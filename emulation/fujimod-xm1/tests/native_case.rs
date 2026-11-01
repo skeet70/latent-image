@@ -731,6 +731,91 @@ fn cortex_r4f_exclusions_are_refused_before_they_execute() {
 }
 
 #[test]
+fn register_apsr_writes_change_only_the_selected_nzcvq_and_ge_bits() {
+    for (instruction, source, expected) in [
+        (0xe128_f00c, 0xffff_ffff, 0xf800_0010),
+        (0xe12c_f00c, 0xffff_ffff, 0xf80f_0010),
+        (0xe128_f00c, 0x000f_ffff, 0x0000_0010),
+        (0xe12c_f00c, 0x000a_ffff, 0x000a_0010),
+    ] {
+        let observed = Case::new(&[instruction, BX_LR]).register(12, source).run();
+        observed.assert_returned();
+        assert_eq!(observed.register("cpsr"), expected, "{instruction:#010x}");
+        assert_eq!(observed.register("r12"), source);
+        assert_eq!(observed.observation.memory_provenance_total, "0");
+    }
+}
+
+#[test]
+fn nzcvq_writes_preserve_ge_and_nzcvqg_writes_can_clear_every_application_flag() {
+    let preserved = Case::new(&[0xe12c_f001, 0xe128_f00c, BX_LR])
+        .register(1, 0xa80a_ffff)
+        .register(12, 0x5005_ffff)
+        .run();
+    preserved.assert_returned();
+    assert_eq!(preserved.register("cpsr"), 0x500a_0010);
+    let cleared = Case::new(&[0xe12c_f001, 0xe12c_f00c, BX_LR])
+        .register(1, 0xffff_ffff)
+        .register(12, 0)
+        .run();
+    cleared.assert_returned();
+    assert_eq!(cleared.register("cpsr"), 0x10);
+}
+
+#[test]
+fn condition_false_apsr_writes_preserve_the_application_flags() {
+    for instruction in [0x0128_f00c, 0x012c_f00c] {
+        let observed = Case::new(&[instruction, BX_LR]).register(12, 0xffff_ffff).run();
+        observed.assert_returned();
+        assert_eq!(observed.register("cpsr"), 0x10);
+    }
+}
+
+fn assert_status_write_has_no_effect(case: &Case, observed: &Observed) {
+    observed.assert_stopped(Status::UnsupportedInstruction, CODE);
+    for (index, label) in ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12", "sp", "lr", "cpsr"].iter().enumerate() {
+        assert_eq!(observed.register(label), case.registers[index], "{label}");
+    }
+    for region in &case.regions {
+        let expected: String = region.bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(observed.bytes(region.address), expected);
+    }
+    assert_eq!(observed.observation.memory_provenance_total, "0");
+}
+
+#[test]
+fn other_register_status_masks_and_spsr_targets_are_refused_without_effects() {
+    for saved_status in [0, 1 << 22] {
+        for mask in 0..16 {
+            if saved_status == 0 && matches!(mask, 8 | 12) {
+                continue;
+            }
+            let instruction = 0xe120_f00c | saved_status | (mask << 16);
+            let case = Case::new(&[instruction, STR_R0_R1_POST_4, BX_LR])
+                .region(0x4000, READ_WRITE, &[0x44, 0x33, 0x22, 0x11])
+                .register(0, 9)
+                .register(1, 0x4000)
+                .register(12, 0xffff_ffff)
+                .register(15, 0xa000_0010);
+            let observed = case.run();
+            assert_status_write_has_no_effect(&case, &observed);
+        }
+    }
+}
+
+#[test]
+fn immediate_status_writes_pc_sources_and_condition_false_control_writes_still_refuse() {
+    for instruction in [
+        0xe321_f0ff, 0xe322_f0ff, 0xe324_f0ff, 0xe329_f0ff, 0xe32f_f0ff,
+        0xe328_f20f, 0xe368_f20f, 0xe128_f00f, 0xe12c_f00f, 0x0121_f00c,
+    ] {
+        let case = Case::new(&[instruction, BX_LR]).register(12, 0xffff_ffff);
+        let observed = case.run();
+        assert_status_write_has_no_effect(&case, &observed);
+    }
+}
+
+#[test]
 fn an_undefined_instruction_is_unsupported() {
     // udf #0
     let observed = Case::new(&[0xe7f0_00f0, BX_LR]).register(0, 9).run();
