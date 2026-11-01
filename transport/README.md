@@ -317,6 +317,8 @@ One installer and ABI header serve every payload kind (RAM-PUSH-MECHANISM-CONVER
 
 `RamPushLayoutProvenanceRefresh` covers the standalone Classic Chrome and icon builder identities; `ToggleMainProvenanceRefresh` covers the USB-toggle builder and shared BUILD/layout identities. Reference-base relinks preserve their reviewed runtime bytes and publication contracts. These reviews do not approve the combined bank.
 
+`MainHostApiReview` (`42e9c349`) approves only the refreshed standalone Classic Chrome, icon and USB-toggle builder identities and the toggle's `host/FujiAF/Host.hs` pin after the shared process/temporary-directory helper extraction and distinct timeout/output-cap units. Both reference-base runtimes, publications and contracts are unchanged. A fresh 15-root transport test wave and the three standalone reviewed-build checks pass; the build checks use the failing `noUsb` provider. The combined bank builder is re-pinned `unreviewed`; its two reference-base runtimes, publications and contracts match newly generated frozen-`cee1b97` references. No bank approval or live go follows from this refresh.
+
 ## Classic Chrome payload
 
 Standalone Classic Chrome uses allocation `0x1560` with ABI 3, 84 setup and 47 activation publications. Its icon candidate uses `0x21fc`. These remain separate from the combined bank candidate. The standalone relinker uses `build-classic-chrome-ram.sh` and `build-classic-chrome-ram`; it links only `classic_chrome_ram.S` and the generic installer, checks the pinned RC0-to-flash delta shape through `FujiAF.ClassicChromeRam`, and overlays the parameter block at `cc_ram_data`. No bank ELF allowlist applies to the standalone payload.
