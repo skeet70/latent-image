@@ -92,6 +92,9 @@ bindConsumerSource source image4 = do
       Descriptor -> wordsAt 0x61c400 image4 start words'
       Selector -> wordsAt 0x40000 (sourceLoader source) start words'
       Identity -> wordsAt 0x40000 (sourceLoader source) start words'
+  wordsAt 0x40000 (sourceLoader source) 0x40250 [0xe59fd118]
+  wordsAt 0x40000 (sourceLoader source) 0x40370 [0x70002000]
+  wordsAt 0x40000 (sourceLoader source) 0x402c8 [0xe10f2000,0xe3c22080,0xe129f002]
   let RootPair (Guest primary) (Guest secondary) = sourceRoots source
       selector = [publicationValue row | row <- sourcePublications source,publicationGuest row == Guest (primary + 0x1618)]
   require (primary == 0x4004dae0 && secondary == 0x400ddaa0 && selector == [0x412bc])
@@ -163,6 +166,10 @@ consumerSourceValue consumer@(ConsumerSource source imageDigest _) =
       , "consumer_stack_source" .= object
           [ "saved_bytes" .= (24 :: Word32), "selector_saved_bytes" .= (8 :: Word32)
           , "entry_sp_premise" .= ("live-consumer-context" :: String)
+          , "backing" .= ("core0-atcm" :: String), "atcm_register" .= (0x70000011 :: Word32)
+          , "guest_window" .= ([0x70000000,0x70002000] :: [Word32])
+          , "cpsr_mask" .= (0x07f0ffff :: Word32), "cpsr_value" .= (0x153 :: Word32)
+          , "observation" .= ("instruction-boundary-snapshots" :: String)
           ]
       , "unproved_runtime_premises" .= map premiseName
           [ NaturalPrimaryArrival,OwnedCarrierCommittedAndImmutable,CurrentDecoderAndBothCoreAliases,BothCoreTcmExclusions

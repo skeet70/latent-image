@@ -21,6 +21,12 @@ enum PoolPremise { RequiresLivePreimage }
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum StackPremise { LiveConsumerContext }
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum StackBacking { Core0Atcm }
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum StackObservation { InstructionBoundarySnapshots }
 #[derive(Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 enum Premise {
@@ -60,7 +66,11 @@ struct Descriptor {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct StackSource { saved_bytes: u32, selector_saved_bytes: u32, entry_sp_premise: StackPremise }
+struct StackSource {
+    saved_bytes: u32, selector_saved_bytes: u32, entry_sp_premise: StackPremise,
+    backing: StackBacking, atcm_register: Word, guest_window: [Guest; 2],
+    cpsr_mask: Word, cpsr_value: Word, observation: StackObservation,
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Code { start: Guest, words: Vec<Word> }
@@ -98,7 +108,11 @@ impl Contract {
             && descriptor.after_pool_read.0 == 0x725bb4 && descriptor.identifiers == [1,120]
             && descriptor.record_bytes == 44 && descriptor.root_relative_field == 0x184
             && descriptor.published_accesses.len() == 120 && self.consumer_stack_source.saved_bytes == 24
-            && self.consumer_stack_source.selector_saved_bytes == 8, "root0 descriptor or dynamic stack source differs")?;
+            && self.consumer_stack_source.selector_saved_bytes == 8
+            && self.consumer_stack_source.atcm_register.0 == 0x70000011
+            && self.consumer_stack_source.guest_window.map(|guest| guest.0) == [0x70000000,0x70002000]
+            && self.consumer_stack_source.cpsr_mask.0 == 0x07f0ffff
+            && self.consumer_stack_source.cpsr_value.0 == 0x153, "root0 descriptor or dynamic stack source differs")?;
         for (index, access) in descriptor.published_accesses.iter().enumerate() {
             require(access.identifier.0 == index as u32 + 1 && access.table_word.0 == 0x4004dae0 + index as u32 * 44 + 0x184
                 && access.pool_word.0 == 0x4005beac + index as u32 * 40 + 8, "root0 published descriptor access differs")?;
@@ -126,10 +140,56 @@ struct BoundaryObservation { boundary: Boundary, context: Context }
 struct Continuation { start: Context, roots_start: Views, prelude_watch: WatchState, watch: Option<WatchState> }
 #[derive(Serialize)]
 struct CodeViews { start: Guest, views: Views }
+#[derive(Clone, Copy)]
+struct ConsumerStack { low: Guest, top: Guest }
+
+impl ConsumerStack {
+    fn admit(entry: &Context) -> Result<Self, String> {
+        require(entry.sp.0 % 4 == 0 && (0x70000020..=0x70002000).contains(&entry.sp.0)
+            && entry.tcm[0] == [Word(0x70000011),Word(0)]
+            && entry.cpsr.0 & 0x07f0ffff == 0x153, "root0 core0 ATCM stack or SVC interrupt context differs")?;
+        Ok(Self { low: Guest(entry.sp.0 - 32), top: Guest(entry.sp.0) })
+    }
+    fn offsets(self) -> [u32; 2] { [self.low.0 - 0x70000000,self.top.0 - 0x70000000] }
+    fn scope(self) -> Result<ScopeSpan, String> {
+        let [low,high] = self.offsets();
+        TcmRange::new(TcmBank::Atcm, low, high).map(ScopeSpan::Tcm)
+    }
+    fn read(self, machine: &Machine) -> Result<Vec<u8>, String> {
+        let mut bytes = vec![0; 32];
+        machine.session.board.read_memory(0, u64::from(self.low.0), &mut bytes)?;
+        Ok(bytes)
+    }
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum StackOperation { CallerSave, SelectorSave, SelectorRestore }
+
+impl StackOperation {
+    fn sites(self) -> (u32, u32, u64) {
+        match self {
+            Self::CallerSave => (0x725b74,0x725b78,0),
+            Self::SelectorSave => (0x412bc,0x412c0,9),
+            Self::SelectorRestore => (0x412c8,0x725b98,19),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct StackStep {
+    operation: StackOperation, before: Context, after: Context, before_bytes: Vec<u8>, after_bytes: Vec<u8>,
+}
+
+#[derive(Serialize)]
+struct StackEvidence {
+    core: usize, bank: TcmBank, offsets: [u32; 2], before: Vec<u8>, after: Vec<u8>, steps: Vec<StackStep>,
+}
+
 #[derive(Serialize)]
 struct Observation {
     entry: Context, selected: Context, after: Context, roots_before: Views, roots_after: Views,
-    table_before: Views, table_after: Views, stack_before: Views, stack_after: Views,
+    table_before: Views, table_after: Views, stack: StackEvidence,
     pool_before: Views, pool_after: Views, code: Vec<CodeViews>, decoder: Decoder, aliases: Vec<AliasBinding>,
 }
 #[derive(Serialize)]
@@ -143,19 +203,20 @@ fn code_spans() -> impl Iterator<Item = (u64, u64)> {
     CODE.into_iter().map(|(start, words)| (u64::from(start), u64::from(start) + words.len() as u64 * 4))
 }
 fn span(extent: (u64, u64)) -> Result<ScopeSpan, String> { PhysicalRange::new(extent.0, extent.1).map(ScopeSpan::Physical) }
-fn begin(machine: &mut Machine, maps: &[factory::MemoryMap], body: Option<((u64, u64), (u64, u64))>) -> Result<Box<ScopedMemoryWatch>, String> {
+fn begin(machine: &mut Machine, maps: &[factory::MemoryMap], body: Option<(ConsumerStack, (u64, u64))>) -> Result<Box<ScopedMemoryWatch>, String> {
     let class = |(start, end), kinds| WatchRange { start, end, kinds };
     let data = WatchKinds::CPU_READ.union(WatchKinds::WRITES);
     let mut classes = vec![class(PRIMARY_TABLE, data), class(ROOTS, data)];
     let confinement = if let Some((stack, pool)) = body {
-        classes.extend([class(stack, data), class(pool, data)]);
+        classes.push(class(pool, data));
         classes.extend(code_spans().map(|extent| class(extent, WatchKinds::WRITES)));
         classes.extend(HEADERS.map(|extent| class(extent, WatchKinds::WRITES)));
-        let resources = [PRIMARY_TABLE,ROOTS,stack,pool].into_iter().chain(code_spans()).chain(HEADERS).map(span).collect::<Result<Vec<_>, _>>()?;
-        vec![ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Write, rule: Confinement::Allow(vec![span(stack)?]) },
+        let resources = [PRIMARY_TABLE,ROOTS,pool].into_iter().chain(code_spans()).chain(HEADERS).map(span).collect::<Result<Vec<_>, _>>()?;
+        let mut reads = vec![stack.scope()?];
+        reads.extend([ROOTS,PRIMARY_TABLE,pool].into_iter().map(span).collect::<Result<Vec<_>, _>>()?);
+        vec![ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Write, rule: Confinement::Allow(vec![stack.scope()?]) },
             ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Write, rule: Confinement::Forbid(resources) },
-            ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Read,
-                rule: Confinement::Allow([stack,ROOTS,PRIMARY_TABLE,pool].into_iter().map(span).collect::<Result<_, _>>()?) }]
+            ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Read, rule: Confinement::Allow(reads) }]
     } else {
         classes.extend(HEADERS.map(|extent| class(extent, data)));
         classes.extend(code_spans().enumerate().map(|(index, extent)| class(extent,
@@ -171,24 +232,103 @@ fn observed(watch: &ScopedMemoryWatch) -> Result<WatchState, String> {
     require(state.enabled && state.violation.is_none() && state.fault.is_none(), "root0 watch faulted")?;
     Ok(state)
 }
-fn stop(machine: &mut Machine, boundary: Boundary, start: &Context, boundaries: &mut Vec<BoundaryObservation>) -> Result<Option<Context>, String> {
-    machine.traces.arm_primary(&machine.session, BTreeMap::from([(boundary.address(), boundary.label().into())]))?;
-    machine.traces.stop_labels = [boundary.label().into()].into_iter().collect();
+enum StopPoint { Boundary(Boundary), StackBefore(StackOperation), StackAfter(StackOperation) }
+
+fn stop_at(machine: &mut Machine, point: StopPoint, start: &Context) -> Result<Option<Context>, String> {
+    let (address,label) = match point {
+        StopPoint::Boundary(boundary) => (boundary.address(),boundary.label()),
+        StopPoint::StackBefore(operation) => (operation.sites().0,"root0-stack-before"),
+        StopPoint::StackAfter(operation) => (operation.sites().1,"root0-stack-after"),
+    };
+    machine.traces.arm_primary(&machine.session, BTreeMap::from([(address, label.into())]))?;
+    machine.traces.stop_labels = [label.into()].into_iter().collect();
     let previous = machine.traces.hits.len();
     let remaining = BUDGET.checked_sub(machine.instructions()).ok_or("root0 instruction deadline exceeded")?;
     if remaining == 0 { return Ok(None); }
     machine.run(remaining); machine.require_running()?;
     let hits = &machine.traces.hits[previous..];
     if hits.is_empty() { require(machine.instructions() == BUDGET, "root0 stopped before finite deadline")?; return Ok(None); }
-    require(hits.len() == 1 && hits[0].core == 0 && hits[0].site == boundary.label()
-        && hit_address(&hits[0])? == boundary.address(), "root0 boundary attribution differs")?;
+    require(hits.len() == 1 && hits[0].core == 0 && hits[0].site == label
+        && hit_address(&hits[0])? == address, "root0 boundary attribution differs")?;
     let context = context_for(machine, 0)?;
-    require(context.pc.0 == boundary.address() && context.tcm == start.tcm
+    require(context.pc.0 == address && context.tcm == start.tcm
         && context.counts.0.iter().sum::<u64>() <= BUDGET && context.counts.0.iter().zip(start.counts.0).all(|(a,b)| *a >= b),
         "root0 preexecution context, TCM or chronology differs")?;
-    boundaries.push(BoundaryObservation { boundary, context: context.clone() });
     Ok(Some(context))
 }
+fn stop(machine: &mut Machine, boundary: Boundary, start: &Context, boundaries: &mut Vec<BoundaryObservation>) -> Result<Option<Context>, String> {
+    let context = stop_at(machine, StopPoint::Boundary(boundary), start)?;
+    if let Some(context) = &context { boundaries.push(BoundaryObservation { boundary, context: context.clone() }); }
+    Ok(context)
+}
+
+fn stack_step(machine: &mut Machine, stack: ConsumerStack, operation: StackOperation, entry: &Context) -> Result<Option<StackStep>, String> {
+    let before = if matches!(operation, StackOperation::CallerSave) { entry.clone() } else {
+        let Some(before) = stop_at(machine, StopPoint::StackBefore(operation), entry)? else { return Ok(None) };
+        before
+    };
+    let before_bytes = stack.read(machine)?;
+    let Some(after) = stop_at(machine, StopPoint::StackAfter(operation), &before)? else { return Ok(None) };
+    let after_bytes = stack.read(machine)?;
+    Ok(Some(StackStep { operation,before,after,before_bytes,after_bytes }))
+}
+fn validate_stack(stack: &StackEvidence, entry: &Context, selected: &Context) -> Result<(), String> {
+    let binding = ConsumerStack::admit(entry)?;
+    require(stack.core == 0 && stack.bank == TcmBank::Atcm && stack.offsets == binding.offsets()
+        && stack.steps.len() == 3, "root0 private stack binding or observation coverage differs")?;
+    let mut bytes: [u8; 32] = stack.before.as_slice().try_into().map_err(|_| "root0 private stack extent differs")?;
+    let mut previous_core1 = entry.counts.0[1];
+    for (step, operation) in stack.steps.iter().zip([StackOperation::CallerSave,StackOperation::SelectorSave,StackOperation::SelectorRestore]) {
+        let (before_pc,after_pc,ordinal) = operation.sites();
+        require(step.operation.sites() == operation.sites() && step.before_bytes == bytes
+            && step.before.counts.0[0] == entry.counts.0[0] + ordinal
+            && step.after.counts.0[0] == step.before.counts.0[0] + 1
+            && step.before.counts.0[1] >= previous_core1 && step.after.counts.0[1] >= step.before.counts.0[1]
+            && step.after.counts.0[1] <= selected.counts.0[1], "root0 private stack instruction or progress differs")?;
+        let mut expected = entry.clone();
+        expected.pc = Word(before_pc);
+        match operation {
+            StackOperation::CallerSave => {}
+            StackOperation::SelectorSave | StackOperation::SelectorRestore => {
+                expected.registers[2] = Word(0x4004dae0); expected.registers[3] = Word(0x412bc);
+                expected.registers[4] = Word(ROOTS.0 as u32); expected.registers[5] = entry.registers[0];
+                expected.registers[11] = Word(entry.sp.0 - 4); expected.sp = Word(entry.sp.0 - 24); expected.lr = Word(0x725b98);
+                if matches!(operation, StackOperation::SelectorRestore) {
+                    expected.registers[0] = Word(0); expected.registers[1] = Word(0x4003); expected.registers[2] = Word(0x4003);
+                    expected.registers[11] = Word(entry.sp.0 - 28); expected.sp = Word(entry.sp.0 - 32);
+                    expected.lr = Word(0x412c8); expected.cpsr = Word((entry.cpsr.0 & 0x0fff_ffff) | 0x6000_0000);
+                }
+            }
+        }
+        let same = |actual: &Context, expected: &Context| actual.pc == expected.pc && actual.registers == expected.registers
+            && actual.sp == expected.sp && actual.lr == expected.lr && actual.cpsr == expected.cpsr && actual.tcm == expected.tcm;
+        require(same(&step.before, &expected), "root0 private stack incoming instruction context differs")?;
+        expected.pc = Word(after_pc);
+        match operation {
+            StackOperation::CallerSave => {
+                expected.sp = Word(entry.sp.0 - 24);
+                for (offset,value) in (8..32).step_by(4).zip([entry.registers[4],entry.registers[5],entry.registers[6],
+                    entry.registers[7],entry.registers[11],entry.lr]) {
+                    bytes[offset..offset + 4].copy_from_slice(&value.0.to_le_bytes());
+                }
+            }
+            StackOperation::SelectorSave => {
+                expected.sp = Word(entry.sp.0 - 32);
+                bytes[..4].copy_from_slice(&(entry.sp.0 - 4).to_le_bytes());
+                bytes[4..8].copy_from_slice(&0x725b98_u32.to_le_bytes());
+            }
+            StackOperation::SelectorRestore => {
+                require(word(&bytes[..4])? == entry.sp.0 - 4 && word(&bytes[4..8])? == 0x725b98,
+                    "root0 private selector saved words differ")?;
+                expected.sp = Word(entry.sp.0 - 24); expected.registers[11] = Word(entry.sp.0 - 4);
+            }
+        }
+        require(same(&step.after, &expected) && step.after_bytes == bytes, "root0 private stack instruction effect differs")?;
+        previous_core1 = step.after.counts.0[1];
+    }
+    require(stack.after == bytes, "root0 private stack final readback differs")
+}
+
 fn snapshot(machine: &Machine, maps: &[factory::MemoryMap], extent: (u64, u64)) -> Result<Views, String> {
     views(machine, maps, ZERO_GUEST + extent.0, (extent.1 - extent.0) as usize)
 }
@@ -333,32 +473,21 @@ fn aliases(machine: &Machine, maps: &[factory::MemoryMap], tcm: &TcmWords,
 
 struct ExpectedData { source: Source, guest: u64, pc: u64, ordinal: u64, value: u32 }
 
-fn body(state: &WatchState, entry: &Context, selected: &Context, after: &Context, stack_start: &[u8], stack_end: &[u8],
+fn body(state: &WatchState, entry: &Context, selected: &Context, after: &Context,
     descriptor: u64, pool: u64, pool_value: u32, prelude: &WatchState) -> Result<(), String> {
-    let mut expected = Vec::with_capacity(15);
-    for (index, value) in [entry.registers[4].0,entry.registers[5].0,entry.registers[6].0,entry.registers[7].0,
-        entry.registers[11].0,entry.lr.0].into_iter().enumerate() {
-        expected.push(ExpectedData { source: Source::CpuWrite, guest: u64::from(entry.sp.0) - 24 + index as u64 * 4,
-            pc: 0x725b74, ordinal: 0, value });
-    }
-    expected.extend([
+    let expected = [
         ExpectedData { source: Source::CpuRead, guest: ROOTS.0, pc: 0x725b88, ordinal: 5, value: 0x4004dae0 },
         ExpectedData { source: Source::CpuRead, guest: 0x4004f0f8, pc: 0x725b90, ordinal: 7, value: 0x412bc },
-        ExpectedData { source: Source::CpuWrite, guest: u64::from(entry.sp.0) - 32, pc: 0x412bc, ordinal: 9, value: entry.sp.0 - 4 },
-        ExpectedData { source: Source::CpuWrite, guest: u64::from(entry.sp.0) - 28, pc: 0x412bc, ordinal: 9, value: 0x725b98 },
-        ExpectedData { source: Source::CpuRead, guest: u64::from(entry.sp.0) - 32, pc: 0x412c8, ordinal: 19, value: entry.sp.0 - 4 },
-        ExpectedData { source: Source::CpuRead, guest: u64::from(entry.sp.0) - 28, pc: 0x412c8, ordinal: 19, value: 0x725b98 },
         ExpectedData { source: Source::CpuRead, guest: ROOTS.0, pc: 0x725b9c, ordinal: 21, value: 0x4004dae0 },
         ExpectedData { source: Source::CpuRead, guest: ZERO_GUEST + descriptor, pc: 0x725bac, ordinal: 25, value: (ZERO_GUEST + pool) as u32 },
         ExpectedData { source: Source::CpuRead, guest: ZERO_GUEST + pool, pc: 0x725bb0, ordinal: 26, value: pool_value },
-    ]);
+    ];
     require(state.records.len() == expected.len(), "root0 bounded data event count differs")?;
-    let mut stack = stack_start.to_vec();
     let mut instructions = prelude.records.last().and_then(|event| event.instructions).unwrap_or_else(|| entry.counts.0.iter().sum());
     let mut tick = prelude.records.last().and_then(|event| event.tick.as_ref()).map_or(0, |tick| tick.0);
     let mut previous_ordinal = None;
     let mut previous_core1 = entry.counts.0[1];
-    for (index, (event, expected)) in state.records.iter().zip(expected).enumerate() {
+    for (event, expected) in state.records.iter().zip(expected) {
         let previous_clock = instructions;
         let value = raw(event, &mut instructions, &mut tick, after.counts.0.iter().sum())?;
         let core0_clock = entry.counts.0[0].checked_add(expected.ordinal + 1).ok_or("root0 instruction clock overflow")?;
@@ -366,20 +495,15 @@ fn body(state: &WatchState, entry: &Context, selected: &Context, after: &Context
         require(event.source == expected.source && event.core == Some(0) && event.address == expected.guest
             && event.pc == Some(expected.pc) && value == expected.value
             && core1_clock >= previous_core1 && core1_clock <= after.counts.0[1]
-            && (if index < 12 { core1_clock <= selected.counts.0[1] } else { core1_clock >= selected.counts.0[1] })
+            && (if expected.ordinal < 21 { core1_clock <= selected.counts.0[1] } else { core1_clock >= selected.counts.0[1] })
             && (previous_ordinal != Some(expected.ordinal) || instructions == previous_clock)
             && (previous_ordinal == Some(expected.ordinal) || previous_ordinal.is_none() || instructions > previous_clock)
-            && (if index < 12 { instructions <= selected.counts.0.iter().sum() } else { instructions > selected.counts.0.iter().sum() }),
+            && (if expected.ordinal < 21 { instructions <= selected.counts.0.iter().sum() } else { instructions > selected.counts.0.iter().sum() }),
             "root0 actual selected read, write or ordinal differs")?;
-        if expected.guest >= u64::from(entry.sp.0) - 32 && expected.guest < u64::from(entry.sp.0) {
-            let offset = (expected.guest - (u64::from(entry.sp.0) - 32)) as usize;
-            require(preimage(event, &stack[offset..offset + 4]), "root0 dynamic stack preimage differs")?;
-            if matches!(event.source, Source::CpuWrite) { stack[offset..offset + 4].copy_from_slice(&value.to_le_bytes()); }
-            else { require(word(&stack[offset..offset + 4])? == value, "root0 stack read differs")?; }
-        } else { require(preimage(event, &value.to_le_bytes()), "root0 data read preimage differs")?; }
+        require(preimage(event, &value.to_le_bytes()), "root0 data read preimage differs")?;
         previous_ordinal = Some(expected.ordinal); previous_core1 = core1_clock;
     }
-    require(stack == stack_end, "root0 saved frame replay differs")
+    Ok(())
 }
 
 fn check_code(machine: &Machine, maps: &[factory::MemoryMap]) -> Result<Vec<CodeViews>, String> {
@@ -421,19 +545,16 @@ fn observe(machine: &mut Machine, initializer: &ObservationPrimary, continuation
     require(captured.prelude_watch.enabled && captured.prelude_watch.violation.is_none() && captured.prelude_watch.fault.is_none(),
         "root0 prelude watch faulted")?;
     let Some((installation, entry)) = prelude_outcome? else { return Ok(None) };
-    require(entry.sp.0 % 4 == 0
-        && (0x40000020..=0x40100000).contains(&entry.sp.0) && entry.cpsr.0 & 0x07f0_feff == 0xd3,
-        "root0 actual descriptor identifier, stack or mode differs")?;
+    let stack = ConsumerStack::admit(&entry)?;
     let identifier = DescriptorId::try_from(entry.registers[0].0)?.0;
     let descriptor = PRIMARY_TABLE.0 + u64::from(identifier - 1) * 44 + 0x184;
     let pool = PRIMARY_POOLS.0 + u64::from(identifier - 1) * 40 + 8;
-    let stack = (u64::from(entry.sp.0) - ZERO_GUEST - 32, u64::from(entry.sp.0) - ZERO_GUEST);
     let pool_span = (pool,pool + 4);
     require([PRIMARY_TABLE,ROOTS,pool_span].into_iter().chain(HEADERS).chain(code_spans())
-        .all(|(low,high)| stack.1 <= low || high <= stack.0), "root0 actual stack overlaps protected resources")?;
+        .all(|(low,high)| u64::from(stack.top.0) <= low || high <= u64::from(stack.low.0)), "root0 actual stack overlaps protected resources")?;
     let roots_before = snapshot(machine, &committed, ROOTS)?;
     let table_before = snapshot(machine, &committed, PRIMARY_TABLE)?;
-    let stack_before = snapshot(machine, &committed, stack)?;
+    let stack_before = stack.read(machine)?;
     let pool_before = snapshot(machine, &committed, pool_span)?;
     let code = check_code(machine, &committed)?;
     require(roots_before.physical == [0xe0,0xda,0x04,0x40,0xa0,0xda,0x0d,0x40]
@@ -442,13 +563,18 @@ fn observe(machine: &mut Machine, initializer: &ObservationPrimary, continuation
     prelude(&captured.prelude_watch, captured, &installation, &entry,
         &initializer.table_after.physical, &table_before.physical, descriptor)?;
     let decoder = decoder(machine)?;
-    let resources: Vec<_> = [(ROOTS,&roots_before),(PRIMARY_TABLE,&table_before),(stack,&stack_before),(pool_span,&pool_before)]
+    let resources: Vec<_> = [(ROOTS,&roots_before),(PRIMARY_TABLE,&table_before),(pool_span,&pool_before)]
         .into_iter().chain(code_spans().zip(code.iter().map(|code| &code.views))).collect();
     let hashes: Vec<_> = resources.iter().map(|(_,view)| Sha256Digest::of(&view.physical)).collect();
     let mut aliases_observed = Vec::with_capacity(128);
     aliases(machine, &committed, &entry.tcm, &resources, &hashes, &mut aliases_observed)?;
     let mut watch = begin(machine, &maps, Some((stack,pool_span)))?;
     let outcome = (|| {
+        let mut steps = Vec::with_capacity(3);
+        for operation in [StackOperation::CallerSave,StackOperation::SelectorSave,StackOperation::SelectorRestore] {
+            let Some(step) = stack_step(machine, stack, operation, &entry)? else { return Ok(None) };
+            steps.push(step);
+        }
         let Some(selected) = stop(machine, Boundary::Selected, &entry, boundaries)? else { return Ok(None) };
         let mut selected_registers = entry.registers;
         selected_registers[..7].copy_from_slice(&[Word(0),Word(0x4003),Word(0x4003),Word(0x412bc),Word(ROOTS.0 as u32),Word(identifier),Word(0)]);
@@ -466,16 +592,16 @@ fn observe(machine: &mut Machine, initializer: &ObservationPrimary, continuation
         decoder_fn(machine)?;
         let roots_after = snapshot(machine, &committed, ROOTS)?;
         let table_after = snapshot(machine, &committed, PRIMARY_TABLE)?;
-        let stack_after = snapshot(machine, &committed, stack)?;
+        let stack_after = stack.read(machine)?;
         let pool_after = snapshot(machine, &committed, pool_span)?;
         require(roots_before.physical == roots_after.physical && table_before.physical == table_after.physical
             && pool_before.physical == pool_after.physical, "root0 bounded roots/table/pool changed")?;
-        let resources_after: Vec<_> = [(ROOTS,&roots_after),(PRIMARY_TABLE,&table_after),(stack,&stack_after),(pool_span,&pool_after)]
+        let resources_after: Vec<_> = [(ROOTS,&roots_after),(PRIMARY_TABLE,&table_after),(pool_span,&pool_after)]
             .into_iter().chain(code_spans().zip(code.iter().map(|code| &code.views))).collect();
-        let hashes_after: Vec<_> = resources_after.iter().enumerate().map(|(index,(_,view))|
-            if index == 2 { Sha256Digest::of(&view.physical) } else { hashes[index] }).collect();
-        aliases(machine, &committed, &after.tcm, &resources_after, &hashes_after, &mut aliases_observed)?;
-        Ok(Some(Observation { entry,selected,after,roots_before,roots_after,table_before,table_after,stack_before,stack_after,
+        aliases(machine, &committed, &after.tcm, &resources_after, &hashes, &mut aliases_observed)?;
+        let stack = StackEvidence { core: 0, bank: TcmBank::Atcm, offsets: stack.offsets(), before: stack_before, after: stack_after, steps };
+        validate_stack(&stack, &entry, &selected)?;
+        Ok(Some(Observation { entry,selected,after,roots_before,roots_after,table_before,table_after,stack,
             pool_before,pool_after,code,decoder,aliases: aliases_observed }))
     })();
     let state = serde_json::from_value(watch.state()).map_err(|error| error.to_string());
@@ -488,7 +614,7 @@ fn observe(machine: &mut Machine, initializer: &ObservationPrimary, continuation
         Ok(Some(observation)) => {
             ended?;
             body(state, &observation.entry, &observation.selected, &observation.after,
-                &observation.stack_before.physical, &observation.stack_after.physical, descriptor,pool,
+                descriptor,pool,
                 word(&observation.pool_before.physical)?, &captured.prelude_watch)?;
             Ok(Some(observation))
         }
