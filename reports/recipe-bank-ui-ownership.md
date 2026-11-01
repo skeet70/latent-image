@@ -150,7 +150,24 @@ The existing reviewed `trace_sites` mechanism can observe the retained dispatche
 | `0x00bfb0f8` | r2 = captured transition-table base, r3 = transition target |
 | `0x00bfb114` | r3 = direct state's negated high halfword |
 
-The retained route can supply bounded caller/frame observations before global admission. Qualifying an owned packaged cutover additionally requires reviewed applicable declarations, closed global registration/storage/reference obligations and a both-core retired-fetch guard over the complete replaced dispatcher and cancellation extents. The current native and bank-specific results do not provide that cutover.
+The retained route can supply bounded caller/frame observations before admission. Global dispatcher retirement would additionally require closed global registration/storage/reference obligations and a both-core retired-fetch guard over the complete replaced extents. The current native and bank-specific results do not provide that cutover.
+
+### Scoped modal-75 diagnostic and fallback design
+
+The next proposed entry route selects owned dispatch only for full-word controller ID 75 and retains the original dispatcher for every other ID. This is an entry-routing design, not a published hook or qualified fallback. `modal-closure --diagnostic-controller 0x4b` computes a conservative modal-75 diagnostic and always reports `admitted=false` and `fallback_qualified=false` (E-MODAL75-SCOPED-DIAGNOSTIC-150).
+
+The diagnostic retains 6,828 residual obligations, plus the separate pending fallback-boundary proof. It covers 46 resolved modal-75 call sites and eleven unresolved sites that may select 75, 2,208 captured cells, 294 action slots and one transition slot. The residuals are 6,507 pointer escapes, 286 computed-index stores, sixteen analysis limits, eleven unresolved caller IDs, four unresolved state/event values, two data-word references and one each for initial arrays and uncovered constant forms. Scoping removes 79 unrelated table-word references and one known other-controller event-value obligation, not the unattributed provenance obligations.
+
+Both array and table provenance are computed globally before scoping. The global table materialization range and pointer classification remain intact, including an unknown offset derived from another controller's table. Only resolved address extents proved disjoint from admitted storage are dropped. Public regression coverage checks that unrelated known writes can drop while a computed store from another controller's table remains an obligation. The selected caller diagnostic leaves every r1/r2/r12/LR continuation unresolved; three r3 continuations overwrite before a read or unresolved stop, and 54 remain unresolved.
+
+The fallback must account for flags and the replaced first instruction. A bare `cmp r0,#75; bne 0x00bfb028` is invalid: CMP changes NZCV and the branch reenters the hook. A proposed 56-byte A32 entry uses r12 and the eight bytes `[S-8,S)` to save incoming r12/CPSR, compares the complete r0 with 75, then takes one of two separate cleanup paths. Each path restores NZCVQ, r12 and SP without changing the restored flags. The admitted path branches to owned policy with the original incoming context.
+
+The nonadmitted path replays the original first instruction `push {r4-r11,lr}` and branches directly to untouched stock `0x00bfb02c`. At that handoff, r0-r12, LR, flags and SP=S-36 match stock after its first instruction; `[S-36,S)` contains the identical saved words, and caller-owned memory at S and above is unchanged. The replayed push overwrites both temporary words before stock can read them. No table, application-state or peripheral access precedes the controller test.
+
+This proves a proposed synchronous handoff relation, not identical pre-handoff write history. The routing adds two temporary stack stores. Its proof still needs executable/published-word integrity, nonwrapping original stack capacity, physical separation and exclusion of asynchronous observation or alteration of the temporary interval. It introduces no deeper stack extent than the original 36-byte push. No new callback may be called on the routing path.
+
+For admitted modal 75, cheap callback/return-seam equivalence and consumer closure are complementary. Exact relocated LR identity is not cheap; the 294 captured action slots and single transition slot need an input-use census before selecting repairs. The controller's state/event writer and table-mutation domain remains a separate obligation. The retained dispatcher is not globally retired under this design, and unconditional fetch exclusion of its full body would reject legitimate fallback executions. Guarding must distinguish admitted execution and nested nonadmitted fallback.
+
 
 
 ### Owned editor-cancel increment

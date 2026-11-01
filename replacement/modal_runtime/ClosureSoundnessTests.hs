@@ -486,6 +486,17 @@ fixtures =
 detached :: [(String, Word32, [Word32])]
 detached =
   [("alias branch into the 0x00370000 callee", 0x40370100, [0xeaffffc6])] -- b 0x40370020
+    ++ [ ("controller1 event/state producer", 0x00400000,
+          [0xe3072588, 0xe3402146, 0xe3a01000, 0xe1c210b2, 0xe30726e4, 0xe3402146, 0xe1c210b2, 0xe3a00001, 0xeb1fec00, 0xe12fff1e])
+       , ("unknown offset from controller1 cell table", 0x00400100,
+          [0xe3012000, 0xe3402200, 0xe0822000, 0xe1c210b0, 0xe12fff1e])
+       , ("cell pointer array", 0x00cf58b8, 0 : 0x02001000 : replicate 172 0)
+       , ("action pointer array", 0x00cfe2a8, 0 : 0x02002000 : replicate 172 0)
+       , ("transition pointer array", 0x00d0013c, 0 : 0x02003000 : replicate 172 0)
+       , ("width array", 0x00cd5e78, 0x00010000 : replicate 86 0)
+       , ("controller1 cells", 0x02001000, [0])
+       , ("controller1 actions", 0x02002000, [0])
+       ]
 
 main :: IO ()
 main = do
@@ -542,6 +553,15 @@ main = do
     putStrLn ((if ok then "pass: " else "FAIL: ") ++ fixtureName f)
     pure ok
   unless (and results) exitFailure
+  let scoped index = proofValue (buildControllerDiagnostic [ControllerId index] (Inputs regions [] []))
+      retainsWrite document = any
+        (\entry -> field "kind" entry == Just (text "store-value-unresolved") && field "site" entry == Just (text "0x00100010"))
+        (array "obligations" document)
+      only75 = all (\controller -> field "controller" controller == Just (Number 75)) (array "controllers" (scoped 75))
+      retainsUnknownOffset = any
+        (\entry -> field "kind" entry == Just (text "computed-index-store") && field "site" entry == Just (text "0x0040010c") && field "into" entry == Just (text "dispatcher table"))
+        (array "obligations" (scoped 75))
+  unless (retainsWrite (scoped 0) && not (retainsWrite (scoped 75)) && only75 && retainsUnknownOffset) exitFailure
 
 -- | The sites a continuation witness reports in `role`.
 roleSites :: Role -> Value -> [Value]
