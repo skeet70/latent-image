@@ -29,7 +29,7 @@ main = do
   Arguments mode (InputFile dat) (InputFile run) (InputFile rom) (AnalysisRoot analysis) (InputFile observer) (ObservationDirectory observations) (OutputFile output) <- getArgs >>= arguments
   exists <- doesPathExist output
   if exists then H.failH "checker output already exists" else pure ()
-  sources <- SourceFiles <$> H.readRegular 0x4000000 dat <*> H.readRegular 0x10000 run <*> H.readRegular 0x10000 rom
+  sources <- SourceFiles <$> H.readRegular 0x4000000 dat <*> H.readRegular 0x100000 run <*> H.readRegular 0x10000 rom
     <*> H.readRegular 0x20000 (analysis </> "decode/loader-40000.bin") <*> H.readRegular 0x20000 (analysis </> "decode/loader-d0000.bin")
     <*> H.readRegular 0x400000 (analysis </> "lz/id4-0061c400.bin") <*> H.readRegular 0x10000000 observer
   observed <- ObservedFiles <$> H.readRegular 0x8000000 (observations </> "startup-tasks.json")

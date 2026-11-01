@@ -26,6 +26,7 @@ data Control = WrongSource | DuplicateReceiptKey | OverflowingHitAddress | Refus
   | WrongStoppedClock | WrongWatchClass | WrongAuxiliaryFlag | ExtraRunnableBit | WrongFirstNode
   | WrongPrologueRegister | WrongPrologueStack | WrongPrologueStore
   | CodeWrite | WrongKnownPreimage | WrongReturnStatus | MissingFirstTransfer
+  | MissingStoppedPhysical | MalformedStoppedAddress | MalformedStoppedSize | WrappedCounts
   deriving (Bounded, Enum, Eq, Show)
 data ControlError = BaselineRejected WitnessError | MutationRejected Control
   | WrongRefusal Control WitnessError (Maybe WitnessError) deriving (Eq, Show)
@@ -80,6 +81,8 @@ expected control = case control of
   WrongPrologueRegister -> PrologueRejected; WrongPrologueStack -> PrologueRejected; WrongPrologueStore -> PrologueRejected
   CodeWrite -> WriteRejected; WrongKnownPreimage -> PreimageRejected; WrongReturnStatus -> SubmissionRejected
   MissingFirstTransfer -> FirstTaskRejected
+  MissingStoppedPhysical -> FetchRejected; MalformedStoppedAddress -> FetchRejected; MalformedStoppedSize -> FetchRejected
+  WrappedCounts -> ClockRejected
 
 withHash :: Control -> ObservedFiles -> J.Value -> J.Value -> Either ControlError ObservedFiles
 withHash control original receipt watch = do
@@ -168,12 +171,33 @@ journalEdit control position replacement delta receipt watch = do
   changedReceipt <- set control [field "samples"] changedSamples receipt
   pure (changedReceipt,changedWatch)
 
+wrappedCounts :: Control -> J.Value -> Either ControlError J.Value
+wrappedCounts control receipt = do
+  samples <- arrayAt control [field "samples"] receipt
+  changedSamples <- mapM (modifyAt control [field "context",field "counts"] shiftPair) samples
+  withSamples <- set control [field "samples"] changedSamples receipt
+  firstTasks <- arrayAt control [field "first_tasks"] withSamples
+  changedTasks <- mapM (modifyAt control [field "entry_counts"] shiftPair) firstTasks
+  withTasks <- set control [field "first_tasks"] changedTasks withSamples
+  modifyAt control [field "startup_end_counts"] shiftPair withTasks
+  where
+    shiftPair raw = do
+      pair <- parse control raw
+      case pair of
+        [W.Count primary,W.Count secondary] -> pure (J.toJSON
+          [fromInteger ((toInteger primary-4000000) `mod` 0x10000000000000000),secondary+4000000])
+        _ -> Left (MutationRejected control)
+
 mutate :: Control -> SourceFiles -> ObservedFiles -> Either ControlError (SourceFiles,ObservedFiles)
 mutate control sources observed = do
   receipt <- either (const (Left (MutationRejected control))) Right (decodeStrictIntegers (observedReceipt observed))
   watch <- either (const (Left (MutationRejected control))) Right (decodeStrictIntegers (observedWatch observed))
   let receiptOnly change = do changed <- change receipt; pure (sources,observed {observedReceipt=encode changed})
       journal change = do (changedReceipt,changedWatch) <- change receipt watch; updated <- withHash control observed changedReceipt changedWatch; pure (sources,updated)
+      stoppedField name value = journal (\raw watches -> do
+        rows <- arrayAt control [field "records"] watches
+        changed <- set control [field "records",Element (length rows-1),field name] value watches
+        pure (raw,changed))
   case control of
     WrongSource -> pure (sources {sourceImage=B.cons (B.head (sourceImage sources) `xor` 1) (B.tail (sourceImage sources))},observed)
     DuplicateReceiptKey -> pure (sources,observed {observedReceipt=C.pack "{\"schema\":1," <> B.drop 1 (observedReceipt observed)})
@@ -237,6 +261,10 @@ mutate control sources observed = do
       old <- numberAt control [field "records",Element position,field "instructions"] watches
       changed <- set control [field "records",Element position,field "instructions"] (old+1) watches
       pure (raw,changed))
+    MissingStoppedPhysical -> stoppedField "physical" J.Null
+    MalformedStoppedAddress -> stoppedField "address" (J.toJSON (0 :: Word32))
+    MalformedStoppedSize -> stoppedField "size" (J.toJSON (8 :: Int))
+    WrappedCounts -> receiptOnly (wrappedCounts control)
     WrongWatchClass -> journal (\raw watches -> do changed <- modifyAt control [field "classes"] (\value -> do values <- parse control value; pure (J.toJSON (drop 1 (values :: [J.Value])))) watches; pure (raw,changed))
     WrongAuxiliaryFlag -> journal (recordedEffect control 0xed600 (Replace 0))
     ExtraRunnableBit -> journal (recordedEffect control 0xe471c (AddBits 32))

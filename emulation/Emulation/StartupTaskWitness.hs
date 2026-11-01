@@ -35,11 +35,22 @@ require condition problem = unless condition (Left problem)
 required :: WitnessError -> Maybe a -> Either WitnessError a
 required problem = maybe (Left problem) Right
 address :: W.Address -> Word32
-address (W.Address value) = value
+address (W.Address location) = location
 value :: W.WordValue -> Word32
 value (W.WordValue number) = number
 count :: W.Count -> Word64
 count (W.Count number) = number
+startupBudget :: W.Count
+startupBudget = W.Count 80000000
+checkedCounts :: [W.Count] -> Either WitnessError W.Count
+checkedCounts counts = do
+  let total = sum (map (toInteger . count) counts)
+  require (length counts == 2 && total <= toInteger (count startupBudget)) ClockRejected
+  pure (W.Count (fromInteger total))
+checkedIncrement :: W.Count -> Either WitnessError W.Count
+checkedIncrement current = do
+  require (current < startupBudget) ClockRejected
+  pure (W.Count (count current+1))
 index :: HitIndex -> Int
 index (HitIndex number) = number
 cursor :: Cursor -> Int
@@ -227,12 +238,13 @@ checkLocalShape receipt sample memory = do
 checkSample :: Inputs -> Receipt -> Sample -> Memory -> Either WitnessError Memory
 checkSample inputs receipt sample previous = do
   let context = sampleContext sample; state = contextState context
+  total <- checkedCounts (W.contextCounts state)
   hit <- at ContextRejected (receiptHits receipt) (index (sampleHit sample))
-  require (length (W.contextRegisters state) == 13 && length (W.contextCounts state) == 2 && length (W.contextTcm state) == 2
+  require (length (W.contextRegisters state) == 13 && length (W.contextTcm state) == 2
     && W.contextIdentities state == map W.WordValue [0x4003,0x5003] && contextCore context == hitCore hit
     && W.contextPc state == hitAddress hit && sampleBoundary sample == hitBoundary hit
     && M.lookup (W.contextPc state) expectedSites == Just (sampleBoundary sample)
-    && sum (map count (W.contextCounts state)) == count (hitInstructions hit)
+    && total == hitInstructions hit
     && W.contextRegisters state == hitRegisters hit && W.contextSp state == hitSp hit && W.contextLr state == hitLr hit && W.contextCpsr state == hitCpsr hit) ContextRejected
   instruction <- sourceWord inputs (address (W.contextPc state))
   require (sampleCodeWord sample == W.WordValue instruction && map kernelCore (sampleKernels sample) == [PrimaryKernel,SecondaryKernel]) CodeRejected
@@ -244,26 +256,40 @@ checkSample inputs receipt sample previous = do
   pure memory
 
 data Progress = Progress {progressCounts :: [W.Count], progressFetches :: M.Map W.Core (W.Address,W.Count), progressMemory :: Memory}
-clockTotal :: Progress -> Word64
-clockTotal = sum . map count . progressCounts
-advance :: Inputs -> Progress -> W.MemoryEvent -> Either WitnessError Progress
-advance inputs progress event = do
-  require (W.eventSource event /= W.HostWrite && W.eventSource event /= W.ModelBusWrite) ForeignWriterRejected
+clockTotal :: Progress -> Either WitnessError W.Count
+clockTotal = checkedCounts . progressCounts
+checkFetchShape :: W.Address -> Word64 -> W.MemoryEvent -> Either WitnessError ()
+checkFetchShape pc target event =
+  require (W.eventSource event == W.CpuFetch && W.eventAddress event == fromIntegral (address pc)
+    && target == fromIntegral (physical (address pc)) && W.eventSize event == 4
+    && W.eventValue event == Nothing && W.eventBefore event == Nothing) FetchRejected
+eventShape :: Inputs -> W.MemoryEvent -> Either WitnessError (W.Core,W.Address,W.Count,Word64)
+eventShape inputs event = do
+  let malformed = if W.eventSource event == W.CpuFetch then FetchRejected else WriteRejected
   core <- required FetchRejected (W.eventCore event); pc <- required FetchRejected (W.eventPc event)
-  clock <- required ClockRejected (W.eventInstructions event); target <- required WriteRejected (W.eventPhysical event)
+  clock <- required ClockRejected (W.eventInstructions event); target <- required malformed (W.eventPhysical event)
+  require (clock <= startupBudget) ClockRejected
   require (W.eventByteOrder event == Just W.Little && W.eventAddress event <= 0xffffffff
-    && target <= 0xffffffff && physical (fromIntegral (W.eventAddress event)) == fromIntegral target) WriteRejected
+    && target <= 0xffffffff && physical (fromIntegral (W.eventAddress event)) == fromIntegral target) malformed
   require (any (\classification -> case W.classRange classification of
       [start,end] -> target >= start && toInteger target+toInteger (W.eventSize event) <= toInteger end
         && W.eventSource event `elem` W.classKinds classification
       _ -> False) (expectedClasses inputs)) WatchRejected
   _ <- sourceWord inputs (address pc)
+  pure (core,pc,clock,target)
+advance :: Inputs -> Progress -> W.MemoryEvent -> Either WitnessError Progress
+advance inputs progress event = do
+  require (W.eventSource event /= W.HostWrite && W.eventSource event /= W.ModelBusWrite) ForeignWriterRejected
+  (core,pc,clock,target) <- eventShape inputs event
   case W.eventSource event of
     W.CpuFetch -> do
-      require (W.eventAddress event == fromIntegral (address pc) && target == fromIntegral (address pc)
-        && W.eventSize event == 4 && W.eventValue event == Nothing && W.eventBefore event == Nothing) FetchRejected
-      require (count clock == clockTotal progress+1) ClockRejected
-      let counts = zipWith (\position current -> if position == (case core of W.Primary -> 0; W.Secondary -> 1) then W.Count (count current+1) else current) [0 :: Int ..] (progressCounts progress)
+      checkFetchShape pc target event
+      nextTotal <- clockTotal progress >>= checkedIncrement
+      require (clock == nextTotal) ClockRejected
+      let position = case core of W.Primary -> 0; W.Secondary -> 1
+      current <- at ClockRejected (progressCounts progress) position
+      incremented <- checkedIncrement current
+      let counts = zipWith (\slot currentCount -> if slot == position then incremented else currentCount) [0 :: Int ..] (progressCounts progress)
       pure progress {progressCounts=counts,progressFetches=M.insert core (pc,clock) (progressFetches progress)}
     W.CpuWrite -> do
       require (M.lookup core (progressFetches progress) == Just (pc,clock)) ClockRejected
@@ -292,12 +318,17 @@ replay inputs receipt watch = do
   where
     step (progress,previousCursor) sample = do
       let end = cursor (sampleCursor sample); start = cursor previousCursor; events = take (end-start) (drop start (W.watchRecords watch))
-          context = sampleContext sample; state = contextState context; expectedClock = W.Count (sum (map count (W.contextCounts state)))
-          -- Instruction points precede watch hooks; stopped fetch clocks equal the settled count.
-          stopped event = W.eventSource event == W.CpuFetch && W.eventCore event == Just (watchCore (contextCore context))
-            && W.eventPc event == Just (W.contextPc state) && W.eventInstructions event == Just expectedClock
+          context = sampleContext sample; state = contextState context
+      expectedClock <- checkedCounts (W.contextCounts state)
       require (end > start && end <= length (W.watchRecords watch)) SnapshotRejected
-      executed <- case reverse events of event:rest | stopped event -> Right (reverse rest); _ -> Left FetchRejected
+      -- Instruction points precede watch hooks; stopped fetch clocks equal the settled count.
+      executed <- case reverse events of
+        event:rest -> do
+          (core,pc,clock,target) <- eventShape inputs event
+          checkFetchShape pc target event
+          require (core == watchCore (contextCore context) && pc == W.contextPc state && clock == expectedClock) FetchRejected
+          pure (reverse rest)
+        _ -> Left FetchRejected
       next <- foldM (advance inputs) progress executed
       require (progressCounts next == W.contextCounts state) ClockRejected
       memory <- checkSample inputs receipt sample (progressMemory next)
@@ -460,7 +491,7 @@ checkFirst receipt watch first = do
   trampolineCount <- at FirstTaskRejected (W.contextCounts trampolineState) (coreIndex core)
   transferCount <- at FirstTaskRejected (W.contextCounts transferState) (coreIndex core)
   entryCount <- at FirstTaskRejected (W.contextCounts state) (coreIndex core)
-  require (count trampolineCount == count stackCount+1 && count entryCount == count transferCount+1) FirstTaskRejected
+  require (toInteger (count trampolineCount) == toInteger (count stackCount)+1 && toInteger (count entryCount) == toInteger (count transferCount)+1) FirstTaskRejected
   let entryPc = address (firstEntry first)
   registers <- case entryPc of 0x69d160 -> Right [4,5,11,14]; 0x69cbf0 -> Right [11]; 0x69cd58 -> Right [4,5,6,11,14]; _ -> Left PrologueRejected
   let frameBytes = 4*fromIntegral (length registers); expectedSp = address (firstStackTop first)-frameBytes
@@ -469,7 +500,7 @@ checkFirst receipt watch first = do
     && W.contextLr after == W.contextLr state && W.contextCpsr after == W.contextCpsr state) PrologueRejected
   beforeCount <- at PrologueRejected (W.contextCounts state) corePosition
   afterCount <- at PrologueRejected (W.contextCounts after) corePosition
-  require (count afterCount == count beforeCount+1) PrologueRejected
+  require (toInteger (count afterCount) == toInteger (count beforeCount)+1) PrologueRejected
   expectedValues <- mapM (\position -> if position == 14 then pure (address (W.contextLr state)) else value <$> at PrologueRejected (W.contextRegisters state) position) registers
   committed <- localMemory entered
   actualValues <- mapM (readWord PrologueRejected committed . (physical expectedSp+) . (4*)) [0..fromIntegral (length registers)-1]
@@ -497,7 +528,8 @@ admitReceipt inputs@(Inputs _ expectedIdentity) observed = do
     && W.watchClasses watch == expectedClasses inputs && W.watchRanges watch == unionRanges (map W.classRange (expectedClasses inputs))
     && not (null (W.watchRecords watch)) && length (W.watchRecords watch) < 1048576) WatchRejected
   let clocks = mapMaybe W.eventInstructions (W.watchRecords watch); ticks = mapMaybe W.eventTick (W.watchRecords watch)
-  require (length clocks == length (W.watchRecords watch) && length ticks == length clocks && clocks == sort clocks && ticks == sort ticks) ClockRejected
+  require (length clocks == length (W.watchRecords watch) && length ticks == length clocks
+    && all (<=startupBudget) clocks && clocks == sort clocks && ticks == sort ticks) ClockRejected
   require (receiptSites receipt == expectedSites && not (null (receiptSamples receipt)) && length (receiptHits receipt) < 4096) SnapshotRejected
   first <- at SnapshotRejected (receiptSamples receipt) 0
   require (map (index . sampleHit) (receiptSamples receipt) == [index (sampleHit first)..length (receiptHits receipt)-1]) SnapshotRejected
