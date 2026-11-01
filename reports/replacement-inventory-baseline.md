@@ -1223,3 +1223,102 @@ Retained stock enters only the compatibility front end at the complete recovered
 
 `rlsf` is the provisional trace-comparison baseline, not a final benchmark-backed selection. Representative heap traces, full task/core/interrupt attribution, unresolved indirect and address-sensitive clients, aligned/usable-size/statistics entry discovery and target-cycle/fragmentation/contention measurements remain [#148](https://github.com/skeet70/latent-image/issues/148) obligations. The reviewed natural observer builds with 27 passing reducer tests, but its enabled route refuses the all-images-resident preflight when image-5 calloc code is still zero at the first image-4 malloc. Disabled menu routes pass; they supply no heap lifetimes. The [lifecycle-aware heap-code guard](stock-heap-survey.md#image-5-heap-code-admission) is ready for independent review before execution. File handles, task storage and the misidentified `0x007235d8` synchronization adapter are separate mechanisms.
 
+### 8.17 Initial root, idle and standby task bodies (#152)
+
+`E-INITIAL-TASK-BODIES-SOURCE-150` binds the complete X-M1 1.50 image4 bodies, their retained service boundaries and a read-only projection of the admitted #151 stock receipt. This is source recovery and an owned-increment proposal. It adds no owned task artifact or natural task-body qualification.
+
+#### Entries, frames and observed startup contexts
+
+| Task | Core / class | Complete body | Stock local frame | Committed initial stack | Effective priority |
+| --- | --- | --- | --- | --- | --- |
+| Root104 | A / 1 | `[0x69d160,0x69d2b4)`, 340 bytes | 16 bytes | `[0xa10a00,0xa10e00)` | 0 |
+| Idle102 | A / 1 | `[0x69cbf0,0x69cc00)`, 16 bytes | 4 bytes | `[0xa10e00,0xa11200)` | 14 |
+| Idle103 | B / 2 | Same shared idle body | 4 bytes | `[0xa10200,0xa10600)` | 14 |
+| Standby93 | B / 2 | `[0x69cd58,0x69cdf8)`, 160 bytes | 32 bytes | `[0xa10600,0xa10a00)` | 12 |
+
+The stacks above are committed #151 creation-record extents, not bounds for all retained callees. Source: image4 listing lines131585-131588,131675-131714,131933-132017 and the four phase descriptors at131736-131813.
+
+`E-STARTUP-TASK-STOCK-QUALIFIED-150` admits B93 entry at6,445,424 with SP `0xa10a00`, then A104 entry at6,448,757 with SP `0xa10e00`; both have CPSR `0x53`, argument0 and the selected node/creation pointers supplied by their real trampolines. Their first prologue instructions complete at6,445,425 and6,448,758. Incoming LR is `0xd53b0` for B93 and `0x453f0` for A104.
+
+The same receipt records B103 entry at6,445,956 with SP `0xa10600`, LR `0xd53b0` and CPSR `0x53`, after B93 blocks. The raw journal contains its WFI fetch at6,445,959 and no idle backedge before watching ends. Final per-core counts are `[3259799,3188959]`: B makes no further instruction progress during that remaining interval. A102 is created and runnable, but its entry is not watched. Root104's first retained call is also outside the interval. These projections do not add an independently qualified WFI exit, repeated iteration or wakeup claim.
+
+#### Shared idle body
+
+The idle body saves incoming r11 at entry-SP-4, sets r11 to the resulting SP, then repeats WFI and its backedge forever. It has no retained service call, task/core query, shared-word predicate, timer read, message receive, MMIO access, completion publication or return path. Idle102 and idle103 wait for architectural interrupt activity, not for the standby event flag.
+
+The pinned FujiMod R-profile engine advances PC past WFI and yields `WaitForInterrupt`; the board marks that core waiting and releases its wait when the modeled IRQ or FIQ pin is high. That source behavior is distinct from physical interrupt/cache qualification. The ordinary user-ARM native-case profile refuses WFI and other hints before execution; it cannot substitute for natural full-system idle qualification.
+
+Observable idle acceptance therefore needs actual task selection and entry, the first wait, IRQ preemption/restoration and a subsequent backedge/wait when the scenario claims wake behavior. A parked core is not a completed task. The caller's saved return continuation remains live even though this body has no source return.
+
+#### Standby event and hardware contract
+
+Standby93 reserves a persistent output word at entry-SP-32 and repeatedly calls `0x724480(1,&output,-1)`. It ignores returned status and proceeds only when the entire output word equals1. It does not initialize that word. A wait error that leaves the output untouched preserves its previous or initial stack contents; a replacement must not silently substitute `status == 0` for this predicate.
+
+`0x724480` selects the executing core's interface root, queries current task and encodes its class/id. For B93 the event id is `0x0002005d`; selected slot `+0x9c` calls B's `0xd8af0`, with A's counterpart `0x48b30`. Mode0 requires all requested bits, but a satisfied wait writes the whole current flag word to the output. Thus word3 satisfies mask1 in the kernel and is rejected by the body's exact equality. Attribute mask4 clears the whole flag word after recording the result. This is event-bit state, not a counted wake or a message queue.
+
+The B wait refuses invalid task/IRQ context, domain/id/mode/mask/timeout errors, absent objects and an existing waiter at their retained boundaries. An unsatisfied nonzero-timeout wait records its request and blocks through `0xd48a4`; successful resumption copies the recorded result. Wrapper statuses0 and-50 bypass error reporting. Other statuses log `(18,current_task,status)`, store `0x40a0f82c` and invoke the callback at `0x4089ea8c` through `0x723398`; that callback is not assumed to abort. Source: image4 lines270373-270426 and loader-B lines8201-8228,8866-9060.
+
+On output1 the body performs this order:
+
+| Order | Required effect |
+| --- | --- |
+| 1 | Save and mask the executing core's IRQ I bit through `0x42574`; leave the FIQ mask unchanged. |
+| 2 | Call `0x42634(0,0)` for the whole-cache clean/invalidate path, then disable D-cache mask `0x4` through `0x425e0` and I-cache mask `0x1000` through `0x425d8`. |
+| 3 | Read `0xfffb4080`, `0xfffb4084`, `0xfffb4088`, `0xfffb408c`, retaining the four words in registers. |
+| 4 | Write `0xffffffff` to `0xfffb40a0`, `0xfffb40a4`, `0xfffb40a8`, `0xfffb40ac`, in that order. |
+| 5 | Write `0x01000000` to `0xfffb408c`, then execute WFI at `0x69cdcc`. |
+| 6 | Write `0x01000000` to `0xfffb40ac`, then restore the four saved words to `0xfffb4080..0xfffb408c` in address order. |
+| 7 | Restore the saved IRQ bit through `0x4257c`, enable I-cache through `0x425c8`, then enable D-cache through `0x425d0`. Repeat the event wait. |
+
+The cache-enable state is not saved: both caches are unconditionally enabled on exit, after IRQ restoration. The CPU helpers contain the recovered DSB/ISB/cache-maintenance sequences; the task body adds no barrier around its MMIO stores or WFI. Low-address `0x425xx` helper execution on B is not a transfer to A. Code address, executing core and encoded event domain are separate identities. Both loader listings lines2374-2518 bind the corresponding CPU-local helpers; no IRQ-leaf digest is used.
+
+Task-associated flag creation initializes its word to zero, so creation is not the mask1 producer. `0x724558(destination,bits)` selects task- or interrupt-context flag setting through slots `+0x88`/`+0x8c`; the lower operation ORs bits and readies a satisfied waiter. The generic callback `0x69da38` sets mask1 for its argument, but no recovered call or installed callback establishes that its argument is task93. The concrete B93 flag producer, its ordering relative to blocking, the hardware source represented by fourth-bank mask `0x01000000`, and the interrupt-controller acknowledgement/routing semantics remain exact missing facts. The watched stock receipt contains no successful B93 flag return, standby WFI/wake or completed restore cycle.
+
+#### Root104 initialization, branches and handback
+
+Root104 saves `{r4,r5,r11,lr}` in its 16-byte local frame, does not inspect its incoming task argument, and executes this direct prefix in order:
+
+| Stage | Root-required calls and effects |
+| --- | --- |
+| Shared/diagnostic setup | `0x649624()`, `0x7284ec()`, marker `0x72872c(0x01010000)`, callback publication `0x725b54(0x72835c)`. |
+| Initial resources | Exactly97 calls `0x7247ac(id,1)`, IDs1..97 inclusive. This constructs `{0,1,1}` through selected-root slot `+0x64`; root ignores each result. It is not task activation. |
+| Early executor workers | `0x69ca24 -> 0x6b0764(0x69c9f8)` submits five `execpu` workers88..92, priority2, stack `0x1000`, entry `0x6c6b5c`, argument `0x8e1f28`; that argument cell receives callback `0x69c9f8`. Mailbox/task failures return-255 and the wrapper halts at `0x69ca40`. |
+| Retained state/hardware setup | `0x676054()`, `0x662e48()`, `0x665224()`, `0x649070()`, `0x6490dc(1)`. |
+| Checked initialization | `0x6a9354()` must return0 or root halts at `0x69d1d0`; `0x6ac2b4()` must return0 or it halts at `0x69d1e0`. |
+| Adjustment/MMIO/diagnostics | `0x69f204()`, `0x656788()`, `0x7262cc()`, callback publication `0x724cbc(0x726478)`, `0x6a5634()`. |
+| Branch selection | `0x6a59b8(34,0,0)` then `0x69cfa4()`. Nonzero selects the later-initialization arm; zero selects the configuration/shutdown arm. |
+
+The early workers precede that branch and must not be conflated with the later flashloader. Their constructor creates a mailbox per worker and submits each through the retained task wrapper. Source: image4 lines131470-131477,151774-151841 and worker ID table630621-630635.
+
+On the zero arm, root queries `0x6a5920(34)`. If nonzero it calls `0x6a59b8` with `(34,0,0)`, `(31,60,0)`, `(32,0,0)`, `(34,1,0)`, in order. It then calls `0x6a564c()`, `0x6a5c08()`, `0x6568ec()` and halts forever at `0x69d278`. This arm does not call `0x69ca44`.
+
+On the nonzero arm, `0x69ca44()` runs the retained later initialization and submits task95 `elfloader`, task60 `flashloader`, then task59 `initcont`, with the descriptors in §8.15. Each checked initializer must return zero; its failure path halts. Root then calls `0x725424(30,0,0x69cc18,0x96ca4c)`, ignoring registration status, emits marker `0x72872c(0x11010000)`, and calls `0x72612c(0)` for current-task cleanup/termination.
+
+If that final service and its lower operations return, it supplies-63, and root's epilogue at `0x69d2b0` restores the saved frame and returns through the trampoline-supplied LR. The source does not make root unconditionally divergent. Natural cleanup nonreturn, any returning continuation and eventual task-resource release remain to be observed.
+
+The periodic callback `0x69cc18` visits the current ID at `0x828094` through `0x725b74`, increments it and signed-wraps above104 to1. Result-64 calls `0x7235d8` then halts at `0x69cc3c`. Its1..104 bound is not root's1..97 resource loop. Registering the callback does not establish invocation; its code, tables and handle outlive root if registration succeeds.
+
+`0x69cfa4` has mode-dependent configuration, MMIO and potentially blocking callback behavior. Its result cannot be renamed ordinary/service boot without route evidence. Root104 itself does not load image5 or the plain image. The downstream task60 commands, callbacks and task59 state machine lead toward `0x73cdc0 -> 0x69d2b4 -> BLX *(load+0xc)` and image5 entry `0xd985a4`, under §8.15's existing partial order. Source submission order is not observed scheduling or publication order.
+
+#### First owned increment and acceptance
+
+Own the complete **shared idle102/103 body** in place over `[0x69cbf0,0x69cc00)`, a strict16-byte carrier. Use a Rust divergent WFI loop with only the required A32 entry boundary. Retain root104, standby93, initial creation/auto-ready/scheduler/trampolines, IRQ/timer/device services and their resources. This increment has no allocation, new shared-state protocol, production stock fallback or guessed relocation.
+
+1. Bind canonical DAT/image4, both task identities and current/selected nodes, actual emitted bytes/symbols and one-DAT confinement. Refuse an artifact that exceeds16 bytes. Record its actual live stack profile; do not compare private compiler frames as caller-visible behavior.
+2. Independently review the new firmware bytes and the existing startup observer/consumer extension before execution. Reuse their typed source, task, alias, TCM, clock and attributed-journal mechanics. Do not relax the user-ARM native-case profile to manufacture a WFI pass.
+3. Start from natural reset and real auto-ready/scheduler entry. Observe both A102 and B103 entering owned code and reaching WFI. Never force a task frame or treat a submitted/runnable descriptor as execution.
+4. For each claimed wake scenario, observe a real interrupt preemption/return, restored task/IRQ state, the resumed idle backedge and repeated WFI. Independently compare consumer-visible state, effects and stack bounds, not compiler frame shape or instruction counts. Name naturally unreached cases.
+5. Refuse wrong task/core/privilege/IRQ context, stack/TCM/alias mismatch, code corruption, forbidden effects, WFE/busy-loop/return substitutions, missing or misattributed wake and lost repeated iterations at their actual boundaries.
+6. Continuously admit only the installed owned idle code on both cores and executable aliases. Reject original content/copies and out-of-contract transfers, rather than rejecting the in-place address that now contains owned code. Keep both stacks, task nodes/creation records, interrupt continuations, dependent executable mappings and retained service resources live through all consumers.
+7. Extend watching past A104's first prologue for separately bound retained/owned observations. The existing cutoff cannot qualify A102 entry or any idle wake iteration. B93 can block and B103 can run before A102 creation; the four phase submissions are not a global barrier.
+8. Keep root/standby replacement, general scheduler and IRQ/device ownership, later executable publication and application startup open. Passing this increment does not close #152.
+
+| #152 acceptance criterion | Current status and exact remaining fact |
+| --- | --- |
+| Bound entries, task/core/context, loop/handback and retained services | Complete bodies and the existing initial contexts are source-bound. A102 entry, root service/handback execution and standby wake/hardware routing remain unobserved. |
+| Natural owned root104/idle102/idle103/standby93 execution | Unmet. No owned task-body artifact or run is introduced here. |
+| Independent actions, task/IRQ, blocking/wakeup, repetition and handback comparisons | Existing stock admission reaches B93/A104 first prologues only. New retained/owned interval comparisons are required. |
+| Wrong identity/context, lost coordination, forbidden effects and false-completion refusals | Proposed for the idle increment. Concrete B93 flag producer and hardware wake contract remain prerequisites for standby controls. |
+| Continuous body guards and shared-data/callback/stack/task lifetimes | Unmet. Source extents and persistent consumers are named; runtime exclusion, wake/restoration and release are unqualified. |
+| Inventory, startup documentation and ledger separate later application, scheduler and device dependencies | Recorded here and in the startup observer documentation; no larger ownership claim is added. |
+
