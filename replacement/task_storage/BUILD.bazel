@@ -20,7 +20,10 @@ xm1_rust_elf(
 
 haskell_library(
     name = "task-storage-artifact",
-    srcs = ["Replacement/TaskStorage/Artifact.hs"],
+    srcs = [
+        "Replacement/TaskStorage/Artifact.hs",
+        "Replacement/TaskStorage/FrameProof.hs",
+    ],
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
@@ -29,8 +32,10 @@ haskell_library(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:containers",
         "//host:first-stage",
         "//host:update-container",
+        "//host/firmware:bank-allowlist",
     ],
 )
 

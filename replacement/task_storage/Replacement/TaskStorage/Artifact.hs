@@ -3,6 +3,9 @@ module Replacement.TaskStorage.Artifact
   ( CanonicalSource, LinkedArtifact, StagedImage4, StagedCandidate
   , canonicalSource, deriveArtifact, stageImage4, stagedBytes, contractValue
   , stageCandidate, candidateBytes, candidateContractValue
+  , artifactAdmission, Admission (..), Scratch (..), ByteCount (..), FrameOffset (..)
+  , InstructionAddress (..), DataOffset (..), DataRoot (..), Location (..)
+  , Direction (..), Access (..), Premise (..), ReturnPaths (..)
   ) where
 
 import Control.Monad (forM_, unless)
@@ -14,6 +17,12 @@ import qualified Emulation.Sha256 as SHA
 import qualified Emulation.Image4Staging as Image4
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
+import Replacement.TaskStorage.FrameProof
+  ( Admission (..), Scratch (..), ByteCount (..), FrameOffset (..)
+  , InstructionAddress (..), DataOffset (..), DataRoot (..), Location (..)
+  , Direction (..), Access (..), Premise (..), ReturnPaths (..)
+  )
+import qualified Replacement.TaskStorage.FrameProof as Proof
 
 newtype GuestAddress = GuestAddress Word32
 newtype RequestedBytes = RequestedBytes Word32
@@ -21,7 +30,7 @@ newtype TaskIndex = TaskIndex Word32
 newtype SourceIdentity = SourceIdentity SHA.Sha256
 
 data CanonicalSource = CanonicalSource B.ByteString B.ByteString SourceIdentity SourceIdentity SourceIdentity SourceIdentity
-data LinkedArtifact = LinkedArtifact B.ByteString SourceIdentity SourceIdentity GuestAddress GuestAddress
+data LinkedArtifact = LinkedArtifact B.ByteString SourceIdentity SourceIdentity GuestAddress GuestAddress Admission
 data StagedImage4 = StagedImage4 CanonicalSource LinkedArtifact B.ByteString
 data StagedCandidate = StagedCandidate StagedImage4 Image4.StagedCandidate
 
@@ -111,10 +120,14 @@ deriveArtifact image symbolBytes = do
   exit <- branch 0xea000000 (start + 20) resume
   let expected = [0xe1a00004,0xe1a01007,0xe1a02008,call,0xe1a04000,exit]
   require (map (U.word32At image) [0,4 .. 20] == expected) "task storage adapter register or return ABI differs"
-  pure (LinkedArtifact image (identity image) (identity symbolBytes) (GuestAddress rustStart) (GuestAddress (fromInteger rustEnd)))
+  admission <- Proof.proveFrame (InstructionAddress start) image (InstructionAddress rustStart) (InstructionAddress (fromInteger rustEnd))
+  pure (LinkedArtifact image (identity image) (identity symbolBytes) (GuestAddress rustStart) (GuestAddress (fromInteger rustEnd)) admission)
+
+artifactAdmission :: LinkedArtifact -> Admission
+artifactAdmission (LinkedArtifact _ _ _ _ _ admission) = admission
 
 stageImage4 :: CanonicalSource -> LinkedArtifact -> StagedImage4
-stageImage4 source@(CanonicalSource _ original _ _ _ _) artifact@(LinkedArtifact linked _ _ _ _) =
+stageImage4 source@(CanonicalSource _ original _ _ _ _) artifact@(LinkedArtifact linked _ _ _ _ _) =
   let offset = fromIntegral (transitionStart - imageBase)
       extent = fromIntegral (transitionEnd - transitionStart)
       padding = B.concat (replicate ((extent - B.length linked) `div` 4) (U.putWord32 0xe320f000))
@@ -148,7 +161,7 @@ aliasValue :: GuestAddress -> Value
 aliasValue guest = object ["guest" .= addressValue guest, "candidate_physical" .= (addressValue guest .&. 0xbfffffff)]
 
 contractValue :: StagedImage4 -> Value
-contractValue (StagedImage4 (CanonicalSource _ _ source original primary secondary) (LinkedArtifact _ linked symbols rustStart rustEnd) staged) =
+contractValue (StagedImage4 (CanonicalSource _ _ source original primary secondary) (LinkedArtifact _ linked symbols rustStart rustEnd admission) staged) =
   let TaskIndex taskIndex = TaskIndex 102
       RequestedBytes requested = RequestedBytes 0x400
   in object
@@ -159,6 +172,7 @@ contractValue (StagedImage4 (CanonicalSource _ _ source original primary seconda
     , "staged_image4_sha256" .= identityText (identity staged)
     , "patch" .= object ["start" .= transitionStart, "end" .= transitionEnd]
     , "rust" .= [addressValue rustStart,addressValue rustEnd]
+    , "frame_admission" .= Proof.admissionValue admission
     , "retained_helper" .= ([0x725c6c,0x725cc4,0x725da8,0x725dd8] :: [Word32])
     , "retained_pool_base_literal" .= object
         ["guest" .= (0x725dd4 :: Word32), "expected_word" .= (0x40a10200 :: Word32)]

@@ -4,15 +4,19 @@ import Control.Monad (forM, unless)
 import Data.Bits ((.&.), (.|.), shiftR)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
-import Data.Either (isLeft, isRight)
+import Data.Either (isLeft)
+import Data.List (nub, sort)
 import Data.Word (Word32)
 import Numeric (showHex)
-import Replacement.TaskStorage.Artifact (deriveArtifact)
+import Replacement.TaskStorage.Artifact
+  ( deriveArtifact, artifactAdmission, Admission (..), Scratch (..), ByteCount (..)
+  , Access (..), Location (..), DataRoot (..), Premise (..)
+  )
 import qualified FujiAF.UpdateContainer as U
 
 -- Synthetic A32 inputs specify public admission boundaries, not firmware execution.
 newtype Program = Program [Word32]
-data Expected = Admit | Refuse
+data Expected = Admit ByteCount [DataRoot] | Refuse
 data Scenario = Scenario String Expected Program
 
 main :: IO ()
@@ -21,7 +25,14 @@ main = do
     let (image, symbols) = artifact program
         actual = deriveArtifact image symbols
         passed = case expected of
-          Admit -> isRight actual
+          Admit bytes roots -> case actual of
+            Left _ -> False
+            Right admitted ->
+              let proof = artifactAdmission admitted
+                  observedRoots = sort (nub [root | Access _ _ (GuestWord root _) <- admissionAccesses proof])
+              in scratchBytes (admissionScratch proof) == bytes && observedRoots == sort roots
+                && all (`elem` admissionPremises proof)
+                  [GuestWritesDisjointImageAndAllocatedFrame,OwnFrameStableStorage]
           Refuse -> isLeft actual
     putStrLn (name ++ ": " ++ if passed then "passed" else "FAILED")
     pure passed
@@ -29,18 +40,18 @@ main = do
 
 scenarios :: [Scenario]
 scenarios =
-  [ Scenario "leaf return preserves caller with no frame" Admit (Program [0xe3a00000,0xe12fff1e])
-  , Scenario "callee spill and block restore preserve caller" Admit (Program
+  [ Scenario "leaf return preserves caller with no frame" (Admit (ByteCount 0) []) (Program [0xe3a00000,0xe12fff1e])
+  , Scenario "callee spill and block restore preserve caller" (Admit (ByteCount 8) []) (Program
       [0xe92d4010,0xe1a04000,0xe3a00000,0xe8bd8010])
-  , Scenario "single-transfer frame allocation and return preserve caller" Admit (Program
+  , Scenario "single-transfer frame allocation and return preserve caller" (Admit (ByteCount 4) []) (Program
       [0xe52de004,0xe49df004])
-  , Scenario "frame alias load writeback remains within allocated frame" Admit (Program
+  , Scenario "frame alias load writeback remains within allocated frame" (Admit (ByteCount 8) []) (Program
       [0xe92d4010,0xe1a0300d,0xe4934004,0xe493e004,0xe1a0d003,0xe12fff1e])
-  , Scenario "output word access requires no new guest alignment check" Admit (Program
+  , Scenario "output word access requires no new guest alignment check" (Admit (ByteCount 0) [Output]) (Program
       [0xe5821000,0xe5920000,0xe12fff1e])
-  , Scenario "generic incoming index reaches only the indexed requested-size word" Admit (Program
+  , Scenario "generic incoming index reaches only the indexed requested-size word" (Admit (ByteCount 0) [IndexedState]) (Program
       [0xe30fcc44,0xe344c0a0,0xe0800080,0xe08c3100,0xe5831004,0xe12fff1e])
-  , Scenario "cursor value can be copied to output without becoming a pointer" Admit (Program
+  , Scenario "cursor value can be copied to output without becoming a pointer" (Admit (ByteCount 0) [Cursor,Output]) (Program
       [0xe30e3a98,0xe3443089,0xe5930000,0xe5820000,0xe12fff1e])
   , Scenario "callee register clobber cannot return" Refuse (Program [0xe1a04000,0xe12fff1e])
   , Scenario "callee spill overwrite cannot restore caller identity" Refuse (Program
