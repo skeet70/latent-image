@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.StartupConsumers.Effects (ConsumerProjection, familyEntryAddress, checkConsumers, consumerProjection, consumerProjectionValue) where
 
-import Control.Monad (foldM, forM_, when)
+import Control.Monad (foldM, forM, forM_, when)
 import qualified Data.Aeson as J
 import Data.Bits ((.&.), (.|.), shiftL, xor)
 import qualified Data.ByteString as B
@@ -42,6 +42,96 @@ familyEpilogue family = case family of
   TaskWrapper -> 0x726094; TaskReserve -> 0x725dcc; StorageReserve -> 0x7235cc
   MessageConstruct -> 0x724f04; MessageSend -> 0x725210; MessageReceive -> 0x725420
 
+data ExecutionMode = UserMode | FiqMode | IrqMode | SupervisorMode | MonitorMode | AbortMode | HypervisorMode | UndefinedMode | SystemMode deriving (Eq)
+data ExecutionFrame = ExecutionFrame Core ExecutionMode K.Address K.Address deriving (Eq)
+data ConsumerFrameLayout = ConsumerFrameLayout {savedFrameBytes :: S.ByteCount,allocatedFrameBytes :: S.ByteCount}
+
+consumerFrameLayout :: Family -> ConsumerFrameLayout
+consumerFrameLayout family = case family of
+  TaskWrapper -> layout 24 56
+  TaskReserve -> layout 32 32
+  StorageReserve -> layout 32 32
+  MessageConstruct -> layout 36 72
+  MessageSend -> layout 24 32
+  MessageReceive -> layout 32 40
+  where layout saved allocated = ConsumerFrameLayout (S.ByteCount saved) (S.ByteCount allocated)
+
+executionFrame :: Probe -> Either WitnessError ExecutionFrame
+executionFrame probe = do
+  mode <- case number (K.contextCpsr (machine probe)) .&. 0x1f of
+    0x10 -> pure UserMode
+    0x11 -> pure FiqMode
+    0x12 -> pure IrqMode
+    0x13 -> pure SupervisorMode
+    0x16 -> pure MonitorMode
+    0x17 -> pure AbortMode
+    0x1a -> pure HypervisorMode
+    0x1b -> pure UndefinedMode
+    0x1f -> pure SystemMode
+    _ -> Left InvocationRejected
+  fp <- K.Address <$> register probe 11
+  pure (ExecutionFrame (core probe) mode fp (K.contextSp (machine probe)))
+
+bodyFrame :: Family -> Probe -> Either WitnessError ExecutionFrame
+bodyFrame family entry = do
+  ExecutionFrame owner mode _ incoming <- executionFrame entry
+  let S.ByteCount allocated = allocatedFrameBytes (consumerFrameLayout family)
+  require (address incoming >= allocated+8) InvocationRejected
+  pure (ExecutionFrame owner mode (K.Address (address incoming-4)) (K.Address (address incoming-allocated)))
+
+errorContinuations :: Family -> [K.Address]
+errorContinuations family = map K.Address $ case family of
+  TaskWrapper -> [0x725eac,0x725fe4,0x726058,0x72608c]
+  TaskReserve -> []
+  StorageReserve -> []
+  MessageConstruct -> [0x724d50,0x724dd4,0x724e64,0x724efc]
+  MessageSend -> [0x7250b4,0x72513c,0x725208]
+  MessageReceive -> [0x7253b8]
+
+checkFrameAttribution :: Receipt -> Invocation -> Probe -> Probe -> Either WitnessError ()
+checkFrameAttribution receipt invocation entry returned = do
+  incoming <- executionFrame entry
+  final <- executionFrame returned
+  require (incoming == final) InvocationRejected
+  expectedBody@(ExecutionFrame owner mode bodyFp bodySp) <- bodyFrame (invocationFamily invocation) entry
+  let probes = invocationProbes receipt invocation
+      family = invocationFamily invocation
+      S.ByteCount saved = savedFrameBytes (consumerFrameLayout family)
+  require (all (\probe -> probeKind probe `elem` [FamilyEntry,SourceProbe,DynamicTarget,DynamicReturn,FamilyReturn]) probes) InvocationRejected
+  sources <- forM [probe | probe <- probes,probeKind probe == SourceProbe] $ \probe -> do
+    actual <- executionFrame probe
+    if pc probe `elem` [0x7233ac,0x7233b0] then do
+      let helperSp = address bodySp-8
+          expectedHelper = ExecutionFrame owner mode (K.Address (address bodySp-4)) (K.Address helperSp)
+      require (actual == expectedHelper) InvocationRejected
+      contents <- memoryAt receipt probe
+      callerFp <- wordAt InvocationRejected contents helperSp
+      continuation <- K.Address <$> wordAt InvocationRejected contents (helperSp+4)
+      require (callerFp == address bodyFp && continuation `elem` errorContinuations family) InvocationRejected
+    else do
+      require (pc probe >= address (familyEntryAddress family) && pc probe <= familyEpilogue family) InvocationRejected
+      let expected = if pc probe == familyEpilogue family
+            then ExecutionFrame owner mode bodyFp (K.Address (sp entry-saved))
+            else expectedBody
+      require (actual == expected) InvocationRejected
+    pure (probe,actual)
+  targets <- forM [probe | probe <- probes,probeKind probe == DynamicTarget] $ \probe -> do
+    actual <- executionFrame probe
+    caller <- one InvocationRejected [source | (source,key) <- sources,key == actual
+      ,pc source `elem` map (\(site,_,_) -> site) callSpecs,lr probe == pc source+4,probeId source < probeId probe]
+    sourceCount <- instructionCount caller
+    targetCount <- instructionCount probe
+    require (count targetCount == count sourceCount+1
+      && K.contextRegisters (machine caller) == K.contextRegisters (machine probe)) InvocationRejected
+    pure (probe,actual)
+  forM_ [probe | probe <- probes,probeKind probe == DynamicReturn] $ \probe -> do
+    actual <- executionFrame probe
+    _ <- one InvocationRejected [target | (target,key) <- targets,key == actual
+      ,pc probe == lr target,probeId target < probeId probe]
+    pure ()
+  where
+    instructionCount probe = one InvocationRejected [at | (owner,at) <- zip [Primary,Secondary] (K.contextCounts (machine probe)),owner == core probe]
+
 checkConsumers :: S.SourceModel -> Receipt -> Either WitnessError ()
 checkConsumers source receipt = do
   checkKernelBaselines receipt
@@ -59,12 +149,16 @@ checkConsumers source receipt = do
       && core returned == core entry && probeFamily returned == probeFamily entry
       && take 8 (drop 4 (K.contextRegisters (machine returned))) == take 8 (drop 4 (K.contextRegisters (machine entry)))
       && K.contextTcm (machine returned) == K.contextTcm (machine entry)) InvocationRejected
+    checkFrameAttribution receipt invocation entry returned
     case invocationParent invocation of
       Nothing -> pure ()
       Just parentId -> do
         parent <- one InvocationRejected [candidate | candidate <- invocations,invocationId candidate == parentId]
         parentEntry <- entryOf receipt parent
         parentReturn <- returnOf receipt parent
+        callerFrame <- executionFrame entry
+        expectedCaller <- bodyFrame (invocationFamily parent) parentEntry
+        require (callerFrame == expectedCaller) InvocationRejected
         require (core entry == core parentEntry && probeId parentEntry < probeId entry && probeId returned < probeId parentReturn) InvocationRejected
         target <- one InvocationRejected [probe | probe <- invocationProbes receipt parent,probeKind probe == DynamicTarget
           ,pc probe == pc entry,lr probe == lr entry,sp probe == sp entry,probeClock probe == probeClock entry]

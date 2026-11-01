@@ -33,6 +33,7 @@ macro_rules! scalar {
 }
 scalar!(Address, u32);
 scalar!(Word, u32);
+scalar!(StackBytes, u32);
 scalar!(InvocationId, u64);
 scalar!(ResourceId, u64);
 scalar!(ProbeSequence, u64);
@@ -115,6 +116,32 @@ impl Family {
             Self::TaskWrapper => 0x725dd8, Self::TaskReserve => 0x725c6c,
             Self::StorageReserve => 0x723470, Self::MessageConstruct => 0x724cdc,
             Self::MessageSend => 0x72503c, Self::MessageReceive => 0x725318,
+        }
+    }
+    fn layout(self) -> FrameLayout {
+        let (saved, locals) = match self {
+            Self::TaskWrapper => (24,32),
+            Self::TaskReserve | Self::StorageReserve => (32,0),
+            Self::MessageConstruct => (36,36),
+            Self::MessageSend => (24,8),
+            Self::MessageReceive => (32,8),
+        };
+        FrameLayout { saved: StackBytes(saved), locals: StackBytes(locals) }
+    }
+    fn epilogue(self) -> Address {
+        Address(match self {
+            Self::TaskWrapper => 0x726094, Self::TaskReserve => 0x725dcc,
+            Self::StorageReserve => 0x7235cc, Self::MessageConstruct => 0x724f04,
+            Self::MessageSend => 0x725210, Self::MessageReceive => 0x725420,
+        })
+    }
+    fn error_continuations(self) -> &'static [u32] {
+        match self {
+            Self::TaskWrapper => &[0x725eac,0x725fe4,0x726058,0x72608c],
+            Self::MessageConstruct => &[0x724d50,0x724dd4,0x724e64,0x724efc],
+            Self::MessageSend => &[0x7250b4,0x72513c,0x725208],
+            Self::MessageReceive => &[0x7253b8],
+            Self::TaskReserve | Self::StorageReserve => &[],
         }
     }
     fn points(self) -> &'static [u32] {
@@ -354,15 +381,59 @@ fn add(base: Address, offset: u32) -> Result<Address, String> {
     base.0.checked_add(offset).map(Address).ok_or_else(|| "guest address overflow".into())
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
+struct FrameLayout { saved: StackBytes, locals: StackBytes }
+impl FrameLayout {
+    const LINK: Self = Self { saved: StackBytes(8), locals: StackBytes(0) };
+}
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ProcessorMode { User, Fiq, Irq, Supervisor, Monitor, Abort, Hypervisor, Undefined, System }
+impl ProcessorMode {
+    fn from_cpsr(cpsr: Word) -> Result<Self, String> {
+        match cpsr.0 & 0x1f {
+            0x10 => Ok(Self::User), 0x11 => Ok(Self::Fiq), 0x12 => Ok(Self::Irq),
+            0x13 => Ok(Self::Supervisor), 0x16 => Ok(Self::Monitor), 0x17 => Ok(Self::Abort),
+            0x1a => Ok(Self::Hypervisor), 0x1b => Ok(Self::Undefined), 0x1f => Ok(Self::System),
+            _ => Err("unsupported processor mode".into()),
+        }
+    }
+}
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct ExecutionFrame { core: Core, mode: ProcessorMode, fp: Address, sp: Address }
+impl ExecutionFrame {
+    fn observed(state: &Context) -> Result<Self, String> {
+        Ok(Self { core: state.core, mode: ProcessorMode::from_cpsr(state.cpsr)?,
+            fp: Address(state.registers[11].0), sp: state.sp })
+    }
+    fn entered(self, layout: FrameLayout) -> Result<Self, String> {
+        let bytes = layout.saved.0.checked_add(layout.locals.0).ok_or("frame extent overflow")?;
+        Ok(Self { fp: Address(self.sp.0.checked_sub(4).ok_or("frame pointer underflow")?),
+            sp: Address(self.sp.0.checked_sub(bytes).ok_or("body stack underflow")?), ..self })
+    }
+}
+#[derive(Clone, Copy)]
 struct Frame {
-    id: InvocationId, family: Family, core: Core, entry: Context,
+    id: InvocationId, family: Family, entry_lr: Address, caller: ExecutionFrame,
+    body: ExecutionFrame, pop_sp: Address,
     descriptor: Option<Address>, record: Option<Address>, output: Option<Address>,
     message: Option<Address>, active: bool,
 }
+impl Frame {
+    fn source_key(self, pc: Address) -> ExecutionFrame {
+        ExecutionFrame { sp: if pc == self.family.epilogue() { self.pop_sp } else { self.body.sp }, ..self.body }
+    }
+}
 struct Call {
-    owner: Option<InvocationId>, core: Core, target: Address, caller: Address,
-    entry_sp: Address, returned_to: Option<Address>, entered: bool,
+    owner: Option<InvocationId>, target: Address, continuation: Address,
+    caller_frame: ExecutionFrame, entered: bool,
+}
+impl Call {
+    fn targets(&self, state: &Context, key: ExecutionFrame) -> bool {
+        !self.entered && self.target == state.pc && self.continuation == state.lr && self.caller_frame == key
+    }
+    fn returns(&self, pc: Address, key: ExecutionFrame) -> bool {
+        self.entered && self.continuation == pc && self.caller_frame == key
+    }
 }
 struct Runtime {
     receipt: Receipt, maps: Vec<MemoryMap>, frames: Vec<Frame>, calls: Vec<Call>,
@@ -530,7 +601,7 @@ impl Runtime {
         }
         Ok(())
     }
-    fn family_entry(&mut self, machine: &mut Machine, state: &Context, family: Family) -> Result<(), String> {
+    fn family_entry(&mut self, machine: &mut Machine, state: &Context, family: Family, key: ExecutionFrame) -> Result<(), String> {
         let selected = !self.receipt.invocations.iter().any(|i| i.family == family && i.entry_probe.is_some());
         let owner = if selected { Some(InvocationId(self.receipt.invocations.len() as u64)) } else { None };
         let probe = self.probe(machine, state, ProbeKind::FamilyEntry, Some(family), owner)?;
@@ -538,19 +609,30 @@ impl Runtime {
         census.entries = census.entries.checked_add(1).ok_or("census overflow")?;
         census.first_probe.get_or_insert(probe);
         if !selected {
-            require(!self.frames.iter().any(|f| f.active && f.core == state.core && f.family == family), "reentrant first-family observation")?;
+            require(!self.frames.iter().any(|frame| frame.active && frame.family == family && frame.caller == key),
+                "selected family frame re-entered before its first return")?;
             return Ok(());
         }
         require(self.receipt.invocations.len() < LIMITS.invocations as usize, "invocation bound reached")?;
         let id = owner.ok_or("selected invocation ID absent")?;
-        let parent = self.frames.iter().rev().find(|f| f.active && f.core == state.core).map(|f| f.id);
+        let mut parent = None;
+        let mut ambiguous_parent = false;
+        for call in self.calls.iter().filter(|call| call.targets(state,key)) {
+            if let Some(owner) = call.owner.filter(|id| self.frames.iter().any(|frame| frame.active && frame.id == *id && frame.body == key)) {
+                ambiguous_parent |= parent.replace(owner).is_some();
+            }
+        }
         self.receipt.invocations.push(Invocation {
             id, family, core: state.core, entry_probe: Some(probe), return_probe: None,
-            parent, status: Status::Unclosed, entry_lr: state.lr, entry_sp: state.sp,
+            parent: if ambiguous_parent { None } else { parent },
+            status: Status::Unclosed, entry_lr: state.lr, entry_sp: state.sp,
         });
+        require(!ambiguous_parent, "immediate parent frame is ambiguous")?;
+        let layout = family.layout();
         let mut frame = Frame {
-            id, family, core: state.core, entry: state.clone(), descriptor: None,
-            record: None, output: None, message: None, active: true,
+            id, family, entry_lr: state.lr, caller: key, body: key.entered(layout)?,
+            pop_sp: Address(key.sp.0.checked_sub(layout.saved.0).ok_or("saved frame underflow")?),
+            descriptor: None, record: None, output: None, message: None, active: true,
         };
         self.admit(machine, state, ResourceKind::Stack, Lifetime::Invocation, Some(id),
             Address(state.sp.0.checked_sub(256).ok_or("local stack underflow")?), 288)?;
@@ -797,46 +879,81 @@ impl Runtime {
         }
         Ok(())
     }
-    fn dynamic_call(&mut self, machine: &mut Machine, state: &Context, owner: Option<InvocationId>, instruction: Word) -> Result<(), String> {
+    fn dynamic_call(&mut self, machine: &mut Machine, state: &Context, owner: Option<InvocationId>,
+        instruction: Word, caller_frame: ExecutionFrame) -> Result<(), String> {
         let Some(target) = call_target(state, instruction)? else { return Ok(()); };
         require(self.calls.len() < LIMITS.probes as usize, "dynamic call bound reached")?;
-        self.calls.push(Call { owner, core: state.core, target, caller: state.pc, entry_sp: state.sp, returned_to: None, entered: false });
+        self.calls.push(Call { owner, target, continuation: add(state.pc,4)?, caller_frame, entered: false });
         arm_sites(machine, vec![target.0])
     }
-    fn handle(&mut self, machine: &mut Machine, state: &Context) -> Result<(), String> {
-        if let Some(family) = FAMILIES.into_iter().find(|f| f.entry() == state.pc.0) {
-            self.family_entry(machine, state, family)?;
+    fn source_owner(&self, machine: &Machine, state: &Context, key: ExecutionFrame,
+        returning_owner: Option<InvocationId>) -> Result<Option<Frame>, String> {
+        let mut selected = None;
+        let mut helper_link = None;
+        for frame in self.frames.iter().filter(|frame| frame.active) {
+            let in_body = frame.family.entry() <= state.pc.0 && state.pc.0 <= frame.family.epilogue().0;
+            let mut owns = key == frame.source_key(state.pc)
+                && (frame.family.points().contains(&state.pc.0) || (in_body && returning_owner == Some(frame.id)));
+            if !owns && COMMON_PCS.contains(&state.pc.0) && !frame.family.error_continuations().is_empty()
+                && key == frame.body.entered(FrameLayout::LINK)? {
+                let (saved_fp, saved_lr) = match helper_link {
+                    Some(link) => link,
+                    None => {
+                        let link = (Address(word(machine, &self.maps, state, key.sp)?.0),
+                            Address(word(machine, &self.maps, state, add(key.sp,4)?)?.0));
+                        helper_link = Some(link);
+                        link
+                    }
+                };
+                owns = saved_fp == frame.body.fp && frame.family.error_continuations().contains(&saved_lr.0);
+            }
+            if owns {
+                require(selected.is_none(), "source frame is ambiguous")?;
+                selected = Some(*frame);
+            }
         }
-        let returning_owners: BTreeSet<_> = self.calls.iter().filter(|call| call.entered && call.core == state.core
-            && call.returned_to == Some(state.pc) && call.entry_sp == state.sp).filter_map(|call| call.owner).collect();
-        let source_frame = self.frames.iter().rev().find(|frame| frame.active && frame.core == state.core
-            && (frame.family.points().contains(&state.pc.0) || COMMON_PCS.contains(&state.pc.0) || returning_owners.contains(&frame.id))).cloned();
+        Ok(selected)
+    }
+    fn identity_source_frame(&self, key: ExecutionFrame) -> Result<bool, String> {
+        for call in self.calls.iter().filter(|call| call.owner.is_none() && call.entered && call.target == Address(0x412bc)) {
+            if key == call.caller_frame.entered(FrameLayout::LINK)? { return Ok(true); }
+        }
+        Ok(false)
+    }
+    fn handle(&mut self, machine: &mut Machine, state: &Context) -> Result<(), String> {
+        let key = ExecutionFrame::observed(state)?;
+        if let Some(family) = FAMILIES.into_iter().find(|family| family.entry() == state.pc.0) {
+            self.family_entry(machine, state, family, key)?;
+        }
+        let mut returning_call = None;
+        let mut target_call = None;
+        for (index, call) in self.calls.iter().enumerate() {
+            if call.returns(state.pc,key) {
+                require(returning_call.replace(index).is_none(), "dynamic return frame is ambiguous")?;
+            }
+            if call.targets(state,key) {
+                require(target_call.replace(index).is_none(), "dynamic target frame is ambiguous")?;
+            }
+        }
+        let returning_owner = returning_call.and_then(|index| self.calls[index].owner);
+        let source_frame = self.source_owner(machine, state, key, returning_owner)?;
         if let Some(frame) = &source_frame { self.source_resources(machine, state, frame)?; }
-        let targets: Vec<usize> = self.calls.iter().enumerate().filter(|(_, call)| !call.entered
-            && call.core == state.core && call.target == state.pc).map(|(index, _)| index).collect();
-        for index in targets {
+        if let Some(index) = target_call {
             let owner = self.calls[index].owner;
             let family = owner.and_then(|id| self.frames.iter().find(|frame| frame.id == id).map(|frame| frame.family));
             self.probe(machine, state, ProbeKind::DynamicTarget, family, owner)?;
-            require(state.sp == self.calls[index].entry_sp && state.lr == add(self.calls[index].caller, 4)?,
-                "dynamic target caller LR/SP differs")?;
             self.calls[index].entered = true;
-            self.calls[index].returned_to = Some(state.lr);
-            arm_sites(machine, vec![state.lr.0])?;
+            arm_sites(machine, vec![self.calls[index].continuation.0])?;
         }
-        let returns: Vec<usize> = self.calls.iter().enumerate().filter(|(_, call)| call.entered && call.core == state.core
-            && call.returned_to == Some(state.pc) && call.entry_sp == state.sp).map(|(index, _)| index).collect();
-        for index in returns.into_iter().rev() {
+        if let Some(index) = returning_call {
             let owner = self.calls[index].owner;
             let family = owner.and_then(|id| self.frames.iter().find(|frame| frame.id == id).map(|frame| frame.family));
             self.probe(machine, state, ProbeKind::DynamicReturn, family, owner)?;
             let target = self.calls[index].target;
-            let return_pc = self.calls[index].returned_to;
+            let continuation = self.calls[index].continuation;
             self.calls.remove(index);
             remove_if_unused(machine, target.0, &self.frames, &self.calls, &self.global_returns)?;
-            if let Some(return_pc) = return_pc {
-                remove_if_unused(machine, return_pc.0, &self.frames, &self.calls, &self.global_returns)?;
-            }
+            remove_if_unused(machine, continuation.0, &self.frames, &self.calls, &self.global_returns)?;
         }
         if let Some(kind) = self.global_returns.remove(&(state.core, state.pc)) {
             self.probe(machine, state, kind, None, None)?;
@@ -875,7 +992,7 @@ impl Runtime {
                 }
                 if matches!(kind, ProbeKind::CriticalIdentityCall | ProbeKind::CriticalCall) {
                     let instruction = word(machine, &self.maps, state, state.pc)?;
-                    self.dynamic_call(machine, state, None, instruction)?;
+                    self.dynamic_call(machine, state, None, instruction, key)?;
                 }
                 if kind == ProbeKind::InitializerCall {
                     for pc in [0xd0a44,0xd0a48,0xd0a4c] {
@@ -887,19 +1004,23 @@ impl Runtime {
         if let Some(frame) = source_frame {
             let sequence = self.probe(machine, state, ProbeKind::Source, Some(frame.family), Some(frame.id))?;
             let instruction = self.receipt.probes[sequence.0 as usize].source_word;
-            self.dynamic_call(machine, state, Some(frame.id), instruction)?;
+            self.dynamic_call(machine, state, Some(frame.id), instruction, key)?;
             if frame.family == Family::MessageReceive && state.pc == Address(0x725418) {
                 self.close(machine, state, Some(frame.id), Lifetime::ReceiveRelease)?;
             }
         } else if state.core == Core::Secondary && [0x412c4,0x412c8,0x427b8].contains(&state.pc.0)
-            && self.calls.iter().any(|call| call.owner.is_none() && call.core == state.core) {
+            && self.identity_source_frame(key)? {
             let sequence = self.probe(machine, state, ProbeKind::Source, None, None)?;
-            self.dynamic_call(machine, state, None, self.receipt.probes[sequence.0 as usize].source_word)?;
+            self.dynamic_call(machine, state, None, self.receipt.probes[sequence.0 as usize].source_word, key)?;
         }
-        let returned = self.frames.iter().position(|frame| frame.active && frame.core == state.core
-            && frame.entry.lr == state.pc && frame.entry.sp == state.sp);
+        let mut returned = None;
+        for (index, frame) in self.frames.iter().enumerate() {
+            if frame.active && frame.entry_lr == state.pc && frame.caller == key {
+                require(returned.replace(index).is_none(), "family return frame is ambiguous")?;
+            }
+        }
         if let Some(index) = returned {
-            let frame = self.frames[index].clone();
+            let frame = self.frames[index];
             if matches!(frame.family, Family::TaskReserve | Family::StorageReserve) && state.registers[0] == Word(0) {
                 self.allocation(machine, state, &frame)?;
             }
@@ -963,8 +1084,8 @@ fn arm_sites(machine: &mut Machine, pcs: Vec<u32>) -> Result<(), String> {
 fn remove_if_unused(machine: &mut Machine, pc: u32, frames: &[Frame], calls: &[Call], returns: &BTreeMap<(Core, Address), ProbeKind>) -> Result<(), String> {
     if FAMILIES.iter().any(|family| family.entry() == pc)
         || GLOBAL_PCS.contains(&pc)
-        || frames.iter().any(|f| f.active && (f.entry.lr == Address(pc) || f.family.points().contains(&pc) || COMMON_PCS.contains(&pc)))
-        || calls.iter().any(|c| c.target == Address(pc) || c.returned_to == Some(Address(pc)))
+        || frames.iter().any(|frame| frame.active && (frame.entry_lr == Address(pc) || frame.family.points().contains(&pc) || COMMON_PCS.contains(&pc)))
+        || calls.iter().any(|call| call.target == Address(pc) || call.continuation == Address(pc))
         || returns.keys().any(|(_, address)| *address == Address(pc)) { return Ok(()); }
     if machine.traces.sites.contains_key(&pc) { machine.traces.remove_site(&machine.session, Guest(pc))?; }
     Ok(())
@@ -1130,7 +1251,7 @@ fn observe(runtime: &mut Runtime, machine: &mut Machine, image4: &[u8], loader_a
             let state = context(machine, core)?;
             if core == Core::Primary && state.pc == Address(0x69cdf8) && state.registers[0] == Word(0) { outer = Some(state); }
             else if let Some(family) = FAMILIES.into_iter().find(|family| family.entry() == state.pc.0) {
-                runtime.family_entry(machine, &state, family)?;
+                runtime.family_entry(machine, &state, family, ExecutionFrame::observed(&state)?)?;
                 return Err("first consumer entered before fixed-view observation boundary".into());
             }
         }
@@ -1297,7 +1418,7 @@ fn drive() -> Result<(), String> {
     runtime.receipt.instructions = machine.instructions();
     let file = std::fs::File::create_new(output.join("consumers.json")).map_err(|error| error.to_string())?;
     let mut writer = BufWriter::new(file);
-    serde_json::to_writer_pretty(&mut writer, &runtime.receipt).map_err(|error| error.to_string())?;
+    serde_json::to_writer(&mut writer, &runtime.receipt).map_err(|error| error.to_string())?;
     writer.flush().map_err(|error| error.to_string())?;
     result
 }

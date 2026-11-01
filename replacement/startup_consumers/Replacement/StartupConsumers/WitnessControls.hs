@@ -84,6 +84,9 @@ mutations =
   ,Control (ControlName "executed entry omitted from producer census") CensusRejected omitCensusEntry
   ,Control (ControlName "acquire LDREX access omitted") AllocationRejected (omitLockRead (Address 0x427d4))
   ,Control (ControlName "release LDREX access omitted") AllocationRejected (omitLockRead (Address 0x42800))
+  ,Control (ControlName "receive source and call probes belong to another task frame") InvocationRejected $
+    mapSelectedProbe (\probe -> probeFamily probe == Just MessageReceive && probeInvocation probe /= Nothing
+      && probeKind probe `elem` [SourceProbe,DynamicTarget,DynamicReturn]) otherTaskFrame
   ] ++ concat
     [[Control (ControlName (show family ++ " absent")) (MissingFamily family) $ \receipt -> receipt
         {receiptInvocations = [if invocationFamily invocation == family then invocation {invocationStatus = NotObserved,invocationEntry = Nothing,invocationReturn = Nothing} else invocation | invocation <- receiptInvocations receipt]}
@@ -135,6 +138,13 @@ mapSelectedProbe selected modify receipt = receipt
 changeRegister :: Int -> Word32 -> Probe -> Probe
 changeRegister index value probe = probe {probeContext = (probeContext probe)
   {contextMachine = (contextMachine (probeContext probe)) {K.contextRegisters = [if offset == index then WordValue value else original | (offset,original) <- zip [0..] (K.contextRegisters (contextMachine (probeContext probe)))]}}}
+otherTaskFrame :: Probe -> Probe
+otherTaskFrame probe = probe {probeContext = (probeContext probe)
+  {contextMachine = (contextMachine (probeContext probe))
+    {K.contextSp = case K.contextSp (contextMachine (probeContext probe)) of Address incoming -> Address (incoming+0x1000)
+    ,K.contextRegisters = [if index == (11 :: Int) then WordValue (number value+0x1000) else value
+      | (index,value) <- zip [0..] (K.contextRegisters (contextMachine (probeContext probe)))]}}}
+
 corruptSavedRegister :: Probe -> Probe
 corruptSavedRegister probe = probe {probeContext = (probeContext probe)
   {contextMachine = (contextMachine (probeContext probe)) {K.contextRegisters =
