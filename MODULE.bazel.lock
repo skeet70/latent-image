@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "Rjvdb0h0tM9bzSHywHbpbsYCj6eNwS7JLTo70c9NRr0=",
+        "bzlTransitiveDigest": "X3C8/nTPdAx6Qi5NprhgiIDFyOm/Uynmw2AzoVuo5tM=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -504,6 +504,8 @@
                 "@@//emulation:fujimod-xm1/src/peer_witness_interrupt_mask.rs": "//emulation:fujimod-xm1/src/peer_witness_interrupt_mask.rs",
                 "@@//emulation:fujimod-xm1/src/peer_witness_loader.rs": "//emulation:fujimod-xm1/src/peer_witness_loader.rs",
                 "@@//emulation:fujimod-xm1/src/peer_witness_primary_initializer.rs": "//emulation:fujimod-xm1/src/peer_witness_primary_initializer.rs",
+                "@@//emulation:fujimod-xm1/src/peer_witness_primary_owned.rs": "//emulation:fujimod-xm1/src/peer_witness_primary_owned.rs",
+                "@@//emulation:fujimod-xm1/src/peer_witness_primary_root0.rs": "//emulation:fujimod-xm1/src/peer_witness_primary_root0.rs",
                 "@@//emulation:fujimod-xm1/src/peer_witness_startup.rs": "//emulation:fujimod-xm1/src/peer_witness_startup.rs",
                 "@@//emulation:fujimod-xm1/src/peer_witness_vectors.rs": "//emulation:fujimod-xm1/src/peer_witness_vectors.rs",
                 "@@//emulation:fujimod-xm1/src/peer_witness_wait.rs": "//emulation:fujimod-xm1/src/peer_witness_wait.rs",
