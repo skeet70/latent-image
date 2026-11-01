@@ -1052,3 +1052,88 @@ Own the finite **image4 task-submission wrapper and reservation-release adapter*
 | Continuous create/activate/initial-scheduler exclusion and initial resource lifetimes | Unmet. No task wrapper/kernel/scheduler cutover is staged or guarded by this analysis. |
 | Inventory/ledger distinguish initial scheduling from general scheduler/release/body ownership | Met by this section and its three scoped ledger records. Release semantics are recovered, not accepted reclamation. The issue remains open. |
 
+### 8.15 Later executable loading and publication (#153)
+
+`E-LATER-EXECUTABLE-SOURCE-150` binds the canonical image4, image5, plain image and payload separately. The following is source inference from the X-M1 1.50 listings and table bytes, not a new guest observation or an owned loading qualification. The table-dispatched later executable producers are image5 and the plain image; images0/1/4 belong to earlier loading. Other flashloader cases have the data or zero-transfer consumers listed below. This inventory is not a whole-program computed-reference closure.
+
+#### Inputs, producers and transformations
+
+| Executable input | Producer and actual destination | Transformations and publication |
+| --- | --- | --- |
+| Image5, segment5 | Flashloader command `0x4c00`, call `0x73b4ac -> 0x6a96c0`; logical flash `[0x2c0000,0x5a0000)` through fixed staging `[0x43e40000,0x44120000)`; decoded `[0xbf1a00,0x10e3860)` through alias `0x40bf1a00` | Compressed record header `{0x4f1e60,0x2c66d1,0xb2,0x4000,4}`; body starts staging+`0x14`. Image4's streaming hardware-decoder driver produces the destination. A separate request clears BSS `[0x1460000,0x171be40)`. No byte relocation or post-decode CPU image-copy pass appears in the recovered producer. Entry publication reads `*(load+0xc) = 0xd985a4`. |
+| Plain image, segment6 | Command `0x4c03`, call `0x73b554 -> 0x6a9844`; logical flash `[0x5a0000,0x900000)`; 27 raw blocks into `[0x1100000,0x1460000)` through alias `0x41100000` | No decode, byte relocation or BSS clear in this producer. Destination comes from the extent descriptor, not segment6's repeated load/size/BSS fields. The raw payload interval equals the canonical plain image byte-for-byte. A separate worker changes MPU coverage and invokes per-extent initialization lists. |
+
+Payload-relative input positions include the `0x48`-byte prefix: the image5 record starts at `0x2c0048`, and the plain input at `0x5a0048`. Neither a logical flash allocation nor a software transfer span proves the native DMA write envelope. `E-PREFIX-RUNTIME-DMA-BOUNDS-150` still limits the raw reader's zero-count and active-stop semantics.
+
+`0x6a96c0` requests aligned BSS fill before storage/decode, then waits for completion only after decoder drain. Accepted request status is not completed coherent zero contents. Callback `0x6a8bec` writes 1 to `0x89f8ac` without a success/error distinction. Rejected or alignment-skipped fill uses `0x7221c8(bss,0,length)` followed by `0x42634(0,0)`. Storage status is saved and returned at `0x6a9840`; decoder finish is called even after storage failure. Finish forces available input to the record's declared total, and no recovered comparison checks produced bytes against `0x4f1e60`. Failure can therefore expose stale staging or a nonreturning drain.
+
+The mode flag returned by `0x657184` is table header word `0x61c008`. Nonzero image5 mode still reads flash into staging but skips decoder initialization, callbacks and finish; it does not copy staging into executable RAM. Nonzero plain mode performs no storage read: it takes resources `0x24` then `0x34`, delays and reports successive block positions, releases `0x34` then `0x24`, and returns zero. These source branches are not fresh residency proofs.
+
+| Other flashloader case | Producer and consumer classification |
+| --- | --- |
+| 1 | `0x6aa5b4 -> 0x6a8ff0(0xd9,0,0x290c800,1)`. The exact block count is zero. `0x6fc244` bypasses the transfer loop to zero status and teardown, so this is not a nonempty executable-image transfer. Acquisition, cache and release effects remain. |
+| 2 | `0x6aa5e4` loads id2 layout/bitmap data into `[0x130000,0x390000)`; only zero status permits `0x6aa6f8` to load id3 FDL font data into `[0x3bc000,0x43c000)`. Identified consumers include `0x117dce0`/`0x117dd48`/`0x117ddb0` and font registration `0x11804a4`. |
+| 4 | `0x6aa63c` selects one of 35 UTF-16/menu-string blocks into `[0x39c000,0x3bc000)`. The three optional mapped-font enable words are zero in the canonical table. |
+| 5 | `0x6aa750` selects one of seven FDL text fonts at `0x45c000`, at most `0x160000` bytes. |
+| 6 | `0x69f920` calls byte reader `0x6a9c70` with adjustment-cache-derived lengths and destinations. The actual cache fields and runtime transfer envelopes remain to be captured. |
+| 7 | `0x6c1444(0,0x73b378)` delegates command `0x7400` to mailbox `0x64`; `0x6c0c98` routes argument0 through `0x6c061c`. This is a state-dependent data-buffer pipeline, not a direct dispatch of segment7 as code. Its source7 fallback reads selector1's `0x2000` bytes into `0x6a0010(0x3e0000)` and selector0's `0x15e00` bytes into `0x6a0010(0x3e2000)`. No instruction-entry transfer from those buffers is established. The actual alternate producer and cache base/content remain route-dependent. |
+| 8 | `0x6aa838(0)` loads profile data into `[0x5bc000,0x61c000)`; the identified consumer chain reaches `0x1068e00`. |
+
+#### Task and application-entry partial order
+
+Root104 entry `0x69d160` reaches `0x69ca44` at `0x69d27c` on its nonzero `0x69cfa4` arm. That initializer submits three relevant tasks in source call order. Each helper must return zero before root continues; otherwise root self-loops.
+
+| Root call | Constructor and submission | Descriptor `{id,name,priority,stack,entry,arg}` |
+| --- | --- | --- |
+| `0x69cae8` | `0x73bf64`, submit `0x73bfd4` | `{95,elfloader,1,0xc00,0x73bc54,0}` |
+| `0x69cafc` | `0x73ac74 -> 0x73b028`, submit `0x73b0a4` | `{60,flashloader,4,0xc00,0x73b3a0,0x91482c}`; the argument word receives zero |
+| `0x69cbc0` | `0x73afe0 -> 0x73c0d4`, submit `0x73c144` | `{59,initcont,6,0xc00,0x73e048,0}` |
+
+This is creation-call order95→60→59, not observed first scheduling order. Initial phase/task provenance belongs to #149/#151; no source edge requires every initial task body to run before these producers.
+
+After image5's producer returns, flashloader stores command done at `0x944440[0]`, releases resource `0x4c`, then invokes the request callback with `(argument,producer_status != 0)`. Callback `0x73c56c` posts `0x4b04` only for argument0/status0. Submachine5's corresponding transition issues the remaining load requests, including plain command `0x4c03`, and returns 1. The root action then stores root state1 and calls `0x73cdc0 -> 0x69d2b4`. That wrapper checks the id5 lookup and load pointer, then executes `BLX *(load+0xc)` at `0x69d2e0`.
+
+Image5 entry `0xd985a4` calls `0x73aca4(7)` at `0xd985c0`, before `0xed4acc`. The synchronous adapter returns immediately for command done1; otherwise it enqueues command `0x4c07`, takes/releases that command's resource and returns zero if enqueue succeeded. `0xd985c4` is the continuation after this wait. Actual first entry, subsequent resource waits and overlap with plain loading must be observed. The source graph does not make all plain hooks a prerequisite of the first image5 instruction.
+
+#### Plain extent publication and retained lifetime
+
+The descriptor at `0x61c1a4` is `{0x4061c1b0,0x1100000,0x360000}`. Three 24-byte records are followed by an id `0xffffffff` terminator at `0x61c1f8`. Their canonical unresolved `+0xc` word and initial done word are zero.
+
+| Extent id | Base / bytes / exclusive end | Done word / resource | First sufficient block-granularity progress |
+| --- | --- | --- | --- |
+| 0 | `0x1100000 / 0xac5a0 / 0x11ac5a0` | `0x61c1c0 / 0x44` | `0xc0000` |
+| 2 | `0x11c0000 / 0x1cca0 / 0x11dcca0` | `0x61c1d8 / 0x46` | `0xe0000` |
+| 3 | `0x11e0000 / 0x26a5e0 / 0x144a5e0` | `0x61c1f0 / 0x47` | `0x360000` |
+
+Worker `0x73bc54` takes resources `0x44/0x46/0x47`, installs vector/MPU publications and enters mailbox `0x5f` receive. Progress `0x73b924` admits only counts greater than high-water `0x914834`; it posts one `0x6f00` event when `destination+count >= extent.end` for an unflagged extent. The worker updates MPU coverage and companion publication, then scans every eligible extent using the same inclusive condition. MPU calls are not image relocation or clearing.
+
+For each eligible extent, lookup `0x6571bc` returns the entry; the worker walks the NULL-terminated function list at its base, calling at `0x73be5c` and resuming at `0x73be60`. Only after every hook returns does it store done at `0x73be70`, release the extent resource at `0x73be78`, then clear and invoke matching deferred callbacks at `0x73beac`. A nonreturning hook prevents the remaining publication. Resource acquisition/release and companion calls have unchecked outcomes at this boundary.
+
+- Id0 hooks: `0x110f9d8`. Its constructor submits task33, entry `0x1109130`, through `0x725dd8`.
+- Id2 hooks: none.
+- Id3 hooks, in order: `0x11e00f8`, `0x125a260`, `0x125f16c`, `0x1274628`, `0x1279d38`, `0x127ae64`, `0x127c06c`, `0x127ce18`, `0x127dcc4`, `0x127fa28`, `0x1281560`, `0x128eb8c`, `0x13e4d98`, `0x13ed5c0`. The first submits task26, entry `0x11e6e14`.
+
+Eligible extent hooks can run before the whole raw read returns. Hook-created tasks can become consumers before the worker's done store; their actual scheduling requires a witness. Conversely, command completion need not wait for queued extent work. The plain producer unconditionally reports the complete source length at `0x6a9928`, even after raw-read failure. Flashloader unconditionally sets command done and releases its command resource before callback; later done requests callback immediately with success. Progress/done/return alone must therefore never substitute for committed executable/data readback.
+
+Image5 staging remains live through final decode completion. Decoder source/destination/count globals are not withdrawn at teardown, and the fixed range has no allocation/free marker. Resource `0x48` coordinates feed/drain, while `0x2b` controls engine ownership; their callback/error concurrency and cross-core visibility remain separate obligations. Plain extent resources carry readiness, not indefinite protection from later writes. Code, data, callback tables, MPU/alias configuration and backing must survive their actual consumers; reset or a changed mapping invalidates a checkpoint admitted under a prior interval. None of these source facts establishes physical cache coherence.
+
+#### First owned increment and acceptance boundary
+
+Own the complete finite **plain-image orchestration** `[0x6a9844,0x6a9938)`, 244 original bytes. Retain the storage/cache adapter, progress producer, resource/delay services, MPU/companion worker, initialization hooks and task consumers as named dependencies. This avoids prematurely owning the image5 decoder's asynchronous completion protocol.
+
+1. Bind source image4, segment6, the extent descriptor, raw input and complete emitted code/literals. Preserve temporal field loads, the missing-segment halt, both mode branches, normal storage arguments and the saved read status.
+2. Preserve the unconditional final full-length notification, including error paths. Preserve alternate-mode resource order, delays and synthetic progress without treating them as proof that bytes arrived. Qualification must reject a false readiness claim, not silently change vendor failure semantics.
+3. Start on the actual reset/task/flashloader route. Independently compare retained/owned committed source/destination/BSS and both-core guest/physical views at producer/publication/first-consumer boundaries, using the recovered partial order rather than a fabricated prepared entry.
+4. Refuse wrong input identity, destination, entry, callback, premature publication and out-of-range writes at the relevant admission/consumer boundary. Cover read failure, synthetic progress, nonreturning hook and error-side done publication as distinct outcomes.
+5. Admit complete replacement bytes and live stack extent with no selectable stock fallback. Continuously exclude every fetch of the replaced leaf and retained copies on both cores/all executable aliases. Preserve dependent code/data/resources, mappings and writer attribution throughout the admitted interval.
+6. Extend ownership to decoder orchestration and per-extent initialization only after independently qualifying their resource/completion/visibility contracts. A plain-loader cutover alone does not close #153.
+
+| #153 acceptance criterion | Current status and exact remaining fact |
+| --- | --- |
+| Inventory later executable inputs, actual producers, transformations and publications | Source inventory recovered for the segment table and nine flashloader cases, including both later executable producers and all 15 plain hooks. Computed/alternate producer closure and actual route-dependent data-cache inputs remain unqualified. |
+| Natural owned loading with independently verified committed views and order | Unmet. The source contract stages no owned loader and supplies no fresh natural byte/publication receipt. |
+| Every image initializes and reaches its admitted consumer through actual loader/task execution | Source graph and exact hooks/entry recovered. Fresh natural hook/task/entry ordering and owned consumer execution remain required. |
+| Wrong image/destination/entry/callback/premature publication/out-of-range controls | Specified above, not executed. Done/progress false positives and source-required error effects must be distinguished. |
+| Executable visibility, aliases/remaps and resource lifetimes | Source ranges and readiness edges recovered. Complete committed views, callback/MPU synchronization, writer/later-reuse closure, physical coherence and reset invalidation remain unproved. |
+| Continuous replaced-body exclusion and inventory/ledger dependencies | Inventory and retained dependencies recorded. No #153 body is replaced or continuously excluded by this source-only increment. |
+
