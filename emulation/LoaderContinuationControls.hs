@@ -495,9 +495,23 @@ moveProjection fixture = do
   EventId destination <- firstEvent fixture (GuestAddress 0x6a9840)
   modifyReceipt [field "snapshots",Element selected,field "event"] (const (Right (J.toJSON destination))) fixture
 
+removeBoundary :: GuestAddress -> Fixture -> Either String Fixture
+removeBoundary address fixture = do
+  events <- arrayAt [field "events"] (receipt fixture)
+  addresses <- traverse (guestAt [field "pc"]) events
+  let removed = S.fromList [EventId index | (index,pc) <- zip [0..] addresses,pc==address]
+  unless (not (S.null removed)) (Left "producer return boundary absent")
+  samples <- arrayAt [field "snapshots"] (receipt fixture)
+  kept <- forM samples $ \sample -> do
+    identifier <- eventReference "event" sample
+    pure (sample,S.notMember identifier removed)
+  next <- modifyReceipt [field "snapshots"] (const (Right (J.toJSON [sample | (sample,True) <- kept]))) fixture
+  removeEvents removed next
+
 data Control = ReorderCallRecords | WrongPhase | WrongTarget | WrongReturnedCode | WrongSavedPc | OutOfRangeWrite
   | MissingTask | MissingHook | SyntheticDeferred | MissingDeferred | PhaseRawOrder | ConstructorRawOrder
   | MissingLoaderBss | MissingFirstImage | MissingFirstBss | MissingFirstPlain | MisplacedProjection
+  | MissingImage5Return | MissingPlainReturn
   | MissingTrampoline | WrongCreationArgument | WrongCreationTarget | WrongCleanup
   | CpuClock ClockMode | TcmMisaligned | TcmPastEnd | TcmExactEnd | MissingExtent PlainExtent | MissingObservedBss GuestAddress
 
@@ -509,6 +523,7 @@ controlName control = case control of
   SyntheticDeferred -> "synthetic-deferred-call"; MissingDeferred -> "missing-deferred-call"
   PhaseRawOrder -> "phase-raw-order"; ConstructorRawOrder -> "constructor-raw-order"
   MissingLoaderBss -> "missing-loader-return-bss"; MissingFirstImage -> "missing-first-image5-image"
+  MissingImage5Return -> "missing-image5-return-and-projections"; MissingPlainReturn -> "missing-plain-return-and-projections"
   MissingFirstBss -> "missing-first-image5-bss"; MissingFirstPlain -> "missing-first-image5-plain"
   MisplacedProjection -> "projection-attached-to-wrong-boundary"; MissingTrampoline -> "missing-trampoline-transfer"
   WrongCreationArgument -> "wrong-trampoline-argument"; WrongCreationTarget -> "wrong-trampoline-target"; WrongCleanup -> "wrong-trampoline-cleanup"
@@ -537,6 +552,7 @@ controls fixture = do
   events <- arrayAt [field "events"] (receipt fixture)
   addresses <- traverse (guestAt [field "pc"]) events
   pure ([ReorderCallRecords,WrongPhase,WrongTarget,WrongReturnedCode,WrongSavedPc,OutOfRangeWrite,MissingTask,MissingHook,SyntheticDeferred,MissingDeferred,PhaseRawOrder,ConstructorRawOrder,MissingLoaderBss,MissingFirstImage,MissingFirstBss,MissingFirstPlain,MisplacedProjection,MissingTrampoline,WrongCreationArgument,WrongCreationTarget,WrongCleanup,CpuClock AtBegin,CpuClock AfterEnd,CpuClock ReversedClock,CpuClock AtEnd,CpuClock ResumedBegin,TcmMisaligned,TcmPastEnd,TcmExactEnd,MissingExtent Extent0,MissingExtent Extent2,MissingExtent Extent3]
+    ++[MissingImage5Return,MissingPlainReturn]
     ++[MissingObservedBss address | address <- [GuestAddress 0x6a8c04,GuestAddress 0x6a9734],address `elem` addresses])
 
 applyControl :: Control -> Fixture -> Either String Fixture
@@ -548,6 +564,8 @@ applyControl control fixture = case control of
   SyntheticDeferred -> makeDeferred fixture; MissingDeferred -> makeDeferred fixture >>= omitCall Deferred
   PhaseRawOrder -> phaseOrder fixture; ConstructorRawOrder -> constructorOrder fixture
   MissingLoaderBss -> omitProjection Image5Bss (Just (GuestAddress 0x6a9840)) fixture
+  MissingImage5Return -> removeBoundary (GuestAddress 0x6a9840) fixture
+  MissingPlainReturn -> removeBoundary (GuestAddress 0x6a9934) fixture
   MissingFirstImage -> omitProjection Image5 (Just (GuestAddress 0xd985a4)) fixture
   MissingFirstBss -> omitProjection Image5Bss (Just (GuestAddress 0xd985a4)) fixture
   MissingFirstPlain -> omitProjection Plain (Just (GuestAddress 0xd985a4)) fixture

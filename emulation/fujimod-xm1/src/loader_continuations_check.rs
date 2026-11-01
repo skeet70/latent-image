@@ -84,6 +84,7 @@ fn route(report:&Report)->Result<(),String>{
 }
 
 fn projections(report:&Report)->Result<(),String>{
+    for pc in [0x6a9840,0x6a9934]{require(report.events.iter().any(|event|event.pc.0==pc),"required producer return boundary absent")?;}
     let mut required=Vec::new();let mut image5=false;let mut plain=[false;3];
     for observed in &report.events {
         let resources:&[Resource]=match observed.pc.0{
