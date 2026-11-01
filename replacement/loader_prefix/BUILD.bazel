@@ -35,6 +35,7 @@ xm1_rust_elf(
 _RUST_FAULTS = {
     "core-refusal": "loader_prefix_core_refusal",
     "fill-fault": "loader_prefix_fill_fault",
+    "invalid-core-fault": "loader_prefix_invalid_core_fault",
     "predicate-fault": "loader_prefix_predicate_fault",
     "vector-fault": "loader_prefix_vector_fault",
 }

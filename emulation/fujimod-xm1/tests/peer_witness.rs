@@ -268,6 +268,75 @@ fn schema_four_and_five_require_explicit_well_formed_immutable_identity() {
     }
 }
 
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn explicit_negative_prefix_scenarios_require_owned_standalone_images_and_exact_period_shape() {
+    for scenario in ["negative-invalid-core", "negative-predicate-zero"] {
+        let period = if scenario == "negative-predicate-zero" { "null" } else { "256" };
+        let program = loader_program().replace("\"poll_period\":256", &format!("\"poll_period\":{period}"));
+        let valid = format!(r#"{{"schema":4,"budget":50000000,"scenario":{{"kind":"{scenario}"}},{program}}}"#);
+        assert!(PeerContract::parse(valid.as_bytes()).is_ok());
+        let wrong_period = if scenario == "negative-predicate-zero" { "256" } else { "null" };
+        for invalid in [
+            valid.replace(&format!("\"poll_period\":{period}"), &format!("\"poll_period\":{wrong_period}")),
+            valid.replace(&format!("\"poll_period\":{period},"), ""),
+            valid.replace("\"budget\":50000000", "\"budget\":49999999"),
+            valid.replace("[852168,852220]", "[852172,852220]"),
+            retained_loader().replace("\"kind\":\"natural\"", &format!("\"kind\":\"{scenario}\"")),
+            composed(scenario).replace("\"poll_period\":256", &format!("\"poll_period\":{period}")),
+        ] {
+            assert!(PeerContract::parse(invalid.as_bytes()).is_err(), "{invalid}");
+        }
+    }
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn ordinary_prefix_scenarios_still_require_a_bounded_positive_period() {
+    for scenario in ["natural", "held", "delayed", "non-one"] {
+        let valid = format!(r#"{{"schema":4,"budget":50000000,"scenario":{{"kind":"{scenario}"}},{}}}"#, loader_program());
+        for period in ["null", "0", "-1", "100001", "1.5", "\"256\""] {
+            let invalid = valid.replace("\"poll_period\":256", &format!("\"poll_period\":{period}"));
+            assert!(PeerContract::parse(invalid.as_bytes()).is_err(), "{invalid}");
+        }
+        for period in ["1", "100000"] {
+            let valid = valid.replace("\"poll_period\":256", &format!("\"poll_period\":{period}"));
+            assert!(PeerContract::parse(valid.as_bytes()).is_ok());
+        }
+    }
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn interleaved_tail_requires_a_declared_fixed_branch_into_the_owned_firststage() {
+    let hook = format!(r#""interleaved_tail":{{"site":262208,"instruction":{},"target":24640}},"#, 0xeaff17fe_u32);
+    let valid = composed("negative-interleaved-tail").replace("\"completion_zero\":", &(hook.clone() + "\"completion_zero\":"));
+    assert!(PeerContract::parse(valid.as_bytes()).is_ok());
+    let standalone = format!(r#"{{"schema":4,"budget":50000000,"scenario":{{"kind":"negative-interleaved-tail"}},{}}}"#, loader_program());
+    for invalid in [
+        composed("negative-interleaved-tail"),
+        standalone,
+        valid.replace(&hook, "\"interleaved_tail\":null,"),
+        valid.replace(&hook, &(hook.clone() + &hook)),
+        valid.replace("\"site\":262208", "\"site\":262204"),
+        valid.replace("\"target\":24640", "\"target\":24644"),
+        valid.replace("\"target\":24640", "\"target\":6144"),
+        valid.replace("\"image\":[24576,25088]", "\"image\":[24576,24664]"),
+        valid.replace(&format!("\"instruction\":{}", 0xeaff17fe_u32), "\"instruction\":3818926120"),
+        valid.replace(&format!("\"instruction\":{}", 0xeaff17fe_u32), &format!("\"instruction\":{}", 0xebff17fe_u32)),
+        valid.replace("\"poll_period\":256", "\"poll_period\":null"),
+        valid.replace("\"kind\":\"owned\"", "\"kind\":\"retained\""),
+    ] {
+        assert!(PeerContract::parse(invalid.as_bytes()).is_err(), "{invalid}");
+    }
+    for scenario in ["natural", "held", "delayed", "non-one"] {
+        let invalid = valid.replace("negative-interleaved-tail", scenario);
+        assert!(PeerContract::parse(invalid.as_bytes()).is_err());
+        let invalid = composed(scenario).replace("\"completion_zero\":", "\"interleaved_tail\":null,\"completion_zero\":");
+        assert!(PeerContract::parse(invalid.as_bytes()).is_err());
+    }
+}
+
 fn retained_initializer() -> String {
     format!(r#"{{"schema":6,"prefix":{},"initializer":{{"role":"retained","entry":{},"rust":[{},{}],
         "scratch_bytes":12,"image_sha256":"60aeb6c0c68717940fef3771f3387540a2c87276d7c947a9f3d276dd51fe850d",
@@ -282,6 +351,18 @@ fn owned_initializer() -> String {
         "scratch_bytes":8,"image_sha256":"{digest}","symbols_sha256":"{digest}",
         "source_sha256":"43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"}}}}"#,
         0x10800, 0x10800, 0x10840, digest = "ab".repeat(32))
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn initializer_rejects_every_negative_prefix_scenario() {
+    for scenario in ["negative-invalid-core", "negative-predicate-zero", "negative-interleaved-tail"] {
+        let invalid = owned_initializer().replace("\"kind\":\"natural\"", &format!("\"kind\":\"{scenario}\""));
+        let invalid = if scenario == "negative-predicate-zero" {
+            invalid.replace("\"poll_period\":256", "\"poll_period\":null")
+        } else { invalid };
+        assert!(PeerContract::parse(invalid.as_bytes()).is_err());
+    }
 }
 
 fn consumer_code() -> String {

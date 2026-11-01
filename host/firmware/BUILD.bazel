@@ -282,6 +282,31 @@ haskell_binary(
     ],
 )
 
+haskell_test(
+    name = "startup-negative-artifact-tests",
+    srcs = ["StartupNegativeArtifactTests.hs"],
+    args = [
+        "$(rootpath //replacement/first_stage:first-stage-interleaved-tail-fault-image.bin)",
+        "$(rootpath //replacement/first_stage:first-stage-interleaved-tail-fault-image.symbols)",
+        "$(rootpath //replacement/first_stage:first-stage-image.bin)",
+        "$(rootpath //replacement/first_stage:first-stage-image.symbols)",
+    ],
+    data = [
+        "//replacement/first_stage:first-stage-interleaved-tail-fault-image.bin",
+        "//replacement/first_stage:first-stage-interleaved-tail-fault-image.symbols",
+        "//replacement/first_stage:first-stage-image.bin",
+        "//replacement/first_stage:first-stage-image.symbols",
+    ],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021"],
+    deps = [
+        ":startup-stage-contract",
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:update-container",
+    ],
+)
+
 haskell_binary(
     name = "build-completion-control",
     srcs = ["BuildCompletionControl.hs"],

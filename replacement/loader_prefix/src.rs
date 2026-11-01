@@ -26,6 +26,9 @@ impl Core {
     unsafe fn current() -> Self {
         let value: u32;
         asm!("mrc p14, 0, {0}, c2, c0, 0", out(reg) value, options(nomem, nostack, preserves_flags));
+        #[cfg(loader_prefix_invalid_core_fault)]
+        return xm1_loader_prefix_invalid_core_fault(value);
+        #[cfg(not(loader_prefix_invalid_core_fault))]
         if value == DISCRIMINATOR_PRIMARY {
             Core::Zero
         } else {
@@ -40,6 +43,19 @@ impl Core {
         }
     }
 }
+
+// Original synthetic identity fault: an unqualified discriminator selects core 1.
+#[cfg(loader_prefix_invalid_core_fault)]
+#[no_mangle]
+#[inline(never)]
+fn xm1_loader_prefix_invalid_core_fault(value: u32) -> Core {
+    if value == DISCRIMINATOR_PRIMARY { Core::Zero } else { Core::One }
+}
+
+#[cfg(loader_prefix_predicate_fault)]
+#[no_mangle]
+#[used]
+static xm1_loader_prefix_predicate_zero_fault: u32 = 0x5052_4544;
 
 /// Loader A's completion word; any nonzero value ends the wait.
 #[repr(transparent)]

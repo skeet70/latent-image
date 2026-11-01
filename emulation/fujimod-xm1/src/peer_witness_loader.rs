@@ -85,7 +85,12 @@ fn record_immutable_sha256(record: &[u8; RECORD_BYTES]) -> Sha256Digest {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-enum Scenario { Natural, Held, Delayed, NonOne }
+enum Scenario { Natural, Held, Delayed, NonOne, NegativeInvalidCore, NegativePredicateZero, NegativeInterleavedTail }
+impl Scenario {
+    fn negative(self) -> bool {
+        matches!(self, Self::NegativeInvalidCore | Self::NegativePredicateZero | Self::NegativeInterleavedTail)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -108,6 +113,25 @@ impl TryFrom<u8> for RegisterIndex {
 }
 
 #[derive(Deserialize)]
+#[serde(try_from = "u64")]
+struct PollPeriod;
+impl TryFrom<u64> for PollPeriod {
+    type Error = String;
+    fn try_from(period: u64) -> Result<Self, String> {
+        require((1..=100_000).contains(&period), "loader-prefix poll period is out of range")?;
+        Ok(Self)
+    }
+}
+
+fn poll_period<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<PollPeriod>, D::Error> {
+    Option::<PollPeriod>::deserialize(deserializer)
+}
+
+fn interleaved_tail<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<vectors::InterleavedTail>, D::Error> {
+    vectors::InterleavedTail::deserialize(deserializer).map(Some)
+}
+
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProgramWire {
     kind: ProgramKind,
@@ -119,7 +143,8 @@ struct ProgramWire {
     load: Guest,
     post_load: Guest,
     loaded_register: RegisterIndex,
-    poll_period: u64,
+    #[serde(deserialize_with = "poll_period")]
+    poll_period: Option<PollPeriod>,
     image: Option<(Guest, Guest)>,
     refusal: Option<Guest>,
     forbid_fetch: Vec<(Guest, Guest)>,
@@ -158,6 +183,8 @@ struct ComposedStartup {
     secondary_source_sha256: Sha256Digest,
     completion_zero: vectors::CompletionZero,
     kernel_vector_install: vectors::Facts,
+    #[serde(default, deserialize_with = "interleaved_tail", skip_serializing_if = "Option::is_none")]
+    interleaved_tail: Option<vectors::InterleavedTail>,
 }
 
 #[derive(Deserialize)]
@@ -174,7 +201,7 @@ impl ComposedWire {
     pub(super) fn validate(self) -> Result<LoaderContract, String> {
         require(self.schema == 5, "composed startup requires schema 5")?;
         let startup = self.startup;
-        let mut contract = LoaderWire { schema: 4, budget: self.budget, scenario: self.scenario, program: self.program }.validate()?;
+        let mut contract = LoaderWire { schema: 4, budget: self.budget, scenario: self.scenario, program: self.program }.validate_role(true)?;
         require(contract.kind == ProgramKind::Owned, "composed startup requires the owned secondary and prefix image")?;
         let (start, end) = (startup.image.0 .0, startup.image.1 .0);
         require(start == FIRST_ENTRY && start < end && end <= FIRST_RECORD.1 as u32 && end % 4 == 0
@@ -188,6 +215,11 @@ impl ComposedWire {
             "composed startup secondary origin or source identities differ")?;
         startup.completion_zero.validate(startup.image)?;
         startup.kernel_vector_install.validate(&startup)?;
+        require((contract.scenario == Scenario::NegativeInterleavedTail) == startup.interleaved_tail.is_some(),
+            "only negative interleaved-tail startup requires its hook")?;
+        if let Some(hook) = &startup.interleaved_tail {
+            hook.validate(startup.image)?;
+        }
         contract.startup = Some(startup);
         Ok(contract)
     }
@@ -259,9 +291,19 @@ fn spans(spans: &[(Guest, Guest)]) -> BTreeSet<(u64, u64)> {
 
 impl LoaderWire {
     pub(super) fn validate(self) -> Result<LoaderContract, String> {
+        self.validate_role(false)
+    }
+
+    fn validate_role(self, composed: bool) -> Result<LoaderContract, String> {
         require(self.schema == 4 && self.budget.0 == BUDGET, "loader-prefix witness requires schema 4 and budget 50000000")?;
         let program = self.program;
-        require((1..=100_000).contains(&program.poll_period), "loader-prefix poll period is out of range")?;
+        require(program.poll_period.is_none() == (self.scenario.kind == Scenario::NegativePredicateZero),
+            "only negative predicate-zero requires a null poll period")?;
+        require(match self.scenario.kind {
+            Scenario::NegativeInvalidCore | Scenario::NegativePredicateZero => !composed && program.kind == ProgramKind::Owned,
+            Scenario::NegativeInterleavedTail => composed && program.kind == ProgramKind::Owned,
+            _ => true,
+        }, "negative scenario requires its owned standalone or composed role")?;
         let record = Sha256Digest::parse(&program.record_sha256)?;
         let loader = Sha256Digest::parse(&program.loader_sha256)?;
         match program.kind {
@@ -475,6 +517,11 @@ struct ComposedReceipt<'a> {
 }
 
 #[derive(Serialize)]
+struct NegativeEvidence {
+    invalid_core_identity: Identity,
+}
+
+#[derive(Serialize)]
 struct Receipt<'a> {
     schema: u32,
     scenario: ScenarioWire,
@@ -496,6 +543,8 @@ struct Receipt<'a> {
     final_primary: &'a Option<wait::Primary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     initializer: &'a Option<initializer::Receipt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    negative_evidence: &'a Option<NegativeEvidence>,
     #[serde(flatten)]
     composed: Option<ComposedReceipt<'a>>,
 }
@@ -543,6 +592,7 @@ struct Runner<'a> {
     initial_record_sha256: Option<Sha256Digest>,
     handoff_record_immutable_sha256: Option<Sha256Digest>,
     final_primary: Option<wait::Primary>,
+    negative_evidence: Option<NegativeEvidence>,
     phase: Phase,
     vectors: vectors::History,
 }
@@ -554,6 +604,7 @@ impl<'a> Runner<'a> {
             boot_watch: Value::Null, loaded_watch: Value::Null, scoped_watch: None, stops: Vec::new(), bindings: None,
             completion: None, endpoint: None, final_primary: None, phase: Phase::default(),
             initial_record_sha256: None, handoff_record_immutable_sha256: None,
+            negative_evidence: None,
             vectors: vectors::History::default(),
         }
     }
@@ -694,6 +745,9 @@ impl<'a> Runner<'a> {
             "composed first-stage image bytes differ from their selected identity")?;
         require(word(machine, u64::from(startup.handoff.0))?.0 == 0xe1a0_f002,
             "composed first-stage handoff is not MOV PC,R2")?;
+        if let Some(hook) = &startup.interleaved_tail {
+            hook.bind(startup.image.0, &record.physical[startup.image.0 .0 as usize..startup.image.1 .0 as usize])?;
+        }
         startup.completion_zero.bind(startup.image.0,
             &record.physical[startup.image.0 .0 as usize..startup.image.1 .0 as usize])
     }
@@ -1007,7 +1061,8 @@ impl<'a> Runner<'a> {
                 add.extend(match scenario {
                     Scenario::Held => vec![(HELD_GATE, Label::HeldGate)],
                     Scenario::Delayed => vec![(DELAY_ENTRY, Label::DelayEntry), (DELAY_RELEASE, Label::DelayRelease), (STORE, Label::CompletionStore)],
-                    Scenario::Natural | Scenario::NonOne => vec![(STORE, Label::CompletionStore)],
+                    Scenario::Natural | Scenario::NonOne | Scenario::NegativeInvalidCore
+                        | Scenario::NegativePredicateZero | Scenario::NegativeInterleavedTail => vec![(STORE, Label::CompletionStore)],
                 });
                 self.add(machine, &add)?;
             }
@@ -1020,11 +1075,22 @@ impl<'a> Runner<'a> {
                 require(stop.counter == Some(Totals { count: 0, zero_count: 0, nonzero_count: 0 })
                     && (contract.startup.is_some() || stop.watch_records == Some(0)),
                     "scoped watch was not active and empty at the prefix entry")?;
+                for (core, expected) in [(0, 0x4003), (1, 0x5003)] {
+                    require(machine.session.board.cpu(core)?.rprofile_identity(None)? == expected,
+                        "prefix-entry active CP14 identity changed")?;
+                }
+                if scenario == Scenario::NegativeInvalidCore {
+                    machine.session.board.cpu(1)?.rprofile_identity(Some(0x6003))?;
+                    let injected = machine.session.board.cpu(1)?.rprofile_identity(None)?;
+                    require(injected == 0x6003, "negative invalid-core injection differs")?;
+                    self.negative_evidence = Some(NegativeEvidence { invalid_core_identity: Identity(injected) });
+                }
                 self.phase.entry = true;
                 self.remove(machine, contract.entry.0)?;
             }
             Label::PostLoad => {
                 require(self.phase.entry && !self.phase.exit, "post-load stop out of phase")?;
+                require(scenario != Scenario::NegativeInvalidCore, "negative invalid-core reached post-load after injected identity")?;
                 let stop = &self.stops[index];
                 let loaded = stop.registers[usize::from(contract.loaded.0)].0;
                 let counter = stop.counter.ok_or("post-load stop lacks its counter")?;
@@ -1092,6 +1158,7 @@ impl<'a> Runner<'a> {
                 self.phase.stored = true;
             }
             Label::PrefixExit => {
+                require(scenario != Scenario::NegativeInvalidCore, "negative invalid-core reached prefix exit after injected identity")?;
                 require(self.phase.stored && !self.phase.exit, "prefix exit precedes the committed store")?;
                 self.endpoint = Some(self.endpoint(machine)?);
                 self.phase.exit = true;
@@ -1104,6 +1171,7 @@ impl<'a> Runner<'a> {
             require(self.stops[index].tcm == tcm || label == Label::Record2Handoff, "TCM registers changed after the handoff")?;
         }
         if accepted {
+            require(!scenario.negative(), "negative loader scenario cannot produce a positive receipt")?;
             require(contract.startup.is_none() || self.vectors.installed(),
                 "composed endpoint lacks the observed first-stage handoff")?;
             self.terminal_vectors(machine)?;
@@ -1211,6 +1279,7 @@ pub(super) fn run(mut machine: Machine, contract: &LoaderContract, output: &Path
         final_primary: &runner.final_primary, composed,
         initial_record_sha256: &runner.initial_record_sha256, handoff_record_immutable_sha256: &runner.handoff_record_immutable_sha256,
         initializer: &initializer_receipt,
+        negative_evidence: &runner.negative_evidence,
     };
     let final_outcome = outcome.as_ref().map(|_| ()).map_err(Clone::clone).and(consumer_outcome);
     let bytes = if contract.consumer.is_some() {
