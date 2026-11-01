@@ -4,8 +4,9 @@ module Emulation.IdleTaskWire where
 import Control.Monad (unless)
 import Data.Aeson hiding (Object)
 import Data.Aeson.Types (Parser)
+import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Map.Strict as M
-import Data.Word (Word32)
+import Data.Word (Word32, Word64)
 import qualified Emulation.StartupTaskWire as S
 import qualified Replacement.KernelInstall.Wire as W
 
@@ -23,6 +24,41 @@ data Receipt = Receipt
   , receiptWatchDigest :: W.Digest, receiptWatch :: S.WatchResult, receiptWatchEndError :: Maybe String
   , receiptSites :: M.Map W.Address Boundary, receiptHits :: [Hit], receiptSamples :: [Sample], receiptMenu :: S.MenuResult, receiptEndCounts :: Maybe [W.Count]
   } deriving (Eq, Show)
+
+newtype PhysicalBoundary = PhysicalBoundary Word64 deriving (Eq, Show)
+data FetchRange = FetchRange PhysicalBoundary PhysicalBoundary deriving (Eq, Show)
+data FetchAttribution = FetchAttribution [W.Source] [FetchRange] deriving (Eq, Show)
+data WatchViews = ObserveWatch | FixedWatch deriving (Eq, Show)
+newtype WatchFailure = WatchFailure String deriving (Eq, Show)
+data FetchObservation = FetchObservation {fetchRecord :: W.MemoryEvent, fetchCoreInstructions :: W.Count} deriving (Eq, Show)
+data CapturedEvent = CapturedEvent
+  { eventRecord :: W.MemoryEvent, eventCoreInstructions :: Maybe W.Count, eventLatestFetch :: Maybe FetchObservation } deriving (Eq, Show)
+data CapturedWatch = CapturedWatch
+  { captureEnabled :: Bool, captureRanges :: [[Word64]], captureClasses :: [W.WatchClass], captureViews :: WatchViews
+  , captureEvents :: [CapturedEvent], captureViolation :: Maybe WatchFailure, captureAttribution :: FetchAttribution } deriving (Eq, Show)
+
+instance FromJSON FetchRange where
+  parseJSON value = do
+    bounds <- parseJSON value :: Parser [Word64]
+    case bounds of
+      [low,high] | low < high && high <= 0x100000000 -> pure (FetchRange (PhysicalBoundary low) (PhysicalBoundary high))
+      _ -> fail "invalid physical fetch span"
+instance FromJSON FetchAttribution where
+  parseJSON = withObject "fetch attribution" $ \o -> FetchAttribution <$> o .: "sources" <*> o .: "ranges"
+instance FromJSON WatchViews where
+  parseJSON = withText "watch views" $ \value -> case value of
+    "observe" -> pure ObserveWatch; "fixed" -> pure FixedWatch; _ -> fail "invalid watch views"
+instance FromJSON WatchFailure where parseJSON value = WatchFailure <$> parseJSON value
+instance FromJSON FetchObservation where
+  parseJSON value = withObject "actual fetched instruction" (\o -> do
+    unless (not (KM.member "latest_fetch" o)) (fail "recursive fetched instruction")
+    FetchObservation <$> parseJSON value <*> o .: "core_instructions") value
+instance FromJSON CapturedEvent where
+  parseJSON value = withObject "attributed memory event" (\o -> CapturedEvent <$> parseJSON value
+    <*> o .:? "core_instructions" <*> o .:? "latest_fetch") value
+instance FromJSON CapturedWatch where
+  parseJSON = withObject "attributed memory watch" $ \o -> CapturedWatch <$> o .: "enabled" <*> o .: "ranges" <*> o .: "classes"
+    <*> o .: "views" <*> o .: "records" <*> o .:? "violation" <*> o .: "fetch_attribution"
 
 parseRole :: String -> Parser Role
 parseRole "retained" = pure Retained

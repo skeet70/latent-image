@@ -1,5 +1,5 @@
 use fujimod_emulator::board::factory::MemoryMap;
-use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
+use fujimod_emulator::board::observation::{CpuDataAttribution, FetchAttribution, MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
 use fujimod_emulator_cpu::{Register, arm};
 use fujimod_xm1::{bridge::{read, sha256, write}, guest::Press, machine::{KeyPulse, Machine, RunOutcome}, run::{self, RunDocument, ValidatedUpdate}, trace::Hit};
 use serde::{Deserialize, Serialize};
@@ -288,13 +288,10 @@ fn immutable(physical: u64, size: u64) -> bool {
         .any(|&(low, high)| physical < high && low < physical.saturating_add(size))
 }
 fn watch_ranges() -> Vec<WatchRange> {
-    let mut ranges = Vec::with_capacity(45);
+    let mut ranges = Vec::with_capacity(42);
     ranges.extend(LOADER_A_CODE.iter().chain(&LOADER_B_CODE).chain(&IMAGE_CODE).chain(&INTERFACES)
         .map(|&(start, end)| WatchRange { start, end, kinds: WatchKinds::WRITES }));
     ranges.extend([
-        WatchRange { start: 0x40000, end: 0x4dae0, kinds: WatchKinds::CPU_FETCH },
-        WatchRange { start: 0xd0000, end: 0xddaa0, kinds: WatchKinds::CPU_FETCH },
-        WatchRange { start: 0x7221a0, end: 0x722218, kinds: WatchKinds::CPU_FETCH },
         WatchRange { start: u64::from(ENTRY), end: u64::from(LIMIT), kinds: WatchKinds::CPU_FETCH },
         WatchRange { start: 0x725dd8, end: 0x725ddc, kinds: WatchKinds::CPU_FETCH },
     ]);
@@ -308,6 +305,13 @@ fn watch_ranges() -> Vec<WatchRange> {
         }
     }
     ranges
+}
+fn fetch_attribution() -> Result<FetchAttribution, String> {
+    FetchAttribution::new(CpuDataAttribution::Writes, vec![
+        WatchRange { start: 0x40000, end: 0x4dae0, kinds: WatchKinds::CPU_FETCH },
+        WatchRange { start: 0xd0000, end: 0xddaa0, kinds: WatchKinds::CPU_FETCH },
+        WatchRange { start: u64::from(IMAGE_BASE), end: u64::from(INITIAL_IMAGE_VIEW_END), kinds: WatchKinds::CPU_FETCH },
+    ])
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -483,7 +487,7 @@ fn drive() -> Result<(), String> {
                     }
                     let lifecycle_sites = sites.iter().filter(|(address, _)| **address != 0x725dd8).map(|(&address, label)| (address, label.clone())).collect();
                     machine.traces.arm(&machine.session, lifecycle_sites)?;
-                    watch = Some(machine.session.board.memory_watch_begin_classified(watch_ranges(), WATCH_LIMIT, maps.clone(), ViewPolicy::Observe)?);
+                    watch = Some(machine.session.board.memory_watch_begin_with_fetch_attribution(watch_ranges(), fetch_attribution()?, WATCH_LIMIT, maps.clone(), ViewPolicy::Observe)?);
                 }
                 let mut observed = sample(&machine, &maps, &code, index, state, cursor)?;
                 observed.views.extend(installed_views);
