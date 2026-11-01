@@ -20,6 +20,51 @@ pub struct Hit {
     pub sp: String,
     pub lr: String,
     pub cpsr: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_word: Option<CodeWord>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CodeWord {
+    pub guest: u32,
+    pub physical: u32,
+    pub expected: u32,
+    pub tcm: [[u32; 2]; 2],
+}
+
+struct CodeBinding { start: Guest, bytes: Vec<u8>, maps: Vec<MemoryMap> }
+
+impl CodeBinding {
+    fn sample(&self, session: &Session, core: usize, pc: u32) -> Result<Option<CodeWord>, String> {
+        let Some(offset) = pc.checked_sub(self.start.0).map(|offset| offset as usize)
+            .filter(|offset| *offset < self.bytes.len()) else { return Ok(None) };
+        if offset % 4 != 0 || session.board.read_register(core, Register::Pc)? != u64::from(pc) {
+            return Err("code word is not at its preexecution instruction point".into());
+        }
+        let end = u64::from(self.start.0) + self.bytes.len() as u64;
+        let mut tcm = [[0; 2]; 2];
+        for (index, banks) in tcm.iter_mut().enumerate() {
+            let cpu = session.board.cpu(index)?;
+            for (bank, value) in banks.iter_mut().enumerate() {
+                *value = u32::try_from(cpu.coprocessor(arm::Coprocessor {
+                    cp: 15, opc1: 0, crn: 9, crm: 1, opc2: bank as u32, secure: 0, wide: false,
+                }, None)?).map_err(|_| "code TCM register exceeds 32 bits")?;
+                if tcm_window(TcmRegister(*value))?.is_some_and(|(low, high)| low < end && u64::from(self.start.0) < high) {
+                    return Err("code binding overlaps a current TCM window".into());
+                }
+            }
+        }
+        let span = static_span(&self.maps, MemoryCore(core), MemoryAddress(u64::from(pc))..MemoryAddress(u64::from(pc) + 4))?;
+        if span.physical.0 != u64::from(pc) { return Err("code binding is not identity-mapped".into()); }
+        let mut guest = [0; 4];
+        let mut physical = [0; 4];
+        session.board.read_memory(core, u64::from(pc), &mut guest)?;
+        session.board.read_physical(span.physical.0, &mut physical)?;
+        let expected = u32::from_le_bytes(self.bytes[offset..offset + 4].try_into().map_err(|_| "code word leaves image")?);
+        let observed = CodeWord { guest: u32::from_le_bytes(guest), physical: u32::from_le_bytes(physical), expected, tcm };
+        if observed.guest != expected || observed.physical != expected { return Err("preexecution code word differs from bound image".into()); }
+        Ok(Some(observed))
+    }
 }
 
 const CAPTURE_SITE_LIMIT: usize = 256;
@@ -650,6 +695,8 @@ pub struct TraceSites {
     /// Labels whose entry ends the current run.
     pub stop_labels: BTreeSet<String>,
     pub hits: Vec<Hit>,
+    hit_limit: Option<std::num::NonZeroUsize>,
+    code_binding: Option<CodeBinding>,
     points: Vec<(usize, Box<InstructionPoints>)>,
     cores: CoreSelection,
     resumed: BTreeMap<usize, ResumeMarker>,
@@ -664,6 +711,19 @@ fn register(session: &Session, core: usize, register: arm::Register) -> Result<u
 }
 
 impl TraceSites {
+    pub fn bound_full_registers(&mut self, limit: std::num::NonZeroUsize) {
+        self.hit_limit = Some(limit);
+    }
+
+    pub fn bind_code_words(&mut self, limit: std::num::NonZeroUsize, start: Guest, bytes: Vec<u8>, maps: Vec<MemoryMap>) -> Result<(), String> {
+        if start.0 % 4 != 0 || bytes.is_empty() || bytes.len() % 4 != 0 || u64::from(start.0) + bytes.len() as u64 > 1 << 32 {
+            return Err("code binding is not a bounded word-aligned image".into());
+        }
+        self.bound_full_registers(limit);
+        self.code_binding = Some(CodeBinding { start, bytes, maps });
+        Ok(())
+    }
+
     pub fn with_memory(session: &Session, memory: CaptureMemory) -> Self {
         let mut traces = Self::default();
         traces.prepare_memory(session, memory);
@@ -959,12 +1019,15 @@ impl TraceSites {
                 points.resume(current, pc);
                 continue;
             }
+            if self.hit_limit.is_some_and(|limit| self.hits.len() >= limit.get()) {
+                return Err("trace hit limit reached".into());
+            }
             let counts = session.board.instruction_counts();
             let instructions = counts.iter().sum();
             let site = site.clone();
-            let registers = (0..4u8)
+            let registers = (0..if self.hit_limit.is_some() { 13u8 } else { 4u8 })
                 .map(|index| {
-                    let name = ["r0", "r1", "r2", "r3"][usize::from(index)];
+                    let name = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12"][usize::from(index)];
                     register(session, *core, arm::Register::R(index)).map(|value| (name, format!("{value:#x}")))
                 })
                 .collect::<Result<_, String>>()?;
@@ -977,6 +1040,7 @@ impl TraceSites {
                 sp: format!("{:#x}", register(session, *core, arm::Register::R(13))?),
                 lr: format!("{:#x}", register(session, *core, arm::Register::R(14))?),
                 cpsr: register(session, *core, arm::Register::Cpsr)?,
+                code_word: self.code_binding.as_ref().map(|binding| binding.sample(session, *core, address)).transpose()?.flatten(),
             });
             let current = session.board.read_register(*core, Register::Pc)?;
             points.resume(current, pc);
