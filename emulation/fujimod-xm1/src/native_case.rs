@@ -14,7 +14,7 @@
 //! (B, BL, BX, BLX, LDM with PC and the two LDR-to-PC dispatch forms). All
 //! other instruction semantics belong to the backend, which executes the
 //! Cortex-R5F instruction set. The user-ARM case profile refuses coprocessor,
-//! supervisor-call, unconditional-space, status-register write, hint and
+//! supervisor-call, unconditional-space, non-APSR status writes, hint and
 //! synchronization-primitive words, and ARMv7 UNPREDICTABLE transfer and
 //! multiply forms.
 
@@ -1510,7 +1510,9 @@ fn excluded(word: u32) -> bool {
     let unconditional = word >> 28 == 15;
     let coprocessor_or_supervisor = word >> 25 & 7 >= 6;
     // MSR immediate with an empty mask is the hint space (NOP, YIELD, WFE, WFI, SEV, DBG).
-    let status_write_or_hint = word & 0x0fb0_f000 == 0x0320_f000 || word & 0x0fb0_fff0 == 0x0120_f000;
+    let register_status_write = word & 0x0fb0_fff0 == 0x0120_f000;
+    let user_flags = matches!(word & 0x0fff_fff0, 0x0128_f000 | 0x012c_f000) && word & 15 != 15;
+    let status_write_or_hint = word & 0x0fb0_f000 == 0x0320_f000 || (register_status_write && !user_flags);
     let synchronization = word & 0x0f00_00f0 == 0x0100_0090;
     unconditional
         || coprocessor_or_supervisor
