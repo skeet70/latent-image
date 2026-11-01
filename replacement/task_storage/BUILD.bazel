@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
@@ -20,7 +20,10 @@ xm1_rust_elf(
 
 haskell_library(
     name = "task-storage-artifact",
-    srcs = ["Replacement/TaskStorage/Artifact.hs"],
+    srcs = [
+        "Replacement/TaskStorage/Artifact.hs",
+        "Replacement/TaskStorage/FrameProof.hs",
+    ],
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
@@ -29,8 +32,10 @@ haskell_library(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:containers",
         "//host:first-stage",
         "//host:update-container",
+        "//host/firmware:bank-allowlist",
     ],
 )
 
@@ -55,5 +60,17 @@ haskell_binary(
         "//host:base",
         "//host:bytestring",
         "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "task-storage-artifact-tests",
+    srcs = ["ArtifactTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":task-storage-artifact",
+        "//host:base",
+        "//host:bytestring",
+        "//host:update-container",
     ],
 )
