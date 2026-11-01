@@ -9,9 +9,10 @@ import Data.List (sort)
 import qualified Data.List.NonEmpty as NE
 import Data.Word (Word32)
 import Numeric (showHex)
-import System.Environment (getArgs, getEnvironment)
+import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitFailure)
-import System.Process (CreateProcess (env), proc, readCreateProcessWithExitCode, readProcessWithExitCode)
+import System.Process (readProcessWithExitCode)
+import Text.Read (readMaybe)
 
 import RamPushLayout
 
@@ -22,22 +23,16 @@ check label passed = unless passed $ do
 
 main :: IO ()
 main = do
-  [archivePath, builderPath, relinkerPath, bashPath] <- getArgs
+  [archivePath, builderPath] <- getArgs
   archiveDigest <- SHA256.hash <$> B.readFile archivePath
   let hexByte byte = let digits = showHex byte "" in replicate (2 - length digits) '0' ++ digits
   check "default bank archive preserves f0b8386 and #133 byte identity"
     (concatMap hexByte (B.unpack archiveDigest) == "0fb86c8296323f492efc4f3455a6d3766ab7a372e3f1bb90896c851d4c92e61a")
-  environment <- getEnvironment
-  forM_ ["lifecycle", "lifecycle,modal75"] $ \groups -> do
-    (builderCode, _, _) <- readProcessWithExitCode builderPath
-      (["--ram-push-variant", groups, "0x00c40000"] ++ replicate 7 "absent") ""
-    check ("unavailable lifecycle builder selection refuses before opening inputs: " ++ groups)
-      (builderCode == ExitFailure 2)
-    (relinkerCode, _, _) <- readCreateProcessWithExitCode
-      ((proc bashPath [relinkerPath])
-        {env = Just (("RB_PUBLICATION_GROUPS", groups) : filter ((/= "RB_PUBLICATION_GROUPS") . fst) environment)}) ""
-    check ("unavailable lifecycle relinker selection refuses before tool invocation: " ++ groups)
-      (relinkerCode == ExitFailure 2)
+  forM_ [("lifecycle",0x1dcd8),("lifecycle,modal75",0x1dcf8)] $ \(groups,expected) -> do
+    (builderCode, output, _) <- readProcessWithExitCode builderPath
+      ["--ram-push-variant-allocation-size",groups] ""
+    check ("lifecycle allocation query returns the public byte count: " ++ groups)
+      (builderCode == ExitSuccess && readMaybe output == Just (expected :: Word32))
   check "fixed executable offset" (runtimeExecutableBase 0x00be1a00 == 0x00be1f00)
   let alignedBases = [base | high <- [0x0090, 0x00a0, 0x00b0, 0x00c0], low <- [0, 8 .. 0xfff8], let base = high * 0x10000 + low] :: [Word32]
   let allocationExtents =

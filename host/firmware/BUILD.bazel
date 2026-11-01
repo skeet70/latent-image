@@ -1624,14 +1624,10 @@ haskell_test(
     args = [
         "$(location //replacement/bank:bank)",
         "$(location :build-recipe-bank)",
-        "$(location build-recipe-bank-ram.sh)",
-        "$(location @lab_bash//:bin/bash)",
     ],
     data = [
         ":build-recipe-bank",
-        "build-recipe-bank-ram.sh",
         "//replacement/bank:bank",
-        "@lab_bash//:bin/bash",
     ],
     ghcopts = [
         "-Wall",
