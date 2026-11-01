@@ -435,7 +435,8 @@ main = do
 
   -- The RAM caps count one native-outcome line per completed transfer.
   happyJournal <- lines <$> readFile (happyDir </> "journal.v1")
-  let kindCount kind = length (filter (isInfixOf (show kind)) happyJournal)
+  let kindCount :: String -> Int
+      kindCount kind = length (filter (isInfixOf (show kind)) happyJournal)
   check "every completed transfer journals its native outcome"
     (kindCount "native-outcome" > 0 && kindCount "native-outcome" == kindCount "reply-before-deadline-check")
 

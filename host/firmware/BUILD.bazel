@@ -2080,6 +2080,7 @@ haskell_binary(
     main_file = "BuildAfRingRam.hs",
     deps = [
         ":bank-allowlist",
+        ":ram-push-layout",
         ":ram-push-toolchain",
         "//host:base",
         "//host:bytestring",

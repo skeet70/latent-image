@@ -20,8 +20,8 @@ check label passed = unless passed $ do
   exitFailure
 
 document :: [Value] -> [Value] -> [Value] -> B.ByteString
-document calls stores indirect = encodeCanonical (object
-  [ "schema" .= (1 :: Int), "stock_calls" .= calls, "stock_stores" .= stores, "unproven" .= indirect ])
+document calls stores indirectRows = encodeCanonical (object
+  [ "schema" .= (1 :: Int), "stock_calls" .= calls, "stock_stores" .= stores, "unproven" .= indirectRows ])
 
 call :: String -> String -> Value
 call address name = object ["address" .= address, "name" .= name, "source" .= ("synthetic" :: String)]
@@ -68,7 +68,7 @@ main = do
   check "missing selected fragments are refused"
     (isLeft (composeBankAllowlist modalLifecycleBankVariant (take 2 sources)))
   check "reordered selected fragments are refused"
-    (isLeft (composeBankAllowlist modalLifecycleBankVariant [head sources, last sources, sources !! 1]))
+    (isLeft (composeBankAllowlist modalLifecycleBankVariant [(basePath, base), (modalPath, modal), (lifecyclePath, lifecycle)]))
   check "wrong fragment identity is refused"
     (isLeft (composeBankAllowlist modalScopedBankVariant [(basePath, base), (lifecyclePath, modal)]))
   check "unselected fragments are refused"

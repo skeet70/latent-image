@@ -6,6 +6,7 @@ import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import Data.Either (isLeft)
 import Data.List (sort)
+import qualified Data.List.NonEmpty as NE
 import Data.Word (Word32)
 import Numeric (showHex)
 import System.Environment (getArgs, getEnvironment)
@@ -91,15 +92,15 @@ main = do
   check "scoped order preserves every prior activation and installs the modal entry last"
     (scopedOrder == order <> [PublicationIndex 223]
       && sort (map publicationIndex scopedOrder) == [0 .. 223]
-      && scopedAddressAt (head (reverse scopedOrder)) == modalHookAddress)
+      && maybe False ((== modalHookAddress) . scopedAddressAt . NE.last) (NE.nonEmpty scopedOrder))
   check "scoped order refuses a missing modal hook"
     (scopedRefuses (testAddresses <> [PublicationAddress 0x00bfb02c]))
   check "scoped order refuses duplicate modal hooks"
-    (scopedRefuses (modalHookAddress : tail scopedAddresses))
+    (scopedRefuses (modalHookAddress : drop 1 scopedAddresses))
   check "scoped order refuses a modal hook moved from logical index 223"
     (scopedRefuses (modalHookAddress : testAddresses))
   check "scoped order refuses duplicate dependent publications"
-    (scopedRefuses (head testAddresses : head testAddresses : drop 2 scopedAddresses))
+    (scopedRefuses (PublicationAddress 0x00100000 : PublicationAddress 0x00100000 : drop 2 scopedAddresses))
   check "scoped order still requires the capture hook"
     (scopedRefuses (take 222 testAddresses <> [PublicationAddress 0x00e9e03c, modalHookAddress]))
   check "modal hook emits an unconditional A32 branch"
@@ -150,7 +151,7 @@ main = do
     (lifecycleOrder == order <> map PublicationIndex [223 .. 225])
   check "composed activation installs modal after lifecycle"
     (composedOrder == lifecycleOrder <> [PublicationIndex 226]
-      && composedAddresses !! publicationIndex (head (reverse composedOrder)) == modalHookAddress)
+      && maybe False (\indices -> composedAddresses !! publicationIndex (NE.last indices) == modalHookAddress) (NE.nonEmpty composedOrder))
   check "lifecycle order refuses missing or reordered hook destinations"
     (isLeft (safePublicationOrderForVariant lifecycleBankVariant (testAddresses <> reverse lifecycleHookAddresses))
       && isLeft (safePublicationOrderForVariant lifecycleBankVariant

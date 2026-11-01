@@ -35,7 +35,7 @@ pub struct BeginRequest {
 
 impl BeginRequest {
     pub fn into_config(self, maps: Vec<MemoryMap>) -> Result<Config, String> {
-        let range = |[start, end]| CodeRange::new(Guest(start), Guest(end))
+        let range = |[start, end]: [u32; 2]| CodeRange::new(Guest(start), Guest(end))
             .map_err(|failure| failure.to_string());
         let layout = match (self.seam, self.owned) {
             (None, None) => Layout::stock_baseline(),
