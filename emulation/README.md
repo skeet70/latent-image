@@ -1311,6 +1311,7 @@ Case `natural` adds no guest mutation. Cases `reuse`, `size-error`, `reserved-er
 
 `task-storage --compare RETAINED_DIRECTORY OWNED_DIRECTORY ANALYSIS_ROOT LINKED_BIN OUTPUT_JSON` independently reads both completed receipts and their checkpoint/access sidecars, binds instruction samples to the canonical image and linked artifact, checks fixed boundary expectations, retained one-shot synchronization, ordered caller contexts and original/owned storage equality. Natural qualification extends only through that task103 wrapper return. General task lifetime, reclamation, scheduler ownership and other caller origins remain separate.
 
+`E-TASK-STORAGE-NATURAL-150` records the natural pair, the nine labelled perturbed helper cases, ordered state comparisons and synthetic consumer-refusal inputs. Natural observation completes with helper status `0` and wrapper status `-25` from retained installed service `0xd4eec`; observer exit `0` means the observation reached its bound, not successful task creation. Pool readbacks at helper return, fill return and wrapper return include all 1,024 physical bytes plus both aliases on both cores, with TCM and static-backing checks. The [task-storage inventory](../reports/replacement-inventory-baseline.md#89-bounded-task-storage-source-increment-143) records the retained dependencies and later lifetime obligations.
 
 ### Owned first-stage witness
 
