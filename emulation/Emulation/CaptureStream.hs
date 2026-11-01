@@ -11,7 +11,7 @@ module Emulation.CaptureStream
   , pageFirst, pageLast, pageSites, pageHits, pageMetadata, pageValue
   , SiteTotals, siteLabel, siteTotal, siteValue
   , Event, eventLabel, eventRegisters, eventInstructions, eventValue
-  , Coverage, startCoverage, openInterval, validateAdvance, collectBoundary, coverageValue, coverageIncomplete
+  , Coverage, startCoverage, openInterval, validateAdvance, collectBoundary, coverageObserved, coverageValue, coverageIncomplete
   , BoundedReader, newBoundedReader, readBoundedLine
   , Journal, openJournal, note, journalPage, synchronizeJournal, closeJournal
   ) where

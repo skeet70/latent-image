@@ -2180,3 +2180,52 @@ The comparison requires matching natural input context, common resource inputs/o
 
 This mechanism qualifies only the finite installation interval and the explicit marker control. Later startup consumers, allocation/lifetime behavior, menu continuation, optional BSS execution, general entry closure and silicon cache coherence remain separate acceptance obligations.
 
+
+## Packaged save lifecycle prefix (#129)
+
+`--ram-push-lifecycle` selects a separate RAM package. Its three source-word-checked publications follow the default 223, in order: save caller `0xe99e8c` to `xm1_save_facade`, then permission callers `0xe6a754` and `0xe6bb90` to `rb_media_permit_apply`. The combined modal/lifecycle variant places its modal publication after those three. Save and permission veneers are linked only into lifecycle-selected packages. The default package does not select either lifecycle module, its veneers or these publications.
+
+The lifecycle builder emits `save-lifecycle-program.json` with the actual linked entry and completion symbols and the complete uploaded runtime extent. `Emulation.SaveLifecycle` admits that metadata against the runtime bytes. The observer reads all three live publication words before capture and requires the selected retained or owned instructions.
+
+The retained media-permission lookup converts its nullable result into a nonzero `FrameContext` at the adapter boundary. Null still means no context. This type establishes no selected-count, backing or lifetime guarantee.
+
+The trajectory field `save_lifecycle` takes canonical `image5` and `image6` source paths and `program: "retained" | "owned"`. Select exactly one terminal before-unload segment with `--segments save-lifecycle`; this mode neither unloads nor accepts separate preservation, write-watch or forbidden-fetch claims. `save-lifecycle-retained-trajectories.json` selects the default package reference, and `save-lifecycle-owned-trajectories.json` selects the lifecycle variant. Both use ordinary post-install input, not a forced function entry.
+
+Both roles use `--unreviewed-relink` with the enforced allowlist and no override. The retained role omits `--ram-push-lifecycle`. A virtual-card lifecycle run requires an explicit trajectory; modal composition remains cardless. The viewer takes the emulator slot itself.
+
+The ordinary trajectory first uses the existing packaged route's two physical MENU pulses, requiring menu/setting/cursor states `[67,56,0]` and `[1,5,2]`. Preparation then opens SHOOT WITHOUT LENS through physical keys, requires shooting-menu cursor 20, setting `0xa3` and ON cursor 0, commits and closes it, then repeats the existing P-dial and pre-press capture sequence. `preparation.jsonl` synchronizes each menu-step result before its assertion, and retains the pre-press dial/capture replies; `preparation.json` records the completed keys, menu states, captures and lens words. Capture uses the existing physical S1/S2 sequence of 8M/8M/4M/4M entered instructions followed by one 40M window.
+
+`--fujimod-run-document PATH` selects the declared run document and participates in the existing SDK/checkpoint input binding. A changed SDK or run document requires its matching checkpoint qualification. This option supplies an input document; it adds no peripheral behavior.
+
+The protocol2 `save-lifecycle` scope retains real r4/r5/r11 and raw TCM registers alongside the existing event context. It samples source-bound allocator, producer, initializer, population, release, save, permission, storage-registration and completion seams. Unrelated SDK sites remain in the protocol stream without a speculative frame follow.
+
+The observer distinguishes the 201-slot namespace from the selected backing count:
+
+| Selected modes | Count | Frame root | Auxiliary root |
+| --- | --- | --- | --- |
+| `0,1,2,4,5,6,b` | 87 | `0x1f9dbb60` | `0x1fb21f60` |
+| `3` | 96 | `0x5f9fb7e0` | `0x5fb637e0` |
+| `7,9` | 1 | `0x04988600` | `0x0498c200` |
+| `8,ff` | 1 | `0x49c4f480` | `0x49c53080` |
+| `a` | 1 | `0x44988600` | `0x4498c200` |
+
+The canonical catalogue is `[0xe8a338,0xe8a408)`, the selected mode is `u32[0x1581f50]`, the frame root is `u32[0x157dd3c]`, and stride is `0x326c`. The allocator scans the namespace, not the selected count. A namespace-valid index alone does not admit a frame follow. The consumer checks catalogue identity, selected count, actual frame arithmetic, mapping/TCM separation and the ownership marker at `+0x3268`.
+
+Population samples cover the relevant scalars, three descriptor mode/tail pairs, media/capture fields, name, group, permit and ownership tail. Save and storage-registration observations retain the complete selected `0x150`-byte descriptor. Kinds 1, 2/3/4 and all other ABI words select banks 1, 2 and 0 respectively. Void producer/population returns use the actual published output cells or frame-pointer locals, not undefined r0.
+
+`Emulation.SaveLifecycleRun` durably journals each validated page before ACK and drains before resume. A bridge refusal is recorded without another resume. Only capture-tail reads follow it; the SDK's original terminal receipt remains the execution-stop authority. Output includes `caller-code.json`, `program.json`, `source.json`, `scope.json`, `trace-sites.json`, `observations.jsonl`, `snapshots.json` and `result.json`.
+
+`//emulation:save-lifecycle-receipt-cases` requires `--image5`, `--image6`, `--program`, `--caller-code`, `--journal` and `--snapshots`, plus `--runtime` for owned metadata. It first accepts the supplied genuine baseline, then tests independently changed catalogue/count, namespace, frame pointer, opcode, TCM, callback/task, begin scope and caller publications where the required observation exists. An unavailable mutation site is reported as unobserved.
+
+`E-SAVE-LIFECYCLE-NATURAL-PREFIX-150` records one retained and one lifecycle-selected execution on the same current observer SDK and declared SourceBit0/readback input. Both pass their ordinary two-MENU prefix and physical lens preparation. Each independently admitted journal observes the same thirteen source seams once: allocator entry/return, producer entry/return, slot/frame publication, initializer call/entry/return, population entry/allocation/return and the retained resolver. Excluding instruction timestamps, all recorded semantic events match. Mode 0 selects the 87-frame catalogue row; slot 0 is published at `0x1f9dbb60` with ownership marker 1 and both ownership-tail words `0xffffffff`. The initializer sets `+0x27c8` to 1, and population sets `+0x2fa0` to 1.
+
+Both finite tails are completely drained, with three snapshots, zero detail loss and no retained-event RAM/context gap. The SDK preserves the strict second-filter refusal at `0xfff30010`, CPU0 PC `0x00689490`, at entered-instruction counters 1,928,146,460 and 1,949,782,797. The remaining intended post-window instructions were not executed. Eleven independent receipt corruptions refuse per role, including all three live caller words, scope, catalogue/count, namespace, pointer, opcode and TCM binding; the callback/task mutation is explicitly unobserved. No save caller, owned permission entry, storage registration, release or completion is reached. Matching unsupported stops do not establish save, no-save, cancellation or handback acceptance.
+
+`E-SAVE-LIFECYCLE-PACKAGE-HOST-150` binds the default 223-publication runtime byte-for-byte to the retained main reference and admits both actual 226/227-publication ELFs with no policy violation. The nonzero frame-context change passes twenty fresh original/owned native pairs and four refusal controls (`E-SAVE-LIFECYCLE-PERMIT-NONZERO-NATIVE-150`). A separately reviewed Haskell derivation binds the qualified candidate to nineteen packaged functions, 1,124 code bytes and 29 immutable lookup-table bytes after source-recorded relocations. Rebuilding at the observed allocation base reproduces the complete uploaded runtime byte-for-byte and binds that installed permission closure too. These are bounded execution and byte-identity results, not asynchronous lifetime or general caller closure.
+
+The result is always `unqualified-lifecycle-prefix` with `full_save_qualified: false`. Observed source-bound frame effects are not encoded output, completed save, preview handback or callback retirement. The unchanged descriptor iterator follows extents to a zero terminator; the append helper's sixteen-entry bound is not a bound on an arbitrary descriptor.
+
+Phase-one completion writes status at `0x154d970` even when task slot `0x155ccb8` is clear. Clearing that slot does not revoke the callback, and a later entry can repopulate it before an old callback arrives. Storage callback/status/descriptor cells at `0x14ddc1c/+4/+8` and release registration at `0x14ddbd8` remain lifetime obligations. Keeping uploaded code/data allocated until power-off establishes no descriptor freshness, callback quiescence or frame-reuse safety.
+
+The current second-filter frontier remains strict: the unowned store to `0xfff30010` at `0x00689490` does not acquire an accepting model here. Reaching save, genuine storage completion/error/cancel delivery, preview handback, encoded extents, competing reentry and release/reuse requires the independently grounded #139 device law and the corresponding natural continuation. Caller/computed-reference closure and whole-body access/fetch retirement remain separate from this sampled prefix.
+

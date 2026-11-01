@@ -1,5 +1,4 @@
 exports_files([
-    "recipe_bank_allowlist.lifecycle.json",
     "recipe_bank_modal_allowlist_fragment.json",
 ])
 
@@ -100,6 +99,14 @@ exports_files(
         "recipe_bank_fields.inc",
     ],
     visibility = ["//host/firmware:__pkg__"],
+)
+
+exports_files(
+    ["recipe_bank_allowlist.lifecycle.json"],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//replacement/bank:__pkg__",
+    ],
 )
 
 filegroup(

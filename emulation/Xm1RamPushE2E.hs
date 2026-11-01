@@ -34,6 +34,9 @@ import Emulation.SegmentReceipt (SegmentReceipt (..), SegmentResult (..), elapse
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
 import Emulation.PreservationObservation
 import Emulation.ModalObservation
+import qualified Emulation.CaptureStream as CaptureJournal
+import qualified Emulation.SaveLifecycle as SaveLifecycle
+import Emulation.SaveLifecycleRun (runSaveLifecycle)
 import Emulation.UiTrajectory
 import Emulation.WatchObservation
 import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
@@ -358,6 +361,42 @@ observe emulator pulse = mapM $ \step -> do
                , "expected" .= [em, es, ec], "actual" .= [am, as, ac]
                , "matched" .= (MenuState am as ac == stepExpected step), "seconds" .= (ended - started) ])
 
+data LensPreparation = FindLensRow | OpenLensSetting | SelectLensOn | CommitLensSetting | CloseLensMenu
+  deriving (Show)
+
+prepareLifecycleCapture :: FilePath -> Emulator -> IO Value
+prepareLifecycleCapture output emulator =
+  bracket (CaptureJournal.openJournal (output </> "preparation.jsonl")) CaptureJournal.closeJournal $ \journal -> do
+    keys <- forM [FindLensRow,OpenLensSetting,SelectLensOn,CommitLensSetting,CloseLensMenu] $ \step -> do
+      let key = case step of
+            FindLensRow -> "cursor:down:20:64"
+            OpenLensSetting -> "right"
+            SelectLensOn -> "up"
+            CommitLensSetting -> "ok"
+            CloseLensMenu -> "back"
+      (pressed,actual@(MenuState menu setting cursor)) <- pressStep emulator defaultKeyTiming key
+      let record = object ["step" .= show step,"pressed" .= pressed,"menu" .= [menu,setting,cursor]]
+      CaptureJournal.note journal "menu-step" record
+      CaptureJournal.synchronizeJournal journal
+      case step of
+        FindLensRow -> require (cursor == 20) ("shooting-menu row 20 was not reached: " ++ show actual)
+        OpenLensSetting -> require (setting == 0xa3) "SHOOT WITHOUT LENS setting was not opened"
+        SelectLensOn -> require (cursor == 0) "SHOOT WITHOUT LENS ON was not selected"
+        _ -> pure ()
+      pure record
+    dialFirst <- emulatorModeDial emulator ModeDialProgram
+    first <- emulatorCapture emulator "lifecycle-pre-press-a"
+    CaptureJournal.note journal "pre-press-a" (object ["mode_dial" .= dialFirst,"capture" .= first])
+    CaptureJournal.synchronizeJournal journal
+    dialSecond <- emulatorModeDial emulator ModeDialProgram
+    second <- emulatorCapture emulator "lifecycle-pre-press"
+    CaptureJournal.note journal "pre-press" (object ["mode_dial" .= dialSecond,"capture" .= second])
+    CaptureJournal.synchronizeJournal journal
+    lens0 <- emulatorReadMemory emulator 0x009504d4 4
+    lens1 <- emulatorReadMemory emulator 0x00950508 4
+    pure (object ["keys" .= keys,"mode_dial" .= modeDialName ModeDialProgram
+      ,"dial_replies" .= [dialFirst,dialSecond],"captures" .= [first,second],"lens_words" .= map hexBytes [lens0,lens1]])
+
 hexAddress :: Word32 -> String
 hexAddress value = "0x" ++ replicate (8 - length digits) '0' ++ digits where digits = showHex value ""
 
@@ -443,6 +482,7 @@ data Relinked = Relinked
   , relinkedExperiment :: Maybe B.ByteString
   , relinkedModal :: Maybe RelinkedModal
   , relinkedAllowlistInput :: Maybe B.ByteString
+  , relinkedLifecycle :: Maybe B.ByteString
   }
 
 data RelinkedModal = RelinkedModal
@@ -518,10 +558,15 @@ runRamPushE2EUsing given python workspace trajectoryFile installedMedia adjustme
   hSetBuffering stdout LineBuffering
   bytes <- maybe (pure defaultExperimentTrajectory) B.readFile trajectoryFile
   trajectories <- either (ioError . userError . ("invalid RAM-push e2e trajectories: " ++)) pure (decodeTrajectories bytes)
+  let lifecycleRequested = any (isJust . segmentSaveLifecycle) (beforeUnload trajectories ++ afterUnload trajectories)
+  when lifecycleRequested $ require (pushMode given == RamPush)
+    "save lifecycle observation requires an installed RAM package"
   when (payloadKind (e2ePayload given) `elem` [RecipeBankModal75, RecipeBankLifecycle, RecipeBankModalLifecycle]) $ do
-    require (pushMode given == RamPush && emulationCardMode given == Cardless
+    require (pushMode given == RamPush
+      && (emulationCardMode given == Cardless
+        || (payloadKind (e2ePayload given) == RecipeBankLifecycle && lifecycleRequested))
       && case emulationRuntime given of FujiModRuntime _ -> True; _ -> False)
-      "unqualified bank variants require --ram-push-e2e --cardless --fujimod"
+      "unqualified bank variants require FujiMod RAM push; a virtual card requires the lifecycle capture interval"
     require (relinkMode given == UnreviewedRelink EnforceAllowlist)
       "unqualified bank variants require --unreviewed-relink without an allowlist override"
     require (modalDiagnostic given == NoModalDiagnostic) "--modal-observation is a stock no-install diagnostic"
@@ -588,6 +633,25 @@ seconds value = showFFloat (Just 1) value " s"
 
 runSession :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> Plan -> FilePath -> IO ()
 runSession settings python runtime installedMedia adjustmentNand plan e2e = do
+  lifecycle <- case [action | segment <- planBefore plan ++ planAfter plan, Just action <- [segmentSaveLifecycle segment]] of
+    [] -> pure Nothing
+    [action] -> do
+      require (not (planUnload plan) && null (planAfter plan)
+        && case reverse (planBefore plan) of segment:_ -> segmentSaveLifecycle segment == Just action; [] -> False)
+        "save lifecycle requires one terminal before-unload segment selected without unload"
+      require (planProtection plan == Unprotected && null (planForbiddenExecution plan) && planExpect plan == ExpectClean)
+        "save lifecycle prefix does not accept separate preservation, write-watch or fetch-exclusion claims"
+      require (case emulationRuntime settings of FujiModRuntime _ -> True; _ -> False)
+        "save lifecycle requires the FujiMod protocol2 observer"
+      require (case lifecycleRole action of
+        RetainedLifecycle -> payloadKind (e2ePayload settings) `elem` [RecipeBankD3,RecipeBankModal75]
+        OwnedLifecycle -> payloadKind (e2ePayload settings) `elem` [RecipeBankLifecycle,RecipeBankModalLifecycle])
+        "save lifecycle program disagrees with the selected publication group"
+      image5 <- B.readFile (lifecycleImage5 action)
+      image6 <- B.readFile (lifecycleImage6 action)
+      source <- either (ioError . userError . show) pure (SaveLifecycle.deriveSource image5 image6)
+      pure (Just (action,source))
+    _ -> ioError (userError "save lifecycle permits one terminal capture interval")
   phases <- newIORef []
   require (null (planForbiddenExecution plan) || case emulationRuntime settings of FujiModRuntime _ -> True; _ -> False)
     "forbidden execution requires the FujiMod fixed-view observer"
@@ -641,6 +705,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         <*> (if isJust (payloadBankVariant selected)
           then Just <$> B.readFile (pinnedDirectory pinned </> "bank-allowlist-input.json")
           else pure Nothing)
+        <*> (if payloadKind selected `elem` [RecipeBankLifecycle,RecipeBankModalLifecycle]
+          then Just <$> B.readFile (pinnedDirectory pinned </> "save-lifecycle-program.json")
+          else pure Nothing)
       choose candidates
         | not (planFromInstall plan) || bootMode settings == FreshBoot = pure (Nothing, Nothing)
         | otherwise = do
@@ -680,6 +747,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
             writePrivateBytes (relinkDirectory </> "modal-scope.json") (relinkedModalScope modal)
             writePrivateBytes (relinkDirectory </> "kernel.elf") (relinkedModalElf modal)
           forM_ (relinkedAllowlistInput relinked) (writePrivateBytes (relinkDirectory </> "bank-allowlist-input.json"))
+          forM_ (relinkedLifecycle relinked) (writePrivateBytes (relinkDirectory </> "save-lifecycle-program.json"))
           let allowlist = allowlistReceipt (relinkedAllowlist relinked)
           writePrivateBytes (relinkDirectory </> "bank-allowlist.json") (BL.toStrict (encode allowlist) <> "\n")
           pure allowlist
@@ -795,287 +863,330 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           (manifestDigest manifest) (runtimeDigest manifest) procedure (installHostValue host))
         putStrLn ("install checkpoint: " ++ C.unpack (BL.toStrict (encode saved)))
         pure (statePath, installMailbox)
-    state <- readRamPushState statePath
-    runner <- newSegmentRunner emulator e2e (\label action -> timed label action) readAddress (\phase message -> stop phase message) plan
-    let segments = runSegments runner
-        protection = planProtection plan
-        expect = planExpect plan
-        limit = either error id (watchLimit 4096)
-        cardless = emulationCardMode settings == Cardless
-        expectedPresent = not cardless
-        scopeText = if cardless then "cardless" else "card"
-        purpose = if expect == ExpectRefused then FaultControlRun else CandidateRun
-        forbidden = planForbiddenExecution plan
-        executionGuarded = not (null forbidden)
-        protected = case protection of
-          WatchProtection ranges -> ranges
-          PreservationProtection ranges -> preservationRangeList ranges
-          Unprotected -> []
-        writePolicy = case protection of
-          PreservationProtection _ -> PreserveProtectedBytes
-          _ -> ForbidProtectedWrites
-        watched = unionWatchRanges (protected ++ forbidden)
-    executionAck <- if executionGuarded
-      then Just <$> rawWatch (emulatorExecutionWatchBegin emulator protected forbidden limit)
-      else pure Nothing
-    executionEvidence <- newIORef Nothing
-    preUnloadEvidence <- newIORef Nothing
-    let snapshotExecution interval runPurpose controlPc final trajectoryProblem = when executionGuarded $ do
-          rawState <- rawWatch (emulatorWatchStateRaw emulator)
-          preUnload <- readIORef preUnloadEvidence
-          let observerResult = do
-                ack <- maybe (Left "missing execution acknowledgement") id executionAck >>= parseFixedWatchAck
-                observation <- rawState >>= parseFixedWatchObservation limit
-                pure (ack, observation)
-              writeResult = do
-                (ack, observation) <- observerResult
-                checkExecutionWrites writePolicy limit protected forbidden ack observation
-              gateResult = do
-                (ack, observation) <- observerResult
-                checkExecution writePolicy limit protected forbidden ack observation
-              checked = do
-                gate <- gateResult
-                when final $ do
-                  judgeExecution runPurpose controlPc (Right gate)
-                  forM_ trajectoryProblem Left
-                pure gate
-              fetches = case gateResult of Right (ExecutionRejected values) -> values; _ -> []
-              evidence = object
-                [ "schema" .= (1 :: Int)
-                , "enforcement" .= String "original-body-fetch-exclusion"
-                , "ranges" .= [[lo, hi] | range <- forbidden, let (lo, hi) = watchRangeBounds range]
-                , "protected_write_ranges" .= [[lo, hi] | range <- protected, let (lo, hi) = watchRangeBounds range]
-                , "write_policy" .= writePolicyLabel writePolicy
-                , "write_observation" .= either (const Null) executionWriteGateJson writeResult
-                , "watched_ranges" .= [[lo, hi] | range <- watched, let (lo, hi) = watchRangeBounds range]
-                , "interval" .= executionIntervalLabel interval
-                , "start" .= String "successful-install"
-                , "end" .= (if final then executionIntervalLabel interval else "armed")
-                , "cores" .= ([0, 1] :: [Int])
-                , "views" .= String "fixed"
-                , "limit" .= watchLimitValue limit
-                , "acknowledgement" .= maybe Null (either (const Null) id) executionAck
-                , "acknowledgement_error" .= (executionAck >>= either Just (const Nothing))
-                , "final_state" .= either (const Null) id rawState
-                , "state_error" .= either Just (const Nothing) rawState
-                , "complete" .= (final && either (const False) (const True) checked)
-                , "forbidden_fetches" .= map forbiddenFetchJson fetches
-                , "forbidden_fetch_count" .= length fetches
-                , "control_pc" .= fmap watchAddressValue controlPc
-                , "expect" .= (case runPurpose of CandidateRun -> String "clean"; FaultControlRun -> String "refused")
-                , "pre_unload" .= (if interval == ThroughAfterUnload then preUnload else Nothing)
-                , "trajectory_failure" .= trajectoryProblem
-                , "problem" .= either Just (const Nothing) checked ]
-              evidencePath
-                | not final = "e2e-execution-watch-arm.json"
-                | interval == BeforeUnload && planExecutionInterval plan == ThroughAfterUnload = "e2e-execution-watch-before-unload.json"
-                | otherwise = "e2e-execution-watch.json"
-          writePrivateBytes (e2e </> evidencePath) (BL.toStrict (encode evidence) <> "\n")
-          either (stop "forbidden-execution") (const (pure ())) checked
-          when final $ do
-            either (stop "forbidden-execution-receipt") (const (pure ()))
-              (checkExecutionReceipt writePolicy limit protected forbidden interval runPurpose controlPc evidence)
-            writeIORef executionEvidence (Just evidence)
-            when (interval == BeforeUnload) (writeIORef preUnloadEvidence (Just evidence))
-    snapshotExecution BeforeUnload CandidateRun Nothing False Nothing
-    mediaBefore <- if executionGuarded || protection /= Unprotected
-      then emulatorMediaState emulator
-      else pure (Left "no media watch")
-    watchAck <- case protection of
-      WatchProtection ranges | not executionGuarded -> Just <$> emulatorWatchBegin emulator ranges limit
-      _ -> pure Nothing
-    preservationAck <- case protection of
-      PreservationProtection ranges | not executionGuarded -> Just <$> emulatorPreservationBegin emulator ranges
-      _ -> pure Nothing
-    trajectoryOutcome <- try $ do
-      captured <- case modalObservation of
-        Nothing -> segments (planBefore plan)
-        Just (request, source) -> observeModalInterval emulator e2e request source InstalledScopedRoute (segments (planBefore plan))
-      windows <- forM exported $ \(name, Address address, count) -> do
-        bytes <- emulatorReadMemory emulator address count
-        putStrLn ("read " ++ T.unpack name ++ " " ++ hexAddress address ++ " (" ++ show count ++ " bytes): " ++ hexBytes bytes)
-        pure (object ["symbol" .= name, "address" .= hexAddress address, "length" .= count, "bytes" .= hexBytes bytes])
-      pure (captured, windows)
-    (capturedBefore, symbolReads, trajectoryFailure) <- case trajectoryOutcome of
-      Right (captured, windows) -> pure (captured, windows, Nothing)
-      Left (failure :: SomeException)
-        | experimental || executionGuarded -> pure ([], [], Just (displayException failure))
-        | otherwise -> throwIO failure
-    case planExecutionInterval plan of
-      BeforeUnload -> snapshotExecution BeforeUnload purpose (planExecutionControlPc plan) True trajectoryFailure
-      ThroughAfterUnload -> snapshotExecution BeforeUnload CandidateRun Nothing True trajectoryFailure
-    (unloadMailbox, capturedAfter) <- (do
-      unloadMailbox <- if planUnload plan
-        then do
-          privateDirectory unloadDirectory
-          unload <- timed "ram-unload" (stagedSession unloadDirectory (unloadWith state realClock api))
-          unless (unload == RamUnloaded) (stop "ram-unload" (show unload))
-          Just <$> readMailbox
-        else pure Nothing
-      capturedAfter <- segments (planAfter plan)
-      pure (unloadMailbox, capturedAfter))
-      `catch` \(failure :: SomeException) -> do
-        writePrivateBytes (e2e </> "e2e-lifecycle-failure.json")
-          (BL.toStrict (encode (object ["failure" .= displayException failure])) <> "\n")
+    case lifecycle of
+      Nothing -> do
+        state <- readRamPushState statePath
+        runner <- newSegmentRunner emulator e2e (\label action -> timed label action) readAddress (\phase message -> stop phase message) plan
+        let segments = runSegments runner
+            protection = planProtection plan
+            expect = planExpect plan
+            limit = either error id (watchLimit 4096)
+            cardless = emulationCardMode settings == Cardless
+            expectedPresent = not cardless
+            scopeText = if cardless then "cardless" else "card"
+            purpose = if expect == ExpectRefused then FaultControlRun else CandidateRun
+            forbidden = planForbiddenExecution plan
+            executionGuarded = not (null forbidden)
+            protected = case protection of
+              WatchProtection ranges -> ranges
+              PreservationProtection ranges -> preservationRangeList ranges
+              Unprotected -> []
+            writePolicy = case protection of
+              PreservationProtection _ -> PreserveProtectedBytes
+              _ -> ForbidProtectedWrites
+            watched = unionWatchRanges (protected ++ forbidden)
+        executionAck <- if executionGuarded
+          then Just <$> rawWatch (emulatorExecutionWatchBegin emulator protected forbidden limit)
+          else pure Nothing
+        executionEvidence <- newIORef Nothing
+        preUnloadEvidence <- newIORef Nothing
+        let snapshotExecution interval runPurpose controlPc final trajectoryProblem = when executionGuarded $ do
+              rawState <- rawWatch (emulatorWatchStateRaw emulator)
+              preUnload <- readIORef preUnloadEvidence
+              let observerResult = do
+                    ack <- maybe (Left "missing execution acknowledgement") id executionAck >>= parseFixedWatchAck
+                    observation <- rawState >>= parseFixedWatchObservation limit
+                    pure (ack, observation)
+                  writeResult = do
+                    (ack, observation) <- observerResult
+                    checkExecutionWrites writePolicy limit protected forbidden ack observation
+                  gateResult = do
+                    (ack, observation) <- observerResult
+                    checkExecution writePolicy limit protected forbidden ack observation
+                  checked = do
+                    gate <- gateResult
+                    when final $ do
+                      judgeExecution runPurpose controlPc (Right gate)
+                      forM_ trajectoryProblem Left
+                    pure gate
+                  fetches = case gateResult of Right (ExecutionRejected values) -> values; _ -> []
+                  evidence = object
+                    [ "schema" .= (1 :: Int)
+                    , "enforcement" .= String "original-body-fetch-exclusion"
+                    , "ranges" .= [[lo, hi] | range <- forbidden, let (lo, hi) = watchRangeBounds range]
+                    , "protected_write_ranges" .= [[lo, hi] | range <- protected, let (lo, hi) = watchRangeBounds range]
+                    , "write_policy" .= writePolicyLabel writePolicy
+                    , "write_observation" .= either (const Null) executionWriteGateJson writeResult
+                    , "watched_ranges" .= [[lo, hi] | range <- watched, let (lo, hi) = watchRangeBounds range]
+                    , "interval" .= executionIntervalLabel interval
+                    , "start" .= String "successful-install"
+                    , "end" .= (if final then executionIntervalLabel interval else "armed")
+                    , "cores" .= ([0, 1] :: [Int])
+                    , "views" .= String "fixed"
+                    , "limit" .= watchLimitValue limit
+                    , "acknowledgement" .= maybe Null (either (const Null) id) executionAck
+                    , "acknowledgement_error" .= (executionAck >>= either Just (const Nothing))
+                    , "final_state" .= either (const Null) id rawState
+                    , "state_error" .= either Just (const Nothing) rawState
+                    , "complete" .= (final && either (const False) (const True) checked)
+                    , "forbidden_fetches" .= map forbiddenFetchJson fetches
+                    , "forbidden_fetch_count" .= length fetches
+                    , "control_pc" .= fmap watchAddressValue controlPc
+                    , "expect" .= (case runPurpose of CandidateRun -> String "clean"; FaultControlRun -> String "refused")
+                    , "pre_unload" .= (if interval == ThroughAfterUnload then preUnload else Nothing)
+                    , "trajectory_failure" .= trajectoryProblem
+                    , "problem" .= either Just (const Nothing) checked ]
+                  evidencePath
+                    | not final = "e2e-execution-watch-arm.json"
+                    | interval == BeforeUnload && planExecutionInterval plan == ThroughAfterUnload = "e2e-execution-watch-before-unload.json"
+                    | otherwise = "e2e-execution-watch.json"
+              writePrivateBytes (e2e </> evidencePath) (BL.toStrict (encode evidence) <> "\n")
+              either (stop "forbidden-execution") (const (pure ())) checked
+              when final $ do
+                either (stop "forbidden-execution-receipt") (const (pure ()))
+                  (checkExecutionReceipt writePolicy limit protected forbidden interval runPurpose controlPc evidence)
+                writeIORef executionEvidence (Just evidence)
+                when (interval == BeforeUnload) (writeIORef preUnloadEvidence (Just evidence))
+        snapshotExecution BeforeUnload CandidateRun Nothing False Nothing
+        mediaBefore <- if executionGuarded || protection /= Unprotected
+          then emulatorMediaState emulator
+          else pure (Left "no media watch")
+        watchAck <- case protection of
+          WatchProtection ranges | not executionGuarded -> Just <$> emulatorWatchBegin emulator ranges limit
+          _ -> pure Nothing
+        preservationAck <- case protection of
+          PreservationProtection ranges | not executionGuarded -> Just <$> emulatorPreservationBegin emulator ranges
+          _ -> pure Nothing
+        trajectoryOutcome <- try $ do
+          captured <- case modalObservation of
+            Nothing -> segments (planBefore plan)
+            Just (request, source) -> observeModalInterval emulator e2e request source InstalledScopedRoute (segments (planBefore plan))
+          windows <- forM exported $ \(name, Address address, count) -> do
+            bytes <- emulatorReadMemory emulator address count
+            putStrLn ("read " ++ T.unpack name ++ " " ++ hexAddress address ++ " (" ++ show count ++ " bytes): " ++ hexBytes bytes)
+            pure (object ["symbol" .= name, "address" .= hexAddress address, "length" .= count, "bytes" .= hexBytes bytes])
+          pure (captured, windows)
+        (capturedBefore, symbolReads, trajectoryFailure) <- case trajectoryOutcome of
+          Right (captured, windows) -> pure (captured, windows, Nothing)
+          Left (failure :: SomeException)
+            | experimental || executionGuarded -> pure ([], [], Just (displayException failure))
+            | otherwise -> throwIO failure
+        case planExecutionInterval plan of
+          BeforeUnload -> snapshotExecution BeforeUnload purpose (planExecutionControlPc plan) True trajectoryFailure
+          ThroughAfterUnload -> snapshotExecution BeforeUnload CandidateRun Nothing True trajectoryFailure
+        (unloadMailbox, capturedAfter) <- (do
+          unloadMailbox <- if planUnload plan
+            then do
+              privateDirectory unloadDirectory
+              unload <- timed "ram-unload" (stagedSession unloadDirectory (unloadWith state realClock api))
+              unless (unload == RamUnloaded) (stop "ram-unload" (show unload))
+              Just <$> readMailbox
+            else pure Nothing
+          capturedAfter <- segments (planAfter plan)
+          pure (unloadMailbox, capturedAfter))
+          `catch` \(failure :: SomeException) -> do
+            writePrivateBytes (e2e </> "e2e-lifecycle-failure.json")
+              (BL.toStrict (encode (object ["failure" .= displayException failure])) <> "\n")
+            when (planExecutionInterval plan == ThroughAfterUnload)
+              (snapshotExecution ThroughAfterUnload purpose (planExecutionControlPc plan) True (Just (displayException failure))
+                `catch` \(_ :: SomeException) -> pure ())
+            throwIO failure
         when (planExecutionInterval plan == ThroughAfterUnload)
-          (snapshotExecution ThroughAfterUnload purpose (planExecutionControlPc plan) True (Just (displayException failure))
-            `catch` \(_ :: SomeException) -> pure ())
-        throwIO failure
-    when (planExecutionInterval plan == ThroughAfterUnload)
-      (snapshotExecution ThroughAfterUnload purpose (planExecutionControlPc plan) True trajectoryFailure)
-    (judgement, protectionFields, mediaAfter) <- case (executionGuarded, protection) of
-      (True, _) -> do
-        rawState <- rawWatch (emulatorWatchStateRaw emulator)
-        mediaAfterValue <- emulatorMediaState emulator
-        let writeResult = do
-              ack <- maybe (Left "missing execution acknowledgement") id executionAck >>= parseFixedWatchAck
-              observation <- rawState >>= parseFixedWatchObservation limit
-              checkExecutionWrites writePolicy limit protected forbidden ack observation
-            checked = do
-              _ <- judgeExecutionWrites writeResult
-              before <- mediaBefore
-              after <- mediaAfterValue
-              checkMedia expectedPresent before after
-            evidence = object
-              [ "enforcement" .= String "fixed-classified-protected-memory"
-              , "write_policy" .= writePolicyLabel writePolicy
-              , "ranges" .= [[lo, hi] | range <- protected, let (lo, hi) = watchRangeBounds range]
-              , "start" .= String "successful-install"
-              , "end" .= (if planUnload plan then String "after-unload" else String "before-unload")
-              , "acknowledgement" .= maybe Null (either (const Null) id) executionAck
-              , "acknowledgement_error" .= (executionAck >>= either Just (const Nothing))
-              , "final_state" .= either (const Null) id rawState
-              , "state_error" .= either Just (const Nothing) rawState
-              , "write_observation" .= either (const Null) executionWriteGateJson writeResult
-              , "media_before" .= either (const Null) mediaJson mediaBefore
-              , "media_after" .= either (const Null) mediaJson mediaAfterValue
-              , "problem" .= either Just (const Nothing) checked ]
-        writePrivateBytes (e2e </> "e2e-classified-protected-memory.json") (BL.toStrict (encode evidence) <> "\n")
-        either (stop "classified-protected-memory") pure checked
-        pure (CandidateQualified, ["classified_protected_memory" .= evidence], mediaAfterValue)
-      (False, Unprotected) -> pure (CandidateQualified, [], Left "no media watch")
-      (False, WatchProtection ranges) -> do
-        mediaAfterValue <- emulatorMediaState emulator
-        observation <- emulatorWatchObservation emulator limit
-        let gateResult = do
-              ack <- maybe (Left "no watch acknowledgement") Right watchAck
-              observationValue <- observation
-              checkWatch limit ranges ack observationValue
-        let checked = do
-              gate <- gateResult
-              before <- mediaBefore
-              after <- mediaAfterValue
-              checkMedia expectedPresent before after
-              judgement <- judgeWatch purpose (Right gate)
-              pure (gate, judgement)
-        (gate, judgement) <- either (stop "protected-writes") pure checked
-        let summary = case gate of
-              WatchRejectedProtectedWrites value -> value
-              WatchAcceptedClean -> noProtectedWrites
-        pure (judgement,
-          [ "protected_writes" .= object
-              [ "ranges" .= [ [lo, hi] | range <- ranges, let (lo, hi) = watchRangeBounds range ]
-              , "expect" .= T.unpack (expectLabel expect)
-              , "cpu_writes" .= protectedCpuWritesValue (protectedCpuWrites summary)
-              , "host_writes" .= protectedHostWritesValue (protectedHostWrites summary)
-              , "bus_writes" .= protectedBusWritesValue (protectedBusWrites summary)
-              , "enforced" .= True ] ],
-          mediaAfterValue)
-      (False, PreservationProtection ranges) -> do
-        mediaAfterValue <- emulatorMediaState emulator
-        observationResult <- emulatorPreservationState emulator
-        let ackValue = maybe (Left "no preservation acknowledgement") Right preservationAck
-            checked = do
-              ack <- ackValue
-              observation <- observationResult
-              judgement <- judgePreservation purpose (checkPreservation ranges ack observation)
-              before <- mediaBefore
-              after <- mediaAfterValue
-              checkMedia expectedPresent before after
-              pure (observation, judgement)
-            verdict :: String
-            verdict = case checked of
-              Left _ -> "failed"
-              Right (_, CandidateQualified) -> "preserved"
-              Right (_, ControlRefusedProtectedWrite) -> "refused"
-            evidence = object
-              [ "enforcement" .= ("ram-byte-preservation" :: T.Text)
-              , "ranges" .= preservationRangesJson ranges
-              , "counters" .= either (const Null) (preservationCountersJson . preservationCounters) observationResult
-              , "first_violation" .= either (const Null) (maybe Null preservationViolationJson . preservationFirstViolation) observationResult
-              , "verdict" .= verdict
-              , "problem" .= either Just (const Nothing) checked ]
-        writePrivateBytes (e2e </> "e2e-preservation.json") (BL.toStrict (encode evidence) <> "\n")
-        (observation, judgement) <- either (stop "ram-byte-preservation") pure checked
-        pure (judgement,
-          ["ram_preservation" .= preservationReceipt ranges observation judgement],
-          mediaAfterValue)
-    observed <- readIORef (runnerObservations runner)
-    phaseTimes <- readIORef phases
-    executionReceipt <- readIORef executionEvidence
-    let result = object $
-          [ "schema" .= (1 :: Int)
-          , "scope" .= String "emulated X-M1 RC0 ordinary-boot RAM push"
-          , "plan" .= planName plan
-          , "payload" .= payloadText selected
-          , "relink" .= object ["mode" .= relinkModeText (relinkMode settings),
-                                "source_identity" .= object [K.fromString name .= digest | (name, digest) <- sourceIdentity manifest],
-                                "allowlist" .= allowlist]
-          , "emulator_start" .= startRecord start
-          , "attach_hold" .= attachHoldText (attachHold settings)
-          , "phases" .= (phaseTimes :: [Value])
-          , "allocation" .= object ["base" .= hexAddress base, "bytes" .= allocationBytes,
-                                     "cpu0" .= hexAddress (allocCpu0 allocation),
-                                     "heap_break_before" .= breakBefore, "heap_break_after" .= breakAfter]
-          , "runtime" .= object ["bytes" .= allocationSize manifest,
-                                  "publications" .= length (manifestPublications manifest),
-                                  "manifest" .= manifestPath manifest,
-                                  "symbols_sha256" .= sha256Hex symbolsDigest]
-          , "declared_trace_sites" .= traceSiteValues declaredTraceSites
-          , "states" .= object ["allocation" .= allocationPath, "installed" .= statePath]
-          , "card" .= cardRecord (emulationCardMode settings)
-          , "menu_receipts" .= catMaybes (capturedBefore ++ capturedAfter)
-          , "trajectories" .= map (\name -> object ["name" .= name, "result" .= String "matched"])
-              (nub (map segmentPhase (filter (not . segmentObserve) (planBefore plan ++ planAfter plan))))
-          , "observations" .= (observed :: [Value])
-          , "reads" .= symbolReads
-          , "checks" .= object ["install" .= String "PASS", "trajectory" .= maybe (String "PASS") (const (String "FAIL")) trajectoryFailure, "unload" .= (if planUnload plan then String "PASS" else String "NOT_RUN")]
-          , "trajectory_failure" .= trajectoryFailure
-          , "mailbox" .= object ["install" .= installMailbox, "rollback" .= unloadMailbox,
-                                 "address" .= hexAddress mailbox]
-          , "outcome" .= (if scoped then String "unqualified-scoped-diagnostic"
-              else if executionGuarded && expect == ExpectRefused then String "control-refused"
-              else if unreviewedBank then String "unqualified-lifecycle-variant" else toJSON judgement)
-          , "forbidden_execution" .= executionReceipt
-          , "media" .= object
-              [ "scope" .= String scopeText
+          (snapshotExecution ThroughAfterUnload purpose (planExecutionControlPc plan) True trajectoryFailure)
+        (judgement, protectionFields, mediaAfter) <- case (executionGuarded, protection) of
+          (True, _) -> do
+            rawState <- rawWatch (emulatorWatchStateRaw emulator)
+            mediaAfterValue <- emulatorMediaState emulator
+            let writeResult = do
+                  ack <- maybe (Left "missing execution acknowledgement") id executionAck >>= parseFixedWatchAck
+                  observation <- rawState >>= parseFixedWatchObservation limit
+                  checkExecutionWrites writePolicy limit protected forbidden ack observation
+                checked = do
+                  _ <- judgeExecutionWrites writeResult
+                  before <- mediaBefore
+                  after <- mediaAfterValue
+                  checkMedia expectedPresent before after
+                evidence = object
+                  [ "enforcement" .= String "fixed-classified-protected-memory"
+                  , "write_policy" .= writePolicyLabel writePolicy
+                  , "ranges" .= [[lo, hi] | range <- protected, let (lo, hi) = watchRangeBounds range]
+                  , "start" .= String "successful-install"
+                  , "end" .= (if planUnload plan then String "after-unload" else String "before-unload")
+                  , "acknowledgement" .= maybe Null (either (const Null) id) executionAck
+                  , "acknowledgement_error" .= (executionAck >>= either Just (const Nothing))
+                  , "final_state" .= either (const Null) id rawState
+                  , "state_error" .= either Just (const Nothing) rawState
+                  , "write_observation" .= either (const Null) executionWriteGateJson writeResult
+                  , "media_before" .= either (const Null) mediaJson mediaBefore
+                  , "media_after" .= either (const Null) mediaJson mediaAfterValue
+                  , "problem" .= either Just (const Nothing) checked ]
+            writePrivateBytes (e2e </> "e2e-classified-protected-memory.json") (BL.toStrict (encode evidence) <> "\n")
+            either (stop "classified-protected-memory") pure checked
+            pure (CandidateQualified, ["classified_protected_memory" .= evidence], mediaAfterValue)
+          (False, Unprotected) -> pure (CandidateQualified, [], Left "no media watch")
+          (False, WatchProtection ranges) -> do
+            mediaAfterValue <- emulatorMediaState emulator
+            observation <- emulatorWatchObservation emulator limit
+            let gateResult = do
+                  ack <- maybe (Left "no watch acknowledgement") Right watchAck
+                  observationValue <- observation
+                  checkWatch limit ranges ack observationValue
+            let checked = do
+                  gate <- gateResult
+                  before <- mediaBefore
+                  after <- mediaAfterValue
+                  checkMedia expectedPresent before after
+                  judgement <- judgeWatch purpose (Right gate)
+                  pure (gate, judgement)
+            (gate, judgement) <- either (stop "protected-writes") pure checked
+            let summary = case gate of
+                  WatchRejectedProtectedWrites value -> value
+                  WatchAcceptedClean -> noProtectedWrites
+            pure (judgement,
+              [ "protected_writes" .= object
+                  [ "ranges" .= [ [lo, hi] | range <- ranges, let (lo, hi) = watchRangeBounds range ]
+                  , "expect" .= T.unpack (expectLabel expect)
+                  , "cpu_writes" .= protectedCpuWritesValue (protectedCpuWrites summary)
+                  , "host_writes" .= protectedHostWritesValue (protectedHostWrites summary)
+                  , "bus_writes" .= protectedBusWritesValue (protectedBusWrites summary)
+                  , "enforced" .= True ] ],
+              mediaAfterValue)
+          (False, PreservationProtection ranges) -> do
+            mediaAfterValue <- emulatorMediaState emulator
+            observationResult <- emulatorPreservationState emulator
+            let ackValue = maybe (Left "no preservation acknowledgement") Right preservationAck
+                checked = do
+                  ack <- ackValue
+                  observation <- observationResult
+                  judgement <- judgePreservation purpose (checkPreservation ranges ack observation)
+                  before <- mediaBefore
+                  after <- mediaAfterValue
+                  checkMedia expectedPresent before after
+                  pure (observation, judgement)
+                verdict :: String
+                verdict = case checked of
+                  Left _ -> "failed"
+                  Right (_, CandidateQualified) -> "preserved"
+                  Right (_, ControlRefusedProtectedWrite) -> "refused"
+                evidence = object
+                  [ "enforcement" .= ("ram-byte-preservation" :: T.Text)
+                  , "ranges" .= preservationRangesJson ranges
+                  , "counters" .= either (const Null) (preservationCountersJson . preservationCounters) observationResult
+                  , "first_violation" .= either (const Null) (maybe Null preservationViolationJson . preservationFirstViolation) observationResult
+                  , "verdict" .= verdict
+                  , "problem" .= either Just (const Nothing) checked ]
+            writePrivateBytes (e2e </> "e2e-preservation.json") (BL.toStrict (encode evidence) <> "\n")
+            (observation, judgement) <- either (stop "ram-byte-preservation") pure checked
+            pure (judgement,
+              ["ram_preservation" .= preservationReceipt ranges observation judgement],
+              mediaAfterValue)
+        observed <- readIORef (runnerObservations runner)
+        phaseTimes <- readIORef phases
+        executionReceipt <- readIORef executionEvidence
+        let result = object $
+              [ "schema" .= (1 :: Int)
+              , "scope" .= String "emulated X-M1 RC0 ordinary-boot RAM push"
+              , "plan" .= planName plan
+              , "payload" .= payloadText selected
+              , "relink" .= object ["mode" .= relinkModeText (relinkMode settings),
+                                    "source_identity" .= object [K.fromString name .= digest | (name, digest) <- sourceIdentity manifest],
+                                    "allowlist" .= allowlist]
+              , "emulator_start" .= startRecord start
+              , "attach_hold" .= attachHoldText (attachHold settings)
+              , "phases" .= (phaseTimes :: [Value])
+              , "allocation" .= object ["base" .= hexAddress base, "bytes" .= allocationBytes,
+                                         "cpu0" .= hexAddress (allocCpu0 allocation),
+                                         "heap_break_before" .= breakBefore, "heap_break_after" .= breakAfter]
+              , "runtime" .= object ["bytes" .= allocationSize manifest,
+                                      "publications" .= length (manifestPublications manifest),
+                                      "manifest" .= manifestPath manifest,
+                                      "symbols_sha256" .= sha256Hex symbolsDigest]
+              , "declared_trace_sites" .= traceSiteValues declaredTraceSites
+              , "states" .= object ["allocation" .= allocationPath, "installed" .= statePath]
               , "card" .= cardRecord (emulationCardMode settings)
-              , "before" .= either (const Null) mediaJson mediaBefore
-              , "after" .= either (const Null) mediaJson mediaAfter ]
-          , "unload" .= (if planUnload plan
-              then Just (String (T.pack (show (length (manifestPublications manifest)) ++ " old words verified; allocation retained until power-off")))
-              else Nothing)
-          ] ++ protectionFields ++
-          [ "modal_observation" .= object
-              [ "receipt" .= (e2e </> "e2e-modal-observation.json")
-              , "interval" .= String "post-install selected physical-key segments only"
-              , "physical_fetch_coverage" .= False
-              , "task_identity_verified" .= False
-              , "whole_installed_lifetime_coverage" .= False
-              , "rollback_requested" .= planUnload plan
-              ]
-          | scoped ]
-    forM_ trajectoryFailure $ \problem -> do
-      writePrivateBytes (e2e </> "e2e-failure.json") (BL.toStrict (encode result) <> "\n")
-      ioError (userError problem)
-    if judgement == ControlRefusedProtectedWrite || (executionGuarded && expect == ExpectRefused)
-      then do
-        stale <- doesFileExist (e2e </> "e2e-result.json")
-        when stale (stop "protected-writes" "control output contains a stale e2e-result.json")
-        writePrivateBytes (e2e </> "e2e-control.json") (BL.toStrict (encode result) <> "\n")
-        ioError (userError "control refused as expected")
-      else writePrivateBytes (e2e </> "e2e-result.json") (BL.toStrict (encode result) <> "\n")
-    pure (manifestPublications manifest)
+              , "menu_receipts" .= catMaybes (capturedBefore ++ capturedAfter)
+              , "trajectories" .= map (\name -> object ["name" .= name, "result" .= String "matched"])
+                  (nub (map segmentPhase (filter (not . segmentObserve) (planBefore plan ++ planAfter plan))))
+              , "observations" .= (observed :: [Value])
+              , "reads" .= symbolReads
+              , "checks" .= object ["install" .= String "PASS", "trajectory" .= maybe (String "PASS") (const (String "FAIL")) trajectoryFailure, "unload" .= (if planUnload plan then String "PASS" else String "NOT_RUN")]
+              , "trajectory_failure" .= trajectoryFailure
+              , "mailbox" .= object ["install" .= installMailbox, "rollback" .= unloadMailbox,
+                                     "address" .= hexAddress mailbox]
+              , "outcome" .= (if scoped then String "unqualified-scoped-diagnostic"
+                  else if executionGuarded && expect == ExpectRefused then String "control-refused"
+                  else if unreviewedBank then String "unqualified-lifecycle-variant" else toJSON judgement)
+              , "forbidden_execution" .= executionReceipt
+              , "media" .= object
+                  [ "scope" .= String scopeText
+                  , "card" .= cardRecord (emulationCardMode settings)
+                  , "before" .= either (const Null) mediaJson mediaBefore
+                  , "after" .= either (const Null) mediaJson mediaAfter ]
+              , "unload" .= (if planUnload plan
+                  then Just (String (T.pack (show (length (manifestPublications manifest)) ++ " old words verified; allocation retained until power-off")))
+                  else Nothing)
+              ] ++ protectionFields ++
+              [ "modal_observation" .= object
+                  [ "receipt" .= (e2e </> "e2e-modal-observation.json")
+                  , "interval" .= String "post-install selected physical-key segments only"
+                  , "physical_fetch_coverage" .= False
+                  , "task_identity_verified" .= False
+                  , "whole_installed_lifetime_coverage" .= False
+                  , "rollback_requested" .= planUnload plan
+                  ]
+              | scoped ]
+        forM_ trajectoryFailure $ \problem -> do
+          writePrivateBytes (e2e </> "e2e-failure.json") (BL.toStrict (encode result) <> "\n")
+          ioError (userError problem)
+        if judgement == ControlRefusedProtectedWrite || (executionGuarded && expect == ExpectRefused)
+          then do
+            stale <- doesFileExist (e2e </> "e2e-result.json")
+            when stale (stop "protected-writes" "control output contains a stale e2e-result.json")
+            writePrivateBytes (e2e </> "e2e-control.json") (BL.toStrict (encode result) <> "\n")
+            ioError (userError "control refused as expected")
+          else writePrivateBytes (e2e </> "e2e-result.json") (BL.toStrict (encode result) <> "\n")
+        pure (manifestPublications manifest)
+      Just (action,source) -> do
+        let output = e2e </> "save-lifecycle"
+        privateDirectory output
+        metadataBytes <- case lifecycleRole action of
+          RetainedLifecycle -> pure "{\"kind\":\"retained\"}"
+          OwnedLifecycle -> B.readFile (relinkDirectory </> "save-lifecycle-program.json")
+        metadata <- either (ioError . userError) pure (eitherDecodeStrict' metadataBytes)
+        runtimeBytes <- case lifecycleRole action of
+          RetainedLifecycle -> pure B.empty
+          OwnedLifecycle -> B.readFile (relinkDirectory </> "runtime.bin")
+        program <- either (ioError . userError . show) pure (SaveLifecycle.parseProgram source runtimeBytes metadata)
+        writePrivateBytes (output </> "program.json") (metadataBytes <> "\n")
+        runner <- newSegmentRunner emulator e2e (\label action' -> timed label action') readAddress (\phase message -> stop phase message) plan
+        captured <- case modalObservation of
+          Nothing -> runSegments runner (planBefore plan)
+          Just (request,modalSource) -> observeModalInterval emulator e2e request modalSource InstalledScopedRoute
+            (runSegments runner (planBefore plan))
+        windows <- forM exported $ \(name, Address address, count) -> do
+          bytes <- emulatorReadMemory emulator address count
+          pure (object ["symbol" .= name,"address" .= hexAddress address,"length" .= count,"bytes" .= hexBytes bytes])
+        preparation <- prepareLifecycleCapture output emulator
+        writePrivateBytes (output </> "preparation.json") (BL.toStrict (encode preparation) <> "\n")
+        witness <- runSaveLifecycle emulator output source program
+        observed <- readIORef (runnerObservations runner)
+        let result = object
+              [ "schema" .= (1 :: Int)
+              , "scope" .= String "emulated X-M1 normal-bank save lifecycle prefix"
+              , "plan" .= planName plan, "payload" .= payloadText selected
+              , "outcome" .= String "unqualified-lifecycle-prefix"
+              , "full_save_qualified" .= False
+              , "runtime" .= object ["bytes" .= allocationSize manifest,"publications" .= length (manifestPublications manifest)]
+              , "card" .= cardRecord (emulationCardMode settings)
+              , "allowlist" .= allowlist
+              , "emulator_start" .= startRecord start
+              , "mailbox" .= object ["install" .= installMailbox,"address" .= hexAddress mailbox]
+              , "checks" .= object ["install" .= String "PASS","full_save" .= String "NOT_QUALIFIED","unload" .= String "NOT_RUN"]
+              , "menu_receipts" .= catMaybes captured
+              , "observations" .= (observed :: [Value]), "reads" .= windows
+              , "save_lifecycle" .= witness ]
+        writePrivateBytes (e2e </> "e2e-result.json") (BL.toStrict (encode result) <> "\n")
+        pure (manifestPublications manifest)
   when (planUnload plan && carriesClassicChrome selected) $
     timed "cold-restart-read" (coldRestartRead settings python runtime installedMedia adjustmentNand published e2e)
 

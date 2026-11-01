@@ -17,9 +17,18 @@ case "${RB_PUBLICATION_GROUPS:-}" in
     activation_count=93
     modal_link=(-Wl,--undefined=rb_modal_entry)
     ;;
-  lifecycle|lifecycle,modal75)
-    printf 'lifecycle publication group is unavailable until its publications and veneers are supplied\n' >&2
-    exit 2
+  lifecycle)
+    builder_mode=(--ram-push-variant lifecycle)
+    allocation_size=0x1dcd8
+    publication_count=226
+    activation_count=95
+    ;;
+  lifecycle,modal75)
+    builder_mode=(--ram-push-variant lifecycle,modal75)
+    allocation_size=0x1dcf8
+    publication_count=227
+    activation_count=96
+    modal_link=(-Wl,--undefined=rb_modal_entry)
     ;;
   *) printf 'invalid RB_PUBLICATION_GROUPS selection\n' >&2; exit 1 ;;
 esac
@@ -67,10 +76,18 @@ ARM=(--target=armv7r-none-eabi -march=armv7-r -marm)
 FREE=(-ffreestanding -nostdlib -fno-builtin -mno-unaligned-access)
 LINK=(-nostdlib -static -fuse-ld=lld "--ld-path=$LD_LLD" -Wl,--no-dynamic-linker -Wl,--build-id=none)
 objects=()
+lifecycle_sources=()
+lifecycle_link=()
+case "${RB_PUBLICATION_GROUPS:-}" in
+  lifecycle|lifecycle,modal75)
+    lifecycle_sources=(replacement/save/save_stock.S replacement/media_permit/rb_media_permit_stock.S)
+    lifecycle_link=(-Wl,--undefined=xm1_save_facade -Wl,--undefined=xm1_save_completion
+      -Wl,--undefined=xm1_save_release_completion -Wl,--undefined=rb_media_permit_apply) ;;
+esac
 for src in menu/recipe_bank_arm.S menu/recipe_bank_probe.c menu/recipe_bank_hook.c \
   menu/recipe_bank_storage.c menu/recipe_bank_actions.c menu/recipe_bank_edit.c \
   menu/recipe_bank_diagnostic.c replacement/service/rb_service_stock.S \
-  replacement/capture/rb_capture_stock.S; do
+  replacement/capture/rb_capture_stock.S "${lifecycle_sources[@]}"; do
   name="${src##*/}"
   obj="$OUT/${name%.*}.o"
   case "$src" in
@@ -92,7 +109,7 @@ objects+=("$OUT/classic_chrome_ram.o")
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${LINK[@]}" -Wl,-T,menu/recipe_bank_ram.ld \
   -Wl,--defsym=RAM_PUSH_BASE="$BASE" -Wl,--defsym=RAM_PUSH_BANK_END="$rb_bank_end" \
   -Wl,--defsym=RAM_PUSH_INSTALLER_START="$rb_installer_start" \
-  -Wl,--defsym=RAM_PUSH_PUBLICATION_COUNT="$publication_count" "${modal_link[@]}" \
+  -Wl,--defsym=RAM_PUSH_PUBLICATION_COUNT="$publication_count" "${modal_link[@]}" "${lifecycle_link[@]}" \
   -Wl,menu/classic_chrome_ram_stock.ld -Wl,--emit-relocs \
   "${objects[@]}" -o "$OUT/kernel.elf"
 "$OBJCOPY" -O binary "$OUT/kernel.elf" "$OUT/linked.bin"

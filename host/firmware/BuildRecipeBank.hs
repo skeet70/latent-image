@@ -15,9 +15,8 @@ import Data.List (elemIndex, nub, sort, sortOn)
 import Data.Word (Word16, Word32)
 import Numeric (showHex)
 import System.Environment (getArgs, lookupEnv)
-import System.Exit (ExitCode (..), exitSuccess, exitWith)
+import System.Exit (exitSuccess)
 import System.Posix.Files (setFileMode)
-import System.IO (hPutStrLn, stderr)
 
 import FujiAF.JSON (encodeCanonical)
 import FujiAF.RecipeBank
@@ -53,6 +52,12 @@ modeKernel :: BuildMode -> Maybe FilePath
 modeKernel PreBootstrap = Nothing
 modeKernel (FlashPackage kernel _ _ _) = Just kernel
 modeKernel (RamPush _ _ linkedDir _ _ _) = Just linkedDir
+
+modeLifecycle :: BuildMode -> Bool
+modeLifecycle PreBootstrap = False
+modeLifecycle FlashPackage {} = False
+modeLifecycle (RamPush variant _ _ _ _ _) =
+  hasPublicationGroup LifecyclePublications variant
 
 -- | Refuses unless the relink script ran with exactly the compiled tool paths.
 requirePinnedToolchain :: IO ()
@@ -93,9 +98,6 @@ main = do
       pure (s, o, d, RamPush standardBankVariant (hexValue base) linkedDir rc0Id4 rc0Id5 rc0Plain)
     ["--ram-push-variant", groups, base, s, o, d, linkedDir, rc0Id4, rc0Id5, rc0Plain] -> do
       variant <- either H.failH pure (parseBankVariant groups)
-      when (hasPublicationGroup LifecyclePublications variant) $ do
-        hPutStrLn stderr "lifecycle publication group is unavailable until its publications and veneers are supplied"
-        exitWith (ExitFailure 2)
       requirePinnedToolchain
       pure (s, o, d, RamPush variant (hexValue base) linkedDir rc0Id4 rc0Id5 rc0Plain)
     _ ->
@@ -645,7 +647,19 @@ main = do
         dialApply armBranchWord [0x00c2dfbc] [0xeb03b205]
       pairWrites <- retargetSites image5 image5Base "image5" "mode and class apply call"
         pairApply armBranchWord [0x00c2cf88, 0x00c2d278] [0xebe85a87, 0xebe859cb]
-      pure $ workerWrites ++ previewWrites ++ dialWrites ++ pairWrites ++
+      lifecycleWrites <- if modeLifecycle buildMode
+        then do
+          save <- linked symbols "xm1_save_facade"
+          permit <- linked symbols "rb_media_permit_apply"
+          saveWrites <- retargetSites image5 image5Base "image5"
+            "save caller BL to xm1_save_facade" save armBranchWord
+            [0x00e99e8c] [0xebfede8b]
+          permitWrites <- retargetSites image5 image5Base "image5"
+            "media permit thunk BL to rb_media_permit_apply" permit armBranchWord
+            [0x00e6a754, 0x00e6bb90] [0xeb005080, 0xeb004b71]
+          pure (saveWrites ++ permitWrites)
+        else pure []
+      pure $ workerWrites ++ previewWrites ++ dialWrites ++ pairWrites ++ lifecycleWrites ++
         [ wordWrite sources "image5" 0x00d3d894 presentBranch "bank presenter entry branch"
         , wordWrite sources "plain_sites" 0x0115815c drawBranch "bank list graphics entry branch"
         , wordWrite sources "plain_sites" 0x011089d8 drawSelectedBranch "bank failure after selected drawer"
@@ -696,20 +710,61 @@ main = do
         ++ show (length (planWrites plan))
     )
 
-data LinkSymbol = LinkSymbol {symbolName :: String, symbolAddress :: Word32}
+data LinkSymbolKind = LinkCode | LinkOther
+  deriving (Eq)
+
+data LinkSymbol = LinkSymbol
+  { symbolName :: String
+  , symbolAddress :: Word32
+  , symbolKind :: LinkSymbolKind
+  }
 
 readSymbols :: FilePath -> IO [LinkSymbol]
 readSymbols path = do
   text <- C.unpack <$> B.readFile path
   forM (lines text) $ \line -> case words line of
     address : rest | not (null rest) && all isHexDigit address ->
-      pure (LinkSymbol (last rest) (hexValue address))
+      let kind = case reverse rest of
+            _ : "T" : _ -> LinkCode
+            _ : "t" : _ -> LinkCode
+            _ -> LinkOther
+       in pure (LinkSymbol (last rest) (hexValue address) kind)
     _ -> H.failH ("link symbols: malformed row in " ++ path)
 
 linked :: [LinkSymbol] -> String -> IO Word32
 linked symbols name = case [symbolAddress s | s <- symbols, symbolName s == name] of
   [address] -> pure address
   _ -> H.failH ("link symbols: unique definition required for " ++ name)
+
+data LifecycleImageExtent = LifecycleImageExtent
+  { lifecycleImageStart :: Word32
+  , lifecycleImageEnd :: Word32
+  }
+
+emitSaveLifecycleProgram :: [LinkSymbol] -> LifecycleImageExtent -> FilePath -> IO ()
+emitSaveLifecycleProgram symbols extent out = do
+  begin <- linked symbols "__rb_image_start"
+  end <- linked symbols "__rb_image_end"
+  textEnd <- linked symbols "__rb_text_end"
+  unless (lifecycleImageStart extent <= begin && begin < textEnd && textEnd <= end &&
+          end <= lifecycleImageEnd extent) $
+    H.failH "package: save lifecycle image extent differs from linked text"
+  entries <- forM
+    [ ("save_entry", "xm1_save_facade")
+    , ("save_completion", "xm1_save_completion")
+    , ("release_completion", "xm1_save_release_completion")
+    , ("permit_entry", "rb_media_permit_apply")
+    ] $ \(field, name) -> do
+      address <- case
+        [symbolAddress s | s <- symbols, symbolName s == name, symbolKind s == LinkCode] of
+          [entry] -> pure entry
+          _ -> H.failH ("package: unique code symbol required for " ++ name)
+      unless (begin <= address && address < textEnd && address .&. 3 == 0) $
+        H.failH ("package: save lifecycle symbol outside A32 text: " ++ name)
+      pure (field, H.n (fromIntegral address))
+  B.writeFile (out ++ "/save-lifecycle-program.json") (encodeCanonical (H.obj
+    ([("kind", H.s "owned"), ("image", H.arr (map (H.n . fromIntegral)
+      [lifecycleImageStart extent, lifecycleImageEnd extent]))] ++ entries)))
 
 replaceFields :: Value -> [(String, Value)] -> Value
 replaceFields value changes = H.obj
@@ -892,7 +947,8 @@ emitPackage spec sources plan kernel boot d3 stockPath out = do
   let activationSites = [0x0071fa9c,0x0071f7dc,0x0071c4d4,0x0071c108,0x0071c28c,0x007115a4,0x007116e4,0x00711768,
         0x00d526fc,0x00bfa3f0,0x00bfa7ec,0x00bfacf0,
         0x00d04084,0x00cd20a4,0x00cd211c,0x00cd243c,0x00d3d894,0x0115815c,0x011089d8,0x0116657c,0x011675c4,
-        0x00bfb1f0,0x00d04188,0x00d04114,0x00cd24b4,0x00c2dfbc,0x00c2cf88,0x00c2d278]
+        0x00bfb1f0,0x00d04188,0x00d04114,0x00cd24b4,0x00c2dfbc,0x00c2cf88,0x00c2d278,
+        0x00e99e8c,0x00e6a754,0x00e6bb90]
       priority address
         | address `elem` activationSites = 2 :: Int
         | address >= 0x01100000 = 0
@@ -1008,6 +1064,8 @@ emitPackage spec sources plan kernel boot d3 stockPath out = do
      ("refusal_fallback", H.s "D3/unlock/Q with reduced heap; no bank stock-word publication"),
      ("unaccepted", H.arr (map H.s ["gap1 lifetime/ownership", "nonallocator carve writer exclusion",
        "heap exhaustion with 64KiB reduction", "source fetch coherence", "publication core ownership",
+       "save frame catalogue/selected-count/backing/allocation admission", "save status-output ownership",
+       "permit slot selected-count and frame liveness", "retained callback code lifetime after publication rollback",
        "independent final-byte review", "camera behavior"]))]))
 
 data RamPublication = RamPublication
@@ -1147,7 +1205,10 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
         | ramAddress publication `elem` legacyActivationSites = 2 :: Int
         | ramAddress publication >= 0x01100000 = 0
         | otherwise = 1
-      legacyOrdered = sortOn (\publication -> (legacyPriority publication, ramAddress publication)) publicationPairs
+      lifecycleSites = [0x00e99e8c, 0x00e6a754, 0x00e6bb90]
+      lifecyclePairs = [p | p <- publicationPairs, ramAddress p `elem` lifecycleSites]
+      legacyPairs = [p | p <- publicationPairs, ramAddress p `notElem` lifecycleSites]
+      legacyOrdered = sortOn (\publication -> (legacyPriority publication, ramAddress publication)) legacyPairs
       publicationCore index
         | index >= 97 = "unknown"
         | index <= 35 || index >= 54 && index <= 71 || index >= 75 = "cpu0"
@@ -1157,6 +1218,14 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
         && sortOn id (map ramAddress legacyOrdered) == sortOn id expectedSites
     ) $
     H.failH "ram-push: publication destinations differ from the bank contract"
+  lifecycleOrdered <- if hasPublicationGroup LifecyclePublications variant
+    then forM lifecycleSites $ \site -> case [p | p <- lifecyclePairs, ramAddress p == site] of
+      [publication] -> pure publication
+      _ -> H.failH ("ram-push: unique lifecycle publication required at " ++ hex32 site)
+    else do
+      unless (null lifecyclePairs) $
+        H.failH "ram-push: lifecycle publication in a package without lifecycle selection"
+      pure []
   rc0Id2 <- B.readFile ramRc0Image2Path
   d3Id4 <- B.readFile ramD3Image4Path
   checkImageHash "RC0 image2" rc0Id2 "236d12a11c8b386f71192675c12398358840327f21e392e6eaa91ddfd6e020a5"
@@ -1208,14 +1277,14 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
         H.failH "ram-push: unselected scoped modal entry is linked"
       pure []
   let capturePublication = RamPublication 0x00e9e038 0xe92d4870 captureWord
-      reserved = map ramAddress (legacyOrdered ++ d3Activation)
+      reserved = map ramAddress (legacyOrdered ++ lifecycleOrdered ++ d3Activation)
       ccKept = [p | p <- ccPublications, let CC.Address address = CC.publicationAddress p,
         address `notElem` reserved]
       convert p = let CC.Address address = CC.publicationAddress p
                    in RamPublication address (CC.publicationOld p) (CC.publicationNew p)
       ccSetup = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Setup]
       ccActivation = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Activation]
-      logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra <> [capturePublication] <> modalPublications
+      logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra <> [capturePublication] <> lifecycleOrdered <> modalPublications
   safeOrder <- either H.failH pure (safePublicationOrderForVariant variant (map (PublicationAddress . ramAddress) logical))
   let ordered = [logical !! publicationIndex index | index <- safeOrder]
       allocationEnd = toInteger base + toInteger size
@@ -1320,6 +1389,20 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
             [Modal75Publication] -> ["host/firmware/build-recipe-bank-modal-ram.sh"]
             [LifecyclePublications] -> ["host/firmware/build-recipe-bank-lifecycle-ram.sh"]
             _ -> ["host/firmware/build-recipe-bank-modal-lifecycle-ram.sh"]
+          ++ [path | hasPublicationGroup LifecyclePublications variant, path <-
+          [ "replacement/save/src/lib.rs"
+          , "replacement/save/src/abi.rs"
+          , "replacement/save/src/contract.rs"
+          , "replacement/save/src/facade.rs"
+          , "replacement/save/src/ports.rs"
+          , "replacement/save/save_stock.S"
+          , "replacement/save/save_abi.h"
+          , "replacement/save/stock_calls.json"
+          , "replacement/media_permit/src/lib.rs"
+          , "replacement/media_permit/src/stock.rs"
+          , "replacement/media_permit/rb_media_permit_stock.S"
+          , "replacement/media_permit/stock_calls.json"
+          ]]
   sourceIdentity <- forM (nub sourcePaths) $ \path -> do
     digest <- H.sha256 =<< B.readFile path
     pure (path, H.s digest)
@@ -1345,6 +1428,10 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
   statusEntry <- linked symbols "ram_push_status"
   B.writeFile (out ++ "/runtime.bin") runtime
   setFileMode (out ++ "/runtime.bin") 0o600
+  when (hasPublicationGroup LifecyclePublications variant) $ do
+    emitSaveLifecycleProgram symbols
+      (LifecycleImageExtent base (base + fromIntegral (B.length runtime))) out
+    setFileMode (out ++ "/save-lifecycle-program.json") 0o600
   B.writeFile (out ++ "/ram-push-manifest.json") (encodeCanonical (H.obj
     [ ("schema", H.n 1)
     , ("source_identity", H.obj (sourceIdentity <> rc0Identity <> rustIdentity <> toolIdentity

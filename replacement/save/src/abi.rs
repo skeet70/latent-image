@@ -188,15 +188,16 @@ impl CompletionState for AbiServices {
     }
 
     fn save_completion(&self) -> SaveCompletion {
-        SaveCompletion(save_completion)
+        SaveCompletion(xm1_save_completion)
     }
 
     fn release_completion(&self) -> ReleaseCompletion {
-        ReleaseCompletion(release_completion)
+        ReleaseCompletion(xm1_save_release_completion)
     }
 }
 
-unsafe extern "C" fn save_completion(code: i32) {
+#[no_mangle]
+pub unsafe extern "C" fn xm1_save_completion(code: i32) {
     let status = RawStatus::from_completion(CompletionCode(code));
     unsafe { write_word(SAVE_STATUS_WORD, status.0 as u32) };
     let task = unsafe { read_word(SAVE_PHASE_ONE_TASK) };
@@ -207,7 +208,8 @@ unsafe extern "C" fn save_completion(code: i32) {
     }
 }
 
-unsafe extern "C" fn release_completion() {
+#[no_mangle]
+pub unsafe extern "C" fn xm1_save_release_completion() {
     let task = unsafe { read_word(SAVE_PHASE_TWO_TASK) };
     if task != 0 {
         unsafe {

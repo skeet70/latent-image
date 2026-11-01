@@ -51,13 +51,8 @@ fn write_u32(address: usize, value: u32) {
     unsafe { core::ptr::write_volatile(address as *mut u32, value) }
 }
 
-fn live_context(slot: SlotIndex) -> Option<usize> {
-    let address = unsafe { rb_mp_stock_context(slot.word()) };
-    if address == 0 {
-        None
-    } else {
-        Some(address)
-    }
+fn live_context(slot: SlotIndex) -> Option<FrameContext> {
+    FrameContext::from_address(unsafe { rb_mp_stock_context(slot.word()) })
 }
 
 struct StockSlots;
@@ -135,19 +130,19 @@ impl PermitRuntime for StockRuntime {
     }
 
     fn frame_context(&self, slot: SlotIndex) -> Option<FrameContext> {
-        live_context(slot).map(FrameContext)
+        live_context(slot)
     }
 
     fn clear_capture_word(&mut self, context: FrameContext) {
-        write_u32(context.0 + CAPTURE_WORD, 0);
+        write_u32(context.address() + CAPTURE_WORD, 0);
     }
 
     fn store_permit_word(&mut self, context: FrameContext, word: PermitWord) {
-        write_u32(context.0 + PERMIT_WORD, word.0);
+        write_u32(context.address() + PERMIT_WORD, word.0);
     }
 
     fn kind_flag_is_one(&self, context: FrameContext) -> bool {
-        read_u32(context.0 + KIND_FLAG) == 1
+        read_u32(context.address() + KIND_FLAG) == 1
     }
 
     fn subframe_count(&self, slot: SlotIndex) -> SubframeCount {

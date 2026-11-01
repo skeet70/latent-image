@@ -5,6 +5,7 @@
 
 use crate::guest::{Press, RouteKey};
 use crate::machine::{KeyPulse, Machine, RunOutcome};
+use crate::trace::CaptureScope;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Instant;
@@ -223,7 +224,7 @@ impl Ff80 {
         save.endpoints.ok_or_else(|| "USB endpoints are not connected".into())
     }
 
-    pub fn begin_capture_observation(&mut self) -> Result<(), String> {
+    pub fn begin_capture_observation(&mut self, scope: CaptureScope) -> Result<(), String> {
         self.machine.require_running()?;
         if self.rendezvous_complete || self.rendezvous.last().is_some_and(|event| event.released_instructions.is_none()) {
             return Err("capture observation cannot replace an active rendezvous trace".into());
@@ -231,7 +232,7 @@ impl Ff80 {
         if self.hits_seen != self.machine.traces.hits.len() {
             return Err("capture observation requires consumed rendezvous trace hits".into());
         }
-        self.machine.begin_capture_observation()?;
+        self.machine.begin_capture_observation(scope)?;
         self.hits_seen = 0;
         Ok(())
     }
