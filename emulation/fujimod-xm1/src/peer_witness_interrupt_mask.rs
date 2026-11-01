@@ -28,7 +28,10 @@ const DISPATCH_CODE: &[u32] = &[0xe92d4df0,0xe28db01c,0xe30b5d20,0xe3405096,0xe5
     0xe7923003,0xe12fff33,0xe1a04000,0xe7953100,0xe5933164,0xe12fff33,0xe1a0a000];
 const SERVICE: &[u32] = &[0xe52db004,0xe28db000,0xe10f0000,0xe3801080,0xe121f001,0xe2000080,
     0xe28bd000,0xe8bd0800,0xe12fff1e];
-const CODE: [(u32, &[u32]); 4] = [(0x69cdf8, STAGE4),(0x725dd8, WRAPPER),(0x7235d8, DISPATCH_CODE),(ENTERED, SERVICE)];
+const IDENTITY_WRAPPER: &[u32] = &[0xe92d4800,0xe28db004,0xeb00053b,0xe8bd8800];
+const IDENTITY_HELPER: &[u32] = &[0xee121e10,0xe3a02901,0xe2822003,0xe1510002,0x03a00000,0x13a00001,0xe12fff1e];
+const CODE: [(u32, &[u32]); 6] = [(0x69cdf8, STAGE4),(0x725dd8, WRAPPER),(0x7235d8, DISPATCH_CODE),
+    (0x412bc, IDENTITY_WRAPPER),(0x427b8, IDENTITY_HELPER),(ENTERED, SERVICE)];
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -115,8 +118,8 @@ fn begin(machine: &mut Machine, runner: &Runner<'_>, phase: Phase) -> Result<Box
     let mut classes = vec![class(TABLE, WatchKinds::CPU_READ.union(WatchKinds::WRITES)),
         class(ROOTS, if prelude { WatchKinds::CPU_READ.union(WatchKinds::WRITES) } else { WatchKinds::WRITES })];
     if !prelude { classes.push(class(CALL_FRAME, WatchKinds::CPU_READ.union(WatchKinds::WRITES))); }
-    classes.extend(code_spans().enumerate().map(|(index, extent)| class(extent,
-        if prelude && index < 3 { WatchKinds::CPU_FETCH.union(WatchKinds::WRITES) } else { WatchKinds::WRITES })));
+    classes.extend(code_spans().map(|extent| class(extent,
+        if prelude && extent.0 != u64::from(ENTERED) { WatchKinds::CPU_FETCH.union(WatchKinds::WRITES) } else { WatchKinds::WRITES })));
     classes.push(class((0xd0ab0, 0xd0af0), if prelude {
         WatchKinds::CPU_FETCH.union(WatchKinds::WRITES)
     } else { WatchKinds::WRITES }));
@@ -175,7 +178,7 @@ fn snapshot(machine: &Machine, runner: &Runner<'_>, extent: (u64, u64)) -> Resul
     Ok(views)
 }
 fn digest_resources<'a>(roots: &'a Views, slot: &'a Views, frame: &'a Views, table: &'a Views,
-    code: &'a [CodeViews]) -> [((u64, u64), &'a Views); 7] {
+    code: &'a [CodeViews]) -> [((u64, u64), &'a Views); 9] {
     std::array::from_fn(|index| match index {
         0 => (ROOTS, roots), 1 => (SLOT, slot), 2 => (CALL_FRAME, frame), 3 => (TABLE, table),
         _ => {
@@ -186,8 +189,8 @@ fn digest_resources<'a>(roots: &'a Views, slot: &'a Views, frame: &'a Views, tab
     })
 }
 fn aliases(machine: &Machine, runner: &Runner<'_>, tcm: &TcmWords,
-    resources: &[((u64, u64), &Views); 7], hashes: &[Sha256Digest; 7], result: &mut Vec<AliasBinding>) -> Result<(), String> {
-    let guarded: [(u64, u64); 7] = std::array::from_fn(|index| resources[index].0);
+    resources: &[((u64, u64), &Views); 9], hashes: &[Sha256Digest; 9], result: &mut Vec<AliasBinding>) -> Result<(), String> {
+    let guarded: [(u64, u64); 9] = std::array::from_fn(|index| resources[index].0);
     tcm_disjoint_views(&runner.committed, tcm, &guarded)?;
     let mut buffer = [0; (TABLE.1 - TABLE.0) as usize];
     for core in 0..2 {
@@ -240,7 +243,10 @@ fn validate_prelude(state: &WatchState, start: &Context, dispatch: &Context) -> 
         .chain([0x69ce44,0x69ce48,0x69ce90,0x69ce94,0x69ce98,0x69ce9c,0x69cea0,0x69cea4])
         .chain((0x69ceec..0x69cf38).step_by(4))
         .chain((0x725dd8..0x725e00).step_by(4))
-        .chain((0x7235d8..0x723604).step_by(4));
+        .chain((0x7235d8..0x7235f8).step_by(4))
+        .chain([0x412bc,0x412c0,0x412c4])
+        .chain((0x427b8..0x427d4).step_by(4))
+        .chain([0x412c8,0x7235f8,0x7235fc,0x723600]);
     let mut selector = false;
     let mut magic = false;
     let mut primary = false;
@@ -314,7 +320,8 @@ pub(in crate::peer_witness::loader) fn observe(machine: &mut Machine, runner: &R
         let dispatch = stop(machine, DISPATCH)?;
         require(dispatch.registers[0].0 == 1 && dispatch.registers[3].0 == TABLE_GUEST as u32
             && dispatch.registers[4].0 == 1 && dispatch.registers[5].0 == ROOTS.0 as u32
-            && dispatch.sp.0 == 0x400f3388 && dispatch.registers[11].0 == 0x400f33a4 && dispatch.lr.0 == 0x7235f8
+            // The identity wrapper returns with pop-PC after its nested BL.
+            && dispatch.sp.0 == 0x400f3388 && dispatch.registers[11].0 == 0x400f33a4 && dispatch.lr.0 == 0x412c8
             && dispatch.cpsr.0 & 0x07f0_fe20 == 0 && dispatch.cpsr.0 & 0xdf == 0xd3 && dispatch.tcm == start.tcm,
             "consumer source dispatch context differs")?;
         let state = observed(&prelude)?;
@@ -345,10 +352,10 @@ pub(in crate::peer_witness::loader) fn observe(machine: &mut Machine, runner: &R
             "consumer source instruction readback differs")?;
         code.push(CodeViews { start: source.start, views });
     }
-    let mut bindings = Vec::with_capacity(56);
+    let mut bindings = Vec::with_capacity(72);
     let mut service_bindings = Vec::with_capacity(8);
     let resources = digest_resources(&roots, &slot_before, &frame_before, &table_before, &code);
-    let mut hashes: [Sha256Digest; 7] = std::array::from_fn(|index| Sha256Digest::of(&resources[index].1.physical));
+    let mut hashes: [Sha256Digest; 9] = std::array::from_fn(|index| Sha256Digest::of(&resources[index].1.physical));
     aliases(machine, runner, &dispatch.tcm, &resources, &hashes, &mut bindings)?;
     service_aliases(machine, runner, &dispatch.tcm, &mut service_bindings)?;
     let mut watch = begin(machine, runner, Phase::Consumer)?;

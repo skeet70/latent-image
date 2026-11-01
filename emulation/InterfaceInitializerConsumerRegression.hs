@@ -30,10 +30,9 @@ main = do
   receiptBytes <- B.readFile receiptPath
   initializer <- either fail pure (I.deriveContract I.Retained source source B.empty B.empty)
   contract <- either fail pure (C.deriveContract initializer)
+  either fail pure (C.validateReceipt contract receiptBytes)
   fixture <- either fail pure (eitherDecodeStrict' receiptBytes)
-  correct <- either fail pure (withDispatchLr 0x412c8 fixture)
   stale <- either fail pure (withDispatchLr 0x7235f8 fixture)
   let validate = C.validateReceipt contract . L.toStrict . encode
-  either fail pure (validate correct)
   unless (isLeft (validate stale)) (fail "consumer admitted the caller BLX return address as live LR")
   putStrLn "consumer dispatch LR receipt regressions: pass"
