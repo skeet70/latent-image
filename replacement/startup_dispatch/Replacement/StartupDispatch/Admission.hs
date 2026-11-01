@@ -45,7 +45,7 @@ descriptor [task,name,priority,stack,code,argument] =
 descriptor _ = Left (AdmissionError "A32 descriptor does not contain six assigned words")
 
 require :: Bool -> String -> Either AdmissionError ()
-require condition message = unless condition (Left (AdmissionError message))
+require premise message = unless premise (Left (AdmissionError message))
 
 known :: Scalar -> Either AdmissionError Word32
 known (Constant word) = Right word

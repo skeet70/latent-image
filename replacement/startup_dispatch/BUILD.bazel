@@ -67,12 +67,26 @@ haskell_test(
         "$(rootpath :startup-dispatch-image.bin)",
         "$(rootpath :startup-dispatch-image.symbols)",
     ],
-    data = [":startup-dispatch-image"],
+    data = [":startup-dispatch-image.bin", ":startup-dispatch-image.symbols"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":startup-dispatch-artifact",
         "//host:base",
         "//host:bytestring",
+        "//host:update-container",
+    ],
+)
+
+haskell_test(
+    name = "startup-dispatch-regressions",
+    srcs = ["Fixtures.hs", "RegressionTests.hs"],
+    main_file = "RegressionTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":startup-dispatch-artifact",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
         "//host:update-container",
     ],
 )
