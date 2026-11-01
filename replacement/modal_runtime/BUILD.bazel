@@ -143,3 +143,41 @@ haskell_test(
         "//host:base",
     ],
 )
+
+genrule(
+    name = "entry-seam-image",
+    srcs = ["src/entry.S", "entry-seam.ld"],
+    outs = ["entry-seam.elf", "entry-seam.bin"],
+    cmd = """
+set -e
+tmp=$$(mktemp -d)
+trap 'rm -rf "$$tmp"' EXIT
+NIX_HARDENING_ENABLE= $(location @lab_clang//:bin/clang) --target=armv7r-none-eabi -march=armv7-r -marm -c $(location src/entry.S) -o "$$tmp/entry.o"
+$(location @lab_lld//:bin/ld.lld) -T $(location entry-seam.ld) "$$tmp/entry.o" -o $(@D)/entry-seam.elf
+$(location @lab_llvm//:bin/llvm-objcopy) -O binary $(@D)/entry-seam.elf $(@D)/entry-seam.bin
+""",
+    tools = ["@lab_clang//:bin/clang", "@lab_lld//:bin/ld.lld", "@lab_llvm//:bin/llvm-objcopy"],
+    visibility = ["//visibility:public"],
+)
+
+haskell_binary(
+    name = "qualify-entry",
+    srcs = ["ModalEntryQualifyMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-threaded"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":qualification",
+        "//emulation:case-sha256",
+        "//emulation:native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host/firmware:bank-allowlist",
+        "//replacement/media_permit:stock-inventory",
+    ],
+)
