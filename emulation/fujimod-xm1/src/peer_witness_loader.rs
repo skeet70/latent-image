@@ -632,7 +632,7 @@ impl<'a> Runner<'a> {
 
     fn remove(&mut self, machine: &mut Machine, address: u32) -> Result<(), String> {
         if self.sites.remove(&address).is_some() {
-            machine.traces.remove_site(&machine.session, Guest(address))?;
+            machine.traces.remove_sites(&machine.session, &[Guest(address)])?;
         }
         Ok(())
     }

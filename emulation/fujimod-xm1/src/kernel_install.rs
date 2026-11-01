@@ -329,7 +329,7 @@ fn drive() -> Result<(),String> {
                 (terminal,"installation-terminal".into()),(0x42634,"installation-cache".into()),
             ]))?;
             machine.traces.stop_labels = BTreeSet::from(["installation-terminal".into(),"installation-cache".into()]);
-            machine.traces.remove_site(&machine.session,fujimod_xm1::provenance::Guest(ENTRY))?;
+            machine.traces.remove_sites(&machine.session,&[fujimod_xm1::provenance::Guest(ENTRY)])?;
             require(machine.run(100_000) == RunOutcome::Stopped, "cache entry absent")?;
             let cache = context(&machine)?;
             require(cache.pc == Address(0x42634) && cache.registers[0..2] == [Word(0x96bd20),Word(32)], "cache call differs")?;
@@ -338,13 +338,13 @@ fn drive() -> Result<(),String> {
             observation.cache = Some(cache);
             machine.traces.add_sites(&machine.session,BTreeMap::from([(cache_return,"installation-cache-return".into())]))?;
             machine.traces.stop_labels = BTreeSet::from(["installation-terminal".into(),"installation-cache-return".into()]);
-            machine.traces.remove_site(&machine.session,fujimod_xm1::provenance::Guest(0x42634))?;
+            machine.traces.remove_sites(&machine.session,&[fujimod_xm1::provenance::Guest(0x42634)])?;
             require(machine.run(100_000) == RunOutcome::Stopped, "cache return absent")?;
             let returned = context(&machine)?;
             require(returned.pc == Address(cache_return), "cache return PC differs")?;
             observation.cache_return = Some(returned);
             machine.traces.stop_labels = BTreeSet::from(["installation-terminal".into()]);
-            machine.traces.remove_site(&machine.session,fujimod_xm1::provenance::Guest(cache_return))?;
+            machine.traces.remove_sites(&machine.session,&[fujimod_xm1::provenance::Guest(cache_return)])?;
             require(machine.run(100_000) == RunOutcome::Stopped, "installation terminal absent")?;
             let after = context(&machine)?;
             require(after.pc == Address(terminal) && after.tcm == entry.tcm && after.identities == entry.identities, "terminal PC, TCM or identity differs")?;

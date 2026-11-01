@@ -528,8 +528,7 @@ fn execute(machine: &mut Machine, control: Control, watch: &MemoryWatch, observe
                     machine.traces.sites.insert(stop.address(), stop.name().into());
                     machine.traces.stop_labels.insert(stop.name().into());
                 }
-                // remove_site rearms the updated set and preserves pending-entry resume markers.
-                machine.traces.remove_site(&machine.session, Guest(label.address()))?;
+                machine.traces.remove_sites(&machine.session, &[Guest(label.address())])?;
             }
             Stop::PeerWaitLoaded => {
                 require(phase.tail && phase.waits < 4 && !phase.clear, "control equality stop out of phase")?;
@@ -546,7 +545,7 @@ fn execute(machine: &mut Machine, control: Control, watch: &MemoryWatch, observe
                             && same_context(final_primary, &gate.registers, gate.sp, gate.lr, gate.cpsr, false), "held primary context changed")?;
                         return acceptance(control, observed, &boundary_watch);
                     }
-                    machine.traces.remove_site(&machine.session, Guest(label.address()))?;
+                    machine.traces.remove_sites(&machine.session, &[Guest(label.address())])?;
                 }
             }
             Stop::PeerAcknowledged => {
@@ -559,7 +558,7 @@ fn execute(machine: &mut Machine, control: Control, watch: &MemoryWatch, observe
                     "control original clear occurred before required wait observations")?;
                 let gate = &observed.stops[phase.gate.ok_or("control primary gate absent")?].hit;
                 require(same_context(&primary(machine)?, &gate.registers, gate.sp, gate.lr, gate.cpsr, true), "control veneer did not restore primary context")?;
-                machine.traces.remove_site(&machine.session, Guest(label.address()))?;
+                machine.traces.remove_sites(&machine.session, &[Guest(label.address())])?;
                 clear(machine, watch, boundary, &mut observed.clear_readback)?;
                 phase.clear = true;
             }
