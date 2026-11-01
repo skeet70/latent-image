@@ -142,19 +142,31 @@ main = do
         {declarations = declarations allowlist ++
           [Declaration "rb_assert_one" StoreAccess (Index (StockAddress stateRoot)) "synthetic indexed state store"
           ,Declaration "rb_assert_one" BranchAccess (Deref (Deref (Index (StockAddress actionRoot)))) "synthetic captured action slot"]}
-      storeProgram first root = functionProgram [first,0xe1a01080,0xe0811002,0xe1c130b0,0xe12fff1e,0xe320f000,root]
-      callProgram first root = functionProgram [first,0xe7922100,0xe1a01723,0xe7910002,0xe12fff10,0xe320f000,root]
+      completeProgram rootInstruction middle root tailInstruction =
+        functionProgram ([0xe59f2010,rootInstruction] ++ middle ++ [0xea000000,root]
+          ++ replicate (fromIntegral ((snd (function "rb_assert_one") - statusFunction) `div` 4) - 8) 0xe320f000
+          ++ [tailInstruction])
+      storeProgram rootInstruction root = completeProgram rootInstruction [0xe1a01080,0xe0811002,0xe1c130b0] root 0xe12fff1e
+      callProgram rootInstruction root = completeProgram rootInstruction [0xe7922100,0xe1a01723,0xe7910002] root 0xe12fff10
+      rootRefusal finding = case findingReason finding of
+        UnboundedStore -> True
+        UnboundedBranch -> True
+        Unproven _ _ -> True
+        UnprovenArgument -> True
+        _ -> False
       verifyRoot label policy bytes expected = do
         report <- run policy bytes
-        check (label ++ ": " ++ show (map renderFinding (violations report))) (null (violations report) == expected)
-  verifyRoot "commuted state root retains its exact declared index" indexedPolicy (storeProgram 0xe59f2010 stateRoot) True
-  verifyRoot "commuted state root still requires a declaration" allowlist (storeProgram 0xe59f2010 stateRoot) False
-  verifyRoot "commuted state root rejects a different root" indexedPolicy (storeProgram 0xe59f2010 (stateRoot + 4)) False
-  verifyRoot "two unknown store operands do not invent a root" indexedPolicy (storeProgram 0xe1a02082 stateRoot) False
-  verifyRoot "large scalar index retains the captured table root" indexedPolicy (callProgram 0xe59f2010 actionRoot) True
-  verifyRoot "commuted action root still requires a declaration" allowlist (callProgram 0xe59f2010 actionRoot) False
-  verifyRoot "commuted action root rejects a different root" indexedPolicy (callProgram 0xe59f2010 (actionRoot + 4)) False
-  verifyRoot "two unknown call operands do not invent a root" indexedPolicy (callProgram 0xe1a02082 actionRoot) False
+        let refused = violations report
+        check (label ++ ": " ++ show (map renderFinding refused))
+          (if expected then null refused else not (null refused) && all rootRefusal refused)
+  verifyRoot "commuted state root retains its exact declared index" indexedPolicy (storeProgram 0xe320f000 stateRoot) True
+  verifyRoot "commuted state root still requires a declaration" allowlist (storeProgram 0xe320f000 stateRoot) False
+  verifyRoot "commuted state root rejects a different root" indexedPolicy (storeProgram 0xe320f000 (stateRoot + 4)) False
+  verifyRoot "two unknown store operands do not invent a root" indexedPolicy (storeProgram 0xe1a02083 stateRoot) False
+  verifyRoot "large scalar index retains the captured table root" indexedPolicy (callProgram 0xe320f000 actionRoot) True
+  verifyRoot "commuted action root still requires a declaration" allowlist (callProgram 0xe320f000 actionRoot) False
+  verifyRoot "commuted action root rejects a different root" indexedPolicy (callProgram 0xe320f000 (actionRoot + 4)) False
+  verifyRoot "two unknown call operands do not invent a root" indexedPolicy (callProgram 0xe1a02083 actionRoot) False
   -- rb_assert_one's `cmp rN, #0` replaced by `mov r0, r0`: the 0 trace
   -- reaches its store.
   expect "untested 0 argument" (fixture zeroTest 0xe1a00000)
