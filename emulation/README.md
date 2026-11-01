@@ -1311,7 +1311,7 @@ The same owned-primary run observes the retained phase0 installer: mode/header/c
 
 #### General-heap observation
 
-`//emulation:heap-observe` is the source candidate for #148's natural no-card boot/menu allocation survey. It is not qualified execution evidence. Independently review the observer, lifetime reducer and receipt consumer before running them. The [heap survey](../reports/stock-heap-survey.md#natural-allocation-observer-design-for-review) defines the coverage and limits.
+`//emulation:heap-observe` records #148's natural no-card boot/menu allocation survey. Independently reviewed schema-3 source has one complete enabled/disabled cohort admitted by the receipt consumer, with all ten genuine-receipt refusal controls targeted. This qualifies only the finite route and named entry surface. The [heap survey](../reports/stock-heap-survey.md#admitted-natural-heap-trace) records its metrics, inputs and limits. Changed observer or consumer mechanisms require review before execution.
 
 Build after review with `devenv shell -- bazel --batch build --jobs=2 //emulation:heap-observe //emulation:emulator-slot`. Invoke the resulting binary only under `//emulation:emulator-slot`, with `XM1_EMULATOR_SLOTS=1`, using `--run RUN_JSON --update DAT --boot-rom ROM --analysis ANALYSIS_ROOT --observer enabled|disabled --output NEW_DIRECTORY`. The admitted inputs are the canonical run/DAT/ROM and eight canonical analysis images, including image 2. Outputs belong below `private-data/scratch/heap148/`.
 

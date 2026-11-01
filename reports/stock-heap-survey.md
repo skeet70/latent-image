@@ -2,7 +2,7 @@
 
 ## Scope and decision
 
-[#148](https://github.com/skeet70/latent-image/issues/148) covers the general C heap and its future Rust replacement, not every stock resource reservation. This survey establishes the newlib/dlmalloc family, concrete entry ABIs, the direct-call surface, one cross-image chunk-header dependency, backing bounds and the [#147](https://github.com/skeet70/latent-image/issues/147) resize defect. Static findings are E-STOCK-HEAP-SURVEY-150 and E-STOCK-HEAP-RESIZE-LOCK-150. Complete indirect-call closure, full task/core/IRQ attribution and representative complete allocation traces remain open.
+[#148](https://github.com/skeet70/latent-image/issues/148) covers the general C heap and its future Rust replacement, not every stock resource reservation. This survey establishes the newlib/dlmalloc family, concrete entry ABIs, the direct-call surface, one cross-image chunk-header dependency, backing bounds and the [#147](https://github.com/skeet70/latent-image/issues/147) resize defect. Static findings are E-STOCK-HEAP-SURVEY-150 and E-STOCK-HEAP-RESIZE-LOCK-150. One complete no-card boot/menu trace is admitted. Complete indirect-call closure, whole-firmware task/core/IRQ attribution and representative capture/development/storage traces remain open.
 
 `rlsf` is the baseline candidate for the trace-driven comparison, not a benchmark-selected or qualified replacement. No allocator is installed. The final selection remains open until reviewed observation and target-architecture measurements establish the workload, fragmentation, capacity and contention costs.
 
@@ -180,7 +180,24 @@ The single `b3ecd0c` enabled route progresses through image-5 code admission and
 
 The preserved prefix contains successful logical malloc returns in scheduler domain 0 from task 33 (1,100), task 72 (2) and task 73 (291), all on physical core 0, SVC mode, kernel context zero and IRQ unmasked. These are finite positive calling-context observations, not task-name attribution, a complete task/core mix or proof that IRQ/core-1 allocation never occurs. Image-5 producer pre-return is observed in task 60 at counts `[27839893,3221942]`; the separate done/header transfer and first header instruction occur in task 59 at `[28788904,3222321]` and `[28788905,3222321]`.
 
-Lossless host gzip of the preserved 268,434,764-byte watch prefix produces 7,601,489 bytes. That is a storage observation, not allocator performance. The schema-3 source keeps the same route and raw rows, streams bounded gzip with trailer/CRC/EOF checks, raises the reducer/boundary ceilings to 131,072/262,144, preserves a failed terminal batch and marks finish errors incomplete. Compressed output remains bounded at 256 MiB, decoded output at 1 GiB and each decoded line at 64 MiB. The new I/O fixtures and four additional genuine-receipt refusal controls require independent review before the next build/cohort.
+Lossless host gzip of the preserved 268,434,764-byte watch prefix produces 7,601,489 bytes. That is a storage observation, not allocator performance. The schema-3 source keeps the same route and raw rows, streams bounded gzip with trailer/CRC/EOF checks, raises the reducer/boundary ceilings to 131,072/262,144, preserves a failed terminal batch and marks finish errors incomplete. Compressed output remains bounded at 256 MiB, decoded output at 1 GiB and each decoded line at 64 MiB. Independent review found no issues in this revision, its 11 I/O fixtures or the four additional genuine-receipt refusal controls.
+
+#### Admitted natural heap trace
+
+The `0fffa83` package builds with 165 passing SDK tests, including 47 heap/lifecycle/I/O and 20 public SDK integration tests. One enabled and one disabled canonical no-card route each complete 450,000,000 instructions with counts `[385422633,64577367]`, menus `[69,52,12]` then `[1,5,2]` and the same final frame. The independent consumer admits both receipts, raw boundaries, code/task bindings, exact watch projections, gzip EOF/CRC and lifetime replay. All ten genuine-receipt controls refuse at their intended checks (E-STOCK-HEAP-NATURAL-TRACE-150).
+
+The admitted route contains 51,214 reduced events and 51,220 watch batches, with no pending invocation, code write or observed external live-header read. Its 4,490 logical mallocs all succeed; 4,039 logical frees leave 451 allocations live. Requests span 0 through 19,200 bytes across 73 distinct sizes. Eight-byte ordinary allocation alignment comes from the recovered malloc ABI, not a separately supplied alignment argument. No logical realloc or calloc occurs.
+
+| Scheduler domain / task | Physical core | Malloc calls | Free calls |
+| --- | --- | ---: | ---: |
+| 0 / 33 | 0 | 3,648 | 3,405 |
+| 0 / 72 | 0 | 2 | 17 |
+| 0 / 73 | 0 | 840 | 617 |
+
+Every completed logical call has SVC mode, kernel context zero and IRQ unmasked. At most one logical call is pending at a time, so this route contains no overlapping logical allocation calls or two-core heap contention. Those observations cover the named entry surface and route, not whole-program IRQ/core-1 absence. Task labels remain numeric scheduler identities rather than inferred task names.
+
+Peak requested live bytes are 115,185 and peak stock usable live bytes are 116,880. Final requested/usable live bytes are 113,309/115,052. The break grows from `0x00a71a00` to a high-water `0x00a8f000`, 120,320 backing bytes. The final reduced boundary counters `[349805630,21293810]` precede the checked route endpoint; no later observed heap call changes these lifetime totals. Lossless watch storage is 25,046,399 compressed bytes for 872,292,909 decoded bytes. These are finite menu-workload measurements, not allocator replay timing or target cycles.
+
 
 
 ## Reproduction and evidence anchors
