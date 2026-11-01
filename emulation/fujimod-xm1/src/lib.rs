@@ -8,6 +8,7 @@ pub mod guest;
 pub mod handoff;
 pub mod machine;
 mod memory_view;
+pub mod modal_permit;
 pub mod nand_image;
 pub mod native_case;
 pub mod peer_witness;
