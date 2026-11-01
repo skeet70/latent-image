@@ -8,14 +8,14 @@ import qualified FujiAF.UpdateContainer as U
 import Replacement.PlainLoad.Admission (AdmissionError (..))
 
 -- Project-owned complete A32 programs assembled independently of compiler output.
-data Fault = Control | EquivalentImmediate | UnreachableNop
+data Fault = Control | EquivalentImmediate | UnreachableNop | PcRelativeReturn
   | WrongLookupId | MissingExtent | NullReturns | NullCallsMode | WrongModeComparison
   | WrongReadTarget | WrongReadOffset | HardcodedOffset | HardcodedCount | HardcodedDestination | WrongDestinationField
   | DroppedOffsetRead | DroppedLengthRead | WrongFifthArgument | FifthBelowSp | WrongCallback
   | WrongFirstResource | WrongSecondResource | WrongTimeout | ReversedRelease | WrongDelay
   | MissingDelay | MissingProgress | WrongProgressScale | WrongRounding | NonwrappingCount
   | CachedFinalLength | WrongFinalValue | HardcodedFinalLength | DroppedFinalProgress | WrongErrorStatus | LostReadStatus | LeakedIgnoredStatus
-  | WrongRestore | WrongLr | BelowSpStore | BelowSpLoad | UninitializedLoad | MisalignedCall
+  | WrongRestore | WrongLr | PcRelativeWrongReturn | PcRelativeFlagWrite | BelowSpStore | BelowSpLoad | UninitializedLoad | MisalignedCall
   | StackOutside | UnprovenSp | DeallocatedLoad | OutOfRangeLoad | OutOfRangeControl
   | VolatileRegister | VolatileFlags | ZeroLsr | RegisterShift | YieldInstruction
   | StoreOverlapFault | LoadOverlapFault | PushSp | PopSp
@@ -51,6 +51,7 @@ fixture fault = B.concat (map U.putWord32 (reverse encoded))
     alter item@(At DryLengthLoad _) | fault == CachedFinalLength = [item,At InjectedValue (Raw 0xe1a07001)]
     alter (At FinalProbe _) | fault == HardcodedDestination = []
     alter item@(At DestinationLoad _) | fault == HardcodedDestination = [item,At InjectedValue (Literal 2 Padding)]
+    alter (At AdapterHigh _) | fault `elem` [PcRelativeReturn,PcRelativeWrongReturn,PcRelativeFlagWrite] = []
     alter item = [item]
     (_,labels) = foldl locate (origin,M.empty) items
     locate (pc,found) (Mark label) = (pc,M.insert label pc found)
@@ -105,6 +106,7 @@ changes fault = case fault of
   Control -> []
   EquivalentImmediate -> [(LookupArg,Raw (wide 0 6))]
   UnreachableNop -> [(PaddingWord,Raw 0xe320f000)]
+  PcRelativeReturn -> [(AdapterLow,Raw 0xe28fe0d8)]
   WrongLookupId -> [(LookupArg,Raw 0xe3a00005)]
   MissingExtent -> [(ExtentCall,Raw 0xe320f000)]
   NullReturns -> [(NullBranch,Jump 0x0a000000 BodyReturn)]
@@ -140,6 +142,8 @@ changes fault = case fault of
   LeakedIgnoredStatus -> [(DryStatus,Raw 0xe1a04000)]
   WrongRestore -> [(ReturnBody,Raw 0xe8bd80bc)]
   WrongLr -> [(AdapterLow,Raw (wide 14 0x9930))]
+  PcRelativeWrongReturn -> [(AdapterLow,Raw 0xe28fe0dc)]
+  PcRelativeFlagWrite -> [(AdapterLow,Raw 0xe29fe0d8)]
   BelowSpStore -> [(FinalProbe,Raw 0xe50d0004)]
   BelowSpLoad -> [(FinalProbe,Raw 0xe51dc004)]
   UninitializedLoad -> [(FinalLoad,Raw 0xe24dd008),(FinalProbe,Raw 0xe59dc000)]
@@ -164,6 +168,7 @@ expectedRefusal fault = case fault of
   Control -> Nothing
   EquivalentImmediate -> Nothing
   UnreachableNop -> Nothing
+  PcRelativeReturn -> Nothing
   WrongLookupId -> Just CallArgumentsDiffer
   MissingExtent -> Just OrderedEffectsDiffer
   NullReturns -> Just OutcomeDiffer
@@ -199,6 +204,8 @@ expectedRefusal fault = case fault of
   LeakedIgnoredStatus -> Just ReturnStatusDiffer
   WrongRestore -> Just PreservedRegisterDiffers
   WrongLr -> Just ReturnLrDiffers
+  PcRelativeWrongReturn -> Just ReturnLrDiffers
+  PcRelativeFlagWrite -> Just UnprovedTransfer
   BelowSpStore -> Just UnallocatedStackAccess
   BelowSpLoad -> Just UnallocatedStackAccess
   UninitializedLoad -> Just UninitializedStackRead

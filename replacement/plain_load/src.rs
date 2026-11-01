@@ -171,9 +171,7 @@ pub unsafe extern "C" fn xm1_plain_load() -> Status {
         let segment = xm1_plain_segment(SegmentId::Plain);
         let extents = xm1_plain_extents();
         if segment.is_null() {
-            loop {
-                asm!("b .", options(nomem, nostack));
-            }
+            loop {}
         }
         let status = match xm1_plain_mode().classify() {
             LoadMode::Read => {

@@ -35,6 +35,7 @@ haskell_library(
         "//host:containers",
         "//host:first-stage",
         "//host:update-container",
+        "//host/firmware:bank-allowlist",
     ],
 )
 

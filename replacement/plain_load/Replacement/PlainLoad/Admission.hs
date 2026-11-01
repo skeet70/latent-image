@@ -341,7 +341,10 @@ deriveProducerProof bytes = do
           (previous,sources) <- numeric (get machine destination)
           assign destination (Number ((previous .&. 0xffff) .|. (word16 `shiftL` 16)) sources) advanced
         A.DataProcessing cond operation updates destination source value -> execute cond $ do
-          require (source /= A.pc || operation `elem` [A.MOV,A.MVN]) UnprovedTransfer
+          let pcRelative = source == A.pc && not updates && destination /= A.pc
+                && operation `elem` [A.ADD,A.SUB]
+                && (case value of A.Immediate _ -> True; _ -> False)
+          require (source /= A.pc || operation `elem` [A.MOV,A.MVN] || pcRelative) UnprovedTransfer
           right <- operand machine value
           if operation == A.CMP && updates then do
             compared <- compareFlags (get machine source) right
@@ -352,7 +355,7 @@ deriveProducerProof bytes = do
             let result = if operation == A.TST then left .&. other else left `xor` other
             next advanced {flags = Flags (Just (result .&. 0x80000000 /= 0)) (Just (result == 0)) Nothing Nothing}
           else do
-            result <- arithmetic operation (get machine source) right
+            result <- arithmetic operation (if pcRelative then constant (pc+8) else get machine source) right
             if updates then do
               require (destination /= A.pc && operation `elem` [A.ADD,A.SUB,A.RSB]) UnsupportedFlagUpdate
               (left,_) <- numeric (get machine source)
