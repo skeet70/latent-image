@@ -128,6 +128,8 @@ struct Receipt {
     boundaries_sha256: Digest,
     accesses_sha256: Digest,
     summary_sha256: Digest,
+    failure_checkpoint: Option<Digest>,
+    failure_checkpoint_error: Option<String>,
     limitations: Vec<String>,
 }
 #[derive(Debug, Serialize)]
@@ -181,7 +183,10 @@ fn expected(images: &[Image], address: u32) -> Result<u32, String> {
 }
 fn code_word(machine: &Machine, maps: &[MemoryMap], banks: &[[u32; 2]; 2], images: &[Image], core: usize, address: u32) -> Result<u32, String> {
     let observed = word(machine, maps, banks, core, address)?;
-    require(observed == expected(images, address)?, "current instruction differs from canonical bytes")?;
+    let wanted = expected(images, address)?;
+    if observed != wanted {
+        return Err(format!("current instruction at {address:#010x} on core {core} differs: expected {wanted:#010x}, observed {observed:#010x}"));
+    }
     Ok(observed)
 }
 fn chunk(machine: &Machine, maps: &[MemoryMap], banks: &[[u32; 2]; 2], core: usize, pointer: u32) -> Result<Option<u32>, String> {
@@ -666,6 +671,15 @@ fn drive() -> Result<(), String> {
     let counts: [u64; 2] = machine.session.board.instruction_counts().try_into().map_err(|_| "expected two instruction counters")?;
     let final_counters = admit_final(counts, &boundaries);
     let complete = result.is_ok() && frame.is_ok() && final_counters.is_ok() && watch_end_error.is_none() && guest_code_writes == 0;
+    let (failure_checkpoint, failure_checkpoint_error) = if complete { (None, None) } else {
+        let saved = (|| -> Result<Digest, String> {
+            machine.disarm()?;
+            let bytes = machine.session.checkpoint(None)?.export()?;
+            write(&output.join("failure.fujimod"), &bytes)?;
+            Ok(Digest(sha256(&bytes)))
+        })();
+        match saved { Ok(digest) => (Some(digest), None), Err(error) => (None, Some(error)) }
+    };
     let receipt = Receipt { schema: 1, scope: "canonical-natural-reset-no-card-menu-roundtrip-general-heap".into(), mode, identity,
         checkpoint: Digest(sha256(&checkpoint)), complete, error: result.err().or_else(|| frame.as_ref().err().cloned()).or_else(|| final_counters.err().map(|error| error.to_string())), machine_failure: machine.failure.clone(),
         instructions: counts, menus,
@@ -673,6 +687,7 @@ fn drive() -> Result<(), String> {
         external_header_reads, guest_code_writes, watch_end_error, events_sha256: Digest(sha256(&event_bytes)), boundaries_sha256: Digest(sha256(&boundary_bytes)),
         hits_sha256: Digest(sha256(&hit_bytes)),
         accesses_sha256: Digest(sha256(&read(&access_path)?)), summary_sha256: Digest(sha256(&summary_bytes)),
+        failure_checkpoint, failure_checkpoint_error,
         limitations: vec!["Finite no-card boot/menu route, not capture, development or storage workload coverage.".into(),
             "Instruction counters are not silicon cycles; event intervals include preemption and lock waits.".into(),
             "Header watches cover returned live allocations, not unreturned internal split chunks or pre-return pointer escapes.".into(),

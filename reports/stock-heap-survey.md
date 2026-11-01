@@ -42,6 +42,8 @@ All listed entries are A32. Register arguments and pointer/size results are 32-b
 
 An aligned-allocation entry, standalone usable-size entry, mallinfo, mallopt or statistics API has not been positively identified. The direct calls to the known lock occur only in allocation, resize, free and trim in the inspected listings. That does not prove an unlocked/computed or separately implemented API absent. No extra alignment or placement promise is inferred from a sibling model or from the allocator family.
 
+Additional retained client adapters do not introduce another allocator. `0x006dbf38(r0=bytes)` forwards unchanged to malloc. `0x0072a7ac` consumes r1=bytes, r2=output pointer and signed r3: nonnegative r3 returns `-9`, while negative r3 calls malloc, stores the payload through r2 and returns 0, or returns `-42` on null. Errors are also stored at `0x009121b8`. `0x0072a7fc` takes the payload in r1, rejects null with `-30` and that error-cell write, otherwise calls free and returns 0. These service-layer errors are distinct from newlib's context errno and null result. Their argument roles beyond the observed branch are not assigned a pool or alignment meaning.
+
 ## Confirmed resize defect
 
 For a valid non-null old allocation, `0x0089da7c` takes the recursive lock before `bytes+11` normalization. Requests in inclusive range `[0x7ffffff5, 0xffffffff]` fail the signed-size/overflow checks. The core stores 12 through context, sets the result to null and branches at `0x0089dabc` to `0x0089dc28`, bypassing the unlock call at `0x0089dc20`.
