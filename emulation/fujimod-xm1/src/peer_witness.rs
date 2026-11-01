@@ -94,6 +94,8 @@ enum ContractWire {
     InitializerConsumer(loader::ConsumerWire),
     #[cfg(feature = "scoped-watch")]
     PrimaryInitializer(loader::PrimaryWire),
+    #[cfg(feature = "scoped-watch")]
+    PrimaryRoot(loader::RootWire),
 }
 
 pub struct PeerContract {
@@ -174,24 +176,30 @@ impl PeerContract {
                 let contract = wire.validate()?;
                 Ok(Self { budget: Instructions(MAX_BUDGET), control: None, startup: None, loader: None, primary: Some(contract) })
             }
+            #[cfg(feature = "scoped-watch")]
+            ContractWire::PrimaryRoot(wire) => {
+                let contract = wire.validate()?;
+                Ok(Self { budget: Instructions(MAX_BUDGET), control: None, startup: None, loader: None, primary: Some(contract) })
+            }
         }
     }
 
     pub fn open_machine(&self, run_bytes: &[u8], update: &run::ValidatedUpdate, boot_rom: &[u8]) -> Result<WitnessMachine, String> {
-        let document = RunDocument::parse(run_bytes)?;
-        let mut session = run::open(&document, update, boot_rom)?;
-        session.board.set_execution_policy(document.execution_policy.into())?;
-        let machine = Machine::new(document, session)?;
         #[cfg(feature = "scoped-watch")]
         let inputs = if let Some(primary) = &self.primary {
             let identities = InputIdentities {
                 run: Sha256Digest::of(run_bytes), update: Sha256Digest::of(&update.0), boot_rom: Sha256Digest::of(boot_rom),
             };
             primary.admit(&identities)?;
+            primary.admit_update(&update.0)?;
             InputBinding::Bound(identities)
         } else {
             InputBinding::Unbound
         };
+        let document = RunDocument::parse(run_bytes)?;
+        let mut session = run::open(&document, update, boot_rom)?;
+        session.board.set_execution_policy(document.execution_policy.into())?;
+        let machine = Machine::new(document, session)?;
         Ok(WitnessMachine { machine, #[cfg(feature = "scoped-watch")] inputs })
     }
 }

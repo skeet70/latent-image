@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.PrimaryInitializerConsumerSource
-  ( ConsumerSource, DescriptorId, DescriptorAccess (..), descriptorId
+  ( ConsumerSource, DescriptorId, DescriptorAccess (..), descriptorId, descriptorIdentifier
+  , CodeSite (..), CodeRegion (..), consumerCode, consumerSource, consumerImageDigest
   , bindConsumerSource, descriptorAccess, consumerSourceValue
   ) where
 
@@ -14,6 +15,33 @@ import qualified FujiAF.FirstStage as F
 
 newtype DescriptorId = DescriptorId Word32 deriving (Eq, Ord, Show)
 
+descriptorIdentifier :: DescriptorId -> Word32
+descriptorIdentifier (DescriptorId ident) = ident
+
+data CodeSite = Installation | Descriptor | Selector | Identity deriving (Eq, Ord, Show)
+
+data CodeRegion = CodeRegion
+  { codeSite :: CodeSite
+  , codeStart :: Guest
+  , codeWords :: [Word32]
+  } deriving (Eq, Show)
+
+consumerCode :: ConsumerSource -> [CodeRegion]
+consumerCode _ = codeRegions
+
+codeRegions :: [CodeRegion]
+codeRegions =
+  [ CodeRegion Installation (Guest 0x725a04)
+      [0xe92d4800,0xe28db004,0xe30b0d20,0xe3400096,0xe3003000,0xe3403004
+      ,0xe5933010,0xe5803000,0xe3003000,0xe340300d,0xe5933010,0xe5803004]
+  , CodeRegion Descriptor (Guest 0x725b74)
+      [0xe92d48f0,0xe28db014,0xe1a05000,0xe30b4d20,0xe3404096,0xe5942000
+      ,0xe3013618,0xe7923003,0xe12fff33,0xe1a06000,0xe7942100,0xe2453001
+      ,0xe3a0102c,0xe0212391,0xe5911184,0xe5911000]
+  , CodeRegion Selector (Guest 0x412bc) [0xe92d4800,0xe28db004,0xeb00053b,0xe8bd8800]
+  , CodeRegion Identity (Guest 0x427b8)
+      [0xee121e10,0xe3a02901,0xe2822003,0xe1510002,0x03a00000,0x13a00001,0xe12fff1e]
+  ]
 data DescriptorAccess = DescriptorAccess
   { descriptorTableWord :: Guest
   , descriptorPoolWord :: Guest
@@ -31,10 +59,15 @@ data RuntimePremise
   | DescriptorIdentifierBounded
   | RetainedPoolBackingAndContents
   | ConsumerCodeFetchable
-  | NoInterveningPublicationWriter
+  | NoInterveningSelectedWordOrSelectorWriter
   | AlternateAndComputedCallerClosureOpen
 
 data ConsumerSource = ConsumerSource Source F.Sha256 Guest
+consumerSource :: ConsumerSource -> Source
+consumerSource (ConsumerSource source _ _) = source
+
+consumerImageDigest :: ConsumerSource -> F.Sha256
+consumerImageDigest (ConsumerSource _ digest _) = digest
 
 require :: Bool -> String -> Either String ()
 require condition message = unless condition (Left message)
@@ -53,18 +86,12 @@ bindConsumerSource source image4 = do
       wordsAt origin bytes start expected = forM_ (zip [0,4..] expected) $ \(offset,value) ->
         require (leWordAt bytes (fromIntegral (start - origin) + offset) == Right value)
           "primary consumer installation, selector or descriptor source differs"
-  wordsAt 0x61c400 image4 0x725a04
-    [ 0xe92d4800,0xe28db004,0xe30b0d20,0xe3400096,0xe3003000,0xe3403004
-    , 0xe5933010,0xe5803000,0xe3003000,0xe340300d,0xe5933010,0xe5803004
-    ]
-  wordsAt 0x61c400 image4 0x725b74
-    [ 0xe92d48f0,0xe28db014,0xe1a05000,0xe30b4d20,0xe3404096,0xe5942000
-    , 0xe3013618,0xe7923003,0xe12fff33,0xe1a06000,0xe7942100,0xe2453001
-    , 0xe3a0102c,0xe0212391,0xe5911184,0xe5911000
-    ]
-  wordsAt 0x40000 (sourceLoader source) 0x412bc [0xe92d4800,0xe28db004,0xeb00053b,0xe8bd8800]
-  wordsAt 0x40000 (sourceLoader source) 0x427b8
-    [0xee121e10,0xe3a02901,0xe2822003,0xe1510002,0x03a00000,0x13a00001,0xe12fff1e]
+  forM_ codeRegions $ \(CodeRegion site (Guest start) words') ->
+    case site of
+      Installation -> wordsAt 0x61c400 image4 start words'
+      Descriptor -> wordsAt 0x61c400 image4 start words'
+      Selector -> wordsAt 0x40000 (sourceLoader source) start words'
+      Identity -> wordsAt 0x40000 (sourceLoader source) start words'
   let RootPair (Guest primary) (Guest secondary) = sourceRoots source
       selector = [publicationValue row | row <- sourcePublications source,publicationGuest row == Guest (primary + 0x1618)]
   require (primary == 0x4004dae0 && secondary == 0x400ddaa0 && selector == [0x412bc])
@@ -99,7 +126,7 @@ premiseName premise = case premise of
   DescriptorIdentifierBounded -> "descriptor-identifier-in-1..120"
   RetainedPoolBackingAndContents -> "retained-pool-backing-and-contents"
   ConsumerCodeFetchable -> "consumer-code-fetchable"
-  NoInterveningPublicationWriter -> "no-intervening-publication-writer"
+  NoInterveningSelectedWordOrSelectorWriter -> "no-intervening-selected-word-or-selector-writer"
   AlternateAndComputedCallerClosureOpen -> "alternate-and-computed-caller-closure-open"
 
 consumerSourceValue :: ConsumerSource -> Value
@@ -109,7 +136,9 @@ consumerSourceValue consumer@(ConsumerSource source imageDigest _) =
         let DescriptorAccess (Guest tableWord) (Guest poolWord) = descriptorAccess consumer (DescriptorId ident)
          in object ["identifier" .= ident,"table_word" .= tableWord,"pool_word" .= poolWord]
    in object
-      [ "evidence" .= ("source-only" :: String)
+      [ "kind" .= ("primary-root0" :: String)
+      , "code" .= [object ["start" .= start,"words" .= words'] | CodeRegion _ (Guest start) words' <- codeRegions]
+      , "evidence" .= ("source-only" :: String)
       , "source_sha256" .= F.sha256Hex (sourceDigest source)
       , "loader_a_sha256" .= F.sha256Hex (sourceLoaderDigest source)
       , "image4_sha256" .= F.sha256Hex imageDigest
@@ -139,6 +168,6 @@ consumerSourceValue consumer@(ConsumerSource source imageDigest _) =
           [ NaturalPrimaryArrival,OwnedCarrierCommittedAndImmutable,CurrentDecoderAndBothCoreAliases,BothCoreTcmExclusions
           , CallerFrameAndDerivedScratchBacking,ConsumerCallerStackBacking,RootPairInstallationObserved,PrimaryCp14SelectionObserved
           , DescriptorIdentifierBounded,RetainedPoolBackingAndContents,ConsumerCodeFetchable
-          , NoInterveningPublicationWriter,AlternateAndComputedCallerClosureOpen
+          , NoInterveningSelectedWordOrSelectorWriter,AlternateAndComputedCallerClosureOpen
           ]
       ]

@@ -410,7 +410,7 @@ fn primary_initializer_requires_retained_source_and_whole_input_bindings() {
 
 #[cfg(feature = "scoped-watch")]
 #[test]
-fn primary_constructor_refuses_synthetic_inputs_accepted_by_existing_peer_mode() {
+fn primary_producer_and_root0_refuse_synthetic_inputs_accepted_by_existing_peer_mode() {
     use fujimod_xm1::run::{RunDocument, ValidatedUpdate};
     fujimod_emulator_exr2_board::register_board_builder();
     fujimod_emulator_models::register();
@@ -423,6 +423,84 @@ fn primary_constructor_refuses_synthetic_inputs_accepted_by_existing_peer_mode()
     }
     let primary = PeerContract::parse(primary_initializer().as_bytes()).expect("retained primary contract");
     assert!(primary.open_machine(run, &update, &rom).is_err());
+    let root0 = PeerContract::parse(primary_root0().as_bytes()).expect("primary root0 contract");
+    assert!(root0.open_machine(run, &update, &rom).is_err());
     let natural = PeerContract::parse(br#"{"schema":1,"budget":1}"#).expect("natural peer contract");
     assert!(natural.open_machine(run, &update, &rom).is_ok());
 }
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn primary_roles_reject_missing_null_and_cross_role_owned_payloads() {
+    let retained = primary_initializer();
+    for invalid in [
+        retained.replace("\"retained-primary\"", "\"owned-primary\""),
+        retained.replace("\"role\":\"retained-primary\"", "\"role\":\"retained-primary\",\"owned\":null"),
+        retained.replace("\"role\":\"retained-primary\"", "\"role\":\"retained-primary\",\"owned\":{}"),
+        retained.replace("\"role\":\"retained-primary\"", "\"role\":\"owned-primary\",\"owned\":null"),
+        retained.replace("\"role\":\"retained-primary\"", "\"role\":\"retained-primary\",\"consumer\":null"),
+        retained.replace("\"role\":\"retained-primary\"", "\"role\":\"owned-primary\",\"owned\":{\"source_loader\":[],\"image\":[],\"symbols\":[]}"),
+    ] {
+        assert!(PeerContract::parse(invalid.as_bytes()).is_err());
+    }
+}
+
+fn primary_root0() -> String {
+    let accesses = (0..120_u32).map(|index| format!(
+        "{{\"identifier\":{},\"table_word\":{},\"pool_word\":{}}}", index + 1, 0x4004dae0 + index * 44 + 0x184,
+        0x4005beac + index * 40 + 8)).collect::<Vec<_>>().join(",");
+    let code: [(u32, &[u32]); 4] = [
+        (0x725a04, &[0xe92d4800,0xe28db004,0xe30b0d20,0xe3400096,0xe3003000,0xe3403004,0xe5933010,0xe5803000,0xe3003000,0xe340300d,0xe5933010,0xe5803004]),
+        (0x725b74, &[0xe92d48f0,0xe28db014,0xe1a05000,0xe30b4d20,0xe3404096,0xe5942000,0xe3013618,0xe7923003,0xe12fff33,0xe1a06000,0xe7942100,0xe2453001,0xe3a0102c,0xe0212391,0xe5911184,0xe5911000]),
+        (0x412bc, &[0xe92d4800,0xe28db004,0xeb00053b,0xe8bd8800]),
+        (0x427b8, &[0xee121e10,0xe3a02901,0xe2822003,0xe1510002,0x03a00000,0x13a00001,0xe12fff1e]),
+    ];
+    let code = code.into_iter().map(|(start,words)| format!("{{\"start\":{start},\"words\":{words:?}}}")).collect::<Vec<_>>().join(",");
+    let premises = ["natural-primary-arrival","owned-carrier-committed-and-immutable","current-decoder-and-both-core-aliases",
+        "both-core-tcm-exclusions","caller-frame-and-derived-scratch-backing","consumer-caller-stack-backing",
+        "root-pair-installation-observed","primary-cp14-selection-observed","descriptor-identifier-in-1..120",
+        "retained-pool-backing-and-contents","consumer-code-fetchable","no-intervening-selected-word-or-selector-writer","alternate-and-computed-caller-closure-open"];
+    format!(r#"{{"schema":9,"initializer":{},"consumer":{{"kind":"primary-root0","evidence":"source-only",
+        "source_sha256":"43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490",
+        "loader_a_sha256":"21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+        "image4_sha256":"f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+        "installation":{{"code":[{},{}],"header_words":[{},{}],"root_words":[{},{}],"root_values":[{},{}]}},
+        "selection":{{"extension_offset":{},"service":{},"identity_helper":{},"cp14_identity":{},"root_index":0}},
+        "descriptor":{{"entry":{},"pointer_read":{},"pool_read":{},"after_pool_read":{},"identifiers":[1,120],"record_bytes":44,
+            "root_relative_field":388,"retained_pool_word_value":"requires-live-preimage","published_accesses":[{accesses}]}},
+        "consumer_stack_source":{{"saved_bytes":24,"selector_saved_bytes":8,"entry_sp_premise":"live-consumer-context"}},
+        "unproved_runtime_premises":{},"code":[{code}]}}}}"#, primary_initializer(),
+        0x725a04,0x725a34,0x40010,0xd0010,0x96bd20,0x96bd24,0x4004dae0,0x400ddaa0,
+        0x1618,0x412bc,0x427b8,0x4003,0x725b74,0x725bac,0x725bb0,0x725bb4,
+        serde_json::to_string(&premises).unwrap())
+}
+
+#[cfg(not(feature = "scoped-watch"))]
+#[test]
+fn default_sdk_refuses_primary_root0_scope() {
+    assert!(PeerContract::parse(primary_root0().as_bytes()).is_err());
+}
+
+#[cfg(feature = "scoped-watch")]
+#[test]
+fn root0_contract_rejects_retargeting_and_nested_schema_changes() {
+    let contract = primary_root0();
+    assert!(PeerContract::parse(contract.as_bytes()).is_ok());
+    for invalid in [
+        contract.replace("\"primary-root0\"", "\"primary-root1\""),
+        contract.replace("\"source-only\"", "\"observed\""),
+        contract.replace("\"root_index\":0", "\"root_index\":1"),
+        contract.replace("\"identifiers\":[1,120]", "\"identifiers\":[0,120]"),
+        contract.replace("\"record_bytes\":44", "\"record_bytes\":40"),
+        contract.replace("\"root_relative_field\":388", "\"root_relative_field\":384"),
+        contract.replace("\"requires-live-preimage\"", "\"owned-pool\""),
+        contract.replace("\"live-consumer-context\"", "\"fixed-stack\""),
+        contract.replace("\"schema\":8", "\"schema\":7"),
+        contract.replace("\"schema\":9", "\"schema\":9,\"schema\":9"),
+        contract.replace("\"image4_sha256\":\"f2e2", "\"image4_sha256\":\"f3e2"),
+        contract.replace("\"pool_word\":", "\"unknown_pool_word\":"),
+    ] {
+        assert!(PeerContract::parse(invalid.as_bytes()).is_err());
+    }
+}
+

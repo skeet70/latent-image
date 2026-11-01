@@ -1,43 +1,53 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.PrimaryInitializer
-  ( Contract, Receipt, Status (..), deriveContract, contractValue, parseReceipt
-  , validateReceipt, receiptStatus
+  ( Contract, Receipt, Role (..), Status (..), Program, RunInput, BootRomInput
+  , retainedProgram, ownedProgram, parseRunInput, parseBootRomInput, deriveContract
+  , retainedCounterpart
+  , contractValue, contractRole, contractSource, contractLoaderBytes
+  , parseReceipt, parseReceiptValue, validateReceipt, compareReceipts, receiptStatus
+  , receiptAfter, receiptFinal, receiptTableAfter, receiptInputIdentityMatches
   ) where
 
 import qualified A32 as A
-import Control.Monad (forM, forM_, unless)
+import Control.Monad (foldM, forM, forM_, unless)
 import Data.Aeson (FromJSON, Object, Value (..), object, (.=))
 import qualified Data.Aeson as J
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
-import Data.Bits (complement, shiftL, (.&.), (.|.))
+import Data.Aeson.Types (Pair)
+import Data.Bits (shiftL, (.&.), (.|.))
 import qualified Data.ByteString as B
 import Data.List (sort)
 import qualified Data.Map.Strict as M
 import Data.Word (Word8, Word32, Word64)
-import Emulation.FirstStageWitness (leWordAt, sha256Hex)
+import Emulation.FirstStageWitness (encodeLeWord, leWordAt, sha256Hex)
 import qualified Emulation.InterfaceInitializer as I
 import Emulation.InterfaceInitializer
   ( Context (..), Views (..), Source (..), ByteOrder (..), Event (..), Mode (..)
   , PhysicalSpan (..), Window (..), BankSnapshot (..), TcmSnapshot (..), WatchClass (..)
   , FixedViews (..), NoFault (..), Rule (..), Watch (..), Alias (..), Decoder (..)
   )
+import qualified Emulation.PrimaryInitializerArtifact as PA
+import qualified Emulation.PrimaryInitializerSource as PS
 import qualified FujiAF.FirstStage as F
 import FujiAF.JSON (decodeStrictIntegers)
-import qualified FujiAF.UpdateContainer as U
-import qualified StartupStageContract as S
 
 newtype Guest = Guest Word32 deriving (Eq, Ord)
 newtype Physical = Physical Word64 deriving (Eq, Ord)
 newtype Instructions = Instructions Word64 deriving (Eq, Ord)
 newtype Tick = Tick Word64 deriving (Eq, Ord)
 newtype AccessBytes = AccessBytes B.ByteString deriving (Eq)
-data Role = RetainedPrimary deriving (Eq)
+data Role = RetainedPrimary | OwnedPrimary deriving (Eq, Show)
+data Program = RetainedProgram PS.Source | OwnedProgram PS.Source PA.Artifact F.Sha256
+newtype RunInput = RunInput F.Sha256
+newtype BootRomInput = BootRomInput F.Sha256
 data Status = Observed | Absent | Refused deriving (Eq, Show)
 data Result = Passed | Failed deriving (Eq)
 data Boundary = Caller | Before | Entered | After deriving (Eq, Ord)
 data Stop = Stop Boundary Context deriving (Eq)
-data Identity = Identity Role F.Sha256 F.Sha256 F.Sha256 F.Sha256 deriving (Eq)
+data OwnedHashes = OwnedHashes F.Sha256 F.Sha256 F.Sha256 F.Sha256 F.Sha256 deriving (Eq)
+data ProgramIdentity = RetainedIdentity | OwnedIdentity OwnedHashes deriving (Eq)
+data Identity = Identity ProgramIdentity F.Sha256 F.Sha256 F.Sha256 F.Sha256 deriving (Eq)
 data Store = Store Guest Word32 Guest Instructions
 
 data FramePremise = FramePremise Guest Guest Guest
@@ -49,11 +59,13 @@ data Contract = Contract
   , expectedStores :: [Store]
   , expectedReturn :: [Word32]
   , leafInstructions :: Instructions
+  , program :: Program
   }
 
 data Publication = Publication Guest Physical Word32 Guest Instructions
 
 data RawEvent = RawEvent Event AccessBytes Tick
+data ProgramMemory = RetainedMemory | OwnedMemory Views Views
 
 data Observation = Observation
   { observedIdentity :: Identity
@@ -75,6 +87,7 @@ data Observation = Observation
   , aliases :: [Alias]
   , publications :: [Publication]
   , rawWatch :: Watch RawEvent
+  , programMemory :: ProgramMemory
   }
 
 data Receipt = Receipt Identity Result Status (Maybe String) (Maybe String) Instructions [Word32] Context [Stop] (Maybe Observation)
@@ -85,37 +98,90 @@ budget = 50000000
 require :: Bool -> String -> Either String ()
 require condition message = unless condition (Left message)
 
-deriveContract :: B.ByteString -> B.ByteString -> B.ByteString -> Either String Contract
-deriveContract source run rom = do
-  original <- I.parseOriginalSource source
-  require (not (B.null run) && B.length run <= 1024 * 1024 && B.length rom == 0x4000)
-    "primary run or boot ROM extent differs"
-  let parts = U.parsedParts (S.originalStartupParsed original)
-  segment <- case filter ((== 0) . U.segId) (U.partSegments parts) of
-    [found] -> Right found
-    _ -> Left "primary loader A segment is not unique"
-  let offset = toInteger (U.segFlash segment)
-      size = toInteger (U.segSize segment)
-      carrier = U.partPreTable parts
-  require (U.segLoad segment == 0x40000 && size == 0xdae0 && offset >= 0 && offset + size <= toInteger (B.length carrier))
-    "primary loader A source extent differs"
-  let loader = B.map complement (B.take (fromInteger size) (B.drop (fromInteger offset) carrier))
-  loaderDigest <- F.parseSha256 (sha256Hex loader)
-  canonicalLoader <- F.parseSha256 "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
-  require (loaderDigest == canonicalLoader) "primary requires the canonical whole loader A"
-  runDigest <- F.parseSha256 (sha256Hex run)
-  romDigest <- F.parseSha256 (sha256Hex rom)
-  canonicalRun <- F.parseSha256 "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"
-  canonicalRom <- F.parseSha256 "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be"
-  require (runDigest == canonicalRun && romDigest == canonicalRom) "primary requires the canonical natural-reset run and captured boot ROM"
+retainedProgram :: PS.Source -> Program
+retainedProgram = RetainedProgram
+
+ownedProgram :: PS.Source -> PA.Artifact -> B.ByteString -> Either String Program
+ownedProgram source artifact candidate = do
+  require (B.length candidate == B.length (PS.sourceBytes source)) "owned primary DAT length differs from canonical source"
+  staged <- PA.stageArtifact source artifact
+  require (candidate == PA.stagedBytes staged) "owned primary DAT differs from the admitted exact source staging"
+  pure (OwnedProgram source artifact (PA.stagedDigest staged))
+
+parseRunInput :: B.ByteString -> Either String RunInput
+parseRunInput bytes = do
+  require (not (B.null bytes) && B.length bytes <= 1024 * 1024) "primary run extent differs"
+  digest <- F.parseSha256 (sha256Hex bytes)
+  canonical <- F.parseSha256 "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"
+  require (digest == canonical) "primary requires the canonical natural-reset run"
+  pure (RunInput digest)
+
+parseBootRomInput :: B.ByteString -> Either String BootRomInput
+parseBootRomInput bytes = do
+  require (B.length bytes == 0x4000) "primary boot ROM extent differs"
+  digest <- F.parseSha256 (sha256Hex bytes)
+  canonical <- F.parseSha256 "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be"
+  require (digest == canonical) "primary requires the captured canonical boot ROM"
+  pure (BootRomInput digest)
+
+programSource :: Program -> PS.Source
+programSource (RetainedProgram source) = source
+programSource (OwnedProgram source _ _) = source
+
+contractSource :: Contract -> PS.Source
+contractSource = programSource . program
+
+identityRole :: Identity -> Role
+identityRole (Identity RetainedIdentity _ _ _ _) = RetainedPrimary
+identityRole (Identity (OwnedIdentity _) _ _ _ _) = OwnedPrimary
+
+contractRole :: Contract -> Role
+contractRole = identityRole . identity
+
+retainedCounterpart :: Contract -> Either String Contract
+retainedCounterpart contract =
+  let Identity _ _ _ run rom = identity contract
+   in deriveContract (retainedProgram (contractSource contract)) (RunInput run) (BootRomInput rom)
+
+contractLoaderBytes :: Contract -> B.ByteString
+contractLoaderBytes = loaderBytes
+
+ownedHashesFor :: PA.Artifact -> F.Sha256 -> OwnedHashes
+ownedHashesFor artifact inputDigest =
+  let bound = PA.metadataIdentity (PA.artifactMetadata artifact)
+   in OwnedHashes inputDigest (PA.identitySourceLoader bound) (PA.identityImage bound)
+        (PA.identitySymbols bound) (PA.identityPublication bound)
+
+deriveContract :: Program -> RunInput -> BootRomInput -> Either String Contract
+deriveContract selected (RunInput runDigest) (BootRomInput romDigest) = do
+  let source = programSource selected
+      loader = PS.sourceLoader source
   premise <- deriveFrame loader
-  (stores, returned, steps) <- derivePublications loader
-  require (length stores == 1419 && sort [guest | Store guest _ _ _ <- stores] == map Guest [0x4004dae0,0x4004dae4 .. 0x4004f108])
-    "primary source does not publish exactly its complete table"
-  require (returned == [0x4005beac,0x4005d160,0x40061930,0x4004ef80,120] && steps == Instructions 4634)
-    "primary source return values or instruction extent differs"
-  pure (Contract (Identity RetainedPrimary (S.originalStartupDigest original) loaderDigest runDigest romDigest)
-    loader premise stores returned steps)
+  (stores,returned,steps,activeLoader,loaderDigest,programIdentity) <- case selected of
+    RetainedProgram _ -> do
+      (stores,returned,steps) <- derivePublications loader
+      require (length stores == 1419 && sort [guest | Store guest _ _ _ <- stores] == map Guest [0x4004dae0,0x4004dae4 .. 0x4004f108])
+        "primary source does not publish exactly its complete table"
+      require (returned == [0x4005beac,0x4005d160,0x40061930,0x4004ef80,120] && steps == Instructions 4634)
+        "primary source return values or instruction extent differs"
+      pure (stores,returned,steps,loader,PS.sourceLoaderDigest source,RetainedIdentity)
+    OwnedProgram _ artifact inputDigest -> do
+      let metadata = PA.artifactMetadata artifact
+          artifactIdentity = PA.metadataIdentity metadata
+          PA.InstructionCount instructionCount = PA.metadataInstructions metadata
+          PS.ReturnValues r0 r1 r2 r3 r12 = PA.metadataReturn metadata
+          guest (PS.Guest value) = value
+          emittedStore publication =
+            let PA.InstructionCount ordinal = PA.emittedOrdinal publication
+             in Store (Guest (guest (PA.emittedGuest publication))) (PA.emittedValue publication)
+                  (Guest (guest (PA.emittedPc publication))) (Instructions ordinal)
+          image = PA.artifactImage artifact
+          active = B.take 0x430 loader <> image <> B.drop 0x9ac loader
+          hashes = ownedHashesFor artifact inputDigest
+      pure (map emittedStore (PA.artifactPublications artifact),map guest [r0,r1,r2,r3] ++ [r12],
+        Instructions instructionCount,active,PA.identityOwnedLoader artifactIdentity,OwnedIdentity hashes)
+  pure (Contract (Identity programIdentity (PS.sourceDigest source) loaderDigest runDigest romDigest)
+    activeLoader premise stores returned steps selected)
 
 instruction :: B.ByteString -> Word32 -> Either String A.Instruction
 instruction loader pc = do
@@ -204,13 +270,54 @@ derivePublications loader = walk 0x40438 M.empty Nothing 2 []
           _ -> Left "primary source instruction is outside the retained scalar slice"
 
 contractValue :: Contract -> Value
-contractValue contract = object ["schema" .= (8 :: Word32), "primary" .= identityValue True (identity contract)]
+contractValue contract = object ["schema" .= (8 :: Word32),"primary" .= object
+  (identityFields (identity contract) ++ ["budget" .= budget] ++ case program contract of
+    RetainedProgram _ -> []
+    OwnedProgram source artifact inputDigest -> ["owned" .= ownedContractValue source artifact (ownedHashesFor artifact inputDigest)])]
 
-identityValue :: Bool -> Identity -> Value
-identityValue includeBudget (Identity RetainedPrimary source loader run rom) = object
-  ([ "role" .= ("retained-primary" :: String), "source_sha256" .= F.sha256Hex source
-   , "loader_a_sha256" .= F.sha256Hex loader, "run_sha256" .= F.sha256Hex run, "boot_rom_sha256" .= F.sha256Hex rom
-   ] ++ ["budget" .= budget | includeBudget])
+identityFields :: Identity -> [Pair]
+identityFields bound@(Identity _ source loader run rom) =
+  [ "role" .= roleName (identityRole bound),"source_sha256" .= F.sha256Hex source
+  , "loader_a_sha256" .= F.sha256Hex loader,"run_sha256" .= F.sha256Hex run,"boot_rom_sha256" .= F.sha256Hex rom
+  ]
+
+roleName :: Role -> String
+roleName RetainedPrimary = "retained-primary"
+roleName OwnedPrimary = "owned-primary"
+
+ownedHashFields :: OwnedHashes -> [Pair]
+ownedHashFields (OwnedHashes input sourceLoader image symbols publication) =
+  [ "input_sha256" .= F.sha256Hex input,"source_loader_a_sha256" .= F.sha256Hex sourceLoader
+  , "image_sha256" .= F.sha256Hex image,"symbols_sha256" .= F.sha256Hex symbols
+  , "publication_sha256" .= F.sha256Hex publication
+  ]
+
+ownedContractValue :: PS.Source -> PA.Artifact -> OwnedHashes -> Value
+ownedContractValue source artifact hashes = object (ownedHashFields hashes ++
+  [ "source_loader" .= B.unpack (PS.sourceLoader source),"image" .= B.unpack (PA.artifactImage artifact)
+  , "symbols" .= B.unpack (PA.artifactSymbols artifact)
+  , "scratch" .= object ["low" .= guest (PA.scratchLow scratch),"high" .= guest (PA.scratchHigh scratch)
+      ,"rust_bytes" .= count (PA.scratchRustBytes scratch),"adapter_bytes" .= count (PA.scratchAdapterBytes scratch)]
+  , "instructions" .= instructions
+  , "publications" .= [object ["guest" .= guest (PA.emittedGuest publication),"value" .= PA.emittedValue publication
+      ,"pc" .= guest (PA.emittedPc publication),"ordinal" .= ordinal (PA.emittedOrdinal publication)]
+      | publication <- PA.artifactPublications artifact]
+  , "accesses" .= [object ["guest" .= guest (PA.accessGuest access),"pc" .= guest (PA.accessPc access)
+      ,"ordinal" .= ordinal (PA.accessOrdinal access),"kind" .= accessName (PA.accessKind access)
+      ,"scratch_value" .= PA.accessScratchValue access]
+      | access <- PA.artifactAccesses artifact]
+  ])
+  where
+    scratch = PA.metadataScratch (PA.artifactMetadata artifact)
+    PA.InstructionCount instructions = PA.metadataInstructions (PA.artifactMetadata artifact)
+    guest (PS.Guest value) = value
+    count (PS.ByteCount value) = value
+    ordinal (PA.InstructionCount value) = value
+    accessName kind = case kind of
+      PA.ScratchRead -> "scratch-read" :: String
+      PA.ScratchWrite -> "scratch-write"
+      PA.ImageRead -> "image-read"
+      PA.PublicationWrite -> "publication-write"
 
 fields :: [String] -> Value -> Either String Object
 fields names (Object row) = do
@@ -238,14 +345,24 @@ parseRole value = do
   text <- json value :: Either String String
   case text of
     "retained-primary" -> Right RetainedPrimary
+    "owned-primary" -> Right OwnedPrimary
     _ -> Left "unsupported primary role"
 
 parseIdentity :: Value -> Either String Identity
 parseIdentity value = do
-  row <- fields ["role","source_sha256","loader_a_sha256","run_sha256","boot_rom_sha256"] value
+  selected <- case value of
+    Object row -> field row "role" >>= parseRole
+    _ -> Left "primary identity is not an object"
+  row <- fields (["role","source_sha256","loader_a_sha256","run_sha256","boot_rom_sha256"] ++ ["owned" | selected == OwnedPrimary]) value
   let digest name = get row name >>= F.parseSha256
-  Identity <$> (field row "role" >>= parseRole) <*> digest "source_sha256" <*> digest "loader_a_sha256"
-    <*> digest "run_sha256" <*> digest "boot_rom_sha256"
+  selectedIdentity <- case selected of
+    RetainedPrimary -> pure RetainedIdentity
+    OwnedPrimary -> do
+      owned <- field row "owned" >>= fields ["input_sha256","source_loader_a_sha256","image_sha256","symbols_sha256","publication_sha256"]
+      let ownedDigest name = get owned name >>= F.parseSha256
+      OwnedIdentity <$> (OwnedHashes <$> ownedDigest "input_sha256" <*> ownedDigest "source_loader_a_sha256"
+        <*> ownedDigest "image_sha256" <*> ownedDigest "symbols_sha256" <*> ownedDigest "publication_sha256")
+  Identity selectedIdentity <$> digest "source_sha256" <*> digest "loader_a_sha256" <*> digest "run_sha256" <*> digest "boot_rom_sha256"
 
 parseContext :: Value -> Either String Context
 parseContext value = do
@@ -318,15 +435,22 @@ parsePublication value = do
 
 parseObservation :: Value -> Either String Observation
 parseObservation value = do
-  row <- fields ["contract","caller","before","entered","after","frame_before","frame_after","table_before","table_after"
-    ,"tail_before","tail_after","pools_before","pools_after","code_before","code_after","decoder","aliases","publications","watch"] value
+  bound <- case value of
+    Object initial -> field initial "contract" >>= parseIdentity
+    _ -> Left "primary observation is not an object"
+  row <- fields (["contract","caller","before","entered","after","frame_before","frame_after","table_before","table_after"
+    ,"tail_before","tail_after","pools_before","pools_after","code_before","code_after","decoder","aliases","publications","watch"]
+    ++ (if identityRole bound == OwnedPrimary then ["scratch_before","scratch_after"] else [])) value
   let context name = field row name >>= parseContext
       views name = field row name >>= parseViews
-  Observation <$> (field row "contract" >>= parseIdentity) <*> context "caller" <*> context "before" <*> context "entered" <*> context "after"
+  memory <- case identityRole bound of
+    RetainedPrimary -> pure RetainedMemory
+    OwnedPrimary -> OwnedMemory <$> views "scratch_before" <*> views "scratch_after"
+  Observation bound <$> context "caller" <*> context "before" <*> context "entered" <*> context "after"
     <*> views "frame_before" <*> views "frame_after" <*> views "table_before" <*> views "table_after"
     <*> views "tail_before" <*> views "tail_after" <*> views "pools_before" <*> views "pools_after"
     <*> views "code_before" <*> views "code_after" <*> (field row "decoder" >>= parseDecoder)
-    <*> (get row "aliases" >>= mapM parseAlias) <*> (get row "publications" >>= mapM parsePublication) <*> (field row "watch" >>= parseWatch)
+    <*> (get row "aliases" >>= mapM parseAlias) <*> (get row "publications" >>= mapM parsePublication) <*> (field row "watch" >>= parseWatch) <*> pure memory
 
 parseStop :: Value -> Either String Stop
 parseStop value = do
@@ -347,12 +471,16 @@ parseStop value = do
 parseReceipt :: B.ByteString -> Either String Receipt
 parseReceipt bytes = do
   require (B.length bytes <= 32 * 1024 * 1024) "primary receipt exceeds 32 MiB"
-  value <- decodeStrictIntegers bytes
+  decodeStrictIntegers bytes >>= parseReceiptValue
+
+parseReceiptValue :: Value -> Either String Receipt
+parseReceiptValue value = do
   row <- fields ["schema","role","contract","result","status","error","machine_failure","instructions","cp14_identities","final","boundaries","primary"] value
   schema <- get row "schema" :: Either String Word32
   require (schema == 8) "unsupported primary receipt schema"
-  _ <- field row "role" >>= parseRole
+  role <- field row "role" >>= parseRole
   receiptIdentity <- field row "contract" >>= parseIdentity
+  require (role == identityRole receiptIdentity) "primary top-level role differs from receipt identity"
   resultName <- get row "result" :: Either String String
   result <- case resultName of "passed" -> Right Passed; "failed" -> Right Failed; _ -> Left "unsupported primary result"
   statusName <- get row "status" :: Either String String
@@ -395,6 +523,51 @@ parseReceipt bytes = do
 receiptStatus :: Receipt -> Status
 receiptStatus (Receipt _ _ status _ _ _ _ _ _ _) = status
 
+receiptFinal :: Receipt -> Context
+receiptFinal (Receipt _ _ _ _ _ _ _ final _ _) = final
+
+receiptAfter :: Receipt -> Either String Context
+receiptAfter (Receipt _ _ _ _ _ _ _ _ _ evidence) =
+  maybe (Left "primary receipt has no observed return") (Right . afterContext) evidence
+
+receiptTableAfter :: Receipt -> Either String B.ByteString
+receiptTableAfter (Receipt _ _ _ _ _ _ _ _ _ evidence) =
+  maybe (Left "primary receipt has no committed table") (viewBytes 0x162c . tableAfter) evidence
+
+receiptInputIdentityMatches :: Contract -> Receipt -> Either String ()
+receiptInputIdentityMatches contract (Receipt bound _ _ _ _ _ _ _ _ _) =
+  require (bound == identity contract) "primary receipt whole-input identity differs"
+
+data SemanticContext = SemanticContext Word32 [Word32] Word32 Word32 Word32 [[Word32]] deriving (Eq)
+
+semanticContext :: Context -> SemanticContext
+semanticContext (Context pc registers sp lr cpsr _ banks) = SemanticContext pc registers sp lr cpsr banks
+
+data Semantics = Semantics SemanticContext SemanticContext SemanticContext SemanticContext [Views] [(B.ByteString,B.ByteString)] deriving (Eq)
+
+semantics :: Receipt -> Either String Semantics
+semantics (Receipt _ _ _ _ _ _ _ _ _ evidence) = do
+  observation <- maybe (Left "primary comparison lacks an observation") Right evidence
+  code <- forM [codeBefore observation,codeAfter observation] $ \view -> do
+    bytes <- viewBytes 0xdae0 view
+    pure (B.take 0x430 bytes,B.drop 0x9ac bytes)
+  pure (Semantics (semanticContext (callerContext observation)) (semanticContext (beforeContext observation))
+    (semanticContext (enteredContext observation)) (semanticContext (afterContext observation))
+    [frameBefore observation,frameAfter observation,tableBefore observation,tableAfter observation
+    ,tailBefore observation,tailAfter observation,poolsBefore observation,poolsAfter observation] code)
+
+compareReceipts :: Contract -> Receipt -> Contract -> Receipt -> Either String ()
+compareReceipts retained before owned after = do
+  require (contractRole retained == RetainedPrimary && contractRole owned == OwnedPrimary)
+    "primary comparison requires retained then owned"
+  validateReceipt retained before
+  validateReceipt owned after
+  require (PS.sourceDigest (contractSource retained) == PS.sourceDigest (contractSource owned))
+    "primary comparison canonical source differs"
+  left <- semantics before
+  right <- semantics after
+  require (left == right) "primary comparison caller, preserved state or memory semantics differ"
+
 progressing :: Context -> Context -> Either String ()
 progressing (Context _ _ _ _ _ before _) (Context _ _ _ _ _ after _) =
   require (and (zipWith (<=) before after)) "primary core progress decreased"
@@ -405,10 +578,10 @@ viewBytes size (Views virtual physical) = do
   pure (B.pack physical)
 
 validateReceipt :: Contract -> Receipt -> Either String ()
-validateReceipt contract (Receipt receiptIdentity result status failure machineFailure _ _ _ _ evidence) = do
-  require (receiptIdentity == identity contract) "primary receipt whole-input identity differs"
+validateReceipt contract receipt@(Receipt _ result status failure machineFailure _ _ _ _ evidence) = do
+  receiptInputIdentityMatches contract receipt
   require (result == Passed && status == Observed && failure == Nothing && machineFailure == Nothing)
-    "primary validation accepts only an observed retained initializer"
+    "primary validation accepts only an observed initializer"
   observation <- maybe (Left "primary observation is absent") Right evidence
   require (observedIdentity observation == identity contract) "primary observation whole-input identity differs"
   let Context callerPc caller callerSp callerLr callerCpsr callerCounts callerTcm = callerContext observation
@@ -470,24 +643,37 @@ validateWatch contract observation tcm prestate committed enteringCounts outgoin
       forM_ active $ \window -> require (all (disjoint window) windows) "primary TCM remaps a loader, table, pool or stack alias"
   let physical low high = PhysicalSpan [low,high]
       rule cores kind mode spans = Rule cores kind mode spans [snapshot | snapshot@(TcmSnapshot core _ _) <- expectedTcm,core `elem` cores]
+      (Physical scratchLow,Physical scratchHigh) = scratchBounds contract
       expectedRules =
-        [ rule [0] CpuWrite Allow [physical 0x4dae0 0x4f10c,physical 0x63444 0x63450]
+        [ rule [0] CpuWrite Allow [physical 0x4dae0 0x4f10c,physical scratchLow scratchHigh]
         , rule [1] CpuWrite Forbid [physical 0x4dae0 0x63460,physical 0x40000 0x4dae0]
-        , rule [0] CpuRead Forbid [physical 0x4dae0 0x4f10c]
-        ]
+        , case program contract of
+            RetainedProgram _ -> rule [0] CpuRead Forbid [physical 0x4dae0 0x4f10c]
+            OwnedProgram _ _ _ -> rule [0] CpuRead Allow [physical 0x40430 0x409ac,physical scratchLow scratchHigh]
+        ] ++ case program contract of
+          RetainedProgram _ -> []
+          OwnedProgram _ _ _ -> [rule [1] CpuFetch Forbid [physical 0x40430 0x409ac]]
       writes = [CpuWrite,HostWrite,ModelBusWrite]
       expectedClasses =
         [ WatchClass (Window (0x4dae0,0x4f10c)) writes
         , WatchClass (Window (0x4dae0,0x63460)) [HostWrite,ModelBusWrite]
         , WatchClass (Window (0x40000,0x4dae0)) writes
-        ]
+        ] ++ case program contract of
+          RetainedProgram _ -> []
+          OwnedProgram _ _ _ ->
+            [ WatchClass (Window (0x40430,0x409ac)) [CpuRead]
+            , WatchClass (Window (scratchLow,scratchHigh)) [CpuRead,CpuWrite]
+            ]
       normalizeClass (WatchClass range kinds) = WatchClass range (sort kinds)
   require (rules == expectedRules && sort (map normalizeClass classes) == sort (map normalizeClass expectedClasses))
     "primary exact watch confinement or source classes differ"
   let stores = expectedStores contract
       observedPublications = publications observation
-  require (length events == 1419 && length observedPublications == 1419 && length stores == 1419) "primary publication coverage differs"
-  forM_ (zip3 stores observedPublications events) $ \(Store (Guest guest) value expectedPc (Instructions ordinal),
+      publicationEvents = case program contract of
+        RetainedProgram _ -> events
+        OwnedProgram _ _ _ -> filter isPublication events
+  require (length publicationEvents == 1419 && length observedPublications == 1419 && length stores == 1419) "primary publication coverage differs"
+  forM_ (zip3 stores observedPublications publicationEvents) $ \(Store (Guest guest) value expectedPc (Instructions ordinal),
       Publication observedGuest observedPhysical observedValue pc (Instructions instructions),
       RawEvent (Event kind core address rawPhysical width eventValue eventPc eventInstructions order) (AccessBytes before) _) -> do
     let physicalAddress = fromIntegral guest - 0x40000000
@@ -502,8 +688,103 @@ validateWatch contract observation tcm prestate committed enteringCounts outgoin
       "primary raw publication preimage or committed readback differs"
   let clocks = [clock | Publication _ _ _ _ clock <- observedPublications]
       ticks = [tick | RawEvent _ _ tick <- events]
-  require (and (zipWith (<) clocks (drop 1 clocks)) && and (zipWith (<=) ticks (drop 1 ticks)))
-    "primary publication instruction clocks did not increase or raw ticks decreased"
+      progresses = case program contract of
+        RetainedProgram _ -> (<)
+        OwnedProgram _ _ _ -> (<=)
+  require (and (zipWith progresses clocks (drop 1 clocks)) && and (zipWith (<=) ticks (drop 1 ticks)))
+    "primary publication instruction groups or raw ticks decreased"
+  validateProgramMemory contract observation events prestate committed enteringCounts outgoingCounts
+
+scratchBounds :: Contract -> (Physical,Physical)
+scratchBounds contract = case program contract of
+  RetainedProgram _ -> (Physical 0x63444,Physical 0x63450)
+  OwnedProgram _ artifact _ ->
+    let scratch = PA.metadataScratch (PA.artifactMetadata artifact)
+        PS.Guest low = PA.scratchLow scratch
+        PS.Guest high = PA.scratchHigh scratch
+     in (Physical (fromIntegral low - 0x40000000),Physical (fromIntegral high - 0x40000000))
+
+isPublication :: RawEvent -> Bool
+isPublication (RawEvent (Event kind _ _ physical _ _ _ _ _) _ _) =
+  kind == CpuWrite && maybe False (\location -> location >= 0x4dae0 && location < 0x4f10c) physical
+
+validateProgramMemory :: Contract -> Observation -> [RawEvent] -> B.ByteString -> B.ByteString -> [Word64] -> [Word64] -> Either String ()
+validateProgramMemory contract observation events prestate committed enteringCounts outgoingCounts =
+  case (program contract,programMemory observation) of
+    (RetainedProgram _,RetainedMemory) -> pure ()
+    (OwnedProgram _ artifact _,OwnedMemory before after) -> do
+      let scratch = PA.metadataScratch (PA.artifactMetadata artifact)
+          PS.Guest low = PA.scratchLow scratch
+          PS.Guest high = PA.scratchHigh scratch
+          bytes = fromIntegral (high - low)
+          accesses = PA.artifactAccesses artifact
+      beforeBytes <- viewBytes bytes before
+      afterBytes <- viewBytes bytes after
+      initial <- M.fromList <$> forM [low,low + 4 .. high - 4] (\location ->
+        (,) location <$> leWordAt beforeBytes (fromIntegral (location - low)))
+      require (length events == length accesses) "owned primary emitted access coverage differs"
+      case (enteringCounts,outgoingCounts) of
+        ([e0,e1],[a0,a1]) -> do
+          (final,_,_) <- foldM (step e0 e1 a0 a1) (initial,e1,Nothing) (zip accesses events)
+          forM_ (M.toList final) $ \(location,value) ->
+            require (leWordAt afterBytes (fromIntegral (location - low)) == Right value) "owned primary scratch readback differs from raw writes"
+        _ -> Left "owned primary access count width differs"
+    _ -> Left "primary scratch evidence role differs"
+  where
+    step e0 e1 a0 a1 (memory,lastCore1,previous)
+      (access,RawEvent (Event kind core address physical width eventValue eventPc eventInstructions order) (AccessBytes before) _) = do
+      let PS.Guest guest = PA.accessGuest access
+          PS.Guest pc = PA.accessPc access
+          PA.InstructionCount ordinal = PA.accessOrdinal access
+          expectedKind = case PA.accessKind access of
+            PA.ScratchWrite -> CpuWrite
+            PA.PublicationWrite -> CpuWrite
+            PA.ScratchRead -> CpuRead
+            PA.ImageRead -> CpuRead
+          expectedPhysical = if guest < 0x100000 then fromIntegral guest else fromIntegral guest - 0x40000000
+          enteredCore0 = e0 + ordinal + 1
+      instructions <- maybe (Left "owned primary access lacks instruction clock") Right eventInstructions
+      value <- maybe (Left "owned primary access lacks value") Right eventValue
+      require (kind == expectedKind && core == Just 0 && address == fromIntegral guest && physical == Just expectedPhysical
+        && width == 4 && eventPc == Just pc && order == Just LittleEndian && value <= 0xffffffff)
+        "owned primary emitted access attribution differs"
+      require (enteredCore0 <= a0 && instructions >= enteredCore0 && instructions < a0 + a1)
+        "owned primary access leaves its instruction interval"
+      let actualCore1 = instructions - enteredCore0
+          wordValue = fromIntegral value
+      require (actualCore1 >= e1 && actualCore1 >= lastCore1 && actualCore1 <= a1)
+        "owned primary access clock lacks monotone other-core progress"
+      forM_ previous $ \(lastOrdinal,lastInstructions) ->
+        require (if ordinal == lastOrdinal then instructions == lastInstructions else ordinal > lastOrdinal && instructions > lastInstructions)
+          "owned primary raw access instruction groups differ"
+      next <- case PA.accessKind access of
+        PA.ScratchWrite -> do
+          old <- maybe (Left "owned primary scratch write leaves its admitted frame") Right (M.lookup guest memory)
+          require (before == encodeLeWord old) "owned primary scratch write preimage differs"
+          provenance <- maybe (Left "owned primary scratch write lacks value provenance") Right (PA.accessScratchValue access)
+          let Context _ registers _ lr cpsr _ _ = enteredContext observation
+              expectedValue = case provenance of
+                PA.ScratchConstant word -> word
+                PA.EnteredRegister (A.Reg register) -> registers !! fromIntegral register
+                PA.EnteredLr -> lr
+                PA.EnteredCpsr -> cpsr
+          require (wordValue == expectedValue) "owned primary scratch write differs from its entered value provenance"
+          pure (M.insert guest wordValue memory)
+        PA.ScratchRead -> do
+          old <- maybe (Left "owned primary scratch read leaves its admitted frame") Right (M.lookup guest memory)
+          require (before == encodeLeWord old && wordValue == old) "owned primary scratch read differs from raw saved words"
+          pure memory
+        PA.ImageRead -> do
+          let offset = fromIntegral (guest - 0x40000)
+          expected <- leWordAt (loaderBytes contract) offset
+          require (before == encodeLeWord expected && wordValue == expected) "owned primary immutable image read differs"
+          pure memory
+        PA.PublicationWrite -> do
+          let offset = fromIntegral (guest - 0x4004dae0)
+          require (before == B.take 4 (B.drop offset prestate) && leWordAt committed offset == Right wordValue)
+            "owned primary publication preimage or final value differs"
+          pure memory
+      pure (next,actualCore1,Just (ordinal,instructions))
 
 validateAliases :: Contract -> [Alias] -> Either String ()
 validateAliases contract bindings = do

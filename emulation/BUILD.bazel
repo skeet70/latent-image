@@ -500,15 +500,15 @@ haskell_library(
     deps = [
         ":first-stage-witness-lib",
         ":interface-initializer-lib",
+        ":primary-initializer-source-lib",
+        ":primary-initializer-artifact-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:containers",
         "//host:first-stage",
         "//host:json",
-        "//host:update-container",
         "//host/firmware:bank-allowlist",
-        "//host/firmware:startup-stage-contract",
     ],
 )
 
@@ -516,9 +516,45 @@ haskell_test(
     name = "primary-initializer-tests",
     size = "small",
     srcs = ["PrimaryInitializerTests.hs"],
+    args = ["$(rootpath fujimod-xm1/data/xm1-150.json)"],
+    data = ["fujimod-xm1/data/xm1-150.json"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":primary-initializer-lib",
+        ":primary-initializer-source-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_library(
+    name = "primary-initializer-consumer-lib",
+    srcs = ["Emulation/PrimaryInitializerConsumer.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":first-stage-witness-lib",
+        ":interface-initializer-lib",
+        ":primary-initializer-lib",
+        ":primary-initializer-source-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:json",
+    ],
+)
+
+haskell_test(
+    name = "primary-initializer-consumer-tests",
+    size = "small",
+    srcs = ["PrimaryInitializerConsumerTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":primary-initializer-consumer-lib",
+        ":primary-initializer-source-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -720,6 +756,9 @@ haskell_binary(
         ":peer-startup-witness-lib",
         ":peer-wait-witness-lib",
         ":primary-initializer-lib",
+        ":primary-initializer-consumer-lib",
+        ":primary-initializer-source-lib",
+        ":primary-initializer-artifact-lib",
         ":viewer-runtime-lib",
         "//host:aeson",
         "//host:base",
