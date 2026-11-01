@@ -447,6 +447,7 @@ haskell_library(
     name = "loader-prefix-witness-lib",
     srcs = ["Emulation/LoaderPrefixWitness.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//replacement/startup_consumers:__pkg__"],
     deps = [
         ":first-stage-witness-lib",
         ":peer-stage-witness-lib",
@@ -473,6 +474,7 @@ haskell_library(
         "Emulation/InterfaceInitializerConsumer.hs",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//replacement/startup_consumers:__pkg__"],
     deps = [
         ":first-stage-witness-lib",
         ":loader-prefix-witness-lib",
@@ -1333,6 +1335,12 @@ sh_binary(
 sh_binary(
     name = "startup-dispatch",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-startup-dispatch"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
+    name = "startup-consumers",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-startup-consumers"],
     visibility = ["//visibility:public"],
 )
 
