@@ -1113,6 +1113,29 @@ For each eligible extent, lookup `0x6571bc` returns the entry; the worker walks 
 - Id2 hooks: none.
 - Id3 hooks, in order: `0x11e00f8`, `0x125a260`, `0x125f16c`, `0x1274628`, `0x1279d38`, `0x127ae64`, `0x127c06c`, `0x127ce18`, `0x127dcc4`, `0x127fa28`, `0x1281560`, `0x128eb8c`, `0x13e4d98`, `0x13ed5c0`. The first submits task26, entry `0x11e6e14`.
 
+`E-LATER-PLAIN-HOOK-PUBLICATIONS-150` recovers every hook's concrete publication. Fourteen hooks construct mailboxes and submit tasks through `0x725dd8`; `0x128eb8c -> 0x128eb74` instead returns zero without a task or callback publication. The task submissions are:
+
+| Hook | Task id / name | Priority / stack | Published entry / submission call |
+| --- | --- | --- | --- |
+| `0x110f9d8` | 33 / uilib | 9 / `0x1000` | `0x1109130 / 0x110f9cc` |
+| `0x11e00f8` | 26 / dpof | 9 / `0xc00` | `0x11e6e14 / 0x11e00ec` |
+| `0x125a260` | 31 / playsub | 9 / `0xc00` | `0x125cdfc / 0x125a254` |
+| `0x125f16c` | 32 / wificont | 6 / `0xc00` | `0x1273f60 / 0x125f160` |
+| `0x1274628` | 63 / searchTbl | 7 / `0xc00` | `0x1279828 / 0x127461c` |
+| `0x1279d38` | 74 / pm_snd | 6 / `0xc00` | `0x127aabc / 0x1279d2c` |
+| `0x127ae64` | 75 / pm_frm | 6 / `0xc00` | `0x127bdf4 / 0x127ae58` |
+| `0x127c06c` | 76 / pm_dec | 6 / `0xc00` | `0x127cbb0 / 0x127c060` |
+| `0x127ce18` | 77 / pm_dcn | 6 / `0xc00` | `0x127da94 / 0x127ce0c` |
+| `0x127dcc4` | 78 / pm_rsz | 6 / `0xc00` | `0x127f658 / 0x127dcb8` |
+| `0x127fa28` | 79 / pm_dsp | 6 / `0xc00` | `0x12812c4 / 0x127fa1c` |
+| `0x1281560` | 70 / book | 9 / `0xc00` | `0x128becc / 0x1281554` |
+| `0x13e4d98` | 87 / netdrvsub | 6 / `0xc00` | `0x13e36fc / 0x13e4d80` |
+| `0x13ed5c0` | 86 / netdrv | 5 / `0xc00` | `0x13e9c0c / 0x13ed5a0` |
+
+Each constructor sets descriptor words `+0..+20`, with argument zero. None writes `D+24`, which the task wrapper still reads for its attribute classification. That word is live stack state, not an implicit zero or sentinel. The first twelve task constructors return the actual mailbox/submission status; the last two map failures to `-255`. Each hook halts for a nonzero initializer return.
+
+The final netdrv constructor also calls `0x13eb650`: it clears `[0x14c1010,0x14c1618)`, stores `0x14c101c` at `0x14c1018` and 5 at `0x14c113c`. Its hook then publishes callback `0x6b0090` at `0x14c100c` through `0x13eb528`, and callback `0x13eb548` at `0x9662d4` through `0x6b00cc`. These are actual image5-BSS and image4-BSS writes. All-zero BSS at image5 producer completion is a different claim from its later mutable state at application entry.
+
 Eligible extent hooks can run before the whole raw read returns. Hook-created tasks can become consumers before the worker's done store; their actual scheduling requires a witness. Conversely, command completion need not wait for queued extent work. The plain producer unconditionally reports the complete source length at `0x6a9928`, even after raw-read failure. Flashloader unconditionally sets command done and releases its command resource before callback; later done requests callback immediately with success. Progress/done/return alone must therefore never substitute for committed executable/data readback.
 
 Image5 staging remains live through final decode completion. Decoder source/destination/count globals are not withdrawn at teardown, and the fixed range has no allocation/free marker. Resource `0x48` coordinates feed/drain, while `0x2b` controls engine ownership; their callback/error concurrency and cross-core visibility remain separate obligations. Plain extent resources carry readiness, not indefinite protection from later writes. Code, data, callback tables, MPU/alias configuration and backing must survive their actual consumers; reset or a changed mapping invalidates a checkpoint admitted under a prior interval. None of these source facts establishes physical cache coherence.
