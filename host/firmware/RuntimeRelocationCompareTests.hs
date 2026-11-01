@@ -1,12 +1,13 @@
 module Main (main) where
 
-import Control.Monad (unless)
+import Control.Monad (forM_, unless)
 import Data.Aeson (Value, encode, object, (.=))
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import Data.List (mapAccumL)
+import qualified Data.IntMap.Strict as IM
 import Data.Word (Word32)
 import Numeric (showHex)
 import RuntimeRelocationCompare
@@ -14,7 +15,7 @@ import qualified RamPushLayout as L
 import System.Exit (exitFailure)
 
 data Placement = Placement { base :: Word32, names :: Word32, installer :: Word32 }
-data Damage = Clean | ChangedStockTarget | ChangedRegister | CaptureBL | CaptureWrongTarget | MissingCodeMap | CodeGap | NonzeroGap | ChangedData | ManifestDrift | RuntimeCodeDrift | ChangedLiteralLoad | MissingCompanion | AddressLikeScalar | StalePointer | StaleGeneratedPointer | MissingRelocations | MissingPointerRecord | NameConsumerToOtherLiteral | NameConsumerNotLoad | StaleNameLiteral | ShiftedNameLiteral | MissingNameFunction | StaleD3Publication | StalePlanPublication | WrongFixedPublication | AddressLikePublicationScalar | StalePublicationBranch | StalePublicationWide | ModalWrongController | ModalWrongFlags | ModalStockResume | ModalOwnedTarget | ModalBL | ModalWrongPush | ModalWrongSize | MissingModalHook deriving (Eq, Show)
+data Damage = Clean | ChangedStockTarget | ChangedRegister | CaptureBL | CaptureWrongTarget | MissingCodeMap | CodeGap | NonzeroGap | ChangedData | ManifestDrift | RuntimeCodeDrift | ChangedLiteralLoad | MissingCompanion | AddressLikeScalar | StalePointer | StaleGeneratedPointer | MissingRelocations | MissingPointerRecord | NameConsumerToOtherLiteral | NameConsumerNotLoad | StaleNameLiteral | ShiftedNameLiteral | MissingNameFunction | StaleD3Publication | StalePlanPublication | WrongFixedPublication | AddressLikePublicationScalar | StalePublicationBranch | StalePublicationWide | ModalWrongController | ModalWrongFlags | ModalStockResume | ModalOwnedTarget | ModalBL | ModalWrongPush | ModalWrongSize | MissingModalHook | ReorderedPublications | WrongGroupDestination deriving (Eq, Show)
 
 leftPlacement, rightPlacement :: Placement
 leftPlacement = Placement 0x00c40000 0x00c5b784 0x00c5bfa0
@@ -56,6 +57,15 @@ main = do
   mapM_ (\damage -> check (show damage ++ " refuses even when both relocated selectors match")
       (refused (comparePackages (scoped leftPlacement damage) (scoped rightPlacement damage))))
     [ModalWrongController,ModalWrongFlags,ModalStockResume,ModalOwnedTarget,ModalBL,ModalWrongPush,ModalWrongSize,MissingModalHook]
+  forM_ [L.standardBankVariant, L.modalScopedBankVariant, L.lifecycleBankVariant, L.modalLifecycleBankVariant] $ \variant -> do
+    valid <- either (\problem -> putStrLn problem >> exitFailure) pure
+      (comparePackages (fixtureFor variant leftPlacement Clean) (fixtureFor variant rightPlacement Clean))
+    check ("canonical selected group order accepts: " ++ show variant) (comparisonAccepted valid)
+    check ("matching noncanonical physical order refuses: " ++ show variant)
+      (refused (comparePackages (fixtureFor variant leftPlacement ReorderedPublications) (fixtureFor variant rightPlacement ReorderedPublications)))
+    unless (null (L.publicationGroups variant)) $
+      check ("matching wrong group destination refuses: " ++ show variant)
+        (refused (comparePackages (fixtureFor variant leftPlacement WrongGroupDestination) (fixtureFor variant rightPlacement WrongGroupDestination)))
   putStrLn "runtime relocation comparison: behavioral checks passed"
  where
   check label passed = unless passed (putStrLn ("FAIL: " ++ label) >> exitFailure)
@@ -72,8 +82,8 @@ fixtureFor variant placement damage = PackageBytes elf runtime (json manifest) (
   text = start + 0x500
   dataStart = start + if L.hasPublicationGroup L.Modal75Publication variant then 0x800 else 0x600
   publicationStart = install + 0x20
-  rendezvousStart = install + 0xe20
-  mailboxStart = install + 0xea0
+  rendezvousStart = (publicationStart + fromIntegral (publicationCount * 16) + 31) .&. 0xffffffe0
+  mailboxStart = rendezvousStart + 0x80
   branch site target link = (if link then 0xeb000000 else 0xea000000) .|. (((target - site - 8) `shiftR` 2) .&. 0x00ffffff)
   wide top register value = (if top then 0xe3400000 else 0xe3000000) .|. (register `shiftL` 12) .|. ((immediate .&. 0xf000) `shiftL` 4) .|. (immediate .&. 0xfff)
    where immediate = if top then value `shiftR` 16 else value .&. 0xffff
@@ -83,6 +93,7 @@ fixtureFor variant placement damage = PackageBytes elf runtime (json manifest) (
   nameLiteral = case damage of StaleNameLiteral -> 0x00c5b84a; ShiftedNameLiteral -> name + 0xca; _ -> name + 0xc6
   nameBody = overlay 0x9c [(0,B.concat (replicate 37 (w32 0xe320f000))),(0x0c,w32 nameConsumer),(0x94,w32 nameLiteral)]
   scoped = L.hasPublicationGroup L.Modal75Publication variant
+  lifecycle = L.hasPublicationGroup L.LifecyclePublications variant
   publicationCount = L.publicationCountFor variant
   allocationSize = fromIntegral (L.runtimeAllocationSizeFor variant)
   seam = text + 0x100
@@ -105,8 +116,15 @@ fixtureFor variant placement damage = PackageBytes elf runtime (json manifest) (
   captureTarget = text + if damage == CaptureWrongTarget then 4 else 0
   captureWord = branch 0x00e9e038 captureTarget (damage == CaptureBL)
   publication index =
-    let site = case index of 223 | damage /= MissingModalHook -> 0x00bfb028; 222 -> 0x00e9e038; 0 -> 0x0078eab8; 2 -> 0x01110004; 3 -> 0x007823c8; 4 -> 0x0078bd80; 5 -> 0x0078bd7c; 6 -> 0x0061c384; _ -> 0x01100000 + 4 * fromIntegral index
-        old = case index of 223 -> if damage == ModalWrongPush then 0xe92d4000 else 0xe92d4ff0; 222 -> 0xe92d4870; 2 -> 0xe3403037; 6 -> 1; _ -> 0
+    let site
+          | scoped && index == publicationCount - 1 && damage /= MissingModalHook = 0x00bfb028
+          | lifecycle && index == 223 = 0x00e99e8c
+          | lifecycle && index == 224 = 0x00e6a754
+          | lifecycle && index == 225 = 0x00e6bb90
+          | otherwise = case index of 222 -> 0x00e9e038; 0 -> 0x0078eab8; 2 -> 0x01110004; 3 -> 0x007823c8; 4 -> 0x0078bd80; 5 -> 0x0078bd7c; 6 -> 0x0061c384; _ -> 0x01100000 + 4 * fromIntegral index
+        old
+          | scoped && index == publicationCount - 1 = if damage == ModalWrongPush then 0xe92d4000 else 0xe92d4ff0
+          | otherwise = case index of 222 -> 0xe92d4870; 2 -> 0xe3403037; 6 -> 1; _ -> 0
         new = case index of
           0 -> if damage == StalePlanPublication then 0x00c5b784 else name
           1 -> branch site (if damage == StalePublicationBranch then 0x00c40500 else text) False
@@ -117,12 +135,22 @@ fixtureFor variant placement damage = PackageBytes elf runtime (json manifest) (
           6 -> 0
           7 -> if damage == AddressLikePublicationScalar then text else 1
           222 -> captureWord
-          223 -> branch 0x00bfb028 seam (damage == ModalBL)
-          _ -> 1
-        phase = if index < 131 then 0 else 1
-     in (site,old,new,phase)
-  publications = map publication [0 :: Int .. publicationCount - 1]
-  table = B.concat [B.concat (map w32 [site,old,new,phase]) | (site,old,new,phase) <- publications]
+          _ | scoped && index == publicationCount - 1 -> branch 0x00bfb028 seam (damage == ModalBL)
+            | lifecycle && 223 <= index && index <= 225 -> branch site text False
+            | otherwise -> 1
+     in (if damage == WrongGroupDestination && index == 223 then site + 4 else site, old, new)
+  logicalPublications = IM.fromDistinctAscList [(index, publication index) | index <- [0 :: Int .. publicationCount - 1]]
+  canonicalOrder = [0 .. 35] ++ [55 .. 68] ++ [88] ++ [36 .. 53] ++ [97 .. 158] ++ [222] ++ [159 .. 221]
+    ++ [75,76,72,73,74,69,70,71,77,78,79,80,81,82,83,89,90,91,92,93,94,95,96,84,85,86,87,54]
+    ++ [223 .. publicationCount - 1]
+  physicalOrder = case (damage, canonicalOrder) of
+    (ReorderedPublications, first : second : rest) -> second : first : rest
+    _ -> canonicalOrder
+  publications =
+    [(index, (site, old, new, if position < 131 then 0 else 1))
+    | (position, index) <- zip [0 :: Int ..] physicalOrder
+    , let (site, old, new) = logicalPublications IM.! index]
+  table = B.concat [B.concat (map w32 [site,old,new,phase]) | (_, (site,old,new,phase)) <- publications]
   relocationSymbolIndex = fromIntegral (1 + length (takeWhile (\(symbolName,_,_,_,_) -> symbolName /= "__rb_name_records") symbols))
   abs32 site = w32 site <> w32 ((relocationSymbolIndex `shiftL` 8) .|. 2)
   sections = [(".text",text,6,code),(".data",dataStart,3,payload),(".ram_push.text",install,6,w32 (branch install text False) <> w32 0xe12fff1e),(".ram_push.publications",publicationStart,3,B.replicate (publicationCount * 16) 0),(".ram_push.rendezvous",rendezvousStart,3,B.replicate 128 0),(".ram_push.mailbox",mailboxStart,3,B.replicate 128 0)]
@@ -134,13 +162,13 @@ fixtureFor variant placement damage = PackageBytes elf runtime (json manifest) (
     [("$d",text+20,0,0,1),("$a",install,0,0,3),("cc_ram_data",dataStart,0,0,2),("cc_ram_data_end",dataStart+100,0,0,2),("__rb_name_records",name,0,0,0xfff1),("RAM_PUSH_BANK_END",name+0x400,0,0,0xfff1),("__ram_push_publications_start",publicationStart,0,0,4),("__ram_push_publications_end",publicationStart+fromIntegral publicationCount*16,0,0,4),("rb_capture_develop_wait",text,4,2,1),("ram_push_install",install,4,2,3),("ram_push_rollback",install+4,4,2,3),("ram_push_status",install+4,4,2,3)]
   elf = makeElf text sections symbols
   header = B.concat (map w32 [0x0061c400,0x00282800,0x00bf1a00,0x004d0020,0x01100000,0x00080000]) <> B.replicate 104 0
-    <> B.concat [w32 site <> w32 new | (site,_,new,_) <- take 97 publications] <> B.replicate (0x400 - 97*8) 0
+    <> B.concat [w32 site <> w32 new | (site,_,new) <- take 97 (IM.elems logicalPublications)] <> B.replicate (0x400 - 97*8) 0
   chunks = [(0,header)] ++ [(fromIntegral (address-start),bytes) | (_,address,flags,bytes) <- sections, flags .&. 2 /= 0]
     ++ [(fromIntegral (publicationStart-start),table),(fromIntegral (name-start),B.replicate 924 65),(fromIntegral (nodeAddress-start),node),(fromIntegral (name+0x400+472-start),B.concat (replicate 19 (w32 0xe12fff1e)))]
     ++ [(0x4c0,B.singleton 1) | damage == NonzeroGap] ++ [(0x500,B.singleton 0) | damage == RuntimeCodeDrift]
   runtime = overlay allocationSize chunks
   manifest = object ["schema" .= (1 :: Int),"base" .= hex start,"size" .= allocationSize,"entry" .= object ["install" .= hex install,"rollback" .= hex (install+4),"status" .= hex (install+4)],"publications" .=
-    [object ["index" .= index,"address" .= hex site,"old" .= hex old,"new" .= hex (if damage == ManifestDrift && index == 3 then 2 else new),"phase" .= (if phase == 0 then "setup" else "activation" :: String)] | (index,(site,old,new,phase)) <- zip [0 :: Int ..] publications]]
+    [object ["index" .= index,"address" .= hex site,"old" .= hex old,"new" .= hex (if damage == ManifestDrift && index == 3 then 2 else new),"phase" .= (if phase == 0 then "setup" else "activation" :: String)] | (index,(site,old,new,phase)) <- publications]]
   plan = object ["schema" .= ("recipe-bank-plan-1" :: String),"writes" .=
     ([object ["region" .= ("name_records" :: String),"address" .= show name,"new" .= concat (replicate 924 "41"),"current" .= concat (replicate 924 "00"),"role" .= ("names" :: String)]
      ,object ["region" .= ("menu_values" :: String),"address" .= show nodeAddress,"new" .= byteHex node,"current" .= concat (replicate 44 "00"),"role" .= ("slot list node header" :: String)]

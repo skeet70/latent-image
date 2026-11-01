@@ -149,8 +149,12 @@ parseImage (PackageBytes elfBytes runtime manifestBytes planBytes) = do
   plan <- eitherDecodeStrict' planBytes
   unless (size == B.length runtime) (Left "runtime allocation extent mismatch")
   unless (toIntegerAddress base + toInteger size <= 0x100000000) (Left "runtime extent wraps")
-  unless (sort (map publicationIndex publications) == [0 .. L.publicationCountFor variant - 1]) (Left "publication indices are not the selected bank permutation")
+  let logical = sortOn publicationIndex publications
+  unless (map publicationIndex logical == [0 .. L.publicationCountFor variant - 1]) (Left "publication indices are not the selected bank permutation")
   unless (length (nub (map publicationAddress publications)) == L.publicationCountFor variant) (Left "duplicate publication address")
+  order <- L.safePublicationOrderForVariant variant
+    [L.PublicationAddress address | publication <- logical, let Address address = publicationAddress publication]
+  unless (map L.publicationIndex order == map publicationIndex publications) (Left "physical publication records do not follow the selected group order")
   forM_ entries $ \(EntryPoint kind address) -> do
     let name = case kind of InstallEntry -> "ram_push_install"; RollbackEntry -> "ram_push_rollback"; StatusEntry -> "ram_push_status"
     symbol elf name >>= \value -> unless (value == address) (Left ("manifest entry mismatch: " ++ name))

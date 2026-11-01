@@ -17,18 +17,9 @@ case "${RB_PUBLICATION_GROUPS:-}" in
     activation_count=93
     modal_link=(-Wl,--undefined=rb_modal_entry)
     ;;
-  lifecycle)
-    builder_mode=(--ram-push-variant lifecycle)
-    allocation_size=0x1dcd8
-    publication_count=226
-    activation_count=95
-    ;;
-  lifecycle,modal75)
-    builder_mode=(--ram-push-variant lifecycle,modal75)
-    allocation_size=0x1dcf8
-    publication_count=227
-    activation_count=96
-    modal_link=(-Wl,--undefined=rb_modal_entry)
+  lifecycle|lifecycle,modal75)
+    printf 'lifecycle publication group is unavailable until its publications and veneers are supplied\n' >&2
+    exit 2
     ;;
   *) printf 'invalid RB_PUBLICATION_GROUPS selection\n' >&2; exit 1 ;;
 esac

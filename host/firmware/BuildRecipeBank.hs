@@ -15,8 +15,9 @@ import Data.List (elemIndex, nub, sort, sortOn)
 import Data.Word (Word16, Word32)
 import Numeric (showHex)
 import System.Environment (getArgs, lookupEnv)
-import System.Exit (exitSuccess)
+import System.Exit (ExitCode (..), exitSuccess, exitWith)
 import System.Posix.Files (setFileMode)
+import System.IO (hPutStrLn, stderr)
 
 import FujiAF.JSON (encodeCanonical)
 import FujiAF.RecipeBank
@@ -92,6 +93,9 @@ main = do
       pure (s, o, d, RamPush standardBankVariant (hexValue base) linkedDir rc0Id4 rc0Id5 rc0Plain)
     ["--ram-push-variant", groups, base, s, o, d, linkedDir, rc0Id4, rc0Id5, rc0Plain] -> do
       variant <- either H.failH pure (parseBankVariant groups)
+      when (hasPublicationGroup LifecyclePublications variant) $ do
+        hPutStrLn stderr "lifecycle publication group is unavailable until its publications and veneers are supplied"
+        exitWith (ExitFailure 2)
       requirePinnedToolchain
       pure (s, o, d, RamPush variant (hexValue base) linkedDir rc0Id4 rc0Id5 rc0Plain)
     _ ->
