@@ -1,4 +1,6 @@
 mod heap_state;
+#[path = "memory_view.rs"]
+mod memory_view;
 
 use heap_state::{Address, ContextKey, Core, Operation, Recorder, Snapshot, TaskId};
 use fujimod_emulator::board::factory::MemoryMap;
@@ -7,7 +9,7 @@ use fujimod_emulator_cpu::{Register, arm};
 use fujimod_xm1::bridge::{read, sha256, write};
 use fujimod_xm1::guest::RouteKey;
 use fujimod_xm1::machine::{Machine, RunOutcome};
-use fujimod_xm1::memory_view::{MemoryAddress, MemoryCore, TcmRegister, static_span, tcm_window};
+use memory_view::{MemoryAddress, MemoryCore, TcmRegister, static_span, tcm_window};
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
 use serde::{Deserialize, Serialize};
 use std::{collections::{BTreeMap, BTreeSet}, fs::OpenOptions, io::{BufWriter, Write}, path::PathBuf, process::ExitCode};
@@ -568,7 +570,7 @@ fn drive() -> Result<(), String> {
         machine.traces.arm(&machine.session, armed.iter().map(|address| (*address, "heap".into())).collect())?;
         machine.traces.stop_labels = ["heap".into()].into_iter().collect();
     }
-    let mut watch = None;
+    let mut watch: Option<Box<fujimod_emulator::board::observation::MemoryWatch>> = None;
     let mut watch_batches = 0;
     let mut external_header_reads = 0;
     let mut guest_code_writes = 0;
