@@ -20,6 +20,7 @@ pub(super) use initializer::InitializerWire;
 pub(super) use initializer::interrupt_mask::ConsumerWire;
 pub(super) use initializer::primary::{PrimaryContract, PrimaryWire};
 pub(super) use initializer::primary::root0::RootWire;
+pub(super) use initializer::critical_pair::CriticalPairWire;
 
 pub(super) fn run_primary(machine: Machine, contract: &PrimaryContract, output: &Path) -> Result<(), String> {
     initializer::primary::run(machine, contract, output)
@@ -240,10 +241,14 @@ pub(super) struct LoaderContract {
     startup: Option<ComposedStartup>,
     initializer: Option<initializer::Contract>,
     consumer: Option<initializer::interrupt_mask::Contract>,
+    critical_pair: Option<initializer::critical_pair::Contract>,
 }
 impl LoaderContract {
     pub(super) fn budget(&self) -> Instructions {
         Instructions(BUDGET)
+    }
+    pub(super) fn admit_update(&self, bytes: &[u8]) -> Result<(), String> {
+        self.critical_pair.as_ref().map_or(Ok(()), |pair| pair.admit_update(bytes))
     }
     fn record1_entry(&self) -> u32 {
         self.startup.as_ref().map_or(RECORD1_ENTRY, |startup| startup.entry.0)
@@ -331,7 +336,7 @@ impl LoaderWire {
             scenario: self.scenario.kind, kind: program.kind, record, record_immutable: program.record_immutable_sha256, loader,
             handoff: program.handoff, entry: program.entry, post_load: program.post_load,
             loaded: program.loaded_register, refusal: program.refusal,
-            image: program.image, startup: None, initializer: None, consumer: None,
+            image: program.image, startup: None, initializer: None, consumer: None, critical_pair: None,
         })
     }
 }
@@ -1264,6 +1269,14 @@ pub(super) fn run(mut machine: Machine, contract: &LoaderContract, output: &Path
             (None, _) => Ok(()),
         }
     } else { Err(outcome.as_ref().err().cloned().unwrap_or_default()) };
+    let mut pair_receipt = None;
+    let pair_outcome = if outcome.is_ok() {
+        match (&contract.critical_pair, &initializer_receipt) {
+            (Some(pair), Some(initializer)) => initializer::critical_pair::observe(&mut machine, &runner, initializer, pair, &mut pair_receipt),
+            (Some(_), None) => Err("critical pair complete initializer receipt absent".into()),
+            (None, _) => Ok(()),
+        }
+    } else { Err(outcome.as_ref().err().cloned().unwrap_or_default()) };
 
     let composed = contract.startup.as_ref().map(|startup| ComposedReceipt {
         startup, firststage_zero: &runner.vectors.zero, kernel_vector_install: runner.vectors.proof(),
@@ -1281,8 +1294,14 @@ pub(super) fn run(mut machine: Machine, contract: &LoaderContract, output: &Path
         initializer: &initializer_receipt,
         negative_evidence: &runner.negative_evidence,
     };
-    let final_outcome = outcome.as_ref().map(|_| ()).map_err(Clone::clone).and(consumer_outcome);
-    let bytes = if contract.consumer.is_some() {
+    let final_outcome = outcome.as_ref().map(|_| ()).map_err(Clone::clone).and(consumer_outcome).and(pair_outcome);
+    let bytes = if contract.critical_pair.is_some() {
+        serde_json::to_vec_pretty(&initializer::critical_pair::OuterReceipt {
+            schema: 10, result: if final_outcome.is_ok() { WitnessResult::Passed } else { WitnessResult::Failed },
+            error: final_outcome.as_ref().err().map(String::as_str), machine_failure: machine.failure.as_deref(),
+            initializer: &receipt, pair: &pair_receipt,
+        })
+    } else if contract.consumer.is_some() {
         serde_json::to_vec_pretty(&initializer::interrupt_mask::OuterReceipt {
             schema: 7, result: if final_outcome.is_ok() { WitnessResult::Passed } else { WitnessResult::Failed },
             error: final_outcome.as_ref().err().map(String::as_str), machine_failure: machine.failure.as_deref(),
@@ -1291,7 +1310,7 @@ pub(super) fn run(mut machine: Machine, contract: &LoaderContract, output: &Path
     } else { serde_json::to_vec_pretty(&receipt) }.map_err(|error| error.to_string())?;
     if contract.consumer.is_some() {
         require(bytes.len() <= (32 << 20), "initializer-consumer receipt exceeds 32 MiB")?;
-    } else {
+    } else if contract.critical_pair.is_none() {
         require(bytes.len() <= MAX_RECEIPT, "loader-prefix receipt exceeds 16 MiB")?;
     }
     let path = output.join("peer-witness.json");

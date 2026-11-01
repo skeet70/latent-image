@@ -96,6 +96,8 @@ enum ContractWire {
     PrimaryInitializer(loader::PrimaryWire),
     #[cfg(feature = "scoped-watch")]
     PrimaryRoot(loader::RootWire),
+    #[cfg(feature = "scoped-watch")]
+    CriticalPair(loader::CriticalPairWire),
 }
 
 pub struct PeerContract {
@@ -181,6 +183,11 @@ impl PeerContract {
                 let contract = wire.validate()?;
                 Ok(Self { budget: Instructions(MAX_BUDGET), control: None, startup: None, loader: None, primary: Some(contract) })
             }
+            #[cfg(feature = "scoped-watch")]
+            ContractWire::CriticalPair(wire) => {
+                let contract = wire.validate()?;
+                Ok(Self { budget: contract.budget(), control: None, startup: None, loader: Some(contract), primary: None })
+            }
         }
     }
 
@@ -196,6 +203,8 @@ impl PeerContract {
         } else {
             InputBinding::Unbound
         };
+        #[cfg(feature = "scoped-watch")]
+        if let Some(loader) = &self.loader { loader.admit_update(&update.0)?; }
         let document = RunDocument::parse(run_bytes)?;
         let mut session = run::open(&document, update, boot_rom)?;
         session.board.set_execution_policy(document.execution_policy.into())?;

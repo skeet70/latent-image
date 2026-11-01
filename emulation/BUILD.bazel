@@ -2557,3 +2557,62 @@ haskell_test(
         "//host:update-container",
     ],
 )
+
+haskell_library(
+    name = "critical-pair-witness-lib",
+    srcs = ["Emulation/CriticalPairWitness.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":critical-pair-lib",
+        ":first-stage-witness-lib",
+        ":interface-initializer-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:json",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "critical-pair-witness",
+    srcs = ["CriticalPairWitness.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":critical-pair-witness-lib",
+        ":emulator-slot-lib",
+        ":interface-initializer-lib",
+        ":viewer-runtime-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:process",
+        "//host:unix",
+        "//host:update-container",
+    ],
+)
+
+haskell_binary(
+    name = "critical-pair-receipt-cases",
+    srcs = ["CriticalPairWitnessReceiptCases.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":critical-pair-witness-lib",
+        ":interface-initializer-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+        "//host:json",
+        "//host:vector",
+    ],
+)

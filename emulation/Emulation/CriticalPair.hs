@@ -2,6 +2,7 @@
 module Emulation.CriticalPair
   ( Original, LinkedArtifact, Staging, deriveOriginal, deriveLinkedArtifact
   , stageStartup, startupDat, patchedImage4, stagingValue, verifyFinalDat
+  , Guest (..), FrameBytes (..), WitnessLayout (..), witnessLayout
   ) where
 
 import qualified A32 as A
@@ -605,6 +606,17 @@ deriveLinkedArtifact image symbolBytes = do
   enterFrame <- frameExtent image symbols EntryBody
   exitFrame <- frameExtent image symbols ExitBody
   pure (LinkedArtifact image symbolBytes symbols enter exit enterFrame exitFrame)
+
+data WitnessLayout = WitnessLayout
+  { witnessEntry :: Guest
+  , witnessExit :: Guest
+  , witnessEntryFrame :: FrameBytes
+  , witnessExitFrame :: FrameBytes
+  }
+
+witnessLayout :: LinkedArtifact -> WitnessLayout
+witnessLayout (LinkedArtifact _ _ _ enter exit (FrameBytes enterFrame) (FrameBytes exitFrame)) =
+  WitnessLayout enter exit (FrameBytes (64 + enterFrame)) (FrameBytes (56 + exitFrame))
 
 stageStartup :: Original -> LinkedArtifact -> Either String Staging
 stageStartup (Original reference original image4 bindings) artifact@(LinkedArtifact image symbolBytes symbols (Guest enter) (Guest exit) _ _) = do
