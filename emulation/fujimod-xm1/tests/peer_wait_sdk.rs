@@ -133,6 +133,25 @@ fn removing_another_site_preserves_only_an_unconsumed_entry() {
     assert!(machine.failure.is_none());
 }
 
+#[test]
+fn a_drained_stop_label_stops_again_when_its_next_site_is_added() {
+    let mut machine = machine(&[0xe2800001, 0xe2800002, 0xe2800004, 0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
+    machine.traces.arm(&machine.session, BTreeMap::from([(0x1000, "temporary".into())])).unwrap();
+    machine.traces.stop_labels.insert("temporary".into());
+    machine.run(10);
+    assert_eq!(machine.instructions(), 0);
+    for (removed, added, entered, value) in [(0x1000, 0x1004, 1, 1), (0x1004, 0x1008, 2, 3)] {
+        machine.traces.remove_sites(&machine.session, &[Guest(removed)]).unwrap();
+        machine.traces.add_sites(&machine.session, BTreeMap::from([(added, "temporary".into())])).unwrap();
+        machine.run(10);
+        machine.require_running().unwrap();
+        assert_eq!(machine.instructions(), entered);
+        assert_eq!(machine.session.board.read_register(0, Register::Pc).unwrap(), u64::from(added));
+        assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), value);
+    }
+}
+
 #[derive(Deserialize, PartialEq, Eq, Debug)]
 #[serde(rename_all = "kebab-case")]
 enum Source { CpuWrite, CpuRead, CpuFetch, HostRead, HostWrite, ModelBusRead, ModelBusWrite }

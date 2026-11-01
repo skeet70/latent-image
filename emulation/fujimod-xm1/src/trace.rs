@@ -910,7 +910,7 @@ impl TraceSites {
         self.restore_resume(session)
     }
 
-    /// Arms more sites, keeping a core stopped at an armed site resumable.
+    /// Adds stopping sites while preserving a stopped core's resume marker.
     pub fn add_sites(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
         if self.capture_observation_active() {
             return Err("capture observation sites are frozen until the session ends".into());
@@ -919,6 +919,7 @@ impl TraceSites {
             return Err("trace site is already armed".into());
         }
         self.disarm(session)?;
+        self.stop_labels.extend(sites.values().cloned());
         self.sites.extend(sites);
         self.rearm(session)?;
         self.restore_resume(session)
