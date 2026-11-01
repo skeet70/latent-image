@@ -90,9 +90,9 @@ The calloc body is a confirmed allocator-internals reader outside image 4: it re
 
 ## Tasks, cores and interrupt context
 
-The heap lock queries task identity through `0x00723cb8`, whose selected-root service calls are indirect. Identity zero hard-loops. A different owner waits indefinitely; the same owner increments recursion depth. These facts establish task-context and blocking assumptions, not the complete set of allocating tasks or a multicore exclusion proof.
+The heap lock queries task identity through `0x00723cb8`, whose selected-root service calls are indirect. The canonical A/B services reach `0x0004c620`/`0x000dc5e0`: a nonzero kernel-context word or set CPSR.I returns `-25`; their wrappers return identity zero on failure. The lock hard-loops on zero identity. A different owner waits indefinitely; the same numeric owner increments recursion depth. These facts establish context and blocking preconditions, not the complete allocating-task set or a cross-core exclusion proof.
 
-Graphics callback users and direct image-5 users establish clients outside the wrapper-only surface. Static inspection here does not attribute every client to a runtime task or core. No positive interrupt-to-heap allocation path was established, and absence has not been proved. An interrupt may retain a nonzero interrupted-task identity; the task-id check alone cannot exclude interrupt allocation or unsafe recursive access. Allocator locking must not be used from the IRQ-masked trace-ring callback described in [the observation report](af-observe-instruments-150.md).
+Graphics callback users and direct image-5 users establish clients outside the wrapper-only surface. Static inspection here does not attribute every client to a runtime task or core. No positive interrupt-to-heap allocation path was established, and absence has not been proved. A masked interrupt or nonzero kernel context cannot obtain the lock's admitted task identity. Clear CPSR.I and a zero context word alone do not establish task-mode execution; the observer preserves CPSR mode separately. Allocator locking must not be used from the IRQ-masked trace-ring callback described in [the observation report](af-observe-instruments-150.md).
 
 ## Pinned candidate fitness
 
@@ -149,6 +149,14 @@ Producer `60842bf` refuses its enabled route at the first malloc-core entry beca
 The matching `f172b30` disabled route completes the fixed 450,000,000-instruction menu round trip with per-core counts 385,422,633 and 64,577,367, startup menu `(69,52,12)` and return menu `(1,5,2)`. Its framebuffer matches the older disabled result. A successful disabled route does not admit the incomplete enabled output. No enabled/disabled semantic comparison or genuine-receipt refusal control has run.
 
 The diagnostic producer `d8a78fa` passes the same 144 SDK tests, then its single enabled route identifies the actual preflight mismatch: image-5 calloc wrapper `0x00bf1c1c` contains zero on core 0 instead of canonical instruction `0xe1a02001`. Its halted failure checkpoint is preserved. This is an early image-5 residency observation at that finite first heap boundary, not an image-4 code mutation or a universal image-load order.
+
+#### Systematic CODE extent qualification
+
+The reviewed `replacement/media_permit/StockInventory.hs` derivation checks all 21 declared guard groups as 31 complete function windows against four digest-pinned images. One actual derivation invocation emits every result; two earlier driver compilation attempts failed before derivation on partial-list and redundant-import warnings. The successful driver invocation returns a failing overall verdict for the original declarations and preserves the individual findings.
+
+The derived windows expose two one-word truncations: the resize range omits its `0x0089dfbc` literal, and the callback-adapter range omits malloc's `0x00890f04` return. The corrected ends are `0x0089dfc0` and `0x00890f08`. The original two-instruction flashloader callsite guard is replaced by its completely derived containing function `[0x0073b3a0,0x0073b728)`, including the bounded dispatch table and trailing literals.
+
+Twenty-seven function windows derive successfully. Four remain explicit library refusals: CP14 MRC at `0x000427b8`/`0x000d27b8`, and system-register access at `0x0004c640`/`0x000dc600` within the task-query functions. Their canonical bytes remain guarded. The native-call derivation library and its instruction admission are unchanged; these refusals do not qualify the four functions as native-callable.
 
 #### Image-5 heap-code admission
 

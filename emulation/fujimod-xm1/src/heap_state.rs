@@ -649,7 +649,7 @@ impl Recorder {
 
 #[cfg(test)]
 mod tests {
-    use super::{Address, Boundary, Classification, ContextKey, Core, Counter, Failure, FreeKind, Operation, Recorder, Snapshot, TaskId, entry};
+    use super::{Address, Boundary, Classification, ContextKey, Core, Counter, Failure, FreeKind, Image5CodeStatus, Image5Failure, Image5Lifecycle, Image5Phase, Operation, Recorder, Snapshot, TaskId, entry};
 
     fn context(task: u32) -> ContextKey {
         ContextKey { domain: Core(0), task: TaskId(task), task_record: Address(0x40010000 + task * 0x100), mode: 0x13, exception_depth: 0 }
