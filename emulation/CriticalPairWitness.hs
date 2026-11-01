@@ -31,6 +31,13 @@ newtype ReceiptPath = ReceiptPath FilePath
 data Inputs = Retained SourceDat | Owned SourceDat CandidateDat LinkedImage LinkedSymbols
 data Launch = Launch FilePath FilePath FilePath
 
+data Derived = Derived
+  { derivedFirmware :: FilePath
+  , derivedContract :: W.Contract
+  , derivedSourceDat :: B.ByteString
+  , derivedSourceImage4 :: B.ByteString
+  }
+
 data Command = Prepare Inputs Decoder Output (Maybe Launch) | Consume Inputs Decoder Output ReceiptPath | Compare Inputs Decoder Output ReceiptPath ReceiptPath | Help
 
 usage :: String
@@ -71,7 +78,7 @@ main = do
         Nothing -> pure ()
         Just _ -> slotPolicyFromEnvironment >>= (`reexecInSlot` args)
       root <- freshOutput output
-      (firmware,contract) <- derive inputs decoder root
+      Derived firmware contract _ _ <- derive inputs decoder root
       let contractPath = root </> "peer-witness-contract.json"
           receipt = root </> "peer-witness.json"
       L.writeFile contractPath (J.encode (W.contractValue contract))
@@ -82,13 +89,13 @@ main = do
     Consume inputs decoder output (ReceiptPath receipt) -> do
       root <- scratchOutput output
       H.withTemporaryAt root "critical-pair-consume-" $ \scratch -> do
-        (_,contract) <- derive inputs decoder scratch
+        Derived _ contract _ _ <- derive inputs decoder scratch
         consume contract receipt
-    Compare inputs@(Owned source _ _ _) decoder output (ReceiptPath first) (ReceiptPath second) -> do
+    Compare inputs@(Owned _ _ _ _) decoder output (ReceiptPath first) (ReceiptPath second) -> do
       root <- scratchOutput output
       H.withTemporaryAt root "critical-pair-compare-" $ \scratch -> do
-        (_,retained) <- derive (Retained source) decoder scratch
-        (_,owned) <- derive inputs decoder scratch
+        Derived _ owned source sourceImage4 <- derive inputs decoder scratch
+        retained <- either H.failH pure (W.deriveContract I.Retained source sourceImage4 source sourceImage4 B.empty B.empty)
         a <- H.readRegular W.maxReceiptBytes first
         b <- H.readRegular W.maxReceiptBytes second
         either (H.failH . show) pure (W.compareReceipts (retained,a) (owned,b))
@@ -119,7 +126,7 @@ scratchOutput (Output output) = do
   H.ensure admitted "critical scratch must be under this workspace's private output roots"
   pure resolved
 
-derive :: Inputs -> Decoder -> FilePath -> IO (FilePath,W.Contract)
+derive :: Inputs -> Decoder -> FilePath -> IO Derived
 derive inputs decoder scratch = do
   let sourcePath = case inputs of Retained (SourceDat source) -> source; Owned (SourceDat source) _ _ _ -> source
   source <- H.readRegular (64*1024*1024) sourcePath
@@ -128,7 +135,7 @@ derive inputs decoder scratch = do
     Retained _ -> do
       contract <- either H.failH pure (W.deriveContract I.Retained source sourceDecoded source sourceDecoded B.empty B.empty)
       firmware <- canonicalizePath sourcePath
-      pure (firmware,contract)
+      pure (Derived firmware contract source sourceDecoded)
     Owned _ (CandidateDat candidatePath) (LinkedImage imagePath) (LinkedSymbols symbolsPath) -> do
       candidate <- H.readRegular (64*1024*1024) candidatePath
       decoded <- decodeImage4 decoder scratch "candidate" candidate
@@ -136,7 +143,7 @@ derive inputs decoder scratch = do
       symbols <- H.readRegular (1024*1024) symbolsPath
       contract <- either H.failH pure (W.deriveContract I.Owned source sourceDecoded candidate decoded image symbols)
       firmware <- canonicalizePath candidatePath
-      pure (firmware,contract)
+      pure (Derived firmware contract source sourceDecoded)
 
 decodeImage4 :: Decoder -> FilePath -> String -> B.ByteString -> IO B.ByteString
 decodeImage4 (Decoder decoderPath) scratch label dat = do

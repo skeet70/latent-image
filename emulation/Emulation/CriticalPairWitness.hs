@@ -777,8 +777,9 @@ compareReceipts (retained,retainedBytes) (owned,ownedBytes) = do
   Accepted a b c d e before after <- validateEvidence retained retainedBytes
   Accepted a' b' c' d' e' before' after' <- validateEvidence owned ownedBytes
   let visible context = (pcOf context,regsOf context,cpsrOf context,tcmOf context)
+      caller context = (pcOf context,map (register context . A.Reg) (0:[4..11]++[13]),cpsrOf context,tcmOf context)
       effects resources = [(address,views) | Resource address@(Physical start) views <- resources,start `elem` [0x96bd20,0x4dae0,0xddaa0,0xa0f824,0xc0804]]
-  checked ComparisonMismatch (require (map visible [a,b,c,d,e] == map visible [a',b',c',d',e'] && effects before == effects before' && effects after == effects after') "critical retained/owned caller ABI, counter, lock or publication effects differ")
+  checked ComparisonMismatch (require (map visible [a,b,c,d] == map visible [a',b',c',d'] && caller e == caller e' && effects before == effects before' && effects after == effects after') "critical retained/owned caller ABI, counter, lock or publication effects differ")
 
 replayWrapper :: Context -> Context -> [Resource] -> Resource -> [PairEvent] -> Either String Resource
 replayWrapper origin returned resources frame events = do

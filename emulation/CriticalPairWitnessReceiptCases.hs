@@ -221,13 +221,22 @@ main = do
       owned <- H.readRegular (64*1024*1024) ownedPath
       originalContract <- either H.failH pure (W.deriveContract I.Retained source sourceImage4 source sourceImage4 B.empty B.empty)
       ownedContract <- either H.failH pure (W.deriveContract I.Owned source sourceImage4 candidate candidateImage4 image symbols)
+      either (H.failH . show) pure (W.compareReceipts (originalContract,retained) (ownedContract,owned))
       originalCases <- runCases I.Retained originalContract retained
       ownedCases <- runCases I.Owned ownedContract owned
-      either (H.failH . show) pure (W.compareReceipts (originalContract,retained) (ownedContract,owned))
+      ownedValue <- strict owned
+      changedResult <- either H.failH pure (mutate
+        (ReceiptPath [field "pair",field "returned",field "registers",Element 0]) (FlipWord 1) ownedValue)
+      comparisonRefusal <- case W.compareReceipts (originalContract,retained) (ownedContract,BL.toStrict (J.encode changedResult)) of
+        Left (W.ReceiptFailure W.ComparisonMismatch _) -> pure (object
+          ["case" .= ("caller-result" :: String),"result" .= ("refused" :: String),"category" .= show W.ComparisonMismatch])
+        Left failure -> H.failH ("caller result comparison refused at " ++ show failure)
+        Right () -> H.failH "caller result comparison admitted a differing defined result"
       let expectedCases = length cases+length semanticCases+7
       unless (length originalCases == expectedCases && length ownedCases == expectedCases+2) (H.failH "receipt case count differs")
       BL.writeFile outputPath (J.encode (object
         [ "schema" .= (1 :: Int),"positive_receipts" .= (2 :: Int),"comparison" .= ("matched" :: String)
         , "cases" .= (originalCases ++ ownedCases)
+        , "comparison_cases" .= [comparisonRefusal]
         ]))
     _ -> H.failH "usage: critical-pair-receipt-cases SOURCE_DAT SOURCE_IMAGE4 CANDIDATE_DAT CANDIDATE_IMAGE4 LINKED_BIN LINKED_SYMBOLS RETAINED_RECEIPT OWNED_RECEIPT OUT_JSON"
