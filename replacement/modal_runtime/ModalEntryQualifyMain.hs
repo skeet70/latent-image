@@ -10,7 +10,6 @@ import Control.Monad (unless, when)
 import Data.Aeson (Value, object, (.=))
 import Data.Bits (shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
-import Data.List (isInfixOf)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.Word (Word32)
@@ -39,11 +38,13 @@ data Context = Context
   , entryBytes :: B.ByteString
   }
 
-stockEntry, stockResume, ownedEntry, entryBase, stackBase :: Word32
+stockEntry, stockResume, ownedEntry, entryBase, probeBase, exitAddress, stackBase :: Word32
 stockEntry = 0x00bfb028
 stockResume = stockEntry + 4
 ownedEntry = 0x00a879b0
 entryBase = 0x00977f00
+probeBase = 0x00977e00
+exitAddress = 0x0097a000
 stackBase = 0x00979000
 
 fixtures :: [Fixture]
@@ -72,27 +73,53 @@ stackBytes = B.pack [fromIntegral (index * 17 + 0x53) | index <- [0 .. 511 :: In
 branch :: Word32 -> Word32 -> Word32
 branch site destination = 0xea000000 .|. (((destination - site - 8) `shiftR` 2) .&. 0x00ffffff)
 
+probeBytes :: Fixture -> B.ByteString
+probeBytes fixture@(Fixture _ _ (CpsrWord flags) incoming _) = B.concat (map Q.word32le words_)
+ where
+  words_ =
+    [ 0xe59fd010 -- LDR sp,[pc,#16]
+    , 0xe59fe010 -- LDR lr,[pc,#16]
+    , 0xe59fc010 -- LDR r12,[pc,#16]
+    , 0xe12cf00c -- MSR APSR_nzcvqg,r12
+    , 0xe59fc00c -- LDR r12,[pc,#12]
+    , branch (probeBase + 20) stockEntry
+    , fromIntegral (guestAddress incoming)
+    , initial Lr
+    , flags
+    , initial R12
+    ]
+  initial register = fromMaybe (error "missing probe register") (lookup register (registers fixture))
+
+wireRegisters :: Fixture -> [(Register, Word32)]
+wireRegisters fixture = map valid (registers fixture)
+ where
+  valid (Sp, _) = (Sp, stackBase + 0x180)
+  valid (Lr, _) = (Lr, exitAddress)
+  valid (Cpsr, _) = (Cpsr, 0x10)
+  valid other = other
+
 observe :: Context -> Fixture -> String -> Maybe B.ByteString -> IO NativeObservation
 observe context fixture@(Fixture _ _ _ incoming route) suffix candidate = do
-  let destination = if route == Retained then stockResume else ownedEntry
-      expectedSp = guestAddress incoming - if route == Retained then 36 else 0
+  let expectedSp = guestAddress incoming - if route == Retained then 36 else 0
       stock = case candidate of
         Nothing -> stockBytes context
         Just _ -> Q.patchWord (stockBytes context) 0 (branch stockEntry entryBase)
       code = fromMaybe (entryBytes context) candidate
       spec = Q.CaseSpec
         { Q.caseSpecId = fixtureName fixture ++ suffix
-        , Q.caseSpecEntry = stockEntry
+        , Q.caseSpecEntry = probeBase
         , Q.caseSpecRegions =
             [ Q.mkRegion (RegionId "stock") stockEntry 0xfc Q.ReadExecute stock
-            , Q.mkRegion (RegionId "entry") entryBase 56 Q.ReadExecute code
+            , Q.mkRegion (RegionId "entry") entryBase (B.length code) Q.ReadExecute code
+            , Q.mkRegion (RegionId "probe") probeBase 40 Q.ReadExecute (probeBytes fixture)
+            , Q.mkRegion (RegionId "exit") exitAddress 4 Q.ReadExecute (Q.word32le 0xe12fff1e)
             , Q.mkRegion (RegionId "kernel") (kernelBase context) (B.length (kernelText context)) Q.ReadExecute (kernelText context)
             , Q.mkRegion (RegionId "stack") stackBase (B.length stackBytes) Q.ReadWrite stackBytes
             ]
-        , Q.caseSpecFunctions = [(stockEntry, 0xfc), (entryBase, 56)]
-        , Q.caseSpecStatus = Returned
+        , Q.caseSpecFunctions = [(probeBase, 24), (stockEntry, 4), (entryBase, fromIntegral (B.length code))]
+        , Q.caseSpecStatus = UnknownCall
         }
-      boundary = Q.CaseBoundary (registers fixture) (GuestAddress (fromIntegral destination)) (GuestAddress expectedSp)
+      boundary = Q.CaseBoundary (wireRegisters fixture) (GuestAddress (fromIntegral exitAddress)) (GuestAddress expectedSp)
         "X-M1 modal entry routing seam only; stop before stock+4 or the bound owned dispatcher executes"
   path <- Q.writeCaseWith boundary (output context </> (fixtureName fixture ++ suffix)) spec
   Q.loadObserved (runner context) path
@@ -100,14 +127,21 @@ observe context fixture@(Fixture _ _ _ incoming route) suffix candidate = do
 stackOf :: NativeObservation -> B.ByteString
 stackOf observation = fromMaybe (error "missing stack observation") (lookup (RegionId "stack") (nativeMemory observation))
 
-check :: Fixture -> Maybe NativeObservation -> NativeObservation -> [String]
-check fixture@(Fixture _ _ (CpsrWord flags) incoming route) oracle candidate =
-  ["boundary status is not returned" | nativeStatus candidate /= Returned]
+data EntryShape = CanonicalEntry | CallerWriteEntry
+
+check :: EntryShape -> Fixture -> Maybe NativeObservation -> NativeObservation -> [String]
+check shape fixture@(Fixture _ _ (CpsrWord flags) incoming route) oracle candidate =
+  ["boundary status is not unknown_call" | nativeStatus candidate /= UnknownCall]
+    ++ ["engine error" | nativeEngineError candidate /= EngineError 0]
+    ++ ["instruction count" | nativeInstructions candidate /= InstructionCount expectedInstructions]
     ++ ["register " ++ registerLabel register | (register, value) <- expectedRegisters, lookupRegister register candidate /= Just value]
     ++ ["complete stack image" | stackOf candidate /= expectedStack]
     ++ ["caller-owned stack" | B.drop incomingOffset (stackOf candidate) /= B.drop incomingOffset stackBytes]
     ++ ["write history" | nativeProvenance candidate /= expectedWrites]
  where
+  expectedInstructions = (if route == Retained then 17 else 16) + case shape of
+    CanonicalEntry -> 0
+    CallerWriteEntry -> 1
   incomingWord = fromIntegral (guestAddress incoming)
   incomingOffset = fromIntegral (incomingWord - stackBase)
   expectedRegisters = case (route, oracle) of
@@ -121,16 +155,18 @@ check fixture@(Fixture _ _ (CpsrWord flags) incoming route) oracle candidate =
   temporaryWrites = [Write (GuestAddress (guestAddress incoming - 4)) (WriteBytes 4), Write (GuestAddress (guestAddress incoming - 8)) (WriteBytes 4)]
   expectedWrites = case oracle of
     Just original -> case nativeProvenance original of
-      Complete (ProvenanceTotal count) writes -> Complete (ProvenanceTotal (count + 2)) (temporaryWrites ++ writes)
+      Complete (ProvenanceTotal count) writes -> Complete (ProvenanceTotal (count + 4)) (temporaryWrites ++ writes)
       Truncated _ -> error "truncated stock write history"
-    Nothing -> Complete (ProvenanceTotal 2) temporaryWrites
+    Nothing -> Complete (ProvenanceTotal 8) temporaryWrites
 
 checkOracle :: Fixture -> NativeObservation -> [String]
 checkOracle fixture@(Fixture _ _ _ incoming _) original =
-  ["stock status" | nativeStatus original /= Returned]
+  ["stock boundary status" | nativeStatus original /= UnknownCall]
+    ++ ["stock engine error" | nativeEngineError original /= EngineError 0]
+    ++ ["stock instruction count" | nativeInstructions original /= InstructionCount 7]
     ++ ["stock register " ++ registerLabel register | (register, value) <- expected, lookupRegister register original /= Just value]
     ++ ["stock complete stack image" | stackOf original /= savedStack]
-    ++ ["stock write history" | nativeProvenance original /= Complete (ProvenanceTotal 9) writes]
+    ++ ["stock write history" | nativeProvenance original /= Complete (ProvenanceTotal 13) writes]
  where
   saved = [fromMaybe (error "missing saved register") (lookup register (registers fixture)) | register <- [R4, R5, R6, R7, R8, R9, R10, R11, Lr]]
   bottom = guestAddress incoming - 36
@@ -160,18 +196,21 @@ namedFixture selected = case [fixture | fixture@(Fixture ident _ _ _ _) <- fixtu
   _ -> error "unique control prerequisite required"
 
 mutated :: Control -> B.ByteString -> B.ByteString
-mutated FlagsRetained bytes = Q.patchWord bytes 24 0xe320f000
-mutated FlagsOwned bytes = Q.patchWord bytes 44 0xe320f000
+mutated FlagsRetained bytes = Q.patchWord bytes 24 0xe1a00000
+mutated FlagsOwned bytes = Q.patchWord bytes 44 0xe1a00000
 mutated ScratchRegister bytes = Q.patchWord bytes 28 0xe28dd004
-mutated CallerStack bytes = Q.patchWord bytes 0 0xe58dc000
+mutated CallerStack bytes =
+  Q.patchWord
+    (Q.patchWord (B.take 12 bytes <> Q.word32le 0xe58dc008 <> B.drop 12 bytes) 40 (branch (entryBase + 40) stockResume))
+    56 (branch (entryBase + 56) ownedEntry)
 mutated WrongContinuation bytes = Q.patchWord bytes 36 (branch (entryBase + 36) (stockResume + 4))
 
 controlEvidence :: Control -> [String]
 controlEvidence FlagsRetained = ["register cpsr"]
 controlEvidence FlagsOwned = ["register cpsr"]
 controlEvidence ScratchRegister = ["register r12"]
-controlEvidence CallerStack = ["caller-owned stack", "write history"]
-controlEvidence WrongContinuation = ["boundary status"]
+controlEvidence CallerStack = ["complete stack image", "caller-owned stack", "write history"]
+controlEvidence WrongContinuation = ["register pc"]
 
 readBound :: FilePath -> Int -> IO B.ByteString
 readBound path maximumSize = do
@@ -236,7 +275,7 @@ run [runnerPath, id5Path, kernelPath, entryPath, outputPath] = do
         Just observation -> unless (null (checkOracle fixture observation)) $ error (show (checkOracle fixture observation))
         Nothing -> pure ()
       candidate <- observe context fixture "-entry" (Just (entryBytes context))
-      pure (original, check fixture original candidate)
+      pure (original, check CanonicalEntry fixture original candidate)
     let (ok, problems, original) = case result of
           Left (exception :: SomeException) -> (False, ["exception: " ++ show exception], Nothing)
           Right (observed, mismatches) -> (null mismatches, mismatches, observed)
@@ -251,8 +290,11 @@ run [runnerPath, id5Path, kernelPath, entryPath, outputPath] = do
         original = fromMaybe (error "missing control prerequisite") (M.lookup ident oracles)
     result <- try $ do
       candidate <- observe context fixture ("-" ++ controlName control) (Just (mutated control (entryBytes context)))
-      let problems = check fixture original candidate
-      pure (all (\expected -> any (expected `isInfixOf`) problems) (controlEvidence control), problems)
+      let shape = case control of
+            CallerStack -> CallerWriteEntry
+            _ -> CanonicalEntry
+          problems = check shape fixture original candidate
+      pure (problems == controlEvidence control, problems)
     let (ok, problems) = case result of
           Left (exception :: SomeException) -> (False, ["exception: " ++ show exception])
           Right observed -> observed
