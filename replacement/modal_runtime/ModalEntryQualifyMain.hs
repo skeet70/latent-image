@@ -198,7 +198,7 @@ namedFixture selected = case [fixture | fixture@(Fixture ident _ _ _ _) <- fixtu
 mutated :: Control -> B.ByteString -> B.ByteString
 mutated FlagsRetained bytes = Q.patchWord bytes 24 0xe1a00000
 mutated FlagsOwned bytes = Q.patchWord bytes 44 0xe1a00000
-mutated ScratchRegister bytes = Q.patchWord bytes 28 0xe28dd004
+mutated ScratchRegister bytes = Q.patchWord bytes 28 0xe5bdc004
 mutated CallerStack bytes =
   Q.patchWord
     (Q.patchWord (B.take 12 bytes <> Q.word32le 0xe58dc008 <> B.drop 12 bytes) 40 (branch (entryBase + 40) stockResume))
@@ -233,7 +233,7 @@ run [runnerPath, id5Path, kernelPath, entryPath, outputPath] = do
   exists <- doesPathExist outputPath
   when exists $ error "output path already exists"
   backend <- readBound runnerPath (64 * 1024 * 1024)
-  unless (sha256Hex (sha256 backend) == "b36ce1ec9269e4a73791bfd887e5bac3617649fb5b5856459f7092327c9c1323") $ error "runner differs from qualified #125 backend"
+  unless (sha256Hex (sha256 backend) == "b51544c62053d1bf31816d2c3e4b439e3847296b2eef1f99c8f17b5d75da2860") $ error "runner differs from E-NATIVE-APSR-MSR-150"
   id5 <- readBound id5Path 5185120
   unless (B.length id5 == 5185120 && sha256Hex (sha256 id5) == "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a") $ error "id5 identity mismatch"
   derived <- either error pure (SI.deriveFunction (SI.GuestAddress 0x00bf1a00) id5 (SI.FunctionWindow (SI.GuestAddress stockEntry) (SI.GuestAddress 0x00bfb124)) [])
