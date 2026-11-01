@@ -403,7 +403,7 @@ fn observe(machine: &mut Machine, initializer: &ObservationPrimary, continuation
     tcm_disjoint_views(&committed, &start.tcm, &[PRIMARY_TABLE,ROOTS,HEADERS[0],HEADERS[1]])?;
     let mut prelude_watch = begin(machine, &maps, None)?;
     *continuation = Some(Continuation { start: start.clone(), roots_start, prelude_watch: observed(&prelude_watch)?, watch: None });
-    let prelude_outcome = (|| {
+    let prelude_outcome: Result<_, String> = (|| {
         let Some(installation) = stop(machine, Boundary::Installation, &start, boundaries)? else { return Ok(None) };
         check_code(machine, &committed)?;
         for (index, extent) in HEADERS.into_iter().enumerate() {
