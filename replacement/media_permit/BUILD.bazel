@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_test")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 filegroup(
@@ -77,7 +77,8 @@ xm1_rust_elf(
 
 haskell_binary(
     name = "media-permit-qualification",
-    srcs = ["MediaPermitQualifyMain.hs"],
+    srcs = ["MediaPermitQualifyMain.hs", "StockInventory.hs"],
+    main_file = "MediaPermitQualifyMain.hs",
     ghcopts = [
         "-XGHC2021",
         "-Wall",
@@ -98,6 +99,20 @@ haskell_binary(
         "//host:filepath",
         "//host:host-support",
         "//host:json",
+        "//host/firmware:bank-allowlist",
         "//host:text",
+    ],
+)
+
+haskell_test(
+    name = "stock-inventory-tests",
+    srcs = ["StockInventoryTests.hs", "StockInventory.hs"],
+    main_file = "StockInventoryTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host/firmware:bank-allowlist",
     ],
 )
