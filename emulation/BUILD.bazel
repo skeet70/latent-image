@@ -1944,6 +1944,21 @@ haskell_binary(
     ],
 )
 
+haskell_test(
+    name = "controller-lifecycle-cases-tests",
+    srcs = ["ControllerLifecycleCasesTests.hs"],
+    args = ["$(location :controller-lifecycle-cases)"],
+    data = [":controller-lifecycle-cases"],
+    ghcopts = ["-Wall"],
+    main_file = "ControllerLifecycleCasesTests.hs",
+    deps = [
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+        "//host:process",
+    ],
+)
+
 # Original-versus-owned menu-frame snapshot cases (replacement/owned_menu).
 haskell_binary(
     name = "menu-frame-cases",

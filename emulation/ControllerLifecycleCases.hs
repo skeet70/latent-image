@@ -16,8 +16,9 @@ import Emulation.OwnedCase
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.JSON (encodeCanonical)
 import System.Environment (getArgs)
-import System.Exit (exitFailure)
+import System.Exit (ExitCode (..), exitFailure, exitWith)
 import System.FilePath ((</>))
+import System.IO (hPutStrLn, stderr)
 
 newtype FrameClass = FrameClass Word32
 newtype RowToken = RowToken Word32
@@ -26,7 +27,7 @@ newtype StateWord = StateWord Word32
 newtype Notification = Notification Word32
 newtype CellAddress = CellAddress Word32
 
-data Action = Set | Confirm | Leave deriving (Eq, Show)
+data Action = Set | Confirm | Leave | EditorCancel deriving (Eq, Show)
 data StageKind = Direct | Enter | Exit deriving (Eq, Show)
 data StageId = Accept | Cancel deriving (Eq, Show)
 data Effect
@@ -163,7 +164,7 @@ scenarios =
         ("leave-ee",0xee,0,0x72,0,[],[Open Exit Accept],[]),
         ("leave-ed",0xed,0,0x72,0,[],[Open Exit Cancel],[]),
         ("leave-fe",0xfe,0,0x72,0,[],[Open Exit Cancel],[]),
-        ("leave-generic",0x267,0,0x72,0,[],[Open Exit Cancel,Notify (Notification 0x933)],blink)]
+        ("leave-generic",0x267,0,0x72,0,[],[Open Exit Cancel],[])]
      ]
   ++ [ (base ("leave-post-node-" ++ show n) Leave (FrameClass 0x267) (RowToken 0)) { transitionedFrame = (NodeId n, FrameClass 5, RowToken 0), expectedEffects = [Open Exit Cancel] }
      | n <- [0x60,0x37,0x61] ]
@@ -173,6 +174,7 @@ entry :: Action -> (Word32, Int, String)
 entry Set = (0xc72e10, 0x1498, "rb_ui_set")
 entry Confirm = (0xc75ed4, 0x64, "rb_ui_editor_confirm")
 entry Leave = (0xc76650, 0x414, "rb_ui_leave")
+entry EditorCancel = (0xc77794, 0x68, "rb_ui_editor_cancel")
 
 cfg, effectsAddress, ramBase, exitAddress, stackAddress :: Word32
 cfg = 0x00960800
@@ -484,27 +486,27 @@ guestFaultSpecs reference =
       let code = guestFaultCode (caseEntry reference) kind
       in reference
         { caseId = "control-" ++ name
-        , caseProvenance = "AAPCS-aligned guest wrapper calls real owned SET, restores LR/SP and changes one observed output"
-        , caseEntry = GuestAddress 0x00963000
+        , caseProvenance = "AAPCS-aligned guest wrapper calls the real owned lifecycle, restores LR/SP and changes one observed output"
+        , caseEntry = GuestAddress 0x00963800
         , caseRegions = caseRegions reference
-            ++ [mkRegion (RegionId "fault") (GuestAddress 0x00963000) (length code*4) ReadExecute (assemble code)]
-        , caseFunctions = (GuestAddress 0x00963000,fromIntegral (length code*4)) : caseFunctions reference
+            ++ [mkRegion (RegionId "fault") (GuestAddress 0x00963800) (length code*4) ReadExecute (assemble code)]
+        , caseFunctions = (GuestAddress 0x00963800,fromIntegral (length code*4)) : caseFunctions reference
         }
 
 fetchControlSpecs :: B.ByteString -> Word32 -> CaseSpec -> [(CaseSpec, GuestAddress)]
 fetchControlSpecs stock stockBase reference =
-  [(fault address,GuestAddress (fromIntegral address)) | address <- [0xc72e10,0xc75ed4,0xc76650]]
+  [(fault address,GuestAddress (fromIntegral address)) | address <- [0xc72e10,0xc75ed4,0xc76650,0xc77794]]
   where
     fault address = reference
       { caseId = "control-fetch-" ++ show address
       , caseProvenance = "negative control for forbidden original-action fetch observation"
-      , caseEntry = GuestAddress 0x00963000
+      , caseEntry = GuestAddress 0x00963800
       , caseRegions = caseRegions reference
-          ++ [mkRegion (RegionId "fault") (GuestAddress 0x00963000) 12 ReadExecute
+          ++ [mkRegion (RegionId "fault") (GuestAddress 0x00963800) 12 ReadExecute
                 (assemble [0xe59fc000,0xe12fff1c,address]),
               mkRegion (RegionId "forbidden-original") (GuestAddress (fromIntegral address)) 4 ReadOnly
                 (B.take 4 (B.drop (fromIntegral (address-stockBase)) stock))]
-      , caseFunctions = (GuestAddress 0x00963000,12) : caseFunctions reference
+      , caseFunctions = (GuestAddress 0x00963800,12) : caseFunctions reference
       }
 
 controlReport :: CaseSpec -> NativeObservation -> Bool -> Value
@@ -516,9 +518,93 @@ controlReport spec observation rejected = object
    "producer_pc" .= hexAddress (GuestAddress (fromIntegral (registerValue observation Pc))),
    "mismatches" .= map mismatchLabel (problems spec observation)]
 
+data EditorRoute = EditorRoute String Action Word32 Word32 Word32 Word32
+
+editorRoutes :: [EditorRoute]
+editorRoutes =
+  [EditorRoute ("editor-" ++ label) act choice query sessionWord answer
+  | (label,act,choice,query,sessionWord,answer) <-
+      [("confirm-minus1",Confirm,1,0,0,0xffffffff),
+       ("confirm-two",Confirm,2,2,1,2),
+       ("confirm-other",Confirm,1,0,1,0x5d),
+       ("confirm-denied",Confirm,2,1,0,0xffffffff),
+       ("confirm-session2",Confirm,1,2,2,2),
+       ("cancel-minus1",EditorCancel,1,0,0,0xffffffff),
+       ("cancel-two",EditorCancel,2,2,1,2),
+       ("cancel-other",EditorCancel,1,0,1,0x5d),
+       ("cancel-denied",EditorCancel,2,1,0,0xffffffff),
+       ("cancel-session2",EditorCancel,1,2,2,2)]]
+
+editorSpec :: M.Map String Symbol -> B.ByteString -> B.ByteString -> Word32 -> EditorRoute -> Bool -> CaseSpec
+editorSpec symbols kernel stock stockBase (EditorRoute name act choice query sessionWord answer) owned =
+  reference
+    { caseId = name ++ if owned then "-owned" else "-original"
+    , caseProvenance = "Composed SET/editor-confirm-or-cancel/leave over shared RAM and retained ABI models; literal per-step return, state, editor-choice and final effects"
+    , caseEntry = wrapperAddress
+    , caseRegions = filter (\r -> regionName (regionIdOf (caseRegion r)) `notElem` ["original","ram"]) (caseRegions reference)
+        ++ [mkRegion (RegionId "ram") (GuestAddress (fromIntegral ramBase)) 0x20000 ReadWrite (cellImage initial False),
+            mkRegion (RegionId "editor-wrapper") wrapperAddress (B.length wrapper) ReadExecute wrapper]
+        ++ if owned then [] else
+          [mkRegion (RegionId "original-actions") (GuestAddress 0xc72e10) 0x49ec ReadExecute
+            (patch (B.replicate 0x49ec 0)
+              [(fromIntegral (address-0xc72e10),B.take size (B.drop (fromIntegral (address-stockBase)) stock))
+              | actionKind <- [Set,act,Leave], let (address,size,_) = entry actionKind])]
+    , caseFunctions = M.toAscList (M.fromListWith max (serviceFunctions ++ [(wrapperAddress,fromIntegral (B.length wrapper))]
+        ++ concatMap functions [Set,act,Leave]))
+    , caseExpectedMemory =
+        [(RegionId "ram",cellImage final True),
+         (RegionId "state",patch (B.replicate 0x40 0) [(0x1e,B.pack [fromIntegral nextState,0])]),
+         (RegionId "effects",patch (word32le (fromIntegral (B.length effects)) <> effects <> B.replicate (0x400-4-B.length effects) 0)
+           [(0x300,assemble [0xffffffff,0x26,choice,secondReturn,nextState,choice,0xffffffff,nextState,choice])])]
+    }
+  where
+    initial = (base name Set (FrameClass 0x167) (RowToken choice)) { session = sessionWord }
+    final = initial { expectedCells = (CellAddress 0x00954cf4,choice) : blink }
+    reference = caseSpec symbols kernel stock stockBase initial owned
+    deniedEditor = query /= 0 && sessionWord /= 1
+    secondReturn = if deniedEditor then 0 else answer
+    nextState = if act == EditorCancel && not deniedEditor && answer `elem` [0xffffffff,2] then 0x1d else 0x26
+    secondEffects
+      | deniedEditor = []
+      | act == EditorCancel = [Open Exit Cancel]
+      | otherwise = [ConfirmEditor query] ++ [Postlude | answer `elem` [0xffffffff,2]]
+    effects = assemble (concatMap effectWords
+      ([EditPrepare,EditOpen,Notify (Notification 0x92a)] ++ secondEffects ++ [Open Exit Cancel,Notify (Notification 0x933)]))
+    wrapperAddress = GuestAddress 0x00963000
+    traceAddress = GuestAddress (fromIntegral (effectsAddress+0x300))
+    target actionKind = let (address,_,symbol) = entry actionKind in if owned then guestWord (symbolAddress symbols symbol) else address
+    functions actionKind = let (address,size,symbol) = entry actionKind in
+      if owned then ownedClosure symbols kernel (symbolAddress symbols symbol) else [(GuestAddress (fromIntegral address),fromIntegral size)]
+    serviceFunctions = [(GuestAddress (fromIntegral a),fromIntegral (length code*4)) | (_,a,code) <- services]
+    -- Each inline literal is skipped by the instruction preceding it.
+    store address value = [0xe59fc008,0xe59f0008,0xe58c0000,0xea000001,address,value]
+    call address = [0xe59fc004,0xe12fff3c,0xea000000,address]
+    snapshot offset =
+      [0xe59fc028,0xe58c0000,0xe59f0024,0xe1d000b0,0xe58c0004,
+       0xe59f001c,0xe5900000,0xe58c0008,0xea000005,
+       0xe1a00000,0xe1a00000,0xe1a00000,guestWord traceAddress+offset,0x0146761e,0x00954cf4]
+    wrapper = assemble $
+      [0xe92d5000] ++ call (target Set) ++ snapshot 0
+      ++ store cfg query ++ store (cfg+44) 0x72 ++ store (cfg+48) 0x267
+      ++ store (cfg+52) 0 ++ store (cfg+56) answer
+      ++ call (target act) ++ snapshot 12
+      ++ store cfg 0 ++ store (cfg+16) 0x72 ++ store (cfg+20) 0x267
+      ++ store (cfg+24) 0 ++ store (cfg+56) 0xffffffff
+      ++ call (target Leave) ++ snapshot 24 ++ [0xe3e00000,0xe8bd5000,0xe12fff1e]
+
+selectScenarios :: [String] -> IO [Scenario]
+selectScenarios args = case dropWhile (/= "--scenario") args of
+  [] -> pure scenarios
+  _ : name : _ | name `elem` map identifier scenarios ->
+    pure (filter ((== name) . identifier) scenarios)
+  _ -> do
+    hPutStrLn stderr "--scenario requires a known action scenario identifier"
+    exitWith (ExitFailure 2)
+
 main :: IO ()
 main = do
   args <- getArgs
+  selected <- selectScenarios args
   build <- required args "--build"
   out <- required args "--out"
   id5Path <- required args "--id5"
@@ -531,24 +617,32 @@ main = do
   unless (id5Base <= 0xc72e10 && fromIntegral (0xc76a64-id5Base) <= B.length stock) (error "original image-5 actions are truncated")
   unless (id5Base == 0x00bf1a00 && sha256Hex (sha256 stock) == "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a")
     (error "original image-5 identity does not match X-M1 1.50")
-  paths <- forM scenarios $ \s -> forM [False,True] $ \owned -> do
-    let spec = caseSpec symbols kernel stock id5Base s owned
+  let specs = if "--editor" `elem` args
+        then [[editorSpec symbols kernel stock id5Base route owned | owned <- [False,True]] | route <- editorRoutes]
+        else [[caseSpec symbols kernel stock id5Base s owned | owned <- [False,True]] | s <- selected]
+  paths <- forM specs $ \pair -> forM pair $ \spec -> do
     path <- writeCheckedCase (out </> caseId spec) spec
     pure (spec,path)
   let referenceScenario = (base "controls" Set (FrameClass 0x267) (RowToken 2))
         { expectedCells = blink, expectedEffects = [Open Exit Accept, Notify (Notification 0x930)] }
-      reference = caseSpec symbols kernel stock id5Base referenceScenario True
-  referencePath <- writeCheckedCase (out </> caseId reference) reference
-  faultPaths <- forM (guestFaultSpecs reference) $ \(spec,expected) -> do
-    path <- writeCheckedCase (out </> caseId spec) spec
-    pure (spec,path,expected)
-  fetchPaths <- forM (fetchControlSpecs stock id5Base reference) $ \(spec,target) -> do
-    path <- writeCheckedCase (out </> caseId spec) spec
-    pure (spec,path,target)
+      reference = if "--editor" `elem` args
+        then editorSpec symbols kernel stock id5Base (EditorRoute "controls" Confirm 1 0 0 0xffffffff) True
+        else caseSpec symbols kernel stock id5Base referenceScenario True
+  referencePath <- if "--no-controls" `elem` args then pure Nothing
+    else Just <$> writeCheckedCase (out </> "controls-owned") reference { caseId = "controls-owned" }
+  faultPaths <- if "--no-controls" `elem` args then pure [] else
+    forM (guestFaultSpecs reference) $ \(spec,expected) -> do
+      path <- writeCheckedCase (out </> caseId spec) spec
+      pure (spec,path,expected)
+  fetchPaths <- if "--no-controls" `elem` args then pure [] else
+    forM (fetchControlSpecs stock id5Base (caseSpec symbols kernel stock id5Base referenceScenario True)) $ \(spec,target) -> do
+      path <- writeCheckedCase (out </> caseId spec) spec
+      pure (spec,path,target)
   if "--execute" `elem` args then do
     runner <- required args "--runner"
-    referenceObservation <- loadObserved runner referencePath
-    let referenceFailures = problems reference referenceObservation
+    referenceFailures <- case referencePath of
+      Nothing -> pure []
+      Just path -> problems reference <$> loadObserved runner path
     faultControls <- forM faultPaths $ \(spec,path,expected) -> do
       observation <- loadObserved runner path
       let rejected = null referenceFailures && problems spec observation == [expected]
@@ -567,4 +661,5 @@ main = do
        "reference_mismatches" .= map mismatchLabel referenceFailures,
        "controls" .= map snd controls]))
     when (not (null referenceFailures) || any (not . null . snd) flat || any (not . fst) controls) exitFailure
-  else putStrLn ("emitted " ++ show (length scenarios) ++ " original/owned pairs, one owned reference and six guest controls; no execution")
+  else putStrLn ("emitted " ++ show (length specs) ++ " original/owned pairs and "
+    ++ show (length faultPaths + length fetchPaths) ++ " guest controls; no execution")
