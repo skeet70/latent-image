@@ -2657,3 +2657,41 @@ haskell_binary(
         "//host:vector",
     ],
 )
+
+haskell_library(
+    name = "startup-task-witness-lib",
+    srcs = [
+        "Emulation/StartupTaskControls.hs",
+        "Emulation/StartupTaskWire.hs",
+        "Emulation/StartupTaskWitness.hs",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:json",
+        "//host:update-container",
+        "//host:vector",
+        "//replacement/kernel_install:kernel-install-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "startup-task-check",
+    srcs = ["StartupTaskWitnessMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":startup-task-witness-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)
