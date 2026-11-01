@@ -9,6 +9,10 @@ use std::{collections::BTreeMap, num::NonZeroUsize, path::{Path, PathBuf}, proce
 mod memory_view;
 use memory_view::{MemoryAddress, MemoryCore, TcmRegister, static_span, tcm_window};
 
+#[path = "loader_code.rs"]
+mod loader_code;
+use loader_code::immutable_loader_spans;
+
 const USAGE: &str = "fujimod-xm1-idle-tasks --role retained|owned --run RUN --update DAT --boot-rom ROM --analysis ROOT --linked BIN --symbols SYMBOLS --contract CONTRACT --output NEW_DIR";
 const DEADLINE: u64 = 80_000_000;
 const HIT_LIMIT: usize = 16_384;
@@ -16,9 +20,13 @@ const WATCH_LIMIT: usize = 1_048_576;
 const ENTRY: u32 = 0x69cbf0;
 const LIMIT: u32 = 0x69cc00;
 const IMAGE_BASE: u32 = 0x61c400;
-const IMAGE_IMMUTABLE_END: u32 = 0x89ea8c;
 const ORIGINAL_DAT: &str = "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490";
 const ORIGINAL_IMAGE: &str = "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16";
+const INITIAL_IMAGE_VIEW_END: u32 = 0x89ea8c;
+const LOADER_A_CODE: [(u64, u64); 8] = immutable_loader_spans(0x40000, 0x4dae0);
+const LOADER_B_CODE: [(u64, u64); 8] = immutable_loader_spans(0xd0000, 0xddaa0);
+const IMAGE_CODE: [(u64, u64); 3] = [(ENTRY as u64, LIMIT as u64), (0x7221a0, 0x7221c8), (0x7221c8, 0x722218)];
+const INTERFACES: [(u64, u64); 3] = [(0x96bd20, 0x96bd28), (0x4dae0, 0x4f10c), (0xddaa0, 0xdf0cc)];
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -276,27 +284,26 @@ fn sites() -> BTreeMap<u32, String> {
         .into_iter().map(|(address, name)| (address, name.into())).collect()
 }
 fn immutable(physical: u64, size: u64) -> bool {
-    [(0x40000, 0x4dae0), (0xd0000, 0xddaa0), (u64::from(IMAGE_BASE), u64::from(IMAGE_IMMUTABLE_END))].into_iter()
-        .any(|(low, high)| physical < high && low < physical.saturating_add(size))
+    LOADER_A_CODE.iter().chain(&LOADER_B_CODE).chain(&IMAGE_CODE).chain(&INTERFACES)
+        .any(|&(low, high)| physical < high && low < physical.saturating_add(size))
 }
 fn watch_ranges() -> Vec<WatchRange> {
-    let mut ranges = vec![
-        WatchRange { start: 0x40000, end: 0x4dae0, kinds: WatchKinds::WRITES },
-        WatchRange { start: 0xd0000, end: 0xddaa0, kinds: WatchKinds::WRITES },
+    let mut ranges = Vec::with_capacity(45);
+    ranges.extend(LOADER_A_CODE.iter().chain(&LOADER_B_CODE).chain(&IMAGE_CODE).chain(&INTERFACES)
+        .map(|&(start, end)| WatchRange { start, end, kinds: WatchKinds::WRITES }));
+    ranges.extend([
         WatchRange { start: 0x40000, end: 0x4dae0, kinds: WatchKinds::CPU_FETCH },
         WatchRange { start: 0xd0000, end: 0xddaa0, kinds: WatchKinds::CPU_FETCH },
         WatchRange { start: 0x7221a0, end: 0x722218, kinds: WatchKinds::CPU_FETCH },
-        WatchRange { start: u64::from(IMAGE_BASE), end: u64::from(IMAGE_IMMUTABLE_END), kinds: WatchKinds::WRITES },
         WatchRange { start: u64::from(ENTRY), end: u64::from(LIMIT), kinds: WatchKinds::CPU_FETCH },
         WatchRange { start: 0x725dd8, end: 0x725ddc, kinds: WatchKinds::CPU_FETCH },
-        WatchRange { start: 0x96bd20, end: 0x96bd28, kinds: WatchKinds::WRITES },
-    ];
+    ]);
     for address in [0x40204, 0xd0204, 0x40234, 0xd0234, 0x40364, 0xd0364, 0x437d8, 0xd37d8] {
         ranges.push(WatchRange { start: address, end: address + 4, kinds: WatchKinds::CPU_FETCH });
     }
     for core in [Core::Primary, Core::Secondary] {
         let l = core.layout();
-        for (base, size) in [(l.creation, 40), (l.node, 56), (l.current, 4), (l.selected, 4), (l.stack, 1024), (l.table, 0x162c)] {
+        for (base, size) in [(l.creation, 40), (l.node, 56), (l.current, 4), (l.selected, 4), (l.stack, 1024)] {
             ranges.push(WatchRange { start: u64::from(base & !0x40000000), end: u64::from((base & !0x40000000) + size), kinds: WatchKinds::WRITES });
         }
     }
@@ -468,10 +475,10 @@ fn drive() -> Result<(), String> {
                 if watch.is_none() {
                     require(matches!((core, state.lr.0), (Core::Primary, 0x69ce8c | 0x69cee8) | (Core::Secondary, 0x69cf38 | 0x69cf70)), "first wrapper is outside canonical startup callers")?;
                     for source in &code {
-                        let length = if source.base == IMAGE_BASE { (IMAGE_IMMUTABLE_END - IMAGE_BASE) as usize } else { source.bytes.len() };
+                        let length = if source.base == IMAGE_BASE { (INITIAL_IMAGE_VIEW_END - IMAGE_BASE) as usize } else { source.bytes.len() };
                         let owner = if source.base == 0xd0000 { Core::Secondary } else { Core::Primary };
                         let installed = view(&machine, &maps, &state, Object::LoadedCode, owner, source.base, length)?;
-                        require(installed.bytes == source.bytes[..length], "installed immutable source differs at first wrapper")?;
+                        require(installed.bytes == source.bytes[..length], "installed source differs at first wrapper")?;
                         installed_views.push(installed);
                     }
                     let lifecycle_sites = sites.iter().filter(|(address, _)| **address != 0x725dd8).map(|(&address, label)| (address, label.clone())).collect();
@@ -701,5 +708,36 @@ mod tests {
             assert!(inspect_watch(&write, &mut 0, &[], &mut producer).is_err());
         }
         assert!(!producer.complete());
+    }
+
+    #[test]
+    fn only_source_code_and_interfaces_are_immutable() {
+        let mut producer = Producer::new(WFI, RESUME);
+        for physical in [0x820f24, 0x8297f0, 0x8297f4, 0x828580] {
+            let write = serde_json::json!({"enabled":true,"violation":null,"records":[
+                {"source":"cpu-write","physical":physical,"size":4,"core":0,"pc":0x662e60,"instructions":6502046}
+            ]});
+            assert!(inspect_watch(&write, &mut 0, &[], &mut producer).is_ok());
+        }
+        for base in [0x40000, 0xd0000] {
+            for offset in loader_code::MUTABLE_TABLE_OFFSETS {
+                let mutable = serde_json::json!({"enabled":true,"violation":null,"records":[
+                    {"source":"cpu-write","physical":base+offset,"size":4,"core":0,"pc":0x662e60,"instructions":6502046}
+                ]});
+                assert!(inspect_watch(&mutable, &mut 0, &[], &mut producer).is_ok());
+                for adjacent in [base+offset-1, base+offset+4] {
+                    let code_write = serde_json::json!({"enabled":true,"violation":null,"records":[
+                        {"source":"cpu-write","physical":adjacent,"size":1,"core":0,"pc":0x662e60,"instructions":6502046}
+                    ]});
+                    assert!(inspect_watch(&code_write, &mut 0, &[], &mut producer).is_err());
+                }
+            }
+        }
+        for physical in [0x69cbf0, 0x69cbfc, 0x7221a0, 0x7221c4, 0x7221c8, 0x722214, 0x96bd20, 0x4dae0, 0xddaa0] {
+            let write = serde_json::json!({"enabled":true,"violation":null,"records":[
+                {"source":"cpu-write","physical":physical,"size":4,"core":0,"pc":0x662e60,"instructions":6502046}
+            ]});
+            assert!(inspect_watch(&write, &mut 0, &[], &mut producer).is_err());
+        }
     }
 }

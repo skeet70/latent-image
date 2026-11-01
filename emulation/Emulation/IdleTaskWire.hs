@@ -2,7 +2,7 @@
 module Emulation.IdleTaskWire where
 
 import Control.Monad (unless)
-import Data.Aeson
+import Data.Aeson hiding (Object)
 import Data.Aeson.Types (Parser)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)

@@ -1,5 +1,9 @@
 use super::*;
 
+#[path = "loader_code.rs"]
+mod loader_code;
+use loader_code::{MUTABLE_TABLE_OFFSETS, immutable_loader_spans};
+
 const CARRIER: (u64, u64) = (0x10400, 0x11800);
 const PAIR: (u64, u64) = (0x7235d8, 0x723790);
 const WRAPPER: (u64, u64) = (0x725dd8, 0x726098);
@@ -18,20 +22,6 @@ const LEAVE: u32 = 0x7236b0;
 const ENTRY_RETURN: u32 = 0x725e00;
 const CALLER_RETURN: u32 = 0x69cf38;
 const EXIT_CALLS: [u32; 3] = [0x725e84, 0x725fb4, 0x726064];
-const MUTABLE_TABLE_OFFSETS: [u64; 8] = [0x3a0, 0x3b0, 0x3c0, 0x3d0, 0x3e0, 0x3a0, 0x3f0, 0x400];
-const fn immutable_loader_spans(base: u64, end: u64) -> [(u64, u64); 8] {
-    let mut spans = [(0, 0); 8];
-    let mut start = base;
-    let mut index = 0;
-    while index < 7 {
-        let cell = base + 0x3a0 + index as u64 * 0x10;
-        spans[index] = (start, cell);
-        start = cell + 4;
-        index += 1;
-    }
-    spans[7] = (start, end);
-    spans
-}
 const CODE_A: [(u64, u64); 8] = immutable_loader_spans(LOADER_A.0, LOADER_A.1);
 const CODE_B: [(u64, u64); 8] = immutable_loader_spans(LOADER_B.0, LOADER_B.1);
 const COMMON: [(u64, u64); 26] = [CARRIER, PAIR, WRAPPER, ROOTS, TABLE_A, TABLE, COUNTER, LOCK,

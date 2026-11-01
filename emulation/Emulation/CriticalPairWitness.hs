@@ -13,13 +13,14 @@ import Data.Bits (complement, rotateR, shiftL, shiftR, testBit, xor, (.&.), (.|.
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as L
 import Data.Int (Int32)
-import Data.List (nub, sort)
+import Data.List (sort)
 import qualified Data.Map.Strict as M
 import Data.Word (Word8, Word32, Word64)
 import qualified Emulation.CriticalPair as C
 import Emulation.FirstStageWitness (leWordAt, sha256Hex)
 import qualified Emulation.InterfaceInitializer as I
 import Emulation.InterfaceInitializer (Context (..), Views (..), Source (..), ByteOrder (..), Event (..), Mode (..), PhysicalSpan (..), Window (..), BankSnapshot (..), TcmSnapshot (..), WatchClass (..), FixedViews (..), NoFault (..), Rule (..), Watch (..), Alias (..), Decoder (..))
+import Emulation.LoaderCode (mutableTableOffsets, loaderSpans)
 import qualified FujiAF.FirstStage as F
 import FujiAF.JSON (decodeStrictIntegers)
 import qualified FujiAF.UpdateContainer as U
@@ -230,17 +231,10 @@ snapshots context = case tcmOf context of
   [[a,b],[c,d]] -> sequence [TcmSnapshot 0 <$> I.bankSnapshot a <*> I.bankSnapshot b,TcmSnapshot 1 <$> I.bankSnapshot c <*> I.bankSnapshot d]
   _ -> Left "critical context lacks both-core raw TCM registers"
 
-mutableTableOffsets :: [Word64]
-mutableTableOffsets = [0x3a0,0x3b0,0x3c0,0x3d0,0x3e0,0x3a0,0x3f0,0x400]
-
 bindMutableTable :: Word64 -> B.ByteString -> Either String ()
 bindMutableTable base bytes = do
   targets <- mapM (leWordAt bytes . (0x380+) . (*4)) [0..7]
   require (map fromIntegral targets == map (base+) mutableTableOffsets) "critical mutable-cell source table differs"
-
-loaderSpans :: Word64 -> Word64 -> [(Word64,Word64)]
-loaderSpans base extent = let cells = map (base+) (sort (nub mutableTableOffsets))
-  in zip (base:map (+4) cells) (cells++[base+extent])
 
 immutableLoaderResources :: Word64 -> B.ByteString -> Either String [Resource]
 immutableLoaderResources base bytes = mapM (\(low,high) ->

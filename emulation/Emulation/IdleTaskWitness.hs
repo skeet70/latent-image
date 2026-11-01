@@ -17,12 +17,14 @@ import Data.Maybe (isJust)
 import Data.Word (Word8, Word32, Word64)
 import qualified Emulation.Sha256 as SHA
 import Emulation.IdleTaskWire
+import qualified Emulation.LoaderCode as Loader
 import qualified Emulation.StartupTaskWire as S
 import FujiAF.JSON (decodeStrictIntegers)
 import qualified FujiAF.UpdateContainer as U
 import qualified Replacement.IdleTask.Admission as A
 import qualified Replacement.IdleTask.Artifact as I
 import qualified Replacement.KernelInstall.Wire as W
+import StockInventory (FunctionWindow (..), GuestAddress (..), deriveFunction)
 
 data SourceFiles = SourceFiles
   { sourceDat :: B.ByteString, runDat :: B.ByteString, runDecoded :: B.ByteString, sourceRun :: B.ByteString, sourceRom :: B.ByteString
@@ -75,8 +77,12 @@ sourceWord inputs pc = do
   (base,body) <- need CodeRejected (find (\(base,body) -> pc >= base && toInteger pc+4 <= toInteger base+toInteger (B.length body)) (sourceBodies inputs))
   require (pc `mod` 4 == 0 && (base /= 0x61c400 || pc < 0x89ea8c)) CodeRejected
   pure (U.word32At body (fromIntegral (pc-base)))
+image4CodeWindows :: [(Word32,Word32)]
+image4CodeWindows = [(0x7221a0,0x7221c8),(0x7221c8,0x722218)]
 immutableRanges :: [(Word64,Word64)]
-immutableRanges = [(0x40000,0x4dae0),(0xd0000,0xddaa0),(0x61c400,0x89ea8c),(0x96bd20,0x96bd28),(0x4dae0,0x4f10c),(0xddaa0,0xdf0cc)]
+immutableRanges = Loader.loaderSpans 0x40000 0xdae0 ++ Loader.loaderSpans 0xd0000 0xdaa0
+  ++ [(0x69cbf0,0x69cc00),(0x96bd20,0x96bd28),(0x4dae0,0x4f10c),(0xddaa0,0xdf0cc)]
+  ++ [(fromIntegral low,fromIntegral high) | (low,high) <- image4CodeWindows]
 layout :: S.KernelCore -> (Word32,Word32,Word32,Word32,Word32,Word32,S.TaskId)
 layout S.PrimaryKernel = (0x4005beac+40*101,0x4005ff0c+56*101,0x40054760,0x40054768,0xa10e00,0xa11200,S.TaskId 102)
 layout S.SecondaryKernel = (0x400ebe6c+40*102,0x400efecc+56*102,0x400e4720,0x400e4728,0xa10200,0xa10600,S.TaskId 103)
@@ -108,6 +114,10 @@ admitInputs role source = do
     ,(sourceB source,"8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec")
     ,(sourceRun source,"efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef")
     ,(sourceRom source,"4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be")]
+  mapM_ (\(low,high) -> do
+    derived <- either (const (Left CodeRejected)) Right
+      (deriveFunction (GuestAddress 0x61c400) (sourceImage source) (FunctionWindow (GuestAddress low) (GuestAddress high)) [])
+    require (derived == (low,fromIntegral (high-low))) CodeRejected) image4CodeWindows
   canonical <- either (const (Left ArtifactRejected)) Right (I.canonicalSource (sourceDat source) (sourceImage source))
   artifact <- either (const (Left ArtifactRejected)) Right (I.deriveArtifact (sourceLinked source) (sourceSymbols source))
   let staged = I.stageImage4 canonical artifact; expectedImage = I.stagedBytes staged
@@ -161,8 +171,8 @@ checkViews sample previous = do
       mapM_ (\banks -> do
         require (length banks == 2) ContextRejected
         mapM_ (\(W.WordValue bank) -> if bank .&. 1 == 0 || (bank `shiftR` 2) .&. 31 == 0 then pure () else do
-          let exponent = (bank `shiftR` 2) .&. 31; low = fromIntegral (bank .&. 0xfffff000) :: Word64; extent = 512 `shiftL` fromIntegral exponent
-          require (exponent >= 3 && exponent <= 14 && low `mod` extent == 0 && low+extent <= 0x100000000) ContextRejected
+          let sizeLog2 = (bank `shiftR` 2) .&. 31; low = fromIntegral (bank .&. 0xfffff000) :: Word64; extent = 512 `shiftL` fromIntegral sizeLog2
+          require (sizeLog2 >= 3 && sizeLog2 <= 14 && low `mod` extent == 0 && low+extent <= 0x100000000) ContextRejected
           mapM_ (\alias -> let begin = fromIntegral start+alias; end = begin+fromIntegral (B.length body)
             in require (end <= low || begin >= low+extent) ContextRejected) [0,0x40000000]) banks) (W.contextTcm state)
 
@@ -402,7 +412,8 @@ checkLifecycles inputs receipt watch memories = do
         Start -> pure track
         IdleEntry -> case trackEntry track of
           Nothing -> do
-            require (address (W.contextSp state) == high && word (head (W.contextRegisters state)) == 0
+            argument <- need EntryRejected (case W.contextRegisters state of first:_ -> Just first; [] -> Nothing)
+            require (address (W.contextSp state) == high && word argument == 0
               && word (W.contextCpsr state) .&. 0xff == 0x53
               && address (W.contextLr state) == case core of S.PrimaryKernel -> 0x453f0; S.SecondaryKernel -> 0xd53b0) EntryRejected
             let entered = track {trackEntry=Just sample}
@@ -477,6 +488,8 @@ qualificationValue (QualifiedReceipt receipt lifecycles) = J.object
   , "snapshots" J..= length (receiptSamples receipt)
   , "tasks" J..= [J.object ["core" J..= coreValue core,"id" J..= ident,"stack" J..= [low,high],"irq_cycles" J..= cycles]
       | Lifecycle core (S.TaskId ident) low high cycles <- lifecycles]
+  , "immutable_ranges" J..= [[low,high] | (low,high) <- immutableRanges]
+  , "stock_inventory_image4_code" J..= [[low,high] | (low,high) <- image4CodeWindows]
   , "scope" J..= ("Both initial idle bodies through real IRQ preemption/frame/return and repeated wait; no root/standby or general scheduler retirement" :: String)]
 compareReceipts :: QualifiedReceipt -> QualifiedReceipt -> Either WitnessError J.Value
 compareReceipts (QualifiedReceipt retained left) (QualifiedReceipt owned right) = do

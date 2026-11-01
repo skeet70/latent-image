@@ -130,14 +130,14 @@ refusalControls role sources original = do
           firstEntry = findPosition control ((==IdleEntry) . sampleBoundary) receipt
           irq = findPosition control (\sample -> sampleBoundary sample == IrqEntry && isCurrent sample
             && word (contextSpsr (sampleContext sample)) .&. 0xff == 0x53 && address (W.contextLr (state sample)) == A.resumePc proof+4) receipt
-          after index kind = maybe (Left (MutationRejected control)) (Right . (+index+1)) (findIndex (\sample -> sampleBoundary sample == kind
+          after index kind = maybe (Left (MutationRejected control)) (Right . (+ (index+1))) (findIndex (\sample -> sampleBoundary sample == kind
             && contextCore (sampleContext sample) == contextCore (sampleContext (receiptSamples receipt !! index))) (drop (index+1) (receiptSamples receipt)))
           matchingReturn entered = do
             let core = contextCore (sampleContext (receiptSamples receipt !! entered))
                 waits = [sample | sample <- take entered (receiptSamples receipt),contextCore (sampleContext sample) == core
                   ,address (W.contextPc (state sample)) == A.wfiPc proof]
             waiting <- maybe (Left (MutationRejected control)) Right (case reverse waits of item:_ -> Just item; [] -> Nothing)
-            maybe (Left (MutationRejected control)) (Right . (+entered+1)) (findIndex (\sample -> contextCore (sampleContext sample) == core
+            maybe (Left (MutationRejected control)) (Right . (+ (entered+1))) (findIndex (\sample -> contextCore (sampleContext sample) == core
               && sampleBoundary sample == IrqReturn && isCurrent sample
               && address (W.contextSp (state sample))+28 == address (W.contextSp (state waiting))
               && contextSpsr (sampleContext sample) == W.contextCpsr (state waiting)) (drop (entered+1) (receiptSamples receipt)))
@@ -207,9 +207,11 @@ refusalControls role sources original = do
         WrongRestoredRegister -> do
           entered <- irq; returned <- matchingReturn entered
           let core = contextCore (sampleContext (receiptSamples receipt !! returned))
-          index <- maybe (Left (MutationRejected control)) (Right . (+returned+1)) (findIndex (\sample -> contextCore (sampleContext sample) == core
+          index <- maybe (Left (MutationRejected control)) (Right . (+ (returned+1))) (findIndex (\sample -> contextCore (sampleContext sample) == core
             && address (W.contextPc (state sample)) == A.resumePc proof) (drop (returned+1) (receiptSamples receipt)))
-          let old = word (head (W.contextRegisters (state (receiptSamples receipt !! index))))
+          old <- case W.contextRegisters (state (receiptSamples receipt !! index)) of
+            first:_ -> Right (word first)
+            [] -> Left (MutationRejected control)
           changeRegister control index 0 (old `xor` 1) receiptValue >>= plain
         MissingRepeatedWait -> removeLastRepeated control receiptValue watchValue receipt watch proof >>= \(r,w) -> (Nothing,) <$> withHash control original r w
 
@@ -245,7 +247,7 @@ coherentTask control receipt watch = do
 removeLastRepeated :: Control -> J.Value -> J.Value -> Receipt -> W.Watch -> A.IdleProof -> Either ControlError (J.Value,J.Value)
 removeLastRepeated control receiptValue watchValue receipt watch proof = do
   let samples = receiptSamples receipt
-      firstAfter index predicate = maybe (Left (MutationRejected control)) (Right . (+index+1)) (findIndex predicate (drop (index+1) samples))
+      firstAfter index predicate = maybe (Left (MutationRejected control)) (Right . (+ (index+1))) (findIndex predicate (drop (index+1) samples))
       repeatedFor core = do
         waiting <- firstAfter (-1) (\sample -> contextCore (sampleContext sample) == core && address (W.contextPc (state sample)) == A.wfiPc proof)
         let saved = state (samples !! waiting)

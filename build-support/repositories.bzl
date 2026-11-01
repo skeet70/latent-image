@@ -72,6 +72,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/heap_state.rs",
     "//emulation:fujimod-xm1/src/kernel_install.rs",
     "//emulation:fujimod-xm1/src/lib.rs",
+    "//emulation:fujimod-xm1/src/loader_code.rs",
     "//emulation:fujimod-xm1/src/machine.rs",
     "//emulation:fujimod-xm1/src/main.rs",
     "//emulation:fujimod-xm1/src/memory_view.rs",

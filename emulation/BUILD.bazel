@@ -2659,6 +2659,15 @@ haskell_test(
 )
 
 haskell_library(
+    name = "loader-code-layout",
+    srcs = ["Emulation/LoaderCode.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = ["//host:base"],
+)
+
+haskell_library(
     name = "critical-pair-witness-lib",
     srcs = ["Emulation/CriticalPairWitness.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
@@ -2667,6 +2676,7 @@ haskell_library(
         ":critical-pair-lib",
         ":first-stage-witness-lib",
         ":interface-initializer-lib",
+        ":loader-code-layout",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -2766,6 +2776,7 @@ haskell_library(
     visibility = ["//visibility:public"],
     deps = [
         ":case-sha256",
+        ":loader-code-layout",
         ":startup-task-witness-lib",
         "//host:aeson",
         "//host:base",
@@ -2776,6 +2787,7 @@ haskell_library(
         "//host:vector",
         "//replacement/idle_task:idle-task-artifact",
         "//replacement/kernel_install:kernel-install-artifact",
+        "//replacement/media_permit:stock-inventory",
     ],
 )
 
