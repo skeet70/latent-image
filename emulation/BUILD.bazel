@@ -2664,6 +2664,10 @@ haskell_library(
         "Emulation/StartupTaskControls.hs",
         "Emulation/StartupTaskWire.hs",
         "Emulation/StartupTaskWitness.hs",
+        "Emulation/TaskSubmissionComparison.hs",
+        "Emulation/TaskSubmissionControlWire.hs",
+        "Emulation/TaskSubmissionControlWitness.hs",
+        "Emulation/TaskSubmissionProgram.hs",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     visibility = ["//visibility:public"],
@@ -2676,22 +2680,32 @@ haskell_library(
         "//host:json",
         "//host:update-container",
         "//host:vector",
+        "//host/firmware:bank-allowlist",
         "//replacement/kernel_install:kernel-install-artifact",
+        "//replacement/task_submission:task-submission-artifact",
     ],
 )
 
 haskell_binary(
     name = "startup-task-check",
     srcs = ["StartupTaskWitnessMain.hs"],
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+    ],
+    data = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     visibility = ["//visibility:public"],
     deps = [
         ":startup-task-witness-lib",
+        ":image4-staging-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
         "//host:host-support",
+        "//replacement/task_submission:task-submission-artifact",
     ],
 )

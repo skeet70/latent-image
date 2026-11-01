@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.StartupTaskWitness
   ( SourceFiles(..), ObservedFiles(..), Inputs, QualifiedReceipt, WitnessError(..)
-  , admitInputs, admitReceipt, qualificationValue
+  , admitInputs, admitOwnedInputs, admitReceipt, qualificationValue, qualifiedReceiptData, qualifiedProbeData
   ) where
 
 import Control.Monad (foldM, unless)
@@ -14,20 +14,25 @@ import Data.Maybe (mapMaybe)
 import Data.Word (Word8, Word32, Word64)
 import qualified Emulation.Sha256 as SHA
 import Emulation.StartupTaskWire
+import qualified Emulation.TaskSubmissionProgram as P
+import qualified Emulation.TaskSubmissionControlWire as C
+import qualified Emulation.TaskSubmissionControlWitness as C
 import FujiAF.JSON (decodeStrictIntegers)
 import qualified FujiAF.UpdateContainer as U
 import qualified Replacement.KernelInstall.Wire as W
+import qualified Replacement.TaskSubmission.Artifact as A
+import qualified Replacement.TaskSubmission.Admission as F
 
 data SourceFiles = SourceFiles
   {sourceDat :: B.ByteString, sourceRun :: B.ByteString, sourceRom :: B.ByteString
   ,sourceA :: B.ByteString, sourceB :: B.ByteString, sourceImage :: B.ByteString, sourceObserver :: B.ByteString}
 data ObservedFiles = ObservedFiles {observedReceipt :: B.ByteString, observedWatch :: B.ByteString, observedReset :: B.ByteString}
-data Inputs = Inputs SourceFiles Identity
-data QualifiedReceipt = QualifiedReceipt Receipt W.Digest Int
+data Inputs = Inputs SourceFiles Identity P.Program
+data QualifiedReceipt = QualifiedReceipt Receipt W.Digest Int (Maybe C.ProbeRecord) (Maybe C.ControlProof)
 data WitnessError = SourceRejected | ReceiptDecodeRejected | StatusRejected | IdentityRejected | ResetRejected
   | WatchRejected | ClockRejected | FetchRejected | WriteRejected | PreimageRejected | ForeignWriterRejected
   | SnapshotRejected | AliasRejected | ContextRejected | CodeRejected | KernelRejected | TaskRejected
-  | SubmissionRejected | RunnableRejected | FirstTaskRejected | PrologueRejected | RawWatchRejected
+  | SubmissionRejected | RunnableRejected | FirstTaskRejected | PrologueRejected | RawWatchRejected | ProgramRejected | ControlRejected
   deriving (Eq, Show)
 
 require :: Bool -> WitnessError -> Either WitnessError ()
@@ -79,16 +84,26 @@ admitInputs sources = do
     ,(rom,"4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be")
     ,(loaderA,"21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882")
     ,(loaderB,"8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec")
-    ,(image,"f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16")
-    ,(observer,"bc6e8ab207703901286a85bffc994d74543b3d213e3d54ab89a7bff8b5b6609d")]
+    ,(image,"f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16")]
+  require (B.length (sourceObserver sources) >= 64 && B.take 4 (sourceObserver sources) == "\x7f\&ELF") SourceRejected
   require (U.word32At (sourceA sources) 0xdabc == 120 && U.word32At (sourceB sources) 0xda80 == 120) SourceRejected
   pure (Inputs sources (Identity run dat rom observer
     [SourceIdentity LoaderA (W.Address 0x40000) (B.length (sourceA sources)) loaderA
     ,SourceIdentity LoaderB (W.Address 0xd0000) (B.length (sourceB sources)) loaderB
-    ,SourceIdentity Image4 (W.Address 0x61c400) (B.length (sourceImage sources)) image]))
+    ,SourceIdentity Image4 (W.Address 0x61c400) (B.length (sourceImage sources)) image]) P.stockProgram)
+
+admitOwnedInputs :: SourceFiles -> P.NativeInputs -> A.StagedCandidate -> Either WitnessError Inputs
+admitOwnedInputs sources native candidate = do
+  Inputs _ (Identity run dat rom observer identities) _ <- admitInputs sources
+  program <- either (const (Left ProgramRejected)) Right (P.ownedProgram
+    (P.CanonicalImages (sourceDat sources) (sourceA sources) (sourceB sources) (sourceImage sources)) native candidate)
+  let image = P.programImage4 program (sourceImage sources)
+      replace identity@(SourceIdentity kind base _ _) = if kind == Image4
+        then SourceIdentity kind base (B.length image) (hash image) else identity
+  pure (Inputs sources (Identity run (P.programUpdateDigest program dat) rom observer (map replace identities)) program)
 
 codeSources :: Inputs -> [(SourceKind,Word32,B.ByteString)]
-codeSources (Inputs sources _) = [(LoaderA,0x40000,sourceA sources),(LoaderB,0xd0000,sourceB sources),(Image4,0x61c400,sourceImage sources)]
+codeSources (Inputs sources _ program) = [(LoaderA,0x40000,sourceA sources),(LoaderB,0xd0000,sourceB sources),(Image4,0x61c400,P.programImage4 program (sourceImage sources))]
 sourceWord :: Inputs -> Word32 -> Either WitnessError Word32
 sourceWord inputs pc = do
   (_,base,contents) <- required CodeRejected (case filter (\(_,start,body) -> pc >= start && toInteger pc+4 <= toInteger start+toInteger (B.length body)) (codeSources inputs) of [found] -> Just found; _ -> Nothing)
@@ -102,21 +117,11 @@ layout :: KernelCore -> (Word32,Word32,Word32,Word32,Word32,Word32,Word32,Word32
 layout PrimaryKernel = (0x4005beac,0x4005ff0c,0x400622d4,0x4005d178,0x400624b4,0x400545cc,0x400545a4,0x40054768,0x40054760,0x400545c8)
 layout SecondaryKernel = (0x400ebe6c,0x400efecc,0x400f2294,0x400ed138,0x400f2474,0x400e458c,0x400e4564,0x400e4728,0x400e4720,0x400e4588)
 
-expectedSites :: M.Map W.Address Boundary
-expectedSites = M.fromList [(W.Address pc,boundary) | (boundary,pcs) <-
-  [(SubmissionEntry,[0x725dd8]),(AuxiliaryReturn,[0x725f0c]),(CreationCall,[0x725fa8]),(CreationReturn,[0x725fac])
-  ,(ActivationCall,[0x726024]),(ActivationReturn,[0x726028]),(WrapperReturn,[0x69ce8c,0x69cee8,0x69cf38,0x69cf70])
-  ,(AutoReadyEntry,[0x43f9c,0xd3f58]),(AutoReadyReturn,[0x40a74,0xd0a74]),(Prepare,[0x43f70,0xd3f2c])
-  ,(Prepared,[0x43f98,0xd3f54]),(Scheduler,[0x43688,0xd3688]),(Selected,[0x436bc,0xd36bc])
-  ,(StackTransfer,[0x436e8,0xd36e8]),(Trampoline,[0x43728,0xd3728]),(EntryTransfer,[0x43758,0xd3758])
-  ,(TaskEntry,[0x69d160,0x69cbf0,0x69cd58]),(EnteredInstruction,[0x69d164,0x69cbf4,0x69cd5c])],pc <- pcs]
+expectedSites :: Inputs -> ReceiptProtocol -> M.Map W.Address Boundary
+expectedSites (Inputs _ _ program) = P.programSites program
+expectedClasses :: Inputs -> ReceiptProtocol -> [W.WatchClass]
+expectedClasses inputs@(Inputs _ _ program) protocol = P.programClasses program protocol (codeSources inputs)
 
-expectedClasses :: Inputs -> [W.WatchClass]
-expectedClasses inputs = [W.WatchClass [start,end] writes | (start,end) <-
-  [(0x4dae0,0x4f10c),(0xddaa0,0xdf0cc),(0x545a4,0x63460),(0xe4564,0xf3410),(0xc0800,0xc0900)
-  ,(0x96bd20,0x96bd28),(0xa0fc44,0xa101e4),(0xa5b204,0xa5b5c4),(0x89ea94,0x89ea9c),(0x9c280c,0x9c2810),(0xa10200,0xa5b200)]]
-  ++ [W.WatchClass [fromIntegral base,fromIntegral base+fromIntegral (B.length contents)] [W.CpuWrite,W.CpuFetch,W.HostWrite,W.ModelBusWrite] | (_,base,contents) <- codeSources inputs]
-  where writes = [W.CpuWrite,W.HostWrite,W.ModelBusWrite]
 unionRanges :: [[Word64]] -> [[Word64]]
 unionRanges = reverse . foldl merge [] . sort
   where
@@ -137,21 +142,20 @@ mergeView (Memory memory) view = Memory <$> foldM insert memory (zip [address (v
           pure (M.insert target byte contents)
 validateViews :: Sample -> Memory -> Either WitnessError Memory
 validateViews sample memory = do
-  mapM_ validate (allViews sample)
+  mapM_ (validateView (contextState (sampleContext sample))) (allViews sample)
   foldM mergeView memory (allViews sample)
-  where
-    state = contextState (sampleContext sample)
-    validate view = do
-      let contents = bytes (viewBytes view); start = address (viewPhysical view); expected = hash contents
-      require (not (B.null contents) && toInteger start+toInteger (B.length contents) <= 0x20000000
-        && viewAliases view == replicate 2 (replicate 2 expected)) AliasRejected
-      mapM_ (\banks -> do
-        require (length banks == 2) ContextRejected
-        mapM_ (\(W.WordValue bank) -> if bank .&. 1 == 0 || (bank `shiftR` 2) .&. 31 == 0 then pure () else do
-          let code = (bank `shiftR` 2) .&. 31; low = fromIntegral (bank .&. 0xfffff000) :: Word64; size = 512 `shiftL` fromIntegral code
-          require (code >= 3 && code <= 14 && low `mod` size == 0 && low+size <= 0x100000000) ContextRejected
-          mapM_ (\alias -> let begin = fromIntegral start+alias; end = begin+fromIntegral (B.length contents)
-            in require (end <= low || begin >= low+size) ContextRejected) [0,0x40000000]) banks) (W.contextTcm state)
+validateView :: W.Context -> View -> Either WitnessError ()
+validateView state view = do
+  let contents = bytes (viewBytes view); start = address (viewPhysical view); expected = hash contents
+  require (not (B.null contents) && toInteger start+toInteger (B.length contents) <= 0x20000000
+    && viewAliases view == replicate 2 (replicate 2 expected)) AliasRejected
+  mapM_ (\banks -> do
+    require (length banks == 2) ContextRejected
+    mapM_ (\(W.WordValue bank) -> if bank .&. 1 == 0 || (bank `shiftR` 2) .&. 31 == 0 then pure () else do
+      let code = (bank `shiftR` 2) .&. 31; low = fromIntegral (bank .&. 0xfffff000) :: Word64; size = 512 `shiftL` fromIntegral code
+      require (code >= 3 && code <= 14 && low `mod` size == 0 && low+size <= 0x100000000) ContextRejected
+      mapM_ (\alias -> let begin = fromIntegral start+alias; end = begin+fromIntegral (B.length contents)
+        in require (end <= low || begin >= low+size) ContextRejected) [0,0x40000000]) banks) (W.contextTcm state)
 
 checkTask :: Memory -> KernelCore -> Int -> Task -> Either WitnessError ()
 checkTask memory core i task = do
@@ -206,8 +210,8 @@ checkInitial sample memory = mapM_ initialize [PrimaryKernel,SecondaryKernel]
         status <- readBytes KernelRejected memory (t+12) 3
         require (B.index status 0 == 0 && B.index status 1 == 15 && B.index status 2 .&. 7 == 0) KernelRejected) [0..119]
 
-checkLocalShape :: Receipt -> Sample -> Memory -> Either WitnessError ()
-checkLocalShape receipt sample memory = do
+legacyLocalShape :: Receipt -> Sample -> Memory -> Either WitnessError ()
+legacyLocalShape receipt sample memory = do
   active <- case filter (\submitted -> submissionCore submitted == core && submissionEntryHit submitted <= position
     && maybe True (position <=) (submissionReturnHit submitted)) (receiptSubmissions receipt) of
       [] -> pure []
@@ -228,34 +232,253 @@ checkLocalShape receipt sample memory = do
   let base = [(SharedDomains,0xc0800,256),(InterfaceRoots,0x96bd20,8),(InterfaceTable,0x4dae0,0x162c),(InterfaceTable,0xddaa0,0x162c)]
       actual = [(viewObject view,address (viewPhysical view),B.length (bytes (viewBytes view))) | view <- sampleLocal sample]
   require (sort actual == sort (base ++ active ++ entries)) SnapshotRejected
-  mapM_ (\(table,offset,expected) -> readWord SnapshotRejected memory (table+offset) >>= \actualWord -> require (actualWord == expected) SnapshotRejected)
-    [(0x4dae0,0,0x4d094),(0x4dae0,0xc,0x44f2c),(0x4dae0,0x80,0x4d39c),(0x4dae0,0x1618,0x412bc)
-    ,(0x4dae0,0x164,0x41140),(0x4dae0,0x168,0x41164),(0xddaa0,0,0xdd054),(0xddaa0,0xc,0xd4eec)
-    ,(0xddaa0,0x80,0xdd360),(0xddaa0,0x164,0xd1140),(0xddaa0,0x168,0xd1164)]
   where core = contextCore (sampleContext sample); position = sampleHit sample
 
+data CallerBinding = CallerBinding {bindingTask :: TaskId, bindingDescriptor :: W.Address, bindingSp :: W.Address}
+data CallerBacking = CallerBacking {backingLow :: W.Address, backingHigh :: W.Address}
+data PublishedSlot = PublishedSlot W.Address W.Address
+publishedSlots :: [PublishedSlot]
+publishedSlots = [PublishedSlot (W.Address (table+offset)) (W.Address target) | (table,slots) <-
+  [(0x4dae0,[(0,0x4d094),(0xc,0x44f2c),(0x80,0x4d39c),(0x1618,0x412bc),(0x161c,0x412cc),(0x1620,0x412e8),(0x1624,0x41304),(0x164,0x41140),(0x168,0x41164)])
+  ,(0xddaa0,[(0,0xdd054),(0xc,0xd4eec),(0x80,0xdd360),(0x1618,0xd12bc),(0x161c,0xd12cc),(0x1620,0xd12e8),(0x1624,0xd1304),(0x164,0xd1140),(0x168,0xd1164)])],(offset,target) <- slots]
+activeBinding :: Receipt -> Maybe C.ProbeRecord -> Sample -> Either WitnessError (Maybe CallerBinding)
+activeBinding receipt probe sample = case probe of
+  Just controlled | core == PrimaryKernel && sampleHit sample >= C.probeInitialHit controlled ->
+    pure (Just (CallerBinding (C.probeTask controlled) (C.probeDescriptor controlled) (W.contextSp (contextState (C.probeConfigured controlled)))))
+  _ -> case filter (\submitted -> submissionCore submitted == core && submissionEntryHit submitted <= sampleHit sample
+    && maybe True (sampleHit sample <=) (submissionReturnHit submitted)) (receiptSubmissions receipt) of
+      [] -> pure Nothing
+      [submitted] -> pure (Just (CallerBinding (submissionId submitted) (submissionDescriptor submitted) (submissionSp submitted)))
+      _ -> Left SnapshotRejected
+  where core = contextCore (sampleContext sample)
+callerBacking :: Sample -> CallerBinding -> Either WitnessError CallerBacking
+callerBacking sample binding
+  | bindingSp binding == W.Address bootSp = pure (CallerBacking (W.Address bootLow) (W.Address (physical bootSp+32)))
+  | otherwise = do
+      kernel <- kernelAt sample core
+      current <- required SnapshotRejected (case filter ((==kernelCurrent kernel) . taskNode) (kernelTasks kernel) of [task] -> Just task; _ -> Nothing)
+      let low = physical (address (taskStackBase current)); high = toInteger low+toInteger (value (taskStackBytes current))
+      require (taskId current == TaskId 104 && taskStackBytes current == W.WordValue 1024
+        && low >= 0xa10200 && high <= 0xa5b200 && toInteger (physical (address (bindingSp binding)))+16 == high) SnapshotRejected
+      pure (CallerBacking (W.Address low) (W.Address (fromInteger high)))
+  where
+    core = contextCore (sampleContext sample)
+    (bootSp,bootLow) = case core of PrimaryKernel -> (0x40063420,0x62c54); SecondaryKernel -> (0x400f33e0,0xf2c14)
+currentLocalShape :: Inputs -> Receipt -> Maybe C.ProbeRecord -> Sample -> Memory -> Either WitnessError ()
+currentLocalShape inputs receipt probe sample memory = do
+  binding <- activeBinding receipt probe sample
+  active <- case binding of
+    Nothing -> pure []
+    Just current -> do
+      let TaskId ident = bindingTask current; i = fromIntegral ident-1
+          descriptor = physical (address (bindingDescriptor current))
+      pool <- readWord SnapshotRejected memory (0xa0fc44+12*i)
+      size <- readWord SnapshotRejected memory (0xa0fc48+12*i)
+      require (pool == 0 || (size == 1024 && physical pool >= 0xa10200 && toInteger (physical pool)+1024 <= 0xa5b200)) SnapshotRejected
+      backing <- callerBacking sample current
+      let low = address (backingLow backing); high = address (backingHigh backing)
+          pools = if pool == 0 then [] else [(Stack,physical pool,1024)]
+      parameters <- if sampleCallTaken sample /= Just False && sampleBoundary sample `elem` [AuxiliaryCall,CreationCall]
+        then do
+          pointer <- contextRegister 1 sample
+          let sizeBytes = if sampleBoundary sample == AuxiliaryCall then 8 else 24
+          require (pointer `mod` 4 == 0 && physical pointer >= low && toInteger (physical pointer)+toInteger sizeBytes <= toInteger high) SnapshotRejected
+          pure [(Parameters,physical pointer,sizeBytes)]
+        else pure []
+      pure ([(Descriptor,descriptor,28),(Wrapper,0xa5b204+8*i,8),(Storage,0xa0fc44+12*i,12),(Stack,low,fromIntegral (high-low))] ++ pools ++ parameters)
+  entries <- fmap concat $ mapM (\first -> if firstCore first == core && (firstEntryHit first == Just position || firstEnteredHit first == Just position)
+    then do require (address (firstStackTop first) >= 64) SnapshotRejected
+            pure [(Stack,physical (address (firstStackTop first)-64),96)]
+    else pure []) (receiptFirstTasks receipt)
+  let base = [(SharedDomains,0xc0800,256),(InterfaceRoots,0x96bd20,8),(InterfaceTable,0x4dae0,0x162c),(InterfaceTable,0xddaa0,0x162c)
+        ,(ErrorState,0xa0f82c,4),(Callback,0x89ea8c,4),(CursorObject,0x89ea98,4),(LockObject,0x9c280c,4),(ClassTable,0x7cad9c,420)
+        ,(LogCallback,0x4f15c,4),(LogMode,0x4f25c,4),(LogEnable,0x4f5e4,38)]
+      actual = [(viewObject view,address (viewPhysical view),B.length (bytes (viewBytes view))) | view <- sampleLocal sample]
+  require (sort actual == sort (base ++ active ++ entries)) SnapshotRejected
+  (_,imageBase,image) <- required CodeRejected (case filter (\(kind,_,_) -> kind == Image4) (codeSources inputs) of [found] -> Just found; _ -> Nothing)
+  classTable <- readBytes SnapshotRejected memory 0x7cad9c 420
+  require (classTable == B.take 420 (B.drop (fromIntegral (0x7cad9c-imageBase)) image)) SnapshotRejected
+  where core = contextCore (sampleContext sample); position = sampleHit sample
+checkLocalShape :: Inputs -> Receipt -> Maybe C.ProbeRecord -> Sample -> Memory -> Either WitnessError ()
+checkLocalShape inputs receipt probe sample memory = do
+  case receiptSchema receipt of
+    LegacyStockProtocol -> legacyLocalShape receipt sample memory
+    TaskSubmissionProtocol -> currentLocalShape inputs receipt probe sample memory
+  mapM_ (\(PublishedSlot cell target) -> readWord SnapshotRejected memory (address cell) >>= \actual -> require (actual == address target) SnapshotRejected) publishedSlots
 
-checkSample :: Inputs -> Receipt -> Sample -> Memory -> Either WitnessError Memory
-checkSample inputs receipt sample previous = do
+
+checkSample :: Inputs -> Receipt -> Maybe C.ProbeRecord -> Sample -> Memory -> Either WitnessError Memory
+checkSample inputs@(Inputs _ _ program) receipt probe sample previous = do
   let context = sampleContext sample; state = contextState context
   total <- checkedCounts (W.contextCounts state)
   hit <- at ContextRejected (receiptHits receipt) (index (sampleHit sample))
   require (length (W.contextRegisters state) == 13 && length (W.contextTcm state) == 2
     && W.contextIdentities state == map W.WordValue [0x4003,0x5003] && contextCore context == hitCore hit
     && W.contextPc state == hitAddress hit && sampleBoundary sample == hitBoundary hit
-    && M.lookup (W.contextPc state) expectedSites == Just (sampleBoundary sample)
+    && M.lookup (W.contextPc state) (expectedSites inputs (receiptSchema receipt)) == Just (sampleBoundary sample)
     && total == hitInstructions hit
     && W.contextRegisters state == hitRegisters hit && W.contextSp state == hitSp hit && W.contextLr state == hitLr hit && W.contextCpsr state == hitCpsr hit) ContextRejected
   instruction <- sourceWord inputs (address (W.contextPc state))
   require (sampleCodeWord sample == W.WordValue instruction && map kernelCore (sampleKernels sample) == [PrimaryKernel,SecondaryKernel]) CodeRejected
   memory <- validateViews sample previous
   mapM_ (checkKernel memory) (sampleKernels sample)
-  checkLocalShape receipt sample memory
+  checkLocalShape inputs receipt probe sample memory
+  either (const (Left (if receiptSchema receipt == LegacyStockProtocol then SubmissionRejected else ProgramRejected))) Right (P.checkProgramSample program receipt sample)
   readWord SnapshotRejected memory 0x96bd20 >>= \root -> require (root == 0x4004dae0) SnapshotRejected
   readWord SnapshotRejected memory 0x96bd24 >>= \root -> require (root == 0x400ddaa0) SnapshotRejected
   pure memory
 
-data Progress = Progress {progressCounts :: [W.Count], progressFetches :: M.Map W.Core (W.Address,W.Count), progressMemory :: Memory}
+data WrapperFailure = ActivationMasked | CreationDuplicate | ReservationHeld deriving (Eq, Show)
+data Publication = NoPublication | PendingPublication | Published deriving (Eq, Show)
+data FailurePhase = NoFailure | BeforeFailure WrapperFailure | FailureObserved WrapperFailure | FailureLogging WrapperFailure
+  | FailureLogComplete WrapperFailure | FailureStored WrapperFailure | FailureReporting WrapperFailure | FailureReported WrapperFailure deriving (Eq, Show)
+data CriticalToken = InterruptsEnabled | InterruptsMasked deriving (Eq, Show)
+criticalWord :: CriticalToken -> Word32
+criticalWord InterruptsEnabled = 0
+criticalWord InterruptsMasked = 0x80
+data CriticalPhase = CriticalNotNeeded | CriticalPending | CriticalEntering | CriticalHeld CriticalToken | CriticalExiting CriticalToken | CriticalReleased deriving (Eq, Show)
+criticalHeld :: CriticalPhase -> Bool
+criticalHeld (CriticalHeld _) = True
+criticalHeld _ = False
+data Invocation = Invocation
+  {invocationKind :: F.EntryPoint, invocationSp :: W.Address, invocationLow :: W.Address, invocationTask :: TaskId
+  ,invocationPublication :: Publication, invocationFailure :: FailurePhase, invocationCritical :: CriticalPhase, invocationInitialToken :: CriticalToken}
+data StoppedPoint = StoppedPoint W.Address W.Count
+data PendingStore = PendingStore W.Address P.GuestStore
+data WriteAuthority = RetainedWriter | OwnedWriter deriving (Eq)
+data Progress = Progress
+  {progressCounts :: [W.Count], progressFetches :: M.Map W.Core (W.Address,W.Count), progressMemory :: Memory
+  ,progressInvocations :: M.Map W.Core Invocation, progressStops :: M.Map W.Core StoppedPoint, progressStores :: M.Map W.Core PendingStore}
+failureWord :: WrapperFailure -> Word32
+failureWord ActivationMasked = 0xffffffe7
+failureWord CreationDuplicate = 0xffffffd7
+failureWord ReservationHeld = 0xffffffee
+expectedFailure :: Receipt -> Maybe C.ProbeRecord -> Sample -> Maybe WrapperFailure
+expectedFailure receipt probe sample
+  | any ((==sampleHit sample) . submissionEntryHit) (receiptSubmissions receipt) = Just ActivationMasked
+  | otherwise = case C.probeCase <$> probe of
+      Just C.FreshMasked -> Just ActivationMasked
+      Just C.ReusedRecord -> Just CreationDuplicate
+      Just C.PartialPair -> Just CreationDuplicate
+      Just C.ReservedRefusal -> Just ReservationHeld
+      Just C.CallbackUnreturned -> Just ReservationHeld
+      _ -> Nothing
+ownedPoint :: Inputs -> ReceiptProtocol -> W.Address -> Bool
+ownedPoint inputs@(Inputs _ _ program) protocol pc = case P.programFrameProof program of
+  Just _ -> address pc >= 0x725dd8 && address pc < 0x72612c && M.member pc (expectedSites inputs protocol)
+  Nothing -> False
+noteSnapshot :: Inputs -> Receipt -> Maybe C.ProbeRecord -> Sample -> Progress -> Either WitnessError Progress
+noteSnapshot inputs@(Inputs _ _ program) receipt probe sample progress = do
+  noted <- noteInvocation inputs receipt probe sample progress
+  if receiptSchema receipt == LegacyStockProtocol then pure noted else do
+    let core = watchCore (contextCore (sampleContext sample)); state = contextState (sampleContext sample)
+    counter <- at ClockRejected (W.contextCounts state) (coreIndex (contextCore (sampleContext sample)))
+    require (M.notMember core (progressStops noted)) ContextRejected
+    require (M.notMember core (progressStores noted)) WriteRejected
+    store <- either (const (Left ProgramRejected)) Right (P.programGuestStore program sample)
+    case store of
+      Nothing -> pure ()
+      Just actual -> do
+        invocation <- required WriteRejected (M.lookup core (progressInvocations noted))
+        _ <- applyStore OwnedWriter invocation actual
+        pure ()
+    let stops = if ownedPoint inputs (receiptSchema receipt) (W.contextPc state)
+          then M.insert core (StoppedPoint (W.contextPc state) counter) (progressStops noted) else progressStops noted
+    pure noted {progressStops=stops
+      ,progressStores=maybe (progressStores noted) (\actual -> M.insert core (PendingStore (W.contextPc state) actual) (progressStores noted)) store}
+noteInvocation :: Inputs -> Receipt -> Maybe C.ProbeRecord -> Sample -> Progress -> Either WitnessError Progress
+noteInvocation (Inputs _ _ program) receipt probe sample progress
+  | receiptSchema receipt == LegacyStockProtocol = pure progress
+  | sampleBoundary sample `elem` [SubmissionEntry,ReleaseEntry] = do
+      let kind = if sampleBoundary sample == SubmissionEntry then F.Submission else F.Release
+          incomingSp = W.contextSp (contextState (sampleContext sample))
+          F.StackOffset offset = maybe (if kind == F.Submission then F.StackOffset (-56) else F.StackOffset (-32)) (\proof -> F.scratchLow proof kind) (P.programFrameProof program)
+          low = toInteger (physical (address incomingSp))+offset
+      require (M.notMember core (progressInvocations progress) && low >= 0 && low <= toInteger (physical (address incomingSp))) SubmissionRejected
+      memory <- localMemory sample
+      argument <- contextRegister 0 sample
+      (ident,publication,failure) <- if kind == F.Submission
+        then do
+          number <- readWord SubmissionRejected memory (physical argument)
+          requested <- readWord SubmissionRejected memory (physical argument+12)
+          require (number >= 1 && number <= 120 && requested == 1024) SubmissionRejected
+          base <- readWord SubmissionRejected memory (0xa5b204+8*(number-1))
+          size <- readWord SubmissionRejected memory (0xa5b208+8*(number-1))
+          pure (TaskId (fromIntegral number),if base == 0 && size == 0 then PendingPublication else NoPublication,maybe NoFailure BeforeFailure (expectedFailure receipt probe sample))
+        else do require (argument < 120) SubmissionRejected; pure (TaskId (fromIntegral argument+1),NoPublication,NoFailure)
+      let token = if testBit (value (W.contextCpsr (contextState (sampleContext sample)))) 7 then InterruptsMasked else InterruptsEnabled
+          invocation = Invocation kind incomingSp (W.Address (fromInteger low)) ident publication failure (if kind == F.Submission then CriticalPending else CriticalNotNeeded) token
+      pure progress {progressInvocations=M.insert core invocation (progressInvocations progress)}
+  | isOuterReturn = do
+      case M.lookup core (progressInvocations progress) of
+        Nothing -> require (sampleBoundary sample /= WrapperReturn) SubmissionRejected
+        Just invocation -> do
+          require (invocationPublication invocation /= PendingPublication && case invocationFailure invocation of NoFailure -> True; FailureReported _ -> True; _ -> False) SubmissionRejected
+          require (W.contextSp (contextState (sampleContext sample)) == invocationSp invocation) SubmissionRejected
+          require (invocationCritical invocation == (if invocationKind invocation == F.Submission then CriticalReleased else CriticalNotNeeded)) SubmissionRejected
+      pure progress {progressInvocations=M.delete core (progressInvocations progress)}
+  | sampleCallTaken sample == Just False = pure progress
+  | otherwise = case M.lookup core (progressInvocations progress) of
+      Nothing -> pure progress
+      Just invocation -> do
+        next <- case sampleBoundary sample of
+          CriticalEnterCall -> do
+            require (invocationCritical invocation == CriticalPending) SubmissionRejected
+            pure invocation {invocationCritical=CriticalEntering}
+          CriticalEnterReturn -> do
+            require (invocationCritical invocation == CriticalEntering) SubmissionRejected
+            token <- contextRegister 0 sample
+            require (token == criticalWord (invocationInitialToken invocation) && testBit (value (W.contextCpsr (contextState (sampleContext sample)))) 7) SubmissionRejected
+            pure invocation {invocationCritical=CriticalHeld (invocationInitialToken invocation)}
+          CriticalExitCall -> case invocationCritical invocation of
+            CriticalHeld token -> do
+              actual <- contextRegister 0 sample
+              require (actual == criticalWord token && testBit (value (W.contextCpsr (contextState (sampleContext sample)))) 7) SubmissionRejected
+              pure invocation {invocationCritical=CriticalExiting token}
+            _ -> Left SubmissionRejected
+          CriticalExitReturn -> case invocationCritical invocation of
+            CriticalExiting token -> do
+              require (value (W.contextCpsr (contextState (sampleContext sample))) .&. 0x80 == criticalWord token) SubmissionRejected
+              pure invocation {invocationCritical=CriticalReleased}
+            _ -> Left SubmissionRejected
+          ReservationCall -> do
+            require (criticalHeld (invocationCritical invocation) && invocationPublication invocation == Published) SubmissionRejected
+            pure invocation
+          AuxiliaryCall -> held invocation
+          FillCall -> held invocation
+          CacheCall -> held invocation
+          CreationCall -> held invocation
+          ActivationCall -> do require (invocationCritical invocation == CriticalReleased) SubmissionRejected; pure invocation
+          ReservationReturn -> serviceResult ReservationHeld invocation
+          CreationReturn -> serviceResult CreationDuplicate invocation
+          ActivationReturn -> serviceResult ActivationMasked invocation
+          LogCall -> do
+            require (invocationCritical invocation == CriticalReleased) SubmissionRejected
+            case invocationFailure invocation of
+              FailureObserved failure -> pure invocation {invocationFailure=FailureLogging failure}
+              _ -> Left SubmissionRejected
+          LogReturn -> case invocationFailure invocation of
+            FailureLogging failure -> pure invocation {invocationFailure=FailureLogComplete failure}
+            _ -> Left SubmissionRejected
+          ErrorCallbackCall -> case invocationFailure invocation of
+            FailureStored failure -> pure invocation {invocationFailure=FailureReporting failure}
+            _ -> Left SubmissionRejected
+          ErrorCallbackReturn -> case invocationFailure invocation of
+            FailureReporting failure -> pure invocation {invocationFailure=FailureReported failure}
+            _ -> Left SubmissionRejected
+          _ -> pure invocation
+        pure progress {progressInvocations=M.insert core next (progressInvocations progress)}
+  where
+    core = watchCore (contextCore (sampleContext sample))
+    isOuterReturn = sampleBoundary sample `elem` [WrapperReturn,ReleaseReturn] || maybe False ((==Just (sampleHit sample)) . C.probeReturnHit) probe
+    held invocation = do
+      require (criticalHeld (invocationCritical invocation) && testBit (value (W.contextCpsr (contextState (sampleContext sample)))) 7) SubmissionRejected
+      pure invocation
+    serviceResult failure invocation = do
+      status <- contextRegister 0 sample
+      if status == 0 then pure invocation else do
+        require (status == failureWord failure && invocationFailure invocation == BeforeFailure failure) SubmissionRejected
+        pure invocation {invocationFailure=FailureObserved failure}
 clockTotal :: Progress -> Either WitnessError W.Count
 clockTotal = checkedCounts . progressCounts
 checkFetchShape :: W.Address -> Word64 -> W.MemoryEvent -> Either WitnessError ()
@@ -263,8 +486,8 @@ checkFetchShape pc target event =
   require (W.eventSource event == W.CpuFetch && W.eventAddress event == fromIntegral (address pc)
     && target == fromIntegral (physical (address pc)) && W.eventSize event == 4
     && W.eventValue event == Nothing && W.eventBefore event == Nothing) FetchRejected
-eventShape :: Inputs -> W.MemoryEvent -> Either WitnessError (W.Core,W.Address,W.Count,Word64)
-eventShape inputs event = do
+eventShape :: Inputs -> ReceiptProtocol -> W.MemoryEvent -> Either WitnessError (W.Core,W.Address,W.Count,Word64)
+eventShape inputs@(Inputs _ _ program) protocol event = do
   let malformed = if W.eventSource event == W.CpuFetch then FetchRejected else WriteRejected
   core <- required FetchRejected (W.eventCore event); pc <- required FetchRejected (W.eventPc event)
   clock <- required ClockRejected (W.eventInstructions event); target <- required malformed (W.eventPhysical event)
@@ -274,13 +497,14 @@ eventShape inputs event = do
   require (any (\classification -> case W.classRange classification of
       [start,end] -> target >= start && toInteger target+toInteger (W.eventSize event) <= toInteger end
         && W.eventSource event `elem` W.classKinds classification
-      _ -> False) (expectedClasses inputs)) WatchRejected
+      _ -> False) (expectedClasses inputs protocol)) WatchRejected
   _ <- sourceWord inputs (address pc)
+  require (P.programAllowsPc program pc) CodeRejected
   pure (core,pc,clock,target)
-advance :: Inputs -> Progress -> W.MemoryEvent -> Either WitnessError Progress
-advance inputs progress event = do
+advance :: Inputs -> Receipt -> Progress -> W.MemoryEvent -> Either WitnessError Progress
+advance inputs receipt progress event = do
   require (W.eventSource event /= W.HostWrite && W.eventSource event /= W.ModelBusWrite) ForeignWriterRejected
-  (core,pc,clock,target) <- eventShape inputs event
+  (core,pc,clock,target) <- eventShape inputs (receiptSchema receipt) event
   case W.eventSource event of
     W.CpuFetch -> do
       checkFetchShape pc target event
@@ -288,51 +512,142 @@ advance inputs progress event = do
       require (clock == nextTotal) ClockRejected
       let position = case core of W.Primary -> 0; W.Secondary -> 1
       current <- at ClockRejected (progressCounts progress) position
+      if receiptSchema receipt == LegacyStockProtocol then pure () else do
+        case M.lookup core (progressStops progress) of
+          Nothing -> require (not (ownedPoint inputs (receiptSchema receipt) pc)) FetchRejected
+          Just (StoppedPoint stoppedPc settled) -> require (pc == stoppedPc && current == settled) FetchRejected
+        case M.lookup core (progressStores progress) of
+          Nothing -> pure ()
+          Just (PendingStore expectedPc _) -> require (pc == expectedPc) WriteRejected
       incremented <- checkedIncrement current
       let counts = zipWith (\slot currentCount -> if slot == position then incremented else currentCount) [0 :: Int ..] (progressCounts progress)
-      pure progress {progressCounts=counts,progressFetches=M.insert core (pc,clock) (progressFetches progress)}
+      pure progress {progressCounts=counts,progressFetches=M.insert core (pc,clock) (progressFetches progress),progressStops=M.delete core (progressStops progress)}
     W.CpuWrite -> do
       require (M.lookup core (progressFetches progress) == Just (pc,clock)) ClockRejected
       require (W.eventSize event `elem` [1,2,4,8] && not (immutable inputs (fromIntegral target) (W.eventSize event))) WriteRejected
+      let end = toInteger target+toInteger (W.eventSize event)
+          touches cell = toInteger target < toInteger cell+4 && toInteger cell < end
+      require (not (any (\(PublishedSlot cell _) -> touches (address cell)) publishedSlots)
+        && not (toInteger target < 0x96bd28 && 0x96bd20 < end)) WriteRejected
+      effects <- wrapperWrite inputs receipt progress event
       old <- bytes <$> required PreimageRejected (W.eventBefore event); new <- required WriteRejected (W.eventValue event)
       let size = fromIntegral (W.eventSize event); Memory contents = progressMemory progress
       require (B.length old == size && (size == 8 || new < 1 `shiftL` (8*size))) WriteRejected
       mapM_ (\(offset,byte) -> require (maybe True (==byte) (M.lookup (fromIntegral target+offset) contents)) PreimageRejected) (zip [0..] (B.unpack old))
       let replacement = [(fromIntegral target+fromIntegral offset,fromIntegral (new `shiftR` (8*offset))) | offset <- [0..size-1]]
-      pure progress {progressMemory=Memory (foldr (uncurry M.insert) contents replacement)}
+      pure effects {progressMemory=Memory (foldr (uncurry M.insert) contents replacement)}
     W.HostWrite -> Left ForeignWriterRejected
     W.ModelBusWrite -> Left ForeignWriterRejected
     _ -> Left WatchRejected
 
-replay :: Inputs -> Receipt -> W.Watch -> Either WitnessError Memory
-replay inputs receipt watch = do
+applyStore :: WriteAuthority -> Invocation -> P.GuestStore -> Either WitnessError Invocation
+applyStore authority invocation store = do
+  let target = physical (address (P.guestStoreAddress store)); payload = value (P.guestStoreValue store)
+      TaskId ident = invocationTask invocation; i = fromIntegral ident-1
+      end = toInteger target+4
+      scratch = target >= address (invocationLow invocation) && end <= toInteger (physical (address (invocationSp invocation)))
+      publication = invocationKind invocation == F.Submission && target == 0xa5b208+8*i
+      release = invocationKind invocation == F.Release && target == 0xa0fc4c+12*i && payload == 0
+  require (target `mod` 4 == 0) WriteRejected
+  if publication
+    then do
+      require (payload == 1024 && invocationPublication invocation == PendingPublication && criticalHeld (invocationCritical invocation)) WriteRejected
+      pure invocation {invocationPublication=Published}
+    else if target == 0xa0f82c
+      then case invocationFailure invocation of
+        FailureLogComplete failure -> do
+          require (payload == failureWord failure) WriteRejected
+          pure invocation {invocationFailure=FailureStored failure}
+        _ -> Left WriteRejected
+      else do require (authority == RetainedWriter || scratch || release) WriteRejected; pure invocation
+wrapperWrite :: Inputs -> Receipt -> Progress -> W.MemoryEvent -> Either WitnessError Progress
+wrapperWrite (Inputs _ _ program) receipt progress event
+  | receiptSchema receipt == LegacyStockProtocol = pure progress
+  | maybe True (\pc -> address pc < 0x725dd8 || address pc >= 0x72612c) (W.eventPc event) = pure progress
+  | otherwise = do
+      core <- required WriteRejected (W.eventCore event)
+      pc <- required WriteRejected (W.eventPc event)
+      invocation <- required WriteRejected (M.lookup core (progressInvocations progress))
+      payload <- required WriteRejected (W.eventValue event)
+      require (W.eventSize event == 4 && payload <= 0xffffffff && W.eventAddress event <= 0xffffffff) WriteRejected
+      let store = P.GuestStore (W.Address (fromIntegral (W.eventAddress event))) (W.WordValue (fromIntegral payload))
+          authority = case P.programFrameProof program of Just _ -> OwnedWriter; Nothing -> RetainedWriter
+      if P.programHasStore program pc
+        then do
+          PendingStore expectedPc expected <- required WriteRejected (M.lookup core (progressStores progress))
+          require (pc == expectedPc && store == expected) WriteRejected
+        else pure ()
+      next <- applyStore authority invocation store
+      pure progress {progressInvocations=M.insert core next (progressInvocations progress),progressStores=M.delete core (progressStores progress)}
+hostPatch :: Receipt -> M.Map Int C.ControlPatch -> Progress -> (Int,W.MemoryEvent) -> Either WitnessError Progress
+hostPatch receipt patches progress (slot,event) = do
+  patch <- required ForeignWriterRejected (M.lookup slot patches)
+  anchor <- sampleAt receipt (C.patchAfterHit patch)
+  let before = C.patchBefore patch; after = C.patchAfter patch
+      virtual = address (C.patchAddress patch); target = physical virtual
+      old = bytes (viewBytes before); new = bytes (viewBytes after)
+      state = contextState (sampleContext anchor)
+  require (W.eventSource event == W.HostWrite && W.eventAddress event == fromIntegral virtual
+    && W.eventPhysical event == Just (fromIntegral target) && W.eventSize event == 4
+    && viewObject before == ControlPatch && viewObject after == ControlPatch
+    && viewPhysical before == W.Address target && viewPhysical after == W.Address target
+    && B.length old == 4 && B.length new == 4 && old /= new
+    && W.eventCore event == Nothing && W.eventPc event == Nothing && W.eventInstructions event == Nothing && W.eventTick event == Nothing
+    && maybe True (==W.Little) (W.eventByteOrder event)
+    && maybe True (==fromIntegral (U.word32At new 0)) (W.eventValue event)
+    && maybe True (==viewBytes before) (W.eventBefore event)) ForeignWriterRejected
+  validateView state before
+  validateView state after
+  actual <- readBytes PreimageRejected (progressMemory progress) target 4
+  require (actual == old) PreimageRejected
+  let Memory memory = progressMemory progress
+      replacement = zip [target..] (B.unpack new)
+  pure progress {progressMemory=Memory (foldr (uncurry M.insert) memory replacement)}
+
+replay :: Inputs -> Receipt -> Maybe C.ProbeRecord -> W.Watch -> Either WitnessError Memory
+replay inputs@(Inputs sources _ program) receipt probe watch = do
   first <- at SnapshotRejected (receiptSamples receipt) 0
   require (sampleCursor first == Cursor 0) SnapshotRejected
-  let Inputs sources _ = inputs; offset = 0x89ea8c-0x61c400
-      initialTail = View Control (W.Address 0x89ea8c) (W.Bytes (B.drop offset (sourceImage sources))) []
-  initial <- mergeView (Memory M.empty) initialTail >>= checkSample inputs receipt first
+  let offset = 0x89ea8c-0x61c400
+      initialTail = View Control (W.Address 0x89ea8c) (W.Bytes (B.drop offset (P.programImage4 program (sourceImage sources)))) []
+      declared = maybe [] C.probePatches probe
+      patches = M.fromList [(cursor (C.patchWatchCursor patch),patch) | patch <- declared]
+  require (M.size patches == length declared) ControlRejected
+  initial <- mergeView (Memory M.empty) initialTail >>= checkSample inputs receipt probe first
   checkInitial first initial
-  final <- foldM step (Progress (W.contextCounts (contextState (sampleContext first))) M.empty initial,sampleCursor first) (drop 1 (receiptSamples receipt))
-  require (cursor (snd final) == length (W.watchRecords watch) && Just (progressCounts (fst final)) == receiptStartupCounts receipt) ClockRejected
+  started <- noteSnapshot inputs receipt probe first (Progress (W.contextCounts (contextState (sampleContext first))) M.empty initial M.empty M.empty M.empty)
+  final <- foldM (step patches) (started,sampleCursor first) (drop 1 (receiptSamples receipt))
+  lastSample <- required SnapshotRejected (case reverse (receiptSamples receipt) of sample:_ -> Just sample; [] -> Nothing)
+  let expectedCounts = case probe of Nothing -> receiptStartupCounts receipt; Just _ -> Just (W.contextCounts (contextState (sampleContext lastSample)))
+      invocations = progressInvocations (fst final)
+  require (cursor (snd final) == length (W.watchRecords watch) && Just (progressCounts (fst final)) == expectedCounts) ClockRejected
+  require (M.null (progressStores (fst final))) WriteRejected
+  case probe of
+    Just controlled | C.probeCase controlled == C.CallbackUnreturned ->
+      require (M.size invocations == 1 && maybe False ((==FailureReporting ReservationHeld) . invocationFailure) (M.lookup W.Primary invocations)) SubmissionRejected
+    _ -> require (M.null invocations) SubmissionRejected
   pure (progressMemory (fst final))
   where
-    step (progress,previousCursor) sample = do
-      let end = cursor (sampleCursor sample); start = cursor previousCursor; events = take (end-start) (drop start (W.watchRecords watch))
+    step patches (progress,previousCursor) sample = do
+      let end = cursor (sampleCursor sample); start = cursor previousCursor
+          events = zip [start..] (take (end-start) (drop start (W.watchRecords watch)))
           context = sampleContext sample; state = contextState context
       expectedClock <- checkedCounts (W.contextCounts state)
       require (end > start && end <= length (W.watchRecords watch)) SnapshotRejected
       -- Instruction points precede watch hooks; stopped fetch clocks equal the settled count.
       executed <- case reverse events of
-        event:rest -> do
-          (core,pc,clock,target) <- eventShape inputs event
+        (_,event):rest -> do
+          (core,pc,clock,target) <- eventShape inputs (receiptSchema receipt) event
           checkFetchShape pc target event
           require (core == watchCore (contextCore context) && pc == W.contextPc state && clock == expectedClock) FetchRejected
           pure (reverse rest)
         _ -> Left FetchRejected
-      next <- foldM (advance inputs) progress executed
+      next <- foldM (\current row@(_,event) -> if W.eventSource event == W.HostWrite
+        then hostPatch receipt patches current row else advance inputs receipt current event) progress executed
       require (progressCounts next == W.contextCounts state) ClockRejected
-      memory <- checkSample inputs receipt sample (progressMemory next)
-      pure (next {progressMemory=memory},sampleCursor sample)
+      memory <- checkSample inputs receipt probe sample (progressMemory next)
+      observed <- noteSnapshot inputs receipt probe sample (next {progressMemory=memory})
+      pure (observed,sampleCursor sample)
 
 submissionSpec :: TaskId -> Either WitnessError (KernelCore,Word32,Word32,Word32,Word32,Word32,Word32)
 submissionSpec (TaskId ident) = case ident of
@@ -341,8 +656,8 @@ submissionSpec (TaskId ident) = case ident of
   103 -> Right (SecondaryKernel,0x400f33e4,0x400f33e0,0x69cf38,0x781970,14,0x69cbf0)
   93 -> Right (SecondaryKernel,0x400f33e4,0x400f33e0,0x69cf70,0x781978,12,0x69cd58)
   _ -> Left SubmissionRejected
-checkSubmission :: Receipt -> Submission -> Either WitnessError ()
-checkSubmission receipt submitted = do
+checkSubmission :: Inputs -> Receipt -> Submission -> Either WitnessError ()
+checkSubmission (Inputs _ _ program) receipt submitted = do
   let ident@(TaskId number) = submissionId submitted; start = submissionEntryHit submitted
   (core,descriptor,sp,returnPc,name,priority,entry) <- submissionSpec ident
   finish <- required SubmissionRejected (submissionReturnHit submitted)
@@ -361,9 +676,16 @@ checkSubmission receipt submitted = do
   require (take 6 descriptorWords == [fromIntegral number,name,priority+1,1024,entry,0]) SubmissionRejected
   later <- mapM (readWord SubmissionRejected after . (physical descriptor+)) [0,4..24]
   require (later == descriptorWords) SubmissionRejected
-  let interval = filter (\sample -> sampleHit sample >= start && sampleHit sample <= finish && contextCore (sampleContext sample) == core) (receiptSamples receipt)
+  let interval = filter (\sample -> sampleHit sample >= start && sampleHit sample <= finish && contextCore (sampleContext sample) == core
+        && sampleCallTaken sample /= Just False) (receiptSamples receipt)
   mapM_ (\kind -> require (length (filter ((==kind) . sampleBoundary) interval) == 1) SubmissionRejected)
     [SubmissionEntry,AuxiliaryReturn,CreationCall,CreationReturn,ActivationCall,ActivationReturn,WrapperReturn]
+  if receiptSchema receipt == LegacyStockProtocol then pure () else do
+    let ordered = [CriticalEnterCall,CriticalEnterReturn,ReservationCall,ReservationReturn,AuxiliaryCall,AuxiliaryReturn
+          ,FillCall,FillReturn,CacheCall,CacheReturn,CreationCall,CreationReturn,CriticalExitCall,CriticalExitReturn
+          ,IdentityCall,IdentityReturn,ActivationCall,ActivationReturn,LogCall,LogReturn,ErrorCallbackCall,ErrorCallbackReturn]
+    require ([sampleBoundary sample | sample <- interval,sampleCallTaken sample /= Nothing] == ordered) SubmissionRejected
+    readWord SubmissionRejected after 0xa0f82c >>= \errorWord -> require (errorWord == 0xffffffe7) SubmissionRejected
   creationCall <- required SubmissionRejected (case filter ((==CreationCall) . sampleBoundary) interval of [sample] -> Just sample; _ -> Nothing)
   activationCall <- required SubmissionRejected (case filter ((==ActivationCall) . sampleBoundary) interval of [sample] -> Just sample; _ -> Nothing)
   auxiliary <- required SubmissionRejected (case filter ((==AuxiliaryReturn) . sampleBoundary) interval of [sample] -> Just sample; _ -> Nothing)
@@ -382,18 +704,24 @@ checkSubmission receipt submitted = do
       activation = case core of PrimaryKernel -> 0x44f2c; SecondaryKernel -> 0xd4eec
       creationState = contextState (sampleContext creationCall); activationState = contextState (sampleContext activationCall)
   contextRegister 0 creationCall >>= \actual -> require (actual == encoded) SubmissionRejected
-  contextRegister 1 creationCall >>= \actual -> require (actual == sp-48) SubmissionRejected
-  contextRegister 3 creationCall >>= \actual -> require (actual == constructor) SubmissionRejected
+  parameterPointer <- contextRegister 1 creationCall
   contextRegister 0 activationCall >>= \actual -> require (actual == encoded) SubmissionRejected
-  contextRegister 3 activationCall >>= \actual -> require (actual == activation) SubmissionRejected
-  require (W.contextSp creationState == W.Address (sp-56) && W.contextSp activationState == W.Address (sp-56)
-    && testBit (value (W.contextCpsr activationState)) 7) SubmissionRejected
+  require (testBit (value (W.contextCpsr activationState)) 7) SubmissionRejected
+  case P.programFrameProof program of
+    Just _ -> pure ()
+    Nothing -> do
+      require (parameterPointer == sp-48 && W.contextSp creationState == W.Address (sp-56) && W.contextSp activationState == W.Address (sp-56)) SubmissionRejected
+      contextRegister 3 creationCall >>= \actual -> require (actual == constructor) SubmissionRejected
+      contextRegister 3 activationCall >>= \actual -> require (actual == activation) SubmissionRejected
   callMemory <- localMemory creationCall
-  callParameters <- mapM (\offset -> readWord SubmissionRejected callMemory (physical sp-48+offset)) [0,4..20]
+  callParameters <- mapM (\offset -> readWord SubmissionRejected callMemory (physical parameterPointer+offset)) [0,4..20]
   require (callParameters == [2,0,entry,priority+1,1024,pool]) SubmissionRejected
-  saved <- mapM (\position -> if position == 14 then pure (address (W.contextLr incomingState)) else value <$> at SubmissionRejected (W.contextRegisters incomingState) position) [4,5,6,7,11,14]
-  savedBytes <- mapM (\offset -> readWord SubmissionRejected after (physical sp-24+offset)) [0,4..20]
-  require (savedBytes == saved) SubmissionRejected
+  case P.programFrameProof program of
+    Just _ -> pure ()
+    Nothing -> do
+      saved <- mapM (\position -> if position == 14 then pure (address (W.contextLr incomingState)) else value <$> at SubmissionRejected (W.contextRegisters incomingState) position) [4,5,6,7,11,14]
+      savedBytes <- mapM (\offset -> readWord SubmissionRejected after (physical sp-24+offset)) [0,4..20]
+      require (savedBytes == saved) SubmissionRejected
   readWord SubmissionRejected before (physical sp) >>= \untouched -> readWord SubmissionRejected after (physical sp) >>= \actual -> require (actual == untouched) SubmissionRejected
   parameters <- mapM (readWord TaskRejected after . (c+)) [0,4..36]
   require (parameters == [2,0,entry,priority,1024,pool,0,0,fromIntegral number,1]) TaskRejected
@@ -513,38 +841,62 @@ checkFirst receipt watch first = do
       && maybe False (sampleHit sample <) (firstTransferHit first)) (receiptSamples receipt) of [sample] -> Just sample; _ -> Nothing)
 
 admitReceipt :: Inputs -> ObservedFiles -> Either WitnessError QualifiedReceipt
-admitReceipt inputs@(Inputs _ expectedIdentity) observed = do
+admitReceipt inputs@(Inputs _ expectedIdentity program) observed = do
   require (B.length (observedReceipt observed) <= 128*1024*1024 && B.length (observedWatch observed) <= 32*1024*1024) ReceiptDecodeRejected
-  receipt <- decode ReceiptDecodeRejected (observedReceipt observed)
+  C.ControlEnvelope receipt probe <- decode ReceiptDecodeRejected (observedReceipt observed)
   watch <- decode RawWatchRejected (observedWatch observed)
-  require (receiptSchema receipt == 1 && receiptScope receipt == StockStartupScope
-    && receiptOutcome receipt == ObservedMenu && receiptError receipt == Nothing && receiptMachineFailure receipt == Nothing
-    && receiptWatch receipt == WatchOk True Nothing && receiptWatchEndError receipt == Nothing && receiptMenu receipt == MenuOk (Just [1,5,2])
-    && receiptInstructions receipt == W.Count 382000000) StatusRejected
+  either (const (Left StatusRejected)) Right (P.checkProgramHeader program receipt)
+  require (receiptError receipt == Nothing && receiptMachineFailure receipt == Nothing
+    && receiptWatch receipt == WatchOk True Nothing && receiptWatchEndError receipt == Nothing) StatusRejected
+  case probe of
+    Nothing -> require (receiptOutcome receipt == ObservedMenu && receiptMenu receipt == MenuOk (Just [1,5,2])
+      && receiptInstructions receipt == W.Count 382000000) StatusRejected
+    Just _ -> do
+      endpoint <- required SnapshotRejected (case reverse (receiptSamples receipt) of sample:_ -> Just sample; [] -> Nothing)
+      endpointCount <- checkedCounts (W.contextCounts (contextState (sampleContext endpoint)))
+      require (receiptOutcome receipt == ObservedProbe && receiptInstructions receipt == endpointCount
+        && case receiptMenu receipt of MenuOk _ -> True; MenuError _ -> False) StatusRejected
   require (receiptIdentity receipt == expectedIdentity) IdentityRejected
   require (receiptCheckpointReused receipt && receiptCheckpoint receipt == hash (observedReset observed) && not (B.null (observedReset observed))) ResetRejected
   require (receiptWatchDigest receipt == hash (observedWatch observed)) RawWatchRejected
   require (W.watchEnabled watch && W.watchViolation watch == Nothing && W.watchViews watch == "observe"
-    && W.watchClasses watch == expectedClasses inputs && W.watchRanges watch == unionRanges (map W.classRange (expectedClasses inputs))
+    && W.watchClasses watch == expectedClasses inputs (receiptSchema receipt)
+    && W.watchRanges watch == unionRanges (map W.classRange (expectedClasses inputs (receiptSchema receipt)))
     && not (null (W.watchRecords watch)) && length (W.watchRecords watch) < 1048576) WatchRejected
-  let clocks = mapMaybe W.eventInstructions (W.watchRecords watch); ticks = mapMaybe W.eventTick (W.watchRecords watch)
-  require (length clocks == length (W.watchRecords watch) && length ticks == length clocks
+  let cpuRows = filter (\event -> W.eventSource event `elem` [W.CpuFetch,W.CpuWrite]) (W.watchRecords watch)
+      clocks = mapMaybe W.eventInstructions cpuRows; ticks = mapMaybe W.eventTick cpuRows
+  require (length clocks == length cpuRows && length ticks == length clocks
     && all (<=startupBudget) clocks && clocks == sort clocks && ticks == sort ticks) ClockRejected
-  require (receiptSites receipt == expectedSites && not (null (receiptSamples receipt)) && length (receiptHits receipt) < 4096) SnapshotRejected
+  require (receiptSites receipt == expectedSites inputs (receiptSchema receipt) && not (null (receiptSamples receipt)) && length (receiptHits receipt) < 4096) SnapshotRejected
   first <- at SnapshotRejected (receiptSamples receipt) 0
   require (map (index . sampleHit) (receiptSamples receipt) == [index (sampleHit first)..length (receiptHits receipt)-1]) SnapshotRejected
-  _ <- replay inputs receipt watch
+  control <- case receiptSchema receipt of
+    LegacyStockProtocol -> do require (probe == Nothing) ControlRejected; pure Nothing
+    TaskSubmissionProtocol -> either (const (Left ControlRejected)) Right (C.qualifyControl receipt watch probe)
+  _ <- replay inputs receipt probe watch
   require (sort (map submissionId (receiptSubmissions receipt)) == map TaskId [93,102,103,104]) SubmissionRejected
-  mapM_ (checkSubmission receipt) (receiptSubmissions receipt)
+  mapM_ (checkSubmission inputs receipt) (receiptSubmissions receipt)
   mapM_ (checkRunnable receipt) [PrimaryKernel,SecondaryKernel]
   require (sort (map firstCore (receiptFirstTasks receipt)) == [PrimaryKernel,SecondaryKernel]) FirstTaskRejected
   mapM_ (checkFirst receipt watch) (receiptFirstTasks receipt)
-  pure (QualifiedReceipt receipt (hash (observedReceipt observed)) (length (W.watchRecords watch)))
+  pure (QualifiedReceipt receipt (hash (observedReceipt observed)) (length (W.watchRecords watch)) probe control)
 
+qualifiedReceiptData :: QualifiedReceipt -> Receipt
+qualifiedReceiptData (QualifiedReceipt receipt _ _ _ _) = receipt
+qualifiedProbeData :: QualifiedReceipt -> Maybe C.ProbeRecord
+qualifiedProbeData (QualifiedReceipt _ _ _ probe _) = probe
 qualificationValue :: QualifiedReceipt -> J.Value
-qualificationValue (QualifiedReceipt receipt (W.Digest digest) rows) = J.object
-  ["schema" J..= (1 :: Int),"qualification" J..= ("stock-startup-task-observation" :: String),"receipt_sha256" J..= digest
+qualificationValue (QualifiedReceipt receipt (W.Digest digest) rows _ control) = J.object
+  ["schema" J..= (1 :: Int),"qualification" J..= label,"receipt_sha256" J..= digest
   ,"watch_rows" J..= rows,"snapshots" J..= length (receiptSamples receipt),"submissions" J..= length (receiptSubmissions receipt)
+  ,"control" J..= fmap (\proof -> J.object ["case" J..= show (C.controlCase proof),"endpoint" J..= show (C.controlEndpoint proof)]) control
   ,"first_tasks" J..= [J.object ["core" J..= show (firstCore first),"id" J..= (case firstId first of TaskId ident -> ident)
       ,"entry" J..= address (firstEntry first),"stack_top" J..= address (firstStackTop first)] | first <- receiptFirstTasks receipt]
-  ,"scope" J..= ("Canonical stock startup task objects, auto-ready queues and both first prologues; no owned task implementation or post-entry lifetime acceptance" :: String)]
+  ,"scope" J..= scope]
+  where
+    label, scope :: String
+    (label,scope) = case receiptScope receipt of
+      StockStartupScope -> ("stock-startup-task-observation","Canonical stock startup task objects, auto-ready queues and both first prologues; no owned task implementation or post-entry lifetime acceptance")
+      OwnedStartupScope -> ("owned-task-submission-observation","In-place wrapper/release with named retained callees, four startup submissions and both first prologues; no global caller retirement or post-entry lifetime acceptance")
+      StockProbeScope -> ("stock-task-submission-control","Retained wrapper/release through the declared bounded controlled endpoint")
+      OwnedProbeScope -> ("owned-task-submission-control","In-place wrapper/release through the declared bounded controlled endpoint; named retained callee, mapping, lifetime and external ABI premises remain")
