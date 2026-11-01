@@ -8,6 +8,7 @@ use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, load_card, menu_value, r
 use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, encode_hex};
 use fujimod_xm1::guest::{DialTurn, ModeDialPosition, PhysicalShutterPosition, Press, RouteKey};
 use fujimod_xm1::machine::{KeyPulse, Machine, MENU_PULSE, ReleaseSegment, RunOutcome};
+use fujimod_xm1::modal_trace::BeginRequest as ModalBeginRequest;
 use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::run::{self, NodeName};
 use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
@@ -296,6 +297,9 @@ enum Request {
     Transfer(Transfer),
     TraceSites { sites: BTreeMap<String, String> },
     TraceHits { from: usize },
+    ModalObservationBegin(ModalBeginRequest),
+    ModalObservationReport,
+    ModalObservationEnd,
     CaptureObservationBegin,
     CaptureObservationHits { from: CaptureCursor },
     CaptureObservationAck { next: CaptureCursor },
@@ -331,6 +335,9 @@ enum RequestKind {
     Transfer,
     TraceSites,
     TraceHits,
+    ModalObservationBegin,
+    ModalObservationReport,
+    ModalObservationEnd,
     CaptureObservationBegin,
     CaptureObservationHits,
     CaptureObservationAck,
@@ -361,6 +368,9 @@ impl Request {
             Request::Transfer(_) => RequestKind::Transfer,
             Request::TraceSites { .. } => RequestKind::TraceSites,
             Request::TraceHits { .. } => RequestKind::TraceHits,
+            Request::ModalObservationBegin(_) => RequestKind::ModalObservationBegin,
+            Request::ModalObservationReport => RequestKind::ModalObservationReport,
+            Request::ModalObservationEnd => RequestKind::ModalObservationEnd,
             Request::CaptureObservationBegin => RequestKind::CaptureObservationBegin,
             Request::CaptureObservationHits { .. } => RequestKind::CaptureObservationHits,
             Request::CaptureObservationAck { .. } => RequestKind::CaptureObservationAck,
@@ -778,8 +788,8 @@ impl Server {
         }
         let count = sites.len();
         let machine = &mut self.bridge.machine;
-        machine.traces.stop_labels = [RENDEZVOUS_LOCKED.to_owned()].into();
         machine.traces.arm(&machine.session, sites)?;
+        machine.traces.stop_labels = [RENDEZVOUS_LOCKED.to_owned()].into();
         if !requested.is_empty() {
             self.bridge.enable_keepalive();
         }
@@ -788,13 +798,19 @@ impl Server {
 
     fn handle(&mut self, request: Request) -> Result<Option<Value>, String> {
         let tail_request = matches!(&request, Request::CaptureObservationHits { .. } | Request::CaptureObservationAck { .. }
-            | Request::CaptureObservationState | Request::WatchState | Request::Finish);
+            | Request::CaptureObservationState | Request::WatchState | Request::Finish
+            | Request::ModalObservationReport | Request::ModalObservationEnd);
         if self.bridge.machine.failure.is_some() && !tail_request {
             return Err(self.bridge.machine.failure.as_ref().ok_or("terminal failure disappeared")?.clone());
         }
         let read_only = tail_request || matches!(&request, Request::List | Request::TraceHits { .. }
             | Request::ImageInputFingerprint { .. } | Request::ReadMemory { .. } | Request::MediaRead { .. }
             | Request::WatchState | Request::PreservationState | Request::MediaState);
+        if !read_only {
+            if let Some(failure) = self.bridge.machine.traces.modal_observation_report().failure {
+                return Err(failure.to_owned());
+            }
+        }
         if (self.pending_capture.is_some() || self.bridge.machine.traces.capture_page_outstanding())
             && !read_only && !matches!(&request, Request::CaptureObservationResume) {
             return Err("capture continuation must be drained and resumed before mutation".into());
@@ -803,6 +819,10 @@ impl Server {
             && !matches!(&request, Request::ShutterSequence | Request::CaptureObservationWindow
                 | Request::CaptureObservationResume | Request::Capture { .. }) {
             return Err("active capture refuses this mutating request".into());
+        }
+        if self.bridge.machine.traces.modal_observation_active()
+            && matches!(&request, Request::SaveInstallCheckpoint { .. }) {
+            return Err("active modal observation refuses checkpoint replacement".into());
         }
         Ok(Some(match request {
             Request::List => {
@@ -824,6 +844,30 @@ impl Server {
                     return Err("trace-hits requires a hit index within the recorded hits".into());
                 }
                 json!({"count": hits.len(), "hits": &hits[from..]})
+            }
+            Request::ModalObservationBegin(request) => {
+                let machine = &mut self.bridge.machine;
+                let config = request.into_config(machine.session.board.mappings().to_vec())?;
+                machine.traces.begin_modal_observation(&machine.session, config)?;
+                serde_json::to_value(machine.traces.modal_observation_report())
+                    .map_err(|failure| format!("modal-observation-begin: {failure}"))?
+            }
+            Request::ModalObservationReport => {
+                let machine = &mut self.bridge.machine;
+                if machine.traces.modal_observation_active() {
+                    let instructions = InstructionCount::from_board(&machine.session)?;
+                    let _ = machine.traces.collect(&machine.session, instructions);
+                }
+                serde_json::to_value(machine.traces.modal_observation_report())
+                    .map_err(|failure| format!("modal-observation-report: {failure}"))?
+            }
+            Request::ModalObservationEnd => {
+                let machine = &mut self.bridge.machine;
+                let instructions = InstructionCount::from_board(&machine.session)?;
+                machine.traces.collect(&machine.session, instructions)?;
+                machine.traces.end_modal_observation(&machine.session)?;
+                serde_json::to_value(machine.traces.modal_observation_report())
+                    .map_err(|failure| format!("modal-observation-end: {failure}"))?
             }
             Request::CaptureObservationBegin => {
                 self.bridge.begin_capture_observation()?;
@@ -1052,6 +1096,12 @@ impl Server {
                 }
             }
             Request::Finish => {
+                if self.bridge.machine.traces.modal_observation_active() {
+                    let machine = &mut self.bridge.machine;
+                    let instructions = InstructionCount::from_board(&machine.session)?;
+                    machine.traces.collect(&machine.session, instructions)?;
+                    machine.traces.end_modal_observation(&machine.session)?;
+                }
                 self.collect_capture_tail();
                 return Ok(None);
             }
@@ -1085,6 +1135,7 @@ impl Server {
             "rendezvous_activity": self.bridge.rendezvous,
             "keepalive_inputs": self.bridge.keepalive_inputs,
             "contexts": self.bridge.machine.traces.hits,
+            "modal_observation": self.bridge.machine.traces.modal_observation_report(),
             "screenshots": self.screenshots,
             "memory_watch": self.watch.as_ref().map(|watch| watch.records.borrow().state()).unwrap_or(Value::Null),
             "preservation": preservation,
@@ -1147,10 +1198,14 @@ impl Server {
                     let response = json!({"ok": false, "error": "BridgeError", "message": message});
                     if error.is_some() {
                         self.capture_evidence_error.get_or_insert(message);
-                    } else if self.bridge.machine.failure.is_some() || !self.bridge.machine.traces.capture_observation_active() {
+                    } else if self.bridge.machine.failure.is_some()
+                        || !(self.bridge.machine.traces.capture_observation_active()
+                            || self.bridge.machine.traces.modal_observation_active()) {
                         error = Some(message);
                     }
-                    (response, !self.bridge.machine.traces.capture_observation_active())
+                    let observing = self.bridge.machine.traces.capture_observation_active()
+                        || self.bridge.machine.traces.modal_observation_active();
+                    (response, !observing)
                 }
             };
             if let Err(io_error) = emit(&response) {
