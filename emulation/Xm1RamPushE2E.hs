@@ -1004,11 +1004,13 @@ runfilesCardlessBridge = do
   require present ("cardless RAM-push bridge is missing from this binary's runfiles: " ++ path)
   pure path
 
--- | One flash-candidate process: boot or restore the attach checkpoint keyed by the candidate DAT,
--- then run the plan's segments; the candidate's loader has already published the bank.
+-- | Boot or restore the supplied firmware's attach checkpoint and run segments without installation.
 runFlashSession :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> Plan -> FilePath -> IO ()
 runFlashSession settings python runtime installedMedia adjustmentNand plan e2e = do
-  require (emulationCardMode settings /= Cardless) "--cardless belongs to the RAM push, not --flash-candidate"
+  when (emulationCardMode settings == Cardless) $
+    case emulationRuntime settings of
+      FujiModRuntime _ -> pure ()
+      RetainedRuntime -> require False "--cardless --flash-candidate requires --fujimod"
   require (planProtection plan == Unprotected) "a protected-memory watch is unsupported on the flash-candidate path"
   require (planExpect plan == ExpectClean) "a refused-watch control is unsupported on the flash-candidate path"
   phases <- newIORef []
