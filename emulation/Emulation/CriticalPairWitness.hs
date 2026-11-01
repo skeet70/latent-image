@@ -56,7 +56,7 @@ data Contract = Contract
   }
 
 require :: Bool -> String -> Either String ()
-require condition message = unless condition (Left message)
+require admitted message = unless admitted (Left message)
 
 data RefusalCategory
   = MalformedEvidence | SourceBindingMismatch | PublicationMismatch | InstructionEffectsMismatch
@@ -114,6 +114,10 @@ deriveContract role source image4 candidate decoded image symbolBytes = do
   livePair <- slice (0x7235d8 - 0x61c400) 440 decoded
   phase4 <- slice (0x69cdf8 - 0x61c400) (0x69cf38 - 0x69cdf8) decoded
   tailBytes <- slice 0xab0 0x40 stagedB
+  primaryServices <- slice 0x1140 0x1e0 stagedA
+  primaryPrimitives <- slice 0x27b8 0x78 stagedA
+  secondaryServices <- slice 0x1140 0x1e0 stagedB
+  secondaryPrimitives <- slice 0x27b8 0x78 stagedB
   sourceHash <- SourceDigest <$> F.parseSha256 (sha256Hex source)
   inputHash <- SourceDigest <$> F.parseSha256 (sha256Hex candidate)
   imageHash <- ImageDigest <$> F.parseSha256 (sha256Hex image4)
@@ -123,7 +127,9 @@ deriveContract role source image4 candidate decoded image symbolBytes = do
     (CodeBytes carrier) (CodeBytes pair) (CodeBytes wrapper) (CodeBytes loaderA) (CodeBytes loaderB)
     [resource 0x10400 carrier,resource 0x7235d8 livePair,resource 0x725dd8 wrapper,resource 0x96bd20 (wordBytes [0x4004dae0,0x400ddaa0])
     ,resource 0x4dae0 B.empty,resource 0xddaa0 B.empty,resource 0xa0f824 B.empty,resource 0xc0804 B.empty
-    ,resource 0x40000 stagedA,resource 0xd0000 stagedB,resource 0x69cdf8 phase4,resource 0xd0ab0 tailBytes])
+    ,resource 0x41140 primaryServices,resource 0x427b8 primaryPrimitives
+    ,resource 0xd1140 secondaryServices,resource 0xd27b8 secondaryPrimitives
+    ,resource 0x69cdf8 phase4,resource 0xd0ab0 tailBytes])
 
 roleName :: I.Role -> String
 roleName I.Retained = "retained"
@@ -227,7 +233,10 @@ snapshots context = case tcmOf context of
   _ -> Left "critical context lacks both-core raw TCM registers"
 
 spans :: [(Word64,Word64)]
-spans = [(0x10400,0x11800),(0x7235d8,0x723790),(0x725dd8,0x726098),(0x96bd20,0x96bd28),(0x4dae0,0x4f10c),(0xddaa0,0xdf0cc),(0xa0f824,0xa0f828),(0xc0804,0xc0808),(0x40000,0x4dae0),(0xd0000,0xddaa0),(0x69cdf8,0x69cf38),(0xd0ab0,0xd0af0)]
+spans = [(0x10400,0x11800),(0x7235d8,0x723790),(0x725dd8,0x726098),(0x96bd20,0x96bd28),(0x4dae0,0x4f10c),(0xddaa0,0xdf0cc),(0xa0f824,0xa0f828),(0xc0804,0xc0808),(0x41140,0x41320),(0x427b8,0x42830),(0xd1140,0xd1320),(0xd27b8,0xd2830),(0x69cdf8,0x69cf38),(0xd0ab0,0xd0af0)]
+
+commonResourceCount :: Int
+commonResourceCount = length spans
 
 immutableSpans :: [(Word64,Word64)]
 immutableSpans = [span' | (index,span') <- zip [0 :: Int ..] spans,index /= 6 && index /= 7]
@@ -237,7 +246,7 @@ resourceBytes (Resource (Physical address) views) = (address,) <$> viewsBytes vi
 
 validateResources :: Contract -> [Resource] -> Either String ()
 validateResources contract resources = do
-  require (length resources == 12) "critical common resource coverage differs"
+  require (length resources == commonResourceCount) "critical common resource coverage differs"
   zipWithM_ (\(low,high) observed -> do
     (address,bytes) <- resourceBytes observed
     require (address == low && fromIntegral (B.length bytes) == high-low) "critical resource order or extent differs") spans resources
@@ -293,7 +302,7 @@ watchClasses phase = let
   kinds index
     | boundary = CpuFetch:CpuRead:writes
     | index `elem` [3,4,5,6,7] = CpuRead:writes
-    | index `elem` [0,1,2,10,11] = CpuFetch:writes
+    | index `elem` [0,1,2,12,13] = CpuFetch:writes
     | otherwise = writes
   base = [WatchClass (Window span') (kinds index) | (index,span') <- zip [0 :: Int ..] spans]
   extra = case phase of
@@ -306,7 +315,7 @@ watchRules :: Contract -> Phase -> [TcmSnapshot] -> [Rule]
 watchRules contract phase banks = let
   rule cores kind mode ranges = Rule cores kind mode [PhysicalSpan [low,high] | (low,high) <- ranges] [bank | bank@(TcmSnapshot core _ _) <- banks,core `elem` cores]
   record = [(0x10000,0x14c80)]
-  disjoint = filter (`notElem` [(0x10400,0x11800),(0xd0ab0,0xd0af0)])
+  disjoint = filter (/= (0x10400,0x11800))
   primary = case phase of
     BoundaryPhase low high -> [rule [1] CpuWrite Allow [(0xa0f824,0xa0f828),(0xc0804,0xc0808),(low,high)],rule [0] CpuWrite Forbid (disjoint spans++[(low,high),(0xf33a8,0xf33e0)]++record)]
     Prelude -> [rule [1] CpuWrite Forbid (disjoint immutableSpans++[(0x7caf34,0x7caf38)]++record),rule [0] CpuWrite Forbid (disjoint spans++[(0x7caf34,0x7caf38)]++record)]
@@ -552,11 +561,13 @@ validateBoundary contract callerFrame preceding (FrameBytes frameBytes) boundary
   returned <- boundaryResult boundary
   mapM_ contextShape (incoming:returned:steps)
   first <- case steps of [] -> Left "critical boundary contains no instruction steps"; context:_ -> Right context
+  let sameProgress = case (countsOf first,countsOf incoming) of
+        ([first0,first1],[incoming0,incoming1]) -> first1 == incoming1 && first0 >= incoming0
+        _ -> False
   require (pcOf first == pcOf incoming && regsOf first == regsOf incoming && cpsrOf first == cpsrOf incoming
-    && tcmOf first == tcmOf incoming && drop 1 (countsOf first) == drop 1 (countsOf incoming)
-    && head (countsOf first) >= head (countsOf incoming)) "critical boundary steps do not start at the natural branchsite"
+    && tcmOf first == tcmOf incoming && sameProgress) "critical boundary steps do not start at the natural branchsite"
   let sp = fromIntegral (register incoming A.sp); low = sp-fromIntegral frameBytes-0x40000000; high = sp-0x40000000
-  require (length before == 13 && length after == 13) "critical boundary resource coverage differs"
+  require (length before == commonResourceCount+1 && length after == commonResourceCount+1) "critical boundary resource coverage differs"
   zipWithM_ (\(start,end) r -> do (address,bytes) <- resourceBytes r; require (address == start && fromIntegral (B.length bytes) == end-start) "critical boundary resource extent differs") (spans++[(low,high)]) before
   zipWithM_ (\(Resource address a) (Resource address' b) -> do
     a' <- viewsBytes a; b' <- viewsBytes b; require (address == address' && B.length a' == B.length b') "critical after-resource geometry differs") before after
@@ -598,8 +609,8 @@ validatePrelude origin incoming resources events = do
         require (pc `elem` [0xd38b8,0xd38cc,0xd391c] && leWordAt (B.pack bytes) 0 == Right (fromIntegral observed)) "critical natural peer magic provenance differs"
       (CpuRead,Just 0,Just physical',Just observed,_,Just (AccessBytes bytes))
         | physical' >= 0xddaa0 && physical'+4 <= 0xdf0cc -> do
-            expected <- readMemory protected physical'
-            require (observed == fromIntegral expected && leWordAt (B.pack bytes) 0 == Right expected) "critical peer prelude table read differs from validated publication"
+            published <- readMemory protected physical'
+            require (observed == fromIntegral published && leWordAt (B.pack bytes) 0 == Right published) "critical peer prelude table read differs from validated publication"
       _ -> Left "critical prelude contains an unclassified protected access"
 
 validateAliases :: Context -> [[Resource]] -> [Alias] -> Either String ()
@@ -653,7 +664,7 @@ validateEvidence contract bytes = do
     require (pcOf incoming == 0x7235d8 && register incoming A.sp == 0x400f33a8 && register incoming A.lr == 0x725e00 && register incoming A.sp .&. 7 == 0 && cpsrOf incoming .&. 0x80 == 0x80) "critical entry was not the admitted natural original caller boundary"
   checked SourceBindingMismatch (validateResources contract resources)
   checked PublicationMismatch (validatePublications contract initializer resources)
-  checked SourceBindingMismatch (require (take 12 entryBefore == resources) "critical initial resources differ from entry snapshots")
+  checked SourceBindingMismatch (require (take commonResourceCount entryBefore == resources) "critical initial resources differ from entry snapshots")
   preludeEvents <- checked MalformedEvidence (validateWatch contract Prelude origin prelude)
   checked MalformedEvidence (validatePrelude origin incoming resources preludeEvents)
   (entryReturned,_,entryEvents) <- checked InstructionEffectsMismatch (validateBoundary contract callerBefore preludeEvents (entryFrame contract) entry)
@@ -677,7 +688,7 @@ validateEvidence contract bytes = do
     require (pcOf exitReturned == register exitIncoming A.lr && cpsrOf exitReturned .&. 0x80 == register exitIncoming (A.Reg 0) .&. 0x80) "critical exit did not restore the prior IRQ mask at its actual caller return"
     require (pcOf final == 0x69cf38 && register final A.sp == 0x400f33e0 && tcmOf final == tcmOf origin) "critical original wrapper epilogue did not return to its caller"
   checked CallerFrameMismatch (validateCallerFrame incoming final callerBefore callerAfter)
-  checked AliasEvidenceMismatch (validateAliases origin [resources,[callerBefore],entryBefore,entryAfter,exitBefore,exitAfter,take 12 exitAfter,[callerAfter]] aliases)
+  checked AliasEvidenceMismatch (validateAliases origin [resources,[callerBefore],entryBefore,entryAfter,exitBefore,exitAfter,take commonResourceCount exitAfter,[callerAfter]] aliases)
   pure (Accepted incoming entryReturned exitIncoming exitReturned final entryAfter exitAfter)
 
 validateTransition :: Context -> Context -> [PairEvent] -> [Resource] -> [Resource] -> Either String ()
@@ -691,7 +702,7 @@ validateTransition entered exit events entryAfter exitBefore = do
     "critical wrapper saved-mask MOV, stopped BL fetch, executed BL and exit fetch differ"
   require (all (\(site,_) -> (site >= 0x725e00 && site < 0x726098) || site == 0x7236b0) fetched) "critical transition fetched outside the original wrapper and exit endpoint"
   require (sum (countsOf entered) < sum (countsOf exit) && tcmOf entered == tcmOf exit) "critical wrapper transition counters or TCM differ"
-  require (take 12 entryAfter == take 12 exitBefore && not (null exitBefore)) "critical wrapper changed a protected resource between boundaries"
+  require (take commonResourceCount entryAfter == take commonResourceCount exitBefore && not (null exitBefore)) "critical wrapper changed a protected resource between boundaries"
   require (not (null events)) "critical wrapper transition evidence is absent"
 
 validateCaller :: Context -> Context -> [PairEvent] -> Either String ()

@@ -62,8 +62,8 @@ main :: IO ()
 main = do
   args <- getArgs
   command <- either H.failH pure (parse args)
-  Workspace root <- workspace Nothing
-  setCurrentDirectory root
+  Workspace projectRoot <- workspace Nothing
+  setCurrentDirectory projectRoot
   case command of
     Help -> putStr usage
     Prepare inputs decoder output launch -> do

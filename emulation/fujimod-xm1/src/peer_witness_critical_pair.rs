@@ -18,8 +18,10 @@ const LEAVE: u32 = 0x7236b0;
 const ENTRY_RETURN: u32 = 0x725e00;
 const CALLER_RETURN: u32 = 0x69cf38;
 const EXIT_CALLS: [u32; 3] = [0x725e84, 0x725fb4, 0x726064];
-const COMMON: [(u64, u64); 12] = [CARRIER, PAIR, WRAPPER, ROOTS, TABLE_A, TABLE, COUNTER, LOCK,
-    LOADER_A, LOADER_B, STAGE4, TAIL];
+const SERVICE_CODE: [(u64, u64); 4] = [(0x41140, 0x41320), (0x427b8, 0x42830),
+    (0xd1140, 0xd1320), (0xd27b8, 0xd2830)];
+const COMMON: [(u64, u64); 14] = [CARRIER, PAIR, WRAPPER, ROOTS, TABLE_A, TABLE, COUNTER, LOCK,
+    SERVICE_CODE[0], SERVICE_CODE[1], SERVICE_CODE[2], SERVICE_CODE[3], STAGE4, TAIL];
 const PAIR_SHA: &str = "8d0b5366c29252bf28baf514f77921cc379d3f519836aba6589ccc977cdbb62a";
 const WRAPPER_SHA: &str = "1432c11311a1a15437364f8d69372bec69a2e06357c94ca56e00c402fe96cf43";
 const LOADER_A_SHA: &str = "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882";
@@ -190,19 +192,19 @@ fn begin(machine: &mut Machine, runner: &Runner<'_>, phase: Phase, frame: Option
         classes.push(WatchRange { start: CALLER_FRAME.0, end: CALLER_FRAME.1, kinds: WatchKinds::CPU_READ.union(WatchKinds::WRITES) });
     }
     classes.push(WatchRange { start: RECORD.0, end: RECORD.1, kinds: WatchKinds::WRITES });
-    let immutable: Vec<_> = COMMON.into_iter().filter(|extent| ![COUNTER, LOCK, CARRIER, TAIL].contains(extent)).collect();
+    let immutable: Vec<_> = COMMON.into_iter().filter(|extent| ![COUNTER, LOCK, CARRIER].contains(extent)).collect();
     let mut confinement = if matches!(phase, Phase::Boundary) {
         vec![ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Write,
             rule: Confinement::Allow([Some(COUNTER), Some(LOCK), frame].into_iter().flatten().map(span).collect::<Result<_, _>>()?) },
             ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Write,
-                rule: Confinement::Forbid(COMMON.into_iter().filter(|extent| ![CARRIER, TAIL].contains(extent))
+                rule: Confinement::Forbid(COMMON.into_iter().filter(|extent| *extent != CARRIER)
                     .chain(frame).chain([CALLER_FRAME, RECORD]).map(span).collect::<Result<_, _>>()?) }]
     } else {
         vec![ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Write,
             rule: Confinement::Forbid(immutable.into_iter().chain(if prelude { Some(SELECTOR) } else { None })
                 .chain(Some(RECORD)).map(span).collect::<Result<_, _>>()?) },
             ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Write,
-                rule: Confinement::Forbid(COMMON.into_iter().filter(|extent| ![CARRIER, TAIL].contains(extent))
+                rule: Confinement::Forbid(COMMON.into_iter().filter(|extent| *extent != CARRIER)
                     .chain(Some(if prelude { SELECTOR } else { CALLER_FRAME }))
                     .chain(Some(RECORD)).map(span).collect::<Result<_, _>>()?) }]
     };
@@ -311,12 +313,9 @@ fn source_bindings(machine: &Machine, contract: &Contract) -> Result<(), String>
     }
     require(machine.read(PAIR.0, expected_pair.len())? == expected_pair, "critical original or branch-patched pair differs")?;
     for (extent, canonical) in [(LOADER_A, &contract.loader_a), (LOADER_B, &contract.loader_b)] {
-        let actual = machine.read(extent.0, canonical.len())?;
-        for (offset, (&actual, &expected)) in actual.iter().zip(canonical.iter()).enumerate() {
-            let address = extent.0 + offset as u64;
-            let replaced = contract.role == Role::Owned && [REPLACED[0], REPLACED[1], REPLACED[2],
-                (0xd0aac, 0xd0ab0), LOADER_A_COMPLETION, LOADER_A_LITERAL].iter().any(|&(start, end)| (start..end).contains(&address));
-            require(replaced || actual == expected, "critical independent retained loader bytes differ")?;
+        for (start, end) in [(0x1140_usize, 0x1320_usize), (0x27b8, 0x2830)] {
+            require(machine.read(extent.0 + start as u64, end - start)? == canonical[start..end],
+                "critical independent retained service bytes differ")?;
         }
     }
     for (root, table, base) in [(ROOTS.0, TABLE_A.0, LOADER_A.0), (ROOTS.0 + 4, TABLE.0, LOADER_B.0)] {
