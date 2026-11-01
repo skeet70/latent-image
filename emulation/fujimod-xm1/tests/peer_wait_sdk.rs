@@ -152,6 +152,32 @@ fn a_drained_stop_label_stops_again_when_its_next_site_is_added() {
     }
 }
 
+#[test]
+fn retained_watch_record_count_is_read_only_and_includes_host_and_cpu_writes() {
+    use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
+    let mut machine = machine(&[0xe5810000, 0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[0], 0x1234).unwrap();
+    machine.session.board.write_register(0, arm::CORE[1], 0x3000).unwrap();
+    let maps = machine.session.board.mappings().to_vec();
+    let mut watch = machine.session.board.memory_watch_begin_classified(
+        vec![WatchRange {start:0x3000,end:0x3004,kinds:WatchKinds::WRITES}],
+        8, maps, ViewPolicy::Observe,
+    ).unwrap();
+    assert_eq!(watch.records.borrow().record_count(), 0);
+    machine.session.board.write_physical(0x3000, &0u32.to_le_bytes()).unwrap();
+    assert_eq!(watch.records.borrow().record_count(), 1);
+    machine.run(1);
+    machine.require_running().unwrap();
+    let before = (machine.instructions(), context(&machine));
+    assert_eq!(watch.records.borrow().record_count(), 2);
+    assert_eq!(watch.records.borrow().record_count(), 2);
+    assert_eq!((machine.instructions(), context(&machine)), before);
+    let mut committed = [0; 4];
+    machine.session.board.read_physical(0x3000, &mut committed).unwrap();
+    assert_eq!(u32::from_le_bytes(committed), 0x1234);
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+}
+
 #[derive(Deserialize, PartialEq, Eq, Debug)]
 #[serde(rename_all = "kebab-case")]
 enum Source { CpuWrite, CpuRead, CpuFetch, HostRead, HostWrite, ModelBusRead, ModelBusWrite }

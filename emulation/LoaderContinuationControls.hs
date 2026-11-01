@@ -30,6 +30,9 @@ newtype Observer = Observer FilePath
 newtype AnalysisRoot = AnalysisRoot FilePath
 newtype ObservationDirectory = ObservationDirectory FilePath
 newtype OutputDirectory = OutputDirectory FilePath
+newtype RecordCursor = RecordCursor Integer
+newtype RowIndex = RowIndex Int
+newtype InstructionCount = InstructionCount Integer
 
 data Verdict = Admit | Refuse deriving Eq
 data Origin = ActualMutation | SerializedSynthetic
@@ -38,6 +41,10 @@ data CallKind = Loader | Image5Wait | Image5Entry | Image5Service | Image5Constr
 data Resource = LoaderA | LoaderB | Image5 | Image5Bss | Plain | Plain0 | Plain2 | Plain3 deriving Eq
 data Access = CpuFetch | CpuRead | CpuWrite | HostRead | HostWrite | ModelBusRead | ModelBusWrite deriving Eq
 data ClockMode = AtBegin | AfterEnd | ReversedClock | ResumedBegin | AtEnd deriving Eq
+data WatchEpoch = PrefixEpoch | TailEpoch deriving Eq
+data CursorFault = PastWatchEnd | WrongWatchEpoch | IncludesFutureCpu | OmitsEarlierCpu
+data WriteBoundary = BeforeLoaderEntry | AfterLoaderEntry | DuringLoaderFrame deriving Eq
+data Writer = HostWriter | ModelWriter
 data Gpr = R0 | R3 | R4
 data PlainExtent = Extent0 | Extent2 | Extent3
 data Arguments = Arguments Observer AnalysisRoot ObservationDirectory OutputDirectory
@@ -402,6 +409,83 @@ modifyWatch index change fixture = do
   updated <- modifyAt [Element index] change (J.toJSON (watches fixture)) >>= arrayAt []
   pure fixture {watches=updated}
 
+watchEpoch :: [Part] -> J.Value -> Either String WatchEpoch
+watchEpoch path value = textAt path value >>= \kind -> case kind of
+  "prefix" -> Right PrefixEpoch
+  "tail" -> Right TailEpoch
+  _ -> Left "unknown watch epoch"
+
+watchPosition :: J.Value -> Either String (WatchEpoch,RecordCursor)
+watchPosition event = do
+  kind <- watchEpoch [field "watch",field "epoch"] event
+  cursor <- numberAt [field "watch",field "rows"] event
+  unless (cursor<=65536) (Left "watch cursor exceeds retained-row limit")
+  pure (kind,RecordCursor cursor)
+
+moveCursor :: WatchEpoch -> RowIndex -> InstructionCount -> Fixture -> Either String Fixture
+moveCursor kind (RowIndex removed) (InstructionCount clock) fixture = do
+  events <- arrayAt [field "events"] (receipt fixture)
+  updated <- forM events $ \event -> do
+    (actual,RecordCursor cursor) <- watchPosition event
+    if actual/=kind then pure event else do
+      count <- numberAt [field "instructions"] event
+      let before = if toInteger removed<cursor then 1 else 0
+          after = if clock<=count then 1 else 0
+      setAt [field "watch",field "rows"] (cursor-before+after) event
+  modifyReceipt [field "events"] (const (Right (J.toJSON updated))) fixture
+
+cursorControl :: CursorFault -> Fixture -> Either String Fixture
+cursorControl fault fixture = do
+  identifier <- firstEvent fixture (GuestAddress 0xd09b8)
+  event <- eventAt fixture identifier
+  (kind,RecordCursor cursor) <- watchPosition event
+  unless (kind==PrefixEpoch) (Left "initial loader call is outside prefix")
+  watch <- firstIndex "prefix watch absent" (watches fixture)
+  rows <- arrayAt [field "records"] watch
+  replacement <- case fault of
+    PastWatchEnd -> pure (toInteger (length rows)+1)
+    WrongWatchEpoch -> pure cursor
+    _ -> do
+      count <- numberAt [field "instructions"] event
+      let EventId index = identifier
+      previous <- eventAt fixture (EventId (index-1)) >>= watchPosition
+      let (_,RecordCursor lower) = previous
+      candidates <- forM (zip [0..] rows) $ \(position,row) -> do
+        source <- parseAccess row
+        if source `elem` [CpuRead,CpuFetch,CpuWrite] then do
+          clock <- numberAt [field "instructions"] row
+          pure $ case fault of
+            IncludesFutureCpu | position>=cursor && clock>count -> Just (position+1)
+            OmitsEarlierCpu | lower<=position && position<cursor && clock<count -> Just position
+            _ -> Nothing
+        else pure Nothing
+      firstIndex "discriminating cursor CPU row absent" [value | Just value <- candidates]
+  case fault of
+    WrongWatchEpoch -> modifyEvent identifier [field "watch",field "epoch"] (const (Right (J.toJSON ("tail"::String)))) fixture
+    _ -> modifyEvent identifier [field "watch",field "rows"] (const (Right (J.toJSON replacement))) fixture
+
+writerControl :: WriteBoundary -> Writer -> Fixture -> Either String Fixture
+writerControl boundary writer fixture = do
+  identifier@(EventId selected) <- firstEvent fixture (GuestAddress 0x409ac)
+  event <- eventAt fixture identifier
+  (kind,RecordCursor cursor) <- watchPosition event
+  unless (kind==PrefixEpoch) (Left "initial loader entry is outside prefix")
+  watch <- firstIndex "prefix watch absent" (watches fixture)
+  rows <- arrayAt [field "records"] watch
+  unless (cursor<=toInteger (length rows)) (Left "entry cursor exceeds watch")
+  let address = if boundary==DuringLoaderFrame then 0x63450 else 0x409ac :: Word32
+      source = case writer of HostWriter -> "host-write"; ModelWriter -> "model-bus-write" :: String
+  value <- if boundary==DuringLoaderFrame then pure 0 else numberAt [field "code",field "values",Element 0] event
+  let row = J.object ["source" J..= source,"address" J..= address,"physical" J..= address,"size" J..= (4::Int),"value" J..= value,"core" J..= J.Null,"pc" J..= J.Null,"instructions" J..= J.Null,"tick" J..= J.Null]
+      (before,after) = splitAt (fromInteger cursor) rows
+  changed <- modifyWatch 0 (setAt [field "records"] (before++row:after)) fixture
+  events <- arrayAt [field "events"] (receipt changed)
+  updated <- forM (zip [0..] events) $ \(index,observed) -> do
+    (actual,RecordCursor position) <- watchPosition observed
+    let includes = if boundary==BeforeLoaderEntry then selected<=index else selected<index
+    if actual==kind && includes then setAt [field "watch",field "rows"] (position+1) observed else pure observed
+  modifyReceipt [field "events"] (const (Right (J.toJSON updated))) changed
+
 clockControl :: ClockMode -> Fixture -> Either String Fixture
 clockControl mode fixture = do
   selected <- safeCpuRows fixture
@@ -412,21 +496,25 @@ clockControl mode fixture = do
   end <- numberAt [field "end"] epoch
   first <- firstIndex "CPU write absent" (cpuIndices selected)
   let rowAt index = pathAt [Element index] (J.toJSON rows)
-  changed <- if mode==ReversedClock then do
+  (changed,moved) <- if mode==ReversedClock then do
       original <- rowAt first >>= numberAt [field "instructions"]
       clocks <- forM (drop 1 (cpuIndices selected)) $ \index -> do
         count <- rowAt index >>= numberAt [field "instructions"]
         pure (index,count)
       (second,other) <- firstIndex "distinct CPU clock absent" [(index,count) | (index,count) <- clocks,count/=original]
-      setAt [Element first,field "instructions"] other (J.toJSON rows) >>= setAt [Element second,field "instructions"] original
+      updated <- setAt [Element first,field "instructions"] other (J.toJSON rows) >>= setAt [Element second,field "instructions"] original
+      pure (updated,Nothing)
     else do
       let index = if mode==AtEnd then last (cpuIndices selected) else first
       count <- case mode of AtBegin -> Right begin; AfterEnd -> Right (end+1); ResumedBegin -> Right (begin+1); AtEnd -> Right end; ReversedClock -> Left "clock permutation is not a point replacement"
       row <- rowAt index >>= setAt [field "instructions"] count
-      if mode==ResumedBegin || mode==AtEnd
-        then pure (J.toJSON (if mode==ResumedBegin then row:[value | (position,value) <- zip [0..] rows,position/=index] else [value | (position,value) <- zip [0..] rows,position/=index]++[row]))
-        else setAt [Element index] row (J.toJSON rows)
-  modifyWatch (cpuEpoch selected) (setAt [field "records"] changed) fixture
+      if mode==ResumedBegin || mode==AtEnd || mode==AfterEnd
+        then pure (J.toJSON (if mode==ResumedBegin then row:[value | (position,value) <- zip [0..] rows,position/=index] else [value | (position,value) <- zip [0..] rows,position/=index]++[row]),Just (RowIndex index,InstructionCount count))
+        else do updated <- setAt [Element index] row (J.toJSON rows);pure (updated,Nothing)
+  updated <- modifyWatch (cpuEpoch selected) (setAt [field "records"] changed) fixture
+  case moved of
+    Nothing -> pure updated
+    Just (index,count) -> do kind <- watchEpoch [field "kind"] epoch;moveCursor kind index count updated
 
 wrongPhase :: Fixture -> Either String Fixture
 wrongPhase fixture = do
@@ -514,6 +602,7 @@ data Control = ReorderCallRecords | WrongPhase | WrongTarget | WrongReturnedCode
   | MissingImage5Return | MissingPlainReturn
   | MissingTrampoline | WrongCreationArgument | WrongCreationTarget | WrongCleanup
   | CpuClock ClockMode | TcmMisaligned | TcmPastEnd | TcmExactEnd | MissingExtent PlainExtent | MissingObservedBss GuestAddress
+  | BadCursor CursorFault | UntimedWriter WriteBoundary Writer
 
 controlName :: Control -> String
 controlName control = case control of
@@ -531,17 +620,19 @@ controlName control = case control of
   TcmMisaligned -> "misaligned-tcm-window"; TcmPastEnd -> "tcm-window-past-address-space"; TcmExactEnd -> "tcm-window-exact-address-space-end"
   MissingExtent extent -> "missing-extent-"++resourceText (extentResource extent)
   MissingObservedBss (GuestAddress address) -> "missing-observed-bss-"++showHex address ""
+  BadCursor fault -> case fault of PastWatchEnd -> "cursor-past-watch-end"; WrongWatchEpoch -> "cursor-wrong-epoch"; IncludesFutureCpu -> "cursor-includes-future-cpu"; OmitsEarlierCpu -> "cursor-omits-earlier-cpu"
+  UntimedWriter boundary writer -> (case boundary of BeforeLoaderEntry -> "before-loader-entry"; AfterLoaderEntry -> "after-loader-entry"; DuringLoaderFrame -> "during-live-loader-frame")++(case writer of HostWriter -> "-host-write"; ModelWriter -> "-model-bus-write")
 
 controlVerdict :: Control -> Verdict
 controlVerdict control = case control of
-  ReorderCallRecords -> Admit; SyntheticDeferred -> Admit; CpuClock AtEnd -> Admit; CpuClock ResumedBegin -> Admit; TcmExactEnd -> Admit; _ -> Refuse
+  ReorderCallRecords -> Admit; SyntheticDeferred -> Admit; CpuClock AtEnd -> Admit; CpuClock ResumedBegin -> Admit; TcmExactEnd -> Admit; UntimedWriter BeforeLoaderEntry _ -> Admit; _ -> Refuse
 
 controlOrigin :: Control -> Origin
 controlOrigin control = case control of
   SyntheticDeferred -> SerializedSynthetic; MissingDeferred -> SerializedSynthetic; PhaseRawOrder -> SerializedSynthetic
   ConstructorRawOrder -> SerializedSynthetic; CpuClock AtEnd -> SerializedSynthetic; CpuClock ResumedBegin -> SerializedSynthetic
   TcmExactEnd -> SerializedSynthetic; WrongTarget -> SerializedSynthetic; WrongReturnedCode -> SerializedSynthetic
-  OutOfRangeWrite -> SerializedSynthetic; _ -> ActualMutation
+  OutOfRangeWrite -> SerializedSynthetic; UntimedWriter _ _ -> SerializedSynthetic; _ -> ActualMutation
 
 originText :: Origin -> String
 originText ActualMutation = "actual-observation-mutation"
@@ -553,6 +644,8 @@ controls fixture = do
   addresses <- traverse (guestAt [field "pc"]) events
   pure ([ReorderCallRecords,WrongPhase,WrongTarget,WrongReturnedCode,WrongSavedPc,OutOfRangeWrite,MissingTask,MissingHook,SyntheticDeferred,MissingDeferred,PhaseRawOrder,ConstructorRawOrder,MissingLoaderBss,MissingFirstImage,MissingFirstBss,MissingFirstPlain,MisplacedProjection,MissingTrampoline,WrongCreationArgument,WrongCreationTarget,WrongCleanup,CpuClock AtBegin,CpuClock AfterEnd,CpuClock ReversedClock,CpuClock AtEnd,CpuClock ResumedBegin,TcmMisaligned,TcmPastEnd,TcmExactEnd,MissingExtent Extent0,MissingExtent Extent2,MissingExtent Extent3]
     ++[MissingImage5Return,MissingPlainReturn]
+    ++[BadCursor PastWatchEnd,BadCursor WrongWatchEpoch,BadCursor IncludesFutureCpu,BadCursor OmitsEarlierCpu]
+    ++[UntimedWriter boundary writer | boundary <- [BeforeLoaderEntry,AfterLoaderEntry,DuringLoaderFrame],writer <- [HostWriter,ModelWriter]]
     ++[MissingObservedBss address | address <- [GuestAddress 0x6a8c04,GuestAddress 0x6a9734],address `elem` addresses])
 
 applyControl :: Control -> Fixture -> Either String Fixture
@@ -584,6 +677,8 @@ applyControl control fixture = case control of
   TcmExactEnd -> setTcm (TcmRegisterWord 0xff800039)
   MissingExtent extent -> omitProjection (extentResource extent) Nothing fixture
   MissingObservedBss address -> omitProjection Image5Bss (Just address) fixture
+  BadCursor fault -> cursorControl fault fixture
+  UntimedWriter boundary writer -> writerControl boundary writer fixture
   where setTcm (TcmRegisterWord bank) = modifyReceipt [field "events",Element 0,field "code",field "mapping",field "tcm",Element 0,Element 0] (const (Right (J.toJSON bank))) fixture
 
 emit :: FilePath -> J.Value -> IO SHA.Sha256

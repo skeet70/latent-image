@@ -1403,6 +1403,10 @@ Dynamic call-entry/return sites use `TraceSites::add_sites`. Added labels are st
 
 Both image5 and plain producer-return boundaries are required independently of the projection schedule. Removing a return event together with its resource files does not reduce the admission requirements.
 
+Schema 2 records each paused event's watch epoch and retained-row cursor before its committed projections. `Records::record_count` reads the retained journal length without advancing the guest. The consumer checks cursor bounds/order against CPU row clocks, permits carrier initialization only strictly before the canonical entry projection, and rejects every later carrier writer kind. Original saved-frame ownership is guarded between the entry and first scheduler-transfer cursors. Untimed model/host writes are not assigned invented instruction clocks; a delayed callback after the cut still refuses.
+
+The Haskell controls include out-of-range/wrong-epoch/clock-inconsistent cursors, pre-entry host/model writes that remain admissible, and post-entry carrier or live-frame host/model writes that refuse. Row-moving clock controls update the paused cuts coherently.
+
 After a complete retained receipt passes `--verify`, build `//emulation:loader-continuation-controls` with the other Haskell host tools. Invoke `bazel-bin/emulation/loader-continuation-controls OBSERVER ROOT OBSERVATION_DIRECTORY NEW_DIRECTORY` inside `devenv shell`. These controls invoke only the public host verifier, never a guest. They reconcile all observed call categories, raw phase/constructor chronology, required boundary projections, initial saved-context/C-entry transfers, CPU clock intervals/order, TCM alignment/endpoints and the named wrong-argument/target/return/write cases. Changed trace/watch files receive new bindings; unchanged resource files are hard-linked without mutation. The manifest distinguishes actual-observation mutations from serialized synthetic examples, including the deferred-call case. A synthetic admission is a validator control, not an observed firmware outcome.
 
 ### Owned first-stage witness
