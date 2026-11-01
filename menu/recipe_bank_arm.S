@@ -227,10 +227,7 @@ RB_TRAMPOLINE rb_call_transition,  0x00c12aac
 RB_TRAMPOLINE rb_call_loader_uidiv, 0x0004d978
 RB_TRAMPOLINE rb_call_redraw,      0x00d38d98
 RB_TRAMPOLINE rb_call_stock_redraw_dispatch, 0x00d38e1c
-RB_TRAMPOLINE rb_call_set_dispatch, 0x00c72e10
-RB_TRAMPOLINE rb_call_editor_confirm, 0x00c75ed4
 RB_TRAMPOLINE rb_call_postlude, 0x00d38f34
-RB_TRAMPOLINE rb_call_leave_edge, 0x00c76650
 RB_TRAMPOLINE rb_call_draw_root_prepare, 0x01166200
 RB_TRAMPOLINE rb_call_stock_key_right, 0x00c70528
 RB_TRAMPOLINE rb_call_stock_key_left, 0x00c6f14c

@@ -7,6 +7,7 @@ module Emulation.WatchObservation
   , WatchRange
   , watchRange
   , watchRangeBounds
+  , unionWatchRanges
   , overlapsWatchRange
   , WatchBytes
   , watchBytesValue
@@ -43,6 +44,28 @@ module Emulation.WatchObservation
   , parseWatchObservation
   , checkWatch
   , judgeWatch
+  , FixedWatchAck
+  , FixedWatchObservation
+  , parseFixedWatchAck
+  , parseFixedWatchObservation
+  , ForbiddenFetch (..)
+  , ExecutionGate (..)
+  , ExecutionInterval (..)
+  , executionIntervalLabel
+  , checkExecutionReceipt
+  , checkExecution
+  , judgeExecution
+  , checkExecutionWrites
+  , WritePolicy (..)
+  , writePolicyLabel
+  , ExecutionWriteGate (..)
+  , ExecutionWriteSummary (..)
+  , identityCpuStoresValue
+  , ExecutionWriteFault (..)
+  , ExecutionWriteViolation (..)
+  , judgeExecutionWrites
+  , executionWriteGateJson
+  , forbiddenFetchJson
   , AcceptedWrites
   , acceptedWrites
   , acceptedWritesValue
@@ -64,15 +87,16 @@ module Emulation.WatchObservation
   ) where
 
 import Control.Monad (forM, forM_, unless, when)
-import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), withText)
+import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), withText, (.=))
+import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
-import Data.Bits (shiftL)
+import Data.Bits (shiftL, shiftR)
 import Data.Scientific (toBoundedInteger)
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Data.List (sort)
+import Data.List (sort, sortOn)
 import Data.Word (Word32, Word64, Word8)
 
 newtype WatchAddress = WatchAddress { watchAddressValue :: Word32 } deriving (Eq, Ord, Show)
@@ -89,6 +113,15 @@ watchRange low high
 
 watchRangeBounds :: WatchRange -> (Word64, Word64)
 watchRangeBounds (WatchRange (WatchAddress low) (WatchAddress high)) = (fromIntegral low, fromIntegral high)
+
+unionWatchRanges :: [WatchRange] -> [WatchRange]
+unionWatchRanges = foldr merge [] . sortOn watchRangeLow
+  where
+    merge range [] = [range]
+    merge range (next : rest)
+      | watchRangeHigh range >= watchRangeLow next =
+          merge (WatchRange (watchRangeLow range) (max (watchRangeHigh range) (watchRangeHigh next))) rest
+      | otherwise = range : next : rest
 
 -- | Upstream Records::overlaps: a half-open physical overlap, not containment.
 overlapsWatchRange :: WatchRange -> WatchAddress -> WatchBytes -> Bool
@@ -154,6 +187,60 @@ data WatchObservation = WatchObservation
   } deriving (Eq, Show)
 
 data WatchAck = WatchAck { ackArmed :: Bool, ackRanges :: [WatchRange] } deriving (Eq, Show)
+
+data GuardAccess = GuardWrites | GuardFetches deriving (Eq, Show)
+data GuardClass = GuardClass WatchRange GuardAccess deriving (Eq, Show)
+data FixedWatchAck = FixedWatchAck WatchAck [GuardClass] deriving (Eq, Show)
+data FixedWatchObservation = FixedWatchObservation WatchObservation [GuardClass] deriving (Eq, Show)
+
+data ForbiddenFetch = ForbiddenFetch
+  { forbiddenFetchCore :: CoreId
+  , forbiddenFetchPc :: WatchAddress
+  , forbiddenFetchAddress :: WatchAddress
+  , forbiddenFetchPhysical :: WatchAddress
+  , forbiddenFetchBytes :: WatchBytes
+  , forbiddenFetchInstructions :: Instructions
+  , forbiddenFetchTick :: Tick
+  } deriving (Eq, Show)
+
+data ExecutionGate = ExecutionAccepted | ExecutionRejected [ForbiddenFetch] deriving (Eq, Show)
+
+data ExecutionInterval = BeforeUnload | ThroughAfterUnload deriving (Eq, Show)
+
+executionIntervalLabel :: ExecutionInterval -> T.Text
+executionIntervalLabel BeforeUnload = "before-unload"
+executionIntervalLabel ThroughAfterUnload = "through-after-unload"
+
+data WritePolicy = PreserveProtectedBytes | ForbidProtectedWrites deriving (Eq, Show)
+
+writePolicyLabel :: WritePolicy -> T.Text
+writePolicyLabel PreserveProtectedBytes = "preserve-protected-bytes"
+writePolicyLabel ForbidProtectedWrites = "forbid-protected-writes"
+
+newtype IdentityCpuStores = IdentityCpuStores { identityCpuStoresValue :: Int } deriving (Eq, Show)
+
+data ExecutionWriteSummary = ExecutionWriteSummary
+  { executionTotalWrites :: ProtectedWriteSummary
+  , executionIdentityCpuStores :: IdentityCpuStores
+  } deriving (Eq, Show)
+
+data ExecutionWriteFault
+  = StrictProtectedWrite
+  | ChangedProtectedByte
+  | UnverifiableCpuStore
+  | ForbiddenHostWrite
+  | ForbiddenModelBusWrite
+  deriving (Eq, Show)
+
+data ExecutionWriteViolation = ExecutionWriteViolation
+  { executionWriteFault :: ExecutionWriteFault
+  , executionWriteRecord :: WatchRecord
+  } deriving (Eq, Show)
+
+data ExecutionWriteGate
+  = ExecutionWritesAccepted ExecutionWriteSummary
+  | ExecutionWritesRejected ExecutionWriteViolation ExecutionWriteSummary
+  deriving (Eq, Show)
 
 data WatchLimit = WatchLimit { watchLimitValue :: Int } deriving (Eq, Show)
 
@@ -370,6 +457,218 @@ parseWatchObservation limit value = do
     Left problem -> Left problem
   unless (length records <= watchLimitValue limit) (Left "watch records exceed the declared limit")
   pure (WatchObservation enabled ranges records violation)
+
+parseGuardClasses :: Value -> Either String [GuardClass]
+parseGuardClasses value = asArray value >>= mapM (\entry -> do
+  exactKeys ["range", "kinds"] entry
+  range <- field "range" entry >>= parseRange
+  kinds <- field "kinds" entry
+  access <- if kinds == toJSON (["cpu-write", "host-write", "model-bus-write"] :: [String])
+    then Right GuardWrites
+    else if kinds == toJSON (["cpu-fetch"] :: [String])
+      then Right GuardFetches
+      else Left "execution watch class has unsupported access sources"
+  pure (GuardClass range access))
+
+parseFixedWatchAck :: Value -> Either String FixedWatchAck
+parseFixedWatchAck value = do
+  exactKeys ["armed", "ranges", "views", "classes"] value
+  unless (field "views" value == Right (String "fixed")) (Left "execution watch acknowledgement is not fixed-view")
+  classes <- field "classes" value >>= parseGuardClasses
+  case value of
+    Object row -> FixedWatchAck <$> parseWatchAck (Object (KM.delete "classes" (KM.delete "views" row))) <*> pure classes
+    _ -> Left "execution watch acknowledgement is not an object"
+
+parseFixedWatchObservation :: WatchLimit -> Value -> Either String FixedWatchObservation
+parseFixedWatchObservation limit value = do
+  exactKeys ["enabled", "ranges", "records", "violation", "classes", "views"] value
+  unless (field "views" value == Right (String "fixed")) (Left "execution watch is not fixed-view")
+  classes <- field "classes" value >>= parseGuardClasses
+  case value of
+    Object row -> FixedWatchObservation <$> parseWatchObservation limit (Object (KM.delete "classes" (KM.delete "views" row))) <*> pure classes
+    _ -> Left "execution watch is not an object"
+
+checkExecutionWrites :: WritePolicy -> WatchLimit -> [WatchRange] -> [WatchRange] -> FixedWatchAck -> FixedWatchObservation -> Either String ExecutionWriteGate
+checkExecutionWrites policy limit protected forbidden (FixedWatchAck ack ackClasses) (FixedWatchObservation observation classes) = do
+  let expected = map (`GuardClass` GuardWrites) protected ++ map (`GuardClass` GuardFetches) forbidden
+      watched = unionWatchRanges (protected ++ forbidden)
+      matches record (GuardClass range access) = case (record, access) of
+        (CpuRecord{cpuAccess = CpuFetch, cpuPhysical = physical, cpuBytes = bytes}, GuardFetches) -> overlapsWatchRange range physical bytes
+        (CpuRecord{cpuAccess = CpuWrite, cpuPhysical = physical, cpuBytes = bytes}, GuardWrites) -> overlapsWatchRange range physical bytes
+        (TransferRecord{transferAccess = HostWrite, transferPhysical = physical, transferBytes = bytes}, GuardWrites) -> overlapsWatchRange range physical bytes
+        (TransferRecord{transferAccess = ModelBusWrite, transferPhysical = physical, transferBytes = bytes}, GuardWrites) -> overlapsWatchRange range physical bytes
+        _ -> False
+  unless (not (null watched) && length watched <= 8 && classes == expected && ackClasses == expected)
+    (Left "execution watch classes differ from the declared write and fetch ranges")
+  forM_ (watchRecords observation) $ \record -> do
+    unless (any (matches record) classes) (Left "execution watch record is outside its declared access classes")
+    case record of
+      CpuRecord{cpuAccess = CpuFetch, cpuPc = pc, cpuAddress = address} ->
+        unless (pc == address) (Left "execution fetch PC differs from its instruction address")
+      _ -> pure ()
+  _ <- checkWatch limit watched ack observation
+  pure (summarizeExecutionWrites policy protected (watchRecords observation))
+
+storePreservesProtectedBytes :: [WatchRange] -> WatchRecord -> Either ExecutionWriteFault ()
+storePreservesProtectedBytes protected CpuRecord{cpuAccess = CpuWrite, cpuPhysical = physical, cpuBytes = WatchBytes size,
+    cpuValue = Just value, cpuBefore = Just before, cpuByteOrder = order}
+  | size >= 1 && size <= 8 && B.length before == size
+      && (size == 8 || value < (1 `shiftL` (size * 8))) =
+      let start = fromIntegral (watchAddressValue physical) :: Word64
+          changed index
+            | index == size = False
+            | otherwise =
+                let address = start + fromIntegral index
+                    guarded = any (\range -> let (low, high) = watchRangeBounds range in low <= address && address < high) protected
+                    shift = case order of LittleEndian -> index * 8; BigEndian -> (size - index - 1) * 8
+                 in (guarded && B.index before index /= fromIntegral (value `shiftR` shift)) || changed (index + 1)
+       in if changed 0 then Left ChangedProtectedByte else Right ()
+storePreservesProtectedBytes _ _ = Left UnverifiableCpuStore
+
+summarizeExecutionWrites :: WritePolicy -> [WatchRange] -> [WatchRecord] -> ExecutionWriteGate
+summarizeExecutionWrites policy protected records =
+  let (cpu, host, bus, identity, first) = foldl' step (0, 0, 0, 0, Nothing) records
+      summary = ExecutionWriteSummary (ProtectedWriteSummary (ProtectedCpuWrites cpu) (ProtectedHostWrites host) (ProtectedBusWrites bus))
+        (IdentityCpuStores identity)
+   in maybe (ExecutionWritesAccepted summary) (\violation -> ExecutionWritesRejected violation summary) first
+  where
+    retain first record fault = case first of
+      Just _ -> first
+      Nothing -> Just (ExecutionWriteViolation fault record)
+    step counts@(cpu, host, bus, identity, first) record = case record of
+      CpuRecord{cpuAccess = CpuWrite} ->
+        let preserved = storePreservesProtectedBytes protected record
+            identity' = identity + if preserved == Right () then 1 else 0
+            violation = case policy of
+              ForbidProtectedWrites -> retain first record StrictProtectedWrite
+              PreserveProtectedBytes -> either (retain first record) (const first) preserved
+         in (cpu + 1, host, bus, identity', violation)
+      TransferRecord{transferAccess = HostWrite} ->
+        (cpu, host + 1, bus, identity, retain first record ForbiddenHostWrite)
+      TransferRecord{transferAccess = ModelBusWrite} ->
+        (cpu, host, bus + 1, identity, retain first record ForbiddenModelBusWrite)
+      _ -> counts
+
+judgeExecutionWrites :: Either String ExecutionWriteGate -> Either String ExecutionWriteSummary
+judgeExecutionWrites result = do
+  gate <- result
+  case gate of
+    ExecutionWritesAccepted summary -> Right summary
+    ExecutionWritesRejected violation _ -> Left ("protected store rejected: " ++ show (executionWriteFault violation))
+
+executionWriteGateJson :: ExecutionWriteGate -> Value
+executionWriteGateJson gate =
+  let (summary, violation) = case gate of
+        ExecutionWritesAccepted value -> (value, Nothing)
+        ExecutionWritesRejected fault value -> (value, Just fault)
+      totals = executionTotalWrites summary
+   in A.object
+      [ "cpu_writes" .= protectedCpuWritesValue (protectedCpuWrites totals)
+      , "protected_identity_cpu_stores" .= identityCpuStoresValue (executionIdentityCpuStores summary)
+      , "host_writes" .= protectedHostWritesValue (protectedHostWrites totals)
+      , "model_bus_writes" .= protectedBusWritesValue (protectedBusWrites totals)
+      , "first_violation" .= fmap executionWriteViolationJson violation ]
+
+executionWriteViolationJson :: ExecutionWriteViolation -> Value
+executionWriteViolationJson (ExecutionWriteViolation fault record) = A.object
+  [ "kind" .= (case fault of
+      StrictProtectedWrite -> "strict-protected-write"
+      ChangedProtectedByte -> "changed-protected-byte"
+      UnverifiableCpuStore -> "unverifiable-cpu-store"
+      ForbiddenHostWrite -> "forbidden-host-write"
+      ForbiddenModelBusWrite -> "forbidden-model-bus-write" :: T.Text)
+  , "record" .= case record of
+      CpuRecord access address physical bytes value before order core pc instructions tick -> A.object
+        [ "source" .= (case access of CpuWrite -> "cpu-write"; CpuRead -> "cpu-read"; CpuFetch -> "cpu-fetch" :: T.Text)
+        , "address" .= watchAddressValue address, "physical" .= watchAddressValue physical, "size" .= watchBytesValue bytes
+        , "value" .= value, "before" .= fmap B.unpack before
+        , "byte_order" .= (case order of LittleEndian -> "little"; BigEndian -> "big" :: T.Text)
+        , "core" .= (case core of Core0 -> 0 :: Int; Core1 -> 1), "pc" .= watchAddressValue pc
+        , "instructions" .= instructionsValue instructions, "tick" .= tickValue tick ]
+      TransferRecord access address physical bytes -> A.object
+        [ "source" .= (case access of HostRead -> "host-read"; HostWrite -> "host-write"; ModelBusRead -> "model-bus-read"; ModelBusWrite -> "model-bus-write" :: T.Text)
+        , "address" .= watchAddressValue address, "physical" .= watchAddressValue physical, "size" .= watchBytesValue bytes ] ]
+
+checkExecution :: WritePolicy -> WatchLimit -> [WatchRange] -> [WatchRange] -> FixedWatchAck -> FixedWatchObservation -> Either String ExecutionGate
+checkExecution policy limit protected forbidden ack fixed@(FixedWatchObservation observation _) = do
+  unless (not (null forbidden)) (Left "execution watch has no forbidden ranges")
+  _ <- judgeExecutionWrites (checkExecutionWrites policy limit protected forbidden ack fixed)
+  let fetches =
+        [ ForbiddenFetch core pc address physical bytes instructions tick
+        | CpuRecord CpuFetch address physical bytes _ _ _ core pc instructions tick <- watchRecords observation
+        , any (\range -> overlapsWatchRange range physical bytes) forbidden ]
+  pure (if null fetches then ExecutionAccepted else ExecutionRejected fetches)
+
+checkExecutionReceipt :: WritePolicy -> WatchLimit -> [WatchRange] -> [WatchRange] -> ExecutionInterval -> RunPurpose -> Maybe WatchAddress -> Value -> Either String ExecutionGate
+checkExecutionReceipt policy limit protected forbidden interval purpose controlPc value = do
+  exactKeys ["schema", "enforcement", "ranges", "protected_write_ranges", "watched_ranges", "interval", "start", "end", "cores", "views", "limit"
+    , "acknowledgement", "acknowledgement_error", "final_state", "state_error", "complete", "forbidden_fetches"
+    , "forbidden_fetch_count", "control_pc", "expect", "pre_unload", "trajectory_failure", "problem", "write_policy", "write_observation"] value
+  unless (field "schema" value == Right (toJSON (1 :: Int))
+    && field "enforcement" value == Right (String "original-body-fetch-exclusion")
+    && field "start" value == Right (String "successful-install")
+    && field "interval" value == Right (String (executionIntervalLabel interval))
+    && field "end" value == Right (String (executionIntervalLabel interval))
+    && field "cores" value == Right (toJSON ([0, 1] :: [Int]))
+    && field "views" value == Right (String "fixed")
+    && field "limit" value == Right (toJSON (watchLimitValue limit))
+    && field "complete" value == Right (Bool True))
+    (Left "execution receipt interval or observer is incomplete")
+  unless (purpose /= CandidateRun || (interval == BeforeUnload && controlPc == Nothing))
+    (Left "candidate execution interval extends beyond unload or declares a control PC")
+  unless (field "write_policy" value == Right (String (writePolicyLabel policy)))
+    (Left "execution receipt write policy differs")
+  declared <- field "ranges" value >>= parseRanges
+  writeRanges <- field "protected_write_ranges" value >>= parseRanges
+  armed <- field "watched_ranges" value >>= parseRanges
+  unless (declared == forbidden && writeRanges == protected && armed == unionWatchRanges (protected ++ forbidden))
+    (Left "execution receipt ranges differ")
+  forM_ ["acknowledgement_error", "state_error", "trajectory_failure", "problem"] $ \name ->
+    unless (field name value == Right Null) (Left "execution receipt carries an error")
+  unless (field "expect" value == Right (String (case purpose of CandidateRun -> "clean"; FaultControlRun -> "refused"))
+    && field "control_pc" value == Right (toJSON (watchAddressValue <$> controlPc)))
+    (Left "execution receipt expectation differs")
+  case interval of
+    BeforeUnload -> unless (field "pre_unload" value == Right Null) (Left "pre-unload receipt contains a nested interval")
+    ThroughAfterUnload -> do
+      unless (purpose == FaultControlRun) (Left "only a refusal control may observe restored entries after unload")
+      preUnload <- field "pre_unload" value
+      _ <- checkExecutionReceipt policy limit protected forbidden BeforeUnload CandidateRun Nothing preUnload
+      unless (field "acknowledgement" preUnload == field "acknowledgement" value)
+        (Left "control pre-unload snapshot belongs to a different armed observer")
+  ack <- field "acknowledgement" value >>= parseFixedWatchAck
+  observation <- field "final_state" value >>= parseFixedWatchObservation limit
+  writes <- checkExecutionWrites policy limit protected forbidden ack observation
+  unless (field "write_observation" value == Right (executionWriteGateJson writes))
+    (Left "execution receipt write attribution differs")
+  gate <- checkExecution policy limit protected forbidden ack observation
+  judgeExecution purpose controlPc (Right gate)
+  let fetches = case gate of ExecutionAccepted -> []; ExecutionRejected rows -> rows
+  unless (field "forbidden_fetches" value == Right (toJSON (map forbiddenFetchJson fetches))
+    && field "forbidden_fetch_count" value == Right (toJSON (length fetches)))
+    (Left "execution receipt fetch attribution differs")
+  pure gate
+
+judgeExecution :: RunPurpose -> Maybe WatchAddress -> Either String ExecutionGate -> Either String ()
+judgeExecution purpose controlPc result = do
+  gate <- result
+  case (purpose, gate) of
+    (CandidateRun, ExecutionAccepted) -> Right ()
+    (CandidateRun, ExecutionRejected _) -> Left "candidate fetched forbidden original instructions"
+    (FaultControlRun, ExecutionAccepted) -> Left "execution control observed no forbidden fetch"
+    (FaultControlRun, ExecutionRejected fetches) -> case controlPc of
+      Just pc | any ((== pc) . forbiddenFetchPc) fetches -> Right ()
+      _ -> Left "execution control did not fetch its declared exact PC"
+
+forbiddenFetchJson :: ForbiddenFetch -> Value
+forbiddenFetchJson fetch = Object (KM.fromList
+  [ ("core", toJSON (case forbiddenFetchCore fetch of Core0 -> 0 :: Int; Core1 -> 1))
+  , ("pc", toJSON (watchAddressValue (forbiddenFetchPc fetch)))
+  , ("address", toJSON (watchAddressValue (forbiddenFetchAddress fetch)))
+  , ("physical", toJSON (watchAddressValue (forbiddenFetchPhysical fetch)))
+  , ("size", toJSON (watchBytesValue (forbiddenFetchBytes fetch)))
+  , ("instructions", toJSON (instructionsValue (forbiddenFetchInstructions fetch)))
+  , ("tick", toJSON (tickValue (forbiddenFetchTick fetch))) ])
 
 checkWatch :: WatchLimit -> [WatchRange] -> WatchAck -> WatchObservation -> Either String WatchGate
 checkWatch limit expected ack observation = do

@@ -29,7 +29,7 @@ main = do
   check "allocation includes aligned installer and relocated recipe tables"
     (all (\base -> runtimeInstallerBase base - base + runtimeInstallerExtent <= runtimeAllocationSize) alignedBases)
   let testAddresses =
-        [PublicationAddress (0x00100000 + 4 * fromIntegral index) | index <- [0 .. 221]]
+        [PublicationAddress (0x00100000 + 4 * index) | index <- [0 .. 221 :: Word32]]
           <> [captureHookAddress]
       order = either error id (safePublicationOrderFor testAddresses)
       addressAt index = testAddresses !! publicationIndex index
@@ -45,7 +45,7 @@ main = do
   check "a duplicate capture hook is rejected"
     (isLeft (safePublicationOrderFor (testAddresses <> [captureHookAddress])))
   check "a duplicate logical address is rejected"
-    (isLeft (safePublicationOrderFor (take 221 testAddresses <> [head testAddresses, last testAddresses])))
+    (isLeft (safePublicationOrderFor (take 221 testAddresses <> [PublicationAddress 0x00100000, captureHookAddress])))
   check "a missing hook record at a different extra address is rejected"
     (isLeft (safePublicationOrderFor (init testAddresses <> [PublicationAddress 0x00e9e03c])))
   let completeInstaller = unlines

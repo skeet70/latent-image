@@ -71,7 +71,7 @@ objects+=("$OUT/classic_chrome_ram.o")
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${LINK[@]}" -Wl,-T,menu/recipe_bank_ram.ld \
   -Wl,--defsym=RAM_PUSH_BASE="$BASE" -Wl,--defsym=RAM_PUSH_BANK_END="$rb_bank_end" \
   -Wl,--defsym=RAM_PUSH_INSTALLER_START="$rb_installer_start" \
-  -Wl,menu/classic_chrome_ram_stock.ld \
+  -Wl,menu/classic_chrome_ram_stock.ld -Wl,--emit-relocs \
   "${objects[@]}" -o "$OUT/kernel.elf"
 "$OBJCOPY" -O binary "$OUT/kernel.elf" "$OUT/linked.bin"
 "$NM" --defined-only --print-size --numeric-sort "$OUT/kernel.elf" > "$OUT/kernel.syms"

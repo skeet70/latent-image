@@ -540,26 +540,21 @@ static uint32_t rb_ui_editor_commit(void)
   return rb_ui_pop();
 }
 
-/* The stock handler of each cell this module is registered in; a further
- * registration must add its cell's handler here. */
-static uint32_t rb_ui_stock(uint32_t state, uint32_t event)
+static uint32_t rb_ui_action(uint32_t state, uint32_t event)
 {
   if (event == RB_UI_EVENT_LEAVE) {
     if (state == RB_UI_STATE_EDITOR) {
       return rb_ui_editor_cancel();
     }
-    return (state == RB_UI_STATE_BROWSE) ? rb_call_leave_edge()
-                                         : rb_call_set_dispatch();
+    return (state == RB_UI_STATE_BROWSE) ? rb_ui_leave() : rb_ui_set();
   }
   if (state == RB_UI_STATE_EDITOR) {
-    return rb_call_editor_confirm();
+    return rb_ui_editor_confirm();
   }
-  return rb_call_set_dispatch();
+  return rb_ui_set();
 }
 
-/* The stock delegate reads the selected row from the cursor cell with no bound
- * (FUN_00c72e10 -> FUN_0061d154 -> FUN_0061cd14 reads values[cursor]); a row
- * the values array does not carry is clamped to row 0 and the event is dropped. */
+/* The retained frame accessor reads values[cursor] without an upper bound. */
 static uint32_t rb_ui_refuse_stale(void)
 {
   rb_ui_store(RB_UI_CURSOR_CELL, 0u);
@@ -579,12 +574,12 @@ uint32_t rb_bank_interpose(void)
   uint8_t slot = 0u;
   RbBankPage page;
   if (frame == 0u) {
-    return rb_ui_stock(state, event);
+    return rb_ui_action(state, event);
   }
   cls = rb_ui_word(frame + RB_NODE_X);
   page = rb_ui_page(cls, &slot);
   if (page == RB_PAGE_EDITOR && rb_ui_word(frame + RB_NODE_ID) != RB_UI_EDITOR_ID) {
-    return rb_ui_stock(state, event);
+    return rb_ui_action(state, event);
   }
   if (event == RB_UI_EVENT_LEAVE) {
     if (cls == RB_UI_CLASS_EDIT) {
@@ -602,7 +597,7 @@ uint32_t rb_bank_interpose(void)
     if (page != RB_PAGE_NONE) {
       return rb_ui_pop();
     }
-    return rb_ui_stock(state, event);
+    return rb_ui_action(state, event);
   }
   if (page == RB_PAGE_EDITOR) {
     if (state == RB_UI_STATE_EDITOR &&
@@ -622,10 +617,10 @@ uint32_t rb_bank_interpose(void)
         return 1u;
       }
     }
-    return rb_ui_stock(state, event);
+    return rb_ui_action(state, event);
   }
   if (state != RB_UI_STATE_BROWSE) {
-    return rb_ui_stock(state, event);
+    return rb_ui_action(state, event);
   }
   values = rb_ui_word(frame + RB_NODE_VALUES);
   cursor = rb_ui_word(RB_UI_CURSOR_CELL);
@@ -641,11 +636,10 @@ uint32_t rb_bank_interpose(void)
         }
       }
     }
-    return rb_ui_stock(state, event);
+    return rb_ui_action(state, event);
   }
   if (values == 0u) {
-    /* The stock delegate's row read is guarded on the values word itself. */
-    return rb_ui_stock(state, event);
+    return rb_ui_action(state, event);
   }
   if (rb_ui_row_ok(values, cursor) == 0u) {
     return rb_ui_refuse_stale();
@@ -660,13 +654,13 @@ uint32_t rb_bank_interpose(void)
         token < RB_UI_TOKEN_SLOT_BASE + RB_BANK_SLOTS && child != 0u) {
       return rb_ui_child_enter();
     }
-    return rb_ui_stock(state, event);
+    return rb_ui_action(state, event);
   }
   if (page == RB_PAGE_EDIT) {
     if (child != 0u) {
       return rb_ui_child_enter();
     }
-    return rb_ui_stock(state, event);
+    return rb_ui_action(state, event);
   }
   if (page == RB_PAGE_DIALOG) {
     if (token == RB_UI_TOKEN_DIALOG_OK) {
@@ -677,34 +671,31 @@ uint32_t rb_bank_interpose(void)
       (void)rb_stage_edit_dialog_cancel();
       return 1u;
     }
-    return rb_ui_stock(state, event);
+    return rb_ui_action(state, event);
   }
-  /* OK stores the row's code, then the stock SET delegate's leaf exit pops the
-   * list, requests 0x930 and sets 0x009504a8. */
+  /* The owned SET leaf exit pops the list and notifies 0x930. */
   if (page == RB_PAGE_FIELD) {
     uint32_t result;
     if (rb_stage_edit_row(cls, token) != (uint32_t)RB_OK) {
       return 1u;
     }
-    result = rb_ui_stock(state, event);
+    result = rb_ui_action(state, event);
     if (result == 0xffffffffu || result == 2u) {
       rb_ui_view_changed();
     }
     return result;
   }
-  /* OK selects the row, then the stock SET delegate's leaf exit pops to the
-   * shooting menu, requests 0x930 and sets 0x009504a8. A refused selection has
-   * reported its status and stays on the list. */
+  /* A refused selection reports its status and stays on the list. */
   if (page == RB_PAGE_SELECT) {
     uint32_t result;
     if (token < RB_UI_TOKEN_SELECT_BASE ||
         token >= RB_UI_TOKEN_SELECT_BASE + RB_UI_SELECT_ROWS) {
-      return rb_ui_stock(state, event);
+      return rb_ui_action(state, event);
     }
     if (rb_bank_action(token, rb_verb_identity) != RB_OK) {
       return 1u;
     }
-    result = rb_ui_stock(state, event);
+    result = rb_ui_action(state, event);
     if (result == 0xffffffffu || result == 2u) {
       rb_ui_view_changed();
     }
@@ -720,7 +711,7 @@ uint32_t rb_bank_interpose(void)
   if (token == rb_ui_verb_token(slot, RB_VERB_EDIT_NAME)) {
     uint32_t result;
     if (child == 0u) {
-      return rb_ui_stock(state, event);
+      return rb_ui_action(state, event);
     }
     result = rb_ui_child_enter();
     if (result != 0xffffffffu && result != 2u) {
@@ -735,14 +726,13 @@ uint32_t rb_bank_interpose(void)
     }
     return result;
   }
-  /* OK stores the save, then the stock SET delegate's leaf exit pops to the
-   * slot list, requests 0x930 and sets 0x009504a8. */
+  /* The owned SET leaf exit pops to the slot list and notifies 0x930. */
   if (token == rb_ui_verb_token(slot, RB_VERB_SAVE_CURRENT)) {
     uint32_t result;
     if (rb_bank_action(token, identity) != RB_OK) {
       return 1u;
     }
-    result = rb_ui_stock(state, event);
+    result = rb_ui_action(state, event);
     if (result == 0xffffffffu || result == 2u) {
       rb_ui_view_changed();
     }
@@ -759,7 +749,7 @@ uint32_t rb_bank_interpose(void)
     (void)rb_bank_action(token, identity);
     return 1u;
   }
-  return rb_ui_stock(state, event);
+  return rb_ui_action(state, event);
 }
 
 /* Save Current keeps the slot's name; only the payload is replaced. */

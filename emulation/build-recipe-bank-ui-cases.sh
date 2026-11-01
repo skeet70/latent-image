@@ -109,11 +109,14 @@ env $HARDEN clang "${ARM[@]}" -nostdlib -static -fuse-ld=lld \
   "${UI_DEFSYMS[@]}" "$BUILD_DIR/ui-model.o" -o "$BUILD_DIR/ui-model.elf"
 llvm-nm --defined-only --print-size --numeric-sort "$BUILD_DIR/ui-model.elf" > "$BUILD_DIR/ui-model.syms"
 llvm-readelf --symbols --wide "$BUILD_DIR/ui-model.elf" > "$BUILD_DIR/ui-model.symbols"
-for pair in a:ui-a b:ui-b c:ui-c; do
+for pair in a:ui-a c:ui-c; do
   llvm-objcopy -j ".text.${pair%%:*}" -O binary "$BUILD_DIR/ui-model.elf" "$BUILD_DIR/${pair##*:}.bin"
 done
 
 "$GEN" bind-plan --build "$BUILD_DIR" --plan "$PLAN" --out "$BUILD_DIR/bank-plan-ui.json"
+if [[ "${PREPARE_ONLY:-0}" == 1 ]]; then
+  exit 0
+fi
 "$GEN" --runner "$RUNNER" --build "$BUILD_DIR" --out "$OUT_DIR" --plan "$BUILD_DIR/bank-plan-ui.json" --jobs "$JOBS" \
   --name-record "${RB_NAME_RECORD%u}" --rb-base "$RB_BASE" \
-  --id4 "$ID4" --id4-base "$ID4_BASE" --id5 "$ID5" --fields "$FIELDS"
+  --id4 "$ID4" --id4-base "$ID4_BASE" --id5 "$ID5" --fields "$FIELDS" "$@"

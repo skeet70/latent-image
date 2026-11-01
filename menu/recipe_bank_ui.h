@@ -350,15 +350,6 @@ extern uint32_t rb_stage_edit_reset_begin(uint32_t slot, RbMediaIdentity identit
 extern uint32_t rb_stage_edit_dialog_ok(void);
 extern uint32_t rb_stage_edit_dialog_cancel(void);
 
-/* Stock tail the interposer delegates to for the leaving-edge cell: the
- * class-checked nav pop FUN_00c76650 (action 129, cell (0,13)). */
-extern uint32_t rb_call_leave_edge(void);
-
-/* Stock tails the interposer delegates to, by state: the modal-75 state-0 SET
- * dispatcher FUN_00c72e10 and the editor confirm action FUN_00c75ed4. */
-extern uint32_t rb_call_set_dispatch(void);
-extern uint32_t rb_call_editor_confirm(void);
-
 /* Menu framework transitions, from menu/recipe_bank_arm.S trampolines. The
  * child-enter pattern is rb_call_stage_open(0xe, 0x1d) then rb_call_transition(),
  * and the confirm exit is rb_call_stage_open(0xf, 0x1d) then rb_call_transition(). */
@@ -393,8 +384,11 @@ extern void rb_call_name_label_position(uint32_t label, int8_t *x, int8_t *y);
 extern uint32_t rb_call_backdrop_suppressed(void);
 extern uint32_t rb_call_stock_key_right(void);
 extern uint32_t rb_call_stock_key_left(void);
-/* Owned modal-75 editor-cancel action replacing FUN_00c77794. */
+/* Owned modal-75 lifecycle actions. */
 extern uint32_t rb_ui_editor_cancel(void);
+extern uint32_t rb_ui_set(void);
+extern uint32_t rb_ui_editor_confirm(void);
+extern uint32_t rb_ui_leave(void);
 /* Owned menu-frame snapshot store replacing FUN_0061ceac; returns 1 once
  * written, 0 when the indexed slot address is null. */
 extern uint32_t rb_menu_frame_store(RbMenuRoot root);

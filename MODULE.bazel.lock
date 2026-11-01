@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "FVs8DfkgFHtZt9Xd9swARYrxuYWhVw+qvbLNgzIBZHE=",
+        "bzlTransitiveDigest": "rl7KRxKdtA8OCQbFnk1K18dvAj3VleOSNnOClJLt/Pc=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -490,6 +490,7 @@
                 "@@//emulation:fujimod-xm1/src/adjustment.rs": "//emulation:fujimod-xm1/src/adjustment.rs",
                 "@@//emulation:fujimod-xm1/src/bridge.rs": "//emulation:fujimod-xm1/src/bridge.rs",
                 "@@//emulation:fujimod-xm1/src/ff80.rs": "//emulation:fujimod-xm1/src/ff80.rs",
+                "@@//emulation:fujimod-xm1/src/frame_capture.rs": "//emulation:fujimod-xm1/src/frame_capture.rs",
                 "@@//emulation:fujimod-xm1/src/guest.rs": "//emulation:fujimod-xm1/src/guest.rs",
                 "@@//emulation:fujimod-xm1/src/handoff.rs": "//emulation:fujimod-xm1/src/handoff.rs",
                 "@@//emulation:fujimod-xm1/src/kernel_install.rs": "//emulation:fujimod-xm1/src/kernel_install.rs",

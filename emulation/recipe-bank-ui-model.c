@@ -1,8 +1,7 @@
-/* The recipe-bank UI-behavior model (X-M1 1.50, host-only): the synthetic stock
- * consumer the UI cases drive the bank's menu modules through.
+/* Recipe-bank UI guest ABI consumer (X-M1 1.50, host-only).
  *
- * The dispatch, transition and label shapes below are byte-read from the pinned
- * 1.50 firmware. Only cells registered to the interposer are modeled.
+ * Modal dispatch, frame transitions and label drawing are modeled retained
+ * services. SET, editor confirm and leave execute the owned controllers.
  *
  * The transition carries one frame/cursor record per depth. A push moves the
  * cursor cell to the child depth's recorded index, which is nonzero after a
@@ -26,7 +25,6 @@
 #define UI_NODE_VALUES 0x20u
 #define UI_NODE_LABELS 0x24u
 #define UI_NODE_PARENT 0x1cu
-#define UI_NODE_CLASS 0x08u
 #define UI_RECORD_BASE_ID 0x83cu
 #define UI_RECORD_STRIDE 0x42u
 #define UI_NAME_BYTES 26u
@@ -34,17 +32,6 @@
 #define UI_STEP_WORDS 5u
 #define UI_STEP_MAX 63u
 
-/* ui_log words */
-#define UI_LOG_SET_CALLS 0u
-#define UI_LOG_LEAVE_CALLS 1u
-#define UI_LOG_CONFIRM_CALLS 2u
-#define UI_LOG_STAGE_KIND 3u
-#define UI_LOG_STAGE_ID 4u
-#define UI_LOG_REDRAW 5u
-#define UI_LOG_POSTLUDE 6u
-#define UI_LOG_SET_CLASS 7u
-#define UI_LOG_SET_TOKEN 8u
-#define UI_LOG_AUX_CALLS 9u
 
 /* step opcodes */
 #define UI_OP_DISPATCH 0u
@@ -66,13 +53,11 @@
 volatile uint32_t ui_handler;      /* the action table word: the linked rb_bank_interpose */
 volatile uint32_t ui_name_base;    /* the label record table base */
 volatile uint32_t ui_epoch_bump;   /* the probe module's epoch bump entry */
-volatile uint32_t ui_set_result;   /* the stock SET delegate's word */
-volatile uint32_t ui_confirm_result;
 volatile uint32_t ui_refuse;       /* nonzero makes the next push transition fail */
 
 /* case outputs */
 volatile uint32_t ui_out[64];
-volatile uint32_t ui_log[32];
+volatile uint32_t ui_redraw_request;
 volatile uint8_t ui_out26[16][32];
 
 /* the swap fixture's second bank file */
@@ -195,53 +180,33 @@ static void ui_draw_label(uint32_t page, uint32_t row, uint32_t field,
           (const uint8_t *)(uintptr_t)record, UI_NAME_BYTES);
 }
 
-/* ------------------------------------------------------------ the delegates */
+/* ---------------------------------------------------- retained ABI services */
 
 uint32_t ui_transition(void)
 {
-  return (ui_stage_kind == 0x0eu) ? ui_core_push() : ui_core_pop();
-}
-
-uint32_t ui_set_dispatch(void)
-{
-  uint32_t frame = ui_word(UI_FRAME_CELL);
-  ui_log[UI_LOG_SET_CALLS] = ui_log[UI_LOG_SET_CALLS] + 1u;
-  if (frame != 0u) {
-    uint32_t values = ui_word(frame + UI_NODE_VALUES);
-    uint32_t cursor = ui_word(UI_CURSOR_CELL);
-    ui_log[UI_LOG_SET_CLASS] = ui_word(frame + UI_NODE_CLASS);
-    ui_log[UI_LOG_SET_TOKEN] = (values != 0u) ? ui_word(values + cursor * 8u) : 0u;
+  uint32_t kind = ui_stage_kind;
+  ui_stage_kind = 0u;
+  if (kind == 0u) {
+    return 0u;
   }
-  return ui_set_result;
+  return (kind == 0x0eu) ? ui_core_push() : ui_core_pop();
 }
 
-uint32_t ui_editor_confirm(void)
-{
-  ui_log[UI_LOG_CONFIRM_CALLS] = ui_log[UI_LOG_CONFIRM_CALLS] + 1u;
-  return ui_confirm_result;
-}
-
-uint32_t ui_leave_edge(void)
-{
-  ui_log[UI_LOG_LEAVE_CALLS] = ui_log[UI_LOG_LEAVE_CALLS] + 1u;
-  return ui_core_pop();
-}
 
 void ui_stage_open(uint32_t kind, uint32_t id)
 {
   ui_stage_kind = kind;
-  ui_log[UI_LOG_STAGE_KIND] = kind;
-  ui_log[UI_LOG_STAGE_ID] = id;
+  (void)id;
 }
 
 void ui_redraw(uint32_t region)
 {
-  ui_log[UI_LOG_REDRAW] = region;
+  ui_redraw_request = region;
 }
 
 void ui_postlude(uint32_t code)
 {
-  ui_log[UI_LOG_POSTLUDE] = code;
+  (void)code;
 }
 
 /* ------------------------------------------------------------- the case run */

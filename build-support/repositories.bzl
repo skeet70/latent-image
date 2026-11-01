@@ -65,6 +65,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/adjustment.rs",
     "//emulation:fujimod-xm1/src/bridge.rs",
     "//emulation:fujimod-xm1/src/ff80.rs",
+    "//emulation:fujimod-xm1/src/frame_capture.rs",
     "//emulation:fujimod-xm1/src/guest.rs",
     "//emulation:fujimod-xm1/src/handoff.rs",
     "//emulation:fujimod-xm1/src/kernel_install.rs",

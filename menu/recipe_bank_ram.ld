@@ -8,6 +8,7 @@ rb_stock_draw_root_continue = 0x01158160;
 
 SECTIONS {
   __ram_push_start = RAM_PUSH_BASE;
+  __rb_name_records = RAM_PUSH_BANK_END - 0x400;
   . = RAM_PUSH_BASE + 0x500;
   __rb_image_start = .;
   .text : {

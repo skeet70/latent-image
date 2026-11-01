@@ -10,7 +10,7 @@ use fujimod_xm1::guest::{DialTurn, ModeDialPosition, PhysicalShutterPosition, Pr
 use fujimod_xm1::machine::{KeyPulse, Machine, MENU_PULSE, ReleaseSegment, RunOutcome};
 use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::run::{self, NodeName};
-use fujimod_emulator::board::observation::MemoryWatch;
+use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
 use fujimod_emulator::board::preservation::{
     PhysicalRange, Preservation, PreservationState, ProtectedRanges,
 };
@@ -281,6 +281,14 @@ fn hex_field(text: &str) -> Result<Vec<u8>, String> {
     fujimod_xm1::ff80::decode_hex(text)
 }
 
+#[derive(Clone, Copy, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+enum WatchViews {
+    #[default]
+    Observe,
+    Fixed,
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "kebab-case")]
 enum Request {
@@ -301,7 +309,12 @@ enum Request {
     ModeDial { position: ModeDialPosition },
     ReadMemory { address: u64, count: usize },
     MediaRead { first: SectorAddress, count: SectorCount },
-    WatchBegin { ranges: Vec<[u64; 2]>, limit: usize },
+    WatchBegin {
+        ranges: Vec<[u64; 2]>, limit: usize,
+        #[serde(default)] views: WatchViews,
+        #[serde(default)] write_ranges: Vec<[u64; 2]>,
+        #[serde(default)] fetch_ranges: Vec<[u64; 2]>,
+    },
     WatchState,
     PreservationBegin { ranges: Vec<[u64; 2]> },
     PreservationState,
@@ -775,7 +788,7 @@ impl Server {
 
     fn handle(&mut self, request: Request) -> Result<Option<Value>, String> {
         let tail_request = matches!(&request, Request::CaptureObservationHits { .. } | Request::CaptureObservationAck { .. }
-            | Request::CaptureObservationState | Request::Finish);
+            | Request::CaptureObservationState | Request::WatchState | Request::Finish);
         if self.bridge.machine.failure.is_some() && !tail_request {
             return Err(self.bridge.machine.failure.as_ref().ok_or("terminal failure disappeared")?.clone());
         }
@@ -910,7 +923,7 @@ impl Server {
                 let read = self.bridge.machine.read_media(first, count)?;
                 json!({"first": read.first.0, "count": read.count.get(), "bytes": encode_hex(&read.bytes)})
             }
-            Request::WatchBegin { ranges, limit } => {
+            Request::WatchBegin { ranges, limit, views, write_ranges, fetch_ranges } => {
                 if self.watch.is_some() {
                     return Err("a memory watch is already armed".into());
                 }
@@ -923,11 +936,47 @@ impl Server {
                 {
                     return Err("watch-begin requires bounded 32-bit ranges and a positive record limit".into());
                 }
+                match views {
+                    WatchViews::Observe if !write_ranges.is_empty() || !fetch_ranges.is_empty() =>
+                        return Err("classified write/fetch ranges require fixed views".into()),
+                    WatchViews::Fixed => {
+                        let mut classes: Vec<_> = write_ranges.iter().chain(&fetch_ranges).copied().collect();
+                        if fetch_ranges.is_empty() || classes.len() > 16
+                            || classes.iter().any(|range| range[0] >= range[1] || range[1] > u32::MAX as u64) {
+                            return Err("fixed watch requires bounded write/fetch classes and forbidden fetch ranges".into());
+                        }
+                        classes.sort_unstable();
+                        let mut union: Vec<[u64; 2]> = Vec::with_capacity(classes.len());
+                        for range in classes {
+                            match union.last_mut() {
+                                Some(previous) if range[0] <= previous[1] => previous[1] = previous[1].max(range[1]),
+                                _ => union.push(range),
+                            }
+                        }
+                        if union != ranges {
+                            return Err("fixed watch ranges differ from the write/fetch class union".into());
+                        }
+                    }
+                    WatchViews::Observe => {}
+                }
                 let maps = run::memory_maps(&self.bridge.machine.document)?;
-                let watch = self.bridge.machine.session.board.memory_watch_begin(
-                    ranges.iter().map(|range| (range[0], range[1])).collect(), limit, maps)?;
+                let watch = match views {
+                    WatchViews::Observe => self.bridge.machine.session.board.memory_watch_begin(
+                        ranges.iter().map(|range| (range[0], range[1])).collect(), limit, maps)?,
+                    WatchViews::Fixed => self.bridge.machine.session.board.memory_watch_begin_classified(
+                        write_ranges.into_iter().map(|range| WatchRange { start: range[0], end: range[1], kinds: WatchKinds::WRITES })
+                            .chain(fetch_ranges.into_iter().map(|range| WatchRange { start: range[0], end: range[1], kinds: WatchKinds::CPU_FETCH })).collect(),
+                        limit, maps, ViewPolicy::Fixed)?,
+                };
+                let acknowledgement = match views {
+                    WatchViews::Observe => json!({"armed": true, "ranges": ranges}),
+                    WatchViews::Fixed => {
+                        let state = watch.records.borrow().state();
+                        json!({"armed": true, "ranges": ranges, "views": "fixed", "classes": state["classes"]})
+                    }
+                };
                 self.watch = Some(watch);
-                json!({"armed": true, "ranges": ranges})
+                acknowledgement
             }
             Request::WatchState => match &self.watch {
                 Some(watch) => watch.records.borrow().state(),
@@ -975,12 +1024,13 @@ impl Server {
                 if label.is_empty() || !label.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
                     return Err("screenshot label must be lowercase ASCII".into());
                 }
-                let png = self.bridge.machine.frame()?.ok_or("no display plane to capture")?;
+                let capture = self.bridge.machine.capture_frame()?;
                 let directory = self.output.join("screenshots");
                 std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
                 let path = directory.join(format!("{label}.png"));
-                write(&path, &png)?;
-                let shot = json!({"label": label, "path": path, "frame_number": null, "sha256": sha256(&png),
+                let capture = capture.write(&path)?;
+                let shot = json!({"label": label, "path": capture.png.path, "frame_number": null,
+                    "sha256": capture.png.sha256, "scanout_evidence": capture.scanout_evidence,
                     "menu": menu_value(self.bridge.machine.menu()?)});
                 self.screenshots.push(shot.clone());
                 shot
@@ -1289,6 +1339,7 @@ mod tests {
         finished: Option<bool>,
         phases: Option<Vec<Phase>>,
         path: Option<PathBuf>,
+        scanout_evidence: Option<ScanoutEvidenceReceipt>,
     }
 
     #[derive(Deserialize)]
@@ -1300,6 +1351,96 @@ mod tests {
     #[derive(Deserialize)]
     struct Screenshot {
         path: PathBuf,
+        scanout_evidence: ScanoutEvidenceReceipt,
+    }
+
+    #[derive(Debug, Deserialize, Eq, PartialEq)]
+    struct ArtifactReceipt {
+        path: PathBuf,
+        sha256: String,
+        bytes: usize,
+    }
+
+    #[derive(Debug, Deserialize, Eq, PartialEq)]
+    struct ScanoutEvidenceReceipt {
+        metadata: ArtifactReceipt,
+        source_bytes: ArtifactReceipt,
+    }
+
+    #[derive(Deserialize)]
+    struct CaptureMetadataReceipt {
+        schema: u32,
+        node: String,
+        instance: usize,
+        instructions: u64,
+        pixels: CapturedPixelsReceipt,
+        png: ArtifactReceipt,
+        source_bytes: ArtifactReceipt,
+        source_planes: Vec<SourcePlaneReceipt>,
+        native_scanout_state: NativeScanoutReceipt,
+        native_frame_state: NativeFrameReceipt,
+    }
+
+    #[derive(Deserialize)]
+    struct CapturedPixelsReceipt {
+        width: usize,
+        height: usize,
+        rgb_bytes: usize,
+        rgb_sha256: String,
+    }
+
+    #[derive(Debug, Deserialize, Eq, PartialEq)]
+    #[serde(tag = "kind", rename_all = "kebab-case")]
+    enum PlaneKindReceipt {
+        Main,
+        Graphics { layer: usize, channel: usize },
+    }
+
+    #[derive(Deserialize)]
+    struct SourcePlaneReceipt {
+        #[serde(flatten)]
+        kind: PlaneKindReceipt,
+        native_source_address: u64,
+        offset: usize,
+        bytes: usize,
+    }
+
+    #[derive(Deserialize)]
+    struct NativeScanoutReceipt {
+        instances: Vec<NativeInstanceReceipt>,
+    }
+
+    #[derive(Deserialize)]
+    struct NativeInstanceReceipt {
+        instance: usize,
+        registers: BTreeMap<String, String>,
+        written_offsets: Vec<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct NativeFrameReceipt {
+        instance: usize,
+        width: usize,
+        height: usize,
+        graphics: Vec<NativeGraphicsReceipt>,
+        rectangles: Vec<NativeRectangleReceipt>,
+    }
+
+    #[derive(Deserialize)]
+    struct NativeGraphicsReceipt {
+        source: String,
+        width: usize,
+        height: usize,
+        origin: [usize; 2],
+        stride_bytes: usize,
+        captured_bytes: usize,
+        alpha_field: usize,
+    }
+
+    #[derive(Deserialize)]
+    struct NativeRectangleReceipt {
+        index: usize,
+        luma: usize,
     }
 
     #[derive(Debug, Deserialize, Eq, PartialEq)]
@@ -1381,6 +1522,32 @@ mod tests {
         let receipt = serde_json::from_slice(&std::fs::read(server.output.join("emulator-session.json")).unwrap()).unwrap();
         std::fs::remove_dir_all(&server.output).unwrap();
         (responses, receipt)
+    }
+
+    #[test]
+    fn fixed_watch_protocol_records_guest_fetch_at_its_exact_pc() {
+        let mut server = server(&[0xe3a00001, 0xeafffffe]);
+        let physical = server.bridge.machine.document.boot_rom.address.0;
+        assert_eq!(physical, 0x8000_0000);
+        let mut reset_instruction = [0; 4];
+        server.bridge.machine.session.board.read_memory(0, 0, &mut reset_instruction).unwrap();
+        assert_eq!(reset_instruction, 0xe3a00001u32.to_le_bytes());
+        let begin = serde_json::from_value(json!({
+            "command": "watch-begin", "ranges": [[physical, physical + 4]], "limit": 16,
+            "views": "fixed", "fetch_ranges": [[physical, physical + 4]]
+        })).unwrap();
+        let acknowledgement = server.handle(begin).unwrap().unwrap();
+        assert_eq!(acknowledgement["views"], "fixed");
+        assert_eq!(server.bridge.machine.run(1), RunOutcome::Completed);
+        let state = server.handle(Request::WatchState).unwrap().unwrap();
+        assert_eq!(state["enabled"], true);
+        assert_eq!(state["views"], "fixed");
+        assert!(state["violation"].is_null());
+        assert!(state["records"].as_array().unwrap().iter().any(|record|
+            record["source"] == "cpu-fetch" && record["address"] == 0 && record["pc"] == 0 && record["physical"] == physical));
+        server.bridge.machine.failure = Some("synthetic terminal fault".into());
+        let final_state = server.handle(Request::WatchState).unwrap().unwrap();
+        assert_eq!(final_state, state);
     }
 
     const DRAIN_FIRST_PAUSE: &str = concat!(
@@ -1489,12 +1656,28 @@ mod tests {
             (0x00, 11 << 24),
             (0x10, 0x00010001),
             (0x84, 1),
-            (0x90, 1),
+            (0x90, 0x11),
             (0x94, 0),
+            (0x98, 0),
             (0xa4, 0x00010001),
+            (0xa8, 0x00010001),
             (0xb4, 0x2000),
+            (0xb8, 0x3000),
             (0xc4, 0),
-            (0xe4, 128),
+            (0xc8, 1),
+            (0xe4, 0x8080),
+            (0x108, 3),
+            (0x11c, 0),
+            (0x120, 0),
+            (0x124, 0),
+            (0x128, 0),
+            (0x16c, 1),
+            (0x174, 4),
+            (0x178, 10),
+            (0x17c, 20),
+            (0x188, 0),
+            (0x18c, 128),
+            (0x190, 0),
         ] {
             machine.session.board.write_register(0, fujimod_emulator_cpu::Register::Pc, 0).unwrap();
             machine.session.board.write_register(0, fujimod_emulator_cpu::arm::CORE[0], value).unwrap();
@@ -1502,7 +1685,9 @@ mod tests {
             machine.run(1);
             machine.require_running().unwrap();
         }
-        machine.session.board.write_physical(0x2000, &[255, 30, 60, 210].repeat(4)).unwrap();
+        machine.session.board.write_physical(0x4000_2000, &[255, 30, 60, 210].repeat(4)).unwrap();
+        let lower_plane = [128, 40, 50, 60, 128, 70, 80, 90, 0, 0, 0, 0, 128, 10, 20, 30, 128, 50, 60, 70];
+        machine.session.board.write_physical(0x4000_3000, &lower_plane).unwrap();
         let counts = machine.session.board.instruction_counts();
         let before: ModelClock = serde_json::from_value(machine.session.board.observation().unwrap()).unwrap();
         let mut output = Vec::new();
@@ -1522,6 +1707,51 @@ mod tests {
         let png = std::fs::read(path).unwrap();
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
         assert_eq!(png.get(16..24), Some([0, 0, 0, 2, 0, 0, 0, 2].as_slice()));
+        let pixels = fujimod_recording::Frame::from_png(&png).unwrap();
+        assert_eq!(pixels.pixels(), &[20, 20, 20, 210, 60, 30, 210, 60, 30, 210, 60, 30]);
+        let evidence = captured.scanout_evidence.as_ref().unwrap();
+        let metadata_bytes = std::fs::read(&evidence.metadata.path).unwrap();
+        assert_eq!(evidence.metadata.sha256, sha256(&metadata_bytes));
+        assert_eq!(evidence.metadata.bytes, metadata_bytes.len());
+        let metadata: CaptureMetadataReceipt = serde_json::from_slice(&metadata_bytes).unwrap();
+        assert_eq!(metadata.schema, 1);
+        assert_eq!(metadata.node, "scanout");
+        assert_eq!(metadata.instance, 0);
+        assert_eq!(metadata.instructions, server.bridge.machine.instructions());
+        assert_eq!((metadata.pixels.width, metadata.pixels.height), (2, 2));
+        assert_eq!(metadata.pixels.rgb_bytes, pixels.pixels().len());
+        assert_eq!(metadata.pixels.rgb_sha256, sha256(pixels.pixels()));
+        assert_eq!(&metadata.png.path, path);
+        assert_eq!(metadata.png.sha256, sha256(&png));
+        assert_eq!(metadata.png.bytes, png.len());
+        assert_eq!(metadata.source_bytes, evidence.source_bytes);
+        let raw = std::fs::read(&metadata.source_bytes.path).unwrap();
+        assert_eq!(&raw[..20], &lower_plane);
+        assert_eq!(&raw[20..], &[255, 30, 60, 210].repeat(4));
+        assert_eq!(metadata.source_bytes.sha256, sha256(&raw));
+        assert_eq!(metadata.source_bytes.bytes, raw.len());
+        assert_eq!(metadata.source_planes.len(), 2);
+        let lower = &metadata.source_planes[0];
+        assert_eq!(lower.kind, PlaneKindReceipt::Graphics { layer: 1, channel: 1 });
+        assert_eq!((lower.native_source_address, lower.offset, lower.bytes), (0x3000, 0, 20));
+        let upper = &metadata.source_planes[1];
+        assert_eq!(upper.kind, PlaneKindReceipt::Graphics { layer: 1, channel: 0 });
+        assert_eq!((upper.native_source_address, upper.offset, upper.bytes), (0x2000, 20, 16));
+        let native = &metadata.native_frame_state;
+        assert_eq!((native.instance, native.width, native.height), (0, 2, 2));
+        assert_eq!(native.graphics.len(), 2);
+        let lower = &native.graphics[0];
+        assert_eq!(lower.source, "0x3000");
+        assert_eq!((lower.width, lower.height, lower.origin), (2, 2, [0, 0]));
+        assert_eq!((lower.stride_bytes, lower.captured_bytes, lower.alpha_field), (12, 20, 128));
+        let graphics = &native.graphics[1];
+        assert_eq!(graphics.source, "0x2000");
+        assert_eq!((graphics.width, graphics.height, graphics.origin), (2, 2, [0, 0]));
+        assert_eq!((graphics.stride_bytes, graphics.captured_bytes, graphics.alpha_field), (8, 16, 128));
+        assert_eq!(native.rectangles.iter().map(|rectangle| (rectangle.index, rectangle.luma)).collect::<Vec<_>>(), [(0, 10), (1, 20)]);
+        let instance = metadata.native_scanout_state.instances.iter().find(|instance| instance.instance == metadata.instance).unwrap();
+        assert_eq!(instance.registers.get("0xfff6b108").map(String::as_str), Some("0x3"));
+        assert!(instance.written_offsets.iter().any(|offset| offset == "0x108"));
         let states: Vec<_> = responses.iter().filter_map(|response| response.snapshot.as_ref()).collect();
         assert_eq!(states.len(), 2);
         assert_eq!(states[0].instructions, states[1].instructions);
@@ -1531,8 +1761,25 @@ mod tests {
         let receipt: Receipt = serde_json::from_slice(&std::fs::read(server.output.join("emulator-session.json")).unwrap()).unwrap();
         assert_eq!(receipt.screenshots.len(), 1);
         assert_eq!(&receipt.screenshots[0].path, path);
+        assert_eq!(&receipt.screenshots[0].scanout_evidence, evidence);
         assert!(receipt.bridge_error.is_none());
         std::fs::remove_dir_all(&server.output).unwrap();
+    }
+
+    #[test]
+    fn capture_without_source_evidence_refuses_a_screenshot_receipt() {
+        let mut server = server(&[0xeafffffe]);
+        let counts = server.bridge.machine.session.board.instruction_counts();
+        let (responses, receipt) = exchange(&mut server, concat!(
+            "{\"command\":\"capture\",\"label\":\"missing\"}\n",
+            "{\"command\":\"finish\"}\n",
+        ));
+        let refusal = responses.iter().find(|response| !response.ok).unwrap();
+        assert!(refusal.path.is_none());
+        assert!(refusal.scanout_evidence.is_none());
+        assert!(receipt.screenshots.is_empty());
+        assert!(receipt.bridge_error.is_some());
+        assert_eq!(server.bridge.machine.session.board.instruction_counts(), counts);
     }
 
     #[test]

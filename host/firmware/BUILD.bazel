@@ -1538,6 +1538,45 @@ haskell_library(
     ],
 )
 
+haskell_library(
+    name = "runtime-relocation-compare",
+    srcs = ["RuntimeRelocationCompare.hs", "RuntimeRelocationProvenance.hs"],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-XOverloadedStrings"],
+    deps = [
+        ":bank-allowlist",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "compare-runtime-relocation",
+    srcs = ["CompareRuntimeRelocation.hs"],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-XOverloadedStrings"],
+    deps = [
+        ":runtime-relocation-compare",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+    ],
+)
+
+haskell_test(
+    name = "runtime-relocation-compare-tests",
+    srcs = ["RuntimeRelocationCompareTests.hs"],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021", "-XOverloadedStrings"],
+    deps = [
+        ":runtime-relocation-compare",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
 haskell_test(
     name = "bank-allowlist-tests",
     srcs = ["BankAllowlistTests.hs"],
