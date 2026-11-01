@@ -173,11 +173,11 @@ fn validate(observation: &Observation, role: Role, original: &[u8], linked: &[u8
         let (constructor, _) = snapshot(observation, 0x725fa8)?;
         require(register(constructor, "r0")? == 0x20067 && register(constructor, "r1")? == 0x400f33b0 && register(constructor, "r3")? == 0xdd054,
             "retained task constructor binding differs")?;
+        let (service, _) = snapshot(observation, 0x726024)?;
+        require(register(service, "r0")? == 0x20067 && register(service, "r3")? == 0xd4eec, "retained installed-service binding differs")?;
         let (endpoint, wrapper_return) = snapshot(observation, 0x69cf38)?;
         require(endpoint.core == entry.core && endpoint.sp == wrapper.sp, "wrapper return core/SP differs")?;
-        require(register(endpoint, "r0")? == (-25i32) as u32, "retained constructor failure did not survive wrapper return")?;
-        require(!observation.hits.iter().any(|hit| hit.core == entry.core && at(hit) == Ok(0x726024)),
-            "later installed service unexpectedly executed")?;
+        require(register(endpoint, "r0")? == (-25i32) as u32, "retained installed-service failure did not survive wrapper return")?;
         for name in ["r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11"] {
             require(register(wrapper, name)? == register(endpoint, name)?, "wrapper callee-saved register differs")?;
         }
