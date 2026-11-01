@@ -23,6 +23,7 @@ const HEAP_START: u32 = 0xa71a00;
 const HEAP_END: u32 = 0xbf1a00;
 const WATCH_LIMIT: usize = 65_536;
 const EVENT_LIMIT: usize = 32_768;
+const ROUTE_INSTRUCTIONS: u64 = 80_000_000 + 15 * 16_000_000 + 40_000_000 + 90_000_000;
 
 struct ArtifactBytes(u64);
 struct WatchOutput { writer: BufWriter<std::fs::File>, used: ArtifactBytes }
@@ -52,15 +53,45 @@ struct Image { base: u32, bytes: Vec<u8> }
 #[derive(Deserialize)]
 #[serde(transparent)]
 struct HexAddress(String);
+impl HexAddress {
+    fn decode(&self) -> Result<u32, String> {
+        u32::from_str_radix(self.0.strip_prefix("0x").ok_or("trace word is not hexadecimal")?, 16).map_err(|error| error.to_string())
+    }
+}
 #[derive(Deserialize)]
-struct RecordedHit { address: HexAddress, core: Core, instructions: heap_state::Counter }
-#[derive(Clone, Copy, Deserialize, Serialize)]
+struct HitRegisters {
+    r0: HexAddress, r1: HexAddress, r2: HexAddress, r3: HexAddress, r4: HexAddress, r5: HexAddress, r6: HexAddress,
+    r7: HexAddress, r8: HexAddress, r9: HexAddress, r10: HexAddress, r11: HexAddress, r12: HexAddress,
+}
+impl HitRegisters {
+    fn decode(&self) -> Result<[u32; 13], String> {
+        Ok([self.r0.decode()?, self.r1.decode()?, self.r2.decode()?, self.r3.decode()?, self.r4.decode()?,
+            self.r5.decode()?, self.r6.decode()?, self.r7.decode()?, self.r8.decode()?, self.r9.decode()?,
+            self.r10.decode()?, self.r11.decode()?, self.r12.decode()?])
+    }
+}
+#[derive(Deserialize)]
+struct RecordedHit {
+    address: HexAddress, core: Core, instructions: heap_state::Counter,
+    registers: HitRegisters, sp: HexAddress, lr: HexAddress, cpsr: u32,
+}
+#[derive(Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum Access { CpuFetch, CpuWrite, CpuRead, HostRead, HostWrite, ModelBusRead, ModelBusWrite }
 #[derive(Deserialize, Serialize)]
-struct AccessRecord { source: Access, address: u64, physical: u64, size: u64, core: Option<usize>, pc: Option<u64> }
+struct AccessRecord {
+    source: Access, address: u64, physical: u64, size: u64, core: Option<usize>, pc: Option<u64>, instructions: Option<u64>,
+}
+#[derive(Deserialize, Eq, PartialEq, Serialize)]
+struct WatchClass { range: [u64; 2], kinds: Vec<Access> }
+#[derive(Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum Views { Observe }
 #[derive(Deserialize, Serialize)]
-struct AccessBatch { enabled: bool, violation: Option<String>, records: Vec<AccessRecord> }
+struct AccessBatch {
+    enabled: bool, violation: Option<String>, records: Vec<AccessRecord>,
+    classes: Vec<WatchClass>, ranges: Vec<[u64; 2]>, views: Views,
+}
 #[derive(Deserialize, Serialize)]
 struct Boundary {
     snapshot: Snapshot,
@@ -97,6 +128,14 @@ struct Receipt {
     summary_sha256: Digest,
     limitations: Vec<String>,
 }
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", content = "detail", rename_all = "kebab-case")]
+enum AdmissionFailure { BoundaryRegisters, WatchClasses, WatchRanges, MissingFetch, FinalCounters, Other(String) }
+impl std::fmt::Display for AdmissionFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(formatter, "{self:?}") }
+}
+impl From<String> for AdmissionFailure { fn from(error: String) -> Self { Self::Other(error) } }
+impl From<&str> for AdmissionFailure { fn from(error: &str) -> Self { Self::Other(error.into()) } }
 fn require(condition: bool, reason: &str) -> Result<(), String> {
     if condition { Ok(()) } else { Err(reason.into()) }
 }
@@ -193,11 +232,78 @@ fn sample(machine: &Machine, maps: &[MemoryMap], images: &[Image], recorder: &Re
         heap_break: word(machine, maps, &banks, core, 0x829a08)?, owner: word(machine, maps, &banks, core, 0x40a6c7d8)?, depth: word(machine, maps, &banks, core, 0x40a6c7dc)? },
         identities, tcm: banks, root: Address(root), context_word, task_record_word: Address(task_record_word), code_word })
 }
+fn watch_classes(recorder: &Recorder) -> Vec<WatchClass> {
+    let mut classes: Vec<_> = CODE.into_iter().map(|(start, end)| WatchClass { range: [u64::from(start), u64::from(end)], kinds: vec![Access::CpuWrite, Access::HostWrite, Access::ModelBusWrite] }).collect();
+    classes.extend(ENTRIES.into_iter().map(|start| WatchClass { range: [u64::from(start), u64::from(start + 4)], kinds: vec![Access::CpuFetch] }));
+    let mut headers: Vec<_> = recorder.live_headers().into_iter().map(|address| address.0 & !0x40000000).collect();
+    headers.sort_unstable();
+    headers.dedup();
+    let group = headers.len().div_ceil(256 - CODE.len() - ENTRIES.len()).max(1);
+    classes.extend(headers.chunks(group).map(|chunk| WatchClass {
+        range: [u64::from(chunk[0]), u64::from(chunk[chunk.len() - 1]) + 4], kinds: vec![Access::CpuRead],
+    }));
+    classes
+}
 fn ranges(recorder: &Recorder) -> Vec<WatchRange> {
-    let mut ranges: Vec<_> = CODE.into_iter().map(|(start, end)| WatchRange { start: u64::from(start), end: u64::from(end), kinds: WatchKinds::WRITES }).collect();
-    ranges.extend(ENTRIES.into_iter().map(|start| WatchRange { start: u64::from(start), end: u64::from(start + 4), kinds: WatchKinds::CPU_FETCH }));
-    ranges.extend(recorder.live_headers().into_iter().map(|address| WatchRange { start: u64::from(address.0 & !0x40000000), end: u64::from(address.0 & !0x40000000) + 4, kinds: WatchKinds::CPU_READ }));
-    ranges
+    watch_classes(recorder).into_iter().map(|class| WatchRange { start: class.range[0], end: class.range[1],
+        kinds: match class.kinds.as_slice() { [Access::CpuRead] => WatchKinds::CPU_READ, [Access::CpuFetch] => WatchKinds::CPU_FETCH, _ => WatchKinds::WRITES } }).collect()
+}
+fn merged_ranges(classes: &[WatchClass]) -> Vec<[u64; 2]> {
+    let mut sorted: Vec<_> = classes.iter().map(|class| class.range).collect();
+    sorted.sort_unstable();
+    let mut merged: Vec<[u64; 2]> = Vec::new();
+    for range in sorted {
+        if let Some(last) = merged.last_mut().filter(|last| range[0] <= last[1]) { last[1] = last[1].max(range[1]); }
+        else { merged.push(range); }
+    }
+    merged
+}
+#[derive(Eq, PartialEq)]
+struct FetchStamp { core: Core, pc: Address, clock: u64 }
+fn admit_final(counts: [u64; 2], boundaries: &[Boundary]) -> Result<(), AdmissionFailure> {
+    if counts[0].checked_add(counts[1]) != Some(ROUTE_INSTRUCTIONS)
+        || boundaries.iter().any(|boundary| boundary.snapshot.counts.iter().zip(counts).any(|(before, after)| *before > after)) {
+        return Err(AdmissionFailure::FinalCounters);
+    }
+    Ok(())
+}
+fn admit_interval(batch: &AccessBatch, classes: &[WatchClass], headers: &[Address], start: &Boundary, next: Option<&Boundary>, final_counts: [u64; 2]) -> Result<(usize, usize), AdmissionFailure> {
+    if batch.classes != classes || batch.views != Views::Observe { return Err(AdmissionFailure::WatchClasses); }
+    if batch.ranges != merged_ranges(classes) { return Err(AdmissionFailure::WatchRanges); }
+    let begin = start.snapshot.counts[0].checked_add(start.snapshot.counts[1]).ok_or(AdmissionFailure::FinalCounters)?;
+    let end_counts = next.map_or(final_counts, |boundary| boundary.snapshot.counts);
+    let end = end_counts[0].checked_add(end_counts[1]).ok_or(AdmissionFailure::FinalCounters)?;
+    if end < begin || start.snapshot.counts.iter().zip(end_counts).any(|(before, after)| *before > after) { return Err(AdmissionFailure::FinalCounters); }
+    let mut expected = Vec::new();
+    for boundary in std::iter::once(start).chain(next) {
+        if ENTRIES.contains(&boundary.snapshot.pc.0) {
+            expected.push(FetchStamp { core: boundary.snapshot.core, pc: boundary.snapshot.pc,
+                clock: boundary.snapshot.counts[0].checked_add(boundary.snapshot.counts[1]).and_then(|clock| clock.checked_add(1)).ok_or(AdmissionFailure::FinalCounters)? });
+        }
+    }
+    let mut fetches = Vec::new();
+    let mut previous_clock = begin;
+    let mut external_reads = 0;
+    for row in &batch.records {
+        require(row.size != 0 && row.physical.checked_add(row.size).is_some(), "invalid memory event extent")?;
+        let high = row.physical + row.size;
+        require(classes.iter().any(|class| class.range[0] < high && row.physical < class.range[1] && class.kinds.contains(&row.source)), "memory event is outside declared classes")?;
+        if matches!(row.source, Access::CpuFetch | Access::CpuRead | Access::CpuWrite) {
+            let clock = row.instructions.ok_or(AdmissionFailure::MissingFetch)?;
+            let upper = if matches!(row.source, Access::CpuFetch) { end.checked_add(1).ok_or(AdmissionFailure::FinalCounters)? } else { end };
+            if clock <= begin || clock > upper || clock < previous_clock { return Err(AdmissionFailure::FinalCounters); }
+            previous_clock = clock;
+        }
+        if matches!(row.source, Access::CpuFetch) {
+            require(row.pc == Some(row.address), "fetch PC differs from address")?;
+            fetches.push(FetchStamp { core: Core(row.core.ok_or(AdmissionFailure::MissingFetch)?), pc: Address(u32::try_from(row.address).map_err(|error| error.to_string())?), clock: row.instructions.ok_or(AdmissionFailure::MissingFetch)? });
+        }
+        if matches!(row.source, Access::CpuRead)
+            && headers.iter().any(|header| row.physical < u64::from(header.0 & !0x40000000) + 4 && u64::from(header.0 & !0x40000000) < high)
+            && row.pc.is_some_and(|pc| !CODE.iter().any(|(low, high)| u64::from(*low) <= (pc & !0x40000000) && (pc & !0x40000000) < u64::from(*high))) { external_reads += 1; }
+    }
+    if fetches != expected { return Err(AdmissionFailure::MissingFetch); }
+    Ok((external_reads, admit_batch(batch)?))
 }
 fn source_images(analysis: &std::path::Path) -> Result<(Vec<Image>, Vec<Digest>), String> {
     let sources = [
@@ -224,9 +330,8 @@ fn source_images(analysis: &std::path::Path) -> Result<(Vec<Image>, Vec<Digest>)
 fn menu(machine: &Machine) -> Result<Option<[u32; 3]>, String> {
     machine.menu().map(|value| value.map(|value| [value.menu_id, value.setting_id, value.cursor]))
 }
-fn admit_batch(batch: &AccessBatch) -> Result<(usize, usize), String> {
+fn admit_batch(batch: &AccessBatch) -> Result<usize, String> {
     require(batch.enabled && batch.violation.is_none(), "memory watch overflowed or refused")?;
-    let mut external_reads = 0;
     let mut code_writes = 0;
     for row in &batch.records {
         if matches!(row.source, Access::CpuFetch | Access::CpuRead | Access::CpuWrite) {
@@ -235,17 +340,16 @@ fn admit_batch(batch: &AccessBatch) -> Result<(usize, usize), String> {
         match row.source {
             Access::CpuFetch => require(row.address == row.physical && row.size == 4, "unsampled allocator executable alias")?,
             Access::CpuWrite | Access::HostWrite | Access::ModelBusWrite => code_writes += 1,
-            Access::CpuRead if row.pc.is_some_and(|pc| !CODE.iter().any(|(low, high)| u64::from(*low) <= (pc & !0x40000000) && (pc & !0x40000000) < u64::from(*high))) => external_reads += 1,
             _ => {}
         }
     }
-    Ok((external_reads, code_writes))
+    Ok(code_writes)
 }
 fn bounded_read(path: &std::path::Path, limit: u64) -> Result<Vec<u8>, String> {
     require(std::fs::metadata(path).map_err(|error| error.to_string())?.len() <= limit, "observation artifact exceeds byte bound")?;
     read(path)
 }
-fn admit_receipt(directory: &std::path::Path, images: &[Image], expected_mode: ObserverMode) -> Result<Receipt, String> {
+fn admit_receipt(directory: &std::path::Path, images: &[Image], expected_mode: ObserverMode) -> Result<Receipt, AdmissionFailure> {
     let receipt: Receipt = serde_json::from_slice(&bounded_read(&directory.join("heap-observation.json"), 65_536)?).map_err(|error| error.to_string())?;
     require(receipt.schema == 1 && receipt.mode == expected_mode && receipt.complete && receipt.error.is_none()
         && receipt.machine_failure.is_none() && receipt.watch_end_error.is_none() && receipt.guest_code_writes == 0, "observation receipt is not complete")?;
@@ -265,12 +369,20 @@ fn admit_receipt(directory: &std::path::Path, images: &[Image], expected_mode: O
     let hits: Vec<RecordedHit> = serde_json::from_slice(&hit_bytes).map_err(|error| error.to_string())?;
     require(hits.len() == boundaries.len(), "instruction hits and sampled boundaries differ")?;
     for (hit, boundary) in hits.iter().zip(&boundaries) {
-        let pc = u32::from_str_radix(hit.address.0.strip_prefix("0x").ok_or("trace address is not hexadecimal")?, 16).map_err(|error| error.to_string())?;
+        let pc = hit.address.decode()?;
         require(hit.core == boundary.snapshot.core && pc == boundary.snapshot.pc.0
             && Some(hit.instructions.0) == boundary.snapshot.counts[0].checked_add(boundary.snapshot.counts[1]), "raw hit context differs from boundary")?;
+        if hit.registers.decode()? != boundary.snapshot.registers[..13]
+            || hit.sp.decode()? != boundary.snapshot.registers[13] || hit.lr.decode()? != boundary.snapshot.registers[14]
+            || hit.cpsr != boundary.snapshot.cpsr { return Err(AdmissionFailure::BoundaryRegisters); }
     }
+    admit_final(receipt.instructions, &boundaries)?;
+    let mut batch_lines = access_bytes.split(|byte| *byte == b'\n').filter(|line| !line.is_empty());
+    let mut batches = 0;
+    let mut reads = 0;
+    let mut writes = 0;
     let mut replay = Recorder::new();
-    for boundary in &boundaries {
+    for (index, boundary) in boundaries.iter().enumerate() {
         let snapshot = &boundary.snapshot;
         require(snapshot.core.0 < 2 && matches!(boundary.identities[snapshot.core.0], 0x4003 | 0x5003), "boundary core identity differs")?;
         let domain = usize::from(boundary.identities[snapshot.core.0] != 0x4003);
@@ -280,20 +392,16 @@ fn admit_receipt(directory: &std::path::Path, images: &[Image], expected_mode: O
         require(offset % 56 == 0 && offset / 56 < 120 && snapshot.context.task.0 == offset / 56 + 1, "boundary task index differs")?;
         require(boundary.code_word == expected(images, snapshot.pc.0)? && snapshot.registers[15] == snapshot.pc.0, "boundary instruction binding differs")?;
         replay.observe(snapshot.clone()).map_err(|error| error.to_string())?;
-    }
-    require(serde_json::to_vec(replay.records()).map_err(|error| error.to_string())? == event_bytes
-        && replay.records().len() == receipt.events && replay.pending_count() == receipt.pending, "event replay differs")?;
-    require(serde_json::to_vec(&replay.summary()).map_err(|error| error.to_string())? == summary_bytes, "lifetime summary replay differs")?;
-    let mut batches = 0;
-    let mut reads = 0;
-    let mut writes = 0;
-    for line in access_bytes.split(|byte| *byte == b'\n').filter(|line| !line.is_empty()) {
-        let batch: AccessBatch = serde_json::from_slice(line).map_err(|error| error.to_string())?;
-        let (batch_reads, batch_writes) = admit_batch(&batch)?;
+        let batch: AccessBatch = serde_json::from_slice(batch_lines.next().ok_or(AdmissionFailure::MissingFetch)?).map_err(|error| error.to_string())?;
+        let (batch_reads, batch_writes) = admit_interval(&batch, &watch_classes(&replay), &replay.live_headers(), boundary, boundaries.get(index + 1), receipt.instructions)?;
         reads += batch_reads;
         writes += batch_writes;
         batches += 1;
     }
+    require(serde_json::to_vec(replay.records()).map_err(|error| error.to_string())? == event_bytes
+        && replay.records().len() == receipt.events && replay.pending_count() == receipt.pending, "event replay differs")?;
+    require(serde_json::to_vec(&replay.summary()).map_err(|error| error.to_string())? == summary_bytes, "lifetime summary replay differs")?;
+    if batch_lines.next().is_some() { return Err(AdmissionFailure::MissingFetch); }
     require((batches, reads, writes) == (receipt.watch_batches, receipt.external_header_reads, receipt.guest_code_writes), "memory-watch projection differs")?;
     match expected_mode {
         ObserverMode::Enabled => {
@@ -307,8 +415,8 @@ fn admit_receipt(directory: &std::path::Path, images: &[Image], expected_mode: O
 fn compare(arguments: &[std::ffi::OsString]) -> Result<(), String> {
     require(arguments.len() == 5, "heap-observe --compare ENABLED_DIR DISABLED_DIR ANALYSIS_ROOT OUTPUT_JSON")?;
     let (images, digests) = source_images(std::path::Path::new(&arguments[3]))?;
-    let enabled = admit_receipt(std::path::Path::new(&arguments[1]), &images, ObserverMode::Enabled)?;
-    let disabled = admit_receipt(std::path::Path::new(&arguments[2]), &images, ObserverMode::Disabled)?;
+    let enabled = admit_receipt(std::path::Path::new(&arguments[1]), &images, ObserverMode::Enabled).map_err(|error| error.to_string())?;
+    let disabled = admit_receipt(std::path::Path::new(&arguments[2]), &images, ObserverMode::Disabled).map_err(|error| error.to_string())?;
     require(enabled.identity == disabled.identity && enabled.identity.images == digests && enabled.checkpoint == disabled.checkpoint
         && enabled.identity.run.0 == "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"
         && enabled.identity.update.0 == "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"
@@ -320,9 +428,101 @@ fn compare(arguments: &[std::ffi::OsString]) -> Result<(), String> {
     OpenOptions::new().create_new(true).write(true).open(std::path::Path::new(&arguments[4]))
         .and_then(|mut file| file.write_all(&bytes)).map_err(|error| error.to_string())
 }
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum ReceiptFault { BoundarySize, RemovedClass, OmittedFetch, FinalCounter }
+impl ReceiptFault {
+    fn directory(self) -> &'static str {
+        match self { Self::BoundarySize => "boundary-size", Self::RemovedClass => "removed-class", Self::OmittedFetch => "omitted-fetch", Self::FinalCounter => "final-counter" }
+    }
+    fn targets(self, error: &AdmissionFailure) -> bool {
+        matches!((self, error), (Self::BoundarySize, AdmissionFailure::BoundaryRegisters)
+            | (Self::RemovedClass, AdmissionFailure::WatchClasses) | (Self::OmittedFetch, AdmissionFailure::MissingFetch)
+            | (Self::FinalCounter, AdmissionFailure::FinalCounters))
+    }
+}
+#[derive(Serialize)]
+struct Refusal { fault: ReceiptFault, targeted: bool, observed: Option<AdmissionFailure> }
+fn refusal_controls(arguments: &[std::ffi::OsString]) -> Result<(), String> {
+    require(arguments.len() == 5, "heap-observe --refusal-controls ENABLED_DIR DISABLED_DIR ANALYSIS_ROOT NEW_OUTPUT_DIR")?;
+    let source = std::path::Path::new(&arguments[1]);
+    let output = std::path::Path::new(&arguments[4]);
+    std::fs::create_dir(output).map_err(|error| error.to_string())?;
+    let comparison = vec!["--compare".into(), arguments[1].clone(), arguments[2].clone(), arguments[3].clone(), output.join("baseline-comparison.json").into_os_string()];
+    compare(&comparison)?;
+    let (images, _) = source_images(std::path::Path::new(&arguments[3]))?;
+    let mut results = Vec::new();
+    for fault in [ReceiptFault::BoundarySize, ReceiptFault::RemovedClass, ReceiptFault::OmittedFetch, ReceiptFault::FinalCounter] {
+        let directory = output.join(fault.directory());
+        std::fs::create_dir(&directory).map_err(|error| error.to_string())?;
+        let mut receipt: Receipt = serde_json::from_slice(&bounded_read(&source.join("heap-observation.json"), 65_536)?).map_err(|error| error.to_string())?;
+        let changed: &[&str] = match fault {
+            ReceiptFault::BoundarySize => &["boundaries.json", "events.json", "summary.json"],
+            ReceiptFault::RemovedClass | ReceiptFault::OmittedFetch => &["accesses.jsonl"],
+            ReceiptFault::FinalCounter => &[],
+        };
+        for name in ["boundaries.json", "events.json", "summary.json", "accesses.jsonl", "trace-hits.json", "reset.fujimod"] {
+            if !changed.contains(&name) { std::fs::hard_link(source.join(name), directory.join(name)).map_err(|error| error.to_string())?; }
+        }
+        match fault {
+            ReceiptFault::BoundarySize => {
+                let events: Vec<heap_state::Event> = serde_json::from_slice(&bounded_read(&source.join("events.json"), 64 * 1024 * 1024)?).map_err(|error| error.to_string())?;
+                let origin = events.iter().find(|event| matches!(&event.boundary, heap_state::Boundary::Enter { operation: Operation::Malloc, parent: None, .. })).ok_or("control needs a logical malloc entry")?;
+                let mut boundaries: Vec<Boundary> = serde_json::from_slice(&bounded_read(&source.join("boundaries.json"), 64 * 1024 * 1024)?).map_err(|error| error.to_string())?;
+                let boundary = boundaries.iter_mut().find(|boundary| boundary.snapshot == origin.snapshot).ok_or("control malloc boundary absent")?;
+                boundary.snapshot.registers[1] = if boundary.snapshot.registers[1] == 0 { 1 } else { boundary.snapshot.registers[1] - 1 };
+                let mut replay = Recorder::new();
+                for boundary in &boundaries { replay.observe(boundary.snapshot.clone()).map_err(|error| error.to_string())?; }
+                replay.finish().map_err(|error| error.to_string())?;
+                let boundary_bytes = serde_json::to_vec(&boundaries).map_err(|error| error.to_string())?;
+                let event_bytes = serde_json::to_vec(replay.records()).map_err(|error| error.to_string())?;
+                let summary_bytes = serde_json::to_vec(&replay.summary()).map_err(|error| error.to_string())?;
+                write(&directory.join("boundaries.json"), &boundary_bytes)?;
+                write(&directory.join("events.json"), &event_bytes)?;
+                write(&directory.join("summary.json"), &summary_bytes)?;
+                receipt.boundaries_sha256 = Digest(sha256(&boundary_bytes));
+                receipt.events_sha256 = Digest(sha256(&event_bytes));
+                receipt.summary_sha256 = Digest(sha256(&summary_bytes));
+            }
+            ReceiptFault::RemovedClass | ReceiptFault::OmittedFetch => {
+                let access_bytes = bounded_read(&source.join("accesses.jsonl"), 256 * 1024 * 1024)?;
+                let mut output_bytes = Vec::with_capacity(access_bytes.len());
+                let mut changed = false;
+                for line in access_bytes.split(|byte| *byte == b'\n').filter(|line| !line.is_empty()) {
+                    let mut batch: AccessBatch = serde_json::from_slice(line).map_err(|error| error.to_string())?;
+                    if !changed {
+                        match fault {
+                            ReceiptFault::RemovedClass if !batch.classes.is_empty() => { batch.classes.remove(0); changed = true; }
+                            ReceiptFault::OmittedFetch => {
+                                if let Some(index) = batch.records.iter().position(|row| matches!(row.source, Access::CpuFetch)) { batch.records.remove(index); changed = true; }
+                            }
+                            _ => {}
+                        }
+                    }
+                    serde_json::to_writer(&mut output_bytes, &batch).map_err(|error| error.to_string())?;
+                    output_bytes.push(b'\n');
+                }
+                require(changed, "control has no suitable watch row or class")?;
+                write(&directory.join("accesses.jsonl"), &output_bytes)?;
+                receipt.accesses_sha256 = Digest(sha256(&output_bytes));
+            }
+            ReceiptFault::FinalCounter => {
+                receipt.instructions[0] = receipt.instructions[0].checked_sub(1).ok_or("control needs a primary instruction")?;
+            }
+        }
+        write(&directory.join("heap-observation.json"), &serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?)?;
+        let observed = admit_receipt(&directory, &images, ObserverMode::Enabled).err();
+        let targeted = observed.as_ref().is_some_and(|error| fault.targets(error));
+        results.push(Refusal { fault, targeted, observed });
+    }
+    let all_targeted = results.iter().all(|result| result.targeted);
+    write(&output.join("refusal-controls.json"), &serde_json::to_vec_pretty(&results).map_err(|error| error.to_string())?)?;
+    require(all_targeted, "receipt control was accepted or refused at a different boundary")
+}
 fn drive() -> Result<(), String> {
     let compare_args: Vec<_> = std::env::args_os().skip(1).collect();
     if compare_args.first().is_some_and(|argument| argument == "--compare") { return compare(&compare_args); }
+    if compare_args.first().is_some_and(|argument| argument == "--refusal-controls") { return refusal_controls(&compare_args); }
     let mut arguments = BTreeMap::new();
     let mut args = std::env::args_os().skip(1);
     while let Some(flag) = args.next() {
@@ -400,7 +600,8 @@ fn drive() -> Result<(), String> {
                     machine.session.board.memory_watch_end(&mut active)?;
                     accesses.append(&bytes)?;
                     watch_batches += 1;
-                    let (reads, writes) = admit_batch(&batch)?;
+                    let start = boundaries.last().ok_or("watch has no initial boundary")?;
+                    let (reads, writes) = admit_interval(&batch, &watch_classes(&recorder), &recorder.live_headers(), start, Some(&boundary), boundary.snapshot.counts).map_err(|error| error.to_string())?;
                     external_header_reads += reads;
                     guest_code_writes += writes;
                     require(writes == 0, "allocator code changed during observation")?;
@@ -443,7 +644,9 @@ fn drive() -> Result<(), String> {
         let final_batch = (|| -> Result<(usize, usize), String> {
             accesses.append(&serde_json::to_vec(&raw).map_err(|error| error.to_string())?)?;
             watch_batches += 1;
-            admit_batch(&serde_json::from_value(raw).map_err(|error| error.to_string())?)
+            let batch = serde_json::from_value(raw).map_err(|error| error.to_string())?;
+            let counts = machine.session.board.instruction_counts().try_into().map_err(|_| "expected two instruction counters")?;
+            admit_interval(&batch, &watch_classes(&recorder), &recorder.live_headers(), boundaries.last().ok_or("final watch has no initial boundary")?, None, counts).map_err(|error| error.to_string())
         })();
         match final_batch {
             Ok((reads, writes)) => { external_header_reads += reads; guest_code_writes += writes; }
@@ -460,10 +663,12 @@ fn drive() -> Result<(), String> {
     write(&output.join("boundaries.json"), &boundary_bytes)?;
     write(&output.join("summary.json"), &summary_bytes)?;
     let frame = machine.frame().map(|value| value.map(|bytes| Digest(sha256(&bytes))));
-    let complete = result.is_ok() && frame.is_ok() && watch_end_error.is_none() && guest_code_writes == 0;
+    let counts: [u64; 2] = machine.session.board.instruction_counts().try_into().map_err(|_| "expected two instruction counters")?;
+    let final_counters = admit_final(counts, &boundaries);
+    let complete = result.is_ok() && frame.is_ok() && final_counters.is_ok() && watch_end_error.is_none() && guest_code_writes == 0;
     let receipt = Receipt { schema: 1, scope: "canonical-natural-reset-no-card-menu-roundtrip-general-heap".into(), mode, identity,
-        checkpoint: Digest(sha256(&checkpoint)), complete, error: result.err().or_else(|| frame.as_ref().err().cloned()), machine_failure: machine.failure.clone(),
-        instructions: machine.session.board.instruction_counts().try_into().map_err(|_| "expected two instruction counters")?, menus,
+        checkpoint: Digest(sha256(&checkpoint)), complete, error: result.err().or_else(|| frame.as_ref().err().cloned()).or_else(|| final_counters.err().map(|error| error.to_string())), machine_failure: machine.failure.clone(),
+        instructions: counts, menus,
         frame: frame.ok().flatten(), events: recorder.records().len(), pending: recorder.pending_count(), watch_batches,
         external_header_reads, guest_code_writes, watch_end_error, events_sha256: Digest(sha256(&event_bytes)), boundaries_sha256: Digest(sha256(&boundary_bytes)),
         hits_sha256: Digest(sha256(&hit_bytes)),
