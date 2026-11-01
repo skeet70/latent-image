@@ -61,7 +61,7 @@ require admitted message = unless admitted (Left message)
 data RefusalCategory
   = MalformedEvidence | SourceBindingMismatch | PublicationMismatch | InstructionEffectsMismatch
   | SourceContractMismatch | TransitionMismatch | CallerFrameMismatch | CallerEpilogueMismatch
-  | AliasEvidenceMismatch | ComparisonMismatch
+  | AliasEvidenceMismatch | ComparisonMismatch | RetiredInitializerAccess
   deriving (Eq, Show)
 
 data ReceiptFailure = ReceiptFailure RefusalCategory String deriving (Show)
@@ -250,9 +250,10 @@ immutableLoaderResources base bytes = mapM (\(low,high) ->
 loaderCodeSpans :: [(Word64,Word64)]
 loaderCodeSpans = loaderSpans 0x40000 0xdae0 ++ loaderSpans 0xd0000 0xdaa0
 
-retainedLoaderInstruction :: Word32 -> Bool
-retainedLoaderInstruction pc = let address = fromIntegral pc
-  in pc .&. 3 == 0 && any (\(low,high) -> address >= low && address < high) loaderCodeSpans
+retainedLoaderInstruction :: I.Role -> Word32 -> Bool
+retainedLoaderInstruction role pc = let address = fromIntegral pc
+  in pc .&. 3 == 0 && (role /= I.Owned || pc < 0xd0430 || pc >= 0xd09ac)
+    && any (\(low,high) -> address >= low && address < high) loaderCodeSpans
 
 spans :: [(Word64,Word64)]
 spans = [(0x10400,0x11800),(0x7235d8,0x723790),(0x725dd8,0x726098),(0x96bd20,0x96bd28),(0x4dae0,0x4f10c),(0xddaa0,0xdf0cc),(0xa0f824,0xa0f828),(0xc0804,0xc0808)]
@@ -352,6 +353,17 @@ mergedRanges = foldr merge [] . sort
     merge (low,high) ((nextLow,nextHigh):rest)
       | high >= nextLow = merge (low,max high nextHigh) rest
     merge span' rest = span':rest
+
+validateRetirement :: Contract -> [PairWatch] -> Either String ()
+validateRetirement contract watches = case pairRole contract of
+  I.Retained -> pure ()
+  I.Owned -> forM_ watches $ \(PairWatch (Watch _ _ events _ _ _ _ _) _ _ _) ->
+    forM_ events $ \(PairEvent (Event source core address _ width _ _ _ _) _ _) ->
+      if core == Just 1 && source `elem` [CpuRead,CpuFetch] then do
+        physical <- physicalAddress address
+        require (not (physical < 0xd09ac && (physical >= 0xd0430 || width > 0xd0430-physical)))
+          "critical owned receipt accesses the retired initializer body"
+      else pure ()
 
 validateWatch :: Contract -> Phase -> Context -> PairWatch -> Either String [PairEvent]
 validateWatch contract phase origin (PairWatch (Watch enabled violation events rules classes FixedViews NoFault banks) ranges Empty Empty) = do
@@ -683,6 +695,8 @@ validateEvidence contract bytes = do
   let incoming = boundaryIncoming entry; exitIncoming = boundaryIncoming exit
       Boundary _ _ _ entryBefore entryAfter _ = entry
       Boundary _ _ _ exitBefore exitAfter _ = exit
+  let boundaryWatches = [watch | Boundary _ _ _ _ _ (Just watch) <- [entry,exit]]
+  checked RetiredInitializerAccess (validateRetirement contract ([prelude,transition,caller] ++ boundaryWatches))
   checked MalformedEvidence $ do
     mapM_ contextShape [origin,incoming,exitIncoming,final]
     require (pcOf incoming == 0x7235d8 && register incoming A.sp == 0x400f33a8 && register incoming A.lr == 0x725e00 && register incoming A.sp .&. 7 == 0 && cpsrOf incoming .&. 0x80 == 0x80) "critical entry was not the admitted natural original caller boundary"
@@ -700,14 +714,14 @@ validateEvidence contract bytes = do
       && register exitIncoming (A.Reg 7) == register entryReturned (A.Reg 0)) "critical exit lacks an actual wrapper call and saved prior mask"
   transitionEvents <- checked TransitionMismatch (validateWatch contract Transition entryReturned transition)
   transitionFrame <- checked TransitionMismatch (replayWrapper entryReturned exitIncoming entryAfter callerBefore transitionEvents)
-  checked TransitionMismatch (validateTransition entryReturned exitIncoming transitionEvents entryAfter exitBefore)
+  checked TransitionMismatch (validateTransition contract entryReturned exitIncoming transitionEvents entryAfter exitBefore)
   (exitReturned,_,exitEvents) <- checked InstructionEffectsMismatch (validateBoundary contract transitionFrame transitionEvents (exitFrame contract) exit)
   checked SourceContractMismatch (validateSourceExit exit exitReturned exitEvents)
   callerEvents <- checked MalformedEvidence (validateWatch contract Transition exitReturned caller)
   finalFrame <- checked InstructionEffectsMismatch (replayWrapper exitReturned final exitAfter transitionFrame callerEvents)
   checked CallerFrameMismatch (require (finalFrame == callerAfter) "critical wrapper final committed frame differs from its chronological effects")
   checked MalformedEvidence (validateCrossWindowTicks [preludeEvents,entryEvents,transitionEvents,exitEvents,callerEvents])
-  checked CallerEpilogueMismatch (validateCaller exitReturned final callerEvents)
+  checked CallerEpilogueMismatch (validateCaller contract exitReturned final callerEvents)
   checked SourceContractMismatch $ do
     require (pcOf exitReturned == register exitIncoming A.lr && cpsrOf exitReturned .&. 0x80 == register exitIncoming (A.Reg 0) .&. 0x80) "critical exit did not restore the prior IRQ mask at its actual caller return"
     require (pcOf final == 0x69cf38 && register final A.sp == 0x400f33e0 && tcmOf final == tcmOf origin) "critical original wrapper epilogue did not return to its caller"
@@ -715,8 +729,8 @@ validateEvidence contract bytes = do
   checked AliasEvidenceMismatch (validateAliases origin [resources,[callerBefore],entryBefore,entryAfter,exitBefore,exitAfter,take commonResourceCount exitAfter,[callerAfter]] aliases)
   pure (Accepted incoming entryReturned exitIncoming exitReturned final entryAfter exitAfter)
 
-validateTransition :: Context -> Context -> [PairEvent] -> [Resource] -> [Resource] -> Either String ()
-validateTransition entered exit events entryAfter exitBefore = do
+validateTransition :: Contract -> Context -> Context -> [PairEvent] -> [Resource] -> [Resource] -> Either String ()
+validateTransition contract entered exit events entryAfter exitBefore = do
   let fetched = [(site,clock) | PairEvent (Event CpuFetch (Just 1) _ _ _ _ (Just site) (Just clock) _) _ _ <- events]
       callsite = register exit A.lr-4
       tailFetches = reverse (take 4 (reverse fetched))
@@ -724,16 +738,16 @@ validateTransition entered exit events entryAfter exitBefore = do
     && snd (last tailFetches) == sum (countsOf exit)+1
     && all (\(_,clock) -> clock >= sum (countsOf entered) && clock <= sum (countsOf exit)) (init tailFetches))
     "critical wrapper saved-mask MOV, stopped BL fetch, executed BL and exit fetch differ"
-  require (all (\(site,_) -> (site >= 0x725e00 && site < 0x726098) || site == 0x7236b0 || retainedLoaderInstruction site) fetched) "critical transition fetched outside the original wrapper, retained loaders and exit endpoint"
+  require (all (\(site,_) -> (site >= 0x725e00 && site < 0x726098) || site == 0x7236b0 || retainedLoaderInstruction (pairRole contract) site) fetched) "critical transition fetched outside the original wrapper, retained loaders and exit endpoint"
   require (sum (countsOf entered) < sum (countsOf exit) && tcmOf entered == tcmOf exit) "critical wrapper transition counters or TCM differ"
   require (take commonResourceCount entryAfter == take commonResourceCount exitBefore && not (null exitBefore)) "critical wrapper changed a protected resource between boundaries"
   require (not (null events)) "critical wrapper transition evidence is absent"
 
-validateCaller :: Context -> Context -> [PairEvent] -> Either String ()
-validateCaller exited final events = do
+validateCaller :: Contract -> Context -> Context -> [PairEvent] -> Either String ()
+validateCaller contract exited final events = do
   let fetched = [site | PairEvent (Event CpuFetch (Just 1) _ _ _ _ (Just site) _ _) _ _ <- events]
   require (reverse (take 2 (reverse fetched)) == [0x726090,0x726094]) "critical original wrapper epilogue was not executed"
-  require (all (\site -> (site >= pcOf exited && site < 0x726098) || retainedLoaderInstruction site) fetched && sum (countsOf exited) < sum (countsOf final)) "critical caller continuation route or counters differ"
+  require (all (\site -> (site >= pcOf exited && site < 0x726098) || retainedLoaderInstruction (pairRole contract) site) fetched && sum (countsOf exited) < sum (countsOf final)) "critical caller continuation route or counters differ"
   require (not (null events)) "critical caller continuation evidence is absent"
   let loads = [(address,physical,width,value,clock,before) |
         PairEvent (Event CpuRead (Just 1) address physical width value (Just 0x726094) clock _) before _ <- wordEvents events]

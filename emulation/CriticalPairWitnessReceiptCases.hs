@@ -135,6 +135,25 @@ withoutEpilogueReads selected value = do
     (Left "genuine epilogue load evidence differs from the refusal case input")
   mutate path (ReplaceValue (J.toJSON kept)) value
 
+withRetiredFetch :: K.Key -> Value -> Either String Value
+withRetiredFetch window value = do
+  let path = ReceiptPath [field "pair",field window,field "records"]
+  records <- lookupAt path value
+  rows <- case records of
+    Array rows -> pure rows
+    _ -> Left "retirement case records are not an array"
+  candidates <- forM (zip [0..] (V.toList rows)) $ \(index,row) -> do
+    observed <- event row
+    pure $ case observed of
+      I.Event I.CpuFetch (Just 1) _ _ 4 _ _ _ _ -> Just (index,row)
+      _ -> Nothing
+  (index,original) <- case [candidate | Just candidate <- candidates] of
+    first:_ -> pure first
+    [] -> Left "retirement case lacks an observed core1 fetch"
+  changed <- foldM (\current key -> mutate (ReceiptPath [field key])
+    (ReplaceValue (J.toJSON (0xd0430 :: Word64))) current) original ["address","physical","pc"]
+  mutate path (ReplaceValue (Array (rows V.// [(index,changed)]))) value
+
 mutate :: ReceiptPath -> Change -> Value -> Either String Value
 mutate (ReceiptPath path) change = descend path
   where
@@ -159,7 +178,7 @@ mutate (ReceiptPath path) change = descend path
 strict :: B.ByteString -> IO Value
 strict bytes = either H.failH pure (decodeStrictIntegers bytes)
 
-runCases :: String -> W.Contract -> B.ByteString -> IO [Value]
+runCases :: I.Role -> W.Contract -> B.ByteString -> IO [Value]
 runCases role contract receipt = do
   either (H.failH . show) pure (W.validateReceipt contract receipt)
   value <- strict receipt
@@ -172,14 +191,20 @@ runCases role contract receipt = do
   epilogue <- forM (Nothing:map Just [0xf33c8,0xf33cc..0xf33dc]) $ \selected -> do
     changed <- either H.failH pure (withoutEpilogueReads selected value)
     refuse ("caller-epilogue-loads-" ++ maybe "all" show selected) (Just W.CallerEpilogueMismatch) changed
-  pure (generic++coherent++epilogue)
+  retired <- case role of
+    I.Retained -> pure []
+    I.Owned -> forM ["transition_watch","caller_watch"] $ \window -> do
+      changed <- either H.failH pure (withRetiredFetch window value)
+      refuse ("owned-retired-initializer-" ++ K.toString window) (Just W.RetiredInitializerAccess) changed
+  pure (generic++coherent++epilogue++retired)
   where
+    label = case role of I.Retained -> "retained" :: String; I.Owned -> "owned"
     refuse name expected changed = case W.validateReceipt contract (BL.toStrict (J.encode changed)) of
       Left (W.ReceiptFailure category _) -> do
         unless (maybe True (== category) expected)
-          (H.failH (role ++ " receipt refused " ++ name ++ " at " ++ show category ++ ", expected " ++ show expected))
-        pure (object ["role" .= role,"case" .= name,"result" .= ("refused" :: String),"category" .= show category])
-      Right () -> H.failH (role ++ " receipt admitted " ++ name)
+          (H.failH (label ++ " receipt refused " ++ name ++ " at " ++ show category ++ ", expected " ++ show expected))
+        pure (object ["role" .= label,"case" .= name,"result" .= ("refused" :: String),"category" .= show category])
+      Right () -> H.failH (label ++ " receipt admitted " ++ name)
 
 main :: IO ()
 main = do
@@ -196,11 +221,11 @@ main = do
       owned <- H.readRegular (64*1024*1024) ownedPath
       originalContract <- either H.failH pure (W.deriveContract I.Retained source sourceImage4 source sourceImage4 B.empty B.empty)
       ownedContract <- either H.failH pure (W.deriveContract I.Owned source sourceImage4 candidate candidateImage4 image symbols)
-      originalCases <- runCases "retained" originalContract retained
-      ownedCases <- runCases "owned" ownedContract owned
+      originalCases <- runCases I.Retained originalContract retained
+      ownedCases <- runCases I.Owned ownedContract owned
       either (H.failH . show) pure (W.compareReceipts (originalContract,retained) (ownedContract,owned))
       let expectedCases = length cases+length semanticCases+7
-      unless (length originalCases == expectedCases && length ownedCases == expectedCases) (H.failH "receipt case count differs")
+      unless (length originalCases == expectedCases && length ownedCases == expectedCases+2) (H.failH "receipt case count differs")
       BL.writeFile outputPath (J.encode (object
         [ "schema" .= (1 :: Int),"positive_receipts" .= (2 :: Int),"comparison" .= ("matched" :: String)
         , "cases" .= (originalCases ++ ownedCases)

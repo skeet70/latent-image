@@ -156,7 +156,7 @@ adapterProof image symbols = do
     ,0xe10f2000,0xe58d2018,0xe1a0000d,exitCall,0xe59d2018,0xe12cf002,0xe89d100f
     ,0xe59de014,0xe28dd020,0xe8bd8878]
   check "xm1_critical_retained_call" [0xe92d4070,0xe1a04000,0xe1a05001,0xe594e018,0xe12cf00e
-    ,0xe894100f,0xe12fff35,0xe884100f,0xe10f0000,0xe5840018,0xe8bd8070]
+    ,0xe894100f,0xe12fff35,0xe584e014,0xe884100f,0xe10f0000,0xe5840018,0xe8bd8070]
 
 -- Frame offsets are below incoming SP; Scratch fields occupy [SP, SP+28).
 data Address = FrameAddress Int | ScratchAddress Int | InterfaceAddress Core Int deriving (Eq, Ord)
@@ -439,7 +439,7 @@ bridgeSummary frame = do
       require (kind `notElem` [RetryExclusive,ReleaseExclusive,ObserveWord] || memoryArgument)
         "critical-pair Rust retained memory service can escape its admitted lock cell"
       let assign fields = foldl (\words' (field,value) -> insertWord field value words') before fields
-          unknown = [(ScratchR0,UnknownWord),(ScratchCpsr,UnknownWord)]
+          unknown = [(ScratchR0,UnknownWord),(ScratchLr,UnknownWord),(ScratchCpsr,UnknownWord)]
       pure $ case kind of
         IdentifyCore -> assign (unknown ++ [(ScratchR0,KnownWords (Set.fromList [0,1])),(ScratchR1,UnknownWord),(ScratchR2,knownWord 0x4003)])
         MaskIrq -> assign (unknown ++ [(ScratchR0,KnownWords (Set.fromList [0,0x80])),(ScratchR1,UnknownWord)])
