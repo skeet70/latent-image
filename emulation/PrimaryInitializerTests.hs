@@ -7,9 +7,11 @@ import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as L
-import Data.Either (isLeft)
+import Data.Either (isLeft, isRight)
 import Data.Word (Word32, Word64)
 import Emulation.PrimaryInitializer
+import qualified Emulation.PrimaryInitializerSource as PS
+import System.Environment (getArgs)
 
 -- These synthetic documents contain no initializer observation.
 nonobservation :: String -> Word64 -> Value
@@ -30,6 +32,15 @@ receiptIdentity = object
   , "run_sha256" .= ("efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef" :: String)
   , "boot_rom_sha256" .= ("4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be" :: String)
   ]
+
+ownedHashes :: Value
+ownedHashes = object
+  [ name .= (replicate 64 'a') | name <-
+      ["input_sha256","source_loader_a_sha256","image_sha256","symbols_sha256","publication_sha256"]
+  ]
+
+ownedIdentity :: Value
+ownedIdentity = replace "owned" ownedHashes (replace "role" (String "owned-primary") receiptIdentity)
 
 context :: Word64 -> Value
 context count = object
@@ -54,6 +65,12 @@ assert label condition = unless condition (fail label)
 
 main :: IO ()
 main = do
+  arguments <- getArgs
+  runBytes <- case arguments of
+    [path] -> B.readFile path
+    _ -> fail "expected canonical public run fixture"
+  assert "canonical float-bearing run is admitted" (isRight (parseRunInput runBytes))
+  assert "whole run bytes remain authoritative" (isLeft (parseRunInput (B.snoc runBytes 32)))
   let finite = nonobservation "absent" 50000000
       refused = nonobservation "refused" 12
       callerStop = object ["boundary" .= ("caller" :: String), "context" .= replace "pc" (Number 0x409ac) (context 10)]
@@ -67,6 +84,22 @@ main = do
   case parse finiteAfterCaller of
     Right receipt -> assert "partial caller progress remains finite absence" (receiptStatus receipt == Absent)
     Left problem -> fail problem
+  let ownedFinite = replace "role" (String "owned-primary") (replace "contract" ownedIdentity finite)
+  case parse ownedFinite of
+    Right receipt -> assert "owned finite absence remains distinct" (receiptStatus receipt == Absent)
+    Left problem -> fail problem
+  forM_
+    [ replace "role" (String "owned-primary") finite
+    , replace "contract" ownedIdentity finite
+    , replace "contract" (replace "owned" ownedHashes receiptIdentity) finite
+    , replace "contract" (remove "owned" ownedIdentity) ownedFinite
+    , replace "contract" (replace "owned" Null ownedIdentity) ownedFinite
+    , replace "contract" (replace "owned" (replace "extra" Null ownedHashes) ownedIdentity) ownedFinite
+    , replace "contract" (replace "owned" (replace "image_sha256" (String "invalid") ownedHashes) ownedIdentity) ownedFinite
+    ] $ \document -> assert "owned receipt identity and role remain closed" (isLeft (parse document))
+  forM_ ["input_sha256","source_loader_a_sha256","image_sha256","symbols_sha256","publication_sha256"] $ \name ->
+    assert "owned receipt requires each artifact binding" (isLeft (parse (replace "contract"
+      (replace "owned" (remove name ownedHashes) ownedIdentity) ownedFinite)))
   forM_ ["schema","role","contract","result","status","error","machine_failure","instructions","cp14_identities","final","boundaries","primary"] $ \name ->
     assert ("required field " ++ name) (isLeft (parse (remove name finite)))
   forM_
@@ -101,4 +134,6 @@ main = do
     , schemaWire "-1"
     , B.append encoded "{}"
     ] $ \bytes -> assert "strict JSON admission" (isLeft (parseReceipt bytes))
-  assert "noncanonical source cannot derive a contract" (isLeft (deriveContract B.empty B.empty B.empty))
+  assert "noncanonical source is refused before program construction" (isLeft (PS.parseSource B.empty))
+  assert "noncanonical run is refused at its typed boundary" (isLeft (parseRunInput B.empty))
+  assert "noncanonical ROM is refused at its typed boundary" (isLeft (parseBootRomInput B.empty))

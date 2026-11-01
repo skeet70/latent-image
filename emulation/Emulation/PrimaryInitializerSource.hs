@@ -2,7 +2,7 @@
 module Emulation.PrimaryInitializerSource
   ( Guest (..), Physical (..), ByteCount (..), ContainerOffset (..)
   , Source, Geometry (..), CallerFrame (..), Publication (..), ReturnValues (..), RootPair (..)
-  , parseSource, sourceDigest, sourceLoaderDigest, sourceLoader, sourceGeometry
+  , parseSource, sourceDigest, sourceLoaderDigest, sourceLoader, sourceGeometry, sourceBytes, sourceContainer
   , sourceCaller, sourcePublications, sourceReturn, sourceRoots, sourceValue
   ) where
 
@@ -50,31 +50,38 @@ data ReturnValues = ReturnValues
 
 data RootPair = RootPair { primaryRoot :: Guest, secondaryRoot :: Guest } deriving (Eq, Show)
 
-data Source = Source F.Sha256 F.Sha256 B.ByteString Geometry CallerFrame [Publication] ReturnValues RootPair
+data CanonicalContainer = CanonicalContainer B.ByteString U.Parsed
+data Source = Source F.Sha256 F.Sha256 B.ByteString Geometry CallerFrame [Publication] ReturnValues RootPair CanonicalContainer
 
 sourceDigest :: Source -> F.Sha256
-sourceDigest (Source value _ _ _ _ _ _ _) = value
+sourceDigest (Source value _ _ _ _ _ _ _ _) = value
 
 sourceLoaderDigest :: Source -> F.Sha256
-sourceLoaderDigest (Source _ value _ _ _ _ _ _) = value
+sourceLoaderDigest (Source _ value _ _ _ _ _ _ _) = value
 
 sourceLoader :: Source -> B.ByteString
-sourceLoader (Source _ _ value _ _ _ _ _) = value
+sourceLoader (Source _ _ value _ _ _ _ _ _) = value
 
 sourceGeometry :: Source -> Geometry
-sourceGeometry (Source _ _ _ value _ _ _ _) = value
+sourceGeometry (Source _ _ _ value _ _ _ _ _) = value
 
 sourceCaller :: Source -> CallerFrame
-sourceCaller (Source _ _ _ _ value _ _ _) = value
+sourceCaller (Source _ _ _ _ value _ _ _ _) = value
 
 sourcePublications :: Source -> [Publication]
-sourcePublications (Source _ _ _ _ _ value _ _) = value
+sourcePublications (Source _ _ _ _ _ value _ _ _) = value
 
 sourceReturn :: Source -> ReturnValues
-sourceReturn (Source _ _ _ _ _ _ value _) = value
+sourceReturn (Source _ _ _ _ _ _ value _ _) = value
 
 sourceRoots :: Source -> RootPair
-sourceRoots (Source _ _ _ _ _ _ _ value) = value
+sourceRoots (Source _ _ _ _ _ _ _ value _) = value
+
+sourceBytes :: Source -> B.ByteString
+sourceBytes (Source _ _ _ _ _ _ _ _ (CanonicalContainer bytes _)) = bytes
+
+sourceContainer :: Source -> U.Parsed
+sourceContainer (Source _ _ _ _ _ _ _ _ (CanonicalContainer _ parsed)) = parsed
 
 require :: Bool -> String -> Either String ()
 require condition message = unless condition (Left message)
@@ -116,7 +123,7 @@ parseSource bytes = do
     "primary source publication does not cover its complete table exactly once"
   pure (Source (S.originalStartupDigest original) digest loader
     (Geometry (Guest load) (ByteCount size) (ContainerOffset (fromInteger absolute)) (Physical (fromIntegral flash)))
-    frame stores returned (RootPair (Guest primaryHeader) (Guest secondaryHeader)))
+    frame stores returned (RootPair (Guest primaryHeader) (Guest secondaryHeader)) (CanonicalContainer bytes parsed))
 
 callerFrame :: B.ByteString -> Either String CallerFrame
 callerFrame loader = do

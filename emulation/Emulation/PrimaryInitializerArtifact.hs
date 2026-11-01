@@ -10,6 +10,8 @@ module Emulation.PrimaryInitializerArtifact
   , PublicationWords (..)
   , InstructionCount (..)
   , ArtifactMetadata (..)
+  , EmittedPublication (..), StagedFirmware, stagedBytes, stagedDigest
+  , artifactImage, artifactSymbols, artifactPublications, artifactAccesses
   , artifactMetadata
   , deriveArtifact
   , stageArtifact
@@ -70,6 +72,7 @@ data Access = Access
   { accessPc :: Guest
   , accessGuest :: Guest
   , accessKind :: AccessKind
+  , accessOrdinal :: InstructionCount
   } deriving (Eq, Show)
 
 data Obligation
@@ -98,10 +101,36 @@ data ArtifactMetadata = ArtifactMetadata
   , metadataObligations :: [Obligation]
   } deriving (Eq, Show)
 
-data Artifact = Artifact ArtifactMetadata B.ByteString
+data EmittedPublication = EmittedPublication
+  { emittedGuest :: Guest
+  , emittedValue :: Word32
+  , emittedPc :: Guest
+  , emittedOrdinal :: InstructionCount
+  } deriving (Eq, Show)
+
+data Artifact = Artifact ArtifactMetadata B.ByteString B.ByteString [EmittedPublication]
+data StagedFirmware = StagedFirmware F.Sha256 B.ByteString
 
 artifactMetadata :: Artifact -> ArtifactMetadata
-artifactMetadata (Artifact metadata _) = metadata
+artifactMetadata (Artifact metadata _ _ _) = metadata
+
+artifactImage :: Artifact -> B.ByteString
+artifactImage (Artifact _ image _ _) = image
+
+artifactSymbols :: Artifact -> B.ByteString
+artifactSymbols (Artifact _ _ symbols _) = symbols
+
+artifactPublications :: Artifact -> [EmittedPublication]
+artifactPublications (Artifact _ _ _ publications) = publications
+
+artifactAccesses :: Artifact -> [Access]
+artifactAccesses = metadataAccesses . artifactMetadata
+
+stagedBytes :: StagedFirmware -> B.ByteString
+stagedBytes (StagedFirmware _ bytes) = bytes
+
+stagedDigest :: StagedFirmware -> F.Sha256
+stagedDigest (StagedFirmware digest' _) = digest'
 
 require :: Bool -> String -> Either String ()
 require instructionCondition message = unless instructionCondition (Left message)
@@ -217,8 +246,9 @@ address machine base offset indexing = do
     _ -> Left "primary initializer transfer base is unproved"
   pure (if indexing == A.PostIndexed then readRegister machine base else updated, updated)
 
+-- The Rust step count includes this instruction; three adapter instructions precede Rust.
 recordAccess :: Word32 -> Word32 -> AccessKind -> Machine -> Machine
-recordAccess pc location kind machine = machine {machineAccesses = Access (Guest pc) (Guest location) kind : machineAccesses machine}
+recordAccess pc location kind machine = machine {machineAccesses = Access (Guest pc) (Guest location) kind (InstructionCount (machineSteps machine + 2)) : machineAccesses machine}
 
 frameAddress :: Word32 -> Machine -> Integer -> Either String Word32
 frameAddress incomingSp machine relative = do
@@ -447,18 +477,20 @@ deriveArtifact source image symbolBytes = do
       placement = Placement (Guest ownedStart) (Guest ownedEnd) (Guest end) (Guest rustStart) (Guest (fromInteger rustEnd)) (ContainerOffset (container + displacement)) (Physical (flash + displacement))
       obligations = [NaturalCallerContext,BothCoreLowHighRamAliases,CurrentRamDecoder,BothCoreItcmExclusion,BothCoreDtcmExclusion,EarlyCarrierLifetime,ScratchLifetime]
       adapterSlots = [word (callerSp (sourceCaller source)) - 8, word (callerSp (sourceCaller source)) - 4]
-      adapterWrites = [Access (Guest ownedStart) (Guest location) ScratchWrite | location <- adapterSlots]
-      adapterReads = [Access (Guest (ownedStart + 24)) (Guest location) ScratchRead | location <- adapterSlots]
+      adapterWrites = [Access (Guest ownedStart) (Guest location) ScratchWrite (InstructionCount 0) | location <- adapterSlots]
+      adapterReads = [Access (Guest (ownedStart + 24)) (Guest location) ScratchRead (InstructionCount (steps + 6)) | location <- adapterSlots]
       metadata = ArtifactMetadata identity placement scratch (sourceCaller source) returns (map Guest callerSites)
         (adapterWrites ++ accesses ++ adapterReads) (InstructionCount (steps + 17)) (PublicationWords 1419) obligations
-  pure (Artifact metadata image)
+      emitted = [EmittedPublication (accessGuest access) (publicationValue sourceWord) (accessPc access) (accessOrdinal access)
+        | (sourceWord,access) <- zip (sourcePublications source) (filter ((== PublicationWrite) . accessKind) accesses)]
+  pure (Artifact metadata image symbolBytes emitted)
 
-stageArtifact :: Source -> Artifact -> B.ByteString -> Either String B.ByteString
-stageArtifact source (Artifact metadata image) original = do
-  actualSource <- digest original
-  require (actualSource == sourceDigest source && identitySource (metadataIdentity metadata) == sourceDigest source && identitySourceLoader (metadataIdentity metadata) == sourceLoaderDigest source) "primary initializer artifact and canonical source identities differ"
-  parsed <- U.parseContainer original
-  let parts = U.parsedParts parsed
+stageArtifact :: Source -> Artifact -> Either String StagedFirmware
+stageArtifact source (Artifact metadata image _ _) = do
+  require (identitySource (metadataIdentity metadata) == sourceDigest source && identitySourceLoader (metadataIdentity metadata) == sourceLoaderDigest source) "primary initializer artifact and canonical source identities differ"
+  let original = sourceBytes source
+      parsed = sourceContainer source
+      parts = U.parsedParts parsed
       geometry = sourceGeometry source
       Guest loadBase = geometryLoad geometry
       ContainerOffset segmentStart = geometryContainerStart geometry
@@ -484,10 +516,11 @@ stageArtifact source (Artifact metadata image) original = do
       same low high = B.take (high - low) (B.drop low staged) == B.take (high - low) (B.drop low original)
   require (checksum + 4 <= start && same 0 checksum && same (checksum + 4) start && same stop (B.length original)) "primary initializer staging changes bytes outside its entire owned window and main checksum"
   require (B.take (B.length image) (B.drop start staged) == encoded) "primary initializer staging does not contain the entire owned image"
-  pure staged
+  stagedHash <- digest staged
+  pure (StagedFirmware stagedHash staged)
 
 artifactValue :: Artifact -> Value
-artifactValue (Artifact metadata _) = object
+artifactValue (Artifact metadata _ _ _) = object
   [ "schema" .= (1 :: Int)
   , "kind" .= ("primary-initializer-source-artifact" :: String)
   , "identity" .= object

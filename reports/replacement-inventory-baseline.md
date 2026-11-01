@@ -377,6 +377,9 @@ The eight source-mapped samples bind descriptor `0x015759f8`, repeated sampled p
 | Replacement startup on hardware | No qualified physical route. | #85, #60 |
 | Persistent deployment | Not pursued. | None |
 
+The [#144 primary initialization candidate](../emulation/README.md#owned-primary-publication-and-bounded-root0-consumption-schemas89) now has source-implemented owned schema8 and bounded root0 schema9 protocols over the independently admitted in-place carrier. The retained schema8 contract/receipt and schemas4..7 remain unchanged. Current source binds actual whole inputs, immutable same-address owned code, caller/return/CPSR, emitted scratch/accesses, complete publication and the root0 installation/selection/descriptor/pool chain. It tracks intervening selected-word/selector writers and observes only the selected pool word. Natural owned arrival and independently consumed producer/consumer receipts remain unqualified; root1, retained services/pools, alternate/computed callers and wider backing/lifetime remain ownership limits. This adds no qualified runtime increment or whole-leaf retirement.
+
+
 ### 8.5 Candidate next boundaries
 
 Selected boundaries retain their qualification and retirement gates.
