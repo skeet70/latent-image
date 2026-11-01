@@ -1325,6 +1325,12 @@ sh_binary(
 )
 
 sh_binary(
+    name = "startup-tasks",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-startup-tasks"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
     name = "kernel-install-observe",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-kernel-install"],
     visibility = ["//visibility:public"],
