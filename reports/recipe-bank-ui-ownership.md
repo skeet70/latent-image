@@ -200,6 +200,16 @@ bazel-bin/replacement/modal_runtime/qualify-entry \
 
 The emitted-code checker admits CPSR reads and register-form APSR_nzcvq writes. Reads invalidate the destination's abstract value; writes invalidate comparison facts. CPSR control writes, SPSR access, immediate MSR forms, other field masks and PC operands remain rejected. The native backend's separately qualified mask12 support does not broaden this bank checker.
 
+### Modal-only 224 requalification
+
+`E-MODAL224-HOST-QUALIFICATION-150` and `E-MODAL224-NATIVE-LIFECYCLE-150` qualify the separately selected modal-only variant's linked ELF. The default remains223 publications; modal adds one final activation publication. Lifecycle selection refuses explicitly until its three publications and stock veneers are supplied. Group destination and physical-order checks reject malformed selected groups, including identically malformed relocation pairs.
+
+The fresh native cohort executes88 invocations:17 dispatcher pairs and five controls, ten cancellation pairs and four controls, then eight stock-prefix oracles,12 entry cases and five entry controls. Every comparison matches and every control refuses at its intended boundary. ELF, extracted text and symbols are bound explicitly; previous candidate receipts remain unchanged. The synchronous stock+4 boundary preserves the complete expected register/stack state, including full-width controller selection and application flags.
+
+The host checks retain15 passing test targets across the corrected runs, including both actual modal link bases and the default archive identity control. The SDK check phase passes164 tests. The emitted-code checker retains commuted pointer roots without inventing bounds; positive and negative controls distinguish exact declarations, absent declarations, different roots and rootless unknowns. Failed host inputs and their corrections remain retained.
+
+This cohort does not execute a packaged guest route or discharge callback-frame, caller continuation, object initialization, asynchronous writer, alias-fetch or task-identity obligations. The producer and selected package interfaces are implemented, but their existence is not route admission. Natural generic state30 cancellation still needs an identified X-M1 route; wireless NAME remains controller76, not that route.
+
 ### Published modal storage obligations
 
 Modal75 storage is loaded image5 data, not an established read-only hardware region. Its cell table spans `[0x00cd1ae4,0x00cd3f8c)`, action table `[0x00d04080,0x00d0452c)` and transition table `[0x00d01370,0x00d01378)`; the next controller-table bases match these upper bounds. Root pointer words are `0x00cf59e4`, `0x00cfe3d4` and `0x00d00268`; width is the halfword at `0x00cd5f0e`. Bank publication deliberately changes cell/action words. The static census reports no resolved direct table store but does not establish absence of stores through unresolved pointers. All 286 computed-store obligations concern the state/event arrays.
