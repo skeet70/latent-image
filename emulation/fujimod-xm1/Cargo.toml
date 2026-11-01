@@ -37,6 +37,10 @@ path = "src/queue_boundary.rs"
 name = "fujimod-xm1-native-case"
 path = "src/native_case_main.rs"
 
+[[bin]]
+name = "fujimod-xm1-startup-callers"
+path = "src/startup_callers.rs"
+
 # Compiles the schema-4 loader-prefix observer against an engine carrying
 # build-support/fujimod-scoped-watch.patch.
 [features]

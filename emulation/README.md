@@ -1265,6 +1265,24 @@ Of the 78 windows, 66 are bound by code and 6 by words. 63 of those are bound at
 
 Observed 2026-10-24 (emulated, E-FUJIMOD-XM1-FLASH-BOOT-150): stock 1.50 shows START MENU (69, 52, 12) at 80,000,000 instructions. The language phase ends at 234,250,000 on the date page (67, 56, 0), the date phase at 242,500,000 and live view at 282,500,000. MENU makes (1, 5, 2) current at 292,000,000, and the check passes at 382,000,000 with the rendered SHOOTING MENU page 1. Two runs gave identical counts and frames, in 4.4 s of driver time and 5.0 s for the whole `bazel run`, against 29.7 s for `//emulation:flash-boot-check` on the same host and DAT. The UDF control stops at 6,136,307 instructions on an invalid instruction at PC `0x0069cdf8` and fails as `model-stopped` in the language phase. FujiMod's counts are a new baseline, not comparable with the retained engine's.
 
+#### Initialization caller observation
+
+`//emulation:startup-callers` observes the canonical natural reset-to-menu route for #145/#144. Run it under `//emulation:emulator-slot`, never directly. Its output directory must be new. It verifies the run/DAT/ROM and seven analysis inputs, saves and imports a zero-instruction reset checkpoint, then arms both-core instruction sites and classified physical watches before the first guest instruction. The route uses the existing erased-settings START MENU `(69,52,12)` and fixed 8M input pulses; it changes no guest code, register, entry or device law.
+
+```sh
+devenv shell -- bazel --batch build --jobs=2 //emulation:startup-callers //emulation:emulator-slot
+XM1_EMULATOR_SLOTS=1 devenv shell -- bazel --batch run --jobs=2 //emulation:emulator-slot -- \
+  "$PWD/bazel-bin/emulation/startup-callers" \
+  --run "$PWD/emulation/fujimod-xm1/data/xm1-150.json" \
+  --update "$PWD/private-data/firmware/x-m1-1.50/FWUP0002.DAT" \
+  --boot-rom "$ROM" --analysis "$PWD/private-data/analysis/x-m1-1.50" \
+  --output "$PWD/private-data/scratch/caller145/natural"
+```
+
+`startup-callers.json` retains all selected instruction entries with r0-r12, SP, LR and CPSR, input/executable identities, the reset-checkpoint identity, final menu or its read error and explicit observed-menu/deadline/refused outcome. The 4096-hit bound fails during collection. `writes.json` retains up to 16,384 classified events, including both-core loader-A initializer fetches, A/B diagnostic flag/callback writes, image4's callback, arena root `0x16d8284`, its known pointed cell `0x16d7d20` and derived-base cell `0x16d7370`. A replaced root does not retarget that fixed watch. The watch uses Observe views across reset decoder changes; it does not establish fixed backing or coherence. Fetch records identify attempted instruction addresses, not committed instruction execution or fetched-byte identity.
+
+`source-census.json` records aligned words, the existing linear A32 formed-address sweep and direct A32 B/BL edges into the named initializer/dispatcher windows. It is reproducible discovery evidence, not a complete interprocedural, Thumb, alias-writer or restored-PC proof. The [caller report](../reports/replacement-inventory-baseline.md#811-image4-initialization-caller-boundary-145) owns those closure limits and the admitted natural caller contexts.
+
 ### Owned first-stage witness
 
 `//emulation:first-stage-witness` starts from the captured ROM reset with the packaged DAT. It arms five core-0 instruction stops before execution and reads twelve memory extents at the owned handoff vector. Its 20,000,000-instruction budget is separate from the cold-menu route. It does not import a stock-initialization checkpoint or force an execution frame.

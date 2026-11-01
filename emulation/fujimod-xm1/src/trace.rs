@@ -650,6 +650,7 @@ pub struct TraceSites {
     /// Labels whose entry ends the current run.
     pub stop_labels: BTreeSet<String>,
     pub hits: Vec<Hit>,
+    hit_limit: Option<std::num::NonZeroUsize>,
     points: Vec<(usize, Box<InstructionPoints>)>,
     cores: CoreSelection,
     resumed: BTreeMap<usize, ResumeMarker>,
@@ -664,6 +665,10 @@ fn register(session: &Session, core: usize, register: arm::Register) -> Result<u
 }
 
 impl TraceSites {
+    pub fn bound_full_registers(&mut self, limit: std::num::NonZeroUsize) {
+        self.hit_limit = Some(limit);
+    }
+
     pub fn with_memory(session: &Session, memory: CaptureMemory) -> Self {
         let mut traces = Self::default();
         traces.prepare_memory(session, memory);
@@ -959,12 +964,15 @@ impl TraceSites {
                 points.resume(current, pc);
                 continue;
             }
+            if self.hit_limit.is_some_and(|limit| self.hits.len() >= limit.get()) {
+                return Err("trace hit limit reached".into());
+            }
             let counts = session.board.instruction_counts();
             let instructions = counts.iter().sum();
             let site = site.clone();
-            let registers = (0..4u8)
+            let registers = (0..if self.hit_limit.is_some() { 13u8 } else { 4u8 })
                 .map(|index| {
-                    let name = ["r0", "r1", "r2", "r3"][usize::from(index)];
+                    let name = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12"][usize::from(index)];
                     register(session, *core, arm::Register::R(index)).map(|value| (name, format!("{value:#x}")))
                 })
                 .collect::<Result<_, String>>()?;
