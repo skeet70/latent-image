@@ -612,9 +612,15 @@ readSized context width signed address = case width of
 
 -- * Value arithmetic
 
--- | `base + index` with base the pointer side (Rn of an address or ADD).
 offsetFrom :: Context -> Abstract -> Abstract -> Abstract
-offsetFrom context base index = case (base, index) of
+offsetFrom context base index = case offsetFromOrdered context base index of
+  Unknown -> case offsetFromOrdered context index base of
+    derived@(Derived _) -> derived
+    _ -> Unknown
+  precise -> precise
+
+offsetFromOrdered :: Context -> Abstract -> Abstract -> Abstract
+offsetFromOrdered context base index = case (base, index) of
   (StackOffset o, _) | Just offsets <- signedOffsets index -> stackAt (map (o +) offsets)
   (StackSpan lo hi, _) | Just offsets <- signedOffsets index -> stackAt (map (lo +) offsets ++ map (hi +) offsets)
   (StackOffset _, _) | scalar index -> Derived (Index StackFrame)
