@@ -183,9 +183,10 @@ loadFixture root analysis = do
   files <- forM epochs $ \epoch -> do
     name <- either H.failH pure (textAt [field "file",field "path"] epoch)
     readJson 0x4000000 (root </> name)
+  loaderA <- H.readRegular 0x20000 (analysis </> "decode/loader-40000.bin")
   image4 <- H.readRegular 0x1000000 (analysis </> "lz/id4-0061c400.bin")
   image5 <- H.readRegular 0x1000000 (analysis </> "lz/id5-00bf1a00.bin")
-  pure (Fixture root document trace files [CodeImage (GuestAddress 0x61c400) image4, CodeImage (GuestAddress 0xbf1a00) image5])
+  pure (Fixture root document trace files [CodeImage (GuestAddress 0x40000) loaderA, CodeImage (GuestAddress 0x61c400) image4, CodeImage (GuestAddress 0xbf1a00) image5])
 
 eventAt :: Fixture -> EventId -> Either String J.Value
 eventAt fixture (EventId index) = pathAt [field "events",Element index] (receipt fixture)
