@@ -1095,6 +1095,18 @@ After image5's producer returns, flashloader stores command done at `0x944440[0]
 
 Image5 entry `0xd985a4` calls `0x73aca4(7)` at `0xd985c0`, before `0xed4acc`. The synchronous adapter returns immediately for command done1; otherwise it enqueues command `0x4c07`, takes/releases that command's resource and returns zero if enqueue succeeded. `0xd985c4` is the continuation after this wait. Actual first entry, subsequent resource waits and overlap with plain loading must be observed. The source graph does not make all plain hooks a prerequisite of the first image5 instruction.
 
+`E-LATER-IMAGE5-INITIALIZERS-150` recovers the complete direct entry boundary `[0xd985a4,0xd986b0)`, with return at `0xd986ac`. After the command7 wait and initial setup, it publishes diagnostic callback `0xed4a8c` through `0x69cf84`, then calls `0xd9856c`. That dispatcher reads the table backwards from `0xbf1a2c`, invoking `0x107277c`, `0x1066304`, `0x1062114`, then stopping at the `0xffffffff` word at `0xbf1a20`. Its hook call/return sites are `0xd9858c / 0xd98590`.
+
+| Image5 hook / constructor | Task id / name | Priority / stack | Published entry / submission call |
+| --- | --- | --- | --- |
+| `0x107277c / 0x10726f4` | 56 / redeye | 12 / `0x1400` | `0x1071ca4 / 0x1072764` |
+| `0x1066304 / 0x1066280` | 55 / face | 7 / `0xc00` | `0x106ceec / 0x10662e8` |
+| `0x1062114 / 0x1062090` | 62 / facerecog | 12 / `0x1000` | `0x1064224 / 0x10620f8` |
+
+All three arguments are zero; `D+24` is unwritten live stack state. Task56's constructor skips submission if mailbox creation fails. Task55/62 constructors still submit after mailbox failure, combine both statuses with bitwise OR, and return zero only if that combined status is zero; otherwise they return `-255`. Their hooks halt on a nonzero result. The dispatcher does not supply rollback.
+
+The next call `0xd986b0` publishes `0xef9704` at `0x89f784` and `0xef9944` at `0x89f78c`, then returns zero. The entry subsequently calls the retained initializers `0xd80d44`, `0x1056c24(0)`, `0xdb01fc(1)`, `0xec5350`, `0xdca604`, `0xdb63e0`, `0xed10b4`, `0xef8c90(0)`, `0xed2b00`, `0x1055d10`, `0x6b7df8`, `0x69f000`, and finally emits its completion marker through `0x72872c`. All of those initializer results except `0xdb01fc` and `0xef8c90` are checked for zero and otherwise halt. These are named retained dependencies, not owned or transitively qualified subsystems. Entry return, constructor order, scheduled task entries and callback delivery require runtime witnesses.
+
 #### Plain extent publication and retained lifetime
 
 The descriptor at `0x61c1a4` is `{0x4061c1b0,0x1100000,0x360000}`. Three 24-byte records are followed by an id `0xffffffff` terminator at `0x61c1f8`. Their canonical unresolved `+0xc` word and initial done word are zero.
