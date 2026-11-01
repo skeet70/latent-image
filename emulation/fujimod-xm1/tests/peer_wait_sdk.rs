@@ -2300,7 +2300,7 @@ fn writes_only_attribution_and_record_bounds_do_not_expand_other_sources() {
 #[test]
 fn fetch_attribution_keeps_guest_alias_and_physical_instruction_distinct() {
     use fujimod_emulator::board::observation::{CpuDataAttribution, FetchAttribution, ViewPolicy, WatchKinds, WatchRange};
-    let mut machine = machine_with_ram(&[0xe5810000,0xeafffffe], 0x4000, RamViews::AliasedWithDecoder);
+    let mut machine = machine_with_ram(&[0xe5810000,0xeafffffe], 0x8000, RamViews::AliasedWithDecoder);
     machine.session.board.write_register(0, Register::Pc, 0x40001000).unwrap();
     machine.session.board.write_register(0, arm::CORE[0], 0x22b).unwrap();
     machine.session.board.write_register(0, arm::CORE[1], 0x40003000).unwrap();
