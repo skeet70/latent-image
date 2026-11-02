@@ -16,7 +16,7 @@ main = do
   assert "standalone original global remains required" (check (firstSites (filter (/= K.Address 0x40a08))) == Left E.WatchRejected)
   assert "producer supersets are refused" (check (firstSites (sort . (K.Address 0x1000:))) == Left E.WatchRejected)
   assert "poll cannot retire before initializer call" (check (firstSites (filter (`notElem` polls))) == Left E.WatchRejected)
-  assert "standalone poll retires at initializer call" (check (baseline {W.receiptSegments = [first,second {W.segmentArmedSites = initialSites}]})) == Left E.WatchRejected)
+  assert "standalone poll retires at initializer call" (check (baseline {W.receiptSegments = [first,second {W.segmentArmedSites = initialSites}]}) == Left E.WatchRejected)
   assert "complete fetch policy is admitted" (E.checkDeclaredFetchPolicyWithPolicy P.standalonePolicy baseline == Right ())
   assert "complete fetch range cannot be omitted" (E.checkDeclaredFetchPolicyWithPolicy P.standalonePolicy
     (baseline {W.receiptSegments = [first {W.segmentFetchRanges = drop 1 completeRanges},second]}) == Left E.WatchRejected)

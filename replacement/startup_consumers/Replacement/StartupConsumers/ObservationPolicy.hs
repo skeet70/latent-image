@@ -229,8 +229,8 @@ providerSites artifact J.JoinedCapture =
   let primary = LS.loaderSites artifact LS.LoaderA
       peer = LS.loaderSites artifact LS.LoaderB
       native (L.CodeAddress value) = K.Address value
-      completion = map (native . ($primary)) [LS.completionStore,LS.completionBeforeDsb,LS.completionAfterDsb]
-      poll = map (native . ($peer)) [LS.peerPoll,LS.peerPollPostload,LS.peerPollBranch]
-      initializer = map (native . ($peer)) [LS.initializerCall,LS.initializerEntry,LS.initializerReturn]
+      completion = map (\site -> native (site primary)) [LS.completionStore,LS.completionBeforeDsb,LS.completionAfterDsb]
+      poll = map (\site -> native (site peer)) [LS.peerPoll,LS.peerPollPostload,LS.peerPollBranch]
+      initializer = map (\site -> native (site peer)) [LS.initializerCall,LS.initializerEntry,LS.initializerReturn]
       replaced = map K.Address [0x40a08,0x40a0c,0x40a10,0xd0a44,0xd0a48,0xd0a4c,0xd0aac,0xd0430,0xd0ab0]
   in (Set.toAscList (Set.fromList (filter (`notElem` replaced) S.globalSourceSites ++ completion ++ poll ++ initializer)),poll)

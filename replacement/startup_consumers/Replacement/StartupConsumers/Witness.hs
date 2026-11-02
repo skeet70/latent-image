@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.StartupConsumers.Witness
   ( NativeFiles (..), ProducerFiles (..), LoaderProducerFiles (..), ObservedFiles (..), Inputs, Projection, QualifiedReceipt
-  , WitnessError (..), admitInputs, admitLoaderJoinedInputs, admitReceipt, validateReceipt, compareReceipts, qualificationValue
+  , WitnessError (..), admitInputs, admitLoaderJoinedInputs, joinedLoaderProvider, admitReceipt, validateReceipt, validateReceiptWithPolicy, compareReceipts, qualificationValue
   , qualifiedProjection, compareSemanticProjections, compareLoaderSemanticProjections
   ) where
 
@@ -27,6 +27,7 @@ import qualified Replacement.LoaderOrchestration.Interface as LI
 import qualified Replacement.StartupDispatch.Artifact as D
 import Replacement.StartupConsumers.Evidence
 import Replacement.StartupConsumers.Effects (ConsumerProjection, checkConsumers, consumerProjectionValue)
+import qualified Replacement.StartupConsumers.ObservationPolicy as Policy
 import qualified Replacement.StartupConsumers.Source as S
 import Replacement.StartupConsumers.Wire
 
@@ -135,6 +136,11 @@ roleUpdate inputs role = case (inputProducer inputs,role) of
   (LoaderJoinedProducer producer,Joined) -> Right (loaderProducerDat producer)
   _ -> Left IdentityRejected
 
+joinedLoaderProvider :: Inputs -> Maybe LS.LoaderJoinedArtifact
+joinedLoaderProvider inputs = case inputLoaders inputs of
+  CanonicalLoaderProvider -> Nothing
+  JoinedLoaderProvider artifact _ -> Just artifact
+
 admitReceipt :: Inputs -> ObservedFiles -> Either WitnessError QualifiedReceipt
 admitReceipt inputs files = do
   receipt <- either (const (Left DecodeRejected)) Right (J.eitherDecodeStrict' (observedReceipt files))
@@ -150,7 +156,10 @@ admitReceipt inputs files = do
   pure (QualifiedReceipt (receiptRole receipt) (receiptIdentity receipt) (hash (observedReceipt files)) (receiptCheckpoint receipt) coverage projection)
 
 validateReceipt :: Inputs -> Receipt -> Either WitnessError Projection
-validateReceipt inputs receipt = do
+validateReceipt = validateReceiptWithPolicy Policy.standalonePolicy
+
+validateReceiptWithPolicy :: Policy.ObservationPolicy -> Inputs -> Receipt -> Either WitnessError Projection
+validateReceiptWithPolicy policy inputs receipt = do
   require (receiptSchema receipt == 1) DecodeRejected
   checkIdentity inputs receipt
   checkWatchFailures receipt
@@ -158,7 +167,7 @@ validateReceipt inputs receipt = do
   require (receiptOutcome receipt == Observed && receiptError receipt == Nothing && receiptFailure receipt == Nothing) StatusRejected
   checkLimits receipt
   checkProbes inputs receipt
-  checkSegments receipt
+  checkSegmentsWithPolicy policy receipt
   checkSourcePublications inputs receipt
   checkResources receipt
   case inputProducer inputs of
@@ -167,7 +176,7 @@ validateReceipt inputs receipt = do
   outer <- checkOuter inputs receipt
   checkInstallation inputs receipt
   checkCompletion inputs receipt
-  checkFetchPolicies receipt
+  checkFetchPoliciesWithPolicy policy receipt
   consumers <- checkConsumers (inputSource inputs) receipt
   pure (Projection outer consumers)
 

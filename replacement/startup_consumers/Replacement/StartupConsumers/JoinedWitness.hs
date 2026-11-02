@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.StartupConsumers.JoinedWitness
   ( NativeInputs(..), CapturedArtifact(..), CapturedWatch(..), ObservedFiles(..), Inputs, QualifiedCapture
-  , JoinedError(..), admitInputs, consumerInputs, admitCapture, compareCaptures, qualificationValue
+  , JoinedError(..), admitInputs, consumerInputs, capturePolicy, admitCapture, checkMutation, compareCaptures, qualificationValue
   ) where
 
 import Control.Monad (foldM, forM_, unless)
@@ -15,7 +15,9 @@ import qualified Replacement.KernelInstall.Wire as K
 import qualified Replacement.StartupComposition.Artifact as C
 import qualified Replacement.StartupComposition.LoaderStartup as LS
 import qualified Replacement.StartupConsumers.Evidence as E
+import qualified Replacement.StartupConsumers.JoinedHost as Host
 import qualified Replacement.StartupConsumers.JoinedWire as S
+import qualified Replacement.StartupConsumers.ObservationPolicy as Policy
 import qualified Replacement.StartupConsumers.Source as Source
 import qualified Replacement.StartupConsumers.Wire as W
 import qualified Replacement.StartupConsumers.Witness as Witness
@@ -29,11 +31,12 @@ data ObservedFiles = ObservedFiles
   ,observedArtifacts :: [CapturedArtifact],observedWatches :: [CapturedWatch]}
 data Inputs = Inputs Source.SourceFiles NativeInputs Witness.LoaderProducerFiles LS.LoaderStagedCandidate Witness.Inputs
 data Cohort = Cohort K.Digest K.Digest K.Digest K.Digest deriving (Eq)
-data QualifiedCapture = QualifiedCapture S.CaptureRole Cohort K.Digest Witness.Projection
+data QualifiedCapture = QualifiedCapture S.CaptureRole Cohort K.Digest K.Digest Witness.Projection
 
 data JoinedError = ComponentInputsRejected Witness.WitnessError | ConsumerRejected Witness.WitnessError
   | SharedDecodeRejected | SharedIdentityRejected | SharedArtifactRejected | SharedStatusRejected
   | SharedCheckpointRejected | SharedSubobservationRejected | SharedGuardRejected | SharedComparisonRejected
+  | SharedPolicyRejected Policy.PolicyError
   deriving (Eq, Show)
 
 require :: Bool -> JoinedError -> Either JoinedError ()
@@ -69,8 +72,31 @@ artifactBytes (Inputs sources native producer candidate _) role = case role of
   S.NativeInstaller -> C.nativeBytes (nativeInstaller native); S.SymbolsInstaller -> C.nativeSymbols (nativeInstaller native)
   S.JoinedContract -> Witness.loaderProducerContract producer
 
-admitCapture :: Inputs -> ObservedFiles -> Either JoinedError QualifiedCapture
-admitCapture inputs@(Inputs _ _ producer _ checked) files = do
+-- The policy must have been issued by the host check for these capture bytes.
+capturePolicy :: Inputs -> Host.HostPolicyBytes -> ObservedFiles -> Either JoinedError Policy.ObservationPolicy
+capturePolicy (Inputs _ _ _ _ checked) admitted files = do
+  require (Host.policyCaptureDigest admitted == hash (observedCapture files)) (SharedPolicyRejected Policy.PolicyBindingRejected)
+  capture <- either (const (Left SharedDecodeRejected)) Right (J.eitherDecodeStrict' (observedCapture files))
+  trace <- either (const (Left SharedDecodeRejected)) Right (J.eitherDecodeStrict' (observedTrace files))
+  artifact <- maybe (Left SharedIdentityRejected) Right (Witness.joinedLoaderProvider checked)
+  either (Left . SharedPolicyRejected) Right (Policy.sharedPolicy admitted artifact capture trace)
+
+admitCapture :: Inputs -> Host.HostPolicyBytes -> ObservedFiles -> Either JoinedError QualifiedCapture
+admitCapture inputs admitted files = do
+  policy <- capturePolicy inputs admitted files
+  (role,cohort,projection) <- admitWithPolicy inputs policy files
+  pure (QualifiedCapture role cohort (hash (observedCapture files)) (hash (Host.policyBytes admitted)) projection)
+
+-- Checks mutated files against the policy issued for the unmutated capture; an admitted mutation yields Right ().
+checkMutation :: Inputs -> Host.HostPolicyBytes -> ObservedFiles -> ObservedFiles -> Either JoinedError ()
+checkMutation inputs admitted original mutated = do
+  policy <- capturePolicy inputs admitted original
+  _ <- admitWithPolicy inputs policy original
+  _ <- admitWithPolicy inputs policy mutated
+  pure ()
+
+admitWithPolicy :: Inputs -> Policy.ObservationPolicy -> ObservedFiles -> Either JoinedError (S.CaptureRole,Cohort,Witness.Projection)
+admitWithPolicy inputs@(Inputs _ _ producer _ checked) policy files = do
   capture <- either (const (Left SharedDecodeRejected)) Right (J.eitherDecodeStrict' (observedCapture files))
   trace <- either (const (Left SharedDecodeRejected)) Right (J.eitherDecodeStrict' (observedTrace files))
   let consumer = S.captureConsumer capture
@@ -91,9 +117,9 @@ admitCapture inputs@(Inputs _ _ producer _ checked) files = do
   require (W.receiptRole window == case role of S.RetainedCapture -> W.Retained; S.JoinedCapture -> W.Joined) SharedIdentityRejected
   checkSubobservation capture trace
   checkEpochs files capture actualCounts
-  projection <- either (Left . ConsumerRejected) Right (Witness.validateReceipt checked window)
+  projection <- either (Left . ConsumerRejected) Right (Witness.validateReceiptWithPolicy policy checked window)
   let cohort = Cohort (S.identityRun identity) (S.identityRom identity) (S.identityExecutable identity) (hash (Witness.loaderProducerContract producer))
-  pure (QualifiedCapture role cohort (hash (observedCapture files)) projection)
+  pure (role,cohort,projection)
 
 checkArtifacts :: Inputs -> ObservedFiles -> S.SharedCapture -> Either JoinedError ()
 checkArtifacts inputs files capture = do
@@ -214,8 +240,9 @@ checkEpochs files capture actualCounts = do
       segments = W.receiptSegments (S.consumerEvidence consumer)
       references = [index | epoch <- epochs,S.ConsumerSegment index <- [S.epochEvidence epoch]]
       watchBindings = [binding | epoch <- epochs,S.WatchFile binding _ <- [S.epochEvidence epoch]]
-  require (not (null epochs) && S.epochStart (head epochs) == K.Count 0 && S.epochStartCounts (head epochs) == S.CoreCounts (K.Count 0) (K.Count 0)
-    && S.epochEnd (last epochs) == S.captureInstructions capture && S.epochEndCounts (last epochs) == actualCounts
+  (first,final) <- case epochs of [] -> Left SharedGuardRejected; initial:rest -> Right (initial,last (initial:rest))
+  require (S.epochStart first == K.Count 0 && S.epochStartCounts first == S.CoreCounts (K.Count 0) (K.Count 0)
+    && S.epochEnd final == S.captureInstructions capture && S.epochEndCounts final == actualCounts
     && references == map S.SegmentIndex (take (length segments) [0..])
     && any ((==K.Count 8000000) . S.epochEnd) epochs) SharedGuardRejected
   forM_ (zip epochs (drop 1 epochs)) $ \(before,after) ->
@@ -242,13 +269,13 @@ checkEpochs files capture actualCounts = do
     && length watchBindings == Set.size (Set.fromList (map S.bindingPath watchBindings))) SharedGuardRejected
 
 compareCaptures :: QualifiedCapture -> QualifiedCapture -> Either JoinedError ()
-compareCaptures (QualifiedCapture before beforeCohort _ beforeProjection) (QualifiedCapture after afterCohort _ afterProjection) = do
+compareCaptures (QualifiedCapture before beforeCohort _ _ beforeProjection) (QualifiedCapture after afterCohort _ _ afterProjection) = do
   require (before == S.RetainedCapture && after == S.JoinedCapture && beforeCohort == afterCohort) SharedComparisonRejected
   either (const (Left SharedComparisonRejected)) Right (Witness.compareLoaderSemanticProjections beforeProjection afterProjection)
 
 qualificationValue :: QualifiedCapture -> J.Value
-qualificationValue (QualifiedCapture role _ (K.Digest receipt) _) = J.object
+qualificationValue (QualifiedCapture role _ (K.Digest receipt) (K.Digest policy) _) = J.object
   ["schema" J..= (1::Int),"qualification" J..= ("source-admitted-shared-startup-consumers"::String)
-  ,"role" J..= show role,"receipt_sha256" J..= receipt
+  ,"role" J..= show role,"receipt_sha256" J..= receipt,"observation_policy_sha256" J..= policy
   ,"comparison_scope" J..= ("source-proved-loader-caller-and-exact-outer-public-effects-and-selected-operation-boundaries"::String)
   ,"post_return_scheduler_equality" J..= False]

@@ -8,8 +8,10 @@ haskell_library(
         "Replacement/StartupConsumers/Effects.hs",
         "Replacement/StartupConsumers/Evidence.hs",
         "Replacement/StartupConsumers/JoinedControls.hs",
+        "Replacement/StartupConsumers/JoinedHost.hs",
         "Replacement/StartupConsumers/JoinedWire.hs",
         "Replacement/StartupConsumers/JoinedWitness.hs",
+        "Replacement/StartupConsumers/ObservationPolicy.hs",
         "Replacement/StartupConsumers/Source.hs",
         "Replacement/StartupConsumers/Wire.hs",
         "Replacement/StartupConsumers/Witness.hs",
@@ -26,6 +28,9 @@ haskell_library(
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
         "//host:text",
         "//host:update-container",
         "//host:vector",
@@ -74,6 +79,17 @@ haskell_test(
     ],
 )
 
+haskell_test(
+    name = "observation-policy-tests",
+    srcs = ["ObservationPolicyTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":startup-consumers-lib",
+        "//host:base",
+        "//replacement/kernel_install:kernel-install-artifact",
+    ],
+)
+
 haskell_binary(
     name = "startup-joined-check",
     srcs = ["JoinedMain.hs"],
@@ -108,6 +124,7 @@ haskell_test(
         ":startup-consumers-lib",
         "//host:aeson",
         "//host:base",
+        "//host:bytestring",
         "//replacement/kernel_install:kernel-install-artifact",
     ],
 )

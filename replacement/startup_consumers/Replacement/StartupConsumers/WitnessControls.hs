@@ -14,6 +14,7 @@ import qualified Replacement.KernelInstall.Wire as K
 import Replacement.StartupConsumers.Evidence (address, bytesWord, clock, count, number, physical, probeClock, wordBytes)
 import Replacement.StartupConsumers.Wire
 import Replacement.StartupConsumers.Witness
+import qualified Replacement.StartupConsumers.ObservationPolicy as Policy
 import qualified Replacement.StartupConsumers.Source as S
 
 newtype ControlName = ControlName String
@@ -34,7 +35,7 @@ checkRefusals inputs retained installer joined = do
     ,expectComparison (ControlName "missing joined role") (compareReceipts qualifiedRetained qualifiedInstaller qualifiedInstaller)]
   receipts <- mapM (either (const (Left "control receipt decode failed")) Right . J.eitherDecodeStrict' . observedReceipt) [retained,installer,joined]
   rows <- forM (zip receipts [qualifiedRetained,qualifiedInstaller,qualifiedJoined]) $ \(receipt,qualified) ->
-    checkReceiptControls compareSemanticProjections inputs receipt (qualifiedProjection qualified)
+    checkReceiptControls compareSemanticProjections (validateReceipt inputs) [] receipt (qualifiedProjection qualified)
   forM_ [retained,installer,joined] $ \files ->
     case admitReceipt inputs (files {observedCheckpoint = observedCheckpoint files <> B.singleton 0}) of
       Left CheckpointRejected -> Right ()
@@ -46,20 +47,22 @@ checkRefusals inputs retained installer joined = do
     liftAdmission :: Either WitnessError value -> Either String value
     liftAdmission = either (Left . show) Right
 
-checkLoaderPairRefusals :: Inputs -> Receipt -> Receipt -> Either String J.Value
-checkLoaderPairRefusals inputs retained joined = do
+checkLoaderPairRefusals :: Policy.ObservationPolicy -> Policy.ObservationPolicy -> Inputs -> Receipt -> Receipt -> Either String J.Value
+checkLoaderPairRefusals retainedPolicy joinedPolicy inputs retained joined = do
   if receiptRole retained == Retained && receiptRole joined == Joined then pure () else Left "loader consumer control roles differ"
-  before <- either (Left . show) Right (validateReceipt inputs retained)
-  after <- either (Left . show) Right (validateReceipt inputs joined)
+  before <- either (Left . show) Right (validateReceiptWithPolicy retainedPolicy inputs retained)
+  after <- either (Left . show) Right (validateReceiptWithPolicy joinedPolicy inputs joined)
   either (Left . show) Right (compareLoaderSemanticProjections before after)
-  rows <- sequence [checkReceiptControls compareLoaderSemanticProjections inputs retained before
-    ,checkReceiptControls compareLoaderSemanticProjections inputs joined after]
+  retainedExtra <- policyControls retainedPolicy retained
+  joinedExtra <- policyControls joinedPolicy joined
+  rows <- sequence [checkReceiptControls compareLoaderSemanticProjections (validateReceiptWithPolicy retainedPolicy inputs) retainedExtra retained before
+    ,checkReceiptControls compareLoaderSemanticProjections (validateReceiptWithPolicy joinedPolicy inputs) joinedExtra joined after]
   pure (J.object ["schema" J..= (1::Int),"qualification" J..= ("exact-loader-joined-consumer-refusals"::String),"roles" J..= rows])
 
-checkReceiptControls :: (Projection -> Projection -> Either WitnessError ()) -> Inputs -> Receipt -> Projection -> Either String J.Value
-checkReceiptControls compareProjection inputs receipt baseline = do
-  controls <- forM mutations $ \(Control (ControlName name) expected mutate) ->
-    case validateReceipt inputs (mutate receipt) of
+checkReceiptControls :: (Projection -> Projection -> Either WitnessError ()) -> (Receipt -> Either WitnessError Projection) -> [Control] -> Receipt -> Projection -> Either String J.Value
+checkReceiptControls compareProjection validate extra receipt baseline = do
+  controls <- forM (mutations ++ extra) $ \(Control (ControlName name) expected mutate) ->
+    case validate (mutate receipt) of
       Left actual | actual == expected -> Right (J.object ["control" J..= name,"rejection" J..= show expected])
       Left actual -> Left (name ++ ": expected " ++ show expected ++ ", got " ++ show actual)
       Right _ -> Left (name ++ ": mutation was accepted")
@@ -68,7 +71,7 @@ checkReceiptControls compareProjection inputs receipt baseline = do
     case changed of
       UnobservedPayload reason -> pure (J.object ["control" J..= show which,"observation" J..= ("not-observed"::String),"reason" J..= show reason])
       ChangedReceipt altered -> do
-        projected <- either (\failure -> Left (show which ++ ": individual admission rejected with " ++ show failure)) Right (validateReceipt inputs altered)
+        projected <- either (\failure -> Left (show which ++ ": individual admission rejected with " ++ show failure)) Right (validate altered)
         case compareProjection baseline projected of
           Left ComparisonRejected -> pure (J.object ["control" J..= show which,"typed_receipt_admitted" J..= True,"rejection" J..= show ComparisonRejected])
           Left failure -> Left (show which ++ ": expected ComparisonRejected, got " ++ show failure)
@@ -80,6 +83,45 @@ expectComparison (ControlName name) result = case result of
   Left ComparisonRejected -> Right (J.object ["control" J..= name,"rejection" J..= show ComparisonRejected])
   Left actual -> Left (name ++ ": expected ComparisonRejected, got " ++ show actual)
   Right () -> Left (name ++ ": role mutation was accepted")
+
+-- Mutations of the shared observation union, selected from the policy issued for this receipt.
+policyControls :: Policy.ObservationPolicy -> Receipt -> Either String [Control]
+policyControls policy receipt = do
+  let segments = receiptSegments receipt
+      external segment = either (Left . show) Right (Policy.policyExternalBefore policy (segmentId segment))
+      consumerStatic = Set.fromList (Policy.policyGlobalSites policy ++ map S.familyEntryAddress [minBound..maxBound])
+  externals <- mapM external segments
+  (omittedSegment,omitted) <- selectFirst "external-only armed site"
+    [(segmentId segment,site) | (segment,sites) <- zip segments externals,site <- sites
+      ,not (Set.member site consumerStatic),site `elem` segmentArmedSites segment,site `notElem` map stopPc (segmentStops segment)]
+  (retainedSegment,released) <- selectFirst "released external site"
+    [(segmentId later,site) | ((_,sites),(later,laterSites)) <- zip (zip segments externals) (drop 1 (zip segments externals))
+      ,site <- sites,site `notElem` laterSites,site `notElem` segmentArmedSites later]
+  let onSegment ident modify changed = changed
+        {receiptSegments = [if segmentId segment == ident then modify segment else segment | segment <- receiptSegments changed]}
+  pure
+    [Control (ControlName "external observation site omitted") WatchRejected $ onSegment omittedSegment $ \segment -> segment
+      {segmentArmedSites = filter (/= omitted) (segmentArmedSites segment)}
+    ,Control (ControlName "released external site retained") WatchRejected $ onSegment retainedSegment $ \segment -> segment
+      {segmentArmedSites = sort (released:segmentArmedSites segment)}
+    ,Control (ControlName "shared loader carrier fetch guard omitted") WatchRejected omitLoaderCarrierFetch]
+  where
+    selectFirst label values = case values of
+      value:_ -> Right value
+      [] -> Left ("policy control cannot identify " ++ label)
+
+omitLoaderCarrierFetch :: Receipt -> Receipt
+omitLoaderCarrierFetch = mapScoped $ \segment -> segment
+  {segmentFetchRanges = [range | range@(FetchRange (PhysicalBoundary low) (PhysicalBoundary high)) <- segmentFetchRanges segment,not (covers low high)]
+  ,segmentWatch = (segmentWatch segment) {K.watchClasses = concatMap remove (K.watchClasses (segmentWatch segment))}}
+  where
+    covers low high = low <= 0x409ac && 0x409ac < high
+    remove classification
+      | K.CpuFetch `elem` K.classKinds classification
+      , [low,high] <- K.classRange classification
+      , covers low high =
+          [classification {K.classKinds = remaining} | let remaining = filter (/= K.CpuFetch) (K.classKinds classification),not (null remaining)]
+      | otherwise = [classification]
 
 mutations :: [Control]
 mutations =
