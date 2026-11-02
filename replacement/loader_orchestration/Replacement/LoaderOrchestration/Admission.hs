@@ -3,6 +3,7 @@ module Replacement.LoaderOrchestration.Admission
   , Scalar(..), StackOffset(..), NopCount(..), CallTarget(..)
   , DispatcherBoundary, boundarySide, boundaryScenario, boundaryPhase, boundaryInstruction, boundaryContinuation
   , boundaryStack, boundaryFramePointer, boundaryLiveWords, dispatcherBoundaries
+  , EffectSite, effectSites, effectScenario, effectKind, effectInstruction
   , deriveFrameProof, proofPaths, executionPcs, callBoundaries, frameLow
   ) where
 
@@ -32,10 +33,12 @@ data CallTarget = Retained Service | Dispatcher deriving (Eq, Ord, Show)
 data PathProof = PathProof Scenario [Effect] Terminal deriving (Eq, Show)
 data DispatcherBoundary = DispatcherBoundary LoaderSide Scenario Phase CodeAddress CodeAddress
   StackOffset StackOffset (M.Map StackOffset Scalar) deriving (Eq, Show)
-data FrameProof = FrameProof [PathProof] (S.Set CodeAddress) (M.Map CodeAddress CallTarget) [DispatcherBoundary]
+data EffectSite = EffectSite Scenario Effect CodeAddress deriving (Eq, Show)
+data FrameProof = FrameProof [PathProof] (S.Set CodeAddress) (M.Map CodeAddress CallTarget) [DispatcherBoundary] [EffectSite]
 data PathResult = PathResult
   { resultPath :: PathProof, resultPcs :: S.Set CodeAddress
   , resultCalls :: M.Map CodeAddress CallTarget, resultDispatcherCalls :: [DispatcherBoundary]
+  , resultLocations :: [EffectSite]
   }
 data AdmissionError = ExtentRejected | CompilerPrologueRejected | UnsupportedInstruction CodeAddress
   | FrameRejected | OperandRejected | ConditionRejected | MemoryRejected | CallRejected CodeAddress
@@ -47,18 +50,27 @@ data Machine = Machine
   { registers :: M.Map A.Reg Scalar, stack :: M.Map StackOffset Scalar, zero :: Maybe Bool
   , effects :: [Effect], visited :: S.Set CodeAddress, boundaries :: M.Map CodeAddress CallTarget, dispatcherEdges :: [DispatcherBoundary]
   , polls :: PollCount, checkpoint :: Maybe PollCheckpoint, calls :: CallOrdinal, steps :: StepCount, terminal :: Maybe Terminal
+  , locations :: [(Effect,CodeAddress)]
   }
 
 proofPaths :: FrameProof -> [PathProof]
-proofPaths (FrameProof paths _ _ _) = paths
+proofPaths (FrameProof paths _ _ _ _) = paths
 executionPcs :: FrameProof -> [CodeAddress]
-executionPcs (FrameProof _ points _ _) = S.toAscList points
+executionPcs (FrameProof _ points _ _ _) = S.toAscList points
 callBoundaries :: FrameProof -> [(CodeAddress,CallTarget)]
-callBoundaries (FrameProof _ _ points _) = M.toAscList points
+callBoundaries (FrameProof _ _ points _ _) = M.toAscList points
 frameLow :: FrameProof -> StackOffset
 frameLow _ = StackOffset (-16)
 dispatcherBoundaries :: FrameProof -> [DispatcherBoundary]
-dispatcherBoundaries (FrameProof _ _ _ entries) = entries
+dispatcherBoundaries (FrameProof _ _ _ entries _) = entries
+effectSites :: FrameProof -> [EffectSite]
+effectSites (FrameProof _ _ _ _ entries) = entries
+effectScenario :: EffectSite -> Scenario
+effectScenario (EffectSite scenario _ _) = scenario
+effectKind :: EffectSite -> Effect
+effectKind (EffectSite _ effect _) = effect
+effectInstruction :: EffectSite -> CodeAddress
+effectInstruction (EffectSite _ _ instruction) = instruction
 boundarySide :: DispatcherBoundary -> LoaderSide
 boundarySide (DispatcherBoundary value _ _ _ _ _ _ _) = value
 boundaryScenario :: DispatcherBoundary -> Scenario
@@ -90,11 +102,12 @@ known :: Scalar -> Either AdmissionError Word32
 known (Word value) = Right value
 known _ = Left OperandRejected
 
-emit :: Effect -> Machine -> Machine
-emit (DelayNops (NopCount next)) machine = case effects machine of
-  DelayNops (NopCount previous):rest -> machine {effects=DelayNops (NopCount (previous+next)):rest}
-  _ -> machine {effects=DelayNops (NopCount next):effects machine}
-emit effect machine = machine {effects=effect:effects machine}
+emit :: CodeAddress -> Effect -> Machine -> Machine
+emit site effect machine =
+  let observed = machine {locations=(effect,site):locations machine}
+  in case (effect,effects machine) of
+    (DelayNops (NopCount next),DelayNops (NopCount previous):rest) -> observed {effects=DelayNops (NopCount (previous+next)):rest}
+    _ -> observed {effects=effect:effects machine}
 
 condition :: Machine -> A.Cond -> Either AdmissionError Bool
 condition _ (A.Cond 14) = Right True
@@ -179,7 +192,7 @@ callService (Scenario role _ _) site continuation service machine = do
   requireFrame machine
   require (service/=Schedule || get machine (A.Reg 0)==Word 0xfffffff6) EffectRejected
   let arguments = [(register,get machine register) | register <- liveRegisters service]
-      captured = emit (ServiceCall service arguments) machine {boundaries=M.insert site (Retained service) (boundaries machine)}
+      captured = emit site (ServiceCall service arguments) machine {boundaries=M.insert site (Retained service) (boundaries machine)}
       CallOrdinal ordinal = calls machine
       result = case service of
         Identity -> case role of Primary -> Word 0; Peer -> NonzeroWord
@@ -198,7 +211,7 @@ callDispatcher side scenario@(Scenario _ _ outcome) site continuation machine = 
   incomingStack <- stackOffset (get machine A.sp)
   incomingFramePointer <- stackOffset (get machine (A.Reg 11))
   let boundary = DispatcherBoundary side scenario selected site continuation incomingStack incomingFramePointer (stack machine)
-      captured = emit (DispatchCall selected) machine {boundaries=M.insert site Dispatcher (boundaries machine),dispatcherEdges=boundary:dispatcherEdges machine}
+      captured = emit site (DispatchCall selected) machine {boundaries=M.insert site Dispatcher (boundaries machine),dispatcherEdges=boundary:dispatcherEdges machine}
       CallOrdinal ordinal = calls machine
       result = if selected==Diagnostic then CallbackCapability else Returned (CallOrdinal (ordinal+1)) (A.Reg 0)
   pure $ if selected==Setup && outcome==SetupNonreturn then captured {terminal=Just SetupDidNotReturn} else callReturning continuation result captured
@@ -234,18 +247,20 @@ deriveFrameProof side bytes (CodeAddress compilerPc) = do
   require (not (B.null bytes)&&B.length bytes<=340&&B.length bytes `mod` 4==0) ExtentRejected
   require (compilerPc==first+12&&compilerPc+8<=end&&word compilerPc==0xe92d4800&&word (compilerPc+4)==0xe1a0b00d) CompilerPrologueRejected
   results <- traverse (run start end) scenarios
-  pure (FrameProof (map resultPath results) (S.unions (map resultPcs results)) (M.unions (map resultCalls results)) (concatMap resultDispatcherCalls results))
+  pure (FrameProof (map resultPath results) (S.unions (map resultPcs results)) (M.unions (map resultCalls results))
+    (concatMap resultDispatcherCalls results) (concatMap resultLocations results))
   where
     targets = serviceTable side
     run start end scenario = do
-      let initial = Machine (M.fromList [(A.Reg 0,DispatchCapability),(A.sp,Stack (StackOffset 0)),(A.lr,IncomingLink)]) M.empty Nothing [] S.empty M.empty [] (PollCount 0) Nothing (CallOrdinal 0) (StepCount 0) Nothing
+      let initial = Machine (M.fromList [(A.Reg 0,DispatchCapability),(A.sp,Stack (StackOffset 0)),(A.lr,IncomingLink)]) M.empty Nothing [] S.empty M.empty [] (PollCount 0) Nothing (CallOrdinal 0) (StepCount 0) Nothing []
       final <- execute start initial
       requireFrame final
       stopped <- maybe (Left EffectRejected) Right (terminal final)
       require (case scenario of Scenario Peer NeverPublished _ -> stopped==WaitingForCompletion; _ -> True) PollingInvariantRejected
       let observed = reverse (effects final)
       require ((observed,stopped)==expected scenario) EffectRejected
-      pure (PathResult (PathProof scenario observed stopped) (visited final) (boundaries final) (reverse (dispatcherEdges final)))
+      pure (PathResult (PathProof scenario observed stopped) (visited final) (boundaries final) (reverse (dispatcherEdges final))
+        [EffectSite scenario effect site | (effect,site) <- reverse (locations final)])
       where
         CodeAddress first = start
         readLiteral at = do
@@ -261,7 +276,7 @@ deriveFrameProof side bytes (CodeAddress compilerPc) = do
               PollCount count = polls machine
               value = case source of InitiallyPublished -> NonzeroWord; PublishedAfterDelay | count>0 -> NonzeroWord; _ -> Word 0
               state = if value==Word 0 then Pending else Published
-              next = put destination value (emit (CompletionRead state) machine {polls=PollCount (count+1)})
+              next = put destination value (emit site (CompletionRead state) machine {polls=PollCount (count+1)})
               recurrent = PollCheckpoint site (registers next) (stack next) (zero next) (calls next)
           if source/=NeverPublished || count==0 then pure next
             else if count==1 then pure next {checkpoint=Just recurrent}
@@ -280,7 +295,7 @@ deriveFrameProof side bytes (CodeAddress compilerPc) = do
                 marked = machine {steps=StepCount (count+1),visited=S.insert site (visited machine)}
             require (pc<compilerPc+8 || not (bodyUsesFrame decoded)) FrameRejected
             require (not (programCounterDestination decoded)) (ControlFlowRejected site)
-            if raw==0xf57ff04f then execute next (emit StoreBarrier marked) else do
+            if raw==0xf57ff04f then execute next (emit site StoreBarrier marked) else do
               cond <- maybe (Left (UnsupportedInstruction site)) Right (instructionCondition decoded)
               active <- condition marked cond
               if not active then execute next marked else case decoded of
@@ -308,7 +323,7 @@ deriveFrameProof side bytes (CodeAddress compilerPc) = do
                   at <- address pc marked base offset
                   require (get marked source==Word 1) MemoryRejected
                   effect <- if at==0x400a00c4 then Right CompletionPublication else if at==readyAddress side then Right ReadyPublication else Left MemoryRejected
-                  execute next (emit effect marked)
+                  execute next (emit site effect marked)
                 A.Branch _ False target -> execute (CodeAddress target) marked
                 A.Branch _ True target -> do
                   service <- maybe (Left (CallRejected (CodeAddress target))) Right (M.lookup (CodeAddress target) targets)
@@ -318,5 +333,5 @@ deriveFrameProof side bytes (CodeAddress compilerPc) = do
                   require (get marked register==DispatchCapability) (CallRejected site)
                   called <- callDispatcher side scenario site next marked
                   execute next called
-                A.Hint _ | raw==0xe320f000 -> execute next (emit (DelayNops (NopCount 1)) marked)
+                A.Hint _ | raw==0xe320f000 -> execute next (emit site (DelayNops (NopCount 1)) marked)
                 _ -> Left (UnsupportedInstruction site)

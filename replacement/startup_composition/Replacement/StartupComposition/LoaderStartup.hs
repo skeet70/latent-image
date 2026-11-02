@@ -15,6 +15,7 @@ import qualified A32 as A
 import Control.Monad (forM, unless)
 import Data.Aeson (Value, object, (.=))
 import qualified Data.ByteString as B
+import Data.List (nub)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import qualified Emulation.Image4Staging as Image4
@@ -90,13 +91,23 @@ deriveSites side linked = do
       word pc = U.word32At (L.linkedBytes linked) (fromIntegral (addressValue pc-first))
       instructions = [(pc,A.decode (addressValue pc) (word pc)) | pc <- LA.executionPcs proof]
       unique values = case values of [value] -> Right value; _ -> Left (LoaderSitesRejected side)
-  barrier <- unique [pc | (pc,_) <- instructions,word pc==0xf57ff04f]
-  let store = LI.CodeAddress (addressValue barrier-4)
-  require (case lookup store instructions of Just (A.Store _ A.Word _ _ _ A.OffsetOnly) -> True; _ -> False) (LoaderSitesRejected side)
-  (poll,destination) <- unique [(pc,destination) | (pc,A.Load _ A.Word False destination base _ A.OffsetOnly) <- instructions,base/=A.pc]
+      consistent predicate applies = do
+        sites <- forM LI.scenarios $ \scenario -> do
+          let selected = nub [LA.effectInstruction located | located <- LA.effectSites proof
+                ,LA.effectScenario located==scenario,predicate (LA.effectKind located)]
+          if applies scenario then (:[]) <$> unique selected
+            else require (null selected) (LoaderSitesRejected side) >> pure []
+        unique (nub (concat sites))
+      publishes (LI.Scenario role _ outcome) = role==LI.Primary && outcome==LI.SetupReturns
+      polls (LI.Scenario role _ _) = role==LI.Peer
+      initializes (LI.Scenario role completion _) = role/=LI.Peer || completion/=LI.NeverPublished
+  store <- consistent (==LA.CompletionPublication) publishes
+  barrier <- consistent (==LA.StoreBarrier) publishes
+  poll <- consistent (\effect -> case effect of LA.CompletionRead _ -> True; _ -> False) polls
+  destination <- unique [register | (pc,A.Load _ A.Word False register _ _ A.OffsetOnly) <- instructions,pc==poll]
   branch <- unique [pc | (pc,A.Branch (A.Cond condition) False _) <- instructions
     ,addressValue pc>addressValue poll,addressValue pc<=addressValue poll+8,condition==0||condition==1]
-  initializer <- unique [pc | (pc,LA.Retained LI.PrivateInitialize) <- LA.callBoundaries proof]
+  initializer <- consistent (\effect -> case effect of LA.ServiceCall LI.PrivateInitialize _ -> True; _ -> False) initializes
   pure (LoaderSites store barrier poll destination branch initializer (LI.serviceAddress side LI.PrivateInitialize))
 
 joinLoader :: LoaderSide -> LoaderNative -> C.JoinedArtifact -> Either LoaderJoinError [LoaderBoundary]

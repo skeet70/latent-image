@@ -51,21 +51,42 @@ main = do
       forM_ [LoaderA,LoaderB] $ \side -> do
         let boundaries = loaderBoundaries proof side
             sites = loaderSites joined side
-            LI.CodeAddress store = completionStore sites
             LI.CodeAddress before = completionBeforeDsb sites
             LI.CodeAddress after = completionAfterDsb sites
             LI.CodeAddress poll = peerPoll sites
             LI.CodeAddress postload = peerPollPostload sites
             LI.CodeAddress call = initializerCall sites
             LI.CodeAddress returned = initializerReturn sites
+        forM_ LI.scenarios $ \scenario@(LI.Scenario role completion outcome) -> do
+          let expectedPhases = case (role,completion,outcome) of
+                (LI.Primary,_,LI.SetupReturns) -> [LI.Setup,LI.Root,LI.Idle0,LI.Diagnostic]
+                (LI.Primary,_,LI.SetupNonreturn) -> [LI.Setup]
+                (LI.Peer,LI.NeverPublished,_) -> []
+                (LI.Peer,_,_) -> [LI.PeerTasks,LI.Diagnostic]
+              actual = [boundary | boundary <- boundaries,boundaryScenario boundary==scenario]
+          assert "joined census covers every scenario without missing or duplicate phases" (map boundaryPhase actual==expectedPhases)
+          assert "every scenario carries its phase-specific composed low"
+            (all (\boundary -> stackOffsetValue (boundaryOwnedLow boundary)==
+              if boundaryPhase boundary==LI.Setup then -120 else -88) actual)
         assert "loader preserves sixteen-byte saved frame at every dispatcher call"
           (all (\boundary -> stackOffsetValue (boundaryStack boundary)==(-16)
             && stackOffsetValue (boundaryFramePointer boundary)==(-4)
             && M.keys (boundaryLiveWords boundary)==map LA.StackOffset [-16,-12,-8,-4]) boundaries)
-        assert "source-derived publication is bracketed by DSB" (before==store+4&&after==before+4)
+        assert "source-derived DSB postinstruction site is preserved" (after==before+4)
         assert "source-derived poll postload and initializer return are next instructions" (postload==poll+4&&returned==call+4)
         assert "source-derived initializer target matches admitted retained provider" (initializerEntry sites==LI.serviceAddress side LI.PrivateInitialize)
         assert "per-side execution census is nonempty" (not (null (LA.executionPcs (L.linkedProof (loaderArtifact joined side)))))
+      (movedPublication,executedStore) <- either fail pure
+        (relocatedPublication LoaderA a (completionStore (loaderSites joined LoaderA)))
+      case L.deriveArtifact LoaderA (C.nativeBytes movedPublication) (C.nativeSymbols movedPublication) of
+        Left failure -> fail ("relocated publication lost component behavior: "++show failure)
+        Right _ -> pure ()
+      moved <- accepted (deriveArtifact movedPublication b dispatcher installer)
+      assert "executed publication wins over skipped conditional store before DSB"
+        (completionStore (loaderSites moved LoaderA)==executedStore
+          &&completionStore (loaderSites moved LoaderA)/=completionStore (loaderSites joined LoaderA))
+      assert "relocated publication preserves the DSB boundary"
+        (completionBeforeDsb (loaderSites moved LoaderA)==completionBeforeDsb (loaderSites joined LoaderA))
       forM_ [Baseline,AlignedExtraFrame] $ \layout -> do
         synthetic <- either fail pure (dispatcherFixture layout)
         composed <- accepted (deriveArtifact a b synthetic installer)
@@ -100,8 +121,8 @@ main = do
       refused "retained service cannot substitute dispatcher" (LoaderRejected LoaderA (L.CodeRejected LA.EffectRejected)) (deriveArtifact retainedCopy b dispatcher installer)
       let publications = [site | (site,LA.Retained LI.PublishCallback) <- LA.callBoundaries aProof]
       publication <- case publications of [site] -> pure site; _ -> fail "callback publication is not unique"
-      let wrongCallback = replaceLoaderWord LoaderA a publication 0xe3a00000
-      refused "callback publication cannot be replaced by a scalar" (LoaderRejected LoaderA (L.CodeRejected LA.EffectRejected)) (deriveArtifact wrongCallback b dispatcher installer)
+      wrongCallback <- either fail pure (scalarCallback LoaderA a publication)
+      refused "scalar callback is refused while publication call remains present" (LoaderRejected LoaderA (L.CodeRejected LA.EffectRejected)) (deriveArtifact wrongCallback b dispatcher installer)
       case canonicalSource (C.SourceFiles B.empty B.empty B.empty B.empty) of
         Left failure -> assert "canonical source cannot be omitted" (failure==CompositionRejected (C.SourceRejected D.SourceMismatch))
         Right _ -> fail "empty canonical source admitted"
