@@ -60,6 +60,7 @@ mutations side artifact symbols = do
       jump from target = branchTo from target .&. 0xfeffffff
       roleSite = CodeAddress (identityPc+4)
       CodeAddress pollPc = polled
+      CodeAddress returnedPc = lastDispatch
       thunk = CodeAddress (start+fromIntegral (B.length bytes))
       pollThunk = case thunk of CodeAddress pc -> CodeAddress (pc+12)
       extended = replaceIn (replace roleSite (jump roleSite thunk)) polled (jump polled pollThunk)
@@ -68,16 +69,18 @@ mutations side artifact symbols = do
           , at polled,0xe2822001,0xe3520002
           , jump (case pollThunk of CodeAddress pc -> CodeAddress (pc+12)) initialize .&. 0x0fffffff
           , jump (case pollThunk of CodeAddress pc -> CodeAddress (pc+16)) (CodeAddress (pollPc+4)) ])
+      returned = replace lastDispatch (jump lastDispatch thunk)
+        <> B.concat (map U.putWord32 [at lastDispatch,0xe3a00000,jump (case thunk of CodeAddress pc -> CodeAddress (pc+8)) (CodeAddress (returnedPc+4))])
       symbol address name = C.pack (showHex address ""++" 00000000 T "++name++"\n")
-      extendedSymbols = B.concat
+      symbolsFor input = B.concat
         [ symbol start "__loader_orchestration_start"
-        , symbol (start+fromIntegral (B.length extended)) "__loader_orchestration_end"
+        , symbol (start+fromIntegral (B.length input)) "__loader_orchestration_end"
         , symbol start "xm1_loader_orchestration_entry"
         , symbol (start+12) "xm1_loader_orchestration" ]
   pure
     [ ordinary WrongPhase (replace phaseAssignment 0xe3a00004) EffectRejected
     , ordinary WrongTarget (replace identitySite (branchTo identitySite wrongTarget)) (CallRejected wrongTarget)
-    , ordinary WrongReturnedCode (replace lastDispatch 0xe3a00000) EffectRejected
+    , Mutation WrongReturnedCode returned (symbolsFor returned) (CodeRejected EffectRejected)
     , ordinary WrongSavedFrame (replace (CodeAddress savedStart) 0xe92d4850) FrameRejected
     , ordinary WrongFramePointer (replace (CodeAddress (savedStart+4)) 0xe28db008) FrameRejected
     , ordinary UnallocatedStack (replace (CodeAddress (savedStart+4)) 0xe24dd004) FrameRejected
@@ -90,5 +93,5 @@ mutations side artifact symbols = do
     , pcDestination ProgramCounterLoad loaded
     , pcDestination ProgramCounterWide widened
     , pcDestination ProgramCounterTop topped
-    , Mutation CounterControlledExit extended extendedSymbols (CodeRejected PollingInvariantRejected)
+    , Mutation CounterControlledExit extended (symbolsFor extended) (CodeRejected PollingInvariantRejected)
     ]
