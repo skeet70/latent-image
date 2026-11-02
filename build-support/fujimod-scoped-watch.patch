@@ -60,17 +60,14 @@ index 01d5dee..e03ea34 100644
 diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/board/observation.rs
 --- a/crates/emulator/src/board/observation.rs
 +++ b/crates/emulator/src/board/observation.rs
-@@ -1,8 +1,9 @@
+@@ -1,5 +1,6 @@
  //! Explicit, bounded CPU/bus observation. No device consumes these records.
  pub mod calls;
 +pub mod scoped;
  mod fetch_attribution;
  pub use fetch_attribution::{CpuDataAttribution, FetchAttribution};
--use fetch_attribution::{AccessBytes, ByteOrder, CoreIndex, CpuAttribution, CpuCapture, CpuObservation, CpuSource, GuestAddress, ObservedWord, PhysicalAddress};
-+use fetch_attribution::{AccessBytes, Attribution, ByteOrder, CoreIndex, CpuAttribution, CpuCapture, CpuObservation, CpuSource, GuestAddress, ObservedWord, PhysicalAddress};
- use super::{Board, State, factory::MemoryMap, scalar};
- use fujimod_emulator_cpu::{Access, Cpu, Hook, HookId, HookRange, Model, Register, arm};
- use serde_json::{Value, json};
+-use fetch_attribution::{CpuAttribution, CpuCapture, CpuObservation, CpuSource, ObservedWord};
++use fetch_attribution::{Attribution, CpuAttribution, CpuCapture, CpuObservation, CpuSource, ObservedWord};
 @@ -78,6 +79,7 @@
      /// Empty for an unclassified watch, which records every source.
      classes: Vec<WatchRange>,
@@ -98,9 +95,10 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
          } else {
              self.rows.push(row);
          }
-@@ -120,14 +126,18 @@
+@@ -120,15 +126,19 @@
      }
      pub(super) fn view_changed(&mut self) {
+         if let Some(capture) = &mut self.fetch_attribution { capture.view_changed(); }
          if self.views == ViewPolicy::Fixed {
 -            self.violation
 -                .get_or_insert_with(|| "Memory decoding changed under a fixed-view memory watch".into());
@@ -130,10 +128,11 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
          if let Some(capture) = &self.fetch_attribution { capture.describe(&mut state); }
          state
      }
-@@ -146,6 +159,16 @@
+@@ -146,7 +159,17 @@
      pub records: Rc<RefCell<Records>>,
      contexts: Vec<Box<MemoryContext>>,
      hooks: Vec<(usize, HookId)>,
+     refusal: Option<ExecutionRefusal>,
 +    lifetime: WatchLifetime,
 +    owner: Weak<super::memory::Memory>,
 +}
@@ -169,7 +168,7 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
          let ranges = union(ranges);
          self.watch_backing(&ranges)?;
          let records = Rc::new(RefCell::new(Records {
-@@ -321,11 +352,7 @@
+@@ -321,12 +352,7 @@
              limit,
              ..Default::default()
          }));
@@ -177,6 +176,7 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 -            records: records.clone(),
 -            contexts: vec![],
 -            hooks: vec![],
+-            refusal: None,
 -        });
 +        let mut watch = self.armed_watch(records.clone());
          for (core, cpu) in self.cpus.iter().enumerate() {
@@ -192,7 +192,7 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
          let ranges = union(classes.iter().map(|range| (range.start, range.end)).collect());
          self.watch_backing(&ranges)?;
          let records = Rc::new(RefCell::new(Records {
-@@ -439,11 +469,7 @@
+@@ -439,12 +469,7 @@
              views,
              ..Default::default()
          }));
@@ -200,12 +200,13 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 -            records: records.clone(),
 -            contexts: vec![],
 -            hooks: vec![],
+-            refusal: None,
 -        });
 +        let mut watch = self.armed_watch(records.clone());
          for (core, cpu) in self.cpus.iter().enumerate() {
              let mut processor_views = maps
                  .iter()
-@@ -514,11 +540,35 @@
+@@ -514,17 +540,40 @@
              .replace(Some(Rc::downgrade(&records)));
          Ok(watch)
      }
@@ -216,6 +217,7 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 +            records,
 +            contexts: vec![],
 +            hooks: vec![],
++            refusal: None,
 +            lifetime: WatchLifetime::Armed,
 +            owner: Rc::downgrade(&self.physical_memory),
 +        })
@@ -224,22 +226,25 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 +        if !Weak::ptr_eq(&watch.owner, &Rc::downgrade(&self.physical_memory)) {
 +            return Err("memory watch belongs to a different board".into());
 +        }
-         for (core, hook) in watch.hooks.drain(..) {
--            self.cpus[core].remove_hook(hook)?;
-+            if let Err(error) = self.cpus[core].remove_hook(hook) {
+         while let Some(&(core, hook)) = watch.hooks.last() {
+             if let Err(error) = self.cpus[core].remove_hook(hook) {
 +                watch.lifetime = WatchLifetime::Stuck;
-+                return Err(error);
-+            }
-+        }
+                 if let Some(gate) = &watch.refusal { gate.refuse(); }
+                 if let Some(capture) = &mut watch.records.borrow_mut().fetch_attribution { capture.observation_failed(); }
+                 return Err(error);
+             }
+             let _ = watch.hooks.pop();
+         }
+         watch.disarm_instruction_guard(self)?;
 +        if watch.lifetime == WatchLifetime::Armed {
 +            watch.lifetime = WatchLifetime::Ended;
 +            let armed = &self.physical_memory.armed_watches;
 +            armed.set(armed.get().saturating_sub(1));
 +        }
+-        self.physical_memory.observation.replace(None);
 +        if !self.scoped_watch_active() {
 +            self.physical_memory.observation.replace(None);
-         }
--        self.physical_memory.observation.replace(None);
++        }
          Ok(())
      }
  }

@@ -2384,7 +2384,7 @@ fn attributed_site_fetches_keep_settled_stops_and_execute_once_on_resume() {
     let stopped: AttributedWatch = serde_json::from_value(watch.records.borrow().state()).unwrap();
     let fetches: Vec<_> = stopped.records.iter().filter(|row| row.event.source == Source::CpuFetch)
         .map(|row| (row.event.pc,row.event.instructions,row.core_instructions)).collect();
-    assert_eq!(fetches, [(Some(0x1000),Some(1),Some(CoreInstructionOrdinal(1))),(Some(0x1004),Some(1),Some(CoreInstructionOrdinal(1)))]);
+    assert_eq!(fetches, [(Some(0x1000),Some(1),Some(CoreInstructionOrdinal(1))),(Some(0x1004),Some(2),Some(CoreInstructionOrdinal(2)))]);
     let write = stopped.records.iter().find(|row| row.event.source == Source::CpuWrite).unwrap();
     assert_eq!(write.latest_fetch.as_ref().unwrap().event.pc, Some(0x1000));
     assert!(stopped.violation.is_none());
