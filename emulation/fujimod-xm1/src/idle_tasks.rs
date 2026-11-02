@@ -1401,9 +1401,8 @@ fn inspect_root_watch(raw: &serde_json::Value, processed: &mut usize, stopped: &
 }
 fn canonical_interface_target(sources: &[Code], core: Core, offset: usize) -> Result<u32, String> {
     let base = if core == Core::Primary { 0x40000 } else { 0xd0000 };
-    if offset == 0x1618 { return Ok(base + 0x12bc); }
     let mut values = [None; 16];
-    for pc in ((base + 0x430)..(base + 0x89c)).step_by(4) {
+    for pc in ((base + 0x430)..(base + 0x8f8)).step_by(4) {
         let instruction = code_word(sources, pc)?;
         let register = ((instruction >> 12) & 15) as usize;
         let immediate = ((instruction >> 4) & 0xf000) | (instruction & 0xfff);
@@ -1411,9 +1410,19 @@ fn canonical_interface_target(sources: &[Code], core: Core, offset: usize) -> Re
             0x03000000 => values[register] = Some(immediate),
             0x03400000 => values[register] = Some((values[register].ok_or("source MOVT lacks MOVW")? & 0xffff) | (immediate << 16)),
             0x03a00000 => values[register] = Some((instruction & 255).rotate_right(2 * ((instruction >> 8) & 15))),
+            0x02800000 => {
+                let source = ((instruction >> 16) & 15) as usize;
+                let delta = (instruction & 255).rotate_right(2 * ((instruction >> 8) & 15));
+                values[register] = values[source].and_then(|value| value.checked_add(delta));
+            }
             _ => (),
         }
-        if instruction & 0xffff0000 == 0xe5830000 && (instruction & 0xfff) as usize == offset {
+        let published_offset = if instruction & 0xffff0000 == 0xe5830000 {
+            Some(instruction & 0xfff)
+        } else if instruction & 0xffff0ff0 == 0xe7830000 {
+            values[(instruction & 15) as usize]
+        } else { None };
+        if published_offset == Some(offset as u32) {
             return values[register].ok_or_else(|| "selected-root source service value is unresolved".into());
         }
     }
@@ -1424,7 +1433,7 @@ fn bind_root_interfaces(machine: &Machine, maps: &[MemoryMap], state: &Context, 
     let mut entries = binding.service_entries.clone();
     for core in [Core::Primary, Core::Secondary] {
         let table = view(machine, maps, state, Object::InterfaceTable, core, core.layout().table, 0x162c)?;
-        for offset in (0..0x174).step_by(4).chain([0x1618]) {
+        for offset in (0..0x174).step_by(4).chain([0x1618,0x161c,0x1620,0x1624]) {
             let target = word(&table.bytes, offset)?;
             require(target == canonical_interface_target(sources, core, offset)?, "selected-root service differs from canonical installer")?;
             if target == 0 { continue; }

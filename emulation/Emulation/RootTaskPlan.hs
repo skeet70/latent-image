@@ -132,7 +132,7 @@ derivePlan files proof runtime = do
   canonicalCalls <- fmap concat $ mapM (\pc -> do
     raw <- sourceWord sources pc
     pure (case A.decode pc raw of A.Branch _ True destination -> [destination]; _ -> [])) [rootLow,rootLow+4..rootHigh-4]
-  let tableTargets body = [U.word32At body offset | offset <- [0,4..92*4]++[0x1618],offset+4 <= B.length body]
+  let tableTargets body = [U.word32At body offset | offset <- [0,4..92*4]++[0x1618,0x161c,0x1620,0x1624],offset+4 <= B.length body]
       staticSeeds = S.fromList (canonicalCalls++map Root.callTarget (Root.callSites proof)
         ++ [0x69c9f8,0x69cc00,0x69cc18,0x725b74,0x72835c,0x726478,0x725dd8,0x724924,0x72337c
            ,0x4d434,0x41140,0x4d1a4,0x453f0,0x43dd0,0x43688,0x412bc,0x4118c,0x43728]
