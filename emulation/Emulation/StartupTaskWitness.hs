@@ -916,7 +916,9 @@ admitReceipt inputs@(Inputs _ expectedIdentity program) observed = do
     && receiptWatch receipt == WatchOk True Nothing && receiptWatchEndError receipt == Nothing) StatusRejected
   case probe of
     Nothing -> require (receiptOutcome receipt == ObservedMenu && receiptMenu receipt == MenuOk (Just [1,5,2])
-      && receiptInstructions receipt == W.Count 382000000) StatusRejected
+      && case receiptSchema receipt of
+        JoinedTaskProtocol -> receiptInstructions receipt >= W.Count 330000000 && receiptInstructions receipt <= W.Count 450000000
+        _ -> receiptInstructions receipt == W.Count 382000000) StatusRejected
     Just _ -> do
       endpoint <- required SnapshotRejected (case reverse (receiptSamples receipt) of sample:_ -> Just sample; [] -> Nothing)
       endpointCount <- checkedCounts (W.contextCounts (contextState (sampleContext endpoint)))

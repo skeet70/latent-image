@@ -33,6 +33,7 @@ data Control = WrongSource | DuplicateReceiptKey | OverflowingHitAddress | Refus
   | WrongBootLogBuffer | InvalidBootLogIndex
   | UnexpectedRecord2Fetch
   | WrongBootHandoffTarget | WrongBootModeCopy | NonzeroBootBssReserved
+  | MenuBeforeFiniteRoute | MenuBeyondFiniteRoute
   deriving (Bounded, Enum, Eq, Ord, Show)
 data ControlError = BaselineRejected WitnessError | MutationRejected Control
   | WrongRefusal Control WitnessError (Maybe WitnessError) deriving (Eq, Show)
@@ -97,6 +98,7 @@ expected control = case control of
   WrongBootLogBuffer -> SnapshotRejected; InvalidBootLogIndex -> SnapshotRejected
   UnexpectedRecord2Fetch -> CodeRejected
   WrongBootHandoffTarget -> SnapshotRejected; WrongBootModeCopy -> SnapshotRejected; NonzeroBootBssReserved -> SnapshotRejected
+  MenuBeforeFiniteRoute -> StatusRejected; MenuBeyondFiniteRoute -> StatusRejected
 
 withHash :: Control -> ObservedFiles -> J.Value -> J.Value -> Either ControlError ObservedFiles
 withHash control original receipt watch = do
@@ -309,6 +311,8 @@ mutate control sources observed = do
     WrongBootHandoffTarget -> receiptOnly (modifyAt control [field "samples",Element 0] (changeViews control 0x14c80 (Replace 0)))
     WrongBootModeCopy -> receiptOnly (modifyAt control [field "samples",Element 0] (changeViews control 0x14c90 (FlipBits 1)))
     NonzeroBootBssReserved -> receiptOnly (modifyAt control [field "samples",Element 0] (changeViews control 0x14c88 (Replace 1)))
+    MenuBeforeFiniteRoute -> receiptOnly (set control [field "instructions"] (329999999 :: Word64))
+    MenuBeyondFiniteRoute -> receiptOnly (set control [field "instructions"] (450000001 :: Word64))
     UnexpectedRecord2Fetch -> journal (\raw watches -> do
       position <- findRow control (\row -> fetchRow row && maybe False (\(W.Address pc) -> pc >= 0x10000 && pc < 0x20000) (W.eventPc row)) watches
       changed <- set control [field "records",Element position,field "address"] (0x13490 :: Word32) watches

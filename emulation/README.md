@@ -1622,6 +1622,8 @@ Schema-3 runs write `prewatch-record2.json` at the first admitted wrapper stop, 
 
 Storage publication checkpoints preserve the actual non-atomic record. The typed storage proof identifies stores to `IndexedState+4`; only at such a size-publication stop may a committed base coexist with zero size and zero reserved. The observer omits an allocated-pool view until size commits. The consumer additionally decodes the imminent store and requires the current record's size address, payload 1024 and bounded pool base; its existing raw journal must then contain that exact write. Other incomplete records remain refused.
 
+Schema-3 menu continuation admits the source-derived finite range `[330000000,450000000]` instructions, not a previously observed exact total. The route waits to 80 million, performs fifteen eight-million-instruction holds with debounced releases capped at eight million each, and adds 40-million and 90-million waits. The producer identity binds this unchanged route; menu continuation remains unwatched and is not post-entry lifetime qualification.
+
 The checker adds these modes after the same three encoder/rebuilder/decoder tool paths:
 
 ```text
