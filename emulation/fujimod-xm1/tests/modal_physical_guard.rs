@@ -63,7 +63,7 @@ fn board(program: &[u32]) -> (Board, usize) {
     };
     let mut bus = Bus::new(Mode::Strict);
     let input = bus.register(0x2000_0000, 0x1000, Box::new(DecodeInput)).unwrap();
-    let board = graph.build(factory::Options {
+    let mut board = graph.build(factory::Options {
         engine: factory::Engine::Unicorn, translation_cache_bytes: 1 << 20,
     }, bus, None).unwrap();
     board.set_execution_policy(ExecutionPolicy::Exact).unwrap();
@@ -849,5 +849,32 @@ fn default_execution_state_still_admits_masked_svc_and_fiq() {
         assert_eq!(board.read_register(0, arm::CORE[0]).unwrap(), 8);
         assert!(watch.instruction_guard_status().unwrap().first_failure.is_none());
         board.memory_watch_end(&mut watch).unwrap();
+    }
+}
+
+#[test]
+fn refused_board_runs_return_without_satisfying_or_retrying_the_instruction_budget() {
+    for policy in [ExecutionPolicy::Exact, ExecutionPolicy::Interactive] {
+        let (mut board, _) = board(&[0xe2800001, 0xeafffffe]);
+        board.set_execution_policy(policy).unwrap();
+        let gate = ExecutionRefusal::default();
+        for core in 0..2 {
+            board.cpu(core).unwrap().arm_execution_refusal(gate.clone()).unwrap();
+        }
+        gate.refuse();
+        for _ in 0..2 {
+            board.run_for_instructions(2, 1).unwrap();
+            assert_eq!(board.instruction_counts(), vec![0, 0]);
+            for core in 0..2 {
+                assert!(board.cpu(core).unwrap().execution_refused());
+                assert_eq!(board.read_register(core, arm::CORE[0]).unwrap(), 7);
+            }
+        }
+        for core in 0..2 {
+            board.cpu(core).unwrap().disarm_execution_refusal(&gate).unwrap();
+            assert!(!board.cpu(core).unwrap().execution_refused());
+        }
+        board.run_for_instructions(2, 1).unwrap();
+        assert!(board.instruction_counts().iter().any(|count| *count > 0));
     }
 }

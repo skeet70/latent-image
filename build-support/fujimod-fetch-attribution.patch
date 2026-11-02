@@ -859,6 +859,19 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
              skip: Cell::new(None),
              hooks: vec![],
          });
+diff --git a/crates/emulator/src/board/mod.rs b/crates/emulator/src/board/mod.rs
+--- a/crates/emulator/src/board/mod.rs
++++ b/crates/emulator/src/board/mod.rs
+@@ -699,6 +699,9 @@ impl Board {
+             let mut s = self.state.borrow_mut();
+             s.apply_memory(&self.cpus)?;
++            if self.cpus.iter().any(|cpu| cpu.execution_refused()) {
++                return Ok(());
++            }
+             s.refresh_processors()?;
+             s.due(&self.cpus)?;
+             s.push_pins(&self.cpus)?;
+             // Clock inputs advance with execution/idle time, including for
 diff --git a/crates/emulator-cpu/src/lib.rs b/crates/emulator-cpu/src/lib.rs
 index 5d60452..7831fa4 100644
 --- a/crates/emulator-cpu/src/lib.rs
@@ -929,7 +942,7 @@ index 5d60452..7831fa4 100644
      fn stop(&self) -> Result<(), String>;
      /// Explicit isolated-call interception: omit the current instruction entry.
      /// Valid only inside an instruction observer, before any guest effects.
-@@ -787,6 +832,12 @@ pub trait Cpu {
+@@ -787,6 +832,15 @@ pub trait Cpu {
      fn refuse_access(&self) -> Result<(), AccessRefusalError> {
          Err(AccessRefusalError::Unsupported)
      }
@@ -938,6 +951,9 @@ index 5d60452..7831fa4 100644
 +    }
 +    fn disarm_execution_refusal(&self, _gate: &ExecutionRefusal) -> Result<(), String> {
 +        Err("backend has no instruction execution-refusal gate".into())
++    }
++    fn execution_refused(&self) -> bool {
++        false
 +    }
      /// Declared R-profile CP14 identity input, changed only while paused.
      fn rprofile_identity(&self, _value: Option<u32>) -> Result<u32, String> {
@@ -1021,10 +1037,13 @@ index 0b6bcb7..a78539c 100644
          Ok(())
      }
      fn identity(&self) -> Identity {
-@@ -371,6 +371,29 @@ impl Cpu for Core {
+@@ -371,6 +371,32 @@ impl Cpu for Core {
      fn invalidate_code(&self, range: Option<(u64, u64)>) -> Result<(), String> {
          self.execution.cpu.invalidate_code(range)
      }
++    fn execution_refused(&self) -> bool {
++        self.execution.refusal.borrow().as_ref().is_some_and(ExecutionRefusal::is_refused)
++    }
 +    fn arm_execution_refusal(&self, gate: ExecutionRefusal) -> Result<(), String> {
 +        let e = &self.execution;
 +        if e.active.get() || e.refusal.borrow().is_some() {
@@ -1051,7 +1070,7 @@ index 0b6bcb7..a78539c 100644
      fn run(&self, request: Run) -> Result<Exit, ExecutionError> {
          let e = &self.execution;
          let _guest_tick_scope = crate::rprofile::GuestTickScope::new();
-@@ -382,6 +405,10 @@ impl Cpu for Core {
+@@ -382,6 +408,10 @@ impl Cpu for Core {
          e.clock_overshoot.set(0);
          e.count.set(0);
          e.last_span.set(None);
@@ -1062,7 +1081,7 @@ index 0b6bcb7..a78539c 100644
          if request.until.is_some() || request.instructions.is_none() {
              e.loops.window.set(false);
          }
-@@ -441,6 +468,9 @@ impl Cpu for Core {
+@@ -441,6 +471,9 @@ impl Cpu for Core {
      fn instruction_progress(&self) -> Option<u64> {
          self.execution.progress()
      }
@@ -1159,23 +1178,25 @@ diff --git a/crates/emulator-cpu-unicorn/src/rprofile/worker.rs b/crates/emulato
 index cb06b2b..bd97317 100644
 --- a/crates/emulator-cpu-unicorn/src/rprofile/worker.rs
 +++ b/crates/emulator-cpu-unicorn/src/rprofile/worker.rs
-@@ -51,6 +51,7 @@ pub struct CpuWorker {
+@@ -51,6 +51,8 @@ pub struct CpuWorker {
      running: Cell<bool>,
      active_run: Cell<Option<RunToken>>,
      stopped_progress: Cell<Option<u64>>,
 +    stopped_entry: Cell<Option<InstructionEntry>>,
++    execution_refusal: RefCell<Option<ExecutionRefusal>>,
      stopped_pc: Cell<Option<u32>>,
      stopped_pstate: Cell<Option<u32>>,
      loop_window: Cell<Option<bool>>,
-@@ -142,6 +143,7 @@ pub fn spawn(config: Config) -> Result<CpuWorker, String> {
+@@ -142,6 +144,8 @@ pub fn spawn(config: Config) -> Result<CpuWorker, String> {
                  running: Cell::new(false),
                  active_run: Cell::new(None),
                  stopped_progress: Cell::new(None),
 +                stopped_entry: Cell::new(None),
++                execution_refusal: RefCell::new(None),
                  stopped_pc: Cell::new(None),
                  stopped_pstate: Cell::new(None),
                  loop_window: Cell::new(Some(false)),
-@@ -185,6 +187,7 @@ enum Event {
+@@ -185,6 +189,7 @@ enum Event {
          callback: usize,
          call: CallbackCall,
          progress: Option<u64>,
@@ -1183,7 +1204,7 @@ index cb06b2b..bd97317 100644
          pc: Option<u32>,
          pstate: Option<u32>,
      },
-@@ -293,6 +296,8 @@ enum Operation {
+@@ -293,6 +298,8 @@ enum Operation {
      SetLoopMode(loops::LoopMode),
      SetLoopWindow(bool),
      SetExecutionPolicy(ExecutionPolicy),
@@ -1192,7 +1213,7 @@ index cb06b2b..bd97317 100644
      CheckpointBackings,
      Fingerprint,
      SetGuestClock(Clock),
-@@ -471,6 +476,7 @@ impl Operation {
+@@ -471,6 +478,7 @@ impl Operation {
              Self::SetLoopMode(_) => WorkerRpcCounter::SetLoopMode,
              Self::SetLoopWindow(_) => WorkerRpcCounter::SetLoopWindow,
              Self::SetExecutionPolicy(_) => WorkerRpcCounter::SetExecutionPolicy,
@@ -1200,7 +1221,7 @@ index cb06b2b..bd97317 100644
              Self::CheckpointBackings => WorkerRpcCounter::CheckpointBackings,
              Self::Fingerprint => WorkerRpcCounter::Fingerprint,
              Self::SetGuestClock(_) => WorkerRpcCounter::SetGuestClock,
-@@ -643,6 +649,7 @@ impl WorkerLoop {
+@@ -643,6 +651,7 @@ impl WorkerLoop {
                  callback,
                  call,
                  progress,
@@ -1208,7 +1229,7 @@ index cb06b2b..bd97317 100644
                  pc,
                  pstate,
              })
-@@ -1061,6 +1068,14 @@ fn dispatch(context: &WorkerLoop, cpu: &core::Core, operation: Operation) -> Res
+@@ -1061,6 +1070,14 @@ fn dispatch(context: &WorkerLoop, cpu: &core::Core, operation: Operation) -> Res
              cpu.stop_before_instruction()?;
              Value::Unit
          }
@@ -1223,7 +1244,7 @@ index cb06b2b..bd97317 100644
          Operation::RprofileIdentity(value) => Value::Identity(cpu.rprofile_identity(value)?),
          Operation::SetInterrupt(line, asserted) => {
              cpu.set_interrupt(line, asserted)?;
-@@ -1311,6 +1326,7 @@ impl CpuWorker {
+@@ -1311,6 +1328,7 @@ impl CpuWorker {
                  callback,
                  call,
                  progress,
@@ -1231,7 +1252,7 @@ index cb06b2b..bd97317 100644
                  pc,
                  pstate,
              } => {
-@@ -1325,6 +1341,7 @@ impl CpuWorker {
+@@ -1325,6 +1343,7 @@ impl CpuWorker {
                  let count = &self.callback_counts[callback_counter as usize];
                  count.set(count.get().saturating_add(1));
                  self.stopped_progress.set(progress);
@@ -1239,7 +1260,7 @@ index cb06b2b..bd97317 100644
                  self.stopped_pc.set(pc);
                  self.stopped_pstate.set(pstate);
                  *self.pending_callback.borrow_mut() =
-@@ -1804,12 +1821,25 @@ impl Cpu for CpuWorker {
+@@ -1804,12 +1823,32 @@ impl Cpu for CpuWorker {
              _ => None,
          }
      }
@@ -1257,10 +1278,17 @@ index cb06b2b..bd97317 100644
          self.unit(Operation::StopBeforeInstruction)
      }
 +    fn arm_execution_refusal(&self, gate: ExecutionRefusal) -> Result<(), String> {
-+        self.unit(Operation::ArmExecutionRefusal(gate))
++        self.unit(Operation::ArmExecutionRefusal(gate.clone()))?;
++        self.execution_refusal.replace(Some(gate));
++        Ok(())
 +    }
 +    fn disarm_execution_refusal(&self, gate: &ExecutionRefusal) -> Result<(), String> {
-+        self.unit(Operation::DisarmExecutionRefusal(gate.clone()))
++        self.unit(Operation::DisarmExecutionRefusal(gate.clone()))?;
++        self.execution_refusal.take();
++        Ok(())
++    }
++    fn execution_refused(&self) -> bool {
++        self.execution_refusal.borrow().as_ref().is_some_and(ExecutionRefusal::is_refused)
 +    }
      fn rprofile_identity(&self, value: Option<u32>) -> Result<u32, String> {
          match self.rpc(Operation::RprofileIdentity(value))? {
