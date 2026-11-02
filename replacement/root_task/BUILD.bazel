@@ -12,7 +12,6 @@ xm1_rust_staticlib(
 xm1_rust_elf(
     name = "root-task-image",
     rust_staticlib = ":root-task-rust",
-    asm_srcs = ["entry.S"],
     entry = "xm1_root_task",
     link_script = "root-task.ld",
     extra_ldflags = ["-Wl,--gc-sections"],
