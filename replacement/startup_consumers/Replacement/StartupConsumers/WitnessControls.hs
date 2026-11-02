@@ -11,7 +11,7 @@ import qualified Data.Set as Set
 import Data.Word (Word32)
 import Replacement.KernelInstall.Wire (Address (..), WordValue (..), Count (..), Digest (..))
 import qualified Replacement.KernelInstall.Wire as K
-import Replacement.StartupConsumers.Evidence (address, count, number)
+import Replacement.StartupConsumers.Evidence (address, count, number, wordBytes)
 import Replacement.StartupConsumers.Wire
 import Replacement.StartupConsumers.Witness
 
@@ -87,8 +87,11 @@ mutations =
     {receiptResources = [if resourceKind resource == Record && resourcePhysical resource == Address 0x5988c
       then resource {resourceKind = Auxiliary} else resource | resource <- receiptResources receipt]}
   ,Control (ControlName "executed entry omitted from producer census") CensusRejected omitCensusEntry
-  ,Control (ControlName "acquire LDREX access omitted") AllocationRejected (omitLockRead (Address 0x427d4))
-  ,Control (ControlName "release LDREX access omitted") AllocationRejected (omitLockRead (Address 0x42800))
+  ,Control (ControlName "acquire LDREX access omitted") AllocationRejected (omitInstructionRead (Address 0x427d4))
+  ,Control (ControlName "release LDREX access omitted") AllocationRejected (omitInstructionRead (Address 0x42800))
+  ,Control (ControlName "consumed startup mode read omitted") EffectRejected (omitInstructionRead (Address 0x657194))
+  ,Control (ControlName "consumed startup mode differs") EffectRejected $ \receipt -> receipt
+    {receiptSegments = [segment {segmentWatch = (segmentWatch segment) {K.watchRecords = map alterStartupMode (K.watchRecords (segmentWatch segment))}} | segment <- receiptSegments receipt]}
   ,Control (ControlName "receive source and call probes belong to another task frame") InvocationRejected $
     mapSelectedProbe (\probe -> probeFamily probe == Just MessageReceive && probeInvocation probe /= Nothing
       && probeKind probe `elem` [SourceProbe,DynamicTarget,DynamicReturn]) otherTaskFrame
@@ -131,8 +134,8 @@ omitCensusEntry receipt = receipt
       in item {censusEntries = Count (fromIntegral (length remaining))
         ,censusFirst = case remaining of probe:_ -> Just (probeId probe); [] -> Nothing}
 
-omitLockRead :: Address -> Receipt -> Receipt
-omitLockRead instruction receipt = receipt
+omitInstructionRead :: Address -> Receipt -> Receipt
+omitInstructionRead instruction receipt = receipt
   {receiptSegments = map transform (receiptSegments receipt)
   ,receiptFetches = [attempt {fetchRow = shift indices (fetchRow attempt)}
     | attempt <- receiptFetches receipt,Just indices <- [M.lookup (fetchSegment attempt) removed]]}
@@ -237,4 +240,9 @@ alterPreimage event = if K.eventSource event == K.CpuWrite then
 outsideSourceClasses :: K.MemoryEvent -> K.MemoryEvent
 outsideSourceClasses event = if K.eventSource event == K.HostRead then
   event {K.eventAddress = 0x60000000,K.eventPhysical = Just 0x60000000}
+  else event
+
+alterStartupMode :: K.MemoryEvent -> K.MemoryEvent
+alterStartupMode event = if K.eventSource event == K.CpuRead && K.eventPc event == Just (Address 0x657194) then
+  event {K.eventValue = Just 1,K.eventBefore = Just (K.Bytes (wordBytes 1))}
   else event

@@ -7,7 +7,7 @@ module Replacement.StartupConsumers.Witness
 import Control.Monad (forM, forM_, foldM)
 import qualified Data.Aeson as J
 import qualified Data.Aeson.KeyMap as KM
-import Data.Bits ((.&.), (.|.), shiftR)
+import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as L
 import Data.List (sort, sortOn)
@@ -286,6 +286,81 @@ installationStores = map (\(whereAt,value) -> S.Store (Address whereAt) (WordVal
     ++ [(base+4*index,0) | index <- [1..64],base <- [0x409c3600,0x409c3800]]
     ++ [(base+4*index,0) | (base,wordsCount) <- [(0x40a0fc44,360),(0x409c3904,720),(0x40a0fa50,120)],index <- [0..wordsCount-1]])
 
+data NormalStartupMode = NormalStartupMode
+
+directCallTarget :: Address -> WordValue -> Maybe Address
+directCallTarget (Address site) (WordValue instruction)
+  | instruction .&. 0xff000000 /= 0xeb000000 = Nothing
+  | otherwise =
+      let offset = (instruction .&. 0x00ffffff) `shiftL` 2
+          displacement = if offset .&. 0x02000000 /= 0 then offset .|. 0xfc000000 else offset
+      in Just (Address (site+8+displacement))
+
+observedStartupMode :: Inputs -> Receipt -> Probe -> Either WitnessError NormalStartupMode
+observedStartupMode inputs receipt installation = do
+  outer <- probeAt receipt OuterEntry
+  beginOwn <- coreCounter Primary (K.contextCounts (machine outer))
+  endOwn <- coreCounter Primary (K.contextCounts (machine installation))
+  let getterEntry = Address 0x657184
+      loadSite = Address 0x657194
+      moveSite = Address 0x657198
+      returnSite = Address 0x65719c
+      modeCell = Address 0x61c008
+      prefix = [segment | segment <- receiptSegments receipt,segmentFetchScope segment == CompleteFetch]
+      within event = eventCore event == Just Primary && maybe False
+        (\at -> count at > probeClock outer && count at <= probeClock installation) (eventInstructions event)
+      own fetched = count (executedCoreBefore fetched)+1
+      site fetched = eventPc (executedRow fetched)
+  forM_ [event | segment <- prefix,event <- K.watchRecords (segmentWatch segment),isWrite event] $ \event -> do
+    backing <- eventPhysical32 event
+    require (backing >= address modeCell+4
+      || fromIntegral backing+eventSize event <= fromIntegral (address modeCell)) WriterRejected
+  (segment,row,readMode) <- one EffectRejected [(segment,Count index,event)
+    | segment <- prefix,(index,event) <- zip [0..] (K.watchRecords (segmentWatch segment))
+    ,eventSource event == CpuRead,eventPc event == Just loadSite,within event]
+  evidence <- one EffectRejected [item | item <- segmentCpuEvidence segment,evidenceRow item == row]
+  latest <- required EffectRejected (evidenceLatestFetch evidence)
+  fetched <- executedFetchesAt ([Address location | location <- [0x69cdf8,0x69cdfc..0x69cf80]]
+    ++ [getterEntry,loadSite,moveSite,returnSite]) receipt
+  let executed = filter (within . executedRow) fetched
+      at destination = one EffectRejected [item | item <- executed,site item == Just destination]
+  candidates <- forM [item | item <- executed,Just destination <- [site item]
+    ,destination >= Address 0x69cdf8,destination < Address 0x69cf84] $ \item -> do
+      destination <- required EffectRejected (site item)
+      instruction <- sourceWord inputs (receiptRole receipt) (address destination)
+      pure [item | directCallTarget destination (WordValue instruction) == Just getterEntry]
+  called <- one EffectRejected (concat candidates)
+  getter <- at getterEntry
+  loaded <- at loadSite
+  moved <- at moveSite
+  returned <- at returnSite
+  callSite <- required EffectRejected (site called)
+  continued <- at (Address (address callSite+4))
+  installed <- at (Address (lr installation-4))
+  installInstruction <- sourceWord inputs (receiptRole receipt) (lr installation-4)
+  loadInstruction <- sourceWord inputs (receiptRole receipt) (address loadSite)
+  moveInstruction <- sourceWord inputs (receiptRole receipt) (address moveSite)
+  returnInstruction <- sourceWord inputs (receiptRole receipt) (address returnSite)
+  require ([loadInstruction,moveInstruction,returnInstruction] == [0xe5933008,0xe1a00003,0xe8bd8800]) SourceWordRejected
+  argument <- register installation 0
+  require (eventAddress readMode == fromIntegral (address modeCell)
+    && eventPhysical readMode == Just (fromIntegral (address modeCell)) && eventSize readMode == 4
+    && eventByteOrder readMode == Just K.Little && eventBefore readMode == Just (K.Bytes (wordBytes 0))
+    && eventValue readMode == Just 0 && argument == 0
+    && count (evidenceCoreInstructions evidence) > count beginOwn
+    && count (evidenceCoreInstructions evidence) < count endOwn
+    && eventInstructions readMode == eventInstructions (executedRow loaded)
+    && eventTick readMode == eventTick (executedRow loaded)
+    && attributedFetchEvent latest == executedRow loaded
+    && evidenceCoreInstructions evidence == attributedFetchCoreInstructions latest
+    && count (evidenceCoreInstructions evidence) == own loaded
+    && own getter == own called+1 && own getter < own loaded
+    && own moved == own loaded+1 && own returned == own moved+1
+    && own continued == own returned+1 && own continued < own installed
+    && own installed == count endOwn
+    && directCallTarget (Address (lr installation-4)) (WordValue installInstruction) == Just (Address (pc installation))) EffectRejected
+  pure NormalStartupMode
+
 checkInstallation :: Inputs -> Receipt -> Either WitnessError ()
 checkInstallation inputs receipt = do
   entry <- probeAt receipt InstallerEntry
@@ -293,20 +368,17 @@ checkInstallation inputs receipt = do
   cache <- probeAt receipt CacheEntry
   cached <- probeAt receipt CacheReturn
   before <- memoryAt receipt entry
-  forM_ [(0x40010,0x4004dae0),(0xd0010,0x400ddaa0),(0x61c008,0),(0x7caf3c,3)] $ \(location,value) ->
+  _ <- observedStartupMode inputs receipt entry
+  forM_ [(0x40010,0x4004dae0),(0xd0010,0x400ddaa0),(0x7caf3c,3)] $ \(location,value) ->
     wordAt EffectRejected before location >>= \actual -> require (actual == value) EffectRejected
   let isRetained = receiptRole receipt == Retained
       bottom = physical (sp entry) + fromIntegral (if isRetained then -8 else IA.scratchLow (inputInstallerProof inputs))
       top = physical (sp entry)
       native = nativeImage (inputInstaller inputs)
-      branchTarget site instruction =
-        let displacement = toInteger (instruction .&. 0xffffff)
-            signed = if displacement >= 0x800000 then displacement-0x1000000 else displacement
-        in fromInteger (toInteger site+8+4*signed) :: Word32
       cacheReturns = [site+4 | site <- IA.executionPcs (inputInstallerProof inputs),site >= 0x725a04
         ,toInteger site+4 <= 0x725a04+toInteger (B.length native)
         ,let instruction = U.word32At native (fromIntegral (site-0x725a04))
-        ,instruction .&. 0xff000000 == 0xeb000000,branchTarget site instruction == 0x42634]
+        ,directCallTarget (Address site) (WordValue instruction) == Just (Address 0x42634)]
   cacheReturn <- if isRetained then Right 0x725a40 else one CallRejected cacheReturns
   require (lr cache == cacheReturn && pc cached == cacheReturn && lr returned == cacheReturn
     && take 4 (K.contextRegisters (machine returned)) == map WordValue [0,0x40a0fc2c,0,0x40a0fc2c]
