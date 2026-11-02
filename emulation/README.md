@@ -1439,11 +1439,11 @@ Admission separately checks all four descriptor/caller/creation/activation/error
 
 #### Initial task-body boundary (#152)
 
-[The initial task-body contract](../reports/replacement-inventory-baseline.md#817-initial-root-idle-and-standby-task-bodies-152) source-binds root104 `[0x69d160,0x69d2b4)`, shared idle102/103 `[0x69cbf0,0x69cc00)` and standby93 `[0x69cd58,0x69cdf8)`. It reuses the admitted #151 receipt without another guest. B103 reaches a recorded WFI fetch before the watch closes; A102's entry, a repeated idle wait/wake interval, root104's retained calls and a successful standby hardware cycle remain outside that qualification.
+[The initial task-body contract](../reports/replacement-inventory-baseline.md#817-initial-root-idle-and-standby-task-bodies-152) source-binds root104 `[0x69d160,0x69d2b4)`, shared idle102/103 `[0x69cbf0,0x69cc00)` and standby93 `[0x69cd58,0x69cdf8)`. Its historical #151 projection ends before A102 entry or an idle wake cycle. `E-INITIAL-IDLE-NATURAL-QUALIFIED-150` now independently admits both natural idle entries, modeled IRQ restoration and repeated waits in separately bound retained/owned runs. Root104 and standby93 remain retained.
 
 Idle102/103 have no body-local shared predicate or service call: they repeat WFI and its backedge. Standby93 instead waits on its task-associated event mask1 through `0x724480`, accepts only an entire output word equal to1, then performs the recovered IRQ/cache/MMIO wait/restore sequence. Its concrete flag producer and hardware wake source remain unidentified. Root104 creates five early executor workers and, on its nonzero branch, submits the later elfloader/flashloader/initcont chain; the later executable-publication contract belongs to #153.
 
-The first owned increment's source now replaces only the complete16-byte shared idle body. `//emulation:idle-tasks` is its separate retained/owned observer; `startup_tasks.rs` and the stock #151 checker are unchanged. The new source has not been built, tested, staged or run, and requires independent review before execution. The user-ARM native-case profile still refuses WFI.
+The first owned increment replaces only the complete 16-byte shared idle body. `E-INITIAL-IDLE-HOST-150` records the measured 16-byte artifact, finite host admission and one staged candidate. `//emulation:idle-tasks` is its separate retained/owned observer; `startup_tasks.rs` and the stock #151 checker are unchanged. Independent source review precedes the exercised builds and runs. The user-ARM native-case profile still refuses WFI.
 
 The observer takes `--role retained|owned --run RUN --update DAT --boot-rom ROM --analysis ROOT --linked BIN --symbols SYMBOLS --contract CONTRACT --output NEW_DIRECTORY`. Both roles bind the actual linked bytes, symbols and staging contract, as well as run, DAT, ROM, observer and three separate canonical source images. Retained uses the original DAT; owned uses the candidate. It starts from a saved/restored zero-instruction reset and never writes a CPU/task context or forces an interrupt.
 
@@ -1472,7 +1472,13 @@ devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
   "$LINKED_BIN" "$SYMBOLS" "$CONTRACT" "$RETAINED_OBSERVATIONS" "$OWNED_OBSERVATIONS" "$SCRATCH" "$OUTPUT"
 ```
 
-The checker decodes the carried record through the existing bounded LZ tool in a temporary directory below `private-data/scratch`; comparison admits each captured observation independently. No check above is recorded as exercised yet. The runtime interval, natural wake reachability, original-copy/global caller closure, complete retained IRQ service lifetimes and all root/standby acceptance remain unqualified.
+The checker decodes the carried record through the existing bounded LZ tool below the declared scratch root; comparison admits each observation independently. Both admitted runs have 235 snapshots, B103 entry at 6,445,956 and A102 entry at 27,803,472. They preserve 12 B103 and one A102 modeled IRQ cycles, with 13 and two executed waits respectively. The original private frame is four bytes; the emitted and observed owned frame is eight bytes. The watched endpoint is `[24592020,3213604]`, aggregate 27,805,624. Both unwatched continuations reach shooting menu `(1,5,2)` at 382 million instructions.
+
+`E-INITIAL-IDLE-NATURAL-REFUSALS-150` preserves both earlier retained failures: an overbroad image4 code guard rejects a real root-data write, then complete generic-fill fetch logging exhausts the fixed row cap. The corrected code fences and actual-writer fetch cache admit 1,572 retained and 1,574 owned rows without increasing the cap or losing monitored writes.
+
+`E-INITIAL-IDLE-CONTROLS-150` records 43 passing serialized refusal controls per role. The first suite attempts correctly refuse a malformed missing-repeat fixture at an earlier wait boundary; the corrected fixture coherently stops before the repeated WFI executes and refuses premature completion as `RepetitionRejected`. No guest is repeated for that host-only correction.
+
+Original copies and computed call/read/copy references outside the observed canonical entries remain open. Retained IRQ/service and callback lifetimes after the watched endpoint, root104 and standby93 replacement, the concrete standby flag producer and hardware wake routing remain unqualified. The fixed menu continuation does not extend the continuous guard interval. #152 remains open.
 
 ### Owned first-stage witness
 

@@ -144,7 +144,7 @@ The checker compares emitted instructions with an independently written ordered 
 
 `deriveIdleProof` interprets WFI only in this fixed-site proof; the user-ARM native profile is unchanged. Symbolic incoming registers/SP, a source-effect model and a repeated-state check admit safe entry-only private frames, require exactly one WFI with a direct resume backedge, and reject calls, data/MMIO access, returns, other hints, a pre-wait cycle, register/flag corruption, stack escape/drift and unreachable linked bytes. The stager derives actual wait/resume PCs, reachable PCs and scratch from linked bytes, pads only the remaining carrier, and reuses the shared one-DAT image4 confinement checks.
 
-Source is unexercised. Independent review precedes building, tests, staging and natural execution. The supported host commands are:
+`E-INITIAL-IDLE-HOST-150` records the independently reviewed artifact at exactly 16 bytes, with WFI/resume at `0x69cbf8 / 0x69cbfc` and eight bytes of private entry scratch. The finite artifact test passes and one canonical candidate is staged without relaxing the carrier. The supported host commands are:
 
 ```sh
 devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" build --jobs=2 \
@@ -157,7 +157,7 @@ devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
   "$SOURCE_DAT" "$IMAGE4" "$LINKED_BIN" "$SYMBOLS" "$SCRATCH" "$OUT_DAT" "$OUT_CONTRACT"
 ```
 
-Tests exercise public artifact derivation with alternate valid arrangements and malformed behaviors, plus the actual linked artifact. Optional canonical DAT/image4 inputs check decoded-image confinement. A strict linker assertion is not a measured fit until the artifact builds; no emitted size, host pass, staged DAT or natural qualification is recorded yet.
+Tests exercise public artifact derivation with alternate valid arrangements and malformed behaviors, plus the emitted artifact. The optional canonical DAT/image4 test branch is not invoked in this qualification; the actual stager and independent runtime checker establish candidate confinement. `E-INITIAL-IDLE-NATURAL-QUALIFIED-150` admits both idle tasks through modeled IRQ restoration and repeated WFI in retained/owned runs, and accepts their semantic comparison. Their four-byte and eight-byte private frames are observed separately. `E-INITIAL-IDLE-CONTROLS-150` adds 43 passing host-side refusal mutations per role. Root/standby bodies, global original-copy/caller closure and retained service lifetimes beyond the watched interval remain open.
 
 The contract's `idle_task` object contains `entry`, `replaced_extent`, `linked_bytes`, `linked_sha256`, `symbols_sha256`, `staged_image4_sha256`, `scratch_low_from_entry_sp`, `execution_pcs`, `wfi_pc` and `resume_pc`. The outer contract binds candidate DAT/image4 identities. [The idle lifecycle observer and independent checker](../emulation/README.md#initial-task-body-boundary-152) consume these actual identities without borrowing an earlier run's pins.
 
