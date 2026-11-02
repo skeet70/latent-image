@@ -257,8 +257,8 @@ decode address word
               then Load cond width False rt rn offset indexing
               else Store cond width rt rn offset indexing
   group1
-    | field 27 20 word == 0x30 = MoveWide cond (reg 12 word) wide
-    | field 27 20 word == 0x34 = MoveTop cond (reg 12 word) wide
+    | field 27 20 word == 0x30 = if reg 12 word == pc then Rejected Unadmitted else MoveWide cond (reg 12 word) wide
+    | field 27 20 word == 0x34 = if reg 12 word == pc then Rejected Unadmitted else MoveTop cond (reg 12 word) wide
     | word .&. 0x0fffff00 == 0x0320f000 = case field 7 0 word of
         0 -> Hint cond
         1 -> Hint cond

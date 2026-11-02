@@ -19,11 +19,27 @@ import qualified Emulation.NativeObservation as N
 import Emulation.Sha256 (sha256, sha256Hex)
 import FujiAF.Host hiding (sha256)
 import Numeric (showHex)
-import StockInventory (checkedStockFunctions)
+import StockInventory (FunctionDeclaration (..), FunctionDerivation (..), FunctionSize (..), GuestAddress (..), PremiseUse (..), ProgramCounter (..), checkedStockFunctions, requiredReturnPremises, returnPremiseLabel)
 import System.Directory (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist, listDirectory)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
+
+stockFunctionExtent :: FunctionDerivation -> (Word32, Int)
+stockFunctionExtent derivation =
+  let FunctionDeclaration (GuestAddress address) (FunctionSize size) = derivedDeclaration derivation
+   in (address, size)
+
+inventoryFunction :: FunctionDerivation -> Value
+inventoryFunction derivation =
+  let (address, size) = stockFunctionExtent derivation
+   in object
+        [ "address" .= hex address
+        , "size" .= size
+        , "required_premises" .= map returnPremiseLabel (derivationPremises derivation)
+        , "premise_uses" .=
+            [object ["pc" .= hex pc, "premise" .= returnPremiseLabel premise] | PremiseUse (ProgramCounter pc) premise <- derivationPremiseUses derivation]
+        ]
 
 globalsBase, globalsSize, framesBase, framesSize, stackBase, stackSize, stackTop :: Word32
 globalsBase = 0x01500000
@@ -411,7 +427,7 @@ loadInputs build stockElf = do
     ioError (userError "stock ELF does not contain the pinned image-5 bytes")
   when (any (\(address, expected) -> stockWord stock address /= expected) stockEntries) $
     ioError (userError "stock ELF does not carry the admitted entry words")
-  stockCode <- either (ioError . userError) pure (checkedStockFunctions (B.take 5185120 (B.drop 0xe8 stock)))
+  stockCode <- map stockFunctionExtent <$> either (ioError . userError) pure (checkedStockFunctions (B.take 5185120 (B.drop 0xe8 stock)))
   models <- concat <$> mapM (linkedFunctions build) [LowModel, HandbackModel, FatalLogModel, FatalModel, CommandModel, CancelModel]
   countFunctions <- linkedFunctions build CountModel
   pure
@@ -1022,7 +1038,10 @@ main = do
       unless (sha256Hex (sha256 (B.take 5185120 (B.drop 0xe8 stock))) == "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a") $
         ioError (userError "stock ELF does not contain the pinned image-5 bytes")
       functions <- either (ioError . userError) pure (checkedStockFunctions (B.take 5185120 (B.drop 0xe8 stock)))
-      jsonPrint (object ["functions" .= [object ["address" .= hex address, "size" .= size] | (address,size) <- functions]])
+      jsonPrint (object
+        [ "functions" .= map inventoryFunction functions
+        , "required_premises" .= map returnPremiseLabel requiredReturnPremises
+        ])
     [runner, build, out, stockElf] -> run runner build out stockElf
     _ -> putStrLn "usage: media-permit-qualification RUNNER BAZEL_BIN OUT_DIR STOCK_ELF" >> exitFailure
 
