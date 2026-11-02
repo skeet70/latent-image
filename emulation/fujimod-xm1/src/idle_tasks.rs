@@ -182,9 +182,9 @@ fn view(machine: &Machine, maps: &[MemoryMap], state: &Context, object: Object, 
     Ok(View { object, core, physical: Address(physical), bytes, aliases })
 }
 fn kernel(machine: &Machine, maps: &[MemoryMap], state: &Context, core: Core, views: &mut Vec<View>) -> Result<Kernel, String> {
-    kernel_at(machine, maps, state, core, core.layout(), ENTRY, views)
+    kernel_at(machine, maps, state, core, core.layout(), TaskScope::Idle, views)
 }
-fn kernel_at(machine: &Machine, maps: &[MemoryMap], state: &Context, core: Core, l: Layout, entry: u32, views: &mut Vec<View>) -> Result<Kernel, String> {
+fn kernel_at(machine: &Machine, maps: &[MemoryMap], state: &Context, core: Core, l: Layout, scope: TaskScope, views: &mut Vec<View>) -> Result<Kernel, String> {
     views.push(view(machine, maps, state, Object::Pool, core, l.stack, 1024)?);
     let creation = view(machine, maps, state, Object::CreationRecord, core, l.creation, 40)?;
     let node = view(machine, maps, state, Object::TaskNode, core, l.node, 56)?;
@@ -199,14 +199,26 @@ fn kernel_at(machine: &Machine, maps: &[MemoryMap], state: &Context, core: Core,
         current: Address(word(&current.bytes, 0)?), selected: Address(word(&selected.bytes, 0)?),
         state: node.bytes[12], effective_priority: node.bytes[13], pending: node.bytes[14],
     };
-    require(task.created.0 <= 1, "idle created flag is not Boolean")?;
+    task.require_layout(l, scope)?;
     if task.created == Word(1) {
-        require(task.creation_pointer == task.creation && task.creation_id.0 == u32::from(l.id.0) && task.entry == Address(entry), "task creation/node identity differs")?;
-        require(task.stack_bytes == Word(1024) && task.stack_base.0 & !0x40000000 == l.stack, "task stack differs from canonical run bounds")?;
         views.push(view(machine, maps, state, Object::Stack, core, task.stack_base.0, 1024)?);
     }
     views.extend([creation, node, current, selected]);
     Ok(task)
+}
+impl Kernel {
+    fn require_layout(&self, layout: Layout, scope: TaskScope) -> Result<(), String> {
+        require(self.created.0 <= 1, "idle created flag is not Boolean")?;
+        if self.created == Word(1) {
+            let (entry, identity_error, stack_error) = match scope {
+                TaskScope::Idle => (ENTRY, "idle creation/node identity differs", "idle stack differs from canonical run bounds"),
+                TaskScope::Root => (ROOT_ENTRY, "root creation/node identity differs", "root stack differs from canonical run bounds"),
+            };
+            require(self.creation_pointer == self.creation && self.creation_id.0 == u32::from(layout.id.0) && self.entry == Address(entry), identity_error)?;
+            require(self.stack_bytes == Word(1024) && self.stack_base.0 & !0x40000000 == layout.stack, stack_error)?;
+        }
+        Ok(())
+    }
 }
 fn sample(machine: &Machine, maps: &[MemoryMap], sources: &[Code], hit: usize, state: Context, watch_cursor: usize) -> Result<Sample, String> {
     let boundary = boundary(state.pc.0)?;
@@ -766,7 +778,7 @@ fn root_sample(machine: &Machine, maps: &[MemoryMap], sources: &[Code],
     hit: usize, state: Context, watch_cursor: usize, boundary: Boundary, callback_context: bool) -> Result<Sample, String> {
     let mut views = Vec::new();
     let kernels = [
-        kernel_at(machine, maps, &state, Core::Primary, root_layout(), ROOT_ENTRY, &mut views)?,
+        kernel_at(machine, maps, &state, Core::Primary, root_layout(), TaskScope::Root, &mut views)?,
         kernel(machine, maps, &state, Core::Secondary, &mut views)?,
     ];
     if callback_context { callback_task_views(machine, maps, &state, kernels[state.core.index()].current, &mut views)?; }
@@ -1297,32 +1309,34 @@ impl RootProducer {
     }
 }
 
-fn root_dynamic_sites(producer: &RootProducer, binding: &RootBinding) -> Result<BTreeMap<u32, String>, String> {
+fn root_fixed_sites(binding: &RootBinding, sources: &[Code]) -> Result<BTreeMap<u32, String>, String> {
     let mut sites = root_sites(binding);
-    let mut add = |pc: u32, boundary: &str| -> Result<(), String> {
-        require(pc % 4 == 0, "dynamic root continuation is not A32 aligned")?;
-        sites.entry(pc & !0x40000000).or_insert_with(|| boundary.into());
-        Ok(())
-    };
-    if let Some(irq) = &producer.irq { add(irq.resume.0, "service-return")?; }
-    if let Some(submission) = &producer.submission { add(submission.caller.lr.0, "service-return")?; }
-    if let Some(callback) = &producer.callback { add(callback.caller.lr.0, "service-return")?; }
-    if let Some((target, _)) = producer.transfer {
-        require(binding.fetch_spans.is_empty() || binding.fetch_spans.iter().any(|&(low, high)|
-            low <= u64::from(target.0 & !0x40000000) && u64::from(target.0 & !0x40000000) + 8 <= high),
-            "selected task continuation has no complete actual-fetch coverage")?;
-        add(target.0, "post-cleanup")?;
-        add(target.0.checked_add(4).ok_or("selected task continuation overflow")?, "post-cleanup")?;
+    for &pc in &binding.service_words {
+        let instruction = code_word(sources, pc)?;
+        if instruction & 0x0f000000 == 0x0b000000 && direct_target(pc, instruction)? == 0x725dd8 {
+            sites.insert(pc.checked_add(4).ok_or("task wrapper return PC overflow")?, "service-return".into());
+        }
     }
-    if let Some(handback) = &producer.handback {
-        add(handback.pc.0.checked_add(4).ok_or("root handback continuation overflow")?, "post-cleanup")?;
+    sites.insert(0x723394, "service-return".into());
+    for pc in [0x43668, 0x43728, 0x437a4] {
+        require(binding.fetch_spans.iter().any(|&(low, high)| low <= u64::from(pc) && u64::from(pc) + 8 <= high),
+            "selected task continuation has no complete actual-fetch coverage")?;
+        sites.entry(pc).or_insert_with(|| "service-return".into());
+        sites.entry(pc + 4).or_insert_with(|| "service-return".into());
     }
     let aliases: Vec<_> = sites.iter().map(|(&pc, label)| (pc | 0x40000000, label.clone())).collect();
     sites.extend(aliases);
     Ok(sites)
 }
+fn root_resume_sites(sources: &[Code], resume: Address) -> Result<BTreeMap<u32, String>, String> {
+    require(resume.0 % 4 == 0, "root IRQ continuation is not A32 aligned")?;
+    code_word(sources, resume.0)?;
+    let physical = resume.0 & !0x40000000;
+    Ok(BTreeMap::from([(physical, "service-return".into()), (physical | 0x40000000, "service-return".into())]))
+}
 fn root_sample_boundary(producer: &RootProducer, binding: &RootBinding, continuations: &BTreeSet<u32>, pc: u32) -> Result<Boundary, String> {
     let physical = pc & !0x40000000;
+    if physical == 0x725dd8 { return Ok(Boundary::TaskSubmit); }
     if producer.irq.as_ref().is_some_and(|irq| irq.resume.0 & !0x40000000 == physical)
         || producer.callback.as_ref().is_some_and(|callback| callback.caller.lr.0 & !0x40000000 == physical)
         || producer.submission.as_ref().is_some_and(|submission| submission.caller.lr.0 & !0x40000000 == physical) {
@@ -1435,14 +1449,14 @@ fn bind_root_interfaces(machine: &Machine, maps: &[MemoryMap], state: &Context, 
 fn drive_root(mut machine: Machine, maps: &[MemoryMap], code: &[Code], mut binding: RootBinding, identity: Identity,
     role: Role, output: &Path, reset: &[u8]) -> Result<(), String> {
     let mut producer = RootProducer::new();
-    let mut sites = root_dynamic_sites(&producer, &binding)?;
+    let mut sites = root_sites(&binding);
     machine.traces.bound_full_registers(NonZeroUsize::new(HIT_LIMIT).ok_or("invalid root hit bound")?);
     machine.traces.stop_labels.extend(sites.values().cloned());
     machine.traces.stop_labels.insert("start".into());
-    let mut active_sites = BTreeMap::from([(0x725dd8, "start".into()), (0x40725dd8, "start".into())]);
-    let static_sites: BTreeSet<u32> = sites.keys().copied().collect();
+    let mut static_sites = BTreeSet::new();
+    let mut dynamic_resume: Option<Address> = None;
     let mut continuations = BTreeSet::new();
-    machine.traces.arm(&machine.session, active_sites.clone())?;
+    machine.traces.arm_mutable(&machine.session, BTreeMap::from([(0x725dd8, "start".into()), (0x40725dd8, "start".into())]))?;
     let mut watch: Option<Box<MemoryWatch>> = None;
     let mut samples = Vec::new();
     let mut processed_hits = 0;
@@ -1478,12 +1492,15 @@ fn drive_root(mut machine: Machine, maps: &[MemoryMap], code: &[Code], mut bindi
                     }
                     installed_views.extend(bind_root_interfaces(&machine, maps, &state, code, &mut binding)?);
                     let ranges = root_watch_ranges(&mut binding)?;
+                    let base_sites = root_sites(&binding);
+                    let fixed = root_fixed_sites(&binding, code)?;
+                    continuations.extend(fixed.keys().filter(|pc| !base_sites.contains_key(pc)).map(|pc| *pc & !0x40000000));
+                    static_sites.extend(fixed.keys().copied());
+                    machine.traces.stop_labels.extend(fixed.values().cloned());
+                    machine.traces.replace_sites(&machine.session, fixed.clone())?;
+                    sites = fixed;
                     watch = Some(machine.session.board.memory_watch_begin_with_fetch_attribution(ranges, fetch_attribution()?,
                         WATCH_LIMIT, maps.to_vec(), ViewPolicy::Observe)?);
-                    machine.traces.remove_sites(&machine.session, &[
-                        fujimod_xm1::provenance::Guest(0x725dd8), fujimod_xm1::provenance::Guest(0x40725dd8),
-                    ])?;
-                    active_sites.clear();
                 }
                 let boundary = if first { Boundary::Start } else { root_sample_boundary(&producer, &binding, &continuations, address)? };
                 let callback_context = (0x69cc18..0x69cc6c).contains(&(address & !0x40000000))
@@ -1512,13 +1529,22 @@ fn drive_root(mut machine: Machine, maps: &[MemoryMap], code: &[Code], mut bindi
             }
             require(stopped == RunOutcome::Stopped && machine.instructions() < DEADLINE,
                 producer.deadline_error())?;
-            let dynamic = root_dynamic_sites(&producer, &binding)?;
-            let additions: BTreeMap<u32, String> = dynamic.iter().filter(|(pc, _)| !active_sites.contains_key(pc))
-                .map(|(&pc, label)| (pc, label.clone())).collect();
-            continuations.extend(additions.keys().filter(|pc| !static_sites.contains(pc)).map(|pc| *pc & !0x40000000));
-            if !additions.is_empty() { machine.traces.add_sites(&machine.session, additions.clone())?; }
-            active_sites.extend(additions);
-            sites.extend(dynamic);
+            let next_resume = producer.irq.as_ref().map(|irq| Address(irq.resume.0 & !0x40000000))
+                .filter(|resume| !static_sites.contains(&resume.0));
+            if next_resume != dynamic_resume {
+                if let Some(previous) = dynamic_resume {
+                    machine.traces.remove_sites(&machine.session, &[
+                        fujimod_xm1::provenance::Guest(previous.0), fujimod_xm1::provenance::Guest(previous.0 | 0x40000000),
+                    ])?;
+                }
+                if let Some(resume) = next_resume {
+                    let additions = root_resume_sites(code, resume)?;
+                    machine.traces.add_sites(&machine.session, additions.clone())?;
+                    continuations.insert(resume.0);
+                    sites.extend(additions);
+                }
+                dynamic_resume = next_resume;
+            }
         }
         Ok(())
     })();
@@ -1877,5 +1903,51 @@ mod tests {
             ]});
             assert!(inspect_watch(&write, &mut 0, &[], &mut producer).is_err());
         }
+    }
+    #[test]
+    fn idle_kernel_refusals_preserve_diagnostics() {
+        for core in [Core::Primary, Core::Secondary] {
+            let mut wrong_identity = synthetic_kernel(core);
+            wrong_identity.creation_id = Word(104);
+            assert_eq!(wrong_identity.require_layout(core.layout(), TaskScope::Idle).unwrap_err(), "idle creation/node identity differs");
+            let mut wrong_stack = synthetic_kernel(core);
+            wrong_stack.stack_base.0 -= 4;
+            assert_eq!(wrong_stack.require_layout(core.layout(), TaskScope::Idle).unwrap_err(), "idle stack differs from canonical run bounds");
+        }
+    }
+
+    fn root_routing_binding() -> RootBinding {
+        RootBinding {
+            execution: BTreeSet::new(), calls: Vec::new(), halts: BTreeSet::new(), returns: BTreeSet::new(),
+            service_words: BTreeSet::new(), service_literals: BTreeSet::new(), service_entries: BTreeSet::from([0x725dd8]),
+            indirect_sites: BTreeMap::new(), service_halts: BTreeSet::new(), fetch_spans: Vec::new(), scratch_low: 0,
+        }
+    }
+
+    #[test]
+    fn root_wrapper_entry_is_serialized_as_task_submit_on_both_aliases() {
+        let binding = root_routing_binding();
+        let producer = RootProducer::new();
+        for pc in [0x725dd8, 0x40725dd8] {
+            let boundary = root_sample_boundary(&producer, &binding, &BTreeSet::from([0x725dd8]), pc).unwrap();
+            assert_eq!(serde_json::to_value(boundary).unwrap(), "task-submit");
+        }
+    }
+
+    #[test]
+    fn fixed_root_points_cover_known_returns_without_opaque_callee_instructions() {
+        let mut binding = root_routing_binding();
+        binding.service_words.extend([0x6b07f0, 0x6b07f8]);
+        let source = Code {
+            name: "retained-wrapper-caller", base: 0x6b07f0,
+            bytes: [0xeb01d578u32, 0xe3500000, 0xe2800001].into_iter().flat_map(u32::to_le_bytes).collect(),
+        };
+        root_watch_ranges(&mut binding).unwrap();
+        let sites = root_fixed_sites(&binding, &[source]).unwrap();
+        for pc in [0x6b07f4, 0x406b07f4] { assert_eq!(sites.get(&pc).map(String::as_str), Some("service-return")); }
+        for pc in [0x723394, 0x43668, 0x4366c, 0x43728, 0x4372c, 0x437a4, 0x437a8] {
+            assert!(sites.contains_key(&pc) && sites.contains_key(&(pc | 0x40000000)));
+        }
+        assert!(!sites.contains_key(&0x6b07f8) && !sites.contains_key(&0x406b07f8));
     }
 }

@@ -423,3 +423,135 @@ new file mode 100644
 +        Ok(watch)
 +    }
 +}
+
+diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/board/observation.rs
+--- a/crates/emulator/src/board/observation.rs
++++ b/crates/emulator/src/board/observation.rs
+@@ -353,14 +353,33 @@
++#[derive(Clone, Copy)]
++enum PointSetMode { Fixed, Mutable }
++enum PointAddresses { Fixed(Vec<u64>), Mutable(RefCell<Vec<u64>>) }
++impl PointAddresses {
++    fn contains(&self, pc: u64) -> bool {
++        match self {
++            Self::Fixed(addresses) => addresses.binary_search(&pc).is_ok(),
++            Self::Mutable(addresses) => addresses.borrow().binary_search(&pc).is_ok(),
++        }
++    }
++}
++fn normalize_point_addresses(mut addresses: Vec<u64>) -> Result<Vec<u64>, String> {
++    if addresses.len() > 4096 || addresses.iter().any(|pc| pc & 1 != 0) {
++        return Err("Instruction points require bounded aligned addresses".into());
++    }
++    addresses.sort_unstable();
++    addresses.dedup();
++    Ok(addresses)
++}
+ /// Repeated entry observations stop before the selected instruction. Resume
+ /// executes that instruction once, even when it is itself a loop target.
+ pub(super) struct EntryPoints {
+-    addresses: Vec<u64>,
++    addresses: PointAddresses,
+     pause: Rc<Cell<bool>>,
+     event: RefCell<Option<u64>>,
+     skip: Cell<Option<u64>>,
+ }
+ impl EntryPoints {
+     fn hit(&self, pc: u64) -> bool {
+-        if self.addresses.binary_search(&pc).is_err() {
++        if !self.addresses.contains(pc) {
+             return false;
+         }
+         if self.skip.get() == Some(pc) {
+@@ -387,6 +406,17 @@
+     }
+ }
+ impl InstructionPoints {
++    pub fn replace_addresses(&self, addresses: Vec<u64>) -> Result<(), String> {
++        let PointAddresses::Mutable(current) = &self.entry.addresses else {
++            return Err("Instruction point addresses are fixed".into());
++        };
++        let addresses = normalize_point_addresses(addresses)?;
++        if self.entry.skip.get().is_some_and(|pc| addresses.binary_search(&pc).is_err()) {
++            self.entry.skip.set(None);
++        }
++        current.replace(addresses);
++        Ok(())
++    }
+     pub fn event(&self) -> Option<u64> {
+         self.entry.event.borrow_mut().take()
+     }
+@@ -417,18 +447,33 @@
+     pub fn instruction_points_begin(
+         &self,
+         core: usize,
+-        mut addresses: Vec<u64>,
++        addresses: Vec<u64>,
++    ) -> Result<Box<InstructionPoints>, String> {
++        self.instruction_points_begin_mode(core, addresses, PointSetMode::Fixed)
++    }
++    /// Address replacement retains the installed instruction hook.
++    pub fn instruction_points_begin_mutable(
++        &self,
++        core: usize,
++        addresses: Vec<u64>,
++    ) -> Result<Box<InstructionPoints>, String> {
++        self.instruction_points_begin_mode(core, addresses, PointSetMode::Mutable)
++    }
++    fn instruction_points_begin_mode(
++        &self,
++        core: usize,
++        addresses: Vec<u64>,
++        mode: PointSetMode,
+     ) -> Result<Box<InstructionPoints>, String> {
+         let cpu = self.cpu(core)?;
+-        if addresses.len() > 4096 || addresses.iter().any(|pc| pc & 1 != 0) {
+-            return Err("Instruction points require bounded aligned addresses".into());
+-        }
+-        addresses.sort_unstable();
+-        addresses.dedup();
++        let addresses = normalize_point_addresses(addresses)?;
+         let mut points = Box::new(InstructionPoints {
+             cpu: Rc::downgrade(&self.cpus[core]),
+             entry: Rc::new(EntryPoints {
+-                addresses: addresses.clone(),
++                addresses: match mode {
++                    PointSetMode::Fixed => PointAddresses::Fixed(addresses),
++                    PointSetMode::Mutable => PointAddresses::Mutable(RefCell::new(addresses)),
++                },
+                 pause: self.host_pause.clone(),
+                 event: RefCell::new(None),
+                 skip: Cell::new(None),
+@@ -442,20 +487,18 @@
+             return Ok(points);
+         }
+         let data = (&*points as *const InstructionPoints).cast_mut().cast();
+-        for pc in addresses {
+-            match unsafe {
+-                cpu.install_hook(Hook::Instruction {
+-                    callback: instruction,
+-                    data,
+-                    range: HookRange::Inclusive { begin: pc, end: pc },
+-                })
+-            } {
+-                Ok(id) => points.hooks.push(id),
+-                Err(error) => {
+-                    self.instruction_points_end(core, &mut points)?;
+-                    return Err(error);
+-                }
+-            }
++        let mut install = |range| -> Result<(), String> {
++            let id = unsafe { cpu.install_hook(Hook::Instruction { callback: instruction, data, range }) }?;
++            points.hooks.push(id);
++            Ok(())
++        };
++        let result = match &points.entry.addresses {
++            PointAddresses::Fixed(addresses) => addresses.iter().try_for_each(|&pc| install(HookRange::Inclusive { begin: pc, end: pc })),
++            PointAddresses::Mutable(_) => install(HookRange::All),
++        };
++        if let Err(error) = result {
++            self.instruction_points_end(core, &mut points)?;
++            return Err(error);
+         }
+         Ok(points)
+     }
