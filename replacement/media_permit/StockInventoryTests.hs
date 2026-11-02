@@ -97,3 +97,11 @@ main = do
     (retained [0xfa000000] == Left (FootprintThumb (GuestAddress 0x1000)))
   check "unclassified retained PC calculations remain explicit"
     (retained [0xe083f000] == Right (footprint [0x1000] [] [0x1000] []))
+  check "a canonical postindexed stack pop is an explicit retained return"
+    (retained [0xe49df004] == Right (footprint [0x1000] [] [] []))
+  check "a stack-indexed dispatch remains an unresolved retained transfer"
+    (retained [0xe79df000] == Right (footprint [0x1000] [] [0x1000] []))
+  check "a noncanonical stack offset PC load remains unresolved"
+    (retained [0xe59df004] == Right (footprint [0x1000] [] [0x1000] []))
+  check "a byte PC load is not a retained word return"
+    (retained [0xe4ddf004] == Right (footprint [0x1000] [] [0x1000] []))

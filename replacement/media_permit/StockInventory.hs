@@ -238,8 +238,10 @@ deriveRetainedFootprint (GuestAddress imageBase) image (GuestAddress entry) = do
           (next,_,unknown,called) <- branch address condition targetWord
           pure (next,pools,unknown,called)
         else pure ([address+4],pools,False,[])
-      A.Load condition _ _ destination base _ _ | destination == A.pc ->
-        pure (conditional address condition,[],base /= A.sp,[])
+      A.Load condition A.Word False destination base (A.OffsetImmediate 4) A.PostIndexed
+        | destination == A.pc && base == A.sp -> pure (conditional address condition,[],False,[])
+      A.Load condition _ _ destination _ _ _ | destination == A.pc ->
+        pure (conditional address condition,[],True,[])
       A.DataProcessing condition A.MOV _ destination _ (A.ShiftedImmediate source A.LSL 0)
         | destination == A.pc && source == A.lr -> pure (conditional address condition,[],False,[])
       A.DataProcessing condition _ _ destination _ _ | destination == A.pc ->

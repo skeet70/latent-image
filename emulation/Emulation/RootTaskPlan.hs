@@ -115,12 +115,13 @@ footprints files initial = walk (S.toList initial) S.empty S.empty S.empty S.emp
     checkTransfer pc = do
       raw <- sourceWord sources pc
       let instruction = A.decode pc raw
-          scheduler = pc `elem` [0x436e8,0x43758,0xd36e8,0xd3758]
+          dispatch = lookup pc [(0x436e8,(A.Reg 1,A.OffsetImmediate 28)),(0x43758,(A.Reg 2,A.OffsetImmediate 8))
+            ,(0xd36e8,(A.Reg 1,A.OffsetImmediate 28)),(0xd3758,(A.Reg 2,A.OffsetImmediate 8))]
           irqReturn = pc `elem` [0x40364,0xd0364,0x437d8,0xd37d8]
           admitted = case instruction of
             A.BranchExchange {} -> True
             A.DataProcessing _ A.MOV _ destination _ (A.ShiftedImmediate _ A.LSL 0) -> destination == A.pc
-            A.Load _ _ _ destination base _ _ -> destination == A.pc && (base == A.sp || scheduler)
+            A.Load _ A.Word False destination base offset A.OffsetOnly -> destination == A.pc && dispatch == Just (base,offset)
             A.LoadMultiple _ base _ _ registers -> base == A.sp && A.pc `elem` registers
             A.Rejected A.ExceptionReturn -> irqReturn
             _ -> False

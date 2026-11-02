@@ -9,6 +9,7 @@ import Data.Bits ((.&.), (.|.), xor)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as L
+import qualified Data.IntSet as IntSet
 import Data.List (findIndex)
 import Data.Word (Word32)
 import Emulation.EvidenceMutation (Part(..), field)
@@ -29,7 +30,7 @@ data Control = WrongSource | WrongArtifact | WrongCandidate | WrongContract | Du
   | WrongWriterCore | OtherWriterCore | ForeignWriter | CodeWrite | WrongKnownPreimage | MalformedStoppedFetch | WrongStoppedClock
   | MissingSample | MissingPool | WrongAlias | WrongCodeWord | WrappedCounts | WrongEntryContext | WrongEntryStack
   | WrongResourceArgument | MissingResourceCall | WrongResourceIdentity | WrongCheckedStatus | MissingSubmission | WrongDescriptorAddress
-  | WrongFlagIdentity | WrongFlagResult | WrongConstructorResult | WrongWrapperRegister | WrongCleanupSelector | WrongCleanupMask
+  | WrongFlagIdentity | WrongFlagTarget | WrongFlagResult | WrongConstructorTarget | WrongConstructorResult | WrongWrapperRegister | WrongCleanupSelector | WrongCleanupMask
   | WrongCallbackArgument | WrongCallbackResult | WrongCallbackFrame | WrongCallbackRestoration | MissingPostCleanupCallback
   | WrongIrqStatus | WrongIrqFrame | WrongIrqReturn | WrongIrqRestoration deriving (Eq, Show, Enum, Bounded)
 data ControlError = BaselineRejected WitnessError | MutationRejected Control | WrongRefusal Control WitnessError (Maybe WitnessError)
@@ -82,10 +83,11 @@ expected control = case control of
   WrappedCounts -> ClockRejected; WrongEntryContext -> ContextRejected; WrongEntryStack -> EntryRejected
   WrongResourceArgument -> CallRejected; MissingResourceCall -> CallRejected; WrongResourceIdentity -> ResourceRejected
   WrongCheckedStatus -> CallRejected; MissingSubmission -> SubmissionRejected; WrongDescriptorAddress -> SnapshotRejected
-  WrongFlagIdentity -> SubmissionRejected; WrongFlagResult -> FlagRejected; WrongConstructorResult -> CreationRejected
-  WrongWrapperRegister -> SubmissionRejected; WrongCleanupSelector -> CleanupRejected; WrongCleanupMask -> CleanupRejected
+  WrongFlagIdentity -> SubmissionRejected; WrongFlagTarget -> FlagRejected; WrongFlagResult -> FlagRejected
+  WrongConstructorTarget -> CreationRejected; WrongConstructorResult -> CreationRejected
+  WrongWrapperRegister -> SubmissionRejected; WrongCleanupSelector -> CleanupRejected; WrongCleanupMask -> ContextRejected
   WrongCallbackArgument -> CallbackRejected; WrongCallbackResult -> CallbackRejected; WrongCallbackFrame -> FrameRejected
-  WrongCallbackRestoration -> ReturnRejected; MissingPostCleanupCallback -> CallbackRejected
+  WrongCallbackRestoration -> ReturnRejected; MissingPostCleanupCallback -> CompletionRejected
   WrongIrqStatus -> IrqRejected; WrongIrqFrame -> FrameRejected; WrongIrqReturn -> ReturnRejected; WrongIrqRestoration -> ReturnRejected
 withHash :: Control -> ObservedFiles -> J.Value -> J.Value -> Either ControlError ObservedFiles
 withHash control original receipt watch = do
@@ -110,23 +112,15 @@ after :: Control -> Receipt -> Int -> (Sample -> Bool) -> Either ControlError In
 after control receipt index predicate = maybe (Left (MutationRejected control)) (Right . (+ (index+1)))
   (findIndex predicate (drop (index+1) (receiptSamples receipt)))
 dropSample :: Control -> Int -> J.Value -> Either ControlError J.Value
-dropSample control index receipt = do
+dropSample control index = dropSamples control (IntSet.singleton index)
+dropSamples :: Control -> IntSet.IntSet -> J.Value -> Either ControlError J.Value
+dropSamples control excluded receipt = do
   samples <- pathAt control [field "samples"] receipt >>= parse control :: Either ControlError [J.Value]
   hits <- pathAt control [field "hits"] receipt >>= parse control :: Either ControlError [J.Value]
-  let remove values = take index values ++ drop (index+1) values
+  let remove values = [value | (index,value) <- zip [0..] values,not (IntSet.member index excluded)]
   changedSamples <- zipWithM (\number value -> set control [field "hit"] number value) [0 :: Int ..] (remove samples)
   changed <- set control [field "samples"] changedSamples receipt
   set control [field "hits"] (remove hits) changed
-stopBefore :: Control -> Receipt -> Int -> J.Value -> J.Value -> Either ControlError (J.Value,J.Value)
-stopBefore control receipt index receiptValue watchValue = do
-  previous <- maybe (Left (MutationRejected control)) Right (case reverse (take index (receiptSamples receipt)) of value:_ -> Just value; [] -> Nothing)
-  rows <- pathAt control [field "records"] watchValue >>= parse control :: Either ControlError [J.Value]
-  watch <- set control [field "records"] (take (sampleCursor previous) rows) watchValue
-  changed <- foldM (\value name -> modifyAt control [field name] (\raw -> do
-    values <- parse control raw :: Either ControlError [J.Value]
-    pure (J.toJSON (take index values))) value) receiptValue ["samples","hits"]
-  ended <- set control [field "lifecycle_end_counts"] (W.contextCounts (state previous)) changed
-  pure (ended,watch)
 
 refusalControls :: Role -> SourceFiles -> ObservedFiles -> Either ControlError J.Value
 refusalControls role sources original = do
@@ -157,7 +151,6 @@ refusalControls role sources original = do
       let plain value = Right (Nothing,original {observedReceipt=encode value})
           source value = Right (Just value,original)
           changedWatch value = do observed <- withHash control original receiptValue value; pure (Nothing,observed)
-          both r w = do observed <- withHash control original r w; pure (Nothing,observed)
           samples = receiptSamples receipt
           sampleAt index = samples !! index
           primary sample = contextCore (sampleContext sample) == S.PrimaryKernel
@@ -267,7 +260,15 @@ refusalControls role sources original = do
         MissingSubmission -> do index <- submission; dropSample control index receiptValue >>= plain
         WrongDescriptorAddress -> alterRegister submission 0 (+4)
         WrongFlagIdentity -> alterRegister (at 0x725f08) 0 (`xor` 1)
+        WrongFlagTarget -> do
+          constructor <- at 0x725fa8
+          destination <- maybe (Left (MutationRejected control)) Right (register (sampleAt constructor) 3)
+          alterRegister (at 0x725f08) 3 (const destination)
         WrongFlagResult -> alterRegister (at 0x725f0c) 0 (const 0xffffffff)
+        WrongConstructorTarget -> do
+          flag <- at 0x725f08
+          destination <- maybe (Left (MutationRejected control)) Right (register (sampleAt flag) 3)
+          alterRegister (at 0x725fa8) 3 (const destination)
         WrongConstructorResult -> alterRegister (at 0x725fac) 0 (const 1)
         WrongWrapperRegister -> do
           entered <- submission
@@ -284,7 +285,10 @@ refusalControls role sources original = do
           returned <- after control receipt ending (\sample -> pc sample == Plan.physical (address (W.contextLr (state (sampleAt entered))))
             && contextCore (sampleContext sample) == contextCore (sampleContext (sampleAt entered)))
           alterRegister (Right returned) 4 (`xor` 1)
-        MissingPostCleanupCallback -> do index <- callback 0x69cc18; (r,w) <- stopBefore control receipt index receiptValue watchValue; both r w
+        MissingPostCleanupCallback -> do
+          let excluded = IntSet.fromList [index | (index,sample) <- zip [0..] samples,rootTerminated sample && pc sample == 0x69cc18]
+          unless (not (IntSet.null excluded)) (Left (MutationRejected control))
+          dropSamples control excluded receiptValue >>= plain
         WrongIrqStatus -> alterContext irq "spsr" (\value -> value .&. 0xffffffe0 .|. 0x12)
         WrongIrqFrame -> alterContext (irqAfter IrqFrame) "sp" (+4)
         WrongIrqReturn -> alterContext (irqAfter IrqReturn) "spsr" (`xor` 0x20000000)

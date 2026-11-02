@@ -640,6 +640,8 @@ checkSubmissions episodes executions pairs = do
                 0x725f08 -> do
                   require (case submissionStage episode of Submitted -> True; _ -> False) SubmissionRejected
                   require (register sample 0 == Right encoded) SubmissionRejected
+                  let table = case core of S.PrimaryKernel -> 0x4dae0; S.SecondaryKernel -> 0xddaa0
+                  require (register sample 3 == readWord FlagRejected memory (table+0x80)) FlagRejected
                   descriptor <- descriptorView ResourceDescriptor sample
                   fields <- wordsAt FlagRejected memory (address (viewPhysical descriptor)) 8
                   require (fields == [flagValue (publicationFlag publication),0]) FlagRejected
@@ -657,6 +659,8 @@ checkSubmissions episodes executions pairs = do
                 0x725fa8 -> do
                   actual <- case submissionStage episode of FlagsReady value -> Right value; _ -> Left SubmissionRejected
                   require (register sample 0 == Right encoded) CreationRejected
+                  let table = case core of S.PrimaryKernel -> 0x4dae0; S.SecondaryKernel -> 0xddaa0
+                  require (register sample 3 == readWord CreationRejected memory table) CreationRejected
                   descriptor <- descriptorView ResourceDescriptor sample
                   fields <- wordsAt CreationRejected memory (address (viewPhysical descriptor)) 24
                   require (take 5 fields == [2,argument,address (publicationEntry publication),priority,size]) CreationRejected
