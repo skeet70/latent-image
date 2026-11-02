@@ -9,16 +9,17 @@ const SAMPLE_LIMIT: usize = 32768;
 const WATCH_LIMIT: usize = 262144;
 const WATCH_WINDOW: u64 = 250_000;
 const SETTLE_LIMIT: u64 = 90_000_000;
-const PUMP_SITES: &[u32] = &[
+pub(super) const PUMP_SITES: &[u32] = &[
     0x6a9840, 0xc22f60, 0xc22f64, 0xc22f6c, 0xc22f70, 0xc22f74, 0xc22f84,
     0xbfb124, 0xc22bd0, 0xc22fb4, 0xc22fd4, 0xc22fd8, 0xc23094, 0xc230a0,
     0xc230b4, 0xc230c0, 0xc230d8, 0xc230f4, 0xc23104, 0xc23114, 0xc2311c,
     0xc2312c, 0xc2314c, 0xc23150, 0xc231ec, 0xc231fc, 0xc23274, 0xc23278,
     0xbfbd20, 0xbfbd24, 0xbfbd28, 0xbfbd2c, 0xbfbd30, 0xbfbd34, 0xbfbd38, 0xbfbd3c,
-    0xbfb1b8, 0xbfb20c, 0xbfb1e0, 0xdb5124, 0xdb515c, 0xdb5174, 0xdb5178, 0xdb51d0,
-    0x725214, 0x725318, 0x725378, 0x72537c, 0x7253c0, 0x7253f8, 0x7253fc, 0x725414, 0x725418, 0x72541c,
+    0xbfb1b8, 0xbfb20c, 0xbfb1e0, 0xdb5124, 0xdb515c, 0xdb5170, 0xdb5174, 0xdb5178, 0xdb51d0,
+    0x725214,
     0x11090a4, 0x1109130, 0x1108a2c, 0x110f9d8,
 ];
+pub(super) const SHARED_QUEUE_SITES: &[u32] = &[0x725318, 0x725378, 0x72537c, 0x7253c0, 0x7253f8, 0x7253fc, 0x725414, 0x725418, 0x72541c];
 #[derive(Clone, Copy)]
 pub(super) struct TaskLayout {
     pub(super) creation: Guest,
@@ -47,6 +48,40 @@ pub(super) fn watch_limits() -> bounded_gzip::Limits {
     Limits::new(compressed, decoded, decoded).expect("ordered raw-watch bounds")
 }
 
+pub(super) fn scope_limits() -> bounded_gzip::Limits {
+    use bounded_gzip::{ByteLimit, Limits};
+    Limits::new(
+        ByteLimit::new(16 * 1024 * 1024).expect("nonzero scope compressed bound"),
+        ByteLimit::new(128 * 1024 * 1024).expect("nonzero scope decoded bound"),
+        ByteLimit::new(1024 * 1024).expect("nonzero scope line bound"),
+    ).expect("ordered scope bounds")
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum ScopeWrite<'a> {
+    Begin { sample: SampleId, epoch: EpochId, config: &'a TraceStackScopeConfig, instructions: Count },
+    Site { site: Guest, epoch: EpochId, first_full_hit: RowIndex, instructions: Count },
+    Skip { hit: TraceStackSkip },
+    Finish { summary: &'a TraceStackScopeSummary },
+}
+fn write_scope(writer: &mut bounded_gzip::Writer<std::fs::File>, line: &mut Vec<u8>, record: &ScopeWrite<'_>) -> Result<(), Failure> {
+    line.clear();
+    serde_json::to_writer(&mut *line, record).map_err(|error| fail(Refusal::CaptureBound, error.to_string()))?;
+    writer.append(line).map_err(|error| fail(Refusal::CaptureBound, error.to_string()))
+}
+fn sampled_word(views: &[Words], address: Guest) -> Result<u32, Failure> {
+    let address = physical(address.0);
+    views.iter().find_map(|view| {
+        let offset = address.checked_sub(view.mapping.physical.0)?;
+        if offset & 3 != 0 { return None; }
+        view.values.get((offset / 4) as usize).copied()
+    }).ok_or_else(|| fail(Refusal::TaskContext, "frozen scope source word is absent"))
+}
+fn identity_layout(identity: u32) -> Result<TaskLayout, Failure> {
+    match identity { 0x4003 => Ok(TASK_LAYOUTS[0]), 0x5003 => Ok(TASK_LAYOUTS[1]), _ => Err(fail(Refusal::TaskContext, "unknown configured kernel identity")) }
+}
+
 struct Receive { core: Core, sp: Guest }
 
 pub(super) struct Capture {
@@ -55,6 +90,7 @@ pub(super) struct Capture {
     pub(super) epochs: Vec<PumpEpoch>,
     pub(super) inputs: Vec<Input>,
     pub(super) visible: Vec<Visible>,
+    pub(super) trace_scope: Option<FileBinding>,
 }
 pub(super) struct Runner<'a> {
     machine: &'a mut Machine,
@@ -73,6 +109,10 @@ pub(super) struct Runner<'a> {
     active_input: Option<InputId>,
     queue: Vec<Receive>,
     raw_views: RefCell<Vec<continuation_view::RawWords>>,
+    scoped_sites: BTreeSet<u32>,
+    dynamic_scopes: BTreeSet<u32>,
+    scope_output: Option<bounded_gzip::Writer<std::fs::File>>,
+    scope_line: Vec<u8>,
 }
 fn fail(reason: Refusal, error: impl Into<String>) -> Failure { Failure::new(reason, error) }
 fn checked<T>(reason: Refusal, result: Result<T, String>) -> Result<T, Failure> { result.map_err(|error| fail(reason, error)) }
@@ -105,9 +145,10 @@ impl<'a> Runner<'a> {
         machine.traces.arm(&machine.session, permanent.clone())?;
         let mut runner = Self {
             machine, catalog, maps, output, calls, permanent, pump_sites,
-            capture: Capture { loader: Observation::default(), samples: Vec::new(), epochs: Vec::new(), inputs: Vec::new(), visible: Vec::new() },
+            capture: Capture { loader: Observation::default(), samples: Vec::new(), epochs: Vec::new(), inputs: Vec::new(), visible: Vec::new(), trace_scope: None },
             watch: None, epoch_start: Count(0), published: false, epoch_views: Views::Observe, cursor: 0, active_input: None, queue: Vec::new(),
             raw_views: RefCell::new(Vec::new()),
+            scoped_sites: BTreeSet::new(), dynamic_scopes: BTreeSet::new(), scope_output: None, scope_line: Vec::with_capacity(1024),
         };
         runner.begin_watch().map_err(|failure| failure.detail)?;
         Ok(runner)
@@ -116,6 +157,9 @@ impl<'a> Runner<'a> {
         self.epoch_start = Count(self.machine.instructions());
         self.epoch_views = if self.published { Views::Fixed } else { Views::Observe };
         let mut ranges = watch_classes(self.published, self.machine.instructions() < 8_000_000);
+        for &site in &self.dynamic_scopes {
+            ranges.push(WatchRange { start: u64::from(site), end: u64::from(site) + 4, kinds: WatchKinds::CPU_FETCH.union(WatchKinds::WRITES).union(WatchKinds::HOST_READ) });
+        }
         for backing in checked(Refusal::Mapping, run::memory_backings(&self.machine.document))? {
             let end = backing.base.checked_add(backing.size as u64).ok_or_else(|| fail(Refusal::Mapping, "backing extent overflows"))?;
             ranges.push(WatchRange { start: backing.base, end, kinds: if self.published { WatchKinds::HOST_READ.union(WatchKinds::WRITES) } else { WatchKinds::HOST_READ } });
@@ -206,17 +250,78 @@ impl<'a> Runner<'a> {
     fn receiving(&self, core: Core, regs: &Registers) -> bool {
         self.queue.iter().any(|receive| receive.core == core && regs.r[11].checked_add(4) == Some(receive.sp.0) && regs.r[8] == 1)
     }
-    fn target(&mut self, target: Guest) -> Result<(), Failure> {
-        if target.0 & 3 != 0 { return Err(fail(Refusal::QueueProvenance, "queue service target is not aligned A32")); }
-        checked(Refusal::QueueProvenance, self.catalog.word(target))?;
+    fn begin_scope(&mut self) -> Result<(), Failure> {
+        if self.scope_output.is_some() { return Err(fail(Refusal::TaskContext, "UI stack scope was already frozen")); }
+        let (origin, config) = {
+            let sample = self.capture.samples.last().ok_or_else(|| fail(Refusal::TaskContext, "UI entry sample is absent"))?;
+            let layout = identity_layout(sample.identities[usize::from(sample.core)])?;
+            let creation = layout.creation.0;
+            let at = |offset| sampled_word(&sample.task, Guest(creation + offset));
+            let base = at(20)?;
+            let end = base.checked_add(at(16)?).ok_or_else(|| fail(Refusal::StackContext, "UI frozen stack overflows"))?;
+            if physical(sample.pc.0) != 0xc22f60 || physical(sampled_word(&sample.task, layout.current)?) != physical(layout.task.0)
+                || physical(sampled_word(&sample.task, Guest(layout.task.0 + 8))?) != physical(layout.creation.0)
+                || at(8)? != 0xc22f60 || at(4)? != 0 || at(12)? != 5 || at(16)? != 0xc00 || at(36)? != 1
+                || at(32)? & 0xffff != 1 || sampled_word(&sample.task, layout.ids)? != at(32)?
+                || base & 7 != 0 || physical(sample.registers.sp.0) != end || sample.registers.sp.0 & 7 != 0
+                || sample.registers.cpsr & 0x3f != 0x13 || sample.registers.r[0] != 0
+                || physical(sample.registers.r[1]) != physical(layout.task.0) || physical(sample.registers.r[2]) != physical(layout.creation.0) {
+                return Err(fail(Refusal::TaskContext, "UI entry does not establish the committed stack owner"));
+            }
+            let current = [Guest(physical(identity_layout(sample.identities[0])?.current.0)), Guest(physical(identity_layout(sample.identities[1])?.current.0))];
+            let config = checked(Refusal::StackContext, TraceStackScopeConfig::new([Guest(base), Guest(end)], Guest(physical(layout.task.0)), current))?;
+            (sample.id, config)
+        };
+        self.end_watch()?;
+        self.begin_watch()?;
+        let file = std::fs::OpenOptions::new().create_new(true).write(true).open(self.output.join("pump-stack-scope.json.gz")).map_err(|error| fail(Refusal::CaptureBound, error.to_string()))?;
+        self.scope_output = Some(bounded_gzip::Writer::new(file, scope_limits()));
+        write_scope(self.scope_output.as_mut().ok_or_else(|| fail(Refusal::CaptureBound, "scope writer absent"))?, &mut self.scope_line,
+            &ScopeWrite::Begin { sample: origin, epoch: EpochId(self.capture.epochs.len()), config: &config, instructions: Count(self.machine.instructions()) })?;
+        checked(Refusal::StackContext, self.machine.traces.begin_stack_scope(config))?;
+        let sites: [Guest; SHARED_QUEUE_SITES.len() * 2] = std::array::from_fn(|index| Guest(SHARED_QUEUE_SITES[index / 2] | if index & 1 == 0 { 0 } else { 0x40000000 }));
+        self.register_scoped_sites(&sites)
+    }
+    fn register_scoped_sites(&mut self, sites: &[Guest]) -> Result<(), Failure> {
+        checked(Refusal::StackContext, self.machine.traces.scope_stack_sites(&self.machine.session, sites))?;
         let mut added = BTreeMap::new();
-        for address in [physical(target.0), physical(target.0) | 0x40000000] {
-            self.pump_sites.insert(address);
-            self.permanent.insert(address, "application-pump-boundary".into());
-            if !self.machine.traces.sites.contains_key(&address) { added.insert(address, "application-pump-boundary".into()); }
+        let cursor = RowIndex(self.machine.traces.hits.len());
+        for &site in sites {
+            if !self.scoped_sites.insert(site.0) { continue; }
+            self.pump_sites.insert(site.0);
+            self.permanent.insert(site.0, "application-pump-boundary".into());
+            if !self.machine.traces.sites.contains_key(&site.0) { added.insert(site.0, "application-pump-boundary".into()); }
+            write_scope(self.scope_output.as_mut().ok_or_else(|| fail(Refusal::CaptureBound, "scope writer absent"))?, &mut self.scope_line,
+                &ScopeWrite::Site { site, epoch: EpochId(self.capture.epochs.len()), first_full_hit: cursor, instructions: Count(self.machine.instructions()) })?;
         }
-        if !added.is_empty() { checked(Refusal::QueueProvenance, self.machine.traces.add_sites(&self.machine.session, added))?; }
+        if !added.is_empty() { checked(Refusal::StackContext, self.machine.traces.add_sites(&self.machine.session, added))?; }
         Ok(())
+    }
+    fn flush_scope_skips(&mut self) -> Result<(), Failure> {
+        let Some(writer) = &mut self.scope_output else { return Ok(()); };
+        for hit in self.machine.traces.drain_stack_scope_skips() { write_scope(writer, &mut self.scope_line, &ScopeWrite::Skip { hit })?; }
+        Ok(())
+    }
+    fn finish_scope(&mut self) -> Result<(), Failure> {
+        self.flush_scope_skips()?;
+        let Some(mut writer) = self.scope_output.take() else { return Ok(()); };
+        let summary = self.machine.traces.stack_scope_summary().ok_or_else(|| fail(Refusal::CaptureBound, "scope summary absent"))?;
+        write_scope(&mut writer, &mut self.scope_line, &ScopeWrite::Finish { summary })?;
+        writer.finish().map_err(|error| fail(Refusal::CaptureBound, error.to_string()))?;
+        self.capture.trace_scope = Some(checked(Refusal::CaptureBound, binding(self.output, "pump-stack-scope.json.gz"))?);
+        Ok(())
+    }
+    fn target(&mut self, target: Guest) -> Result<(), Failure> {
+        let target = physical(target.0);
+        if target & 3 != 0 || PUMP_SITES.contains(&target) || SHARED_QUEUE_SITES.contains(&target) {
+            return Err(fail(Refusal::QueueProvenance, "queue service target is not an independent aligned A32 entry"));
+        }
+        checked(Refusal::QueueProvenance, self.catalog.word(Guest(target)))?;
+        if self.dynamic_scopes.contains(&target) { return Ok(()); }
+        self.end_watch()?;
+        self.dynamic_scopes.insert(target);
+        self.begin_watch()?;
+        self.register_scoped_sites(&[Guest(target), Guest(target | 0x40000000)])
     }
     fn task_views(&self, reader: &continuation_view::Reader<'_>) -> Result<Vec<Words>, Failure> {
         let mut views = Vec::new();
@@ -256,7 +361,7 @@ impl<'a> Runner<'a> {
         let mut packet = Vec::new();
         let address = physical(pc.0);
         if address == 0xdb5124 { packet.push(self.words(&reader, regs.r[0], 4)?); }
-        if address == 0x725318 { packet.push(self.words(&reader, regs.r[1], 3)?); }
+        if address == 0x725318 && regs.r[0] == 1 { packet.push(self.words(&reader, regs.r[1], 3)?); }
         if matches!(address, 0x725378 | 0x72537c | 0x7253c0 | 0x7253f8 | 0x7253fc | 0x725414 | 0x725418 | 0x72541c) && self.receiving(core, &regs) {
             let slot = self.words(&reader, regs.r[11].checked_sub(32).ok_or_else(|| fail(Refusal::QueueProvenance, "packet slot underflows"))?, 1)?;
             let pointer = slot.values[0];
@@ -319,16 +424,12 @@ impl<'a> Runner<'a> {
                 if self.queue.iter().any(|receive| receive.core == core && receive.sp == regs.sp) { return Err(fail(Refusal::QueueProvenance, "queue1 receive context overlaps an unfinished receive")); }
                 self.queue.push(Receive { core, sp: regs.sp });
             }
-            let queue_site = matches!(address, 0x725318 | 0x725378 | 0x72537c | 0x7253c0 | 0x7253f8 | 0x7253fc | 0x725414 | 0x725418 | 0x72541c);
             let receiving = if address == 0x725318 { regs.r[0] == 1 } else { self.receiving(core, &regs) };
             if receiving && matches!(address, 0x725378 | 0x725414) { self.target(Guest(regs.r[3]))?; }
             if receiving && address == 0x7253f8 { self.target(Guest(0x722054))?; }
-            let fixed_site = PUMP_SITES.contains(&address);
-            if self.pump_sites.contains(&pc.0) && (!queue_site || receiving) && (fixed_site || receiving) { self.sample(core, pc)?; }
-            if !fixed_site && receiving && self.pump_sites.contains(&pc.0) {
-                let aliases = [Guest(address), Guest(address | 0x40000000)];
-                checked(Refusal::QueueProvenance, self.machine.traces.remove_sites(&self.machine.session, &aliases))?;
-                for alias in aliases { self.pump_sites.remove(&alias.0); self.permanent.remove(&alias.0); }
+            if self.pump_sites.contains(&pc.0) {
+                self.sample(core, pc)?;
+                if address == 0xc22f60 { self.begin_scope()?; }
             }
             if receiving && address == 0x72541c { self.queue.retain(|receive| receive.core != core || regs.r[11].checked_add(4) != Some(receive.sp.0)); }
         }
@@ -342,6 +443,11 @@ impl<'a> Runner<'a> {
             let first_hit = self.cursor;
             let epoch_end = self.epoch_start.0.checked_add(WATCH_WINDOW).ok_or_else(|| fail(Refusal::CaptureBound, "watch endpoint overflows"))?;
             let outcome = self.machine.run(end.min(epoch_end) - before);
+            self.flush_scope_skips()?;
+            if let Some(violation) = self.machine.traces.stack_scope_summary().and_then(|summary| summary.violation.as_ref()) {
+                let reason = match violation { TraceStackViolation::OwnerOutsideStack { .. } => Refusal::StackContext, TraceStackViolation::SkipLimit { .. } | TraceStackViolation::CounterOverflow { .. } => Refusal::CaptureBound };
+                return Err(fail(reason, format!("scoped instruction observation refused: {violation:?}")));
+            }
             self.collect()?;
             checked(Refusal::Guest, self.machine.require_running())?;
             self.check_watch()?;
@@ -483,8 +589,9 @@ impl<'a> Runner<'a> {
     }
     pub(super) fn finish(&mut self) -> Result<(), Failure> {
         let partial = if self.raw_views.borrow().is_empty() { Ok(()) } else { self.save_views("pump-partial.views.json.gz").map(|_| ()) };
+        let scope = self.finish_scope();
         let watch = self.end_watch();
-        partial.and(watch)
+        partial.and(scope).and(watch)
     }
     pub(super) fn into_capture(self) -> Capture { self.capture }
 }

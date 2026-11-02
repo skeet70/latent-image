@@ -11,6 +11,8 @@ mod queue;
 mod controls;
 #[path = "application_pump_program.rs"]
 mod program;
+#[path = "application_pump_scope.rs"]
+mod scope;
 
 const METADATA_BYTES: u64 = 256 * 1024 * 1024;
 const INPUT_BYTES: u64 = 256 * 1024 * 1024;
@@ -122,7 +124,7 @@ pub(super) fn admit_inputs(original: &[u8], actual: &[u8], mode: Mode, catalog: 
     packaged_delta(original, actual, mode).and_then(|()| program::derive(catalog).map(|_| ())).map_err(|failure| format!("{:?}: {}", failure.reason, failure.detail))
 }
 fn identity(root: &Path, report: &PumpReport, canonical: &Catalog) -> Result<(Catalog, Profile, RunDocument), Failure> {
-    require(report.schema == 1 && matches!(report.outcome, Outcome::Captured) && report.loader.error.is_none() && report.loader.machine_failure.is_none(), Refusal::Guest, "capture did not complete")?;
+    require(report.schema == 2 && matches!(report.outcome, Outcome::Captured) && report.loader.error.is_none() && report.loader.machine_failure.is_none(), Refusal::Guest, "capture did not complete")?;
     let id = &report.identity;
     let observer = bounded(&std::env::current_exe().map_err(|error| refusal(Refusal::ArtifactIdentity, error.to_string()))?, INPUT_BYTES)?;
     require(Digest::of(&observer).as_str() == id.observer.as_str(), Refusal::ArtifactIdentity, "receipt producer differs from reviewed consumer binary")?;
@@ -244,7 +246,7 @@ fn task_context(sample: &Sample) -> Result<(), Failure> {
 }
 fn is_ui(pc: u32) -> bool {
     (0xc22f60..0xc2327c).contains(&pc) || (CARRIER.0..CARRIER.0 + 32).contains(&pc)
-        || matches!(pc, 0xbfb124 | 0xc22bd0 | 0xbfb1b8 | 0xbfb20c | 0xbfb1e0 | 0xdb5124 | 0xdb515c | 0xdb5174 | 0xdb5178 | 0xdb51d0)
+        || matches!(pc, 0xbfb124 | 0xc22bd0 | 0xbfb1b8 | 0xbfb20c | 0xbfb1e0 | 0xdb5124 | 0xdb515c | 0xdb5170 | 0xdb5174 | 0xdb5178 | 0xdb51d0)
 }
 struct PendingCall<'a> { before: &'a Sample, target: Guest, continuation: Guest, entered: bool, phase: usize }
 struct Invocation<'a> { entry: &'a Sample, phase: usize, call: Option<PendingCall<'a>>, result: Option<u32>, returned_instruction: bool }
@@ -484,7 +486,14 @@ fn inspect(root: &Path, report: &PumpReport, canonical: &Catalog) -> Result<Veri
             for (word, value) in carrier.values.iter().enumerate() { require(*value == catalog.word(Guest(CARRIER.0 + word as u32 * 4)).map_err(|error| refusal(Refusal::CodeIdentity, error))?.1, Refusal::CodeIdentity, "original or foreign carrier bytes executed")?; }
         }
     }
+    for hit in &hits {
+        let (pc, _, _) = shared::hit_location(hit);
+        if matches!(physical(pc), 0xc22fd4 | 0xc2314c | 0xdb5124 | 0xdb515c | 0xdb5170 | 0xdb5174 | 0xdb5178 | 0xdb51d0 | 0xc22fd8 | 0xc23150) {
+            require(report.samples.iter().filter(|sample| shared::hit_matches(hit, sample.pc, sample.core, sample.stop, &sample.registers)).count() == 1, Refusal::QueueProvenance, "raw UI adapter boundary lacks exactly one sample")?;
+        }
+    }
     epochs(root, report, published)?;
+    scope::check(root, report, &hits, &catalog)?;
     let sequence = sequences(report, &proof)?;
     queue::check(report)?;
     compare::visible(root, report, &document, &sequence)?;

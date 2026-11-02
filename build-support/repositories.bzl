@@ -70,6 +70,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/application_pump_controls.rs",
     "//emulation:fujimod-xm1/src/application_pump_program.rs",
     "//emulation:fujimod-xm1/src/application_pump_queue.rs",
+    "//emulation:fujimod-xm1/src/application_pump_scope.rs",
     "//emulation:fujimod-xm1/src/bridge.rs",
     "//emulation:fujimod-xm1/src/ff80.rs",
     "//emulation:fujimod-xm1/src/frame_capture.rs",

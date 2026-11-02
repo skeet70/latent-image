@@ -3,7 +3,7 @@ use std::os::unix::fs::symlink;
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum Control { CanonicalInput, StopClock, RawAlias, KernelIdentity, MissingInitialization, NormalizerResult, LostCalleeSave, RenderReadiness, WatchCoverage, PublishedWrite, PacketCopy, RelabelledOlderSample, TruncatedPlane }
+enum Control { CanonicalInput, StopClock, RawAlias, KernelIdentity, MissingInitialization, NormalizerResult, LostCalleeSave, RenderReadiness, WatchCoverage, PublishedWrite, PacketCopy, RelabelledOlderSample, TruncatedPlane, FrozenStackBound }
 impl Control {
     fn reason(self) -> Refusal { match self {
         Self::CanonicalInput => Refusal::ArtifactIdentity,
@@ -16,6 +16,7 @@ impl Control {
         Self::WatchCoverage => Refusal::CaptureBound,
         Self::PublishedWrite => Refusal::CodeIdentity,
         Self::PacketCopy => Refusal::QueueProvenance,
+        Self::FrozenStackBound => Refusal::StackContext,
     } }
     fn name(self) -> &'static str { match self {
         Self::CanonicalInput => "canonical-input", Self::StopClock => "stop-clock", Self::RawAlias => "raw-alias",
@@ -24,6 +25,7 @@ impl Control {
         Self::LostCalleeSave => "lost-callee-save", Self::RenderReadiness => "render-readiness",
         Self::WatchCoverage => "watch-coverage", Self::PublishedWrite => "published-write", Self::PacketCopy => "packet-copy",
         Self::RelabelledOlderSample => "relabelled-older-sample", Self::TruncatedPlane => "truncated-plane",
+        Self::FrozenStackBound => "frozen-stack-bound",
     } }
 }
 #[derive(Serialize)]
@@ -139,6 +141,22 @@ fn mutate(root: &Path, report: &mut PumpReport, control: Control) -> Result<(), 
             for bytes in target.aliases.iter_mut().flatten() { bytes[0] ^= 1; }
             write_gzip(root, &mut sample.raw_views, &raw, capture::raw_view_limits())?;
         }
+        Control::FrozenStackBound => {
+            let binding = report.trace_scope.as_mut().ok_or_else(|| refusal(Refusal::CaptureBound, "no scope-bound control stream"))?;
+            let mut records = scope::records(root, binding)?;
+            let Some(TraceScopeRecord::Begin { config, .. }) = records.first_mut() else { return Err(refusal(Refusal::CaptureBound, "no initial scope-bound control record")); };
+            let mut stack = config.stack();
+            stack[0].0 = stack[0].0.checked_add(8).ok_or_else(|| refusal(Refusal::StackContext, "control stack bound overflows"))?;
+            *config = fujimod_xm1::trace::TraceStackScopeConfig::new(stack, config.owner(), config.current()).map_err(|error| refusal(Refusal::StackContext, error))?;
+            let mut writer = capture::bounded_gzip::Writer::new(Vec::new(), capture::scope_limits());
+            for record in &records {
+                let bytes = serde_json::to_vec(record).map_err(|error| refusal(Refusal::Guest, error.to_string()))?;
+                writer.append(&bytes).map_err(|error| refusal(Refusal::CaptureBound, error.to_string()))?;
+            }
+            let bytes = writer.finish().map_err(|error| refusal(Refusal::CaptureBound, error.to_string()))?;
+            replace(root, &binding.path, &bytes)?;
+            binding.sha256 = Digest::of(&bytes);
+        }
     }
     Ok(())
 }
@@ -149,7 +167,7 @@ pub(super) fn run(source: &Path, output: &Path, catalog: &Catalog) -> Result<(),
         let baseline: PumpReport = parse(&original, Refusal::Guest)?;
         let baseline = inspect(&source, &baseline, catalog)?;
         let mut rows = Vec::new();
-        for control in [Control::CanonicalInput, Control::StopClock, Control::RawAlias, Control::KernelIdentity, Control::MissingInitialization, Control::NormalizerResult, Control::LostCalleeSave, Control::RenderReadiness, Control::WatchCoverage, Control::PublishedWrite, Control::PacketCopy, Control::RelabelledOlderSample, Control::TruncatedPlane] {
+        for control in [Control::CanonicalInput, Control::StopClock, Control::RawAlias, Control::KernelIdentity, Control::MissingInitialization, Control::NormalizerResult, Control::LostCalleeSave, Control::RenderReadiness, Control::WatchCoverage, Control::PublishedWrite, Control::PacketCopy, Control::RelabelledOlderSample, Control::TruncatedPlane, Control::FrozenStackBound] {
             let root = output.join(control.name());
             links(&source, &root)?;
             let mut report: PumpReport = parse(&original, Refusal::Guest)?;

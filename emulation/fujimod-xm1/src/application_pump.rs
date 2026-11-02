@@ -1,5 +1,6 @@
 use super::*;
 use fujimod_xm1::{guest::RouteKey, render::Probe};
+use fujimod_xm1::trace::{TraceStackScopeConfig, TraceStackScopeSummary, TraceStackSkip, TraceStackViolation};
 
 #[path = "application_pump_capture.rs"]
 mod capture;
@@ -179,6 +180,14 @@ enum Reachability { Unqualified, Observed { samples: Vec<SampleId> } }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct RouteCoverage { route: Route, reachability: Reachability }
 #[derive(Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum TraceScopeRecord {
+    Begin { sample: SampleId, epoch: EpochId, config: TraceStackScopeConfig, instructions: Count },
+    Site { site: Guest, epoch: EpochId, first_full_hit: RowIndex, instructions: Count },
+    Skip { hit: TraceStackSkip },
+    Finish { summary: TraceStackScopeSummary },
+}
+#[derive(Deserialize, Serialize)]
 struct PumpReport {
     schema: u32,
     mode: Mode,
@@ -192,6 +201,7 @@ struct PumpReport {
     inputs: Vec<Input>,
     visible: Vec<Visible>,
     routes: Vec<RouteCoverage>,
+    trace_scope: Option<FileBinding>,
 }
 
 fn file_identity(path: &Path, bytes: &[u8]) -> FileBinding {
@@ -294,7 +304,7 @@ fn produce(request: &Request) -> Result<(), String> {
     let result = runner.observe();
     let finish = runner.finish();
     let failure = result.err().or_else(|| finish.err());
-    let capture::Capture { loader, samples, epochs, inputs, visible } = runner.into_capture();
+    let capture::Capture { loader, samples, epochs, inputs, visible, trace_scope } = runner.into_capture();
     persist(&request.output.join("trace.json"), &machine.traces.hits)?;
     let loader = Report {
         schema: 1,
@@ -306,9 +316,9 @@ fn produce(request: &Request) -> Result<(), String> {
         epochs: Vec::new(), trace: binding(&request.output, "trace.json")?, static_calls: calls,
     };
     let report = PumpReport {
-        schema: 1, mode: request.mode, identity, checkpoint: Digest::of(&checkpoint), instructions: Count(machine.instructions()),
+        schema: 2, mode: request.mode, identity, checkpoint: Digest::of(&checkpoint), instructions: Count(machine.instructions()),
         outcome: failure.map_or(Outcome::Captured, |failure| Outcome::Refused { failure }),
-        loader, samples, epochs, inputs, visible,
+        loader, samples, epochs, inputs, visible, trace_scope,
         routes: [Route::RepeatedReceive, Route::PendingWork, Route::BackThenInput, Route::Unhandled, Route::ReceiveFailure, Route::ServiceFailure].into_iter().map(|route| RouteCoverage { route, reachability: Reachability::Unqualified }).collect(),
     };
     persist(&request.output.join("application-pump.json"), &report)?;
