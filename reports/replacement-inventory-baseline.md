@@ -1459,13 +1459,22 @@ Both separately bound natural runs admit 235 snapshots. B103 enters at 6,445,956
 
 The earlier retained observations remain refused: a root-data write inside an overbroad immutable prefix, then the unchanged row cap exhausted by unrelated generic-fill fetches (`E-INITIAL-IDLE-NATURAL-REFUSALS-150`). Source-derived code fences and actual-writer attribution correct those causes without a cap increase. The admitted watches contain 1,572 retained and 1,574 owned rows. The corrected host suites pass 43 expected refusal mutations per role; their earlier missing-repeat fixture failures remain recorded (`E-INITIAL-IDLE-CONTROLS-150`).
 
+#### Root104 source increment
+
+The root-only increment defines the complete 340-byte carrier in Rust, a finite emitted caller proof, canonical one-DAT staging and an opt-in root observer/independent consumer. The artifact body and the observer's corrected hook-order/submit-boundary changes have independent source review. Emitted Rust fit, host fixtures, staging, natural observations, comparison and serialized controls remain unexercised; source declarations are not runtime ownership.
+
+The consumer requires the ordered prefix and 97 resource effects, five executors and tasks95/60/59 with actual flags and constructor records, root-private stack/callee-save preservation, modeled IRQ restoration and the concrete cleanup lower operations. Termination must reach a different live selected task; a returning cleanup instead requires restored `-63` handback. A surviving periodic callback must execute and return after cleanup on a source-bound allocated task stack. Root's descriptor must remain unrepurposed throughout this interval.
+
+The observer retains complete task/flag/stack-pool writes and actual per-core writer-fetch attribution. Its source-derived code/literal guards reuse the seven-cell loader complement and do not promote the entire image4 prefix to immutable code. All fixed points precede the watch; only the runtime-known IRQ resume address changes membership in the reviewed bounded mutable-point hook. Unknown source transfers, unbound callback stacks, incomplete constructors, false stopped-only completion and unchanged cap exhaustion refuse. Root/idle joined composition, original-copy/computed-reference closure beyond this interval, standby93 and later application/scheduler/device ownership remain open.
+
+
 
 | #152 acceptance criterion | Current status and exact remaining fact |
 | --- | --- |
 | Bound entries, task/core/context, loop/handback and retained services | Both idle entries, stacks, code and IRQ/wait boundaries are admitted. Root104 service/handback execution and standby93's complete wake contract remain unqualified. |
-| Natural owned root104/idle102/idle103/standby93 execution | Partial: owned idle102 and idle103 execute naturally through repeated WFI. Root104 and standby93 still have no owned runtime implementation. |
+| Natural owned root104/idle102/idle103/standby93 execution | Partial: owned idle102 and idle103 execute naturally through repeated WFI. Root104 has a source-prepared Rust implementation but no admitted emitted or runtime result; standby93 has no owned implementation. |
 | Independent actions, task/IRQ, blocking/wakeup, repetition and handback comparisons | The retained/owned idle comparison passes with preserved task/IRQ state and repeated waits. Root/standby actions, coordination, blocking and required handback remain open. |
-| Wrong identity/context, lost coordination, forbidden effects and false-completion refusals | The finite emitted proof, nine producer regressions and 43 serialized controls per role qualify the idle scope. Root controls and the concrete standby event `0x2005d` mask1 producer/wake contract remain missing. |
+| Wrong identity/context, lost coordination, forbidden effects and false-completion refusals | The finite emitted proof, nine producer regressions and 43 serialized controls per role qualify the idle scope. Root controls are source-prepared but unexercised; the concrete standby event `0x2005d` mask1 producer/wake contract remains missing. |
 | Continuous body guards and shared-data/callback/stack/task lifetimes | The complete canonical idle carrier and observed live resources are guarded through aggregate 27,805,624. Original copies and computed call/read/copy references outside those entries, retained IRQ/callback dependencies after that endpoint, and any path that releases or repurposes idle nodes/stacks remain open. Root/standby guards and release are unqualified. |
 | Inventory, startup documentation and ledger separate later application, scheduler and device dependencies | Recorded with the measured host, refused attempts, admitted idle interval and controls. Later publication/application work, general scheduler and device/physical ownership remain separate; #152 is not closed. |
 

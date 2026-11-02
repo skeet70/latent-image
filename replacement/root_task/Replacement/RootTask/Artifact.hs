@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.RootTask.Artifact
   ( CanonicalSource, LinkedArtifact, StagedImage4, StagedCandidate, ArtifactError (..)
-  , canonicalSource, deriveArtifact, artifactProof, artifactBytes
+  , canonicalSource, canonicalProof, deriveArtifact, artifactProof, artifactBytes
   , stageImage4, stagedBytes, contractValue
   , stageCandidate, candidateBytes, candidateContractValue
   ) where
@@ -26,7 +26,7 @@ newtype DecodedImage4 = DecodedImage4 B.ByteString
 data SourceIdentities = SourceIdentities SourceIdentity SourceIdentity
 data ArtifactError = SourceMismatch | ExtentRejected | SymbolRejected | CodeRejected AdmissionError
   deriving (Eq, Show)
-data CanonicalSource = CanonicalSource OriginalDat DecodedImage4 SourceIdentities
+data CanonicalSource = CanonicalSource OriginalDat DecodedImage4 SourceIdentities RootProof
 data LinkedArtifact = LinkedArtifact B.ByteString SourceIdentity SourceIdentity RootProof
 data StagedImage4 = StagedImage4 CanonicalSource LinkedArtifact DecodedImage4
 data StagedCandidate = StagedCandidate StagedImage4 Image4.StagedCandidate
@@ -50,9 +50,12 @@ canonicalSource dat image = do
   derived <- either (const (Left SourceMismatch)) Right (Stock.deriveFunction (Stock.GuestAddress 0x61c400) image
     (Stock.FunctionWindow (Stock.GuestAddress origin) (Stock.GuestAddress limit)) [])
   require (derived == (origin,340)) SourceMismatch
-  _ <- either (Left . CodeRejected) Right
+  proof <- either (Left . CodeRejected) Right
     (deriveRootProof (B.take 340 (B.drop (fromIntegral (origin-0x61c400)) image)))
-  pure (CanonicalSource (OriginalDat dat) (DecodedImage4 image) (SourceIdentities datIdentity imageIdentity))
+  pure (CanonicalSource (OriginalDat dat) (DecodedImage4 image) (SourceIdentities datIdentity imageIdentity) proof)
+
+canonicalProof :: CanonicalSource -> RootProof
+canonicalProof (CanonicalSource _ _ _ proof) = proof
 
 deriveArtifact :: B.ByteString -> B.ByteString -> Either ArtifactError LinkedArtifact
 deriveArtifact bytes symbolBytes = do
@@ -91,7 +94,7 @@ artifactProof (LinkedArtifact _ _ _ proof) = proof
 artifactBytes :: LinkedArtifact -> B.ByteString
 artifactBytes (LinkedArtifact bytes _ _ _) = bytes
 stageImage4 :: CanonicalSource -> LinkedArtifact -> StagedImage4
-stageImage4 source@(CanonicalSource _ (DecodedImage4 original) _) artifact =
+stageImage4 source@(CanonicalSource _ (DecodedImage4 original) _ _) artifact =
   let linked = artifactBytes artifact
       offset = fromIntegral (origin-0x61c400)
       extent = fromIntegral (limit-origin)
@@ -101,7 +104,7 @@ stageImage4 source@(CanonicalSource _ (DecodedImage4 original) _) artifact =
 stagedBytes :: StagedImage4 -> B.ByteString
 stagedBytes (StagedImage4 _ _ (DecodedImage4 bytes)) = bytes
 stageCandidate :: Image4.Tools -> Image4.ScratchDirectory -> StagedImage4 -> IO StagedCandidate
-stageCandidate tools scratch staged@(StagedImage4 (CanonicalSource (OriginalDat original) _ _) _ (DecodedImage4 image)) = do
+stageCandidate tools scratch staged@(StagedImage4 (CanonicalSource (OriginalDat original) _ _ _) _ (DecodedImage4 image)) = do
   candidate <- Image4.runImage4Staging tools scratch original original image
   pure (StagedCandidate staged candidate)
 candidateBytes :: StagedCandidate -> B.ByteString
@@ -114,7 +117,7 @@ candidateContractValue (StagedCandidate staged candidate) = object
   , "candidate_image4_sha256" .= Image4.candidateImage4Sha256 candidate
   ]
 contractValue :: StagedImage4 -> Value
-contractValue (StagedImage4 (CanonicalSource _ _ (SourceIdentities datIdentity imageIdentity))
+contractValue (StagedImage4 (CanonicalSource _ _ (SourceIdentities datIdentity imageIdentity) _)
     (LinkedArtifact linked linkedIdentity symbolIdentity proof) (DecodedImage4 staged)) = object
   [ "schema" .= (1 :: Int), "qualification" .= ("finite-fixed-site-host-admission" :: String)
   , "entry" .= origin, "replaced_extent" .= [origin,limit]
