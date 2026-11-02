@@ -61,10 +61,10 @@ fn next<'a>(report:&'a Report,event:&Event,index:usize)->Result<&'a Event,String
     let following=report.events.iter().skip(event.id.0+1).find(|next|next.core==event.core).ok_or("timer-source provenance")?;
     source(following,index)?;require(event.instructions.0<following.instructions.0,"timer-source provenance")?;Ok(following)
 }
-fn actual<'a>(transactions:&'a [Transaction],fetch:&Row,event:&Event,address:Guest)->Result<&'a Transaction,String>{
-    let mut matching=transactions.iter().filter(|read|read.pc==event.pc&&read.cpu==event.core&&Some(read.tick)==fetch.tick);
-    let read=matching.next().ok_or("timer-read provenance")?;
-    require(matching.next().is_none()&&read.address==address&&read.size==4&&matches!(read.operation,Operation::Read)&&read.accepted&&read.value<=u64::from(u32::MAX),"timer-read provenance")?;Ok(read)
+fn actual<'a>(transactions:&'a [Transaction],fetch:&Row,event:&Event,address:Guest)->Result<(usize,&'a Transaction),String>{
+    let mut matching=transactions.iter().enumerate().filter(|(_,read)|read.pc==event.pc&&read.cpu==event.core&&Some(read.tick)==fetch.tick);
+    let (index,read)=matching.next().ok_or("timer-read provenance")?;
+    require(matching.next().is_none()&&read.address==address&&read.size==4&&matches!(read.operation,Operation::Read)&&read.accepted&&read.value<=u64::from(u32::MAX),"timer-read provenance")?;Ok((index,read))
 }
 fn write_matches(row:&Row,event:&Event,address:Guest,value:u32,rows:&[Row])->Result<(),String>{
     let executed=fetch(rows,event)?;
@@ -81,7 +81,7 @@ pub(super) fn admit(root:&Path,report:&Report,rows:&[Row])->Result<Admission,Str
     require(batch.omitted==0&&batch.transactions.len()<=observed.limit,"timer-transactions coverage differs")?;
     require(batch.transactions.windows(2).all(|pair|pair[0].tick<=pair[1].tick)&&batch.transactions.iter().all(|read|u64::from(read.address.0)>=observed.range[0]&&u64::from(read.address.0)+u64::from(read.size)<=observed.range[1]&&read.size>0),"timer-transactions order differs")?;
     batch.transactions.retain(|read|matches!(read.pc.0,0x41ad8|0x41adc));
-    let mut samples=Vec::new();let mut occurrences=[0usize;2];
+    let mut samples=Vec::new();let mut occurrences=[0usize;2];let mut consumed=[None;2];
     for begin in report.events.iter().filter(|event|event.pc.0==PCS[0]) {
         source(begin,0)?;let reload=next(report,begin,1)?;let count=next(report,reload,2)?;let subtract=next(report,count,3)?;let store=next(report,subtract,4)?;let after=next(report,store,5)?;
         require(startup.start.0<=begin.instructions.0&&after.instructions.0<=startup.end.0,"timer-source provenance")?;
@@ -94,15 +94,14 @@ pub(super) fn admit(root:&Path,report:&Report,rows:&[Row])->Result<Admission,Str
             let tick=fetch(rows,boundary)?.tick.ok_or("timer-read provenance")?;
             require(previous_tick.is_none_or(|previous|previous<=tick.0),"timer-read provenance")?;previous_tick=Some(tick.0);
         }
-        let reload_read=actual(&batch.transactions,reload_fetch,reload,Guest(0xfff91004))?;let count_read=actual(&batch.transactions,count_fetch,count,Guest(0xfff91000))?;
-        let reload_index=batch.transactions.iter().position(|read|std::ptr::eq(read,reload_read)).ok_or("timer-read provenance")?;
-        let count_index=batch.transactions.iter().position(|read|std::ptr::eq(read,count_read)).ok_or("timer-read provenance")?;
-        require(reload_index<count_index&&reload_read.tick.0<=count_read.tick.0,"timer-read provenance")?;
+        let (reload_index,reload_read)=actual(&batch.transactions,reload_fetch,reload,Guest(0xfff91004))?;let (count_index,count_read)=actual(&batch.transactions,count_fetch,count,Guest(0xfff91000))?;
+        let core=usize::from(begin.core);require(consumed[core].is_none_or(|previous|previous<reload_index)&&reload_index<count_index,"timer-read reuse")?;consumed[core]=Some(count_index);
+        require(reload_read.tick.0<=count_read.tick.0,"timer-read provenance")?;
         let reload_value=reload_read.value as u32;let count_value=count_read.value as u32;let value=reload_value.wrapping_sub(count_value);
         require(count.registers.r[1]==reload_value&&subtract.registers.r[1]==reload_value&&subtract.registers.r[2]==count_value,"timer-read provenance")?;
         require(store.registers.r[1]==reload_value&&store.registers.r[2]==value&&after.registers.r[2]==value,"timer-ring provenance")?;
         require(at(after,slot.0)?==value,"timer-ring provenance")?;
-        let core=usize::from(begin.core);samples.push(Sample {id:SampleId {core:begin.core,occurrence:Occurrence(occurrences[core]),ring:slot},value,store:store.id,after:after.id});occurrences[core]+=1;
+        samples.push(Sample {id:SampleId {core:begin.core,occurrence:Occurrence(occurrences[core]),ring:slot},value,store:store.id,after:after.id});occurrences[core]+=1;
     }
     require(!samples.is_empty()&&report.events.iter().filter(|event|event.pc.0==PCS[4]).count()==samples.len(),"timer-ring provenance")?;
     require(batch.transactions.len()==2*samples.len(),"timer-read provenance")?;

@@ -86,7 +86,7 @@ struct InputIdentity { run:Digest, update:Digest, update_file:FileBinding, rom:D
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all="kebab-case")]
 enum Access { CpuFetch, CpuRead, CpuWrite, HostRead, HostWrite, ModelBusRead, ModelBusWrite }
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 struct Row {source:Access,address:Guest,physical:Guest,size:u64,core:Option<Core>,pc:Option<Guest>,instructions:Option<Count>,value:Option<u64>,tick:Option<Tick>}
 #[derive(Deserialize, Serialize)]
 struct Class {range:[u64;2],kinds:Vec<Access>}

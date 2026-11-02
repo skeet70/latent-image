@@ -193,6 +193,7 @@ fn verified_receipt(root:&Path,analysis:&Path,receipt:Vec<u8>)->Result<Verified,
         let mut previous_cpu=epoch.start.0;let mut lower=None;
         for (index,row) in raw.records.iter().enumerate() {
             require(in_class(row,&raw.classes)?,"raw access lies outside its declared classes")?;
+            if startup&&matches!(row.source,Access::CpuWrite|Access::HostWrite|Access::ModelBusWrite){let end=u64::from(row.physical.0)+row.size;require([[0x41ad4,0x41aec],[0x41b78,0x41b84]].iter().all(|span|end<=span[0]||span[1]<=u64::from(row.physical.0)),"timer-source code write")?;}
             if matches!(row.source,Access::CpuRead|Access::CpuFetch|Access::CpuWrite){
                 let count=row.instructions.ok_or("CPU access clock absent")?.0;
                 if startup&&count==epoch.start.0&&row.source==Access::CpuFetch{require(row.core==Some(origin.core)&&row.pc==Some(origin.pc)&&row.address==origin.pc&&row.physical==origin.pc,"loader carrier fetch attribution differs")?;}
@@ -551,7 +552,7 @@ mod tests {
         #[derive(Serialize)]
         struct RewrittenWatch<'a> {enabled:bool,views:WatchViews,violation:Option<()>,classes:&'a [Class],records:&'a [Row]}
         let bytes=serde_json::to_vec(&RewrittenWatch {enabled:raw.enabled,views:raw.views,violation:None,classes:&raw.classes,records:&raw.records}).expect("serialize raw watch");
-        let name="mutated-watch.json";std::fs::write(root.0.join(name),&bytes).expect("write raw watch");
+        let name=format!("mutated-watch-{index}.json");std::fs::write(root.0.join(&name),&bytes).expect("write raw watch");
         report.epochs[index].file=FileBinding {path:name.into(),sha256:Digest::of(&bytes)};report.epochs[index].record_count=raw.records.len();root.receipt(report);
     }
     #[derive(Deserialize)]
@@ -607,6 +608,68 @@ mod tests {
     fn schema_two_cannot_admit_without_actual_timer_read_evidence(){
         let root=Temporary::new();let mut report=synthetic_unqualified_report();report.schema=2;root.receipt(&report);
         assert!(matches!(check(&root.0,&root.0.join("absent-analysis")),Err(reason) if reason=="observation did not complete"));
+    }
+    #[test]
+    #[ignore="requires schema3 LOADER_CONTINUATIONS_RETAINED and LOADER_CONTINUATIONS_ANALYSIS"]
+    fn serialized_samples_cannot_reuse_an_earlier_device_read_pair(){
+        let (root,mut report,analysis)=admitted_fixture("LOADER_CONTINUATIONS_RETAINED");
+        let begin=report.events.iter().position(|event|event.pc==Guest(0x41ad4)).expect("source sample");
+        let core=report.events[begin].core;let mut cursor=begin;
+        let original:[Event;6]=std::array::from_fn(|index|{
+            if index!=0{cursor+=1;cursor+=report.events[cursor..].iter().position(|event|event.core==core).expect("same-core source continuation");}
+            report.events[cursor].clone()
+        });
+        assert_eq!(original.each_ref().map(|event|event.pc.0),[0x41ad4,0x41ad8,0x41adc,0x41ae0,0x41ae4,0x41ae8]);
+        let (startup,raw)=watch(&root,&report,WatchStage::Startup);
+        let fetches:[Row;6]=std::array::from_fn(|index|*raw.records.iter().find(|row|row.source==Access::CpuFetch&&row.pc==Some(original[index].pc)&&row.core==Some(core)&&row.instructions==Some(Count(original[index].instructions.0+1))).expect("executed source fetch"));
+        let stored=*raw.records.iter().find(|row|row.source==Access::CpuWrite&&row.pc==Some(Guest(0x41ae4))&&row.instructions==Some(Count(original[4].instructions.0+1))).expect("raw ring store");
+        let slot=original[0].registers.r[3]+0x40;let value=at(&original[5],slot).expect("stored elapsed");
+        let cutoff=original[5].instructions;let cutoff_tick=fetches[5].tick.expect("source tick");let insertion=original[5].id.0+1;
+        let ticks:[Tick;6]=std::array::from_fn(|index|Tick(cutoff_tick.0+index as u64+1));
+        for event in &mut report.events{if event.instructions>cutoff{event.instructions.0+=6;}}
+        let shift=|id:&mut super::super::EventId|{if id.0>=insertion{id.0+=6;}};
+        if let Some(origin)=&mut report.origin{shift(origin);}
+        for call in &mut report.calls{for id in [&mut call.before,&mut call.entry,&mut call.returned].into_iter().flatten(){shift(id);}}
+        for snapshot in &mut report.snapshots{shift(&mut snapshot.event);}
+        let repeated:[Event;6]=std::array::from_fn(|index|{
+            let mut event=original[index].clone();event.instructions=Count(cutoff.0+index as u64+1);
+            let projected=event.state.iter_mut().find(|view|view.mapping.guest==Guest(slot)).expect("ring projection");projected.values[0]=value;event
+        });
+        report.events.splice(insertion..insertion,repeated);
+        for (index,event) in report.events.iter_mut().enumerate(){event.id=super::super::EventId(index);}
+        for index in 0..report.epochs.len(){
+            let stage=report.epochs[index].stage;let (_,mut raw)=watch(&root,&report,stage);
+            for row in &mut raw.records{
+                if let Some(clock)=&mut row.instructions{if clock.0>cutoff.0+1{clock.0+=6;}}
+                if let Some(tick)=&mut row.tick{if *tick>cutoff_tick{tick.0+=6;}}
+            }
+            if index==startup{
+                for step in 0..6{
+                    let mut row=fetches[step];row.instructions=Some(Count(cutoff.0+step as u64+2));row.tick=Some(ticks[step]);
+                    let position=raw.records.iter().position(|existing|existing.instructions.is_some_and(|clock|clock>row.instructions.expect("new fetch clock"))).unwrap_or(raw.records.len());raw.records.insert(position,row);
+                    if step==4{let mut row=stored;row.instructions=Some(Count(cutoff.0+6));row.tick=Some(ticks[4]);let position=raw.records.iter().position(|existing|existing.instructions.is_some_and(|clock|clock>row.instructions.expect("new store clock"))).unwrap_or(raw.records.len());raw.records.insert(position,row);}
+                }
+            }
+            replace_watch(&root,&mut report,index,&raw);
+        }
+        let mut timer:TimerReceipt=serde_json::from_slice(&read(&root.0.join(&report.timer_transactions.path)).expect("actual timer evidence")).expect("timer receipt");
+        let batch=&mut timer.batch.as_mut().expect("complete timer batch").transactions;
+        let duplicate:[TimerRead;2]=std::array::from_fn(|index|{
+            let pc=original[index+1].pc.0;let tick=fetches[index+1].tick.expect("read tick");
+            let read=batch.iter().find(|read|read.cpu==core&&read.pc==u64::from(pc)&&read.tick==tick).expect("actual device read");
+            TimerRead {cpu:read.cpu,pc:read.pc,address:read.address,size:read.size,operation:TimerOperation::Read,value:read.value,accepted:read.accepted,tick:ticks[index+1]}
+        });
+        for read in batch.iter_mut(){if read.tick>cutoff_tick{read.tick.0+=6;}}
+        batch.extend(duplicate);batch.sort_by_key(|read|read.tick);replace_timer(&root,&mut report,&timer);replace_trace(&root,&mut report);
+        assert!(check(&root.0,&analysis).is_ok(),"serialized two-sample source relation must admit");
+        let (_,mut raw)=watch(&root,&report,WatchStage::Startup);
+        for step in 0..6{
+            let clock=Count(cutoff.0+step as u64+2);
+            let row=raw.records.iter_mut().find(|row|row.source==Access::CpuFetch&&row.instructions==Some(clock)&&row.pc==Some(original[step].pc)).expect("repeated source fetch");row.tick=fetches[step].tick;
+            if step==4{let row=raw.records.iter_mut().find(|row|row.source==Access::CpuWrite&&row.instructions==Some(clock)&&row.pc==Some(Guest(0x41ae4))).expect("repeated ring store");row.tick=fetches[step].tick;}
+        }
+        replace_watch(&root,&mut report,startup,&raw);
+        assert!(matches!(check(&root.0,&analysis),Err(reason) if reason=="timer-read reuse"));
     }
     #[test]
     #[ignore="requires schema3 LOADER_CONTINUATIONS_RETAINED and LOADER_CONTINUATIONS_ANALYSIS"]

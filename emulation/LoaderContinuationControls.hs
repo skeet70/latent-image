@@ -60,7 +60,9 @@ data TimerChange = TimerBinding | TimerSchema | TimerBatch | TimerError | TimerO
   | TimerOrder | TimerCpu | TimerPc | TimerAddress | TimerSize | TimerOperation | TimerAccepted | TimerTick | TimerValue | TimerMissingRead | TimerFetchTick
   | TimerSubtraction | TimerRingState | TimerRingWrite | TimerRingWriteTick | TimerCopyRegister | TimerCopyState | TimerCopyWrite | TimerCopyWriteTick | TimerLifetime
   | TimerSourceCore | TimerSourceChronology | TimerSourceInstruction
+  | TimerCpuCodeWrite | TimerHostCodeWrite | TimerModelCodeWrite | TimerRestoredCodeWrite
   deriving (Enum, Bounded)
+data CodeWriteStyle = IdenticalWord | RestoredWord
 
 creationIndex :: CreationField -> Int
 creationIndex CreationArgument = 1
@@ -804,6 +806,29 @@ fetchControl change fixture = do
         OwnedPaddingFetch -> setPc 0x40ac4
       modifyWatch 1 (setAt [field "records",Element index] updated) fixture
 
+timerCodeWrite :: Access -> CodeWriteStyle -> Fixture -> Either String Fixture
+timerCodeWrite access style fixture = do
+  source <- case access of
+    CpuWrite -> Right ("cpu-write"::String)
+    HostWrite -> Right "host-write"
+    ModelBusWrite -> Right "model-bus-write"
+    _ -> Left "code-write control requires a writer"
+  identifier <- firstEvent fixture (GuestAddress 0x41ae8)
+  canonical <- eventAt fixture identifier >>= numberAt [field "code",field "values",Element 0]
+  modifyWatch 1 (modifyAt [field "records"] (\value -> do
+    rows <- arrayAt [] value
+    selected <- forM (zip [0::Int ..] rows) $ \(index,row) -> do
+      kind <- parseAccess row
+      selectedPc <- if kind==CpuFetch then (==GuestAddress 0x41ae8) <$> guestAt [field "pc"] row else Right False
+      pure (index,row,selectedPc)
+    (index,row,_) <- firstIndex "timer source fetch absent" [candidate | candidate@(_,_,True) <- selected]
+    stored <- setAt [field "source"] source row >>= setAt [field "value"] canonical
+    writes <- case style of
+      IdenticalWord -> Right [stored]
+      RestoredWord -> do changed <- setAt [field "value"] (canonical `xor` 1) stored;Right [changed,stored]
+    let (before,after) = splitAt index rows
+    Right (J.toJSON (before++writes++after)))) fixture
+
 timerControl :: TimerChange -> Fixture -> Either String Fixture
 timerControl change fixture = case change of
   TimerBinding -> modifyReceipt [field "timer_transactions",field "sha256"] (const (Right (J.toJSON (replicate 64 '0')))) fixture
@@ -814,6 +839,10 @@ timerControl change fixture = case change of
   TimerWindow -> modifyTimer (modifyAt [field "start"] increment) fixture
   TimerRange -> modifyTimer (setAt [field "range"] ([0xfff91000,0xfff91004]::[Word64])) fixture
   TimerLimit -> modifyTimer (setAt [field "limit"] (1::Int)) fixture
+  TimerCpuCodeWrite -> timerCodeWrite CpuWrite IdenticalWord fixture
+  TimerHostCodeWrite -> timerCodeWrite HostWrite IdenticalWord fixture
+  TimerModelCodeWrite -> timerCodeWrite ModelBusWrite IdenticalWord fixture
+  TimerRestoredCodeWrite -> timerCodeWrite HostWrite RestoredWord fixture
   TimerSourceCore -> do
     identifier <- firstEvent fixture (GuestAddress 0x41ad4)
     modifyEvent identifier [field "core"] flipBit fixture >>= syncEvent identifier
@@ -878,6 +907,8 @@ timerControlName change = "timer-"++case change of
   TimerCopyRegister -> "wrong-copy-register"; TimerCopyState -> "wrong-latched-word"; TimerCopyWrite -> "wrong-raw-latched-write"; TimerLifetime -> "wrong-latched-lifetime"
   TimerRingWriteTick -> "wrong-raw-ring-write-tick"; TimerCopyWriteTick -> "wrong-raw-latched-write-tick"
   TimerSourceCore -> "wrong-source-core"; TimerSourceChronology -> "wrong-source-chronology"; TimerSourceInstruction -> "wrong-source-instruction"
+  TimerCpuCodeWrite -> "same-value-source-cpu-write"; TimerHostCodeWrite -> "same-value-source-host-write"
+  TimerModelCodeWrite -> "same-value-source-model-write"; TimerRestoredCodeWrite -> "source-write-then-restore"
 
 timerReason :: TimerChange -> String
 timerReason change = case change of
@@ -893,6 +924,8 @@ timerReason change = case change of
   TimerLifetime -> "timer-state provenance"
   TimerSourceCore -> "timer-source provenance"; TimerSourceChronology -> "timer-source provenance"
   TimerSourceInstruction -> "entered source instruction differs"
+  TimerCpuCodeWrite -> "timer-source code write"; TimerHostCodeWrite -> "timer-source code write"
+  TimerModelCodeWrite -> "timer-source code write"; TimerRestoredCodeWrite -> "timer-source code write"
   where
     coverage = "timer-transactions coverage differs"
     readReason = "timer-read provenance"
