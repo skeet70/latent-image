@@ -32,7 +32,7 @@ main = do
     [ (UnmodelledPcWrite DataDestination,0,0xe1a0f000)
     , (UnmodelledPcWrite DataDestination,0,0xe28df004)
     , (UnmodelledPcWrite DataDestination,0,0x01a0f000)
-    , (UnmodelledPcWrite DataDestination,0,0xe300f000)
+    , (UnsupportedInstruction,0,0xe300f000)
     , (UnmodelledPcWrite LoadDestination,0,0xe59df000)
     , (UnmodelledPcWrite LoadDestination,0,0x0590f000)
     , (UnmodelledPcWrite MultipleDestination,0,0xe8908000)
