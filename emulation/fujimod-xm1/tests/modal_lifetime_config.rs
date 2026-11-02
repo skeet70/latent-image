@@ -9,9 +9,10 @@ fn context_sources() -> Vec<Value> {
     let stores = [
         (0x40240, 0xe582_0000u32), (0x4031c, 0xe582_3000), (0x436b8, 0xe582_1000),
         (0x43690, 0xe586_3000), (0x436f0, 0xe586_3000), (0x43720, 0xe586_3000),
-        (0x43848, 0xe583_2000), (0xd0240, 0xe582_0000), (0xd031c, 0xe582_3000),
+        (0x43848, 0xe583_2000), (0x42440, 0xe583_5000), (0x4dad4, 0xffff_ffff),
+        (0xd0240, 0xe582_0000), (0xd031c, 0xe582_3000),
         (0xd36b8, 0xe582_1000), (0xd3690, 0xe586_3000), (0xd36f0, 0xe586_3000),
-        (0xd3720, 0xe586_3000), (0xd3848, 0xe583_2000),
+        (0xd3720, 0xe586_3000), (0xd3848, 0xe583_2000), (0xd2440, 0xe583_5000), (0xdda98, 0xffff_ffff),
     ];
     let mut result = Vec::new();
     for (base, end) in [(0x40000u32, 0x4dae0u32), (0xd0000, 0xddaa0)] {
@@ -78,13 +79,15 @@ fn complete_stock_and_scoped_source_declarations_own_the_lifetime_watch() {
 
 #[test]
 fn every_context_span_and_its_actual_store_words_are_required() {
-    for case in 0..4 {
+    for case in 0..6 {
         let mut value = request(true);
         match case {
             0 => { value["context_sources"].as_array_mut().unwrap().pop(); }
             1 => { value["context_sources"][0]["bytes"].as_array_mut().unwrap().pop(); }
             2 => value["context_sources"][0]["start"] = json!(0x40004),
-            _ => value["context_sources"][0]["bytes"][(0x40240 - 0x40000) as usize] = json!(1),
+            3 => value["context_sources"][0]["bytes"][(0x40240 - 0x40000) as usize] = json!(1),
+            4 => value["context_sources"][7]["bytes"][(0x42440 - 0x40404) as usize] = json!(1),
+            _ => value["context_sources"][15]["bytes"][(0xdda98 - 0xd0404) as usize] = json!(0),
         }
         assert!(!accepted(value));
     }

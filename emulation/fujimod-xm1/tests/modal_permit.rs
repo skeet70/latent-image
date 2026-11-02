@@ -983,6 +983,28 @@ fn only_zero_context_irq_enabled_little_endian_a32_svc_execution_is_admitted() {
 }
 
 #[test]
+fn lazy_vfp_owner_words_are_unowned_or_created_tasks_and_the_current_task_needs_no_svc_context() {
+    for (core, kernel) in [(0, KernelId::Primary), (1, KernelId::Secondary)] {
+        let mut memory = TaskMemory::new(kernel, 7);
+        memory.put(kernel.context_cell(), 1);
+        let current = modal_task::current_task_id(&memory, CoreId(core)).unwrap();
+        assert_eq!(current.get(), 7);
+        assert_eq!(modal_task::vfp_owner(&memory, kernel, VfpOwner::UNOWNED), Ok(VfpOwner::Unowned));
+        assert_eq!(modal_task::vfp_owner(&memory, kernel, 7), Ok(VfpOwner::Task(current)));
+        for value in [0, 121, 0x8000_0007] {
+            assert_eq!(modal_task::vfp_owner(&memory, kernel, value), Err(TaskError::InvalidVfpOwner(value)));
+        }
+        assert!(modal_task::vfp_owner(&memory, kernel, 8).is_err());
+        memory.put(Guest(memory.creation.0 + 36), 0);
+        assert_eq!(modal_task::vfp_owner(&memory, kernel, 7), Err(TaskError::NotCreated(0)));
+        assert_eq!(modal_task::current_task_id(&memory, CoreId(core)), Err(TaskError::NotCreated(0)));
+    }
+    let memory = TaskMemory::new(KernelId::Secondary, 7);
+    assert_eq!(modal_task::current_task_id(&memory, CoreId(0)),
+        Err(TaskError::WrongKernel { core: CoreId(0), observed: KernelId::Secondary }));
+}
+
+#[test]
 fn nonzero_svc_handler_context_cannot_enter_continue_or_return_owned_code() {
     let layout = scoped_layout();
     for pc in [STOCK_ENTRY, SEAM, OWNED, Guest(OWNED.0 + 4), RETURN] {

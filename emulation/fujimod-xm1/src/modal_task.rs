@@ -25,11 +25,25 @@ impl KernelId {
     const fn creations(self) -> Guest {
         match self { Self::Primary => Guest(0x4005_beac), Self::Secondary => Guest(0x400e_be6c) }
     }
+    /// Lazy-VFP owner word, stored with TPIDRURW by the undefined-instruction handler at 0x42440/0xd2440.
+    pub const fn vfp_owner_cell(self) -> Guest {
+        match self { Self::Primary => Guest(0x0004_dad4), Self::Secondary => Guest(0x000d_da98) }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TaskId(NonZeroU16);
 impl TaskId { pub const fn get(self) -> u16 { self.0.get() } }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VfpOwner { Unowned, Task(TaskId) }
+impl VfpOwner {
+    /// Loader image value before any task traps on VFP.
+    pub const UNOWNED: u32 = 0xffff_ffff;
+    pub const fn word(self) -> u32 {
+        match self { Self::Unowned => Self::UNOWNED, Self::Task(id) => id.get() as u32 }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TaskNode(Guest);
@@ -83,6 +97,7 @@ pub struct SourceLayout {
     pub current: PhysicalExtent,
     pub nodes: PhysicalExtent,
     pub creations: PhysicalExtent,
+    pub vfp_owner: PhysicalExtent,
 }
 
 pub fn source_layouts() -> [SourceLayout; 2] {
@@ -96,6 +111,7 @@ pub fn source_layouts() -> [SourceLayout; 2] {
             context: extent(kernel.context_cell(), 4),
             nodes: extent(kernel.nodes(), NODE_BYTES * TASK_COUNT),
             creations: extent(kernel.creations(), CREATION_BYTES * TASK_COUNT),
+            vfp_owner: extent(kernel.vfp_owner_cell(), 4),
         }
     })
 }
@@ -127,6 +143,7 @@ pub enum TaskError {
     InvalidAddress(Guest),
     InvalidExtent { address: Guest, bytes: u32 },
     StackPointerOutside { sp: Guest, stack: StackExtent },
+    InvalidVfpOwner(u32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,16 +193,41 @@ fn validate_cpsr(cpsr: Cpsr) -> Result<(), TaskError> {
 pub fn sample(
     memory: &impl ValidatedTaskMemory, execution_core: CoreId, sp: Guest, cpsr: Cpsr,
 ) -> Result<TaskExecution, TaskError> {
-    let local_kernel = match execution_core.0 {
-        0 => KernelId::Primary,
-        1 => KernelId::Secondary,
-        _ => return Err(TaskError::InvalidCore(execution_core)),
-    };
+    let local_kernel = local_kernel(execution_core)?;
     validate_cpsr(cpsr)?;
     let depth = word(memory, local_kernel.context_cell())?;
     if depth != 0 { return Err(TaskError::ContextNonzero { kernel: local_kernel, depth }); }
-    let current_cell = local_kernel.current_cell();
-    let pointer = Guest(word(memory, current_cell)?);
+    let (identity, creation_words) = current_task(memory, execution_core)?;
+    let stack = StackExtent(PhysicalExtent::new(Guest(creation_words[5]), creation_words[4])?);
+    memory.validate_stack(stack).map_err(TaskError::Memory)?;
+    stack.validate_sp(sp)?;
+    Ok(TaskExecution { identity, stack, creation_words, execution_core })
+}
+
+/// The current task of `core`'s kernel, without the task-execution mode and context-depth checks of [`sample`].
+pub fn current_task_id(memory: &impl ValidatedTaskMemory, core: CoreId) -> Result<TaskId, TaskError> {
+    current_task(memory, core).map(|(identity, _)| identity.id)
+}
+
+/// Parses a lazy-VFP owner word: the loader's unowned value or the ID of a created task of `kernel`.
+pub fn vfp_owner(memory: &impl ValidatedTaskMemory, kernel: KernelId, value: u32) -> Result<VfpOwner, TaskError> {
+    if value == VfpOwner::UNOWNED { return Ok(VfpOwner::Unowned); }
+    if value == 0 || value > TASK_COUNT { return Err(TaskError::InvalidVfpOwner(value)); }
+    let (identity, _) = created_task(memory, kernel, value - 1)?;
+    Ok(VfpOwner::Task(identity.id))
+}
+
+fn local_kernel(core: CoreId) -> Result<KernelId, TaskError> {
+    match core.0 {
+        0 => Ok(KernelId::Primary),
+        1 => Ok(KernelId::Secondary),
+        _ => Err(TaskError::InvalidCore(core)),
+    }
+}
+
+fn current_task(memory: &impl ValidatedTaskMemory, core: CoreId) -> Result<(TaskIdentity, [u32; 10]), TaskError> {
+    let local_kernel = local_kernel(core)?;
+    let pointer = Guest(word(memory, local_kernel.current_cell())?);
     if pointer.0 == 0 { return Err(TaskError::NullCurrent); }
     if pointer.0 % 4 != 0 { return Err(TaskError::MisalignedNode(pointer)); }
     let kernel = [KernelId::Primary, KernelId::Secondary].into_iter().find(|kernel| {
@@ -194,11 +236,15 @@ pub fn sample(
     }).ok_or(TaskError::OutsideNodeArrays(pointer))?;
     let offset = pointer.0 - kernel.nodes().0;
     if offset % NODE_BYTES != 0 { return Err(TaskError::MisalignedNode(pointer)); }
-    if kernel != local_kernel { return Err(TaskError::WrongKernel { core: execution_core, observed: kernel }); }
-    let index = offset / NODE_BYTES;
+    if kernel != local_kernel { return Err(TaskError::WrongKernel { core, observed: kernel }); }
+    created_task(memory, kernel, offset / NODE_BYTES)
+}
+
+fn created_task(memory: &impl ValidatedTaskMemory, kernel: KernelId, index: u32) -> Result<(TaskIdentity, [u32; 10]), TaskError> {
+    let node = Guest(kernel.nodes().0 + NODE_BYTES * index);
     let id = TaskId(NonZeroU16::new((index + 1) as u16).ok_or(TaskError::NullCurrent)?);
     let creation = Guest(kernel.creations().0 + CREATION_BYTES * index);
-    let backlink = Guest(word(memory, Guest(pointer.0 + 8))?);
+    let backlink = Guest(word(memory, Guest(node.0 + 8))?);
     if backlink != creation { return Err(TaskError::WrongBacklink { expected: creation, observed: backlink }); }
     let mut bytes = [0; CREATION_BYTES as usize];
     memory.read(creation, &mut bytes).map_err(TaskError::Memory)?;
@@ -210,11 +256,5 @@ pub fn sample(
         return Err(TaskError::WrongCreationId { expected: id, observed: creation_words[8] });
     }
     if creation_words[9] != 1 { return Err(TaskError::NotCreated(creation_words[9])); }
-    let stack = StackExtent(PhysicalExtent::new(Guest(creation_words[5]), creation_words[4])?);
-    memory.validate_stack(stack).map_err(TaskError::Memory)?;
-    stack.validate_sp(sp)?;
-    Ok(TaskExecution {
-        identity: TaskIdentity { kernel, id, node: TaskNode(pointer), creation: CreationRecord(creation) },
-        stack, creation_words, execution_core,
-    })
+    Ok((TaskIdentity { kernel, id, node: TaskNode(node), creation: CreationRecord(creation) }, creation_words))
 }

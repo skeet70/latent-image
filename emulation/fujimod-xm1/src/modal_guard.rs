@@ -1,10 +1,10 @@
 use crate::{
     loader_code::immutable_loader_spans,
     modal_lifetime::{CodeSiteRole, CurrentState, LifetimeConfig, LifetimeMemory, LifetimeMonitor,
-        LifetimeReceipt, LifetimeRequest, Word},
+        LifetimeReceipt, LifetimeRequest, VfpOwnerState, Word},
     modal_memory::FixedMemory,
     modal_permit::{CoreId, Cpsr, Layout},
-    modal_task::{PhysicalExtent, source_layouts},
+    modal_task::{PhysicalExtent, VfpOwner, current_task_id, source_layouts, vfp_owner},
     modal_trace::SourceImage,
     provenance::Guest,
 };
@@ -41,6 +41,10 @@ impl GuardConfig {
             u64::from(image.start().0) != start || image.bytes().len() as u64 != end - start
         }) {
             return Err("modal task context requires all16 immutable loader source spans".into());
+        }
+        if source_layouts().iter().any(|layout| contexts.iter()
+            .find_map(|image| image_word(image, layout.vfp_owner.start())) != Some(Word(VfpOwner::UNOWNED))) {
+            return Err("modal task context does not bind the unowned lazy-VFP word".into());
         }
         let sources = images.iter().chain(&contexts).map(image_extent)
             .collect::<Result<Vec<_>, _>>()?;
@@ -157,8 +161,20 @@ impl InstalledGuard {
                 let address = Guest(image.start().0 + (index * observed.len()) as u32);
                 let bytes = &mut observed[..expected.len()];
                 LifetimeMemory::read(&memory, address, bytes).map_err(|failure| failure.to_string())?;
-                if bytes != expected { return Err("modal task context differs from its bound source".into()); }
+                let owner_byte = |offset: usize| {
+                    let byte = address.0 + offset as u32;
+                    source_layouts().iter().any(|layout| layout.vfp_owner.start().0 <= byte && byte < layout.vfp_owner.end().0)
+                };
+                if bytes.iter().zip(expected).enumerate().any(|(offset, (actual, source))| actual != source && !owner_byte(offset)) {
+                    return Err("modal task context differs from its bound source".into());
+                }
             }
+        }
+        for layout in source_layouts() {
+            let mut bytes = [0; 4];
+            LifetimeMemory::read(&memory, layout.vfp_owner.start(), &mut bytes).map_err(|failure| failure.to_string())?;
+            vfp_owner(&memory, layout.kernel, u32::from_le_bytes(bytes))
+                .map_err(|failure| format!("modal lazy-VFP owner is neither unowned nor a created task: {failure:?}"))?;
         }
         let lifetime = LifetimeMonitor::new(config.lifetime, &memory)
             .map_err(|failure| failure.to_string())?;
@@ -285,9 +301,14 @@ impl InstalledGuard {
                 }
                 target
             }
-            CodeSiteRole::ContextStore(expected_core) | CodeSiteRole::CurrentStore(expected_core) => {
+            CodeSiteRole::ContextStore(expected_core) | CodeSiteRole::CurrentStore(expected_core)
+            | CodeSiteRole::VfpOwnerStore(expected_core) => {
                 if core != expected_core { return Err("modal context writer runs on the wrong core".into()); }
-                let extent = if matches!(site.role, CodeSiteRole::CurrentStore(_)) { layout.current } else { layout.context };
+                let extent = match site.role {
+                    CodeSiteRole::CurrentStore(_) => layout.current,
+                    CodeSiteRole::VfpOwnerStore(_) => layout.vfp_owner,
+                    _ => layout.context,
+                };
                 if target.0 & !0x4000_0000 != extent.start().0 {
                     return Err("modal context store target differs from its source cell".into());
                 }
@@ -302,14 +323,23 @@ impl InstalledGuard {
             Ok::<_, String>(Word(u32::from_le_bytes(bytes)))
         };
         let before = read_word(expected)?;
-        if matches!(site.role, CodeSiteRole::CurrentStore(_)) {
-            let selected = read_word(Guest(layout.current.start().0 + 8))?;
-            let context_depth = read_word(layout.context.start())?;
-            self.lifetime.prepare_current_store(core, pc, word, &registers, before, cpsr,
-                CurrentState { selected, context_depth }).map_err(|failure| failure.to_string())
-        } else {
-            self.lifetime.prepare_store(core, pc, word, &registers, before, cpsr)
-                .map_err(|failure| failure.to_string())
+        match site.role {
+            CodeSiteRole::CurrentStore(_) => {
+                let selected = read_word(Guest(layout.current.start().0 + 8))?;
+                let context_depth = read_word(layout.context.start())?;
+                self.lifetime.prepare_current_store(core, pc, word, &registers, before, cpsr,
+                    CurrentState { selected, context_depth }).map_err(|failure| failure.to_string())
+            }
+            CodeSiteRole::VfpOwnerStore(_) => {
+                let previous = vfp_owner(&memory, layout.kernel, before.0)
+                    .map_err(|failure| format!("modal lazy-VFP owner is neither unowned nor a created task: {failure:?}"))?;
+                let current = current_task_id(&memory, core)
+                    .map_err(|failure| format!("modal lazy-VFP trap has no valid current task: {failure:?}"))?;
+                self.lifetime.prepare_vfp_owner_store(core, pc, word, &registers, before, cpsr,
+                    VfpOwnerState { before: previous, current }).map_err(|failure| failure.to_string())
+            }
+            _ => self.lifetime.prepare_store(core, pc, word, &registers, before, cpsr)
+                .map_err(|failure| failure.to_string()),
         }
     }
 

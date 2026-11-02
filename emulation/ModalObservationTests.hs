@@ -475,7 +475,8 @@ completedReceipt count = object
   [ "phase" .= ("ended" :: String), "publication_count" .= count, "forward_writes" .= count, "reverse_writes" .= count
   , "pending_stores" .= (0 :: Int), "install_core" .= (0 :: Int), "rollback_core" .= (1 :: Int)
   , "checked_resource_writes" .= (7 :: Int), "checked_identity_writes" .= (0 :: Int)
-  , "checked_scheduler_writes" .= (10 :: Int), "checked_context_writes" .= (40 :: Int), "audited_writes" .= (12 :: Int)
+  , "checked_scheduler_writes" .= (10 :: Int), "checked_context_writes" .= (40 :: Int), "checked_vfp_owner_writes" .= (2 :: Int)
+  , "audited_writes" .= (12 :: Int)
   , "failure" .= Null ]
 
 healthyGuard :: Value
@@ -707,7 +708,7 @@ runtimeBindingTests = do
   expectedWrites <- either error pure (modalLifetimeWatchRanges request)
   let fetches = unionWatchRanges (range 0x00bfb028 0x00bfb124 :
         [range pc (pc+4) | pc <- [0x10000,0x10010,0x10024,0x10044,0x40240,0x4031c,0x436b8,0x43690,0x436f0
-          ,0x43720,0x43848,0xd0240,0xd031c,0xd36b8,0xd3690,0xd36f0,0xd3720,0xd3848]])
+          ,0x43720,0x43848,0x42440,0xd0240,0xd031c,0xd36b8,0xd3690,0xd36f0,0xd3720,0xd3848,0xd2440]])
       fetchJson spans = object ["sources" .= ([] :: [Value]), "ranges" .= map pair spans]
       watch spans records = object
         [ "enabled" .= True, "views" .= ("fixed" :: String), "ranges" .= map pair spans, "records" .= records, "violation" .= Null
@@ -721,7 +722,7 @@ runtimeBindingTests = do
           (cpu 1 address address 4 clock))) | (address,clock) <- zip (reverse addresses) [224 ..]]
       fullWatch = watch expectedWrites writes
       exactReceipt = foldr (\key value -> set key (Number 0) value) (completedReceipt 223)
-        ["checked_resource_writes","checked_identity_writes","checked_scheduler_writes","checked_context_writes","audited_writes"]
+        ["checked_resource_writes","checked_identity_writes","checked_scheduler_writes","checked_context_writes","checked_vfp_owner_writes","audited_writes"]
       clean = set "watch" fullWatch (set "lifetime" exactReceipt (set "task_identity_verified" (Bool False)
         (set "task_entries" (array []) (completedEnvelope 223))))
   rangeBound <- either error pure (watchRangeLimit (length expectedWrites))
@@ -790,6 +791,18 @@ runtimeBindingTests = do
   check "mutable array audit count must match the raw writer summary" (isLeft (checkCompletedModalLifetime request audit wrongAudit))
   missingContext <- either error pure (parseModalReport permitLimit (set "context_source_spans" (Number 0) (set "enabled" (Bool True) clean)))
   check "begin acknowledgement must bind the exact context source count" (isLeft (checkModalBegin request missingContext))
+  let vfpOwnerRow = set "pc" (Number 0x42440) (set "value" (Number 7) (set "before" (array (replicate 4 (Number 0xff)))
+        (cpu 0 0x4dad4 0x4dad4 4 500)))
+      vfpWatch = watch expectedWrites (writes ++ [vfpOwnerRow])
+  vfpAudit <- either error pure (checkLifetimeArrayAudit request (Right vfpWatch) (Right vfpWatch))
+  vfpCounted <- either error pure (parseModalReport permitLimit (set "watch" vfpWatch
+    (set "lifetime" (set "checked_vfp_owner_writes" (Number 1) exactReceipt) clean)))
+  check "a counted lazy-VFP owner store accounts for its raw write row" (checkCompletedModalLifetime request vfpAudit vfpCounted == Right ())
+  vfpUncounted <- either error pure (parseModalReport permitLimit (set "watch" vfpWatch clean))
+  check "an uncounted lazy-VFP owner write row refuses" (isLeft (checkCompletedModalLifetime request vfpAudit vfpUncounted))
+  let withoutVfpCounter = case exactReceipt of Object fields -> Object (KM.delete "checked_vfp_owner_writes" fields); other -> other
+  check "lifetime receipt requires its lazy-VFP owner counter"
+    (isLeft (parseModalReport permitLimit (set "lifetime" withoutVfpCounter clean)))
  where
   values (Array entries) = foldr (:) [] entries
   values _ = []

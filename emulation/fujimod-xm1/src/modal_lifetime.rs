@@ -1,4 +1,4 @@
-use crate::{modal_permit::{CoreId, Cpsr}, modal_task::{PhysicalExtent, SourceLayout, source_layouts}, provenance::Guest};
+use crate::{modal_permit::{CoreId, Cpsr}, modal_task::{PhysicalExtent, SourceLayout, TaskId, VfpOwner, source_layouts}, provenance::Guest};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -52,7 +52,7 @@ pub struct Word(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CodeSite { pub pc: Guest, pub word: Word }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CodeSiteRole { Entry, PublicationStore, ContextStore(CoreId), CurrentStore(CoreId) }
+pub enum CodeSiteRole { Entry, PublicationStore, ContextStore(CoreId), CurrentStore(CoreId), VfpOwnerStore(CoreId) }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SourceSite { pub instruction: CodeSite, pub role: CodeSiteRole }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,7 +159,7 @@ impl LifetimeRequest {
             let target = word_extent(address)?;
             if row.address % 4 != 0 || row.old == row.new || target.overlaps(resident)
                 || target.overlaps(settings_extent())
-                || layouts.iter().any(|layout| [layout.nodes, layout.creations, layout.current, layout.context].iter().any(|range| range.overlaps(target))) {
+                || layouts.iter().any(|layout| [layout.nodes, layout.creations, layout.current, layout.context, layout.vfp_owner].iter().any(|range| range.overlaps(target))) {
                 return Err(LifetimeFailure::InvalidRequest);
             }
             Ok(Publication { address, old: Word(row.old), new: Word(row.new) })
@@ -180,7 +180,7 @@ impl LifetimeRequest {
         watched.extend(immutable_sources.iter().copied());
         watched.extend(readonly.iter().map(|image| image.extent));
         watched.extend(publications.iter().map(|row| word_extent(row.address).expect("validated publication")));
-        for layout in layouts { watched.extend([layout.context, layout.current, layout.nodes, layout.creations]); }
+        for layout in layouts { watched.extend([layout.context, layout.current, layout.nodes, layout.creations, layout.vfp_owner]); }
         watched.sort_by_key(|range| range.start());
         let mut merged: Vec<PhysicalExtent> = Vec::with_capacity(watched.len());
         for range in watched {
@@ -206,10 +206,10 @@ impl LifetimeConfig {
         let role = if pc == self.install.entry.pc || pc == self.rollback.entry.pc {
             CodeSiteRole::Entry
         } else if let Some(site) = CONTEXT_SITES.iter().find(|site| site.pc == pc.0) {
-            if matches!(site.kind, ContextKind::Current) {
-                CodeSiteRole::CurrentStore(CoreId(site.core))
-            } else {
-                CodeSiteRole::ContextStore(CoreId(site.core))
+            match site.kind {
+                ContextKind::Current => CodeSiteRole::CurrentStore(CoreId(site.core)),
+                ContextKind::VfpOwner => CodeSiteRole::VfpOwnerStore(CoreId(site.core)),
+                _ => CodeSiteRole::ContextStore(CoreId(site.core)),
             }
         } else {
             CodeSiteRole::PublicationStore
@@ -243,6 +243,7 @@ pub struct LifetimeReceipt {
     pub checked_identity_writes: u64,
     pub checked_scheduler_writes: u64,
     pub checked_context_writes: u64,
+    pub checked_vfp_owner_writes: u64,
     pub audited_writes: u64,
     pub failure: Option<LifetimeFailure>,
 }
@@ -323,11 +324,11 @@ impl<'a> WriteAttempt<'a> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PermitKind { Forward, Reverse, Context }
+enum PermitKind { Forward, Reverse, Context, VfpOwner }
 #[derive(Clone, Copy)]
 struct StorePermit { pc: Guest, address: Guest, physical: Guest, before: Word, value: Word, kind: PermitKind }
 #[derive(Clone, Copy)]
-enum ContextKind { Increment, Decrement, Current, Clear, Set, Initialize }
+enum ContextKind { Increment, Decrement, Current, Clear, Set, Initialize, VfpOwner }
 #[derive(Clone, Copy)]
 struct ContextSite { pc: u32, core: usize, kind: ContextKind }
 impl ContextSite {
@@ -338,11 +339,12 @@ impl ContextSite {
             ContextKind::Current => 0xe582_1000,
             ContextKind::Clear | ContextKind::Set => 0xe586_3000,
             ContextKind::Initialize => 0xe583_2000,
+            ContextKind::VfpOwner => 0xe583_5000,
         };
         CodeSite { pc: Guest(self.pc), word: Word(word) }
     }
 }
-const CONTEXT_SITES: [ContextSite; 14] = [
+const CONTEXT_SITES: [ContextSite; 16] = [
     ContextSite { pc: 0x40240, core: 0, kind: ContextKind::Increment },
     ContextSite { pc: 0x4031c, core: 0, kind: ContextKind::Decrement },
     ContextSite { pc: 0x436b8, core: 0, kind: ContextKind::Current },
@@ -350,6 +352,7 @@ const CONTEXT_SITES: [ContextSite; 14] = [
     ContextSite { pc: 0x436f0, core: 0, kind: ContextKind::Set },
     ContextSite { pc: 0x43720, core: 0, kind: ContextKind::Clear },
     ContextSite { pc: 0x43848, core: 0, kind: ContextKind::Initialize },
+    ContextSite { pc: 0x42440, core: 0, kind: ContextKind::VfpOwner },
     ContextSite { pc: 0xd0240, core: 1, kind: ContextKind::Increment },
     ContextSite { pc: 0xd031c, core: 1, kind: ContextKind::Decrement },
     ContextSite { pc: 0xd36b8, core: 1, kind: ContextKind::Current },
@@ -357,10 +360,16 @@ const CONTEXT_SITES: [ContextSite; 14] = [
     ContextSite { pc: 0xd36f0, core: 1, kind: ContextKind::Set },
     ContextSite { pc: 0xd3720, core: 1, kind: ContextKind::Clear },
     ContextSite { pc: 0xd3848, core: 1, kind: ContextKind::Initialize },
+    ContextSite { pc: 0xd2440, core: 1, kind: ContextKind::VfpOwner },
 ];
 
 #[derive(Clone, Copy)]
 pub struct CurrentState { pub selected: Word, pub context_depth: Word }
+/// The trapping core's current task and the owner word it replaces, both validated against task memory.
+#[derive(Clone, Copy)]
+pub struct VfpOwnerState { pub before: VfpOwner, pub current: TaskId }
+#[derive(Clone, Copy)]
+enum StoreState { Plain, Current(CurrentState), VfpOwner(VfpOwnerState) }
 
 pub struct LifetimeMonitor {
     config: LifetimeConfig,
@@ -391,7 +400,7 @@ impl LifetimeMonitor {
         Ok(Self { config, settings, pending: [None; 2], receipt: LifetimeReceipt {
             phase: LifetimePhase::Prepared, publication_count, forward_writes: 0, reverse_writes: 0,
             pending_stores: 0, install_core: None, rollback_core: None, checked_resource_writes: 0,
-            checked_identity_writes: 0, checked_scheduler_writes: 0, checked_context_writes: 0,
+            checked_identity_writes: 0, checked_scheduler_writes: 0, checked_context_writes: 0, checked_vfp_owner_writes: 0,
             audited_writes: 0, failure: None,
         } })
     }
@@ -428,7 +437,7 @@ impl LifetimeMonitor {
     }
     pub fn prepare_store(&mut self, core: CoreId, pc: Guest, word: Word, registers: &[u32; 13], before: Word, cpsr: Cpsr) -> Result<()> {
         self.healthy()?;
-        let result = self.prepare(core, pc, word, registers, before, cpsr, None);
+        let result = self.prepare(core, pc, word, registers, before, cpsr, StoreState::Plain);
         self.record(result)
     }
     pub fn prepare_current_store(&mut self, core: CoreId, pc: Guest, word: Word, registers: &[u32; 13], before: Word, cpsr: Cpsr, current: CurrentState) -> Result<()> {
@@ -436,10 +445,18 @@ impl LifetimeMonitor {
         if !CONTEXT_SITES.iter().any(|spec| spec.pc == pc.0 && matches!(spec.kind, ContextKind::Current)) {
             return Err(self.refuse(LifetimeFailure::WrongWriter));
         }
-        let result = self.prepare(core, pc, word, registers, before, cpsr, Some(current));
+        let result = self.prepare(core, pc, word, registers, before, cpsr, StoreState::Current(current));
         self.record(result)
     }
-    fn prepare(&mut self, core: CoreId, pc: Guest, word: Word, registers: &[u32; 13], before: Word, cpsr: Cpsr, current: Option<CurrentState>) -> Result<()> {
+    pub fn prepare_vfp_owner_store(&mut self, core: CoreId, pc: Guest, word: Word, registers: &[u32; 13], before: Word, cpsr: Cpsr, state: VfpOwnerState) -> Result<()> {
+        self.healthy()?;
+        if !CONTEXT_SITES.iter().any(|spec| spec.pc == pc.0 && matches!(spec.kind, ContextKind::VfpOwner)) {
+            return Err(self.refuse(LifetimeFailure::WrongWriter));
+        }
+        let result = self.prepare(core, pc, word, registers, before, cpsr, StoreState::VfpOwner(state));
+        self.record(result)
+    }
+    fn prepare(&mut self, core: CoreId, pc: Guest, word: Word, registers: &[u32; 13], before: Word, cpsr: Cpsr, state: StoreState) -> Result<()> {
         if core.0 >= 2 { return Err(LifetimeFailure::InvalidCore); }
         if self.receipt.phase == LifetimePhase::Ended { return Err(LifetimeFailure::WrongPhase); }
         if self.pending[core.0].is_some() { return Err(LifetimeFailure::PendingStore); }
@@ -461,7 +478,9 @@ impl LifetimeMonitor {
             let spec = CONTEXT_SITES.iter().find(|spec| spec.pc == pc.0).ok_or(LifetimeFailure::WrongWriter)?;
             if spec.core != core.0 { return Err(LifetimeFailure::WrongCore); }
             if spec.site().word != word { return Err(LifetimeFailure::WrongWriter); }
-            if cpsr.0 & ((1 << 24) | (1 << 9) | (1 << 7) | (1 << 5) | 0x1f) != 0x93 {
+            // Kernel stores run in SVC; the lazy-VFP store runs in the undefined-instruction handler. Both mask IRQ.
+            let mode = if matches!(spec.kind, ContextKind::VfpOwner) { 0x9b } else { 0x93 };
+            if cpsr.0 & ((1 << 24) | (1 << 9) | (1 << 7) | (1 << 5) | 0x1f) != mode {
                 return Err(LifetimeFailure::InvalidContext);
             }
             let layout = source_layouts()[core.0];
@@ -470,23 +489,28 @@ impl LifetimeMonitor {
                 ContextKind::Increment => (Guest(registers[2]), Word(registers[0]), layout.context),
                 ContextKind::Decrement => (Guest(registers[2]), Word(registers[3]), layout.context),
                 ContextKind::Clear | ContextKind::Set => (Guest(registers[6]), Word(registers[3]), layout.context),
+                ContextKind::VfpOwner => (Guest(registers[3]), Word(registers[5]), layout.vfp_owner),
                 ContextKind::Initialize => return Err(LifetimeFailure::InvalidContext),
             };
-            if address.0 != target.start().0 + 0x4000_0000 { return Err(LifetimeFailure::WrongAddress); }
+            let canonical = if matches!(spec.kind, ContextKind::VfpOwner) { target.start().0 } else { target.start().0 + 0x4000_0000 };
+            if address.0 != canonical { return Err(LifetimeFailure::WrongAddress); }
             let valid_node = |value: Word| value.0 == 0 || (value.0 >= layout.nodes.start().0 + 0x4000_0000
                 && value.0 < layout.nodes.end().0 + 0x4000_0000
                 && (value.0 - layout.nodes.start().0 - 0x4000_0000) % NODE_BYTES == 0);
-            let valid = match spec.kind {
-                ContextKind::Increment => before.0.checked_add(1) == Some(value.0),
-                ContextKind::Decrement => before.0.checked_sub(1) == Some(value.0),
-                ContextKind::Current => current.is_some_and(|current| current.context_depth == Word(0) && current.selected == value)
+            let valid = match (spec.kind, state) {
+                (ContextKind::Increment, StoreState::Plain) => before.0.checked_add(1) == Some(value.0),
+                (ContextKind::Decrement, StoreState::Plain) => before.0.checked_sub(1) == Some(value.0),
+                (ContextKind::Current, StoreState::Current(current)) => current.context_depth == Word(0) && current.selected == value
                     && valid_node(value) && valid_node(before),
-                ContextKind::Clear => value == Word(0) && before == Word(if spec.pc == 0x43690 || spec.pc == 0xd3690 { 0 } else { 1 }),
-                ContextKind::Set => value == Word(1) && before == Word(0),
-                ContextKind::Initialize => false,
+                (ContextKind::Clear, StoreState::Plain) => value == Word(0) && before == Word(if spec.pc == 0x43690 || spec.pc == 0xd3690 { 0 } else { 1 }),
+                (ContextKind::Set, StoreState::Plain) => value == Word(1) && before == Word(0),
+                (ContextKind::VfpOwner, StoreState::VfpOwner(owner)) => before == Word(owner.before.word())
+                    && value == Word(u32::from(owner.current.get())),
+                _ => false,
             };
             if !valid { return Err(LifetimeFailure::InvalidContext); }
-            StorePermit { pc, address, physical: target.start(), before, value, kind: PermitKind::Context }
+            let kind = if matches!(spec.kind, ContextKind::VfpOwner) { PermitKind::VfpOwner } else { PermitKind::Context };
+            StorePermit { pc, address, physical: target.start(), before, value, kind }
         };
         self.pending[core.0] = Some(permit);
         Ok(())
@@ -534,6 +558,7 @@ impl LifetimeMonitor {
                     if self.receipt.reverse_writes as usize == self.config.publications.len() { self.receipt.phase = LifetimePhase::RollbackStored; }
                 }
                 PermitKind::Context => self.receipt.checked_context_writes += 1,
+                PermitKind::VfpOwner => self.receipt.checked_vfp_owner_writes += 1,
             }
             return Ok(());
         }
@@ -546,7 +571,7 @@ impl LifetimeMonitor {
                 self.receipt.checked_identity_writes += 1;
                 return Err(LifetimeFailure::IdentityWrite);
             }
-            if layout.current.overlaps(target) || layout.context.overlaps(target) { return Err(LifetimeFailure::MissingPermit); }
+            if layout.current.overlaps(target) || layout.context.overlaps(target) || layout.vfp_owner.overlaps(target) { return Err(LifetimeFailure::MissingPermit); }
         }
         if self.config.resident.overlaps(target) || settings_extent().overlaps(target) {
             self.receipt.checked_resource_writes += 1;

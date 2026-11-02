@@ -1,7 +1,9 @@
 use fujimod_xm1::{
     modal_lifetime::{CurrentState, LifetimeConfig, LifetimeFailure, LifetimeMemory, LifetimeMonitor,
-        LifetimePhase, LifetimeRequest, Publication, Word, WriteAttempt, WriteSource},
-    modal_permit::{CoreId, Cpsr}, modal_task::{PhysicalExtent, source_layouts}, provenance::Guest,
+        LifetimePhase, LifetimeRequest, Publication, VfpOwnerState, Word, WriteAttempt, WriteSource},
+    modal_permit::{CoreId, Cpsr},
+    modal_task::{MemoryError, PhysicalExtent, StackExtent, TaskId, ValidatedTaskMemory, VfpOwner, source_layouts, vfp_owner},
+    provenance::Guest,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -487,4 +489,85 @@ fn immutable_site_metadata_and_initial_publication_preimages_are_required() {
     for (extent, bytes) in config.readonly_images() { memory.store(extent.start().0, bytes); }
     memory.store(config.publications()[0].address.0, &[1, 0, 0, 0]);
     assert!(matches!(LifetimeMonitor::new(config, &memory), Err(LifetimeFailure::WrongBefore)));
+}
+
+#[derive(Default)]
+struct Tasks(BTreeMap<u32, u8>);
+impl Tasks {
+    fn put(&mut self, address: u32, word: u32) {
+        self.0.extend(word.to_le_bytes().into_iter().enumerate().map(|(index, byte)| ((address & !0x4000_0000) + index as u32, byte)));
+    }
+}
+impl ValidatedTaskMemory for Tasks {
+    fn read(&self, address: Guest, output: &mut [u8]) -> Result<(), MemoryError> {
+        for (index, byte) in output.iter_mut().enumerate() {
+            *byte = *self.0.get(&((address.0 & !0x4000_0000) + index as u32)).ok_or(MemoryError::Unmapped)?;
+        }
+        Ok(())
+    }
+    fn validate_stack(&self, _: StackExtent) -> Result<(), MemoryError> { Ok(()) }
+}
+fn created_task(core: usize, id: u16) -> TaskId {
+    let layout = source_layouts()[core];
+    let mut tasks = Tasks::default();
+    let creation = layout.creations.start().0 + 40 * u32::from(id - 1);
+    tasks.put(layout.nodes.start().0 + 56 * u32::from(id - 1) + 8, creation | 0x4000_0000);
+    for (offset, word) in [(32, u32::from(id)), (36, 1)] { tasks.put(creation + offset, word); }
+    match vfp_owner(&tasks, layout.kernel, u32::from(id)) { Ok(VfpOwner::Task(task)) => task, other => panic!("{other:?}") }
+}
+fn vfp_store(monitor: &mut LifetimeMonitor, core: usize, before: VfpOwner, current: TaskId) -> Result<(), LifetimeFailure> {
+    let cell = source_layouts()[core].vfp_owner.start();
+    let pc = Guest(if core == 0 { 0x42440 } else { 0xd2440 });
+    let mut registers = [0; 13];
+    registers[3] = cell.0;
+    registers[5] = u32::from(current.get());
+    monitor.prepare_vfp_owner_store(CoreId(core), pc, Word(0xe583_5000), &registers, Word(before.word()), Cpsr(0x6000_019b),
+        VfpOwnerState { before, current })?;
+    monitor.observe_write(WriteAttempt::cpu(CoreId(core), pc, cell, cell, &before.word().to_le_bytes(), u64::from(current.get())))
+}
+
+#[test]
+fn lazy_vfp_owner_stores_install_the_trapping_current_task_from_its_source_store() {
+    for core in 0..2 {
+        let (mut monitor, _) = fixture();
+        let (first, second) = (created_task(core, 3), created_task(core, 7));
+        vfp_store(&mut monitor, core, VfpOwner::Unowned, first).unwrap();
+        vfp_store(&mut monitor, core, VfpOwner::Task(first), second).unwrap();
+        vfp_store(&mut monitor, core, VfpOwner::Task(second), second).unwrap();
+        let receipt = monitor.receipt();
+        assert_eq!((receipt.checked_vfp_owner_writes, receipt.checked_context_writes, receipt.failure), (3, 0, None));
+    }
+}
+
+#[test]
+fn lazy_vfp_owner_stores_refuse_other_values_modes_aliases_cores_and_unpermitted_writes() {
+    let layout = source_layouts()[0];
+    let current = created_task(0, 3);
+    let state = VfpOwnerState { before: VfpOwner::Unowned, current };
+    for case in 0..6 {
+        let (mut monitor, _) = fixture();
+        let mut registers = [0; 13];
+        registers[3] = layout.vfp_owner.start().0;
+        registers[5] = 3;
+        let (mut core, mut before, mut cpsr) = (0, Word(VfpOwner::UNOWNED), Cpsr(0x9b));
+        let expected = match case {
+            0 => { registers[5] = 4; LifetimeFailure::InvalidContext },
+            1 => { registers[5] = 0x8000_0003; LifetimeFailure::InvalidContext },
+            2 => { cpsr = Cpsr(0x93); LifetimeFailure::InvalidContext },
+            3 => { registers[3] |= 0x4000_0000; LifetimeFailure::WrongAddress },
+            4 => { core = 1; LifetimeFailure::WrongCore },
+            _ => { before = Word(3); LifetimeFailure::InvalidContext },
+        };
+        assert_eq!(monitor.prepare_vfp_owner_store(CoreId(core), Guest(0x42440), Word(0xe583_5000), &registers, before, cpsr, state), Err(expected));
+    }
+    let (mut monitor, _) = fixture();
+    let mut registers = [0; 13];
+    registers[3] = layout.vfp_owner.start().0;
+    registers[5] = 3;
+    assert_eq!(monitor.prepare_store(CoreId(0), Guest(0x42440), Word(0xe583_5000), &registers, Word(VfpOwner::UNOWNED), Cpsr(0x9b)),
+        Err(LifetimeFailure::InvalidContext));
+    let (mut monitor, _) = fixture();
+    assert_eq!(cpu_write(&mut monitor, layout.vfp_owner.start().0, &VfpOwner::UNOWNED.to_le_bytes(), 3), Err(LifetimeFailure::MissingPermit));
+    let (mut monitor, _) = fixture();
+    assert_eq!(cpu_write(&mut monitor, layout.vfp_owner.start().0 - 4, &[0; 4], 0), Err(LifetimeFailure::ImmutableWrite));
 }

@@ -844,6 +844,7 @@ data LifetimeReceipt = LifetimeReceipt
   , receiptIdentityWrites :: ModalCount
   , receiptSchedulerWrites :: ModalCount
   , receiptContextWrites :: ModalCount
+  , receiptVfpOwnerWrites :: ModalCount
   , receiptAuditedWrites :: ModalCount
   , receiptFailure :: Maybe LifetimeFailure
   } deriving (Eq, Show)
@@ -888,7 +889,7 @@ parseLifetimeReceipt :: Value -> Either String LifetimeReceipt
 parseLifetimeReceipt value = do
   modalKeys ["phase", "publication_count", "forward_writes", "reverse_writes", "pending_stores",
     "install_core", "rollback_core", "checked_resource_writes", "checked_identity_writes",
-    "checked_scheduler_writes", "checked_context_writes", "audited_writes", "failure"] value
+    "checked_scheduler_writes", "checked_context_writes", "checked_vfp_owner_writes", "audited_writes", "failure"] value
   let count key = ModalCount <$> (modalField key value >>= modalWord)
   phase <- modalField "phase" value >>= parseClosed lifetimePhaseText
   failure <- modalField "failure" value >>= parseNullable (\entry -> do
@@ -898,7 +899,8 @@ parseLifetimeReceipt value = do
     <*> count "pending_stores" <*> (modalField "install_core" value >>= parseNullable parseCore)
     <*> (modalField "rollback_core" value >>= parseNullable parseCore)
     <*> count "checked_resource_writes" <*> count "checked_identity_writes"
-    <*> count "checked_scheduler_writes" <*> count "checked_context_writes" <*> count "audited_writes" <*> pure failure
+    <*> count "checked_scheduler_writes" <*> count "checked_context_writes" <*> count "checked_vfp_owner_writes"
+    <*> count "audited_writes" <*> pure failure
 
 lifetimeReceiptJson :: LifetimeReceipt -> Value
 lifetimeReceiptJson receipt = object
@@ -913,6 +915,7 @@ lifetimeReceiptJson receipt = object
   , "checked_identity_writes" .= countValue (receiptIdentityWrites receipt)
   , "checked_scheduler_writes" .= countValue (receiptSchedulerWrites receipt)
   , "checked_context_writes" .= countValue (receiptContextWrites receipt)
+  , "checked_vfp_owner_writes" .= countValue (receiptVfpOwnerWrites receipt)
   , "audited_writes" .= countValue (receiptAuditedWrites receipt)
   , "failure" .= fmap (\failure -> object ["kind" .= lifetimeFailureText failure]) (receiptFailure receipt)
   ]
@@ -1051,7 +1054,7 @@ checkCompletedModalLifetime (ModalRequest (ModalStock stock) scoped _ source) au
   let rows = fixedWatchRecords observation
       expectedWrites = sum (map (toInteger . countValue)
         [receiptForwardWrites receipt, receiptReverseWrites receipt, receiptResourceWrites receipt
-        , receiptSchedulerWrites receipt, receiptContextWrites receipt, receiptAuditedWrites receipt])
+        , receiptSchedulerWrites receipt, receiptContextWrites receipt, receiptVfpOwnerWrites receipt, receiptAuditedWrites receipt])
   unless (toInteger (length rows) == expectedWrites
     && toInteger (length (arrayWrites audit)) == toInteger (countValue (receiptAuditedWrites receipt))
     && all (\row -> case row of CpuRecord { cpuAccess = CpuWrite } -> True; _ -> False) rows)
@@ -1168,7 +1171,7 @@ checkModalLifetimeWatchSources (ModalRequest _ scoped _ source) value = do
   let instructionPc (SourceInstruction pc _) = watchAddressValue pc
       routinePcs (PublicationRoutine entry writer) = map instructionPc [entry, writer]
       fixedPcs = [0x00bfb028,0x00bfb02c .. 0x00bfb120]
-        ++ [0x40240,0x4031c,0x436b8,0x43690,0x436f0,0x43720,0x43848,0xd0240,0xd031c,0xd36b8,0xd3690,0xd36f0,0xd3720,0xd3848]
+        ++ [0x40240,0x4031c,0x436b8,0x43690,0x436f0,0x43720,0x43848,0x42440,0xd0240,0xd031c,0xd36b8,0xd3690,0xd36f0,0xd3720,0xd3848,0xd2440]
         ++ routinePcs (lifetimeInstall binding) ++ routinePcs (lifetimeRollback binding)
       scopedPcs = case scoped of
         Nothing -> []
