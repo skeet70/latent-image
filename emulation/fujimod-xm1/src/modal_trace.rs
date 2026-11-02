@@ -382,6 +382,7 @@ impl ModalTrace {
         (STOCK_ENTRY <= pc && pc < STOCK_END)
             || [self.config.layout.seam(), self.config.layout.owned()].into_iter().flatten()
                 .any(|range| range.start() <= pc && pc < range.end())
+            || self.config.layout.helpers().any(|range| range.start() <= pc && pc < range.end())
             || self.config.owned_prehook == Some(pc) || self.returns.contains_key(&pc)
             || self.guard.as_ref().is_some_and(|guard| guard.contains(pc))
     }
@@ -415,13 +416,6 @@ impl ModalTrace {
         instructions: InstructionCount, point: Option<InstructionPointEvent>) -> Result<Option<Guest>, String> {
         if !self.contains(pc) { return Err("instruction point outside modal observation".into()); }
         let cpsr = Cpsr(read_register(session, core, arm::Register::Cpsr)?);
-        let bound_fetch = if let Some(guard) = &mut self.guard {
-            let point = point.ok_or("modal point lacks its stable instruction-entry identity")?;
-            if session.board.read_register(core, Register::Pc)? != u64::from(pc.0) {
-                return Err("modal point does not name the current instruction".into());
-            }
-            guard.bind_point(CoreId(core), pc, point, cpsr)?
-        } else { None };
         let word = if self.guard.is_some() && pc == STOCK_ENTRY {
             let mut bytes = [0; 4];
             LifetimeMemory::read(&FixedMemory { session, maps: &self.config.maps }, pc, &mut bytes)
@@ -444,6 +438,13 @@ impl ModalTrace {
         } else {
             return Err("modal instruction has no bound source word".into());
         };
+        let bound_fetch = if let Some(guard) = &mut self.guard {
+            let point = point.ok_or("modal point lacks its stable instruction-entry identity")?;
+            if session.board.read_register(core, Register::Pc)? != u64::from(pc.0) {
+                return Err("modal point does not name the current instruction".into());
+            }
+            guard.bind_point(CoreId(core), pc, point, cpsr, word)?
+        } else { None };
         if let Some(guard) = self.guard.as_mut().filter(|guard| guard.contains(pc)) {
             guard.observe_source(session, &self.config.maps, CoreId(core), pc, word, cpsr)?;
             return Ok(None);

@@ -734,7 +734,8 @@ runtimeBindingTests = do
   scope <- either error pure (modalScope linked (range 0x10000 0x10038) (range 0x10038 0x10060)
     (ModalHelpers (range 0x10060 0x10070) (range 0x10070 0x10080)) (Just (watchAddress 0x10060)))
   scopedBase <- either error pure (modalRequest stock (Just (linked, scope)) permitLimit)
-  let scopedPublications = rows ++ [object ["address" .= (0x2037c :: Word32), "old" .= (0x11111111 :: Word32), "new" .= (0x22222222 :: Word32)]]
+  let installedBranch = 0xea000abc :: Word32
+      scopedPublications = rows ++ [object ["address" .= (0x00bfb028 :: Word32), "old" .= (0 :: Word32), "new" .= installedBranch]]
       scopedLifetime = set "publications" (array scopedPublications) (set "readonly" (array (drop 1 images)) lifetime)
       scopedDeclaration = set "context_sources" (array context) (set "lifetime" scopedLifetime (modalBeginRequestJson scopedBase))
       helperFetches = unionWatchRanges (range 0x10000 0x10080 : fetches)
@@ -744,6 +745,29 @@ runtimeBindingTests = do
     checkModalLifetimeWatchSources scopedRequest (set "fetch_attribution" (fetchJson helperFetches) fullWatch) == Right ()
   check "missing final call-helper instruction refuses source coverage" $
     isLeft (checkModalLifetimeWatchSources scopedRequest (set "fetch_attribution" (fetchJson truncatedHelperFetches) fullWatch))
+  scopedWrites <- either error pure (modalLifetimeWatchRanges scopedRequest)
+  let forwardEntry = set "pc" (Number 0x10024) (set "value" (Number (fromIntegral installedBranch))
+        (cpu 0 0x00bfb028 0x00bfb028 4 224))
+      reverseEntry = set "pc" (Number 0x10044) (set "before" (array (map (Number . fromIntegral) (B.unpack (wordBytes installedBranch))))
+        (cpu 1 0x00bfb028 0x00bfb028 4 225))
+      reverseRows = zipWith (\clock row -> set "tick" (Number clock) (set "instructions" (Number clock) row))
+        [226 ..] (drop 223 writes)
+      scopedWatch = set "fetch_attribution" (fetchJson helperFetches)
+        (watch scopedWrites (take 223 writes ++ [forwardEntry,reverseEntry] ++ reverseRows))
+      scopedCounts = object ["observations" .= (4 :: Int), "entries" .= (2 :: Int), "owned_handoffs" .= (1 :: Int)
+        , "fallback_handoffs" .= (1 :: Int), "returns" .= (2 :: Int), "active_frames" .= (0 :: Int), "peak_core_depth" .= (1 :: Int)]
+      scopedReceipt = set "publication_count" (Number 224) (set "forward_writes" (Number 224) (set "reverse_writes" (Number 224) exactReceipt))
+      installedTask = set "fetch" (set "bytes" (array (map (Number . fromIntegral) (B.unpack (wordBytes installedBranch))))
+        (get "fetch" taskEntry)) taskEntry
+      completedScoped = set "policy" (String "scoped-owned75") (set "counts" scopedCounts
+        (set "captured_domains" (array [set "controller" (Number 75) domain])
+        (set "task_entries" (array [installedTask]) (set "watch" scopedWatch (set "lifetime" scopedReceipt (completedEnvelope 224))))))
+  scopedAudit <- either error pure (checkLifetimeArrayAudit scopedRequest (Right scopedWatch) (Right scopedWatch))
+  installedReport <- either error pure (parseModalReport permitLimit completedScoped)
+  check "owned fetch binds the installed branch publication" (checkCompletedModalLifetime scopedRequest scopedAudit installedReport == Right ())
+  let stockTask = set "fetch" (set "bytes" (array (replicate 4 (Number 0))) (get "fetch" taskEntry)) taskEntry
+  stockReport <- either error pure (parseModalReport permitLimit (set "task_entries" (array [stockTask]) completedScoped))
+  check "owned fetch rejects the pre-install stock word" (isLeft (checkCompletedModalLifetime scopedRequest scopedAudit stockReport))
   let withoutSettings = filter (\span_ -> let (low,high) = watchRangeBounds span_ in not (low <= 0x96cc64 && 0x96ce26 <= high)) expectedWrites
       incompleteWatch = watch withoutSettings writes
   check "array audit requires settings and all other expected write classes" $

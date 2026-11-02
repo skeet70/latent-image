@@ -1031,8 +1031,14 @@ checkCompletedModalLifetime (ModalRequest (ModalStock stock) scoped _ source) au
   unless (modalPhysicalCoverage report) (Left "modal lifetime lacks healthy physical fetch coverage")
   unless (countValue (modalContextSourceSpans report) == fromIntegral (length (lifetimeContext binding)))
     (Left "modal lifetime completed with a mismatched context source count")
+  entryBytes <- case scoped of
+    Nothing -> Right (B.take 4 stock)
+    Just _ -> case [new | PublicationBinding address _ (Ram.WordValue new) <- lifetimePublications binding
+                       , watchAddressValue address == 0x00bfb028] of
+      [new] -> Right (littleWord new)
+      _ -> Left "scoped modal lifetime lacks its unique shared-entry publication"
   forM_ (modalTaskEntries report) $ \(TaskEntry _ _ _ _ _ _ _ _ (TaskFetch _ _ bytes _ _)) ->
-    unless (bytes == B.take 4 stock) (Left "owned modal task fetch bytes differ from bound stock entry")
+    unless (bytes == entryBytes) (Left "owned modal task fetch differs from the installed entry publication")
   ModalWatchEvidence observation _ <- maybe (Left "modal lifetime lacks raw watch evidence") Right (modalWatchEvidence report)
   let rows = fixedWatchRecords observation
       expectedWrites = sum (map (toInteger . countValue)

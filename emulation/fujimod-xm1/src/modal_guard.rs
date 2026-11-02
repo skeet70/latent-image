@@ -9,7 +9,7 @@ use crate::{
     provenance::Guest,
 };
 use fujimod_emulator::{board::{factory::MemoryMap, observation::{ByteOrder, CoreIndex,
-    CpuDataAttribution, FetchAttribution, FetchEvent, InstructionCores, InstructionExecutionState, InstructionPointEvent,
+    CpuDataAttribution, FetchAttribution, InstructionCores, InstructionExecutionState, InstructionPointEvent,
     MemoryWatch, PhysicalInstructionGuard, WatchKinds, WatchRange}}, session::Session};
 use fujimod_emulator_cpu::{Register, arm};
 use serde::{Serialize, Serializer, ser::{SerializeMap, SerializeSeq}};
@@ -97,16 +97,21 @@ pub(crate) struct GuardReport<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct BoundFetch(FetchEvent);
+pub(crate) struct BoundFetch {
+    guest: Guest,
+    physical: fujimod_emulator::board::observation::PhysicalAddress,
+    core: CoreId,
+    progress: crate::trace::InstructionCount,
+    word: Word,
+}
 impl Serialize for BoundFetch {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let fetch = self.0;
         let mut state = serializer.serialize_map(Some(6))?;
-        state.serialize_entry("guest", &fetch.address.0)?;
-        state.serialize_entry("physical", &fetch.physical.0)?;
-        state.serialize_entry("bytes", &fetch.size.0)?;
-        state.serialize_entry("core", &fetch.core.0)?;
-        state.serialize_entry("entry_progress", &fetch.entry.progress)?;
+        state.serialize_entry("guest", &self.guest.0)?;
+        state.serialize_entry("physical", &self.physical.0)?;
+        state.serialize_entry("bytes", &self.word.0.to_le_bytes())?;
+        state.serialize_entry("core", &self.core.0)?;
+        state.serialize_entry("entry_progress", &self.progress.0)?;
         state.serialize_entry("byte_order", "little")?;
         state.end()
     }
@@ -224,7 +229,7 @@ impl InstalledGuard {
     }
 
     pub(crate) fn bind_point(&mut self, core: CoreId, pc: Guest,
-        point: InstructionPointEvent, cpsr: Cpsr) -> Result<Option<BoundFetch>, String> {
+        point: InstructionPointEvent, cpsr: Cpsr, word: Word) -> Result<Option<BoundFetch>, String> {
         if point.core.0 != core.0 || point.entry.address != u64::from(pc.0)
             || point.entry.bytes != 4 || point.entry.pstate != cpsr.0
             || point.entry.pstate & (1 << 5 | 1 << 9 | 1 << 24) != 0 {
@@ -238,7 +243,8 @@ impl InstalledGuard {
                 || fetch.size.0 != 4 || fetch.byte_order != ByteOrder::Little {
                 return Err("modal point fetch differs from its canonical physical source".into());
             }
-            Ok(Some(BoundFetch(fetch)))
+            Ok(Some(BoundFetch { guest: pc, physical: fetch.physical, core,
+                progress: crate::trace::InstructionCount(fetch.entry.progress), word }))
         } else {
             let physical = u64::from(pc.0 & !0x4000_0000);
             if point.entry.physical != Some(physical) || point.entry.tcm.iter().flatten().any(|window| {
@@ -370,5 +376,21 @@ impl Serialize for WatchEvidence<'_> {
         state.serialize_entry("views", "fixed")?;
         state.serialize_entry("fetch_attribution", &Attribution { sources: [], ranges: RangeEvidence(&guard.fetch_ranges) })?;
         state.end()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_fetch_wire_bytes_round_trip_as_the_bound_little_endian_instruction() {
+        let fetch = BoundFetch { guest: Guest(0x00bf_b028),
+            physical: fujimod_emulator::board::observation::PhysicalAddress(0x00bf_b028),
+            core: CoreId(0), progress: crate::trace::InstructionCount(91), word: Word(0xea10_0abc) };
+        let encoded = serde_json::to_vec(&fetch).unwrap();
+        let decoded: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, serde_json::json!({"guest":0x00bf_b028,"physical":0x00bf_b028,
+            "bytes":[0xbc,0x0a,0x10,0xea],"core":0,"entry_progress":91,"byte_order":"little"}));
     }
 }
