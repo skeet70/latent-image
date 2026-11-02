@@ -16,7 +16,7 @@ import qualified A32 as A
 import Control.Monad (forM, forM_, unless)
 import Data.Bits (shiftL, (.&.))
 import qualified Data.ByteString as B
-import Data.List (foldl', sort)
+import Data.List (sort)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Word (Word32)
@@ -166,6 +166,7 @@ deriveRetainedFootprint (GuestAddress imageBase) image (GuestAddress entry) = do
   where
     inside address = address >= imageBase && address .&. 3 == 0
       && toInteger address+4 <= toInteger imageBase+toInteger (B.length image)
+    word :: Word32 -> Either FootprintError Word32
     word address
       | not (inside address) = Left (FootprintSourceMissing (GuestAddress address))
       | otherwise = Right (foldr (\index value -> (value `shiftL` 8)
@@ -218,8 +219,8 @@ deriveRetainedFootprint (GuestAddress imageBase) image (GuestAddress entry) = do
             bound <- switchBound address condition index
             let targets = [address+8+4*index' | index' <- [0..bound]]
             instructions <- mapM word targets
-            unless (and [case A.decode target instruction of A.Branch (A.Cond 14) False _ -> True; _ -> False
-              | (target,instruction) <- zip targets instructions]) (Left (FootprintSwitchBranches (GuestAddress address)))
+            unless (and [case A.decode target tableWord of A.Branch (A.Cond 14) False _ -> True; _ -> False
+              | (target,tableWord) <- zip targets instructions]) (Left (FootprintSwitchBranches (GuestAddress address)))
             pure (targets++conditional address condition,[],False,[])
       A.Load condition A.Word _ destination base (A.OffsetRegister True index A.LSL 2) A.OffsetOnly
         | destination == A.pc && base == A.pc -> do

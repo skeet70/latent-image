@@ -37,8 +37,6 @@ stackLow = 0xa10200
 stackHigh = 0xa5b200
 physical :: Word32 -> Word32
 physical value = value .&. 0x3fffffff
-address :: W.Address -> Word32
-address (W.Address value) = value
 sourceBodies :: SourceFiles -> B.ByteString -> [(Word32,B.ByteString)]
 sourceBodies files image = [(0x40000,sourceA files),(0xd0000,sourceB files),(0x61c400,B.take (0x89ea8c-0x61c400) image)]
 sourceWord :: [(Word32,B.ByteString)] -> Word32 -> Either PlanError Word32

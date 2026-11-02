@@ -9,11 +9,11 @@ import qualified FujiAF.UpdateContainer as U
 import Numeric (showHex)
 import Replacement.RootTask.Services (serviceSymbols)
 
-data Layout = Compact | SavedFrame | TailCleanup | LiteralArguments deriving (Eq, Show)
+data Layout = Compact | SavedFrame | TailCleanup | LiteralArguments | OrMarker deriving (Eq, Show)
 data Damage = Intact | SkipResource | DuplicateResource | WrongConfig | CleanupSuccess
   | PcMoveWide | PcMoveTop | PcArithmetic | PcOperand | PcStore | PcMultiStore
   | DriftHalt | DriftResource | HiddenCode | ExternalStore | BadReturn | UnbalancedReturn
-  | WrongOrder | BranchOnIgnored | LoopNeverEnds | LoadPcLiteral | Unsupported
+  | WrongOrder | BranchOnIgnored | LoopNeverEnds | LoadPcLiteral | Unsupported | OrUnknown | OrFlags | OrPc | OrStack | OrRegister
   deriving (Eq, Show)
 data Label = Resources | ZeroArm | ZeroTail | Stop | Literal deriving (Eq, Ord, Show)
 data Condition = Always | Equal | NotEqual
@@ -30,7 +30,7 @@ fixture layout damage = assemble (prefix ++ resources ++ common ++ arms ++ halt 
     prefix = [Raw (0xe92d0000 .|. saved)]
       ++ (if layout == SavedFrame then [Raw 0xe1a0b00d] else [])
       ++ (if damage == WrongOrder then calls [0x7284ec,0x649624] else calls [0x649624,0x7284ec])
-      ++ constant (Register 0) 0x01010000 ++ calls [0x72872c]
+      ++ (if layout == OrMarker then [Raw 0xe3a00401,Raw 0xe3800801] else constant (Register 0) 0x01010000) ++ calls [0x72872c]
       ++ (if layout == LiteralArguments then [LoadLiteral (Register 0) Literal] else constant (Register 0) 0x72835c)
       ++ calls [0x725b54] ++ [mov counter (if damage == SkipResource then 2 else 1)]
       ++ case damage of
@@ -43,6 +43,11 @@ fixture layout damage = assemble (prefix ++ resources ++ common ++ arms ++ halt 
         ExternalStore -> [Raw 0xe5801000]
         LoadPcLiteral -> [Raw 0xe59ff000]
         Unsupported -> [Raw 0xffffffff]
+        OrUnknown -> [Raw 0xe3800001]
+        OrFlags -> [Raw 0xe3900001]
+        OrPc -> [Raw 0xe38ff001]
+        OrStack -> [Raw 0xe38d0000]
+        OrRegister -> [mov (Register 0) 1,mov (Register 1) 2,Raw 0xe1800001]
         _ -> []
     resources = [Mark Resources,copy (Register 0) counter,mov (Register 1) 1]
       ++ calls (if damage == DuplicateResource then [0x7247ac,0x7247ac] else [0x7247ac])

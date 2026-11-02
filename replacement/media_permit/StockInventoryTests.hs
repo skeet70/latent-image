@@ -92,7 +92,7 @@ main = do
     (retained [0x0a000001,0xe1a00000,0xe3500001,0x979ff100,0xe12fff1e,0x101c,0x1020,0xe3a00000,0xe12fff1e]
       == Left (FootprintSwitchBypassed (GuestAddress 0x100c)))
   check "a retained switch cannot begin without an executed comparison"
-    (refused (retained [0x979ff100,0xe12fff1e,0x1004])))
+    (refused (retained [0x979ff100,0xe12fff1e,0x1004]))
   check "retained Thumb transfers refuse without an A32 source extent"
     (retained [0xfa000000] == Left (FootprintThumb (GuestAddress 0x1000)))
   check "unclassified retained PC calculations remain explicit"

@@ -74,7 +74,7 @@ checkSource artifact datPath imagePath = do
 
 main :: IO ()
 main = do
-  forM_ [Compact,SavedFrame,TailCleanup,LiteralArguments] $ \layout -> do
+  forM_ [Compact,SavedFrame,TailCleanup,LiteralArguments,OrMarker] $ \layout -> do
     let bytes = fixture layout Intact
     artifact <- checkArtifact bytes (symbolsFor bytes)
     let kinds = map callKind (callSites (artifactProof artifact))
@@ -82,7 +82,7 @@ main = do
       "cleanup handback call kind differs from emitted transfer"
   forM_ [SkipResource,DuplicateResource,WrongConfig,CleanupSuccess,PcMoveWide,PcMoveTop,PcArithmetic
     ,PcOperand,PcStore,PcMultiStore,DriftHalt,DriftResource,HiddenCode,ExternalStore,BadReturn
-    ,UnbalancedReturn,WrongOrder,BranchOnIgnored,LoopNeverEnds,LoadPcLiteral,Unsupported] $ \damage ->
+    ,UnbalancedReturn,WrongOrder,BranchOnIgnored,LoopNeverEnds,LoadPcLiteral,Unsupported,OrUnknown,OrFlags,OrPc,OrStack,OrRegister] $ \damage ->
     assert (refuses (deriveRootProof (fixture Compact damage))) ("forbidden root behavior admitted: " ++ show damage)
   assert (refuses (canonicalSource B.empty B.empty)) "noncanonical source admitted"
   arguments <- getArgs

@@ -1024,7 +1024,8 @@ impl RootProducer {
                 self.finish_service(service.site.target.0, state.registers[0].0)?;
                 sample.boundary = Boundary::ServiceReturn;
             }
-            if binding.returns.contains(&pc) {
+            if binding.returns.contains(&pc)
+                && !binding.calls.iter().any(|site| site.pc.0 == pc && site.kind == RootCallKind::TailCall) {
                 require(self.action == self.sequence.len() && self.cleanup_return && self.pending.is_none(), "root epilogue precedes complete cleanup return")?;
                 require(state.registers[0] == Word((-63i32) as u32), "root handback status is not-63")?;
             }

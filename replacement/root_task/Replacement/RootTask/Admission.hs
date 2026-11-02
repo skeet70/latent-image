@@ -7,6 +7,7 @@ import qualified A32 as A
 import Control.Monad (foldM, unless)
 import Data.Bits ((.&.), (.|.), shiftL)
 import qualified Data.ByteString as B
+import Data.Int (Int32)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Word (Word32)
@@ -101,6 +102,7 @@ arithmetic A.ADD (Stack offset) (Number amount) = Right (Stack (offset+fromInteg
 arithmetic A.SUB (Stack offset) (Number amount) = Right (Stack (offset-fromIntegral amount))
 arithmetic A.ADD (Number a) (Number b) = Right (Number (a+b))
 arithmetic A.SUB (Number a) (Number b) = Right (Number (a-b))
+arithmetic A.ORR (Number a) (Number b) = Right (Number (a .|. b))
 arithmetic _ _ _ = Left NumericProvenanceRejected
 
 validate :: A.Instruction -> Either AdmissionError ()
@@ -108,11 +110,12 @@ validate instruction = case instruction of
   A.MoveWide _ destination _ -> noPc destination
   A.MoveTop _ destination _ -> noPc destination
   A.DataProcessing _ operation updates destination source value -> do
-    require (operation `elem` [A.MOV,A.ADD,A.SUB,A.CMP] && updates == (operation == A.CMP)) UnsupportedInstruction
+    require (operation `elem` [A.MOV,A.ADD,A.SUB,A.CMP,A.ORR] && updates == (operation == A.CMP)) UnsupportedInstruction
     case value of
       A.Immediate _ -> pure ()
       A.ShiftedImmediate register A.LSL 0 -> require (register /= A.pc) PcOperandRejected
       _ -> Left UnsupportedInstruction
+    require (operation /= A.ORR || case value of A.Immediate _ -> True; _ -> False) UnsupportedInstruction
     let relative = source == A.pc && operation `elem` [A.ADD,A.SUB]
           && case value of A.Immediate _ -> True; _ -> False
         lrReturn = operation == A.MOV && value == A.ShiftedImmediate A.lr A.LSL 0
@@ -225,6 +228,7 @@ deriveRootProof bytes = do
           returned value changed = do
             require (value == IncomingLr) ReturnProvenanceRejected
             finish scenario Return pc changed
+          address :: A.Reg -> Int32 -> Either AdmissionError Int
           address base delta = case get machine base of
             Stack offset -> Right (offset+fromIntegral delta)
             _ -> Left ExternalMemoryAccess

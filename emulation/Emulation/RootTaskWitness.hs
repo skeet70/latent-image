@@ -13,7 +13,7 @@ import Data.Bits ((.&.), shiftL, shiftR, testBit)
 import qualified Data.ByteString as B
 import Data.List (find)
 import qualified Data.Map.Strict as M
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, listToMaybe)
 import qualified Data.Set as Set
 import Data.Word (Word16, Word32, Word64)
 import Emulation.RootTaskWire
@@ -239,6 +239,7 @@ checkViews inputs plan sample previous = do
       let (object,core,base,size) = viewShape view
           initial = sampleBoundary sample == Start
           codeBytes = bytes (viewBytes view)
+          within :: Word32 -> Word32 -> Bool
           within low high = base >= low && toInteger base+toInteger size <= toInteger high
       case object of
         LoadedCode -> do
@@ -339,9 +340,10 @@ seedSource plan (Memory old) captured
         case M.lookup location memory of
           Just _ -> pure memory
           Nothing -> do
-            image <- need PreimageRejected (find (\source -> let base = address (Memory.imageBase source)
-              in location >= base && toInteger location < toInteger base+toInteger (B.length (bytes (Memory.imageBytes source)))))
-              (Memory.planCode (Plan.memoryPlan plan)))
+            let contains source =
+                  let base = address (Memory.imageBase source)
+                  in location >= base && toInteger location < toInteger base+toInteger (B.length (bytes (Memory.imageBytes source)))
+            image <- need PreimageRejected (find contains (Memory.planCode (Plan.memoryPlan plan)))
             let value = B.index (bytes (Memory.imageBytes image)) (fromIntegral (location-address (Memory.imageBase image)))
             pure (M.insert location value memory)) old [0..fromIntegral size-1]
       pure (Memory seeded)
@@ -407,8 +409,8 @@ replay inputs plan receipt watch = do
 
 action :: Service -> [Word32] -> Action
 action service = Action service . map W.WordValue
-target :: Service -> Word32
-target service = case service of
+serviceTarget :: Service -> Word32
+serviceTarget service = case service of
   SharedSetup -> 0x649624; DiagnosticSetup -> 0x7284ec; Marker -> 0x72872c; ErrorCallback -> 0x725b54
   ResourceCreate -> 0x7247ac; Workers -> 0x69ca24; StateSetup -> 0x676054; PlatformSetup -> 0x662e48
   DeviceSetup -> 0x665224; ConfigurationSetup -> 0x649070; ConfigurationEnable -> 0x6490dc
@@ -553,7 +555,7 @@ checkActions inputs plan executions irqs pairs = do
                 expected <- need ActionOrderRejected (case drop (length (actionCompleted returned)) expectedActions of value:_ -> Just value; [] -> Nothing)
                 let Action service arguments = expected
                 observed <- mapM (register sample) [0..length arguments-1]
-                require (Root.callTarget site == target service && map W.WordValue observed == arguments) CallRejected
+                require (Root.callTarget site == serviceTarget service && map W.WordValue observed == arguments) CallRejected
                 let callerSp = toInteger (physical (address (W.contextSp (stateOf sample))))
                 require (callerSp <= 0xa10e00 && callerSp >= 0xa10e00+toInteger (Root.scratchLow (inputProof inputs))
                   && callerSp `mod` 8 == 0) FrameRejected
@@ -652,8 +654,7 @@ checkSubmissions episodes executions pairs = do
                   require (result `elem` [0,0xffffffd7]) FlagRejected
                   (_,_,flag) <- taskLocations core (publicationId publication)
                   state <- wordsAt FlagRejected memory flag 12
-                  require (last state == 1) FlagRejected
-                  actual <- flagAttribute (head state)
+                  actual <- case state of [attributes,_,1] -> flagAttribute attributes; _ -> Left FlagRejected
                   require (result /= 0 || actual == publicationFlag publication) FlagRejected
                   pure (Just episode {submissionStage=FlagsReady actual},completed)
                 0x725fa8 -> do
@@ -905,14 +906,16 @@ checkIrqs executions pairs = do
           volatile <- mapM (register (irqEntered tracked)) [0,1,2,3,12]
           saved <- mapM (register (irqEntered tracked)) [4..11]
           present <- mapM (register sample) [4..11]
-          require (head payload == word (contextSpsr (sampleContext (irqEntered tracked)))
+          status <- need FrameRejected (listToMaybe payload)
+          require (status == word (contextSpsr (sampleContext (irqEntered tracked)))
             && take 5 (drop 1 payload) == volatile && last payload == physical (address (W.contextLr (stateOf (irqEntered tracked))))-4
             && saved == present) FrameRejected
           pure (Just tracked {irqSaved=Just (W.Address sp,payload)},intervals)
         (IrqReturn,Just tracked) | current -> do
           (W.Address savedSp,payload) <- need FrameRejected (irqSaved tracked)
+          status <- need FrameRejected (listToMaybe payload)
           require (physical (address (W.contextSp (stateOf sample))) == savedSp+4
-            && contextSpsr (sampleContext sample) == W.WordValue (head payload)
+            && contextSpsr (sampleContext sample) == W.WordValue status
             && word (W.contextCpsr (stateOf sample)) .&. 0xbf == 0x93) ReturnRejected
           remaining <- wordsAt FrameRejected memory (savedSp+4) 28
           require (remaining == drop 1 payload) FrameRejected
@@ -923,8 +926,9 @@ checkIrqs executions pairs = do
             restored <- mapM (register sample) [0,1,2,3,12]
             before <- mapM (register (irqEntered tracked)) [4..11]
             after <- mapM (register sample) [4..11]
+            status <- need FrameRejected (listToMaybe payload)
             require (ran && restored == take 5 (drop 1 payload) && before == after
-              && W.contextCpsr (stateOf sample) == W.WordValue (head payload)
+              && W.contextCpsr (stateOf sample) == W.WordValue status
               && W.contextLr (stateOf sample) == W.Address (payload !! 6)
               && physical (address (W.contextSp (stateOf sample))) == savedSp+32) ReturnRejected
             low <- coreCount (irqEntered tracked); high <- coreCount sample

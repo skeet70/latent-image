@@ -238,8 +238,9 @@ refusalControls role sources original = do
         WrongStoppedClock -> do index <- stoppedRow; increment [field "records",Element index,field "instructions"]
         MissingSample -> set control [field "samples"] ([] :: [J.Value]) receiptValue >>= plain
         MissingPool -> do
+          initial <- maybe (Left (MutationRejected control)) Right (case samples of value:_ -> Just value; [] -> Nothing)
           index <- maybe (Left (MutationRejected control)) Right (findIndex (\view -> viewObject view == Pool
-            && address (viewPhysical view) == Plan.stackLow) (sampleViews (head samples)))
+            && address (viewPhysical view) == Plan.stackLow) (sampleViews initial))
           modifyAt control [field "samples",Element 0,field "views"] (\raw -> do
             values <- parse control raw :: Either ControlError [J.Value]
             pure (J.toJSON (take index values++drop (index+1) values))) receiptValue >>= plain
