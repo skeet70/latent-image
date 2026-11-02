@@ -541,6 +541,10 @@ impl ModalTrace {
         }
     }
 
+    pub(crate) fn watch_evidence(&self) -> Option<WatchEvidence<'_>> {
+        self.guard.as_ref().map(InstalledGuard::watch_evidence)
+    }
+
     pub(crate) fn check_finish(&mut self, session: &Session) -> Result<(), String> {
         if !self.enabled { return Err("modal observation is not active".into()); }
         self.check_interval()?;

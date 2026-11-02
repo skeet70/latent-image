@@ -832,6 +832,12 @@ impl TraceSites {
         self.modal_observation.as_ref().map(ModalTrace::report).unwrap_or_else(ModalReport::inactive)
     }
 
+    /// The installed-lifetime guard's memory watch, which the modal observation owns exclusively.
+    pub fn modal_watch_state(&self) -> Option<Result<serde_json::Value, String>> {
+        self.modal_observation.as_ref().and_then(ModalTrace::watch_evidence)
+            .map(|evidence| serde_json::to_value(evidence).map_err(|failure| format!("modal watch state: {failure}")))
+    }
+
     pub fn begin_modal_observation(&mut self, session: &Session, config: ModalConfig) -> Result<(), String> {
         if self.modal_observation_active() || self.capture_observation_active() {
             return Err("modal observation requires no active modal or capture observation".into());

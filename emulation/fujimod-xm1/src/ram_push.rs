@@ -1030,7 +1030,10 @@ impl Server {
             }
             Request::WatchState => match &self.watch {
                 Some(watch) => watch.records.borrow().state(),
-                None => return Err("watch-state requires an armed memory watch".into()),
+                None => match self.bridge.machine.traces.modal_watch_state() {
+                    Some(state) => state?,
+                    None => return Err("watch-state requires an armed memory watch".into()),
+                },
             },
             Request::PreservationBegin { ranges } => {
                 if self.bridge.machine.traces.modal_observation_active() {
