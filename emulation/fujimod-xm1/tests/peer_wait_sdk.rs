@@ -2631,3 +2631,136 @@ fn readding_a_removed_current_point_stops_its_first_return() {
     assert_eq!(machine.session.board.read_register(0, Register::Pc).unwrap(), 0x1000);
     assert_eq!(machine.instructions(), 2);
 }
+
+fn stop_sites(addresses: &[u32]) -> BTreeMap<u32, String> {
+    addresses.iter().map(|&address| (address, "stop".to_owned())).collect()
+}
+
+fn hit_positions(machine: &Machine) -> Vec<(usize, u32, u64)> {
+    machine.traces.hits.iter()
+        .map(|hit| (hit.core, u32::from_str_radix(hit.address.trim_start_matches("0x"), 16).unwrap(), hit.instructions))
+        .collect()
+}
+
+fn stopped_at(machine: &mut Machine, pc: u64, instructions: u64) {
+    assert_eq!(machine.run(20), RunOutcome::Stopped);
+    machine.require_running().unwrap();
+    assert_eq!(machine.instructions(), instructions);
+    assert_eq!(machine.session.board.read_register(0, Register::Pc).unwrap(), pc);
+}
+
+#[test]
+fn persistent_points_keep_stopped_fetch_rows_exact_through_every_site_and_mode_transition() {
+    use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
+    let mut program = vec![0xe2800001; 16];
+    program.push(0xeafffffe);
+    let mut machine = machine(&program);
+    machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
+    machine.traces.arm(&machine.session, stop_sites(&[0x1000])).unwrap();
+    machine.traces.stop_labels.insert("stop".into());
+    stopped_at(&mut machine, 0x1000, 0);
+    let mut watch = machine.session.board.memory_watch_begin_classified(vec![
+        WatchRange { start: 0x1000, end: 0x1044, kinds: WatchKinds::CPU_FETCH },
+    ], 64, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
+    machine.traces.arm_primary(&machine.session, stop_sites(&[0x1000, 0x1008])).unwrap();
+    stopped_at(&mut machine, 0x1000, 0);
+    stopped_at(&mut machine, 0x1008, 2);
+    machine.traces.add_sites(&machine.session, stop_sites(&[0x1010])).unwrap();
+    machine.traces.remove_sites(&machine.session, &[Guest(0x1008)]).unwrap();
+    stopped_at(&mut machine, 0x1010, 4);
+    machine.traces.add_sites(&machine.session, stop_sites(&[0x1018])).unwrap();
+    machine.traces.disarm(&machine.session).unwrap();
+    assert!(!machine.traces.armed());
+    machine.traces.rearm(&machine.session).unwrap();
+    stopped_at(&mut machine, 0x1018, 6);
+    machine.traces.disarm(&machine.session).unwrap();
+    assert_eq!(machine.run(2), RunOutcome::Completed);
+    machine.traces.rearm(&machine.session).unwrap();
+    assert!(machine.traces.armed());
+    machine.traces.arm(&machine.session, stop_sites(&[0x1024, 0x102c])).unwrap();
+    stopped_at(&mut machine, 0x1024, 9);
+    machine.traces.arm_mutable(&machine.session, stop_sites(&[0x1024, 0x102c])).unwrap();
+    stopped_at(&mut machine, 0x1024, 9);
+    stopped_at(&mut machine, 0x102c, 11);
+    machine.traces.replace_sites(&machine.session, stop_sites(&[0x1034])).unwrap();
+    stopped_at(&mut machine, 0x1034, 13);
+    machine.traces.remove_sites(&machine.session, &[Guest(0x1034)]).unwrap();
+    assert_eq!(machine.run(3), RunOutcome::Completed);
+    machine.require_running().unwrap();
+    let observed: Watch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(observed.violation.is_none());
+    assert!(observed.records.iter().all(|row| row.source == Source::CpuFetch && row.core == Some(0)));
+    let fetches: Vec<_> = observed.records.iter().map(|row| (row.pc.unwrap(), row.instructions.unwrap())).collect();
+    assert_eq!(fetches, [
+        (0x1000, 0),
+        (0x1000, 1), (0x1004, 2), (0x1008, 2),
+        (0x1008, 3), (0x100c, 4), (0x1010, 4),
+        (0x1010, 5), (0x1014, 6), (0x1018, 6),
+        (0x1018, 7), (0x101c, 8),
+        (0x1020, 9), (0x1024, 9),
+        (0x1024, 9),
+        (0x1024, 10), (0x1028, 11), (0x102c, 11),
+        (0x102c, 12), (0x1030, 13), (0x1034, 13),
+        (0x1034, 14), (0x1038, 15), (0x103c, 16),
+    ]);
+    assert_eq!(hit_positions(&machine), [
+        (0, 0x1000, 0), (0, 0x1000, 0), (0, 0x1008, 2), (0, 0x1010, 4), (0, 0x1018, 6),
+        (0, 0x1024, 9), (0, 0x1024, 9), (0, 0x102c, 11), (0, 0x1034, 13),
+    ]);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 16);
+    assert_eq!(machine.session.board.read_register(0, Register::Pc).unwrap(), 0x1040);
+    assert_eq!(machine.instructions(), 16);
+}
+
+#[test]
+fn primary_selection_leaves_the_secondary_set_empty_across_selection_transitions() {
+    use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
+    let mut program = vec![0xe2800001; 1023];
+    program.push(0xeafffffe);
+    let mut machine = machine(&program);
+    assert_eq!(machine.run(1000), RunOutcome::Completed);
+    assert_eq!(machine.session.board.instruction_counts(), [1000, 0]);
+    machine.traces.arm_primary(&machine.session, stop_sites(&[0x2008])).unwrap();
+    machine.traces.stop_labels.insert("stop".into());
+    let mut watch = machine.session.board.memory_watch_begin_classified(vec![
+        WatchRange { start: 0x2000, end: 0x2020, kinds: WatchKinds::CPU_FETCH },
+    ], 32, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
+    assert_eq!(machine.run(4), RunOutcome::Completed);
+    assert_eq!(machine.session.board.instruction_counts(), [1000, 4]);
+    assert!(machine.traces.hits.is_empty());
+    machine.traces.arm(&machine.session, stop_sites(&[0x2008, 0x2014])).unwrap();
+    assert_eq!(machine.run(10), RunOutcome::Stopped);
+    assert_eq!(machine.session.board.instruction_counts(), [1000, 5]);
+    assert_eq!(machine.session.board.read_register(1, Register::Pc).unwrap(), 0x2014);
+    machine.traces.arm_primary(&machine.session, stop_sites(&[0x2014, 0x201c])).unwrap();
+    assert_eq!(machine.run(4), RunOutcome::Completed);
+    machine.require_running().unwrap();
+    let observed: Watch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(observed.violation.is_none());
+    assert!(observed.records.iter().all(|row| row.source == Source::CpuFetch && row.core == Some(1)));
+    let fetches: Vec<_> = observed.records.iter().map(|row| (row.pc.unwrap(), row.instructions.unwrap())).collect();
+    assert_eq!(fetches, [
+        (0x2000, 1001), (0x2004, 1002), (0x2008, 1003), (0x200c, 1004),
+        (0x2010, 1005), (0x2014, 1005),
+        (0x2014, 1006), (0x2018, 1007), (0x201c, 1008),
+    ]);
+    assert_eq!(hit_positions(&machine), [(1, 0x2014, 1005)]);
+    assert_eq!(machine.session.board.instruction_counts(), [1000, 9]);
+}
+
+#[test]
+fn checkpoint_teardown_reinstalls_points_with_a_once_only_resume() {
+    let mut machine = machine(&[0xe2800001, 0xe2800001, 0xe2800001, 0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
+    machine.traces.arm(&machine.session, stop_sites(&[0x1000, 0x1008])).unwrap();
+    machine.traces.stop_labels.insert("stop".into());
+    stopped_at(&mut machine, 0x1000, 0);
+    machine.disarm().unwrap();
+    machine.rearm().unwrap();
+    assert!(machine.traces.armed());
+    stopped_at(&mut machine, 0x1008, 2);
+    assert_eq!(hit_positions(&machine), [(0, 0x1000, 0), (0, 0x1008, 2)]);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 2);
+}

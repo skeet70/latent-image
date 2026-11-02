@@ -51,6 +51,8 @@ exports_files(["share/libusb-runtime/store-path"], visibility = ["//visibility:p
 _FUJIMOD_NIX_DEPS = [
     "//:devenv.lock",
     "//build-support:fujimod-classified-watch.patch",
+    "//build-support:fujimod-composite-cpu.patch",
+    "//build-support:fujimod-composite-watch.patch",
     "//build-support:fujimod-fetch-attribution.patch",
     "//build-support:fujimod-unicorn-context-align.patch",
     "//build-support:fujimod.nix",

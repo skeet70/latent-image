@@ -753,11 +753,35 @@ enum CoreSelection {
     Primary,
 }
 
+impl CoreSelection {
+    fn includes(self, core: usize) -> bool {
+        matches!(self, Self::All) || core == 0
+    }
+}
+
+/// `Replaceable` permits `replace_sites` and stays armed without sites.
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
-enum PointSetMode {
+enum SiteSet {
     #[default]
     Fixed,
-    Mutable,
+    Replaceable,
+}
+
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+enum Arming {
+    #[default]
+    Disarmed,
+    Armed,
+}
+
+/// Lifecycle of the per-core all-PC instruction point sets.
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+enum NativePoints {
+    #[default]
+    Absent,
+    Installed,
+    /// Removed by `teardown` until `reinstall`.
+    Removed,
 }
 
 enum PointScope {
@@ -779,9 +803,12 @@ pub struct TraceSites {
     pub hits: Vec<Hit>,
     hit_limit: Option<std::num::NonZeroUsize>,
     code_binding: Option<CodeBinding>,
+    /// Per-core mutable sets in core order; a set whose removal failed stays here.
     points: Vec<(usize, Box<InstructionPoints>)>,
     cores: CoreSelection,
-    point_set_mode: PointSetMode,
+    site_set: SiteSet,
+    arming: Arming,
+    native: NativePoints,
     resumed: BTreeMap<usize, ResumeMarker>,
     capture_observation: Option<CaptureObservation>,
     pending_points: Vec<Option<u64>>,
@@ -846,9 +873,8 @@ impl TraceSites {
             Ok::<(), String>(())
         });
         if let Err(failure) = &observed { monitor.fail(failure.clone()); }
-        self.end_points(session)?;
         self.modal_observation = Some(monitor);
-        if let Err(failure) = self.rearm(session).and_then(|()| self.restore_resume(session)) {
+        if let Err(failure) = self.arm_membership(session, PointScope::UserAndModal) {
             if let Some(modal) = &mut self.modal_observation { modal.fail(failure.clone()); }
             return Err(failure);
         }
@@ -857,11 +883,9 @@ impl TraceSites {
 
     pub fn end_modal_observation(&mut self, session: &Session) -> Result<(), String> {
         self.modal_observation.as_mut().ok_or("modal observation has not begun")?.check_finish()?;
-        let teardown = self.end_points(session)
-            .and_then(|()| self.rearm_scope(session, PointScope::User))
-            .and_then(|()| self.restore_resume(session));
+        let narrowed = self.arm_membership(session, PointScope::User);
         let modal = self.modal_observation.as_mut().ok_or("modal observation disappeared")?;
-        match teardown {
+        match narrowed {
             Ok(()) => {
                 modal.disable();
                 Ok(())
@@ -1000,41 +1024,34 @@ impl TraceSites {
         }))
     }
 
+    /// Logically armed with a nonempty membership, or armed for whole-set replacement.
     pub fn armed(&self) -> bool {
-        !self.points.is_empty()
+        self.arming == Arming::Armed && (self.site_set == SiteSet::Replaceable || !self.sites.is_empty()
+            || self.modal_observation.as_ref().is_some_and(|modal| modal.active() && modal.sites().next().is_some()))
     }
 
     /// Replaces the armed sites on every core.
     pub fn arm(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
-        self.arm_selection(session, sites, CoreSelection::All, PointSetMode::Fixed)
+        self.arm_selection(session, sites, CoreSelection::All, SiteSet::Fixed)
     }
 
     pub fn arm_primary(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
-        self.arm_selection(session, sites, CoreSelection::Primary, PointSetMode::Fixed)
+        self.arm_selection(session, sites, CoreSelection::Primary, SiteSet::Fixed)
     }
 
     pub fn arm_mutable(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
-        self.arm_selection(session, sites, CoreSelection::All, PointSetMode::Mutable)
+        self.arm_selection(session, sites, CoreSelection::All, SiteSet::Replaceable)
     }
 
     pub fn replace_sites(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
-        if self.modal_observation_active() {
-            return Err("modal observation sites are frozen until successful finish".into());
-        }
-        if self.capture_observation_active() {
-            return Err("capture observation sites are frozen until the session ends".into());
-        }
-        self.replace_point_addresses(sites.keys().map(|&address| u64::from(address)).collect())?;
-        self.sites = sites;
-        self.restore_resume(session)
-    }
-
-    fn replace_point_addresses(&self, addresses: Vec<u64>) -> Result<(), String> {
-        if self.point_set_mode != PointSetMode::Mutable || self.points.is_empty() {
+        self.require_unfrozen_sites()?;
+        if self.site_set != SiteSet::Replaceable || self.arming != Arming::Armed {
             return Err("mutable instruction points are not armed".into());
         }
-        for (_, points) in &self.points { points.replace_addresses(addresses.clone())?; }
-        Ok(())
+        let memberships = self.memberships(session, sites.keys().copied(), self.cores, Arming::Armed, PointScope::UserAndModal);
+        self.apply(session, memberships)?;
+        self.sites = sites;
+        self.restore_resume(session)
     }
 
     fn arm_selection(
@@ -1042,53 +1059,94 @@ impl TraceSites {
         session: &Session,
         sites: BTreeMap<u32, String>,
         cores: CoreSelection,
-        point_set_mode: PointSetMode,
+        site_set: SiteSet,
     ) -> Result<(), String> {
+        self.require_unfrozen_sites()?;
+        let memberships = self.memberships(session, sites.keys().copied(), cores, Arming::Armed, PointScope::UserAndModal);
+        self.apply(session, memberships)?;
+        self.discard_events();
+        self.resumed.clear();
+        self.sites = sites;
+        self.cores = cores;
+        self.site_set = site_set;
+        self.arming = Arming::Armed;
+        self.restore_resume(session)
+    }
+
+    fn require_unfrozen_sites(&self) -> Result<(), String> {
         if self.modal_observation_active() {
             return Err("modal observation sites are frozen until successful finish".into());
         }
         if self.capture_observation_active() {
             return Err("capture observation sites are frozen until the session ends".into());
         }
-        self.disarm(session)?;
-        self.sites = sites;
-        self.cores = cores;
-        self.point_set_mode = point_set_mode;
-        self.resumed.clear();
-        self.rearm(session)
+        Ok(())
     }
 
+    /// Fixed site sets arm on update; replaceable ones must already be armed.
+    fn require_updatable(&self) -> Result<(), String> {
+        if self.site_set == SiteSet::Replaceable && self.arming == Arming::Disarmed {
+            return Err("mutable instruction points are not armed".into());
+        }
+        Ok(())
+    }
+
+    /// Empties every core's membership and discards undelivered entries. Installed point sets stay installed.
     pub fn disarm(&mut self, session: &Session) -> Result<(), String> {
         if self.modal_observation_active() {
             return Err("modal observation sites cannot be disarmed before successful finish".into());
         }
-        self.end_points(session)
-    }
-
-    fn end_points(&mut self, session: &Session) -> Result<(), String> {
-        for (core, mut points) in self.points.drain(..) {
-            session.board.instruction_points_end(core, &mut points)?;
+        if self.native == NativePoints::Installed {
+            let memberships = self.memberships(session, std::iter::empty(), self.cores, Arming::Disarmed, PointScope::User);
+            self.apply(session, memberships)?;
+            self.discard_events();
         }
-        self.pending_points.clear();
+        self.arming = Arming::Disarmed;
         Ok(())
     }
 
-    pub fn remove_sites(&mut self, session: &Session, addresses: &[Guest]) -> Result<(), String> {
+    /// Restores the membership emptied by `disarm`.
+    pub fn rearm(&mut self, session: &Session) -> Result<(), String> {
+        if self.armed() {
+            return Err("trace sites are already armed".into());
+        }
+        self.arm_membership(session, PointScope::UserAndModal)
+    }
+
+    /// Removes the native point sets, as before a session checkpoint, keeping logical arming for `reinstall`.
+    /// Undelivered entries are discarded; a core still stopped before one enters it again after `reinstall`.
+    pub fn teardown(&mut self, session: &Session) -> Result<(), String> {
         if self.modal_observation_active() {
-            return Err("modal observation sites are frozen until successful finish".into());
+            return Err("modal observation sites cannot be disarmed before successful finish".into());
         }
-        if self.capture_observation_active() {
-            return Err("capture observation sites are frozen until the session ends".into());
+        self.remove_points(session)?;
+        if self.native == NativePoints::Installed {
+            self.native = NativePoints::Removed;
         }
+        Ok(())
+    }
+
+    /// Installs the point sets removed by `teardown` with the current membership.
+    pub fn reinstall(&mut self, session: &Session) -> Result<(), String> {
+        if self.native != NativePoints::Removed {
+            return Ok(());
+        }
+        let memberships = self.memberships(session, self.sites.keys().copied(), self.cores, self.arming, PointScope::UserAndModal);
+        self.install(session, memberships)?;
+        self.restore_resume(session)
+    }
+
+    pub fn remove_sites(&mut self, session: &Session, addresses: &[Guest]) -> Result<(), String> {
+        self.require_unfrozen_sites()?;
         if addresses.is_empty() { return Ok(()); }
         if addresses.iter().any(|address| !self.sites.contains_key(&address.0)) {
             return Err("trace site is not armed".into());
         }
-        let mutable = self.point_set_mode == PointSetMode::Mutable;
-        if mutable {
-            self.replace_point_addresses(self.sites.keys().filter(|address| !addresses.iter().any(|removed| removed.0 == **address))
-                .map(|&address| u64::from(address)).collect())?;
-        } else { self.disarm(session)?; }
+        self.require_updatable()?;
+        let remaining = self.sites.keys().copied().filter(|site| !addresses.iter().any(|removed| removed.0 == *site));
+        let memberships = self.memberships(session, remaining, self.cores, Arming::Armed, PointScope::UserAndModal);
+        self.apply(session, memberships)?;
+        self.arming = Arming::Armed;
         for address in addresses {
             if let Some(label) = self.sites.remove(&address.0) {
                 if !self.sites.values().any(|other| other == &label) {
@@ -1096,78 +1154,128 @@ impl TraceSites {
                 }
             }
         }
-        if !mutable { self.rearm(session)?; }
         self.restore_resume(session)
     }
 
     /// Adds stopping sites while preserving a stopped core's resume marker.
     pub fn add_sites(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
-        if self.modal_observation_active() {
-            return Err("modal observation sites are frozen until successful finish".into());
-        }
-        if self.capture_observation_active() {
-            return Err("capture observation sites are frozen until the session ends".into());
-        }
+        self.require_unfrozen_sites()?;
         if sites.keys().any(|address| self.sites.contains_key(address)) {
             return Err("trace site is already armed".into());
         }
-        let mutable = self.point_set_mode == PointSetMode::Mutable;
-        if mutable {
-            self.replace_point_addresses(self.sites.keys().chain(sites.keys()).map(|&address| u64::from(address)).collect())?;
-        } else { self.disarm(session)?; }
+        self.require_updatable()?;
+        let memberships = self.memberships(session, self.sites.keys().chain(sites.keys()).copied(), self.cores, Arming::Armed, PointScope::UserAndModal);
+        self.apply(session, memberships)?;
+        self.arming = Arming::Armed;
         for label in sites.values() {
             if !self.stop_labels.contains(label) {
                 self.stop_labels.insert(label.clone());
             }
         }
         self.sites.extend(sites);
-        if !mutable { self.rearm(session)?; }
         self.restore_resume(session)
     }
 
-    fn restore_resume(&self, session: &Session) -> Result<(), String> {
-        let counts = session.board.instruction_counts();
-        for (core, points) in &self.points {
-            if let Some(marker) = self.resumed.get(core) {
-                let current = session.board.read_register(*core, Register::Pc)?;
-                if current == u64::from(marker.pc.0) && counts[*core] == marker.entered.0 {
-                    points.resume(current, u64::from(marker.pc.0));
-                }
-            }
+    /// Each core's point addresses. A modal scope selects every core; otherwise unselected cores are empty.
+    fn memberships(
+        &self,
+        session: &Session,
+        user: impl Iterator<Item = u32>,
+        cores: CoreSelection,
+        arming: Arming,
+        scope: PointScope,
+    ) -> Vec<Vec<u64>> {
+        let count = session.board.instruction_counts().len();
+        if arming == Arming::Disarmed {
+            return vec![Vec::new(); count];
+        }
+        let modal = self.modal_observation.as_ref()
+            .filter(|modal| matches!(scope, PointScope::UserAndModal) && modal.active());
+        let mut addresses: BTreeSet<u64> = user.map(u64::from).collect();
+        if let Some(modal) = modal {
+            addresses.extend(modal.sites().map(|pc| u64::from(pc.0)));
+        }
+        let addresses: Vec<u64> = addresses.into_iter().collect();
+        (0..count).map(|core| if modal.is_some() || cores.includes(core) { addresses.clone() } else { Vec::new() }).collect()
+    }
+
+    /// Arms the current sites under `scope` and re-derives each core's once-only resume.
+    fn arm_membership(&mut self, session: &Session, scope: PointScope) -> Result<(), String> {
+        let memberships = self.memberships(session, self.sites.keys().copied(), self.cores, Arming::Armed, scope);
+        self.apply(session, memberships)?;
+        self.arming = Arming::Armed;
+        self.restore_resume(session)
+    }
+
+    /// Sets each core's membership, installing the point sets first when they are not installed.
+    fn apply(&mut self, session: &Session, memberships: Vec<Vec<u64>>) -> Result<(), String> {
+        if self.native != NativePoints::Installed {
+            return self.install(session, memberships);
+        }
+        if self.points.len() != memberships.len() {
+            return Err("trace instruction points were not fully removed".into());
+        }
+        self.take_events();
+        for ((_, points), addresses) in self.points.iter().zip(memberships) {
+            points.replace_addresses(addresses)?;
         }
         Ok(())
     }
 
-    pub fn rearm(&mut self, session: &Session) -> Result<(), String> {
-        self.rearm_scope(session, PointScope::UserAndModal)
+    fn install(&mut self, session: &Session, memberships: Vec<Vec<u64>>) -> Result<(), String> {
+        if !self.points.is_empty() {
+            return Err("trace instruction points were not fully removed".into());
+        }
+        for (core, addresses) in memberships.into_iter().enumerate() {
+            match session.board.instruction_points_begin_mutable(core, addresses) {
+                Ok(points) => {
+                    self.points.push((core, points));
+                    self.pending_points.push(None);
+                }
+                Err(failure) => {
+                    self.remove_points(session)?;
+                    return Err(failure);
+                }
+            }
+        }
+        self.native = NativePoints::Installed;
+        Ok(())
     }
 
-    fn rearm_scope(&mut self, session: &Session, scope: PointScope) -> Result<(), String> {
-        if !self.points.is_empty() {
-            return Err("trace sites are already armed".into());
+    /// Removes from the last core; a set whose removal fails stays owned.
+    fn remove_points(&mut self, session: &Session) -> Result<(), String> {
+        while let Some((core, points)) = self.points.last_mut() {
+            session.board.instruction_points_end(*core, points)?;
+            self.points.pop();
+            self.pending_points.pop();
         }
-        let modal = self.modal_observation.as_ref()
-            .filter(|modal| matches!(scope, PointScope::UserAndModal) && modal.active());
-        let mut addresses: BTreeSet<u64> = self.sites.keys().map(|&address| u64::from(address)).collect();
-        if let Some(modal) = modal {
-            addresses.extend(modal.sites().map(|pc| u64::from(pc.0)));
-        }
-        if addresses.is_empty() && self.point_set_mode == PointSetMode::Fixed { return Ok(()); }
-        let addresses: Vec<u64> = addresses.into_iter().collect();
-        for core in 0..session.board.instruction_counts().len() {
-            let selected = modal.is_some() || match self.cores {
-                CoreSelection::All => true,
-                CoreSelection::Primary => core == 0,
-            };
-            if !selected {
-                continue;
+        Ok(())
+    }
+
+    fn take_events(&mut self) {
+        for ((_, points), pending) in self.points.iter().zip(&mut self.pending_points) {
+            if pending.is_none() {
+                *pending = points.event();
             }
-            let points = match self.point_set_mode {
-                PointSetMode::Fixed => session.board.instruction_points_begin(core, addresses.clone())?,
-                PointSetMode::Mutable => session.board.instruction_points_begin_mutable(core, addresses.clone())?,
-            };
-            self.points.push((core, points));
-            self.pending_points.push(None);
+        }
+    }
+
+    fn discard_events(&mut self) {
+        for ((_, points), pending) in self.points.iter().zip(&mut self.pending_points) {
+            points.event();
+            *pending = None;
+        }
+    }
+
+    /// Re-derives each core's once-only resume from its undelivered entry or its still-current marker.
+    fn restore_resume(&self, session: &Session) -> Result<(), String> {
+        let counts = session.board.instruction_counts();
+        for ((core, points), pending) in self.points.iter().zip(&self.pending_points) {
+            let current = session.board.read_register(*core, Register::Pc)?;
+            let marker = self.resumed.get(core).filter(|marker| counts[*core] == marker.entered.0)
+                .map(|marker| u64::from(marker.pc.0));
+            // `resume` keeps a skip only for a member observed at the current PC, so `!current` cancels it.
+            points.resume(current, pending.or(marker).unwrap_or(!current));
         }
         Ok(())
     }
@@ -1190,11 +1298,7 @@ impl TraceSites {
         let mut new_returns = [None; 2];
         let mut observed_modal = [None; 2];
         let counts = session.board.instruction_counts();
-        for (index, (_, points)) in self.points.iter().enumerate() {
-            if self.pending_points[index].is_none() {
-                self.pending_points[index] = points.event();
-            }
-        }
+        self.take_events();
         for (point_index, (core, points)) in self.points.iter().enumerate() {
             let Some(pc) = self.pending_points[point_index] else { continue };
             let address = u32::try_from(pc).map_err(|_| "trace site exceeds 32 bits")?;
@@ -1204,7 +1308,7 @@ impl TraceSites {
                     observed_modal[*core] = Some(Guest(address));
                 }
             }
-            let selected = matches!(self.cores, CoreSelection::All) || *core == 0;
+            let selected = self.cores.includes(*core);
             let Some(site) = self.sites.get(&address).filter(|_| selected) else {
                 let current = session.board.read_register(*core, Register::Pc)?;
                 points.resume(current, pc);
@@ -1308,8 +1412,7 @@ impl TraceSites {
                     }
                 }
             }
-            let rearmed = self.end_points(session).and_then(|()| self.rearm(session))
-                .and_then(|()| self.restore_resume(session));
+            let rearmed = self.arm_membership(session, PointScope::UserAndModal);
             if let Err(failure) = rearmed {
                 if let Some(modal) = &mut self.modal_observation { modal.fail(failure.clone()); }
                 return Err(failure);

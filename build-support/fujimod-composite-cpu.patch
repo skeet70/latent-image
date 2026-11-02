@@ -1,0 +1,1622 @@
+diff --git a/crates/emulator-cpu/src/lib.rs b/crates/emulator-cpu/src/lib.rs
+index 5d60452..e1a3739 100644
+--- a/crates/emulator-cpu/src/lib.rs
++++ b/crates/emulator-cpu/src/lib.rs
+@@ -179,6 +179,42 @@ impl ExecutionPolicy {
+         }
+     }
+ }
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum MutationOrigin {
++    Guest,
++    Host,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum MappingMutation {
++    MapBacking,
++    MapPhysical,
++    ReplacePhysical,
++    MapZeroed,
++    MapMmio,
++    Unmap,
++    Protect,
++}
++/// A validated mutation transaction, reported before its first effect.
++/// Admission does not promise completion or rollback of later failures.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum CpuMutation {
++    HostWrite { address: u64, bytes: usize },
++    Tcm {
++        register: arm::Coprocessor,
++        previous: u32,
++        next: u32,
++        origin: MutationOrigin,
++    },
++    Mapping {
++        operation: MappingMutation,
++        address: u64,
++        physical: Option<u64>,
++        bytes: usize,
++        permissions: Option<u32>,
++    },
++    Restore,
++    ExecutionPolicy { before: ExecutionPolicy, after: ExecutionPolicy },
++}
+ /// Guest-clock anchor for architectural registers implemented by a backend.
+ /// Its phase and ratio are supplied by the execution owner, never host time.
+ #[derive(Clone, Copy, Debug)]
+@@ -475,6 +511,15 @@ pub struct Block {
+ }
+ #[derive(Clone, Copy)]
+ pub enum Hook {
++    /// Opt-in transaction admission. False refuses before the first effect.
++    /// Runs before any other observer of the transaction. While it runs, hook
++    /// registration, removal and mutations through the same CPU are refused,
++    /// and such a refused mutation also refuses the transaction.
++    /// Callback contexts must remain live until successful removal.
++    Mutation {
++        callback: unsafe fn(CpuMutation, *mut c_void) -> bool,
++        data: *mut c_void,
++    },
+     Instruction {
+         callback: unsafe fn(u64, u32, *mut c_void),
+         data: *mut c_void,
+@@ -576,6 +621,10 @@ pub struct BackingObserver {
+ 
+ pub trait Cpu {
+     fn identity(&self) -> Identity;
++    /// Whether this processor reports every CpuMutation transaction to Hook::Mutation observers.
++    fn supports_mutation_observation(&self) -> bool {
++        false
++    }
+     /// Configure instruction-proven loops; statistics remain observational.
+     fn set_loop_mode(&self, mode: loops::LoopMode) -> Result<(), String> {
+         if mode == loops::LoopMode::Disabled {
+diff --git a/crates/emulator-cpu-unicorn/src/lib.rs b/crates/emulator-cpu-unicorn/src/lib.rs
+index 4a26db6..904da9c 100644
+--- a/crates/emulator-cpu-unicorn/src/lib.rs
++++ b/crates/emulator-cpu-unicorn/src/lib.rs
+@@ -795,6 +795,9 @@ impl Cpu for Core {
+     }
+     unsafe fn install_hook(&self, hook: Hook) -> Result<HookId, String> {
+         let (kind, callback, span) = match hook {
++            Hook::Mutation { .. } => {
++                return Err("mutation hooks require the serialized R-profile backend".into());
++            }
+             Hook::Instruction { range, .. } => (4, instruction as *const (), range),
+             Hook::Block { range, .. } => (8, block as *const (), range),
+             Hook::Exception { .. } => (1, exception as *const (), HookRange::All),
+diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs b/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs
+index 0b6bcb7..1ddc146 100644
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs
+@@ -9,6 +9,16 @@ fn host_write_selected(range: HookRange, address: u64, bytes: usize) -> bool {
+     }
+ }
+ 
++fn mmio_mutation(address: u64, bytes: usize) -> CpuMutation {
++    CpuMutation::Mapping {
++        operation: MappingMutation::MapMmio,
++        address,
++        physical: None,
++        bytes,
++        permissions: None,
++    }
++}
++
+ impl Cpu for Core {
+     fn set_loop_mode(&self, mode: fujimod_emulator_cpu::loops::LoopMode) -> Result<(), String> {
+         let e = &self.execution;
+@@ -31,6 +41,9 @@ impl Cpu for Core {
+     fn identity(&self) -> Identity {
+         self.execution.cpu.identity()
+     }
++    fn supports_mutation_observation(&self) -> bool {
++        !self.execution.parallel_tcg
++    }
+     fn set_execution_policy(&self, policy: ExecutionPolicy) -> Result<(), String> {
+         let e = &self.execution;
+         if e.memory.run_reserved(e.id.get()) {
+@@ -40,10 +53,23 @@ impl Cpu for Core {
+         if e.active.get() {
+             return Err("execution policy requires a stopped processor".into());
+         }
+-        e.set_policy(policy)?;
+-        e.clock_overshoot.set(0);
+-        unsafe { (*e.record.as_ptr()).enabled = e.accounting_mode() };
+-        Ok(())
++        let before = e.policy.get();
++        let apply = || -> Result<(), String> {
++            e.set_policy(policy)?;
++            e.clock_overshoot.set(0);
++            unsafe { (*e.record.as_ptr()).enabled = e.accounting_mode() };
++            Ok(())
++        };
++        if before == policy {
++            return apply();
++        }
++        e.mutate(
++            CpuMutation::ExecutionPolicy {
++                before,
++                after: policy,
++            },
++            apply,
++        )
+     }
+     fn checkpoint_backings(&self) -> Result<Vec<(NonNull<u8>, usize)>, String> {
+         Ok(self
+@@ -100,6 +126,7 @@ impl Cpu for Core {
+                 e.apply_tcm(
+                     r.opc2 as usize,
+                     u32::try_from(value).map_err(|_| "TCM value exceeds 32 bits")?,
++                    MutationOrigin::Host,
+                 )?;
+                 return Ok(0);
+             }
+@@ -159,25 +186,38 @@ impl Cpu for Core {
+         self.execution.cpu.read_virtual(address, access, bytes)
+     }
+     fn write_memory(&self, address: u64, bytes: &[u8]) -> Result<(), String> {
+-        if !bytes.is_empty() {
+-            let index = self.execution.observer_index.borrow();
+-            for (_, hook) in &index.host_writes {
+-                let Hook::HostWrite {
+-                    callback,
+-                    data,
+-                    range,
+-                } = *hook
+-                else {
+-                    continue;
+-                };
+-                if host_write_selected(range, address, bytes.len()) {
+-                    unsafe { callback(address, bytes.len(), data) };
++        let e = &self.execution;
++        if bytes.is_empty() {
++            e.mark_direct_write(address, 0)?;
++            e.cpu.write_memory(address, bytes)?;
++            return self.memory_written(address, 0);
++        }
++        let event = CpuMutation::HostWrite {
++            address,
++            bytes: bytes.len(),
++        };
++        e.mutate(event, || {
++            {
++                let index = e.observer_index.borrow();
++                for (_, hook) in &index.host_writes {
++                    let Hook::HostWrite {
++                        callback,
++                        data,
++                        range,
++                    } = *hook
++                    else {
++                        continue;
++                    };
++                    if host_write_selected(range, address, bytes.len()) {
++                        unsafe { callback(address, bytes.len(), data) };
++                    }
+                 }
+             }
+-        }
+-        self.execution.mark_direct_write(address, bytes.len())?;
+-        self.execution.cpu.write_memory(address, bytes)?;
+-        self.memory_written(address, bytes.len())
++            e.mutation_refusal()?;
++            e.mark_direct_write(address, bytes.len())?;
++            e.cpu.write_memory(address, bytes)?;
++            self.memory_written(address, bytes.len())
++        })
+     }
+     fn memory_written(&self, address: u64, bytes: usize) -> Result<(), String> {
+         let e = &self.execution;
+@@ -212,13 +252,16 @@ impl Cpu for Core {
+         backing: NonNull<u8>,
+     ) -> Result<(), String> {
+         let e = &self.execution;
+-        e.map_external(Mapping {
+-            address,
+-            bytes,
+-            pointer: backing.as_ptr() as usize,
+-            permissions,
+-            physical: None,
+-        })
++        e.map_external(
++            Mapping {
++                address,
++                bytes,
++                pointer: backing.as_ptr() as usize,
++                permissions,
++                physical: None,
++            },
++            MappingMutation::MapBacking,
++        )
+     }
+     unsafe fn map_physical(
+         &self,
+@@ -228,13 +271,16 @@ impl Cpu for Core {
+         permissions: u32,
+         backing: NonNull<u8>,
+     ) -> Result<(), String> {
+-        self.execution.map_external(Mapping {
+-            address,
+-            bytes,
+-            permissions,
+-            pointer: backing.as_ptr() as usize,
+-            physical: Some(physical),
+-        })
++        self.execution.map_external(
++            Mapping {
++                address,
++                bytes,
++                permissions,
++                pointer: backing.as_ptr() as usize,
++                physical: Some(physical),
++            },
++            MappingMutation::MapPhysical,
++        )
+     }
+     unsafe fn replace_physical(
+         &self,
+@@ -253,34 +299,39 @@ impl Cpu for Core {
+         })
+     }
+     fn map_zeroed(&self, address: u64, bytes: usize, permissions: u32) -> Result<(), String> {
+-        self.execution.memory.require_stopped()?;
++        let e = &self.execution;
++        e.memory.require_stopped()?;
+         let backing = Backing::aligned_zeros(bytes, 4096)?;
+-        let pointer = (backing.as_ptr() as usize + 4095) & !4095;
+-        // Keep the allocation even if a later map/watch operation fails.
+-        // An error must never leave a native mapping of a freed allocation.
+-        self.execution.owned.borrow_mut().push(backing);
+-        unsafe {
+-            self.map_backing(
+-                address,
+-                bytes,
+-                permissions,
+-                NonNull::new(pointer as *mut u8).unwrap(),
+-            )
+-        }
++        let map = Mapping {
++            address,
++            bytes,
++            pointer: (backing.as_ptr() as usize + 4095) & !4095,
++            permissions,
++            physical: None,
++        };
++        e.validate_external(map)?;
++        e.mutate(map.mutation(MappingMutation::MapZeroed), || {
++            // Keep the allocation even if a later map/watch operation fails.
++            // An error must never leave a native mapping of a freed allocation.
++            e.owned.borrow_mut().push(backing);
++            e.map_external_inner(map)
++        })
+     }
+     unsafe fn map_mmio(&self, address: u64, bytes: usize, callbacks: Mmio) -> Result<(), String> {
+         let e = &self.execution;
+         if e.overlaps_tcm(address, bytes) {
+             return Err("MMIO overlaps processor-private TCM".into());
+         }
+-        unsafe {
+-            e.cpu.map_mmio(address, bytes, callbacks)?;
+-        }
+-        if let Err(error) = e.device_hook(address, bytes) {
+-            e.cpu.unmap(address, bytes)?;
+-            return Err(error);
+-        }
+-        Ok(())
++        e.mutate(mmio_mutation(address, bytes), || {
++            unsafe {
++                e.cpu.map_mmio(address, bytes, callbacks)?;
++            }
++            if let Err(error) = e.device_hook(address, bytes) {
++                e.cpu.unmap(address, bytes)?;
++                return Err(error);
++            }
++            Ok(())
++        })
+     }
+     unsafe fn map_mmio_fast(
+         &self,
+@@ -293,80 +344,114 @@ impl Cpu for Core {
+         if e.overlaps_tcm(address, bytes) {
+             return Err("MMIO overlaps processor-private TCM".into());
+         }
+-        for read in &fast_reads {
+-            read.set_enabled(e.policy.get() == ExecutionPolicy::Interactive);
+-        }
+-        unsafe {
+-            e.cpu
+-                .map_mmio_fast(address, bytes, callbacks, fast_reads.clone())?;
+-        }
+-        if let Err(error) = e.device_hook(address, bytes) {
+-            e.cpu.unmap(address, bytes)?;
+-            return Err(error);
+-        }
+-        e.loop_reads
+-            .borrow_mut()
+-            .extend(fast_reads.iter().cloned().map(|read| (address, read)));
+-        e.fast_reads.borrow_mut().extend(fast_reads);
+-        Ok(())
++        e.mutate(mmio_mutation(address, bytes), || {
++            for read in &fast_reads {
++                read.set_enabled(e.policy.get() == ExecutionPolicy::Interactive);
++            }
++            unsafe {
++                e.cpu
++                    .map_mmio_fast(address, bytes, callbacks, fast_reads.clone())?;
++            }
++            if let Err(error) = e.device_hook(address, bytes) {
++                e.cpu.unmap(address, bytes)?;
++                return Err(error);
++            }
++            e.loop_reads
++                .borrow_mut()
++                .extend(fast_reads.iter().cloned().map(|read| (address, read)));
++            e.fast_reads.borrow_mut().extend(fast_reads);
++            Ok(())
++        })
+     }
+     fn unmap(&self, address: u64, bytes: usize) -> Result<(), String> {
+         let e = &self.execution;
+         if e.overlaps_tcm(address, bytes) {
+             return Err("TCM mappings are owned by the processor".into());
+         }
+-        e.cpu.unmap(address, bytes)?;
+-        e.memory.unmap(e.id.get(), address, bytes);
+-        e.remove_external(address, bytes);
+-        let end = address + bytes as u64;
+-        e.loop_reads.borrow_mut().retain(|(base, read)| {
+-            let p = base + read.register_offset;
+-            p + 4 <= address || p >= end
+-        });
+-        let affected: Vec<_> = e
+-            .mmio_hooks
+-            .borrow()
+-            .iter()
+-            .filter(|(start, (n, _))| **start < end && address < **start + *n as u64)
+-            .map(|(&start, &(n, hook))| (start, n, hook))
+-            .collect();
+-        for (start, n, hook) in affected {
+-            e.cpu.remove_hook(hook)?;
+-            e.mmio_hooks.borrow_mut().remove(&start);
+-            if start < address {
+-                e.device_hook(start, (address - start) as usize)?;
+-            }
+-            if start + n as u64 > end {
+-                e.device_hook(end, (start + n as u64 - end) as usize)?;
++        let apply = || -> Result<(), String> {
++            e.cpu.unmap(address, bytes)?;
++            e.memory.unmap(e.id.get(), address, bytes);
++            e.remove_external(address, bytes);
++            let end = address + bytes as u64;
++            e.loop_reads.borrow_mut().retain(|(base, read)| {
++                let p = base + read.register_offset;
++                p + 4 <= address || p >= end
++            });
++            let affected: Vec<_> = e
++                .mmio_hooks
++                .borrow()
++                .iter()
++                .filter(|(start, (n, _))| **start < end && address < **start + *n as u64)
++                .map(|(&start, &(n, hook))| (start, n, hook))
++                .collect();
++            for (start, n, hook) in affected {
++                e.cpu.remove_hook(hook)?;
++                e.mmio_hooks.borrow_mut().remove(&start);
++                if start < address {
++                    e.device_hook(start, (address - start) as usize)?;
++                }
++                if start + n as u64 > end {
++                    e.device_hook(end, (start + n as u64 - end) as usize)?;
++                }
+             }
++            Ok(())
++        };
++        // An empty native unmap changes nothing.
++        if bytes == 0 {
++            return apply();
+         }
+-        Ok(())
++        e.mutate(
++            CpuMutation::Mapping {
++                operation: MappingMutation::Unmap,
++                address,
++                physical: None,
++                bytes,
++                permissions: None,
++            },
++            apply,
++        )
+     }
+     fn protect(&self, address: u64, bytes: usize, permissions: u32) -> Result<(), String> {
+         let e = &self.execution;
+         if e.overlaps_tcm(address, bytes) {
+             return Err("TCM mappings are owned by the processor".into());
+         }
+-        e.cpu.protect(address, bytes, permissions)?;
+-        let changed: Vec<_> = e
+-            .maps
+-            .borrow()
+-            .iter()
+-            .filter_map(|m| m.clip(address, address + bytes as u64))
+-            .collect();
+-        e.remove_external(address, bytes);
+-        for mut map in changed {
+-            map.permissions = permissions;
+-            e.memory.declare(
+-                e.id.get(),
+-                map.address,
+-                map.pointer,
+-                map.bytes,
+-                map.physical,
+-            );
+-            e.maps.borrow_mut().push(map);
++        let apply = || -> Result<(), String> {
++            e.cpu.protect(address, bytes, permissions)?;
++            let changed: Vec<_> = e
++                .maps
++                .borrow()
++                .iter()
++                .filter_map(|m| m.clip(address, address + bytes as u64))
++                .collect();
++            e.remove_external(address, bytes);
++            for mut map in changed {
++                map.permissions = permissions;
++                e.memory.declare(
++                    e.id.get(),
++                    map.address,
++                    map.pointer,
++                    map.bytes,
++                    map.physical,
++                );
++                e.maps.borrow_mut().push(map);
++            }
++            Ok(())
++        };
++        // An empty native protect changes nothing.
++        if bytes == 0 {
++            return apply();
+         }
+-        Ok(())
++        e.mutate(
++            CpuMutation::Mapping {
++                operation: MappingMutation::Protect,
++                address,
++                physical: None,
++                bytes,
++                permissions: Some(permissions),
++            },
++            apply,
++        )
+     }
+     fn invalidate_code(&self, range: Option<(u64, u64)>) -> Result<(), String> {
+         self.execution.cpu.invalidate_code(range)
+@@ -495,6 +580,9 @@ impl Cpu for Core {
+     }
+     unsafe fn install_hook(&self, hook: Hook) -> Result<HookId, String> {
+         let e = &self.execution;
++        if e.mutation.dispatching() {
++            return Err("cannot install a hook during mutation dispatch".into());
++        }
+         e.observer_index
+             .try_borrow_mut()
+             .map(|_| ())
+@@ -502,6 +590,14 @@ impl Cpu for Core {
+         if e.active.get() {
+             return Err("cannot install a hook during R-profile execution".into());
+         }
++        if let Hook::Mutation { .. } = hook {
++            if !self.supports_mutation_observation() {
++                return Err("parallel R-profile workers do not support mutation observers".into());
++            }
++            if e.observer_index.borrow().mutations.len() >= mutation::MAX_MUTATION_OBSERVERS {
++                return Err("R-profile mutation observers are exhausted".into());
++            }
++        }
+         let key = e.next_observer.get();
+         let next = key
+             .checked_add(1)
+@@ -517,9 +613,9 @@ impl Cpu for Core {
+             // Owner synchronization is raised explicitly by the R-profile
+             // execution adapter at sensitive memory operations.
+             Hook::Synchronization { .. } => None,
+-            // Host writes are dispatched by this backend before the worker
+-            // mutation.
+-            Hook::HostWrite { .. } => None,
++            // Host writes and mutations are dispatched by this backend before
++            // the worker mutation.
++            Hook::HostWrite { .. } | Hook::Mutation { .. } => None,
+             Hook::CompletedStore { range, .. } => {
+                 // The permanent coherence hook already dispatches stores on
+                 // watched pages. Reuse it instead of creating native hooks
+@@ -550,6 +646,9 @@ impl Cpu for Core {
+     }
+     fn remove_hook(&self, hook: HookId) -> Result<(), String> {
+         let e = &self.execution;
++        if e.mutation.dispatching() {
++            return Err("cannot remove a hook during mutation dispatch".into());
++        }
+         e.observer_index
+             .try_borrow_mut()
+             .map(|_| ())
+diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core/mapping.rs b/crates/emulator-cpu-unicorn/src/rprofile/core/mapping.rs
+index 575c251..e6f923d 100644
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core/mapping.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/mapping.rs
+@@ -34,6 +34,15 @@ impl Mapping {
+     pub fn end(self) -> u64 {
+         self.address + self.bytes as u64
+     }
++    pub fn mutation(self, operation: MappingMutation) -> CpuMutation {
++        CpuMutation::Mapping {
++            operation,
++            address: self.address,
++            physical: self.physical,
++            bytes: self.bytes,
++            permissions: Some(self.permissions),
++        }
++    }
+     pub fn clip(self, begin: u64, end: u64) -> Option<Self> {
+         let begin = self.address.max(begin);
+         let end = self.end().min(end);
+@@ -71,7 +80,15 @@ impl Execution {
+         );
+         self.memory.apply_watches()
+     }
+-    pub(super) fn map_external(&self, map: Mapping) -> Result<(), String> {
++    pub(super) fn map_external(
++        &self,
++        map: Mapping,
++        operation: MappingMutation,
++    ) -> Result<(), String> {
++        self.validate_external(map)?;
++        self.mutate(map.mutation(operation), || self.map_external_inner(map))
++    }
++    pub(super) fn validate_external(&self, map: Mapping) -> Result<(), String> {
+         self.memory.require_stopped()?;
+         map.validate()?;
+         if self
+@@ -87,8 +104,9 @@ impl Execution {
+         {
+             return Err("overlapping R-profile external memory mapping".into());
+         }
+-        self.memory
+-            .validate_mapping(map.pointer, map.bytes, map.physical)?;
++        self.memory.validate_mapping(map.pointer, map.bytes, map.physical)
++    }
++    pub(super) fn map_external_inner(&self, map: Mapping) -> Result<(), String> {
+         self.maps.borrow_mut().push(map);
+         self.memory.declare(
+             self.id.get(),
+@@ -140,14 +158,17 @@ impl Execution {
+                 .ok_or("physical replacement has no complete external RAM underlay")?;
+             cursor = next.end().min(map.end());
+         }
+-        self.external_parts(map, |part| {
+-            self.cpu.unmap(part.address, part.bytes)?;
+-            self.memory.unmap(self.id.get(), part.address, part.bytes);
+-            Ok(())
+-        })?;
+-        self.remove_external(map.address, map.bytes);
+-        self.map_external(map)?;
+-        self.cpu.invalidate_code(None)
++        self.mutate(map.mutation(MappingMutation::ReplacePhysical), || {
++            self.external_parts(map, |part| {
++                self.cpu.unmap(part.address, part.bytes)?;
++                self.memory.unmap(self.id.get(), part.address, part.bytes);
++                Ok(())
++            })?;
++            self.remove_external(map.address, map.bytes);
++            self.validate_external(map)?;
++            self.map_external_inner(map)?;
++            self.cpu.invalidate_code(None)
++        })
+     }
+     pub(super) fn remove_external(&self, address: u64, bytes: usize) {
+         let end = address + bytes as u64;
+diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core/mutation/tests.rs b/crates/emulator-cpu-unicorn/src/rprofile/core/mutation/tests.rs
+new file mode 100644
+index 0000000..8a7f630
+--- /dev/null
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/mutation/tests.rs
+@@ -0,0 +1,676 @@
++use super::super::tests::{get, processor_with_options, resume, run, set, words};
++use super::*;
++use crate::rprofile::tcm::{BankOptions, Options as TcmOptions};
++
++#[derive(Default)]
++struct Recorder {
++    events: RefCell<Vec<CpuMutation>>,
++    refuse: Cell<bool>,
++}
++impl Recorder {
++    fn take(&self) -> Vec<CpuMutation> {
++        self.events.take()
++    }
++}
++unsafe fn record(event: CpuMutation, data: *mut c_void) -> bool {
++    let recorder = unsafe { &*data.cast::<Recorder>() };
++    recorder.events.borrow_mut().push(event);
++    !recorder.refuse.get()
++}
++fn observe(cpu: &dyn Cpu, recorder: &Recorder) -> HookId {
++    unsafe {
++        cpu.install_hook(Hook::Mutation {
++            callback: record,
++            data: (recorder as *const Recorder).cast_mut().cast(),
++        })
++    }
++    .unwrap()
++}
++
++fn tcm(bank: u32) -> arm::Coprocessor {
++    arm::Coprocessor {
++        cp: 15,
++        opc1: 0,
++        crn: 9,
++        crm: 1,
++        opc2: bank,
++        secure: 0,
++        wide: false,
++    }
++}
++fn moved(bank: u32, previous: u32, next: u32, origin: MutationOrigin) -> CpuMutation {
++    CpuMutation::Tcm {
++        register: tcm(bank),
++        previous,
++        next,
++        origin,
++    }
++}
++fn mapping(
++    operation: MappingMutation,
++    address: u64,
++    physical: Option<u64>,
++    bytes: usize,
++    permissions: Option<u32>,
++) -> CpuMutation {
++    CpuMutation::Mapping {
++        operation,
++        address,
++        physical,
++        bytes,
++        permissions,
++    }
++}
++/// ATCM at 0x8000 and, with `btcm`, BTCM at 0x6000; 4 KiB each.
++fn banks(btcm: bool) -> Options {
++    Options {
++        tcm: TcmOptions {
++            btcm: BankOptions {
++                bytes: if btcm { 0x1000 } else { 0 },
++                reset: if btcm { 0x6001 } else { 0 },
++            },
++            atcm: BankOptions {
++                bytes: 0x1000,
++                reset: 0x8001,
++            },
++        },
++        ..Options::default()
++    }
++}
++fn read(cpu: &dyn Cpu, address: u64) -> u32 {
++    let mut bytes = [0; 4];
++    cpu.read_memory(address, &mut bytes).unwrap();
++    u32::from_le_bytes(bytes)
++}
++fn pointer(backing: &Backing) -> NonNull<u8> {
++    NonNull::new(backing.as_ptr()).unwrap()
++}
++unsafe fn idle_read(_: u64, _: u32, _: *mut c_void) -> u64 {
++    0
++}
++unsafe fn idle_write(_: u64, _: u32, _: u64, _: *mut c_void) {}
++fn idle() -> Mmio {
++    Mmio {
++        read: idle_read,
++        write: idle_write,
++        data: std::ptr::null_mut(),
++    }
++}
++
++#[test]
++fn host_tcm_writes_on_both_banks_report_normalized_transactions_before_moving() {
++    let cpu = processor_with_options(&Memory::default(), banks(true));
++    words(&cpu, 0x6000, &[11]);
++    words(&cpu, 0x8000, &[22]);
++    let recorder = Recorder::default();
++    observe(&cpu, &recorder);
++    assert_eq!(cpu.coprocessor(tcm(0), None).unwrap(), 0x600d);
++    assert_eq!(cpu.coprocessor(tcm(1), None).unwrap(), 0x800d);
++    cpu.coprocessor(tcm(0), Some(0x6001)).unwrap();
++    cpu.coprocessor(tcm(1), Some(0x87ff)).unwrap();
++    assert!(cpu.coprocessor(tcm(1), Some(0x6001)).is_err());
++    assert_eq!(cpu.translate(0x8000, Access::Read).unwrap(), 0x8000);
++    let snapshot = cpu.snapshot(None).unwrap();
++    cpu.import_snapshot(&snapshot.export().unwrap()).unwrap();
++    assert!(recorder.take().is_empty());
++    cpu.coprocessor(tcm(0), Some(0x4001)).unwrap();
++    cpu.coprocessor(tcm(1), Some(0xa001)).unwrap();
++    assert_eq!(
++        recorder.take(),
++        [
++            moved(0, 0x600d, 0x400d, MutationOrigin::Host),
++            moved(1, 0x800d, 0xa00d, MutationOrigin::Host),
++        ]
++    );
++    assert_eq!((read(&cpu, 0x4000), read(&cpu, 0xa000)), (11, 22));
++}
++
++#[test]
++fn paused_host_tcm_change_and_restore_reports_both_transactions() {
++    let cpu = processor_with_options(&Memory::default(), banks(false));
++    cpu.map_zeroed(0x1000, 0x1000, 7).unwrap();
++    words(&cpu, 0x1000, &[0xe2800001, 0xe2800001]); // add r0,#1; add r0,#1
++    let recorder = Recorder::default();
++    observe(&cpu, &recorder);
++    run(&cpu, 0x1000, 1).unwrap();
++    let paused = cpu.fingerprint().unwrap();
++    cpu.coprocessor(tcm(1), Some(0xa001)).unwrap();
++    cpu.coprocessor(tcm(1), Some(0x8001)).unwrap();
++    // Sampling the paused state cannot see the transient move.
++    assert_eq!(cpu.fingerprint().unwrap(), paused);
++    resume(&cpu, 1).unwrap();
++    assert_eq!(get(&cpu, arm::CORE[0]), 2);
++    assert_eq!(
++        recorder.take(),
++        [
++            moved(1, 0x800d, 0xa00d, MutationOrigin::Host),
++            moved(1, 0xa00d, 0x800d, MutationOrigin::Host),
++        ]
++    );
++}
++
++#[test]
++fn final_guest_mcr_on_each_bank_reports_a_guest_transaction_without_a_later_fetch() {
++    let cpu = processor_with_options(&Memory::default(), banks(true));
++    cpu.map_zeroed(0x1000, 0x1000, 7).unwrap();
++    words(&cpu, 0x1000, &[0xee090f11, 0xee091f31]); // mcr btcm,r0; mcr atcm,r1
++    set(&cpu, arm::CORE[0], 0x4001);
++    set(&cpu, arm::CORE[1], 0xa001);
++    let recorder = Recorder::default();
++    observe(&cpu, &recorder);
++    run(&cpu, 0x1000, 2).unwrap();
++    assert_eq!(
++        (cpu.instruction_progress(), get(&cpu, arm::PC)),
++        (Some(2), 0x1008)
++    );
++    assert_eq!(
++        recorder.take(),
++        [
++            moved(0, 0x600d, 0x400d, MutationOrigin::Guest),
++            moved(1, 0x800d, 0xa00d, MutationOrigin::Guest),
++        ]
++    );
++    assert_eq!(
++        (
++            cpu.coprocessor(tcm(0), None).unwrap(),
++            cpu.coprocessor(tcm(1), None).unwrap()
++        ),
++        (0x400d, 0xa00d)
++    );
++}
++
++#[test]
++fn failed_conditional_mcr_mrc_and_normalized_guest_no_op_report_nothing() {
++    let cpu = processor_with_options(&Memory::default(), banks(false));
++    cpu.map_zeroed(0x1000, 0x1000, 7).unwrap();
++    // cmp r0,r0; mcrne atcm,r1; mrc atcm,r3; mcr atcm,r2
++    words(&cpu, 0x1000, &[0xe1500000, 0x1e091f31, 0xee193f31, 0xee092f31]);
++    set(&cpu, arm::CORE[1], 0xa001);
++    set(&cpu, arm::CORE[2], 0x87ff);
++    let recorder = Recorder::default();
++    observe(&cpu, &recorder);
++    run(&cpu, 0x1000, 4).unwrap();
++    assert_eq!(cpu.instruction_progress(), Some(4));
++    assert_eq!(get(&cpu, arm::CORE[3]), 0x800d);
++    assert_eq!(cpu.coprocessor(tcm(1), None).unwrap(), 0x800d);
++    assert!(recorder.take().is_empty());
++}
++
++#[test]
++fn direct_maps_and_hidden_underlays_report_each_operation_before_its_effect() {
++    let underlay = Backing::aligned_zeros(0x2000, 4096).unwrap();
++    let physical = Backing::aligned_zeros(0x1000, 4096).unwrap();
++    let replacement = Backing::aligned_zeros(0x1000, 4096).unwrap();
++    unsafe { std::ptr::write_unaligned(replacement.as_ptr().cast::<u32>(), 0xbbbb) };
++    let cpu = processor_with_options(&Memory::default(), banks(false));
++    let recorder = Recorder::default();
++    observe(&cpu, &recorder);
++    unsafe {
++        // The first page stays hidden under the ATCM window.
++        cpu.map_backing(0x8000, 0x2000, 7, pointer(&underlay)).unwrap();
++        cpu.map_physical(0x2000, 0x10000, 0x1000, 7, pointer(&physical))
++            .unwrap();
++    }
++    cpu.map_zeroed(0x4000, 0x1000, 7).unwrap();
++    unsafe {
++        cpu.replace_physical(0x8000, 0x20000, 0x1000, 5, pointer(&replacement))
++            .unwrap();
++    }
++    cpu.protect(0x9000, 0x1000, 5).unwrap();
++    cpu.unmap(0x4000, 0x1000).unwrap();
++    unsafe { cpu.map_mmio(0xc000, 0x1000, idle()).unwrap() };
++    // Validation refusals and empty native operations change nothing.
++    assert!(cpu.unmap(0x8000, 0x1000).is_err());
++    assert!(cpu.protect(0x8000, 0x1000, 5).is_err());
++    assert!(cpu.map_zeroed(0x4100, 0x1000, 7).is_err());
++    assert!(unsafe { cpu.map_mmio(0x8000, 0x1000, idle()) }.is_err());
++    cpu.unmap(0x2000, 0).unwrap();
++    cpu.protect(0x2000, 0, 5).unwrap();
++    assert_eq!(
++        recorder.take(),
++        [
++            mapping(MappingMutation::MapBacking, 0x8000, None, 0x2000, Some(7)),
++            mapping(MappingMutation::MapPhysical, 0x2000, Some(0x10000), 0x1000, Some(7)),
++            mapping(MappingMutation::MapZeroed, 0x4000, None, 0x1000, Some(7)),
++            mapping(MappingMutation::ReplacePhysical, 0x8000, Some(0x20000), 0x1000, Some(5)),
++            mapping(MappingMutation::Protect, 0x9000, None, 0x1000, Some(5)),
++            mapping(MappingMutation::Unmap, 0x4000, None, 0x1000, None),
++            mapping(MappingMutation::MapMmio, 0xc000, None, 0x1000, None),
++        ]
++    );
++    cpu.coprocessor(tcm(1), Some(0xa001)).unwrap();
++    assert_eq!(read(&cpu, 0x8000), 0xbbbb);
++}
++
++#[test]
++fn refused_transactions_leave_tcm_maps_policy_bytes_and_later_observers_untouched() {
++    unsafe fn host_write(_: u64, _: usize, data: *mut c_void) {
++        let calls = unsafe { &*data.cast::<Cell<usize>>() };
++        calls.set(calls.get() + 1);
++    }
++    let backing = Backing::aligned_zeros(0x1000, 4096).unwrap();
++    let replacement = Backing::aligned_zeros(0x1000, 4096).unwrap();
++    let cpu = processor_with_options(&Memory::default(), banks(false));
++    cpu.map_zeroed(0x1000, 0x1000, 7).unwrap();
++    unsafe {
++        cpu.map_physical(0x2000, 0x10000, 0x1000, 7, pointer(&backing))
++            .unwrap();
++    }
++    words(&cpu, 0x1000, &[0xee090f31]); // mcr atcm,r0
++    words(&cpu, 0x2000, &[0x11]);
++    set(&cpu, arm::CORE[0], 0xa001);
++    let host_writes = Cell::new(0usize);
++    unsafe {
++        cpu.install_hook(Hook::HostWrite {
++            callback: host_write,
++            data: (&host_writes as *const Cell<usize>).cast_mut().cast(),
++            range: HookRange::All,
++        })
++    }
++    .unwrap();
++    let first = Recorder {
++        refuse: Cell::new(true),
++        ..Recorder::default()
++    };
++    let later = Recorder::default();
++    observe(&cpu, &first);
++    observe(&cpu, &later);
++    let regions = cpu.memory_regions().unwrap();
++    let state = cpu.fingerprint().unwrap();
++    assert!(cpu.write_memory(0x2000, &[0x22; 4]).is_err());
++    assert!(cpu.coprocessor(tcm(1), Some(0xa001)).is_err());
++    assert!(cpu.map_zeroed(0x4000, 0x1000, 7).is_err());
++    assert!(
++        unsafe { cpu.replace_physical(0x2000, 0x20000, 0x1000, 5, pointer(&replacement)) }
++            .is_err()
++    );
++    assert!(cpu.protect(0x2000, 0x1000, 5).is_err());
++    assert!(cpu.unmap(0x2000, 0x1000).is_err());
++    assert!(unsafe { cpu.map_mmio(0xc000, 0x1000, idle()) }.is_err());
++    assert!(cpu.set_execution_policy(ExecutionPolicy::Interactive).is_err());
++    assert_eq!(first.take().len(), 8);
++    assert!(later.take().is_empty());
++    assert_eq!(host_writes.get(), 0);
++    assert_eq!(cpu.memory_regions().unwrap(), regions);
++    assert_eq!(cpu.fingerprint().unwrap(), state);
++    assert_eq!(read(&cpu, 0x2000), 0x11);
++    // A refused final guest MCR keeps the bank in place.
++    assert!(run(&cpu, 0x1000, 1).is_err());
++    assert_eq!(
++        first.take(),
++        [moved(1, 0x800d, 0xa00d, MutationOrigin::Guest)]
++    );
++    assert!(later.take().is_empty());
++    assert_eq!(cpu.coprocessor(tcm(1), None).unwrap(), 0x800d);
++    assert_eq!(cpu.memory_regions().unwrap(), regions);
++}
++
++#[test]
++fn restore_and_policy_transitions_report_transactions_and_keep_observers() {
++    let cpu = processor_with_options(&Memory::default(), banks(false));
++    cpu.map_zeroed(0x1000, 0x1000, 7).unwrap();
++    set(&cpu, arm::CORE[0], 1);
++    let recorder = Recorder::default();
++    let id = observe(&cpu, &recorder);
++    let snapshot = cpu.snapshot(None).unwrap();
++    let imported = cpu.import_snapshot(&snapshot.export().unwrap()).unwrap();
++    cpu.set_execution_policy(ExecutionPolicy::Exact).unwrap();
++    assert!(recorder.take().is_empty());
++    cpu.set_execution_policy(ExecutionPolicy::Interactive).unwrap();
++    cpu.coprocessor(tcm(1), Some(0xa001)).unwrap();
++    set(&cpu, arm::CORE[0], 2);
++    cpu.restore(snapshot.as_ref()).unwrap();
++    let policy = |cpu: &Core| cpu.fingerprint().unwrap()["execution_policy"].clone();
++    assert_eq!(
++        (
++            get(&cpu, arm::CORE[0]),
++            cpu.coprocessor(tcm(1), None).unwrap(),
++            policy(&cpu)
++        ),
++        (1, 0x800d, ExecutionPolicy::Exact.name().into())
++    );
++    cpu.restore(imported.as_ref()).unwrap();
++    assert_eq!(
++        recorder.take(),
++        [
++            CpuMutation::ExecutionPolicy {
++                before: ExecutionPolicy::Exact,
++                after: ExecutionPolicy::Interactive,
++            },
++            moved(1, 0x800d, 0xa00d, MutationOrigin::Host),
++            CpuMutation::Restore,
++            CpuMutation::Restore,
++        ]
++    );
++    // The observer and its identity survive restore.
++    cpu.coprocessor(tcm(1), Some(0xa001)).unwrap();
++    assert_eq!(
++        recorder.take(),
++        [moved(1, 0x800d, 0xa00d, MutationOrigin::Host)]
++    );
++    recorder.refuse.set(true);
++    set(&cpu, arm::CORE[0], 3);
++    assert!(cpu.restore(snapshot.as_ref()).is_err());
++    assert!(cpu.set_execution_policy(ExecutionPolicy::Interactive).is_err());
++    assert_eq!(
++        (
++            get(&cpu, arm::CORE[0]),
++            cpu.coprocessor(tcm(1), None).unwrap(),
++            policy(&cpu)
++        ),
++        (3, 0xa00d, ExecutionPolicy::Exact.name().into())
++    );
++    assert_eq!(recorder.take().len(), 2);
++    cpu.remove_hook(id).unwrap();
++    cpu.coprocessor(tcm(1), Some(0x8001)).unwrap();
++    assert!(recorder.take().is_empty());
++}
++
++#[derive(Debug, PartialEq, Eq)]
++enum Entry {
++    Mutation(CpuMutation),
++    HostWrite(u64, usize),
++}
++#[derive(Default)]
++struct Log {
++    entries: RefCell<Vec<Entry>>,
++    refuse: Cell<bool>,
++}
++unsafe fn log_mutation(event: CpuMutation, data: *mut c_void) -> bool {
++    let log = unsafe { &*data.cast::<Log>() };
++    log.entries.borrow_mut().push(Entry::Mutation(event));
++    !log.refuse.get()
++}
++unsafe fn log_host_write(address: u64, bytes: usize, data: *mut c_void) {
++    let log = unsafe { &*data.cast::<Log>() };
++    log.entries.borrow_mut().push(Entry::HostWrite(address, bytes));
++}
++
++#[test]
++fn direct_host_writes_through_retained_handles_report_spans_before_host_write_observers() {
++    let shared: Rc<dyn Cpu> = Rc::new(processor_with_options(
++        &Memory::default(),
++        Options::default(),
++    ));
++    let retained = Rc::clone(&shared);
++    shared.map_zeroed(0x1000, 0x1000, 7).unwrap();
++    let log = Log::default();
++    let data = (&log as *const Log).cast_mut().cast();
++    unsafe {
++        shared
++            .install_hook(Hook::HostWrite {
++                callback: log_host_write,
++                data,
++                range: HookRange::All,
++            })
++            .unwrap();
++        shared
++            .install_hook(Hook::Mutation {
++                callback: log_mutation,
++                data,
++            })
++            .unwrap();
++    }
++    retained.write_memory(0x1000, &[1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
++    retained.write_memory(0x1000, &[]).unwrap();
++    assert_eq!(
++        log.entries.take(),
++        [
++            Entry::Mutation(CpuMutation::HostWrite {
++                address: 0x1000,
++                bytes: 8
++            }),
++            Entry::HostWrite(0x1000, 8),
++        ]
++    );
++    log.refuse.set(true);
++    assert!(retained.write_memory(0x1000, &[9]).is_err());
++    assert_eq!(
++        log.entries.take(),
++        [Entry::Mutation(CpuMutation::HostWrite {
++            address: 0x1000,
++            bytes: 1
++        })]
++    );
++    assert_eq!(read(&*retained, 0x1000), 0x0403_0201);
++}
++
++struct Reenter {
++    cpu: *const Core,
++    id: Cell<Option<HookId>>,
++    calls: Cell<usize>,
++    changes: RefCell<Vec<bool>>,
++    inspected: Cell<Option<u64>>,
++    captured: Cell<bool>,
++}
++unsafe fn admit(_: CpuMutation, _: *mut c_void) -> bool {
++    true
++}
++unsafe fn reenter_during_dispatch(_: CpuMutation, data: *mut c_void) -> bool {
++    let reenter = unsafe { &*data.cast::<Reenter>() };
++    let cpu = unsafe { &*reenter.cpu };
++    reenter.calls.set(reenter.calls.get() + 1);
++    let installed = unsafe {
++        cpu.install_hook(Hook::Mutation {
++            callback: admit,
++            data,
++        })
++    };
++    let changes = [
++        cpu.write_memory(0x1004, &[0xff]).is_ok(),
++        cpu.coprocessor(tcm(1), Some(0xa001)).is_ok(),
++        installed.is_ok(),
++        cpu.remove_hook(reenter.id.get().unwrap()).is_ok(),
++    ];
++    reenter.changes.borrow_mut().extend(changes);
++    reenter.inspected.set(cpu.coprocessor(tcm(1), None).ok());
++    reenter.captured.set(cpu.snapshot(None).is_ok());
++    true
++}
++
++#[test]
++fn mutation_callbacks_cannot_reenter_or_change_hooks_and_the_transaction_is_refused() {
++    let cpu = processor_with_options(&Memory::default(), banks(false));
++    cpu.map_zeroed(0x1000, 0x1000, 7).unwrap();
++    let reenter = Reenter {
++        cpu: &cpu,
++        id: Cell::new(None),
++        calls: Cell::new(0),
++        changes: RefCell::new(Vec::new()),
++        inspected: Cell::new(None),
++        captured: Cell::new(false),
++    };
++    let id = unsafe {
++        cpu.install_hook(Hook::Mutation {
++            callback: reenter_during_dispatch,
++            data: (&reenter as *const Reenter).cast_mut().cast(),
++        })
++    }
++    .unwrap();
++    reenter.id.set(Some(id));
++    assert!(cpu.write_memory(0x1000, &[0xaa; 4]).is_err());
++    assert_eq!(reenter.calls.get(), 1);
++    assert_eq!(*reenter.changes.borrow(), [false; 4]);
++    assert_eq!(
++        (reenter.inspected.get(), reenter.captured.get()),
++        (Some(0x800d), true)
++    );
++    assert_eq!((read(&cpu, 0x1000), read(&cpu, 0x1004)), (0, 0));
++    assert_eq!(cpu.coprocessor(tcm(1), None).unwrap(), 0x800d);
++    // The refusal ends with its transaction.
++    cpu.remove_hook(id).unwrap();
++    cpu.write_memory(0x1000, &[0xaa; 4]).unwrap();
++    assert_eq!(read(&cpu, 0x1000), 0xaaaa_aaaa);
++}
++
++struct Nested {
++    cpu: *const Core,
++    events: RefCell<Vec<CpuMutation>>,
++    nested: RefCell<Vec<Result<(), String>>>,
++}
++unsafe fn refuse_nested(event: CpuMutation, data: *mut c_void) -> bool {
++    let nested = unsafe { &*data.cast::<Nested>() };
++    nested.events.borrow_mut().push(event);
++    !matches!(event, CpuMutation::HostWrite { address: 0x1004, .. })
++}
++unsafe fn write_nested(address: u64, _: usize, data: *mut c_void) {
++    let nested = unsafe { &*data.cast::<Nested>() };
++    if address == 0x1000 {
++        let cpu = unsafe { &*nested.cpu };
++        for _ in 0..2 {
++            let result = cpu.write_memory(0x1004, &[0xbb]);
++            nested.nested.borrow_mut().push(result);
++        }
++    }
++}
++fn nested_writer(cpu: &Core, nested: &Nested, refusing: bool) {
++    let data = (nested as *const Nested).cast_mut().cast();
++    unsafe {
++        cpu.install_hook(Hook::HostWrite {
++            callback: write_nested,
++            data,
++            range: HookRange::All,
++        })
++        .unwrap();
++        if refusing {
++            cpu.install_hook(Hook::Mutation {
++                callback: refuse_nested,
++                data,
++            })
++            .unwrap();
++        }
++    }
++}
++
++#[test]
++fn a_refused_nested_transaction_fails_its_enclosing_write_with_the_first_refusal() {
++    let cpu = processor_with_options(&Memory::default(), Options::default());
++    cpu.map_zeroed(0x1000, 0x1000, 7).unwrap();
++    let nested = Nested {
++        cpu: &cpu,
++        events: RefCell::new(Vec::new()),
++        nested: RefCell::new(Vec::new()),
++    };
++    nested_writer(&cpu, &nested, true);
++    let outer = cpu.write_memory(0x1000, &[0xaa]).unwrap_err();
++    let first = nested.nested.take();
++    assert_eq!(first, [Err(outer.clone()), Err(outer)]);
++    // The second nested write is refused without reaching the observer.
++    assert_eq!(
++        nested.events.take(),
++        [
++            CpuMutation::HostWrite {
++                address: 0x1000,
++                bytes: 1
++            },
++            CpuMutation::HostWrite {
++                address: 0x1004,
++                bytes: 1
++            },
++        ]
++    );
++    assert_eq!((read(&cpu, 0x1000), read(&cpu, 0x1004)), (0, 0));
++    cpu.write_memory(0x1008, &[0xcc]).unwrap();
++    assert_eq!(read(&cpu, 0x1008), 0xcc);
++}
++
++#[test]
++fn unobserved_cores_keep_default_nested_host_writes_and_mutations() {
++    let cpu = processor_with_options(&Memory::default(), banks(false));
++    assert!(cpu.supports_mutation_observation());
++    cpu.map_zeroed(0x1000, 0x1000, 7).unwrap();
++    let nested = Nested {
++        cpu: &cpu,
++        events: RefCell::new(Vec::new()),
++        nested: RefCell::new(Vec::new()),
++    };
++    nested_writer(&cpu, &nested, false);
++    cpu.write_memory(0x1000, &[0xaa]).unwrap();
++    assert_eq!(nested.nested.take(), [Ok(()), Ok(())]);
++    assert_eq!((read(&cpu, 0x1000), read(&cpu, 0x1004)), (0xaa, 0xbb));
++    cpu.coprocessor(tcm(1), Some(0xa001)).unwrap();
++    cpu.set_execution_policy(ExecutionPolicy::Interactive).unwrap();
++    cpu.protect(0x1000, 0x1000, 5).unwrap();
++    cpu.unmap(0x1000, 0x1000).unwrap();
++    assert!(cpu.read_memory(0x1000, &mut [0; 4]).is_err());
++}
++
++#[test]
++fn mutation_observer_registration_is_bounded_and_unsupported_backends_refuse_it() {
++    let cpu = processor_with_options(&Memory::default(), Options::default());
++    let recorder = Recorder::default();
++    let hook = Hook::Mutation {
++        callback: record,
++        data: (&recorder as *const Recorder).cast_mut().cast(),
++    };
++    for _ in 0..MAX_MUTATION_OBSERVERS {
++        unsafe { cpu.install_hook(hook) }.unwrap();
++    }
++    assert!(unsafe { cpu.install_hook(hook) }.is_err());
++    cpu.map_zeroed(0x1000, 0x1000, 7).unwrap();
++    assert_eq!(recorder.take().len(), MAX_MUTATION_OBSERVERS);
++
++    let library = crate::test_support::library();
++    let worker = Core::new_parallel_worker(
++        library.open(Model::CortexR5F, 1024 * 1024).unwrap(),
++        Options::default(),
++        Wiring {
++            memory: Memory::default(),
++        },
++    )
++    .unwrap();
++    let raw = library.open(Model::CortexR5F, 1024 * 1024).unwrap();
++    for unsupported in [&worker as &dyn Cpu, &raw] {
++        assert!(!unsupported.supports_mutation_observation());
++        assert!(unsafe { unsupported.install_hook(hook) }.is_err());
++        unsupported.map_zeroed(0x1000, 0x1000, 7).unwrap();
++    }
++    assert!(recorder.take().is_empty());
++}
++
++unsafe fn panic_on_mutation(_: CpuMutation, _: *mut c_void) -> bool {
++    panic!("mutation observer panicked");
++}
++
++#[test]
++fn a_panicking_observer_refuses_before_later_observers_and_fast_mmio_reports_its_mapping() {
++    let cpu = processor_with_options(&Memory::default(), Options::default());
++    cpu.map_zeroed(0x1000, 0x1000, 7).unwrap();
++    words(&cpu, 0x1000, &[0x11]);
++    let panicking = unsafe {
++        cpu.install_hook(Hook::Mutation {
++            callback: panic_on_mutation,
++            data: std::ptr::null_mut(),
++        })
++    }
++    .unwrap();
++    let recorder = Recorder::default();
++    observe(&cpu, &recorder);
++    assert!(cpu.write_memory(0x1000, &[0x22; 4]).is_err());
++    assert_eq!(read(&cpu, 0x1000), 0x11);
++    assert!(recorder.take().is_empty());
++    cpu.remove_hook(panicking).unwrap();
++    cpu.write_memory(0x1000, &[0x22; 4]).unwrap();
++    assert_eq!(read(&cpu, 0x1000), 0x2222_2222);
++    assert_eq!(
++        recorder.take(),
++        [CpuMutation::HostWrite {
++            address: 0x1000,
++            bytes: 4
++        }]
++    );
++
++    unsafe { cpu.map_mmio_fast(0xc000, 0x1000, idle(), Vec::new()) }.unwrap();
++    assert_eq!(
++        recorder.take(),
++        [mapping(MappingMutation::MapMmio, 0xc000, None, 0x1000, None)]
++    );
++    recorder.refuse.set(true);
++    let regions = cpu.memory_regions().unwrap();
++    assert!(unsafe { cpu.map_mmio_fast(0xd000, 0x1000, idle(), Vec::new()) }.is_err());
++    assert_eq!(cpu.memory_regions().unwrap(), regions);
++    assert_eq!(
++        recorder.take(),
++        [mapping(MappingMutation::MapMmio, 0xd000, None, 0x1000, None)]
++    );
++}
+diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core/mutation.rs b/crates/emulator-cpu-unicorn/src/rprofile/core/mutation.rs
+new file mode 100644
+index 0000000..166baf8
+--- /dev/null
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/mutation.rs
+@@ -0,0 +1,113 @@
++//! Synchronous mutation admission, independent of board observation state.
++use super::*;
++
++pub(super) const MAX_MUTATION_OBSERVERS: usize = 16;
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum Refusal {
++    Observer,
++    Panicked,
++    Reentered,
++}
++impl Refusal {
++    fn error(self) -> String {
++        match self {
++            Self::Observer => "CPU mutation observer refused the transaction",
++            Self::Panicked => "CPU mutation observer panicked",
++            Self::Reentered => "CPU mutation during mutation dispatch is refused",
++        }
++        .into()
++    }
++}
++
++/// `refusal` holds the first refusal while any admitted transaction is open.
++#[derive(Default)]
++pub(super) struct Admission {
++    dispatching: Cell<bool>,
++    depth: Cell<u32>,
++    refusal: Cell<Option<Refusal>>,
++}
++impl Admission {
++    pub(super) fn dispatching(&self) -> bool {
++        self.dispatching.get()
++    }
++    fn refuse(&self, refusal: Refusal) -> String {
++        let first = self.refusal.get().unwrap_or(refusal);
++        self.refusal.set(Some(first));
++        first.error()
++    }
++}
++
++struct Open<'a>(&'a Admission);
++impl Drop for Open<'_> {
++    fn drop(&mut self) {
++        let depth = self.0.depth.get() - 1;
++        self.0.depth.set(depth);
++        if depth == 0 {
++            self.0.refusal.set(None);
++        }
++    }
++}
++
++struct Dispatch<'a>(&'a Admission);
++impl Drop for Dispatch<'_> {
++    fn drop(&mut self) {
++        self.0.dispatching.set(false);
++    }
++}
++
++impl Execution {
++    /// Offers `event` to every mutation observer in installation order, then
++    /// runs `apply`, which must start at the first potentially mutating step.
++    /// A refusal recorded by a nested transaction fails every enclosing one.
++    pub(super) fn mutate<T>(
++        &self,
++        event: CpuMutation,
++        apply: impl FnOnce() -> Result<T, String>,
++    ) -> Result<T, String> {
++        let admission = &self.mutation;
++        if admission.dispatching.get() {
++            return Err(admission.refuse(Refusal::Reentered));
++        }
++        if let Some(first) = admission.refusal.get() {
++            return Err(first.error());
++        }
++        admission.depth.set(admission.depth.get() + 1);
++        let _open = Open(admission);
++        {
++            let observers = self.observer_index.borrow();
++            admission.dispatching.set(true);
++            let _dispatch = Dispatch(admission);
++            for &(_, hook) in &observers.mutations {
++                let Hook::Mutation { callback, data } = hook else {
++                    continue;
++                };
++                let refusal =
++                    match catch_unwind(AssertUnwindSafe(|| unsafe { callback(event, data) })) {
++                        Ok(true) => admission.refusal.get(),
++                        Ok(false) => Some(Refusal::Observer),
++                        Err(_) => Some(Refusal::Panicked),
++                    };
++                if let Some(refusal) = refusal {
++                    return Err(admission.refuse(refusal));
++                }
++            }
++        }
++        let result = apply();
++        match admission.refusal.get() {
++            Some(first) => Err(first.error()),
++            None => result,
++        }
++    }
++
++    /// Fails an admitted transaction once a nested transaction was refused.
++    pub(super) fn mutation_refusal(&self) -> Result<(), String> {
++        self.mutation
++            .refusal
++            .get()
++            .map_or(Ok(()), |first| Err(first.error()))
++    }
++}
++
++#[cfg(test)]
++mod tests;
+diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core/observers.rs b/crates/emulator-cpu-unicorn/src/rprofile/core/observers.rs
+index b38e681..f9f3a48 100644
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core/observers.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/observers.rs
+@@ -99,11 +99,13 @@ pub(super) struct Index {
+     pub exceptions: Vec<(usize, Hook)>,
+     pub synchronization: Vec<(usize, Hook)>,
+     pub host_writes: Vec<(usize, Hook)>,
++    pub mutations: Vec<(usize, Hook)>,
+ }
+ 
+ impl Index {
+     pub fn insert(&mut self, key: usize, hook: Hook) {
+         match hook {
++            Hook::Mutation { .. } => self.mutations.push((key, hook)),
+             Hook::Instruction { range, .. } => self.instructions.insert(key, hook, range),
+             Hook::Block { range, .. } => self.blocks.insert(key, hook, range),
+             Hook::CompletedStore { range, .. } => self.stores.insert(key, hook, range),
+@@ -126,6 +128,7 @@ impl Index {
+ 
+     pub fn remove(&mut self, key: usize, hook: Hook) {
+         match hook {
++            Hook::Mutation { .. } => self.mutations.retain(|(id, _)| *id != key),
+             Hook::Instruction { range, .. } => self.instructions.remove(key, range),
+             Hook::Block { range, .. } => self.blocks.remove(key, range),
+             Hook::CompletedStore { range, .. } => self.stores.remove(key, range),
+diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core/run.rs b/crates/emulator-cpu-unicorn/src/rprofile/core/run.rs
+index 8264e0e..fe13ffd 100644
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core/run.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/run.rs
+@@ -47,7 +47,7 @@ impl Core {
+             let exit = result?;
+             let remap = e.tcm_pending.take();
+             if let Some((bank, value)) = remap {
+-                e.apply_tcm(bank, value)?;
++                e.apply_tcm(bank, value, MutationOrigin::Guest)?;
+             }
+             let flush = e.memory.flush_pending();
+             if flush {
+diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core/snapshot.rs b/crates/emulator-cpu-unicorn/src/rprofile/core/snapshot.rs
+index 82bfe31..dbfeab7 100644
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core/snapshot.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/snapshot.rs
+@@ -266,6 +266,10 @@ impl Core {
+                     .into(),
+             );
+         }
++        e.mutate(CpuMutation::Restore, || self.apply_saved(saved))
++    }
++    fn apply_saved(&self, saved: &Saved) -> Result<(), String> {
++        let e = &self.execution;
+         // The saved reservation is eligible only if no external memory write
+         // followed capture. Internal TCM rollback below must not itself count
+         // as a conflicting *external* write. Every CPU is stopped throughout.
+@@ -281,11 +285,11 @@ impl Core {
+         // Disable both banks first: a restored bank can occupy the current
+         // other bank's window, including a complete ATCM/BTCM position swap.
+         for bank in 0..2 {
+-            e.apply_tcm(bank, e.tcm[bank].register.get() & !1)?;
++            e.apply_tcm_inner(bank, e.tcm[bank].register.get() & !1)?;
+         }
+         for bank in 0..2 {
+             let b = &e.tcm[bank];
+-            e.apply_tcm(bank, saved.tcm[bank].0)?;
++            e.apply_tcm_inner(bank, saved.tcm[bank].0)?;
+             let changed = unsafe { b.tracker.restore(&saved.tcm[bank].1, b.memory.as_ptr()) }?;
+             for (offset, bytes) in changed {
+                 e.memory.backing_written(
+diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core/tcm.rs b/crates/emulator-cpu-unicorn/src/rprofile/core/tcm.rs
+index e5bc27f..48af5c3 100644
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core/tcm.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/tcm.rs
+@@ -61,7 +61,37 @@ impl Execution {
+         }
+         Ok(value)
+     }
+-    pub(super) fn apply_tcm(&self, bank: usize, value: u32) -> Result<(), String> {
++    pub(super) fn apply_tcm(
++        &self,
++        bank: usize,
++        value: u32,
++        origin: MutationOrigin,
++    ) -> Result<(), String> {
++        let value = self.validate_tcm(bank, value)?;
++        let previous = self.tcm[bank].register.get();
++        if value == previous {
++            return Ok(());
++        }
++        let register = arm::Coprocessor {
++            cp: 15,
++            opc1: 0,
++            crn: 9,
++            crm: 1,
++            opc2: bank as u32,
++            secure: 0,
++            wide: false,
++        };
++        self.mutate(
++            CpuMutation::Tcm {
++                register,
++                previous,
++                next: value,
++                origin,
++            },
++            || self.apply_tcm_inner(bank, value),
++        )
++    }
++    pub(super) fn apply_tcm_inner(&self, bank: usize, value: u32) -> Result<(), String> {
+         let value = self.validate_tcm(bank, value)?;
+         let b = &self.tcm[bank];
+         if value == b.register.get() {
+diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core.rs b/crates/emulator-cpu-unicorn/src/rprofile/core.rs
+index 9cca628..7c78717 100644
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core.rs
+@@ -20,6 +20,7 @@ mod backend;
+ mod exclusive;
+ mod loops;
+ mod mapping;
++mod mutation;
+ mod observers;
+ mod pmu;
+ mod run;
+@@ -100,6 +101,7 @@ pub(super) struct Execution {
+     observer_index: RefCell<observers::Index>,
+     at_block: Cell<bool>,
+     at_instruction: Cell<bool>,
++    mutation: mutation::Admission,
+ }
+ 
+ pub struct Core {
+@@ -202,6 +204,7 @@ impl Core {
+             observer_index: RefCell::new(observers::Index::default()),
+             at_block: Cell::new(false),
+             at_instruction: Cell::new(false),
++            mutation: mutation::Admission::default(),
+         });
+         e.id.set(e.memory.register(Rc::downgrade(&e)));
+         unsafe {
+diff --git a/crates/emulator-cpu-unicorn/src/rprofile/worker.rs b/crates/emulator-cpu-unicorn/src/rprofile/worker.rs
+index cb06b2b..2d231a8 100644
+--- a/crates/emulator-cpu-unicorn/src/rprofile/worker.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/worker.rs
+@@ -1872,9 +1872,9 @@ impl Cpu for CpuWorker {
+         }
+         if hooks
+             .iter()
+-            .any(|hook| matches!(hook, Hook::HostWrite { .. }))
++            .any(|hook| matches!(hook, Hook::HostWrite { .. } | Hook::Mutation { .. }))
+         {
+-            return Err("host-write hooks require the R-profile backend boundary".into());
++            return Err("host-write and mutation hooks require the serialized R-profile backend boundary".into());
+         }
+         let mut pending = Vec::with_capacity(hooks.len());
+         for &hook in hooks {
+@@ -1888,8 +1888,8 @@ impl Cpu for CpuWorker {
+                     read, write, range, ..
+                 } => HookKind::Memory { read, write, range },
+                 Hook::CompletedStore { range, .. } => HookKind::CompletedStore(range),
+-                Hook::HostWrite { .. } => {
+-                    return Err("host-write hooks require the R-profile backend boundary".into());
++                Hook::HostWrite { .. } | Hook::Mutation { .. } => {
++                    return Err("host-write and mutation hooks require the serialized R-profile backend boundary".into());
+                 }
+                 Hook::Fault { .. } => HookKind::Fault,
+             };
+@@ -2107,6 +2107,37 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn worker_refuses_mutation_observers_without_installing_group_members() {
++        unsafe fn admit(_: CpuMutation, _: *mut std::ffi::c_void) -> bool {
++            true
++        }
++        unsafe fn entered(_: u64, _: u32, data: *mut std::ffi::c_void) {
++            let calls = unsafe { &*data.cast::<Cell<usize>>() };
++            calls.set(calls.get() + 1);
++        }
++        let cpu = worker(SharedMemory::default());
++        assert!(!cpu.supports_mutation_observation());
++        cpu.map_zeroed(0x1000, 4096, 7).unwrap();
++        write_words(&cpu, 0x1000, &[0xe2800001]);
++        let calls = Cell::new(0usize);
++        let mutation = Hook::Mutation {
++            callback: admit,
++            data: std::ptr::null_mut(),
++        };
++        let group = [
++            Hook::Instruction {
++                callback: entered,
++                data: (&calls as *const Cell<usize>).cast_mut().cast(),
++                range: HookRange::All,
++            },
++            mutation,
++        ];
++        assert!(unsafe { cpu.install_hooks(&group) }.is_err());
++        assert!(unsafe { cpu.install_hook(mutation) }.is_err());
++        one_step(&cpu, 0x1000).unwrap();
++        assert_eq!((calls.get(), read_u32(&cpu, arm::CORE[0])), (0, 1));
++    }
+ 
+     #[test]
+     fn observer_groups_use_one_rpc_and_retire_callback_contexts() {

@@ -205,7 +205,7 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
          for (core, cpu) in self.cpus.iter().enumerate() {
              let mut processor_views = maps
                  .iter()
-@@ -514,11 +540,35 @@
+@@ -530,8 +556,31 @@
              .replace(Some(Rc::downgrade(&records)));
          Ok(watch)
      }
@@ -221,28 +221,23 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 +        })
 +    }
      pub fn memory_watch_end(&self, watch: &mut MemoryWatch) -> Result<(), String> {
+-        self.memory_watch_release(watch)
 +        if !Weak::ptr_eq(&watch.owner, &Rc::downgrade(&self.physical_memory)) {
 +            return Err("memory watch belongs to a different board".into());
 +        }
-         for (core, hook) in watch.hooks.drain(..) {
--            self.cpus[core].remove_hook(hook)?;
-+            if let Err(error) = self.cpus[core].remove_hook(hook) {
-+                watch.lifetime = WatchLifetime::Stuck;
-+                return Err(error);
-+            }
++        if let Err(error) = self.memory_watch_release(watch) {
++            watch.lifetime = WatchLifetime::Stuck;
++            return Err(error);
 +        }
 +        if watch.lifetime == WatchLifetime::Armed {
 +            watch.lifetime = WatchLifetime::Ended;
 +            let armed = &self.physical_memory.armed_watches;
 +            armed.set(armed.get().saturating_sub(1));
 +        }
-+        if !self.scoped_watch_active() {
-+            self.physical_memory.observation.replace(None);
-         }
--        self.physical_memory.observation.replace(None);
-         Ok(())
++        Ok(())
      }
  }
+ 
 diff --git a/crates/emulator/src/board/observation/scoped.rs b/crates/emulator/src/board/observation/scoped.rs
 new file mode 100644
 index 0000000..00b7bf6

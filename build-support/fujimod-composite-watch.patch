@@ -1,0 +1,2571 @@
+--- a/crates/emulator/src/board/decoder.rs
++++ b/crates/emulator/src/board/decoder.rs
+@@ -2,6 +2,7 @@
+ use super::{
+     factory::MemoryMap,
+     memory::{BusMapping, Memory},
++    observation::GuardMutation,
+ };
+ use fujimod_emulator_cpu::Cpu;
+ use serde_json::{Value, json};
+@@ -57,6 +58,12 @@
+             .cloned()
+             .collect()
+     }
++    pub(super) fn selected_maps(&self, core: usize) -> impl Iterator<Item = &MemoryMap> {
++        self.slots
++            .iter()
++            .flat_map(|s| &s.choices[s.selected].processors)
++            .filter(move |m| m.core == core)
++    }
+ 
+     pub(super) fn checkpoint(&self) -> Checkpoint {
+         Checkpoint {
+@@ -137,10 +144,11 @@
+         if let Some(error) = &self.failure {
+             return Err(error.clone());
+         }
+-        for slot in &mut self.slots {
++        for (decoder, slot) in self.slots.iter_mut().enumerate() {
+             let Some(choice) = slot.pending else {
+                 continue;
+             };
++            memory.admit_transaction(GuardMutation::Decoder { decoder, choice })?;
+             let result = (|| {
+                 for map in &slot.choices[choice].processors {
+                     let (base, backing) = memory
+--- a/crates/emulator/src/board/factory.rs
++++ b/crates/emulator/src/board/factory.rs
+@@ -267,6 +267,16 @@
+         bus: Bus,
+         interrupts: Option<InterruptMap>,
+     ) -> Result<Board, String> {
++        self.build_with(options, bus, interrupts, |_, cpu| cpu)
++    }
++    /// Builds with each processor passed through `wrap`, by core index.
++    pub(super) fn build_with(
++        self,
++        options: Options,
++        bus: Bus,
++        interrupts: Option<InterruptMap>,
++        mut wrap: impl FnMut(usize, Box<dyn Cpu>) -> Box<dyn Cpu>,
++    ) -> Result<Board, String> {
+         self.validate()?;
+         // Validate maps before creating a process-wide native VM.
+         let ram = super::memory::Memory::new(
+@@ -281,7 +291,8 @@
+         let cpus = self
+             .processors
+             .iter()
+-            .map(|p| engines.cpu(p, &options, &memory))
++            .enumerate()
++            .map(|(core, p)| engines.cpu(p, &options, &memory).map(|cpu| wrap(core, cpu)))
+             .collect::<Result<Vec<_>, _>>()?;
+         for (core, cpu) in cpus.iter().enumerate() {
+             for a in self.mappings.iter().filter(|a| a.core == core) {
+--- a/crates/emulator/src/board/keyframe.rs
++++ b/crates/emulator/src/board/keyframe.rs
+@@ -129,6 +129,7 @@
+             parallel: _,
+             decoders: _,
+             memory_access: _,
++            observation_cleanup_failed: _,
+             continuation: _,
+         } = self;
+         Saved {
+@@ -321,6 +322,7 @@
+             .lock()
+             .map_err(|_| "exclusive monitors poisoned")?
+             .validate_checkpoint(&saved.exclusive)?;
++        state.memory.admit_transaction(super::observation::GuardMutation::Restore)?;
+         let result = (|| {
+             let memory = state.memory.clone();
+             state
+--- a/crates/emulator/src/board/memory.rs
++++ b/crates/emulator/src/board/memory.rs
+@@ -1,6 +1,7 @@
+ //! Physical bus decoding and backing, independent of CPU-private mappings.
+ mod checkpoint;
+ use fujimod_emulator_cpu::{Cpu, exclusive, memory::Backing};
++use super::observation::FailurePhase;
+ use std::{
+     cell::{Ref, RefCell},
+     ptr::NonNull,
+@@ -65,9 +66,24 @@
+     Read,
+     Write,
+ }
++/// Source of a bulk physical write.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) enum BulkWrite {
++    Host,
++    ModelBus,
++}
++impl BulkWrite {
++    fn access(self) -> Access {
++        match self {
++            Self::Host => Access::Host,
++            Self::ModelBus => Access::Write,
++        }
++    }
++}
+ #[derive(Default)]
+ pub struct Memory {
+     pub(super) continuation: RefCell<Option<std::rc::Weak<RefCell<super::continuation::Stops>>>>,
++    pub(super) observers: super::observation::ObservationRegistry,
+     regions: Vec<(u64, Backing)>,
+     mappings: RefCell<Vec<BusMapping>>,
+     trackers: Vec<fujimod_emulator_cpu::memory::pages::Tracker>,
+@@ -326,6 +342,7 @@
+             .collect();
+         Ok(Self {
+             regions,
++            observers: Default::default(),
+             mappings: RefCell::new(mappings),
+             trackers,
+             observation: Default::default(),
+@@ -422,26 +439,53 @@
+         domain: &exclusive::Shared,
+         address: u64,
+         bytes: &[u8],
+-        access: Access,
++        source: BulkWrite,
+     ) -> Result<(), String> {
++        let chunks = self.chunks(address, bytes.len(), source.access())?;
++        let guard = self.observers.guard();
++        if let Some(guard) = &guard {
++            let spans = chunks.clone().flatten().map(|(physical, _, len)| (physical, len));
++            guard.admit_bulk(source, address, bytes.len(), spans)?;
++        }
+         let mut offset = 0;
+-        for chunk in self.chunks(address, bytes.len(), access)? {
++        let mut copied = false;
++        for chunk in chunks {
+             let (physical, pointer, len) = chunk?;
+-            self.mark(pointer, len)?;
+-            unsafe {
+-                std::ptr::copy_nonoverlapping(bytes.as_ptr().add(offset), pointer.as_ptr(), len);
+-                for cpu in cpus {
+-                    cpu.backing_written(physical, pointer, len)?;
++            if let Err(error) = self.copy(cpus, domain, physical, pointer, &bytes[offset..offset + len], &mut copied) {
++                if let Some(guard) = &guard {
++                    let phase = if copied { FailurePhase::AfterCopy } else { FailurePhase::BeforeCopy };
++                    guard.operational(source, address, bytes.len(), phase);
+                 }
++                return Err(error);
+             }
+-            domain
+-                .lock()
+-                .map_err(|_| "exclusive monitors poisoned")?
+-                .written(Some((physical, len)))?;
+             offset += len;
+         }
+         Ok(())
+     }
++    fn copy(
++        &self,
++        cpus: &[Rc<dyn Cpu>],
++        domain: &exclusive::Shared,
++        physical: u64,
++        pointer: NonNull<u8>,
++        bytes: &[u8],
++        copied: &mut bool,
++    ) -> Result<(), String> {
++        let len = bytes.len();
++        self.mark(pointer, len)?;
++        unsafe {
++            std::ptr::copy_nonoverlapping(bytes.as_ptr(), pointer.as_ptr(), len);
++            *copied = true;
++            for cpu in cpus {
++                cpu.backing_written(physical, pointer, len)?;
++            }
++        }
++        domain
++            .lock()
++            .map_err(|_| "exclusive monitors poisoned")?
++            .written(Some((physical, len)))?;
++        Ok(())
++    }
+     pub(super) fn write_host(
+         &self,
+         cpus: &[Rc<dyn Cpu>],
+@@ -454,7 +498,7 @@
+             address,
+             bytes.len(),
+         );
+-        self.write(cpus, domain, address, bytes, Access::Host)?;
++        self.write(cpus, domain, address, bytes, BulkWrite::Host)?;
+         self.observe_transfer("host-write", address, bytes.len());
+         Ok(())
+     }
+@@ -470,7 +514,7 @@
+             address,
+             bytes.len(),
+         );
+-        self.write(cpus, domain, address, bytes, Access::Write)?;
++        self.write(cpus, domain, address, bytes, BulkWrite::ModelBus)?;
+         self.observe_transfer("model-bus-write", address, bytes.len());
+         if let Some(stops) = self
+             .continuation
+--- a/crates/emulator/src/board/mod.rs
++++ b/crates/emulator/src/board/mod.rs
+@@ -110,6 +110,8 @@
+     parallel: Option<interactive::Epoch>,
+     decoders: decoder::Decoders,
+     memory_access: bool,
++    /// Set when an observation hook could not be removed; execution is refused.
++    observation_cleanup_failed: Rc<Cell<bool>>,
+ }
+ struct Binding {
+     state: Rc<RefCell<State>>,
+@@ -125,6 +127,8 @@
+     run_wakeup: fujimod_emulator_cpu::RunWakeup,
+     bindings: Vec<Box<Binding>>,
+     hooks: Vec<(usize, HookId)>,
++    /// One window per `map_mmio` call, parallel to `bindings` after the
++    /// per-core bindings.
+     mmio: Vec<(usize, u64, usize)>,
+     next_core: Cell<usize>,
+     slice_left: Cell<usize>,
+@@ -329,6 +333,7 @@
+             parallel: None,
+             decoders: decoder::Decoders::default(),
+             memory_access: false,
++            observation_cleanup_failed: memory.observers.cleanup_failed.clone(),
+         }));
+         let mut board = Self {
+             run_wakeup: Default::default(),
+@@ -683,6 +688,9 @@
+         pause_after: Option<u64>,
+         quantum: usize,
+     ) -> Result<(), String> {
++        if self.state.borrow().observation_cleanup_failed.get() {
++            return Err("an observation hook could not be removed; board execution is refused".into());
++        }
+         prepare_device_workers(self.execution_policy(), self.device_worker_preference())?;
+         if quantum == 0 {
+             return Err("zero processor quantum".into());
+@@ -965,6 +973,9 @@
+ }
+ impl Drop for Board {
+     fn drop(&mut self) {
++        if let Some(guard) = self.physical_memory.observers.guard() {
++            guard.release();
++        }
+         let _ = self.continuation_end();
+         let _ = self.release_store_watch();
+         // The board exclusively owns processors; bindings hold only Weak
+--- a/crates/emulator/src/board/observation.rs
++++ b/crates/emulator/src/board/observation.rs
+@@ -11,6 +11,15 @@
+     ffi::c_void,
+     rc::{Rc, Weak},
+ };
++mod composite;
++mod lifecycle;
++pub use composite::{
++    CompositeGuardConfig, DestinationPolicy, FailurePhase, GuardAttachError, GuardCore, GuardFault, GuardHook,
++    GuardLocation, GuardMutation, GuardRange, GuardReport, GuardSpan, GuardStatus, GuardStatusToken, GuardTarget,
++    MAX_GUARD_BYTES, MAX_GUARD_CORES, MAX_GUARD_PC_SPANS, MAX_GUARD_RANGES, MAX_GUARD_VIEWS, OwnedPcPolicy,
++    SourcePolicy, TcmBank, WriteFaultReason, WriteOutcome, WriteSource,
++};
++pub(in crate::board) use lifecycle::ObservationRegistry;
+ type Span = (u64, u64);
+ /// Access sources one classified watch range records.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+@@ -75,6 +84,7 @@
+     limit: usize,
+     rows: Vec<Value>,
+     violation: Option<String>,
++    lease: lifecycle::WatchLease,
+     /// Empty for an unclassified watch, which records every source.
+     classes: Vec<WatchRange>,
+     views: ViewPolicy,
+@@ -311,6 +321,7 @@
+         {
+             return Err("Memory watch requires bounded ranges and R-profile processors".into());
+         }
++        self.refuse_watch_replacement()?;
+         if self.preservation_active() {
+             return Err("A preservation observation conflicts with memory watch".into());
+         }
+@@ -318,6 +329,7 @@
+         self.watch_backing(&ranges)?;
+         let records = Rc::new(RefCell::new(Records {
+             ranges: ranges.clone(),
++            lease: lifecycle::WatchLease::new(&self.physical_memory),
+             limit,
+             ..Default::default()
+         }));
+@@ -387,6 +399,7 @@
+                 }
+             }
+         }
++        records.borrow_mut().lease.arm();
+         self.physical_memory
+             .observation
+             .replace(Some(Rc::downgrade(&records)));
+@@ -427,6 +440,7 @@
+         {
+             return Err("Memory watch requires bounded classified ranges and R-profile processors".into());
+         }
++        self.refuse_watch_replacement()?;
+         if self.preservation_active() {
+             return Err("A preservation observation conflicts with memory watch".into());
+         }
+@@ -434,6 +448,7 @@
+         self.watch_backing(&ranges)?;
+         let records = Rc::new(RefCell::new(Records {
+             ranges,
++            lease: lifecycle::WatchLease::new(&self.physical_memory),
+             limit,
+             classes,
+             views,
+@@ -509,29 +524,33 @@
+                 }
+             }
+         }
++        records.borrow_mut().lease.arm();
+         self.physical_memory
+             .observation
+             .replace(Some(Rc::downgrade(&records)));
+         Ok(watch)
+     }
+     pub fn memory_watch_end(&self, watch: &mut MemoryWatch) -> Result<(), String> {
+-        for (core, hook) in watch.hooks.drain(..) {
+-            self.cpus[core].remove_hook(hook)?;
+-        }
+-        self.physical_memory.observation.replace(None);
+-        Ok(())
++        self.memory_watch_release(watch)
+     }
+ }
+ 
+ /// Repeated entry observations stop before the selected instruction. Resume
+ /// executes that instruction once, even when it is itself a loop target.
+ pub struct InstructionPoints {
++    /// The hooks' callback data. Retained by the board if a hook outlives these points.
++    context: Rc<PointContext>,
++    hooks: Vec<HookId>,
++    state: Weak<RefCell<State>>,
++    memory: Weak<super::memory::Memory>,
++    cleanup_failed: Rc<Cell<bool>>,
++}
++struct PointContext {
+     cpu: Weak<dyn Cpu>,
+     addresses: PointAddresses,
+     pause: Rc<Cell<bool>>,
+-    event: RefCell<Option<u64>>,
++    event: Cell<Option<u64>>,
+     skip: Cell<Option<u64>>,
+-    hooks: Vec<HookId>,
+ }
+ #[derive(Clone, Copy)]
+ enum PointSetMode { Fixed, Mutable }
+@@ -553,36 +572,66 @@
+     Ok(addresses)
+ }
+ unsafe fn instruction(pc: u64, _: u32, data: *mut c_void) {
+-    let points = unsafe { &*data.cast::<InstructionPoints>() };
++    // SAFETY: `data` is a `PointContext` kept alive until this hook is removed.
++    let points = unsafe { &*data.cast::<PointContext>() };
+     if !points.addresses.permits_hook_pc(pc) { return; }
+     if points.skip.get() == Some(pc) {
+         points.skip.set(None);
+         return;
+     }
+     if let Some(cpu) = points.cpu.upgrade() {
+-        points.event.replace(Some(pc));
++        points.event.set(Some(pc));
+         points.skip.set(Some(pc));
+         points.pause.set(true);
+         let _ = cpu.stop_before_instruction();
+     }
+ }
+ impl InstructionPoints {
++    /// Requires a paused board.
+     pub fn replace_addresses(&self, addresses: Vec<u64>) -> Result<(), String> {
+-        let PointAddresses::Mutable(current) = &self.addresses else {
++        let PointAddresses::Mutable(current) = &self.context.addresses else {
+             return Err("Instruction point addresses are fixed".into());
+         };
+         let addresses = normalize_point_addresses(addresses)?;
+-        if self.skip.get().is_some_and(|pc| addresses.binary_search(&pc).is_err()) {
+-            self.skip.set(None);
++        let state = self.state.upgrade().ok_or("Instruction points outlived their board")?;
++        let paused = state
++            .try_borrow()
++            .is_ok_and(|state| state.active_slice.is_none() && state.parallel.is_none() && !state.memory_access);
++        if !paused {
++            return Err("Instruction point replacement requires a paused board".into());
++        }
++        if self.context.skip.get().is_some_and(|pc| addresses.binary_search(&pc).is_err()) {
++            self.context.skip.set(None);
+         }
+         current.replace(addresses);
+         Ok(())
+     }
+     pub fn event(&self) -> Option<u64> {
+-        self.event.borrow_mut().take()
++        self.context.event.take()
+     }
+     pub fn resume(&self, current_pc: u64, observed_pc: u64) {
+-        self.skip.set((current_pc == observed_pc && self.addresses.permits_hook_pc(observed_pc)).then_some(observed_pc));
++        let resumed = current_pc == observed_pc && self.context.addresses.permits_hook_pc(observed_pc);
++        self.context.skip.set(resumed.then_some(observed_pc));
++    }
++    /// Keeps every hook whose removal failed or was not reached.
++    fn remove(&mut self) -> Result<(), String> {
++        let cpu = self.context.cpu.upgrade();
++        let result =
++            lifecycle::remove_hooks(&mut self.hooks, |&hook| cpu.as_ref().map_or(Ok(()), |cpu| cpu.remove_hook(hook)));
++        if result.is_err() {
++            self.cleanup_failed.set(true);
++        }
++        result
++    }
++}
++impl Drop for InstructionPoints {
++    fn drop(&mut self) {
++        if self.hooks.is_empty() || self.remove().is_ok() {
++            return;
++        }
++        if let Some(memory) = self.memory.upgrade() {
++            memory.observers.retain(Box::new((self.context.clone(), std::mem::take(&mut self.hooks))));
++        }
+     }
+ }
+ impl Board {
+@@ -609,26 +658,33 @@
+     ) -> Result<Box<InstructionPoints>, String> {
+         let cpu = self.cpu(core)?;
+         let addresses = normalize_point_addresses(addresses)?;
+-        let mut points = Box::new(InstructionPoints {
++        let context = Rc::new(PointContext {
+             cpu: Rc::downgrade(&self.cpus[core]),
+             addresses: match mode {
+                 PointSetMode::Fixed => PointAddresses::Fixed(addresses),
+                 PointSetMode::Mutable => PointAddresses::Mutable(RefCell::new(addresses)),
+             },
+             pause: self.host_pause.clone(),
+-            event: RefCell::new(None),
++            event: Cell::new(None),
+             skip: Cell::new(None),
++        });
++        let mut points = Box::new(InstructionPoints {
++            context: context.clone(),
+             hooks: vec![],
++            state: Rc::downgrade(&self.state),
++            memory: Rc::downgrade(&self.physical_memory),
++            cleanup_failed: self.physical_memory.observers.cleanup_failed.clone(),
+         });
+-        let data = (&*points as *const InstructionPoints).cast_mut().cast();
+-        let addresses = &points.addresses;
++        let data = Rc::as_ptr(&context).cast_mut().cast();
+         let hooks = &mut points.hooks;
+         let mut install = |range| -> Result<(), String> {
++            // SAFETY: `points` keeps `context` until this hook is removed, then
++            // hands it to the board if removal fails.
+             let id = unsafe { cpu.install_hook(Hook::Instruction { callback: instruction, data, range }) }?;
+             hooks.push(id);
+             Ok(())
+         };
+-        let result = match addresses {
++        let result = match &context.addresses {
+             PointAddresses::Fixed(addresses) => addresses.iter().try_for_each(|&pc| install(HookRange::Inclusive { begin: pc, end: pc })),
+             PointAddresses::Mutable(_) => install(HookRange::All),
+         };
+@@ -643,10 +699,11 @@
+         core: usize,
+         points: &mut InstructionPoints,
+     ) -> Result<(), String> {
+-        for hook in points.hooks.drain(..) {
+-            self.cpu(core)?.remove_hook(hook)?;
++        let cpu = self.cpus.get(core).ok_or("absent processor")?;
++        if !Weak::ptr_eq(&points.context.cpu, &Rc::downgrade(cpu)) {
++            return Err("Instruction points belong to another processor".into());
+         }
+-        Ok(())
++        points.remove()
+     }
+ }
+ 
+--- /dev/null
++++ b/crates/emulator/src/board/observation/composite.rs
+@@ -0,0 +1,849 @@
++//! Opt-in write and mutation admission attached to the current classified
++//! memory watch. The guard retains bounded policy, checked counters and the
++//! first typed fault; it adds no rows to the watch.
++use super::{Board, MemoryWatch, State, lifecycle::LeasePhase};
++use crate::board::{
++    memory::{BulkWrite, Memory},
++    scalar,
++};
++use fujimod_emulator_cpu::{Access, Cpu, CpuMutation, ExecutionPolicy, Hook, HookId, HookRange, Model, Register, arm};
++use std::{
++    cell::Cell,
++    ffi::c_void,
++    rc::{Rc, Weak},
++};
++
++pub const MAX_GUARD_CORES: usize = 16;
++/// Allow and forbid ranges across every policy of one configuration.
++pub const MAX_GUARD_RANGES: usize = 256;
++pub const MAX_GUARD_PC_SPANS: usize = 128;
++/// Pinned processor views per core.
++pub const MAX_GUARD_VIEWS: usize = 256;
++/// Heap bytes retained for one configuration's policy storage.
++pub const MAX_GUARD_BYTES: usize = 1 << 20;
++const ADDRESS_END: u64 = 1 << 32;
++const GUEST_WIDTHS: [usize; 5] = [1, 2, 4, 8, 16];
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
++pub struct GuardCore(u8);
++impl GuardCore {
++    pub fn new(core: usize) -> Result<Self, GuardAttachError> {
++        u8::try_from(core)
++            .ok()
++            .filter(|_| core < MAX_GUARD_CORES)
++            .map(Self)
++            .ok_or(GuardAttachError::InvalidCore)
++    }
++    pub fn get(self) -> usize {
++        usize::from(self.0)
++    }
++}
++/// Half-open and within the 32-bit address space.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct GuardSpan {
++    start: u64,
++    end: u64,
++}
++impl GuardSpan {
++    pub fn new(start: u64, end: u64) -> Result<Self, GuardAttachError> {
++        if start >= end || end > ADDRESS_END {
++            return Err(GuardAttachError::InvalidInterval);
++        }
++        Ok(Self { start, end })
++    }
++    pub fn start(self) -> u64 {
++        self.start
++    }
++    pub fn end(self) -> u64 {
++        self.end
++    }
++    fn holds(self, address: u64) -> bool {
++        self.start <= address && address < self.end
++    }
++    fn intersects(self, start: u64, end: u64) -> bool {
++        start < self.end && self.start < end
++    }
++}
++/// `Data` is CP15 c9,c1,0 (BTCM on Cortex-R5); `Instruction` is c9,c1,1 (ATCM).
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub enum TcmBank {
++    Data,
++    Instruction,
++}
++impl TcmBank {
++    const ALL: [Self; 2] = [Self::Data, Self::Instruction];
++    fn register(self) -> arm::Coprocessor {
++        arm::Coprocessor {
++            cp: 15,
++            opc1: 0,
++            crn: 9,
++            crm: 1,
++            opc2: match self {
++                Self::Data => 0,
++                Self::Instruction => 1,
++            },
++            secure: 0,
++            wide: false,
++        }
++    }
++}
++/// A TCM span is an offset range within that core's bank.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub enum GuardTarget {
++    Physical,
++    Tcm { core: GuardCore, bank: TcmBank },
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct GuardRange {
++    pub target: GuardTarget,
++    pub span: GuardSpan,
++}
++/// The union of `allow` must cover a whole access; any `forbid` overlap denies it.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct DestinationPolicy {
++    pub allow: Vec<GuardRange>,
++    pub forbid: Vec<GuardRange>,
++}
++/// Writes by instructions whose PC lies in `spans` use `destinations`.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct OwnedPcPolicy {
++    pub spans: Vec<GuardSpan>,
++    pub destinations: DestinationPolicy,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub enum WriteSource {
++    /// Guest stores by this core.
++    Cpu(GuardCore),
++    /// Host writes through this core's view, including `Cpu::write_memory`.
++    CoreHost(GuardCore),
++    /// Host writes through the physical bus.
++    PhysicalHost,
++    /// Device writes through the physical bus.
++    ModelBus,
++}
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct SourcePolicy {
++    pub source: WriteSource,
++    /// For `Cpu` sources with `owned_pc`, the policy outside its spans.
++    pub destinations: DestinationPolicy,
++    pub owned_pc: Option<OwnedPcPolicy>,
++}
++/// Exactly one policy for every `Cpu` and `CoreHost` core, `PhysicalHost`
++/// and `ModelBus`.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct CompositeGuardConfig {
++    pub sources: Vec<SourcePolicy>,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum GuardHook {
++    Mutation,
++    Write,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum GuardAttachError {
++    NotPaused,
++    PendingDecode,
++    UnsupportedBackend,
++    WrongOwner,
++    DeadWatch,
++    NotCurrent,
++    SiblingWatch,
++    NotClassified,
++    AlreadyAttached,
++    CleanupFailed,
++    InvalidCore,
++    InvalidInterval,
++    MissingSource,
++    DuplicateSource,
++    InvalidTarget,
++    InvalidPartition,
++    AmbiguousRanges,
++    BoundExceeded,
++    InvalidMapping,
++    CpuInspection,
++    /// Installation failed and every hook installed before it was removed.
++    HookInstallation { core: GuardCore, hook: GuardHook },
++}
++impl std::fmt::Display for GuardAttachError {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        write!(f, "composite guard attach refused: {self:?}")
++    }
++}
++impl std::error::Error for GuardAttachError {}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum GuardStatus {
++    Armed,
++    Faulted,
++    Ended,
++    /// A hook removal failed; board execution is refused.
++    CleanupFailed,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum WriteFaultReason {
++    Denied,
++    Unresolved,
++    InvalidWidth,
++    Overflow,
++    CpuInspection,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum WriteOutcome {
++    /// The write did not happen. Earlier accesses of the same guest
++    /// instruction may have.
++    Refused,
++    /// The backend could not refuse the guest write; the core was stopped at it and the write may have happened.
++    Attempted,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum FailurePhase {
++    BeforeCopy,
++    /// Some bytes may have been copied; nothing was rolled back.
++    AfterCopy,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum GuardMutation {
++    Cpu(CpuMutation),
++    /// A memory decoder choice, including one that changes only DMA windows.
++    Decoder { decoder: usize, choice: usize },
++    /// A board keyframe restore.
++    Restore,
++}
++/// A resolved destination: a physical address, or an offset within a TCM bank.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct GuardLocation {
++    pub target: GuardTarget,
++    pub address: u64,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum GuardFault {
++    Write {
++        source: WriteSource,
++        /// The processor address for core sources, the bus address otherwise.
++        address: u64,
++        bytes: usize,
++        pc: Option<u64>,
++        /// The first offending chunk; absent when the access did not resolve.
++        location: Option<GuardLocation>,
++        reason: WriteFaultReason,
++        outcome: WriteOutcome,
++    },
++    /// Refused before its first effect.
++    Mutation {
++        core: Option<GuardCore>,
++        mutation: GuardMutation,
++    },
++    /// An admitted bulk write failed.
++    Operational {
++        source: WriteSource,
++        address: u64,
++        bytes: usize,
++        phase: FailurePhase,
++    },
++    CounterOverflow,
++    CleanupFailed,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct GuardReport {
++    pub status: GuardStatus,
++    pub first_fault: Option<GuardFault>,
++    pub write_checks: u64,
++    pub mutation_attempts: u64,
++}
++/// Read-only; the attached watch owns the guard.
++#[derive(Clone)]
++pub struct GuardStatusToken(Rc<GuardLatch>);
++impl GuardStatusToken {
++    pub fn report(&self) -> GuardReport {
++        self.0.report.get()
++    }
++}
++
++/// Policy and report shared by every guard callback, without Records or State.
++pub(in crate::board) struct GuardLatch {
++    /// Indexed by `slot`.
++    policies: Vec<SourcePolicy>,
++    cores: usize,
++    report: Cell<GuardReport>,
++    /// Set by `Board::drop`; callbacks then admit without counting.
++    released: Cell<bool>,
++}
++#[derive(Clone, Copy)]
++enum Counter {
++    Write,
++    Mutation,
++}
++impl GuardLatch {
++    pub(in crate::board) fn release(&self) {
++        self.released.set(true);
++    }
++    fn record(&self, fault: GuardFault) {
++        let mut report = self.report.get();
++        report.first_fault.get_or_insert(fault);
++        if report.status == GuardStatus::Armed {
++            report.status = GuardStatus::Faulted;
++        }
++        self.report.set(report);
++    }
++    fn count(&self, counter: Counter) {
++        let mut report = self.report.get();
++        let value = match counter {
++            Counter::Write => &mut report.write_checks,
++            Counter::Mutation => &mut report.mutation_attempts,
++        };
++        match value.checked_add(1) {
++            Some(next) => {
++                *value = next;
++                self.report.set(report);
++            }
++            None => self.record(GuardFault::CounterOverflow),
++        }
++    }
++    fn destinations(&self, source: WriteSource, pc: Option<u64>) -> &DestinationPolicy {
++        let policy = &self.policies[slot(source, self.cores)];
++        match (&policy.owned_pc, pc) {
++            (Some(owned), Some(pc)) if owned.spans.iter().any(|span| span.holds(pc)) => &owned.destinations,
++            _ => &policy.destinations,
++        }
++    }
++    fn end(&self) {
++        let mut report = self.report.get();
++        report.status = GuardStatus::Ended;
++        self.report.set(report);
++    }
++    fn cleanup_failed(&self) {
++        self.record(GuardFault::CleanupFailed);
++        let mut report = self.report.get();
++        report.status = GuardStatus::CleanupFailed;
++        self.report.set(report);
++    }
++    fn refuse(&self, core: Option<GuardCore>, mutation: GuardMutation) {
++        self.count(Counter::Mutation);
++        self.record(GuardFault::Mutation { core, mutation });
++    }
++    /// Checks every chunk of a bulk transfer before its first copy.
++    pub(in crate::board) fn admit_bulk(
++        &self,
++        source: BulkWrite,
++        address: u64,
++        bytes: usize,
++        chunks: impl Iterator<Item = (u64, usize)>,
++    ) -> Result<(), String> {
++        if bytes == 0 {
++            return Ok(());
++        }
++        let source = WriteSource::from(source);
++        self.count(Counter::Write);
++        let policy = self.destinations(source, None);
++        for (physical, len) in chunks {
++            let location = GuardLocation { target: GuardTarget::Physical, address: physical };
++            let reason = match physical.checked_add(len as u64) {
++                Some(end) if permits(policy, GuardTarget::Physical, physical, end) => continue,
++                Some(_) => WriteFaultReason::Denied,
++                None => WriteFaultReason::Overflow,
++            };
++            self.record(GuardFault::Write {
++                source,
++                address,
++                bytes,
++                pc: None,
++                location: Some(location),
++                reason,
++                outcome: WriteOutcome::Refused,
++            });
++            return Err(format!("composite guard refused a {source:?} write of {bytes} bytes at {address:#x}"));
++        }
++        Ok(())
++    }
++    pub(in crate::board) fn operational(&self, source: BulkWrite, address: u64, bytes: usize, phase: FailurePhase) {
++        self.record(GuardFault::Operational { source: source.into(), address, bytes, phase });
++    }
++}
++fn slot(source: WriteSource, cores: usize) -> usize {
++    match source {
++        WriteSource::Cpu(core) => core.get(),
++        WriteSource::CoreHost(core) => cores + core.get(),
++        WriteSource::PhysicalHost => 2 * cores,
++        WriteSource::ModelBus => 2 * cores + 1,
++    }
++}
++fn permits(policy: &DestinationPolicy, target: GuardTarget, start: u64, end: u64) -> bool {
++    if policy.forbid.iter().any(|range| range.target == target && range.span.intersects(start, end)) {
++        return false;
++    }
++    let mut cursor = start;
++    while cursor < end {
++        match policy.allow.iter().find(|range| range.target == target && range.span.holds(cursor)) {
++            Some(range) => cursor = range.span.end,
++            None => return false,
++        }
++    }
++    true
++}
++impl From<BulkWrite> for WriteSource {
++    fn from(source: BulkWrite) -> Self {
++        match source {
++            BulkWrite::Host => Self::PhysicalHost,
++            BulkWrite::ModelBus => Self::ModelBus,
++        }
++    }
++}
++
++#[derive(Clone, Copy)]
++struct TcmWindow {
++    base: u64,
++    end: u64,
++}
++/// A processor RAM or MMIO view as it was when the guard attached.
++#[derive(Clone, Copy)]
++struct PinnedView {
++    start: u64,
++    end: u64,
++    physical: u64,
++}
++type Denial = (WriteFaultReason, Option<GuardLocation>);
++struct GuardContext {
++    core: GuardCore,
++    cpu: Weak<dyn Cpu>,
++    latch: Rc<GuardLatch>,
++    pause: Rc<Cell<bool>>,
++    /// Indexed like `TcmBank::ALL`.
++    tcm: [Option<TcmWindow>; 2],
++    /// Sorted and disjoint.
++    views: Vec<PinnedView>,
++}
++impl GuardContext {
++    /// The location of `cursor` and the end of its contiguous chunk below `end`.
++    fn resolve(&self, cursor: u64, end: u64) -> Option<(GuardLocation, u64)> {
++        for (bank, window) in TcmBank::ALL.into_iter().zip(self.tcm) {
++            if let Some(window) = window
++                && window.base <= cursor
++                && cursor < window.end
++            {
++                let target = GuardTarget::Tcm { core: self.core, bank };
++                return Some((GuardLocation { target, address: cursor - window.base }, end.min(window.end)));
++            }
++        }
++        let view = self.views.iter().find(|view| view.start <= cursor && cursor < view.end)?;
++        let next = self
++            .tcm
++            .iter()
++            .flatten()
++            .filter(|window| cursor < window.base)
++            .fold(end.min(view.end), |next, window| next.min(window.base));
++        let address = view.physical + (cursor - view.start);
++        Some((GuardLocation { target: GuardTarget::Physical, address }, next))
++    }
++    fn admit(&self, source: WriteSource, address: u64, bytes: usize, pc: Option<u64>) -> Result<(), Denial> {
++        let end = address
++            .checked_add(bytes as u64)
++            .filter(|&end| end <= ADDRESS_END)
++            .ok_or((WriteFaultReason::Overflow, None))?;
++        let policy = self.latch.destinations(source, pc);
++        let mut cursor = address;
++        while cursor < end {
++            let (location, next) = self.resolve(cursor, end).ok_or((WriteFaultReason::Unresolved, None))?;
++            let chunk_end = location.address + (next - cursor);
++            if !permits(policy, location.target, location.address, chunk_end) {
++                return Err((WriteFaultReason::Denied, Some(location)));
++            }
++            cursor = next;
++        }
++        Ok(())
++    }
++    fn guest_write(&self, address: u64, size: i32) {
++        let Some(cpu) = self.cpu.upgrade().filter(|_| !self.latch.released.get()) else {
++            return;
++        };
++        let source = WriteSource::Cpu(self.core);
++        self.latch.count(Counter::Write);
++        let bytes = usize::try_from(size).unwrap_or(0);
++        let pc = scalar(&*cpu, Register::Pc).ok();
++        let decision = if !GUEST_WIDTHS.contains(&bytes) {
++            Err((WriteFaultReason::InvalidWidth, None))
++        } else if pc.is_none() {
++            Err((WriteFaultReason::CpuInspection, None))
++        } else {
++            self.admit(source, address, bytes, pc)
++        };
++        let Err((reason, location)) = decision else {
++            return;
++        };
++        let outcome = if cpu.refuse_access().is_ok() {
++            WriteOutcome::Refused
++        } else {
++            self.pause.set(true);
++            let _ = cpu.stop();
++            WriteOutcome::Attempted
++        };
++        self.latch.record(GuardFault::Write { source, address, bytes, pc, location, reason, outcome });
++    }
++    fn mutation(&self, event: CpuMutation) -> bool {
++        if self.latch.released.get() {
++            return true;
++        }
++        let CpuMutation::HostWrite { address, bytes } = event else {
++            self.latch.refuse(Some(self.core), GuardMutation::Cpu(event));
++            return false;
++        };
++        let source = WriteSource::CoreHost(self.core);
++        self.latch.count(Counter::Write);
++        let Err((reason, location)) = self.admit(source, address, bytes, None) else {
++            return true;
++        };
++        self.latch.record(GuardFault::Write {
++            source,
++            address,
++            bytes,
++            pc: None,
++            location,
++            reason,
++            outcome: WriteOutcome::Refused,
++        });
++        false
++    }
++}
++unsafe fn mutation(event: CpuMutation, data: *mut c_void) -> bool {
++    // SAFETY: `data` is a `GuardContext` its lease keeps until this hook is removed.
++    let context = unsafe { &*data.cast::<GuardContext>() };
++    context.mutation(event)
++}
++unsafe fn guest_write(access: Access, address: u64, size: i32, _value: i64, data: *mut c_void) {
++    // SAFETY: `data` is a `GuardContext` its lease keeps until this hook is removed.
++    let context = unsafe { &*data.cast::<GuardContext>() };
++    if access == Access::Write {
++        context.guest_write(address, size);
++    }
++}
++
++/// Owns guard contexts and hooks. Dropping it with a hook still installed
++/// hands both to the board instead of freeing the contexts.
++pub(super) struct GuardLease {
++    latch: Rc<GuardLatch>,
++    owner: Weak<Memory>,
++    cleanup_failed: Rc<Cell<bool>>,
++    contexts: Vec<Box<GuardContext>>,
++    hooks: Vec<(Weak<dyn Cpu>, HookId)>,
++}
++impl GuardLease {
++    /// Keeps every hook whose removal failed or was not reached.
++    pub(super) fn remove(&mut self) -> Result<(), String> {
++        let result = super::lifecycle::remove_hooks(&mut self.hooks, |(cpu, hook)| {
++            cpu.upgrade().map_or(Ok(()), |cpu| cpu.remove_hook(*hook))
++        });
++        match &result {
++            Ok(()) => {
++                self.latch.end();
++                if let Some(memory) = self.owner.upgrade() {
++                    memory.observers.clear_guard(&self.latch);
++                }
++            }
++            Err(_) => {
++                self.latch.cleanup_failed();
++                self.cleanup_failed.set(true);
++            }
++        }
++        result
++    }
++}
++impl Drop for GuardLease {
++    fn drop(&mut self) {
++        if self.hooks.is_empty() || self.remove().is_ok() {
++            return;
++        }
++        if let Some(memory) = self.owner.upgrade() {
++            memory
++                .observers
++                .retain(Box::new((std::mem::take(&mut self.contexts), std::mem::take(&mut self.hooks))));
++        }
++    }
++}
++
++fn validate_destinations(
++    policy: &DestinationPolicy,
++    source: WriteSource,
++    cores: usize,
++) -> Result<(), GuardAttachError> {
++    for list in [&policy.allow, &policy.forbid] {
++        for (index, range) in list.iter().enumerate() {
++            match (range.target, source) {
++                (GuardTarget::Physical, _) => (),
++                (GuardTarget::Tcm { core, .. }, WriteSource::Cpu(owner) | WriteSource::CoreHost(owner))
++                    if core == owner && core.get() < cores => {}
++                (GuardTarget::Tcm { .. }, _) => return Err(GuardAttachError::InvalidTarget),
++            }
++            if list[..index]
++                .iter()
++                .any(|other| other.target == range.target && other.span.intersects(range.span.start, range.span.end))
++            {
++                return Err(GuardAttachError::AmbiguousRanges);
++            }
++        }
++    }
++    Ok(())
++}
++fn retained_bytes<T>(list: &Vec<T>) -> Option<usize> {
++    list.capacity().checked_mul(size_of::<T>())
++}
++fn shrink(policy: &mut DestinationPolicy) {
++    policy.allow.shrink_to_fit();
++    policy.forbid.shrink_to_fit();
++}
++impl CompositeGuardConfig {
++    /// Returns the policies indexed by `slot`.
++    fn validate(self, cores: usize) -> Result<Vec<SourcePolicy>, GuardAttachError> {
++        use GuardAttachError::*;
++        if cores == 0 || cores > MAX_GUARD_CORES {
++            return Err(InvalidCore);
++        }
++        let expected = 2 * cores + 2;
++        let (mut ranges, mut pc_spans) = (0usize, 0usize);
++        for policy in &self.sources {
++            let lists = [Some(&policy.destinations), policy.owned_pc.as_ref().map(|owned| &owned.destinations)];
++            for destinations in lists.into_iter().flatten() {
++                ranges = ranges
++                    .checked_add(destinations.allow.len())
++                    .and_then(|n| n.checked_add(destinations.forbid.len()))
++                    .ok_or(BoundExceeded)?;
++            }
++            pc_spans = pc_spans
++                .checked_add(policy.owned_pc.as_ref().map_or(0, |owned| owned.spans.len()))
++                .ok_or(BoundExceeded)?;
++        }
++        if self.sources.len() > expected || ranges > MAX_GUARD_RANGES || pc_spans > MAX_GUARD_PC_SPANS {
++            return Err(BoundExceeded);
++        }
++        let mut slots: Vec<Option<SourcePolicy>> = (0..expected).map(|_| None).collect();
++        for mut policy in self.sources {
++            if let WriteSource::Cpu(core) | WriteSource::CoreHost(core) = policy.source
++                && core.get() >= cores
++            {
++                return Err(InvalidCore);
++            }
++            validate_destinations(&policy.destinations, policy.source, cores)?;
++            shrink(&mut policy.destinations);
++            if let Some(owned) = &mut policy.owned_pc {
++                if !matches!(policy.source, WriteSource::Cpu(_)) || owned.spans.is_empty() {
++                    return Err(InvalidPartition);
++                }
++                for (index, span) in owned.spans.iter().enumerate() {
++                    if owned.spans[..index].iter().any(|other| other.intersects(span.start, span.end)) {
++                        return Err(InvalidPartition);
++                    }
++                }
++                validate_destinations(&owned.destinations, policy.source, cores)?;
++                owned.spans.shrink_to_fit();
++                shrink(&mut owned.destinations);
++            }
++            if slots[slot(policy.source, cores)].replace(policy).is_some() {
++                return Err(DuplicateSource);
++            }
++        }
++        let policies = slots.into_iter().collect::<Option<Vec<_>>>().ok_or(MissingSource)?;
++        let mut bytes = retained_bytes(&policies).ok_or(BoundExceeded)?;
++        for policy in &policies {
++            let lists = [Some(&policy.destinations), policy.owned_pc.as_ref().map(|owned| &owned.destinations)];
++            for destinations in lists.into_iter().flatten() {
++                for list in [&destinations.allow, &destinations.forbid] {
++                    bytes = retained_bytes(list).and_then(|n| bytes.checked_add(n)).ok_or(BoundExceeded)?;
++                }
++            }
++            if let Some(owned) = &policy.owned_pc {
++                bytes = retained_bytes(&owned.spans).and_then(|n| bytes.checked_add(n)).ok_or(BoundExceeded)?;
++            }
++        }
++        if bytes > MAX_GUARD_BYTES {
++            return Err(BoundExceeded);
++        }
++        Ok(policies)
++    }
++}
++fn pin_tcm(cpu: &dyn Cpu) -> Result<[Option<TcmWindow>; 2], GuardAttachError> {
++    let mut windows = [None; 2];
++    for (bank, window) in TcmBank::ALL.into_iter().zip(&mut windows) {
++        let register = cpu
++            .coprocessor(bank.register(), None)
++            .ok()
++            .and_then(|value| u32::try_from(value).ok())
++            .ok_or(GuardAttachError::CpuInspection)?;
++        if register & 1 != 0 {
++            let base = u64::from(register & 0xffff_f000);
++            let end = (512u64 << ((register >> 2) & 31))
++                .checked_add(base)
++                .filter(|&end| end <= ADDRESS_END)
++                .ok_or(GuardAttachError::InvalidMapping)?;
++            *window = Some(TcmWindow { base, end });
++        }
++    }
++    Ok(windows)
++}
++impl Board {
++    fn pin_views(&self, state: &State, core: usize) -> Result<Vec<PinnedView>, GuardAttachError> {
++        let mut views = Vec::new();
++        let mut push = |address: u64, physical: u64, size: usize| {
++            if views.len() == MAX_GUARD_VIEWS {
++                return Err(GuardAttachError::BoundExceeded);
++            }
++            let size = size as u64;
++            let end = address.checked_add(size).filter(|&end| size != 0 && end <= ADDRESS_END);
++            let (Some(end), Some(_)) = (end, physical.checked_add(size)) else {
++                return Err(GuardAttachError::InvalidMapping);
++            };
++            views.push(PinnedView { start: address, end, physical });
++            Ok(())
++        };
++        for map in self.mappings.iter().filter(|map| map.core == core) {
++            let map = state
++                .decoders
++                .selected_maps(core)
++                .find(|selected| selected.address == map.address && selected.size == map.size)
++                .unwrap_or(map);
++            push(map.address, map.physical, map.size)?;
++        }
++        for (binding, &(owner, address, bytes)) in self.bindings[self.cpus.len()..].iter().zip(&self.mmio) {
++            if owner == core {
++                push(address, binding.base, bytes)?;
++            }
++        }
++        views.sort_unstable_by_key(|view| view.start);
++        if views.windows(2).any(|pair| pair[1].start < pair[0].end) {
++            return Err(GuardAttachError::InvalidMapping);
++        }
++        views.shrink_to_fit();
++        Ok(views)
++    }
++    /// Attach write and mutation admission to the current classified watch,
++    /// keeping its records, classes, fetch capture, bounds and hooks.
++    pub fn memory_guard_attach(
++        &self,
++        watch: &mut MemoryWatch,
++        config: CompositeGuardConfig,
++    ) -> Result<GuardStatusToken, GuardAttachError> {
++        use GuardAttachError::*;
++        let state = self.state.try_borrow_mut().map_err(|_| NotPaused)?;
++        if state.active_slice.is_some() || state.parallel.is_some() || state.memory_access {
++            return Err(NotPaused);
++        }
++        if state.decoders.pending() {
++            return Err(PendingDecode);
++        }
++        let observers = &self.physical_memory.observers;
++        if observers.cleanup_failed.get() {
++            return Err(CleanupFailed);
++        }
++        if state.execution_policy != ExecutionPolicy::Exact
++            || self
++                .cpus
++                .iter()
++                .any(|cpu| cpu.model() != Model::CortexR5F || !cpu.supports_mutation_observation())
++        {
++            return Err(UnsupportedBackend);
++        }
++        {
++            let records = watch.records.borrow();
++            if !records.lease.owned_by(&self.physical_memory) {
++                return Err(WrongOwner);
++            }
++            if records.lease.cleanup_failed {
++                return Err(CleanupFailed);
++            }
++            if records.lease.phase != LeasePhase::Armed {
++                return Err(DeadWatch);
++            }
++            if records.lease.guard.is_some() || observers.guard().is_some() {
++                return Err(AlreadyAttached);
++            }
++            if records.classes.is_empty() {
++                return Err(NotClassified);
++            }
++        }
++        let current = self
++            .physical_memory
++            .observation
++            .borrow()
++            .as_ref()
++            .and_then(Weak::upgrade)
++            .is_some_and(|current| Rc::ptr_eq(&current, &watch.records));
++        if !current {
++            return Err(NotCurrent);
++        }
++        if observers.live_watches() != 1 {
++            return Err(SiblingWatch);
++        }
++        let cores = self.cpus.len();
++        let latch = Rc::new(GuardLatch {
++            policies: config.validate(cores)?,
++            cores,
++            report: Cell::new(GuardReport {
++                status: GuardStatus::Armed,
++                first_fault: None,
++                write_checks: 0,
++                mutation_attempts: 0,
++            }),
++            released: Cell::new(false),
++        });
++        let mut contexts = Vec::with_capacity(cores);
++        for (core, cpu) in self.cpus.iter().enumerate() {
++            contexts.push(Box::new(GuardContext {
++                core: GuardCore::new(core)?,
++                cpu: Rc::downgrade(cpu),
++                latch: latch.clone(),
++                pause: self.host_pause.clone(),
++                tcm: pin_tcm(&**cpu)?,
++                views: self.pin_views(&state, core)?,
++            }));
++        }
++        drop(state);
++        let mut lease = GuardLease {
++            latch,
++            owner: Rc::downgrade(&self.physical_memory),
++            cleanup_failed: observers.cleanup_failed.clone(),
++            contexts,
++            hooks: Vec::with_capacity(2 * cores),
++        };
++        for (core, cpu) in self.cpus.iter().enumerate() {
++            let context = &*lease.contexts[core];
++            let guard_core = context.core;
++            let data = (context as *const GuardContext).cast_mut().cast();
++            let hooks = [
++                (GuardHook::Mutation, Hook::Mutation { callback: mutation, data }),
++                (
++                    GuardHook::Write,
++                    Hook::Memory { callback: guest_write, data, read: false, write: true, range: HookRange::All },
++                ),
++            ];
++            for (kind, hook) in hooks {
++                // SAFETY: the lease keeps the boxed context until this hook is removed.
++                match unsafe { cpu.install_hook(hook) } {
++                    Ok(id) => lease.hooks.push((Rc::downgrade(cpu), id)),
++                    Err(_) => {
++                        if lease.remove().is_ok() {
++                            return Err(HookInstallation { core: guard_core, hook: kind });
++                        }
++                        observers.set_guard(&lease.latch);
++                        watch.records.borrow_mut().lease.guard = Some(lease);
++                        return Err(CleanupFailed);
++                    }
++                }
++            }
++        }
++        observers.set_guard(&lease.latch);
++        let token = GuardStatusToken(lease.latch.clone());
++        watch.records.borrow_mut().lease.guard = Some(lease);
++        Ok(token)
++    }
++}
++impl Memory {
++    /// Refuses `mutation` before its first effect while a guard is attached.
++    pub(in crate::board) fn admit_transaction(&self, mutation: GuardMutation) -> Result<(), String> {
++        match self.observers.guard() {
++            Some(guard) => {
++                guard.refuse(None, mutation);
++                Err(format!("composite guard refused {mutation:?}"))
++            }
++            None => Ok(()),
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests;
+--- /dev/null
++++ b/crates/emulator/src/board/observation/composite/tests.rs
+@@ -0,0 +1,1048 @@
++use super::*;
++use crate::board::{
++    bus::{self, Bus},
++    decoder::{Choice, Decoder},
++    factory::{Engine, Graph, MemoryMap, Options, Peripheral, Processor, Ram},
++    memory::BusMapping,
++    observation::{CpuDataAttribution, FetchAttribution, InstructionPoints, ViewPolicy, WatchKinds, WatchRange},
++};
++use fujimod_emulator_cpu::{
++    AccessRefusalError, BackingObserver, BlockAccounting, Clock, ExecutionError, Exit, FastMmioRead, Features,
++    Identity, Interrupt, MappingMutation, MemoryRegion, Mmio, MutationOrigin, Run, RunStatus, RunToken, RunWakeup,
++    Snapshot, TranslationHooks, exclusive, loops, timeline::Ratio,
++};
++use fujimod_emulator_cpu_unicorn::rprofile;
++use fujimod_emulator_devices::{Cx, Device};
++use std::ptr::NonNull;
++
++const STORE: [u32; 2] = [0xe5810000, 0xeafffffe]; // str r0,[r1]; b .
++const ATCM: u64 = 0x10000;
++const BTCM: u64 = 0x50000;
++const DMA: u64 = 0x8000000;
++
++/// Writes four bytes at the bus address it is given.
++struct Dma;
++impl Device for Dma {
++    fn name(&self) -> &'static str {
++        "composite-guard-dma"
++    }
++    fn read(&mut self, cx: &mut Cx<'_>, _: u64, _: u8) -> u64 {
++        cx.unmodeled();
++        0
++    }
++    fn write(&mut self, cx: &mut Cx<'_>, _: u64, _: u8, value: u64) {
++        if let Err(error) = cx.ram_write(value, &0x5a5a_5a5au32.to_le_bytes()) {
++            cx.fail(error);
++        }
++    }
++}
++
++fn map(core: usize, address: u64, physical: u64) -> MemoryMap {
++    MemoryMap { core, address, physical, size: 0x1000, permissions: 7 }
++}
++fn graph(released: [bool; 2], decoders: bool) -> Graph {
++    let mut mappings: Vec<_> = (0..2)
++        .flat_map(|core| {
++            [map(core, ATCM, 0x10000), map(core, 0x20000, 0x10000), map(core, 0x30000, 0x30000), map(core, 0x40000, 0x40000)]
++        })
++        .collect();
++    let mut dma_mappings = vec![
++        BusMapping::ram(0x10000, 0x1000),
++        BusMapping::ram(0x30000, 0x1000),
++        BusMapping::ram(0x40000, 0x1000),
++        BusMapping { address: 0x60000, physical: 0x30000, size: 0x1000, permissions: 3 },
++        BusMapping { address: 0x61000, physical: 0x40000, size: 0x1000, permissions: 3 },
++    ];
++    let mut graph_decoders = vec![];
++    if decoders {
++        let processors = |physical| (0..2).map(|core| map(core, 0x70000, physical)).collect::<Vec<_>>();
++        let window = |physical| BusMapping { address: 0x70000, physical, size: 0x1000, permissions: 3 };
++        mappings.extend(processors(0x30000));
++        dma_mappings.push(window(0x30000));
++        graph_decoders = vec![
++            Decoder {
++                initial: 0,
++                choices: vec![
++                    Choice { processors: processors(0x30000), dma: vec![] },
++                    Choice { processors: processors(0x40000), dma: vec![] },
++                ],
++            },
++            Decoder {
++                initial: 0,
++                choices: vec![
++                    Choice { processors: vec![], dma: vec![window(0x30000)] },
++                    Choice { processors: vec![], dma: vec![window(0x40000)] },
++                ],
++            },
++        ];
++    }
++    Graph {
++        processors: released
++            .into_iter()
++            .map(|released| Processor {
++                model: Model::CortexR5F,
++                released,
++                mprofile: None,
++                rprofile: Some(rprofile::core::Options {
++                    tcm: rprofile::tcm::Options {
++                        atcm: rprofile::tcm::BankOptions { bytes: 0x1000, reset: ATCM as u32 | 1 },
++                        btcm: rprofile::tcm::BankOptions { bytes: 0x1000, reset: BTCM as u32 | 1 },
++                    },
++                    ..Default::default()
++                }),
++                registers: vec![(Register::Pc, 0x30000), (Register::Pstate, 0xd3)],
++            })
++            .collect(),
++        ram: [0x10000, 0x30000, 0x40000].map(|base| Ram { base, size: 0x1000 }).into(),
++        dma_mappings,
++        decoders: graph_decoders,
++        mappings,
++        peripherals: (0..2).map(|core| Peripheral { core, address: DMA, physical: DMA, size: 0x1000 }).collect(),
++        instructions_per_tick: Ratio::new(1, 1).unwrap(),
++    }
++}
++fn options() -> Options {
++    Options { engine: Engine::Unicorn, translation_cache_bytes: 1024 * 1024 }
++}
++fn devices() -> Bus {
++    let mut bus = Bus::new(bus::Mode::Strict);
++    bus.register(DMA, 4, Box::new(Dma)).unwrap();
++    bus
++}
++fn board_with(released: [bool; 2], decoders: bool) -> Board {
++    graph(released, decoders).build(options(), devices(), None).unwrap()
++}
++fn board() -> Board {
++    board_with([true, false], false)
++}
++
++/// Successful calls left before every later call fails; `None` never fails.
++#[derive(Default)]
++struct Faults {
++    installs: Cell<Option<usize>>,
++    removals: Cell<Option<usize>>,
++}
++impl Faults {
++    fn fails(budget: &Cell<Option<usize>>) -> bool {
++        match budget.get() {
++            None => false,
++            Some(0) => true,
++            Some(left) => {
++                budget.set(Some(left - 1));
++                false
++            }
++        }
++    }
++    fn clear(&self) {
++        self.installs.set(None);
++        self.removals.set(None);
++    }
++}
++/// Delegates to `inner`, failing hook installation and removal on demand.
++struct Flaky {
++    inner: Box<dyn Cpu>,
++    faults: Rc<Faults>,
++}
++impl Cpu for Flaky {
++    fn identity(&self) -> Identity {
++        self.inner.identity()
++    }
++    fn supports_mutation_observation(&self) -> bool {
++        self.inner.supports_mutation_observation()
++    }
++    fn set_loop_mode(&self, mode: loops::LoopMode) -> Result<(), String> {
++        self.inner.set_loop_mode(mode)
++    }
++    fn set_loop_window(&self, stable: bool) -> Result<(), String> {
++        self.inner.set_loop_window(stable)
++    }
++    fn set_execution_policy(&self, policy: ExecutionPolicy) -> Result<(), String> {
++        self.inner.set_execution_policy(policy)
++    }
++    fn checkpoint_backings(&self) -> Result<Vec<(NonNull<u8>, usize)>, String> {
++        self.inner.checkpoint_backings()
++    }
++    fn fingerprint(&self) -> Result<serde_json::Value, String> {
++        self.inner.fingerprint()
++    }
++    fn exclusive_domain(&self) -> Option<exclusive::Shared> {
++        self.inner.exclusive_domain()
++    }
++    fn model(&self) -> Model {
++        self.inner.model()
++    }
++    fn features(&self) -> Features {
++        self.inner.features()
++    }
++    fn set_guest_clock(&self, clock: Clock) -> Result<(), String> {
++        self.inner.set_guest_clock(clock)
++    }
++    fn read_register(&self, register: Register, out: &mut [u8]) -> Result<usize, String> {
++        self.inner.read_register(register, out)
++    }
++    fn write_register(&self, register: Register, bytes: &[u8]) -> Result<(), String> {
++        self.inner.write_register(register, bytes)
++    }
++    fn coprocessor(&self, register: arm::Coprocessor, value: Option<u64>) -> Result<u64, String> {
++        self.inner.coprocessor(register, value)
++    }
++    fn read_memory(&self, address: u64, bytes: &mut [u8]) -> Result<(), String> {
++        self.inner.read_memory(address, bytes)
++    }
++    fn translate(&self, address: u64, access: Access) -> Result<u64, String> {
++        self.inner.translate(address, access)
++    }
++    fn read_virtual(&self, address: u64, access: Access, bytes: &mut [u8]) -> Result<(), String> {
++        self.inner.read_virtual(address, access, bytes)
++    }
++    fn write_memory(&self, address: u64, bytes: &[u8]) -> Result<(), String> {
++        self.inner.write_memory(address, bytes)
++    }
++    fn memory_written(&self, address: u64, bytes: usize) -> Result<(), String> {
++        self.inner.memory_written(address, bytes)
++    }
++    unsafe fn backing_written(&self, physical: u64, backing: NonNull<u8>, bytes: usize) -> Result<(), String> {
++        unsafe { self.inner.backing_written(physical, backing, bytes) }
++    }
++    fn memory_regions(&self) -> Result<Vec<MemoryRegion>, String> {
++        self.inner.memory_regions()
++    }
++    unsafe fn map_backing(&self, address: u64, bytes: usize, permissions: u32, backing: NonNull<u8>) -> Result<(), String> {
++        unsafe { self.inner.map_backing(address, bytes, permissions, backing) }
++    }
++    unsafe fn map_physical(
++        &self,
++        address: u64,
++        physical: u64,
++        bytes: usize,
++        permissions: u32,
++        backing: NonNull<u8>,
++    ) -> Result<(), String> {
++        unsafe { self.inner.map_physical(address, physical, bytes, permissions, backing) }
++    }
++    unsafe fn replace_physical(
++        &self,
++        address: u64,
++        physical: u64,
++        bytes: usize,
++        permissions: u32,
++        backing: NonNull<u8>,
++    ) -> Result<(), String> {
++        unsafe { self.inner.replace_physical(address, physical, bytes, permissions, backing) }
++    }
++    fn map_zeroed(&self, address: u64, bytes: usize, permissions: u32) -> Result<(), String> {
++        self.inner.map_zeroed(address, bytes, permissions)
++    }
++    unsafe fn map_mmio(&self, address: u64, bytes: usize, callbacks: Mmio) -> Result<(), String> {
++        unsafe { self.inner.map_mmio(address, bytes, callbacks) }
++    }
++    unsafe fn map_mmio_fast(
++        &self,
++        address: u64,
++        bytes: usize,
++        callbacks: Mmio,
++        fast_reads: Vec<FastMmioRead>,
++    ) -> Result<(), String> {
++        unsafe { self.inner.map_mmio_fast(address, bytes, callbacks, fast_reads) }
++    }
++    fn unmap(&self, address: u64, bytes: usize) -> Result<(), String> {
++        self.inner.unmap(address, bytes)
++    }
++    fn protect(&self, address: u64, bytes: usize, permissions: u32) -> Result<(), String> {
++        self.inner.protect(address, bytes, permissions)
++    }
++    fn invalidate_code(&self, range: Option<(u64, u64)>) -> Result<(), String> {
++        self.inner.invalidate_code(range)
++    }
++    fn run(&self, request: Run) -> Result<Exit, ExecutionError> {
++        self.inner.run(request)
++    }
++    fn start_run(&self, request: Run) -> Result<RunToken, ExecutionError> {
++        self.inner.start_run(request)
++    }
++    fn poll_run(&self, run: RunToken) -> Result<RunStatus, ExecutionError> {
++        self.inner.poll_run(run)
++    }
++    fn request_pause(&self, run: RunToken) -> Result<(), ExecutionError> {
++        self.inner.request_pause(run)
++    }
++    fn service_pending_callback(&self, run: RunToken) -> Result<(), ExecutionError> {
++        self.inner.service_pending_callback(run)
++    }
++    fn cancel_pending_callback(&self, run: RunToken) -> Result<(), ExecutionError> {
++        self.inner.cancel_pending_callback(run)
++    }
++    fn set_run_wakeup(&self, wakeup: RunWakeup) -> Result<(), String> {
++        self.inner.set_run_wakeup(wakeup)
++    }
++    fn tighten_instruction_limit(&self, total_entries: u64) -> Result<(), String> {
++        self.inner.tighten_instruction_limit(total_entries)
++    }
++    fn instruction_progress(&self) -> Option<u64> {
++        self.inner.instruction_progress()
++    }
++    fn stop(&self) -> Result<(), String> {
++        self.inner.stop()
++    }
++    fn stop_before_instruction(&self) -> Result<(), String> {
++        self.inner.stop_before_instruction()
++    }
++    fn refuse_access(&self) -> Result<(), AccessRefusalError> {
++        self.inner.refuse_access()
++    }
++    fn rprofile_identity(&self, value: Option<u32>) -> Result<u32, String> {
++        self.inner.rprofile_identity(value)
++    }
++    fn set_interrupt(&self, line: Interrupt, asserted: bool) -> Result<(), String> {
++        self.inner.set_interrupt(line, asserted)
++    }
++    fn snapshot(&self, previous: Option<&dyn Snapshot>) -> Result<Box<dyn Snapshot>, String> {
++        self.inner.snapshot(previous)
++    }
++    fn restore(&self, snapshot: &dyn Snapshot) -> Result<(), String> {
++        self.inner.restore(snapshot)
++    }
++    fn import_snapshot(&self, bytes: &[u8]) -> Result<Box<dyn Snapshot>, String> {
++        self.inner.import_snapshot(bytes)
++    }
++    unsafe fn install_hook(&self, hook: Hook) -> Result<HookId, String> {
++        if Faults::fails(&self.faults.installs) {
++            return Err("injected hook installation failure".into());
++        }
++        unsafe { self.inner.install_hook(hook) }
++    }
++    fn remove_hook(&self, hook: HookId) -> Result<(), String> {
++        if Faults::fails(&self.faults.removals) {
++            return Err("injected hook removal failure".into());
++        }
++        self.inner.remove_hook(hook)
++    }
++    unsafe fn translation_hooks(&self, hooks: Option<TranslationHooks>) -> Result<(), String> {
++        unsafe { self.inner.translation_hooks(hooks) }
++    }
++    fn retry_block(&self, instructions: u32) -> Result<(), String> {
++        self.inner.retry_block(instructions)
++    }
++    fn request_restart(&self) -> Result<(), String> {
++        self.inner.request_restart()
++    }
++    fn accounting(&self) -> Option<NonNull<BlockAccounting>> {
++        self.inner.accounting()
++    }
++    unsafe fn observe_backings(&self, ranges: &[BackingObserver]) -> Result<(), String> {
++        unsafe { self.inner.observe_backings(ranges) }
++    }
++    fn watch_stores(&self, address: u64, bytes: u64) -> Result<(), String> {
++        self.inner.watch_stores(address, bytes)
++    }
++    fn hook_watched(&self, hook: HookId, watched: bool) -> Result<(), String> {
++        self.inner.hook_watched(hook, watched)
++    }
++}
++/// Both processors share one `Faults`, so budgets count calls across cores.
++fn flaky_board() -> (Board, Rc<Faults>) {
++    let faults = Rc::new(Faults::default());
++    let shared = faults.clone();
++    let board = graph([true, false], false)
++        .build_with(options(), devices(), None, move |_, inner| {
++            Box::new(Flaky { inner, faults: shared.clone() }) as Box<dyn Cpu>
++        })
++        .unwrap();
++    (board, faults)
++}
++
++fn core(index: usize) -> GuardCore {
++    GuardCore::new(index).unwrap()
++}
++fn range(target: GuardTarget, start: u64, end: u64) -> GuardRange {
++    GuardRange { target, span: GuardSpan::new(start, end).unwrap() }
++}
++fn physical(start: u64, end: u64) -> GuardRange {
++    range(GuardTarget::Physical, start, end)
++}
++fn every_source(cores: usize) -> Vec<WriteSource> {
++    let mut sources: Vec<_> = (0..cores).flat_map(|index| [WriteSource::Cpu(core(index)), WriteSource::CoreHost(core(index))]).collect();
++    sources.extend([WriteSource::PhysicalHost, WriteSource::ModelBus]);
++    sources
++}
++/// Every physical address, and both TCM banks of a core source.
++fn open(source: WriteSource) -> DestinationPolicy {
++    let mut allow = vec![physical(0, ADDRESS_END)];
++    if let WriteSource::Cpu(owner) | WriteSource::CoreHost(owner) = source {
++        allow.extend(TcmBank::ALL.map(|bank| range(GuardTarget::Tcm { core: owner, bank }, 0, 0x1000)));
++    }
++    DestinationPolicy { allow, forbid: vec![] }
++}
++fn config(policy: impl Fn(WriteSource) -> DestinationPolicy) -> CompositeGuardConfig {
++    let sources =
++        every_source(2).into_iter().map(|source| SourcePolicy { source, destinations: policy(source), owned_pc: None });
++    CompositeGuardConfig { sources: sources.collect() }
++}
++fn forbidding(denied: WriteSource, forbidden: GuardRange) -> CompositeGuardConfig {
++    config(|source| {
++        let mut policy = open(source);
++        if source == denied {
++            policy.forbid.push(forbidden);
++        }
++        policy
++    })
++}
++fn classes() -> Vec<WatchRange> {
++    vec![WatchRange { start: 0x40000, end: 0x40100, kinds: WatchKinds::WRITES }]
++}
++fn watch(board: &Board, limit: usize) -> Box<MemoryWatch> {
++    board.memory_watch_begin_classified(classes(), limit, board.mappings().to_vec(), ViewPolicy::Observe).unwrap()
++}
++fn rows(watch: &MemoryWatch) -> Vec<serde_json::Value> {
++    watch.records.borrow().state()["records"].as_array().unwrap().clone()
++}
++fn program(board: &Board, core: usize, at: u64, value: u64, target: u64) {
++    let code: Vec<u8> = STORE.iter().flat_map(|word| word.to_le_bytes()).collect();
++    board.write_memory(core, at, &code).unwrap();
++    board.write_register(core, Register::Pc, at).unwrap();
++    board.write_register(core, arm::CORE[0], value).unwrap();
++    board.write_register(core, arm::CORE[1], target).unwrap();
++}
++fn word(board: &Board, core: usize, address: u64) -> u32 {
++    let mut bytes = [0; 4];
++    board.read_memory(core, address, &mut bytes).unwrap();
++    u32::from_le_bytes(bytes)
++}
++fn physical_word(board: &Board, address: u64) -> u32 {
++    let mut bytes = [0; 4];
++    board.inspect_physical(address, &mut bytes).unwrap();
++    u32::from_le_bytes(bytes)
++}
++fn tcm_register(board: &Board, core: usize, bank: TcmBank) -> u64 {
++    board.cpu(core).unwrap().coprocessor(bank.register(), None).unwrap()
++}
++fn outcome(board: &Board, core: usize) -> WriteOutcome {
++    if board.cpu(core).unwrap().features().access_refusal { WriteOutcome::Refused } else { WriteOutcome::Attempted }
++}
++fn denied(source: WriteSource, address: u64, bytes: usize, pc: Option<u64>, location: GuardLocation, outcome: WriteOutcome) -> Option<GuardFault> {
++    Some(GuardFault::Write { source, address, bytes, pc, location: Some(location), reason: WriteFaultReason::Denied, outcome })
++}
++fn at(target: GuardTarget, address: u64) -> GuardLocation {
++    GuardLocation { target, address }
++}
++fn mutation_fault(core: Option<GuardCore>, mutation: GuardMutation) -> Option<GuardFault> {
++    Some(GuardFault::Mutation { core, mutation })
++}
++/// A guest store that `forbidding` denied: it either did not happen and the
++/// run failed, or it was attempted and the board paused at it.
++fn assert_guest_denial(board: &Board, result: Result<(), String>, address: u64, value: u32, before: u32) {
++    match outcome(board, 0) {
++        WriteOutcome::Refused => {
++            assert!(result.is_err());
++            assert_eq!(physical_word(board, address), before);
++        }
++        WriteOutcome::Attempted => {
++            result.unwrap();
++            assert_eq!(physical_word(board, address), value);
++        }
++    }
++}
++
++#[test]
++fn attach_preserves_existing_rows_classes_and_wire() {
++    let board = board();
++    let mut watch = watch(&board, 64);
++    board.write_physical(0x40000, &[1, 2, 3, 4]).unwrap();
++    let before = watch.records.borrow().state();
++    let fingerprint = board.fingerprint().unwrap();
++    let token = board.memory_guard_attach(&mut watch, config(open)).unwrap();
++    assert_eq!(watch.records.borrow().state(), before);
++    assert_eq!(board.fingerprint().unwrap(), fingerprint);
++    board.write_physical(0x40004, &[5, 6, 7, 8]).unwrap();
++    let after = rows(&watch);
++    assert_eq!(after.len(), 2);
++    assert_eq!(after[0], before["records"][0]);
++    let report = token.report();
++    assert_eq!((report.status, report.first_fault, report.write_checks), (GuardStatus::Armed, None, 1));
++}
++
++#[test]
++fn attach_preserves_fetch_attribution_capture() {
++    let mut board = board();
++    program(&board, 0, 0x30000, 7, 0x40010);
++    let attribution = FetchAttribution::new(
++        CpuDataAttribution::Writes,
++        vec![WatchRange { start: 0x30000, end: 0x30008, kinds: WatchKinds::CPU_FETCH }],
++    )
++    .unwrap();
++    let mut watch = board
++        .memory_watch_begin_with_fetch_attribution(classes(), attribution, 64, board.mappings().to_vec(), ViewPolicy::Observe)
++        .unwrap();
++    board.run_until(4, 1).unwrap();
++    let before = watch.records.borrow().state();
++    assert_eq!(before["records"].as_array().unwrap().len(), 1);
++    board.memory_guard_attach(&mut watch, config(open)).unwrap();
++    assert_eq!(watch.records.borrow().state(), before);
++    board.write_physical(0x40020, &[1; 4]).unwrap();
++    let after = rows(&watch);
++    assert_eq!(after.len(), 2);
++    assert_eq!(after[0], before["records"][0]);
++    board.memory_watch_end(&mut watch).unwrap();
++}
++
++#[test]
++fn an_ended_open_guard_leaves_execution_unchanged() {
++    let run = |guarded: bool| {
++        let mut board = board_with([true, true], false);
++        program(&board, 0, 0x30000, 0x11, 0x40010);
++        program(&board, 1, 0x30100, 0x22, 0x20020);
++        let mut watch = watch(&board, 64);
++        let token = guarded.then(|| board.memory_guard_attach(&mut watch, config(open)).unwrap());
++        board.run_until(20, 3).unwrap();
++        board.memory_watch_end(&mut watch).unwrap();
++        if let Some(token) = token {
++            let report = token.report();
++            assert_eq!((report.status, report.first_fault), (GuardStatus::Ended, None));
++            assert!(report.write_checks >= 2);
++        }
++        (board.fingerprint().unwrap(), rows(&watch), board.instruction_counts())
++    };
++    assert_eq!(run(true), run(false));
++}
++
++#[test]
++fn attach_refusals_are_typed() {
++    use GuardAttachError::*;
++    let board = board();
++    let mut legacy = board.memory_watch_begin(vec![(0x40000, 0x40100)], 8, board.mappings().to_vec()).unwrap();
++    assert_eq!(board.memory_guard_attach(&mut legacy, config(open)).err(), Some(NotClassified));
++    board.memory_watch_end(&mut legacy).unwrap();
++    assert_eq!(board.memory_guard_attach(&mut legacy, config(open)).err(), Some(DeadWatch));
++
++    let mut first = watch(&board, 8);
++    let mut second = watch(&board, 8);
++    assert_eq!(board.memory_guard_attach(&mut first, config(open)).err(), Some(NotCurrent));
++    assert_eq!(board.memory_guard_attach(&mut second, config(open)).err(), Some(SiblingWatch));
++    board.memory_watch_end(&mut first).unwrap();
++
++    let other = self::board();
++    let mut foreign = watch(&other, 8);
++    assert_eq!(board.memory_guard_attach(&mut foreign, config(open)).err(), Some(WrongOwner));
++
++    {
++        let _busy = board.state.borrow_mut();
++        assert_eq!(board.memory_guard_attach(&mut second, config(open)).err(), Some(NotPaused));
++    }
++    let mut missing = config(open);
++    missing.sources.pop();
++    assert_eq!(board.memory_guard_attach(&mut second, missing).err(), Some(MissingSource));
++    let mut duplicate = config(open);
++    duplicate.sources[1] = duplicate.sources[0].clone();
++    assert_eq!(board.memory_guard_attach(&mut second, duplicate).err(), Some(DuplicateSource));
++    let foreign_tcm = range(GuardTarget::Tcm { core: core(1), bank: TcmBank::Data }, 0, 4);
++    assert_eq!(
++        board.memory_guard_attach(&mut second, forbidding(WriteSource::Cpu(core(0)), foreign_tcm)).err(),
++        Some(InvalidTarget)
++    );
++    let host_tcm = range(GuardTarget::Tcm { core: core(0), bank: TcmBank::Data }, 0, 4);
++    assert_eq!(
++        board.memory_guard_attach(&mut second, forbidding(WriteSource::PhysicalHost, host_tcm)).err(),
++        Some(InvalidTarget)
++    );
++    let ambiguous = config(|source| {
++        let mut policy = open(source);
++        policy.allow.push(physical(0x40000, 0x40004));
++        policy
++    });
++    assert_eq!(board.memory_guard_attach(&mut second, ambiguous).err(), Some(AmbiguousRanges));
++    let mut partitioned = config(open);
++    let last = partitioned.sources.len() - 1;
++    partitioned.sources[last].owned_pc =
++        Some(OwnedPcPolicy { spans: vec![GuardSpan::new(0x30000, 0x30004).unwrap()], destinations: open(WriteSource::ModelBus) });
++    assert_eq!(board.memory_guard_attach(&mut second, partitioned).err(), Some(InvalidPartition));
++    let oversized = config(|source| {
++        let mut policy = open(source);
++        policy.forbid = (0..MAX_GUARD_RANGES as u64).map(|index| physical(index * 4, index * 4 + 4)).collect();
++        policy
++    });
++    assert_eq!(board.memory_guard_attach(&mut second, oversized).err(), Some(BoundExceeded));
++    let mut absent_core = config(open);
++    absent_core.sources[0].source = WriteSource::Cpu(core(2));
++    assert_eq!(board.memory_guard_attach(&mut second, absent_core).err(), Some(InvalidCore));
++    assert_eq!(GuardCore::new(MAX_GUARD_CORES).err(), Some(InvalidCore));
++    assert_eq!(GuardSpan::new(5, 5).err(), Some(InvalidInterval));
++    assert_eq!(GuardSpan::new(0, ADDRESS_END + 1).err(), Some(InvalidInterval));
++
++    // None of the refusals above changed the watch.
++    board.memory_guard_attach(&mut second, config(open)).unwrap();
++    assert_eq!(board.memory_guard_attach(&mut second, config(open)).err(), Some(AlreadyAttached));
++    board.memory_watch_end(&mut second).unwrap();
++}
++
++#[test]
++fn attach_refuses_unsupported_policy_and_pending_decode() {
++    let mut board = board_with([true, false], true);
++    let mut watch = watch(&board, 8);
++    board.set_execution_policy(ExecutionPolicy::Interactive).unwrap();
++    assert_eq!(board.memory_guard_attach(&mut watch, config(open)).err(), Some(GuardAttachError::UnsupportedBackend));
++    board.set_execution_policy(ExecutionPolicy::Exact).unwrap();
++    board.state.borrow_mut().decoders.select(0, 1, true).unwrap();
++    assert_eq!(board.memory_guard_attach(&mut watch, config(open)).err(), Some(GuardAttachError::PendingDecode));
++}
++
++#[test]
++fn unlogged_guest_writes_are_checked_on_both_cores() {
++    for index in 0..2 {
++        let mut released = [false; 2];
++        released[index] = true;
++        let mut board = board_with(released, false);
++        program(&board, index, 0x30000, 0x1234, 0x20010);
++        let mut watch = watch(&board, 64);
++        let source = WriteSource::Cpu(core(index));
++        let token = board.memory_guard_attach(&mut watch, forbidding(source, physical(0x10010, 0x10014))).unwrap();
++        let before = physical_word(&board, 0x10010);
++        let result = board.run_until(4, 1);
++        let outcome = outcome(&board, index);
++        assert_eq!(
++            token.report().first_fault,
++            denied(source, 0x20010, 4, Some(0x30000), at(GuardTarget::Physical, 0x10010), outcome)
++        );
++        assert_eq!(token.report().status, GuardStatus::Faulted);
++        if index == 0 {
++            assert_guest_denial(&board, result, 0x10010, 0x1234, before);
++        }
++        assert!(rows(&watch).is_empty());
++    }
++}
++
++#[test]
++fn tcm_overlays_resolve_to_their_bank_and_aliases_to_physical() {
++    for (address, location) in [
++        (ATCM + 0x10, at(GuardTarget::Tcm { core: core(0), bank: TcmBank::Instruction }, 0x10)),
++        (BTCM + 0x20, at(GuardTarget::Tcm { core: core(0), bank: TcmBank::Data }, 0x20)),
++        (0x20030, at(GuardTarget::Physical, 0x10030)),
++    ] {
++        let mut board = board();
++        program(&board, 0, 0x30000, 0x55, address);
++        let mut watch = watch(&board, 64);
++        let source = WriteSource::Cpu(core(0));
++        let forbidden = range(location.target, location.address, location.address + 4);
++        let token = board.memory_guard_attach(&mut watch, forbidding(source, forbidden)).unwrap();
++        let _ = board.run_until(4, 1);
++        assert_eq!(
++            token.report().first_fault,
++            denied(source, address, 4, Some(0x30000), location, outcome(&board, 0))
++        );
++    }
++    // A TCM write is not a write to the physical RAM the overlay hides.
++    let mut board = board();
++    program(&board, 0, 0x30000, 0x55, ATCM + 0x10);
++    let mut watch = watch(&board, 64);
++    let token =
++        board.memory_guard_attach(&mut watch, forbidding(WriteSource::Cpu(core(0)), physical(0x10000, 0x11000))).unwrap();
++    board.run_until(4, 1).unwrap();
++    assert_eq!(token.report().first_fault, None);
++    assert_eq!(word(&board, 0, ATCM + 0x10), 0x55);
++}
++
++#[test]
++fn owned_pc_spans_select_their_destination_policy() {
++    let mut board = board();
++    program(&board, 0, 0x30100, 0x66, 0x40000);
++    program(&board, 0, 0x30000, 0x77, 0x40000);
++    let mut watch = watch(&board, 64);
++    let mut guarded = forbidding(WriteSource::Cpu(core(0)), physical(0x40000, 0x40004));
++    guarded.sources[0].owned_pc = Some(OwnedPcPolicy {
++        spans: vec![GuardSpan::new(0x30000, 0x30008).unwrap()],
++        destinations: DestinationPolicy { allow: vec![physical(0x40000, 0x40004)], forbid: vec![] },
++    });
++    let token = board.memory_guard_attach(&mut watch, guarded).unwrap();
++    board.run_until(4, 1).unwrap();
++    assert_eq!(token.report().first_fault, None);
++    assert_eq!(physical_word(&board, 0x40000), 0x77);
++    board.write_register(0, Register::Pc, 0x30100).unwrap();
++    board.write_register(0, arm::CORE[0], 0x66).unwrap();
++    let result = board.run_until(8, 1);
++    assert_eq!(
++        token.report().first_fault,
++        denied(WriteSource::Cpu(core(0)), 0x40000, 4, Some(0x30100), at(GuardTarget::Physical, 0x40000), outcome(&board, 0))
++    );
++    assert_guest_denial(&board, result, 0x40000, 0x66, 0x77);
++}
++
++#[test]
++fn host_and_model_writes_are_checked_on_every_path() {
++    let forbidden = physical(0x40020, 0x40024);
++    for source in every_source(2).into_iter().filter(|source| !matches!(source, WriteSource::Cpu(_))) {
++        let mut board = board_with([true, true], false);
++        program(&board, 0, 0x30000, 0x40020, DMA);
++        program(&board, 1, 0x30000, 0x40020, DMA);
++        let mut watch = watch(&board, 64);
++        let token = board.memory_guard_attach(&mut watch, forbidding(source, forbidden)).unwrap();
++        let result = match source {
++            WriteSource::PhysicalHost => board.write_physical(0x40020, &[9; 4]),
++            WriteSource::CoreHost(owner) => board.write_memory(owner.get(), 0x40020, &[9; 4]),
++            _ => board.run_until(4, 1),
++        };
++        assert!(result.is_err(), "{source:?}");
++        assert_eq!(physical_word(&board, 0x40020), 0, "{source:?}");
++        let pc = None;
++        assert_eq!(
++            token.report().first_fault,
++            denied(source, 0x40020, 4, pc, at(GuardTarget::Physical, 0x40020), WriteOutcome::Refused),
++            "{source:?}"
++        );
++        assert!(rows(&watch).is_empty(), "{source:?}");
++    }
++}
++
++#[test]
++fn bulk_refusal_of_a_late_chunk_precedes_every_copy() {
++    let board = board();
++    let mut watch = watch(&board, 64);
++    let token = board.memory_guard_attach(&mut watch, forbidding(WriteSource::PhysicalHost, physical(0x40000, 0x40004))).unwrap();
++    assert!(board.write_physical(0x60ff0, &[7; 32]).is_err());
++    let mut first = [0xff; 16];
++    board.inspect_physical(0x30ff0, &mut first).unwrap();
++    assert_eq!(first, [0; 16]);
++    assert_eq!(
++        token.report().first_fault,
++        denied(WriteSource::PhysicalHost, 0x60ff0, 32, None, at(GuardTarget::Physical, 0x40000), WriteOutcome::Refused)
++    );
++    assert!(rows(&watch).is_empty());
++}
++
++#[test]
++fn core_host_writes_check_edges_straddles_and_overflow() {
++    let board = board();
++    let mut watch = watch(&board, 64);
++    let token = board.memory_guard_attach(&mut watch, config(open)).unwrap();
++    board.write_memory(0, ATCM + 0xffc, &[1; 4]).unwrap();
++    assert_eq!(token.report().first_fault, None);
++    let before = word(&board, 0, ATCM + 0xffc);
++    assert!(board.write_memory(0, ATCM + 0xffc, &[2; 8]).is_err());
++    assert_eq!(word(&board, 0, ATCM + 0xffc), before);
++    let unresolved = GuardFault::Write {
++        source: WriteSource::CoreHost(core(0)),
++        address: ATCM + 0xffc,
++        bytes: 8,
++        pc: None,
++        location: None,
++        reason: WriteFaultReason::Unresolved,
++        outcome: WriteOutcome::Refused,
++    };
++    assert_eq!(token.report().first_fault, Some(unresolved));
++    assert!(board.write_memory(1, ADDRESS_END - 2, &[3; 4]).is_err());
++    assert_eq!(token.report().first_fault, Some(unresolved));
++    assert_eq!(token.report().write_checks, 3);
++}
++
++#[test]
++fn guard_checks_continue_after_classified_log_exhaustion() {
++    let board = board();
++    let mut watch = watch(&board, 1);
++    let token = board.memory_guard_attach(&mut watch, forbidding(WriteSource::PhysicalHost, physical(0x40080, 0x40084))).unwrap();
++    board.write_physical(0x40000, &[1; 4]).unwrap();
++    board.write_physical(0x40004, &[1; 4]).unwrap();
++    assert!(watch.records.borrow().state()["violation"].is_string());
++    assert_eq!(rows(&watch).len(), 1);
++    assert!(board.write_physical(0x40080, &[1; 4]).is_err());
++    assert_eq!(
++        token.report().first_fault,
++        denied(WriteSource::PhysicalHost, 0x40080, 4, None, at(GuardTarget::Physical, 0x40080), WriteOutcome::Refused)
++    );
++}
++
++#[test]
++fn paused_host_tcm_change_and_restore_are_refused_without_executing() {
++    let board = board();
++    let mut watch = watch(&board, 64);
++    let token = board.memory_guard_attach(&mut watch, config(open)).unwrap();
++    let cpu = board.cpu(0).unwrap();
++    let original = tcm_register(&board, 0, TcmBank::Instruction);
++    assert!(cpu.coprocessor(TcmBank::Instruction.register(), Some(0x60001)).is_err());
++    assert!(cpu.coprocessor(TcmBank::Instruction.register(), Some(original)).is_ok());
++    assert_eq!(tcm_register(&board, 0, TcmBank::Instruction), original);
++    assert_eq!(board.instruction_counts(), [0, 0]);
++    let report = token.report();
++    assert!(matches!(
++        report.first_fault,
++        Some(GuardFault::Mutation {
++            core: Some(owner),
++            mutation: GuardMutation::Cpu(CpuMutation::Tcm { origin: MutationOrigin::Host, .. }),
++        }) if owner == core(0)
++    ));
++    assert_eq!((report.status, report.mutation_attempts), (GuardStatus::Faulted, 1));
++}
++
++#[test]
++fn guest_tcm_move_is_refused_before_it_applies() {
++    let mut board = board();
++    // mcr p15,0,r0,c9,c1,1; b .
++    board.write_memory(0, 0x30000, &[0x31, 0x0f, 0x09, 0xee, 0xfe, 0xff, 0xff, 0xea]).unwrap();
++    board.write_register(0, arm::CORE[0], 0x60001).unwrap();
++    let mut watch = watch(&board, 64);
++    let token = board.memory_guard_attach(&mut watch, config(open)).unwrap();
++    let original = tcm_register(&board, 0, TcmBank::Instruction);
++    assert!(board.run_until(4, 1).is_err());
++    assert_eq!(tcm_register(&board, 0, TcmBank::Instruction), original);
++    assert!(matches!(
++        token.report().first_fault,
++        Some(GuardFault::Mutation {
++            core: Some(owner),
++            mutation: GuardMutation::Cpu(CpuMutation::Tcm { origin: MutationOrigin::Guest, .. }),
++        }) if owner == core(0)
++    ));
++}
++
++#[test]
++fn direct_mapping_and_policy_transactions_are_refused_before_effect() {
++    let mut board = board();
++    board.write_physical(0x40000, &[4; 4]).unwrap();
++    let mut watch = watch(&board, 64);
++    let token = board.memory_guard_attach(&mut watch, config(open)).unwrap();
++    let cpu = board.cpu(0).unwrap();
++    assert!(cpu.unmap(0x40000, 0x1000).is_err());
++    assert!(cpu.protect(0x40000, 0x1000, 5).is_err());
++    assert!(cpu.map_zeroed(0x90000, 0x1000, 7).is_err());
++    assert_eq!(word(&board, 0, 0x40000), 0x0404_0404);
++    assert!(board.set_execution_policy(ExecutionPolicy::Interactive).is_err());
++    assert_eq!(board.execution_policy(), ExecutionPolicy::Exact);
++    let report = token.report();
++    let unmap = CpuMutation::Mapping {
++        operation: MappingMutation::Unmap,
++        address: 0x40000,
++        physical: None,
++        bytes: 0x1000,
++        permissions: None,
++    };
++    assert_eq!(report.first_fault, mutation_fault(Some(core(0)), GuardMutation::Cpu(unmap)));
++    assert_eq!(report.mutation_attempts, 4);
++}
++
++#[test]
++fn decoder_transactions_including_dma_only_are_refused() {
++    for decoder in 0..2 {
++        let mut board = board_with([true, false], true);
++        board.write_physical(0x30000, &[3; 4]).unwrap();
++        let mut watch = watch(&board, 64);
++        let token = board.memory_guard_attach(&mut watch, config(open)).unwrap();
++        board.state.borrow_mut().decoders.select(decoder, 1, true).unwrap();
++        assert!(board.run_until(4, 1).is_err());
++        assert_eq!(token.report().first_fault, mutation_fault(None, GuardMutation::Decoder { decoder, choice: 1 }));
++        assert_eq!(physical_word(&board, 0x70000), 0x0303_0303);
++        assert_eq!(word(&board, 0, 0x70000), 0x0303_0303);
++    }
++}
++
++#[test]
++fn live_restores_are_refused_transactions() {
++    let mut board = board();
++    let saved = board.checkpoint(None).unwrap();
++    let snapshot = board.cpu(0).unwrap().snapshot(None).unwrap();
++    let mut watch = watch(&board, 64);
++    let token = board.memory_guard_attach(&mut watch, config(open)).unwrap();
++    board.write_physical(0x40000, &[8; 4]).unwrap();
++    assert!(board.restore_keyframe(&saved).is_err());
++    assert!(board.cpu(0).unwrap().restore(&*snapshot).is_err());
++    assert_eq!(physical_word(&board, 0x40000), 0x0808_0808);
++    let report = token.report();
++    assert_eq!(report.first_fault, mutation_fault(None, GuardMutation::Restore));
++    assert_eq!(report.mutation_attempts, 2);
++}
++
++#[test]
++fn read_only_inspection_and_normalized_no_ops_are_admitted() {
++    let board = board();
++    let mut watch = watch(&board, 64);
++    let token = board.memory_guard_attach(&mut watch, config(open)).unwrap();
++    let cpu = board.cpu(0).unwrap();
++    for bank in TcmBank::ALL {
++        let value = tcm_register(&board, 0, bank);
++        cpu.coprocessor(bank.register(), Some(value)).unwrap();
++    }
++    let mut bytes = [0; 8];
++    board.read_memory(0, 0x40000, &mut bytes).unwrap();
++    board.inspect_physical(0x40000, &mut bytes).unwrap();
++    board.checkpoint(None).unwrap();
++    cpu.snapshot(None).unwrap();
++    let report = token.report();
++    assert_eq!((report.status, report.first_fault, report.mutation_attempts), (GuardStatus::Armed, None, 0));
++}
++
++#[test]
++fn replacement_watches_are_refused_while_attached() {
++    let board = board();
++    let mut watch = watch(&board, 64);
++    board.memory_guard_attach(&mut watch, config(open)).unwrap();
++    assert!(board.memory_watch_begin_classified(classes(), 8, board.mappings().to_vec(), ViewPolicy::Observe).is_err());
++    assert!(board.memory_watch_begin(vec![(0x40000, 0x40100)], 8, board.mappings().to_vec()).is_err());
++    board.memory_watch_end(&mut watch).unwrap();
++    let mut next = self::watch(&board, 8);
++    board.memory_watch_end(&mut next).unwrap();
++}
++
++#[test]
++fn ending_a_replaced_watch_keeps_the_current_watch_logging() {
++    let board = board();
++    let mut first = watch(&board, 8);
++    let mut second = watch(&board, 8);
++    board.memory_watch_end(&mut first).unwrap();
++    board.write_physical(0x40000, &[1; 4]).unwrap();
++    assert_eq!(rows(&second).len(), 1);
++    board.memory_watch_end(&mut second).unwrap();
++    board.write_physical(0x40000, &[2; 4]).unwrap();
++    assert_eq!(rows(&second).len(), 1);
++}
++
++#[test]
++fn installation_failure_at_every_position_leaves_the_watch_unchanged() {
++    let hooks = [GuardHook::Mutation, GuardHook::Write];
++    for position in 0..4 {
++        let (mut board, faults) = flaky_board();
++        let mut watch = watch(&board, 64);
++        let before = watch.records.borrow().state();
++        faults.installs.set(Some(position));
++        let refused = board.memory_guard_attach(&mut watch, forbidding(WriteSource::PhysicalHost, physical(0x40000, 0x40004)));
++        assert_eq!(refused.err(), Some(GuardAttachError::HookInstallation { core: core(position / 2), hook: hooks[position % 2] }));
++        faults.clear();
++        assert_eq!(watch.records.borrow().state(), before);
++        board.write_physical(0x40000, &[1; 4]).unwrap();
++        assert_eq!(rows(&watch).len(), 1);
++        board.run_until(2, 1).unwrap();
++        let token = board.memory_guard_attach(&mut watch, config(open)).unwrap();
++        board.memory_watch_end(&mut watch).unwrap();
++        assert_eq!(token.report().status, GuardStatus::Ended);
++    }
++}
++
++#[test]
++fn failed_installation_rollback_keeps_the_guard_and_refuses_execution() {
++    let (mut board, faults) = flaky_board();
++    let mut watch = watch(&board, 64);
++    faults.installs.set(Some(3));
++    faults.removals.set(Some(1));
++    let refused = board.memory_guard_attach(&mut watch, forbidding(WriteSource::PhysicalHost, physical(0x40000, 0x40004)));
++    assert_eq!(refused.err(), Some(GuardAttachError::CleanupFailed));
++    faults.clear();
++    assert!(board.run_until(2, 1).is_err());
++    assert!(board.write_physical(0x40000, &[1; 4]).is_err());
++    assert_eq!(board.memory_guard_attach(&mut watch, config(open)).err(), Some(GuardAttachError::CleanupFailed));
++    board.memory_watch_end(&mut watch).unwrap();
++    board.write_physical(0x40000, &[1; 4]).unwrap();
++    assert!(board.run_until(2, 1).is_err());
++}
++
++#[test]
++fn end_failure_at_every_position_stays_armed_until_a_retry_succeeds() {
++    let mut position = 0;
++    loop {
++        let (mut board, faults) = flaky_board();
++        let mut watch = watch(&board, 64);
++        let token = board.memory_guard_attach(&mut watch, forbidding(WriteSource::PhysicalHost, physical(0x40080, 0x40084))).unwrap();
++        faults.removals.set(Some(position));
++        if board.memory_watch_end(&mut watch).is_ok() {
++            assert!(position >= 6, "two classified and four guard hooks");
++            break;
++        }
++        faults.clear();
++        assert_ne!(token.report().status, GuardStatus::Ended);
++        assert!(board.write_physical(0x40080, &[1; 4]).is_err());
++        assert!(board.memory_watch_begin_classified(classes(), 8, board.mappings().to_vec(), ViewPolicy::Observe).is_err());
++        assert!(board.run_until(2, 1).is_err());
++        board.memory_watch_end(&mut watch).unwrap();
++        assert_eq!(token.report().status, GuardStatus::Ended);
++        board.write_physical(0x40080, &[1; 4]).unwrap();
++        assert!(board.run_until(2, 1).is_err(), "cleanup failure stays sticky");
++        position += 1;
++    }
++}
++
++#[test]
++fn dropping_an_attached_watch_ends_the_guard() {
++    let board = board();
++    let mut watch = watch(&board, 64);
++    let token = board.memory_guard_attach(&mut watch, forbidding(WriteSource::PhysicalHost, physical(0x40000, 0x40004))).unwrap();
++    drop(watch);
++    assert_eq!(token.report().status, GuardStatus::Ended);
++    board.write_physical(0x40000, &[1; 4]).unwrap();
++    assert_eq!(token.report().write_checks, 0);
++    let mut next = self::watch(&board, 8);
++    board.memory_guard_attach(&mut next, config(open)).unwrap();
++    board.memory_watch_end(&mut next).unwrap();
++}
++
++#[test]
++fn dropping_a_watch_whose_hooks_cannot_be_removed_blocks_execution() {
++    let (mut board, faults) = flaky_board();
++    let mut watch = watch(&board, 64);
++    let token = board.memory_guard_attach(&mut watch, config(open)).unwrap();
++    faults.removals.set(Some(0));
++    drop(watch);
++    faults.clear();
++    assert_ne!(token.report().status, GuardStatus::Ended);
++    assert!(board.run_until(2, 1).is_err());
++    assert!(board.write_physical(0x40000, &[1; 4]).is_ok());
++    assert_eq!(token.report().write_checks, 1);
++}
++
++#[test]
++fn a_watch_may_outlive_its_board() {
++    let board = board();
++    let mut watch = watch(&board, 64);
++    let token = board.memory_guard_attach(&mut watch, config(open)).unwrap();
++    drop(board);
++    drop(watch);
++    let report = token.report();
++    assert_eq!((report.status, report.first_fault, report.mutation_attempts), (GuardStatus::Ended, None, 0));
++}
++
++#[test]
++fn point_removal_failure_keeps_the_points_and_blocks_execution() {
++    let (mut board, faults) = flaky_board();
++    let mut points = board.instruction_points_begin(0, vec![0x30004]).unwrap();
++    faults.removals.set(Some(0));
++    assert!(board.instruction_points_end(0, &mut points).is_err());
++    faults.clear();
++    assert!(board.run_until(2, 1).is_err());
++    board.instruction_points_end(0, &mut points).unwrap();
++    assert!(board.run_until(2, 1).is_err(), "cleanup failure stays sticky");
++}
++
++#[test]
++fn dropping_points_whose_hook_cannot_be_removed_keeps_their_context() {
++    let (mut board, faults) = flaky_board();
++    let points: Box<InstructionPoints> = board.instruction_points_begin_mutable(0, vec![0x30004]).unwrap();
++    faults.removals.set(Some(0));
++    drop(points);
++    faults.clear();
++    assert!(board.run_until(2, 1).is_err());
++}
++
++#[test]
++fn point_installation_rollback_failure_blocks_execution() {
++    let (mut board, faults) = flaky_board();
++    faults.installs.set(Some(1));
++    faults.removals.set(Some(0));
++    assert!(board.instruction_points_begin(0, vec![0x30000, 0x30004]).is_err());
++    faults.clear();
++    assert!(board.run_until(2, 1).is_err());
++}
++
++#[test]
++fn mutable_point_replacement_moves_points_until_the_board_is_dropped() {
++    let mut board = board();
++    // nop; nop; b .
++    board.write_memory(0, 0x30000, &[0x00, 0x00, 0xa0, 0xe1, 0x00, 0x00, 0xa0, 0xe1, 0xfe, 0xff, 0xff, 0xea]).unwrap();
++    let points = board.instruction_points_begin_mutable(0, vec![]).unwrap();
++    points.replace_addresses(vec![0x30004]).unwrap();
++    board.run_until(10, 1).unwrap();
++    assert_eq!(points.event(), Some(0x30004));
++    assert_eq!(board.read_register(0, Register::Pc).unwrap(), 0x30004);
++    drop(board);
++    assert!(points.replace_addresses(vec![0x30000]).is_err());
++}
++
++#[test]
++fn fixed_points_refuse_replacement_and_another_core_end() {
++    let board = board();
++    let mut points = board.instruction_points_begin(0, vec![0x30004]).unwrap();
++    assert!(points.replace_addresses(vec![0x30000]).is_err());
++    assert!(board.instruction_points_end(1, &mut points).is_err());
++    board.instruction_points_end(0, &mut points).unwrap();
++}
+--- /dev/null
++++ b/crates/emulator/src/board/observation/lifecycle.rs
+@@ -0,0 +1,173 @@
++//! Hook ownership for memory watches, instruction points and guards. A failed
++//! removal keeps the hook's identity and context and blocks board execution.
++use super::{
++    Board, MemoryWatch,
++    composite::{GuardLatch, GuardLease},
++};
++use crate::board::memory::Memory;
++use std::{
++    any::Any,
++    cell::{Cell, RefCell},
++    rc::{Rc, Weak},
++};
++
++/// Observation lifecycle state of one board, owned by its physical memory.
++#[derive(Default)]
++pub(in crate::board) struct ObservationRegistry {
++    /// The same cell as `State::observation_cleanup_failed`.
++    pub(in crate::board) cleanup_failed: Rc<Cell<bool>>,
++    /// Armed legacy and classified watches whose end has not completed.
++    live_watches: Cell<usize>,
++    guard: RefCell<Option<Weak<GuardLatch>>>,
++    /// Callback contexts of hooks that may still be installed. Processors
++    /// drop before the board's memory.
++    retained: RefCell<Vec<Box<dyn Any>>>,
++}
++impl ObservationRegistry {
++    pub(in crate::board) fn guard(&self) -> Option<Rc<GuardLatch>> {
++        self.guard.borrow().as_ref().and_then(Weak::upgrade)
++    }
++    pub(super) fn set_guard(&self, latch: &Rc<GuardLatch>) {
++        self.guard.replace(Some(Rc::downgrade(latch)));
++    }
++    pub(super) fn clear_guard(&self, latch: &Rc<GuardLatch>) {
++        let mut slot = self.guard.borrow_mut();
++        if slot.as_ref().is_some_and(|current| Weak::ptr_eq(current, &Rc::downgrade(latch))) {
++            *slot = None;
++        }
++    }
++    pub(super) fn live_watches(&self) -> usize {
++        self.live_watches.get()
++    }
++    pub(super) fn retain(&self, contexts: Box<dyn Any>) {
++        self.cleanup_failed.set(true);
++        self.retained.borrow_mut().push(contexts);
++    }
++}
++
++/// Removes `hooks` in order, keeping the first one that fails and every later one.
++pub(super) fn remove_hooks<T>(
++    hooks: &mut Vec<T>,
++    mut remove: impl FnMut(&T) -> Result<(), String>,
++) -> Result<(), String> {
++    let mut removed = 0;
++    let result = hooks.iter().try_for_each(|hook| {
++        remove(hook)?;
++        removed += 1;
++        Ok(())
++    });
++    hooks.drain(..removed);
++    result
++}
++
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub(super) enum LeasePhase {
++    /// Begun, hooks not yet complete.
++    #[default]
++    Pending,
++    Armed,
++    Ended,
++}
++/// Lifecycle of the watch that owns these records.
++#[derive(Default)]
++pub(super) struct WatchLease {
++    owner: Weak<Memory>,
++    pub(super) phase: LeasePhase,
++    pub(super) cleanup_failed: bool,
++    pub(super) guard: Option<GuardLease>,
++}
++impl WatchLease {
++    pub(super) fn new(owner: &Rc<Memory>) -> Self {
++        Self { owner: Rc::downgrade(owner), ..Self::default() }
++    }
++    pub(super) fn owned_by(&self, memory: &Rc<Memory>) -> bool {
++        Weak::ptr_eq(&self.owner, &Rc::downgrade(memory))
++    }
++    pub(super) fn arm(&mut self) {
++        self.phase = LeasePhase::Armed;
++        if let Some(memory) = self.owner.upgrade() {
++            let live = &memory.observers.live_watches;
++            live.set(live.get() + 1);
++        }
++    }
++    fn fail(&mut self, owner: Option<&Rc<Memory>>) {
++        self.cleanup_failed = true;
++        if let Some(memory) = owner {
++            memory.observers.cleanup_failed.set(true);
++        }
++    }
++}
++
++impl MemoryWatch {
++    /// Ends classified then guard registrations. A failure leaves the
++    /// remaining hooks and the guard attached.
++    fn release(&mut self) -> Result<(), String> {
++        let owner = self.records.borrow().lease.owner.upgrade();
++        let contexts = &self.contexts;
++        let classified = remove_hooks(&mut self.hooks, |&(core, hook)| {
++            match contexts.iter().find(|context| context.core == core) {
++                Some(context) => context.cpu.upgrade().map_or(Ok(()), |cpu| cpu.remove_hook(hook)),
++                None => Err("memory watch hook has no processor context".into()),
++            }
++        });
++        if let Err(error) = classified {
++            self.records.borrow_mut().lease.fail(owner.as_ref());
++            return Err(error);
++        }
++        let guard = self.records.borrow_mut().lease.guard.take();
++        if let Some(mut guard) = guard
++            && let Err(error) = guard.remove()
++        {
++            let mut records = self.records.borrow_mut();
++            records.lease.fail(owner.as_ref());
++            records.lease.guard = Some(guard);
++            return Err(error);
++        }
++        let ended = {
++            let mut records = self.records.borrow_mut();
++            let armed = records.lease.phase == LeasePhase::Armed;
++            records.lease.phase = LeasePhase::Ended;
++            armed
++        };
++        if let Some(memory) = owner {
++            if ended {
++                let live = &memory.observers.live_watches;
++                live.set(live.get().saturating_sub(1));
++            }
++            let mut slot = memory.observation.borrow_mut();
++            if slot.as_ref().and_then(Weak::upgrade).is_some_and(|current| Rc::ptr_eq(&current, &self.records)) {
++                *slot = None;
++            }
++        }
++        Ok(())
++    }
++}
++impl Drop for MemoryWatch {
++    fn drop(&mut self) {
++        if self.release().is_ok() || self.hooks.is_empty() {
++            return;
++        }
++        let owner = self.records.borrow().lease.owner.upgrade();
++        if let Some(memory) = owner {
++            memory
++                .observers
++                .retain(Box::new((std::mem::take(&mut self.contexts), std::mem::take(&mut self.hooks))));
++        }
++    }
++}
++impl Board {
++    pub(super) fn refuse_watch_replacement(&self) -> Result<(), String> {
++        if self.physical_memory.observers.guard().is_some() {
++            return Err("A composite guard is attached to the current memory watch".into());
++        }
++        Ok(())
++    }
++    /// Ends `watch` as one operation, clearing the observation slot only when
++    /// it still names this watch.
++    pub(super) fn memory_watch_release(&self, watch: &mut MemoryWatch) -> Result<(), String> {
++        if !watch.records.borrow().lease.owned_by(&self.physical_memory) {
++            return Err("memory watch belongs to a different board".into());
++        }
++        watch.release()
++    }
++}
