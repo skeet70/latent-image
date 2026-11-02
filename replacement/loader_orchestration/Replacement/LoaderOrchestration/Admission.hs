@@ -1,6 +1,8 @@
 module Replacement.LoaderOrchestration.Admission
   ( AdmissionError(..), FrameProof, PathProof(..), Effect(..), Terminal(..), CompletionState(..)
   , Scalar(..), StackOffset(..), NopCount(..), CallTarget(..)
+  , DispatcherBoundary, boundarySide, boundaryScenario, boundaryPhase, boundaryInstruction, boundaryContinuation
+  , boundaryStack, boundaryFramePointer, boundaryLiveWords, dispatcherBoundaries
   , deriveFrameProof, proofPaths, executionPcs, callBoundaries, frameLow
   ) where
 
@@ -28,7 +30,13 @@ data Effect = ServiceCall Service [(A.Reg,Scalar)] | DispatchCall Phase | Comple
 data Terminal = WaitingForCompletion | SetupDidNotReturn | EnteredScheduler deriving (Eq, Show)
 data CallTarget = Retained Service | Dispatcher deriving (Eq, Ord, Show)
 data PathProof = PathProof Scenario [Effect] Terminal deriving (Eq, Show)
-data FrameProof = FrameProof [PathProof] (S.Set CodeAddress) (M.Map CodeAddress CallTarget)
+data DispatcherBoundary = DispatcherBoundary LoaderSide Scenario Phase CodeAddress CodeAddress
+  StackOffset StackOffset (M.Map StackOffset Scalar) deriving (Eq, Show)
+data FrameProof = FrameProof [PathProof] (S.Set CodeAddress) (M.Map CodeAddress CallTarget) [DispatcherBoundary]
+data PathResult = PathResult
+  { resultPath :: PathProof, resultPcs :: S.Set CodeAddress
+  , resultCalls :: M.Map CodeAddress CallTarget, resultDispatcherCalls :: [DispatcherBoundary]
+  }
 data AdmissionError = ExtentRejected | CompilerPrologueRejected | UnsupportedInstruction CodeAddress
   | FrameRejected | OperandRejected | ConditionRejected | MemoryRejected | CallRejected CodeAddress
   | EffectRejected | StepLimit | ControlFlowRejected CodeAddress | PollingInvariantRejected deriving (Eq, Show)
@@ -37,18 +45,40 @@ data PollCheckpoint = PollCheckpoint CodeAddress (M.Map A.Reg Scalar) (M.Map Sta
 
 data Machine = Machine
   { registers :: M.Map A.Reg Scalar, stack :: M.Map StackOffset Scalar, zero :: Maybe Bool
-  , effects :: [Effect], visited :: S.Set CodeAddress, boundaries :: M.Map CodeAddress CallTarget
+  , effects :: [Effect], visited :: S.Set CodeAddress, boundaries :: M.Map CodeAddress CallTarget, dispatcherEdges :: [DispatcherBoundary]
   , polls :: PollCount, checkpoint :: Maybe PollCheckpoint, calls :: CallOrdinal, steps :: StepCount, terminal :: Maybe Terminal
   }
 
 proofPaths :: FrameProof -> [PathProof]
-proofPaths (FrameProof paths _ _) = paths
+proofPaths (FrameProof paths _ _ _) = paths
 executionPcs :: FrameProof -> [CodeAddress]
-executionPcs (FrameProof _ points _) = S.toAscList points
+executionPcs (FrameProof _ points _ _) = S.toAscList points
 callBoundaries :: FrameProof -> [(CodeAddress,CallTarget)]
-callBoundaries (FrameProof _ _ points) = M.toAscList points
+callBoundaries (FrameProof _ _ points _) = M.toAscList points
 frameLow :: FrameProof -> StackOffset
 frameLow _ = StackOffset (-16)
+dispatcherBoundaries :: FrameProof -> [DispatcherBoundary]
+dispatcherBoundaries (FrameProof _ _ _ entries) = entries
+boundarySide :: DispatcherBoundary -> LoaderSide
+boundarySide (DispatcherBoundary value _ _ _ _ _ _ _) = value
+boundaryScenario :: DispatcherBoundary -> Scenario
+boundaryScenario (DispatcherBoundary _ value _ _ _ _ _ _) = value
+boundaryPhase :: DispatcherBoundary -> Phase
+boundaryPhase (DispatcherBoundary _ _ value _ _ _ _ _) = value
+boundaryInstruction :: DispatcherBoundary -> CodeAddress
+boundaryInstruction (DispatcherBoundary _ _ _ value _ _ _ _) = value
+boundaryContinuation :: DispatcherBoundary -> CodeAddress
+boundaryContinuation (DispatcherBoundary _ _ _ _ value _ _ _) = value
+boundaryStack :: DispatcherBoundary -> StackOffset
+boundaryStack (DispatcherBoundary _ _ _ _ _ value _ _) = value
+boundaryFramePointer :: DispatcherBoundary -> StackOffset
+boundaryFramePointer (DispatcherBoundary _ _ _ _ _ _ value _) = value
+boundaryLiveWords :: DispatcherBoundary -> M.Map StackOffset Scalar
+boundaryLiveWords (DispatcherBoundary _ _ _ _ _ _ _ value) = value
+
+stackOffset :: Scalar -> Either AdmissionError StackOffset
+stackOffset (Stack offset) = Right offset
+stackOffset _ = Left FrameRejected
 
 require :: Bool -> AdmissionError -> Either AdmissionError ()
 require premise failure = unless premise (Left failure)
@@ -161,11 +191,14 @@ phase :: Scalar -> Either AdmissionError Phase
 phase (Word value) = case value of 0 -> Right Setup; 1 -> Right Root; 2 -> Right Diagnostic; 3 -> Right Idle0; 4 -> Right PeerTasks; _ -> Left EffectRejected
 phase _ = Left EffectRejected
 
-callDispatcher :: Scenario -> CodeAddress -> CodeAddress -> Machine -> Either AdmissionError Machine
-callDispatcher (Scenario _ _ outcome) site continuation machine = do
+callDispatcher :: LoaderSide -> Scenario -> CodeAddress -> CodeAddress -> Machine -> Either AdmissionError Machine
+callDispatcher side scenario@(Scenario _ _ outcome) site continuation machine = do
   requireFrame machine
   selected <- phase (get machine (A.Reg 0))
-  let captured = emit (DispatchCall selected) machine {boundaries=M.insert site Dispatcher (boundaries machine)}
+  incomingStack <- stackOffset (get machine A.sp)
+  incomingFramePointer <- stackOffset (get machine (A.Reg 11))
+  let boundary = DispatcherBoundary side scenario selected site continuation incomingStack incomingFramePointer (stack machine)
+      captured = emit (DispatchCall selected) machine {boundaries=M.insert site Dispatcher (boundaries machine),dispatcherEdges=boundary:dispatcherEdges machine}
       CallOrdinal ordinal = calls machine
       result = if selected==Diagnostic then CallbackCapability else Returned (CallOrdinal (ordinal+1)) (A.Reg 0)
   pure $ if selected==Setup && outcome==SetupNonreturn then captured {terminal=Just SetupDidNotReturn} else callReturning continuation result captured
@@ -201,18 +234,18 @@ deriveFrameProof side bytes (CodeAddress compilerPc) = do
   require (not (B.null bytes)&&B.length bytes<=340&&B.length bytes `mod` 4==0) ExtentRejected
   require (compilerPc==first+12&&compilerPc+8<=end&&word compilerPc==0xe92d4800&&word (compilerPc+4)==0xe1a0b00d) CompilerPrologueRejected
   results <- traverse (run start end) scenarios
-  pure (FrameProof [path | (path,_,_) <- results] (S.unions [points | (_,points,_) <- results]) (M.unions [points | (_,_,points) <- results]))
+  pure (FrameProof (map resultPath results) (S.unions (map resultPcs results)) (M.unions (map resultCalls results)) (concatMap resultDispatcherCalls results))
   where
     targets = serviceTable side
     run start end scenario = do
-      let initial = Machine (M.fromList [(A.Reg 0,DispatchCapability),(A.sp,Stack (StackOffset 0)),(A.lr,IncomingLink)]) M.empty Nothing [] S.empty M.empty (PollCount 0) Nothing (CallOrdinal 0) (StepCount 0) Nothing
+      let initial = Machine (M.fromList [(A.Reg 0,DispatchCapability),(A.sp,Stack (StackOffset 0)),(A.lr,IncomingLink)]) M.empty Nothing [] S.empty M.empty [] (PollCount 0) Nothing (CallOrdinal 0) (StepCount 0) Nothing
       final <- execute start initial
       requireFrame final
       stopped <- maybe (Left EffectRejected) Right (terminal final)
       require (case scenario of Scenario Peer NeverPublished _ -> stopped==WaitingForCompletion; _ -> True) PollingInvariantRejected
       let observed = reverse (effects final)
       require ((observed,stopped)==expected scenario) EffectRejected
-      pure (PathProof scenario observed stopped,visited final,boundaries final)
+      pure (PathResult (PathProof scenario observed stopped) (visited final) (boundaries final) (reverse (dispatcherEdges final)))
       where
         CodeAddress first = start
         readLiteral at = do
@@ -283,7 +316,7 @@ deriveFrameProof side bytes (CodeAddress compilerPc) = do
                   execute next called
                 A.BranchExchange _ True register -> do
                   require (get marked register==DispatchCapability) (CallRejected site)
-                  called <- callDispatcher scenario site next marked
+                  called <- callDispatcher side scenario site next marked
                   execute next called
                 A.Hint _ | raw==0xe320f000 -> execute next (emit (DelayNops (NopCount 1)) marked)
                 _ -> Left (UnsupportedInstruction site)
