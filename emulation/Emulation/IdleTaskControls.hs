@@ -264,7 +264,7 @@ refusalControls role sources original = do
             first:_ -> Right (word first)
             [] -> Left (MutationRejected control)
           changeRegister control index 0 (old `xor` 1) receiptValue >>= plain
-        MissingRepeatedWait -> removeLastRepeated control receiptValue watchValue receipt watch proof >>= \(r,w) -> (Nothing,) <$> withHash control original r w
+        MissingRepeatedWait -> stopBeforeRepeatedWait control receiptValue watchValue receipt proof >>= \(r,w) -> (Nothing,) <$> withHash control original r w
 
 coherentTask :: Control -> J.Value -> J.Value -> Either ControlError (J.Value,J.Value)
 coherentTask control receipt watch = do
@@ -295,8 +295,8 @@ coherentTask control receipt watch = do
     decodeWord body = sum [fromIntegral (B.index body index)*256^index | index <- [0..3 :: Int]] :: Word32
     putWord number = B.pack [fromIntegral (number `div` 256^index) | index <- [0..3 :: Int]]
 
-removeLastRepeated :: Control -> J.Value -> J.Value -> Receipt -> CapturedWatch -> A.IdleProof -> Either ControlError (J.Value,J.Value)
-removeLastRepeated control receiptValue watchValue receipt watch proof = do
+stopBeforeRepeatedWait :: Control -> J.Value -> J.Value -> Receipt -> A.IdleProof -> Either ControlError (J.Value,J.Value)
+stopBeforeRepeatedWait control receiptValue watchValue receipt proof = do
   let samples = receiptSamples receipt
       firstAfter index predicate = maybe (Left (MutationRejected control)) (Right . (+ (index+1))) (findIndex predicate (drop (index+1) samples))
       repeatedFor core = do
@@ -308,16 +308,13 @@ removeLastRepeated control receiptValue watchValue receipt watch proof = do
         repeated <- firstAfter resumed (\sample -> contextCore (sampleContext sample) == core && address (W.contextPc (state sample)) == A.wfiPc proof)
         pure (repeated,samples !! repeated)
   candidates <- mapM repeatedFor [S.PrimaryKernel,S.SecondaryKernel]
-  (_,repeated) <- case candidates of
+  (index,repeated) <- case candidates of
     [left,right] -> Right (if fst left > fst right then left else right)
     _ -> Left (MutationRejected control)
-  let lower = sum (map count (W.contextCounts (state repeated))); core = S.watchCore (contextCore (sampleContext repeated))
-      stopped = map ((subtract 1) . sampleCursor) (drop 1 samples)
-      deleted = [index | (index,observed) <- zip [0..] (captureEvents watch),let event=eventRecord observed,index `notElem` stopped,W.eventSource event == W.CpuFetch
-        ,W.eventCore event == Just core,W.eventPc event == Just (W.Address (A.wfiPc proof)),maybe False ((>lower) . count) (W.eventInstructions event)]
-  unless (not (null deleted)) (Left (MutationRejected control))
   rows <- pathAt control [field "records"] watchValue >>= parse control :: Either ControlError [J.Value]
-  w <- set control [field "records"] [row | (index,row) <- zip [0..] rows,index `notElem` deleted] watchValue
-  r <- foldM (\value (index,sample) -> set control [field "samples",Element index,field "watch_cursor"]
-    (sampleCursor sample-length (filter (<sampleCursor sample) deleted)) value) receiptValue (zip [0..] samples)
-  pure (r,w)
+  w <- set control [field "records"] (take (sampleCursor repeated) rows) watchValue
+  r <- foldM (\value name -> modifyAt control [field name] (\raw -> do
+    values <- parse control raw :: Either ControlError [J.Value]
+    pure (J.toJSON (take (index+1) values))) value) receiptValue ["samples","hits"]
+  ended <- set control [field "lifecycle_end_counts"] (map count (W.contextCounts (state repeated))) r
+  pure (ended,w)
