@@ -14,7 +14,7 @@ newtype TaskId = TaskId Word16 deriving (Eq, Ord, Show)
 newtype HitIndex = HitIndex Int deriving (Eq, Ord, Show)
 newtype Cursor = Cursor Int deriving (Eq, Ord, Show)
 data KernelCore = PrimaryKernel | SecondaryKernel deriving (Eq, Ord, Show)
-data SourceKind = LoaderA | LoaderB | Image4 deriving (Eq, Ord, Show)
+data SourceKind = LoaderA | LoaderB | Record2 | Image4 deriving (Eq, Ord, Show)
 data Boundary = SubmissionEntry | AuxiliaryCall | AuxiliaryReturn | CreationCall | CreationReturn | ActivationCall | ActivationReturn
   | WrapperReturn | AutoReadyEntry | AutoReadyReturn | Prepare | Prepared | Scheduler | Selected | StackTransfer
   | Trampoline | EntryTransfer | TaskEntry | EnteredInstruction
@@ -25,11 +25,17 @@ data Boundary = SubmissionEntry | AuxiliaryCall | AuxiliaryReturn | CreationCall
 data ObjectKind = CreationRecords | TaskNodes | IdMap | AuxiliaryRecords | AuxiliaryNodes | Domains | Control
   | QueueHeads | Bitmap | SelectedObject | Current | Descriptor | Wrapper | Storage | Stack | EntryCode
   | SharedDomains | InterfaceRoots | InterfaceTable | Parameters | ErrorState | Callback | CursorObject | LockObject
-  | ClassTable | ControlPatch | LogCallback | LogMode | LogEnable deriving (Eq, Ord, Show)
+  | ClassTable | ControlPatch | LogCallback | LogMode | LogEnable | CriticalCounter | CriticalLock deriving (Eq, Ord, Show)
 data Outcome = ObservedMenu | ObservedProbe | Refused deriving (Eq, Show)
-data Scope = StockStartupScope | OwnedStartupScope | StockProbeScope | OwnedProbeScope deriving (Eq, Show)
-data ReceiptProtocol = LegacyStockProtocol | TaskSubmissionProtocol deriving (Eq, Show)
-data ProgramEvidence = LegacyStockProgram | StockProgram | OwnedProgram W.Digest W.Digest W.Digest deriving (Eq, Show)
+data Scope = StockStartupScope | OwnedStartupScope | StockProbeScope | OwnedProbeScope
+  | JoinedStartupScope | JoinedProbeScope | StockJoinedStartupScope | StockJoinedProbeScope deriving (Eq, Show)
+data ReceiptProtocol = LegacyStockProtocol | TaskSubmissionProtocol | JoinedTaskProtocol deriving (Eq, Show)
+data JoinedEvidence = JoinedEvidence
+  { joinedContractDigest :: W.Digest, joinedWrapperDigest :: W.Digest, joinedWrapperSymbolsDigest :: W.Digest
+  , joinedCriticalDigest :: W.Digest, joinedCriticalSymbolsDigest :: W.Digest
+  , joinedStorageDigest :: W.Digest, joinedStorageSymbolsDigest :: W.Digest
+  } deriving (Eq, Show)
+data ProgramEvidence = LegacyStockProgram | StockProgram | OwnedProgram W.Digest W.Digest W.Digest | JoinedProgram JoinedEvidence deriving (Eq, Show)
 data WatchResult = WatchOk Bool (Maybe String) | WatchError String deriving (Eq, Show)
 data MenuResult = MenuOk (Maybe [Word32]) | MenuError String deriving (Eq, Show)
 data SourceIdentity = SourceIdentity SourceKind W.Address Int W.Digest deriving (Eq, Show)
@@ -84,11 +90,15 @@ instance FromJSON Scope where
     "owned-task-submission-reset-startup-task-objects-through-both-first-prologue-instructions;unwatched-continuation-to-menu" -> pure OwnedStartupScope
     "stock-controlled-task-submission-after-both-first-prologue-instructions" -> pure StockProbeScope
     "owned-controlled-task-submission-after-both-first-prologue-instructions" -> pure OwnedProbeScope
+    "owned-task-composition-reset-startup-task-objects-through-both-first-prologue-instructions;unwatched-continuation-to-menu" -> pure JoinedStartupScope
+    "owned-composed-controlled-task-submission-after-both-first-prologue-instructions" -> pure JoinedProbeScope
+    "retained-task-composition-reset-startup-task-objects-through-both-first-prologue-instructions;unwatched-continuation-to-menu" -> pure StockJoinedStartupScope
+    "retained-composed-controlled-task-submission-after-both-first-prologue-instructions" -> pure StockJoinedProbeScope
     _ -> fail "unknown task observation scope"
 instance FromJSON ReceiptProtocol where
   parseJSON value = do
     protocol <- parseJSON value :: Parser Int
-    case protocol of 1 -> pure LegacyStockProtocol; 2 -> pure TaskSubmissionProtocol; _ -> fail "unsupported task receipt protocol"
+    case protocol of 1 -> pure LegacyStockProtocol; 2 -> pure TaskSubmissionProtocol; 3 -> pure JoinedTaskProtocol; _ -> fail "unsupported task receipt protocol"
 instance FromJSON ProgramEvidence where
   parseJSON = withObject "task program" $ \o -> do
     kind <- o .: "kind" :: Parser String
@@ -97,6 +107,11 @@ instance FromJSON ProgramEvidence where
       "owned" -> do
         unless (KM.size o == 4) (fail "incomplete owned program evidence")
         OwnedProgram <$> o .: "contract_sha256" <*> o .: "linked_sha256" <*> o .: "symbols_sha256"
+      "joined" -> do
+        unless (KM.size o == 8) (fail "incomplete joined program evidence")
+        JoinedProgram <$> (JoinedEvidence <$> o .: "contract_sha256" <*> o .: "linked_sha256" <*> o .: "symbols_sha256"
+          <*> o .: "critical_linked_sha256" <*> o .: "critical_symbols_sha256"
+          <*> o .: "storage_linked_sha256" <*> o .: "storage_symbols_sha256")
       _ -> fail "unknown task program"
 parseBoundary :: String -> Parser Boundary
 parseBoundary value = case value of
@@ -131,6 +146,7 @@ instance FromJSON Cursor where parseJSON value = do number <- parseJSON value; u
 instance FromJSON SourceKind where
   parseJSON = withText "source name" $ \value -> case value of
     "decode/loader-40000.bin" -> pure LoaderA; "decode/loader-d0000.bin" -> pure LoaderB; "lz/id4-0061c400.bin" -> pure Image4
+    "record2/critical-pair.bin" -> pure Record2
     _ -> fail "unknown canonical source"
 instance FromJSON SourceIdentity where
   parseJSON = withObject "source identity" $ \o -> SourceIdentity <$> o .: "name" <*> o .: "base" <*> o .: "bytes" <*> o .: "sha256"
@@ -146,6 +162,7 @@ instance FromJSON ObjectKind where
     "interface-roots" -> pure InterfaceRoots; "interface-table" -> pure InterfaceTable
     "parameters" -> pure Parameters; "error-state" -> pure ErrorState; "callback" -> pure Callback; "cursor" -> pure CursorObject; "lock" -> pure LockObject
     "class-table" -> pure ClassTable; "control-patch" -> pure ControlPatch; "log-callback" -> pure LogCallback; "log-mode" -> pure LogMode; "log-enable" -> pure LogEnable
+    "critical-counter" -> pure CriticalCounter; "critical-lock" -> pure CriticalLock
     _ -> fail "unknown task object"
 instance FromJSON Context where
   parseJSON value = withObject "context" (\o -> Context <$> o .: "core" <*> parseJSON value) value

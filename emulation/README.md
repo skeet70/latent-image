@@ -1610,6 +1610,23 @@ cohort DAT RUN ROM ANALYSIS_ROOT OBSERVER LINKED_BIN SYMBOLS SCRATCH_DIR CANDIDA
 New-mode output records each observation's acceptance or refusal and every attempted `comparisonValue`, alongside successful `qualificationValue` results. All cohort members are processed even when another receipt is missing or refused. Any refused qualification/comparison makes the command exit nonzero after writing its report. A cohort requires all eleven retained/owned pairs; individual successful pairs do not accept it. Comparison does not require equal instruction counts, compiler-private frames or scratch registers. It compares committed task records at their own checkpoints, per-core ready queues/bitmaps, defined first-entry ABI, source-service effects and bounded release/callback outcomes. Neither a synthetic serialized-input refusal nor a bounded unreturned callback proves successful guest behavior or infinite nonreturn.
 
 
+##### Joined task-submission composition (#155)
+
+The default stock and standalone-owned interfaces above retain schema 2. `--scope task-composition` selects a schema-3 retained reference and cannot be combined with owned inputs. A joined owned run supplies `--contract JOINED_CONTRACT --native WRAPPER_BIN` and all of `--critical-native CRITICAL_BIN --storage-native STORAGE_BIN --loader-a-source STAGED_LOADER_A --loader-b-source STAGED_LOADER_B --record2-source STAGED_RECORD2 --image4-source STAGED_IMAGE4`. These sources are the actual four outputs of `//replacement/startup_composition:stage-task-composition`, not copies of the original loader identities.
+
+Schema 3 captures the critical counter at physical `0xa0f824` and lock at `0xc0804` in every snapshot. It watches CPU reads as well as fetches and writes over actual source images and watches counter reads/writes. The joined role refuses fetches and reads of the retired critical-body interiors. Component global-store checkpoints come from typed proof metadata. Both-core source/alias binding, full raw preimages and instruction-clock replay remain required. Controlled patching still uses actual SDK physical host writes and preserves their journal rows.
+
+The checker adds these modes after the same three encoder/rebuilder/decoder tool paths:
+
+```text
+joined-qualify DAT RUN ROM ANALYSIS_ROOT OBSERVER WRAPPER_BIN WRAPPER_SYMBOLS CRITICAL_BIN CRITICAL_SYMBOLS STORAGE_BIN STORAGE_SYMBOLS SCRATCH_DIR CANDIDATE_DAT CONTRACT OBSERVATION_DIR... OUT_JSON
+joined-compare DAT RUN ROM ANALYSIS_ROOT OBSERVER WRAPPER_BIN WRAPPER_SYMBOLS CRITICAL_BIN CRITICAL_SYMBOLS STORAGE_BIN STORAGE_SYMBOLS SCRATCH_DIR CANDIDATE_DAT CONTRACT RETAINED_DIR JOINED_DIR OUT_JSON
+joined-cohort DAT RUN ROM ANALYSIS_ROOT OBSERVER WRAPPER_BIN WRAPPER_SYMBOLS CRITICAL_BIN CRITICAL_SYMBOLS STORAGE_BIN STORAGE_SYMBOLS SCRATCH_DIR CANDIDATE_DAT CONTRACT RETAINED_ROOT JOINED_ROOT OUT_JSON
+joined-refusal-controls DAT RUN ROM ANALYSIS_ROOT OBSERVER WRAPPER_BIN WRAPPER_SYMBOLS CRITICAL_BIN CRITICAL_SYMBOLS STORAGE_BIN STORAGE_SYMBOLS SCRATCH_DIR CANDIDATE_DAT CONTRACT OBSERVATION_DIR OUT_JSON
+```
+
+Joined admission independently rederives all three artifacts and restages the candidate once. The cohort keeps the natural plus ten controlled cases listed above. Comparison retains exact run, ROM, observer and loader-A identities while allowing only independently admitted joined source changes. Critical-resource comparison uses captured initial/final states, not timing-dependent intermediate interleavings. Serialized refusal controls also check schema-3 read payloads, preimages, clocks, physical attribution, width, retired critical reads, record-2 identity and counter views/aliases. No joined runtime acceptance follows from declaring these interfaces.
+
 ### Owned first-stage witness
 
 `//emulation:first-stage-witness` starts from the captured ROM reset with the packaged DAT. It arms five core-0 instruction stops before execution and reads twelve memory extents at the owned handoff vector. Its 20,000,000-instruction budget is separate from the cold-menu route. It does not import a stock-initialization checkpoint or force an execution frame.

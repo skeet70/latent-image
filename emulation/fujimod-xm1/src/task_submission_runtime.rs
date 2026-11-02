@@ -1,19 +1,23 @@
 use super::{Address, Boundary, Code, Context, Core, Digest, Kernel, Object, TaskId, View, Word, pointer, require, view, word};
 use super::task_submission_control::{ProbeCase, ProbeStop};
-use super::task_submission_program::{Entry, Program, Target};
+use super::task_submission_program::{Entry, JoinedInputs, Program, Role, Target};
 use fujimod_emulator::board::factory::MemoryMap;
 use fujimod_xm1::{bridge::read, machine::Machine};
+use serde::Deserialize;
 use std::path::PathBuf;
 
 pub(super) struct Arguments {
     pub(super) run: PathBuf, pub(super) update: PathBuf, pub(super) rom: PathBuf,
     pub(super) analysis: PathBuf, pub(super) output: PathBuf, pub(super) contract: Option<PathBuf>,
-    pub(super) native: Option<PathBuf>, pub(super) case: ProbeCase,
+    pub(super) native: Option<PathBuf>, pub(super) joined: Option<JoinedInputs>, pub(super) role: Role, pub(super) case: ProbeCase,
 }
 impl Arguments {
     pub(super) fn parse() -> Result<Self, String> {
         let mut run = None; let mut update = None; let mut rom = None; let mut analysis = None;
         let mut output = None; let mut contract = None; let mut native = None; let mut case = None;
+        let mut critical_native = None; let mut storage_native = None; let mut loader_a = None;
+        let mut loader_b = None; let mut record2 = None; let mut image4 = None;
+        let mut role = None;
         let mut arguments = std::env::args_os().skip(1);
         while let Some(flag) = arguments.next() {
             let flag = flag.into_string().map_err(|_| super::USAGE)?;
@@ -23,12 +27,27 @@ impl Arguments {
                 "--boot-rom" => put(&mut rom, PathBuf::from(value))?, "--analysis" => put(&mut analysis, PathBuf::from(value))?,
                 "--output" => put(&mut output, PathBuf::from(value))?, "--contract" => put(&mut contract, PathBuf::from(value))?,
                 "--native" => put(&mut native, PathBuf::from(value))?,
+                "--critical-native" => put(&mut critical_native, PathBuf::from(value))?,
+                "--storage-native" => put(&mut storage_native, PathBuf::from(value))?,
+                "--loader-a-source" => put(&mut loader_a, PathBuf::from(value))?,
+                "--loader-b-source" => put(&mut loader_b, PathBuf::from(value))?,
+                "--record2-source" => put(&mut record2, PathBuf::from(value))?,
+                "--image4-source" => put(&mut image4, PathBuf::from(value))?,
+                "--scope" => put(&mut role, value.into_string().map_err(|_| super::USAGE)?.parse::<Role>()?)?,
                 "--case" => put(&mut case, value.into_string().map_err(|_| super::USAGE)?.parse::<ProbeCase>()?)?,
                 _ => return Err(super::USAGE.into()),
             }
         }
+        let joined = match (critical_native, storage_native, loader_a, loader_b, record2, image4) {
+            (None, None, None, None, None, None) => None,
+            (Some(critical_native), Some(storage_native), Some(loader_a), Some(loader_b), Some(record2), Some(image4)) => {
+                require(contract.is_some() && native.is_some(), "joined inputs require contract and task native")?;
+                Some(JoinedInputs { critical_native, storage_native, loader_a, loader_b, record2, image4 })
+            }
+            _ => return Err("joined native and staged source inputs must be supplied together".into()),
+        };
         Ok(Self { run: run.ok_or(super::USAGE)?, update: update.ok_or(super::USAGE)?, rom: rom.ok_or(super::USAGE)?,
-            analysis: analysis.ok_or(super::USAGE)?, output: output.ok_or(super::USAGE)?, contract, native, case: case.unwrap_or(ProbeCase::Natural) })
+            analysis: analysis.ok_or(super::USAGE)?, output: output.ok_or(super::USAGE)?, contract, native, joined, role: role.unwrap_or_default(), case: case.unwrap_or(ProbeCase::Natural) })
     }
 }
 fn put<T>(slot: &mut Option<T>, value: T) -> Result<(), String> { require(slot.is_none(), "duplicate observer argument")?; *slot = Some(value); Ok(()) }
@@ -45,6 +64,10 @@ pub(super) fn local(machine: &Machine, maps: &[MemoryMap], state: &Context, bind
         views.push(view(machine, maps, state, Object::InterfaceTable, root, 0x162c)?);
     }
     views.push(roots);
+    if program.composition() {
+        views.push(view(machine, maps, state, Object::CriticalCounter, 0x40a0f824, 4)?);
+        views.push(view(machine, maps, state, Object::CriticalLock, 0x400c0804, 4)?);
+    }
     for (object, address, bytes) in [(Object::ErrorState, 0x40a0f82c, 4), (Object::Callback, 0x4089ea8c, 4),
         (Object::Cursor, 0x4089ea98, 4), (Object::Lock, 0x409c280c, 4), (Object::ClassTable, 0x7cad9c, 420),
         (Object::LogCallback, 0x4004f15c, 4), (Object::LogMode, 0x4004f25c, 4), (Object::LogEnable, 0x4004f5e4, 38)] {
@@ -184,4 +207,73 @@ pub(super) fn identity<'a>(run: Digest, update: Digest, rom: Digest, code: &'a [
     use fujimod_xm1::bridge::sha256;
     require(run.0 == "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef" && rom.0 == "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be", "observer run/ROM identity differs")?;
     Ok(super::Identity { run, update, boot_rom: rom, observer: Digest(sha256(&read(&std::env::current_exe().map_err(|error| error.to_string())?)?)), sources: code.iter().map(|code| super::SourceIdentity { name: code.name, base: Address(code.base), bytes: code.bytes.len(), sha256: &code.sha256 }).collect() })
+}
+
+pub(super) fn bind_sources(machine: &Machine, maps: &[MemoryMap], state: &Context, sources: &[Code], joined: bool) -> Result<(), String> {
+    for source in sources {
+        let bind = |start: u64, end: u64| -> Result<(), String> {
+            let observed = view(machine, maps, state, Object::EntryCode, start as u32, (end - start) as usize)?;
+            let offset = (start - u64::from(source.base)) as usize;
+            require(observed.bytes == source.bytes[offset..offset + (end - start) as usize], "loaded staged source differs before startup watch")
+        };
+        let base = u64::from(source.base);
+        let end = base + source.bytes.len() as u64;
+        if joined && matches!(source.base, 0x40000 | 0xd0000) {
+            for (start, end) in super::loader_code::immutable_loader_spans(base, end) { bind(start, end)?; }
+        } else { bind(base, end)?; }
+    }
+    Ok(())
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum Access { CpuFetch, CpuRead, CpuWrite, HostRead, HostWrite, ModelBusRead, ModelBusWrite }
+#[derive(Deserialize)]
+struct WatchRecord {
+    source: Access, address: u64, physical: u64, size: u64,
+    core: Option<usize>, pc: Option<u32>, instructions: Option<u64>, tick: Option<u64>,
+    tcm: Option<serde::de::IgnoredAny>,
+}
+#[derive(Deserialize)]
+struct WatchRecords { records: Vec<WatchRecord> }
+fn overlaps(start: u64, end: u64, low: u64, high: u64) -> bool { start < high && low < end }
+fn immutable(start: u64, end: u64) -> bool {
+    if [(0x10000, 0x20000), (0x7235d8, 0x723790), (0x725c6c, 0x72612c), (0x96bd20, 0x96bd28)]
+        .into_iter().any(|(low, high)| overlaps(start, end, low, high)) { return true; }
+    [(0x40000, 0x4dae0), (0xd0000, 0xddaa0)].into_iter()
+        .flat_map(|(base, end)| super::loader_code::immutable_loader_spans(base, end))
+        .any(|(low, high)| overlaps(start, end, low, high))
+}
+pub(super) fn joined_guard(raw: &serde_json::Value, program: &Program) -> Result<(), String> {
+    let watch = WatchRecords::deserialize(raw).map_err(|error| error.to_string())?;
+    let mut clocks = [0; 2];
+    let mut previous_tick = 0;
+    for event in watch.records {
+        let end = event.physical.checked_add(event.size).ok_or("joined watch extent wraps")?;
+        require(event.size != 0, "joined watch access is empty")?;
+        require(event.tcm.is_none(), "joined protected access selected TCM")?;
+        if matches!(event.source, Access::CpuFetch | Access::CpuRead | Access::CpuWrite) {
+            let core = event.core.filter(|core| *core < 2).ok_or("joined watch CPU core absent")?;
+            let count = event.instructions.ok_or("joined watch CPU clock absent")?;
+            let tick = event.tick.ok_or("joined watch CPU tick absent")?;
+            require(event.pc.is_some() && count >= clocks[core] && tick >= previous_tick,
+                "joined watch CPU attribution regressed")?;
+            clocks[core] = count; previous_tick = tick;
+        }
+        if matches!(event.source, Access::CpuFetch | Access::CpuRead) {
+            require(![(0x7235dc, 0x7236b0), (0x7236b4, 0x723790)].into_iter()
+                .any(|(low, high)| overlaps(event.physical, end, low, high)), "retired critical body was fetched or read")?;
+        }
+        if matches!(event.source, Access::CpuFetch) {
+            let physical = u32::try_from(event.physical).map_err(|_| "joined fetch physical address exceeds32 bits")?;
+            require(program.admits_execution(physical), "joined component fetch has no proof-derived PC")?;
+            if (0x10000..0x20000).contains(&physical) || (0x725cc4..0x72612c).contains(&physical) {
+                require(event.size == 4 && event.address == event.physical && event.pc == Some(physical),
+                    "joined component fetch alias or extent differs")?;
+            }
+        }
+        if matches!(event.source, Access::CpuWrite | Access::HostWrite | Access::ModelBusWrite) {
+            require(!immutable(event.physical, end), "joined immutable source or publication root was written")?;
+        }
+    }
+    Ok(())
 }

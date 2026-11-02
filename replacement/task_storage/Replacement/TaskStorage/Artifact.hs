@@ -6,12 +6,15 @@ module Replacement.TaskStorage.Artifact
   , artifactAdmission, Admission (..), Scratch (..), ByteCount (..), FrameOffset (..)
   , InstructionAddress (..), DataOffset (..), DataRoot (..), Location (..)
   , Direction (..), Access (..), Premise (..), ReturnPaths (..)
+  , linkedBytes, rustExtent
+  , executionPcs, guestStorePcs, privateStorePcs
   ) where
 
 import Control.Monad (forM_, unless)
 import Data.Aeson (Value, object, (.=))
 import Data.Bits ((.&.), (.|.))
 import qualified Data.ByteString as B
+import Data.List (nub)
 import Data.Word (Word32)
 import qualified Emulation.Sha256 as SHA
 import qualified Emulation.Image4Staging as Image4
@@ -125,6 +128,25 @@ deriveArtifact image symbolBytes = do
 
 artifactAdmission :: LinkedArtifact -> Admission
 artifactAdmission (LinkedArtifact _ _ _ _ _ admission) = admission
+
+linkedBytes :: LinkedArtifact -> B.ByteString
+linkedBytes (LinkedArtifact bytes _ _ _ _ _) = bytes
+
+rustExtent :: LinkedArtifact -> (InstructionAddress, InstructionAddress)
+rustExtent (LinkedArtifact _ _ _ (GuestAddress start) (GuestAddress end) _) =
+  (InstructionAddress start, InstructionAddress end)
+
+executionPcs :: LinkedArtifact -> [InstructionAddress]
+executionPcs artifact = map InstructionAddress [transitionStart,transitionStart+4..transitionStart+20]
+  ++ admissionExecutionPcs (artifactAdmission artifact)
+
+guestStorePcs :: LinkedArtifact -> [InstructionAddress]
+guestStorePcs artifact = nub [accessInstruction access | access <- admissionAccesses (artifactAdmission artifact)
+  , accessDirection access == WriteWord, GuestWord _ _ <- [accessLocation access]]
+
+privateStorePcs :: LinkedArtifact -> [InstructionAddress]
+privateStorePcs artifact = nub [accessInstruction access | access <- admissionAccesses (artifactAdmission artifact)
+  , accessDirection access == WriteWord, FrameWord _ <- [accessLocation access]]
 
 stageImage4 :: CanonicalSource -> LinkedArtifact -> StagedImage4
 stageImage4 source@(CanonicalSource _ original _ _ _ _) artifact@(LinkedArtifact linked _ _ _ _ _) =

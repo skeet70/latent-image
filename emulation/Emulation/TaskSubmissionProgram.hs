@@ -1,8 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.TaskSubmissionProgram
-  ( CanonicalImages(..), NativeInputs(..), Program, ProgramError(..)
-  , stockProgram, ownedProgram, programImage4, programUpdateDigest, programEvidence
-  , programSites, programFrameProof, programAllowsPc, programHasStore, GuestStore(..), programGuestStore, programClasses, checkProgramHeader, checkProgramSample
+  ( CanonicalImages(..), NativeInputs(..), JoinedInputs(..), Program, ProgramError(..)
+  , stockProgram, ownedProgram, joinedProgram, programImage4, programSources, programUpdateDigest, programEvidence
+  , programSites, programFrameProof, programFrameLow, programOwnedPoint, programOwnsPc, programStoreComponent, StoreComponent(..), programAllowsPc, programAllowsRead, programHasStore, GuestStore(..), programGuestStore, programClasses, checkProgramHeader, checkProgramSample
   ) where
 
 import qualified A32 as A
@@ -16,23 +16,35 @@ import Data.List (find, nub)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Emulation.Sha256 as SHA
+import qualified Emulation.CriticalPair as Critical
 import Emulation.StartupTaskWire
 import qualified FujiAF.UpdateContainer as U
 import qualified Replacement.KernelInstall.Wire as W
 import qualified Replacement.TaskSubmission.Admission as N
 import qualified Replacement.TaskSubmission.Artifact as Artifact
+import qualified Replacement.StartupComposition.TaskSubmission as Joined
+import qualified Replacement.TaskStorage.Artifact as Storage
 import Data.Word (Word32)
 
 data CanonicalImages = CanonicalImages
   { canonicalDat :: B.ByteString, canonicalA :: B.ByteString, canonicalB :: B.ByteString, canonicalImage4 :: B.ByteString }
 data NativeInputs = NativeInputs
   { nativeFlat :: B.ByteString, nativeSymbols :: B.ByteString, nativeCandidate :: B.ByteString, nativeContract :: B.ByteString }
-data Program = Stock | Owned N.FrameProof B.ByteString W.Digest ProgramEvidence (M.Map W.Address Boundary) (S.Set N.CodeAddress) (S.Set N.CodeAddress)
+data JoinedInputs = JoinedInputs
+  { joinedWrapper :: NativeInputs, joinedCritical :: Joined.NativeFiles, joinedStorage :: Joined.NativeFiles }
+data OwnedVariant = Standalone | Composed Joined.JoinedArtifact Joined.CandidateSources
+data Program = Stock | Owned
+  { ownedProof :: N.FrameProof, ownedImage4 :: B.ByteString, ownedUpdate :: W.Digest
+  , ownedEvidence :: ProgramEvidence, ownedCodeSites :: M.Map W.Address Boundary
+  , ownedExecution :: S.Set N.CodeAddress, ownedWrites :: S.Set N.CodeAddress, ownedVariant :: OwnedVariant
+  }
 data GuestStore = GuestStore {guestStoreAddress :: W.Address, guestStoreValue :: W.WordValue} deriving (Eq, Show)
+data StoreComponent = WrapperComponent | CriticalComponent | StorageComponent deriving (Eq, Show)
 data ProgramError = ArtifactRejected Artifact.ArtifactError | CandidateAssociationRejected | SiteCollision W.Address
   | HeaderRejected | CodeRejected | CallDispositionRejected | CallTargetRejected | CallArgumentsRejected
   | CallProvenanceRejected | CallReturnRejected | InvocationRejected | ViewRejected | StackRejected N.AdmissionError
   | StackContextRejected | UnsupportedActivation | UnsupportedCallback | GuestStoreRejected
+  | CompositionRejected Joined.JoinError
   deriving (Eq, Show)
 
 require :: Bool -> ProgramError -> Either ProgramError ()
@@ -82,26 +94,93 @@ ownedProgram images native candidate = do
     && nativeContract native == L.toStrict (J.encode (Artifact.candidateContractValue candidate))) CandidateAssociationRejected
   sites <- ownedSites proof
   pure (Owned proof (Artifact.stagedBytes staged) (hash (nativeCandidate native))
-    (OwnedProgram (hash (nativeContract native)) (hash (nativeFlat native)) (hash (nativeSymbols native))) sites (S.fromList (N.executionPcs proof)) (S.fromList (N.globalWrites proof)))
+    (OwnedProgram (hash (nativeContract native)) (hash (nativeFlat native)) (hash (nativeSymbols native))) sites (S.fromList (N.executionPcs proof)) (S.fromList (N.globalWrites proof)) Standalone)
+joinedProgram :: CanonicalImages -> JoinedInputs -> Joined.StagedCandidate -> Either ProgramError Program
+joinedProgram images native candidate = do
+  source <- either (Left . CompositionRejected) Right (Joined.canonicalSource
+    (Joined.SourceFiles (canonicalDat images) (canonicalImage4 images) (canonicalA images) (canonicalB images)))
+  let wrapper = joinedWrapper native
+  artifact <- either (Left . CompositionRejected) Right (Joined.deriveArtifact
+    (Joined.NativeFiles (nativeFlat wrapper) (nativeSymbols wrapper)) (joinedCritical native) (joinedStorage native))
+  staged <- either (Left . CompositionRejected) Right (Joined.stageImage4 source artifact)
+  let supplied = Joined.candidateStagedImage4 candidate
+      proof = Artifact.frameProof (Joined.wrapperArtifact artifact)
+      critical = Joined.criticalArtifact artifact
+      storage = Joined.storageArtifact artifact
+      criticalStores = map criticalAddress (Critical.criticalCounterStorePcs (Critical.criticalProof critical))
+      storageStores = map storageAddress (Storage.guestStorePcs storage)
+      writes = N.globalWrites proof ++ criticalStores ++ storageStores
+      execution = N.executionPcs proof ++ map criticalAddress (Critical.criticalExecutionPcs (Critical.criticalProof critical))
+        ++ map storageAddress (Storage.executionPcs storage)
+  require (Joined.stagedBytes staged == Joined.stagedBytes supplied
+    && Joined.contractValue staged == Joined.contractValue supplied
+    && nativeCandidate wrapper == Joined.candidateBytes candidate
+    && nativeContract wrapper == L.toStrict (J.encode (Joined.candidateContractValue candidate))) CandidateAssociationRejected
+  sites <- ownedSites proof
+  let allSites = foldr (\location -> M.insertWith (\_ previous -> previous) (W.Address location) NativeWrite)
+        sites [location | N.CodeAddress location <- writes]
+      evidence = JoinedEvidence (hash (nativeContract wrapper)) (hash (nativeFlat wrapper)) (hash (nativeSymbols wrapper))
+        (hash (Joined.nativeBytes (joinedCritical native))) (hash (Joined.nativeSymbols (joinedCritical native)))
+        (hash (Joined.nativeBytes (joinedStorage native))) (hash (Joined.nativeSymbols (joinedStorage native)))
+  pure (Owned proof (Joined.stagedBytes staged) (hash (nativeCandidate wrapper)) (JoinedProgram evidence)
+    allSites (S.fromList execution) (S.fromList writes) (Composed artifact (Joined.candidateSources candidate)))
+  where
+    criticalAddress (Critical.Guest location) = N.CodeAddress location
+    storageAddress (Storage.InstructionAddress location) = N.CodeAddress location
 programImage4 :: Program -> B.ByteString -> B.ByteString
 programImage4 Stock fallback = fallback
-programImage4 (Owned _ image _ _ _ _ _) _ = image
+programImage4 Owned{ownedImage4=image} _ = image
+programSources :: Program -> [(SourceKind,Word32,B.ByteString)] -> [(SourceKind,Word32,B.ByteString)]
+programSources Owned{ownedVariant=Composed _ sources} _ =
+  [(LoaderA,0x40000,Joined.candidateLoaderA sources),(LoaderB,0xd0000,Joined.candidateLoaderB sources)
+  ,(Record2,0x10000,Joined.candidateRecord2 sources),(Image4,0x61c400,Joined.candidateImage4 sources)]
+programSources program sources = [(kind,base,if kind == Image4 then programImage4 program contents else contents) | (kind,base,contents) <- sources]
 programUpdateDigest :: Program -> W.Digest -> W.Digest
 programUpdateDigest Stock fallback = fallback
-programUpdateDigest (Owned _ _ digest _ _ _ _) _ = digest
+programUpdateDigest Owned{ownedUpdate=digest} _ = digest
 programEvidence :: Program -> ProgramEvidence
 programEvidence Stock = StockProgram
-programEvidence (Owned _ _ _ evidence _ _ _) = evidence
+programEvidence Owned{ownedEvidence=evidence} = evidence
 programFrameProof :: Program -> Maybe N.FrameProof
 programFrameProof Stock = Nothing
-programFrameProof (Owned proof _ _ _ _ _ _) = Just proof
+programFrameProof Owned{ownedProof=proof} = Just proof
+programFrameLow :: Program -> N.EntryPoint -> N.StackOffset
+programFrameLow Stock entry = if entry == N.Submission then N.StackOffset (-56) else N.StackOffset (-32)
+programFrameLow Owned{ownedVariant=Composed artifact _} entry = Joined.entryLow (Joined.joinedProof artifact) entry
+programFrameLow Owned{ownedProof=proof} entry = N.scratchLow proof entry
+programOwnedPoint :: Program -> ReceiptProtocol -> W.Address -> Bool
+programOwnedPoint program protocol location = programOwnsPc program location && M.member location (programSites program protocol)
+programOwnsPc :: Program -> W.Address -> Bool
+programOwnsPc Stock _ = False
+programOwnsPc Owned{ownedVariant=Standalone} (W.Address location) = location >= 0x725dd8 && location < 0x72612c
+programOwnsPc Owned{ownedVariant=Composed _ _} (W.Address location) =
+  location >= 0x725dd8 && location < 0x72612c || location >= 0x725cc4 && location < 0x725da8
+    || location >= 0x10000 && location < 0x12000
+programStoreComponent :: Program -> W.Address -> Maybe StoreComponent
+programStoreComponent program location@(W.Address pc)
+  | not (programOwnsPc program location) = Nothing
+  | pc >= 0x725dd8 && pc < 0x72612c = Just WrapperComponent
+  | pc >= 0x725cc4 && pc < 0x725da8 = Just StorageComponent
+  | otherwise = Just CriticalComponent
 programAllowsPc :: Program -> W.Address -> Bool
 programAllowsPc Stock _ = True
-programAllowsPc (Owned _ _ _ _ _ execution _) (W.Address location) =
+programAllowsPc Owned{ownedExecution=execution,ownedVariant=Standalone} (W.Address location) =
   location < 0x725dd8 || location >= 0x72612c || S.member (N.CodeAddress location) execution
+programAllowsPc Owned{ownedExecution=execution,ownedVariant=Composed _ _} (W.Address location)
+  | location >= 0x725dd8 && location < 0x72612c = S.member (N.CodeAddress location) execution
+  | location >= 0x7235dc && location < 0x7236b0 || location >= 0x7236b4 && location < 0x723790 = False
+  | location >= 0x10000 && location < 0x12000 || location >= 0x725cc4 && location < 0x725da8 =
+      S.member (N.CodeAddress location) execution
+  | otherwise = True
+programAllowsRead :: Program -> W.MemoryEvent -> Bool
+programAllowsRead Owned{ownedVariant=Composed _ _} event = case W.eventPhysical event of
+  Nothing -> False
+  Just start -> all (\(low,high) -> toInteger start >= high || low >= toInteger start+toInteger (W.eventSize event))
+    [(0x7235dc,0x7236b0),(0x7236b4,0x723790)]
+programAllowsRead _ _ = True
 programHasStore :: Program -> W.Address -> Bool
 programHasStore Stock _ = False
-programHasStore (Owned _ _ _ _ _ _ stores) (W.Address location) = S.member (N.CodeAddress location) stores
+programHasStore Owned{ownedWrites=stores} (W.Address location) = S.member (N.CodeAddress location) stores
 programGuestStore :: Program -> Sample -> Either ProgramError (Maybe GuestStore)
 programGuestStore Stock _ = pure Nothing
 programGuestStore program sample
@@ -182,16 +261,19 @@ currentStockSites = foldM insertSite legacySites (fixedSites ++ concatMap (uncur
 programSites :: Program -> ReceiptProtocol -> M.Map W.Address Boundary
 programSites Stock LegacyStockProtocol = legacySites
 programSites Stock TaskSubmissionProtocol = either (const M.empty) id currentStockSites
-programSites (Owned _ _ _ _ sites _ _) TaskSubmissionProtocol = sites
-programSites (Owned _ _ _ _ _ _ _) LegacyStockProtocol = M.empty
+programSites Stock JoinedTaskProtocol = either (const M.empty) id currentStockSites
+programSites Owned{ownedCodeSites=sites} protocol = if protocol == LegacyStockProtocol then M.empty else sites
 programClasses :: Program -> ReceiptProtocol -> [(SourceKind,Word32,B.ByteString)] -> [W.WatchClass]
-programClasses program protocol sources = [W.WatchClass range writes | range <- oldRanges ++ extra]
-  ++ [W.WatchClass [fromIntegral base,fromIntegral base+fromIntegral (B.length actual)] [W.CpuWrite,W.CpuFetch,W.HostWrite,W.ModelBusWrite]
+programClasses program protocol sources = [W.WatchClass range (if protocol == JoinedTaskProtocol && range == [0xa0f824,0xa0f828] then W.CpuRead:writes else writes) | range <- oldRanges ++ extra]
+  ++ [W.WatchClass [fromIntegral base,fromIntegral base+fromIntegral (B.length actual)]
+        ((if protocol == JoinedTaskProtocol then [W.CpuRead] else []) ++ [W.CpuWrite,W.CpuFetch,W.HostWrite,W.ModelBusWrite])
      | (kind,base,contents) <- sources, let actual = if kind == Image4 then programImage4 program contents else contents]
+  ++ [W.WatchClass range [W.CpuRead] | protocol == JoinedTaskProtocol, range <- [[0x7235dc,0x7236b0],[0x7236b4,0x723790]]]
   where writes = [W.CpuWrite,W.HostWrite,W.ModelBusWrite]
         oldRanges = [[0x4dae0,0x4f10c],[0xddaa0,0xdf0cc],[0x545a4,0x63460],[0xe4564,0xf3410],[0xc0800,0xc0900]
           ,[0x96bd20,0x96bd28],[0xa0fc44,0xa101e4],[0xa5b204,0xa5b5c4],[0x89ea94,0x89ea9c],[0x9c280c,0x9c2810],[0xa10200,0xa5b200]]
-        extra = case protocol of LegacyStockProtocol -> []; TaskSubmissionProtocol -> [[0xa0f82c,0xa0f830],[0x4f15c,0x4f160],[0x4f25c,0x4f260],[0x4f5e4,0x4f60a]]
+        extra = (if protocol == LegacyStockProtocol then [] else [[0xa0f82c,0xa0f830],[0x4f15c,0x4f160],[0x4f25c,0x4f260],[0x4f5e4,0x4f60a]])
+          ++ [[0xa0f824,0xa0f828] | protocol == JoinedTaskProtocol]
 checkProgramHeader :: Program -> Receipt -> Either ProgramError ()
 checkProgramHeader program receipt = do
   case (program,receiptSchema receipt) of
@@ -199,9 +281,15 @@ checkProgramHeader program receipt = do
     (Stock,TaskSubmissionProtocol) -> do
       _ <- currentStockSites
       require (receiptProgram receipt == StockProgram && receiptScope receipt `elem` [StockStartupScope,StockProbeScope]) HeaderRejected
-    (Owned _ _ digest evidence _ _ _,TaskSubmissionProtocol) -> do
+    (Stock,JoinedTaskProtocol) -> do
+      _ <- currentStockSites
+      require (receiptProgram receipt == StockProgram && receiptScope receipt `elem` [StockJoinedStartupScope,StockJoinedProbeScope]) HeaderRejected
+    (Owned{ownedUpdate=digest,ownedEvidence=evidence,ownedVariant=Standalone},TaskSubmissionProtocol) -> do
       let Identity _ update _ _ _ = receiptIdentity receipt
       require (receiptProgram receipt == evidence && update == digest && receiptScope receipt `elem` [OwnedStartupScope,OwnedProbeScope]) HeaderRejected
+    (Owned{ownedUpdate=digest,ownedEvidence=evidence,ownedVariant=Composed _ _},JoinedTaskProtocol) -> do
+      let Identity _ update _ _ _ = receiptIdentity receipt
+      require (receiptProgram receipt == evidence && update == digest && receiptScope receipt `elem` [JoinedStartupScope,JoinedProbeScope]) HeaderRejected
     _ -> Left HeaderRejected
   require (receiptSites receipt == programSites program (receiptSchema receipt)) HeaderRejected
 
@@ -459,11 +547,17 @@ checkStack :: Program -> Receipt -> Sample -> Sample -> N.EntryPoint -> Maybe (N
 checkStack program receipt entry sample kind reached = do
   context <- stackContext entry sample
   case program of
-    Owned proof _ _ _ _ _ _ -> do
-      let demands = [N.CalleeDemand target (N.StackOffset (negate (case reached of Just (actual,demand) | actual == target -> demand; _ -> maximumDemand target)))
-            | target <- nub (map N.callTarget (N.callBoundaries proof))]
-      _ <- either (Left . StackRejected) Right (N.joinStack proof kind context demands)
-      pure ()
+    Owned{ownedProof=proof,ownedVariant=variant} -> do
+      let demand target = N.CalleeDemand target (N.StackOffset (negate (case reached of Just (actual,depth) | actual == target -> depth; _ -> maximumDemand target)))
+          targets = nub (map N.callTarget (N.callBoundaries proof))
+      case variant of
+        Standalone -> do
+          _ <- either (Left . StackRejected) Right (N.joinStack proof kind context (map demand targets))
+          pure ()
+        Composed artifact _ -> do
+          let retained = filter (`notElem` map N.FixedService [N.CriticalEnter,N.CriticalExit,N.Reservation]) targets
+          _ <- either (Left . CompositionRejected) Right (Joined.joinStack artifact kind context (map demand retained))
+          pure ()
     Stock -> do
       let own = if kind == N.Submission then 56 else 32
           nested = case reached of Just (_,demand) -> toInteger (sp sample)-toInteger (sp entry)-demand; Nothing -> negate own
@@ -495,7 +589,7 @@ checkCall program receipt sample target = do
   taken <- condition (value (sampleCodeWord sample)) (value (W.contextCpsr (state sample)))
   require (sampleCallTaken sample == Just taken) CallDispositionRejected
   case program of
-    Owned proof _ _ _ _ _ _ -> do
+    Owned{ownedProof=proof} -> do
       let alternatives = [boundary | boundary <- N.callBoundaries proof,N.callEntry boundary == kind
             , N.callInstruction boundary == N.CodeAddress (pc sample)
             , let N.StackOffset offset = N.callStack boundary, toInteger (sp sample) == toInteger (sp entry)+offset]
@@ -510,11 +604,27 @@ checkCall program receipt sample target = do
     demand <- actualDemand entry sample target
     checkStack program receipt entry sample kind (Just (target,demand))
   else checkStack program receipt entry sample kind Nothing
-  checkContinuation receipt sample target taken
+  checkContinuation program receipt sample target taken
 
-checkContinuation :: Receipt -> Sample -> N.CallTarget -> Bool -> Either ProgramError ()
-checkContinuation receipt sample target taken = do
-  let following = filter (\other -> core other == core sample && sampleHit other > sampleHit sample) (receiptSamples receipt)
+checkContinuation :: Program -> Receipt -> Sample -> N.CallTarget -> Bool -> Either ProgramError ()
+checkContinuation program receipt sample target taken = do
+  let followingAll = filter (\other -> core other == core sample && sampleHit other > sampleHit sample) (receiptSamples receipt)
+  following <- case program of
+    Owned{ownedVariant=Composed artifact _} | taken && target `elem` map N.FixedService [N.CriticalEnter,N.CriticalExit,N.Reservation] -> do
+      let nested point = sampleBoundary point == NativeWrite && programHasStore program (W.contextPc (state point))
+            && case target of
+              N.FixedService N.Reservation -> pc point >= 0x725cc4 && pc point < 0x725da8
+              _ -> pc point >= 0x10400 && pc point < 0x11800
+          (checkpoints,rest) = span nested followingAll
+          proof = Joined.joinedProof artifact
+          N.StackOffset low = case target of
+            N.FixedService N.CriticalEnter -> Joined.criticalEnterLow proof
+            N.FixedService N.CriticalExit -> Joined.criticalExitLow proof
+            _ -> Joined.reservationLow proof
+      mapM_ (\point -> require (sampleCallTaken point == Nothing && sp point .&. 3 == 0
+        && toInteger (sp point) >= toInteger (sp sample)+low && sp point <= sp sample) StackContextRejected) checkpoints
+      pure rest
+    _ -> pure followingAll
   next <- if taken && target == N.ActivationService && not (testBit (value (W.contextCpsr (state sample))) 7) then
     case following of
       preparing:prepared:returned:_ -> do
@@ -587,7 +697,7 @@ checkReturn program receipt sample target = do
     Just called | not (any (returnedAfter called) previous) -> paired called
     _ -> case program of
       -- Owned continuation PCs may also be branch targets.
-      Owned _ _ _ _ _ _ _ -> require (sampleCallTaken sample == Just False) CallReturnRejected
+      Owned{} -> require (sampleCallTaken sample == Just False) CallReturnRejected
       Stock -> Left CallReturnRejected
   where
     paired called = do
@@ -609,17 +719,17 @@ checkProgramSample program receipt sample = do
   require (M.lookup (W.contextPc (state sample)) (programSites program (receiptSchema receipt)) == Just (sampleBoundary sample)
     && pc sample .&. 3 == 0 && length (W.contextRegisters (state sample)) == 13) CodeRejected
   case program of
-    Owned _ image _ _ _ _ _ | pc sample >= 0x725dd8 && pc sample < 0x72612c ->
+    Owned{ownedImage4=image} | pc sample >= 0x725dd8 && pc sample < 0x72612c ->
       require (sampleCodeWord sample == W.WordValue (U.word32At image (fromIntegral (pc sample-0x61c400)))) CodeRejected
     _ -> pure ()
   if receiptSchema receipt == LegacyStockProtocol then pure () else checkViews sample
   case callRole (sampleBoundary sample) of
     Just target -> checkCall program receipt sample target
     Nothing -> case returnRole (sampleBoundary sample) of
-      Just target | receiptSchema receipt == TaskSubmissionProtocol -> checkReturn program receipt sample target
+      Just target | receiptSchema receipt /= LegacyStockProtocol -> checkReturn program receipt sample target
       _ -> do
         require (sampleCallTaken sample == Nothing) CallDispositionRejected
-        if sampleBoundary sample `elem` [SubmissionEntry,ReleaseEntry] && receiptSchema receipt == TaskSubmissionProtocol then do
+        if sampleBoundary sample `elem` [SubmissionEntry,ReleaseEntry] && receiptSchema receipt /= LegacyStockProtocol then do
           let kind = if sampleBoundary sample == SubmissionEntry then N.Submission else N.Release
           checkStack program receipt sample sample kind Nothing
         else pure ()
