@@ -879,7 +879,7 @@ impl Runtime {
                 }
                 if kind == ProbeKind::InitializerCall {
                     for pc in [0xd0a44,0xd0a48,0xd0a4c] {
-                        if machine.traces.sites.contains_key(&pc) { machine.traces.remove_site(&machine.session, Guest(pc))?; }
+                        if machine.traces.sites.contains_key(&pc) { machine.traces.remove_sites(&machine.session, &[Guest(pc)])?; }
                     }
                 }
             }
@@ -966,7 +966,7 @@ fn remove_if_unused(machine: &mut Machine, pc: u32, frames: &[Frame], calls: &[C
         || frames.iter().any(|f| f.active && (f.entry.lr == Address(pc) || f.family.points().contains(&pc) || COMMON_PCS.contains(&pc)))
         || calls.iter().any(|c| c.target == Address(pc) || c.returned_to == Some(Address(pc)))
         || returns.keys().any(|(_, address)| *address == Address(pc)) { return Ok(()); }
-    if machine.traces.sites.contains_key(&pc) { machine.traces.remove_site(&machine.session, Guest(pc))?; }
+    if machine.traces.sites.contains_key(&pc) { machine.traces.remove_sites(&machine.session, &[Guest(pc)])?; }
     Ok(())
 }
 fn condition(state: &Context, instruction: u32) -> bool {
