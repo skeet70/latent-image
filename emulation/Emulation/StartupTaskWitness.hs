@@ -34,6 +34,7 @@ data WitnessError = SourceRejected | ReceiptDecodeRejected | StatusRejected | Id
   | SnapshotRejected | AliasRejected | ContextRejected | CodeRejected | KernelRejected | TaskRejected
   | SubmissionRejected | RunnableRejected | FirstTaskRejected | PrologueRejected | RawWatchRejected | ProgramRejected | ControlRejected
   | ProgramSampleRejected HitIndex P.ProgramError
+  | ControlReasonRejected C.ControlError
   deriving (Eq, Show)
 
 require :: Bool -> WitnessError -> Either WitnessError ()
@@ -873,7 +874,7 @@ admitReceipt inputs@(Inputs _ expectedIdentity program) observed = do
   require (map (index . sampleHit) (receiptSamples receipt) == [index (sampleHit first)..length (receiptHits receipt)-1]) SnapshotRejected
   control <- case receiptSchema receipt of
     LegacyStockProtocol -> do require (probe == Nothing) ControlRejected; pure Nothing
-    TaskSubmissionProtocol -> either (const (Left ControlRejected)) Right (C.qualifyControl receipt watch probe)
+    TaskSubmissionProtocol -> either (Left . ControlReasonRejected) Right (C.qualifyControl receipt watch probe)
   _ <- replay inputs receipt probe watch
   require (sort (map submissionId (receiptSubmissions receipt)) == map TaskId [93,102,103,104]) SubmissionRejected
   mapM_ (checkSubmission inputs receipt) (receiptSubmissions receipt)

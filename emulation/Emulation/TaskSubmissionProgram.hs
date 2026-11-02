@@ -451,6 +451,7 @@ stackContext entry sample = do
   let interval begin end = N.StackInterval (N.StackOffset (toInteger begin-toInteger incoming)) (N.StackOffset (toInteger end-toInteger incoming))
       objects = [interval begin end | view <- views sample
         , let begin = address (viewPhysical view), let end = begin+fromIntegral (B.length (bytes (viewBytes view)))
+        , begin < high && low < end
         , not (viewObject view == Stack && begin == low && end == high)
         , viewObject view /= Parameters]
   pure (N.StackContext incoming (interval low high) (interval incoming high:objects))
@@ -514,7 +515,29 @@ checkCall program receipt sample target = do
 checkContinuation :: Receipt -> Sample -> N.CallTarget -> Bool -> Either ProgramError ()
 checkContinuation receipt sample target taken = do
   let following = filter (\other -> core other == core sample && sampleHit other > sampleHit sample) (receiptSamples receipt)
-  next <- needed CallReturnRejected (case following of first:_ -> Just first; _ -> Nothing)
+  next <- if taken && target == N.ActivationService && not (testBit (value (W.contextCpsr (state sample))) 7) then
+    case following of
+      preparing:prepared:returned:_ -> do
+        require (core sample == PrimaryKernel && sampleBoundary preparing == Prepare && pc preparing == 0x43f70
+          && sampleBoundary prepared == Prepared && pc prepared == 0x43f98
+          && sampleCallTaken preparing == Nothing && sampleCallTaken prepared == Nothing
+          && toInteger (sp preparing) == toInteger (sp sample)-24 && toInteger (sp prepared) == toInteger (sp sample)-32
+          && W.contextLr (state preparing) == W.Address 0x45060
+          && W.contextLr (state prepared) == W.Address 0x43f98
+          && all (\point -> value (W.contextCpsr (state point)) .&. 0x80 == 0x80) [preparing,prepared]) CallReturnRejected
+        arguments preparing [0x400545cc,0x4005ff0c]
+        arguments prepared [0,0x4005ff0c]
+        reg preparing 11 >>= \saved -> wordAt prepared (sp prepared) >>= \actual -> require (actual == saved) CallReturnRejected
+        wordAt prepared (sp prepared+4) >>= \saved -> require (saved == 0x45060) CallReturnRejected
+        kernel <- one CallReturnRejected (filter ((==PrimaryKernel) . kernelCore) (sampleKernels prepared))
+        fresh <- one CallReturnRejected (filter ((==TaskId 1) . taskId) (kernelTasks kernel))
+        resume <- objectWord prepared Domains 0x40054648
+        require (taskState fresh == 1
+          && toInteger (address (taskSavedSp fresh)) == toInteger (address (taskStackBase fresh))+toInteger (value (taskStackBytes fresh))
+          && taskResumePc fresh == W.Address resume) CallReturnRejected
+        pure returned
+      _ -> Left CallReturnRejected
+    else needed CallReturnRejected (case following of first:_ -> Just first; _ -> Nothing)
   if pc next == pc sample+4 && sampleBoundary next == snd (callLabels target) then
     require (sampleCallTaken next == Just taken) CallDispositionRejected
   else do
@@ -558,20 +581,28 @@ checkLegacyCall receipt sample target = do
 checkReturn :: Program -> Receipt -> Sample -> N.CallTarget -> Either ProgramError ()
 checkReturn program receipt sample target = do
   let previous = reverse (prior receipt sample)
-  called <- needed CallReturnRejected (find (\other -> pc other+4 == pc sample && callRole (sampleBoundary other) == Just target) previous)
-  require (not (any (\other -> sampleHit other > sampleHit called && returnRole (sampleBoundary other) == Just target && pc other == pc sample) previous)) CallReturnRejected
-  taken <- condition (value (sampleCodeWord called)) (value (W.contextCpsr (state called)))
-  require (sampleCallTaken sample == Just taken) CallDispositionRejected
-  checkCall program receipt called target
-  require (W.contextSp (state called) == W.contextSp (state sample)
-    && take 8 (drop 4 (W.contextRegisters (state called))) == take 8 (drop 4 (W.contextRegisters (state sample)))
-    && value (W.contextCpsr (state called)) .&. 0x1f == value (W.contextCpsr (state sample)) .&. 0x1f) CallReturnRejected
-  if taken then pure ()
-    else require ((state sample) {W.contextPc = W.contextPc (state called),W.contextCounts = W.contextCounts (state called)} == state called) CallReturnRejected
-  case target of
-    N.CurrentCoreService | taken -> reg sample 0 >>= \identity -> require (identity == fromIntegral (coreIndex (core sample))) CallReturnRejected
-    N.ActivationService | taken && testBit (value (W.contextCpsr (state called))) 7 -> reg sample 0 >>= \status -> require (status == 0xffffffe7) CallReturnRejected
-    _ -> pure ()
+      returnedAfter called other = sampleHit other > sampleHit called
+        && returnRole (sampleBoundary other) == Just target && pc other == pc sample
+  case find (\other -> pc other+4 == pc sample && callRole (sampleBoundary other) == Just target) previous of
+    Just called | not (any (returnedAfter called) previous) -> paired called
+    _ -> case program of
+      -- Owned continuation PCs may also be branch targets.
+      Owned _ _ _ _ _ _ _ -> require (sampleCallTaken sample == Just False) CallReturnRejected
+      Stock -> Left CallReturnRejected
+  where
+    paired called = do
+      taken <- condition (value (sampleCodeWord called)) (value (W.contextCpsr (state called)))
+      require (sampleCallTaken sample == Just taken) CallDispositionRejected
+      checkCall program receipt called target
+      require (W.contextSp (state called) == W.contextSp (state sample)
+        && take 8 (drop 4 (W.contextRegisters (state called))) == take 8 (drop 4 (W.contextRegisters (state sample)))
+        && value (W.contextCpsr (state called)) .&. 0x1f == value (W.contextCpsr (state sample)) .&. 0x1f) CallReturnRejected
+      if taken then pure ()
+        else require ((state sample) {W.contextPc = W.contextPc (state called),W.contextCounts = W.contextCounts (state called)} == state called) CallReturnRejected
+      case target of
+        N.CurrentCoreService | taken -> reg sample 0 >>= \identity -> require (identity == fromIntegral (coreIndex (core sample))) CallReturnRejected
+        N.ActivationService | taken && testBit (value (W.contextCpsr (state called))) 7 -> reg sample 0 >>= \status -> require (status == 0xffffffe7) CallReturnRejected
+        _ -> pure ()
 
 checkProgramSample :: Program -> Receipt -> Sample -> Either ProgramError ()
 checkProgramSample program receipt sample = do

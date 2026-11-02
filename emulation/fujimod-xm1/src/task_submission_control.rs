@@ -232,12 +232,13 @@ fn patch_word(
     cursor: &impl Fn() -> Result<usize, String>,
     patches: &mut Vec<ControlPatch>,
 ) -> Result<(), String> {
+    let address = Address(address.0 & !0x40000000);
     let before = view(machine, maps, state, Object::ControlPatch, address.0, 4)?;
     if word(&before.bytes, 0)? == value.0 {
         return Ok(());
     }
     let watch_cursor = cursor()?;
-    machine.session.board.write_memory(Core::Primary.index(), u64::from(address.0), &value.0.to_le_bytes())?;
+    machine.session.board.write_physical(u64::from(address.0), &value.0.to_le_bytes())?;
     let after = view(machine, maps, state, Object::ControlPatch, address.0, 4)?;
     require(word(&after.bytes, 0)? == value.0, "control patch did not commit")?;
     patches.push(ControlPatch { after_hit, watch_cursor, address, before, after });

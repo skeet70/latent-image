@@ -1345,6 +1345,10 @@ The observer source accepts `--contract CANDIDATE_CONTRACT --native NATIVE_IMAGE
 
 Controlled submissions construct their seven-word descriptor in bytes 32..60 of the genuine current104 allocation, derived from its admitted post-prologue SP. The consumer protects that live interval when joining native and retained frames. Each changed word records its preimage and aliases; deletion controls make no descriptor patch. The boot caller's old descriptor is not retained after scheduling. Receipt inputs are capped at 512 MiB and watch inputs at 32 MiB.
 
+Control memory patches use the SDK's physical host-write entry point and record normalized physical addresses. That path emits genuine classified `host-write` journal rows. CPU debug writes do not emit those rows. Explicit before/after four-alias snapshots supply word values and preimages when the SDK transfer row omits them.
+
+The [qualified finite increment](../reports/replacement-inventory-baseline.md#qualified-finite-wrapperrelease-increment) records one natural pair and ten real-service control pairs, 22 independently admitted observations. Each pair retains its exact common producer; the preserved natural, no-patch release and revised patched controls use separately recorded producer versions. The original stock receipt, its 38 serialized refusals, two continuation-flag refusals and the three real release write-checkpoint regressions pass. These results do not retire every wrapper caller or own the retained kernel/scheduler bodies.
+
 The checker adds three explicit modes. `bazel run //emulation:startup-task-check -- ...` supplies `ENCODER REBUILD DECODER`; a directly invoked binary needs those three tool paths before the mode. Historical direct stock commands still work without them.
 
 ```text

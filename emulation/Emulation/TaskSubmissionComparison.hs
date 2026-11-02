@@ -184,8 +184,14 @@ compareProbe :: Receipt -> Receipt -> ProbeRecord -> ProbeRecord -> Either Compa
 compareProbe retained owned left right = do
   let kind = probeCase left; ident = probeTask left; problem = ComparisonControlRejected kind
   ensure ComparisonCaseRejected (probeCase right == kind && probeTarget right == probeTarget left
-    && probeTask right == ident && probeDescriptor right == probeDescriptor left && probeReturnPc right == probeReturnPc left)
+    && probeTask right == ident && probeReturnPc right == probeReturnPc left)
   before <- probeSample retained left; after <- probeSample owned right
+  leftKernel <- kernelAt before PrimaryKernel; rightKernel <- kernelAt after PrimaryKernel
+  leftCaller <- unique ComparisonStackRejected (filter ((==TaskId 104) . taskId) (kernelTasks leftKernel))
+  rightCaller <- unique ComparisonStackRejected (filter ((==TaskId 104) . taskId) (kernelTasks rightKernel))
+  leftLocation <- pointer (TaskId 104) (taskStackBase leftCaller) (word (taskStackBytes leftCaller)) (probeDescriptor left)
+  rightLocation <- pointer (TaskId 104) (taskStackBase rightCaller) (word (taskStackBytes rightCaller)) (probeDescriptor right)
+  ensure ComparisonCaseRejected (leftLocation == rightLocation)
   leftRecord <- taskRecord before PrimaryKernel ident; rightRecord <- taskRecord after PrimaryKernel ident
   ensure problem (leftRecord == rightRecord)
   leftStorage <- storageRecord before ident; rightStorage <- storageRecord after ident
@@ -195,13 +201,15 @@ compareProbe retained owned left right = do
     && word (W.contextCpsr leftState) .&. 0x80 == word (W.contextCpsr rightState) .&. 0x80
     && W.contextPc leftState == W.contextPc rightState)
   leftMemory <- memoryAt before; rightMemory <- memoryAt after
+  leftDescriptor <- readBytes leftMemory (addr (probeDescriptor left)) 28
+  rightDescriptor <- readBytes rightMemory (addr (probeDescriptor right)) 28
+  ensure problem (leftDescriptor == rightDescriptor)
   let TaskId number = ident
   mapM_ (\(start,size) -> do
     original <- readBytes leftMemory start size; replacement <- readBytes rightMemory start size
     ensure problem (original == replacement))
-    [(0xa0f82c,4),(0x89ea8c,4),(0x89ea98,4),(0x9c280c,4),(physical (addr (probeDescriptor left)),28)
+    [(0xa0f82c,4),(0x89ea8c,4),(0x89ea98,4),(0x9c280c,4)
     ,(0x5d178+12*(fromIntegral number-1),12),(0x624b4+16*(fromIntegral number-1),16)]
-  leftKernel <- kernelAt before PrimaryKernel; rightKernel <- kernelAt after PrimaryKernel
   let queueViews kernel = sortOn (\(object,address,_) -> (object,address))
         [(viewObject view,viewPhysical view,viewBytes view) | view <- kernelViews kernel
         ,viewObject view `elem` [QueueHeads,Bitmap,SelectedObject,Current]]
