@@ -1618,6 +1618,8 @@ Schema 3 captures the critical counter at physical `0xa0f824` and lock at `0xc08
 
 Record-2 boot logging initializes the twelve-byte control at physical `[0x14c60,0x14c6c)` before the task watch. Prewatch binding treats that control as a source-derived state object, requiring buffer `0x400a0040` and even indices in `[0,16]` and `[16,32]`, while binding every other record-2 byte to the staged file. Each schema-3 snapshot captures its four aliases. The consumer admits those bounds and replays the committed bytes; joined-role post-watch record-2 immutability is unchanged.
 
+Schema-3 runs write `prewatch-record2.json` at the first admitted wrapper stop, before source binding or task-watch activation. It contains the complete physical `[0x10000,0x20000)` bytes with four checked alias digests, stopped context, natural/control case, program and input identities. The existing view reader also requires physical readback agreement. The sidecar does not widen any source-binding or write permission and is preserved if binding subsequently refuses.
+
 The checker adds these modes after the same three encoder/rebuilder/decoder tool paths:
 
 ```text

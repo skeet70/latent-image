@@ -1,10 +1,10 @@
 use super::{Address, Boundary, Code, Context, Core, Digest, Kernel, Object, TaskId, View, Word, pointer, require, view, word};
 use super::task_submission_control::{ProbeCase, ProbeStop};
-use super::task_submission_program::{Entry, JoinedInputs, Program, Role, Target};
+use super::task_submission_program::{Entry, JoinedInputs, Program, Role, Summary, Target};
 use fujimod_emulator::board::factory::MemoryMap;
-use fujimod_xm1::{bridge::read, machine::Machine};
-use serde::Deserialize;
-use std::path::PathBuf;
+use fujimod_xm1::{bridge::{read, write}, machine::Machine};
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 pub(super) struct Arguments {
     pub(super) run: PathBuf, pub(super) update: PathBuf, pub(super) rom: PathBuf,
@@ -208,6 +208,22 @@ pub(super) fn identity<'a>(run: Digest, update: Digest, rom: Digest, code: &'a [
     use fujimod_xm1::bridge::sha256;
     require(run.0 == "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef" && rom.0 == "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be", "observer run/ROM identity differs")?;
     Ok(super::Identity { run, update, boot_rom: rom, observer: Digest(sha256(&read(&std::env::current_exe().map_err(|error| error.to_string())?)?)), sources: code.iter().map(|code| super::SourceIdentity { name: code.name, base: Address(code.base), bytes: code.bytes.len(), sha256: &code.sha256 }).collect() })
+}
+
+#[derive(Serialize)]
+struct Record2Prewatch<'a, 'b> {
+    schema: u32,
+    identity: &'a super::Identity<'b>,
+    program: Summary<'a>,
+    case: ProbeCase,
+    context: &'a Context,
+    record2: View,
+}
+pub(super) fn preserve_record2(machine: &Machine, maps: &[MemoryMap], state: &Context, identity: &super::Identity<'_>, program: &Program, case: ProbeCase, output: &Path) -> Result<(), String> {
+    let record2 = view(machine, maps, state, Object::EntryCode, 0x10000, 0x10000)?;
+    let observed = Record2Prewatch { schema: 1, identity, program: program.summary(), case, context: state, record2 };
+    let encoded = serde_json::to_vec(&observed).map_err(|error| error.to_string())?;
+    write(output, &encoded)
 }
 
 fn boot_log_control(machine: &Machine, maps: &[MemoryMap], state: &Context) -> Result<View, String> {

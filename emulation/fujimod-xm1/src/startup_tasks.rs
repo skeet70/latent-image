@@ -273,6 +273,9 @@ fn drive() -> Result<(), String> {
                 let kind = *points.get(&address).ok_or("unknown semantic instruction point")?;
                 if watch.is_none() {
                     require(caller(core, state.lr.0).is_some(), "first wrapper is outside the four admitted phase callers")?;
+                    if program.composition() {
+                        task_submission_runtime::preserve_record2(&machine, &maps, &state, &identity, &program, probe_case, &output.join("prewatch-record2.json"))?;
+                    }
                     task_submission_runtime::bind_sources(&machine, &maps, &state, &code, program.joined())?;
                     watch = Some(machine.session.board.memory_watch_begin_classified(watch_ranges(&code, program.composition()), WATCH_LIMIT, maps.clone(), ViewPolicy::Observe)?);
                 }
