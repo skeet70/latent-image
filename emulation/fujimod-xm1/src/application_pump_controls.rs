@@ -3,7 +3,7 @@ use std::os::unix::fs::symlink;
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum Control { CanonicalInput, StopClock, RawAlias, KernelIdentity, MissingInitialization, NormalizerResult, LostCalleeSave, RenderReadiness, WatchCoverage, PublishedWrite, PacketCopy }
+enum Control { CanonicalInput, StopClock, RawAlias, KernelIdentity, MissingInitialization, NormalizerResult, LostCalleeSave, RenderReadiness, WatchCoverage, PublishedWrite, PacketCopy, RelabelledOlderSample, TruncatedPlane }
 impl Control {
     fn reason(self) -> Refusal { match self {
         Self::CanonicalInput => Refusal::ArtifactIdentity,
@@ -11,8 +11,8 @@ impl Control {
         Self::KernelIdentity => Refusal::TaskContext,
         Self::MissingInitialization => Refusal::Initializer,
         Self::NormalizerResult => Refusal::NormalizerResult,
-        Self::LostCalleeSave => Refusal::Handback,
-        Self::RenderReadiness => Refusal::RenderCompletion,
+        Self::LostCalleeSave | Self::RelabelledOlderSample => Refusal::Handback,
+        Self::RenderReadiness | Self::TruncatedPlane => Refusal::RenderCompletion,
         Self::WatchCoverage => Refusal::CaptureBound,
         Self::PublishedWrite => Refusal::CodeIdentity,
         Self::PacketCopy => Refusal::QueueProvenance,
@@ -23,6 +23,7 @@ impl Control {
         Self::MissingInitialization => "missing-initialization", Self::NormalizerResult => "normalizer-result",
         Self::LostCalleeSave => "lost-callee-save", Self::RenderReadiness => "render-readiness",
         Self::WatchCoverage => "watch-coverage", Self::PublishedWrite => "published-write", Self::PacketCopy => "packet-copy",
+        Self::RelabelledOlderSample => "relabelled-older-sample", Self::TruncatedPlane => "truncated-plane",
     } }
 }
 #[derive(Serialize)]
@@ -100,6 +101,24 @@ fn mutate(root: &Path, report: &mut PumpReport, control: Control) -> Result<(), 
             let sample = report.samples[index].clone();
             alter_trace(root, report, &sample)?;
         }
+        Control::RelabelledOlderSample => {
+            let input = report.inputs.get(15).ok_or_else(|| refusal(Refusal::Handback, "no ordinary input control interval"))?;
+            let (id, pressed) = (input.id, input.pressed);
+            let handback = report.samples.iter().rposition(|sample| physical(sample.pc) == 0xc23278 && sample.stop.0 < pressed.0).ok_or_else(|| refusal(Refusal::Handback, "no older complete handback for relabelling"))?;
+            let entry = report.samples[..handback].iter().rposition(|sample| physical(sample.pc) == CARRIER.0).ok_or_else(|| refusal(Refusal::Handback, "no older pump entry for relabelling"))?;
+            require(report.samples[entry].core == report.samples[handback].core && report.samples[entry].registers.sp == report.samples[handback].registers.sp, Refusal::Handback, "older control samples are not a matching invocation")?;
+            for sample in &mut report.samples { if sample.input == Some(id) { sample.input = None; } }
+            report.samples[entry].input = Some(id);
+            report.samples[handback].input = Some(id);
+        }
+        Control::TruncatedPlane => {
+            let visible = report.visible.first_mut().ok_or_else(|| refusal(Refusal::RenderCompletion, "no visible plane control"))?;
+            let mutation = compare::truncated_plane(root, visible)?;
+            replace(root, &visible.planes.path, &mutation.planes)?;
+            replace(root, &visible.scanout.path, &mutation.scanout)?;
+            visible.planes.sha256 = Digest::of(&mutation.planes);
+            visible.scanout.sha256 = Digest::of(&mutation.scanout);
+        }
         Control::RenderReadiness => report.visible.first_mut().ok_or_else(|| refusal(Refusal::RenderCompletion, "no visible control"))?.probe.drained = false,
         Control::WatchCoverage => report.epochs.first_mut().ok_or_else(|| refusal(Refusal::CaptureBound, "no watch control"))?.enabled = false,
         Control::PublishedWrite => {
@@ -130,7 +149,7 @@ pub(super) fn run(source: &Path, output: &Path, catalog: &Catalog) -> Result<(),
         let baseline: PumpReport = parse(&original, Refusal::Guest)?;
         let baseline = inspect(&source, &baseline, catalog)?;
         let mut rows = Vec::new();
-        for control in [Control::CanonicalInput, Control::StopClock, Control::RawAlias, Control::KernelIdentity, Control::MissingInitialization, Control::NormalizerResult, Control::LostCalleeSave, Control::RenderReadiness, Control::WatchCoverage, Control::PublishedWrite, Control::PacketCopy] {
+        for control in [Control::CanonicalInput, Control::StopClock, Control::RawAlias, Control::KernelIdentity, Control::MissingInitialization, Control::NormalizerResult, Control::LostCalleeSave, Control::RenderReadiness, Control::WatchCoverage, Control::PublishedWrite, Control::PacketCopy, Control::RelabelledOlderSample, Control::TruncatedPlane] {
             let root = output.join(control.name());
             links(&source, &root)?;
             let mut report: PumpReport = parse(&original, Refusal::Guest)?;

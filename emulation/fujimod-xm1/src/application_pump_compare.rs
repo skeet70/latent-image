@@ -7,16 +7,180 @@ struct GraphicsEngine {
     regs: Vec<(u32, u32)>, busy: bool, command_pending: Option<serde::de::IgnoredAny>,
     jobs_started: u64, jobs_completed: u64, bytes_completed: u64, acknowledgments: u64,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct Pixels { width: u32, height: u32, rgb_bytes: u64, rgb_sha256: Digest }
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct CapturedArtifact { path: PathBuf, sha256: Digest, bytes: u64 }
-#[derive(Deserialize)]
-struct Plane { native_source_address: u64, offset: u64, bytes: u64 }
-#[derive(Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(try_from = "u8", into = "u8")]
+enum Layer { Lower, Upper }
+impl TryFrom<u8> for Layer {
+    type Error = &'static str;
+    fn try_from(value: u8) -> Result<Self, Self::Error> { match value { 0 => Ok(Self::Lower), 1 => Ok(Self::Upper), _ => Err("unknown native graphics layer") } }
+}
+impl From<Layer> for u8 { fn from(value: Layer) -> Self { match value { Layer::Lower => 0, Layer::Upper => 1 } } }
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(try_from = "u8", into = "u8")]
+enum Channel { Zero, One, Two, Three }
+impl TryFrom<u8> for Channel {
+    type Error = &'static str;
+    fn try_from(value: u8) -> Result<Self, Self::Error> { match value { 0 => Ok(Self::Zero), 1 => Ok(Self::One), 2 => Ok(Self::Two), 3 => Ok(Self::Three), _ => Err("unknown native graphics channel") } }
+}
+impl From<Channel> for u8 { fn from(value: Channel) -> Self { match value { Channel::Zero => 0, Channel::One => 1, Channel::Two => 2, Channel::Three => 3 } } }
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum PlaneKind { Main, Graphics { layer: Layer, channel: Channel } }
+#[derive(Deserialize, Serialize)]
+struct Plane { #[serde(flatten)] kind: PlaneKind, native_source_address: u64, offset: u64, bytes: u64 }
+#[derive(Deserialize, Serialize)]
 struct Scanout {
-    schema: u32, instructions: u64, pixels: Pixels, png: CapturedArtifact,
+    schema: u32, instructions: u64,
+    #[serde(serialize_with = "node_name")]
+    node: fujimod_xm1::run::NodeName,
+    instance: usize, pixels: Pixels, png: CapturedArtifact,
     source_bytes: CapturedArtifact, source_planes: Vec<Plane>,
+    native_scanout_state: Box<serde_json::value::RawValue>,
+    native_frame_state: Box<serde_json::value::RawValue>,
+}
+fn node_name<S: serde::Serializer>(node: &fujimod_xm1::run::NodeName, serializer: S) -> Result<S::Ok, S::Error> { serializer.serialize_str(&node.0) }
+#[derive(Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(try_from = "String")]
+struct NativeWord(u32);
+impl TryFrom<String> for NativeWord {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        u32::from_str_radix(value.strip_prefix("0x").ok_or("native word lacks hexadecimal prefix")?, 16).map(Self).map_err(|error| error.to_string())
+    }
+}
+#[derive(Deserialize)]
+enum Backdrop {
+    #[serde(rename = "declared-black-canvas-unmeasured")] Black,
+    #[serde(rename = "declared-white-canvas-unmeasured")] White,
+}
+#[derive(Deserialize)]
+struct NativeController { instances: Vec<NativeInstance>, backdrop_profile: Option<Backdrop> }
+#[derive(Deserialize)]
+struct NativeInstance { instance: usize, image_base: NativeWord, registers: BTreeMap<NativeWord, NativeWord> }
+#[derive(Deserialize)]
+struct MainGeometry { width: u32, height: u32, source: NativeWord, stride: u64 }
+#[derive(Deserialize)]
+struct FramePlane {
+    layer: Layer, channel: Channel, width: u32, height: u32, source: NativeWord,
+    origin: [u32; 2], visible: Option<bool>, stride_bytes: Option<u64>,
+}
+#[derive(Deserialize)]
+struct NativeFrame {
+    instance: usize, image_base: NativeWord, width: u32, height: u32,
+    #[serde(default)] graphics: Vec<FramePlane>,
+    #[serde(default)] declared_backdrop_used: bool,
+    main: Option<MainGeometry>, source: Option<NativeWord>, stride: Option<u64>, canvas: Option<[u32; 2]>,
+}
+#[derive(Clone, Copy)]
+struct Rectangle { x: u32, y: u32, width: u32, height: u32 }
+fn full_planes(scanout: &Scanout) -> Result<(), Failure> {
+    let controller: NativeController = parse(scanout.native_scanout_state.get().as_bytes(), Refusal::RenderCompletion)?;
+    let frame: NativeFrame = parse(scanout.native_frame_state.get().as_bytes(), Refusal::RenderCompletion)?;
+    require(scanout.instance < 2 && frame.instance == scanout.instance, Refusal::RenderCompletion, "native scanout instance differs")?;
+    let mut instances = controller.instances.iter().filter(|instance| instance.instance == scanout.instance);
+    let instance = instances.next().ok_or_else(|| refusal(Refusal::RenderCompletion, "native controller instance is missing"))?;
+    require(instances.next().is_none(), Refusal::RenderCompletion, "native controller instance is duplicated")?;
+    let base = [0xfff6b000, 0xfff6e000][scanout.instance];
+    require(instance.image_base.0 == base && frame.image_base.0 == base, Refusal::RenderCompletion, "native controller base differs")?;
+    let reg = |offset: u32| instance.registers.get(&NativeWord(base + offset)).map_or(0, |word| word.0);
+    let canvas = [((reg(0x10) >> 16) & 0xfff) + 1, (reg(0x10) & 0xfff) + 1];
+    let mut expected = Vec::with_capacity(9);
+    let mut endpoint = 0u64;
+    let mut add = |kind, address: u32, width: u32, height: u32, padding: u32, depth: u32| -> Result<u64, Failure> {
+        let stride = u64::from(width + padding) * u64::from(depth);
+        let bytes = u64::from(height - 1).checked_mul(stride).and_then(|value| value.checked_add(u64::from(width) * u64::from(depth))).ok_or_else(|| refusal(Refusal::RenderCompletion, "native plane geometry overflows"))?;
+        require(u64::from(address).checked_add(bytes).is_some_and(|end| end <= 0x20000000), Refusal::RenderCompletion, "native plane exceeds physical DRAM")?;
+        expected.push(Plane { kind, native_source_address: u64::from(address), offset: endpoint, bytes });
+        endpoint = endpoint.checked_add(bytes).ok_or_else(|| refusal(Refusal::RenderCompletion, "native source extent overflows"))?;
+        Ok(stride)
+    };
+    let main_enabled = reg(0) & 1 != 0;
+    if main_enabled {
+        let dimensions = reg(0x28);
+        let width = ((dimensions >> 16) & 0x1fff) + 1;
+        let height = (dimensions & 0x1fff) + 1;
+        let address = reg(0x2c);
+        require(dimensions & 0xe000e000 == 0 && address & 0xc0000000 == 0 && reg(0x30) & !0xfff == 0, Refusal::RenderCompletion, "native main geometry has unmodeled controls")?;
+        let stride = add(PlaneKind::Main, address, width, height, reg(0x30), 2)?;
+        if let Some(main) = &frame.main {
+            require(main.width == width && main.height == height && main.source.0 == address && main.stride == stride, Refusal::RenderCompletion, "native main frame geometry differs from registers")?;
+        } else {
+            require(frame.width == width && frame.height == height && frame.source == Some(NativeWord(address)) && frame.stride == Some(stride), Refusal::RenderCompletion, "native direct main geometry differs from registers")?;
+        }
+    } else {
+        require(frame.main.is_none() && frame.source.is_none(), Refusal::RenderCompletion, "native frame invents an inactive main plane")?;
+    }
+    let mut rectangles = Vec::with_capacity(8);
+    let mut channels = 0usize;
+    for layer in [Layer::Lower, Layer::Upper] {
+        let bank = u32::from(u8::from(layer)) * 0x50;
+        let mode = reg(0x34 + bank);
+        let order = if layer == Layer::Lower { [Channel::Zero, Channel::One, Channel::Two, Channel::Three] } else { [Channel::Three, Channel::Two, Channel::One, Channel::Zero] };
+        for channel in order {
+            let index = u32::from(u8::from(channel));
+            if reg(0x40 + bank) & (1 << (index * 4)) == 0 { continue; }
+            channels += 1;
+            let mut matches = frame.graphics.iter().filter(|plane| plane.layer == layer && plane.channel == channel);
+            let plane = matches.next().ok_or_else(|| refusal(Refusal::RenderCompletion, "enabled native plane identity is missing"))?;
+            require(matches.next().is_none(), Refusal::RenderCompletion, "enabled native plane identity is duplicated")?;
+            let dimensions = reg(0x54 + bank + index * 4);
+            let width = ((dimensions >> 16) & 0x1fff) + 1;
+            let height = (dimensions & 0x1fff) + 1;
+            let address = reg(0x64 + bank + index * 4);
+            let padding = reg(0x74 + bank + index * 4);
+            let origin = reg(0x44 + bank + index * 4);
+            let orientation = (reg(8) >> if layer == Layer::Upper { 8 } else { 4 }) & 0xf;
+            require(mode <= 1 && dimensions & 0xe000e000 == 0 && address & 0xc0000000 == 0 && padding & !0xfff == 0 && origin & 0xc000c000 == 0 && matches!(orientation, 0 | 5), Refusal::RenderCompletion, "native graphics geometry has unmodeled controls")?;
+            let scale = if orientation == 5 { 2 } else { 1 };
+            let x = ((origin >> 16) & 0x3fff) * scale;
+            let y = (origin & 0x3fff) * scale;
+            require(plane.width == width && plane.height == height && plane.source.0 == address && plane.origin == [x, y], Refusal::RenderCompletion, "native graphics frame geometry differs from registers")?;
+            if x >= canvas[0] || y >= canvas[1] {
+                require(plane.visible == Some(false), Refusal::RenderCompletion, "off-canvas native plane claims source bytes")?;
+                continue;
+            }
+            require(plane.visible != Some(false), Refusal::RenderCompletion, "visible native plane was omitted")?;
+            let stride = add(PlaneKind::Graphics { layer, channel }, address, width, height, padding, if mode == 0 { 2 } else { 4 })?;
+            require(plane.stride_bytes == Some(stride), Refusal::RenderCompletion, "native graphics stride differs from geometry")?;
+            rectangles.push(Rectangle { x, y, width: (width * scale).min(canvas[0] - x), height: (height * scale).min(canvas[1] - y) });
+        }
+    }
+    require(frame.graphics.len() == channels, Refusal::RenderCompletion, "native frame includes an inactive graphics plane")?;
+    let dimensions = if channels == 0 { frame.canvas.unwrap_or([frame.width, frame.height]) } else { canvas };
+    require([scanout.pixels.width, scanout.pixels.height] == dimensions && (channels == 0 || [frame.width, frame.height] == canvas) && frame.declared_backdrop_used == (channels != 0 && !main_enabled && controller.backdrop_profile.is_some()), Refusal::RenderCompletion, "native composition canvas/backdrop differs")?;
+    if !main_enabled && !frame.declared_backdrop_used {
+        let mut row = Vec::with_capacity(8);
+        for y in 0..canvas[1] {
+            row.clear();
+            row.extend(rectangles.iter().filter(|rectangle| rectangle.y <= y && y < rectangle.y + rectangle.height).map(|rectangle| (rectangle.x, rectangle.x + rectangle.width)));
+            row.sort_unstable();
+            let mut covered = 0;
+            for &(begin, end) in &row { require(begin <= covered, Refusal::RenderCompletion, "native planes leave a canvas coverage gap")?; covered = covered.max(end); }
+            require(covered == canvas[0], Refusal::RenderCompletion, "native planes do not cover the full canvas")?;
+        }
+    }
+    require(!expected.is_empty() && expected.len() == scanout.source_planes.len(), Refusal::RenderCompletion, "native selected plane set differs")?;
+    for (expected, actual) in expected.iter().zip(&scanout.source_planes) {
+        require(expected.kind == actual.kind && expected.native_source_address == actual.native_source_address && expected.offset == actual.offset && expected.bytes == actual.bytes, Refusal::RenderCompletion, "native full-plane identity/extent is truncated or differs")?;
+    }
+    require(endpoint == scanout.source_bytes.bytes, Refusal::RenderCompletion, "native full-plane source bytes are incomplete")
+}
+pub(super) struct TruncatedPlane { pub(super) scanout: Vec<u8>, pub(super) planes: Vec<u8> }
+pub(super) fn truncated_plane(root: &Path, visible: &Visible) -> Result<TruncatedPlane, Failure> {
+    let mut scanout: Scanout = parse(&artifact(root, &visible.scanout)?, Refusal::RenderCompletion)?;
+    let mut planes = artifact(root, &visible.planes)?;
+    let plane = scanout.source_planes.last_mut().ok_or_else(|| refusal(Refusal::RenderCompletion, "no selected plane to truncate"))?;
+    require(plane.bytes > 1 && plane.offset.checked_add(plane.bytes) == Some(planes.len() as u64), Refusal::RenderCompletion, "truncation control lacks a complete final plane")?;
+    planes.pop();
+    plane.bytes -= 1;
+    scanout.source_bytes.bytes -= 1;
+    scanout.source_bytes.sha256 = Digest::of(&planes);
+    let scanout = serde_json::to_vec(&scanout).map_err(|error| refusal(Refusal::RenderCompletion, error.to_string()))?;
+    Ok(TruncatedPlane { scanout, planes })
 }
 fn word(views: &[Words], address: u64) -> Result<u32, Failure> {
     let address = u32::try_from(address).map_err(|_| refusal(Refusal::Mapping, "render address exceeds32bits"))?;
@@ -88,7 +252,7 @@ fn capture_file(root: &Path, binding: &FileBinding, captured: &CapturedArtifact)
     require(captured.path.file_name() == Some(expected_name) && captured.sha256.as_str() == binding.sha256.as_str(), Refusal::RenderCompletion, "native capture artifact binding differs")?;
     require(artifact(root, binding)?.len() as u64 == captured.bytes, Refusal::RenderCompletion, "native capture artifact extent differs")
 }
-pub(super) fn visible(root: &Path, report: &PumpReport, document: &RunDocument) -> Result<(), Failure> {
+pub(super) fn visible(root: &Path, report: &PumpReport, document: &RunDocument, sequence: &Sequence) -> Result<(), Failure> {
     require(report.inputs.len() == 20 && report.visible.len() == 6, Refusal::RouteUnavailable, "natural first-start and interaction program is incomplete")?;
     let mut previous = Count(80_000_000);
     for (index, input) in report.inputs.iter().enumerate() {
@@ -100,7 +264,13 @@ pub(super) fn visible(root: &Path, report: &PumpReport, document: &RunDocument) 
         previous = input.settled.unwrap_or(debounced);
         if index >= 15 {
             require(input.before.is_some_and(|probe| probe.drained && probe.consumer_finished()) && input.after.is_some_and(|probe| probe.drained && probe.consumer_finished()) && input.settled.is_some_and(|settled| settled.0 >= debounced.0 && settled.0 <= report.instructions.0), Refusal::RenderCompletion, "ordinary input lacks drained handback")?;
-            require(report.samples.iter().any(|sample| sample.input == Some(input.id) && physical(sample.pc) == CARRIER.0) && report.samples.iter().any(|sample| sample.input == Some(input.id) && physical(sample.pc) == 0xc23278), Refusal::Handback, "device input did not traverse an owned/retained pump and handback")?;
+            require(sequence.invocations.iter().any(|pump| {
+                let entry = &report.samples[pump.entry.0];
+                let handback = &report.samples[pump.handback.0];
+                entry.input == Some(input.id) && handback.input == Some(input.id)
+                    && input.pressed.0 <= entry.stop.0 && entry.stop.0 < handback.stop.0
+                    && input.settled.is_some_and(|settled| handback.stop.0 <= settled.0)
+            }), Refusal::Handback, "device input lacks a matching complete pump within its pressed-to-settled interval")?;
         }
     }
     for (index, visible) in report.visible.iter().enumerate() {
@@ -109,15 +279,10 @@ pub(super) fn visible(root: &Path, report: &PumpReport, document: &RunDocument) 
         let graphics: GraphicsSave = parse(&artifact(root, &visible.graphics)?, Refusal::RenderCompletion)?;
         ready(visible, document, &graphics.engine)?;
         let scanout: Scanout = parse(&artifact(root, &visible.scanout)?, Refusal::RenderCompletion)?;
-        require(scanout.schema == 1 && scanout.instructions == visible.instructions.0 && scanout.pixels.width > 0 && scanout.pixels.height > 0 && u64::from(scanout.pixels.width).checked_mul(u64::from(scanout.pixels.height)).and_then(|pixels| pixels.checked_mul(3)) == Some(scanout.pixels.rgb_bytes) && !scanout.pixels.rgb_sha256.as_str().is_empty(), Refusal::RenderCompletion, "native pixel capture dimensions differ")?;
+        require(scanout.schema == 1 && scanout.node.0 == document.scanout.0 && scanout.instructions == visible.instructions.0 && scanout.pixels.width > 0 && scanout.pixels.height > 0 && u64::from(scanout.pixels.width).checked_mul(u64::from(scanout.pixels.height)).and_then(|pixels| pixels.checked_mul(3)) == Some(scanout.pixels.rgb_bytes) && !scanout.pixels.rgb_sha256.as_str().is_empty(), Refusal::RenderCompletion, "native pixel capture identity/dimensions differ")?;
         capture_file(root, &visible.png, &scanout.png)?;
         capture_file(root, &visible.planes, &scanout.source_bytes)?;
-        let mut endpoint = 0u64;
-        for plane in &scanout.source_planes {
-            require(plane.offset == endpoint && plane.bytes > 0 && plane.native_source_address < 1u64 << 32, Refusal::RenderCompletion, "selected plane coverage is incomplete")?;
-            endpoint = endpoint.checked_add(plane.bytes).ok_or_else(|| refusal(Refusal::RenderCompletion, "selected plane extent overflows"))?;
-        }
-        require(endpoint != 0 && endpoint == scanout.source_bytes.bytes, Refusal::RenderCompletion, "selected full-plane bytes are missing")?;
+        full_planes(&scanout)?;
         if let Some(id) = visible.input {
             let input = &report.inputs[id.0];
             require(input.settled == Some(visible.instructions) && input.after == Some(visible.probe), Refusal::RenderCompletion, "settled input/visible state differs")?;

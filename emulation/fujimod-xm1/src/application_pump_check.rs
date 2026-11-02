@@ -248,8 +248,9 @@ fn is_ui(pc: u32) -> bool {
 }
 struct PendingCall<'a> { before: &'a Sample, target: Guest, continuation: Guest, entered: bool, phase: usize }
 struct Invocation<'a> { entry: &'a Sample, phase: usize, call: Option<PendingCall<'a>>, result: Option<u32>, returned_instruction: bool }
+struct CompletedPump { entry: SampleId, handback: SampleId }
 #[derive(Default)]
-struct Sequence { complete: usize, receive: usize, pending: usize, queue_success: usize, queue_failure: usize }
+struct Sequence { complete: usize, invocations: Vec<CompletedPump>, receive: usize, pending: usize, queue_success: usize, queue_failure: usize }
 fn sequences(report: &PumpReport, proof: &Profile) -> Result<Sequence, Failure> {
     let mut total = Sequence::default();
     let mut invocation: Option<Invocation<'_>> = None;
@@ -318,6 +319,7 @@ fn sequences(report: &PumpReport, proof: &Profile) -> Result<Sequence, Failure> 
             require(active.returned_instruction && active.phase == 3 && active.call.is_none() && sample.core == active.entry.core && sample.registers.sp == active.entry.registers.sp && sample.registers.r[4..12] == active.entry.registers.r[4..12], Refusal::Handback, "pump frame/callee saves/return transfer differs")?;
             require(active.result == Some(sample.registers.r[0]), Refusal::NormalizerResult, "posthook replaced the normalizer result")?;
             total.complete += 1;
+            total.invocations.push(CompletedPump { entry: active.entry.id, handback: sample.id });
             backedge_due = true;
         }
     }
@@ -485,7 +487,7 @@ fn inspect(root: &Path, report: &PumpReport, canonical: &Catalog) -> Result<Veri
     epochs(root, report, published)?;
     let sequence = sequences(report, &proof)?;
     queue::check(report)?;
-    compare::visible(root, report, &document)?;
+    compare::visible(root, report, &document, &sequence)?;
     let mut unqualified = vec![Route::Unhandled, Route::ReceiveFailure, Route::ServiceFailure];
     if sequence.pending == 0 { unqualified.push(Route::PendingWork); }
     Ok(Verification { schema: 1, mode: report.mode, receipt: Digest::of(&bounded(&root.join("application-pump.json"), METADATA_BYTES)?), samples: report.samples.len(), complete_pumps: sequence.complete, receive_backed_pumps: sequence.receive, pending_work_pumps: sequence.pending, queue_successes: sequence.queue_success, queue_failures: sequence.queue_failure, visible_frames: report.visible.len(), unqualified })
