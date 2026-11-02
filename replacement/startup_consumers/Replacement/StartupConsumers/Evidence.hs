@@ -213,6 +213,19 @@ checkViews resource views = do
 resourceEnd :: Receipt -> Resource -> Either WitnessError Context
 resourceEnd _ resource = required LifetimeRejected (resourceClosed resource)
 
+checkResourceCoverage :: WitnessError -> Receipt -> Resource -> Either WitnessError ()
+checkResourceCoverage failure receipt resource = do
+  end <- resourceEnd receipt resource
+  let intervals = [segment | segment <- receiptSegments receipt
+        ,sum (map count (segmentEnd segment)) > clock (resourceAdmitted resource)
+        ,sum (map count (segmentStart segment)) < clock end]
+      low = fromIntegral (address (resourcePhysical resource)); high = low+count (resourceSize resource)
+      covered watch kind = any (\classification -> kind `elem` classKinds classification
+        && case classRange classification of [a,b] -> a <= low && b >= high; _ -> False) (watchClasses watch)
+  require (not (null intervals) && all (\segment -> all (covered (segmentWatch segment))
+    (if resourceKind resource == Carrier then [CpuWrite,HostWrite,ModelBusWrite]
+      else [CpuRead,CpuWrite,HostRead,HostWrite,ModelBusRead,ModelBusWrite])) intervals) failure
+
 resourceEvents :: Receipt -> Resource -> Either WitnessError [MemoryEvent]
 resourceEvents receipt resource = do
   end <- resourceEnd receipt resource
@@ -337,14 +350,9 @@ checkResources receipt = do
       require (expectedBytes == finalBytes) EffectRejected
       events <- resourceEvents receipt resource
       require (resourceKind resource /= Code || not (any isWrite events)) WriterRejected
-      let intervals = [segment | segment <- receiptSegments receipt
-            ,sum (map count (segmentEnd segment)) > clock (resourceAdmitted resource)
-            ,sum (map count (segmentStart segment)) < clock end]
-          low = fromIntegral (address (resourcePhysical resource)); high = low+count (resourceSize resource)
-          covered watch kind = any (\classification -> kind `elem` classKinds classification && case classRange classification of [a,b] -> a <= low && b >= high; _ -> False) (watchClasses watch)
-      require (not (null intervals) && all (\segment -> all (covered (segmentWatch segment))
-        (if resourceKind resource == Carrier then [CpuWrite,HostWrite,ModelBusWrite] else [CpuRead,CpuWrite,HostRead,HostWrite,ModelBusRead,ModelBusWrite])) intervals) WatchRejected
-      let tcms = concat (K.contextTcm (contextMachine (resourceAdmitted resource)))
+      checkResourceCoverage WatchRejected receipt resource
+      let low = fromIntegral (address (resourcePhysical resource)); high = low+count (resourceSize resource)
+          tcms = concat (K.contextTcm (contextMachine (resourceAdmitted resource)))
       mapM_ (\(WordValue raw) -> if raw .&. 1 == 0 then pure () else do
         let sizeCode = (raw `shiftR` 2) .&. 31
             start = fromIntegral (raw .&. 0xfffff000) :: Word64

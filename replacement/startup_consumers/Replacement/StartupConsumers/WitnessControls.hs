@@ -87,6 +87,9 @@ mutations =
     {receiptResources = [if resourceKind resource == Record && resourcePhysical resource == Address 0x5988c
       then resource {resourceKind = Auxiliary} else resource | resource <- receiptResources receipt]}
   ,Control (ControlName "executed entry omitted from producer census") CensusRejected omitCensusEntry
+  ,Control (ControlName "root publications truncated to 1418 words") InitializerRejected truncatePublications
+  ,Control (ControlName "required initializer extension store omitted") InitializerRejected $
+    omitCpuAccesses (\event -> K.eventSource event == K.CpuWrite && K.eventCore event == Just K.Secondary && K.eventPc event == Just (Address 0xd08f4))
   ,Control (ControlName "acquire LDREX access omitted") AllocationRejected (omitInstructionRead (Address 0x427d4))
   ,Control (ControlName "release LDREX access omitted") AllocationRejected (omitInstructionRead (Address 0x42800))
   ,Control (ControlName "consumed startup mode read omitted") EffectRejected (omitInstructionRead (Address 0x657194))
@@ -135,7 +138,11 @@ omitCensusEntry receipt = receipt
         ,censusFirst = case remaining of probe:_ -> Just (probeId probe); [] -> Nothing}
 
 omitInstructionRead :: Address -> Receipt -> Receipt
-omitInstructionRead instruction receipt = receipt
+omitInstructionRead instruction = omitCpuAccesses
+  (\event -> K.eventSource event == K.CpuRead && K.eventPc event == Just instruction)
+
+omitCpuAccesses :: (K.MemoryEvent -> Bool) -> Receipt -> Receipt
+omitCpuAccesses omitted receipt = receipt
   {receiptSegments = map transform (receiptSegments receipt)
   ,receiptFetches = [attempt {fetchRow = shift indices (fetchRow attempt)}
     | attempt <- receiptFetches receipt,Just indices <- [M.lookup (fetchSegment attempt) removed]]}
@@ -151,7 +158,18 @@ omitInstructionRead instruction receipt = receipt
           [event | (index,event) <- zip [0..] (K.watchRecords (segmentWatch segment)),Set.notMember (Count index) indices]}
         ,segmentCpuEvidence = [item {evidenceRow = shift indices (evidenceRow item)}
           | item <- segmentCpuEvidence segment,Set.notMember (evidenceRow item) indices]}
-    omitted event = K.eventSource event == K.CpuRead && K.eventPc event == Just instruction
+
+truncatePublications :: Receipt -> Receipt
+truncatePublications receipt = receipt
+  {receiptResources = [if Set.member (resourceId resource) roots then resource
+    {resourceSize = Count 0x1628,resourceInitial = map clip (resourceInitial resource),resourceFinal = map clip (resourceFinal resource)}
+    else resource | resource <- receiptResources receipt]
+  ,receiptProbes = [probe {probeSnapshots = [if Set.member (snapshotResource snapshot) roots
+    then snapshot {snapshotViews = map clip (snapshotViews snapshot)} else snapshot | snapshot <- probeSnapshots probe]}
+    | probe <- receiptProbes receipt]}
+  where
+    roots = Set.fromList [resourceId resource | resource <- receiptResources receipt,resourceKind resource == RootObject]
+    clip view = view {viewBytes = case viewBytes view of K.Bytes bytes -> K.Bytes (B.take 0x1628 bytes)}
 
 mapScoped :: (Segment -> Segment) -> Receipt -> Receipt
 mapScoped modify receipt = receipt

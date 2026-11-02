@@ -604,8 +604,8 @@ impl Runtime {
     fn initial_resources(&mut self, machine: &Machine, state: &Context) -> Result<(), String> {
         for (kind, base, size) in [
             (ResourceKind::Roots,0x96bd10,64),
-            (ResourceKind::RootObject,0x4dae0,0x1628),
-            (ResourceKind::RootObject,0xddaa0,0x1628),
+            (ResourceKind::RootObject,0x4dae0,0x162c),
+            (ResourceKind::RootObject,0xddaa0,0x162c),
             (ResourceKind::ServiceStorage,0x9c34f0,0xf64),
             (ResourceKind::TaskStorage,0xa0f85c,0x998),
             (ResourceKind::Record,0xa0f464,8*120),

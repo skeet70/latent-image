@@ -93,6 +93,7 @@ validateReceipt inputs receipt = do
   checkLimits receipt
   checkProbes inputs receipt
   checkSegments receipt
+  checkSourcePublications inputs receipt
   checkResources receipt
   (entry,returned) <- checkOuter inputs receipt
   checkInstallation inputs receipt
@@ -440,7 +441,6 @@ checkCompletion inputs receipt = do
   primaryMemory <- memoryAt receipt primaryEntry
   forM_ (S.primaryStores model) $ \store -> wordAt InitializerRejected primaryMemory (address (S.storeAddress store)) >>= \actual ->
     require (actual == number (S.storeValue store)) InitializerRejected
-  checkStores receipt Secondary (probeClock initializer) (probeClock initialized) (S.secondaryStores model)
   initializedMemory <- memoryAt receipt initialized
   forM_ (S.secondaryStores model) $ \store -> wordAt InitializerRejected initializedMemory (address (S.storeAddress store)) >>= \actual ->
     require (actual == number (S.storeValue store)) InitializerRejected
@@ -450,13 +450,45 @@ checkCompletion inputs receipt = do
     require (actual == value) InitializerRejected
   checkFirstConsumer model receipt initialized
 
+data PublicationSpan = PublicationSpan !Address !S.ByteCount
+
+publicationSpan :: [S.Store] -> Either WitnessError PublicationSpan
+publicationSpan [] = Left SourceRejected
+publicationSpan (first:rest) = Right (foldl' extend initial rest)
+  where
+    initial = PublicationSpan (Address (physical (address (S.storeAddress first)))) (S.ByteCount 4)
+    extend (PublicationSpan (Address low) (S.ByteCount size)) store =
+      let target = physical (address (S.storeAddress store))
+          lower = min low target
+          upper = max (low+size) (target+4)
+      in PublicationSpan (Address lower) (S.ByteCount (upper-lower))
+
+checkSourcePublications :: Inputs -> Receipt -> Either WitnessError ()
+checkSourcePublications inputs receipt = do
+  outer <- probeAt receipt OuterEntry
+  initializer <- probeAt receipt InitializerEntry
+  initialized <- probeAt receipt InitializerReturn
+  let model = inputSource inputs
+  forM_ [S.primaryStores model,S.secondaryStores model] $ \stores -> do
+    PublicationSpan low (S.ByteCount size) <- publicationSpan stores
+    resource <- one InitializerRejected [item | item <- receiptResources receipt,resourceKind item == RootObject
+      ,resourcePhysical item == low,resourceSize item == Count (fromIntegral size)]
+    end <- resourceEnd receipt resource
+    let fullExtent views = length views == 4 && all
+          (\view -> case viewBytes view of K.Bytes bytes -> B.length bytes == fromIntegral size) views
+    require (resourceLifetime resource == ObservationLifetime && resourceOwner resource == Nothing
+      && resourceAdmitted resource == probeContext outer && clock end == count (receiptInstructions receipt)
+      && fullExtent (resourceInitial resource) && fullExtent (resourceFinal resource)) InitializerRejected
+    checkResourceCoverage InitializerRejected receipt resource
+  checkStores receipt Secondary (probeClock initializer) (probeClock initialized) (S.secondaryStores model)
+
 checkStores :: Receipt -> Core -> Word64 -> Word64 -> [S.Store] -> Either WitnessError ()
 checkStores receipt which begin end stores = do
-  let addresses = map (physical . address . S.storeAddress) stores
+  let addresses = Set.fromList (map (physical . address . S.storeAddress) stores)
   selected <- foldM (\found event -> do
     at <- eventClock event
     backing <- eventPhysical32 event
-    pure (if at > begin && at <= end && eventSource event == CpuWrite && eventCore event == Just which && backing `elem` addresses
+    pure (if at > begin && at <= end && eventSource event == CpuWrite && eventCore event == Just which && Set.member backing addresses
       then event:found else found)) [] [event | event <- allEvents receipt,eventSource event == CpuWrite]
   require ([(eventAddress event,eventSize event,eventValue event) | event <- reverse selected]
     == [(fromIntegral (address (S.storeAddress store)),4,Just (fromIntegral (number (S.storeValue store)))) | store <- stores]) InitializerRejected
