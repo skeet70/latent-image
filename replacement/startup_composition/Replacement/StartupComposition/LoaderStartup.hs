@@ -217,6 +217,7 @@ contractValue (LoaderSource files composition _) artifact@(LoaderJoinedArtifact 
   , "native_inputs" .= object ["loader_a" .= loaderInput a,"loader_b" .= loaderInput b,"dispatcher" .= nativeValue dispatch,"installer" .= nativeValue install]
   , "dispatcher_installer" .= C.contractValue (C.stageImage4 composition joined)
   , "dispatcher_provider" .= object ["role" .= ("OwnedJoined"::String),"entry" .= (0x69cdf8::Word32)]
+  , "dispatcher_calls" .= map dispatcherCallValue (DA.callBoundaries (D.frameProof (C.dispatcherArtifact joined)))
   , "loaders" .= map loaderValue [LoaderA,LoaderB]
   , "owned_stack" .= object ["loader_frame_low" .= stackOffsetValue (loaderFrameLow proof)
       ,"dispatcher_low" .= stackOffsetValue (dispatcherLow proof),"installer_low_from_entry" .= stackOffsetValue (installerLow proof)
@@ -234,6 +235,16 @@ contractValue (LoaderSource files composition _) artifact@(LoaderJoinedArtifact 
   ]
   where
     loaderInput (LoaderNative _ native _ _) = nativeValue native
+    dispatcherCallValue boundary =
+      let instruction = DA.instructionAddressValue (DA.callInstruction boundary)
+          bytes = D.linkedBytes (C.dispatcherArtifact joined)
+          target = case A.decode instruction (U.word32At bytes (fromIntegral (instruction-0x69cdf8))) of
+            A.Branch _ _ address -> Just address
+            _ -> Nothing
+      in object ["phase" .= show (DA.callPhase boundary),"effect" .= show (DA.callEffect boundary)
+        ,"instruction" .= instruction,"continuation" .= fmap DA.instructionAddressValue (DA.callContinuation boundary)
+        ,"target" .= target,"stack_from_dispatcher_entry" .= DA.stackOffsetValue (DA.callStack boundary)
+        ,"caller_live_words" .= map DA.stackOffsetValue (DA.callLiveWords boundary)]
     loaderValue side =
       let linked = loaderArtifact artifact side
           frame = L.linkedProof linked
