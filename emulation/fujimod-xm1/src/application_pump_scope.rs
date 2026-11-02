@@ -329,7 +329,7 @@ mod tests {
         serde_json::from_slice(&serde_json::to_vec(&hit).unwrap()).unwrap()
     }
     fn fetch(core: Core, count: u64) -> Row {
-        Row { source: Access::CpuFetch, address: Guest(0x725318), physical: Guest(0x725318), size: 4, core: Some(core), pc: Some(Guest(0x725318)), instructions: Some(Count(count)), value: Some(0xe320f000) }
+        Row { source: Access::CpuFetch, address: Guest(0x725318), physical: Guest(0x725318), size: 4, core: Some(core), pc: Some(Guest(0x725318)), instructions: Some(Count(count)), value: Some(0xe320f000), tick: None }
     }
     fn classes() -> Vec<Class> {
         capture::SHARED_QUEUE_SITES.iter().map(|site| Class { range: [u64::from(*site), u64::from(*site) + 4], kinds: vec![Access::CpuFetch, Access::CpuWrite, Access::HostWrite, Access::ModelBusWrite] }).chain(capture::TASK_LAYOUTS.into_iter().map(|layout| Class { range: [u64::from(physical(layout.current)), u64::from(physical(layout.current)) + 4], kinds: vec![Access::CpuWrite, Access::HostWrite, Access::ModelBusWrite] })).chain(std::iter::once(Class { range: [u64::from(physical(capture::TASK_LAYOUTS[0].creation)) + 16, u64::from(physical(capture::TASK_LAYOUTS[0].creation)) + 24], kinds: vec![Access::CpuWrite, Access::HostWrite, Access::ModelBusWrite] })).collect()
@@ -438,7 +438,7 @@ mod tests {
         let mut fixture = fixture();
         fixture.omission(Core::Secondary, Guest(0x12342000), Guest(0x120000));
         let cell = config().current()[1];
-        fixture.rows.insert(0, Row { source: Access::HostWrite, address: Guest(cell.0 + 2), physical: Guest(cell.0 + 2), size: 2, core: None, pc: None, instructions: None, value: Some(0x1234) });
+        fixture.rows.insert(0, Row { source: Access::HostWrite, address: Guest(cell.0 + 2), physical: Guest(cell.0 + 2), size: 2, core: None, pc: None, instructions: None, value: Some(0x1234), tick: None });
         fixture.save();
         assert!(fixture.check().is_ok());
         fixture.rows[0].value = None;
@@ -469,7 +469,7 @@ mod tests {
         let Some(TraceScopeRecord::Finish { summary }) = fixture.records.last_mut() else { unreachable!() };
         summary.sites.iter_mut().find(|site| site.site == Guest(0x725318)).unwrap().outside[1] = ScopedHitCount(2);
         let cell = config().current()[1];
-        fixture.rows.push(Row { source: Access::ModelBusWrite, address: cell, physical: cell, size: 4, core: None, pc: None, instructions: None, value: Some(0x3000) });
+        fixture.rows.push(Row { source: Access::ModelBusWrite, address: cell, physical: cell, size: 4, core: None, pc: None, instructions: None, value: Some(0x3000), tick: None });
         fixture.rows.push(fetch(Core::Secondary, 21));
         fixture.rows.push(fetch(Core::Secondary, 22));
         fixture.save();
@@ -481,7 +481,7 @@ mod tests {
         let mut fixture = fixture();
         fixture.omission(Core::Secondary, Guest(0x2000), Guest(0x120000));
         let cell = Guest(physical(capture::TASK_LAYOUTS[0].creation) + 20);
-        fixture.rows.insert(0, Row { source: Access::CpuWrite, address: cell, physical: cell, size: 4, core: Some(Core::Primary), pc: Some(Guest(0x8000)), instructions: Some(Count(15)), value: Some(0x110000) });
+        fixture.rows.insert(0, Row { source: Access::CpuWrite, address: cell, physical: cell, size: 4, core: Some(Core::Primary), pc: Some(Guest(0x8000)), instructions: Some(Count(15)), value: Some(0x110000), tick: None });
         fixture.save();
         assert!(matches!(fixture.check(), Err(Failure { reason: Refusal::StackContext, .. })));
     }

@@ -465,6 +465,9 @@ fn inspect(root: &Path, report: &PumpReport, canonical: &Catalog) -> Result<Veri
         require(hits.iter().any(|hit| shared::hit_matches(hit, event.pc, event.core, event.instructions, &event.registers)), Refusal::Publication, "loader boundary missing from raw trace")?;
         shared::words(&event.code).map_err(|error| refusal(Refusal::Mapping, error))?;
         require(event.code.values == [catalog.word(event.pc).map_err(|error| refusal(Refusal::CodeIdentity, error))?.1], Refusal::CodeIdentity, "loader code observation differs from admitted source")?;
+        if let Some(expected) = dispatch_phase(event.pc) {
+            require(Phase::parse(event.registers.r[0]).ok() == Some(expected) && event.registers.r[4] == 0x69cdf8, Refusal::Publication, "loader phase or dispatcher target differs")?;
+        }
         for value in event.state.iter().chain(event.descriptor.iter()).chain(event.payload.iter()) {
             shared::words(value).map_err(|error| refusal(Refusal::Mapping, error))?;
         }

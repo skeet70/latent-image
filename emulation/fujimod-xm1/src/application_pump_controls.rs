@@ -126,7 +126,7 @@ fn mutate(root: &Path, report: &mut PumpReport, control: Control) -> Result<(), 
         Control::PublishedWrite => {
             let epoch = report.epochs.iter_mut().rev().find(|epoch| epoch.views == Views::Fixed).ok_or_else(|| refusal(Refusal::Publication, "no published epoch"))?;
             let mut watch: Watched = gzip_record(root, &epoch.raw, capture::watch_limits(), Refusal::CaptureBound)?;
-            watch.records.push(Row { source: Access::CpuWrite, address: CARRIER, physical: CARRIER, size: 4, core: Some(Core::Primary), pc: Some(Guest(0xc23274)), instructions: Some(epoch.end), value: Some(0) });
+            watch.records.push(Row { source: Access::CpuWrite, address: CARRIER, physical: CARRIER, size: 4, core: Some(Core::Primary), pc: Some(Guest(0xc23274)), instructions: Some(epoch.end), value: Some(0), tick: None });
             epoch.record_count = watch.records.len();
             write_gzip(root, &mut epoch.raw, &watch, capture::watch_limits())?;
         }

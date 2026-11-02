@@ -134,6 +134,10 @@ enum Phase { Setup, Root, DiagnosticReturn, Idle0, Idle1AndStandby }
 impl Phase {
     fn parse(value:u32)->Result<Self,String>{match value{0=>Ok(Self::Setup),1=>Ok(Self::Root),2=>Ok(Self::DiagnosticReturn),3=>Ok(Self::Idle0),4=>Ok(Self::Idle1AndStandby),_=>Err("phase is outside the loader producer set".into())}}
 }
+fn dispatch_phase(pc:Guest)->Option<Phase>{
+    carrier(pc)?;
+    match pc.0&0xffff{0x09fc=>Some(Phase::Setup),0x0a34=>Some(Phase::Root),0x0a3c=>Some(Phase::Idle0),0x0a68=>Some(Phase::DiagnosticReturn),0x0aec=>Some(Phase::Idle1AndStandby),_=>None}
+}
 fn carrier(pc:Guest)->Option<Side>{[Side::LoaderA,Side::LoaderB].into_iter().find(|side|(side.base().0+0x9ac..side.base().0+0xb00).contains(&(pc.0&!0x40000000)))}
 fn decode_call(site:Guest,word:u32)->Result<Option<StaticCall>,String>{
     if word&0xff000000==0xeb000000 {let displacement=(((word&0xffffff)<<8) as i32>>6) as u32;Ok(Some(StaticCall {site,target:CallTarget::Direct(Guest(site.0.wrapping_add(8).wrapping_add(displacement))),continuation:Guest(site.0+4)}))}
