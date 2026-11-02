@@ -122,14 +122,16 @@ summarizeArrayWrites :: WatchLimit -> [WatchRange] -> [WatchRange] -> FixedWatch
 summarizeArrayWrites limit expectedWrites expectedFetches acknowledgement observation = do
   unless (covered expectedWrites stateBegin arraysEnd) (Left "modal array write classes do not cover both complete arrays")
   gate <- checkExecutionWrites ForbidProtectedWrites limit expectedWrites expectedFetches acknowledgement observation
-  let writes =
-        [ ArrayWrite (OperationIndex index) writer intersections
-        | (index, record) <- zip [0 ..] (fixedWatchRecords observation)
-        , Just (writer, physical, bytes) <- [writeAttribution record]
-        , let intersections = intersectArrays physical bytes
-        , not (null intersections)
-        ]
-  pure (ArrayWriteReport writes gate)
+  pure (ArrayWriteReport (writesInArrays observation) gate)
+
+writesInArrays :: FixedWatchObservation -> [ArrayWrite]
+writesInArrays observation =
+  [ ArrayWrite (OperationIndex index) writer intersections
+  | (index, record) <- zip [0 ..] (fixedWatchRecords observation)
+  , Just (writer, physical, bytes) <- [writeAttribution record]
+  , let intersections = intersectArrays physical bytes
+  , not (null intersections)
+  ]
 
 covered :: [WatchRange] -> Integer -> Integer -> Bool
 covered ranges low high = advance low (sortOn fst bounds)
@@ -1203,7 +1205,9 @@ checkLifetimeArrayAudit request armed final = do
   checkModalLifetimeWatchSources request finalValue
   acknowledgement <- armed >>= lifetimeWatchAcknowledgement >>= parseModalLifetimeWatchAck
   observation <- final >>= parseModalLifetimeWatch bound
-  summarizeArrayWrites bound expected [] acknowledgement observation
+  rangeLimit <- watchRangeLimit (length expected)
+  gate <- checkExecutionWritesWithRangeLimit rangeLimit ForbidProtectedWrites bound expected [] acknowledgement observation
+  pure (ArrayWriteReport (writesInArrays observation) gate)
  where
   bound = modalLifetimeWriterLimit
 

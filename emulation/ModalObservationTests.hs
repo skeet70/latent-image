@@ -724,6 +724,16 @@ runtimeBindingTests = do
         ["checked_resource_writes","checked_identity_writes","checked_scheduler_writes","checked_context_writes","audited_writes"]
       clean = set "watch" fullWatch (set "lifetime" exactReceipt (set "task_identity_verified" (Bool False)
         (set "task_entries" (array []) (completedEnvelope 223))))
+  rangeBound <- either error pure (watchRangeLimit (length expectedWrites))
+  shortRangeBound <- either error pure (watchRangeLimit (length expectedWrites - 1))
+  fullAcknowledgement <- either error pure (lifetimeWatchAcknowledgement fullWatch >>= parseModalLifetimeWatchAck)
+  fullObservation <- either error pure (parseModalLifetimeWatch modalLifetimeWriterLimit fullWatch)
+  check "continuous source watch exceeds only the unchanged UI range cap" $
+    length expectedWrites > 8 && isLeft (checkExecutionWrites ForbidProtectedWrites modalLifetimeWriterLimit expectedWrites [] fullAcknowledgement fullObservation)
+  check "source-bound checker refuses more ranges than its explicit bound" $
+    isLeft (checkExecutionWritesWithRangeLimit shortRangeBound ForbidProtectedWrites modalLifetimeWriterLimit expectedWrites [] fullAcknowledgement fullObservation)
+  check "source-bound checker accepts its complete finite range bound" $
+    not (isLeft (checkExecutionWritesWithRangeLimit rangeBound ForbidProtectedWrites modalLifetimeWriterLimit expectedWrites [] fullAcknowledgement fullObservation))
   audit <- either error pure (checkLifetimeArrayAudit request (Right fullWatch) (Right fullWatch))
   report <- either error pure (parseModalReport permitLimit clean)
   check "stock223 full lifetime binds to its request and every raw write" (checkCompletedModalLifetime request audit report == Right ())
