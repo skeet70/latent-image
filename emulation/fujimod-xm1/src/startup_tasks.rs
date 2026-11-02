@@ -69,7 +69,7 @@ struct Code { name: &'static str, base: u32, bytes: Vec<u8>, sha256: Digest }
 struct Context { core: Core, pc: Address, registers: [Word; 13], sp: Address, lr: Address, cpsr: Word, counts: [u64; 2], identities: [Word; 2], tcm: [[Word; 2]; 2] }
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum Object { CreationRecords, TaskNodes, IdMap, AuxiliaryRecords, AuxiliaryNodes, Domains, Control, QueueHeads, Bitmap, Selected, Current, Descriptor, Wrapper, Storage, Stack, EntryCode, SharedDomains, InterfaceRoots, InterfaceTable, Parameters, ErrorState, Callback, Cursor, Lock, ClassTable, ControlPatch, LogCallback, LogMode, LogEnable, CriticalCounter, CriticalLock, BootLogControl }
+enum Object { CreationRecords, TaskNodes, IdMap, AuxiliaryRecords, AuxiliaryNodes, Domains, Control, QueueHeads, Bitmap, Selected, Current, Descriptor, Wrapper, Storage, Stack, EntryCode, SharedDomains, InterfaceRoots, InterfaceTable, Parameters, ErrorState, Callback, Cursor, Lock, ClassTable, ControlPatch, LogCallback, LogMode, LogEnable, CriticalCounter, CriticalLock, BootLogControl, BootBss, BootMode }
 #[derive(Serialize)]
 struct View { object: Object, physical: Address, bytes: Vec<u8>, aliases: [[Digest; 2]; 2] }
 #[derive(Serialize)]
@@ -218,6 +218,7 @@ fn watch_ranges(sources: &[Code], composition: bool) -> Vec<WatchRange> {
     let mut ranges: Vec<_> = [(0x4dae0, 0x4f10c), (0xddaa0, 0xdf0cc), (0x545a4, 0x63460), (0xe4564, 0xf3410), (0xc0800, 0xc0900), (0x96bd20, 0x96bd28), (0xa0fc44, 0xa101e4), (0xa5b204, 0xa5b5c4), (0x89ea94, 0x89ea9c), (0x9c280c, 0x9c2810), (0xa10200, 0xa5b200), (0xa0f82c, 0xa0f830), (0x4f15c, 0x4f160), (0x4f25c, 0x4f260), (0x4f5e4, 0x4f60a)].into_iter().map(|(start, end)| WatchRange { start, end, kinds: WatchKinds::WRITES }).collect();
     if composition {
         ranges.push(WatchRange { start: 0xa0f824, end: 0xa0f828, kinds: WatchKinds::CPU_READ.union(WatchKinds::WRITES) });
+        ranges.push(WatchRange { start: 0xa00c0, end: 0xa00c4, kinds: WatchKinds::WRITES });
     }
     ranges.extend(sources.iter().map(|code| WatchRange { start: u64::from(code.base), end: u64::from(code.base) + code.bytes.len() as u64,
         kinds: if composition { WatchKinds::CPU_FETCH.union(WatchKinds::CPU_READ).union(WatchKinds::WRITES) } else { WatchKinds::CPU_FETCH.union(WatchKinds::WRITES) } }));
@@ -314,7 +315,7 @@ fn drive() -> Result<(), String> {
                     Some(pending_returns[core.index()].remove(&address).unwrap_or(false))
                 } else { None };
                 let kernels = [Core::Primary, Core::Secondary].into_iter().map(|core| kernel(&machine, &maps, &state, core)).collect::<Result<Vec<_>, _>>()?;
-                let mut local = task_submission_runtime::local(&machine, &maps, &state, active, invocations[core.index()], &kernels, &program, kind, call_taken)?;
+                let mut local = task_submission_runtime::local(&machine, &maps, &state, active, invocations[core.index()], &kernels, &program, &code, kind, call_taken)?;
                 if matches!(kind, Boundary::Selected) && !first_tasks.iter().any(|item| item.core == core) {
                     let l = core.layout(); let node = kernels[core.index()].current.0;
                     require(node >= l.tasks && (node - l.tasks) % 56 == 0 && (node - l.tasks) / 56 < COUNT, "first selected task is not a canonical node")?;

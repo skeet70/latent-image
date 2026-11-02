@@ -310,7 +310,8 @@ currentLocalShape inputs receipt probe sample memory = do
   let base = [(SharedDomains,0xc0800,256),(InterfaceRoots,0x96bd20,8),(InterfaceTable,0x4dae0,0x162c),(InterfaceTable,0xddaa0,0x162c)
         ,(ErrorState,0xa0f82c,4),(Callback,0x89ea8c,4),(CursorObject,0x89ea98,4),(LockObject,0x9c280c,4),(ClassTable,0x7cad9c,420)
         ,(LogCallback,0x4f15c,4),(LogMode,0x4f25c,4),(LogEnable,0x4f5e4,38)]
-        ++ (if receiptSchema receipt == JoinedTaskProtocol then [(CriticalCounter,0xa0f824,4),(CriticalLock,0xc0804,4),(BootLogControl,0x14c60,12)] else [])
+        ++ (if receiptSchema receipt == JoinedTaskProtocol then
+          [(CriticalCounter,0xa0f824,4),(CriticalLock,0xc0804,4),(BootLogControl,0x14c60,12),(BootBss,0x14c80,32),(BootMode,0xa00c0,4)] else [])
       actual = [(viewObject view,address (viewPhysical view),B.length (bytes (viewBytes view))) | view <- sampleLocal sample]
   require (sort actual == sort (base ++ active ++ entries)) SnapshotRejected
   (_,imageBase,image) <- required CodeRejected (case filter (\(kind,_,_) -> kind == Image4) (codeSources inputs) of [found] -> Just found; _ -> Nothing)
@@ -329,6 +330,11 @@ checkLocalShape inputs receipt probe sample memory = do
         [buffer,first,second] -> require (buffer == 0x400a0040 && first <= 16 && first `mod` 2 == 0
           && second >= 16 && second <= 32 && second `mod` 2 == 0) SnapshotRejected
         _ -> Left SnapshotRejected
+      loader <- sourceWord inputs 0xd000c
+      entry <- sourceWord inputs 0x61c40c
+      mode <- readWord SnapshotRejected memory 0xa00c0
+      bss <- mapM (readWord SnapshotRejected memory . (0x14c80+)) [0,4..28]
+      require (bss == [loader,entry,0,0,mode,0,0,0]) SnapshotRejected
   mapM_ (\(PublishedSlot cell target) -> readWord SnapshotRejected memory (address cell) >>= \actual -> require (actual == address target) SnapshotRejected) publishedSlots
 
 

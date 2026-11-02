@@ -32,15 +32,17 @@ data Control = WrongSource | DuplicateReceiptKey | OverflowingHitAddress | Refus
   | MissingReadTick | RegressingReadTick
   | WrongBootLogBuffer | InvalidBootLogIndex
   | UnexpectedRecord2Fetch
+  | WrongBootHandoffTarget | WrongBootModeCopy | NonzeroBootBssReserved
   deriving (Bounded, Enum, Eq, Ord, Show)
 data ControlError = BaselineRejected WitnessError | MutationRejected Control
   | WrongRefusal Control WitnessError (Maybe WitnessError) deriving (Eq, Show)
 data Part = Field K.Key | Element Int
 
-data Effect = Replace Word32 | AddBits Word32
+data Effect = Replace Word32 | AddBits Word32 | FlipBits Word32
 applyEffect :: Effect -> Word32 -> Word32
 applyEffect (Replace word) _ = word
 applyEffect (AddBits mask) word = word .|. mask
+applyEffect (FlipBits mask) word = word `xor` mask
 field :: String -> Part
 field = Field . K.fromString
 pathAt :: Control -> [Part] -> J.Value -> Either ControlError J.Value
@@ -94,6 +96,7 @@ expected control = case control of
   MissingReadTick -> ClockRejected; RegressingReadTick -> ClockRejected
   WrongBootLogBuffer -> SnapshotRejected; InvalidBootLogIndex -> SnapshotRejected
   UnexpectedRecord2Fetch -> CodeRejected
+  WrongBootHandoffTarget -> SnapshotRejected; WrongBootModeCopy -> SnapshotRejected; NonzeroBootBssReserved -> SnapshotRejected
 
 withHash :: Control -> ObservedFiles -> J.Value -> J.Value -> Either ControlError ObservedFiles
 withHash control original receipt watch = do
@@ -303,6 +306,9 @@ mutate control sources observed = do
       pure (raw,changed))
     WrongBootLogBuffer -> receiptOnly (modifyAt control [field "samples",Element 0] (changeViews control 0x14c60 (Replace 0)))
     InvalidBootLogIndex -> receiptOnly (modifyAt control [field "samples",Element 0] (changeViews control 0x14c64 (Replace 1)))
+    WrongBootHandoffTarget -> receiptOnly (modifyAt control [field "samples",Element 0] (changeViews control 0x14c80 (Replace 0)))
+    WrongBootModeCopy -> receiptOnly (modifyAt control [field "samples",Element 0] (changeViews control 0x14c90 (FlipBits 1)))
+    NonzeroBootBssReserved -> receiptOnly (modifyAt control [field "samples",Element 0] (changeViews control 0x14c88 (Replace 1)))
     UnexpectedRecord2Fetch -> journal (\raw watches -> do
       position <- findRow control (\row -> fetchRow row && maybe False (\(W.Address pc) -> pc >= 0x10000 && pc < 0x20000) (W.eventPc row)) watches
       changed <- set control [field "records",Element position,field "address"] (0x13490 :: Word32) watches

@@ -273,7 +273,7 @@ programClasses program protocol sources = [W.WatchClass range (if protocol == Jo
         oldRanges = [[0x4dae0,0x4f10c],[0xddaa0,0xdf0cc],[0x545a4,0x63460],[0xe4564,0xf3410],[0xc0800,0xc0900]
           ,[0x96bd20,0x96bd28],[0xa0fc44,0xa101e4],[0xa5b204,0xa5b5c4],[0x89ea94,0x89ea9c],[0x9c280c,0x9c2810],[0xa10200,0xa5b200]]
         extra = (if protocol == LegacyStockProtocol then [] else [[0xa0f82c,0xa0f830],[0x4f15c,0x4f160],[0x4f25c,0x4f260],[0x4f5e4,0x4f60a]])
-          ++ [[0xa0f824,0xa0f828] | protocol == JoinedTaskProtocol]
+          ++ (if protocol == JoinedTaskProtocol then [[0xa0f824,0xa0f828],[0xa00c0,0xa00c4]] else [])
 checkProgramHeader :: Program -> Receipt -> Either ProgramError ()
 checkProgramHeader program receipt = do
   case (program,receiptSchema receipt) of

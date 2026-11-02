@@ -56,7 +56,7 @@ pub(super) struct Binding { pub(super) id: TaskId, pub(super) core: Core, pub(su
 #[derive(Clone, Copy)]
 pub(super) struct Invocation { pub(super) entry: Entry, pub(super) sp: Address }
 
-pub(super) fn local(machine: &Machine, maps: &[MemoryMap], state: &Context, binding: Option<Binding>, invocation: Option<Invocation>, kernels: &[Kernel], program: &Program, boundary: Boundary, taken: Option<bool>) -> Result<Vec<View>, String> {
+pub(super) fn local(machine: &Machine, maps: &[MemoryMap], state: &Context, binding: Option<Binding>, invocation: Option<Invocation>, kernels: &[Kernel], program: &Program, sources: &[Code], boundary: Boundary, taken: Option<bool>) -> Result<Vec<View>, String> {
     let mut views = vec![view(machine, maps, state, Object::SharedDomains, 0x400c0800, 256)?];
     let roots = view(machine, maps, state, Object::InterfaceRoots, 0x96bd20, 8)?;
     for (offset, expected) in [(0, 0x4004dae0), (4, 0x400ddaa0)] {
@@ -68,6 +68,7 @@ pub(super) fn local(machine: &Machine, maps: &[MemoryMap], state: &Context, bind
         views.push(view(machine, maps, state, Object::CriticalCounter, 0x40a0f824, 4)?);
         views.push(view(machine, maps, state, Object::CriticalLock, 0x400c0804, 4)?);
         views.push(boot_log_control(machine, maps, state)?);
+        views.extend(boot_bss(machine, maps, state, sources)?);
     }
     for (object, address, bytes) in [(Object::ErrorState, 0x40a0f82c, 4), (Object::Callback, 0x4089ea8c, 4),
         (Object::Cursor, 0x4089ea98, 4), (Object::Lock, 0x409c280c, 4), (Object::ClassTable, 0x7cad9c, 420),
@@ -235,6 +236,21 @@ fn boot_log_control(machine: &Machine, maps: &[MemoryMap], state: &Context) -> R
     Ok(control)
 }
 
+fn boot_bss(machine: &Machine, maps: &[MemoryMap], state: &Context, sources: &[Code]) -> Result<[View; 2], String> {
+    let bss = view(machine, maps, state, Object::BootBss, 0x14c80, 32)?;
+    let mode = view(machine, maps, state, Object::BootMode, 0x400a00c0, 4)?;
+    let header_entry = |base| -> Result<u32, String> {
+        let source = sources.iter().find(|source| source.base == base).ok_or("boot BSS header source absent")?;
+        word(&source.bytes, 12)
+    };
+    require(word(&bss.bytes, 0)? == header_entry(0xd0000)? && word(&bss.bytes, 4)? == header_entry(0x61c400)?
+        && word(&bss.bytes, 16)? == word(&mode.bytes, 0)?, "record2 boot BSS publication differs")?;
+    for offset in [8, 12, 20, 24, 28] {
+        require(word(&bss.bytes, offset)? == 0, "record2 boot BSS reserved word differs")?;
+    }
+    Ok([bss, mode])
+}
+
 pub(super) fn bind_sources(machine: &Machine, maps: &[MemoryMap], state: &Context, sources: &[Code], joined: bool) -> Result<(), String> {
     for source in sources {
         let bind = |start: u64, end: u64| -> Result<(), String> {
@@ -256,7 +272,9 @@ pub(super) fn bind_sources(machine: &Machine, maps: &[MemoryMap], state: &Contex
         } else if joined && source.base == 0x10000 {
             bind(base, 0x14c60)?;
             boot_log_control(machine, maps, state)?;
-            bind(0x14c6c, end)?;
+            bind(0x14c6c, 0x14c80)?;
+            boot_bss(machine, maps, state, sources)?;
+            bind(0x14ca0, end)?;
         } else { bind(base, end)?; }
     }
     Ok(())
