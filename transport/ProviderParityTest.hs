@@ -182,7 +182,7 @@ ramSessions directory provider = inSession directory $ \root -> do
   pushModel <- newModel Nothing
   pushApi <- over pushModel
   retained <- allocate clock pushApi "alloc"
-  pushed <- session "push" >>= runRamPushWith PeerCacheBound (retainedAllocation retained) manifest clock pushApi
+  pushed <- session "push" >>= runRamPushWith PeerCacheBound NoRamPushObserver (retainedAllocation retained) manifest clock pushApi
   state <- case pushed of
     RamPushInstalled path -> readRamPushState path
     other -> fail ("ram-push: "++show other)

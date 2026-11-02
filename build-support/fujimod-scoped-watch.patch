@@ -128,7 +128,7 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
          if let Some(capture) = &self.fetch_attribution { capture.describe(&mut state); }
          state
      }
-@@ -146,7 +159,17 @@
+@@ -146,5 +159,15 @@
      pub records: Rc<RefCell<Records>>,
      contexts: Vec<Box<MemoryContext>>,
      hooks: Vec<(usize, HookId)>,
@@ -144,8 +144,6 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 +    /// A hook removal failed; the watch stays counted.
 +    Stuck,
  }
- struct MemoryContext {
-     state: Weak<RefCell<State>>,
 @@ -154,6 +177,11 @@
      maps: Vec<MemoryMap>,
      core: usize,
@@ -178,7 +176,7 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 -            hooks: vec![],
 -            refusal: None,
 -        });
-+        let mut watch = self.armed_watch(records.clone());
++        let mut watch = self.armed_watch(records.clone(), None);
          for (core, cpu) in self.cpus.iter().enumerate() {
              let mut views = maps
                  .iter()
@@ -200,24 +198,24 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 -            records: records.clone(),
 -            contexts: vec![],
 -            hooks: vec![],
--            refusal: None,
+-            refusal,
 -        });
-+        let mut watch = self.armed_watch(records.clone());
-         for (core, cpu) in self.cpus.iter().enumerate() {
-             let mut processor_views = maps
-                 .iter()
++        let mut watch = self.armed_watch(records.clone(), refusal);
+         if let Some(gate) = watch.refusal.clone() {
+             for cpu in &self.cpus {
+                 if let Err(error) = cpu.arm_execution_refusal(gate.clone()) {
 @@ -514,17 +540,40 @@
              .replace(Some(Rc::downgrade(&records)));
          Ok(watch)
      }
-+    fn armed_watch(&self, records: Rc<RefCell<Records>>) -> Box<MemoryWatch> {
++    fn armed_watch(&self, records: Rc<RefCell<Records>>, refusal: Option<ExecutionRefusal>) -> Box<MemoryWatch> {
 +        let armed = &self.physical_memory.armed_watches;
 +        armed.set(armed.get() + 1);
 +        Box::new(MemoryWatch {
 +            records,
 +            contexts: vec![],
 +            hooks: vec![],
-+            refusal: None,
++            refusal,
 +            lifetime: WatchLifetime::Armed,
 +            owner: Rc::downgrade(&self.physical_memory),
 +        })

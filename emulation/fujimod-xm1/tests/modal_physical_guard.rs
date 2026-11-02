@@ -6,13 +6,14 @@ use fujimod_emulator::board::{
     memory::BusMapping,
     observation::{
         AccessBytes, ByteOrder, CoreIndex, CpuDataAttribution, FetchAttribution, GuestAddress,
-        InstructionCores, InstructionGuardFailure, InstructionPoints, MemoryWatch,
+        InstructionCores, InstructionExecutionState, InstructionGuardFailure, InstructionPoints, MemoryWatch,
         PhysicalAddress, PhysicalInstructionGuard, ViewPolicy, WatchKinds, WatchRange,
     },
 };
 use fujimod_emulator_cpu::{Cpu, ExecutionPolicy, ExecutionRefusal, Hook, HookRange, Model, Register, Run, arm, timeline::Ratio};
 use fujimod_emulator_cpu_unicorn::rprofile;
 use fujimod_emulator_devices::{Cx, Device};
+use fujimod_xm1::modal_permit::Cpsr;
 
 const CODE: u64 = 0x1000;
 const ALIAS: u64 = 0x4000_1000;
@@ -81,11 +82,17 @@ fn watch(board: &Board, cores: InstructionCores) -> Box<MemoryWatch> {
 }
 
 fn watch_with_sources(board: &Board, cores: InstructionCores, sources: CpuDataAttribution) -> Box<MemoryWatch> {
+    watch_with_policy(board, cores, sources, InstructionExecutionState::A32Little)
+}
+
+fn watch_with_policy(
+    board: &Board, cores: InstructionCores, sources: CpuDataAttribution, state: InstructionExecutionState,
+) -> Box<MemoryWatch> {
     let protected = range(CODE, CODE + 12);
     let attribution = FetchAttribution::new(sources, vec![protected]).unwrap()
         .with_instruction_guards(vec![PhysicalInstructionGuard::arm32_little(
             protected, GuestAddress(CODE), cores,
-        ).unwrap()]).unwrap();
+        ).unwrap().with_execution_state(state)]).unwrap();
     board.memory_watch_begin_with_fetch_attribution(vec![
         range(CODE, CODE + 12),
         WatchRange { start: DATA, end: DATA + 8, kinds: WatchKinds::CPU_WRITE },
@@ -190,6 +197,7 @@ fn settled_entry_identity_is_fresh_across_same_pc_resume_loops_and_observer_orde
                 }
             };
             run(&board, core, CODE, 1);
+            assert_eq!(board.cpu(core).unwrap().instruction_progress(), Some(0));
             assert_eq!(points.event(), Some(CODE));
             let first = points.event_context().unwrap();
             let fetch = watch.fetch_event(first.core, first.entry.id).unwrap();
@@ -203,6 +211,7 @@ fn settled_entry_identity_is_fresh_across_same_pc_resume_loops_and_observer_orde
             assert_eq!(points.event(), None);
             assert!(watch.fetch_event(first.core, first.entry.id).is_none());
             run(&board, core, CODE, 1);
+            assert_eq!(board.cpu(core).unwrap().instruction_progress(), Some(0));
             assert_eq!(points.event(), Some(CODE));
             let later = points.event_context().unwrap();
             assert_ne!(later.entry.id, first.entry.id);
@@ -437,6 +446,7 @@ fn intrinsic_shared_worker_gate_adds_no_unprotected_instruction_callbacks() {
         let entry = unsafe { &*data.cast::<RefuseEntry>() };
         entry.observed.set(unsafe { &*entry.cpu }.instruction_entry());
         entry.gate.refuse();
+        unsafe { &*entry.cpu }.stop_before_instruction().unwrap();
     }
     let memory = rprofile::memory::SharedMemory::default();
     let cpus: Vec<_> = (0..2).map(|_| rprofile::worker::spawn(rprofile::worker::Config {
@@ -508,4 +518,336 @@ fn an_interactive_midblock_refusal_stops_the_next_unobserved_instruction() {
     assert_eq!(u32::from_le_bytes(value), 7);
     assert_eq!(cpu.exit_counters().unwrap()["worker_callback_instruction"], 0);
     cpu.disarm_execution_refusal(&gate).unwrap();
+    cpu.unmap(0x4000, 0x1000).unwrap();
+}
+
+#[test]
+fn an_observed_branch_cannot_supply_fetch_provenance_for_a_later_unobserved_store() {
+    let (board, _) = board(&[0xea0003fe]);
+    let stores: Vec<_> = [0xe5810000u32, 0xe2800001, 0xeafffffe]
+        .into_iter().flat_map(u32::to_le_bytes).collect();
+    board.write_physical(0x2000, &stores).unwrap();
+    let mut watch = watch(&board, InstructionCores::Both);
+    run(&board, 0, CODE, 8);
+    let records = watch.records.borrow();
+    let rows = records.rows_since(0).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["pc"].as_u64(), Some(0x2000));
+    assert_eq!(rows[0]["core_instructions"].as_u64(), Some(2));
+    assert!(rows[0]["latest_fetch"].is_null());
+    assert!(records.violation().is_some());
+    drop(records);
+    assert_eq!(watch.instruction_guard_status().unwrap().first_failure.unwrap().kind, InstructionGuardFailure::ObservationFailed);
+    assert_eq!(board.read_register(0, arm::CORE[0]).unwrap(), 7);
+    board.memory_watch_end(&mut watch).unwrap();
+}
+
+#[test]
+fn an_initial_unobserved_store_retains_its_row_before_missing_fetch_refusal() {
+    let (board, _) = board(&[0xe5810000, 0xe2800001, 0xeafffffe]);
+    let mut watch = watch(&board, InstructionCores::Both);
+    run(&board, 0, 0x2000, 8);
+    let records = watch.records.borrow();
+    let rows = records.rows_since(0).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["pc"].as_u64(), Some(0x2000));
+    assert_eq!(rows[0]["core_instructions"].as_u64(), Some(1));
+    assert!(rows[0]["latest_fetch"].is_null());
+    assert!(records.violation().is_some());
+    drop(records);
+    assert_eq!(watch.instruction_guard_status().unwrap().first_failure.unwrap().kind, InstructionGuardFailure::ObservationFailed);
+    assert_eq!(board.read_register(0, arm::CORE[0]).unwrap(), 7);
+    board.memory_watch_end(&mut watch).unwrap();
+}
+
+fn isolated_core() -> rprofile::core::Core {
+    let raw = fujimod_emulator_cpu_unicorn::Library::linked().unwrap()
+        .open(Model::CortexR5F, 1 << 20).unwrap();
+    let cpu = rprofile::core::Core::new(raw, Default::default(), rprofile::core::Wiring {
+        memory: rprofile::memory::Memory::default(),
+    }).unwrap();
+    cpu.set_execution_policy(ExecutionPolicy::Exact).unwrap();
+    cpu.write_register(Register::Pstate, &0xd3u32.to_le_bytes()).unwrap();
+    cpu.write_register(arm::CORE[0], &7u32.to_le_bytes()).unwrap();
+    cpu
+}
+
+fn register_word(cpu: &dyn Cpu, register: Register) -> u32 {
+    let mut bytes = [0; 4];
+    cpu.read_register(register, &mut bytes).unwrap();
+    u32::from_le_bytes(bytes)
+}
+
+#[test]
+fn an_exact_first_entry_intrinsic_refusal_counts_no_admitted_block_tail() {
+    unsafe fn refuse(_: fujimod_emulator_cpu::Block, data: *mut std::ffi::c_void) {
+        unsafe { &*data.cast::<ExecutionRefusal>() }.refuse();
+    }
+    let cpu = isolated_core();
+    cpu.map_zeroed(CODE, 0x1000, 7).unwrap();
+    let code: Vec<_> = [0xe2800001u32, 0xe2800002, 0xe2800004, 0xeafffffe]
+        .into_iter().flat_map(u32::to_le_bytes).collect();
+    cpu.write_memory(CODE, &code).unwrap();
+    let gate = ExecutionRefusal::default();
+    cpu.arm_execution_refusal(gate.clone()).unwrap();
+    let hook = unsafe { cpu.install_hook(Hook::Block {
+        callback: refuse, data: (&gate as *const ExecutionRefusal).cast_mut().cast(),
+        range: HookRange::Inclusive { begin: CODE, end: CODE },
+    }) }.unwrap();
+    cpu.run(Run { begin: CODE, until: None, instructions: Some(32), watchdog_us: 0 }).unwrap();
+    assert_eq!(cpu.instruction_progress(), Some(0));
+    assert_eq!(register_word(&cpu, arm::CORE[0]), 7);
+    assert_eq!(register_word(&cpu, Register::Pc), CODE as u32);
+    assert!(cpu.instruction_entry().is_none());
+    cpu.remove_hook(hook).unwrap();
+    cpu.disarm_execution_refusal(&gate).unwrap();
+    cpu.run(Run { begin: CODE, until: None, instructions: Some(1), watchdog_us: 0 }).unwrap();
+    assert!(gate.is_refused());
+    assert_eq!(cpu.instruction_progress(), Some(1));
+    assert_eq!(register_word(&cpu, arm::CORE[0]), 8);
+}
+
+#[test]
+fn an_exact_shared_core_midblock_refusal_counts_only_the_entered_prefix() {
+    struct PeerRefusal {
+        gate: ExecutionRefusal,
+        peer: *const dyn Cpu,
+    }
+    unsafe fn refuse(_: u64, _: u32, data: *mut std::ffi::c_void) {
+        let refusal = unsafe { &*data.cast::<PeerRefusal>() };
+        refusal.gate.refuse();
+        unsafe { &*refusal.peer }.stop_before_instruction().unwrap();
+    }
+    unsafe fn read(_: u64, _: u32, data: *mut std::ffi::c_void) -> u64 {
+        let refusal = unsafe { &*data.cast::<PeerRefusal>() };
+        unsafe { &*refusal.peer }.run(Run {
+            begin: 0x5000, until: None, instructions: Some(1), watchdog_us: 0,
+        }).unwrap();
+        42
+    }
+    unsafe fn write(_: u64, _: u32, _: u64, _: *mut std::ffi::c_void) {}
+    let cpu = isolated_core();
+    let peer = isolated_core();
+    cpu.map_zeroed(0x2000, 0x1000, 7).unwrap();
+    peer.map_zeroed(0x5000, 0x1000, 7).unwrap();
+    let code: Vec<_> = [0xe2800001u32, 0xe5921000, 0xe2800004, 0xeafffffe]
+        .into_iter().flat_map(u32::to_le_bytes).collect();
+    cpu.write_memory(0x2000, &code).unwrap();
+    cpu.write_register(arm::CORE[2], &0x4000u32.to_le_bytes()).unwrap();
+    peer.write_memory(0x5000, &0xe2800001u32.to_le_bytes()).unwrap();
+    let gate = ExecutionRefusal::default();
+    let refusal = PeerRefusal { gate: gate.clone(), peer: &peer };
+    let data = (&refusal as *const PeerRefusal).cast_mut().cast();
+    let hook = unsafe { peer.install_hook(Hook::Instruction {
+        callback: refuse, data, range: HookRange::Inclusive { begin: 0x5000, end: 0x5000 },
+    }) }.unwrap();
+    unsafe { cpu.map_mmio(0x4000, 0x1000, fujimod_emulator_cpu::Mmio { read, write, data }) }.unwrap();
+    cpu.arm_execution_refusal(gate.clone()).unwrap();
+    peer.arm_execution_refusal(gate.clone()).unwrap();
+    cpu.run(Run { begin: 0x2000, until: None, instructions: Some(32), watchdog_us: 0 }).unwrap();
+    assert_eq!(cpu.instruction_progress(), Some(2));
+    assert_eq!(register_word(&cpu, arm::CORE[0]), 8);
+    assert_eq!(register_word(&cpu, arm::CORE[1]), 42);
+    assert_eq!(register_word(&cpu, Register::Pc), 0x2008);
+    assert_eq!(peer.instruction_progress(), Some(0));
+    assert_eq!(register_word(&peer, arm::CORE[0]), 7);
+    peer.remove_hook(hook).unwrap();
+    cpu.disarm_execution_refusal(&gate).unwrap();
+    peer.disarm_execution_refusal(&gate).unwrap();
+    cpu.unmap(0x4000, 0x1000).unwrap();
+}
+
+#[test]
+fn dropping_an_unended_guard_refuses_both_cores_even_while_records_are_borrowed() {
+    let (board, _) = board(&[0xe2800001, 0xe2800004, 0xeafffffe]);
+    let watch = watch(&board, InstructionCores::Both);
+    let records = watch.records.clone();
+    let inspected = records.borrow();
+    drop(watch);
+    for core in 0..2 {
+        run(&board, core, CODE, 2);
+        run(&board, core, 0x2000, 2);
+        assert_eq!(board.read_register(core, arm::CORE[0]).unwrap(), 7);
+        assert_eq!(board.cpu(core).unwrap().instruction_progress(), Some(0));
+    }
+    assert_eq!(inspected.row_count(), 0);
+}
+
+#[test]
+fn dropping_a_guard_after_successful_end_leaves_execution_available() {
+    let (board, _) = board(&[0xe2800001, 0xeafffffe]);
+    let mut watch = watch(&board, InstructionCores::Both);
+    board.memory_watch_end(&mut watch).unwrap();
+    drop(watch);
+    for core in 0..2 {
+        run(&board, core, 0x2000, 1);
+        assert_eq!(board.read_register(core, arm::CORE[0]).unwrap(), 8);
+    }
+}
+
+#[test]
+fn a_hook_removal_failure_followed_by_drop_keeps_both_cores_refused() {
+    use std::cell::{Cell, RefCell};
+    struct EndDuringEntry {
+        board: *const Board,
+        watch: RefCell<Option<Box<MemoryWatch>>>,
+        refused: Cell<bool>,
+    }
+    unsafe fn end(_: u64, _: u32, data: *mut std::ffi::c_void) {
+        let context = unsafe { &*data.cast::<EndDuringEntry>() };
+        let mut watch = context.watch.borrow_mut().take().unwrap();
+        context.refused.set(unsafe { &*context.board }.memory_watch_end(&mut watch).is_err());
+        drop(watch);
+    }
+    let (board, _) = board(&[0xe2800001, 0xe2800004, 0xeafffffe]);
+    let context = EndDuringEntry {
+        board: &board, watch: RefCell::new(Some(watch(&board, InstructionCores::Both))),
+        refused: Cell::new(false),
+    };
+    let hook = unsafe { board.cpu(0).unwrap().install_hook(Hook::Instruction {
+        callback: end, data: (&context as *const EndDuringEntry).cast_mut().cast(),
+        range: HookRange::Inclusive { begin: 0x2000, end: 0x2000 },
+    }) }.unwrap();
+    run(&board, 0, 0x2000, 8);
+    assert!(context.refused.get());
+    assert_eq!(board.read_register(0, arm::CORE[0]).unwrap(), 8);
+    assert_eq!(board.cpu(0).unwrap().instruction_progress(), Some(1));
+    run(&board, 0, CODE, 2);
+    run(&board, 1, 0x2000, 2);
+    assert_eq!(board.read_register(0, arm::CORE[0]).unwrap(), 8);
+    assert_eq!(board.read_register(1, arm::CORE[0]).unwrap(), 7);
+    assert_eq!(board.cpu(0).unwrap().instruction_progress(), Some(0));
+    assert_eq!(board.cpu(1).unwrap().instruction_progress(), Some(0));
+    board.cpu(0).unwrap().remove_hook(hook).unwrap();
+}
+
+#[derive(Clone, Copy)]
+struct RefusedTaskExecution {
+    cpsr: Cpsr,
+    begin: GuestAddress,
+    instruction: [u8; 4],
+    failure: InstructionGuardFailure,
+}
+
+fn refused_task_execution_states() -> [RefusedTaskExecution; 4] {
+    let add = 0xe2800001u32.to_le_bytes();
+    [
+        RefusedTaskExecution { cpsr: Cpsr(0x93), begin: GuestAddress(CODE), instruction: add, failure: InstructionGuardFailure::ExecutionState },
+        RefusedTaskExecution { cpsr: Cpsr(0x11), begin: GuestAddress(CODE), instruction: add, failure: InstructionGuardFailure::ExecutionState },
+        RefusedTaskExecution { cpsr: Cpsr(0x33), begin: GuestAddress(CODE | 1), instruction: [0x09,0x20,0xfe,0xe7], failure: InstructionGuardFailure::InvalidWidth },
+        RefusedTaskExecution { cpsr: Cpsr(0x213), begin: GuestAddress(CODE), instruction: add, failure: InstructionGuardFailure::ByteOrder },
+    ]
+}
+
+#[test]
+fn owned_execution_state_refuses_masked_svc_fiq_thumb_and_big_endian_before_effects() {
+    for core in 0..2 {
+        for case in refused_task_execution_states() {
+            let (board, _) = board(&[0xe2800001, 0xeafffffe]);
+            board.write_physical(CODE, &case.instruction).unwrap();
+            board.write_register(core, Register::Pstate, u64::from(case.cpsr.0)).unwrap();
+            let mut watch = watch_with_policy(
+                &board, InstructionCores::Both, CpuDataAttribution::None, InstructionExecutionState::UnmaskedSvcA32Little,
+            );
+            run(&board, core, case.begin.0, 1);
+            assert_eq!(board.read_register(core, arm::CORE[0]).unwrap(), 7);
+            assert_eq!(board.cpu(core).unwrap().instruction_progress(), Some(0));
+            assert_eq!(watch.instruction_guard_status().unwrap().first_failure.unwrap().kind, case.failure);
+            assert_eq!(watch.records.borrow().row_count(), 0);
+            board.memory_watch_end(&mut watch).unwrap();
+        }
+    }
+}
+
+#[test]
+fn owned_execution_state_admits_nzcv_and_f_bit_variants() {
+    for core in 0..2 {
+        for cpsr in [Cpsr(0x13), Cpsr(0x53), Cpsr(0xa0000013), Cpsr(0xf0000053)] {
+            let (board, _) = board(&[0xe2800001, 0xe5810000, 0xeafffffe]);
+            board.write_register(core, Register::Pstate, u64::from(cpsr.0)).unwrap();
+            let mut watch = watch_with_policy(
+                &board, InstructionCores::Both, CpuDataAttribution::None, InstructionExecutionState::UnmaskedSvcA32Little,
+            );
+            run(&board, core, CODE, 2);
+            assert_eq!(board.read_register(core, arm::CORE[0]).unwrap(), 8);
+            assert_eq!(word(&board, DATA), 8);
+            assert!(watch.instruction_guard_status().unwrap().first_failure.is_none());
+            board.memory_watch_end(&mut watch).unwrap();
+        }
+    }
+}
+
+#[test]
+fn owned_execution_state_is_revalidated_on_the_resume_entry_skipped_by_points() {
+    for core in 0..2 {
+        for order in [ObserverOrder::FetchFirst, ObserverOrder::PointFirst] {
+            for case in refused_task_execution_states() {
+                let (board, _) = board(&[0xe2800001, 0xeafffffe]);
+                board.write_register(core, Register::Pstate, 0x13).unwrap();
+                let (mut watch, mut points) = match order {
+                    ObserverOrder::FetchFirst => {
+                        let watch = watch_with_policy(
+                            &board, InstructionCores::Both, CpuDataAttribution::None, InstructionExecutionState::UnmaskedSvcA32Little,
+                        );
+                        (watch, points(&board, core, CODE))
+                    }
+                    ObserverOrder::PointFirst => {
+                        let points = points(&board, core, CODE);
+                        (watch_with_policy(
+                            &board, InstructionCores::Both, CpuDataAttribution::None, InstructionExecutionState::UnmaskedSvcA32Little,
+                        ), points)
+                    }
+                };
+                run(&board, core, CODE, 1);
+                assert_eq!(points.event(), Some(CODE));
+                let stopped = points.event_context().unwrap();
+                assert!(watch.fetch_event(stopped.core, stopped.entry.id).is_some());
+                points.resume(CODE, CODE);
+                board.write_register(core, Register::Pstate, u64::from(case.cpsr.0)).unwrap();
+                run(&board, core, case.begin.0, 1);
+                assert_eq!(points.event(), None);
+                assert_eq!(board.read_register(core, arm::CORE[0]).unwrap(), 7);
+                assert_eq!(board.read_register(core, arm::CORE[1]).unwrap(), DATA);
+                assert_eq!(board.cpu(core).unwrap().instruction_progress(), Some(0));
+                assert_eq!(watch.instruction_guard_status().unwrap().first_failure.unwrap().kind, case.failure);
+                assert!(watch.fetch_event(stopped.core, stopped.entry.id).is_none());
+                board.instruction_points_end(core, &mut points).unwrap();
+                board.memory_watch_end(&mut watch).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn owned_resume_admits_nzcv_and_f_bit_changes() {
+    let (board, _) = board(&[0xe2800001, 0xeafffffe]);
+    board.write_register(0, Register::Pstate, 0x13).unwrap();
+    let mut points = points(&board, 0, CODE);
+    let mut watch = watch_with_policy(
+        &board, InstructionCores::Both, CpuDataAttribution::None, InstructionExecutionState::UnmaskedSvcA32Little,
+    );
+    run(&board, 0, CODE, 1);
+    assert_eq!(points.event(), Some(CODE));
+    points.resume(CODE, CODE);
+    board.write_register(0, Register::Pstate, 0xa0000053).unwrap();
+    run(&board, 0, CODE, 1);
+    assert_eq!(points.event(), None);
+    assert_eq!(board.read_register(0, arm::CORE[0]).unwrap(), 8);
+    assert_eq!(board.cpu(0).unwrap().instruction_progress(), Some(1));
+    assert!(watch.instruction_guard_status().unwrap().first_failure.is_none());
+    board.instruction_points_end(0, &mut points).unwrap();
+    board.memory_watch_end(&mut watch).unwrap();
+}
+
+#[test]
+fn default_execution_state_still_admits_masked_svc_and_fiq() {
+    for cpsr in [Cpsr(0xd3), Cpsr(0x11)] {
+        let (board, _) = board(&[0xe2800001, 0xeafffffe]);
+        board.write_register(0, Register::Pstate, u64::from(cpsr.0)).unwrap();
+        let mut watch = watch_with_sources(&board, InstructionCores::Both, CpuDataAttribution::None);
+        run(&board, 0, CODE, 1);
+        assert_eq!(board.read_register(0, arm::CORE[0]).unwrap(), 8);
+        assert!(watch.instruction_guard_status().unwrap().first_failure.is_none());
+        board.memory_watch_end(&mut watch).unwrap();
+    }
 }

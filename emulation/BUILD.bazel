@@ -1128,6 +1128,49 @@ haskell_binary(
     ],
 )
 
+haskell_test(
+    name = "xm1-viewer-tests",
+    size = "small",
+    srcs = ["Xm1ViewerTests.hs", "Xm1Viewer.hs", "Xm1RamPushE2E.hs"],
+    main_file = "Xm1ViewerTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-main-is", "Xm1ViewerTests.main"],
+    deps = [
+        ":emulator-slot-lib",
+        ":case-sha256",
+        ":checkpoint-key-lib",
+        ":fujimod-paths",
+        ":ff80-rehearsal-lib",
+        ":viewer-runtime-lib",
+        ":emulator-usb",
+        ":preservation-observation",
+        ":watch-observation",
+        ":modal-observation",
+        ":ui-trajectory-lib",
+        ":capture-stream-lib",
+        ":save-lifecycle-lib",
+        ":save-lifecycle-run",
+        ":segment-receipt-lib",
+        ":ram-push-unreviewed",
+        ":ram-push-procedure",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//broker:core",
+        "//host:process",
+        "//host:time",
+        "//host:unix",
+        "//host:aeson",
+        "//host:text",
+        "//host:update-container",
+        "//transport:camera-core",
+        "//transport:ram-push-cc-icon-pins",
+        "//transport:ram-push-cc-pins",
+        "//transport:ram-push-pins",
+        "//transport:ram-push-toggle-pins",
+    ],
+)
+
 # Emulated USB-toggle scenarios E2-E7 (reports/usb-personality-toggle.md 8.2).
 haskell_binary(
     name = "usb-toggle-emu",
@@ -2271,6 +2314,8 @@ haskell_library(
         ":case-sha256",
         "//host/firmware:bank-allowlist",
         ":watch-observation",
+        ":loader-code-layout",
+        "//transport:camera-core",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -2295,6 +2340,7 @@ haskell_test(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//transport:camera-core",
     ],
 )
 

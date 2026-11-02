@@ -234,7 +234,7 @@ rehearseRamAlloc size = do
 rehearseRamPush :: RamAllocState -> RamPushManifest -> IO ()
 rehearseRamPush allocation manifest = do
   putStrLn ("rehearsal: ram-push; no native provider, USB enumeration or camera execution;allocation-bytes="++show (allocSize allocation)++";runtime-bytes="++show (allocationSize manifest)++";publications="++show (length (manifestPublications manifest)))
-  outcome <- withRehearsalDirectory (runRamPushWith PeerCacheUnbound allocation manifest realClock unavailableApi)
+  outcome <- withRehearsalDirectory (runRamPushWith PeerCacheUnbound NoRamPushObserver allocation manifest realClock unavailableApi)
   unless (outcome == RamPushRefused "X-M1 peer-core cache binding is unbound; no camera write sent")
     (P.reject ("RAM-push unbound rehearsal outcome changed: "++show outcome))
 

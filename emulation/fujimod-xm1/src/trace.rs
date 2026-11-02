@@ -4,7 +4,7 @@ use crate::provenance::Guest;
 use crate::memory_view::{MemoryAddress, MemoryCore, TcmRegister, static_span, tcm_window};
 use crate::modal_trace::{Config as ModalConfig, ModalTrace, Report as ModalReport};
 use fujimod_emulator::board::factory::{Graph, MemoryMap};
-use fujimod_emulator::board::observation::InstructionPoints;
+use fujimod_emulator::board::observation::{InstructionPointEvent, InstructionPoints};
 use fujimod_emulator::session::Session;
 use fujimod_emulator_cpu::{Register, arm};
 use serde::{Deserialize, Serialize, Serializer, ser::SerializeSeq};
@@ -759,9 +759,18 @@ enum PointScope {
 }
 
 struct EnteredInstructions(u64);
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ModalPointState { Unobserved, Observed }
+#[derive(Clone, Copy)]
+struct PendingPoint {
+    pc: Guest,
+    point: Option<InstructionPointEvent>,
+}
 struct ResumeMarker {
     pc: Guest,
     entered: EnteredInstructions,
+    point: Option<InstructionPointEvent>,
+    modal: ModalPointState,
 }
 
 #[derive(Default)]
@@ -776,7 +785,7 @@ pub struct TraceSites {
     cores: CoreSelection,
     resumed: BTreeMap<usize, ResumeMarker>,
     capture_observation: Option<CaptureObservation>,
-    pending_points: Vec<Option<u64>>,
+    pending_points: Vec<Option<PendingPoint>>,
     capture_memory: Option<CaptureMemory>,
     modal_observation: Option<ModalTrace>,
 }
@@ -827,20 +836,28 @@ impl TraceSites {
         if self.modal_observation_active() || self.capture_observation_active() {
             return Err("modal observation requires no active modal or capture observation".into());
         }
-        let mut monitor = ModalTrace::new(config, session)?;
         let counts = session.board.instruction_counts();
-        let instructions = InstructionCount::from_board(session)?;
-        let observed = self.resumed.iter().try_for_each(|(&core, marker)| {
-            if monitor.contains(marker.pc) && counts[core] == marker.entered.0
+        for (&core, marker) in &self.resumed {
+            if config.refuses_prior_stop(marker.pc) && counts.get(core).copied() == Some(marker.entered.0)
                 && session.board.read_register(core, Register::Pc)? == u64::from(marker.pc.0) {
-                monitor.observe(session, core, marker.pc, instructions)?;
+                return Err("installed-lifetime observation requires a fresh protected instruction entry".into());
+            }
+        }
+        let mut monitor = ModalTrace::new(config, session)?;
+        let instructions = InstructionCount::from_board(session)?;
+        let observed = self.resumed.iter_mut().try_for_each(|(&core, marker)| {
+            if !monitor.guarded() && monitor.contains(marker.pc)
+                && counts.get(core).copied() == Some(marker.entered.0)
+                && session.board.read_register(core, Register::Pc)? == u64::from(marker.pc.0) {
+                monitor.observe(session, core, marker.pc, instructions, marker.point)?;
+                marker.modal = ModalPointState::Observed;
             }
             Ok::<(), String>(())
         });
         if let Err(failure) = &observed { monitor.fail(failure.clone()); }
-        self.end_points(session)?;
         self.modal_observation = Some(monitor);
-        if let Err(failure) = self.rearm(session).and_then(|()| self.restore_resume(session)) {
+        if let Err(failure) = self.end_points(session).and_then(|()| self.rearm(session))
+            .and_then(|()| self.restore_resume(session)) {
             if let Some(modal) = &mut self.modal_observation { modal.fail(failure.clone()); }
             return Err(failure);
         }
@@ -848,12 +865,12 @@ impl TraceSites {
     }
 
     pub fn end_modal_observation(&mut self, session: &Session) -> Result<(), String> {
-        self.modal_observation.as_mut().ok_or("modal observation has not begun")?.check_finish()?;
+        self.modal_observation.as_mut().ok_or("modal observation has not begun")?.check_finish(session)?;
         let teardown = self.end_points(session)
             .and_then(|()| self.rearm_scope(session, PointScope::User))
             .and_then(|()| self.restore_resume(session));
         let modal = self.modal_observation.as_mut().ok_or("modal observation disappeared")?;
-        match teardown {
+        match teardown.and_then(|()| modal.finish_guard(session)) {
             Ok(()) => {
                 modal.disable();
                 Ok(())
@@ -1130,10 +1147,8 @@ impl TraceSites {
 
     /// Pending hooks are retained until their details fit in the capture arena.
     pub fn collect(&mut self, session: &Session, instructions: InstructionCount) -> Result<CollectionOutcome, String> {
-        if self.modal_observation_active() {
-            if let Some(failure) = self.modal_observation_report().failure {
-                return Err(failure.to_owned());
-            }
+        if let Some(modal) = self.modal_observation.as_mut().filter(|modal| modal.active()) {
+            modal.check_interval()?;
         }
         if self.capture_page_outstanding() {
             return Ok(CollectionOutcome::DrainRequired);
@@ -1148,15 +1163,21 @@ impl TraceSites {
         let counts = session.board.instruction_counts();
         for (index, (_, points)) in self.points.iter().enumerate() {
             if self.pending_points[index].is_none() {
-                self.pending_points[index] = points.event();
+                self.pending_points[index] = points.event().map(|pc| {
+                    Ok::<_, String>(PendingPoint {
+                        pc: Guest(u32::try_from(pc).map_err(|_| "trace site exceeds32bits")?),
+                        point: points.event_context(),
+                    })
+                }).transpose()?;
             }
         }
         for (point_index, (core, points)) in self.points.iter().enumerate() {
-            let Some(pc) = self.pending_points[point_index] else { continue };
-            let address = u32::try_from(pc).map_err(|_| "trace site exceeds 32 bits")?;
+            let Some(pending) = self.pending_points[point_index] else { continue };
+            let address = pending.pc.0;
+            let pc = u64::from(address);
             if let Some(modal) = self.modal_observation.as_mut().filter(|modal| modal.active()) {
                 if modal.contains(Guest(address)) {
-                    new_returns[*core] = modal.observe(session, *core, Guest(address), instructions)?;
+                    new_returns[*core] = modal.observe(session, *core, Guest(address), instructions, pending.point)?;
                     observed_modal[*core] = Some(Guest(address));
                 }
             }
@@ -1166,7 +1187,12 @@ impl TraceSites {
                 points.resume(current, pc);
                 self.pending_points[point_index] = None;
                 if current == pc {
-                    self.resumed.insert(*core, ResumeMarker { pc: Guest(address), entered: EnteredInstructions(counts[*core]) });
+                    self.resumed.insert(*core, ResumeMarker {
+                        pc: Guest(address), entered: EnteredInstructions(counts[*core]), point: pending.point,
+                        modal: if observed_modal[*core] == Some(Guest(address)) {
+                            ModalPointState::Observed
+                        } else { ModalPointState::Unobserved },
+                    });
                 } else {
                     self.resumed.remove(core);
                 }
@@ -1249,18 +1275,24 @@ impl TraceSites {
             points.resume(current, pc);
             self.pending_points[point_index] = None;
             if current == pc {
-                self.resumed.insert(*core, ResumeMarker { pc: Guest(address), entered: EnteredInstructions(counts[*core]) });
+                self.resumed.insert(*core, ResumeMarker {
+                    pc: Guest(address), entered: EnteredInstructions(counts[*core]), point: pending.point,
+                    modal: if observed_modal[*core] == Some(Guest(address)) {
+                        ModalPointState::Observed
+                    } else { ModalPointState::Unobserved },
+                });
             } else {
                 self.resumed.remove(core);
             }
         }
         if new_returns.iter().any(Option::is_some) {
             if let Some(modal) = &mut self.modal_observation {
-                for (&core, marker) in &self.resumed {
-                    if new_returns.contains(&Some(marker.pc)) && observed_modal[core] != Some(marker.pc)
+                for (&core, marker) in &mut self.resumed {
+                    if new_returns.contains(&Some(marker.pc)) && marker.modal == ModalPointState::Unobserved
                         && counts[core] == marker.entered.0
                         && session.board.read_register(core, Register::Pc)? == u64::from(marker.pc.0) {
-                        modal.observe(session, core, marker.pc, instructions)?;
+                        modal.observe(session, core, marker.pc, instructions, marker.point)?;
+                        marker.modal = ModalPointState::Observed;
                     }
                 }
             }
