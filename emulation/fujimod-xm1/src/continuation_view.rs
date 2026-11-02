@@ -55,6 +55,13 @@ pub(super) struct Words {
     pub guest_equal: [bool; 2],
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) struct RawWords {
+    pub mapping: Mapping,
+    pub physical: Vec<u8>,
+    pub aliases: [[Vec<u8>; 2]; 2],
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum Resource {
@@ -159,6 +166,34 @@ impl<'a> Reader<'a> {
         }
         if equal != [true; 2] { return Err("committed guest and physical words differ".into()); }
         Ok(Words { mapping, values: physical[..length].chunks_exact(4).map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]])).collect(), guest_equal: equal })
+    }
+    pub(super) fn observed_words(&self, guest: Guest, count: usize) -> Result<(Words, RawWords), String> {
+        if guest.0 % 4 != 0 || count == 0 || count > 80 {
+            return Err("word projection extent is not admitted".into());
+        }
+        let length = count * 4;
+        let mapping = self.mapping(guest, length)?;
+        let mut physical = vec![0; length];
+        self.session.board.read_physical(u64::from(mapping.physical.0), &mut physical)?;
+        let mut aliases: [[Vec<u8>; 2]; 2] =
+            std::array::from_fn(|_| std::array::from_fn(|_| vec![0; length]));
+        for (core, views) in aliases.iter_mut().enumerate() {
+            for (alias, bytes) in views.iter_mut().enumerate() {
+                let address = Guest(mapping.physical.0 | if alias == 0 { 0 } else { 0x40000000 });
+                if self.mapping(address, length)?.physical != mapping.physical {
+                    return Err("projection alias has a different physical mapping".into());
+                }
+                self.session.board.read_memory(core, u64::from(address.0), bytes)?;
+            }
+        }
+        let words = Words {
+            mapping: mapping.clone(),
+            values: physical.chunks_exact(4).map(|word| {
+                u32::from_le_bytes([word[0], word[1], word[2], word[3]])
+            }).collect(),
+            guest_equal: std::array::from_fn(|core| aliases[core].iter().all(|bytes| *bytes == physical)),
+        };
+        Ok((words, RawWords { mapping, physical, aliases }))
     }
 }
 pub(super) fn words(session: &Session, maps: &[MemoryMap], guest: Guest, count: usize) -> Result<Words, String> {

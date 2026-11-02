@@ -6,9 +6,10 @@ use std::{collections::{BTreeMap, BTreeSet}, num::NonZeroUsize, path::{Path, Pat
 
 mod continuation_view;
 mod loader_continuations_check;
+mod application_pump;
 use continuation_view::{ByteCount, Digest, EventId, FileBinding, Resource, Snapshot, Words};
 
-const USAGE: &str = "loader-continuations --run RUN --update DAT --boot-rom ROM --analysis ROOT --output NEW_DIR; --verify DIR --analysis ROOT validates the raw observation; --source-calls NEW_DIR --analysis ROOT emits the canonical call model without guest execution";
+const USAGE: &str = "loader-continuations --run RUN --update DAT --boot-rom ROM --analysis ROOT --output NEW_DIR; --verify DIR --analysis ROOT; --source-calls NEW_DIR --analysis ROOT; --application-pump retained|owned --original-update ORIGINAL_DAT --update ACTUAL_DAT --pump-code BIN --pump-symbols SYMBOLS --pump-admission CONTRACT --run RUN --boot-rom ROM --analysis ROOT --output NEW_APP154_DIR; --verify-application-pump DIR --analysis ROOT; --compare-application-pump RETAINED --owned-pump OWNED --analysis ROOT --output NEW_APP154_DIR; --controls-application-pump OWNED --analysis ROOT --output NEW_APP154_DIR";
 const TRACE_LIMIT: usize = 16384;
 const DIAGNOSTICS: [(u32, u32); 7] = [(0x40cac,0x40d50),(0xd0cac,0xd0d50),(0x40d70,0x40d98),(0xd0d70,0xd0d98),(0x69cc6c,0x69cd58),(0xed468c,0xed485c),(0xed4a8c,0xed4a9c)];
 
@@ -243,12 +244,31 @@ fn epoch(machine:&mut Machine,observation:&mut Observation,catalog:&Catalog,maps
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum OptionKey { Run,Update,Rom,Analysis,Output,Verify,SourceCalls }
-impl OptionKey {fn parse(value:&std::ffi::OsStr)->Result<Self,String>{match value.to_str(){Some("--run")=>Ok(Self::Run),Some("--update")=>Ok(Self::Update),Some("--boot-rom")=>Ok(Self::Rom),Some("--analysis")=>Ok(Self::Analysis),Some("--output")=>Ok(Self::Output),Some("--verify")=>Ok(Self::Verify),Some("--source-calls")=>Ok(Self::SourceCalls),_=>Err(USAGE.into())}}}
+enum OptionKey { Run,Update,Rom,Analysis,Output,Verify,SourceCalls,ApplicationPump,VerifyApplicationPump,CompareApplicationPump,OwnedPump,ControlsApplicationPump,OriginalUpdate,PumpCode,PumpSymbols,PumpAdmission }
+impl OptionKey {fn parse(value:&std::ffi::OsStr)->Result<Self,String>{match value.to_str(){Some("--run")=>Ok(Self::Run),Some("--update")=>Ok(Self::Update),Some("--boot-rom")=>Ok(Self::Rom),Some("--analysis")=>Ok(Self::Analysis),Some("--output")=>Ok(Self::Output),Some("--verify")=>Ok(Self::Verify),Some("--source-calls")=>Ok(Self::SourceCalls),Some("--application-pump")=>Ok(Self::ApplicationPump),Some("--verify-application-pump")=>Ok(Self::VerifyApplicationPump),Some("--compare-application-pump")=>Ok(Self::CompareApplicationPump),Some("--owned-pump")=>Ok(Self::OwnedPump),Some("--controls-application-pump")=>Ok(Self::ControlsApplicationPump),Some("--original-update")=>Ok(Self::OriginalUpdate),Some("--pump-code")=>Ok(Self::PumpCode),Some("--pump-symbols")=>Ok(Self::PumpSymbols),Some("--pump-admission")=>Ok(Self::PumpAdmission),_=>Err(USAGE.into())}}}
 fn drive()->Result<(),String>{
     let mut arguments=std::env::args_os().skip(1);let mut options=BTreeMap::new();
     while let Some(flag)=arguments.next(){if options.insert(OptionKey::parse(&flag)?,PathBuf::from(arguments.next().ok_or(USAGE)?)).is_some(){return Err(USAGE.into());}}
     let analysis=options.remove(&OptionKey::Analysis).ok_or(USAGE)?;
+    if let Some(output)=options.remove(&OptionKey::VerifyApplicationPump){if !options.is_empty(){return Err(USAGE.into());}return application_pump::verify(&output,&analysis);}
+    if let Some(retained)=options.remove(&OptionKey::CompareApplicationPump){
+        let owned=options.remove(&OptionKey::OwnedPump).ok_or(USAGE)?;
+        let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;
+        if !options.is_empty(){return Err(USAGE.into());}
+        return application_pump::compare(&retained,&owned,&analysis,&output);
+    }
+    if let Some(source)=options.remove(&OptionKey::ControlsApplicationPump){
+        let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;
+        if !options.is_empty(){return Err(USAGE.into());}
+        return application_pump::controls(&source,&analysis,&output);
+    }
+    if let Some(mode)=options.remove(&OptionKey::ApplicationPump){
+        let mode=application_pump::Mode::parse(&mode)?;
+        let mut take=|key|options.remove(&key).ok_or_else(||USAGE.to_owned());
+        let request=application_pump::Request {mode,analysis,run:take(OptionKey::Run)?,update:take(OptionKey::Update)?,original_update:take(OptionKey::OriginalUpdate)?,boot_rom:take(OptionKey::Rom)?,output:take(OptionKey::Output)?,code:take(OptionKey::PumpCode)?,symbols:take(OptionKey::PumpSymbols)?,admission:take(OptionKey::PumpAdmission)?};
+        if !options.is_empty(){return Err(USAGE.into());}
+        return application_pump::run(request);
+    }
     if let Some(output)=options.remove(&OptionKey::SourceCalls){
         if !options.is_empty(){return Err(USAGE.into());}
         let catalog=Catalog::open(&analysis)?;std::fs::create_dir(&output).map_err(|error|error.to_string())?;

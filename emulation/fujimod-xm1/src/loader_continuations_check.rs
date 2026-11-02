@@ -20,7 +20,13 @@ impl TryFrom<String> for RegisterNumber {
     fn try_from(value:String)->Result<Self,String>{let number=value.strip_prefix('r').ok_or("general-register name absent")?.parse::<u8>().map_err(|error|error.to_string())?;if number>12{return Err("register outside captured set".into());}Ok(Self(number))}
 }
 #[derive(Deserialize)]
-struct Hit {address:HexWord,core:Core,instructions:super::Count,cpsr:u32,registers:BTreeMap<RegisterNumber,HexWord>,sp:HexWord,lr:HexWord}
+pub(super) struct Hit {address:HexWord,core:Core,instructions:super::Count,cpsr:u32,registers:BTreeMap<RegisterNumber,HexWord>,sp:HexWord,lr:HexWord}
+pub(super) fn hit_location(hit:&Hit)->(Guest,Core,super::Count){(Guest(hit.address.0),hit.core,hit.instructions)}
+pub(super) fn hit_matches(hit:&Hit,pc:Guest,core:Core,count:super::Count,registers:&super::Registers)->bool{
+    hit.address.0==pc.0&&hit.core==core&&hit.instructions==count&&hit.cpsr==registers.cpsr
+        &&hit.sp.0==registers.sp.0&&hit.lr.0==registers.lr.0&&hit.registers.len()==13
+        &&(0..13u8).all(|number|hit.registers.get(&RegisterNumber(number)).is_some_and(|value|value.0==registers.r[usize::from(number)]))
+}
 #[derive(Serialize)]
 #[serde(rename_all="kebab-case")]
 enum Scope { CanonicalNaturalObservation }
@@ -36,7 +42,7 @@ fn mapping(value:&Mapping)->Result<(),String>{
     for bank in value.tcm.into_iter().flatten(){if bank&1==0{continue;}let size=(bank>>2)&31;if size==0{continue;}require((3..=14).contains(&size),"projection has a reserved TCM size")?;let bytes=512u64<<size;let low=u64::from(bank&0xfffff000);let end=low+bytes;require(low%bytes==0&&end<=1u64<<32,"projection TCM window has invalid alignment or endpoint")?;require(end<=u64::from(value.guest.0)||u64::from(value.guest.0)+u64::from(value.bytes.0)<=low,"projection intersects TCM")?;}
     Ok(())
 }
-fn words(value:&Words)->Result<(),String>{mapping(&value.mapping)?;require(value.mapping.bytes.0 as usize==4*value.values.len()&&value.guest_equal==[true;2],"word projection lacks equal committed views")}
+pub(super) fn words(value:&Words)->Result<(),String>{mapping(&value.mapping)?;require(value.mapping.bytes.0 as usize==4*value.values.len()&&value.guest_equal==[true;2],"word projection lacks equal committed views")}
 fn at(event:&Event,address:u32)->Result<u32,String>{
     for view in &event.state {if let Some(offset)=address.checked_sub(view.mapping.guest.0){if offset%4==0{if let Some(value)=view.values.get((offset/4) as usize){return Ok(*value);}}}}
     Err(format!("committed scalar {address:#x} absent"))
@@ -51,7 +57,7 @@ fn projected_frame(event:&Event)->Result<&[u32],String>{
     let frame=event.frame.as_ref().map_err(|_|"loader caller frame was not projected")?;words(frame)?;
     require(frame.mapping.guest.0.checked_add(64)==Some(event.registers.sp.0)&&frame.values.len()==20,"loader frame extent differs")?;Ok(&frame.values[16..20])
 }
-fn snapshot(root:&Path,sample:&super::Snapshot,catalog:&Catalog)->Result<(),String>{
+pub(super) fn snapshot(root:&Path,sample:&super::Snapshot,catalog:&Catalog)->Result<(),String>{
     mapping(&sample.mapping)?;let (start,end)=sample.resource.extent();require(sample.mapping.guest.0==start&&sample.mapping.bytes.0==end-start,"resource projection extent differs")?;
     let expected=catalog.expected(sample.resource)?;let mut first_difference=None;let mut digests=Vec::with_capacity(3);
     for (index,binding) in sample.files.iter().enumerate(){
@@ -129,8 +135,7 @@ pub(super) fn check(root:&Path,catalog:&Catalog)->Result<Verification,String>{
     let mut previous=0;
     for (index,(hit,event)) in trace.iter().zip(&report.events).enumerate(){
         require(event.id.0==index&&event.instructions.0>=previous&&event.instructions.0<=report.instructions.0,"event chronology differs")?;previous=event.instructions.0;
-        require(hit.address.0==event.pc.0&&hit.core==event.core&&hit.instructions==event.instructions&&hit.cpsr==event.registers.cpsr&&hit.sp.0==event.registers.sp.0&&hit.lr.0==event.registers.lr.0&&hit.registers.len()==13,"raw boundary differs")?;
-        for register in 0..13u8{require(hit.registers.get(&RegisterNumber(register)).is_some_and(|value|value.0==event.registers.r[usize::from(register)]),"raw general register differs")?;}
+        require(hit_matches(hit,event.pc,event.core,event.instructions,&event.registers),"raw boundary differs")?;
         let (source,expected)=catalog.word(event.pc)?;words(&event.code)?;require(source==event.source&&event.code.mapping.guest==event.pc&&event.code.values==[expected]&&event.registers.cpsr&0x20==0,"entered source instruction differs")?;
         for value in event.state.iter().chain(event.descriptor.iter()).chain(event.payload.iter()){words(value)?;}if let Ok(frame)=&event.frame{words(frame)?;}
         let physical=event.pc.0&!0x40000000;
