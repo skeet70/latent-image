@@ -753,6 +753,13 @@ enum CoreSelection {
     Primary,
 }
 
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+enum PointSetMode {
+    #[default]
+    Fixed,
+    Mutable,
+}
+
 enum PointScope {
     User,
     UserAndModal,
@@ -774,6 +781,7 @@ pub struct TraceSites {
     code_binding: Option<CodeBinding>,
     points: Vec<(usize, Box<InstructionPoints>)>,
     cores: CoreSelection,
+    point_set_mode: PointSetMode,
     resumed: BTreeMap<usize, ResumeMarker>,
     capture_observation: Option<CaptureObservation>,
     pending_points: Vec<Option<u64>>,
@@ -998,11 +1006,35 @@ impl TraceSites {
 
     /// Replaces the armed sites on every core.
     pub fn arm(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
-        self.arm_selection(session, sites, CoreSelection::All)
+        self.arm_selection(session, sites, CoreSelection::All, PointSetMode::Fixed)
     }
 
     pub fn arm_primary(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
-        self.arm_selection(session, sites, CoreSelection::Primary)
+        self.arm_selection(session, sites, CoreSelection::Primary, PointSetMode::Fixed)
+    }
+
+    pub fn arm_mutable(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
+        self.arm_selection(session, sites, CoreSelection::All, PointSetMode::Mutable)
+    }
+
+    pub fn replace_sites(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
+        if self.modal_observation_active() {
+            return Err("modal observation sites are frozen until successful finish".into());
+        }
+        if self.capture_observation_active() {
+            return Err("capture observation sites are frozen until the session ends".into());
+        }
+        self.replace_point_addresses(sites.keys().map(|&address| u64::from(address)).collect())?;
+        self.sites = sites;
+        self.restore_resume(session)
+    }
+
+    fn replace_point_addresses(&self, addresses: Vec<u64>) -> Result<(), String> {
+        if self.point_set_mode != PointSetMode::Mutable || self.points.is_empty() {
+            return Err("mutable instruction points are not armed".into());
+        }
+        for (_, points) in &self.points { points.replace_addresses(addresses.clone())?; }
+        Ok(())
     }
 
     fn arm_selection(
@@ -1010,6 +1042,7 @@ impl TraceSites {
         session: &Session,
         sites: BTreeMap<u32, String>,
         cores: CoreSelection,
+        point_set_mode: PointSetMode,
     ) -> Result<(), String> {
         if self.modal_observation_active() {
             return Err("modal observation sites are frozen until successful finish".into());
@@ -1020,6 +1053,7 @@ impl TraceSites {
         self.disarm(session)?;
         self.sites = sites;
         self.cores = cores;
+        self.point_set_mode = point_set_mode;
         self.resumed.clear();
         self.rearm(session)
     }
@@ -1050,7 +1084,11 @@ impl TraceSites {
         if addresses.iter().any(|address| !self.sites.contains_key(&address.0)) {
             return Err("trace site is not armed".into());
         }
-        self.disarm(session)?;
+        let mutable = self.point_set_mode == PointSetMode::Mutable;
+        if mutable {
+            self.replace_point_addresses(self.sites.keys().filter(|address| !addresses.iter().any(|removed| removed.0 == **address))
+                .map(|&address| u64::from(address)).collect())?;
+        } else { self.disarm(session)?; }
         for address in addresses {
             if let Some(label) = self.sites.remove(&address.0) {
                 if !self.sites.values().any(|other| other == &label) {
@@ -1058,7 +1096,7 @@ impl TraceSites {
                 }
             }
         }
-        self.rearm(session)?;
+        if !mutable { self.rearm(session)?; }
         self.restore_resume(session)
     }
 
@@ -1073,14 +1111,17 @@ impl TraceSites {
         if sites.keys().any(|address| self.sites.contains_key(address)) {
             return Err("trace site is already armed".into());
         }
-        self.disarm(session)?;
+        let mutable = self.point_set_mode == PointSetMode::Mutable;
+        if mutable {
+            self.replace_point_addresses(self.sites.keys().chain(sites.keys()).map(|&address| u64::from(address)).collect())?;
+        } else { self.disarm(session)?; }
         for label in sites.values() {
             if !self.stop_labels.contains(label) {
                 self.stop_labels.insert(label.clone());
             }
         }
         self.sites.extend(sites);
-        self.rearm(session)?;
+        if !mutable { self.rearm(session)?; }
         self.restore_resume(session)
     }
 
@@ -1111,7 +1152,7 @@ impl TraceSites {
         if let Some(modal) = modal {
             addresses.extend(modal.sites().map(|pc| u64::from(pc.0)));
         }
-        if addresses.is_empty() { return Ok(()); }
+        if addresses.is_empty() && self.point_set_mode == PointSetMode::Fixed { return Ok(()); }
         let addresses: Vec<u64> = addresses.into_iter().collect();
         for core in 0..session.board.instruction_counts().len() {
             let selected = modal.is_some() || match self.cores {
@@ -1121,7 +1162,10 @@ impl TraceSites {
             if !selected {
                 continue;
             }
-            let points = session.board.instruction_points_begin(core, addresses.clone())?;
+            let points = match self.point_set_mode {
+                PointSetMode::Fixed => session.board.instruction_points_begin(core, addresses.clone())?,
+                PointSetMode::Mutable => session.board.instruction_points_begin_mutable(core, addresses.clone())?,
+            };
             self.points.push((core, points));
             self.pending_points.push(None);
         }
