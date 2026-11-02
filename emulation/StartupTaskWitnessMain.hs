@@ -9,12 +9,14 @@ import Data.Either (isRight)
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NE
 import qualified Emulation.Image4Staging as Image4
-import Emulation.StartupTaskControls (refusalControls)
+import Emulation.StartupTaskControls (refusalControls, refusalControlsFor)
 import Emulation.StartupTaskWitness
 import Emulation.TaskSubmissionComparison (compareReceipts, comparisonValue)
 import Emulation.TaskSubmissionControlWire (ProbeCase(..), probeCase)
 import Emulation.TaskSubmissionProgram (NativeInputs(..))
+import qualified Emulation.TaskSubmissionProgram as P
 import qualified FujiAF.Host as H
+import qualified Replacement.StartupComposition.TaskSubmission as Joined
 import qualified Replacement.TaskSubmission.Artifact as Artifact
 import System.Directory (doesPathExist)
 import System.Environment (getArgs)
@@ -29,13 +31,17 @@ newtype OutputFile = OutputFile FilePath
 
 data SourcePaths = SourcePaths InputFile InputFile InputFile AnalysisRoot InputFile
 data NativePaths = NativePaths InputFile InputFile ScratchPath InputFile InputFile
+data NativeComponentPaths = NativeComponentPaths InputFile InputFile
+data JoinedNativePaths = JoinedNativePaths NativePaths NativeComponentPaths NativeComponentPaths
 data StockCommand = Qualify | RefusalControls
-data OwnedMode = QualifyOwned | CompareOwned | CohortOwned
+data OwnedMode = QualifyOwned | CompareOwned | CohortOwned | RefuseOwned
 data OwnedCommand = OwnedQualify (NonEmpty ObservationDirectory)
   | Compare ObservationDirectory ObservationDirectory
   | Cohort ObservationDirectory ObservationDirectory
+  | OwnedRefusals ObservationDirectory
 data Arguments = Historical StockCommand SourcePaths ObservationDirectory OutputFile
   | Owned Image4.Tools SourcePaths NativePaths OwnedCommand OutputFile
+  | Joined Image4.Tools SourcePaths JoinedNativePaths OwnedCommand OutputFile
 
 data ExpectedCase = AnyCase | NaturalCase | ControlledCase ProbeCase
 data QualificationFailure = ObservationReadRejected String | ReceiptRejected WitnessError | CohortCaseRejected
@@ -47,6 +53,8 @@ usage = unlines
   [ "usage: startup-task-check [ENCODER REBUILD DECODER] qualify|refusal-controls DAT RUN ROM ANALYSIS_ROOT OBSERVER OBSERVATION_DIR OUT_JSON"
   , "       startup-task-check ENCODER REBUILD DECODER owned-qualify DAT RUN ROM ANALYSIS_ROOT OBSERVER LINKED_BIN SYMBOLS SCRATCH_DIR CANDIDATE_DAT CONTRACT OBSERVATION_DIR... OUT_JSON"
   , "       startup-task-check ENCODER REBUILD DECODER compare|cohort DAT RUN ROM ANALYSIS_ROOT OBSERVER LINKED_BIN SYMBOLS SCRATCH_DIR CANDIDATE_DAT CONTRACT RETAINED_DIR OWNED_DIR OUT_JSON"
+  , "       startup-task-check ENCODER REBUILD DECODER joined-qualify|joined-refusal-controls DAT RUN ROM ANALYSIS_ROOT OBSERVER WRAPPER_BIN WRAPPER_SYMBOLS CRITICAL_BIN CRITICAL_SYMBOLS STORAGE_BIN STORAGE_SYMBOLS SCRATCH_DIR CANDIDATE_DAT CONTRACT OBSERVATION_DIR... OUT_JSON"
+  , "       startup-task-check ENCODER REBUILD DECODER joined-compare|joined-cohort DAT RUN ROM ANALYSIS_ROOT OBSERVER WRAPPER_BIN WRAPPER_SYMBOLS CRITICAL_BIN CRITICAL_SYMBOLS STORAGE_BIN STORAGE_SYMBOLS SCRATCH_DIR CANDIDATE_DAT CONTRACT RETAINED_DIR JOINED_DIR OUT_JSON"
   ]
 
 arguments :: [String] -> IO Arguments
@@ -59,6 +67,10 @@ arguments raw = case raw of
     "owned-qualify" -> owned (Image4.Tools encoder rebuild decoder) QualifyOwned paths
     "compare" -> owned (Image4.Tools encoder rebuild decoder) CompareOwned paths
     "cohort" -> owned (Image4.Tools encoder rebuild decoder) CohortOwned paths
+    "joined-qualify" -> joined (Image4.Tools encoder rebuild decoder) QualifyOwned paths
+    "joined-compare" -> joined (Image4.Tools encoder rebuild decoder) CompareOwned paths
+    "joined-cohort" -> joined (Image4.Tools encoder rebuild decoder) CohortOwned paths
+    "joined-refusal-controls" -> joined (Image4.Tools encoder rebuild decoder) RefuseOwned paths
     _ -> H.failH usage
   _ -> H.failH usage
   where
@@ -67,18 +79,28 @@ arguments raw = case raw of
     historical mode [dat,run,rom,analysis,observer,observations,output] = pure
       (Historical mode (sourcePaths dat run rom analysis observer) (ObservationDirectory observations) (OutputFile output))
     historical _ _ = H.failH usage
+    commandOutput mode paths = case (mode,reverse paths) of
+      (QualifyOwned,output:lastDirectory:rest) -> pure
+        (OwnedQualify (NE.reverse (ObservationDirectory lastDirectory :| map ObservationDirectory rest)),OutputFile output)
+      (CompareOwned,[output,ownedDirectory,retainedDirectory]) -> pure
+        (Compare (ObservationDirectory retainedDirectory) (ObservationDirectory ownedDirectory),OutputFile output)
+      (CohortOwned,[output,ownedDirectory,retainedDirectory]) -> pure
+        (Cohort (ObservationDirectory retainedDirectory) (ObservationDirectory ownedDirectory),OutputFile output)
+      (RefuseOwned,[output,directory]) -> pure (OwnedRefusals (ObservationDirectory directory),OutputFile output)
+      _ -> H.failH usage
     owned tools mode (dat:run:rom:analysis:observer:linked:symbols:scratch:candidate:contract:paths) = do
-      (command,output) <- case (mode,reverse paths) of
-        (QualifyOwned,output:lastDirectory:rest) -> pure
-          (OwnedQualify (NE.reverse (ObservationDirectory lastDirectory :| map ObservationDirectory rest)),OutputFile output)
-        (CompareOwned,[output,ownedDirectory,retainedDirectory]) -> pure
-          (Compare (ObservationDirectory retainedDirectory) (ObservationDirectory ownedDirectory),OutputFile output)
-        (CohortOwned,[output,ownedDirectory,retainedDirectory]) -> pure
-          (Cohort (ObservationDirectory retainedDirectory) (ObservationDirectory ownedDirectory),OutputFile output)
-        _ -> H.failH usage
+      (command,output) <- commandOutput mode paths
       pure (Owned tools (sourcePaths dat run rom analysis observer)
         (NativePaths (InputFile linked) (InputFile symbols) (ScratchPath scratch) (InputFile candidate) (InputFile contract)) command output)
     owned _ _ _ = H.failH usage
+    joined tools mode (dat:run:rom:analysis:observer:wrapper:wrapperSymbols:critical:criticalSymbols:storage:storageSymbols:scratch:candidate:contract:paths) = do
+      (command,output) <- commandOutput mode paths
+      pure (Joined tools (sourcePaths dat run rom analysis observer)
+        (JoinedNativePaths
+          (NativePaths (InputFile wrapper) (InputFile wrapperSymbols) (ScratchPath scratch) (InputFile candidate) (InputFile contract))
+          (NativeComponentPaths (InputFile critical) (InputFile criticalSymbols))
+          (NativeComponentPaths (InputFile storage) (InputFile storageSymbols))) command output)
+    joined _ _ _ = H.failH usage
 
 sourceFiles :: SourcePaths -> IO SourceFiles
 sourceFiles (SourcePaths (InputFile dat) (InputFile run) (InputFile rom) (AnalysisRoot analysis) (InputFile observer)) =
@@ -102,6 +124,24 @@ ownedInputs tools sources (NativePaths (InputFile linked) (InputFile symbols) (S
   scratch <- Image4.validateScratchDirectory scratchPath
   staged <- Artifact.stageCandidate tools scratch (Artifact.stageImage4 canonical artifact)
   either (H.failH . show) pure (admitOwnedInputs sources native staged)
+
+joinedInputs :: Image4.Tools -> SourceFiles -> JoinedNativePaths -> IO Inputs
+joinedInputs tools sources (JoinedNativePaths
+    (NativePaths (InputFile wrapper) (InputFile wrapperSymbols) (ScratchPath scratchPath) (InputFile candidate) (InputFile contract))
+    (NativeComponentPaths (InputFile critical) (InputFile criticalSymbols))
+    (NativeComponentPaths (InputFile storage) (InputFile storageSymbols))) = do
+  wrapperInputs <- NativeInputs <$> H.readRegular 852 wrapper <*> H.readRegular 0x10000 wrapperSymbols
+    <*> H.readRegular 0x4000000 candidate <*> H.readRegular 0x100000 contract
+  criticalInputs <- Joined.NativeFiles <$> H.readRegular 0x1400 critical <*> H.readRegular 0x10000 criticalSymbols
+  storageInputs <- Joined.NativeFiles <$> H.readRegular 0x1000 storage <*> H.readRegular 0x10000 storageSymbols
+  canonical <- either (H.failH . show) pure
+    (Joined.canonicalSource (Joined.SourceFiles (sourceDat sources) (sourceImage sources) (sourceA sources) (sourceB sources)))
+  artifact <- either (H.failH . show) pure (Joined.deriveArtifact
+    (Joined.NativeFiles (nativeFlat wrapperInputs) (nativeSymbols wrapperInputs)) criticalInputs storageInputs)
+  image <- either (H.failH . show) pure (Joined.stageImage4 canonical artifact)
+  scratch <- Image4.validateScratchDirectory scratchPath
+  staged <- Joined.stageCandidate tools scratch image
+  either (H.failH . show) pure (admitJoinedInputs sources (P.JoinedInputs wrapperInputs criticalInputs storageInputs) staged)
 
 qualify :: Inputs -> ExpectedCase -> ObservationDirectory -> IO Qualification
 qualify inputs expected directory = do
@@ -146,8 +186,8 @@ cohortCases = ("natural",NaturalCase) :
   ,("release-unlocked",ControlledCase ReleaseUnlocked),("release-peer-lock",ControlledCase ReleasePeerLock)
   ,("release-unlock-refusal",ControlledCase ReleaseUnlockRefusal),("callback-unreturned",ControlledCase CallbackUnreturned)]
 
-runOwned :: Inputs -> Inputs -> OwnedCommand -> IO (Bool,J.Value)
-runOwned retainedInputs candidateInputs command = case command of
+runOwned :: SourceFiles -> Inputs -> Inputs -> OwnedCommand -> IO (Bool,J.Value)
+runOwned sources retainedInputs candidateInputs command = case command of
   OwnedQualify directories -> do
     results <- forM (NE.toList directories) $ \directory -> do
       checked <- qualify candidateInputs AnyCase directory
@@ -164,11 +204,18 @@ runOwned retainedInputs candidateInputs command = case command of
       pure (accepted,J.object ["case" J..= name,"result" J..= result])
     let accepted = all fst results
     pure (accepted,J.object ["schema" J..= (1 :: Int),"accepted" J..= accepted,"pairs" J..= map snd results])
+  OwnedRefusals directory -> do
+    observed <- observedFiles directory
+    value <- either (H.failH . show) pure (refusalControlsFor sources candidateInputs observed)
+    pure (True,value)
 
 main :: IO ()
 main = do
   selected <- getArgs >>= arguments
-  let OutputFile output = case selected of Historical _ _ _ path -> path; Owned _ _ _ _ path -> path
+  let OutputFile output = case selected of
+        Historical _ _ _ path -> path
+        Owned _ _ _ _ path -> path
+        Joined _ _ _ _ path -> path
   exists <- doesPathExist output
   H.ensure (not exists) "checker output already exists"
   (accepted,result) <- case selected of
@@ -186,6 +233,11 @@ main = do
       sources <- sourceFiles paths
       retainedInputs <- either (H.failH . show) pure (admitInputs sources)
       candidateInputs <- ownedInputs tools sources native
-      runOwned retainedInputs candidateInputs command
+      runOwned sources retainedInputs candidateInputs command
+    Joined tools paths native command _ -> do
+      sources <- sourceFiles paths
+      retainedInputs <- either (H.failH . show) pure (admitInputs sources)
+      candidateInputs <- joinedInputs tools sources native
+      runOwned sources retainedInputs candidateInputs command
   L.writeFile output (J.encode result)
   unless accepted exitFailure

@@ -2799,6 +2799,7 @@ haskell_library(
     visibility = ["//visibility:public"],
     deps = [
         ":case-sha256",
+        ":critical-pair-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -2809,6 +2810,8 @@ haskell_library(
         "//host/firmware:bank-allowlist",
         "//replacement/kernel_install:kernel-install-artifact",
         "//replacement/task_submission:task-submission-artifact",
+        "//replacement/startup_composition:task-composition-artifact",
+        "//replacement/task_storage:task-storage-artifact",
     ],
 )
 
@@ -2833,6 +2836,7 @@ haskell_binary(
         "//host:filepath",
         "//host:host-support",
         "//replacement/task_submission:task-submission-artifact",
+        "//replacement/startup_composition:task-composition-artifact",
     ],
 )
 
