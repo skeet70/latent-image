@@ -76,13 +76,12 @@ pub(super) fn admit(bytes:&[u8],document:&RunDocument,media:&NandBase)->Result<R
     require(board.blobs().len()==3&&board.children().len()==2,"reset checkpoint processor topology differs")?;
     let resources=&point.children()[1];
     let resource:ResourcesWire=resources.decode("session-resources-v1").map_err(|_|"reset checkpoint resources differ")?;
-    require(resources.blobs().is_empty()&&resource.nands==[MediumName::Nand],"reset checkpoint NAND resources differ")?;
-    let medium_index=resource.wires.len().checked_add(resource.images.len()).and_then(|count|count.checked_add(resource.statistics.len())).ok_or("reset resource extent overflows")?;
-    let resource_count=resource.sensors.iter().try_fold(medium_index+2,|count,sensor|count.checked_add(if sensor.shared{1}else{2}).ok_or("reset resource extent overflows"))?;
+    require(resources.blobs().is_empty()&&resource.nands.is_empty(),"reset checkpoint NAND resources differ")?;
+    let resource_prefix=resource.wires.len().checked_add(resource.images.len()).and_then(|count|count.checked_add(resource.statistics.len())).and_then(|count|count.checked_add(1)).ok_or("reset resource extent overflows")?;
+    let resource_count=resource.sensors.iter().try_fold(resource_prefix,|count,sensor|count.checked_add(if sensor.shared{1}else{2}).ok_or("reset resource extent overflows"))?;
     require(resources.children().len()==resource_count,"reset checkpoint resource topology differs")?;
     let scene:SceneWire=serde_json::from_str(document.scene.get()).map_err(|error|error.to_string())?;
     let options=&scene.nands.get(&MediumName::Nand).ok_or("canonical reset NAND specification absent")?.options;
-    medium(&resources.children()[medium_index],options,media)?;
     let bus=&board.children()[1];
     bus.decode::<IgnoredAny>("board-bus-v1").map_err(|_|"reset checkpoint bus differs")?;
     require(bus.blobs().is_empty(),"reset checkpoint bus blob topology differs")?;
@@ -91,7 +90,7 @@ pub(super) fn admit(bytes:&[u8],document:&RunDocument,media:&NandBase)->Result<R
     controller.decode::<IgnoredAny>("nand-controller").map_err(|_|"reset checkpoint NAND controller differs")?;
     require(controller.blobs().is_empty()&&controller.children().len()==1,"reset checkpoint NAND controller topology differs")?;
     medium(&controller.children()[0],options,media)?;
-    require(media_census(&point)==2,"reset NAND medium census differs")?;
+    require(media_census(&point)==1,"reset NAND medium census differs")?;
     Ok(Reset {point})
 }
 
@@ -133,9 +132,9 @@ mod tests {
     #[derive(Serialize)]
     struct SyntheticBoard {runtime:SyntheticRuntime,processors:usize}
     #[derive(Serialize)]
-    struct SyntheticResources {wires:[u8;0],images:[u8;0],statistics:[u8;0],nands:[SyntheticResource;1],sensors:[u8;0]}
+    struct SyntheticResources {wires:[u8;0],images:[u8;0],statistics:[u8;0],nands:Vec<SyntheticResource>,sensors:[u8;0]}
     #[derive(Clone,Copy)]
-    enum Change {None,Session,Runtime,Cpu,Memory,MemoryTopology,Controller,DirtyNand,Geometry,NonzeroInstructions,NonzeroTime}
+    enum Change {None,Session,Runtime,Cpu,Memory,MemoryTopology,Controller,DirtyNand,Geometry,NonzeroInstructions,NonzeroTime,DuplicateResourceNand}
 
     fn document()->RunDocument{RunDocument::parse(include_bytes!("../data/xm1-150.json")).expect("canonical run document")}
     fn media(document:&RunDocument,flash:&[u8])->NandBase{
@@ -158,7 +157,10 @@ mod tests {
         let memory=Checkpoint::encode("synthetic-memory",&Marker::Original).expect("memory").with_blobs(memory_blobs);
         let runtime=SyntheticRuntime {execution_policy:SyntheticPolicy::Exact,timeline:SyntheticTimeline {now:u64::from(matches!(change,Change::NonzeroTime)),phase:0},instructions:[u64::from(matches!(change,Change::NonzeroInstructions)),0],accounted:[0;2],error:None,marker:if matches!(change,Change::Runtime){Marker::Changed}else{Marker::Original}};
         let board=Checkpoint::encode("board-keyframe-v1",&SyntheticBoard {runtime,processors:2}).expect("board").with_blobs(vec![Arc::from(if matches!(change,Change::Cpu){&b"changed CPU"[..]}else{&b"reset CPU"[..]}),Arc::from(&b"peer CPU"[..]),Arc::from(&b"exclusive state"[..])]).with_children(vec![memory,bus]);
-        let resources=Checkpoint::encode("session-resources-v1",&SyntheticResources {wires:[],images:[],statistics:[],nands:[SyntheticResource::Nand],sensors:[]}).expect("resources").with_children(vec![nand,Checkpoint::encode("resource-media",&Marker::Original).expect("other media")]);
+        let duplicate=matches!(change,Change::DuplicateResourceNand);
+        let mut resource_children=Vec::new();if duplicate{resource_children.push(nand);}
+        resource_children.push(Checkpoint::encode("resource-media",&Marker::Original).expect("other media"));
+        let resources=Checkpoint::encode("session-resources-v1",&SyntheticResources {wires:[],images:[],statistics:[],nands:if duplicate{vec![SyntheticResource::Nand]}else{Vec::new()},sensors:[]}).expect("resources").with_children(resource_children);
         Checkpoint::encode("emulator-session-v2",&SyntheticSession {nodes:BTreeMap::from([(SyntheticResource::Nand,SyntheticDeviceIndex(0))]),marker:if matches!(change,Change::Session){Marker::Changed}else{Marker::Original}}).expect("session").with_children(vec![board,resources])
     }
     fn admitted(point:&Checkpoint,document:&RunDocument,media:&NandBase)->Reset{admit(&point.to_bytes().expect("export synthetic checkpoint"),document,media).expect("admit synthetic reset")}
@@ -186,6 +188,12 @@ mod tests {
         for change in [Change::Session,Change::Runtime,Change::Cpu,Change::Memory,Change::MemoryTopology,Change::Controller]{let after=admitted(&point(&candidate,change),&document,&candidate);assert!(compare(&before,&after).is_err());}
     }
     #[test]
+    fn an_input_medium_left_in_resources_is_not_the_constructed_reset(){
+        let document=document();let source=media(&document,&[0x11]);
+        let refused=admit(&point(&source,Change::DuplicateResourceNand).to_bytes().expect("checkpoint"),&document,&source).err();
+        assert_eq!(refused.as_deref(),Some("reset checkpoint NAND resources differ"));
+    }
+    #[test]
     #[ignore="requires LOADER_RESET_CHECKPOINT and LOADER_RESET_UPDATE from the qualified retained observation"]
     fn preserved_qualified_reset_admits_its_bound_canonical_media_without_execution(){
         use fujimod_xm1::bridge::{read,sha256};
@@ -198,6 +206,6 @@ mod tests {
         let document=document();let media=nand_base(&document,&ValidatedUpdate(update)).expect("derive canonical reset media");
         let checkpoint=read(&checkpoint_path).expect("read qualified reset checkpoint");
         assert_eq!(sha256(&checkpoint),"4e543a67ee02a63f8001ad7969d975e1d82aeab45f6658fde7c48b0df4727663");
-        assert!(admit(&checkpoint,&document,&media).is_ok());
+        admit(&checkpoint,&document,&media).expect("admit qualified canonical reset");
     }
 }

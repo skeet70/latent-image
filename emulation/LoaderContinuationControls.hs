@@ -752,7 +752,6 @@ fetchControl change fixture = do
         OwnedPrefixFetch -> setPc 0x409b8
         OwnedDataFetch -> setPc 0x40ab8
         OwnedPaddingFetch -> setPc 0x40ac4
-        TailFetch -> Left "tail fetch has a separate epoch"
       modifyWatch 1 (setAt [field "records",Element index] updated) fixture
 
 data Control = ReorderCallRecords | WrongPhase | WrongTarget | WrongReturnedCode | WrongSavedPc | OutOfRangeWrite
