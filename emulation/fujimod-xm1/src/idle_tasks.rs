@@ -997,6 +997,42 @@ impl SubmittedTask {
 }
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum SubmissionStage { Submitted, FlagsEntered, FlagsObserved, ConstructorEntered(Address), Constructed }
+/// Every task submission reachable from root services 0x69ca24 and 0x69ca44 in source call order.
+/// `return_pc` follows the submitting `bl 0x725dd8`; worker ids come from the runtime table at 0x4089e9f8.
+struct RootSubmissionSource { service: u32, return_pc: u32, id: u16, name: u32, priority: u32, stack_bytes: u32, entry: u32, argument: u32 }
+const fn worker(id: u16) -> RootSubmissionSource {
+    RootSubmissionSource { service: 0x69ca24, return_pc: 0x6b07f4, id, name: 0x781a3c, priority: 2, stack_bytes: 4096, entry: 0x6c6b5c, argument: 0x8e1f28 }
+}
+const fn later(return_pc: u32, id: u16, name: u32, priority: u32, stack_bytes: u32, entry: u32, argument: u32) -> RootSubmissionSource {
+    RootSubmissionSource { service: 0x69ca44, return_pc, id, name, priority, stack_bytes, entry, argument }
+}
+const ROOT_WORKER_SUBMISSIONS: usize = 5;
+const ROOT_SUBMISSIONS: [RootSubmissionSource; 28] = [
+    worker(88), worker(89), worker(90), worker(91), worker(92),
+    later(0x69c6e0, 9, 0x781940, 3, 3072, 0x69c5d4, 0x89f770),
+    later(0x69c3e4, 6, 0x781938, 3, 3072, 0x69c2b0, 0x89f76c),
+    later(0x6b15d4, 8, 0x781a54, 4, 3072, 0x6b14e4, 0x8e1f2c),
+    later(0x6b7910, 37, 0x781d40, 4, 3072, 0x6b7d7c, 0),
+    later(0x71fdb4, 28, 0x782000, 10, 3072, 0x71fe7c, 0),
+    later(0x7218b4, 101, 0x782008, 2, 3072, 0x721744, 0x9114e0),
+    later(0x73bfd8, 95, 0x782078, 1, 3072, 0x73bc54, 0),
+    later(0x73b0a8, 60, 0x782064, 4, 3072, 0x73b3a0, 0x91482c),
+    later(0x6d48b4, 69, 0x781e40, 7, 3072, 0x6d6c9c, 0x8e2090),
+    later(0x6bda4c, 98, 0x781d88, 4, 3072, 0x6b9c68, 0),
+    later(0x6c5998, 99, 0x781e10, 4, 3072, 0x6c28f4, 0),
+    later(0x6c0934, 100, 0x781e04, 5, 3072, 0x6c12d8, 0),
+    later(0x76fe08, 50, 0x78215c, 3, 3072, 0x75fe54, 0),
+    later(0x8923ac, 71, 0x892430, 5, 3072, 0x892184, 0),
+    later(0x8923f8, 72, 0x892438, 5, 3072, 0x892110, 0),
+    later(0x6d2928, 34, 0x781e38, 6, 3072, 0x6d35e0, 0x8e208c),
+    later(0x6d22a4, 40, 0x781e30, 4, 3072, 0x6d2700, 0),
+    later(0x6d7ffc, 73, 0x781e48, 7, 4096, 0x6d7540, 0),
+    later(0x6b0014, 83, 0x781a38, 4, 3072, 0x6b0434, 0x8e1f24),
+    later(0x73c148, 59, 0x78209c, 6, 3072, 0x73e048, 0),
+    later(0x6e2f80, 30, 0x781e50, 3, 3072, 0x6e2b70, 0),
+    later(0x6e2fec, 29, 0x781e58, 6, 3072, 0x6e2b70, 0),
+    later(0x6e3058, 27, 0x781e64, 9, 3072, 0x6e2b70, 0),
+];
 struct RootSubmission { caller: Context, executed: bool, task: SubmittedTask, stage: SubmissionStage }
 struct RootProducer {
     entry: Option<Context>, entry_executed: bool, sequence: Vec<u32>, action: usize, pending: Option<RootService>,
@@ -1017,7 +1053,7 @@ impl RootProducer {
     fn deadline_error(&self) -> &'static str {
         if self.entry.is_none() { "root entry was not observed before deadline" }
         else if self.resources != 97 { "root97-loop complete call/result sequence was not observed before deadline" }
-        else if self.submissions.len() != 8 || self.submission.is_some() { "root worker submission and return sequence was not observed before deadline" }
+        else if self.submissions.len() != ROOT_SUBMISSIONS.len() || self.submission.is_some() { "root worker submission and return sequence was not observed before deadline" }
         else if !self.transfer_executed && !self.epilogue { "root cleanup did not establish actual termination transfer or returning-63 handback before deadline" }
         else if self.post_cleanup_callbacks == 0 { "executed and restored periodic callback after root cleanup was not observed before deadline" }
         else if self.irq_cycles == 0 { "root IRQ preemption and restoration were not observed before deadline" }
@@ -1158,14 +1194,14 @@ impl RootProducer {
             && self.irq_cycles != 0 && self.post_cleanup_callbacks != 0 && self.irq.is_none() && self.callback.is_none() {
             require(self.cleanup_step == 8 && self.resources == 97
                 && (self.action + 1 == self.sequence.len() || self.cleanup_return && self.action == self.sequence.len() && self.epilogue)
-                && self.submissions == [TaskId(88), TaskId(89), TaskId(90), TaskId(91), TaskId(92), TaskId(95), TaskId(60), TaskId(59)],
+                && self.submissions.iter().map(|id| id.0).eq(ROOT_SUBMISSIONS.iter().map(|source| source.id)),
                 "post-cleanup task state precedes required lifecycle facts")?;
             require(task.entry == Address(ROOT_ENTRY) && task.stack_base.0 & !0x40000000 == ROOT_STACK && task.stack_bytes == Word(1024),
                 "post-cleanup root descriptor was repurposed")?;
             sample.boundary = Boundary::PostCleanup; self.complete = true;
         }
         if self.cleanup_return && self.epilogue && self.handback.is_some() && self.post_cleanup_callbacks != 0 && state.core == Core::Primary {
-            require(self.resources == 97 && self.submissions.len() == 8 && self.submission.is_none()
+            require(self.resources == 97 && self.submissions.len() == ROOT_SUBMISSIONS.len() && self.submission.is_none()
                 && self.action == self.sequence.len() && task.created == Word(0) && task.state == 0
                 && self.irq_cycles != 0 && self.irq.is_none() && self.callback.is_none(), "returning root handback lacks complete post-cleanup facts")?;
             sample.boundary = Boundary::PostCleanup; self.complete = true;
@@ -1182,15 +1218,17 @@ impl RootProducer {
             0x724cbc => require(args[0] == 0x726478, "root error callback differs"),
             0x6a59b8 => require(args[..3] == [34, 0, 0], "root initial configuration arguments differ"),
             0x725424 => require(args[..4] == [30, 0, 0x69cc18, 0x96ca4c], "root periodic registration arguments differ"),
-            0x72612c => require(args[0] == 0 && self.resources == 97 && self.submissions.len() == 8, "root cleanup precedes complete actions"),
+            0x72612c => require(args[0] == 0 && self.resources == 97 && self.submissions.len() == ROOT_SUBMISSIONS.len(), "root cleanup precedes complete actions"),
             _ => Ok(()),
         }
     }
     fn finish_service(&mut self, target: u32, result: u32) -> Result<(), String> {
         if target == 0x7247ac { self.resources += 1; }
         if [0x6a9354, 0x6ac2b4].contains(&target) { require(result == 0, "root checked service returned nonzero")?; }
-        if target == 0x69ca24 { require(self.submissions.len() == 5 && self.resources == 97, "root early workers or resource loop incomplete")?; }
-        if target == 0x69ca44 { require(self.submissions.len() == 8, "root later task submissions incomplete")?; }
+        if target == 0x69ca24 {
+            require(self.submissions.len() == ROOT_WORKER_SUBMISSIONS && self.resources == 97, "root early workers or resource loop incomplete")?;
+        }
+        if target == 0x69ca44 { require(self.submissions.len() == ROOT_SUBMISSIONS.len(), "root later task submissions incomplete")?; }
         if target == 0x69cfa4 {
             require(result != 0, "root selected source shutdown arm; no cleanup completion is established")?;
             self.sequence.extend([0x69ca44, 0x725424, 0x72872c, 0x72612c]);
@@ -1204,18 +1242,12 @@ impl RootProducer {
     }
     fn submit(&mut self, sample: &Sample, target: u32) -> Result<(), String> {
         let task = SubmittedTask::read(sample)?;
-        let (id, priority, bytes, entry, argument) = match self.submissions.len() {
-            index @ 0..=4 => (88 + index as u32, 2, 4096, 0x6c6b5c, 0x8e1f28),
-            5 => (95, 1, 3072, 0x73bc54, 0),
-            6 => (60, 4, 3072, 0x73b3a0, 0x91482c),
-            7 => (59, 6, 3072, 0x73e048, 0),
-            _ => return Err("root submitted excess tasks".into()),
-        };
-        require((target == 0x69ca24) == (id >= 88 && id <= 92)
-            && [u32::from(task.id.0), task.priority.0, task.stack_bytes.0, task.entry.0, task.argument.0] == [id, priority, bytes, entry, argument],
-            "root task submission descriptor or interval differs")?;
-        let expected_name = match id { 88..=92 => 0x781a3c, 95 => 0x782078, 60 => 0x782064, 59 => 0x78209c, _ => return Err("root descriptor task id differs".into()) };
-        require(task.name == Address(expected_name) && self.submission.is_none(), "root descriptor name or wrapper lifetime differs")?;
+        let source = ROOT_SUBMISSIONS.get(self.submissions.len()).ok_or("root submitted excess tasks")?;
+        require(source.service == target && sample.context.lr.0 & !0x40000000 == source.return_pc
+            && [u32::from(task.id.0), task.name.0, task.priority.0, task.stack_bytes.0, task.entry.0, task.argument.0]
+                == [u32::from(source.id), source.name, source.priority, source.stack_bytes, source.entry, source.argument],
+            "root task submission descriptor, caller or interval differs")?;
+        require(self.submission.is_none(), "root descriptor wrapper lifetime differs")?;
         self.submissions.push(task.id);
         self.submission = Some(RootSubmission { caller: sample.context.clone(), executed: false, task, stage: SubmissionStage::Submitted });
         Ok(())

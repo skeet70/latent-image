@@ -5,7 +5,7 @@ module Emulation.RootTaskWitness
   ) where
 
 import qualified A32 as A
-import Control.Monad (foldM, unless)
+import Control.Monad (filterM, foldM, unless)
 import qualified Data.Aeson as J
 import Data.Aeson ((.:))
 import Data.Aeson.Types (parseEither)
@@ -41,7 +41,7 @@ data WitnessError = SourceRejected | ArtifactRejected | ContractRejected | Candi
   | CallbackRejected | CleanupRejected | ReturnRejected | IrqRejected | FrameRejected | CompletionRejected | ComparisonRejected
   | PlanRejected Plan.PlanError deriving (Eq, Show)
 newtype ResourceId = ResourceId Word16 deriving (Eq, Ord, Show)
-data TaskName = Executor | ElfLoader | FlashLoader | InitContinuation deriving (Eq, Show)
+newtype TaskName = TaskName String deriving (Eq, Show)
 data FlagAttribute = KeepBits | ClearOnWait deriving (Eq, Show)
 data Service = SharedSetup | DiagnosticSetup | Marker | ErrorCallback | ResourceCreate | Workers | StateSetup | PlatformSetup
   | DeviceSetup | ConfigurationSetup | ConfigurationEnable | CheckedA | CheckedB | Adjustment | HardwareSetup | DiagnosticReset
@@ -571,11 +571,27 @@ checkActions inputs plan executions irqs pairs = do
 data SubmissionStage = Submitted | FlagsEntered | FlagsReady FlagAttribute | ConstructorEntered FlagAttribute W.Address | Constructed FlagAttribute
 data SubmissionEpisode = SubmissionEpisode
   { submissionCaller :: Sample, submissionValue :: Publication, submissionStage :: SubmissionStage }
-expectedPublications :: [(S.TaskId,TaskName,Word32,Word32,Word32,Word32,Word32)]
-expectedPublications = [(S.TaskId identifier,Executor,0x781a3c,0x6c6b5c,0x8e1f28,2,4096) | identifier <- [88..92]]
-  ++ [(S.TaskId 95,ElfLoader,0x782078,0x73bc54,0,1,3072)
-     ,(S.TaskId 60,FlashLoader,0x782064,0x73b3a0,0x91482c,4,3072)
-     ,(S.TaskId 59,InitContinuation,0x78209c,0x73e048,0,6,3072)]
+data SourceSubmission = SourceSubmission
+  { sourceService :: Service, sourceReturn :: Word32, sourceTask :: S.TaskId, sourceName :: TaskName, sourceNamePointer :: Word32
+  , sourceEntry :: Word32, sourceArgument :: Word32, sourcePriority :: Word32, sourceStack :: Word32 }
+-- | Every task submission reachable from root services 0x69ca24 and 0x69ca44 in source call order.
+-- Worker ids come from the runtime table at 0x4089e9f8.
+expectedPublications :: [SourceSubmission]
+expectedPublications = [SourceSubmission Workers 0x6b07f4 (S.TaskId identifier) (TaskName "execcpu") 0x781a3c 0x6c6b5c 0x8e1f28 2 4096 | identifier <- [88..92]]
+  ++ [SourceSubmission LaterTasks returnPc (S.TaskId identifier) (TaskName name) namePointer entry argument priority size
+     | (returnPc,identifier,name,namePointer,priority,size,entry,argument) <-
+       [(0x69c6e0,9,"timer",0x781940,3,3072,0x69c5d4,0x89f770),(0x69c3e4,6,"delay",0x781938,3,3072,0x69c2b0,0x89f76c)
+       ,(0x6b15d4,8,"calendar",0x781a54,4,3072,0x6b14e4,0x8e1f2c),(0x6b7910,37,"keytimer",0x781d40,4,3072,0x6b7d7c,0)
+       ,(0x71fdb4,28,"media",0x782000,10,3072,0x71fe7c,0),(0x7218b4,101,"mediamsg",0x782008,2,3072,0x721744,0x9114e0)
+       ,(0x73bfd8,95,"elfloader",0x782078,1,3072,0x73bc54,0),(0x73b0a8,60,"flashloader",0x782064,4,3072,0x73b3a0,0x91482c)
+       ,(0x6d48b4,69,"hdmi",0x781e40,7,3072,0x6d6c9c,0x8e2090),(0x6bda4c,98,"lenscom",0x781d88,4,3072,0x6b9c68,0)
+       ,(0x6c5998,99,"lswatch",0x781e10,4,3072,0x6c28f4,0),(0x6c0934,100,"lensdata",0x781e04,5,3072,0x6c12d8,0)
+       ,(0x76fe08,50,"lensdc",0x78215c,3,3072,0x75fe54,0),(0x8923ac,71,"smaphp",0x892430,5,3072,0x892184,0)
+       ,(0x8923f8,72,"smaphk",0x892438,5,3072,0x892110,0),(0x6d2928,34,"lcdevf",0x781e38,6,3072,0x6d35e0,0x8e208c)
+       ,(0x6d22a4,40,"graphic",0x781e30,4,3072,0x6d2700,0),(0x6d7ffc,73,"vglib",0x781e48,7,4096,0x6d7540,0)
+       ,(0x6b0014,83,"pos",0x781a38,4,3072,0x6b0434,0x8e1f24),(0x73c148,59,"initcont",0x78209c,6,3072,0x73e048,0)
+       ,(0x6e2f80,30,"soundio",0x781e50,3,3072,0x6e2b70,0),(0x6e2fec,29,"voicecont",0x781e58,6,3072,0x6e2b70,0)
+       ,(0x6e3058,27,"comp",0x781e64,9,3072,0x6e2b70,0)]]
 flagValue :: FlagAttribute -> Word32
 flagValue KeepBits = 0
 flagValue ClearOnWait = 4
@@ -610,26 +626,30 @@ descriptorView object sample = need SnapshotRejected
 checkSubmissions :: [CallEpisode] -> Executions -> [(Sample,Memory)] -> Either WitnessError [Publication]
 checkSubmissions episodes executions pairs = do
   (pending,completed) <- foldM step (Nothing,[]) pairs
-  require (not (isJust pending) && map publicationId (reverse completed) == map (\(ident,_,_,_,_,_,_) -> ident) expectedPublications) SubmissionRejected
+  require (not (isJust pending) && map publicationId (reverse completed) == map sourceTask expectedPublications) SubmissionRejected
   pure (reverse completed)
   where
     step (pending,completed) (sample,memory) = do
-      scoped <- or <$> mapM (insideEpisode sample) episodes
-      began <- if scoped && sampleBoundary sample == TaskSubmit && coreOf sample == S.PrimaryKernel then do
-        require (not (isJust pending)) SubmissionRejected
-        (ident,name,namePointer,entry,argument,priority,size) <- need SubmissionRejected
-          (case drop (length completed) expectedPublications of value:_ -> Just value; [] -> Nothing)
-        descriptor <- descriptorView TaskDescriptor sample
-        fields <- wordsAt SubmissionRejected memory (address (viewPhysical descriptor)) 28
-        let S.TaskId identifier = ident
-        require (take 6 fields == [fromIntegral identifier,namePointer,priority,size,entry,argument]) SubmissionRejected
-        domain <- taskDomain memory ident
-        let flags = if fields !! 6 == 0xa5f0a5f0 then KeepBits else ClearOnWait
-            value = Publication ident name (W.Address entry) (W.WordValue argument) (W.WordValue priority)
-              (StackBytes size) domain flags (RetainedResult (W.WordValue 0))
+      services <- map (\episode -> let Action service _ = episodeAction episode in service) <$> filterM (insideEpisode sample) episodes
+      began <- if not (null services) && sampleBoundary sample == TaskSubmit && coreOf sample == S.PrimaryKernel then do
         current <- rootCurrent memory
-        require current TaskRejected
-        pure (Just (SubmissionEpisode sample value Submitted))
+        if not current then pure pending else do
+          require (not (isJust pending)) SubmissionRejected
+          source <- need SubmissionRejected
+            (case drop (length completed) expectedPublications of value:_ -> Just value; [] -> Nothing)
+          let S.TaskId identifier = sourceTask source
+          require (sourceService source `elem` services
+            && physical (address (W.contextLr (stateOf sample))) == sourceReturn source) SubmissionRejected
+          descriptor <- descriptorView TaskDescriptor sample
+          fields <- wordsAt SubmissionRejected memory (address (viewPhysical descriptor)) 28
+          require (take 6 fields == [fromIntegral identifier,sourceNamePointer source,sourcePriority source,sourceStack source
+            ,sourceEntry source,sourceArgument source]) SubmissionRejected
+          domain <- taskDomain memory (sourceTask source)
+          let flags = if fields !! 6 == 0xa5f0a5f0 then KeepBits else ClearOnWait
+              value = Publication (sourceTask source) (sourceName source) (W.Address (sourceEntry source))
+                (W.WordValue (sourceArgument source)) (W.WordValue (sourcePriority source))
+                (StackBytes (sourceStack source)) domain flags (RetainedResult (W.WordValue 0))
+          pure (Just (SubmissionEpisode sample value Submitted))
       else pure pending
       case began of
         Nothing -> pure (Nothing,completed)
@@ -1051,7 +1071,7 @@ admitReceipt inputs observed = do
 serviceName :: Service -> String
 serviceName = show
 taskName :: TaskName -> String
-taskName name = case name of Executor -> "execpu"; ElfLoader -> "elfloader"; FlashLoader -> "flashloader"; InitContinuation -> "initcont"
+taskName (TaskName name) = name
 completionName :: Completion -> String
 completionName Terminated = "terminated"
 completionName ReturnedMinus63 = "returned-minus63"
