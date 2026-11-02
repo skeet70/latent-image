@@ -381,7 +381,7 @@ checkInstallation inputs receipt = do
         ,let instruction = U.word32At native (fromIntegral (site-0x725a04))
         ,directCallTarget (Address site) (WordValue instruction) == Just (Address 0x42634)]
   cacheReturn <- if isRetained then Right 0x725a40 else one CallRejected cacheReturns
-  require (lr cache == cacheReturn && pc cached == cacheReturn && lr returned == cacheReturn
+  require (lr cache == cacheReturn && pc cached == cacheReturn && lr returned == 0x725a40
     && take 4 (K.contextRegisters (machine returned)) == map WordValue [0,0x40a0fc2c,0,0x40a0fc2c]
     && drop 4 (K.contextRegisters (machine returned)) == drop 4 (K.contextRegisters (machine entry))
     && number (K.contextCpsr (machine returned)) `shiftR` 28 == 6

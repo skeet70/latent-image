@@ -66,6 +66,8 @@ mutations =
     {probeContext = (probeContext probe) {contextMachine = (contextMachine (probeContext probe)) {K.contextSp = Address 0x40063458}}}
   ,Control (ControlName "secondary accepts only observed nonzero") InitializerRejected $ mapProbe PeerPostload $ changeRegister 3 0
   ,Control (ControlName "initializer return ABI") InitializerRejected $ mapProbe InitializerReturn $ changeRegister 0 0
+  ,Control (ControlName "installer private return LR differs") EffectRejected $ mapProbe InstallerReturn $ \probe -> probe
+    {probeContext = (probeContext probe) {contextMachine = (contextMachine (probeContext probe)) {K.contextLr = Address 0x725a84}}}
   ,Control (ControlName "first root1 target") FirstConsumerRejected $ mapProbe CriticalCall $ changeRegister 3 0xd1164
   ,Control (ControlName "watch teardown error") WatchRejected $ \receipt -> receipt
     {receiptSegments = [segment {segmentError = Just "control teardown failure"} | segment <- receiptSegments receipt]}
