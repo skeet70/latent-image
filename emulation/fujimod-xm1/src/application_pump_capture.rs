@@ -336,14 +336,25 @@ impl<'a> Runner<'a> {
     }
     fn advance(&mut self, count: u64) -> Result<(), Failure> {
         let end = self.machine.instructions().checked_add(count).ok_or_else(|| fail(Refusal::CaptureBound, "instruction endpoint overflows"))?;
+        let mut stopped_without_entry = [false; 2];
         while self.machine.instructions() < end {
             let before = self.machine.instructions();
+            let first_hit = self.cursor;
             let epoch_end = self.epoch_start.0.checked_add(WATCH_WINDOW).ok_or_else(|| fail(Refusal::CaptureBound, "watch endpoint overflows"))?;
-            self.machine.run(end.min(epoch_end) - before);
+            let outcome = self.machine.run(end.min(epoch_end) - before);
             self.collect()?;
             checked(Refusal::Guest, self.machine.require_running())?;
             self.check_watch()?;
-            if self.machine.instructions() == before { return Err(fail(Refusal::Guest, "observer made no entered-instruction progress")); }
+            if self.machine.instructions() == before {
+                // A window endpoint may precede an unconsumed point at the same entered count (tests/peer_wait_sdk.rs:256-285).
+                if outcome != fujimod_xm1::machine::RunOutcome::Stopped || self.cursor == first_hit {
+                    return Err(fail(Refusal::Guest, "observer made neither entered-instruction nor live-stop progress"));
+                }
+                for hit in &self.machine.traces.hits[first_hit..self.cursor] {
+                    if stopped_without_entry[hit.core] { return Err(fail(Refusal::Guest, "core repeated an unconsumed stop without entered-instruction progress")); }
+                    stopped_without_entry[hit.core] = true;
+                }
+            } else { stopped_without_entry.fill(false); }
             if self.machine.instructions() >= epoch_end { self.end_watch()?; self.begin_watch()?; }
         }
         Ok(())

@@ -284,6 +284,26 @@ fn completed_load_and_its_next_unconsumed_point_share_an_entered_count() {
     assert!(machine.failure.is_none());
 }
 
+#[test]
+fn an_unconsumed_point_at_a_window_endpoint_stops_without_a_new_entry() {
+    let mut machine = machine(&[0xe2800001, 0xe2800002, 0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
+    machine.traces.arm(&machine.session, BTreeMap::from([(0x1004, "after-window".into())])).unwrap();
+    machine.traces.stop_labels.insert("after-window".into());
+    assert_eq!(machine.run(1), fujimod_xm1::machine::RunOutcome::Completed);
+    assert_eq!(machine.instructions(), 1);
+    assert_eq!(machine.session.board.read_register(0, Register::Pc).unwrap(), 0x1004);
+    assert_eq!(machine.run(1), fujimod_xm1::machine::RunOutcome::Stopped);
+    assert_eq!(machine.instructions(), 1);
+    assert_eq!(machine.traces.hits.len(), 1);
+    assert_eq!(machine.traces.hits[0].instructions, 1);
+    assert_eq!(machine.traces.hits[0].address, "0x1004");
+    assert_eq!(machine.run(1), fujimod_xm1::machine::RunOutcome::Completed);
+    machine.require_running().unwrap();
+    assert_eq!(machine.instructions(), 2);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 3);
+}
+
 #[derive(Deserialize)]
 struct CaptureTotals { total: u64 }
 
