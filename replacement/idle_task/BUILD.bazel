@@ -1,0 +1,77 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "idle-task-rust",
+    src = "src.rs",
+    crate_name = "xm1_idle_task",
+)
+
+xm1_rust_elf(
+    name = "idle-task-image",
+    rust_staticlib = ":idle-task-rust",
+    entry = "xm1_idle_task",
+    link_script = "idle-task.ld",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
+
+haskell_library(
+    name = "idle-task-artifact",
+    srcs = [
+        "Replacement/IdleTask/Admission.hs",
+        "Replacement/IdleTask/Artifact.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "stage-idle-task",
+    srcs = ["StageMain.hs"],
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+    ],
+    data = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":idle-task-artifact",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "idle-task-tests",
+    srcs = ["Tests.hs"],
+    args = [
+        "$(rootpath :idle-task-image.bin)",
+        "$(rootpath :idle-task-image.symbols)",
+    ],
+    data = [":idle-task-image.bin", ":idle-task-image.symbols"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":idle-task-artifact",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:update-container",
+    ],
+)

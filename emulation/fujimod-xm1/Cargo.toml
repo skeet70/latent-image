@@ -50,6 +50,10 @@ name = "fujimod-xm1-startup-tasks"
 path = "src/startup_tasks.rs"
 
 [[bin]]
+name = "fujimod-xm1-idle-tasks"
+path = "src/idle_tasks.rs"
+
+[[bin]]
 name = "fujimod-xm1-kernel-install"
 path = "src/kernel_install.rs"
 

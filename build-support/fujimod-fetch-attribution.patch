@@ -1,0 +1,425 @@
+diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/board/observation.rs
+--- a/crates/emulator/src/board/observation.rs
++++ b/crates/emulator/src/board/observation.rs
+@@ -1,5 +1,8 @@
+ //! Explicit, bounded CPU/bus observation. No device consumes these records.
+ pub mod calls;
++mod fetch_attribution;
++pub use fetch_attribution::{CpuDataAttribution, FetchAttribution};
++use fetch_attribution::{AccessBytes, ByteOrder, CoreIndex, CpuAttribution, CpuCapture, CpuObservation, CpuSource, GuestAddress, ObservedWord, PhysicalAddress};
+ use super::{Board, State, factory::MemoryMap, scalar};
+ use fujimod_emulator_cpu::{Access, Cpu, Hook, HookId, HookRange, Model, Register, arm};
+ use serde_json::{Value, json};
+@@ -75,6 +78,7 @@
+     /// Empty for an unclassified watch, which records every source.
+     classes: Vec<WatchRange>,
+     views: ViewPolicy,
++    fetch_attribution: Option<fetch_attribution::FetchCapture>,
+ }
+ impl Records {
+     fn overlaps(&self, address: u64, bytes: u64) -> bool {
+@@ -134,6 +138,7 @@
+                 ViewPolicy::Fixed => "fixed",
+             });
+         }
++        if let Some(capture) = &self.fetch_attribution { capture.describe(&mut state); }
+         state
+     }
+ }
+@@ -150,92 +155,47 @@
+     core: usize,
+ }
+ impl MemoryContext {
+-    fn record(
+-        &self,
+-        source: &str,
+-        address: u64,
+-        size: u64,
+-        value: Option<u64>,
+-    ) -> Result<(), String> {
+-        let (Some(state), Some(cpu)) = (self.state.upgrade(), self.cpu.upgrade()) else {
+-            return Ok(());
+-        };
++    fn physical(&self, state: &State, address: u64, size: u64) -> Option<u64> {
++        state.decoders.observed_physical(self.core, address, size).or_else(|| {
++            self.maps.iter().find(|map| map.address <= address && address.saturating_add(size) <= map.address + map.size as u64)
++                .map(|map| map.physical + address - map.address)
++        })
++    }
++    fn record(&self, source: CpuSource, address: u64, size: u64, value: Option<u64>) -> Result<(), String> {
++        let (Some(state), Some(cpu)) = (self.state.upgrade(), self.cpu.upgrade()) else { return Ok(()); };
+         let state = state.borrow();
+-        let physical = state
+-            .decoders
+-            .observed_physical(self.core, address, size)
+-            .or_else(|| {
+-                self.maps
+-                    .iter()
+-                    .find(|m| {
+-                        m.address <= address
+-                            && address.saturating_add(size) <= m.address + m.size as u64
+-                    })
+-                    .map(|m| m.physical + address - m.address)
+-            });
++        let physical = self.physical(&state, address, size);
+         let mut records = self.records.borrow_mut();
+         let Some(physical) = physical else {
+             return if records.views == ViewPolicy::Fixed {
+                 Err(format!("Memory watch cannot resolve CPU{} access at {address:#x} to physical memory", self.core))
+-            } else {
+-                Ok(())
+-            };
+-        };
+-        if !records.wants(source, physical, size) {
+-            return Ok(());
+-        }
+-        if tcm_overlap(&*cpu, address, size)? {
+-            return Err("Memory watch intersects a CPU-private TCM overlay".into());
+-        }
+-        let byte_order = if scalar(&*cpu, Register::Pstate)? & (1 << 9) != 0 {
+-            "big"
+-        } else {
+-            "little"
++            } else { Ok(()) };
+         };
+-        let before = if source != "cpu-fetch" {
+-            if !(1..=16).contains(&size) {
+-                return Err("Memory watch cannot capture this CPU access width".into());
+-            }
++        let logged = records.wants(source.name(), physical, size);
++        let cached = source == CpuSource::CpuFetch && records.fetch_attribution.as_ref().is_some_and(|capture| capture.wants(PhysicalAddress(physical),AccessBytes(size)));
++        let capture = match (logged,cached) {
++            (true,true) => CpuCapture::ClassifiedAndCached,
++            (true,false) => CpuCapture::Classified,
++            (false,true) => CpuCapture::Cached,
++            (false,false) => return Ok(()),
++        };
++        if tcm_overlap(&*cpu, address, size)? { return Err("Memory watch intersects a CPU-private TCM overlay".into()); }
++        let byte_order = ByteOrder::of(&*cpu)?;
++        let before = if source != CpuSource::CpuFetch {
++            if !(1..=16).contains(&size) { return Err("Memory watch cannot capture this CPU access width".into()); }
+             let mut bytes = vec![0; size as usize];
+             cpu.read_memory(address, &mut bytes)?;
+             Some(bytes)
+-        } else {
+-            None
+-        };
+-        let value = if source == "cpu-read" && size <= 8 {
+-            let bytes = before.as_ref().unwrap();
+-            Some(if byte_order == "little" {
+-                bytes
+-                    .iter()
+-                    .rev()
+-                    .fold(0u64, |v, b| (v << 8) | u64::from(*b))
+-            } else {
+-                bytes.iter().fold(0u64, |v, b| (v << 8) | u64::from(*b))
+-            })
+-        } else {
+-            value
+-        };
+-        let extra = cpu
+-            .instruction_progress()
+-            .unwrap_or(state.accounted[self.core])
+-            .saturating_sub(state.accounted[self.core]);
+-        let instructions = state.instructions.iter().sum::<u64>().saturating_add(extra);
+-        let elapsed = state
+-            .timeline
+-            .ratio()
+-            .advance_phase(state.timeline.phase(), extra)?
+-            .0;
+-        let tick = state
+-            .timeline
+-            .now()
+-            .saturating_add(elapsed.min(u64::MAX as u128) as u64);
+-        records.push(
+-            json!({"source":source,"address":address,"physical":physical,"size":size,
+-            "value":value,"before":before,"byte_order":byte_order,
+-            "core":self.core,"pc":scalar(&*cpu,Register::Pc)?,
+-            "instructions":instructions,"tick":tick}),
+-        );
+-        Ok(())
++        } else { None };
++        let value = if source == CpuSource::CpuRead && size <= 8 {
++            Some(byte_order.decode(before.as_ref().unwrap()))
++        } else { value };
++        let attribution = CpuAttribution::capture(&state, &*cpu, CoreIndex(self.core), records.fetch_attribution.is_some())?;
++        records.record_cpu(CpuObservation {
++            source, capture, address: GuestAddress(address), physical: PhysicalAddress(physical), size: AccessBytes(size),
++            value: value.map(ObservedWord), before, byte_order,
++            attribution,
++        })
+     }
+     fn fail(&self, error: String) {
+         self.records.borrow_mut().violation.get_or_insert(error);
+@@ -251,9 +211,9 @@
+             }
+             context.record(
+                 if access == Access::Write {
+-                    "cpu-write"
++                    CpuSource::CpuWrite
+                 } else {
+-                    "cpu-read"
++                    CpuSource::CpuRead
+                 },
+                 address,
+                 size,
+@@ -267,7 +227,7 @@
+ }
+ unsafe fn fetch(address: u64, size: u32, data: *mut c_void) {
+     let context = unsafe { &*data.cast::<MemoryContext>() };
+-    if let Err(error) = context.record("cpu-fetch", address, size as u64, None) {
++    if let Err(error) = context.record(CpuSource::CpuFetch, address, size as u64, None) {
+         context.fail(error);
+     }
+ }
+diff --git a/crates/emulator/src/board/observation/fetch_attribution.rs b/crates/emulator/src/board/observation/fetch_attribution.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/emulator/src/board/observation/fetch_attribution.rs
+@@ -0,0 +1,246 @@
++use super::{Board, MemoryContext, MemoryMap, MemoryWatch, Records, Span, State, ViewPolicy, WatchKinds, WatchRange, fetch, scalar, union};
++use fujimod_emulator_cpu::{Cpu, Hook, HookRange, Register};
++use serde_json::{Value, json};
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum CpuDataAttribution { Writes, ReadsAndWrites }
++
++pub struct FetchAttribution {
++    sources: CpuDataAttribution,
++    ranges: Vec<WatchRange>,
++}
++impl FetchAttribution {
++    pub fn new(sources: CpuDataAttribution, mut ranges: Vec<WatchRange>) -> Result<Self, String> {
++        if ranges.is_empty() || ranges.len() > 64 || ranges.iter().any(|range| {
++            range.start >= range.end || range.end > 1 << 32 || range.kinds != WatchKinds::CPU_FETCH
++        }) {
++            return Err("Fetch attribution requires bounded physical CPU-fetch ranges".into());
++        }
++        ranges.sort_unstable_by_key(|range| range.start);
++        let mut kept = 0usize;
++        for index in 0..ranges.len() {
++            let range = ranges[index];
++            if kept != 0 && range.start <= ranges[kept - 1].end {
++                ranges[kept - 1].end = ranges[kept - 1].end.max(range.end);
++            } else {
++                ranges[kept] = range;
++                kept += 1;
++            }
++        }
++        ranges.truncate(kept);
++        Ok(Self { sources, ranges })
++    }
++    fn wants(&self, physical: PhysicalAddress, size: AccessBytes) -> bool {
++        self.ranges.iter().any(|range| physical.0 < range.end && range.start < physical.0.saturating_add(size.0))
++    }
++    fn selected(&self, source: CpuSource) -> bool {
++        source == CpuSource::CpuWrite || (source == CpuSource::CpuRead && self.sources == CpuDataAttribution::ReadsAndWrites)
++    }
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
++#[serde(rename_all = "kebab-case")]
++pub(super) enum CpuSource { CpuRead, CpuWrite, CpuFetch }
++impl CpuSource {
++    pub(super) fn name(self) -> &'static str {
++        match self { Self::CpuRead => "cpu-read", Self::CpuWrite => "cpu-write", Self::CpuFetch => "cpu-fetch" }
++    }
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
++#[serde(rename_all = "lowercase")]
++pub(super) enum ByteOrder { Little, Big }
++impl ByteOrder {
++    pub(super) fn of(cpu: &dyn Cpu) -> Result<Self, String> {
++        Ok(if scalar(cpu, Register::Pstate)? & (1 << 9) != 0 { Self::Big } else { Self::Little })
++    }
++    pub(super) fn decode(self, bytes: &[u8]) -> u64 {
++        match self {
++            Self::Little => bytes.iter().rev().fold(0u64, |value, byte| (value << 8) | u64::from(*byte)),
++            Self::Big => bytes.iter().fold(0u64, |value, byte| (value << 8) | u64::from(*byte)),
++        }
++    }
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) struct CoreIndex(pub(super) usize);
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) struct CoreInstructionCount(u64);
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) struct GuestAddress(pub(super) u64);
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) struct PhysicalAddress(pub(super) u64);
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) struct AccessBytes(pub(super) u64);
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) struct ObservedWord(pub(super) u64);
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) struct Attribution {
++    pub(super) pc: u64,
++    pub(super) instructions: u64,
++    pub(super) tick: u64,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) struct CpuAttribution {
++    core: CoreIndex,
++    pub(super) clock: Attribution,
++    core_instructions: CoreInstructionCount,
++}
++impl CpuAttribution {
++    #[inline]
++    pub(super) fn capture(state: &State, cpu: &dyn Cpu, core: CoreIndex, require_progress: bool) -> Result<Self, String> {
++        let progress = cpu.instruction_progress();
++        if require_progress && progress.is_none() { return Err("Fetch attribution requires actual CPU instruction progress".into()); }
++        let extra = progress.unwrap_or(state.accounted[core.0]).saturating_sub(state.accounted[core.0]);
++        let instructions = state.instructions.iter().sum::<u64>().saturating_add(extra);
++        let elapsed = state.timeline.ratio().advance_phase(state.timeline.phase(), extra)?.0;
++        let tick = state.timeline.now().saturating_add(elapsed.min(u64::MAX as u128) as u64);
++        Ok(Self {
++            core,
++            clock: Attribution { pc: scalar(cpu, Register::Pc)?, instructions, tick },
++            core_instructions: CoreInstructionCount(state.instructions[core.0].saturating_add(extra)),
++        })
++    }
++}
++
++#[derive(Clone, Copy)]
++pub(super) enum CpuCapture { Classified, Cached, ClassifiedAndCached }
++impl CpuCapture {
++    fn cached(self) -> bool { matches!(self, Self::Cached | Self::ClassifiedAndCached) }
++    fn classified(self) -> bool { matches!(self, Self::Classified | Self::ClassifiedAndCached) }
++}
++
++pub(super) struct CpuObservation {
++    pub(super) source: CpuSource,
++    pub(super) capture: CpuCapture,
++    pub(super) address: GuestAddress,
++    pub(super) physical: PhysicalAddress,
++    pub(super) size: AccessBytes,
++    pub(super) value: Option<ObservedWord>,
++    pub(super) before: Option<Vec<u8>>,
++    pub(super) byte_order: ByteOrder,
++    pub(super) attribution: CpuAttribution,
++}
++#[derive(Clone, Copy)]
++struct CapturedFetch {
++    address: GuestAddress,
++    physical: PhysicalAddress,
++    size: AccessBytes,
++    byte_order: ByteOrder,
++    attribution: CpuAttribution,
++}
++impl CapturedFetch {
++    fn value(self) -> Value {
++        json!({"source":"cpu-fetch","address":self.address.0,"physical":self.physical.0,"size":self.size.0,
++            "value":null,"before":null,"byte_order":self.byte_order,"core":self.attribution.core.0,
++            "pc":self.attribution.clock.pc,"instructions":self.attribution.clock.instructions,
++            "core_instructions":self.attribution.core_instructions.0,"tick":self.attribution.clock.tick})
++    }
++}
++pub(super) struct FetchCapture {
++    specification: FetchAttribution,
++    latest: [Option<CapturedFetch>; 2],
++}
++impl FetchCapture {
++    pub(super) fn wants(&self, physical: PhysicalAddress, size: AccessBytes) -> bool { self.specification.wants(physical, size) }
++    pub(super) fn describe(&self, state: &mut Value) {
++        let sources = match self.specification.sources {
++            CpuDataAttribution::Writes => json!(["cpu-write"]),
++            CpuDataAttribution::ReadsAndWrites => json!(["cpu-read","cpu-write"]),
++        };
++        state["fetch_attribution"] = json!({"sources":sources,"ranges":self.specification.ranges.iter()
++            .map(|range| [range.start,range.end]).collect::<Vec<_>>()});
++    }
++}
++impl Records {
++    pub(super) fn record_cpu(&mut self, observed: CpuObservation) -> Result<(), String> {
++        let captured = self.fetch_attribution.is_some();
++        let mut latest = None;
++        let mut selected = false;
++        if let Some(capture) = &mut self.fetch_attribution {
++            let core = observed.attribution.core.0;
++            if observed.source == CpuSource::CpuFetch && observed.capture.cached() {
++                if !matches!(observed.size.0, 2 | 4) || observed.address.0 != observed.attribution.clock.pc {
++                    return Err("Fetch attribution observed an invalid instruction fetch".into());
++                }
++                capture.latest[core] = Some(CapturedFetch {
++                    address: observed.address, physical: observed.physical, size: observed.size,
++                    byte_order: observed.byte_order, attribution: observed.attribution,
++                });
++            }
++            selected = capture.specification.selected(observed.source);
++            if selected {
++                latest = capture.latest[core].filter(|fetch| fetch.attribution == observed.attribution && fetch.byte_order == observed.byte_order);
++            }
++        }
++        if !observed.capture.classified() { return Ok(()); }
++        let mut row = json!({"source":observed.source,"address":observed.address.0,"physical":observed.physical.0,
++            "size":observed.size.0,"value":observed.value.map(|value| value.0),"before":observed.before,
++            "byte_order":observed.byte_order,"core":observed.attribution.core.0,"pc":observed.attribution.clock.pc,
++            "instructions":observed.attribution.clock.instructions,"tick":observed.attribution.clock.tick});
++        if captured {
++            row["core_instructions"] = json!(observed.attribution.core_instructions.0);
++            if selected { row["latest_fetch"] = latest.map(CapturedFetch::value).unwrap_or(Value::Null); }
++        }
++        self.push(row);
++        if selected && latest.is_none() {
++            self.violation.get_or_insert_with(|| "Monitored CPU data access lacks its matching actual instruction fetch".into());
++        }
++        Ok(())
++    }
++}
++
++fn mapped_spans<'a>(maps: impl Iterator<Item = &'a MemoryMap>, ranges: &[WatchRange]) -> Vec<Span> {
++    let mut spans = Vec::new();
++    for map in maps {
++        for range in ranges {
++            if !range.kinds.contains(WatchKinds::CPU_FETCH) { continue; }
++            let start = range.start.max(map.physical);
++            let end = range.end.min(map.physical + map.size as u64);
++            if start < end { spans.push(((map.address + start - map.physical).saturating_sub(15), map.address + end - map.physical)); }
++        }
++    }
++    union(spans)
++}
++impl Board {
++    pub fn memory_watch_begin_with_fetch_attribution(
++        &self, classes: Vec<WatchRange>, attribution: FetchAttribution, limit: usize,
++        maps: Vec<MemoryMap>, views: ViewPolicy,
++    ) -> Result<Box<MemoryWatch>, String> {
++        if self.cpus.len() > 2 { return Err("Fetch attribution supports at most two processors".into()); }
++        for range in &attribution.ranges { self.watch_backing(&[(range.start,range.end)])?; }
++        let mut watch = self.memory_watch_begin_classified(classes, limit, maps, views)?;
++        watch.records.borrow_mut().fetch_attribution = Some(FetchCapture { specification: attribution, latest: [None; 2] });
++        let result = (|| -> Result<(), String> {
++            for (core, cpu) in self.cpus.iter().enumerate() {
++                let context: &MemoryContext = &watch.contexts[core];
++                let decoder_maps = self.state.borrow().decoders.observation_maps(core);
++                let (cached, ordinary) = {
++                    let records = watch.records.borrow();
++                    let capture = records.fetch_attribution.as_ref().ok_or("Fetch attribution configuration absent")?;
++                    (mapped_spans(context.maps.iter().chain(&decoder_maps), &capture.specification.ranges),
++                        mapped_spans(context.maps.iter().chain(&decoder_maps), &records.classes))
++                };
++                let data = (context as *const MemoryContext).cast_mut().cast();
++                for (mut begin, end) in cached {
++                    let mut install = |start, stop| -> Result<(), String> {
++                        let id = unsafe { cpu.install_hook(Hook::Instruction { callback: fetch, data,
++                            range: HookRange::Inclusive { begin: start, end: stop - 1 } }) }?;
++                        watch.hooks.push((core,id));
++                        Ok(())
++                    };
++                    for &(low,high) in &ordinary {
++                        if high <= begin { continue; }
++                        if low >= end { break; }
++                        if begin < low { install(begin,low.min(end))?; }
++                        begin = begin.max(high).min(end);
++                        if begin == end { break; }
++                    }
++                    if begin < end { install(begin,end)?; }
++                }
++            }
++            Ok(())
++        })();
++        if let Err(error) = result { self.memory_watch_end(&mut watch)?; return Err(error); }
++        Ok(watch)
++    }
++}

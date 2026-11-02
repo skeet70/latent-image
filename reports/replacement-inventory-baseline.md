@@ -1306,7 +1306,7 @@ No fit or native frame proof is claimed before emission. There is no stock fallb
 
 ### 8.17 Initial root, idle and standby task bodies (#152)
 
-`E-INITIAL-TASK-BODIES-SOURCE-150` binds the complete X-M1 1.50 image4 bodies, their retained service boundaries and a read-only projection of the admitted #151 stock receipt. This is source recovery and an owned-increment proposal. It adds no owned task artifact or natural task-body qualification.
+`E-INITIAL-TASK-BODIES-SOURCE-150` binds the complete X-M1 1.50 bodies, retained service boundaries and historical #151 projection. `E-INITIAL-IDLE-HOST-150` now measures and stages the shared idle artifact. `E-INITIAL-IDLE-NATURAL-QUALIFIED-150` independently admits natural retained/owned idle102/103 lifecycles and their semantic comparison; it does not add root104 or standby93 ownership.
 
 #### Entries, frames and observed startup contexts
 
@@ -1394,14 +1394,21 @@ Own the complete **shared idle102/103 body** in place over `[0x69cbf0,0x69cc00)`
 7. Extend watching past A104's first prologue for separately bound retained/owned observations. The existing cutoff cannot qualify A102 entry or any idle wake iteration. B93 can block and B103 can run before A102 creation; the four phase submissions are not a global barrier.
 8. Keep root/standby replacement, general scheduler and IRQ/device ownership, later executable publication and application startup open. Passing this increment does not close #152.
 
+`replacement/idle_task` emits exactly 16 bytes with an eight-byte private frame, WFI at `0x69cbf8` and resume at `0x69cbfc`. Its finite artifact test and one-DAT staging pass (`E-INITIAL-IDLE-HOST-150`). The separate observer retains the #151 source unchanged, samples complete initial loader/image4 source views, and continuously guards the idle carrier, source-derived fill/memset fences, reviewed loader-code complements and interface roots/tables. Task resources retain attributed writes and known preimages. The SDK caches actual fetched instructions per core without logging unrelated fill loops; its default package passes 216 checks, including six public attribution regressions (`E-FETCH-ATTRIBUTION-HOST-150`).
+
+Both separately bound natural runs admit 235 snapshots. B103 enters at 6,445,956 with SP `0xa10600`; A102 enters at 27,803,472 with SP `0xa11200`. Both independently preserve 12 B103 and one A102 modeled IRQ cycles, with 13 and two executed WFI instructions. The source frame is four bytes and the owned frame eight bytes. Continuous watching ends at `[24592020,3213604]`, aggregate 27,805,624; each fixed unwatched continuation reaches shooting menu `(1,5,2)` at 382 million instructions. The semantic comparison passes (`E-INITIAL-IDLE-NATURAL-QUALIFIED-150`).
+
+The earlier retained observations remain refused: a root-data write inside an overbroad immutable prefix, then the unchanged row cap exhausted by unrelated generic-fill fetches (`E-INITIAL-IDLE-NATURAL-REFUSALS-150`). Source-derived code fences and actual-writer attribution correct those causes without a cap increase. The admitted watches contain 1,572 retained and 1,574 owned rows. The corrected host suites pass 43 expected refusal mutations per role; their earlier missing-repeat fixture failures remain recorded (`E-INITIAL-IDLE-CONTROLS-150`).
+
+
 | #152 acceptance criterion | Current status and exact remaining fact |
 | --- | --- |
-| Bound entries, task/core/context, loop/handback and retained services | Complete bodies and the existing initial contexts are source-bound. A102 entry, root service/handback execution and standby wake/hardware routing remain unobserved. |
-| Natural owned root104/idle102/idle103/standby93 execution | Unmet. No owned task-body artifact or run is introduced here. |
-| Independent actions, task/IRQ, blocking/wakeup, repetition and handback comparisons | Existing stock admission reaches B93/A104 first prologues only. New retained/owned interval comparisons are required. |
-| Wrong identity/context, lost coordination, forbidden effects and false-completion refusals | Proposed for the idle increment. Concrete B93 flag producer and hardware wake contract remain prerequisites for standby controls. |
-| Continuous body guards and shared-data/callback/stack/task lifetimes | Unmet. Source extents and persistent consumers are named; runtime exclusion, wake/restoration and release are unqualified. |
-| Inventory, startup documentation and ledger separate later application, scheduler and device dependencies | Recorded here and in the startup observer documentation; no larger ownership claim is added. |
+| Bound entries, task/core/context, loop/handback and retained services | Both idle entries, stacks, code and IRQ/wait boundaries are admitted. Root104 service/handback execution and standby93's complete wake contract remain unqualified. |
+| Natural owned root104/idle102/idle103/standby93 execution | Partial: owned idle102 and idle103 execute naturally through repeated WFI. Root104 and standby93 still have no owned runtime implementation. |
+| Independent actions, task/IRQ, blocking/wakeup, repetition and handback comparisons | The retained/owned idle comparison passes with preserved task/IRQ state and repeated waits. Root/standby actions, coordination, blocking and required handback remain open. |
+| Wrong identity/context, lost coordination, forbidden effects and false-completion refusals | The finite emitted proof, nine producer regressions and 43 serialized controls per role qualify the idle scope. Root controls and the concrete standby event `0x2005d` mask1 producer/wake contract remain missing. |
+| Continuous body guards and shared-data/callback/stack/task lifetimes | The complete canonical idle carrier and observed live resources are guarded through aggregate 27,805,624. Original copies and computed call/read/copy references outside those entries, retained IRQ/callback dependencies after that endpoint, and any path that releases or repurposes idle nodes/stacks remain open. Root/standby guards and release are unqualified. |
+| Inventory, startup documentation and ledger separate later application, scheduler and device dependencies | Recorded with the measured host, refused attempts, admitted idle interval and controls. Later publication/application work, general scheduler and device/physical ownership remain separate; #152 is not closed. |
 
 ### 8.18 Application entry, main UI actor and first owned loop boundary (#154)
 

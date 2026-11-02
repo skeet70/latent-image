@@ -1469,7 +1469,6 @@ cc_test(
     deps = ["@lab_unicorn//:unicorn"],
 )
 
-
 cc_test(
     name = "persistent-repair-smoke",
     srcs = ["persistent-repair-smoke.c"],
@@ -2675,6 +2674,7 @@ haskell_library(
         ":critical-pair-lib",
         ":first-stage-witness-lib",
         ":interface-initializer-lib",
+        ":loader-code-layout",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
@@ -2841,4 +2841,66 @@ sh_binary(
     name = "loader-continuations",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-loader-continuations"],
     visibility = ["//visibility:public"],
+)
+
+sh_binary(
+    name = "idle-tasks",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-idle-tasks"],
+    visibility = ["//visibility:public"],
+)
+
+haskell_library(
+    name = "loader-code-layout",
+    srcs = ["Emulation/LoaderCode.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = ["//host:base"],
+)
+
+haskell_library(
+    name = "idle-task-witness-lib",
+    srcs = [
+        "Emulation/IdleTaskControls.hs",
+        "Emulation/IdleTaskWire.hs",
+        "Emulation/IdleTaskWitness.hs",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":loader-code-layout",
+        ":startup-task-witness-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:json",
+        "//host:update-container",
+        "//host:vector",
+        "//replacement/idle_task:idle-task-artifact",
+        "//replacement/kernel_install:kernel-install-artifact",
+        "//replacement/media_permit:stock-inventory",
+    ],
+)
+
+haskell_binary(
+    name = "idle-task-check",
+    srcs = ["IdleTaskWitnessMain.hs"],
+    args = ["$(rootpath //lz:fflzd)"],
+    data = ["//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":idle-task-witness-lib",
+        ":image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:process",
+        "//host:update-container",
+    ],
 )
