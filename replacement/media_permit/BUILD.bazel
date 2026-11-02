@@ -78,7 +78,7 @@ xm1_rust_elf(
 
 haskell_library(
     name = "stock-inventory",
-    srcs = ["StockInventory.hs"],
+    srcs = ["StockInventory.hs", "ReturnProvenance.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     visibility = ["//visibility:public"],
     deps = [

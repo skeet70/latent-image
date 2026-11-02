@@ -5,6 +5,12 @@ module StockInventory
   , FunctionWindow (..)
   , FunctionSize (..)
   , FunctionDeclaration (..)
+  , FunctionDerivation (..)
+  , ProgramCounter (..)
+  , PremiseUse (..)
+  , ReturnPremise (..)
+  , requiredReturnPremises
+  , returnPremiseLabel
   , checkDeclarations
   , deriveFunction
   , checkedStockFunctions
@@ -13,17 +19,24 @@ module StockInventory
 
 import qualified A32 as A
 import Control.Monad (forM, forM_, unless)
-import Data.Bits (shiftL, (.&.))
+import Data.Bits (shiftL, shiftR, (.&.))
 import qualified Data.ByteString as B
-import Data.List (sort)
+import Data.List (intercalate, sort)
+import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Word (Word32)
 import Numeric (showHex)
+import ReturnProvenance (CodeNode (..), LiteralWord (..), PremiseUse (..), ProgramCounter (..), ReturnPremise (..), requiredReturnPremises, returnPremiseLabel, verifyReturns)
 
 newtype GuestAddress = GuestAddress Word32 deriving (Eq, Ord, Show)
 data FunctionWindow = FunctionWindow GuestAddress GuestAddress deriving (Eq, Show)
 newtype FunctionSize = FunctionSize Int deriving (Eq, Ord, Show)
 data FunctionDeclaration = FunctionDeclaration GuestAddress FunctionSize deriving (Eq, Ord, Show)
+data FunctionDerivation = FunctionDerivation
+  { derivedDeclaration :: FunctionDeclaration
+  , derivationPremises :: [ReturnPremise]
+  , derivationPremiseUses :: [PremiseUse]
+  } deriving (Eq, Show)
 
 checkDeclarations :: [FunctionDeclaration] -> [FunctionDeclaration] -> Either String ()
 checkDeclarations declared derived = do
@@ -56,30 +69,42 @@ stockFunctions =
   , (0xe88e1c,0x60), (0xe88ed0,0x8c), (0xeb0ea0,0x38)
   ]
 
-checkedStockFunctions :: B.ByteString -> Either String [(Word32, Int)]
+checkedStockFunctions :: B.ByteString -> Either String [FunctionDerivation]
 checkedStockFunctions image = do
-  derived <- mapM (\window -> deriveFunction (GuestAddress 0xbf1a00) image window []) windows
+  let outcomes = [(low, deriveFunction (GuestAddress 0xbf1a00) image window []) | window@(FunctionWindow (GuestAddress low) _) <- windows]
+      failures = [showHex low "" ++ ": " ++ problem | (low, Left problem) <- outcomes]
+      derived = [extent | (_, Right extent) <- outcomes]
+  unless (null failures) (Left ("required premises: " ++ intercalate "," (map returnPremiseLabel requiredReturnPremises) ++ "\n" ++ intercalate "\n" failures))
   let declaration (address, size) = FunctionDeclaration (GuestAddress address) (FunctionSize size)
-  checkDeclarations (map declaration stockFunctions) (map declaration derived)
+  checkDeclarations (map declaration stockFunctions) (map derivedDeclaration derived)
   pure derived
 
-deriveFunction :: GuestAddress -> B.ByteString -> FunctionWindow -> [GuestAddress] -> Either String (Word32, Int)
+deriveFunction :: GuestAddress -> B.ByteString -> FunctionWindow -> [GuestAddress] -> Either String FunctionDerivation
 deriveFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low) (GuestAddress high)) externalTails = do
   unless (low < high && low .&. 3 == 0 && high .&. 3 == 0) (Left "invalid function window")
   (code, literals) <- walk [low] S.empty S.empty
   graph <- forM (S.toList code) $ \address -> do
-    instruction <- A.decode address <$> word address
+    encoded <- word address
+    let instruction = A.decode address encoded
     (successors, _) <- edges address instruction
-    pure (address, instruction, successors)
-  forM_ graph $ \(address, instruction, _) -> case instruction of
+    pure (address, instruction, successors, A.Cond (encoded `shiftR` 28))
+  forM_ graph $ \(address, instruction, _, _) -> case instruction of
     A.Load _ _ _ destination base (A.OffsetRegister _ _ _ _) _ | destination == A.pc && base == A.pc -> do
-      let predecessors = S.fromList [source | (source, _, successors) <- graph, address `elem` successors]
+      let predecessors = S.fromList [source | (source, _, successors, _) <- graph, address `elem` successors]
       unless (address /= low && predecessors == S.singleton (address-4)) (Left "dispatch bound is bypassed")
     _ -> pure ()
   unless (S.null (S.intersection code literals)) (Left "instruction also used as a literal")
   let missing = S.fromList [low,low+4..high-4] S.\\ S.union code literals
   unless (S.null missing) (Left ("unclassified function words at " ++ show (S.toList missing)))
-  pure (low, fromIntegral (S.findMax code + 4 - low))
+  literalWords <- forM (S.toList literals) $ \address -> do
+    value <- word address
+    pure (ProgramCounter address, LiteralWord value)
+  dependencies <- verifyReturns (M.fromList literalWords) (ProgramCounter low)
+    [CodeNode (ProgramCounter address) instruction (map ProgramCounter successors) condition | (address, instruction, successors, condition) <- graph]
+  pure (FunctionDerivation
+    (FunctionDeclaration (GuestAddress low) (FunctionSize (fromIntegral (S.findMax code + 4 - low))))
+    (S.toList (S.fromList [premise | PremiseUse _ premise <- dependencies]))
+    dependencies)
   where
     inside address = low <= address && address < high && address .&. 3 == 0
     word address
