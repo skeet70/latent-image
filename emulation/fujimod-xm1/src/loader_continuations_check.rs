@@ -29,7 +29,13 @@ impl TryFrom<String> for RegisterNumber {
 }
 impl From<RegisterNumber> for String {fn from(value:RegisterNumber)->Self{format!("r{}",value.0)}}
 #[derive(Deserialize,Serialize)]
-struct Hit {address:HexWord,core:Core,instructions:super::Count,cpsr:u32,registers:BTreeMap<RegisterNumber,HexWord>,sp:HexWord,lr:HexWord}
+pub(super) struct Hit {address:HexWord,core:Core,instructions:super::Count,cpsr:u32,registers:BTreeMap<RegisterNumber,HexWord>,sp:HexWord,lr:HexWord}
+pub(super) fn hit_location(hit:&Hit)->(Guest,Core,super::Count){(Guest(hit.address.0),hit.core,hit.instructions)}
+pub(super) fn hit_matches(hit:&Hit,pc:Guest,core:Core,count:super::Count,registers:&super::Registers)->bool{
+    hit.address.0==pc.0&&hit.core==core&&hit.instructions==count&&hit.cpsr==registers.cpsr
+        &&hit.sp.0==registers.sp.0&&hit.lr.0==registers.lr.0&&hit.registers.len()==13
+        &&(0..13u8).all(|number|hit.registers.get(&RegisterNumber(number)).is_some_and(|value|value.0==registers.r[usize::from(number)]))
+}
 #[derive(Serialize)]
 #[serde(rename_all="kebab-case")]
 enum Scope { CanonicalNaturalObservation, OwnedNaturalObservation, PlainRetainedNaturalObservation, PlainOwnedNaturalObservation }
@@ -60,7 +66,7 @@ fn projected_frame(event:&Event)->Result<&[u32],String>{
     let frame=event.frame.as_ref().map_err(|_|"loader caller frame was not projected")?;words(frame)?;
     require(frame.mapping.guest.0.checked_add(64)==Some(event.registers.sp.0)&&frame.values.len()==20,"loader frame extent differs")?;Ok(&frame.values[16..20])
 }
-fn snapshot(root:&Path,sample:&super::Snapshot,catalog:&Catalog)->Result<(),String>{
+pub(super) fn snapshot(root:&Path,sample:&super::Snapshot,catalog:&Catalog)->Result<(),String>{
     mapping(&sample.mapping)?;let (start,end)=sample.resource.extent();require(sample.mapping.guest.0==start&&sample.mapping.bytes.0==end-start,"resource projection extent differs")?;
     let expected=catalog.expected(sample.resource)?;let mut first_difference=None;let mut digests=Vec::with_capacity(3);
     for (index,binding) in sample.files.iter().enumerate(){
@@ -159,8 +165,7 @@ fn verified_receipt(root:&Path,analysis:&Path,receipt:Vec<u8>)->Result<Verified,
     let mut previous=0;
     for (index,(hit,event)) in trace.iter().zip(&report.events).enumerate(){
         require(event.id.0==index&&event.instructions.0>=previous&&event.instructions.0<=report.instructions.0,"event chronology differs")?;previous=event.instructions.0;
-        require(hit.address.0==event.pc.0&&hit.core==event.core&&hit.instructions==event.instructions&&hit.cpsr==event.registers.cpsr&&hit.sp.0==event.registers.sp.0&&hit.lr.0==event.registers.lr.0&&hit.registers.len()==13,"raw boundary differs")?;
-        for register in 0..13u8{require(hit.registers.get(&RegisterNumber(register)).is_some_and(|value|value.0==event.registers.r[usize::from(register)]),"raw general register differs")?;}
+        require(hit_matches(hit,event.pc,event.core,event.instructions,&event.registers),"raw boundary differs")?;
         let (source,expected)=catalog.word(event.pc)?;words(&event.code)?;require(source==event.source&&event.code.mapping.guest==event.pc&&event.code.values==[expected]&&event.registers.cpsr&0x20==0,"entered source instruction differs")?;
         for value in event.state.iter().chain(event.descriptor.iter()).chain(event.payload.iter()){words(value)?;}if let Ok(frame)=&event.frame{words(frame)?;}
         let physical=event.pc.0&!0x40000000;

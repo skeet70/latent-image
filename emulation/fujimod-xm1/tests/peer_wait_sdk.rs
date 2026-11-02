@@ -7,7 +7,10 @@ use fujimod_emulator_exr2_plan::Resources;
 use fujimod_xm1::{machine::Machine, peer_witness::{self, PeerContract}, run::RunDocument};
 use fujimod_xm1::provenance::Guest;
 use fujimod_xm1::machine::RunOutcome;
-use fujimod_xm1::trace::{CaptureCursor, CaptureMemory, CaptureProtocolError, InstructionCount, TraceSites};
+use fujimod_xm1::trace::{
+    CaptureCursor, CaptureMemory, CaptureProtocolError, EnteredInstructions, InstructionCount,
+    ScopedHitCount, TraceSites, TraceStackScopeConfig, TraceStackSkip, TraceStackViolation,
+};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -87,6 +90,240 @@ fn context(machine: &Machine) -> Vec<(u64, u64)> {
         machine.session.board.read_register(core, arm::CORE[0]).unwrap(),
         machine.session.board.read_register(core, Register::Pc).unwrap(),
     )).collect()
+}
+
+fn stack_scope_config() -> TraceStackScopeConfig {
+    TraceStackScopeConfig::new([Guest(0x3100), Guest(0x3300)], Guest(0x3500), [Guest(0x3000), Guest(0x3004)]).unwrap()
+}
+
+fn begin_stack_scope(machine: &mut Machine) {
+    for cell in [0x3000, 0x3004] {
+        machine.session.board.write_physical(cell, &0x3600u32.to_le_bytes()).unwrap();
+    }
+    machine.traces.begin_stack_scope(stack_scope_config()).unwrap();
+}
+
+#[test]
+fn outside_non_owner_points_are_drained_and_counted_without_spending_full_hits_or_stopping() {
+    let mut machine = machine(&[0xe2800001, 0xeafffffd]);
+    machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
+    machine.session.board.write_register(0, arm::CORE[13], 0x3800).unwrap();
+    machine.traces.arm(&machine.session, BTreeMap::from([(0x1000, "shared".into())])).unwrap();
+    machine.traces.stop_labels.insert("shared".into());
+    machine.traces.bound_full_registers(std::num::NonZeroUsize::new(1).unwrap());
+    begin_stack_scope(&mut machine);
+    machine.traces.scope_stack_sites(&machine.session, &[Guest(0x1000)]).unwrap();
+
+    for entered in [6, 12] {
+        assert_eq!(machine.run(6), RunOutcome::Completed);
+        assert_eq!(machine.instructions(), entered);
+        assert!(machine.traces.hits.is_empty());
+        let skips: Vec<_> = machine.traces.drain_stack_scope_skips().collect();
+        assert_eq!(skips, [entered - 6, entered - 4, entered - 2].map(|instructions| TraceStackSkip {
+            core: 0, site: Guest(0x1000), instructions: EnteredInstructions(instructions),
+            sp: Guest(0x3800), current: Guest(0x3600),
+        }));
+        machine.traces.scope_stack_sites(&machine.session, &[Guest(0x1000)]).unwrap();
+        let summary = machine.traces.stack_scope_summary().unwrap();
+        assert_eq!(summary.sites.len(), 1);
+        assert_eq!(summary.sites[0].entered, EnteredInstructions(0));
+        assert_eq!(summary.sites[0].outside, [ScopedHitCount(entered / 2), ScopedHitCount(0)]);
+        assert_eq!(summary.sites[0].recorded, [ScopedHitCount(0); 2]);
+        assert!(summary.violation.is_none());
+    }
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 6);
+    machine.session.board.write_register(0, arm::CORE[13], 0x3200).unwrap();
+    machine.session.board.write_physical(0x3000, &0x3500u32.to_le_bytes()).unwrap();
+    assert_eq!(machine.run(10), RunOutcome::Stopped);
+    assert_eq!(machine.instructions(), 12);
+    assert_eq!(machine.traces.hits.len(), 1);
+    assert_eq!(machine.traces.stack_scope_summary().unwrap().sites[0].recorded, [ScopedHitCount(1), ScopedHitCount(0)]);
+    machine.session.board.write_register(0, arm::CORE[13], 0x3800).unwrap();
+    machine.session.board.write_physical(0x3000, &0x3600u32.to_le_bytes()).unwrap();
+    assert_eq!(machine.run(6), RunOutcome::Completed);
+    assert_eq!(machine.instructions(), 18);
+    assert_eq!(machine.traces.hits.len(), 1);
+    assert_eq!(machine.traces.drain_stack_scope_skips().count(), 2);
+    assert_eq!(machine.traces.stack_scope_summary().unwrap().sites[0].outside, [ScopedHitCount(8), ScopedHitCount(0)]);
+}
+
+#[test]
+fn scoped_owner_keeps_full_registers_stops_and_the_original_full_hit_limit() {
+    let mut machine = machine(&[0xe2800001, 0xeafffffd]);
+    for index in 0..13 {
+        machine.session.board.write_register(0, arm::CORE[index], 0x120 + index as u64).unwrap();
+    }
+    machine.session.board.write_register(0, arm::CORE[13], 0x3200).unwrap();
+    machine.session.board.write_register(0, arm::CORE[14], 0x1234).unwrap();
+    machine.traces.arm(&machine.session, BTreeMap::from([(0x1000, "shared".into())])).unwrap();
+    machine.traces.stop_labels.insert("shared".into());
+    machine.traces.bound_full_registers(std::num::NonZeroUsize::new(1).unwrap());
+    begin_stack_scope(&mut machine);
+    machine.session.board.write_physical(0x3000, &0x3500u32.to_le_bytes()).unwrap();
+    machine.traces.scope_stack_sites(&machine.session, &[Guest(0x1000)]).unwrap();
+
+    assert_eq!(machine.run(10), RunOutcome::Stopped);
+    assert_eq!(machine.instructions(), 0);
+    let hit = &machine.traces.hits[0];
+    assert_eq!(hit.registers.len(), 13);
+    assert_eq!(hit.registers["r0"], "0x120");
+    assert_eq!(hit.registers["r12"], "0x12c");
+    assert_eq!(hit.sp, "0x3200");
+    assert_eq!(hit.lr, "0x1234");
+    assert_eq!(hit.cpsr, 0xd3);
+    assert_eq!(machine.run(1), RunOutcome::Completed);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 0x121);
+    assert_eq!(machine.run(2), RunOutcome::Failed);
+    assert_eq!(machine.traces.hits.len(), 1);
+    assert_eq!(machine.traces.stack_scope_summary().unwrap().sites[0].recorded, [ScopedHitCount(1), ScopedHitCount(0)]);
+    assert_eq!(machine.traces.drain_stack_scope_skips().count(), 0);
+}
+
+#[test]
+fn scoped_owner_outside_either_stack_edge_refuses_with_the_exact_omission() {
+    for sp in [0x30fc, 0x40003304, 0xc0003200] {
+        let mut machine = machine(&[0xe2800001, 0xeafffffd]);
+        machine.session.board.write_register(0, arm::CORE[13], sp).unwrap();
+        machine.traces.arm(&machine.session, BTreeMap::from([(0x1000, "shared".into())])).unwrap();
+        begin_stack_scope(&mut machine);
+        machine.session.board.write_physical(0x3000, &0x40003500u32.to_le_bytes()).unwrap();
+        machine.traces.scope_stack_sites(&machine.session, &[Guest(0x1000)]).unwrap();
+
+        assert_eq!(machine.run(1), RunOutcome::Failed);
+        assert_eq!(machine.instructions(), 0);
+        assert!(machine.traces.hits.is_empty());
+        let hit = TraceStackSkip {
+            core: 0, site: Guest(0x1000), instructions: EnteredInstructions(0),
+            sp: Guest(sp as u32), current: Guest(0x3500),
+        };
+        assert_eq!(machine.traces.drain_stack_scope_skips().collect::<Vec<_>>(), [hit]);
+        let summary = machine.traces.stack_scope_summary().unwrap();
+        assert_eq!(summary.sites[0].outside, [ScopedHitCount(1), ScopedHitCount(0)]);
+        assert_eq!(summary.violation, Some(TraceStackViolation::OwnerOutsideStack { hit }));
+        assert_eq!(machine.run(1), RunOutcome::Failed);
+        assert_eq!(machine.instructions(), 0);
+    }
+}
+
+#[test]
+fn stack_edges_and_known_dram_aliases_remain_in_scope() {
+    for sp in [0x3100, 0x40003300] {
+        let mut machine = machine(&[0xeafffffe]);
+        machine.session.board.write_register(0, arm::CORE[13], sp).unwrap();
+        machine.traces.arm(&machine.session, BTreeMap::from([(0x1000, "shared".into())])).unwrap();
+        machine.traces.stop_labels.insert("shared".into());
+        begin_stack_scope(&mut machine);
+        machine.session.board.write_physical(0x3000, &0x40003500u32.to_le_bytes()).unwrap();
+        machine.traces.scope_stack_sites(&machine.session, &[Guest(0x1000)]).unwrap();
+        assert_eq!(machine.run(1), RunOutcome::Stopped);
+        assert_eq!(machine.traces.hits.len(), 1);
+        assert_eq!(machine.traces.hits[0].sp, format!("{sp:#x}"));
+        assert_eq!(machine.traces.drain_stack_scope_skips().count(), 0);
+    }
+}
+
+#[test]
+fn stack_scope_counts_guest_aliases_and_executing_core_slots_separately() {
+    let mut machine = machine_with_ram(&[0xeafffffe], 0x5000, RamViews::AliasedWithDecoder);
+    machine.session.board.write_register(1, Register::Pc, 0x40001000).unwrap();
+    machine.session.board.write_register(0, arm::CORE[13], 0x40003100).unwrap();
+    machine.session.board.write_register(1, arm::CORE[13], 0x3800).unwrap();
+    machine.traces.arm(&machine.session, BTreeMap::from([(0x1000, "physical".into()), (0x40001000, "alias".into())])).unwrap();
+    machine.traces.bound_full_registers(std::num::NonZeroUsize::new(1000).unwrap());
+    machine.traces.begin_stack_scope(TraceStackScopeConfig::new(
+        [Guest(0x3100), Guest(0x3300)], Guest(0x3500), [Guest(0x3004), Guest(0x3000)],
+    ).unwrap()).unwrap();
+    machine.session.board.write_physical(0x3004, &0x40003500u32.to_le_bytes()).unwrap();
+    machine.session.board.write_physical(0x3000, &0x40003600u32.to_le_bytes()).unwrap();
+    machine.traces.scope_stack_sites(&machine.session, &[Guest(0x1000), Guest(0x40001000)]).unwrap();
+
+    assert_eq!(machine.run(1001), RunOutcome::Completed);
+    assert_eq!(machine.session.board.instruction_counts(), [1000, 1]);
+    assert_eq!(machine.traces.hits.len(), 1000);
+    assert!(machine.traces.hits.iter().all(|hit| hit.core == 0 && hit.address == "0x1000"));
+    assert_eq!(machine.traces.drain_stack_scope_skips().collect::<Vec<_>>(), [TraceStackSkip {
+        core: 1, site: Guest(0x40001000), instructions: EnteredInstructions(1000),
+        sp: Guest(0x3800), current: Guest(0x3600),
+    }]);
+    let summary = machine.traces.stack_scope_summary().unwrap();
+    assert_eq!(summary.sites[0].recorded, [ScopedHitCount(1000), ScopedHitCount(0)]);
+    assert_eq!(summary.sites[0].outside, [ScopedHitCount(0); 2]);
+    assert_eq!(summary.sites[1].recorded, [ScopedHitCount(0); 2]);
+    assert_eq!(summary.sites[1].outside, [ScopedHitCount(0), ScopedHitCount(1)]);
+    machine.session.board.write_register(1, Register::Pc, 0x1000).unwrap();
+    assert_eq!(machine.run(1), RunOutcome::Completed);
+    assert_eq!(machine.traces.hits.len(), 1000);
+    assert_eq!(machine.traces.drain_stack_scope_skips().collect::<Vec<_>>(), [TraceStackSkip {
+        core: 1, site: Guest(0x1000), instructions: EnteredInstructions(1001),
+        sp: Guest(0x3800), current: Guest(0x3600),
+    }]);
+    assert_eq!(machine.traces.stack_scope_summary().unwrap().sites[0].outside, [ScopedHitCount(0), ScopedHitCount(1)]);
+}
+
+#[test]
+fn dynamic_scope_registration_preserves_ordinary_stops_and_refuses_scoped_site_removal() {
+    let mut machine = machine(&[0xe2800001, 0xe2800002, 0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
+    machine.session.board.write_register(0, arm::CORE[13], 0x3800).unwrap();
+    machine.traces.arm(&machine.session, BTreeMap::from([(0x1000, "entry".into())])).unwrap();
+    machine.traces.stop_labels.insert("entry".into());
+    assert_eq!(machine.run(10), RunOutcome::Stopped);
+    begin_stack_scope(&mut machine);
+    machine.traces.scope_stack_sites(&machine.session, &[Guest(0x1000)]).unwrap();
+    machine.traces.scope_stack_sites(&machine.session, &[Guest(0x1004)]).unwrap();
+    machine.traces.add_sites(&machine.session, BTreeMap::from([(0x1004, "dynamic".into()), (0x1008, "unfiltered".into())])).unwrap();
+    assert!(machine.traces.remove_sites(&machine.session, &[Guest(0x1004)]).is_err());
+    assert_eq!(machine.run(10), RunOutcome::Stopped);
+    assert_eq!(machine.instructions(), 2);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 3);
+    assert_eq!(machine.traces.hits.len(), 2);
+    assert_eq!(machine.traces.hits[1].address, "0x1008");
+    assert_eq!(machine.traces.drain_stack_scope_skips().collect::<Vec<_>>(), [TraceStackSkip {
+        core: 0, site: Guest(0x1004), instructions: EnteredInstructions(1),
+        sp: Guest(0x3800), current: Guest(0x3600),
+    }]);
+}
+
+#[test]
+fn undrained_stack_omissions_refuse_at_the_fixed_bound_without_truncation() {
+    let mut machine = machine(&[0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[13], 0x3800).unwrap();
+    machine.traces.arm(&machine.session, BTreeMap::from([(0x1000, "shared".into())])).unwrap();
+    machine.traces.bound_full_registers(std::num::NonZeroUsize::new(1).unwrap());
+    begin_stack_scope(&mut machine);
+    machine.traces.scope_stack_sites(&machine.session, &[Guest(0x1000)]).unwrap();
+    assert_eq!(machine.run(200000), RunOutcome::Failed);
+    assert!(machine.traces.hits.is_empty());
+    assert_eq!(machine.traces.drain_stack_scope_skips().count(), 65536);
+    let summary = machine.traces.stack_scope_summary().unwrap();
+    assert_eq!(summary.sites[0].outside, [ScopedHitCount(65536), ScopedHitCount(0)]);
+    assert!(matches!(summary.violation, Some(TraceStackViolation::SkipLimit { hit })
+        if hit.core == 0 && hit.site == Guest(0x1000) && hit.sp == Guest(0x3800) && hit.current == Guest(0x3600)));
+}
+
+#[test]
+fn stack_scope_deserialization_keeps_constructor_validation_and_capture_exclusion() {
+    let config = stack_scope_config();
+    assert_eq!(serde_json::from_value::<TraceStackScopeConfig>(serde_json::to_value(config).unwrap()).unwrap(), config);
+    assert_eq!(config.stack(), [Guest(0x3100), Guest(0x3300)]);
+    assert_eq!(config.owner(), Guest(0x3500));
+    assert_eq!(config.current(), [Guest(0x3000), Guest(0x3004)]);
+    for invalid in [
+        serde_json::json!({"stack":[0x3300,0x3100],"owner":0x3500,"current":[0x3000,0x3004]}),
+        serde_json::json!({"stack":[0x3100,0x40003300],"owner":0x3500,"current":[0x3000,0x3004]}),
+        serde_json::json!({"stack":[0x3100,0x3300],"owner":0,"current":[0x3000,0x3004]}),
+        serde_json::json!({"stack":[0x3100,0x3300],"owner":0x3500,"current":[0x3000,0x3000]}),
+        serde_json::json!({"stack":[0x3100,0x3300],"owner":0x3500,"current":[0x3001,0x3004]}),
+    ] {
+        assert!(serde_json::from_value::<TraceStackScopeConfig>(invalid).is_err());
+    }
+    let mut traces = TraceSites::default();
+    traces.begin_stack_scope(config).unwrap();
+    assert!(traces.begin_stack_scope(config).is_err());
+    assert!(traces.begin_capture_observation(fujimod_xm1::trace::CaptureScope::Capture).is_err());
+    let mut capture = TraceSites::default();
+    capture.begin_capture_observation(fujimod_xm1::trace::CaptureScope::Capture).unwrap();
+    assert!(capture.begin_stack_scope(config).is_err());
 }
 
 #[test]
@@ -254,6 +491,40 @@ fn fetch_watch_after_points_uses_rolled_back_stops_and_resumed_entries() {
 }
 
 #[test]
+fn reopening_a_fetch_watch_after_dynamic_points_restores_stop_and_resume_clocks() {
+    use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
+    let mut machine = machine(&[0xe2800001, 0xe2800002, 0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
+    machine.traces.arm(&machine.session, BTreeMap::from([(0x1000, "entry".into())])).unwrap();
+    machine.traces.stop_labels.insert("entry".into());
+    assert_eq!(machine.run(10), RunOutcome::Stopped);
+    assert_eq!(machine.instructions(), 0);
+    let ranges = || vec![WatchRange { start: 0x1000, end: 0x100c, kinds: WatchKinds::CPU_FETCH }];
+    let mut watch = machine.session.board.memory_watch_begin_classified(ranges(), 8, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
+    machine.traces.add_sites(&machine.session, BTreeMap::from([(0x1004, "next".into()), (0x1008, "last".into())])).unwrap();
+    assert_eq!(machine.run(10), RunOutcome::Stopped);
+    machine.require_running().unwrap();
+    let observed: Watch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(observed.violation.is_none());
+    let fetches: Vec<_> = observed.records.iter().filter(|row| row.source == Source::CpuFetch).map(|row| (row.core, row.pc, row.instructions)).collect();
+    assert_eq!(fetches, [(Some(0), Some(0x1000), Some(1)), (Some(0), Some(0x1004), Some(2))]);
+    assert_eq!(machine.instructions(), 1);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 1);
+    let mut watch = machine.session.board.memory_watch_begin_classified(ranges(), 8, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
+    assert_eq!(machine.run(10), RunOutcome::Stopped);
+    machine.require_running().unwrap();
+    let resumed: Watch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(resumed.violation.is_none());
+    let fetches: Vec<_> = resumed.records.iter().filter(|row| row.source == Source::CpuFetch).map(|row| (row.core, row.pc, row.instructions)).collect();
+    assert_eq!(fetches, [(Some(0), Some(0x1004), Some(2)), (Some(0), Some(0x1008), Some(2))]);
+    assert_eq!(machine.instructions(), 2);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 3);
+    assert_eq!(machine.session.board.read_register(0, Register::Pc).unwrap(), 0x1008);
+}
+
+#[test]
 fn completed_load_and_its_next_unconsumed_point_share_an_entered_count() {
     let mut machine = machine(&[0xe5912000, 0xe3520000, 0xeafffffe]);
     machine.session.board.write_register(0, arm::CORE[1], 0x3000).unwrap();
@@ -282,6 +553,26 @@ fn completed_load_and_its_next_unconsumed_point_share_an_entered_count() {
     assert_eq!(committed, [0x2b, 2, 0, 0]);
     assert!(observed.violation.is_none());
     assert!(machine.failure.is_none());
+}
+
+#[test]
+fn an_unconsumed_point_at_a_window_endpoint_stops_without_a_new_entry() {
+    let mut machine = machine(&[0xe2800001, 0xe2800002, 0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
+    machine.traces.arm(&machine.session, BTreeMap::from([(0x1004, "after-window".into())])).unwrap();
+    machine.traces.stop_labels.insert("after-window".into());
+    assert_eq!(machine.run(1), fujimod_xm1::machine::RunOutcome::Completed);
+    assert_eq!(machine.instructions(), 1);
+    assert_eq!(machine.session.board.read_register(0, Register::Pc).unwrap(), 0x1004);
+    assert_eq!(machine.run(1), fujimod_xm1::machine::RunOutcome::Stopped);
+    assert_eq!(machine.instructions(), 1);
+    assert_eq!(machine.traces.hits.len(), 1);
+    assert_eq!(machine.traces.hits[0].instructions, 1);
+    assert_eq!(machine.traces.hits[0].address, "0x1004");
+    assert_eq!(machine.run(1), fujimod_xm1::machine::RunOutcome::Completed);
+    machine.require_running().unwrap();
+    assert_eq!(machine.instructions(), 2);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 3);
 }
 
 #[derive(Deserialize)]
