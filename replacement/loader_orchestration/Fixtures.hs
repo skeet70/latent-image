@@ -56,7 +56,9 @@ mutations side artifact symbols = do
       phaseAssignment = CodeAddress (firstPc-4)
       (identitySite@(CodeAddress identityPc),_) = identityCall
       ordinary fault mutant failure = Mutation fault mutant symbols (CodeRejected failure)
-      pcDestination fault site = ordinary fault (replace site ((at site .&. complement 0xf000) .|. 0xf000)) (ControlFlowRejected site)
+      pcMutant site = replace site ((at site .&. complement 0xf000) .|. 0xf000)
+      pcDestination fault site = ordinary fault (pcMutant site) (ControlFlowRejected site)
+      pcUndecodable fault site = ordinary fault (pcMutant site) (UnsupportedInstruction site)
       jump from target = branchTo from target .&. 0xfeffffff
       roleSite = CodeAddress (identityPc+4)
       CodeAddress pollPc = polled
@@ -91,7 +93,7 @@ mutations side artifact symbols = do
     , ordinary ZeroEncodedRrx (replace moved (at moved .|. 0x60)) OperandRejected
     , pcDestination ProgramCounterData moved
     , pcDestination ProgramCounterLoad loaded
-    , pcDestination ProgramCounterWide widened
-    , pcDestination ProgramCounterTop topped
+    , pcUndecodable ProgramCounterWide widened
+    , pcUndecodable ProgramCounterTop topped
     , Mutation CounterControlledExit extended (symbolsFor extended) (CodeRejected PollingInvariantRejected)
     ]
