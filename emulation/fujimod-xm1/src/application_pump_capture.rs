@@ -273,14 +273,14 @@ impl<'a> Runner<'a> {
             (sample.id, config)
         };
         self.end_watch()?;
-        self.begin_watch()?;
         let file = std::fs::OpenOptions::new().create_new(true).write(true).open(self.output.join("pump-stack-scope.json.gz")).map_err(|error| fail(Refusal::CaptureBound, error.to_string()))?;
         self.scope_output = Some(bounded_gzip::Writer::new(file, scope_limits()));
         write_scope(self.scope_output.as_mut().ok_or_else(|| fail(Refusal::CaptureBound, "scope writer absent"))?, &mut self.scope_line,
             &ScopeWrite::Begin { sample: origin, epoch: EpochId(self.capture.epochs.len()), config: &config, instructions: Count(self.machine.instructions()) })?;
         checked(Refusal::StackContext, self.machine.traces.begin_stack_scope(config))?;
         let sites: [Guest; SHARED_QUEUE_SITES.len() * 2] = std::array::from_fn(|index| Guest(SHARED_QUEUE_SITES[index / 2] | if index & 1 == 0 { 0 } else { 0x40000000 }));
-        self.register_scoped_sites(&sites)
+        self.register_scoped_sites(&sites)?;
+        self.begin_watch()
     }
     fn register_scoped_sites(&mut self, sites: &[Guest]) -> Result<(), Failure> {
         checked(Refusal::StackContext, self.machine.traces.scope_stack_sites(&self.machine.session, sites))?;
@@ -320,8 +320,8 @@ impl<'a> Runner<'a> {
         if self.dynamic_scopes.contains(&target) { return Ok(()); }
         self.end_watch()?;
         self.dynamic_scopes.insert(target);
-        self.begin_watch()?;
-        self.register_scoped_sites(&[Guest(target), Guest(target | 0x40000000)])
+        self.register_scoped_sites(&[Guest(target), Guest(target | 0x40000000)])?;
+        self.begin_watch()
     }
     fn task_views(&self, reader: &continuation_view::Reader<'_>) -> Result<Vec<Words>, Failure> {
         let mut views = Vec::new();

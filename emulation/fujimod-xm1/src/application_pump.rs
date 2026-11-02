@@ -321,10 +321,16 @@ fn produce(request: &Request) -> Result<(), String> {
         loader, samples, epochs, inputs, visible, trace_scope,
         routes: [Route::RepeatedReceive, Route::PendingWork, Route::BackThenInput, Route::Unhandled, Route::ReceiveFailure, Route::ServiceFailure].into_iter().map(|route| RouteCoverage { route, reachability: Reachability::Unqualified }).collect(),
     };
-    persist(&request.output.join("application-pump.json"), &report)?;
+    write_report(&request.output, &report)?;
     if let Outcome::Refused { failure } = report.outcome { return Err(format!("pump observation refused {:?}: {}", failure.reason, failure.detail)); }
     let verified = application_pump_check::check(&request.output, &Catalog::open(&request.analysis)?)?;
     persist(&request.output.join("application-pump-verification.json"), &verified)
+}
+fn write_report(output: &Path, report: &PumpReport) -> Result<(), String> {
+    let file = std::fs::OpenOptions::new().create_new(true).write(true).open(output.join("application-pump.json")).map_err(|error| error.to_string())?;
+    let mut writer = std::io::BufWriter::new(file);
+    serde_json::to_writer(&mut writer, report).map_err(|error| error.to_string())?;
+    std::io::Write::flush(&mut writer).map_err(|error| error.to_string())
 }
 pub(super) fn verify(output: &Path, analysis: &Path) -> Result<(), String> {
     let verification = application_pump_check::check(output, &Catalog::open(analysis)?)?;
