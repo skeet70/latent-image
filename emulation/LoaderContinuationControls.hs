@@ -7,7 +7,7 @@ import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import Data.Bits ((.&.), complement, shiftL, (.|.), xor)
-import Data.List (findIndex, stripPrefix)
+import Data.List (findIndex, sortOn, stripPrefix)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.Text as T
@@ -56,6 +56,11 @@ data FetchChange = TailFetch | WrongFetchCore | WrongFetchPhysical | Unsupported
 data GuardChange = WrongEpochStage | EpochGap | RawObserve | DeclaredObserve | MissingCarrierFetch | MissingInitialProjection | MissingOrigin | WrongOrigin | FixedViewViolation | MissingBoundaryFetch
 data LoaderChange = PendingCall | WrongCallCore | WrongOriginalFrame | WrongPublication | WrongLiveInput deriving Eq
 data CreationField = CreationArgument | CreationTarget
+data TimerChange = TimerBinding | TimerSchema | TimerBatch | TimerError | TimerOmitted | TimerWindow | TimerRange | TimerLimit
+  | TimerOrder | TimerCpu | TimerPc | TimerAddress | TimerSize | TimerOperation | TimerAccepted | TimerTick | TimerValue | TimerMissingRead | TimerFetchTick
+  | TimerSubtraction | TimerRingState | TimerRingWrite | TimerRingWriteTick | TimerCopyRegister | TimerCopyState | TimerCopyWrite | TimerCopyWriteTick | TimerLifetime
+  | TimerSourceCore | TimerSourceChronology | TimerSourceInstruction
+  deriving (Enum, Bounded)
 
 creationIndex :: CreationField -> Int
 creationIndex CreationArgument = 1
@@ -178,7 +183,8 @@ resourceText resource = case resource of
 data CodeImage = CodeImage {imageStart :: GuestAddress, imageBytes :: B.ByteString}
 data Fixture = Fixture
   { originalRoot :: FilePath, receipt :: J.Value, rawTrace :: J.Value, watches :: [J.Value], codeImages :: [CodeImage]
-  , programRole :: ProgramRole, fileChanges :: M.Map FilePath B.ByteString, watchChanges :: S.Set Int, traceChanged :: Bool }
+  , programRole :: ProgramRole, fileChanges :: M.Map FilePath B.ByteString, watchChanges :: S.Set Int, traceChanged :: Bool
+  , timerTransactions :: J.Value, timerChanged :: Bool }
 
 readJson :: Int -> FilePath -> IO J.Value
 readJson limit path = H.readRegular limit path >>= either H.failH pure . decodeStrictIntegers
@@ -193,7 +199,9 @@ loadFixture root analysis = do
     name <- either H.failH pure (textAt [field "file",field "path"] epoch)
     readJson 0x40000000 (root </> name)
   schema <- either H.failH pure (numberAt [field "schema"] document)
-  H.ensure (schema==2 && length epochs==3) "schema2 three-epoch observation required"
+  H.ensure (schema==3 && length epochs==3) "schema3 three-epoch observation required"
+  timerName <- either H.failH pure (textAt [field "timer_transactions",field "path"] document)
+  timer <- readJson 0x40000000 (root </> timerName)
   role <- either H.failH pure (textAt [field "program",field "role"] document >>= \value -> case value of
     "retained" -> Right Retained; "owned" -> Right Owned; _ -> Left "unknown program role")
   artifacts <- if role==Retained then pure M.empty else M.fromList <$> forM [Contract,LoaderArtifact PrimaryCopy,LoaderArtifact SecondaryCopy] (\artifact -> do
@@ -206,7 +214,7 @@ loadFixture root analysis = do
     CodeImage (GuestAddress start) <$> H.readRegular 0x20000 name
   image4 <- H.readRegular 0x1000000 (analysis </> "lz/id4-0061c400.bin")
   image5 <- H.readRegular 0x1000000 (analysis </> "lz/id5-00bf1a00.bin")
-  pure (Fixture root document trace files (loaders++[CodeImage (GuestAddress 0x61c400) image4,CodeImage (GuestAddress 0xbf1a00) image5]) role artifacts S.empty False)
+  pure (Fixture root document trace files (loaders++[CodeImage (GuestAddress 0x61c400) image4,CodeImage (GuestAddress 0xbf1a00) image5]) role artifacts S.empty False timer False)
 
 artifactPath :: Artifact -> [Part]
 artifactPath artifact = [field "program",field "artifacts"]++case artifact of
@@ -273,6 +281,48 @@ gprIndex R4 = 4
 
 setRegister :: EventId -> Gpr -> Word32 -> Fixture -> Either String Fixture
 setRegister identifier register value fixture = modifyEvent identifier [field "registers",field "r",Element (gprIndex register)] (const (Right (J.toJSON value))) fixture >>= syncEvent identifier
+
+setRegisterWord :: EventId -> Int -> (Integer -> Integer) -> Fixture -> Either String Fixture
+setRegisterWord identifier register change fixture =
+  modifyEvent identifier [field "registers",field "r",Element register]
+    (\value -> wireNumber value >>= \word -> wordLike (change word) value) fixture >>= syncEvent identifier
+
+changeStateWord :: EventId -> GuestAddress -> Fixture -> Either String Fixture
+changeStateWord identifier (GuestAddress address) fixture = do
+  event <- eventAt fixture identifier
+  views <- arrayAt [field "state"] event
+  candidates <- forM (zip [0::Int ..] views) $ \(index,view) -> do
+    start <- numberAt [field "mapping",field "guest"] view
+    values <- arrayAt [field "values"] view
+    pure (index,start,start<=toInteger address && toInteger address<start+4*toInteger (length values))
+  (index,start,_) <- firstIndex "control state word absent" [candidate | candidate@(_,_,True) <- candidates]
+  modifyEvent identifier [field "state",Element index,field "values",Element (fromInteger ((toInteger address-start) `div` 4))]
+    (\value -> wireNumber value >>= \word -> wordLike (word `xor` 1) value) fixture
+
+modifyTimer :: (J.Value -> Either String J.Value) -> Fixture -> Either String Fixture
+modifyTimer change fixture = do
+  updated <- change (timerTransactions fixture)
+  pure fixture {timerTransactions=updated,timerChanged=True}
+
+timerReadIndex :: Fixture -> Either String Int
+timerReadIndex fixture = do
+  rows <- arrayAt [field "batch",field "transactions"] (timerTransactions fixture)
+  candidates <- forM (zip [0::Int ..] rows) $ \(index,row) -> do
+    pc <- numberAt [field "pc"] row
+    pure (index,pc==0x41ad8)
+  firstIndex "actual reload device read absent" [index | (index,True) <- candidates]
+
+changeRawTimerRow :: Access -> GuestAddress -> String -> (J.Value -> Either String J.Value) -> Fixture -> Either String Fixture
+changeRawTimerRow kind source name change fixture = do
+  watch <- pathAt [Element 1] (J.toJSON (watches fixture))
+  rows <- arrayAt [field "records"] watch
+  candidates <- forM (zip [0::Int ..] rows) $ \(index,row) -> do
+    access <- parseAccess row
+    pc <- pathAt [field "pc"] row
+    matches <- if access==kind && pc/=J.Null then (==source) <$> guestAt [field "pc"] row else Right False
+    pure (index,matches)
+  index <- firstIndex "actual timer source RAM row absent" [index | (index,True) <- candidates]
+  modifyWatch 1 (modifyAt [field "records",Element index,field name] change) fixture
 
 setLink :: EventId -> GuestAddress -> Fixture -> Either String Fixture
 setLink identifier address fixture = modifyEvent identifier [field "registers"] (setGuest [field "lr"] address) fixture >>= syncEvent identifier
@@ -754,6 +804,100 @@ fetchControl change fixture = do
         OwnedPaddingFetch -> setPc 0x40ac4
       modifyWatch 1 (setAt [field "records",Element index] updated) fixture
 
+timerControl :: TimerChange -> Fixture -> Either String Fixture
+timerControl change fixture = case change of
+  TimerBinding -> modifyReceipt [field "timer_transactions",field "sha256"] (const (Right (J.toJSON (replicate 64 '0')))) fixture
+  TimerSchema -> modifyTimer (setAt [field "batch",field "omitted"] ("invalid"::String)) fixture
+  TimerBatch -> modifyTimer (setAt [field "batch"] J.Null) fixture
+  TimerError -> modifyTimer (setAt [field "error"] ("synthetic device observation failure"::String)) fixture
+  TimerOmitted -> modifyTimer (setAt [field "batch",field "omitted"] (1::Int)) fixture
+  TimerWindow -> modifyTimer (modifyAt [field "start"] increment) fixture
+  TimerRange -> modifyTimer (setAt [field "range"] ([0xfff91000,0xfff91004]::[Word64])) fixture
+  TimerLimit -> modifyTimer (setAt [field "limit"] (1::Int)) fixture
+  TimerSourceCore -> do
+    identifier <- firstEvent fixture (GuestAddress 0x41ad4)
+    modifyEvent identifier [field "core"] flipBit fixture >>= syncEvent identifier
+  TimerSourceChronology -> do
+    identifier <- firstEvent fixture (GuestAddress 0x41adc)
+    modifyEvent identifier [field "instructions"] (\value -> wireNumber value >>= \word -> wordLike (word-1) value) fixture >>= syncEvent identifier
+  TimerSourceInstruction -> do
+    identifier <- firstEvent fixture (GuestAddress 0x41ad8)
+    modifyEvent identifier [field "code",field "values",Element 0] flipBit fixture
+  TimerOrder -> modifyTimer (modifyAt [field "batch",field "transactions"] (\value -> J.toJSON . reverse <$> arrayAt [] value)) fixture
+  TimerCpu -> readField "cpu" flipBit
+  TimerPc -> readField "pc" (wordLike 0x41ad4)
+  TimerAddress -> readField "address" (wordLike 0xfff91000)
+  TimerSize -> readField "size" (const (Right (J.toJSON (2::Int))))
+  TimerOperation -> readField "operation" (const (Right (J.toJSON ("write"::String))))
+  TimerAccepted -> readField "accepted" (const (Right (J.Bool False)))
+  TimerTick -> do
+    index <- timerReadIndex fixture
+    modifyTimer (modifyAt [field "batch",field "transactions"] (\value -> do
+      changed <- modifyAt [Element index,field "tick"] flipBit value
+      rows <- arrayAt [] changed
+      timed <- traverse (\row -> do tick <- numberAt [field "tick"] row;pure (tick,row)) rows
+      pure (J.toJSON (map snd (sortOn fst timed))))) fixture
+  TimerValue -> readField "value" flipBit
+  TimerMissingRead -> do
+    index <- timerReadIndex fixture
+    modifyTimer (modifyAt [field "batch",field "transactions"] (\value -> do
+      rows <- arrayAt [] value
+      pure (J.toJSON [row | (position,row) <- zip [0::Int ..] rows,position/=index]))) fixture
+  TimerFetchTick -> changeRawTimerRow CpuFetch (GuestAddress 0x41ad8) "tick" flipBit fixture
+  TimerSubtraction -> firstEvent fixture (GuestAddress 0x41ae4) >>= \identifier -> setRegisterWord identifier 2 (`xor` 1) fixture
+  TimerRingState -> do
+    identifier <- firstEvent fixture (GuestAddress 0x41ae8)
+    base <- eventAt fixture identifier >>= numberAt [field "registers",field "r",Element 3]
+    changeStateWord identifier (GuestAddress (fromInteger (base+0x40))) fixture
+  TimerRingWrite -> changeRawTimerRow CpuWrite (GuestAddress 0x41ae4) "value" flipBit fixture
+  TimerRingWriteTick -> changeRawTimerRow CpuWrite (GuestAddress 0x41ae4) "tick" flipBit fixture
+  TimerCopyRegister -> firstEvent fixture (GuestAddress 0x41b7c) >>= \identifier -> setRegisterWord identifier 2 (`xor` 1) fixture
+  TimerCopyState -> firstEvent fixture (GuestAddress 0x41b80) >>= \identifier -> changeStateWord identifier (GuestAddress 0xa0830) fixture
+  TimerCopyWrite -> changeRawTimerRow CpuWrite (GuestAddress 0x41b7c) "value" flipBit fixture
+  TimerCopyWriteTick -> changeRawTimerRow CpuWrite (GuestAddress 0x41b7c) "tick" flipBit fixture
+  TimerLifetime -> do
+    events <- arrayAt [field "events"] (receipt fixture)
+    identifier <- firstIndex "late elapsed projection absent" (reverse [EventId index | (index,_) <- zip [0..] events])
+    changeStateWord identifier (GuestAddress 0xa0830) fixture
+  where
+    increment value = wireNumber value >>= \word -> wordLike (word+1) value
+    flipBit value = wireNumber value >>= \word -> wordLike (word `xor` 1) value
+    readField name mutation = do
+      index <- timerReadIndex fixture
+      modifyTimer (modifyAt [field "batch",field "transactions",Element index,field name] mutation) fixture
+
+timerControlName :: TimerChange -> String
+timerControlName change = "timer-"++case change of
+  TimerBinding -> "wrong-binding-hash"; TimerSchema -> "malformed-transactions"; TimerBatch -> "missing-batch"; TimerError -> "capture-error"
+  TimerOmitted -> "omitted-transactions"; TimerWindow -> "wrong-startup-window"; TimerRange -> "wrong-device-range"; TimerLimit -> "wrong-capture-limit"
+  TimerOrder -> "reversed-transactions"; TimerCpu -> "reload-wrong-core"; TimerPc -> "reload-wrong-source-pc"
+  TimerAddress -> "reload-wrong-address"; TimerSize -> "reload-wrong-size"; TimerOperation -> "reload-wrong-operation"
+  TimerAccepted -> "reload-unaccepted"; TimerTick -> "reload-wrong-tick"; TimerValue -> "reload-wrong-value"; TimerMissingRead -> "missing-reload-read"
+  TimerFetchTick -> "reload-wrong-source-fetch-tick"
+  TimerSubtraction -> "wrong-subtraction-result"; TimerRingState -> "wrong-ring-word"; TimerRingWrite -> "wrong-raw-ring-write"
+  TimerCopyRegister -> "wrong-copy-register"; TimerCopyState -> "wrong-latched-word"; TimerCopyWrite -> "wrong-raw-latched-write"; TimerLifetime -> "wrong-latched-lifetime"
+  TimerRingWriteTick -> "wrong-raw-ring-write-tick"; TimerCopyWriteTick -> "wrong-raw-latched-write-tick"
+  TimerSourceCore -> "wrong-source-core"; TimerSourceChronology -> "wrong-source-chronology"; TimerSourceInstruction -> "wrong-source-instruction"
+
+timerReason :: TimerChange -> String
+timerReason change = case change of
+  TimerBinding -> "timer-transactions identity differs"
+  TimerSchema -> "timer-transactions schema differs"
+  TimerBatch -> coverage; TimerError -> coverage; TimerOmitted -> coverage; TimerWindow -> coverage; TimerRange -> coverage; TimerLimit -> coverage
+  TimerOrder -> "timer-transactions order differs"
+  TimerCpu -> readReason; TimerPc -> readReason; TimerAddress -> readReason; TimerSize -> readReason; TimerOperation -> readReason
+  TimerAccepted -> readReason; TimerTick -> readReason; TimerValue -> readReason; TimerMissingRead -> readReason; TimerFetchTick -> readReason
+  TimerSubtraction -> "timer-ring provenance"; TimerRingState -> "timer-ring provenance"
+  TimerRingWrite -> writeReason; TimerRingWriteTick -> writeReason; TimerCopyWrite -> writeReason; TimerCopyWriteTick -> writeReason
+  TimerCopyRegister -> "timer-copy provenance"; TimerCopyState -> "timer-copy provenance"
+  TimerLifetime -> "timer-state provenance"
+  TimerSourceCore -> "timer-source provenance"; TimerSourceChronology -> "timer-source provenance"
+  TimerSourceInstruction -> "entered source instruction differs"
+  where
+    coverage = "timer-transactions coverage differs"
+    readReason = "timer-read provenance"
+    writeReason = "timer-write provenance"
+
 data Control = ReorderCallRecords | WrongPhase | WrongTarget | WrongReturnedCode | WrongSavedPc | OutOfRangeWrite
   | MissingTask | MissingHook | SyntheticDeferred | MissingDeferred | PhaseRawOrder | ConstructorRawOrder
   | MissingLoaderBss | MissingFirstImage | MissingFirstBss | MissingFirstPlain | MisplacedProjection
@@ -761,10 +905,11 @@ data Control = ReorderCallRecords | WrongPhase | WrongTarget | WrongReturnedCode
   | MissingTrampoline | WrongCreationArgument | WrongCreationTarget | WrongCleanup
   | CpuClock ClockMode | TcmMisaligned | TcmPastEnd | TcmExactEnd | MissingExtent PlainExtent | MissingObservedBss GuestAddress
   | LoaderCopyControl CopyChange | UntimedWriter WriteBoundary Writer | ForgedEntryCut
-  | ArtifactControl ArtifactChange | FetchControl FetchChange | GuardControl GuardChange | LoaderControl LoaderChange
+  | ArtifactControl ArtifactChange | FetchControl FetchChange | GuardControl GuardChange | LoaderControl LoaderChange | TimerControl TimerChange
 
 controlName :: Control -> String
 controlName control = case control of
+  TimerControl change -> timerControlName change
   ReorderCallRecords -> "call-record-order-is-not-execution-order"; WrongPhase -> "wrong-phase-argument"
   WrongTarget -> "wrong-dispatch-target"; WrongReturnedCode -> "wrong-returned-code"; WrongSavedPc -> "wrong-saved-pc"
   OutOfRangeWrite -> "out-of-range-write"; MissingTask -> "missing-task-call"; MissingHook -> "missing-plain-hook-call"
@@ -811,6 +956,7 @@ artifactName (LoaderArtifact SecondaryCopy) = "owned-loader-b"
 controlReason :: Control -> Maybe String
 controlReason control | controlVerdict control==Admit = Nothing
 controlReason control = Just (case control of
+  TimerControl change -> timerReason change
   WrongPhase -> "phase argument or target differs"
   WrongTarget -> "phase argument or target differs"
   WrongReturnedCode -> "dispatcher result differs"
@@ -823,6 +969,7 @@ controlReason control = Just (case control of
   ConstructorRawOrder -> "image5 reverse constructor order differs"
   MissingImage5Return -> "required producer return boundary absent"
   MissingPlainReturn -> "required producer return boundary absent"
+  MisplacedProjection -> "required boundary/resource projection absent or repeated"
   MissingTrampoline -> "initial C-entry transfer absent"
   WrongCreationArgument -> "C-record argument, caller or cleanup context differs"
   WrongCreationTarget -> "initial C function entry absent"
@@ -874,6 +1021,7 @@ controlOrigin control = case control of
   FetchControl _ -> SerializedSynthetic; GuardControl DeclaredObserve -> SerializedSynthetic
   GuardControl FixedViewViolation -> SerializedSynthetic; GuardControl WrongOrigin -> SerializedSynthetic
   LoaderControl WrongOriginalFrame -> SerializedSynthetic; LoaderControl WrongLiveInput -> SerializedSynthetic
+  TimerControl _ -> SerializedSynthetic
   ArtifactControl (RebindArtifactBytes _) -> SerializedSynthetic; _ -> ActualMutation
 
 originText :: Origin -> String
@@ -893,6 +1041,7 @@ controls fixture = do
     ++map LoaderControl [PendingCall,WrongCallCore,WrongOriginalFrame,WrongPublication,WrongLiveInput]
     ++map GuardControl [WrongEpochStage,EpochGap,RawObserve,DeclaredObserve,MissingCarrierFetch,MissingInitialProjection,MissingOrigin,WrongOrigin,FixedViewViolation,MissingBoundaryFetch]
     ++map FetchControl [TailFetch,WrongFetchCore,WrongFetchPhysical,UnsupportedFetch,AliasFetch]
+    ++map TimerControl [minBound..maxBound]
     ++if programRole fixture==Owned then
       [ArtifactControl change | artifact <- [Contract,LoaderArtifact PrimaryCopy,LoaderArtifact SecondaryCopy],change <- [WrongArtifactHash artifact,ChangeArtifactBytes artifact,RebindArtifactBytes artifact]]
       ++map FetchControl [OwnedPrefixFetch,OwnedDataFetch,OwnedPaddingFetch]
@@ -934,6 +1083,7 @@ applyControl control fixture = case control of
   FetchControl change -> fetchControl change fixture
   GuardControl change -> guardControl change fixture
   LoaderControl change -> loaderControl change fixture
+  TimerControl change -> timerControl change fixture
   where setTcm (TcmRegisterWord bank) = modifyReceipt [field "events",Element 0,field "code",field "mapping",field "tcm",Element 0,Element 0] (const (Right (J.toJSON bank))) fixture
 
 emit :: FilePath -> J.Value -> IO SHA.Sha256
@@ -949,8 +1099,9 @@ writeFixture output fixture = do
   createDirectory output
   traceName <- either H.failH pure (textAt [field "trace",field "path"] (receipt fixture))
   epochs <- either H.failH pure (arrayAt [field "epochs"] (receipt fixture))
+  timerName <- either H.failH pure (textAt [field "timer_transactions",field "path"] (receipt fixture))
   names <- either H.failH pure (traverse (textAt [field "file",field "path"]) epochs)
-  let excluded = S.fromList (["continuations.json","verification.json","observer-error.json",traceName]++names++M.keys (fileChanges fixture))
+  let excluded = S.fromList (["continuations.json","verification.json","observer-error.json",traceName,timerName]++names++M.keys (fileChanges fixture))
   entries <- listDirectory (originalRoot fixture)
   forM_ entries $ \name -> unless (S.member name excluded) $ do
     status <- getSymbolicLinkStatus (originalRoot fixture </> name)
@@ -973,7 +1124,13 @@ writeFixture output fixture = do
       count <- either H.failH pure (length <$> arrayAt [field "records"] watch)
       either H.failH pure (setAt [field "epochs",Element index,field "file"] (J.object ["path" J..= name,"sha256" J..= SHA.sha256Hex digest]) value >>= setAt [field "epochs",Element index,field "record_count"] count))
     document (zip3 [0..] (watches fixture) names)
-  _ <- emit (output </> "continuations.json") updated
+  withTimer <- if timerChanged fixture then do
+    digest <- emit (output </> "control-timer-transactions.json") (timerTransactions fixture)
+    either H.failH pure (setAt [field "timer_transactions"] (J.object ["path" J..= ("control-timer-transactions.json"::String),"sha256" J..= SHA.sha256Hex digest]) updated)
+    else do
+      createLink (originalRoot fixture </> timerName) (output </> timerName)
+      pure updated
+  _ <- emit (output </> "continuations.json") withTimer
   pure ()
 
 data ProcessResult = ProcessResult
@@ -1004,7 +1161,7 @@ refusalMatches reason actual = TE.encodeUtf8 (T.pack reason) `B.isInfixOf` (proc
 verificationMatches :: SHA.Sha256 -> ProcessResult -> Bool
 verificationMatches digest actual = case decodeStrictIntegers (processStdout actual) of
   Left _ -> False
-  Right verified -> numberAt [field "schema"] verified==Right 3
+  Right verified -> numberAt [field "schema"] verified==Right 4
     && textAt [field "receipt"] verified==Right (SHA.sha256Hex digest)
 
 resultPassed :: Verdict -> Maybe String -> Bool -> ProcessResult -> Bool
@@ -1043,7 +1200,7 @@ runSuite observer@(Observer executable) analysis@(AnalysisRoot sources) (Observa
   observerHash <- SHA.sha256File executable
   controlsHash <- SHA.sha256File own
   let passed = baselinePassed && all casePassed results
-      manifest = J.object ["schema" J..= (2::Int),"baseline_exit" J..= exitNumber (processExit baseline),"baseline_timed_out" J..= processTimedOut baseline
+      manifest = J.object ["schema" J..= (3::Int),"baseline_exit" J..= exitNumber (processExit baseline),"baseline_timed_out" J..= processTimedOut baseline
         ,"baseline_passed" J..= baselinePassed,"observer_sha256" J..= SHA.sha256Hex observerHash,"controls_executable_sha256" J..= SHA.sha256Hex controlsHash
         ,"baseline_receipt_sha256" J..= SHA.sha256Hex baselineHash,"cases" J..= results,"passed" J..= passed]
   _ <- emit (output </> "controls.json") manifest
@@ -1053,7 +1210,7 @@ casePassed :: J.Value -> Bool
 casePassed value = pathAt [field "passed"] value==Right (J.Bool True)
 
 data PairControl = NaturalPair | ReorderedPair | SwappedPair | PhasePair | FramePair | PublicationPair
-  | MissingRawCallPair | LateWritePair | DescriptorPair deriving Eq
+  | MissingRawCallPair | LateWritePair | DescriptorPair | UnprovenElapsedPair | UnrelatedHeaderPair deriving Eq
 
 pairName :: PairControl -> String
 pairName control = case control of
@@ -1066,6 +1223,8 @@ pairName control = case control of
   MissingRawCallPair -> "paired-owned-missing-raw-call"
   LateWritePair -> "paired-owned-late-publication-effect-mismatch"
   DescriptorPair -> "paired-owned-task-descriptor-effect-mismatch"
+  UnprovenElapsedPair -> "paired-owned-elapsed-without-source-relation"
+  UnrelatedHeaderPair -> "paired-owned-unrelated-header-word-effect-mismatch"
 
 pairReason :: PairControl -> Maybe String
 pairReason control = case control of
@@ -1078,6 +1237,8 @@ pairReason control = case control of
   MissingRawCallPair -> Just "raw/event trace coverage differs"
   LateWritePair -> Just "paired semantic effects differ"
   DescriptorPair -> Just "paired semantic effects differ"
+  UnprovenElapsedPair -> controlReason (TimerControl TimerCopyState)
+  UnrelatedHeaderPair -> Just "paired semantic effects differ"
 
 pairMutation :: PairControl -> Fixture -> Either String Fixture
 pairMutation control fixture = case control of
@@ -1087,6 +1248,12 @@ pairMutation control fixture = case control of
   PhasePair -> wrongPhase fixture
   FramePair -> loaderControl WrongOriginalFrame fixture
   PublicationPair -> loaderControl WrongPublication fixture
+  UnprovenElapsedPair -> timerControl TimerCopyState fixture
+  UnrelatedHeaderPair -> do
+    indices <- callIndices fixture Task
+    selected <- firstIndex "returned task call absent" (reverse indices)
+    returned <- callAt fixture selected >>= eventReference "returned"
+    changeStateWord returned (GuestAddress 0xa0834) fixture
   MissingRawCallPair -> do
     call <- loaderService (GuestAddress 0x434f0) fixture >>= callAt fixture
     EventId selected <- eventReference "entry" call
@@ -1116,6 +1283,39 @@ bindingMatches root binding = do
   digest <- SHA.sha256File (root </> name)
   pure (SHA.sha256Hex digest==expected)
 
+timerRelation :: J.Value -> Either String Bool
+timerRelation value = do
+  kind <- textAt [field "kind"] value
+  case kind of
+    "exact" -> numberAt [field "value"] value >> Right False
+    "timer-elapsed" -> do
+      core <- numberAt [field "value",field "core"] value
+      _ <- numberAt [field "value",field "occurrence"] value
+      ring <- numberAt [field "value",field "ring"] value
+      let physical = ring .&. complement 0x40000000
+      unless (core<=1 && ring<=0xffffffff && ring .&. 0x40000000/=0 && physical>=0xa0840 && physical+4<=0xc0900 && physical `mod` 16==0)
+        (Left "serialized timer sample differs")
+      Right True
+    _ -> Left "serialized scalar kind differs"
+
+timerEffectsMatch :: FilePath -> J.Value -> IO Bool
+timerEffectsMatch root binding = do
+  name <- either H.failH pure (textAt [field "path"] binding)
+  effects <- readJson 0x4000000 (root </> name)
+  pure (either (const False) id (do
+    calls <- arrayAt [field "calls"] effects
+    states <- concat <$> traverse (\call -> concat <$> traverse (\boundary -> arrayAt [field boundary,field "state"] call) ["entry","returned"]) calls
+    headerRelations <- forM states $ \state -> do
+      address <- numberAt [field "address"] state
+      if address/=0xa0800 then Right False else do
+        elapsed <- pathAt [field "values",Element 12] state >>= timerRelation
+        adjacent <- pathAt [field "values",Element 13] state >>= timerRelation
+        unless (not adjacent) (Left "unrelated header word has a timer relation")
+        Right elapsed
+    writes <- arrayAt [field "publications",field (show (0xa0830::Int))] effects
+    writeRelations <- traverse (\row -> pathAt [field "value"] row >>= \value -> if value==J.Null then Right False else timerRelation value) writes
+    Right (or headerRelations && or writeRelations)))
+
 comparisonMatches :: FilePath -> FilePath -> FilePath -> Bool -> IO Bool
 comparisonMatches root retained owned equivalent = do
   exists <- doesPathExist (root </> "comparison.json")
@@ -1127,8 +1327,10 @@ comparisonMatches root retained owned equivalent = do
     bindings <- traverse selected
       [[field "retained",field "receipt"],[field "owned",field "receipt"],[field "effects"],[field "owned_effects"]]
     valid <- traverse (bindingMatches root) bindings
-    pure (and valid && numberAt [field "schema"] compared==Right 1
+    relations <- traverse (timerEffectsMatch root) (drop 2 bindings)
+    pure (and valid && and relations && numberAt [field "schema"] compared==Right 2
       && textAt [field "scope"] compared==Right "paired-natural-loader-orchestration"
+      && maybe False (elem (J.toJSON ("device-read-elapsed"::String))) (either (const Nothing) Just (arrayAt [field "admitted_timing"] compared))
       && pathAt [field "accepted"] compared==Right (J.Bool equivalent)
       && pathAt [field "refusal"] compared==Right (if equivalent then J.Null else J.toJSON ("paired semantic effects differ"::String))
       && textAt [field "outcome"] compared==Right (if equivalent then "equivalent" else "refused-semantic-mismatch")
@@ -1136,6 +1338,7 @@ comparisonMatches root retained owned equivalent = do
       && textAt [field "owned",field "receipt",field "sha256"] compared==Right (SHA.sha256Hex replacement)
       && textAt [field "retained",field "verification",field "receipt"] compared==Right (SHA.sha256Hex source)
       && textAt [field "owned",field "verification",field "receipt"] compared==Right (SHA.sha256Hex replacement)
+      && all (\side -> numberAt [field side,field "verification",field "schema"] compared==Right 4) ["retained","owned"]
       && pathAt [field "menu"] compared==Right (J.toJSON ([1,5,2]::[Int]))
       && ((textAt [field "effects",field "sha256"] compared==textAt [field "owned_effects",field "sha256"] compared)==equivalent))
 
@@ -1148,7 +1351,7 @@ comparisonRefusalMatches root retained owned control = do
     replacement <- SHA.sha256File (owned </> "continuations.json")
     bindings <- either H.failH pure (traverse (\side -> pathAt [field side,field "receipt"] compared) ["retained","owned"])
     valid <- traverse (bindingMatches root) bindings
-    pure (and valid && numberAt [field "schema"] compared==Right 1
+    pure (and valid && numberAt [field "schema"] compared==Right 2
       && textAt [field "scope"] compared==Right "paired-natural-loader-orchestration"
       && pathAt [field "accepted"] compared==Right (J.Bool False)
       && textAt [field "outcome"] compared==Right (if control==SwappedPair then "refused-roles" else "refused-owned-observation")
@@ -1164,13 +1367,13 @@ comparisonRefusalMatches root retained owned control = do
 runPairControls :: Observer -> AnalysisRoot -> ObservationDirectory -> ObservationDirectory -> FilePath -> IO [J.Value]
 runPairControls observer analysis@(AnalysisRoot sources) (ObservationDirectory retained) (ObservationDirectory owned) output = do
   fixture <- loadFixture owned sources
-  forM [NaturalPair,ReorderedPair,SwappedPair,PhasePair,FramePair,PublicationPair,MissingRawCallPair,LateWritePair,DescriptorPair] $ \control -> do
+  forM [NaturalPair,ReorderedPair,SwappedPair,PhasePair,FramePair,PublicationPair,MissingRawCallPair,LateWritePair,DescriptorPair,UnprovenElapsedPair,UnrelatedHeaderPair] $ \control -> do
     let name = pairName control
         directory = output </> name
         reason = pairReason control
         verdict = maybe Admit (const Refuse) reason
-        semanticMismatch = control==LateWritePair || control==DescriptorPair
-        individualVerdict = if control `elem` [PhasePair,FramePair,PublicationPair,MissingRawCallPair] then Refuse else Admit
+        semanticMismatch = control `elem` [LateWritePair,DescriptorPair,UnrelatedHeaderPair]
+        individualVerdict = if control `elem` [PhasePair,FramePair,PublicationPair,MissingRawCallPair,UnprovenElapsedPair] then Refuse else Admit
         individualReason = if individualVerdict==Refuse then reason else Nothing
         fields = ["name" J..= name,"scope" J..= (if control==NaturalPair then "actual-observation-pair" else originText SerializedSynthetic)
           ,"expected_exit" J..= exitNumber (expectedExit verdict),"expected_refusal" J..= reason]
@@ -1226,7 +1429,7 @@ main = do
         then runPairControls observer analysis retained owned output
         else pure []
       let passed = casePassed source && casePassed replacement && not (null paired) && all casePassed paired
-          manifest = J.object ["schema" J..= (2::Int),"retained" J..= source,"owned" J..= replacement,"paired_cases" J..= paired,"passed" J..= passed]
+          manifest = J.object ["schema" J..= (3::Int),"retained" J..= source,"owned" J..= replacement,"paired_cases" J..= paired,"passed" J..= passed]
       _ <- emit (output </> "controls.json") manifest
       pure manifest
   unless (casePassed result) exitFailure

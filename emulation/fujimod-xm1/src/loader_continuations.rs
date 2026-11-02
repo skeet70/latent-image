@@ -1,4 +1,4 @@
-use fujimod_emulator::board::{factory::MemoryMap, observation::{ViewPolicy, WatchKinds, WatchRange}};
+use fujimod_emulator::board::{bus::TransactionBatch, factory::MemoryMap, observation::{ViewPolicy, WatchKinds, WatchRange}};
 use fujimod_emulator_cpu::{Register, arm};
 use fujimod_xm1::{bridge::{read, write}, guest::RouteKey, machine::Machine, provenance::Guest, run::{self, RunDocument, ValidatedUpdate}};
 use serde::{Deserialize, Serialize};
@@ -55,6 +55,9 @@ impl Catalog {
 #[serde(transparent)]
 struct Count(u64);
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(transparent)]
+struct Tick(u64);
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(try_from="usize",into="usize")]
 enum Core { Primary, Secondary }
 impl TryFrom<usize> for Core {type Error=String;fn try_from(value:usize)->Result<Self,String>{match value{0=>Ok(Self::Primary),1=>Ok(Self::Secondary),_=>Err("core is outside the two-core model".into())}}}
@@ -84,7 +87,7 @@ struct InputIdentity { run:Digest, update:Digest, update_file:FileBinding, rom:D
 #[serde(rename_all="kebab-case")]
 enum Access { CpuFetch, CpuRead, CpuWrite, HostRead, HostWrite, ModelBusRead, ModelBusWrite }
 #[derive(Deserialize, Serialize)]
-struct Row {source:Access,address:Guest,physical:Guest,size:u64,core:Option<Core>,pc:Option<Guest>,instructions:Option<Count>,value:Option<u64>}
+struct Row {source:Access,address:Guest,physical:Guest,size:u64,core:Option<Core>,pc:Option<Guest>,instructions:Option<Count>,value:Option<u64>,tick:Option<Tick>}
 #[derive(Deserialize, Serialize)]
 struct Class {range:[u64;2],kinds:Vec<Access>}
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -112,7 +115,12 @@ enum ReleaseOutcome { Debounced, Deadline }
 #[derive(Deserialize, Serialize)]
 struct Pulse {key:Key,pressed:Count,released:Option<Count>,finished:Option<Count>,outcome:Option<ReleaseOutcome>}
 #[derive(Deserialize, Serialize)]
-struct Report {schema:u32,program:ProgramBinding,origin:Option<EventId>,identity:InputIdentity,checkpoint:Digest,instructions:Count,menu:Result<Option<[u32;3]>,String>,error:Option<String>,machine_failure:Option<String>,events:Vec<Event>,calls:Vec<Call>,snapshots:Vec<Snapshot>,pulses:Vec<Pulse>,epochs:Vec<Epoch>,trace:FileBinding,static_calls:Vec<StaticCall>}
+struct Report {schema:u32,program:ProgramBinding,origin:Option<EventId>,identity:InputIdentity,checkpoint:Digest,instructions:Count,menu:Result<Option<[u32;3]>,String>,error:Option<String>,machine_failure:Option<String>,events:Vec<Event>,calls:Vec<Call>,snapshots:Vec<Snapshot>,pulses:Vec<Pulse>,epochs:Vec<Epoch>,trace:FileBinding,timer_transactions:FileBinding,static_calls:Vec<StaticCall>}
+const TIMER_RANGE:[Guest;2]=[Guest(0xfff91000),Guest(0xfff91008)];
+const TIMER_LIMIT:usize=3_000_000;
+#[derive(Serialize)]
+struct TimerWatch {start:Count,end:Count,range:[Guest;2],limit:usize,batch:Option<TransactionBatch>,error:Option<String>}
+
 #[derive(Default)]
 struct Observation {events:Vec<Event>,calls:Vec<Call>,snapshots:Vec<Snapshot>,pulses:Vec<Pulse>,cursor:usize,plain_views:BTreeSet<u32>,image5_seen:bool,loader_sp:[Option<Guest>;2],first_loader:Option<EventId>}
 
@@ -137,6 +145,7 @@ fn sites(calls:&[StaticCall],program:&Program)->BTreeMap<u32,String>{
     for pc in [0x43688,0xd3688,0x436e4,0xd36e4,0x436e8,0xd36e8,0x43728,0xd3728,0x43758,0xd3758,0x69cbf0,0x69cd58,0x69d160,0x69d2b4,0x69d2e0,0x69d2e4,0x69cf84,0x69cf94,0x69cf98,0xd985a4,0xd985c0,0xd985c4,0xd985e0,0xd985e4,0x6a96c0,0x6a9734,0x6a9840,0x6a9844,0x6a9934,0x6ae360,0x6ae3f4,0x6ae500,0x73b3a0,0x73b4ac,0x73b554,0x73b924,0x73b950,0x73b9c4,0x73bc54,0x73bd24,0x73be5c,0x73be60,0x73be70,0x73be74,0x73beac,0x73beb0,0x73cdc0,0x73e048,0x725dd8,0x1109130,0x11e6e14,0x125cdfc,0x1273f60,0x1279828,0x127aabc,0x127bdf4,0x127cbb0,0x127da94,0x127f658,0x12812c4,0x128becc,0x13e36fc,0x13e9c0c,0x13eb548]{points.insert(pc,"continuation".into());}
     for pc in [0xd9858c,0xd98590,0xd986ac,0xd986c8,0xd986cc,0xd986dc,0xd986e0,0x107277c,0x1066304,0x1062114,0x1071ca4,0x106ceec,0x1064224,0x6a97bc]{points.insert(pc,"image5-continuation".into());}
     for pc in [0x6a8bec,0x6a8c00,0x6a8c04]{points.insert(pc,"bss-completion".into());}
+    for pc in [0x41ad4,0x41ad8,0x41adc,0x41ae0,0x41ae4,0x41ae8,0x41b78,0x41b7c,0x41b80]{points.insert(pc,"elapsed-source".into());}
     points.insert(0x69d2d8,"source-spin-refusal".into());
     for pc in program.refusal_sites(){points.insert(pc.0,"unsupported-carrier-fetch".into());}
     points
@@ -144,10 +153,11 @@ fn sites(calls:&[StaticCall],program:&Program)->BTreeMap<u32,String>{
 fn classes(stage:WatchStage)->Vec<WatchRange>{
     let early=stage.early();
     let mut spans=vec![(0x61c000,0x61c220),(0x40000,0x40020),(0xd0000,0xd0020),(0xa00c4,0xa00c8),(0x5927c,0x59280),(0xe923c,0xe9240),(0x4f10c,0x4f118),(0xdf0cc,0xdf0d8),(0x89f794,0x89f798),(0x96bd20,0x96bd28),(0x89f8ac,0x89f8b0),(0x944440,0x944464),(0x914834,0x914838),(0x972e88,0x972e94),(0x14c100c,0x14c1010),(0x14c1018,0x14c101c),(0x14c113c,0x14c1140),(0x9662d4,0x9662d8)];
-    spans.extend([(0x89f784,0x89f788),(0x89f78c,0x89f790)]);
-    if early{spans.extend([(0x545a4,0x545a8),(0x54760,0x5476c),(0xe4564,0xe4568),(0xe4720,0xe472c),(0x63450,0x63460),(0xf3410,0xf3420),(0x63460,0x63498),(0xf3420,0xf3458),(0xa0800,0xa0838)]);}
+    spans.extend([(0x89f784,0x89f788),(0x89f78c,0x89f790),(0xa0800,0xa0838)]);
+    if early{spans.extend([(0x545a4,0x545a8),(0x54760,0x5476c),(0xe4564,0xe4568),(0xe4720,0xe472c),(0x63450,0x63460),(0xf3410,0xf3420),(0x63460,0x63498),(0xf3420,0xf3458),(0xa0800,0xc0900)]);}
     let mut result:Vec<_>=spans.into_iter().map(|(start,end)|WatchRange {start,end,kinds:WatchKinds::WRITES}).collect();
     result.extend(DIAGNOSTICS.map(|(start,end)|WatchRange {start:u64::from(start),end:u64::from(end),kinds:WatchKinds::CPU_FETCH.union(WatchKinds::WRITES)}));
+    if stage==WatchStage::Startup{result.extend([(0x41ad4,0x41aec),(0x41b78,0x41b84)].map(|(start,end)|WatchRange {start,end,kinds:WatchKinds::CPU_FETCH.union(WatchKinds::WRITES)}));}
     result.extend([(0x409ac,0x40b00),(0xd09ac,0xd0b00)].map(|(start,end)|WatchRange {start,end,kinds:if stage==WatchStage::Bootstrap {WatchKinds::WRITES}else{WatchKinds::CPU_FETCH.union(WatchKinds::WRITES)}}));result
 }
 fn registers(machine:&Machine,core:Core)->Result<Registers,String>{
@@ -166,6 +176,8 @@ impl Observation {
         if code.values!=[expected]{return Err("entered instruction differs from canonical source".into());}
         let frame=registers.sp.0.checked_sub(64).ok_or_else(||"stack projection underflows".to_owned()).and_then(|low|reader.words(Guest(low),20));
         let id=EventId(self.events.len());let mut state=Vec::new();
+        let ring=match pc.0{0x41ad4|0x41ad8|0x41adc|0x41ae0|0x41ae4|0x41ae8=>Some(registers.r[3]),0x41b78|0x41b7c=>Some(registers.r[8]),0x41b80 if self.events.iter().rev().find(|event|event.core==core).is_some_and(|event|event.pc.0==0x41b7c)=>Some(registers.r[8]),_=>None};
+        if let Some(base)=ring{let address=base.checked_add(0x40).ok_or("elapsed ring word address overflows")?;let physical=address&!0x40000000;if address%4!=0||!(0xa0840..0xc0900).contains(&physical){return Err("elapsed ring word is outside the shared ring".into());}state.push(reader.words(Guest(address),1)?);}
         for (address,words) in [(0xa00c4,1),(0x61c000,8),(0x61c1a4,24),(0x61c400,4),(0x40000,8),(0xd0000,8),(0x5927c,1),(0xe923c,1),(0x4f10c,3),(0xdf0cc,3),(0x63460,14),(0xf3420,14),(0xa0800,14),(0x96bd20,2),(0x89f784,6),(0x89f8ac,1),(0x944440,9),(0x914834,1),(0x972e88,3),(0x8e1900,8),(0x9c2f54,2)]{state.push(reader.words(Guest(address),words)?);}
         if machine.instructions()<=8_000_000{if let Some(sp)=self.loader_sp[usize::from(core)]{state.push(reader.words(sp,4)?);}}
         if pc.0==0x69d2e0{let descriptor=reader.words(Guest(registers.r[0]),2)?;let header=Guest(descriptor.values[1]);state.push(descriptor);state.push(reader.words(header,4)?);}
@@ -310,9 +322,28 @@ fn drive()->Result<(),String>{
         for side in [Side::LoaderA,Side::LoaderB]{for pc in (side.base().0+0x9ac..side.base().0+0xb00).step_by(4){initial.entry(pc).or_insert_with(||"first-carrier-fetch".into());}}
         machine.traces.bound_full_registers(NonZeroUsize::new(TRACE_LIMIT).ok_or("zero trace bound")?);machine.traces.stop_labels=initial.values().cloned().chain(["temporary-boundary".into()]).collect();
         let mut observation=Observation::default();let mut epochs=Vec::new();
-        let outcome=(||->Result<(),String>{machine.traces.arm(&machine.session,initial)?;for stage in [WatchStage::Bootstrap,WatchStage::Startup,WatchStage::Tail]{let (observed,result)=epoch(&mut machine,&mut observation,&catalog,&maps,&output,&permanent,&calls,stage,&program)?;epochs.push(observed);result?;}Ok(())})();
+        let mut timer=TimerWatch {start:Count(0),end:Count(0),range:TIMER_RANGE,limit:TIMER_LIMIT,batch:None,error:None};let mut timer_active=false;
+        let outcome=(||->Result<(),String>{
+            machine.traces.arm(&machine.session,initial)?;
+            for stage in [WatchStage::Bootstrap,WatchStage::Startup,WatchStage::Tail]{
+                if stage==WatchStage::Startup{
+                    timer.start=Count(machine.instructions());
+                    machine.session.board.transaction_watch_begin(vec![(u64::from(TIMER_RANGE[0].0),u64::from(TIMER_RANGE[1].0))],TIMER_LIMIT).map_err(|error|{timer.error=Some(error.clone());error})?;timer_active=true;
+                }
+                let (observed,result)=epoch(&mut machine,&mut observation,&catalog,&maps,&output,&permanent,&calls,stage,&program)?;epochs.push(observed);
+                if stage==WatchStage::Startup{
+                    timer.end=Count(machine.instructions());timer_active=false;
+                    timer.batch=Some(machine.session.board.transaction_watch_end().map_err(|error|{timer.error=Some(error.clone());error})?);
+                    if timer.batch.as_ref().is_some_and(|batch|batch.omitted!=0){let error="timer transaction bound exhausted".to_owned();timer.error=Some(error.clone());return Err(error);}
+                }
+                result?;
+            }
+            Ok(())
+        })();
+        if timer_active{timer.end=Count(machine.instructions());match machine.session.board.transaction_watch_end(){Ok(batch)=>timer.batch=Some(batch),Err(error)=>timer.error=Some(error)}}
+        persist(&output.join("timer-transactions.json"),&timer)?;
         persist(&output.join("trace.json"),&machine.traces.hits)?;
-        let report=Report {schema:2,program:program.binding(),origin:observation.first_loader,identity,checkpoint:Digest::of(&checkpoint),instructions:Count(machine.instructions()),menu:machine.menu().map(|menu|menu.map(|menu|[menu.menu_id,menu.setting_id,menu.cursor])),error:outcome.err(),machine_failure:machine.failure.clone(),events:observation.events,calls:observation.calls,snapshots:observation.snapshots,pulses:observation.pulses,epochs,trace:binding(&output,"trace.json")?,static_calls:calls};
+        let report=Report {schema:3,program:program.binding(),origin:observation.first_loader,identity,checkpoint:Digest::of(&checkpoint),instructions:Count(machine.instructions()),menu:machine.menu().map(|menu|menu.map(|menu|[menu.menu_id,menu.setting_id,menu.cursor])),error:outcome.err(),machine_failure:machine.failure.clone(),events:observation.events,calls:observation.calls,snapshots:observation.snapshots,pulses:observation.pulses,epochs,trace:binding(&output,"trace.json")?,timer_transactions:binding(&output,"timer-transactions.json")?,static_calls:calls};
         persist(&output.join("continuations.json"),&report)?;
         if report.error.is_some()||report.machine_failure.is_some(){return Err("continuation observation did not complete".into());}
         drop(catalog);let verified=loader_continuations_check::check(&output,&analysis)?;persist(&output.join("verification.json"),&verified)

@@ -8,6 +8,8 @@ use std::{collections::BTreeMap, fs::File, io::Read, path::{Component, Path}};
 
 #[path="loader_reset_check.rs"]
 mod loader_reset_check;
+#[path="loader_timer_check.rs"]
+mod loader_timer_check;
 const CANONICAL_RUN:&[u8]=include_bytes!("../data/xm1-150.json");
 
 #[derive(Deserialize)]
@@ -123,11 +125,11 @@ fn projections(report:&Report)->Result<(),String>{
 
 pub(super) fn check(root:&Path,analysis:&Path)->Result<Verification,String>{Ok(verified(root,analysis)?.verification)}
 
-struct Verified {report:Report,program:Program,verification:Verification,publications:Vec<Publication>,loader_effects:Vec<LoaderEffect>,reset:loader_reset_check::Reset}
+struct Verified {report:Report,program:Program,verification:Verification,publications:Vec<Publication>,loader_effects:Vec<LoaderEffect>,reset:loader_reset_check::Reset,timer:loader_timer_check::Admission}
 fn verified(root:&Path,analysis:&Path)->Result<Verified,String>{verified_receipt(root,analysis,read(&root.join("continuations.json"))?)}
 fn verified_receipt(root:&Path,analysis:&Path,receipt:Vec<u8>)->Result<Verified,String>{
     let report:Report=serde_json::from_slice(&receipt).map_err(|error|error.to_string())?;
-    require(report.schema==2&&report.error.is_none()&&report.machine_failure.is_none(),"observation did not complete")?;
+    require(report.schema==3&&report.error.is_none()&&report.machine_failure.is_none(),"observation did not complete")?;
     let mut catalog=Catalog::open(analysis)?;let program=Program::from_binding(report.program.clone(),root,&mut catalog)?;let catalog=&catalog;
     require(report.identity.update.as_str()==program.update()&&report.identity.run.as_str()=="efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"&&report.identity.rom.as_str()=="4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be","canonical input identity differs")?;
     require(report.identity.sources.len()==catalog.0.len(),"source catalog extent differs")?;
@@ -165,6 +167,7 @@ fn verified_receipt(root:&Path,analysis:&Path,receipt:Vec<u8>)->Result<Verified,
     require(report.epochs.len()==3&&report.epochs[0].stage==super::WatchStage::Bootstrap&&report.epochs[0].start.0==0&&report.epochs[0].end==origin.instructions&&report.epochs[1].stage==super::WatchStage::Startup&&report.epochs[1].start==origin.instructions&&report.epochs[1].end.0==8_000_000&&report.epochs[2].stage==super::WatchStage::Tail&&report.epochs[2].start==report.epochs[1].end&&report.epochs[2].end==report.instructions,"classified watch interval differs")?;
     let loaders=[loader_bounds(&report,Guest(0x40000),Guest(0x63450),Core::Primary)?,loader_bounds(&report,Guest(0xd0000),Guest(0xf3410),Core::Secondary)?];
     let mut publications=Vec::new();
+    let mut timer_rows=Vec::new();
     let mut missing_fetches=std::collections::BTreeSet::new();
     // Exact execution stamps the resumed instruction at the stopped count plus one.
     for boundary in report.events.iter().filter(|boundary|carrier_side(boundary.pc).is_some()){
@@ -183,6 +186,8 @@ fn verified_receipt(root:&Path,analysis:&Path,receipt:Vec<u8>)->Result<Verified,
         for span in [[0x409ac,0x40b00],[0xd09ac,0xd0b00]]{require(guarded(&raw.classes,span,!bootstrap),"loader carrier watch coverage absent")?;}
         for span in [[0x61c000,0x61c220],[0x40000,0x40020],[0xd0000,0xd0020],[0x4f10c,0x4f118],[0xdf0cc,0xdf0d8],[0x89f794,0x89f798],[0xa00c4,0xa00c8],[0x5927c,0x59280],[0xe923c,0xe9240],[0x96bd20,0x96bd28],[0x89f8ac,0x89f8b0],[0x944440,0x944464],[0x914834,0x914838],[0x972e88,0x972e94],[0x14c100c,0x14c1010],[0x14c1018,0x14c101c],[0x14c113c,0x14c1140],[0x9662d4,0x9662d8],[0x89f784,0x89f788],[0x89f78c,0x89f790]]{require(guarded(&raw.classes,span,false),"shared publication watch coverage absent")?;}
         if bootstrap||startup{for span in [[0x63450,0x63460],[0xf3410,0xf3420]]{require(guarded(&raw.classes,span,false),"saved loader frame watch coverage absent")?;}}
+        require(guarded(&raw.classes,if bootstrap||startup{[0xa0800,0xc0900]}else{[0xa0800,0xa0838]},false),"timer RAM watch coverage absent")?;
+        if startup{for span in [[0x41ad4,0x41aec],[0x41b78,0x41b84]]{require(guarded(&raw.classes,span,true),"timer source watch coverage absent")?;}}
         if bootstrap{for loader in &loaders{require(raw.records.iter().filter(|row|loader_copy(row,loader.copy)).count()==1,"canonical loader-copy census differs")?;}}
         let mut future=raw.records.iter().enumerate().filter(|(_,row)|matches!(row.source,Access::CpuRead|Access::CpuFetch|Access::CpuWrite)).peekable();
         let mut previous_cpu=epoch.start.0;let mut lower=None;
@@ -220,8 +225,10 @@ fn verified_receipt(root:&Path,analysis:&Path,receipt:Vec<u8>)->Result<Verified,
                 }
             }
         }
+        timer_rows.extend(raw.records.into_iter().filter(loader_timer_check::relevant));
     }
     require(missing_fetches.is_empty(),"observed loader boundary lacks raw carrier fetch")?;
+    let timer=loader_timer_check::admit(root,&report,&timer_rows)?;
     let mut loader_calls=0;let mut task_calls=0;
     for call in &report.calls {
         let entered=event(&report,call.entry.ok_or("observed call lacks its actual entry")?)?;
@@ -277,8 +284,8 @@ fn verified_receipt(root:&Path,analysis:&Path,receipt:Vec<u8>)->Result<Verified,
     require(report.calls.iter().filter(|call|call.kind==CallKind::Image5Entry).count()==1,"image5 header call extent differs")?;
     let setters:Vec<_>=report.calls.iter().filter(|call|call.kind==CallKind::Image5Service&&call.target.0==0x69cf84).collect();require(setters.len()==1,"diagnostic callback setter call census differs")?;
     let setter=event(&report,setters[0].entry.ok_or("setter entry absent")?)?;let setter_return=event(&report,setters[0].returned.ok_or("setter return absent")?)?;require(setter.registers.r[0]==0xed4a8c&&at(setter_return,0x89f794)?==0xed4a8c,"installed diagnostic callback or committed cell differs")?;
-    let verification=Verification {schema:3,scope:if program.owned(){Scope::OwnedNaturalObservation}else{Scope::CanonicalNaturalObservation},receipt:Digest::of(&receipt),events:report.events.len(),loader_calls,task_calls,snapshots:report.snapshots.len(),source_differences:report.snapshots.iter().filter(|sample|!sample.expected_equal).count()};
-    Ok(Verified {report,program,verification,publications,loader_effects,reset})
+    let verification=Verification {schema:4,scope:if program.owned(){Scope::OwnedNaturalObservation}else{Scope::CanonicalNaturalObservation},receipt:Digest::of(&receipt),events:report.events.len(),loader_calls,task_calls,snapshots:report.snapshots.len(),source_differences:report.snapshots.iter().filter(|sample|!sample.expected_equal).count()};
+    Ok(Verified {report,program,verification,publications,loader_effects,reset,timer})
 }
 
 fn carrier_side(pc:Guest)->Option<Side>{
@@ -370,13 +377,29 @@ fn bind_publications(report:&Report,writes:&[Publication])->Result<(),String>{
 }
 
 #[derive(Serialize)]
-struct ScalarEffect<'a> {address:Guest,values:&'a [u32]}
-fn scalar_effect(value:&Words)->ScalarEffect<'_>{ScalarEffect {address:value.mapping.guest,values:&value.values}}
+#[serde(tag="kind",content="value",rename_all="kebab-case")]
+enum ScalarValue<T> {Exact(T),TimerElapsed(loader_timer_check::SampleId)}
+struct ScalarValues<'a> {event:Option<super::EventId>,view:&'a Words,timer:&'a loader_timer_check::Admission}
+impl Serialize for ScalarValues<'_> {
+    fn serialize<S:serde::Serializer>(&self,serializer:S)->Result<S::Ok,S::Error>{
+        use serde::ser::SerializeSeq;
+        let mut sequence=serializer.serialize_seq(Some(self.view.values.len()))?;
+        for (offset,value) in self.view.values.iter().enumerate(){
+            let address=Guest(self.view.mapping.guest.0+4*offset as u32);
+            let relation=self.event.and_then(|event|self.timer.state(event,address));
+            sequence.serialize_element(&relation.map_or(ScalarValue::Exact(*value),ScalarValue::TimerElapsed))?;
+        }
+        sequence.end()
+    }
+}
+#[derive(Serialize)]
+struct ScalarEffect<'a> {address:Guest,values:ScalarValues<'a>}
+fn scalar_effect<'a>(value:&'a Words,event:Option<super::EventId>,timer:&'a loader_timer_check::Admission)->ScalarEffect<'a>{ScalarEffect {address:value.mapping.guest,values:ScalarValues {event,view:value,timer}}}
 #[derive(Serialize)]
 struct BoundaryEffect<'a> {state:Vec<ScalarEffect<'a>>,descriptor:Option<ScalarEffect<'a>>,payload:Option<ScalarEffect<'a>>}
-fn boundary_effect(observed:&Event)->BoundaryEffect<'_>{
-    let mut state:Vec<_>=observed.state.iter().map(scalar_effect).collect();state.sort_unstable_by_key(|value|value.address.0);
-    BoundaryEffect {state,descriptor:observed.descriptor.as_ref().map(scalar_effect),payload:observed.payload.as_ref().map(scalar_effect)}
+fn boundary_effect<'a>(observed:&'a Event,timer:&'a loader_timer_check::Admission)->BoundaryEffect<'a>{
+    let mut state:Vec<_>=observed.state.iter().map(|view|scalar_effect(view,Some(observed.id),timer)).collect();state.sort_unstable_by_key(|value|value.address.0);
+    BoundaryEffect {state,descriptor:observed.descriptor.as_ref().map(|view|scalar_effect(view,None,timer)),payload:observed.payload.as_ref().map(|view|scalar_effect(view,None,timer))}
 }
 #[derive(Serialize)]
 #[serde(tag="kind",rename_all="kebab-case")]
@@ -390,7 +413,7 @@ enum ConsumerInput {
 }
 #[derive(Serialize)]
 struct CallEffect<'a> {core:Core,kind:CallKind,target:Guest,source:Option<Guest>,input:ConsumerInput,entry:BoundaryEffect<'a>,returned:BoundaryEffect<'a>}
-fn consumer_calls(report:&Report)->Result<Vec<CallEffect<'_>>,String>{
+fn consumer_calls<'a>(report:&'a Report,timer:&'a loader_timer_check::Admission)->Result<Vec<CallEffect<'a>>,String>{
     let mut effects=Vec::new();
     for core in [Core::Primary,Core::Secondary]{
         let mut calls:Vec<_>=report.calls.iter().filter(|call|call.core==core&&call.kind!=CallKind::Loader).collect();
@@ -407,51 +430,57 @@ fn consumer_calls(report:&Report)->Result<Vec<CallEffect<'_>>,String>{
                 CallKind::PlainHook=>{let source=before.ok_or("plain hook source absent")?;ConsumerInput::PlainHook {index:source.registers.r[7],descriptor:Guest(source.registers.r[4]),hook:Guest(source.registers.r[10])}},
                 _=>ConsumerInput::SourceBoundProjections,
             };
-            effects.push(CallEffect {core,kind:call.kind,target:call.target,source:before.map(|before|before.pc),input,entry:boundary_effect(entry),returned:boundary_effect(returned)});
+            effects.push(CallEffect {core,kind:call.kind,target:call.target,source:before.map(|before|before.pc),input,entry:boundary_effect(entry,timer),returned:boundary_effect(returned,timer)});
         }
     }
     Ok(effects)
 }
 #[derive(Serialize)]
 struct TransferEffect<'a> {side:Side,selected_task:Guest,selected_sp:Guest,saved_context:ScalarEffect<'a>,creation:ScalarEffect<'a>,entry:Guest,argument:u32,cleanup:Guest}
-fn transfers(report:&Report)->Result<Vec<TransferEffect<'_>>,String>{
+fn transfers<'a>(report:&'a Report,timer:&'a loader_timer_check::Admission)->Result<Vec<TransferEffect<'a>>,String>{
     [Side::LoaderA,Side::LoaderB].into_iter().map(|side|{
         let stopped=|offset|report.events.iter().find(|observed|observed.pc==Guest(side.base().0+offset)&&observed.core==side.core()).ok_or("first task transfer boundary absent");
         let handoff=stopped(0x36e8)?;let jump=stopped(0x3758)?;
         let context_address=handoff.registers.r[1].checked_add(24).ok_or("selected context address overflows")?;
         let context=handoff.state.iter().find(|view|view.mapping.guest.0==context_address&&view.values.len()==2).ok_or("selected context absent")?;
         let creation=jump.state.iter().find(|view|view.mapping.guest.0==jump.registers.r[2]&&view.values.len()==3).ok_or("initial creation record absent")?;
-        Ok(TransferEffect {side,selected_task:Guest(handoff.registers.r[1]),selected_sp:handoff.registers.sp,saved_context:scalar_effect(context),creation:scalar_effect(creation),entry:Guest(creation.values[2]),argument:jump.registers.r[0],cleanup:jump.registers.lr})
+        Ok(TransferEffect {side,selected_task:Guest(handoff.registers.r[1]),selected_sp:handoff.registers.sp,saved_context:scalar_effect(context,None,timer),creation:scalar_effect(creation,None,timer),entry:Guest(creation.values[2]),argument:jump.registers.r[0],cleanup:jump.registers.lr})
     }).collect()
 }
 #[derive(Serialize)]
 struct ResourceEffect<'a> {core:Core,pc:Guest,resource:Resource,physical_digest:&'a Digest,expected_equal:bool,first_difference:Option<Guest>}
 #[derive(Serialize)]
-struct SemanticEffects<'a> {loaders:&'a [LoaderEffect],calls:Vec<CallEffect<'a>>,transfers:Vec<TransferEffect<'a>>,publications:BTreeMap<u32,Vec<&'a Publication>>,resources:Vec<ResourceEffect<'a>>,menu:[u32;3]}
+struct PublicationEffect<'a> {source:Access,address:Guest,physical:Guest,size:u64,core:Option<Core>,value:Option<ScalarValue<u64>>,writer:&'a Writer}
+#[derive(Serialize)]
+struct SemanticEffects<'a> {loaders:&'a [LoaderEffect],calls:Vec<CallEffect<'a>>,transfers:Vec<TransferEffect<'a>>,publications:BTreeMap<u32,Vec<PublicationEffect<'a>>>,resources:Vec<ResourceEffect<'a>>,menu:[u32;3]}
 fn semantic_effects(observed:&Verified)->Result<SemanticEffects<'_>,String>{
-    let mut publications:BTreeMap<u32,Vec<&Publication>>=BTreeMap::new();
-    for write in &observed.publications{publications.entry(write.physical.0).or_default().push(write);}
+    let mut publications:BTreeMap<u32,Vec<PublicationEffect<'_>>>=BTreeMap::new();
+    for write in &observed.publications{
+        let relation=observed.timer.write(write);
+        let value=write.value.map(|value|relation.map_or(ScalarValue::Exact(value),ScalarValue::TimerElapsed));
+        publications.entry(write.physical.0).or_default().push(PublicationEffect {source:write.source,address:write.address,physical:write.physical,size:write.size,core:write.core,value,writer:&write.writer});
+    }
     let mut snapshots:Vec<_>=observed.report.snapshots.iter().filter(|sample|!matches!(sample.resource,Resource::LoaderA|Resource::LoaderB)).collect();
     snapshots.sort_unstable_by_key(|sample|(sample.event.0,sample.resource as u8));
     let resources=snapshots.into_iter().map(|sample|{
         let boundary=event(&observed.report,sample.event)?;
         Ok(ResourceEffect {core:boundary.core,pc:boundary.pc,resource:sample.resource,physical_digest:&sample.files[2].sha256,expected_equal:sample.expected_equal,first_difference:sample.first_difference})
     }).collect::<Result<_,String>>()?;
-    Ok(SemanticEffects {loaders:&observed.loader_effects,calls:consumer_calls(&observed.report)?,transfers:transfers(&observed.report)?,publications,resources,menu:[1,5,2]})
+    Ok(SemanticEffects {loaders:&observed.loader_effects,calls:consumer_calls(&observed.report,&observed.timer)?,transfers:transfers(&observed.report,&observed.timer)?,publications,resources,menu:[1,5,2]})
 }
 #[derive(Serialize)]
 #[serde(rename_all="kebab-case")]
 enum ComparisonScope { PairedNaturalLoaderOrchestration }
 #[derive(Serialize)]
 #[serde(rename_all="kebab-case")]
-enum AdmittedTiming { SourceLocalCoreOrder,PeerCompletionWait }
+enum AdmittedTiming { SourceLocalCoreOrder,PeerCompletionWait,DeviceReadElapsed }
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(rename_all="kebab-case")]
 enum ComparisonOutcome { Equivalent,RefusedSemanticMismatch,RefusedRetainedObservation,RefusedOwnedObservation,RefusedRoles,RefusedIdentity }
 #[derive(Serialize)]
 struct ComparedObservation {receipt:FileBinding,verification:Option<Verification>}
 #[derive(Serialize)]
-struct Comparison {schema:u32,scope:ComparisonScope,accepted:bool,outcome:ComparisonOutcome,refusal:Option<String>,retained:ComparedObservation,owned:ComparedObservation,effects:Option<FileBinding>,owned_effects:Option<FileBinding>,admitted_timing:[AdmittedTiming;2],menu:Option<[u32;3]>}
+struct Comparison {schema:u32,scope:ComparisonScope,accepted:bool,outcome:ComparisonOutcome,refusal:Option<String>,retained:ComparedObservation,owned:ComparedObservation,effects:Option<FileBinding>,owned_effects:Option<FileBinding>,admitted_timing:[AdmittedTiming;3],menu:Option<[u32;3]>}
 fn persist_bound(output:&Path,name:&str,bytes:&[u8])->Result<FileBinding,String>{fujimod_xm1::bridge::write(&output.join(name),bytes)?;Ok(FileBinding {path:name.into(),sha256:Digest::of(bytes)})}
 fn persist_comparison(output:&Path,comparison:&Comparison)->Result<(),String>{fujimod_xm1::bridge::write(&output.join("comparison.json"),&serde_json::to_vec_pretty(comparison).map_err(|error|error.to_string())?)}
 fn refuse_comparison(output:&Path,comparison:&mut Comparison,outcome:ComparisonOutcome,error:String)->Result<(),String>{
@@ -462,7 +491,7 @@ pub(super) fn compare(retained:&Path,owned:&Path,analysis:&Path,output:&Path)->R
     let retained_bytes=read(&retained.join("continuations.json"))?;let owned_bytes=read(&owned.join("continuations.json"))?;
     std::fs::create_dir(output).map_err(|error|error.to_string())?;
     let retained_receipt=persist_bound(output,"retained.json",&retained_bytes)?;let owned_receipt=persist_bound(output,"owned.json",&owned_bytes)?;
-    let mut comparison=Comparison {schema:1,scope:ComparisonScope::PairedNaturalLoaderOrchestration,accepted:false,outcome:ComparisonOutcome::RefusedRetainedObservation,refusal:None,retained:ComparedObservation {receipt:retained_receipt,verification:None},owned:ComparedObservation {receipt:owned_receipt,verification:None},effects:None,owned_effects:None,admitted_timing:[AdmittedTiming::SourceLocalCoreOrder,AdmittedTiming::PeerCompletionWait],menu:None};
+    let mut comparison=Comparison {schema:2,scope:ComparisonScope::PairedNaturalLoaderOrchestration,accepted:false,outcome:ComparisonOutcome::RefusedRetainedObservation,refusal:None,retained:ComparedObservation {receipt:retained_receipt,verification:None},owned:ComparedObservation {receipt:owned_receipt,verification:None},effects:None,owned_effects:None,admitted_timing:[AdmittedTiming::SourceLocalCoreOrder,AdmittedTiming::PeerCompletionWait,AdmittedTiming::DeviceReadElapsed],menu:None};
     let retained=match verified_receipt(retained,analysis,retained_bytes){Ok(observed)=>observed,Err(error)=>return refuse_comparison(output,&mut comparison,ComparisonOutcome::RefusedRetainedObservation,error)};
     let owned=match verified_receipt(owned,analysis,owned_bytes){Ok(observed)=>observed,Err(error)=>{comparison.retained.verification=Some(retained.verification);return refuse_comparison(output,&mut comparison,ComparisonOutcome::RefusedOwnedObservation,error)}};
     let roles=!retained.program.owned()&&owned.program.owned();
@@ -482,7 +511,7 @@ pub(super) fn compare(retained:&Path,owned:&Path,analysis:&Path,output:&Path)->R
 #[cfg(all(test,unix))]
 mod tests {
     use super::*;
-    use super::super::{Class,Count,InputIdentity,Row,WatchStage,WatchViews};
+    use super::super::{Class,Count,InputIdentity,Row,Tick,WatchStage,WatchViews};
     use super::super::loader_orchestration_owned::ProgramBinding;
     use std::{path::PathBuf,sync::atomic::{AtomicU64,Ordering}};
 
@@ -499,10 +528,10 @@ mod tests {
     impl Drop for Temporary {fn drop(&mut self){let _=std::fs::remove_dir_all(&self.0);}}
     fn synthetic_unqualified_report()->Report{
         let digest=Digest::of(b"synthetic unqualified loader observation");
-        Report {schema:1,program:ProgramBinding::Retained,origin:None,identity:InputIdentity {run:digest.clone(),update:digest.clone(),update_file:FileBinding {path:"input-update.DAT".into(),sha256:digest.clone()},rom:digest.clone(),executable:digest.clone(),sources:Vec::new()},checkpoint:digest.clone(),instructions:Count(0),menu:Ok(Some([1,5,2])),error:None,machine_failure:None,events:Vec::new(),calls:Vec::new(),snapshots:Vec::new(),pulses:Vec::new(),epochs:Vec::new(),trace:FileBinding {path:"trace.json".into(),sha256:digest},static_calls:Vec::new()}
+        Report {schema:1,program:ProgramBinding::Retained,origin:None,identity:InputIdentity {run:digest.clone(),update:digest.clone(),update_file:FileBinding {path:"input-update.DAT".into(),sha256:digest.clone()},rom:digest.clone(),executable:digest.clone(),sources:Vec::new()},checkpoint:digest.clone(),instructions:Count(0),menu:Ok(Some([1,5,2])),error:None,machine_failure:None,events:Vec::new(),calls:Vec::new(),snapshots:Vec::new(),pulses:Vec::new(),epochs:Vec::new(),trace:FileBinding {path:"trace.json".into(),sha256:digest.clone()},timer_transactions:FileBinding {path:"timer-transactions.json".into(),sha256:digest},static_calls:Vec::new()}
     }
     fn admitted_fixture(variable:&str)->(Temporary,Report,PathBuf){
-        let source=PathBuf::from(std::env::var_os(variable).expect("set schema2 observation fixture path"));
+        let source=PathBuf::from(std::env::var_os(variable).expect("set schema3 observation fixture path"));
         let analysis=PathBuf::from(std::env::var_os("LOADER_CONTINUATIONS_ANALYSIS").expect("set canonical analysis fixture path"));
         assert!(check(&source,&analysis).is_ok(),"fixture must independently admit");
         let output=Temporary::under(source.parent().expect("private fixture parent"));
@@ -531,6 +560,185 @@ mod tests {
     fn bound_effect(path:&Path,binding:&FileBinding)->Digest{
         let digest=Digest::of(&read(&path.join(&binding.path)).expect("semantic effects"));
         assert_eq!(digest.as_str(),binding.sha256.as_str());digest
+    }
+    #[derive(Serialize,Deserialize)]
+    #[serde(rename_all="lowercase")]
+    enum TimerOperation {Read,Write}
+    #[derive(Serialize,Deserialize)]
+    struct TimerRead {cpu:Core,pc:u64,address:u64,size:u8,operation:TimerOperation,#[serde(skip_serializing_if="Option::is_none")]value:Option<u64>,accepted:bool,tick:Tick}
+    #[derive(Serialize,Deserialize)]
+    struct TimerBatch {transactions:Vec<TimerRead>,omitted:u64}
+    #[derive(Serialize,Deserialize)]
+    struct TimerReceipt {start:Count,end:Count,range:[u64;2],limit:usize,batch:Option<TimerBatch>,error:Option<String>}
+    fn replace_timer(root:&Temporary,report:&mut Report,timer:&TimerReceipt){
+        let bytes=serde_json::to_vec(timer).expect("serialize timer receipt");let name="mutated-timer.json";
+        std::fs::write(root.0.join(name),&bytes).expect("write timer receipt");
+        report.timer_transactions=FileBinding {path:name.into(),sha256:Digest::of(&bytes)};root.receipt(report);
+    }
+    #[derive(Serialize)]
+    struct ReboundHit {address:String,core:Core,instructions:Count,cpsr:u32,registers:BTreeMap<String,String>,sp:String,lr:String}
+    fn replace_trace(root:&Temporary,report:&mut Report){
+        let hits:Vec<_>=report.events.iter().map(|event|ReboundHit {address:format!("{:#x}",event.pc.0),core:event.core,instructions:event.instructions,cpsr:event.registers.cpsr,registers:event.registers.r.iter().enumerate().map(|(register,value)|(format!("r{register}"),format!("{value:#x}"))).collect(),sp:format!("{:#x}",event.registers.sp.0),lr:format!("{:#x}",event.registers.lr.0)}).collect();
+        let bytes=serde_json::to_vec(&hits).expect("serialize rebound trace");let name="rebound-trace.json";
+        std::fs::write(root.0.join(name),&bytes).expect("write rebound trace");report.trace=FileBinding {path:name.into(),sha256:Digest::of(&bytes)};root.receipt(report);
+    }
+    fn change_word(event:&mut Event,address:u32){
+        let view=event.state.iter_mut().find(|view|address>=view.mapping.guest.0&&(address-view.mapping.guest.0)/4<(view.values.len() as u32)).expect("projected timer word");
+        view.values[((address-view.mapping.guest.0)/4) as usize]^=1;
+    }
+    fn copy_report(bytes:&[u8])->Report{serde_json::from_slice(bytes).expect("copy fixture receipt")}
+    #[derive(Deserialize)]
+    #[serde(tag="kind",content="value",rename_all="kebab-case")]
+    enum EffectWord {Exact(u32),TimerElapsed(serde::de::IgnoredAny)}
+    #[derive(Deserialize)]
+    struct EffectState {address:Guest,values:Vec<EffectWord>}
+    #[derive(Deserialize)]
+    struct EffectBoundary {state:Vec<EffectState>}
+    #[derive(Deserialize)]
+    struct EffectCall {kind:CallKind,returned:EffectBoundary}
+    #[derive(Deserialize)]
+    struct Effects {calls:Vec<EffectCall>}
+    fn assert_task_elapsed_is_exact(output:&Path,binding:&FileBinding,expected:u32){
+        let effects:Effects=serde_json::from_slice(&read(&output.join(&binding.path)).expect("semantic effects")).expect("parse semantic effects");
+        assert!(effects.calls.iter().filter(|call|call.kind==CallKind::Task).any(|call|call.returned.state.iter().find(|state|state.address==Guest(0xa0800)).is_some_and(|header|matches!(header.values.get(12),Some(EffectWord::Exact(value)) if *value==expected))));
+    }
+
+    #[test]
+    fn schema_two_cannot_admit_without_actual_timer_read_evidence(){
+        let root=Temporary::new();let mut report=synthetic_unqualified_report();report.schema=2;root.receipt(&report);
+        assert!(matches!(check(&root.0,&root.0.join("absent-analysis")),Err(reason) if reason=="observation did not complete"));
+    }
+    #[test]
+    #[ignore="requires schema3 LOADER_CONTINUATIONS_RETAINED and LOADER_CONTINUATIONS_ANALYSIS"]
+    fn actual_timer_reads_are_required_even_when_leaf_hashes_are_rebound(){
+        #[derive(Debug)]
+        enum Mutation {Missing,MissingValue,Value,Address,Pc,Core,Tick,Size,Operation,Accepted,Order}
+        let (root,mut report,analysis)=admitted_fixture("LOADER_CONTINUATIONS_RETAINED");
+        let original=read(&root.0.join(&report.timer_transactions.path)).expect("timer fixture");
+        for mutation in [Mutation::Missing,Mutation::MissingValue,Mutation::Value,Mutation::Address,Mutation::Pc,Mutation::Core,Mutation::Tick,Mutation::Size,Mutation::Operation,Mutation::Accepted,Mutation::Order] {
+            let mut timer:TimerReceipt=serde_json::from_slice(&original).expect("parse timer fixture");
+            let transactions=&mut timer.batch.as_mut().expect("complete batch").transactions;
+            let index=transactions.iter().position(|read|read.pc==0x41ad8).expect("actual reload read");
+            match mutation {
+                Mutation::Missing=>{transactions.remove(index);},
+                Mutation::MissingValue=>transactions[index].value=None,
+                Mutation::Value=>transactions[index].value=transactions[index].value.map(|value|value^1),
+                Mutation::Address=>transactions[index].address=0xfff91000,
+                Mutation::Pc=>transactions[index].pc=0x41ad4,
+                Mutation::Core=>transactions[index].cpu=match transactions[index].cpu{Core::Primary=>Core::Secondary,Core::Secondary=>Core::Primary},
+                Mutation::Tick=>{transactions[index].tick.0^=1;transactions.sort_by_key(|read|read.tick.0);},
+                Mutation::Size=>transactions[index].size=2,
+                Mutation::Operation=>transactions[index].operation=TimerOperation::Write,
+                Mutation::Accepted=>transactions[index].accepted=false,
+                Mutation::Order=>transactions.reverse(),
+            }
+            replace_timer(&root,&mut report,&timer);
+            assert!(check(&root.0,&analysis).is_err(),"{mutation:?} must refuse");
+        }
+    }
+    #[test]
+    #[ignore="requires schema3 LOADER_CONTINUATIONS_RETAINED and LOADER_CONTINUATIONS_ANALYSIS"]
+    fn incomplete_or_unbound_timer_observation_is_refused(){
+        #[derive(Debug)]
+        enum Mutation {Binding,Batch,Error,Omitted,Window,Range,Limit}
+        let (root,mut report,analysis)=admitted_fixture("LOADER_CONTINUATIONS_RETAINED");
+        let original=read(&root.0.join(&report.timer_transactions.path)).expect("timer fixture");
+        for mutation in [Mutation::Binding,Mutation::Batch,Mutation::Error,Mutation::Omitted,Mutation::Window,Mutation::Range,Mutation::Limit] {
+            let mut timer:TimerReceipt=serde_json::from_slice(&original).expect("parse timer fixture");
+            match mutation {
+                Mutation::Binding=>{},
+                Mutation::Batch=>timer.batch=None,
+                Mutation::Error=>timer.error=Some("synthetic transaction capture failure".into()),
+                Mutation::Omitted=>timer.batch.as_mut().expect("batch").omitted=1,
+                Mutation::Window=>timer.start.0+=1,
+                Mutation::Range=>timer.range[1]-=4,
+                Mutation::Limit=>timer.limit=1,
+            }
+            replace_timer(&root,&mut report,&timer);
+            if matches!(mutation,Mutation::Binding){report.timer_transactions.sha256=Digest::of(b"unbound timer");root.receipt(&report);}
+            assert!(check(&root.0,&analysis).is_err(),"{mutation:?} must refuse");
+        }
+    }
+    #[test]
+    #[ignore="requires schema3 LOADER_CONTINUATIONS_RETAINED and LOADER_CONTINUATIONS_ANALYSIS"]
+    fn read_execution_clock_and_timer_raw_writes_are_independently_bound(){
+        #[derive(Debug)]
+        enum Mutation {ReadClock,ReadTick,RingValue,RingTick,RingAddress,RingCore,CopyValue,CopyTick,CopyAddress,CopyClock,MissingRing,MissingCopy}
+        let (root,report,analysis)=admitted_fixture("LOADER_CONTINUATIONS_RETAINED");let baseline=serde_json::to_vec(&report).expect("fixture receipt");
+        let (index,original)=watch(&root,&report,WatchStage::Startup);
+        #[derive(Serialize)]
+        struct Rows<'a> {enabled:bool,views:WatchViews,violation:Option<()>,classes:&'a [Class],records:&'a [Row]}
+        let original=serde_json::to_vec(&Rows {enabled:original.enabled,views:original.views,violation:None,classes:&original.classes,records:&original.records}).expect("fixture watch");
+        for mutation in [Mutation::ReadClock,Mutation::ReadTick,Mutation::RingValue,Mutation::RingTick,Mutation::RingAddress,Mutation::RingCore,Mutation::CopyValue,Mutation::CopyTick,Mutation::CopyAddress,Mutation::CopyClock,Mutation::MissingRing,Mutation::MissingCopy] {
+            let mut report=copy_report(&baseline);let mut raw:RawWatch=serde_json::from_slice(&original).expect("copy watch");
+            let (source,pc)=match mutation {Mutation::ReadClock|Mutation::ReadTick=>(Access::CpuFetch,0x41ad8),Mutation::RingValue|Mutation::RingTick|Mutation::RingAddress|Mutation::RingCore|Mutation::MissingRing=>(Access::CpuWrite,0x41ae4),_=>(Access::CpuWrite,0x41b7c)};
+            let position=raw.records.iter().position(|row|row.source==source&&row.pc==Some(Guest(pc))).expect("timer access");
+            match mutation {
+                Mutation::ReadClock|Mutation::CopyClock=>raw.records[position].instructions.as_mut().expect("clock").0+=1,
+                Mutation::ReadTick|Mutation::RingTick|Mutation::CopyTick=>raw.records[position].tick.as_mut().expect("tick").0^=1,
+                Mutation::RingValue|Mutation::CopyValue=>raw.records[position].value=raw.records[position].value.map(|value|value^1),
+                Mutation::RingAddress|Mutation::CopyAddress=>{raw.records[position].address.0+=16;raw.records[position].physical.0+=16;},
+                Mutation::RingCore=>raw.records[position].core=raw.records[position].core.map(|core|match core{Core::Primary=>Core::Secondary,Core::Secondary=>Core::Primary}),
+                Mutation::MissingRing|Mutation::MissingCopy=>{raw.records.remove(position);},
+            }
+            replace_watch(&root,&mut report,index,&raw);assert!(check(&root.0,&analysis).is_err(),"{mutation:?} must refuse");
+        }
+    }
+    #[test]
+    #[ignore="requires schema3 LOADER_CONTINUATIONS_RETAINED and LOADER_CONTINUATIONS_ANALYSIS"]
+    fn rebound_source_registers_ring_copy_and_latched_state_cannot_replace_reads(){
+        #[derive(Debug)]
+        enum Mutation {RingRegister,RingState,CopySource,CopyRegister,CopyState,Lifetime}
+        let (root,report,analysis)=admitted_fixture("LOADER_CONTINUATIONS_RETAINED");let baseline=serde_json::to_vec(&report).expect("fixture receipt");
+        for mutation in [Mutation::RingRegister,Mutation::RingState,Mutation::CopySource,Mutation::CopyRegister,Mutation::CopyState,Mutation::Lifetime] {
+            let mut report=copy_report(&baseline);
+            let pc=match mutation {Mutation::RingRegister=>0x41ae4,Mutation::RingState=>0x41ae8,Mutation::CopySource=>0x41b78,Mutation::CopyRegister=>0x41b7c,Mutation::CopyState=>0x41b80,Mutation::Lifetime=>report.events.last().expect("last event").pc.0};
+            let event=if matches!(mutation,Mutation::Lifetime){report.events.last_mut().expect("last event")}else{report.events.iter_mut().find(|event|event.pc.0==pc).expect("timer boundary")};
+            match mutation {
+                Mutation::RingRegister|Mutation::CopyRegister=>event.registers.r[2]^=1,
+                Mutation::RingState=>{let address=event.registers.r[3]+0x40;change_word(event,address);},
+                Mutation::CopySource=>event.registers.r[8]+=16,
+                Mutation::CopyState|Mutation::Lifetime=>change_word(event, 0xa0830),
+            }
+            replace_trace(&root,&mut report);assert!(check(&root.0,&analysis).is_err(),"{mutation:?} must refuse");
+        }
+    }
+    #[test]
+    #[ignore="requires schema3 LOADER_CONTINUATIONS_RETAINED, LOADER_CONTINUATIONS_OWNED and LOADER_CONTINUATIONS_ANALYSIS"]
+    fn equal_valued_but_unproven_header_fields_remain_exact(){
+        let (retained,retained_report,analysis)=admitted_fixture("LOADER_CONTINUATIONS_RETAINED");let (owned,mut report,_)=admitted_fixture("LOADER_CONTINUATIONS_OWNED");
+        let baseline=retained.0.join("timer-baseline");assert!(compare(&retained.0,&owned.0,&analysis,&baseline).is_ok());
+        let changed=report.calls.iter().filter(|call|call.kind==CallKind::Task).filter_map(|call|call.returned).last().expect("last task return");
+        let retained_value=at(retained_report.events.last().expect("retained final event"), 0xa0830).expect("retained elapsed");
+        let event=&mut report.events[changed.0];let view=event.state.iter_mut().find(|view|view.mapping.guest.0==0xa0800).expect("header");
+        assert_ne!(view.values[13],retained_value);view.values[13]=retained_value;root_receipt_and_refuse_pair(&retained,&owned,&report,&analysis,"unproven-header");
+    }
+    fn root_receipt_and_refuse_pair(retained:&Temporary,owned:&Temporary,report:&Report,analysis:&Path,name:&str){
+        owned.receipt(report);assert!(check(&owned.0,analysis).is_ok());
+        let output=retained.0.join(name);assert!(compare(&retained.0,&owned.0,analysis,&output).is_err());
+        assert_eq!(comparison(&output).outcome,ComparisonOutcome::RefusedSemanticMismatch);
+    }
+    #[test]
+    #[ignore="requires schema3 LOADER_CONTINUATIONS_RETAINED, LOADER_CONTINUATIONS_OWNED and LOADER_CONTINUATIONS_ANALYSIS"]
+    fn later_same_valued_header_overwrites_do_not_inherit_timer_provenance(){
+        let (retained,mut retained_report,analysis)=admitted_fixture("LOADER_CONTINUATIONS_RETAINED");let (owned,mut owned_report,_)=admitted_fixture("LOADER_CONTINUATIONS_OWNED");
+        let baseline=retained.0.join("timer-baseline");assert!(compare(&retained.0,&owned.0,&analysis,&baseline).is_ok());
+        let retained_value=at(retained_report.events.last().expect("retained final event"), 0xa0830).expect("retained elapsed");
+        let owned_value=at(owned_report.events.last().expect("owned final event"), 0xa0830).expect("owned elapsed");assert_ne!(retained_value,owned_value);
+        for (root,report,value) in [(&retained,&mut retained_report,retained_value),(&owned,&mut owned_report,owned_value)] {
+            let returned=report.calls.iter().filter(|call|call.kind==CallKind::Task).filter_map(|call|call.returned).last().expect("last task return");
+            let clock=report.events[returned.0].instructions;
+            let stage=if clock.0<=8_000_000{WatchStage::Startup}else{WatchStage::Tail};
+            let (index,mut raw)=watch(root,report,stage);
+            assert_eq!(at(&report.events[returned.0],0x400a0830).expect("current elapsed"),value);
+            let position=raw.records.iter().position(|row|row.instructions.is_some_and(|observed|observed.0>clock.0)).unwrap_or(raw.records.len());
+            raw.records.insert(position,Row {source:Access::CpuWrite,address:Guest(0x400a0830),physical:Guest(0xa0830),size:4,core:Some(Core::Primary),pc:Some(Guest(0x41b38)),instructions:Some(clock),value:Some(u64::from(value)),tick:None});
+            replace_watch(root,report,index,&raw);assert!(check(&root.0,&analysis).is_ok());
+        }
+        let output=retained.0.join("overwritten");assert!(compare(&retained.0,&owned.0,&analysis,&output).is_err());assert_eq!(comparison(&output).outcome,ComparisonOutcome::RefusedSemanticMismatch);
+        let receipt=comparison(&output);
+        assert_task_elapsed_is_exact(&output,receipt.effects.as_ref().expect("retained effects"),retained_value);
+        assert_task_elapsed_is_exact(&output,receipt.owned_effects.as_ref().expect("owned effects"),owned_value);
     }
 
     #[test]
@@ -586,7 +794,7 @@ mod tests {
         let (root,mut report,analysis)=admitted_fixture("LOADER_CONTINUATIONS_RETAINED");
         let (_,startup)=watch(&root,&report,WatchStage::Startup);let source=startup.records.iter().find(|row|row.source==Access::CpuFetch&&carrier_side(row.address).is_some()).expect("carrier fetch");
         let (index,mut raw)=watch(&root,&report,WatchStage::Tail);
-        raw.records.push(Row {source:source.source,address:source.address,physical:source.physical,size:source.size,core:source.core,pc:source.pc,instructions:Some(report.epochs[index].end),value:source.value});
+        raw.records.push(Row {source:source.source,address:source.address,physical:source.physical,size:source.size,core:source.core,pc:source.pc,instructions:Some(report.epochs[index].end),value:source.value,tick:source.tick});
         replace_watch(&root,&mut report,index,&raw);assert!(check(&root.0,&analysis).is_err());
     }
     #[test]
@@ -636,7 +844,7 @@ mod tests {
     fn origin_retry_fetch_at_the_rotation_clock_keeps_its_executed_fetch_obligation(){
         let (root,mut report,analysis)=admitted_fixture("LOADER_CONTINUATIONS_RETAINED");let (index,mut raw)=watch(&root,&report,WatchStage::Startup);
         let origin=&report.events[report.origin.expect("carrier origin").0];
-        raw.records.insert(0,Row {source:Access::CpuFetch,address:origin.pc,physical:origin.pc,size:4,core:Some(origin.core),pc:Some(origin.pc),instructions:Some(origin.instructions),value:None});
+        raw.records.insert(0,Row {source:Access::CpuFetch,address:origin.pc,physical:origin.pc,size:4,core:Some(origin.core),pc:Some(origin.pc),instructions:Some(origin.instructions),value:None,tick:None});
         replace_watch(&root,&mut report,index,&raw);assert!(check(&root.0,&analysis).is_ok());
     }
     #[test]
