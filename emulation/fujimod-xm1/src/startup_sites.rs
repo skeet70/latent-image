@@ -1,4 +1,4 @@
-//! Shared startup capture ownership: the armed site set is exactly the union of every component's requests.
+//! Shared startup capture ownership: the armed site set is the union of every component's requests.
 use crate::{machine::Machine,provenance::Guest};
 use std::{cell::RefCell,collections::{BTreeMap,BTreeSet},rc::Rc};
 
