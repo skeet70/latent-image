@@ -78,17 +78,23 @@ frameValue (FrameProof entry bottom calls returns pcs literals) = object
 -- Calls retain only their boundary metadata; callee register effects are a conditional premise.
 -- Each path carries the last evaluated condition and its outcome until an instruction may write
 -- the flags, so a predicated epilogue is followed only on the paths where it executes.
+-- A call to an entry without a reachable return has no fallthrough. Nonreturning entries are the
+-- greatest fixpoint: every entry starts nonreturning, and explored paths only grow as entries leave the set.
 deriveFrames :: B.ByteString -> [Word32] -> Either AdmissionError [FrameProof]
-deriveFrames bytes entries = mapM derive entries
+deriveFrames bytes entries = settle (S.fromList entries)
   where
+    settle noreturn = do
+      frames <- mapM (derive noreturn) entries
+      let remaining = S.fromList [entry | FrameProof entry _ _ returns _ _ <- frames, null returns]
+      if remaining == noreturn then pure frames else settle remaining
     base = 0x89cda4
     inside pc = pc .&. 3 == 0 && pc /= 0x89d4f8 && any (\(Carrier _ low high) -> low <= pc && pc < high) carriers
     word pc = if pc >= base && toInteger pc + 4 <= toInteger base + toInteger (B.length bytes)
       then Right (U.word32At bytes (fromIntegral (pc-base))) else Left CarrierRejected
-    derive entry = walk entry S.empty [(entry,0,Nothing,Nothing)] 0 [] [] [] []
-    walk entry _ [] bottom calls returns pcs literals = Right (FrameProof entry bottom (S.toList (S.fromList calls)) (S.toList (S.fromList returns)) (S.toList (S.fromList pcs)) (M.toList (M.fromList literals)))
-    walk entry seen (state@(pc,sp,fp,known):pending) bottom calls returns pcs literals
-      | S.member state seen = walk entry seen pending bottom calls returns pcs literals
+    derive noreturn entry = walk noreturn entry S.empty [(entry,0,Nothing,Nothing)] 0 [] [] [] []
+    walk _ entry _ [] bottom calls returns pcs literals = Right (FrameProof entry bottom (S.toList (S.fromList calls)) (S.toList (S.fromList returns)) (S.toList (S.fromList pcs)) (M.toList (M.fromList literals)))
+    walk noreturn entry seen (state@(pc,sp,fp,known):pending) bottom calls returns pcs literals
+      | S.member state seen = walk noreturn entry seen pending bottom calls returns pcs literals
       | S.size seen > 100000 || not (inside pc) = Left (InstructionRejected pc)
       | otherwise = do
           encoded <- word pc
@@ -103,7 +109,7 @@ deriveFrames bytes entries = mapM derive entries
               skippedKnown = maybe (Just (code,False)) (const known) outcome
               seen' = S.insert state seen
               next offset frame = [(pc+4,offset,frame,executedKnown)]
-              finish paths low calls' returns' literals' = walk entry seen' (paths ++ pending) (min bottom low) (calls' ++ calls) (returns' ++ returns) (pc:pcs) (literals' ++ literals)
+              finish paths low calls' returns' literals' = walk noreturn entry seen' (paths ++ pending) (min bottom low) (calls' ++ calls) (returns' ++ returns) (pc:pcs) (literals' ++ literals)
               conditional paths = paths ++ [(pc+4,sp,fp,skippedKnown) | outcome == Nothing]
               stack offset = unless (offset <= 0 && offset >= -65536 && offset .&. 3 == 0) (Left (StackRejected pc))
               ret offset = do
@@ -111,8 +117,8 @@ deriveFrames bytes entries = mapM derive entries
                 finish (conditional []) offset [] [pc] []
               call target = do
                 unless (pc >= 0xbf1a00 || target < 0xbf1a00) (Left (InstructionRejected pc))
-                unless (sp .&. 7 == 0 && (inside target || target `elem` retainedCallees)) (Left (StackRejected pc))
-                finish (conditional (next sp fp)) sp [CallBoundary pc target sp] [] []
+                unless (sp .&. 7 == 0 && ((inside target && target `elem` entries) || target `elem` retainedCallees)) (Left (StackRejected pc))
+                finish (conditional (if S.member target noreturn then [] else next sp fp)) sp [CallBoundary pc target sp] [] []
           case instruction of
             A.Rejected _ -> Left (InstructionRejected pc)
             A.ReadStatus _ _ -> Left (InstructionRejected pc)

@@ -40,7 +40,8 @@ SECTIONS {
   .trim_body : { KEEP(*(.heap.entry.trim_r)) *(.heap.trim) } > TRIM_CARRIER
   .malloc_body : { KEEP(*(.heap.entry.malloc_r)) *(.heap.malloc) *(.text*) *(.rodata*) . = ALIGN(4); } > MALLOC_CARRIER
   .sentinel : { KEEP(*(.heap.sentinel)) } > SENTINEL
-  .bin_body : { KEEP(*(.heap.metadata)) KEEP(*(.heap.support)) *(.heap.calloc) *(.text*) *(.rodata*) . = ALIGN(4); } > BIN_CARRIER
+  .bin_metadata : { KEEP(*(.heap.metadata)) } > BIN_CARRIER
+  .bin_body : { KEEP(*(.heap.support)) *(.heap.calloc) *(.text*) *(.rodata*) . = ALIGN(4); } > BIN_CARRIER
   .realloc_spill : { *(.text*) *(.rodata*) . = ALIGN(4); } > REALLOC_CARRIER
   .trim_spill : { *(.text*) *(.rodata*) . = ALIGN(4); } > TRIM_CARRIER
   .free_spill : { *(.text*) *(.rodata*) . = ALIGN(4); } > FREE_CARRIER

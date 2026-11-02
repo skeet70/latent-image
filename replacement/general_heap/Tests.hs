@@ -78,6 +78,10 @@ main = do
   check "predicated frame-pointer epilogue admitted on its executing paths" (accepted (deriveWords [0xe92d4830,0xe28db008,0xe3500001,0x11a0d00b,0x18bd8800,0xe8bd8830]))
   check "flag write between predicated epilogue instructions rejected" (not (accepted (deriveWords [0xe92d4830,0xe28db008,0xe3500001,0x11a0d00b,0xe3500002,0x18bd8800,0xe8bd8830])))
   check "SP restore from an unknown frame pointer rejected" (not (accepted (deriveWords [0xe92d4830,0xe1a0d00b,0xe8bd8830])))
+  let deriveEntries words' = deriveFrames (B.concat (map U.putWord32 words'))
+  check "call to a nonreturning entry has no fallthrough" (accepted (deriveEntries [0xe92d4010,0xebffffff,0xeafffffe] [0x89cda4,0x89cdac]))
+  check "call to a returning entry falls through" (not (accepted (deriveEntries [0xe92d4010,0xebffffff,0xe12fff1e] [0x89cda4,0x89cdac])))
+  check "call to a carrier address that is not an entry rejected" (not (accepted (deriveEntries [0xe92d4010,0xebffffff,0xeafffffe] [0x89cda4])))
   let originalDat = B.replicate 0x600 0
       changeFile offset = B.take offset originalDat <> B.singleton 1 <> B.drop (offset+1) originalDat
       record5 = Record5Window 0x400 0x500

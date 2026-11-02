@@ -160,14 +160,15 @@ stageCandidate tools configured (StagedImages (CanonicalSource dat _ original5 _
         recordPath = root </> "record5.bin"
         outputPath = root </> "candidate.DAT"
         readbackPath = root </> "carried5.bin"
+        sourceImage = root </> "source-image5.bin"
         readbackImage = root </> "carried-image5.bin"
     B.writeFile readbackPath (B.map complement (U.serializeRecord record))
-    runTool root (Image4.decoderPath tools) [readbackPath,"0",readbackImage,show sourceSize]
-    readbackOriginal <- H.readRegular (16*1024*1024) readbackImage
+    runTool root (Image4.decoderPath tools) [readbackPath,"0",sourceImage,show sourceSize]
+    readbackOriginal <- H.readRegular (16*1024*1024) sourceImage
     H.ensure (readbackOriginal == original5) "heap image5 canonical record differs from admitted source"
     B.writeFile basePath (Image4.candidateDat first)
     B.writeFile imagePath five
-    runTool root (Image4.encoderPath tools) ["0x2c0000",imagePath,recordPath]
+    runTool root (Image4.encoderPath tools) ["0x2e0000",imagePath,recordPath]
     decoder <- canonicalizePath (Image4.decoderPath tools)
     runTool root (Image4.rebuildPath tools) ["replace-record5","--decoder",decoder,basePath,recordPath,imagePath,outputPath]
     result <- H.readRegular (64*1024*1024) outputPath
