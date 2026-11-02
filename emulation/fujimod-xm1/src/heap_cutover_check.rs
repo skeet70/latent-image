@@ -5,9 +5,10 @@ use heap_state::{Classification, FreeKind};
 #[serde(rename_all = "kebab-case")]
 enum Fault { WrongSizeClass, UnbalancedLock, HeaderCorruption, StockBodyFetch }
 
+/// `allocation` is the creating context and its per-context creation ordinal, so identities survive cross-context reordering.
 #[derive(Deserialize, Eq, PartialEq, Serialize)]
 struct InterfaceCall {
-    operation: Operation, context: ContextKey, request: u64, allocation: Option<u64>,
+    operation: Operation, context: ContextKey, request: u64, allocation: Option<(ContextKey, u64)>,
     succeeded: Option<bool>, errno_before: Option<u32>, errno_after: Option<u32>,
 }
 
@@ -77,8 +78,9 @@ fn logical(classification: Classification) -> bool {
 
 fn interfaces(events: &[heap_state::Event]) -> Result<Vec<InterfaceCall>, String> {
     let mut result = Vec::new();
-    let mut allocations = BTreeMap::<u32, u64>::new();
-    let mut next_allocation = 1;
+    let mut allocations = BTreeMap::<u32, (ContextKey, u64)>::new();
+    let mut ordinals = BTreeMap::<ContextKey, u64>::new();
+    let mut create = |context: ContextKey| { let ordinal = ordinals.entry(context).or_insert(0); *ordinal += 1; (context, *ordinal) };
     let roots: BTreeSet<_> = events.iter().filter_map(|event| match &event.boundary {
         heap_state::Boundary::Enter { invocation, parent: None, .. } => Some(*invocation), _ => None,
     }).collect();
@@ -100,14 +102,13 @@ fn interfaces(events: &[heap_state::Event]) -> Result<Vec<InterfaceCall>, String
                     let previous = if entry.registers[1] == 0 { None } else { Some(*allocations.get(&entry.registers[1]).ok_or("interface resizes unknown logical allocation")?) };
                     if pointer == 0 { previous } else {
                         if entry.registers[1] != 0 { allocations.remove(&entry.registers[1]); }
-                        let identity = previous.unwrap_or_else(|| { let id = next_allocation; next_allocation += 1; id });
+                        let identity = previous.unwrap_or_else(|| create(entry.context));
                         allocations.insert(pointer, identity);
                         Some(identity)
                     }
                 }
                 Operation::Malloc | Operation::Calloc if pointer != 0 => {
-                    let identity = next_allocation;
-                    next_allocation += 1;
+                    let identity = create(entry.context);
                     require(allocations.insert(pointer, identity).is_none(), "interface aliases a live allocation")?;
                     Some(identity)
                 }
@@ -234,18 +235,26 @@ fn consume(inputs: &Inputs, directory: &Path, role: Role, fault: Option<Fault>) 
     Ok(Consumed { receipt, calls: interfaces(recorder.records())?, payload_checks })
 }
 
+fn by_context(calls: &[InterfaceCall]) -> BTreeMap<ContextKey, Vec<&InterfaceCall>> {
+    let mut grouped = BTreeMap::<ContextKey, Vec<&InterfaceCall>>::new();
+    for call in calls { grouped.entry(call.context).or_default().push(call); }
+    grouped
+}
+
 pub(super) fn pair(inputs: &Inputs, directory: &Path, output: &Path) -> Result<(), String> {
     let stock = consume(inputs, &directory.join("stock"), Role::Stock, None)?;
     let owned = consume(inputs, &directory.join("owned"), Role::Owned, None)?;
-    require(stock.calls == owned.calls, "stock/owned interface lifetimes, success/error, errno or allocation identity differ")?;
+    require(by_context(&stock.calls) == by_context(&owned.calls), "stock/owned per-context interface lifetimes, success/error, errno or allocation identity differ")?;
     require(stock.receipt.menus == owned.receipt.menus, "stock/owned natural menu outcomes differ")?;
+    let global_order_identical = stock.calls == owned.calls;
     #[derive(Serialize)]
     struct Comparison<'a> {
-        schema: u32, admitted: bool, qualification: &'static str, calls: usize,
+        schema: u32, admitted: bool, qualification: &'static str, calls: usize, contexts: usize, global_order_identical: bool,
         stock: NaturalReceipt, owned: NaturalReceipt, observable_realloc_checks: [usize; 2],
         conditional_premises: &'a [String], limitations: [&'static str; 5],
     }
     let comparison = Comparison { schema: 1, admitted: true, qualification: "conditional-natural-no-card-menu-only", calls: stock.calls.len(),
+        contexts: by_context(&stock.calls).len(), global_order_identical,
         stock: stock.receipt, owned: owned.receipt, observable_realloc_checks: [stock.payload_checks, owned.payload_checks], conditional_premises: &inputs.contract.premises,
         limitations: [
             "Payload evidence is allocator-origin write confinement for other live requested payloads, plus exact realloc/calloc byte samples only when those calls occur.",

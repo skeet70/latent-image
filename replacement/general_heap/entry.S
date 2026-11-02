@@ -1,6 +1,7 @@
 .syntax unified
 .arm
 
+@ Public wrappers enter through the core entry address, as the stock wrappers call it.
 .macro public_entry name, operation, arity
 .section .heap.entry.\name,"ax",%progbits
 .global xm1_heap_\name\()_entry
@@ -13,7 +14,7 @@ xm1_heap_\name\()_entry:
     movw r0, #0xc970
     movt r0, #0x89
     ldr r0, [r0]
-    b xm1_heap_\operation\()_r
+    b xm1_heap_\operation\()_r_entry
 .size xm1_heap_\name\()_entry, .-xm1_heap_\name\()_entry
 .endm
 

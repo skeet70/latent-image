@@ -8,6 +8,11 @@ exports_files(
     visibility = ["//replacement/recipe_ui:__pkg__"],
 )
 
+exports_files(
+    ["fujimod-xm1/src/heap_state.rs", "fujimod-xm1/src/heap_replay_state.rs"],
+    visibility = ["//replacement/general_heap:__pkg__"],
+)
+
 # Copies a card image to a new path and writes named files into its FAT
 # partition with mtools, for --sd-card-image inputs.
 haskell_binary(

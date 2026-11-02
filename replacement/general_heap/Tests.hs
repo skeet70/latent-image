@@ -34,10 +34,10 @@ fixture = (foldl (\bytes (address,value) -> replace address value bytes) empty p
     patches = [(address,U.putWord32 0xe12fff1e) | (_,address) <- cores] ++ adapters ++ [(metadata,B.concat (map U.putWord32 geometry))]
     target operation = case lookup ("xm1_heap_" ++ operation ++ "_r") cores of Just address -> address; Nothing -> error "synthetic operation absent"
     tailWord address destination = U.putWord32 (0xea000000 .|. (((destination-address-8) `shiftR` 2) .&. 0xffffff))
-    public operation address twoArguments =
+    public core address twoArguments =
       let prefix = [0xe1a02001 | twoArguments] ++ [0xe1a01000,0xe30c0970,0xe3400089,0xe5900000]
-      in (address,B.concat (map U.putWord32 prefix) <> tailWord (address+fromIntegral (4*length prefix)) (target operation))
-    adapters = [public "malloc" 0x89cda4 False,public "free" 0x89cdc4 False,public "realloc" 0x89da3c True,public "calloc" 0xbf1c1c True]
+      in (address,B.concat (map U.putWord32 prefix) <> tailWord (address+fromIntegral (4*length prefix)) core)
+    adapters = [public 0x89cde4 0x89cda4 False,public 0x89e560 0x89cdc4 False,public 0x89da64 0x89da3c True,public 0xbf1c44 0xbf1c1c True]
       ++ [(address,tailWord address (target operation)) | (operation,address) <- [("malloc",0x89cde4),("free",0x89e560),("realloc",0x89da64),("calloc",0xbf1c44),("trim",0x89e464)]]
     row :: String -> Word32 -> Int -> String -> String
     row name address size kind = showHex address "" ++ " " ++ showHex size "" ++ " " ++ kind ++ " " ++ name

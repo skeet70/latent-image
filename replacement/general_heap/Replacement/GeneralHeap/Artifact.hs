@@ -92,11 +92,10 @@ deriveArtifact bytes symbolBytes = do
     && U.word32At bytes (0x89d4f8-0x89cda4) == 0) ExtentRejected
   let emittedWord address = U.word32At bytes (fromIntegral (address-0x89cda4))
       tailTo address target = require (A.decode address (emittedWord address) == A.Branch (A.Cond 14) False target) SymbolsRejected
-  forM_ [("malloc",0x89cda4,False),("free",0x89cdc4,False),("realloc",0x89da3c,True),("calloc",0xbf1c1c,True)] $ \(operation,address,twoArguments) -> do
-    target <- at ("xm1_heap_" ++ operation ++ "_r")
+  forM_ [(0x89cda4,0x89cde4,False),(0x89cdc4,0x89e560,False),(0x89da3c,0x89da64,True),(0xbf1c1c,0xbf1c44,True)] $ \(address,core,twoArguments) -> do
     let prefix = [0xe1a02001 | twoArguments] ++ [0xe1a01000,0xe30c0970,0xe3400089,0xe5900000]
     require ([emittedWord (address+fromIntegral offset) | offset <- [0,4..4*length prefix-4]] == prefix) SymbolsRejected
-    tailTo (address+fromIntegral (4*length prefix)) target
+    tailTo (address+fromIntegral (4*length prefix)) core
   forM_ [("malloc",0x89cde4),("free",0x89e560),("realloc",0x89da64),("calloc",0xbf1c44),("trim",0x89e464)] $ \(operation,address) -> at ("xm1_heap_" ++ operation ++ "_r") >>= tailTo address
   metadata <- at "XM1_HEAP_METADATA"
   require (inside4 metadata && inside4 (metadata+55) && metadata .&. 3 == 0) ExtentRejected
