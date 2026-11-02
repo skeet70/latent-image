@@ -248,15 +248,15 @@ modalScope (ModalLinked start bytes) seam owned helpers prehook = do
       allRanges = seam : owned : helperRanges
   unless (all contained helperRanges
     && all (\range -> let (low, high) = watchRangeBounds range in high <= 0x00bfb028 || low >= 0x00bfb124) helperRanges
-    && and [not (overlapsWatchRange left right) | (index, left) <- zip [0 :: Int ..] allRanges, right <- drop (index + 1) allRanges])
+    && and [not (rangesOverlap left right) | (index, left) <- zip [0 :: Int ..] allRanges, right <- drop (index + 1) allRanges])
     (Left "modal helpers must be complete aligned disjoint linked ranges outside stock code")
   forM_ prehook $ \address -> do
     let (helperStart, _) = watchRangeBounds (modalPrehookCode helpers)
-    unless (watchAddressValue address == helperStart)
+    unless (fromIntegral (watchAddressValue address) == helperStart)
       (Left "modal owned prehook must equal the complete prehook helper entry")
   pure (ModalScope seam owned helpers prehook)
 
-data ModalRequest = ModalRequest ModalStock (Maybe (ModalLinked, ModalScope)) ModalLimit (Maybe ModalLifetimeSource) deriving (Eq, Show)
+data ModalRequest = ModalRequest ModalStock (Maybe (ModalLinked, ModalScope)) ModalLimit (Maybe ModalLifetimeSource) deriving (Eq)
 
 modalRequest :: ModalStock -> Maybe (ModalLinked, ModalScope) -> ModalLimit -> Either String ModalRequest
 modalRequest stock scoped limit = do
@@ -597,7 +597,7 @@ parseScopedModalSource runtimeStart runtime elfBytes metadata = do
   prehook <- extent "rb_modal_call_prehook"
   call <- extent "rb_modal_call"
   let (prehookLow, _) = watchRangeBounds prehook
-  scope <- modalScope linked seam owned (ModalHelpers prehook call) (Just (watchAddress prehookLow))
+  scope <- modalScope linked seam owned (ModalHelpers prehook call) (Just (watchAddress (fromIntegral prehookLow)))
   pure (ScopedModalSource linked scope elfDigest runtimeDigest)
  where
   parseHexAddress (String text)
@@ -639,13 +639,19 @@ data ModalLifetimeSource = ModalLifetimeSource
   , lifetimeContext :: [SourceImage]
   , lifetimeElfDigest :: Maybe Sha256
   , lifetimeRuntimeDigest :: Maybe Sha256
-  } deriving (Eq, Show)
+  } deriving (Eq)
 
 sourceImageJson :: SourceImage -> Value
 sourceImageJson (SourceImage start bytes) = object ["start" .= watchAddressValue start, "bytes" .= B.unpack bytes]
 
-extentJson :: WatchRange -> [Word32]
+extentJson :: WatchRange -> [Word64]
 extentJson span_ = let (low, high) = watchRangeBounds span_ in [low, high]
+
+rangesOverlap :: WatchRange -> WatchRange -> Bool
+rangesOverlap left right =
+  let (leftLow, leftHigh) = watchRangeBounds left
+      (rightLow, rightHigh) = watchRangeBounds right
+  in leftLow < rightHigh && rightLow < leftHigh
 
 lifetimeRequestJson :: ModalLifetimeSource -> Value
 lifetimeRequestJson source = object
@@ -764,8 +770,8 @@ bindModalRuntimeSource manifest elfBytes = do
     pure (SourceImage (watchAddress address) bytes)
   unless (not (null readonly)) (Left "modal lifetime requires allocated readonly sources")
   readonlyRanges <- mapM sourceImageRange readonly
-  unless (and [not (overlapsWatchRange left right) | (index, left) <- zip [0 :: Int ..] readonlyRanges, right <- drop (index + 1) readonlyRanges]
-    && all (not . overlapsWatchRange residentExtent) readonlyRanges)
+  unless (and [not (rangesOverlap left right) | (index, left) <- zip [0 :: Int ..] readonlyRanges, right <- drop (index + 1) readonlyRanges]
+    && all (not . rangesOverlap residentExtent) readonlyRanges)
     (Left "modal lifetime readonly ELF sources overlap each other or resident")
   install <- routine "ram_push_install" (Ram.unAddress (Ram.installEntry (Ram.manifestEntries manifest))) "store_new_words"
   rollback <- routine "ram_push_rollback" (Ram.unAddress (Ram.rollbackEntry (Ram.manifestEntries manifest))) "restore_old_words"
@@ -972,7 +978,7 @@ parseTaskEntry value = do
   creation <- modalField "creation" identity >>= modalWord32
   stack <- modalField "stack" identity >>= parseModalExtent
   let (stackLow, stackHigh) = watchRangeBounds stack
-      physicalSp = sp .&. 0xbfffffff
+      physicalSp = fromIntegral (sp .&. 0xbfffffff) :: Word64
       (nodeBase, creationBase) = case kernel of
         PrimaryKernel -> (0x4005ff0c, 0x4005beac)
         SecondaryKernel -> (0x400efecc, 0x400ebe6c)
@@ -1091,7 +1097,7 @@ parseLifetimeBinding scoped contextValue value = do
     (Left "modal lifetime requires aligned canonical runtime and exact resident1024 within it")
   context <- modalList (either error id (modalLimit 16)) contextValue >>= mapM parseSourceImage
   contextRanges <- mapM sourceImageRange context
-  let expectedContext = [pair | (base, end) <- [(0x40000, 0x4dae0), (0xd0000, 0xddaa0)], pair <- immutableLoaderSpans base end]
+  let expectedContext = [(fromIntegral low, fromIntegral high) | (base, end) <- [(0x40000, 0x4dae0), (0xd0000, 0xddaa0)], (low, high) <- immutableLoaderSpans base end]
   unless (map watchRangeBounds contextRanges == expectedContext)
     (Left "modal lifetime requires exactly the 16 ordered immutable loader spans")
   readonly <- modalField "readonly" value >>= modalList (either error id (modalLimit 1024)) >>= mapM parseSourceImage
@@ -1099,8 +1105,8 @@ parseLifetimeBinding scoped contextValue value = do
       allImages = readonly ++ linkedImages
   allRanges <- mapM sourceImageRange allImages
   unless (not (null allImages) && all contained allRanges
-    && all (\span_ -> not (overlapsWatchRange resident span_)) allRanges
-    && and [not (overlapsWatchRange left right) | (index, left) <- zip [0 :: Int ..] allRanges, right <- drop (index + 1) allRanges])
+    && all (\span_ -> not (rangesOverlap resident span_)) allRanges
+    && and [not (rangesOverlap left right) | (index, left) <- zip [0 :: Int ..] allRanges, right <- drop (index + 1) allRanges])
     (Left "modal lifetime readonly and linked images overlap or leave runtime")
   let sourceWord pc = case [bytes | SourceImage start image <- allImages,
           let offset = toInteger pc - toInteger (watchAddressValue start), offset >= 0,
@@ -1165,7 +1171,7 @@ checkModalLifetimeWatchSources (ModalRequest _ scoped _ source) value = do
       scopedPcs = case scoped of
         Nothing -> []
         Just (_, ModalScope seam owned helpers prehook) ->
-          [pc | span_ <- [seam, owned, modalPrehookCode helpers, modalCallCode helpers], let (low, high) = watchRangeBounds span_, pc <- [low,low + 4 .. high - 4]]
+          [fromIntegral pc | span_ <- [seam, owned, modalPrehookCode helpers, modalCallCode helpers], let (low, high) = watchRangeBounds span_, pc <- [low,low + 4 .. high - 4]]
             ++ maybe [] (pure . watchAddressValue) prehook
   expected <- mapM (\pc -> watchRange (watchAddress pc) (watchAddress (pc + 4))) (fixedPcs ++ scopedPcs)
   unless (map watchRangeBounds actual == map watchRangeBounds (unionWatchRanges expected))

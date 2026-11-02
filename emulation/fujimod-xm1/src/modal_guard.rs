@@ -96,12 +96,16 @@ pub(crate) struct GuardReport<'a> {
     failure: Option<&'a str>,
 }
 
+#[derive(Clone, Copy, Serialize)]
+#[serde(transparent)]
+struct EntryProgress(u64);
+
 #[derive(Clone, Copy)]
 pub(crate) struct BoundFetch {
     guest: Guest,
     physical: fujimod_emulator::board::observation::PhysicalAddress,
     core: CoreId,
-    progress: crate::trace::InstructionCount,
+    progress: EntryProgress,
     word: Word,
 }
 impl Serialize for BoundFetch {
@@ -111,7 +115,7 @@ impl Serialize for BoundFetch {
         state.serialize_entry("physical", &self.physical.0)?;
         state.serialize_entry("bytes", &self.word.0.to_le_bytes())?;
         state.serialize_entry("core", &self.core.0)?;
-        state.serialize_entry("entry_progress", &self.progress.0)?;
+        state.serialize_entry("entry_progress", &self.progress)?;
         state.serialize_entry("byte_order", "little")?;
         state.end()
     }
@@ -244,7 +248,7 @@ impl InstalledGuard {
                 return Err("modal point fetch differs from its canonical physical source".into());
             }
             Ok(Some(BoundFetch { guest: pc, physical: fetch.physical, core,
-                progress: crate::trace::InstructionCount(fetch.entry.progress), word }))
+                progress: EntryProgress(fetch.entry.progress), word }))
         } else {
             let physical = u64::from(pc.0 & !0x4000_0000);
             if point.entry.physical != Some(physical) || point.entry.tcm.iter().flatten().any(|window| {
@@ -387,7 +391,7 @@ mod tests {
     fn task_fetch_wire_bytes_round_trip_as_the_bound_little_endian_instruction() {
         let fetch = BoundFetch { guest: Guest(0x00bf_b028),
             physical: fujimod_emulator::board::observation::PhysicalAddress(0x00bf_b028),
-            core: CoreId(0), progress: crate::trace::InstructionCount(91), word: Word(0xea10_0abc) };
+            core: CoreId(0), progress: EntryProgress(91), word: Word(0xea10_0abc) };
         let encoded = serde_json::to_vec(&fetch).unwrap();
         let decoded: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(decoded, serde_json::json!({"guest":0x00bf_b028,"physical":0x00bf_b028,

@@ -786,7 +786,7 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 +            refusal,
          });
 +        if let Some(gate) = watch.refusal.clone() {
-+            for cpu in &self.cpus {
++            for cpu in self.cpus.iter() {
 +                if let Err(error) = cpu.arm_execution_refusal(gate.clone()) {
 +                    return Err(match self.memory_watch_end(&mut watch) {
 +                        Ok(()) => error,
