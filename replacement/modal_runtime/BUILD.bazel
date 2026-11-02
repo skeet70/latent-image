@@ -225,3 +225,20 @@ haskell_test(
         "//host:bytestring",
     ],
 )
+
+haskell_binary(
+    name = "controller-manifest",
+    srcs = ["ControllerManifestMain.hs"],
+    ghcopts = ["-XGHC2021", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//replacement/media_permit:stock-inventory",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host/firmware:bank-allowlist",
+    ],
+)

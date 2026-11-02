@@ -536,3 +536,124 @@ XM1_EMULATOR_SLOTS=1 devenv shell -- bazel --output_base="$HOME/.cache/bazel/lat
 ## Remaining
 
 The final link uses one bank staticlib from `//replacement/bank:bank` and one panic handler. `replacement/bank/lib.rs` includes this module as `#[path = "../recipe_ui/src/lib.rs"] mod recipe_ui_route;`; a second UI archive or panic handler is not kept. The bank manifest binds `replacement/recipe_ui/src/lib.rs`, the bank archive digest under `rust_object_replacement_bank`, `RB_RUST_BUILD_FACTS` under `rust_toolchain_replacement_bank`, and the #119 toolchain facts. Primary packaged aggregate effect observation and its accepted changed-store control qualify the scoped #121 pilot for the 450-byte range on one route. #117 full application/runtime/startup milestones remain open; #85 is hardware blocked and persistence is unpursued. Visual acceptance is carried only by byte-identical PNGs, not a new human approval or reviewed live publication. Existing modal-75 and source-retirement limits and the sourceMode94 correction are unchanged; no application/runtime retirement, startup, hardware or migration default cutover is claimed.
+
+## Modal/controller subsystem project
+
+This is the first-deliverable plan for owning the dispatcher and all174 controllers' decision/state code as one subsystem, folding #128, #132 and #133 into #117/#127. Existing qualification stays scoped: modal224 retains stock+4 fallback for non75 IDs, and neither snapshot nor bank action migration retires every stock caller. Function boundaries may change internally; retained interfaces and accepted capability scenarios remain the qualification boundary. [Sources: [replacement contract](../spec/11-incremental-firmware-replacement.md#goal-and-completion-boundary); E-MODAL224-PACKAGED-FILMSIM-150; E-MENU-FRAME-SNAPSHOT-NATIVE-150; E-MODAL75-PACKAGED-DEVICE-150.]
+
+### Machine-readable inventory and limits
+
+[`//replacement/modal_runtime:controller-manifest`](../replacement/modal_runtime/ControllerManifestMain.hs) consumes pinned image5 bytes, the pinned decompiler function inventory and a receipt projection. Its private output is `private-data/scratch/ControllerManifest/manifest.json`; copied table contents remain private. Every ID records three root words, width, state/event addresses, candidate table intervals, raw contents and decoded cell coordinates. Each distinct nonnull callback records its source/callback-head window, `StockInventory.inspectFunction` structural extent, separately checked return proof, premises, decoded calls, service witnesses and private-ABI leads. `deriveFunction` retains its strict return-admission behavior. A source window alone is not a recovered extent. The helper's opaque-callee SP/r4-r11-preservation assumption is explicit. [Sources: extractor; `replacement/media_permit/StockInventory.hs`; `replacement/media_permit/ReturnProvenance.hs:302-305`; E-MODAL-CONTROLLER-MANIFEST-150.]
+
+| Inventory quantity | Result |
+| --- | ---: |
+| Controller registrations | 174 |
+| Candidate physical cell words | 50,534 |
+| Physical action slots | 6,143 |
+| Physical transition slots | 348 |
+| Unique nonnull action targets | 5,795 |
+| Unique nonnull transition targets in these stock table bytes | 0 |
+| Structurally inspected callback extents | 5,795 |
+| Conditional successful return derivations | 4,844 |
+| Structural extents with unresolved return provenance | 951 |
+| Sum of callback code-address spans | 710,152 bytes |
+| Actually classified callback instruction words | 709,844 bytes |
+| Classified literal words | 330 words / 1,320 bytes |
+
+All348 transition words are zero in the pinned stock image; this does not close later writers or exclude a future nonnull transition publication. All5,795 targets have structurally complete instruction/literal classification. The951 return refusals remain ABI/integrity obligations, not failed extent recovery. The232 callbacks missing Ghidra function headers derive from table-entry and neighboring-head evidence; all232 have no direct call, indirect call or external branch in their structural instruction sets, which is not a purity or memory-effect claim. The final callback's explicit `0xcd0c78` code/data fence is listing-bound and independently reviewed. The byte totals exclude dispatcher, transitive retained services, initialization and resources. [Source: E-MODAL-CONTROLLER-MANIFEST-150; private manifest `counts`, `functions[].extent`, `function_fence_evidence`; independent review record.]
+
+Reproduce with owner-supplied inputs and a fresh output path:
+
+```sh
+devenv shell -- bazel --batch --output_base="$HOME/.cache/bazel/latent-image-ControllerManifest" build --jobs=2 //replacement/modal_runtime:controller-manifest
+bazel-bin/replacement/modal_runtime/controller-manifest \
+  --id5 private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin \
+  --decompilation private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c \
+  --reachability private-data/scratch/ControllerManifest/reachability.json \
+  --out private-data/scratch/ControllerManifest/manifest.json
+```
+
+The previous 49,738 cells describe the closure checker's captured state/event expansion, not physical table length or distinct functions. Modal75's captured 2,208 cells, 294 action slots and one transition slot similarly differ from its 299-entry physical action table. Root adjacency gives candidate storage fences, not valid index domains or lifetime immutability. Bank publication deliberately changes cell and action words. Unresolved return proofs, unclassified service frontiers and source-window instruction candidates stay unresolved. [Sources: retained modal contract, scoped diagnostic and published storage sections above; `Replacement/ModalRuntime/Closure.hs:1761-1816`; E-MODAL75-SCOPED-DIAGNOSTIC-150.]
+
+### Existing trajectory coverage
+
+The receipt-backed dispatched-ID union is `{0,30,74,75,100,107}`. The retained FILMSIM trace records134 contexts across those IDs, including25 controller75 contexts at state0/events2,8,13,50. The packaged modal224 interval records254 completed contexts,40 owned75 and214 fallback, on core0 with the same75 state/event set. The manifest preserves each trajectory's exact paired state/event domains rather than taking a Cartesian product. These are selected navigation intervals, not a continuous reset-to-menu witness. [Sources: E-MODAL-RETAINED-FILM-ROUTE-150, `retained-film-route/segment-retained-film-route/e2e-result.json` trace hits; E-MODAL224-PACKAGED-FILMSIM-150, `packaged224-owned-corrected/e2e-modal-observation.json` captured domains; private manifest `reachability`.]
+
+The recipe-bank lifecycle observes owned action entries and controller75 RAM snapshots in states0/30, not a full dispatcher-ID/context trace. Direct native editor composition establishes action semantics with modeled services, not natural reachability. Cold first-start records language/date/live-view/shooting endpoints but no complete dispatched-controller set. Therefore168 IDs have no dispatched-ID witness in these receipts; that is missing coverage, not evidence of unreachability. Controller ID30 and controller75 state30 are different coordinates. [Sources: E-MODAL75-PACKAGED-DEVICE-150, `private-data/scratch/modal133/fetch-positive-corrected/e2e-result.json`; E-MODAL75-EDITOR-NATIVE-150; E-APPLICATION-ENTRY-LOOP-SOURCE-150; `private-data/scratch/ControllerManifest/reachability.json`.]
+
+### Retained service categories
+
+Categories overlap. Direct decompiled call expressions and source-window encoded call candidates are recorded separately. Source paths to named services are static evidence, not execution coverage. Unknown callees, indirect calls, memory effects and device descendants remain obligations; a seed names a proposed retained seam, not a closed implementation. In particular transition service `0xc12aac` writes controller100's event cell and reenters `0xbfb028`. [Sources: extractor; `menu/recipe_bank_arm.S:225-275`; `private-data/analysis/x-m1-1.50/filmsim/id5.dis:33797-33834`.]
+
+| Category | Grounded seams | Ownership boundary |
+| --- | --- | --- |
+| Settings/property gates | Query `0x63a0f8(0x53)`, predicates `0x6394d0/0x6394e8`, bank-declared property read/write/availability/conversion/commit entries | Own branch selection and typed decisions; retain explicit property/mode operations. A commit name does not establish durable output. |
+| Frame/editor/buffers | Snapshot11, saved reader `0x61ce1c`, editor `0xd4ad38`, prepare/open `0xd45ce4/0xd45cf8`, copy/clear `0x722a50/0x722178/0x7221c8` | Absorb snapshot early; retain editor engine, frame/value/slot lifetime and buffer primitives until migrated. Read the new frame after transitions. |
+| Rendering | Notification `0xd38d98`, redraw `0xd38e1c`, row probe `0xd52684`, text/draw bindings, UILIB/VGLIB | Own controller intent and required ordering; compare acknowledged full-plane results over an explicit renderer/resource/device seam. |
+| Persistence | File operations `0x71c648/0x71c6fc/0x71c75c/0x71c7bc`, media worker continuations, settings append `0x6ad3f4` | Separate property changes, RAM bank state and durable effects; preserve file/handle/callback lifetime and errors. |
+| Capture/playback/device | Playback mode apply `0x6439ac`, REC actor `0xe00a80`, playback actor `0x1215480` | Keep accepted branches in the inventory; full scenarios depend on their independently grounded device/output laws. |
+| Input | Menu left/right `0xc6f14c/0xc70528`, queue1 adapter `0xdb5124` | Normalize typed events; distinguish receive-backed input, pending internal work and unhandled-input handback. |
+| Controller/runtime support | Dispatcher, prehook, stage, transition, postlude; queue/task/heap/division | Migrate decision callbacks together while retaining explicit RTOS, allocation, exception and service-reentry interfaces. |
+
+Address meanings are grounded in `menu/recipe_bank_arm.S:225-275`, `menu/recipe_bank_allowlist.json:47-154,219-223`, the lifecycle/snapshot sections above, [file-service recovery](named-recipe-reach.md), [heap survey](stock-heap-survey.md) and [Inventory §8.18](replacement-inventory-baseline.md#818-application-entry-main-ui-actor-and-first-owned-loop-boundary-154). No category is inferred from address proximity.
+
+| Static category witness | Targets calling a seed directly in decompiled source | Targets with a source path to a seed, or themselves a seed |
+| --- | ---: | ---: |
+| Settings/property gates | 1,397 | 4,525 |
+| Frame/editor/buffers | 423 | 3,695 |
+| Rendering | 668 | 1,472 |
+| Persistence | 0 | 152 |
+| Capture/playback/device | 2 | 2 |
+| Input | 0 | 2 |
+| Controller support | 1,612 | 4,448 |
+| Runtime support | 0 | 1,980 |
+
+These counts overlap and do not measure scenario coverage or complete semantic closure. There are 5,338 targets with an unclassified frontier and 380 whose only category is unclassified. The latter include the 232 structurally call-free callbacks missing Ghidra heads. Every target has a record; missing category evidence stays explicit rather than assigning an address-range meaning. Zero direct seed matches does not mean no persistence, input or runtime dependence. [Source: E-MODAL-CONTROLLER-MANIFEST-150; manifest `functions[].direct_service_categories`, `service_categories`, `unclassified_frontier`, `source` and decoded transfers.]
+
+### Private callback ABI blockers
+
+At action entry, stock supplies r4=cell offset, r5=ID, r6=cell table, r7=event, r8=width, r9=action table, r10=cell address, r11=`S-4`, LR=`0xbfb0cc`, SP=`S-48`. Transition changes r4 to the action result and LR to `0xbfb0fc`, and carries action residues in r0/r1/r12. `[S-44]` holds the transition root; `[S-48]` and `[S-40]` are unwritten, not guaranteed zero. Owned dispatch instead uses r11=`S-8`, different register roles/scratch and glue LR/r12. These are actual compatibility obligations wherever retained consumers observe them. [Sources: dispatcher register and frame contract above; E-MODAL-DISPATCHER-ABI-150; E-MODAL-DISPATCHER-LINKED-ABI-150.]
+
+Selected SET/confirm/leave/cancel prologues save incoming r11/LR and establish local r11. Confirm and leave also save/restore entry r3, creating a concrete outgoing volatile-r3 dependency. No incoming-LR-as-data consumer or dispatcher-scratch read is positively established by these excerpts; that is not absence across all callbacks/descendants. Manifest `unaff_r11`, `in_lr` and stack-input tokens are leads only. Decoded literal-pool words are not ABI evidence. [Sources: `private-data/analysis/x-m1-1.50/filmsim/id5.dis:132318-132321,135439-135463,135918-135924,136174-136177,137023-137046,33797-33834`; open premises/caller-continuation sections above.]
+
+**[INFERENCE] Cutover rule:** AAPCS is insufficient while callbacks, saved frames, LR, volatile residues or scratch are externally observable. Internal identities/layouts cease to be comparison fields only after every consumer migrates inside the unit or an actual retained contract excludes those observations. Keep conservative caller/storage/alias/writer obligations; do not accumulate174 routing exemptions.
+
+### Snapshot service folded into the project
+
+Absorb classifier `[0x61ca2c,0x61cd14)`744 bytes, snapshot `[0x61cd14,0x61ce1c)`264, store `[0x61ceac,0x61cf14)`104 and eight80-byte accessors as one11-entry component totaling1,752 original bytes. Compare11 semantic words, result, slot choice and permitted writes, including null destination, detached defaults, zero-row division and invalid values. Preserve live-frame read order. Saved reader, three slot tables, frame/value lifetime and loader divide/SVC remain named retained dependencies. The307 native pairs and bank-store migration are regressions, not global retirement of3,027 stock call sites. [Source: owned menu-frame snapshot section; E-MENU-FRAME-SNAPSHOT-NATIVE-150.]
+
+### One typed interface and internal milestone order
+
+**[INFERENCE] Interface:** one dispatch operation over validated `ControllerId`, controller-specific typed `Event`, logical `ControllerState` and action-specific `ActionResult`. Unknown physical input becomes explicit unhandled input, not an unchecked table index. Keep action/transition/frame/node/row/property IDs and retained statuses typed at adapters. Own selection, post-action state decisions, registration changes and reentry internally. Do not invent a universal error enum: stock returns the action result and discards the transition result. Preserve captured inputs and post-action transition evaluation until every mutation consumer migrates. [Grounding: E-MODAL-DISPATCHER-ABI-150; `replacement/owned_menu/src/lifecycle.rs`; spec §Replacement contract.]
+
+1. **[INFERENCE] Manifest/boundary closure:** resolve table/code fences, source/byte correspondence, index and result domains, service frontiers and actual ABI consumers. Bind static obligations and scenario coverage to the same artifact.
+2. **[INFERENCE] Integrate existing pieces:** snapshot11, classifiers, row binding, dispatcher and SET/confirm/leave/cancel become components of one artifact with one property/frame/editor/render/runtime/device service layer. Publish/retire all11 snapshot entries together.
+3. **[INFERENCE] Connected menus:** own the decision closure of observed IDs `{0,30,74,75,100,107}`, not only four modal75 cells. Reuse FILMSIM entry/BACK/reentry, nested dispatch, unhandled input, handback and completed rendering.
+4. **[INFERENCE] Editor lifecycle:** qualify bank cancel/confirm/leave, ordinary-setting preservation and reentry over explicit editor/buffer/frame services. Keep native generic state30 cancellation separate until a natural route is identified; wireless NAME is controller76/state36.
+5. **[INFERENCE] Complete trajectories:** cold first-start/shooting readiness, Q/SETUP and every accepted controller trajectory. Prioritize property/frame/render groups before persistence and capture/playback/device groups without deleting the latter from scope.
+6. **[INFERENCE] Global cutover:** migrate every caller/registration/callback to the typed interface, remove stock+4 routing, and qualify continuous retired-code/data exclusion, initialization/publication and the full accepted matrix.
+
+These are milestones inside one174-controller project, not new per-leaf acceptance units. [Grounding: existing FILMSIM/lifecycle/snapshot evidence; Inventory §§8.1-8.5,8.18; #117/#127; spec §§Ownership stages, Automatic verification.]
+
+### Scenario matrix and proposed runs
+
+Every row is **[INFERENCE] proposed acceptance**, not new execution. Extend reviewed trajectories, journals, typed receipts, render comparison and actual-content exclusion; independently review changed mechanisms before use. Each corrected input runs once, with failures preserved.
+
+| Scenario | Reusable evidence | Required observation or gap |
+| --- | --- | --- |
+| Cold first-start language/date, live view, shooting menu | E-APPLICATION-ENTRY-LOOP-SOURCE-150 | Cold controller trace, executable publication, initialized state/event ownership, actual task1/pump readiness and acknowledged frames; screen endpoints are not controller IDs. |
+| Shooting menu, FILMSIM, BACK, repeated reentry | E-MODAL-RETAINED-FILM-ROUTE-150; E-MODAL224-PACKAGED-FILMSIM-150; E-MODAL224-RENDER-DIFFERENTIAL-150 | All connected decisions/results/effects, nested dispatch, handback and next input; extend the selected interval and declare remaining alias/task/lifetime limits. |
+| Q and SETUP | Accepted menu capability inventory | Physical navigation/BACK/reentry, gates, property preservation and render completion; collect real controller/state/event domains. |
+| Bank Save Current, Rename, A-cancel, B-confirm, leave/reentry | E-MODAL75-PACKAGED-DEVICE-150; E-MODAL75-RENDER-DIFFERENTIAL-150 | Name/buffer/cursor/frame outcomes, retained-service ordering, transient-setting preservation, render output and rollback; RAM success is not durable file persistence. |
+| Generic75 state30 cancel/confirm | E-MODAL75-EDITOR-NATIVE-150; E-MODAL-NATIVE-LIFECYCLE-150 | Identify a natural producer, then dispatcher context, effects, post-action transition and repeated handback. Injected state is not reachability. |
+| Unhandled/no-op input, pending work, reentry | Native dispatcher boundaries; Inventory §8.18 | Results/public state, no unintended effects, balanced lifetime, task1 handback followed by next input; pending work need not receive a packet. |
+| Every accepted device/persistence controller trajectory | Capability inventory and separately admitted device/storage records | Typed errors, completion/cancel/order and final artifacts; unresolved capture/JPEG/media/device laws block broader acceptance, not static inclusion. |
+| Wrong artifact/target/context/lifetime, forbidden old execution/data | Existing dispatcher/seam/editor/preservation/render controls | Reject plausible wrong results/state/ordering, caller writes, stale publication, transient setting changes and actual restored-old-body execution. |
+
+**[INFERENCE] First proposed cohort:** retained cold-reset/menu/Q/SETUP coverage capture, then owned connected-menu comparison on identical admitted inputs, expanding the same matrix as editor/service contracts close. No guest was needed for this manifest task. No camera, SD or persistent operation is part of this deliverable. [Grounding: spec §§Repeatable replacement loop, Independent evidence; existing route limits above.]
+
+### Blockers and proposed issue text
+
+Immediate blockers are table/index/mutation lifetime closure; the 951 unresolved callback return proofs; unknown service/computed-call frontiers; actual private-ABI consumers; state/event initialization and nested/asynchronous writers; callers/physical aliases; cold/Q/SETUP/generic-editor reachability; task/queue/pending-work and acknowledged rendering; and independently incomplete storage/capture/playback/device contracts. The 174-ID census is an obligation inventory, not 174 accepted trajectories. [Sources: E-MODAL-CONTROLLER-MANIFEST-150; open premises, scoped diagnostic, published storage, lifecycle and snapshot sections above; Inventory §§8.2,8.18; E-MODAL-CALLER-CONTINUATIONS-150.]
+
+**Proposed #117/#127 project text:** Own modal dispatch and all174 controllers' decision/state code behind one typed event/controller/action interface, absorbing frame snapshots and existing menu/editor implementations. Qualify at retained property, frame/editor/buffer, rendering, input, runtime, storage and device interfaces and through cold first-start/shooting, Q/SETUP, accepted controller trajectories, entry/BACK/reentry, unhandled input and editor cancel/confirm scenarios. Start from the manifest and FILMSIM connected set; keep unobserved controllers and device-dependent scenarios explicit. Completion removes scoped stock fallback and proves caller/callback/data/init/lifetime closure plus continuous original-body/data exclusion within the full accepted scenario/artifact scope.
