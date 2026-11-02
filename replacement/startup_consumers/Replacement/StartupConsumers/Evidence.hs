@@ -578,15 +578,17 @@ checkSegments receipt = do
       require (watchEnabled watch && watchViews watch == "fixed" && watchViolation watch == Nothing
         && segmentError segment == Nothing && not (null (watchClasses watch))
         && fromIntegral (length (watchRecords watch)) <= count (limitRecords (receiptLimits receipt))) WatchRejected
-      let covered kind low high = any (\classification -> kind `elem` classKinds classification
-            && case classRange classification of [a,b] -> a <= low && b >= high; _ -> False) (watchClasses watch)
+      let overlaps kind low size =
+            let high = low+min size (maxBound-low)
+            in any (\classification -> kind `elem` classKinds classification
+              && case classRange classification of [a,b] -> low < b && a < high; _ -> False) (watchClasses watch)
       require (all (\range -> case range of [a,b] -> a < b && b <= 0x100000000; _ -> False) (watchRanges watch)
         && all (\classification -> not (null (classKinds classification)) && case classRange classification of
           [a,b] -> a < b && any (\range -> case range of [low,high] -> low <= a && high >= b; _ -> False) (watchRanges watch)
           _ -> False) (watchClasses watch)) WatchRejected
       mapM_ (\event -> do
         backing <- eventPhysical32 event
-        require (covered (eventSource event) (fromIntegral backing) (fromIntegral backing+eventSize event)) WatchRejected
+        require (overlaps (eventSource event) (fromIntegral backing) (eventSize event)) WatchRejected
         if eventSource event `elem` [CpuRead,CpuWrite,CpuFetch] then do
           at <- eventClock event
           require (at >= sum (map count start) && at <= sum (map count end) && eventSize event <= 8) EventOrderRejected

@@ -69,6 +69,8 @@ mutations =
   ,Control (ControlName "first root1 target") FirstConsumerRejected $ mapProbe CriticalCall $ changeRegister 3 0xd1164
   ,Control (ControlName "watch teardown error") WatchRejected $ \receipt -> receipt
     {receiptSegments = [segment {segmentError = Just "control teardown failure"} | segment <- receiptSegments receipt]}
+  ,Control (ControlName "access outside matching source classes") WatchRejected $ \receipt -> receipt
+    {receiptSegments = [segment {segmentWatch = (segmentWatch segment) {K.watchRecords = map outsideSourceClasses (K.watchRecords (segmentWatch segment))}} | segment <- receiptSegments receipt]}
   ,Control (ControlName "stopped fetch counted as execution") FetchRejected $ \receipt -> receipt {receiptFetches = []}
   ,Control (ControlName "committed readback differs") EffectRejected alterFinal
   ,Control (ControlName "writer preimage differs") PreimageRejected $ \receipt -> receipt
@@ -230,4 +232,9 @@ flipFirst bytes = case B.uncons bytes of Just (byte,rest) -> B.cons (byte `xor` 
 alterPreimage :: K.MemoryEvent -> K.MemoryEvent
 alterPreimage event = if K.eventSource event == K.CpuWrite then
   event {K.eventBefore = fmap (\(K.Bytes bytes) -> K.Bytes (flipFirst bytes)) (K.eventBefore event)}
+  else event
+
+outsideSourceClasses :: K.MemoryEvent -> K.MemoryEvent
+outsideSourceClasses event = if K.eventSource event == K.HostRead then
+  event {K.eventAddress = 0x60000000,K.eventPhysical = Just 0x60000000}
   else event
