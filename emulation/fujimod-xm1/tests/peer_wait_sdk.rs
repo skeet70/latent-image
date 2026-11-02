@@ -2600,3 +2600,34 @@ fn removing_a_mutable_resume_point_does_not_stop_the_next_loop_iteration() {
     assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 2);
     assert_eq!(machine.instructions(), 3);
 }
+
+#[test]
+fn readding_a_removed_current_point_stops_its_first_return() {
+    use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
+    let mut machine = machine(&[0xe2800001, 0xeafffffd]);
+    machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
+    machine.traces.arm_mutable(&machine.session, BTreeMap::from([(0x1000, "entry".into())])).unwrap();
+    machine.traces.stop_labels.insert("entry".into());
+    machine.run(10);
+    machine.require_running().unwrap();
+    assert_eq!(machine.instructions(), 0);
+    let mut watch = machine.session.board.memory_watch_begin_classified(vec![
+        WatchRange { start: 0x1000, end: 0x1008, kinds: WatchKinds::CPU_FETCH },
+    ], 8, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
+    machine.traces.remove_sites(&machine.session, &[Guest(0x1000)]).unwrap();
+    machine.run(1);
+    machine.require_running().unwrap();
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 1);
+    machine.traces.add_sites(&machine.session, BTreeMap::from([(0x1000, "entry".into())])).unwrap();
+    machine.run(10);
+    machine.require_running().unwrap();
+    let observed: Watch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(observed.violation.is_none());
+    let fetches: Vec<_> = observed.records.iter().filter(|row| row.source == Source::CpuFetch)
+        .map(|row| (row.pc, row.instructions)).collect();
+    assert_eq!(fetches, [(Some(0x1000), Some(1)), (Some(0x1004), Some(2)), (Some(0x1000), Some(2))]);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 1);
+    assert_eq!(machine.session.board.read_register(0, Register::Pc).unwrap(), 0x1000);
+    assert_eq!(machine.instructions(), 2);
+}

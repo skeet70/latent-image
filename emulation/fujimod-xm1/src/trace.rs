@@ -1130,7 +1130,7 @@ impl TraceSites {
         for (core, points) in &self.points {
             if let Some(marker) = self.resumed.get(core) {
                 let current = session.board.read_register(*core, Register::Pc)?;
-                if current == u64::from(marker.pc.0) && counts[*core] == marker.entered.0 {
+                if self.sites.contains_key(&marker.pc.0) && current == u64::from(marker.pc.0) && counts[*core] == marker.entered.0 {
                     points.resume(current, u64::from(marker.pc.0));
                 }
             }
