@@ -12,7 +12,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Emulation.Sha256 (Sha256, parseSha256Hex, sha256, sha256Hex)
-import FujiAF.JSON (decodeStrictIntegers, encodeCanonical)
+import FujiAF.JSON (decodeStrict, decodeStrictIntegers, encodeCanonical)
 import System.Directory (canonicalizePath)
 import System.FilePath (isAbsolute, takeDirectory, (</>))
 import System.IO (hClose)
@@ -143,9 +143,9 @@ parseReceipt = withObject "e2e receipt" $ \fields -> do
 failComparison :: String -> IO a
 failComparison = ioError . userError
 
-parseDocument :: (Value -> Parser a) -> Artifact -> IO a
-parseDocument parser (Artifact (ArtifactPath path) _ _ bytes) =
-  either (failComparison . ((path ++ ": ") ++)) pure (decodeStrictIntegers bytes >>= parseEither parser)
+parseDocument :: (B.ByteString -> Either String Value) -> (Value -> Parser a) -> Artifact -> IO a
+parseDocument decoder parser (Artifact (ArtifactPath path) _ _ bytes) =
+  either (failComparison . ((path ++ ": ") ++)) pure (decoder bytes >>= parseEither parser)
 
 resolve :: FilePath -> ArtifactPath -> IO ArtifactPath
 resolve base (ArtifactPath path) = ArtifactPath <$> canonicalizePath (if isAbsolute path then path else base </> path)
@@ -169,7 +169,7 @@ sameArtifact (Artifact path digest' size _) (Artifact otherPath otherDigest othe
 loadReceipt :: FilePath -> IO Receipt
 loadReceipt path = do
   artifact <- resolve "." (ArtifactPath path) >>= readArtifact
-  Receipt artifact <$> parseDocument parseReceipt artifact
+  Receipt artifact <$> parseDocument decodeStrict parseReceipt artifact
 
 loadCapture :: Artifact -> Capture -> IO LoadedCapture
 loadCapture (Artifact (ArtifactPath receiptPath) _ _ _) (Capture label pngRef metadataRef sourceRef) = do
@@ -177,7 +177,7 @@ loadCapture (Artifact (ArtifactPath receiptPath) _ _ _) (Capture label pngRef me
   png <- verifyArtifact base pngRef
   metadata@(Artifact (ArtifactPath metadataPath) _ _ _) <- verifyArtifact base metadataRef
   source@(Artifact _ _ (ByteCount sourceSize) _) <- verifyArtifact base sourceRef
-  scanout@(Scanout _ _ _ _ metadataPng metadataSource (SourcePlanes (_, ByteCount extent)) _ _) <- parseDocument parseScanout metadata
+  scanout@(Scanout _ _ _ _ metadataPng metadataSource (SourcePlanes (_, ByteCount extent)) _ _) <- parseDocument decodeStrictIntegers parseScanout metadata
   boundPng <- verifyArtifact (takeDirectory metadataPath) metadataPng
   boundSource <- verifyArtifact (takeDirectory metadataPath) metadataSource
   unless (sameArtifact png boundPng && sameArtifact source boundSource)

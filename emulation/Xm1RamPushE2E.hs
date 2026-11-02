@@ -1457,7 +1457,6 @@ observeModalInterval emulator receipt request source interval action = do
       rawResponse response = either (const Null) modalRawResponse response
       responseError response = either Just (either Just (const Nothing) . modalParsedResponse) response
   initialPermit <- captureModal (emulatorModalObservationReport emulator limit)
-  initialWatch <- rawWatch (emulatorWatchStateRaw emulator)
   let idle = do
         report <- parsed initialPermit
         unless (not (modalReportEnabled report)) (Left "another modal observer is active")
@@ -1509,8 +1508,6 @@ observeModalInterval emulator receipt request source interval action = do
         , "writer_ranges" .= [let (low, high) = watchRangeBounds modalArrayRange in [low, high]]
         , "writer_limit" .= watchLimitValue writerLimit
         , "permit_limit" .= modalLimitValue limit
-        , "watch_before" .= either (const Null) id initialWatch
-        , "watch_before_error" .= either Just (const Nothing) initialWatch
         , "watch_acknowledgement" .= either (const Null) id writerAck
         , "watch_acknowledgement_error" .= either Just (const Nothing) writerAck
         , "watch_armed" .= either (const Null) id armedWatch

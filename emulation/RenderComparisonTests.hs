@@ -11,7 +11,7 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import Emulation.RenderComparison (compareRenderReceipts)
 import Emulation.Sha256 (sha256, sha256Hex)
-import FujiAF.JSON (decodeStrictIntegers, encodeCanonical)
+import FujiAF.JSON (decodeStrict, encodeCanonical)
 import Numeric (readHex)
 import System.Directory (createDirectory, doesPathExist, getTemporaryDirectory, removeDirectoryRecursive, removeFile)
 import System.FilePath (takeDirectory, (</>))
@@ -90,14 +90,15 @@ fixture directory png source clock changeMetadata changeCaptures = do
       capture label = object
         ["label" .= (label :: T.Text), "path" .= ("capture.png" :: FilePath), "sha256" .= sha256Hex (sha256 png)
         ,"scanout_evidence" .= object ["metadata" .= binding "capture.scanout.json" rawMetadata, "source_bytes" .= binding "capture.planes.bin" source]]
-      receipt = object ["schema" .= (1 :: Int), "menu_receipts" .= changeCaptures [capture "first", capture "second"]]
+      receipt = object ["schema" .= (1 :: Int), "menu_receipts" .= changeCaptures [capture "first", capture "second"],
+        "phases" .= [object ["name" .= ("emulator-start" :: T.Text), "seconds" .= (0.5 :: Double)]]]
       path = directory </> "e2e-result.json"
   B.writeFile (directory </> "capture.scanout.json") rawMetadata
   B.writeFile path (encodeCanonical receipt)
   pure path
 
 readJSON :: FilePath -> IO Value
-readJSON path = B.readFile path >>= either (ioError . userError) pure . decodeStrictIntegers
+readJSON path = B.readFile path >>= either (ioError . userError) pure . decodeStrict
 
 writeJSON :: FilePath -> Value -> IO ()
 writeJSON path = B.writeFile path . encodeCanonical
@@ -195,6 +196,8 @@ main = do
   receiptMutation "missing PNG digest" (mapReceipts (remove "sha256"))
   receiptMutation "missing scanout evidence" (mapReceipts (remove "scanout_evidence"))
   metadataRefusal "unsupported scanout schema" (set "schema" (toJSON (2 :: Int)))
+  metadataRefusal "fractional scanout clock" (set "instructions" (toJSON (0.5 :: Double)))
+  metadataRefusal "fractional pixel width" (modify "pixels" (set "width" (toJSON (0.5 :: Double))))
   forM_ ["schema", "node", "instance", "instructions", "pixels", "png", "source_bytes", "source_planes", "native_frame_state", "native_scanout_state"] $ \key ->
     metadataRefusal ("missing required scanout field " ++ show key) (remove key)
   forM_ ["width", "height", "rgb_bytes", "rgb_sha256"] $ \key ->

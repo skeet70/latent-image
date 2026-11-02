@@ -1090,6 +1090,8 @@ The scoped route validates `modal-scope.json` against the actual relinked `kerne
 
 Scoped trajectories that configure another protected-memory observer, forbidden-execution observer or refusal control are rejected instead of replacing or dropping those guards. The ordinary 223-publication routes retain their existing guard behavior. The scoped result is `unqualified-scoped-diagnostic`; `e2e-modal-observation.json` and its result reference record interval boundaries, `physical_fetch_coverage:false`, `task_identity_verified:false` and `whole_installed_lifetime_coverage:false`. Neither installation nor a bounded observation establishes admission, table immutability, task migration detection or global modal ownership.
 
+The SDK's writer-state query requires an armed memory watch.
+
 After independent review and execution authorization, the first scoped FILMSIM command is:
 
 ```sh
@@ -1129,6 +1131,8 @@ bazel-bin/emulation/render-compare \
 ```
 
 `//emulation:render-compare` strictly pairs capture labels and checks each PNG, source-plane and metadata binding. It compares PNG and source-plane bytes, complete native frame and scanout state, ordered source spans and pixel metadata without exclusions. It retains both instruction clocks and their difference rather than requiring identical clocks. A mismatch writes the comparison receipt and exits nonzero; an existing output is never replaced. The ordinary `e2e-observation-compare` does not replace this rendering check.
+
+Receipt phase timings may be fractional. Scanout clocks and extents retain integer-only decoding.
 
 Public protocol and writer-audit behavior tests are registered as `//emulation:modal-observation-tests`. After independent review, the host-only checks are `devenv shell -- bazel test --jobs=2 //emulation:modal-observation-tests //emulation:ui-trajectory-tests` and `devenv shell -- bazel build --jobs=2 //emulation:xm1-viewer`. No run evidence is implied by these source changes.
 
