@@ -27,8 +27,8 @@ data Control = WrongSource | WrongArtifact | WrongCandidate | WrongContract | Du
   | WrongObserver | WrongReset | WrongRawSidecar | DisabledWatch | WrongWatchClasses | WrongFetchAttribution | WrongFetchRanges
   | MissingWriterFetch | WrongWriterFetchCore | WrongWriterFetchPc | WrongWriterFetchClock | WrongWriterFetchOrdinal
   | WrongWriterFetchTick | MissingCoreOrdinal | WrongCoreOrdinal | WrongStoppedOrdinal | RecursiveWriterFetch
-  | WrongWriterCore | OtherWriterCore | ForeignWriter | CodeWrite | WrongKnownPreimage | MalformedStoppedFetch | WrongStoppedClock
-  | MissingSample | MissingPool | WrongAlias | WrongCodeWord | WrappedCounts | WrongEntryContext | WrongEntryStack
+  | WrongWriterCore | OtherWriterCore | ForeignWriter | CodeWrite | SyncCallbackWrite | WrongKnownPreimage | MalformedStoppedFetch | WrongStoppedClock
+  | MissingSample | MissingPool | MissingSyncRecord | WrongAlias | WrongCodeWord | WrappedCounts | WrongEntryContext | WrongEntryStack
   | WrongResourceArgument | MissingResourceCall | WrongResourceIdentity | WrongCheckedStatus | MissingSubmission | WrongDescriptorAddress
   | WrongFlagIdentity | WrongFlagTarget | WrongFlagResult | WrongConstructorTarget | WrongConstructorResult | WrongWrapperRegister | WrongCleanupSelector | WrongCleanupMask
   | WrongCallbackArgument | WrongCallbackResult | WrongCallbackFrame | WrongCallbackRestoration | MissingPostCleanupCallback
@@ -78,8 +78,8 @@ expected control = case control of
   WrongWriterFetchOrdinal -> WriteRejected; WrongWriterFetchTick -> WriteRejected; MissingCoreOrdinal -> WriteRejected
   WrongCoreOrdinal -> WriteRejected; WrongStoppedOrdinal -> FetchRejected; RecursiveWriterFetch -> RawWatchRejected
   WrongWriterCore -> FetchRejected; OtherWriterCore -> WriteRejected; ForeignWriter -> ForeignWriterRejected; CodeWrite -> WriteRejected
-  WrongKnownPreimage -> PreimageRejected; MalformedStoppedFetch -> FetchRejected; WrongStoppedClock -> FetchRejected
-  MissingSample -> SnapshotRejected; MissingPool -> SnapshotRejected; WrongAlias -> AliasRejected; WrongCodeWord -> CodeRejected
+  SyncCallbackWrite -> WriteRejected; WrongKnownPreimage -> PreimageRejected; MalformedStoppedFetch -> FetchRejected; WrongStoppedClock -> FetchRejected
+  MissingSample -> SnapshotRejected; MissingPool -> SnapshotRejected; MissingSyncRecord -> SnapshotRejected; WrongAlias -> AliasRejected; WrongCodeWord -> CodeRejected
   WrappedCounts -> ClockRejected; WrongEntryContext -> ContextRejected; WrongEntryStack -> EntryRejected
   WrongResourceArgument -> CallRejected; MissingResourceCall -> CallRejected; WrongResourceIdentity -> ResourceRejected
   WrongCheckedStatus -> CallRejected; MissingSubmission -> SubmissionRejected; WrongDescriptorAddress -> SnapshotRejected
@@ -230,6 +230,10 @@ refusalControls role sources original = do
           index <- firstWrite
           changed <- set control [field "records",Element index,field "physical"] Plan.rootLow watchValue
           set control [field "records",Element index,field "address"] Plan.rootLow changed >>= changedWatch
+        SyncCallbackWrite -> do
+          index <- firstWrite
+          changed <- set control [field "records",Element index,field "physical"] (0x545d8 :: Word32) watchValue
+          set control [field "records",Element index,field "address"] (0x400545d8 :: Word32) changed >>= changedWatch
         WrongKnownPreimage -> do
           index <- firstWrite
           old <- pathAt control [field "records",Element index,field "before",Element 0] watchValue >>= parse control :: Either ControlError Word32
@@ -241,6 +245,13 @@ refusalControls role sources original = do
           initial <- maybe (Left (MutationRejected control)) Right (case samples of value:_ -> Just value; [] -> Nothing)
           index <- maybe (Left (MutationRejected control)) Right (findIndex (\view -> viewObject view == Pool
             && address (viewPhysical view) == Plan.stackLow) (sampleViews initial))
+          modifyAt control [field "samples",Element 0,field "views"] (\raw -> do
+            values <- parse control raw :: Either ControlError [J.Value]
+            pure (J.toJSON (take index values++drop (index+1) values))) receiptValue >>= plain
+        MissingSyncRecord -> do
+          initial <- maybe (Left (MutationRejected control)) Right (case samples of value:_ -> Just value; [] -> Nothing)
+          index <- maybe (Left (MutationRejected control)) Right (findIndex (\view ->
+            viewObject view == ResourceState && address (viewPhysical view) == 0x545cc) (sampleViews initial))
           modifyAt control [field "samples",Element 0,field "views"] (\raw -> do
             values <- parse control raw :: Either ControlError [J.Value]
             pure (J.toJSON (take index values++drop (index+1) values))) receiptValue >>= plain

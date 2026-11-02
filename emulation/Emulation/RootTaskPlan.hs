@@ -1,11 +1,12 @@
 module Emulation.RootTaskPlan
   ( RootPlan(..), PlanError(..), derivePlan, rootLow, rootHigh, stackLow, stackHigh
   , taskLayout, callbackResources, sourceBodies, sourceWord, declaredBoundary, physical, conditionHolds
+  , SyncRecords(..), SyncCallback(..)
   ) where
 
 import qualified A32 as A
 import Control.Monad (unless)
-import Data.Bits ((.&.), testBit)
+import Data.Bits ((.&.), (.|.), shiftL, testBit)
 import qualified Data.ByteString as B
 import Data.List (find, sortOn)
 import qualified Data.Map.Strict as M
@@ -24,12 +25,16 @@ import qualified Replacement.KernelInstall.Wire as W
 import qualified FujiAF.UpdateContainer as U
 import StockInventory (GuestAddress(..), CodeFootprint(..), FootprintError, deriveRetainedFootprint)
 
-data PlanError = SourceWordRejected | PublicationTableRejected | ServiceGraphLimitExceeded | ServiceSourceMissing GuestAddress
+data PlanError = SourceWordRejected | PublicationTableRejected | CallbackPublicationRejected GuestAddress
+  | ServiceGraphLimitExceeded | ServiceSourceMissing GuestAddress
   | ServiceFootprintRejected GuestAddress FootprintError | UnresolvedServiceTransfer GuestAddress A.Instruction | SiteRejected deriving (Eq, Show)
+data SyncCallback = SyncCallback { callbackCell :: W.Address, callbackTarget :: W.Address } deriving (Eq, Show)
+data SyncRecords = SyncRecords
+  { syncCore :: T.KernelCore, syncBase :: W.Address, syncCallbacks :: [SyncCallback] } deriving (Eq, Show)
 data RootPlan = RootPlan
   { memoryPlan :: Memory.CapturePlan, tableA :: B.ByteString, tableB :: B.ByteString
   , serviceWords :: S.Set Word32, serviceInstructions :: S.Set Word32, unresolvedTransfers :: S.Set Word32, serviceEntries :: S.Set Word32
-  , rootCallMap :: M.Map Word32 Root.CallSite, requiredSites :: S.Set Word32 }
+  , rootCallMap :: M.Map Word32 Root.CallSite, requiredSites :: S.Set Word32, syncRecords :: [SyncRecords] }
 rootLow, rootHigh, stackLow, stackHigh :: Word32
 rootLow = 0x69d160
 rootHigh = 0x69d2b4
@@ -91,6 +96,50 @@ publishedTables files = do
     table base stores = do
       unless (length stores == 1419 && map fst (sortOn fst stores) == [base,base+4..base+0x1628]) (Left PublicationTableRejected)
       pure (B.concat [U.putWord32 value | (_,value) <- sortOn fst stores])
+sourceWide :: [(Word32,B.ByteString)] -> Word32 -> A.Reg -> Either PlanError Word32
+sourceWide sources location register = do
+  low <- A.decode location <$> sourceWord sources location
+  high <- A.decode (location+4) <$> sourceWord sources (location+4)
+  case (low,high) of
+    (A.MoveWide (A.Cond 14) destination lower,A.MoveTop (A.Cond 14) upperDestination upper)
+      | destination == register && upperDestination == register -> pure (lower .|. (upper `shiftL` 16))
+    _ -> Left (CallbackPublicationRejected (GuestAddress location))
+sourceSyncRecords :: [(Word32,B.ByteString)] -> Either PlanError [SyncRecords]
+sourceSyncRecords sources = mapM derive [(T.PrimaryKernel,0x43ac0,1),(T.SecondaryKernel,0xd3a7c,2)]
+  where
+    derive (core,entry,owner) = do
+      mapM_ (\(offset,expected) -> do
+        actual <- sourceWord sources (entry+offset)
+        unless (actual == expected) (Left (CallbackPublicationRejected (GuestAddress (entry+offset)))))
+        [(8,0xe3a0c001),(0x38,0xe24c3001),(0x3c,0xe0631183),(0x44,0xe0830283),(0x48,0xe0853100)
+        ,(0x4c,0xe35c0000 .|. owner),(0x50,0x1a000009),(0x60,0xe583a00c),(0x6c,0xe5831010)
+        ,(0x70,0xe583a018),(0x74,0xe583101c),(0x88,0xe583700c),(0x8c,0xe5838010)
+        ,(0x90,0xe5837018),(0x94,0xe583801c),(0x170,0xe28cc001),(0x174,0xe35c0003),(0x178,0x1affffae)]
+      base <- sourceWide sources (entry+0x14) (A.Reg 5)
+      unless (toInteger base+264 <= 0x100000000) (Left (CallbackPublicationRejected (GuestAddress (entry+0x14))))
+      acquire <- sourceWide sources (entry+0x1c) (A.Reg 7)
+      release <- sourceWide sources (entry+0x24) (A.Reg 8)
+      localAcquire <- sourceWide sources (entry+0x30) (A.Reg 10)
+      localRelease <- sourceWide sources (entry+0x64) (A.Reg 1)
+      unless (acquire == localAcquire && release == localRelease) (Left (CallbackPublicationRejected (GuestAddress entry)))
+      pure (SyncRecords core (W.Address base)
+        [SyncCallback (W.Address (base+132*domain+offset)) (W.Address target)
+        | domain <- [0,1],(offset,target) <- [(12,acquire),(16,release),(24,acquire),(28,release)]])
+sourcePublishedEntries :: SourceFiles -> [(Word32,B.ByteString)] -> [SyncRecords] -> Either PlanError (S.Set Word32)
+sourcePublishedEntries files sources records = do
+  vectors <- mapM (sourceWord sources) [base+0xe0+4*index | base <- [0x40000,0xd0000],index <- [0..6]]
+  literals <- mapM (sourceWord sources) [base+offset | base <- [0x40000,0xd0000],offset <- [0x410,0x414,0x420,0x424]]
+  callbacks <- mapM (\(location,register) -> sourceWide sources location (A.Reg register))
+    [(0x42884,4),(0x4290c,5),(0x40da4,3),(0x40b7c,3),(0x43f60,3),(0x4be50,2)
+    ,(0xd2884,4),(0xd290c,5),(0xd0da4,3),(0xd0b7c,3),(0xd3f1c,3),(0xdbe10,2)]
+  initialCallbacks <- mapM (sourceWord [(0x61c400,sourceImage files)]) [0x89ea8c,0x89ea94]
+  let synchronization = [target | record <- records,SyncCallback _ (W.Address target) <- syncCallbacks record]
+      entries = S.fromList (vectors++literals++callbacks++synchronization++initialCallbacks)
+  mapM_ (\entry -> do
+    unless (entry `mod` 4 == 0) (Left (CallbackPublicationRejected (GuestAddress entry)))
+    _ <- sourceWord sources entry
+    pure ()) (S.toList entries)
+  pure entries
 footprints :: SourceFiles -> S.Set Word32 -> Either PlanError (S.Set Word32,S.Set Word32,S.Set Word32,S.Set Word32)
 footprints files initial = walk (S.toList initial) S.empty S.empty S.empty S.empty
   where
@@ -116,12 +165,14 @@ footprints files initial = walk (S.toList initial) S.empty S.empty S.empty S.emp
           dispatch = lookup pc [(0x436e8,(A.Reg 1,A.OffsetImmediate 28)),(0x43758,(A.Reg 2,A.OffsetImmediate 8))
             ,(0xd36e8,(A.Reg 1,A.OffsetImmediate 28)),(0xd3758,(A.Reg 2,A.OffsetImmediate 8))]
           irqReturn = pc `elem` [0x40364,0xd0364,0x437d8,0xd37d8]
+          vectorReturn = lookup pc [(0x40124,0xe1b0f00e),(0x401b0,0xe8fd9000),(0x40200,0xe8fd9000),(0x40d38,0xe1b0f00e)
+            ,(0xd0124,0xe1b0f00e),(0xd01b0,0xe8fd9000),(0xd0200,0xe8fd9000),(0xd0d38,0xe1b0f00e)] == Just raw
           admitted = case instruction of
             A.BranchExchange {} -> True
             A.DataProcessing _ A.MOV _ destination _ (A.ShiftedImmediate _ A.LSL 0) -> destination == A.pc
             A.Load _ A.Word False destination base offset A.OffsetOnly -> destination == A.pc && dispatch == Just (base,offset)
             A.LoadMultiple _ base _ _ registers -> base == A.sp && A.pc `elem` registers
-            A.Rejected A.ExceptionReturn -> irqReturn
+            A.Rejected A.ExceptionReturn -> irqReturn || vectorReturn
             _ -> False
       unless admitted (Left (UnresolvedServiceTransfer (GuestAddress pc) instruction))
 
@@ -129,6 +180,8 @@ derivePlan :: SourceFiles -> Root.RootProof -> B.ByteString -> Either PlanError 
 derivePlan files proof runtime = do
   (primary,secondary) <- publishedTables files
   let sources = sourceBodies files (sourceImage files)
+  records <- sourceSyncRecords sources
+  publications <- sourcePublishedEntries files sources records
   canonicalCalls <- fmap concat $ mapM (\pc -> do
     raw <- sourceWord sources pc
     pure (case A.decode pc raw of A.Branch _ True destination -> [destination]; _ -> [])) [rootLow,rootLow+4..rootHigh-4]
@@ -136,12 +189,15 @@ derivePlan files proof runtime = do
       staticSeeds = S.fromList (canonicalCalls++map Root.callTarget (Root.callSites proof)
         ++ [0x69c9f8,0x69cc00,0x69cc18,0x725b74,0x72835c,0x726478,0x725dd8,0x724924,0x72337c
            ,0x4d434,0x41140,0x4d1a4,0x453f0,0x43dd0,0x43688,0x412bc,0x4118c,0x43728]
-        ++ filter (/=0) (tableTargets primary++tableTargets secondary))
+        ++ filter (/=0) (tableTargets primary++tableTargets secondary) ++ S.toList publications)
   (entries,guarded,instructions,unresolved) <- footprints files staticSeeds
   let mutableLoaderCell pc = any (\(base,lastByte) -> pc >= base && pc < lastByte && not (any (\(low,high) -> fromIntegral pc >= low && fromIntegral pc < high) loaderProtected))
         [(0x40000,0x4dae0),(0xd0000,0xddaa0)]
-      protected = map spanOf baseImmutable ++ wordSpans (S.filter (not . mutableLoaderCell) guarded)
-      writes = [W.WatchClass span' [W.CpuWrite,W.HostWrite,W.ModelBusWrite] | span' <- Memory.unionRanges [[low,high] | (low,high) <- writeSpans]]
+      callbackCells = [physical cell | record <- records,SyncCallback (W.Address cell) _ <- syncCallbacks record]
+      callbackProtected = [(fromIntegral cell,fromIntegral cell+4) | cell <- callbackCells]
+      recordWrites = [(fromIntegral (physical base),fromIntegral (physical base)+264) | SyncRecords _ (W.Address base) _ <- records]
+      protected = map spanOf (baseImmutable++callbackProtected) ++ wordSpans (S.filter (not . mutableLoaderCell) guarded)
+      writes = [W.WatchClass span' [W.CpuWrite,W.HostWrite,W.ModelBusWrite] | span' <- Memory.unionRanges [[low,high] | (low,high) <- writeSpans++recordWrites]]
       fetched = [W.WatchClass [low,high] [W.CpuFetch] | Memory.PhysicalSpan (PhysicalBoundary low) (PhysicalBoundary high) <- fetchSpans]
       irqCores = M.fromList [(W.Address pc,if pc < 0xd0000 then W.Primary else W.Secondary) | (pc,_) <- irqSites]
       attributed = map spanOf [(0x40000,0x4dae0),(0xd0000,0xddaa0),(0x61c400,0x89ea8c)]
@@ -150,7 +206,7 @@ derivePlan files proof runtime = do
       calls = M.fromList [(Root.callPc site,site) | site <- Root.callSites proof]
       required = S.fromList ([rootLow,rootLow+4..rootHigh-4]++[0x725dd8,0x724924,0x725f08,0x725f0c,0x725fa8,0x725fac]
         ++[0x69cc18,0x69cc1c..0x69cc68]++cleanupSites++map fst irqSites)
-  pure (RootPlan capture primary secondary guarded (S.union instructions (S.fromList (Root.executionPcs proof))) unresolved entries calls required)
+  pure (RootPlan capture primary secondary guarded (S.union instructions (S.fromList (Root.executionPcs proof))) unresolved entries calls required records)
 
 declaredBoundary :: RootPlan -> [(Word32,B.ByteString)] -> Word32 -> Boundary -> Bool
 declaredBoundary plan sources location boundary = case boundary of

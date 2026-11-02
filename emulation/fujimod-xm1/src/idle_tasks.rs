@@ -484,10 +484,73 @@ struct RootCandidateContract {
     schema: u32, qualification: RootQualification, root_task: RootArtifactContract,
     candidate_dat_sha256: Digest, candidate_image4_sha256: Digest,
 }
+#[derive(Clone, Copy)]
+struct SyncCallback { cell: Address, target: Address }
+struct SyncRecords { core: Core, base: Address, callbacks: [SyncCallback; 8] }
+fn source_wide(sources: &[Code], pc: u32, register: u32) -> Result<u32, String> {
+    let low = code_word(sources, pc)?;
+    let high = code_word(sources, pc + 4)?;
+    require(low & 0xfff0f000 == 0xe3000000 | register << 12
+        && high & 0xfff0f000 == 0xe3400000 | register << 12, "initializer callback lacks source MOVW/MOVT pair")?;
+    let immediate = |word: u32| ((word >> 4) & 0xf000) | (word & 0xfff);
+    Ok(immediate(low) | immediate(high) << 16)
+}
+fn source_sync_records(sources: &[Code], core: Core) -> Result<SyncRecords, String> {
+    let (entry, owner) = match core { Core::Primary => (0x43ac0, 1), Core::Secondary => (0xd3a7c, 2) };
+    for (offset, expected) in [
+        (8, 0xe3a0c001), (0x38, 0xe24c3001), (0x3c, 0xe0631183),
+        (0x44, 0xe0830283), (0x48, 0xe0853100), (0x4c, 0xe35c0000 | owner),
+        (0x50, 0x1a000009), (0x60, 0xe583a00c), (0x6c, 0xe5831010),
+        (0x70, 0xe583a018), (0x74, 0xe583101c), (0x88, 0xe583700c),
+        (0x8c, 0xe5838010), (0x90, 0xe5837018), (0x94, 0xe583801c),
+        (0x170, 0xe28cc001), (0x174, 0xe35c0003), (0x178, 0x1affffae),
+    ] {
+        require(code_word(sources, entry + offset)? == expected, "synchronization callback publication layout differs")?;
+    }
+    let base = source_wide(sources, entry + 0x14, 5)?;
+    require(base.checked_add(264).is_some(), "synchronization records exceed32 bits")?;
+    let acquire = source_wide(sources, entry + 0x1c, 7)?;
+    let release = source_wide(sources, entry + 0x24, 8)?;
+    require(acquire == source_wide(sources, entry + 0x30, 10)?
+        && release == source_wide(sources, entry + 0x64, 1)?, "local and remote synchronization callbacks differ")?;
+    let callbacks = std::array::from_fn(|index| {
+        let (offset, target) = match index % 4 {
+            0 => (12, acquire), 1 => (16, release), 2 => (24, acquire), _ => (28, release),
+        };
+        SyncCallback { cell: Address(base + (index / 4) as u32 * 132 + offset), target: Address(target) }
+    });
+    Ok(SyncRecords { core, base: Address(base), callbacks })
+}
+fn source_published_entries(sources: &[Code], sync: &[SyncRecords; 2]) -> Result<BTreeSet<u32>, String> {
+    let mut entries = BTreeSet::new();
+    for base in [0x40000, 0xd0000] {
+        for index in 0..7 { entries.insert(code_word(sources, base + 0xe0 + 4 * index)?); }
+        for offset in [0x410, 0x414, 0x420, 0x424] { entries.insert(code_word(sources, base + offset)?); }
+    }
+    for (pc, register) in [
+        (0x42884, 4), (0x4290c, 5), (0x40da4, 3), (0x40b7c, 3), (0x43f60, 3), (0x4be50, 2),
+        (0xd2884, 4), (0xd290c, 5), (0xd0da4, 3), (0xd0b7c, 3), (0xd3f1c, 3), (0xdbe10, 2),
+    ] { entries.insert(source_wide(sources, pc, register)?); }
+    for records in sync { entries.extend(records.callbacks.iter().map(|callback| callback.target.0)); }
+    for cell in [0x89ea8c, 0x89ea94] { entries.insert(code_word(sources, cell)?); }
+    for &entry in &entries {
+        require(entry % 4 == 0, "initializer-published callable is not A32")?;
+        code_word(sources, entry)?;
+    }
+    Ok(entries)
+}
+fn loader_exception_return(pc: u32, instruction: u32) -> bool {
+    match pc {
+        0x40124 | 0x40d38 | 0xd0124 | 0xd0d38 => instruction == 0xe1b0f00e,
+        0x401b0 | 0x40200 | 0xd01b0 | 0xd0200 => instruction == 0xe8fd9000,
+        _ => false,
+    }
+}
 struct RootBinding {
     execution: BTreeSet<u32>, calls: Vec<RootCallSite>, halts: BTreeSet<u32>, returns: BTreeSet<u32>,
     service_words: BTreeSet<u32>, service_literals: BTreeSet<u32>, service_entries: BTreeSet<u32>, indirect_sites: BTreeMap<u32, TransferRegister>,
     service_halts: BTreeSet<u32>, fetch_spans: Vec<(u64, u64)>, scratch_low: i32,
+    sync_records: [SyncRecords; 2],
 }
 fn root_layout() -> Layout {
     Layout { id: TaskId(104), creation: 0x4005beac + 40 * 103, node: 0x4005ff0c + 56 * 103,
@@ -585,7 +648,7 @@ fn retained_function_words(sources: &[Code], entries: &BTreeSet<u32>) -> Result<
             let target = direct_target(pc, instruction)?;
             if !(ROOT_ENTRY..ROOT_LIMIT).contains(&target) { pending.push(target); }
             if instruction & 0x01000000 != 0 || conditional { pending.push(pc + 4); }
-        } else if returns_to_caller(instruction) || instruction & 0x0e108000 == 0x08108000 {
+        } else if returns_to_caller(instruction) || loader_exception_return(pc, instruction) || instruction & 0x0e108000 == 0x08108000 {
             if conditional { pending.push(pc + 4); }
         } else if instruction & 0x0ffffff0 == 0x012fff30 {
             indirect_sites.insert(pc, TransferRegister::from_instruction(instruction));
@@ -681,9 +744,11 @@ fn bind_root_artifact(role: Role, linked: &[u8], symbols: &[u8], contract: &[u8]
     let mut service_entries: BTreeSet<u32> = calls.iter().map(|site| site.target.0).collect();
     service_entries.extend([0x69c9f8, 0x69cc00, 0x69cc18, 0x725b74, 0x72835c, 0x726478,
         0x725dd8, 0x4d434, 0x41140, 0x4d1a4, 0x453f0, 0x43dd0, 0x43688, 0x412bc, 0x4118c, 0x72337c, 0x43728]);
+    let sync_records = [source_sync_records(sources, Core::Primary)?, source_sync_records(sources, Core::Secondary)?];
+    service_entries.extend(source_published_entries(sources, &sync_records)?);
     let services = retained_function_words(sources, &service_entries)?;
     Ok(RootBinding { execution, calls, halts, returns, service_words: services.words, service_literals: services.literals, service_entries,
-        indirect_sites: services.indirect_sites, service_halts: services.halts, fetch_spans: Vec::new(),
+        indirect_sites: services.indirect_sites, service_halts: services.halts, fetch_spans: Vec::new(), sync_records,
         scratch_low: if role == Role::Retained { -16 } else { artifact.scratch_low_from_entry_sp } })
 }
 
@@ -782,7 +847,7 @@ fn submission_views(machine: &Machine, maps: &[MemoryMap], state: &Context, task
     views.extend([creation, node]);
     Ok(())
 }
-fn root_sample(machine: &Machine, maps: &[MemoryMap], sources: &[Code],
+fn root_sample(machine: &Machine, maps: &[MemoryMap], sources: &[Code], binding: &RootBinding,
     hit: usize, state: Context, watch_cursor: usize, boundary: Boundary, callback_context: bool) -> Result<Sample, String> {
     let mut views = Vec::new();
     let kernels = [
@@ -803,6 +868,9 @@ fn root_sample(machine: &Machine, maps: &[MemoryMap], sources: &[Code],
     }
     views.push(view(machine, maps, &state, Object::ResourceState, Core::Primary, 0x93e6f4, 104 * 4)?);
     views.push(view(machine, maps, &state, Object::ResourceState, Core::Primary, 0x89ea98, 4)?);
+    for records in &binding.sync_records {
+        views.push(view(machine, maps, &state, Object::ResourceState, records.core, records.base.0, 264)?);
+    }
     if boundary == Boundary::Start {
         views.push(view(machine, maps, &state, Object::Pool, Core::Primary, TASK_STACK_POOL.0, (TASK_STACK_POOL.1 - TASK_STACK_POOL.0) as usize)?);
         for (core, creations, nodes) in TASK_RECORD_POOLS {
@@ -845,6 +913,10 @@ fn merged_spans(mut spans: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
 fn root_watch_ranges(binding: &mut RootBinding) -> Result<Vec<WatchRange>, String> {
     let mut writes = vec![(0x40000, 0x4dae0), (0xd0000, 0xddaa0), (u64::from(IMAGE_BASE), u64::from(INITIAL_IMAGE_VIEW_END))];
     writes.extend(INTERFACES);
+    writes.extend(binding.sync_records.iter().map(|records| {
+        let base = u64::from(records.base.0 & !0x40000000);
+        (base, base + 264)
+    }));
     for core in [Core::Primary, Core::Secondary] {
         let l = if core == Core::Primary { root_layout() } else { core.layout() };
         for (base, size) in [(l.current, 4), (l.selected, 4)] {
@@ -893,6 +965,10 @@ fn root_immutable(binding: &RootBinding, physical: u64, size: u64) -> bool {
         || physical < 0x7caf3c && 0x7cad9c < end
         || binding.service_words.range((physical.saturating_sub(3) as u32)..).next().is_some_and(|pc| u64::from(*pc) < end)
         || binding.service_literals.range((physical.saturating_sub(3) as u32)..).next().is_some_and(|pc| u64::from(*pc) < end)
+        || binding.sync_records.iter().flat_map(|records| &records.callbacks).any(|callback| {
+            let cell = u64::from(callback.cell.0 & !0x40000000);
+            physical < cell + 4 && cell < end
+        })
 }
 struct RootService {
     site: RootCallSite, caller: Context, entered: bool, executed: bool, return_executed: bool,
@@ -1346,6 +1422,10 @@ fn root_resume_sites(sources: &[Code], resume: Address) -> Result<BTreeMap<u32, 
 fn root_sample_boundary(producer: &RootProducer, binding: &RootBinding, continuations: &BTreeSet<u32>, pc: u32) -> Result<Boundary, String> {
     let physical = pc & !0x40000000;
     if physical == 0x725dd8 { return Ok(Boundary::TaskSubmit); }
+    let declared = root_boundary(pc, binding);
+    if matches!(declared.as_ref(), Ok(Boundary::IrqEntry | Boundary::IrqFrame | Boundary::IrqReturn)) {
+        return declared;
+    }
     if producer.irq.as_ref().is_some_and(|irq| irq.resume.0 & !0x40000000 == physical)
         || producer.callback.as_ref().is_some_and(|callback| callback.caller.lr.0 & !0x40000000 == physical)
         || producer.submission.as_ref().is_some_and(|submission| submission.caller.lr.0 & !0x40000000 == physical) {
@@ -1358,7 +1438,7 @@ fn root_sample_boundary(producer: &RootProducer, binding: &RootBinding, continua
     if binding.indirect_sites.contains_key(&physical) || binding.service_halts.contains(&physical)
         || binding.service_entries.contains(&physical) { return Ok(Boundary::ServiceEntry); }
     if continuations.contains(&physical) { return Ok(Boundary::ServiceReturn); }
-    root_boundary(pc, binding)
+    declared
 }
 fn inspect_root_watch(raw: &serde_json::Value, processed: &mut usize, stopped: &[Hit],
     producer: &mut RootProducer, binding: &RootBinding) -> Result<usize, String> {
@@ -1449,6 +1529,13 @@ fn bind_root_interfaces(machine: &Machine, maps: &[MemoryMap], state: &Context, 
         }
         views.push(table);
     }
+    for records in &binding.sync_records {
+        let installed = view(machine, maps, state, Object::ResourceState, records.core, records.base.0, 264)?;
+        for callback in &records.callbacks {
+            require(word(&installed.bytes, (callback.cell.0 - records.base.0) as usize)? == callback.target.0,
+                "installed synchronization callback differs from source publication")?;
+        }
+    }
     let services = retained_function_words(sources, &entries)?;
     binding.service_words = services.words;
     binding.service_literals = services.literals;
@@ -1523,7 +1610,7 @@ fn drive_root(mut machine: Machine, maps: &[MemoryMap], code: &[Code], mut bindi
                 let boundary = if first { Boundary::Start } else { root_sample_boundary(&producer, &binding, &continuations, address)? };
                 let callback_context = (0x69cc18..0x69cc6c).contains(&(address & !0x40000000))
                     || producer.callback.as_ref().is_some_and(|callback| callback.caller.core == core && callback.caller.lr.0 == address);
-                let mut observed = root_sample(&machine, maps, code, index, state, cursor, boundary, callback_context)?;
+                let mut observed = root_sample(&machine, maps, code, &binding, index, state, cursor, boundary, callback_context)?;
                 observed.views.extend(installed_views);
                 if [0x725f0c, 0x725fac].contains(&(address & !0x40000000)) {
                     if let Some(submission) = &producer.submission {
@@ -1939,6 +2026,10 @@ mod tests {
             execution: BTreeSet::new(), calls: Vec::new(), halts: BTreeSet::new(), returns: BTreeSet::new(),
             service_words: BTreeSet::new(), service_literals: BTreeSet::new(), service_entries: BTreeSet::from([0x725dd8]),
             indirect_sites: BTreeMap::new(), service_halts: BTreeSet::new(), fetch_spans: Vec::new(), scratch_low: 0,
+            sync_records: std::array::from_fn(|index| SyncRecords {
+                core: if index == 0 { Core::Primary } else { Core::Secondary }, base: Address(0),
+                callbacks: [SyncCallback { cell: Address(0), target: Address(0) }; 8],
+            }),
         }
     }
 
@@ -1949,6 +2040,24 @@ mod tests {
         for pc in [0x725dd8, 0x40725dd8] {
             let boundary = root_sample_boundary(&producer, &binding, &BTreeSet::from([0x725dd8]), pc).unwrap();
             assert_eq!(serde_json::to_value(boundary).unwrap(), "task-submit");
+        }
+    }
+
+    #[test]
+    fn published_vector_targets_preserve_irq_boundaries_on_both_aliases() {
+        let mut binding = root_routing_binding();
+        let boundaries = [(0x40204, "irq-entry"), (0xd0204, "irq-entry"), (0x40234, "irq-frame"),
+            (0xd0234, "irq-frame"), (0x40364, "irq-return"), (0xd0364, "irq-return"),
+            (0x437d8, "irq-return"), (0xd37d8, "irq-return")];
+        binding.service_entries.extend(boundaries.iter().map(|&(pc, _)| pc));
+        let producer = RootProducer::new();
+        let labels = root_sites(&binding);
+        for (physical, expected) in boundaries {
+            assert_eq!(labels.get(&physical).map(String::as_str), Some(expected));
+            for pc in [physical, physical | 0x40000000] {
+                let boundary = root_sample_boundary(&producer, &binding, &BTreeSet::from([physical]), pc).unwrap();
+                assert_eq!(serde_json::to_value(boundary).unwrap(), expected);
+            }
         }
     }
 

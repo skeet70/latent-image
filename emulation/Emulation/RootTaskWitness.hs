@@ -221,6 +221,7 @@ checkViews inputs plan sample previous = do
         ,(InterfaceTable,S.SecondaryKernel,0xddaa0,0x162c),(TaskClasses,S.PrimaryKernel,0x7cad9c,416)
         ,(ResourceState,S.PrimaryKernel,0x93e6f4,416),(ResourceState,S.PrimaryKernel,0x89ea98,4)]
         ++ [(CallbackResource,S.PrimaryKernel,base,size) | (base,size) <- Plan.callbackResources]
+        ++ [(ResourceState,owner,base,size) | (owner,base,size) <- synchronizationShapes]
   require (all (`elem` shapes) fixed) SnapshotRejected
   mapM_ (\owner -> do
     let (creation,node,current,selected,low,high,_) = Plan.taskLayout owner
@@ -232,9 +233,13 @@ checkViews inputs plan sample previous = do
   a <- readBytes CodeRejected memory 0x4dae0 0x162c
   b <- readBytes CodeRejected memory 0xddaa0 0x162c
   require (a == Plan.tableA plan && b == Plan.tableB plan) CodeRejected
+  mapM_ (\(Plan.SyncCallback cell target) ->
+    require (readWord CodeRejected memory (physical (address cell)) == Right (address target)) CodeRejected)
+    (concatMap Plan.syncCallbacks (Plan.syncRecords plan))
   pure memory
   where
     source = Plan.sourceBodies (inputSource inputs) (inputImage inputs)
+    synchronizationShapes = [(Plan.syncCore record,physical (address (Plan.syncBase record)),264) | record <- Plan.syncRecords plan]
     checkShape descriptorScope memory view = do
       let (object,core,base,size) = viewShape view
           initial = sampleBoundary sample == Start
@@ -262,7 +267,9 @@ checkViews inputs plan sample previous = do
         TaskClasses -> do
           require (core == S.PrimaryKernel && base == 0x7cad9c && size == 416) SnapshotRejected
           require (codeBytes == B.take size (B.drop (fromIntegral (base-0x61c400)) (inputImage inputs))) CodeRejected
-        ResourceState -> require ((base,size) `elem` [(0x93e6f4,416),(0x89ea98,4)] || any (\(owner,_,_,flags) -> owner == core && within flags (flags+1440) && size == 12 && (base-flags) `mod` 12 == 0) recordPools) SnapshotRejected
+        ResourceState -> require ((base,size) `elem` [(0x93e6f4,416),(0x89ea98,4)]
+          || (core,base,size) `elem` synchronizationShapes
+          || any (\(owner,_,_,flags) -> owner == core && within flags (flags+1440) && size == 12 && (base-flags) `mod` 12 == 0) recordPools) SnapshotRejected
         Pool -> require ((base == Plan.stackLow && size == fromIntegral (Plan.stackHigh-Plan.stackLow) && initial)
           || any (\(owner,c,n,f) -> owner == core && initial && (base,size) `elem` [(c,4800),(n,6720),(f,1440)]) recordPools
           || any (\owner -> let (_,_,_,_,low,high,_) = Plan.taskLayout owner in owner == core && base == low && size == fromIntegral (high-low)) [S.PrimaryKernel,S.SecondaryKernel]) SnapshotRejected
