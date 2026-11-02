@@ -910,7 +910,7 @@ admitReceipt inputs@(Inputs _ expectedIdentity program) observed = do
     && W.watchClasses watch == expectedClasses inputs (receiptSchema receipt)
     && W.watchRanges watch == unionRanges (map W.classRange (expectedClasses inputs (receiptSchema receipt)))
     && not (null (W.watchRecords watch)) && length (W.watchRecords watch) < 1048576) WatchRejected
-  let cpuRows = filter (\event -> W.eventSource event `elem` [W.CpuFetch,W.CpuWrite]) (W.watchRecords watch)
+  let cpuRows = filter (\event -> W.eventSource event `elem` [W.CpuFetch,W.CpuRead,W.CpuWrite]) (W.watchRecords watch)
       clocks = mapMaybe W.eventInstructions cpuRows; ticks = mapMaybe W.eventTick cpuRows
   require (length clocks == length cpuRows && length ticks == length clocks
     && all (<=startupBudget) clocks && clocks == sort clocks && ticks == sort ticks) ClockRejected

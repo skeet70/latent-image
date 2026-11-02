@@ -29,6 +29,7 @@ data Control = WrongSource | DuplicateReceiptKey | OverflowingHitAddress | Refus
   | MissingStoppedPhysical | MalformedStoppedAddress | MalformedStoppedSize | WrappedCounts
   | WrongReadValue | WrongReadPreimage | WrongReadClock | MissingReadPhysical | MalformedReadSize
   | RetiredCriticalRead | WrongJoinedSource | MissingCriticalCounter | WrongCounterAlias
+  | MissingReadTick | RegressingReadTick
   deriving (Bounded, Enum, Eq, Ord, Show)
 data ControlError = BaselineRejected WitnessError | MutationRejected Control
   | WrongRefusal Control WitnessError (Maybe WitnessError) deriving (Eq, Show)
@@ -88,6 +89,7 @@ expected control = case control of
   WrongReadValue -> ReadRejected; WrongReadPreimage -> ReadRejected; WrongReadClock -> ClockRejected
   MissingReadPhysical -> ReadRejected; MalformedReadSize -> ReadRejected; RetiredCriticalRead -> ReadRejected
   WrongJoinedSource -> IdentityRejected; MissingCriticalCounter -> SnapshotRejected; WrongCounterAlias -> AliasRejected
+  MissingReadTick -> ClockRejected; RegressingReadTick -> ClockRejected
 
 withHash :: Control -> ObservedFiles -> J.Value -> J.Value -> Either ControlError ObservedFiles
 withHash control original receipt watch = do
@@ -285,6 +287,16 @@ mutate control sources observed = do
     WrongReadClock -> readField "instructions" (\raw -> do value <- parse control raw :: Either ControlError Word64; pure (J.toJSON (value+1)))
     MissingReadPhysical -> readField "physical" (const (Right J.Null))
     MalformedReadSize -> readField "size" (const (Right (J.toJSON (0 :: Int))))
+    MissingReadTick -> readField "tick" (const (Right J.Null))
+    RegressingReadTick -> journal (\raw watches -> do
+      let positiveTick row = maybe False (>W.Count 0) (W.eventTick row)
+      position <- findRow control (\row -> W.eventSource row == W.CpuRead && positiveTick row) watches
+      rows <- arrayAt control [field "records"] watches
+      prior <- mapM (parse control) (take position rows)
+      unless (any (\row -> W.eventSource row `elem` [W.CpuFetch,W.CpuRead,W.CpuWrite] && positiveTick row) prior)
+        (Left (MutationRejected control))
+      changed <- set control [field "records",Element position,field "tick"] (0 :: Word64) watches
+      pure (raw,changed))
     RetiredCriticalRead -> journal (\raw watches -> do
       position <- findRow control (\row -> W.eventSource row == W.CpuRead) watches
       changed <- set control [field "records",Element position,field "address"] (0x7235dc :: Word32) watches
