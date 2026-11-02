@@ -157,10 +157,10 @@ programOwnsPc Owned{ownedVariant=Composed _ _} (W.Address location) =
   location >= 0x725dd8 && location < 0x72612c || location >= 0x725cc4 && location < 0x725da8
     || location >= 0x10000 && location < 0x12000
 programStoreComponent :: Program -> W.Address -> Maybe StoreComponent
-programStoreComponent program location@(W.Address pc)
+programStoreComponent program location@(W.Address instruction)
   | not (programOwnsPc program location) = Nothing
-  | pc >= 0x725dd8 && pc < 0x72612c = Just WrapperComponent
-  | pc >= 0x725cc4 && pc < 0x725da8 = Just StorageComponent
+  | instruction >= 0x725dd8 && instruction < 0x72612c = Just WrapperComponent
+  | instruction >= 0x725cc4 && instruction < 0x725da8 = Just StorageComponent
   | otherwise = Just CriticalComponent
 programAllowsPc :: Program -> W.Address -> Bool
 programAllowsPc Stock _ = True

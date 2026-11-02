@@ -11,7 +11,7 @@ import Replacement.StartupComposition.TaskSubmission
 import System.Directory (canonicalizePath)
 import System.Environment (getArgs)
 import System.FilePath (takeDirectory, (</>), takeFileName)
-import System.Posix.IO (OpenMode (WriteOnly), defaultFileFlags, exclusive, fdToHandle, openFd)
+import System.Posix.IO (OpenMode (WriteOnly), defaultFileFlags, creat, exclusive, fdToHandle, openFd)
 import System.IO (hClose)
 
 main :: IO ()
@@ -34,7 +34,7 @@ main = do
         H.ensure (parent == root) "task composition outputs must be directly inside the supplied scratch directory"
         pure (parent </> takeFileName path)) [outputPath,contractPath,outImage,outLoaderA,outLoaderB,outRecord2]
       unless (length (nub paths) == length paths) (H.failH "task composition outputs must be distinct")
-      handles <- mapM (\path -> openFd path WriteOnly (Just 0o600) defaultFileFlags {exclusive = True} >>= fdToHandle) paths
+      handles <- mapM (\path -> openFd path WriteOnly defaultFileFlags {creat = Just 0o600, exclusive = True} >>= fdToHandle) paths
       candidate <- stageCandidate (Image4.Tools encoder rebuild decoder) scratch staged
       let actual = candidateSources candidate
           bytes = [candidateBytes candidate,L.toStrict (J.encode (candidateContractValue candidate)),candidateImage4 actual

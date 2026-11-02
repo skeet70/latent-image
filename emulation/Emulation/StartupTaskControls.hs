@@ -357,7 +357,7 @@ refusalControlsFor sources inputs observed = do
   where
     run admittedInputs control = do
       (changedSources,changedObserved) <- mutate control sources observed
-      let result = (if control == WrongSource then admitInputs changedSources else Right admittedInputs) >>= \inputs -> admitReceipt inputs changedObserved
+      let result = (if control == WrongSource then admitInputs changedSources else Right admittedInputs) >>= \selectedInputs -> admitReceipt selectedInputs changedObserved
           actual = case result of Left problem -> Just problem; Right _ -> Nothing
       unless (actual == Just (expected control)) (Left (WrongRefusal control (expected control) actual))
       pure (J.object ["control" J..= show control,"expected" J..= show (expected control),"actual" J..= fmap show actual])
