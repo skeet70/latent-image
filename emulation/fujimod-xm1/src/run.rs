@@ -134,6 +134,15 @@ impl RunDocument {
 /// 1.50-compatible; its identity is not compared with a catalog entry.
 pub struct ValidatedUpdate(pub Vec<u8>);
 
+pub struct NandBase(Vec<u8>);
+impl AsRef<[u8]> for NandBase {fn as_ref(&self)->&[u8]{&self.0}}
+impl NandBase {pub fn into_bytes(self)->Vec<u8>{self.0}}
+
+pub fn nand_base(document:&RunDocument,update:&ValidatedUpdate)->Result<NandBase,String>{
+    let flash=update.0.get(document.update_flash_offset..).filter(|rest|!rest.is_empty()).ok_or("update flash offset exceeds input")?;
+    Ok(NandBase(flash.iter().map(|byte|!byte).collect()))
+}
+
 pub(crate) fn graph(document: &RunDocument) -> Result<(ResolvedConfiguration, factory::Graph), String> {
     let resolved = ResolvedConfiguration::with_overlays(&document.catalog_configuration.0, &[])?;
     let graph = fujimod_emulator::boot::graph::assemble_with_starts(
@@ -172,12 +181,7 @@ pub fn open(document: &RunDocument, update: &ValidatedUpdate, boot_rom: &[u8]) -
             .map(|d| MemoryChoices { initial: d.initial, choices: d.choices.len() })
             .collect::<Vec<_>>(),
     )?;
-    let flash = update
-        .0
-        .get(document.update_flash_offset..)
-        .filter(|rest| !rest.is_empty())
-        .ok_or("update flash offset exceeds input")?;
-    let mut assets = BTreeMap::from([("nand_base".to_owned(), flash.iter().map(|b| !b).collect::<Vec<u8>>())]);
+    let mut assets = BTreeMap::from([("nand_base".to_owned(), nand_base(document, update)?.into_bytes())]);
     for asset in &document.generated_assets {
         if asset.pattern.is_empty() || asset.size > 64 << 20 || !asset.size.is_multiple_of(asset.pattern.len()) {
             return Err(format!("scene asset {} has an invalid extent", asset.id));
