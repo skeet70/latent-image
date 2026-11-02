@@ -15,6 +15,7 @@ import Data.Word (Word8, Word32, Word64)
 import qualified Emulation.Sha256 as SHA
 import Emulation.StartupTaskWitness
 import qualified Emulation.StartupTaskWire as Wire
+import qualified Emulation.TaskSubmissionProgram as P
 import FujiAF.JSON (decodeStrictIntegers)
 import qualified FujiAF.UpdateContainer as U
 import qualified Replacement.KernelInstall.Wire as W
@@ -99,6 +100,18 @@ expected control = case control of
   UnexpectedRecord2Fetch -> CodeRejected
   WrongBootHandoffTarget -> SnapshotRejected; WrongBootModeCopy -> SnapshotRejected; NonzeroBootBssReserved -> SnapshotRejected
   MenuBeforeFiniteRoute -> StatusRejected; MenuBeyondFiniteRoute -> StatusRejected
+
+expectedFor :: Wire.Receipt -> Control -> Either ControlError WitnessError
+expectedFor receipt control
+  | Wire.receiptSchema receipt /= Wire.LegacyStockProtocol = case control of
+      WrongDescriptorClass -> atBoundary Wire.CreationCall P.CallArgumentsRejected
+      WrongActivationContext -> atBoundary Wire.ActivationCall P.UnsupportedActivation
+      _ -> pure (expected control)
+  | otherwise = pure (expected control)
+  where
+    atBoundary boundary reason = case filter ((==boundary) . Wire.sampleBoundary) (Wire.receiptSamples receipt) of
+      sample:_ -> pure (ProgramSampleRejected (Wire.sampleHit sample) reason)
+      [] -> Left (MutationRejected control)
 
 withHash :: Control -> ObservedFiles -> J.Value -> J.Value -> Either ControlError ObservedFiles
 withHash control original receipt watch = do
@@ -374,12 +387,13 @@ refusalControlsFor sources inputs observed = do
         | control `elem` [RetiredCriticalRead,WrongJoinedSource,UnexpectedRecord2Fetch] = case Wire.receiptProgram receipt of Wire.JoinedProgram _ -> True; _ -> False
         | control >= WrongReadValue = Wire.receiptSchema receipt == Wire.JoinedTaskProtocol
         | otherwise = True
-  results <- mapM (run inputs) (filter selected [minBound..maxBound])
+  results <- mapM (run receipt inputs) (filter selected [minBound..maxBound])
   pure (J.object ["schema" J..= (1 :: Int),"baseline" J..= qualificationValue baseline,"refusals" J..= length results,"cases" J..= results])
   where
-    run admittedInputs control = do
+    run admittedReceipt admittedInputs control = do
+      wanted <- expectedFor admittedReceipt control
       (changedSources,changedObserved) <- mutate control sources observed
       let result = (if control == WrongSource then admitInputs changedSources else Right admittedInputs) >>= \selectedInputs -> admitReceipt selectedInputs changedObserved
           actual = case result of Left problem -> Just problem; Right _ -> Nothing
-      unless (actual == Just (expected control)) (Left (WrongRefusal control (expected control) actual))
-      pure (J.object ["control" J..= show control,"expected" J..= show (expected control),"actual" J..= fmap show actual])
+      unless (actual == Just wanted) (Left (WrongRefusal control wanted actual))
+      pure (J.object ["control" J..= show control,"expected" J..= show wanted,"actual" J..= fmap show actual])
