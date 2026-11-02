@@ -68,7 +68,7 @@ mutations side artifact symbols = do
           , at polled,0xe2822001,0xe3520002
           , jump (case pollThunk of CodeAddress pc -> CodeAddress (pc+12)) initialize .&. 0x0fffffff
           , jump (case pollThunk of CodeAddress pc -> CodeAddress (pc+16)) (CodeAddress (pollPc+4)) ])
-      symbol address name = C.pack (showHex address ""++" T "++name++"\n")
+      symbol address name = C.pack (showHex address ""++" 00000000 T "++name++"\n")
       extendedSymbols = B.concat
         [ symbol start "__loader_orchestration_start"
         , symbol (start+fromIntegral (B.length extended)) "__loader_orchestration_end"
