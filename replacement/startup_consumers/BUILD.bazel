@@ -1,0 +1,68 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_library(
+    name = "startup-consumers-lib",
+    srcs = [
+        "Replacement/StartupConsumers/Effects.hs",
+        "Replacement/StartupConsumers/Evidence.hs",
+        "Replacement/StartupConsumers/Source.hs",
+        "Replacement/StartupConsumers/Wire.hs",
+        "Replacement/StartupConsumers/Witness.hs",
+        "Replacement/StartupConsumers/WitnessControls.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:interface-initializer-lib",
+        "//emulation:loader-prefix-witness-lib",
+        "//emulation:primary-initializer-source-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
+        "//host:update-container",
+        "//replacement/kernel_install:kernel-install-artifact",
+        "//replacement/startup_composition:startup-composition-artifact",
+        "//replacement/startup_dispatch:startup-dispatch-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "startup-consumers-check",
+    srcs = ["WitnessMain.hs"],
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+    ],
+    data = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":startup-consumers-lib",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+        "//host:host-support",
+        "//replacement/kernel_install:kernel-install-artifact",
+        "//replacement/startup_composition:startup-composition-artifact",
+        "//replacement/startup_dispatch:startup-dispatch-artifact",
+    ],
+)
+
+haskell_test(
+    name = "startup-consumers-tests",
+    srcs = ["Tests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":startup-consumers-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//replacement/kernel_install:kernel-install-artifact",
+    ],
+)

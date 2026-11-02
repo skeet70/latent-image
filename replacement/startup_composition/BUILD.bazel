@@ -1,0 +1,69 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_library(
+    name = "startup-composition-artifact",
+    srcs = ["Replacement/StartupComposition/Artifact.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:update-container",
+        "//replacement/kernel_install:kernel-install-artifact",
+        "//replacement/startup_dispatch:startup-dispatch-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "stage-startup-composition",
+    srcs = ["StageMain.hs"],
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+    ],
+    data = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":startup-composition-artifact",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "startup-composition-tests",
+    srcs = ["Tests.hs", "//replacement/startup_dispatch:Fixtures.hs"],
+    main_file = "Tests.hs",
+    args = [
+        "$(rootpath //replacement/startup_dispatch:startup-dispatch-image.bin)",
+        "$(rootpath //replacement/startup_dispatch:startup-dispatch-image.symbols)",
+        "$(rootpath //replacement/kernel_install:kernel-install-image.bin)",
+        "$(rootpath //replacement/kernel_install:kernel-install-image.symbols)",
+    ],
+    data = [
+        "//replacement/startup_dispatch:startup-dispatch-image.bin",
+        "//replacement/startup_dispatch:startup-dispatch-image.symbols",
+        "//replacement/kernel_install:kernel-install-image.bin",
+        "//replacement/kernel_install:kernel-install-image.symbols",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":startup-composition-artifact",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+        "//replacement/kernel_install:kernel-install-artifact",
+        "//replacement/startup_dispatch:startup-dispatch-artifact",
+    ],
+)

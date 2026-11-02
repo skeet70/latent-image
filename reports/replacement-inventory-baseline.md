@@ -910,7 +910,7 @@ Acceptance for that increment requires all of the following:
 6. Discriminate wrong root source/target, skipped/reordered cache operation, missing/late stores, whole-record off-by-one zeroing, scalar `122` corruption, peer mutation/restoration and out-of-range writes. Marker-not-3 must retain the already-published roots and stop at its nonreturning loop; an injected nonzero installer result must be rejected at the dispatcher's separate nonreturning boundary, not counted as a natural stock error.
 7. Keep the initialized image4 callbacks/cursors, separate wrappers, retained kernel tables/pools, cache semantics and later release/reuse obligations in the retirement inventory. Updating receipts, report and ledger qualifies only this finite installation increment.
 
-Current acceptance includes source recovery, reviewed native/admission/staging, bounded mode-0 retained/owned installation agreement, and the owned bad-marker control below. Completion publication, actual later startup consumers, mode-1/nonzero-preimage qualification, resource lifetimes and production cutover remain open.
+Current mode-0 acceptance includes source recovery, reviewed native/admission/staging, retained/owned installation agreement, the owned bad-marker control, completion publication, root1 initialization/readiness and actual first task/storage/message consumer agreement. The two-component #155 artifact also agrees at the outer dispatcher and selected operation boundaries. Mode-1/nonzero-preimage qualification, whole resource lifetimes and production cutover remain open.
 
 #### Owned installation artifact
 
@@ -948,7 +948,83 @@ The marker-0 run publishes exactly the two roots and executes the same retained 
 
 #### Remaining installation acceptance
 
-The finite mode-0 publication/bookkeeping transition now has natural caller/backing, byte-confinement, private-ABI, retained/owned comparison and bad-marker evidence. It has not reached the later primary completion store or root1 initializer/consumer, first task/storage/message consumers, mode 1, distinct nonzero resource preimages, post-installation pool/storage lifetimes or packaged production cutover. The seven acceptance requirements above are unchanged. No general kernel/table/service ownership, post-return scheduler equivalence, later consumer agreement or silicon cache-coherence result is credited.
+The finite mode-0 publication/bookkeeping transition has natural caller/backing, byte-confinement, private-ABI, retained/owned comparison and bad-marker evidence. The independently consumed v4 cohort below reaches primary completion, all required root1 initialization stores and actual root1 consumption, then closes the globally first task-wrapper, reservation, separate-storage, construction, send and receive invocations. Mode 1, distinct nonzero resource preimages, post-installation pool/storage lifetimes and packaged production cutover remain open. The seven acceptance requirements above are unchanged. No general kernel/table/service ownership, post-return scheduler equivalence or silicon cache-coherence result is credited.
+
+#### Completion publication and late root1 readiness
+
+The A completion boundaries are distinct: `0x40a08` stores 1 to `0x400a00c4`, `0x40a0c` is the pre-DSB committed readback and DSB instruction, and `0x40a10` is post-DSB. B loads the word at `0xd0a44`, exposes the loaded value at `0xd0a48` and branches at `0xd0a4c`. Any nonzero value releases that poll. The source does not require the successful B poll to occur after A's DSB.
+
+B's late initializer has callsite `0xd0aac`, body entry `0xd0430` and caller continuation `0xd0ab0`. Its natural entry frame uses SP `0x400f3410`. The independent loader-B source model names 1,419 stores: 94 service words, five extension words and eleven words for each of 120 task descriptors. Publishing root1 `0x400ddaa0` at `0x96bd24` does not imply those stores have completed.
+
+The source-identified B critical path enters `0x7235d8`, calls root0 identity at `0x7235f4`, selects the root pair at `0x7235fc`, loads root1 service `+0x164` at `0x723600` and calls it at `0x723604`. The expected slot is `0x400ddc04 -> 0xd1140`. Calling this the first root1 consumer requires both-core read monitoring armed before publication, classification of initializer-internal reads, and committed slot survival from initializer completion to the actual observed consumption. The source path alone does not establish that ordering.
+
+#### Later resource and message contracts
+
+Task reservation `0x725c6c` and separate storage reservation `0x723470` have distinct twelve-byte record families and cursors. Task records begin at `0x40a0fc44`, the task cursor is `0x4089ea98`, and the pool is `[0x40a10200,0x40a5b200)`. Separate storage records begin at `0x409c3904`, the cursor is `0x4089ea90`, and its pool is `[0x409c4460,0x40a0f460)`. Each pool has capacity `0x4b000`. Fresh cursor increments use requested bytes with the low two bits cleared. Separate storage does not apply the task allocator's bit-30 pointer treatment. Failure does not establish an initialized output pointer.
+
+Message construction `0x724cdc(id,{count,size})` first reserves `4*count` bytes at separate-storage index `id+119`, publishes the pointer through `0x40a0f870+4*(id-1)`, and calls the selected root's `+0xa0` service with `{0,count,pointer}`. It then publishes size state and reserves `count*(size+4)` bytes at index `id-1`, using pair `0x40a0f464+8*(id-1)`, before calling root `+0xe4` with `{0,count,size+4,pointer}`. A second-service failure calls `+0xa4` but does not roll back all earlier publications or allocations.
+
+Send `0x72503c` consumes a twelve-byte descriptor `{u16 kind,u8 field2,u8 field3,u32 length,u32 payload}`. Its callback through `0x4089ea94` runs before the later descriptor and payload loads. A witness must capture callback-modified inputs. Root `+0x170` acquires the buffer; header stores target offsets `4,6,7,8`, payload starts at `+12`, and the first four bytes are preserved. Root `+0x148` selects submission `+0xb0` exactly when its result is 1, otherwise `+0xac`. Failed submission releases through `+0xf8` and returns the original submission status.
+
+Receive `0x725318` calls root `+0xc8`, fills the caller's descriptor and copies from buffer `+12` into the caller-provided payload pointer, then calls `+0xf8`. The release status is discarded and success returns zero. The wrapper does not check destination payload capacity. A witness must admit the actual dynamic destination interval before its first write and keep the receive open through release. Root/task/storage/message families not observed on a natural route remain non-observations.
+
+#### Joint dispatcher and installer admission (#155)
+
+`replacement/startup_composition` admits the existing owned #146 dispatcher and owned #150 installer together. It derives typed call-boundary metadata from every admitted dispatcher path, including the actual Install call SP, live caller words and return continuation. It requires eight-byte alignment at every Install call and places the installer's private frame strictly below that incoming SP. It does not derive the call SP from the dispatcher's overall low-water mark.
+
+`E-STARTUP-COMPOSITION-HOST-150` records the independently reviewed implementation, one corrected host-test execution and one canonical staging invocation. The 376-byte dispatcher and 336-byte installer occupy their existing decoded windows `[0x69cdf8,0x69cf84)` and `[0x725a04,0x725b54)` in one candidate. The stager preserves every decoded byte outside those windows and the existing container guarantees. The admitted dispatcher low is `S-72`, its Install call is `S-64`, and the installer low is incoming SP minus 40, so the joined owned low is `S-104`. At that call the live caller words are offsets `[-64,-60,-56,-52,-16,-12,-8,-4]` relative to S, all disjoint from the installer's private scratch below `S-64`.
+
+The host controls include positive compositions with different proven Install call depths, a dispatcher-admitted but eight-byte-misaligned Install call refused by composition, missing component images/symbols and a changed installer cache-call target. The v4 cohort below independently qualifies natural writable backing, both-core alias/TCM separation, continuous object writers, actual first-consumer outcomes and finite comparison at the outer dispatcher boundary for this two-component artifact. Retained callees outside the two owned components keep their separate stack premises. No application, table-producer, allocator, scheduler, message-service or whole-firmware ownership follows from this composition.
+
+#### Natural consumer observation and preserved refusals
+
+`E-STARTUP-CONSUMER-MECHANISM-BUILDS-150` records the reviewed three-role observer and independent public consumer at source `190c5b4`, followed by execution-frame correction `016e586`. The public source-model test executes once and passes; the corrective build reuses its unchanged cached result. Earlier compiler failures execute no tests, and their complete diagnostics remain preserved. SDK build checks do not qualify the private natural consumer cohort.
+
+`E-STARTUP-CONSUMER-NATURAL-REFUSALS-150` preserves two distinct retained natural invocations, each executed once. The first refuses at 6,489,780 instructions when the earliest core1 receive remains pending at SP `0xa121a0`, LR `0x6c6bb0`, and another scheduled task enters receive at SP `0xa131a0` with the same LR. The initial observer confused task-switched frames with reentrancy. The reviewed correction keys owned source attribution by core, CPSR mode, FP and SP, including source-derived pre-pop and error-helper frames; later calls remain census-only and cannot replace the earliest receive.
+
+The corrected invocation reaches 7,126,404 instructions, then exhausts exactly 1,048,576 retained raw rows. Its final watch retains 95 rows and reports its 95-record bound; the producer's subsequent reconciliation error is a capture failure, not an installer mismatch. The last observed loop `0x6fcf9c..0x6fcfa8` fills an unrelated `0x20000`-byte block at `0x41aed800` with `0xff`. The first send is still unobserved and the earliest receive is unclosed. Neither invocation is accepted consumer evidence.
+
+The consumer-witness boundary requires complete fetch capture through the outer phase-0 return, then explicitly scoped fetch capture for the two owned carriers, six family entries, atomic lock instructions and armed source/dynamic sites. Data-resource access monitoring and whole-carrier writer monitoring remain gapless. Scoped fetch evidence does not claim whole-machine instruction-clock continuity after the prefix. Instruction attribution for monitored accesses outside that scope must come from the separately qualified opt-in SDK attribution, not reconstructed or fabricated global fetch rows.
+
+The scoped v3 retained, installer-owned and joined invocations each reach all six first consumer returns with no producer watch violation. They remain unqualified. Independent consumption first rejects a host predicate that treated watch overlap as containment, then a predicate demanding an installer-entry mode snapshot that was never admitted. The reviewed corrections use the SDK's whole-access overlap semantics and the actual canonical getter read, fetch attribution and call/return handoff for the consumed zero mode. They do not manufacture a memory view.
+
+The corrected public consumer then rejects all three receipts at the complete initializer contract. Each root object was admitted as `0x1628` bytes, excluding the required source word at offset `+0x1628`. Neither primary cell `0x4004f108` nor secondary cell `0x400df0c8` has admitted bytes or any raw access evidence; the required secondary store at `0xd08f4` was not captured. The 1,419-word source models and initializer ABI checks remain unchanged. Source literals cannot supply those missing observations. The corrected runtime extent is `0x162c` for both roots; v3 stays preserved as unqualified evidence.
+
+`E-STARTUP-CONSUMER-COMPLETE-ROOT-CAPTURE-150` preserves the corrected v4 cohort, independently reviewed at `b047eaa`. Both root extents are `0x162c`; admission requires complete source-derived root spans and every ordered secondary store before replay, memory lookups or ABI checks. Retained, installer-owned and joined roles execute once each with no machine/watch error, at 12,861,312, 12,867,362 and 12,867,912 instructions. The owned cache continuation is `0x725a84`, whereas its final private LR remains `0x725a40`; reviewed public correction `afd3374` separates those contracts without changing either.
+
+The first three-role comparison refuses equality of unrelated late endpoint state. An additional unselected core0 receive appears only in the installer-owned observation, and joined endpoint current/selected task nodes differ from task 91 to task 95. Whole task-pool bytes and globally interleaved writer streams also differ. These differences remain evidence; they do not establish scheduler divergence attributable to installation or scheduler equivalence.
+
+The finite agreement boundary is the outer dispatcher return plus actual first-operation preimages and committed effects. It preserves all outer-admitted public data before entry and at that return, the caller-owned bytes and saved frame, all seven task-descriptor words, actual root/slot/target selection, operation arguments, semantic object identities and statuses. Source-defined reservation, task creation/activation, message construction, send and receive boundaries carry their own object/buffer effects. Every receipt still independently requires complete resource coverage, replay, source-writer classification and globally first-family census. Later endpoint scheduler state, unrelated subsequent census totals and background writer interleavings are not compared.
+
+#### Qualified first-consumer agreement
+
+`E-STARTUP-CONSUMER-NATURAL-COMPARISON-150` records the independently reviewed public consumer at `a6f8e49`, one exercised source-model test, and one successful strict comparison of the unchanged v4 receipts. The result is `retained-installer-joined-agree` over 40 outer public regions, six globally first consumer invocations and 55 typed operation-boundary effects per role. The three roles use independently saved/imported preexecution resets. Public host corrections consume existing evidence without reexecuting a guest.
+
+Both root producers are source-bound independently. Every required secondary initialization store is observed before actual root1 service consumption, with full committed slot survival and both-core monitoring armed before root publication. In the retained role, the completion store/pre-DSB/post-DSB points are clocks 6,142,191/6,142,192/6,142,193; the B initializer enters at 6,143,249 and returns at 6,151,883. Its first root1 critical call is clock 6,433,579 at `0x723604`, targeting `0xd1140` through committed slot `0x400ddc04`. The consumer does not require B's successful nonzero poll to occur after A's DSB.
+
+| Globally first family | Selected core | Committed outcome |
+| --- | --- | --- |
+| Task wrapper | B | Reservation, auxiliary registration and creation complete; explicit activation returns `-25`, preserved by the wrapper |
+| Task reservation | B | Zero status and source-defined record/cursor/output effects |
+| Separate storage reservation | A | Zero status and source-defined record/cursor/output effects |
+| Message construction | A | Zero status and committed selected queue/pool/publication effects |
+| Message send | A | Zero status; actual callback-modified input and committed 28-byte payload |
+| Message receive | B | The original blocked invocation completes with zero status, a 28-byte copied payload and observed release |
+
+The per-core coverage report separately names `SelectedInvocationReturned`, `CensusEntryOnly` and `NoEntryObserved`. This is the first global invocation of each family, not six completed families on each core. A later completed or entry-only call never replaces a selected blocked call.
+
+`E-STARTUP-CONSUMER-RECEIPT-REFUSALS-150` records 171 passing serialized-input refusals: 52 exact-constructor controls per role, three coherent semantic comparison controls per role, three checkpoint controls and three role/cohort controls. Each coherent descriptor-tail, actual-copy-dependent payload-byte and caller-owned-byte mutation remains individually admitted, then fails comparison with `ComparisonRejected`. These controls retain meaningful equality while excluding unread compiler scratch and unrelated endpoint scheduler state. They execute no guest.
+
+| #150 issue acceptance | Status and evidence |
+| --- | --- |
+| Complete reached installation contract | Met by the canonical source records and complete ordered contract above |
+| Natural owned committed state and declared writes | Met for the admitted mode-0 context by finite installation qualification and the v4 source-consumed cohort |
+| Retained/owned agreement at actual installation consumers | Met for the six first global families and root0/root1 selection, targets, caller ABI and initialization order by `E-STARTUP-CONSUMER-NATURAL-COMPARISON-150` |
+| Status, failure, nonreturning and discriminating controls | Met for the finite scope by the existing bad-marker/emitted/receipt controls and the new 171-control cohort |
+| Continuous exclusion, complete lifetimes and retained duties | Partial: in-place code/resource guards cover the observed interval and retained duties are recorded; whole pool/storage release/reuse lifetimes and general kernel/service closure remain open |
+| Qualified package, inventory and obsolete production-path retirement | Partial: the finite and two-component artifacts, commands and ledger are qualified; packaged production cutover and retirement remain open |
+
+The first owned increment remains the 336-byte interface-root publication/bookkeeping boundary. The joined 376-byte dispatcher plus installer is the first two-component #155 artifact, not application independence or whole-firmware replacement. Mode 1 and distinct nonzero resource preimages remain unqualified. Output explicitly sets `post_return_scheduler_equality=false`; neither the finite comparison nor scoped fetch evidence claims whole-machine post-prefix continuity, scheduler equivalence, silicon cache coherence or general resource reclamation.
 
 ### 8.13 Startup task consumption and first scheduling contract (#151)
 
