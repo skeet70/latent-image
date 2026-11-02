@@ -7,6 +7,12 @@ use std::{collections::{BTreeMap, BTreeSet}, num::NonZeroUsize, path::{Path, Pat
 mod continuation_view;
 mod loader_continuations_check;
 mod loader_orchestration_owned;
+mod loader_startup_program;
+mod startup_joined;
+#[path = "startup_consumers.rs"]
+mod shared_consumers;
+#[path = "startup_dispatch.rs"]
+mod shared_dispatch;
 use loader_orchestration_owned::{Program, ProgramBinding, Side};
 use continuation_view::{ByteCount, Digest, EventId, FileBinding, Resource, Snapshot, Words};
 
@@ -122,7 +128,7 @@ const TIMER_LIMIT:usize=3_000_000;
 struct TimerWatch {start:Count,end:Count,range:[Guest;2],limit:usize,batch:Option<TransactionBatch>,error:Option<String>}
 
 #[derive(Default)]
-struct Observation {events:Vec<Event>,calls:Vec<Call>,snapshots:Vec<Snapshot>,pulses:Vec<Pulse>,cursor:usize,plain_views:BTreeSet<u32>,image5_seen:bool,loader_sp:[Option<Guest>;2],first_loader:Option<EventId>}
+struct Observation {events:Vec<Event>,calls:Vec<Call>,snapshots:Vec<Snapshot>,pulses:Vec<Pulse>,cursor:usize,plain_views:BTreeSet<u32>,image5_seen:bool,loader_sp:[Option<Guest>;2],first_loader:Option<EventId>,flexible_origin:bool}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase { Setup, Root, DiagnosticReturn, Idle0, Idle1AndStandby }
@@ -179,7 +185,12 @@ impl Observation {
         let ring=match pc.0{0x41ad4|0x41ad8|0x41adc|0x41ae0|0x41ae4|0x41ae8=>Some(registers.r[3]),0x41b78|0x41b7c=>Some(registers.r[8]),0x41b80 if self.events.iter().rev().find(|event|event.core==core).is_some_and(|event|event.pc.0==0x41b7c)=>Some(registers.r[8]),_=>None};
         if let Some(base)=ring{let address=base.checked_add(0x40).ok_or("elapsed ring word address overflows")?;let physical=address&!0x40000000;if address%4!=0||!(0xa0840..0xc0900).contains(&physical){return Err("elapsed ring word is outside the shared ring".into());}state.push(reader.words(Guest(address),1)?);}
         for (address,words) in [(0xa00c4,1),(0x61c000,8),(0x61c1a4,24),(0x61c400,4),(0x40000,8),(0xd0000,8),(0x5927c,1),(0xe923c,1),(0x4f10c,3),(0xdf0cc,3),(0x63460,14),(0xf3420,14),(0xa0800,14),(0x96bd20,2),(0x89f784,6),(0x89f8ac,1),(0x944440,9),(0x914834,1),(0x972e88,3),(0x8e1900,8),(0x9c2f54,2)]{state.push(reader.words(Guest(address),words)?);}
-        if machine.instructions()<=8_000_000{if let Some(sp)=self.loader_sp[usize::from(core)]{state.push(reader.words(sp,4)?);}}
+        if self.flexible_origin || machine.instructions()<=8_000_000{if let Some(sp)=self.loader_sp[usize::from(core)]{state.push(reader.words(sp,4)?);}}
+        if self.flexible_origin && carrier(pc).is_some() {
+            for (address,words) in [(0x633e8,30),(0x400633e8,30),(0xf33c8,22),(0x400f33c8,22)] {
+                state.push(reader.words(Guest(address),words)?);
+            }
+        }
         if pc.0==0x69d2e0{let descriptor=reader.words(Guest(registers.r[0]),2)?;let header=Guest(descriptor.values[1]);state.push(descriptor);state.push(reader.words(header,4)?);}
         let descriptor=if pc.0==0x725dd8{Some(reader.words(Guest(registers.r[0]),7)?)}else if matches!(pc.0,0x73be5c|0x73be60|0x73be70|0x73be74){Some(reader.words(Guest(registers.r[4]),6)?)}else{None};
         let payload=if pc.0==0x73b9c4{Some(reader.words(Guest(registers.r[2]),1)?)}else{None};
@@ -189,16 +200,17 @@ impl Observation {
         if target.0%4!=0{return Err("computed target is outside the admitted A32 entry set".into());}catalog.word(target)?;
         if diagnostics(target){return Err("computed transfer would enter a diagnostic body".into());}
         if !machine.traces.sites.contains_key(&target.0){machine.traces.add_sites(&machine.session,BTreeMap::from([(target.0,"temporary-boundary".into())]))?;}
+        machine.traces.stop_labels.insert("temporary-boundary".into());
         Ok(())
     }
     fn collect(&mut self,machine:&mut Machine,catalog:&Catalog,maps:&[MemoryMap],output:&Path,permanent:&BTreeMap<u32,String>,static_calls:&[StaticCall],program:&Program)->Result<(),String>{
-        if machine.traces.hits.len()>=TRACE_LIMIT{return Err("continuation trace bound exhausted".into());}
+        if machine.traces.hits.len()>=(if self.flexible_origin {131_072}else{TRACE_LIMIT}){return Err("continuation trace bound exhausted".into());}
         while self.cursor<machine.traces.hits.len(){
             let hit=&machine.traces.hits[self.cursor];let core=Core::try_from(hit.core)?;let pc=Guest(u32::from_str_radix(hit.address.strip_prefix("0x").ok_or("trace PC prefix absent")?,16).map_err(|error|error.to_string())?);
             if hit.instructions!=machine.instructions(){return Err("stopped trace event is no longer live".into());}
             if !program.execution_allowed(pc){return Err("carrier fetch lies outside the admitted executable code".into());}
             let first_carrier=self.first_loader.is_none()&&carrier(pc).is_some();
-            if first_carrier&&(pc!=Guest(0xd09ac)||core!=Core::Secondary||machine.instructions()!=5_861_929){return Err("first carrier fetch differs from the canonical reset caller".into());}
+            if first_carrier&&(pc!=Guest(0xd09ac)||core!=Core::Secondary||(!self.flexible_origin&&machine.instructions()!=5_861_929)){return Err("first carrier fetch differs from the canonical reset caller".into());}
             let id=self.capture(machine,catalog,maps,core,pc)?;self.cursor+=1;
             if first_carrier{self.first_loader=Some(id);}
             if diagnostics(pc){return Err("natural route reached a diagnostic body before execution".into());}
@@ -231,6 +243,7 @@ impl Observation {
                 if regs.sp.0!=context.values[0]{return Err("selected stack differs from the loaded saved context".into());}
                 let target=Guest(context.values[1]);self.events[id.0].state.push(context);self.target(machine,catalog,target)?;
                 let addresses=if pc.0==0x436e8{[Guest(0x43688),Guest(0x436e4),Guest(0x436e8)]}else{[Guest(0xd3688),Guest(0xd36e4),Guest(0xd36e8)]};machine.traces.remove_sites(&machine.session,&addresses)?;
+                if self.flexible_origin {self.loader_sp[usize::from(core)]=None;}
             }
             if matches!(pc.0,0x43758|0xd3758){let task=continuation_view::words(&machine.session,maps,Guest(regs.r[2]),3)?;let link=continuation_view::words(&machine.session,maps,Guest(regs.r[1].checked_add(8).ok_or("task creation-record link overflows")?),1)?;if link.values[0]!=regs.r[2]{return Err("current task creation-record link differs".into());}self.target(machine,catalog,Guest(task.values[2]))?;self.events[id.0].state.extend([task,link]);machine.traces.remove_sites(&machine.session,&[pc])?;}
             let resources:Vec<Resource>=match pc.0 {
@@ -289,12 +302,30 @@ fn epoch(machine:&mut Machine,observation:&mut Observation,catalog:&Catalog,maps
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum OptionKey { Run,Update,Rom,Analysis,Output,Verify,SourceCalls,OwnedArtifact,CompareRetained,CompareOwned }
-impl OptionKey {fn parse(value:&std::ffi::OsStr)->Result<Self,String>{match value.to_str(){Some("--run")=>Ok(Self::Run),Some("--update")=>Ok(Self::Update),Some("--boot-rom")=>Ok(Self::Rom),Some("--analysis")=>Ok(Self::Analysis),Some("--output")=>Ok(Self::Output),Some("--verify")=>Ok(Self::Verify),Some("--source-calls")=>Ok(Self::SourceCalls),Some("--owned-artifact")=>Ok(Self::OwnedArtifact),Some("--compare-retained")=>Ok(Self::CompareRetained),Some("--compare-owned")=>Ok(Self::CompareOwned),_=>Err(USAGE.into())}}}
+enum OptionKey { Run,Update,Rom,Analysis,Output,Verify,SourceCalls,OwnedArtifact,CompareRetained,CompareOwned,SharedArtifact,SharedRole,SharedCheck,SharedCompareRetained,SharedCompareJoined,SharedRefusalControls,SharedRefusalJoined }
+impl OptionKey {fn parse(value:&std::ffi::OsStr)->Result<Self,String>{match value.to_str(){Some("--run")=>Ok(Self::Run),Some("--update")=>Ok(Self::Update),Some("--boot-rom")=>Ok(Self::Rom),Some("--analysis")=>Ok(Self::Analysis),Some("--output")=>Ok(Self::Output),Some("--verify")=>Ok(Self::Verify),Some("--source-calls")=>Ok(Self::SourceCalls),Some("--owned-artifact")=>Ok(Self::OwnedArtifact),Some("--compare-retained")=>Ok(Self::CompareRetained),Some("--compare-owned")=>Ok(Self::CompareOwned),Some("--shared-artifact")=>Ok(Self::SharedArtifact),Some("--shared-role")=>Ok(Self::SharedRole),Some("--shared-check")=>Ok(Self::SharedCheck),Some("--shared-compare-retained")=>Ok(Self::SharedCompareRetained),Some("--shared-compare-joined")=>Ok(Self::SharedCompareJoined),Some("--shared-refusal-controls")=>Ok(Self::SharedRefusalControls),Some("--shared-refusal-joined")=>Ok(Self::SharedRefusalJoined),_=>Err(USAGE.into())}}}
 fn drive()->Result<(),String>{
     let mut arguments=std::env::args_os().skip(1);let mut options=BTreeMap::new();
     while let Some(flag)=arguments.next(){if options.insert(OptionKey::parse(&flag)?,PathBuf::from(arguments.next().ok_or(USAGE)?)).is_some(){return Err(USAGE.into());}}
+    if options.contains_key(&OptionKey::SharedRole) { return startup_joined::drive(options); }
     let analysis=options.remove(&OptionKey::Analysis).ok_or(USAGE)?;
+    if let Some(root)=options.remove(&OptionKey::SharedCheck) {
+        let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;
+        if !options.is_empty(){return Err(USAGE.into());}
+        return loader_continuations_check::shared::check(&root,&analysis,&output);
+    }
+    if let Some(retained)=options.remove(&OptionKey::SharedCompareRetained) {
+        let joined=options.remove(&OptionKey::SharedCompareJoined).ok_or(USAGE)?;
+        let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;
+        if !options.is_empty(){return Err(USAGE.into());}
+        return loader_continuations_check::shared::compare(&retained,&joined,&analysis,&output);
+    }
+    if let Some(retained)=options.remove(&OptionKey::SharedRefusalControls) {
+        let joined=options.remove(&OptionKey::SharedRefusalJoined).ok_or(USAGE)?;
+        let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;
+        if !options.is_empty(){return Err(USAGE.into());}
+        return loader_continuations_check::shared::refusal_controls(&retained,&joined,&analysis,&output);
+    }
     if let Some(output)=options.remove(&OptionKey::SourceCalls){
         if !options.is_empty(){return Err(USAGE.into());}
         let catalog=Catalog::open(&analysis)?;std::fs::create_dir(&output).map_err(|error|error.to_string())?;

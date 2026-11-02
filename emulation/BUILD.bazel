@@ -2939,6 +2939,12 @@ sh_binary(
 )
 
 sh_binary(
+    name = "loader-startup-capture",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-loader-continuations"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
     name = "idle-tasks",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-idle-tasks"],
     visibility = ["//visibility:public"],

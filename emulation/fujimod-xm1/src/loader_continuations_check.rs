@@ -10,6 +10,19 @@ use std::{collections::BTreeMap, fs::File, io::Read, path::{Component, Path}};
 mod loader_reset_check;
 #[path="loader_timer_check.rs"]
 mod loader_timer_check;
+#[path="loader_shared_check.rs"]
+pub(super) mod shared;
+
+#[derive(Clone,Copy)]
+struct RouteView<'a> {
+    origin:Option<super::EventId>,events:&'a [Event],calls:&'a [super::Call],snapshots:&'a [super::Snapshot],
+    pulses:&'a [super::Pulse],instructions:super::Count,menu:&'a Result<Option<[u32;3]>,String>,timer_transactions:&'a FileBinding,
+}
+impl<'a> From<&'a Report> for RouteView<'a> {
+    fn from(report:&'a Report)->Self {Self {origin:report.origin,events:&report.events,calls:&report.calls,snapshots:&report.snapshots,
+        pulses:&report.pulses,instructions:report.instructions,menu:&report.menu,timer_transactions:&report.timer_transactions}}
+}
+impl<'a> From<&RouteView<'a>> for RouteView<'a> {fn from(view:&RouteView<'a>)->Self {*view}}
 const CANONICAL_RUN:&[u8]=include_bytes!("../data/xm1-150.json");
 
 #[derive(Deserialize)]
@@ -71,14 +84,15 @@ fn snapshot(root:&Path,sample:&super::Snapshot,catalog:&Catalog)->Result<(),Stri
     if matches!(sample.resource,Resource::LoaderA|Resource::LoaderB){require(sample.expected_equal,"loader carrier differs from canonical source")?;}
     Ok(())
 }
-fn event<'a>(report:&'a Report,id:super::EventId)->Result<&'a Event,String>{report.events.get(id.0).filter(|event|event.id.0==id.0).ok_or_else(||"call event reference absent".into())}
+fn event<'a>(report:impl Into<RouteView<'a>>,id:super::EventId)->Result<&'a Event,String>{let report=report.into();report.events.get(id.0).filter(|event|event.id.0==id.0).ok_or_else(||"call event reference absent".into())}
 fn in_class(row:&super::Row,classes:&[super::Class])->Result<bool,String>{
     let end=u64::from(row.physical.0).checked_add(row.size).ok_or("access extent overflow")?;require(row.size>0 && end<=1u64<<32,"access extent is not a positive 32-bit span")?;
     Ok(classes.iter().any(|class|class.kinds.contains(&row.source)&&u64::from(row.physical.0)<class.range[1]&&class.range[0]<end))
 }
 fn guarded(classes:&[super::Class],span:[u64;2],fetch:bool)->bool{classes.iter().any(|class|class.range==span&&[Access::CpuWrite,Access::HostWrite,Access::ModelBusWrite].iter().all(|kind|class.kinds.contains(kind))&&(!fetch||class.kinds.contains(&Access::CpuFetch)))}
 
-fn route(report:&Report)->Result<(),String>{
+fn route<'a>(report:impl Into<RouteView<'a>>)->Result<(),String>{
+    let report=report.into();
     require(report.pulses.len()==15,"canonical ADC pulse count differs")?;let mut position=80_000_000u64;
     for (index,pulse) in report.pulses.iter().enumerate(){
         let expected=match index{0..=11=>Key::Up,12|13=>Key::Ok,_=>Key::Menu};if index==14{position=position.checked_add(40_000_000).ok_or("menu-settle endpoint overflows")?;}
@@ -91,20 +105,25 @@ fn route(report:&Report)->Result<(),String>{
 }
 
 struct LoaderBounds<'a> {entry:&'a Event,transfer:&'a Event,copy:Guest,code:[u64;2],frame:[u64;2],core:Core}
-fn loader_bounds(report:&Report,base:Guest,frame:Guest,core:Core)->Result<LoaderBounds<'_>,String>{
+fn loader_bounds<'a>(report:impl Into<RouteView<'a>>,base:Guest,frame:Guest,core:Core)->Result<LoaderBounds<'a>,String>{
+    loader_bounds_until(report,base,frame,core,8_000_000)
+}
+fn loader_bounds_until<'a>(report:impl Into<RouteView<'a>>,base:Guest,frame:Guest,core:Core,deadline:u64)->Result<LoaderBounds<'a>,String>{
+    let report=report.into();
     let pc=Guest(base.0+0x9ac);let entry=report.events.iter().find(|event|event.pc==pc&&event.core==core).ok_or("loader origin absent")?;
     let transfer=report.events.iter().find(|event|event.pc.0==base.0+0x36e8&&event.core==core).ok_or("loader frame endpoint absent")?;
-    require(entry.instructions.0<transfer.instructions.0&&transfer.instructions.0<=8_000_000,"loader lifetime is outside the prefix watch")?;
+    require(entry.instructions.0<transfer.instructions.0&&transfer.instructions.0<=deadline,"loader lifetime is outside its bounded watch")?;
     Ok(LoaderBounds {entry,transfer,copy:base,code:[u64::from(pc.0),u64::from(pc.0)+340],frame:[u64::from(frame.0),u64::from(frame.0)+16],core})
 }
 fn loader_copy(row:&super::Row,base:Guest)->bool{
     row.source==Access::ModelBusWrite&&row.address==base&&row.physical==base&&row.size==0x20000&&row.core.is_none()&&row.pc.is_none()&&row.instructions.is_none()&&row.value.is_none()
 }
 
-fn projections(report:&Report)->Result<(),String>{
+fn projections<'a>(report:impl Into<RouteView<'a>>)->Result<(),String>{
+    let report=report.into();
     for pc in [0x6a9840,0x6a9934]{require(report.events.iter().any(|event|event.pc.0==pc),"required producer return boundary absent")?;}
     let mut required=Vec::new();let mut image5=false;let mut plain=[false;3];
-    for observed in &report.events {
+    for observed in report.events {
         let resources:&[Resource]=match observed.pc.0{
             0x409ac=>&[Resource::LoaderA],0xd09ac if report.origin.is_some_and(|id|id.0==observed.id.0)=>&[Resource::LoaderA,Resource::LoaderB],0xd09ac=>&[Resource::LoaderB],
             0x6a8c04|0x6a9734=>&[Resource::Image5Bss],
@@ -230,8 +249,13 @@ fn verified_receipt(root:&Path,analysis:&Path,receipt:Vec<u8>)->Result<Verified,
     }
     require(missing_fetches.is_empty(),"observed loader boundary lacks raw carrier fetch")?;
     let timer=loader_timer_check::admit(root,&report,&timer_rows)?;
+    let (loader_calls,task_calls,loader_effects)=semantic_calls(root,RouteView::from(&report),catalog,&publications)?;
+    let verification=Verification {schema:4,scope:if program.owned(){Scope::OwnedNaturalObservation}else{Scope::CanonicalNaturalObservation},receipt:Digest::of(&receipt),events:report.events.len(),loader_calls,task_calls,snapshots:report.snapshots.len(),source_differences:report.snapshots.iter().filter(|sample|!sample.expected_equal).count()};
+    Ok(Verified {report,program,verification,publications,loader_effects,reset,timer})
+}
+fn semantic_calls(root:&Path,report:RouteView<'_>,catalog:&Catalog,publications:&[Publication])->Result<(usize,usize,Vec<LoaderEffect>),String>{
     let mut loader_calls=0;let mut task_calls=0;
-    for call in &report.calls {
+    for call in report.calls {
         let entered=event(&report,call.entry.ok_or("observed call lacks its actual entry")?)?;
         require(entered.pc==call.target&&entered.core==call.core&&entered.registers.sp==call.sp&&entered.registers.lr==call.continuation,"callee entry context differs")?;
         if let Some(before)=call.before {let before=event(&report,before)?;require(before.core==call.core&&before.registers.sp==call.sp&&before.pc.0.checked_add(4)==Some(call.continuation.0)&&branch(before,catalog)?==call.target&&before.instructions.0<=entered.instructions.0&&before.registers.r==entered.registers.r&&before.registers.cpsr==entered.registers.cpsr,"source call/target argument context or chronology differs")?;
@@ -254,7 +278,7 @@ fn verified_receipt(root:&Path,analysis:&Path,receipt:Vec<u8>)->Result<Verified,
     }
     let loader_effects=loader_semantics(&report)?;bind_publications(&report,&publications)?;
     let mut constructors=Vec::new();
-    for observed in &report.events {
+    for observed in report.events {
         let counted=(carrier_side(observed.pc).is_some()||(0xd985a4..0xd986ac).contains(&observed.pc.0)||(0x6a9844..0x6a9934).contains(&observed.pc.0)||matches!(observed.pc.0,0x73b554|0x69d2e0|0xd9858c|0x73be5c|0x73beac))&&branch(observed,catalog).is_ok();
         if counted{require(report.calls.iter().filter(|call|call.before.is_some_and(|id|id.0==observed.id.0)).count()==1,"observed source call was omitted or repeated")?;}
         if observed.pc.0==0x725dd8{require(report.calls.iter().filter(|call|call.kind==CallKind::Task&&call.entry.is_some_and(|id|id.0==observed.id.0)).count()==1,"observed task entry was omitted or repeated")?;}
@@ -281,12 +305,11 @@ fn verified_receipt(root:&Path,analysis:&Path,receipt:Vec<u8>)->Result<Verified,
         let callback=event(&report,publisher.returned.ok_or("callback publisher return absent")?)?;require(at(callback,cell)?==0x69cc6c,"committed diagnostic callback differs")?;
     }
     projections(&report)?;
-    for sample in &report.snapshots {require(sample.event.0<report.events.len(),"snapshot event absent")?;snapshot(root,sample,catalog)?;}
+    for sample in report.snapshots {require(sample.event.0<report.events.len(),"snapshot event absent")?;snapshot(root,sample,catalog)?;}
     require(report.calls.iter().filter(|call|call.kind==CallKind::Image5Entry).count()==1,"image5 header call extent differs")?;
     let setters:Vec<_>=report.calls.iter().filter(|call|call.kind==CallKind::Image5Service&&call.target.0==0x69cf84).collect();require(setters.len()==1,"diagnostic callback setter call census differs")?;
     let setter=event(&report,setters[0].entry.ok_or("setter entry absent")?)?;let setter_return=event(&report,setters[0].returned.ok_or("setter return absent")?)?;require(setter.registers.r[0]==0xed4a8c&&at(setter_return,0x89f794)?==0xed4a8c,"installed diagnostic callback or committed cell differs")?;
-    let verification=Verification {schema:4,scope:if program.owned(){Scope::OwnedNaturalObservation}else{Scope::CanonicalNaturalObservation},receipt:Digest::of(&receipt),events:report.events.len(),loader_calls,task_calls,snapshots:report.snapshots.len(),source_differences:report.snapshots.iter().filter(|sample|!sample.expected_equal).count()};
-    Ok(Verified {report,program,verification,publications,loader_effects,reset,timer})
+    Ok((loader_calls,task_calls,loader_effects))
 }
 
 fn carrier_side(pc:Guest)->Option<Side>{
@@ -314,7 +337,8 @@ fn sequence(side:Side)->&'static [LoaderStep]{
 struct LiveInputs {r0:Option<u32>,r1:Option<u32>}
 #[derive(Serialize, PartialEq, Eq)]
 struct LoaderEffect {side:Side,step:LoaderStep,inputs:LiveInputs,saved:[u32;4],returned:bool,dispatcher_result:Option<u32>}
-fn loader_semantics(report:&Report)->Result<Vec<LoaderEffect>,String>{
+fn loader_semantics<'a>(report:impl Into<RouteView<'a>>)->Result<Vec<LoaderEffect>,String>{
+    let report=report.into();
     let mut effects=Vec::new();
     for side in [Side::LoaderA,Side::LoaderB]{
         let mut calls:Vec<_>=report.calls.iter().filter(|call|call.kind==CallKind::Loader&&call.core==side.core()).collect();
@@ -354,7 +378,8 @@ enum Writer { Carrier(Side),Retained(Guest),Untimed }
 #[derive(Serialize, PartialEq, Eq)]
 struct Publication {source:Access,address:Guest,physical:Guest,size:u64,core:Option<Core>,value:Option<u64>,writer:Writer,#[serde(skip)]clock:Option<super::Count>}
 
-fn bind_publications(report:&Report,writes:&[Publication])->Result<(),String>{
+fn bind_publications<'a>(report:impl Into<RouteView<'a>>,writes:&[Publication])->Result<(),String>{
+    let report=report.into();
     let observed=|core,cell,value,low,high|writes.iter().any(|write|write.source==Access::CpuWrite&&write.core==Some(core)&&write.physical==Guest(cell)&&write.size==4&&write.value==Some(value)&&write.clock.is_some_and(|clock|low<clock.0&&clock.0<=high));
     for side in [Side::LoaderA,Side::LoaderB]{
         let call=|service:Service|report.calls.iter().find(|call|call.kind==CallKind::Loader&&call.core==side.core()&&call.target==service.address(side)).ok_or("required loader service absent");
@@ -414,7 +439,8 @@ enum ConsumerInput {
 }
 #[derive(Serialize)]
 struct CallEffect<'a> {core:Core,kind:CallKind,target:Guest,source:Option<Guest>,input:ConsumerInput,entry:BoundaryEffect<'a>,returned:BoundaryEffect<'a>}
-fn consumer_calls<'a>(report:&'a Report,timer:&'a loader_timer_check::Admission)->Result<Vec<CallEffect<'a>>,String>{
+fn consumer_calls<'a>(report:impl Into<RouteView<'a>>,timer:&'a loader_timer_check::Admission)->Result<Vec<CallEffect<'a>>,String>{
+    let report=report.into();
     let mut effects=Vec::new();
     for core in [Core::Primary,Core::Secondary]{
         let mut calls:Vec<_>=report.calls.iter().filter(|call|call.core==core&&call.kind!=CallKind::Loader).collect();
@@ -438,7 +464,8 @@ fn consumer_calls<'a>(report:&'a Report,timer:&'a loader_timer_check::Admission)
 }
 #[derive(Serialize)]
 struct TransferEffect<'a> {side:Side,selected_task:Guest,selected_sp:Guest,saved_context:ScalarEffect<'a>,creation:ScalarEffect<'a>,entry:Guest,argument:u32,cleanup:Guest}
-fn transfers<'a>(report:&'a Report,timer:&'a loader_timer_check::Admission)->Result<Vec<TransferEffect<'a>>,String>{
+fn transfers<'a>(report:impl Into<RouteView<'a>>,timer:&'a loader_timer_check::Admission)->Result<Vec<TransferEffect<'a>>,String>{
+    let report=report.into();
     [Side::LoaderA,Side::LoaderB].into_iter().map(|side|{
         let stopped=|offset|report.events.iter().find(|observed|observed.pc==Guest(side.base().0+offset)&&observed.core==side.core()).ok_or("first task transfer boundary absent");
         let handoff=stopped(0x36e8)?;let jump=stopped(0x3758)?;
@@ -455,19 +482,22 @@ struct PublicationEffect<'a> {source:Access,address:Guest,physical:Guest,size:u6
 #[derive(Serialize)]
 struct SemanticEffects<'a> {loaders:&'a [LoaderEffect],calls:Vec<CallEffect<'a>>,transfers:Vec<TransferEffect<'a>>,publications:BTreeMap<u32,Vec<PublicationEffect<'a>>>,resources:Vec<ResourceEffect<'a>>,menu:[u32;3]}
 fn semantic_effects(observed:&Verified)->Result<SemanticEffects<'_>,String>{
+    projected_effects((&observed.report).into(),&observed.loader_effects,&observed.publications,&observed.timer)
+}
+fn projected_effects<'a>(report:RouteView<'a>,loaders:&'a [LoaderEffect],writes:&'a [Publication],timer:&'a loader_timer_check::Admission)->Result<SemanticEffects<'a>,String>{
     let mut publications:BTreeMap<u32,Vec<PublicationEffect<'_>>>=BTreeMap::new();
-    for write in &observed.publications{
-        let relation=observed.timer.write(write);
+    for write in writes{
+        let relation=timer.write(write);
         let value=write.value.map(|value|relation.map_or(ScalarValue::Exact(value),ScalarValue::TimerElapsed));
         publications.entry(write.physical.0).or_default().push(PublicationEffect {source:write.source,address:write.address,physical:write.physical,size:write.size,core:write.core,value,writer:&write.writer});
     }
-    let mut snapshots:Vec<_>=observed.report.snapshots.iter().filter(|sample|!matches!(sample.resource,Resource::LoaderA|Resource::LoaderB)).collect();
+    let mut snapshots:Vec<_>=report.snapshots.iter().filter(|sample|!matches!(sample.resource,Resource::LoaderA|Resource::LoaderB)).collect();
     snapshots.sort_unstable_by_key(|sample|(sample.event.0,sample.resource as u8));
     let resources=snapshots.into_iter().map(|sample|{
-        let boundary=event(&observed.report,sample.event)?;
+        let boundary=event(report,sample.event)?;
         Ok(ResourceEffect {core:boundary.core,pc:boundary.pc,resource:sample.resource,physical_digest:&sample.files[2].sha256,expected_equal:sample.expected_equal,first_difference:sample.first_difference})
     }).collect::<Result<_,String>>()?;
-    Ok(SemanticEffects {loaders:&observed.loader_effects,calls:consumer_calls(&observed.report,&observed.timer)?,transfers:transfers(&observed.report,&observed.timer)?,publications,resources,menu:[1,5,2]})
+    Ok(SemanticEffects {loaders,calls:consumer_calls(report,timer)?,transfers:transfers(report,timer)?,publications,resources,menu:[1,5,2]})
 }
 #[derive(Serialize)]
 #[serde(rename_all="kebab-case")]

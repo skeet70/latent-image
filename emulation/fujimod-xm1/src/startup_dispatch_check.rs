@@ -9,7 +9,7 @@ const HIGH:u32=0x69cf84;
 #[derive(Deserialize)]
 struct Word {guest:u32,physical:u32,expected:u32,tcm:[[u32;2];2]}
 #[derive(Deserialize)]
-struct Hit {address:String,core:usize,instructions:u64,cpsr:u32,registers:BTreeMap<String,String>,sp:String,lr:String,code_word:Option<Word>}
+pub(super) struct Hit {address:String,core:usize,instructions:u64,cpsr:u32,registers:BTreeMap<String,String>,sp:String,lr:String,code_word:Option<Word>}
 #[derive(Deserialize)]
 struct Class {range:[u64;2],kinds:Vec<Source>}
 #[derive(Deserialize)]
@@ -95,10 +95,13 @@ fn service_interval(service:Service,entry:&Boundary,returned:&Boundary,interval:
 }
 
 fn project(invocation:&Invocation,rows:&[Row])->Result<Outcome,String>{
+    let lr=match(invocation.entry.core,invocation.phase){(Core::Primary,Phase::Install)=>0x40a00,(Core::Primary,Phase::Root)=>0x40a38,(Core::Primary,Phase::Idle)=>0x40a40,(Core::Primary,Phase::Diagnostic)=>0x40a6c,(Core::Secondary,Phase::Peer)=>0xd0af0,(Core::Secondary,Phase::Diagnostic)=>0xd0a6c,_=>return Err("unadmitted caller".into())};
+    project_at(invocation,rows,lr)
+}
+fn project_at(invocation:&Invocation,rows:&[Row],lr:u32)->Result<Outcome,String>{
     let entered=&invocation.entry; let returned=invocation.returned.as_ref().ok_or("caller return absent")?;
     caller(entered)?;caller(returned)?;
     let sp=if entered.core==Core::Primary {0x40063450}else{0x400f3410};
-    let lr=match(entered.core,invocation.phase){(Core::Primary,Phase::Install)=>0x40a00,(Core::Primary,Phase::Root)=>0x40a38,(Core::Primary,Phase::Idle)=>0x40a40,(Core::Primary,Phase::Diagnostic)=>0x40a6c,(Core::Secondary,Phase::Peer)=>0xd0af0,(Core::Secondary,Phase::Diagnostic)=>0xd0a6c,_=>return Err("unadmitted caller".into())};
     require(entered.pc.0==LOW && entered.registers.sp.0==sp && entered.registers.lr.0==lr && returned.pc.0==lr && returned.core==entered.core && returned.registers.sp.0==sp,"caller frame or continuation differs")?;
     require(entered.registers.r[4..12]==returned.registers.r[4..12],"caller-live registers changed")?;
     require(returned.registers.r[0]==if invocation.phase==Phase::Diagnostic{0x69cc6c}else{0},"consumed return differs")?;
@@ -198,6 +201,71 @@ fn check(directory:&Path,role:Role,source:&[u8],linked:&[u8])->Result<(Case,Vec<
         for mutation in &report.perturbations{word(&mutation.before,mutation.before.address.0)?;word(&mutation.after,mutation.after.address.0)?;}
     }
     Ok((report.case,outcomes,digest))
+}
+#[derive(Serialize,PartialEq)]
+pub(crate) struct SharedProjection {outcomes:Vec<Outcome>}
+pub(super) fn shared(invocations:&[Invocation],publications:&[super::Publication],rows:&[Row],trace_bytes:&[u8],callers:&[(usize,u32,u32)])->Result<SharedProjection,String>{
+    let trace:Vec<Hit>=serde_json::from_slice(trace_bytes).map_err(|error|error.to_string())?;
+    require(invocations.len()==6 && publications.len()==2 && callers.len()==6,"shared dispatcher census differs")?;
+    let mut outcomes=Vec::new();
+    for (core,phases) in [(Core::Primary,&[Phase::Install,Phase::Root,Phase::Idle,Phase::Diagnostic][..]),(Core::Secondary,&[Phase::Peer,Phase::Diagnostic][..])] {
+        let selected:Vec<_>=invocations.iter().filter(|invocation|invocation.entry.core==core).collect();
+        require(selected.iter().map(|invocation|invocation.phase).eq(phases.iter().copied()),"shared dispatcher phase order differs")?;
+        for invocation in selected {
+            correlate(&invocation.entry,&trace)?;
+            correlate(invocation.returned.as_ref().ok_or("shared dispatcher return absent")?,&trace)?;
+            for call in &invocation.calls {
+                correlate(&call.entry,&trace)?;correlate(call.returned.as_ref().ok_or("shared service return absent")?,&trace)?;
+                if let Some(attributes)=&call.attributes {correlate(&attributes.boundary,&trace)?;}
+            }
+            let phase=invocation.entry.registers.r[0];
+            let matching:Vec<_>=callers.iter().filter(|(owner,argument,_)|*owner==usize::from(core) && *argument==phase).collect();
+            require(matching.len()==1,"source-bound shared dispatcher caller is absent or repeated")?;
+            outcomes.push(project_at(invocation,rows,matching[0].2)?);
+        }
+    }
+    for core in [Core::Primary,Core::Secondary] {
+        let publication=publications.iter().find(|publication|publication.boundary.core==core).ok_or("shared callback publication absent")?;
+        correlate(&publication.boundary,&trace)?;
+        let address=if core==Core::Primary {0x4004f114}else{0x400df0d4};
+        require(word(&publication.cell,address)?==0x69cc6c && rows.iter().any(|row|row.source==Source::CpuWrite
+            && row.core==Some(core) && row.physical.0==address&!0x40000000 && row.size==4 && row.value==Some(0x69cc6c)),
+            "shared callback publication lacks committed value or source store")?;
+    }
+    Ok(SharedProjection {outcomes})
+}
+pub(super) type SharedHit=Hit;
+pub(super) fn shared_hits(bytes:&[u8],code:&[u8])->Result<Vec<SharedHit>,String>{
+    require(code.len()==(HIGH-LOW) as usize,"shared dispatcher code extent differs")?;
+    let hits:Vec<Hit>=serde_json::from_slice(bytes).map_err(|error|error.to_string())?;
+    let mut sampled=[false;2];
+    for hit in &hits {
+        let pc=number(&hit.address)?;
+        if !(LOW..HIGH).contains(&pc){continue;}
+        require(hit.core<2 && pc%4==0 && hit.cpsr&0x20==0,"shared dispatcher execution state differs")?;
+        let sample=hit.code_word.as_ref().ok_or("shared dispatcher source-word sample absent")?;
+        let offset=(pc-LOW) as usize;let expected=u32::from_le_bytes(code[offset..offset+4].try_into().map_err(|_|"dispatcher source word extent")?);
+        require([sample.guest,sample.physical,sample.expected]==[expected;3],"shared dispatcher source word differs")?;
+        for bank in sample.tcm.into_iter().flatten(){if bank&1!=0 && (bank>>2)&31!=0 {
+            let size=(bank>>2)&31;require((3..=14).contains(&size),"shared dispatcher TCM size reserved")?;
+            let low=u64::from(bank&0xfffff000);require(low>=u64::from(HIGH)||low+(512u64<<size)<=u64::from(LOW),"shared dispatcher TCM overlap")?;
+        }}
+        sampled[hit.core]=true;
+    }
+    require(sampled==[true;2],"shared dispatcher source sampling lacks a core")?;
+    Ok(hits)
+}
+pub(super) fn shared_fetches(rows:&[Row],hits:&[SharedHit])->Result<(),String>{
+    let samples=hits.iter().map(|hit|Ok((hit.core,number(&hit.address)?,hit.instructions))).collect::<Result<std::collections::BTreeSet<_>,String>>()?;
+    let mut cores=[false;2];
+    for row in rows.iter().filter(|row|row.source==Source::CpuFetch && (LOW..HIGH).contains(&row.physical.0)) {
+        let core=usize::from(row.core.ok_or("shared dispatcher fetch core absent")?);
+        let at=row.instructions.as_ref().ok_or("shared dispatcher fetch clock absent")?.0;
+        require(row.size==4 && row.address==row.physical && row.pc==Some(row.address) && (samples.contains(&(core,row.address.0,at))
+            || at.checked_sub(1).is_some_and(|before|samples.contains(&(core,row.address.0,before)))),"shared dispatcher fetch lacks stopped source sample")?;
+        cores[core]=true;
+    }
+    require(cores==[true;2],"shared dispatcher fetch coverage lacks a core")
 }
 pub(super) fn compare(retained:&Path,owned:&Path,source_path:&Path,linked_path:&Path,output:&Path)->Result<(),String>{
     std::fs::create_dir(output).map_err(|error|error.to_string())?;
