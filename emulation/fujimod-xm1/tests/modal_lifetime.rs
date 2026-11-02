@@ -512,6 +512,7 @@ fn created_task(core: usize, id: u16) -> TaskId {
     let mut tasks = Tasks::default();
     let creation = layout.creations.start().0 + 40 * u32::from(id - 1);
     tasks.put(layout.nodes.start().0 + 56 * u32::from(id - 1) + 8, creation | 0x4000_0000);
+    for offset in (0..40).step_by(4) { tasks.put(creation + offset, 0); }
     for (offset, word) in [(32, u32::from(id)), (36, 1)] { tasks.put(creation + offset, word); }
     match vfp_owner(&tasks, layout.kernel, u32::from(id)) { Ok(VfpOwner::Task(task)) => task, other => panic!("{other:?}") }
 }
