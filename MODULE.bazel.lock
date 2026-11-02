@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "QpaEeqFVAh1GfNp2gv4La8D0ZOL+pifrFNFPqTzo+Jc=",
+        "bzlTransitiveDigest": "d8GizLJoAeVPeFlYnUcggTIpP8ot9vDLkAFtSaCB/68=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -507,6 +507,9 @@
                 "@@//emulation:fujimod-xm1/src/continuation_view.rs": "//emulation:fujimod-xm1/src/continuation_view.rs",
                 "@@//emulation:fujimod-xm1/src/loader_continuations.rs": "//emulation:fujimod-xm1/src/loader_continuations.rs",
                 "@@//emulation:fujimod-xm1/src/loader_continuations_check.rs": "//emulation:fujimod-xm1/src/loader_continuations_check.rs",
+                "@@//emulation:fujimod-xm1/src/loader_orchestration_owned.rs": "//emulation:fujimod-xm1/src/loader_orchestration_owned.rs",
+                "@@//emulation:fujimod-xm1/src/loader_reset_check.rs": "//emulation:fujimod-xm1/src/loader_reset_check.rs",
+                "@@//emulation:fujimod-xm1/src/loader_timer_check.rs": "//emulation:fujimod-xm1/src/loader_timer_check.rs",
                 "@@//emulation:fujimod-xm1/src/lib.rs": "//emulation:fujimod-xm1/src/lib.rs",
                 "@@//emulation:fujimod-xm1/src/loader_code.rs": "//emulation:fujimod-xm1/src/loader_code.rs",
                 "@@//emulation:fujimod-xm1/src/machine.rs": "//emulation:fujimod-xm1/src/machine.rs",
