@@ -31,12 +31,14 @@ data PathProof = PathProof Scenario [Effect] Terminal deriving (Eq, Show)
 data FrameProof = FrameProof [PathProof] (S.Set CodeAddress) (M.Map CodeAddress CallTarget)
 data AdmissionError = ExtentRejected | CompilerPrologueRejected | UnsupportedInstruction CodeAddress
   | FrameRejected | OperandRejected | ConditionRejected | MemoryRejected | CallRejected CodeAddress
-  | EffectRejected | StepLimit deriving (Eq, Show)
+  | EffectRejected | StepLimit | ControlFlowRejected CodeAddress | PollingInvariantRejected deriving (Eq, Show)
+
+data PollCheckpoint = PollCheckpoint CodeAddress (M.Map A.Reg Scalar) (M.Map StackOffset Scalar) (Maybe Bool) CallOrdinal deriving (Eq)
 
 data Machine = Machine
   { registers :: M.Map A.Reg Scalar, stack :: M.Map StackOffset Scalar, zero :: Maybe Bool
   , effects :: [Effect], visited :: S.Set CodeAddress, boundaries :: M.Map CodeAddress CallTarget
-  , polls :: PollCount, calls :: CallOrdinal, steps :: StepCount, terminal :: Maybe Terminal
+  , polls :: PollCount, checkpoint :: Maybe PollCheckpoint, calls :: CallOrdinal, steps :: StepCount, terminal :: Maybe Terminal
   }
 
 proofPaths :: FrameProof -> [PathProof]
@@ -109,6 +111,14 @@ instructionCondition instruction = case instruction of
   A.Hint cond -> Just cond
   _ -> Nothing
 
+programCounterDestination :: A.Instruction -> Bool
+programCounterDestination instruction = case instruction of
+  A.DataProcessing _ operation _ destination _ _ -> operation/=A.CMP && destination==A.pc
+  A.MoveWide _ destination _ -> destination==A.pc
+  A.MoveTop _ destination _ -> destination==A.pc
+  A.Load _ _ _ destination _ _ _ -> destination==A.pc
+  _ -> False
+
 bodyUsesFrame :: A.Instruction -> Bool
 bodyUsesFrame instruction = case instruction of
   A.DataProcessing _ operation _ destination left right -> frame destination || (operation `notElem` [A.MOV,A.MVN] && frame left) || operandFrame right
@@ -168,7 +178,7 @@ expected (Scenario role completion setup) =
       waiting = case completion of
         InitiallyPublished -> [CompletionRead Published]
         PublishedAfterDelay -> [CompletionRead Pending,DelayNops (NopCount 100),CompletionRead Published]
-        NeverPublished -> [CompletionRead Pending,DelayNops (NopCount 100),CompletionRead Pending]
+        NeverPublished -> [CompletionRead Pending,DelayNops (NopCount 100),CompletionRead Pending,DelayNops (NopCount 100),CompletionRead Pending]
       before = identity ++ case role of
         Primary -> [ServiceCall ClearShared [(A.Reg 0,Word 0x400a0800),(A.Reg 1,Word 0x20100)]]
         Peer -> waiting
@@ -195,10 +205,11 @@ deriveFrameProof side bytes (CodeAddress compilerPc) = do
   where
     targets = serviceTable side
     run start end scenario = do
-      let initial = Machine (M.fromList [(A.Reg 0,DispatchCapability),(A.sp,Stack (StackOffset 0)),(A.lr,IncomingLink)]) M.empty Nothing [] S.empty M.empty (PollCount 0) (CallOrdinal 0) (StepCount 0) Nothing
+      let initial = Machine (M.fromList [(A.Reg 0,DispatchCapability),(A.sp,Stack (StackOffset 0)),(A.lr,IncomingLink)]) M.empty Nothing [] S.empty M.empty (PollCount 0) Nothing (CallOrdinal 0) (StepCount 0) Nothing
       final <- execute start initial
       requireFrame final
       stopped <- maybe (Left EffectRejected) Right (terminal final)
+      require (case scenario of Scenario Peer NeverPublished _ -> stopped==WaitingForCompletion; _ -> True) PollingInvariantRejected
       let observed = reverse (effects final)
       require ((observed,stopped)==expected scenario) EffectRejected
       pure (PathProof scenario observed stopped,visited final,boundaries final)
@@ -212,13 +223,18 @@ deriveFrameProof side bytes (CodeAddress compilerPc) = do
           pointer <- known (registerValue pc machine base)
           pure (pointer+fromIntegral offset)
         address _ _ _ _ = Left MemoryRejected
-        completionRead machine =
+        completionRead site destination machine = do
           let Scenario _ source _ = scenario
               PollCount count = polls machine
               value = case source of InitiallyPublished -> NonzeroWord; PublishedAfterDelay | count>0 -> NonzeroWord; _ -> Word 0
               state = if value==Word 0 then Pending else Published
-              next = emit (CompletionRead state) machine {polls=PollCount (count+1)}
-          in (value,if source==NeverPublished&&count>0 then next {terminal=Just WaitingForCompletion} else next)
+              next = put destination value (emit (CompletionRead state) machine {polls=PollCount (count+1)})
+              recurrent = PollCheckpoint site (registers next) (stack next) (zero next) (calls next)
+          if source/=NeverPublished || count==0 then pure next
+            else if count==1 then pure next {checkpoint=Just recurrent}
+            else do
+              require (checkpoint next==Just recurrent) PollingInvariantRejected
+              pure next {terminal=Just WaitingForCompletion}
         execute site@(CodeAddress pc) machine = case terminal machine of
           Just _ -> Right machine
           Nothing -> do
@@ -230,6 +246,7 @@ deriveFrameProof side bytes (CodeAddress compilerPc) = do
                 next = CodeAddress (pc+4)
                 marked = machine {steps=StepCount (count+1),visited=S.insert site (visited machine)}
             require (pc<compilerPc+8 || not (bodyUsesFrame decoded)) FrameRejected
+            require (not (programCounterDestination decoded)) (ControlFlowRejected site)
             if raw==0xf57ff04f then execute next (emit StoreBarrier marked) else do
               cond <- maybe (Left (UnsupportedInstruction site)) Right (instructionCondition decoded)
               active <- condition marked cond
@@ -252,8 +269,8 @@ deriveFrameProof side bytes (CodeAddress compilerPc) = do
                   execute next (put A.sp (Stack (StackOffset (-16))) marked {stack=saved})
                 A.Load _ A.Word False destination base offset A.OffsetOnly -> do
                   at <- address pc marked base offset
-                  (value,loaded) <- if at==0x400a00c4 then pure (completionRead marked) else do literal <- readLiteral at;pure (literal,marked)
-                  execute next (put destination value loaded)
+                  loaded <- if at==0x400a00c4 then completionRead site destination marked else do literal <- readLiteral at;pure (put destination literal marked)
+                  execute next loaded
                 A.Store _ A.Word source base offset A.OffsetOnly -> do
                   at <- address pc marked base offset
                   require (get marked source==Word 1) MemoryRejected

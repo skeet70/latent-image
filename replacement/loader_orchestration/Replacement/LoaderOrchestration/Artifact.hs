@@ -107,6 +107,7 @@ contractValue candidate@(StagedCandidate source@(CanonicalSource dat _ image4 lo
   , "source_loader_a_sha256" .= identityText (identity loaderA)
   , "source_loader_b_sha256" .= identityText (identity loaderB)
   , "candidate_dat_sha256" .= identityText (identity (candidateBytes candidate))
+  , "allowed_dat_checksum" .= object ["offset" .= (0x20c::Int),"bytes" .= (4::Int)]
   , "dispatcher_provider" .= object
       [ "role" .= ("CanonicalRetained"::String), "entry" .= (0x69cdf8::Word32)
       , "source_image4_sha256" .= identityText (identity image4)
