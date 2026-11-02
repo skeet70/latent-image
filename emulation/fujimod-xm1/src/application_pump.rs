@@ -280,7 +280,7 @@ fn produce(request: &Request) -> Result<(), String> {
     fujimod_emulator_models::register();
     let document = RunDocument::parse(&run_bytes)?;
     let maps = run::memory_maps(&document)?;
-    let session = run::open(&document, &ValidatedUpdate(actual), &rom)?;
+    let mut session = run::open(&document, &ValidatedUpdate(actual), &rom)?;
     session.board.set_execution_policy(document.execution_policy.into())?;
     let mut machine = Machine::new(document, session)?;
     machine.disarm()?;
