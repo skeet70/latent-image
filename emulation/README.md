@@ -1090,7 +1090,7 @@ The scoped route validates `modal-scope.json` against the actual relinked `kerne
 
 Scoped trajectories that configure another protected-memory observer, forbidden-execution observer or refusal control are rejected instead of replacing or dropping those guards. The ordinary 223-publication routes retain their existing guard behavior. The scoped result is `unqualified-scoped-diagnostic`; `e2e-modal-observation.json` and its result reference record interval boundaries, `physical_fetch_coverage:false`, `task_identity_verified:false` and `whole_installed_lifetime_coverage:false`. Neither installation nor a bounded observation establishes admission, table immutability, task migration detection or global modal ownership.
 
-The SDK's writer-state query requires an armed memory watch.
+The SDK's writer-state query requires an armed memory watch. Fixed watches admit write-only, fetch-only or combined nonempty access classes; a watch with neither class refuses.
 
 After independent review and execution authorization, the first scoped FILMSIM command is:
 
