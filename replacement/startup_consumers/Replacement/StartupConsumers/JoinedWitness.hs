@@ -4,7 +4,7 @@ module Replacement.StartupConsumers.JoinedWitness
   , JoinedError(..), admitInputs, consumerInputs, admitCapture, compareCaptures, qualificationValue
   ) where
 
-import Control.Monad (forM_, unless)
+import Control.Monad (foldM, forM_, unless)
 import qualified Data.Aeson as J
 import qualified Data.ByteString as B
 import Data.List (sort, sortOn)
@@ -143,22 +143,69 @@ checkSubobservation capture trace = do
     && W.receiptInstructions window == S.endpointInstructions end) SharedSubobservationRejected
   (first,lastSegment) <- case segments of [] -> Left SharedSubobservationRejected; initial:rest -> Right (initial,last (initial:rest))
   require (W.segmentStart first == counts (S.endpointCounts begin) && W.segmentEnd lastSegment == counts (S.endpointCounts end)) SharedSubobservationRejected
-  outer <- either (const (Left SharedSubobservationRejected)) Right (E.probeAt window W.OuterEntry)
-  require (K.contextCounts (E.machine outer) == counts (S.endpointCounts begin)) SharedSubobservationRejected
-  require (map S.hitInstructions trace == sort (map S.hitInstructions trace)) SharedSubobservationRejected
-  forM_ [begin,end] $ \endpoint -> do
-    let S.TraceIndex index = S.endpointTraceIndex endpoint
-    require (index > 0 && toInteger index <= toInteger (length trace)) SharedSubobservationRejected
-    require (S.hitInstructions (last (take (fromIntegral index) trace)) == S.endpointInstructions endpoint) SharedSubobservationRejected
-  let prefix endpoint = let S.TraceIndex index = S.endpointTraceIndex endpoint in take (fromIntegral index) trace
-      beginHits = [hit | hit <- prefix begin,S.hitInstructions hit == S.endpointInstructions begin]
-      endHits = [hit | hit <- prefix end,S.hitInstructions hit == S.endpointInstructions end]
-      endProbes = [probe | probe <- probes,E.probeClock probe == clock (S.endpointInstructions end)
-        ,W.probeKind probe `elem` [W.FamilyReturn,W.CriticalReturn]]
-      matches probe hit = S.hitCore hit == E.core probe && S.hitPc hit == K.Address (E.pc probe)
-  require (any (matches outer) beginHits && any (\probe -> any (matches probe) endHits) endProbes) SharedSubobservationRejected
+  let W.ProbeRange terminalBegin terminalEnd = W.segmentProbeRange lastSegment
+  require (any (\probe -> W.probeId probe >= terminalBegin && W.probeId probe < terminalEnd
+    && E.probeClock probe == clock (S.endpointInstructions end)
+    && W.probeKind probe `elem` [W.FamilyReturn,W.CriticalReturn]) probes) SharedSubobservationRejected
+  reconcileSharedContexts trace begin end window
   forM_ [resource | resource <- W.receiptResources window,W.resourceLifetime resource == W.ObservationLifetime] $ \resource ->
     require (maybe False ((==clock (S.endpointInstructions end)) . E.clock) (W.resourceClosed resource)) SharedSubobservationRejected
+
+data SharedTraceCursor = SharedTraceCursor [S.TraceHit] [W.Probe] W.ProbeId
+
+matchesContext :: S.TraceHit -> W.Context -> Bool
+matchesContext hit context =
+  let machine = W.contextMachine context
+  in S.hitCore hit == W.contextCore context && S.hitPc hit == K.contextPc machine
+    && S.registerWords (S.hitRegisters hit) == K.contextRegisters machine
+    && S.hitSp hit == K.contextSp machine && S.hitLr hit == K.contextLr machine && S.hitCpsr hit == K.contextCpsr machine
+    && toInteger (clock (S.hitInstructions hit)) == sum (map (toInteger . clock) (K.contextCounts machine))
+
+reconcileSharedContexts :: [S.TraceHit] -> S.Endpoint -> S.Endpoint -> W.Receipt -> Either JoinedError ()
+reconcileSharedContexts trace begin end window = do
+  let S.TraceIndex beginIndex = S.endpointTraceIndex begin
+      S.TraceIndex endIndex = S.endpointTraceIndex end
+      clocks = map S.hitInstructions trace
+      probes = W.receiptProbes window
+  require (beginIndex > 0 && beginIndex <= endIndex && toInteger endIndex <= toInteger (length trace)
+    && and (zipWith (<=) clocks (drop 1 clocks))) SharedSubobservationRejected
+  outer <- either (const (Left SharedSubobservationRejected)) Right (E.probeAt window W.OuterEntry)
+  let prefix = take (fromIntegral beginIndex) trace
+      entryHits = [hit | hit <- prefix,S.hitInstructions hit == S.endpointInstructions begin,matchesContext hit (W.probeContext outer)]
+  require (length entryHits == 1 && K.contextCounts (E.machine outer) == counts (S.endpointCounts begin)
+    && S.hitInstructions (last prefix) == S.endpointInstructions begin) SharedSubobservationRejected
+  SharedTraceCursor remaining pending consumed <- foldM consume
+    (SharedTraceCursor (drop (fromIntegral beginIndex) trace) probes (W.ProbeId 0)) (W.receiptSegments window)
+  require (length remaining == length trace-fromIntegral endIndex && null pending
+    && consumed == W.ProbeId (fromIntegral (length probes))) SharedSubobservationRejected
+  where
+    consume (SharedTraceCursor remaining pending expected) segment = do
+      let W.ProbeRange first@(W.ProbeId low) after@(W.ProbeId high) = W.segmentProbeRange segment
+          starts = W.segmentStartContexts segment
+          ends = W.segmentEndContexts segment
+      require (first == expected && low <= high && toInteger (high-low) <= toInteger (length pending)
+        && map W.contextCore starts == [K.Primary,K.Secondary] && map W.contextCore ends == [K.Primary,K.Secondary]
+        && all ((==W.segmentStart segment) . K.contextCounts . W.contextMachine) starts
+        && all ((==W.segmentEnd segment) . K.contextCounts . W.contextMachine) ends) SharedSubobservationRejected
+      rest <- foldM (consumeStop ends) remaining (W.segmentStops segment)
+      let (selected,next) = splitAt (fromIntegral (high-low)) pending
+      require (map W.probeId selected == map W.ProbeId (take (length selected) [low..])) SharedSubobservationRejected
+      forM_ selected $ \probe ->
+        if W.probeKind probe == W.OuterEntry && W.probeId probe == W.ProbeId 0 then
+          require (W.probeContext probe `elem` starts) SharedSubobservationRejected
+        else require (W.probeContext probe `elem` ends && any (matchesStop probe) (W.segmentStops segment)) SharedSubobservationRejected
+      pure (SharedTraceCursor rest next after)
+    consumeStop ends remaining stopped = case remaining of
+      [] -> Left SharedSubobservationRejected
+      hit:rest -> do
+        context <- case [value | value <- ends,W.contextCore value == W.stopCore stopped] of
+          [value] -> Right value
+          _ -> Left SharedSubobservationRejected
+        require (S.hitCore hit == W.stopCore stopped && S.hitPc hit == W.stopPc stopped
+          && S.hitInstructions hit == W.stopInstructions stopped && matchesContext hit context) SharedSubobservationRejected
+        pure rest
+    matchesStop probe stopped = W.stopCore stopped == E.core probe && W.stopPc stopped == K.contextPc (E.machine probe)
+      && W.stopInstructions stopped == K.Count (E.probeClock probe)
 
 checkEpochs :: ObservedFiles -> S.SharedCapture -> S.CoreCounts -> Either JoinedError ()
 checkEpochs files capture actualCounts = do

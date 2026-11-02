@@ -3,17 +3,18 @@ module Replacement.StartupConsumers.JoinedWire
   ( ArtifactRole(..), RelativeFilename, relativeName, artifactFilename, traceFilename, timerFilename, resetFilename, updateFilename
   , FileBinding(..), CaptureRole(..), ProgramBinding(..), CoreCounts(..), Observed(..), MenuCursor(..)
   , SourceKind(..), SourceBinding(..), InputIdentity(..), TraceIndex(..), SegmentIndex(..), Endpoint(..), Termination(..), ConsumerWindow(..)
-  , EpochStage(..), EpochEvidence(..), Epoch(..), TraceHit(..), SharedCapture(..)
+  , EpochStage(..), EpochEvidence(..), Epoch(..), GeneralRegisters, registerWords, TraceHit(..), SharedCapture(..)
   ) where
 
 import Control.Monad (unless)
 import Data.Aeson
 import Data.Aeson.Types (Parser)
+import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Text as T
 import Data.Word (Word32, Word64)
 import Numeric (readHex)
-import Replacement.KernelInstall.Wire (Address(..), Count(..), Core, Digest)
+import Replacement.KernelInstall.Wire (Address(..), WordValue(..), Count(..), Core, Digest)
 import qualified Replacement.StartupConsumers.Wire as W
 
 newtype RelativeFilename = RelativeFilename FilePath deriving (Eq, Ord, Show)
@@ -115,16 +116,31 @@ instance FromJSON EpochEvidence where
 data Epoch = Epoch {epochStage :: EpochStage,epochStart :: Count,epochEnd :: Count,epochStartCounts :: CoreCounts,epochEndCounts :: CoreCounts,epochEvidence :: EpochEvidence} deriving (Eq, Show)
 instance FromJSON Epoch where parseJSON = withObject "shared epoch" $ \o -> Epoch <$> o .: "stage" <*> o .: "start" <*> o .: "end" <*> o .: "start_counts" <*> o .: "end_counts" <*> o .: "evidence"
 
+newtype HexWord = HexWord WordValue
+instance FromJSON HexWord where
+  parseJSON = withText "hexadecimal word" $ \value -> case T.stripPrefix "0x" value of
+    Nothing -> fail "expected hexadecimal word"
+    Just digits -> case readHex (T.unpack digits) of
+      [(number,"")] | number <= (0xffffffff :: Integer) -> pure (HexWord (WordValue (fromInteger number)))
+      _ -> fail "invalid hexadecimal word"
 newtype HexAddress = HexAddress Address
 instance FromJSON HexAddress where
-  parseJSON = withText "hexadecimal address" $ \value -> case T.stripPrefix "0x" value of
-    Nothing -> fail "expected hexadecimal address"
-    Just digits -> case readHex (T.unpack digits) of [(number,"")] | number <= (0xffffffff :: Integer) -> pure (HexAddress (Address (fromInteger number))); _ -> fail "invalid hexadecimal address"
-data TraceHit = TraceHit {hitPc :: Address,hitCore :: Core,hitInstructions :: Count} deriving (Eq, Show)
+  parseJSON value = do HexWord (WordValue word) <- parseJSON value; pure (HexAddress (Address word))
+newtype GeneralRegisters = GeneralRegisters [WordValue] deriving (Eq, Show)
+registerWords :: GeneralRegisters -> [WordValue]
+registerWords (GeneralRegisters values) = values
+instance FromJSON GeneralRegisters where
+  parseJSON = withObject "general registers" $ \o -> GeneralRegisters <$> mapM (\index -> do
+    HexWord value <- o .: Key.fromString ("r"++show index); pure value) [0::Int ..12]
+data TraceHit = TraceHit
+  {hitPc :: Address,hitCore :: Core,hitInstructions :: Count,hitRegisters :: GeneralRegisters
+  ,hitSp :: Address,hitLr :: Address,hitCpsr :: WordValue} deriving (Eq, Show)
 instance FromJSON TraceHit where
   parseJSON = withObject "global trace hit" $ \o -> do
     HexAddress pc <- o .: "address"
-    TraceHit pc <$> o .: "core" <*> o .: "instructions"
+    HexAddress sp <- o .: "sp"
+    HexAddress lr <- o .: "lr"
+    TraceHit pc <$> o .: "core" <*> o .: "instructions" <*> o .: "registers" <*> pure sp <*> pure lr <*> o .: "cpsr"
 
 data SharedCapture = SharedCapture
   {captureSchema :: Int,captureRole :: CaptureRole,captureProgram :: ProgramBinding,captureArtifacts :: [FileBinding]
