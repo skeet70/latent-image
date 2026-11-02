@@ -2260,6 +2260,7 @@ fn lifecycle_invalid_release_observes_the_stock_no_frame_branch() {
     assert_eq!(page.hits[0].registers[0], 201);
     assert_observed_bytes(&page.hits[0], Guest(0x00e87d80), &0xeafffffeu32.to_le_bytes());
     assert!(page.hits[0].ram.iter().all(|span| span.address.0 < 0x04988600));
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(transparent)]
