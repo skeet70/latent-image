@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "IgBx6adQWWpbPGbbs7AtMbD/cErdIrlL7WA3i0c53Zg=",
+        "bzlTransitiveDigest": "anlpXUm+2f9OHI+4f3TtjT79NnX+bmcblmzRKLQGDNY=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -496,6 +496,10 @@
                 "@@//emulation:fujimod-xm1/src/guest.rs": "//emulation:fujimod-xm1/src/guest.rs",
                 "@@//emulation:fujimod-xm1/src/handoff.rs": "//emulation:fujimod-xm1/src/handoff.rs",
                 "@@//emulation:fujimod-xm1/src/heap_accesses.rs": "//emulation:fujimod-xm1/src/heap_accesses.rs",
+                "@@//emulation:fujimod-xm1/src/heap_cutover.rs": "//emulation:fujimod-xm1/src/heap_cutover.rs",
+                "@@//emulation:fujimod-xm1/src/heap_cutover_check.rs": "//emulation:fujimod-xm1/src/heap_cutover_check.rs",
+                "@@//emulation:fujimod-xm1/src/heap_cutover_contract.rs": "//emulation:fujimod-xm1/src/heap_cutover_contract.rs",
+                "@@//emulation:fujimod-xm1/src/heap_cutover_guard.rs": "//emulation:fujimod-xm1/src/heap_cutover_guard.rs",
                 "@@//emulation:fujimod-xm1/src/heap_observe.rs": "//emulation:fujimod-xm1/src/heap_observe.rs",
                 "@@//emulation:fujimod-xm1/src/heap_replay.rs": "//emulation:fujimod-xm1/src/heap_replay.rs",
                 "@@//emulation:fujimod-xm1/src/heap_replay_check.rs": "//emulation:fujimod-xm1/src/heap_replay_check.rs",

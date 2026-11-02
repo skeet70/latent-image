@@ -1,5 +1,6 @@
 mod heap_accesses;
 mod heap_state;
+mod heap_cutover;
 #[path = "memory_view.rs"]
 mod memory_view;
 
@@ -314,7 +315,7 @@ fn sample(machine: &Machine, maps: &[MemoryMap], images: &[Image], recorder: &Re
     let pc = Address(registers[15]);
     image5.check_fetch(pc).map_err(|error| format!("image5 heap code admission: {error:?}"))?;
     let returning = recorder.return_operation(context, pc, Address(registers[13]));
-    let operation = returning.or_else(|| heap_state::entry(pc));
+    let operation = returning.or_else(|| heap_state::entry(Address(pc.0 & !0x40000000)));
     let context_pointer = if returning.is_some() {
         recorder.return_context(context, pc, Address(registers[13])).map(|address| address.0)
     } else { operation.map(|_| registers[0]) };
@@ -721,6 +722,7 @@ fn refusal_controls(arguments: &[std::ffi::OsString]) -> Result<(), String> {
 }
 fn drive() -> Result<(), String> {
     let compare_args: Vec<_> = std::env::args_os().skip(1).collect();
+    if let Some(result) = heap_cutover::command(&compare_args) { return result; }
     if compare_args.first().is_some_and(|argument| argument == "--compare") { return compare(&compare_args); }
     if compare_args.first().is_some_and(|argument| argument == "--refusal-controls") { return refusal_controls(&compare_args); }
     let mut arguments = BTreeMap::new();
