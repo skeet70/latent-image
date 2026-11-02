@@ -1,6 +1,8 @@
 use super::*;
 #[path="loader_shared_controls.rs"]
 mod controls;
+#[path="loader_shared_policy.rs"]
+mod policy;
 use super::super as owner;
 use owner::loader_startup_program::{Bindings,JoinedProgram};
 use owner::shared_dispatch::shared::{AccessRow,ByteOrder,DataAttribution,FetchStamp,Capture as Dispatcher,Rows as DispatcherRows};
@@ -144,12 +146,12 @@ impl Capture {
         pulses:&self.route.pulses,instructions:self.instructions,menu:&self.menu,timer_transactions:&self.timer_transactions}}
 }
 struct Checked {capture:Capture,receipt:Digest,reset:loader_reset_check::Reset,timer:loader_timer_check::Admission,
-    loaders:Vec<LoaderEffect>,publications:Vec<Publication>,dispatcher:owner::shared_dispatch::shared::Checked}
+    loaders:Vec<LoaderEffect>,publications:Vec<Publication>,dispatcher:owner::shared_dispatch::shared::Checked,policy:policy::Policy}
 #[derive(Serialize)]
 #[serde(rename_all="kebab-case")]
 enum HostScope {SharedRouteAndDispatcher}
 #[derive(Serialize)]
-struct Verification {schema:u32,scope:HostScope,accepted:bool,error:Option<String>,receipt:Option<Digest>,role:Option<Role>,route_effects:Option<FileBinding>,dispatcher_effects:Option<FileBinding>}
+struct Verification {schema:u32,scope:HostScope,accepted:bool,error:Option<String>,receipt:Option<Digest>,role:Option<Role>,route_effects:Option<FileBinding>,dispatcher_effects:Option<FileBinding>,observation_policy:Option<FileBinding>}
 fn scope(stage:owner::WatchStage)->Vec<([u64;2],Vec<Access>)>{
     watch_scope(owner::startup_joined::guard_classes(stage))
 }
@@ -342,26 +344,35 @@ fn verified(root:&Path,analysis:&Path)->Result<Checked,String>{
     let image4=catalog.0.iter().find(|image|image.binding.kind==owner::SourceKind::Image4).ok_or("effective image4 absent")?;
     let code=image4.bytes.get(0x69cdf8-0x61c400..0x69cf84-0x61c400).ok_or("dispatcher code extent absent")?;
     let dispatcher=capture.dispatcher.verify(&dispatcher_rows,&trace_bytes,code,&callers,&facts,program.owned(),capture.instructions.0)?;
-    Ok(Checked {capture,receipt,reset,timer,loaders:effects,publications,dispatcher})
+    let policy=policy::derive(&capture,&receipt,&catalog,&program,&expected_calls)?;
+    Ok(Checked {capture,receipt,reset,timer,loaders:effects,publications,dispatcher,policy})
 }
 fn write_effects(output:&Path,prefix:&str,checked:&Checked)->Result<(FileBinding,FileBinding),String>{
     let route=serde_json::to_vec_pretty(&projected_effects(checked.capture.route(),&checked.loaders,&checked.publications,&checked.timer)?).map_err(|error|error.to_string())?;
     let dispatch=serde_json::to_vec_pretty(&checked.dispatcher).map_err(|error|error.to_string())?;
     Ok((persist_bound(output,&format!("{prefix}route-effects.json"),&route)?,persist_bound(output,&format!("{prefix}dispatcher-effects.json"),&dispatch)?))
 }
+fn write_policy(output:&Path,prefix:&str,checked:&Checked)->Result<FileBinding,String>{
+    persist_bound(output,&format!("{prefix}observation-policy.json"),&checked.policy.encode()?)
+}
 pub(crate) fn check(root:&Path,analysis:&Path,output:&Path)->Result<(),String>{
     std::fs::create_dir(output).map_err(|error|error.to_string())?;
-    let result=verified(root,analysis).and_then(|checked|{let (route,dispatcher)=write_effects(output,"",&checked)?;
-        Ok(Verification {schema:1,scope:HostScope::SharedRouteAndDispatcher,accepted:true,error:None,receipt:Some(checked.receipt),role:Some(checked.capture.role),route_effects:Some(route),dispatcher_effects:Some(dispatcher)})});
-    let report=match result {Ok(report)=>report,Err(error)=>Verification {schema:1,scope:HostScope::SharedRouteAndDispatcher,accepted:false,error:Some(error),receipt:None,role:None,route_effects:None,dispatcher_effects:None}};
+    let result=verified(root,analysis).and_then(|checked|{let (route,dispatcher)=write_effects(output,"",&checked)?;let policy=write_policy(output,"",&checked)?;
+        Ok(Verification {schema:1,scope:HostScope::SharedRouteAndDispatcher,accepted:true,error:None,receipt:Some(checked.receipt),role:Some(checked.capture.role),route_effects:Some(route),dispatcher_effects:Some(dispatcher),observation_policy:Some(policy)})});
+    let report=match result {Ok(report)=>report,Err(error)=>Verification {schema:1,scope:HostScope::SharedRouteAndDispatcher,accepted:false,error:Some(error),receipt:None,role:None,route_effects:None,dispatcher_effects:None,observation_policy:None}};
     owner::persist(&output.join("shared-verification.json"),&report)?;
     match report.error {Some(error)=>Err(error),None=>Ok(())}
 }
+/// Admits a capture directory and refuses its `observation-policy.json` unless it equals the fresh derivation.
+fn supplied_policy(root:&Path,analysis:&Path)->Result<(),String>{
+    let checked=verified(root,analysis)?;
+    policy::admit(&read(&root.join("observation-policy.json"))?,&checked.policy)
+}
 #[derive(Serialize)]
-struct Comparison {schema:u32,scope:HostScope,accepted:bool,error:Option<String>,retained:Option<Digest>,joined:Option<Digest>,retained_route_effects:Option<FileBinding>,joined_route_effects:Option<FileBinding>,retained_dispatcher_effects:Option<FileBinding>,joined_dispatcher_effects:Option<FileBinding>}
+struct Comparison {schema:u32,scope:HostScope,accepted:bool,error:Option<String>,retained:Option<Digest>,joined:Option<Digest>,retained_route_effects:Option<FileBinding>,joined_route_effects:Option<FileBinding>,retained_dispatcher_effects:Option<FileBinding>,joined_dispatcher_effects:Option<FileBinding>,retained_observation_policy:Option<FileBinding>,joined_observation_policy:Option<FileBinding>}
 pub(crate) fn compare(retained:&Path,joined:&Path,analysis:&Path,output:&Path)->Result<(),String>{
     std::fs::create_dir(output).map_err(|error|error.to_string())?;
-    let mut comparison=Comparison {schema:1,scope:HostScope::SharedRouteAndDispatcher,accepted:false,error:None,retained:None,joined:None,retained_route_effects:None,joined_route_effects:None,retained_dispatcher_effects:None,joined_dispatcher_effects:None};
+    let mut comparison=Comparison {schema:1,scope:HostScope::SharedRouteAndDispatcher,accepted:false,error:None,retained:None,joined:None,retained_route_effects:None,joined_route_effects:None,retained_dispatcher_effects:None,joined_dispatcher_effects:None,retained_observation_policy:None,joined_observation_policy:None};
     let result=(||->Result<(),String>{
         let left=verified(retained,analysis)?;comparison.retained=Some(left.receipt.clone());
         let right=verified(joined,analysis)?;comparison.joined=Some(right.receipt.clone());
@@ -372,7 +383,10 @@ pub(crate) fn compare(retained:&Path,joined:&Path,analysis:&Path,output:&Path)->
         let (lr,ld)=write_effects(output,"retained-",&left)?;let (rr,rd)=write_effects(output,"joined-",&right)?;
         let equal=lr.sha256.as_str()==rr.sha256.as_str()&&ld.sha256.as_str()==rd.sha256.as_str();
         comparison.retained_route_effects=Some(lr);comparison.joined_route_effects=Some(rr);comparison.retained_dispatcher_effects=Some(ld);comparison.joined_dispatcher_effects=Some(rd);
-        require(equal,"shared route or dispatcher public effects differ")
+        require(equal,"shared route or dispatcher public effects differ")?;
+        comparison.retained_observation_policy=Some(write_policy(output,"retained-",&left)?);
+        comparison.joined_observation_policy=Some(write_policy(output,"joined-",&right)?);
+        Ok(())
     })();
     comparison.accepted=result.is_ok();comparison.error=result.as_ref().err().cloned();
     owner::persist(&output.join("shared-comparison.json"),&comparison)?;result

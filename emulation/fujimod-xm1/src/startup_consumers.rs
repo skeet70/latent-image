@@ -5,6 +5,7 @@ use fujimod_xm1::bridge::{read, sha256, write};
 use fujimod_xm1::machine::{Machine, RunOutcome};
 use fujimod_xm1::provenance::Guest;
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
+use fujimod_xm1::startup_sites::{Component,StartupSites};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroU16, NonZeroUsize};
@@ -493,6 +494,7 @@ struct Runtime {
     peer_poll: Option<ProbeSequence>, peer_ready: bool,
     retained_records: u64, captured_bytes: u64, captured_views: u64,
     shared_sites: Option<shared::Sites>,
+    shared_owners: Option<StartupSites>,
 }
 impl Runtime {
     fn capture_views(&mut self, machine: &Machine, state: &Context, base: Address, size: u64) -> Result<Vec<View>, String> {
@@ -743,7 +745,7 @@ impl Runtime {
         require(state.lr.0 & 3 == 0, "family caller return is not A32 aligned")?;
         let mut sites: Vec<u32> = family.points().iter().chain(COMMON_PCS).copied().collect();
         sites.push(state.lr.0);
-        arm_sites(machine, sites)?;
+        arm_sites(machine, sites,self.shared_owners.as_ref())?;
         let snapshots = self.snapshot(machine, state, Some(id))?;
         self.receipt.probes[probe.0 as usize].snapshots = snapshots;
         Ok(())
@@ -949,7 +951,7 @@ impl Runtime {
         let Some(target) = call_target(state, instruction)? else { return Ok(()); };
         require(self.calls.len() < LIMITS.probes as usize, "dynamic call bound reached")?;
         self.calls.push(Call { owner, target, continuation: add(state.pc,4)?, caller_frame, entered: false });
-        arm_sites(machine, vec![target.0])
+        arm_sites(machine, vec![target.0],self.shared_owners.as_ref())
     }
     fn source_owner(&self, machine: &Machine, state: &Context, key: ExecutionFrame,
         returning_owner: Option<InvocationId>) -> Result<Option<Frame>, String> {
@@ -1008,7 +1010,7 @@ impl Runtime {
             let family = owner.and_then(|id| self.frames.iter().find(|frame| frame.id == id).map(|frame| frame.family));
             self.probe(machine, state, ProbeKind::DynamicTarget, family, owner)?;
             self.calls[index].entered = true;
-            arm_sites(machine, vec![self.calls[index].continuation.0])?;
+            arm_sites(machine, vec![self.calls[index].continuation.0],self.shared_owners.as_ref())?;
         }
         if let Some(index) = returning_call {
             let owner = self.calls[index].owner;
@@ -1017,8 +1019,8 @@ impl Runtime {
             let target = self.calls[index].target;
             let continuation = self.calls[index].continuation;
             self.calls.remove(index);
-            remove_if_unused(machine, target.0, &self.frames, &self.calls, &self.global_returns)?;
-            remove_if_unused(machine, continuation.0, &self.frames, &self.calls, &self.global_returns)?;
+            remove_if_unused(machine, target.0, &self.frames, &self.calls, &self.global_returns,self.shared_owners.as_ref())?;
+            remove_if_unused(machine, continuation.0, &self.frames, &self.calls, &self.global_returns,self.shared_owners.as_ref())?;
         }
         if let Some(kind) = self.global_returns.remove(&(state.core, state.pc)) {
             self.probe(machine, state, kind, None, None)?;
@@ -1055,7 +1057,7 @@ impl Runtime {
                 if let Some(returned) = returned {
                     require(state.lr.0 & 3 == 0, "global caller return is not A32 aligned")?;
                     self.global_returns.insert((state.core, state.lr), returned);
-                    arm_sites(machine, vec![state.lr.0])?;
+                    arm_sites(machine, vec![state.lr.0],self.shared_owners.as_ref())?;
                 }
                 if matches!(kind, ProbeKind::CriticalIdentityCall | ProbeKind::CriticalCall) {
                     let instruction = word(machine, &self.maps, state, state.pc)?;
@@ -1097,7 +1099,7 @@ impl Runtime {
             self.close(machine, state, Some(frame.id), Lifetime::Invocation)?;
             self.frames[index].active = false;
             for pc in frame.family.points().iter().chain(COMMON_PCS) {
-                remove_if_unused(machine, *pc, &self.frames, &self.calls, &self.global_returns)?;
+                remove_if_unused(machine, *pc, &self.frames, &self.calls, &self.global_returns,self.shared_owners.as_ref())?;
             }
         }
         Ok(())
@@ -1141,19 +1143,24 @@ const GLOBAL_PCS: &[u32] = &[
     0xd0aac,0xd0430,0xd0ab0,0x7235d8,0x7235f4,0x7235f8,0x7235fc,0x723600,0x723604,0x723608,
     0x412c4,0x412c8,0x427b8,
 ];
-fn arm_sites(machine: &mut Machine, pcs: Vec<u32>) -> Result<(), String> {
+fn arm_sites(machine: &mut Machine, pcs: Vec<u32>,owners:Option<&StartupSites>) -> Result<(), String> {
+    if let Some(owners)=owners {
+        for pc in pcs {owners.acquire(machine,Component::Consumer,Guest(pc))?;}
+        return Ok(());
+    }
     let sites = pcs.into_iter().filter(|pc| !machine.traces.sites.contains_key(pc))
         .map(|pc| (pc, format!("consumer-{pc:x}"))).collect::<BTreeMap<_, _>>();
     if !sites.is_empty() { machine.traces.add_sites(&machine.session, sites)?; }
     machine.traces.stop_labels = machine.traces.sites.values().cloned().collect();
     Ok(())
 }
-fn remove_if_unused(machine: &mut Machine, pc: u32, frames: &[Frame], calls: &[Call], returns: &BTreeMap<(Core, Address), ProbeKind>) -> Result<(), String> {
+fn remove_if_unused(machine: &mut Machine, pc: u32, frames: &[Frame], calls: &[Call], returns: &BTreeMap<(Core, Address), ProbeKind>,owners:Option<&StartupSites>) -> Result<(), String> {
     if FAMILIES.iter().any(|family| family.entry() == pc)
         || GLOBAL_PCS.contains(&pc)
         || frames.iter().any(|frame| frame.active && (frame.entry_lr == Address(pc) || frame.family.points().contains(&pc) || COMMON_PCS.contains(&pc)))
         || calls.iter().any(|call| call.target == Address(pc) || call.continuation == Address(pc))
         || returns.keys().any(|(_, address)| *address == Address(pc)) { return Ok(()); }
+    if let Some(owners)=owners {return owners.release(machine,Component::Consumer,&[Guest(pc)]);}
     if machine.traces.sites.get(&pc).is_some_and(|label|!label.starts_with("consumer-") || label.starts_with("consumer-global-")) { return Ok(()); }
     if machine.traces.sites.contains_key(&pc) { machine.traces.remove_sites(&machine.session, &[Guest(pc)])?; }
     Ok(())
@@ -1380,7 +1387,7 @@ fn observe(runtime: &mut Runtime, machine: &mut Machine, image4: &[u8], loader_a
         if let Some(state) = outer {
             require(state.sp == Address(0x40063450) && state.lr == Address(0x40a00), "outer natural caller differs")?;
             verify_loaded(machine, &runtime.maps, &state, image4, loader_a, loader_b)?;
-            arm_sites(machine, vec![state.lr.0])?;
+            arm_sites(machine, vec![state.lr.0],None)?;
             break;
         }
     }
@@ -1546,6 +1553,7 @@ fn drive() -> Result<(), String> {
         peer_poll: None, peer_ready: false,
         retained_records: 0, captured_bytes: 0, captured_views: 0,
         shared_sites: None,
+        shared_owners: None,
     };
     let result = observe(&mut runtime, &mut machine, &image4, &loader_a, &loader_b, &output);
     runtime.receipt.outcome = if result.is_err() { Outcome::Refused } else if runtime.finished() { Outcome::Observed } else { Outcome::NonObservation };

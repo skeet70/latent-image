@@ -1,5 +1,10 @@
 use super::*;
 use std::collections::BTreeSet;
+use fujimod_xm1::startup_sites::{Component,StartupSites};
+
+/// Clear service entry: dispatcher-permanent until the first stopped occurrence at or after `CLEAR_LIFETIME` aggregate instructions.
+pub(crate) const CLEAR:u32=0x7221a0;
+pub(crate) const CLEAR_LIFETIME:u64=8_000_000;
 
 #[derive(Clone,Copy,Deserialize,PartialEq,Eq)]
 enum ProvenPhase { Setup,Root,Diagnostic,Idle0,Idle1AndStandby }
@@ -48,15 +53,24 @@ pub(crate) struct Capture {
     owned:bool,
     #[serde(skip)]
     facts:Vec<CallFact>,
+    #[serde(skip)]
+    owners:Option<StartupSites>,
+    #[serde(skip)]
+    clear_revoked:bool,
 }
 impl Capture {
     pub(crate) fn new(owned:bool,facts:Vec<CallFact>)->Self {
         Self {invocations:Vec::new(),publications:Vec::new(),mode_reads:Vec::new(),live_words:Vec::new(),
-            active:[None;2],call_protection:[None;2],loader_protection:[None;2],dispatcher_protection:[None;2],owned,facts}
+            active:[None;2],call_protection:[None;2],loader_protection:[None;2],dispatcher_protection:[None;2],owned,facts,owners:None,clear_revoked:false}
     }
     pub(crate) fn sites()->BTreeMap<u32,String> {
-        [START,0x657184,0x657194,0x657198,0x65719c,0x7221a0,0x725a04,0x725dd8,0x725ed0,0x40c80,0xd0c80]
+        [START,0x657184,0x657194,0x657198,0x65719c,CLEAR,0x725a04,0x725dd8,0x725ed0,0x40c80,0xd0c80]
             .into_iter().chain((START..END).step_by(4)).map(|pc|(pc,"shared-dispatch".into())).collect()
+    }
+    pub(crate) fn attach_owners(&mut self,owners:StartupSites){self.owners=Some(owners);}
+    pub(crate) fn service_entry(pc:u32)->bool {service(pc).is_some()}
+    fn arm(&self,machine:&mut Machine,pc:u32)->Result<(),String> {
+        self.owners.as_ref().ok_or("shared dispatcher observation owners absent")?.acquire(machine,Component::Dispatcher,Guest(pc))
     }
     fn protect(&mut self,machine:&Machine,maps:&[MemoryMap],core:Core,addresses:Vec<Guest>)->Result<usize,String> {
         if self.live_words.len()>=64 || addresses.len()>1024 {return Err("live caller protection cap reached".into());}
@@ -97,7 +111,7 @@ impl Capture {
                 let continuation=entry.registers.lr.0;
                 self.active[slot]=Some(self.invocations.len());
                 self.invocations.push(Invocation {phase,entry,calls:Vec::new(),returned:None});
-                arm(machine,continuation)?;
+                self.arm(machine,continuation)?;
             } else if let Some(index)=self.active[slot] {
                 let pending=self.invocations[index].calls.last().filter(|call|call.returned.is_none()).map(|call|call.entry.registers.lr);
                 if pending==Some(pc) {
@@ -147,7 +161,7 @@ impl Capture {
                         }
                         self.call_protection[slot]=Some(self.protect(machine,maps,core,live)?);
                         self.invocations[index].calls.push(Call {service,entry,returned:None,descriptor_before:before,descriptor_after:None,domain,roots,attributes:None});
-                        arm(machine,continuation)?;
+                        self.arm(machine,continuation)?;
                     }
                 }
                 if pc.0==0x725ed0 {
@@ -175,6 +189,14 @@ impl Capture {
                 let address=Guest(if slot==0 {0x4004f114}else{0x400df0d4});
                 self.publications.push(Publication {boundary:boundary(machine,maps,core,pc)?,cell:view(&machine.session,maps,core,address,1)?});
             }
+            if !self.clear_revoked&&instructions>=CLEAR_LIFETIME {
+                if self.invocations.len()!=6||self.active.iter().any(Option::is_some)||self.publications.len()!=2
+                    ||self.invocations.iter().any(|invocation|invocation.returned.is_none()||invocation.calls.iter().any(|call|call.returned.is_none())) {
+                    return Err("dispatcher initial8M frame interval is incomplete".into());
+                }
+                self.owners.as_ref().ok_or("shared dispatcher observation owners absent")?.revoke(machine,Component::Dispatcher,&[Guest(CLEAR)])?;
+                self.clear_revoked=true;
+            }
         }
         Ok(())
     }
@@ -200,10 +222,6 @@ impl Capture {
         }
         Ok(())
     }
-}
-fn arm(machine:&mut Machine,pc:u32)->Result<(),String> {
-    if !machine.traces.sites.contains_key(&pc) {machine.traces.add_sites(&machine.session,BTreeMap::from([(pc,"shared-dispatch-return".into())]))?;}
-    machine.traces.stop_labels=machine.traces.sites.values().cloned().collect();Ok(())
 }
 
 #[derive(Clone,Copy,Deserialize,Serialize,PartialEq,Eq)]

@@ -42,7 +42,7 @@ struct Coordinator<'a> {
     route:Observation,dispatcher:Dispatcher,consumer:Recorder,epochs:Vec<SharedEpoch>,
     catalog:&'a Catalog,maps:Vec<MemoryMap>,output:&'a Path,permanent:BTreeMap<u32,String>,calls:Vec<StaticCall>,
     carrier_calls:BTreeSet<u32>,program:&'a Program,timer:TimerWatch,timer_active:bool,
-    consumer_segments:usize,
+    consumer_segments:usize,owners:StartupSites,
 }
 impl Coordinator<'_> {
     fn collect(&mut self,machine:&mut Machine,start:usize)->Result<(),String>{
@@ -114,10 +114,7 @@ impl Coordinator<'_> {
                         evidence:Evidence::ConsumerSegment {segment:self.consumer_segments}});self.consumer_segments=segments;
                 }
                 outcome?;
-                if self.consumer.complete(){
-                    let remove:Vec<_>=machine.traces.sites.iter().filter(|(_,label)|label.starts_with("consumer-")).map(|(pc,_)|Guest(*pc)).collect();
-                    if !remove.is_empty(){machine.traces.remove_sites(&machine.session,&remove)?;}
-                }
+                if self.consumer.complete(){self.consumer.close_sites(machine)?;}
             }else{
                 self.fixed_epoch(machine,endpoint,stage)?;
                 if !self.consumer.complete() && Recorder::is_outer(machine)? {
@@ -144,8 +141,7 @@ impl Coordinator<'_> {
     fn run(&mut self,machine:&mut Machine)->Result<(),String>{
         self.fixed_epoch(machine,SPLIT,WatchStage::Bootstrap)?;
         require(self.route.first_loader.is_some(),"first carrier entry deadline expired")?;
-        let first_fetches:Vec<_>=machine.traces.sites.iter().filter(|(_,label)|label.as_str()=="first-carrier-fetch").map(|(pc,_)|Guest(*pc)).collect();
-        if !first_fetches.is_empty(){machine.traces.remove_sites(&machine.session,&first_fetches)?;}
+        self.owners.close(machine,Component::Bootstrap)?;
         self.timer_start(machine)?;
         self.advance(machine,SPLIT.checked_sub(machine.instructions()).ok_or("first entry exceeds startup cap")?)?;
         self.advance(machine,80_000_000u64.checked_sub(machine.instructions()).ok_or("startup exceeds menu deadline")?)?;
@@ -196,18 +192,20 @@ pub(super) fn drive(mut options:BTreeMap<OptionKey,PathBuf>)->Result<(),String>{
         require(machine.instructions()==0 && counts(&machine)?==[0,0],"shared checkpoint is not fresh zero-instruction reset")?;
         let calls=startup_calls(&catalog)?;
         let carrier_calls=calls.iter().filter(|call|carrier(call.site).is_some()).map(|call|call.site.0).collect();
-        let consumer=Recorder::new(&machine,ConsumerInput {stage:&stage,owned:matches!(role,Role::Joined),run:&run_bytes,update:&validated.0,rom:&rom,
+        let mut consumer=Recorder::new(&machine,ConsumerInput {stage:&stage,owned:matches!(role,Role::Joined),run:&run_bytes,update:&validated.0,rom:&rom,
             checkpoint:&checkpoint,observer:&observer,sites:consumer_sites,carrier_sizes:[image(&catalog,SourceKind::Image4)?.len(),image(&catalog,SourceKind::LoaderA)?.len(),image(&catalog,SourceKind::LoaderB)?.len()]})?;
-        let mut permanent=sites(&calls,&program);
-        for (pc,label) in Dispatcher::sites().into_iter().chain(consumer.initial_sites()){permanent.entry(pc).or_insert(label);}
-        let mut initial=permanent.clone();
-        for side in [Side::LoaderA,Side::LoaderB]{for pc in (side.base().0+0x9ac..side.base().0+0xb00).step_by(4){initial.entry(pc).or_insert_with(||"first-carrier-fetch".into());}}
+        let permanent=sites(&calls,&program);
+        let bootstrap=[Side::LoaderA,Side::LoaderB].into_iter().flat_map(|side|(side.base().0+0x9ac..side.base().0+0xb00).step_by(4))
+            .map(|pc|(pc,"first-carrier-fetch".to_owned())).collect();
+        let (owners,initial)=StartupSites::new([permanent.clone(),Dispatcher::sites(),consumer.initial_sites(),bootstrap]);
+        consumer.attach_owners(owners.clone());
+        let mut dispatcher=Dispatcher::new(matches!(role,Role::Joined),dispatcher_facts);dispatcher.attach_owners(owners.clone());
         let dispatcher_code=image(&catalog,SourceKind::Image4)?.get(0x69cdf8-0x61c400..0x69cf84-0x61c400).ok_or("dispatcher source extent absent")?;
         machine.traces.bind_code_words(NonZeroUsize::new(131_072).ok_or("zero shared trace cap")?,Guest(0x69cdf8),dispatcher_code.to_vec(),maps.clone())?;
         machine.traces.stop_labels=initial.values().cloned().chain(["temporary-boundary".into()]).collect();
-        let mut capture=Coordinator {route:Observation {flexible_origin:true,..Observation::default()},dispatcher:Dispatcher::new(matches!(role,Role::Joined),dispatcher_facts),consumer,
+        let mut capture=Coordinator {route:Observation {flexible_origin:true,shared_owners:Some(owners.clone()),..Observation::default()},dispatcher,consumer,
             epochs:Vec::new(),catalog:&catalog,maps,output:&output,permanent,calls,carrier_calls,program:&program,
-            timer:TimerWatch {start:Count(0),end:Count(0),range:TIMER_RANGE,limit:TIMER_LIMIT,batch:None,error:None},timer_active:false,consumer_segments:0};
+            timer:TimerWatch {start:Count(0),end:Count(0),range:TIMER_RANGE,limit:TIMER_LIMIT,batch:None,error:None},timer_active:false,consumer_segments:0,owners};
         let outcome=machine.traces.arm(&machine.session,initial).and_then(|()|capture.run(&mut machine));
         if capture.timer_active {if let Err(error)=capture.timer_end(&mut machine){capture.timer.error=Some(error);}}
         capture.consumer.finalize(&machine,outcome.as_ref().err().cloned());

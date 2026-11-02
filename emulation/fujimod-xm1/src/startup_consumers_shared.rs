@@ -83,12 +83,16 @@ impl Recorder {
                 globals_seen:BTreeSet::new(),installed:false,outer_returned:false,
                 carriers:[0x61c400,0x40000,0xd0000].into_iter().zip(input.carrier_sizes).map(|(base,size)|
                     WatchRange {start:base,end:base+size as u64,kinds:WatchKinds::WRITES}).collect(),
-                peer_poll:None,peer_ready:false,retained_records:0,captured_bytes:0,captured_views:0,shared_sites:Some(input.sites)}})
+                peer_poll:None,peer_ready:false,retained_records:0,captured_bytes:0,captured_views:0,shared_sites:Some(input.sites),shared_owners:None}})
     }
     pub(crate) fn initial_sites(&self)->BTreeMap<u32,String> {
         let globals=self.runtime.shared_sites.as_ref().map(Sites::points).unwrap_or_default();
         FAMILIES.into_iter().map(|family|(family.entry(),format!("consumer-global-{:x}",family.entry())))
             .chain(globals.into_iter().map(|pc|(pc,format!("consumer-global-{pc:x}")))).collect()
+    }
+    pub(crate) fn attach_owners(&mut self,owners:StartupSites){self.runtime.shared_owners=Some(owners);}
+    pub(crate) fn close_sites(&self,machine:&mut Machine)->Result<(),String>{
+        self.runtime.shared_owners.as_ref().ok_or("shared observation owners absent")?.close(machine,Component::Consumer)
     }
     pub(crate) fn is_outer(machine:&Machine)->Result<bool,String> {
         let state=context(machine,Core::Primary)?;

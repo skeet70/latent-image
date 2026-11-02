@@ -18,6 +18,7 @@ pub mod r4f;
 pub mod render;
 pub mod run;
 pub mod sd_host;
+pub mod startup_sites;
 pub mod trace;
 pub mod ui_conversion;
 pub mod witness;

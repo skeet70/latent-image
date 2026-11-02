@@ -1,6 +1,7 @@
 use fujimod_emulator::board::{bus::TransactionBatch, factory::MemoryMap, observation::{ViewPolicy, WatchKinds, WatchRange}};
 use fujimod_emulator_cpu::{Register, arm};
 use fujimod_xm1::{bridge::{read, write}, guest::RouteKey, machine::Machine, provenance::Guest, run::{self, RunDocument, ValidatedUpdate}};
+use fujimod_xm1::startup_sites::{Component,StartupSites};
 use serde::{Deserialize, Serialize};
 use std::{collections::{BTreeMap, BTreeSet}, num::NonZeroUsize, path::{Path, PathBuf}, process::ExitCode};
 
@@ -128,7 +129,7 @@ const TIMER_LIMIT:usize=3_000_000;
 struct TimerWatch {start:Count,end:Count,range:[Guest;2],limit:usize,batch:Option<TransactionBatch>,error:Option<String>}
 
 #[derive(Default)]
-struct Observation {events:Vec<Event>,calls:Vec<Call>,snapshots:Vec<Snapshot>,pulses:Vec<Pulse>,cursor:usize,plain_views:BTreeSet<u32>,image5_seen:bool,loader_sp:[Option<Guest>;2],first_loader:Option<EventId>,flexible_origin:bool}
+struct Observation {events:Vec<Event>,calls:Vec<Call>,snapshots:Vec<Snapshot>,pulses:Vec<Pulse>,cursor:usize,plain_views:BTreeSet<u32>,image5_seen:bool,loader_sp:[Option<Guest>;2],first_loader:Option<EventId>,flexible_origin:bool,shared_owners:Option<StartupSites>}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase { Setup, Root, DiagnosticReturn, Idle0, Idle1AndStandby }
@@ -199,9 +200,14 @@ impl Observation {
     fn target(&mut self,machine:&mut Machine,catalog:&Catalog,target:Guest)->Result<(),String>{
         if target.0%4!=0{return Err("computed target is outside the admitted A32 entry set".into());}catalog.word(target)?;
         if diagnostics(target){return Err("computed transfer would enter a diagnostic body".into());}
-        if !machine.traces.sites.contains_key(&target.0){machine.traces.add_sites(&machine.session,BTreeMap::from([(target.0,"temporary-boundary".into())]))?;}
+        if let Some(owners)=&self.shared_owners {owners.acquire(machine,Component::Route,target)?;}
+        else if !machine.traces.sites.contains_key(&target.0){machine.traces.add_sites(&machine.session,BTreeMap::from([(target.0,"temporary-boundary".into())]))?;}
         machine.traces.stop_labels.insert("temporary-boundary".into());
         Ok(())
+    }
+    fn revoke(&self,machine:&mut Machine,addresses:&[Guest])->Result<(),String>{
+        if let Some(owners)=&self.shared_owners {owners.revoke(machine,Component::Route,addresses)}
+        else {machine.traces.remove_sites(&machine.session,addresses)}
     }
     fn collect(&mut self,machine:&mut Machine,catalog:&Catalog,maps:&[MemoryMap],output:&Path,permanent:&BTreeMap<u32,String>,static_calls:&[StaticCall],program:&Program)->Result<(),String>{
         if machine.traces.hits.len()>=(if self.flexible_origin {131_072}else{TRACE_LIMIT}){return Err("continuation trace bound exhausted".into());}
@@ -223,7 +229,10 @@ impl Observation {
             }
             let boundary_consumed=self.calls.iter().any(|call|call.returned.is_some_and(|returned|returned.0==id.0)||call.entry.is_some_and(|entry|entry.0==id.0));
             let boundary_needed=self.calls.iter().any(|call|(call.entry.is_none()&&call.target==pc)||(call.entry.is_some()&&call.returned.is_none()&&call.continuation==pc));
-            if boundary_consumed && !boundary_needed && !permanent.contains_key(&pc.0){machine.traces.remove_sites(&machine.session,&[pc])?;}
+            if boundary_consumed && !boundary_needed {
+                if let Some(owners)=&self.shared_owners {owners.release(machine,Component::Route,&[pc])?;}
+                else if !permanent.contains_key(&pc.0){machine.traces.remove_sites(&machine.session,&[pc])?;}
+            }
             if let Some(address)=self.calls.iter().find(|call|call.kind==CallKind::Task&&call.returned.is_some_and(|returned|returned.0==id.0)).and_then(|call|call.descriptor){self.events[id.0].descriptor=Some(continuation_view::words(&machine.session,maps,address,7)?);}
             let spec=if let Some(spec)=static_calls.iter().find(|call|call.site==pc){Some(spec.clone())}else if matches!(pc.0,0xd9858c|0x69d2e0|0x73be5c|0x73beac){decode_call(pc,catalog.word(pc)?.1)?}else{None};
             if let Some(spec)=spec {
@@ -242,10 +251,10 @@ impl Observation {
                 let context=continuation_view::words(&machine.session,maps,Guest(regs.r[1].checked_add(0x18).ok_or("saved context address overflow")?),2)?;
                 if regs.sp.0!=context.values[0]{return Err("selected stack differs from the loaded saved context".into());}
                 let target=Guest(context.values[1]);self.events[id.0].state.push(context);self.target(machine,catalog,target)?;
-                let addresses=if pc.0==0x436e8{[Guest(0x43688),Guest(0x436e4),Guest(0x436e8)]}else{[Guest(0xd3688),Guest(0xd36e4),Guest(0xd36e8)]};machine.traces.remove_sites(&machine.session,&addresses)?;
+                let addresses=if pc.0==0x436e8{[Guest(0x43688),Guest(0x436e4),Guest(0x436e8)]}else{[Guest(0xd3688),Guest(0xd36e4),Guest(0xd36e8)]};self.revoke(machine,&addresses)?;
                 if self.flexible_origin {self.loader_sp[usize::from(core)]=None;}
             }
-            if matches!(pc.0,0x43758|0xd3758){let task=continuation_view::words(&machine.session,maps,Guest(regs.r[2]),3)?;let link=continuation_view::words(&machine.session,maps,Guest(regs.r[1].checked_add(8).ok_or("task creation-record link overflows")?),1)?;if link.values[0]!=regs.r[2]{return Err("current task creation-record link differs".into());}self.target(machine,catalog,Guest(task.values[2]))?;self.events[id.0].state.extend([task,link]);machine.traces.remove_sites(&machine.session,&[pc])?;}
+            if matches!(pc.0,0x43758|0xd3758){let task=continuation_view::words(&machine.session,maps,Guest(regs.r[2]),3)?;let link=continuation_view::words(&machine.session,maps,Guest(regs.r[1].checked_add(8).ok_or("task creation-record link overflows")?),1)?;if link.values[0]!=regs.r[2]{return Err("current task creation-record link differs".into());}self.target(machine,catalog,Guest(task.values[2]))?;self.events[id.0].state.extend([task,link]);self.revoke(machine,&[pc])?;}
             let resources:Vec<Resource>=match pc.0 {
                 0x409ac=>vec![Resource::LoaderA],0xd09ac if first_carrier=>vec![Resource::LoaderB,Resource::LoaderA],0xd09ac=>vec![Resource::LoaderB],
                 0x6a8c04=>vec![Resource::Image5Bss],
