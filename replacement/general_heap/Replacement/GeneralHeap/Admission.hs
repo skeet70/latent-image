@@ -8,7 +8,7 @@ module Replacement.GeneralHeap.Admission
 import qualified A32 as A
 import Control.Monad (unless)
 import Data.Aeson (Value, object, (.=))
-import Data.Bits ((.&.))
+import Data.Bits (shiftR, xor, (.&.))
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -76,6 +76,8 @@ frameValue (FrameProof entry bottom calls returns pcs literals) = object
   ,"literal_words" .= [object ["address" .= address,"value" .= value] | (address,value) <- literals]]
 
 -- Calls retain only their boundary metadata; callee register effects are a conditional premise.
+-- Each path carries the last evaluated condition and its outcome until an instruction may write
+-- the flags, so a predicated epilogue is followed only on the paths where it executes.
 deriveFrames :: B.ByteString -> [Word32] -> Either AdmissionError [FrameProof]
 deriveFrames bytes entries = mapM derive entries
   where
@@ -83,84 +85,106 @@ deriveFrames bytes entries = mapM derive entries
     inside pc = pc .&. 3 == 0 && pc /= 0x89d4f8 && any (\(Carrier _ low high) -> low <= pc && pc < high) carriers
     word pc = if pc >= base && toInteger pc + 4 <= toInteger base + toInteger (B.length bytes)
       then Right (U.word32At bytes (fromIntegral (pc-base))) else Left CarrierRejected
-    derive entry = walk entry S.empty [(entry,0,Nothing)] 0 [] [] [] []
+    derive entry = walk entry S.empty [(entry,0,Nothing,Nothing)] 0 [] [] [] []
     walk entry _ [] bottom calls returns pcs literals = Right (FrameProof entry bottom (S.toList (S.fromList calls)) (S.toList (S.fromList returns)) (S.toList (S.fromList pcs)) (M.toList (M.fromList literals)))
-    walk entry seen ((pc,sp,fp):pending) bottom calls returns pcs literals
-      | S.member (pc,sp,fp) seen = walk entry seen pending bottom calls returns pcs literals
+    walk entry seen (state@(pc,sp,fp,known):pending) bottom calls returns pcs literals
+      | S.member state seen = walk entry seen pending bottom calls returns pcs literals
       | S.size seen > 100000 || not (inside pc) = Left (InstructionRejected pc)
       | otherwise = do
           encoded <- word pc
           let instruction = A.decode pc encoded
-              seen' = S.insert (pc,sp,fp) seen
-              next offset frame = [(pc+4,offset,frame)]
+              code = min 14 (encoded `shiftR` 28)
+              outcome = case known of
+                _ | code == 14 -> Just True
+                Just (previous,held) | previous == code -> Just held
+                                     | previous `xor` 1 == code -> Just (not held)
+                _ -> Nothing
+              executedKnown = if writesFlags instruction then Nothing else maybe (Just (code,True)) (const known) outcome
+              skippedKnown = maybe (Just (code,False)) (const known) outcome
+              seen' = S.insert state seen
+              next offset frame = [(pc+4,offset,frame,executedKnown)]
               finish paths low calls' returns' literals' = walk entry seen' (paths ++ pending) (min bottom low) (calls' ++ calls) (returns' ++ returns) (pc:pcs) (literals' ++ literals)
-              conditional (A.Cond condition) paths = paths ++ [state | condition /= 14, state <- next sp fp]
+              conditional paths = paths ++ [(pc+4,sp,fp,skippedKnown) | outcome == Nothing]
               stack offset = unless (offset <= 0 && offset >= -65536 && offset .&. 3 == 0) (Left (StackRejected pc))
-              ret condition offset = do
+              ret offset = do
                 unless (offset == 0) (Left (StackRejected pc))
-                finish (conditional condition []) offset [] [pc] []
-              call condition target = do
+                finish (conditional []) offset [] [pc] []
+              call target = do
                 unless (pc >= 0xbf1a00 || target < 0xbf1a00) (Left (InstructionRejected pc))
                 unless (sp .&. 7 == 0 && (inside target || target `elem` retainedCallees)) (Left (StackRejected pc))
-                finish (conditional condition (next sp fp)) sp [CallBoundary pc target sp] [] []
+                finish (conditional (next sp fp)) sp [CallBoundary pc target sp] [] []
           case instruction of
             A.Rejected _ -> Left (InstructionRejected pc)
             A.ReadStatus _ _ -> Left (InstructionRejected pc)
             A.WriteApplicationFlags _ _ -> Left (InstructionRejected pc)
-            A.Branch condition True target -> call condition target
-            A.Branch condition False target
+            _ | outcome == Just False -> finish [(pc+4,sp,fp,known)] sp [] [] []
+            A.Branch _ True target -> call target
+            A.Branch _ False target
               | target `elem` retainedCallees -> do
                   unless (sp == 0) (Left (StackRejected pc))
-                  finish (conditional condition []) sp [CallBoundary pc target sp] [pc] []
+                  finish (conditional []) sp [CallBoundary pc target sp] [pc] []
               | pc < 0xbf1a00 && target >= 0xbf1a00 -> Left (InstructionRejected pc)
-              | otherwise -> finish (conditional condition [(target,sp,fp)]) sp [] [] []
-            A.BranchExchange condition False register | register == A.lr -> ret condition sp
+              | otherwise -> finish (conditional [(target,sp,fp,executedKnown)]) sp [] [] []
+            A.BranchExchange _ False register | register == A.lr -> ret sp
             A.BranchExchange {} -> Left (InstructionRejected pc)
-            A.StoreMultiple condition register A.DecrementBefore True registers | register == A.sp -> do
+            A.StoreMultiple _ register A.DecrementBefore True registers | register == A.sp -> do
               let offset = sp - 4 * length registers
               stack offset
-              finish (conditional condition (next offset fp)) offset [] [] []
-            A.LoadMultiple condition register A.IncrementAfter True registers | register == A.sp -> do
+              finish (conditional (next offset fp)) offset [] [] []
+            A.LoadMultiple _ register A.IncrementAfter True registers | register == A.sp -> do
               let offset = sp + 4 * length registers
               stack offset
-              if A.pc `elem` registers then ret condition offset else finish (conditional condition (next offset (if A.Reg 11 `elem` registers then Nothing else fp))) offset [] [] []
-            A.DataProcessing condition operation _ destination source (A.Immediate amount) | destination == A.sp && source == A.sp && operation `elem` [A.ADD,A.SUB] -> do
+              if A.pc `elem` registers then ret offset else finish (conditional (next offset (if A.Reg 11 `elem` registers then Nothing else fp))) offset [] [] []
+            A.DataProcessing _ operation _ destination source (A.Immediate amount) | destination == A.sp && source == A.sp && operation `elem` [A.ADD,A.SUB] -> do
               let offset = sp + (if operation == A.ADD then 1 else -1) * fromIntegral amount
               stack offset
-              finish (conditional condition (next offset fp)) offset [] [] []
-            A.DataProcessing condition A.ADD _ (A.Reg 11) source (A.Immediate amount) | source == A.sp -> finish (conditional condition (next sp (Just (sp + fromIntegral amount)))) sp [] [] []
-            A.DataProcessing condition A.SUB _ destination (A.Reg 11) (A.Immediate amount) | destination == A.sp -> case fp of
+              finish (conditional (next offset fp)) offset [] [] []
+            A.DataProcessing _ A.ADD _ (A.Reg 11) source (A.Immediate amount) | source == A.sp -> finish (conditional (next sp (Just (sp + fromIntegral amount)))) sp [] [] []
+            A.DataProcessing _ A.SUB _ destination (A.Reg 11) (A.Immediate amount) | destination == A.sp -> case fp of
               Nothing -> Left (StackRejected pc)
               Just saved -> do
                 let offset = saved - fromIntegral amount
                 stack offset
-                finish (conditional condition (next offset fp)) offset [] [] []
-            A.DataProcessing condition A.MOV _ destination _ (A.ShiftedImmediate source A.LSL 0) | destination == A.pc && source == A.lr -> ret condition sp
+                finish (conditional (next offset fp)) offset [] [] []
+            A.DataProcessing _ A.MOV _ destination _ (A.ShiftedImmediate (A.Reg 11) A.LSL 0) | destination == A.sp -> case fp of
+              Nothing -> Left (StackRejected pc)
+              Just saved -> do
+                stack saved
+                finish (conditional (next saved fp)) saved [] [] []
+            A.DataProcessing _ A.MOV _ destination _ (A.ShiftedImmediate source A.LSL 0) | destination == A.pc && source == A.lr -> ret sp
             A.DataProcessing _ _ _ destination _ _ | destination `elem` [A.pc,A.sp] -> Left (StackRejected pc)
-            A.Store condition A.Word _ register (A.OffsetImmediate amount) indexing | register == A.sp && indexing /= A.OffsetOnly -> do
+            A.Store _ A.Word _ register (A.OffsetImmediate amount) indexing | register == A.sp && indexing /= A.OffsetOnly -> do
               let offset = sp + fromIntegral amount
               stack offset
-              finish (conditional condition (next offset fp)) offset [] [] []
-            A.Load condition A.Word _ destination register (A.OffsetImmediate amount) indexing | register == A.sp && indexing /= A.OffsetOnly -> do
+              finish (conditional (next offset fp)) offset [] [] []
+            A.Load _ A.Word _ destination register (A.OffsetImmediate amount) indexing | register == A.sp && indexing /= A.OffsetOnly -> do
               let offset = sp + fromIntegral amount
               stack offset
-              if destination == A.pc then ret condition offset else do
+              if destination == A.pc then ret offset else do
                 unless (destination /= A.sp) (Left (StackRejected pc))
-                finish (conditional condition (next offset (if destination == A.Reg 11 then Nothing else fp))) offset [] [] []
-            A.Load condition width _ _ register (A.OffsetImmediate offset) A.OffsetOnly | register == A.pc -> do
+                finish (conditional (next offset (if destination == A.Reg 11 then Nothing else fp))) offset [] [] []
+            A.Load _ width _ _ register (A.OffsetImmediate offset) A.OffsetOnly | register == A.pc -> do
               let destinations = writtenRegisters instruction
               unless (all (`notElem` destinations) [A.pc,A.sp] && width `elem` [A.Word,A.Dual]) (Left (InstructionRejected pc))
               let address = fromInteger (toInteger pc + 8 + toInteger offset)
                   addresses = if width == A.Dual then [address,address+4] else [address]
               unless (all inside addresses && (pc >= 0xbf1a00 || all (< 0xbf1a00) addresses)) (Left (InstructionRejected pc))
               values <- mapM word addresses
-              finish (conditional condition (next sp (if A.Reg 11 `elem` destinations then Nothing else fp))) sp [] [] (zip addresses values)
+              finish (conditional (next sp (if A.Reg 11 `elem` destinations then Nothing else fp))) sp [] [] (zip addresses values)
             A.Load _ _ _ destination _ _ _ | destination `elem` [A.pc,A.sp] -> Left (StackRejected pc)
             A.LoadMultiple _ _ _ _ registers | any (`elem` registers) [A.pc,A.sp] -> Left (StackRejected pc)
             _ -> do
               let destinations = writtenRegisters instruction
               unless (all (`notElem` destinations) [A.pc,A.sp]) (Left (StackRejected pc))
-              finish (next sp (if A.Reg 11 `elem` destinations then Nothing else fp)) sp [] [] []
+              finish (conditional (next sp (if A.Reg 11 `elem` destinations then Nothing else fp))) sp [] [] []
+
+writesFlags :: A.Instruction -> Bool
+writesFlags instruction = case instruction of
+  A.DataProcessing _ _ setsFlags _ _ _ -> setsFlags
+  A.Branch _ True _ -> True
+  A.BranchExchange _ True _ -> True
+  A.WriteApplicationFlags _ _ -> True
+  _ -> False
 
 writtenRegisters :: A.Instruction -> [A.Reg]
 writtenRegisters instruction = case instruction of

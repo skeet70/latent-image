@@ -101,30 +101,43 @@ pub(super) fn geometry_control(admitted: &Admitted) -> Result<(), String> {
 fn carrier(pc: u32) -> bool { pc & 3 == 0 && CARRIERS.iter().any(|(low, high, _)| *low <= pc && pc.checked_add(4).is_some_and(|end| end <= *high)) }
 fn immediate(word: u32) -> u32 { (word & 255).rotate_right(((word >> 8) & 15) * 2) }
 
+/// Each path carries the last evaluated condition and its outcome until an instruction may write the flags.
 fn derive(images: &[Image], roots: &BTreeSet<u32>) -> Result<(BTreeSet<u32>, BTreeMap<u32, u32>), String> {
-    let mut pending: Vec<_> = roots.iter().map(|pc| (*pc, 0i32, None::<i32>)).collect();
+    let mut pending: Vec<_> = roots.iter().map(|pc| (*pc, 0i32, None::<i32>, None::<(u32, bool)>)).collect();
     let mut seen = BTreeSet::new();
     let mut pcs = BTreeSet::new();
     let mut literals = BTreeMap::new();
-    while let Some((pc, sp, fp)) = pending.pop() {
-        if !seen.insert((pc, sp, fp)) { continue; }
+    while let Some(state @ (pc, sp, fp, known)) = pending.pop() {
+        if !seen.insert(state) { continue; }
         require(seen.len() <= 100_000 && carrier(pc), "owned CFG leaves charged carriers")?;
         let word = expected(images, pc)?;
         let condition = word >> 28;
         require(condition < 15, "unconditional extension instruction is not admitted")?;
         pcs.insert(pc);
-        let mut next = Some((pc.checked_add(4).ok_or("CFG PC overflow")?, sp, fp));
-        let mut returns = false;
+        let outcome = if condition == 14 { Some(true) } else {
+            match known {
+                Some((previous, held)) if previous == condition => Some(held),
+                Some((previous, held)) if previous ^ 1 == condition => Some(!held),
+                _ => None,
+            }
+        };
+        let fallthrough = pc.checked_add(4).ok_or("CFG PC overflow")?;
+        if outcome == Some(false) {
+            pending.push((fallthrough, sp, fp, known));
+            continue;
+        }
+        let mut next = Some((fallthrough, sp, fp));
+        let mut writes_flags = false;
         if word & 0x0e000000 == 0x0a000000 {
             let displacement = (((word & 0xffffff) << 8) as i32) >> 6;
             let target = pc.wrapping_add(8).wrapping_add_signed(displacement);
             require(pc >= 0xbf1a00 || target < 0xbf1a00, "image4 transfer depends on unloaded image5")?;
             if word & 0x01000000 != 0 {
                 require(sp & 7 == 0 && (carrier(target) || RETAINED_CALLEES.contains(&target)), "owned call target or stack is not admitted")?;
-                if carrier(target) { pending.push((target, 0, None)); }
+                writes_flags = true;
+                if carrier(target) { pending.push((target, 0, None, None)); }
             } else if RETAINED_CALLEES.contains(&target) {
                 require(sp == 0, "owned tail call has a live frame")?;
-                returns = true;
                 next = None;
             } else {
                 require(carrier(target), "owned branch leaves carriers")?;
@@ -132,7 +145,6 @@ fn derive(images: &[Image], roots: &BTreeSet<u32>) -> Result<(BTreeSet<u32>, BTr
             }
         } else if word & 0x0ffffff0 == 0x012fff10 {
             require(word & 15 == 14 && sp == 0, "owned computed transfer or unbalanced return")?;
-            returns = true;
             next = None;
         } else if word & 0x0e000000 == 0x08000000 {
             let rn = (word >> 16) & 15;
@@ -147,7 +159,6 @@ fn derive(images: &[Image], roots: &BTreeSet<u32>) -> Result<(BTreeSet<u32>, BTr
                 require((-65536..=0).contains(&offset) && offset & 3 == 0 && list & (1 << 13) == 0, "owned stack multiple transfer escapes frame")?;
                 if load && list & (1 << 15) != 0 {
                     require(offset == 0, "owned return retains stack frame")?;
-                    returns = true;
                     next = None;
                 } else { next = Some((pc + 4, offset, if load && list & (1 << 11) != 0 { None } else { fp })); }
             } else {
@@ -170,7 +181,6 @@ fn derive(images: &[Image], roots: &BTreeSet<u32>) -> Result<(BTreeSet<u32>, BTr
             require((-65536..=0).contains(&offset) && offset & 3 == 0, "owned indexed stack transfer escapes frame")?;
             if load && rd == 15 {
                 require(offset == 0, "owned indexed return retains frame")?;
-                returns = true;
                 next = None;
             } else { next = Some((pc + 4, offset, if load && rd == 11 { None } else { fp })); }
         } else if word & 0x0c000000 == 0x04000000 {
@@ -236,21 +246,23 @@ fn derive(images: &[Image], roots: &BTreeSet<u32>) -> Result<(BTreeSet<u32>, BTr
                     let amount = i32::try_from(immediate(word)).map_err(|_| "owned stack immediate exceeds signed range")?;
                     if op == 4 { sp.checked_add(amount) } else { sp.checked_sub(amount) }
                 } else if imm && rn == 11 && op == 2 { fp.and_then(|fp| i32::try_from(immediate(word)).ok().and_then(|amount| fp.checked_sub(amount))) }
+                else if !imm && op == 13 && word & 0xfff == 11 { fp }
                 else { None }.ok_or("owned SP assignment is not statically bounded")?;
                 require((-65536..=0).contains(&offset) && offset & 3 == 0, "owned SP leaves frame")?;
                 next = Some((pc + 4, offset, fp));
             } else if rd == 15 && ![8, 9, 10, 11].contains(&op) {
                 require(word & 0x0fffffff == 0x01a0f00e && sp == 0, "owned data processing computes PC")?;
-                returns = true;
                 next = None;
             } else if rd == 11 && rn == 13 && imm && op == 4 {
                 let amount = i32::try_from(immediate(word)).map_err(|_| "owned frame immediate exceeds signed range")?;
                 next = Some((pc + 4, sp, Some(sp.checked_add(amount).ok_or("owned frame pointer overflow")?)));
             } else if rd == 11 && !tests { next = Some((pc + 4, sp, None)); }
             require(word & 0x0f9000f0 != 0x01000090, "owned exclusive instruction is not admitted")?;
+            writes_flags = word & (1 << 20) != 0;
         } else { return Err(format!("owned instruction {word:#x} at {pc:#x} has no admitted decoder")); }
-        if let Some(state) = next { pending.push(state); }
-        if condition != 14 && (returns || next != Some((pc + 4, sp, fp))) { pending.push((pc + 4, sp, fp)); }
+        let executed = if writes_flags { None } else if outcome.is_none() { Some((condition, true)) } else { known };
+        if let Some((target, offset, frame)) = next { pending.push((target, offset, frame, executed)); }
+        if outcome.is_none() { pending.push((fallthrough, sp, fp, Some((condition, false)))); }
     }
     require(pcs.is_disjoint(&literals.keys().copied().collect()), "owned literal is executable")?;
     Ok((pcs, literals))

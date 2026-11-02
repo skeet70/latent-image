@@ -75,6 +75,9 @@ main = do
   check "call to retained stock memmove admitted" (accepted (deriveWords [0xe92d4010,0xeb0002d6,0xe8bd8010]))
   check "tail branch to retained stock memmove admitted" (accepted (deriveWords [0xea0002d7]))
   check "call outside carriers and retained callees rejected" (not (accepted (deriveWords [0xe92d4010,0xeb0002d7,0xe8bd8010])))
+  check "predicated frame-pointer epilogue admitted on its executing paths" (accepted (deriveWords [0xe92d4830,0xe28db008,0xe3500001,0x11a0d00b,0x18bd8800,0xe8bd8830]))
+  check "flag write between predicated epilogue instructions rejected" (not (accepted (deriveWords [0xe92d4830,0xe28db008,0xe3500001,0x11a0d00b,0xe3500002,0x18bd8800,0xe8bd8830])))
+  check "SP restore from an unknown frame pointer rejected" (not (accepted (deriveWords [0xe92d4830,0xe1a0d00b,0xe8bd8830])))
   let originalDat = B.replicate 0x600 0
       changeFile offset = B.take offset originalDat <> B.singleton 1 <> B.drop (offset+1) originalDat
       record5 = Record5Window 0x400 0x500
