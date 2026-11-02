@@ -327,6 +327,16 @@ outerContinuation inputs role = case (inputLoaders inputs,role) of
       ,LS.boundaryPhase boundary == LI.Setup]
   _ -> Right (Address 0x40a00)
 
+data InstallationFrame = InstallationFrame Address Address
+installationFrame :: Inputs -> Role -> Address -> Address -> Either WitnessError InstallationFrame
+installationFrame inputs Joined (Address incoming) (Address observedLink) = do
+  boundary <- one FrameRejected [value | value <- C.installationBoundaries (inputJoinedProof inputs)
+    ,C.codeAddressValue (C.boundaryContinuation value) == observedLink
+    ,C.codeAddressValue (C.boundaryInstruction value)+4 == observedLink]
+  pure (InstallationFrame (Address (incoming+fromIntegral (C.stackOffsetValue (C.boundaryStack boundary))))
+    (Address (C.codeAddressValue (C.boundaryContinuation boundary))))
+installationFrame _ _ (Address incoming) _ = Right (InstallationFrame (Address (incoming-48)) (Address 0x69ce38))
+
 data CompletionSites = CompletionSites
   {siteCompletionStore :: Address,siteCompletionBeforeDsb :: Address,siteCompletionAfterDsb :: Address
   ,sitePeerPoll :: Address,sitePeerPostload :: Address,sitePeerBranch :: Address,sitePeerDestination :: A.Reg
@@ -360,14 +370,13 @@ checkOuter inputs receipt = do
     && pc returned == address encodedReturn && sp returned == sp entry && core returned == Primary
     && take 8 (drop 4 (K.contextRegisters (machine returned))) == take 8 (drop 4 (K.contextRegisters (machine entry)))
     && probeId entry < probeId installation && probeId installed < probeId returned) FrameRejected
-  let expectedStack = case receiptRole receipt of Joined -> sp entry-64; _ -> sp entry-48
-      continuation = case receiptRole receipt of Joined -> 0x69cf1c; _ -> 0x69ce38
-      minimumStack = case receiptRole receipt of
+  InstallationFrame expectedStack continuation <- installationFrame inputs (receiptRole receipt) (K.contextSp (machine entry)) (K.contextLr (machine installation))
+  let minimumStack = case receiptRole receipt of
         Joined -> fromIntegral (C.stackOffsetValue (C.joinedLow (inputJoinedProof inputs)))
         Retained -> -56
         Installer -> -48 + fromIntegral (IA.scratchLow (inputInstallerProof inputs))
-  require (core installation == Primary && pc installation == 0x725a04 && sp installation == expectedStack
-    && lr installation == continuation && pc installed == continuation && sp installed == expectedStack) FrameRejected
+  require (core installation == Primary && pc installation == 0x725a04 && sp installation == address expectedStack
+    && lr installation == address continuation && pc installed == address continuation && sp installed == address expectedStack) FrameRejected
   before <- memoryAt receipt entry
   after <- memoryAt receipt returned
   callerBefore <- bytesAt FrameRejected before (physical (sp entry)) 16
