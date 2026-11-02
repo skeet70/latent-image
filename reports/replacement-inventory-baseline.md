@@ -1295,13 +1295,33 @@ The first proposed owned increment is the complete finite startup orchestration 
 
 No fit or native frame proof is claimed before emission. There is no stock fallback or permission to move headers into adjacent data. A paired retained/owned run must compare consumer-visible effects through each actual return and the first task transfer, then through the complete claimed menu interval. Wrong phase, target, returned code, saved context and out-of-range effects must refuse independently. Diagnostic ownership is a later boundary unless complete fetch evidence excludes every diagnostic entry in every claimed scenario.
 
+#### Owned carrier source and admission
+
+The owned Rust source and its A32 entry adapter emit 280 bytes for each loader: `[0x409ac,0x40ac4)` and `[0xd09ac,0xd0ac4)`. Staging confines changes to the original 340-byte carrier and fills its remaining sixty bytes with owned NOP padding. The adapter saves exactly `{r4,r5,r11,lr}` and sets FP to incoming `SP-4`. It branches past the separately checked eight-byte compiler prologue; the admitted Rust body may neither read nor modify SP or r11. Retained calls therefore use incoming `SP-16` and the original sixteen saved bytes. This is emitted fit and compiled admission source, not executed frame qualification.
+
+Independent source walks establish the returning services' volatile live-ins. Preservation-only stack saves are not semantic input uses. No incoming r4-r11 semantic use is found in these returning services beyond preservation.
+
+| Retained service | Loader A / B | Volatile live-ins | Source evidence |
+| --- | --- | --- | --- |
+| Shared clear | `0x434f0` / `0xd34f0` | r0 destination, r1 byte count | Both listings 3364-3385; clears whole words from the supplied byte extent. |
+| Log setup/update | `0x41354` / `0xd1354` | r0, zero versus nonzero | Both listings 1216-1339; the nested copy kills incoming r12 before use. |
+| Returned-code publisher | `0x40c6c` / `0xd0c6c` | r0 callback capability | Both listings 774-781; the store preserves r0. |
+| Original fallback trace | `0x415a0` / `0xd15a0` | r0 byte, r1 halfword, r2 word | Both listings 1363-1412; stores are conditional on the ring-enabled state. |
+| Identity, private initialization, pre-phase and continuation services, auto-ready and timer activation | Entries in the preceding source graph | No incoming volatile semantic arguments | Direct-call closure includes forwarded r12 through interrupt setup and timer activation, rather than assuming it dead from a Rust signature. |
+
+The source scheduler entries `0x43688` and `0xd3688` are dedicated nonreturning transfer boundaries. They overwrite incoming r0 before use, overwrite active r4-r6 without saving them, change mode/SP and load a task-record PC. The owned call retains the source r0 assignment `-10`, but does not invent an ordinary AAPCS return contract. The original fallback is unreachable under this admitted transfer contract; arbitrary restored task PCs remain outside it. Both scheduler bodies and their direct helper are bound by listing ranges 3464-3503 and 2358-2367.
+
+The host artifact constructor symbolically admits both identities, all nonzero completion values, delayed publication, an indefinitely pending peer and phase0 nonreturn. It checks call ordering/arguments, returned-callback provenance, publication/barrier order, saved bytes and every service SP/FP. It refuses encoded-zero LSR/RRX operands instead of treating them as identity shifts. Eleven behavior-changing byte controls are supplied for each placement. These fixture executables compile but have not run.
+
+Staging reuses typed loader-word preimages and the update-container confined rebuild checks. The selected dispatcher provider is the canonical retained image4 implementation, whose actual local frame proof is included. There is no live Rust stack scratch below the retained service SP. The dispatcher's local low bound is not a transitive stack bound, and an owned dispatcher/installer cannot inherit this admission from separate qualification. The builder and its source-only contract are compiled, not yet invoked; source review precedes fixture and natural execution.
+
 | #149 acceptance criterion | Current status and exact missing fact |
 | --- | --- |
 | Bind admitted phase-driving, returned-code, callback and saved-context edges | Met for the canonical retained route and finite carriers: the source model and independently admitted 737-boundary receipt bind the reached calls, returns, callback publication and first saved-context transfer. Global SVC0/computed/interior/Thumb/alias/frame-writer and diagnostic-callee closure remains unmet outside that route. |
-| Preserve owned arguments, ordering, returns, caller/frame and committed resources | Unmet. No emitted, placed or naturally executed owned loader orchestration exists in this increment. |
+| Preserve owned arguments, ordering, returns, caller/frame and committed resources | Unmet. The two 280-byte carriers and compiled typed admission/staging source exist, but their fixtures, placement and natural execution are not yet qualified. |
 | Own reached diagnostics or establish bounded unreachability | Met only as bounded retained-route observation: no diagnostic entry or classified physical fetch is observed through the admitted menu endpoint. No owned-route diagnostic absence, uninterrupted mapping proof or global diagnostic callee/restore closure is claimed. |
-| Independent retained/owned comparisons through complete intervals, including failures/nonreturns | Unmet. The admitted retained baseline and serialized context/refusal controls are not a paired owned qualification. An emitted and naturally executed owned carrier is missing. |
-| Discriminating controls and continuous retired-body fetch guards | Host controls met: fifty complete serialized cases pass. Owned qualification remains unmet: no owned artifact or complete fetch exclusion from its first entry exists; the retained prefix does not individually log peer-poll fetches. |
+| Independent retained/owned comparisons through complete intervals, including failures/nonreturns | Unmet. The retained baseline and emitted carriers exist, but owned fixture outcomes and the paired natural comparison remain unexecuted. |
+| Discriminating controls and continuous retired-body fetch guards | Retained-consumer host controls remain complete at fifty cases. The new carriers' eleven refusal classes compile but have not run; complete owned-interval exclusion and paired natural controls remain unqualified. |
 | Inventory, ledger and clean cutover distinguish scope/resources | Met for this research increment: source inventory, admitted retained evidence, failed attempts, retained service/resources and the proposed 340-byte boundary are explicit. No production loader/diagnostic cutover or retirement is claimed. |
 
 ### 8.17 Initial root, idle and standby task bodies (#152)

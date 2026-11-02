@@ -1471,6 +1471,14 @@ The Haskell controls include earlier exact-copy positives for both loaders, wron
 
 After a complete retained receipt passes `--verify`, build `//emulation:loader-continuation-controls` with the other Haskell host tools. Invoke `bazel-bin/emulation/loader-continuation-controls OBSERVER ROOT OBSERVATION_DIRECTORY NEW_DIRECTORY` inside `devenv shell`. These controls invoke only the public host verifier, never a guest. They reconcile all observed call categories, raw phase/constructor chronology, required boundary projections, initial saved-context/C-entry transfers, CPU clock intervals/order, TCM alignment/endpoints and the named wrong-argument/target/return/write cases. Changed trace/watch files receive new bindings; unchanged resource files are hard-linked without mutation. The manifest distinguishes actual-observation mutations from serialized synthetic examples, including the deferred-call case. A synthetic admission is a validator control, not an observed firmware outcome.
 
+#### Owned loader orchestration source (#149)
+
+`//replacement/loader_orchestration:loader-a-orchestration-image` and `:loader-b-orchestration-image` emit the Rust phase-driving carriers and exact source-frame adapter. Each image fits within 340 bytes; the typed artifact library checks the actual code, compiler-prologue bypass and service boundaries. The [carrier contract](../reports/replacement-inventory-baseline.md#owned-carrier-source-and-admission) records the source-derived live-ins and nonreturning scheduler interface.
+
+After source review, run `//replacement/loader_orchestration:loader-orchestration-tests` for both placements and the eleven byte-changing refusal classes. `//replacement/loader_orchestration:stage-loader-orchestration` takes `SOURCE_DAT IMAGE4 LOADER_A LOADER_B LINKED_A SYMBOLS_A LINKED_B SYMBOLS_B NEW_OUTPUT_DIRECTORY`. Its output must be a new directory under an existing `private-data/scratch/` parent. It writes the confined `candidate.DAT`, both staged loader images and `contract.json`; it does not execute a guest.
+
+This source admits only the canonical retained dispatcher provider. Its local frame proof does not establish transitive retained-service backing, and separately qualified owned dispatcher/installer artifacts require joined admission. The existing retained-only observer does not yet qualify the owned role.
+
 ### Owned first-stage witness
 
 `//emulation:first-stage-witness` starts from the captured ROM reset with the packaged DAT. It arms five core-0 instruction stops before execution and reads twelve memory extents at the owned handoff vector. Its 20,000,000-instruction budget is separate from the cold-menu route. It does not import a stock-initialization checkpoint or force an execution frame.
