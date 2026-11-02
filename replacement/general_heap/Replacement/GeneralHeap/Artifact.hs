@@ -29,7 +29,7 @@ import System.FilePath ((</>))
 import System.Process (CreateProcess (..), proc)
 
 data ArtifactError = SourceMismatch | StockDerivationRejected String | ExtentRejected | MetadataRejected AdmissionError | SymbolsRejected deriving (Eq, Show)
-data CanonicalSource = CanonicalSource B.ByteString B.ByteString B.ByteString [Stock.FunctionDerivation]
+data CanonicalSource = CanonicalSource B.ByteString B.ByteString B.ByteString [Stock.FunctionDeclaration]
 data LinkedArtifact = LinkedArtifact B.ByteString B.ByteString [F.Symbol] [FrameProof] BackendGeometry ArenaLayout
 data StagedImages = StagedImages CanonicalSource LinkedArtifact B.ByteString B.ByteString
 newtype StagedCandidate = StagedCandidate B.ByteString
@@ -60,7 +60,7 @@ canonicalSource dat four five = do
     [segment] -> U.segLoad segment == 0x61c400 && U.segBss segment == 0x89ec00 && U.segBssLen segment == 0x352e00
     _ -> False) SourceMismatch
   proofs <- mapM (\(image,low,high,tails) -> either (Left . StockDerivationRejected) Right
-    (Stock.deriveFunction (Stock.GuestAddress (if image == Image4 then 0x61c400 else 0xbf1a00))
+    (Stock.deriveExtent (Stock.GuestAddress (if image == Image4 then 0x61c400 else 0xbf1a00))
       (if image == Image4 then four else five) (Stock.FunctionWindow (Stock.GuestAddress low) (Stock.GuestAddress high)) (map Stock.GuestAddress tails))) stockWindows
   pure (CanonicalSource dat four five proofs)
 
@@ -199,8 +199,7 @@ contractValue path4 path5 (StagedImages (CanonicalSource dat source4 source5 sto
   ,"frame_metadata" .= map frameValue frames
   ,"backend" .= ("rlsf-0.2.3/u32/u16/17/16"::String),"stock_header" .= ("boundary-tag-prev-inuse"::String)
   ,"backend_geometry" .= geometryValue geometry,"arena" .= arenaValue arena
-  ,"stock_derivation_premises" .= map (map Stock.returnPremiseLabel . Stock.derivationPremises) stockProofs
-  ,"stock_derivations" .= [case Stock.derivedDeclaration proof of Stock.FunctionDeclaration (Stock.GuestAddress address) (Stock.FunctionSize bytes) -> object ["entry" .= address,"code_extent_bytes" .= bytes] | proof <- stockProofs]
+  ,"stock_derivations" .= [object ["entry" .= address,"code_extent_bytes" .= bytes] | Stock.FunctionDeclaration (Stock.GuestAddress address) (Stock.FunctionSize bytes) <- stockProofs]
   ,"stock_windows" .= [object ["image" .= (if image == Image4 then 4 else 5::Int),"low" .= low,"high" .= high,"external_tails" .= tails] | (image,low,high,tails) <- stockWindows]
   ,"retained_dependencies" .= ([0x72b110,0x72b164,0x72b1cc,0x89d908,0x890ef8,0x890ee8,0x890ed8,0x6dbf38,0x72a7ac,0x72a7fc]::[Word32])
   ,"graphics_callback_table" .= [object ["address" .= address,"target" .= target] | (address,target) <- ([(0x890f08,0x890ed8),(0x890f0c,0x890ef8),(0x890f10,0x890ecc),(0x890f14,0x890ee8)]::[(Word32,Word32)])]

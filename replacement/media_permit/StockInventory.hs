@@ -12,6 +12,7 @@ module StockInventory
   , requiredReturnPremises
   , returnPremiseLabel
   , checkDeclarations
+  , deriveExtent
   , deriveFunction
   , checkedStockFunctions
   , stockFunctions
@@ -80,7 +81,21 @@ checkedStockFunctions image = do
   pure derived
 
 deriveFunction :: GuestAddress -> B.ByteString -> FunctionWindow -> [GuestAddress] -> Either String FunctionDerivation
-deriveFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low) (GuestAddress high)) externalTails = do
+deriveFunction imageBase image window@(FunctionWindow (GuestAddress low) _) externalTails = do
+  (declaration, literalWords, graph) <- classifyFunction imageBase image window externalTails
+  dependencies <- verifyReturns (M.fromList literalWords) (ProgramCounter low)
+    [CodeNode (ProgramCounter address) instruction (map ProgramCounter successors) condition | (address, instruction, successors, condition) <- graph]
+  pure (FunctionDerivation declaration (S.toList (S.fromList [premise | PremiseUse _ premise <- dependencies])) dependencies)
+
+-- | Code and literal classification of a function window, without the return proof.
+deriveExtent :: GuestAddress -> B.ByteString -> FunctionWindow -> [GuestAddress] -> Either String FunctionDeclaration
+deriveExtent imageBase image window externalTails = do
+  (declaration, _, _) <- classifyFunction imageBase image window externalTails
+  pure declaration
+
+classifyFunction :: GuestAddress -> B.ByteString -> FunctionWindow -> [GuestAddress]
+  -> Either String (FunctionDeclaration, [(ProgramCounter, LiteralWord)], [(Word32, A.Instruction, [Word32], A.Cond)])
+classifyFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low) (GuestAddress high)) externalTails = do
   unless (low < high && low .&. 3 == 0 && high .&. 3 == 0) (Left "invalid function window")
   (code, literals) <- walk [low] S.empty S.empty
   graph <- forM (S.toList code) $ \address -> do
@@ -99,12 +114,7 @@ deriveFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low)
   literalWords <- forM (S.toList literals) $ \address -> do
     value <- word address
     pure (ProgramCounter address, LiteralWord value)
-  dependencies <- verifyReturns (M.fromList literalWords) (ProgramCounter low)
-    [CodeNode (ProgramCounter address) instruction (map ProgramCounter successors) condition | (address, instruction, successors, condition) <- graph]
-  pure (FunctionDerivation
-    (FunctionDeclaration (GuestAddress low) (FunctionSize (fromIntegral (S.findMax code + 4 - low))))
-    (S.toList (S.fromList [premise | PremiseUse _ premise <- dependencies]))
-    dependencies)
+  pure (FunctionDeclaration (GuestAddress low) (FunctionSize (fromIntegral (S.findMax code + 4 - low))), literalWords, graph)
   where
     inside address = low <= address && address < high && address .&. 3 == 0
     word address
