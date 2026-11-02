@@ -22,7 +22,7 @@ import qualified Replacement.KernelInstall.Admission as IA
 import qualified Replacement.StartupComposition.Artifact as C
 import qualified Replacement.StartupDispatch.Artifact as D
 import Replacement.StartupConsumers.Evidence
-import Replacement.StartupConsumers.Effects (ConsumerProjection, checkConsumers, consumerProjection, consumerProjectionValue, familyEntryAddress)
+import Replacement.StartupConsumers.Effects (ConsumerProjection, checkConsumers, consumerProjection, consumerProjectionValue)
 import qualified Replacement.StartupConsumers.Source as S
 import Replacement.StartupConsumers.Wire
 
@@ -87,6 +87,7 @@ validateReceipt :: Inputs -> Receipt -> Either WitnessError Projection
 validateReceipt inputs receipt = do
   require (receiptSchema receipt == 1) DecodeRejected
   checkIdentity inputs receipt
+  checkWatchFailures receipt
   checkCensus receipt
   require (receiptOutcome receipt == Observed && receiptError receipt == Nothing && receiptFailure receipt == Nothing) StatusRejected
   checkLimits receipt
@@ -96,6 +97,7 @@ validateReceipt inputs receipt = do
   (entry,returned) <- checkOuter inputs receipt
   checkInstallation inputs receipt
   checkCompletion inputs receipt
+  checkFetchPolicies receipt
   checkConsumers (inputSource inputs) receipt
   consumers <- consumerProjection receipt
   pure (Projection entry returned consumers)
@@ -117,7 +119,7 @@ checkIdentity inputs receipt = do
 checkLimits :: Receipt -> Either WitnessError ()
 checkLimits receipt = do
   let limits = receiptLimits receipt
-      policy = Limits (Count 80000000) (Count 256) (Count 65536) (Count 131072) (Count 512) (Count 4194304)
+      policy = Limits (Count 80000000) (Count 256) (Count 4096) (Count 65536) (Count 131072) (Count 512) (Count 4194304)
         (Count 64) (Count 1048576) (Count 134217728) (Count 32768) (Count 65536)
       views = concatMap (\resource -> resourceInitial resource ++ resourceFinal resource) (receiptResources receipt)
         ++ concatMap (concatMap snapshotViews . probeSnapshots) (receiptProbes receipt)
@@ -139,13 +141,13 @@ checkCensus receipt = do
       invocations = receiptInvocations receipt
       families = [minBound..maxBound]
   outer <- probeAt receipt OuterEntry
-  executed <- executedFetchesAt (map familyEntryAddress families) receipt
+  executed <- executedFetchesAt (map S.familyEntryAddress families) receipt
   require (sort [(censusFamily item,censusCore item) | item <- census] == [(family,which) | family <- families,which <- [Primary,Secondary]]) CensusRejected
   forM_ families $ \family -> do
     let entered = [invocation | invocation <- invocations,invocationFamily invocation == family,invocationStatus invocation /= NotObserved]
     require (not (null entered)) (MissingFamily family)
     require (all (\invocation -> invocationStatus invocation == Returned && invocationReturn invocation /= Nothing) entered) (UnclosedFamily family)
-    let occurrences = [occurrence | occurrence <- executed,eventPc (executedRow occurrence) == Just (familyEntryAddress family)]
+    let occurrences = [occurrence | occurrence <- executed,eventPc (executedRow occurrence) == Just (S.familyEntryAddress family)]
         claimed = [probe | probe <- receiptProbes receipt,probeKind probe == FamilyEntry,probeFamily probe == Just family]
         matches probe occurrence =
           let event = executedRow occurrence
@@ -201,7 +203,7 @@ checkProbes inputs receipt = do
 checkFetchedCode :: Inputs -> Receipt -> Either WitnessError ()
 checkFetchedCode inputs receipt = do
   outer <- probeAt receipt OuterEntry
-  let sites = Set.fromList [physical (address site) | event <- allEvents receipt,eventSource event == CpuFetch,Just site <- [eventPc event]]
+  let sites = Set.fromList [physical (address site) | event <- allFetchedEvents receipt,Just site <- [eventPc event]]
       resources = [resource | resource <- receiptResources receipt,resourceKind resource == Carrier]
       sources = S.sourceFiles (inputSource inputs)
       expectedShapes = [(base+fromIntegral offset,fromIntegral (min 1048576 (size-offset)))

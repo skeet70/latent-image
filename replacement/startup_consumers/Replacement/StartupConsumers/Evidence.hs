@@ -1,7 +1,7 @@
 module Replacement.StartupConsumers.Evidence where
 
 import Control.Monad (foldM, forM, forM_, unless)
-import Data.Bits ((.&.), shiftL, shiftR)
+import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as B
 import Data.List (sort, sortOn, nub)
 import qualified Data.Map.Strict as M
@@ -10,6 +10,7 @@ import qualified Data.Set as Set
 import Data.Word (Word8, Word32, Word64)
 import Replacement.KernelInstall.Wire (Address (..), WordValue (..), Count (..), Bytes (..), Core (..), MemoryEvent (..), Watch (..), WatchClass (..), Source (..), ByteOrder (..))
 import qualified Replacement.KernelInstall.Wire as K
+import qualified Replacement.StartupConsumers.Source as S
 import Replacement.StartupConsumers.Wire
 
 data WitnessError
@@ -47,6 +48,25 @@ lr :: Probe -> Word32
 lr = address . K.contextLr . machine
 core :: Probe -> Core
 core = contextCore . probeContext
+data ExecutionMode = UserMode | FiqMode | IrqMode | SupervisorMode | MonitorMode | AbortMode | HypervisorMode | UndefinedMode | SystemMode deriving (Eq)
+data ExecutionFrame = ExecutionFrame Core ExecutionMode K.Address K.Address deriving (Eq)
+
+executionFrame :: Probe -> Either WitnessError ExecutionFrame
+executionFrame probe = do
+  mode <- case number (K.contextCpsr (machine probe)) .&. 0x1f of
+    0x10 -> pure UserMode
+    0x11 -> pure FiqMode
+    0x12 -> pure IrqMode
+    0x13 -> pure SupervisorMode
+    0x16 -> pure MonitorMode
+    0x17 -> pure AbortMode
+    0x1a -> pure HypervisorMode
+    0x1b -> pure UndefinedMode
+    0x1f -> pure SystemMode
+    _ -> Left InvocationRejected
+  fp <- K.Address <$> register probe 11
+  pure (ExecutionFrame (core probe) mode fp (K.contextSp (machine probe)))
+
 register :: Probe -> Int -> Either WitnessError Word32
 register probe index = required ContextRejected (lookup index (zip [0..] (map number (K.contextRegisters (machine probe)))))
 clock :: Context -> Word64
@@ -103,35 +123,60 @@ allEvents = concatMap (watchRecords . segmentWatch) . receiptSegments
 
 data ExecutedFetch = ExecutedFetch {executedRow :: MemoryEvent,executedCoreBefore :: Count}
 
+actualStoppedRows :: Segment -> Either WitnessError (Set.Set Word64)
+actualStoppedRows segment = do
+  require (unique (map stopCore (segmentStops segment))) FetchRejected
+  rows <- forM (segmentStops segment) $ \stopped -> do
+    require (stopInstructions stopped == Count (sum (map count (segmentEnd segment)))
+      && any (\context -> contextCore context == stopCore stopped
+        && K.contextPc (contextMachine context) == stopPc stopped) (segmentEndContexts segment)) FetchRejected
+    required FetchRejected (case reverse [index | (index,event) <- zip [0 :: Word64 ..] (watchRecords (segmentWatch segment))
+      ,eventSource event == CpuFetch,eventCore event == Just (stopCore stopped)
+      ,eventPc event == Just (stopPc stopped),eventInstructions event == Just (stopInstructions stopped)] of
+        index:_ -> Just index
+        [] -> Nothing)
+  pure (Set.fromList rows)
+
 executedFetchesAt :: [Address] -> Receipt -> Either WitnessError [ExecutedFetch]
 executedFetchesAt targets receipt = concat <$> mapM collect (receiptSegments receipt)
   where
     collect segment = do
-      let rows = watchRecords (segmentWatch segment)
-      require (unique (map stopCore (segmentStops segment))) FetchRejected
-      stoppedRows <- forM (segmentStops segment) $ \stopped -> do
-        require (stopInstructions stopped == Count (sum (map count (segmentEnd segment)))
-          && any (\context -> contextCore context == stopCore stopped
-            && K.contextPc (contextMachine context) == stopPc stopped) (segmentEndContexts segment)) FetchRejected
-        required FetchRejected (case reverse [index | (index,event) <- zip [0 :: Word64 ..] rows
-          ,eventSource event == CpuFetch,eventCore event == Just (stopCore stopped)
-          ,eventPc event == Just (stopPc stopped),eventInstructions event == Just (stopInstructions stopped)] of
-            index:_ -> Just index
-            [] -> Nothing)
-      (primary,secondary) <- case segmentStart segment of
-        [a,b] -> pure (a,b)
-        _ -> Left FetchRejected
-      (_,_,selected) <- foldM (advance (Set.fromList stoppedRows)) (primary,secondary,[]) (zip [0 :: Word64 ..] rows)
-      pure (reverse selected)
-    advance stopped state@(primary,secondary,selected) (index,event)
-      | eventSource event /= CpuFetch || Set.member index stopped = pure state
-      | otherwise = do
-          owner <- required FetchRejected (eventCore event)
-          instruction <- required FetchRejected (eventPc event)
-          let before = if owner == Primary then primary else secondary
-              next = Count (count before+1)
-              found = if instruction `elem` targets then ExecutedFetch event before:selected else selected
-          pure (if owner == Primary then (next,secondary,found) else (primary,next,found))
+      stopped <- actualStoppedRows segment
+      let evidence = M.fromList [(evidenceRow item,item) | item <- segmentCpuEvidence segment]
+      forM [(index,event) | (index,event) <- zip [0 :: Word64 ..] (watchRecords (segmentWatch segment))
+        ,eventSource event == CpuFetch,eventPc event `elem` map Just targets,Set.notMember index stopped] $ \(index,event) -> do
+          item <- required FetchRejected (M.lookup (Count index) evidence)
+          let own = count (evidenceCoreInstructions item)
+          require (own > 0) FetchRejected
+          pure (ExecutedFetch event (Count (own-1)))
+
+mergeFetchRanges :: [FetchRange] -> [FetchRange]
+mergeFetchRanges = reverse . foldl' merge [] . sort
+  where
+    merge [] next = [next]
+    merge (previous:rest) next
+      | fetchRangeLow next <= fetchRangeHigh previous =
+          FetchRange (fetchRangeLow previous) (max (fetchRangeHigh previous) (fetchRangeHigh next)):rest
+      | otherwise = next:previous:rest
+
+codeFetchRange :: Address -> S.ByteCount -> FetchRange
+codeFetchRange guest (S.ByteCount size) =
+  let start = fromIntegral (physical (address guest))
+  in FetchRange (PhysicalBoundary start) (PhysicalBoundary (start+fromIntegral size))
+
+backedFetchRanges :: [FetchRange]
+backedFetchRanges = [FetchRange (PhysicalBoundary low) (PhysicalBoundary high) | (low,high) <- backedRanges]
+
+rangeContains :: [FetchRange] -> Address -> S.ByteCount -> Bool
+rangeContains ranges low (S.ByteCount size) = any covers ranges
+  where
+    start = fromIntegral (address low)
+    covers (FetchRange (PhysicalBoundary begin) (PhysicalBoundary end)) = begin <= start && start+fromIntegral size <= end
+
+allFetchedEvents :: Receipt -> [MemoryEvent]
+allFetchedEvents receipt = [event | event <- allEvents receipt,eventSource event == CpuFetch]
+  ++ [attributedFetchEvent fetched | segment <- receiptSegments receipt,item <- segmentCpuEvidence segment
+      ,Just fetched <- [evidenceLatestFetch item]]
 
 isWrite :: MemoryEvent -> Bool
 isWrite event = eventSource event `elem` [CpuWrite,HostWrite,ModelBusWrite]
@@ -348,6 +393,156 @@ checkResources receipt = do
         expectedBytes <- resourceBytes resource expected
         require (actualBytes == expectedBytes) EffectRejected) (probeSnapshots probe)
 
+data SiteCallPhase = AwaitingTarget | AwaitingReturn deriving (Eq)
+data SiteCall = SiteCall
+  {siteCallOwner :: Maybe InvocationId,siteCallTarget :: Address,siteCallContinuation :: Address
+  ,siteCallFrame :: ExecutionFrame,siteCallPhase :: SiteCallPhase} deriving (Eq)
+data GlobalSiteReturn = GlobalSiteReturn Core Address ProbeKind deriving (Eq)
+data SiteState = SiteState
+  {siteAddresses :: Set.Set Address,siteFrames :: Set.Set InvocationId,siteCalls :: [SiteCall]
+  ,siteReturns :: [GlobalSiteReturn],siteCompleted :: Set.Set ProbeKind}
+
+scopedFetchRanges :: [Address] -> [FetchRange]
+scopedFetchRanges sites = mergeFetchRanges
+  ([codeFetchRange start size | S.CodeSpan start size <- S.ownedCodeSpans]
+  ++ [codeFetchRange site (S.ByteCount 4) | site <- map S.familyEntryAddress [minBound..maxBound]
+      ++ S.atomicSourceSites ++ map S.messageAccessInstruction S.messageAccesses ++ sites])
+
+checkDeclaredFetchPolicy :: Receipt -> Either WitnessError ()
+checkDeclaredFetchPolicy receipt = do
+  returned <- probeAt receipt OuterReturn
+  forM_ (receiptSegments receipt) $ \segment -> do
+    let ProbeRange begin _ = segmentProbeRange segment
+        expectedScope = if begin <= probeId returned then CompleteFetch else ScopedFetch
+        sites = segmentArmedSites segment
+        expected = if expectedScope == CompleteFetch then backedFetchRanges else scopedFetchRanges sites
+        actual = [FetchRange (PhysicalBoundary low) (PhysicalBoundary high) | classification <- watchClasses (segmentWatch segment)
+          ,CpuFetch `elem` classKinds classification,[low,high] <- [classRange classification]]
+    require (segmentFetchScope segment == expectedScope && sites == Set.toAscList (Set.fromList sites)
+      && all (\site -> address site .&. 3 == 0) sites
+      && segmentFetchRanges segment == expected && mergeFetchRanges actual == expected
+      && attributionSources (segmentFetchAttribution segment) == [CpuRead,CpuWrite]
+      && attributionRanges (segmentFetchAttribution segment) == backedFetchRanges) WatchRejected
+
+checkFetchPolicies :: Receipt -> Either WitnessError ()
+checkFetchPolicies receipt = do
+  outer <- probeAt receipt OuterEntry
+  let probes = receiptProbes receipt
+      initial = SiteState (Set.fromList (S.globalSourceSites ++ map S.familyEntryAddress [minBound..maxBound]
+        ++ [K.contextLr (machine outer)])) Set.empty [] [] Set.empty
+  require (map probeId probes == map (ProbeId . fromIntegral) [0..length probes-1]) ProbeRejected
+  (consumed,final,remaining) <- foldM checkSegment (0,initial,probes) (receiptSegments receipt)
+  require (consumed == fromIntegral (length probes) && null remaining) ProbeRejected
+  require (Set.null (siteFrames final) && null (siteCalls final) && null (siteReturns final)) WatchRejected
+  where
+    invocation ident = one WatchRejected [item | item <- receiptInvocations receipt,invocationId item == ident]
+    checkSegment (consumed,state,remaining) segment = do
+      let ProbeRange (ProbeId begin) (ProbeId end) = segmentProbeRange segment
+          expectedScope = if Set.member OuterReturn (siteCompleted state) then ScopedFetch else CompleteFetch
+          sites = Set.toAscList (siteAddresses state)
+          expected = if expectedScope == CompleteFetch then backedFetchRanges else scopedFetchRanges sites
+          actual = [FetchRange (PhysicalBoundary low) (PhysicalBoundary high) | classification <- watchClasses (segmentWatch segment)
+            ,CpuFetch `elem` classKinds classification,[low,high] <- [classRange classification]]
+      require (begin == consumed && begin <= end && end <= fromIntegral (length (receiptProbes receipt))) ProbeRejected
+      require (segmentFetchScope segment == expectedScope && segmentArmedSites segment == sites
+        && segmentFetchRanges segment == expected && mergeFetchRanges actual == expected
+        && attributionSources (segmentFetchAttribution segment) == [CpuRead,CpuWrite]
+        && attributionRanges (segmentFetchAttribution segment) == backedFetchRanges) WatchRejected
+      let (captured,rest) = splitAt (fromIntegral (end-begin)) remaining
+      forM_ captured $ \probe ->
+        if probeKind probe == OuterEntry && probeId probe == ProbeId 0 then
+          require (K.contextCounts (machine probe) == segmentStart segment
+            && any (\context -> contextCore context == core probe && contextMachine context == machine probe) (segmentStartContexts segment)) ProbeRejected
+        else require (any (\stopped -> stopCore stopped == core probe && stopPc stopped == K.contextPc (machine probe)
+          && stopInstructions stopped == Count (probeClock probe)) (segmentStops segment)
+          && any (\context -> contextCore context == core probe && contextMachine context == machine probe) (segmentEndContexts segment)) ProbeRejected
+      next <- foldM applyProbe state captured
+      pure (end,next,rest)
+    applyProbe state probe = do
+      changed <- case probeKind probe of
+        FamilyEntry -> case probeInvocation probe of
+          Nothing -> pure state
+          Just ident -> do
+            entered <- invocation ident
+            require (invocationEntry entered == Just (probeId probe)) WatchRejected
+            pure state {siteFrames = Set.insert ident (siteFrames state)
+              ,siteAddresses = Set.union (siteAddresses state) (Set.fromList
+                (S.familySourceSites (invocationFamily entered) ++ S.commonSourceSites ++ [K.contextLr (machine probe)]))}
+        FamilyReturn -> do
+          ident <- required WatchRejected (probeInvocation probe)
+          closed <- invocation ident
+          require (Set.member ident (siteFrames state)) WatchRejected
+          pure (removeSites (state {siteFrames = Set.delete ident (siteFrames state)})
+            (S.familySourceSites (invocationFamily closed) ++ S.commonSourceSites))
+        DynamicTarget -> do
+          key <- executionFrame probe
+          selected <- one WatchRejected [pending | pending <- siteCalls state,siteCallPhase pending == AwaitingTarget
+            ,siteCallOwner pending == probeInvocation probe,siteCallTarget pending == K.contextPc (machine probe)
+            ,siteCallContinuation pending == K.contextLr (machine probe),siteCallFrame pending == key]
+          pure state {siteCalls = [if pending == selected then pending {siteCallPhase = AwaitingReturn} else pending | pending <- siteCalls state]
+            ,siteAddresses = Set.insert (siteCallContinuation selected) (siteAddresses state)}
+        DynamicReturn -> do
+          key <- executionFrame probe
+          selected <- one WatchRejected [pending | pending <- siteCalls state,siteCallPhase pending == AwaitingReturn
+            ,siteCallOwner pending == probeInvocation probe,siteCallContinuation pending == K.contextPc (machine probe),siteCallFrame pending == key]
+          pure (removeSites (state {siteCalls = filter (/=selected) (siteCalls state)})
+            [siteCallTarget selected,siteCallContinuation selected])
+        kind | kind `elem` [OuterReturn,InstallerReturn,CacheReturn,InitializerReturn] -> do
+          selected <- one WatchRejected [pending | pending@(GlobalSiteReturn owner destination returned) <- siteReturns state
+            ,owner == core probe,destination == K.contextPc (machine probe),returned == kind]
+          pure state {siteReturns = filter (/=selected) (siteReturns state),siteCompleted = Set.insert kind (siteCompleted state)}
+        kind -> case globalReturn kind state of
+          Nothing -> pure state
+          Just returned -> pure state {siteReturns = GlobalSiteReturn (core probe) (K.contextLr (machine probe)) returned:siteReturns state
+            ,siteAddresses = Set.insert (K.contextLr (machine probe)) (siteAddresses state)}
+      let withoutPoll = if probeKind probe == InitializerCall
+            then changed {siteAddresses = foldr Set.delete (siteAddresses changed) (map Address [0xd0a44,0xd0a48,0xd0a4c])}
+            else changed
+      if probeKind probe `elem` [SourceProbe,CriticalIdentityCall,CriticalCall] then do
+        target <- sourceCallTarget probe
+        case target of
+          Nothing -> pure withoutPoll
+          Just destination -> do
+            key <- executionFrame probe
+            let pending = SiteCall (probeInvocation probe) destination (Address (pc probe+4)) key AwaitingTarget
+            pure withoutPoll {siteCalls = pending:siteCalls withoutPoll,siteAddresses = Set.insert destination (siteAddresses withoutPoll)}
+      else pure withoutPoll
+    globalReturn kind state = case kind of
+      OuterEntry -> Just OuterReturn
+      InstallerEntry -> Just InstallerReturn
+      CacheEntry | Set.notMember InstallerReturn (siteCompleted state) -> Just CacheReturn
+      InitializerEntry -> Just InitializerReturn
+      _ -> Nothing
+    removeSites state candidates = state {siteAddresses = foldr remove (siteAddresses state) candidates}
+      where
+        active = [item | item <- receiptInvocations receipt,Set.member (invocationId item) (siteFrames state)]
+        permanent = S.globalSourceSites ++ map S.familyEntryAddress [minBound..maxBound]
+        used site = site `elem` permanent
+          || any (\item -> site == invocationLr item || site `elem` S.familySourceSites (invocationFamily item) ++ S.commonSourceSites) active
+          || any (\pending -> site == siteCallTarget pending || site == siteCallContinuation pending) (siteCalls state)
+          || any (\(GlobalSiteReturn _ destination _) -> site == destination) (siteReturns state)
+        remove site sites = if used site then sites else Set.delete site sites
+
+sourceCallTarget :: Probe -> Either WitnessError (Maybe Address)
+sourceCallTarget probe
+  | instruction .&. 0x0f000000 == 0x0b000000 = do
+      require (instruction `shiftR` 28 == 14) WatchRejected
+      let offset = (instruction .&. 0x00ffffff) `shiftL` 2
+          displacement = if offset .&. 0x02000000 /= 0 then offset .|. 0xfc000000 else offset
+      aligned (pc probe+8+displacement)
+  | instruction .&. 0x0ffffff0 == 0x012fff30 = do
+      require (instruction `shiftR` 28 == 14) WatchRejected
+      destination <- case instruction .&. 15 of
+        13 -> pure (sp probe)
+        14 -> pure (lr probe)
+        15 -> pure (pc probe+8)
+        index -> register probe (fromIntegral index)
+      aligned destination
+  | otherwise = pure Nothing
+  where
+    instruction = number (probeSourceWord probe)
+    aligned destination = require (destination .&. 3 == 0) WatchRejected >> pure (Just (Address destination))
+
 checkSegments :: Receipt -> Either WitnessError ()
 checkSegments receipt = do
   outer <- probeAt receipt OuterEntry
@@ -357,10 +552,13 @@ checkSegments receipt = do
   require (unique (map segmentId segments)
     && segmentStart initial == K.contextCounts (machine outer)
     && and (zipWith (\a b -> segmentEnd a == segmentStart b && segmentEndContexts a == segmentStartContexts b) segments (drop 1 segments))) SegmentRejected
+  checkWatchFailures receipt
+  checkDeclaredFetchPolicy receipt
   mapM_ (check (K.contextTcm (machine outer))) segments
+  mapM_ (checkFetches receipt) segments
   let events = allEvents receipt
   clocks <- mapM eventClock [event | event <- events,eventSource event `elem` [CpuRead,CpuWrite,CpuFetch]]
-  require (clocks == sort clocks) EventOrderRejected
+  require (and (zipWith (<=) clocks (drop 1 clocks))) EventOrderRejected
   let terminal = sum (map count (segmentEnd terminalSegment))
   require (count (receiptInstructions receipt) == terminal
     && all (\attempt -> fetchSegment attempt `elem` map segmentId segments) (receiptFetches receipt)) SegmentRejected
@@ -369,7 +567,8 @@ checkSegments receipt = do
     check decoder segment = do
       let start = segmentStart segment; end = segmentEnd segment; watch = segmentWatch segment
       require (length start == 2 && length end == 2 && and (zipWith (<=) start end)
-        && sum (map count end)-sum (map count start) <= count (limitSegmentInstructions (receiptLimits receipt))) SegmentRejected
+        && sum (map count end)-sum (map count start) <= count (if segmentFetchScope segment == CompleteFetch
+          then limitSegmentInstructions (receiptLimits receipt) else limitScopedSegmentInstructions (receiptLimits receipt))) SegmentRejected
       let startContexts = segmentStartContexts segment; endContexts = segmentEndContexts segment
       require (map contextCore startContexts == [Primary,Secondary] && map contextCore endContexts == [Primary,Secondary]
         && all ((==start) . K.contextCounts . contextMachine) startContexts
@@ -381,8 +580,7 @@ checkSegments receipt = do
         && fromIntegral (length (watchRecords watch)) <= count (limitRecords (receiptLimits receipt))) WatchRejected
       let covered kind low high = any (\classification -> kind `elem` classKinds classification
             && case classRange classification of [a,b] -> a <= low && b >= high; _ -> False) (watchClasses watch)
-      require (all (\(low,high) -> covered CpuFetch low high) backedRanges
-        && all (\range -> case range of [a,b] -> a < b && b <= 0x100000000; _ -> False) (watchRanges watch)
+      require (all (\range -> case range of [a,b] -> a < b && b <= 0x100000000; _ -> False) (watchRanges watch)
         && all (\classification -> not (null (classKinds classification)) && case classRange classification of
           [a,b] -> a < b && any (\range -> case range of [low,high] -> low <= a && high >= b; _ -> False) (watchRanges watch)
           _ -> False) (watchClasses watch)) WatchRejected
@@ -391,9 +589,8 @@ checkSegments receipt = do
         require (covered (eventSource event) (fromIntegral backing) (fromIntegral backing+eventSize event)) WatchRejected
         if eventSource event `elem` [CpuRead,CpuWrite,CpuFetch] then do
           at <- eventClock event
-          require (at >= sum (map count start) && at <= sum (map count end)+1 && eventSize event <= 8) EventOrderRejected
+          require (at >= sum (map count start) && at <= sum (map count end) && eventSize event <= 8) EventOrderRejected
         else require (eventCore event == Nothing && eventPc event == Nothing && eventInstructions event == Nothing && eventTick event == Nothing) EventRejected) (watchRecords watch)
-      checkFetches receipt segment
 
 backedRanges :: [(Word64,Word64)]
 backedRanges = [(0,0x20000000),(0x3fff0000,0x3fff1000),(0x80000000,0x80004000),(0x90000000,0x90020000),(0xfff00000,0xfff01000)]
@@ -407,52 +604,122 @@ checkStops receipt outer = forM_ [probe | probe <- receiptProbes receipt,probeCl
       | segment <- receiptSegments receipt,stopped <- segmentStops segment
       ,context <- segmentEndContexts segment,contextCore context == stopCore stopped]
 
+checkWatchFailures :: Receipt -> Either WitnessError ()
+checkWatchFailures receipt = forM_ (receiptSegments receipt) $ \segment ->
+  require (watchViolation (segmentWatch segment) == Nothing && segmentError segment == Nothing) WatchRejected
+
+coreCounter :: Core -> [Count] -> Either WitnessError Count
+coreCounter owner counts = case (owner,counts) of
+  (Primary,[a,_]) -> pure a
+  (Secondary,[_,b]) -> pure b
+  _ -> Left FetchRejected
+
+cpuRowCounts :: Segment -> MemoryEvent -> CpuRowEvidence -> Either WitnessError [Count]
+cpuRowCounts segment event evidence = do
+  owner <- required FetchRejected (eventCore event)
+  global <- eventClock event
+  let own = count (evidenceCoreInstructions evidence)
+  require (global >= own) FetchRejected
+  let actual = if owner == Primary then map Count [own,global-own] else map Count [global-own,own]
+  require (and (zipWith (<=) (segmentStart segment) actual) && and (zipWith (<=) actual (segmentEnd segment))) FetchRejected
+  pure actual
+
+fetchKey :: MemoryEvent -> Count -> Either WitnessError (Core,Address,Count,Count,Count)
+fetchKey event own = (,,,,) <$> required FetchRejected (eventCore event) <*> required FetchRejected (eventPc event)
+  <*> required FetchRejected (eventInstructions event) <*> pure own <*> required FetchRejected (eventTick event)
+
+checkCpuEvidence :: Segment -> Set.Set Word64 -> Either WitnessError (M.Map Count CpuRowEvidence)
+checkCpuEvidence segment stopped = do
+  let rows = watchRecords (segmentWatch segment)
+      evidence = M.fromList [(evidenceRow item,item) | item <- segmentCpuEvidence segment]
+      expected = [Count index | (index,event) <- zip [0 :: Word64 ..] rows,eventSource event `elem` [CpuFetch,CpuRead,CpuWrite]]
+  require (M.size evidence == length (segmentCpuEvidence segment) && M.keys evidence == expected) FetchRejected
+  captured <- forM [(index,event) | (index,event) <- zip [0 :: Word64 ..] rows,eventSource event == CpuFetch,Set.notMember index stopped] $ \(index,event) -> do
+    item <- required FetchRejected (M.lookup (Count index) evidence)
+    key <- fetchKey event (evidenceCoreInstructions item)
+    pure (key,(index,event))
+  let fetched = M.fromList captured
+  require (M.size fetched == length captured) FetchRejected
+  forM_ (zip [0 :: Word64 ..] rows) $ \(index,event) ->
+    whenCpu event $ do
+      item <- required FetchRejected (M.lookup (Count index) evidence)
+      _ <- cpuRowCounts segment event item
+      if eventSource event == CpuFetch then do
+        require (evidenceLatestFetch item == Nothing) FetchRejected
+        checkPoint event
+      else do
+        point <- required FetchRejected (evidenceLatestFetch item)
+        let latest = attributedFetchEvent point
+        checkPoint latest
+        key <- fetchKey latest (attributedFetchCoreInstructions point)
+        actual <- fetchKey event (evidenceCoreInstructions item)
+        require (key == actual) FetchRejected
+        backing <- eventPhysical32 latest
+        require (rangeContains (attributionRanges (segmentFetchAttribution segment)) (Address backing) (S.ByteCount 4)) FetchRejected
+        if rangeContains (segmentFetchRanges segment) (Address backing) (S.ByteCount 4) then do
+          (before,raw) <- required FetchRejected (M.lookup key fetched)
+          require (before < index && raw == latest) FetchRejected
+        else pure ()
+  pure evidence
+  where
+    whenCpu event action = if eventSource event `elem` [CpuFetch,CpuRead,CpuWrite] then action else pure ()
+    checkPoint event = do
+      site <- required FetchRejected (eventPc event)
+      require (eventSource event == CpuFetch && eventAddress event == fromIntegral (address site)
+        && eventPhysical event == Just (fromIntegral (physical (address site))) && eventSize event == 4
+        && eventValue event == Nothing && eventBefore event == Nothing && eventByteOrder event == Just Little) FetchRejected
+
 checkFetches :: Receipt -> Segment -> Either WitnessError ()
 checkFetches receipt segment = do
   let attempts = [attempt | attempt <- receiptFetches receipt,fetchSegment attempt == segmentId segment]
       rows = watchRecords (segmentWatch segment)
       boundaries = Set.fromList (map (count . fetchRow) attempts)
-      stopped = segmentStops segment
-  require (unique (map stopCore stopped)) FetchRejected
-  expectedRows <- forM stopped $ \point -> do
-    require (stopInstructions point == Count (sum (map count (segmentEnd segment)))
-      && any (\context -> contextCore context == stopCore point && K.contextPc (contextMachine context) == stopPc point) (segmentEndContexts segment)) FetchRejected
-    let matching = [index | (index,event) <- zip [0..] rows,eventSource event == CpuFetch
-          ,eventCore event == Just (stopCore point),eventPc event == Just (stopPc point),eventInstructions event == Just (stopInstructions point)]
-    required FetchRejected (case reverse matching of index:_ -> Just index; [] -> Nothing)
-  require (sort expectedRows == sort (map (count . fetchRow) attempts)) FetchRejected
-  require (unique (map fetchRow attempts) && all ((==BoundaryAttempt) . fetchClassification) attempts
-    && all (\index -> index < fromIntegral (length rows)) (Set.toList boundaries)
-    && all (\(index,event) -> Set.notMember index boundaries || eventSource event == CpuFetch) (zip [0..] rows)) FetchRejected
-  require (unique [eventCore event | (index,event) <- zip [0..] rows,Set.member index boundaries]) FetchRejected
-  (final,_,_) <- foldM (advance boundaries) (segmentStart segment,M.empty,M.empty) (zip [0..] rows)
-  require (final == segmentEnd segment) FetchRejected
+  expectedRows <- actualStoppedRows segment
+  require (expectedRows == boundaries && length attempts == Set.size boundaries
+    && all ((==BoundaryAttempt) . fetchClassification) attempts) FetchRejected
+  require (all (\stopped -> stopPc stopped `elem` segmentArmedSites segment) (segmentStops segment)) FetchRejected
+  evidence <- checkCpuEvidence segment boundaries
+  resumed <- forM (segmentStartContexts segment) $ \context -> do
+    let owner = contextCore context
+        site = physical (address (K.contextPc (contextMachine context)))
+    begin <- coreCounter owner (segmentStart segment)
+    end <- coreCounter owner (segmentEnd segment)
+    pure (owner,count end > count begin && rangeContains (segmentFetchRanges segment) (Address site) (S.ByteCount 4))
+  (final,pending,_,_) <- foldM (advance evidence boundaries) (segmentStart segment,M.fromList resumed,M.empty,M.empty) (zip [0 :: Word64 ..] rows)
+  require (not (or (M.elems pending))
+    && (segmentFetchScope segment /= CompleteFetch || final == segmentEnd segment)) FetchRejected
   where
-    advance boundaries state@(progress,lastFetch,lastTick) (index,event)
+    advance evidence boundaries state@(progress,resumes,lastFetch,lastTick) (index,event)
       | eventSource event `notElem` [CpuFetch,CpuRead,CpuWrite] = pure state
       | otherwise = do
-          which <- required FetchRejected (eventCore event)
+          owner <- required FetchRejected (eventCore event)
           site <- required FetchRejected (eventPc event)
           at <- required FetchRejected (eventInstructions event)
           tick <- required FetchRejected (eventTick event)
-          require (maybe True (<=tick) (M.lookup which lastTick)) EventOrderRejected
-          let ticks = M.insert which tick lastTick
-          case eventSource event of
-            CpuFetch -> do
-              require (eventAddress event == fromIntegral (address site)
-                && eventSize event == 4 && eventValue event == Nothing && eventBefore event == Nothing
-                && eventByteOrder event == Just Little) FetchRejected
-              if Set.member index boundaries then do
-                require (count at == sum (map count progress) && progress == segmentEnd segment && any (\context -> contextCore context == which
-                  && K.contextPc (contextMachine context) == site && K.contextCounts (contextMachine context) == progress) (segmentEndContexts segment)) FetchRejected
-                pure (progress,lastFetch,ticks)
-              else do
-                require (count at == sum (map count progress)+1) FetchRejected
-                next <- case (which,progress) of
-                  (Primary,[a,b]) -> pure [Count (count a+1),b]
-                  (Secondary,[a,b]) -> pure [a,Count (count b+1)]
-                  _ -> Left FetchRejected
-                pure (next,M.insert which (site,at) lastFetch,ticks)
-            _ -> do
-              require (M.lookup which lastFetch == Just (site,at)) FetchRejected
-              pure (progress,lastFetch,ticks)
+          item <- required FetchRejected (M.lookup (Count index) evidence)
+          actual <- cpuRowCounts segment event item
+          previousOwn <- coreCounter owner progress
+          let ordinal = evidenceCoreInstructions item
+          require (and (zipWith (<=) progress actual) && maybe True (<=tick) (M.lookup owner lastTick)) EventOrderRejected
+          let ticks = M.insert owner tick lastTick
+          if eventSource event == CpuFetch then
+            if Set.member index boundaries then do
+              require (at == Count (sum (map count (segmentEnd segment))) && actual == segmentEnd segment
+                && any (\context -> contextCore context == owner && K.contextPc (contextMachine context) == site
+                  && K.contextCounts (contextMachine context) == actual) (segmentEndContexts segment)) FetchRejected
+              pure (actual,resumes,lastFetch,ticks)
+            else do
+              require (count at > sum (map count progress) && ordinal > previousOwn) FetchRejected
+              whenComplete $ require (count at == sum (map count progress)+1 && count ordinal == count previousOwn+1) FetchRejected
+              if M.findWithDefault False owner resumes then do
+                paused <- one FetchRejected [context | context <- segmentStartContexts segment,contextCore context == owner]
+                begin <- coreCounter owner (segmentStart segment)
+                require (site == K.contextPc (contextMachine paused) && count ordinal == count begin+1) FetchRejected
+              else pure ()
+              pure (actual,M.insert owner False resumes,M.insert owner (site,at) lastFetch,ticks)
+          else do
+            whenComplete $ require (actual == progress && M.lookup owner lastFetch == Just (site,at)) FetchRejected
+            begin <- coreCounter owner (segmentStart segment)
+            require (ordinal > begin && count at > sum (map count (segmentStart segment))) FetchRejected
+            pure (actual,resumes,lastFetch,ticks)
+    whenComplete action = if segmentFetchScope segment == CompleteFetch then action else pure ()

@@ -1,5 +1,5 @@
 use fujimod_emulator::board::factory::MemoryMap;
-use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
+use fujimod_emulator::board::observation::{CpuDataAttribution, FetchAttribution, ViewPolicy, WatchKinds, WatchRange};
 use fujimod_emulator_cpu::{Register, arm};
 use fujimod_xm1::bridge::{read, sha256, write};
 use fujimod_xm1::machine::{Machine, RunOutcome};
@@ -19,7 +19,7 @@ use memory_view::{MemoryAddress, MemoryCore, TcmRegister, static_span, tcm_windo
 const USAGE: &str = "startup-consumers --role retained|installer|joined --run RUN --update DAT --canonical-dat DAT --boot-rom ROM --analysis ROOT --installer-image BIN --installer-symbols SYMBOLS --installer-contract CONTRACT --dispatcher-image BIN --dispatcher-symbols SYMBOLS --dispatcher-contract CONTRACT --joined-contract CONTRACT --output NEW_DIR";
 const BOOT_LIMIT: u64 = 8_000_000;
 const LIMITS: Limits = Limits {
-    instructions: 80_000_000, segment_instructions: 256, watch_records: 65_536,
+    instructions: 80_000_000, segment_instructions: 256, scoped_segment_instructions: InstructionBudget(4096), watch_records: 65_536,
     probes: 131_072, resources: 512, resource_bytes: 4_194_304, invocations: 64,
     records: 1_048_576, snapshot_bytes: 134_217_728, snapshots: 65_536, segments: 32_768,
 };
@@ -34,6 +34,8 @@ macro_rules! scalar {
 scalar!(Address, u32);
 scalar!(Word, u32);
 scalar!(StackBytes, u32);
+scalar!(CoreInstructions, u64);
+scalar!(InstructionBudget, u64);
 scalar!(InvocationId, u64);
 scalar!(ResourceId, u64);
 scalar!(ProbeSequence, u64);
@@ -219,11 +221,26 @@ enum Source { CpuRead, CpuWrite, CpuFetch, HostRead, HostWrite, ModelBusRead, Mo
 #[serde(rename_all = "lowercase")]
 enum ByteOrder { Little, Big }
 #[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum FetchSource { CpuFetch }
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LatestFetch {
+    source: FetchSource, address: u64, physical: Option<u64>, size: u64,
+    value: Option<u64>, before: Option<Bytes>, byte_order: Option<ByteOrder>,
+    core: Option<Core>, pc: Option<Address>, instructions: Option<u64>, tick: Option<u64>,
+    core_instructions: CoreInstructions,
+}
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct MemoryEvent {
     source: Source, address: u64, physical: Option<u64>, size: u64,
     value: Option<u64>, before: Option<Bytes>, byte_order: Option<ByteOrder>,
     core: Option<Core>, pc: Option<Address>, instructions: Option<u64>, tick: Option<u64>,
+    #[serde(default)]
+    core_instructions: Option<CoreInstructions>,
+    #[serde(default)]
+    latest_fetch: Option<LatestFetch>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -235,8 +252,15 @@ enum ViewsPolicy { Fixed }
 #[serde(deny_unknown_fields)]
 struct WatchState {
     enabled: bool, ranges: Vec<[u64; 2]>, classes: Vec<WatchClass>, views: ViewsPolicy,
+    fetch_attribution: AttributionConfig,
     records: Vec<MemoryEvent>, violation: Option<String>,
 }
+#[derive(Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum CpuDataSource { CpuRead, CpuWrite }
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AttributionConfig { sources: Vec<CpuDataSource>, ranges: Vec<FetchRange> }
 #[derive(Serialize)]
 struct View { core: Core, guest: Address, physical: Address, bytes: Bytes }
 #[derive(Serialize)]
@@ -260,12 +284,34 @@ struct Invocation {
 }
 #[derive(Serialize)]
 struct Census { family: Family, core: Core, entries: u64, first_probe: Option<ProbeSequence> }
+#[derive(Clone, Copy, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum FetchScope { Complete, Scoped }
+#[derive(Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "[u64; 2]", into = "[u64; 2]")]
+struct FetchRange([u64; 2]);
+impl TryFrom<[u64; 2]> for FetchRange {
+    type Error = String;
+    fn try_from(range: [u64; 2]) -> Result<Self, String> {
+        require(range[0] < range[1] && range[1] <= 1u64 << 32, "invalid physical fetch span")?;
+        Ok(Self(range))
+    }
+}
+impl From<FetchRange> for [u64; 2] {
+    fn from(range: FetchRange) -> Self { range.0 }
+}
+struct WatchPlan {
+    classes: Vec<WatchRange>, fetch_scope: FetchScope, fetch_ranges: Vec<FetchRange>,
+    armed_sites: Vec<Address>,
+}
 #[derive(Serialize)]
 struct StopPoint { core: Core, pc: Address, instructions: u64 }
 #[derive(Serialize)]
 struct Segment {
     id: SegmentId, start_counts: [u64; 2], end_counts: [u64; 2],
     start_contexts: [Context; 2], end_contexts: [Context; 2],
+    fetch_scope: FetchScope, fetch_ranges: Vec<FetchRange>, armed_sites: Vec<Address>,
+    probe_range: [ProbeSequence; 2],
     watch: WatchState, end_error: Option<String>, stops: Vec<StopPoint>,
 }
 #[derive(Serialize)]
@@ -286,6 +332,7 @@ struct PayloadAdmission {
 #[derive(Clone, Copy, Serialize)]
 struct Limits {
     instructions: u64, segment_instructions: u64, watch_records: u64,
+    scoped_segment_instructions: InstructionBudget,
     probes: u64, resources: u64, resource_bytes: u64, invocations: u64,
     records: u64, snapshot_bytes: u64, snapshots: u64, segments: u64,
 }
@@ -453,22 +500,33 @@ impl Runtime {
         self.captured_views += 1;
         views(machine, &self.maps, state, base, size)
     }
-    fn watch_ranges(&self, backings: &[WatchRange]) -> Result<Vec<WatchRange>, String> {
-        if !self.outer_returned { return Ok(backings.to_vec()); }
-        let mut data = self.receipt.resources.iter().filter(|resource| resource.closed.is_none() && resource.kind != ResourceKind::Carrier)
-            .map(|resource| WatchRange { start: u64::from(resource.physical.0),
-                end: u64::from(resource.physical.0) + resource.size, kinds: WatchKinds::ALL })
-            .collect::<Vec<_>>();
-        data.sort_unstable_by_key(|range| range.start);
-        let mut result: Vec<WatchRange> = Vec::with_capacity(data.len() + backings.len() + self.carriers.len());
-        for range in data {
-            if let Some(last) = result.last_mut().filter(|last| range.start <= last.end) { last.end = last.end.max(range.end); }
-            else { result.push(range); }
+    fn watch_ranges(&self, machine: &Machine, backings: &[WatchRange], states: &[Context; 2]) -> Result<WatchPlan, String> {
+        let armed_sites = machine.traces.sites.keys().copied().map(Address).collect::<Vec<_>>();
+        if !self.outer_returned {
+            return Ok(WatchPlan { classes: backings.to_vec(), fetch_scope: FetchScope::Complete,
+                fetch_ranges: backings.iter().map(|range| FetchRange([range.start, range.end])).collect(), armed_sites });
         }
-        result.extend(backings.iter().map(|range| WatchRange { start: range.start, end: range.end, kinds: WatchKinds::CPU_FETCH }));
-        result.extend(self.carriers.iter().cloned());
-        require(result.len() <= 256, "classified resource range bound reached")?;
-        Ok(result)
+        let data_kinds = WatchKinds::CPU_READ.union(WatchKinds::WRITES).union(WatchKinds::HOST_READ).union(WatchKinds::MODEL_BUS_READ);
+        let data = self.receipt.resources.iter().filter(|resource| resource.closed.is_none() && resource.kind != ResourceKind::Carrier)
+            .map(|resource| WatchRange { start: u64::from(resource.physical.0),
+                end: u64::from(resource.physical.0) + resource.size, kinds: data_kinds }).collect();
+        let mut classes = merge_watch_ranges(data);
+        let words = FAMILIES.iter().map(|family| Address(family.entry()))
+            .chain([0x427d4,0x427e4,0x42800,0x42810,0xd27d4,0xd27e4,0xd2800,0xd2810].into_iter().map(Address))
+            .chain([0x4b430,0xdb3f0,0x48fb8,0xd8f78,0x48f04,0xd8ec4,0x48f58,0xd8f18].into_iter().map(Address))
+            .chain(armed_sites.iter().copied()).map(|pc| (pc, 4));
+        let mut fetches = Vec::new();
+        for (guest, size) in [(Address(0x69cdf8),0x18c),(Address(0x725a04),0x150)].into_iter().chain(words) {
+            let start = physical(&self.maps, &states[0], guest, size)?;
+            require(physical(&self.maps, &states[1], guest, size)? == start, "fetch scope differs between processor views")?;
+            fetches.push(WatchRange { start: u64::from(start.0), end: u64::from(start.0) + size, kinds: WatchKinds::CPU_FETCH });
+        }
+        let fetches = merge_watch_ranges(fetches);
+        let fetch_ranges = fetches.iter().map(|range| FetchRange([range.start, range.end])).collect();
+        classes.extend(fetches);
+        classes.extend(self.carriers.iter().cloned());
+        require(classes.len() <= 256, "classified resource range bound reached")?;
+        Ok(WatchPlan { classes, fetch_scope: FetchScope::Scoped, fetch_ranges, armed_sites })
     }
     fn admit(&mut self, machine: &Machine, state: &Context, kind: ResourceKind, lifetime: Lifetime,
         owner: Option<InvocationId>, guest: Address, size: u64) -> Result<Option<ResourceId>, String> {
@@ -564,7 +622,8 @@ impl Runtime {
             (ResourceKind::Code,0x723318,0x2d80),
             (ResourceKind::Code,0x722054,0x198),
             (ResourceKind::Code,0x412bc,0x60),
-            (ResourceKind::Code,0x427b8,0x68),
+            (ResourceKind::Code,0x427b8,0x70),
+            (ResourceKind::Code,0xd27b8,0x70),
             (ResourceKind::Code,0xd1140,0x48),
             (ResourceKind::Header,0x40010,4),
             (ResourceKind::Header,0xd0010,4),
@@ -1170,6 +1229,15 @@ fn pinned(root: &Path, path: &str, expected: &str) -> Result<Vec<u8>, String> {
     require(sha256(&bytes) == expected, "canonical analysis input differs")?;
     Ok(bytes)
 }
+fn merge_watch_ranges(mut ranges: Vec<WatchRange>) -> Vec<WatchRange> {
+    ranges.sort_unstable_by_key(|range| range.start);
+    let mut result: Vec<WatchRange> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        if let Some(last) = result.last_mut().filter(|last| range.start <= last.end) { last.end = last.end.max(range.end); }
+        else { result.push(range); }
+    }
+    result
+}
 fn backed_ranges(document: &RunDocument) -> Result<Vec<WatchRange>, String> {
     let mut regions = run::memory_backings(document)?.into_iter().map(|region| {
         let end = region.base.checked_add(region.size as u64).ok_or("backing overflow")?;
@@ -1182,7 +1250,7 @@ fn backed_ranges(document: &RunDocument) -> Result<Vec<WatchRange>, String> {
         if let Some(last) = result.last_mut().filter(|last| region.start <= last.end) { last.end = last.end.max(region.end); }
         else { result.push(region); }
     }
-    require(!result.is_empty() && result.len() <= 256, "backing range bound differs")?;
+    require(!result.is_empty() && result.len() <= 64, "fetch attribution backing range bound differs")?;
     Ok(result)
 }
 fn stopped_points(machine: &Machine) -> Result<Vec<StopPoint>, String> {
@@ -1192,11 +1260,18 @@ fn stopped_points(machine: &Machine) -> Result<Vec<StopPoint>, String> {
         Ok(StopPoint { core: Core::try_from(hit.core)?, pc: Address(pc), instructions: hit.instructions })
     }).collect()
 }
-fn record_fetches(receipt: &mut Receipt, segment: &Segment) -> Result<(), String> {
+fn record_fetches(maps: &[MemoryMap], receipt: &mut Receipt, segment: &Segment) -> Result<(), String> {
     let mut progress = segment.start_counts;
+    let begin = segment.start_counts.iter().sum::<u64>();
     let settled = segment.end_counts.iter().sum::<u64>();
     let mut boundary_cores = BTreeSet::new();
     let mut boundary_rows = BTreeSet::new();
+    for core in [Core::Primary, Core::Secondary] {
+        let index = usize::from(core);
+        require(segment.start_counts[index] <= segment.end_counts[index], "per-core counter decreased")?;
+        require(segment.start_contexts[index].counts == segment.start_counts
+            && segment.end_contexts[index].counts == segment.end_counts, "fetch endpoint context counts differ")?;
+    }
     for point in &segment.stops {
         require(boundary_cores.insert(point.core), "duplicate stopped core")?;
         let end = &segment.end_contexts[usize::from(point.core)];
@@ -1206,19 +1281,57 @@ fn record_fetches(receipt: &mut Receipt, segment: &Segment) -> Result<(), String
             .ok_or("stopped instruction point fetch absent")?;
         require(boundary_rows.insert(index), "stopped instruction points share a fetch row")?;
     }
+    let mut resumes = [false; 2];
+    for core in [Core::Primary, Core::Secondary] {
+        let index = usize::from(core);
+        let start = &segment.start_contexts[index];
+        let base = u64::from(physical(maps, start, start.pc, 4)?.0);
+        resumes[index] = segment.fetch_ranges.iter().any(|range| range.0[0] <= base && base + 4 <= range.0[1])
+            && segment.start_counts[index] < segment.end_counts[index];
+    }
+    let mut last_clock = begin;
+    let mut last_tick = None;
     for (index, row) in segment.watch.records.iter().enumerate().filter(|(_, row)| row.source == Source::CpuFetch) {
         let core = row.core.ok_or("fetch core absent")?;
+        let cpu = usize::from(core);
         let clock = row.instructions.ok_or("fetch clock absent")?;
+        let ordinal = row.core_instructions.ok_or("fetch own-core count absent")?.0;
+        let tick = row.tick.ok_or("fetch tick absent")?;
+        let base = row.physical.ok_or("fetch physical projection absent")?;
+        let end = base.checked_add(row.size).ok_or("fetch physical extent overflow")?;
+        require(row.size != 0 && segment.fetch_ranges.iter().any(|range| range.0[0] <= base && end <= range.0[1]),
+            "fetch falls outside declared scope")?;
+        let peer_count = clock.checked_sub(ordinal).ok_or("fetch own-core count exceeds global clock")?;
+        require(clock >= last_clock && clock <= settled && ordinal <= segment.end_counts[cpu]
+            && peer_count >= progress[1-cpu] && peer_count <= segment.end_counts[1-cpu]
+            && last_tick.is_none_or(|previous| tick >= previous), "fetch clocks or per-core counts exceed actual endpoints")?;
+        last_tick = Some(tick);
         if boundary_rows.contains(&index) {
+            require(ordinal == segment.end_counts[cpu], "stopped fetch own-core count differs")?;
             receipt.fetch_attempts.push(FetchAttempt {
                 segment: segment.id, row: index as u64, classification: FetchClassification::BoundaryAttempt,
             });
-        } else {
-            require(clock == progress.iter().sum::<u64>() + 1, "fetch clock does not advance exact scheduler")?;
-            progress[usize::from(core)] = progress[usize::from(core)].checked_add(1).ok_or("fetch count overflow")?;
+            continue;
         }
+        if resumes[cpu] {
+            require(row.pc == Some(segment.start_contexts[cpu].pc)
+                && ordinal == segment.start_counts[cpu] + 1, "in-scope resumed fetch differs from paused entry")?;
+            resumes[cpu] = false;
+        }
+        require(clock > last_clock && ordinal > progress[cpu], "executed fetch clock or own-core count does not advance")?;
+        if segment.fetch_scope == FetchScope::Complete {
+            require(clock == progress.iter().sum::<u64>() + 1 && ordinal == progress[cpu] + 1,
+                "fetch clock does not advance exact scheduler")?;
+        }
+        progress[cpu] = ordinal;
+        progress[1-cpu] = peer_count;
+        last_clock = clock;
     }
-    require(progress == segment.end_counts, "executed fetches do not reconcile per-core counts")
+    require(!resumes.into_iter().any(|pending| pending), "in-scope executed resumption absent")?;
+    if segment.fetch_scope == FetchScope::Complete {
+        require(progress == segment.end_counts, "executed fetches do not reconcile per-core counts")?;
+    }
+    Ok(())
 }
 fn verify_loaded(machine: &Machine, maps: &[MemoryMap], state: &Context, image4: &[u8], loader_a: &[u8], loader_b: &[u8]) -> Result<(), String> {
     for (base, expected) in [
@@ -1270,8 +1383,16 @@ fn observe(runtime: &mut Runtime, machine: &mut Machine, image4: &[u8], loader_a
         require(available != 0, "aggregate memory record bound reached")?;
         let start_contexts = contexts(machine)?;
         let start_counts = counts(machine)?;
-        let classes = runtime.watch_ranges(&ranges)?;
-        let mut watch = machine.session.board.memory_watch_begin_classified(classes, LIMITS.watch_records.min(available) as usize, runtime.maps.clone(), ViewPolicy::Fixed)?;
+        let plan = runtime.watch_ranges(machine, &ranges, &start_contexts)?;
+        let segment_instructions = match plan.fetch_scope {
+            FetchScope::Complete => InstructionBudget(LIMITS.segment_instructions),
+            FetchScope::Scoped => LIMITS.scoped_segment_instructions,
+        };
+        let probe_begin = ProbeSequence(runtime.receipt.probes.len() as u64);
+        let attribution = FetchAttribution::new(CpuDataAttribution::ReadsAndWrites,
+            ranges.iter().map(|range| WatchRange { start: range.start, end: range.end, kinds: WatchKinds::CPU_FETCH }).collect())?;
+        let mut watch = machine.session.board.memory_watch_begin_with_fetch_attribution(
+            plan.classes, attribution, LIMITS.watch_records.min(available) as usize, runtime.maps.clone(), ViewPolicy::Fixed)?;
         let mut stops = Vec::new();
         let body = (|| -> Result<(), String> {
             if !initialized {
@@ -1280,7 +1401,7 @@ fn observe(runtime: &mut Runtime, machine: &mut Machine, image4: &[u8], loader_a
                 initialized = true;
             }
             machine.traces.hits.clear();
-            let result = machine.run(LIMITS.segment_instructions.min(LIMITS.instructions-machine.instructions()));
+            let result = machine.run(segment_instructions.0.min(LIMITS.instructions-machine.instructions()));
             stops = stopped_points(machine)?;
             let cores = machine.traces.hits.iter().map(|hit| Core::try_from(hit.core)).collect::<Result<Vec<_>,_>>()?;
             for core in cores {
@@ -1315,14 +1436,20 @@ fn observe(runtime: &mut Runtime, machine: &mut Machine, image4: &[u8], loader_a
         let segment = Segment {
             id: SegmentId(runtime.receipt.segments.len() as u64), start_counts, end_counts: end_counts?,
             start_contexts, end_contexts: end_contexts?, watch: state, end_error, stops,
+            fetch_scope: plan.fetch_scope, fetch_ranges: plan.fetch_ranges, armed_sites: plan.armed_sites,
+            probe_range: [probe_begin, ProbeSequence(runtime.receipt.probes.len() as u64)],
         };
         runtime.retained_records = runtime.retained_records.checked_add(segment.watch.records.len() as u64).ok_or("aggregate record count overflow")?;
-        let fetches = record_fetches(&mut runtime.receipt, &segment);
-        let refused = !segment.watch.enabled || segment.watch.violation.is_some() || segment.end_error.is_some();
+        let refusal = segment.watch.violation.as_ref().map(|error| format!("continuous memory watch refused: {error}"))
+            .or_else(|| segment.end_error.as_ref().map(|error| format!("continuous memory watch teardown: {error}")))
+            .or_else(|| (!segment.watch.enabled).then(|| "continuous memory watch disabled".to_owned()));
+        let fetches = if refusal.is_none() && body.is_ok() { record_fetches(&runtime.maps, &mut runtime.receipt, &segment) } else { Ok(()) };
         runtime.receipt.segments.push(segment);
-        body?;
+        if let Err(error) = body {
+            return Err(match refusal { Some(watch) => format!("{error}; {watch}"), None => error });
+        }
+        if let Some(error) = refusal { return Err(error); }
         fetches?;
-        require(!refused, "continuous memory watch refused")?;
         if runtime.finished() { return Ok(()); }
     }
     Ok(())

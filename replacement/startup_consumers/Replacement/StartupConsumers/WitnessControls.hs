@@ -5,10 +5,13 @@ import Control.Monad (forM, forM_)
 import qualified Data.Aeson as J
 import Data.Bits (xor)
 import qualified Data.ByteString as B
+import Data.List (sort)
+import qualified Data.Map.Strict as M
+import qualified Data.Set as Set
 import Data.Word (Word32)
 import Replacement.KernelInstall.Wire (Address (..), WordValue (..), Count (..), Digest (..))
 import qualified Replacement.KernelInstall.Wire as K
-import Replacement.StartupConsumers.Evidence (number)
+import Replacement.StartupConsumers.Evidence (address, count, number)
 import Replacement.StartupConsumers.Wire
 import Replacement.StartupConsumers.Witness
 
@@ -87,6 +90,17 @@ mutations =
   ,Control (ControlName "receive source and call probes belong to another task frame") InvocationRejected $
     mapSelectedProbe (\probe -> probeFamily probe == Just MessageReceive && probeInvocation probe /= Nothing
       && probeKind probe `elem` [SourceProbe,DynamicTarget,DynamicReturn]) otherTaskFrame
+  ,Control (ControlName "scoped pause cadence bound") LimitsRejected $ \receipt -> receipt
+    {receiptLimits = (receiptLimits receipt) {limitScopedSegmentInstructions = Count 256}}
+  ,Control (ControlName "scoped fetch widened to whole image4") WatchRejected expandScopedFetch
+  ,Control (ControlName "mandatory message prehistory fetch word omitted") WatchRejected omitMessageFetch
+  ,Control (ControlName "scoped fetch falsely declared complete") WatchRejected $ mapScoped $ \segment -> segment {segmentFetchScope = CompleteFetch}
+  ,Control (ControlName "armed source sites omitted") WatchRejected $ mapScoped $ \segment -> segment {segmentArmedSites = []}
+  ,Control (ControlName "SDK attribution scope omitted") WatchRejected $ \receipt -> receipt
+    {receiptSegments = [segment {segmentFetchAttribution = (segmentFetchAttribution segment) {attributionRanges = []}} | segment <- receiptSegments receipt]}
+  ,Control (ControlName "actual complete-fetch ordinal altered") FetchRejected alterCompleteOrdinal
+  ,Control (ControlName "CPU access latest fetch omitted") FetchRejected $ \receipt -> receipt
+    {receiptSegments = [segment {segmentCpuEvidence = [item {evidenceLatestFetch = Nothing} | item <- segmentCpuEvidence segment]} | segment <- receiptSegments receipt]}
   ] ++ concat
     [[Control (ControlName (show family ++ " absent")) (MissingFamily family) $ \receipt -> receipt
         {receiptInvocations = [if invocationFamily invocation == family then invocation {invocationStatus = NotObserved,invocationEntry = Nothing,invocationReturn = Nothing} else invocation | invocation <- receiptInvocations receipt]}
@@ -97,12 +111,18 @@ mutations =
     | family <- [minBound..maxBound]]
 
 omitCensusEntry :: Receipt -> Receipt
-omitCensusEntry receipt = receipt {receiptProbes = retained,receiptCensus = map recount (receiptCensus receipt)}
+omitCensusEntry receipt = receipt
+  {receiptProbes = retained,receiptCensus = map recount (receiptCensus receipt)
+  ,receiptInvocations = [item {invocationEntry = shiftReference (invocationEntry item),invocationReturn = shiftReference (invocationReturn item)} | item <- receiptInvocations receipt]
+  ,receiptSegments = [segment {segmentProbeRange = case segmentProbeRange segment of
+      ProbeRange begin end -> ProbeRange (shift begin) (shift end)} | segment <- receiptSegments receipt]}
   where
     entries = filter ((==FamilyEntry) . probeKind) (receiptProbes receipt)
     undetailed = [probe | probe <- entries,Just (probeId probe) `notElem` map invocationEntry (receiptInvocations receipt)]
     omitted = map probeId (take 1 (if null undetailed then entries else undetailed))
-    retained = [probe | probe <- receiptProbes receipt,probeId probe `notElem` omitted]
+    shift (ProbeId original) = ProbeId (original-fromIntegral (length [ident | ident <- omitted,ident < ProbeId original]))
+    shiftReference reference = reference >>= \ident -> if ident `elem` omitted then Nothing else Just (shift ident)
+    retained = [probe {probeId = shift (probeId probe)} | probe <- receiptProbes receipt,probeId probe `notElem` omitted]
     recount item =
       let remaining = [probe | probe <- retained,probeKind probe == FamilyEntry
             ,probeFamily probe == Just (censusFamily item),contextCore (probeContext probe) == censusCore item]
@@ -111,14 +131,62 @@ omitCensusEntry receipt = receipt {receiptProbes = retained,receiptCensus = map 
 
 omitLockRead :: Address -> Receipt -> Receipt
 omitLockRead instruction receipt = receipt
-  {receiptSegments = [segment {segmentWatch = (segmentWatch segment)
-    {K.watchRecords = filter (not . omitted) (K.watchRecords (segmentWatch segment))}} | segment <- receiptSegments receipt]
-  ,receiptFetches = [attempt {fetchRow = Count (original-fromIntegral removed)}
-    | attempt <- receiptFetches receipt,segment <- receiptSegments receipt,segmentId segment == fetchSegment attempt
-    ,let Count original = fetchRow attempt
-    ,let removed = length [() | (index,event) <- zip [0..] (K.watchRecords (segmentWatch segment)),index < original,omitted event]]}
+  {receiptSegments = map transform (receiptSegments receipt)
+  ,receiptFetches = [attempt {fetchRow = shift indices (fetchRow attempt)}
+    | attempt <- receiptFetches receipt,Just indices <- [M.lookup (fetchSegment attempt) removed]]}
   where
+    removed = M.fromList [(segmentId segment,Set.fromList
+      [Count index | (index,event) <- zip [0..] (K.watchRecords (segmentWatch segment)),omitted event])
+      | segment <- receiptSegments receipt]
+    shift indices (Count original) = Count (original-fromIntegral (Set.size (fst (Set.split (Count original) indices))))
+    transform segment = case M.lookup (segmentId segment) removed of
+      Nothing -> segment {segmentError = Just "control segment index absent"}
+      Just indices -> segment
+        {segmentWatch = (segmentWatch segment) {K.watchRecords =
+          [event | (index,event) <- zip [0..] (K.watchRecords (segmentWatch segment)),Set.notMember (Count index) indices]}
+        ,segmentCpuEvidence = [item {evidenceRow = shift indices (evidenceRow item)}
+          | item <- segmentCpuEvidence segment,Set.notMember (evidenceRow item) indices]}
     omitted event = K.eventSource event == K.CpuRead && K.eventPc event == Just instruction
+
+mapScoped :: (Segment -> Segment) -> Receipt -> Receipt
+mapScoped modify receipt = receipt
+  {receiptSegments = [if segmentFetchScope segment == ScopedFetch then modify segment else segment | segment <- receiptSegments receipt]}
+
+omitMessageFetch :: Receipt -> Receipt
+omitMessageFetch = mapScoped $ \segment -> segment
+  {segmentFetchRanges = [range | range@(FetchRange (PhysicalBoundary low) (PhysicalBoundary high)) <- segmentFetchRanges segment,not (covers low high)]
+  ,segmentWatch = (segmentWatch segment) {K.watchClasses = concatMap remove (K.watchClasses (segmentWatch segment))}}
+  where
+    covers low high = low <= 0x4b430 && 0x4b430 < high
+    remove classification
+      | K.CpuFetch `elem` K.classKinds classification
+      , [low,high] <- K.classRange classification
+      , covers low high =
+          [classification {K.classKinds = remaining} | let remaining = filter (/= K.CpuFetch) (K.classKinds classification),not (null remaining)]
+      | otherwise = [classification]
+
+expandScopedFetch :: Receipt -> Receipt
+expandScopedFetch receipt = mapScoped expand receipt
+  where
+    PhysicalBoundary low = PhysicalBoundary 0x61c400
+    high = foldr max low [fromIntegral (address (resourcePhysical resource))+count (resourceSize resource)
+      | resource <- receiptResources receipt,resourceKind resource == Carrier,fromIntegral (address (resourcePhysical resource)) >= low]
+    whole = FetchRange (PhysicalBoundary low) (PhysicalBoundary high)
+    outside (FetchRange (PhysicalBoundary begin) (PhysicalBoundary end)) = end <= low || begin >= high
+    expand segment = segment
+      {segmentFetchRanges = sort (whole:filter outside (segmentFetchRanges segment))
+      ,segmentWatch = (segmentWatch segment)
+        {K.watchClasses = K.WatchClass [low,high] [K.CpuFetch]:K.watchClasses (segmentWatch segment)}}
+
+alterCompleteOrdinal :: Receipt -> Receipt
+alterCompleteOrdinal receipt = receipt {receiptSegments = map alter (receiptSegments receipt)}
+  where
+    alter segment
+      | segmentFetchScope segment /= CompleteFetch = segment
+      | otherwise =
+          let fetched = Set.fromList [Count index | (index,event) <- zip [0..] (K.watchRecords (segmentWatch segment)),K.eventSource event == K.CpuFetch]
+          in segment {segmentCpuEvidence = [if Set.member (evidenceRow item) fetched
+            then item {evidenceCoreInstructions = Count (count (evidenceCoreInstructions item)+1)} else item | item <- segmentCpuEvidence segment]}
 
 mapProbe :: ProbeKind -> (Probe -> Probe) -> Receipt -> Receipt
 mapProbe kind = mapSelectedProbe ((== kind) . probeKind)

@@ -2072,3 +2072,237 @@ mod composed_interleaving {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(transparent)]
+struct CoreInstructionOrdinal(u64);
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(transparent)]
+struct ObservationTick(u64);
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(transparent)]
+struct ObservationBytes(u64);
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct PhysicalFetchSpan([u64; 2]);
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ObservationByteOrder { Little, Big }
+#[derive(Deserialize)]
+struct CapturedInstruction {
+    #[serde(flatten)]
+    event: Row,
+    address: Guest,
+    size: ObservationBytes,
+    byte_order: ObservationByteOrder,
+    core_instructions: CoreInstructionOrdinal,
+    tick: ObservationTick,
+}
+#[derive(Deserialize)]
+struct AttributedRow {
+    #[serde(flatten)]
+    event: Row,
+    core_instructions: Option<CoreInstructionOrdinal>,
+    tick: Option<ObservationTick>,
+    latest_fetch: Option<CapturedInstruction>,
+}
+#[derive(Deserialize)]
+struct FetchAttributionHeader { sources: Vec<Source>, ranges: Vec<PhysicalFetchSpan> }
+#[derive(Deserialize)]
+struct AttributedWatch {
+    records: Vec<AttributedRow>,
+    violation: Option<String>,
+    fetch_attribution: Option<FetchAttributionHeader>,
+}
+
+#[test]
+fn selected_data_rows_bind_actual_fetch_and_core_ordinals_without_unrelated_fetch_rows() {
+    use fujimod_emulator::board::observation::{CpuDataAttribution, FetchAttribution, ViewPolicy, WatchKinds, WatchRange};
+    let mut machine = machine(&[0xe5912000, 0xe5810004, 0xeafffffe]);
+    for (core, value) in [0x22b, 0x55aa].into_iter().enumerate() {
+        machine.session.board.write_register(core, arm::CORE[0], value).unwrap();
+        machine.session.board.write_register(core, arm::CORE[1], 0x3000 + core as u64 * 0x100).unwrap();
+    }
+    let attribution = FetchAttribution::new(CpuDataAttribution::ReadsAndWrites, vec![
+        WatchRange { start: 0x2000, end: 0x200c, kinds: WatchKinds::CPU_FETCH },
+        WatchRange { start: 0x1004, end: 0x100c, kinds: WatchKinds::CPU_FETCH },
+        WatchRange { start: 0x1000, end: 0x1008, kinds: WatchKinds::CPU_FETCH },
+    ]).unwrap();
+    let classes = vec![
+        WatchRange { start: 0x3000, end: 0x3108, kinds: WatchKinds::CPU_READ.union(WatchKinds::WRITES) },
+        WatchRange { start: 0x1000, end: 0x1004, kinds: WatchKinds::CPU_FETCH },
+        WatchRange { start: 0x2000, end: 0x2004, kinds: WatchKinds::CPU_FETCH },
+    ];
+    let mut watch = machine.session.board.memory_watch_begin_with_fetch_attribution(
+        classes, attribution, 16, machine.session.board.mappings().to_vec(), ViewPolicy::Fixed).unwrap();
+    machine.run(1002);
+    machine.require_running().unwrap();
+    let observed: AttributedWatch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(observed.violation.is_none());
+    assert_eq!(machine.session.board.instruction_counts(), [1000, 2]);
+    assert_eq!(observed.records.len(), 6);
+    let header = observed.fetch_attribution.unwrap();
+    assert!(header.sources == [Source::CpuRead, Source::CpuWrite]);
+    assert_eq!(header.ranges.iter().map(|span| span.0).collect::<Vec<_>>(), [[0x1000,0x100c],[0x2000,0x200c]]);
+    for row in &observed.records {
+        if row.event.source == Source::CpuFetch {
+            assert_eq!(row.core_instructions, Some(CoreInstructionOrdinal(1)));
+            assert!(row.latest_fetch.is_none());
+            continue;
+        }
+        let fetch = row.latest_fetch.as_ref().unwrap();
+        assert!(fetch.event.source == Source::CpuFetch);
+        assert_eq!(fetch.event.core, row.event.core);
+        assert_eq!(fetch.event.pc, row.event.pc);
+        assert_eq!(fetch.event.instructions, row.event.instructions);
+        assert_eq!(Some(fetch.core_instructions), row.core_instructions);
+        assert_eq!(Some(fetch.tick), row.tick);
+        assert_eq!(u64::from(fetch.address.0), row.event.pc.unwrap());
+        assert_eq!(fetch.event.physical, row.event.pc.unwrap());
+        assert_eq!(fetch.size, ObservationBytes(4));
+        assert!(matches!(fetch.byte_order, ObservationByteOrder::Little));
+        assert!(fetch.event.before.is_none() && fetch.event.value.is_none());
+        let expected = if row.event.source == Source::CpuRead { 1 } else { 2 };
+        assert_eq!(fetch.core_instructions, CoreInstructionOrdinal(expected));
+    }
+    for (address, value) in [(0x3004,0x22bu32),(0x3104,0x55aa)] {
+        let mut bytes = [0; 4];
+        machine.session.board.read_physical(address, &mut bytes).unwrap();
+        assert_eq!(u32::from_le_bytes(bytes), value);
+    }
+}
+
+#[test]
+fn attributed_site_fetches_keep_settled_stops_and_execute_once_on_resume() {
+    use fujimod_emulator::board::observation::{CpuDataAttribution, FetchAttribution, ViewPolicy, WatchKinds, WatchRange};
+    let mut machine = machine(&[0xe5810000, 0xe2800001, 0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[0], 0x22b).unwrap();
+    machine.session.board.write_register(0, arm::CORE[1], 0x3000).unwrap();
+    machine.traces.arm(&machine.session, BTreeMap::from([(0x1000,"entry".into()),(0x1004,"next".into())])).unwrap();
+    machine.traces.stop_labels = ["entry".into(),"next".into()].into_iter().collect();
+    machine.run(10);
+    assert_eq!(machine.instructions(), 0);
+    let attribution = FetchAttribution::new(CpuDataAttribution::Writes, vec![
+        WatchRange { start: 0x1000, end: 0x100c, kinds: WatchKinds::CPU_FETCH },
+    ]).unwrap();
+    let mut watch = machine.session.board.memory_watch_begin_with_fetch_attribution(vec![
+        WatchRange { start: 0x1000, end: 0x1008, kinds: WatchKinds::CPU_FETCH },
+        WatchRange { start: 0x3000, end: 0x3004, kinds: WatchKinds::WRITES },
+    ], attribution, 8, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
+    machine.run(10);
+    machine.require_running().unwrap();
+    let stopped: AttributedWatch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    let fetches: Vec<_> = stopped.records.iter().filter(|row| row.event.source == Source::CpuFetch)
+        .map(|row| (row.event.pc,row.event.instructions,row.core_instructions)).collect();
+    assert_eq!(fetches, [(Some(0x1000),Some(1),Some(CoreInstructionOrdinal(1))),(Some(0x1004),Some(1),Some(CoreInstructionOrdinal(1)))]);
+    let write = stopped.records.iter().find(|row| row.event.source == Source::CpuWrite).unwrap();
+    assert_eq!(write.latest_fetch.as_ref().unwrap().event.pc, Some(0x1000));
+    assert!(stopped.violation.is_none());
+    machine.run(1);
+    machine.require_running().unwrap();
+    let resumed: AttributedWatch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    let final_fetch = resumed.records.last().unwrap();
+    assert!(final_fetch.event.source == Source::CpuFetch);
+    assert_eq!((final_fetch.event.pc,final_fetch.event.instructions,final_fetch.core_instructions),
+        (Some(0x1004),Some(2),Some(CoreInstructionOrdinal(2))));
+    assert_eq!(resumed.records.iter().filter(|row| row.event.source == Source::CpuWrite).count(), 1);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 0x22c);
+    assert!(resumed.violation.is_none());
+}
+
+#[test]
+fn missing_actual_writer_fetch_preserves_the_data_row_and_refuses() {
+    use fujimod_emulator::board::observation::{CpuDataAttribution, FetchAttribution, ViewPolicy, WatchKinds, WatchRange};
+    let mut machine = machine(&[0xe5810000, 0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[0], 0x22b).unwrap();
+    machine.session.board.write_register(0, arm::CORE[1], 0x3000).unwrap();
+    let attribution = FetchAttribution::new(CpuDataAttribution::Writes, vec![
+        WatchRange { start: 0x1004, end: 0x1008, kinds: WatchKinds::CPU_FETCH },
+    ]).unwrap();
+    let mut watch = machine.session.board.memory_watch_begin_with_fetch_attribution(vec![
+        WatchRange { start: 0x3000, end: 0x3004, kinds: WatchKinds::WRITES },
+    ], attribution, 8, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
+    machine.run(1);
+    let observed: AttributedWatch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(observed.violation.is_some());
+    assert_eq!(observed.records.len(), 1);
+    assert!(observed.records[0].event.source == Source::CpuWrite);
+    assert_eq!(observed.records[0].event.value, Some(0x22b));
+    assert!(observed.records[0].latest_fetch.is_none());
+    let mut bytes = [0; 4];
+    machine.session.board.read_physical(0x3000, &mut bytes).unwrap();
+    assert_eq!(u32::from_le_bytes(bytes), 0x22b);
+}
+
+#[test]
+fn writes_only_attribution_and_record_bounds_do_not_expand_other_sources() {
+    use fujimod_emulator::board::observation::{CpuDataAttribution, FetchAttribution, ViewPolicy, WatchKinds, WatchRange};
+    let mut machine = machine(&[0xe5912000, 0xe5810004, 0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[0], 0x22b).unwrap();
+    machine.session.board.write_register(0, arm::CORE[1], 0x3000).unwrap();
+    let attribution = FetchAttribution::new(CpuDataAttribution::Writes, vec![
+        WatchRange { start: 0x1000, end: 0x100c, kinds: WatchKinds::CPU_FETCH },
+    ]).unwrap();
+    let mut watch = machine.session.board.memory_watch_begin_with_fetch_attribution(vec![
+        WatchRange { start: 0x3000, end: 0x3008, kinds: WatchKinds::CPU_READ.union(WatchKinds::WRITES) },
+    ], attribution, 2, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
+    machine.run(2);
+    let observed: AttributedWatch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    assert!(observed.violation.is_none());
+    assert_eq!(observed.records.len(), 2);
+    assert!(observed.records[0].event.source == Source::CpuRead && observed.records[0].latest_fetch.is_none());
+    assert_eq!(observed.records[0].core_instructions, Some(CoreInstructionOrdinal(1)));
+    assert!(observed.records[1].latest_fetch.is_some());
+    assert!(observed.fetch_attribution.unwrap().sources == [Source::CpuWrite]);
+    machine.session.board.write_physical(0x3004, &[1,2,3,4]).unwrap();
+    let bounded: AttributedWatch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert_eq!(bounded.records.len(), 2);
+    assert!(bounded.violation.is_some());
+}
+
+#[test]
+fn fetch_attribution_keeps_guest_alias_and_physical_instruction_distinct() {
+    use fujimod_emulator::board::observation::{CpuDataAttribution, FetchAttribution, ViewPolicy, WatchKinds, WatchRange};
+    let mut machine = machine_with_ram(&[0xe5810000,0xeafffffe], 0x8000, RamViews::AliasedWithDecoder);
+    machine.session.board.write_register(0, Register::Pc, 0x40001000).unwrap();
+    machine.session.board.write_register(0, arm::CORE[0], 0x22b).unwrap();
+    machine.session.board.write_register(0, arm::CORE[1], 0x40003000).unwrap();
+    let attribution = FetchAttribution::new(CpuDataAttribution::Writes, vec![
+        WatchRange { start: 0x1000, end: 0x1008, kinds: WatchKinds::CPU_FETCH },
+    ]).unwrap();
+    let mut watch = machine.session.board.memory_watch_begin_with_fetch_attribution(vec![
+        WatchRange { start: 0x3000, end: 0x3004, kinds: WatchKinds::CPU_WRITE },
+    ], attribution, 8, machine.session.board.mappings().to_vec(), ViewPolicy::Fixed).unwrap();
+    machine.run(1);
+    let observed: AttributedWatch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(observed.violation.is_none());
+    assert_eq!(observed.records.len(), 1);
+    let write = &observed.records[0];
+    let fetch = write.latest_fetch.as_ref().unwrap();
+    assert_eq!((write.event.pc,write.event.physical), (Some(0x40001000),0x3000));
+    assert_eq!((fetch.address.0,fetch.event.physical), (0x40001000,0x1000));
+    assert_eq!(fetch.core_instructions, CoreInstructionOrdinal(1));
+}
+
+#[test]
+fn default_classified_watches_do_not_add_attribution_fields() {
+    use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
+    let mut machine = machine(&[0xe5912000,0xe5810004,0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[0], 0x22b).unwrap();
+    machine.session.board.write_register(0, arm::CORE[1], 0x3000).unwrap();
+    let mut watch = machine.session.board.memory_watch_begin_classified(vec![
+        WatchRange { start: 0x3000, end: 0x3008, kinds: WatchKinds::CPU_READ.union(WatchKinds::WRITES) },
+    ], 8, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
+    machine.run(2);
+    machine.session.board.write_physical(0x3004, &[1,2,3,4]).unwrap();
+    let observed: AttributedWatch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(observed.violation.is_none() && observed.fetch_attribution.is_none());
+    assert_eq!(observed.records.len(), 3);
+    assert!(observed.records.iter().all(|row| row.core_instructions.is_none() && row.latest_fetch.is_none()));
+}

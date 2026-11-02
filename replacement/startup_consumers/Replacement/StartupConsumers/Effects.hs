@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Replacement.StartupConsumers.Effects (ConsumerProjection, familyEntryAddress, checkConsumers, consumerProjection, consumerProjectionValue) where
+module Replacement.StartupConsumers.Effects (ConsumerProjection, checkConsumers, consumerProjection, consumerProjectionValue) where
 
 import Control.Monad (foldM, forM, forM_, when)
 import qualified Data.Aeson as J
@@ -33,17 +33,6 @@ rootIndex :: RootSelector -> Word32
 rootIndex PrimaryRoot = 0
 rootIndex SecondaryRoot = 1
 
-familyEntryAddress :: Family -> K.Address
-familyEntryAddress family = K.Address $ case family of
-  TaskWrapper -> 0x725dd8; TaskReserve -> 0x725c6c; StorageReserve -> 0x723470
-  MessageConstruct -> 0x724cdc; MessageSend -> 0x72503c; MessageReceive -> 0x725318
-familyEpilogue :: Family -> Word32
-familyEpilogue family = case family of
-  TaskWrapper -> 0x726094; TaskReserve -> 0x725dcc; StorageReserve -> 0x7235cc
-  MessageConstruct -> 0x724f04; MessageSend -> 0x725210; MessageReceive -> 0x725420
-
-data ExecutionMode = UserMode | FiqMode | IrqMode | SupervisorMode | MonitorMode | AbortMode | HypervisorMode | UndefinedMode | SystemMode deriving (Eq)
-data ExecutionFrame = ExecutionFrame Core ExecutionMode K.Address K.Address deriving (Eq)
 data ConsumerFrameLayout = ConsumerFrameLayout {savedFrameBytes :: S.ByteCount,allocatedFrameBytes :: S.ByteCount}
 
 consumerFrameLayout :: Family -> ConsumerFrameLayout
@@ -55,22 +44,6 @@ consumerFrameLayout family = case family of
   MessageSend -> layout 24 32
   MessageReceive -> layout 32 40
   where layout saved allocated = ConsumerFrameLayout (S.ByteCount saved) (S.ByteCount allocated)
-
-executionFrame :: Probe -> Either WitnessError ExecutionFrame
-executionFrame probe = do
-  mode <- case number (K.contextCpsr (machine probe)) .&. 0x1f of
-    0x10 -> pure UserMode
-    0x11 -> pure FiqMode
-    0x12 -> pure IrqMode
-    0x13 -> pure SupervisorMode
-    0x16 -> pure MonitorMode
-    0x17 -> pure AbortMode
-    0x1a -> pure HypervisorMode
-    0x1b -> pure UndefinedMode
-    0x1f -> pure SystemMode
-    _ -> Left InvocationRejected
-  fp <- K.Address <$> register probe 11
-  pure (ExecutionFrame (core probe) mode fp (K.contextSp (machine probe)))
 
 bodyFrame :: Family -> Probe -> Either WitnessError ExecutionFrame
 bodyFrame family entry = do
@@ -109,8 +82,8 @@ checkFrameAttribution receipt invocation entry returned = do
       continuation <- K.Address <$> wordAt InvocationRejected contents (helperSp+4)
       require (callerFp == address bodyFp && continuation `elem` errorContinuations family) InvocationRejected
     else do
-      require (pc probe >= address (familyEntryAddress family) && pc probe <= familyEpilogue family) InvocationRejected
-      let expected = if pc probe == familyEpilogue family
+      require (pc probe >= address (S.familyEntryAddress family) && pc probe <= address (S.familyEpilogueAddress family)) InvocationRejected
+      let expected = if pc probe == address (S.familyEpilogueAddress family)
             then ExecutionFrame owner mode bodyFp (K.Address (sp entry-saved))
             else expectedBody
       require (actual == expected) InvocationRejected
@@ -140,8 +113,8 @@ checkConsumers source receipt = do
   forM_ invocations $ \invocation -> do
     entry <- entryOf receipt invocation
     returned <- returnOf receipt invocation
-    epilogue <- sourceAt receipt invocation (familyEpilogue (invocationFamily invocation))
-    require (probeKind entry == FamilyEntry && pc entry == address (familyEntryAddress (invocationFamily invocation))
+    epilogue <- sourceAt receipt invocation (address (S.familyEpilogueAddress (invocationFamily invocation)))
+    require (probeKind entry == FamilyEntry && pc entry == address (S.familyEntryAddress (invocationFamily invocation))
       && core entry == invocationCore invocation && lr entry == address (invocationLr invocation)
       && sp entry == address (invocationSp invocation) && probeFamily entry == Just (invocationFamily invocation)
       && probeKind returned == FamilyReturn && pc returned == lr entry && sp returned == sp entry
@@ -220,9 +193,9 @@ checkRetainedPrehistory :: Receipt -> Call -> Either WitnessError ()
 checkRetainedPrehistory receipt observed = do
   before <- memoryAt receipt (callEntry observed)
   let boundaries = Set.fromList [(fetchSegment attempt,count (fetchRow attempt)) | attempt <- receiptFetches receipt]
-      accesses = [(K.Address location,kind) | (location,kind) <-
-        [(0x4b430,K.CpuRead),(0xdb3f0,K.CpuRead),(0x48fb8,K.CpuRead),(0xd8f78,K.CpuRead)
-        ,(0x48f04,K.CpuWrite),(0xd8ec4,K.CpuWrite),(0x48f58,K.CpuWrite),(0xd8f18,K.CpuWrite)]]
+      sourceKind S.MessageRead = K.CpuRead
+      sourceKind S.MessageWrite = K.CpuWrite
+      accesses = [(S.messageAccessInstruction access,sourceKind (S.messageAccessKind access)) | access <- S.messageAccesses]
       executed = [event | segment <- receiptSegments receipt
         ,(index,event) <- zip [0 :: Word64 ..] (K.watchRecords (segmentWatch segment))
         ,Set.notMember (segmentId segment,index) boundaries,eventSource event == K.CpuFetch

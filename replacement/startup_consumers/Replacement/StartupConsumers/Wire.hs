@@ -1,8 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.StartupConsumers.Wire where
 
+import Control.Monad (forM, unless)
 import Data.Aeson
 import Data.Aeson.Types (Parser)
+import Data.Maybe (catMaybes)
 import qualified Data.Text as T
 import Data.Word (Word64)
 import Replacement.KernelInstall.Wire (Address (..), WordValue (..), Count (..), Digest (..), Bytes (..), Core (..), Watch (..))
@@ -22,7 +24,15 @@ data Status = Returned | NotObserved | Unclosed deriving (Eq, Show)
 data Outcome = Observed | NonObservation | Refused deriving (Eq, Show)
 data ComponentKind = InstallerComponent | DispatcherComponent deriving (Eq, Ord, Show)
 data FetchClassification = BoundaryAttempt deriving (Eq, Show)
+data FetchScope = CompleteFetch | ScopedFetch deriving (Eq, Show)
+newtype PhysicalBoundary = PhysicalBoundary Word64 deriving (Eq, Ord, Show)
+data FetchRange = FetchRange {fetchRangeLow :: PhysicalBoundary,fetchRangeHigh :: PhysicalBoundary} deriving (Eq, Ord, Show)
+data FetchAttribution = FetchAttribution {attributionSources :: [K.Source],attributionRanges :: [FetchRange]} deriving (Eq, Show)
+data AttributedFetch = AttributedFetch {attributedFetchEvent :: K.MemoryEvent,attributedFetchCoreInstructions :: Count} deriving (Eq, Show)
+data CpuRowEvidence = CpuRowEvidence
+  {evidenceRow :: Count,evidenceCoreInstructions :: Count,evidenceLatestFetch :: Maybe AttributedFetch} deriving (Eq, Show)
 newtype ProbeId = ProbeId Word64 deriving (Eq, Ord, Show)
+data ProbeRange = ProbeRange {probeRangeBegin :: ProbeId,probeRangeEnd :: ProbeId} deriving (Eq, Show)
 newtype InvocationId = InvocationId Word64 deriving (Eq, Ord, Show)
 newtype ResourceId = ResourceId Word64 deriving (Eq, Ord, Show)
 newtype SegmentId = SegmentId Word64 deriving (Eq, Ord, Show)
@@ -33,7 +43,7 @@ data Identity = Identity
   ,identityLoaderA :: Digest, identityLoaderB :: Digest, identityObserver :: Digest, identityComponents :: [Component]
   ,identityRom :: Digest, identityJoinedContract :: Digest} deriving (Eq, Show)
 data Limits = Limits
-  {limitInstructions :: Count, limitSegmentInstructions :: Count, limitRecords :: Count, limitProbes :: Count
+  {limitInstructions :: Count, limitSegmentInstructions :: Count,limitScopedSegmentInstructions :: Count, limitRecords :: Count, limitProbes :: Count
   ,limitResources :: Count, limitResourceBytes :: Count, limitInvocations :: Count, limitTotalRecords :: Count
   ,limitSnapshotBytes :: Count, limitSegments :: Count, limitSnapshots :: Count} deriving (Eq, Show)
 data View = View {viewCore :: Core, viewGuest :: Address, viewPhysical :: Address, viewBytes :: Bytes} deriving (Eq, Show)
@@ -53,7 +63,9 @@ data Resource = Resource
 data TraceStop = TraceStop {stopCore :: Core, stopPc :: Address, stopInstructions :: Count} deriving (Eq, Show)
 data Segment = Segment
   {segmentId :: SegmentId, segmentStart :: [Count], segmentEnd :: [Count], segmentStartContexts :: [Context]
-  ,segmentEndContexts :: [Context], segmentStops :: [TraceStop], segmentWatch :: Watch, segmentError :: Maybe String} deriving (Eq, Show)
+  ,segmentEndContexts :: [Context], segmentStops :: [TraceStop], segmentWatch :: Watch, segmentError :: Maybe String
+  ,segmentFetchScope :: FetchScope,segmentFetchRanges :: [FetchRange],segmentArmedSites :: [Address]
+  ,segmentFetchAttribution :: FetchAttribution,segmentCpuEvidence :: [CpuRowEvidence],segmentProbeRange :: ProbeRange} deriving (Eq, Show)
 data FetchAttempt = FetchAttempt
   {fetchSegment :: SegmentId, fetchRow :: Count, fetchClassification :: FetchClassification} deriving (Eq, Show)
 data PayloadState = EmptyPayload | AdmittedPayload deriving (Eq, Show)
@@ -65,6 +77,14 @@ data Receipt = Receipt
   ,receiptIdentity :: Identity, receiptCheckpoint :: Digest, receiptCheckpointReused :: Bool, receiptInstructions :: Count
   ,receiptLimits :: Limits, receiptProbes :: [Probe], receiptInvocations :: [Invocation], receiptResources :: [Resource]
   ,receiptSegments :: [Segment], receiptCensus :: [Census], receiptFetches :: [FetchAttempt], receiptPayloads :: [PayloadAdmission]} deriving (Eq, Show)
+
+instance FromJSON FetchScope where parseJSON = tagged "fetch scope" [("complete",CompleteFetch),("scoped",ScopedFetch)]
+instance FromJSON FetchRange where
+  parseJSON value = do
+    bounds <- parseJSON value
+    case bounds of
+      [low,high] | low < high && high <= 0x100000000 -> pure (FetchRange (PhysicalBoundary low) (PhysicalBoundary high))
+      _ -> fail "invalid physical fetch range"
 
 tagged :: String -> [(T.Text,a)] -> Value -> Parser a
 tagged name choices = withText name $ \tag -> maybe (fail ("invalid " ++ name)) pure (lookup tag choices)
@@ -102,7 +122,7 @@ instance FromJSON Identity where
   parseJSON = withObject "identity" $ \o -> Identity <$> o .: "run" <*> o .: "update" <*> o .: "canonical_dat" <*> o .: "image4"
     <*> o .: "loader_a" <*> o .: "loader_b" <*> o .: "observer" <*> o .: "components" <*> o .: "boot_rom" <*> o .: "joined_contract"
 instance FromJSON Limits where
-  parseJSON = withObject "limits" $ \o -> Limits <$> o .: "instructions" <*> o .: "segment_instructions" <*> o .: "watch_records"
+  parseJSON = withObject "limits" $ \o -> Limits <$> o .: "instructions" <*> o .: "segment_instructions" <*> o .: "scoped_segment_instructions" <*> o .: "watch_records"
     <*> o .: "probes" <*> o .: "resources" <*> o .: "resource_bytes" <*> o .: "invocations"
     <*> o .: "records" <*> o .: "snapshot_bytes" <*> o .: "segments" <*> o .: "snapshots"
 instance FromJSON View where parseJSON = withObject "view" $ \o -> View <$> o .: "core" <*> o .: "guest" <*> o .: "physical" <*> o .: "bytes"
@@ -119,9 +139,44 @@ instance FromJSON Resource where
     <*> o .: "size" <*> o .: "admitted" <*> o .: "initial" <*> o .: "closed" <*> o .: "final_views"
 instance FromJSON TraceStop where
   parseJSON = withObject "trace stop" $ \o -> TraceStop <$> o .: "core" <*> o .: "pc" <*> o .: "instructions"
+instance FromJSON FetchAttribution where
+  parseJSON = withObject "fetch attribution" $ \o -> FetchAttribution <$> o .: "sources" <*> o .: "ranges"
+instance FromJSON AttributedFetch where
+  parseJSON value = withObject "attributed fetch" (\o -> AttributedFetch <$> parseJSON value <*> o .: "core_instructions") value
+
+parseWatchEvidence :: Watch -> Value -> Parser (FetchAttribution,[CpuRowEvidence])
+parseWatchEvidence watch = withObject "attributed watch" $ \o -> do
+  attribution <- o .: "fetch_attribution"
+  values <- o .: "records"
+  unless (length values == length (K.watchRecords watch)) (fail "CPU evidence row count differs")
+  evidence <- forM (zip3 [0..] (K.watchRecords watch) values) $ \(index,event,value) ->
+    withObject "attributed row" (\row -> do
+      own <- row .:? "core_instructions"
+      latest <- row .:? "latest_fetch"
+      if K.eventSource event `elem` [K.CpuFetch,K.CpuRead,K.CpuWrite] then do
+        ordinal <- maybe (fail "CPU row lacks its actual core instruction count") pure own
+        pure (Just (CpuRowEvidence (Count index) ordinal latest))
+      else do
+        unless (own == Nothing && latest == Nothing) (fail "non-CPU row has CPU provenance")
+        pure Nothing) value
+  pure (attribution,catMaybes evidence)
+
+instance FromJSON ProbeRange where
+  parseJSON value = do
+    bounds <- parseJSON value
+    case bounds of
+      [begin,end] | begin <= end -> pure (ProbeRange begin end)
+      _ -> fail "invalid probe range"
+
 instance FromJSON Segment where
-  parseJSON = withObject "segment" $ \o -> Segment <$> o .: "id" <*> o .: "start_counts" <*> o .: "end_counts"
-    <*> o .: "start_contexts" <*> o .: "end_contexts" <*> o .: "stops" <*> o .: "watch" <*> o .: "end_error"
+  parseJSON = withObject "segment" $ \o -> do
+    watchValue <- o .: "watch"
+    watch <- parseJSON watchValue
+    (attribution,evidence) <- parseWatchEvidence watch watchValue
+    Segment <$> o .: "id" <*> o .: "start_counts" <*> o .: "end_counts"
+      <*> o .: "start_contexts" <*> o .: "end_contexts" <*> o .: "stops" <*> pure watch <*> o .: "end_error"
+      <*> o .: "fetch_scope" <*> o .: "fetch_ranges" <*> o .: "armed_sites" <*> pure attribution <*> pure evidence
+      <*> o .: "probe_range"
 instance FromJSON FetchAttempt where
   parseJSON = withObject "fetch attempt" $ \o -> FetchAttempt <$> o .: "segment" <*> o .: "row" <*> o .: "classification"
 instance FromJSON Receipt where

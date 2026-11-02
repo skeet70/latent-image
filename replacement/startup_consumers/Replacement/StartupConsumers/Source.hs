@@ -3,6 +3,9 @@ module Replacement.StartupConsumers.Source
   , AllocationInput (..), AllocationResult (..), Reservation (..), ReservationState, reservationState, reservationWord
   , ByteCount (..), TaskId, taskId, taskIndex
   , deriveSource, primaryStores, secondaryStores, sourceFiles, reserve
+  , familyEntryAddress, familyEpilogueAddress, familySourceSites, globalSourceSites, commonSourceSites, atomicSourceSites
+  , CodeSpan (..), ownedCodeSpans
+  , MessageAccessKind (..), MessageAccess (..), messageAccesses
   ) where
 
 import Data.Bits ((.&.), complement)
@@ -13,6 +16,7 @@ import qualified Emulation.LoaderPrefixWitness as P
 import qualified Emulation.PrimaryInitializerSource as A
 import qualified Replacement.KernelInstall.Artifact as K
 import Replacement.KernelInstall.Wire (Address (..), WordValue (..))
+import Replacement.StartupConsumers.Wire (Family (..))
 
 data SourceFiles = SourceFiles
   { sourceDat :: B.ByteString, sourceImage4 :: B.ByteString
@@ -80,3 +84,54 @@ reserve input
     Address cursor = allocationCursor input
     pool = case allocationKind input of TaskAllocation -> 0x40a10200; StorageAllocation -> 0x409c4460
     pointer = case allocationKind input of TaskAllocation -> cursor .&. complement 0x40000000; StorageAllocation -> cursor
+
+familyEntryAddress :: Family -> Address
+familyEntryAddress family = Address $ case family of
+  TaskWrapper -> 0x725dd8; TaskReserve -> 0x725c6c; StorageReserve -> 0x723470
+  MessageConstruct -> 0x724cdc; MessageSend -> 0x72503c; MessageReceive -> 0x725318
+
+familyEpilogueAddress :: Family -> Address
+familyEpilogueAddress family = Address $ case family of
+  TaskWrapper -> 0x726094; TaskReserve -> 0x725dcc; StorageReserve -> 0x7235cc
+  MessageConstruct -> 0x724f04; MessageSend -> 0x725210; MessageReceive -> 0x725420
+
+familySourceSites :: Family -> [Address]
+familySourceSites family = map Address $ case family of
+  TaskWrapper -> [0x725df8,0x725e1c,0x725e34,0x725e50,0x725e74,0x725e78
+    ,0x725f08,0x725f0c,0x725f68,0x725f6c,0x725f78,0x725f7c,0x725fa8,0x725fac,0x725fb4,0x725fb8
+    ,0x726000,0x726004,0x726024,0x726028,0x726094]
+  TaskReserve -> [0x725c94,0x725c98,0x725ca4,0x725ca8,0x725cc0,0x725cc4
+    ,0x725cd4,0x725cf0,0x725d0c,0x725d1c,0x725d30,0x725d44,0x725d54,0x725d64,0x725d7c
+    ,0x725d94,0x725d98,0x725da0,0x725dac,0x725db0,0x725dc4,0x725dc8,0x725dcc]
+  StorageReserve -> [0x723498,0x72349c,0x7234a8,0x7234ac,0x7234c4,0x7234c8
+    ,0x7234d8,0x7234f4,0x723510,0x723520,0x723534,0x723548,0x723558,0x723564,0x72357c
+    ,0x723594,0x723598,0x7235a0,0x7235ac,0x7235b0,0x7235c4,0x7235c8,0x7235cc]
+  MessageConstruct -> [0x724d00,0x724d20,0x724d24,0x724d70,0x724d98,0x724d9c,0x724de4,0x724dec
+    ,0x724e04,0x724e20,0x724e34,0x724e38,0x724ea4,0x724ea8,0x724ee4,0x724ee8,0x724f04]
+  MessageSend -> [0x725064,0x725068,0x725078,0x725084,0x7250c4,0x7250cc,0x7250d0,0x725100,0x725104
+    ,0x72514c,0x725154,0x72515c,0x725164,0x72517c,0x725180,0x725190,0x725194
+    ,0x7251b4,0x7251b8,0x7251f0,0x7251f4,0x725210]
+  MessageReceive -> [0x725344,0x725348,0x725378,0x72537c,0x7253c0,0x7253c8,0x7253d0,0x7253d8
+    ,0x7253e0,0x7253f8,0x7253fc,0x725414,0x725418,0x725420]
+
+globalSourceSites :: [Address]
+globalSourceSites = map Address [0x69cdf8,0x725a04,0x42634,0x40a08,0x40a0c,0x40a10
+  ,0xd0a44,0xd0a48,0xd0a4c,0xd0aac,0xd0430,0xd0ab0
+  ,0x7235d8,0x7235f4,0x7235f8,0x7235fc,0x723600,0x723604,0x723608,0x412c4,0x412c8,0x427b8]
+
+commonSourceSites :: [Address]
+commonSourceSites = map Address [0x7233ac,0x7233b0]
+
+atomicSourceSites :: [Address]
+atomicSourceSites = map Address [0x427d4,0x427e4,0x42800,0x42810,0xd27d4,0xd27e4,0xd2800,0xd2810]
+
+data MessageAccessKind = MessageRead | MessageWrite deriving (Eq, Show)
+data MessageAccess = MessageAccess {messageAccessInstruction :: Address,messageAccessKind :: MessageAccessKind}
+messageAccesses :: [MessageAccess]
+messageAccesses =
+  [MessageAccess (Address site) MessageRead | site <- [0x4b430,0xdb3f0,0x48fb8,0xd8f78]]
+  ++ [MessageAccess (Address site) MessageWrite | site <- [0x48f04,0xd8ec4,0x48f58,0xd8f18]]
+
+data CodeSpan = CodeSpan {codeSpanStart :: Address,codeSpanSize :: ByteCount}
+ownedCodeSpans :: [CodeSpan]
+ownedCodeSpans = [CodeSpan (Address 0x69cdf8) (ByteCount 0x18c),CodeSpan (Address 0x725a04) (ByteCount 0x150)]
