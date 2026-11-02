@@ -255,15 +255,39 @@ pub(super) fn shared_hits(bytes:&[u8],code:&[u8])->Result<Vec<SharedHit>,String>
     require(sampled==[true;2],"shared dispatcher source sampling lacks a core")?;
     Ok(hits)
 }
-pub(super) fn shared_fetches(rows:&[Row],hits:&[SharedHit])->Result<(),String>{
+pub(super) fn shared_boundary(boundary:&Boundary,hits:&[SharedHit])->Result<(),String>{correlate(boundary,hits)}
+pub(super) fn shared_fetches(records:&[super::shared::FetchRecord],hits:&[SharedHit],endpoint:u64)->Result<(),String>{
     let samples=hits.iter().map(|hit|Ok((hit.core,number(&hit.address)?,hit.instructions))).collect::<Result<std::collections::BTreeSet<_>,String>>()?;
+    let mut executed=std::collections::BTreeSet::new();let mut attempts=std::collections::BTreeSet::new();
+    let mut retries:BTreeMap<(usize,u32,u64,bool),&super::shared::FetchRecord>=BTreeMap::new();
     let mut cores=[false;2];
-    for row in rows.iter().filter(|row|row.source==Source::CpuFetch && (LOW..HIGH).contains(&row.physical.0)) {
+    for record in records {
+        let row=&record.row;
         let core=usize::from(row.core.ok_or("shared dispatcher fetch core absent")?);
         let at=row.instructions.as_ref().ok_or("shared dispatcher fetch clock absent")?.0;
-        require(row.size==4 && row.address==row.physical && row.pc==Some(row.address) && (samples.contains(&(core,row.address.0,at))
-            || at.checked_sub(1).is_some_and(|before|samples.contains(&(core,row.address.0,before)))),"shared dispatcher fetch lacks stopped source sample")?;
+        require(row.source==Source::CpuFetch&&row.size==4&&row.address==row.physical&&row.pc==Some(row.address)
+            &&record.order==Some(super::shared::ByteOrder::Little)&&row.value.is_none()&&at<=endpoint,
+            "shared dispatcher fetch identity or instruction state differs")?;
+        let key=(core,row.address.0,at,record.attempt);
+        if let Some(previous)=retries.insert(key,record) {
+            require(previous.own==record.own&&previous.order==record.order
+                &&previous.row.tick.as_ref().map(|tick|tick.0)==row.tick.as_ref().map(|tick|tick.0)
+                &&previous.row.value==row.value,"shared dispatcher fetch retry contradicts prior evidence")?;
+        }
+        if record.attempt {
+            require(samples.contains(&(core,row.address.0,at)),"dispatcher attempted fetch lacks its stopped sample")?;
+            attempts.insert((core,row.address.0,at));
+        }else{
+            let before=at.checked_sub(1).ok_or("dispatcher executed fetch clock underflows")?;
+            require(samples.contains(&(core,row.address.0,before)),"dispatcher executed fetch lacks its N+1 source sample")?;
+            executed.insert((core,row.address.0,before));
+        }
         cores[core]=true;
+    }
+    for sample in samples.iter().filter(|(_,pc,_)|(LOW..HIGH).contains(pc)) {
+        require(sample.2<=endpoint,"dispatcher sample exceeds actual endpoint")?;
+        if sample.2==endpoint {require(attempts.contains(sample),"terminal dispatcher sample lacks preexecution attempt")?;}
+        else {require(executed.contains(sample),"completed dispatcher sample lacks executed N+1 fetch")?;}
     }
     require(cores==[true;2],"shared dispatcher fetch coverage lacks a core")
 }

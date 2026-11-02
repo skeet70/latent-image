@@ -167,7 +167,8 @@ impl Capture {
                     self.invocations[index].returned=Some(returned);self.active[slot]=None;
                 }
             }
-            if pc.0==0x657194 {
+            if pc.0==0x657194 && self.active[slot].is_some_and(|index|self.invocations[index].phase==Phase::Install
+                &&self.invocations[index].calls.last().is_some_and(|call|call.service==Service::Mode&&call.returned.is_none())) {
                 self.mode_reads.push(ModeRead {boundary:boundary(machine,maps,core,pc)?,cell:view(&machine.session,maps,core,Guest(0x61c008),1)?});
             }
             if matches!(pc.0,0x40c80|0xd0c80) {
@@ -205,17 +206,53 @@ fn arm(machine:&mut Machine,pc:u32)->Result<(),String> {
     machine.traces.stop_labels=machine.traces.sites.values().cloned().collect();Ok(())
 }
 
+#[derive(Clone,Copy,Deserialize,Serialize,PartialEq,Eq)]
+#[serde(rename_all="lowercase")]
+pub(crate) enum ByteOrder {Little,Big}
+#[derive(Clone,Deserialize,Serialize,PartialEq,Eq)]
+pub(crate) struct FetchStamp {
+    pub(crate) source:Source,pub(crate) address:Guest,pub(crate) physical:Option<Guest>,pub(crate) size:u64,
+    pub(crate) value:Option<u64>,pub(crate) before:Option<Vec<u8>>,pub(crate) byte_order:Option<ByteOrder>,
+    pub(crate) core:Option<usize>,pub(crate) pc:Option<Guest>,pub(crate) instructions:Option<u64>,
+    pub(crate) tick:Option<u64>,pub(crate) core_instructions:u64,
+}
+pub(crate) struct DataAttribution {
+    pub(crate) own:u64,pub(crate) before:Option<[u8;4]>,pub(crate) byte_order:Option<ByteOrder>,pub(crate) latest:Option<FetchStamp>,
+}
+pub(super) struct FetchRecord {pub(super) row:Row,pub(super) own:Option<u64>,pub(super) order:Option<ByteOrder>,pub(super) attempt:bool}
 #[derive(Default)]
-pub(crate) struct Rows {rows:Vec<Row>,fetched:bool}
+pub(crate) struct Rows {
+    rows:Vec<Row>,fetches:Vec<FetchRecord>,getter_fetches:Vec<FetchStamp>,mode_reads:Vec<(Row,Option<DataAttribution>)>,
+    mode_writes:Vec<(Option<u64>,[u64;2])>,fetched:bool,
+}
 pub(crate) struct AccessRow {
     pub(crate) source:Source,pub(crate) address:Guest,pub(crate) physical:Guest,pub(crate) size:u64,
     pub(crate) core:Option<usize>,pub(crate) pc:Option<Guest>,pub(crate) instructions:Option<u64>,
-    pub(crate) tick:Option<u64>,pub(crate) value:Option<u64>,
+    pub(crate) tick:Option<u64>,pub(crate) value:Option<u64>,pub(crate) own:Option<u64>,
+    pub(crate) order:Option<ByteOrder>,pub(crate) attribution:Option<DataAttribution>,pub(crate) attempt:bool,pub(crate) interval:[u64;2],
 }
 impl Rows {
     pub(crate) fn push(&mut self,row:AccessRow)->Result<(),String>{
         let end=u64::from(row.physical.0).checked_add(row.size).ok_or("dispatcher access extent overflows")?;
         let code=u64::from(row.physical.0)<u64::from(END) && u64::from(START)<end;
+        if row.source==Source::CpuFetch && !row.attempt && matches!(row.pc.map(|pc|pc.0),Some(0x657184|0x657194|0x657198|0x65719c)) {
+            self.getter_fetches.push(FetchStamp {source:row.source,address:row.address,physical:Some(row.physical),size:row.size,
+                value:row.value,before:None,byte_order:row.order,core:row.core,pc:row.pc,instructions:row.instructions,
+                tick:row.tick,core_instructions:row.own.ok_or("getter fetch own-core count absent")?});
+        }
+        if row.source==Source::CpuRead && row.pc==Some(Guest(0x657194)) {
+            self.mode_reads.push((Row {source:row.source,address:row.address,physical:row.physical,size:row.size,
+                core:row.core.map(Core::try_from).transpose()?,pc:row.pc,instructions:row.instructions.map(Count),tick:row.tick.map(Count),
+                value:row.value,before:None},row.attribution));
+        }
+        if u64::from(row.physical.0)<0x61c00c && 0x61c008<end && matches!(row.source,Source::CpuWrite|Source::HostWrite|Source::ModelBusWrite) {
+            self.mode_writes.push((row.instructions,row.interval));
+        }
+        if code && row.source==Source::CpuFetch {
+            self.fetches.push(FetchRecord {row:Row {source:row.source,address:row.address,physical:row.physical,size:row.size,
+                core:row.core.map(Core::try_from).transpose()?,pc:row.pc,instructions:row.instructions.map(Count),tick:row.tick.map(Count),
+                value:row.value,before:None},own:row.own,order:row.order,attempt:row.attempt});
+        }
         if code && row.source==Source::CpuFetch {self.fetched=true;}
         if code && self.fetched && matches!(row.source,Source::CpuWrite|Source::HostWrite|Source::ModelBusWrite) {
             return Err("shared dispatcher code rewritten after first fetch".into());
@@ -234,14 +271,11 @@ impl Rows {
 #[derive(Serialize,PartialEq)]
 pub(crate) struct Checked {projection:startup_dispatch_check::SharedProjection}
 impl Capture {
-    pub(crate) fn verify(&self,rows:&Rows,trace_bytes:&[u8],code:&[u8],callers:&[(usize,u32,u32)],facts:&[CallFact],owned:bool)->Result<Checked,String>{
+    pub(crate) fn verify(&self,rows:&Rows,trace_bytes:&[u8],code:&[u8],callers:&[(usize,u32,u32)],facts:&[CallFact],owned:bool,endpoint:u64)->Result<Checked,String>{
         let trace:Vec<startup_dispatch_check::SharedHit>=startup_dispatch_check::shared_hits(trace_bytes,code)?;
-        startup_dispatch_check::shared_fetches(&rows.rows,&trace)?;
+        startup_dispatch_check::shared_fetches(&rows.fetches,&trace,endpoint)?;
         let projection=startup_dispatch_check::shared(&self.invocations,&self.publications,&rows.rows,trace_bytes,callers)?;
-        if self.mode_reads.len()!=1 || self.mode_reads[0].boundary.pc.0!=0x657194 || self.mode_reads[0].cell.words!=[0] {
-            return Err("mode getter committed read provenance differs".into());
-        }
-        validate_boundary(&self.mode_reads[0].boundary)?;validate_view(&self.mode_reads[0].cell)?;
+        self.verify_mode(rows,&trace,code)?;
         for invocation in &self.invocations {
             let sp=invocation.entry.registers.sp.0;
             let returned=invocation.returned.as_ref().ok_or("dispatcher return absent")?;
@@ -281,6 +315,83 @@ impl Capture {
             }
         }
         Ok(Checked {projection})
+    }
+}
+
+impl Capture {
+    fn verify_mode(&self,rows:&Rows,trace:&[startup_dispatch_check::SharedHit],code:&[u8])->Result<(),String>{
+        let invocation=self.invocations.iter().find(|invocation|invocation.entry.core==Core::Primary&&invocation.phase==Phase::Install)
+            .ok_or("mode getter outer0 invocation absent")?;
+        let call=invocation.calls.iter().find(|call|call.service==Service::Mode).ok_or("mode getter call absent")?;
+        let returned=call.returned.as_ref().ok_or("mode getter return absent")?;
+        let installer=invocation.calls.iter().find(|call|call.service==Service::Install).ok_or("mode getter installation successor absent")?;
+        if self.mode_reads.len()!=1 {return Err("mode getter committed read sample absent or repeated".into());}
+        let sample=&self.mode_reads[0];
+        validate_boundary(&sample.boundary)?;validate_view(&sample.cell)?;
+        startup_dispatch_check::shared_boundary(&sample.boundary,trace)?;
+        if sample.boundary.core!=Core::Primary||sample.boundary.pc!=Guest(0x657194)
+            ||sample.cell.address!=Guest(0x61c008)||sample.cell.physical!=Guest(0x61c008)||sample.cell.words!=[0]
+            ||sample.cell.other_words.len()!=1||sample.cell.physical_words.len()!=1
+            ||call.entry.instructions.0>sample.boundary.instructions.0||sample.boundary.instructions.0>=returned.instructions.0
+            ||sample.boundary.registers.lr!=call.entry.registers.lr||sample.boundary.registers.r[3]!=0x61c000
+            ||returned.registers.r[0]!=0||installer.entry.registers.r[0]!=0 {
+            return Err("mode getter committed sample is not the source cell in its enclosing call".into());
+        }
+        let site=call.entry.registers.lr.0.checked_sub(4).ok_or("mode getter callsite underflows")?;
+        let offset=site.checked_sub(START).ok_or("mode getter callsite precedes dispatcher")? as usize;
+        let instruction=u32::from_le_bytes(code.get(offset..offset+4).ok_or("mode getter callsite exceeds dispatcher")?.try_into().map_err(|_|"mode getter callsite word")?);
+        let displacement=(((instruction&0xffffff)<<8) as i32>>6) as u32;
+        if instruction&0xff000000!=0xeb000000||site.wrapping_add(8).wrapping_add(displacement)!=0x657184 {
+            return Err("mode getter lacks a direct source-bound dispatcher call".into());
+        }
+        let within=|clock:Option<u64>|clock.is_some_and(|clock|invocation.entry.instructions.0<clock&&clock<=installer.entry.instructions.0);
+        let source_fetch=|pc:u32|->Result<FetchStamp,String>{
+            let mut candidates=rows.fetches.iter().filter(|fetch|!fetch.attempt&&fetch.row.core==Some(Core::Primary)
+                &&fetch.row.pc==Some(Guest(pc))&&within(fetch.row.instructions.as_ref().map(|clock|clock.0)));
+            let first=candidates.next().ok_or("mode getter source call/continuation executed fetch absent")?;
+            if candidates.any(|other|other.own!=first.own||other.row.tick.as_ref().map(|tick|tick.0)!=first.row.tick.as_ref().map(|tick|tick.0)) {
+                return Err("mode getter source fetch is ambiguous".into());
+            }
+            Ok(FetchStamp {source:Source::CpuFetch,address:first.row.address,physical:Some(first.row.physical),size:first.row.size,
+                value:first.row.value,before:None,byte_order:first.order,core:Some(0),pc:first.row.pc,
+                instructions:first.row.instructions.as_ref().map(|clock|clock.0),tick:first.row.tick.as_ref().map(|tick|tick.0),
+                core_instructions:first.own.ok_or("mode getter source fetch own-core count absent")?})
+        };
+        let getter_fetch=|pc:u32|->Result<&FetchStamp,String>{
+            let mut candidates=rows.getter_fetches.iter().filter(|fetch|fetch.core==Some(0)&&fetch.pc==Some(Guest(pc))&&within(fetch.instructions));
+            let first=candidates.next().ok_or("mode getter executed entry/load/move/return fetch absent")?;
+            if candidates.any(|other|other!=first){return Err("mode getter executed fetch is ambiguous".into());}
+            if first.source!=Source::CpuFetch||first.address!=Guest(pc)||first.physical!=Some(Guest(pc))||first.size!=4
+                ||first.byte_order!=Some(ByteOrder::Little){return Err("mode getter executed fetch identity differs".into());}
+            Ok(first)
+        };
+        let called=source_fetch(site)?;let entered=getter_fetch(0x657184)?;let loaded=getter_fetch(0x657194)?;
+        let moved=getter_fetch(0x657198)?;let completed=getter_fetch(0x65719c)?;let continued=source_fetch(site+4)?;
+        if called.core_instructions.checked_add(1)!=Some(entered.core_instructions)||entered.core_instructions>=loaded.core_instructions
+            ||loaded.core_instructions.checked_add(1)!=Some(moved.core_instructions)
+            ||moved.core_instructions.checked_add(1)!=Some(completed.core_instructions)
+            ||completed.core_instructions.checked_add(1)!=Some(continued.core_instructions) {
+            return Err("mode getter own-core call/read/return sequence differs".into());
+        }
+        let mut reads=rows.mode_reads.iter().filter(|(row,_)|row.core==Some(Core::Primary)
+            &&within(row.instructions.as_ref().map(|clock|clock.0)));
+        let (read,attribution)=reads.next().ok_or("mode getter actual CPU read absent")?;
+        if reads.next().is_some(){return Err("mode getter actual CPU read repeated".into());}
+        let attribution=attribution.as_ref().ok_or("mode getter actual fetch attribution absent")?;
+        if read.address!=Guest(0x61c008)||read.physical!=Guest(0x61c008)||read.size!=4||read.value!=Some(0)
+            ||read.pc!=Some(Guest(0x657194))||read.instructions.as_ref().map(|clock|clock.0)!=loaded.instructions
+            ||read.tick.as_ref().map(|tick|tick.0)!=loaded.tick||attribution.own!=loaded.core_instructions
+            ||attribution.before!=Some([0;4])||attribution.byte_order!=Some(ByteOrder::Little)||attribution.latest.as_ref()!=Some(loaded)
+            ||!loaded.instructions.is_some_and(|clock|sample.boundary.instructions.0<clock&&clock<=returned.instructions.0) {
+            return Err("mode getter actual read and executed source fetch attribution differ".into());
+        }
+        for (clock,interval) in &rows.mode_writes {
+            if clock.is_some_and(|clock|invocation.entry.instructions.0<clock&&clock<=installer.entry.instructions.0)
+                ||(clock.is_none()&&interval[0]<installer.entry.instructions.0&&invocation.entry.instructions.0<interval[1]) {
+                return Err("mode getter source cell overwritten during setup".into());
+            }
+        }
+        Ok(())
     }
 }
 

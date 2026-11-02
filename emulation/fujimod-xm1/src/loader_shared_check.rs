@@ -3,7 +3,7 @@ use super::*;
 mod controls;
 use super::super as owner;
 use owner::loader_startup_program::{Bindings,JoinedProgram};
-use owner::shared_dispatch::shared::{AccessRow,Capture as Dispatcher,Rows as DispatcherRows};
+use owner::shared_dispatch::shared::{AccessRow,ByteOrder,DataAttribution,FetchStamp,Capture as Dispatcher,Rows as DispatcherRows};
 use owner::shared_dispatch::Source as DispatchSource;
 use std::collections::BTreeSet;
 
@@ -12,10 +12,10 @@ use std::collections::BTreeSet;
 enum Role {Retained,Joined}
 #[derive(Deserialize,Serialize)]
 struct RouteCapture {origin:Option<owner::EventId>,events:Vec<Event>,calls:Vec<owner::Call>,snapshots:Vec<owner::Snapshot>,pulses:Vec<owner::Pulse>,static_calls:Vec<owner::StaticCall>}
-#[derive(Deserialize,Serialize)]
+#[derive(Clone,Deserialize,Serialize)]
 #[serde(tag="kind",rename_all="kebab-case")]
 enum Evidence {Watch {file:FileBinding,teardown_error:Option<String>},ConsumerSegment {segment:usize}}
-#[derive(Deserialize,Serialize)]
+#[derive(Clone,Deserialize,Serialize)]
 struct Epoch {stage:owner::WatchStage,start:owner::Count,end:owner::Count,start_counts:[u64;2],end_counts:[u64;2],evidence:Evidence}
 #[derive(Deserialize)]
 struct Endpoint {instructions:u64,counts:[u64;2],trace_index:usize}
@@ -34,9 +34,103 @@ struct Context {core:Core,pc:Guest,counts:[u64;2]}
 struct Stop {core:Core,pc:Guest,instructions:u64}
 #[derive(Deserialize)]
 struct Segment {id:u64,start_counts:[u64;2],end_counts:[u64;2],start_contexts:[Context;2],end_contexts:[Context;2],
-    fetch_scope:FetchScope,watch:RawWatch,end_error:Option<String>,stops:Vec<Stop>}
+    fetch_scope:FetchScope,fetch_ranges:Vec<[u64;2]>,armed_sites:Vec<Guest>,watch:ReplayWatch,end_error:Option<String>,stops:Vec<Stop>}
 #[derive(Deserialize)]
-struct Window {schema:u32,role:Role,outcome:Outcome,error:Option<String>,machine_failure:Option<String>,instructions:u64,segments:Vec<Segment>}
+struct Window {schema:u32,role:Role,outcome:Outcome,error:Option<String>,machine_failure:Option<String>,instructions:u64,segments:Vec<Segment>,fetch_attempts:Vec<FetchAttempt>}
+#[derive(Deserialize,PartialEq,Eq)]
+#[serde(rename_all="kebab-case")]
+enum FetchClassification {BoundaryAttempt}
+#[derive(Deserialize)]
+struct FetchAttempt {segment:u64,row:usize,classification:FetchClassification}
+#[derive(Deserialize)]
+struct ReplayRow {
+    #[serde(flatten)]
+    legacy:owner::Row,
+    #[serde(default)]
+    core_instructions:Option<u64>,
+    #[serde(default)]
+    latest_fetch:Option<FetchStamp>,
+    #[serde(default)]
+    before:Option<Vec<u8>>,
+    #[serde(default)]
+    byte_order:Option<ByteOrder>,
+}
+impl std::ops::Deref for ReplayRow {type Target=owner::Row;fn deref(&self)->&Self::Target {&self.legacy}}
+#[derive(Deserialize)]
+struct ReplayWatch {enabled:bool,violation:Option<String>,views:owner::WatchViews,classes:Vec<owner::Class>,records:Vec<ReplayRow>}
+#[derive(Default)]
+struct FetchReplay {settled_fetches:BTreeSet<(Core,Guest,u64,u64)>}
+impl FetchReplay {
+    fn admit(&mut self,segment:&Segment,declared:&[FetchAttempt],events:&[Event])->Result<BTreeSet<usize>,String>{
+        let begin=segment.start_counts[0].checked_add(segment.start_counts[1]).ok_or("fetch start clock overflows")?;
+        let settled=segment.end_counts[0].checked_add(segment.end_counts[1]).ok_or("fetch end clock overflows")?;
+        require(!segment.fetch_ranges.is_empty()&&segment.fetch_ranges.len()<=256&&segment.fetch_ranges.iter().all(|range|range[0]<range[1]&&range[1]<=1u64<<32)
+            &&segment.fetch_ranges.windows(2).all(|pair|pair[0][1]<pair[1][0]),"fetch replay scope differs")?;
+        let mut boundary_rows=BTreeSet::new();let mut cores=BTreeSet::new();
+        for stop in &segment.stops {
+            let core=usize::from(stop.core);
+            require(cores.insert(core)&&stop.instructions==settled&&stop.pc==segment.end_contexts[core].pc
+                &&segment.armed_sites.binary_search(&stop.pc).is_ok()
+                &&events.iter().any(|event|event.core==stop.core&&event.pc==stop.pc&&event.instructions.0==settled),
+                "fetch attempt lacks its stopped source endpoint")?;
+            let (index,row)=segment.watch.records.iter().enumerate().rfind(|(_,row)|row.source==Access::CpuFetch
+                &&row.core==Some(stop.core)&&row.pc==Some(stop.pc)&&row.instructions.is_some_and(|count|count.0==settled))
+                .ok_or("stopped fetch attempt absent")?;
+            let own=row.core_instructions.ok_or("stopped fetch own-core count absent")?;
+            require(own==segment.end_counts[core]&&row.address==stop.pc&&row.size==4
+                &&!self.settled_fetches.contains(&(stop.core,stop.pc,own,settled)),"fetch attempt contradicts or reuses an earlier observation")?;
+            require(boundary_rows.insert(index),"stops share fetch evidence")?;
+        }
+        let mut asserted=BTreeSet::new();
+        let lower=declared.partition_point(|attempt|attempt.segment<segment.id);
+        let upper=declared.partition_point(|attempt|attempt.segment<=segment.id);
+        for attempt in &declared[lower..upper] {
+            require(attempt.classification==FetchClassification::BoundaryAttempt&&asserted.insert(attempt.row),"fetch attempt classification repeated")?;
+        }
+        require(asserted==boundary_rows,"fetch attempt classifications do not match actual stops")?;
+        require(begin<settled||!boundary_rows.is_empty(),"zero-instruction segment lacks a new attempted fetch")?;
+        let mut progress=segment.start_counts;let mut last_clock=begin;let mut last_tick=None;
+        let mut resumes=[false;2];
+        for core in 0..2 {
+            require(segment.start_counts[core]<=segment.end_counts[core],"fetch own-core endpoint decreased")?;
+            let base=u64::from(segment.start_contexts[core].pc.0&!0x40000000);
+            resumes[core]=segment.start_counts[core]<segment.end_counts[core]
+                &&segment.fetch_ranges.iter().any(|range|range[0]<=base&&base+4<=range[1]);
+        }
+        for (index,row) in segment.watch.records.iter().enumerate().filter(|(_,row)|row.source==Access::CpuFetch) {
+            let core=row.core.ok_or("fetch core absent")?;let cpu=usize::from(core);
+            let clock=row.instructions.ok_or("fetch clock absent")?.0;
+            let own=row.core_instructions.ok_or("fetch own-core count absent")?;
+            let tick=row.tick.ok_or("fetch tick absent")?.0;let pc=row.pc.ok_or("fetch PC absent")?;
+            let end=u64::from(row.physical.0).checked_add(row.size).ok_or("fetch extent overflows")?;
+            let peer=clock.checked_sub(own).ok_or("fetch own-core count exceeds global clock")?;
+            require(row.size!=0&&segment.fetch_ranges.iter().any(|range|range[0]<=u64::from(row.physical.0)&&end<=range[1])
+                &&clock>=last_clock&&clock<=settled&&own<=segment.end_counts[cpu]
+                &&peer>=progress[1-cpu]&&peer<=segment.end_counts[1-cpu]&&last_tick.is_none_or(|before|before<=tick),
+                "fetch own-core clocks or scope contradict endpoints")?;
+            last_tick=Some(tick);
+            if boundary_rows.contains(&index){continue;}
+            if resumes[cpu] {
+                require(pc==segment.start_contexts[cpu].pc&&segment.start_counts[cpu].checked_add(1)==Some(own),
+                    "fetch resumption does not advance actual own-core clock")?;resumes[cpu]=false;
+            }
+            require(clock>last_clock&&own>progress[cpu],"executed fetch does not advance clocks")?;
+            if matches!(segment.fetch_scope,FetchScope::Complete) {
+                require(progress[0].checked_add(progress[1]).and_then(|clock|clock.checked_add(1))==Some(clock)
+                    &&progress[cpu].checked_add(1)==Some(own),"complete fetch replay does not advance exact scheduler")?;
+            }
+            progress[cpu]=own;progress[1-cpu]=peer;last_clock=clock;
+        }
+        require(!resumes.into_iter().any(|pending|pending),"executed in-scope resumption absent")?;
+        if matches!(segment.fetch_scope,FetchScope::Complete){require(progress==segment.end_counts,"complete fetch replay does not reconcile actual per-core endpoints")?;}
+        self.settled_fetches.retain(|(_,_,_,clock)|*clock==settled);
+        for row in segment.watch.records.iter().filter(|row|row.source==Access::CpuFetch&&row.instructions.is_some_and(|clock|clock.0==settled)) {
+            self.settled_fetches.insert((row.core.ok_or("fetch core absent")?,row.pc.ok_or("fetch PC absent")?,
+                row.core_instructions.ok_or("fetch own-core count absent")?,row.instructions.ok_or("fetch clock absent")?.0));
+        }
+        Ok(boundary_rows)
+    }
+}
 #[derive(Deserialize)]
 struct Consumer {begin:Option<Endpoint>,end:Option<Endpoint>,termination:Option<Termination>,window:Window}
 #[derive(Deserialize)]
@@ -57,12 +151,15 @@ enum HostScope {SharedRouteAndDispatcher}
 #[derive(Serialize)]
 struct Verification {schema:u32,scope:HostScope,accepted:bool,error:Option<String>,receipt:Option<Digest>,role:Option<Role>,route_effects:Option<FileBinding>,dispatcher_effects:Option<FileBinding>}
 fn scope(stage:owner::WatchStage)->Vec<([u64;2],Vec<Access>)>{
+    watch_scope(owner::startup_joined::guard_classes(stage))
+}
+fn watch_scope(ranges:Vec<owner::WatchRange>)->Vec<([u64;2],Vec<Access>)>{
     let sources=[(fujimod_emulator::board::observation::WatchKinds::CPU_FETCH,Access::CpuFetch),
         (fujimod_emulator::board::observation::WatchKinds::CPU_READ,Access::CpuRead),
         (fujimod_emulator::board::observation::WatchKinds::CPU_WRITE,Access::CpuWrite),
         (fujimod_emulator::board::observation::WatchKinds::HOST_WRITE,Access::HostWrite),
         (fujimod_emulator::board::observation::WatchKinds::MODEL_BUS_WRITE,Access::ModelBusWrite)];
-    owner::classes(stage).into_iter().map(|range|([range.start,range.end],sources.iter().filter(|(kind,_)|range.kinds.contains(*kind)).map(|(_,source)|*source).collect())).collect()
+    ranges.into_iter().map(|range|([range.start,range.end],sources.iter().filter(|(kind,_)|range.kinds.contains(*kind)).map(|(_,source)|*source).collect())).collect()
 }
 fn covered(classes:&[owner::Class],span:[u64;2],kind:Access)->bool {
     let mut intervals:Vec<_>=classes.iter().filter(|class|class.kinds.contains(&kind)).map(|class|class.range).collect();
@@ -73,8 +170,8 @@ fn covered(classes:&[owner::Class],span:[u64;2],kind:Access)->bool {
 fn dispatch_source(source:Access)->DispatchSource {match source {Access::CpuFetch=>DispatchSource::CpuFetch,Access::CpuRead=>DispatchSource::CpuRead,
     Access::CpuWrite=>DispatchSource::CpuWrite,Access::HostRead=>DispatchSource::HostRead,Access::HostWrite=>DispatchSource::HostWrite,
     Access::ModelBusRead=>DispatchSource::ModelBusRead,Access::ModelBusWrite=>DispatchSource::ModelBusWrite}}
-fn inspect_watch(raw:&RawWatch,epoch:&Epoch,report:RouteView<'_>,program:&Program,loaders:&[LoaderBounds<'_>;2],
-    missing:&mut BTreeSet<(Core,Guest,u64)>,publications:&mut Vec<Publication>,timer_rows:&mut Vec<owner::Row>,dispatcher:&mut DispatcherRows)->Result<(),String>{
+fn inspect_watch(raw:&ReplayWatch,epoch:&Epoch,report:RouteView<'_>,program:&Program,loaders:&[LoaderBounds<'_>;2],
+    missing:&mut BTreeSet<(Core,Guest,u64)>,publications:&mut Vec<Publication>,timer_rows:&mut Vec<owner::Row>,dispatcher:&mut DispatcherRows,attempts:&BTreeSet<usize>)->Result<(),String>{
     require(raw.enabled&&raw.violation.is_none(),"shared classified watch refused or disabled")?;
     for (span,kinds) in scope(epoch.stage){for kind in kinds {require(covered(&raw.classes,span,kind),"shared route guard coverage absent")?;}}
     let bootstrap=epoch.stage==owner::WatchStage::Bootstrap;
@@ -116,9 +213,16 @@ fn inspect_watch(raw:&RawWatch,epoch:&Epoch,report:RouteView<'_>,program:&Progra
                 }
             }
         }
-        if loader_timer_check::relevant(row){timer_rows.push(*row);}
+        if loader_timer_check::relevant(row){timer_rows.push(row.legacy);}
+        let attribution=if row.source==Access::CpuRead&&row.pc==Some(Guest(0x657194)) {
+            row.core_instructions.map(|own|DataAttribution {own,
+                before:row.before.as_deref().and_then(|bytes|bytes.try_into().ok()),byte_order:row.byte_order,latest:row.latest_fetch.clone()})
+        }else{None};
+        let attempted=attempts.contains(&index) || (matches!(epoch.evidence,Evidence::Watch {..}) && row.source==Access::CpuFetch
+            &&report.events.iter().any(|event|row.core==Some(event.core)&&row.pc==Some(event.pc)&&row.instructions==Some(event.instructions)));
         dispatcher.push(AccessRow {source:dispatch_source(row.source),address:row.address,physical:row.physical,size:row.size,
-            core:row.core.map(usize::from),pc:row.pc,instructions:row.instructions.map(|count|count.0),tick:row.tick.map(|tick|tick.0),value:row.value})?;
+            core:row.core.map(usize::from),pc:row.pc,instructions:row.instructions.map(|count|count.0),tick:row.tick.map(|tick|tick.0),value:row.value,
+            own:row.core_instructions,order:row.byte_order,attribution,attempt:attempted,interval:[epoch.start.0,epoch.end.0]})?;
     }
     Ok(())
 }
@@ -187,6 +291,11 @@ fn verified(root:&Path,analysis:&Path)->Result<Checked,String>{
     }
     require(!capture.epochs.is_empty()&&capture.epochs.len()<=32_864,"shared route epoch cap differs")?;
     let mut cursor=0;let mut core_cursor=[0,0];let mut segment_cursor=0;let mut records=0usize;let mut split=false;
+    let mut replay=FetchReplay::default();
+    require(consumer.window.fetch_attempts.len()<=2*consumer.window.segments.len()
+        &&consumer.window.fetch_attempts.iter().all(|attempt|attempt.segment<(consumer.window.segments.len() as u64))
+        &&consumer.window.fetch_attempts.windows(2).all(|pair|(pair[0].segment,pair[0].row)<(pair[1].segment,pair[1].row)),
+        "shared attempted-fetch census exceeds segment endpoints")?;
     for epoch in &capture.epochs {
         require(epoch.start.0==cursor&&epoch.end.0>=cursor&&epoch.start_counts==core_cursor
             &&epoch.start_counts[0].checked_add(epoch.start_counts[1])==Some(epoch.start.0)&&epoch.end_counts[0].checked_add(epoch.end_counts[1])==Some(epoch.end.0)
@@ -201,22 +310,15 @@ fn verified(root:&Path,analysis:&Path)->Result<Checked,String>{
                 require(epoch.end.0>epoch.start.0,"zero-instruction route watch has no consumer stop evidence")?;
                 require(epoch.end.0<=begin.instructions||epoch.start.0>=end.instructions,"separate route watch overlaps consumer subobservation")?;
                 let bytes=read(&artifact(root,file)?)?;require(Digest::of(&bytes).as_str()==file.sha256.as_str(),"shared watch file binding differs")?;
-                let raw:RawWatch=serde_json::from_slice(&bytes).map_err(|error|error.to_string())?;
+                let raw:ReplayWatch=serde_json::from_slice(&bytes).map_err(|error|error.to_string())?;
                 require(raw.records.len()<=3_000_000,"shared route watch record cap exceeded")?;
-                inspect_watch(&raw,epoch,report,&program,&loaders,&mut missing,&mut publications,&mut timer_rows,&mut dispatcher_rows)?;
+                inspect_watch(&raw,epoch,report,&program,&loaders,&mut missing,&mut publications,&mut timer_rows,&mut dispatcher_rows,&BTreeSet::new())?;
             },Evidence::ConsumerSegment {segment}=>{
                 require(*segment==segment_cursor,"shared consumer segment reference is missing or repeated")?;
                 let observed=consumer.window.segments.get(*segment).ok_or("shared consumer segment absent")?;
                 require(observed.id==*segment as u64&&observed.start_counts==epoch.start_counts&&observed.end_counts==epoch.end_counts
                     &&observed.end_error.is_none()&&observed.watch.records.len()<=65_536,"shared consumer segment endpoints or cap differ")?;
-                require(epoch.end.0>epoch.start.0 || !observed.stops.is_empty(),"zero-instruction segment has no stopped boundary")?;
-                let mut stopped=BTreeSet::new();
-                for stop in &observed.stops {
-                    let core=usize::from(stop.core);
-                    require(stopped.insert(core)&&stop.instructions==epoch.end.0&&stop.pc==observed.end_contexts[core].pc
-                        &&observed.watch.records.iter().any(|row|row.source==Access::CpuFetch&&row.core==Some(stop.core)&&row.pc==Some(stop.pc)
-                            &&row.instructions.is_some_and(|count|count.0==stop.instructions)),"shared segment stop differs from actual endpoint fetch")?;
-                }
+                let attempts=replay.admit(observed,&consumer.window.fetch_attempts,report.events)?;
                 for (core,(start,end)) in observed.start_contexts.iter().zip(&observed.end_contexts).enumerate(){
                     require(usize::from(start.core)==core&&usize::from(end.core)==core&&start.counts==epoch.start_counts&&end.counts==epoch.end_counts,"shared consumer context clocks differ")?;
                 }
@@ -226,7 +328,7 @@ fn verified(root:&Path,analysis:&Path)->Result<Checked,String>{
                 if *segment+1==consumer.window.segments.len(){require(observed.end_counts==end.counts,"shared consumer last segment differs from end")?;}
                 records=records.checked_add(observed.watch.records.len()).ok_or("shared consumer aggregate record overflow")?;
                 require(records<=1_048_576,"shared consumer aggregate record cap exceeded")?;
-                inspect_watch(&observed.watch,epoch,report,&program,&loaders,&mut missing,&mut publications,&mut timer_rows,&mut dispatcher_rows)?;segment_cursor+=1;
+                inspect_watch(&observed.watch,epoch,report,&program,&loaders,&mut missing,&mut publications,&mut timer_rows,&mut dispatcher_rows,&attempts)?;segment_cursor+=1;
             },
         }
         cursor=epoch.end.0;core_cursor=epoch.end_counts;
@@ -239,7 +341,7 @@ fn verified(root:&Path,analysis:&Path)->Result<Checked,String>{
     }).collect::<Result<Vec<_>,String>>()?;
     let image4=catalog.0.iter().find(|image|image.binding.kind==owner::SourceKind::Image4).ok_or("effective image4 absent")?;
     let code=image4.bytes.get(0x69cdf8-0x61c400..0x69cf84-0x61c400).ok_or("dispatcher code extent absent")?;
-    let dispatcher=capture.dispatcher.verify(&dispatcher_rows,&trace_bytes,code,&callers,&facts,program.owned())?;
+    let dispatcher=capture.dispatcher.verify(&dispatcher_rows,&trace_bytes,code,&callers,&facts,program.owned(),capture.instructions.0)?;
     Ok(Checked {capture,receipt,reset,timer,loaders:effects,publications,dispatcher})
 }
 fn write_effects(output:&Path,prefix:&str,checked:&Checked)->Result<(FileBinding,FileBinding),String>{

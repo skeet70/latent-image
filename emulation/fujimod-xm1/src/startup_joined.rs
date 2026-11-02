@@ -28,7 +28,7 @@ struct Receipt<'a> {
 fn require(ok:bool,message:&str)->Result<(),String>{if ok {Ok(())}else{Err(message.into())}}
 fn counts(machine:&Machine)->Result<[u64;2],String>{machine.session.board.instruction_counts().try_into().map_err(|_|"shared route requires two core clocks".into())}
 fn image(catalog:&Catalog,kind:SourceKind)->Result<&[u8],String>{catalog.0.iter().find(|image|image.binding.kind==kind).map(|image|image.bytes.as_slice()).ok_or_else(||"effective source absent".into())}
-fn guard_classes(stage:WatchStage,_catalog:&Catalog)->Vec<WatchRange>{
+pub(super) fn guard_classes(stage:WatchStage)->Vec<WatchRange>{
     let mut result=classes(stage);
     result.extend([(0x633e8,0x63460),(0xf33c8,0xf3420)].into_iter().map(|(start,end)|
         WatchRange {start,end,kinds:WatchKinds::WRITES}));
@@ -65,7 +65,7 @@ impl Coordinator<'_> {
     fn fixed_epoch(&mut self,machine:&mut Machine,end:u64,stage:WatchStage)->Result<(),String>{
         let start=Count(machine.instructions());let start_counts=counts(machine)?;
         let policy=if stage==WatchStage::Bootstrap {ViewPolicy::Observe}else{ViewPolicy::Fixed};
-        let mut watch=machine.session.board.memory_watch_begin_classified(guard_classes(stage,self.catalog),3_000_000,self.maps.clone(),policy)?;
+        let mut watch=machine.session.board.memory_watch_begin_classified(guard_classes(stage),3_000_000,self.maps.clone(),policy)?;
         let body=(||->Result<(),String>{
             while machine.instructions()<end {
                 let before=machine.instructions();let trace_start=machine.traces.hits.len();
@@ -98,7 +98,7 @@ impl Coordinator<'_> {
             if self.consumer.active(){
                 let start=Count(before);let start_counts=counts(machine)?;
                 let Self {route,dispatcher,consumer,catalog,maps,output,permanent,calls,carrier_calls,program,..}=self;
-                let outcome=consumer.step(machine,guard_classes(stage,catalog),endpoint-before,output,|machine,event|{
+                let outcome=consumer.step(machine,guard_classes(stage),endpoint-before,output,|machine,event|{
                     match event {
                         ConsumerEvent::Stop(trace_start)=>{
                             route.collect(machine,catalog,maps,output,permanent,calls,program)?;

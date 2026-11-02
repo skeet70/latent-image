@@ -2,9 +2,13 @@ use super::*;
 use serde_json::value::RawValue;
 use std::path::PathBuf;
 
-#[derive(Deserialize,Serialize)]
+#[derive(Clone,Deserialize,Serialize)]
 #[serde(transparent)]
 struct Frozen(Box<RawValue>);
+impl Frozen {
+    fn parsed<T:serde::de::DeserializeOwned>(&self)->Result<T,String>{serde_json::from_str(self.0.get()).map_err(|error|error.to_string())}
+    fn encoded<T:Serialize>(value:&T)->Result<Self,String>{serde_json::value::to_raw_value(value).map(Self).map_err(|error|error.to_string())}
+}
 #[derive(Deserialize,Serialize)]
 #[serde(deny_unknown_fields)]
 struct Envelope {
@@ -22,13 +26,13 @@ struct WindowEnvelope {
     checkpoint_sha256:Frozen,checkpoint_reused:Frozen,instructions:Frozen,limits:Frozen,
     probes:Frozen,invocations:Frozen,resources:Frozen,segments:Vec<SegmentEnvelope>,census:Frozen,fetch_attempts:Frozen,payloads:Frozen,
 }
-#[derive(Deserialize,Serialize)]
+#[derive(Clone,Deserialize,Serialize)]
 #[serde(deny_unknown_fields)]
 struct SegmentEnvelope {
     id:Frozen,start_counts:Frozen,end_counts:Frozen,start_contexts:Frozen,end_contexts:Frozen,
     fetch_scope:Frozen,fetch_ranges:Frozen,armed_sites:Frozen,probe_range:Frozen,watch:WatchEnvelope,end_error:Frozen,stops:Frozen,
 }
-#[derive(Deserialize,Serialize)]
+#[derive(Clone,Deserialize,Serialize)]
 #[serde(deny_unknown_fields)]
 struct WatchEnvelope {
     enabled:bool,ranges:Frozen,classes:Vec<owner::Class>,views:owner::WatchViews,
@@ -36,10 +40,10 @@ struct WatchEnvelope {
     fetch_attribution:Option<Frozen>,
     records:Vec<AccessEnvelope>,violation:Frozen,
 }
-#[derive(Deserialize,Serialize)]
+#[derive(Clone,Deserialize,Serialize)]
 #[serde(rename_all="lowercase")]
 enum ByteOrder {Little,Big}
-#[derive(Deserialize,Serialize)]
+#[derive(Clone,Deserialize,Serialize)]
 #[serde(deny_unknown_fields)]
 struct AccessEnvelope {
     source:Access,address:Guest,physical:Guest,size:u64,value:Option<u64>,before:Option<Vec<u8>>,
@@ -71,14 +75,20 @@ struct TraceHit {site:String,address:Hex,core:Core,instructions:owner::Count,reg
 #[serde(rename_all="kebab-case")]
 enum Control {
     PhaseArgument,LoaderLink,CallbackResult,DescriptorStore,ForeignLiveWord,SourceAlias,SourceTcm,
-    MissingCarrierFetch,MenuPulse,ResetBytes,TimerRead,MissingGuard,
+    MissingCarrierFetch,MenuPulse,ResetBytes,TimerRead,MissingGuard,ModeCell,ModeBoundary,ModeRead,ModeAttribution,
+    RepeatedZeroSegment,StopOwnCount,MissingAddedGuard,DispatcherOneFetch,DispatcherAttemptOnly,
 }
 impl Control {
-    const ALL:[Self;12]=[Self::PhaseArgument,Self::LoaderLink,Self::CallbackResult,Self::DescriptorStore,Self::ForeignLiveWord,
-        Self::SourceAlias,Self::SourceTcm,Self::MissingCarrierFetch,Self::MenuPulse,Self::ResetBytes,Self::TimerRead,Self::MissingGuard];
+    const ALL:[Self;21]=[Self::PhaseArgument,Self::LoaderLink,Self::CallbackResult,Self::DescriptorStore,Self::ForeignLiveWord,
+        Self::SourceAlias,Self::SourceTcm,Self::MissingCarrierFetch,Self::MenuPulse,Self::ResetBytes,Self::TimerRead,Self::MissingGuard,
+        Self::ModeCell,Self::ModeBoundary,Self::ModeRead,Self::ModeAttribution,Self::RepeatedZeroSegment,Self::StopOwnCount,
+        Self::MissingAddedGuard,Self::DispatcherOneFetch,Self::DispatcherAttemptOnly];
     fn name(self)->&'static str {match self {Self::PhaseArgument=>"phase-argument",Self::LoaderLink=>"loader-link",Self::CallbackResult=>"callback-result",
         Self::DescriptorStore=>"descriptor-store",Self::ForeignLiveWord=>"foreign-live-word",Self::SourceAlias=>"source-alias",Self::SourceTcm=>"source-tcm",
-        Self::MissingCarrierFetch=>"missing-carrier-fetch",Self::MenuPulse=>"menu-pulse",Self::ResetBytes=>"reset-bytes",Self::TimerRead=>"timer-read",Self::MissingGuard=>"missing-guard"}}
+        Self::MissingCarrierFetch=>"missing-carrier-fetch",Self::MenuPulse=>"menu-pulse",Self::ResetBytes=>"reset-bytes",Self::TimerRead=>"timer-read",Self::MissingGuard=>"missing-guard",
+        Self::ModeCell=>"mode-cell",Self::ModeBoundary=>"mode-boundary",Self::ModeRead=>"mode-read",Self::ModeAttribution=>"mode-attribution",
+        Self::RepeatedZeroSegment=>"repeated-zero-segment",Self::StopOwnCount=>"stop-own-count",Self::MissingAddedGuard=>"missing-added-guard",
+        Self::DispatcherOneFetch=>"dispatcher-one-fetch",Self::DispatcherAttemptOnly=>"dispatcher-attempt-only"}}
 }
 #[derive(Serialize)]
 #[serde(tag="outcome",content="error",rename_all="kebab-case")]
@@ -106,7 +116,19 @@ fn copy_files(source:&Path,destination:&Path,capture:&Capture,skip_reset:bool)->
     }
     Ok(())
 }
-fn watches<F>(capture:&mut Envelope,root:&Path,persist:bool,mut mutate:F)->Result<bool,String> where F:FnMut(&mut WatchEnvelope)->Result<bool,String>{
+#[derive(Clone,Copy,Deserialize,Serialize)]
+#[serde(rename_all="kebab-case")]
+enum AttemptClass {BoundaryAttempt}
+#[derive(Clone,Deserialize,Serialize)]
+struct AttemptEnvelope {segment:usize,row:usize,classification:AttemptClass}
+fn watches<F>(capture:&mut Envelope,root:&Path,persist:bool,mutate:F)->Result<bool,String> where F:FnMut(&mut WatchEnvelope)->Result<bool,String>{
+    walk_watches(capture,root,persist,false,mutate)
+}
+fn walk_watches<F>(capture:&mut Envelope,root:&Path,persist:bool,all:bool,mut mutate:F)->Result<bool,String> where F:FnMut(&mut WatchEnvelope)->Result<bool,String>{
+    let mut attempts:Vec<AttemptEnvelope>=capture.consumer.window.fetch_attempts.parsed()?;
+    let mut by_segment:BTreeMap<usize,Vec<usize>>=BTreeMap::new();
+    for (index,attempt) in attempts.iter().enumerate(){by_segment.entry(attempt.segment).or_default().push(index);}
+    let mut changed=false;
     for (index,epoch) in capture.epochs.iter_mut().enumerate(){match &mut epoch.evidence {
         Evidence::Watch {file,..}=>{
             let mut watch:WatchEnvelope=serde_json::from_slice(&read(&root.join(&file.path))?).map_err(|error|error.to_string())?;
@@ -115,14 +137,29 @@ fn watches<F>(capture:&mut Envelope,root:&Path,persist:bool,mut mutate:F)->Resul
                     let bytes=serde_json::to_vec(&watch).map_err(|error|error.to_string())?;
                     *file=persist_bound(root,&format!("control-watch-{index}.json"),&bytes)?;
                 }
-                return Ok(true);
+                changed=true;
             }
         },Evidence::ConsumerSegment {segment}=>{
             let watch=&mut capture.consumer.window.segments.get_mut(*segment).ok_or("control consumer segment absent")?.watch;
-            if mutate(watch)? {return Ok(true);}
+            let mut references=Vec::new();
+            for reference in by_segment.get(segment).into_iter().flatten() {
+                let attempt=&attempts[*reference];let row=watch.records.get(attempt.row).ok_or("control original attempted-fetch row absent")?;
+                references.push((*reference,row.core,row.pc,row.instructions,row.core_instructions,row.tick));
+            }
+            let before=watch.records.len();
+            if mutate(watch)? {
+                changed=true;
+                if before!=watch.records.len() {
+                    for (reference,core,pc,clock,own,tick) in references {
+                        if let Some(row)=watch.records.iter().rposition(|row|row.source==Access::CpuFetch&&row.core==core&&row.pc==pc
+                            &&row.instructions==clock&&row.core_instructions==own&&row.tick==tick) {attempts[reference].row=row;}
+                    }
+                }
+            }
         },
-    }}
-    Ok(false)
+    }if changed&&!all {break;}}
+    if changed {capture.consumer.window.fetch_attempts=Frozen::encoded(&attempts)?;}
+    Ok(changed)
 }
 fn nested_push(capture:&mut Envelope,root:&Path,original:&Capture,replace:bool)->Result<Option<NestedPush>,String>{
     let calls=original.dispatcher.retained_calls();let mut found=None;
@@ -209,6 +246,27 @@ fn mutate(control:Control,source:&Path,root:&Path,capture:&mut Envelope,original
                 Ok(present)
             })?;require(changed,"classified fetch guard absent")?;
         },
+        Control::ModeCell|Control::ModeBoundary=>mode_sample(control,capture)?,
+        Control::ModeRead=>{
+            let changed=watches(capture,root,true,|watch|{
+                let before=watch.records.len();watch.records.retain(|row|!(row.source==Access::CpuRead&&row.pc==Some(Guest(0x657194))));
+                Ok(before!=watch.records.len())
+            })?;require(changed,"control actual mode getter read absent")?;
+        },
+        Control::ModeAttribution=>{
+            let changed=watches(capture,root,true,|watch|{
+                if let Some(row)=watch.records.iter_mut().find(|row|row.source==Access::CpuRead&&row.pc==Some(Guest(0x657194))) {
+                    let latest=row.latest_fetch.as_mut().ok_or("control mode getter latest-fetch evidence absent")?;
+                    let mut stamp:FetchStamp=latest.parsed()?;
+                    stamp.core_instructions=stamp.core_instructions.checked_add(1).ok_or("control mode fetch own-core mutation overflows")?;
+                    *latest=Frozen::encoded(&stamp)?;Ok(true)
+                }else{Ok(false)}
+            })?;require(changed,"control actual mode getter read absent")?;
+        },
+        Control::RepeatedZeroSegment=>repeat_zero_segment(capture)?,
+        Control::StopOwnCount=>wrong_stop_own_count(capture)?,
+        Control::MissingAddedGuard=>missing_added_guard(capture,root)?,
+        Control::DispatcherOneFetch|Control::DispatcherAttemptOnly=>dispatcher_fetch_mutation(control,capture,root,original)?,
     }
     Ok(())
 }
@@ -242,4 +300,96 @@ pub(super) fn run(retained:&Path,joined:&Path,analysis:&Path,output:&Path)->Resu
     })();
     report.accepted=result.is_ok();report.error=result.as_ref().err().cloned();
     owner::persist(&output.join("shared-refusal-controls.json"),&report)?;result
+}
+
+#[derive(Deserialize,Serialize)]
+struct DispatcherEnvelope {invocations:Frozen,publications:Frozen,mode_reads:Vec<ModeSampleEnvelope>,live_words:Frozen}
+#[derive(Deserialize,Serialize)]
+struct ModeSampleEnvelope {boundary:ModeBoundaryEnvelope,cell:CellEnvelope}
+#[derive(Deserialize,Serialize)]
+struct ModeBoundaryEnvelope {instructions:owner::Count,core:Core,pc:Guest,registers:Frozen,frame:Frozen}
+#[derive(Deserialize,Serialize)]
+struct CellEnvelope {address:Guest,physical:Guest,words:Vec<u32>,other_words:Vec<u32>,physical_words:Vec<u32>,tcm:[[u32;2];2],decoder:u32}
+fn mode_sample(control:Control,capture:&mut Envelope)->Result<(),String>{
+    let mut dispatcher:DispatcherEnvelope=capture.dispatcher.parsed()?;
+    require(dispatcher.mode_reads.len()==1,"control mode sample census differs")?;
+    let sample=&mut dispatcher.mode_reads[0];
+    match control {
+        Control::ModeCell=>{sample.cell.address=Guest(0x61c00c);sample.cell.physical=Guest(0x61c00c);},
+        Control::ModeBoundary=>{sample.boundary.instructions.0=sample.boundary.instructions.0.checked_add(1).ok_or("mode boundary mutation overflows")?;},
+        _=>return Err("control is not a mode sample mutation".into()),
+    }
+    capture.dispatcher=Frozen::encoded(&dispatcher)?;Ok(())
+}
+fn repeat_zero_segment(capture:&mut Envelope)->Result<(),String>{
+    let window=&mut capture.consumer.window;
+    require(window.segments.len()<32_768,"control lacks room for a coherent duplicate zero segment")?;
+    let mut attempts:Vec<AttemptEnvelope>=window.fetch_attempts.parsed()?;
+    let source=attempts.first().ok_or("control actual attempted fetch absent")?.segment;
+    let insertion=source+1;let original=window.segments.get(source).ok_or("control actual stop segment absent")?;
+    let rows:BTreeSet<_>=attempts.iter().filter(|attempt|attempt.segment==source).map(|attempt|attempt.row).collect();
+    let mut duplicate=original.clone();
+    duplicate.id=Frozen::encoded(&insertion)?;
+    duplicate.start_counts=original.end_counts.clone();duplicate.start_contexts=original.end_contexts.clone();
+    let probes:[u64;2]=original.probe_range.parsed()?;duplicate.probe_range=Frozen::encoded(&[probes[1];2])?;
+    duplicate.watch.records=duplicate.watch.records.into_iter().enumerate().filter(|(index,_)|rows.contains(index)).map(|(_,row)|row).collect();
+    require(!duplicate.watch.records.is_empty(),"control actual stopped rows absent")?;
+    for (index,segment) in window.segments.iter_mut().enumerate().skip(insertion){segment.id=Frozen::encoded(&(index+1))?;}
+    for attempt in &mut attempts {if attempt.segment>=insertion {attempt.segment+=1;}}
+    for row in 0..duplicate.watch.records.len(){attempts.push(AttemptEnvelope {segment:insertion,row,classification:AttemptClass::BoundaryAttempt});}
+    attempts.sort_unstable_by_key(|attempt|(attempt.segment,attempt.row));window.fetch_attempts=Frozen::encoded(&attempts)?;
+    window.segments.insert(insertion,duplicate);
+    let source_epoch=capture.epochs.iter().position(|epoch|matches!(epoch.evidence,Evidence::ConsumerSegment {segment} if segment==source)).ok_or("control actual stop epoch absent")?;
+    let mut duplicate_epoch=capture.epochs[source_epoch].clone();
+    duplicate_epoch.start=duplicate_epoch.end;duplicate_epoch.start_counts=duplicate_epoch.end_counts;
+    duplicate_epoch.evidence=Evidence::ConsumerSegment {segment:insertion};
+    for epoch in capture.epochs.iter_mut().skip(source_epoch+1) {
+        if let Evidence::ConsumerSegment {segment}=&mut epoch.evidence {if *segment>=insertion {*segment+=1;}}
+    }
+    capture.epochs.insert(source_epoch+1,duplicate_epoch);Ok(())
+}
+fn wrong_stop_own_count(capture:&mut Envelope)->Result<(),String>{
+    let attempts:Vec<AttemptEnvelope>=capture.consumer.window.fetch_attempts.parsed()?;
+    let attempt=attempts.first().ok_or("control actual attempted fetch absent")?;
+    let row=capture.consumer.window.segments.get_mut(attempt.segment).ok_or("control actual stop segment absent")?.watch.records.get_mut(attempt.row).ok_or("control actual stop row absent")?;
+    let own=row.core_instructions.as_mut().ok_or("control actual stopped own-core count absent")?;
+    *own=own.checked_add(1).ok_or("control own-core count mutation overflows")?;Ok(())
+}
+fn missing_added_guard(capture:&mut Envelope,root:&Path)->Result<(),String>{
+    for (index,epoch) in capture.epochs.iter_mut().enumerate() {
+        let Evidence::Watch {file,..}=&mut epoch.evidence else{continue};
+        let mut watch:WatchEnvelope=serde_json::from_slice(&read(&root.join(&file.path))?).map_err(|error|error.to_string())?;
+        let before=watch.classes.len();watch.classes.retain(|class|class.range!=[0x61c008,0x61c00c]);
+        if before==watch.classes.len(){continue;}
+        watch.records.retain(|row|!(row.source==Access::CpuRead&&u64::from(row.physical.0)<0x61c00c&&0x61c008<u64::from(row.physical.0)+row.size));
+        for (span,kinds) in super::watch_scope(owner::classes(epoch.stage)) {
+            for kind in kinds {require(super::covered(&watch.classes,span,kind),"added-guard control removed a legacy guard")?;}
+        }
+        *file=persist_bound(root,&format!("control-added-guard-{index}.json"),&serde_json::to_vec(&watch).map_err(|error|error.to_string())?)?;
+        return Ok(());
+    }
+    Err("control distinct shared mode guard absent".into())
+}
+fn dispatcher_fetch_mutation(control:Control,capture:&mut Envelope,root:&Path,original:&Capture)->Result<(),String>{
+    let mut retained=[false;2];let mut removed=0usize;
+    let changed=walk_watches(capture,root,true,true,|watch|{
+        let before=watch.records.len();
+        watch.records.retain(|row|{
+            if row.source!=Access::CpuFetch||!(0x69cdf8..0x69cf84).contains(&row.physical.0){return true;}
+            let keep=match control {
+                Control::DispatcherOneFetch=>{
+                    let Some(core)=row.core.map(usize::from) else{return true};
+                    let keep=!retained[core];retained[core]=true;keep
+                },
+                Control::DispatcherAttemptOnly=>original.route.events.iter().any(|event|row.core==Some(event.core)
+                    &&row.pc==Some(event.pc)&&row.instructions==Some(event.instructions)),
+                _=>false,
+            };
+            if !keep {removed+=1;}keep
+        });
+        Ok(before!=watch.records.len())
+    })?;
+    require(changed&&removed!=0,"control dispatcher executed fetch stream absent")?;
+    if matches!(control,Control::DispatcherOneFetch){require(retained==[true;2],"control dispatcher fetches lack a core")?;}
+    Ok(())
 }
