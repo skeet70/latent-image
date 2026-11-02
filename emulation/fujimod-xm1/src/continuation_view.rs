@@ -107,6 +107,17 @@ pub(super) struct Snapshot {
     pub first_difference: Option<Guest>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) struct RangeSnapshot {
+    pub event: EventId,
+    pub mapping: Mapping,
+    pub alias_mapping: Mapping,
+    pub files: [FileBinding; 5],
+    pub guest_equal: [bool; 4],
+    pub expected_equal: bool,
+    pub first_difference: Option<Guest>,
+}
+
 pub(super) struct Reader<'a> {
     session: &'a Session,
     maps: &'a [MemoryMap],
@@ -173,30 +184,58 @@ pub(super) fn snapshot(session: &Session, maps: &[MemoryMap], output: &Path, eve
     let names: [String; 3] = std::array::from_fn(|view| format!("event-{:05}-{}-view-{view}.bin", event.0, resource.name()));
     let open = |name: &str| OpenOptions::new().write(true).create_new(true).open(output.join(name)).map_err(|error| error.to_string());
     let mut files = [open(&names[0])?, open(&names[1])?, open(&names[2])?];
-    let mut hashes: [Sha256; 3] = std::array::from_fn(|_| Sha256::new());
-    let mut equal = [true; 2];
+    let (hashes, equal, difference) = capture_views(session, &mapping, [Guest(start); 2], &mut files, expected)?;
+    let [a, b, c] = hashes;
+    let [first, second, physical] = names;
+    let files = [FileBinding {path:first.into(),sha256:a}, FileBinding {path:second.into(),sha256:b}, FileBinding {path:physical.into(),sha256:c}];
+    let result = Snapshot { event, resource, mapping, files, guest_equal: equal, expected_equal: difference.is_none(), first_difference: difference };
+    write(&output.join(format!("event-{:05}-{}-projection.json", event.0, resource.name())), &serde_json::to_vec_pretty(&result).map_err(|error| error.to_string())?)?;
+    Ok(result)
+}
+
+pub(super) fn snapshot_range(session: &Session, maps: &[MemoryMap], output: &Path, event: EventId, start: Guest, length: ByteCount, label: &str, expected: Option<&[u8]>) -> Result<RangeSnapshot, String> {
+    if label.is_empty() || !label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-') { return Err("snapshot label is not a filename component".into()); }
+    let bytes = length.0 as usize;
+    if expected.is_some_and(|expected| expected.len() != bytes) { return Err("range snapshot source extent differs".into()); }
+    if start.0 & 0x40000000 != 0 { return Err("range snapshot requires the low guest spelling".into()); }
+    let reader = Reader::new(session, maps)?;
+    let mapping = reader.mapping(start, bytes)?;
+    let alias = Guest(start.0 | 0x40000000);
+    let alias_mapping = reader.mapping(alias, bytes)?;
+    if mapping.physical != alias_mapping.physical { return Err("range snapshot aliases have different physical backing".into()); }
+    let names: [String; 5] = std::array::from_fn(|view| format!("event-{:05}-{label}-view-{view}.bin", event.0));
+    let open = |name: &str| OpenOptions::new().write(true).create_new(true).open(output.join(name)).map_err(|error| error.to_string());
+    let mut files = [open(&names[0])?, open(&names[1])?, open(&names[2])?, open(&names[3])?, open(&names[4])?];
+    let (hashes, equal, difference) = capture_views(session, &mapping, [start,start,alias,alias], &mut files, expected)?;
+    if equal != [true; 4] { return Err("plain range guest aliases differ from physical memory".into()); }
+    let [a,b,c,d,e] = hashes;
+    let [first,second,third,fourth,physical] = names;
+    let files = [FileBinding {path:first.into(),sha256:a},FileBinding {path:second.into(),sha256:b},FileBinding {path:third.into(),sha256:c},FileBinding {path:fourth.into(),sha256:d},FileBinding {path:physical.into(),sha256:e}];
+    Ok(RangeSnapshot {event,mapping,alias_mapping,files,guest_equal:equal,expected_equal:difference.is_none(),first_difference:difference})
+}
+
+fn capture_views<const V: usize, const F: usize>(session: &Session, mapping: &Mapping, guests: [Guest; V], files: &mut [std::fs::File; F], expected: Option<&[u8]>) -> Result<([Digest; F], [bool; V], Option<Guest>), String> {
+    if F != V+1 { return Err("committed projection view census differs".into()); }
+    let bytes = mapping.bytes.0 as usize;
+    let mut hashes: [Sha256; F] = std::array::from_fn(|_| Sha256::new());
+    let mut equal = [true; V];
     let mut difference = None;
     for offset in (0..bytes).step_by(4096) {
         let length = (bytes - offset).min(4096);
         let mut physical = [0; 4096];
         session.board.read_physical(u64::from(mapping.physical.0) + offset as u64, &mut physical[..length])?;
-        for core in 0..2 {
+        for (view, address) in guests.iter().enumerate() {
             let mut guest = [0; 4096];
-            session.board.read_memory(core, u64::from(start) + offset as u64, &mut guest[..length])?;
-            equal[core] &= guest[..length] == physical[..length];
-            files[core].write_all(&guest[..length]).map_err(|error| error.to_string())?;
-            hashes[core].update(&guest[..length]);
+            session.board.read_memory(view % 2, u64::from(address.0) + offset as u64, &mut guest[..length])?;
+            equal[view] &= guest[..length] == physical[..length];
+            files[view].write_all(&guest[..length]).map_err(|error| error.to_string())?;
+            hashes[view].update(&guest[..length]);
         }
-        files[2].write_all(&physical[..length]).map_err(|error| error.to_string())?;
-        hashes[2].update(&physical[..length]);
+        files[V].write_all(&physical[..length]).map_err(|error| error.to_string())?;
+        hashes[V].update(&physical[..length]);
         if difference.is_none() {
-            difference = physical[..length].iter().enumerate().find(|(index, value)| **value != expected.map_or(0, |expected| expected[offset + index])).map(|(index, _)| Guest(start + (offset + index) as u32));
+            difference = physical[..length].iter().enumerate().find(|(index, value)| **value != expected.map_or(0, |expected| expected[offset + index])).map(|(index, _)| Guest(mapping.guest.0 + (offset + index) as u32));
         }
     }
-    let [a, b, c] = hashes.map(|hash| Digest(format!("{:x}", hash.finalize())));
-    let [first, second, physical] = names;
-    let files = [FileBinding { path: first.into(), sha256: a }, FileBinding { path: second.into(), sha256: b }, FileBinding { path: physical.into(), sha256: c }];
-    let result = Snapshot { event, resource, mapping, files, guest_equal: equal, expected_equal: difference.is_none(), first_difference: difference };
-    write(&output.join(format!("event-{:05}-{}-projection.json", event.0, resource.name())), &serde_json::to_vec_pretty(&result).map_err(|error| error.to_string())?)?;
-    Ok(result)
+    Ok((hashes.map(|hash| Digest(format!("{:x}", hash.finalize()))), equal, difference))
 }
