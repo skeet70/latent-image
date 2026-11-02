@@ -67,6 +67,7 @@ pub(super) fn local(machine: &Machine, maps: &[MemoryMap], state: &Context, bind
     if program.composition() {
         views.push(view(machine, maps, state, Object::CriticalCounter, 0x40a0f824, 4)?);
         views.push(view(machine, maps, state, Object::CriticalLock, 0x400c0804, 4)?);
+        views.push(boot_log_control(machine, maps, state)?);
     }
     for (object, address, bytes) in [(Object::ErrorState, 0x40a0f82c, 4), (Object::Callback, 0x4089ea8c, 4),
         (Object::Cursor, 0x4089ea98, 4), (Object::Lock, 0x409c280c, 4), (Object::ClassTable, 0x7cad9c, 420),
@@ -209,17 +210,37 @@ pub(super) fn identity<'a>(run: Digest, update: Digest, rom: Digest, code: &'a [
     Ok(super::Identity { run, update, boot_rom: rom, observer: Digest(sha256(&read(&std::env::current_exe().map_err(|error| error.to_string())?)?)), sources: code.iter().map(|code| super::SourceIdentity { name: code.name, base: Address(code.base), bytes: code.bytes.len(), sha256: &code.sha256 }).collect() })
 }
 
+fn boot_log_control(machine: &Machine, maps: &[MemoryMap], state: &Context) -> Result<View, String> {
+    let control = view(machine, maps, state, Object::BootLogControl, 0x40014c60, 12)?;
+    let first = word(&control.bytes, 4)?;
+    let second = word(&control.bytes, 8)?;
+    require(word(&control.bytes, 0)? == 0x400a0040 && first <= 16 && first % 2 == 0
+        && (16..=32).contains(&second) && second % 2 == 0, "record2 boot logger control differs")?;
+    Ok(control)
+}
+
 pub(super) fn bind_sources(machine: &Machine, maps: &[MemoryMap], state: &Context, sources: &[Code], joined: bool) -> Result<(), String> {
     for source in sources {
         let bind = |start: u64, end: u64| -> Result<(), String> {
             let observed = view(machine, maps, state, Object::EntryCode, start as u32, (end - start) as usize)?;
             let offset = (start - u64::from(source.base)) as usize;
-            require(observed.bytes == source.bytes[offset..offset + (end - start) as usize], "loaded staged source differs before startup watch")
+            let expected = &source.bytes[offset..offset + (end - start) as usize];
+            if observed.bytes != expected {
+                let mismatch = observed.bytes.iter().zip(expected).position(|(actual, wanted)| actual != wanted)
+                    .unwrap_or(observed.bytes.len().min(expected.len()));
+                return Err(format!("loaded staged source {} differs at {:#x}: actual {:?}, expected {:?}; binding [{start:#x},{end:#x})",
+                    source.name, start + mismatch as u64, observed.bytes.get(mismatch), expected.get(mismatch)));
+            }
+            Ok(())
         };
         let base = u64::from(source.base);
         let end = base + source.bytes.len() as u64;
         if joined && matches!(source.base, 0x40000 | 0xd0000) {
             for (start, end) in super::loader_code::immutable_loader_spans(base, end) { bind(start, end)?; }
+        } else if joined && source.base == 0x10000 {
+            bind(base, 0x14c60)?;
+            boot_log_control(machine, maps, state)?;
+            bind(0x14c6c, end)?;
         } else { bind(base, end)?; }
     }
     Ok(())

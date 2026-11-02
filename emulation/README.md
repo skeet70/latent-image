@@ -1616,6 +1616,8 @@ The default stock and standalone-owned interfaces above retain schema 2. `--scop
 
 Schema 3 captures the critical counter at physical `0xa0f824` and lock at `0xc0804` in every snapshot. It watches CPU reads as well as fetches and writes over actual source images and watches counter reads/writes. The joined role refuses fetches and reads of the retired critical-body interiors. Component global-store checkpoints come from typed proof metadata. Both-core source/alias binding, full raw preimages and instruction-clock replay remain required. Controlled patching still uses actual SDK physical host writes and preserves their journal rows.
 
+Record-2 boot logging initializes the twelve-byte control at physical `[0x14c60,0x14c6c)` before the task watch. Prewatch binding treats that control as a source-derived state object, requiring buffer `0x400a0040` and even indices in `[0,16]` and `[16,32]`, while binding every other record-2 byte to the staged file. Each schema-3 snapshot captures its four aliases. The consumer admits those bounds and replays the committed bytes; joined-role post-watch record-2 immutability is unchanged.
+
 The checker adds these modes after the same three encoder/rebuilder/decoder tool paths:
 
 ```text

@@ -155,7 +155,7 @@ programOwnsPc Stock _ = False
 programOwnsPc Owned{ownedVariant=Standalone} (W.Address location) = location >= 0x725dd8 && location < 0x72612c
 programOwnsPc Owned{ownedVariant=Composed _ _} (W.Address location) =
   location >= 0x725dd8 && location < 0x72612c || location >= 0x725cc4 && location < 0x725da8
-    || location >= 0x10000 && location < 0x12000
+    || location >= 0x10000 && location < 0x20000
 programStoreComponent :: Program -> W.Address -> Maybe StoreComponent
 programStoreComponent program location@(W.Address instruction)
   | not (programOwnsPc program location) = Nothing
@@ -169,7 +169,7 @@ programAllowsPc Owned{ownedExecution=execution,ownedVariant=Standalone} (W.Addre
 programAllowsPc Owned{ownedExecution=execution,ownedVariant=Composed _ _} (W.Address location)
   | location >= 0x725dd8 && location < 0x72612c = S.member (N.CodeAddress location) execution
   | location >= 0x7235dc && location < 0x7236b0 || location >= 0x7236b4 && location < 0x723790 = False
-  | location >= 0x10000 && location < 0x12000 || location >= 0x725cc4 && location < 0x725da8 =
+  | location >= 0x10000 && location < 0x20000 || location >= 0x725cc4 && location < 0x725da8 =
       S.member (N.CodeAddress location) execution
   | otherwise = True
 programAllowsRead :: Program -> W.MemoryEvent -> Bool

@@ -25,7 +25,7 @@ data Boundary = SubmissionEntry | AuxiliaryCall | AuxiliaryReturn | CreationCall
 data ObjectKind = CreationRecords | TaskNodes | IdMap | AuxiliaryRecords | AuxiliaryNodes | Domains | Control
   | QueueHeads | Bitmap | SelectedObject | Current | Descriptor | Wrapper | Storage | Stack | EntryCode
   | SharedDomains | InterfaceRoots | InterfaceTable | Parameters | ErrorState | Callback | CursorObject | LockObject
-  | ClassTable | ControlPatch | LogCallback | LogMode | LogEnable | CriticalCounter | CriticalLock deriving (Eq, Ord, Show)
+  | ClassTable | ControlPatch | LogCallback | LogMode | LogEnable | CriticalCounter | CriticalLock | BootLogControl deriving (Eq, Ord, Show)
 data Outcome = ObservedMenu | ObservedProbe | Refused deriving (Eq, Show)
 data Scope = StockStartupScope | OwnedStartupScope | StockProbeScope | OwnedProbeScope
   | JoinedStartupScope | JoinedProbeScope | StockJoinedStartupScope | StockJoinedProbeScope deriving (Eq, Show)
@@ -163,6 +163,7 @@ instance FromJSON ObjectKind where
     "parameters" -> pure Parameters; "error-state" -> pure ErrorState; "callback" -> pure Callback; "cursor" -> pure CursorObject; "lock" -> pure LockObject
     "class-table" -> pure ClassTable; "control-patch" -> pure ControlPatch; "log-callback" -> pure LogCallback; "log-mode" -> pure LogMode; "log-enable" -> pure LogEnable
     "critical-counter" -> pure CriticalCounter; "critical-lock" -> pure CriticalLock
+    "boot-log-control" -> pure BootLogControl
     _ -> fail "unknown task object"
 instance FromJSON Context where
   parseJSON value = withObject "context" (\o -> Context <$> o .: "core" <*> parseJSON value) value

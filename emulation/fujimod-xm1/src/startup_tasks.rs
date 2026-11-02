@@ -69,7 +69,7 @@ struct Code { name: &'static str, base: u32, bytes: Vec<u8>, sha256: Digest }
 struct Context { core: Core, pc: Address, registers: [Word; 13], sp: Address, lr: Address, cpsr: Word, counts: [u64; 2], identities: [Word; 2], tcm: [[Word; 2]; 2] }
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum Object { CreationRecords, TaskNodes, IdMap, AuxiliaryRecords, AuxiliaryNodes, Domains, Control, QueueHeads, Bitmap, Selected, Current, Descriptor, Wrapper, Storage, Stack, EntryCode, SharedDomains, InterfaceRoots, InterfaceTable, Parameters, ErrorState, Callback, Cursor, Lock, ClassTable, ControlPatch, LogCallback, LogMode, LogEnable, CriticalCounter, CriticalLock }
+enum Object { CreationRecords, TaskNodes, IdMap, AuxiliaryRecords, AuxiliaryNodes, Domains, Control, QueueHeads, Bitmap, Selected, Current, Descriptor, Wrapper, Storage, Stack, EntryCode, SharedDomains, InterfaceRoots, InterfaceTable, Parameters, ErrorState, Callback, Cursor, Lock, ClassTable, ControlPatch, LogCallback, LogMode, LogEnable, CriticalCounter, CriticalLock, BootLogControl }
 #[derive(Serialize)]
 struct View { object: Object, physical: Address, bytes: Vec<u8>, aliases: [[Digest; 2]; 2] }
 #[derive(Serialize)]

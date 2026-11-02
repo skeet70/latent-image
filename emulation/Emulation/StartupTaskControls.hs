@@ -30,6 +30,8 @@ data Control = WrongSource | DuplicateReceiptKey | OverflowingHitAddress | Refus
   | WrongReadValue | WrongReadPreimage | WrongReadClock | MissingReadPhysical | MalformedReadSize
   | RetiredCriticalRead | WrongJoinedSource | MissingCriticalCounter | WrongCounterAlias
   | MissingReadTick | RegressingReadTick
+  | WrongBootLogBuffer | InvalidBootLogIndex
+  | UnexpectedRecord2Fetch
   deriving (Bounded, Enum, Eq, Ord, Show)
 data ControlError = BaselineRejected WitnessError | MutationRejected Control
   | WrongRefusal Control WitnessError (Maybe WitnessError) deriving (Eq, Show)
@@ -90,6 +92,8 @@ expected control = case control of
   MissingReadPhysical -> ReadRejected; MalformedReadSize -> ReadRejected; RetiredCriticalRead -> ReadRejected
   WrongJoinedSource -> IdentityRejected; MissingCriticalCounter -> SnapshotRejected; WrongCounterAlias -> AliasRejected
   MissingReadTick -> ClockRejected; RegressingReadTick -> ClockRejected
+  WrongBootLogBuffer -> SnapshotRejected; InvalidBootLogIndex -> SnapshotRejected
+  UnexpectedRecord2Fetch -> CodeRejected
 
 withHash :: Control -> ObservedFiles -> J.Value -> J.Value -> Either ControlError ObservedFiles
 withHash control original receipt watch = do
@@ -297,6 +301,14 @@ mutate control sources observed = do
         (Left (MutationRejected control))
       changed <- set control [field "records",Element position,field "tick"] (0 :: Word64) watches
       pure (raw,changed))
+    WrongBootLogBuffer -> receiptOnly (modifyAt control [field "samples",Element 0] (changeViews control 0x14c60 (Replace 0)))
+    InvalidBootLogIndex -> receiptOnly (modifyAt control [field "samples",Element 0] (changeViews control 0x14c64 (Replace 1)))
+    UnexpectedRecord2Fetch -> journal (\raw watches -> do
+      position <- findRow control (\row -> fetchRow row && maybe False (\(W.Address pc) -> pc >= 0x10000 && pc < 0x20000) (W.eventPc row)) watches
+      changed <- set control [field "records",Element position,field "address"] (0x13490 :: Word32) watches
+        >>= set control [field "records",Element position,field "physical"] (0x13490 :: Word32)
+        >>= set control [field "records",Element position,field "pc"] (0x13490 :: Word32)
+      pure (raw,changed))
     RetiredCriticalRead -> journal (\raw watches -> do
       position <- findRow control (\row -> W.eventSource row == W.CpuRead) watches
       changed <- set control [field "records",Element position,field "address"] (0x7235dc :: Word32) watches
@@ -349,7 +361,7 @@ refusalControlsFor sources inputs observed = do
   baseline <- either (Left . BaselineRejected) Right (admitReceipt inputs observed)
   let receipt = qualifiedReceiptData baseline
       selected control
-        | control `elem` [RetiredCriticalRead,WrongJoinedSource] = case Wire.receiptProgram receipt of Wire.JoinedProgram _ -> True; _ -> False
+        | control `elem` [RetiredCriticalRead,WrongJoinedSource,UnexpectedRecord2Fetch] = case Wire.receiptProgram receipt of Wire.JoinedProgram _ -> True; _ -> False
         | control >= WrongReadValue = Wire.receiptSchema receipt == Wire.JoinedTaskProtocol
         | otherwise = True
   results <- mapM (run inputs) (filter selected [minBound..maxBound])
