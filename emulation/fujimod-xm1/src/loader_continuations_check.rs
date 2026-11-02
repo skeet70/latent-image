@@ -793,7 +793,7 @@ mod tests {
             let clock=report.events[returned.0].instructions;
             let stage=if clock.0<=8_000_000{WatchStage::Startup}else{WatchStage::Tail};
             let (index,mut raw)=watch(root,report,stage);
-            assert_eq!(at(&report.events[returned.0],0x400a0830).expect("current elapsed"),value);
+            assert_eq!(at(&report.events[returned.0],0xa0830).expect("current elapsed"),value);
             let position=raw.records.iter().position(|row|row.instructions.is_some_and(|observed|observed.0>clock.0)).unwrap_or(raw.records.len());
             raw.records.insert(position,Row {source:Access::CpuWrite,address:Guest(0x400a0830),physical:Guest(0xa0830),size:4,core:Some(Core::Primary),pc:Some(Guest(0x41b38)),instructions:Some(clock),value:Some(u64::from(value)),tick:None});
             replace_watch(root,report,index,&raw);assert!(check(&root.0,&analysis).is_ok());
