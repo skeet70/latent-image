@@ -1403,3 +1403,87 @@ Own the complete **shared idle102/103 body** in place over `[0x69cbf0,0x69cc00)`
 | Continuous body guards and shared-data/callback/stack/task lifetimes | Unmet. Source extents and persistent consumers are named; runtime exclusion, wake/restoration and release are unqualified. |
 | Inventory, startup documentation and ledger separate later application, scheduler and device dependencies | Recorded here and in the startup observer documentation; no larger ownership claim is added. |
 
+### 8.18 Application entry, main UI actor and first owned loop boundary (#154)
+
+`E-APPLICATION-ENTRY-LOOP-SOURCE-150` recovers the X-M1 1.50 application bootstrap and actor boundary from the pinned image4/image5/plain listings, and projects the existing admitted later-loader receipt without another guest, checker invocation or hardware operation. §8.15's executable producers, §8.16's loader continuations and §8.17's root104 chain remain prerequisites. **No owned application artifact or runtime retirement is qualified here.**
+
+#### Finite image5 initializer and retained subsystem duties
+
+Image5 header entry `0xd985a4` is a synchronous initializer over `[0xd985a4,0xd986b0)`, not a task entry or event loop. It saves an8-byte frame and returns the final marker service's r0. Its21 direct calls, in order, are `0x72872c(0x01010100)`, `0x6c62a8()`, `0x73aca4(7)`, `0xed4acc()`, `0xed4afc()`, `0x69cf84(0xed4a8c)`, `0xd9856c()`, `0xd986b0()`, `0xd80d44()`, `0x1056c24(0)`, `0xdb01fc(1)`, `0xec5350()`, `0xdca604()`, `0xdb63e0()`, `0xed10b4()`, `0xef8c90(0)`, `0xed2b00()`, `0x1055d10()`, `0x6b7df8()`, `0x69f000()` and `0x72872c(0x11010100)`. Source: `lz/id5.dis:431830-431896`.
+
+Only `0xed4acc`, `0xd80d44`, `0x1056c24`, `0xec5350`, `0xdca604`, `0xdb63e0`, `0xed10b4`, `0xed2b00`, `0x1055d10`, `0x6b7df8` and `0x69f000` have local zero-result checks. Each nonzero branch spins locally without rollback. Ignored results are not implicit zero-success requirements. The earlier wait7 is not a whole-plain-image or all-subsystems-ready barrier.
+
+| Retained initialization | Recovered duty and limitation |
+| --- | --- |
+| `0xed4acc`, `0xed4afc`, `0x69cf84` | Read adjustment-cache byte266; register callback `0xed4a70`; install diagnostic callback `0xed4a8c`. A cache read is not body-calibration validation. |
+| `0xd9856c` | Reverse constructor hooks `0x107277c`, `0x1066304`, `0x1062114` submit tasks56 redeye,55 face,62 facerecog. Mailbox/submission failure handling differs between constructors; see §8.15. |
+| `0xd986b0` | Publish interface pointers `0x89f784=0xef9704`, `0x89f78c=0xef9944`. Their application-level identities remain unresolved. |
+| `0xd80d44` | Submit task36 usb, entry `0xd81218`, priority11, stack `0xc00`, mailbox `0x20`. State clear `[0x1469cd0,0x146a184)` follows successful submission, not a prior global readiness barrier. |
+| `0x1056c24`, `0x6b7df8` | No-effect zero-return functions, not substantive subsystem initialization. |
+| `0xdb01fc(1)` | Set one-shot byte `0x14e2c30` before registration through `0x6e27ac`, with callbacks `0xdb2b60`/`0xdb2d60`. Guard1 does not prove successful registration. |
+| `0xec5350`, `0xdca604`, `0xdb63e0`, `0xed10b4` | Submit system, record, playback and USB-controller actors. Playback entry is in plain image3; its executable lifetime remains a loader dependency. |
+| `0xef8c90(0)` | Submit task43 saclcac, entry `0xf01bc8`, priority5, stack `0x1000`, mailbox `0xb0`, and invoke retained initialization fanout including adjustment-cache work. Its argument is a nullable completion callback, not a Boolean. Local mailbox/task errors are not propagated as a simple checked task-success convention. |
+| `0xed2b00`, `0x1055d10`, `0x69f000` | Submit task35 mujin (`0xed2ce0`,9,`0xc00`,mailbox`0xc`),64 rplib (`0x1054cf4`,6,`0xc00`,mailbox`0x40`),80 flashext (`0x69f0e0`,6,`0xc00`,mailbox`0x10`). Names alone do not close their services. |
+
+Most constructors write descriptor words0..5 but leave word6 (`D+24`) untouched. `0x69f000` also leaves its argument word `D+20` unwritten. Preserve observed values rather than filling either field with an inferred zero. Constructor submission is not first scheduling, committed runnable state, initialized subsystem state or callback completion.
+
+#### Application actors, messages and repeated handback
+
+| Actor | Constructor, entry and mailbox | Role |
+| --- | --- | --- |
+| Task1 `ui` | `0xd0a238`; entry `0xc22f60`; priority6; stack `0xc00`; argument0; queue1 `{0x30,0x54}` | Actual main application/UI actor. Syscont startup reaches `0xec0aa8 -> 0xec5678 -> 0xd0a238`. |
+| Task2 `syscont` | `0xec5350`; entry `0xec2668`; priority6; stack `0x1000`; argument0; queue2 `{0x30,0x100}` | Once `0xec0aa8`, `0xec2618`; repeat receive then `0xec0ab8`, without locally checking receive status. |
+| Task3 `reccont` | `0xdca604`; entry `0xe00a80`; priority6; stack `0x1000`; argument0; queue3 `{0x30,0x34}` | Once `0xe008e4`; successful receive first offers header to `0xe66770`; consumed result1 restarts receive, otherwise `0xdf7db8`, including receive errors. |
+| Task4 `playcont` | `0xdb63e0`; entry `0x1215480`; priority6; stack `0x1000`; argument0; queue4 `{0x30,0xcc}` | Distinct playback actor requiring plain image3. |
+| Task33 `uilib` | Plain hook `0x110f9d8 -> 0x110f960`; entry `0x1109130`; priority9; stack `0x1000`; argument0; queue33 `{0x30,0x14}` | Rendering/UI-library consumer, not the top-level application loop. |
+| Task72 `smaphk` | `0x892334`; entry `0x892110`; priority5; stack `0xc00`; argument0 | Wait/work helper producing command `0x5701` to queue71. The constructor creates queue71, not queue72. |
+| Task73 `vglib` | `0x6d7f88`; entry `0x6d7540`; priority7; stack `0x1000`; argument0; queue73 `{0x30,0x38}` | Vector-graphics consumer, not the main menu/controller actor. |
+
+Source anchors: `lz/id5.dis:286717-286749,731425-731438,734237-734277,482387-482429,537611-537640,461933-461965`; `decode/img6.dis:9233-9304,14463-14503`; `lz/id4.dis:618072-618100,618215-618275,191573-191686,192231-192268`.
+
+Task1's complete outer body is `[0xc22f60,0xc2327c)`. Once it calls `0xbfb124` and `0xc22bd0`; every iteration begins at `0xc22f84`, clears the application mailbox and pending word, and processes pending internal work or queue1 input. `0xbfb124` establishes retained state and forwards a five-word descriptor through `0xdb4b34`, then calls `0xd48240` and `0xd38130(0)`. `0xc22bd0` clears174 current-state halfwords over `[0x1467588,0x14676e4)`, not the adjacent event array. These duties must precede loop readiness. Source: `lz/id5.dis:9635-9671,50254-50481,50482-50680`.
+
+Queue1 adapter `0xdb5124` polls for operation `0x106`, otherwise blocks through `0x725318(1,buffer,-1)`. It copies command, argument and68 payload bytes regardless of receive result; the outer main loop clears command `0x944580`, argument `0x944584` and modifier `0x944588` on nonzero status. For masked commands below `0x600`, the loop moves bits `0xc0` into the modifier and filters the packet through retained predicates. Pending-work paths need not receive a fresh packet. Every path converges at `0xc23274: BL 0xbfbd20`, followed by `0xc23278 -> 0xc22f84`, not task termination. Source: `lz/id5.dis:460734-460779,50482-50680`.
+
+Shared receive `0x725318(queue,destination,timeout)` copies kernel packet command/metadata/length from offsets4/6/7/8 into destination0/2/3/4, and payload from packet12 into the pointer stored at destination8. On success it releases the original packet through the installed kernel's slot `+0xf8`, then returns0. Actor code must not free that packet again. Status-50 returns directly; other nonzero statuses diagnose and may return, leaving destination unrefreshed. No local payload-capacity check appears in this success path. Queue routing, installed receive/release targets and their resources remain retained. Source: `lz/id4.dis:271307-271371`.
+
+UILIB33 instead initializes through `0x1108cec`, `0x1108bc8`, then repeats finite step `[0x11090a4,0x1109130)`. A nonzero receive returns without dispatch. Success publishes a nonzero consumer token before filtering; an unfiltered packet reaches `0x1108a2c`. `0x1111c30` is a no-effect leaf, not reply or release. Consumer-token equality alone proves neither rendering nor completion. The initialized byte `0x15e470d` becomes1 only through its `0x1000` command family. These semantics cannot be substituted for task1, syscont or REC error handling.
+
+Generic application dispatch `[0xbfb028,0xbfb124)` uses cell/action/transition pointer arrays at `0xcf58b8`, `0xcfe2a8`, `0xd0013c`, width halfwords at `0xcd5e78`, current-state halfwords at `0x1467588`, and event halfwords at `0x14676e4`. It invokes prehook `0xd0cc68`, computes the cell from captured state/event, calls optional action at computed BLX `0xbfb0c8`, rereads the signed transition halfword after that action, and calls optional transition at `0xbfb0f8` or directly stores the negated state. Its result is the action result, not the transition result. Computed callbacks, table/state writers and nested/asynchronous producers remain unresolved obligations.
+
+#### Existing natural observations and first idle state
+
+The already admitted loader receipt has737 events,47 loader calls,84 task submissions and13 snapshots. On core0, image5 entry runs at32,011,226..35,842,556 entered instructions and returns `0x11010100`. Ignored service `0xed4afc` returns98, not zero. The checked constructors return0 in this observation; that does not make their services ready.
+
+Observed zero-return task submissions include syscont2 at35,635,833..35,640,429, reccont3 at35,641,296..35,645,892, playcont4 at35,746,510..35,751,106, UI1 at35,845,505..35,849,141 and UILIB33 at40,587,849..40,597,445. UI1's observed descriptor tail is `0x02020202`, not a source-written zero. Image5 returns and UI1 is submitted before plain production at40,407,475..55,646,819 and UILIB construction. The receipt observes submission arguments/results, not these actors' initial C/T scheduling or repeated queue1-to-controller handback.
+
+The earlier accepted erased-settings flash-boot route first samples stable START MENU `(69,52,12)` at80M instructions, not the later shooting menu. It reaches date `(67,56,0)` at234.25M, live view at282.5M, and shooting menu `(1,5,2)` after MENU at292M, with final observation at382M. Those are the historical runtime's route counts, not new measurements or universal readiness times. The later-loader receipt separately reaches final `(1,5,2)` at382M; it does not add the missing queue1/pump readiness witness.
+
+The canonical current scene declares no NAND overlays and generated live pixels/statistics. A nonzero calibration pointer, adjustment-cache lookup and scanner-registered flag do not establish valid body calibration, persisted user settings or hardware behavior. Retain their provenance and initialization dependencies. No custom-settings, SD, camera or persistence acceptance is added.
+
+Readiness must separately bind executable publication, actor initialization, accepted settings/calibration/input state and render completion. Existing `RenderFacts::probe` checks released inputs, zero pending/busy/suppression/batch state, initialized UILIB, graphics completion/acknowledgment and selected actors waiting on queues; the settling path additionally checks command/token consumption and selected full-plane rendering. Reuse these checks, but do not call them owned boot acceptance or replace a semantic first-idle invariant with a menu ID, PC, zero task status or token equality.
+
+#### Smallest owned application-loop increment and acceptance
+
+Own the complete **32-byte main-UI controller-pump wrapper** `[0xbfbd20,0xbfbd40)`. Call retained prehook `0xbfb1b8`, retained normalizer/dispatch `0xbfb20c`, preserve its r0 across retained posthook `0xbfb1e0`, and return that r0 to `0xc23278`. The original frame is16 bytes, saving r3/r4/r11/LR with r11=SP+12. Preserve caller-live ABI state and any service-visible frame dependencies; private compiler frames need not match. Source: `lz/id5.dis:10402-10410`. The listing census finds only this head and the single encoded direct BL at `0xc23274`; computed/address-built references are not thereby closed. No linked owned32-byte fit has been demonstrated.
+
+This increment owns application-loop orchestration, not the outer task loop, image initializer, state-machine actions or complete #154 capability. Retain boot/loaders, all initialization, task/kernel/queue services, scanner, normalizer, controller actions/transitions, settings/calibration, renderers and their live resources. A finite initializer replacement or UILIB step alone would not be main-application-loop ownership.
+
+1. Bind canonical inputs, actual packaged DAT, emitted code/symbols and the32-byte carrier. Refuse overflow or an undeclared relocation rather than assuming neighboring bytes are spare. Declare accepted erased-settings first-start behavior and retained service contracts, not full saved-settings/calibration ownership.
+2. Extend the existing reviewed loader/task/input/render mechanisms, then independently review the changed observer, consumer and candidate before any run. Do not introduce another runner or reuse a producer verdict as independent acceptance.
+3. Start from admitted cold reset with the packaged artifact. Observe image5/plain publication, actual task1 C/T/current-core/stack entry, completed `0xbfb124`/`0xc22bd0` duties and the first owned pump call. Submission, forced frames, markers or a menu screenshot cannot replace these facts.
+4. Observe repeated ordinary receive-backed input and a naturally reached pending-work iteration. Attribute queue1 packets/status/copy/release and cleared-error state to each iteration; observe ordered prehook/normalizer/posthook, saved normalizer result, caller-visible effects and return/backedge. Independently compare controller/menu evolution and acknowledged full-plane visible results, not instruction-count equality.
+5. Exercise cancellation/back handback followed by another ordinary input, unhandled/no-op input, and receive/service failures. Name routes that are not naturally reachable; injected-only probes cannot qualify cold-boot reachability. Modal75 state0 BACK is not its state30 editor-cancel route.
+6. Refuse wrong readiness/task/core/context/stack/alias, missed initialization, stale packet attribution, skipped/reordered/doubled hooks, wrong returned normalizer value, lost handback/repetition, forbidden effects, out-of-range retained dispatch input and false completion. Preserve genuine typed refusals and raw diagnostics.
+7. Arm lifecycle-aware guards only after the relevant code is published, then continuously admit actual owned contents and executable mappings on both cores/aliases. Reject original contents/copies and out-of-contract transfers, not the in-place address now holding owned code. Keep retained callback/data/task/stack/queue/render resources live across every consumer and handback.
+8. Reuse the pinned SDK's entered-instruction/stop/fetch clock rules and attributed host-read/mapping journals. A stopped next fetch has the rolled-back end count; resumed execution starts at begin+1. Stop/restore continuity must not be inferred from overlapping timestamps.
+
+| #154 acceptance criterion | Current status and exact remaining fact |
+| --- | --- |
+| Bound application entry, subsystem initialization, readiness and dependencies | Finite entry, actors, message/handback structure and retained duties recovered. Runtime readiness, computed-call/global-writer closure and persistent settings/calibration validity remain open. |
+| Packaged artifact enters owned orchestration from cold reset | Unmet. No owned artifact, emitted32-byte fit or owned boot run is introduced. |
+| Device-driven owned loop with independently checked visible results | Existing stock route reused only. Actual repeated pump/task1 context and owned visible-effect comparison remain unobserved. |
+| Repetition, cancellation, handback and failures preserve state/resources | Source handback and packet-release behavior recovered; owned lifecycle intervals and reachable failure/cancel routes remain unqualified. |
+| Readiness/effect/refusal controls and continuous replaced-body exclusion | Design above only; no new observer, guard or control execution. |
+| Inventory/ledger distinguish retained services and emulator/hardware scope | Recorded here and in startup documentation with immutable receipt projection. No ownership or hardware qualification claim is added. |
+
