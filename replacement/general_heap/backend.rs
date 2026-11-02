@@ -1,10 +1,12 @@
-use core::{alloc::Layout, mem::size_of, ptr::{self, NonNull}};
+use core::{alloc::Layout, mem::{size_of, MaybeUninit}, ptr::{self, NonNull}};
 
 pub(crate) type FirstLevelBitmap = u32;
 pub(crate) type SecondLevelBitmap = u16;
 pub(crate) const FIRST_LEVELS: usize = 17;
 pub(crate) const SECOND_LEVELS: usize = 16;
 type Tlsf = rlsf::Tlsf<'static, FirstLevelBitmap, SecondLevelBitmap, FIRST_LEVELS, SECOND_LEVELS>;
+/// Evaluates rlsf's compile-time geometry assertion, which `initialize` bypasses.
+const _: Tlsf = Tlsf::new();
 
 pub(crate) const STOCK_ALIGNMENT: usize = 8;
 pub(crate) const PREFIX_BYTES: usize = 16;
@@ -73,9 +75,20 @@ pub(crate) fn checked_layout(layout: Layout, capacity: usize) -> Result<Layout, 
 
 impl Heap {
     /// # Safety
-    /// `base..base+bytes` must be writable, exclusively owned, and live until this heap and all its allocations are discarded.
-    /// The prefix charged for `Heap` may contain this value, but must have no other writer.
+    /// As for [`Heap::initialize`].
     pub unsafe fn new(base: NonNull<u8>, bytes: usize) -> Result<Self, HeapError> {
+        let mut state = MaybeUninit::<Self>::uninit();
+        Self::initialize(state.as_mut_ptr(), base, bytes)?;
+        Ok(state.assume_init())
+    }
+
+    /// Builds the heap in place at `state`, without a `Heap`-sized stack temporary.
+    ///
+    /// # Safety
+    /// `state` must be writable for a `Heap`. `base..base+bytes` must be writable, exclusively owned, and live until
+    /// this heap and all its allocations are discarded. The prefix charged for `Heap` may contain `state`, but must
+    /// have no other writer. On error `state` is partially written and must not be used.
+    pub unsafe fn initialize(state: *mut Self, base: NonNull<u8>, bytes: usize) -> Result<(), HeapError> {
         let start = base.as_ptr() as usize;
         let end = start.checked_add(bytes).ok_or(HeapError::OutOfMemory)?;
         let pool_start = start.checked_add(size_of::<Self>())
@@ -86,10 +99,14 @@ impl Heap {
             return Err(HeapError::OutOfMemory);
         }
         let pool = NonNull::new_unchecked(base.as_ptr().add(pool_start - start));
-        let mut core = Tlsf::new();
-        let admitted = core.insert_free_block_ptr(NonNull::slice_from_raw_parts(pool, pool_bytes))
+        let core = ptr::addr_of_mut!((*state).core);
+        // rlsf 0.2.3 `Tlsf::new()` is all zero bits: zero bitmaps and `None` free lists.
+        core.write_bytes(0, 1);
+        let admitted = (*core).insert_free_block_ptr(NonNull::slice_from_raw_parts(pool, pool_bytes))
             .ok_or(HeapError::OutOfMemory)?.get();
-        Ok(Self { core, pool, pool_bytes: admitted })
+        ptr::addr_of_mut!((*state).pool).write(pool);
+        ptr::addr_of_mut!((*state).pool_bytes).write(admitted);
+        Ok(())
     }
 
     pub unsafe fn malloc(&mut self, bytes: u32) -> Result<NonNull<u8>, HeapError> {

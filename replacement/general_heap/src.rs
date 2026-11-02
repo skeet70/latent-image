@@ -240,6 +240,14 @@ mod target {
         }
     }
 
+    #[cold]
+    #[inline(never)]
+    unsafe fn initialize(state: *mut Heap) {
+        if Heap::initialize(state, NonNull::new_unchecked(ARENA_BASE as *mut u8), ARENA_BYTES).is_err() {
+            refuse();
+        }
+    }
+
     #[inline(never)]
     unsafe fn acquire(context: u32) -> *mut Heap {
         xm1_heap_lock(context);
@@ -247,9 +255,7 @@ mod target {
         let state = ARENA_BASE as *mut Heap;
         match ptr::read_volatile(sentinel) {
             0 => {
-                let arena = NonNull::new_unchecked(ARENA_BASE as *mut u8);
-                let heap = Heap::new(arena, ARENA_BYTES).unwrap_or_else(|_| refuse());
-                ptr::write(state, heap);
+                initialize(state);
                 ptr::write_volatile(sentinel, INITIALIZED);
             }
             INITIALIZED => {}

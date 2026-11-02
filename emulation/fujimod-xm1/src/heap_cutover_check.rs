@@ -221,6 +221,7 @@ fn consume(inputs: &Inputs, directory: &Path, role: Role, fault: Option<Fault>) 
     }
     let batch: AccessBatch = serde_json::from_slice(lines.next_line().map_err(|error| error.to_string())?.ok_or("natural final watch interval missing")?).map_err(|error| error.to_string())?;
     retired_guard.batch(&batch, &recorder, lifecycle.phase(), role, &inputs.contract.owned, begin, receipt.instructions, None, None, &receipt.final_sentinel, images)?;
+    retired_guard.finish(role)?;
     require(lines.next_line().map_err(|error| error.to_string())?.is_none(), "natural watch has extra intervals")?;
     require(retired_guard.sealed && lifecycle.phase() == Image5Phase::Admitted && receipt.instructions[0].checked_add(receipt.instructions[1]) == Some(ROUTE_INSTRUCTIONS)
         && receipt.fetches_checked == retired_guard.fetches_checked && receipt.payload_writes_checked == retired_guard.payload_writes_checked,

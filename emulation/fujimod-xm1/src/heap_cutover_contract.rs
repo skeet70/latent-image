@@ -101,12 +101,31 @@ pub(super) fn geometry_control(admitted: &Admitted) -> Result<(), String> {
 fn carrier(pc: u32) -> bool { pc & 3 == 0 && CARRIERS.iter().any(|(low, high, _)| *low <= pc && pc.checked_add(4).is_some_and(|end| end <= *high)) }
 fn immediate(word: u32) -> u32 { (word & 255).rotate_right(((word >> 8) & 15) * 2) }
 
-/// Each path carries the last evaluated condition and its outcome until an instruction may write the flags.
+/// Nonreturning roots are the greatest fixpoint: every root starts nonreturning, and explored paths only grow as roots leave the set.
 fn derive(images: &[Image], roots: &BTreeSet<u32>) -> Result<(BTreeSet<u32>, BTreeMap<u32, u32>), String> {
-    let mut pending: Vec<_> = roots.iter().map(|pc| (*pc, 0i32, None::<i32>, None::<(u32, bool)>)).collect();
+    let mut noreturn = roots.clone();
+    loop {
+        let mut pcs = BTreeSet::new();
+        let mut literals = BTreeMap::new();
+        let mut remaining = BTreeSet::new();
+        for root in roots {
+            if !walk(images, roots, &noreturn, *root, &mut pcs, &mut literals)? { remaining.insert(*root); }
+        }
+        if remaining == noreturn {
+            require(pcs.is_disjoint(&literals.keys().copied().collect()), "owned literal is executable")?;
+            return Ok((pcs, literals));
+        }
+        noreturn = remaining;
+    }
+}
+
+/// Walks one root's frame and reports whether a return is reachable. Each path carries the last evaluated
+/// condition and its outcome until an instruction may write the flags; a call to a nonreturning root has no fallthrough.
+fn walk(images: &[Image], roots: &BTreeSet<u32>, noreturn: &BTreeSet<u32>, root: u32,
+    pcs: &mut BTreeSet<u32>, literals: &mut BTreeMap<u32, u32>) -> Result<bool, String> {
+    let mut pending = vec![(root, 0i32, None::<i32>, None::<(u32, bool)>)];
     let mut seen = BTreeSet::new();
-    let mut pcs = BTreeSet::new();
-    let mut literals = BTreeMap::new();
+    let mut returns = false;
     while let Some(state @ (pc, sp, fp, known)) = pending.pop() {
         if !seen.insert(state) { continue; }
         require(seen.len() <= 100_000 && carrier(pc), "owned CFG leaves charged carriers")?;
@@ -128,14 +147,18 @@ fn derive(images: &[Image], roots: &BTreeSet<u32>) -> Result<(BTreeSet<u32>, BTr
         }
         let mut next = Some((fallthrough, sp, fp));
         let mut writes_flags = false;
+        let mut terminal_call = false;
         if word & 0x0e000000 == 0x0a000000 {
             let displacement = (((word & 0xffffff) << 8) as i32) >> 6;
             let target = pc.wrapping_add(8).wrapping_add_signed(displacement);
             require(pc >= 0xbf1a00 || target < 0xbf1a00, "image4 transfer depends on unloaded image5")?;
             if word & 0x01000000 != 0 {
-                require(sp & 7 == 0 && (carrier(target) || RETAINED_CALLEES.contains(&target)), "owned call target or stack is not admitted")?;
+                require(sp & 7 == 0 && (roots.contains(&target) || RETAINED_CALLEES.contains(&target)), "owned call target or stack is not admitted")?;
                 writes_flags = true;
-                if carrier(target) { pending.push((target, 0, None, None)); }
+                if noreturn.contains(&target) {
+                    terminal_call = true;
+                    next = None;
+                }
             } else if RETAINED_CALLEES.contains(&target) {
                 require(sp == 0, "owned tail call has a live frame")?;
                 next = None;
@@ -218,12 +241,12 @@ fn derive(images: &[Image], roots: &BTreeSet<u32>) -> Result<(BTreeSet<u32>, BTr
             let load = word & (1 << 20) != 0 || op == 2;
             let dual = op == 2 && word & (1 << 20) == 0;
             require(!dual || rd & 1 == 0 && rd + 1 < 13, "owned dual load changes PC or SP or uses an invalid pair")?;
-            if load && (rd == 11 || dual && rd + 1 == 11) { next = Some((pc + 4, sp, None)); }
+            if load && (rd == 11 || dual && rd + 1 == 11) || rn == 11 && word & 0x01200000 != 0x01000000 { next = Some((pc + 4, sp, None)); }
             require(op != 0 && word & 0x01200000 != 0x00200000
                 && (!load || ![13, 15].contains(&rd)) && (rn != 13 || word & 0x01200000 == 0x01000000),
                 "owned extra transfer changes PC or SP")?;
             if rn == 15 {
-                require(load && op == 2 && word & 0x01500000 == 0x01400000, "owned extra PC-relative transfer is not a dual literal")?;
+                require(load && op == 2 && word & 0x01700000 == 0x01400000, "owned extra PC-relative transfer is not a dual literal")?;
                 let displacement = ((word >> 4) & 0xf0) | (word & 15);
                 let address = if word & (1 << 23) != 0 { pc.checked_add(8).and_then(|pc| pc.checked_add(displacement)) }
                     else { pc.checked_add(8).and_then(|pc| pc.checked_sub(displacement)) }.ok_or("dual literal address overflow")?;
@@ -260,12 +283,12 @@ fn derive(images: &[Image], roots: &BTreeSet<u32>) -> Result<(BTreeSet<u32>, BTr
             require(word & 0x0f9000f0 != 0x01000090, "owned exclusive instruction is not admitted")?;
             writes_flags = word & (1 << 20) != 0;
         } else { return Err(format!("owned instruction {word:#x} at {pc:#x} has no admitted decoder")); }
+        if next.is_none() && !terminal_call { returns = true; }
         let executed = if writes_flags { None } else if outcome.is_none() { Some((condition, true)) } else { known };
         if let Some((target, offset, frame)) = next { pending.push((target, offset, frame, executed)); }
         if outcome.is_none() { pending.push((fallthrough, sp, fp, Some((condition, false)))); }
     }
-    require(pcs.is_disjoint(&literals.keys().copied().collect()), "owned literal is executable")?;
-    Ok((pcs, literals))
+    Ok(returns)
 }
 
 pub(super) fn admit(contract_path: &Path, canonical_dat: &Path, candidate_dat: &Path, analysis: &Path) -> Result<Admitted, String> {

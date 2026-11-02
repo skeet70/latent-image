@@ -227,7 +227,9 @@ fn execute(inputs: &Inputs, role: Role, output: &Path) -> Result<(), String> {
         let drained = (|| -> Result<(), String> {
             append_accesses(&mut accesses, output, &mut terminal, &bytes)?;
             let batch: AccessBatch = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
-            retired_guard.batch(&batch, &recorder, lifecycle.phase(), role, &inputs.contract.owned, begin, counts(&machine)?, None, None, &final_sentinel, images)
+            retired_guard.batch(&batch, &recorder, lifecycle.phase(), role, &inputs.contract.owned, begin, counts(&machine)?, None, None, &final_sentinel, images)?;
+            if result.is_ok() { retired_guard.finish(role)?; }
+            Ok(())
         })();
         if let Err(error) = drained { watch_end_error = Some(error); }
     }
