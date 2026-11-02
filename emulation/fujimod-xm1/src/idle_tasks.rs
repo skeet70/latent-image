@@ -656,7 +656,10 @@ fn bind_root_artifact(role: Role, linked: &[u8], symbols: &[u8], contract: &[u8]
     let halts: BTreeSet<u32> = artifact.halt_pcs.iter().map(|pc| pc.0).collect();
     let returns: BTreeSet<u32> = artifact.return_pcs.iter().map(|pc| pc.0).collect();
     for &pc in &halts { require(execution.contains(&pc) && code_word(sources, pc)? == 0xeafffffe, "root halt contract differs")?; }
-    for &pc in &returns { require(execution.contains(&pc) && returns_to_caller(code_word(sources, pc)?), "root return contract differs")?; }
+    for &pc in &returns {
+        let tail_call = artifact.call_sites.iter().any(|site| site.pc.0 == pc && site.kind == RootCallKind::TailCall);
+        require(execution.contains(&pc) && (returns_to_caller(code_word(sources, pc)?) || tail_call), "root return contract differs")?;
+    }
     let (execution, calls, halts, returns) = match role {
         Role::Owned => {
             require(*update == binding.candidate_dat_sha256, "owned root DAT differs from staging contract")?;
