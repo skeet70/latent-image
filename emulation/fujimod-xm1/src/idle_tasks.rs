@@ -496,7 +496,8 @@ fn root_layout() -> Layout {
 fn code_word(sources: &[Code], address: u32) -> Result<u32, String> {
     let physical = address & !0x40000000;
     let source = sources.iter().find(|source| physical >= source.base
-        && u64::from(physical) + 4 <= u64::from(source.base) + source.bytes.len() as u64).ok_or("required instruction leaves bound canonical sources")?;
+        && u64::from(physical) + 4 <= u64::from(source.base) + source.bytes.len() as u64)
+        .ok_or_else(|| format!("required instruction0x{address:x} physical0x{physical:x} leaves bound canonical sources"))?;
     word(&source.bytes, (physical - source.base) as usize)
 }
 fn direct_target(pc: u32, instruction: u32) -> Result<u32, String> {
@@ -564,6 +565,10 @@ fn retained_function_words(sources: &[Code], entries: &BTreeSet<u32>) -> Result<
         if !words.insert(pc) { continue; }
         require(words.len() <= 262_144, "retained service source graph exceeds admission bound")?;
         let instruction = code_word(sources, pc)?;
+        if matches!(instruction & 0xfffffff0, 0xf57ff040 | 0xf57ff050 | 0xf57ff060) {
+            pending.push(pc + 4);
+            continue;
+        }
         let conditional = instruction >> 28 != 14;
         if instruction & 0x0f7f0000 == 0x051f0000 {
             let base = pc.checked_add(8).ok_or("service literal PC overflow")?;

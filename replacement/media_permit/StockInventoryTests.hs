@@ -105,3 +105,6 @@ main = do
     (retained [0xe59df004] == Right (footprint [0x1000] [] [0x1000] []))
   check "a byte PC load is not a retained word return"
     (retained [0xe4ddf004] == Right (footprint [0x1000] [] [0x1000] []))
+  check "unconditional barriers remain linear retained instructions"
+    (retained [0xf57ff04f,0xf57ff05f,0xf57ff06f,0xe12fff1e]
+      == Right (footprint [0x1000,0x1004,0x1008,0x100c] [] [] []))
