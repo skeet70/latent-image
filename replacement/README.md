@@ -252,6 +252,26 @@ devenv shell -- bazel run //replacement/task_submission:stage-task-submission --
 
 The [startup task checker](../emulation/README.md#startup-task-lifecycle-observation-151) independently restages once per admitted owned input set and binds the supplied candidate and serialized contract to that restaging. Its natural/control cohort compares independently qualified retained and owned observations, without treating synthetic receipt mutations as successful guest controls. `E-STARTUP-TASK-WRAPPER-QUALIFIED-150` records the separately qualified standalone cohort; it does not establish general deletion/reclamation, scheduler ownership or composition with other replacement packages.
 
+## Joined loader, dispatcher and installer composition (#155)
+
+`//replacement/startup_composition:loader-startup-composition-artifact` independently admits all four native image/symbol pairs, joins the loader-to-dispatcher and dispatcher-to-installer frames, and exposes read-only scenario-indexed phase/call/site facts. `stage-loader-startup-composition` stages loader A/B first and then uses the existing image4/container reconstruction once. The standalone loader contract's `CanonicalRetained` summary does not admit this owned provider.
+
+The owned-component low is `L-120` for primary phase0, with dispatcher service entry `S=L-16` and installer entry `P=S-64`. Natural peer phases4/2 use the conservative dispatcher low `L-88`, not an installer demand. Other retained callees keep separate depth, backing and lifetime obligations.
+
+`//emulation:loader-startup-capture` captures schema1 `startup-joined.json` for `--shared-role retained` or `--shared-role joined`. Both roles use one frozen observer executable and independently exported zero-instruction reset checkpoints from their actual DATs. One coordinator retains the loader reset-to-menu guards and dispatcher observations, while the first-family/root1 consumer subobservation closes its own resources at its explicit terminal. The eight-million-instruction split is gapless and is not a lifetime endpoint. Every guest invocation must run under `//emulation:emulator-slot`; builds and host-only checks do not take a slot.
+
+`//replacement/startup_consumers:startup-joined-check` independently reconstructs the candidate from the canonical and native staged files, binds the copied artifacts and effective catalog, validates the actual raw consumer window, and requires the source-bound route/dispatcher host admission. Its exact positional interface is:
+
+```text
+startup-joined-check ENCODER REBUILD DECODER qualify|compare|refusal-controls STAGED_DIR RUN_JSON BOOT_ROM OBSERVER ANALYSIS_ROOT SCRATCH_DIR NEW_OUTPUT_DIR [CAPTURE_DIR|RETAINED_DIR JOINED_DIR]
+```
+
+Bazel supplies the first three tool paths. `qualify` takes one capture; `compare` and `refusal-controls` take retained then joined captures. Each checker invocation needs a fresh staging scratch directory and a new output directory. `qualification.json` is persisted on both acceptance and refusal. Host process output and the route/dispatcher result remain separate evidence.
+
+The pair comparison preserves the source-invariant caller frame, SP/control state, all outer public data and the opaque first-operation projection. Active loader registers and encoded dispatcher links are checked against their own provider and preservation contracts, not substituted with qualification summaries. Controls reuse the exact #150 refusal constructors and coherent descriptor-tail, payload-copy and caller-byte changes, and add wrapper/artifact/reset/window/epoch/preimage discriminators. The route/dispatcher suite separately checks its serialized mutations and a real admitted retained-callee push below incoming SP.
+
+These are source mechanisms until their execution records qualify an actual candidate and natural pair. They do not claim application independence, global caller/resource closure, mode1/nonzero-preimage coverage, transitive retained-service depth, post-return scheduler equality or production retirement.
+
 ## Joined task-submission composition (#155)
 
 `//replacement/startup_composition:task-composition-artifact` joins the wrapper/release artifact, `critical_pair` and `task_storage` from their typed emitted proofs. Every owned callee demand is inserted at the wrapper's actual call SP. Critical adapter, Rust, bridge and retained primitive depth are composed without substituting the wrapper's overall low-water mark for a call SP. Storage includes its retained 32-byte prelude and the proved reservation-body demand. Writable backing and live caller objects remain separate per-invocation admissions.

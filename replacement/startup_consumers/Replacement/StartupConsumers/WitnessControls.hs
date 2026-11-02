@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Replacement.StartupConsumers.WitnessControls (checkRefusals) where
+module Replacement.StartupConsumers.WitnessControls (checkRefusals,checkLoaderPairRefusals) where
 
 import Control.Monad (foldM, forM, forM_)
 import qualified Data.Aeson as J
@@ -33,23 +33,8 @@ checkRefusals inputs retained installer joined = do
     ,expectComparison (ControlName "swapped installer and joined roles") (compareReceipts qualifiedRetained qualifiedJoined qualifiedInstaller)
     ,expectComparison (ControlName "missing joined role") (compareReceipts qualifiedRetained qualifiedInstaller qualifiedInstaller)]
   receipts <- mapM (either (const (Left "control receipt decode failed")) Right . J.eitherDecodeStrict' . observedReceipt) [retained,installer,joined]
-  rows <- forM (zip receipts [qualifiedRetained,qualifiedInstaller,qualifiedJoined]) $ \(receipt,qualified) -> do
-    controls <- forM mutations $ \(Control (ControlName name) expected mutate) ->
-      case validateReceipt inputs (mutate receipt) of
-        Left actual | actual == expected -> Right (J.object ["control" J..= name,"rejection" J..= show expected])
-        Left actual -> Left (name ++ ": expected " ++ show expected ++ ", got " ++ show actual)
-        Right _ -> Left (name ++ ": mutation was accepted")
-    coherent <- forM [DescriptorTailCase,PayloadByteCase,CallerByteCase] $ \which -> do
-      changed <- prepareCoherent which receipt
-      case changed of
-        UnobservedPayload reason -> pure (J.object ["control" J..= show which,"observation" J..= ("not-observed" :: String),"reason" J..= show reason])
-        ChangedReceipt altered -> do
-          projected <- either (\failure -> Left (show which ++ ": individual admission rejected with " ++ show failure)) Right (validateReceipt inputs altered)
-          case compareSemanticProjections (qualifiedProjection qualified) projected of
-            Left ComparisonRejected -> pure (J.object ["control" J..= show which,"typed_receipt_admitted" J..= True,"rejection" J..= show ComparisonRejected])
-            Left failure -> Left (show which ++ ": expected ComparisonRejected, got " ++ show failure)
-            Right () -> Left (show which ++ ": semantic difference was accepted")
-    pure (J.object ["role" J..= show (receiptRole receipt),"controls" J..= controls,"coherent_comparison_controls" J..= coherent])
+  rows <- forM (zip receipts [qualifiedRetained,qualifiedInstaller,qualifiedJoined]) $ \(receipt,qualified) ->
+    checkReceiptControls compareSemanticProjections inputs receipt (qualifiedProjection qualified)
   forM_ [retained,installer,joined] $ \files ->
     case admitReceipt inputs (files {observedCheckpoint = observedCheckpoint files <> B.singleton 0}) of
       Left CheckpointRejected -> Right ()
@@ -60,6 +45,35 @@ checkRefusals inputs retained installer joined = do
   where
     liftAdmission :: Either WitnessError value -> Either String value
     liftAdmission = either (Left . show) Right
+
+checkLoaderPairRefusals :: Inputs -> Receipt -> Receipt -> Either String J.Value
+checkLoaderPairRefusals inputs retained joined = do
+  if receiptRole retained == Retained && receiptRole joined == Joined then pure () else Left "loader consumer control roles differ"
+  before <- either (Left . show) Right (validateReceipt inputs retained)
+  after <- either (Left . show) Right (validateReceipt inputs joined)
+  either (Left . show) Right (compareLoaderSemanticProjections before after)
+  rows <- sequence [checkReceiptControls compareLoaderSemanticProjections inputs retained before
+    ,checkReceiptControls compareLoaderSemanticProjections inputs joined after]
+  pure (J.object ["schema" J..= (1::Int),"qualification" J..= ("exact-loader-joined-consumer-refusals"::String),"roles" J..= rows])
+
+checkReceiptControls :: (Projection -> Projection -> Either WitnessError ()) -> Inputs -> Receipt -> Projection -> Either String J.Value
+checkReceiptControls compareProjection inputs receipt baseline = do
+  controls <- forM mutations $ \(Control (ControlName name) expected mutate) ->
+    case validateReceipt inputs (mutate receipt) of
+      Left actual | actual == expected -> Right (J.object ["control" J..= name,"rejection" J..= show expected])
+      Left actual -> Left (name ++ ": expected " ++ show expected ++ ", got " ++ show actual)
+      Right _ -> Left (name ++ ": mutation was accepted")
+  coherent <- forM [DescriptorTailCase,PayloadByteCase,CallerByteCase] $ \which -> do
+    changed <- prepareCoherent which receipt
+    case changed of
+      UnobservedPayload reason -> pure (J.object ["control" J..= show which,"observation" J..= ("not-observed"::String),"reason" J..= show reason])
+      ChangedReceipt altered -> do
+        projected <- either (\failure -> Left (show which ++ ": individual admission rejected with " ++ show failure)) Right (validateReceipt inputs altered)
+        case compareProjection baseline projected of
+          Left ComparisonRejected -> pure (J.object ["control" J..= show which,"typed_receipt_admitted" J..= True,"rejection" J..= show ComparisonRejected])
+          Left failure -> Left (show which ++ ": expected ComparisonRejected, got " ++ show failure)
+          Right () -> Left (show which ++ ": semantic difference was accepted")
+  pure (J.object ["role" J..= show (receiptRole receipt),"controls" J..= controls,"coherent_comparison_controls" J..= coherent])
 
 expectComparison :: ControlName -> Either WitnessError () -> Either String J.Value
 expectComparison (ControlName name) result = case result of
@@ -78,7 +92,8 @@ mutations =
     {probeSourceWord = WordValue (number (probeSourceWord probe) `xor` 1)}
   ,Control (ControlName "outer dispatcher SP") FrameRejected $ mapProbe OuterEntry $ \probe -> probe
     {probeContext = (probeContext probe) {contextMachine = (contextMachine (probeContext probe)) {K.contextSp = Address 0x40063458}}}
-  ,Control (ControlName "secondary accepts only observed nonzero") InitializerRejected $ mapProbe PeerPostload $ changeRegister 3 0
+  ,Control (ControlName "secondary accepts only observed nonzero") InitializerRejected $ mapProbe PeerPostload $ \probe -> probe
+    {probeContext = (probeContext probe) {contextMachine = (contextMachine (probeContext probe)) {K.contextRegisters = replicate 13 (WordValue 0)}}}
   ,Control (ControlName "initializer return ABI") InitializerRejected $ mapProbe InitializerReturn $ changeRegister 0 0
   ,Control (ControlName "installer private return LR differs") EffectRejected $ mapProbe InstallerReturn $ \probe -> probe
     {probeContext = (probeContext probe) {contextMachine = (contextMachine (probeContext probe)) {K.contextLr = Address 0x725a84}}}

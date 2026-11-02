@@ -7,6 +7,9 @@ haskell_library(
     srcs = [
         "Replacement/StartupConsumers/Effects.hs",
         "Replacement/StartupConsumers/Evidence.hs",
+        "Replacement/StartupConsumers/JoinedControls.hs",
+        "Replacement/StartupConsumers/JoinedWire.hs",
+        "Replacement/StartupConsumers/JoinedWitness.hs",
         "Replacement/StartupConsumers/Source.hs",
         "Replacement/StartupConsumers/Wire.hs",
         "Replacement/StartupConsumers/Witness.hs",
@@ -25,8 +28,12 @@ haskell_library(
         "//host:containers",
         "//host:text",
         "//host:update-container",
+        "//host:vector",
+        "//host/firmware:bank-allowlist",
         "//replacement/kernel_install:kernel-install-artifact",
+        "//replacement/loader_orchestration:loader-orchestration-artifact",
         "//replacement/startup_composition:startup-composition-artifact",
+        "//replacement/startup_composition:loader-startup-composition-artifact",
         "//replacement/startup_dispatch:startup-dispatch-artifact",
     ],
 )
@@ -63,6 +70,44 @@ haskell_test(
         ":startup-consumers-lib",
         "//host:base",
         "//host:bytestring",
+        "//replacement/kernel_install:kernel-install-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "startup-joined-check",
+    srcs = ["JoinedMain.hs"],
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+    ],
+    data = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":startup-consumers-lib",
+        "//emulation:case-sha256",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//replacement/kernel_install:kernel-install-artifact",
+        "//replacement/startup_composition:loader-startup-composition-artifact",
+        "//replacement/startup_composition:startup-composition-artifact",
+    ],
+)
+
+haskell_test(
+    name = "startup-joined-tests",
+    srcs = ["JoinedTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":startup-consumers-lib",
+        "//host:aeson",
+        "//host:base",
         "//replacement/kernel_install:kernel-install-artifact",
     ],
 )
