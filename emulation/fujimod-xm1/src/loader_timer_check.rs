@@ -54,7 +54,7 @@ fn ring(event:&Event,register:usize)->Result<Guest,String>{
 fn fetch<'a>(rows:&'a [Row],event:&Event)->Result<&'a Row,String>{
     let mut candidates=rows.iter().filter(|row|row.source==Access::CpuFetch&&row.address==event.pc&&row.pc==Some(event.pc)&&row.core==Some(event.core)&&row.instructions.is_some_and(|clock|Some(clock.0)==event.instructions.0.checked_add(1)));
     let row=candidates.next().ok_or("timer-read provenance")?;
-    require(candidates.next().is_none()&&row.physical==event.pc&&row.size==4&&row.tick.is_some(),"timer-read provenance")?;Ok(row)
+    require(row.physical==event.pc&&row.size==4&&row.tick.is_some()&&candidates.all(|retry|retry.physical==row.physical&&retry.size==row.size&&retry.tick==row.tick&&retry.value==row.value),"timer-read provenance")?;Ok(row)
 }
 fn source(event:&Event,index:usize)->Result<(),String>{require(event.pc.0==PCS[index]&&event.code.values==[CODE[index]],"timer-source provenance")}
 fn next<'a>(report:&'a Report,event:&Event,index:usize)->Result<&'a Event,String>{

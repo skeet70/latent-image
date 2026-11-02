@@ -61,6 +61,7 @@ data TimerChange = TimerBinding | TimerSchema | TimerBatch | TimerError | TimerO
   | TimerSubtraction | TimerRingState | TimerRingWrite | TimerRingWriteTick | TimerCopyRegister | TimerCopyState | TimerCopyWrite | TimerCopyWriteTick | TimerLifetime
   | TimerSourceCore | TimerSourceChronology | TimerSourceInstruction
   | TimerCpuCodeWrite | TimerHostCodeWrite | TimerModelCodeWrite | TimerRestoredCodeWrite
+  | TimerConflictingFetch
   deriving (Enum, Bounded)
 data CodeWriteStyle = IdenticalWord | RestoredWord
 
@@ -873,6 +874,16 @@ timerControl change fixture = case change of
       rows <- arrayAt [] value
       pure (J.toJSON [row | (position,row) <- zip [0::Int ..] rows,position/=index]))) fixture
   TimerFetchTick -> changeRawTimerRow CpuFetch (GuestAddress 0x41ad8) "tick" flipBit fixture
+  TimerConflictingFetch -> modifyWatch 1 (modifyAt [field "records"] (\value -> do
+    rows <- arrayAt [] value
+    candidates <- forM (zip [0::Int ..] rows) $ \(index,row) -> do
+      access <- parseAccess row
+      selected <- if access==CpuFetch then (==GuestAddress 0x41ad8) <$> guestAt [field "pc"] row else Right False
+      Right (index,row,selected)
+    (index,row,_) <- firstIndex "timer source fetch absent" [candidate | candidate@(_,_,True) <- candidates]
+    conflicting <- modifyAt [field "tick"] flipBit row
+    let (before,after) = splitAt index rows
+    Right (J.toJSON (before++conflicting:after)))) fixture
   TimerSubtraction -> firstEvent fixture (GuestAddress 0x41ae4) >>= \identifier -> setRegisterWord identifier 2 (`xor` 1) fixture
   TimerRingState -> do
     identifier <- firstEvent fixture (GuestAddress 0x41ae8)
@@ -903,6 +914,7 @@ timerControlName change = "timer-"++case change of
   TimerAddress -> "reload-wrong-address"; TimerSize -> "reload-wrong-size"; TimerOperation -> "reload-wrong-operation"
   TimerAccepted -> "reload-unaccepted"; TimerTick -> "reload-wrong-tick"; TimerValue -> "reload-wrong-value"; TimerMissingRead -> "missing-reload-read"
   TimerFetchTick -> "reload-wrong-source-fetch-tick"
+  TimerConflictingFetch -> "conflicting-source-fetch-retry"
   TimerSubtraction -> "wrong-subtraction-result"; TimerRingState -> "wrong-ring-word"; TimerRingWrite -> "wrong-raw-ring-write"
   TimerCopyRegister -> "wrong-copy-register"; TimerCopyState -> "wrong-latched-word"; TimerCopyWrite -> "wrong-raw-latched-write"; TimerLifetime -> "wrong-latched-lifetime"
   TimerRingWriteTick -> "wrong-raw-ring-write-tick"; TimerCopyWriteTick -> "wrong-raw-latched-write-tick"
@@ -918,6 +930,7 @@ timerReason change = case change of
   TimerOrder -> "timer-transactions order differs"
   TimerCpu -> readReason; TimerPc -> readReason; TimerAddress -> readReason; TimerSize -> readReason; TimerOperation -> readReason
   TimerAccepted -> readReason; TimerTick -> readReason; TimerValue -> readReason; TimerMissingRead -> readReason; TimerFetchTick -> readReason
+  TimerConflictingFetch -> readReason
   TimerSubtraction -> "timer-ring provenance"; TimerRingState -> "timer-ring provenance"
   TimerRingWrite -> writeReason; TimerRingWriteTick -> writeReason; TimerCopyWrite -> writeReason; TimerCopyWriteTick -> writeReason
   TimerCopyRegister -> "timer-copy provenance"; TimerCopyState -> "timer-copy provenance"
