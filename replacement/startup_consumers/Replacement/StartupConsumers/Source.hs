@@ -6,6 +6,7 @@ module Replacement.StartupConsumers.Source
   , familyEntryAddress, familyEpilogueAddress, familySourceSites, globalSourceSites, commonSourceSites, atomicSourceSites
   , CodeSpan (..), ownedCodeSpans
   , MessageAccessKind (..), MessageAccess (..), messageAccesses
+  , CopyPart (..), CopyAccess (..), copyAccess
   ) where
 
 import Data.Bits ((.&.), complement)
@@ -135,3 +136,15 @@ messageAccesses =
 data CodeSpan = CodeSpan {codeSpanStart :: Address,codeSpanSize :: ByteCount}
 ownedCodeSpans :: [CodeSpan]
 ownedCodeSpans = [CodeSpan (Address 0x69cdf8) (ByteCount 0x18c),CodeSpan (Address 0x725a04) (ByteCount 0x150)]
+
+data CopyPart = CopyPrefix | CopyWords | CopyLargeTail | CopyHalfWords | CopyAlignedTail | CopyBytes deriving (Eq, Ord, Enum, Bounded, Show)
+data CopyAccess = CopyAccess {copyWidth :: ByteCount,copyLoad :: Address,copyStore :: Address}
+copyAccess :: CopyPart -> CopyAccess
+copyAccess part = case part of
+  CopyPrefix -> access 1 0x722080 0x722084
+  CopyWords -> access 4 0x7220c4 0x7220c8
+  CopyLargeTail -> access 1 0x7220e8 0x7220ec
+  CopyHalfWords -> access 2 0x722130 0x722134
+  CopyAlignedTail -> access 1 0x722150 0x722154
+  CopyBytes -> access 1 0x72215c 0x722160
+  where access width load store = CopyAccess (ByteCount width) (Address load) (Address store)

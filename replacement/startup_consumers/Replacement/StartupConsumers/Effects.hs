@@ -1,9 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Replacement.StartupConsumers.Effects (ConsumerProjection, checkConsumers, consumerProjection, consumerProjectionValue) where
+module Replacement.StartupConsumers.Effects (ConsumerProjection, checkConsumers, consumerProjectionValue) where
 
 import Control.Monad (foldM, forM, forM_, when)
 import qualified Data.Aeson as J
-import Data.Bits ((.&.), (.|.), shiftL, xor)
+import Data.Bits ((.&.), (.|.), shiftL, shiftR, xor)
+import Data.Int (Int32)
 import qualified Data.ByteString as B
 import Data.List (sortOn)
 import qualified Data.Set as Set
@@ -15,8 +16,8 @@ import qualified Replacement.StartupConsumers.Source as S
 import Replacement.StartupConsumers.Wire
 
 data Call = Call {callEntry :: Probe, callExit :: Probe}
-data ConsumerProjection = ConsumerProjection [InvocationProjection] [ResourceProjection] [(Family,Core,K.Count)] deriving (Eq)
-data InvocationProjection = InvocationProjection Family Core InputProjection OutputProjection [CallProjection] deriving (Eq)
+newtype ConsumerProjection = ConsumerProjection [InvocationProjection] deriving (Eq)
+data InvocationProjection = InvocationProjection Family Core InputProjection OutputProjection [CallProjection] [ObjectEffect] deriving (Eq)
 data InputProjection = TaskInput [K.WordValue] | ReserveInput K.WordValue K.WordValue PointerLocation
   | ConstructInput K.WordValue [K.WordValue] | MessageInput K.WordValue MessageProjection (Maybe K.WordValue) deriving (Eq)
 data OutputProjection = ScalarOutput K.WordValue | ConstructOutput K.WordValue [K.WordValue]
@@ -25,9 +26,17 @@ data MessageProjection = MessageProjection K.WordValue K.WordValue PointerLocati
 data Argument = ScalarArgument K.WordValue | PointerArgument PointerLocation deriving (Eq)
 data CallProjection = CallProjection K.Address K.Address [Argument] [Argument] (Maybe K.WordValue) deriving (Eq)
 data PointerLocation = AbsoluteLocation K.Address | LocalLocation Family ResourceKind Int K.Count | FrameLocation Family Integer deriving (Eq)
-data ResourceProjection = ResourceProjection ResourceKind Lifetime PointerLocation Bytes Bytes [ComparableWrite] deriving (Eq)
-data WritePhase = InstallationWrites | ConsumerWrites deriving (Eq)
-data ComparableWrite = ComparableWrite WritePhase K.Source (Maybe Core) (Maybe K.Address) PointerLocation K.Count (Maybe Bytes) Bytes deriving (Eq)
+data EffectOperation = ReservationDecision | NestedReservation | TaskAuxiliary | TaskFill | TaskCreation | TaskActivation
+  | QueueConstruction | PoolConstruction | QueueCleanup | MessagePublication | SendCallback | CallbackInput | CallbackOutput
+  | PoolAcquisition | QueueSubmission | QueueReception | PoolRelease | CopyTransfer | PacketCommit | ReceiveCommit | ErrorCallback deriving (Eq, Show)
+data EffectObject = RecordObject | NodeObject | IdentifierObject | CursorObject | OutputObject | FillObject
+  | HeaderObject | PayloadObject | SourceObject | DestinationObject | PublicationObject | ErrorObject deriving (Eq, Show)
+data InputPolicy = ComparedInput | WriteOnly
+data EffectInput = ObservedInput Bytes | NotConsumed deriving (Eq)
+data ObjectEffect = ObjectEffect EffectOperation EffectObject PointerLocation S.ByteCount EffectInput Bytes
+  | EmptyPayloadEffect EffectOperation | PreservedPacketPrefix PointerLocation S.ByteCount deriving (Eq)
+data EffectSpan = EffectSpan EffectObject K.Address S.ByteCount InputPolicy
+newtype CheckedInvocation = CheckedInvocation Invocation
 data RootSelector = PrimaryRoot | SecondaryRoot deriving (Eq)
 rootIndex :: RootSelector -> Word32
 rootIndex PrimaryRoot = 0
@@ -105,7 +114,7 @@ checkFrameAttribution receipt invocation entry returned = do
   where
     instructionCount probe = one InvocationRejected [at | (owner,at) <- zip [Primary,Secondary] (K.contextCounts (machine probe)),owner == core probe]
 
-checkConsumers :: S.SourceModel -> Receipt -> Either WitnessError ()
+checkConsumers :: S.SourceModel -> Receipt -> Either WitnessError ConsumerProjection
 checkConsumers source receipt = do
   checkKernelBaselines receipt
   let invocations = [invocation | invocation <- receiptInvocations receipt,invocationStatus invocation /= NotObserved]
@@ -138,7 +147,7 @@ checkConsumers source receipt = do
         require (machine target == machine entry) InvocationRejected
     forM_ (invocationProbes receipt invocation) $ \probe -> require (core probe == core entry && probeFamily probe == Just (invocationFamily invocation)
       && probeId entry <= probeId probe && probeId probe <= probeId returned) InvocationRejected
-  forM_ invocations $ \invocation ->
+  checked <- forM invocations $ \invocation -> do
     case invocationFamily invocation of
       TaskReserve -> checkAllocation source receipt invocation S.TaskAllocation
       StorageReserve -> checkAllocation source receipt invocation S.StorageAllocation
@@ -146,6 +155,8 @@ checkConsumers source receipt = do
       MessageConstruct -> checkConstruct source receipt invocation
       MessageSend -> checkSend source receipt invocation
       MessageReceive -> checkReceive source receipt invocation
+    pure (CheckedInvocation invocation)
+  consumerProjection source receipt checked
 
 atWord :: Receipt -> Probe -> Word32 -> Either WitnessError Word32
 atWord receipt probe location = memoryAt receipt probe >>= \contents -> wordAt EffectRejected contents location
@@ -857,18 +868,18 @@ checkCopy failure receipt copied destination source size = walk 0
     prefix = 4-(destination .&. 3)
     wordsEnd = prefix+((size-prefix) .&. 0xfffffffc)
     step offset
-      | largeAligned && offset < prefix = (1,0x722080,0x722084)
-      | largeAligned && offset < wordsEnd = (4,0x7220c4,0x7220c8)
-      | largeAligned = (1,0x7220e8,0x7220ec)
-      | (source .|. destination) .&. 1 == 0 && offset < size .&. 0xfffffffe = (2,0x722130,0x722134)
-      | (source .|. destination) .&. 1 == 0 = (1,0x722150,0x722154)
-      | otherwise = (1,0x72215c,0x722160)
+      | largeAligned && offset < prefix = S.copyAccess S.CopyPrefix
+      | largeAligned && offset < wordsEnd = S.copyAccess S.CopyWords
+      | largeAligned = S.copyAccess S.CopyLargeTail
+      | (source .|. destination) .&. 1 == 0 && offset < size .&. 0xfffffffe = S.copyAccess S.CopyHalfWords
+      | (source .|. destination) .&. 1 == 0 = S.copyAccess S.CopyAlignedTail
+      | otherwise = S.copyAccess S.CopyBytes
     walk offset [] = require (offset == size) failure >> pure []
     walk offset (readEvent:writeEvent:rest) = do
-      let (width,loadPc,storePc) = step offset
+      let S.CopyAccess (S.ByteCount width) loadSite storeSite = step offset
       require (offset < size && width <= size-offset
         && eventSource readEvent == K.CpuRead && eventSource writeEvent == K.CpuWrite
-        && eventPc readEvent == Just (K.Address loadPc) && eventPc writeEvent == Just (K.Address storePc)
+        && eventPc readEvent == Just loadSite && eventPc writeEvent == Just storeSite
         && eventAddress readEvent == fromIntegral (source+offset)
         && eventAddress writeEvent == fromIntegral (destination+offset)
         && eventSize readEvent == fromIntegral width && eventSize writeEvent == fromIntegral width
@@ -877,20 +888,31 @@ checkCopy failure receipt copied destination source size = walk 0
       pure (writeEvent:remaining)
     walk _ _ = Left failure
 
-consumerProjection :: Receipt -> Either WitnessError ConsumerProjection
-consumerProjection receipt = do
-  let invocations = sortOn invocationId [invocation | invocation <- receiptInvocations receipt,invocationStatus invocation == Returned]
-  projected <- mapM projectInvocation invocations
-  resources <- mapM projectResource [resource | resource <- receiptResources receipt
-    ,resourceKind resource `notElem` [Stack,Code,Header,Carrier,Descriptor]
-    ,not (resourceKind resource `elem` [Output,Auxiliary] && privateResource resource)]
-  pure (ConsumerProjection projected resources [(censusFamily item,censusCore item,censusEntries item) | item <- receiptCensus receipt])
+consumerProjection :: S.SourceModel -> Receipt -> [CheckedInvocation] -> Either WitnessError ConsumerProjection
+consumerProjection model receipt checked = ConsumerProjection <$> mapM projectInvocation
+  (sortOn (\(CheckedInvocation invocation) -> invocationId invocation) checked)
   where
     contains resource location = location >= address (resourcePhysical resource)
       && toInteger location < toInteger (address (resourcePhysical resource))+toInteger (count (resourceSize resource))
     onStack location = any (\resource -> resourceKind resource == Stack && contains resource location) (receiptResources receipt)
-    privateResource resource = onStack (address (resourcePhysical resource))
-      && onStack (address (resourcePhysical resource)+fromIntegral (count (resourceSize resource))-1)
+    effects invocation operation before after spans = do
+      beforeMemory <- if any readsInput spans then Just <$> memoryAt receipt before else pure Nothing
+      afterMemory <- if not (any hasBytes spans) then pure Nothing else case beforeMemory of
+        Just memory | probeClock before == probeClock after -> pure (Just memory)
+        _ -> Just <$> memoryAt receipt after
+      forM spans $ \(EffectSpan kind location size@(S.ByteCount bytes) policy) ->
+        if bytes == 0 then pure (EmptyPayloadEffect operation) else do
+          final <- required EffectRejected afterMemory >>= \memory ->
+            Bytes <$> bytesAt EffectRejected memory (physical (address location)) (fromIntegral bytes)
+          initial <- case policy of
+            WriteOnly -> pure NotConsumed
+            ComparedInput -> do
+              memory <- required EffectRejected beforeMemory
+              ObservedInput . Bytes <$> bytesAt EffectRejected memory (physical (address location)) (fromIntegral bytes)
+          pure (ObjectEffect operation kind (pointer invocation (address location)) size initial final)
+      where
+        readsInput (EffectSpan _ _ (S.ByteCount bytes) policy) = bytes /= 0 && case policy of ComparedInput -> True; WriteOnly -> False
+        hasBytes (EffectSpan _ _ (S.ByteCount bytes) _) = bytes /= 0
     pointer invocation value =
       let here = physical value
           locals = [resource | resource <- receiptResources receipt,resourceOwner resource == Just (invocationId invocation)
@@ -906,7 +928,170 @@ consumerProjection receipt = do
       else AbsoluteLocation (K.Address value)
     argument :: Invocation -> [Int] -> Int -> Word32 -> Argument
     argument invocation pointers index value = if index `elem` pointers then PointerArgument (pointer invocation value) else ScalarArgument (K.WordValue value)
-    projectInvocation invocation = do
+    spanOf kind location bytes policy = EffectSpan kind (K.Address location) (S.ByteCount bytes) policy
+    callWindow invocation probe = Call probe <$> sourceAt receipt invocation (pc probe+4)
+    projectEffects invocation entry returned = do
+      called <- concat <$> mapM (\probe -> callWindow invocation probe >>= callEffects invocation)
+        [probe | probe <- invocationProbes receipt invocation,probeKind probe == SourceProbe,pc probe `elem` map (\(site,_,_) -> site) callSpecs]
+      owned <- case invocationFamily invocation of
+        TaskReserve -> do
+          decision <- sourceAt receipt invocation 0x725cd4
+          reservation invocation ReservationDecision S.TaskAllocation entry decision returned
+        StorageReserve -> do
+          decision <- sourceAt receipt invocation 0x7234d8
+          reservation invocation ReservationDecision S.StorageAllocation entry decision returned
+        TaskWrapper -> do
+          descriptor <- register entry 0
+          ident <- atWord receipt entry descriptor
+          effects invocation MessagePublication entry returned [spanOf PublicationObject (0x40a5b204+8*(ident-1)) 8 ComparedInput]
+        MessageConstruct -> do
+          ident <- register entry 0
+          effects invocation MessagePublication entry returned
+            [spanOf PublicationObject (0x40a0f870+4*(ident-1)) 4 ComparedInput
+            ,spanOf PublicationObject (0x40a0fa50+4*(ident-1)) 4 ComparedInput
+            ,spanOf PublicationObject (0x40a0f464+8*(ident-1)) 8 ComparedInput]
+        MessageSend -> pure []
+        MessageReceive -> pure []
+      pure (owned ++ called)
+    reservation invocation operation kind input begin end = do
+      (index,_,out) <- args3 input
+      result <- register end 0
+      let record = (if kind == S.TaskAllocation then 0x40a0fc44 else 0x409c3904)+12*index
+          cursor = if kind == S.TaskAllocation then 0x4089ea98 else 0x4089ea90
+      effects invocation operation begin end
+        ([spanOf RecordObject record 12 ComparedInput,spanOf CursorObject cursor 4 ComparedInput]
+        ++ [spanOf OutputObject out 4 WriteOnly | result == 0])
+    taskObjects invocation observed operation = do
+      entry <- entryOf receipt invocation
+      descriptor <- register entry 0
+      ident <- atWord receipt entry descriptor
+      (selected,_) <- classEncoding receipt entry ident
+      let layout = kernelLayout selected; index = ident-1
+          threadObjects = [spanOf RecordObject (kernelCreation layout+40*index) 40 ComparedInput
+            ,spanOf NodeObject (kernelNodes layout+56*index) 56 ComparedInput
+            ,spanOf IdentifierObject (kernelIds layout+4*index) 4 ComparedInput]
+      spans <- case operation of
+        TaskAuxiliary -> pure [spanOf RecordObject (kernelAuxiliary layout+12*index) 12 ComparedInput
+          ,spanOf NodeObject (kernelAuxiliaryNodes layout+16*index) 16 ComparedInput]
+        TaskCreation -> pure threadObjects
+        TaskActivation -> pure threadObjects
+        _ -> Left EffectRejected
+      effects invocation operation (callEntry observed) (callExit observed) spans
+    creationObjects invocation observed creation = do
+      entry <- entryOf receipt invocation
+      ident <- register entry 0
+      (selected,_) <- classEncoding receipt entry ident
+      let layout = messageLayout selected; index = ident-1
+          (operation,record,node,recordBytes,nodeBytes) = case creation of
+            QueueCreation -> (QueueConstruction,messageCreation layout+16*index,messageNodes layout+32*index,16,32)
+            PoolCreation -> (PoolConstruction,messagePoolCreation layout+20*index,messagePoolNodes layout+20*index,20,20)
+      effects invocation operation (callEntry observed) (callExit observed)
+        [spanOf RecordObject record recordBytes ComparedInput,spanOf NodeObject node nodeBytes ComparedInput]
+    serviceObjects invocation observed operation creation = do
+      encoded <- register (callEntry observed) 0
+      ident <- required EffectRejected (S.taskId (encoded .&. 0xffff))
+      target <- register (callEntry observed) 3
+      selected <- one EffectRejected [root | (root,stores) <- [(PrimaryRoot,S.primaryStores model),(SecondaryRoot,S.secondaryStores model)]
+        ,any ((== K.WordValue target) . S.storeValue) stores]
+      let layout = kernelLayout selected
+      domain <- case encoded `shiftR` 16 of
+        0 -> atWord receipt (callEntry observed) (kernelDomainPointer layout)
+        1 -> pure (kernelDomains layout)
+        2 -> pure (kernelDomains layout+132)
+        _ -> Left EffectRejected
+      let (tableOffset,countOffset,stride,recordBytes) = case creation of
+            QueueCreation -> (0x5c,0x60,32,16)
+            PoolCreation -> (0x6c,0x70,20,20)
+      countWord <- atWord receipt (callEntry observed) (domain+countOffset)
+      let countSigned = fromIntegral countWord :: Int32
+      if countSigned < 0 || S.taskIndex ident+1 > fromIntegral countSigned then do
+        result <- status observed
+        require (result == negate 18) EffectRejected
+        pure []
+      else do
+        table <- atWord receipt (callEntry observed) (domain+tableOffset)
+        let node = table+stride*S.taskIndex ident
+        record <- atWord receipt (callEntry observed) (node+8)
+        effects invocation operation (callEntry observed) (callExit observed)
+          [spanOf RecordObject record recordBytes ComparedInput,spanOf NodeObject node stride ComparedInput]
+    payloadAt invocation operation probe message = do
+      size <- atWord receipt probe (message+4)
+      payload <- atWord receipt probe (message+8)
+      effects invocation operation probe probe [spanOf PayloadObject payload size ComparedInput]
+    copyEffects invocation observed = do
+      (destination,source,size) <- args3 (callEntry observed)
+      effects invocation CopyTransfer (callEntry observed) (callExit observed)
+        [spanOf SourceObject source size ComparedInput,spanOf DestinationObject destination size WriteOnly]
+    sendPacket invocation observed = do
+      result <- status observed
+      objects <- serviceObjects invocation observed PoolAcquisition PoolCreation
+      if result /= 0 then pure objects else do
+        out <- register (callEntry observed) 1
+        buffer <- atWord receipt (callExit observed) out
+        submitted <- sourceAt receipt invocation 0x7251b4
+        header <- effects invocation PacketCommit (callExit observed) submitted [spanOf HeaderObject (buffer+4) 8 WriteOnly]
+        let copies = [probe | probe <- invocationProbes receipt invocation,probeKind probe == SourceProbe,pc probe == 0x72517c]
+        payload <- case copies of
+          [] -> pure [EmptyPayloadEffect PacketCommit]
+          [copied] -> do
+            size <- register copied 2
+            effects invocation PacketCommit submitted submitted [spanOf PayloadObject (buffer+12) size ComparedInput]
+          _ -> Left EffectRejected
+        pure (objects ++ header ++ payload ++ [PreservedPacketPrefix (pointer invocation buffer) (S.ByteCount 4)])
+    receivedPacket invocation observed = do
+      result <- status observed
+      objects <- serviceObjects invocation observed QueueReception QueueCreation
+      if result /= 0 then pure objects else do
+        out <- register (callEntry observed) 1
+        buffer <- atWord receipt (callExit observed) out
+        size <- atWord receipt (callExit observed) (buffer+8)
+        admitted <- effects invocation QueueReception (callExit observed) (callExit observed)
+          [spanOf HeaderObject (buffer+4) 8 ComparedInput,spanOf PayloadObject (buffer+12) size ComparedInput]
+        entry <- entryOf receipt invocation
+        message <- register entry 1
+        release <- sourceAt receipt invocation 0x725414
+        header <- effects invocation ReceiveCommit (callExit observed) release [spanOf HeaderObject message 8 WriteOnly]
+        payload <- case [probe | probe <- invocationProbes receipt invocation,probeKind probe == SourceProbe,pc probe == 0x7253f8] of
+          [] -> pure [EmptyPayloadEffect ReceiveCommit]
+          [copied] -> do
+            destination <- register copied 0
+            lengthWord <- register copied 2
+            effects invocation ReceiveCommit release release [spanOf PayloadObject destination lengthWord ComparedInput]
+          _ -> Left EffectRejected
+        pure (objects ++ admitted ++ header ++ payload)
+    callEffects invocation observed = case pc (callEntry observed) of
+      0x725e74 -> reservation invocation NestedReservation S.TaskAllocation (callEntry observed) (callEntry observed) (callExit observed)
+      0x724d20 -> reservation invocation NestedReservation S.StorageAllocation (callEntry observed) (callEntry observed) (callExit observed)
+      0x724e34 -> reservation invocation NestedReservation S.StorageAllocation (callEntry observed) (callEntry observed) (callExit observed)
+      0x725f08 -> taskObjects invocation observed TaskAuxiliary
+      0x725fa8 -> taskObjects invocation observed TaskCreation
+      0x726024 -> taskObjects invocation observed TaskActivation
+      0x725f68 -> do
+        destination <- register (callEntry observed) 0
+        size <- register (callEntry observed) 2
+        effects invocation TaskFill (callEntry observed) (callExit observed) [spanOf FillObject destination size WriteOnly]
+      0x724d98 -> creationObjects invocation observed QueueCreation
+      0x724ea4 -> creationObjects invocation observed PoolCreation
+      0x724ee4 -> serviceObjects invocation observed QueueCleanup QueueCreation
+      0x7250cc -> do
+        message <- register (callEntry observed) 0
+        header <- effects invocation SendCallback (callEntry observed) (callExit observed) [spanOf HeaderObject message 8 ComparedInput]
+        before <- payloadAt invocation CallbackInput (callEntry observed) message
+        after <- payloadAt invocation CallbackOutput (callExit observed) message
+        pure (header ++ before ++ after)
+      0x725100 -> sendPacket invocation observed
+      0x7251b4 -> serviceObjects invocation observed QueueSubmission QueueCreation
+      0x725378 -> receivedPacket invocation observed
+      0x7251f0 -> serviceObjects invocation observed PoolRelease PoolCreation
+      0x725414 -> serviceObjects invocation observed PoolRelease PoolCreation
+      0x72517c -> copyEffects invocation observed
+      0x7253f8 -> copyEffects invocation observed
+      0x7233ac -> effects invocation ErrorCallback (callEntry observed) (callExit observed) [spanOf ErrorObject 0x40a0f82c 4 ComparedInput]
+      site | site `elem` [0x725c94,0x725ca4,0x725cc0,0x725dac,0x725dc4
+        ,0x723498,0x7234a8,0x7234c4,0x7235ac,0x7235c4,0x725f78,0x725fb4,0x726000
+        ,0x725064,0x725190,0x725344] -> pure []
+      _ -> Left EffectRejected
+    projectInvocation (CheckedInvocation invocation) = do
       entry <- entryOf receipt invocation
       returned <- returnOf receipt invocation
       input <- case invocationFamily invocation of
@@ -930,7 +1115,8 @@ consumerProjection receipt = do
           ConstructOutput result . map K.WordValue <$> mapM (atWord receipt returned . (descriptor+)) [0,4]
         _ -> pure (ScalarOutput result)
       calls <- mapM (projectCall invocation) [probe | probe <- invocationProbes receipt invocation,probeKind probe == SourceProbe,pc probe `elem` map (\(site,_,_) -> site) callSpecs]
-      pure (InvocationProjection (invocationFamily invocation) (invocationCore invocation) input output calls)
+      observed <- projectEffects invocation entry returned
+      pure (InvocationProjection (invocationFamily invocation) (invocationCore invocation) input output calls observed)
     reserveInput invocation entry = do
       (index,size,out) <- args3 entry
       pure (ReserveInput (K.WordValue index) (K.WordValue size) (pointer invocation out))
@@ -962,44 +1148,25 @@ consumerProjection receipt = do
       pure (CallProjection (K.Address (pc probe)) (K.Address (pc target))
         (zipWith (argument invocation pointerArgs) [0..] arguments)
         (zipWith (argument invocation pointerParams) [0..] parameters) result)
-    resourcePointer resource value = case resourceOwner resource of
-      Nothing -> pure (AbsoluteLocation (K.Address value))
-      Just owner -> do
-        invocation <- one ComparisonRejected [candidate | candidate <- receiptInvocations receipt,invocationId candidate == owner]
-        pure (pointer invocation value)
-    projectResource resource = do
-      final <- checkViews resource (resourceFinal resource)
-      bytes <- bytesAt ViewsRejected final (address (resourcePhysical resource)) (count (resourceSize resource))
-      initial <- checkViews resource (resourceInitial resource)
-      before <- bytesAt ViewsRejected initial (address (resourcePhysical resource)) (count (resourceSize resource))
-      events <- resourceEvents receipt resource
-      installed <- probeAt receipt InstallerEntry
-      installationReturn <- probeAt receipt InstallerReturn
-      writes <- mapM (projectWrite resource (probeClock installed) (probeClock installationReturn)) (filter isWrite events)
-      location <- resourcePointer resource (address (resourcePhysical resource))
-      pure (ResourceProjection (resourceKind resource) (resourceLifetime resource) location (Bytes before) (Bytes bytes) writes)
-    projectWrite resource installationBegin installationEnd event = do
-      at <- eventClock event
-      location <- resourcePointer resource (fromIntegral (eventAddress event))
-      value <- Bytes <$> eventBytes event
-      let installation = at > installationBegin && at <= installationEnd
-          phase = if installation then InstallationWrites else ConsumerWrites
-      pure (ComparableWrite phase (eventSource event) (eventCore event) (if installation then Nothing else eventPc event)
-        location (K.Count (eventSize event)) (eventBefore event) value)
 
 consumerProjectionValue :: ConsumerProjection -> J.Value
-consumerProjectionValue (ConsumerProjection invocations resources census) = J.object
-  ["invocations" J..= map invocationValue invocations
-  ,"census" J..= [J.object ["family" J..= show family,"core" J..= show owner,"entries" J..= count entries] | (family,owner,entries) <- census]
-  ,"resources" J..= [J.object ["kind" J..= show kind,"lifetime" J..= show lifetime,"location" J..= pointerValue location
-    ,"before_bytes" J..= B.length before,"after_bytes" J..= B.length after,"writes" J..= length writes]
-    | ResourceProjection kind lifetime location (Bytes before) (Bytes after) writes <- resources]]
+consumerProjectionValue (ConsumerProjection invocations) = J.object
+  ["invocations" J..= map invocationValue invocations]
   where
-    invocationValue (InvocationProjection family owner input output calls) = J.object
+    invocationValue (InvocationProjection family owner input output calls effects) = J.object
       ["family" J..= show family,"core" J..= show owner,"input" J..= inputValue input,"output" J..= outputValue output
       ,"calls" J..= [J.object ["site" J..= address site,"target" J..= address target
         ,"arguments" J..= map argumentValue arguments,"parameters" J..= map argumentValue parameters
-        ,"result" J..= fmap number result] | CallProjection site target arguments parameters result <- calls]]
+        ,"result" J..= fmap number result] | CallProjection site target arguments parameters result <- calls]
+      ,"effects" J..= map effectValue effects]
+    effectValue observed = case observed of
+      EmptyPayloadEffect operation -> J.object ["operation" J..= show operation,"empty_payload" J..= True]
+      PreservedPacketPrefix location (S.ByteCount bytes) -> J.object
+        ["preserved_packet_prefix" J..= pointerValue location,"bytes" J..= bytes]
+      ObjectEffect operation kind location (S.ByteCount bytes) initial (Bytes final) -> J.object
+        ["operation" J..= show operation,"object" J..= show kind,"location" J..= pointerValue location,"bytes" J..= bytes
+        ,"input_bytes" J..= case initial of NotConsumed -> Nothing; ObservedInput (Bytes before) -> Just (B.length before)
+        ,"committed_bytes" J..= B.length final]
     inputValue input = case input of
       TaskInput values -> J.object ["descriptor" J..= map number values]
       ReserveInput index size out -> J.object ["index" J..= number index,"size" J..= number size,"out" J..= pointerValue out]

@@ -1,22 +1,26 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.StartupConsumers.WitnessControls (checkRefusals) where
 
-import Control.Monad (forM, forM_)
+import Control.Monad (foldM, forM, forM_)
 import qualified Data.Aeson as J
-import Data.Bits (xor)
+import Data.Bits (shiftL, xor)
 import qualified Data.ByteString as B
 import Data.List (sort)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
-import Data.Word (Word32)
+import Data.Word (Word8, Word32)
 import Replacement.KernelInstall.Wire (Address (..), WordValue (..), Count (..), Digest (..))
 import qualified Replacement.KernelInstall.Wire as K
-import Replacement.StartupConsumers.Evidence (address, count, number, wordBytes)
+import Replacement.StartupConsumers.Evidence (address, bytesWord, clock, count, number, physical, probeClock, wordBytes)
 import Replacement.StartupConsumers.Wire
 import Replacement.StartupConsumers.Witness
+import qualified Replacement.StartupConsumers.Source as S
 
 newtype ControlName = ControlName String
 data Control = Control ControlName WitnessError (Receipt -> Receipt)
+data CoherentCase = DescriptorTailCase | PayloadByteCase | CallerByteCase deriving (Eq, Show)
+data PayloadScope = SelectedPayloadEmpty | SelectedCopyAbsent deriving (Eq, Show)
+data CoherentChange = ChangedReceipt Receipt | UnobservedPayload PayloadScope
 
 checkRefusals :: Inputs -> ObservedFiles -> ObservedFiles -> ObservedFiles -> Either String J.Value
 checkRefusals inputs retained installer joined = do
@@ -29,13 +33,23 @@ checkRefusals inputs retained installer joined = do
     ,expectComparison (ControlName "swapped installer and joined roles") (compareReceipts qualifiedRetained qualifiedJoined qualifiedInstaller)
     ,expectComparison (ControlName "missing joined role") (compareReceipts qualifiedRetained qualifiedInstaller qualifiedInstaller)]
   receipts <- mapM (either (const (Left "control receipt decode failed")) Right . J.eitherDecodeStrict' . observedReceipt) [retained,installer,joined]
-  rows <- forM receipts $ \receipt -> do
+  rows <- forM (zip receipts [qualifiedRetained,qualifiedInstaller,qualifiedJoined]) $ \(receipt,qualified) -> do
     controls <- forM mutations $ \(Control (ControlName name) expected mutate) ->
       case validateReceipt inputs (mutate receipt) of
         Left actual | actual == expected -> Right (J.object ["control" J..= name,"rejection" J..= show expected])
         Left actual -> Left (name ++ ": expected " ++ show expected ++ ", got " ++ show actual)
         Right _ -> Left (name ++ ": mutation was accepted")
-    pure (J.object ["role" J..= show (receiptRole receipt),"controls" J..= controls])
+    coherent <- forM [DescriptorTailCase,PayloadByteCase,CallerByteCase] $ \which -> do
+      changed <- prepareCoherent which receipt
+      case changed of
+        UnobservedPayload reason -> pure (J.object ["control" J..= show which,"observation" J..= ("not-observed" :: String),"reason" J..= show reason])
+        ChangedReceipt altered -> do
+          projected <- either (\failure -> Left (show which ++ ": individual admission rejected with " ++ show failure)) Right (validateReceipt inputs altered)
+          case compareSemanticProjections (qualifiedProjection qualified) projected of
+            Left ComparisonRejected -> pure (J.object ["control" J..= show which,"typed_receipt_admitted" J..= True,"rejection" J..= show ComparisonRejected])
+            Left failure -> Left (show which ++ ": expected ComparisonRejected, got " ++ show failure)
+            Right () -> Left (show which ++ ": semantic difference was accepted")
+    pure (J.object ["role" J..= show (receiptRole receipt),"controls" J..= controls,"coherent_comparison_controls" J..= coherent])
   forM_ [retained,installer,joined] $ \files ->
     case admitReceipt inputs (files {observedCheckpoint = observedCheckpoint files <> B.singleton 0}) of
       Left CheckpointRejected -> Right ()
@@ -89,6 +103,8 @@ mutations =
     {receiptResources = [if resourceKind resource == Record && resourcePhysical resource == Address 0x5988c
       then resource {resourceKind = Auxiliary} else resource | resource <- receiptResources receipt]}
   ,Control (ControlName "executed entry omitted from producer census") CensusRejected omitCensusEntry
+  ,Control (ControlName "later census count fabricated") CensusRejected $ \receipt -> receipt
+    {receiptCensus = [item {censusEntries = Count (count (censusEntries item)+1)} | item <- receiptCensus receipt]}
   ,Control (ControlName "root publications truncated to 1418 words") InitializerRejected truncatePublications
   ,Control (ControlName "required initializer extension store omitted") InitializerRejected $
     omitCpuAccesses (\event -> K.eventSource event == K.CpuWrite && K.eventCore event == Just K.Secondary && K.eventPc event == Just (Address 0xd08f4))
@@ -266,3 +282,229 @@ alterStartupMode :: K.MemoryEvent -> K.MemoryEvent
 alterStartupMode event = if K.eventSource event == K.CpuRead && K.eventPc event == Just (Address 0x657194) then
   event {K.eventValue = Just 1,K.eventBefore = Just (K.Bytes (wordBytes 1))}
   else event
+
+data EventPosition = EventPosition SegmentId Count deriving (Eq, Ord)
+data LocatedEvent = LocatedEvent {locatedPosition :: EventPosition,locatedOwn :: Count,locatedEvent :: K.MemoryEvent}
+data MutationStart = InitialCell Address | WrittenCell EventPosition Address
+data CopyDependency = CopyDependency EventPosition Address
+data PendingCopy = PendingCopy Address Count B.ByteString
+data PatchState = PatchState
+  {patchActive :: M.Map Address Word8,patchHistory :: M.Map Address [(Count,Word8)]
+  ,patchPending :: M.Map K.Core PendingCopy,patchRows :: M.Map EventPosition K.MemoryEvent}
+
+selectOne :: String -> [value] -> Either String value
+selectOne _ [value] = Right value
+selectOne label _ = Left ("coherent control cannot identify " ++ label)
+
+controlEntry :: Receipt -> Family -> Either String (Invocation,Probe)
+controlEntry receipt family = do
+  invocation <- selectOne "selected family" [item | item <- receiptInvocations receipt,invocationFamily item == family,invocationStatus item == Returned]
+  probe <- selectOne "selected entry" [item | item <- receiptProbes receipt,Just (probeId item) == invocationEntry invocation]
+  pure (invocation,probe)
+
+controlRegister :: Probe -> Int -> Either String Word32
+controlRegister probe index = case drop index (K.contextRegisters (contextMachine (probeContext probe))) of
+  value:_ -> Right (number value)
+  [] -> Left "coherent control register is missing"
+
+prepareCoherent :: CoherentCase -> Receipt -> Either String CoherentChange
+prepareCoherent which receipt = case which of
+  CallerByteCase -> do
+    outer <- selectOne "outer entry" [probe | probe <- receiptProbes receipt,probeKind probe == OuterEntry]
+    let caller = K.contextSp (contextMachine (probeContext outer))
+    ChangedReceipt <$> coherentPatch (InitialCell (Address (physical (address caller)+8))) receipt
+  DescriptorTailCase -> do
+    (invocation,entry) <- controlEntry receipt TaskWrapper
+    descriptor <- controlRegister entry 0
+    resource <- selectOne "task descriptor" [item | item <- receiptResources receipt,resourceKind item == Descriptor
+      ,resourceOwner item == Just (invocationId invocation),resourcePhysical item == Address (physical descriptor),resourceSize item == Count 28]
+    view <- selectOne "descriptor low view" [item | item <- resourceInitial resource,viewCore item == K.Primary,viewGuest item == viewPhysical item]
+    let K.Bytes bytes = viewBytes view
+        tailWord = bytesWord (B.take 4 (B.drop 24 bytes))
+    if tailWord == 0xa5f0a5f0 || tailWord `xor` 1 == 0xa5f0a5f0 then
+      Left "descriptor-tail control requires a non-sentinel mutation"
+    else do
+      events <- locatedCpuEvents receipt
+      let cell = Address (physical descriptor+24)
+          prior = [item | item <- events,K.eventSource (locatedEvent item) == K.CpuWrite,eventTouches cell (locatedEvent item)
+            ,Just at <- [K.eventInstructions (locatedEvent item)],count at <= probeClock entry]
+          start = case reverse prior of item:_ -> WrittenCell (locatedPosition item) cell; [] -> InitialCell cell
+      ChangedReceipt <$> coherentPatchWithEvents start receipt events
+  PayloadByteCase -> do
+    (invocation,_) <- controlEntry receipt MessageSend
+    let copies = [probe | probe <- receiptProbes receipt,probeInvocation probe == Just (invocationId invocation)
+          ,probeKind probe == SourceProbe,K.contextPc (contextMachine (probeContext probe)) == Address 0x72517c]
+    case copies of
+      [] -> pure (UnobservedPayload (if any (\admission -> payloadOwner admission == invocationId invocation
+        && payloadState admission == EmptyPayload) (receiptPayloads receipt) then SelectedPayloadEmpty else SelectedCopyAbsent))
+      [copied] -> do
+        size <- controlRegister copied 2
+        if size == 0 then pure (UnobservedPayload SelectedPayloadEmpty) else do
+          source <- controlRegister copied 1
+          ended <- selectOne "selected copy return" [probe | probe <- receiptProbes receipt
+            ,probeInvocation probe == Just (invocationId invocation),probeKind probe == SourceProbe
+            ,K.contextPc (contextMachine (probeContext probe)) == Address 0x725180]
+          events <- locatedCpuEvents receipt
+          let sourceCell = Address (physical source)
+          readEvent <- selectOne "selected payload read" [item | item <- events
+            ,let event = locatedEvent item,K.eventSource event == K.CpuRead,eventTouches sourceCell event
+            ,K.eventCore event == Just (invocationCore invocation),Just at <- [K.eventInstructions event]
+            ,count at > probeClock copied,count at <= probeClock ended,copyLoadFor event /= Nothing]
+          links <- copyDependencies events
+          start <- payloadOrigin receipt events links sourceCell (locatedPosition readEvent)
+          ChangedReceipt <$> coherentPatchWithEvents start receipt events
+      _ -> Left "coherent control has multiple selected copies"
+
+locatedCpuEvents :: Receipt -> Either String [LocatedEvent]
+locatedCpuEvents receipt = concat <$> mapM collect (receiptSegments receipt)
+  where
+    collect segment = do
+      let metadata = M.fromList [(evidenceRow item,evidenceCoreInstructions item) | item <- segmentCpuEvidence segment]
+      forM [(Count index,event) | (index,event) <- zip [0..] (K.watchRecords (segmentWatch segment))
+        ,K.eventSource event `elem` [K.CpuRead,K.CpuWrite]] $ \(index,event) -> do
+          own <- maybe (Left "coherent control CPU ordinal is missing") Right (M.lookup index metadata)
+          pure (LocatedEvent (EventPosition (segmentId segment) index) own event)
+
+eventTouches :: Address -> K.MemoryEvent -> Bool
+eventTouches cell event = case K.eventPhysical event of
+  Just low -> low <= fromIntegral (address cell) && fromIntegral (address cell) < low+K.eventSize event
+  Nothing -> False
+
+copyAccesses :: [S.CopyAccess]
+copyAccesses = map S.copyAccess [minBound..maxBound]
+
+copyLoadFor :: K.MemoryEvent -> Maybe Address
+copyLoadFor event = case [S.copyStore access | access <- copyAccesses,K.eventPc event == Just (S.copyLoad access)
+  ,let S.ByteCount width = S.copyWidth access,K.eventSize event == fromIntegral width] of
+  [destination] -> Just destination
+  _ -> Nothing
+
+isCopyStore :: K.MemoryEvent -> Bool
+isCopyStore event = any (\access -> K.eventPc event == Just (S.copyStore access)
+  && case S.copyWidth access of S.ByteCount width -> K.eventSize event == fromIntegral width) copyAccesses
+
+copyDependencies :: [LocatedEvent] -> Either String (M.Map EventPosition CopyDependency)
+copyDependencies events = snd <$> foldM step (M.empty,M.empty) events
+  where
+    step (pending,links) item = do
+      let event = locatedEvent item
+      owner <- maybe (Left "coherent copy core is missing") Right (K.eventCore event)
+      case (K.eventSource event,copyLoadFor event) of
+        (K.CpuRead,Just destination) -> pure (M.insert owner (destination,item) pending,links)
+        (K.CpuWrite,_) | isCopyStore event -> case M.lookup owner pending of
+          Just (destination,readItem)
+            | K.eventPc event == Just destination && count (locatedOwn item) == count (locatedOwn readItem)+1
+            && K.eventSize event == K.eventSize (locatedEvent readItem)
+            && K.eventValue event == K.eventValue (locatedEvent readItem) -> do
+                source <- maybe (Left "coherent copy source is missing") (Right . Address . fromIntegral) (K.eventPhysical (locatedEvent readItem))
+                pure (M.delete owner pending,M.insert (locatedPosition item) (CopyDependency (locatedPosition readItem) source) links)
+          _ -> pure (M.delete owner pending,links)
+        _ -> pure (pending,links)
+
+payloadOrigin :: Receipt -> [LocatedEvent] -> M.Map EventPosition CopyDependency -> Address -> EventPosition -> Either String MutationStart
+payloadOrigin receipt events links cell before = do
+  written <- case reverse [item | item <- takeWhile ((/=before) . locatedPosition) events,K.eventSource (locatedEvent item) == K.CpuWrite,eventTouches cell (locatedEvent item)] of
+    item:_ -> Right item
+    [] -> Left "selected payload has no observed writable origin"
+  let event = locatedEvent written
+  if isCopyStore event then do
+    CopyDependency readPosition source <- maybe (Left "payload origin has no observed copy dependence") Right (M.lookup (locatedPosition written) links)
+    low <- maybe (Left "payload copy destination is missing") Right (K.eventPhysical event)
+    payloadOrigin receipt events links (Address (address source+address cell-fromIntegral low)) readPosition
+  else do
+    outer <- selectOne "outer return" [probe | probe <- receiptProbes receipt,probeKind probe == OuterReturn]
+    at <- maybe (Left "payload origin clock is missing") Right (K.eventInstructions event)
+    if count at <= probeClock outer then Left "payload origin precedes the finite outer boundary"
+      else pure (WrittenCell (locatedPosition written) cell)
+
+coherentPatch :: MutationStart -> Receipt -> Either String Receipt
+coherentPatch start receipt = locatedCpuEvents receipt >>= coherentPatchWithEvents start receipt
+
+coherentPatchWithEvents :: MutationStart -> Receipt -> [LocatedEvent] -> Either String Receipt
+coherentPatchWithEvents start receipt events = do
+  let initial = case start of
+        InitialCell cell -> PatchState (M.singleton cell 1) (M.singleton cell [(Count 0,1)]) M.empty M.empty
+        WrittenCell _ _ -> PatchState M.empty M.empty M.empty M.empty
+  finished <- foldM (patchEvent start) initial events
+  if not (M.null (patchPending finished)) then Left "coherent payload copy has no observed store" else do
+    resources <- mapM (patchResource (patchHistory finished)) (receiptResources receipt)
+    pure receipt
+      {receiptResources = resources
+      ,receiptSegments = [segment {segmentWatch = (segmentWatch segment) {K.watchRecords =
+          [M.findWithDefault event (EventPosition (segmentId segment) (Count index)) (patchRows finished)
+          | (index,event) <- zip [0..] (K.watchRecords (segmentWatch segment))]}} | segment <- receiptSegments receipt]
+      ,receiptProbes = [probe {probeSnapshots = [snapshot {snapshotViews = map (patchView (patchHistory finished) (Count (probeClock probe))) (snapshotViews snapshot)}
+        | snapshot <- probeSnapshots probe]} | probe <- receiptProbes receipt]}
+
+patchEvent :: MutationStart -> PatchState -> LocatedEvent -> Either String PatchState
+patchEvent start state item = do
+  let event = locatedEvent item
+  low <- maybe (Left "coherent event physical address is missing") Right (K.eventPhysical event)
+  owner <- maybe (Left "coherent event core is missing") Right (K.eventCore event)
+  at <- maybe (Left "coherent event clock is missing") Right (K.eventInstructions event)
+  let seeded = case start of WrittenCell position _ -> position == locatedPosition item; InitialCell _ -> False
+      touched = case M.lookupGE (Address (fromIntegral low)) (patchActive state) of
+        Just (cell,_) -> fromIntegral (address cell) < low+K.eventSize event
+        Nothing -> False
+  if not seeded && not touched && not (M.member owner (patchPending state)) then pure state else do
+    let cells = [Address (fromIntegral (low+offset)) | offset <- [0..K.eventSize event-1]]
+        oldMasks = B.pack [M.findWithDefault 0 cell (patchActive state) | cell <- cells]
+        patchValue masks value = foldl' (\word (index,mask) -> word `xor` (fromIntegral mask `shiftL` (8*index))) value (zip [0..] (B.unpack masks))
+        valueWith masks = if B.any (/=0) masks then fmap (patchValue masks) (K.eventValue event) else K.eventValue event
+        changedBefore = if B.any (/=0) oldMasks then event
+          {K.eventBefore = fmap (\(K.Bytes bytes) -> K.Bytes (B.pack (B.zipWith xor bytes oldMasks))) (K.eventBefore event)}
+          else event
+        remember current changed = if changed == event then current else current {patchRows = M.insert (locatedPosition item) changed (patchRows current)}
+    case K.eventSource event of
+      K.CpuRead -> do
+        pending <- case copyLoadFor event of
+          Nothing -> pure (patchPending state)
+          Just destination
+            | M.member owner (patchPending state) -> Left "coherent copy dependence is interrupted"
+            | B.any (/=0) oldMasks -> pure (M.insert owner (PendingCopy destination (locatedOwn item) oldMasks) (patchPending state))
+            | otherwise -> pure (patchPending state)
+        pure (remember (state {patchPending = pending}) (changedBefore {K.eventValue = valueWith oldMasks}))
+      K.CpuWrite -> do
+        let zeroMasks = B.replicate (fromIntegral (K.eventSize event)) 0
+        (pending,masks) <- case start of
+          WrittenCell position cell | position == locatedPosition item ->
+            pure (patchPending state,B.pack [if here == cell then 1 else 0 | here <- cells])
+          _ | isCopyStore event -> case M.lookup owner (patchPending state) of
+            Just (PendingCopy destination ordinal copied)
+              | K.eventPc event == Just destination && count (locatedOwn item) == count ordinal+1
+              && B.length copied == fromIntegral (K.eventSize event) -> pure (M.delete owner (patchPending state),copied)
+            Just _ -> Left "coherent copy store does not follow its actual load"
+            Nothing -> pure (patchPending state,zeroMasks)
+          _ -> pure (patchPending state,zeroMasks)
+        let changed = changedBefore {K.eventValue = valueWith masks}
+            updated = foldl' (recordMask at) (state {patchPending = pending}) (zip cells (B.unpack masks))
+        pure (remember updated changed)
+      _ -> Left "coherent patch received a non-CPU-data event"
+
+recordMask :: Count -> PatchState -> (Address,Word8) -> PatchState
+recordMask at state (cell,mask)
+  | M.findWithDefault 0 cell (patchActive state) == mask = state
+  | otherwise = state
+      {patchActive = if mask == 0 then M.delete cell (patchActive state) else M.insert cell mask (patchActive state)
+      ,patchHistory = M.insertWith (++) cell [(at,mask)] (patchHistory state)}
+
+patchResource :: M.Map Address [(Count,Word8)] -> Resource -> Either String Resource
+patchResource history resource = do
+  end <- maybe (Left "coherent resource lifetime is unclosed") Right (resourceClosed resource)
+  pure resource {resourceInitial = map (patchView history (Count (clock (resourceAdmitted resource)))) (resourceInitial resource)
+    ,resourceFinal = map (patchView history (Count (clock end))) (resourceFinal resource)}
+
+patchView :: M.Map Address [(Count,Word8)] -> Count -> View -> View
+patchView history at view = view {viewBytes = K.Bytes (applyChanges bytes edits)}
+  where
+    K.Bytes bytes = viewBytes view
+    low = address (viewPhysical view)
+    edits = [(fromIntegral (address cell-low),mask) | (cell,changes) <- M.toAscList history
+      ,address cell >= low,toInteger (address cell) < toInteger low+toInteger (B.length bytes)
+      ,(_,mask):_ <- [dropWhile ((>at) . fst) changes],mask /= 0]
+    applyChanges original [] = original
+    applyChanges original changes = B.concat (walk 0 changes)
+      where
+        walk offset [] = [B.drop offset original]
+        walk offset ((index,mask):rest) = B.take (index-offset) (B.drop offset original)
+          : B.singleton (B.index original index `xor` mask) : walk (index+1) rest

@@ -2,6 +2,7 @@
 module Replacement.StartupConsumers.Witness
   ( NativeFiles (..), ProducerFiles (..), ObservedFiles (..), Inputs, Projection, QualifiedReceipt
   , WitnessError (..), admitInputs, admitReceipt, validateReceipt, compareReceipts, qualificationValue
+  , qualifiedProjection, compareSemanticProjections
   ) where
 
 import Control.Monad (forM, forM_, foldM)
@@ -22,7 +23,7 @@ import qualified Replacement.KernelInstall.Admission as IA
 import qualified Replacement.StartupComposition.Artifact as C
 import qualified Replacement.StartupDispatch.Artifact as D
 import Replacement.StartupConsumers.Evidence
-import Replacement.StartupConsumers.Effects (ConsumerProjection, checkConsumers, consumerProjection, consumerProjectionValue)
+import Replacement.StartupConsumers.Effects (ConsumerProjection, checkConsumers, consumerProjectionValue)
 import qualified Replacement.StartupConsumers.Source as S
 import Replacement.StartupConsumers.Wire
 
@@ -36,8 +37,12 @@ data Inputs = Inputs
   ,inputInstallerImage :: B.ByteString, inputJoinedImage :: B.ByteString, inputJoinedProof :: C.JoinedProof
   ,inputInstallerProof :: IA.InstallationProof}
 data CallerState = CallerState Address [WordValue] WordValue K.Bytes deriving (Eq)
-data Projection = Projection CallerState CallerState ConsumerProjection deriving (Eq)
-data QualifiedReceipt = QualifiedReceipt Role Identity Digest Digest Projection
+data BoundaryMemory = BoundaryMemory ResourceKind Address Count K.Bytes K.Bytes deriving (Eq)
+data OuterProjection = OuterProjection CallerState CallerState K.Bytes [BoundaryMemory] deriving (Eq)
+data Projection = Projection OuterProjection ConsumerProjection deriving (Eq)
+data CoverageState = SelectedInvocationReturned | CensusEntryOnly | NoEntryObserved deriving (Show)
+data ObservationCoverage = ObservationCoverage Census CoverageState
+data QualifiedReceipt = QualifiedReceipt Role Identity Digest Digest [ObservationCoverage] Projection
 
 hash :: B.ByteString -> Digest
 hash = Digest . SHA.sha256Hex . SHA.sha256
@@ -81,7 +86,13 @@ admitReceipt inputs files = do
   require (hash (observedCheckpoint files) == receiptCheckpoint receipt && not (B.null (observedCheckpoint files))
     && not (receiptCheckpointReused receipt)) CheckpointRejected
   projection <- validateReceipt inputs receipt
-  pure (QualifiedReceipt (receiptRole receipt) (receiptIdentity receipt) (hash (observedReceipt files)) (receiptCheckpoint receipt) projection)
+  let coverage = [ObservationCoverage item (state item) | item <- receiptCensus receipt]
+      state item
+        | any (\invocation -> invocationFamily invocation == censusFamily item && invocationCore invocation == censusCore item
+            && invocationStatus invocation == Returned) (receiptInvocations receipt) = SelectedInvocationReturned
+        | censusEntries item == Count 0 = NoEntryObserved
+        | otherwise = CensusEntryOnly
+  pure (QualifiedReceipt (receiptRole receipt) (receiptIdentity receipt) (hash (observedReceipt files)) (receiptCheckpoint receipt) coverage projection)
 
 validateReceipt :: Inputs -> Receipt -> Either WitnessError Projection
 validateReceipt inputs receipt = do
@@ -95,13 +106,12 @@ validateReceipt inputs receipt = do
   checkSegments receipt
   checkSourcePublications inputs receipt
   checkResources receipt
-  (entry,returned) <- checkOuter inputs receipt
+  outer <- checkOuter inputs receipt
   checkInstallation inputs receipt
   checkCompletion inputs receipt
   checkFetchPolicies receipt
-  checkConsumers (inputSource inputs) receipt
-  consumers <- consumerProjection receipt
-  pure (Projection entry returned consumers)
+  consumers <- checkConsumers (inputSource inputs) receipt
+  pure (Projection outer consumers)
 
 checkIdentity :: Inputs -> Receipt -> Either WitnessError ()
 checkIdentity inputs receipt = do
@@ -227,7 +237,7 @@ checkFetchedCode inputs receipt = do
       Just site -> fromIntegral site >= fromIntegral backing+eventSize event
       Nothing -> True) WriterRejected
 
-checkOuter :: Inputs -> Receipt -> Either WitnessError (CallerState,CallerState)
+checkOuter :: Inputs -> Receipt -> Either WitnessError OuterProjection
 checkOuter inputs receipt = do
   entry <- probeAt receipt OuterEntry
   returned <- probeAt receipt OuterReturn
@@ -277,7 +287,12 @@ checkOuter inputs receipt = do
   require (outerResult == 0) FrameRejected
   let caller probe frame = CallerState (K.contextSp (machine probe)) (take 8 (drop 4 (K.contextRegisters (machine probe))))
         (WordValue (number (K.contextCpsr (machine probe)) .&. 0x0fffffff)) (K.Bytes frame)
-  pure (caller entry callerBefore,caller returned callerAfter)
+  boundary <- forM [resource | resource <- receiptResources receipt,resourceOwner resource == Nothing
+    ,clock (resourceAdmitted resource) == probeClock entry,resourceKind resource `notElem` [Stack,Code,Carrier]] $ \resource -> do
+      initial <- bytesAt EffectRejected before (address (resourcePhysical resource)) (count (resourceSize resource))
+      committed <- bytesAt EffectRejected after (address (resourcePhysical resource)) (count (resourceSize resource))
+      pure (BoundaryMemory (resourceKind resource) (resourcePhysical resource) (resourceSize resource) (K.Bytes initial) (K.Bytes committed))
+  pure (OuterProjection (caller entry callerBefore) (caller returned callerAfter) (K.Bytes savedFrame) boundary)
 
 installationStores :: [S.Store]
 installationStores = map (\(whereAt,value) -> S.Store (Address whereAt) (WordValue value))
@@ -568,18 +583,35 @@ checkFirstConsumer model receipt initialized = do
       && fromIntegral backing+eventSize event > fromIntegral start) protected)) WriterRejected
 
 compareReceipts :: QualifiedReceipt -> QualifiedReceipt -> QualifiedReceipt -> Either WitnessError ()
-compareReceipts (QualifiedReceipt retained retainedIdentity _ _ r) (QualifiedReceipt installer installerIdentity _ _ i) (QualifiedReceipt joined joinedIdentity _ _ j) = do
+compareReceipts (QualifiedReceipt retained retainedIdentity _ _ _ r) (QualifiedReceipt installer installerIdentity _ _ _ i) (QualifiedReceipt joined joinedIdentity _ _ _ j) = do
   let cohort identity = identity {identityUpdate = identityUpdate retainedIdentity,identityComponents = sortOn componentKind (identityComponents identity)}
   require ([retained,installer,joined] == [Retained,Installer,Joined]
-    && cohort retainedIdentity == cohort installerIdentity && cohort retainedIdentity == cohort joinedIdentity
-    && r == i && i == j) ComparisonRejected
+    && cohort retainedIdentity == cohort installerIdentity && cohort retainedIdentity == cohort joinedIdentity) ComparisonRejected
+  compareSemanticProjections r i
+  compareSemanticProjections i j
+
+qualifiedProjection :: QualifiedReceipt -> Projection
+qualifiedProjection (QualifiedReceipt _ _ _ _ _ projection) = projection
+
+compareSemanticProjections :: Projection -> Projection -> Either WitnessError ()
+compareSemanticProjections before after = require (before == after) ComparisonRejected
 
 qualificationValue :: QualifiedReceipt -> J.Value
-qualificationValue (QualifiedReceipt role identity (Digest digest) (Digest checkpoint) (Projection entry returned consumers)) = J.object
+qualificationValue (QualifiedReceipt role identity (Digest digest) (Digest checkpoint) coverage
+  (Projection (OuterProjection entry returned (K.Bytes savedFrame) boundary) consumers)) = J.object
   ["schema" J..= (1 :: Int),"qualification" J..= ("source-admitted-startup-consumers" :: String)
   ,"role" J..= show role,"receipt_sha256" J..= digest,"checkpoint_sha256" J..= checkpoint
   ,"observer_sha256" J..= digestText (identityObserver identity)
   ,"outer_entry" J..= callerValue entry,"outer_return" J..= callerValue returned
+  ,"outer_saved_frame" J..= B.unpack savedFrame
+  ,"outer_memory" J..= [J.object ["kind" J..= show kind,"physical" J..= address location,"bytes" J..= count size
+      ,"before_bytes" J..= B.length before,"committed_bytes" J..= B.length after]
+      | BoundaryMemory kind location size (K.Bytes before) (K.Bytes after) <- boundary]
+  ,"coverage" J..= [J.object ["family" J..= show (censusFamily item),"core" J..= show (censusCore item)
+      ,"entries" J..= count (censusEntries item),"first_probe" J..= fmap (\(ProbeId ident) -> ident) (censusFirst item)
+      ,"observation" J..= show state] | ObservationCoverage item state <- coverage]
+  ,"comparison_scope" J..= ("outer-return-and-selected-operation-boundaries" :: String)
+  ,"post_return_scheduler_equality" J..= False
   ,"consumers" J..= consumerProjectionValue consumers]
   where
     digestText (Digest value) = value
