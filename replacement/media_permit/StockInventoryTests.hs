@@ -129,3 +129,19 @@ main = do
   check "the production comparison accepts the independently specified code extent" (compareExtent 8 == Right ())
   check "the production comparison rejects a shortened declaration" (refused (compareExtent 4))
   check "the production comparison rejects a declaration that includes the literal" (refused (compareExtent 12))
+  structural <- either fail pure (inspectFunction (GuestAddress 0x1000) (bytes [0xe3a0e000,0xe12fff1e])
+    (FunctionWindow (GuestAddress 0x1000) (GuestAddress 0x1008)) [])
+  check "structural inventory retains an extent without admitting an overwritten return"
+    (inspectedDeclaration structural == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 8)
+      && inspectedCodeWords structural == [GuestAddress 0x1000, GuestAddress 0x1004]
+      && null (inspectedLiteralWords structural)
+      && refused (inspectedReturn structural))
+  withLiteral <- either fail pure (inspectFunction (GuestAddress 0x1000) (bytes [0xe59f0000,0xe12fff1e,0x12345678])
+    (FunctionWindow (GuestAddress 0x1000) (GuestAddress 0x100c)) [])
+  check "structural inventory separates a referenced literal from executable words"
+    (inspectedCodeWords withLiteral == [GuestAddress 0x1000, GuestAddress 0x1004]
+      && inspectedLiteralWords withLiteral == [GuestAddress 0x1008]
+      && inspectedReturn withLiteral == Right [])
+  check "structural inventory also refuses unclassified trailing storage"
+    (refused (inspectFunction (GuestAddress 0x1000) (bytes [0xe12fff1e,0x12345678])
+      (FunctionWindow (GuestAddress 0x1000) (GuestAddress 0x1008)) []))
