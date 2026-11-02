@@ -1096,6 +1096,8 @@ The scoped route validates `modal-scope.json` against the actual relinked `kerne
 
 Scoped trajectories that configure another protected-memory observer, forbidden-execution observer or refusal control are rejected instead of replacing or dropping those guards. The ordinary 223-publication routes retain their existing guard behavior. The scoped result is `unqualified-scoped-diagnostic`; `e2e-modal-observation.json` and its result reference record interval boundaries, `physical_fetch_coverage:false`, `task_identity_verified:false` and `whole_installed_lifetime_coverage:false`. Neither installation nor a bounded observation establishes admission, table immutability, task migration detection or global modal ownership.
 
+The SDK's writer-state query requires an armed memory watch. Fixed watches admit write-only, fetch-only or combined nonempty access classes; a watch with neither class refuses.
+
 After independent review and execution authorization, the first scoped FILMSIM command is:
 
 ```sh
@@ -1108,6 +1110,35 @@ XM1_EMULATOR_SLOTS=1 devenv shell -- bazel run --jobs=2 //emulation:xm1-viewer -
 ```
 
 The full-route invocation above requests rollback after the observed keys. `--segments` retains its existing semantics: a selected pre-unload-only plan does not itself request rollback, and the receipt records `rollback_requested`.
+
+The matched packaged trajectory is `emulation/modal75-packaged-route-trajectories.json`. It retains the qualified two-MENU package prefix, opens FILM SIMULATION with four DOWN inputs and OK, exits with BACK, repeats entry/exit and hands back to the live view. After rollback the qualified two-MENU service prefix precedes shooting-menu and film-list navigation through the restored stock dispatcher. Ten captures accompany16 physical keys. Resident-bank and450-byte live-setting snapshots must remain unchanged; these are snapshot comparisons, not whole-interval no-write claims.
+
+Use the same trajectory, prefix firmware and SDK for the default223 stock-dispatcher control and selected modal224 candidate. The control retains the already-owned bank actions and omits only the modal package selection. The candidate requires positive owned and fallback handoffs, balanced completed entries/returns and a captured controller75 domain. An empty monitor observation cannot satisfy that route check.
+
+```sh
+XM1_EMULATOR_SLOTS=1 devenv shell -- bazel-bin/emulation/xm1-viewer \
+  --ram-push-e2e --cardless --fujimod --unreviewed-relink \
+  --firmware private-data/analysis/x-m1-1.50/update/prefix/FWUP0002-prefix.DAT \
+  --installed-nand private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand \
+  --trajectories emulation/modal75-packaged-route-trajectories.json \
+  --output private-data/scratch/modal128/packaged224-stock-runtime \
+  --receipt-output private-data/scratch/modal128/packaged224-stock
+XM1_EMULATOR_SLOTS=1 devenv shell -- bazel-bin/emulation/xm1-viewer \
+  --ram-push-e2e --cardless --fujimod --unreviewed-relink --ram-push-modal-scoped \
+  --firmware private-data/analysis/x-m1-1.50/update/prefix/FWUP0002-prefix.DAT \
+  --installed-nand private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand \
+  --trajectories emulation/modal75-packaged-route-trajectories.json \
+  --output private-data/scratch/modal128/packaged224-owned-runtime \
+  --receipt-output private-data/scratch/modal128/packaged224-owned
+bazel-bin/emulation/render-compare \
+  private-data/scratch/modal128/packaged224-stock/e2e-result.json \
+  private-data/scratch/modal128/packaged224-owned/e2e-result.json \
+  private-data/scratch/modal128/packaged224-render-comparison.json
+```
+
+`//emulation:render-compare` strictly pairs capture labels and checks each PNG, source-plane and metadata binding. It compares PNG and source-plane bytes, complete native frame and scanout state, ordered source spans and pixel metadata without exclusions. It retains both instruction clocks and their difference rather than requiring identical clocks. A mismatch writes the comparison receipt and exits nonzero; an existing output is never replaced. The ordinary `e2e-observation-compare` does not replace this rendering check.
+
+Receipt phase timings may be fractional. Scanout clocks and extents retain integer-only decoding.
 
 Public protocol and writer-audit behavior tests are registered as `//emulation:modal-observation-tests`. After independent review, the host-only checks are `devenv shell -- bazel test --jobs=2 //emulation:modal-observation-tests //emulation:ui-trajectory-tests` and `devenv shell -- bazel build --jobs=2 //emulation:xm1-viewer`. No run evidence is implied by these source changes.
 

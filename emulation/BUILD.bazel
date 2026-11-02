@@ -988,6 +988,57 @@ haskell_test(
     ],
 )
 
+haskell_library(
+    name = "render-comparison-lib",
+    srcs = ["Emulation/RenderComparison.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:json",
+        "//host:text",
+        "//host:unix",
+        "//host:vector",
+    ],
+)
+
+haskell_binary(
+    name = "render-compare",
+    srcs = ["RenderCompare.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":render-comparison-lib",
+        "//host:base",
+        "//host:filepath",
+    ],
+)
+
+haskell_test(
+    name = "render-comparison-tests",
+    size = "small",
+    srcs = ["RenderComparisonTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":render-comparison-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:json",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
 # bazel run //emulation:e2e-observation-compare -- RETAINED_RECEIPTS FUJIMOD_RECEIPTS
 haskell_binary(
     name = "e2e-observation-compare",
