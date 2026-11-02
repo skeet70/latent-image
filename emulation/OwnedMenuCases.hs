@@ -356,7 +356,7 @@ main = do
     SI.deriveFunction (SI.GuestAddress id5Base) id5
       (SI.FunctionWindow (SI.GuestAddress (guestWord stockEntry)) (SI.GuestAddress 0x00c777fc)) []
   let declaration (address, size) = SI.FunctionDeclaration (SI.GuestAddress address) (SI.FunctionSize size)
-  either error pure (SI.checkDeclarations [declaration (guestWord stockEntry, stockBytesCount)] [declaration derived])
+  either error pure (SI.checkDeclarations [declaration (guestWord stockEntry, stockBytesCount)] [SI.derivedDeclaration derived])
   unless (id5Base <= guestWord stockEntry) (error "--id5-base lies above the stock entry")
   let offset = fromIntegral (guestWord stockEntry - id5Base) :: Int
   unless (offset + stockBytesCount <= B.length id5) (error "stock bytes are truncated")
