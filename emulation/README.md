@@ -1620,6 +1620,8 @@ Record-2 boot startup initializes logger control `[0x14c60,0x14c6c)` and BSS `[0
 
 Schema-3 runs write `prewatch-record2.json` at the first admitted wrapper stop, before source binding or task-watch activation. It contains the complete physical `[0x10000,0x20000)` bytes with four checked alias digests, stopped context, natural/control case, program and input identities. The existing view reader also requires physical readback agreement. The sidecar does not widen any source-binding or write permission and is preserved if binding subsequently refuses.
 
+Storage publication checkpoints preserve the actual non-atomic record. The typed storage proof identifies stores to `IndexedState+4`; only at such a size-publication stop may a committed base coexist with zero size and zero reserved. The observer omits an allocated-pool view until size commits. The consumer additionally decodes the imminent store and requires the current record's size address, payload 1024 and bounded pool base; its existing raw journal must then contain that exact write. Other incomplete records remain refused.
+
 The checker adds these modes after the same three encoder/rebuilder/decoder tool paths:
 
 ```text

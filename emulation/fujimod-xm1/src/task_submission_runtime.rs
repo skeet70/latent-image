@@ -84,8 +84,11 @@ pub(super) fn local(machine: &Machine, maps: &[MemoryMap], state: &Context, bind
         let pool = word(&storage.bytes, 0)?; let bytes = word(&storage.bytes, 4)?;
         if pool != 0 {
             let physical = pool & !0x40000000;
-            require(bytes == 1024 && physical >= 0xa10200 && physical.checked_add(bytes).is_some_and(|end| end <= 0xa5b200), "reserved backing leaves task pool")?;
-            views.push(view(machine, maps, state, Object::Stack, pool, bytes as usize)?);
+            let publishing = bytes == 0 && boundary == Boundary::NativeWrite && program.storage_size_store(state.pc)
+                && word(&storage.bytes, 8)? == 0;
+            require((bytes == 1024 || publishing) && physical >= 0xa10200
+                && physical.checked_add(1024).is_some_and(|end| end <= 0xa5b200), "reserved backing leaves task pool")?;
+            if !publishing { views.push(view(machine, maps, state, Object::Stack, pool, bytes as usize)?); }
         }
         views.push(wrapper); views.push(storage);
         let (low, high) = backing(binding, kernels)?;

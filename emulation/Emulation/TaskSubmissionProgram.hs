@@ -2,7 +2,7 @@
 module Emulation.TaskSubmissionProgram
   ( CanonicalImages(..), NativeInputs(..), JoinedInputs(..), Program, ProgramError(..)
   , stockProgram, ownedProgram, joinedProgram, programImage4, programSources, programUpdateDigest, programEvidence
-  , programSites, programFrameProof, programFrameLow, programOwnedPoint, programOwnsPc, programStoreComponent, StoreComponent(..), programAllowsPc, programAllowsRead, programHasStore, GuestStore(..), programGuestStore, programClasses, checkProgramHeader, checkProgramSample
+  , programSites, programFrameProof, programFrameLow, programOwnedPoint, programOwnsPc, programStoreComponent, StoreComponent(..), programAllowsPc, programAllowsRead, programHasStore, programStorageSizeStore, GuestStore(..), programGuestStore, programClasses, checkProgramHeader, checkProgramSample
   ) where
 
 import qualified A32 as A
@@ -36,7 +36,8 @@ data OwnedVariant = Standalone | Composed Joined.JoinedArtifact Joined.Candidate
 data Program = Stock | Owned
   { ownedProof :: N.FrameProof, ownedImage4 :: B.ByteString, ownedUpdate :: W.Digest
   , ownedEvidence :: ProgramEvidence, ownedCodeSites :: M.Map W.Address Boundary
-  , ownedExecution :: S.Set N.CodeAddress, ownedWrites :: S.Set N.CodeAddress, ownedVariant :: OwnedVariant
+  , ownedExecution :: S.Set N.CodeAddress, ownedWrites :: S.Set N.CodeAddress
+  , ownedStorageSizes :: S.Set N.CodeAddress, ownedVariant :: OwnedVariant
   }
 data GuestStore = GuestStore {guestStoreAddress :: W.Address, guestStoreValue :: W.WordValue} deriving (Eq, Show)
 data StoreComponent = WrapperComponent | CriticalComponent | StorageComponent deriving (Eq, Show)
@@ -94,7 +95,7 @@ ownedProgram images native candidate = do
     && nativeContract native == L.toStrict (J.encode (Artifact.candidateContractValue candidate))) CandidateAssociationRejected
   sites <- ownedSites proof
   pure (Owned proof (Artifact.stagedBytes staged) (hash (nativeCandidate native))
-    (OwnedProgram (hash (nativeContract native)) (hash (nativeFlat native)) (hash (nativeSymbols native))) sites (S.fromList (N.executionPcs proof)) (S.fromList (N.globalWrites proof)) Standalone)
+    (OwnedProgram (hash (nativeContract native)) (hash (nativeFlat native)) (hash (nativeSymbols native))) sites (S.fromList (N.executionPcs proof)) (S.fromList (N.globalWrites proof)) S.empty Standalone)
 joinedProgram :: CanonicalImages -> JoinedInputs -> Joined.StagedCandidate -> Either ProgramError Program
 joinedProgram images native candidate = do
   source <- either (Left . CompositionRejected) Right (Joined.canonicalSource
@@ -123,7 +124,8 @@ joinedProgram images native candidate = do
         (hash (Joined.nativeBytes (joinedCritical native))) (hash (Joined.nativeSymbols (joinedCritical native)))
         (hash (Joined.nativeBytes (joinedStorage native))) (hash (Joined.nativeSymbols (joinedStorage native)))
   pure (Owned proof (Joined.stagedBytes staged) (hash (nativeCandidate wrapper)) (JoinedProgram evidence)
-    allSites (S.fromList execution) (S.fromList writes) (Composed artifact (Joined.candidateSources candidate)))
+    allSites (S.fromList execution) (S.fromList writes) (S.fromList (map storageAddress (Storage.sizeStorePcs storage)))
+    (Composed artifact (Joined.candidateSources candidate)))
   where
     criticalAddress (Critical.Guest location) = N.CodeAddress location
     storageAddress (Storage.InstructionAddress location) = N.CodeAddress location
@@ -181,6 +183,9 @@ programAllowsRead _ _ = True
 programHasStore :: Program -> W.Address -> Bool
 programHasStore Stock _ = False
 programHasStore Owned{ownedWrites=stores} (W.Address location) = S.member (N.CodeAddress location) stores
+programStorageSizeStore :: Program -> W.Address -> Bool
+programStorageSizeStore Stock _ = False
+programStorageSizeStore Owned{ownedStorageSizes=stores} (W.Address location) = S.member (N.CodeAddress location) stores
 programGuestStore :: Program -> Sample -> Either ProgramError (Maybe GuestStore)
 programGuestStore Stock _ = pure Nothing
 programGuestStore program sample

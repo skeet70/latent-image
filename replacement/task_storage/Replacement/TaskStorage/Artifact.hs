@@ -7,7 +7,7 @@ module Replacement.TaskStorage.Artifact
   , InstructionAddress (..), DataOffset (..), DataRoot (..), Location (..)
   , Direction (..), Access (..), Premise (..), ReturnPaths (..)
   , linkedBytes, rustExtent
-  , executionPcs, guestStorePcs, privateStorePcs
+  , executionPcs, guestStorePcs, sizeStorePcs, privateStorePcs
   ) where
 
 import Control.Monad (forM_, unless)
@@ -143,6 +143,10 @@ executionPcs artifact = map InstructionAddress [transitionStart,transitionStart+
 guestStorePcs :: LinkedArtifact -> [InstructionAddress]
 guestStorePcs artifact = nub [accessInstruction access | access <- admissionAccesses (artifactAdmission artifact)
   , accessDirection access == WriteWord, GuestWord _ _ <- [accessLocation access]]
+
+sizeStorePcs :: LinkedArtifact -> [InstructionAddress]
+sizeStorePcs artifact = nub [accessInstruction access | access <- admissionAccesses (artifactAdmission artifact)
+  , accessDirection access == WriteWord, accessLocation access == GuestWord IndexedState (DataOffset 4)]
 
 privateStorePcs :: LinkedArtifact -> [InstructionAddress]
 privateStorePcs artifact = nub [accessInstruction access | access <- admissionAccesses (artifactAdmission artifact)

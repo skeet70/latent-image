@@ -83,6 +83,7 @@ nativeTests paths = do
   refuse "mismatched critical adapter admitted" (deriveArtifact wrapper wrongCritical storage)
   assert "critical counter stores missing" (not (null (Critical.criticalCounterStorePcs (Critical.criticalProof (criticalArtifact artifact)))))
   assert "storage guest stores missing" (not (null (Storage.guestStorePcs (storageArtifact artifact))))
+  assert "storage size publication missing" (not (null (Storage.sizeStorePcs (storageArtifact artifact))))
   let original = B.pack [0..63]
       window = ImageWindow (A.CodeAddress 0x61c408) (A.CodeAddress 0x61c410) (B.replicate 8 99)
       adjacent = ImageWindow (A.CodeAddress 0x61c410) (A.CodeAddress 0x61c414) (B.replicate 4 88)

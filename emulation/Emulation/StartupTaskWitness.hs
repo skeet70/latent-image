@@ -282,7 +282,7 @@ callerBacking sample binding
     core = contextCore (sampleContext sample)
     (bootSp,bootLow) = case core of PrimaryKernel -> (0x40063420,0x62c54); SecondaryKernel -> (0x400f33e0,0xf2c14)
 currentLocalShape :: Inputs -> Receipt -> Maybe C.ProbeRecord -> Sample -> Memory -> Either WitnessError ()
-currentLocalShape inputs receipt probe sample memory = do
+currentLocalShape inputs@(Inputs _ _ program) receipt probe sample memory = do
   binding <- activeBinding receipt probe sample
   active <- case binding of
     Nothing -> pure []
@@ -291,10 +291,17 @@ currentLocalShape inputs receipt probe sample memory = do
           descriptor = physical (address (bindingDescriptor current))
       pool <- readWord SnapshotRejected memory (0xa0fc44+12*i)
       size <- readWord SnapshotRejected memory (0xa0fc48+12*i)
-      require (pool == 0 || (size == 1024 && physical pool >= 0xa10200 && toInteger (physical pool)+1024 <= 0xa5b200)) SnapshotRejected
+      reserved <- readWord SnapshotRejected memory (0xa0fc4c+12*i)
+      pending <- if sampleBoundary sample == NativeWrite && P.programStorageSizeStore program (W.contextPc (contextState (sampleContext sample)))
+        then either (Left . ProgramSampleRejected (sampleHit sample)) Right (P.programGuestStore program sample)
+        else pure Nothing
+      let publishing = size == 0 && reserved == 0 && case pending of
+            Just store -> physical (address (P.guestStoreAddress store)) == 0xa0fc48+12*i && P.guestStoreValue store == W.WordValue 1024
+            Nothing -> False
+      require (pool == 0 || ((size == 1024 || publishing) && physical pool >= 0xa10200 && toInteger (physical pool)+1024 <= 0xa5b200)) SnapshotRejected
       backing <- callerBacking sample current
       let low = address (backingLow backing); high = address (backingHigh backing)
-          pools = if pool == 0 then [] else [(Stack,physical pool,1024)]
+          pools = if pool == 0 || publishing then [] else [(Stack,physical pool,1024)]
       parameters <- if sampleCallTaken sample /= Just False && sampleBoundary sample `elem` [AuxiliaryCall,CreationCall]
         then do
           pointer <- contextRegister 1 sample

@@ -210,7 +210,8 @@ compositionContract staged@(StagedImage4 _ artifact critical wrapper storage sou
         , "critical_pcs" .= map criticalAddress (C.criticalExecutionPcs criticalMetadata)
         , "critical_counter_store_pcs" .= map criticalAddress (C.criticalCounterStorePcs criticalMetadata)
         , "critical_private_store_pcs" .= map criticalAddress (C.criticalPrivateStorePcs criticalMetadata)
-        , "storage_pcs" .= map storageAddress (S.executionPcs storageMetadata),"storage_guest_store_pcs" .= map storageAddress (S.guestStorePcs storageMetadata)]
+        , "storage_pcs" .= map storageAddress (S.executionPcs storageMetadata),"storage_guest_store_pcs" .= map storageAddress (S.guestStorePcs storageMetadata)
+        , "storage_size_store_pcs" .= map storageAddress (S.sizeStorePcs storageMetadata)]
     , "owned_stack" .= object
         [ "submission_low" .= stackOffsetValue (entryLow proof A.Submission),"release_low" .= stackOffsetValue (entryLow proof A.Release)
         , "critical_enter_low" .= stackOffsetValue (criticalEnterLow proof),"critical_exit_low" .= stackOffsetValue (criticalExitLow proof)

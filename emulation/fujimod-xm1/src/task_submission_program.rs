@@ -93,7 +93,7 @@ struct StorageContract { linked_sha256: Digest, symbols_sha256: Digest, rust: [A
 struct Execution {
     wrapper_pcs: Vec<Address>, wrapper_global_store_pcs: Vec<Address>,
     critical_pcs: Vec<Address>, critical_counter_store_pcs: Vec<Address>, critical_private_store_pcs: Vec<Address>,
-    storage_pcs: Vec<Address>, storage_guest_store_pcs: Vec<Address>,
+    storage_pcs: Vec<Address>, storage_guest_store_pcs: Vec<Address>, storage_size_store_pcs: Vec<Address>,
 }
 #[derive(Deserialize)]
 struct JoinedCall {
@@ -223,6 +223,9 @@ impl Program {
     pub(super) fn owned(&self) -> bool { matches!(self, Self::Owned(_) | Self::Joined(_)) }
     pub(super) fn joined(&self) -> bool { matches!(self, Self::Joined(_)) }
     pub(super) fn composition(&self) -> bool { matches!(self, Self::CompositionReference | Self::Joined(_)) }
+    pub(super) fn storage_size_store(&self, pc: Address) -> bool {
+        matches!(self, Self::Joined(joined) if joined.contract.composition.execution.storage_size_store_pcs.contains(&pc))
+    }
     fn task(&self) -> Option<&NativeContract> {
         match self { Self::Stock | Self::CompositionReference => None, Self::Owned(owned) => Some(&owned.contract.task_submission), Self::Joined(joined) => Some(&joined.contract.composition.task_submission) }
     }
@@ -336,6 +339,10 @@ fn validate_composition(c: &Composition) -> Result<(), String> {
     store_set(&execution.critical_counter_store_pcs, &critical)?;
     store_set(&execution.critical_private_store_pcs, &critical)?;
     store_set(&execution.storage_guest_store_pcs, &storage)?;
+    store_set(&execution.storage_size_store_pcs, &storage)?;
+    require(!execution.storage_size_store_pcs.is_empty()
+        && execution.storage_size_store_pcs.iter().all(|pc| execution.storage_guest_store_pcs.contains(pc)),
+        "joined storage size-publication metadata differs")?;
     let stack = &c.owned_stack;
     require([stack.submission_low, stack.release_low, stack.critical_enter_low, stack.critical_exit_low, stack.reservation_low]
         .into_iter().all(|low| (-65536..=0).contains(&low))
