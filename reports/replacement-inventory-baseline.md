@@ -1731,3 +1731,7 @@ This increment owns application-loop orchestration, not the outer task loop, ima
 | Readiness/effect/refusal controls and continuous replaced-body exclusion | Design above only; no new observer, guard or control execution. |
 | Inventory/ledger distinguish retained services and emulator/hardware scope | Recorded here and in startup documentation with immutable receipt projection. No ownership or hardware qualification claim is added. |
 
+
+### 8.19 Subsystem-sized replacement projects
+
+The [subsystem unit plan for X-M1 1.50](subsystem-replacement-map.md) groups the recovered interfaces, existing leaf proofs and system-scenario gaps into four projects: the general heap; RTOS platform services across both domains; modal dispatch with all 174 controllers; and one composed startup artifact from reset through application readiness. Storage/file services and display/render services are later projects with separate backend-law prerequisites. Existing leaf proofs are internal regression evidence for these subsystem interfaces; the [replacement process](../spec/11-incremental-firmware-replacement.md#ownership-stages) owns the unit and qualification rules.
