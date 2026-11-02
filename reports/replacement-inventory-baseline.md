@@ -1070,7 +1070,7 @@ Controlled submission inputs occupy bytes 32..60 of the genuine current104 backi
 | Partial nonzero wrapper pair | Zero size retains the nonzero base, skips reservation and executes the 36-byte whole-cache path before duplicate creation `-41` | 8 |
 | Sentinel fresh | Tail `0xa5f0a5f0` selects auxiliary flags 0; creation and enabled activation succeed | 7 |
 | Release unlocked | Genuine retained nonself102 deletion reaches the owned release adapter; reservation-only clear and return 0 | 0 |
-| Release peer lock | Actual failed acquisition and failed unlock are ignored; reservation clears, peer lock and wrapper/base/size/cursor remain | 1 |
+| Release peer lock | Acquisition fails with `0xffffffff` while the lock is 2; reservation clears, then unlock succeeds and clears the peer's lock to 0, matching stock behavior. Wrapper/base/size/cursor remain unchanged | 1 |
 | Release unlock refusal | Actual acquisition succeeds, declared host clear makes unlock refuse, release still returns 0 and clears only reservation | 1 |
 | Callback unreturned | Real `-18` is logged and committed to the error word; callback `0x69cbf0` reaches its first prologue without a wrapper-return claim | 10 |
 
