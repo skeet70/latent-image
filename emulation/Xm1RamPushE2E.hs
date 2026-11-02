@@ -1490,6 +1490,9 @@ observeModalInterval emulator receipt request source interval action = do
         _ <- parsed ended
         finalReport <- parsed afterEnd
         checkModalEnd finalReport
+        case interval of
+          RetainedStockRoute -> pure ()
+          InstalledScopedRoute -> checkScopedModalRoute finalReport
       routeFailure = either (Just . displayException) (const Nothing) route
       evidence = object
         [ "schema" .= (1 :: Int)

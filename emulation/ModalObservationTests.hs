@@ -178,6 +178,43 @@ permitTests = do
  where
   toArray values = get "values" (object ["values" .= values])
 
+scopedRouteTests :: IO ()
+scopedRouteTests = do
+  let counts = object
+        [ "observations" .= (4 :: Int), "entries" .= (2 :: Int), "owned_handoffs" .= (1 :: Int)
+        , "fallback_handoffs" .= (1 :: Int), "returns" .= (2 :: Int), "active_frames" .= (0 :: Int)
+        , "peak_core_depth" .= (1 :: Int) ]
+      captured75 = set "controller" (Number 75) domain
+      capture values = get "values" (object ["values" .= values])
+      scoped = set "policy" (String "scoped-owned75") permitEnvelope
+      mixed = set "counts" counts (set "captured_domains" (capture [captured75]) scoped)
+      withCount key value = set "counts" (set key (Number value) counts) mixed
+      rejected =
+        [ ("empty route", scoped)
+        , ("owned-only route", set "counts" (set "owned_handoffs" (Number 2) (set "fallback_handoffs" (Number 0) counts)) mixed)
+        , ("fallback-only route", set "counts" (set "owned_handoffs" (Number 0) (set "fallback_handoffs" (Number 2) counts)) mixed)
+        , ("entries exceed handoffs", withCount "entries" 3)
+        , ("handoffs exceed entries", withCount "owned_handoffs" 2)
+        , ("missing return", withCount "returns" 1)
+        , ("extra return", withCount "returns" 3)
+        , ("missing captured domain", set "captured_domains" (capture ([] :: [Value])) mixed)
+        , ("no controller75 domain", set "captured_domains" (capture [domain]) mixed)
+        , ("stock policy", set "policy" (String "stock-baseline") mixed)
+        , ("monitor failure", set "failure" (String "unfinished frame") mixed)
+        , ("active monitor", set "enabled" (Bool True) mixed)
+        , ("active frame", withCount "active_frames" 1)
+        ]
+  clean <- either error pure (parseModalReport permitLimit mixed)
+  check "finished mixed scoped route is accepted" (checkScopedModalRoute clean == Right ())
+  varied <- either error pure (parseModalReport permitLimit
+    (set "captured_domains" (capture [domain, set "state" (Number 0) (set "event" (Number 0) captured75), captured75]) mixed))
+  check "captured samples need not match entry totals or specific state/event values" (checkScopedModalRoute varied == Right ())
+  stock <- either error pure (parseModalReport permitLimit permitEnvelope)
+  check "stock diagnostic end accepts zero observations" (checkModalEnd stock == Right ())
+  mapM_ (\(label, value) -> do
+    report <- either (\problem -> error ("scoped route fixture " ++ label ++ ": " ++ problem)) pure (parseModalReport permitLimit value)
+    check ("scoped route refuses " ++ label) (isLeft (checkScopedModalRoute report))) rejected
+
 serve :: Value -> Value -> BridgeExchange
 serve expected response request = do
   check "modal RPC sends the exact public protocol request" (eitherDecode request == Right expected)
@@ -281,6 +318,7 @@ main = do
   check "writer record overflow refuses" (isLeft (auditEnvelope small ack
     (snd (writerEnvelope [cpu 0 0x01467588 0x01467588 2 1, cpu 1 0x01467588 0x01467588 2 2]))))
   permitTests
+  scopedRouteTests
   rpcTests
   frameBoundsTests
   scopedSourceTests
