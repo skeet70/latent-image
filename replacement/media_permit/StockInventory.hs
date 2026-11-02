@@ -6,6 +6,7 @@ module StockInventory
   , FunctionSize (..)
   , FunctionDeclaration (..)
   , FunctionDerivation (..)
+  , FunctionInspection (..)
   , ProgramCounter (..)
   , PremiseUse (..)
   , ReturnPremise (..)
@@ -13,6 +14,7 @@ module StockInventory
   , returnPremiseLabel
   , checkDeclarations
   , deriveFunction
+  , inspectFunction
   , checkedStockFunctions
   , stockFunctions
   ) where
@@ -36,6 +38,13 @@ data FunctionDerivation = FunctionDerivation
   { derivedDeclaration :: FunctionDeclaration
   , derivationPremises :: [ReturnPremise]
   , derivationPremiseUses :: [PremiseUse]
+  } deriving (Eq, Show)
+
+data FunctionInspection = FunctionInspection
+  { inspectedDeclaration :: FunctionDeclaration
+  , inspectedCodeWords :: [GuestAddress]
+  , inspectedLiteralWords :: [GuestAddress]
+  , inspectedReturn :: Either String [PremiseUse]
   } deriving (Eq, Show)
 
 checkDeclarations :: [FunctionDeclaration] -> [FunctionDeclaration] -> Either String ()
@@ -80,7 +89,16 @@ checkedStockFunctions image = do
   pure derived
 
 deriveFunction :: GuestAddress -> B.ByteString -> FunctionWindow -> [GuestAddress] -> Either String FunctionDerivation
-deriveFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low) (GuestAddress high)) externalTails = do
+deriveFunction imageBase image window externalTails = do
+  inspection <- inspectFunction imageBase image window externalTails
+  dependencies <- inspectedReturn inspection
+  pure (FunctionDerivation
+    (inspectedDeclaration inspection)
+    (S.toList (S.fromList [premise | PremiseUse _ premise <- dependencies]))
+    dependencies)
+
+inspectFunction :: GuestAddress -> B.ByteString -> FunctionWindow -> [GuestAddress] -> Either String FunctionInspection
+inspectFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low) (GuestAddress high)) externalTails = do
   unless (low < high && low .&. 3 == 0 && high .&. 3 == 0) (Left "invalid function window")
   (code, literals) <- walk [low] S.empty S.empty
   graph <- forM (S.toList code) $ \address -> do
@@ -99,11 +117,12 @@ deriveFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low)
   literalWords <- forM (S.toList literals) $ \address -> do
     value <- word address
     pure (ProgramCounter address, LiteralWord value)
-  dependencies <- verifyReturns (M.fromList literalWords) (ProgramCounter low)
-    [CodeNode (ProgramCounter address) instruction (map ProgramCounter successors) condition | (address, instruction, successors, condition) <- graph]
-  pure (FunctionDerivation
+  let dependencies = verifyReturns (M.fromList literalWords) (ProgramCounter low)
+        [CodeNode (ProgramCounter address) instruction (map ProgramCounter successors) condition | (address, instruction, successors, condition) <- graph]
+  pure (FunctionInspection
     (FunctionDeclaration (GuestAddress low) (FunctionSize (fromIntegral (S.findMax code + 4 - low))))
-    (S.toList (S.fromList [premise | PremiseUse _ premise <- dependencies]))
+    (map GuestAddress (S.toList code))
+    (map GuestAddress (S.toList literals))
     dependencies)
   where
     inside address = low <= address && address < high && address .&. 3 == 0
