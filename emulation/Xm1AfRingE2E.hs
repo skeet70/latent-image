@@ -15,7 +15,7 @@ import Data.Word (Word8, Word32, Word64)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, routeKey, routeKeyHex)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.Sha256 (sha256File, sha256Hex)
-import Emulation.UiTrajectory (Segment (..), Step (..), TraceSite (..), Trajectories (..), decodeTrajectories)
+import Emulation.UiTrajectory (ReadAddress (..), Segment (..), Step (..), TraceSite (..), Trajectories (..), decodeTrajectories)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, resolve, stageViewerRuntime, stagedFirmwarePath)
 import qualified Emulation.ViewerRuntime as Runtime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
@@ -269,8 +269,14 @@ run options = do
       installerSites <- forM
         [("ram_push_rendezvous_locked", "rendezvous-locked"), ("ram_push_cpu0_window_exit", "cpu0-window-exit"), ("ram_push_cpu1_window_exit", "cpu1-window-exit")] $ \(name, label) ->
           (\value -> (value, label)) <$> symbolAddress symbols name
-      emulatorTraceSites emulator (installerSites ++ [(synthetic, "af-ring-synthetic")] ++
-        [(traceSiteAddress site, traceSiteLabel site) | site <- trajectoryTraceSites trajectory])
+      trajectorySites <- forM (trajectoryTraceSites trajectory) $ \site -> case traceSiteAddress site of
+        FixedAddress value -> pure (value, traceSiteLabel site)
+        RuntimeSymbol name offset -> do
+          symbolBase <- symbolAddress symbols name
+          let value = toInteger symbolBase + toInteger offset
+          require (value <= 0xffffffff) ("trace site overflows 32 bits: " ++ traceSiteLabel site)
+          pure (fromIntegral value, traceSiteLabel site)
+      emulatorTraceSites emulator (installerSites ++ [(synthetic, "af-ring-synthetic")] ++ trajectorySites)
       ensurePrivateDirectory pushDirectory
       pushed <- steppingClock >>= \clock -> runUnreviewedRamPush retained manifest clock api pushDirectory
       pushStatePath <- case pushed of

@@ -50,6 +50,10 @@ name = "fujimod-xm1-startup-tasks"
 path = "src/startup_tasks.rs"
 
 [[bin]]
+name = "fujimod-xm1-idle-tasks"
+path = "src/idle_tasks.rs"
+
+[[bin]]
 name = "fujimod-xm1-kernel-install"
 path = "src/kernel_install.rs"
 
@@ -68,6 +72,10 @@ path = "src/loader_continuations.rs"
 [[bin]]
 name = "fujimod-xm1-heap-replay"
 path = "src/heap_replay.rs"
+
+[[bin]]
+name = "fujimod-xm1-startup-consumers"
+path = "src/startup_consumers.rs"
 
 # Compiles the schema-4 loader-prefix observer against an engine carrying
 # build-support/fujimod-scoped-watch.patch.

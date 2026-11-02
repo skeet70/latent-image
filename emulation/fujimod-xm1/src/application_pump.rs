@@ -188,6 +188,25 @@ enum TraceScopeRecord {
     Finish { summary: TraceStackScopeSummary },
 }
 #[derive(Deserialize, Serialize)]
+struct LoaderIdentity { run: Digest, update: Digest, rom: Digest, executable: Digest, sources: Vec<SourceBinding> }
+#[derive(Deserialize, Serialize)]
+struct LoaderEvidence {
+    schema: u32,
+    identity: LoaderIdentity,
+    checkpoint: Digest,
+    instructions: Count,
+    menu: Result<Option<[u32; 3]>, String>,
+    error: Option<String>,
+    machine_failure: Option<String>,
+    events: Vec<Event>,
+    calls: Vec<Call>,
+    snapshots: Vec<Snapshot>,
+    pulses: Vec<Pulse>,
+    epochs: Vec<Epoch>,
+    trace: FileBinding,
+    static_calls: Vec<StaticCall>,
+}
+#[derive(Deserialize, Serialize)]
 struct PumpReport {
     schema: u32,
     mode: Mode,
@@ -195,7 +214,7 @@ struct PumpReport {
     checkpoint: Digest,
     instructions: Count,
     outcome: Outcome,
-    loader: Report,
+    loader: LoaderEvidence,
     samples: Vec<Sample>,
     epochs: Vec<PumpEpoch>,
     inputs: Vec<Input>,
@@ -306,9 +325,9 @@ fn produce(request: &Request) -> Result<(), String> {
     let failure = result.err().or_else(|| finish.err());
     let capture::Capture { loader, samples, epochs, inputs, visible, trace_scope } = runner.into_capture();
     persist(&request.output.join("trace.json"), &machine.traces.hits)?;
-    let loader = Report {
+    let loader = LoaderEvidence {
         schema: 1,
-        identity: InputIdentity { run: identity.run.sha256.clone(), update: identity.actual_update.sha256.clone(), rom: identity.boot_rom.sha256.clone(), executable: identity.observer.clone(), sources: catalog.0.iter().map(|image| image.binding.clone()).collect() },
+        identity: LoaderIdentity { run: identity.run.sha256.clone(), update: identity.actual_update.sha256.clone(), rom: identity.boot_rom.sha256.clone(), executable: identity.observer.clone(), sources: catalog.0.iter().map(|image| image.binding.clone()).collect() },
         checkpoint: Digest::of(&checkpoint), instructions: Count(machine.instructions()),
         menu: machine.menu().map(|menu| menu.map(|menu| [menu.menu_id, menu.setting_id, menu.cursor])),
         error: failure.as_ref().map(|failure| failure.detail.clone()), machine_failure: machine.failure.clone(),

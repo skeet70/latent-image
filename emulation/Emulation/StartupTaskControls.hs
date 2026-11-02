@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Emulation.StartupTaskControls (ControlError(..), refusalControls) where
+module Emulation.StartupTaskControls (ControlError(..), refusalControls, refusalControlsFor) where
 
 import Control.Monad (unless)
 import qualified Data.Aeson as J
@@ -15,6 +15,7 @@ import Data.Word (Word8, Word32, Word64)
 import qualified Emulation.Sha256 as SHA
 import Emulation.StartupTaskWitness
 import qualified Emulation.StartupTaskWire as Wire
+import qualified Emulation.TaskSubmissionProgram as P
 import FujiAF.JSON (decodeStrictIntegers)
 import qualified FujiAF.UpdateContainer as U
 import qualified Replacement.KernelInstall.Wire as W
@@ -27,15 +28,23 @@ data Control = WrongSource | DuplicateReceiptKey | OverflowingHitAddress | Refus
   | WrongPrologueRegister | WrongPrologueStack | WrongPrologueStore
   | CodeWrite | WrongKnownPreimage | WrongReturnStatus | MissingFirstTransfer
   | MissingStoppedPhysical | MalformedStoppedAddress | MalformedStoppedSize | WrappedCounts
-  deriving (Bounded, Enum, Eq, Show)
+  | WrongReadValue | WrongReadPreimage | WrongReadClock | MissingReadPhysical | MalformedReadSize
+  | RetiredCriticalRead | WrongJoinedSource | MissingCriticalCounter | WrongCounterAlias
+  | MissingReadTick | RegressingReadTick
+  | WrongBootLogBuffer | InvalidBootLogIndex
+  | UnexpectedRecord2Fetch
+  | WrongBootHandoffTarget | WrongBootModeCopy | NonzeroBootBssReserved
+  | MenuBeforeFiniteRoute | MenuBeyondFiniteRoute
+  deriving (Bounded, Enum, Eq, Ord, Show)
 data ControlError = BaselineRejected WitnessError | MutationRejected Control
   | WrongRefusal Control WitnessError (Maybe WitnessError) deriving (Eq, Show)
 data Part = Field K.Key | Element Int
 
-data Effect = Replace Word32 | AddBits Word32
+data Effect = Replace Word32 | AddBits Word32 | FlipBits Word32
 applyEffect :: Effect -> Word32 -> Word32
 applyEffect (Replace word) _ = word
 applyEffect (AddBits mask) word = word .|. mask
+applyEffect (FlipBits mask) word = word `xor` mask
 field :: String -> Part
 field = Field . K.fromString
 pathAt :: Control -> [Part] -> J.Value -> Either ControlError J.Value
@@ -83,6 +92,26 @@ expected control = case control of
   MissingFirstTransfer -> FirstTaskRejected
   MissingStoppedPhysical -> FetchRejected; MalformedStoppedAddress -> FetchRejected; MalformedStoppedSize -> FetchRejected
   WrappedCounts -> ClockRejected
+  WrongReadValue -> ReadRejected; WrongReadPreimage -> ReadRejected; WrongReadClock -> ClockRejected
+  MissingReadPhysical -> ReadRejected; MalformedReadSize -> ReadRejected; RetiredCriticalRead -> ReadRejected
+  WrongJoinedSource -> IdentityRejected; MissingCriticalCounter -> SnapshotRejected; WrongCounterAlias -> AliasRejected
+  MissingReadTick -> ClockRejected; RegressingReadTick -> ClockRejected
+  WrongBootLogBuffer -> SnapshotRejected; InvalidBootLogIndex -> SnapshotRejected
+  UnexpectedRecord2Fetch -> CodeRejected
+  WrongBootHandoffTarget -> SnapshotRejected; WrongBootModeCopy -> SnapshotRejected; NonzeroBootBssReserved -> SnapshotRejected
+  MenuBeforeFiniteRoute -> StatusRejected; MenuBeyondFiniteRoute -> StatusRejected
+
+expectedFor :: Wire.Receipt -> Control -> Either ControlError WitnessError
+expectedFor receipt control
+  | Wire.receiptSchema receipt /= Wire.LegacyStockProtocol = case control of
+      WrongDescriptorClass -> atBoundary Wire.CreationCall P.CallArgumentsRejected
+      WrongActivationContext -> atBoundary Wire.ActivationCall P.UnsupportedActivation
+      _ -> pure (expected control)
+  | otherwise = pure (expected control)
+  where
+    atBoundary boundary reason = case filter ((==boundary) . Wire.sampleBoundary) (Wire.receiptSamples receipt) of
+      sample:_ -> pure (ProgramSampleRejected (Wire.sampleHit sample) reason)
+      [] -> Left (MutationRejected control)
 
 withHash :: Control -> ObservedFiles -> J.Value -> J.Value -> Either ControlError ObservedFiles
 withHash control original receipt watch = do
@@ -198,6 +227,14 @@ mutate control sources observed = do
         rows <- arrayAt control [field "records"] watches
         changed <- set control [field "records",Element (length rows-1),field name] value watches
         pure (raw,changed))
+      readField name change = journal (\raw watches -> do
+        position <- findRow control (\row -> W.eventSource row == W.CpuRead) watches
+        changed <- modifyAt control [field "records",Element position,field name] change watches
+        pure (raw,changed))
+      counterView raw sample = do
+        views <- arrayAt control [field "samples",Element sample,field "local"] raw
+        decoded <- mapM (parse control) views
+        maybe (Left (MutationRejected control)) Right (findIndex ((==Wire.CriticalCounter) . Wire.viewObject) decoded)
   case control of
     WrongSource -> pure (sources {sourceImage=B.cons (B.head (sourceImage sources) `xor` 1) (B.tail (sourceImage sources))},observed)
     DuplicateReceiptKey -> pure (sources,observed {observedReceipt=C.pack "{\"schema\":1," <> B.drop 1 (observedReceipt observed)})
@@ -265,6 +302,56 @@ mutate control sources observed = do
     MalformedStoppedAddress -> stoppedField "address" (J.toJSON (0 :: Word32))
     MalformedStoppedSize -> stoppedField "size" (J.toJSON (8 :: Int))
     WrappedCounts -> receiptOnly (wrappedCounts control)
+    WrongReadValue -> readField "value" (\raw -> do value <- parse control raw :: Either ControlError Word64; pure (J.toJSON (value `xor` 1)))
+    WrongReadPreimage -> readField "before" (\raw -> do
+      values <- parse control raw :: Either ControlError [Word8]
+      case values of first:rest -> pure (J.toJSON ((first `xor` 1):rest)); [] -> Left (MutationRejected control))
+    WrongReadClock -> readField "instructions" (\raw -> do value <- parse control raw :: Either ControlError Word64; pure (J.toJSON (value+1)))
+    MissingReadPhysical -> readField "physical" (const (Right J.Null))
+    MalformedReadSize -> readField "size" (const (Right (J.toJSON (0 :: Int))))
+    MissingReadTick -> readField "tick" (const (Right J.Null))
+    RegressingReadTick -> journal (\raw watches -> do
+      let positiveTick row = maybe False (>W.Count 0) (W.eventTick row)
+      position <- findRow control (\row -> W.eventSource row == W.CpuRead && positiveTick row) watches
+      rows <- arrayAt control [field "records"] watches
+      prior <- mapM (parse control) (take position rows)
+      unless (any (\row -> W.eventSource row `elem` [W.CpuFetch,W.CpuRead,W.CpuWrite] && positiveTick row) prior)
+        (Left (MutationRejected control))
+      changed <- set control [field "records",Element position,field "tick"] (0 :: Word64) watches
+      pure (raw,changed))
+    WrongBootLogBuffer -> receiptOnly (modifyAt control [field "samples",Element 0] (changeViews control 0x14c60 (Replace 0)))
+    InvalidBootLogIndex -> receiptOnly (modifyAt control [field "samples",Element 0] (changeViews control 0x14c64 (Replace 1)))
+    WrongBootHandoffTarget -> receiptOnly (modifyAt control [field "samples",Element 0] (changeViews control 0x14c80 (Replace 0)))
+    WrongBootModeCopy -> receiptOnly (modifyAt control [field "samples",Element 0] (changeViews control 0x14c90 (FlipBits 1)))
+    NonzeroBootBssReserved -> receiptOnly (modifyAt control [field "samples",Element 0] (changeViews control 0x14c88 (Replace 1)))
+    MenuBeforeFiniteRoute -> receiptOnly (set control [field "instructions"] (329999999 :: Word64))
+    MenuBeyondFiniteRoute -> receiptOnly (set control [field "instructions"] (450000001 :: Word64))
+    UnexpectedRecord2Fetch -> journal (\raw watches -> do
+      position <- findRow control (\row -> fetchRow row && maybe False (\(W.Address pc) -> pc >= 0x10000 && pc < 0x20000) (W.eventPc row)) watches
+      changed <- set control [field "records",Element position,field "address"] (0x13490 :: Word32) watches
+        >>= set control [field "records",Element position,field "physical"] (0x13490 :: Word32)
+        >>= set control [field "records",Element position,field "pc"] (0x13490 :: Word32)
+      pure (raw,changed))
+    RetiredCriticalRead -> journal (\raw watches -> do
+      position <- findRow control (\row -> W.eventSource row == W.CpuRead) watches
+      changed <- set control [field "records",Element position,field "address"] (0x7235dc :: Word32) watches
+        >>= set control [field "records",Element position,field "physical"] (0x7235dc :: Word32)
+      pure (raw,changed))
+    WrongJoinedSource -> receiptOnly (\raw -> do
+      identities <- arrayAt control [field "identity",field "sources"] raw
+      names <- mapM (\identity -> pathAt control [field "name"] identity >>= parse control) identities
+      position <- maybe (Left (MutationRejected control)) Right (findIndex (==("record2/critical-pair.bin" :: String)) names)
+      set control [field "identity",field "sources",Element position,field "sha256"] (replicate 64 '0') raw)
+    MissingCriticalCounter -> receiptOnly (\raw -> do
+      samples <- arrayAt control [field "samples"] raw
+      let sample = length samples-1
+      position <- counterView raw sample
+      modifyAt control [field "samples",Element sample,field "local"] (\value -> do
+        views <- parse control value :: Either ControlError [J.Value]
+        pure (J.toJSON (take position views ++ drop (position+1) views))) raw)
+    WrongCounterAlias -> receiptOnly (\raw -> do
+      position <- counterView raw 0
+      set control [field "samples",Element 0,field "local",Element position,field "aliases",Element 0,Element 0] (replicate 64 '0') raw)
     WrongWatchClass -> journal (\raw watches -> do changed <- modifyAt control [field "classes"] (\value -> do values <- parse control value; pure (J.toJSON (drop 1 (values :: [J.Value])))) watches; pure (raw,changed))
     WrongAuxiliaryFlag -> journal (recordedEffect control 0xed600 (Replace 0))
     ExtraRunnableBit -> journal (recordedEffect control 0xe471c (AddBits 32))
@@ -290,13 +377,23 @@ mutate control sources observed = do
 refusalControls :: SourceFiles -> ObservedFiles -> Either ControlError J.Value
 refusalControls sources observed = do
   inputs <- either (Left . BaselineRejected) Right (admitInputs sources)
+  refusalControlsFor sources inputs observed
+
+refusalControlsFor :: SourceFiles -> Inputs -> ObservedFiles -> Either ControlError J.Value
+refusalControlsFor sources inputs observed = do
   baseline <- either (Left . BaselineRejected) Right (admitReceipt inputs observed)
-  results <- mapM (run inputs) [minBound..maxBound]
+  let receipt = qualifiedReceiptData baseline
+      selected control
+        | control `elem` [RetiredCriticalRead,WrongJoinedSource,UnexpectedRecord2Fetch] = case Wire.receiptProgram receipt of Wire.JoinedProgram _ -> True; _ -> False
+        | control >= WrongReadValue = Wire.receiptSchema receipt == Wire.JoinedTaskProtocol
+        | otherwise = True
+  results <- mapM (run receipt inputs) (filter selected [minBound..maxBound])
   pure (J.object ["schema" J..= (1 :: Int),"baseline" J..= qualificationValue baseline,"refusals" J..= length results,"cases" J..= results])
   where
-    run admittedInputs control = do
+    run admittedReceipt admittedInputs control = do
+      wanted <- expectedFor admittedReceipt control
       (changedSources,changedObserved) <- mutate control sources observed
-      let result = (if control == WrongSource then admitInputs changedSources else Right admittedInputs) >>= \inputs -> admitReceipt inputs changedObserved
+      let result = (if control == WrongSource then admitInputs changedSources else Right admittedInputs) >>= \selectedInputs -> admitReceipt selectedInputs changedObserved
           actual = case result of Left problem -> Just problem; Right _ -> Nothing
-      unless (actual == Just (expected control)) (Left (WrongRefusal control (expected control) actual))
-      pure (J.object ["control" J..= show control,"expected" J..= show (expected control),"actual" J..= fmap show actual])
+      unless (actual == Just wanted) (Left (WrongRefusal control wanted actual))
+      pure (J.object ["control" J..= show control,"expected" J..= show wanted,"actual" J..= fmap show actual])

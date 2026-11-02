@@ -118,7 +118,9 @@ fn fail(reason: Refusal, error: impl Into<String>) -> Failure { Failure::new(rea
 fn checked<T>(reason: Refusal, result: Result<T, String>) -> Result<T, Failure> { result.map_err(|error| fail(reason, error)) }
 fn physical(address: u32) -> u32 { address & !0x40000000 }
 fn watch_classes(published: bool, early: bool) -> Vec<WatchRange> {
-    let mut ranges = classes(early);
+    let mut spans = LOADER_SPANS.to_vec();
+    if early { spans.extend(EARLY_SPANS); spans.push(RING_HEADER); }
+    let mut ranges = loader_classes(spans, &[], if early { WatchKinds::WRITES } else { WatchKinds::CPU_FETCH.union(WatchKinds::WRITES) });
     if published {
         ranges.push(WatchRange { start: u64::from(CARRIER.0), end: u64::from(CARRIER.0) + CARRIER_BYTES as u64, kinds: WatchKinds::ALL });
         for (start, end) in [(0xbfb124, 0xbfb244), (0xc22bd0, 0xc22f60), (0xc22f60, 0xc2327c), (0x725214, 0x725424), (0xdb5124, 0xdb51dc), (0x11090a4, 0x11091b0)] {
@@ -137,7 +139,7 @@ fn watch_classes(published: bool, early: bool) -> Vec<WatchRange> {
 }
 impl<'a> Runner<'a> {
     pub(super) fn new(machine: &'a mut Machine, catalog: &'a Catalog, maps: &'a [MemoryMap], output: &'a Path, calls: &'a [StaticCall]) -> Result<Self, String> {
-        let mut permanent = sites(calls);
+        let mut permanent = base_sites(calls);
         let pump_sites: BTreeSet<_> = PUMP_SITES.iter().flat_map(|address| [*address, *address | 0x40000000]).collect();
         for address in &pump_sites { permanent.entry(*address).or_insert_with(|| "application-pump-boundary".into()); }
         machine.traces.bound_full_registers(NonZeroUsize::new(65536).ok_or("zero pump trace bound")?);
@@ -409,7 +411,7 @@ impl<'a> Runner<'a> {
             let loader_site = !self.pump_sites.contains(&pc.0) || address == 0x6a9840 || loader_boundary;
             if loader_site {
                 self.capture.loader.cursor = self.cursor;
-                checked(Refusal::Publication, self.capture.loader.collect(self.machine, self.catalog, self.maps, self.output, &self.permanent, self.calls))?;
+                checked(Refusal::Publication, self.capture.loader.collect(self.machine, self.catalog, self.maps, self.output, &self.permanent, self.calls, &Program::Retained))?;
             }
             self.cursor += 1;
             self.capture.loader.cursor = self.cursor;
