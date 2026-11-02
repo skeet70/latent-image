@@ -1084,6 +1084,7 @@ haskell_binary(
     ],
     data = [":xm1-upstream", ":cardless-ram-push-bridge", "//host/firmware:experiment-ram-relinker"],
     main_file = "Xm1Viewer.hs",
+    main_function = "Xm1Viewer.main",
     ghcopts = [
         "-XGHC2021",
         "-Wall",
@@ -1133,7 +1134,7 @@ haskell_test(
     size = "small",
     srcs = ["Xm1ViewerTests.hs", "Xm1Viewer.hs", "Xm1RamPushE2E.hs"],
     main_file = "Xm1ViewerTests.hs",
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-main-is", "Xm1ViewerTests.main"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":emulator-slot-lib",
         ":case-sha256",

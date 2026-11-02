@@ -1,4 +1,4 @@
-module Main where
+module Xm1Viewer where
 
 import Control.Exception (IOException, catch, displayException)
 import Control.Monad (when)

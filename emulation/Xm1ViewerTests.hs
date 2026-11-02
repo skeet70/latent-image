@@ -1,8 +1,8 @@
-module Xm1ViewerTests (main) where
+module Main (main) where
 
 import Control.Exception (IOException, try)
 import Control.Monad (forM_, unless)
-import qualified Main as Viewer
+import qualified Xm1Viewer as Viewer
 import Xm1RamPushE2E (ModalDiagnostic (..), ModalLifetimeGuard (..))
 
 check :: String -> Bool -> IO ()
