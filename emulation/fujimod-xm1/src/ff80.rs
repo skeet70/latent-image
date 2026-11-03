@@ -224,9 +224,14 @@ impl Ff80 {
         save.endpoints.ok_or_else(|| "USB endpoints are not connected".into())
     }
 
+    /// Whether a rendezvous is latched or not yet released.
+    pub fn rendezvous_active(&self) -> bool {
+        self.rendezvous_complete || self.rendezvous.last().is_some_and(|event| event.released_instructions.is_none())
+    }
+
     pub fn begin_capture_observation(&mut self, scope: CaptureScope) -> Result<(), String> {
         self.machine.require_running()?;
-        if self.rendezvous_complete || self.rendezvous.last().is_some_and(|event| event.released_instructions.is_none()) {
+        if self.rendezvous_active() {
             return Err("capture observation cannot replace an active rendezvous trace".into());
         }
         if self.hits_seen != self.machine.traces.hits.len() {

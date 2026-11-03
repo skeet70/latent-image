@@ -393,3 +393,18 @@ haskell_binary(
         "//host/firmware:bank-allowlist",
     ],
 )
+
+haskell_binary(
+    name = "menu-census",
+    srcs = ["MenuCensusMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+    ],
+)
