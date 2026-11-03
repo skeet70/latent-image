@@ -15,13 +15,15 @@ let
     # optimized Unicorn build reads the CPUARMState copy there with movdqa.
     # The classified memory watch adds per-range access kinds and a
     # fixed-view policy. The composite patches add CPU mutation admission and
-    # the opt-in composite write and mapping guard.
+    # the opt-in composite write and mapping guard. The timer patch makes the
+    # kernel counter rise in mode 0x23 (E-XM1-TIMER-IRQ-LAWS-150).
     patches = [
       ./fujimod-unicorn-context-align.patch
       ./fujimod-classified-watch.patch
       ./fujimod-fetch-attribution.patch
       ./fujimod-composite-cpu.patch
       ./fujimod-composite-watch.patch
+      ./fujimod-timer-upcount.patch
     ] ++ extraPatches;
   };
   # Upstream's mise.toml pins Rust 1.99.1; cargo 1.98 rejects the workspace's
@@ -52,6 +54,8 @@ rustPlatform.buildRustPackage {
     cargo test -p fujimod-emulator --locked -j "$CARGO_BUILD_JOBS" --profile release \
       --target ${pkgs.stdenv.targetPlatform.rust.rustcTargetSpec} \
       --offline --lib
+    cargo test -p fujimod-emulator-exr2-system --locked -j "$CARGO_BUILD_JOBS" --profile release \
+      --target ${pkgs.stdenv.targetPlatform.rust.rustcTargetSpec} --offline --lib
   '';
   nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config ];
   # The JIT execution-gate tests run their emitted Wasm under Node.

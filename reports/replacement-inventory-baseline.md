@@ -1881,7 +1881,7 @@ Observed order on the natural route: record1 first stage releases core 1, which 
 7. Open leaves: root104 has no qualified lifecycle; its tick-callback context is assigned to #156 [INFERENCE: per the #155/#156 issue split]. The pump has no owned run.
 8. Endpoints differ: installer and dispatcher+installer stop near 6.1-12.9M, critical pair and storage at `0x69cf38`, idle's watch at 27.8M; only some cohorts guard to the menu.
 9. Checkpoints: each composed DAT needs its own exported zero-instruction reset, because reset snapshots bind the DAT-derived NAND medium (§8.16); post-switch checkpoints such as the first-heap-call seed are model- and candidate-bound.
-10. Model: natural evidence and checkpoints past the mode-`0x23` timer switch (about 6.14-6.43M) would need re-recording if the up-count model became default; runs ending before it and zero-instruction resets are unaffected (`reports/xm1-timer-upcount-adoption.md`).
+10. Model: the up-count timer is the default FujiMod model since 2026-11-03. Natural evidence and checkpoints past the mode-`0x23` timer switch (about 6.14-6.43M) recorded earlier describe the down-counting model and are re-recorded when each next comes up; runs ending before it and zero-instruction resets are unaffected (`reports/xm1-timer-upcount-adoption.md`).
 
 #### Qualification sequence
 
