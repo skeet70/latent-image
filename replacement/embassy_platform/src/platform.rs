@@ -430,6 +430,7 @@ extern "C" fn host_main(argument: u32) -> ! {
         match kernel::sleep(sleep_timeout(now, next)) {
             SlotStatus::Ok => {
                 unsafe { increment(addr_of_mut!((*r).sleeps_woken)) };
+                own.polling.store(true, Ordering::Release);
                 deliver_doorbell(domain);
             }
             SlotStatus::Timeout => unsafe {
