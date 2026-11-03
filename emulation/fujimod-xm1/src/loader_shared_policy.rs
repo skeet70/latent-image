@@ -1,8 +1,6 @@
 //! Shared external observation policy: route and dispatcher site ownership replayed from admitted source, raw trace contexts and committed words.
 use super::*;
 use owner::shared_dispatch::shared::{CLEAR,CLEAR_LIFETIME};
-use serde::de::Deserializer;
-use std::rc::Rc;
 
 const DISPATCHER:(u32,u32)=(0x69cdf8,0x69cf84);
 
@@ -17,14 +15,12 @@ impl Owner {
 #[derive(Clone,Debug,PartialEq,Eq,Deserialize,Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct OwnedSite {pub(super) address:u32,pub(super) owners:Vec<Owner>}
-/// Owned sites ascending by address, shared between equal consecutive snapshots.
-#[derive(Clone,Debug,PartialEq,Eq)]
-pub(super) struct Snapshot(Rc<[OwnedSite]>);
-impl Serialize for Snapshot {fn serialize<S:serde::Serializer>(&self,serializer:S)->Result<S::Ok,S::Error>{self.0.serialize(serializer)}}
-impl<'de> Deserialize<'de> for Snapshot {fn deserialize<D:Deserializer<'de>>(deserializer:D)->Result<Self,D::Error>{Ok(Self(Vec::<OwnedSite>::deserialize(deserializer)?.into()))}}
+/// Owned sites ascending by address.
+#[derive(Clone,Debug,PartialEq,Eq,Deserialize,Serialize)]
+#[serde(transparent)]
+pub(super) struct Snapshot(Vec<OwnedSite>);
 impl Snapshot {
     pub(super) fn sites(&self)->&[OwnedSite] {&self.0}
-    pub(super) fn new(sites:Vec<OwnedSite>)->Self {Self(sites.into())}
 }
 #[derive(Clone,Debug,PartialEq,Eq,Deserialize,Serialize)]
 #[serde(deny_unknown_fields)]
@@ -56,14 +52,13 @@ pub(super) fn grouped(pairs:&BTreeSet<(u32,Owner)>)->Vec<OwnedSite>{
 struct RouteCall {core:Core,target:u32,continuation:u32,sp:u32,entry:Option<usize>,returned:Option<usize>}
 #[derive(Default)]
 struct Replay {
-    owners:BTreeMap<u32,BTreeSet<Owner>>,added:BTreeSet<(u32,Owner)>,removed:BTreeSet<(u32,Owner)>,snapshot:Option<Snapshot>,
+    owners:BTreeMap<u32,BTreeSet<Owner>>,added:BTreeSet<(u32,Owner)>,removed:BTreeSet<(u32,Owner)>,
     calls:Vec<RouteCall>,active:[Option<u32>;2],entries:usize,publications:usize,clear_revoked:bool,
 }
 impl Replay {
     fn acquire(&mut self,address:u32,owner:Owner)->Result<(),String>{
         require(address%4==0,"external observation site is not A32 aligned")?;
         if self.owners.entry(address).or_default().insert(owner) {
-            self.snapshot=None;
             if !self.removed.remove(&(address,owner)) {self.added.insert((address,owner));}
         }
         Ok(())
@@ -72,14 +67,13 @@ impl Replay {
         let Some(held)=self.owners.get_mut(&address) else {return};
         let gone:Vec<Owner>=held.iter().copied().filter(|owner|select(*owner)).collect();
         for owner in gone {
-            held.remove(&owner);self.snapshot=None;
+            held.remove(&owner);
             if !self.added.remove(&(address,owner)) {self.removed.insert((address,owner));}
         }
         if held.is_empty() {self.owners.remove(&address);}
     }
-    fn snapshot(&mut self)->Snapshot {
-        self.snapshot.get_or_insert_with(||Snapshot::new(self.owners.iter().map(|(address,owners)|
-            OwnedSite {address:*address,owners:owners.iter().copied().collect()}).collect())).clone()
+    fn snapshot(&self)->Snapshot {
+        Snapshot(self.owners.iter().map(|(address,owners)|OwnedSite {address:*address,owners:owners.iter().copied().collect()}).collect())
     }
     fn route(&mut self,event:&Event,static_calls:&BTreeMap<u32,&owner::StaticCall>,catalog:&Catalog)->Result<(),String>{
         let (id,pc,core,registers)=(event.id.0,event.pc.0,event.core,&event.registers);let origin=id as u64;
