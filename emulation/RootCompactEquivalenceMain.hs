@@ -85,6 +85,7 @@ run original compactDir output = do
     Nothing -> pure ()
   unless (end == B.length blob) $
     failWith ("references end at " ++ show end ++ " but blob_bytes is " ++ show (B.length blob))
+  compactSha <- sha256Hex <$> sha256File compactJson
   refuseExisting output
   B.writeFile output $ encodeCanonical $ Object $ KM.fromList
     [ ("schema", Number 1)
@@ -92,8 +93,10 @@ run original compactDir output = do
     , ("samples", Number (fromIntegral samples))
     , ("references", Number (fromIntegral references))
     , ("blob_bytes", Number (fromIntegral (B.length blob)))
+    , ("blob_sha256", String (T.pack (metaBlobSha meta)))
     , ("source_bytes", Number (fromIntegral sourceBytes))
-    , ("source_sha256_checked", Bool True)
+    , ("source_sha256", String (T.pack sourceSha))
+    , ("compact_sha256", String (T.pack compactSha))
     ]
 
 refuseExisting :: FilePath -> IO ()

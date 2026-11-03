@@ -1,6 +1,7 @@
 //! Streaming lossless transcoder from a root `root-task.json` to its compact wire.
 //! Each `bytes` array of a sample's `views` elements and of its `interrupt_stack` object moves to
-//! `root-task.bytes` and is replaced by `{"offset":O,"length":L}`; references are contiguous in document order.
+//! `root-task.bytes` and is replaced by `{"offset":O,"length":L}`. References are contiguous in sample order, each
+//! sample's views before its interrupt stack. Objects inside a sample are written with sorted keys.
 use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
