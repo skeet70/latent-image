@@ -11,7 +11,7 @@ import Data.List (sort)
 import qualified Data.Map.Strict as M
 import Data.Maybe (isNothing)
 import Emulation.MenuCrawl
-import EmulatorUsb (ModeDial (..), SnapshotName (..), SnapshotPress (..), TraceHit (..))
+import EmulatorUsb (CrawlKey (..), ModeDial (..), SnapshotName (..), SnapshotPress (..), TraceHit (..))
 import System.Exit (exitFailure)
 
 -- | A synthetic screen: a menu reading, a frame number and a controller-cell value.
