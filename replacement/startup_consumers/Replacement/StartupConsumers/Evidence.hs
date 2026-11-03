@@ -8,7 +8,7 @@ import qualified Data.Map.Strict as M
 import Data.Ord (Down (..))
 import qualified Data.Set as Set
 import Data.Word (Word8, Word32, Word64)
-import Replacement.KernelInstall.Wire (Address (..), WordValue (..), Count (..), Bytes (..), Core (..), MemoryEvent (..), Watch (..), WatchClass (..), Source (..), ByteOrder (..))
+import Replacement.KernelInstall.Wire (Address (..), WordValue (..), Count (..), Bytes (..), Core (..), MemoryEvent (..), Watch (..), WatchClass (..), Source (..), ByteOrder (..), RomBacking (..))
 import qualified Replacement.KernelInstall.Wire as K
 import qualified Replacement.StartupConsumers.Source as S
 import qualified Replacement.StartupConsumers.ObservationPolicy as Policy
@@ -165,12 +165,8 @@ codeFetchRange guest (S.ByteCount size) =
   let start = fromIntegral (physical (address guest))
   in FetchRange (PhysicalBoundary start) (PhysicalBoundary (start+fromIntegral size))
 
--- | Boot-ROM backing of the model a receipt was recorded on: the catalog's 16 KiB region, or the
--- X-M1 decode repeated through 0x80104000 (E-BOOT-ROM-DECODE-150).
-data RomBacking = CatalogRom | RepeatedRom deriving (Bounded, Enum, Eq, Show)
-
 backedFetchRanges :: RomBacking -> [FetchRange]
-backedFetchRanges rom = [FetchRange (PhysicalBoundary low) (PhysicalBoundary high) | (low,high) <- backedRanges rom]
+backedFetchRanges rom = [FetchRange (PhysicalBoundary low) (PhysicalBoundary high) | [low,high] <- K.backedRanges rom]
 
 -- | The backing whose ranges the receipt's first segment attributes fetches over.
 receiptRomBacking :: Receipt -> Either WitnessError RomBacking
@@ -631,10 +627,6 @@ checkSegmentsWithPolicy policy receipt = do
           at <- eventClock event
           require (at >= sum (map count start) && at <= sum (map count end) && eventSize event <= 8) EventOrderRejected
         else require (eventCore event == Nothing && eventPc event == Nothing && eventInstructions event == Nothing && eventTick event == Nothing) EventRejected) (watchRecords watch)
-
-backedRanges :: RomBacking -> [(Word64,Word64)]
-backedRanges rom = [(0,0x20000000),(0x3fff0000,0x3fff1000),(0x80000000,romEnd),(0x90000000,0x90020000),(0xfff00000,0xfff01000)]
-  where romEnd = case rom of CatalogRom -> 0x80004000; RepeatedRom -> 0x80104000
 
 checkStops :: Receipt -> Probe -> Either WitnessError ()
 checkStops receipt outer = forM_ [probe | probe <- receiptProbes receipt,probeClock probe >= probeClock outer,probeKind probe /= OuterEntry] $ \probe -> do

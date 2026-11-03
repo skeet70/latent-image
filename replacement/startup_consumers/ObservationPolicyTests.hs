@@ -30,9 +30,11 @@ main = do
   assert "receipt recorded on the 16 KiB catalog ROM is admitted" (check (onRom 0x80004000) == Right ()
     && E.checkDeclaredFetchPolicyWithPolicy P.standalonePolicy (onRom 0x80004000) == Right ())
   assert "unknown ROM extent is refused" (check (onRom 0x80008000) == Left E.WatchRejected)
-  assert "segments share one ROM backing" (check (baseline {W.receiptSegments = [romSegment 0x80004000 first,second]}) == Left E.WatchRejected)
+  assert "segments share one ROM backing" (check mixed == Left E.WatchRejected
+    && E.checkDeclaredFetchPolicyWithPolicy P.standalonePolicy mixed == Left E.WatchRejected)
   where
     onRom end = baseline {W.receiptSegments = map (romSegment end) [first,second]}
+    mixed = baseline {W.receiptSegments = [romSegment 0x80004000 first,second]}
     romSegment end s = s {W.segmentWatch = completeWatchTo end,W.segmentFetchRanges = completeRangesTo end
       ,W.segmentFetchAttribution = W.FetchAttribution [K.CpuRead,K.CpuWrite] (completeRangesTo end)}
     check = E.checkFetchPoliciesWithPolicy P.standalonePolicy
