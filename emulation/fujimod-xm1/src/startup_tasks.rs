@@ -14,11 +14,13 @@ mod task_submission_program;
 mod task_submission_control;
 #[path = "task_submission_runtime.rs"]
 mod task_submission_runtime;
+#[path = "loader_code.rs"]
+mod loader_code;
 use task_submission_runtime::{Binding, Invocation};
 use task_submission_program::{Entry as NativeEntry, Program};
 use task_submission_control::{PreparedProbe, ProbeCase, ProbeProgress, ProbeRecord, ProbeStop};
 
-const USAGE: &str = "startup-tasks --run RUN --update DAT --boot-rom ROM --analysis ROOT --output NEW_DIR [--contract CANDIDATE_CONTRACT --native NATIVE_IMAGE] [--case CASE]";
+const USAGE: &str = "startup-tasks --run RUN --update DAT --boot-rom ROM --analysis ROOT --output NEW_DIR [--scope task-composition | --contract CANDIDATE_CONTRACT --native NATIVE_IMAGE [--critical-native IMAGE --storage-native IMAGE --loader-a-source FILE --loader-b-source FILE --record2-source FILE --image4-source FILE]] [--case CASE]";
 const DEADLINE: u64 = 80_000_000;
 const HIT_LIMIT: usize = 4096;
 const WATCH_LIMIT: usize = 1_048_576;
@@ -67,7 +69,7 @@ struct Code { name: &'static str, base: u32, bytes: Vec<u8>, sha256: Digest }
 struct Context { core: Core, pc: Address, registers: [Word; 13], sp: Address, lr: Address, cpsr: Word, counts: [u64; 2], identities: [Word; 2], tcm: [[Word; 2]; 2] }
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum Object { CreationRecords, TaskNodes, IdMap, AuxiliaryRecords, AuxiliaryNodes, Domains, Control, QueueHeads, Bitmap, Selected, Current, Descriptor, Wrapper, Storage, Stack, EntryCode, SharedDomains, InterfaceRoots, InterfaceTable, Parameters, ErrorState, Callback, Cursor, Lock, ClassTable, ControlPatch, LogCallback, LogMode, LogEnable }
+enum Object { CreationRecords, TaskNodes, IdMap, AuxiliaryRecords, AuxiliaryNodes, Domains, Control, QueueHeads, Bitmap, Selected, Current, Descriptor, Wrapper, Storage, Stack, EntryCode, SharedDomains, InterfaceRoots, InterfaceTable, Parameters, ErrorState, Callback, Cursor, Lock, ClassTable, ControlPatch, LogCallback, LogMode, LogEnable, CriticalCounter, CriticalLock, BootLogControl, BootBss, BootMode }
 #[derive(Serialize)]
 struct View { object: Object, physical: Address, bytes: Vec<u8>, aliases: [[Digest; 2]; 2] }
 #[derive(Serialize)]
@@ -106,6 +108,14 @@ enum Scope {
     StockProbe,
     #[serde(rename = "owned-controlled-task-submission-after-both-first-prologue-instructions")]
     OwnedProbe,
+    #[serde(rename = "owned-task-composition-reset-startup-task-objects-through-both-first-prologue-instructions;unwatched-continuation-to-menu")]
+    JoinedNatural,
+    #[serde(rename = "owned-composed-controlled-task-submission-after-both-first-prologue-instructions")]
+    JoinedProbe,
+    #[serde(rename = "retained-task-composition-reset-startup-task-objects-through-both-first-prologue-instructions;unwatched-continuation-to-menu")]
+    ReferenceNatural,
+    #[serde(rename = "retained-composed-controlled-task-submission-after-both-first-prologue-instructions")]
+    ReferenceProbe,
 }
 #[derive(Serialize)]
 struct Receipt<'a> { schema: u32, scope: Scope, outcome: Outcome, error: Option<&'a str>, machine_failure: Option<&'a str>, identity: Identity<'a>, checkpoint_sha256: Digest, checkpoint_reused: bool, instructions: u64, startup_end_counts: Option<[u64; 2]>, memory_watch_sha256: Digest, watch: Result<WatchSummary, String>, watch_end_error: Option<String>, sites: &'a BTreeMap<u32, String>, hits: &'a [Hit], submissions: &'a [Submission], first_tasks: &'a [FirstTask], samples: &'a [Sample], final_menu: Result<Option<[u32; 3]>, String>, program: task_submission_program::Summary<'a>, probe: Option<&'a ProbeRecord> }
@@ -204,9 +214,18 @@ fn boundary(address: u32) -> Result<Boundary, String> {
     })
 }
 fn caller(core: Core, lr: u32) -> Option<TaskId> { match (core, lr) { (Core::Primary, 0x69ce8c) => Some(TaskId(104)), (Core::Primary, 0x69cee8) => Some(TaskId(102)), (Core::Secondary, 0x69cf38) => Some(TaskId(103)), (Core::Secondary, 0x69cf70) => Some(TaskId(93)), _ => None } }
-fn watch_ranges(sources: &[Code]) -> Vec<WatchRange> {
+fn watch_ranges(sources: &[Code], composition: bool) -> Vec<WatchRange> {
     let mut ranges: Vec<_> = [(0x4dae0, 0x4f10c), (0xddaa0, 0xdf0cc), (0x545a4, 0x63460), (0xe4564, 0xf3410), (0xc0800, 0xc0900), (0x96bd20, 0x96bd28), (0xa0fc44, 0xa101e4), (0xa5b204, 0xa5b5c4), (0x89ea94, 0x89ea9c), (0x9c280c, 0x9c2810), (0xa10200, 0xa5b200), (0xa0f82c, 0xa0f830), (0x4f15c, 0x4f160), (0x4f25c, 0x4f260), (0x4f5e4, 0x4f60a)].into_iter().map(|(start, end)| WatchRange { start, end, kinds: WatchKinds::WRITES }).collect();
-    ranges.extend(sources.iter().map(|code| WatchRange { start: u64::from(code.base), end: u64::from(code.base) + code.bytes.len() as u64, kinds: WatchKinds::CPU_FETCH.union(WatchKinds::WRITES) }));
+    if composition {
+        ranges.push(WatchRange { start: 0xa0f824, end: 0xa0f828, kinds: WatchKinds::CPU_READ.union(WatchKinds::WRITES) });
+        ranges.push(WatchRange { start: 0xa00c0, end: 0xa00c4, kinds: WatchKinds::WRITES });
+    }
+    ranges.extend(sources.iter().map(|code| WatchRange { start: u64::from(code.base), end: u64::from(code.base) + code.bytes.len() as u64,
+        kinds: if composition { WatchKinds::CPU_FETCH.union(WatchKinds::CPU_READ).union(WatchKinds::WRITES) } else { WatchKinds::CPU_FETCH.union(WatchKinds::WRITES) } }));
+    if composition {
+        ranges.extend([(0x7235dc, 0x7236b0), (0x7236b4, 0x723790)].into_iter()
+            .map(|(start, end)| WatchRange { start, end, kinds: WatchKinds::CPU_READ }));
+    }
     ranges
 }
 fn menu_route(machine: &mut Machine) -> Result<(), String> {
@@ -223,7 +242,7 @@ fn drive() -> Result<(), String> {
     let arguments = task_submission_runtime::Arguments::parse()?;
     let task_submission_runtime::RawInputs { run: run_bytes, update, rom, run_digest, update_digest, rom_digest } = task_submission_runtime::inputs(&arguments)?;
     let mut code = sources(&arguments.analysis)?;
-    let program = Program::open(arguments.contract.as_deref(), arguments.native.as_deref(), &update_digest, &mut code)?;
+    let program = Program::open(arguments.role, arguments.contract.as_deref(), arguments.native.as_deref(), arguments.joined.as_ref(), &update_digest, &mut code)?;
     let identity = task_submission_runtime::identity(run_digest, update_digest, rom_digest, &code)?;
     let output = arguments.output; let probe_case = arguments.case;
     std::fs::create_dir(&output).map_err(|error| error.to_string())?;
@@ -255,8 +274,11 @@ fn drive() -> Result<(), String> {
                 let kind = *points.get(&address).ok_or("unknown semantic instruction point")?;
                 if watch.is_none() {
                     require(caller(core, state.lr.0).is_some(), "first wrapper is outside the four admitted phase callers")?;
-                    for source in &code { let observed = view(&machine, &maps, &state, Object::EntryCode, source.base, source.bytes.len())?; require(observed.bytes == source.bytes, "loaded canonical image differs before startup watch")?; }
-                    watch = Some(machine.session.board.memory_watch_begin_classified(watch_ranges(&code), WATCH_LIMIT, maps.clone(), ViewPolicy::Observe)?);
+                    if program.composition() {
+                        task_submission_runtime::preserve_record2(&machine, &maps, &state, &identity, &program, probe_case, &output.join("prewatch-record2.json"))?;
+                    }
+                    task_submission_runtime::bind_sources(&machine, &maps, &state, &code, program.joined())?;
+                    watch = Some(machine.session.board.memory_watch_begin_classified(watch_ranges(&code, program.composition()), WATCH_LIMIT, maps.clone(), ViewPolicy::Observe)?);
                 }
                 if kind == Boundary::Submission {
                     if probe.is_none() {
@@ -293,7 +315,7 @@ fn drive() -> Result<(), String> {
                     Some(pending_returns[core.index()].remove(&address).unwrap_or(false))
                 } else { None };
                 let kernels = [Core::Primary, Core::Secondary].into_iter().map(|core| kernel(&machine, &maps, &state, core)).collect::<Result<Vec<_>, _>>()?;
-                let mut local = task_submission_runtime::local(&machine, &maps, &state, active, invocations[core.index()], &kernels, &program, kind, call_taken)?;
+                let mut local = task_submission_runtime::local(&machine, &maps, &state, active, invocations[core.index()], &kernels, &program, &code, kind, call_taken)?;
                 if matches!(kind, Boundary::Selected) && !first_tasks.iter().any(|item| item.core == core) {
                     let l = core.layout(); let node = kernels[core.index()].current.0;
                     require(node >= l.tasks && (node - l.tasks) % 56 == 0 && (node - l.tasks) / 56 < COUNT, "first selected task is not a canonical node")?;
@@ -353,16 +375,19 @@ fn drive() -> Result<(), String> {
     let watch_end_error = watch.as_mut().and_then(|watch| machine.session.board.memory_watch_end(watch).err());
     machine.traces.disarm(&machine.session)?; machine.traces.stop_labels.clear();
     let outcome = result.and_then(|()| {
+        if program.joined() { task_submission_runtime::joined_guard(raw.as_ref().ok_or("joined memory watch is absent")?, &program)?; }
         require(summary.as_ref().is_ok_and(|summary| summary.enabled && summary.violation.is_none()) && watch_end_error.is_none(), "startup watch refused")?;
         if probe_case == ProbeCase::Natural { menu_route(&mut machine) } else { Ok(()) }
     });
-    let scope = match (program.owned(), probe_case == ProbeCase::Natural) {
-        (false, true) => Scope::StockNatural, (true, true) => Scope::OwnedNatural,
-        (false, false) => Scope::StockProbe, (true, false) => Scope::OwnedProbe,
+    let scope = match (program.composition(), program.owned(), probe_case == ProbeCase::Natural) {
+        (true, true, true) => Scope::JoinedNatural, (true, true, false) => Scope::JoinedProbe,
+        (true, false, true) => Scope::ReferenceNatural, (true, false, false) => Scope::ReferenceProbe,
+        (false, false, true) => Scope::StockNatural, (false, true, true) => Scope::OwnedNatural,
+        (false, false, false) => Scope::StockProbe, (false, true, false) => Scope::OwnedProbe,
     };
     let observed = if probe_case == ProbeCase::Natural { Outcome::ObservedMenu } else { Outcome::ObservedProbe };
     let final_menu = machine.menu().map(|menu| menu.map(|menu| [menu.menu_id, menu.setting_id, menu.cursor]));
-    let receipt = Receipt { schema: 2, scope, outcome: if outcome.is_ok() { observed } else { Outcome::Refused }, error: outcome.as_ref().err().map(String::as_str), machine_failure: machine.failure.as_deref(), identity, checkpoint_sha256: Digest(sha256(&reset)), checkpoint_reused: true, instructions: machine.instructions(), startup_end_counts, memory_watch_sha256: Digest(sha256(&accesses)), watch: summary, watch_end_error, sites: &sites, hits: &machine.traces.hits, submissions: &submissions, first_tasks: &first_tasks, samples: &samples, final_menu, program: program.summary(), probe: probe.as_ref().map(PreparedProbe::record) };
+    let receipt = Receipt { schema: if program.composition() { 3 } else { 2 }, scope, outcome: if outcome.is_ok() { observed } else { Outcome::Refused }, error: outcome.as_ref().err().map(String::as_str), machine_failure: machine.failure.as_deref(), identity, checkpoint_sha256: Digest(sha256(&reset)), checkpoint_reused: true, instructions: machine.instructions(), startup_end_counts, memory_watch_sha256: Digest(sha256(&accesses)), watch: summary, watch_end_error, sites: &sites, hits: &machine.traces.hits, submissions: &submissions, first_tasks: &first_tasks, samples: &samples, final_menu, program: program.summary(), probe: probe.as_ref().map(PreparedProbe::record) };
     write(&output.join("startup-tasks.json"), &serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?)?;
     outcome
 }

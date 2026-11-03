@@ -4,20 +4,15 @@ module Emulation.IdleTaskWire where
 import Control.Monad (unless)
 import Data.Aeson hiding (Object)
 import Data.Aeson.Types (Parser)
-import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Map.Strict as M
-import Data.Word (Word32, Word64)
+import Data.Word (Word32)
 import qualified Emulation.StartupTaskWire as S
 import qualified Replacement.KernelInstall.Wire as W
+import Emulation.TaskMemoryWire
 
-data Role = Retained | Owned deriving (Eq, Show)
 data Boundary = Start | IdleEntry | IdleInstruction | IrqEntry | IrqFrame | IrqReturn deriving (Eq, Ord, Show)
-data Object = CreationRecord | TaskNode | Current | Selected | Pool | Stack | Code | LoadedCode | InterfaceRoots | InterfaceTable deriving (Eq, Ord, Show)
-data View = View {viewObject :: Object, viewCore :: S.KernelCore, viewPhysical :: W.Address, viewBytes :: W.Bytes, viewAliases :: [[W.Digest]]} deriving (Eq, Show)
-data Context = Context {contextCore :: S.KernelCore, contextState :: W.Context, contextSpsr :: W.WordValue} deriving (Eq, Show)
 data Sample = Sample {sampleHit :: Int, sampleBoundary :: Boundary, sampleContext :: Context, sampleCodeWord :: W.WordValue, sampleCursor :: Int, sampleViews :: [View]} deriving (Eq, Show)
 data Hit = Hit {hitBoundary :: Boundary, hitCore :: S.KernelCore, hitState :: W.Context, hitCount :: W.Count} deriving (Eq, Show)
-data Identity = Identity {identityRun :: W.Digest, identityUpdate :: W.Digest, identityRom :: W.Digest, identityObserver :: W.Digest, identityLinked :: W.Digest, identitySymbols :: W.Digest, identityContract :: W.Digest, identitySources :: [S.SourceIdentity]} deriving (Eq, Show)
 data Receipt = Receipt
   { receiptSchema :: Int, receiptRole :: Role, receiptOutcome :: S.Outcome, receiptError :: Maybe String, receiptMachineFailure :: Maybe String
   , receiptIdentity :: Identity, receiptCheckpoint :: W.Digest, receiptCheckpointReused :: Bool, receiptInstructions :: W.Count
@@ -25,62 +20,11 @@ data Receipt = Receipt
   , receiptSites :: M.Map W.Address Boundary, receiptHits :: [Hit], receiptSamples :: [Sample], receiptMenu :: S.MenuResult, receiptEndCounts :: Maybe [W.Count]
   } deriving (Eq, Show)
 
-newtype PhysicalBoundary = PhysicalBoundary Word64 deriving (Eq, Show)
-data FetchRange = FetchRange PhysicalBoundary PhysicalBoundary deriving (Eq, Show)
-data FetchAttribution = FetchAttribution [W.Source] [FetchRange] deriving (Eq, Show)
-data WatchViews = ObserveWatch | FixedWatch deriving (Eq, Show)
-newtype WatchFailure = WatchFailure String deriving (Eq, Show)
-data FetchObservation = FetchObservation {fetchRecord :: W.MemoryEvent, fetchCoreInstructions :: W.Count} deriving (Eq, Show)
-data CapturedEvent = CapturedEvent
-  { eventRecord :: W.MemoryEvent, eventCoreInstructions :: Maybe W.Count, eventLatestFetch :: Maybe FetchObservation } deriving (Eq, Show)
-data CapturedWatch = CapturedWatch
-  { captureEnabled :: Bool, captureRanges :: [[Word64]], captureClasses :: [W.WatchClass], captureViews :: WatchViews
-  , captureEvents :: [CapturedEvent], captureViolation :: Maybe WatchFailure, captureAttribution :: FetchAttribution } deriving (Eq, Show)
-
-instance FromJSON FetchRange where
-  parseJSON value = do
-    bounds <- parseJSON value :: Parser [Word64]
-    case bounds of
-      [low,high] | low < high && high <= 0x100000000 -> pure (FetchRange (PhysicalBoundary low) (PhysicalBoundary high))
-      _ -> fail "invalid physical fetch span"
-instance FromJSON FetchAttribution where
-  parseJSON = withObject "fetch attribution" $ \o -> FetchAttribution <$> o .: "sources" <*> o .: "ranges"
-instance FromJSON WatchViews where
-  parseJSON = withText "watch views" $ \value -> case value of
-    "observe" -> pure ObserveWatch; "fixed" -> pure FixedWatch; _ -> fail "invalid watch views"
-instance FromJSON WatchFailure where parseJSON value = WatchFailure <$> parseJSON value
-instance FromJSON FetchObservation where
-  parseJSON value = withObject "actual fetched instruction" (\o -> do
-    unless (not (KM.member "latest_fetch" o)) (fail "recursive fetched instruction")
-    FetchObservation <$> parseJSON value <*> o .: "core_instructions") value
-instance FromJSON CapturedEvent where
-  parseJSON value = withObject "attributed memory event" (\o -> CapturedEvent <$> parseJSON value
-    <*> o .:? "core_instructions" <*> o .:? "latest_fetch") value
-instance FromJSON CapturedWatch where
-  parseJSON = withObject "attributed memory watch" $ \o -> CapturedWatch <$> o .: "enabled" <*> o .: "ranges" <*> o .: "classes"
-    <*> o .: "views" <*> o .: "records" <*> o .:? "violation" <*> o .: "fetch_attribution"
-
-parseRole :: String -> Parser Role
-parseRole "retained" = pure Retained
-parseRole "owned" = pure Owned
-parseRole _ = fail "invalid idle role"
-instance FromJSON Role where parseJSON value = parseJSON value >>= parseRole
-instance ToJSON Role where toJSON Retained = String "retained"; toJSON Owned = String "owned"
 instance FromJSON Boundary where
   parseJSON = withText "idle boundary" $ \value -> case value of
     "start" -> pure Start; "entry" -> pure IdleEntry; "instruction" -> pure IdleInstruction
     "irq-entry" -> pure IrqEntry; "irq-frame" -> pure IrqFrame; "irq-return" -> pure IrqReturn
     _ -> fail "invalid idle boundary"
-instance FromJSON Object where
-  parseJSON = withText "idle view" $ \value -> case value of
-    "creation-record" -> pure CreationRecord; "task-node" -> pure TaskNode; "current" -> pure Current; "selected" -> pure Selected
-    "pool" -> pure Pool; "stack" -> pure Stack; "code" -> pure Code; "interface-roots" -> pure InterfaceRoots; "interface-table" -> pure InterfaceTable
-    "loaded-code" -> pure LoadedCode
-    _ -> fail "invalid idle object"
-instance FromJSON View where
-  parseJSON = withObject "idle view" $ \o -> View <$> o .: "object" <*> o .: "core" <*> o .: "physical" <*> o .: "bytes" <*> o .: "aliases"
-instance FromJSON Context where
-  parseJSON value = withObject "idle context" (\o -> Context <$> o .: "core" <*> parseJSON value <*> o .: "spsr") value
 instance FromJSON Sample where
   parseJSON = withObject "idle sample" $ \o -> do
     hit <- o .: "hit"; cursor <- o .: "watch_cursor"
@@ -96,9 +40,6 @@ instance FromJSON Hit where
     values <- mapM (\name -> maybe (fail "missing idle register") (fmap W.WordValue . S.hexWord) (M.lookup name registers)) names
     sp <- o .: "sp" >>= S.hexWord; lr <- o .: "lr" >>= S.hexWord; cpsr <- o .: "cpsr"; count <- o .: "instructions"
     pure (Hit boundary selected (W.Context (W.Address pc) values (W.Address sp) (W.Address lr) cpsr [] [] []) count)
-instance FromJSON Identity where
-  parseJSON = withObject "idle identity" $ \o -> Identity <$> o .: "run" <*> o .: "update" <*> o .: "boot_rom" <*> o .: "observer"
-    <*> o .: "linked" <*> o .: "symbols" <*> o .: "contract" <*> o .: "sources"
 instance FromJSON Receipt where
   parseJSON = withObject "idle receipt" $ \o -> do
     scope <- o .: "scope" :: Parser String

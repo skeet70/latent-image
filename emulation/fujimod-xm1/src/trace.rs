@@ -753,12 +753,158 @@ enum CoreSelection {
     Primary,
 }
 
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+enum PointSetMode {
+    #[default]
+    Fixed,
+    Mutable,
+}
+
 enum PointScope {
     User,
     UserAndModal,
 }
 
-struct EnteredInstructions(u64);
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct EnteredInstructions(pub u64);
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "TraceStackScopeFields")]
+pub struct TraceStackScopeConfig {
+    stack: [Guest; 2],
+    owner: Guest,
+    current: [Guest; 2],
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TraceStackScopeFields {
+    stack: [Guest; 2],
+    owner: Guest,
+    current: [Guest; 2],
+}
+
+impl TryFrom<TraceStackScopeFields> for TraceStackScopeConfig {
+    type Error = String;
+
+    fn try_from(value: TraceStackScopeFields) -> Result<Self, Self::Error> {
+        Self::new(value.stack, value.owner, value.current)
+    }
+}
+
+impl TraceStackScopeConfig {
+    pub fn new(stack: [Guest; 2], owner: Guest, current: [Guest; 2]) -> Result<Self, String> {
+        if stack.into_iter().chain([owner]).chain(current).any(|value| value.0 % 4 != 0 || value.0 >= 0x20000000)
+            || stack[0] >= stack[1] || owner.0 == 0 || current[0] == current[1] {
+            return Err("stack scope requires aligned physical DRAM bounds, owner and distinct current-task cells".into());
+        }
+        Ok(Self { stack, owner, current })
+    }
+
+    pub const fn stack(&self) -> [Guest; 2] { self.stack }
+    pub const fn owner(&self) -> Guest { self.owner }
+    pub const fn current(&self) -> [Guest; 2] { self.current }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct ScopedHitCount(pub u64);
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraceStackSkip {
+    pub core: usize,
+    pub site: Guest,
+    pub instructions: EnteredInstructions,
+    pub sp: Guest,
+    pub current: Guest,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum TraceStackViolation {
+    OwnerOutsideStack { hit: TraceStackSkip },
+    SkipLimit { hit: TraceStackSkip },
+    CounterOverflow { site: Guest, core: usize },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraceStackSiteSummary {
+    pub site: Guest,
+    pub entered: EnteredInstructions,
+    pub recorded: [ScopedHitCount; 2],
+    pub outside: [ScopedHitCount; 2],
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraceStackScopeSummary {
+    pub config: TraceStackScopeConfig,
+    pub sites: Vec<TraceStackSiteSummary>,
+    pub violation: Option<TraceStackViolation>,
+}
+
+const STACK_SKIP_LIMIT: usize = 65536;
+
+struct StackScope {
+    summary: TraceStackScopeSummary,
+    skips: Vec<TraceStackSkip>,
+}
+
+enum StackPoint {
+    Unscoped,
+    Inside { index: usize, next: ScopedHitCount },
+    Outside,
+}
+
+fn stack_physical(value: Guest) -> Guest {
+    match value.0 {
+        0x40000000..0x60000000 => Guest(value.0 - 0x40000000),
+        _ => value,
+    }
+}
+
+impl StackScope {
+    fn fail(&mut self, violation: TraceStackViolation) -> String {
+        self.summary.violation = Some(violation);
+        "trace stack scope refused".into()
+    }
+
+    fn observe(&mut self, session: &Session, core: usize, site: Guest, instructions: EnteredInstructions) -> Result<StackPoint, String> {
+        let Ok(index) = self.summary.sites.binary_search_by_key(&site, |entry| entry.site) else {
+            return Ok(StackPoint::Unscoped);
+        };
+        let cell = self.summary.config.current.get(core).ok_or("stack scope core exceeds two cores")?;
+        let sp = Guest(register(session, core, arm::Register::R(13))?);
+        let mut bytes = [0; 4];
+        session.board.read_physical(u64::from(cell.0), &mut bytes)?;
+        let current = stack_physical(Guest(u32::from_le_bytes(bytes)));
+        let physical_sp = stack_physical(sp);
+        let [start, end] = self.summary.config.stack;
+        if start <= physical_sp && physical_sp <= end {
+            let Some(next) = self.summary.sites[index].recorded[core].0.checked_add(1) else {
+                return Err(self.fail(TraceStackViolation::CounterOverflow { site, core }));
+            };
+            return Ok(StackPoint::Inside { index, next: ScopedHitCount(next) });
+        }
+        let hit = TraceStackSkip { core, site, instructions, sp, current };
+        if self.skips.len() == STACK_SKIP_LIMIT {
+            return Err(self.fail(TraceStackViolation::SkipLimit { hit }));
+        }
+        let Some(next) = self.summary.sites[index].outside[core].0.checked_add(1) else {
+            return Err(self.fail(TraceStackViolation::CounterOverflow { site, core }));
+        };
+        self.skips.push(hit);
+        self.summary.sites[index].outside[core] = ScopedHitCount(next);
+        if current == self.summary.config.owner {
+            return Err(self.fail(TraceStackViolation::OwnerOutsideStack { hit }));
+        }
+        Ok(StackPoint::Outside)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ModalPointState { Unobserved, Observed }
 #[derive(Clone, Copy)]
@@ -766,6 +912,7 @@ struct PendingPoint {
     pc: Guest,
     point: Option<InstructionPointEvent>,
 }
+
 struct ResumeMarker {
     pc: Guest,
     entered: EnteredInstructions,
@@ -783,11 +930,13 @@ pub struct TraceSites {
     code_binding: Option<CodeBinding>,
     points: Vec<(usize, Box<InstructionPoints>)>,
     cores: CoreSelection,
+    point_set_mode: PointSetMode,
     resumed: BTreeMap<usize, ResumeMarker>,
     capture_observation: Option<CaptureObservation>,
     pending_points: Vec<Option<PendingPoint>>,
     capture_memory: Option<CaptureMemory>,
     modal_observation: Option<ModalTrace>,
+    stack_scope: Option<StackScope>,
 }
 
 fn register(session: &Session, core: usize, register: arm::Register) -> Result<u32, String> {
@@ -796,6 +945,50 @@ fn register(session: &Session, core: usize, register: arm::Register) -> Result<u
 }
 
 impl TraceSites {
+    pub fn begin_stack_scope(&mut self, config: TraceStackScopeConfig) -> Result<(), String> {
+        if self.stack_scope.is_some() || self.modal_observation_active() || self.capture_observation_active() {
+            return Err("stack scope requires no existing stack, modal or capture observation".into());
+        }
+        self.stack_scope = Some(StackScope {
+            summary: TraceStackScopeSummary { config, sites: Vec::new(), violation: None },
+            skips: Vec::with_capacity(STACK_SKIP_LIMIT),
+        });
+        Ok(())
+    }
+
+    pub fn scope_stack_sites(&mut self, session: &Session, sites: &[Guest]) -> Result<(), String> {
+        if self.modal_observation_active() || self.capture_observation_active() {
+            return Err("stack scope conflicts with modal or capture observation".into());
+        }
+        if session.board.instruction_counts().len() != 2 {
+            return Err("stack scope requires two executing core slots".into());
+        }
+        if sites.iter().any(|site| site.0 % 4 != 0 || RamAddress::parse(site.0, 4).is_none()) {
+            return Err("stack scope sites must be aligned DRAM instruction addresses".into());
+        }
+        let entered = EnteredInstructions(InstructionCount::from_board(session)?.0);
+        let scope = self.stack_scope.as_mut().ok_or("stack scope has not begun")?;
+        if scope.summary.violation.is_some() {
+            return Err("trace stack scope has already refused".into());
+        }
+        for &site in sites {
+            if let Err(index) = scope.summary.sites.binary_search_by_key(&site, |entry| entry.site) {
+                scope.summary.sites.insert(index, TraceStackSiteSummary {
+                    site, entered, recorded: [ScopedHitCount(0); 2], outside: [ScopedHitCount(0); 2],
+                });
+            }
+        }
+        Ok(())
+    }
+
+    pub fn drain_stack_scope_skips(&mut self) -> impl Iterator<Item = TraceStackSkip> + '_ {
+        self.stack_scope.iter_mut().flat_map(|scope| scope.skips.drain(..))
+    }
+
+    pub fn stack_scope_summary(&self) -> Option<&TraceStackScopeSummary> {
+        self.stack_scope.as_ref().map(|scope| &scope.summary)
+    }
+
     pub fn bound_full_registers(&mut self, limit: std::num::NonZeroUsize) {
         self.hit_limit = Some(limit);
     }
@@ -839,6 +1032,9 @@ impl TraceSites {
     }
 
     pub fn begin_modal_observation(&mut self, session: &Session, config: ModalConfig) -> Result<(), String> {
+        if self.stack_scope.is_some() {
+            return Err("modal observation conflicts with stack scope".into());
+        }
         if self.modal_observation_active() || self.capture_observation_active() {
             return Err("modal observation requires no active modal or capture observation".into());
         }
@@ -893,6 +1089,9 @@ impl TraceSites {
     }
 
     pub fn begin_capture_observation(&mut self, scope: CaptureScope) -> Result<(), String> {
+        if self.stack_scope.is_some() {
+            return Err("capture observation conflicts with stack scope".into());
+        }
         if self.modal_observation_active() {
             return Err("capture observation refuses an active modal observation".into());
         }
@@ -1021,11 +1220,35 @@ impl TraceSites {
 
     /// Replaces the armed sites on every core.
     pub fn arm(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
-        self.arm_selection(session, sites, CoreSelection::All)
+        self.arm_selection(session, sites, CoreSelection::All, PointSetMode::Fixed)
     }
 
     pub fn arm_primary(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
-        self.arm_selection(session, sites, CoreSelection::Primary)
+        self.arm_selection(session, sites, CoreSelection::Primary, PointSetMode::Fixed)
+    }
+
+    pub fn arm_mutable(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
+        self.arm_selection(session, sites, CoreSelection::All, PointSetMode::Mutable)
+    }
+
+    pub fn replace_sites(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
+        if self.modal_observation_active() {
+            return Err("modal observation sites are frozen until successful finish".into());
+        }
+        if self.capture_observation_active() {
+            return Err("capture observation sites are frozen until the session ends".into());
+        }
+        self.replace_point_addresses(sites.keys().map(|&address| u64::from(address)).collect())?;
+        self.sites = sites;
+        self.restore_resume(session)
+    }
+
+    fn replace_point_addresses(&self, addresses: Vec<u64>) -> Result<(), String> {
+        if self.point_set_mode != PointSetMode::Mutable || self.points.is_empty() {
+            return Err("mutable instruction points are not armed".into());
+        }
+        for (_, points) in &self.points { points.replace_addresses(addresses.clone())?; }
+        Ok(())
     }
 
     fn arm_selection(
@@ -1033,7 +1256,11 @@ impl TraceSites {
         session: &Session,
         sites: BTreeMap<u32, String>,
         cores: CoreSelection,
+        point_set_mode: PointSetMode,
     ) -> Result<(), String> {
+        if self.stack_scope.is_some() {
+            return Err("stack scope sites cannot be replaced".into());
+        }
         if self.modal_observation_active() {
             return Err("modal observation sites are frozen until successful finish".into());
         }
@@ -1043,6 +1270,7 @@ impl TraceSites {
         self.disarm(session)?;
         self.sites = sites;
         self.cores = cores;
+        self.point_set_mode = point_set_mode;
         self.resumed.clear();
         self.rearm(session)
     }
@@ -1063,6 +1291,10 @@ impl TraceSites {
     }
 
     pub fn remove_sites(&mut self, session: &Session, addresses: &[Guest]) -> Result<(), String> {
+        if self.stack_scope.as_ref().is_some_and(|scope| addresses.iter()
+            .any(|address| scope.summary.sites.binary_search_by_key(address, |entry| entry.site).is_ok())) {
+            return Err("stack scope sites cannot be removed".into());
+        }
         if self.modal_observation_active() {
             return Err("modal observation sites are frozen until successful finish".into());
         }
@@ -1073,7 +1305,11 @@ impl TraceSites {
         if addresses.iter().any(|address| !self.sites.contains_key(&address.0)) {
             return Err("trace site is not armed".into());
         }
-        self.disarm(session)?;
+        let mutable = self.point_set_mode == PointSetMode::Mutable;
+        if mutable {
+            self.replace_point_addresses(self.sites.keys().filter(|address| !addresses.iter().any(|removed| removed.0 == **address))
+                .map(|&address| u64::from(address)).collect())?;
+        } else { self.disarm(session)?; }
         for address in addresses {
             if let Some(label) = self.sites.remove(&address.0) {
                 if !self.sites.values().any(|other| other == &label) {
@@ -1081,7 +1317,7 @@ impl TraceSites {
                 }
             }
         }
-        self.rearm(session)?;
+        if !mutable { self.rearm(session)?; }
         self.restore_resume(session)
     }
 
@@ -1096,14 +1332,17 @@ impl TraceSites {
         if sites.keys().any(|address| self.sites.contains_key(address)) {
             return Err("trace site is already armed".into());
         }
-        self.disarm(session)?;
+        let mutable = self.point_set_mode == PointSetMode::Mutable;
+        if mutable {
+            self.replace_point_addresses(self.sites.keys().chain(sites.keys()).map(|&address| u64::from(address)).collect())?;
+        } else { self.disarm(session)?; }
         for label in sites.values() {
             if !self.stop_labels.contains(label) {
                 self.stop_labels.insert(label.clone());
             }
         }
         self.sites.extend(sites);
-        self.rearm(session)?;
+        if !mutable { self.rearm(session)?; }
         self.restore_resume(session)
     }
 
@@ -1134,7 +1373,7 @@ impl TraceSites {
         if let Some(modal) = modal {
             addresses.extend(modal.sites().map(|pc| u64::from(pc.0)));
         }
-        if addresses.is_empty() { return Ok(()); }
+        if addresses.is_empty() && self.point_set_mode == PointSetMode::Fixed { return Ok(()); }
         let addresses: Vec<u64> = addresses.into_iter().collect();
         for core in 0..session.board.instruction_counts().len() {
             let selected = modal.is_some() || match self.cores {
@@ -1144,7 +1383,10 @@ impl TraceSites {
             if !selected {
                 continue;
             }
-            let points = session.board.instruction_points_begin(core, addresses.clone())?;
+            let points = match self.point_set_mode {
+                PointSetMode::Fixed => session.board.instruction_points_begin(core, addresses.clone())?,
+                PointSetMode::Mutable => session.board.instruction_points_begin_mutable(core, addresses.clone())?,
+            };
             self.points.push((core, points));
             self.pending_points.push(None);
         }
@@ -1153,6 +1395,9 @@ impl TraceSites {
 
     /// Pending hooks are retained until their details fit in the capture arena.
     pub fn collect(&mut self, session: &Session, instructions: InstructionCount) -> Result<CollectionOutcome, String> {
+        if self.stack_scope.as_ref().is_some_and(|scope| scope.summary.violation.is_some()) {
+            return Err("trace stack scope has already refused".into());
+        }
         if let Some(modal) = self.modal_observation.as_mut().filter(|modal| modal.active()) {
             modal.check_interval()?;
         }
@@ -1204,7 +1449,6 @@ impl TraceSites {
                 }
                 continue;
             };
-            stop |= self.stop_labels.contains(site);
             if let Some(observation) = &mut self.capture_observation {
                 if self.stop_labels.contains(site) {
                     return Err("capture observation encountered a rendezvous stop".into());
@@ -1255,28 +1499,39 @@ impl TraceSites {
                 points.resume(current, pc);
                 continue;
             }
-            if self.hit_limit.is_some_and(|limit| self.hits.len() >= limit.get()) {
-                return Err("trace hit limit reached".into());
+            let scoped = self.stack_scope.as_mut().map(|scope| {
+                scope.observe(session, *core, Guest(address), EnteredInstructions(instructions.0))
+            }).transpose()?.unwrap_or(StackPoint::Unscoped);
+            if !matches!(scoped, StackPoint::Outside) {
+                stop |= self.stop_labels.contains(site);
+                if self.hit_limit.is_some_and(|limit| self.hits.len() >= limit.get()) {
+                    return Err("trace hit limit reached".into());
+                }
+                let instructions = counts.iter().sum();
+                let site = site.clone();
+                let registers = (0..if self.hit_limit.is_some() { 13u8 } else { 4u8 })
+                    .map(|index| {
+                        let name = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12"][usize::from(index)];
+                        register(session, *core, arm::Register::R(index)).map(|value| (name, format!("{value:#x}")))
+                    })
+                    .collect::<Result<_, String>>()?;
+                self.hits.push(Hit {
+                    site,
+                    address: format!("{address:#x}"),
+                    core: *core,
+                    instructions,
+                    registers,
+                    sp: format!("{:#x}", register(session, *core, arm::Register::R(13))?),
+                    lr: format!("{:#x}", register(session, *core, arm::Register::R(14))?),
+                    cpsr: register(session, *core, arm::Register::Cpsr)?,
+                    code_word: self.code_binding.as_ref().map(|binding| binding.sample(session, *core, address)).transpose()?.flatten(),
+                });
+                if let StackPoint::Inside { index, next } = scoped {
+                    if let Some(scope) = &mut self.stack_scope {
+                        scope.summary.sites[index].recorded[*core] = next;
+                    }
+                }
             }
-            let instructions = counts.iter().sum();
-            let site = site.clone();
-            let registers = (0..if self.hit_limit.is_some() { 13u8 } else { 4u8 })
-                .map(|index| {
-                    let name = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12"][usize::from(index)];
-                    register(session, *core, arm::Register::R(index)).map(|value| (name, format!("{value:#x}")))
-                })
-                .collect::<Result<_, String>>()?;
-            self.hits.push(Hit {
-                site,
-                address: format!("{address:#x}"),
-                core: *core,
-                instructions,
-                registers,
-                sp: format!("{:#x}", register(session, *core, arm::Register::R(13))?),
-                lr: format!("{:#x}", register(session, *core, arm::Register::R(14))?),
-                cpsr: register(session, *core, arm::Register::Cpsr)?,
-                code_word: self.code_binding.as_ref().map(|binding| binding.sample(session, *core, address)).transpose()?.flatten(),
-            });
             let current = session.board.read_register(*core, Register::Pc)?;
             points.resume(current, pc);
             self.pending_points[point_index] = None;

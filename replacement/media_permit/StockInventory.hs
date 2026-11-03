@@ -6,6 +6,7 @@ module StockInventory
   , FunctionSize (..)
   , FunctionDeclaration (..)
   , FunctionDerivation (..)
+  , FunctionInspection (..)
   , ProgramCounter (..)
   , PremiseUse (..)
   , ReturnPremise (..)
@@ -13,7 +14,9 @@ module StockInventory
   , returnPremiseLabel
   , checkDeclarations
   , deriveFunction
+  , inspectFunction
   , checkedStockFunctions
+  , CodeFootprint (..), FootprintError (..), deriveRetainedFootprint
   , stockFunctions
   ) where
 
@@ -32,10 +35,28 @@ newtype GuestAddress = GuestAddress Word32 deriving (Eq, Ord, Show)
 data FunctionWindow = FunctionWindow GuestAddress GuestAddress deriving (Eq, Show)
 newtype FunctionSize = FunctionSize Int deriving (Eq, Ord, Show)
 data FunctionDeclaration = FunctionDeclaration GuestAddress FunctionSize deriving (Eq, Ord, Show)
+data CodeFootprint = CodeFootprint
+  { footprintInstructions :: [GuestAddress]
+  , footprintLiterals :: [GuestAddress]
+  , footprintUnresolvedTransfers :: [GuestAddress]
+  , footprintDependencies :: [GuestAddress]
+  } deriving (Eq, Show)
+data FootprintError = FootprintSourceMissing GuestAddress | FootprintWordLimit GuestAddress
+  | FootprintSwitchCondition GuestAddress | FootprintSwitchGuard GuestAddress
+  | FootprintSwitchComparison GuestAddress | FootprintSwitchBranches GuestAddress | FootprintSwitchBypassed GuestAddress | FootprintUnalignedTarget GuestAddress
+  | FootprintComputedPc GuestAddress | FootprintStatusPc GuestAddress | FootprintThumb GuestAddress
+  | FootprintForbidden GuestAddress A.Forbidden deriving (Eq, Show)
 data FunctionDerivation = FunctionDerivation
   { derivedDeclaration :: FunctionDeclaration
   , derivationPremises :: [ReturnPremise]
   , derivationPremiseUses :: [PremiseUse]
+  } deriving (Eq, Show)
+
+data FunctionInspection = FunctionInspection
+  { inspectedDeclaration :: FunctionDeclaration
+  , inspectedCodeWords :: [GuestAddress]
+  , inspectedLiteralWords :: [GuestAddress]
+  , inspectedReturn :: Either String [PremiseUse]
   } deriving (Eq, Show)
 
 checkDeclarations :: [FunctionDeclaration] -> [FunctionDeclaration] -> Either String ()
@@ -80,7 +101,16 @@ checkedStockFunctions image = do
   pure derived
 
 deriveFunction :: GuestAddress -> B.ByteString -> FunctionWindow -> [GuestAddress] -> Either String FunctionDerivation
-deriveFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low) (GuestAddress high)) externalTails = do
+deriveFunction imageBase image window externalTails = do
+  inspection <- inspectFunction imageBase image window externalTails
+  dependencies <- inspectedReturn inspection
+  pure (FunctionDerivation
+    (inspectedDeclaration inspection)
+    (S.toList (S.fromList [premise | PremiseUse _ premise <- dependencies]))
+    dependencies)
+
+inspectFunction :: GuestAddress -> B.ByteString -> FunctionWindow -> [GuestAddress] -> Either String FunctionInspection
+inspectFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low) (GuestAddress high)) externalTails = do
   unless (low < high && low .&. 3 == 0 && high .&. 3 == 0) (Left "invalid function window")
   (code, literals) <- walk [low] S.empty S.empty
   graph <- forM (S.toList code) $ \address -> do
@@ -99,11 +129,12 @@ deriveFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low)
   literalWords <- forM (S.toList literals) $ \address -> do
     value <- word address
     pure (ProgramCounter address, LiteralWord value)
-  dependencies <- verifyReturns (M.fromList literalWords) (ProgramCounter low)
-    [CodeNode (ProgramCounter address) instruction (map ProgramCounter successors) condition | (address, instruction, successors, condition) <- graph]
-  pure (FunctionDerivation
+  let dependencies = verifyReturns (M.fromList literalWords) (ProgramCounter low)
+        [CodeNode (ProgramCounter address) instruction (map ProgramCounter successors) condition | (address, instruction, successors, condition) <- graph]
+  pure (FunctionInspection
     (FunctionDeclaration (GuestAddress low) (FunctionSize (fromIntegral (S.findMax code + 4 - low))))
-    (S.toList (S.fromList [premise | PremiseUse _ premise <- dependencies]))
+    (map GuestAddress (S.toList code))
+    (map GuestAddress (S.toList literals))
     dependencies)
   where
     inside address = low <= address && address < high && address .&. 3 == 0
@@ -165,3 +196,112 @@ deriveFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low)
       A.DataProcessing _ _ _ destination _ _ | destination == A.pc -> Left "unresolved computed destination"
       A.Rejected problem -> Left ("unadmitted code at " ++ showHex address "" ++ ": " ++ show problem)
       _ -> pure ([address+4], [])
+
+deriveRetainedFootprint :: GuestAddress -> B.ByteString -> GuestAddress -> Either FootprintError CodeFootprint
+deriveRetainedFootprint (GuestAddress imageBase) image (GuestAddress entry) = do
+  (code,literals,unresolved,dependencies,predecessors,switches) <- walk [entry] S.empty S.empty S.empty S.empty M.empty M.empty
+  forM_ (M.toList switches) $ \(address,condition) -> do
+    let onlyPrevious location = location /= entry && M.lookup location predecessors == Just (S.singleton (location-4))
+    unless (onlyPrevious address && (condition /= A.Cond 14 || onlyPrevious (address-4)))
+      (Left (FootprintSwitchBypassed (GuestAddress address)))
+  pure (CodeFootprint (map GuestAddress (S.toAscList code)) (map GuestAddress (S.toAscList literals))
+    (map GuestAddress (S.toAscList unresolved)) (map GuestAddress (S.toAscList dependencies)))
+  where
+    inside address = address >= imageBase && address .&. 3 == 0
+      && toInteger address+4 <= toInteger imageBase+toInteger (B.length image)
+    word :: Word32 -> Either FootprintError Word32
+    word address
+      | not (inside address) = Left (FootprintSourceMissing (GuestAddress address))
+      | otherwise = Right (foldr (\index value -> (value `shiftL` 8)
+          + fromIntegral (B.index image (fromIntegral (address-imageBase)+index))) 0 [0..3])
+    walk [] code literals unresolved dependencies predecessors switches = Right (code,literals,unresolved,dependencies,predecessors,switches)
+    walk (address:pending) code literals unresolved dependencies predecessors switches
+      | S.member address code = walk pending code literals unresolved dependencies predecessors switches
+      | S.size code >= 16384 = Left (FootprintWordLimit (GuestAddress address))
+      | otherwise = do
+          raw <- word address
+          let instruction = A.decode address raw
+              switch = case instruction of
+                A.DataProcessing condition A.ADD False destination base (A.ShiftedImmediate _ A.LSL 2) | destination == A.pc && base == A.pc -> Just condition
+                A.Load condition A.Word _ destination base (A.OffsetRegister True _ A.LSL 2) A.OffsetOnly | destination == A.pc && base == A.pc -> Just condition
+                _ -> Nothing
+          (next,pools,unknown,called) <- edges address raw instruction
+          mapM_ word pools
+          let incoming = foldl' (\seen destination -> M.insertWith S.union destination (S.singleton address) seen) predecessors next
+              dispatches = maybe switches (\condition -> M.insert address condition switches) switch
+          walk (next++pending) (S.insert address code) (S.union literals (S.fromList pools))
+            (if unknown then S.insert address unresolved else unresolved) (S.union dependencies (S.fromList called)) incoming dispatches
+    conditional address (A.Cond condition) = [address+4 | condition /= 14]
+    unalias address = address .&. 0xbfffffff
+    branch address condition target
+      | inside (unalias target) = pure (unalias target:conditional address condition,[],False,[])
+      | otherwise = pure (conditional address condition,[],False,[unalias target])
+    switchBound address condition index = do
+      compared <- case condition of
+        A.Cond 9 -> A.decode (address-4) <$> word (address-4)
+        A.Cond 14 -> do
+          guard <- A.decode (address-4) <$> word (address-4)
+          case guard of
+            A.Branch (A.Cond 8) False _ -> A.decode (address-8) <$> word (address-8)
+            _ -> Left (FootprintSwitchGuard (GuestAddress address))
+        _ -> Left (FootprintSwitchCondition (GuestAddress address))
+      case compared of
+        A.DataProcessing (A.Cond 14) A.CMP _ _ register (A.Immediate bound)
+          | register == index && bound <= 1024 -> Right bound
+        _ -> Left (FootprintSwitchComparison (GuestAddress address))
+    edges address raw instruction = case instruction of
+      A.Branch _ True target -> pure ([address+4],[],False,[unalias target])
+      A.Branch condition False target -> branch address condition target
+      A.BranchExchange _ True _ -> pure ([address+4],[],True,[])
+      A.BranchExchange condition False register ->
+        pure (conditional address condition,[],register /= A.lr,[])
+      A.LoadMultiple condition base _ _ registers | A.pc `elem` registers ->
+        pure (conditional address condition,[],base /= A.sp,[])
+      A.DataProcessing condition A.ADD False destination base (A.ShiftedImmediate index A.LSL 2)
+        | destination == A.pc && base == A.pc -> do
+            bound <- switchBound address condition index
+            let targets = [address+8+4*index' | index' <- [0..bound]]
+            instructions <- mapM word targets
+            unless (and [case A.decode target tableWord of A.Branch (A.Cond 14) False _ -> True; _ -> False
+              | (target,tableWord) <- zip targets instructions]) (Left (FootprintSwitchBranches (GuestAddress address)))
+            pure (targets++conditional address condition,[],False,[])
+      A.Load condition A.Word _ destination base (A.OffsetRegister True index A.LSL 2) A.OffsetOnly
+        | destination == A.pc && base == A.pc -> do
+            bound <- switchBound address condition index
+            let pools = [address+8+4*index' | index' <- [0..bound]]
+            targets <- map (unalias) <$> mapM word pools
+            unless (all (\target -> target .&. 3 == 0) targets) (Left (FootprintUnalignedTarget (GuestAddress address)))
+            pure (filter inside targets++conditional address condition,pools,False,filter (not . inside) targets)
+      A.Load condition width _ destination base (A.OffsetImmediate offset) A.OffsetOnly | base == A.pc -> do
+        let target = fromIntegral (toInteger address+8+toInteger offset)
+            bytes = case width of A.Byte -> 1; A.Half -> 2; A.Word -> 4; A.Dual -> 8
+            pools = [target .&. 0xfffffffc, (target .&. 0xfffffffc)+4..(target+bytes-1) .&. 0xfffffffc]
+        if destination == A.pc then do
+          targetWord <- word target
+          unless (targetWord .&. 3 == 0) (Left (FootprintUnalignedTarget (GuestAddress address)))
+          (next,_,unknown,called) <- branch address condition targetWord
+          pure (next,pools,unknown,called)
+        else pure ([address+4],pools,False,[])
+      A.Load condition A.Word False destination base (A.OffsetImmediate 4) A.PostIndexed
+        | destination == A.pc && base == A.sp -> pure (conditional address condition,[],False,[])
+      A.Load condition _ _ destination _ _ _ | destination == A.pc ->
+        pure (conditional address condition,[],True,[])
+      A.DataProcessing condition A.MOV _ destination _ (A.ShiftedImmediate source A.LSL 0)
+        | destination == A.pc && source == A.lr -> pure (conditional address condition,[],False,[])
+      A.DataProcessing condition _ _ destination _ _ | destination == A.pc ->
+        pure (conditional address condition,[],True,[])
+      A.Compute _ destinations | A.pc `elem` destinations -> Left (FootprintComputedPc (GuestAddress address))
+      A.ReadStatus _ destination | destination == A.pc -> Left (FootprintStatusPc (GuestAddress address))
+      A.Rejected problem -> case problem of
+        A.Coprocessor _ -> linear address
+        A.SystemRegister -> linear address
+        A.InterruptMask -> linear address
+        A.Barrier -> linear address
+        A.WaitForEvent -> linear address
+        A.Exclusive -> linear address
+        A.SupervisorCall -> linear address
+        A.ThumbBranch -> Left (FootprintThumb (GuestAddress address))
+        A.ExceptionReturn -> pure (conditional address (A.Cond (raw `div` 0x10000000)),[],True,[])
+        _ -> Left (FootprintForbidden (GuestAddress address) problem)
+      _ -> linear address
+    linear address = pure ([address+4],[],False,[])

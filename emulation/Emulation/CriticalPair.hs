@@ -3,6 +3,8 @@ module Emulation.CriticalPair
   ( Original, LinkedArtifact, Staging, deriveOriginal, deriveLinkedArtifact
   , stageStartup, startupDat, patchedImage4, stagingValue, verifyFinalDat
   , Guest (..), FrameBytes (..), WitnessLayout (..), witnessLayout
+  , CriticalProof, criticalProof, criticalExecutionPcs, criticalCounterStorePcs, criticalPrivateStorePcs
+  , linkedBytes, linkedSymbols
   ) where
 
 import qualified A32 as A
@@ -30,7 +32,10 @@ data Core = Core0 | Core1 deriving (Eq, Ord)
 
 data Services = Services Core Guest F.Sha256 [(InterfaceOffset, RetainedCode)]
 data Original = Original B.ByteString S.OriginalStartupDat B.ByteString [Services]
-data LinkedArtifact = LinkedArtifact B.ByteString B.ByteString [F.Symbol] Guest Guest FrameBytes FrameBytes
+data CriticalProof = CriticalProof
+  { criticalExecutionPcs :: [Guest], criticalCounterStorePcs :: [Guest], criticalPrivateStorePcs :: [Guest] }
+data BodyProof = BodyProof FrameBytes CriticalProof
+data LinkedArtifact = LinkedArtifact B.ByteString B.ByteString [F.Symbol] Guest Guest BodyProof BodyProof
 data Staging = Staging B.ByteString B.ByteString B.ByteString [ImageWordPatch] [Services] LinkedArtifact
 
 require :: Bool -> String -> Either String ()
@@ -465,7 +470,7 @@ blockPlan mode count base = do
   updated <- addWords base (knownWord (fromIntegral change))
   pure (addresses,updated)
 
-frameExtent :: B.ByteString -> [F.Symbol] -> Body -> Either String FrameBytes
+frameExtent :: B.ByteString -> [F.Symbol] -> Body -> Either String BodyProof
 frameExtent image symbols body = do
   origin <- at symbols "__secondary_stage_start"
   helper <- at symbols "xm1_critical_retained_call"
@@ -484,9 +489,24 @@ frameExtent image symbols body = do
         require (sp == 0) "critical-pair Rust return changes SP"
         require (all (\register -> M.lookup register (frameRegisters frame) == Just (CallerWord register)) preserved)
           "critical-pair Rust return changes a preserved register"
-      walk [] _ deepest returns = do
+      walk [] seen deepest returns = do
         require (returns > (0 :: Int)) "critical-pair Rust has no admitted return"
-        pure (FrameBytes deepest)
+        stores <- forM (Set.toList seen) $ \(pc,frame) -> do
+          word <- leWordAt image (fromIntegral (pc-origin))
+          pointers <- case A.decode pc word of
+            A.Store _ width source base offset indexing -> do
+              registers <- transferRegisters word width source
+              TransferPlan address _ <- transferPlan pc frame base offset indexing
+              mapM (addWords address . knownWord . fromIntegral) [0,4..4*length registers-4]
+            A.StoreMultiple _ base mode _ registers -> fst <$> blockPlan mode (length registers) (readRegister pc frame base)
+            _ -> pure []
+          addresses <- concat <$> mapM memoryAddresses pointers
+          pure ([Guest pc | Absolute 0x40a0f824 `elem` addresses],
+                [Guest pc | any (\address -> case address of Relative _ -> True; _ -> False) addresses])
+        pure (BodyProof (FrameBytes deepest) (CriticalProof
+          (Set.toAscList (Set.fromList [Guest pc | (pc,_) <- Set.toList seen]))
+          (Set.toAscList (Set.fromList (concatMap fst stores)))
+          (Set.toAscList (Set.fromList (concatMap snd stores)))))
       walk ((pc,frame):pending) seen deepest returns
         | Set.member (pc,frame) seen = walk pending seen deepest returns
         | otherwise = do
@@ -615,8 +635,26 @@ data WitnessLayout = WitnessLayout
   }
 
 witnessLayout :: LinkedArtifact -> WitnessLayout
-witnessLayout (LinkedArtifact _ _ _ enter exit (FrameBytes enterFrame) (FrameBytes exitFrame)) =
+witnessLayout (LinkedArtifact _ _ _ enter exit (BodyProof (FrameBytes enterFrame) _) (BodyProof (FrameBytes exitFrame) _)) =
   WitnessLayout enter exit (FrameBytes (64 + enterFrame)) (FrameBytes (56 + exitFrame))
+
+linkedBytes :: LinkedArtifact -> B.ByteString
+linkedBytes (LinkedArtifact bytes _ _ _ _ _ _) = bytes
+
+linkedSymbols :: LinkedArtifact -> B.ByteString
+linkedSymbols (LinkedArtifact _ symbols _ _ _ _ _) = symbols
+
+criticalProof :: LinkedArtifact -> CriticalProof
+criticalProof (LinkedArtifact _ _ symbols (Guest enter) (Guest exit) (BodyProof _ entry) (BodyProof _ leaving)) =
+  let helper = [pc | symbol <- symbols, F.symbolName symbol == "xm1_critical_retained_call"
+        , let address = F.symbolAddress symbol, pc <- [address,address+4..address+44]]
+      execution = map Guest ([enter,enter+4..enter+108] ++ [exit,exit+4..exit+56] ++ helper)
+      privateStores = map Guest (map (enter+) [0,56,60,68] ++ map (exit+) [0,12,16,24]
+        ++ [pc | (offset,pc) <- zip [0,4..] helper, offset `elem` ([0,28,32,40] :: [Int])])
+      unique = Set.toAscList . Set.fromList
+  in CriticalProof (unique (execution ++ criticalExecutionPcs entry ++ criticalExecutionPcs leaving))
+       (unique (criticalCounterStorePcs entry ++ criticalCounterStorePcs leaving))
+       (unique (privateStores ++ criticalPrivateStorePcs entry ++ criticalPrivateStorePcs leaving))
 
 stageStartup :: Original -> LinkedArtifact -> Either String Staging
 stageStartup (Original reference original image4 bindings) artifact@(LinkedArtifact image symbolBytes symbols (Guest enter) (Guest exit) _ _) = do
@@ -661,7 +699,7 @@ verifyFinalDat staging final = do
     "critical-pair final DAT changes decoded image4 extent"
 
 stagingValue :: Staging -> B.ByteString -> Value
-stagingValue (Staging reference staged patched patches bindings (LinkedArtifact image symbolBytes _ (Guest enter) (Guest exit) (FrameBytes enterFrame) (FrameBytes exitFrame))) final = object
+stagingValue (Staging reference staged patched patches bindings (LinkedArtifact image symbolBytes _ (Guest enter) (Guest exit) (BodyProof (FrameBytes enterFrame) _) (BodyProof (FrameBytes exitFrame) _))) final = object
   [ "schema" .= (1 :: Int),"kind" .= ("critical-pair-source-staging" :: String)
   , "source_sha256" .= sha256Hex reference,"startup_dat_sha256" .= sha256Hex staged
   , "final_dat_sha256" .= sha256Hex final,"decoded_image4_sha256" .= sha256Hex patched

@@ -100,18 +100,21 @@ expectedStatus kind = case kind of
   _ -> 0
 
 checkProtocol :: Receipt -> Either ControlError ()
-checkProtocol receipt = ensure ControlScopeRejected (receiptSchema receipt == TaskSubmissionProtocol
-  && case (receiptScope receipt,receiptProgram receipt) of
-    (StockStartupScope,StockProgram) -> True
-    (StockProbeScope,StockProgram) -> True
-    (OwnedStartupScope,OwnedProgram _ _ _) -> True
-    (OwnedProbeScope,OwnedProgram _ _ _) -> True
-    _ -> False)
+checkProtocol receipt = ensure ControlScopeRejected (case (receiptSchema receipt,receiptScope receipt,receiptProgram receipt) of
+  (TaskSubmissionProtocol,StockStartupScope,StockProgram) -> True
+  (TaskSubmissionProtocol,StockProbeScope,StockProgram) -> True
+  (TaskSubmissionProtocol,OwnedStartupScope,OwnedProgram _ _ _) -> True
+  (TaskSubmissionProtocol,OwnedProbeScope,OwnedProgram _ _ _) -> True
+  (JoinedTaskProtocol,StockJoinedStartupScope,StockProgram) -> True
+  (JoinedTaskProtocol,StockJoinedProbeScope,StockProgram) -> True
+  (JoinedTaskProtocol,JoinedStartupScope,JoinedProgram _) -> True
+  (JoinedTaskProtocol,JoinedProbeScope,JoinedProgram _) -> True
+  _ -> False)
 
 checkPhase :: Receipt -> ProbeRecord -> Either ControlError Sample
 checkPhase receipt probe = do
   initial <- sampleAt receipt (probeInitialHit probe)
-  ensure ControlScopeRejected (receiptScope receipt `elem` [StockProbeScope,OwnedProbeScope])
+  ensure ControlScopeRejected (receiptScope receipt `elem` [StockProbeScope,OwnedProbeScope,StockJoinedProbeScope,JoinedProbeScope])
   ensure ControlPhaseRejected (sort (map submissionId (receiptSubmissions receipt)) == map TaskId [93,102,103,104]
     && all (maybe False (<probeInitialHit probe) . submissionReturnHit) (receiptSubmissions receipt)
     && length (receiptFirstTasks receipt) == 2
@@ -233,6 +236,7 @@ replaySuffix receipt watch probe initial = do
         pure (putBytes (fromIntegral target) (B.pack [fromIntegral (value `shiftR` (8*offset)) | offset <- [0..size-1]]) memory)
       W.ModelBusWrite -> Left ControlHostWriteRejected
       W.CpuFetch -> pure memory
+      W.CpuRead | receiptSchema receipt == JoinedTaskProtocol -> pure memory
       _ -> Left ControlReplayRejected
 
 one :: Boundary -> [Sample] -> Either ControlError Sample
@@ -307,6 +311,9 @@ checkSubmission receipt watch probe initial samples = do
   after <- memoryAt end
   sameRegion ControlDescriptorRejected before after descriptorAddress 28
   sameRegion ControlStorageRejected before after 0x89ea8c 4
+  if receiptSchema receipt == JoinedTaskProtocol
+    then mapM_ (\address -> sameRegion ControlIrqRejected before after address 4) [0xa0f824,0xc0804]
+    else pure ()
   ensure ControlSequenceRejected (sampleHit incoming > sampleHit initial && sampleHit end == sampleHit (last samples))
   if kind == CallbackUnreturned then checkCallback receipt watch probe samples
     else do
@@ -568,7 +575,7 @@ checkRelease receipt watch probe samples = do
 qualifyControl :: Receipt -> W.Watch -> Maybe ProbeRecord -> Either ControlError (Maybe ControlProof)
 qualifyControl receipt _ Nothing = do
   checkProtocol receipt
-  ensure ControlScopeRejected (receiptScope receipt `elem` [StockStartupScope,OwnedStartupScope])
+  ensure ControlScopeRejected (receiptScope receipt `elem` [StockStartupScope,OwnedStartupScope,StockJoinedStartupScope,JoinedStartupScope])
   pure Nothing
 qualifyControl receipt watch (Just probe) = do
   checkProtocol receipt

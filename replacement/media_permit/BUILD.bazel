@@ -132,3 +132,22 @@ haskell_test(
         "//host/firmware:bank-allowlist",
     ],
 )
+
+haskell_binary(
+    name = "rtos-manifest",
+    srcs = ["RtosManifestMain.hs"],
+    main_file = "RtosManifestMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":stock-inventory",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:json",
+        "//host/firmware:bank-allowlist",
+    ],
+)
