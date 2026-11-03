@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
 use std::{collections::BTreeMap, num::NonZeroU64};
 
 const MAX_OBSERVATIONS: u64 = 65_536;
+/// Installed-lifetime bound, equal to the guard's write-row limit.
+const MAX_LIFETIME_OBSERVATIONS: u64 = 1 << 20;
 const MAX_LINKED_BYTES: usize = 1024 * 1024;
 const MAX_RETURN_SITES: usize = 4096;
 const DEPTH: usize = 32;
@@ -62,7 +64,8 @@ impl BeginRequest {
         let linked = self.linked.map(|source| SourceImage::new(Guest(source.start), source.bytes)).transpose()?;
         let limit = ObservationLimit(NonZeroU64::new(self.limit)
             .ok_or("modal observation limit must be positive")?);
-        let config = Config::new(layout, self.stock, linked, maps, limit)?
+        let bound = if self.lifetime.is_some() { MAX_LIFETIME_OBSERVATIONS } else { MAX_OBSERVATIONS };
+        let config = Config::bounded(layout, self.stock, linked, maps, limit, bound)?
             .with_owned_prehook(self.owned_prehook.map(Guest))?;
         match self.lifetime {
             Some(lifetime) => {
@@ -116,13 +119,18 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn new(layout: Layout, mut stock: Vec<u8>, linked: Option<SourceImage>,
+    pub fn new(layout: Layout, stock: Vec<u8>, linked: Option<SourceImage>,
         maps: Vec<MemoryMap>, limit: ObservationLimit) -> Result<Self, String> {
+        Self::bounded(layout, stock, linked, maps, limit, MAX_OBSERVATIONS)
+    }
+
+    fn bounded(layout: Layout, mut stock: Vec<u8>, linked: Option<SourceImage>,
+        maps: Vec<MemoryMap>, limit: ObservationLimit, bound: u64) -> Result<Self, String> {
         if stock.len() != (STOCK_END.0 - STOCK_ENTRY.0) as usize
             || stock.get(..4) != Some(0xe92d_4ff0u32.to_le_bytes().as_slice()) {
             return Err("modal stock source is not the complete pinned dispatcher".into());
         }
-        if limit.0.get() > MAX_OBSERVATIONS {
+        if limit.0.get() > bound {
             return Err("modal observation limit exceeds its bound".into());
         }
         let mut entry_branch = None;
@@ -366,8 +374,9 @@ impl ModalTrace {
             &config.maps, config.instruction_sites(), config.layout)).transpose()?;
         let task_capacity = if guard.is_some() && config.layout.policy() == Policy::ScopedOwned75 { capacity } else { 0 };
         Ok(Self { config, monitor, returns: BTreeMap::new(),
-            stock_fetches: Vec::with_capacity(capacity),
-            captured_domains: Vec::with_capacity(capacity), task_entries: Vec::with_capacity(task_capacity),
+            stock_fetches: Vec::with_capacity(capacity.min(MAX_OBSERVATIONS as usize)),
+            captured_domains: Vec::with_capacity(capacity.min(MAX_OBSERVATIONS as usize)),
+            task_entries: Vec::with_capacity(task_capacity.min(MAX_OBSERVATIONS as usize)),
             guard, failure: None, enabled: true })
     }
 

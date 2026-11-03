@@ -17,6 +17,7 @@ module Emulation.ModalObservation
   , ModalLimit
   , modalLimit
   , modalLimitValue
+  , modalLifetimeObservationLimit
   , ModalStock
   , modalStock
   , ModalLinked
@@ -207,6 +208,10 @@ modalLimit :: Word64 -> Either String ModalLimit
 modalLimit value
   | value >= 1 && value <= 65536 = Right (ModalLimit value)
   | otherwise = Left "modal observation limit must be 1..65536"
+
+-- | Installed-lifetime observation bound, equal to 'modalLifetimeWriterLimit'.
+modalLifetimeObservationLimit :: ModalLimit
+modalLifetimeObservationLimit = ModalLimit 1048576
 
 newtype ModalStock = ModalStock B.ByteString deriving (Eq, Show)
 
@@ -496,7 +501,11 @@ parseModalBeginRequest value = do
   modalKeys (required ++ optional) value
   unless (modalField "command" value == Right (String "modal-observation-begin")) (Left "not a modal begin request")
   stock <- modalField "stock" value >>= byteArray 0xfc >>= modalStock
-  limit <- modalField "limit" value >>= modalWord >>= modalLimit
+  rawLimit <- modalField "limit" value >>= modalWord
+  limit <- case (optionalField "context_sources" value, optionalField "lifetime" value) of
+    (Nothing, Nothing) -> modalLimit rawLimit
+    _ | rawLimit == modalLimitValue modalLifetimeObservationLimit -> Right modalLifetimeObservationLimit
+      | otherwise -> Left "modal lifetime request requires its fixed observation bound"
   linkedValue <- modalField "linked" value
   seamValue <- modalField "seam" value
   ownedValue <- modalField "owned" value
@@ -785,7 +794,7 @@ littleWord :: Word32 -> B.ByteString
 littleWord word = B.pack [fromIntegral (word `div` (256 ^ index)) | index <- [0 .. 3 :: Int]]
 
 lifetimeModalRequest :: ModalRequest -> ModalLifetimeSource -> Either String ModalRequest
-lifetimeModalRequest (ModalRequest stock scoped limit _) source = do
+lifetimeModalRequest (ModalRequest stock scoped _ _) source = do
   unless (length (lifetimeContext source) == 16) (Left "modal lifetime requires complete loader context binding")
   unless (length (lifetimePublications source) == maybe 223 (const 224) scoped)
     (Left "modal lifetime publication count differs from stock or scoped route")
@@ -795,7 +804,7 @@ lifetimeModalRequest (ModalRequest stock scoped limit _) source = do
   let readonly = case scoped of
         Nothing -> lifetimeReadonly source
         Just (ModalLinked start bytes, _) -> filter (/= SourceImage start bytes) (lifetimeReadonly source)
-  pure (ModalRequest stock scoped limit (Just source { lifetimeReadonly = readonly }))
+  pure (ModalRequest stock scoped modalLifetimeObservationLimit (Just source { lifetimeReadonly = readonly }))
 
 parseModalLifetimeWatchAck :: Value -> Either String FixedWatchAck
 parseModalLifetimeWatchAck value = projectCacheOnlyWatch value >>= parseFixedWatchAck

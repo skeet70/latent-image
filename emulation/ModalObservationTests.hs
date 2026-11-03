@@ -684,10 +684,12 @@ runtimeBindingTests = do
         ,(0xd0000,0xd03a0),(0xd03a4,0xd03b0),(0xd03b4,0xd03c0),(0xd03c4,0xd03d0)
         ,(0xd03d4,0xd03e0),(0xd03e4,0xd03f0),(0xd03f4,0xd0400),(0xd0404,0xddaa0)] :: [(Word32,Word32)]
       context = [object ["start" .= low,"bytes" .= B.unpack (B.replicate (fromIntegral (high-low)) 0)] | (low,high) <- contextRanges]
-      declaration = set "context_sources" (array context) (set "lifetime" lifetime (modalBeginRequestJson base))
+      lifetimeLimit = Number (fromIntegral (modalLimitValue modalLifetimeObservationLimit))
+      declaration = set "limit" lifetimeLimit (set "context_sources" (array context) (set "lifetime" lifetime (modalBeginRequestJson base)))
       changeLifetime key value = set "lifetime" (set key value lifetime) declaration
       malformedDeclarations =
-        [ ("partial context",set "context_sources" (array (drop 1 context)) declaration)
+        [ ("ordinary observation bound",set "limit" (Number 65536) declaration)
+        , ("partial context",set "context_sources" (array (drop 1 context)) declaration)
         , ("extra context",set "context_sources" (array (context ++ take 1 context)) declaration)
         , ("reordered context",set "context_sources" (array (reverse context)) declaration)
         , ("mutable vector included",set "context_sources" (array (map (set "bytes" (array (replicate 0x3a4 (Number 0)))) (take 1 context) ++ drop 1 context)) declaration)
@@ -748,7 +750,7 @@ runtimeBindingTests = do
   let installedBranch = 0xea000abc :: Word32
       scopedPublications = rows ++ [object ["address" .= (0x00bfb028 :: Word32), "old" .= (0 :: Word32), "new" .= installedBranch]]
       scopedLifetime = set "publications" (array scopedPublications) (set "readonly" (array (drop 1 images)) lifetime)
-      scopedDeclaration = set "context_sources" (array context) (set "lifetime" scopedLifetime (modalBeginRequestJson scopedBase))
+      scopedDeclaration = set "limit" lifetimeLimit (set "context_sources" (array context) (set "lifetime" scopedLifetime (modalBeginRequestJson scopedBase)))
       helperFetches = unionWatchRanges (range 0x10000 0x10080 : fetches)
       truncatedHelperFetches = unionWatchRanges (range 0x10000 0x1007c : fetches)
   scopedRequest <- either error pure (parseModalBeginRequest scopedDeclaration)

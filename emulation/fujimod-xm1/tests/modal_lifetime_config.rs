@@ -139,3 +139,14 @@ fn lifetime_source_payloads_are_bounded_and_readonly_sections_are_disjoint() {
     overlap["lifetime"]["readonly"].as_array_mut().unwrap().push(image);
     assert!(!accepted(overlap));
 }
+
+#[test]
+fn installed_lifetime_observations_are_bounded_by_the_lifetime_writer_limit() {
+    for scoped in [false, true] {
+        let mut value = request(scoped);
+        value["limit"] = json!(1u64 << 20);
+        assert!(accepted(value.clone()));
+        value["limit"] = json!((1u64 << 20) + 1);
+        assert!(!accepted(value));
+    }
+}
