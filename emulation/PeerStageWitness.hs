@@ -107,7 +107,7 @@ usage = unlines
   , "       peer-stage-witness --startup retained|owned --scenario natural|held-sentinel|delayed-release [--endpoint handoff|loader-entry] --firmware DAT --fflzd FFLZD --output DIR [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT] [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
   , "       peer-stage-witness --startup-receipt FILE --startup-contract FILE"
   , "       peer-stage-witness --compare RETAINED_RECEIPT RETAINED_CONTRACT OWNED_RECEIPT OWNED_CONTRACT"
-  , "       peer-stage-witness --loader-prefix retained|owned --scenario natural|held|delayed|non-one|negative-invalid-core|negative-predicate-zero --firmware DAT --fflzd FFLZD --output DIR [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT] [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
+  , "       peer-stage-witness --loader-prefix retained|owned --scenario natural|held|delayed|non-one --firmware DAT --fflzd FFLZD --output DIR [--candidate-image BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT] [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
   , "       peer-stage-witness --loader-prefix-receipt FILE --loader-prefix-contract FILE"
   , "       peer-stage-witness --compare-loader-prefix RETAINED_RECEIPT RETAINED_CONTRACT OWNED_RECEIPT OWNED_CONTRACT"
   , "       peer-stage-witness --composed-startup owned --scenario natural|held|delayed|non-one|negative-interleaved-tail --firmware DAT --fflzd FFLZD --output DIR --firststage-image BIN --firststage-symbols SYMS --candidate-image SECONDARY_PREFIX_BIN --candidate-symbols SYMS --source-firmware ORIGINAL_DAT [--launch --driver DRIVER --run RUN_JSON --boot-rom ROM]"
@@ -719,7 +719,7 @@ prepareLoaderPrefix root firmwarePath fflzdPath outputPath scenario choice execu
       bin <- H.readRegular maxCandidateImage (resolve root imagePath)
       symbols <- H.readRegular maxCandidateSymbols (resolve root symbolsPath)
       images <- either H.failH pure (L.verifyStagedOwned reference staged bin symbols)
-      facts <- either H.failH pure (L.deriveScenarioOwnedFacts scenario bin symbols images)
+      facts <- either H.failH pure (L.deriveOwnedFacts bin symbols images)
       pure (datPath, staged, L.OwnedProgram, facts)
   parsed <- either H.failH pure (U.parseContainer launchedBytes)
   image4 <- decodeImage4 fflzd output (U.parsedParts parsed)

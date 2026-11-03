@@ -16,6 +16,7 @@ import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
 import Replacement.Record5Staging (decodeRecord, stageRecord5, stagedRecord5Dat)
 import Replacement.StartupArtifact.Adapters
+import Replacement.StartupArtifact.AttachState (AttachSources (..), attachStateValue)
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Contract
 import Replacement.StartupArtifact.Joins (registeredJoins)
@@ -104,4 +105,6 @@ runStager tools canonicalPath manifestPath scratchPath output = do
   pieces <- refused (attachGuard attach derived)
   composition <- refused (compose registeredJoins source pieces)
   (dat, observed) <- stageComposition tools scratch source composition
-  writeOutputs output dat observed (contractValue source manifestBytes composition dat observed attach)
+  let sources = AttachSources (canonicalDat source) dat (canonicalTargets source) observed
+  attachState <- refused (attachStateValue sources (manifestAttachRules manifest) (contractCarriers composition))
+  writeOutputs output dat observed (contractValue source manifestBytes composition dat observed attach attachState)

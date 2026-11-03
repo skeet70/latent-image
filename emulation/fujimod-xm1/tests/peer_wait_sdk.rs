@@ -884,8 +884,8 @@ fn composed_configuration_refusal_keeps_its_schema_and_selected_startup_identity
     let protocol = composed_interleaving::protocol([digest.clone(), digest.clone()]);
     let contract = format!(r#"{{"schema":5,"budget":50000000,"scenario":{{"kind":"natural"}},
         "program":{{"kind":"owned","record_sha256":"{digest}","record_immutable_sha256":"{digest}","loader_sha256":"{digest}",
-        "handoff":66592,"entry":66604,"load":66700,"post_load":66704,"loaded_register":0,"poll_period":256,
-        "image":[66560,68096],"refusal":null,"forbid_fetch":[[852000,852168],[854444,854480],[854596,854628]],
+        "handoff":66592,"entry":66604,"load":854596,"post_load":854600,"loaded_register":3,"poll_period":305,
+        "image":[66560,68096],"refusal":null,"forbid_fetch":[[852000,852168]],
         "forbid_read":[[852168,852220]]}},
         "startup":{{"kind":"composed","record1_sha256":"{digest}","image_sha256":"{digest}",
         "symbols_sha256":"{digest}","source_sha256":"{digest}","image":[24576,25088],"entry":24576,"handoff":24608,
@@ -926,8 +926,8 @@ fn standalone_configuration_refusal_keeps_initial_and_handoff_identity_unobserve
     let digest = "ab".repeat(32);
     let contract = format!(r#"{{"schema":4,"budget":50000000,"scenario":{{"kind":"natural"}},
         "program":{{"kind":"owned","record_sha256":"{digest}","record_immutable_sha256":"{digest}","loader_sha256":"{digest}",
-        "handoff":66592,"entry":66604,"load":66700,"post_load":66704,"loaded_register":0,"poll_period":256,
-        "image":[66560,68096],"refusal":null,"forbid_fetch":[[852000,852168],[854444,854480],[854596,854628]],
+        "handoff":66592,"entry":66604,"load":854596,"post_load":854600,"loaded_register":3,"poll_period":305,
+        "image":[66560,68096],"refusal":null,"forbid_fetch":[[852000,852168]],
         "forbid_read":[[852168,852220]]}}}}"#);
     let output = std::env::temp_dir().join(format!("peer-loader-identity-{}-{}", std::process::id(), OUTPUT.fetch_add(1, Ordering::Relaxed)));
     std::fs::create_dir(&output).unwrap();
@@ -1315,8 +1315,8 @@ fn initializer_contract(scratch_bytes: u32) -> String {
     let digest = "ab".repeat(32);
     format!(r#"{{"schema":6,"prefix":{{"schema":4,"budget":50000000,"scenario":{{"kind":"natural"}},
         "program":{{"kind":"owned","record_sha256":"{digest}","record_immutable_sha256":"{digest}","loader_sha256":"{digest}",
-        "handoff":66592,"entry":66604,"load":66700,"post_load":66704,"loaded_register":0,"poll_period":256,
-        "image":[66560,68096],"refusal":null,"forbid_fetch":[[852000,852168],[854444,854480],[854596,854628]],
+        "handoff":66592,"entry":66604,"load":854596,"post_load":854600,"loaded_register":3,"poll_period":305,
+        "image":[66560,68096],"refusal":null,"forbid_fetch":[[852000,852168]],
         "forbid_read":[[852168,852220]]}}}},
         "initializer":{{"role":"owned","entry":67584,"rust":[67616,67712],"scratch_bytes":{scratch_bytes},
         "image_sha256":"{digest}","symbols_sha256":"{digest}",
@@ -1364,24 +1364,33 @@ mod composed_interleaving {
     enum FirstHandoff { Early, Late, Missing, Invalid, Partial(usize) }
 
     #[derive(Clone, Copy)]
-    enum Scenario {
-        Held, Natural, Delayed, NegativeInterleavedTail, NegativeInvalidCorePostLoad,
-        NegativeInvalidCoreExit, NegativeInvalidCoreRefusal, NegativePredicateZero,
-    }
+    enum Scenario { Held, Natural, Delayed, NegativeInterleavedTail }
 
     impl Scenario {
         fn name(self) -> &'static str {
             match self {
                 Self::Held => "held", Self::Natural => "natural", Self::Delayed => "delayed",
                 Self::NegativeInterleavedTail => "negative-interleaved-tail",
-                Self::NegativeInvalidCorePostLoad | Self::NegativeInvalidCoreExit | Self::NegativeInvalidCoreRefusal => "negative-invalid-core",
-                Self::NegativePredicateZero => "negative-predicate-zero",
             }
         }
-        fn standalone(self) -> bool {
-            matches!(self, Self::NegativeInvalidCorePostLoad | Self::NegativeInvalidCoreExit
-                | Self::NegativeInvalidCoreRefusal | Self::NegativePredicateZero)
+    }
+
+    const STOCK_LOADER_B: [(usize, u32); 24] = [
+        (0xd09ac, 0xe92d4830), (0xd09b0, 0xe28db00c), (0xd09b4, 0xe1a04000), (0xd09b8, 0xeb00077e),
+        (0xd09bc, 0xe3500000), (0xd09c0, 0x13001000), (0xd09c4, 0x1344100a), (0xd09c8, 0x13a02064),
+        (0xd09cc, 0x1a00001c),
+        (0xd0a44, 0xe59130c4), (0xd0a48, 0xe3530000), (0xd0a4c, 0x1a000016), (0xd0a50, 0xe1a03002),
+        (0xd0a54, 0xe320f000), (0xd0a58, 0xe2533001), (0xd0a5c, 0x1afffffc), (0xd0a60, 0xeafffff7),
+        (0xd27b8, 0xee121e10), (0xd27bc, 0xe3a02901), (0xd27c0, 0xe2822003), (0xd27c4, 0xe1510002),
+        (0xd27c8, 0x03a00000), (0xd27cc, 0x13a00001), (0xd27d0, 0xe12fff1e),
+    ];
+
+    fn stock_loader_b() -> Vec<u8> {
+        let mut loader = vec![0; 0xddaa0 - 0xd0000];
+        for (address, value) in STOCK_LOADER_B {
+            put_word(&mut loader, address - 0xd0000, value);
         }
+        loader
     }
 
     #[derive(Clone, Copy)]
@@ -1582,22 +1591,6 @@ mod composed_interleaving {
         endpoint: Option<Endpoint>,
     }
 
-    #[derive(Deserialize)]
-    struct NegativeEvidence { invalid_core_identity: u32 }
-
-    #[derive(Deserialize)]
-    struct StandaloneReceipt {
-        schema: u32,
-        result: ResultStatus,
-        machine_failure: Option<String>,
-        cp14_identities: [u32; 2],
-        stops: Vec<Stop>,
-        scoped_watch: Option<ScopedHistory>,
-        negative_evidence: Option<NegativeEvidence>,
-        completion: Option<Completion>,
-        endpoint: Option<Endpoint>,
-    }
-
     impl Receipt {
         fn row(&self, reference: &HistoryRef) -> &ProtocolRow {
             match reference.epoch {
@@ -1685,9 +1678,9 @@ mod composed_interleaving {
             (0x10400, 0xee091f31),
             (0x10404, branch(0x10404, 0x10420)),
             (0x10420, 0xe1a0f003),
-            (0x1042c, 0xe1a00000),
-            (0x10430, 0xe59500c4),
-            (0x10434, branch(0x10434, 0x10430)),
+            (0x1042c, 0xe1a01005),
+            (0x10430, 0xe3a02064),
+            (0x10434, branch(0x10434, 0xd0a44)),
             (0x4000c, 0x40020),
             (0x40020, 0xe1a05000),
             (0x40024, 0xeb0009e3),
@@ -1781,14 +1774,13 @@ mod composed_interleaving {
                 }
             }
         }
+        memory[0xd0000..0xddaa0].copy_from_slice(&stock_loader_b());
         if !matches!(scenario, Scenario::Held) {
             memory[0xddaa0..0xf3420].fill(0xa5);
             for (address, value) in [
                 (0x1042c, branch(0x1042c, 0x10440)),
-                (0x10430, 0xe59c00c4),
-                (0x10434, 0xe3500000),
-                (0x10438, branch(0x10438, 0x10600) & 0x0fffffff | 0x10000000),
-                (0x1043c, branch(0x1043c, 0x11000)),
+                (0x10430, 0),
+                (0x10434, 0),
                 (0x10440, 0xe1a04000),
                 (0x10444, 0xe1a05000),
                 (0x10448, 0xe59f1090),
@@ -1797,11 +1789,9 @@ mod composed_interleaving {
                 (0x10454, 0xe4813004),
                 (0x10458, 0xe1510002),
                 (0x1045c, 0x1afffffc),
-                (0x10460, 0xe59fc080),
-                (0x10464, branch(0x10464, 0x10430)),
+                (0x10460, branch(0x10460, 0x10600)),
                 (0x104e0, 0x400ddaa0),
                 (0x104e4, 0x400f3420),
-                (0x104e8, 0x400a0000),
                 (0x10600, 0xe59f10d8),
                 (0x10604, 0xe59f60d8),
                 (0x10608, 0xe3a03007),
@@ -1809,25 +1799,16 @@ mod composed_interleaving {
                 (0x10610, 0xe4862004),
                 (0x10614, 0xe2533001),
                 (0x10618, 0x1afffffb),
-                (0x1061c, 0xe59f10c4),
-                (0x10620, 0xe59f20c4),
-                (0x10624, 0xe5812000),
-                (0x10628, 0xe5814004),
-                (0x1062c, 0xe581b008),
-                (0x10630, 0xe59f20b8),
-                (0x10634, 0xe581200c),
-                (0x10638, 0xe281b00c),
-                (0x1063c, 0xe1a0d001),
-                (0x10640, 0xe59f60ac),
-                (0x10644, 0xe59fe0ac),
-                (0x10648, branch(0x10648, 0xd0aac)),
+                (0x1061c, 0xe59f40c8),
+                (0x10620, 0xe1a0d004),
+                (0x10624, 0xe59fe0c4),
+                (0x10628, 0xe59f60c4),
+                (0x1062c, branch(0x1062c, 0xd09ac)),
                 (0x106e0, 0x10700),
                 (0x106e4, 0xffff0024),
-                (0x106e8, 0x400f3410),
                 (0x106ec, 0x400f3420),
                 (0x106f0, 0xd00c0),
                 (0x106f4, 0xffff0000),
-                (0x106f8, 0xd09bc),
                 (0x40a00, if matches!(scenario, Scenario::Delayed) { branch(0x40a00, 0x180) | 0x01000000 } else { 0xe3a05001 }),
                 (0x40a04, 0xe59f30f0),
                 (0x40a08, 0xe58350c4),
@@ -1839,31 +1820,10 @@ mod composed_interleaving {
             for (index, word) in [0xd0100, 0xd01b4, 0xd0128, 0xd0148, 0xd0168, 0xd0204, 0xd0184].into_iter().enumerate() {
                 put_word(&mut memory, 0x10700 + 4 * index, word);
             }
-            for index in 0..251 {
-                put_word(&mut memory, 0x11000 + 4 * index, 0xe1a00000);
-            }
-            put_word(&mut memory, 0x113ec, branch(0x113ec, 0x10430));
             if matches!(scenario, Scenario::Delayed) {
                 for (index, word) in [0xe10f3000, 0xe3a05801, 0xe2555001, 0x1afffffd, 0xe128f003, 0xe3a05001, 0xe12fff1e].into_iter().enumerate() {
                     put_word(&mut memory, 0x180 + 4 * index, word);
                 }
-            }
-        }
-        if scenario.standalone() {
-            put_word(&mut memory, 0x6000, branch(0x6000, 0x1800));
-            put_word(&mut memory, 0x1800, 0xee091f31);
-            put_word(&mut memory, 0x1804, branch(0x1804, 0x6004));
-            put_word(&mut memory, 0x10464, branch(0x10464, 0x10500));
-            put_word(&mut memory, 0x10500, 0xee121e10);
-            let continuation = match scenario {
-                Scenario::NegativeInvalidCoreExit => 0xd0aac,
-                Scenario::NegativeInvalidCoreRefusal => 0x10510,
-                _ => 0x10430,
-            };
-            put_word(&mut memory, 0x10504, branch(0x10504, continuation));
-            put_word(&mut memory, 0x10510, 0xeafffffe);
-            if matches!(scenario, Scenario::NegativePredicateZero) {
-                put_word(&mut memory, 0x10438, branch(0x10438, 0x10600));
             }
         }
         let canonical_installer = digest(&memory[0x40020..0x40100]);
@@ -1929,22 +1889,14 @@ mod composed_interleaving {
         let scenario_name = scenario.name();
         let contract = format!(r#"{{"schema":5,"budget":50000000,"scenario":{{"kind":"{scenario_name}"}},
             "program":{{"kind":"owned","record_sha256":"{record2}","record_immutable_sha256":"{immutable}",
-            "loader_sha256":"{loader}","handoff":66592,"entry":66604,"load":66608,"post_load":66612,
-            "loaded_register":0,"poll_period":256,"image":[66560,{image_end}],"refusal":null,
-            "forbid_fetch":[[852000,852168],[854444,854480],[854596,854628]],"forbid_read":[[852168,852220]]}},
+            "loader_sha256":"{loader}","handoff":66592,"entry":66604,"load":854596,"post_load":854600,
+            "loaded_register":3,"poll_period":305,"image":[66560,{image_end}],"refusal":null,
+            "forbid_fetch":[[852000,852168]],"forbid_read":[[852168,852220]]}},
             "startup":{{"kind":"composed","record1_sha256":"{record1}","image_sha256":"{first_image}",
             "symbols_sha256":"{identity}","source_sha256":"{identity}","image":[24576,28928],"entry":24576,
             "handoff":24608,"handoff_target":262176,"handoff_argument":6934008,"secondary_entry":66560,
             "secondary_image_sha256":"{second_image}","secondary_symbols_sha256":"{identity}",
             "secondary_source_sha256":"{identity}",{hook}{protocol}}}}}"#);
-        let contract = if scenario.standalone() {
-            let period = if matches!(scenario, Scenario::NegativePredicateZero) { "null" } else { "256" };
-            format!(r#"{{"schema":4,"budget":50000000,"scenario":{{"kind":"{scenario_name}"}},
-                "program":{{"kind":"owned","record_sha256":"{record2}","record_immutable_sha256":"{immutable}",
-                "loader_sha256":"{loader}","handoff":66592,"entry":66604,"load":66608,"post_load":66612,
-                "loaded_register":0,"poll_period":{period},"image":[66560,{image_end}],"refusal":66832,
-                "forbid_fetch":[[852000,852168],[854444,854480],[854596,854628]],"forbid_read":[[852168,852220]]}}}}"#)
-        } else { contract };
         let output = std::env::temp_dir().join(format!(
             "peer-composed-order-{}-{}", std::process::id(), OUTPUT.fetch_add(1, Ordering::Relaxed),
         ));
@@ -1953,48 +1905,6 @@ mod composed_interleaving {
         let receipt = std::fs::read(output.join("peer-witness.json")).unwrap();
         std::fs::remove_dir_all(output).unwrap();
         (result, receipt)
-    }
-
-    #[test]
-    fn invalid_core_injection_executes_owned_instructions_before_refusing_each_continuation() {
-        for (scenario, boundary) in [
-            (Scenario::NegativeInvalidCorePostLoad, Label::PostLoad),
-            (Scenario::NegativeInvalidCoreExit, Label::PrefixExit),
-            (Scenario::NegativeInvalidCoreRefusal, Label::Refusal),
-        ] {
-            let (result, bytes) = observe_bytes(FirstHandoff::Late, Mutation::None, scenario);
-            let receipt: StandaloneReceipt = serde_json::from_slice(&bytes).unwrap();
-            assert!(result.is_err());
-            assert_eq!(receipt.schema, 4);
-            assert_eq!(receipt.result, ResultStatus::Failed);
-            assert!(receipt.machine_failure.is_none());
-            assert_eq!(receipt.cp14_identities, [0x4003, 0x5003]);
-            assert_eq!(receipt.negative_evidence.unwrap().invalid_core_identity, 0x6003);
-            let entry = receipt.stops.iter().find(|stop| stop.label == Label::PrefixEntry).unwrap();
-            let refused = receipt.stops.iter().find(|stop| stop.label == boundary).unwrap();
-            assert!(refused.counts[1] > entry.counts[1] + 1);
-            assert_eq!(refused.registers[1], 0x6003);
-            assert!(receipt.completion.is_none());
-            assert!(receipt.endpoint.is_none());
-        }
-    }
-
-    #[test]
-    fn zero_accepting_predicate_reaches_the_unchanged_uncommitted_prefix_exit_refusal() {
-        let (result, bytes) = observe_bytes(FirstHandoff::Late, Mutation::None, Scenario::NegativePredicateZero);
-        let receipt: StandaloneReceipt = serde_json::from_slice(&bytes).unwrap();
-        assert!(result.is_err());
-        assert_eq!(receipt.schema, 4);
-        assert_eq!(receipt.result, ResultStatus::Failed);
-        assert!(receipt.machine_failure.is_none());
-        assert!(receipt.negative_evidence.is_none());
-        let post = receipt.stops.iter().find(|stop| stop.label == Label::PostLoad).unwrap();
-        assert_eq!(post.registers[0], 0);
-        let exit = receipt.stops.iter().find(|stop| stop.label == Label::PrefixExit).unwrap();
-        assert_eq!(exit.completion, 0);
-        assert_eq!(receipt.scoped_watch.unwrap().counters[0].nonzero_count, 0);
-        assert!(receipt.completion.is_none());
-        assert!(receipt.endpoint.is_none());
     }
 
     fn assert_vectors(snapshot: &VectorSnapshot, matched: usize) {
@@ -2169,13 +2079,13 @@ mod composed_interleaving {
         assert_eq!(counter.tail.len(), counter.count.min(2) as usize);
         for sample in counter.head.iter().chain(&counter.tail) {
             assert_eq!(sample.source, Source::CpuRead);
-            assert_eq!((sample.core, sample.pc, sample.physical, sample.size), (Some(1), Some(0x10430), 0xa00c4, 4));
+            assert_eq!((sample.core, sample.pc, sample.physical, sample.size), (Some(1), Some(0xd0a44), 0xa00c4, 4));
             assert!(matches!(sample.value, Some(0 | 1)));
         }
         let first = counter.first_nonzero.as_ref().unwrap();
         assert_eq!(counter.first_nonzero_index, Some(counter.count - 1));
         assert_eq!(first.source, Source::CpuRead);
-        assert_eq!((first.core, first.pc, first.physical, first.size, first.value), (Some(1), Some(0x10430), 0xa00c4, 4, Some(1)));
+        assert_eq!((first.core, first.pc, first.physical, first.size, first.value), (Some(1), Some(0xd0a44), 0xa00c4, 4, Some(1)));
         assert_eq!(first.before.as_deref(), Some(&[1, 0, 0, 0][..]));
         assert!(first.instructions.unwrap() > row.instructions.unwrap());
         assert_eq!(counter.tail.last().unwrap().value, Some(1));
@@ -2189,11 +2099,11 @@ mod composed_interleaving {
         let posts: Vec<_> = receipt.stops.iter().filter(|stop| stop.label == Label::PostLoad).collect();
         assert_eq!(posts.len(), 4);
         for pair in posts.windows(2) {
-            assert_eq!(pair[1].counts[1] - pair[0].counts[1], 256);
+            assert_eq!(pair[1].counts[1] - pair[0].counts[1], 305);
             assert_eq!(pair[1].counter.as_ref().unwrap().count, pair[0].counter.as_ref().unwrap().count + 1);
         }
         for stop in &posts {
-            assert_eq!(stop.registers[0], 0);
+            assert_eq!(stop.registers[3], 0);
             assert_eq!(stop.counter.as_ref().unwrap().nonzero_count, 0);
         }
         for stop in receipt.stops.iter().filter(|stop| stop.counter.is_some()) {
@@ -2223,7 +2133,7 @@ mod composed_interleaving {
         assert_eq!(endpoint.zero.range, [0xddaa0, 0xf33ec]);
         assert!(endpoint.zero.first_nonzero.is_none());
         assert_eq!(Some(&endpoint.record_immutable_sha256), receipt.handoff_record_immutable_sha256.as_ref());
-        assert_eq!(endpoint.loader_sha256, digest(&vec![0; 0xddaa0 - 0xd0000]));
+        assert_eq!(endpoint.loader_sha256, digest(&stock_loader_b()));
         if matches!(scenario, Scenario::Delayed) {
             let entry = &receipt.stops[receipt.position(Label::DelayEntry)];
             let release = &receipt.stops[receipt.position(Label::DelayRelease)];

@@ -2,7 +2,7 @@
 module Replacement.StartupArtifact.Compose
   ( Canonical, canonical, canonicalDat, canonicalParsed, canonicalTargets
   , StagedOutput (..), PieceDeclaration (..), derivePiece
-  , JoinName (..), Join (..), JoinBasis (..), HostCheck (..), JoinEvidence (..)
+  , JoinName (..), Join (..), JoinBasis (..), HostCheck (..), JoinEvidence (..), AppliedJoin (..)
   , Composition, compositionPieces, compositionJoins, compositionTargets, compose, attachGuard
   , Qualification (..), compositionQualification
   , preTableDat, verifyComposed
@@ -118,18 +118,23 @@ data HostCheck = HostCheck Text (JoinEvidence -> Bool)
 data Join k = Join
   { joinKind :: k
   , joinMembers :: Set.Set PieceKind
-  , joinSpans :: [Span]
+  -- | Each bound must hold a conflict between members; the conflicts inside
+  -- the bounds are the join's spans in a composition.
+  , joinBounds :: [Span]
   , joinBasis :: JoinBasis
   , joinChecks :: [HostCheck]
   }
 
-data Composition k = Composition [Piece] [Join k] TargetBytes
+-- | A registered join with the member conflicts it covers in one composition.
+data AppliedJoin k = AppliedJoin { appliedJoin :: Join k, appliedSpans :: [Span] }
+
+data Composition k = Composition [Piece] [AppliedJoin k] TargetBytes
 
 compositionPieces :: Composition k -> [Piece]
 compositionPieces (Composition pieces _ _) = pieces
 
 -- | The registered joins whose members are all present.
-compositionJoins :: Composition k -> [Join k]
+compositionJoins :: Composition k -> [AppliedJoin k]
 compositionJoins (Composition _ joins _) = joins
 
 compositionTargets :: Composition k -> TargetBytes
@@ -139,7 +144,7 @@ data Qualification = HostComposed | Pending [Text] deriving (Eq, Show)
 
 compositionQualification :: JoinName k => Composition k -> Qualification
 compositionQualification composition =
-  case [joinName (joinKind join) | join <- compositionJoins composition, ObservationQualified _ <- [joinBasis join]] of
+  case [joinName (joinKind join) | AppliedJoin join _ <- compositionJoins composition, ObservationQualified _ <- [joinBasis join]] of
     [] -> HostComposed
     names -> Pending names
 
@@ -147,13 +152,14 @@ pairs :: [a] -> [(a, a)]
 pairs items = [(left, right) | (index, left) <- zip [0 :: Int ..] items, right <- drop (index + 1) items]
 
 compose :: JoinName k => [Join k] -> Canonical -> [Piece] -> Either Refusal (Composition k)
-compose registry source pieces = do
-  let kinds = map pieceKind pieces
+compose registry source declared = do
+  let kinds = map pieceKind declared
   forM_ (sort kinds `zip` drop 1 (sort kinds)) $ \(left, right) ->
     when (left == right) (Left (DuplicatePieceKind left))
-  forM_ (pairs pieces) $ \(left, right) ->
+  forM_ (pairs declared) $ \(left, right) ->
     forM_ (Set.toList (Set.intersection (pieceAreas left) (pieceAreas right))) $ \area ->
       Left (SharedArea (pieceKind left) (pieceKind right) area)
+  let pieces = yieldBoundaries declared
   forM_ pieces $ \piece -> forM_ (pieceEdits piece) $ \change ->
     unless (coveredBy (editSpan change) (pieceCarriers piece)) (Left (EditOutsideCarriers (pieceKind piece) (editSpan change)))
   forM_ (pairs pieces) $ \(left, right) ->
@@ -165,11 +171,14 @@ compose registry source pieces = do
                   | owner <- pieces, carrier <- pieces, pieceKind owner /= pieceKind carrier
                   , Footprint range _ _ <- pieceFootprint owner, held <- pieceCarriers carrier
                   , Just overlap <- [intersectSpan range held] ]
-  forM_ applicable $ \join -> forM_ (joinSpans join) $ \range -> do
-    let among = [overlap | (owner, carrier, overlap) <- conflicts, Set.member owner (joinMembers join), Set.member carrier (joinMembers join)]
-    unless (coveredBy range among) (Left (JoinSpanNotConflicting (joinName (joinKind join)) range))
+      among join = [overlap | (owner, carrier, overlap) <- conflicts, Set.member owner (joinMembers join), Set.member carrier (joinMembers join)]
+      within join = normalizeSpans [inner | overlap <- among join, bound <- joinBounds join, Just inner <- [intersectSpan overlap bound]]
+  forM_ applicable $ \join -> forM_ (joinBounds join) $ \bound ->
+    when (null [() | overlap <- among join, Just _ <- [intersectSpan overlap bound]])
+      (Left (JoinSpanNotConflicting (joinName (joinKind join)) bound))
+  let applied = [AppliedJoin join (within join) | join <- applicable]
   forM_ conflicts $ \(owner, carrier, overlap) -> do
-    let joined = concat [joinSpans join | join <- applicable, Set.member owner (joinMembers join), Set.member carrier (joinMembers join)]
+    let joined = concat [spans | AppliedJoin join spans <- applied, Set.member owner (joinMembers join), Set.member carrier (joinMembers join)]
     case subtractSpans overlap joined of
       [] -> pure ()
       uncovered : _ -> Left (FootprintOverlap owner carrier uncovered)
@@ -181,7 +190,21 @@ compose registry source pieces = do
   let evidence = JoinEvidence (canonicalTargets source) targets parts pieces
   forM_ applicable $ \join -> forM_ (joinChecks join) $ \(HostCheck name check) ->
     unless (check evidence) (Left (HostProofFailed (joinName (joinKind join)) name))
-  pure (Composition pieces applicable targets)
+  pure (Composition pieces applied targets)
+
+-- | Drops each boundary that yields to an area another manifest piece
+-- claims, with the reads stopping at it.
+yieldBoundaries :: [Piece] -> [Piece]
+yieldBoundaries pieces = map trim pieces
+  where
+    claimed piece = Set.unions [pieceAreas other | other <- pieces, pieceKind other /= pieceKind piece]
+    trim piece =
+      let catalog = pieceCatalog piece
+          yielded boundary = maybe False (`Set.member` claimed piece) (boundaryYieldsTo boundary)
+          dropped = [boundaryLabel boundary | boundary <- catalogBoundaries catalog, yielded boundary]
+      in piece {pieceCatalog = catalog
+          { catalogBoundaries = filter (not . yielded) (catalogBoundaries catalog)
+          , catalogReads = filter ((`notElem` dropped) . readBoundary) (catalogReads catalog) }}
 
 validateCatalogs :: [Piece] -> Either Refusal ()
 validateCatalogs pieces = do
@@ -220,7 +243,8 @@ validateCatalogs pieces = do
       _ -> refuse kind (ReadBoundaryUnknown (readBoundary row))
     let tcmCores = case catalogWrites catalog of
           UnenumeratedWrites _ -> []
-          EnumeratedWrites ranges _ -> [core | WriteRange (TcmTarget core _) _ _ <- ranges]
+          EnumeratedWrites ranges _ ->
+            [core | WriteRange (TcmTarget core _) _ _ <- ranges] ++ [core | WriteRange (CorePhysicalTarget core) _ _ <- ranges]
     forM_ tcmCores $ \core -> unless (core `elem` boundaryCoreSet) (refuse kind (TcmCoreWithoutBoundary core))
 
 maxBoundariesPerCore :: Int

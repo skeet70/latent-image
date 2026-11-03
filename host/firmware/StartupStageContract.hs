@@ -53,8 +53,7 @@ data PrefixSymbol
   = PrefixEntry
   | PrefixInstall
   | PrefixClearWorkspace
-  | PrefixCompletionCell
-  | PrefixDispatch
+  | PrefixClear
   | PrefixExit
   deriving (Bounded, Enum)
 
@@ -63,15 +62,16 @@ data ImageBound = ImageStart | ImageEnd
 data LoaderSymbol
   = LoaderImage ImageBound
   | LoaderStockEntry
-  | LoaderContinuation Continuation
+  | LoaderStartup
   | LoaderForbidden Forbidden ImageBound
 
-data Continuation = Core0Continuation | Core1Continuation
-  deriving (Bounded, Enum)
+-- | Stock loader-B startup, which the prefix exit enters.
+loaderStartupAddress :: Word32
+loaderStartupAddress = 0xd09ac
 
 data Access = FetchAccess | ReadAccess
 
-data Replaced = ReplacedEntry | ReplacedEntryPool | ReplacedDecision | ReplacedWait
+data Replaced = ReplacedEntry | ReplacedEntryPool
   deriving (Bounded, Enum)
 
 data Forbidden = Forbidden Access Replaced
@@ -89,8 +89,6 @@ accessText ReadAccess = "read"
 replacedText :: Replaced -> String
 replacedText ReplacedEntry = "entry"
 replacedText ReplacedEntryPool = "entry_pool"
-replacedText ReplacedDecision = "decision"
-replacedText ReplacedWait = "wait"
 
 boundText :: ImageBound -> String
 boundText ImageStart = "start"
@@ -102,8 +100,7 @@ prefixSymbolName symbol = "xm1_loader_prefix_" ++ suffix symbol
     suffix PrefixEntry = "entry"
     suffix PrefixInstall = "install"
     suffix PrefixClearWorkspace = "clear_workspace"
-    suffix PrefixCompletionCell = "completion_cell"
-    suffix PrefixDispatch = "dispatch"
+    suffix PrefixClear = "clear"
     suffix PrefixExit = "exit"
 
 loaderSymbolName :: LoaderSymbol -> String
@@ -111,8 +108,7 @@ loaderSymbolName symbol = "xm1_loader_b_" ++ suffix symbol
   where
     suffix (LoaderImage bound) = "image_" ++ boundText bound
     suffix LoaderStockEntry = "stock_entry"
-    suffix (LoaderContinuation Core0Continuation) = "core0_continuation"
-    suffix (LoaderContinuation Core1Continuation) = "core1_continuation"
+    suffix LoaderStartup = "startup"
     suffix (LoaderForbidden (Forbidden access replaced) bound) =
       "forbid_" ++ accessText access ++ "_" ++ replacedText replaced ++ "_" ++ boundText bound
 
@@ -140,12 +136,9 @@ loaderPrefixDeclarations symbols = do
       describe (Forbidden access replaced) = accessText access ++ " " ++ replacedText replaced
   forM_ (zip ordered (drop 1 ordered)) $ \((kind, (_, end)), (next, (start, _))) ->
     when (end > start) (Left ("loader-B forbidden " ++ describe kind ++ " overlaps " ++ describe next))
-  retained <- forM [minBound .. maxBound] $ \continuation -> do
-    let name = loaderSymbolName (LoaderContinuation continuation)
-    location <- address name
-    unless (inside loader location) (Left (name ++ " is outside loader B"))
-    when (any (\(_, range) -> inside range location) spans) (Left (name ++ " is inside a forbidden extent"))
-    pure (name, location)
+  startup <- loaderAddress LoaderStartup
+  unless (startup == loaderStartupAddress) (Left (loaderSymbolName LoaderStartup ++ " is not " ++ U.showHexWord loaderStartupAddress))
+  when (any (\(_, range) -> inside range startup) spans) (Left (loaderSymbolName LoaderStartup ++ " is inside a forbidden extent"))
   stockEntry <- loaderAddress LoaderStockEntry
   entrySpan <- loaderAddress (LoaderForbidden (forbidden ReplacedEntry) ImageStart)
   unless (entrySpan == stockEntry) (Left "the stock loader-B entry does not start the forbidden entry extent")
@@ -153,7 +146,7 @@ loaderPrefixDeclarations symbols = do
   entry <- address (prefixSymbolName PrefixEntry) >>= armEntry
   publication <- loaderEntryPublication loaderB (fst loader) stock entry
   let summary =
-        ["retained loader-B continuation " ++ name ++ " " ++ U.showHexWord location | (name, location) <- retained]
+        ["retained loader-B startup " ++ U.showHexWord startup]
           ++ [ "candidate loader-B forbidden " ++ describe kind ++ " [" ++ U.showHexWord start ++ "," ++ U.showHexWord end ++ ")"
              | (kind, (start, end)) <- spans
              ]

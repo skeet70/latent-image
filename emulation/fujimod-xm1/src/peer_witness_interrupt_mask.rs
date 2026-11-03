@@ -130,7 +130,7 @@ fn begin(machine: &mut Machine, runner: &Runner<'_>, phase: Phase) -> Result<Box
     let owned = runner.contract.initializer.as_ref().is_some_and(ContractInitializer::owns_body);
     let mut forbidden_reads = Vec::with_capacity(2);
     if prelude { forbidden_reads.push(span(TABLE)?); }
-    if owned { forbidden_reads.push(span(BODY)?); }
+    if owned { forbidden_reads.push(span(RETIRED_BODY)?); }
     let mut confinement = if prelude {
         vec![ConfinementRule { cores: CoreSet::new(&[0, 1])?, access: Access::Write,
             rule: Confinement::Forbid(guarded.into_iter().map(span).collect::<Result<_, _>>()?) }]
@@ -146,7 +146,7 @@ fn begin(machine: &mut Machine, runner: &Runner<'_>, phase: Phase) -> Result<Box
     }
     if owned {
         confinement.push(ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Fetch,
-            rule: Confinement::Forbid(vec![span(BODY)?]) });
+            rule: Confinement::Forbid(vec![span(RETIRED_BODY)?]) });
     }
     machine.session.board.memory_watch_begin_scoped(ScopedWatch {
         classes, limit: WATCH_LIMIT, confinement, counters: Vec::new(), coverage: Vec::new(),

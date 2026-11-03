@@ -17,7 +17,7 @@ exports_files(
 )
 
 exports_files(
-    ["fujimod-xm1/tests/data/composed-contract-v1.json"],
+    ["fujimod-xm1/tests/data/composed-contract-v2.json"],
     visibility = ["//replacement/startup_artifact:__pkg__"],
 )
 
@@ -747,10 +747,6 @@ haskell_test(
         "$(location //replacement/loader_prefix:loader-prefix-image.symbols)",
         "$(location //replacement/loader_prefix:loader-prefix-core-refusal-image.bin)",
         "$(location //replacement/loader_prefix:loader-prefix-core-refusal-image.symbols)",
-        "$(location //replacement/loader_prefix:loader-prefix-invalid-core-fault-image.bin)",
-        "$(location //replacement/loader_prefix:loader-prefix-invalid-core-fault-image.symbols)",
-        "$(location //replacement/loader_prefix:loader-prefix-predicate-fault-image.bin)",
-        "$(location //replacement/loader_prefix:loader-prefix-predicate-fault-image.symbols)",
         "$(location //replacement/first_stage:first-stage-interleaved-tail-fault-image.bin)",
         "$(location //replacement/first_stage:first-stage-interleaved-tail-fault-image.symbols)",
     ],
@@ -759,10 +755,6 @@ haskell_test(
         "//replacement/loader_prefix:loader-prefix-core-refusal-image.symbols",
         "//replacement/loader_prefix:loader-prefix-image.bin",
         "//replacement/loader_prefix:loader-prefix-image.symbols",
-        "//replacement/loader_prefix:loader-prefix-invalid-core-fault-image.bin",
-        "//replacement/loader_prefix:loader-prefix-invalid-core-fault-image.symbols",
-        "//replacement/loader_prefix:loader-prefix-predicate-fault-image.bin",
-        "//replacement/loader_prefix:loader-prefix-predicate-fault-image.symbols",
         "//replacement/first_stage:first-stage-interleaved-tail-fault-image.bin",
         "//replacement/first_stage:first-stage-interleaved-tail-fault-image.symbols",
     ],
@@ -770,7 +762,6 @@ haskell_test(
     deps = [
         ":loader-prefix-artifact-checks",
         ":loader-prefix-receipt-fixtures",
-        ":loader-prefix-witness-lib",
         "//host:base",
         "//host:bytestring",
         "//host:update-container",

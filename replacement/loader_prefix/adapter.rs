@@ -20,33 +20,15 @@ pub(crate) const STACK_WINDOW_START: u32 = 0x400f_2c14;
 /// Stock `0xd00bc`: cleared on the loader-B stack up to [`STACK_WINDOW_START`].
 pub(crate) const WORKSPACE_START: u32 = 0x400d_daa0;
 
-/// Loader A stores its completion here at `0x40a08`.
-pub(crate) const COMPLETION: *const u32 = 0x400a_00c4 as *const u32;
-/// Stock `0xd09c8`: NOP iterations between completion polls.
-pub(crate) const COMPLETION_DELAY_ITERATIONS: u32 = 100;
-
-/// A retained loader-B address the prefix exits to.
-#[repr(transparent)]
-#[derive(Clone, Copy)]
-pub(crate) struct Continuation(u32);
-
-impl Continuation {
-    pub(crate) fn of(entry: unsafe extern "C" fn()) -> Self {
-        Continuation(entry as *const () as u32)
-    }
-}
-
 /// The vector base the entry assembly keeps in `r6`.
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub(crate) struct VectorBase(pub(crate) u32);
 
 extern "C" {
-    /// `0x400f3420`, also the loader-B frame's first word.
+    /// `0x400f3420`.
     pub(crate) static xm1_loader_b_stack_top: [u32; 0];
 
-    /// `0xd0aac`: stock core-1 exit from the completion wait.
-    pub(crate) fn xm1_loader_b_core1_continuation();
-    /// `0xd09d0`: stock continuation on the `0x4003` identity.
-    pub(crate) fn xm1_loader_b_core0_continuation();
+    /// Zeroes `[start, end)`, eight words per store (`entry.S`).
+    pub(crate) fn xm1_loader_prefix_clear(start: u32, end: u32);
 }

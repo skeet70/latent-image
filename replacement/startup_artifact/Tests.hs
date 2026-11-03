@@ -5,6 +5,7 @@ module Main where
 
 import Control.Monad (unless)
 import qualified Data.Aeson as J
+import Data.Aeson ((.=))
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Bits (complement)
@@ -14,10 +15,13 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Vector as V
+import qualified Data.Text as T
 import Data.Word (Word32)
+import qualified Emulation.Sha256 as SHA
 import Fixtures
 import qualified FujiAF.UpdateContainer as U
 import Replacement.StartupArtifact.Compose
+import Replacement.StartupArtifact.AttachState
 import Replacement.StartupArtifact.Contract
 import Replacement.StartupArtifact.Manifest
 import Replacement.StartupArtifact.Joins (JoinKind, registeredJoins)
@@ -80,13 +84,40 @@ boundary :: Label -> BoundaryKind -> Core -> Word32 -> Bool -> Boundary
 boundary name kind core pc stop = boundaryOn name kind [core] pc stop
 
 boundaryOn :: Label -> BoundaryKind -> [Core] -> Word32 -> Bool -> Boundary
-boundaryOn name kind listed pc stop = Boundary name kind set (Pc pc) (Just (Pc (pc + 0x100000))) stop CompareSequence once
+boundaryOn name kind listed pc stop = Boundary name kind set (Pc pc) (Just (Pc (pc + 0x100000))) stop CompareSequence once Nothing
   where
     once = maybe (error "positive record limit") id (recordLimit 1)
     set = maybe (error "nonempty cores") id (cores listed)
 
 labelled :: PieceKind -> Text -> IO Label
 labelled kind name = either (fail . show) pure (label kind name)
+
+-- | A schema-2 manifest with the given guard and pieces JSON.
+manifestWith :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString
+manifestWith attach rules pieces =
+  "{\"schema\":2,\"guard\":{\"attach\":\"" <> attach <> "\",\"attach_state\":" <> rules <> "},\"pieces\":" <> pieces <> "}"
+
+emptyRules :: B.ByteString
+emptyRules = "{\"peers\":[],\"carriers\":[],\"allowances\":[],\"registers\":[],\"board\":[]}"
+
+onePiece :: B.ByteString
+onePiece = "[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a.bin\",\"symbols\":\"a.symbols\"}}]"
+
+rulesFrom :: J.Value -> Either Refusal AttachRules
+rulesFrom = parseAttachRules
+
+digestText :: B.ByteString -> Text
+digestText = T.pack . SHA.sha256Hex . SHA.sha256
+
+member :: Text -> J.Value -> J.Value
+member key value = case value of
+  J.Object fields -> maybe J.Null id (KeyMap.lookup (Key.fromText key) fields)
+  _ -> J.Null
+
+element :: Int -> J.Value -> J.Value
+element index value = case value of
+  J.Array items | index < V.length items -> items V.! index
+  _ -> J.Null
 
 main :: IO ()
 main = do
@@ -198,6 +229,9 @@ main = do
     (refusal (composeWith [proved "never" (const False)] [first, publisher]) == Just (HostProofFailed "test-join" "never"))
   ok "a passing host proof composes host-qualified"
     (fmap compositionQualification (composeWith [proved "always" (const True)] [first, publisher]) == Right HostComposed)
+  ok "a join's spans in a composition are the member conflicts inside its bounds"
+    (fmap (map appliedSpans . compositionJoins) (composeWith [join [at LoaderA 0x40000 0x4dae0] [FirstStage, PrimaryPublisher] (ObservationQualified "bounded")] [first, publisher])
+      == Right [[overlap]])
 
   -- Registered J1 joins over synthetic pieces.
   let composeRegistered :: [Piece] -> Either Refusal (Composition JoinKind)
@@ -207,10 +241,10 @@ main = do
       starter entry = (piece FirstStage [FirstStageArea] [at Record1 0x20 0x24, at Record1 0x6000 0x64ac]
           [wordEdit Record1 0x20 firstEntry, flip' targets (at Record1 0x6000 0x6004)]
           [Footprint (at Record2 0x10000 0x20000) RuntimePremise (Citation "synthetic")])
-        {pieceFacts = FirstStageFacts (Pc entry)}
+        {pieceFacts = FirstStageFacts (Pc entry) (LinkedBytes B.empty "")}
       link entry bindings' footprint = (piece Record2Link [CriticalPairArea] [at Record2 0x10020 0x10024, at Record2 0x10400 0x110e0]
           [wordEdit Record2 0x10020 secondaryEntry, flip' targets (at Record2 0x10400 0x10404)] footprint)
-        {pieceFacts = Record2LinkFacts (Pc entry) bindings' (LinkedBytes (B.replicate 0x40 0) "")}
+        {pieceFacts = Record2LinkFacts (Pc entry) bindings' (LinkedBytes (B.replicate 0x40 0) "") (ScratchBytes 32)}
       onRecord1 = [Footprint (at Record1 0 0x10000) RuntimePremise (Citation "synthetic")]
       rendezvousName = "first-stage-secondary-rendezvous"
   ok "the rendezvous join refuses a record-2 image whose prefix facts do not derive on the composed images"
@@ -282,6 +316,14 @@ main = do
   ok "a read at a boundary without a retained PC with a stated difference composes"
     (either (const False) (const True)
       (composeWith [] [withCatalog first (catalogOf [unretained] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 (Just "owned only")])]))
+  let yielding = (boundary entryLabel EntryBoundary Core0 0x6000 True) {boundaryYieldsTo = Just PrimaryInitializerArea}
+      yieldingFirst = withCatalog first (catalogOf [yielding] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing])
+      kept composition = [ (map boundaryLabel (catalogBoundaries (pieceCatalog p)), map readLabel (catalogReads (pieceCatalog p)))
+                         | p <- compositionPieces composition, pieceKind p == FirstStage ]
+  ok "a boundary yielding to an area another piece claims is dropped with its reads"
+    (fmap kept (composeWith [observed] [yieldingFirst, publisher]) == Right [([], [])])
+  ok "a boundary yielding to an unclaimed area stays with its reads"
+    (fmap kept (composeWith [] [yieldingFirst]) == Right [([entryLabel], [readLabel'])])
   ok "a composition without edits refuses"
     (refusal (composeWith [] [piece FirstStage [FirstStageArea] [at Record1 0x6000 0x6010] [] []]) == Just CompositionUnchanged)
   ok "the guard attach boundary stops"
@@ -316,26 +358,28 @@ main = do
     (refusal (verifyComposed source abutting (B.take 100 composedDat) composedImage4 fixtureImage5) == Just ComposedUnparsed)
 
   -- Manifest.
-  let manifestText = "{\"schema\":1,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a.bin\",\"symbols\":\"a.symbols\"}}]}"
+  let manifestText = manifestWith "first-stage/entry" emptyRules onePiece
   ok "a manifest parses"
-    (parseManifest manifestText == Right (Manifest entryLabel [ManifestPiece FirstStage (LinkedPaths "a.bin" "a.symbols")]))
+    (parseManifest manifestText == Right (Manifest entryLabel emptyAttachRules [ManifestPiece FirstStage (LinkedPaths "a.bin" "a.symbols")]))
   ok "an unknown top-level key refuses"
-    (refusal (parseManifest "{\"schema\":1,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[],\"extra\":1}")
+    (refusal (parseManifest "{\"schema\":2,\"guard\":{\"attach\":\"first-stage/entry\",\"attach_state\":{}},\"pieces\":[],\"extra\":1}")
       == Just (ManifestRefused (ManifestUnknownKey "manifest.extra")))
   ok "an unknown input key refuses"
-    (refusal (parseManifest "{\"schema\":1,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\",\"dat\":\"c\"}}]}")
+    (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\",\"dat\":\"c\"}}]"))
       == Just (ManifestRefused (ManifestUnknownKey "piece.inputs.dat")))
   ok "an unknown kind refuses"
-    (refusal (parseManifest "{\"schema\":1,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[{\"kind\":\"loader-startup\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}}]}")
+    (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"loader-startup\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}}]"))
       == Just (ManifestRefused (ManifestUnknownKind "loader-startup")))
   ok "another schema refuses"
-    (refusal (parseManifest "{\"schema\":2,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}") == Just (ManifestRefused ManifestSchemaUnsupported))
+    (refusal (parseManifest "{\"schema\":1,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}") == Just (ManifestRefused ManifestSchemaUnsupported))
+  ok "a manifest without attach_state refuses"
+    (refusal (parseManifest "{\"schema\":2,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}")
+      == Just (ManifestRefused (ManifestMalformed "guard lacks attach_state")))
   ok "duplicate manifest kinds refuse"
-    (refusal (parseManifest "{\"schema\":1,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}},{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"c\",\"symbols\":\"d\"}}]}")
+    (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}},{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"c\",\"symbols\":\"d\"}}]"))
       == Just (DuplicatePieceKind FirstStage))
   ok "an attach that is not a label refuses"
-    (refusal (parseManifest "{\"schema\":1,\"guard\":{\"attach\":\"nowhere\"},\"pieces\":[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}}]}")
-      == Just (ManifestRefused (GuardAttachUnknown "nowhere")))
+    (refusal (parseManifest (manifestWith "nowhere" emptyRules onePiece)) == Just (ManifestRefused (GuardAttachUnknown "nowhere")))
 
   -- Footprint normalization and write resolution.
   ok "overlapping footprints normalize to disjoint spans with merged citations"
@@ -349,9 +393,17 @@ main = do
     (allowRanges [at LoaderA 0x40430 0x409ac]
       (EnumeratedWrites [WriteRange PhysicalTarget 0x40040000 0x40041000, WriteRange (TcmTarget Core0 DataBank) 0 0x100] (Premised (Premise "p")))
       == EmittedWrites [WriteRange PhysicalTarget 0x40000 0x40430, WriteRange PhysicalTarget 0x409ac 0x41000, WriteRange (TcmTarget Core0 DataBank) 0 0x100] "premised" (Just "p"))
+  ok "core-bound physical ranges are translated and cut like shared ones"
+    (allowRanges [at LoaderA 0x40430 0x409ac]
+      (EnumeratedWrites [WriteRange (CorePhysicalTarget Core1) 0x40040400 0x40040500, WriteRange PhysicalTarget 0x10 0x20] (Premised (Premise "p")))
+      == EmittedWrites [WriteRange PhysicalTarget 0x10 0x20, WriteRange (CorePhysicalTarget Core1) 0x40400 0x40430] "premised" (Just "p"))
   ok "the alias window ends at 0x60000000"
     (allowRanges [] (EnumeratedWrites [WriteRange PhysicalTarget 0x5fff0000 0x60000000, WriteRange PhysicalTarget 0x60000000 0x60001000] Proved)
       == EmittedWrites [WriteRange PhysicalTarget 0x1fff0000 0x20000000, WriteRange PhysicalTarget 0x60000000 0x60001000] "proved" Nothing)
+  ok "a core-bound physical range on a core without boundaries refuses"
+    (refusal (composeWith [] [withCatalog first (Catalog [boundary entryLabel EntryBoundary Core0 0x6000 False] [CodeSpan 0x6000 0x6010]
+      (EnumeratedWrites [WriteRange (CorePhysicalTarget Core1) 0x100 0x200] Proved) [])])
+      == Just (CatalogRefused FirstStage (TcmCoreWithoutBoundary Core1)))
   ok "a multi-core attach boundary refuses"
     (refusal (attachGuard entryLabel [withCatalog first (catalogOf [boundaryOn entryLabel EntryBoundary [Core0, Core1] 0x6000 False] [CodeSpan 0x6000 0x6010] [])])
       == Just (ManifestRefused (GuardAttachUnsuitable "first-stage/entry")))
@@ -376,13 +428,75 @@ main = do
   contracted <- either (fail . show) pure (composeWith [observed] [contractFirst, contractPublisher])
   contractDat <- either (fail . show) pure (preTableDat source contracted)
   contractTargets <- either (fail . show) pure (verifyComposed source contracted contractDat fixtureImage4 fixtureImage5)
-  let contractJson = contractValue source manifestText contracted contractDat contractTargets entryLabel
+  let sources = AttachSources (canonicalDat source) contractDat (canonicalTargets source) contractTargets
+      carriersOf = contractCarriers contracted
+      absentPart (_, Span target (Guest start) (Guest end)) =
+        J.object ["target" .= targetName target, "start" .= start, "end" .= end, "residency" .= ("absent" :: Text), "reason" .= ("illustrative" :: Text)]
+      peer = J.object ["core" .= (1 :: Int), "retained_pc" .= [J.object ["start" .= (0xd0000 :: Int), "end" .= (0xdc000 :: Int)]]
+        , "composed_pc" .= [J.object ["start" .= (0x10400 :: Int), "end" .= (0x11000 :: Int)]], "reason" .= ("waiting" :: Text)]
+      rulesJson :: [J.Value] -> [J.Value] -> J.Value
+      rulesJson residency allowances = J.object ["peers" .= [peer], "carriers" .= residency, "allowances" .= allowances, "registers" .= ([] :: [J.Value]), "board" .= ([] :: [J.Value])]
+  absentRules <- either (fail . show) pure (rulesFrom (rulesJson (map absentPart carriersOf) ([] :: [J.Value])))
+  attachJson <- either (fail . show) pure (attachStateValue sources absentRules carriersOf)
+  let contractJson = contractValue source manifestText contracted contractDat contractTargets entryLabel attachJson
   ok "the contract has exactly the fixture's keys" (keyPaths contractJson == keyPaths fixture)
   ok "a pending contract names its joins"
     (case contractJson of
       J.Object fields -> KeyMap.lookup "qualification" fields == Just (J.String "pending")
         && KeyMap.lookup "pending_joins" fields == Just (J.toJSON ["test-join" :: Text])
       _ -> False)
+
+  -- Attach-state rules and their contract form.
+  let firstCarrier = at Record1 0x6000 0x6010
+      part range residency extra = case range of
+        Span target (Guest start) (Guest end) -> J.object
+          (["target" .= targetName target, "start" .= start, "end" .= end, "residency" .= (residency :: Text)] ++ extra)
+      publisherAbsent = part (at LoaderA 0x40430 0x409ac) "absent" ["reason" .= ("loaded later" :: Text)]
+      residentFirst = [part firstCarrier "resident" [], publisherAbsent]
+      attachOf residency allowances = rulesFrom (rulesJson residency allowances) >>= \rules -> attachStateValue sources rules carriersOf
+      firstPart = element 0 . member "parts" . element 0 . member "carriers"
+  case attachOf residentFirst [] of
+    Right value -> ok "a resident part carries both roles' digests over its target bytes"
+      (member "canonical_sha256" (firstPart value) == J.toJSON (digestText (slice 0x6000 0x10 (targetOf (canonicalTargets source) Record1)))
+        && member "composed_sha256" (firstPart value) == J.toJSON (digestText (slice 0x6000 0x10 (targetOf contractTargets Record1)))
+        && member "canonical_sha256" (firstPart value) /= member "composed_sha256" (firstPart value))
+    Left problem -> fail (show problem)
+  let split = [part (at Record1 0x6000 0x6008) "resident" [], part (at Record1 0x6008 0x6010) "absent" ["reason" .= ("r" :: Text)], publisherAbsent]
+  ok "a carrier may be tiled by resident and absent parts"
+    (either (const False) ((== 2) . V.length . (\v -> case v of J.Array items -> items; _ -> V.empty) . member "parts" . element 0 . member "carriers") (attachOf split []))
+  let tilingRefused residency = case attachOf residency [] of
+        Left (ManifestRefused (AttachStateRefused _)) -> True
+        _ -> False
+  ok "a gap in a carrier's parts refuses" (tilingRefused [part (at Record1 0x6000 0x6008) "resident" [], publisherAbsent])
+  ok "a carrier without parts refuses" (tilingRefused [part firstCarrier "resident" []])
+  ok "a part outside every carrier refuses" (tilingRefused (residentFirst ++ [part (at Record2 0x10400 0x10404) "resident" []]))
+  ok "a resident part with a reason refuses" (tilingRefused [part firstCarrier "resident" ["reason" .= ("r" :: Text)], publisherAbsent])
+  let copy transform = J.object ["label" .= ("staged-record" :: Text), "kind" .= ("copy" :: Text), "space" .= J.object ["target" .= ("physical" :: Text)]
+        , "start" .= (0x50000 :: Int), "end" .= (0x50010 :: Int), "reason" .= ("r" :: Text)
+        , "source" .= J.object ["dat" .= J.object ["offset" .= (0x40000 :: Int), "transform" .= (transform :: Text)]]]
+      copyDigest which = member which . element 0 . member "allowances"
+  case (attachOf residentFirst [copy "complement"], attachOf residentFirst [copy "identity"]) of
+    (Right complemented, Right identical) -> do
+      ok "a DAT copy carries both DATs' digests under its transform"
+        (copyDigest "canonical_sha256" complemented == J.toJSON (digestText (B.map complement (slice 0x40000 0x10 (canonicalDat source))))
+          && copyDigest "composed_sha256" identical == J.toJSON (digestText (slice 0x40000 0x10 contractDat)))
+      ok "an allowance carries every allowance key"
+        (case element 0 (member "allowances" complemented) of
+          J.Object fields -> length (KeyMap.keys fields) == 14 && member "citation" (J.Object fields) == J.Null
+          _ -> False)
+    _ -> fail "copy allowances did not emit"
+  let declared size = J.object ["label" .= ("word" :: Text), "kind" .= ("declared" :: Text), "space" .= J.object ["target" .= ("physical" :: Text)]
+        , "start" .= (0 :: Int), "end" .= (size :: Int), "reason" .= ("r" :: Text), "citation" .= ("c" :: Text)]
+      refusedRules value = case rulesFrom value of
+        Left (ManifestRefused (AttachStateRefused _)) -> True
+        _ -> False
+  ok "a declared allowance within 64 KiB parses" (either (const False) (const True) (rulesFrom (rulesJson [] [declared 0x10000])))
+  ok "a declared allowance above 64 KiB refuses" (refusedRules (rulesJson [] [declared 0x10001]))
+  ok "an allowance with another kind's key refuses"
+    (refusedRules (rulesJson [] [case declared 4 of J.Object fields -> J.Object (KeyMap.insert "core" (J.toJSON (0 :: Int)) fields); other -> other]))
+  ok "a repeated allowance label refuses" (refusedRules (rulesJson [] [declared 4, declared 8]))
+  ok "an unknown attach_state key refuses"
+    (refusedRules (case rulesJson [] [] of J.Object fields -> J.Object (KeyMap.insert "extra" J.Null fields); other -> other))
 
   passed <- readIORef counter
   putStrLn ("startup-artifact-tests: " ++ show passed ++ " checks passed")

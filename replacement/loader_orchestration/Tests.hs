@@ -71,5 +71,5 @@ main = do
       bSymbols <- B.readFile bSymbolsPath
       check LoaderA a aSymbols
       check LoaderB b bSymbols
-      expectRefusal "synthetic canonical source" SourceMismatch (canonicalSource B.empty B.empty B.empty B.empty)
+      expectRefusal "synthetic canonical source" SourceMismatch (canonicalSource B.empty B.empty)
     _ -> ioError (userError "loader-orchestration-tests requires both emitted images and symbol files")

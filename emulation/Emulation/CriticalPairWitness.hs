@@ -246,7 +246,7 @@ loaderCodeSpans = loaderSpans 0x40000 0xdae0 ++ loaderSpans 0xd0000 0xdaa0
 
 retainedLoaderInstruction :: I.Role -> Word32 -> Bool
 retainedLoaderInstruction role pc = let address = fromIntegral pc
-  in pc .&. 3 == 0 && (role /= I.Owned || pc < 0xd0430 || pc >= 0xd09ac)
+  in pc .&. 3 == 0 && (role /= I.Owned || pc < 0xd0434 || pc >= 0xd09ac)
     && any (\(low,high) -> address >= low && address < high) loaderCodeSpans
 
 spans :: [(Word64,Word64)]
@@ -339,7 +339,7 @@ watchRules contract phase banks = let
     BoundaryPhase low high -> [rule [1] CpuWrite Allow [(0xa0f824,0xa0f828),(0xc0804,0xc0808),(low,high)],rule [0] CpuWrite Forbid (disjoint spans++[(low,high),(0xf33a8,0xf33e0)]++record)]
     Prelude -> [rule [1] CpuWrite Forbid (disjoint immutableSpans++[(0x7caf34,0x7caf38)]++record),rule [0] CpuWrite Forbid (disjoint spans++[(0x7caf34,0x7caf38)]++record)]
     Transition -> [rule [1] CpuWrite Forbid (disjoint immutableSpans++record),rule [0] CpuWrite Forbid (disjoint spans++[(0xf33a8,0xf33e0)]++record)]
-  in primary ++ [rule [1] kind Forbid [(0xd0430,0xd09ac)] | pairRole contract == I.Owned,kind <- [CpuRead,CpuFetch]]
+  in primary ++ [rule [1] kind Forbid [(0xd0434,0xd09ac)] | pairRole contract == I.Owned,kind <- [CpuRead,CpuFetch]]
 
 mergedRanges :: [(Word64,Word64)] -> [(Word64,Word64)]
 mergedRanges = foldr merge [] . sort
@@ -355,7 +355,7 @@ validateRetirement contract watches = case pairRole contract of
     forM_ events $ \(PairEvent (Event source core address _ width _ _ _ _) _ _) ->
       if core == Just 1 && source `elem` [CpuRead,CpuFetch] then do
         physical <- physicalAddress address
-        require (not (physical < 0xd09ac && (physical >= 0xd0430 || width > 0xd0430-physical)))
+        require (not (physical < 0xd09ac && (physical >= 0xd0434 || width > 0xd0434-physical)))
           "critical owned receipt accesses the retired initializer body"
       else pure ()
 

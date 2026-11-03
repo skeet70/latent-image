@@ -1,14 +1,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.LoaderOrchestration.Artifact
-  ( CanonicalSource, LinkedArtifact, StagedCandidate, ArtifactError(..)
-  , canonicalSource, deriveArtifact, stageCandidate, candidateBytes, contractValue
-  , linkedBytes, linkedProof, sourceLoader, candidateLoader
+  ( CanonicalSource, LinkedArtifact, StagedSide, StagedCandidate, ArtifactError(..), CalleeExtent(..)
+  , canonicalSource, deriveArtifact, stageSide, stagedSideBytes, stagedSideLoader, stageCandidate, candidateBytes, contractValue
+  , linkedBytes, linkedSide, linkedProof, linkedCompilerEntry, linkedEnd, sourceLoader, candidateLoader, calleeExtents
   ) where
 
+import qualified A32 as A
 import Control.Monad (forM, unless)
 import Data.Aeson (Value, object, (.=))
-import Data.Bits ((.&.))
+import Data.Bits ((.&.), complement)
 import qualified Data.ByteString as B
+import Data.List (sortOn)
+import qualified Data.Set as S
 import Data.Word (Word32)
 import qualified Emulation.Sha256 as SHA
 import qualified FujiAF.FirstStage as F
@@ -21,8 +24,12 @@ newtype ContentDigest = ContentDigest SHA.Sha256
 newtype LinkedSymbols = LinkedSymbols B.ByteString
 data CanonicalSource = CanonicalSource B.ByteString U.Parsed B.ByteString B.ByteString B.ByteString D.FrameProof
 data LinkedArtifact = LinkedArtifact LoaderSide B.ByteString LinkedSymbols CodeAddress FrameProof
+-- | The staged DAT and the staged loader of one side.
+data StagedSide = StagedSide B.ByteString B.ByteString
 data StagedCandidate = StagedCandidate CanonicalSource LinkedArtifact LinkedArtifact B.ByteString B.ByteString B.ByteString
 data ArtifactError = SourceMismatch | ContainerRejected | SymbolRejected | SideRejected | CodeRejected AdmissionError deriving (Eq, Show)
+-- | Retained loader code, half-open.
+data CalleeExtent = CalleeExtent CodeAddress CodeAddress deriving (Eq, Show)
 
 require :: Bool -> ArtifactError -> Either ArtifactError ()
 require premise failure = unless premise (Left failure)
@@ -31,19 +38,33 @@ identity = ContentDigest . SHA.sha256
 identityText :: ContentDigest -> String
 identityText (ContentDigest digest) = SHA.sha256Hex digest
 
-canonicalSource :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString -> Either ArtifactError CanonicalSource
-canonicalSource dat image4 loaderA loaderB = do
-  require (map (identityText . identity) [dat,image4,loaderA,loaderB] ==
+canonicalSource :: B.ByteString -> B.ByteString -> Either ArtifactError CanonicalSource
+canonicalSource dat image4 = do
+  require (map (identityText . identity) [dat,image4] ==
     [ "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"
     , "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
-    , "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
-    , "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
     ]) SourceMismatch
   require (U.word32At image4 12==0x69cdf8) SourceMismatch
   parsed <- either (const (Left ContainerRejected)) Right (U.parseContainer dat)
+  loaderA <- loaderOf (U.parsedParts parsed) LoaderA
+  loaderB <- loaderOf (U.parsedParts parsed) LoaderB
   provider <- either (const (Left SourceMismatch)) Right (D.deriveFrameProof (B.take 396 (B.drop (0x69cdf8-0x61c400) image4)))
   require (D.scratchLow provider==(-48)) SourceMismatch
   pure (CanonicalSource dat parsed image4 loaderA loaderB provider)
+
+-- | The decoded loader segment: id 0 at 0x40000 for 0xdae0 bytes, id 1 at
+-- 0xd0000 for 0xdaa0, stored complemented in the pre-table.
+loaderOf :: U.Parts -> LoaderSide -> Either ArtifactError B.ByteString
+loaderOf parts side = do
+  let (ident,extent) = case side of LoaderA -> (0,0xdae0); LoaderB -> (1,0xdaa0)
+  segment <- case filter ((==ident) . U.segId) (U.partSegments parts) of
+    [found] -> Right found
+    _ -> Left SourceMismatch
+  let offset = fromIntegral (U.segFlash segment)
+      count = fromIntegral (U.segSize segment)
+      carrier = U.partPreTable parts
+  require (U.segLoad segment==loaderBase side&&count==(extent::Int)&&offset+count<=B.length carrier) SourceMismatch
+  pure (B.map complement (B.take count (B.drop offset carrier)))
 
 deriveArtifact :: LoaderSide -> B.ByteString -> B.ByteString -> Either ArtifactError LinkedArtifact
 deriveArtifact side bytes symbols = do
@@ -62,6 +83,13 @@ linkedBytes :: LinkedArtifact -> B.ByteString
 linkedBytes (LinkedArtifact _ bytes _ _ _) = bytes
 linkedProof :: LinkedArtifact -> FrameProof
 linkedProof (LinkedArtifact _ _ _ _ proof) = proof
+linkedSide :: LinkedArtifact -> LoaderSide
+linkedSide (LinkedArtifact side _ _ _ _) = side
+linkedCompilerEntry :: LinkedArtifact -> CodeAddress
+linkedCompilerEntry (LinkedArtifact _ _ _ compiler _) = compiler
+-- | End of the emitted code; NOP padding follows to the carrier end.
+linkedEnd :: LinkedArtifact -> CodeAddress
+linkedEnd (LinkedArtifact side bytes _ _ _) = let CodeAddress start = carrierStart side in CodeAddress (start+fromIntegral (B.length bytes))
 sourceLoader :: CanonicalSource -> LoaderSide -> B.ByteString
 sourceLoader (CanonicalSource _ _ _ loaderA loaderB _) side = case side of LoaderA -> loaderA; LoaderB -> loaderB
 candidateLoader :: StagedCandidate -> LoaderSide -> B.ByteString
@@ -82,19 +110,69 @@ patches source artifact@(LinkedArtifact side _ _ _ _) = do
   forM [(offset,before,after) | (offset,before,after) <- values,before/=after] $ \(offset,before,after) ->
     either (const (Left ContainerRejected)) Right (F.loaderWordPatch loaderId (start+fromIntegral offset) before after)
 
-stageCandidate :: CanonicalSource -> LinkedArtifact -> LinkedArtifact -> Either ArtifactError StagedCandidate
-stageCandidate source@(CanonicalSource _ parsed _ _ _ _) a@(LinkedArtifact sideA _ _ _ _) b@(LinkedArtifact sideB _ _ _ _) = do
-  require (sideA==LoaderA&&sideB==LoaderB) SideRejected
-  aPatches <- patches source a
-  bPatches <- patches source b
-  let changes = aPatches++bPatches
-      original = U.parsedParts parsed
-  stagedParts <- either (const (Left ContainerRejected)) Right (F.applyLoaderWordPatches changes original)
+stagePatches :: CanonicalSource -> [F.LoaderWordPatch] -> Either ArtifactError B.ByteString
+stagePatches (CanonicalSource _ parsed _ _ _ _) changes = do
+  stagedParts <- either (const (Left ContainerRejected)) Right (F.applyLoaderWordPatches changes (U.parsedParts parsed))
   staged <- either (const (Left ContainerRejected)) Right (U.rebuildContainer parsed stagedParts)
   consumed <- either (const (Left ContainerRejected)) Right (U.parseContainer staged)
   either (const (Left ContainerRejected)) Right (F.verifyPreTablePatches [] changes parsed consumed)
-  let loader side artifact = let bytes=sourceLoader source side in B.take 0x9ac bytes<>padded artifact<>B.drop 0xb00 bytes
-  pure (StagedCandidate source a b staged (loader LoaderA a) (loader LoaderB b))
+  pure staged
+
+stagedLoader :: CanonicalSource -> LinkedArtifact -> B.ByteString
+stagedLoader source artifact@(LinkedArtifact side _ _ _ _) =
+  let bytes = sourceLoader source side in B.take 0x9ac bytes<>padded artifact<>B.drop 0xb00 bytes
+
+-- | One side staged alone into the canonical DAT.
+stageSide :: CanonicalSource -> LinkedArtifact -> Either ArtifactError StagedSide
+stageSide source artifact = do
+  changes <- patches source artifact
+  staged <- stagePatches source changes
+  pure (StagedSide staged (stagedLoader source artifact))
+
+stagedSideBytes :: StagedSide -> B.ByteString
+stagedSideBytes (StagedSide bytes _) = bytes
+stagedSideLoader :: StagedSide -> B.ByteString
+stagedSideLoader (StagedSide _ loader) = loader
+
+stageCandidate :: CanonicalSource -> LinkedArtifact -> LinkedArtifact -> Either ArtifactError StagedCandidate
+stageCandidate source a@(LinkedArtifact sideA _ _ _ _) b@(LinkedArtifact sideB _ _ _ _) = do
+  require (sideA==LoaderA&&sideB==LoaderB) SideRejected
+  aPatches <- patches source a
+  bPatches <- patches source b
+  staged <- stagePatches source (aPatches++bPatches)
+  pure (StagedCandidate source a b staged (stagedLoader source a) (stagedLoader source b))
+
+-- | Retained code a side's proof calls into: every direct callee and,
+-- transitively, every direct BL target inside those callees, each from its
+-- entry to the next direct-BL target of the loader or the carrier bounds.
+-- 'PrivateInitialize' spans the stock initializer body and is not expanded.
+calleeExtents :: CanonicalSource -> LinkedArtifact -> [CalleeExtent]
+calleeExtents source (LinkedArtifact side _ _ _ proof) = merge (map extent (S.toAscList closed) ++ [initializer])
+  where
+    base = loaderBase side
+    loader = sourceLoader source side
+    CodeAddress carrier = carrierStart side
+    carrierEnd = carrier+340
+    loaderEnd = base+fromIntegral (B.length loader)
+    callsIn low high = [target | pc <- [low,low+4..high-4], A.Branch _ True target <- [A.decode pc (U.word32At loader (fromIntegral (pc-base)))]
+      , target>=base, target<loaderEnd, target<carrier||target>=carrierEnd]
+    bounds = S.fromList (callsIn base loaderEnd++[carrier,carrierEnd,loaderEnd])
+    next entry = maybe loaderEnd id (S.lookupGT entry bounds)
+    extent entry = CalleeExtent (CodeAddress entry) (CodeAddress (next entry))
+    CodeAddress initializerEntry = serviceAddress side PrivateInitialize
+    initializer = CalleeExtent (CodeAddress initializerEntry) (CodeAddress carrier)
+    direct = S.fromList [target | (_,Retained service) <- callBoundaries proof, service/=PrivateInitialize
+      , let CodeAddress target = serviceAddress side service]
+    closed = grow direct (S.toList direct)
+    grow seen [] = seen
+    grow seen (entry:pending) =
+      let found = [target | target <- callsIn entry (next entry), target/=initializerEntry, S.notMember target seen]
+      in grow (foldr S.insert seen found) (found++pending)
+    merge extents = foldr absorb [] (sortOn (\(CalleeExtent (CodeAddress low) _) -> low) extents)
+    absorb current [] = [current]
+    absorb current@(CalleeExtent low (CodeAddress high)) rest@(CalleeExtent (CodeAddress low') high':others)
+      | high>=low' = CalleeExtent low (max (CodeAddress high) high'):others
+      | otherwise = current:rest
 
 addressWord :: CodeAddress -> Word32
 addressWord (CodeAddress value) = value

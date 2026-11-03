@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "3DEVPCce2HqOAQLhgOkcaDXye6HpOa4vfG/P9H4Z7BY=",
+        "bzlTransitiveDigest": "0AhYuFkEDbMzsXS0Txczz/D+ExkcHQbdbvdbdEICdtQ=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -519,6 +519,7 @@
                 "@@//emulation:fujimod-xm1/src/application_pump_program.rs": "//emulation:fujimod-xm1/src/application_pump_program.rs",
                 "@@//emulation:fujimod-xm1/src/application_pump_queue.rs": "//emulation:fujimod-xm1/src/application_pump_queue.rs",
                 "@@//emulation:fujimod-xm1/src/application_pump_scope.rs": "//emulation:fujimod-xm1/src/application_pump_scope.rs",
+                "@@//emulation:fujimod-xm1/src/attach_state.rs": "//emulation:fujimod-xm1/src/attach_state.rs",
                 "@@//emulation:fujimod-xm1/src/bridge.rs": "//emulation:fujimod-xm1/src/bridge.rs",
                 "@@//emulation:fujimod-xm1/src/composed_catalog.rs": "//emulation:fujimod-xm1/src/composed_catalog.rs",
                 "@@//emulation:fujimod-xm1/src/composed_receipt.rs": "//emulation:fujimod-xm1/src/composed_receipt.rs",
@@ -615,7 +616,7 @@
                 "@@//emulation:fujimod-xm1/src/updater.rs": "//emulation:fujimod-xm1/src/updater.rs",
                 "@@//emulation:fujimod-xm1/src/witness.rs": "//emulation:fujimod-xm1/src/witness.rs",
                 "@@//emulation:fujimod-xm1/tests/composed_startup.rs": "//emulation:fujimod-xm1/tests/composed_startup.rs",
-                "@@//emulation:fujimod-xm1/tests/data/composed-contract-v1.json": "//emulation:fujimod-xm1/tests/data/composed-contract-v1.json",
+                "@@//emulation:fujimod-xm1/tests/data/composed-contract-v2.json": "//emulation:fujimod-xm1/tests/data/composed-contract-v2.json",
                 "@@//emulation:fujimod-xm1/tests/modal_lifetime.rs": "//emulation:fujimod-xm1/tests/modal_lifetime.rs",
                 "@@//emulation:fujimod-xm1/tests/modal_lifetime_config.rs": "//emulation:fujimod-xm1/tests/modal_lifetime_config.rs",
                 "@@//emulation:fujimod-xm1/tests/modal_permit.rs": "//emulation:fujimod-xm1/tests/modal_permit.rs",

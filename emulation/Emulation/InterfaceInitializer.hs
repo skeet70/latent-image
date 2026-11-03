@@ -2,7 +2,7 @@
 module Emulation.InterfaceInitializer
   ( Role (..), Contract, parseOriginalSource, deriveContract, contractValue, declarations, validateReceipt
   , contractRole, contractSourceSha256, ValidatedInitializer, initializerExit, initializerTable, validateReceiptEvidence
-  , ExpectedStore (..), originalStores
+  , ExpectedStore (..), originalStores, CallerFramePremise (..), callerFramePremise, contractScratchBytes
   , Context (..), Views (..), Source (..), ByteOrder (..), Event (..), Mode (..)
   , PhysicalSpan (..), Window (..), BankSnapshot (..), TcmSnapshot (..), bankSnapshot
   , WatchClass (..), FixedViews (..), NoFault (..), Rule (..), Watch (..), Alias (..), Decoder (..)
@@ -39,6 +39,10 @@ data Contract = Contract Role P.Contract P.Guest P.Span StackBytes F.Sha256 (May
 contractRole :: Contract -> Role
 contractRole (Contract role _ _ _ _ _ _ _ _ _) = role
 
+-- | Owned initializer stack bytes below the caller's SP.
+contractScratchBytes :: Contract -> Word32
+contractScratchBytes (Contract _ _ _ _ (StackBytes scratch) _ _ _ _ _) = scratch
+
 contractSourceSha256 :: Contract -> F.Sha256
 contractSourceSha256 (Contract _ _ _ _ _ _ _ source _ _) = source
 
@@ -48,12 +52,20 @@ require condition message = unless condition (Left message)
 at :: [F.Symbol] -> String -> Either String Word32
 at symbols name = F.symbolAddress <$> F.lookupSymbol symbols name
 
-branchLink :: Word32 -> Word32 -> Either String Word32
-branchLink site target = do
+branchTo :: Bool -> Word32 -> Word32 -> Either String Word32
+branchTo link site target = do
   let displacement = toInteger target - toInteger site - 8
   require (target .&. 3 == 0 && displacement >= -0x2000000 && displacement < 0x2000000)
-    "initializer entry is outside the A32 BL range"
-  pure (0xeb000000 .|. (fromInteger (displacement `div` 4) .&. 0xffffff))
+    "initializer entry is outside the A32 branch range"
+  pure ((if link then 0xeb000000 else 0xea000000) .|. (fromInteger (displacement `div` 4) .&. 0xffffff))
+
+branchLink :: Word32 -> Word32 -> Either String Word32
+branchLink = branchTo True
+
+-- | Stock loader-B initializer entry and its first word, @push {r4,r5,r11}@.
+initializerSite, initializerPreimage :: Word32
+initializerSite = 0xd0430
+initializerPreimage = 0xe92d0830
 
 declarations :: [F.Symbol] -> Either String StageDeclarations
 declarations symbols = do
@@ -62,8 +74,8 @@ declarations symbols = do
   start <- at symbols "__secondary_stage_start"
   end <- at symbols "__secondary_stage_end"
   require (start <= target && target < end) "initializer adapter leaves the staged image"
-  replacement <- branchLink 0xd0aac target
-  patch <- F.loaderWordPatch (F.LoaderId 1) 0xd0aac 0xebfffe5f replacement
+  replacement <- branchTo False initializerSite target
+  patch <- F.loaderWordPatch (F.LoaderId 1) initializerSite initializerPreimage replacement
   pure prefix { declaredLoaderPatches = declaredLoaderPatches prefix ++ [patch] }
 
 adapterExtent :: B.ByteString -> [F.Symbol] -> Either String Word32
@@ -452,8 +464,9 @@ deriveContract role reference staged image symbolBytes = do
   parsed <- U.parseContainer staged
   let source = S.originalStartupParsed original
   images <- P.stagedImages staged
+  sourceImages <- P.stagedImages reference
   let loader = P.stagedLoader images
-  require (sha256Hex (B.take 0x57c (B.drop 0x430 loader)) == "60aeb6c0c68717940fef3771f3387540a2c87276d7c947a9f3d276dd51fe850d")
+  require (sha256Hex (B.take 0x57c (B.drop 0x430 (P.stagedLoader sourceImages))) == "60aeb6c0c68717940fef3771f3387540a2c87276d7c947a9f3d276dd51fe850d")
     "retained initializer body differs from the pinned DAT bytes"
   caller <- callerFramePremise loader
   stores <- originalStores loader
@@ -754,12 +767,12 @@ validateReceiptEvidence (Contract role prefix (P.Guest entry) (P.Span rustStart 
       normalizeClass (WatchClass range kinds) = WatchClass range (sort kinds)
       rule cores kind mode spans =
         Rule cores kind mode spans [snapshot | snapshot@(TcmSnapshot core _ _) <- expectedTcm, core `elem` cores]
-      readSpans = [physical 0xddaa0 0xdf0cc] ++ if role == Owned then [physical 0xd0430 0xd09ac,physical 0xd00c8 0xd00fc] else []
+      readSpans = [physical 0xddaa0 0xdf0cc] ++ if role == Owned then [physical 0xd0434 0xd09ac,physical 0xd00c8 0xd00fc] else []
       expectedRules =
         [ rule [1] CpuWrite Allow [physical 0xddaa0 0xdf0cc, physical (stackPhysical - fromIntegral scratch) stackPhysical]
         , rule [0] CpuWrite Forbid [physical 0xddaa0 0xf3420,physical 0x10000 0x14c80,physical 0xd0000 0xddaa0]
         ]
-          ++ [rule [1] CpuFetch Forbid (map (uncurry physical) [(0xd0430,0xd09ac),(0xd0020,0xd00c8),(0xd09ac,0xd09d0),(0xd0a44,0xd0a64)]) | role == Owned]
+          ++ [rule [1] CpuFetch Forbid (map (uncurry physical) [(0xd0434,0xd09ac),(0xd0020,0xd00c8)]) | role == Owned]
           ++ [rule [1] CpuRead Forbid readSpans]
       normalize (Rule cores kind mode spans describedTcm) = Rule cores kind mode (sort spans) (sort describedTcm)
   require (sort (map normalizeClass classes) == sort (map normalizeClass expectedClasses))

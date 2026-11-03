@@ -1,11 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | composed-contract.json, schema 1, in the shape of
--- emulation/fujimod-xm1/tests/data/composed-contract-v1.json: every list is
--- sorted and non-overlapping.
+-- | composed-contract.json, schema 2, in the shape of
+-- emulation/fujimod-xm1/tests/data/composed-contract-v2.json: every list is
+-- sorted and non-overlapping, and every object carries all its keys.
 module Replacement.StartupArtifact.Contract
-  ( contractValue, normalizeFootprint, allowRanges, EmittedWrites (..)
+  ( contractValue, normalizeFootprint, allowRanges, EmittedWrites (..), contractCarriers
   ) where
 
+import qualified Data.Aeson as J
 import Data.Aeson (Value, object, (.=))
 import qualified Data.Aeson.Key as Key
 import Data.Aeson.Types (Pair)
@@ -61,19 +62,26 @@ allowRanges carriers policy = case policy of
   EnumeratedWrites ranges (Premised (Premise premise)) ->
     EmittedWrites (sort (concatMap (excludeCarriers . physicalRange) ranges)) "premised" (Just premise)
   where
-    physicalRange (WriteRange PhysicalTarget start end) = WriteRange PhysicalTarget (physicalAddress start) (physicalAddress (end - 1) + 1)
+    physicalRange (WriteRange target start end) | physicalTarget target = WriteRange target (physicalAddress start) (physicalAddress (end - 1) + 1)
     physicalRange range = range
     held = [(fromIntegral start, fromIntegral end) | Span _ (Guest start) (Guest end) <- carriers] :: [(Word64, Word64)]
-    excludeCarriers range@(WriteRange PhysicalTarget _ _) = foldl cut [range] held
+    excludeCarriers range@(WriteRange target _ _) | physicalTarget target = foldl cut [range] held
     excludeCarriers range = [range]
     cut ranges (low, high) = concat
       [ [WriteRange target start (min end low) | start < min end low] ++ [WriteRange target (max start high) end | max start high < end]
       | WriteRange target start end <- ranges ]
 
+physicalTarget :: WriteTarget -> Bool
+physicalTarget target = case target of
+  PhysicalTarget -> True
+  CorePhysicalTarget _ -> True
+  TcmTarget _ _ -> False
+
 writeRangeValue :: WriteRange -> Value
-writeRangeValue (WriteRange PhysicalTarget start end) = object ["target" .= ("physical" :: Text), "start" .= start, "end" .= end]
-writeRangeValue (WriteRange (TcmTarget core bank) start end) = object
-  ["target" .= ("tcm" :: Text), "core" .= coreIndex core, "bank" .= tcmBankName bank, "start" .= start, "end" .= end]
+writeRangeValue (WriteRange target start end) = object $ case target of
+  PhysicalTarget -> ["target" .= ("physical" :: Text), "core" .= J.Null, "bank" .= J.Null, "start" .= start, "end" .= end]
+  CorePhysicalTarget core -> ["target" .= ("physical" :: Text), "core" .= coreIndex core, "bank" .= J.Null, "start" .= start, "end" .= end]
+  TcmTarget core bank -> ["target" .= ("tcm" :: Text), "core" .= coreIndex core, "bank" .= tcmBankName bank, "start" .= start, "end" .= end]
 
 pcValue :: Pc -> Word32
 pcValue (Pc value) = value
@@ -108,25 +116,30 @@ pieceValue carriers piece = object
   , "catalog" .= catalogValue carriers (pieceCatalog piece)
   ]
 
-joinValue :: JoinName k => Join k -> Value
-joinValue join = object
+joinValue :: JoinName k => AppliedJoin k -> Value
+joinValue (AppliedJoin join spans) = object
   [ "kind" .= joinName (joinKind join)
   , "members" .= map pieceKindName (Set.toAscList (joinMembers join))
-  , "spans" .= [object (spanFields range) | range <- normalizeSpans (joinSpans join)]
+  , "spans" .= [object (spanFields range) | range <- spans]
   , "basis" .= (case joinBasis join of HostProof _ -> "host-proof" :: Text; ObservationQualified _ -> "observation-qualified")
   , "reason" .= (case joinBasis join of HostProof reason -> reason; ObservationQualified reason -> reason)
   ]
 
-contractValue :: JoinName k => Canonical -> B.ByteString -> Composition k -> B.ByteString -> TargetBytes -> Label -> Value
-contractValue source manifest composition composedDat composedTargets attach = object
-  [ "schema" .= (1 :: Int)
+-- | Every piece's carriers in contract order: pieces by kind, each piece's carriers normalized.
+contractCarriers :: Composition k -> [(PieceKind, Span)]
+contractCarriers composition =
+  [(pieceKind piece, range) | piece <- sortOn pieceKind (compositionPieces composition), range <- normalizeSpans (pieceCarriers piece)]
+
+contractValue :: JoinName k => Canonical -> B.ByteString -> Composition k -> B.ByteString -> TargetBytes -> Label -> Value -> Value
+contractValue source manifest composition composedDat composedTargets attach attachState = object
+  [ "schema" .= (2 :: Int)
   , "kind" .= ("composed-startup-contract" :: Text)
   , "qualification" .= (case qualification of HostComposed -> "host-composed" :: Text; Pending _ -> "pending")
   , "pending_joins" .= (case qualification of HostComposed -> [] :: [Text]; Pending names -> names)
   , "manifest_sha256" .= sha256 manifest
   , "canonical" .= identityValue (canonicalDat source) (canonicalTargets source)
   , "composed" .= identityValue composedDat composedTargets
-  , "guard" .= object ["attach" .= labelText attach]
+  , "guard" .= object ["attach" .= labelText attach, "attach_state" .= attachState]
   , "joins" .= map joinValue (compositionJoins composition)
   , "pieces" .= map (pieceValue carriers) (sortOn pieceKind (compositionPieces composition))
   ]

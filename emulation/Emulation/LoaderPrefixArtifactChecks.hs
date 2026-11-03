@@ -3,19 +3,17 @@ module Emulation.LoaderPrefixArtifactChecks
   , SymbolDocument (..)
   , checkNaturalArtifact
   , checkRefusalArtifact
-  , checkNegativeArtifact
   , checkInterleavedTailArtifact
   ) where
 
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Char8 as BC
 import Data.Bits (xor)
 import Data.Word (Word32)
-import Emulation.FirstStageWitness (encodeLeWord, leWordAt)
+import Emulation.FirstStageWitness (encodeLeWord)
 import Emulation.LoaderPrefixReceiptFixtures
   ( RecordByteClass (..), accepted, checkProjectionAdmission, expect )
 import Emulation.LoaderPrefixWitness
-  ( Guest (..), Polling (..), ProgramFacts (..), Scenario (..), StagedImages (..), deriveOwnedFacts, deriveScenarioOwnedFacts )
+  ( Guest (..), ProgramFacts (..), StagedImages (..), deriveOwnedFacts )
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
 import qualified StartupStageContract as Stage
@@ -27,12 +25,27 @@ data ArtifactInput = ArtifactInput U.MediaImage SymbolDocument
 symbolAt :: SymbolDocument -> String -> IO Word32
 symbolAt (SymbolDocument symbols) name = either fail pure (F.parseSymbols symbols >>= fmap F.symbolAddress . flip F.lookupSymbol name)
 
--- | Record 2 holding the image at 0x10400 and loader B publishing @entry@.
+-- | Loader B words of the X-M1 1.50 stock wait: register setup at `0xd09c0`
+-- and the poll loop `[0xd0a44,0xd0a64)` (`loader-d0000.dis:603-605,636-643`).
+stockWaitWords :: [(Int, [Word32])]
+stockWaitWords =
+  [ (0x9c0, [0x13001000, 0x1344100a, 0x13a02064])
+  , (0xa44, [0xe59130c4, 0xe3530000, 0x1a000016, 0xe1a03002, 0xe320f000, 0xe2533001, 0x1afffffc, 0xeafffff7]) ]
+
+-- | Loader B publishing @entry@ in its header word, zero apart from @waits@.
+loaderWith :: [(Int, [Word32])] -> Word32 -> B.ByteString
+loaderWith waits entry = foldl place (B.replicate 0xc 0 <> encodeLeWord entry <> B.replicate (0xdaa0 - 0x10) 0) waits
+  where
+    place bytes (offset, words') = let block = B.concat (map encodeLeWord words')
+      in B.take offset bytes <> block <> B.drop (offset + B.length block) bytes
+
+-- | Record 2 holding the image at 0x10400 and loader B publishing @entry@
+-- over the stock wait.
 stagedFor :: B.ByteString -> Word32 -> StagedImages
 stagedFor bin entry =
   StagedImages
     (B.replicate 0x400 0 <> bin <> B.replicate (0x4c80 - 0x400 - B.length bin) 0)
-    (B.replicate 0xc 0 <> encodeLeWord entry <> B.replicate (0xdaa0 - 0x10) 0)
+    (loaderWith stockWaitWords entry)
 
 checkRecordProjection :: B.ByteString -> B.ByteString -> Word32 -> ProgramFacts -> IO ()
 checkRecordProjection bin symbols prefix facts = do
@@ -62,11 +75,14 @@ checkNaturalArtifact (ArtifactInput image@(U.MediaImage bin) document@(SymbolDoc
   let Guest entry = factEntry facts
   expect "owned entry is the published prefix entry" (entry == prefixEntry)
   expect "correct image declares no refusal" (factRefusal facts == Nothing)
-  expect "ordinary image cannot establish the invalid-core negative"
-    (not (accepted (deriveScenarioOwnedFacts NegativeInvalidCore bin symbols (stagedFor bin prefixEntry))))
-  expect "ordinary image cannot establish the predicate-zero negative"
-    (not (accepted (deriveScenarioOwnedFacts NegativePredicateZero bin symbols (stagedFor bin prefixEntry))))
   expect "loader B naming another entry is refused" (not (accepted (deriveOwnedFacts bin symbols (stagedFor bin 0xd0020))))
+  expect "loader B without the stock wait is refused"
+    (not (accepted (deriveOwnedFacts bin symbols ((stagedFor bin prefixEntry) {stagedLoader = loaderWith [] prefixEntry}))))
+  exit <- symbolAt document "xm1_loader_prefix_exit"
+  let exitOffset = fromIntegral exit - 0x10400
+      returning = B.take exitOffset bin <> encodeLeWord 0xe12fff10 <> B.drop (exitOffset + 4) bin
+  expect "prefix exit other than B 0xd09ac is refused"
+    (not (accepted (deriveOwnedFacts returning symbols (stagedFor returning prefixEntry))))
   checkRecordProjection bin symbols prefixEntry facts
   pure facts
 
@@ -75,40 +91,6 @@ checkRefusalArtifact (ArtifactInput (U.MediaImage bin) document@(SymbolDocument 
   refusalEntry <- symbolAt document "xm1_loader_prefix_entry"
   refusalFacts <- either fail pure (deriveOwnedFacts bin symbols (stagedFor bin refusalEntry))
   expect "refusal control declares its refusal site" (factRefusal refusalFacts /= Nothing)
-
-checkNegativeArtifact :: Scenario -> ArtifactInput -> IO ()
-checkNegativeArtifact scenario (ArtifactInput (U.MediaImage bin) document@(SymbolDocument symbols)) = do
-  entry <- symbolAt document "xm1_loader_prefix_entry"
-  let images = stagedFor bin entry
-      derive = deriveScenarioOwnedFacts scenario
-      marker = case scenario of
-        NegativeInvalidCore -> "xm1_loader_prefix_invalid_core_fault"
-        NegativePredicateZero -> "xm1_loader_prefix_predicate_zero_fault"
-        _ -> error "negative prefix artifact requires a standalone negative scenario"
-      withoutMarker = BC.unlines (filter (\line -> case BC.words line of
-        [_, _, _, name] -> BC.unpack name /= marker
-        _ -> True) (BC.lines symbols))
-  facts <- either fail pure (derive bin symbols images)
-  expect "negative source image is refused by ordinary preparation"
-    (not (accepted (deriveOwnedFacts bin symbols images)))
-  expect "negative preparation requires its exported marker"
-    (not (accepted (derive bin withoutMarker images)))
-  case scenario of
-    NegativePredicateZero -> do
-      expect "zero-accepting image has no polling cycle" (factPeriod facts == ZeroAcceptingExit)
-      address <- symbolAt document marker
-      let offset = fromIntegral address - 0x10400
-          changed = B.take offset bin <> encodeLeWord 0 <> B.drop (offset + 4) bin
-      expect "predicate preparation binds the marker bytes"
-        (not (accepted (derive changed symbols (stagedFor changed entry))))
-      let wrongContinuation = B.concat
-            [if leWordAt bin location == Right 0xd0aac then encodeLeWord 0xd0ab0 else B.take 4 (B.drop location bin)
-            | location <- [0, 4 .. B.length bin - 4]]
-      expect "predicate preparation proves its actual continuation"
-        (not (accepted (derive wrongContinuation symbols (stagedFor wrongContinuation entry))))
-    _ -> expect "invalid-core image retains its actual polling cycle" (case factPeriod facts of
-      WaitingPoll _ -> True
-      ZeroAcceptingExit -> False)
 
 checkInterleavedTailArtifact :: ArtifactInput -> IO ()
 checkInterleavedTailArtifact (ArtifactInput image@(U.MediaImage bin) (SymbolDocument symbols)) = do
