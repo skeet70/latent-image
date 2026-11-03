@@ -477,7 +477,7 @@ completedReceipt count = object
   , "pending_stores" .= (0 :: Int), "install_core" .= (0 :: Int), "rollback_core" .= (1 :: Int)
   , "checked_resource_writes" .= (7 :: Int), "checked_identity_writes" .= (0 :: Int)
   , "checked_scheduler_writes" .= (10 :: Int), "checked_context_writes" .= (40 :: Int), "checked_vfp_owner_writes" .= (2 :: Int)
-  , "audited_writes" .= (12 :: Int)
+  , "audited_writes" .= (12 :: Int), "admitted_settings_writes" .= (0 :: Int)
   , "failure" .= Null ]
 
 healthyGuard :: Value
@@ -747,7 +747,7 @@ runtimeBindingTests = do
           (cpu 1 address address 4 clock))) | (address,clock) <- zip (reverse addresses) [224 ..]]
       fullWatch = watch expectedWrites writes
       exactReceipt = foldr (\key value -> set key (Number 0) value) (completedReceipt 223)
-        ["checked_resource_writes","checked_identity_writes","checked_scheduler_writes","checked_context_writes","checked_vfp_owner_writes","audited_writes"]
+        ["checked_resource_writes","checked_identity_writes","checked_scheduler_writes","checked_context_writes","checked_vfp_owner_writes","audited_writes","admitted_settings_writes"]
       clean = set "watch" (withoutRecords fullWatch) (set "lifetime" exactReceipt (set "task_identity_verified" (Bool False)
         (set "task_entries" (array []) (completedEnvelope 223))))
   rangeBound <- either error pure (watchRangeLimit (length expectedWrites))
@@ -809,6 +809,73 @@ runtimeBindingTests = do
   let stockTask = set "fetch" (set "bytes" (array (replicate 4 (Number 0))) (get "fetch" taskEntry)) taskEntry
   stockReport <- either error pure (parseModalReport permitLimit (set "task_entries" (array [stockTask]) completedScoped))
   check "owned fetch rejects the pre-install stock word" (isLeft (checkCompletedModalLifetime scopedRequest scopedAudit finalScoped stockReport))
+  let retiredPairs = [[0x00c7aef4, 0x00c7af6c], [0x00c7af6c, 0x00c7afc8]] :: [[Word32]]
+      retiredSpans = [range 0x00c7aef4 0x00c7af6c, range 0x00c7af6c 0x00c7afc8]
+      retiredDeclarationWith pairs = set "limit" lifetimeLimit (set "context_sources" (array context)
+        (set "lifetime" (set "retired" (get "r" (object ["r" .= (pairs :: [[Word32]])])) scopedLifetime) (modalBeginRequestJson scopedBase)))
+  retiredRequest <- either (error . ("retired declaration fixture: " ++)) pure (parseModalBeginRequest (retiredDeclarationWith retiredPairs))
+  check "typed lifetime request preserves adjacent retired extents" (modalBeginRequestJson retiredRequest == retiredDeclarationWith retiredPairs)
+  mapM_ (\(label, pairs) -> check ("lifetime request refuses retired " ++ label) (isLeft (parseModalBeginRequest (retiredDeclarationWith pairs))))
+    [ ("overlap", [[0x00c7aef4, 0x00c7af70], [0x00c7af6c, 0x00c7afc8]])
+    , ("unaligned", [[0x00c7aef6, 0x00c7af6c]])
+    , ("empty extent", [[0x00c7aef4, 0x00c7aef4]])
+    , ("inside runtime", [[0x10000, 0x10010]])
+    , ("65 extents", [[0x00c00000 + index * 8, 0x00c00004 + index * 8] | index <- [0 .. 64]]) ]
+  check "retired extent over the watched action table refuses its watch ranges"
+    (isLeft (parseModalBeginRequest (retiredDeclarationWith [[0x00d04080, 0x00d04090]]) >>= modalLifetimeWatchRanges))
+  check "adjacent retired extents merge in the watched union" (unionWatchRanges retiredSpans == [range 0x00c7aef4 0x00c7afc8])
+  let fetchRow physical clock = set "source" (String "cpu-fetch") (set "value" Null (set "before" Null
+        (set "pc" (Number (fromIntegral physical)) (cpu 0 physical physical 4 clock))))
+      retiredWatch records = set "fetch_attribution" (fetchJson helperFetches) (digested (object
+        [ "enabled" .= True, "views" .= ("fixed" :: String), "ranges" .= map pair (unionWatchRanges (scopedWrites ++ retiredSpans))
+        , "records" .= records, "violation" .= Null
+        , "classes" .= ([object ["range" .= pair span_, "kinds" .= (["cpu-write","host-write","model-bus-write"] :: [String])] | span_ <- scopedWrites]
+            ++ [object ["range" .= pair span_, "kinds" .= (["cpu-fetch"] :: [String])] | span_ <- retiredSpans])
+        , "fetch_attribution" .= fetchJson fetches ]))
+      published = take 223 writes ++ [forwardEntry, reverseEntry] ++ reverseRows
+      completes request_ rowsWatch = either (const False) (const True) $ do
+        audit_ <- checkLifetimeArrayAudit request_ (Right rowsWatch) (parseFinalModalWatch rowsWatch)
+        final_ <- parseFinalModalWatch rowsWatch
+        report_ <- parseModalReport permitLimit (set "watch" (withoutRecords rowsWatch) completedScoped)
+        checkCompletedModalLifetime request_ audit_ final_ report_
+  check "completed lifetime accepts the retired watch without fetch rows" (completes retiredRequest (retiredWatch published))
+  check "completed lifetime accepts a retired fetch before the first forward write"
+    (completes retiredRequest (retiredWatch (fetchRow 0x00c7af6c 0 : published)))
+  check "completed lifetime accepts a retired fetch after the last reverse write"
+    (completes retiredRequest (retiredWatch (published ++ [fetchRow 0x00c7aef4 9000])))
+  check "completed lifetime refuses a retired fetch between publication writes"
+    (not (completes retiredRequest (retiredWatch (take 10 published ++ [fetchRow 0x00c7af6c 10] ++ drop 10 published))))
+  check "completed lifetime refuses a fetch outside every retired extent"
+    (not (completes retiredRequest (retiredWatch (published ++ [fetchRow 0x00c7afc8 9000]))))
+  check "a request without retired extents refuses a retired-extent fetch row"
+    (not (completes scopedRequest (set "classes" (get "classes" scopedWatch) (set "ranges" (get "ranges" scopedWatch)
+      (retiredWatch (published ++ [fetchRow 0x00c7aef4 9000]))))))
+  let settingsRow pc = set "pc" (Number pc) (set "value" (Number 0x21) (set "before" (array [Number 0x20]) (cpu 0 0x0096ccca 0x0096ccca 1 100)))
+      settingsWatch pc = set "fetch_attribution" (fetchJson helperFetches) (watch scopedWrites (take 100 published ++ [settingsRow pc] ++ drop 100 published))
+      settingsCompletes admitted rowsWatch = either (const False) (const True) $ do
+        audit_ <- checkLifetimeArrayAudit scopedRequest (Right rowsWatch) (parseFinalModalWatch rowsWatch)
+        final_ <- parseFinalModalWatch rowsWatch
+        report_ <- parseModalReport permitLimit (set "watch" (withoutRecords rowsWatch) (set "lifetime"
+          (set "admitted_settings_writes" (Number admitted) (set "checked_resource_writes" (Number 1) scopedReceipt)) completedScoped))
+        checkCompletedModalLifetime scopedRequest audit_ final_ report_
+  check "a counted settings change from the stock property setter completes" (settingsCompletes 1 (settingsWatch 0x0062ff54))
+  check "an uncounted settings change from the stock property setter refuses" (not (settingsCompletes 0 (settingsWatch 0x0062ff54)))
+  check "a settings change from outside every settings writer refuses" (not (settingsCompletes 1 (settingsWatch 0x0072212c)))
+  check "the completed settings writes name the setter row"
+    (fmap (map (get "pc") . values . get "writes" . settingsWritesJson)
+      (parseFinalModalWatch (settingsWatch 0x0062ff54) >>= completedSettingsWrites scopedRequest) == Right [Number 0x0062ff54])
+  let settingsWrite address value = object ["instructions" .= (1 :: Int), "pc" .= (0x0062ff54 :: Word32), "address" .= (address :: Word32)
+        , "size" .= (1 :: Int), "before" .= [0x20 :: Int], "value" .= (value :: Int)]
+      sequenceOf writes_ = either error id (parseSettingsWrites (object ["schema" .= (1 :: Int), "writes" .= writes_]))
+      stockSequence = sequenceOf [settingsWrite 0x0096ccca 0x21, settingsWrite 0x0096ccd2 0xc9]
+  check "equal stock and owned settings sequences compare equal"
+    (compareSettingsWrites stockSequence (sequenceOf [settingsWrite 0x0096ccca 0x21, settingsWrite 0x0096ccd2 0xc9]) == Right ())
+  check "a reordered owned settings sequence fails comparison"
+    (isLeft (compareSettingsWrites stockSequence (sequenceOf [settingsWrite 0x0096ccd2 0xc9, settingsWrite 0x0096ccca 0x21])))
+  check "an extra owned settings write fails comparison"
+    (isLeft (compareSettingsWrites stockSequence (sequenceOf [settingsWrite 0x0096ccca 0x21, settingsWrite 0x0096ccd2 0xc9, settingsWrite 0x0096ccca 0x20])))
+  check "a different owned settings value fails comparison"
+    (isLeft (compareSettingsWrites stockSequence (sequenceOf [settingsWrite 0x0096ccca 0x21, settingsWrite 0x0096ccd2 0xc8])))
   let withoutSettings = filter (\span_ -> let (low,high) = watchRangeBounds span_ in not (low <= 0x96cc64 && 0x96ce26 <= high)) expectedWrites
       incompleteWatch = watch withoutSettings writes
   check "array audit requires settings and all other expected write classes" $
