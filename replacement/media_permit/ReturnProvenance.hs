@@ -135,8 +135,12 @@ verifyReturns arrays literals entry nodes = walk [(entry, initial)] M.empty S.em
               propagated = executed {instructionPremises = S.empty}
               actual = [(next, propagated) | next <- successors, not (stepReturns step)]
               skipped = case (address, condition) of
-                (ProgramCounter pc, A.Cond c) -> [(ProgramCounter (pc+4), joined) | c /= 14]
+                (ProgramCounter pc, A.Cond c) -> [(runEnd condition (pc+4), joined) | c /= 14]
           walk (actual ++ skipped ++ pending) (M.insert address joined states) nextDependencies
+    -- A failed condition also fails for each following instruction with the same condition field: flags are unchanged while none execute.
+    runEnd condition next = case M.lookup (ProgramCounter next) graph of
+      Just (CodeNode _ _ _ other) | other == condition -> runEnd condition (next+4)
+      _ -> ProgramCounter next
 
 joinState :: FrameState -> FrameState -> FrameState
 joinState left right = FrameState

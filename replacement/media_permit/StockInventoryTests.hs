@@ -83,6 +83,14 @@ main = do
     (refused (derive [0xe92d4000,0xe5cd0000,0xe8bd8000]))
   check "a conditional overwrite is not a proven return"
     (refused (derive [0xe92d4000,0x058d0000,0xe8bd8000]))
+  predicatedRun <- either fail pure (deriveResult [] [0xe92d4800,0xe3500000,0x03073588,0x03403146,0x03a02000,0x01c321b4,0xe8bd8800])
+  check "a not-executed predicated run skips to its end, so its constant-base store keeps the saved return"
+    (derivedDeclaration predicatedRun == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 28)
+      && derivationPremiseUses predicatedRun == [PremiseUse (ProgramCounter 0x1014) GlobalObjectStackSeparation])
+  check "a different condition ends the run, so the store base is unknown"
+    (refused (derive [0xe92d4800,0xe3500000,0x03073588,0x13403146,0x03a02000,0x01c321b4,0xe8bd8800]))
+  check "after an executed flag-setting member, the rest of the run may be skipped"
+    (refused (derive [0xe92d4800,0xe3500000,0x058d1004,0x01b02001,0x058de004,0xe8bd8800]))
   check "an overwritten LR is not an incoming register return"
     (refused (derive [0xe3a0e000,0xe12fff1e]))
   check "an unsaved LR after a call is not the incoming return"
