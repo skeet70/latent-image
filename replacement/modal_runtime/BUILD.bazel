@@ -30,6 +30,12 @@ filegroup(
 )
 
 filegroup(
+    name = "picker-owned-sources",
+    srcs = ["src/picker.rs"],
+    visibility = ["//replacement/bank:__pkg__"],
+)
+
+filegroup(
     name = "modal75-owned-sources",
     srcs = ["src/modal75.rs"],
     visibility = ["//replacement/bank:__pkg__"],
@@ -50,6 +56,23 @@ sh_test(
     srcs = ["//emulation:recovery-task-state-tests.sh"],
     args = ["$(location :modal75-tests-build)"],
     data = [":modal75-tests-build"],
+)
+
+genrule(
+    name = "picker-tests-build",
+    srcs = ["src/picker.rs"],
+    outs = ["picker-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/picker.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
+)
+
+sh_test(
+    name = "picker-tests",
+    size = "small",
+    srcs = ["//emulation:recovery-task-state-tests.sh"],
+    args = ["$(location :picker-tests-build)"],
+    data = [":picker-tests-build"],
 )
 
 haskell_binary(
@@ -445,5 +468,46 @@ haskell_test(
         ":menu-tables-decode",
         "//host:base",
         "//host:bytestring",
+    ],
+)
+
+haskell_library(
+    name = "picker-table-lib",
+    srcs = ["Replacement/ModalRuntime/PickerTable.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
+)
+
+haskell_binary(
+    name = "picker-table",
+    srcs = ["PickerTableMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":picker-table-lib",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+    ],
+)
+
+haskell_test(
+    name = "picker-table-tests",
+    srcs = ["PickerTableTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        ":picker-table-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
     ],
 )

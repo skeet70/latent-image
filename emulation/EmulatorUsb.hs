@@ -13,6 +13,7 @@ module EmulatorUsb
   , emulatorTraceSites
   , TraceHit (..)
   , emulatorTraceHits
+  , emulatorTraceHitsRaw
   , ReleaseSegment
   , releaseSegment
   , emulatorReleaseContext
@@ -369,6 +370,12 @@ emulatorTraceHits emulator start = do
             _ -> ioError (userError ("invalid emulator trace register " ++ name ++ ": " ++ text))
       TraceHit site core instructions <$> register "r0" <*> register "r1" <*> register "r2" <*> register "r3"
     hit _ = ioError (userError "emulator trace hit must be an object")
+
+-- | The bridge's hit records from index `start` on, unchanged, with their `lr`, `sp` and `cpsr`.
+emulatorTraceHitsRaw :: Emulator -> Int -> IO Value
+emulatorTraceHitsRaw emulator start = do
+  fields <- rpc emulator (object ["command" .= String "trace-hits", "from" .= start])
+  objectField "hits" fields
 
 -- | A key's hold and debounced-release cap in guest instructions, both positive.
 data KeyPulse = KeyPulse { keyPulseHold :: Word32, keyPulseRelease :: Word32 } deriving (Eq, Show)

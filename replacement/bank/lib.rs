@@ -21,6 +21,9 @@ mod modal_runtime;
 #[cfg(all(rb_modal_scoped, target_arch = "arm"))]
 core::arch::global_asm!(include_str!("../modal_runtime/src/entry.S"), options(raw));
 
+#[cfg(all(rb_menu_picker_owned, not(rb_modal_scoped)))]
+compile_error!("rb_menu_picker_owned requires rb_modal_scoped");
+
 #[cfg(rb_lifecycle_scoped)]
 #[path = "../save/src/lib.rs"]
 mod save;
