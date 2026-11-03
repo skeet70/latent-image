@@ -1344,7 +1344,7 @@
 +mod tests;
 --- /dev/null
 +++ b/crates/emulator/src/board/observation/composite/tests.rs
-@@ -0,0 +1,1054 @@
+@@ -0,0 +1,1069 @@
 +use super::*;
 +use crate::board::{
 +    bus::{self, Bus},
@@ -1368,10 +1368,25 @@
 +const DMA: u64 = 0x8000000;
 +
 +/// Writes four bytes at the bus address it is given.
++#[derive(serde::Serialize, serde::Deserialize)]
 +struct Dma;
 +impl Device for Dma {
 +    fn name(&self) -> &'static str {
 +        "composite-guard-dma"
++    }
++    fn fingerprint(&self) -> Result<serde_json::Value, String> {
++        serde_json::to_value(self).map_err(|error| error.to_string())
++    }
++    fn checkpoint(&self) -> Result<fujimod_emulator_devices::checkpoint::Checkpoint, String> {
++        fujimod_emulator_devices::checkpoint::Checkpoint::encode(self.name(), self)
++    }
++    fn validate_checkpoint(&self, saved: &fujimod_emulator_devices::checkpoint::Checkpoint) -> Result<(), String> {
++        let _: Self = saved.decode(self.name())?;
++        Ok(())
++    }
++    fn restore_checkpoint(&mut self, saved: &fujimod_emulator_devices::checkpoint::Checkpoint) -> Result<(), String> {
++        *self = saved.decode(self.name())?;
++        Ok(())
 +    }
 +    fn read(&mut self, cx: &mut Cx<'_>, _: u64, _: u8) -> u64 {
 +        cx.unmodeled();
