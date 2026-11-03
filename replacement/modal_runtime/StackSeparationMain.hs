@@ -290,7 +290,7 @@ main = do
             , "image5" .= imagePath, "image5_sha256" .= sha256Hex (sha256 bytes)
             , "ram_summary" .= summaryPath, "ram_summary_sha256" .= sha256Hex (sha256 summaryBytes) ]
         , "stack_regions" .= [object ["kind" .= show kind, "physical" .= intervalJson region, "evidence" .= evidence] | StackRegion kind region evidence <- stackRegions]
-        , "address_model" .= ("addresses in [0x40000000,0x50000000) fold onto physical DRAM by clearing 0x40000000; other addresses are their own physical address" :: String)
+        , "address_model" .= ("addresses in [0x40000000,0x60000000) fold onto physical DRAM by clearing 0x40000000; other addresses are their own physical address" :: String)
         , "controller_cells" .= object
             [ "state" .= intervalJson stateCells, "event" .= intervalJson eventCells
             , "state_disjoint_from_every_stack_region" .= not (any (\(StackRegion _ region _) -> overlaps stateCells region) stackRegions)
