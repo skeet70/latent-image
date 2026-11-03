@@ -232,6 +232,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-O2"],
     visibility = ["//visibility:public"],
     deps = [
+        ":service-categories",
         "//emulation:case-sha256",
         "//replacement/media_permit:stock-inventory",
         "//host:aeson",
@@ -282,6 +283,7 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     visibility = ["//visibility:public"],
     deps = [
+        ":instruction-form",
         "//emulation:case-sha256",
         "//replacement/media_permit:stock-inventory",
         "//host:aeson",
@@ -299,6 +301,48 @@ haskell_binary(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     visibility = ["//visibility:public"],
     deps = [
+        "//emulation:case-sha256",
+        "//replacement/media_permit:stock-inventory",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_library(
+    name = "instruction-form",
+    srcs = ["Replacement/ModalRuntime/InstructionForm.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_library(
+    name = "service-categories",
+    srcs = ["Replacement/ModalRuntime/ServiceCategories.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//replacement/media_permit:stock-inventory",
+        "//host:base",
+        "//host:containers",
+    ],
+)
+
+haskell_binary(
+    name = "controller75-inventory",
+    srcs = ["Controller75InventoryMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":instruction-form",
+        ":service-categories",
         "//emulation:case-sha256",
         "//replacement/media_permit:stock-inventory",
         "//host:aeson",
