@@ -275,3 +275,20 @@ haskell_binary(
         "//host/firmware:bank-allowlist",
     ],
 )
+
+haskell_binary(
+    name = "controller-forms",
+    srcs = ["ControllerFormsMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//replacement/media_permit:stock-inventory",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host/firmware:bank-allowlist",
+    ],
+)
