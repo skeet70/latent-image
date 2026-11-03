@@ -2818,7 +2818,7 @@ fn mutable_points_preserve_stopped_fetch_clocks_attribution_and_watch_cap() {
         .map(|row| (row.event.pc, row.event.instructions, row.core_instructions)).collect::<Vec<_>>();
     assert_eq!(fetches(&entry), [
         (Some(0x1000), Some(1), Some(CoreInstructionOrdinal(1))),
-        (Some(0x1004), Some(1), Some(CoreInstructionOrdinal(1))),
+        (Some(0x1004), Some(2), Some(CoreInstructionOrdinal(2))),
     ]);
     assert_eq!(machine.instructions(), 1);
     assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 0x22b);
@@ -2829,9 +2829,9 @@ fn mutable_points_preserve_stopped_fetch_clocks_attribution_and_watch_cap() {
     let resumed: AttributedWatch = serde_json::from_value(watch.records.borrow().state()).unwrap();
     assert_eq!(fetches(&resumed), [
         (Some(0x1000), Some(1), Some(CoreInstructionOrdinal(1))),
-        (Some(0x1004), Some(1), Some(CoreInstructionOrdinal(1))),
         (Some(0x1004), Some(2), Some(CoreInstructionOrdinal(2))),
-        (Some(0x1008), Some(2), Some(CoreInstructionOrdinal(2))),
+        (Some(0x1004), Some(2), Some(CoreInstructionOrdinal(2))),
+        (Some(0x1008), Some(3), Some(CoreInstructionOrdinal(3))),
     ]);
     assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 0x22c);
     assert!(machine.traces.replace_sites(&machine.session, BTreeMap::from([(0x1003, "invalid".into())])).is_err());
@@ -2843,11 +2843,11 @@ fn mutable_points_preserve_stopped_fetch_clocks_attribution_and_watch_cap() {
     assert_eq!(completed.records.len(), 8);
     assert_eq!(fetches(&completed), [
         (Some(0x1000), Some(1), Some(CoreInstructionOrdinal(1))),
-        (Some(0x1004), Some(1), Some(CoreInstructionOrdinal(1))),
         (Some(0x1004), Some(2), Some(CoreInstructionOrdinal(2))),
-        (Some(0x1008), Some(2), Some(CoreInstructionOrdinal(2))),
+        (Some(0x1004), Some(2), Some(CoreInstructionOrdinal(2))),
         (Some(0x1008), Some(3), Some(CoreInstructionOrdinal(3))),
-        (Some(0x100c), Some(3), Some(CoreInstructionOrdinal(3))),
+        (Some(0x1008), Some(3), Some(CoreInstructionOrdinal(3))),
+        (Some(0x100c), Some(4), Some(CoreInstructionOrdinal(4))),
     ]);
     let writes: Vec<_> = completed.records.iter().filter(|row| row.event.source == Source::CpuWrite)
         .map(|row| (row.event.physical, row.event.value, row.latest_fetch.as_ref().unwrap().event.pc)).collect();
