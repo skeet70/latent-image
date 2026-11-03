@@ -1,4 +1,5 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 filegroup(
     name = "module",
@@ -25,6 +26,45 @@ filegroup(
         "//menu:__pkg__",
         "//replacement/bank:__pkg__",
         "//transport:__pkg__",
+    ],
+)
+
+filegroup(
+    name = "modal75-owned-sources",
+    srcs = ["src/modal75.rs"],
+    visibility = ["//replacement/bank:__pkg__"],
+)
+
+genrule(
+    name = "modal75-tests-build",
+    srcs = ["src/modal75.rs"],
+    outs = ["modal75-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/modal75.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
+)
+
+sh_test(
+    name = "modal75-tests",
+    size = "small",
+    srcs = ["//emulation:recovery-task-state-tests.sh"],
+    args = ["$(location :modal75-tests-build)"],
+    data = [":modal75-tests-build"],
+)
+
+haskell_binary(
+    name = "controller75-table",
+    srcs = ["Controller75TableMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host/firmware:bank-allowlist",
     ],
 )
 

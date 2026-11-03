@@ -5,7 +5,10 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 exports_files(
     ["recovery-task-state-tests.sh"],
-    visibility = ["//replacement/recipe_ui:__pkg__"],
+    visibility = [
+        "//replacement/modal_runtime:__pkg__",
+        "//replacement/recipe_ui:__pkg__",
+    ],
 )
 
 exports_files(
