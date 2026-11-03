@@ -342,9 +342,15 @@ main = do
     , check "a crawl route whose last step lacks its recorded effects is refused"
         (refusal OwnedRole (ownedWith (filter (/= commit) (stepHits ownedStep))) == Just (RouteEffectsDiffer crawlRoute))
 
-    , check "getter calls compare as a set of returned (caller, arguments, result)"
+    , check "getter calls compare per (caller, arguments) as result sequences with repeats collapsed"
         (compared retainedStep (ownedWith (stepHits ownedStep ++ [getterIn, getterOut])) == Right ()
           && compared retainedStep (ownedWith (take 5 (stepHits ownedStep) ++ [hit GetterReturn (getterCall + 4) [0xac] stackPointer 0])) == Left (GetterResultsDiffer crawlRoute))
+    , check "a getter result returned out of order is a difference even when the result set is equal"
+        (let returning value = hit GetterReturn (getterCall + 4) [value] stackPointer 0
+         in compared (retainedStep { stepHits = stepHits retainedStep ++ [getterIn, returning 0xac] })
+                     (ownedWith (stepHits ownedStep ++ [getterIn, returning 0xac, getterIn, returning 0xab])) == Left (GetterResultsDiffer crawlRoute)
+            && compared (retainedStep { stepHits = stepHits retainedStep ++ [getterIn, returning 0xac] })
+                        (ownedWith (stepHits ownedStep ++ [getterIn, returning 0xac, getterIn, returning 0xac])) == Right ())
     , check "a write that leaves its preimage is not compared"
         (compared retainedStep ownedStep { stepRows = stepRows ownedStep ++ [cpuWrite 0x96cc80 1 (Just 0) [0] retiredSetter] } == Right ())
     , check "settle status differs only through an exhausted budget; the menu always counts"

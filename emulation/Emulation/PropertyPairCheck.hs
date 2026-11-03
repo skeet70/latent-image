@@ -35,6 +35,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import Data.List (find, sort)
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Scientific (toBoundedInteger)
@@ -638,9 +639,9 @@ parseStep expected value = do
 -- Comparison.
 
 -- | Per route: the ordered setter calls, area-3 appends, byte-changing writes and transfers, the
--- final regions and each press's menu must be equal; getter calls are compared as the set of
--- (caller, arguments, result) over returned calls; settle statuses only where neither press
--- exhausted its budget.
+-- final regions and each press's menu must be equal; for each (caller, arguments) of a returned
+-- getter call, the results in call order with consecutive repeats collapsed must be equal; settle
+-- statuses only where neither press exhausted its budget.
 compareRoles :: Qualified -> Qualified -> Either Refusal [(RouteResult, RouteResult)]
 compareRoles retained owned = do
   unless (qualifiedRole retained == RetainedRole && qualifiedRole owned == OwnedRole) (Left (CohortDiffers "roles"))
@@ -651,11 +652,11 @@ compareRoles retained owned = do
     let name = resultRoute left
         differs refusal select = when (select left /= select right) (Left (refusal name))
         writeKey write = (effectAddress write, effectWidth write, effectBytes write)
-        getterSet result = S.fromList [(callReturn call, callArguments call, value) | call <- resultGetters result, Just value <- [callResult call]]
+        getterResults result = M.map (map NE.head . NE.group) (M.fromListWith (flip (++)) [((callReturn call, callArguments call), [value]) | call <- resultGetters result, Just value <- [callResult call]])
         pressAgrees (Press leftStatus leftMenu) (Press rightStatus rightMenu) = leftMenu == rightMenu
           && (leftStatus == rightStatus || BudgetExhausted `elem` [leftStatus, rightStatus])
     differs SetterSequenceDiffers resultSetters
-    differs GetterResultsDiffer getterSet
+    differs GetterResultsDiffer getterResults
     differs WriteSequenceDiffers (map writeKey . filter effectChanges . resultWrites)
     differs TransferSequenceDiffers resultTransfers
     differs AppendSequenceDiffers resultAppends
