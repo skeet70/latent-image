@@ -189,7 +189,9 @@ fn inspect_watch(raw:&ReplayWatch,epoch:&Epoch,report:RouteView<'_>,program:&Pro
             let at=row.instructions.ok_or("shared CPU access clock absent")?.0;
             let stopped=|clock:u64|report.events.iter().any(|event|event.instructions.0==clock&&Some(event.core)==row.core&&Some(event.pc)==row.pc&&event.pc==row.address);
             let boundary_attempt=row.source==Access::CpuFetch&&at==epoch.start.0&&stopped(at);
-            // The stop that ends an epoch leaves its rolled-back fetch stamped one past the end; the next epoch records the execution.
+            // Points rearmed after the watch (any add_sites/remove_sites) record the rolled-back fetch of a stop one past its settled count
+            // (tests/peer_wait_sdk.rs points_rearmed_after_a_fetch_watch_*); points armed before it record the settled count (heap_observe.rs:382-389).
+            // The stop ending the epoch is the only such fetch without its executed retry; the next epoch records the execution.
             terminal_attempt=row.source==Access::CpuFetch&&Some(at)==epoch.end.0.checked_add(1)&&stopped(epoch.end.0);
             require(row.core.is_some()&&row.pc.is_some()&&(epoch.start.0<at||boundary_attempt)&&(at<=epoch.end.0||terminal_attempt)&&previous<=at,"shared CPU access attribution differs")?;
             previous=at;lower=Some(at);require(future.next().is_some_and(|(position,_)|position==index),"shared CPU chronology differs")?;
