@@ -83,6 +83,20 @@ main = do
     (refused (derive [0xe92d4000,0xe5cd0000,0xe8bd8000]))
   check "a conditional overwrite is not a proven return"
     (refused (derive [0xe92d4000,0x058d0000,0xe8bd8000]))
+  predicatedRun <- either fail pure (deriveResult [] [0xe92d4800,0xe3500000,0x03073588,0x03403146,0x03a02000,0x01c321b4,0xe8bd8800])
+  check "a not-executed predicated run skips to its end, so its constant-base store keeps the saved return"
+    (derivedDeclaration predicatedRun == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 28)
+      && derivationPremiseUses predicatedRun == [PremiseUse (ProgramCounter 0x1014) GlobalObjectStackSeparation])
+  check "a different condition ends the run, so the store base is unknown"
+    (refused (derive [0xe92d4800,0xe3500000,0x03073588,0x13403146,0x03a02000,0x01c321b4,0xe8bd8800]))
+  check "an executed flag-setting member does not make the rest of the run execute"
+    (refused (derive [0xe92d4800,0xe3500000,0x058d1004,0x01b02001,0x058de004,0xe8bd8800]))
+  insertedIndex <- either fail pure (deriveResult [] [0xe92d4010,0xe3a02064,0xe3a04001,0xe7df2814,0xe3043580,0xe3403094,0xe3a01000,0xe7831002,0xe8bd8010])
+  check "a BFI of constants gives a constant index for a global store"
+    (derivedDeclaration insertedIndex == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 36)
+      && derivationPremiseUses insertedIndex == [PremiseUse (ProgramCounter 0x101c) GlobalObjectStackSeparation])
+  check "a BFI from the stack pointer gives an address that may alias the frame"
+    (refused (derive [0xe92d4010,0xe3a02000,0xe7df201d,0xe5821000,0xe8bd8010]))
   check "an overwritten LR is not an incoming register return"
     (refused (derive [0xe3a0e000,0xe12fff1e]))
   check "an unsaved LR after a call is not the incoming return"
@@ -392,6 +406,10 @@ main = do
   let excluded words' = refused (deriveTasks words') && either (const False) (const True) (deriveResult [] words')
       refusesWith message words' = either (message `isInfixOf`) (const False) (deriveTasks words')
       savedIndex = [0xe92d4010,0xe3023000,0xe5932000,0xe5922018,0xe3043000,0xe0833002,0xe5831000,0xe8bd8010]
+  check "a BFC keeps a saved stack pointer's taint as an index"
+    (excluded [0xe92d4010,0xe3023000,0xe5932000,0xe5922018,0xe7df241f,0xe3043000,0xe0833002,0xe5831000,0xe8bd8010])
+  check "a BFI of a saved stack pointer taints the destination as an index"
+    (excluded [0xe92d4010,0xe3023000,0xe5932000,0xe5922018,0xe3a00000,0xe7c90112,0xe3043000,0xe0833000,0xe5831000,0xe8bd8010])
   check "a saved stack pointer used as an index from a constant base refuses"
     (refused (deriveTasks savedIndex))
   check "without a declaration the same index is accepted under global-object separation"
