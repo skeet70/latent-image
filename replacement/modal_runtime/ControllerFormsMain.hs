@@ -219,19 +219,19 @@ main = do
         [ (name, (status, 1 :: Int, if conditional then 1 else 0 :: Int, S.singleton ident))
         | (ident, Occurrence name status conditional) <- occurrences ]
       merge (status, a, b, c) (_, x, y, z) = (status, a + x, b + y, S.union c z)
-      ranked = sortOn (\(_, (_, count, _, _)) -> negate count) (M.toList forms)
+      ranked = sortOn (\(FormName name, (_, count, _, _)) -> (negate count, name)) (M.toList forms)
       formSets = [S.fromList [name | (_, Occurrence name _ _) <- entries] | Census _ _ entries <- censuses]
       covered k = let chosen = S.fromList (map fst (take k ranked)) in length [() | set <- formSets, set `S.isSubsetOf` chosen]
       family (FormName name) = takeWhile (/= ' ') name
       families = M.fromListWith (+) [(family name, count) | (name, (_, count, _, _)) <- M.toList forms]
-      byStatus = M.fromListWith (\(a, b, c) (x, y, z) -> (a + x, b + y, c + z))
-        [(status, (1 :: Int, count, S.size users)) | (_, (status, count, _, users)) <- M.toList forms]
+      byStatus = M.fromListWith (\(a, b, c) (x, y, z) -> (a + x, b + y, S.union c z))
+        [(status, (1 :: Int, count, users)) | (_, (status, count, _, users)) <- M.toList forms]
       result = object
         [ "schema_version" .= (1 :: Int)
         , "firmware" .= ("Fujifilm X-M1 1.50" :: String)
         , "evidence_class" .= ("static structural census of StockInventory-inspected callback code words; no semantics, equivalence or execution" :: String)
         , "inputs" .= object ["manifest" .= manifestPath, "manifest_sha256" .= sha256Hex (sha256 manifestBytes), "image5" .= imagePath, "image5_sha256" .= sha256Hex (sha256 bytes)]
-        , "form_definition" .= ("operation, flag-setting, operand/offset shape (immediate, register, shift kind with immediate or register amount, RRX), width and signedness, indexing and writeback, block mode, and PC/SP/LR roles that change semantics; register numbers, immediates, offset signs and condition codes are parameters. Conditional occurrences are counted per form." :: String)
+        , "form_definition" .= ("operation, flag-setting, operand/offset shape (immediate, register, shift kind with immediate or register amount, RRX), width and signedness, indexing and writeback, block mode, PC/SP roles of Rd, Rn and the load/store base, PC as load target, PC in a load-multiple and LR in a store-multiple; register numbers (including Rm and register offsets), immediates, offset signs and condition codes are parameters. Conditional occurrences are counted per form. Forms are ranked by instruction count, ties by name." :: String)
         , "decoder_status_definition" .= object
             [ "a32-operand-semantics" .= ("host/firmware/A32.hs decode returns an operand-level constructor" :: String)
             , "a32-destinations-only" .= ("A32.hs returns Compute: it knows only the written registers" :: String)
@@ -243,8 +243,8 @@ main = do
         , "literal_words" .= sum [literals | Census _ literals _ <- censuses]
         , "distinct_forms" .= M.size forms
         , "distinct_families" .= M.size families
-        , "by_decoder_status" .= [object ["status" .= statusName status, "forms" .= f, "instructions" .= n, "callbacks_using" .= u] | (status, (f, n, u)) <- M.toList byStatus]
-        , "callbacks_fully_covered_by_top_forms" .= [object ["forms" .= k, "callbacks" .= covered k] | k <- [10, 20, 30, 50, 75, 100, 150, M.size forms]]
+        , "by_decoder_status" .= [object ["status" .= statusName status, "forms" .= f, "instructions" .= n, "callbacks_using" .= S.size u] | (status, (f, n, u)) <- M.toList byStatus]
+        , "callbacks_fully_covered_by_top_forms" .= [object ["forms" .= k, "callbacks" .= covered k] | k <- S.toList (S.fromList ([k | k <- [10, 20, 30, 40, 50], k < M.size forms] ++ [M.size forms]))]
         , "forms" .= [ object ["form" .= name, "decoder_status" .= statusName status, "instructions" .= count, "conditional" .= conditional, "callbacks" .= S.size users]
             | (FormName name, (status, count, conditional, users)) <- ranked ]
         , "families" .= [object ["family" .= name, "instructions" .= count] | (name, count) <- sortOn (negate . snd) (M.toList families)]

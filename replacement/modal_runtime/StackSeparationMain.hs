@@ -28,8 +28,10 @@ newtype PhysicalAddress = PhysicalAddress Integer deriving (Eq, Ord, Show)
 data Interval = Interval PhysicalAddress PhysicalAddress deriving (Eq, Ord, Show)
 data StackKind = TaskStackPool | SeparateStoragePool | KernelBootStack | KernelIdleStackRuntime | ExceptionModeStacks | BootRomStack deriving (Eq, Ord, Show)
 data StackRegion = StackRegion StackKind Interval String
-data SiteAddress = AbsoluteAddress Word32 Int | IndexedFromBase Word32 | UnresolvedAddress deriving (Eq, Ord, Show)
-data SiteClass = Discharged | OverlapsStack | IndexedSite | UnresolvedSite deriving (Eq, Ord, Show)
+-- AbsoluteAddress: constant address, byte count, and whether the constant was
+-- held in r4-r11 across a call.
+data SiteAddress = AbsoluteAddress Word32 Int Bool | IndexedFromBase Word32 | UnresolvedAddress deriving (Eq, Ord, Show)
+data SiteClass = Discharged | DischargedUnderCalleePreservation | OverlapsStack | IndexedSite | UnresolvedSite deriving (Eq, Ord, Show)
 newtype CallbackId = CallbackId Word32 deriving (Eq, Ord, Show)
 data ReturnStatus = CitedConditional | CitedUnresolved deriving (Eq, Show)
 data Callback = Callback CallbackId Word32 [GuestAddress] ReturnStatus
@@ -39,7 +41,7 @@ imageBase = 0xbf1a00
 
 dramAliasBase, dramAliasEnd :: Integer
 dramAliasBase = 0x40000000
-dramAliasEnd = 0x50000000
+dramAliasEnd = 0x60000000
 
 physical :: Integer -> PhysicalAddress
 physical address
@@ -57,11 +59,11 @@ stackRegions :: [StackRegion]
 stackRegions =
   [ StackRegion TaskStackPool (interval 0x40a10200 0x40a5b200) "task reservation 0x725c6c: cursor 0x4089ea98 from 0x40a10200, growth bounded by 0x4b000 (E-KERNEL-PHASE0-RESOURCE-ORDER-SOURCE-150; reports/replacement-inventory-baseline.md section 8)"
   , StackRegion SeparateStoragePool (interval 0x409c4460 0x40a0f460) "separate storage reservation 0x723470: cursor 0x4089ea90 from 0x409c4460, growth bounded by 0x4b000; included because phase submissions fill/cache stack storage (E-KERNEL-PHASE0-RESOURCE-ORDER-SOURCE-150)"
-  , StackRegion KernelBootStack (interval 0x62c54 0x63460) "loader A boot stack extent (E-STARTUP-TASK-RETAINED-STACK-SOURCE-150)"
-  , StackRegion KernelBootStack (interval 0xf2c14 0xf3420) "loader B boot stack extent (E-STARTUP-TASK-RETAINED-STACK-SOURCE-150)"
+  , StackRegion KernelBootStack (interval 0x40062c54 0x40063460) "loader A boot stack 0x40062c54..0x40063460, initialized over 0x80c bytes before SP installation (reports/replacement-inventory-baseline.md section 8.13; E-STARTUP-TASK-RETAINED-STACK-SOURCE-150)"
+  , StackRegion KernelBootStack (interval 0x400f2c14 0x400f3420) "loader B boot stack 0x400f2c14..0x400f3420, top 0x400f3420 (reports/replacement-inventory-baseline.md section 8.13; emulation/README.md opaque caller-frame premise; E-STARTUP-TASK-RETAINED-STACK-SOURCE-150)"
   , StackRegion KernelIdleStackRuntime (interval 0x60000 0xa0000) "loader A constant SP top 0x000a0000 at 0x436f4 with unrecovered extent; whole kernel A runtime partition below it (reports/classic-chrome-patch.md stacks; reports/ram-calibration.md regions)"
   , StackRegion KernelIdleStackRuntime (interval 0xf0000 0x130000) "loader B constant SP top 0x00130000 at 0xd36f4 with unrecovered extent; whole kernel B runtime partition below it (same sources)"
-  , StackRegion ExceptionModeStacks (interval 0x70000000 0x70002000) "core TCM exception-mode SPs 0x70000800..0x70002000 set by loader sources (E-PEER-ENTRY-FRAME-HANDOFF-SOURCE-150; emulation/README.md natural IRQ callback)"
+  , StackRegion ExceptionModeStacks (interval 0x70000000 0x70002000) "core TCM exception-mode SPs 0x70000800..0x70002000 set by record-2 code at 0x118b8 (E-PEER-ENTRY-FRAME-HANDOFF-SOURCE-150); loaders reload the IRQ top 0x70002000 at 0x40250/0xd0250 (reports/classic-chrome-patch.md stacks; emulation/README.md natural IRQ callback)"
   , StackRegion BootRomStack (interval 0xfff00000 0xfff01000) "boot ROM SRAM stack top 0xfff00f00 (reports/bootrom-window.md)"
   ]
 
@@ -118,7 +120,9 @@ always = A.Cond 14
 -- ADD/SUB immediates and PC-relative literal words. A value defined under a
 -- condition is used only by instructions with that condition and is dropped when
 -- flags change. Known values reset at join targets, after a gap in the code
--- words and after unconditional transfers; calls clobber r0-r3, r12 and LR.
+-- words and after unconditional transfers. Calls clobber r0-r3, r12 and LR; a
+-- value kept in r4-r11 across a call is marked as relying on the callee
+-- preserving it.
 storeAddresses :: B.ByteString -> S.Set Word32 -> [Word32] -> M.Map Word32 SiteAddress
 storeAddresses bytes joins code = go M.empty Nothing code
   where
@@ -129,45 +133,45 @@ storeAddresses bytes joins code = go M.empty Nothing code
           instruction = maybe (A.Rejected A.UndefinedEncoding) (A.decode address) (wordAt bytes address)
           (site, known') = step address instruction known
        in maybe id (M.insert address) site (go known' (Just address) rest)
-    usable condition (held, value) = if held == always || held == condition then Just value else Nothing
+    usable condition (held, value, crossed) = if held == always || held == condition then Just (value, crossed) else Nothing
     lookupAt known condition register = M.lookup register known >>= usable condition
     define condition register value known = case value of
-      Just constant | register /= A.pc -> M.insert register (condition, constant) known
+      Just (constant, crossed) | register /= A.pc -> M.insert register (condition, constant, crossed) known
       _ -> M.delete register known
-    dropConditional = M.filter ((== always) . fst)
-    clobber = dropConditional . flip (foldr M.delete) [A.Reg 0, A.Reg 1, A.Reg 2, A.Reg 3, A.Reg 12, A.lr]
+    dropConditional = M.filter (\(held, _, _) -> held == always)
+    clobber = M.map (\(held, value, _) -> (held, value, True)) . dropConditional . flip (foldr M.delete) [A.Reg 0, A.Reg 1, A.Reg 2, A.Reg 3, A.Reg 12, A.lr]
     transfer condition known = if condition == always then M.empty else known
     writeback base indexing known = if indexing == A.OffsetOnly then known else M.delete base known
     effective address condition base offset indexing known = do
-      baseValue <- if base == A.pc then Just (address + 8) else lookupAt known condition base
+      (baseValue, baseCrossed) <- if base == A.pc then Just (address + 8, False) else lookupAt known condition base
       case (offset, indexing) of
-        (_, A.PostIndexed) -> Just (Right baseValue)
-        (A.OffsetImmediate delta, _) -> Just (Right (baseValue + fromIntegral delta))
+        (_, A.PostIndexed) -> Just (Right (baseValue, baseCrossed))
+        (A.OffsetImmediate delta, _) -> Just (Right (baseValue + fromIntegral delta, baseCrossed))
         (A.OffsetRegister added register A.LSL amount, _) -> Just (case lookupAt known condition register of
-          Just index -> Right (if added then baseValue + (index `shiftL` amount) else baseValue - (index `shiftL` amount))
+          Just (index, indexCrossed) -> Right (if added then baseValue + (index `shiftL` amount) else baseValue - (index `shiftL` amount), baseCrossed || indexCrossed)
           Nothing -> Left baseValue)
         (A.OffsetRegister {}, _) -> Just (Left baseValue)
     widthBytes width = case width of A.Byte -> 1; A.Half -> 2; A.Word -> 4; A.Dual -> 8
-    classifyAddress size = maybe UnresolvedAddress (either IndexedFromBase (`AbsoluteAddress` size))
+    classifyAddress size = maybe UnresolvedAddress (either IndexedFromBase (\(value, crossed) -> AbsoluteAddress value size crossed))
     step address instruction known = case instruction of
-      A.MoveWide condition register value -> (Nothing, define condition register (Just value) known)
-      A.MoveTop condition register value -> (Nothing, define condition register ((\low -> (value `shiftL` 16) .|. (low .&. 0xffff)) <$> lookupAt known condition register) known)
+      A.MoveWide condition register value -> (Nothing, define condition register (Just (value, False)) known)
+      A.MoveTop condition register value -> (Nothing, define condition register ((\(low, crossed) -> ((value `shiftL` 16) .|. (low .&. 0xffff), crossed)) <$> lookupAt known condition register) known)
       A.DataProcessing condition operation flags destination source operand ->
         let tests = operation `elem` [A.TST, A.TEQ, A.CMP, A.CMN]
-            sourceValue = if source == A.pc then Just (address + 8) else lookupAt known condition source
+            sourceValue = if source == A.pc then Just (address + 8, False) else lookupAt known condition source
             value = case (operation, operand) of
-              (A.MOV, A.Immediate immediate) -> Just immediate
-              (A.MVN, A.Immediate immediate) -> Just (complement immediate)
+              (A.MOV, A.Immediate immediate) -> Just (immediate, False)
+              (A.MVN, A.Immediate immediate) -> Just (complement immediate, False)
               (A.MOV, A.ShiftedImmediate register A.LSL 0) -> lookupAt known condition register
-              (A.ADD, A.Immediate immediate) -> (+ immediate) <$> sourceValue
-              (A.SUB, A.Immediate immediate) -> subtract immediate <$> sourceValue
+              (A.ADD, A.Immediate immediate) -> (\(x, crossed) -> (x + immediate, crossed)) <$> sourceValue
+              (A.SUB, A.Immediate immediate) -> (\(x, crossed) -> (x - immediate, crossed)) <$> sourceValue
               _ -> Nothing
             written = if tests then known else define condition destination value known
             flagged = if flags then dropConditional written else written
          in (Nothing, if not tests && destination == A.pc then transfer condition flagged else flagged)
       A.Load condition width _ destination base offset indexing ->
         let literal = case (width, offset, indexing) of
-              (A.Word, A.OffsetImmediate delta, A.OffsetOnly) | base == A.pc -> wordAt bytes (address + 8 + fromIntegral delta)
+              (A.Word, A.OffsetImmediate delta, A.OffsetOnly) | base == A.pc -> (\word -> (word, False)) <$> wordAt bytes (address + 8 + fromIntegral delta)
               _ -> Nothing
             destinations = if width == A.Dual then [destination, nextRegister destination] else [destination]
             loaded = foldr (\register held -> if register == destination then define condition register literal held else M.delete register held) (writeback base indexing known) destinations
@@ -176,12 +180,12 @@ storeAddresses bytes joins code = go M.empty Nothing code
         (Just (classifyAddress (widthBytes width) (effective address condition base offset indexing known)), writeback base indexing known)
       A.StoreMultiple condition base mode back registers ->
         let count = length registers
-            start = (\value -> case mode of
+            start = (\(value, crossed) -> (case mode of
               A.IncrementAfter -> value
               A.IncrementBefore -> value + 4
               A.DecrementAfter -> value + 4 - 4 * fromIntegral count
-              A.DecrementBefore -> value - 4 * fromIntegral count) <$> lookupAt known condition base
-         in (Just (maybe UnresolvedAddress (`AbsoluteAddress` (4 * count)) start), if back then M.delete base known else known)
+              A.DecrementBefore -> value - 4 * fromIntegral count, crossed)) <$> lookupAt known condition base
+         in (Just (maybe UnresolvedAddress (\(value, crossed) -> AbsoluteAddress value (4 * count) crossed) start), if back then M.delete base known else known)
       A.LoadMultiple condition base _ back registers ->
         let cleared = foldr M.delete (if back then M.delete base known else known) registers
          in (Nothing, if A.pc `elem` registers then transfer condition cleared else cleared)
@@ -206,8 +210,9 @@ data CallbackResult = CallbackResult
 
 classifySite :: SiteAddress -> SiteClass
 classifySite address = case address of
-  AbsoluteAddress at size
+  AbsoluteAddress at size crossed
     | any (\(StackRegion _ region _) -> overlaps (interval (toInteger at) (toInteger at + toInteger size)) region) stackRegions -> OverlapsStack
+    | crossed -> DischargedUnderCalleePreservation
     | otherwise -> Discharged
   IndexedFromBase _ -> IndexedSite
   UnresolvedAddress -> UnresolvedSite
@@ -259,10 +264,11 @@ main = do
       inside (Interval (PhysicalAddress a) (PhysicalAddress b)) (Interval (PhysicalAddress c) (PhysicalAddress d)) = c <= a && b <= d
       derived = filter resultDerived results
       usesSeparation = filter (not . null . resultSites) derived
-      dischargedAll result = all (\(_, _, siteClass) -> siteClass == Discharged) (resultSites result)
+      dischargedAll result = all (\(_, _, siteClass) -> siteClass `elem` [Discharged, DischargedUnderCalleePreservation]) (resultSites result)
+      dischargedWithoutCallees result = all (\(_, _, siteClass) -> siteClass == Discharged) (resultSites result)
       allSites = concatMap resultSites derived
       siteCount wanted = length [() | (_, _, siteClass) <- allSites, siteClass == wanted]
-      absoluteObjects = M.fromListWith (+) [((at, size), 1 :: Int) | (_, AbsoluteAddress at size, _) <- allSites]
+      absoluteObjects = M.fromListWith (+) [((at, size), 1 :: Int) | (_, AbsoluteAddress at size _, _) <- allSites]
       inCells (at, size) = any (\cells -> inside (interval (toInteger at) (toInteger at + toInteger size)) cells) [stateCells, eventCells]
       citedUnresolved = [result | result <- results, resultCited result == CitedUnresolved]
       citedNowDerived = filter resultDerived citedUnresolved
@@ -273,6 +279,7 @@ main = do
         , "derived_using_separation" .= length [() | result <- selected, resultDerived result, not (null (resultSites result))]
         , "separation_discharged_at_every_site" .= length [() | result <- selected, resultDerived result, not (null (resultSites result)), dischargedAll result]
         , "derived_without_separation_after_discharge" .= length [() | result <- selected, resultDerived result, dischargedAll result]
+        , "derived_without_separation_or_callee_preservation_after_discharge" .= length [() | result <- selected, resultDerived result, dischargedWithoutCallees result]
         , "derived_with_no_premise_after_discharge" .= length [() | result <- selected, resultDerived result, dischargedAll result, S.null (resultOtherPremises result)] ]
       document = object
         [ "schema_version" .= (1 :: Int)
@@ -297,22 +304,24 @@ main = do
             , "outside_task_stack_pool" .= [object ["stack_base" .= hex base, "stack_bytes" .= size] | (base, size, region) <- taskIntervals, size > 0, not (inside region taskPool)] ]
         , "separation_sites" .= object
             [ "sites" .= length allSites
-            , "discharged" .= siteCount Discharged
+            , "discharged" .= (siteCount Discharged + siteCount DischargedUnderCalleePreservation)
+            , "discharged_relying_on_callee_preserved_registers" .= siteCount DischargedUnderCalleePreservation
             , "absolute_overlapping_a_stack_region" .= siteCount OverlapsStack
             , "indexed_from_constant_base" .= siteCount IndexedSite
             , "unresolved_address" .= siteCount UnresolvedSite
-            , "absolute_sites_in_controller_cells" .= length [() | (_, AbsoluteAddress at size, _) <- allSites, inCells (at, size)]
+            , "absolute_sites_in_controller_cells" .= length [() | (_, AbsoluteAddress at size _, _) <- allSites, inCells (at, size)]
             , "distinct_absolute_objects" .= M.size absoluteObjects
             , "absolute_objects_outside_controller_cells" .= [object ["address" .= hex at, "bytes" .= size, "sites" .= count] | ((at, size), count) <- M.toList absoluteObjects, not (inCells (at, size))]
             , "indexed_bases" .= M.toList (M.fromListWith (+) [(hex base, 1 :: Int) | (_, IndexedFromBase base, _) <- allSites])
-            , "undischarged_sites" .= [object ["callback" .= hex callback, "site" .= hex site, "class" .= show siteClass] | result <- derived, let CallbackId callback = resultCallback result, (site, _, siteClass) <- resultSites result, siteClass /= Discharged] ]
+            , "undischarged_sites" .= [object ["callback" .= hex callback, "site" .= hex site, "class" .= show siteClass] | result <- derived, let CallbackId callback = resultCallback result, (site, _, siteClass) <- resultSites result, siteClass `notElem` [Discharged, DischargedUnderCalleePreservation]] ]
         , "callbacks" .= [summary "all manifest callbacks" results, summary "cited unresolved (E-MODAL-CONTROLLER-MANIFEST-150)" citedUnresolved, summary "cited conditional" [r | r <- results, resultCited r == CitedConditional]]
         , "cited_unresolved_still_refused" .= [hex callback | result <- citedUnresolved, not (resultDerived result), let CallbackId callback = resultCallback result]
         , "derived_using_separation" .= length usesSeparation
         , "cited_unresolved_now_derived" .= length citedNowDerived
-        , "premises" .= ([ "recovered-stack-allocation-completeness: every stack pointer installed while callbacks run lies in a listed region. The task pool bound comes from the reservation source and the 84 hardware-observed task stacks; other task-creation callers and stack sources are not closed."
+        , "premises" .= ([ "callee-preserves-r4-r11: a constant held in r4-r11 across a call is unchanged after it, the AAPCS assumption StockInventory's derivation already makes for opaque calls; discharges that rely on it are counted separately."
+                         , "recovered-stack-allocation-completeness: every stack pointer installed while callbacks run lies in a listed region. The task pool bound comes from the reservation source and the 84 hardware-observed task stacks; other task-creation callers and stack sources are not closed."
                          , "Store sites whose address is not a constant, including indexed globals and loaded objects joined with globals, keep global-object-stack-separation."
                          , "The constant-address scan is straight-line and resets at joins; an unresolved scan leaves the premise in place." ] :: [String])
         ]
   L.writeFile outputPath (J.encode document)
-  putStrLn ("wrote " ++ outputPath ++ "; sites=" ++ show (length allSites) ++ "; discharged=" ++ show (siteCount Discharged))
+  putStrLn ("wrote " ++ outputPath ++ "; sites=" ++ show (length allSites) ++ "; discharged=" ++ show (siteCount Discharged + siteCount DischargedUnderCalleePreservation))
