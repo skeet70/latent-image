@@ -2,6 +2,7 @@ module Main (main) where
 
 import Control.Monad (unless)
 import Data.List (sort)
+import Data.Word (Word64)
 import qualified Replacement.KernelInstall.Wire as K
 import qualified Replacement.StartupConsumers.Evidence as E
 import qualified Replacement.StartupConsumers.ObservationPolicy as P
@@ -26,7 +27,14 @@ main = do
     (baseline {W.receiptSegments = [first {W.segmentArmedSites = reverse initialSites},second]}) == Left E.WatchRejected)
   assert "segments before the outer return keep complete fetch scope" (E.checkDeclaredFetchPolicyWithPolicy P.standalonePolicy
     (baseline {W.receiptSegments = [first {W.segmentFetchScope = W.ScopedFetch},second]}) == Left E.WatchRejected)
+  assert "receipt recorded on the 16 KiB catalog ROM is admitted" (check (onRom 0x80004000) == Right ()
+    && E.checkDeclaredFetchPolicyWithPolicy P.standalonePolicy (onRom 0x80004000) == Right ())
+  assert "unknown ROM extent is refused" (check (onRom 0x80008000) == Left E.WatchRejected)
+  assert "segments share one ROM backing" (check (baseline {W.receiptSegments = [romSegment 0x80004000 first,second]}) == Left E.WatchRejected)
   where
+    onRom end = baseline {W.receiptSegments = map (romSegment end) [first,second]}
+    romSegment end s = s {W.segmentWatch = completeWatchTo end,W.segmentFetchRanges = completeRangesTo end
+      ,W.segmentFetchAttribution = W.FetchAttribution [K.CpuRead,K.CpuWrite] (completeRangesTo end)}
     check = E.checkFetchPoliciesWithPolicy P.standalonePolicy
     firstSites change = baseline {W.receiptSegments = [first {W.segmentArmedSites = change initialSites},second]}
     assert name condition = unless condition (putStrLn ("FAIL: " ++ name) >> exitFailure)
@@ -50,11 +58,15 @@ initialSites = sort (map K.Address
   ,0xd0aac,0xd0430,0xd0ab0,0x7235d8,0x7235f4,0x7235f8,0x7235fc,0x723600,0x723604
   ,0x723608,0x412c4,0x412c8,0x427b8,0x725dd8,0x725c6c,0x723470,0x724cdc,0x72503c,0x725318,0x69ce00])
 completeRanges :: [W.FetchRange]
-completeRanges = [W.FetchRange (W.PhysicalBoundary low) (W.PhysicalBoundary high)
-  | (low,high) <- [(0,0x20000000),(0x3fff0000,0x3fff1000),(0x80000000,0x80104000),(0x90000000,0x90020000),(0xfff00000,0xfff01000)]]
+completeRanges = completeRangesTo 0x80104000
+completeRangesTo :: Word64 -> [W.FetchRange]
+completeRangesTo romEnd = [W.FetchRange (W.PhysicalBoundary low) (W.PhysicalBoundary high)
+  | (low,high) <- [(0,0x20000000),(0x3fff0000,0x3fff1000),(0x80000000,romEnd),(0x90000000,0x90020000),(0xfff00000,0xfff01000)]]
 completeWatch :: K.Watch
-completeWatch = K.Watch True ranges [K.WatchClass range [K.CpuFetch] | range <- ranges] "fixed" [] Nothing
-  where ranges = [[0,0x20000000],[0x3fff0000,0x3fff1000],[0x80000000,0x80104000],[0x90000000,0x90020000],[0xfff00000,0xfff01000]]
+completeWatch = completeWatchTo 0x80104000
+completeWatchTo :: Word64 -> K.Watch
+completeWatchTo romEnd = K.Watch True ranges [K.WatchClass range [K.CpuFetch] | range <- ranges] "fixed" [] Nothing
+  where ranges = [[0,0x20000000],[0x3fff0000,0x3fff1000],[0x80000000,romEnd],[0x90000000,0x90020000],[0xfff00000,0xfff01000]]
 segment :: W.SegmentId -> W.Context -> W.Context -> W.ProbeRange -> [K.Address] -> W.Segment
 segment ident begin end probes sites = W.Segment ident (K.contextCounts (W.contextMachine begin))
   (K.contextCounts (W.contextMachine end)) [begin] [end]

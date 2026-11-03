@@ -152,8 +152,10 @@ allowedFetch inputs program core pc = case core of
     Retained -> pc >= 0x725a04 && pc < 0x725b44 && pc `mod` 4 == 0
   where cachePcs = [0x42634,0x42638] ++ [0x4264c,0x42650..0x4266c] ++ [0x4268c,0x42690..0x426a4]
 
-backedRanges :: [[Word64]]
-backedRanges = [[0,0x20000000],[0x3fff0000,0x3fff1000],[0x80000000,0x80104000],[0x90000000,0x90020000],[0xfff00000,0xfff01000]]
+-- | Physical backings of the model a receipt was recorded on, by boot-ROM extent: the catalog's
+-- 16 KiB region, or the X-M1 decode repeated through 0x80104000 (E-BOOT-ROM-DECODE-150).
+modelBackings :: [[[Word64]]]
+modelBackings = [[[0,0x20000000],[0x3fff0000,0x3fff1000],[0x80000000,romEnd],[0x90000000,0x90020000],[0xfff00000,0xfff01000]] | romEnd <- [0x80004000,0x80104000]]
 
 data FetchStamp = FetchStamp {fetchPc :: Address, fetchClock :: Count}
 data FetchProgress = FetchProgress
@@ -203,8 +205,8 @@ checkContinuity observation events = do
 
 checkEvents :: Inputs -> Receipt -> Context -> Context -> Memory -> Watch -> Either WitnessError Memory
 checkEvents inputs receipt entry after initial watch = do
-  require (watchEnabled watch && watchRanges watch == backedRanges
-    && watchClasses watch == [WatchClass range [CpuRead,CpuWrite,CpuFetch,HostWrite,ModelBusWrite] | range <- backedRanges]
+  require (watchEnabled watch && watchRanges watch `elem` modelBackings
+    && watchClasses watch == [WatchClass range [CpuRead,CpuWrite,CpuFetch,HostWrite,ModelBusWrite] | range <- watchRanges watch]
     && watchViews watch == "observe" && watchViolation watch == Nothing
     && not (null events) && length events < 32768) WatchRejected
   let clocks = [clock | event <- events, Just clock <- [eventInstructions event]]
