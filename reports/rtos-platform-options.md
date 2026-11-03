@@ -495,4 +495,4 @@ Two earlier inputs are preserved as failures:
 - B's timeouts on hardware depend on line 32 reaching core 1 (laws U4).
 - Wake resolution is one tick.
 - The host tasks keep running after `ram-unload`.
-- Before any camera run, core 1's instruction cache over the payload needs maintenance that the push does not perform, the payload must be the `counter-up` build, and the push and run need the owner's go.
+- Before any camera run, the payload must be the `counter-up` build, and the push and run need the owner's go. Core 1's instruction cache over the payload needs nothing beyond the install: the shared installer runs stock `0x006b0c3c` and `0x0061c490` on core 1 over the whole image, then `peer_cache_action` on core 1 ends in DSB/ICIALLU/DSB/ISB, and core 1 repeats ICIALLU after GO (`menu/ram_push_installer.c:199-206,239-289`; E-RAM-PUSH-INSTALL-150).

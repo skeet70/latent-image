@@ -5,6 +5,7 @@ import qualified A32 as A
 import Control.Monad (foldM, unless, zipWithM)
 import qualified Data.Aeson as J
 import qualified Data.Aeson.KeyMap as KM
+import Data.Aeson.Types (parseEither)
 import Data.Bits ((.&.), (.|.), xor)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
@@ -32,6 +33,8 @@ data Control = WrongSource | WrongArtifact | WrongCandidate | WrongContract | Du
   | WrongResourceArgument | MissingResourceCall | WrongResourceIdentity | WrongCheckedStatus | MissingSubmission | WrongDescriptorAddress
   | WrongFlagIdentity | WrongFlagTarget | WrongFlagResult | WrongConstructorTarget | WrongConstructorResult | WrongWrapperRegister | WrongCleanupSelector | WrongCleanupMask
   | WrongCallbackArgument | WrongCallbackResult | WrongCallbackFrame | WrongCallbackRestoration | MissingPostCleanupCallback
+  | MaskedCallbackInterrupt | WrongCallbackDispatcherFrame | MissingCallbackInterruptStack | WrongCallbackReturnFrame
+  | DisabledCallbackAtcm | LowCallbackStack | WrongCallbackIrqSavedSp | MissingCallbackIrqHost | WrongSelectedContinuationStack
   | WrongIrqStatus | WrongIrqFrame | WrongIrqReturn | WrongIrqRestoration deriving (Eq, Show, Enum, Bounded)
 data ControlError = BaselineRejected WitnessError | MutationRejected Control | WrongRefusal Control WitnessError (Maybe WitnessError)
   | ProducerSummaryChangedQualification deriving (Eq, Show)
@@ -59,9 +62,11 @@ pc :: Sample -> Word32
 pc = Plan.physical . address . W.contextPc . state
 register :: Sample -> Int -> Maybe Word32
 register sample index = case drop index (W.contextRegisters (state sample)) of value:_ -> Just (word value); [] -> Nothing
+currentIs :: Word32 -> Sample -> Bool
+currentIs node sample = any (\view -> viewObject view == Current && viewCore view == S.PrimaryKernel
+  && let W.Bytes body = viewBytes view in B.length body == 4 && decodeWord body == node) (sampleViews sample)
 currentRoot :: Sample -> Bool
-currentRoot sample = any (\view -> viewObject view == Current && viewCore view == S.PrimaryKernel
-  && let W.Bytes body = viewBytes view in B.length body == 4 && decodeWord body == 0x40061594) (sampleViews sample)
+currentRoot = currentIs 0x40061594
 rootTerminated :: Sample -> Bool
 rootTerminated sample = any (\view -> viewObject view == CreationRecord && viewCore view == S.PrimaryKernel
   && let W.Bytes body = viewBytes view in B.length body == 40 && decodeWord (B.drop 8 body) == Plan.rootLow
@@ -88,6 +93,9 @@ expected control = case control of
   WrongWrapperRegister -> SubmissionRejected; WrongCleanupSelector -> CleanupRejected; WrongCleanupMask -> ContextRejected
   WrongCallbackArgument -> CallbackRejected; WrongCallbackResult -> CallbackRejected; WrongCallbackFrame -> FrameRejected
   WrongCallbackRestoration -> ReturnRejected; MissingPostCleanupCallback -> CompletionRejected
+  MaskedCallbackInterrupt -> IrqRejected; WrongCallbackDispatcherFrame -> FrameRejected; MissingCallbackInterruptStack -> FrameRejected
+  WrongCallbackReturnFrame -> FrameRejected; DisabledCallbackAtcm -> IrqRejected; LowCallbackStack -> IrqRejected
+  WrongCallbackIrqSavedSp -> IrqRejected; MissingCallbackIrqHost -> IrqRejected; WrongSelectedContinuationStack -> FrameRejected
   WrongIrqStatus -> IrqRejected; WrongIrqFrame -> FrameRejected; WrongIrqReturn -> ReturnRejected; WrongIrqRestoration -> ReturnRejected
 withHash :: Control -> ObservedFiles -> J.Value -> J.Value -> Either ControlError ObservedFiles
 withHash control original receipt watch = do
@@ -128,7 +136,7 @@ refusalControls role sources original = do
   baseline <- either (Left . BaselineRejected) Right (admitReceipt inputs original)
   receiptValue <- either (const (Left (MutationRejected MissingSample))) Right (decodeStrictIntegers (observedReceipt original))
   watchValue <- either (const (Left (MutationRejected WrongRawSidecar))) Right (decodeStrictIntegers (observedWatch original))
-  receipt <- parse MissingSample receiptValue
+  receipt <- either (const (Left (MutationRejected MissingSample))) Right (parseEither (receiptWith (observedBytes original)) receiptValue)
   watch <- parse WrongRawSidecar watchValue
   results <- mapM (run inputs receiptValue watchValue receipt watch) [minBound..maxBound]
   withoutSummaries <- modifyAt MissingSample [field "samples"] (\raw -> do
@@ -151,6 +159,22 @@ refusalControls role sources original = do
       let plain value = Right (Nothing,original {observedReceipt=encode value})
           source value = Right (Just value,original)
           changedWatch value = do observed <- withHash control original receiptValue value; pure (Nothing,observed)
+          flipStackByte index offset = do
+            let path = [field "samples",Element index,field "interrupt_stack",field "bytes"]
+            holder <- pathAt control path receiptValue
+            case holder of
+              J.Array _ -> do
+                old <- pathAt control (path++[Element offset]) receiptValue >>= parse control :: Either ControlError Word32
+                set control (path++[Element offset]) (old `xor` 1) receiptValue >>= plain
+              J.Object _ -> do
+                start <- pathAt control (path++[field "offset"]) receiptValue >>= parse control :: Either ControlError Int
+                size <- pathAt control (path++[field "length"]) receiptValue >>= parse control :: Either ControlError Int
+                let blob = observedBytes original; location = start+offset
+                unless (offset >= 0 && offset < size && start >= 0 && start+size <= B.length blob) (Left (MutationRejected control))
+                let changed = B.take location blob <> B.singleton (B.index blob location `xor` 1) <> B.drop (location+1) blob
+                bound <- set control [field "compact",field "blob_sha256"] (hash changed) receiptValue
+                pure (Nothing,original {observedReceipt=encode bound,observedBytes=changed})
+              _ -> Left (MutationRejected control)
           samples = receiptSamples receipt
           sampleAt index = samples !! index
           primary sample = contextCore (sampleContext sample) == S.PrimaryKernel
@@ -161,6 +185,12 @@ refusalControls role sources original = do
           resourceCall = position control (\sample -> callTo 0x7247ac sample && register sample 0 == Just 42) receipt
           submission = position control (\sample -> primary sample && currentRoot sample && sampleBoundary sample == TaskSubmit) receipt
           callback location = position control (\sample -> rootTerminated sample && pc sample == location) receipt
+          nest sample = [decodeWord body | view <- sampleViews sample,viewPhysical view == W.Address Plan.irqNest
+            ,let W.Bytes body = viewBytes view,B.length body == 4]
+          levelZeroFrame entered = case reverse [index | (index,sample) <- zip [0..entered-1] samples
+            ,primary sample && pc sample == 0x40234 && nest sample == [0]] of
+            index:_ -> Right index
+            [] -> Left (MutationRejected control)
           irq = position control (\sample -> primary sample && currentRoot sample && sampleBoundary sample == IrqEntry
             && Plan.physical (address (W.contextLr (state sample)))-4 `notElem` [0x725dd8,0x724924,0x725f08,0x725fa8]) receipt
           irqAfter boundary = do index <- irq; after control receipt index (\sample -> primary sample && currentRoot sample && sampleBoundary sample == boundary)
@@ -301,6 +331,37 @@ refusalControls role sources original = do
           let excluded = IntSet.fromList [index | (index,sample) <- zip [0..] samples,rootTerminated sample && pc sample == 0x69cc18]
           unless (not (IntSet.null excluded)) (Left (MutationRejected control))
           dropSamples control excluded receiptValue >>= plain
+        MaskedCallbackInterrupt -> alterContext (callback 0x69cc18) "cpsr" (.|. 0x80)
+        WrongCallbackDispatcherFrame -> do entered <- callback 0x69cc18; flipStackByte entered 12
+        MissingCallbackInterruptStack -> do
+          entered <- callback 0x69cc18
+          set control [field "samples",Element entered,field "interrupt_stack"] J.Null receiptValue >>= plain
+        WrongCallbackReturnFrame -> do
+          entered <- callback 0x69cc18
+          ending <- after control receipt entered (\sample -> pc sample == 0x69cc68 && contextCore (sampleContext sample) == contextCore (sampleContext (sampleAt entered)))
+          returned <- after control receipt ending (\sample -> pc sample == Plan.physical (address (W.contextLr (state (sampleAt entered))))
+            && contextCore (sampleContext sample) == contextCore (sampleContext (sampleAt entered)))
+          flipStackByte returned 12
+        DisabledCallbackAtcm -> do
+          entered <- callback 0x69cc18
+          set control [field "samples",Element entered,field "context",field "tcm",Element 0,Element 1] (0 :: Word32) receiptValue >>= plain
+        LowCallbackStack -> alterContext (callback 0x69cc18) "sp" (\(_ :: Word32) -> 0x70000020)
+        WrongCallbackIrqSavedSp -> do
+          entered <- callback 0x69cc18
+          InterruptStack (W.Address low) _ <- maybe (Left (MutationRejected control)) Right (sampleInterruptStack (sampleAt entered))
+          unless (low <= 0x70001ffc) (Left (MutationRejected control))
+          flipStackByte entered (fromIntegral (0x70001ffc-low))
+        MissingCallbackIrqHost -> do
+          entered <- callback 0x69cc18
+          frame <- levelZeroFrame entered
+          dropSample control frame receiptValue >>= plain
+        WrongSelectedContinuationStack -> do
+          transfer <- position control (\sample -> primary sample && rootTerminated sample && pc sample == 0x436e8) receipt
+          selected <- maybe (Left (MutationRejected control)) Right (register (sampleAt transfer) 1)
+          let node = Plan.physical selected+0x40000000
+          resumed <- after control receipt transfer (\sample -> primary sample && pc sample `elem` [0x4366c,0x4372c,0x437a8]
+            && currentIs node sample)
+          alterContext (Right resumed) "sp" (+ (0x01000000 :: Word32))
         WrongIrqStatus -> alterContext irq "spsr" (\value -> value .&. 0xffffffe0 .|. 0x12)
         WrongIrqFrame -> alterContext (irqAfter IrqFrame) "sp" (+4)
         WrongIrqReturn -> alterContext (irqAfter IrqReturn) "spsr" (`xor` 0x20000000)

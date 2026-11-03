@@ -7,8 +7,9 @@ import Emulation.Ff80Rehearsal (runFujiModRehearsal)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
-import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, experimentPayload, parseSymbolRead, runMenuCrawlE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint)
+import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, experimentPayload, loadModalOwnedPackage, parseSymbolRead, runMenuCrawlE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint)
 import Data.List (isPrefixOf, nub)
+import Data.Maybe (isJust)
 import Data.Char (isAscii, isAlphaNum)
 import qualified Data.Text as T
 import Data.Word (Word16)
@@ -67,6 +68,8 @@ data Options = Options
   , modalDiagnosticOption :: ModalDiagnostic
   , modalLifetimeGuardOption :: ModalLifetimeGuard
   , runDocumentOption :: Maybe FujiModRunFile
+  , modal75ArchiveOption :: Maybe FilePath
+  , modal75RetiredOption :: Maybe FilePath
   , screenProbeOption :: Maybe ScreenProbe
   }
 
@@ -124,6 +127,10 @@ usage = unlines
   , "  --ram-push-modal-scoped Select the separate unqualified 224-publication scoped modal bank"
   , "                         Requires --ram-push-e2e --cardless --fujimod --unreviewed-relink"
   , "                         Automatically guards the full nonsegmented route through successful unload"
+  , "  --modal75-owned-archive PATH  With --ram-push-modal-scoped: link this bank Rust archive (built"
+  , "                         with --cfg rb_modal75_owned) instead of the runfiles bank-modal archive"
+  , "  --modal75-retired PATH Retired stock extents the continuous guard refuses to see fetched"
+  , "                         (required with --modal75-owned-archive)"
   , "  --ram-push-lifecycle   Select the unqualified 226-publication lifecycle variant"
   , "                         Cannot combine with the continuously guarded --ram-push-modal-scoped route"
   , "                         Requires --ram-push-e2e --fujimod --unreviewed-relink"
@@ -154,7 +161,7 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False NoModalDiagnostic NoModalLifetimeGuard Nothing Nothing
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False NoModalDiagnostic NoModalLifetimeGuard Nothing Nothing Nothing Nothing
     go options [] = validateModalLifetimeOptions options >> pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
@@ -261,10 +268,16 @@ parseCommand args
     go options ("--fixed-scene-frame" : value : rest) = do
       frame <- either (ioError . userError) pure (parseFixedSceneFrame value)
       go options { fixedSceneFrameOption = Just frame } rest
+    go options ("--modal75-owned-archive" : value : rest) = do
+      require (not (null value) && modal75ArchiveOption options == Nothing) "--modal75-owned-archive must be nonempty and appear once"
+      go options { modal75ArchiveOption = Just value } rest
+    go options ("--modal75-retired" : value : rest) = do
+      require (not (null value) && modal75RetiredOption options == Nothing) "--modal75-retired must be nonempty and appear once"
+      go options { modal75RetiredOption = Just value } rest
     go _ (argument : _) = ioError (userError ("Unknown option or missing value: " ++ argument ++ "\n" ++ usage))
 
 validateModalLifetimeOptions :: Options -> IO ()
-validateModalLifetimeOptions options =
+validateModalLifetimeOptions options = do
   when (modalLifetimeGuardOption options == ContinuousModalLifetimeGuard
     || ramPayloadOption options `elem` [BankModal75Choice, BankModalLifecycleChoice]) $ do
     require (ramPushE2EOption options && not (ff80RehearsalOption options))
@@ -280,6 +293,20 @@ validateModalLifetimeOptions options =
     require (modalDiagnosticOption options == NoModalDiagnostic) "modal lifetime guard cannot use --modal-observation"
     require (segmentsOption options == Nothing) "modal lifetime guard requires a full nonsegmented route"
     require (not (warmCheckpointOption options)) "modal lifetime guard cannot use --warm-checkpoint"
+  when (isJust (modal75ArchiveOption options) || isJust (modal75RetiredOption options)) $ do
+    require (isJust (modal75ArchiveOption options) && isJust (modal75RetiredOption options))
+      "--modal75-owned-archive and --modal75-retired are required together"
+    require (ramPayloadOption options == BankModal75Choice) "the owned modal75 archive requires --ram-push-modal-scoped"
+
+-- | A regular file beneath workspace/private-data/.
+privateRegularInput :: Workspace -> String -> FilePath -> IO FilePath
+privateRegularInput root flag supplied = do
+  private <- canonicalizePath (resolve root "private-data")
+  path <- canonicalizePath (resolve root supplied)
+  require (splitDirectories private `isPrefixOf` splitDirectories path) (flag ++ " must be beneath workspace/private-data/")
+  status <- getFileStatus path
+  require (isRegularFile status) (flag ++ " must be a regular file")
+  pure path
 
 validateVirtualSDImage :: Workspace -> VirtualSDImage -> IO VirtualSDImage
 validateVirtualSDImage root (VirtualSDImage supplied) = do
@@ -426,6 +453,12 @@ launch options = do
           Just (VirtualSDImage image) -> pure (CardBacked image)
           Nothing | cardless -> pure Cardless
                   | otherwise -> ioError (userError "--ram-push-e2e requires --sd-card-image")
+        owned <- case (modal75ArchiveOption options, modal75RetiredOption options) of
+          (Just archive, Just retired) -> do
+            archivePath <- privateRegularInput root "--modal75-owned-archive" archive
+            retiredPath <- privateRegularInput root "--modal75-retired" retired
+            Just <$> loadModalOwnedPackage archivePath retiredPath
+          _ -> pure Nothing
         let nandPath = case nand of Just (InstalledNand path) -> path; Nothing -> error "validated NAND missing"
             receiptPath = case receipt of Just (ReceiptDirectory path) -> path; Nothing -> error "validated receipt directory missing"
             Workspace workspacePath = root
@@ -465,7 +498,7 @@ launch options = do
                 ExperimentChoice (ExperimentName name) -> experimentPayload name)
               (attachHoldOption options)
               (uiConversionProfileOption options) cardInput (fixedSceneFrameOption options) Nothing runtime dat (readSymbolsOption options) (modalDiagnosticOption options)
-              (modalLifetimeGuardOption options)
+              (modalLifetimeGuardOption options) owned
         trajectory <- case trajectoriesOption options of
           Just (TrajectoryFile path) -> pure (Just (resolve root path))
           Nothing -> do

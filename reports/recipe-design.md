@@ -826,7 +826,7 @@ devenv --refresh-eval-cache --max-jobs 2 --cores 4 shell -- bazel build --jobs=2
 devenv --refresh-eval-cache --max-jobs 2 --cores 4 shell -- bazel run --jobs=2 --local_resources=cpu=4 //host/firmware:build-recipe-package -- "$PACKAGE_DIR"
 ```
 
-`PACKAGE_DIR` must be beneath the builder's private output root. Boot-only execution consumes that complete package through `recipe-bank-cases --boot-package PACKAGE_DIR --runner NATIVE_RUNNER --out OUT_DIR`; use the canonical emulator slot and thermal guard after the compiler window has ended. The [native harness instructions](../emulation/README.md#recipe-bank-runtime-scope) separate this bounded guest execution from whole-system or installed behavior.
+`PACKAGE_DIR` must be beneath the builder's private output root. Boot-only execution consumes that complete package through `recipe-bank-cases --boot-package PACKAGE_DIR --runner NATIVE_RUNNER --out OUT_DIR`; use the canonical emulator slot after the compiler window has ended. The [native harness instructions](../emulation/README.md#recipe-bank-runtime-scope) separate this bounded guest execution from whole-system or installed behavior.
 
 ### 19.1 Bounded format-2 boot publication
 

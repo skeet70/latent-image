@@ -34,6 +34,8 @@ Apply the existing [publication and asset boundaries](../docs/principles.md#publ
 
 The default replacement unit is a whole subsystem behind its interface: one artifact, one interface contract and one scenario matrix. Existing leaf proofs become internal regression evidence. Keep exact data layout only where a retained consumer reads it. Use function-level units only where a subsystem has no usable boundary yet or as internal milestones of a subsystem project. The [X-M1 1.50 subsystem unit plan](../reports/subsystem-replacement-map.md) maps the recovered interfaces, existing proofs and qualification gaps to those projects.
 
+Each subsystem project names its target design: the structure we would build from scratch, free of stock structure. Increments build toward that target. Every compatibility layer with stock code, including ABI bridges, seams, delegations to stock and adapters, is a named shim with a stated removal condition, recorded in the project. Once a target exists, avoid increments that only extend stock-shaped structure.
+
 | Stage | Outcome | Incremental unit | Exit evidence |
 | --- | --- | --- | --- |
 | Extend stock | Normally compiled features operate through bounded stock interfaces | Feature or adapter | Qualified entry, behavior, effects and lifecycle |
@@ -63,14 +65,14 @@ Qualification maps existing execution diagnostics onto pass within scope, behavi
 
 ## Repeatable replacement loop
 
-1. Select a whole subsystem behind a usable interface from the capability/dependency inventory. Prefer high feature leverage, observable behavior and bounded effects over raw function count. Use function-level units only where no usable subsystem boundary exists yet or as internal subsystem milestones.
+1. Select a whole subsystem behind a usable interface from the capability/dependency inventory. Prefer high feature leverage, observable behavior and bounded effects over raw function count. Use function-level units only where no usable subsystem boundary exists yet or as internal subsystem milestones. Name the target design and record each shim with its removal condition.
 2. Establish original behavior, one interface contract and one scenario matrix from source, original-binary execution and available hardware observations. Record unsupported paths before implementing the replacement.
-3. Implement or translate the candidate as one subsystem artifact using the normal build. Generated code is a candidate, not evidence of correctness. Keep compatibility adapters separate from owned internals, with recovered addresses and layouts confined to retained interfaces. Preserve exact layout only where a retained consumer reads it.
+3. Implement or translate the candidate as one subsystem artifact using the normal build, structured as a step toward the target design. Generated code is a candidate, not evidence of correctness. Keep shims separate from owned internals, with recovered addresses and layouts confined to retained interfaces. Preserve exact layout only where a retained consumer reads it.
 4. Reuse existing leaf proofs as internal regressions, then run bounded component checks, effect guards and negative controls. Reduce failures to reproducible counterexamples.
 5. Qualify the actual integrated subsystem at its interface and through device-driven system scenarios, including entry, repeated use, cancellation and handback. Keep injected-state probes separate from reachable-state acceptance.
 6. Maintain one subsystem acceptance matrix. Run affected scenarios during iteration and the existing complete candidate matrix before qualification or live promotion. Compare timing changes by semantic ordering, required synchronization edges and grounded deadlines, not instruction-count equality. Review intentional differences rather than weakening comparisons or re-recording baselines to manufacture agreement.
 7. Request the least-risk human or hardware check that answers a named remaining question. Apply the existing camera-run procedure independently of task completion.
-8. Record the scoped decision, integrate the candidate and update the capability/dependency inventory. Remove obsolete production paths and compatibility adapters after cutover and select the next subsystem from exposed dependencies.
+8. Record the scoped decision, integrate the candidate and update the capability/dependency inventory. Remove obsolete production paths and each shim whose removal condition is met, and select the next subsystem from exposed dependencies.
 
 Reuse [Emulation.CheckpointKey](../emulation/Emulation/CheckpointKey.hs) and its existing guest-state, procedure and route identities (E-XM1-EMU-CHECKPOINT-KEYS-150, refined by E-XM1-EMU-CHECKPOINT-PROCEDURE-150). Invalidate checkpoints when initialization, executable memory or dependency assumptions change; startup changes require cold-boot scenarios. Qualification must exercise the packaged artifact and installation/boot path being claimed, not only a separately linked component.
 

@@ -3,6 +3,7 @@
 -- pins. Only //emulation links this module; //transport:camera does not.
 module Xm1UnreviewedRelink
   ( withUnreviewedBuild
+  , withUnreviewedBuildArchive
   , runUnreviewedRamPush
   , runUnreviewedRamUnload
   ) where
@@ -14,6 +15,14 @@ withUnreviewedBuild :: Payload -> AllowlistPolicy -> Address -> (PinnedBuild -> 
 withUnreviewedBuild payload policy base action = do
   relinker <- runfilesRelinker payload
   withRelinkedBuildUsing relinker policy base action
+
+-- | As 'withUnreviewedBuild' with the bank's Rust archive replaced; the
+-- payload must link the bank.
+withUnreviewedBuildArchive :: FilePath -> Payload -> AllowlistPolicy -> Address -> (PinnedBuild -> IO a) -> IO a
+withUnreviewedBuildArchive archive payload policy base action = do
+  relinker <- runfilesRelinker payload
+  rust <- maybe (ioError (userError "the selected payload links no Rust bank archive")) pure (relinkerRust relinker)
+  withRelinkedBuildUsing relinker { relinkerRust = Just rust { rustBankArchive = archive } } policy base action
 
 runUnreviewedRamPush :: RamPushObserver -> RetainedAllocation -> RamPushManifest -> Clock -> UsbApi -> FilePath -> IO RamPushOutcome
 runUnreviewedRamPush observer retained = runRamPushWith xm1PeerCacheAvailability observer (retainedAllocation retained)
