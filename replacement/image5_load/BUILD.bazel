@@ -1,0 +1,17 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_binary(
+    name = "image5-load-source",
+    srcs = ["SourceMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//emulation:case-sha256",
+        "//host:directory",
+        "//replacement/media_permit:stock-inventory",
+    ],
+)
