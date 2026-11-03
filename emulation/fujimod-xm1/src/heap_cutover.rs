@@ -9,7 +9,7 @@ use guard::Role;
 
 const HELP: &str = "heap-observe --cutover-run|--cutover-check|--cutover-controls CONTRACT STOCK_DAT CANDIDATE_DAT ANALYSIS RUN ROM OUTPUT [REPORT_JSON]";
 const JOURNAL_LIMIT: u64 = 256 * 1024 * 1024;
-/// The owned journal records every owned allocator fetch; it exceeded 1 GiB decoded after 44,593 of the route's 51,221 stock batches.
+/// The owned journal records every owned allocator fetch; it exceeded 1 GiB decoded after 44,593 of the route's 51,221 stock boundaries.
 const CUTOVER_ACCESS_LIMITS: AccessLimits = match (heap_accesses::ByteLimit::new(4 * 1024 * 1024 * 1024), ACCESS_LIMITS) {
     (Some(decoded), stock) => match AccessLimits::new(stock.compressed(), decoded, stock.line()) { Some(limits) => limits, None => panic!("invalid cutover watch limits") },
     (None, _) => panic!("invalid cutover decoded limit"),
