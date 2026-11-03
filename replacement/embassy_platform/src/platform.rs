@@ -37,7 +37,8 @@ const HOST_TASK: TaskId = match TaskId::new(119) {
     Some(id) => id,
     None => panic!(),
 };
-const HOST_PRIORITY: u32 = 15;
+/// External priority, one above the shared idle tasks 102/103 (15), whose WFI loop never blocks.
+const HOST_PRIORITY: u32 = 14;
 const STACK_WORDS: usize = 512;
 const TICKER_PERIOD: Duration = Duration::from_millis(100);
 const DOORBELL_EVERY: u32 = 10;
