@@ -133,21 +133,24 @@ add (Just ScaledIndex) delta = Just (if delta == 0 then ScaledIndex else GlobalO
 add value 0 = value
 add _ _ = Nothing
 
-indexedAddress :: Maybe Value -> Maybe Value -> Maybe Value
-indexedAddress base index = case derivedFrom [base, index] of
+indexedAddress :: FrameExposure -> Maybe Value -> Maybe Value -> Maybe Value
+indexedAddress exposure base index = case derivedFrom [base, index] of
   Just FrameDerived -> Just FrameDerived
   _ -> case base of
-    Just (Constant _) -> Just GlobalObject
-    Just GlobalObject -> Just GlobalObject
+    -- After exposure an unknown operand can be a reloaded frame address.
+    Just (Constant _) | exposure == PrivateFrame -> Just GlobalObject
+    Just GlobalObject | exposure == PrivateFrame -> Just GlobalObject
     Just ReturnedObject -> Just ReturnedObject
     _ -> Nothing
 
-multiplyValue :: Maybe Value -> Maybe Value -> Accumulation -> Maybe Value
-multiplyValue left right accumulator = case derivedFrom [left, right, case accumulator of ProductOnly -> Nothing; Addend value -> value] of
+multiplyValue :: FrameExposure -> Maybe Value -> Maybe Value -> Accumulation -> Maybe Value
+multiplyValue exposure left right accumulator = case derivedFrom [left, right, case accumulator of ProductOnly -> Nothing; Addend value -> value] of
   Just FrameDerived -> Just FrameDerived
   _ -> case (left, right, accumulator) of
     (Just (Constant a), Just (Constant b), Addend (Just (Constant c))) -> Just (Constant (a*b+c))
     (Just (Constant a), Just (Constant b), ProductOnly) -> Just (Constant (a*b))
+    -- After exposure an unknown operand can be a reloaded frame address.
+    _ | exposure == ExposedFrame -> Nothing
     (_, _, Addend (Just (Constant _))) -> Just GlobalObject
     (_, _, Addend (Just GlobalObject)) -> Just GlobalObject
     (Just (Constant _), _, _) -> Just ScaledIndex
@@ -164,11 +167,15 @@ shiftConstant shift amount value = case shift of
 operandValue :: FrameState -> A.Operand -> Maybe Value
 operandValue _ (A.Immediate value) = Just (Constant value)
 operandValue state (A.ShiftedImmediate register A.LSL 0) = M.lookup register (registers state)
-operandValue state (A.ShiftedImmediate register shift amount) = case M.lookup register (registers state) of
-  Just (Constant value) -> Constant <$> shiftConstant shift amount value
-  value -> derivedFrom [value]
-operandValue state (A.ShiftedRegister register _ amountRegister) =
-  derivedFrom [M.lookup register (registers state), M.lookup amountRegister (registers state)]
+operandValue state (A.ShiftedImmediate register shift amount) = case (shift, M.lookup register (registers state)) of
+  (_, Just (Constant value)) -> Constant <$> shiftConstant shift amount value
+  (A.LSL, value) -> multiplyValue (frameExposure state) value (Just (Constant (1 `shiftL` amount))) ProductOnly
+  (_, value) -> derivedFrom [value]
+operandValue state (A.ShiftedRegister register shift amountRegister) = case M.lookup amountRegister (registers state) of
+  Just (Constant amount)
+    | amount .&. 0xff == 0 -> operandValue state (A.ShiftedImmediate register A.LSL 0)
+    | amount .&. 0xff < 32 -> operandValue state (A.ShiftedImmediate register shift (fromIntegral (amount .&. 0xff)))
+  amountValue -> derivedFrom [M.lookup register (registers state), amountValue]
 
 accessAddress :: FrameState -> A.Reg -> A.Offset -> A.Indexing -> (Maybe Value, FrameState)
 accessAddress state base offset indexing = (if indexing == A.PostIndexed then original else adjusted, updated)
@@ -183,7 +190,7 @@ accessAddress state base offset indexing = (if indexing == A.PostIndexed then or
         _ -> Nothing
     adjusted = case delta of
       Just value -> add original value
-      Nothing -> indexedAddress original (case offset of
+      Nothing -> indexedAddress (frameExposure state) original (case offset of
         A.OffsetImmediate _ -> Nothing
         A.OffsetRegister _ register _ _ -> M.lookup register (registers state))
     updated = if indexing == A.OffsetOnly then state else setRegister base adjusted state
@@ -244,15 +251,15 @@ execute literals (ProgramCounter pc) instruction state = case instruction of
         A.MOV -> operandValue state operand
         A.ADD -> case operandValue state operand of
           Just (Constant value) -> add (reg source) (fromIntegral value)
-          _ -> indexedAddress (reg source) (operandValue state operand)
+          _ -> indexedAddress (frameExposure state) (reg source) (operandValue state operand)
         A.SUB -> case operandValue state operand of
           Just (Constant value) -> add (reg source) (negate (fromIntegral value))
-          _ -> indexedAddress (reg source) (operandValue state operand)
+          _ -> indexedAddress (frameExposure state) (reg source) (operandValue state operand)
         _ -> derivedFrom [reg source, operandValue state operand]) state)
   A.ReadStatus _ destination -> pure (setRegister destination Nothing state)
   A.ZeroExtend _ destination source _ _ -> pure (setRegister destination (derivedFrom [reg source]) state)
   A.Multiply _ destination left right accumulator ->
-    pure (setRegister destination (multiplyValue (reg left) (reg right) (maybe ProductOnly (Addend . reg) accumulator)) state)
+    pure (setRegister destination (multiplyValue (frameExposure state) (reg left) (reg right) (maybe ProductOnly (Addend . reg) accumulator)) state)
   -- Compute exposes destinations without source registers.
   A.Compute _ destinations -> pure (foldr (\destination -> setRegister destination (Just FrameDerived)) state destinations)
   A.Load _ width _ destination base offset indexing -> do

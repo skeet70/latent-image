@@ -74,6 +74,36 @@ data SurfaceMap = SurfaceMap
 instance FromJSON SurfaceMap
 instance ToJSON SurfaceMap
 
+newtype Sha256 = Sha256 String deriving (Eq)
+instance FromJSON Sha256 where
+  parseJSON value = parseJSON value >>= \text ->
+    if length text == 64 && all (`elem` ("0123456789abcdef" :: String)) text then pure (Sha256 text) else fail ("not a lowercase SHA256: " ++ text)
+
+instance FromJSON Domain where
+  parseJSON value = parseJSON value >>= \name -> case (name :: String) of
+    "A" -> pure A
+    "B" -> pure B
+    _ -> fail ("unknown domain " ++ name)
+
+newtype FunctionStart = FunctionStart Word32 deriving (Eq)
+instance FromJSON FunctionStart where
+  parseJSON value = parseJSON value >>= \text -> case stripPrefix "0x" text of
+    Just digits | not (null digits) && length digits <= 8 && all isHexDigit digits, [(number, "")] <- readHex digits -> pure (FunctionStart number)
+    _ -> fail ("function start is not 0x-prefixed 32-bit hexadecimal: " ++ text)
+
+-- A reviewed start of an unpublished function, bound to one domain's loader image.
+data FunctionBoundary = FunctionBoundary
+  { boundaryDomain :: Domain
+  , loaderSha256 :: Sha256
+  , boundaryStart :: FunctionStart
+  , boundaryEvidence :: [String]
+  , basis :: String
+  } deriving (Generic)
+instance FromJSON FunctionBoundary
+
+newtype FunctionBoundaries = FunctionBoundaries { boundaries :: [FunctionBoundary] } deriving (Generic)
+instance FromJSON FunctionBoundaries
+
 hex :: Word32 -> String
 hex value = "0x" ++ showHex value ""
 
@@ -171,7 +201,7 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
-    [publisherA, publisherB, loaderA, loaderB, listingA, image4, surfacePath, output] -> do
+    [publisherA, publisherB, loaderA, loaderB, listingA, image4, surfacePath, boundaryPath, output] -> do
       exists <- doesPathExist output
       unless (not exists) (fail "output already exists; use a fresh evidence path")
       publisherBytesA <- B.readFile publisherA
@@ -194,7 +224,20 @@ main = do
       surfaceBytes <- B.readFile surfacePath
       surfaceValue <- either fail pure (JSON.decodeStrict surfaceBytes)
       surfaces <- either fail pure (parseEither parseJSON surfaceValue :: Either String SurfaceMap)
-      let makeDomain domain base bytes slotEntries starts =
+      boundaryBytes <- B.readFile boundaryPath
+      boundaryValue <- either fail pure (JSON.decodeStrict boundaryBytes)
+      reviewed <- either fail pure (boundaries <$> (parseEither parseJSON boundaryValue :: Either String FunctionBoundaries))
+      let loaderOf domain = if domain == A then (0x40000, bytesA) else (0xd0000, bytesB)
+          admitBoundary boundary = do
+            let (base, bytes) = loaderOf (boundaryDomain boundary)
+                FunctionStart start = boundaryStart boundary
+            unless (loaderSha256 boundary == Sha256 (digest bytes)) (Left ("boundary " ++ hex start ++ " names a different loader image"))
+            unless (start >= base && start < base + fromIntegral (B.length bytes) && start `mod` 4 == 0) (Left ("boundary " ++ hex start ++ " is not an aligned address of its loader"))
+            unless (not (null (boundaryEvidence boundary))) (Left ("boundary " ++ hex start ++ " has no evidence"))
+            pure (boundaryDomain boundary, start)
+      admitted <- either fail pure (mapM admitBoundary reviewed)
+      let boundaryStarts domain = [start | (owner, start) <- admitted, owner == domain]
+          makeDomain domain base bytes slotEntries starts =
             let decoded = instructions base bytes
                 fences = sort (nub (starts ++ [target | (_, A.Branch _ True target) <- decoded, target >= base, target < base+fromIntegral (B.length bytes)] ++ [address | (_, EntryAddress address) <- slotEntries]))
             in object
@@ -214,9 +257,14 @@ main = do
       L.writeFile output (encode (object
         [ "schemaVersion" .= (1 :: Int), "firmware" .= ("X-M1 1.50" :: String)
         , "scope" .= ("Source inventory; unknowns and extent refusals block complete RTOS replacement. No new guest qualification." :: String)
-        , "inputs" .= [InputIdentity path (B.length bytes) (digest bytes) | (path,bytes) <- [(publisherA,publisherBytesA),(publisherB,publisherBytesB),(loaderA,bytesA),(loaderB,bytesB),(listingA,listingBytes),(image4,imageBytes),(surfacePath,surfaceBytes)]]
-        , "extentMethod" .= ("Unmodified StockInventory.deriveFunction; no external tails admitted; fence=min(next published entry, direct BL target, A Ghidra export, image end). A exports never transferred to B. Refusals preserve missing extents." :: String)
-        , "domains" .= [makeDomain A 0x40000 bytesA entriesA exportedA,makeDomain B 0xd0000 bytesB entriesB []]
+        , "inputs" .= [InputIdentity path (B.length bytes) (digest bytes) | (path,bytes) <- [(publisherA,publisherBytesA),(publisherB,publisherBytesB),(loaderA,bytesA),(loaderB,bytesB),(listingA,listingBytes),(image4,imageBytes),(surfacePath,surfaceBytes),(boundaryPath,boundaryBytes)]]
+        , "extentMethod" .= ("StockInventory.deriveFunction; no external tails admitted; fence=min(next published entry, direct BL target, A Ghidra export, reviewed function boundary bound to the same domain loader digest, image end). A exports and boundaries never transferred to B. Refusals preserve missing extents." :: String)
+        , "functionBoundaries" .= [object
+            [ "domain" .= show (boundaryDomain boundary), "start" .= hex start
+            , "loaderSha256" .= (let Sha256 text = loaderSha256 boundary in text)
+            , "evidence" .= boundaryEvidence boundary, "basis" .= basis boundary
+            ] | boundary <- reviewed, let FunctionStart start = boundaryStart boundary]
+        , "domains" .= [makeDomain A 0x40000 bytesA entriesA (exportedA ++ boundaryStarts A),makeDomain B 0xd0000 bytesB entriesB (boundaryStarts B)]
         , "surfaceMap" .= surfaces
         ]) <> "\n")
-    _ -> fail "usage: rtos-manifest PUBLISHER_A PUBLISHER_B LOADER_A LOADER_B GHIDRA_A IMAGE4 SURFACE_JSON OUTPUT_JSON"
+    _ -> fail "usage: rtos-manifest PUBLISHER_A PUBLISHER_B LOADER_A LOADER_B GHIDRA_A IMAGE4 SURFACE_JSON BOUNDARIES_JSON OUTPUT_JSON"

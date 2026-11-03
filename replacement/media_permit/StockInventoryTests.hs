@@ -102,6 +102,39 @@ main = do
   check "an indexed global store is accepted under global-object separation"
     (derivedDeclaration indexedGlobal == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 24)
       && map returnPremiseLabel (derivationPremises indexedGlobal) == ["global-object-stack-separation"])
+  let globalStore result use = derivationPremises result == [GlobalObjectStackSeparation]
+        && derivationPremiseUses result == [PremiseUse (ProgramCounter use) GlobalObjectStackSeparation]
+  shiftedFirst <- either fail pure (deriveResult [] [0xe92d4000,0xe3033000,0xe1a02200,0xe0823003,0xe583100c,0xe8bd8000])
+  check "a shifted index added to a register global base is accepted under global-object separation"
+    (derivedDeclaration shiftedFirst == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 24) && globalStore shiftedFirst 0x1010)
+  indexBase <- either fail pure (deriveResult [] [0xe92d4000,0xe3032000,0xe1a05100,0xe7851002,0xe8bd8000])
+  check "a shifted index base with a global offset register is accepted under global-object separation"
+    (derivedDeclaration indexBase == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 20) && globalStore indexBase 0x100c)
+  registerShift <- either fail pure (deriveResult [] [0xe92d4000,0xe3032000,0xe3a0c002,0xe1a01c10,0xe7813002,0xe8bd8000])
+  check "a known register shift amount scales an index"
+    (derivedDeclaration registerShift == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 24) && globalStore registerShift 0x1010)
+  check "an unscaled unknown pointer plus a register constant can alias the saved return"
+    (refused (derive [0xe92d4000,0xe3033000,0xe0803003,0xe5831000,0xe8bd8000]))
+  check "a shifted frame address plus a constant can alias the saved return"
+    (refused (derive [0xe92d4000,0xe3032000,0xe1a0108d,0xe0811002,0xe5810000,0xe8bd8000]))
+  check "an unknown register shift amount may leave a pointer unscaled"
+    (refused (derive [0xe92d4000,0xe3033000,0xe1a01c10,0xe0811003,0xe5810000,0xe8bd8000]))
+  check "a register shift amount with a zero low byte leaves a pointer unscaled"
+    (refused (derive [0xe92d4000,0xe3033000,0xe3a0cc01,0xe1a01c10,0xe0811003,0xe5810000,0xe8bd8000]))
+  check "a register shift amount of 32 or more leaves a pointer unknown"
+    (refused (derive [0xe92d4000,0xe3033000,0xe3a0c020,0xe1a01c10,0xe0811003,0xe5810000,0xe8bd8000]))
+  check "a logical right shift does not scale a pointer into an index"
+    (refused (derive [0xe92d4000,0xe3033000,0xe1a01120,0xe0811003,0xe5810000,0xe8bd8000]))
+  check "an arithmetic right shift does not scale a pointer into an index"
+    (refused (derive [0xe92d4000,0xe3033000,0xe1a01140,0xe0811003,0xe5810000,0xe8bd8000]))
+  check "a re-aligned pointer loaded from an exposed frame can alias the saved return"
+    (refused (derive [0xe92d4000,0xe24dd004,0xe3033000,0xe583d000,0xe5930000,0xe1a00120,0xe1a00100,0xe5801004,0xe28dd004,0xe8bd8000]))
+  check "a multiplied pointer loaded from an exposed frame can alias the saved return"
+    (refused (derive [0xe92d4000,0xe24dd004,0xe3033000,0xe583d000,0xe5930000,0xe1a00120,0xe3a02004,0xe0000290,0xe5801004,0xe28dd004,0xe8bd8000]))
+  check "a constant base plus a pointer loaded from an exposed frame can alias the saved return"
+    (refused (derive [0xe92d4000,0xe24dd004,0xe3033000,0xe583d000,0xe5930000,0xe3003000,0xe0830000,0xe5801004,0xe28dd004,0xe8bd8000]))
+  check "a constant base register offset by a pointer loaded from an exposed frame can alias the saved return"
+    (refused (derive [0xe92d4000,0xe24dd004,0xe3033000,0xe583d000,0xe5930000,0xe3003004,0xe7831000,0xe28dd004,0xe8bd8000]))
   returnedObject <- either fail pure (deriveResult [] [0xe92d4000,0xeb0003fd,0xe5801004,0xe8bd8000])
   check "a returned-object store is accepted under frame isolation"
     (derivedDeclaration returnedObject == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 16)

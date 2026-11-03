@@ -4,13 +4,14 @@
   "title": "X-M1 RTOS source inventory",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "firmware", "scope", "inputs", "extentMethod", "domains", "surfaceMap"],
+  "required": ["schemaVersion", "firmware", "scope", "inputs", "extentMethod", "functionBoundaries", "domains", "surfaceMap"],
   "properties": {
     "schemaVersion": {"const": 1},
     "firmware": {"const": "X-M1 1.50"},
     "scope": {"type": "string"},
     "extentMethod": {"type": "string"},
     "inputs": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["inputPath", "inputBytes", "inputSha256"], "properties": {"inputPath": {"type": "string"}, "inputBytes": {"type": "integer", "minimum": 0}, "inputSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}},
+    "functionBoundaries": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["domain", "start", "loaderSha256", "evidence", "basis"], "properties": {"domain": {"enum": ["A", "B"]}, "start": {"$ref": "#/$defs/address"}, "loaderSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "evidence": {"$ref": "#/$defs/evidence"}, "basis": {"type": "string"}}}},
     "domains": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"allOf": [{"$ref": "#/$defs/domain"}, {"properties": {"domain": {"const": "A"}, "root": {"const": "0x4004dae0"}}}]}, {"allOf": [{"$ref": "#/$defs/domain"}, {"properties": {"domain": {"const": "B"}, "root": {"const": "0x400ddaa0"}}}]}]},
     "surfaceMap": {"$ref": "#/$defs/surfaceMap"}
   },

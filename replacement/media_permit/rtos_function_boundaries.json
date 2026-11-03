@@ -1,0 +1,24 @@
+{
+  "boundaries": [
+    {
+      "boundaryDomain": "A",
+      "loaderSha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "boundaryStart": "0x4cc94",
+      "boundaryEvidence": [
+        "private-data/analysis/x-m1-1.50/decode/loader-40000.dis:13047-13066",
+        "private-data/analysis/x-m1-1.50/decode/loader-40000.dis:13067-13076"
+      ],
+      "basis": "Slot +0x154 body 0x4cc44..0x4cc90 ends in an unconditional BX LR at 0x4cc90; its only branches (0x4cc60, 0x4cc70) target 0x4cc88. 0x4cc94 opens a separate leaf with its own frame save (str r11,[sp,#-4]!) that reads 0x4005927c and returns through BX LR at 0x4ccb8."
+    },
+    {
+      "boundaryDomain": "B",
+      "loaderSha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "boundaryStart": "0xdcc54",
+      "boundaryEvidence": [
+        "private-data/analysis/x-m1-1.50/decode/loader-d0000.dis:13031-13050",
+        "private-data/analysis/x-m1-1.50/decode/loader-d0000.dis:13051-13060"
+      ],
+      "basis": "Slot +0x154 body 0xdcc04..0xdcc50 ends in an unconditional BX LR at 0xdcc50; its only branches (0xdcc20, 0xdcc30) target 0xdcc48. 0xdcc54 opens a separate leaf with its own frame save (str r11,[sp,#-4]!) that reads 0x400e923c and returns through BX LR at 0xdcc78."
+    }
+  ]
+}
