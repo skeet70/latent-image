@@ -47,7 +47,7 @@ canonicalSource dat image = do
       imageIdentity = identity image
   require (identityText datIdentity == "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"
     && identityText imageIdentity == "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16") SourceMismatch
-  derived <- either (const (Left SourceMismatch)) Right (Stock.deriveFunction (Stock.GuestAddress 0x61c400) image
+  derived <- either (const (Left SourceMismatch)) Right (Stock.deriveFunction Stock.xm1TaskRecords (Stock.GuestAddress 0x61c400) image
     (Stock.FunctionWindow (Stock.GuestAddress origin) (Stock.GuestAddress limit)) [])
   require (Stock.derivedDeclaration derived == Stock.FunctionDeclaration (Stock.GuestAddress origin) (Stock.FunctionSize 340)) SourceMismatch
   proof <- either (Left . CodeRejected) Right

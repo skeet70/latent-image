@@ -4,13 +4,16 @@
   "title": "X-M1 RTOS source inventory",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "firmware", "scope", "inputs", "extentMethod", "domains", "surfaceMap"],
+  "required": ["schemaVersion", "firmware", "scope", "inputs", "extentMethod", "savedStackArrays", "savedStackTaintResiduals", "functionBoundaries", "domains", "surfaceMap"],
   "properties": {
     "schemaVersion": {"const": 1},
     "firmware": {"const": "X-M1 1.50"},
     "scope": {"type": "string"},
     "extentMethod": {"type": "string"},
     "inputs": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["inputPath", "inputBytes", "inputSha256"], "properties": {"inputPath": {"type": "string"}, "inputBytes": {"type": "integer", "minimum": 0}, "inputSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}},
+    "savedStackArrays": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["domain", "start", "stride", "count", "field", "evidence"], "properties": {"domain": {"enum": ["A", "B"]}, "start": {"$ref": "#/$defs/address"}, "stride": {"type": "integer", "minimum": 1}, "count": {"type": "integer", "minimum": 1}, "field": {"$ref": "#/$defs/address"}, "evidence": {"$ref": "#/$defs/evidence"}}}},
+    "savedStackTaintResiduals": {"type": "array", "minItems": 6, "maxItems": 6, "items": {"type": "object", "additionalProperties": false, "required": ["name", "statement"], "properties": {"name": {"enum": ["sub-word-load", "sub-word-or-unaligned-store", "untracked-pointer", "joined-address", "unknown-first-operand-address", "call-boundary"]}, "statement": {"type": "string"}}}},
+    "functionBoundaries": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["domain", "start", "loaderSha256", "evidence", "basis"], "properties": {"domain": {"enum": ["A", "B"]}, "start": {"$ref": "#/$defs/address"}, "loaderSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "evidence": {"$ref": "#/$defs/evidence"}, "basis": {"type": "string"}}}},
     "domains": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"allOf": [{"$ref": "#/$defs/domain"}, {"properties": {"domain": {"const": "A"}, "root": {"const": "0x4004dae0"}}}]}, {"allOf": [{"$ref": "#/$defs/domain"}, {"properties": {"domain": {"const": "B"}, "root": {"const": "0x400ddaa0"}}}]}]},
     "surfaceMap": {"$ref": "#/$defs/surfaceMap"}
   },
@@ -25,12 +28,13 @@
     },
     "slot": {
       "type": "object", "additionalProperties": false,
-      "required": ["offset", "target", "recovery", "operation", "arguments", "result", "errors", "context", "objects", "directImage4Calls", "computedWrapperEntries", "callerClosure", "extent", "evidence"],
+      "required": ["offset", "target", "recovery", "operation", "analogue", "arguments", "result", "errors", "context", "objects", "preconditions", "directImage4Calls", "computedWrapperEntries", "callerClosure", "extent", "evidence"],
       "properties": {
         "offset": {"$ref": "#/$defs/address"}, "target": {"$ref": "#/$defs/address"},
-        "recovery": {"enum": ["recovered", "partial", "unknown"]}, "operation": {"type": "string"},
+        "recovery": {"enum": ["recovered", "partial", "unknown"]}, "operation": {"type": "string"}, "analogue": {"$ref": "#/$defs/nullableContract"},
         "arguments": {"$ref": "#/$defs/nullableContract"}, "result": {"$ref": "#/$defs/nullableContract"}, "context": {"$ref": "#/$defs/nullableContract"},
         "errors": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["value", "meaning"], "properties": {"value": {"type": "integer"}, "meaning": {"type": "string"}}}},
+        "preconditions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["name", "statement"], "properties": {"name": {"type": "string"}, "statement": {"type": "string"}}}},
         "objects": {"$ref": "#/$defs/strings"}, "directImage4Calls": {"type": "array", "items": {"$ref": "#/$defs/address"}}, "computedWrapperEntries": {"type": "array", "items": {"$ref": "#/$defs/address"}},
         "callerClosure": {"type": "string"}, "extent": {"$ref": "#/$defs/extent"}, "evidence": {"$ref": "#/$defs/evidence"}
       }

@@ -1420,6 +1420,12 @@ sh_binary(
 )
 
 sh_binary(
+    name = "rtos-census",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-rtos-census"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
     name = "task-storage",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-task-storage"],
     visibility = ["//visibility:public"],

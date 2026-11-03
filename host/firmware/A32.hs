@@ -13,7 +13,14 @@ module A32
   , BlockMode (..)
   , Forbidden (..)
   , Instruction (..)
+  , StatusRegister (..)
+  , StatusField (..)
+  , StatusSource (..)
+  , StatusWrite (..)
+  , SignExtension (..)
   , decode
+  , statusWrite
+  , signExtension
   , sp
   , lr
   , pc
@@ -124,6 +131,42 @@ data Instruction
   | Hint Cond
   | Rejected Forbidden
   deriving (Eq, Show)
+
+data StatusRegister = CurrentStatus | SavedStatus deriving (Eq, Show)
+
+-- | MSR mask fields: control [7:0], extension [15:8], status [23:16], flags [31:24].
+data StatusField = ControlBits | ExtensionBits | StatusBits | FlagBits deriving (Eq, Show, Enum, Bounded)
+
+data StatusSource = StatusFromRegister Reg | StatusFromImmediate Word32 deriving (Eq, Show)
+
+data StatusWrite = StatusWrite Cond StatusRegister [StatusField] StatusSource deriving (Eq, Show)
+
+-- | Fields of an MSR (register or immediate); `decode` rejects these as
+-- SystemRegister except for WriteApplicationFlags. Banked, PC-source and
+-- empty-mask encodings give Nothing.
+statusWrite :: Word32 -> Maybe StatusWrite
+statusWrite word
+  | field 31 28 word == 15 || field 19 16 word == 0 = Nothing
+  | word .&. 0x0fb0fff0 == 0x0120f000 && reg 0 word /= pc = Just (write (StatusFromRegister (reg 0 word)))
+  | word .&. 0x0fb0f000 == 0x0320f000 = Just (write (StatusFromImmediate (field 7 0 word `rotateR` (2 * fromIntegral (field 11 8 word)))))
+  | otherwise = Nothing
+ where
+  target = if testBit word 22 then SavedStatus else CurrentStatus
+  fields = [bits | (bits, index) <- zip [minBound .. maxBound] [16 ..], testBit word index]
+  write = StatusWrite (Cond (field 31 28 word)) target fields
+
+-- | Destination, source, rotation and width of SXTB or SXTH, which `decode`
+-- returns as Compute. PC operands give Nothing.
+data SignExtension = SignExtension Cond Reg Reg Int Int deriving (Eq, Show)
+
+signExtension :: Word32 -> Maybe SignExtension
+signExtension word
+  | field 31 28 word == 15 || pc `elem` [reg 12 word, reg 0 word] = Nothing
+  | word .&. 0x0fff03f0 == 0x06af0070 = Just (extend 8)
+  | word .&. 0x0fff03f0 == 0x06bf0070 = Just (extend 16)
+  | otherwise = Nothing
+ where
+  extend = SignExtension (Cond (field 31 28 word)) (reg 12 word) (reg 0 word) (8 * fromIntegral (field 11 10 word))
 
 field :: Int -> Int -> Word32 -> Word32
 field high low word = (word `shiftR` low) .&. ((1 `shiftL` (high - low + 1)) - 1)

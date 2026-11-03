@@ -2,6 +2,7 @@
 
 module StockInventory
   ( GuestAddress (..)
+  , SavedStackArray (..)
   , FunctionWindow (..)
   , FunctionSize (..)
   , FunctionDeclaration (..)
@@ -12,8 +13,14 @@ module StockInventory
   , ReturnPremise (..)
   , requiredReturnPremises
   , returnPremiseLabel
+  , SavedStackTaintResidual (..)
+  , savedStackTaintResidualLabel
+  , savedStackTaintResidualStatement
   , checkDeclarations
   , deriveFunction
+  , xm1TaskRecordsA
+  , xm1TaskRecordsB
+  , xm1TaskRecords
   , inspectFunction
   , checkedStockFunctions
   , CodeFootprint (..), FootprintError (..), deriveRetainedFootprint
@@ -29,9 +36,8 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Word (Word32)
 import Numeric (showHex)
-import ReturnProvenance (CodeNode (..), LiteralWord (..), PremiseUse (..), ProgramCounter (..), ReturnPremise (..), requiredReturnPremises, returnPremiseLabel, verifyReturns)
+import ReturnProvenance (CodeNode (..), GuestAddress (..), LiteralWord (..), PremiseUse (..), ProgramCounter (..), ReturnPremise (..), SavedStackArray (..), SavedStackTaintResidual (..), Step (..), requiredReturnPremises, returnPremiseLabel, savedStackTaintResidualLabel, savedStackTaintResidualStatement, verifyReturns)
 
-newtype GuestAddress = GuestAddress Word32 deriving (Eq, Ord, Show)
 data FunctionWindow = FunctionWindow GuestAddress GuestAddress deriving (Eq, Show)
 newtype FunctionSize = FunctionSize Int deriving (Eq, Ord, Show)
 data FunctionDeclaration = FunctionDeclaration GuestAddress FunctionSize deriving (Eq, Ord, Show)
@@ -92,7 +98,7 @@ stockFunctions =
 
 checkedStockFunctions :: B.ByteString -> Either String [FunctionDerivation]
 checkedStockFunctions image = do
-  let outcomes = [(low, deriveFunction (GuestAddress 0xbf1a00) image window []) | window@(FunctionWindow (GuestAddress low) _) <- windows]
+  let outcomes = [(low, deriveFunction xm1TaskRecords (GuestAddress 0xbf1a00) image window []) | window@(FunctionWindow (GuestAddress low) _) <- windows]
       failures = [showHex low "" ++ ": " ++ problem | (low, Left problem) <- outcomes]
       derived = [extent | (_, Right extent) <- outcomes]
   unless (null failures) (Left ("required premises: " ++ intercalate "," (map returnPremiseLabel requiredReturnPremises) ++ "\n" ++ intercalate "\n" failures))
@@ -100,26 +106,35 @@ checkedStockFunctions image = do
   checkDeclarations (map declaration stockFunctions) (map derivedDeclaration derived)
   pure derived
 
-deriveFunction :: GuestAddress -> B.ByteString -> FunctionWindow -> [GuestAddress] -> Either String FunctionDerivation
-deriveFunction imageBase image window externalTails = do
-  inspection <- inspectFunction imageBase image window externalTails
+-- X-M1 1.50 T task records per loader: 120 of 56 bytes, saved SP at +0x18
+-- (reports/replacement-inventory-baseline.md:444,1111; loader .dis:3449,3487,3531).
+xm1TaskRecordsA, xm1TaskRecordsB :: SavedStackArray
+xm1TaskRecordsA = SavedStackArray (GuestAddress 0x4005ff0c) 56 120 0x18
+xm1TaskRecordsB = SavedStackArray (GuestAddress 0x400efecc) 56 120 0x18
+
+xm1TaskRecords :: [SavedStackArray]
+xm1TaskRecords = [xm1TaskRecordsA, xm1TaskRecordsB]
+
+deriveFunction :: [SavedStackArray] -> GuestAddress -> B.ByteString -> FunctionWindow -> [GuestAddress] -> Either String FunctionDerivation
+deriveFunction arrays imageBase image window externalTails = do
+  inspection <- inspectFunction arrays imageBase image window externalTails
   dependencies <- inspectedReturn inspection
   pure (FunctionDerivation
     (inspectedDeclaration inspection)
     (S.toList (S.fromList [premise | PremiseUse _ premise <- dependencies]))
     dependencies)
 
-inspectFunction :: GuestAddress -> B.ByteString -> FunctionWindow -> [GuestAddress] -> Either String FunctionInspection
-inspectFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low) (GuestAddress high)) externalTails = do
+inspectFunction :: [SavedStackArray] -> GuestAddress -> B.ByteString -> FunctionWindow -> [GuestAddress] -> Either String FunctionInspection
+inspectFunction arrays (GuestAddress imageBase) image (FunctionWindow (GuestAddress low) (GuestAddress high)) externalTails = do
   unless (low < high && low .&. 3 == 0 && high .&. 3 == 0) (Left "invalid function window")
   (code, literals) <- walk [low] S.empty S.empty
   graph <- forM (S.toList code) $ \address -> do
     encoded <- word address
-    let instruction = A.decode address encoded
+    let instruction = step address encoded
     (successors, _) <- edges address instruction
     pure (address, instruction, successors, A.Cond (encoded `shiftR` 28))
   forM_ graph $ \(address, instruction, _, _) -> case instruction of
-    A.Load _ _ _ destination base (A.OffsetRegister _ _ _ _) _ | destination == A.pc && base == A.pc -> do
+    Executes (A.Load _ _ _ destination base (A.OffsetRegister _ _ _ _) _) | destination == A.pc && base == A.pc -> do
       let predecessors = S.fromList [source | (source, _, successors, _) <- graph, address `elem` successors]
       unless (address /= low && predecessors == S.singleton (address-4)) (Left "dispatch bound is bypassed")
     _ -> pure ()
@@ -129,7 +144,7 @@ inspectFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low
   literalWords <- forM (S.toList literals) $ \address -> do
     value <- word address
     pure (ProgramCounter address, LiteralWord value)
-  let dependencies = verifyReturns (M.fromList literalWords) (ProgramCounter low)
+  let dependencies = verifyReturns arrays (M.fromList literalWords) (ProgramCounter low)
         [CodeNode (ProgramCounter address) instruction (map ProgramCounter successors) condition | (address, instruction, successors, condition) <- graph]
   pure (FunctionInspection
     (FunctionDeclaration (GuestAddress low) (FunctionSize (fromIntegral (S.findMax code + 4 - low))))
@@ -146,7 +161,7 @@ inspectFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low
       | S.member address code = walk pending code literals
       | not (inside address) = Left ("fallthrough leaves function window at " ++ showHex address "")
       | otherwise = do
-          instruction <- A.decode address <$> word address
+          instruction <- step address <$> word address
           (successors, pools) <- edges address instruction
           unless (all inside pools) (Left "literal leaves function window")
           walk (successors ++ pending) (S.insert address code) (S.union literals (S.fromList pools))
@@ -155,7 +170,13 @@ inspectFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low
       unless (target .&. 3 == 0 && (inside target || GuestAddress target `elem` externalTails))
         (Left ("undeclared external tail at " ++ showHex target ""))
       pure ([target | inside target] ++ fallthrough address condition)
-    edges address instruction = case instruction of
+    step address encoded = case A.decode address encoded of
+      A.Rejected A.SystemRegister | Just write <- A.statusWrite encoded -> WritesStatus write
+      A.Compute _ _ | Just extension <- A.signExtension encoded -> SignExtends extension
+      instruction -> Executes instruction
+    edges address (WritesStatus _) = pure ([address+4], [])
+    edges address (SignExtends _) = pure ([address+4], [])
+    edges address (Executes instruction) = case instruction of
       A.Branch _ True _ -> pure ([address+4], [])
       A.Branch condition False target -> do
         successors <- branch address condition target
