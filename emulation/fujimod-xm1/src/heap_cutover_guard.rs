@@ -29,8 +29,7 @@ pub(super) fn classes(recorder: &Recorder) -> Vec<WatchClass> {
 
 pub(super) fn ranges_for(recorder: &Recorder) -> Vec<WatchRange> {
     classes(recorder).into_iter().map(|class| {
-        let mut kinds = if class.kinds.contains(&Access::CpuFetch) { WatchKinds::CPU_FETCH }
-            else if class.kinds.contains(&Access::CpuRead) { WatchKinds::CPU_READ } else { WatchKinds::CPU_WRITE };
+        let mut kinds = if class.kinds.contains(&Access::CpuFetch) { WatchKinds::CPU_FETCH } else { WatchKinds::CPU_WRITE };
         if class.kinds.contains(&Access::CpuWrite) { kinds = kinds.union(WatchKinds::CPU_WRITE); }
         if class.kinds.contains(&Access::HostWrite) || class.kinds.contains(&Access::ModelBusWrite) { kinds = kinds.union(WatchKinds::WRITES); }
         WatchRange { start: class.range[0], end: class.range[1], kinds }
