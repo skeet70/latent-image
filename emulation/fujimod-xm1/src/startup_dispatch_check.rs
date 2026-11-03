@@ -202,8 +202,14 @@ fn check(directory:&Path,role:Role,source:&[u8],linked:&[u8])->Result<(Case,Vec<
     }
     Ok((report.case,outcomes,digest))
 }
+/// project_at requires the dispatcher to preserve the caller's r4-r11; their values are private to the loader provider and are not compared.
 #[derive(Serialize,PartialEq)]
-pub(crate) struct SharedProjection {outcomes:Vec<Outcome>}
+struct SharedOutcome {core:usize,phase:Phase,sp:u32,result:u32,cpsr:u32,tasks:Vec<Task>}
+impl From<Outcome> for SharedOutcome {
+    fn from(outcome:Outcome)->Self {Self {core:outcome.core,phase:outcome.phase,sp:outcome.sp,result:outcome.result,cpsr:outcome.cpsr,tasks:outcome.tasks}}
+}
+#[derive(Serialize,PartialEq)]
+pub(crate) struct SharedProjection {outcomes:Vec<SharedOutcome>}
 pub(super) fn shared(invocations:&[Invocation],publications:&[super::Publication],rows:&[Row],trace_bytes:&[u8],callers:&[(usize,u32,u32)])->Result<SharedProjection,String>{
     let trace:Vec<Hit>=serde_json::from_slice(trace_bytes).map_err(|error|error.to_string())?;
     require(invocations.len()==6 && publications.len()==2 && callers.len()==6,"shared dispatcher census differs")?;
@@ -221,7 +227,7 @@ pub(super) fn shared(invocations:&[Invocation],publications:&[super::Publication
             let phase=invocation.entry.registers.r[0];
             let matching:Vec<_>=callers.iter().filter(|(owner,argument,_)|*owner==usize::from(core) && *argument==phase).collect();
             require(matching.len()==1,"source-bound shared dispatcher caller is absent or repeated")?;
-            outcomes.push(project_at(invocation,rows,matching[0].2)?);
+            outcomes.push(project_at(invocation,rows,matching[0].2)?.into());
         }
     }
     for core in [Core::Primary,Core::Secondary] {

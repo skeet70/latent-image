@@ -374,7 +374,11 @@ fn loader_semantics<'a>(report:impl Into<RouteView<'a>>)->Result<Vec<LoaderEffec
 const PUBLICATIONS:[[u64;2];21]=[[0x61c000,0x61c220],[0x40000,0x40020],[0xd0000,0xd0020],[0x4f10c,0x4f118],[0xdf0cc,0xdf0d8],[0x89f794,0x89f798],[0xa00c4,0xa00c8],[0x5927c,0x59280],[0xe923c,0xe9240],[0x96bd20,0x96bd28],[0x89f8ac,0x89f8b0],[0x944440,0x944464],[0x914834,0x914838],[0x972e88,0x972e94],[0x14c100c,0x14c1010],[0x14c1018,0x14c101c],[0x14c113c,0x14c1140],[0x9662d4,0x9662d8],[0x89f784,0x89f788],[0x89f78c,0x89f790],[0xa0800,0xa0838]];
 #[derive(Serialize, PartialEq, Eq)]
 #[serde(tag="kind",content="source",rename_all="kebab-case")]
-enum Writer { Carrier(Side),Retained(Guest),Untimed }
+enum Writer { Carrier(Side),Component(StartupComponent),Retained(Guest),Untimed }
+/// Startup components the joined role replaces in place; the shared route names their writers by span, not by provider PC.
+#[derive(Clone,Copy,Debug,Serialize,PartialEq,Eq)]
+#[serde(rename_all="kebab-case")]
+enum StartupComponent { Dispatcher,Installer }
 #[derive(Serialize, PartialEq, Eq)]
 struct Publication {source:Access,address:Guest,physical:Guest,size:u64,core:Option<Core>,value:Option<u64>,writer:Writer,#[serde(skip)]clock:Option<super::Count>}
 

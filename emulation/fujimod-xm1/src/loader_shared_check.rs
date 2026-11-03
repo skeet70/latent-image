@@ -9,6 +9,13 @@ use owner::shared_dispatch::shared::{AccessRow,ByteOrder,DataAttribution,FetchSt
 use owner::shared_dispatch::Source as DispatchSource;
 use std::collections::BTreeSet;
 
+fn startup_component(pc:Guest)->Option<StartupComponent>{
+    let physical=pc.0&!0x40000000;
+    if (0x69cdf8..0x69cf84).contains(&physical) {Some(StartupComponent::Dispatcher)}
+    else if (0x725a04..0x725b54).contains(&physical) {Some(StartupComponent::Installer)}
+    else {None}
+}
+
 #[derive(Clone,Copy,Deserialize,Serialize,PartialEq,Eq)]
 #[serde(rename_all="kebab-case")]
 enum Role {Retained,Joined}
@@ -205,7 +212,7 @@ fn inspect_watch(raw:&ReplayWatch,epoch:&Epoch,report:RouteView<'_>,program:&Pro
         let write=matches!(row.source,Access::CpuWrite|Access::HostWrite|Access::ModelBusWrite);
         if write&&PUBLICATIONS.iter().any(|span|u64::from(row.physical.0)<span[1]&&span[0]<end){
             publications.push(Publication {source:row.source,address:row.address,physical:row.physical,size:row.size,core:row.core,value:row.value,clock:row.instructions,
-                writer:match row.pc {Some(pc)=>carrier_side(pc).map_or(Writer::Retained(pc),Writer::Carrier),None=>Writer::Untimed}});
+                writer:match row.pc {Some(pc)=>carrier_side(pc).map(Writer::Carrier).or_else(||startup_component(pc).map(Writer::Component)).unwrap_or(Writer::Retained(pc)),None=>Writer::Untimed}});
         }
         if epoch.stage==owner::WatchStage::Startup&&write {require([[0x41ad4,0x41aec],[0x41b78,0x41b84]].iter().all(|span|end<=span[0]||span[1]<=u64::from(row.physical.0)),"shared timer source code overwritten")?;}
         for loader in loaders {
