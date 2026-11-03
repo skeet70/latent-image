@@ -1,4 +1,4 @@
-//! Calls into the stock kernel through the published roots (manifest v4) and the device words the
+//! Calls into the stock kernel through the published roots (manifest v5) and the device words the
 //! time driver reads (reports/xm1-timer-interrupt-laws.md §5-§6).
 
 use core::arch::asm;
@@ -120,8 +120,8 @@ pub struct CreatePacket {
     pub stack_base: u32,
 }
 
-/// Root `+0x80` of the owning domain with packet `{0, 0}`; wrapper 0x725dd8 passes `{0, 0}` when
-/// descriptor word +0x18 is 0xa5f0a5f0 and `{4, 0}` otherwise.
+/// Root `+0x80`, the per-task eventflag create, with `{attribute 0, pattern 0}`; task create 0x725dd8
+/// passes attribute 0 when descriptor word +0x18 is 0xa5f0a5f0 and 4 otherwise.
 pub fn register_auxiliary(domain: Domain, id: TaskId) -> SlotStatus {
     let packet = [0u32; 2];
     SlotStatus::from_raw(call2(root(domain), offset::REGISTER_AUXILIARY, EncodedId::new(domain, id).raw(), packet.as_ptr() as u32))

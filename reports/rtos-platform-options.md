@@ -28,7 +28,7 @@ This report answers whether projects listed at [arewertosyet.com](https://arewer
 | --- | --- | --- | --- |
 | -18 | invalid signed class/id/domain selection | activate `+0xc` | Manifest A/B `0xc`; Draft:24 |
 | -25 | nonzero context or IRQ masked | activate `+0xc`, current-task `+0x16c` | Manifest; Draft:24,29 |
-| -41 | C+36 already nonzero / auxiliary+8 already nonzero | create `+0`, auxiliary register `+0x80` | Manifest; Draft:23 |
+| -41 | C+36 already nonzero / eventflag record +8 already nonzero | create `+0`, per-task eventflag create `+0x80` | Manifest; Draft:23 |
 | -42 | creation record absent | activate | Manifest |
 | -43 | already pending activation | activate | Manifest |
 | -50 | finite queue full/empty, flag-wait wrapper special case | `+0x9c`, `+0xac`, `+0xb0`, `+0xc8` | Manifest; Draft:28 |
@@ -37,7 +37,7 @@ This report answers whether projects listed at [arewertosyet.com](https://arewer
 | -60, -62 | message-wrapper returns; sibling `os_error.h` names them MBX_INVALID_LENGTH and MBX_FULL (non-X-M1) | image4 message wrappers | `E-ITRON-VOCAB-150` |
 | -1 | try-lock `0x427d4` / unlock `0x427fc` | loader helpers | Map A.1 |
 
-Objects are 120 C/T task records per kernel, auxiliary records (12 B) and nodes (16 B), scheduler domains (132 B), ready lists and bitmaps, resources/semaphores (97 constructed by root104), task-associated flags, mailbox/message objects with pools, and timer records of 24 bytes [Map A.2; Draft:23-29,43].
+Objects are 120 C/T task records per kernel, per-task eventflag records (12 B) and nodes (16 B), scheduler domains (132 B), ready lists and bitmaps, resources/semaphores (97 constructed by root104), mailbox/message objects with pools, and timer records of 24 bytes [Map A.2; Draft:23-29,43; E-RTOS-SLOT-MANIFEST-V5-150].
 
 ### 1.4 IRQ, timer and blocking behaviour
 
@@ -76,7 +76,7 @@ Leads (non-X-M1):
 | creation does not make tasks runnable; a separate auto-ready scan of 120 records builds ready sets [Draft:23,37] | consistent with TA_ACT handling for statically created tasks **[INFERENCE]** | |
 | activate id0 selects the current task [Manifest `0xc`] | TSK_SELF = 0 [spec act_tsk] | |
 | resource create `{0,1,1}` [Draft:26] | T_CSEM `{sematr=TA_TFIFO 0, isemcnt 1, maxsem 1}` [spec cre_sem] | |
-| auxiliary register `{flags 0 or 4, 0}`, duplicate -41; flag attribute 4 clears the whole word [Manifest `0x80`; Draft:27] | T_CFLG `{flgatr, iflgptn}`; TA_WSGL 0x00, TA_CLR 0x04; cre_flg E_OBJ [spec] | |
+| per-task eventflag create `+0x80` `{attribute 0 or 4, pattern 0}`, duplicate -41; attribute 4 clears the whole word [Manifest v5 `0x80`; Draft:27] | T_CFLG `{flgatr, iflgptn}`; TA_WSGL 0x00, TA_CLR 0x04; cre_flg E_OBJ [spec] | |
 | flag wait mode0 tests all requested bits and returns the whole flag word; timeout −1 [Draft:27; Manifest `0x9c`] | TWF_ANDW 0x00; p_flgptn receives the pattern; TMO_FEVR −1 [spec] | |
 | timer activation enables records whose flag bit1 is set [Draft:43] | TA_STA 0x02, cyclic handler operational after creation [spec] **[INFERENCE]** match | |
 | IRQ save returns the prior mask, restore takes it [Manifest `0x164/0x168`] | none: loc_cpu/unl_cpu take no mask | `vdis_psw()` returns the PSW, `vset_psw(psw)` restores it [no4guide.pdf] |
@@ -457,11 +457,12 @@ Order of work:
 `replacement/embassy_platform` is the phase-1 platform: embassy-executor 0.10.0 `raw::Executor` with no platform feature, embassy-time 0.5 at 3 MHz over an owned driver, and the stock kernel as the thread layer. It is installed as a RAM-push experiment (`experiments/embassy_phase1`), because RAM push is the only owned-code path that has run on the camera (E-RAM-PUSH-INSTALL-150) and it installs after the kernel is running. Experiments gained `prelinked.json`: a Bazel-built relocatable object, gc'd from the hook handler and the exported records, replaces `lib.rs` (`host/firmware/build-experiment-ram.sh`). The demo object takes 0x3ea0 of the 0x5000-byte code window.
 
 - **Host tasks:** the hook in front of the stock modal dispatcher `0x00bfb028` runs once from task context with IRQ unmasked. It fills B's stack with the id byte and cleans the payload's D-cache lines.
-  - **B (class 2, id 119):** inside the stock critical pair `0x7235d8/0x7236b0` the hook calls B's root `+0x80` with `{0, 0}` and `+0x0` with `{flags 2, argument 1, entry, priority 14, 2 KiB stack}`, the sequence of the task-submission wrapper `0x725dd8` (which passes `{4, 0}` to `+0x80` unless descriptor word +0x18 is `0xa5f0a5f0`). After leaving the pair it activates B through the executing core's `+0xc`.
+  - **B (class 2, id 119):** inside the stock critical pair `0x7235d8/0x7236b0` the hook calls B's root `+0x80`, the per-task eventflag create, with `{attribute 0, pattern 0}`, then the task create `+0x0` with `{flags 2, argument 1, entry, priority 14, 2 KiB stack}`. That is the order of stock task create `0x725dd8`, which passes attribute 4 unless descriptor word +0x18 is `0xa5f0a5f0` (E-RTOS-SLOT-MANIFEST-V5-150). After leaving the pair it activates B through the executing core's `+0xc`.
   - **A (class 1):** the hook calls the stock allocator `0x728804(0, 1, {entry, priority 14, 2 KiB stack size, stack base, argument 0})` as its four plain-image callers do. The allocator fills the stack with byte 0 and cleans it. It tries A `+0x0` with flags 2 on ids from cursor `0x40a0fc34` (initially 120) down to 105, moving on when one fails, stores the cursor below the id it took and activates the task through the executing core's `+0xc`. It returns the id, or -34 when the pool is empty, else the failing status. The hook records that return and publishes A's encoded id for the pender.
   - Priority 14 is one above the idle tasks 102/103 (15), whose WFI loop never blocks; at 15 the hosts never ran.
 - **Task ids:**
   - **Census:** on the stock route, root `+0x0` and `+0x80` received ids up to 104 only (A: 74 calls, B: 10 calls; `private-data/scratch/EmbassyPhase1/census-creation-ids.json` from E-RTOS-SLOT-CENSUS-STOCK-150).
+  - **Eventflags:** the allocator calls no `+0x80`, so A has no eventflag record, like the stock tasks it creates. B's task-119 flag is created but never used by the host. In the census no eventflag slot (`+0x80..+0x9c`, `+0xd0`) on either domain received id 119; B saw only `+0x80` (ids up to 103) and one `+0x9c` (id 93) (`private-data/scratch/EmbassyAlloc/census-flag-ids.json`). The stock queue destructor `0x724f08(n)` overwrites task n-1's flag record through `+0xd0` (E-IMAGE4-QUEUE-DESTRUCTOR-POWEROFF-150), so a B call with n = 120 would reach task 119's flag; only A calls with 8 and 41 are observed, and no static search for B callers passing 120 was made.
   - **Wrapper call sites:** none of the 67 static call sites of `0x725dd8` passes an id above 104. Every id is a constant or comes from a static table; the only runtime case is a worker table bounded to 88..92, or 0..4 after its cleanup.
   - **Class 1:** ids 105..120 belong to the allocator `0x728804`, so A takes one from it instead of a fixed id. A then holds one of the allocator's 16 ids for the session.
   - **Class 2:** no traced path creates 119 in class 2.

@@ -174,7 +174,7 @@ pub struct Demo {
     pub started: u32,
     pub panics: u32,
     /// Domain A: `[NOT_CALLED, allocator 0x728804 result (the id when positive), NOT_CALLED]`.
-    /// Domain B: `+0x80`, `+0x0`, `+0xc` raw results. `NOT_CALLED` until called.
+    /// Domain B: `+0x80` (task eventflag create), `+0x0`, `+0xc` raw results. `NOT_CALLED` until called.
     pub start_status: [[i32; 3]; 2],
     pub doorbell_sent: u32,
     pub doorbell_seq: u32,
