@@ -5,10 +5,12 @@
 module Main (main) where
 
 import qualified A32 as A
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import qualified Crypto.Hash.SHA256 as SHA256
-import Data.Aeson (FromJSON (parseJSON), ToJSON, Value, encode, object, (.=))
-import Data.Aeson.Types (parseEither)
+import Data.Aeson (FromJSON (parseJSON), ToJSON, Value, encode, object, withObject, (.:), (.=))
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Aeson.Types (Parser, parseEither)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as L
@@ -41,13 +43,20 @@ data Contract = Contract
   , computedWrappers :: [Word32]
   , evidence :: [String]
   , recovery :: Recovery
+  -- | Proposed census arms or native cases for facts the source cannot settle.
+  , experiments :: [String]
+  , gaps :: Maybe String
+  -- | How the B body differs from the A body.
+  , domainNotes :: Maybe String
   } deriving (Show)
 
 -- | A condition the caller must establish because the slot body does not check it.
 data Precondition = Precondition { preconditionName :: String, statement :: String }
+instance FromJSON Precondition where
+  parseJSON = withObject "precondition" (\o -> Precondition <$> o .: "name" <*> o .: "statement")
 
-slotPreconditions :: SlotOffset -> [Precondition]
-slotPreconditions (SlotOffset offset) = maybe [] pure (M.lookup offset unchecked)
+stockPreconditions :: M.Map Word32 [Precondition]
+stockPreconditions = fmap pure unchecked
   where
     validId table sites = Precondition "valid-object-id"
       ("Caller passes 1 <= uxth(r0) <= the capacity of " ++ table ++ "; the body indexes uxth(r0)-1 without a range check (" ++ sites ++ "), so other ids write outside the table")
@@ -58,12 +67,6 @@ slotPreconditions (SlotOffset offset) = maybe [] pure (M.lookup offset unchecked
       , (0x68, validId "the 250 semaphore records and control blocks" "uxth A 0x4d348 / B 0xdd30c")
       , (0x80, validId "the 120 eventflag records (A 0x4005d178 / B 0x400ed138, stride 12)" "uxth A 0x4d3b0 / B 0xdd374")
       , (0x84, validId "the 120 eventflag records and control blocks" "uxth A 0x4d444 / B 0xdd408")
-      , (0xa0, validId "the data-queue creation records (A 0x4005988c / B 0x400e984c, stride 16; count at domain record +0x60)" "uxth A 0x4d4b0 / B 0xdd474")
-      , (0xa4, validId "the data-queue creation and runtime records" "uxth A 0x4d550 / B 0xdd514")
-      , (0xcc, validId "its 12-byte creation table (capacity not yet read)" "uxth A 0x4d5d0 / B 0xdd594")
-      , (0xd0, validId "its creation table (capacity not yet read)" "uxth A 0x4d664 / B 0xdd628")
-      , (0xe4, validId "its 20-byte pool creation table (capacity not yet read)" "uxth A 0x4d6d8 / B 0xdd69c")
-      , (0xe8, validId "its 20-byte creation table (capacity not yet read)" "uxth A 0x4d7a0 / B 0xdd764")
       , (0x108, validId "the 64 cyclic creation records (A 0x4005ef78 / B 0x400eef38, stride 24)" "uxth A 0x4d82c / B 0xdd7f0")
       , (0x10c, validId "the 64 cyclic creation records" "uxth A 0x4d8b8 / B 0xdd87c")
       ]
@@ -113,11 +116,38 @@ instance FromJSON Domain where
     "B" -> pure B
     _ -> fail ("unknown domain " ++ name)
 
+hexWord :: String -> String -> Parser Word32
+hexWord what text = case stripPrefix "0x" text of
+  Just digits | not (null digits) && length digits <= 8 && all isHexDigit digits, [(number, "")] <- readHex digits -> pure number
+  _ -> fail (what ++ " is not 0x-prefixed 32-bit hexadecimal: " ++ text)
+
 newtype FunctionStart = FunctionStart Word32 deriving (Eq)
 instance FromJSON FunctionStart where
-  parseJSON value = parseJSON value >>= \text -> case stripPrefix "0x" text of
-    Just digits | not (null digits) && length digits <= 8 && all isHexDigit digits, [(number, "")] <- readHex digits -> pure (FunctionStart number)
-    _ -> fail ("function start is not 0x-prefixed 32-bit hexadecimal: " ++ text)
+  parseJSON value = parseJSON value >>= fmap FunctionStart . hexWord "function start"
+
+-- | A reviewed contract for one published slot.
+data SlotContract = SlotContract { contractOffset :: Word32, slotContract :: Contract, contractPreconditions :: [Precondition] }
+instance FromJSON SlotContract where
+  parseJSON = withObject "slot contract" $ \o -> do
+    offset <- o .: "offset" >>= hexWord "slot offset"
+    let keys = sort (map Key.toString (KeyMap.keys o))
+        expected = sort ["offset", "recovery", "operation", "analogue", "arguments", "result", "errors", "context", "objects", "wrappers", "preconditions", "experiments", "evidence", "gaps", "domainNotes"]
+    unless (keys == expected) (fail ("slot contract " ++ hex offset ++ " keys differ from the contract fields: " ++ unwords keys))
+    status <- o .: "recovery" >>= \text -> case (text :: String) of
+      "recovered" -> pure Recovered
+      "partial" -> pure Partial
+      _ -> fail ("slot contract recovery must be recovered or partial: " ++ text)
+    failures <- o .: "errors" >>= mapM (withObject "error" (\e -> (,) <$> e .: "value" <*> e .: "meaning"))
+    wrappers <- o .: "wrappers" >>= mapM (hexWord "wrapper entry")
+    citations <- o .: "evidence"
+    when (null citations) (fail ("slot contract " ++ hex offset ++ " has no evidence"))
+    body <- Contract <$> o .: "operation" <*> o .: "analogue" <*> (Just <$> o .: "arguments") <*> (Just <$> o .: "result")
+      <*> pure failures <*> (Just <$> o .: "context") <*> o .: "objects" <*> pure wrappers <*> pure citations <*> pure status
+      <*> o .: "experiments" <*> o .: "gaps" <*> o .: "domainNotes"
+    SlotContract offset body <$> o .: "preconditions"
+
+newtype SlotContracts = SlotContracts { slotContracts :: [SlotContract] } deriving (Generic)
+instance FromJSON SlotContracts
 
 -- A reviewed start of an unpublished function, bound to one domain's loader image.
 data FunctionBoundary = FunctionBoundary
@@ -196,14 +226,16 @@ extent base image starts (EntryAddress address) =
       , "refusal" .= problem, "scope" .= ("No extent claimed; next entry candidate is a fence, not a measured function end" :: String)
       ]
 
-contract :: SlotOffset -> Contract
-contract (SlotOffset offset) = M.findWithDefault unknown offset known
+unknownContract :: Contract
+unknownContract = Contract "unknown" Nothing Nothing Nothing [] Nothing [] []
+  ["replacement/primary_initializer/src.rs:25-49,93-96", "replacement/interface_initializer/src.rs:25-49,78-81"] Unknown [] Nothing Nothing
+
+stockContracts :: M.Map Word32 Contract
+stockContracts = known
   where
-    unknown = Contract "unknown" Nothing Nothing Nothing [] Nothing [] []
-      ["replacement/primary_initializer/src.rs:25-49,93-96", "replacement/interface_initializer/src.rs:25-49,78-81"] Unknown
-    c name args returned failures required touched wrappers citations = Contract name Nothing (Just args) (Just returned) failures (Just required) touched wrappers citations Partial
-    partialAs like name args returned failures required touched wrappers citations = Contract name like (Just args) (Just returned) failures (Just required) touched wrappers (citations ++ censusEvidence) Partial
-    recoveredAs like name args returned failures required touched wrappers citations = Contract name like (Just args) (Just returned) failures (Just required) touched wrappers (citations ++ censusEvidence) Recovered
+    c name args returned failures required touched wrappers citations = Contract name Nothing (Just args) (Just returned) failures (Just required) touched wrappers citations Partial [] Nothing Nothing
+    partialAs like name args returned failures required touched wrappers citations = Contract name like (Just args) (Just returned) failures (Just required) touched wrappers (citations ++ censusEvidence) Partial [] Nothing Nothing
+    recoveredAs like name args returned failures required touched wrappers citations = Contract name like (Just args) (Just returned) failures (Just required) touched wrappers (citations ++ censusEvidence) Recovered [] Nothing Nothing
     censusEvidence = ["E-RTOS-SLOT-CENSUS-STOCK-150", "private-data/scratch/RtosCensus/census-v1/census.json .reach[]"]
     dis domain range = "private-data/analysis/x-m1-1.50/decode/" ++ (if domain == A then "loader-40000.dis:" else "loader-d0000.dis:") ++ range
     contracts family = "private-data/scratch/RtosCensus/contracts/" ++ family ++ ".json"
@@ -225,13 +257,6 @@ contract (SlotOffset offset) = M.findWithDefault unknown offset known
       , (0x88, c "flag-set-task" "Wrapper destination task/class and bitmask; exact lower register tuple incomplete" "r0 status; OR bits and ready satisfied waiter" [] "Task-context variant" ["task-associated flags", "waiter", "ready queue"] [0x724558] standbyEvidence)
       , (0x8c, c "flag-set-interrupt" "Wrapper destination task/class and bitmask; exact lower register tuple incomplete" "r0 status; OR bits and ready satisfied waiter" [] "Interrupt-context variant; exact masks unknown" ["task-associated flags", "waiter", "ready queue"] [0x724558] standbyEvidence)
       , (0x9c, c "flag-wait" "Encoded event id, mask, mode, output pointer, timeout; exact register/stack placement not recovered here; B93 wrapper (1,&out,-1), encoded id0x2005d" "Satisfied mode0 writes whole flag word; attribute4 clears whole flag word" [(-50,"wrapper treats alongside success without reporting")] "Rejects invalid task/IRQ context; mode/mask/id/timeout/object/existing-waiter checks; numerical errors incomplete" ["task-associated flags", "wait request/result", "T", "scheduler"] [0x724480] standbyEvidence)
-      , (0xa0, c "mailbox-create" "Wrapper(id,{count,size}); exact lower parameters incomplete" "status; cleanup on failure does not undo every publication" [] "Current-core selected root; full admission unknown" ["mailbox", "handle arrays", "size arrays"] [0x724cdc] queueEvidence)
-      , (0xa4, c "mailbox-construction-cleanup" "Lower tuple incomplete" "status; rollback scope incomplete" [] "Construction failure path" ["mailbox", "handle arrays"] [0x724cdc] queueEvidence)
-      , (0xac, c "message-submit-task" "Message buffer from pool, encoded receiver; exact lower tuple incomplete" "0 success; finite queue full may return -50" [(-50,"finite queue full")] "Task variant; full task/IRQ/mask admission unknown" ["mailbox", "message buffer", "waiters"] [0x72503c] queueEvidence)
-      , (0xb0, c "message-submit-contextual" "Message buffer from pool, encoded receiver; exact lower tuple incomplete" "0 success; finite queue full may return -50" [(-50,"finite queue full")] "Context-selected alternate variant; precise IRQ rules unknown" ["mailbox", "message buffer", "waiters"] [0x72503c] queueEvidence)
-      , (0xc8, c "message-receive" "Wrapper(queue,destination,timeout), lower writes returned buffer pointer" "0 success; finite empty queue -50; wrapper copies before release" [(-50,"finite empty queue")] "Potentially blocks; full context checks unknown" ["mailbox", "pool message", "destination", "waiters"] [0x725318] queueEvidence)
-      , (0xe4, c "message-pool-create" "Constructor-derived pool parameters; complete tuple unknown" "r0 status" [] "Constructor path; full context unknown" ["message pool", "handle arrays", "size arrays"] [0x724cdc] queueEvidence)
-      , (0xf8, c "message-buffer-release" "Received/acquired pool buffer; complete tuple unknown" "r0 status ignored by receive wrapper; masked send cleanup can refuse before free" [] "Mask-sensitive refusal; complete checks unknown" ["message pool", "buffer ownership"] [0x72503c,0x725318] queueEvidence)
       , (0x148, recoveredAs (Just "sns_ctx") "non-task-context-sense" "None read" "r0 = 1 when the context word (A 0x400545a4 / B 0x400e4564) is nonzero, else 0; the word counts IRQ nesting (vector increments, exit decrements) and the dispatcher idle loop sets it to 1" [] "Any context; reads one word, no mask or lock" ["context word"] [0x72503c] (queueEvidence ++ [dis A "13020-13029", dis B "13004-13013", dis A "142-145", dis A "217-222"]))
       , (0x14c, recoveredAs (Just "sns_loc") "irq-mask-sense" "None read" "r0 = CPSR bit 7 (1 when IRQ is masked)" [] "Any context; no state access; not reached in the stock census" ["CPSR.I"] [] [dis A "13030-13036", dis B "13014-13020"])
       , (0x150, recoveredAs (Just "sns_dsp") "dispatch-disabled-sense" "None read" "r0 = 1 when the dispatch-enabled word (A 0x40054764 / B 0x400e4724) is 0, else 0" [] "Any context; reads one word; not reached in the stock census" ["dispatch-enabled word"] [] [dis A "13037-13046", dis B "13021-13030"])
@@ -263,7 +288,6 @@ contract (SlotOffset offset) = M.findWithDefault unknown offset known
       , (0x164, c "irq-save" "No semantic arguments recovered" "Prior IRQ mask for paired restoration" [] "CPU-local selected root; task/IRQ nesting closure incomplete" ["CPSR.I"] [0x7235d8,0x726098] criticalEvidence)
       , (0x168, c "irq-restore" "Prior mask returned by +0x164" "Caller observes restored IRQ mask; return register contract incomplete" [] "Paired on same selected root" ["CPSR.I"] [0x7236b0,0x726098] criticalEvidence)
       , (0x16c, c "current-task-query" "Output pointer through image4 adapter; exact lower tuple incomplete" "Status; wrapper0x723cb8 returns identity0 on failure" [(-25,"masked IRQ or nonzero context")] "Unmasked IRQ/task context, valid current node" ["current T", "C", "per-core context"] [0x723cb8] ["reports/replacement-inventory-baseline.md:1398-1408", "reports/stock-heap-survey.md:95-99"])
-      , (0x170, c "message-buffer-acquire" "Pool/timeout arguments from send; complete tuple unknown" "Buffer/status; failure ownership incomplete" [] "Context rules incomplete" ["message pool", "buffer ownership"] [0x72503c] queueEvidence)
       , (0x1618, c "core-identity" "No semantic arguments" "0 exactly for CP14 c2 discriminator0x4003; otherwise1" [] "CPU-local CP14 observation; physical identity qualification separate" ["CP14 c2"] [0x7235d8,0x7236b0,0x723cb8,0x724480,0x7247ac,0x724cdc,0x72503c,0x725318,0x725dd8,0x726098] taskEvidence)
       , (0x161c, c "critical-lock-retry" "Private critical adapter arguments not fully recovered here" "Retry/identity-dependent operation; complete result unknown" [] "Critical-pair contract only" ["shared lock", "per-core critical counter"] [0x7235d8] criticalEvidence)
       , (0x1620, c "critical-lock-release" "Private critical adapter arguments not fully recovered here" "Complete result unknown" [] "Critical-pair contract only" ["shared lock", "per-core critical counter"] [0x7236b0] criticalEvidence)
@@ -274,7 +298,7 @@ main :: IO ()
 main = do
   args <- getArgs
   case args of
-    [publisherA, publisherB, loaderA, loaderB, listingA, image4, surfacePath, boundaryPath, output] -> do
+    [publisherA, publisherB, loaderA, loaderB, listingA, image4, surfacePath, boundaryPath, contractPath, output] -> do
       exists <- doesPathExist output
       unless (not exists) (fail "output already exists; use a fresh evidence path")
       publisherBytesA <- B.readFile publisherA
@@ -310,19 +334,36 @@ main = do
             pure (boundaryDomain boundary, start)
       admitted <- either fail pure (mapM admitBoundary reviewed)
       let boundaryStarts domain = [start | (owner, start) <- admitted, owner == domain]
+      contractBytes <- B.readFile contractPath
+      contractValue <- either fail pure (JSON.decodeStrict contractBytes)
+      supplied <- either fail pure (slotContracts <$> (parseEither parseJSON contractValue :: Either String SlotContracts))
+      let published = [off | (SlotOffset off, _) <- entriesA]
+          suppliedOffsets = map contractOffset supplied
+      unless (length (nub suppliedOffsets) == length suppliedOffsets) (fail "slot contract input repeats an offset")
+      case [off | off <- suppliedOffsets, off `notElem` published] of
+        [] -> pure ()
+        stray -> fail ("slot contract input names unpublished offsets: " ++ unwords (map hex stray))
+      case [off | off <- suppliedOffsets, M.member off stockContracts || M.member off stockPreconditions] of
+        [] -> pure ()
+        overlap -> fail ("slot contract input overlaps the generator's own contracts or preconditions: " ++ unwords (map hex overlap))
+      let contractOf (SlotOffset off) = M.findWithDefault unknownContract off (M.union (M.fromList [(contractOffset s, slotContract s) | s <- supplied]) stockContracts)
+          preconditionsOf (SlotOffset off) = M.findWithDefault [] off (M.union (M.fromList [(contractOffset s, contractPreconditions s) | s <- supplied]) stockPreconditions)
           makeDomain domain base bytes slotEntries starts =
             let decoded = instructions base bytes
                 fences = sort (nub (starts ++ [target | (_, A.Branch _ True target) <- decoded, target >= base, target < base+fromIntegral (B.length bytes)] ++ [address | (_, EntryAddress address) <- slotEntries]))
             in object
               [ "domain" .= show domain, "root" .= hex (if domain == A then 0x4004dae0 else 0x400ddaa0)
-              , "slots" .= [let info = contract offset in object
+              , "slots" .= [let info = contractOf offset in object
                   [ "offset" .= hex off, "target" .= hex address, "recovery" .= case recovery info of { Recovered -> ("recovered" :: String); Partial -> "partial"; Unknown -> "unknown" }
                   , "operation" .= operation info, "analogue" .= analogue info, "arguments" .= arguments info, "result" .= result info
                   , "errors" .= [object ["value" .= status,"meaning" .= meaning] | (status,meaning) <- errors info]
                   , "context" .= context info, "objects" .= objects info
-                  , "preconditions" .= [object ["name" .= preconditionName p, "statement" .= statement p] | p <- slotPreconditions offset]
+                  , "preconditions" .= [object ["name" .= preconditionName p, "statement" .= statement p] | p <- preconditionsOf offset]
                   , "directImage4Calls" .= [hex site | (site,A.Branch _ True target) <- callers,target == address]
                   , "computedWrapperEntries" .= map hex (computedWrappers info)
+                  , "experiments" .= experiments info
+                  , "gaps" .= gaps info
+                  , "domainNotes" .= domainNotes info
                   , "callerClosure" .= ("open: named wrappers are source-evidenced lower bounds, not exhaustive computed/Thumb/tail/alias closure; linear BL matches may be data" :: String)
                   , "extent" .= extent base bytes fences entry
                   , "evidence" .= evidence info
@@ -331,7 +372,7 @@ main = do
       L.writeFile output (encode (object
         [ "schemaVersion" .= (1 :: Int), "firmware" .= ("X-M1 1.50" :: String)
         , "scope" .= ("Source inventory; unknowns and extent refusals block complete RTOS replacement. No new guest qualification." :: String)
-        , "inputs" .= [InputIdentity path (B.length bytes) (digest bytes) | (path,bytes) <- [(publisherA,publisherBytesA),(publisherB,publisherBytesB),(loaderA,bytesA),(loaderB,bytesB),(listingA,listingBytes),(image4,imageBytes),(surfacePath,surfaceBytes),(boundaryPath,boundaryBytes)]]
+        , "inputs" .= [InputIdentity path (B.length bytes) (digest bytes) | (path,bytes) <- [(publisherA,publisherBytesA),(publisherB,publisherBytesB),(loaderA,bytesA),(loaderB,bytesB),(listingA,listingBytes),(image4,imageBytes),(surfacePath,surfaceBytes),(boundaryPath,boundaryBytes),(contractPath,contractBytes)]]
         , "extentMethod" .= ("StockInventory.deriveFunction with both loaders' savedStackArrays; no external tails admitted; fence=min(next published entry, direct BL target, A Ghidra export, reviewed function boundary bound to the same domain loader digest, image end). A exports and boundaries never transferred to B. Refusals preserve missing extents." :: String)
         , "savedStackArrays" .= [object
             [ "domain" .= show domain, "start" .= hex start, "stride" .= stride, "count" .= count, "field" .= hex field
@@ -346,4 +387,4 @@ main = do
         , "domains" .= [makeDomain A 0x40000 bytesA entriesA (exportedA ++ boundaryStarts A),makeDomain B 0xd0000 bytesB entriesB (boundaryStarts B)]
         , "surfaceMap" .= surfaces
         ]) <> "\n")
-    _ -> fail "usage: rtos-manifest PUBLISHER_A PUBLISHER_B LOADER_A LOADER_B GHIDRA_A IMAGE4 SURFACE_JSON BOUNDARIES_JSON OUTPUT_JSON"
+    _ -> fail "usage: rtos-manifest PUBLISHER_A PUBLISHER_B LOADER_A LOADER_B GHIDRA_A IMAGE4 SURFACE_JSON BOUNDARIES_JSON CONTRACTS_JSON OUTPUT_JSON"

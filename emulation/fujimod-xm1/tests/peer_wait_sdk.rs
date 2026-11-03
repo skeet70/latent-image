@@ -491,6 +491,30 @@ fn fetch_watch_after_points_uses_rolled_back_stops_and_resumed_entries() {
 }
 
 #[test]
+fn points_rearmed_after_a_fetch_watch_record_rolled_back_stops_one_past_the_settled_count() {
+    use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
+    let mut machine = machine(&[0xe2800001, 0xe2800002, 0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
+    machine.traces.arm(&machine.session, BTreeMap::from([(0x1000, "entry".into())])).unwrap();
+    machine.traces.stop_labels = ["entry".into(), "next".into()].into_iter().collect();
+    let ranges = vec![WatchRange { start: 0x1000, end: 0x1008, kinds: WatchKinds::CPU_FETCH }];
+    let mut watch = machine.session.board.memory_watch_begin_classified(ranges, 8, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
+    // add_sites disarms and rearms every point, so the points now follow the fetch watch.
+    machine.traces.add_sites(&machine.session, BTreeMap::from([(0x1004, "next".into())])).unwrap();
+    machine.run(10);
+    assert_eq!(machine.instructions(), 0);
+    machine.run(10);
+    machine.require_running().unwrap();
+    let observed: Watch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(observed.violation.is_none());
+    let fetches: Vec<_> = observed.records.iter().filter(|row| row.source == Source::CpuFetch).map(|row| (row.core, row.pc, row.instructions)).collect();
+    assert_eq!(fetches, [(Some(0), Some(0x1000), Some(1)), (Some(0), Some(0x1000), Some(1)), (Some(0), Some(0x1004), Some(2))]);
+    assert_eq!(machine.instructions(), 1);
+    assert_eq!(machine.session.board.read_register(0, Register::Pc).unwrap(), 0x1004);
+}
+
+#[test]
 fn reopening_a_fetch_watch_after_dynamic_points_restores_stop_and_resume_clocks() {
     use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
     let mut machine = machine(&[0xe2800001, 0xe2800002, 0xeafffffe]);

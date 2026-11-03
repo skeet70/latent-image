@@ -19,7 +19,7 @@ module ReturnProvenance
 
 import qualified A32 as A
 import Control.Monad (foldM, unless, when)
-import Data.Bits (rotateR, shiftL, shiftR, (.&.), (.|.))
+import Data.Bits (complement, rotateR, shiftL, shiftR, (.&.), (.|.))
 import Data.Int (Int32)
 import qualified Data.Map.Strict as M
 import Data.Maybe (isNothing)
@@ -39,8 +39,9 @@ data SavedStackArray = SavedStackArray
 newtype ProgramCounter = ProgramCounter Word32 deriving (Eq, Ord, Show)
 newtype FrameOffset = FrameOffset Int32 deriving (Eq, Ord, Show)
 -- | WritesStatus carries an MSR that `A.decode` rejects as SystemRegister;
--- SignExtends carries an SXTB or SXTH that `A.decode` returns as Compute.
-data Step = Executes A.Instruction | WritesStatus A.StatusWrite | SignExtends A.SignExtension
+-- SignExtends carries an SXTB or SXTH and InsertsBits a BFI or BFC that
+-- `A.decode` returns as Compute.
+data Step = Executes A.Instruction | WritesStatus A.StatusWrite | SignExtends A.SignExtension | InsertsBits A.BitFieldInsert
 data CodeNode = CodeNode ProgramCounter Step [ProgramCounter] A.Cond
 newtype LiteralWord = LiteralWord Word32 deriving (Eq, Show)
 data PremiseUse = PremiseUse ProgramCounter ReturnPremise deriving (Eq, Ord, Show)
@@ -99,8 +100,28 @@ savedStackTaintResidualStatement residual = case residual of
 -- SavedStack: a word or a value derived from one that may be a declared saved
 -- stack pointer. No premise admits an index built from it; a store through it,
 -- storing it outside the frame, passing it to a call or returning it refuses.
-data Value = IncomingReturn | FrameAddress FrameOffset | FrameDerived | ReturnedObject | GlobalObject (S.Set Word32) | ScaledIndex | Constant Word32
-  | StatusWord | StatusNeutral | LoadedObject (Maybe Int32) (S.Set Word32) | SavedStack deriving (Eq, Show)
+data Value = IncomingReturn | FrameAddress FrameOffset | FrameDerived | ReturnedObject | GlobalObject Bases | ScaledIndex | Constant Word32
+  | StatusWord | StatusNeutral | LoadedObject (Maybe Int32) Bases | SavedStack deriving (Eq, Show)
+-- | Possible constant bases. A join of more than `baseLimit` gives AnyBase,
+-- which may reach every declared saved stack pointer.
+data Bases = Bases (S.Set Word32) | AnyBase deriving (Eq, Show)
+
+baseLimit :: Int
+baseLimit = 64
+
+noBases :: Bases
+noBases = Bases S.empty
+
+unionBases :: Bases -> Bases -> Bases
+unionBases (Bases left) (Bases right)
+  | S.size joined <= baseLimit = Bases joined
+  where joined = S.union left right
+unionBases _ _ = AnyBase
+
+shiftBases :: Int32 -> Bases -> Bases
+shiftBases delta (Bases bases) = Bases (S.map (+ fromIntegral delta) bases)
+shiftBases _ AnyBase = AnyBase
+
 data FrameExposure = PrivateFrame | ExposedFrame deriving (Eq, Ord, Show)
 data Accumulation = ProductOnly | Addend (Maybe Value)
 data FrameState = FrameState
@@ -135,8 +156,12 @@ verifyReturns arrays literals entry nodes = walk [(entry, initial)] M.empty S.em
               propagated = executed {instructionPremises = S.empty}
               actual = [(next, propagated) | next <- successors, not (stepReturns step)]
               skipped = case (address, condition) of
-                (ProgramCounter pc, A.Cond c) -> [(ProgramCounter (pc+4), joined) | c /= 14]
+                (ProgramCounter pc, A.Cond c) -> [(runEnd condition (pc+4), joined) | c /= 14]
           walk (actual ++ skipped ++ pending) (M.insert address joined states) nextDependencies
+    -- A failed condition also fails for each following instruction with the same condition field: flags are unchanged while none execute.
+    runEnd condition next = case M.lookup (ProgramCounter next) graph of
+      Just (CodeNode _ _ _ other) | other == condition -> runEnd condition (next+4)
+      _ -> ProgramCounter next
 
 joinState :: FrameState -> FrameState -> FrameState
 joinState left right = FrameState
@@ -148,10 +173,10 @@ joinState left right = FrameState
   where
     common leftMap rightMap = M.mergeWithKey
       (\_ a b -> case (a, b) of
-        (LoadedObject x bases, LoadedObject y others) -> Just (LoadedObject (if x == y then x else Nothing) (S.union bases others))
-        (LoadedObject x bases, GlobalObject others) -> Just (LoadedObject x (S.union bases others))
-        (GlobalObject bases, LoadedObject y others) -> Just (LoadedObject y (S.union bases others))
-        (GlobalObject bases, GlobalObject others) -> Just (GlobalObject (S.union bases others))
+        (LoadedObject x bases, LoadedObject y others) -> Just (LoadedObject (if x == y then x else Nothing) (unionBases bases others))
+        (LoadedObject x bases, GlobalObject others) -> Just (LoadedObject x (unionBases bases others))
+        (GlobalObject bases, LoadedObject y others) -> Just (LoadedObject y (unionBases bases others))
+        (GlobalObject bases, GlobalObject others) -> Just (GlobalObject (unionBases bases others))
         _ | a == b -> Just a
         _ -> derivedFrom [Just a, Just b])
       (M.mapMaybe (derivedFrom . (:[]) . Just))
@@ -203,11 +228,11 @@ add :: Maybe Value -> Int32 -> Maybe Value
 add (Just (FrameAddress (FrameOffset offset))) delta = Just (FrameAddress (FrameOffset (offset+delta)))
 add (Just (Constant value)) delta = Just (Constant (value + fromIntegral delta))
 add (Just ReturnedObject) _ = Just ReturnedObject
-add (Just (LoadedObject displacement bases)) delta = Just (LoadedObject ((+ delta) <$> displacement) (S.map (+ fromIntegral delta) bases))
+add (Just (LoadedObject displacement bases)) delta = Just (LoadedObject ((+ delta) <$> displacement) (shiftBases delta bases))
 add (Just FrameDerived) _ = Just FrameDerived
 add (Just SavedStack) _ = Just SavedStack
-add (Just (GlobalObject bases)) delta = Just (GlobalObject (S.map (+ fromIntegral delta) bases))
-add (Just ScaledIndex) delta = Just (if delta == 0 then ScaledIndex else GlobalObject (S.singleton (fromIntegral delta)))
+add (Just (GlobalObject bases)) delta = Just (GlobalObject (shiftBases delta bases))
+add (Just ScaledIndex) delta = Just (if delta == 0 then ScaledIndex else GlobalObject (Bases (S.singleton (fromIntegral delta))))
 add value 0 = value
 add _ _ = Nothing
 
@@ -216,7 +241,7 @@ indexedAddress exposure base index = case derivedFrom [base, index] of
   Just tainted -> Just tainted
   _ -> case base of
     Just ReturnedObject -> Just ReturnedObject
-    Just (Constant base') | exposure == PrivateFrame -> Just (GlobalObject (S.singleton base'))
+    Just (Constant base') | exposure == PrivateFrame -> Just (GlobalObject (Bases (S.singleton base')))
     Just global@(GlobalObject _) | exposure == PrivateFrame -> Just global
     Just loaded@(LoadedObject _ _) | exposure == PrivateFrame -> Just loaded
     -- After exposure an unknown operand can be a reloaded frame address.
@@ -340,7 +365,7 @@ writeFrame (Just (LoadedObject _ bases)) _ value state
   | otherwise = globalBases (usePremise LoadedObjectFrameIsolation ((exposeFrame value state)
       {frameWords = if frameExposure state == PrivateFrame then frameWords state else keptWords state}))
   where
-    globalBases = if S.null bases then id else usePremise GlobalObjectStackSeparation
+    globalBases = if bases == noBases then id else usePremise GlobalObjectStackSeparation
 writeFrame _ _ value state = (exposeFrame value state) {frameWords = taintedWords state}
 
 -- Discarded frame words keep their saved-stack taint.
@@ -375,9 +400,9 @@ trackedAddress pointer = case pointer of
 readableAddress :: [SavedStackArray] -> Maybe Value -> Bool
 readableAddress arrays pointer = case pointer of
   Just (Constant absolute) -> not (readsSavedStack arrays absolute)
-  Just (GlobalObject bases) -> not (any (reachesSavedStacks arrays) bases)
+  Just (GlobalObject bases) -> not (basesReachSavedStacks arrays bases)
   Just (LoadedObject (Just displacement) bases) ->
-    not (any (`overlapsSavedStack` toInteger displacement) arrays || any (reachesSavedStacks arrays) bases)
+    not (any (`overlapsSavedStack` toInteger displacement) arrays || basesReachSavedStacks arrays bases)
   _ -> False
 
 mayReadSavedStack :: [SavedStackArray] -> Maybe Value -> Bool
@@ -400,6 +425,10 @@ reachesSavedStacks arrays base = or
   | array@(SavedStackArray (GuestAddress address) _ _ _) <- arrays
   , let start = toInteger address
         stride = toInteger (savedStackStride array) ]
+
+basesReachSavedStacks :: [SavedStackArray] -> Bases -> Bool
+basesReachSavedStacks arrays (Bases bases) = any (reachesSavedStacks arrays) bases
+basesReachSavedStacks arrays AnyBase = not (null arrays)
 
 readsSavedStack :: [SavedStackArray] -> Word32 -> Bool
 readsSavedStack arrays address = or
@@ -434,6 +463,16 @@ executeStep _ _ (ProgramCounter pc) (WritesStatus (A.StatusWrite _ target fields
       A.StatusFromImmediate _ -> Nothing
 executeStep _ _ _ (SignExtends (A.SignExtension _ destination source _ _)) state =
   pure (setRegister destination (derivedFrom [M.lookup source (registers state)]) state)
+-- Constant operands give the inserted constant; BFC inserts zeros.
+executeStep _ _ _ (InsertsBits (A.BitFieldInsert _ destination source lsb width)) state =
+  pure (setRegister destination inserted state)
+  where
+    mask = (((1 :: Word32) `shiftL` width) - 1) `shiftL` lsb
+    old = M.lookup destination (registers state)
+    new = maybe (Just (Constant 0)) (\register -> M.lookup register (registers state)) source
+    inserted = case (old, new) of
+      (Just (Constant kept), Just (Constant value)) -> Just (Constant ((kept .&. complement mask) .|. ((value `shiftL` lsb) .&. mask)))
+      _ -> derivedFrom [old, new]
 
 execute :: [SavedStackArray] -> M.Map ProgramCounter LiteralWord -> ProgramCounter -> A.Instruction -> FrameState -> Either String FrameState
 execute arrays literals (ProgramCounter pc) instruction state = case instruction of
@@ -472,7 +511,7 @@ execute arrays literals (ProgramCounter pc) instruction state = case instruction
           _ -> address
         readable = readableAddress arrays
         loadedObject pointer value
-          | isNothing value && frameExposure state == PrivateFrame && readable pointer = Just (LoadedObject (Just 0) S.empty)
+          | isNothing value && frameExposure state == PrivateFrame && readable pointer = Just (LoadedObject (Just 0) noBases)
           | isNothing value && mayReadSavedStack arrays pointer = Just SavedStack
           | otherwise = value
         loaded = if width `elem` [A.Word,A.Dual] then loadedObject actualAddress (loadWord actualAddress) else Nothing

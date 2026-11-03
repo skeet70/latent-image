@@ -79,6 +79,7 @@ cp -r experiments/hello experiments/my-feature
   ```
 
 - **`lib.rs`** (a `no_std` crate root) and/or **`*.c` and `*.S` files**. C includes [`experiments/sdk/experiment.h`](../experiments/sdk/experiment.h).
+- Or, instead of `lib.rs`, **`prelinked.json`**: a JSON string naming a relocatable object under `bazel-bin/`, for code with crate dependencies. Build that Bazel target before each run; the manifest records the object's SHA-256. [`experiments/embassy_phase1`](../experiments/embassy_phase1/) uses `//replacement/embassy_platform:embassy-platform-demo`.
 
 A handler receives the hooked function's registers at entry, `r0`-`r3` being its first four arguments. Whatever you write back is what the stock function sees; it always runs after your handler returns.
 

@@ -35,7 +35,7 @@ The mode dial's C position is a UI state of the shared application layer. Three 
 - `FUN_00d20098` has one caller, `0x00c2de74` (by the decompiled-call scan), which is handler slot `0x46` of the image-5 handler table at `0x00d01000` (`0x00d01118` holds `0x00c2de74`, exact-word table search).
 - The C record's own mode is stored in the record: `FUN_00643a38(0x317)` returns property `0xe9` converted from encoding 1 to 3 (decompiled; the function's dispatch `sub r0, r0, #0x302; cmp r0, #26; ldrls pc, [pc, r0, lsl #2]` with a 27-entry table at `0x00643a50` is byte-read), and property `0xe9` is what the custom-set routine writes into the destination slot (section 4). Property `0x16d`, the CUSTOM SET menu node's property (`0x00784040`, node header `X=16d`), has three table rows with stored codes `0, 1, 2` (table `0x0077532c`, byte-read), matching the three slot records the bank carries.
 
-**static-inference**: the custom setting is one of three slot records; the X-M1's single C position uses slot 0, and the record keeps the shooting mode it was saved from as property `0xe9`.
+**static-inference**: the custom setting is slot record 0, and the record keeps the shooting mode it was saved from as property `0xe9`. The property layer gives only slot 0 a record: slot selector 1 reads the ordinary block, and a selector-2 record at bank `+0x190` would overlap the RAM tail that boot fills from `0x0081b074` ([the settings manifest](settings-service-manifest-draft.md#live-settings-record-and-property-storage), E-SETTINGS-SERVICE-MANIFEST-150).
 
 ## 2. The stored record
 
@@ -68,7 +68,7 @@ The parity source length is the word at `0x00828570`, which is `0x2c` in the ima
 
 Write path: `0x006a8484` zeroes both regions and calls `FUN_006a83f4(record, [0x00828570], region_at_0x30, region_at_0x2c)`. `0x006a83f4` (`0x006a83fc` reads its length, `lsrs r9, r1, #2`) sets one bit of the `+0x2c` region per source word and XORs each source bit into the `+0x30` region's matching bit plane.
 
-Read path: `0x006a84d4` recomputes both regions into stack copies, compares each 4-byte region with `memcmp`, and on a difference walks the two syndromes to flip one byte in the RAM record, returning 0; an uncorrectable pattern returns 1. **byte-read** for both callbacks and `0x006a83f4`; the one-byte correction is inherited as the area-2 callback's behaviour and re-read here for the area-3 pair ([public record acceptance findings](adjustment-and-service-interfaces.md#record-acceptance-and-custom-continuation)).
+Read path: `0x006a84d4` recomputes both regions into stack copies, compares each 4-byte region with `memcmp`, and on a difference flips the one data bit selected by exactly one mismatched column-parity bit and exactly one mismatched row-parity bit in the RAM record, returning 0; any other pattern, including a single error in the parity words, returns 1 with the record unchanged. **byte-read** for both callbacks and `0x006a83f4` ([the settings manifest](settings-service-manifest-draft.md#area-3-records-validation-and-recovery), E-SETTINGS-SERVICE-MANIFEST-150).
 
 ### 2.3 How the record reaches RAM
 

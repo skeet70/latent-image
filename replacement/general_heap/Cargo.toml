@@ -1,0 +1,33 @@
+[package]
+name = "xm1-general-heap"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src.rs"
+crate-type = ["rlib", "staticlib"]
+
+[[bin]]
+name = "heap-bridge-replay"
+path = "replay.rs"
+required-features = ["host-replay"]
+
+[features]
+default = []
+host = []
+recipe-arena = []
+host-replay = ["host", "dep:serde", "dep:serde_json", "dep:sha2"]
+
+[dependencies]
+rlsf = { version = "=0.2.3", default-features = false }
+serde = { version = "=1.0.229", features = ["derive"], optional = true }
+serde_json = { version = "=1.0.154", optional = true }
+sha2 = { version = "=0.10.9", optional = true }
+
+[profile.release]
+opt-level = "z"
+panic = "abort"
+codegen-units = 1
+debug = false
+lto = false

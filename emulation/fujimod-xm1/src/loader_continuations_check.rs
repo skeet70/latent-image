@@ -10,6 +10,19 @@ use std::{collections::BTreeMap, fs::File, io::Read, path::{Component, Path}};
 mod loader_reset_check;
 #[path="loader_timer_check.rs"]
 mod loader_timer_check;
+#[path="loader_shared_check.rs"]
+pub(super) mod shared;
+
+#[derive(Clone,Copy)]
+struct RouteView<'a> {
+    origin:Option<super::EventId>,events:&'a [Event],calls:&'a [super::Call],snapshots:&'a [super::Snapshot],
+    pulses:&'a [super::Pulse],instructions:super::Count,menu:&'a Result<Option<[u32;3]>,String>,timer_transactions:&'a FileBinding,
+}
+impl<'a> From<&'a Report> for RouteView<'a> {
+    fn from(report:&'a Report)->Self {Self {origin:report.origin,events:&report.events,calls:&report.calls,snapshots:&report.snapshots,
+        pulses:&report.pulses,instructions:report.instructions,menu:&report.menu,timer_transactions:&report.timer_transactions}}
+}
+impl<'a> From<&RouteView<'a>> for RouteView<'a> {fn from(view:&RouteView<'a>)->Self {*view}}
 const CANONICAL_RUN:&[u8]=include_bytes!("../data/xm1-150.json");
 
 #[derive(Clone,Copy,Deserialize,Serialize)]
@@ -38,7 +51,7 @@ pub(super) fn hit_matches(hit:&Hit,pc:Guest,core:Core,count:super::Count,registe
 }
 #[derive(Serialize)]
 #[serde(rename_all="kebab-case")]
-enum Scope { CanonicalNaturalObservation, OwnedNaturalObservation, PlainRetainedNaturalObservation, PlainOwnedNaturalObservation }
+enum Scope { CanonicalNaturalObservation, OwnedNaturalObservation, PlainRetainedNaturalObservation, PlainOwnedNaturalObservation, Image5RetainedNaturalObservation, Image5OwnedNaturalObservation }
 #[derive(Serialize)]
 pub(super) struct Verification {schema:u32,scope:Scope,receipt:Digest,events:usize,loader_calls:usize,task_calls:usize,snapshots:usize,source_differences:usize}
 fn require(condition:bool,message:&str)->Result<(),String>{if condition{Ok(())}else{Err(message.into())}}
@@ -79,14 +92,15 @@ pub(super) fn snapshot(root:&Path,sample:&super::Snapshot,catalog:&Catalog)->Res
     if matches!(sample.resource,Resource::LoaderA|Resource::LoaderB){require(sample.expected_equal,"loader carrier differs from canonical source")?;}
     Ok(())
 }
-pub(super) fn event<'a>(report:&'a Report,id:super::EventId)->Result<&'a Event,String>{report.events.get(id.0).filter(|event|event.id.0==id.0).ok_or_else(||"call event reference absent".into())}
+pub(super) fn event<'a>(report:impl Into<RouteView<'a>>,id:super::EventId)->Result<&'a Event,String>{let report=report.into();report.events.get(id.0).filter(|event|event.id.0==id.0).ok_or_else(||"call event reference absent".into())}
 pub(super) fn in_class(row:&super::Row,classes:&[super::Class])->Result<bool,String>{
     let end=u64::from(row.physical.0).checked_add(row.size).ok_or("access extent overflow")?;require(row.size>0 && end<=1u64<<32,"access extent is not a positive 32-bit span")?;
     Ok(classes.iter().any(|class|class.kinds.contains(&row.source)&&u64::from(row.physical.0)<class.range[1]&&class.range[0]<end))
 }
 pub(super) fn guarded(classes:&[super::Class],span:[u64;2],fetch:bool)->bool{classes.iter().any(|class|class.range==span&&[Access::CpuWrite,Access::HostWrite,Access::ModelBusWrite].iter().all(|kind|class.kinds.contains(kind))&&(!fetch||class.kinds.contains(&Access::CpuFetch)))}
 
-fn route(report:&Report)->Result<(),String>{
+fn route<'a>(report:impl Into<RouteView<'a>>)->Result<(),String>{
+    let report=report.into();
     require(report.pulses.len()==15,"canonical ADC pulse count differs")?;let mut position=80_000_000u64;
     for (index,pulse) in report.pulses.iter().enumerate(){
         let expected=match index{0..=11=>Key::Up,12|13=>Key::Ok,_=>Key::Menu};if index==14{position=position.checked_add(40_000_000).ok_or("menu-settle endpoint overflows")?;}
@@ -99,25 +113,31 @@ fn route(report:&Report)->Result<(),String>{
 }
 
 struct LoaderBounds<'a> {entry:&'a Event,transfer:&'a Event,copy:Guest,code:[u64;2],frame:[u64;2],core:Core}
-fn loader_bounds(report:&Report,base:Guest,frame:Guest,core:Core)->Result<LoaderBounds<'_>,String>{
+fn loader_bounds<'a>(report:impl Into<RouteView<'a>>,base:Guest,frame:Guest,core:Core)->Result<LoaderBounds<'a>,String>{
+    loader_bounds_until(report,base,frame,core,8_000_000)
+}
+fn loader_bounds_until<'a>(report:impl Into<RouteView<'a>>,base:Guest,frame:Guest,core:Core,deadline:u64)->Result<LoaderBounds<'a>,String>{
+    let report=report.into();
     let pc=Guest(base.0+0x9ac);let entry=report.events.iter().find(|event|event.pc==pc&&event.core==core).ok_or("loader origin absent")?;
     let transfer=report.events.iter().find(|event|event.pc.0==base.0+0x36e8&&event.core==core).ok_or("loader frame endpoint absent")?;
-    require(entry.instructions.0<transfer.instructions.0&&transfer.instructions.0<=8_000_000,"loader lifetime is outside the prefix watch")?;
+    require(entry.instructions.0<transfer.instructions.0&&transfer.instructions.0<=deadline,"loader lifetime is outside its bounded watch")?;
     Ok(LoaderBounds {entry,transfer,copy:base,code:[u64::from(pc.0),u64::from(pc.0)+340],frame:[u64::from(frame.0),u64::from(frame.0)+16],core})
 }
 fn loader_copy(row:&super::Row,base:Guest)->bool{
     row.source==Access::ModelBusWrite&&row.address==base&&row.physical==base&&row.size==0x20000&&row.core.is_none()&&row.pc.is_none()&&row.instructions.is_none()&&row.value.is_none()
 }
 
-fn projections(report:&Report,plain_program:Option<&super::plain_program::Program>)->Result<(),String>{
+fn projections<'a>(report:impl Into<RouteView<'a>>,plain_program:Option<&super::plain_program::Program>,image5_program:Option<&super::image5_program::Program>)->Result<(),String>{
+    let report=report.into();
     let plain_return=plain_program.map_or(Guest(0x6a9934),|program|program.return_pc());
-    for pc in [Guest(0x6a9840),plain_return]{require(report.events.iter().any(|event|event.pc==pc),"required producer return boundary absent")?;}
+    let (fill_return,producer_return)=super::image5_boundaries(image5_program);
+    for pc in [producer_return,plain_return]{require(report.events.iter().any(|event|event.pc==pc),"required producer return boundary absent")?;}
     let mut required=Vec::new();let mut image5=false;let mut plain=[false;3];
-    for observed in &report.events {
+    for observed in report.events {
         let resources:&[Resource]=match observed.pc.0{
             0x409ac=>&[Resource::LoaderA],0xd09ac if report.origin.is_some_and(|id|id.0==observed.id.0)=>&[Resource::LoaderA,Resource::LoaderB],0xd09ac=>&[Resource::LoaderB],
-            0x6a8c04|0x6a9734=>&[Resource::Image5Bss],
-            0x6a9840=>&[Resource::Image5,Resource::Image5Bss],pc if pc==plain_return.0=>&[Resource::Plain],
+            0x6a8c04=>&[Resource::Image5Bss],pc if Some(Guest(pc))==fill_return=>&[Resource::Image5Bss],
+            pc if pc==producer_return.0=>&[Resource::Image5,Resource::Image5Bss],pc if pc==plain_return.0=>&[Resource::Plain],
             0xd985a4 if !image5=>{image5=true;&[Resource::Image5,Resource::Image5Bss,Resource::Plain]},_=>&[],
         };
         required.extend(resources.iter().map(|resource|(observed.id.0,*resource)));
@@ -134,16 +154,18 @@ fn projections(report:&Report,plain_program:Option<&super::plain_program::Progra
 
 pub(super) fn check(root:&Path,analysis:&Path)->Result<Verification,String>{Ok(verified(root,analysis)?.verification)}
 
-struct Verified {report:Report,program:Program,verification:Verification,publications:Vec<Publication>,loader_effects:Vec<LoaderEffect>,reset:loader_reset_check::Reset,timer:loader_timer_check::Admission,plain:Option<super::plain_check::Admission>}
+struct Verified {report:Report,program:Program,verification:Verification,publications:Vec<Publication>,loader_effects:Vec<LoaderEffect>,reset:loader_reset_check::Reset,timer:loader_timer_check::Admission,plain:Option<super::plain_check::Admission>,image5:Option<super::image5_check::Admission>}
 fn verified(root:&Path,analysis:&Path)->Result<Verified,String>{verified_receipt(root,analysis,read(&root.join("continuations.json"))?)}
 fn verified_receipt(root:&Path,analysis:&Path,receipt:Vec<u8>)->Result<Verified,String>{
     let report:Report=serde_json::from_slice(&receipt).map_err(|error|error.to_string())?;
     require(report.schema==3&&report.error.is_none()&&report.machine_failure.is_none(),"observation did not complete")?;
     let mut catalog=Catalog::open(analysis)?;
     let plain_program=report.plain.as_ref().map(|plain|super::plain_program::Program::from_binding(plain.binding.clone(),root,&mut catalog)).transpose()?;
-    require(plain_program.is_none()||matches!(report.program,super::loader_orchestration_owned::ProgramBinding::Retained),"plain and loader ownership are not a qualified composition")?;
+    let image5_program=report.image5.as_ref().map(|image5|super::image5_program::Program::from_binding(image5.binding.clone(),root,&mut catalog)).transpose()?;
+    require((plain_program.is_none()&&image5_program.is_none())||matches!(report.program,super::loader_orchestration_owned::ProgramBinding::Retained),"plain and loader ownership are not a qualified composition")?;
+    require(plain_program.is_none()||image5_program.is_none(),"plain and image5 witnesses are not a qualified composition")?;
     let program=Program::from_binding(report.program.clone(),root,&mut catalog)?;let catalog=&catalog;
-    let expected_update=plain_program.as_ref().map_or(program.update(),|plain|plain.update());
+    let expected_update=if let Some(plain)=&plain_program {plain.update()} else if let Some(image5)=&image5_program {image5.update()} else {program.update()};
     require(report.identity.update.as_str()==expected_update&&report.identity.run.as_str()=="efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"&&report.identity.rom.as_str()=="4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be","canonical input identity differs")?;
     require(report.identity.sources.len()==catalog.0.len(),"source catalog extent differs")?;
     for image in &catalog.0 {require(report.identity.sources.iter().filter(|source|source.kind==image.binding.kind&&source.start==image.binding.start&&source.bytes.0==image.binding.bytes.0&&source.sha256.as_str()==image.binding.sha256.as_str()).count()==1,"source catalog binding differs")?;}
@@ -172,6 +194,7 @@ fn verified_receipt(root:&Path,analysis:&Path,receipt:Vec<u8>)->Result<Verified,
         require(super::DIAGNOSTICS.iter().all(|&(start,end)|physical<start||physical>=end),"diagnostic entry lies in the claimed natural route")?;
         require(program.execution_allowed(event.pc),"loader carrier execution point is not admitted")?;
         if let Some(plain)=&plain_program{require(plain.execution_allowed(event.pc),"plain producer execution point is not admitted")?;}
+        if let Some(image5)=&image5_program{require(image5.execution_allowed(event.pc),"image5 producer execution point is not admitted")?;}
         if let Some(side)=carrier_side(event.pc){require(event.core==side.core(),"loader carrier entry core differs")?;}
         require(event.pc.0!=0x69d2d8&&(!matches!(event.pc.0,0x40aa8|0xd0aa8)||program.owned()),"source nonreturning boundary was reached")?;
     }
@@ -243,12 +266,20 @@ fn verified_receipt(root:&Path,analysis:&Path,receipt:Vec<u8>)->Result<Verified,
     }
     require(missing_fetches.is_empty(),"observed loader boundary lacks raw carrier fetch")?;
     let timer=loader_timer_check::admit(root,&report,&timer_rows)?;
+    let (loader_calls,task_calls,loader_effects)=semantic_calls(root,RouteView::from(&report),catalog,&publications,plain_program.as_ref(),image5_program.as_ref())?;
+    let scope=match (&plain_program,&image5_program){(Some(plain),_) if plain.owned()=>Scope::PlainOwnedNaturalObservation,(Some(_),_)=>Scope::PlainRetainedNaturalObservation,(None,Some(image5)) if image5.owned()=>Scope::Image5OwnedNaturalObservation,(None,Some(_))=>Scope::Image5RetainedNaturalObservation,(None,None) if program.owned()=>Scope::OwnedNaturalObservation,(None,None)=>Scope::CanonicalNaturalObservation};
+    let verification=Verification {schema:4,scope,receipt:Digest::of(&receipt),events:report.events.len(),loader_calls,task_calls,snapshots:report.snapshots.len(),source_differences:report.snapshots.iter().filter(|sample|!sample.expected_equal).count()};
+    let plain=plain_program.as_ref().map(|plain|super::plain_check::admit(root,&report,catalog,plain)).transpose().map_err(|error|format!("{error:?}"))?;
+    let image5=image5_program.as_ref().map(|image5|super::image5_check::admit(root,&report,catalog,image5)).transpose().map_err(|error|format!("{error:?}"))?;
+    Ok(Verified {report,program,verification,publications,loader_effects,reset,timer,plain,image5})
+}
+fn semantic_calls(root:&Path,report:RouteView<'_>,catalog:&Catalog,publications:&[Publication],plain_program:Option<&super::plain_program::Program>,image5_program:Option<&super::image5_program::Program>)->Result<(usize,usize,Vec<LoaderEffect>),String>{
     let mut loader_calls=0;let mut task_calls=0;
-    for call in &report.calls {
+    for call in report.calls {
         let entered=event(&report,call.entry.ok_or("observed call lacks its actual entry")?)?;
         require(entered.pc==call.target&&entered.core==call.core&&entered.registers.sp==call.sp&&entered.registers.lr==call.continuation,"callee entry context differs")?;
         if let Some(before)=call.before {let before=event(&report,before)?;require(before.core==call.core&&before.registers.sp==call.sp&&before.pc.0.checked_add(4)==Some(call.continuation.0)&&branch(before,catalog)?==call.target&&before.instructions.0<=entered.instructions.0&&before.registers.r==entered.registers.r&&before.registers.cpsr==entered.registers.cpsr,"source call/target argument context or chronology differs")?;
-            let expected_kind=match before.pc.0{0xd985c0=>CallKind::Image5Wait,0x69d2e0=>CallKind::Image5Entry,0xd9858c=>CallKind::Image5Constructor,0x73b554=>CallKind::PlainProducer,0x73be5c=>CallKind::PlainHook,0x73beac=>CallKind::Deferred,pc if carrier_side(Guest(pc)).is_some()=>CallKind::Loader,pc if (0xd985a4..0xd986ac).contains(&pc)=>CallKind::Image5Service,pc if (0x6a9844..0x6a9934).contains(&pc)=>CallKind::PlainService,_=>return Err("call origin is outside the observed source boundaries".into())};require(call.kind==expected_kind,"call kind does not match its raw source boundary")?;
+            let expected_kind=match before.pc.0{0xd985c0=>CallKind::Image5Wait,0x69d2e0=>CallKind::Image5Entry,0xd9858c=>CallKind::Image5Constructor,0x73b554=>CallKind::PlainProducer,0x73be5c=>CallKind::PlainHook,0x73beac=>CallKind::Deferred,0x73b4ac if image5_program.is_some()=>CallKind::Image5Producer,pc if carrier_side(Guest(pc)).is_some()=>CallKind::Loader,pc if (0xd985a4..0xd986ac).contains(&pc)=>CallKind::Image5Service,pc if (0x6a9844..0x6a9934).contains(&pc)=>CallKind::PlainService,pc if image5_program.as_ref().is_some_and(|image5|image5.is_call_site(Guest(pc)))=>CallKind::Image5ProducerService,_=>return Err("call origin is outside the observed source boundaries".into())};require(call.kind==expected_kind,"call kind does not match its raw source boundary")?;
             if call.kind==CallKind::Loader {
                 loader_calls+=1;let side=carrier_side(before.pc).ok_or("loader call origin differs")?;let sp=side.frame().0;
                 require(call.core==side.core()&&before.registers.sp.0==sp&&before.registers.r[11]==sp+12&&before.registers.cpsr&0xff==0xd3,"canonical loader caller context differs")?;
@@ -267,10 +298,11 @@ fn verified_receipt(root:&Path,analysis:&Path,receipt:Vec<u8>)->Result<Verified,
     }
     let loader_effects=loader_semantics(&report)?;bind_publications(&report,&publications)?;
     let mut constructors=Vec::new();
-    let plain_calls=plain_program.as_ref().map(|plain|plain.call_sites());
-    for observed in &report.events {
+    let plain_calls=plain_program.map(|plain|plain.call_sites());
+    for observed in report.events {
         let plain_source_call=if let Some(calls)=&plain_calls{calls.iter().any(|call|call.site==observed.pc)}else{(0x6a9844..0x6a9934).contains(&observed.pc.0)&&branch(observed,catalog).is_ok()};
-        let counted=plain_source_call||((carrier_side(observed.pc).is_some()||(0xd985a4..0xd986ac).contains(&observed.pc.0)||matches!(observed.pc.0,0x73b554|0x69d2e0|0xd9858c|0x73be5c|0x73beac))&&branch(observed,catalog).is_ok());
+        let image5_source_call=image5_program.is_some_and(|image5|image5.is_call_site(observed.pc)||observed.pc==super::image5_runtime::CALLER);
+        let counted=plain_source_call||image5_source_call||((carrier_side(observed.pc).is_some()||(0xd985a4..0xd986ac).contains(&observed.pc.0)||matches!(observed.pc.0,0x73b554|0x69d2e0|0xd9858c|0x73be5c|0x73beac))&&branch(observed,catalog).is_ok());
         if counted{require(report.calls.iter().filter(|call|call.before.is_some_and(|id|id.0==observed.id.0)).count()==1,"observed source call was omitted or repeated")?;}
         if observed.pc.0==0x725dd8{require(report.calls.iter().filter(|call|call.kind==CallKind::Task&&call.entry.is_some_and(|id|id.0==observed.id.0)).count()==1,"observed task entry was omitted or repeated")?;}
         if observed.pc.0==0xd9858c{constructors.push(branch(observed,catalog)?.0);}
@@ -295,15 +327,12 @@ fn verified_receipt(root:&Path,analysis:&Path,receipt:Vec<u8>)->Result<Verified,
         let publisher=report.calls.iter().find(|call|call.kind==CallKind::Loader&&call.core==core&&call.target==Service::PublishCallback.address(if core==Core::Primary{Side::LoaderA}else{Side::LoaderB})).ok_or("callback publisher absent")?;
         let callback=event(&report,publisher.returned.ok_or("callback publisher return absent")?)?;require(at(callback,cell)?==0x69cc6c,"committed diagnostic callback differs")?;
     }
-    projections(&report,plain_program.as_ref())?;
-    for sample in &report.snapshots {require(sample.event.0<report.events.len(),"snapshot event absent")?;snapshot(root,sample,catalog)?;}
+    projections(report,plain_program,image5_program)?;
+    for sample in report.snapshots {require(sample.event.0<report.events.len(),"snapshot event absent")?;snapshot(root,sample,catalog)?;}
     require(report.calls.iter().filter(|call|call.kind==CallKind::Image5Entry).count()==1,"image5 header call extent differs")?;
     let setters:Vec<_>=report.calls.iter().filter(|call|call.kind==CallKind::Image5Service&&call.target.0==0x69cf84).collect();require(setters.len()==1,"diagnostic callback setter call census differs")?;
     let setter=event(&report,setters[0].entry.ok_or("setter entry absent")?)?;let setter_return=event(&report,setters[0].returned.ok_or("setter return absent")?)?;require(setter.registers.r[0]==0xed4a8c&&at(setter_return,0x89f794)?==0xed4a8c,"installed diagnostic callback or committed cell differs")?;
-    let scope=match &plain_program{Some(plain) if plain.owned()=>Scope::PlainOwnedNaturalObservation,Some(_)=>Scope::PlainRetainedNaturalObservation,None if program.owned()=>Scope::OwnedNaturalObservation,None=>Scope::CanonicalNaturalObservation};
-    let verification=Verification {schema:4,scope,receipt:Digest::of(&receipt),events:report.events.len(),loader_calls,task_calls,snapshots:report.snapshots.len(),source_differences:report.snapshots.iter().filter(|sample|!sample.expected_equal).count()};
-    let plain=plain_program.as_ref().map(|plain|super::plain_check::admit(root,&report,catalog,plain)).transpose().map_err(|error|format!("{error:?}"))?;
-    Ok(Verified {report,program,verification,publications,loader_effects,reset,timer,plain})
+    Ok((loader_calls,task_calls,loader_effects))
 }
 
 fn carrier_side(pc:Guest)->Option<Side>{
@@ -331,7 +360,8 @@ fn sequence(side:Side)->&'static [LoaderStep]{
 struct LiveInputs {r0:Option<u32>,r1:Option<u32>}
 #[derive(Serialize, PartialEq, Eq)]
 struct LoaderEffect {side:Side,step:LoaderStep,inputs:LiveInputs,saved:[u32;4],returned:bool,dispatcher_result:Option<u32>}
-fn loader_semantics(report:&Report)->Result<Vec<LoaderEffect>,String>{
+fn loader_semantics<'a>(report:impl Into<RouteView<'a>>)->Result<Vec<LoaderEffect>,String>{
+    let report=report.into();
     let mut effects=Vec::new();
     for side in [Side::LoaderA,Side::LoaderB]{
         let mut calls:Vec<_>=report.calls.iter().filter(|call|call.kind==CallKind::Loader&&call.core==side.core()).collect();
@@ -367,11 +397,16 @@ fn loader_semantics(report:&Report)->Result<Vec<LoaderEffect>,String>{
 const PUBLICATIONS:[[u64;2];21]=[[0x61c000,0x61c220],[0x40000,0x40020],[0xd0000,0xd0020],[0x4f10c,0x4f118],[0xdf0cc,0xdf0d8],[0x89f794,0x89f798],[0xa00c4,0xa00c8],[0x5927c,0x59280],[0xe923c,0xe9240],[0x96bd20,0x96bd28],[0x89f8ac,0x89f8b0],[0x944440,0x944464],[0x914834,0x914838],[0x972e88,0x972e94],[0x14c100c,0x14c1010],[0x14c1018,0x14c101c],[0x14c113c,0x14c1140],[0x9662d4,0x9662d8],[0x89f784,0x89f788],[0x89f78c,0x89f790],[0xa0800,0xa0838]];
 #[derive(Serialize, PartialEq, Eq)]
 #[serde(tag="kind",content="source",rename_all="kebab-case")]
-enum Writer { Carrier(Side),Retained(Guest),Untimed }
+enum Writer { Carrier(Side),Component(StartupComponent),Retained(Guest),Untimed }
+/// Startup components the joined role replaces in place; the shared route names their writers by span, not by provider PC.
+#[derive(Clone,Copy,Debug,Serialize,PartialEq,Eq)]
+#[serde(rename_all="kebab-case")]
+enum StartupComponent { Dispatcher,Installer }
 #[derive(Serialize, PartialEq, Eq)]
 struct Publication {source:Access,address:Guest,physical:Guest,size:u64,core:Option<Core>,value:Option<u64>,writer:Writer,#[serde(skip)]clock:Option<super::Count>}
 
-fn bind_publications(report:&Report,writes:&[Publication])->Result<(),String>{
+fn bind_publications<'a>(report:impl Into<RouteView<'a>>,writes:&[Publication])->Result<(),String>{
+    let report=report.into();
     let observed=|core,cell,value,low,high|writes.iter().any(|write|write.source==Access::CpuWrite&&write.core==Some(core)&&write.physical==Guest(cell)&&write.size==4&&write.value==Some(value)&&write.clock.is_some_and(|clock|low<clock.0&&clock.0<=high));
     for side in [Side::LoaderA,Side::LoaderB]{
         let call=|service:Service|report.calls.iter().find(|call|call.kind==CallKind::Loader&&call.core==side.core()&&call.target==service.address(side)).ok_or("required loader service absent");
@@ -431,7 +466,8 @@ enum ConsumerInput {
 }
 #[derive(Serialize)]
 struct CallEffect<'a> {core:Core,kind:CallKind,target:Guest,source:Option<Guest>,input:ConsumerInput,entry:BoundaryEffect<'a>,returned:BoundaryEffect<'a>}
-fn consumer_calls<'a>(report:&'a Report,timer:&'a loader_timer_check::Admission)->Result<Vec<CallEffect<'a>>,String>{
+fn consumer_calls<'a>(report:impl Into<RouteView<'a>>,timer:&'a loader_timer_check::Admission)->Result<Vec<CallEffect<'a>>,String>{
+    let report=report.into();
     let mut effects=Vec::new();
     for core in [Core::Primary,Core::Secondary]{
         let mut calls:Vec<_>=report.calls.iter().filter(|call|call.core==core&&call.kind!=CallKind::Loader).collect();
@@ -455,7 +491,8 @@ fn consumer_calls<'a>(report:&'a Report,timer:&'a loader_timer_check::Admission)
 }
 #[derive(Serialize)]
 struct TransferEffect<'a> {side:Side,selected_task:Guest,selected_sp:Guest,saved_context:ScalarEffect<'a>,creation:ScalarEffect<'a>,entry:Guest,argument:u32,cleanup:Guest}
-fn transfers<'a>(report:&'a Report,timer:&'a loader_timer_check::Admission)->Result<Vec<TransferEffect<'a>>,String>{
+fn transfers<'a>(report:impl Into<RouteView<'a>>,timer:&'a loader_timer_check::Admission)->Result<Vec<TransferEffect<'a>>,String>{
+    let report=report.into();
     [Side::LoaderA,Side::LoaderB].into_iter().map(|side|{
         let stopped=|offset|report.events.iter().find(|observed|observed.pc==Guest(side.base().0+offset)&&observed.core==side.core()).ok_or("first task transfer boundary absent");
         let handoff=stopped(0x36e8)?;let jump=stopped(0x3758)?;
@@ -472,19 +509,22 @@ struct PublicationEffect<'a> {source:Access,address:Guest,physical:Guest,size:u6
 #[derive(Serialize)]
 struct SemanticEffects<'a> {loaders:&'a [LoaderEffect],calls:Vec<CallEffect<'a>>,transfers:Vec<TransferEffect<'a>>,publications:BTreeMap<u32,Vec<PublicationEffect<'a>>>,resources:Vec<ResourceEffect<'a>>,menu:[u32;3]}
 fn semantic_effects(observed:&Verified)->Result<SemanticEffects<'_>,String>{
+    projected_effects((&observed.report).into(),&observed.loader_effects,&observed.publications,&observed.timer)
+}
+fn projected_effects<'a>(report:RouteView<'a>,loaders:&'a [LoaderEffect],writes:&'a [Publication],timer:&'a loader_timer_check::Admission)->Result<SemanticEffects<'a>,String>{
     let mut publications:BTreeMap<u32,Vec<PublicationEffect<'_>>>=BTreeMap::new();
-    for write in &observed.publications{
-        let relation=observed.timer.write(write);
+    for write in writes{
+        let relation=timer.write(write);
         let value=write.value.map(|value|relation.map_or(ScalarValue::Exact(value),ScalarValue::TimerElapsed));
         publications.entry(write.physical.0).or_default().push(PublicationEffect {source:write.source,address:write.address,physical:write.physical,size:write.size,core:write.core,value,writer:&write.writer});
     }
-    let mut snapshots:Vec<_>=observed.report.snapshots.iter().filter(|sample|!matches!(sample.resource,Resource::LoaderA|Resource::LoaderB)).collect();
+    let mut snapshots:Vec<_>=report.snapshots.iter().filter(|sample|!matches!(sample.resource,Resource::LoaderA|Resource::LoaderB)).collect();
     snapshots.sort_unstable_by_key(|sample|(sample.event.0,sample.resource as u8));
     let resources=snapshots.into_iter().map(|sample|{
-        let boundary=event(&observed.report,sample.event)?;
+        let boundary=event(report,sample.event)?;
         Ok(ResourceEffect {core:boundary.core,pc:boundary.pc,resource:sample.resource,physical_digest:&sample.files[2].sha256,expected_equal:sample.expected_equal,first_difference:sample.first_difference})
     }).collect::<Result<_,String>>()?;
-    Ok(SemanticEffects {loaders:&observed.loader_effects,calls:consumer_calls(&observed.report,&observed.timer)?,transfers:transfers(&observed.report,&observed.timer)?,publications,resources,menu:[1,5,2]})
+    Ok(SemanticEffects {loaders,calls:consumer_calls(report,timer)?,transfers:transfers(report,timer)?,publications,resources,menu:[1,5,2]})
 }
 #[derive(Serialize)]
 #[serde(rename_all="kebab-case")]
@@ -550,19 +590,49 @@ pub(super) fn compare_plain(retained_root:&Path,owned_root:&Path,analysis:&Path,
     comparison.accepted=result.is_ok();comparison.refusal=result.as_ref().err().cloned();
     fujimod_xm1::bridge::write(&output.join("plain-comparison.json"),&serde_json::to_vec_pretty(&comparison).map_err(|error|error.to_string())?)?;result
 }
+/// Rebinds the trace to a control's changed events and persists the control receipt.
+fn full_consumer_refuses(root:&Path,analysis:&Path,case:&Path,report:&mut Report)->Result<bool,String>{
+    let mut trace:Vec<Hit>=serde_json::from_slice(&read(&artifact(root,&report.trace)?)?).map_err(|error|error.to_string())?;
+    require(trace.len()==report.events.len(),"control trace event census differs")?;
+    for (hit,event) in trace.iter_mut().zip(&report.events) {
+        hit.address=HexWord(event.pc.0);hit.core=event.core;hit.instructions=event.instructions;hit.cpsr=event.registers.cpsr;hit.sp=HexWord(event.registers.sp.0);hit.lr=HexWord(event.registers.lr.0);
+        hit.registers=event.registers.r.iter().enumerate().map(|(index,&value)|(RegisterNumber(index as u8),HexWord(value))).collect();
+    }
+    report.trace=persist_bound(case,"control-trace.json",&serde_json::to_vec_pretty(&trace).map_err(|error|error.to_string())?)?;
+    let bytes=serde_json::to_vec_pretty(report).map_err(|error|error.to_string())?;fujimod_xm1::bridge::write(&case.join("continuations.json"),&bytes)?;
+    Ok(verified_receipt(case,analysis,bytes).is_err())
+}
 pub(super) fn controls_plain(root:&Path,analysis:&Path,output:&Path)->Result<(),String> {
     let baseline=verified(root,analysis)?;require(baseline.plain.is_some(),"plain controls need an admitted plain observation")?;
-    super::plain_check::controls(root,analysis,output,|case,report|{
-        let mut trace:Vec<Hit>=serde_json::from_slice(&read(&artifact(root,&report.trace)?)?).map_err(|error|error.to_string())?;
-        require(trace.len()==report.events.len(),"control trace event census differs")?;
-        for (hit,event) in trace.iter_mut().zip(&report.events) {
-            hit.address=HexWord(event.pc.0);hit.core=event.core;hit.instructions=event.instructions;hit.cpsr=event.registers.cpsr;hit.sp=HexWord(event.registers.sp.0);hit.lr=HexWord(event.registers.lr.0);
-            hit.registers=event.registers.r.iter().enumerate().map(|(index,&value)|(RegisterNumber(index as u8),HexWord(value))).collect();
-        }
-        report.trace=persist_bound(case,"control-trace.json",&serde_json::to_vec_pretty(&trace).map_err(|error|error.to_string())?)?;
-        let bytes=serde_json::to_vec_pretty(report).map_err(|error|error.to_string())?;fujimod_xm1::bridge::write(&case.join("continuations.json"),&bytes)?;
-        Ok(verified_receipt(case,analysis,bytes).is_err())
-    })
+    super::plain_check::controls(root,analysis,output,|case,report|full_consumer_refuses(root,analysis,case,report))
+}
+#[derive(Serialize)]
+pub(super) struct Image5Verification { baseline:Verification, image5:super::image5_check::Admission }
+pub(super) fn check_image5(root:&Path,analysis:&Path)->Result<Image5Verification,String> {
+    let observed=verified(root,analysis)?;
+    Ok(Image5Verification {baseline:observed.verification,image5:observed.image5.ok_or("image5 witness is missing")?})
+}
+#[derive(Serialize)]
+struct Image5Comparison {schema:u32,accepted:bool,retained:FileBinding,owned:FileBinding,retained_admission:Option<super::image5_check::Admission>,owned_admission:Option<super::image5_check::Admission>,refusal:Option<String>}
+pub(super) fn compare_image5(retained_root:&Path,owned_root:&Path,analysis:&Path,output:&Path)->Result<(),String> {
+    require(!output.try_exists().map_err(|error|error.to_string())?,"image5 comparison output already exists")?;
+    let retained_bytes=read(&retained_root.join("continuations.json"))?;let owned_bytes=read(&owned_root.join("continuations.json"))?;
+    std::fs::create_dir(output).map_err(|error|error.to_string())?;
+    let mut comparison=Image5Comparison {schema:1,accepted:false,retained:persist_bound(output,"retained.json",&retained_bytes)?,owned:persist_bound(output,"owned.json",&owned_bytes)?,retained_admission:None,owned_admission:None,refusal:None};
+    let result=(||{
+        let retained=verified_receipt(retained_root,analysis,retained_bytes)?;let owned=verified_receipt(owned_root,analysis,owned_bytes)?;
+        require(retained.report.identity.run.as_str()==owned.report.identity.run.as_str()&&retained.report.identity.rom.as_str()==owned.report.identity.rom.as_str()&&retained.report.identity.executable.as_str()==owned.report.identity.executable.as_str(),"image5 pair reset or observer identity differs")?;
+        loader_reset_check::compare(&retained.reset,&owned.reset)?;
+        let retained=retained.image5.ok_or("retained image5 evidence is missing")?;let owned=owned.image5.ok_or("owned image5 evidence is missing")?;
+        let result=super::image5_check::compare(&retained,&owned).map_err(|error|format!("{error:?}"));
+        comparison.retained_admission=Some(retained);comparison.owned_admission=Some(owned);result
+    })();
+    comparison.accepted=result.is_ok();comparison.refusal=result.as_ref().err().cloned();
+    fujimod_xm1::bridge::write(&output.join("image5-comparison.json"),&serde_json::to_vec_pretty(&comparison).map_err(|error|error.to_string())?)?;result
+}
+pub(super) fn controls_image5(root:&Path,analysis:&Path,output:&Path)->Result<(),String> {
+    let baseline=verified(root,analysis)?;require(baseline.image5.is_some(),"image5 controls need an admitted image5 observation")?;
+    super::image5_check::controls(root,analysis,output,|case,report|full_consumer_refuses(root,analysis,case,report))
 }
 
 #[cfg(all(test,unix))]
@@ -585,7 +655,7 @@ mod tests {
     impl Drop for Temporary {fn drop(&mut self){let _=std::fs::remove_dir_all(&self.0);}}
     fn synthetic_unqualified_report()->Report{
         let digest=Digest::of(b"synthetic unqualified loader observation");
-        Report {schema:1,program:ProgramBinding::Retained,plain:None,origin:None,identity:InputIdentity {run:digest.clone(),update:digest.clone(),update_file:FileBinding {path:"input-update.DAT".into(),sha256:digest.clone()},rom:digest.clone(),executable:digest.clone(),sources:Vec::new()},checkpoint:digest.clone(),instructions:Count(0),menu:Ok(Some([1,5,2])),error:None,machine_failure:None,events:Vec::new(),calls:Vec::new(),snapshots:Vec::new(),pulses:Vec::new(),epochs:Vec::new(),trace:FileBinding {path:"trace.json".into(),sha256:digest.clone()},timer_transactions:FileBinding {path:"timer-transactions.json".into(),sha256:digest},static_calls:Vec::new()}
+        Report {schema:1,program:ProgramBinding::Retained,plain:None,image5:None,origin:None,identity:InputIdentity {run:digest.clone(),update:digest.clone(),update_file:FileBinding {path:"input-update.DAT".into(),sha256:digest.clone()},rom:digest.clone(),executable:digest.clone(),sources:Vec::new()},checkpoint:digest.clone(),instructions:Count(0),menu:Ok(Some([1,5,2])),error:None,machine_failure:None,events:Vec::new(),calls:Vec::new(),snapshots:Vec::new(),pulses:Vec::new(),epochs:Vec::new(),trace:FileBinding {path:"trace.json".into(),sha256:digest.clone()},timer_transactions:FileBinding {path:"timer-transactions.json".into(),sha256:digest},static_calls:Vec::new()}
     }
     fn admitted_fixture(variable:&str)->(Temporary,Report,PathBuf){
         let source=PathBuf::from(std::env::var_os(variable).expect("set schema3 observation fixture path"));

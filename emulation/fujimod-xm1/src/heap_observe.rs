@@ -1,5 +1,6 @@
 mod heap_accesses;
 mod heap_state;
+mod heap_cutover;
 #[path = "memory_view.rs"]
 mod memory_view;
 
@@ -31,9 +32,9 @@ const WATCH_LIMIT: usize = 65_536;
 const BOUNDARY_LIMIT: usize = 262_144;
 const ROUTE_INSTRUCTIONS: u64 = 80_000_000 + 15 * 16_000_000 + 40_000_000 + 90_000_000;
 
-fn access_writer(path: &Path) -> Result<AccessWriter<BufWriter<File>>, String> {
+fn access_writer(path: &Path, limits: AccessLimits) -> Result<AccessWriter<BufWriter<File>>, String> {
     let file = OpenOptions::new().create_new(true).write(true).open(path).map_err(|error| error.to_string())?;
-    Ok(AccessWriter::new(BufWriter::new(file), ACCESS_LIMITS))
+    Ok(AccessWriter::new(BufWriter::new(file), limits))
 }
 fn append_accesses(writer: &mut AccessWriter<BufWriter<File>>, output: &Path, terminal: &mut Option<Digest>, bytes: &[u8]) -> Result<(), String> {
     match writer.append(bytes) {
@@ -314,7 +315,7 @@ fn sample(machine: &Machine, maps: &[MemoryMap], images: &[Image], recorder: &Re
     let pc = Address(registers[15]);
     image5.check_fetch(pc).map_err(|error| format!("image5 heap code admission: {error:?}"))?;
     let returning = recorder.return_operation(context, pc, Address(registers[13]));
-    let operation = returning.or_else(|| heap_state::entry(pc));
+    let operation = returning.or_else(|| heap_state::entry(Address(pc.0 & !0x40000000)));
     let context_pointer = if returning.is_some() {
         recorder.return_context(context, pc, Address(registers[13])).map(|address| address.0)
     } else { operation.map(|_| registers[0]) };
@@ -618,7 +619,7 @@ fn refusal_controls(arguments: &[std::ffi::OsString]) -> Result<(), String> {
             ReceiptFault::RemovedClass | ReceiptFault::OmittedFetch => {
                 let mut input = AccessReader::new(File::open(source.join("accesses.jsonl.gz")).map_err(|error| error.to_string())?, ACCESS_LIMITS);
                 let destination = directory.join("accesses.jsonl.gz");
-                let mut output_accesses = access_writer(&destination)?;
+                let mut output_accesses = access_writer(&destination, ACCESS_LIMITS)?;
                 let mut changed = false;
                 while let Some(line) = input.next_line().map_err(|error| error.to_string())? {
                     let mut batch: AccessBatch = serde_json::from_slice(line).map_err(|error| error.to_string())?;
@@ -721,6 +722,7 @@ fn refusal_controls(arguments: &[std::ffi::OsString]) -> Result<(), String> {
 }
 fn drive() -> Result<(), String> {
     let compare_args: Vec<_> = std::env::args_os().skip(1).collect();
+    if let Some(result) = heap_cutover::command(&compare_args) { return result; }
     if compare_args.first().is_some_and(|argument| argument == "--compare") { return compare(&compare_args); }
     if compare_args.first().is_some_and(|argument| argument == "--refusal-controls") { return refusal_controls(&compare_args); }
     let mut arguments = BTreeMap::new();
@@ -745,7 +747,7 @@ fn drive() -> Result<(), String> {
         && identity.boot_rom.0 == "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be", "observer requires canonical no-card inputs")?;
     std::fs::create_dir(&output).map_err(|error| error.to_string())?;
     let access_path = output.join("accesses.jsonl.gz");
-    let mut accesses = access_writer(&access_path)?;
+    let mut accesses = access_writer(&access_path, ACCESS_LIMITS)?;
     fujimod_emulator_exr2_board::register_board_builder();
     fujimod_emulator_models::register();
     let document = RunDocument::parse(&run_bytes)?;

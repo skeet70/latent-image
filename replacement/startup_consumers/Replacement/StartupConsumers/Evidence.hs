@@ -11,6 +11,7 @@ import Data.Word (Word8, Word32, Word64)
 import Replacement.KernelInstall.Wire (Address (..), WordValue (..), Count (..), Bytes (..), Core (..), MemoryEvent (..), Watch (..), WatchClass (..), Source (..), ByteOrder (..))
 import qualified Replacement.KernelInstall.Wire as K
 import qualified Replacement.StartupConsumers.Source as S
+import qualified Replacement.StartupConsumers.ObservationPolicy as Policy
 import Replacement.StartupConsumers.Wire
 
 data WitnessError
@@ -416,14 +417,23 @@ scopedFetchRanges sites = mergeFetchRanges
   ++ [codeFetchRange site (S.ByteCount 4) | site <- map S.familyEntryAddress [minBound..maxBound]
       ++ S.atomicSourceSites ++ map S.messageAccessInstruction S.messageAccesses ++ sites])
 
+fetchRangesWithPolicy :: Policy.ObservationPolicy -> Segment -> FetchScope -> [Address] -> [FetchRange]
+fetchRangesWithPolicy policy segment scope sites = mergeFetchRanges
+  ((if scope == CompleteFetch then backedFetchRanges else scopedFetchRanges sites)
+    ++ Policy.policyExtraFetchRanges policy (Count (sum (map count (segmentStart segment)))))
+
 checkDeclaredFetchPolicy :: Receipt -> Either WitnessError ()
-checkDeclaredFetchPolicy receipt = do
+checkDeclaredFetchPolicy = checkDeclaredFetchPolicyWithPolicy Policy.standalonePolicy
+
+checkDeclaredFetchPolicyWithPolicy :: Policy.ObservationPolicy -> Receipt -> Either WitnessError ()
+checkDeclaredFetchPolicyWithPolicy policy receipt = do
   returned <- probeAt receipt OuterReturn
   forM_ (receiptSegments receipt) $ \segment -> do
+    either (const (Left SegmentRejected)) Right (Policy.verifyPolicySegment policy segment)
     let ProbeRange begin _ = segmentProbeRange segment
         expectedScope = if begin <= probeId returned then CompleteFetch else ScopedFetch
         sites = segmentArmedSites segment
-        expected = if expectedScope == CompleteFetch then backedFetchRanges else scopedFetchRanges sites
+        expected = fetchRangesWithPolicy policy segment expectedScope sites
         actual = [FetchRange (PhysicalBoundary low) (PhysicalBoundary high) | classification <- watchClasses (segmentWatch segment)
           ,CpuFetch `elem` classKinds classification,[low,high] <- [classRange classification]]
     require (segmentFetchScope segment == expectedScope && sites == Set.toAscList (Set.fromList sites)
@@ -433,11 +443,14 @@ checkDeclaredFetchPolicy receipt = do
       && attributionRanges (segmentFetchAttribution segment) == backedFetchRanges) WatchRejected
 
 checkFetchPolicies :: Receipt -> Either WitnessError ()
-checkFetchPolicies receipt = do
+checkFetchPolicies = checkFetchPoliciesWithPolicy Policy.standalonePolicy
+
+checkFetchPoliciesWithPolicy :: Policy.ObservationPolicy -> Receipt -> Either WitnessError ()
+checkFetchPoliciesWithPolicy policy receipt = do
   outer <- probeAt receipt OuterEntry
   let probes = receiptProbes receipt
-      initial = SiteState (Set.fromList (S.globalSourceSites ++ map S.familyEntryAddress [minBound..maxBound]
-        ++ [K.contextLr (machine outer)])) Set.empty [] [] Set.empty
+      initial = SiteState (Set.fromList (Policy.policyGlobalSites policy ++ map S.familyEntryAddress [minBound..maxBound]
+        ++ [K.contextLr (machine outer) | Policy.policyInitialOuterReturn policy])) Set.empty [] [] Set.empty
   require (map probeId probes == map (ProbeId . fromIntegral) [0..length probes-1]) ProbeRejected
   (consumed,final,remaining) <- foldM checkSegment (0,initial,probes) (receiptSegments receipt)
   require (consumed == fromIntegral (length probes) && null remaining) ProbeRejected
@@ -445,10 +458,12 @@ checkFetchPolicies receipt = do
   where
     invocation ident = one WatchRejected [item | item <- receiptInvocations receipt,invocationId item == ident]
     checkSegment (consumed,state,remaining) segment = do
+      either (const (Left SegmentRejected)) Right (Policy.verifyPolicySegment policy segment)
+      external <- either (const (Left WatchRejected)) Right (Policy.policyExternalBefore policy (segmentId segment))
       let ProbeRange (ProbeId begin) (ProbeId end) = segmentProbeRange segment
           expectedScope = if Set.member OuterReturn (siteCompleted state) then ScopedFetch else CompleteFetch
-          sites = Set.toAscList (siteAddresses state)
-          expected = if expectedScope == CompleteFetch then backedFetchRanges else scopedFetchRanges sites
+          sites = Set.toAscList (Set.union (siteAddresses state) (Set.fromList external))
+          expected = fetchRangesWithPolicy policy segment expectedScope sites
           actual = [FetchRange (PhysicalBoundary low) (PhysicalBoundary high) | classification <- watchClasses (segmentWatch segment)
             ,CpuFetch `elem` classKinds classification,[low,high] <- [classRange classification]]
       require (begin == consumed && begin <= end && end <= fromIntegral (length (receiptProbes receipt))) ProbeRejected
@@ -503,8 +518,8 @@ checkFetchPolicies receipt = do
           Nothing -> pure state
           Just returned -> pure state {siteReturns = GlobalSiteReturn (core probe) (K.contextLr (machine probe)) returned:siteReturns state
             ,siteAddresses = Set.insert (K.contextLr (machine probe)) (siteAddresses state)}
-      let withoutPoll = if probeKind probe == InitializerCall
-            then changed {siteAddresses = foldr Set.delete (siteAddresses changed) (map Address [0xd0a44,0xd0a48,0xd0a4c])}
+      let withoutPoll = if probeKind probe == InitializerCall && Policy.policyRetiresPoll policy
+            then changed {siteAddresses = foldr Set.delete (siteAddresses changed) (Policy.policyPollSites policy)}
             else changed
       if probeKind probe `elem` [SourceProbe,CriticalIdentityCall,CriticalCall] then do
         target <- sourceCallTarget probe
@@ -524,7 +539,7 @@ checkFetchPolicies receipt = do
     removeSites state candidates = state {siteAddresses = foldr remove (siteAddresses state) candidates}
       where
         active = [item | item <- receiptInvocations receipt,Set.member (invocationId item) (siteFrames state)]
-        permanent = S.globalSourceSites ++ map S.familyEntryAddress [minBound..maxBound]
+        permanent = Policy.policyGlobalSites policy ++ map S.familyEntryAddress [minBound..maxBound]
         used site = site `elem` permanent
           || any (\item -> site == invocationLr item || site `elem` S.familySourceSites (invocationFamily item) ++ S.commonSourceSites) active
           || any (\pending -> site == siteCallTarget pending || site == siteCallContinuation pending) (siteCalls state)
@@ -552,7 +567,10 @@ sourceCallTarget probe
     aligned destination = require (destination .&. 3 == 0) WatchRejected >> pure (Just (Address destination))
 
 checkSegments :: Receipt -> Either WitnessError ()
-checkSegments receipt = do
+checkSegments = checkSegmentsWithPolicy Policy.standalonePolicy
+
+checkSegmentsWithPolicy :: Policy.ObservationPolicy -> Receipt -> Either WitnessError ()
+checkSegmentsWithPolicy policy receipt = do
   outer <- probeAt receipt OuterEntry
   let segments = receiptSegments receipt
   initial <- required SegmentRejected (case segments of value:_ -> Just value; [] -> Nothing)
@@ -561,7 +579,7 @@ checkSegments receipt = do
     && segmentStart initial == K.contextCounts (machine outer)
     && and (zipWith (\a b -> segmentEnd a == segmentStart b && segmentEndContexts a == segmentStartContexts b) segments (drop 1 segments))) SegmentRejected
   checkWatchFailures receipt
-  checkDeclaredFetchPolicy receipt
+  checkDeclaredFetchPolicyWithPolicy policy receipt
   mapM_ (check (K.contextTcm (machine outer))) segments
   mapM_ (checkFetches receipt) segments
   let events = allEvents receipt

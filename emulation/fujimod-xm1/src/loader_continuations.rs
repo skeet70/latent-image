@@ -1,6 +1,7 @@
 use fujimod_emulator::board::{bus::TransactionBatch, factory::MemoryMap, observation::{ViewPolicy, WatchKinds, WatchRange}};
 use fujimod_emulator_cpu::{Register, arm};
 use fujimod_xm1::{bridge::{read, write}, guest::RouteKey, machine::Machine, provenance::Guest, run::{self, RunDocument, ValidatedUpdate}};
+use fujimod_xm1::startup_sites::{Component,StartupSites};
 use serde::{Deserialize, Serialize};
 use std::{collections::{BTreeMap, BTreeSet}, num::NonZeroUsize, path::{Path, PathBuf}, process::ExitCode};
 
@@ -8,14 +9,24 @@ mod continuation_view;
 mod loader_continuations_check;
 mod application_pump;
 mod loader_orchestration_owned;
+mod loader_startup_program;
+mod startup_joined;
+#[path = "startup_consumers.rs"]
+mod shared_consumers;
+#[path = "startup_dispatch.rs"]
+mod shared_dispatch;
 mod plain_program;
 mod plain_wire;
 mod plain_runtime;
 mod plain_check;
+mod image5_program;
+mod image5_wire;
+mod image5_runtime;
+mod image5_check;
 use loader_orchestration_owned::{Program, ProgramBinding, Side};
 use continuation_view::{ByteCount, Digest, EventId, FileBinding, Resource, Snapshot, Words};
 
-const USAGE: &str = "loader-continuations --run RUN --update DAT --boot-rom ROM --analysis ROOT [--owned-artifact STAGED_DIR | --plain-witness retained|owned [--plain-artifact DIR]] --output NEW_DIR; --verify DIR | --verify-plain DIR --analysis ROOT; --compare-retained DIR --compare-owned DIR | --compare-plain-retained DIR --compare-plain-owned DIR --analysis ROOT --output NEW_DIR; --plain-controls DIR --analysis ROOT --output NEW_DIR; --source-calls NEW_DIR --analysis ROOT; --application-pump retained|owned --original-update ORIGINAL_DAT --update ACTUAL_DAT --pump-code BIN --pump-symbols SYMBOLS --pump-admission CONTRACT --run RUN --boot-rom ROM --analysis ROOT --output NEW_APP154_DIR; --verify-application-pump DIR --analysis ROOT; --compare-application-pump RETAINED --owned-pump OWNED --analysis ROOT --output NEW_APP154_DIR; --controls-application-pump OWNED --analysis ROOT --output NEW_APP154_DIR";
+const USAGE: &str = "loader-continuations --run RUN --update DAT --boot-rom ROM --analysis ROOT [--owned-artifact STAGED_DIR | --plain-witness retained|owned [--plain-artifact DIR] | --image5-witness retained|owned [--image5-artifact STAGED_DIR]] --output NEW_DIR; --verify DIR | --verify-plain DIR | --verify-image5 DIR --analysis ROOT; --compare-retained DIR --compare-owned DIR | --compare-plain-retained DIR --compare-plain-owned DIR | --compare-image5-retained DIR --compare-image5-owned DIR --analysis ROOT --output NEW_DIR; --plain-controls DIR | --image5-controls DIR --analysis ROOT --output NEW_DIR; --source-calls NEW_DIR --analysis ROOT; --application-pump retained|owned --original-update ORIGINAL_DAT --update ACTUAL_DAT --pump-code BIN --pump-symbols SYMBOLS --pump-admission CONTRACT --run RUN --boot-rom ROM --analysis ROOT --output NEW_APP154_DIR; --verify-application-pump DIR --analysis ROOT; --compare-application-pump RETAINED --owned-pump OWNED --analysis ROOT --output NEW_APP154_DIR; --controls-application-pump OWNED --analysis ROOT --output NEW_APP154_DIR";
 const TRACE_LIMIT: usize = 16384;
 const DIAGNOSTICS: [(u32, u32); 7] = [(0x40cac,0x40d50),(0xd0cac,0xd0d50),(0x40d70,0x40d98),(0xd0d70,0xd0d98),(0x69cc6c,0x69cd58),(0xed468c,0xed485c),(0xed4a8c,0xed4a9c)];
 
@@ -73,7 +84,7 @@ struct Registers { r:[u32;13], sp:Guest, lr:Guest, cpsr:u32 }
 struct Event { id:EventId, instructions:Count, core:Core, pc:Guest, source:SourceKind, code:Words, registers:Registers, frame:Result<Words,String>, state:Vec<Words>, descriptor:Option<Words>, payload:Option<Words> }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all="kebab-case")]
-enum CallKind { Loader, Image5Wait, Image5Entry, Image5Service, Image5Constructor, PlainProducer, PlainService, PlainHook, Deferred, Task }
+enum CallKind { Loader, Image5Wait, Image5Entry, Image5Service, Image5Constructor, PlainProducer, PlainService, PlainHook, Deferred, Task, Image5Producer, Image5ProducerService }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct Call { kind:CallKind, before:Option<EventId>, entry:Option<EventId>, returned:Option<EventId>, core:Core, target:Guest, continuation:Guest, sp:Guest, descriptor:Option<Guest> }
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -93,7 +104,7 @@ struct InputIdentity { run:Digest, update:Digest, update_file:FileBinding, rom:D
 enum Access { CpuFetch, CpuRead, CpuWrite, HostRead, HostWrite, ModelBusRead, ModelBusWrite }
 #[derive(Clone, Copy, Deserialize, Serialize)]
 struct Row {source:Access,address:Guest,physical:Guest,size:u64,core:Option<Core>,pc:Option<Guest>,instructions:Option<Count>,value:Option<u64>,tick:Option<Tick>}
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct Class {range:[u64;2],kinds:Vec<Access>}
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all="kebab-case")]
@@ -120,14 +131,16 @@ enum ReleaseOutcome { Debounced, Deadline }
 #[derive(Deserialize, Serialize)]
 struct Pulse {key:Key,pressed:Count,released:Option<Count>,finished:Option<Count>,outcome:Option<ReleaseOutcome>}
 #[derive(Deserialize, Serialize)]
-struct Report {schema:u32,program:ProgramBinding,#[serde(default,skip_serializing_if="Option::is_none")] plain:Option<plain_wire::Evidence>,origin:Option<EventId>,identity:InputIdentity,checkpoint:Digest,instructions:Count,menu:Result<Option<[u32;3]>,String>,error:Option<String>,machine_failure:Option<String>,events:Vec<Event>,calls:Vec<Call>,snapshots:Vec<Snapshot>,pulses:Vec<Pulse>,epochs:Vec<Epoch>,trace:FileBinding,timer_transactions:FileBinding,static_calls:Vec<StaticCall>}
+struct Report {schema:u32,program:ProgramBinding,#[serde(default,skip_serializing_if="Option::is_none")] plain:Option<plain_wire::Evidence>,#[serde(default,skip_serializing_if="Option::is_none")] image5:Option<image5_wire::Evidence>,origin:Option<EventId>,identity:InputIdentity,checkpoint:Digest,instructions:Count,menu:Result<Option<[u32;3]>,String>,error:Option<String>,machine_failure:Option<String>,events:Vec<Event>,calls:Vec<Call>,snapshots:Vec<Snapshot>,pulses:Vec<Pulse>,epochs:Vec<Epoch>,trace:FileBinding,timer_transactions:FileBinding,static_calls:Vec<StaticCall>}
 const TIMER_RANGE:[Guest;2]=[Guest(0xfff91000),Guest(0xfff91008)];
 const TIMER_LIMIT:usize=3_000_000;
 #[derive(Serialize)]
 struct TimerWatch {start:Count,end:Count,range:[Guest;2],limit:usize,batch:Option<TransactionBatch>,error:Option<String>}
 
 #[derive(Default)]
-struct Observation {events:Vec<Event>,calls:Vec<Call>,snapshots:Vec<Snapshot>,pulses:Vec<Pulse>,cursor:usize,plain_views:BTreeSet<u32>,image5_seen:bool,loader_sp:[Option<Guest>;2],first_loader:Option<EventId>,plain:Option<plain_runtime::Runtime>}
+struct Observation {events:Vec<Event>,calls:Vec<Call>,snapshots:Vec<Snapshot>,pulses:Vec<Pulse>,cursor:usize,plain_views:BTreeSet<u32>,image5_seen:bool,loader_sp:[Option<Guest>;2],first_loader:Option<EventId>,flexible_origin:bool,shared_owners:Option<StartupSites>,plain:Option<plain_runtime::Runtime>,image5:Option<image5_runtime::Runtime>}
+/// Image5 producer boundaries that carry resource projections: the fill-request return and the producer's final instruction.
+fn image5_boundaries(program:Option<&image5_program::Program>)->(Option<Guest>,Guest){program.map_or((Some(Guest(0x6a9734)),Guest(0x6a9840)),|program|(program.fill_return_pc(),program.return_pc()))}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase { Setup, Root, DiagnosticReturn, Idle0, Idle1AndStandby }
@@ -198,7 +211,12 @@ impl Observation {
         let ring=match pc.0{0x41ad4|0x41ad8|0x41adc|0x41ae0|0x41ae4|0x41ae8=>Some(registers.r[3]),0x41b78|0x41b7c=>Some(registers.r[8]),0x41b80 if self.events.iter().rev().find(|event|event.core==core).is_some_and(|event|event.pc.0==0x41b7c)=>Some(registers.r[8]),_=>None};
         if let Some(base)=ring{let address=base.checked_add(0x40).ok_or("elapsed ring word address overflows")?;let physical=address&!0x40000000;if address%4!=0||!(0xa0840..0xc0900).contains(&physical){return Err("elapsed ring word is outside the shared ring".into());}state.push(reader.words(Guest(address),1)?);}
         for (address,words) in [(0xa00c4,1),(0x61c000,8),(0x61c1a4,24),(0x61c400,4),(0x40000,8),(0xd0000,8),(0x5927c,1),(0xe923c,1),(0x4f10c,3),(0xdf0cc,3),(0x63460,14),(0xf3420,14),(0xa0800,14),(0x96bd20,2),(0x89f784,6),(0x89f8ac,1),(0x944440,9),(0x914834,1),(0x972e88,3),(0x8e1900,8),(0x9c2f54,2)]{state.push(reader.words(Guest(address),words)?);}
-        if machine.instructions()<=8_000_000{if let Some(sp)=self.loader_sp[usize::from(core)]{state.push(reader.words(sp,4)?);}}
+        if self.flexible_origin || machine.instructions()<=8_000_000{if let Some(sp)=self.loader_sp[usize::from(core)]{state.push(reader.words(sp,4)?);}}
+        if self.flexible_origin && carrier(pc).is_some() {
+            for (address,words) in [(0x633e8,30),(0x400633e8,30),(0xf33c8,22),(0x400f33c8,22)] {
+                state.push(reader.words(Guest(address),words)?);
+            }
+        }
         if pc.0==0x69d2e0{let descriptor=reader.words(Guest(registers.r[0]),2)?;let header=Guest(descriptor.values[1]);state.push(descriptor);state.push(reader.words(header,4)?);}
         let descriptor=if pc.0==0x725dd8{Some(reader.words(Guest(registers.r[0]),7)?)}else if matches!(pc.0,0x73be5c|0x73be60|0x73be70|0x73be74){Some(reader.words(Guest(registers.r[4]),6)?)}else{None};
         let payload=if pc.0==0x73b9c4{Some(reader.words(Guest(registers.r[2]),1)?)}else{None};
@@ -207,19 +225,26 @@ impl Observation {
     fn target(&mut self,machine:&mut Machine,catalog:&Catalog,target:Guest)->Result<(),String>{
         if target.0%4!=0{return Err("computed target is outside the admitted A32 entry set".into());}catalog.word(target)?;
         if diagnostics(target){return Err("computed transfer would enter a diagnostic body".into());}
-        if !machine.traces.sites.contains_key(&target.0){machine.traces.add_sites(&machine.session,BTreeMap::from([(target.0,"temporary-boundary".into())]))?;}
+        if let Some(owners)=&self.shared_owners {owners.acquire(machine,Component::Route,target)?;}
+        else if !machine.traces.sites.contains_key(&target.0){machine.traces.add_sites(&machine.session,BTreeMap::from([(target.0,"temporary-boundary".into())]))?;}
+        machine.traces.stop_labels.insert("temporary-boundary".into());
         Ok(())
     }
+    fn revoke(&self,machine:&mut Machine,addresses:&[Guest])->Result<(),String>{
+        if let Some(owners)=&self.shared_owners {owners.revoke(machine,Component::Route,addresses)}
+        else {machine.traces.remove_sites(&machine.session,addresses)}
+    }
     fn collect(&mut self,machine:&mut Machine,catalog:&Catalog,maps:&[MemoryMap],output:&Path,permanent:&BTreeMap<u32,String>,static_calls:&[StaticCall],program:&Program)->Result<(),String>{
-        if machine.traces.hits.len()>=TRACE_LIMIT{return Err("continuation trace bound exhausted".into());}
+        if machine.traces.hits.len()>=(if self.flexible_origin {131_072}else{TRACE_LIMIT}){return Err("continuation trace bound exhausted".into());}
         while self.cursor<machine.traces.hits.len(){
             let hit=&machine.traces.hits[self.cursor];let core=Core::try_from(hit.core)?;let pc=Guest(u32::from_str_radix(hit.address.strip_prefix("0x").ok_or("trace PC prefix absent")?,16).map_err(|error|error.to_string())?);
             if hit.instructions!=machine.instructions(){return Err("stopped trace event is no longer live".into());}
             if !program.execution_allowed(pc){return Err("carrier fetch lies outside the admitted executable code".into());}
             let first_carrier=self.first_loader.is_none()&&carrier(pc).is_some();
-            if first_carrier&&(pc!=Guest(0xd09ac)||core!=Core::Secondary||machine.instructions()!=5_861_929){return Err("first carrier fetch differs from the canonical reset caller".into());}
+            if first_carrier&&(pc!=Guest(0xd09ac)||core!=Core::Secondary||(!self.flexible_origin&&machine.instructions()!=5_861_929)){return Err("first carrier fetch differs from the canonical reset caller".into());}
             let id=self.capture(machine,catalog,maps,core,pc)?;self.cursor+=1;
             if let Some(plain)=&mut self.plain {plain.capture(machine,maps,output,&mut self.events[id.0],catalog)?;}
+            if let Some(image5)=&mut self.image5 {image5.capture(machine,maps,output,&mut self.events[id.0],catalog)?;}
             if first_carrier{self.first_loader=Some(id);}
             if diagnostics(pc){return Err("natural route reached a diagnostic body before execution".into());}
             if pc.0==0x69d2d8||(!program.owned()&&matches!(pc.0,0x40aa8|0xd0aa8)){return Err("selected route reached an unexpected returned-context or header-lookup spin".into());}
@@ -231,13 +256,16 @@ impl Observation {
             }
             let boundary_consumed=self.calls.iter().any(|call|call.returned.is_some_and(|returned|returned.0==id.0)||call.entry.is_some_and(|entry|entry.0==id.0));
             let boundary_needed=self.calls.iter().any(|call|(call.entry.is_none()&&call.target==pc)||(call.entry.is_some()&&call.returned.is_none()&&call.continuation==pc));
-            if boundary_consumed && !boundary_needed && !permanent.contains_key(&pc.0){machine.traces.remove_sites(&machine.session,&[pc])?;}
+            if boundary_consumed && !boundary_needed {
+                if let Some(owners)=&self.shared_owners {owners.release(machine,Component::Route,&[pc])?;}
+                else if !permanent.contains_key(&pc.0){machine.traces.remove_sites(&machine.session,&[pc])?;}
+            }
             if let Some(address)=self.calls.iter().find(|call|call.kind==CallKind::Task&&call.returned.is_some_and(|returned|returned.0==id.0)).and_then(|call|call.descriptor){self.events[id.0].descriptor=Some(continuation_view::words(&machine.session,maps,address,7)?);}
             let spec=if let Some(spec)=static_calls.iter().find(|call|call.site==pc){Some(spec.clone())}else if matches!(pc.0,0xd9858c|0x69d2e0|0x73be5c|0x73beac){decode_call(pc,catalog.word(pc)?.1)?}else{None};
             if let Some(spec)=spec {
                 let target=match spec.target{CallTarget::Direct(target)=>target,CallTarget::Register(register)=>Guest(regs.r[usize::from(register.0)])};
                 if carrier(pc).is_some()&&matches!(spec.target,CallTarget::Register(_)){Phase::parse(regs.r[0])?;if target!=Guest(0x69cdf8)||regs.r[4]!=0x69cdf8{return Err("loader phase dispatcher capability differs".into());}}
-                let kind=match pc.0{0xd985c0=>CallKind::Image5Wait,0x69d2e0=>CallKind::Image5Entry,0xd9858c=>CallKind::Image5Constructor,0x73b554=>CallKind::PlainProducer,0x73be5c=>CallKind::PlainHook,0x73beac=>CallKind::Deferred,pc if (0xd985a4..0xd986ac).contains(&pc)=>CallKind::Image5Service,pc if (0x6a9844..0x6a9934).contains(&pc)=>CallKind::PlainService,_=>CallKind::Loader};
+                let kind=match pc.0{0xd985c0=>CallKind::Image5Wait,0x69d2e0=>CallKind::Image5Entry,0xd9858c=>CallKind::Image5Constructor,0x73b554=>CallKind::PlainProducer,0x73be5c=>CallKind::PlainHook,0x73beac=>CallKind::Deferred,0x73b4ac=>CallKind::Image5Producer,pc if (0xd985a4..0xd986ac).contains(&pc)=>CallKind::Image5Service,pc if (0x6a9844..0x6a9934).contains(&pc)=>CallKind::PlainService,pc if (image5_program::CARRIER[0]..image5_program::CARRIER[1]).contains(&pc)=>CallKind::Image5ProducerService,_=>CallKind::Loader};
                 self.target(machine,catalog,target)?;self.target(machine,catalog,spec.continuation)?;
                 self.calls.push(Call {kind,before:Some(id),entry:None,returned:None,core,target,continuation:spec.continuation,sp:regs.sp,descriptor:None});
             }
@@ -250,14 +278,16 @@ impl Observation {
                 let context=continuation_view::words(&machine.session,maps,Guest(regs.r[1].checked_add(0x18).ok_or("saved context address overflow")?),2)?;
                 if regs.sp.0!=context.values[0]{return Err("selected stack differs from the loaded saved context".into());}
                 let target=Guest(context.values[1]);self.events[id.0].state.push(context);self.target(machine,catalog,target)?;
-                let addresses=if pc.0==0x436e8{[Guest(0x43688),Guest(0x436e4),Guest(0x436e8)]}else{[Guest(0xd3688),Guest(0xd36e4),Guest(0xd36e8)]};machine.traces.remove_sites(&machine.session,&addresses)?;
+                let addresses=if pc.0==0x436e8{[Guest(0x43688),Guest(0x436e4),Guest(0x436e8)]}else{[Guest(0xd3688),Guest(0xd36e4),Guest(0xd36e8)]};self.revoke(machine,&addresses)?;
+                if self.flexible_origin {self.loader_sp[usize::from(core)]=None;}
             }
-            if matches!(pc.0,0x43758|0xd3758){let task=continuation_view::words(&machine.session,maps,Guest(regs.r[2]),3)?;let link=continuation_view::words(&machine.session,maps,Guest(regs.r[1].checked_add(8).ok_or("task creation-record link overflows")?),1)?;if link.values[0]!=regs.r[2]{return Err("current task creation-record link differs".into());}self.target(machine,catalog,Guest(task.values[2]))?;self.events[id.0].state.extend([task,link]);machine.traces.remove_sites(&machine.session,&[pc])?;}
+            if matches!(pc.0,0x43758|0xd3758){let task=continuation_view::words(&machine.session,maps,Guest(regs.r[2]),3)?;let link=continuation_view::words(&machine.session,maps,Guest(regs.r[1].checked_add(8).ok_or("task creation-record link overflows")?),1)?;if link.values[0]!=regs.r[2]{return Err("current task creation-record link differs".into());}self.target(machine,catalog,Guest(task.values[2]))?;self.events[id.0].state.extend([task,link]);self.revoke(machine,&[pc])?;}
+            let (fill_return,producer_return)=image5_boundaries(self.image5.as_ref().map(|image5|&image5.program));
             let resources:Vec<Resource>=match pc.0 {
                 0x409ac=>vec![Resource::LoaderA],0xd09ac if first_carrier=>vec![Resource::LoaderB,Resource::LoaderA],0xd09ac=>vec![Resource::LoaderB],
                 0x6a8c04=>vec![Resource::Image5Bss],
-                0x6a9734=>vec![Resource::Image5Bss],
-                0x6a9840=>vec![Resource::Image5,Resource::Image5Bss],0x6a9934=>vec![Resource::Plain],
+                pc if Some(Guest(pc))==fill_return=>vec![Resource::Image5Bss],
+                pc if pc==producer_return.0=>vec![Resource::Image5,Resource::Image5Bss],0x6a9934=>vec![Resource::Plain],
                 0xd985a4 if !self.image5_seen=>{self.image5_seen=true;vec![Resource::Image5,Resource::Image5Bss,Resource::Plain]},
                 0x73be5c|0x73be70 if self.plain_views.insert(regs.r[7])=>vec![match regs.r[7]{0=>Resource::Plain0,2=>Resource::Plain2,3=>Resource::Plain3,_=>return Err("plain extent ID differs from the canonical three-entry table".into())}],_=>Vec::new(),
             };
@@ -287,7 +317,7 @@ fn pulse(machine:&mut Machine,observation:&mut Observation,catalog:&Catalog,maps
 fn epoch(machine:&mut Machine,observation:&mut Observation,catalog:&Catalog,maps:&[MemoryMap],output:&Path,permanent:&BTreeMap<u32,String>,calls:&[StaticCall],stage:WatchStage,program:&Program)->Result<(Epoch,Result<(),String>),String>{
     let start=Count(machine.instructions());let views=match stage.views(){WatchViews::Observe=>ViewPolicy::Observe,WatchViews::Fixed=>ViewPolicy::Fixed};
     let mut ranges=classes(stage);
-    let mut watch=if let Some(plain)=&observation.plain {ranges.extend(plain.classes());machine.session.board.memory_watch_begin_with_fetch_attribution(ranges,plain.attribution(catalog,machine)?,3_000_000,maps.to_vec(),views)?} else {machine.session.board.memory_watch_begin_classified(ranges,3_000_000,maps.to_vec(),views)?};
+    let mut watch=if let Some(plain)=&observation.plain {ranges.extend(plain.classes());machine.session.board.memory_watch_begin_with_fetch_attribution(ranges,plain.attribution(catalog,machine)?,3_000_000,maps.to_vec(),views)?} else if let Some(image5)=&observation.image5 {ranges.extend(image5.classes());machine.session.board.memory_watch_begin_with_fetch_attribution(ranges,image5.attribution(catalog,machine)?,3_000_000,maps.to_vec(),views)?} else {machine.session.board.memory_watch_begin_classified(ranges,3_000_000,maps.to_vec(),views)?};
     let result=(||->Result<(),String>{
         if stage==WatchStage::Bootstrap {
             advance(machine,observation,catalog,maps,output,permanent,calls,8_000_000,program,Until::FirstCarrier)?;
@@ -311,12 +341,30 @@ fn epoch(machine:&mut Machine,observation:&mut Observation,catalog:&Catalog,maps
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum OptionKey { Run,Update,Rom,Analysis,Output,Verify,SourceCalls,OwnedArtifact,CompareRetained,CompareOwned,PlainWitness,PlainArtifact,VerifyPlain,ComparePlainRetained,ComparePlainOwned,PlainControls,ApplicationPump,VerifyApplicationPump,CompareApplicationPump,OwnedPump,ControlsApplicationPump,OriginalUpdate,PumpCode,PumpSymbols,PumpAdmission }
-impl OptionKey {fn parse(value:&std::ffi::OsStr)->Result<Self,String>{match value.to_str(){Some("--run")=>Ok(Self::Run),Some("--update")=>Ok(Self::Update),Some("--boot-rom")=>Ok(Self::Rom),Some("--analysis")=>Ok(Self::Analysis),Some("--output")=>Ok(Self::Output),Some("--verify")=>Ok(Self::Verify),Some("--source-calls")=>Ok(Self::SourceCalls),Some("--owned-artifact")=>Ok(Self::OwnedArtifact),Some("--compare-retained")=>Ok(Self::CompareRetained),Some("--compare-owned")=>Ok(Self::CompareOwned),Some("--plain-witness")=>Ok(Self::PlainWitness),Some("--plain-artifact")=>Ok(Self::PlainArtifact),Some("--verify-plain")=>Ok(Self::VerifyPlain),Some("--compare-plain-retained")=>Ok(Self::ComparePlainRetained),Some("--compare-plain-owned")=>Ok(Self::ComparePlainOwned),Some("--plain-controls")=>Ok(Self::PlainControls),Some("--application-pump")=>Ok(Self::ApplicationPump),Some("--verify-application-pump")=>Ok(Self::VerifyApplicationPump),Some("--compare-application-pump")=>Ok(Self::CompareApplicationPump),Some("--owned-pump")=>Ok(Self::OwnedPump),Some("--controls-application-pump")=>Ok(Self::ControlsApplicationPump),Some("--original-update")=>Ok(Self::OriginalUpdate),Some("--pump-code")=>Ok(Self::PumpCode),Some("--pump-symbols")=>Ok(Self::PumpSymbols),Some("--pump-admission")=>Ok(Self::PumpAdmission),_=>Err(USAGE.into())}}}
+enum OptionKey { Run,Update,Rom,Analysis,Output,Verify,SourceCalls,OwnedArtifact,CompareRetained,CompareOwned,SharedArtifact,SharedRole,SharedCheck,SharedCompareRetained,SharedCompareJoined,SharedRefusalControls,SharedRefusalJoined,PlainWitness,PlainArtifact,VerifyPlain,ComparePlainRetained,ComparePlainOwned,PlainControls,Image5Witness,Image5Artifact,VerifyImage5,CompareImage5Retained,CompareImage5Owned,Image5Controls,ApplicationPump,VerifyApplicationPump,CompareApplicationPump,OwnedPump,ControlsApplicationPump,OriginalUpdate,PumpCode,PumpSymbols,PumpAdmission }
+impl OptionKey {fn parse(value:&std::ffi::OsStr)->Result<Self,String>{match value.to_str(){Some("--run")=>Ok(Self::Run),Some("--update")=>Ok(Self::Update),Some("--boot-rom")=>Ok(Self::Rom),Some("--analysis")=>Ok(Self::Analysis),Some("--output")=>Ok(Self::Output),Some("--verify")=>Ok(Self::Verify),Some("--source-calls")=>Ok(Self::SourceCalls),Some("--owned-artifact")=>Ok(Self::OwnedArtifact),Some("--compare-retained")=>Ok(Self::CompareRetained),Some("--compare-owned")=>Ok(Self::CompareOwned),Some("--shared-artifact")=>Ok(Self::SharedArtifact),Some("--shared-role")=>Ok(Self::SharedRole),Some("--shared-check")=>Ok(Self::SharedCheck),Some("--shared-compare-retained")=>Ok(Self::SharedCompareRetained),Some("--shared-compare-joined")=>Ok(Self::SharedCompareJoined),Some("--shared-refusal-controls")=>Ok(Self::SharedRefusalControls),Some("--shared-refusal-joined")=>Ok(Self::SharedRefusalJoined),Some("--plain-witness")=>Ok(Self::PlainWitness),Some("--plain-artifact")=>Ok(Self::PlainArtifact),Some("--verify-plain")=>Ok(Self::VerifyPlain),Some("--compare-plain-retained")=>Ok(Self::ComparePlainRetained),Some("--compare-plain-owned")=>Ok(Self::ComparePlainOwned),Some("--plain-controls")=>Ok(Self::PlainControls),Some("--image5-witness")=>Ok(Self::Image5Witness),Some("--image5-artifact")=>Ok(Self::Image5Artifact),Some("--verify-image5")=>Ok(Self::VerifyImage5),Some("--compare-image5-retained")=>Ok(Self::CompareImage5Retained),Some("--compare-image5-owned")=>Ok(Self::CompareImage5Owned),Some("--image5-controls")=>Ok(Self::Image5Controls),Some("--application-pump")=>Ok(Self::ApplicationPump),Some("--verify-application-pump")=>Ok(Self::VerifyApplicationPump),Some("--compare-application-pump")=>Ok(Self::CompareApplicationPump),Some("--owned-pump")=>Ok(Self::OwnedPump),Some("--controls-application-pump")=>Ok(Self::ControlsApplicationPump),Some("--original-update")=>Ok(Self::OriginalUpdate),Some("--pump-code")=>Ok(Self::PumpCode),Some("--pump-symbols")=>Ok(Self::PumpSymbols),Some("--pump-admission")=>Ok(Self::PumpAdmission),_=>Err(USAGE.into())}}}
 fn drive()->Result<(),String>{
     let mut arguments=std::env::args_os().skip(1);let mut options=BTreeMap::new();
     while let Some(flag)=arguments.next(){if options.insert(OptionKey::parse(&flag)?,PathBuf::from(arguments.next().ok_or(USAGE)?)).is_some(){return Err(USAGE.into());}}
+    if options.contains_key(&OptionKey::SharedRole) { return startup_joined::drive(options); }
     let analysis=options.remove(&OptionKey::Analysis).ok_or(USAGE)?;
+    if let Some(root)=options.remove(&OptionKey::SharedCheck) {
+        let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;
+        if !options.is_empty(){return Err(USAGE.into());}
+        return loader_continuations_check::shared::check(&root,&analysis,&output);
+    }
+    if let Some(retained)=options.remove(&OptionKey::SharedCompareRetained) {
+        let joined=options.remove(&OptionKey::SharedCompareJoined).ok_or(USAGE)?;
+        let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;
+        if !options.is_empty(){return Err(USAGE.into());}
+        return loader_continuations_check::shared::compare(&retained,&joined,&analysis,&output);
+    }
+    if let Some(retained)=options.remove(&OptionKey::SharedRefusalControls) {
+        let joined=options.remove(&OptionKey::SharedRefusalJoined).ok_or(USAGE)?;
+        let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;
+        if !options.is_empty(){return Err(USAGE.into());}
+        return loader_continuations_check::shared::refusal_controls(&retained,&joined,&analysis,&output);
+    }
     if let Some(output)=options.remove(&OptionKey::VerifyApplicationPump){if !options.is_empty(){return Err(USAGE.into());}return application_pump::verify(&output,&analysis);}
     if let Some(retained)=options.remove(&OptionKey::CompareApplicationPump){
         let owned=options.remove(&OptionKey::OwnedPump).ok_or(USAGE)?;
@@ -347,10 +395,16 @@ fn drive()->Result<(),String>{
     if let Some(root)=options.remove(&OptionKey::VerifyPlain){if !options.is_empty(){return Err(USAGE.into());}let receipt=loader_continuations_check::check_plain(&root,&analysis)?;println!("{}",serde_json::to_string(&receipt).map_err(|error|error.to_string())?);return Ok(());}
     if let Some(retained)=options.remove(&OptionKey::ComparePlainRetained){let owned=options.remove(&OptionKey::ComparePlainOwned).ok_or(USAGE)?;let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;if !options.is_empty(){return Err(USAGE.into());}return loader_continuations_check::compare_plain(&retained,&owned,&analysis,&output);}
     if let Some(root)=options.remove(&OptionKey::PlainControls){let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;if !options.is_empty(){return Err(USAGE.into());}return loader_continuations_check::controls_plain(&root,&analysis,&output);}
+    if let Some(root)=options.remove(&OptionKey::VerifyImage5){if !options.is_empty(){return Err(USAGE.into());}let receipt=loader_continuations_check::check_image5(&root,&analysis)?;println!("{}",serde_json::to_string(&receipt).map_err(|error|error.to_string())?);return Ok(());}
+    if let Some(retained)=options.remove(&OptionKey::CompareImage5Retained){let owned=options.remove(&OptionKey::CompareImage5Owned).ok_or(USAGE)?;let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;if !options.is_empty(){return Err(USAGE.into());}return loader_continuations_check::compare_image5(&retained,&owned,&analysis,&output);}
+    if let Some(root)=options.remove(&OptionKey::Image5Controls){let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;if !options.is_empty(){return Err(USAGE.into());}return loader_continuations_check::controls_image5(&root,&analysis,&output);}
     let owned_artifact=options.remove(&OptionKey::OwnedArtifact);
     let plain_role=options.remove(&OptionKey::PlainWitness).map(|value|match value.to_str(){Some("retained")=>Ok(plain_wire::Role::Retained),Some("owned")=>Ok(plain_wire::Role::Owned),_=>Err("plain witness role must be retained or owned".to_owned())}).transpose()?;
     let plain_artifact=options.remove(&OptionKey::PlainArtifact);
+    let image5_role=options.remove(&OptionKey::Image5Witness).map(|value|match value.to_str(){Some("retained")=>Ok(image5_wire::Role::Retained),Some("owned")=>Ok(image5_wire::Role::Owned),_=>Err("image5 witness role must be retained or owned".to_owned())}).transpose()?;
+    let image5_artifact=options.remove(&OptionKey::Image5Artifact);
     if (plain_role.is_some()&&owned_artifact.is_some())||(plain_role.is_none()&&plain_artifact.is_some()){return Err("plain witness is separate from owned loader composition".into());}
+    if (image5_role.is_some()&&(owned_artifact.is_some()||plain_role.is_some()))||(image5_role.is_none()&&image5_artifact.is_some()){return Err("image5 witness is separate from owned loader and plain compositions".into());}
     let mut take=|key|options.remove(&key).ok_or_else(||USAGE.to_owned());let run_path=take(OptionKey::Run)?;let update_path=take(OptionKey::Update)?;let rom_path=take(OptionKey::Rom)?;let output=take(OptionKey::Output)?;
     if !options.is_empty(){return Err(USAGE.into());}std::fs::create_dir(&output).map_err(|error|error.to_string())?;
     let result=(||->Result<(),String>{
@@ -362,9 +416,18 @@ fn drive()->Result<(),String>{
             plain_program::Program::from_staged(role,plain_artifact.as_deref(),&output,&mut catalog).map(|program|plain_runtime::Runtime::new(program,payload))
         }).transpose()?;
         if let Some(plain)=&plain {calls.retain(|call|!(0x6a9844..0x6a9938).contains(&call.site.0));calls.extend(plain.program.call_sites());}
+        let image5=image5_role.map(|role|{
+            let (payload,record)=image5_runtime::bind_payload(&analysis,&output)?;
+            image5_program::Program::from_staged(role,image5_artifact.as_deref(),&output,&mut catalog).map(|program|image5_runtime::Runtime::new(program,payload,record))
+        }).transpose()?;
+        if let Some(image5)=&image5 {
+            calls.extend(decode_call(image5_runtime::CALLER,catalog.word(image5_runtime::CALLER)?.1)?);
+            calls.extend(image5.program.call_sites());
+        }
+        let expected_update=if let Some(plain)=&plain {plain.program.update()} else if let Some(image5)=&image5 {image5.program.update()} else {program.update()};
         let update_digest=Digest::of(&update);
         let identity=InputIdentity {run:Digest::of(&run_bytes),update:update_digest.clone(),update_file:FileBinding {path:"input-update.DAT".into(),sha256:update_digest},rom:Digest::of(&rom),executable:Digest::of(&read(&std::env::current_exe().map_err(|error|error.to_string())?)?),sources:catalog.0.iter().map(|image|image.binding.clone()).collect()};
-        if identity.run.as_str()!="efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"||identity.update.as_str()!=plain.as_ref().map_or_else(||program.update(),|plain|plain.program.update())||identity.rom.as_str()!="4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be"{return Err("observer inputs differ from the admitted reset route and program".into());}
+        if identity.run.as_str()!="efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"||identity.update.as_str()!=expected_update||identity.rom.as_str()!="4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be"{return Err("observer inputs differ from the admitted reset route and program".into());}
         std::fs::hard_link(&update_path,output.join(&identity.update_file.path)).map_err(|error|format!("cannot retain the validated DAT input: {error}"))?;
         persist(&output.join("inputs.json"),&identity)?;persist(&output.join("source-graph.json"),&calls)?;
         fujimod_emulator_exr2_board::register_board_builder();fujimod_emulator_models::register();let document=RunDocument::parse(&run_bytes)?;let maps=run::memory_maps(&document)?;
@@ -373,10 +436,11 @@ fn drive()->Result<(),String>{
         if machine.instructions()!=0{return Err("saved reset checkpoint is not preexecution".into());}
         let mut permanent=sites(&calls,&program);
         if let Some(plain)=&plain {for pc in plain.sites(){permanent.insert(pc.0,"plain-witness".into());}}
+        if let Some(image5)=&image5 {for pc in image5.sites(){permanent.insert(pc.0,"image5-witness".into());}}
         let mut initial=permanent.clone();
         for side in [Side::LoaderA,Side::LoaderB]{for pc in (side.base().0+0x9ac..side.base().0+0xb00).step_by(4){initial.entry(pc).or_insert_with(||"first-carrier-fetch".into());}}
         machine.traces.bound_full_registers(NonZeroUsize::new(TRACE_LIMIT).ok_or("zero trace bound")?);machine.traces.stop_labels=initial.values().cloned().chain(["temporary-boundary".into()]).collect();
-        let mut observation=Observation {plain,..Observation::default()};let mut epochs=Vec::new();
+        let mut observation=Observation {plain,image5,..Observation::default()};let mut epochs=Vec::new();
         let mut timer=TimerWatch {start:Count(0),end:Count(0),range:TIMER_RANGE,limit:TIMER_LIMIT,batch:None,error:None};let mut timer_active=false;
         let outcome=(||->Result<(),String>{
             machine.traces.arm(&machine.session,initial)?;
@@ -398,7 +462,7 @@ fn drive()->Result<(),String>{
         if timer_active{timer.end=Count(machine.instructions());match machine.session.board.transaction_watch_end(){Ok(batch)=>timer.batch=Some(batch),Err(error)=>timer.error=Some(error)}}
         persist(&output.join("timer-transactions.json"),&timer)?;
         persist(&output.join("trace.json"),&machine.traces.hits)?;
-        let report=Report {schema:3,program:program.binding(),plain:observation.plain.map(|plain|plain.evidence),origin:observation.first_loader,identity,checkpoint:Digest::of(&checkpoint),instructions:Count(machine.instructions()),menu:machine.menu().map(|menu|menu.map(|menu|[menu.menu_id,menu.setting_id,menu.cursor])),error:outcome.err(),machine_failure:machine.failure.clone(),events:observation.events,calls:observation.calls,snapshots:observation.snapshots,pulses:observation.pulses,epochs,trace:binding(&output,"trace.json")?,timer_transactions:binding(&output,"timer-transactions.json")?,static_calls:calls};
+        let report=Report {schema:3,program:program.binding(),plain:observation.plain.map(|plain|plain.evidence),image5:observation.image5.map(|image5|image5.evidence),origin:observation.first_loader,identity,checkpoint:Digest::of(&checkpoint),instructions:Count(machine.instructions()),menu:machine.menu().map(|menu|menu.map(|menu|[menu.menu_id,menu.setting_id,menu.cursor])),error:outcome.err(),machine_failure:machine.failure.clone(),events:observation.events,calls:observation.calls,snapshots:observation.snapshots,pulses:observation.pulses,epochs,trace:binding(&output,"trace.json")?,timer_transactions:binding(&output,"timer-transactions.json")?,static_calls:calls};
         persist(&output.join("continuations.json"),&report)?;
         if report.error.is_some()||report.machine_failure.is_some(){return Err("continuation observation did not complete".into());}
         drop(catalog);let verified=loader_continuations_check::check(&output,&analysis)?;persist(&output.join("verification.json"),&verified)
