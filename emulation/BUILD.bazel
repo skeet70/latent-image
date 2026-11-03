@@ -871,7 +871,7 @@ haskell_test(
 
 haskell_test(
     name = "fujimod-xm1-tests",
-    size = "small",
+    size = "medium",
     srcs = ["FujimodXm1Tests.hs"],
     args = ["$(rootpath @lab_fujimod_xm1//:test-manifest)"],
     data = [
