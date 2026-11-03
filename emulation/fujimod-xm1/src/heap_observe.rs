@@ -772,7 +772,7 @@ fn drive() -> Result<(), String> {
     } else { BTreeSet::new() };
     if mode == ObserverMode::Enabled {
         machine.traces.bound_full_registers(std::num::NonZeroUsize::new(BOUNDARY_LIMIT).ok_or("invalid hit bound")?);
-        machine.traces.arm(&machine.session, armed.iter().map(|address| (*address, "heap".into())).collect())?;
+        machine.traces.arm_mutable(&machine.session, armed.iter().map(|address| (*address, "heap".into())).collect())?;
         machine.traces.stop_labels = ["heap".into()].into_iter().collect();
     }
     let mut watch: Option<Box<fujimod_emulator::board::observation::MemoryWatch>> = None;

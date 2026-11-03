@@ -51,6 +51,8 @@ exports_files(["share/libusb-runtime/store-path"], visibility = ["//visibility:p
 _FUJIMOD_NIX_DEPS = [
     "//:devenv.lock",
     "//build-support:fujimod-classified-watch.patch",
+    "//build-support:fujimod-composite-cpu.patch",
+    "//build-support:fujimod-composite-watch.patch",
     "//build-support:fujimod-fetch-attribution.patch",
     "//build-support:fujimod-unicorn-context-align.patch",
     "//build-support:fujimod.nix",
@@ -156,6 +158,8 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/tests/peer_witness.rs",
     "//emulation:fujimod-xm1/tests/r4f_guard.rs",
     "//emulation:fujimod-xm1/tests/support/composed_nand_fixture.rs",
+    "//emulation:fujimod-xm1/tests/trace_throughput.rs",
+    "//emulation:fujimod-xm1/tests/trace_throughput_retain.rs",
 ]
 
 _NIX_BUILD_CAP = ["--max-jobs", "2", "--cores", "2"]
