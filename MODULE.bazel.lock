@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "0AhYuFkEDbMzsXS0Txczz/D+ExkcHQbdbvdbdEICdtQ=",
+        "bzlTransitiveDigest": "z3pfjlpeM0DMArlYIwumVeO9SlDfWdeHEZly5EkViw8=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -471,6 +471,7 @@
                 "@@//build-support:fujimod-composite-cpu.patch": "//build-support:fujimod-composite-cpu.patch",
                 "@@//build-support:fujimod-composite-watch.patch": "//build-support:fujimod-composite-watch.patch",
                 "@@//build-support:fujimod-fetch-attribution.patch": "//build-support:fujimod-fetch-attribution.patch",
+                "@@//build-support:fujimod-timer-upcount.patch": "//build-support:fujimod-timer-upcount.patch",
                 "@@//build-support:fujimod-unicorn-context-align.patch": "//build-support:fujimod-unicorn-context-align.patch",
                 "@@//build-support:fujimod.nix": "//build-support:fujimod.nix",
                 "@@//build-support:nixpkgs.nix": "//build-support:nixpkgs.nix"
@@ -503,6 +504,7 @@
                 "@@//build-support:fujimod-composite-cpu.patch": "//build-support:fujimod-composite-cpu.patch",
                 "@@//build-support:fujimod-composite-watch.patch": "//build-support:fujimod-composite-watch.patch",
                 "@@//build-support:fujimod-fetch-attribution.patch": "//build-support:fujimod-fetch-attribution.patch",
+                "@@//build-support:fujimod-timer-upcount.patch": "//build-support:fujimod-timer-upcount.patch",
                 "@@//build-support:fujimod-unicorn-context-align.patch": "//build-support:fujimod-unicorn-context-align.patch",
                 "@@//build-support:fujimod.nix": "//build-support:fujimod.nix",
                 "@@//build-support:nixpkgs.nix": "//build-support:nixpkgs.nix",

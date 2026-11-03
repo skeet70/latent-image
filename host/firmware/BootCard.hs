@@ -126,7 +126,7 @@ powerHoldConfig (Config bytes) = do
   require (control .&. 1 == 0) "power hold requires +0x10 bit 0 clear"
   pure (Config (patch bytes [(0x10,putLE 4 (control .|. 1))]))
 
--- ROM mount: 0x80001ae0 and 0x80001ba0, not a filesystem-library mount.
+-- ROM FAT mount 0x80001ba0 with its volume check 0x80001ae0, not a filesystem-library mount.
 mountRom :: B.ByteString -> Either String Volume
 mountRom image = do
   first <- slice image 0 512

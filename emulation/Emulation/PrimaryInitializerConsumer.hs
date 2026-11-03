@@ -15,7 +15,7 @@ import qualified Data.ByteString as B
 import Data.List (sort)
 import qualified Data.Map.Strict as M
 import Data.Word (Word8, Word32, Word64)
-import Emulation.FirstStageWitness (encodeLeWord, leWordAt, sha256Hex)
+import Emulation.FirstStageWitness (encodeLeWord, leWordAt, recordedCp14Identities, sha256Hex)
 import qualified Emulation.InterfaceInitializer as I
 import Emulation.InterfaceInitializer
   ( Context (..), Views (..), Source (..), ByteOrder (..), Event (..), Mode (..)
@@ -376,7 +376,7 @@ parseReceipt bytes = do
   initializer <- field row "initializer" >>= PI.parseReceiptValue
   continued <- field row "continuation" >>= nullable parseContinuation
   observed <- field row "consumer" >>= nullable parseConsumer
-  require (instructions == total final && instructions <= budget && identities == [0x4003,0x5003])
+  require (instructions == total final && instructions <= budget && identities `elem` [[core0, core1] | (core0, core1) <- recordedCp14Identities])
     "primary root0 final progress or CP14 identities differ"
   let names = [boundary | Stop boundary _ <- stops]
   require (names == take (length names) [Installation,Entry,Selected,After]) "primary root0 boundary order differs"

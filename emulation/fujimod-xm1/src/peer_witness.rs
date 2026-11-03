@@ -383,7 +383,7 @@ fn bindings(document: &RunDocument) -> Result<(Vec<factory::MemoryMap>, [Identit
     let mut identities = [Identity(0); 2];
     for (core, processor) in graph.processors.iter().enumerate() {
         let expected_pc = if core == 0 { 0 } else { 0x3fff0000 };
-        let expected_identity = if core == 0 { 0x4003 } else { 0x5003 };
+        let expected_identity = crate::run::CoreIdentities::Xm1.words()[core];
         let profile = processor.rprofile.ok_or("peer context lacks R-profile options")?;
         if processor.model != CpuModel::CortexR5F || processor.released != (core == 0)
             || profile.cp14_identity != expected_identity

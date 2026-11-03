@@ -11,7 +11,7 @@ Status: prepared 2026-10-09 and run at the bench the same day from 23:35Z; E-FIL
 - A mismatch outside the manifest's 114 changed bytes is a writer or an image difference the container does not carry; name it before concluding anything.
 - The adjustment half answers two independent questions: whether the updater recorded this install at its update stamp, and whether the restore lists preserved this body's bytes. Either outcome of either question is a result.
 
-The before state is on record and verified clean, so this session takes no before capture: the 2026-10-08 `dump-ram` segments `20261008T045459Z-dump-ram-id4-image-0` and `20261008T045506Z-dump-ram-id4-image-1` (E-DUMP-RAM-150), the adjustment mirror `20261009T163324Z-read-config` (E-PREINSTALL-CONFIG-150, byte-identical to the 2026-10-08 mirror) and the settings banks `20261009T163721Z-read-media` (E-PREINSTALL-MEDIA-150).
+The before state is on record and verified clean, so this session takes no before capture: the 2026-10-08 `dump-ram` segments `20261008T045459Z-dump-ram-id4-image-0` and `20261008T045506Z-dump-ram-id4-image-1` (E-DUMP-RAM-150), the adjustment mirror `20261009T163324Z-read-config` (E-FILMSIM-READBACK-150, byte-identical to the 2026-10-08 mirror) and the settings banks `20261009T163721Z-read-media` (E-FILMSIM-READBACK-150).
 
 ## 2. Read this first
 
@@ -55,7 +55,7 @@ devenv shell -- bazel run //transport:camera -- read-media
 
 ## 6. Ending
 
-**End the session by cutting the dummy-battery supply**, then unplug USB and set the POWER switch to OFF while unpowered. Do not end it with the POWER switch: a switch-ended jig cycle resets date, time, language and the C slot (E-JIG-CYCLE-D-150, hardware-observed), and the cut ending preserved settings in every prior observation (E-JIG-POWERCUT-PRESERVES-150). Then boot normally once to restore ordinary operation after `read-media`'s storage-driver shutdown and confirm the watched settings and the seven-entry film-simulation list again, then take one shot and play it back ([spec 3.1 step 4](../spec/07-governance-and-handoff.md#31-procedure)). That boot is the restoration check and its result goes in note row E; the byte evidence is complete when act 4's folder is on disk.
+**End the session by cutting the dummy-battery supply**, then unplug USB and set the POWER switch to OFF while unpowered. Do not end it with the POWER switch: a switch-ended jig cycle resets date, time, language and the C slot (E-JIG-CYCLE-D-150, hardware-observed), and the cut ending preserved settings in every prior observation (E-JIG-CYCLE-D-150). Then boot normally once to restore ordinary operation after `read-media`'s storage-driver shutdown and confirm the watched settings and the seven-entry film-simulation list again, then take one shot and play it back ([spec 3.1 step 4](../spec/07-governance-and-handoff.md#31-procedure)). That boot is the restoration check and its result goes in note row E; the byte evidence is complete when act 4's folder is on disk.
 
 ## 7. The note sheet
 
@@ -109,7 +109,7 @@ No output and exit 0 is the expected result over `[0x0061c340, 0x0081c000)`.
 
 ## 9. The adjustment comparison plan
 
-Act 3's `windows/` compares byte by byte against `private-data/sessions/20261009T163324Z-read-config/windows/`, all 1,309 windows over `[0, 0x42000)` and `[0x400000, 0x40fd00)`. The named fields first, with before values from E-PREINSTALL-ADJ-VALUES-150:
+Act 3's `windows/` compares byte by byte against `private-data/sessions/20261009T163324Z-read-config/windows/`, all 1,309 windows over `[0, 0x42000)` and `[0x400000, 0x40fd00)`. The named fields first, with before values from E-FILMSIM-READBACK-150:
 
 | Field | Window and byte | Before | Expected after | Reading |
 | --- | --- | --- | --- | --- |
@@ -147,7 +147,7 @@ Act 4's `bank-0.bin`/`bank-1.bin` compare against `private-data/sessions/2026100
 
 | Operation | Byte | Values written | Persistence |
 | --- | --- | --- | --- |
-| `dump-ram` acts 1 and 2 | cache index `0xf7`, RAM `0x41acd8f7` | `01`, readback, work, `00`, readback | none; a function-3 write at an index other than `0x80` posts no service command (byte-read transport contract, E-ENABLE-COMMITFREE-150) |
+| `dump-ram` acts 1 and 2 | cache index `0xf7`, RAM `0x41acd8f7` | `01`, readback, work, `00`, readback | none; a function-3 write at an index other than `0x80` posts no service command (byte-read transport contract, E-GATE-ENABLE-SEQUENCE) |
 | `read-config` act 3 | none | none | H1 reads only; C0/C4 session and reply RAM |
 | `read-media` act 4 | cache indices `0x80`, `0x81`, `0x82`, `0x83`, the restore-only `0x84`-`0x8a`, and `0xf7` | `0x35` trigger and `0x33` disarm at `0x80`, left at the `0x33` disarm; zero at `0x81`, the per-bank selector at `0x82`, the `0xff` sentinel at `0x83`; `0x81`-`0x8a` and `0xf7` restored to their session-start values on every exit path | none; `0x35`/`0x33` are the raw-read action's trigger and disarm, not commit values; the operation shuts down the storage driver |
 | Section 6 ending | dummy-battery supply cut | volatile gates and session state | no POWER/OFF defaults record (hardware-observed prior cuts) |

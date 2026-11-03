@@ -170,7 +170,7 @@ fn aliases(machine: &Machine, runner: &Runner<'_>, observed: &[Resource], result
         let size = resource.views.physical.len();
         let sha256 = Sha256Digest::of(&resource.views.physical);
         for core in 0..2 {
-            require(machine.session.board.cpu(core)?.rprofile_identity(None)? == [0x4003, 0x5003][core],
+            require(machine.session.board.cpu(core)?.rprofile_identity(None)? == crate::run::CoreIdentities::Xm1.words()[core],
                 "critical CP14 identity differs")?;
             for guest in [start, ZERO_GUEST + start] {
                 require(runner.physical_of(core, guest, size as u64)? == start

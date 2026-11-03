@@ -470,7 +470,7 @@ expectedValue firmware dat record2 loader image4 (Argument arg) = do
     , "image4_sha256" .= F.sha256Hex imageHash, "argument" .= arg
     , "loader_b_load" .= (0xd0000 :: Word32), "loader_b_entry" .= (0xd0020 :: Word32)
     , "argument_source" .= (0x61c40c :: Word32), "budget" .= (20000000 :: Int)
-    , "cp14_identities" .= ([0x4003,0x5003] :: [Word32])
+    , "cp14_identities" .= ([0x4003,0x8003] :: [Word32])
     , "stops" .= map stopName [Record2Entry,RendezvousTail,Record2Handoff,LoaderBEntry]
     , "watch_record_limit" .= (16384 :: Int)
     ])

@@ -70,6 +70,10 @@ impl EncodedId {
     pub const fn raw(self) -> u32 {
         self.0
     }
+
+    pub const fn from_raw(raw: u32) -> EncodedId {
+        EncodedId(raw)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,6 +109,19 @@ impl SlotStatus {
     }
 }
 
+/// The class-1 ids the allocator 0x728804 hands out, from its cursor (initially 120) down.
+pub const ALLOCATED_IDS: core::ops::RangeInclusive<u16> = 105..=TaskId::CAPACITY;
+
+/// The allocator's return: the created and activated id, or the failing status (-34 when the
+/// pool is exhausted, else the `+0x0` or `+0xc` status).
+pub const fn allocated_id(raw: i32) -> Result<TaskId, SlotStatus> {
+    if raw >= *ALLOCATED_IDS.start() as i32 && raw <= *ALLOCATED_IDS.end() as i32 {
+        Ok(TaskId(raw as u16))
+    } else {
+        Err(SlotStatus::from_raw(raw))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,5 +150,14 @@ mod tests {
         assert_eq!(SlotStatus::from_raw(-43), SlotStatus::QueueOverflow);
         assert_eq!(SlotStatus::from_raw(-50), SlotStatus::Timeout);
         assert_eq!(SlotStatus::from_raw(-7), SlotStatus::Other(-7));
+    }
+
+    #[test]
+    fn allocator_results_decode() {
+        assert_eq!(allocated_id(120), Ok(TaskId::new(120).unwrap()));
+        assert_eq!(allocated_id(105), Ok(TaskId::new(105).unwrap()));
+        assert_eq!(allocated_id(104), Err(SlotStatus::Other(104)));
+        assert_eq!(allocated_id(-34), Err(SlotStatus::Other(-34)));
+        assert_eq!(allocated_id(-41), Err(SlotStatus::ObjectState));
     }
 }

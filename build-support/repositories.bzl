@@ -54,6 +54,7 @@ _FUJIMOD_NIX_DEPS = [
     "//build-support:fujimod-composite-cpu.patch",
     "//build-support:fujimod-composite-watch.patch",
     "//build-support:fujimod-fetch-attribution.patch",
+    "//build-support:fujimod-timer-upcount.patch",
     "//build-support:fujimod-unicorn-context-align.patch",
     "//build-support:fujimod.nix",
     "//build-support:nixpkgs.nix",
