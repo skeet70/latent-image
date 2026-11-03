@@ -27,9 +27,15 @@ deriveResult tails words' = deriveFunction [] (GuestAddress 0x1000) (bytes words
   (FunctionWindow (GuestAddress 0x1000) (GuestAddress (0x1000 + 4 * fromIntegral (length words'))))
   (map GuestAddress tails)
 
-refused :: Either String a -> Bool
+refused :: Either failure a -> Bool
 refused (Left _) = True
 refused (Right _) = False
+
+retained :: [Word32] -> Either FootprintError CodeFootprint
+retained words' = deriveRetainedFootprint (GuestAddress 0x1000) (bytes words') (GuestAddress 0x1000)
+footprint :: [Word32] -> [Word32] -> [Word32] -> [Word32] -> CodeFootprint
+footprint code literals unresolved dependencies = CodeFootprint (map GuestAddress code) (map GuestAddress literals)
+  (map GuestAddress unresolved) (map GuestAddress dependencies)
 
 main :: IO ()
 main = do
@@ -162,6 +168,49 @@ main = do
   check "the production comparison accepts the independently specified code extent" (compareExtent 8 == Right ())
   check "the production comparison rejects a shortened declaration" (refused (compareExtent 4))
   check "the production comparison rejects a declaration that includes the literal" (refused (compareExtent 12))
+  check "retained footprints do not widen across unused trailing bytes"
+    (retained [0xe12fff1e,0x12345678] == Right (footprint [0x1000] [] [] []))
+  check "retained literal words are data even when they encode a return"
+    (retained [0xe59f0000,0xe12fff1e,0xe12fff1e] == Right (footprint [0x1000,0x1004] [0x1008] [] []))
+  check "a retained instruction can also be read as data"
+    (retained [0xe51f0004,0xe12fff1e] == Right (footprint [0x1000,0x1004] [0x1004] [] []))
+  check "an unresolved retained register tail stays explicit"
+    (retained [0xe12fff13] == Right (footprint [0x1000] [] [0x1000] []))
+  check "an unresolved retained call preserves its caller continuation"
+    (retained [0xe12fff33,0xe12fff1e] == Right (footprint [0x1000,0x1004] [] [0x1000] []))
+  check "an external retained call publishes its source dependency"
+    (retained [0xeb00003e,0xe12fff1e] == Right (footprint [0x1000,0x1004] [] [] [0x1100]))
+  check "an external retained tail publishes its source dependency"
+    (retained [0xea00003e] == Right (footprint [0x1000] [] [] [0x1100]))
+  check "retained pointer switches distinguish targets from table data"
+    (retained [0xe3500001,0x979ff100,0xe12fff1e,0x1014,0x1018,0xe3a00000,0xe12fff1e]
+      == Right (footprint [0x1000,0x1004,0x1008,0x1014,0x1018] [0x100c,0x1010] [] []))
+  check "retained branch-table switches admit every bounded branch"
+    (retained [0xe3500001,0x908ff100,0xe12fff1e,0xea000000,0xea000000,0xe12fff1e,0xe12fff1e]
+      == Right (footprint [0x1000,0x1004,0x1008,0x100c,0x1010,0x1014,0x1018] [] [] []))
+  check "retained unconditional switches require their upper-bound guard"
+    (retained [0xe3500001,0x8a000003,0xe08ff100,0xe12fff1e,0xea000000,0xea000000,0xe12fff1e,0xe12fff1e]
+      == Right (footprint [0x1000,0x1004,0x1008,0x1010,0x1014,0x1018,0x101c] [] [] []))
+  check "a branch cannot bypass a retained switch comparison"
+    (retained [0x0a000001,0xe1a00000,0xe3500001,0x979ff100,0xe12fff1e,0x101c,0x1020,0xe3a00000,0xe12fff1e]
+      == Left (FootprintSwitchBypassed (GuestAddress 0x100c)))
+  check "a retained switch cannot begin without an executed comparison"
+    (refused (retained [0x979ff100,0xe12fff1e,0x1004]))
+  check "retained Thumb transfers refuse without an A32 source extent"
+    (retained [0xfa000000] == Left (FootprintThumb (GuestAddress 0x1000)))
+  check "unclassified retained PC calculations remain explicit"
+    (retained [0xe083f000] == Right (footprint [0x1000] [] [0x1000] []))
+  check "a canonical postindexed stack pop is an explicit retained return"
+    (retained [0xe49df004] == Right (footprint [0x1000] [] [] []))
+  check "a stack-indexed dispatch remains an unresolved retained transfer"
+    (retained [0xe79df000] == Right (footprint [0x1000] [] [0x1000] []))
+  check "a noncanonical stack offset PC load remains unresolved"
+    (retained [0xe59df004] == Right (footprint [0x1000] [] [0x1000] []))
+  check "a byte PC load is not a retained word return"
+    (retained [0xe4ddf004] == Right (footprint [0x1000] [] [0x1000] []))
+  check "unconditional barriers remain linear retained instructions"
+    (retained [0xf57ff04f,0xf57ff05f,0xf57ff06f,0xe12fff1e]
+      == Right (footprint [0x1000,0x1004,0x1008,0x100c] [] [] []))
   structural <- either fail pure (inspectFunction [] (GuestAddress 0x1000) (bytes [0xe3a0e000,0xe12fff1e])
     (FunctionWindow (GuestAddress 0x1000) (GuestAddress 0x1008)) [])
   check "structural inventory retains an extent without admitting an overwritten return"

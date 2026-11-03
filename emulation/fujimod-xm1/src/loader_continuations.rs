@@ -6,6 +6,7 @@ use std::{collections::{BTreeMap, BTreeSet}, num::NonZeroUsize, path::{Path, Pat
 
 mod continuation_view;
 mod loader_continuations_check;
+mod application_pump;
 mod loader_orchestration_owned;
 mod plain_program;
 mod plain_wire;
@@ -14,7 +15,7 @@ mod plain_check;
 use loader_orchestration_owned::{Program, ProgramBinding, Side};
 use continuation_view::{ByteCount, Digest, EventId, FileBinding, Resource, Snapshot, Words};
 
-const USAGE: &str = "loader-continuations --run RUN --update DAT --boot-rom ROM --analysis ROOT [--owned-artifact STAGED_DIR | --plain-witness retained|owned [--plain-artifact DIR]] --output NEW_DIR; --verify DIR | --verify-plain DIR --analysis ROOT; --compare-retained DIR --compare-owned DIR | --compare-plain-retained DIR --compare-plain-owned DIR --analysis ROOT --output NEW_DIR; --plain-controls DIR --analysis ROOT --output NEW_DIR; --source-calls NEW_DIR --analysis ROOT";
+const USAGE: &str = "loader-continuations --run RUN --update DAT --boot-rom ROM --analysis ROOT [--owned-artifact STAGED_DIR | --plain-witness retained|owned [--plain-artifact DIR]] --output NEW_DIR; --verify DIR | --verify-plain DIR --analysis ROOT; --compare-retained DIR --compare-owned DIR | --compare-plain-retained DIR --compare-plain-owned DIR --analysis ROOT --output NEW_DIR; --plain-controls DIR --analysis ROOT --output NEW_DIR; --source-calls NEW_DIR --analysis ROOT; --application-pump retained|owned --original-update ORIGINAL_DAT --update ACTUAL_DAT --pump-code BIN --pump-symbols SYMBOLS --pump-admission CONTRACT --run RUN --boot-rom ROM --analysis ROOT --output NEW_APP154_DIR; --verify-application-pump DIR --analysis ROOT; --compare-application-pump RETAINED --owned-pump OWNED --analysis ROOT --output NEW_APP154_DIR; --controls-application-pump OWNED --analysis ROOT --output NEW_APP154_DIR";
 const TRACE_LIMIT: usize = 16384;
 const DIAGNOSTICS: [(u32, u32); 7] = [(0x40cac,0x40d50),(0xd0cac,0xd0d50),(0x40d70,0x40d98),(0xd0d70,0xd0d98),(0x69cc6c,0x69cd58),(0xed468c,0xed485c),(0xed4a8c,0xed4a9c)];
 
@@ -133,6 +134,10 @@ enum Phase { Setup, Root, DiagnosticReturn, Idle0, Idle1AndStandby }
 impl Phase {
     fn parse(value:u32)->Result<Self,String>{match value{0=>Ok(Self::Setup),1=>Ok(Self::Root),2=>Ok(Self::DiagnosticReturn),3=>Ok(Self::Idle0),4=>Ok(Self::Idle1AndStandby),_=>Err("phase is outside the loader producer set".into())}}
 }
+fn dispatch_phase(pc:Guest)->Option<Phase>{
+    carrier(pc)?;
+    match pc.0&0xffff{0x09fc=>Some(Phase::Setup),0x0a34=>Some(Phase::Root),0x0a3c=>Some(Phase::Idle0),0x0a68=>Some(Phase::DiagnosticReturn),0x0aec=>Some(Phase::Idle1AndStandby),_=>None}
+}
 fn carrier(pc:Guest)->Option<Side>{[Side::LoaderA,Side::LoaderB].into_iter().find(|side|(side.base().0+0x9ac..side.base().0+0xb00).contains(&(pc.0&!0x40000000)))}
 fn decode_call(site:Guest,word:u32)->Result<Option<StaticCall>,String>{
     if word&0xff000000==0xeb000000 {let displacement=(((word&0xffffff)<<8) as i32>>6) as u32;Ok(Some(StaticCall {site,target:CallTarget::Direct(Guest(site.0.wrapping_add(8).wrapping_add(displacement))),continuation:Guest(site.0+4)}))}
@@ -142,27 +147,37 @@ fn startup_calls(catalog:&Catalog)->Result<Vec<StaticCall>,String>{
     let mut calls=Vec::new();for (start,end) in [(0x409ac,0x40af4),(0xd09ac,0xd0af4),(0xd985a4,0xd986ac),(0x6a9844,0x6a9934),(0x73b554,0x73b558)]{for pc in (start..end).step_by(4){if let Some(call)=decode_call(Guest(pc),catalog.word(Guest(pc))?.1)?{calls.push(call);}}}Ok(calls)
 }
 fn diagnostics(pc:Guest)->bool{let physical=pc.0&!0x40000000;DIAGNOSTICS.iter().any(|&(start,end)|(start..end).contains(&physical))}
-fn sites(calls:&[StaticCall],program:&Program)->BTreeMap<u32,String>{
+fn base_sites(calls:&[StaticCall])->BTreeMap<u32,String>{
     let mut points=BTreeMap::new();for call in calls{points.insert(call.site.0,"source-call".into());points.insert(call.continuation.0,"source-return".into());}
     for base in [0x40000,0xd0000]{for offset in [0x9ac,0x9cc,0x9d0,0xa08,0xa0c,0xa8c,0xa90,0xaa8,0xaac,0xab0]{points.insert(base+offset,"loader-boundary".into());}}
     for &(start,end) in &DIAGNOSTICS{for pc in (start..end).step_by(4){points.insert(pc,"diagnostic-refusal".into());}}
     for pc in [0x43688,0xd3688,0x436e4,0xd36e4,0x436e8,0xd36e8,0x43728,0xd3728,0x43758,0xd3758,0x69cbf0,0x69cd58,0x69d160,0x69d2b4,0x69d2e0,0x69d2e4,0x69cf84,0x69cf94,0x69cf98,0xd985a4,0xd985c0,0xd985c4,0xd985e0,0xd985e4,0x6a96c0,0x6a9734,0x6a9840,0x6a9844,0x6a9934,0x6ae360,0x6ae3f4,0x6ae500,0x73b3a0,0x73b4ac,0x73b554,0x73b924,0x73b950,0x73b9c4,0x73bc54,0x73bd24,0x73be5c,0x73be60,0x73be70,0x73be74,0x73beac,0x73beb0,0x73cdc0,0x73e048,0x725dd8,0x1109130,0x11e6e14,0x125cdfc,0x1273f60,0x1279828,0x127aabc,0x127bdf4,0x127cbb0,0x127da94,0x127f658,0x12812c4,0x128becc,0x13e36fc,0x13e9c0c,0x13eb548]{points.insert(pc,"continuation".into());}
     for pc in [0xd9858c,0xd98590,0xd986ac,0xd986c8,0xd986cc,0xd986dc,0xd986e0,0x107277c,0x1066304,0x1062114,0x1071ca4,0x106ceec,0x1064224,0x6a97bc]{points.insert(pc,"image5-continuation".into());}
     for pc in [0x6a8bec,0x6a8c00,0x6a8c04]{points.insert(pc,"bss-completion".into());}
-    for pc in [0x41ad4,0x41ad8,0x41adc,0x41ae0,0x41ae4,0x41ae8,0x41b78,0x41b7c,0x41b80]{points.insert(pc,"elapsed-source".into());}
     points.insert(0x69d2d8,"source-spin-refusal".into());
+    points
+}
+fn sites(calls:&[StaticCall],program:&Program)->BTreeMap<u32,String>{
+    let mut points=base_sites(calls);
+    for pc in [0x41ad4,0x41ad8,0x41adc,0x41ae0,0x41ae4,0x41ae8,0x41b78,0x41b7c,0x41b80]{points.insert(pc,"elapsed-source".into());}
     for pc in program.refusal_sites(){points.insert(pc.0,"unsupported-carrier-fetch".into());}
     points
 }
-fn classes(stage:WatchStage)->Vec<WatchRange>{
-    let early=stage.early();
-    let mut spans=vec![(0x61c000,0x61c220),(0x40000,0x40020),(0xd0000,0xd0020),(0xa00c4,0xa00c8),(0x5927c,0x59280),(0xe923c,0xe9240),(0x4f10c,0x4f118),(0xdf0cc,0xdf0d8),(0x89f794,0x89f798),(0x96bd20,0x96bd28),(0x89f8ac,0x89f8b0),(0x944440,0x944464),(0x914834,0x914838),(0x972e88,0x972e94),(0x14c100c,0x14c1010),(0x14c1018,0x14c101c),(0x14c113c,0x14c1140),(0x9662d4,0x9662d8)];
-    spans.extend([(0x89f784,0x89f788),(0x89f78c,0x89f790),(0xa0800,0xa0838)]);
-    if early{spans.extend([(0x545a4,0x545a8),(0x54760,0x5476c),(0xe4564,0xe4568),(0xe4720,0xe472c),(0x63450,0x63460),(0xf3410,0xf3420),(0x63460,0x63498),(0xf3420,0xf3458),(0xa0800,0xc0900)]);}
+const LOADER_SPANS:[(u64,u64);20]=[(0x61c000,0x61c220),(0x40000,0x40020),(0xd0000,0xd0020),(0xa00c4,0xa00c8),(0x5927c,0x59280),(0xe923c,0xe9240),(0x4f10c,0x4f118),(0xdf0cc,0xdf0d8),(0x89f794,0x89f798),(0x96bd20,0x96bd28),(0x89f8ac,0x89f8b0),(0x944440,0x944464),(0x914834,0x914838),(0x972e88,0x972e94),(0x14c100c,0x14c1010),(0x14c1018,0x14c101c),(0x14c113c,0x14c1140),(0x9662d4,0x9662d8),(0x89f784,0x89f788),(0x89f78c,0x89f790)];
+const EARLY_SPANS:[(u64,u64);8]=[(0x545a4,0x545a8),(0x54760,0x5476c),(0xe4564,0xe4568),(0xe4720,0xe472c),(0x63450,0x63460),(0xf3410,0xf3420),(0x63460,0x63498),(0xf3420,0xf3458)];
+const RING_HEADER:(u64,u64)=(0xa0800,0xa0838);
+fn loader_classes(spans:Vec<(u64,u64)>,elapsed:&[(u64,u64)],carrier:WatchKinds)->Vec<WatchRange>{
+    let fetched=WatchKinds::CPU_FETCH.union(WatchKinds::WRITES);
     let mut result:Vec<_>=spans.into_iter().map(|(start,end)|WatchRange {start,end,kinds:WatchKinds::WRITES}).collect();
-    result.extend(DIAGNOSTICS.map(|(start,end)|WatchRange {start:u64::from(start),end:u64::from(end),kinds:WatchKinds::CPU_FETCH.union(WatchKinds::WRITES)}));
-    if stage==WatchStage::Startup{result.extend([(0x41ad4,0x41aec),(0x41b78,0x41b84)].map(|(start,end)|WatchRange {start,end,kinds:WatchKinds::CPU_FETCH.union(WatchKinds::WRITES)}));}
-    result.extend([(0x409ac,0x40b00),(0xd09ac,0xd0b00)].map(|(start,end)|WatchRange {start,end,kinds:if stage==WatchStage::Bootstrap {WatchKinds::WRITES}else{WatchKinds::CPU_FETCH.union(WatchKinds::WRITES)}}));result
+    result.extend(DIAGNOSTICS.map(|(start,end)|WatchRange {start:u64::from(start),end:u64::from(end),kinds:fetched}));
+    result.extend(elapsed.iter().map(|&(start,end)|WatchRange {start,end,kinds:fetched}));
+    result.extend([(0x409ac,0x40b00),(0xd09ac,0xd0b00)].map(|(start,end)|WatchRange {start,end,kinds:carrier}));result
+}
+fn classes(stage:WatchStage)->Vec<WatchRange>{
+    let mut spans=LOADER_SPANS.to_vec();spans.push(RING_HEADER);
+    if stage.early(){spans.extend(EARLY_SPANS);spans.push((0xa0800,0xc0900));}
+    let elapsed:&[(u64,u64)]=if stage==WatchStage::Startup{&[(0x41ad4,0x41aec),(0x41b78,0x41b84)]}else{&[]};
+    loader_classes(spans,elapsed,if stage==WatchStage::Bootstrap{WatchKinds::WRITES}else{WatchKinds::CPU_FETCH.union(WatchKinds::WRITES)})
 }
 fn registers(machine:&Machine,core:Core)->Result<Registers,String>{
     let index=usize::from(core);let mut r=[0;13];for (number,value) in r.iter_mut().enumerate(){*value=u32::try_from(machine.session.board.read_register(index,Register::Arm32(arm::Register::R(number as u8)))?).map_err(|_|"register exceeds word")?;}
@@ -296,12 +311,31 @@ fn epoch(machine:&mut Machine,observation:&mut Observation,catalog:&Catalog,maps
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum OptionKey { Run,Update,Rom,Analysis,Output,Verify,SourceCalls,OwnedArtifact,CompareRetained,CompareOwned,PlainWitness,PlainArtifact,VerifyPlain,ComparePlainRetained,ComparePlainOwned,PlainControls }
-impl OptionKey {fn parse(value:&std::ffi::OsStr)->Result<Self,String>{match value.to_str(){Some("--run")=>Ok(Self::Run),Some("--update")=>Ok(Self::Update),Some("--boot-rom")=>Ok(Self::Rom),Some("--analysis")=>Ok(Self::Analysis),Some("--output")=>Ok(Self::Output),Some("--verify")=>Ok(Self::Verify),Some("--source-calls")=>Ok(Self::SourceCalls),Some("--owned-artifact")=>Ok(Self::OwnedArtifact),Some("--compare-retained")=>Ok(Self::CompareRetained),Some("--compare-owned")=>Ok(Self::CompareOwned),Some("--plain-witness")=>Ok(Self::PlainWitness),Some("--plain-artifact")=>Ok(Self::PlainArtifact),Some("--verify-plain")=>Ok(Self::VerifyPlain),Some("--compare-plain-retained")=>Ok(Self::ComparePlainRetained),Some("--compare-plain-owned")=>Ok(Self::ComparePlainOwned),Some("--plain-controls")=>Ok(Self::PlainControls),_=>Err(USAGE.into())}}}
+enum OptionKey { Run,Update,Rom,Analysis,Output,Verify,SourceCalls,OwnedArtifact,CompareRetained,CompareOwned,PlainWitness,PlainArtifact,VerifyPlain,ComparePlainRetained,ComparePlainOwned,PlainControls,ApplicationPump,VerifyApplicationPump,CompareApplicationPump,OwnedPump,ControlsApplicationPump,OriginalUpdate,PumpCode,PumpSymbols,PumpAdmission }
+impl OptionKey {fn parse(value:&std::ffi::OsStr)->Result<Self,String>{match value.to_str(){Some("--run")=>Ok(Self::Run),Some("--update")=>Ok(Self::Update),Some("--boot-rom")=>Ok(Self::Rom),Some("--analysis")=>Ok(Self::Analysis),Some("--output")=>Ok(Self::Output),Some("--verify")=>Ok(Self::Verify),Some("--source-calls")=>Ok(Self::SourceCalls),Some("--owned-artifact")=>Ok(Self::OwnedArtifact),Some("--compare-retained")=>Ok(Self::CompareRetained),Some("--compare-owned")=>Ok(Self::CompareOwned),Some("--plain-witness")=>Ok(Self::PlainWitness),Some("--plain-artifact")=>Ok(Self::PlainArtifact),Some("--verify-plain")=>Ok(Self::VerifyPlain),Some("--compare-plain-retained")=>Ok(Self::ComparePlainRetained),Some("--compare-plain-owned")=>Ok(Self::ComparePlainOwned),Some("--plain-controls")=>Ok(Self::PlainControls),Some("--application-pump")=>Ok(Self::ApplicationPump),Some("--verify-application-pump")=>Ok(Self::VerifyApplicationPump),Some("--compare-application-pump")=>Ok(Self::CompareApplicationPump),Some("--owned-pump")=>Ok(Self::OwnedPump),Some("--controls-application-pump")=>Ok(Self::ControlsApplicationPump),Some("--original-update")=>Ok(Self::OriginalUpdate),Some("--pump-code")=>Ok(Self::PumpCode),Some("--pump-symbols")=>Ok(Self::PumpSymbols),Some("--pump-admission")=>Ok(Self::PumpAdmission),_=>Err(USAGE.into())}}}
 fn drive()->Result<(),String>{
     let mut arguments=std::env::args_os().skip(1);let mut options=BTreeMap::new();
     while let Some(flag)=arguments.next(){if options.insert(OptionKey::parse(&flag)?,PathBuf::from(arguments.next().ok_or(USAGE)?)).is_some(){return Err(USAGE.into());}}
     let analysis=options.remove(&OptionKey::Analysis).ok_or(USAGE)?;
+    if let Some(output)=options.remove(&OptionKey::VerifyApplicationPump){if !options.is_empty(){return Err(USAGE.into());}return application_pump::verify(&output,&analysis);}
+    if let Some(retained)=options.remove(&OptionKey::CompareApplicationPump){
+        let owned=options.remove(&OptionKey::OwnedPump).ok_or(USAGE)?;
+        let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;
+        if !options.is_empty(){return Err(USAGE.into());}
+        return application_pump::compare(&retained,&owned,&analysis,&output);
+    }
+    if let Some(source)=options.remove(&OptionKey::ControlsApplicationPump){
+        let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;
+        if !options.is_empty(){return Err(USAGE.into());}
+        return application_pump::controls(&source,&analysis,&output);
+    }
+    if let Some(mode)=options.remove(&OptionKey::ApplicationPump){
+        let mode=application_pump::Mode::parse(&mode)?;
+        let mut take=|key|options.remove(&key).ok_or_else(||USAGE.to_owned());
+        let request=application_pump::Request {mode,analysis,run:take(OptionKey::Run)?,update:take(OptionKey::Update)?,original_update:take(OptionKey::OriginalUpdate)?,boot_rom:take(OptionKey::Rom)?,output:take(OptionKey::Output)?,code:take(OptionKey::PumpCode)?,symbols:take(OptionKey::PumpSymbols)?,admission:take(OptionKey::PumpAdmission)?};
+        if !options.is_empty(){return Err(USAGE.into());}
+        return application_pump::run(request);
+    }
     if let Some(output)=options.remove(&OptionKey::SourceCalls){
         if !options.is_empty(){return Err(USAGE.into());}
         let catalog=Catalog::open(&analysis)?;std::fs::create_dir(&output).map_err(|error|error.to_string())?;

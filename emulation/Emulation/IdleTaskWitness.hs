@@ -14,9 +14,12 @@ import Data.List (sort, find)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
 import Data.Maybe (isJust)
-import Data.Word (Word8, Word32, Word64)
+import Data.Word (Word32, Word64)
 import qualified Emulation.Sha256 as SHA
 import Emulation.IdleTaskWire
+import Emulation.TaskMemoryWire
+import Emulation.TaskMemoryWitness (Memory(..), CoreOrdinals, CaptureCoverage(..))
+import qualified Emulation.TaskMemoryWitness as Memory
 import qualified Emulation.LoaderCode as Loader
 import qualified Emulation.StartupTaskWire as S
 import FujiAF.JSON (decodeStrictIntegers)
@@ -26,11 +29,6 @@ import qualified Replacement.IdleTask.Artifact as I
 import qualified Replacement.KernelInstall.Wire as W
 import StockInventory (FunctionDeclaration (..), FunctionSize (..), FunctionWindow (..), GuestAddress (..), deriveFunction, derivedDeclaration, xm1TaskRecords)
 
-data SourceFiles = SourceFiles
-  { sourceDat :: B.ByteString, runDat :: B.ByteString, runDecoded :: B.ByteString, sourceRun :: B.ByteString, sourceRom :: B.ByteString
-  , sourceA :: B.ByteString, sourceB :: B.ByteString, sourceImage :: B.ByteString, sourceObserver :: B.ByteString
-  , sourceLinked :: B.ByteString, sourceSymbols :: B.ByteString, sourceContract :: B.ByteString }
-data ObservedFiles = ObservedFiles {observedReceipt :: B.ByteString, observedWatch :: B.ByteString, observedReset :: B.ByteString}
 data Inputs = Inputs SourceFiles Role Identity I.LinkedArtifact B.ByteString
 data QualifiedReceipt = QualifiedReceipt Receipt [Lifecycle]
 data WitnessError = SourceRejected | ArtifactRejected | ContractRejected | CandidateRejected | ReceiptDecodeRejected | StatusRejected
@@ -38,19 +36,11 @@ data WitnessError = SourceRejected | ArtifactRejected | ContractRejected | Candi
   | ForeignWriterRejected | PreimageRejected | SnapshotRejected | AliasRejected | ContextRejected | CodeRejected | TaskRejected
   | EntryRejected | WaitRejected | IrqRejected | FrameRejected | ReturnRejected | RepetitionRejected | ComparisonRejected
   deriving (Eq, Show)
-newtype Memory = Memory (M.Map Word32 Word8)
-data CoreOrdinals = CoreOrdinals !W.Count !W.Count
-data CaptureCoverage = ClassifiedAccess | AttributedInstruction
 
 coreOrdinals :: [W.Count] -> Either WitnessError CoreOrdinals
-coreOrdinals [primary,secondary] = Right (CoreOrdinals primary secondary)
-coreOrdinals _ = Left ClockRejected
+coreOrdinals = memoryResult . Memory.coreOrdinals
 coreOrdinal :: W.Core -> CoreOrdinals -> W.Count
-coreOrdinal W.Primary (CoreOrdinals primary _) = primary
-coreOrdinal W.Secondary (CoreOrdinals _ secondary) = secondary
-withOrdinal :: W.Core -> W.Count -> CoreOrdinals -> CoreOrdinals
-withOrdinal W.Primary value (CoreOrdinals _ secondary) = CoreOrdinals value secondary
-withOrdinal W.Secondary value (CoreOrdinals primary _) = CoreOrdinals primary value
+coreOrdinal = Memory.coreOrdinal
 data Lifecycle = Lifecycle S.KernelCore S.TaskId Word32 Word32 Int deriving (Eq, Show)
 data Pending = Pending Sample Sample (Maybe Sample) (Maybe Sample)
 data Track = Track {trackEntry :: Maybe Sample, trackWait :: Maybe Sample, trackPending :: Maybe Pending, trackCycles :: Int, trackRepeated :: Maybe Sample, trackResume :: Maybe Sample}
@@ -111,10 +101,6 @@ watchClasses = [W.WatchClass [start,end] writes | (start,end) <- immutableRanges
     writes = [W.CpuWrite,W.HostWrite,W.ModelBusWrite]
     dynamic = [(fromIntegral (physical base),fromIntegral (physical base)+size) | core <- [S.PrimaryKernel,S.SecondaryKernel]
       ,let (c,t,current,selected,low,high,_) = layout core,(base,size) <- [(c,40),(t,56),(current,4),(selected,4),(low,fromIntegral (high-low))]]
-unionRanges :: [[Word64]] -> [[Word64]]
-unionRanges = reverse . foldl merge [] . sort
-  where merge ([low,high]:rest) [start,end] | start <= high = [low,max high end]:rest
-        merge accumulated item = item:accumulated
 
 admitInputs :: Role -> SourceFiles -> Either WitnessError Inputs
 admitInputs role source = do
@@ -246,89 +232,35 @@ checkSample inputs hit index sample previous = do
     _ -> pure ()
   pure memory
 
-eventShape :: CaptureCoverage -> W.MemoryEvent -> Either WitnessError (W.Core,W.Address,Word64,Word64)
-eventShape coverage event = do
-  core <- need FetchRejected (W.eventCore event)
-  pc <- need FetchRejected (W.eventPc event)
-  clock <- count <$> need ClockRejected (W.eventInstructions event)
-  _ <- need ClockRejected (W.eventTick event)
-  target <- need WatchRejected (W.eventPhysical event)
-  require (clock <= budget && W.eventAddress event <= 0xffffffff && target <= 0xffffffff
-    && physical (fromIntegral (W.eventAddress event)) == fromIntegral target && W.eventByteOrder event == Just W.Little) WatchRejected
-  let classes = case coverage of
-        ClassifiedAccess -> watchClasses
-        AttributedInstruction -> [W.WatchClass [start,end] [W.CpuFetch] | (start,end) <- fetchRanges]
-  require (any (\classification -> case W.classRange classification of
-    [start,end] -> target >= start && toInteger target+toInteger (W.eventSize event) <= toInteger end
-      && W.eventSource event `elem` W.classKinds classification
-    _ -> False) classes) WatchRejected
-  pure (core,pc,clock,target)
+memoryResult :: Either Memory.ReplayError a -> Either WitnessError a
+memoryResult = either (Left . convert) Right
+  where
+    convert Memory.WatchRejected = WatchRejected
+    convert Memory.ClockRejected = ClockRejected
+    convert Memory.FetchRejected = FetchRejected
+    convert Memory.WriteRejected = WriteRejected
+    convert Memory.ForeignWriterRejected = ForeignWriterRejected
+    convert Memory.PreimageRejected = PreimageRejected
+    convert Memory.CodeRejected = CodeRejected
+watchPlan :: Memory.CapturePlan
+watchPlan = Memory.CapturePlan (W.Count budget) watchClasses (map spanOf fetchRanges)
+  (map spanOf immutableRanges) irqCores []
+  where
+    spanOf (low,high) = Memory.PhysicalSpan (PhysicalBoundary low) (PhysicalBoundary high)
+    irqCores = M.fromList [(pc,if address pc < 0xd0000 then W.Primary else W.Secondary)
+      | (pc,boundary) <- M.toList sites,boundary `elem` [IrqEntry,IrqFrame,IrqReturn]]
+planFor :: Inputs -> Memory.CapturePlan
+planFor inputs = watchPlan {Memory.planCode =
+  [Memory.CodeImage (W.Address base) (W.Bytes (if base == 0x61c400 then B.take (0x89ea8c-0x61c400) body else body))
+  | (base,body) <- sourceBodies inputs]}
 checkFetch :: CaptureCoverage -> W.MemoryEvent -> Either WitnessError ()
-checkFetch coverage event = do
-  (core,pc,_,target) <- eventShape coverage event
-  require (W.eventSource event == W.CpuFetch && W.eventAddress event == fromIntegral (address pc)
-    && target == fromIntegral (address pc) && W.eventSize event == 4
-    && W.eventValue event == Nothing && W.eventBefore event == Nothing) FetchRejected
-  let location = address pc
-      irqSite = M.lookup pc sites `elem` map Just [IrqEntry,IrqFrame,IrqReturn]
-  require (not irqSite || if location < 0xd0000 then core == W.Primary else core == W.Secondary) FetchRejected
-checkWriterFetch :: CapturedEvent -> Either WitnessError ()
-checkWriterFetch observed = do
-  fetched <- need WriteRejected (eventLatestFetch observed)
-  let event = eventRecord observed; source = fetchRecord fetched
-  checkFetch AttributedInstruction source
-  require (W.eventCore source == W.eventCore event && W.eventPc source == W.eventPc event
-    && W.eventInstructions source == W.eventInstructions event && W.eventTick source == W.eventTick event
-    && eventCoreInstructions observed == Just (fetchCoreInstructions fetched)) WriteRejected
+checkFetch coverage = memoryResult . Memory.checkFetch watchPlan coverage
 advance :: Inputs -> CoreOrdinals -> CoreOrdinals -> Word64 -> Word64
   -> (Memory,Word64,CoreOrdinals) -> CapturedEvent -> Either WitnessError (Memory,Word64,CoreOrdinals)
-advance inputs previousCounts nextCounts lower upper (memory,previousClock,ordinals) observed = do
-  let event = eventRecord observed
-  require (W.eventSource event /= W.HostWrite && W.eventSource event /= W.ModelBusWrite) ForeignWriterRejected
-  (core,pc,clock,target) <- eventShape ClassifiedAccess event
-  require (clock > lower && clock >= previousClock && clock <= upper) ClockRejected
-  let problem = if W.eventSource event == W.CpuWrite then WriteRejected else ClockRejected
-  ordinal <- need problem (eventCoreInstructions observed)
-  require (count ordinal > count (coreOrdinal core previousCounts) && count ordinal <= count (coreOrdinal core nextCounts)
-    && count ordinal >= count (coreOrdinal core ordinals)) problem
-  let advanced = withOrdinal core ordinal ordinals
-  _ <- sourceWord inputs (address pc)
-  case W.eventSource event of
-    W.CpuFetch -> do
-      checkFetch ClassifiedAccess event
-      require (eventLatestFetch observed == Nothing) FetchRejected
-      pure (memory,clock,advanced)
-    W.CpuWrite -> do
-      checkWriterFetch observed
-      require (not (any (\(start,end) -> target < end && start < target+W.eventSize event) immutableRanges)) WriteRejected
-      let size = W.eventSize event
-      require (size `elem` [1,2,4,8]) WriteRejected
-      before <- bytes <$> need WriteRejected (W.eventBefore event)
-      value <- need WriteRejected (W.eventValue event)
-      require (B.length before == fromIntegral size && (size == 8 || value < (1 `shiftL` fromIntegral (8*size)))) WriteRejected
-      actual <- readBytes PreimageRejected memory (fromIntegral target) (fromIntegral size)
-      require (actual == before) PreimageRejected
-      let after = B.pack [fromIntegral (value `shiftR` fromIntegral (8*i)) | i <- [0..size-1]]
-          Memory old = memory
-      pure (Memory (foldl (\contents (offset,byte) -> M.insert (fromIntegral target+offset) byte contents) old (zip [0..] (B.unpack after))),clock,advanced)
-    _ -> Left WatchRejected
-
+advance inputs previousCounts nextCounts lower upper state observed =
+  memoryResult (Memory.advance (planFor inputs) previousCounts nextCounts lower upper state observed)
 checkWatch :: CapturedWatch -> Either WitnessError ()
-checkWatch watch = do
-  require (captureEnabled watch && captureViolation watch == Nothing && captureViews watch == ObserveWatch
-    && length (captureEvents watch) <= 1048576) WatchRejected
-  require (captureAttribution watch == FetchAttribution [W.CpuWrite]
-    [FetchRange (PhysicalBoundary start) (PhysicalBoundary end) | (start,end) <- fetchRanges]) WatchRejected
-  let kinds = [W.CpuFetch,W.CpuWrite,W.HostWrite,W.ModelBusWrite]
-      rangesFor kind classes = unionRanges [W.classRange item | item <- classes,kind `elem` W.classKinds item]
-  require (not (null (captureClasses watch)) && length (captureClasses watch) <= 64) WatchRejected
-  mapM_ (\item -> do
-    require (not (null (W.classKinds item)) && all (`elem` kinds) (W.classKinds item)) WatchRejected
-    case W.classRange item of
-      [start,end] -> require (start < end && end <= 0x100000000) WatchRejected
-      _ -> Left WatchRejected) (captureClasses watch)
-  mapM_ (\kind -> require (rangesFor kind (captureClasses watch) == rangesFor kind watchClasses) WatchRejected) kinds
-  require (captureRanges watch == unionRanges (map W.classRange watchClasses)) WatchRejected
+checkWatch = memoryResult . Memory.checkWatch watchPlan
 
 replay :: Inputs -> Receipt -> CapturedWatch -> Either WitnessError [Memory]
 replay inputs receipt watch = do

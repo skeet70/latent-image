@@ -33,7 +33,11 @@ fujimod.passthru.rustPlatform.buildRustPackage ({
   dontUseCmakeConfigure = true;
   preCheck = ''
     cargo test --no-run --message-format=json -j "$CARGO_BUILD_JOBS" --profile release \
-      --target ${pkgs.stdenv.targetPlatform.rust.rustcTargetSpec} --offline${featureFlag} > test-artifacts.json
+      --target ${pkgs.stdenv.targetPlatform.rust.rustcTargetSpec} --offline${featureFlag} > test-artifacts.json || {
+        status=$?
+        jq -r 'select(.reason == "compiler-message") | .message.rendered // empty' test-artifacts.json
+        exit "$status"
+      }
   '';
   # store-path holds $out, so Bazel actions keyed on it change with the store path.
   postInstall = ''

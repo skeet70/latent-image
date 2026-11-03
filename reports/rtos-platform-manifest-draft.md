@@ -46,6 +46,8 @@ The recovered bodies match µITRON 4.0 numbering and constants where they overla
 | Interrupt/tick `+0x104/+0x158/+0x15c` (partial), `+0x160` (recovered) | Tick fires expired timeout-heap entries and advances the clock by10 from the interrupt-32 callbacks; enable programs the executing core's controller bank (by CP14 identity, not slot domain) from the handler table; disable clears it; define writes the 24-byte handler record. [Manifest; `contracts/interrupt-family.json`.] | Controller register meaning is inferred from access patterns; negative interrupt numbers pass the range check; expiry-callback reentrancy is open. |
 | Other slots (43 per domain) | Exact A/B targets and extent attempts are included. [Publishers and generated manifest.] | Operation, complete arguments/results/errors/context, touched objects and callers remain explicit unknowns. Conventional ITRON names or sibling-model headers do not fill these gaps. |
 
+[RTOS platform options](rtos-platform-options.md) §2 tests the µITRON 4.0 service model against these families as a hypothesis: matching error values, creation packets and chapter-ordered slots give candidate names for the unknown slots, which stay `unknown` here until X-M1 body evidence binds them. Its §4 records the base selection for the platform project and the first build trial.
+
 ## Non-root executable and shared-layout surface
 
 | Surface | Evidenced entries and retained contract | Evidence |

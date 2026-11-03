@@ -263,6 +263,32 @@ fn separate_linked_prehook_records_facts_without_creating_a_permit() {
 }
 
 #[test]
+fn either_complete_helper_range_refuses_execution_without_an_entry_permit() {
+    for pc in [0x4094, 0x40bc] {
+        let mut machine = machine([false, false], false);
+        let seam = CodeRange::new(Guest(0x4000), Guest(0x4038)).unwrap();
+        let owned = CodeRange::new(Guest(0x4040), Guest(0x4080)).unwrap();
+        let layout = Layout::new(seam, owned).unwrap().with_helpers([
+            CodeRange::new(Guest(0x4090), Guest(0x40a0)).unwrap(),
+            CodeRange::new(Guest(0x40b0), Guest(0x40c0)).unwrap(),
+        ]).unwrap();
+        let linked: Vec<_> = [0xe3a0_007bu32; 64].into_iter().flat_map(u32::to_le_bytes).collect();
+        machine.session.board.write_physical(0x4000, &linked).unwrap();
+        let delta = (0x4000i64 - i64::from(STOCK_ENTRY.0) - 8) as u32;
+        let branch = 0xea00_0000 | ((delta >> 2) & 0x00ff_ffff);
+        machine.session.board.write_physical(u64::from(STOCK_ENTRY.0), &branch.to_le_bytes()).unwrap();
+        machine.session.board.write_register(0, Register::Pc, pc).unwrap();
+        let config = Config::new(layout, synthetic_stock(), Some(SourceImage::new(Guest(0x4000), linked).unwrap()),
+            machine.session.board.mappings().to_vec(), ObservationLimit(NonZeroU64::new(128).unwrap())).unwrap()
+            .with_owned_prehook(Some(Guest(0x4090))).unwrap();
+        machine.traces.begin_modal_observation(&machine.session, config).unwrap();
+        assert!(matches!(machine.run(4), RunOutcome::Failed));
+        assert!(machine.traces.modal_observation_report().failure.is_some());
+        assert_eq!(machine.session.board.read_register(0, Register::Arm32(arm::Register::R(0))).unwrap(), 75);
+    }
+}
+
+#[test]
 fn request_rejects_zero_limit_partial_scope_and_unbound_prehook() {
     let machine = machine([false, false], false);
     for fields in [

@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import Control.Exception (SomeException, try)
+import Control.Exception (SomeException, throwIO, try)
 import Control.Monad (forM_)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
@@ -20,6 +20,7 @@ import FujiAF.RamPush
 import FujiAF.SHA256 (sha256)
 import FujiAF.Rehearsal (rehearseRamAlloc, rehearseRamPush, rehearseRamFree, rehearseRamUnload)
 import FujiAF.Transport
+import qualified FujiAF.Broker as P
 import RamPushLayout (installerInstallOffset, installerRollbackOffset, installerStatusOffset, runtimeAllocationSize, runtimeAllocationSizeFor, runtimeInstallerBase, standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant)
 import RamPushModel
 
@@ -35,7 +36,52 @@ runAlloc :: FilePath -> Model -> IO RamAllocOutcome
 runAlloc directory model = runRamAllocWith PeerCacheBound reviewedAllocationSize (Clock (pure 0)) (modelApi model) directory
 
 runPush :: FilePath -> Model -> RamAllocState -> IO RamPushOutcome
-runPush directory model state = runRamPushWith PeerCacheBound state manifest (Clock (pure 0)) (modelApi model) directory
+runPush directory model state = runRamPushWith PeerCacheBound NoRamPushObserver state manifest (Clock (pure 0)) (modelApi model) directory
+
+data RuntimeUploadState = RuntimeIncomplete | RuntimeUploaded deriving (Eq, Show)
+
+data RamQueryObservation = RamQueryObservation Address RuntimeUploadState deriving (Eq, Show)
+
+observeRamQueries :: Model -> IO (UsbApi, IO [RamQueryObservation])
+observeRamQueries model = do
+  pending <- newIORef Nothing
+  completed <- newIORef []
+  let api = modelApi model
+      observed = api { usbTransfer = \transfer timeout -> do
+        query <- case transfer of
+          P.BulkOut _ frame | length frame >= 32 && u32 0 frame == 0x450006 -> do
+            target <- Address . u32 0 <$> readBytes (modelMemory model) (unAddress callbackSlotAddress) 4
+            bytes <- B.pack <$> readBytes (modelMemory model) base (B.length runtime)
+            pure (Just (RamQueryObservation target (if bytes == runtime then RuntimeUploaded else RuntimeIncomplete)))
+          _ -> pure Nothing
+        result <- usbTransfer api transfer timeout
+        case transfer of
+          P.BulkOut _ _ -> writeIORef pending query
+          P.BulkIn _ _ -> do
+            reply <- readIORef pending
+            forM_ reply $ \observation -> modifyIORef' completed (++ [observation])
+            writeIORef pending Nothing
+          _ -> pure ()
+        pure result }
+  pure (observed, readIORef completed)
+
+uploadedSynchronization :: [RamQueryObservation]
+uploadedSynchronization =
+  [ RamQueryObservation (Address 0x0061c4f4) RuntimeUploaded
+  , RamQueryObservation (Address 0x0061c490) RuntimeUploaded
+  ]
+
+checkUnpublished :: String -> Model -> IO ()
+checkUnpublished label model = do
+  sent <- readIORef (modelHostWrites model)
+  forM_ publications $ \publication -> do
+    let address = unAddress (publicationAddress publication)
+        outside (start, bytes) = start + fromIntegral (length bytes) <= address || start >= address + 4
+    actual <- u32 0 <$> readBytes (modelMemory model) address 4
+    check (label ++ ": publication word remains old") (actual == unWordValue (publicationOld publication))
+    check (label ++ ": no host write touches a publication word") (all outside sent)
+  let installerRetarget = (unAddress callbackSlotAddress, word32le (unAddress (installEntry (manifestEntries manifest))))
+  check (label ++ ": installer callback has not been sent") (installerRetarget `notElem` sent)
 
 manifestDocument :: RamPushManifest -> B.ByteString
 manifestDocument candidate = BL.toStrict (encode (object
@@ -244,7 +290,7 @@ main = do
   noPeer <- newModel Nothing
   let noPeerDir = root </> "no-peer"
   makeDir noPeerDir
-  noPeerOutcome <- runRamPushWith PeerCacheUnbound allocation manifest (Clock (pure 0)) (modelApi noPeer) noPeerDir
+  noPeerOutcome <- runRamPushWith PeerCacheUnbound NoRamPushObserver allocation manifest (Clock (pure 0)) (modelApi noPeer) noPeerDir
   check "unbound peer refuses before USB and writes" (case noPeerOutcome of RamPushRefused _ -> True; _ -> False)
   readIORef (modelHostWrites noPeer) >>= check "unbound peer has no writes" . null
   parkModel <- newModel Nothing
@@ -334,6 +380,67 @@ main = do
   freedPush <- runRamPush contract retainedForFree manifest (Clock (pure 0)) (modelApi freeModel) freedPushDir
   check "ram-push from a consumed state is refused with the camera tag gone" (case freedPush of RamPushRefused _ -> True; _ -> False)
   readIORef (modelUsbCalls freeModel) >>= check "consumed-state refusals make no USB call" . (== usbBeforeConsumed)
+
+  observerModel <- newModel Nothing
+  observerAllocation <- allocate "before-publication" observerModel
+  (observerApi, observerQueries) <- observeRamQueries observerModel
+  observerCalls <- newIORef (0 :: Int)
+  let observerDir = root </> "before-publication"
+      observe = do
+        modifyIORef' observerCalls (+1)
+        bytes <- B.pack <$> readBytes (modelMemory observerModel) base (B.length runtime)
+        check "before-publication sees the complete uploaded runtime" (bytes == runtime)
+        observerQueries >>= check "before-publication sees completed synchronization of the uploaded runtime" . (== uploadedSynchronization)
+        checkUnpublished "before-publication" observerModel
+  makeDir observerDir
+  observedOutcome <- runRamPushWith PeerCacheBound (BeforeRamPublication observe) observerAllocation manifest (Clock (pure 0)) observerApi observerDir
+  observedStatePath <- case observedOutcome of
+    RamPushInstalled path -> pure path
+    other -> error ("observed push failed: " ++ show other)
+  observedState <- readRamPushState observedStatePath
+  check "observed push retains the manifest publication contract" (statePublications observedState == publications)
+  readIORef observerCalls >>= check "before-publication runs exactly once" . (== 1)
+  observerQueries >>= check "installer is invoked once after the observation boundary" .
+    (== uploadedSynchronization ++ [RamQueryObservation (installEntry (manifestEntries manifest)) RuntimeUploaded])
+  forM_ publications $ \publication -> do
+    actual <- u32 0 <$> readBytes (modelMemory observerModel) (unAddress (publicationAddress publication)) 4
+    check "observed push publishes every new word" (actual == unWordValue (publicationNew publication))
+
+  observerFailureModel <- newModel Nothing
+  observerFailureAllocation <- allocate "before-publication-failure" observerFailureModel
+  (observerFailureApi, observerFailureQueries) <- observeRamQueries observerFailureModel
+  observerFailureCalls <- newIORef (0 :: Int)
+  let observerFailureDir = root </> "before-publication-failure"
+      observerError = userError "before-publication observer failed"
+      failObservation = do
+        modifyIORef' observerFailureCalls (+1)
+        observerFailureQueries >>= check "failing observer starts after uploaded runtime synchronization" . (== uploadedSynchronization)
+        checkUnpublished "failing observer boundary" observerFailureModel
+        throwIO observerError
+  makeDir observerFailureDir
+  observerFailed <- runRamPushWith PeerCacheBound (BeforeRamPublication failObservation) observerFailureAllocation manifest (Clock (pure 0)) observerFailureApi observerFailureDir
+  check "observer exception is preserved as an uncertain uploaded allocation"
+    (case observerFailed of RamPushUncertain _ -> True; _ -> False)
+  readIORef observerFailureCalls >>= check "failing observer is not retried" . (== 1)
+  observerFailureQueries >>= check "observer exception sends no installer invocation" . (== uploadedSynchronization)
+  checkUnpublished "after observer exception" observerFailureModel
+  failureRuntime <- B.pack <$> readBytes (modelMemory observerFailureModel) base (B.length runtime)
+  check "observer exception retains the uploaded runtime" (failureRuntime == runtime)
+  failureSlot <- u32 0 <$> readBytes (modelMemory observerFailureModel) (unAddress callbackSlotAddress) 4
+  check "observer exception leaves the stock callback selected" (failureSlot == unWordValue callbackStockWord)
+  doesFileExist (observerFailureDir </> "ram-push-state.json") >>= check "observer exception writes no installed state" . not
+
+  observerRefusalModel <- newModel Nothing
+  observerRefusalCalls <- newIORef (0 :: Int)
+  case publications of
+    first : _ -> writeWord (modelMemory observerRefusalModel) (unAddress (publicationAddress first)) 0
+    [] -> fail "observer fixture has no publications"
+  let observerRefusalDir = root </> "before-publication-preflight-refusal"
+  makeDir observerRefusalDir
+  observerRefused <- runRamPushWith PeerCacheBound (BeforeRamPublication (modifyIORef' observerRefusalCalls (+1))) allocation manifest (Clock (pure 0)) (modelApi observerRefusalModel) observerRefusalDir
+  check "observer does not bypass old-word preflight refusal" (case observerRefused of RamPushRefused _ -> True; _ -> False)
+  readIORef observerRefusalCalls >>= check "preflight refusal never invokes the observer" . (== 0)
+  readIORef (modelHostWrites observerRefusalModel) >>= check "observer preflight refusal sends no RAM write" . null
 
   happyModel <- newModel Nothing
   retained <- allocate "happy" happyModel

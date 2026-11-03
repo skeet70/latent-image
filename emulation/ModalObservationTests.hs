@@ -6,6 +6,7 @@ module Main (main) where
 import Control.Monad (unless)
 import Data.Aeson (Value (..), eitherDecode, encode, object, (.=))
 import qualified Data.Aeson.Key as K
+import qualified Data.Text as T
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
@@ -17,6 +18,7 @@ import Emulation.WatchObservation
 import EmulatorUsb (BridgeExchange, ModalResponse (..), bridgeModalObservationBegin, bridgeModalObservationReport, bridgeModalObservationEnd)
 import Emulation.Sha256 (sha256, sha256Hex)
 import Emulation.UiTrajectory (checkModalObserverConfiguration, decodeTrajectories)
+import qualified FujiAF.RamPush as Ram
 import System.Exit (exitFailure)
 
 range :: Word32 -> Word32 -> WatchRange
@@ -87,7 +89,9 @@ permitEnvelope :: Value
 permitEnvelope = object
   [ "enabled" .= False, "policy" .= ("stock-baseline" :: String), "counts" .= permitCounts
   , "stock_fetches" .= ([] :: [Value]), "captured_domains" .= ([] :: [Value]), "failure" .= Null
-  , "physical_fetch_coverage" .= False, "task_identity_verified" .= False ]
+  , "physical_fetch_coverage" .= False, "task_identity_verified" .= False
+  , "physical_guard" .= Null, "task_entries" .= ([] :: [Value]), "lifetime" .= Null, "watch" .= Null
+  , "context_source_spans" .= (0 :: Int) ]
 
 domain :: Value
 domain = object
@@ -105,11 +109,15 @@ permitTests = do
   check "partial stock source refuses" (isLeft (modalStock (B.replicate 0xf8 0)))
   check "zero and excessive modal limits refuse" (isLeft (modalLimit 0) && isLeft (modalLimit 65537))
   linked <- either error pure (modalLinked (watchAddress 0x10000) (B.replicate 128 0))
-  scope <- either error pure (modalScope linked (range 0x10000 0x10038) (range 0x10038 0x10060) (Just (watchAddress 0x10060)))
+  let helpers = ModalHelpers (range 0x10060 0x10070) (range 0x10070 0x10080)
+  scope <- either error pure (modalScope linked (range 0x10000 0x10038) (range 0x10038 0x10060) helpers (Just (watchAddress 0x10060)))
   scopedRequest <- either error pure (modalRequest stock (Just (linked, scope)) permitLimit)
   let scopedJson = modalBeginRequestJson scopedRequest
   check "separate linked owned prehook is encoded" (get "owned_prehook" scopedJson == Number 0x10060)
-  check "unmapped prehook refuses" (isLeft (modalScope linked (range 0x10000 0x10038) (range 0x10038 0x10060) (Just (watchAddress 0x20000))))
+  check "both complete helper extents are encoded" (get "helpers" scopedJson == array
+    [array [Number 0x10060, Number 0x10070], array [Number 0x10070, Number 0x10080]])
+  check "stock helper extents are empty" (get "helpers" requestJson == array [])
+  check "unmapped prehook refuses" (isLeft (modalScope linked (range 0x10000 0x10038) (range 0x10038 0x10060) helpers (Just (watchAddress 0x20000))))
   check "baseline request round trips" (parseModalBeginRequest requestJson == Right request)
   check "scoped request round trips" (parseModalBeginRequest scopedJson == Right scopedRequest)
   check "null optional baseline prehook is accepted" (parseModalBeginRequest (set "owned_prehook" Null requestJson) == Right request)
@@ -123,6 +131,15 @@ permitTests = do
         , ("baseline linked source", set "linked" (get "linked" scopedJson) requestJson)
         , ("baseline owned prehook", set "owned_prehook" (Number 0x10060) requestJson)
         , ("scoped missing owned", set "owned" Null scopedJson)
+        , ("missing helper extents", case scopedJson of Object fields -> Object (KM.delete "helpers" fields); other -> other)
+        , ("empty helper extents", set "helpers" (array []) scopedJson)
+        , ("partial helper list", set "helpers" (array [array [Number 0x10060, Number 0x10070]]) scopedJson)
+        , ("extra helper extent", set "helpers" (array [array [Number 0x10060, Number 0x10070], array [Number 0x10070, Number 0x10078], array [Number 0x10078, Number 0x10080]]) scopedJson)
+        , ("overlapping helpers", set "helpers" (array [array [Number 0x10060, Number 0x10074], array [Number 0x10070, Number 0x10080]]) scopedJson)
+        , ("helper overlaps owned dispatcher", set "helpers" (array [array [Number 0x1005c, Number 0x10070], array [Number 0x10070, Number 0x10080]]) scopedJson)
+        , ("helper outside linked text", set "helpers" (array [array [Number 0x10060, Number 0x10070], array [Number 0x10080, Number 0x10084]]) scopedJson)
+        , ("helper entry differs from capture point", set "owned_prehook" (Number 0x10064) scopedJson)
+        , ("stock request with helper code", set "helpers" (get "helpers" scopedJson) requestJson)
         , ("short seam", set "seam" (toArray [Number 0x10000, Number 0x10034]) scopedJson)
         , ("overlapping extents", set "owned" (toArray [Number 0x10034, Number 0x10060]) scopedJson)
         , ("unaligned prehook", set "owned_prehook" (Number 0x10061) scopedJson)
@@ -186,7 +203,7 @@ scopedRouteTests = do
         , "peak_core_depth" .= (1 :: Int) ]
       captured75 = set "controller" (Number 75) domain
       capture values = get "values" (object ["values" .= values])
-      scoped = set "policy" (String "scoped-owned75") permitEnvelope
+      scoped = set "policy" (String "scoped-owned75") (completedEnvelope 224)
       mixed = set "counts" counts (set "captured_domains" (capture [captured75]) scoped)
       withCount key value = set "counts" (set key (Number value) counts) mixed
       rejected =
@@ -211,9 +228,8 @@ scopedRouteTests = do
   check "captured samples need not match entry totals or specific state/event values" (checkScopedModalRoute varied == Right ())
   stock <- either error pure (parseModalReport permitLimit permitEnvelope)
   check "stock diagnostic end accepts zero observations" (checkModalEnd stock == Right ())
-  mapM_ (\(label, value) -> do
-    report <- either (\problem -> error ("scoped route fixture " ++ label ++ ": " ++ problem)) pure (parseModalReport permitLimit value)
-    check ("scoped route refuses " ++ label) (isLeft (checkScopedModalRoute report))) rejected
+  mapM_ (\(label, value) ->
+    check ("scoped route refuses " ++ label) (either (const True) (isLeft . checkScopedModalRoute) (parseModalReport permitLimit value))) rejected
 
 serve :: Value -> Value -> BridgeExchange
 serve expected response request = do
@@ -323,6 +339,8 @@ main = do
   frameBoundsTests
   scopedSourceTests
   observerConfigurationTests
+  lifetimeTests
+  runtimeBindingTests
   putStrLn "modal array writer observations passed"
 
 frameBoundsTests :: IO ()
@@ -336,15 +354,18 @@ syntheticModalText :: B.ByteString
 syntheticModalText = B.replicate 128 0
 
 syntheticModalElf :: Word32 -> B.ByteString
-syntheticModalElf textFlags = header <> syntheticModalText <> symbols <> names <> sectionNames <> padding <> sections
+syntheticModalElf textFlags = syntheticModalElfWithSections textFlags [1,1,1,1]
+
+syntheticModalElfWithSections :: Word32 -> [Word32] -> B.ByteString
+syntheticModalElfWithSections textFlags symbolSections = header <> syntheticModalText <> symbols <> names <> sectionNames <> padding <> sections
  where
   fields = [("rb_modal_entry", 0x10000, 56), ("rb_modal_dispatch", 0x10038, 32),
-    ("rb_modal_call_prehook", 0x10058, 4), ("rb_modal_call", 0x1005c, 4)] :: [(B.ByteString, Word32, Word32)]
+    ("rb_modal_call_prehook", 0x10058, 16), ("rb_modal_call", 0x10068, 20)] :: [(B.ByteString, Word32, Word32)]
   nameOffsets = scanl (+) 1 [fromIntegral (B.length name + 1) | (name, _, _) <- fields]
   names = B.singleton 0 <> B.concat [name <> B.singleton 0 | (name, _, _) <- fields]
   symbols = B.replicate 16 0 <> B.concat
-    [ word 4 nameOffset <> word 4 address <> word 4 size <> B.pack [0x12, 0] <> word 2 1
-    | (nameOffset, (_, address, size)) <- zip nameOffsets fields ]
+    [ word 4 nameOffset <> word 4 address <> word 4 size <> B.pack [0x12, 0] <> word 2 symbolSection
+    | (nameOffset, (_, address, size), symbolSection) <- zip3 nameOffsets fields symbolSections ]
   sectionNames = "\0.text\0.symtab\0.strtab\0.shstrtab\0"
   symbolOffset = 52 + B.length syntheticModalText
   namesOffset = symbolOffset + B.length symbols
@@ -372,8 +393,8 @@ syntheticScopeMetadata runtime elf = object
   , "bound_elf" .= object ["sha256" .= sha256Hex (sha256 elf), "functions" .= object
     [ "rb_modal_entry" .= function "0x00010000" 56
     , "rb_modal_dispatch" .= function "0x00010038" 32
-    , "rb_modal_call_prehook" .= function "0x00010058" 4
-    , "rb_modal_call" .= function "0x0001005c" 4 ]]
+    , "rb_modal_call_prehook" .= function "0x00010058" 16
+    , "rb_modal_call" .= function "0x00010068" 20 ]]
   ]
  where
   function :: String -> Int -> Value
@@ -393,12 +414,17 @@ scopedSourceTests = do
   check "bound ELF extents configure the scoped request" $
     get "seam" requestJson == pair 0x10000 0x10038 && get "owned" requestJson == pair 0x10038 0x10058
       && get "owned_prehook" requestJson == Number 0x10058
+  check "bound helper extents include instructions beyond their entries" $
+    get "helpers" requestJson == array [pair 0x10058 0x10068, pair 0x10068 0x1007c]
+      && get "helpers" (scopedModalSourceJson source) == get "helpers" requestJson
   check "linked instruction bytes come from bound ELF text" $
     get "start" (get "linked" requestJson) == Number 0x10000
       && get "bytes" (get "linked" requestJson) == get "bytes" (object ["bytes" .= B.unpack syntheticModalText])
   let changedRuntime = B.cons 1 (B.drop 1 runtime)
       changedElf = B.cons 1 (B.drop 1 elf)
       writableElf = syntheticModalElf 7
+      undefinedPrehookElf = syntheticModalElfWithSections 6 [1,1,0,1]
+      misboundCallElf = syntheticModalElfWithSections 6 [1,1,1,2]
       bound = get "bound_elf" metadata
       functions = get "functions" bound
       mismatchedFunction = set "bound_elf" (set "functions"
@@ -409,6 +435,12 @@ scopedSourceTests = do
         , ("ELF text differs from rebound runtime", changedRuntime, elf, syntheticScopeMetadata changedRuntime elf)
         , ("writable linked text", runtime, writableElf, syntheticScopeMetadata runtime writableElf)
         , ("manifest function differs from ELF", runtime, elf, mismatchedFunction)
+        , ("prehook helper truncated against ELF", runtime, elf, set "bound_elf" (set "functions"
+            (set "rb_modal_call_prehook" (set "size" (Number 4) (get "rb_modal_call_prehook" functions)) functions) bound) metadata)
+        , ("call helper truncated against ELF", runtime, elf, set "bound_elf" (set "functions"
+            (set "rb_modal_call" (set "size" (Number 4) (get "rb_modal_call" functions)) functions) bound) metadata)
+        , ("undefined prehook ELF symbol", runtime, undefinedPrehookElf, syntheticScopeMetadata runtime undefinedPrehookElf)
+        , ("call helper symbol bound to nontext section", runtime, misboundCallElf, syntheticScopeMetadata runtime misboundCallElf)
         , ("global admission claim", runtime, elf, set "global_admission" (Bool True) metadata)
         , ("unknown metadata key", runtime, elf, set "extra" Null metadata)
         , ("malformed ELF with matching digest", runtime, changedElf, syntheticScopeMetadata runtime changedElf)
@@ -435,3 +467,377 @@ observerConfigurationTests = do
   mapM_ (\(label, value) -> do
     configured <- decode value
     check ("modal observation refuses coexistence with " ++ label) (isLeft (checkModalObserverConfiguration configured))) configurations
+
+array :: [Value] -> Value
+array values = get "values" (object ["values" .= values])
+
+completedReceipt :: Int -> Value
+completedReceipt count = object
+  [ "phase" .= ("ended" :: String), "publication_count" .= count, "forward_writes" .= count, "reverse_writes" .= count
+  , "pending_stores" .= (0 :: Int), "install_core" .= (0 :: Int), "rollback_core" .= (1 :: Int)
+  , "checked_resource_writes" .= (7 :: Int), "checked_identity_writes" .= (0 :: Int)
+  , "checked_scheduler_writes" .= (10 :: Int), "checked_context_writes" .= (40 :: Int), "checked_vfp_owner_writes" .= (2 :: Int)
+  , "audited_writes" .= (12 :: Int)
+  , "failure" .= Null ]
+
+healthyGuard :: Value
+healthyGuard = object
+  [ "hook_entries" .= (10 :: Int), "protected_entries" .= (8 :: Int), "accepted_entries" .= (8 :: Int)
+  , "refused_entries" .= (0 :: Int), "failure" .= Null ]
+
+taskEntry :: Value
+taskEntry = object
+  [ "core" .= (0 :: Int), "pc" .= (0x00bfb028 :: Word32), "instructions" .= (9000 :: Int)
+  , "controller" .= (75 :: Int), "sp" .= (0x40030000 :: Word32), "lr" .= (0x00bfc000 :: Word32), "cpsr" .= (0x13 :: Int)
+  , "identity" .= object ["kernel" .= ("primary" :: String), "id" .= (1 :: Int)
+      , "node" .= (0x4005ff0c :: Word32), "creation" .= (0x4005beac :: Word32), "stack" .= ([0x30000,0x31000] :: [Word32])]
+  , "fetch" .= object ["guest" .= (0x00bfb028 :: Word32), "physical" .= (0x00bfb028 :: Word32)
+      , "bytes" .= ([0,0,0,0] :: [Int]), "core" .= (0 :: Int), "entry_progress" .= (123 :: Int), "byte_order" .= ("little" :: String)] ]
+
+completedEnvelope :: Int -> Value
+completedEnvelope count = set "watch" cacheOnlyWatchFixture (set "lifetime" (completedReceipt count) (set "physical_guard" healthyGuard
+  (set "physical_fetch_coverage" (Bool True) (set "context_source_spans" (Number 16)
+    (set "task_identity_verified" (Bool True) (set "task_entries" (array [taskEntry]) permitEnvelope))))))
+
+cacheOnlyWatchFixture :: Value
+cacheOnlyWatchFixture = withoutRecords (digested (set "fetch_attribution"
+  (object ["sources" .= ([] :: [Value]), "ranges" .= ([[0x00bfb028,0x00bfb124]] :: [[Word32]])]) (snd (writerEnvelope []))))
+
+-- | Adds the SDK row count; the digest is a fixed fixture value.
+digested :: Value -> Value
+digested value = set "records_sha256" (String fixtureRowDigest) (set "record_count" (Number (fromIntegral rows)) value)
+ where
+  rows = case get "records" value of
+    Array entries -> length entries
+    _ -> 0
+
+fixtureRowDigest :: T.Text
+fixtureRowDigest = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+
+withoutRecords :: Value -> Value
+withoutRecords (Object fields) = Object (KM.delete "records" fields)
+withoutRecords value = value
+
+lifetimeTests :: IO ()
+lifetimeTests = do
+  check "fresh install with requested unload is admissible" (checkModalLifetimeRoute FreshModalInstall ModalUnloadRequested == Right ())
+  check "installed checkpoint restore refuses" (isLeft (checkModalLifetimeRoute RestoredModalInstall ModalUnloadRequested))
+  check "unrequested unload refuses" (isLeft (checkModalLifetimeRoute FreshModalInstall ModalUnloadOmitted))
+  let counts = object ["observations" .= (4 :: Int), "entries" .= (2 :: Int), "owned_handoffs" .= (1 :: Int)
+        , "fallback_handoffs" .= (1 :: Int), "returns" .= (2 :: Int), "active_frames" .= (0 :: Int), "peak_core_depth" .= (1 :: Int)]
+      complete = set "counts" counts (set "captured_domains" (array [set "controller" (Number 75) domain])
+        (set "policy" (String "scoped-owned75") (completedEnvelope 224)))
+      changeReceipt key value = set "lifetime" (set key value (completedReceipt 224)) complete
+      unfinished =
+        [ ("prepared", changeReceipt "phase" (String "prepared"))
+        , ("publishing", changeReceipt "phase" (String "publishing"))
+        , ("installed", changeReceipt "phase" (String "installed"))
+        , ("rolling rollback", changeReceipt "phase" (String "rolling_back"))
+        , ("rollback stores without readback", changeReceipt "phase" (String "rollback_stored"))
+        , ("verified but not ended", changeReceipt "phase" (String "rollback_verified"))
+        , ("partial install", changeReceipt "forward_writes" (Number 223))
+        , ("extra install", changeReceipt "forward_writes" (Number 225))
+        , ("partial rollback", changeReceipt "reverse_writes" (Number 223))
+        , ("wrong source count", changeReceipt "publication_count" (Number 223))
+        , ("pending CPU store", changeReceipt "pending_stores" (Number 1))
+        , ("unbound installer core", changeReceipt "install_core" Null)
+        , ("unbound rollback core", changeReceipt "rollback_core" Null)
+        , ("no task samples", set "task_entries" (array []) complete)
+        , ("no physical observer", set "physical_guard" Null complete)
+        , ("no protected instruction entries", set "physical_guard"
+            (object ["hook_entries" .= (0 :: Int), "protected_entries" .= (0 :: Int), "accepted_entries" .= (0 :: Int)
+              , "refused_entries" .= (0 :: Int), "failure" .= Null]) complete)
+        , ("missing raw lifetime watch", set "watch" Null complete)
+        , ("unverified task", set "task_identity_verified" (Bool False) complete)
+        , ("unverified context sources", set "context_source_spans" (Number 0) complete)
+        , ("missing context span", set "context_source_spans" (Number 15) complete)
+        , ("extra task sample", set "task_entries" (array [taskEntry,taskEntry]) complete)
+        , ("wrong task namespace", set "task_entries" (array [set "identity" (set "kernel" (String "secondary") (get "identity" taskEntry)) taskEntry]) complete)
+        , ("wrong task ID", set "task_entries" (array [set "identity" (set "id" (Number 2) (get "identity" taskEntry)) taskEntry]) complete)
+        , ("IRQ masked task", set "task_entries" (array [set "cpsr" (Number 0x93) taskEntry]) complete)
+        , ("Jazelle task", set "task_entries" (array [set "cpsr" (Number 0x1000013) taskEntry]) complete)
+        , ("stack outside extent", set "task_entries" (array [set "sp" (Number 0x40031004) taskEntry]) complete)
+        , ("fetch on wrong core", set "task_entries" (array [set "fetch" (set "core" (Number 1) (get "fetch" taskEntry)) taskEntry]) complete)
+        , ("fetch alias", set "task_entries" (array [set "fetch" (set "guest" (Number 0x40bfb028) (get "fetch" taskEntry)) taskEntry]) complete)
+        , ("short fetch", set "task_entries" (array [set "fetch" (set "bytes" (array [Number 0]) (get "fetch" taskEntry)) taskEntry]) complete)
+        ]
+  parsed <- either error pure (parseModalReport permitLimit complete)
+  check "completed source-bound scoped lifetime is admitted" (checkScopedModalRoute parsed == Right () && modalLifetimeCoverage parsed)
+  check "lifetime report preserves every typed field" (modalReportJson parsed == complete)
+  mapM_ (\(label, value) -> check ("lifetime refuses " ++ label)
+    (either (const True) (isLeft . checkScopedModalRoute) (parseModalReport permitLimit value))) unfinished
+  check "unknown lifetime phase refuses" (isLeft (parseModalReport permitLimit (changeReceipt "phase" (String "complete"))))
+  check "unknown lifetime failure refuses" (isLeft (parseModalReport permitLimit (changeReceipt "failure" (object ["kind" .= ("other" :: String)]))))
+  let failed = set "physical_fetch_coverage" (Bool False) (set "task_identity_verified" (Bool False)
+        (changeReceipt "failure" (object ["kind" .= ("wrong_order" :: String)])))
+  failedReport <- either error pure (parseModalReport permitLimit failed)
+  check "sticky typed failure remains evidence" (modalReportJson failedReport == failed && not (modalLifetimeCoverage failedReport))
+  let awaiting = set "enabled" (Bool True) (set "counts" (set "owned_handoffs" (Number 0) counts) complete)
+  active <- either error pure (parseModalReport permitLimit awaiting)
+  check "active owned entry may await handoff but does not qualify" (not (modalLifetimeCoverage active))
+  let (ack, state) = writerEnvelope []
+      extension = object ["sources" .= ([] :: [Value]), "ranges" .= ([[0x00bfb028,0x00bfb124]] :: [[Word32]])]
+      cacheOnly = digested . set "fetch_attribution" extension
+  check "cache-only raw watch projects to the FixedWatch parser" $
+    either (const False) (const True) (parseModalLifetimeWatchAck (cacheOnly ack))
+      && either (const False) (const True) (parseModalLifetimeWatch limit (cacheOnly state))
+  check "cache-only watch rejects attributed data sources" (isLeft (parseModalLifetimeWatch limit
+    (set "fetch_attribution" (set "sources" (array [String "cpu-write"]) extension) state)))
+  check "cache-only watch rejects unknown extension keys" (isLeft (parseModalLifetimeWatch limit
+    (set "fetch_attribution" (set "extra" Null extension) state)))
+  check "projection retains strict unknown-field refusal" (isLeft (parseModalLifetimeWatch limit (set "extra" Null (cacheOnly state))))
+  let manyRows = [cpu 0 0x01467588 0x01467588 2 clock | clock <- [1 .. 65537]]
+      longState = cacheOnly (snd (writerEnvelope manyRows))
+      intervalBound = either error id (watchLimit 65536)
+  check "continuous writer history is independent of the modal observation bound" $
+    isLeft (parseModalLifetimeWatch intervalBound longState)
+      && either (const False) (const True) (parseModalLifetimeWatch modalLifetimeWriterLimit longState)
+  check "watch row count must match its rows" $
+    isLeft (parseModalLifetimeWatch limit (set "record_count" (Number 1) (cacheOnly state)))
+  check "report watch summary requires the SDK row digest" $
+    isLeft (parseModalReport permitLimit (set "watch" (case cacheOnlyWatchFixture of
+      Object fields -> Object (KM.delete "records_sha256" fields); other -> other) complete))
+  check "report watch summary refuses embedded rows" $
+    isLeft (parseModalReport permitLimit (set "watch" (digested (cacheOnly state)) complete))
+
+runtimeTextFixture :: B.ByteString
+runtimeTextFixture = B.replicate 0x24 0 <> wordBytes 0xe5813000 <> B.replicate 0x1c 0
+  <> wordBytes 0xe5813000 <> B.replicate 0x38 0
+
+wordBytes :: Word32 -> B.ByteString
+wordBytes value = B.pack [fromIntegral (value `shiftR` (8 * index)) | index <- [0 .. 3 :: Int]]
+
+runtimeSymbolsFixture :: [(B.ByteString, Word32, Word32, Word32, Word32)]
+runtimeSymbolsFixture =
+  [ ("ram_push_install",0x10000,16,1,0x12), ("ram_push_rollback",0x10010,16,1,0x12)
+  , ("store_new_words",0x10020,16,1,0x12), ("restore_old_words",0x10040,16,1,0x12)
+  , ("rb_resident",0x10100,1024,3,0x11) ]
+
+runtimeElfFixture :: B.ByteString -> [(B.ByteString, Word32, Word32, Word32, Word32)] -> B.ByteString
+runtimeElfFixture text fields = header <> text <> readonly <> symbols <> names <> sectionNames <> padding <> sections
+ where
+  readonly = B.pack [1 .. 16]
+  nameOffsets = scanl (+) 1 [fromIntegral (B.length name + 1) | (name, _, _, _, _) <- fields]
+  names = B.singleton 0 <> B.concat [name <> B.singleton 0 | (name, _, _, _, _) <- fields]
+  symbols = B.replicate 16 0 <> B.concat
+    [ word 4 nameOffset <> word 4 address <> word 4 size <> B.pack [fromIntegral kind,0] <> word 2 sectionIndex
+    | (nameOffset, (_,address,size,sectionIndex,kind)) <- zip nameOffsets fields ]
+  sectionNames = "\0.text\0.rodata\0.bss\0.symtab\0.strtab\0.shstrtab\0"
+  symbolOffset = 52 + B.length text + B.length readonly
+  namesOffset = symbolOffset + B.length symbols
+  sectionNamesOffset = namesOffset + B.length names
+  sectionOffset = (sectionNamesOffset + B.length sectionNames + 3) `div` 4 * 4
+  padding = B.replicate (sectionOffset - sectionNamesOffset - B.length sectionNames) 0
+  header = B.pack [0x7f,0x45,0x4c,0x46,1,1,1] <> B.replicate 9 0
+    <> word 2 2 <> word 2 40 <> word 4 1 <> word 4 0x10000 <> word 4 0
+    <> word 4 (fromIntegral sectionOffset) <> word 4 0
+    <> word 2 52 <> word 2 32 <> word 2 0 <> word 2 40 <> word 2 7 <> word 2 6
+  section = B.concat . map (word 4)
+  sections = B.replicate 40 0
+    <> section [1,1,6,0x10000,52,128,0,0,4,0]
+    <> section [7,1,2,0x10080,180,16,0,0,4,0]
+    <> section [15,8,3,0x10100,0,1024,0,0,4,0]
+    <> section [20,2,0,0,fromIntegral symbolOffset,fromIntegral (B.length symbols),5,1,4,16]
+    <> section [28,3,0,0,fromIntegral namesOffset,fromIntegral (B.length names),0,0,1,0]
+    <> section [36,3,0,0,fromIntegral sectionNamesOffset,fromIntegral (B.length sectionNames),0,0,1,0]
+  word :: Int -> Word32 -> B.ByteString
+  word bytes value = B.take bytes (wordBytes value)
+
+runtimeManifestFixture :: B.ByteString -> Ram.RamPushManifest
+runtimeManifestFixture runtime = Ram.RamPushManifest
+  { Ram.manifestPath = "manifest.json", Ram.runtimePath = "runtime.bin", Ram.manifestDigest = "fixture"
+  , Ram.sourceIdentity = [], Ram.allocationBase = Ram.Address 0x10000, Ram.allocationSize = B.length runtime
+  , Ram.runtimeDigest = sha256Hex (sha256 runtime), Ram.runtimeBytes = runtime
+  , Ram.manifestEntries = Ram.RamPushEntries (Ram.Address 0x10000) (Ram.Address 0x10010) (Ram.Address 0x10060)
+  , Ram.manifestPublications =
+      [ Ram.Publication index Ram.Setup (Ram.Address address) (Ram.WordValue 0x11111111) (Ram.WordValue 0x22222222) Ram.Both
+      | (index,address) <- zip [222,221 .. 0] [0x20000,0x20004 .. 0x20378] ] }
+
+runtimeBindingTests :: IO ()
+runtimeBindingTests = do
+  let text = runtimeTextFixture
+      runtime = text <> B.pack [1 .. 16] <> B.replicate (0x500 - 144) 0
+      elf = runtimeElfFixture text runtimeSymbolsFixture
+      manifest = runtimeManifestFixture runtime
+      bind = bindModalRuntimeSource
+      symbolsWith name change = [if symbolName == name then change row else row | row@(symbolName,_,_,_,_) <- runtimeSymbolsFixture]
+      shortWriter = runtimeElfFixture text (symbolsWith "store_new_words" (\(name,address,_,section,kind) -> (name,address,4,section,kind)))
+      shortResident = runtimeElfFixture text (symbolsWith "rb_resident" (\(name,address,_,section,kind) -> (name,address,1020,section,kind)))
+      falseWriter = runtimeElfFixture text (symbolsWith "store_new_words" (\(name,address,size,section,_) -> (name,address,size,section,0x11)))
+      duplicateText = B.take 0x28 text <> wordBytes 0xe5813000 <> B.drop 0x2c text
+      duplicateRuntime = duplicateText <> B.drop 128 runtime
+      duplicateElf = runtimeElfFixture duplicateText runtimeSymbolsFixture
+      shiftedEntry = manifest { Ram.manifestEntries = Ram.RamPushEntries (Ram.Address 0x10004) (Ram.Address 0x10010) (Ram.Address 0x10060) }
+      mismatchedReadonly = B.take 128 runtime <> B.singleton 99 <> B.drop 129 runtime
+      nonzeroResident = B.take 0x100 runtime <> B.singleton 1 <> B.drop 0x101 runtime
+      malformed =
+        [ ("partial writer symbol extent",manifest,shortWriter)
+        , ("resident1020",manifest,shortResident)
+        , ("writer is not function symbol",manifest,falseWriter)
+        , ("duplicate source-bound STR",runtimeManifestFixture duplicateRuntime,duplicateElf)
+        , ("manifest entry inside rather than at ELF function",shiftedEntry,elf)
+        , ("stale runtime digest",manifest { Ram.runtimeDigest = replicate 64 '0' },elf)
+        , ("allocation extent differs from bytes",manifest { Ram.allocationSize = 0x504 },elf)
+        , ("readonly nontext bytes differ from runtime",runtimeManifestFixture mismatchedReadonly,elf)
+        , ("resident initial bytes nonzero",runtimeManifestFixture nonzeroResident,elf)
+        , ("missing writer symbol",manifest,runtimeElfFixture text (filter (\(name,_,_,_,_) -> name /= "store_new_words") runtimeSymbolsFixture))
+        , ("duplicate writer symbol",manifest,runtimeElfFixture text (runtimeSymbolsFixture ++ [("store_new_words",0x10020,16,1,0x12)]))
+        ]
+  bound <- either (error . ("runtime source fixture: " ++)) pure (bind manifest elf)
+  let evidence = modalRuntimeSourceJson bound
+      lifetime = get "lifetime" evidence
+      rows = values (get "publications" lifetime)
+      images = values (get "readonly" lifetime)
+  check "runtime binding retains complete nontext readonly source" $
+    length images == 2 && any (\entry -> get "start" entry == Number 0x10080
+      && get "bytes" entry == array (map (Number . fromIntegral) ([1 .. 16] :: [Word32]))) images
+  check "manifest physical publication vector order survives nonmonotone indices" $
+    map (get "address") rows == map (Number . fromIntegral) ([0x20000,0x20004 .. 0x20378] :: [Word32])
+  check "source binding retains runtime and complete ELF digests" $
+    get "bound_elf_sha256" evidence == get "digest" (object ["digest" .= sha256Hex (sha256 elf)])
+      && get "runtime_sha256" evidence == get "digest" (object ["digest" .= sha256Hex (sha256 runtime)])
+  mapM_ (\(label,description,source) -> check ("runtime source refuses " ++ label) (isLeft (bind description source))) malformed
+  check "whole loader pins reject same-size changed source" $
+    isLeft (bindModalLifetimeSource manifest elf (B.replicate 0xdae0 0) (B.replicate 0xdaa0 0))
+  stock <- either error pure (modalStock (B.replicate 252 0))
+  base <- either error pure (modalRequest stock Nothing permitLimit)
+  let contextRanges =
+        [(0x40000,0x403a0),(0x403a4,0x403b0),(0x403b4,0x403c0),(0x403c4,0x403d0)
+        ,(0x403d4,0x403e0),(0x403e4,0x403f0),(0x403f4,0x40400),(0x40404,0x4dae0)
+        ,(0xd0000,0xd03a0),(0xd03a4,0xd03b0),(0xd03b4,0xd03c0),(0xd03c4,0xd03d0)
+        ,(0xd03d4,0xd03e0),(0xd03e4,0xd03f0),(0xd03f4,0xd0400),(0xd0404,0xddaa0)] :: [(Word32,Word32)]
+      context = [object ["start" .= low,"bytes" .= B.unpack (B.replicate (fromIntegral (high-low)) 0)] | (low,high) <- contextRanges]
+      lifetimeLimit = Number (fromIntegral (modalLimitValue modalLifetimeObservationLimit))
+      declaration = set "limit" lifetimeLimit (set "context_sources" (array context) (set "lifetime" lifetime (modalBeginRequestJson base)))
+      changeLifetime key value = set "lifetime" (set key value lifetime) declaration
+      malformedDeclarations =
+        [ ("ordinary observation bound",set "limit" (Number 65536) declaration)
+        , ("partial context",set "context_sources" (array (drop 1 context)) declaration)
+        , ("extra context",set "context_sources" (array (context ++ take 1 context)) declaration)
+        , ("reordered context",set "context_sources" (array (reverse context)) declaration)
+        , ("mutable vector included",set "context_sources" (array (map (set "bytes" (array (replicate 0x3a4 (Number 0)))) (take 1 context) ++ drop 1 context)) declaration)
+        , ("resident extent1020",changeLifetime "resident" (array [Number 0x10100,Number 0x104fc]))
+        , ("resident outside runtime",changeLifetime "resident" (array [Number 0x20000,Number 0x20400]))
+        , ("runtime alias",changeLifetime "runtime" (array [Number 0x40010000,Number 0x40010500]))
+        , ("missing readonly source",changeLifetime "readonly" (array (drop 1 images)))
+        , ("duplicate readonly source",changeLifetime "readonly" (array (images ++ take 1 images)))
+        , ("wrong writer opcode",changeLifetime "install" (set "writer" (object ["pc" .= (0x10024 :: Word32),"word" .= (0 :: Int)]) (get "install" lifetime)))
+        , ("entry source mismatch",changeLifetime "install" (set "entry" (object ["pc" .= (0x10000 :: Word32),"word" .= (1 :: Int)]) (get "install" lifetime)))
+        , ("publication duplicate",changeLifetime "publications" (array (take 1 rows ++ take 1 rows ++ drop 2 rows)))
+        , ("publication partial vector",changeLifetime "publications" (array (drop 1 rows)))
+        , ("publication alias",changeLifetime "publications" (array (map (set "address" (Number 0x40020000)) (take 1 rows) ++ drop 1 rows)))
+        ]
+  request <- either (error . ("lifetime declaration fixture: " ++)) pure (parseModalBeginRequest declaration)
+  check "typed lifetime request preserves source images and physical vector order" (modalBeginRequestJson request == declaration)
+  mapM_ (\(label,value) -> check ("lifetime request refuses " ++ label) (isLeft (parseModalBeginRequest value))) malformedDeclarations
+  expectedWrites <- either error pure (modalLifetimeWatchRanges request)
+  let fetches = unionWatchRanges (range 0x00bfb028 0x00bfb124 :
+        [range pc (pc+4) | pc <- [0x10000,0x10010,0x10024,0x10044,0x40240,0x4031c,0x436b8,0x43690,0x436f0
+          ,0x43720,0x43848,0x42440,0xd0240,0xd031c,0xd36b8,0xd3690,0xd36f0,0xd3720,0xd3848,0xd2440]])
+      fetchJson spans = object ["sources" .= ([] :: [Value]), "ranges" .= map pair spans]
+      watch spans records = digested (object
+        [ "enabled" .= True, "views" .= ("fixed" :: String), "ranges" .= map pair spans, "records" .= records, "violation" .= Null
+        , "classes" .= [object ["range" .= pair span_, "kinds" .= (["cpu-write","host-write","model-bus-write"] :: [String])] | span_ <- spans]
+        , "fetch_attribution" .= fetchJson fetches ])
+      addresses = [0x20000,0x20004 .. 0x20378] :: [Word32]
+      writes =
+        [set "pc" (Number 0x10024) (set "value" (Number 0x22222222) (set "before" (array (replicate 4 (Number 0x11)))
+          (cpu 0 address address 4 clock))) | (address,clock) <- zip addresses [1 ..]]
+        ++ [set "pc" (Number 0x10044) (set "value" (Number 0x11111111) (set "before" (array (replicate 4 (Number 0x22)))
+          (cpu 1 address address 4 clock))) | (address,clock) <- zip (reverse addresses) [224 ..]]
+      fullWatch = watch expectedWrites writes
+      exactReceipt = foldr (\key value -> set key (Number 0) value) (completedReceipt 223)
+        ["checked_resource_writes","checked_identity_writes","checked_scheduler_writes","checked_context_writes","checked_vfp_owner_writes","audited_writes"]
+      clean = set "watch" (withoutRecords fullWatch) (set "lifetime" exactReceipt (set "task_identity_verified" (Bool False)
+        (set "task_entries" (array []) (completedEnvelope 223))))
+  rangeBound <- either error pure (watchRangeLimit (length expectedWrites))
+  shortRangeBound <- either error pure (watchRangeLimit (length expectedWrites - 1))
+  fullAcknowledgement <- either error pure (lifetimeWatchAcknowledgement fullWatch >>= parseModalLifetimeWatchAck)
+  fullObservation <- either error pure (parseModalLifetimeWatch modalLifetimeWriterLimit fullWatch)
+  check "continuous source watch exceeds only the unchanged UI range cap" $
+    length expectedWrites > 8 && isLeft (checkExecutionWrites ForbidProtectedWrites modalLifetimeWriterLimit expectedWrites [] fullAcknowledgement fullObservation)
+  check "source-bound checker refuses more ranges than its explicit bound" $
+    isLeft (checkExecutionWritesWithRangeLimit shortRangeBound ForbidProtectedWrites modalLifetimeWriterLimit expectedWrites [] fullAcknowledgement fullObservation)
+  check "source-bound checker accepts its complete finite range bound" $
+    not (isLeft (checkExecutionWritesWithRangeLimit rangeBound ForbidProtectedWrites modalLifetimeWriterLimit expectedWrites [] fullAcknowledgement fullObservation))
+  audit <- either error pure (checkLifetimeArrayAudit request (Right fullWatch) (parseFinalModalWatch fullWatch))
+  report <- either error pure (parseModalReport permitLimit clean)
+  finalFull <- either error pure (parseFinalModalWatch fullWatch)
+  check "stock223 full lifetime binds to its request and every raw write" (checkCompletedModalLifetime request audit finalFull report == Right ())
+  otherDigest <- either error pure (parseFinalModalWatch (set "records_sha256" (String (T.replicate 64 "0")) fullWatch))
+  check "an equal row count with another row digest refuses" (isLeft (checkCompletedModalLifetime request audit otherDigest report))
+  check "source-bound cache-only attribution binds every protected point" (checkModalLifetimeWatchSources request fullWatch == Right ())
+  check "missing protected instruction fetch refuses" (isLeft (checkModalLifetimeWatchSources request
+    (set "fetch_attribution" (fetchJson (drop 1 fetches)) fullWatch)))
+  linked <- either error pure (modalLinked (watchAddress 0x10000) text)
+  scope <- either error pure (modalScope linked (range 0x10000 0x10038) (range 0x10038 0x10060)
+    (ModalHelpers (range 0x10060 0x10070) (range 0x10070 0x10080)) (Just (watchAddress 0x10060)))
+  scopedBase <- either error pure (modalRequest stock (Just (linked, scope)) permitLimit)
+  let installedBranch = 0xea000abc :: Word32
+      scopedPublications = rows ++ [object ["address" .= (0x00bfb028 :: Word32), "old" .= (0 :: Word32), "new" .= installedBranch]]
+      scopedLifetime = set "publications" (array scopedPublications) (set "readonly" (array (drop 1 images)) lifetime)
+      scopedDeclaration = set "limit" lifetimeLimit (set "context_sources" (array context) (set "lifetime" scopedLifetime (modalBeginRequestJson scopedBase)))
+      helperFetches = unionWatchRanges (range 0x10000 0x10080 : fetches)
+      truncatedHelperFetches = unionWatchRanges (range 0x10000 0x1007c : fetches)
+  scopedRequest <- either error pure (parseModalBeginRequest scopedDeclaration)
+  check "continuous static fetch coverage includes every helper instruction" $
+    checkModalLifetimeWatchSources scopedRequest (set "fetch_attribution" (fetchJson helperFetches) fullWatch) == Right ()
+  check "missing final call-helper instruction refuses source coverage" $
+    isLeft (checkModalLifetimeWatchSources scopedRequest (set "fetch_attribution" (fetchJson truncatedHelperFetches) fullWatch))
+  scopedWrites <- either error pure (modalLifetimeWatchRanges scopedRequest)
+  let forwardEntry = set "pc" (Number 0x10024) (set "value" (Number (fromIntegral installedBranch))
+        (cpu 0 0x00bfb028 0x00bfb028 4 224))
+      reverseEntry = set "pc" (Number 0x10044) (set "before" (array (map (Number . fromIntegral) (B.unpack (wordBytes installedBranch))))
+        (cpu 1 0x00bfb028 0x00bfb028 4 225))
+      reverseRows = zipWith (\clock row -> set "tick" (Number (fromIntegral clock)) (set "instructions" (Number (fromIntegral clock)) row))
+        [226 :: Integer ..] (drop 223 writes)
+      scopedWatch = set "fetch_attribution" (fetchJson helperFetches)
+        (watch scopedWrites (take 223 writes ++ [forwardEntry,reverseEntry] ++ reverseRows))
+      scopedSummary = withoutRecords scopedWatch
+      scopedCounts = object ["observations" .= (4 :: Int), "entries" .= (2 :: Int), "owned_handoffs" .= (1 :: Int)
+        , "fallback_handoffs" .= (1 :: Int), "returns" .= (2 :: Int), "active_frames" .= (0 :: Int), "peak_core_depth" .= (1 :: Int)]
+      scopedReceipt = set "publication_count" (Number 224) (set "forward_writes" (Number 224) (set "reverse_writes" (Number 224) exactReceipt))
+      installedTask = set "fetch" (set "bytes" (array (map (Number . fromIntegral) (B.unpack (wordBytes installedBranch))))
+        (get "fetch" taskEntry)) taskEntry
+      completedScoped = set "policy" (String "scoped-owned75") (set "counts" scopedCounts
+        (set "captured_domains" (array [set "controller" (Number 75) domain])
+        (set "task_entries" (array [installedTask]) (set "watch" scopedSummary (set "lifetime" scopedReceipt (completedEnvelope 224))))))
+  scopedAudit <- either error pure (checkLifetimeArrayAudit scopedRequest (Right scopedWatch) (parseFinalModalWatch scopedWatch))
+  installedReport <- either error pure (parseModalReport permitLimit completedScoped)
+  finalScoped <- either error pure (parseFinalModalWatch scopedWatch)
+  check "owned fetch binds the installed branch publication" (checkCompletedModalLifetime scopedRequest scopedAudit finalScoped installedReport == Right ())
+  let stockTask = set "fetch" (set "bytes" (array (replicate 4 (Number 0))) (get "fetch" taskEntry)) taskEntry
+  stockReport <- either error pure (parseModalReport permitLimit (set "task_entries" (array [stockTask]) completedScoped))
+  check "owned fetch rejects the pre-install stock word" (isLeft (checkCompletedModalLifetime scopedRequest scopedAudit finalScoped stockReport))
+  let withoutSettings = filter (\span_ -> let (low,high) = watchRangeBounds span_ in not (low <= 0x96cc64 && 0x96ce26 <= high)) expectedWrites
+      incompleteWatch = watch withoutSettings writes
+  check "array audit requires settings and all other expected write classes" $
+    isLeft (checkLifetimeArrayAudit request (Right incompleteWatch) (parseFinalModalWatch incompleteWatch))
+  wrongCount <- either error pure (parseModalReport permitLimit (set "lifetime" (set "publication_count" (Number 224) exactReceipt) clean))
+  check "completed receipt count must match source vector" (isLeft (checkCompletedModalLifetime request audit finalFull wrongCount))
+  let shortWatch = watch expectedWrites (drop 1 writes)
+  finalShort <- either error pure (parseFinalModalWatch shortWatch)
+  check "report summary must describe the final watch rows" (isLeft (checkCompletedModalLifetime request audit finalShort report))
+  missingRow <- either error pure (parseModalReport permitLimit (set "watch" (withoutRecords shortWatch) clean))
+  check "accepted receipt counts cannot exceed raw write rows" (isLeft (checkCompletedModalLifetime request audit finalShort missingRow))
+  wrongAudit <- either error pure (parseModalReport permitLimit (set "lifetime" (set "audited_writes" (Number 1) exactReceipt) clean))
+  check "mutable array audit count must match the raw writer summary" (isLeft (checkCompletedModalLifetime request audit finalFull wrongAudit))
+  missingContext <- either error pure (parseModalReport permitLimit (set "context_source_spans" (Number 0) (set "enabled" (Bool True) clean)))
+  check "begin acknowledgement must bind the exact context source count" (isLeft (checkModalBegin request missingContext))
+  let vfpOwnerRow = set "pc" (Number 0x42440) (set "value" (Number 7) (set "before" (array (replicate 4 (Number 0xff)))
+        (cpu 0 0x4dad4 0x4dad4 4 500)))
+      vfpWatch = watch expectedWrites (writes ++ [vfpOwnerRow])
+  vfpAudit <- either error pure (checkLifetimeArrayAudit request (Right vfpWatch) (parseFinalModalWatch vfpWatch))
+  finalVfp <- either error pure (parseFinalModalWatch vfpWatch)
+  vfpCounted <- either error pure (parseModalReport permitLimit (set "watch" (withoutRecords vfpWatch)
+    (set "lifetime" (set "checked_vfp_owner_writes" (Number 1) exactReceipt) clean)))
+  check "a counted lazy-VFP owner store accounts for its raw write row" (checkCompletedModalLifetime request vfpAudit finalVfp vfpCounted == Right ())
+  vfpUncounted <- either error pure (parseModalReport permitLimit (set "watch" (withoutRecords vfpWatch) clean))
+  check "an uncounted lazy-VFP owner write row refuses" (isLeft (checkCompletedModalLifetime request vfpAudit finalVfp vfpUncounted))
+  let withoutVfpCounter = case exactReceipt of Object fields -> Object (KM.delete "checked_vfp_owner_writes" fields); other -> other
+  check "lifetime receipt requires its lazy-VFP owner counter"
+    (isLeft (parseModalReport permitLimit (set "lifetime" withoutVfpCounter clean)))
+ where
+  values (Array entries) = foldr (:) [] entries
+  values _ = []
+  pair span_ = let (low,high) = watchRangeBounds span_ in [low,high]

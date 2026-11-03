@@ -15,8 +15,8 @@ withUnreviewedBuild payload policy base action = do
   relinker <- runfilesRelinker payload
   withRelinkedBuildUsing relinker policy base action
 
-runUnreviewedRamPush :: RetainedAllocation -> RamPushManifest -> Clock -> UsbApi -> FilePath -> IO RamPushOutcome
-runUnreviewedRamPush retained = runRamPushWith xm1PeerCacheAvailability (retainedAllocation retained)
+runUnreviewedRamPush :: RamPushObserver -> RetainedAllocation -> RamPushManifest -> Clock -> UsbApi -> FilePath -> IO RamPushOutcome
+runUnreviewedRamPush observer retained = runRamPushWith xm1PeerCacheAvailability observer (retainedAllocation retained)
 
 runUnreviewedRamUnload :: RamPushState -> Clock -> UsbApi -> FilePath -> IO RamUnloadOutcome
 runUnreviewedRamUnload = runRamUnloadWith xm1PeerCacheAvailability
