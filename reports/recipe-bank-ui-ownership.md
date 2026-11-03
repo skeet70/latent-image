@@ -1059,16 +1059,23 @@ The build is opt-in: `--cfg rb_menu_picker_owned` (which requires `rb_modal_scop
 
 #### Stock menu engine and the owned target
 
-One observed DOWN at the last row of the setting-246 picker (`--menu-observe`, `emulation/menu-observe-picker-down.json`) produced 174 trace hits and 1,270 PC-recorded writes with no watch violation. Together with the decompilation it fixes the stock menu engine's shape. [Sources: E-MENU-ENGINE-OBSERVE-150; `private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c`.]
+Four single-press `--menu-observe` runs fix the stock menu engine's shape together with the decompilation; none of their watches reported a violation. [Sources: E-MENU-ENGINE-OBSERVE-150; `private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c`.]
+
+| Run | Configuration | Press | Trace hits | Recorded writes |
+| --- | --- | --- | --- | --- |
+| 1 | `emulation/menu-observe-picker-down.json` | DOWN at the last row of the setting-246 picker | 174 | 1,270 |
+| 2 | `emulation/menu-observe-picker-open.json` | OK on that picker's row in its parent list | 285 | 13,258 |
+| 3 | `emulation/menu-observe-picker-back.json` | BACK from the picker | 233 | 12,663 |
+| 4 | `emulation/menu-observe-menu-open.json` | OK at the attach root | 148 | 6,473 |
 
 **Event path.** All events cross one fixed block, not a queue:
-1. Controller 75's DOWN action `0xc6eb44` calls stage open `0xd3d858(4, 1)`, which writes event `0x1e` (kind 4, node 1, id 1) into the fixed event block `0x0094f64c..0x0094f660` through `0x0063270c`.
+1. In run 1, controller 75's DOWN action `0xc6eb44` calls stage open `0xd3d858(4, 1)`, which writes event `0x1e` (kind 4, node 1, id 1) into the fixed event block `0x0094f64c..0x0094f660` through `0x0063270c`.
 2. The stock dispatcher then runs controller 100 (state 1, event `0x15`), whose action `0xca4674` consumes the block.
 3. `0xca4674` enters `0xd4dd2c`, the engine wrapper `0xbf95c8` and the kind switch `0xbfa234` (all.c:331301). Kind 1 opens a node at its remembered row; 2 closes and remembers the row; 4, 5 and `0x45` to `0x48` move within the open node; 6 to `0xb` wrap a move between a pop and a push (6, 7) or a push and a pop (8 to `0xb`, with 10 and `0xb` first calling `0xbfad04`); `0xe` and `0xf` push and pop through `0xbfab98`; `0x10` to `0x12` push or pop two or three levels; `0x13` re-opens.
 4. The move `0xbf9f44` steps through `0xbf9b1c` (all.c:330967; code `0x16` up, anything else down). The step wraps unless node word 4 is 1, skips rows whose state is 2 or 3 unless node word 5 is 1, and then sets the visible ordinal from the row's value token and the visible count.
 5. The move then recomputes the scroll top (`0xbf988c`) and stores 44-byte snapshots through `0x0061ceac`.
 
-**Value step.** `0xca4674` asks `0xd586bc(3, P, V)` whether the move changes a setting. In the observed press it did: `0xd3d620` posted event `0x1d` with property `0xf6` (246), token 1 and `0xf000`, and controller 30 was dispatched (`0xc0028c`). Controller 30's action `0xc2d8ec` called the commit dispatcher `0xd4fc74(0xf6, 1)`, and the property writer `0x0061c91c` was then entered for properties `0xf6`, `0xf9`, `0x161` and `0x1e5`, in that order.
+**Value step.** `0xca4674` asks `0xd586bc(3, P, V)` whether the move changes a setting. In run 1 it did: `0xd3d620` posted event `0x1d` with property `0xf6` (246), token 1 and `0xf000`, and controller 30 was dispatched (`0xc0028c`). Controller 30's action `0xc2d8ec` called the commit dispatcher `0xd4fc74(0xf6, 1)`, and the property writer `0x0061c91c` was then entered for properties `0xf6`, `0xf9`, `0x161` and `0x1e5`, in that order.
 
 **State.** The engine's state is a set of globals:
 - the open node pointer `0x009571d0`;
@@ -1077,9 +1084,17 @@ One observed DOWN at the last row of the setting-246 picker (`--menu-observe`, `
 - a cursor stack `0x00957554` indexed by depth `0x009575f4`;
 - remembered rows `0x0095733c[node]`.
 
-The observed press wrapped the cursor, the visible ordinal and the scroll top from 8, 8 and 2 to 0 (writers `0x00bf9bec`, `0x00bf9c04`, `0x00bf9c10` and `0x00bfa1c8`). `0x0061cd14` (all.c:10050) then rewrote the depth-2 snapshot of node 1 at `0x00941300` as `{depth 2, node words 1, 0, 246, cursor-row token 1, saved-row token 1, cursor 0, ordinal 0, visible 9, page word 1, top 0}`.
+Run 1 wrapped the cursor, the visible ordinal and the scroll top from 8, 8 and 2 to 0 (writers `0x00bf9bec`, `0x00bf9c04`, `0x00bf9c10` and `0x00bfa1c8`). `0x0061cd14` (all.c:10050) then rewrote the depth-2 snapshot of node 1 at `0x00941300` as `{depth 2, node words 1, 0, 246, cursor-row token 1, saved-row token 1, cursor 0, ordinal 0, visible 9, page word 1, top 0}`.
 
-**Rendering.** The engine requests a redraw through `0xd4c8d4` and `0xd3d894` (codes `0x837`, then `0x816`); notifications `0xd38d98(0x50b)` and `(0x400)` set the flags `0x009503d0` and `0x009503d4`. Draw functions in `0x0116xxxx` read 44-byte copies of the engine state through `0x0061cd14` (live) or `0x0061ce1c` (saved) rather than the globals. After the redraw requests, the row-availability function `0xd52684` was entered 106 times, 53 of them from `0x00bf8dbc` and 16 from `0x00bf924c`. Most writes to `0x00a85000..0x00a88000` come from `0x008409bc`, `0x00840a48` and `0x006d8518..0x006d85f8`.
+Run 2 posted kind `0xe` (push) with node 1 and id `0x1d` through `0xd3d858`, called from `0x00c738ec`. The push changed the node pointer from `0x0078ea98` to the node-1 record `0x00784014` and the depth `0x009575f4` from 1 to 2. It saved the parent's cursor, ordinal and visible count (3, 2, `0x20`) at `0x00957564`, cleared the row states, and set the total rows from `0x21` and the visible count from `0x20` to 9. The same `0x1d` value post and commit then ran with property `0xf6` and token 1, so entering the picker re-commits its current value and repeats the property-write fan-out.
+
+Run 3 posted kind `0xf` (pop) with node 1 and id `0x1a` from `0x00c769f4`. The pop restored the parent node `0x0078ea98`, cursor 3, ordinal 2, visible count `0x20`, total `0x21` and depth 1, and recomputed the row states (rows 0 and 1 in states 3 and 2). Afterwards `0x00d43170`, not `0xca4674`, posted `0x1d` for property `0x27d` with token 0, and the commit dispatcher ran for `0x27d`.
+
+Run 4 posted kind 1 (open) with node 1 and id 0 from `0x00d3d754`, without `0xd3d858`. The open set the menu-open flag `0x009575fc`, the node pointer `0x0078ea98` and depth 1, and called the step `0xbf9b1c(0x15)` from `0x00bfaac0`; the cursor landed on row 2 with ordinal 1, past row 0 (state 3) and row 1 (state 2). `0x00d42da4` then posted event `0x20`. Before the press the globals still held a depth-2 node `0x0078ecd8` from an earlier menu.
+
+In all four runs every write to `[0x009571d0,0x00957600)` came from `0x00bf977c..0x00bfacb0` or, in run 4, from `0x007221b0` inside the clear `0x007221c8` that kind 1 calls.
+
+**Rendering.** The engine requests a redraw through `0xd4c8d4` and `0xd3d894` (codes `0x837`, then `0x816`); notifications `0xd38d98(0x50b)` and `(0x400)` set the flags `0x009503d0` and `0x009503d4`. Draw functions in `0x0116xxxx` read 44-byte copies of the engine state through `0x0061cd14` (live) or `0x0061ce1c` (saved) rather than the globals. After the redraw requests of run 1, the row-availability function `0xd52684` was entered 106 times, 53 of them from `0x00bf8dbc` and 16 from `0x00bf924c`. Most writes to `0x00a85000..0x00a88000` come from `0x008409bc`, `0x00840a48` and `0x006d8518..0x006d85f8`.
 
 **Target and shims.** **[INFERENCE]** The target for the menu subsystem is:
 - a declarative menu tree built from the decoded tables (nodes, rows, labels, availability rules);
@@ -1099,7 +1114,7 @@ The stock modal-dispatch hook becomes a thin event adapter. The stock code the o
 | Stock availability | Row states from `0xd52684` | Availability is declared in the menu tree |
 | Picker key cells | Increment 1's seven owned controller-75 cells | The owned key layer replaces them (no further per-cell ownership is added) |
 
-Next observations, each a single `--menu-observe` run: open (kind 1, remembered row), page moves, push and pop with the cursor stack, a list with a disabled or hidden row, and a confirmation dialog.
+Next observations, each a single `--menu-observe` run: page moves, a move with no-wrap or no-availability nodes, value pickers whose commit has a plain arm (properties 163 and 214), and a confirmation dialog.
 
 #### Camera-side validation harness (design)
 
