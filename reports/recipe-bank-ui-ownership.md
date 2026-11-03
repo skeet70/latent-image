@@ -812,3 +812,113 @@ Not closed: task-creation callers that pass stack memory not obtained from eithe
 **Router maps.** `//replacement/modal_runtime:controller-routes` explores every path through both routers with interval domains over loaded words. Both routers ignore their arguments. `0xc0dbf8` always dispatches controller 80 from 81 sites, and the mailbox `u32[0x94f64c]` selects event values 0..81 (for example, 358 gives event 0 and 359..361 give event 1). `0xc12aac` always dispatches controller 100 from 91 sites, with events 0..92 except 26. Its selectors are the mailbox, `u32[0x944580]`, query results `0x632a3c(0x2380/0x20c0)`, `0x63a0e0`, `0xd35fbc` and `0xd1740c(mailbox)`, plus 28 routes that compare `u32[0x944584]` with halfword fields near `0x94f6de`. Two routes, c0dbf8 event 80 and c12aac event 7, require `0x63a0e0` to return something other than 1, while its decompilation returns 1. The 3,412 B/BL caller sites lie in 2,093 callbacks of 38 controllers, which gives 40 typed controller-to-controller edges. These results depend on two premises: the routers' callees preserve the compared words, and repeated queries with the same constant arguments return the same value.
 
 **Instruction forms.** `//replacement/modal_runtime:controller-forms` classifies the 177,461 code words of the 5,795 callbacks into 56 forms in 33 families. `A32.decode` decodes the operands of 55 forms, used by all callbacks. `BFI` (19 instructions, 19 callbacks) decodes as `Compute`; `A32.bitFieldInsert` supplies its operands to the return derivation. The top 30 forms cover 5,391 callbacks completely, and the top 50 cover 5,785. 28,395 instructions are predicated.
+
+#### Controller75 pilot design
+
+[`//replacement/modal_runtime:controller75-inventory`](../replacement/modal_runtime/Controller75InventoryMain.hs) inventories controller 75 from pinned inputs: the cited manifest (`f27b3562…`) for tables and trajectory domains, the current derivation `controller-manifest-bfi.json` (`2190bc89…`) for extents, return proofs, calls and service witnesses, `scale-cells-regoffset.json`, `routes.json`, `separation.json`, the modal75 closure diagnostic (`b7c71e0c…`), image5 and the decompilation. It sweeps every aligned image5 word with straight-line value-set propagation to resolve dispatcher r0, same-segment event-cell writes and every constant-address access to controller 75's state and event cells, and refuses unless it reproduces every `scale-cells-regoffset` record for 75. It reuses the instruction-form definition and the service-seed closure, now shared modules (`Replacement/ModalRuntime/InstructionForm.hs`, `ServiceCategories.hs`); `controller-forms` and `controller-manifest` outputs stay byte-identical to `forms.json` and `controller-manifest-bfi.json`. One independent review found one blocking and four should-fix items, all fixed before the single cited run. The private output is `private-data/scratch/ControllerPilot75/inventory.json`, SHA-256 `153bfd3c9f960e9b888cfc6991edf157ccc85a09bce8de1f36ff59ec4265d0e8`.
+
+```sh
+devenv shell -- bazel --batch --output_base="$HOME/.cache/bazel/latent-image-ControllerPilotPrep" build --jobs=2 //replacement/modal_runtime:controller75-inventory
+bazel-bin/replacement/modal_runtime/controller75-inventory \
+  --manifest private-data/scratch/ControllerManifest/manifest.json \
+  --derivation private-data/scratch/ControllerPilotPrep/controller-manifest-bfi.json \
+  --cells private-data/scratch/ControllerManifest/scale-cells-regoffset.json \
+  --routes private-data/scratch/ControllerPilotPrep/routes.json \
+  --separation private-data/scratch/ControllerPilotPrep/separation.json \
+  --closure-diagnostic private-data/scratch/modal128/closure-modal75-diagnostic.json \
+  --id5 private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin \
+  --decompilation private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c \
+  --out <fresh private path>
+```
+
+**Tables.** The dispatcher indexes `event * 46 + state`, so the 2,346 cell words are 51 event rows (0..50) over 46 states (0..45).
+
+| Controller 75 quantity | Result |
+| --- | ---: |
+| Cells with a non-null action | 1,137 |
+| No-op cells: null action and null transition slot 1 | 1,209 |
+| Cells with high halfword 1 / direct-state cells | 2,342 / 4 |
+| Transition words | 2, both zero |
+| Action words: null (slots 0, 1) / non-null | 2 / 297 |
+| Unique callbacks; callbacks in more than one slot | 297; none |
+| Callback code bytes | 52,968 |
+| Slots referenced by cells | 298, every slot except 1 |
+| Constant state-store sites / callbacks / conditional sites | 252 / 119 / 51 |
+| Stored state values | every value 0..45, none unknown |
+
+The action slot count is 297, not 294. The 294 is the closure diagnostic's capture: 48 locally resolved events (all but 24, 28 and 29) by 46 states, 2,208 cells, read from the publication-adjusted candidate. The stock tables reference 296 slots over the same pairs. The candidate publishes bank targets into slots 1, 37 and 66 (`0x00a86144`, `0x00a86544`, `0x00a86048` for stock null, `0xc6f14c` and `0xc70528`), and its published cells no longer reach stock slots 90, 115 and 129.
+
+Four cells carry a direct state: `(13,4)` and `(13,5)` run `0xc6f994` then set state 0, `(0,41)` runs `0xc79a40` then sets 29, and `(14,47)` runs `0xc7a3f0` then sets 0. On those cells the dispatcher's post-action store overrides any store the action made; on every other cell the action's own store stands. Event row 29 has no non-null cell. Outside callbacks, the only constant-address writer of state 75 is the state-array initializer `0xc22bd0` (store of 0 at `0xc22d10`), and the only writer of event 75 is router `0xc0bae8`. No code reads either cell through a constant address.
+
+**Routes in.** Router `0xc0bae8` holds all 49 image5 dispatcher sites for 75 and writes events 0..50 unconditionally before each; two sites select between `{47,48}` and `{49,50}`. Its selectors are `u32[0x944580]` and `u16[0x944588]` (listing read, `ghidra/all.c:341168-341273`), and its other calls `0x6394d0`, `0x63a0e0`, `0xd35fbc` and `0xd36090` leave the frontier `{0x63a0e0, 0xd35fbc, 0xd36090}`. 23 BL sites in 22 controller-74 callbacks call it; no controller-75 callback does. Routers `0xc0dbf8` and `0xc12aac` never dispatch 75. Of the 3,105 dispatcher call sites, three have no straight-line controller: `0xc0e03c` inside `0xc0dbf8` (path-resolved to 80 by `controller-routes`), and `0xc19c90` and `0xc229ac` after heads `0xc19b50` and `0xc22600`, which stay may-dispatch-75 obligations.
+
+**Routes out.** 266 of the 297 callbacks call `0xc12aac`, which dispatches controller 100 with events 0..92 except 26. None calls `0xc0dbf8`, `0xc0bae8`, another event router or the dispatcher directly. `0xc12aac`'s own bindings leave the frontier `{0x63a0e0, 0xd16e2c, 0xd16f00, 0xd16f24, 0xd1734c, 0xd1740c, 0xd35fbc, 0xd35ffc}`.
+
+**Layers.** The rules are mechanical and recorded in the output (`layer_rules`). Generic primitives are the dispatcher, the two `routes.json` routers and event routers: non-callback functions whose every dispatcher site carries one constant controller and an unconditional known event write. (c) is decided first from the closures of each callback's non-generic direct callees, its private-ABI source tokens and its undischarged stack-separation sites. (a) requires calls only to generic primitives, stores only to the stack frame or controller 75's state cell with known values, and loads only from literals, the frame, 75's cells or image data. Everything else is (b). A primitive's own bindings are one router-level obligation, reported per callback but not counted as a caller's reason. Owned Rust bodies follow the same rules.
+
+| Layer | Callbacks | Code bytes |
+| --- | ---: | ---: |
+| (a) generic instance: constant route through `0xc12aac`, seven with constant state stores (values 0, 22, 29, 33), some selected by the router result | 8 | 548 |
+| (a) generic instance: constant or argument result (`0xc79a40`, absent from the decompilation) | 1 | 24 |
+| (b) residual translation | 148 | 21,156 |
+| (b) of which only seed or primitive calls and no global or computed memory access | 44 | 3,404 |
+| (c) retained: unclassified frontier only | 135 | 30,584 |
+| (c) retained: unresolved computed reference (undischarged index from `0x944580`) | 4 | 400 |
+| (c) retained: persistence service, also frontier (`0xc74e5c`) | 1 | 256 |
+| Total | 297 | 52,968 |
+
+No callback reaches a capture/playback/device seed or carries a private-ABI source token. If `0xc12aac`'s binding frontier counted against callers, 8 of the 9 (a) and 139 of the 148 (b) callbacks would move to (c). The (c) frontier has 141 leaves: `0x722054` alone reaches 93 retained callbacks and is the only leaf of 13. Classifying the top 20 leaves clears 27 of the 135 frontier-only callbacks (3,544 bytes). At the binding level, direct helpers `0xd3a654` (38 retained callbacks, one leaf), `0xd3c9d8` (30, 41 leaves), `0x6361b4` (18, one leaf), `0xd20a94` (18), `0xd19cfc` (17) and `0xd3b198` (14) carry most of it. **[INFERENCE]** `0x722054` is a call-free copy loop over halfword and word pointers (`ghidra/all.c:168602`); its category is not established.
+
+The owner has since replaced the frontier reason with typed stock-service bindings, kept nested dispatch to 100 through stock+4, accepted build-time table derivation and put `0xc0bae8` out of scope. Under that rule no callback moves to (a): every frontier-only callback calls a non-primitive helper. The 135 frontier-only callbacks (30,584 bytes) move to (b), giving (a) 9/572, (b) 283/51,740 and (c) 5/656 (E-MODAL75-INVENTORY-DESIGN-150).
+
+The existing trajectories select six callbacks. The four retained and packaged FILMSIM coordinates `(0,2)`, `(0,8)`, `(0,13)`, `(0,50)` select `0xc6eb44` (c), SET `0xc72e10` (c), BACK/leave `0xc76650` (b) and `0xc7a528` (b). The bank editor contract cells `(30,8)` and `(30,13)` select confirm `0xc75ed4` and cancel `0xc77794`, both (b). SET lands in (c) through its callees' frontier although `rb_ui_set` already replaces it in the bank, so the frontier rule is stricter than the bindings the owned lifecycle bodies already use.
+
+**[INFERENCE] Typed interface.** For the pilot only:
+
+| Type | Definition | Source of the domain |
+| --- | --- | --- |
+| `ControllerId` | Full 32-bit word compared with 75 at the seam; the owned path takes only `Modal75` | `entry.S`, scoped seam qualification |
+| `Event75` | `u8` newtype 0..=50 parsed from the event halfword; any other value is `UnhandledInput(u16)` | 51 rows; router `0xc0bae8` writes exactly 0..50 |
+| `State75` | `u8` newtype 0..=45; any other halfword is `UnknownState(u16)` | width 46; every constant store is 0..45 |
+| `Cell75` | `{ action: Option<Action75>, after: AfterAction }` with `AfterAction::{KeepActionState, SetState(State75)}` | 2,342 high-1 cells over two zero transition words; 4 direct-state cells |
+| `Action75` | `Generic(GenericAction)`, `Translated(fn() -> ActionResult)`, `Retained(StockTarget)` per callback disposition | layer inventory |
+| `GenericAction` | `RouteToTransition { on_result: [(u32, State75)] }` or `Result(ResultForm)` | the 9 (a) bodies |
+| `ActionResult` | `u32` newtype returned unchanged as the dispatcher r0 | stock keeps the action r0; no error enum |
+
+Unknown event or state is not an owned-table index. Stock indexes another row or past the cell table for those, so the owned dispatcher reproduces the stock raw-word lookup for them and reports `UnhandledInput` or `UnknownState` until a recorded trajectory shows such a value. The `[[Cell75; 46]; 51]` table is derived from owner-supplied image5 bytes at build time and checked against the stock words, not checked in. Bank publications into slots 1, 37 and 66 become `Action75` entries instead of word publications.
+
+**[INFERENCE] Dispatcher and seam.** `entry.S` stays as it is: full-word 75 goes to `rb_modal_dispatch`, every other ID to stock+4 with the replayed push. What changes is the 75 path inside `rb_modal_dispatch`. It still reads the shared event and state halfwords, because stock router `0xc0bae8` (from controller 74) and the initializer `0xc22bd0` write them, and still calls the retained prehook `0xd0cc68` first. It then parses `Event75`/`State75`, looks up the owned `Cell75` instead of the stock cell, action and transition pointers, runs the action by disposition, and applies `AfterAction` with the stock post-action ordering. `Generic` and `Translated` actions run in Rust. `Retained` actions keep `rb_modal_call` from `dispatch.S` and inherit every open private-ABI obligation of the dispatcher frame contract above. Nested dispatch from `0xc12aac` reenters the seam and reaches controller 100 through stock+4. In the pilot `0xc0bae8` and `0xc12aac` stay stock; their recovered route maps become typed expectations for the comparison, not owned code.
+
+**[INFERENCE] Translation rules for (b).** The 148 residual bodies use 28 forms, all with `A32.decode` operand semantics except one `BFI`. 1,010 of their instructions are predicated, 462 of them branches. Each rule needs a wrong-behavior control before any member is accepted:
+
+1. `bl` (1,010): call through a typed binding; r0-r3 arguments, r0 result; r0-r3, r12, LR and flags clobbered; r4-r11 preserved.
+2. `mov imm`, `mvn imm`, `movw`, `movt`, `ldr imm offset base=pc`: constant materialization. An absolute address pair becomes a named typed global: `State75` for the state cell, a typed `0x944580` block for the mailbox words, a named retained global otherwise.
+3. `cmp imm`, `cmn imm`, `cmp reg`, `sub.s imm`: exact 32-bit NZCV; conditions read NZCV, never a source-level signed-compare shortcut.
+4. Predication on any form: `if cond(nzcv) { op }`, with flags changed only by flag-setting forms.
+5. `b`: structured control flow within the callback extent; every target is internal.
+6. `stmdb! base=sp +lr`, `ldmia! base=sp +pc`, `add imm rn=sp`, `sub imm rd=sp`, `sub imm rn=sp rd=sp`, `str imm offset base=sp`: frame and locals become Rust locals; r11 is unobservable only while no private-ABI consumer exists.
+7. `mov reg`, `add imm`, `sub imm`: wrapping `u32` arithmetic.
+8. `strh imm offset` (93): state-cell stores become `State75` writes; other halfword stores truncate to 16 bits.
+9. `str reg offset`, `ldr reg offset`, `ldrb reg offset`, `ldr imm offset`, `ldrb imm offset`, `strb reg offset`: volatile accesses of the exact width, in program order relative to calls.
+10. `bfi`: `A32.bitFieldInsert` semantics.
+
+**[INFERENCE] Service bindings for (b).** 37 distinct direct callees. Seeds: transition router `0xc12aac` (139 callbacks), property query `0x63a0f8` (118), stage `0xd3d858` (104), snapshot accessors `0x61d1f4` (50), `0x61d244` (25) and `0x61d154` (9), notification `0xd38d98` (44), postlude `0xd38f34` (12), property access `0x61c93c` (9), gates `0x6394e8` (9), `0x63270c` (8), `0x6394d0` (4) and `0x632a3c` (3), editor `0xd45ce4`/`0xd45cf8` (4 each) and `0xd4ad38` (2), buffer copy `0x722a50` (1). Non-seed helpers whose closures are fully classified: `0xd3d81c` (10), `0xd48ab4` (8), `0xd3d78c` (6), `0xd1150c`, `0xd1f228`, `0xd21808`, `0xd48a34`, `0xd493f4`, `0xd4e1b4` (2 each) and nine single-use settings helpers. The snapshot accessors bind to the owned #132 frame module; the rest bind to retained stock through typed wrappers.
+
+**[INFERENCE] Qualification plan.** Comparisons per dispatcher entry: `(controller, state, event)`, action result r0, post-dispatch state halfword, ordered binding calls with arguments, nested controller-100 contexts, protected-table writes and acknowledged render captures.
+
+| Trajectory | Controller 75 selection | What it qualifies |
+| --- | --- | --- |
+| Retained FILMSIM route, E-MODAL-RETAINED-FILM-ROUTE-150 | state 0, events 2, 8, 13, 50: `0xc6eb44` (c), `0xc72e10` (c), `0xc76650` (b), `0xc7a528` (b) | Stock baseline for the same keys |
+| Packaged modal224 and lifetime guard pair, E-MODAL224-PACKAGED-FILMSIM-150, E-MODAL-LIFETIME-GUARD-150 | same four coordinates, with events 8 and 13 on published slot 1 | Owned dispatch with whole-lifetime fetch guard, 16 keys, core 0 |
+| Native lifecycle, E-MODAL-NATIVE-LIFECYCLE-150 and E-MODAL75-EDITOR-NATIVE-150 | dispatcher fixtures; direct pairs on cancel `0xc77794`, confirm `0xc75ed4`, leave `0xc76650`, SET `0xc72e10` | Dispatcher semantics and owned bodies with modeled services |
+
+None of these selects any (a) callback. The menu crawler must still find: events reaching the (a) cells (`0xc7985c` on 99 cells in events 39, 45, 48, 49; the seven state-selective event-50 routes; `0xc79a40` at `(0,41)`), the four direct-state cells, states other than 0 and 30, the controller-74 callers that feed `0xc0bae8`, and a natural state-30 editor route.
+
+Discriminating controls, each expected to refuse:
+
+- Wrong next state: one (a) instance or the `(0,41)` direct-state entry stores a different `State75`; the post-dispatch state comparison must differ.
+- Wrong route event: the typed `0xc0bae8` expectation maps one admitted key to a neighboring event; the `(75, state, event)` context comparison must differ.
+- Wrong action result: one translated (b) body returns its result plus one; the dispatcher r0 comparison must differ.
+- Retained-body fetch guard: one owned (a) or (b) callback is routed to its stock body; the continuous fetch guard must refuse, while (c) bodies stay permitted only inside an owned-dispatch action frame.
+
+**Open questions for the owner.** Whether the frontier rule should stay as specified (135 callbacks and 30,584 bytes stay stock) or admit a callee bound as a retained typed service, as the owned lifecycle bodies already do. Whether `0xc12aac`'s binding frontier blocks its 266 callers or is closed once with the router. Whether the pilot owns `0xc0bae8` and its 23 controller-74 call sites, or keeps it stock with a typed expectation. Whether build-time derivation of the owned table from owner bytes satisfies the publication review. Whether nested dispatch to controller 100 through stock+4 stays admitted inside owned 75 actions for the pilot.
