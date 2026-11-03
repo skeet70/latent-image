@@ -32,6 +32,14 @@
     "label": {
       "$ref": "common.schema.json#/$defs/evidenceLabel"
     },
+    "status": {
+      "description": "established: current knowledge; open: an observation not yet explained; negative: a known limitation or negative result. Optional until every record is curated.",
+      "enum": [
+        "established",
+        "open",
+        "negative"
+      ]
+    },
     "claim": {
       "type": "string",
       "minLength": 1
