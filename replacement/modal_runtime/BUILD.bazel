@@ -259,3 +259,19 @@ haskell_binary(
         "//host/firmware:bank-allowlist",
     ],
 )
+
+haskell_binary(
+    name = "controller-routes",
+    srcs = ["ControllerRoutesMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host/firmware:bank-allowlist",
+    ],
+)
