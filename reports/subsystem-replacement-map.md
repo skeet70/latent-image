@@ -56,6 +56,8 @@ The platform depends on actual dual-core identity, mapped code/data and aliases,
 
 **[INFERENCE]** This has the largest runtime-retirement leverage: several roughly 50 KiB service-entry address spans plus image4 wrappers and shared objects, with no defensible exact code total yet. Develop it as a single platform project, with internally testable task/scheduler/synchronization/message families rather than a public ticket per function. Start after recovering the complete 97-slot semantic manifest and direct/vector surface, and grounding IRQ/timer/context laws. A task/message-only initial cut is possible, but must retain the IRQ/timer backend explicitly and must not be called whole-kernel retirement. The immediate blockers are interface semantic coverage, raw-object consumers, exception/context closure, cross-core lock/wakeup laws and resource reclamation. [Grounding: #127 runtime ranks3-7; Inventory §§8.12-8.17.]
 
+[RTOS platform options](rtos-platform-options.md) tests the µITRON 4.0 hypothesis against the 97-slot manifest, surveys reusable kernels and Rust runtimes, and records the selected base: a mainstream Rust runtime (embassy) under a shrinking stock-ABI compatibility shim, with the board glue and thread layer still to write.
+
 ## B. General heap and distinct allocator/resource families
 
 ### 1. Interface, count, ABI and errors
