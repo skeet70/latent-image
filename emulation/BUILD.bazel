@@ -2954,6 +2954,45 @@ haskell_library(
 )
 
 haskell_library(
+    name = "task-memory-witness-lib",
+    srcs = [
+        "Emulation/EvidenceMutation.hs",
+        "Emulation/TaskMemoryWire.hs",
+        "Emulation/TaskMemoryWitness.hs",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":startup-task-witness-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:update-container",
+        "//host:vector",
+        "//replacement/kernel_install:kernel-install-artifact",
+    ],
+)
+
+haskell_library(
+    name = "task-witness-cli-lib",
+    srcs = ["Emulation/TaskWitnessCLI.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":image4-staging-lib",
+        ":task-memory-witness-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:process",
+        "//host:update-container",
+    ],
+)
+
+haskell_library(
     name = "idle-task-witness-lib",
     srcs = [
         "Emulation/IdleTaskControls.hs",
@@ -2966,13 +3005,13 @@ haskell_library(
         ":case-sha256",
         ":loader-code-layout",
         ":startup-task-witness-lib",
+        ":task-memory-witness-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:containers",
         "//host:json",
         "//host:update-container",
-        "//host:vector",
         "//replacement/idle_task:idle-task-artifact",
         "//replacement/kernel_install:kernel-install-artifact",
         "//replacement/media_permit:stock-inventory",
@@ -2988,14 +3027,54 @@ haskell_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":idle-task-witness-lib",
-        ":image4-staging-lib",
+        ":task-witness-cli-lib",
+        ":task-memory-witness-lib",
+        "//host:base",
+    ],
+)
+
+haskell_library(
+    name = "root-task-witness-lib",
+    srcs = [
+        "Emulation/RootTaskControls.hs",
+        "Emulation/RootTaskPlan.hs",
+        "Emulation/RootTaskWire.hs",
+        "Emulation/RootTaskWitness.hs",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":interface-initializer-lib",
+        ":loader-code-layout",
+        ":loader-prefix-witness-lib",
+        ":primary-initializer-source-lib",
+        ":startup-task-witness-lib",
+        ":task-memory-witness-lib",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
-        "//host:directory",
-        "//host:filepath",
-        "//host:host-support",
-        "//host:process",
+        "//host:containers",
+        "//host:json",
         "//host:update-container",
+        "//host/firmware:bank-allowlist",
+        "//replacement/kernel_install:kernel-install-artifact",
+        "//replacement/media_permit:stock-inventory",
+        "//replacement/root_task:root-task-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "root-task-check",
+    srcs = ["RootTaskWitnessMain.hs"],
+    args = ["$(rootpath //lz:fflzd)"],
+    data = ["//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":root-task-witness-lib",
+        ":task-memory-witness-lib",
+        ":task-witness-cli-lib",
+        "//host:base",
     ],
 )

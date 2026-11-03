@@ -3,18 +3,19 @@ module Emulation.IdleTaskControls (ControlError(..), refusalControls) where
 
 import Control.Monad (foldM, unless)
 import qualified Data.Aeson as J
-import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.Bits (xor, (.&.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as L
 import Data.List (findIndex)
-import qualified Data.Vector as V
 import Data.Word (Word32)
 import qualified Emulation.Sha256 as SHA
 import Emulation.IdleTaskWitness
 import Emulation.IdleTaskWire
+import Emulation.TaskMemoryWire
+import Emulation.EvidenceMutation (Part(..), field)
+import qualified Emulation.EvidenceMutation as Mutation
 import qualified Emulation.StartupTaskWire as S
 import FujiAF.JSON (decodeStrictIntegers)
 import qualified Replacement.IdleTask.Admission as A
@@ -29,25 +30,10 @@ data Control = WrongSource | WrongArtifact | WrongCandidate | WrongContract | Du
   | WrongWriterFetchClock | WrongWriterFetchOrdinal | WrongWriterFetchTick | MissingCoreOrdinal | WrongCoreOrdinal
   | WrongStoppedOrdinal | RecursiveWriterFetch | MissingRepeatedWait deriving (Eq, Show, Enum, Bounded)
 data ControlError = BaselineRejected WitnessError | MutationRejected Control | WrongRefusal Control WitnessError (Maybe WitnessError) deriving (Eq, Show)
-data Part = Field K.Key | Element Int
-field :: String -> Part
-field = Field . K.fromString
 pathAt :: Control -> [Part] -> J.Value -> Either ControlError J.Value
-pathAt _ [] value = Right value
-pathAt control (Field key:rest) (J.Object object) = maybe (Left (MutationRejected control)) (pathAt control rest) (KM.lookup key object)
-pathAt control (Element index:rest) (J.Array values) = maybe (Left (MutationRejected control)) (pathAt control rest) (values V.!? index)
-pathAt control _ _ = Left (MutationRejected control)
+pathAt control = Mutation.pathAt (MutationRejected control)
 modifyAt :: Control -> [Part] -> (J.Value -> Either ControlError J.Value) -> J.Value -> Either ControlError J.Value
-modifyAt _ [] change value = change value
-modifyAt control (Field key:rest) change (J.Object object) = do
-  old <- maybe (Left (MutationRejected control)) Right (KM.lookup key object)
-  new <- modifyAt control rest change old
-  pure (J.Object (KM.insert key new object))
-modifyAt control (Element index:rest) change (J.Array values) = do
-  old <- maybe (Left (MutationRejected control)) Right (values V.!? index)
-  new <- modifyAt control rest change old
-  pure (J.Array (values V.// [(index,new)]))
-modifyAt control _ _ _ = Left (MutationRejected control)
+modifyAt control = Mutation.modifyAt (MutationRejected control)
 set :: J.ToJSON a => Control -> [Part] -> a -> J.Value -> Either ControlError J.Value
 set control path value = modifyAt control path (const (Right (J.toJSON value)))
 parse :: J.FromJSON a => Control -> J.Value -> Either ControlError a

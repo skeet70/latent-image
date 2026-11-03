@@ -423,3 +423,139 @@ new file mode 100644
 +        Ok(watch)
 +    }
 +}
+
+diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/board/observation.rs
+--- a/crates/emulator/src/board/observation.rs
++++ b/crates/emulator/src/board/observation.rs
+@@ -362,13 +362,34 @@
+ /// executes that instruction once, even when it is itself a loop target.
+ pub struct InstructionPoints {
+     cpu: Weak<dyn Cpu>,
++    addresses: PointAddresses,
+     pause: Rc<Cell<bool>>,
+     event: RefCell<Option<u64>>,
+     skip: Cell<Option<u64>>,
+     hooks: Vec<HookId>,
+ }
++#[derive(Clone, Copy)]
++enum PointSetMode { Fixed, Mutable }
++enum PointAddresses { Fixed(Vec<u64>), Mutable(RefCell<Vec<u64>>) }
++impl PointAddresses {
++    fn permits_hook_pc(&self, pc: u64) -> bool {
++        match self {
++            Self::Fixed(_) => true,
++            Self::Mutable(addresses) => addresses.borrow().binary_search(&pc).is_ok(),
++        }
++    }
++}
++fn normalize_point_addresses(mut addresses: Vec<u64>) -> Result<Vec<u64>, String> {
++    if addresses.len() > 4096 || addresses.iter().any(|pc| pc & 1 != 0) {
++        return Err("Instruction points require bounded aligned addresses".into());
++    }
++    addresses.sort_unstable();
++    addresses.dedup();
++    Ok(addresses)
++}
+ unsafe fn instruction(pc: u64, _: u32, data: *mut c_void) {
+     let points = unsafe { &*data.cast::<InstructionPoints>() };
++    if !points.addresses.permits_hook_pc(pc) { return; }
+     if points.skip.get() == Some(pc) {
+         points.skip.set(None);
+         return;
+@@ -381,48 +402,74 @@
+     }
+ }
+ impl InstructionPoints {
++    pub fn replace_addresses(&self, addresses: Vec<u64>) -> Result<(), String> {
++        let PointAddresses::Mutable(current) = &self.addresses else {
++            return Err("Instruction point addresses are fixed".into());
++        };
++        let addresses = normalize_point_addresses(addresses)?;
++        if self.skip.get().is_some_and(|pc| addresses.binary_search(&pc).is_err()) {
++            self.skip.set(None);
++        }
++        current.replace(addresses);
++        Ok(())
++    }
+     pub fn event(&self) -> Option<u64> {
+         self.event.borrow_mut().take()
+     }
+     pub fn resume(&self, current_pc: u64, observed_pc: u64) {
+-        self.skip
+-            .set((current_pc == observed_pc).then_some(observed_pc));
++        self.skip.set((current_pc == observed_pc && self.addresses.permits_hook_pc(observed_pc)).then_some(observed_pc));
+     }
+ }
+ impl Board {
+     pub fn instruction_points_begin(
+         &self,
+         core: usize,
+-        mut addresses: Vec<u64>,
++        addresses: Vec<u64>,
++    ) -> Result<Box<InstructionPoints>, String> {
++        self.instruction_points_begin_mode(core, addresses, PointSetMode::Fixed)
++    }
++    /// Address replacement retains the installed instruction hook.
++    pub fn instruction_points_begin_mutable(
++        &self,
++        core: usize,
++        addresses: Vec<u64>,
++    ) -> Result<Box<InstructionPoints>, String> {
++        self.instruction_points_begin_mode(core, addresses, PointSetMode::Mutable)
++    }
++    fn instruction_points_begin_mode(
++        &self,
++        core: usize,
++        addresses: Vec<u64>,
++        mode: PointSetMode,
+     ) -> Result<Box<InstructionPoints>, String> {
+         let cpu = self.cpu(core)?;
+-        if addresses.len() > 4096 || addresses.iter().any(|pc| pc & 1 != 0) {
+-            return Err("Instruction points require bounded aligned addresses".into());
+-        }
+-        addresses.sort_unstable();
+-        addresses.dedup();
++        let addresses = normalize_point_addresses(addresses)?;
+         let mut points = Box::new(InstructionPoints {
+             cpu: Rc::downgrade(&self.cpus[core]),
++            addresses: match mode {
++                PointSetMode::Fixed => PointAddresses::Fixed(addresses),
++                PointSetMode::Mutable => PointAddresses::Mutable(RefCell::new(addresses)),
++            },
+             pause: self.host_pause.clone(),
+             event: RefCell::new(None),
+             skip: Cell::new(None),
+             hooks: vec![],
+         });
+         let data = (&*points as *const InstructionPoints).cast_mut().cast();
+-        for pc in addresses {
+-            match unsafe {
+-                cpu.install_hook(Hook::Instruction {
+-                    callback: instruction,
+-                    data,
+-                    range: HookRange::Inclusive { begin: pc, end: pc },
+-                })
+-            } {
+-                Ok(id) => points.hooks.push(id),
+-                Err(error) => {
+-                    self.instruction_points_end(core, &mut points)?;
+-                    return Err(error);
+-                }
+-            }
++        let addresses = &points.addresses;
++        let hooks = &mut points.hooks;
++        let mut install = |range| -> Result<(), String> {
++            let id = unsafe { cpu.install_hook(Hook::Instruction { callback: instruction, data, range }) }?;
++            hooks.push(id);
++            Ok(())
++        };
++        let result = match addresses {
++            PointAddresses::Fixed(addresses) => addresses.iter().try_for_each(|&pc| install(HookRange::Inclusive { begin: pc, end: pc })),
++            PointAddresses::Mutable(_) => install(HookRange::All),
++        };
++        if let Err(error) = result {
++            self.instruction_points_end(core, &mut points)?;
++            return Err(error);
+         }
+         Ok(points)
+     }
