@@ -10,7 +10,6 @@ import Data.List (findIndex)
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import Data.Word (Word32)
-import qualified Emulation.InterfaceInitializer as I
 import qualified Emulation.LoaderPrefixWitness as P
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
@@ -111,12 +110,11 @@ bindings = Join CriticalPairPublisherBindings (Set.fromList [Record2Link, Primar
       mapMaybe (\row -> if physical (publicationGuest row) == physical (Guest (root + offset)) then Just (publicationValue row) else Nothing) emitted
         == [target]
 
--- | Stock loader-B values the prefix exit reproduces and the orchestration frame holds.
-loaderStartup, stockTop, entrySp, framePointer, frameReturn, initializerSite, stackWindowLow :: Word32
+-- | Stock loader-B values the prefix exit reproduces.
+loaderStartup, stockTop, entrySp, frameReturn, initializerSite, stackWindowLow :: Word32
 loaderStartup = 0xd09ac
 stockTop = 0x400f3420
 entrySp = 0x400f3410
-framePointer = 0x400f341c
 frameReturn = 0xd00c0
 initializerSite = 0xd0430
 stackWindowLow = 0x400f2c14
@@ -181,10 +179,12 @@ prefixOrchestration = Join PrefixOrchestrationB (Set.fromList [Record2Link, Load
         Just (_, _, linked@(LinkedBytes image symbols), _) -> prefixExitContract linked
           && either (const False) (const True) (P.deriveOwnedEntryFacts image symbols (composedImages evidence))
         Nothing -> False
-  , HostCheck "orchestration-frame-is-initializer-caller-frame" $ \evidence ->
-      let loader = targetOf (evidenceComposed evidence) LoaderB
-      in either (const False) (\caller -> I.callerStackTop caller == P.Guest stockTop && I.callerEntrySp caller == P.Guest entrySp
-           && I.callerFramePointer caller == P.Guest framePointer) (I.callerFramePremise loader)
+  , HostCheck "orchestration-entry-pushes-the-caller-frame" $ \evidence ->
+      let word = targetWord (evidenceComposed evidence) LoaderB
+      in fmap (A.decode loaderStartup) (word loaderStartup)
+           == Just (A.StoreMultiple (A.Cond 14) A.sp A.DecrementBefore True [A.Reg 4, A.Reg 5, A.Reg 11, A.lr])
+         && fmap (A.decode (loaderStartup + 4)) (word (loaderStartup + 4))
+           == Just (A.DataProcessing (A.Cond 14) A.ADD False (A.Reg 11) A.sp (A.Immediate 12))
   , HostCheck "published-initializer-entry" $ \evidence ->
       case (secondaryFacts evidence, targetWord (evidenceComposed evidence) LoaderB initializerSite) of
         (Just (_, _, LinkedBytes _ symbols, _), Just word) -> case (symbolAt symbols "xm1_interface_initializer_entry", A.decode initializerSite word) of

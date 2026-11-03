@@ -171,13 +171,13 @@ main = do
       withScratch scratch' = [piece {pieceFacts = case pieceFacts piece of
           Record2LinkFacts entry bindings' image _ -> Record2LinkFacts entry bindings' image (ScratchBytes scratch')
           other -> other} | piece <- j2Pieces]
-      j2Checks = [ "prefix-exit-enters-orchestration", "orchestration-frame-is-initializer-caller-frame", "published-initializer-entry"
+      j2Checks = [ "prefix-exit-enters-orchestration", "orchestration-entry-pushes-the-caller-frame", "published-initializer-entry"
                  , "peer-waits-before-initializer", "initializer-scratch-in-window", "first-stage-zeroes-the-completion-cell" ]
   ok "every J2 host check holds on the J2 composition" (all (\name -> holds name j2Targets j2Pieces) j2Checks)
   ok "a loader-B header naming the stock entry fails the prefix exit check"
     (not (holds "prefix-exit-enters-orchestration" (replaced LoaderB 0xd000c 0xd0020) j2Pieces))
-  ok "a loader-B startup without the stock frame push fails the caller-frame check"
-    (not (holds "orchestration-frame-is-initializer-caller-frame" (replaced LoaderB 0xd09ac 0xe92d4810) j2Pieces))
+  ok "a loader-B startup without the stock frame push fails the frame-push check"
+    (not (holds "orchestration-entry-pushes-the-caller-frame" (replaced LoaderB 0xd09ac 0xe92d4810) j2Pieces))
   ok "a stock initializer entry word fails the published-initializer check"
     (not (holds "published-initializer-entry" (replaced LoaderB 0xd0430 0xe92d0830) j2Pieces))
   ok "initializer scratch reaching below the B stack window fails"

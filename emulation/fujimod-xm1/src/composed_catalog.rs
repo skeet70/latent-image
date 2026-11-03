@@ -238,14 +238,23 @@ pub enum WritesBasis {
 /// Piece kinds that may declare `unenumerated` writes.
 const UNENUMERATED_PIECES: [&str; 1] = ["first-stage"];
 
+/// The guard's `PartitionId` of one piece on one core: the partition's index in that core's `SourcePolicy`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct PartitionIndex(pub u16);
+
+impl PartitionIndex {
+    /// Position in `GuardStatusToken::partition_checks`.
+    pub fn position(self) -> usize { usize::from(self.0) }
+}
+
 /// One piece's guard partition on one core.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PiecePolicy {
     pub piece: PieceKind,
     pub core: Core,
-    /// Index of the partition in the core's `SourcePolicy`.
-    pub partition: u16,
+    pub partition: PartitionIndex,
     pub basis: WritesBasis,
     pub premise: Option<Premise>,
     pub spans: Vec<PlanSpan>,
@@ -907,7 +916,7 @@ fn guard_config(pieces: &[Piece], carriers: &[Interval], role: Role) -> (Composi
             policies.push(PiecePolicy {
                 piece: piece.kind.clone(),
                 core,
-                partition: index as u16,
+                partition: PartitionIndex(u16::try_from(index).expect("partitions per core are within MAX_GUARD_PARTITIONS")),
                 basis: piece.catalog.writes.basis,
                 premise: piece.catalog.writes.premise.clone(),
                 spans: partition.spans.iter().map(|span| PlanSpan { start: span.start(), end: span.end() }).collect(),

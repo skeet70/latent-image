@@ -560,8 +560,11 @@ impl TryFrom<String> for BoardPointer {
         if field.excluded() || field.fixed() {
             return Err("board pointer names a field outside the allowance set".into());
         }
-        let deep_enough = match field {
-            BoardField::Bus => segments.len() >= 4 || (segments.len() >= 3 && segments[2] != "state"),
+        let deep_enough = match (field, segments.get(1).map(String::as_str)) {
+            // `/bus/devices/<n>/state/<field>` or `/bus/devices/<n>/<field>` other than `state`.
+            (BoardField::Bus, Some("devices")) => segments.len() >= 5 || (segments.len() == 4 && segments[3] != "state"),
+            // An entry and one of its fields.
+            (BoardField::Bus, Some("frontier" | "unmodeled")) => segments.len() >= 4,
             _ => segments.len() >= 2,
         };
         if !deep_enough {
@@ -607,14 +610,19 @@ enum RawBoardKind {
     Declared,
 }
 
+/// A present key, `null` included.
+fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawBoardAllowance {
     pointer: BoardPointer,
     kind: RawBoardKind,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     retained: Option<Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present")]
     composed: Option<Value>,
     reason: Reason,
     #[serde(default)]
@@ -696,6 +704,11 @@ impl AttachRules {
         for peer in &raw.peers {
             if peer.retained_pc.is_empty() || peer.composed_pc.is_empty() {
                 return Err(Refuse::PeerSpans(peer.core));
+            }
+            for spans in [&peer.retained_pc, &peer.composed_pc] {
+                if spans.windows(2).any(|pair| pair[1].start < pair[0].end) {
+                    return Err(Refuse::PeerSpans(peer.core));
+                }
             }
         }
         let carriers = carrier_parts(raw.carriers, context)?;
@@ -876,12 +889,30 @@ fn hex(hasher: sha2::Sha256) -> Result<Sha256, String> { Sha256::try_from(format
 
 fn io(error: std::io::Error) -> String { error.to_string() }
 
+/// A processor view of a captured region: the core it is read through and the processor address of its first byte.
+#[derive(Clone, Copy, Debug)]
+pub struct CoreView {
+    pub core: Core,
+    pub base: ProcessorAddress,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProcessorAddress(pub u64);
+
 pub struct CaptureRegion {
     pub space: Space,
     pub start: u64,
     pub end: u64,
-    /// Processor address of the first byte, for TCM regions read through their core.
-    pub view: Option<(usize, u64)>,
+    /// For TCM regions; physical regions are read from the bus.
+    pub view: Option<CoreView>,
+}
+
+/// A range in one space.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct SpaceSpan {
+    pub space: Space,
+    pub start: u64,
+    pub end: u64,
 }
 
 /// Writes the memory snapshot of `regions`, reading each through `read`. Pages are 4096 bytes.
@@ -1006,14 +1037,14 @@ pub fn capture(board: &Board, backings: &[(u64, u64)], output: &Path) -> Result<
                     return Err("TCM window exceeds its bound".into());
                 }
                 let space = Space::Tcm { core: context.core, bank };
-                regions.push(CaptureRegion { space, start: 0, end: end - base, view: Some((context.core.index(), base)) });
+                regions.push(CaptureRegion { space, start: 0, end: end - base, view: Some(CoreView { core: context.core, base: ProcessorAddress(base) }) });
             }
         }
     }
     regions.sort_by_key(|region| (region.space, region.start));
     let (records, memory_sha256, memory_bytes) = write_memory_snapshot(&output.join(MEMORY_FILE), &regions, |region, offset, buffer| {
         match region.view {
-            Some((core, base)) => board.read_memory(core, base + offset, buffer),
+            Some(view) => board.read_memory(view.core.index(), view.base.0 + offset, buffer),
             None => board.read_physical(region.start + offset, buffer),
         }
     })?;
@@ -1367,7 +1398,6 @@ struct Absorber {
     space: Space,
     span: Span,
     memory: AbsorbedMemory,
-    last: Option<u64>,
 }
 
 fn verify_stacks(rules: &AttachRules, captures: [&RoleCapture; 2]) -> Result<(), Difference> {
@@ -1481,7 +1511,7 @@ fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCaptu
             }),
             kind => {
                 absorbers.push(Absorber {
-                    space: allowance.space, span: allowance.span, last: None,
+                    space: allowance.space, span: allowance.span,
                     memory: AbsorbedMemory {
                         label: allowance.label.clone(), kind: kind.tag(), differing_bytes: 0, ranges: vec![], retained: vec![], composed: vec![],
                     },
@@ -1506,7 +1536,7 @@ fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCaptu
     let mut pages = [vec![0u8; PAGE], vec![0u8; PAGE]];
     let mut first_difference: Option<(Space, u64, u64)> = None;
     let mut differing_unabsorbed = 0u64;
-    let mut runs: Vec<Span> = Vec::new();
+    let mut runs: Vec<SpaceSpan> = Vec::new();
     for (index, (space, region)) in regions.iter().enumerate() {
         let mut region_hashers = [sha2::Sha256::new(), sha2::Sha256::new()];
         let mut offset = 0u64;
@@ -1536,13 +1566,11 @@ fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCaptu
                     if let Some(absorber) = absorbers.iter_mut().find(|item| item.space == *space && item.span.holds(address)) {
                         let memory = &mut absorber.memory;
                         memory.differing_bytes += 1;
-                        let extends = absorber.last.is_some_and(|last| last + 1 == address);
-                        if let (true, Some(range)) = (extends, memory.ranges.last_mut()) {
+                        if let Some(range) = memory.ranges.last_mut().filter(|range| range.end == address) {
                             range.end = address + 1;
                         } else if memory.ranges.len() < ABSORBED_RANGE_LIMIT {
                             memory.ranges.push(Span { start: address, end: address + 1 });
                         }
-                        absorber.last = Some(address);
                         let recorded: usize = memory.retained.iter().map(|text| text.len() / 2).sum();
                         if recorded < ABSORBED_BYTE_LIMIT {
                             memory.retained.push(hexbytes(&pages[0][byte..=byte]));
@@ -1554,10 +1582,10 @@ fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCaptu
                     if first_difference.is_none() {
                         first_difference = Some((*space, address, address + 1));
                     }
-                    if let Some(run) = runs.last_mut().filter(|run| run.end == address) {
+                    if let Some(run) = runs.last_mut().filter(|run| run.space == *space && run.end == address) {
                         run.end = address + 1;
                     } else if runs.len() < DIFFERING_RUN_LIMIT {
-                        runs.push(Span { start: address, end: address + 1 });
+                        runs.push(SpaceSpan { space: *space, start: address, end: address + 1 });
                     }
                 }
             }

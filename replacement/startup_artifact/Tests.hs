@@ -497,6 +497,23 @@ main = do
   ok "a repeated allowance label refuses" (refusedRules (rulesJson [] [declared 4, declared 8]))
   ok "an unknown attach_state key refuses"
     (refusedRules (case rulesJson [] [] of J.Object fields -> J.Object (KeyMap.insert "extra" J.Null fields); other -> other))
+  let withPeerSpans spans = case rulesJson [] [] of
+        J.Object fields -> J.Object (KeyMap.insert "peers" (J.toJSON [J.object ["core" .= (1 :: Int), "retained_pc" .= spans
+          , "composed_pc" .= [J.object ["start" .= (0x10400 :: Int), "end" .= (0x11000 :: Int)]], "reason" .= ("r" :: Text)]]) fields)
+        other -> other
+      interval' start end = J.object ["start" .= (start :: Int), "end" .= (end :: Int)]
+  ok "overlapping peer PC spans refuse" (refusedRules (withPeerSpans [interval' 0xd0000 0xd1800, interval' 0xd1000 0xd2000]))
+  ok "unsorted peer PC spans refuse" (refusedRules (withPeerSpans [interval' 0xd1000 0xd2000, interval' 0xd0000 0xd0800]))
+  let exactNull = J.object ["pointer" .= ("/memory_decoders/pending/0" :: Text), "kind" .= ("exact" :: Text)
+        , "retained" .= J.Null, "composed" .= (3 :: Int), "reason" .= ("r" :: Text)]
+      withBoard entry = case rulesJson [] [] of
+        J.Object fields -> J.Object (KeyMap.insert "board" (J.toJSON [entry]) fields)
+        other -> other
+  case rulesFrom (withBoard exactNull) >>= \rules -> attachStateValue sources rules [] of
+    Right value -> ok "an exact board entry keeps a null value"
+      (member "retained" (element 0 (member "board" value)) == J.Null
+        && case element 0 (member "board" value) of J.Object fields -> KeyMap.member "retained" fields; _ -> False)
+    Left problem -> fail (show problem)
 
   passed <- readIORef counter
   putStrLn ("startup-artifact-tests: " ++ show passed ++ " checks passed")

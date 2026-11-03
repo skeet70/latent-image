@@ -80,6 +80,7 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":loader-orchestration-artifact",
+        "//emulation:case-sha256",
         "//host:base",
         "//host:bytestring",
         "//host:containers",

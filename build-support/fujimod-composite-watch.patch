@@ -1481,10 +1481,10 @@ index 0000000..9317386
 +mod tests;
 diff --git a/crates/emulator/src/board/observation/composite/tests.rs b/crates/emulator/src/board/observation/composite/tests.rs
 new file mode 100644
-index 0000000..9a40a2b
+index 0000000..d0f3ed2
 --- /dev/null
 +++ b/crates/emulator/src/board/observation/composite/tests.rs
-@@ -0,0 +1,1270 @@
+@@ -0,0 +1,1275 @@
 +use super::*;
 +use crate::board::{
 +    bus::{self, Bus},
@@ -2313,26 +2313,31 @@ index 0000000..9a40a2b
 +}
 +
 +#[test]
-+fn the_most_partitions_resolve_from_every_span_edge() {
++fn the_most_partitions_resolve_from_every_edge_of_interleaved_spans() {
 +    let count = MAX_GUARD_PARTITIONS as u64;
-+    let start = |index: u64| 0x30000 + 16 * index;
++    // Slot `j` belongs to partition `j % count`, so each partition's two spans have every other partition's between them.
++    let slots = 2 * count;
++    let start = |slot: u64| 0x30000 + 16 * slot;
 +    let cell = |index: u64| 0x40000 + 4 * index;
-+    let partitions =
-+        (0..count).map(|index| partition(vec![span(start(index), start(index) + 8)], vec![physical(cell(index), cell(index) + 4)]));
++    let partitions = (0..count).map(|index| partition(
++        vec![span(start(index), start(index) + 8), span(start(index + count), start(index + count) + 8)],
++        vec![physical(cell(index), cell(index) + 4)],
++    ));
 +    let mut board = board();
 +    let mut watch = watch(&board, 64);
 +    let token = board.memory_guard_attach(&mut watch, partitioned(partitions.collect())).unwrap();
 +    let mut tick = 0;
-+    for index in 0..count {
-+        for pc in [start(index), start(index) + 4] {
-+            program(&board, 0, pc, index, cell(index));
++    for slot in 0..slots {
++        let index = slot % count;
++        for pc in [start(slot), start(slot) + 4] {
++            program(&board, 0, pc, slot, cell(index));
 +            tick += 4;
 +            board.run_until(tick, 1).unwrap();
 +        }
 +    }
 +    assert_eq!(token.report().first_fault, None);
-+    assert_eq!(token.partition_checks(core(0)), vec![2; MAX_GUARD_PARTITIONS]);
-+    assert!((0..count).all(|index| u64::from(physical_word(&board, cell(index))) == index));
++    assert_eq!(token.partition_checks(core(0)), vec![4; MAX_GUARD_PARTITIONS]);
++    assert!((0..count).all(|index| u64::from(physical_word(&board, cell(index))) == index + count));
 +}
 +
 +#[test]

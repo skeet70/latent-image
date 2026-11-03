@@ -1,6 +1,6 @@
 //! Composed-startup receipts and the retained/composed comparison.
 use crate::attach_state::{
-    self, AllowanceLabel, AttachState, AttachVerdict, BoardLeaf, ContextRegister, RoleCapture, Space, Span, StackCheck,
+    self, AllowanceLabel, AttachState, AttachVerdict, BoardLeaf, ContextRegister, RoleCapture, Space, SpaceSpan, StackCheck,
     UnusedEntry,
 };
 use crate::composed_catalog::{
@@ -392,7 +392,7 @@ pub enum Difference {
     AttachCopy { label: AllowanceLabel, role: Role },
     AttachAllowance { label: AllowanceLabel, role: Role, check: StackCheck },
     /// `runs` holds up to the first 64 maximal differing ranges.
-    AttachMemory { space: Space, start: u64, end: u64, differing_bytes: u64, runs: Vec<Span> },
+    AttachMemory { space: Space, start: u64, end: u64, differing_bytes: u64, runs: Vec<SpaceSpan> },
     UnusedAllowance { entry: UnusedEntry },
 }
 

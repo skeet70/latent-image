@@ -2,7 +2,7 @@
 module Emulation.InterfaceInitializer
   ( Role (..), Contract, parseOriginalSource, deriveContract, contractValue, declarations, validateReceipt
   , contractRole, contractSourceSha256, ValidatedInitializer, initializerExit, initializerTable, initializerCp14Identities, validateReceiptEvidence
-  , ExpectedStore (..), originalStores, CallerFramePremise (..), callerFramePremise, contractScratchBytes
+  , ExpectedStore (..), originalStores, contractScratchBytes
   , Context (..), Views (..), Source (..), ByteOrder (..), Event (..), Mode (..)
   , PhysicalSpan (..), Window (..), BankSnapshot (..), TcmSnapshot (..), bankSnapshot
   , WatchClass (..), FixedViews (..), NoFault (..), Rule (..), Watch (..), Alias (..), Decoder (..)

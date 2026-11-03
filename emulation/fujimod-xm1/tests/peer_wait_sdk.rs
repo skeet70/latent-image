@@ -1579,6 +1579,7 @@ mod composed_interleaving {
         result: ResultStatus,
         error: Option<String>,
         machine_failure: Option<String>,
+        cp14_identities: [u32; 2],
         stops: Vec<Stop>,
         initial_record_sha256: Option<String>,
         handoff_record_immutable_sha256: Option<String>,
@@ -2154,6 +2155,7 @@ mod composed_interleaving {
         for scenario in [Scenario::Natural, Scenario::Delayed] {
             let (result, receipt) = observe_scenario(FirstHandoff::Late, Mutation::None, scenario);
             assert!(result.is_ok(), "{result:?}");
+            assert_eq!(receipt.cp14_identities, [0x4003, 0x8003]);
             assert_completed(&receipt, scenario);
         }
     }

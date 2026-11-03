@@ -216,7 +216,9 @@ peer value = do
   let spans key = do
         rows <- array ("peer." <> key) (field fields key)
         when (null rows) (refuse ("peer." <> key <> " is empty"))
-        forM rows (\row -> object ("peer." <> key) ["start", "end"] [] row >>= interval ("peer." <> key))
+        parsed <- forM rows (\row -> object ("peer." <> key) ["start", "end"] [] row >>= interval ("peer." <> key))
+        when (or [next < end | ((_, end), (next, _)) <- zip parsed (drop 1 parsed)]) (refuse ("peer." <> key <> " is unsorted or overlapping"))
+        pure parsed
   Peer <$> core "peer.core" (field fields "core") <*> spans "retained_pc" <*> spans "composed_pc" <*> text "peer.reason" (field fields "reason")
 
 carrierPart :: J.Value -> Either Refusal CarrierPart

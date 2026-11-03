@@ -1,7 +1,7 @@
 use fujimod_emulator::board::observation::{WatchKinds, WatchRange};
 use fujimod_xm1::attach_state::{
     self, AllowanceLabel, AttachRuleRefusal, AttachState, AttachVerdict, BoardLeaf, CaptureRegion, ContextRegister, CoreContext,
-    Occupant, Space, Span, StackCheck, UnusedEntry,
+    Occupant, Space, SpaceSpan, Span, StackCheck, UnusedEntry,
 };
 use fujimod_xm1::composed_catalog::{
     Bank, CatalogRefusal, Contract, Core, GuardBound, Label, Pc, PiecePolicy, PieceKind, PlanSpan, RangePlan, Role, Sha256,
@@ -367,7 +367,9 @@ fn board_state() -> Value {
         "next_core": 0, "slice_left": 3, "quantum": 1000, "failure": null, "memory_decoders": {"choices": [1], "pending": [null], "failure": null},
         "dma_mappings": [], "gic": {"pending": [0]}, "core_interrupt_devices": [null, null], "outputs": [], "implementation_cluster": 0,
         "unmodeled_system": [], "aprofile": [null, null], "mprofile": [null, null],
-        "bus": [{"kind": "timer", "windows": [], "native_dependencies": [], "state": {"count": 1, "mode": 0}}], "discovery_callee_stubs": [],
+        "bus": {"mode": "strict", "unmodeled": [], "discovery_shadow": null, "continue_refusals": [], "frontier": [{"tick": 4, "pcs": [16]}],
+            "devices": [{"kind": "timer", "windows": [], "native_dependencies": [], "state": {"count": 1, "mode": 0}}]},
+        "discovery_callee_stubs": [],
     })
 }
 
@@ -730,10 +732,18 @@ fn attach_rules_refuse_overlaps_sizes_masks_and_shapes() {
     assert_eq!(attach_refused(|rules| rules["allowances"] = json!([{
         "label": "stack", "kind": "declared", "space": {"target": "physical"}, "start": 0x63000, "end": 0x63400, "reason": "r",
         "citation": "c", "core": 0}])), AttachRuleRefusal::AllowanceShape(allowance_label("stack")));
-    for pointer in ["/bus", "/bus/0", "/bus/0/state", "/gic", "/timeline/now", "/quantum/x", "/unknown/x"] {
+    for pointer in ["/bus", "/bus/devices", "/bus/devices/0", "/bus/devices/0/state", "/bus/frontier/0", "/bus/unmodeled/0",
+        "/gic", "/timeline/now", "/quantum/x", "/unknown/x"] {
         assert!(matches!(refused(|value| attach_rules(value)["board"] = json!([{"pointer": pointer, "kind": "declared", "reason": "r", "citation": "c"}])),
             CatalogRefusal::Shape(_)), "{pointer}");
     }
+    for pointer in ["/bus/devices/0/state/count", "/bus/devices/0/kind", "/bus/frontier/0/tick", "/bus/mode"] {
+        let mut value = fixture();
+        attach_rules(&mut value)["board"] = json!([{"pointer": pointer, "kind": "declared", "reason": "r", "citation": "c"}]);
+        assert!(parse(&value).is_ok(), "{pointer}");
+    }
+    assert_eq!(attach_refused(|rules| rules["peers"][0]["retained_pc"] = json!([{"start": 0xd1000, "end": 0xd2000}, {"start": 0xd0000, "end": 0xd1800}])),
+        AttachRuleRefusal::PeerSpans(Core::Secondary));
     assert!(matches!(attach_refused(|rules| rules["board"] = json!([
         {"pointer": "/gic/pending", "kind": "declared", "reason": "r", "citation": "c"},
         {"pointer": "/gic/pending/0", "kind": "declared", "reason": "r", "citation": "c"}])), AttachRuleRefusal::BoardOverlap(_)));
@@ -743,7 +753,8 @@ fn attach_rules_refuse_overlaps_sizes_masks_and_shapes() {
 fn an_undeclared_memory_difference_refuses_with_its_runs() {
     let (difference, _) = attach_verdict(&fixture(), |owned| { owned.bytes.insert((Space::Physical, 0x300), 1); owned.bytes.insert((Space::Physical, 0x301), 2); });
     assert_eq!(difference, Some(Difference::AttachMemory {
-        space: Space::Physical, start: 0x300, end: 0x302, differing_bytes: 2, runs: vec![Span::new(0x300, 0x302).unwrap()],
+        space: Space::Physical, start: 0x300, end: 0x302, differing_bytes: 2,
+        runs: vec![SpaceSpan { space: Space::Physical, start: 0x300, end: 0x302 }],
     }));
     let (difference, _) = attach_verdict(&fixture(), |owned| { owned.bytes.insert((Space::Tcm { core: Core::Primary, bank: Bank::Instruction }, 0x1ff8), 7); });
     assert!(matches!(difference, Some(Difference::AttachMemory { space: Space::Tcm { core: Core::Primary, bank: Bank::Instruction }, start: 0x1ff8, .. })));
@@ -828,9 +839,9 @@ fn context_differences_need_an_exact_masked_register_entry() {
 
 #[test]
 fn board_differences_need_an_exact_or_declared_entry() {
-    let set_count = |owned: &mut Spec| owned.board["bus"][0]["state"]["count"] = json!(2);
+    let set_count = |owned: &mut Spec| owned.board["bus"]["devices"][0]["state"]["count"] = json!(2);
     assert_eq!(attach_verdict(&fixture(), set_count).0, Some(Difference::AttachBoard {
-        pointer: BoardLeaf("/bus/0/state/count".into()), retained: "1".into(), owned: "2".into(),
+        pointer: BoardLeaf("/bus/devices/0/state/count".into()), retained: "1".into(), owned: "2".into(),
     }));
     assert_eq!(attach_verdict(&fixture(), |owned| owned.board["timeline"]["now"] = json!(9)).0, None);
     let entry = |kind: Value| {
@@ -838,17 +849,28 @@ fn board_differences_need_an_exact_or_declared_entry() {
         attach_rules(&mut value)["board"] = json!([kind]);
         value
     };
-    let exact = entry(json!({"pointer": "/bus/0/state/count", "kind": "exact", "retained": 1, "composed": 2, "reason": "r"}));
+    let exact = entry(json!({"pointer": "/bus/devices/0/state/count", "kind": "exact", "retained": 1, "composed": 2, "reason": "r"}));
     let (difference, attach) = attach_verdict(&exact, set_count);
     assert_eq!(difference, None);
-    assert_eq!(attach.unwrap().board[0].leaves, [BoardLeaf("/bus/0/state/count".into())]);
-    assert!(matches!(attach_verdict(&exact, |owned| owned.board["bus"][0]["state"]["count"] = json!(3)).0, Some(Difference::AttachBoard { .. })));
-    let declared_entry = entry(json!({"pointer": "/bus/0/state/count", "kind": "declared", "reason": "r", "citation": "c"}));
-    assert_eq!(attach_verdict(&declared_entry, |owned| owned.board["bus"][0]["state"]["count"] = json!(3)).0, None);
-    assert!(matches!(attach_verdict(&declared_entry, |owned| owned.board["bus"][0]["state"]["mode"] = json!(1)).0,
+    assert_eq!(attach.unwrap().board[0].leaves, [BoardLeaf("/bus/devices/0/state/count".into())]);
+    assert!(matches!(attach_verdict(&exact, |owned| owned.board["bus"]["devices"][0]["state"]["count"] = json!(3)).0, Some(Difference::AttachBoard { .. })));
+    let declared_entry = entry(json!({"pointer": "/bus/devices/0/state/count", "kind": "declared", "reason": "r", "citation": "c"}));
+    assert_eq!(attach_verdict(&declared_entry, |owned| owned.board["bus"]["devices"][0]["state"]["count"] = json!(3)).0, None);
+    assert!(matches!(attach_verdict(&declared_entry, |owned| owned.board["bus"]["devices"][0]["state"]["mode"] = json!(1)).0,
         Some(Difference::AttachBoard { .. })));
+    let exact_null = entry(json!({"pointer": "/memory_decoders/pending/0", "kind": "exact", "retained": null, "composed": 3, "reason": "r"}));
+    assert_eq!(attach_verdict(&exact_null, |owned| owned.board["memory_decoders"]["pending"][0] = json!(3)).0, None);
     assert!(matches!(attach_verdict(&fixture(), |owned| { owned.board.as_object_mut().unwrap().insert("added".into(), json!(1)); }).0,
         Some(Difference::AttachSnapshot { role: Role::Composed, .. })));
+}
+
+#[test]
+fn an_absent_carrier_part_compares_as_memory_and_admits_allowances() {
+    let in_carrier = |owned: &mut Spec| { owned.bytes.insert((Space::Physical, 24600), 3); };
+    assert!(matches!(attach_verdict(&fixture(), in_carrier).0, Some(Difference::AttachMemory { start: 24600, .. })));
+    let (difference, attach) = attach_verdict(&with_allowances(json!([declared("carrier-word", 24600, 24604)])), in_carrier);
+    assert_eq!(difference, None);
+    assert_eq!(attach.unwrap().allowances[0].differing_bytes, 1);
 }
 
 #[test]

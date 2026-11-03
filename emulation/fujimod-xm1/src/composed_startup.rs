@@ -262,7 +262,7 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
         (core, state.token.as_ref().map_or_else(Vec::new, |token| token.partition_checks(guard_core)))
     }).collect();
     let policies = contract.policies(role).into_iter().map(|policy| {
-        let checks = checks[&policy.core].get(usize::from(policy.partition)).copied().unwrap_or(0);
+        let checks = checks[&policy.core].get(policy.partition.position()).copied().unwrap_or(0);
         RecordedPolicy { policy, checks }
     }).collect();
     let guard = state.token.as_ref().map(|token| {
