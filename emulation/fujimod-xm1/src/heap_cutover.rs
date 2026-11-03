@@ -145,7 +145,7 @@ fn execute(inputs: &Inputs, role: Role, output: &Path) -> Result<(), String> {
     let mut lifecycle = Image5Lifecycle::default();
     let mut retired_guard = guard::Guard::default();
     let mut boundaries: Vec<RawBoundary> = Vec::new();
-    let shadows: Vec<_> = contract::CARRIERS.into_iter().flat_map(|(low, high, _)| (low..high).step_by(2))
+    let shadows: Vec<_> = contract::CARRIERS.into_iter().flat_map(|(low, high, _)| (low..high).step_by(4))
         .flat_map(|address| [Guest(address), Guest(address | 0x40000000)])
         .filter(|address| !ENTRIES.contains(&(address.0 & !0x40000000))).collect();
     let mut armed: BTreeSet<_> = ENTRIES.into_iter().chain(IMAGE5_LOAD_POINTS)
