@@ -1,4 +1,4 @@
-use super::{artifact,at,require,Access,Core,Digest,Event,Guest,Report};
+use super::{artifact,at,require,Access,Core,Digest,Event,Guest,Report,RouteView};
 use super::super::{Count,Row,Tick};
 use super::super::continuation_view::EventId;
 use fujimod_xm1::bridge::read;
@@ -57,7 +57,7 @@ fn fetch<'a>(rows:&'a [Row],event:&Event)->Result<&'a Row,String>{
     require(row.physical==event.pc&&row.size==4&&row.tick.is_some()&&candidates.all(|retry|retry.physical==row.physical&&retry.size==row.size&&retry.tick==row.tick&&retry.value==row.value),"timer-read provenance")?;Ok(row)
 }
 fn source(event:&Event,index:usize)->Result<(),String>{require(event.pc.0==PCS[index]&&event.code.values==[CODE[index]],"timer-source provenance")}
-fn next<'a>(report:&'a Report,event:&Event,index:usize)->Result<&'a Event,String>{
+fn next<'a>(report:RouteView<'a>,event:&Event,index:usize)->Result<&'a Event,String>{
     let following=report.events.iter().skip(event.id.0+1).find(|next|next.core==event.core).ok_or("timer-source provenance")?;
     source(following,index)?;require(event.instructions.0<following.instructions.0,"timer-source provenance")?;Ok(following)
 }
@@ -72,11 +72,14 @@ fn write_matches(row:&Row,event:&Event,address:Guest,value:u32,rows:&[Row])->Res
 }
 
 pub(super) fn admit(root:&Path,report:&Report,rows:&[Row])->Result<Admission,String>{
-    let bytes=read(&artifact(root,&report.timer_transactions)?)?;
+    let startup=report.epochs.iter().find(|epoch|epoch.stage==super::super::WatchStage::Startup).ok_or("timer-transactions coverage differs")?;
+    admit_interval(root,report.into(),rows,startup.start,startup.end)
+}
+pub(super) fn admit_interval(root:&Path,report:RouteView<'_>,rows:&[Row],start:Count,end:Count)->Result<Admission,String>{
+    let bytes=read(&artifact(root,report.timer_transactions)?)?;
     require(Digest::of(&bytes).as_str()==report.timer_transactions.sha256.as_str(),"timer-transactions identity differs")?;
     let observed:Transactions=serde_json::from_slice(&bytes).map_err(|_|"timer-transactions schema differs")?;
-    let startup=report.epochs.iter().find(|epoch|epoch.stage==super::super::WatchStage::Startup).ok_or("timer-transactions coverage differs")?;
-    require(observed.start==startup.start&&observed.end==startup.end&&observed.range==[0xfff91000,0xfff91008]&&observed.limit==3_000_000&&observed.error.is_none(),"timer-transactions coverage differs")?;
+    require(observed.start==start&&observed.end==end&&observed.range==[0xfff91000,0xfff91008]&&observed.limit==3_000_000&&observed.error.is_none(),"timer-transactions coverage differs")?;
     let mut batch=observed.batch.ok_or("timer-transactions coverage differs")?;
     require(batch.omitted==0&&batch.transactions.len()<=observed.limit,"timer-transactions coverage differs")?;
     require(batch.transactions.windows(2).all(|pair|pair[0].tick<=pair[1].tick)&&batch.transactions.iter().all(|read|u64::from(read.address.0)>=observed.range[0]&&u64::from(read.address.0)+u64::from(read.size)<=observed.range[1]&&read.size>0),"timer-transactions order differs")?;
@@ -84,7 +87,7 @@ pub(super) fn admit(root:&Path,report:&Report,rows:&[Row])->Result<Admission,Str
     let mut samples=Vec::new();let mut occurrences=[0usize;2];let mut consumed=[None;2];
     for begin in report.events.iter().filter(|event|event.pc.0==PCS[0]) {
         source(begin,0)?;let reload=next(report,begin,1)?;let count=next(report,reload,2)?;let subtract=next(report,count,3)?;let store=next(report,subtract,4)?;let after=next(report,store,5)?;
-        require(startup.start.0<=begin.instructions.0&&after.instructions.0<=startup.end.0,"timer-source provenance")?;
+        require(start.0<=begin.instructions.0&&after.instructions.0<=end.0,"timer-source provenance")?;
         let slot=ring(begin,3)?;
         require([reload,count,subtract,store,after].iter().all(|event|event.registers.r[3]==begin.registers.r[3]),"timer-ring provenance")?;
         require(reload.registers.r[2]==0xfff91fff&&count.registers.r[2]==0xfff91fff,"timer-read provenance")?;
@@ -107,7 +110,7 @@ pub(super) fn admit(root:&Path,report:&Report,rows:&[Row])->Result<Admission,Str
     require(batch.transactions.len()==2*samples.len(),"timer-read provenance")?;
     let mut admission=Admission::default();let mut live:BTreeMap<u32,Live>=BTreeMap::new();let mut known:BTreeMap<u32,u32>=BTreeMap::new();let mut cursor=0;let mut pending_copy:Option<(EventId,Live,Guest)>=None;
     let mut copies=0;
-    for event in &report.events {
+    for event in report.events {
         while let Some(row)=rows.get(cursor) {
             if row.source==Access::CpuFetch{cursor+=1;continue;}
             let clock=row.instructions.map(|clock|clock.0);
@@ -130,7 +133,7 @@ pub(super) fn admit(root:&Path,report:&Report,rows:&[Row])->Result<Admission,Str
             }else if row.pc==Some(Guest(PCS[4])) {return Err("timer-write provenance".into());}
             cursor+=1;
         }
-        if event.instructions.0>startup.end.0{live.retain(|address,_|*address==LATCH);known.retain(|address,_|*address==LATCH);}
+        if event.instructions.0>end.0{live.retain(|address,_|*address==LATCH);known.retain(|address,_|*address==LATCH);}
         if let Some(index)=PCS.iter().position(|pc|*pc==event.pc.0){source(event,index)?;}
         if event.pc.0==PCS[6] {
             let slot=ring(event,8)?;let proven=*live.get(&(slot.0&!0x40000000)).ok_or("timer-copy provenance")?;

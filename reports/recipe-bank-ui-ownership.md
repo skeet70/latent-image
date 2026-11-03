@@ -1031,7 +1031,36 @@ Twenty-one actions, of controllers 0, 30, 41, 42, 74, 75, 76, 100, 101 and 107, 
 | Live-view key overlay strip | drive, focus area, white balance and the other outside screens |
 | Information or progress screen | sensor cleaning run, previous-connection details, PC auto-save connection |
 
-**[INFERENCE]** Nine generic behaviours therefore cover the 87 menu keys, five dialogs and the live-view overlays the emulator reaches, where the stock firmware spends 371 actions in 295 shapes across 38 controllers. For #128 this moves the functional unit from the callback to the menu table: an owned dispatcher plus these behaviours replaces the reached actions once the menu, property and value tables are recovered as data. The scope still open is what the emulator cannot reach: card, lens, mode-dial, S1/S2 and Wi-Fi paths, OK on confirmations, and the 14 depth-limited screens.
+**[INFERENCE]** Nine generic behaviours therefore cover the 87 menu keys, five dialogs and the live-view overlays the emulator reaches, where the stock firmware spends 371 actions in 295 shapes across 38 controllers. For #128 this moves the functional unit from the callback to the menu table: an owned dispatcher plus these behaviours replaces the reached actions once the menu, property and value tables are recovered as data, which the next section does. The scope still open is what the emulator cannot reach: card, lens, mode-dial, S1/S2 and Wi-Fi paths, and the depth-limited screens.
+
+#### Menu tables, confirmation paths and the behaviour map
+
+`//replacement/modal_runtime:menu-tables` decodes the stock menu data from the pinned image-4 decode and the English string slot. The node registry at `0x0081babc` has 0x86 slots (bound from the walk in `FUN_0061d038`), 111 of them filled. With parents and row children the decode holds 332 node records of 11 words: id, type, property or class, kind, two zero words, flag, parent, values, labels and a last word of unknown use. Values are `{row, child}` pairs ending at `{0x7ffffffe, 0}` (`FUN_00bf9794`); labels are `{preview icon, list icon, help, name}` string-id records; 142 property conversion tables come from `*(0x0081b09c + 4*property)` for properties up to `0x286` (`FUN_00631a00`). Most row labels resolve to the camera's private-use glyph font rather than plain English text. [Sources: E-MODAL-MENU-TABLES-150; `private-data/scratch/ControllerStrategy/menu-tables.json`.]
+
+Every menu key of crawl-5 matches exactly one stock node by its 44-byte record. The crawl reached 88 of the 332 nodes; 63 of the 244 it did not reach are row children of reached nodes, and which paths open the other 181 is not established. **[INFERENCE]** The decoded tables carry the menu data the nine generic behaviours need, including for menus the emulator does not reach.
+
+The confirmation cursor is the word `0x009503c0`. Two `--ram-diff` runs sampled `[0x00600000,0x03300000)`: in the SHOOTING MENU RESET dialog, DOWN changes it from 0 to 1, a second DOWN or UP restores it, and Q leaves it; DOWN on the RESET list behind the dialog does not change it. Of the small words with that pattern it is the only one in image-4 data; the others lie in repeated structures at `0x00a4d9xx..0x00a87dxx`, `0x0165xxxx` and `0x0207xxxx..0x0283xxxx`. Crawl-5 adds it to screen identity and marks OK from a dialog as a terminal press, so each OK is pressed once from its dialog's own snapshot and the state after the confirmation is never explored. With it, the OK positions of all five dialogs became separate screens. Dialogs are recognised by controller state: controller 75 in `0x0d` for SET OK?, controller 76 in `0x21` for CUSTOM RESET, SHOOTING MENU RESET and SET-UP RESET, and controller 76 in `0x25` for RESET WIRELESS SETTINGS.
+
+| OK path (crawl-5) | Distinct properties set | Landing |
+| --- | --- | --- |
+| RESET WIRELESS SETTINGS | 10 | SET-UP tab column, known screen |
+| CUSTOM RESET | 92 | SET-UP tab column, known screen |
+| SHOOTING MENU RESET | 304 | SET-UP tab column, known screen |
+| SET-UP RESET | 69 | START MENU language page `(69,52,12)`, new screen, not expanded |
+| SET OK? | not pressed: its OK position stayed depth-limited after its replay diverged | |
+
+None of the four confirmations goes through the commit dispatcher `0x00d4fc74`; each writes its properties through the setter `0x00624694` and sends application message `0x816` with `0xa05`, `0xa0e` or both. Crawl-5 otherwise matches crawl-4: 570 screens, 4,584 trials, 88 menu keys (the new key is the START MENU page), 380 distinct actions in 301 shapes, 15 screens depth-limited. [Sources: E-MODAL-MENU-OKPATHS-150.]
+
+`census-5.json` maps each of the 88 keys to its stock node (address, row count, row names), its controllers and every dispatched `(controller, state, event, action)` with the manifest cell index and action slot; the 21 per-press actions are flagged. Grouping keys by the set of actions they dispatch, other than per-press ones:
+
+| Class | Keys | Distinct action sets |
+| --- | --- | --- |
+| Navigation list | 18 | 18 |
+| Value list | 38 | 17 |
+| Toggle | 25 | 12 |
+| Other | 7 | 5 |
+
+The 63 pickers use 117 distinct actions. Twenty-one shooting-menu pickers dispatch the identical set of ten actions of controllers 30, 74, 75 and 100, so the stock firmware already runs them through one generic picker path; the SET-UP pickers fall into smaller groups (at most five keys) with setting-specific controller-76 actions. **[INFERENCE]** A generic owned picker driven by the decoded node, values and conversion table reproduces both groups; the setting-specific controller-76 actions are the residual whose side effects (properties written, application messages) the census lists per key and a replacement must keep.
 
 #### Camera-side validation harness (design)
 

@@ -10,6 +10,8 @@ module Emulation.MenuCrawl
   , rootNameText
   , CrawlRoot (..)
   , ContextKeys (..)
+  , GuestRange (..)
+  , TerminalPress (..)
   , CrawlConfig (..)
   , decodeCrawlConfig
   , FrameDigest (..)
@@ -50,12 +52,12 @@ import qualified Data.ByteString as B
 import Data.IORef
 import Data.List (sort)
 import qualified Data.Map.Strict as M
-import Data.Maybe (isJust, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.Word (Word16, Word32)
 import EmulatorUsb (MenuReading, ModeDial, SnapshotName (..), SnapshotPress (..), TraceHit (..), modeDialName)
-import Numeric (showHex)
+import Numeric (readHex, showHex)
 
 -- | A physical press the bridge accepts; MENU is OK and DISP is BACK on this body.
 data CrawlKey = KeyUp | KeyDown | KeyLeft | KeyRight | KeyOk | KeyBack | KeyQ | KeyDialLeft | KeyDialRight | KeyPlay
@@ -122,15 +124,48 @@ instance FromJSON ContextKeys where
     unless (contextController context >= 0 && contextController context < controllerCount) (fail "context controller must be 0..173")
     pure context
 
+-- | A guest physical range [start, end), word aligned, written as 0x-prefixed hex.
+data GuestRange = GuestRange { rangeStart :: Word32, rangeEnd :: Word32 } deriving (Eq, Show)
+
+instance FromJSON GuestRange where
+  parseJSON = withObject "guest range" $ \fields -> do
+    unless (sort (KM.keys fields) == ["end", "start"]) (fail "a guest range takes exactly start and end")
+    start <- fields .: "start" >>= hexWord
+    end <- fields .: "end" >>= hexWord
+    unless (start < end && start `mod` 4 == 0 && end `mod` 4 == 0) (fail "a guest range is a nonempty word-aligned [start, end)")
+    pure (GuestRange start end)
+   where
+    hexWord text = case T.unpack text of
+      '0' : 'x' : digits | not (null digits), length digits <= 8, [(value, "")] <- readHex digits -> pure (fromInteger value)
+      _ -> fail "expected a 0x-prefixed hex word"
+
+-- | A press whose landing screen is recorded but not expanded: the key, pressed from a screen where
+-- the controller holds the state.
+data TerminalPress = TerminalPress { terminalController :: Int, terminalState :: Word16, terminalKey :: CrawlKey } deriving (Eq, Show)
+
+instance FromJSON TerminalPress where
+  parseJSON = withObject "terminal press" $ \fields -> do
+    unless (sort (KM.keys fields) == ["controller", "key", "state"]) (fail "a terminal press takes exactly controller, state and key")
+    press <- TerminalPress <$> fields .: "controller" <*> fields .: "state" <*> fields .: "key"
+    unless (terminalController press >= 0 && terminalController press < controllerCount) (fail "terminal controller must be 0..173")
+    pure press
+
 data CrawlConfig = CrawlConfig
   { configKeys :: [CrawlKey]
   , configContextKeys :: Maybe ContextKeys
+  -- | Guest bytes read on every screen and compared with its menu reading and state cells.
+  , configIdentityReads :: [GuestRange]
+  , configTerminalPresses :: [TerminalPress]
   , configRoots :: [CrawlRoot]
   , configMaxTrials :: Int
   , configMaxNodes :: Int
   , configMaxDepth :: Int
   , configMaxSeconds :: Double
   } deriving (Eq, Show)
+
+-- | Identity reads total at most this many bytes.
+identityReadLimit :: Int
+identityReadLimit = 4096
 
 -- | The bridge holds at most 24 snapshots: the boot state, one root and one per open depth.
 maxCrawlDepth :: Int
@@ -139,12 +174,19 @@ maxCrawlDepth = 20
 instance FromJSON CrawlConfig where
   parseJSON = withObject "crawl config" $ \document -> do
     let required = ["keys", "max_depth", "max_nodes", "max_seconds", "max_trials", "roots", "schema"]
-    unless (sort (filter (/= "context_keys") (KM.keys document)) == required)
-      (fail "crawl config takes exactly schema, keys, roots, max_trials, max_nodes, max_depth and max_seconds, and optionally context_keys")
+        optional = ["context_keys", "identity_reads", "terminal_presses"]
+    unless (sort (filter (`notElem` optional) (KM.keys document)) == required)
+      (fail "crawl config takes exactly schema, keys, roots, max_trials, max_nodes, max_depth and max_seconds, and optionally context_keys, identity_reads and terminal_presses")
     schema <- document .: "schema"
     unless (schema == (1 :: Int)) (fail "unsupported crawl config schema")
-    config <- CrawlConfig <$> document .: "keys" <*> document .:? "context_keys" <*> document .: "roots" <*> document .: "max_trials"
+    config <- CrawlConfig <$> document .: "keys" <*> document .:? "context_keys"
+      <*> (fromMaybe [] <$> document .:? "identity_reads") <*> (fromMaybe [] <$> document .:? "terminal_presses")
+      <*> document .: "roots" <*> document .: "max_trials"
       <*> document .: "max_nodes" <*> document .: "max_depth" <*> document .: "max_seconds"
+    unless (sum [fromIntegral (rangeEnd range - rangeStart range) | range <- configIdentityReads config] <= toInteger identityReadLimit)
+      (fail "identity reads exceed 4096 bytes")
+    unless (all ((`elem` configKeys config) . terminalKey) (configTerminalPresses config))
+      (fail "terminal press keys must be crawl keys")
     let distinct values = length values == M.size (M.fromList [(value, ()) | value <- values])
     unless (not (null (configKeys config)) && distinct (configKeys config)) (fail "crawl keys must be nonempty and distinct")
     case configContextKeys config of
@@ -162,12 +204,8 @@ instance FromJSON CrawlConfig where
 -- | The keys a screen is crawled with.
 keysFor :: CrawlConfig -> Screen -> [CrawlKey]
 keysFor config screen = case configContextKeys config of
-  Just context | stateOf (contextController context) == Just (contextState context) -> contextKeys context
+  Just context | stateOf (contextController context) screen == Just (contextState context) -> contextKeys context
   _ -> configKeys config
- where
-  stateOf controller = case drop controller (halfwords (cellStates (screenCells screen))) of
-    value : _ -> Just value
-    [] -> Nothing
 
 decodeCrawlConfig :: B.ByteString -> Either String CrawlConfig
 decodeCrawlConfig = eitherDecodeStrict'
@@ -189,7 +227,23 @@ data Screen = Screen
   , screenCells :: ControllerCells
   -- | The 48 bytes of the open menu node descriptor.
   , screenNode :: Maybe B.ByteString
+  -- | The configured identity reads, concatenated in order.
+  , screenIdentity :: B.ByteString
   } deriving (Eq, Show)
+
+-- | The part of a screen compared after its frame: menu reading, state cells and identity reads.
+screenKey :: Screen -> (MenuReading, B.ByteString, B.ByteString)
+screenKey screen = (screenMenu screen, cellStates (screenCells screen), screenIdentity screen)
+
+stateOf :: Int -> Screen -> Maybe Word16
+stateOf controller screen = case drop controller (halfwords (cellStates (screenCells screen))) of
+  value : _ -> Just value
+  [] -> Nothing
+
+-- | Whether pressing the key from this screen lands on a screen that is not expanded.
+isTerminal :: CrawlConfig -> Screen -> CrawlKey -> Bool
+isTerminal config screen key =
+  any (\press -> terminalKey press == key && stateOf (terminalController press) screen == Just (terminalState press)) (configTerminalPresses config)
 
 -- | The emulator operations a crawl uses. A capture label is lowercase ASCII.
 data Driver = Driver
@@ -299,8 +353,9 @@ cellChanges before after = [CellChange controller old new | (controller, old, ne
 
 newtype NodeId = NodeId Int deriving (Eq, Ord, Show)
 
--- | Why a reached screen was not, or not completely, expanded.
-data Frontier = DepthLimit | NodeLimit | TrialLimit | TimeLimit deriving (Eq, Show)
+-- | Why a reached screen was not, or not completely, expanded. A terminal screen was reached by a
+-- configured terminal press and is complete without expansion.
+data Frontier = DepthLimit | NodeLimit | TrialLimit | TimeLimit | Terminal deriving (Eq, Show)
 
 data Node = Node
   { nodeId :: NodeId
@@ -360,7 +415,7 @@ data CrawlGraph = CrawlGraph
 data CrawlState = CrawlState
   { stateNodes :: M.Map NodeId Node
   , stateByFrame :: M.Map FrameDigest NodeId
-  , stateByCells :: M.Map (MenuReading, B.ByteString) NodeId
+  , stateByCells :: M.Map (MenuReading, B.ByteString, B.ByteString) NodeId
   , stateEdges :: [Edge]
   , stateReplays :: [Replay]
   , stateTrials :: Int
@@ -449,9 +504,14 @@ crawl config driver = do
                 after = screenCells screen
             record state (Edge trial (nodeId node) key activity (Reached (nodeId child) match (screenFrame screen) settle instructions
               (cellChanges (cellStates before) (cellStates after)) (cellChanges (cellEvents before) (cellEvents after))))
-            let reopens = match /= NewScreen && nodeFrontier child == Just DepthLimit && nodeDepth node + 1 < nodeDepth child
-            when (match == NewScreen || reopens) $
-              open started state root (nodeId child) (nodePath node ++ [key]) screen reopens
+            let terminalPress = isTerminal config (nodeScreen node) key
+                deeper = nodeFrontier child == Just DepthLimit && nodeDepth node + 1 < nodeDepth child
+                unterminated = nodeFrontier child == Just Terminal && not terminalPress
+                reopens = match /= NewScreen && (deeper || unterminated)
+            if match == NewScreen && terminalPress
+              then updateNode state (nodeId child) (\n -> n { nodeFrontier = Just Terminal })
+              else when (match == NewScreen || reopens) $
+                open started state root (nodeId child) (nodePath node ++ [key]) screen reopens
         pure untried
 
   -- Places a node at a path and, unless a limit applies, expands it from the current guest state.
@@ -504,7 +564,7 @@ crawl config driver = do
         let target = stateNodes current M.! identity
             frame = screenFrame screen
             known = M.lookup frame (stateByFrame current)
-            sameCells = (screenMenu screen, cellStates (screenCells screen)) == (screenMenu (nodeScreen target), cellStates (screenCells (nodeScreen target)))
+            sameCells = screenKey screen == screenKey (nodeScreen target)
         -- The frame decides first, as in intern.
         case known of
           Just owner | owner == identity -> do
@@ -550,7 +610,7 @@ crawl config driver = do
   -- is a variant of the same screen.
   intern state root depth path screen = do
     current <- readIORef state
-    let cellsKey = (screenMenu screen, cellStates (screenCells screen))
+    let cellsKey = screenKey screen
         frame = screenFrame screen
     case (M.lookup frame (stateByFrame current), M.lookup cellsKey (stateByCells current)) of
       (Just identity, _) -> do
@@ -591,6 +651,7 @@ frontierText reason = case reason of
   NodeLimit -> "node-limit"
   TrialLimit -> "trial-limit"
   TimeLimit -> "time-limit"
+  Terminal -> "terminal"
 
 matchText :: Match -> String
 matchText match = case match of
@@ -641,6 +702,7 @@ nodeValue node = object
   , "states" .= hexBytes (cellStates (screenCells screen))
   , "events" .= hexBytes (cellEvents (screenCells screen))
   , "menu_node_bytes" .= fmap hexBytes (screenNode screen)
+  , "identity_bytes" .= hexBytes (screenIdentity screen)
   , "untried_keys" .= nodeUntried node
   , "frontier" .= fmap frontierText (nodeFrontier node)
   ]
@@ -654,6 +716,9 @@ graphValue config graph = object
   , "keys" .= configKeys config
   , "context_keys" .= fmap (\context -> object ["controller" .= contextController context, "state" .= contextState context
       , "keys" .= contextKeys context]) (configContextKeys config)
+  , "identity_reads" .= [object ["start" .= hex (rangeStart range), "end" .= hex (rangeEnd range)] | range <- configIdentityReads config]
+  , "terminal_presses" .= [object ["controller" .= terminalController press, "state" .= terminalState press, "key" .= terminalKey press]
+      | press <- configTerminalPresses config]
   , "roots" .= [object ["name" .= rootName root, "mode_dial" .= fmap modeDialName (rootModeDial root)] | root <- configRoots config]
   , "budgets" .= object
       [ "max_trials" .= configMaxTrials config, "max_nodes" .= configMaxNodes config
@@ -663,7 +728,7 @@ graphValue config graph = object
   , "replay_presses" .= graphReplayPresses graph
   , "seconds" .= graphSeconds graph
   , "limit" .= fmap frontierText (graphLimit graph)
-  , "complete" .= (isNothing (graphLimit graph) && all (\node -> isNothing (nodeFrontier node)) (graphNodes graph))
+  , "complete" .= (isNothing (graphLimit graph) && all (\node -> nodeFrontier node `elem` [Nothing, Just Terminal]) (graphNodes graph))
   , "nodes" .= map nodeValue (graphNodes graph)
   , "edges" .= map edgeValue (graphEdges graph)
   , "replays" .= map replayValue (graphReplays graph)

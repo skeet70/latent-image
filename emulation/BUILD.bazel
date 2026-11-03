@@ -958,7 +958,7 @@ haskell_test(
 
 haskell_library(
     name = "menu-crawl-lib",
-    srcs = ["Emulation/MenuCrawl.hs"],
+    srcs = ["Emulation/MenuCrawl.hs", "Emulation/RamDiff.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
     deps = [
@@ -3046,6 +3046,12 @@ haskell_binary(
 
 sh_binary(
     name = "loader-continuations",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-loader-continuations"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
+    name = "loader-startup-capture",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-loader-continuations"],
     visibility = ["//visibility:public"],
 )

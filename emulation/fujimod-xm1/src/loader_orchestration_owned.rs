@@ -14,9 +14,9 @@ impl Side {
     pub(super) fn base(self)->Guest {Guest(match self {Self::LoaderA=>0x40000,Self::LoaderB=>0xd0000})}
     pub(super) fn core(self)->Core {match self {Self::LoaderA=>Core::Primary,Self::LoaderB=>Core::Secondary}}
     pub(super) fn frame(self)->Guest {Guest(match self {Self::LoaderA=>0x40063450,Self::LoaderB=>0x400f3410})}
-    fn source(self)->SourceKind {match self {Self::LoaderA=>SourceKind::LoaderA,Self::LoaderB=>SourceKind::LoaderB}}
-    fn linked(self)->&'static str {match self {Self::LoaderA=>"32e1ef56b5f1eddd4e88b46aa1258c0cd65e5fe533c047886b6a7bd2c9c25795",Self::LoaderB=>"19bb8cde6bf0a43c0933e9be10fa441415a66eb0a5fc981aed339c05c52dd0d4"}}
-    fn symbols(self)->&'static str {match self {Self::LoaderA=>"c4976afcb03a7f9278d4a93c60fc21b12209270720bd1bd630b3098e706ed2f9",Self::LoaderB=>"72be77fae5b394ad90aa0d4ea8224578dbec894a0b03718f6f2d77ecddd23a26"}}
+    pub(super) fn source(self)->SourceKind {match self {Self::LoaderA=>SourceKind::LoaderA,Self::LoaderB=>SourceKind::LoaderB}}
+    pub(super) fn linked(self)->&'static str {match self {Self::LoaderA=>"32e1ef56b5f1eddd4e88b46aa1258c0cd65e5fe533c047886b6a7bd2c9c25795",Self::LoaderB=>"19bb8cde6bf0a43c0933e9be10fa441415a66eb0a5fc981aed339c05c52dd0d4"}}
+    pub(super) fn symbols(self)->&'static str {match self {Self::LoaderA=>"c4976afcb03a7f9278d4a93c60fc21b12209270720bd1bd630b3098e706ed2f9",Self::LoaderB=>"72be77fae5b394ad90aa0d4ea8224578dbec894a0b03718f6f2d77ecddd23a26"}}
     fn staged(self)->&'static str {match self {Self::LoaderA=>"1b331b0792fd0dc99483326ed34b25541ecf09ae26da3878a492004379139e43",Self::LoaderB=>"3ec88f9e7224e8e8694410940e297e52f77a427bbfc629e3ee285d638a902454"}}
 }
 
@@ -77,9 +77,9 @@ struct Manifest {schema:u32,qualification:Qualification,source_dat_sha256:Digest
 pub(super) struct OwnedBindings {manifest:FileBinding,loaders:[FileBinding;2]}
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag="role",content="artifacts",rename_all="kebab-case")]
-pub(super) enum ProgramBinding {Retained,Owned(OwnedBindings)}
+pub(super) enum ProgramBinding {Retained,Owned(OwnedBindings),Joined(super::loader_startup_program::Bindings)}
 pub(super) struct OwnedProgram {binding:OwnedBindings,manifest:Manifest}
-pub(super) enum Program {Retained,Owned(OwnedProgram)}
+pub(super) enum Program {Retained,Owned(OwnedProgram),Joined(super::loader_startup_program::JoinedProgram)}
 
 fn require(premise:bool,message:&str)->Result<(),String>{if premise {Ok(())} else {Err(message.into())}}
 fn source(catalog:&Catalog,kind:SourceKind)->Result<&super::SourceImage,String>{catalog.0.iter().find(|image|image.binding.kind==kind).ok_or_else(||"artifact source image absent".into())}
@@ -96,15 +96,16 @@ fn paths_match(observed:&[ProvenPath;5])->bool {
         &&matches(&observed[4],BootRole::Peer,Completion::NeverPublished,Setup::SetupReturns,Terminal::WaitingForCompletion,&[])
 }
 impl Program {
-    pub(super) fn binding(&self)->ProgramBinding {match self {Self::Retained=>ProgramBinding::Retained,Self::Owned(owned)=>ProgramBinding::Owned(owned.binding.clone())}}
-    pub(super) fn update(&self)->&'static str {match self {Self::Retained=>SOURCE_UPDATE,Self::Owned(_)=>OWNED_UPDATE}}
-    pub(super) fn owned(&self)->bool {matches!(self,Self::Owned(_))}
+    pub(super) fn binding(&self)->ProgramBinding {match self {Self::Retained=>ProgramBinding::Retained,Self::Owned(owned)=>ProgramBinding::Owned(owned.binding.clone()),Self::Joined(joined)=>ProgramBinding::Joined(joined.binding.clone())}}
+    pub(super) fn update(&self)->&str {match self {Self::Retained=>SOURCE_UPDATE,Self::Owned(_)=>OWNED_UPDATE,Self::Joined(joined)=>joined.update.as_str()}}
+    pub(super) fn owned(&self)->bool {!matches!(self,Self::Retained)}
     pub(super) fn from_staged(stage:&Path,output:&Path,catalog:&mut Catalog)->Result<Self,String>{
         let file=|name:&str|->Result<FileBinding,String>{let bytes=read(&stage.join(name))?;let destination=format!("owned-{name}");write(&output.join(&destination),&bytes)?;Ok(FileBinding {path:PathBuf::from(destination),sha256:Digest::of(&bytes)})};
         let binding=OwnedBindings {manifest:file("contract.json")?,loaders:[file("loader-a.bin")?,file("loader-b.bin")?]};
         Self::from_binding(ProgramBinding::Owned(binding),output,catalog)
     }
     pub(super) fn from_binding(binding:ProgramBinding,root:&Path,catalog:&mut Catalog)->Result<Self,String>{
+        if matches!(binding,ProgramBinding::Joined(_)){return Err("shared program requires independent joined-capture replay".into());}
         let ProgramBinding::Owned(binding)=binding else {return Ok(Self::Retained)};
         let bytes=bytes_at(root,&binding.manifest)?;require(Digest::of(&bytes).as_str()==MANIFEST,"owned contract is not the reviewed staged artifact")?;
         let manifest:Manifest=serde_json::from_slice(&bytes).map_err(|error|error.to_string())?;
@@ -140,7 +141,7 @@ impl Program {
         for side in [Side::LoaderA,Side::LoaderB] {
             if (side.base().0+0x9ac..side.base().0+0xb00).contains(&physical) {
                 if pc.0!=physical {return false;}
-                return match self {Self::Retained=>physical<side.base().0+0xaf4,Self::Owned(owned)=>owned.manifest.loaders[usize::from(side.core())].execution_pcs.binary_search(&pc).is_ok()};
+                return match self {Self::Retained=>physical<side.base().0+0xaf4,Self::Owned(owned)=>owned.manifest.loaders[usize::from(side.core())].execution_pcs.binary_search(&pc).is_ok(),Self::Joined(joined)=>joined.execution_allowed(side,pc)};
             }
         }
         true

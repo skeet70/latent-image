@@ -11,6 +11,7 @@ import Data.List (sort)
 import qualified Data.Map.Strict as M
 import Data.Maybe (isNothing)
 import Emulation.MenuCrawl
+import qualified Emulation.RamDiff as RamDiff
 import EmulatorUsb (ModeDial (..), SnapshotName (..), SnapshotPress (..), TraceHit (..))
 import System.Exit (exitFailure)
 
@@ -29,7 +30,7 @@ data Fake = Fake
   }
 
 config :: [CrawlKey] -> Int -> Int -> Int -> CrawlConfig
-config keys trials nodes depth = CrawlConfig keys Nothing [CrawlRoot (rootOf "default") Nothing] trials nodes depth 1000
+config keys trials nodes depth = CrawlConfig keys Nothing [] [] [CrawlRoot (rootOf "default") Nothing] trials nodes depth 1000
 
 rootOf :: String -> RootName
 rootOf name = either error rootName (decodeRoot name)
@@ -79,7 +80,7 @@ fake start step = do
         , driverObserve = \label -> do
             Guest screen _ <- readIORef current
             pure (Screen (Just (fromIntegral (syntheticMenu screen), 0, 0)) (FrameDigest (show (syntheticFrame screen))) label
-              (ControllerCells (B.pack [fromIntegral (syntheticCell screen), 0]) (B.pack [0, 0])) Nothing)
+              (ControllerCells (B.pack [fromIntegral (syntheticCell screen), 0]) (B.pack [0, 0])) Nothing B.empty)
         , driverTraceMark = length <$> readIORef hits
         , driverTraceSince = \mark -> drop mark <$> readIORef hits
         , driverDiscardImage = \path -> modifyIORef' discarded (path :)
@@ -189,6 +190,35 @@ main = do
   check "a frame-only difference is a variant of the same screen" (length (graphNodes variants) == 1
     && any (\edge -> case edgeOutcome edge of Reached _ SameMenuAndCells _ _ _ _ _ -> True; _ -> False) (graphEdges variants))
 
+  let flicker _ (Synthetic menu frame cell) key = Just (if key == KeyUp then Synthetic menu (if even frame then frame + 1 else frame - 1) cell else Synthetic menu frame cell)
+      withIdentity driver = driver { driverObserve = \label -> do
+        screen <- driverObserve driver label
+        let FrameDigest digest = screenFrame screen
+        pure screen { screenIdentity = C.pack digest } }
+  (_, plainDriver) <- fake (Synthetic 0 0 0) flicker
+  plain <- crawl (config [KeyUp] 1000 100 10) plainDriver
+  (_, identityDriver) <- fake (Synthetic 0 0 0) flicker
+  identified <- crawl (config [KeyUp] 1000 100 10) (withIdentity identityDriver)
+  check "identity bytes separate screens that share a menu reading and cells" (length (graphNodes plain) == 1 && length (graphNodes identified) == 2)
+
+  (_, terminalDriver) <- fake (Synthetic 0 0 0) ring
+  terminal <- crawl ((config keys 1000 100 10) { configTerminalPresses = [TerminalPress 0 0 KeyOk] }) terminalDriver
+  let terminalNodes = [node | node <- graphNodes terminal, nodeFrontier node == Just Terminal]
+  check "a terminal press records its landing screen without expanding it"
+    (map menuOf terminalNodes == [Just 10] && null [() | edge <- graphEdges terminal, edgeFrom edge `elem` map nodeId terminalNodes]
+    && sort [menu | Just menu <- map menuOf (graphNodes terminal)] == [0, 1, 2, 3, 4, 10])
+  let ringToTen dial (Synthetic menu frame cell) key = if (menu, key) == (3, KeyOk) then Just (Synthetic 10 10 10) else ring dial (Synthetic menu frame cell) key
+  (_, reopenDriver) <- fake (Synthetic 0 0 0) ringToTen
+  reopenedTerminal <- crawl ((config [KeyOk, KeyUp, KeyDown, KeyBack] 1000 100 10) { configTerminalPresses = [TerminalPress 0 0 KeyOk] }) reopenDriver
+  let tens = [node | node <- graphNodes reopenedTerminal, menuOf node == Just 10]
+  check "a terminal screen reached later by an ordinary press is expanded"
+    (map nodeFrontier tens == [Nothing] && not (null [() | edge <- graphEdges reopenedTerminal, edgeFrom edge `elem` map nodeId tens]))
+  check "return keys group a candidate address"
+    (RamDiff.byReturnKey [(KeyDown, [RamDiff.Candidate 4 1 2]), (KeyUp, [RamDiff.Candidate 4 1 2, RamDiff.Candidate 8 0 1])]
+      == [(RamDiff.Candidate 4 1 2, [KeyDown, KeyUp]), (RamDiff.Candidate 8 0 1, [KeyUp])])
+  check "configs refuse identity reads beyond 4096 bytes" (either (const True) (const False) (decodeCrawlConfig "{\"schema\":1,\"keys\":[\"up\"],\"roots\":[{\"name\":\"a\"}],\"max_trials\":1,\"max_nodes\":1,\"max_depth\":1,\"max_seconds\":1,\"identity_reads\":[{\"start\":\"0x0\",\"end\":\"0x1004\"}]}"))
+  check "configs refuse a terminal key that is not crawled" (either (const True) (const False) (decodeCrawlConfig "{\"schema\":1,\"keys\":[\"up\"],\"roots\":[{\"name\":\"a\"}],\"max_trials\":1,\"max_nodes\":1,\"max_depth\":1,\"max_seconds\":1,\"terminal_presses\":[{\"controller\":76,\"state\":33,\"key\":\"ok\"}]}"))
+
   let stopping _ (Synthetic menu _ _) key = if key == KeyBack then Nothing else ring Nothing (Synthetic menu menu menu) key
   (_, stopDriver) <- fake (Synthetic 0 0 0) stopping
   stopped <- crawl (config keys 1000 100 10) stopDriver
@@ -197,7 +227,7 @@ main = do
 
   let climbing _ (Synthetic menu _ _) _ = Just (let next = min 3 (menu + 1) in Synthetic next next next)
   (_, dialDriver) <- fake (Synthetic 0 0 0) climbing
-  dialGraph <- crawl (CrawlConfig [KeyUp] Nothing [CrawlRoot (rootOf "default") Nothing, CrawlRoot (rootOf "auto") (Just ModeDialAuto)] 1000 100 10 1000) dialDriver
+  dialGraph <- crawl (CrawlConfig [KeyUp] Nothing [] [] [CrawlRoot (rootOf "default") Nothing, CrawlRoot (rootOf "auto") (Just ModeDialAuto)] 1000 100 10 1000) dialDriver
   check "each root starts from the boot snapshot" (sort [menu | node <- graphNodes dialGraph, nodeDepth node == 0, Just menu <- [menuOf node]] == [0, 50])
 
   let activity = stepActivity
@@ -217,6 +247,19 @@ main = do
 
   check "configs refuse unknown keys" (either (const True) (const False) (decodeCrawlConfig "{\"schema\":1,\"keys\":[\"menu\"],\"roots\":[{\"name\":\"a\"}],\"max_trials\":1,\"max_nodes\":1,\"max_depth\":1,\"max_seconds\":1}"))
   check "configs refuse a depth beyond the snapshot budget" (either (const True) (const False) (decodeCrawlConfig "{\"schema\":1,\"keys\":[\"up\"],\"roots\":[{\"name\":\"a\"}],\"max_trials\":1,\"max_nodes\":1,\"max_depth\":21,\"max_seconds\":1}"))
+
+  let window = GuestRange 0x1000 0x1010
+      le values = B.pack (concatMap (\value -> [value, 0, 0, 0]) values)
+      toggled = RamDiff.toggledWords window (le [1, 2, 3, 4]) (le [1, 9, 7, 5]) (le [1, 2, 7, 4]) (le [1, 2, 3, 6])
+  check "a word the key changes, a second press restores and the control leaves is a candidate"
+    (toggled == [RamDiff.Candidate 0x1004 2 9])
+  check "read chunks cover a window exactly"
+    (RamDiff.rangeChunks (GuestRange 0 0x18000) == [(0, 65536), (0x10000, 0x8000)])
+  let diffConfig windows = RamDiff.decodeRamDiffConfig (C.pack ("{\"schema\":1,\"path\":[\"ok\"],\"key\":\"down\",\"return_keys\":[\"down\",\"up\"],\"control\":\"q\",\"windows\":" ++ windows ++ "}"))
+  check "a RAM diff config decodes its windows" (fmap RamDiff.diffWindows (diffConfig "[{\"start\":\"0x100\",\"end\":\"0x200\"}]") == Right [GuestRange 0x100 0x200])
+  check "RAM diff configs refuse overlapping windows"
+    (either (const True) (const False) (diffConfig "[{\"start\":\"0x100\",\"end\":\"0x200\"},{\"start\":\"0x1fc\",\"end\":\"0x300\"}]"))
+  check "RAM diff configs refuse more than 64 MiB" (either (const True) (const False) (diffConfig "[{\"start\":\"0x0\",\"end\":\"0x4000004\"}]"))
 
   count <- readIORef failures
   if count == 0 then putStrLn "menu crawl tests passed" else exitFailure

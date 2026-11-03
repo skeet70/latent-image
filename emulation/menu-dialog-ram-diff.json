@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "path": ["ok", "up", "left", "down", "ok", "down", "down", "down", "ok", "ok"],
+  "key": "down",
+  "return_keys": ["down", "up"],
+  "control": "q",
+  "windows": [{"start": "0x00600000", "end": "0x03300000"}]
+}

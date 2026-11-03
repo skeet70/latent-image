@@ -82,6 +82,7 @@ haskell_test(
         ":loader-orchestration-artifact",
         "//host:base",
         "//host:bytestring",
+        "//host:containers",
         "//host:update-container",
         "//host/firmware:bank-allowlist",
     ],
