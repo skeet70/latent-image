@@ -1060,6 +1060,82 @@ None of the four confirmations goes through the commit dispatcher `0x00d4fc74`; 
 
 The 63 pickers use 117 distinct actions. Twenty-one shooting-menu pickers dispatch the identical set of ten actions of controllers 30, 74, 75 and 100, so the stock firmware already runs them through one generic picker path; the SET-UP pickers fall into smaller groups (at most five keys) with setting-specific controller-76 actions. **[INFERENCE]** A generic owned picker driven by the decoded node, values and conversion table reproduces both groups; the setting-specific controller-76 actions are the residual whose side effects (properties written, application messages) the census lists per key and a replacement must keep.
 
+#### Owned generic picker, increment 1
+
+The 21 shooting-menu pickers that share one stock action set do not change a value in those actions. Each of the ten actions gates on the busy query `0x63a0f8(0x53)` and posts a stage operation through `0xd3d858` (UP `(5,1)`, DOWN `(4,1)`, LEFT and OK `(0xf,0x1d)`, BACK `(0xf,0x1a)`) before calling the transition router `0xc12aac`. The value step runs downstream: the stock menu engine moves its cursor and posts mailbox `0x1d` with the property and the row token of the new cursor; controller 30 event 2 (`0xc2d8ec`, run on every press) passes them to the commit dispatcher `0xd4fc74`; and the property's commit arm converts the token and calls the write `0x0061c91c`, which reaches the setter. Only the arms of properties 163 and 214 reduce to "convert, write, exit"; the other 18 make further stock calls. [Sources: E-MODAL-MENU-OKPATHS-150; id5 `0xd4fc74..0xd4fcd0`, `0xd52664`.]
+
+Increment 1 owns the seven controller-75 key actions (cells 75/0/0, 2, 4, 6, 8, 13 and 49) for 20 of those pickers; FILMSIM (setting 254, node `0x7823a4`) and every other menu stay stock. `replacement/modal_runtime/src/picker.rs` runs each owned action through stock services: the busy query, the node, class and token accessors, stage open, the router, the notification `0xd38d98` and the flag `0x009504a8`. The action runs only while the open node `*0x009571d0` is a picker node, the live cell word and action target equal the generated table, and the cell selects no transition entry. An owned action that would reach a non-generic stock branch (special classes, mode cells `0x009544f8`, `0x00950474`, `0x00950478` or `0x00954500`) declines before any side effect, and the dispatcher runs the stock action instead. `//replacement/modal_runtime:picker-table` generates the private table from pinned image4 and image5, the decoded menu tables, the census and the controller manifest.
+
+The build is opt-in: `--cfg rb_menu_picker_owned` (which requires `rb_modal_scoped`), with `RB_PICKER_TABLE` naming the generated table. It uses the existing 56-byte controller-75 seam, so the default 223/224 packages are unchanged. The picker cells move into the controller-75 table as a picker cell kind once agent/ControllerPilotPrep merges. Runs wait for that branch's settings-write comparison rule.
+
+**Shelved: owning controllers 30, 74 and 100.** Routing those ids through `rb_modal_dispatch` (a 68-byte seam testing `{30, 74, 75, 100}`) would need:
+- one typed seam layout (owned id set, byte length, fixed words, resume and owned-branch offsets) used by the four consumers that now require the 56-byte, 75-only seam: `host/firmware/BuildRecipeBank.hs` (seam size check), `replacement/modal_runtime/Replacement/ModalRuntime/EntryBinding.hs`, `host/firmware/RuntimeRelocationCompare.hs` and `emulation/fujimod-xm1/src/modal_permit.rs`;
+- an owned-set policy in the lifetime guard and scope contract (`modal_permit.rs`, `emulation/Emulation/ModalObservation.hs`, `modal_trace.rs`, a `controllers` array in `modal-scope.json`);
+- qualification of the dispatcher port for those ids (`Qualify.hs` takes controller 75 as fixed; entry fixtures; the closure diagnostic per id; a register and frame census of their action bodies).
+
+**[INFERENCE]** The table-driven value step belongs to the stock menu engine, which runs inside modal dispatch as controller 100's stage consumer (next section), so the next increment investigates that engine.
+
+#### Stock menu engine and the owned target
+
+Four single-press `--menu-observe` runs fix the stock menu engine's shape together with the decompilation; none of their watches reported a violation. [Sources: E-MENU-ENGINE-OBSERVE-150; `private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c`.]
+
+| Run | Configuration | Press | Trace hits | Recorded writes |
+| --- | --- | --- | --- | --- |
+| 1 | `emulation/menu-observe-picker-down.json` | DOWN at the last row of the setting-246 picker | 174 | 1,270 |
+| 2 | `emulation/menu-observe-picker-open.json` | OK on that picker's row in its parent list | 285 | 13,258 |
+| 3 | `emulation/menu-observe-picker-back.json` | BACK from the picker | 233 | 12,663 |
+| 4 | `emulation/menu-observe-menu-open.json` | OK at the attach root | 148 | 6,473 |
+
+**Event path.** All events cross one fixed block, not a queue:
+1. In run 1, controller 75's DOWN action `0xc6eb44` calls stage open `0xd3d858(4, 1)`, which writes event `0x1e` (kind 4, node 1, id 1) into the fixed event block `0x0094f64c..0x0094f660` through `0x0063270c`.
+2. The stock dispatcher then runs controller 100 (state 1, event `0x15`), whose action `0xca4674` consumes the block.
+3. `0xca4674` enters `0xd4dd2c`, the engine wrapper `0xbf95c8` and the kind switch `0xbfa234` (all.c:331301). Kind 1 opens a node at its remembered row; 2 closes and remembers the row; 4, 5 and `0x45` to `0x48` move within the open node; 6 to `0xb` wrap a move between a pop and a push (6, 7) or a push and a pop (8 to `0xb`, with 10 and `0xb` first calling `0xbfad04`); `0xe` and `0xf` push and pop through `0xbfab98`; `0x10` to `0x12` push or pop two or three levels; `0x13` re-opens.
+4. The move `0xbf9f44` steps through `0xbf9b1c` (all.c:330967; code `0x16` up, anything else down). The step wraps unless node word 4 is 1, skips rows whose state is 2 or 3 unless node word 5 is 1, and then sets the visible ordinal from the row's value token and the visible count.
+5. The move then recomputes the scroll top (`0xbf988c`) and stores 44-byte snapshots through `0x0061ceac`.
+
+**Value step.** For kinds 4, 5 and `0xe`, `0xca4674` (all.c:457594-457621) asks `0xd586bc` with modes 3, 2 and 1 about the node class `0x0061d1f4` and the cursor token `0x0061d244`, and when one of them is nonzero posts event `0x1d` (class, token, `0xf000`) through `0xd3d620` and dispatches controller 30 (`0xc0028c`). In run 1 mode 3 answered: the post carried property `0xf6` (246) with token 1. Controller 30's action `0xc2d8ec` called the commit dispatcher `0xd4fc74(0xf6, 1)`, and the property writer `0x0061c91c` was then entered for properties `0xf6`, `0xf9`, `0x161` and `0x1e5`, in that order. On kind `0xf` with id `0x1a` (BACK), the special-post function `0xd42a64`, which `0xca4674` calls after the engine (all.c:457585), asks `0xd586bc` with modes 3, 2 and 1 about the previous node's property and token, read through `0x0061d494`/`0x0061d4b8`, and posts `0x1d` for property `0x27d` with token 0 when one of them is nonzero (all.c:537689-537735). What property `0x27d` means is not established.
+
+**State.** The engine's state is a set of globals:
+- the open node pointer `0x009571d0`;
+- cursor `0x009571d8`, visible ordinal `0x009571dc`, visible count `0x009571e0`, scroll top `0x009571e4`, total rows `0x009571e8`;
+- per-row states `0x009571f0` (0 offered, 1 variant, 2 disabled, 3 hidden), saved-row copies `0x0095732c..`;
+- a cursor stack `0x00957554` indexed by depth `0x009575f4`;
+- remembered rows `0x0095733c[node]`.
+
+Run 1 wrapped the cursor, the visible ordinal and the scroll top from 8, 8 and 2 to 0 (writers `0x00bf9bec`, `0x00bf9c04`, `0x00bf9c10` and `0x00bfa1c8`). `0x0061cd14` (all.c:10050) then rewrote the depth-2 snapshot of node 1 at `0x00941300` as `{depth 2, node words 1, 0, 246, cursor-row token 1, saved-row token 1, cursor 0, ordinal 0, visible 9, page word 1, top 0}`.
+
+Run 2 posted kind `0xe` (push) with node 1 and id `0x1d` through `0xd3d858`, called from `0x00c738ec`. The push changed the node pointer from `0x0078ea98` to the picker record `0x00784014` and the depth `0x009575f4` from 1 to 2. It saved the parent's cursor, ordinal and visible count (3, 2, `0x20`) at `0x00957564`, cleared the row states, and set the total rows from `0x21` and the visible count from `0x20` to 9. Kind `0xe` takes the same value-post branch as run 1 (return address `0xca4800` in both), so `0x1d` and the commit ran for property `0xf6` with token 1: entering the picker re-commits its current value.
+
+Run 3 posted kind `0xf` (pop) with node 1 and id `0x1a` from `0x00c769f4`. The pop restored the parent node `0x0078ea98`, cursor 3, ordinal 2, visible count `0x20`, total `0x21` and depth 1, and recomputed the row states (rows 0 and 1 in states 3 and 2). `0xd42a64` then asked `0xd586bc(3, 0xf6, 1)` from `0xd430dc`, posted `0x1d` for property `0x27d` with token 0 from `0x00d43170`, and the commit dispatcher ran for `0x27d`.
+
+Run 4 posted kind 1 (open) with node 1 and id 0 from `0x00d3d754`, without `0xd3d858`. The open set the menu-open flag `0x009575fc`, the node pointer `0x0078ea98` and depth 1, and called the step `0xbf9b1c(0x15)` from `0x00bfaac0`; the cursor landed on row 2 with ordinal 1, past row 0 (state 3) and row 1 (state 2). `0xd42a64` then posted event `0x20` from `0x00d42da4`. Before the press the globals still held a depth-2 node `0x0078ecd8` from an earlier menu. The node index 1 that runs 2 to 4 post names both `0x00784014` and `0x0078ea98`; kind 1 loads the record from `(&0x0081babc)[node]`.
+
+In these four runs every write to `[0x009571d0,0x00957600)` came from `0x00bf977c..0x00bfacb0` or, in run 4, from `0x007221b0` inside the clear `0x007221c8` that kind 1 calls. Statically the block has other writers: `0xca4674` saves the whole 0x430-byte block to `0x0096b58c` through `0x0061d384` before `0xd4dd2c` and restores it through `0x0061d3a8` when `0xd4dd2c` returns 0 (all.c:10520-10535), and `0x0061cf14` clears it through `0x7221c8`.
+
+**Rendering.** The engine requests a redraw through `0xd4c8d4` and `0xd3d894` (codes `0x837`, then `0x816`). `0xd38d98` (all.c:531642) stores codes below `0x900` to `0x009503d0` (run 1: `0x50b`, then `0x400`) and sets `0x009503d4` to 1 only for codes `0x900` and above (runs 2 to 4: `0x92b`, `0x933`, `0x919`). Draw functions in `0x0116xxxx` read 44-byte copies of the engine state through `0x0061cd14` (live) or `0x0061ce1c` (saved) rather than the globals. After the redraw requests of run 1, the row-availability function `0xd52684` was entered 106 times, 53 of them from `0x00bf8dbc` and 16 from `0x00bf924c`. In run 1, 142 of the 162 writes to `0x00a85000..0x00a88000` came from `0x008409bc`, `0x00840a48` and `0x006d8518..0x006d85f8`; in runs 2 to 4, `0x00043594` and `0x00043564` wrote most of that range.
+
+**Target and shims.** **[INFERENCE]** The target for the menu subsystem is:
+- a declarative menu tree built from the decoded tables (nodes, rows, labels, availability rules);
+- one owned menu engine implementing these kinds over typed state;
+- the nine generic widgets;
+- a typed settings service;
+- a render layer.
+
+The stock modal-dispatch hook becomes a thin event adapter. The stock code the owned engine still meets is wrapped in named shims, each removed when its condition holds:
+
+| Shim | What it does | Removal condition |
+| --- | --- | --- |
+| Stage-event adapter | Takes the `0x1e` stage events that stock key actions post and feeds them to the owned engine, at the single engine entry `0xbf95c8` | The owned key layer delivers key events to the engine directly |
+| Stock-state mirror | The owned engine writes the stock globals above and the `0x0061ceac` snapshots, so stock readers and the stock renderer stay consistent | Every reader of those globals and snapshots is owned |
+| Value-event adapter | Posts `0x1d (P, V)` for kinds 4, 5 and `0xe` and dispatches controller 30, so stock commit arms apply the value | The typed settings service owns the commit arm of every property the tree uses |
+| Leave post | Reproduces `0xd42a64`'s `0x1d (0x27d, 0)` post on BACK when `0xd586bc` modes 3, 2 or 1 report the previous node's property | The settings service owns property `0x27d` and the conditions that request it |
+| Stock engine rollback | `0xca4674` saves the 0x430-byte state block to `0x0096b58c` before the engine call and restores it when the call returns 0; with the stage-event adapter inside this bracket, a rejected event restores stock state over the owned engine's mirror | The owned engine is entered from the owned key layer outside `0xca4674`, so the bracket no longer runs |
+| Stock redraw path | Redraw requests `0x837`/`0x816` and notifications through `0xd38d98` | The owned render layer draws menus |
+| Stock availability | Row states from `0xd52684` | Availability is declared in the menu tree |
+| Picker key cells | Increment 1's seven owned controller-75 cells | The owned key layer replaces them (no further per-cell ownership is added) |
+
+Next observations, each a single `--menu-observe` run: page moves, a move with no-wrap or no-availability nodes, value pickers whose commit has a plain arm (properties 163 and 214), and a confirmation dialog.
+
 #### Camera-side validation harness (design)
 
 **[INFERENCE]** Purpose: check the emulator graph against the body for the screens the emulator cannot reach (first-start language and date, card-backed playback and storage dialogs, lens and focus menus, other mode-dial positions, wireless, flash, movie, Fn assignments, S1/S2 flows) and for screens it may render differently (live view, timing-dependent overlays). The owner's webcam records the LCD while keys are pressed and the body's own state is read back.

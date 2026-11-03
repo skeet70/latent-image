@@ -969,7 +969,7 @@ haskell_test(
 
 haskell_library(
     name = "menu-crawl-lib",
-    srcs = ["Emulation/MenuCrawl.hs", "Emulation/RamDiff.hs"],
+    srcs = ["Emulation/MenuCrawl.hs", "Emulation/MenuObserve.hs", "Emulation/RamDiff.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
     deps = [

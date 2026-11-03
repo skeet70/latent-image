@@ -1,4 +1,4 @@
-//! Typed identities and status values of the stock root-slot ABI (manifest v4, E-RTOS-SLOT-MANIFEST-V4-150).
+//! Typed identities and status values of the stock root-slot ABI (manifest v5, E-RTOS-SLOT-MANIFEST-V5-150).
 
 /// A kernel domain; class 1 is domain A (core 0), class 2 is domain B (core 1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
