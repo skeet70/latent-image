@@ -91,7 +91,7 @@ The original body/template comparison found these families equal to the 1.50 tem
 
 ## Raw media read interface
 
-Provenance: `end-setting/followup/raw-media-read.md`, corrected by `read-media/findings.md`; E-RAW-MEDIA-READ-150 and E-RAW-MEDIA-NUMBERING-150. This section records the **byte-read/static-inference** interface, not permission to issue arbitrary service commands. The supported closed operation and current refusal policy belong to [transport](../transport/README.md).
+Provenance: `end-setting/followup/raw-media-read.md`, corrected by `read-media/findings.md`; E-RAW-MEDIA-READ-150. This section records the **byte-read/static-inference** interface, not permission to issue arbitrary service commands. The supported closed operation and current refusal policy belong to [transport](../transport/README.md).
 
 Config opcode `0x1a0002`, function 3 reaches `0x00dc7564`. It writes cache bytes through `0x0069fc94` before scanning any whitelist. Only a request whose start index is `0x80` scans the 144 records of stride 12 at `0x00dc7a84`. A repeated value and even a zero-length request at that start index rescan the current byte. A matching enabled record posts queue-7 event `0x1707` through `0x00ed1300(0xff,value)`.
 
@@ -156,7 +156,7 @@ A RAM snapshot can be rebuilt from live state after the stored record was read. 
 
 ### Record acceptance and custom continuation
 
-Provenance: `end-setting/followup/area2-invalidation.md` sections 2.2 and 2.4; E-AREA2-PROBE-150 and E-AREA2-VALIDATOR-NATIVE-150 bound the original capture and native callback evidence respectively.
+Provenance: `end-setting/followup/area2-invalidation.md` sections 2.2 and 2.4; E-AREA2-BANKS-150 and E-AREA2-VALIDATOR-NATIVE-150 bound the original capture and native callback evidence respectively.
 
 Newest-record reader `0x006ac4c8` first requires ready flag `0x0089f8b0`, an active high handle and a lower-object pointer; rejection returns `-14`. Lower-object decoding through `0x006ad5cc` can return `-30`. Buffer selector `0x006ad2f8` uses `0x006acfa8` to find the last non-`0xffff` slot and invokes the validation callback held at lower-object `+0x30`. Exact parity accepts; a one-bit syndrome in each expected dimension can be corrected in RAM without writing the correction back to storage. On validation failure the reader walks older slots; reaching slot zero without an accepted record clears the current buffer and returns `-255`. Across banks, 15-bit sequence ordering uses a 62-record window around the `0x8000` wrap.
 
@@ -166,7 +166,7 @@ After area-2 handling, `0x006a8abc` opens logical area 3 and reads its `0x34`-by
 
 ## Retained header and reset predicates
 
-Provenance: `end-setting/followup/header-byte-differential.md`, especially its corrective section 9, and `cycle-d-round.md`; E-JIG-HEADER-DIFF-150 and E-JIG-CYCLE-D-150. These are **byte-read/static-inference** interface findings. [The service/reset report](service-query-and-jig-reset.md) owns lifecycle routes and the settings-loss conclusion.
+Provenance: `end-setting/followup/header-byte-differential.md`, especially its corrective section 9, and `cycle-d-round.md`; E-RESET-ORIGIN-BOOT-150 and E-JIG-CYCLE-D-150. These are **byte-read/static-inference** interface findings. [The service/reset report](service-query-and-jig-reset.md) owns lifecycle routes and the settings-loss conclusion.
 
 The header is 16 byte-wide retained registers `0x50..0x5f`. Application index table `0x007cb7d4` selects descriptors in `0x007c9b54`; the live header is at `0x409c281c`, application snapshot at `0x409c29b8`, and companion snapshot at `0x400a00d0`. Boot-record reader `0x00013244` sets validity word `0x400a00cc` after checking byte 14 equals `0xaa` and the 16-byte sum modulo 256 is zero. Writer `0x00013338` recomputes byte 15 and writes the registers through encoded descriptors.
 
@@ -180,7 +180,7 @@ Defaults producer `0x006a6fd8`, modes other than 2, copies the header template f
 
 ## Color space setting and metadata
 
-Provenance: `color-space/findings.md`; E-COLOR-SPACE-150 and E-COLOR-SPACE-OWNER-150. The setting search is **byte-read/static-inference** on 1.50. Photographic metadata cited by that research came from recorded 1.00 frames and does not prove the 1.50 capture producer.
+Provenance: `color-space/findings.md`; E-COLOR-SPACE-150, which includes the owner's menu search. The setting search is **byte-read/static-inference** on 1.50. Photographic metadata cited by that research came from recorded 1.00 frames and does not prove the 1.50 capture producer.
 
 The language vocabulary contains label IDs `0x647/0x648/0x649` for COLOR SPACE, sRGB and Adobe RGB. The inspected image-4 menu-node/label map contains no corresponding node or values array. The conversion-pointer array at `0x0081b09c` spans 645 property slots and yielded 289 tables, none identified as a color-space property. The complete 57-field custom-payload map contains no identified color-space field. These findings support “no color-space setting identified on the mapped 1.50 surfaces”, not a universal proof that every opaque field has another meaning.
 

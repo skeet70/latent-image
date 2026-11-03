@@ -95,7 +95,7 @@ The MPU's region 0 `[0,0x40000000)` is a window, not a DRAM size (E-XM1-MPU-BOOT
 
 | Physical range | Evidence |
 | --- | --- |
-| `[0x00000000,0x00000100)` | Hardware-read: the live vector table of the boot record the ROM stages at 0, byte-identical in two captures (E-BOOTROM-EXTENT-150, E-BOOTROM-DISCRIMINATOR-150); the second record is staged at `0x10000` (E-BOOTROM-MODE4-150). |
+| `[0x00000000,0x00000100)` | Hardware-read: the live vector table of the boot record the ROM stages at 0, byte-identical in two captures (E-BOOTROM-DISCRIMINATOR-150); the second record is staged at `0x10000` (E-BOOTROM-MODE4-150). |
 | Loader A at `0x00040000`, the log store `[0x000a0800,0x000c07f4)`, loader B at `0x000d0000` | Hardware-read (E-RAM-PROBE-150, E-DUMP-RAM-150, the read-log sessions of [firmware-extraction.md](firmware-extraction.md#the-whole-store)). |
 | `[0x0061c000,0x01460000)` | Hardware-read: the segment table and the image 4, image 5 and plain-image extents (E-DUMP-RAM-150); the RAM-push allocations near `0x00a8xxxx` were written and read on the body. Image 4's bss fill `[0x0089ec00,0x00bf1a00)` lies between them. |
 | `[0x01460000,0x03360000)` | Hardware-read at `0x015c22a0`, `0x01667000`, `0x01677700` and `0x01acd800`. Firmware use: the face workspace at `0x021a1800`-`0x021afc00` (E-FACE-ADDRESS-WORDS-150), the load-path graphics fills `[0x0228c800,0x027b3200)` (emulated, [classic-chrome-patch.md](classic-chrome-patch.md)) and the updater's main-range staging from `0x02e4025c` or `0x02fb7600` (E-UPDATE-WRITE-ORDER-150). |

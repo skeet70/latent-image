@@ -1,6 +1,6 @@
 # AF recorder revision-2: installed bytes and unresolved residency (X-M1 1.50)
 
-The revision-2 install completed, but the first ordinary boot stayed black with no LEDs (E-RECORDER-INSTALL-150, E-RECORDER-BOOT-FAILURE-150). The session stopped before any capture act; no recorder validation input exists. The body is now recovered through the exact v5 rollback, with ordinary startup, photography, normal-card operation/playback and retained film simulations/settings reported working ([recovery result](sd-boot-card-entry.md#260-physical-rollback-readback-status-20), E-RECOVERY-V5-NORMAL-CARD-PLAYBACK-150, E-RECOVERY-V5-RETENTION-150).
+The revision-2 install completed, but the first ordinary boot stayed black with no LEDs (E-RECORDER-INSTALL-150, E-RECORDER-BOOT-FAILURE-150). The session stopped before any capture act; no recorder validation input exists. The body is now recovered through the exact v5 rollback, with ordinary startup, photography, normal-card operation/playback and retained film simulations/settings reported working ([recovery result](sd-boot-card-entry.md#260-physical-rollback-readback-status-20), E-RECOVERY-V5-RETENTION-150).
 
 This report retains the byte identity and failed safety criterion, not an installation procedure. Do not reinstall or repeat the retired session. Future camera work follows [the camera-run procedure](../spec/07-governance-and-handoff.md#3-camera-runs), with separately reviewed bytes and a named owner go for persistent operations. Superseded operator instructions remain in Git history.
 

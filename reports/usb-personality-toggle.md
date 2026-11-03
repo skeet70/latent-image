@@ -43,7 +43,7 @@ Init action `0x0073e0b0` calls `0x0073cbfc` (`0x0073e0c0`) and then the mode dec
 
 ### 2.3 Attach and detach
 
-Every attach or detach edge reaches connect handler A `0x00ecf8b8` through observer `0x00ecfe64`, queue-7 `0x1714` and group-1 row 12 in state 3 (inherited, E-CONNECT-EDGE-150). Byte-read:
+Every attach or detach edge reaches connect handler A `0x00ecf8b8` through observer `0x00ecfe64`, queue-7 `0x1714` and group-1 row 12 in state 3 (inherited, E-GATE-ENABLE-SEQUENCE). Byte-read:
 
 | Address | Step |
 | --- | --- |
@@ -572,7 +572,7 @@ The go names one candidate. `STOCK` is `$(readlink -f private-data/firmware/x-m1
 | M1 | On the session commit: `sha256sum "$IMAGE"`; `build-extension` from `MANIFEST` into a fresh directory and `cmp` against `IMAGE` | `DIGEST` both times; `cmp` prints nothing |
 | M2 | The 11.4 gates for this candidate recorded: review, flash-boot receipt, visual check, boot path, slot | All present; for CC-icon+toggle gate 4 cleared by one of the two routes of the 11.4 owner decision |
 | M3 | `cmp --ignore-initial=918108 --bytes=270336 "$STOCK" "$IMAGE"` and `cmp --ignore-initial=38404732 --bytes=416 "$STOCK" "$IMAGE"` | Both print nothing (template and restore lists equal stock, 12.2) |
-| M4 | Confirm the adjustment backup (E-ADJ-BACKUP-DURABLE-150, `c82ac937…199c`, two locations) | Present; since then only `0x80`, `0x81` and `0xf7` changed |
+| M4 | Confirm the adjustment backup (E-ADJ-BACKUP-GAP-READ-150, `c82ac937…199c`, two locations) | Present; since then only `0x80`, `0x81` and `0xf7` changed |
 | M5 | The owner reports the slot repaired (#85; the repair is invasive work, planned with the owner first) | Repair reported; a card latches home without a shim and the door closes over it |
 
 ### 12.2 What the update does to stored state
@@ -609,7 +609,7 @@ A damaged copy fails D4. Inside the camera a damaged file fails one of the three
 
 ### 12.5 Camera acts
 
-The screen order is the RC0 run's (E-FILMSIM-INSTALL-150, E-INSTALL-TIMING-150) and the vendor procedure. Do not advance an unfamiliar screen by guessing.
+The screen order is the RC0 run's (E-FILMSIM-INSTALL-150) and the vendor procedure. Do not advance an unfamiliar screen by guessing.
 
 | Code | Owner action | Must show |
 | --- | --- | --- |

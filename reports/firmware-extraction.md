@@ -381,7 +381,7 @@ Unicorn 2.1.4 has no Cortex-R4 model; the native runner uses `UC_CPU_ARM_CORTEX_
 
 ### Matching C recompilation lead
 
-**Reported:** jitl states that about 55% of his decompiled X70 functions compile byte-identically with an older GCC toolchain. This is a rate over his decompiled subset, not demonstrated coverage of the whole firmware or an X-M1 result (E-X70-MATCHING-C-LEAD).
+**Reported:** jitl states that about 55% of his decompiled X70 functions compile byte-identically with an older GCC toolchain. This is a rate over his decompiled subset, not demonstrated coverage of the whole firmware or an X-M1 result (E-X70-MATCHING-C-FETCHED).
 
 **Source-inspected, sibling-only:** the fetched X70 checkout at `ebc7869731ab574d1fa0755caf6fa65923faf00e` has a substantial matching-C workflow, not just a compiler-identification spike (E-X70-MATCHING-C-FETCHED). Its current build defaults to GCC 4.6.4 and links emitted functions at stock addresses. `tools/build.py:1453` uses unmasked equality against the stock prefix over the emitted `.text` section; a shorter emission can match while trailing stock bytes remain. Nonmatching functions also retain stock bytes, so `image == stock` alone does not prove complete C coverage. The older `compiler-id/cmp.py` masking is separate from this current verifier. The upstream native toolchain is macOS-specific and documents host-sort compatibility patches; neither its compiler choice nor its X70 match rate establishes an X-M1 result.
 

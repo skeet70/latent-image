@@ -136,10 +136,10 @@ Residual no read-only run settles: a capture AT the hook's firing point. The hoo
 
 ## What the owner does
 
-1. Note the current date, time, language and one C-slot value; a POWER/OFF jig exit resets them as usual (E-JIG-OBSERVED). Use a fully charged battery or the dummy-battery supply, keep the card free of firmware files, and have the USB cable connected.
-2. Power off, then enter jig mode as usual with USB connected (shutter and up held at power on). Entry needs the host attached (E-JIG-ENTRY-REQUIRES-USB).
+1. Note the current date, time, language and one C-slot value; a POWER/OFF jig exit resets them as usual (E-JIG-CYCLE-D-150). Use a fully charged battery or the dummy-battery supply, keep the card free of firmware files, and have the USB cable connected.
+2. Power off, then enter jig mode as usual with USB connected (shutter and up held at power on). Entry needs the host attached (E-JIG-ENTRY-KEY-BIND-150).
 3. Run the executable sequence above in one jig entry: the four service commands with the derivation step between the route phases. Each command opens and closes its own service session. The phase-2 window list is derived from phase 1's output between commands 2 and 3. If a run stops, the captures that finished stand on their own and the bracket is closed at the last completed capture.
-4. Exit jig mode. Ending by cutting the dummy-battery supply preserved every watched setting in two no-command jig sessions (E-JIG-POWERCUT-PRESERVES-150); with these read-only-content commands the same is expected but unobserved, so note which ending was used. The POWER/OFF ending resets date, time, language and the C slot.
+4. Exit jig mode. Ending by cutting the dummy-battery supply preserved every watched setting in two no-command jig sessions (E-JIG-CYCLE-D-150); with these read-only-content commands the same is expected but unobserved, so note which ending was used. The POWER/OFF ending resets date, time, language and the C slot.
 5. Power-cycle normally, take a shot and play it back, and report in chat: the output directories and result lines, which exit was used, and whether the settings survived.
 
 ## Review class

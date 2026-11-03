@@ -142,7 +142,7 @@ Stub sizes (A32, linked into the converter extents, section 6.2): colour 7 words
 
 ### 4.6 Metadata
 
-FilmMode is `FUN_00eab258` (`[0x00eab258, 0x00eab35c)`, one caller `0x00eab368`, stored at maker-note record `+0xf0` with valid flag `+0xec`). Its output domain {0, `0x120`, `0x200`, `0x500`, `0x501`, `0xffff`} for col2 {0, 1, 3, `0xb`, `0xc`, B&W/SEPIA family} matches exiftool's FujiFilm FilmMode names, and the RC0 body wrote "Pro Neg. Std" for col2 `0xb` (E-FILMSIM-RENDER-REPEAT-ANALYSIS-150) (byte-read, inherited). `FUN_00eaac74` is the Saturation encoder (`+0x40`).
+FilmMode is `FUN_00eab258` (`[0x00eab258, 0x00eab35c)`, one caller `0x00eab368`, stored at maker-note record `+0xf0` with valid flag `+0xec`). Its output domain {0, `0x120`, `0x200`, `0x500`, `0x501`, `0xffff`} for col2 {0, 1, 3, `0xb`, `0xc`, B&W/SEPIA family} matches exiftool's FujiFilm FilmMode names, and the RC0 body wrote "Pro Neg. Std" for col2 `0xb` (E-FILMSIM-RENDER-150) (byte-read, inherited). `FUN_00eaac74` is the Saturation encoder (`+0x40`).
 
 | # | Address | Current | New | Note |
 | ---: | --- | --- | --- | --- |
@@ -777,7 +777,7 @@ cmp --ignore-initial=38404732 --bytes=416 "$STOCK" "$IMAGE"      # restore lists
 
 The path is S4 of [the install procedure](install-procedure.md#2-what-the-camera-does-when-inside-the-update): `0xdb91e0` snapshots `[0, 0x42000)`, refreshes it from the template, stamps `+0x1e8`/`+0x1e9` and `+0x204`/`+0x205`, restores the listed bytes and commits the area. It runs only when `0x014e3578 & 3` is nonzero; that flag's setter is unmapped.
 
-**Hardware-observed** for the RC0 install (captures of E-PREINSTALL-CONFIG-150 and E-FILMSIM-READBACK-150, compared against the template on 2026-10-22): before and after, every byte of `[0, 0x42000)` outside the lists equals the template except the stamps `0xd8`, `0x1e8`, `0x1e9` and `0x4069`-`0x406e`; the update stamp moved `01 54` to `01 78`, so the refresh ran on the equal-version update; the 224 restore-covered body bytes held; area-2 bank 1 was unchanged and bank 0 gained only photo records. The official 1.00 to 1.50 update returned `0x80` from `0x22` and `0x81` from `0xff` to `0x00` (E-ADJ-GATE-BYTE-150).
+**Hardware-observed** for the RC0 install (captures of E-FILMSIM-READBACK-150, compared against the template on 2026-10-22): before and after, every byte of `[0, 0x42000)` outside the lists equals the template except the stamps `0xd8`, `0x1e8`, `0x1e9` and `0x4069`-`0x406e`; the update stamp moved `01 54` to `01 78`, so the refresh ran on the equal-version update; the 224 restore-covered body bytes held; area-2 bank 1 was unchanged and bank 0 gained only photo records. The official 1.00 to 1.50 update returned `0x80` from `0x22` and `0x81` from `0xff` to `0x00` (E-ADJ-GATE-BYTE-150).
 
 Body now: window-0 captures since the f7 enable show `0x80`, `0x81` and `0xf7` as the only non-template bytes outside the lists and stamps, and `commit-f7-restore` left `0xf7 = 00`, `0x80 = 22`, `0x81 = 00` (E-STORED-F7-RESTORE-RUN-150; not reread in a later boot).
 
@@ -803,7 +803,7 @@ A partly written file cannot be picked up during the copy: the card is in the re
 | --- | --- | --- |
 | P0 | Model: on the session commit, `sha256sum "$IMAGE"` and the 12.2.1 gates for `DIGEST`: rebuild, review, flash-boot receipt, the icon RAM-push test result and the 12.2.2 check | `DIGEST`; every gate recorded |
 | P1 | Photograph the watched settings and the C (CUSTOM) values; the RAM session waived this | Record in the notes |
-| P2 | Confirm the adjustment backup (E-ADJ-BACKUP-DURABLE-150, `c82ac937…199c`, two locations) | No new capture is needed: since that backup only `0x80`, `0x81` and `0xf7` changed (12.2.2) |
+| P2 | Confirm the adjustment backup (E-ADJ-BACKUP-GAP-READ-150, `c82ac937…199c`, two locations) | No new capture is needed: since that backup only `0x80`, `0x81` and `0xf7` changed (12.2.2) |
 | P3 | SHOOTING MENU > FILM SIMULATION shows a stock film (PROVIA after the RAM session) and the C slot holds a stock film (review N1) | Stock film in both; RC0 cannot store CC, so this is a check |
 | P4 | Dummy-battery supply on mains, connector secured, not on a shared switch; camera on a stable surface; lens mounted; USB unplugged | Install procedure section 5 |
 | P5 | D1-D5 done | Card in the camera, door closed |
@@ -811,7 +811,7 @@ A partly written file cannot be picked up during the copy: the card is in the re
 
 #### 12.2.5 Camera acts
 
-The screen order is the RC0 run's (E-FILMSIM-INSTALL-150, E-INSTALL-TIMING-150) and the vendor procedure; intermediate wording on this body is **unproved**. Do not advance an unfamiliar screen by guessing.
+The screen order is the RC0 run's (E-FILMSIM-INSTALL-150) and the vendor procedure; intermediate wording on this body is **unproved**. Do not advance an unfamiliar screen by guessing.
 
 | Code | Owner action | Must show |
 | --- | --- | --- |

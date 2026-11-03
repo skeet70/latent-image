@@ -167,7 +167,7 @@ What the commit stores: every byte of `[0, 0x420000)` from RAM, so besides `0xf7
 
 What a stored `0xf7 = 0x01` does afterwards (report sections 1, 3 and 5, static inference): on every ordinary-boot USB attach the body starts `ff80` service mode 3 instead of PTP, so ordinary PTP and the application's USB mode are unavailable for that boot; each attach also runs the 41,156,608-byte `0xff` fill of `0x43360000`..`0x45a9ffff`, which overlaps display buffer windows; any host on `ff80` can use debug opcode `0x200001` function 3, an arbitrary RAM write; and a cable present at a button-less boot gives mode 3 instead of the USB-cable mode 7. An ordinary firmware update with its refresh flags set returns `0xf7`, `0x80` and `0x81` to `0x00`. A jig session starts with `0xf7` stored (hardware-observed, E-STORED-F7-COMMIT-RUN-150), contrary to the static reading of report section 1.5, and `commit-f7-restore` has run in one: `committed;f7=0x01->0x00`, after which an ordinary boot enumerates as PTP `04cb:02b6` (E-STORED-F7-RESTORE-RUN-150). `read-ram` reads window 0 over the ordinary-boot `ff80` route as its gate check and writes it to `OUTDIR/config-000000.bin`.
 
-End the session by cutting the dummy-battery supply (E-JIG-POWERCUT-PRESERVES-150), not the POWER switch, unless the result line says to wait first. Verify on a later fresh jig boot with no gate write by running the gate-byte plan:
+End the session by cutting the dummy-battery supply (E-JIG-CYCLE-D-150), not the POWER switch, unless the result line says to wait first. Verify on a later fresh jig boot with no gate write by running the gate-byte plan:
 
 ```sh
 devenv shell -- bazel run //transport:camera -- read-config "$PWD/private-data/read-plans/gate-byte.json"

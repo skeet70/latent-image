@@ -376,7 +376,7 @@ ISO and white balance are handled by mapping the selectors, not by a cancellatio
 
 | Stage selector | Inputs | Value for these frames |
 | --- | --- | --- |
-| Gain record and tone key | develop code, mode, H/S indices, `level2` from `FUN_0073fc64` | `level2` is 0 only when record `+0x19c = 2`; `FUN_00d78db8` stores 2 there only for capture `+0x4bc = 8`, the ISO 100 code of `FUN_00eaec80` (E-FILMSIM-FIELDS-150). Every other ISO leaves `level2` to the DR setting, 1 at DR100 |
+| Gain record and tone key | develop code, mode, H/S indices, `level2` from `FUN_0073fc64` | `level2` is 0 only when record `+0x19c = 2`; `FUN_00d78db8` stores 2 there only for capture `+0x4bc = 8`, the ISO 100 code of `FUN_00eaec80` (E-FILMSIM-PRODUCERS-MMIO-150). Every other ISO leaves `level2` to the DR setting, 1 at DR100 |
 | Luma bands, matrix, chroma 2x2 | develop code and row `+0x108` (written only 0) | as at ISO 200 |
 | Chroma gain `0xd62194[+0x10c]` | Color index | unity |
 | Chroma gain `0xd61f34[10 (+0x160) + (+0xf4)]` | `+0x160`, clamped to 0..3 by its setter `0x00d78c0c` (called from the still builder at `0x00d79568`); `+0xf4`, stored 2 by `FUN_00d791b0` | unity in every entry of rows 0..3 |
