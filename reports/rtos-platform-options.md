@@ -428,7 +428,7 @@ Order of work:
 
 1. Done: the build trial (§4.11) links an embassy executor with the aarch32 crates under Bazel with rustc 1.98.1.
 2. Recover the timer and interrupt-controller laws.
-3. Bring up phase 1: an embassy executor inside one stock task per domain.
+3. Done in the emulator: phase 1, an embassy executor inside one stock task per domain (§4.12).
 4. Choose the phase-2 thread layer after the µITRON slot tests in §2.5 bound the shim.
 
 ### 4.11 Build trial: embassy executor under the pinned toolchain
@@ -451,3 +451,41 @@ Order of work:
 - **Smallest optional change:** a shared `xm1_cargo_staticlib(name, nix_file, srcs, outs)` macro would remove the duplicated genrule in `replacement/heap_replay/replay.bzl` and here. An owned single-crate root that must call into the vendored graph directly would instead need an `externs` attribute on `xm1_rust_staticlib`: `--extern NAME=PATH` and `-L dependency=DIR` over rlibs exported by the same derivation. Nothing needs that yet.
 - **Command:** `devenv shell -- bazel --batch --output_base=... build --jobs=2 //replacement/embassy_trial:embassy-trial`. Its genrule runs `nix-build` locally and is tagged `manual`, like the heap replay subjects.
 - **Licenses:** the `license` fields of the 62 vendored packages are MIT (19), MIT OR Apache-2.0 in its spellings (38), BSD-3-Clause OR MIT OR Apache-2.0 (2), Unlicense OR MIT (2) and (MIT OR Apache-2.0) AND Unicode-3.0 (1, unicode-ident), all combinable with AGPL-3.0. Their notices travel with any conveyed artifact; this trial is not conveyed.
+
+### 4.12 Phase 1: embassy inside one stock task per domain (emulated)
+
+`replacement/embassy_platform` is the phase-1 platform: embassy-executor 0.10.0 `raw::Executor` with no platform feature, embassy-time 0.5 at 3 MHz over an owned driver, and the stock kernel as the thread layer. It is installed as a RAM-push experiment (`experiments/embassy_phase1`), because RAM push is the only owned-code path that has run on the camera (E-RAM-PUSH-INSTALL-150) and it installs after the kernel is running. Experiments gained `prelinked.json`: a Bazel-built relocatable object, gc'd from the hook handler and the exported records, replaces `lib.rs` (`host/firmware/build-experiment-ram.sh`). The demo object takes 0x3ea0 of the 0x5000-byte code window.
+
+- **Host tasks:** the hook in front of the stock modal dispatcher `0x00bfb028` runs once from task context with IRQ unmasked. It fills both stacks with the id byte and cleans the payload's D-cache lines. Then, inside the stock critical pair `0x7235d8/0x7236b0`, it calls `+0x80` and `+0x0` on each class's root for task id 119 in class 1 (A) and class 2 (B), with `{flags 2, argument domain, entry, priority 14, 2 KiB stack}`, the packet and sequence of the task-submission wrapper `0x725dd8`. It activates both through the executing core's `+0xc` after leaving the pair. Id 119 lies outside the class table `0x7cad9c` and the stack check `0x69cc18`, which both cover 1..104. Priority 14 is one above the idle tasks 102/103 (15), whose WFI loop never blocks; at 15 the hosts never ran.
+- **Waker:** the task wakeup queue. The host loop polls, takes the next deadline from the integrated timer queue and sleeps through `+0x28` with that deadline rounded up to whole ticks, or -1 when there is none. The pender sets a `pending` flag when the host task itself is the caller, and otherwise calls `+0x2c` from a task or `+0x30` from a handler. The one-deep queued wakeup closes the check-then-sleep race. Eventflags (`+0x88/+0x8c/+0x9c`) stay unused until their lower tuples are recovered.
+- **Time:** `now = 30000 × tick cell 0x400c0800 (extended to 64 bits) + sub-tick from [0xfff91000]`. The tick cell is read before and after the counter and the read retried while the two differ, and each domain clamps the result to be monotonic while counting how often and by how much the raw reading fell back. The counting direction is a build feature (`counter-down` for FujiMod, `counter-up` for the camera). At entry each host measures it, and a mismatch drops that domain to tick-only time. No timer register is written.
+- **Critical sections:** `critical-section` over the stock CPU-lock slots `+0x130/+0x134` and `+0x138/+0x13c`, selected by `+0x148`, restoring the prior CPSR.I. The two cores' data caches are not coherent, so each domain's executor state, task storage and stack sit in 32-byte-aligned padded blocks written by one core only, and cross-core words (the demonstration record, the doorbell) go through the uncached alias.
+- **Interrupts:** `kernel::define_interrupt/enable_interrupt/disable_interrupt` over `+0x160/+0x158/+0x15c`; phase 1 does not use them.
+
+**Emulated result (E-EMBASSY-PHASE1-EMULATED-150).** One run of the demonstration and one of each control on the stock DAT, cardless FujiMod RAM-push route, with the modal75 FILM SIMULATION trajectory, all at `ea90d676`. The reviewed checker `replacement/embassy_platform/check-demo.jq` accepts all four runs:
+
+- **Demonstration:**
+  - Install, route and unload pass with every step matched and no forbidden fetch.
+  - All six creation and activation statuses are 0, and both host tasks entered.
+  - Both domains measured the counter counting down and kept sub-tick time, with no clock regression.
+  - By handback each 100 ms ticker had run 33 iterations over a 321-tick span, and both kept running after unload.
+  - The latest wake was 68,757 counts (about 23 ms) on A and 32,347 on B, and A had two wakes later than two ticks. No kernel wake came early.
+  - A rang B's doorbell 3 times and B received all 3 through the kernel wakeup. The observer traced 4 `+0x2c` calls with B's id 0x00020077, and the worst delivery latency was 2,861 counts (about 1 ms).
+  - The observer traced 39 `+0x28` calls on core 0 and 43 on core 1. The stock route makes none (E-RTOS-SLOT-CENSUS-STOCK-150).
+  - Stack high-water was 304 bytes on each domain.
+- **No executors:** the same hook and route with nothing created reach the same menu outcomes.
+- **No pender kernel:** the tickers keep running, and B receives none of its doorbells, with no traced `+0x2c` for B.
+- **Counter up:** both domains detect the down-counting model, fall back to tick-only time, and keep their timers on schedule.
+
+Two earlier inputs are preserved as failures:
+
+- The first stopped in FujiMod at the hook's byte exclusive (`ldrexb/strexb`; "R-profile nonword exclusive execution is not implemented"). The start flag is now a word atomic.
+- The second passed the route, but neither host task ran at priority 15.
+
+**Limits:**
+
+- This is an emulated coexistence demonstration on a model that counts the kernel timer down and models no caches, not kernel or silicon qualification.
+- B's timeouts on hardware depend on line 32 reaching core 1 (laws U4).
+- Wake resolution is one tick.
+- The host tasks keep running after `ram-unload`.
+- Before any camera run, core 1's instruction cache over the payload needs maintenance that the push does not perform, the payload must be the `counter-up` build, and the push and run need the owner's go.
