@@ -1,4 +1,4 @@
-def reads: [["dispatcher-first-word", "00bfb028", 4], ["modal75-state", "0146761e", 2], ["modal75-event", "0146777a", 2], ["open-node", "009571d0", 4], ["resident", "runtime:rb_resident", 1024], ["live-settings", "0096cc64", 450]];
+def reads: [["dispatcher-first-word", "00bfb028", 4], ["modal75-state", "0146761e", 2], ["modal75-event", "0146777a", 2], ["open-node", "009571d0", 4], ["picker-mode-9544f8", "009544f8", 4], ["picker-modes-950474", "00950474", 8], ["picker-mode-954500", "00954500", 4], ["resident", "runtime:rb_resident", 1024], ["live-settings", "0096cc64", 450]];
 def keep_resident: [{"read": "resident", "phase": "package-menu-prefix", "source_read": "resident"}];
 def steps($list): [$list[] | [.[0]] + .[1]];
 def trace_sites: [
