@@ -143,6 +143,8 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/tests/peer_witness.rs",
     "//emulation:fujimod-xm1/tests/r4f_guard.rs",
     "//emulation:fujimod-xm1/tests/support/composed_nand_fixture.rs",
+    "//emulation:fujimod-xm1/tests/trace_throughput.rs",
+    "//emulation:fujimod-xm1/tests/trace_throughput_retain.rs",
 ]
 
 _NIX_BUILD_CAP = ["--max-jobs", "2", "--cores", "2"]

@@ -570,7 +570,9 @@
                 "@@//emulation:fujimod-xm1/tests/peer_wait_sdk.rs": "//emulation:fujimod-xm1/tests/peer_wait_sdk.rs",
                 "@@//emulation:fujimod-xm1/tests/peer_witness.rs": "//emulation:fujimod-xm1/tests/peer_witness.rs",
                 "@@//emulation:fujimod-xm1/tests/r4f_guard.rs": "//emulation:fujimod-xm1/tests/r4f_guard.rs",
-                "@@//emulation:fujimod-xm1/tests/support/composed_nand_fixture.rs": "//emulation:fujimod-xm1/tests/support/composed_nand_fixture.rs"
+                "@@//emulation:fujimod-xm1/tests/support/composed_nand_fixture.rs": "//emulation:fujimod-xm1/tests/support/composed_nand_fixture.rs",
+                "@@//emulation:fujimod-xm1/tests/trace_throughput.rs": "//emulation:fujimod-xm1/tests/trace_throughput.rs",
+                "@@//emulation:fujimod-xm1/tests/trace_throughput_retain.rs": "//emulation:fujimod-xm1/tests/trace_throughput_retain.rs"
               },
               "nix_file_content": "",
               "nix_license_path": "",

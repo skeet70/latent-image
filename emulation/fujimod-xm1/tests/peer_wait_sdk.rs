@@ -2652,17 +2652,19 @@ fn stopped_at(machine: &mut Machine, pc: u64, instructions: u64) {
 #[test]
 fn persistent_points_keep_stopped_fetch_rows_exact_through_every_site_and_mode_transition() {
     use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
+    use fujimod_xm1::trace::DisarmedPoints;
     let mut program = vec![0xe2800001; 16];
     program.push(0xeafffffe);
     let mut machine = machine(&program);
     machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
-    machine.traces.arm(&machine.session, stop_sites(&[0x1000])).unwrap();
+    machine.traces.set_disarmed_points(DisarmedPoints::Retain);
+    machine.traces.arm_mutable(&machine.session, stop_sites(&[0x1000])).unwrap();
     machine.traces.stop_labels.insert("stop".into());
     stopped_at(&mut machine, 0x1000, 0);
     let mut watch = machine.session.board.memory_watch_begin_classified(vec![
         WatchRange { start: 0x1000, end: 0x1044, kinds: WatchKinds::CPU_FETCH },
     ], 64, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
-    machine.traces.arm_primary(&machine.session, stop_sites(&[0x1000, 0x1008])).unwrap();
+    machine.traces.arm_mutable(&machine.session, stop_sites(&[0x1000, 0x1008])).unwrap();
     stopped_at(&mut machine, 0x1000, 0);
     stopped_at(&mut machine, 0x1008, 2);
     machine.traces.add_sites(&machine.session, stop_sites(&[0x1010])).unwrap();
@@ -2677,7 +2679,7 @@ fn persistent_points_keep_stopped_fetch_rows_exact_through_every_site_and_mode_t
     assert_eq!(machine.run(2), RunOutcome::Completed);
     machine.traces.rearm(&machine.session).unwrap();
     assert!(machine.traces.armed());
-    machine.traces.arm(&machine.session, stop_sites(&[0x1024, 0x102c])).unwrap();
+    machine.traces.arm_mutable(&machine.session, stop_sites(&[0x1024, 0x102c])).unwrap();
     stopped_at(&mut machine, 0x1024, 9);
     machine.traces.arm_mutable(&machine.session, stop_sites(&[0x1024, 0x102c])).unwrap();
     stopped_at(&mut machine, 0x1024, 9);
@@ -2714,7 +2716,7 @@ fn persistent_points_keep_stopped_fetch_rows_exact_through_every_site_and_mode_t
 }
 
 #[test]
-fn primary_selection_leaves_the_secondary_set_empty_across_selection_transitions() {
+fn arm_primary_leaves_persistent_points_for_fixed_primary_points() {
     use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
     let mut program = vec![0xe2800001; 1023];
     program.push(0xeafffffe);
@@ -2729,7 +2731,7 @@ fn primary_selection_leaves_the_secondary_set_empty_across_selection_transitions
     assert_eq!(machine.run(4), RunOutcome::Completed);
     assert_eq!(machine.session.board.instruction_counts(), [1000, 4]);
     assert!(machine.traces.hits.is_empty());
-    machine.traces.arm(&machine.session, stop_sites(&[0x2008, 0x2014])).unwrap();
+    machine.traces.arm_mutable(&machine.session, stop_sites(&[0x2008, 0x2014])).unwrap();
     assert_eq!(machine.run(10), RunOutcome::Stopped);
     assert_eq!(machine.session.board.instruction_counts(), [1000, 5]);
     assert_eq!(machine.session.board.read_register(1, Register::Pc).unwrap(), 0x2014);
@@ -2743,7 +2745,7 @@ fn primary_selection_leaves_the_secondary_set_empty_across_selection_transitions
     let fetches: Vec<_> = observed.records.iter().map(|row| (row.pc.unwrap(), row.instructions.unwrap())).collect();
     assert_eq!(fetches, [
         (0x2000, 1001), (0x2004, 1002), (0x2008, 1003), (0x200c, 1004),
-        (0x2010, 1005), (0x2014, 1005),
+        (0x2010, 1005), (0x2014, 1006),
         (0x2014, 1006), (0x2018, 1007), (0x201c, 1008),
     ]);
     assert_eq!(hit_positions(&machine), [(1, 0x2014, 1005)]);
@@ -2751,10 +2753,10 @@ fn primary_selection_leaves_the_secondary_set_empty_across_selection_transitions
 }
 
 #[test]
-fn checkpoint_teardown_reinstalls_points_with_a_once_only_resume() {
+fn checkpoint_teardown_reinstalls_persistent_points_with_a_once_only_resume() {
     let mut machine = machine(&[0xe2800001, 0xe2800001, 0xe2800001, 0xeafffffe]);
     machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
-    machine.traces.arm(&machine.session, stop_sites(&[0x1000, 0x1008])).unwrap();
+    machine.traces.arm_mutable(&machine.session, stop_sites(&[0x1000, 0x1008])).unwrap();
     machine.traces.stop_labels.insert("stop".into());
     stopped_at(&mut machine, 0x1000, 0);
     machine.disarm().unwrap();
@@ -2763,4 +2765,42 @@ fn checkpoint_teardown_reinstalls_points_with_a_once_only_resume() {
     stopped_at(&mut machine, 0x1008, 2);
     assert_eq!(hit_positions(&machine), [(0, 0x1000, 0), (0, 0x1008, 2)]);
     assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 2);
+}
+
+/// Stops at 0x1000, disarms under `policy`, begins a fetch watch, rearms and runs through the stop at 0x1008.
+fn fetches_after_disarm_then_watch(policy: fujimod_xm1::trace::DisarmedPoints) -> Vec<(u64, u64)> {
+    use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
+    let mut machine = machine(&[0xe2800001, 0xe2800001, 0xe2800001, 0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
+    machine.traces.set_disarmed_points(policy);
+    machine.traces.arm_mutable(&machine.session, stop_sites(&[0x1000, 0x1008])).unwrap();
+    machine.traces.stop_labels.insert("stop".into());
+    stopped_at(&mut machine, 0x1000, 0);
+    machine.traces.disarm(&machine.session).unwrap();
+    assert!(!machine.traces.armed());
+    let mut watch = machine.session.board.memory_watch_begin_classified(vec![
+        WatchRange { start: 0x1000, end: 0x1010, kinds: WatchKinds::CPU_FETCH },
+    ], 8, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
+    machine.traces.rearm(&machine.session).unwrap();
+    stopped_at(&mut machine, 0x1008, 2);
+    assert_eq!(machine.run(1), RunOutcome::Completed);
+    machine.require_running().unwrap();
+    let observed: Watch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(observed.violation.is_none());
+    assert_eq!(hit_positions(&machine), [(0, 0x1000, 0), (0, 0x1008, 2)]);
+    assert_eq!(machine.instructions(), 3);
+    observed.records.iter().map(|row| (row.pc.unwrap(), row.instructions.unwrap())).collect()
+}
+
+#[test]
+fn released_disarm_reinstalls_points_behind_a_later_watch() {
+    assert_eq!(fetches_after_disarm_then_watch(fujimod_xm1::trace::DisarmedPoints::Release),
+        [(0x1000, 1), (0x1004, 2), (0x1008, 3), (0x1008, 3)]);
+}
+
+#[test]
+fn retained_disarm_keeps_points_ahead_of_a_later_watch() {
+    assert_eq!(fetches_after_disarm_then_watch(fujimod_xm1::trace::DisarmedPoints::Retain),
+        [(0x1000, 1), (0x1004, 2), (0x1008, 2), (0x1008, 3)]);
 }

@@ -1344,7 +1344,7 @@
 +mod tests;
 --- /dev/null
 +++ b/crates/emulator/src/board/observation/composite/tests.rs
-@@ -0,0 +1,1069 @@
+@@ -0,0 +1,1107 @@
 +use super::*;
 +use crate::board::{
 +    bus::{self, Bus},
@@ -2390,6 +2390,44 @@
 +    assert!(board.instruction_points_begin(0, vec![0x30000, 0x30004]).is_err());
 +    faults.clear();
 +    assert!(board.run_until(2, 1).is_err());
++}
++
++/// Calls `replace_addresses` from a guest instruction hook and keeps its result.
++struct ReplaceDuringRun<'a> {
++    points: &'a InstructionPoints,
++    addresses: Vec<u64>,
++    result: std::cell::RefCell<Option<Result<(), String>>>,
++}
++unsafe fn replace_during_run(_: u64, _: u32, data: *mut c_void) {
++    // SAFETY: the test removes this hook before `ReplaceDuringRun` drops.
++    let attempt = unsafe { &*data.cast::<ReplaceDuringRun>() };
++    attempt.result.replace(Some(attempt.points.replace_addresses(attempt.addresses.clone())));
++}
++
++#[test]
++fn mutable_point_replacement_is_refused_while_the_board_runs() {
++    let mut board = board();
++    // nop; nop; nop; b .
++    let code = [0xe1a00000u32, 0xe1a00000, 0xe1a00000, 0xeafffffe];
++    board.write_memory(0, 0x30000, &code.iter().flat_map(|word| word.to_le_bytes()).collect::<Vec<_>>()).unwrap();
++    let mut points = board.instruction_points_begin_mutable(0, vec![0x30004]).unwrap();
++    let attempt = ReplaceDuringRun { points: &points, addresses: vec![0x30008], result: Default::default() };
++    let data = (&attempt as *const ReplaceDuringRun).cast_mut().cast();
++    let range = HookRange::Inclusive { begin: 0x30000, end: 0x30000 };
++    // SAFETY: removed below while `attempt` is alive.
++    let hook = unsafe { board.cpu(0).unwrap().install_hook(Hook::Instruction { callback: replace_during_run, data, range }) }
++        .unwrap();
++    board.run_until(10, 1).unwrap();
++    board.cpu(0).unwrap().remove_hook(hook).unwrap();
++    assert!(attempt.result.take().expect("the guest reached the hook").is_err());
++    drop(attempt);
++    assert_eq!(points.event(), Some(0x30004));
++    assert_eq!(board.read_register(0, Register::Pc).unwrap(), 0x30004);
++    points.resume(0x30004, 0x30004);
++    board.run_until(20, 1).unwrap();
++    assert_eq!(points.event(), None);
++    assert_eq!(board.read_register(0, Register::Pc).unwrap(), 0x3000c);
++    board.instruction_points_end(0, &mut points).unwrap();
 +}
 +
 +#[test]
