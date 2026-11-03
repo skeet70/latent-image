@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "QpaEeqFVAh1GfNp2gv4La8D0ZOL+pifrFNFPqTzo+Jc=",
+        "bzlTransitiveDigest": "/6ZHp034AkU4UwgYt2hqNcLFxS7iXsnoAB9++VhUHYQ=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -512,7 +512,11 @@
                 "@@//emulation:fujimod-xm1/src/machine.rs": "//emulation:fujimod-xm1/src/machine.rs",
                 "@@//emulation:fujimod-xm1/src/main.rs": "//emulation:fujimod-xm1/src/main.rs",
                 "@@//emulation:fujimod-xm1/src/memory_view.rs": "//emulation:fujimod-xm1/src/memory_view.rs",
+                "@@//emulation:fujimod-xm1/src/modal_guard.rs": "//emulation:fujimod-xm1/src/modal_guard.rs",
+                "@@//emulation:fujimod-xm1/src/modal_lifetime.rs": "//emulation:fujimod-xm1/src/modal_lifetime.rs",
+                "@@//emulation:fujimod-xm1/src/modal_memory.rs": "//emulation:fujimod-xm1/src/modal_memory.rs",
                 "@@//emulation:fujimod-xm1/src/modal_permit.rs": "//emulation:fujimod-xm1/src/modal_permit.rs",
+                "@@//emulation:fujimod-xm1/src/modal_task.rs": "//emulation:fujimod-xm1/src/modal_task.rs",
                 "@@//emulation:fujimod-xm1/src/modal_trace.rs": "//emulation:fujimod-xm1/src/modal_trace.rs",
                 "@@//emulation:fujimod-xm1/src/nand_image.rs": "//emulation:fujimod-xm1/src/nand_image.rs",
                 "@@//emulation:fujimod-xm1/src/native_case.rs": "//emulation:fujimod-xm1/src/native_case.rs",
@@ -552,7 +556,10 @@
                 "@@//emulation:fujimod-xm1/src/ui_conversion.rs": "//emulation:fujimod-xm1/src/ui_conversion.rs",
                 "@@//emulation:fujimod-xm1/src/updater.rs": "//emulation:fujimod-xm1/src/updater.rs",
                 "@@//emulation:fujimod-xm1/src/witness.rs": "//emulation:fujimod-xm1/src/witness.rs",
+                "@@//emulation:fujimod-xm1/tests/modal_lifetime.rs": "//emulation:fujimod-xm1/tests/modal_lifetime.rs",
+                "@@//emulation:fujimod-xm1/tests/modal_lifetime_config.rs": "//emulation:fujimod-xm1/tests/modal_lifetime_config.rs",
                 "@@//emulation:fujimod-xm1/tests/modal_permit.rs": "//emulation:fujimod-xm1/tests/modal_permit.rs",
+                "@@//emulation:fujimod-xm1/tests/modal_physical_guard.rs": "//emulation:fujimod-xm1/tests/modal_physical_guard.rs",
                 "@@//emulation:fujimod-xm1/tests/modal_trace.rs": "//emulation:fujimod-xm1/tests/modal_trace.rs",
                 "@@//emulation:fujimod-xm1/tests/native_case.rs": "//emulation:fujimod-xm1/tests/native_case.rs",
                 "@@//emulation:fujimod-xm1/tests/peer_wait_sdk.rs": "//emulation:fujimod-xm1/tests/peer_wait_sdk.rs",
