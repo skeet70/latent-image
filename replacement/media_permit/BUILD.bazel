@@ -201,3 +201,33 @@ haskell_binary(
         "//host:json",
     ],
 )
+
+haskell_library(
+    name = "property-fields",
+    srcs = ["PropertyFields.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":service-inventory",
+        "//host:base",
+        "//host:containers",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "settings-manifest",
+    srcs = ["SettingsManifestMain.hs"],
+    main_file = "SettingsManifestMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":property-fields",
+        ":service-inventory",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:json",
+    ],
+)

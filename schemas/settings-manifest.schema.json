@@ -1,0 +1,821 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/skeet70/latent-image/schemas/settings-manifest.schema.json",
+  "title": "X-M1 settings and property layer source inventory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "firmware",
+    "scope",
+    "inputs",
+    "extentMethod",
+    "savedStackTaintResiduals",
+    "censusMethod",
+    "callerClosure",
+    "fieldMethod",
+    "propertyTables",
+    "propertySummary",
+    "properties",
+    "entries",
+    "objects",
+    "families"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "firmware": {
+      "const": "X-M1 1.50"
+    },
+    "scope": {
+      "type": "string"
+    },
+    "extentMethod": {
+      "type": "string"
+    },
+    "savedStackTaintResiduals": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "statement"
+        ],
+        "properties": {
+          "name": {
+            "enum": [
+              "sub-word-load",
+              "sub-word-or-unaligned-store",
+              "untracked-pointer",
+              "joined-address",
+              "unknown-first-operand-address",
+              "call-boundary"
+            ]
+          },
+          "statement": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "censusMethod": {
+      "type": "string"
+    },
+    "callerClosure": {
+      "type": "string"
+    },
+    "inputs": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "bytes",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "families": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "family",
+          "entries"
+        ],
+        "properties": {
+          "family": {
+            "$ref": "#/$defs/family"
+          },
+          "entries": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/object"
+      }
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    },
+    "fieldMethod": {
+      "type": "string"
+    },
+    "propertyTables": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "getter",
+        "setter"
+      ],
+      "properties": {
+        "getter": {
+          "$ref": "#/$defs/table"
+        },
+        "setter": {
+          "$ref": "#/$defs/table"
+        }
+      }
+    },
+    "propertySummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "properties",
+        "getterShared",
+        "setterShared",
+        "storageAgreed",
+        "named"
+      ],
+      "properties": {
+        "properties": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "getterShared": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "setterShared": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "storageAgreed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "named": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "properties": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/property"
+      }
+    }
+  },
+  "$defs": {
+    "address": {
+      "type": "string",
+      "pattern": "^0x[0-9a-f]+$"
+    },
+    "nullableAddress": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/address"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "strings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "family": {
+      "enum": [
+        "accessor",
+        "query",
+        "gate",
+        "conversion",
+        "commit",
+        "persistence",
+        "validator",
+        "recovery",
+        "helper"
+      ]
+    },
+    "callSite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "site",
+        "candidateFunction"
+      ],
+      "properties": {
+        "site": {
+          "$ref": "#/$defs/address"
+        },
+        "candidateFunction": {
+          "$ref": "#/$defs/nullableAddress"
+        }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "address",
+        "name",
+        "family",
+        "recovery",
+        "message",
+        "operation",
+        "arguments",
+        "result",
+        "codes",
+        "context",
+        "objects",
+        "callers",
+        "directCalls",
+        "branchSites",
+        "literalWords",
+        "constructedSites",
+        "extent",
+        "grounded",
+        "unknown",
+        "evidence"
+      ],
+      "properties": {
+        "address": {
+          "$ref": "#/$defs/address"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+        },
+        "family": {
+          "$ref": "#/$defs/family"
+        },
+        "recovery": {
+          "enum": [
+            "recovered",
+            "partial",
+            "unknown"
+          ]
+        },
+        "message": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/address"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operation": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "callers": {
+          "type": "string"
+        },
+        "codes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "meaning"
+            ],
+            "properties": {
+              "value": {
+                "type": "integer"
+              },
+              "meaning": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "objects": {
+          "$ref": "#/$defs/strings"
+        },
+        "directCalls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/callSite"
+          }
+        },
+        "branchSites": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/callSite"
+          }
+        },
+        "literalWords": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/address"
+          }
+        },
+        "constructedSites": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/callSite"
+          }
+        },
+        "extent": {
+          "$ref": "#/$defs/extent"
+        },
+        "grounded": {
+          "$ref": "#/$defs/strings"
+        },
+        "unknown": {
+          "$ref": "#/$defs/strings"
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidence"
+        }
+      }
+    },
+    "object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "address",
+        "bytes",
+        "layout",
+        "constructedAddressSites",
+        "grounded",
+        "unknown",
+        "evidence"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "address": {
+          "$ref": "#/$defs/address"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "layout": {
+          "type": "string"
+        },
+        "constructedAddressSites": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "site",
+              "form",
+              "address",
+              "candidateFunction"
+            ],
+            "properties": {
+              "site": {
+                "$ref": "#/$defs/address"
+              },
+              "form": {
+                "enum": [
+                  "movw-movt",
+                  "ldr-literal"
+                ]
+              },
+              "address": {
+                "$ref": "#/$defs/address"
+              },
+              "candidateFunction": {
+                "$ref": "#/$defs/nullableAddress"
+              }
+            }
+          }
+        },
+        "grounded": {
+          "$ref": "#/$defs/strings"
+        },
+        "unknown": {
+          "$ref": "#/$defs/strings"
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidence"
+        }
+      }
+    },
+    "extent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "start",
+            "end",
+            "codeEnvelopeBytes",
+            "windowEnd",
+            "returnPremises",
+            "scope"
+          ],
+          "properties": {
+            "status": {
+              "const": "derived"
+            },
+            "start": {
+              "$ref": "#/$defs/address"
+            },
+            "end": {
+              "$ref": "#/$defs/address"
+            },
+            "codeEnvelopeBytes": {
+              "type": "integer",
+              "minimum": 4
+            },
+            "windowEnd": {
+              "$ref": "#/$defs/address"
+            },
+            "returnPremises": {
+              "$ref": "#/$defs/strings"
+            },
+            "scope": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "start",
+            "windowEnd",
+            "refusal",
+            "scope"
+          ],
+          "properties": {
+            "status": {
+              "const": "unknown"
+            },
+            "start": {
+              "$ref": "#/$defs/address"
+            },
+            "windowEnd": {
+              "$ref": "#/$defs/address"
+            },
+            "refusal": {
+              "type": "string"
+            },
+            "scope": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "table": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "function",
+        "dispatch",
+        "default",
+        "entries"
+      ],
+      "properties": {
+        "function": {
+          "$ref": "#/$defs/address"
+        },
+        "dispatch": {
+          "$ref": "#/$defs/address"
+        },
+        "default": {
+          "$ref": "#/$defs/address"
+        },
+        "entries": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "indexArgument",
+        "indexStride",
+        "offset",
+        "bytes"
+      ],
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/address"
+        },
+        "indexArgument": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "indexStride": {
+          "$ref": "#/$defs/nullableAddress"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "bytes": {
+          "enum": [
+            1,
+            2,
+            4,
+            8
+          ]
+        }
+      }
+    },
+    "bitRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lsb",
+        "bits",
+        "signed"
+      ],
+      "properties": {
+        "lsb": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bits": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "signed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "value": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "location",
+            "extract"
+          ],
+          "properties": {
+            "kind": {
+              "const": "field"
+            },
+            "location": {
+              "$ref": "#/$defs/location"
+            },
+            "extract": {
+              "$ref": "#/$defs/bitRange"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "constant"
+            },
+            "value": {
+              "$ref": "#/$defs/address"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "argument"
+          ],
+          "properties": {
+            "kind": {
+              "const": "argument"
+            },
+            "argument": {
+              "type": "integer"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "other"
+            }
+          }
+        }
+      ]
+    },
+    "property": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "property",
+        "name",
+        "getterArm",
+        "setterArm",
+        "getterShared",
+        "setterShared",
+        "getter",
+        "setter",
+        "storage"
+      ],
+      "properties": {
+        "property": {
+          "$ref": "#/$defs/address"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "source",
+                "confidence"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "confidence": {
+                  "enum": [
+                    "byte-read",
+                    "label",
+                    "inference"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "getterArm": {
+          "$ref": "#/$defs/address"
+        },
+        "setterArm": {
+          "$ref": "#/$defs/address"
+        },
+        "getter": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "returns",
+            "calls",
+            "complete"
+          ],
+          "properties": {
+            "returns": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/value"
+              }
+            },
+            "calls": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/address"
+              }
+            },
+            "complete": {
+              "type": "boolean"
+            }
+          }
+        },
+        "setter": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stores",
+            "calls",
+            "complete"
+          ],
+          "properties": {
+            "stores": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "location",
+                  "extract",
+                  "source"
+                ],
+                "properties": {
+                  "location": {
+                    "$ref": "#/$defs/location"
+                  },
+                  "extract": {
+                    "$ref": "#/$defs/bitRange"
+                  },
+                  "source": {
+                    "$ref": "#/$defs/value"
+                  }
+                }
+              }
+            },
+            "calls": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/address"
+              }
+            },
+            "complete": {
+              "type": "boolean"
+            }
+          }
+        },
+        "storage": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "location",
+                "extract"
+              ],
+              "properties": {
+                "location": {
+                  "$ref": "#/$defs/location"
+                },
+                "extract": {
+                  "$ref": "#/$defs/bitRange"
+                }
+              }
+            }
+          ]
+        },
+        "getterShared": {
+          "type": "boolean"
+        },
+        "setterShared": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

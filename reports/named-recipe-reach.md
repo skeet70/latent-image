@@ -11,12 +11,12 @@ Markdown paragraphs are one line each.
 
 The C position's record is [the custom-settings map](custom-settings.md) as recorded in E-CUSTOM-SETTING-MAP-150: logical log area 3, record size `0x34`, count `0xfe`, opened by `0x006a8abc` through `0x006ac328(3, 0x34, 0xfe, 0, ...)`, with layout log sequence halfword at `+0x00`, two compared bytes at `+0x02`, the `0x28`-byte payload at `+0x04`, word parity at `+0x2c` and bit-plane parity at `+0x30` over the parity span `[0x00, 0x2c)` (inherited, E-CUSTOM-SETTING-MAP-150).
 The area's two banks hold 127 records each (descriptors `0x007c8d38` = `{1, 0x3d8, 3}` and `0x007c8d44` = `{1, 0x3d9, 3}`), and the read path takes the newest record by sequence: `0x006a8abc` reads through `0x006a865c` into the live copy `0x0089f838`, copies the payload to the settings image at `0x409c295c` (mirror offset `0x140`) and mirrors the whole `0x34` bytes to `0x0089f874` (inherited, byte-read sites in E-CUSTOM-SETTING-MAP-150).
-The record is therefore a log of one logical setting, not a slot table: the 254 record positions are append history, and nothing in the image selects an older record.
+The record is therefore a log of one logical setting, not a slot table: the 254 record positions are append history. The reader takes the newest record and falls back to older records in the same bank only when a newer one fails validation ([the settings manifest](settings-service-manifest-draft.md#area-3-records-validation-and-recovery), E-SETTINGS-SERVICE-MANIFEST-150).
 
 ### 1.2 How many slots
 
 The property layer's addressing admits three slot records per bank image: `0x0096cc64 + 0x1c2*bank + 0x140 + 0x28*slot`, whose `+0x140` is payload byte 0 (inherited, E-CUSTOM-SETTING-MAP-150 section 3), and property `0x16d`'s conversion table at `0x0077532c` has three rows with stored codes `0`, `1`, `2` (byte-read: rows `{00000000}`, `{00000001}`, `{00000002}`, each with col2 `0x7ffffffe`, then a terminator row), which is the same three.
-The bank image is `0x1c2` bytes, so three `0x28` records at `0x140`, `0x168` and `0x190` fit before its end at `0x1b8` (arithmetic over the inherited bank layout).
+The bank image is `0x1c2` bytes, but only slot 0 has a record: slot selector 1 reads the ordinary block, and a selector-2 record at `0x190` would overlap the RAM tail at `0x19a` that boot fills from `0x0081b074` ([the settings manifest](settings-service-manifest-draft.md#live-settings-record-and-property-storage), E-SETTINGS-SERVICE-MANIFEST-150).
 
 Shipped behaviour uses one of the three.
 The save action `FUN_00d4e2a0` converts the source and destination rows through property `0x16d`, returns unless the destination code is 0 (`0xd4e2e4 cmp r4, #0`, `0xd4e2e8 popne`, inherited), and its only store is `FUN_0072b3d0({&0x0096cda4 + 0*0x28, 0x28, 0x140})`, the mirror slot 0 (inherited).
