@@ -34,7 +34,7 @@ For the RAM push the mechanical payload check is the bank ELF allowlist check `/
 
 - Camera code exposes only closed operations with internally built bytes. It has no raw command path, never retries, and stops on any unexpected reply, status or disconnect.
 - Do not write guessed values into configuration offsets, GPIOs, regulator registers, lens command mailboxes or boot controls.
-- Never restore another camera's dump onto this body. Keep this body's calibration backup in two verified locations; it exists for the 1.00 adjustment area (E-S03-DURABLE-PRESERVATION) and the 1.50 adjustment area (E-ADJ-BACKUP-DURABLE-150).
+- Never restore another camera's dump onto this body. Keep this body's calibration backup in two verified locations; it exists for the 1.00 adjustment area (E-S03-DURABLE-PRESERVATION) and the 1.50 adjustment area (E-ADJ-BACKUP-GAP-READ-150).
 - Do not deliberately corrupt the owner's only camera to prove recovery.
 - After unexpected camera behavior, stop camera runs and describe it to the owner. Host work continues.
 

@@ -53,7 +53,7 @@ An aligned-word census over the pinned images finds each of the eight array addr
 ```
 
 Each record is 16 bytes, one id in word 0, parallel to the installed values rows `{0,3,1,7,0xc,5,6}` (byte-read stock format at `0x00789e2c`).
-**Byte-read:** the Q id space ends at `n = 0x8c5` and holds no PRO Neg record, so rows 5-6 carry plain string ids. Both the grid's pixel-coordinate drawer `0x01112380` and the cell-coordinate drawer `0x011121d4` accept Q vector ids (`0xff000000|n`) and plain string ids (`<= 0x83d`). The `0x49a`/`0x496` strings are the existing `<f202>`/`<f201>` shooting-list icons (E-FILMSIM-SURFACE-COST-150). Section 7.1 binds the grid consumer and its string metrics; visual acceptance of the chosen `w=120` variants remains open.
+**Byte-read:** the Q id space ends at `n = 0x8c5` and holds no PRO Neg record, so rows 5-6 carry plain string ids. Both the grid's pixel-coordinate drawer `0x01112380` and the cell-coordinate drawer `0x011121d4` accept Q vector ids (`0xff000000|n`) and plain string ids (`<= 0x83d`). The `0x49a`/`0x496` strings are the existing `<f202>`/`<f201>` shooting-list icons (E-FILMSIM-Q-SURFACE-150). Section 7.1 binds the grid consumer and its string metrics; visual acceptance of the chosen `w=120` variants remains open.
 
 ### 2.2 New bracket labels at `0x0061c2c0` (orders 33-64)
 
@@ -106,7 +106,7 @@ The Q cell's values pointer moves from its own five-row array to the installed s
 
 ## 3. Placement, geometry and the running byte budget
 
-**Byte-read:** the free window is `[0x0061c1fc, 0x0061c400)`, 516 bytes. The table-block tail holds the last plain-extent terminator `0xffffffff` at `0x0061c1f8` and reads `0` at `0x0061c1fc` (payload-complement.bin at media `0x140228`), so retained content ends at `0x0061c1fb` and the floor claim of E-RECIPE-PREFIX-TAIL-150 is reproduced from bytes.
+**Byte-read:** the free window is `[0x0061c1fc, 0x0061c400)`, 516 bytes. The table-block tail holds the last plain-extent terminator `0xffffffff` at `0x0061c1f8` and reads `0` at `0x0061c1fc` (payload-complement.bin at media `0x140228`), so retained content ends at `0x0061c1fb` and the floor claim of E-FILMSIM-PREFIX-WIDENING-150 is reproduced from bytes.
 
 | Placement | Range | Bytes | Used | Free after |
 | --- | --- | --- | --- | --- |
@@ -207,12 +207,12 @@ Byte-reading the emitted DAT gives segment entry 4 `{4, 0x0061c240, 0x002829e8, 
 
 ## 7. Residuals
 
-**Source-inspected, with static-inference:** the three independent source questions are answered in sections 7.1-7.3 (E-FILMSIM-SELECTOR-CONSUMERS-150). This establishes rendering dispatch, bracket label-field consumers and RAW processing-family selection, not a visually accepted or installed patch.
+**Source-inspected, with static-inference:** the three independent source questions are answered in sections 7.1-7.3 (E-FILMSIM-Q-SURFACE-150). This establishes rendering dispatch, bracket label-field consumers and RAW processing-family selection, not a visually accepted or installed patch.
 **Unproved visual acceptance:** the selected Q strings must be seen in the complete cell, selected and unselected, without overlap or clipping. The source passes each string's own declared dimensions to the renderer; accepting a string id does not prove that `w=120`, `w=440` or the bracket variant looks right.
 **Static-inference:** the apply wrappers and the query's cell arithmetic are byte-read, but the mode argument's provenance chain (`0x639c14` -> `0x6439ac` -> `0x6438ec` -> `0x6434f8`, mode from `FUN_0063b4c8`) is not executed on a patched image, and whether any other path consults these matrices with a different mode class is unproved; the stock rows' own shape is the support for columns 4-7 being the classes that matter. The revision-1 claim that properties `0x100`-`0x102` have no availability descriptor is withdrawn: they are entries 98-100 of the list at `0x0079944c`.
 **Rebuild status:** the revision-2 chain is built and its applier, encoder, round-trip, header and container numbers are measured (section 6.1); what stays absent is any camera-side look at a patched image.
 **Inherited:** the runtime-writer absence for the prefix (filmsim-patch-01 section 5.3) and the Q-cell direct-path variant of FUN_00bf93e0 (E-FILMSIM-Q-SURFACE-150 limits).
-**Static-inference:** an image carrying this patch set and the D3 recipe prefix does not fit the tail; the window forces one combined decision (E-FILMSIM-SURFACE-COST-150).
+**Static-inference:** an image carrying this patch set and the D3 recipe prefix does not fit the tail; the window forces one combined decision (E-FILMSIM-PATCH-02-150).
 
 ### 7.1 Q grid: actual consumer and string dispatch
 
@@ -244,7 +244,7 @@ Byte-reading the emitted DAT gives segment entry 4 `{4, 0x0061c240, 0x002829e8, 
 
 All commands read host files only.
 
-The finite source cut for E-FILMSIM-SELECTOR-CONSUMERS-150 used the existing `af/words` executable without rebuilding it and LLVM 21.1.8 for disassembly. Input identities, source-function references, real-word stdout and A32 cuts are retained privately under `private-data/analysis/film-selector-proof/`; `source-proof.txt` records the command parameters and limitations. No build, compiler, emulator or camera was run for this cut.
+The finite source cut for E-FILMSIM-Q-SURFACE-150 used the existing `af/words` executable without rebuilding it and LLVM 21.1.8 for disassembly. Input identities, source-function references, real-word stdout and A32 cuts are retained privately under `private-data/analysis/film-selector-proof/`; `source-proof.txt` records the command parameters and limitations. No build, compiler, emulator or camera was run for this cut.
 
 ```sh
 # Q node, its arrays, the three bracket nodes and their arrays
