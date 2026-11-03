@@ -146,6 +146,41 @@
           4
         ],
         [
+          "cell-75-0-0",
+          "00cd1ae4",
+          4
+        ],
+        [
+          "cell-75-0-2",
+          "00cd1c54",
+          4
+        ],
+        [
+          "cell-75-0-4",
+          "00cd1dc4",
+          4
+        ],
+        [
+          "cell-75-0-6",
+          "00cd1f34",
+          4
+        ],
+        [
+          "cell-75-0-8",
+          "00cd20a4",
+          4
+        ],
+        [
+          "cell-75-0-13",
+          "00cd243c",
+          4
+        ],
+        [
+          "cell-75-0-49",
+          "00cd3e1c",
+          4
+        ],
+        [
           "resident",
           "runtime:rb_resident",
           1024
@@ -160,6 +195,10 @@
     {
       "phase": "picker-route",
       "capture": "picker-parent",
+      "key_pulse": {
+        "hold_instructions": 8000000,
+        "release_instructions": 8000000
+      },
       "steps": [
         [
           "ok",
@@ -229,6 +268,41 @@
           4
         ],
         [
+          "cell-75-0-0",
+          "00cd1ae4",
+          4
+        ],
+        [
+          "cell-75-0-2",
+          "00cd1c54",
+          4
+        ],
+        [
+          "cell-75-0-4",
+          "00cd1dc4",
+          4
+        ],
+        [
+          "cell-75-0-6",
+          "00cd1f34",
+          4
+        ],
+        [
+          "cell-75-0-8",
+          "00cd20a4",
+          4
+        ],
+        [
+          "cell-75-0-13",
+          "00cd243c",
+          4
+        ],
+        [
+          "cell-75-0-49",
+          "00cd3e1c",
+          4
+        ],
+        [
           "resident",
           "runtime:rb_resident",
           1024
@@ -250,6 +324,10 @@
     {
       "phase": "owned-picker-keys",
       "capture": "owned-picker-keys",
+      "key_pulse": {
+        "hold_instructions": 8000000,
+        "release_instructions": 8000000
+      },
       "steps": [
         [
           "ok",
@@ -343,6 +421,41 @@
           4
         ],
         [
+          "cell-75-0-0",
+          "00cd1ae4",
+          4
+        ],
+        [
+          "cell-75-0-2",
+          "00cd1c54",
+          4
+        ],
+        [
+          "cell-75-0-4",
+          "00cd1dc4",
+          4
+        ],
+        [
+          "cell-75-0-6",
+          "00cd1f34",
+          4
+        ],
+        [
+          "cell-75-0-8",
+          "00cd20a4",
+          4
+        ],
+        [
+          "cell-75-0-13",
+          "00cd243c",
+          4
+        ],
+        [
+          "cell-75-0-49",
+          "00cd3e1c",
+          4
+        ],
+        [
           "resident",
           "runtime:rb_resident",
           1024
@@ -366,6 +479,10 @@
     {
       "phase": "unloaded-picker",
       "capture": "unloaded-picker",
+      "key_pulse": {
+        "hold_instructions": 8000000,
+        "release_instructions": 8000000
+      },
       "steps": [
         [
           "ok",
@@ -414,6 +531,41 @@
         [
           "picker-mode-954500",
           "00954500",
+          4
+        ],
+        [
+          "cell-75-0-0",
+          "00cd1ae4",
+          4
+        ],
+        [
+          "cell-75-0-2",
+          "00cd1c54",
+          4
+        ],
+        [
+          "cell-75-0-4",
+          "00cd1dc4",
+          4
+        ],
+        [
+          "cell-75-0-6",
+          "00cd1f34",
+          4
+        ],
+        [
+          "cell-75-0-8",
+          "00cd20a4",
+          4
+        ],
+        [
+          "cell-75-0-13",
+          "00cd243c",
+          4
+        ],
+        [
+          "cell-75-0-49",
+          "00cd3e1c",
           4
         ],
         [

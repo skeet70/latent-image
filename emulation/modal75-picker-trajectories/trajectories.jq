@@ -1,4 +1,4 @@
-def reads: [["dispatcher-first-word", "00bfb028", 4], ["modal75-state", "0146761e", 2], ["modal75-event", "0146777a", 2], ["open-node", "009571d0", 4], ["picker-mode-9544f8", "009544f8", 4], ["picker-modes-950474", "00950474", 8], ["picker-mode-954500", "00954500", 4], ["resident", "runtime:rb_resident", 1024], ["live-settings", "0096cc64", 450]];
+def reads: [["dispatcher-first-word", "00bfb028", 4], ["modal75-state", "0146761e", 2], ["modal75-event", "0146777a", 2], ["open-node", "009571d0", 4], ["picker-mode-9544f8", "009544f8", 4], ["picker-modes-950474", "00950474", 8], ["picker-mode-954500", "00954500", 4], ["cell-75-0-0", "00cd1ae4", 4], ["cell-75-0-2", "00cd1c54", 4], ["cell-75-0-4", "00cd1dc4", 4], ["cell-75-0-6", "00cd1f34", 4], ["cell-75-0-8", "00cd20a4", 4], ["cell-75-0-13", "00cd243c", 4], ["cell-75-0-49", "00cd3e1c", 4], ["resident", "runtime:rb_resident", 1024], ["live-settings", "0096cc64", 450]];
 def keep_resident: [{"read": "resident", "phase": "package-menu-prefix", "source_read": "resident"}];
 def steps($list): [$list[] | [.[0]] + .[1]];
 def trace_sites: [
@@ -23,7 +23,8 @@ def trace_sites: [
   ["00c7af6c", "retired-c7af6c"],
   ["00c7afc8", "retired-c7afc8"]
 ];
-def segment($phase; $capture; $list): {"phase": $phase, "capture": $capture, "steps": steps($list), "reads": reads, "read_preservations": keep_resident};
+# The pilot's pulse; the default 3M directional hold went unconsumed in stock-role routes.
+def segment($phase; $capture; $list): {"phase": $phase, "capture": $capture, "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000}, "steps": steps($list), "reads": reads, "read_preservations": keep_resident};
 # The installed package appends two rows to the shooting root (menu/recipe_bank_ui.h), rows 33 and 34,
 # so UP from row 2 wraps to row 34, where crawl-5's uninstalled route wraps to row 32.
 def package_route($route): if $route[1] == ["up", [1, 5, 32]] then [$route[0], ["up", [1, 5, 34]], ["up", [1, 5, 33]]] + $route[1:] else $route end;
