@@ -1,12 +1,12 @@
 module Emulation.RootTaskPlan
   ( RootPlan(..), PlanError(..), derivePlan, rootLow, rootHigh, stackLow, stackHigh
   , taskLayout, callbackResources, sourceBodies, sourceWord, declaredBoundary, physical, conditionHolds
-  , SyncRecords(..), SyncCallback(..)
+  , SyncRecords(..), SyncCallback(..), irqNest, irqStack, irqAtcm, irqCallbackDepth, loaderDispatchReturn
   ) where
 
 import qualified A32 as A
 import Control.Monad (unless)
-import Data.Bits ((.&.), (.|.), shiftL, testBit)
+import Data.Bits ((.&.), (.|.), shiftL, shiftR, testBit)
 import qualified Data.ByteString as B
 import Data.List (find, sortOn)
 import qualified Data.Map.Strict as M
@@ -27,7 +27,8 @@ import StockInventory (GuestAddress(..), CodeFootprint(..), FootprintError, deri
 
 data PlanError = SourceWordRejected | PublicationTableRejected | CallbackPublicationRejected GuestAddress
   | ServiceGraphLimitExceeded | ServiceSourceMissing GuestAddress
-  | ServiceFootprintRejected GuestAddress FootprintError | UnresolvedServiceTransfer GuestAddress A.Instruction | SiteRejected deriving (Eq, Show)
+  | ServiceFootprintRejected GuestAddress FootprintError | UnresolvedServiceTransfer GuestAddress A.Instruction | SiteRejected
+  | IrqCallbackSourceRejected GuestAddress deriving (Eq, Show)
 data SyncCallback = SyncCallback { callbackCell :: W.Address, callbackTarget :: W.Address } deriving (Eq, Show)
 data SyncRecords = SyncRecords
   { syncCore :: T.KernelCore, syncBase :: W.Address, syncCallbacks :: [SyncCallback] } deriving (Eq, Show)
@@ -55,7 +56,46 @@ taskLayout T.PrimaryKernel = (0x4005beac+40*103,0x4005ff0c+56*103,0x40054760,0x4
 taskLayout T.SecondaryKernel = (0x400ebe6c+40*102,0x400efecc+56*102,0x400e4720,0x400e4728,0xa10200,0xa10600,T.TaskId 103)
 callbackResources :: [(Word32,Int)]
 callbackResources = [(0x96ca4c,4),(0x828094,4),(0x8e1f28,4),(0x9c3500,0x404),(0x89ea8c,12)
-  ,(0x5d178+12*103,12),(0x624b4+16*103,16)]
+  ,(0x5d178+12*103,12),(0x624b4+16*103,16),(irqNest,4)]
+-- | Loader A IRQ nesting counter, loaded at 0x40234 through literal 0x40418; nonzero is interrupt context.
+irqNest :: Word32
+irqNest = 0x545a4
+-- | Core0 ATCM window of 'irqAtcm'; its top is the first-level IRQ stack that 0x40250 loads from 0x40370.
+irqStack :: (Word32,Word32)
+irqStack = (0x70000000,0x70002000)
+irqAtcm :: Word32
+irqAtcm = 0x70000011
+-- | Callback frame plus the 32-byte private frame of its 0x725b74 call.
+irqCallbackDepth :: Word32
+irqCallbackDepth = 8+32
+-- | Return address that dispatcher 0x72337c saves when loader A 0x4bf08 calls it.
+loaderDispatchReturn :: Word32
+loaderDispatchReturn = 0x4bf0c
+-- | Loader A IRQ entry, handler call and exit with their literals, the loader A timer dispatch at 0x4bf08,
+-- dispatcher 0x72337c, the 0x725424 table stores and the callback's frame instructions.
+irqCallbackSource :: [(Word32,[Word32])]
+irqCallbackSource =
+  [(0x40204,[0xe3a0d0d3,0xe129f00d,0xe92dd00f,0xe3a000d2,0xe129f000,0xe24e0004,0xe14f1000,0xe2012040,0xe3822093,0xe129f002
+    ,0xe58d0018,0xe92d0002,0xe59f21dc,0xe5923000,0xe2830001,0xe5820000,0xe3530000,0x1b000002,0xe1a0200d,0xe59fd118,0xe92d0004])
+  ,(0x402c0,[0xe59f0158,0xe12fff30,0xe10f2000,0xe3c22080,0xe129f002,0xe3500000,0x11a0e00f,0x11a0f000,0xe10f2000,0xe2022040
+    ,0xe3822093,0xe129f002,0xe59f212c,0xe12fff32,0xe59f2118,0xe5921000,0xe2411001,0xe3510000,0x059f010c,0x0b00093a
+    ,0xe59f2100,0xe5921000,0xe2413001,0xe5823000,0xe3530000,0x1a000008,0xe8bd0001,0xe1a0d000,0xe59f10f0,0xe5910000
+    ,0xe3500000,0x0a000002,0xe3a00000,0xe5810000,0xea000d03,0xe8bd0002,0xe10f2000,0xe2022040,0xe3c11040,0xe1811002
+    ,0xe169f001,0xe8fdd00f])
+  ,(0x40370,[snd irqStack]),(0x40418,[0x40000000 .|. irqNest]),(0x40420,[0x00040d50,0x00040d60,0x400546d8])
+  ,(0x4bf00,[0xe5923008,0xe5920004,0xe12fff33])
+  ,(0x72337c,[0xe92d4800,0xe28db004,0xe3033500,0xe344309c,0xe7933100,0xe12fff33,0xe8bd8800])
+  ,(0x725464,[0xe3580000,0x0303337c,0x03403072]),(0x725540,[0xe3a02001,0xe5892304])
+  ,(0x7255b8,[0xe3033500,0xe344309c,0xe7837104,0xe5932000,0xe0831104,0xe5812100,0xe581a200]),(0x7255f4,[0xe5862000])
+  ,(0x69cc18,[0xe92d4800]),(0x69cc68,[0xe8bd8800])]
+checkIrqCallbackSource :: [(Word32,B.ByteString)] -> Either PlanError ()
+checkIrqCallbackSource sources = do
+  let size = 512 `shiftL` fromIntegral ((irqAtcm `shiftR` 2) .&. 31) :: Word32
+  unless (irqAtcm .&. 1 == 1 && (irqAtcm .&. 0xfffff000,(irqAtcm .&. 0xfffff000)+size) == irqStack)
+    (Left (IrqCallbackSourceRejected (GuestAddress (snd irqStack))))
+  mapM_ (\(base,expected) -> mapM_ (\(location,word') -> do
+    actual <- sourceWord sources location
+    unless (actual == word') (Left (IrqCallbackSourceRejected (GuestAddress location)))) (zip [base,base+4..] expected)) irqCallbackSource
 irqSites :: [(Word32,Boundary)]
 irqSites = [(0x40204,IrqEntry),(0xd0204,IrqEntry),(0x40234,IrqFrame),(0xd0234,IrqFrame)
   ,(0x40364,IrqReturn),(0xd0364,IrqReturn),(0x437d8,IrqReturn),(0xd37d8,IrqReturn)]
@@ -181,6 +221,7 @@ derivePlan files proof runtime = do
   (primary,secondary) <- publishedTables files
   let sources = sourceBodies files (sourceImage files)
   records <- sourceSyncRecords sources
+  checkIrqCallbackSource sources
   publications <- sourcePublishedEntries files sources records
   canonicalCalls <- fmap concat $ mapM (\pc -> do
     raw <- sourceWord sources pc

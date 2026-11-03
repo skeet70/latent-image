@@ -12,9 +12,11 @@ import qualified Replacement.KernelInstall.Wire as W
 
 data Boundary = Start | RootEntry | RootInstruction | ServiceEntry | ServiceReturn | TaskSubmit | PeriodicCallback
   | IrqEntry | IrqFrame | IrqReturn | PostCleanup deriving (Eq, Ord, Show)
+-- | Core0 ATCM bytes from 8 below the sample SP to the IRQ stack top.
+data InterruptStack = InterruptStack {interruptLow :: W.Address, interruptBytes :: W.Bytes} deriving (Eq, Show)
 data Sample = Sample
   { sampleHit :: Int, sampleBoundary :: Boundary, sampleContext :: Context, sampleCodeWord :: W.WordValue
-  , sampleCursor :: Int, sampleViews :: [View] } deriving (Eq, Show)
+  , sampleCursor :: Int, sampleViews :: [View], sampleInterruptStack :: Maybe InterruptStack } deriving (Eq, Show)
 data Hit = Hit {hitBoundary :: Boundary, hitCore :: S.KernelCore, hitState :: W.Context, hitCount :: W.Count} deriving (Eq, Show)
 data Receipt = Receipt
   { receiptSchema :: Int, receiptRole :: Role, receiptOutcome :: S.Outcome, receiptError :: Maybe String, receiptMachineFailure :: Maybe String
@@ -33,7 +35,9 @@ instance FromJSON Sample where
   parseJSON = withObject "root sample" $ \o -> do
     hit <- o .: "hit"; cursor <- o .: "watch_cursor"
     unless (hit >= 0 && hit < 16384 && cursor >= 0 && cursor <= 1048576) (fail "root sample exceeds bound")
-    Sample hit <$> o .: "boundary" <*> o .: "context" <*> o .: "code_word" <*> pure cursor <*> o .: "views"
+    Sample hit <$> o .: "boundary" <*> o .: "context" <*> o .: "code_word" <*> pure cursor <*> o .: "views" <*> o .:? "interrupt_stack"
+instance FromJSON InterruptStack where
+  parseJSON = withObject "root interrupt stack" $ \o -> InterruptStack <$> o .: "low" <*> o .: "bytes"
 instance FromJSON Hit where
   parseJSON = withObject "root hit" $ \o -> do
     boundary <- o .: "site"; pc <- o .: "address" >>= S.hexWord; core <- o .: "core" :: Parser Int

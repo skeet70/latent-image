@@ -32,6 +32,7 @@ data Control = WrongSource | WrongArtifact | WrongCandidate | WrongContract | Du
   | WrongResourceArgument | MissingResourceCall | WrongResourceIdentity | WrongCheckedStatus | MissingSubmission | WrongDescriptorAddress
   | WrongFlagIdentity | WrongFlagTarget | WrongFlagResult | WrongConstructorTarget | WrongConstructorResult | WrongWrapperRegister | WrongCleanupSelector | WrongCleanupMask
   | WrongCallbackArgument | WrongCallbackResult | WrongCallbackFrame | WrongCallbackRestoration | MissingPostCleanupCallback
+  | MaskedCallbackInterrupt | WrongCallbackDispatcherFrame | MissingCallbackInterruptStack
   | WrongIrqStatus | WrongIrqFrame | WrongIrqReturn | WrongIrqRestoration deriving (Eq, Show, Enum, Bounded)
 data ControlError = BaselineRejected WitnessError | MutationRejected Control | WrongRefusal Control WitnessError (Maybe WitnessError)
   | ProducerSummaryChangedQualification deriving (Eq, Show)
@@ -88,6 +89,7 @@ expected control = case control of
   WrongWrapperRegister -> SubmissionRejected; WrongCleanupSelector -> CleanupRejected; WrongCleanupMask -> ContextRejected
   WrongCallbackArgument -> CallbackRejected; WrongCallbackResult -> CallbackRejected; WrongCallbackFrame -> FrameRejected
   WrongCallbackRestoration -> ReturnRejected; MissingPostCleanupCallback -> CompletionRejected
+  MaskedCallbackInterrupt -> IrqRejected; WrongCallbackDispatcherFrame -> FrameRejected; MissingCallbackInterruptStack -> FrameRejected
   WrongIrqStatus -> IrqRejected; WrongIrqFrame -> FrameRejected; WrongIrqReturn -> ReturnRejected; WrongIrqRestoration -> ReturnRejected
 withHash :: Control -> ObservedFiles -> J.Value -> J.Value -> Either ControlError ObservedFiles
 withHash control original receipt watch = do
@@ -301,6 +303,15 @@ refusalControls role sources original = do
           let excluded = IntSet.fromList [index | (index,sample) <- zip [0..] samples,rootTerminated sample && pc sample == 0x69cc18]
           unless (not (IntSet.null excluded)) (Left (MutationRejected control))
           dropSamples control excluded receiptValue >>= plain
+        MaskedCallbackInterrupt -> alterContext (callback 0x69cc18) "cpsr" (.|. 0x80)
+        WrongCallbackDispatcherFrame -> do
+          entered <- callback 0x69cc18
+          let path = [field "samples",Element entered,field "interrupt_stack",field "bytes",Element 12]
+          old <- pathAt control path receiptValue >>= parse control :: Either ControlError Word32
+          set control path (old `xor` 1) receiptValue >>= plain
+        MissingCallbackInterruptStack -> do
+          entered <- callback 0x69cc18
+          set control [field "samples",Element entered,field "interrupt_stack"] J.Null receiptValue >>= plain
         WrongIrqStatus -> alterContext irq "spsr" (\value -> value .&. 0xffffffe0 .|. 0x12)
         WrongIrqFrame -> alterContext (irqAfter IrqFrame) "sp" (+4)
         WrongIrqReturn -> alterContext (irqAfter IrqReturn) "spsr" (`xor` 0x20000000)
