@@ -16,21 +16,23 @@ VARIANTS = {
 }
 
 # The experiment link has no --gc-sections, so only sections reachable from the hook handler and
-# the exported records are kept here.
+# the exported records are kept here. NAME.sources.sha256 lists the digests of the sources the
+# object was built from; the experiment builder copies them into the manifest.
 [genrule(
     name = name,
-    srcs = NIX_INPUTS,
-    outs = [name + ".o"],
+    srcs = NIX_INPUTS + ["BUILD.bazel"],
+    outs = [name + ".o", name + ".sources.sha256"],
     cmd = """
 set -eu
 output=$$(nix-build --no-out-link --max-jobs 1 --cores 2 --arg features "{features}" $(location embassy-platform.nix))
 $(location @lab_lld//:bin/ld.lld) -m armelf -r --gc-sections \
   -u embassy_on_dispatch -u EMBASSY_DEMO -u EMBASSY_STACKS \
-  "$$output/lib/libxm1_embassy_platform.a" -o $@
-""".format(features = features),
+  "$$output/lib/libxm1_embassy_platform.a" -o $(location {name}.o)
+$(location @lab_coreutils//:bin/sha256sum) $(SRCS) > $(location {name}.sources.sha256)
+""".format(features = features, name = name),
     local = True,
     tags = ["manual"],
-    tools = ["@lab_lld//:bin/ld.lld"],
+    tools = ["@lab_lld//:bin/ld.lld", "@lab_coreutils//:bin/sha256sum"],
 ) for name, features in VARIANTS.items()]
 
 genrule(

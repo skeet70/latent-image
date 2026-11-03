@@ -12,8 +12,9 @@ const TICK_CELL: usize = 0x400c_0800;
 const TIMER_COUNTER: usize = 0xfff9_1000;
 /// Stock loader routine `(address, bytes)` that cleans and invalidates D-cache lines on the calling core.
 const CLEAN_DCACHE: usize = 0x0004_2634;
-/// Image-4 critical pair that task creation 0x725dd8 holds around `+0x80`/`+0x0`: enter masks IRQ
-/// through `+0x164` and takes the cross-core lock through `+0x161c`, returning the prior mask.
+/// Image-4 critical pair that task creation 0x725dd8 holds around `+0x80`/`+0x0`. Enter masks IRQ
+/// through `+0x164`, reads the cross-core lock through `+0x1624` and, unless this core already
+/// holds it, retries `+0x161c` until it takes it; it returns the prior mask.
 const CRITICAL_ENTER: usize = 0x0072_35d8;
 const CRITICAL_LEAVE: usize = 0x0072_36b0;
 
@@ -112,7 +113,8 @@ pub struct CreatePacket {
     pub stack_base: u32,
 }
 
-/// Root `+0x80` of the owning domain, with the wrapper's `{0, 0}` packet.
+/// Root `+0x80` of the owning domain with packet `{0, 0}`; wrapper 0x725dd8 passes `{0, 0}` when
+/// descriptor word +0x18 is 0xa5f0a5f0 and `{4, 0}` otherwise.
 pub fn register_auxiliary(domain: Domain, id: TaskId) -> SlotStatus {
     let packet = [0u32; 2];
     SlotStatus::from_raw(call2(root(domain), offset::REGISTER_AUXILIARY, EncodedId::new(domain, id).raw(), packet.as_ptr() as u32))

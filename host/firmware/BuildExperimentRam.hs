@@ -226,7 +226,16 @@ build base linked out experiment images hooks = do
   objectIdentities <- forM linkedObjects $ \name -> do
     digest <- H.sha256 =<< B.readFile (linked </> name)
     pure (name, H.s digest)
-  let identities = sourceIdentities ++ objectIdentities
+  prelinkedSources <- doesFileExist (linked </> "experiment-prelinked.sources.sha256")
+  H.ensure (prelinkedSources == ("experiment-prelinked.o" `elem` linkedObjects))
+    "a prelinked object needs experiment-prelinked.sources.sha256, and the listing needs a prelinked object"
+  sourceDigests <- if not prelinkedSources then pure [] else do
+    listing <- B.readFile (linked </> "experiment-prelinked.sources.sha256")
+    H.ensure (not (null (C.lines listing))) "experiment-prelinked.sources.sha256 is empty"
+    forM (C.lines listing) $ \line -> case C.words line of
+      [digest, path] | B.length digest == 64 && C.all isHexDigit digest -> pure ("prelinked-source:" ++ C.unpack path, H.s (C.unpack digest))
+      _ -> H.failH ("experiment-prelinked.sources.sha256 line is not sha256sum output: " ++ C.unpack line)
+  let identities = sourceIdentities ++ objectIdentities ++ sourceDigests
   let entries = H.obj [("install", H.s (hex install)), ("rollback", H.s (hex rollback)), ("status", H.s (hex status))]
       manifest = H.obj
         [ ("schema", H.n 1)

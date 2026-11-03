@@ -52,7 +52,10 @@ if [[ -f "$EXPERIMENT/prelinked.json" ]]; then
     *) printf 'prelinked.json must name a bazel-bin/*.o object\n' >&2; exit 1 ;;
   esac
   [[ -f "$prelinked" ]] || { printf 'prelinked object %s is missing; build it first\n' "$prelinked" >&2; exit 1; }
+  sources="${prelinked%.o}.sources.sha256"
+  [[ -f "$sources" ]] || { printf 'prelinked object %s has no %s\n' "$prelinked" "$sources" >&2; exit 1; }
   cp "$prelinked" "$OUT/experiment-prelinked.o"
+  cp "$sources" "$OUT/experiment-prelinked.sources.sha256"
   objects+=("$OUT/experiment-prelinked.o")
 elif [[ -f "$EXPERIMENT/lib.rs" ]]; then
   "$RUSTC" --crate-name=experiment --edition=2021 --crate-type=staticlib -C opt-level=z \
