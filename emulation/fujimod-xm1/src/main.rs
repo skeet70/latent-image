@@ -4,7 +4,7 @@
 use fujimod_xm1::guest::Press;
 use fujimod_xm1::machine::{KeyPulse, Machine};
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
-use fujimod_xm1::{peer_witness, witness};
+use fujimod_xm1::{peer_witness, power_hold::PowerHold, witness};
 use sha2::{Digest, Sha256};
 use std::{
     io::{BufRead, Write},
@@ -156,8 +156,23 @@ fn drive() -> Result<(), String> {
         let contract = witness::WitnessContract::parse(&read(contract_path)?)?;
         return witness::run(machine, contract, &output);
     }
+    let mut power_hold = match std::env::var_os("XM1_POWER_HOLD_LOG") {
+        Some(path) => Some(PowerHold::begin(&machine, PathBuf::from(path))?),
+        None => None,
+    };
     let mut driver = Driver { machine, output, frames: 0 };
+    let result = interact(&mut driver, boot, &mut power_hold);
+    match power_hold {
+        Some(log) => result.and(log.finish(&driver.machine)),
+        None => result,
+    }
+}
+
+fn interact(driver: &mut Driver, boot: u64, power_hold: &mut Option<PowerHold>) -> Result<(), String> {
     driver.machine.run(boot);
+    if let Some(log) = power_hold {
+        log.stop(&driver.machine, "boot");
+    }
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     driver.print_state(&mut out)?;
@@ -167,7 +182,11 @@ fn drive() -> Result<(), String> {
         if line.trim().is_empty() {
             continue;
         }
-        match command(&mut driver, &line) {
+        let result = command(driver, &line);
+        if let (Some(log), Ok(true) | Err(_)) = (power_hold.as_mut(), &result) {
+            log.stop(&driver.machine, &line);
+        }
+        match result {
             Ok(false) => break,
             Ok(true) => driver.print_state(&mut out)?,
             Err(error) => writeln!(out, "{}", one_line(&error)).map_err(|e| e.to_string())?,
