@@ -162,7 +162,7 @@ functionJson bytes functions callbackTargets entry@(GuestAddress low) = object
         , "return_proof" .= either (\problem -> object ["status" .= ("unresolved" :: String),"reason" .= problem])
             (\uses -> object ["status" .= ("conditional" :: String),"premises" .= S.toList (S.fromList [returnPremiseLabel premise | PremiseUse _ premise <- uses]),"premise_uses" .= map show uses])
             (inspectedReturn inspection)]
-  , "stock_inventory_opaque_callee_assumption" .= ("ReturnProvenance.hs:302-305 assumes opaque calls preserve SP and r4-r11; this is not a recovered all-callee ABI proof" :: String)
+  , "stock_inventory_opaque_callee_assumption" .= ("ReturnProvenance.hs `callee` assumes opaque calls preserve SP and r4-r11; this is not a recovered all-callee ABI proof" :: String)
   , "direct_calls" .= [object ["site" .= hex site,"target" .= addressJson target,"source_function_reference" .= maybe False (S.member target . sourceCalls) found,"status" .= either (const ("source-window-encoded-candidate" :: String)) (const "structurally-reachable-instruction") inspected] | (site,target) <- calls]
   , "indirect_call_candidates" .= [hex site | (site, A.BranchExchange _ True _) <- instructions]
   , "external_branch_candidates" .= [object ["site" .= hex site,"target" .= hex target] | (site,A.Branch _ False target) <- instructions, target < low || maybe True (\(GuestAddress high) -> target >= high) fence]
