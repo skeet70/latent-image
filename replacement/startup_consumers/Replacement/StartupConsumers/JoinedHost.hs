@@ -12,7 +12,8 @@ import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Lazy as L
-import Data.List (sort)
+import Data.Char (isDigit)
+import Data.List (sort, stripPrefix)
 import qualified Data.Text as T
 import qualified Emulation.Sha256 as SHA
 import qualified FujiAF.Host as H
@@ -76,7 +77,8 @@ instance J.FromJSON NestedPush where
 data HostControlName = PhaseArgument | LoaderLink | CallbackResult | DescriptorStore | ForeignLiveWord | SourceAlias
   | SourceTcm | MissingCarrierFetch | MenuPulse | ResetBytes | TimerRead | MissingGuard | ModeCell | ModeBoundary
   | ModeRead | ModeAttribution | RepeatedZeroSegment | StopOwnCount | MissingAddedGuard | DispatcherOneFetch | DispatcherAttemptOnly
-  | PolicyMissingAcquisition | PolicyWrongAcquisition | PolicyPrematureSharedRelease | PolicyOmittedNoop | PolicyTraceOccurrence | PolicySegmentOwners
+  | EpochEndData | EpochEndSecondFetch | EpochEndUnstopped | DispatcherReturnR4
+  | PolicyMissingAcquisition | PolicyWrongAcquisition | PolicyPrematureSharedRelease | PolicyOmittedNoop | PolicyTraceOccurrence | PolicySegmentIndex
   deriving (Eq, Ord, Enum, Bounded)
 controlNames :: [(T.Text,HostControlName)]
 controlNames =
@@ -86,9 +88,53 @@ controlNames =
   ,("mode-cell",ModeCell),("mode-boundary",ModeBoundary),("mode-read",ModeRead),("mode-attribution",ModeAttribution)
   ,("repeated-zero-segment",RepeatedZeroSegment),("stop-own-count",StopOwnCount),("missing-added-guard",MissingAddedGuard)
   ,("dispatcher-one-fetch",DispatcherOneFetch),("dispatcher-attempt-only",DispatcherAttemptOnly)
+  ,("epoch-end-data",EpochEndData),("epoch-end-second-fetch",EpochEndSecondFetch),("epoch-end-unstopped",EpochEndUnstopped)
+  ,("dispatcher-return-r4",DispatcherReturnR4)
   ,("policy-missing-acquisition",PolicyMissingAcquisition),("policy-wrong-acquisition",PolicyWrongAcquisition)
   ,("policy-premature-shared-release",PolicyPrematureSharedRelease),("policy-omitted-noop",PolicyOmittedNoop)
-  ,("policy-trace-occurrence",PolicyTraceOccurrence),("policy-segment-owners",PolicySegmentOwners)]
+  ,("policy-trace-occurrence",PolicyTraceOccurrence),("policy-segment-index",PolicySegmentIndex)]
+-- The refusal each control must produce; a case refused for any other reason fails the cohort.
+data ExpectedRefusal = Refusal String | IndexedRefusal String String
+expectedRefusal :: HostControlName -> ExpectedRefusal
+expectedRefusal control = case control of
+  PhaseArgument -> Refusal "shared consumer endpoint is not the outer0 window"
+  LoaderLink -> Refusal "callee entry context differs"
+  CallbackResult -> Refusal "dispatcher result differs"
+  DescriptorStore -> Refusal "assigned field lacks a store in this submission interval"
+  ForeignLiveWord -> Refusal "writer reached actual dispatcher caller word"
+  SourceAlias -> Refusal "projection physical translation differs"
+  SourceTcm -> Refusal "projection intersects TCM"
+  MissingCarrierFetch -> Refusal "shared route evidence is incomplete"
+  MenuPulse -> Refusal "canonical ADC edge or hold differs"
+  ResetBytes -> Refusal "reset NAND is not pristine"
+  TimerRead -> Refusal "timer-read provenance"
+  MissingGuard -> Refusal "shared route guard coverage absent"
+  ModeCell -> Refusal "mode getter committed sample is not the source cell in its enclosing call"
+  ModeBoundary -> Refusal "boundary has no raw trace event"
+  ModeRead -> Refusal "mode getter actual CPU read absent"
+  ModeAttribution -> Refusal "mode getter actual read and executed source fetch attribution differ"
+  RepeatedZeroSegment -> Refusal "fetch attempt contradicts or reuses an earlier observation"
+  StopOwnCount -> Refusal "fetch attempt contradicts or reuses an earlier observation"
+  MissingAddedGuard -> Refusal "shared route guard coverage absent"
+  DispatcherOneFetch -> Refusal "stopped fetch attempt absent"
+  DispatcherAttemptOnly -> Refusal "executed in-scope resumption absent"
+  EpochEndData -> Refusal "shared CPU access attribution differs"
+  EpochEndSecondFetch -> Refusal "shared terminal fetch attempts repeat a core"
+  EpochEndUnstopped -> Refusal "shared CPU access attribution differs"
+  DispatcherReturnR4 -> Refusal "retained return state or chronology differs"
+  PolicyMissingAcquisition -> boundaryRefusal
+  PolicyWrongAcquisition -> boundaryRefusal
+  PolicyPrematureSharedRelease -> boundaryRefusal
+  PolicyOmittedNoop -> Refusal "supplied observation policy omits or adds a trace boundary"
+  PolicyTraceOccurrence -> boundaryRefusal
+  PolicySegmentIndex -> IndexedRefusal "supplied observation policy segment " " differs from the independent derivation"
+  where boundaryRefusal = IndexedRefusal "supplied observation policy boundary at trace index " " differs from the independent derivation"
+matchesRefusal :: ExpectedRefusal -> String -> Bool
+matchesRefusal (Refusal expected) observed = observed == expected
+matchesRefusal (IndexedRefusal prefix suffix) observed = case stripPrefix prefix observed of
+  Just rest -> let index = take (length rest - length suffix) rest
+    in length rest > length suffix && all isDigit index && drop (length index) rest == suffix
+  Nothing -> False
 instance J.FromJSON HostControlName where
   parseJSON = J.withText "host control name" $ \value -> maybe (fail "unknown host control") pure (lookup value controlNames)
 data HostCaseOutcome = CaseRefused | CaseAdmitted | CaseSetupFailure
@@ -173,7 +219,7 @@ checkPolicy (Executables observer checker) resultDigest root name input binding 
   PolicyBinding schema scope capture trace contract <- readJson bytes
   let envelope = captureEnvelope input
       contracts = [Wire.bindingDigest file | file <- Wire.captureArtifacts envelope,Wire.bindingPath file==Wire.artifactFilename Wire.JoinedContract]
-  H.ensure (schema==1 && scope==SharedExternalObservationPolicy && capture==captureDigest input
+  H.ensure (schema==2 && scope==SharedExternalObservationPolicy && capture==captureDigest input
     && trace==Wire.bindingDigest (Wire.captureTrace envelope) && contracts==[contract]) "host observation policy does not bind these inputs"
   pure (HostPolicyBytes bytes capture observer resultDigest (Wire.bindingDigest binding) checker)
 
@@ -209,14 +255,15 @@ checkControls observer root retained joined = do
   bytes <- H.readRegular 0x100000 (root </> "shared-refusal-controls.json")
   HostControls schema scope accepted failure (HostBaseline baselineDigest)
     (NestedPush _ (K.Address callSp) callStart callEnd (K.Address guest) (K.Address physical) pc instructions) cases <- readJson bytes
-  let refused (HostControlCase _ True _ _ (HostCaseObservation CaseRefused (Just message))) = not (null message)
-      refused _ = False
   H.ensure (schema==1 && scope==SharedRouteAndDispatcher && accepted && failure==Nothing
-    && sort [name | HostControlCase name _ _ _ _ <- cases]==[minBound..maxBound] && all refused cases
+    && sort [name | HostControlCase name _ _ _ _ <- cases]==[minBound..maxBound]
     && callStart < instructions && instructions <= callEnd && pc/=K.Address 0
     && physical==guest .&. 0xbfffffff && physical < callSp .&. 0xbfffffff) "host refusal cohort is incomplete"
-  forM_ cases $ \(HostControlCase name _ directory receipt _) -> do
-    H.ensure ([(T.unpack text) | (text,control) <- controlNames,control==name]==[Wire.relativeName directory]) "host control directory differs"
+  forM_ cases $ \(HostControlCase name passed directory receipt (HostCaseObservation outcome message)) -> do
+    let label = concat [T.unpack text | (text,control) <- controlNames,control==name]
+    H.ensure (passed && case (outcome,message) of (CaseRefused,Just observed) -> matchesRefusal (expectedRefusal name) observed; _ -> False)
+      ("host control "++label++" was not refused by its expected check")
+    H.ensure ([label]==[Wire.relativeName directory]) "host control directory differs"
     capture <- H.readRegular 0x40000000 (root </> Wire.relativeName directory </> "startup-joined.json")
     H.ensure (hash capture==receipt) "host control receipt binding differs"
   let baselineRoot = root </> "baseline-pair"

@@ -29,9 +29,10 @@ impl Snapshot {
 #[derive(Clone,Debug,PartialEq,Eq,Deserialize,Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct BoundaryPolicy {pub(super) trace_index:u64,pub(super) core:Core,pub(super) pc:u32,pub(super) instructions:u64,pub(super) acquire:Vec<OwnedSite>,pub(super) release:Vec<OwnedSite>}
+/// One consumer segment's slice [trace_begin,trace_end) of the boundaries; its owner sets are the replay of `initial` and the boundaries before each cut.
 #[derive(Clone,Debug,PartialEq,Eq,Deserialize,Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct SegmentPolicy {pub(super) id:u64,pub(super) trace_begin:u64,pub(super) trace_end:u64,pub(super) before:Snapshot,pub(super) after:Snapshot}
+pub(super) struct SegmentPolicy {pub(super) id:u64,pub(super) trace_begin:u64,pub(super) trace_end:u64}
 #[derive(Clone,Copy,Deserialize,Serialize)]
 #[serde(rename_all="kebab-case")]
 enum PolicyScope {SharedExternalObservationPolicy}
@@ -139,13 +140,13 @@ pub(super) fn derive(capture:&Capture,receipt:&Digest,catalog:&Catalog,program:&
     let begin=capture.consumer.begin.as_ref().ok_or("shared consumer begin absent")?.trace_index;
     let end=capture.consumer.end.as_ref().ok_or("shared consumer end absent")?.trace_index;
     require(0<begin&&begin<=end&&end<=events.len(),"external policy trace interval differs")?;
-    let mut cuts=BTreeMap::new();let mut parts=Vec::with_capacity(window.segments.len());let mut cursor=begin;
+    let mut parts=Vec::with_capacity(window.segments.len());let mut cursor=begin;
     for segment in &window.segments {
         let first=cursor;cursor=cursor.checked_add(segment.stops.len()).filter(|next|*next<=end).ok_or("consumer stops exceed the consumer trace interval")?;
         for (stop,event) in segment.stops.iter().zip(&events[first..cursor]) {
             require(stop.core==event.core&&stop.pc==event.pc&&stop.instructions==event.instructions.0,"consumer stop differs from its global trace occurrence")?;
         }
-        cuts.insert(first,None);cuts.insert(cursor,None);parts.push((segment.id,first,cursor));
+        parts.push((segment.id,first,cursor));
     }
     require(cursor==end,"consumer stops do not partition the consumer trace interval")?;
     let static_calls:BTreeMap<u32,&owner::StaticCall>=calls.iter().map(|call|(call.site.0,call)).collect();
@@ -156,7 +157,6 @@ pub(super) fn derive(capture:&Capture,receipt:&Digest,catalog:&Catalog,program:&
     for (index,event) in events[..end].iter().enumerate() {
         require(event.id.0==index,"external policy event order differs")?;
         if index==begin {initial=Some(replay.snapshot());}
-        if let Some(cut)=cuts.get_mut(&index) {*cut=Some(replay.snapshot());}
         replay.added.clear();replay.removed.clear();
         replay.route(event,&static_calls,catalog)?;replay.dispatcher(event)?;
         if index>=begin {
@@ -164,16 +164,13 @@ pub(super) fn derive(capture:&Capture,receipt:&Digest,catalog:&Catalog,program:&
                 acquire:grouped(&replay.added),release:grouped(&replay.removed)});
         }
     }
-    if let Some(cut)=cuts.get_mut(&end) {*cut=Some(replay.snapshot());}
-    let snapshot=|index:usize|cuts.get(&index).cloned().flatten().ok_or_else(||"external policy segment cut absent".to_owned());
-    let segments=parts.into_iter().map(|(id,first,next)|Ok(SegmentPolicy {id,trace_begin:first as u64,trace_end:next as u64,before:snapshot(first)?,after:snapshot(next)?}))
-        .collect::<Result<Vec<_>,String>>()?;
+    let segments=parts.into_iter().map(|(id,first,next)|SegmentPolicy {id,trace_begin:first as u64,trace_end:next as u64}).collect();
     let contracts:Vec<&FileBinding>=capture.artifacts.files.iter().filter(|file|file.path.as_os_str()=="staged-contract.json").collect();
     let [contract]=contracts.as_slice() else {return Err("staged contract binding census differs".into())};
     let mut watch_inputs:Vec<FileBinding>=capture.epochs.iter().filter_map(|epoch|match &epoch.evidence {Evidence::Watch {file,..}=>Some(file.clone()),Evidence::ConsumerSegment {..}=>None}).collect();
     watch_inputs.sort_by(|left,right|left.path.as_os_str().cmp(right.path.as_os_str()));
     require(watch_inputs.windows(2).all(|pair|pair[0].path!=pair[1].path),"standalone watch sidecar is bound twice")?;
-    Ok(Policy {schema:1,scope:PolicyScope::SharedExternalObservationPolicy,capture_sha256:receipt.clone(),trace_sha256:capture.trace.sha256.clone(),
+    Ok(Policy {schema:2,scope:PolicyScope::SharedExternalObservationPolicy,capture_sha256:receipt.clone(),trace_sha256:capture.trace.sha256.clone(),
         contract_sha256:contract.sha256.clone(),watch_inputs,begin_trace_index:begin as u64,end_trace_index:end as u64,
         initial:initial.ok_or("external policy initial snapshot absent")?,boundaries,segments})
 }

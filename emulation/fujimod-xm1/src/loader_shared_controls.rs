@@ -77,26 +77,30 @@ enum Control {
     PhaseArgument,LoaderLink,CallbackResult,DescriptorStore,ForeignLiveWord,SourceAlias,SourceTcm,
     MissingCarrierFetch,MenuPulse,ResetBytes,TimerRead,MissingGuard,ModeCell,ModeBoundary,ModeRead,ModeAttribution,
     RepeatedZeroSegment,StopOwnCount,MissingAddedGuard,DispatcherOneFetch,DispatcherAttemptOnly,
-    PolicyMissingAcquisition,PolicyWrongAcquisition,PolicyPrematureSharedRelease,PolicyOmittedNoop,PolicyTraceOccurrence,PolicySegmentOwners,
+    EpochEndData,EpochEndSecondFetch,EpochEndUnstopped,DispatcherReturnR4,
+    PolicyMissingAcquisition,PolicyWrongAcquisition,PolicyPrematureSharedRelease,PolicyOmittedNoop,PolicyTraceOccurrence,PolicySegmentIndex,
 }
 impl Control {
-    const ALL:[Self;27]=[Self::PhaseArgument,Self::LoaderLink,Self::CallbackResult,Self::DescriptorStore,Self::ForeignLiveWord,
+    const ALL:[Self;31]=[Self::PhaseArgument,Self::LoaderLink,Self::CallbackResult,Self::DescriptorStore,Self::ForeignLiveWord,
         Self::SourceAlias,Self::SourceTcm,Self::MissingCarrierFetch,Self::MenuPulse,Self::ResetBytes,Self::TimerRead,Self::MissingGuard,
         Self::ModeCell,Self::ModeBoundary,Self::ModeRead,Self::ModeAttribution,Self::RepeatedZeroSegment,Self::StopOwnCount,
         Self::MissingAddedGuard,Self::DispatcherOneFetch,Self::DispatcherAttemptOnly,
+        Self::EpochEndData,Self::EpochEndSecondFetch,Self::EpochEndUnstopped,Self::DispatcherReturnR4,
         Self::PolicyMissingAcquisition,Self::PolicyWrongAcquisition,Self::PolicyPrematureSharedRelease,Self::PolicyOmittedNoop,
-        Self::PolicyTraceOccurrence,Self::PolicySegmentOwners];
+        Self::PolicyTraceOccurrence,Self::PolicySegmentIndex];
     fn name(self)->&'static str {match self {Self::PhaseArgument=>"phase-argument",Self::LoaderLink=>"loader-link",Self::CallbackResult=>"callback-result",
         Self::DescriptorStore=>"descriptor-store",Self::ForeignLiveWord=>"foreign-live-word",Self::SourceAlias=>"source-alias",Self::SourceTcm=>"source-tcm",
         Self::MissingCarrierFetch=>"missing-carrier-fetch",Self::MenuPulse=>"menu-pulse",Self::ResetBytes=>"reset-bytes",Self::TimerRead=>"timer-read",Self::MissingGuard=>"missing-guard",
         Self::ModeCell=>"mode-cell",Self::ModeBoundary=>"mode-boundary",Self::ModeRead=>"mode-read",Self::ModeAttribution=>"mode-attribution",
         Self::RepeatedZeroSegment=>"repeated-zero-segment",Self::StopOwnCount=>"stop-own-count",Self::MissingAddedGuard=>"missing-added-guard",
         Self::DispatcherOneFetch=>"dispatcher-one-fetch",Self::DispatcherAttemptOnly=>"dispatcher-attempt-only",
+        Self::EpochEndData=>"epoch-end-data",Self::EpochEndSecondFetch=>"epoch-end-second-fetch",Self::EpochEndUnstopped=>"epoch-end-unstopped",
+        Self::DispatcherReturnR4=>"dispatcher-return-r4",
         Self::PolicyMissingAcquisition=>"policy-missing-acquisition",Self::PolicyWrongAcquisition=>"policy-wrong-acquisition",
         Self::PolicyPrematureSharedRelease=>"policy-premature-shared-release",Self::PolicyOmittedNoop=>"policy-omitted-noop",
-        Self::PolicyTraceOccurrence=>"policy-trace-occurrence",Self::PolicySegmentOwners=>"policy-segment-owners"}}
+        Self::PolicyTraceOccurrence=>"policy-trace-occurrence",Self::PolicySegmentIndex=>"policy-segment-index"}}
     fn policy(self)->bool {matches!(self,Self::PolicyMissingAcquisition|Self::PolicyWrongAcquisition|Self::PolicyPrematureSharedRelease
-        |Self::PolicyOmittedNoop|Self::PolicyTraceOccurrence|Self::PolicySegmentOwners)}
+        |Self::PolicyOmittedNoop|Self::PolicyTraceOccurrence|Self::PolicySegmentIndex)}
 }
 #[derive(Serialize)]
 #[serde(tag="outcome",content="error",rename_all="kebab-case")]
@@ -241,7 +245,8 @@ fn mutate(control:Control,source:&Path,root:&Path,capture:&mut Envelope,original
             let pulse=capture.route.pulses.first_mut().ok_or("route pulse absent")?;
             let released=pulse.released.as_mut().ok_or("route release absent")?;released.0=released.0.checked_add(1).ok_or("release mutation overflows")?;
         },Control::ResetBytes=>{
-            let mut reset=read(&source.join("reset.fujimod"))?;let first=reset.first_mut().ok_or("reset checkpoint empty")?;*first^=0xff;
+            let document=fujimod_xm1::run::RunDocument::parse(CANONICAL_RUN)?;
+            let reset=loader_reset_check::dirty_medium(&read(&source.join("reset.fujimod"))?,&document)?;
             fujimod_xm1::bridge::write(&root.join("reset.fujimod"),&reset)?;capture.checkpoint=Digest::of(&reset);
         },Control::TimerRead=>{
             let mut timer:Timer=serde_json::from_slice(&read(&root.join(&capture.timer_transactions.path))?).map_err(|error|error.to_string())?;
@@ -275,8 +280,10 @@ fn mutate(control:Control,source:&Path,root:&Path,capture:&mut Envelope,original
         Control::StopOwnCount=>wrong_stop_own_count(capture)?,
         Control::MissingAddedGuard=>missing_added_guard(capture,root)?,
         Control::DispatcherOneFetch|Control::DispatcherAttemptOnly=>dispatcher_fetch_mutation(control,capture,root,original)?,
+        Control::EpochEndData|Control::EpochEndSecondFetch|Control::EpochEndUnstopped=>epoch_end_mutation(control,capture,root)?,
+        Control::DispatcherReturnR4=>dispatcher_return_r4(capture,root)?,
         Control::PolicyMissingAcquisition|Control::PolicyWrongAcquisition|Control::PolicyPrematureSharedRelease
-            |Control::PolicyOmittedNoop|Control::PolicyTraceOccurrence|Control::PolicySegmentOwners=>return Err("policy controls keep the admitted capture unchanged".into()),
+            |Control::PolicyOmittedNoop|Control::PolicyTraceOccurrence|Control::PolicySegmentIndex=>return Err("policy controls keep the admitted capture unchanged".into()),
     }
     Ok(())
 }
@@ -411,28 +418,57 @@ fn dispatcher_fetch_mutation(control:Control,capture:&mut Envelope,root:&Path,or
     if matches!(control,Control::DispatcherOneFetch){require(retained==[true;2],"control dispatcher fetches lack a core")?;}
     Ok(())
 }
+/// Mutates the watch epoch whose last CPU row is the rolled-back fetch of its ending stop, stamped one past the epoch end.
+fn epoch_end_mutation(control:Control,capture:&mut Envelope,root:&Path)->Result<(),String>{
+    for (index,epoch) in capture.epochs.iter_mut().enumerate() {
+        let Evidence::Watch {file,..}=&mut epoch.evidence else{continue};
+        let mut watch:WatchEnvelope=serde_json::from_slice(&read(&root.join(&file.path))?).map_err(|error|error.to_string())?;
+        let Some(position)=watch.records.iter().rposition(|row|matches!(row.source,Access::CpuRead|Access::CpuFetch|Access::CpuWrite)) else{continue};
+        let terminal=watch.records[position].clone();
+        if terminal.source!=Access::CpuFetch||terminal.instructions.map(|count|count.0)!=epoch.end.0.checked_add(1){continue;}
+        match control {
+            Control::EpochEndData=>{
+                let data=watch.records.iter().rposition(|row|matches!(row.source,Access::CpuRead|Access::CpuWrite)).ok_or("control epoch CPU data access absent")?;
+                let mut moved=watch.records.remove(data);moved.instructions=terminal.instructions;watch.records.push(moved);
+            },
+            Control::EpochEndSecondFetch=>watch.records.push(terminal),
+            Control::EpochEndUnstopped=>{
+                let row=&mut watch.records[position];
+                let next=Guest(row.address.0.checked_add(4).ok_or("control fetch address overflows")?);
+                row.address=next;row.physical=next;row.pc=Some(next);
+            },
+            _=>return Err("control is not an epoch-end mutation".into()),
+        }
+        *file=persist_bound(root,&format!("control-epoch-end-{index}.json"),&serde_json::to_vec(&watch).map_err(|error|error.to_string())?)?;
+        return Ok(());
+    }
+    Err("control watch epoch ending at a stop absent".into())
+}
+/// Changes r4 at the loader's return from its first dispatcher call in the route event, the raw trace and the dispatcher boundary.
+fn dispatcher_return_r4(capture:&mut Envelope,root:&Path)->Result<(),String>{
+    let call=capture.route.calls.iter().find(|call|call.kind==CallKind::Loader&&call.target==Guest(0x69cdf8)).ok_or("loader dispatcher call absent")?;
+    let id=call.returned.ok_or("loader dispatcher return absent")?.0;
+    let event=capture.route.events.get_mut(id).ok_or("loader dispatcher return event absent")?;
+    event.registers.r[4]^=1;let (core,pc,at,value)=(event.core,event.pc,event.instructions,event.registers.r[4]);
+    rebind_trace(root,capture,id)?;
+    let mut dispatcher:serde_json::Value=capture.dispatcher.parsed()?;
+    let invocations=dispatcher.get_mut("invocations").and_then(serde_json::Value::as_array_mut).ok_or("dispatcher invocations absent")?;
+    let returned=invocations.iter_mut().filter_map(|invocation|invocation.get_mut("returned")).find(|boundary|
+        boundary.get("core")==Some(&serde_json::json!(core))&&boundary.get("pc")==Some(&serde_json::json!(pc))&&boundary.get("instructions")==Some(&serde_json::json!(at)))
+        .ok_or("dispatcher return boundary absent")?;
+    *returned.pointer_mut("/registers/r/4").ok_or("dispatcher return r4 absent")?=serde_json::json!(value);
+    capture.dispatcher=Frozen::encoded(&dispatcher)?;Ok(())
+}
 fn pairs(sites:&[policy::OwnedSite])->BTreeSet<(u32,policy::Owner)>{
     sites.iter().flat_map(|site|site.owners.iter().map(|owner|(site.address,*owner))).collect()
 }
-/// Recomputes segment snapshots by replaying initial ownership and boundary actions, dropping releases of pairs no longer held.
+/// Drops boundary releases of pairs no longer held after a mutation, so the mutated policy stays internally consistent.
 fn rebuild(policy:&mut policy::Policy){
-    let cuts:BTreeSet<u64>=policy.segments.iter().flat_map(|segment|[segment.trace_begin,segment.trace_end]).collect();
-    let mut held=pairs(policy.initial.sites());let mut snapshot=Some(policy.initial.clone());let mut snapshots=BTreeMap::new();
-    let mut record=|at:u64,held:&BTreeSet<(u32,policy::Owner)>,snapshot:&mut Option<policy::Snapshot>|if cuts.contains(&at) {
-        snapshots.insert(at,snapshot.get_or_insert_with(||policy::Snapshot::new(policy::grouped(held))).clone());
-    };
+    let mut held=pairs(policy.initial.sites());
     for boundary in &mut policy.boundaries {
-        record(boundary.trace_index,&held,&mut snapshot);
         let release:BTreeSet<_>=pairs(&boundary.release).intersection(&held).copied().collect();
-        let acquire=pairs(&boundary.acquire);
-        if !release.is_empty()||!acquire.is_empty() {snapshot=None;}
         for pair in &release {held.remove(pair);}
-        held.extend(acquire);boundary.release=policy::grouped(&release);
-    }
-    record(policy.end_trace_index,&held,&mut snapshot);
-    for segment in &mut policy.segments {
-        if let Some(before)=snapshots.get(&segment.trace_begin) {segment.before=before.clone();}
-        if let Some(after)=snapshots.get(&segment.trace_end) {segment.after=after.clone();}
+        held.extend(pairs(&boundary.acquire));boundary.release=policy::grouped(&release);
     }
 }
 fn first_acquisition(policy:&policy::Policy)->Result<(usize,u32,policy::Owner),String>{
@@ -490,12 +526,9 @@ fn policy_mutation(control:Control,policy:&mut policy::Policy)->Result<(),String
                 last.trace_index=last.trace_index.checked_add(1).ok_or("trace index mutation overflows")?;
             }
         },
-        Control::PolicySegmentOwners=>{
-            let segment=policy.segments.iter_mut().find(|segment|!segment.before.sites().is_empty()).ok_or("admitted policy has no externally owned segment snapshot")?;
-            let mut sites=segment.before.sites().to_vec();
-            let site=sites.last_mut().ok_or("segment snapshot is empty")?;site.owners.pop();
-            if site.owners.is_empty() {sites.pop();}
-            segment.before=policy::Snapshot::new(sites);
+        Control::PolicySegmentIndex=>{
+            let index=policy.segments.windows(2).position(|pair|pair[0].trace_end>pair[0].trace_begin).ok_or("admitted policy has no movable segment cut")?;
+            policy.segments[index].trace_end-=1;policy.segments[index+1].trace_begin-=1;
         },
         _=>return Err("control does not mutate the observation policy".into()),
     }
