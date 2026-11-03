@@ -473,27 +473,20 @@ Order of work:
 - **Critical sections:** `critical-section` over the stock CPU-lock slots `+0x130/+0x134` and `+0x138/+0x13c`, selected by `+0x148`, restoring the prior CPSR.I. The two cores' data caches are not coherent, so each domain's executor state, task storage and stack sit in 32-byte-aligned padded blocks written by one core only, and cross-core words (the demonstration record, the doorbell) go through the uncached alias.
 - **Interrupts:** `kernel::define_interrupt/enable_interrupt/disable_interrupt` over `+0x160/+0x158/+0x15c`; phase 1 does not use them.
 
-**Emulated result (E-EMBASSY-PHASE1-EMULATED-150).** One run of the demonstration and one of each control on the stock DAT, cardless FujiMod RAM-push route, with the modal75 FILM SIMULATION trajectory, all at `ea90d676`, when both hosts used id 119 and FujiMod counted down. The reviewed checker `replacement/embassy_platform/check-demo.jq` accepts all four runs:
+**Emulated result (E-EMBASSY-PHASE1-EMULATED-150).** One run of the demonstration and one of each control on the stock DAT, cardless FujiMod RAM-push route under the up-counting default model, with the modal75 FILM SIMULATION trajectory, all at main `82a8af1b`. The demonstration object is the `counter-up` build `8888b6d1…`. The reviewed checker `replacement/embassy_platform/check-demo.jq` accepts all four runs. They link their named objects with the same prelinked source digests, trajectory, hooks and builder identity, and they start from one checkpoint key (two cold, two restored).
 
 - **Demonstration:**
   - Install, route and unload pass with every step matched and no forbidden fetch.
-  - All six creation and activation statuses are 0, and both host tasks entered.
-  - Both domains measured the counter counting down and kept sub-tick time, with no clock regression.
-  - By handback each 100 ms ticker had run 33 iterations over a 321-tick span, and both kept running after unload.
-  - The latest wake was 68,757 counts (about 23 ms) on A and 32,347 on B, and A had two wakes later than two ticks. No kernel wake came early.
-  - A rang B's doorbell 3 times and B received all 3 through the kernel wakeup. The observer traced 4 `+0x2c` calls with B's id 0x00020077, and the worst delivery latency was 2,861 counts (about 1 ms).
+  - The allocator returned id 120 for A, B's three statuses are 0, and both host tasks entered.
+  - Both domains measured the counter counting up and kept sub-tick time, with no clock regression.
+  - By handback each 100 ms ticker had run 34 iterations over a 331-tick span, and both kept running after unload.
+  - The latest wake was 53,180 counts (about 18 ms) on A and 39,718 on B, none later than two ticks. No kernel wake came early.
+  - A rang B's doorbell 3 times and B received all 3 through the kernel wakeup. The observer traced 4 `+0x2c` calls with B's id 0x00020077, and the worst delivery latency was 42 counts.
   - The observer traced 39 `+0x28` calls on core 0 and 43 on core 1. The stock route makes none (E-RTOS-SLOT-CENSUS-STOCK-150).
-  - Stack high-water was 304 bytes on each domain.
+  - Stack high-water was 304 bytes on each domain; A's is a lower bound, since the allocator fills its stack with zeros.
 - **No executors:** the same hook and route with nothing created produce the same four captures as the demonstration (PNG and source-plane digests).
-- **No pender kernel:** the tickers keep running, and B receives none of its doorbells, with no traced `+0x2c` for B.
-- **Counter up:** both domains detect the down-counting model, fall back to tick-only time, and keep their timers on schedule.
-
-Two earlier inputs are preserved as failures:
-
-- The first stopped in FujiMod at the hook's byte exclusive (`ldrexb/strexb`; "R-profile nonword exclusive execution is not implemented"). The start flag is now a word atomic.
-- The second passed the route, but neither host task ran at priority 15.
-
-**Allocator-created A (E-EMBASSY-ALLOC-A-EMULATED-150).** With A created through `0x728804`, one run of the `counter-up` object `8888b6d1…` (experiment `embassy_phase1_counter_up`, on the down-counting model) passes install, route and unload with every step matched. The allocator returned id 120 and A entered. Both domains fell back to tick-only time, A and B ran 33 and 34 ticker iterations by handback, and B received all 3 doorbells through `+0x2c`. After the run that control became `embassy_phase1_counter_down` for FujiMod's up-counting default model, under which the demonstration and its controls have not yet run.
+- **No pender kernel:** the tickers keep running, and B receives none of its 3 doorbells, with no traced `+0x2c` for B.
+- **Counter down:** both domains measure the up-counting model, fall back to tick-only time, keep their timers on schedule and still receive every doorbell.
 
 **Limits:**
 

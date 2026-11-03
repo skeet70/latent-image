@@ -39,7 +39,7 @@ The FIQ handler saves the frame and calls `0x40d70`, which calls the hook word `
 | 9 | `0x40310-0x4034c` | Counter decremented; at 0 the task SP is restored and dispatch flag `0x400546d8` is tested; if set it is cleared and control branches to scheduler `0x4375c` |
 | 10 | `0x4034c-0x40364` | Saved SPSR restored with its F bit replaced by the current F; `ldm sp!,{r0-r3,r12,lr,pc}^` |
 
-Consequences, **static-inference**: an IRQ on one core waits at step 4 while the other core is inside any IRQ handler, so stock IRQ latency on one core includes the other core's handler time. Nesting depth is bounded only by the controller and the 16 per-priority save slots at `0x40054500` (section 4.5). The context word that `+0x158/+0x15c` callers see as "IRQ context" is this counter (E-RTOS-SLOT-MANIFEST-V3-150).
+Consequences, **static-inference**: an IRQ on one core waits at step 4 while the other core is inside any IRQ handler, so stock IRQ latency on one core includes the other core's handler time. Nesting depth is bounded only by the controller and the 16 per-priority save slots at `0x40054500` (section 4.5). The context word that `+0x158/+0x15c` callers see as "IRQ context" is this counter (E-RTOS-SLOT-MANIFEST-V5-150).
 
 ## 4. Interrupt-controller banks
 
