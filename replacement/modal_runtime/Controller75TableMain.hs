@@ -373,13 +373,23 @@ rustTable digest actions cells = unlines
       let padded = take 4 ([(value, s) | (value, State s) <- pairs] ++ repeat (0, 0))
        in "GenericAction::RouteToTransition(Route::new([" ++ intercalate ", " ["(" ++ hex value ++ ", State75(" ++ show s ++ "))" | (value, s) <- padded] ++ "], " ++ show (length pairs) ++ "))"
 
+-- | Adds `identity`, the SHA-256 of the table text without this line, before the
+-- closing brace; the owned archive carries it in the static table.
+withIdentity :: String -> String -> String
+withIdentity identity body = case reverse (lines body) of
+  closing : rest -> unlines (reverse rest ++ ["    identity: [" ++ intercalate ", " ["0x" ++ pair | pair <- pairs identity] ++ "],", closing])
+  [] -> body
+ where
+  pairs (high : low : more) = [high, low] : pairs more
+  pairs _ = []
+
 data StockVector = StockVector Event State Word32 Word32 (Maybe Word32) Word32 (Maybe Word32) [Word16]
 
 -- The code extents of the stock bodies the generic actions replace, for the
 -- continuous guard's retired-fetch watch.
 retiredDocument :: String -> String -> [(Callback, Int)] -> String
-retiredDocument digest table extents =
-  "{\"schema\":1,\"image5_sha256\":\"" ++ digest ++ "\",\"table_sha256\":\"" ++ table ++ "\",\"retired\":["
+retiredDocument digest identity extents =
+  "{\"schema\":2,\"image5_sha256\":\"" ++ digest ++ "\",\"table_identity\":\"" ++ identity ++ "\",\"retired\":["
     ++ intercalate "," [ "{\"callback\":\"" ++ hex entry ++ "\",\"start\":" ++ show entry ++ ",\"end\":" ++ show (entry + fromIntegral size) ++ "}"
                        | (Callback entry, size) <- sortOn (\(Callback entry, _) -> entry) extents ]
     ++ "]}\n"
@@ -452,9 +462,10 @@ main = do
         Nothing -> Right [vector 0 Nothing []]
     pure (actions', cells', vectors)
   let (actions, cells, vectors) = outcome
-  writeFile outputPath (rustTable digest actions cells)
+  let body = rustTable digest actions cells
+      identity = sha256Hex (sha256 (B.pack (map (fromIntegral . fromEnum) body)))
+  writeFile outputPath (withIdentity identity body)
   writeFile vectorsPath (rustVectors digest vectors)
-  tableBytes <- B.readFile outputPath
-  writeFile retiredPath (retiredDocument digest (sha256Hex (sha256 tableBytes)) [(callback, size) | (callback, _) <- actions, (c, size, _) <- generic, c == callback])
+  writeFile retiredPath (retiredDocument digest identity [(callback, size) | (callback, _) <- actions, (c, size, _) <- generic, c == callback])
   putStrLn ("wrote " ++ outputPath ++ " and " ++ vectorsPath ++ "; actions=" ++ show (length actions) ++ "; cells=" ++ show (length cells)
     ++ "; direct-state=" ++ show (length [() | cell <- cells, SetState _ <- [cellAfter cell]]) ++ "; vectors=" ++ show (length vectors))

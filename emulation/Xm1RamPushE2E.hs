@@ -163,13 +163,13 @@ data ModalOwnedPackage = ModalOwnedPackage
   , ownedArchiveDigest :: String
   , ownedRetiredPath :: FilePath
   , ownedRetiredDigest :: String
-  -- | The generated table the retired document names.
-  , ownedTableDigest :: String
+  -- | The generated table's identity, which the archive's static table carries.
+  , ownedTableIdentity :: String
   , ownedRetired :: [WatchRange]
   }
 
 -- | Reads the archive and the generator's retired-extent document, which must
--- name the pinned image5.
+-- name the pinned image5 and the table identity the archive carries.
 loadModalOwnedPackage :: FilePath -> FilePath -> IO ModalOwnedPackage
 loadModalOwnedPackage archive retired = do
   archiveBytes <- B.readFile archive
@@ -180,11 +180,11 @@ loadModalOwnedPackage archive retired = do
     value <- eitherDecodeStrict' document
     flip parseEither value $ withObject "retired document" $ \fields -> do
       schema <- fields .: "schema"
-      unless (schema == (1 :: Int)) (fail "schema is not 1")
+      unless (schema == (2 :: Int)) (fail "schema is not 2")
       image <- fields .: "image5_sha256"
       unless (image == ("3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a" :: String)) (fail "image5_sha256 is not the pinned X-M1 1.50 image5")
-      table <- fields .: "table_sha256"
-      unless (length table == 64 && all (`elem` ("0123456789abcdef" :: String)) table) (fail "table_sha256 is not a SHA-256")
+      table <- fields .: "table_identity"
+      unless (length table == 64 && all (`elem` ("0123456789abcdef" :: String)) table) (fail "table_identity is not a SHA-256")
       rows <- fields .: "retired"
       extents <- forM rows $ withObject "retired extent" $ \row -> do
         callback <- row .: "callback"
@@ -194,7 +194,12 @@ loadModalOwnedPackage archive retired = do
         either fail pure (watchRange (watchAddress low) (watchAddress high))
       pure (table, extents)
   require (not (null extents)) "owned modal75 retired document names no extent"
+  require (hexBytesOf table `B.isInfixOf` archiveBytes) "owned modal75 archive does not carry the retired document's table identity"
   pure (ModalOwnedPackage archive (sha256Hex (sha256 archiveBytes)) retired (sha256Hex (sha256 document)) table extents)
+ where
+  hexBytesOf digits = B.pack [byte | pair <- pairsOf digits, (byte, "") <- readHex pair]
+  pairsOf (high : low : rest) = [high, low] : pairsOf rest
+  pairsOf _ = []
 
 -- | The card attach checkpoint key: the staged guest state and the session's inputs.
 cardAttachRouteKey :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO RouteKey
@@ -867,7 +872,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         writePrivateBytes (e2e </> "e2e-modal-owned-package.json") (BL.toStrict (encode (object
           [ "archive" .= ownedArchivePath owned, "archive_sha256" .= ownedArchiveDigest owned
           , "retired_document" .= ownedRetiredPath owned, "retired_document_sha256" .= ownedRetiredDigest owned
-          , "table_sha256" .= ownedTableDigest owned
+          , "table_identity" .= ownedTableIdentity owned
           , "retired" .= [[low, high] | range <- ownedRetired owned, let (low, high) = watchRangeBounds range] ])) <> "\n")
       writePrivateBytes (relinkDirectory </> "loader-a.bin") loaderA
       writePrivateBytes (relinkDirectory </> "loader-b.bin") loaderB
