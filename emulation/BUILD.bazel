@@ -1796,7 +1796,7 @@ filegroup(
 
 sh_test(
     name = "native-runner-tests",
-    size = "small",
+    size = "medium",
     srcs = ["native-tests.sh"],
     args = [
         "$(location :native-tests-hs)",
@@ -1895,10 +1895,13 @@ haskell_library(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:containers",
         "//host:directory",
         "//host:filepath",
         "//host:host-support",
         "//host:json",
+        "//host:process",
+        "//host:unix",
     ],
 )
 
@@ -1939,8 +1942,11 @@ haskell_binary(
     deps = [
         ":native-adapter",
         "//host:base",
+        "//host:bytestring",
+        "//host:directory",
         "//host:filepath",
         "//host:host-support",
+        "//host:json",
     ],
 )
 
@@ -1954,9 +1960,12 @@ haskell_binary(
     ],
     deps = [
         ":native-adapter",
+        ":native-observation",
+        ":owned-case",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:containers",
         "//host:directory",
         "//host:filepath",
         "//host:host-support",
@@ -2124,6 +2133,7 @@ haskell_library(
         "-O2",
     ],
     src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
     deps = [
         ":case-sha256",
         ":native-adapter",
@@ -3238,5 +3248,142 @@ haskell_binary(
         "//host:scientific",
         "//host:text",
         "//host:vector",
+    ],
+)
+
+haskell_library(
+    name = "property-pair-lib",
+    srcs = [
+        "Emulation/PropertyPairPlan.hs",
+        "Emulation/PropertyPairRoutes.hs",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//host:text",
+    ],
+)
+
+haskell_library(
+    name = "property-pair-check-lib",
+    srcs = ["Emulation/PropertyPairCheck.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        ":property-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+# bazel run //emulation:property-pair-routes -- CRAWL_GRAPH OUTPUT
+haskell_binary(
+    name = "property-pair-routes",
+    srcs = ["PropertyPairRoutesMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":property-pair-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "property-pair-observe",
+    srcs = ["PropertyPairObserverMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        ":fujimod-paths",
+        ":property-pair-lib",
+        ":watch-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_binary(
+    name = "property-pair-check",
+    srcs = ["PropertyPairCheckMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:text",
+        ":case-sha256",
+        ":property-pair-check-lib",
+        ":property-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
+
+haskell_binary(
+    name = "property-pair-control",
+    srcs = ["PropertyPairControlMain.hs"],
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+    ],
+    data = [
+        "//host/firmware:rebuild-update",
+        "//lz:fflzd",
+        "//lz:lz-encode",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":image4-staging-lib",
+        ":property-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+    ],
+)
+
+haskell_test(
+    name = "property-pair-tests",
+    size = "small",
+    srcs = ["PropertyPairTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        ":property-pair-check-lib",
+        ":property-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
     ],
 )

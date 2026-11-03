@@ -5,16 +5,26 @@ import Emulation.Sha256 (sha256, sha256Hex)
 import Data.Aeson (Value(..))
 import FujiAF.JSON (decodeStrictIntegers)
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Char8 as BC
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.Map.Strict as M
+import Control.Concurrent
 import Control.Exception
 import Control.Monad
 import Data.Bits
 import Data.Char
+import Data.Either (isRight)
+import Data.IORef
 import Data.List
 import Numeric
 import System.Directory
 import System.Exit
 import System.FilePath
+import System.IO
+import System.Posix.Signals (sigKILL, signalProcessGroup)
+import System.Process
+import System.Timeout (timeout)
 
 regs :: [String]
 regs=map (("r"++).show) [0::Int ..12]++["sp","lr","cpsr"]
@@ -42,7 +52,7 @@ memoryCount=64
 hex :: Integer -> String
 hex x=showHex x ""
 hexBytes :: B.ByteString -> String
-hexBytes = concatMap (\x -> let h=showHex x "" in replicate(2-length h)'0'++h) . B.unpack
+hexBytes = BC.unpack . BL.toStrict . BB.toLazyByteString . BB.byteStringHex
 address :: Value -> IO Integer
 address v = do
  let text=str v
@@ -68,8 +78,31 @@ arrayCheck v low high label=do
 data Region = Region {description::Value,baseAddress::Integer,regionSize::Integer,regionBytes::B.ByteString} deriving Show
 regionAt :: [Region] -> Integer -> Integer -> Char -> Bool
 regionAt rs base size permission=any(\r->baseAddress r<=base && base+size<=baseAddress r+regionSize r && permission `elem` str(get(description r)"permissions"))rs
+newtype ArtifactDigest = ArtifactDigest String deriving (Eq,Ord,Show)
+data Artifact = Artifact {artifactDigest::ArtifactDigest,artifactBytes::B.ByteString}
+-- A slice's offset and length are in bytes; the region's remainder is zero.
+data RegionSource = ZeroSource | SliceSource Artifact Integer Integer
+-- Reads and hashes the canonical artifact path a case names.
+type ArtifactReader = FilePath -> IO Artifact
+readArtifact :: ArtifactReader
+readArtifact file=do
+ bytes<-readRegularWith (pure())False sizeBytes file
+ pure(Artifact(ArtifactDigest(sha256Hex(sha256 bytes)))bytes)
+data LoadedCase = LoadedCase
+ { loadedValue::Value
+ , loadedRegions::[(Region,RegionSource)]
+ , loadedWire::B.ByteString
+ , loadedIdentity::[(String,Value)]
+ , loadedJsonBytes::Int
+ -- The wire rows before and after the region rows.
+ , loadedRows::([String],[String])
+ }
 loadCase :: FilePath -> IO (Value,[Region],B.ByteString,[(String,Value)])
 loadCase input = do
+ loaded<-loadCaseWith readArtifact input
+ pure(loadedValue loaded,map fst(loadedRegions loaded),loadedWire loaded,loadedIdentity loaded)
+loadCaseWith :: ArtifactReader -> FilePath -> IO LoadedCase
+loadCaseWith reader input = do
  path<-canonicalizePath input
  raw<-readRegularWith (pure()) False caseBytes path
  c<-either failH pure(decodeStrictIntegers raw)
@@ -101,29 +134,32 @@ loadCase input = do
    size<-integer(get item "size")1(fromIntegral sizeBytes) "artifact size"
    let digest=str(get item "sha256")
    ensure(length digest==64 && all (`elem` "0123456789abcdef")digest) "artifact SHA256 invalid"
-   bytes<-readRegularWith (pure())False sizeBytes file
-   ensure(B.length bytes==fromInteger size) "artifact length mismatch"
-   ensure(sha256Hex(sha256 bytes)==digest) "artifact digest mismatch"
-   pure(done++[(ident,bytes)])) [] inventory
+   artifact<-reader file
+   ensure(B.length(artifactBytes artifact)==fromInteger size) "artifact length mismatch"
+   ensure(artifactDigest artifact==ArtifactDigest digest) "artifact digest mismatch"
+   pure(done++[(ident,artifact)])) [] inventory
  regionsInput<-arrayCheck(get c "regions")1 regionCount "regions limit"
- regions<-foldM(\done item->do
+ placed<-foldM(\done item->do
+   let prior=map fst done
    fields item "id address size permissions initial" "region"
-   ensure(validId(get item "id") && all(\r->get(description r)"id"/=get item "id")done) "region id invalid/duplicate"
+   ensure(validId(get item "id") && all(\r->get(description r)"id"/=get item "id")prior) "region id invalid/duplicate"
    base<-address(get item "address"); size<-integer(get item "size")1(fromIntegral sizeBytes) "region size"
    ensure(base+size<=4294967296) "region address overflow"
    ensure(get item "permissions" `elem` map s ["r","rw","rx"]) "permissions must be r/rw/rx"
    ensure(get item "permissions"/=s "rx" || base+size<=0x7ffffffc) "executable region must end by 0x7ffffffc: PMSAv7 default map is execute-never from 0x80000000"
-   ensure(all(\r->base+size<=baseAddress r || baseAddress r+regionSize r<=base)done) "logical regions overlap"
+   ensure(all(\r->base+size<=baseAddress r || baseAddress r+regionSize r<=base)prior) "logical regions overlap"
    let initialBytes=get item "initial"
-   bytes<-if initialBytes==obj[("zero",b True)] then pure(B.replicate(fromInteger size)0) else do
+   (bytes,source)<-if initialBytes==obj[("zero",b True)] then pure(B.replicate(fromInteger size)0,ZeroSource) else do
      fields initialBytes "artifact offset length" "initial"
-     original<-maybe(failH "unknown artifact")pure(lookup(str(get initialBytes "artifact"))artifacts)
+     artifact<-maybe(failH "unknown artifact")pure(lookup(str(get initialBytes "artifact"))artifacts)
+     let original=artifactBytes artifact
      offset<-integer(get initialBytes "offset")0(fromIntegral sizeBytes) "artifact offset"
      len<-integer(get initialBytes "length")1 size "artifact length"
      ensure(offset+len<=fromIntegral(B.length original)) "artifact slice exceeds file"
-     pure(B.take(fromInteger len)(B.drop(fromInteger offset)original)<>B.replicate(fromInteger(size-len))0)
-   ensure(sum(map regionSize done)+size<=fromIntegral totalBytes) "total mapped bytes exceeds host limit"
-   pure(done++[Region item base size bytes]))[] regionsInput
+     pure(B.take(fromInteger len)(B.drop(fromInteger offset)original)<>B.replicate(fromInteger(size-len))0,SliceSource artifact offset len)
+   ensure(sum(map regionSize prior)+size<=fromIntegral totalBytes) "total mapped bytes exceeds host limit"
+   pure(done++[(Region item base size bytes,source)]))[] regionsInput
+ let regions=map fst placed
  ensure(regionAt regions entry 4 'x' && regionAt regions exit 4 'x') "entry/exit must have explicit executable bytes"
  ensure(reg "sp">=8 && regionAt regions (reg "sp"-8) 8 'w') "stack top lacks writable eight bytes"
  functionsInput<-arrayCheck(get c "functions")1 functionCount "functions limit"
@@ -170,12 +206,22 @@ loadCase input = do
  exclusions<-arrayCheck(get c "exclusions")1 1000000 "coverage exclusions required"
  ensure(all(not.null.str)exclusions) "coverage exclusions required"
  let rows=["FUJI_NATIVE_V1","cortex-r5f-arm-le",unwords[hex entry,hex exit,show budget,show wall],unwords[hex(reg r)|r<-regs],unwords(map(show.length)[regionsInput,functionsInput,stubsInput])]
-     regionRows=[unwords[hex(baseAddress r),hex(regionSize r),case str(get(description r)"permissions")of "r"->"1";"rw"->"3";_->"5",hexBytes(regionBytes r)]|r<-regions]
      functionRows=[unwords[hex x,hex size]|(x,size)<-functions]
      stubRows=concat[unwords[hex t,show(length inputs),show(length outputs)]:[unwords[show(maybe 0 id(elemIndex k regs)),hex v]|bindingGroup<-[inputs,outputs],(k,v)<-bindingGroup]|(t,inputs,outputs)<-stubs]
-     wire=BC.pack(unlines(rows++regionRows++functionRows++stubRows))
+     after=functionRows++stubRows
+     wire=BL.toStrict(BB.toLazyByteString(BB.string7(unlines rows)<>mconcat[BB.string7(regionHead r)<>BB.char7 ' '<>BB.byteStringHex(regionBytes r)<>BB.char7 '\n'|r<-regions]<>BB.string7(unlines after)))
  let digest=sha256Hex(sha256 raw); wireDigest=sha256Hex(sha256 wire)
- pure(c,regions,wire,[("case_sha256",s digest),("wire_sha256",s wireDigest),("artifacts",arr inventory)])
+ pure LoadedCase
+  { loadedValue=c
+  , loadedRegions=placed
+  , loadedWire=wire
+  , loadedIdentity=[("case_sha256",s digest),("wire_sha256",s wireDigest),("artifacts",arr inventory)]
+  , loadedJsonBytes=B.length raw
+  , loadedRows=(rows,after)
+  }
+-- A wire region row up to its initial bytes.
+regionHead :: Region -> String
+regionHead r=unwords[hex(baseAddress r),hex(regionSize r),case str(get(description r)"permissions")of "r"->"1";"rw"->"3";_->"5"]
 checkResult :: Value -> [Region] -> Value -> IO [String]
 checkResult c regions result=do
  let expected=get c "expected"
@@ -191,28 +237,436 @@ checkResult c regions result=do
     else pure bytes)(regionBytes r)(list(get expected "memory"))
    pure["memory "++str(get(description r)"id")++": differs from exact allowed final bytes"|get actual "address"/=get(description r)"address" || get actual "bytes"/=s(hexBytes desired)]
  pure(status++registers++events++mem)
+unknownReport :: Value
+unknownReport=obj[("schema_version",n 1),("profile",s "unknown")]
+caseReport :: Value -> [(String,Value)] -> Value
+caseReport c identity=
+ let profile=if get c "origin"==s "stock" then "stock-bounded" else "synthetic-only"
+ in merge unknownReport(identity++[("case_id",get c "id"),("origin",get c "origin"),("profile",s profile),("provenance",get c "provenance"),("exclusions",get c "exclusions")])
+runnerDigest :: FilePath -> IO String
+runnerDigest executable=sha256Hex . sha256 <$> readRegularWith(pure())False (256*1024*1024) executable
+-- The report for one completed runner observation and its exit.
+judgeRunner :: Value -> [Region] -> Value -> ExitCode -> B.ByteString -> B.ByteString -> IO (Int,Value)
+judgeRunner c regions report' exit out err=do
+ let runnerExit=n(case exit of ExitSuccess->0;ExitFailure i->fromIntegral i)
+     failed=merge report'[("status",s "runner_failure"),("runner_exit",runnerExit),("runner_stdout",s(BC.unpack out)),("stderr",s(BC.unpack err))]
+ parsed<-try$do
+  value<-jsonRead out
+  ensure(case value of Object _->get value "wire_version"==n 1;_->False) "invalid runner output"
+  problems<-checkResult c regions value
+  ensure(exit==(if get value "status"==s "returned" then ExitSuccess else ExitFailure 1)) "runner status/exit mismatch"
+  pure(if null problems then 0 else 1,merge report'[("status",s(if null problems then "passed" else "failed")),("runner",value),("runner_exit",runnerExit),("mismatches",arr(map s problems)),("stderr",s(BC.unpack err))])
+ case parsed of Left(e::IOException)->pure(1,set "reason" (s(show e)) failed);Right value->pure value
 runCase :: FilePath -> FilePath -> IO (Int,Value)
 runCase runner path = do
- ref<-pure$obj[("schema_version",n 1),("profile",s "unknown")]
  loaded<-try(loadCase path)
  case loaded of
-  Left(e::IOException)->pure(1,merge ref[("status",s "invalid_case"),("reason",s(show e))])
+  Left(e::IOException)->pure(1,merge unknownReport[("status",s "invalid_case"),("reason",s(show e))])
   Right(c,regions,wire,identity)->do
-   let profile=if get c "origin"==s "stock" then "stock-bounded" else "synthetic-only"
-       report=merge ref(identity++[("case_id",get c "id"),("origin",get c "origin"),("profile",s profile),("provenance",get c "provenance"),("exclusions",get c "exclusions")])
+   let report=caseReport c identity
    result<-try$do
     executable<-canonicalizePath runner
-    hash<-sha256Hex . sha256 <$> readRegularWith(pure())False (256*1024*1024) executable
+    hash<-runnerDigest executable
     (timed,exit,out,err)<-runBounded(fromInteger(num(get(get c "limits")"wall_ms")*1000+2000000))(8*1024*1024) executable [] wire
     let report'=set "runner_sha256" (s hash) report
-    if timed then pure(1,merge report'[("status",s "host_timeout"),("stdout",s(BC.unpack out)),("stderr",s(BC.unpack err))]) else do
-     let runnerExit=n(case exit of ExitSuccess->0;ExitFailure i->fromIntegral i)
-         failed=merge report'[("status",s "runner_failure"),("runner_exit",runnerExit),("runner_stdout",s(BC.unpack out)),("stderr",s(BC.unpack err))]
-     parsed<-try$do
-      value<-jsonRead out
-      ensure(case value of Object _->get value "wire_version"==n 1;_->False) "invalid runner output"
-      problems<-checkResult c regions value
-      ensure(exit==(if get value "status"==s "returned" then ExitSuccess else ExitFailure 1)) "runner status/exit mismatch"
-      pure(if null problems then 0 else 1,merge report'[("status",s(if null problems then "passed" else "failed")),("runner",value),("runner_exit",runnerExit),("mismatches",arr(map s problems)),("stderr",s(BC.unpack err))])
-     case parsed of Left(e::IOException)->pure(1,set "reason" (s(show e)) failed);Right value->pure value
+    if timed then pure(1,merge report'[("status",s "host_timeout"),("stdout",s(BC.unpack out)),("stderr",s(BC.unpack err))]) else judgeRunner c regions report' exit out err
    case result of Left(e::IOException)->pure(1,merge report[("status",s "invalid_case"),("reason",s(show e))]);Right value->pure value
+
+-- Batches. The public batch contract: at most batchCaseCount cases, batchJsonBytes of batch
+-- and case JSON together, and batchArtifactBytes of distinct artifact bytes, by SHA256, read for
+-- its cases. schemas/native-case.schema.json carries the same numbers.
+batchCaseCount :: Int
+batchCaseCount=4096
+batchJsonBytes :: Int
+batchJsonBytes=256*1024*1024
+batchArtifactBytes :: Int
+batchArtifactBytes=256*1024*1024
+-- Time for the runner to read the whole batch wire.
+batchInputMicros :: Int
+batchInputMicros=60000000
+-- Cap on one observation line and on the batch's stderr, as runCase caps each stream.
+batchStreamBytes :: Int
+batchStreamBytes=8*1024*1024
+
+newtype CaseId = CaseId {caseIdText::String} deriving (Eq,Ord,Show)
+
+-- A lowercase hexadecimal SHA256.
+newtype DigestHex = DigestHex {digestHex::String} deriving (Eq,Show)
+
+data BatchEntry = BatchEntry {entryId::CaseId,entryPath::FilePath}
+
+data BatchStatus = BatchComplete | BatchInvalid | BatchRunnerFailure | BatchHostTimeout deriving (Eq,Show)
+
+batchStatusLabel :: BatchStatus -> String
+batchStatusLabel BatchComplete="complete"
+batchStatusLabel BatchInvalid="invalid_batch"
+batchStatusLabel BatchRunnerFailure="runner_failure"
+batchStatusLabel BatchHostTimeout="host_timeout"
+
+-- A case's status in the batch summary: its report's status, or not_run.
+data CaseStatus = CasePassed | CaseFailed | CaseInvalid | CaseRunnerFailure | CaseHostTimeout | CaseNotRun deriving (Eq,Show,Enum,Bounded)
+
+caseStatusLabel :: CaseStatus -> String
+caseStatusLabel CasePassed="passed"
+caseStatusLabel CaseFailed="failed"
+caseStatusLabel CaseInvalid="invalid_case"
+caseStatusLabel CaseRunnerFailure="runner_failure"
+caseStatusLabel CaseHostTimeout="host_timeout"
+caseStatusLabel CaseNotRun="not_run"
+
+caseStatusOf :: Value -> CaseStatus
+caseStatusOf report=case[status|status<-[minBound..maxBound],caseStatusLabel status==str(get report "status")] of
+ status:_->status
+ []->error("native batch: report status "++show(get report "status"))
+
+data BatchCase = BatchCase {batchCaseId::CaseId,batchCaseStatus::CaseStatus,batchCaseDigest::Maybe DigestHex} deriving (Eq,Show)
+
+-- The batch file's SHA256 bound to every case id and status, in batch order.
+data BatchSummary = BatchSummary
+ { summaryStatus::BatchStatus
+ , summaryBatchDigest::Maybe DigestHex
+ , summaryRunnerDigest::Maybe DigestHex
+ , summaryReason::Maybe String
+ -- The case whose frame was due when the runner process failed.
+ , summaryFailedCase::Maybe CaseId
+ , summaryRunnerExit::Maybe ExitCode
+ , summaryStderr::Maybe B.ByteString
+ , summaryCases::[BatchCase]
+ } deriving Show
+
+batchPassed :: BatchSummary -> Bool
+batchPassed summary=summaryStatus summary==BatchComplete && all((==CasePassed) . batchCaseStatus)(summaryCases summary)
+
+-- The summary as $defs/batchSummary of schemas/native-case.schema.json.
+summaryJson :: BatchSummary -> Value
+summaryJson summary=obj(
+ [("schema_version",n 1),("status",s(batchStatusLabel(summaryStatus summary)))
+ ,("cases",arr[obj([("id",s(caseIdText(batchCaseId c))),("status",s(caseStatusLabel(batchCaseStatus c)))]++[("case_sha256",s(digestHex d))|Just d<-[batchCaseDigest c]])|c<-summaryCases summary])]
+ ++[("batch_sha256",s(digestHex d))|Just d<-[summaryBatchDigest summary]]
+ ++[("runner_sha256",s(digestHex d))|Just d<-[summaryRunnerDigest summary]]
+ ++[("reason",s r)|Just r<-[summaryReason summary]]
+ ++[("failed_case",s(caseIdText c))|Just c<-[summaryFailedCase summary]]
+ ++[("runner_exit",exitNumber c)|Just c<-[summaryRunnerExit summary]]
+ ++[("stderr",s(BC.unpack e))|Just e<-[summaryStderr summary]])
+
+-- One case's report in the runCase format, with the regions of an admitted case.
+data CaseReport = CaseReport {reportCase::CaseId,reportRegions::Maybe [Region],reportCode::Int,reportValue::Value}
+
+-- A region without its bytes: case JSON description, base, size and initial-bytes source.
+type RegionPlan = (Value,Integer,Integer,RegionSource)
+
+-- The region loadCase builds from the same plan.
+materialize :: RegionPlan -> Region
+materialize(item,base,size,source)=Region item base size bytes
+ where
+  bytes=case source of
+   ZeroSource->B.replicate(fromInteger size)0
+   SliceSource artifact offset len->B.take(fromInteger len)(B.drop(fromInteger offset)(artifactBytes artifact))<>B.replicate(fromInteger(size-len))0
+
+-- A case the adapter admitted, without its single-case wire or region bytes.
+data Admitted = Admitted
+ { admittedId::CaseId
+ , admittedValue::Value
+ , admittedRegions::[RegionPlan]
+ , admittedReport::Value
+ , admittedRows::([String],[String])
+ }
+
+-- The batch file's bytes and entries: {"schema_version":1,"cases":[{"id":ID,"path":PATH}]},
+-- each path relative and inside the batch file's directory.
+readBatch :: FilePath -> IO (B.ByteString,[BatchEntry])
+readBatch input=do
+ path<-canonicalizePath input
+ size<-getFileSize path
+ ensure(size<=fromIntegral batchJsonBytes) "batch JSON bytes exceed the limit"
+ raw<-readRegularWith(pure())False(fromInteger size)path
+ batch<-either failH pure(decodeStrictIntegers raw)
+ fields batch "schema_version cases" "batch"
+ void(integer(get batch "schema_version")1 1 "batch schema version")
+ items<-arrayCheck(get batch "cases")1 batchCaseCount "batch case count"
+ (_,entries)<-foldM(\(seen,done) item->do
+   fields item "id path" "batch case"
+   let ident=CaseId(str(get item "id")); relative=str(get item "path")
+   ensure(validId(get item "id") && not(M.member ident seen)) "batch case id invalid/duplicate"
+   ensure(not(null relative) && isRelative relative && ".." `notElem` splitDirectories relative) "case path must stay under batch directory"
+   file<-canonicalizePath(takeDirectory path</>relative)
+   ensure(splitDirectories(takeDirectory path) `isPrefixOf` splitDirectories file) "case symlink escapes batch directory"
+   pure(M.insert ident()seen,BatchEntry ident file:done))(M.empty,[])items
+ pure(raw,reverse entries)
+
+-- Raised when the distinct artifact bytes read for a batch pass batchArtifactBytes.
+data ArtifactLimit = ArtifactLimit deriving Show
+instance Exception ArtifactLimit
+
+-- Reads and hashes each canonical path once; paths with identical bytes share one Artifact.
+sharedArtifactReader :: IO ArtifactReader
+sharedArtifactReader=do
+ paths<-newIORef M.empty
+ digests<-newIORef M.empty
+ total<-newIORef 0
+ pure$ \file->do
+  known<-M.lookup file<$>readIORef paths
+  case known of
+   Just artifact->pure artifact
+   Nothing->do
+    fresh<-readArtifact file
+    let ArtifactDigest digest=artifactDigest fresh
+    _<-evaluate(length digest)
+    seen<-M.lookup(artifactDigest fresh)<$>readIORef digests
+    artifact<-case seen of
+     Just shared->pure shared
+     Nothing->do
+      bytes<-(+B.length(artifactBytes fresh))<$>readIORef total
+      when(bytes>batchArtifactBytes)(throwIO ArtifactLimit)
+      writeIORef total bytes
+      modifyIORef' digests(M.insert(artifactDigest fresh)fresh)
+      pure fresh
+    modifyIORef' paths(M.insert file artifact)
+    pure artifact
+
+-- Loads one entry as loadCase would; the case's id must be its entry's. The single-case wire
+-- is hashed for the report; neither it nor the region bytes are retained.
+admitCase :: ArtifactReader -> BatchEntry -> IO (Int,Admitted)
+admitCase reader entry=do
+ LoadedCase{loadedValue=c,loadedRegions=placed,loadedIdentity=identity,loadedJsonBytes=bytes,loadedRows=rows}<-loadCaseWith reader(entryPath entry)
+ ensure(get c "id"==s(caseIdText(entryId entry))) "case id differs from its batch entry"
+ forM_ identity(evaluate . snd)
+ plans<-forM placed$ \(r,source)->do
+  item<-evaluate(description r); base<-evaluate(baseAddress r); size<-evaluate(regionSize r)
+  pure(item,base,size,source)
+ pure(bytes,Admitted(entryId entry)c plans(caseReport c identity)rows)
+
+-- The distinct artifacts the admitted cases slice, in order of first use.
+batchArtifacts :: [Admitted] -> [Artifact]
+batchArtifacts admitted=reverse(snd(foldl' add(M.empty,[])[artifact|a<-admitted,(_,_,_,SliceSource artifact _ _)<-admittedRegions a]))
+ where add(seen,done)artifact
+        |M.member(artifactDigest artifact)seen=(seen,done)
+        |otherwise=(M.insert(artifactDigest artifact)()seen,artifact:done)
+
+-- The case's wire with each region's bytes replaced by `z` or `s ARTIFACT OFFSET LENGTH`.
+batchBody :: M.Map ArtifactDigest Int -> Admitted -> B.ByteString
+batchBody index a=BL.toStrict(BB.toLazyByteString(BB.string7(unlines before)<>mconcat[BB.string7(regionHead(materialize plan)++initial source++"\n")|plan@(_,_,_,source)<-admittedRegions a]<>BB.string7(unlines after)))
+ where
+  (before,after)=admittedRows a
+  initial ZeroSource=" z"
+  initial(SliceSource artifact offset len)=unwords["","s",show(index M.! artifactDigest artifact),show offset,show len]
+
+batchWire :: [Artifact] -> [B.ByteString] -> BL.ByteString
+batchWire artifacts bodies=BB.toLazyByteString(BB.string7("FUJI_NATIVE_BATCH_V1\n"++show(length artifacts)++" "++show(length bodies)++"\n")<>mconcat(map(framed . artifactBytes)artifacts)<>mconcat(map framed bodies))
+ where framed bytes=BB.intDec(B.length bytes)<>BB.char7 '\n'<>BB.byteString bytes<>BB.char7 '\n'
+
+-- Each entry is invalid (its runCase report) or admitted; past the limits the batch is refused.
+prepareBatch :: B.ByteString -> [BatchEntry] -> IO [(CaseId,Either Value Admitted)]
+prepareBatch raw entries=do
+ declared<-forM entries$ \entry->getFileSize(entryPath entry)`catch`(\(_::IOException)->pure 0)
+ ensure(fromIntegral(B.length raw)+sum declared<=toInteger batchJsonBytes) "batch JSON bytes exceed the limit"
+ reader<-sharedArtifactReader
+ loaded<-forM entries(\entry->do
+  result<-try(admitCase reader entry)
+  pure(entryId entry,case result of
+   Left(e::IOException)->(0,Left(merge unknownReport[("status",s "invalid_case"),("reason",s(show e))]))
+   Right(bytes,admitted)->(bytes,Right admitted)))
+  `catch`\ArtifactLimit->failH "batch artifact bytes exceed the limit"
+ ensure(B.length raw+sum[bytes|(_,(bytes,_))<-loaded]<=batchJsonBytes) "batch JSON bytes exceed the limit"
+ pure[(ident,result)|(ident,(_,result))<-loaded]
+
+data LineEnd = OutputEnded | LineTooLong deriving Eq
+
+-- Runner stdout read line by line; the current frame's bytes are kept for diagnostics.
+data Output = Output
+ { outputHandle::Handle
+ , outputBuffer::IORef B.ByteString
+ , outputPending::IORef [B.ByteString]
+ , outputFrame::IORef [B.ByteString]
+ }
+
+readLine :: Output -> Int -> IO (Either LineEnd B.ByteString)
+readLine out cap=go
+ where
+  go=do
+   buffered<-readIORef(outputBuffer out)
+   case BC.elemIndex '\n' buffered of
+    Just i->do
+     earlier<-readIORef(outputPending out)
+     let line=B.concat(reverse(B.take i buffered:earlier))
+     writeIORef(outputBuffer out)(B.drop(i+1)buffered)
+     writeIORef(outputPending out)[]
+     modifyIORef'(outputFrame out)(BC.snoc line '\n':)
+     pure(if B.length line>cap then Left LineTooLong else Right line)
+    Nothing->do
+     modifyIORef'(outputPending out)(buffered:)
+     writeIORef(outputBuffer out)B.empty
+     held<-sum . map B.length<$>readIORef(outputPending out)
+     if held>cap then pure(Left LineTooLong) else do
+      chunk<-B.hGetSome(outputHandle out)65536
+      if B.null chunk then pure(Left OutputEnded) else writeIORef(outputBuffer out)chunk>>go
+
+frameText :: Output -> IO B.ByteString
+frameText out=do
+ frame<-readIORef(outputFrame out); pending<-readIORef(outputPending out); buffered<-readIORef(outputBuffer out)
+ pure(B.take batchStreamBytes(B.concat(reverse frame++reverse pending++[buffered])))
+
+-- `FUJI_NATIVE_BATCH_CASE INDEX EXIT` and the observation line.
+readFrame :: Output -> Int -> IO (Either (BatchStatus,String) (ExitCode,B.ByteString))
+readFrame out index=do
+ header<-readLine out 128
+ case BC.words<$>header of
+  Right[tag,position,exit]|tag==BC.pack "FUJI_NATIVE_BATCH_CASE",position==BC.pack(show index),Just code<-frameExit exit->do
+   observation<-readLine out batchStreamBytes
+   pure$case observation of
+    Right line->Right(code,line)
+    Left OutputEnded->Left(BatchRunnerFailure,"runner output ended inside a frame")
+    Left LineTooLong->Left(BatchHostTimeout,"observation exceeds the stream cap")
+  Left OutputEnded->pure(Left(BatchRunnerFailure,"runner output ended before the frame"))
+  Right(tag:_)|index==0,tag==BC.pack "FUJI_NATIVE_BATCH_INVALID"->pure(Left(BatchInvalid,"runner refused the batch: "++either(const "")BC.unpack header))
+  _->pure(Left(BatchRunnerFailure,"malformed batch frame header"))
+ where
+  frameExit code|code==BC.pack "0"=Just ExitSuccess|code==BC.pack "1"=Just(ExitFailure 1)|otherwise=Nothing
+
+data BatchProcess = BatchProcess
+ { processHandle::ProcessHandle
+ , processGroup::Maybe Pid
+ , processOutput::Output
+ , processInput::MVar ()
+ , processErrors::IORef B.ByteString
+ , processErrorsExcess::IORef Bool
+ , processErrorsDone::MVar ()
+ , processThreads::[ThreadId]
+ }
+
+startBatch :: FilePath -> BL.ByteString -> IO BatchProcess
+startBatch executable wire=do
+ (Just hin,Just hout,Just herr,ph)<-createProcess(proc executable ["--batch"]){std_in=CreatePipe,std_out=CreatePipe,std_err=CreatePipe,create_group=True}
+ mapM_(`hSetBinaryMode`True)[hin,hout,herr]
+ group<-getPid ph
+ input<-newEmptyMVar
+ writer<-forkIO((BL.hPut hin wire`catch`\(_::IOException)->pure())`finally`((hClose hin`catch`\(_::IOException)->pure())>>putMVar input()))
+ errors<-newIORef B.empty; excess<-newIORef False; errorsDone<-newEmptyMVar
+ let drain=do
+      chunk<-B.hGetSome herr 65536
+      unless(B.null chunk)$do
+       current<-readIORef errors
+       let combined=current<>chunk
+       writeIORef errors(B.take batchStreamBytes combined)
+       when(B.length combined>batchStreamBytes)(writeIORef excess True>>terminateProcess ph)
+       drain
+ reader<-forkIO(drain`catch`(\(_::IOException)->pure())`finally`putMVar errorsDone())
+ output<-Output hout<$>newIORef B.empty<*>newIORef[]<*>newIORef[]
+ pure(BatchProcess ph group output input errors excess errorsDone[writer,reader])
+
+-- Kills the process group unless the runner was already reaped, then reaps it.
+stopBatch :: BatchProcess -> IO (Maybe ExitCode)
+stopBatch p=do
+ reaped<-getProcessExitCode(processHandle p)
+ when(reaped==Nothing)$do
+  forM_(processGroup p)(\group->signalProcessGroup sigKILL group`catch`\(_::IOException)->pure())
+  terminateProcess(processHandle p)`catch`\(_::IOException)->pure()
+ code<-maybe(timeout 1000000(waitForProcess(processHandle p)))(pure . Just)reaped
+ void(timeout 1000000(readMVar(processErrorsDone p)))
+ mapM_ killThread(processThreads p)
+ pure code
+
+-- Runs every admitted case of a batch in one runner process and passes each case's report to the
+-- sink in batch order.
+runBatch :: FilePath -> FilePath -> (CaseReport -> IO ()) -> IO BatchSummary
+runBatch runner input sink=do
+ readResult<-try(readBatch input)
+ case readResult of
+  Left(e::IOException)->pure(invalidSummary Nothing(show e))
+  Right(raw,entries)->do
+   let batchDigest=DigestHex(sha256Hex(sha256 raw))
+   prepared<-try$do
+    cases<-prepareBatch raw entries
+    executable<-canonicalizePath runner
+    hash<-runnerDigest executable
+    pure(cases,executable,DigestHex hash)
+   case prepared of
+    Left(e::IOException)->pure(invalidSummary(Just batchDigest)(show e))
+    Right(cases,executable,hash)->do
+     executed<-try(executeBatch executable hash batchDigest cases sink)
+     either(\(e::IOException)->pure(invalidSummary(Just batchDigest)(show e)))pure executed
+ where
+  invalidSummary digest reason=BatchSummary
+   { summaryStatus=BatchInvalid,summaryBatchDigest=digest,summaryRunnerDigest=Nothing,summaryReason=Just reason
+   , summaryFailedCase=Nothing,summaryRunnerExit=Nothing,summaryStderr=Nothing,summaryCases=[]}
+
+exitNumber :: ExitCode -> Value
+exitNumber code=n(case code of ExitSuccess->0;ExitFailure i->fromIntegral i)
+
+reportDigest :: Value -> Maybe DigestHex
+reportDigest report=case get report "case_sha256" of
+ String _->Just(DigestHex(str(get report "case_sha256")))
+ _->Nothing
+
+executeBatch :: FilePath -> DigestHex -> DigestHex -> [(CaseId,Either Value Admitted)] -> (CaseReport -> IO ()) -> IO BatchSummary
+executeBatch executable hash batchDigest cases sink=do
+ statuses<-newIORef[]
+ let admitted=[a|(_,Right a)<-cases]
+     artifacts=batchArtifacts admitted
+     index=M.fromList(zip(map artifactDigest artifacts)[0..])
+     record entry=modifyIORef' statuses(entry:)
+     emit ident regions code value=do
+      sink(CaseReport ident regions code value)
+      record(BatchCase ident(caseStatusOf value)(reportDigest value))
+     -- Reports of refused entries; admitted cases that never got a frame are not_run.
+     remaining=mapM_(\(ident,result)->either(emit ident Nothing 1)(\a->record(BatchCase ident CaseNotRun(reportDigest(admittedReport a))))result)
+     withRunner a=set "runner_sha256"(s(digestHex hash))(admittedReport a)
+ (status,(reason,failed,exit),errors)<-if null admitted then remaining cases>>pure(BatchComplete,(Nothing,Nothing,Nothing),B.empty) else
+  bracket(startBatch executable(batchWire artifacts(map(batchBody index)admitted)))(void . stopBatch)$ \p->do
+   transferred<-timeout batchInputMicros(readMVar(processInput p))
+   let failAt ident a(status,reason)rest=do
+        ended<-case status of BatchHostTimeout->pure Nothing;_->timeout 1000000(waitForProcess(processHandle p))
+        partial<-frameText(processOutput p)
+        stopped<-stopBatch p
+        errors<-readIORef(processErrors p)
+        let code=maybe stopped Just ended
+            exitValue=[("runner_exit",exitNumber c)|Just c<-[code]]
+            diagnostics=case status of
+             BatchHostTimeout->[("status",s "host_timeout"),("stdout",s(BC.unpack partial)),("stderr",s(BC.unpack errors))]
+             _->[("status",s "runner_failure"),("runner_stdout",s(BC.unpack partial)),("stderr",s(BC.unpack errors))]++exitValue
+        if status==BatchInvalid then do
+         remaining((ident,Right a):rest)
+         pure(status,(Just reason,Nothing,code),errors)
+        else do
+         emit ident(Just(map materialize(admittedRegions a)))1(merge(withRunner a)(diagnostics++[("reason",s reason)]))
+         remaining rest
+         pure(status,(Just reason,Just ident,code),errors)
+       frames _ []=finish
+       frames k((ident,Left value):rest)=emit ident Nothing 1 value>>frames k rest
+       frames k((ident,Right a):rest)=do
+        writeIORef(outputFrame(processOutput p))[]
+        let wall=num(get(get(admittedValue a)"limits")"wall_ms")
+        frame<-timeout(fromInteger(wall*1000+2000000))(readFrame(processOutput p)k)
+        excess<-readIORef(processErrorsExcess p)
+        case frame of
+         Just(Right(exit,line))->do
+          let regions=map materialize(admittedRegions a)
+          (code,value)<-judgeRunner(admittedValue a)regions(withRunner a)exit(BC.snoc line '\n')B.empty
+          emit ident(Just regions)code value
+          frames(k+1)rest
+         _|excess->failAt ident a(BatchHostTimeout,"stderr exceeds the stream cap")rest
+         Just(Left failure)->failAt ident a failure rest
+         Nothing->failAt ident a(BatchHostTimeout,"case deadline elapsed")rest
+       finish=do
+        end<-timeout 2000000(readLine(processOutput p)128)
+        exit<-timeout 2000000(waitForProcess(processHandle p))
+        trailing<-timeout 2000000(readLine(processOutput p)128)
+        void(stopBatch p)
+        errors<-readIORef(processErrors p)
+        excess<-readIORef(processErrorsExcess p)
+        let ended=case trailing of Just(Left OutputEnded)->True;_->False
+            proper=end==Just(Right(BC.pack("FUJI_NATIVE_BATCH_END "++show(length admitted))))
+        pure$if excess then(BatchHostTimeout,(Just "stderr exceeds the stream cap",Nothing,exit),errors)
+         else if proper && exit==Just ExitSuccess && ended then(BatchComplete,(Nothing,Nothing,Nothing),errors)
+         else(BatchRunnerFailure,(Just "runner did not end the batch cleanly",Nothing,exit),errors)
+   case transferred of
+    Nothing->case break(isRight . snd)cases of
+     (before,(ident,Right a):rest)->do
+      remaining before
+      failAt ident a(BatchHostTimeout,"runner did not read the batch wire")rest
+     _->finish
+    Just()->frames(0::Int)cases
+ entries<-reverse<$>readIORef statuses
+ pure BatchSummary
+  { summaryStatus=status,summaryBatchDigest=Just batchDigest,summaryRunnerDigest=Just hash,summaryReason=reason
+  , summaryFailedCase=failed,summaryRunnerExit=exit,summaryStderr=Just errors,summaryCases=entries}

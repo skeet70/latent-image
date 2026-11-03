@@ -24,6 +24,7 @@ pub mod provenance;
 pub mod r4f;
 pub mod render;
 pub mod run;
+pub mod reset_observation;
 pub mod sd_host;
 pub mod startup_sites;
 pub mod trace;
