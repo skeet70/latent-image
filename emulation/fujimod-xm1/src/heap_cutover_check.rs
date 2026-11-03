@@ -165,7 +165,7 @@ fn consume(inputs: &Inputs, directory: &Path, role: Role, fault: Option<Fault>) 
     let receipt: NaturalReceipt = serde_json::from_slice(&bounded_read(&directory.join("natural-receipt.json"), 128 * 1024)?).map_err(|error| error.to_string())?;
     require(receipt.schema == 1 && receipt.role == role && receipt.complete && receipt.error.is_none() && receipt.machine_failure.is_none()
         && receipt.watch_end_error.is_none() && receipt.watch_finish_error.is_none() && receipt.terminal_access_sha256.is_none()
-        && receipt.access_limits == ACCESS_LIMITS && receipt.image5_phase == Image5Phase::Admitted,
+        && receipt.access_limits == CUTOVER_ACCESS_LIMITS && receipt.image5_phase == Image5Phase::Admitted,
         "natural receipt is incomplete")?;
     let (update, images) = match role { Role::Stock => (&inputs.stock, &inputs.stock_images), Role::Owned => (&inputs.contract.candidate, &inputs.contract.images) };
     require(receipt.contract_sha256 == inputs.contract.contract_digest && receipt.run_sha256.0 == sha256(&inputs.run)
@@ -178,7 +178,7 @@ fn consume(inputs: &Inputs, directory: &Path, role: Role, fault: Option<Fault>) 
     let access_path = directory.join("accesses.jsonl.gz");
     require(receipt.boundaries_sha256.0 == sha256(&boundary_bytes) && receipt.hits_sha256.0 == sha256(&hits_bytes)
         && receipt.events_sha256.0 == sha256(&event_bytes) && receipt.summary_sha256.0 == sha256(&summary_bytes)
-        && receipt.accesses_sha256 == heap_accesses::digest_file(&access_path, ACCESS_LIMITS.compressed()).map_err(|error| error.to_string())?
+        && receipt.accesses_sha256 == heap_accesses::digest_file(&access_path, CUTOVER_ACCESS_LIMITS.compressed()).map_err(|error| error.to_string())?
         && receipt.reset_sha256.0 == sha256(&bounded_read(&directory.join("reset.fujimod"), 128 * 1024 * 1024)?), "natural raw journal digest differs")?;
     let mut boundaries: Vec<RawBoundary> = serde_json::from_slice(&boundary_bytes).map_err(|error| error.to_string())?;
     let hits: Vec<RecordedHit> = serde_json::from_slice(&hits_bytes).map_err(|error| error.to_string())?;
@@ -209,7 +209,7 @@ fn consume(inputs: &Inputs, directory: &Path, role: Role, fault: Option<Fault>) 
     let mut recorder = Recorder::new();
     let mut lifecycle = Image5Lifecycle::default();
     let mut retired_guard = guard::Guard::default();
-    let mut lines = AccessReader::new(File::open(&access_path).map_err(|error| error.to_string())?, ACCESS_LIMITS);
+    let mut lines = AccessReader::new(File::open(&access_path).map_err(|error| error.to_string())?, CUTOVER_ACCESS_LIMITS);
     let mut begin = [0; 2];
     for (index, (raw, hit)) in boundaries.iter().zip(&hits).enumerate() {
         let boundary = &raw.boundary;

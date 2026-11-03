@@ -9,6 +9,11 @@ use guard::Role;
 
 const HELP: &str = "heap-observe --cutover-run|--cutover-check|--cutover-controls CONTRACT STOCK_DAT CANDIDATE_DAT ANALYSIS RUN ROM OUTPUT [REPORT_JSON]";
 const JOURNAL_LIMIT: u64 = 256 * 1024 * 1024;
+/// The owned journal records every owned allocator fetch; it exceeded 1 GiB decoded after 44,593 of the route's 51,221 stock batches.
+const CUTOVER_ACCESS_LIMITS: AccessLimits = match (heap_accesses::ByteLimit::new(4 * 1024 * 1024 * 1024), ACCESS_LIMITS) {
+    (Some(decoded), stock) => match AccessLimits::new(stock.compressed(), decoded, stock.line()) { Some(limits) => limits, None => panic!("invalid cutover watch limits") },
+    (None, _) => panic!("invalid cutover decoded limit"),
+};
 
 #[derive(Deserialize, Serialize)]
 struct Payload { pointer: Address, bytes: Vec<u8> }
@@ -128,7 +133,7 @@ fn load(arguments: &[std::ffi::OsString]) -> Result<Inputs, String> {
 fn execute(inputs: &Inputs, role: Role, output: &Path) -> Result<(), String> {
     std::fs::create_dir(output).map_err(|error| error.to_string())?;
     let (update, images) = match role { Role::Stock => (&inputs.stock, &inputs.stock_images), Role::Owned => (&inputs.contract.candidate, &inputs.contract.images) };
-    let mut accesses = access_writer(&output.join("accesses.jsonl.gz"))?;
+    let mut accesses = access_writer(&output.join("accesses.jsonl.gz"), CUTOVER_ACCESS_LIMITS)?;
     let document = RunDocument::parse(&inputs.run)?;
     let maps = run::memory_maps(&document)?;
     let mut session = run::open(&document, update, &inputs.rom)?;
@@ -251,9 +256,9 @@ fn execute(inputs: &Inputs, role: Role, output: &Path) -> Result<(), String> {
         contract_sha256: inputs.contract.contract_digest.clone(), run_sha256: Digest(sha256(&inputs.run)), update_sha256: Digest(sha256(&update.0)),
         rom_sha256: Digest(sha256(&inputs.rom)), executable_sha256: Digest(sha256(&read(&std::env::current_exe().map_err(|error| error.to_string())?)?)),
         reset_sha256: Digest(sha256(&checkpoint)), boundaries_sha256: Digest(sha256(&boundaries_bytes)), hits_sha256: Digest(sha256(&hits_bytes)),
-        accesses_sha256: heap_accesses::digest_file(&output.join("accesses.jsonl.gz"), ACCESS_LIMITS.compressed()).map_err(|error| error.to_string())?,
+        accesses_sha256: heap_accesses::digest_file(&output.join("accesses.jsonl.gz"), CUTOVER_ACCESS_LIMITS.compressed()).map_err(|error| error.to_string())?,
         events_sha256: Digest(sha256(&events_bytes)), summary_sha256: Digest(sha256(&summary_bytes)), instructions, menus,
-        frame: frame.ok().flatten(), image5_phase: lifecycle.phase(), access_limits: ACCESS_LIMITS, watch_end_error, watch_finish_error,
+        frame: frame.ok().flatten(), image5_phase: lifecycle.phase(), access_limits: CUTOVER_ACCESS_LIMITS, watch_end_error, watch_finish_error,
         terminal_access_sha256: terminal, fetches_checked: retired_guard.fetches_checked, payload_writes_checked: retired_guard.payload_writes_checked,
         final_sentinel,
     };
