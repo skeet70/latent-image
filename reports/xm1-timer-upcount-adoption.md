@@ -1,6 +1,6 @@
 # Kernel-timer up-count fix: patch and adoption assessment
 
-[The timer laws report](xm1-timer-interrupt-laws.md) (`E-XM1-TIMER-IRQ-LAWS-150`) found from two hardware console captures that the X-M1 kernel counter `0xfff91000` rises within each tick in control mode `0x23`, while pinned FujiMod `3d90035d` counts it down. The up-count patch is the default FujiMod model (section 5, `E-TIMER-UPCOUNT-DEFAULT-150`); sections 1 to 4 are the patch and the assessment the maintainer decided on. Ledger: `E-TIMER-UPCOUNT-PATCH-150`.
+[The timer laws report](xm1-timer-interrupt-laws.md) (`E-XM1-TIMER-IRQ-LAWS-150`) found from two hardware console captures that the X-M1 kernel counter `0xfff91000` rises within each tick in control mode `0x23`, while pinned FujiMod `3d90035d` counts it down. The up-count patch is the default FujiMod model (section 5); sections 1 to 4 are the patch and the assessment the maintainer decided on. Ledger: `E-TIMER-UPCOUNT-DEFAULT-150`.
 
 ## 1. The patch
 

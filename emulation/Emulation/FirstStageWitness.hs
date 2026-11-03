@@ -22,6 +22,7 @@ module Emulation.FirstStageWitness
   , leWordAt
   , encodeLeWord
   , sha256Hex
+  , recordedCp14Identities
   ) where
 
 import Control.Monad (forM_, unless, when)
@@ -223,6 +224,11 @@ hexText bytes = concatMap byte (B.unpack bytes)
 
 sha256Hex :: B.ByteString -> String
 sha256Hex bytes = hexText (SHA256.hash bytes)
+
+-- | CP14 identities of cores 0 and 1 in the models receipts are recorded on: the catalog's, and
+-- the camera's (E-RAM-PUSH-INSTALL-150), which the current SDK configures.
+recordedCp14Identities :: [(Word32, Word32)]
+recordedCp14Identities = [(0x4003, 0x5003), (0x4003, 0x8003)]
 
 exactFields :: Object -> [String] -> Either String ()
 exactFields object allowed =

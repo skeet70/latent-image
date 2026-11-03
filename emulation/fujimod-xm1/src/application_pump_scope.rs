@@ -320,7 +320,7 @@ mod tests {
             registers.r[2] = layout.creation.0;
         }
         let empty = words(Guest(0), vec![0]);
-        Sample { id: SampleId(id), stop: Count(stop), resume: Count(stop + 1), counts: [stop, 0], identities: [0x4003, 0x5003], core: Core::Primary, pc, registers, code: empty.clone(), carrier: [empty.clone(), empty], task, stack: Vec::new(), state: Vec::new(), packet: Vec::new(), host_reads: HostReads { epoch: EpochId(usize::from(id != 0)), first: RowIndex(usize::from(id != 0)), end: RowIndex(usize::from(id != 0)), stopped: Count(stop) }, raw_views: unused(), input: None }
+        Sample { id: SampleId(id), stop: Count(stop), resume: Count(stop + 1), counts: [stop, 0], identities: [0x4003, 0x8003], core: Core::Primary, pc, registers, code: empty.clone(), carrier: [empty.clone(), empty], task, stack: Vec::new(), state: Vec::new(), packet: Vec::new(), host_reads: HostReads { epoch: EpochId(usize::from(id != 0)), first: RowIndex(usize::from(id != 0)), end: RowIndex(usize::from(id != 0)), stopped: Count(stop) }, raw_views: unused(), input: None }
     }
     fn hit(sample: &Sample) -> shared::Hit {
         #[derive(Serialize)]

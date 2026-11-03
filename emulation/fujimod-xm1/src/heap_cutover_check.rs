@@ -65,7 +65,7 @@ pub(super) fn observe(recorder: &mut Recorder, raw: &RawBoundary, role: Role) ->
 fn context(raw: &RawBoundary, images: &[Image]) -> Result<(), String> {
     let boundary = &raw.boundary;
     let snapshot = &boundary.snapshot;
-    require(snapshot.core.0 < 2 && matches!(boundary.identities[snapshot.core.0], 0x4003 | 0x5003), "raw boundary core identity differs")?;
+    require(snapshot.core.0 < 2 && fujimod_xm1::run::CoreIdentities::of(boundary.identities).is_some(), "raw boundary core identities differ")?;
     let domain = usize::from(boundary.identities[snapshot.core.0] != 0x4003);
     let offset = boundary.task_record_word.0.checked_sub([0x4005ff0c, 0x400efecc][domain]).ok_or("raw task record precedes table")?;
     require(offset % 56 == 0 && offset / 56 < 120 && snapshot.context.task.0 == offset / 56 + 1
@@ -218,6 +218,7 @@ fn consume(inputs: &Inputs, directory: &Path, role: Role, fault: Option<Fault>) 
             && hit.registers.decode()? == boundary.snapshot.registers[..13]
             && hit.sp.decode()? == boundary.snapshot.registers[13] && hit.lr.decode()? == boundary.snapshot.registers[14]
             && hit.cpsr == boundary.snapshot.cpsr, "raw hit and boundary registers differ")?;
+        require(boundaries.first().is_some_and(|first| first.boundary.identities == boundary.identities), "raw boundary core identities change within the receipt")?;
         context(raw, images)?;
         let mut batch: AccessBatch = serde_json::from_slice(lines.next_line().map_err(|error| error.to_string())?.ok_or("natural watch interval missing")?).map_err(|error| error.to_string())?;
         if matches!(fault, Some(Fault::StockBodyFetch)) && !targeted {
