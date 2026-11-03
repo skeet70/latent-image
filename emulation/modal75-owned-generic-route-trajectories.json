@@ -1,9 +1,9 @@
 {
   "schema": 1,
-  "entry": "Matched default223 stock-dispatcher control and owned-generic modal224 candidate. The qualified package prefix uses MENU to reach the live view (67,56,0), crawl-3 root 0. OK, OK, DOWN, DOWN and OK follow the crawl-3 route through the shooting menu (1,5,2) to (36,330,0), where controller 75 moves to state 1 and dispatches event 50, the owned layer-(a) cell whose stock action is 0x00c7a6ac. BACK, BACK and BACK return through (1,321,20) and the shooting menu to the live view; the menu tuple keeps (1,5,2) after the last BACK, as the packaged route keeps (1,5,6). After rollback the same keys run through the restored stock dispatcher. Resident and live-setting bytes are observed without host seeding.",
+  "entry": "Matched default223 stock-dispatcher control and owned-generic modal224 candidate. The qualified package prefix uses MENU to reach the live view (67,56,0), crawl-3 root 0, and a second MENU opens the shooting menu (1,5,2), as in the packaged route; OK at the live view, the crawl-3 edge 0->1, changes live-setting byte 0x0096ccd2 under the stock dispatcher (run-stock223 failure). OK, DOWN, DOWN and OK then follow the crawl-3 route to (36,330,0), where controller 75 moves to state 1 and dispatches event 50, the owned layer-(a) cell whose stock action is 0x00c7a6ac. BACK, BACK and BACK return through (1,321,20) and the shooting menu to the live view; the menu tuple keeps (1,5,2) after the last BACK, as the packaged route keeps (1,5,6). After rollback the same keys run through the restored stock dispatcher. Resident and live-setting bytes are observed without host seeding.",
   "source_bindings": [
-    {"source": "emulation/modal75-packaged-route-trajectories.json: package-menu-prefix, modal75-handback and unloaded-shooting", "expectation": "The installed package uses the qualified MENU prefix to the live view, a BACK to the live view keeps the shooting-menu tuple, and after unload two MENU presses reach the shooting menu."},
-    {"source": "private-data/scratch/ControllerStrategy/crawl-3/crawl-graph.json (mechanism 557024fc): nodes 0 to 5 and edges 0->1 ok, 1->2 ok, 2->3 down, 3->4 down, 4->5 ok, 5->4 back, 4->1 back, 1->142 back", "expectation": "(67,56,0) ok (1,5,2) ok (1,321,17) down (1,321,18) down (1,321,20) ok (36,330,0) with controller 75 state 1 event 50 action 0x00c7a6ac; back (1,321,20); back (1,5,2); back to the live-view frame."},
+    {"source": "emulation/modal75-packaged-route-trajectories.json: package-menu-prefix, modal75-shooting, modal75-handback and unloaded-shooting", "expectation": "The installed package uses the qualified MENU prefix to the live view and MENU to the shooting menu, a BACK to the live view keeps the shooting-menu tuple, and after unload two MENU presses reach the shooting menu."},
+    {"source": "private-data/scratch/ControllerStrategy/crawl-3/crawl-graph.json (mechanism 557024fc): nodes 1 to 5 and edges 1->2 ok, 2->3 down, 3->4 down, 4->5 ok, 5->4 back, 4->1 back, 1->142 back", "expectation": "(1,5,2) ok (1,321,17) down (1,321,18) down (1,321,20) ok (36,330,0) with controller 75 state 1 event 50 action 0x00c7a6ac; back (1,321,20); back (1,5,2); back to the live-view frame."},
     {"source": "reports/recipe-bank-ui-ownership.md section Controller75 generic controller, host evidence", "expectation": "(state 1, event 50) is an owned RouteToTransition cell; stock bodies of all nine layer-(a) callbacks are retired."}
   ],
   "trace_sites": [
@@ -25,7 +25,7 @@
     {"phase": "package-menu-prefix", "steps": [["menu", 67, 56, 0]]},
     {"phase": "owned75-shooting", "capture": "owned75-shooting",
      "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000},
-     "steps": [["ok", 1, 5, 2]],
+     "steps": [["menu", 1, 5, 2]],
      "reads": [["dispatcher-first-word", "00bfb028", 4], ["modal75-state", "0146761e", 2], ["modal75-event", "0146777a", 2], ["modal75-cell-1-50", "00cd3ed8", 4], ["modal75-action-275", "00d044cc", 4], ["resident", "runtime:rb_resident", 1024], ["live-settings", "0096cc64", 450]]},
     {"phase": "owned75-submenu", "capture": "owned75-submenu",
      "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000},
