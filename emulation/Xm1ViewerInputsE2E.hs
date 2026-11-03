@@ -240,13 +240,13 @@ data MemoryWindow = MemoryWindow { windowName :: String, windowAddress :: Word32
 
 destructorWindows :: [MemoryWindow]
 destructorWindows =
-  [ MemoryWindow "a-mailbox-and-eventflag-creation" 0x4005d16c 0x56c
-  , MemoryWindow "b-mailbox-and-eventflag-creation" 0x400ed12c 0x56c
+  [ MemoryWindow "a-mailbox-and-eventflag-creation" 0x4005d16c 0x5ac
+  , MemoryWindow "b-mailbox-and-eventflag-creation" 0x400ed12c 0x5ac
   , MemoryWindow "a-eventflag-control-to-boot-stack-top" 0x400624b4 0xfac
   , MemoryWindow "b-eventflag-control-to-boot-stack-top" 0x400f2474 0xfac
   , MemoryWindow "a-data-queue-creation" 0x4005988c 0x780
   , MemoryWindow "b-data-queue-creation" 0x400e984c 0x780
-  , MemoryWindow "task41-module-state" 0x008faef0 0x30
+  , MemoryWindow "task41-module-state" 0x008faef0 0x50
   , MemoryWindow "exit-barrier-mask" 0x015c1e5c 4
   ]
 
@@ -255,10 +255,12 @@ destructorSites =
   [ (0x00ec6708, "exit-after-barrier"), (0x006e4ab4, "task41-stop-request"), (0x006e9dec, "task41-stop-sequence")
   , (0x006e9f68, "task41-stop-final"), (0x00724f08, "destructor-entry"), (0x00724fa0, "destructor-pool-delete-call")
   , (0x00724ffc, "destructor-d0-call"), (0x00725000, "destructor-d0-return"), (0x0072612c, "task-delete-entry")
-  , (0x00724558, "flag-set-wrapper"), (0x00ec31f0, "exit-terminal-action")
-  , (0x0004d39c, "a-80"), (0x0004d434, "a-84"), (0x0004813c, "a-88"), (0x0004839c, "a-8c"), (0x00048b30, "a-9c")
+  , (0x00724558, "flag-set-wrapper"), (0x00ec31f0, "exit-terminal-action"), (0x00041a34, "kernel-failure-log")
+  , (0x0004d39c, "a-80"), (0x0004d434, "a-84"), (0x0004813c, "a-88"), (0x0004839c, "a-8c"), (0x000485c0, "a-90")
+  , (0x000486f8, "a-94"), (0x000489ac, "a-98"), (0x00048b30, "a-9c")
   , (0x0004d540, "a-a4"), (0x0004d654, "a-d0"), (0x0004d790, "a-e8")
-  , (0x000dd360, "b-80"), (0x000dd3f8, "b-84"), (0x000d80fc, "b-88"), (0x000d835c, "b-8c"), (0x000d8af0, "b-9c")
+  , (0x000dd360, "b-80"), (0x000dd3f8, "b-84"), (0x000d80fc, "b-88"), (0x000d835c, "b-8c"), (0x000d8580, "b-90")
+  , (0x000d86b8, "b-94"), (0x000d896c, "b-98"), (0x000d8af0, "b-9c")
   , (0x000dd504, "b-a4"), (0x000dd618, "b-d0"), (0x000dd754, "b-e8")
   ]
 
