@@ -358,3 +358,29 @@ DAT IMAGE4 LOADER_A LOADER_B WRAPPER WRAPPER_SYMBOLS CRITICAL CRITICAL_SYMBOLS S
 
 The existing two-component dispatcher/installer API and standalone component contracts are unchanged. `E-STARTUP-TASK-COMPOSITION-QUALIFIED-150` qualifies one natural pair and ten real retained/joined control pairs, with 57 serialized refusals and six original/composed release regressions. The owned-only submission bound is `S-200`, release `S-32`; remaining retained demands and actual backing stay separate. This three-component boundary retains the dispatcher, interface installer, kernel table producers, task-record creation, activation, fill/cache/log/error services and scheduling. Its schema-3 interfaces are documented in [task lifecycle observation](../emulation/README.md#startup-task-lifecycle-observation-151).
 
+## Owned property service (stage 1)
+
+`//replacement/property_service` replaces the jump-table arms of the getter `0x61e110` and setter `0x624694` for the properties `:classify` owns. `:property-service-artifact` derives the carrier from the classification (the largest run of consecutive distinct setter arm targets whose properties are all owned fields, ending at the next target or the setter fallback `0x6301fc`), admits the linked `.bin`/`.symbols` (symbol placement, stub and accessor encodings as decoded instructions and raw words, `PROPERTIES` equal to `encodeClass` of every property) and walks every A32 word of the linked text under the code policy: calls only to owned functions, branches only inside owned text apart from the two stub tails, returns only by `bx lr` with the entry return address in lr or `pop {..., pc}` from the slot lr was pushed to, sp and r11 restored at every exit, stores only to the own stack frame outside the four store accessors and never over a saved lr or r11 slot, and a bounded, acyclic stack composed into a maximum depth per stub. Loads are not confined.
+
+Staging refuses unless the word before the carrier is an unconditional transfer and no aligned word of image4, image5, plain, loader A, loader B, image2 or image3 equals a carrier address (apart from the repointed setter table words). Image3 is the FONT_ICON.FDL window, which `canonicalSource` extracts from the DAT and pins. In every image but image2 and image3, which hold data only, it also refuses a word outside the carrier that branches, loads PC-relative or forms an ADR/ADD/SUB-from-pc address into the carrier, and a MOVW whose same-register MOVT within 8 words builds a carrier address. Staging writes the linked bytes and UDF (`0xe7f000f0`) fill into the carrier, repoints every owned property's getter and setter table words at the stubs and checks every other byte is unchanged. The contract records the preceding word, the scanned images, the exemptions and every repointed table word. `bazel run` supplies the three tool paths; output paths must not exist:
+
+```sh
+devenv shell -- bazel run //replacement/property_service:stage-property-service -- \
+  SOURCE_DAT IMAGE4 LOADER_A LOADER_B IMAGE5 PLAIN IMAGE2 LINKED_BIN SYMBOLS \
+  private-data/scratch/PropertyService/RUN OUT_DAT OUT_CONTRACT OUT_IMAGE4
+```
+
+A hit is exempt only when it matches a reviewed `dataSites` entry in image, address and word and the 64 bytes at `[address - 32, address + 32)` match the entry's sha256. The one entry is plain `0x12ba48c` (`0xcacdc8b4`, a high-entropy word decoding as `bgt 0x62c764`). The contract lists each exemption with its window digest and the count of rejected decodes in the window.
+
+A scan refusal prints each hit with its image, address, word and decoded instruction. `:property-service-artifact-tests` admits the linked artifact against a classification built from its own table and checks the typed refusals of mutated artifacts, of placement and staging on a synthetic image4, and of the code policy on small functions.
+
+`:property-oracle` runs the stock getter and setter natively for property ids 0 to 646, 32 cases each (getter: bank, defaults flag and slot; setter: bank, slot and six values), once from the canonical image4 and once from the staged image4, over one shared fixture. It re-derives the staged image4 from the canonical sources and the linked artifact and refuses a mismatch with `--candidate-image4` or the contract's `staged_image4_sha256`. Stock runs of owned ids, and of ids 0 and 646, must equal the owned model. Each candidate case must equal its stock case in status, r0, r4-r11, sp, the final bank, previous-value, configuration and caller-frame bytes, and the ordered writes outside the stack below entry sp, with neither provenance log truncated. Seven guest controls patch the staged bytes (a PROPERTIES offset, save bit and default, a delegated id repointed at the stubs, `mov r12, #0` in the getter stub with property 0xe9's getter word at the stub, the getter stub holding the id in r6 instead of r4, and the setter stub's exit branch aimed at property 1's arm) and must each fail a case. A reference with only 0xe9's word at the stub must pass. `--smoke` runs one 64-case batch of the canonical image4 instead. `bazel run` supplies the runner and the linked artifact:
+
+```sh
+devenv shell -- bazel run //replacement/property_service:property-oracle -- \
+  --image4 IMAGE4 --candidate-image4 STAGE/staged-image4.bin --contract STAGE/contract.json \
+  --dat SOURCE_DAT --loader-a LOADER_A --loader-b LOADER_B --image5 IMAGE5 --plain PLAIN --image2 IMAGE2 \
+  --out private-data/scratch/PropertyService/NEW_RUN
+```
+
+Each batch directory holds the case files, every case's native result (about 170 KB each, so about 7 GB for both roles) and a `summary.json`. `results.json` records the input and runner digests, batch digests, totals per class and id, model agreement, verdicts, status distributions, control outcomes and the first 20 differences of each kind. The command exits nonzero unless the model agrees, every candidate case passes and every control holds.

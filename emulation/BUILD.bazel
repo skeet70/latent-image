@@ -1755,7 +1755,7 @@ filegroup(
 
 sh_test(
     name = "native-runner-tests",
-    size = "small",
+    size = "medium",
     srcs = ["native-tests.sh"],
     args = [
         "$(location :native-tests-hs)",
@@ -1854,10 +1854,13 @@ haskell_library(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:containers",
         "//host:directory",
         "//host:filepath",
         "//host:host-support",
         "//host:json",
+        "//host:process",
+        "//host:unix",
     ],
 )
 
@@ -1898,8 +1901,11 @@ haskell_binary(
     deps = [
         ":native-adapter",
         "//host:base",
+        "//host:bytestring",
+        "//host:directory",
         "//host:filepath",
         "//host:host-support",
+        "//host:json",
     ],
 )
 
@@ -1913,9 +1919,12 @@ haskell_binary(
     ],
     deps = [
         ":native-adapter",
+        ":native-observation",
+        ":owned-case",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:containers",
         "//host:directory",
         "//host:filepath",
         "//host:host-support",
@@ -2083,6 +2092,7 @@ haskell_library(
         "-O2",
     ],
     src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
     deps = [
         ":case-sha256",
         ":native-adapter",

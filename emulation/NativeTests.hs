@@ -2,19 +2,25 @@
 module Main where
 import FujiAF.Host
 import Emulation.NativeCase
-import Control.Exception (SomeException, try)
+import qualified Emulation.NativeObservation as N
+import qualified Emulation.OwnedCase as O
+import Control.Exception (SomeException, evaluate, try)
 import Control.Monad
 import Data.Aeson(Value(..))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
+import qualified Data.ByteString.Lazy as BL
 import Data.Bits
+import Data.IORef
+import qualified Data.Map.Strict as M
 import Data.Word
 import Data.Char(toLower)
 import Numeric(showHex)
 import FujiAF.JSON(encodeCanonical)
 import Data.List
+import Data.Maybe(fromMaybe)
 import System.Directory
 import System.Environment
 import System.Exit
@@ -231,6 +237,11 @@ schemaContract=do
  expect "initial offset maximum"(get(get(get sliced "properties")"offset")"maximum")(toInteger sizeBytes)
  expect "expected offset maximum"(get(get(get memory "properties")"offset")"maximum")(toInteger sizeBytes)
  expect "expected hex maxLength"(get(get(get memory "properties")"hex")"maxLength")(toInteger(2*sizeBytes))
+ let batch=get defs "batch"
+ expect "batch cases maxItems"(get(get(get batch "properties")"cases")"maxItems")(toInteger batchCaseCount)
+ expect "batch maxJsonBytes"(get batch "maxJsonBytes")(toInteger batchJsonBytes)
+ expect "batch maxArtifactBytes"(get batch "maxArtifactBytes")(toInteger batchArtifactBytes)
+ expect "batch summary cases maxItems"(get(get(get(get defs "batchSummary")"properties")"cases")"maxItems")(toInteger batchCaseCount)
 
 -- The recording capacity (MAX_RECORDED_EVENTS 512) is a separate engine limit from the 128 public
 -- expected-events bound: an execution records far more stub events than a case declares (the
@@ -265,9 +276,283 @@ recordingLimitRegressions runner=withTemporary "fuji-recording-limit-tests"$ \ro
   ensure(get runnerResult "status"==s statusWanted)("recording capacity "++show k++" status: "++show report)
   ensure(length(list(get runnerResult "events"))==eventWanted)("recording capacity "++show k++" events: "++show report)
 
+-- Batches
+
+-- A report alone and in a batch differ only in elapsed time, and a wall-budget case also in how
+-- far it got before its deadline.
+hostIndependent :: Value -> Value
+hostIndependent report=case get report "runner" of
+ Null->report
+ result->set "runner"(foldr remove result(if get result "status"==s "wall_budget" then ["elapsed_ns","instructions","trace_total","trace"] else ["elapsed_ns"]))report
+
+collectBatch :: FilePath -> FilePath -> IO (BatchSummary,[CaseReport])
+collectBatch runner path=do
+ reports<-newIORef[]
+ summary<-runBatch runner path(\report->modifyIORef' reports(report:))
+ collected<-reverse<$>readIORef reports
+ pure(summary,collected)
+
+writeBatchFile :: FilePath -> [(String,FilePath)] -> IO FilePath
+writeBatchFile root entries=do
+ let path=root</>"batch.json"
+ B.writeFile path(encodeCanonical(obj[("schema_version",n 1),("cases",arr[obj[("id",s ident),("path",s file)]|(ident,file)<-entries])]))
+ pure path
+
+-- Validates documents against a definition of schemas/native-case.schema.json.
+schemaDefinition :: FilePath -> String -> [Value] -> IO ()
+schemaDefinition checker definition documents=withTemporary "fuji-batch-schema"$ \root->do
+ schema<-canonicalizePath "schemas/native-case.schema.json"
+ let wrapper=root</>definition<.>"json"
+ B.writeFile wrapper(encodeCanonical(obj[("$schema",s "https://json-schema.org/draft/2020-12/schema"),("$ref",s("file://"++schema++"#/$defs/"++definition))]))
+ schemaCheck checker wrapper documents
+
+-- Runs a batch, requires every case's report to equal its report alone and the summary to bind
+-- the batch file's SHA256 to each case's id, status and case SHA256 in batch order.
+sameAsAlone :: FilePath -> FilePath -> FilePath -> [(String,FilePath)] -> IO (BatchSummary,[CaseReport])
+sameAsAlone runner checker root entries=do
+ path<-writeBatchFile root entries
+ (summary,reports)<-collectBatch runner path
+ ensure(map(caseIdText . reportCase)reports==map fst entries)("batch report order: "++show(map(caseIdText . reportCase)reports))
+ forM_(zip entries reports)$ \((ident,file),report)->do
+  (aloneCode,alone)<-runCase runner(root</>file)
+  ensure(reportCode report==aloneCode && hostIndependent(reportValue report)==hostIndependent alone)(ident++": batch report differs from the case alone:\n"++show(reportValue report)++"\n"++show alone)
+ digest<-B.readFile path>>=sha256
+ let bound r=BatchCase(reportCase r)(caseStatusOf(reportValue r))(reportDigest(reportValue r))
+ ensure(summaryBatchDigest summary==Just(DigestHex digest) && summaryStatus summary==BatchComplete && summaryCases summary==map bound reports)("batch summary: "++show summary)
+ batchFile<-B.readFile path>>=jsonRead
+ schemaDefinition checker "batch"[batchFile]
+ schemaDefinition checker "batchSummary"[summaryJson summary]
+ pure(summary,reports)
+
+statusesOf :: [CaseReport] -> [(String,String)]
+statusesOf reports=[(caseIdText(reportCase r),str(get(reportValue r)"status"))|r<-reports]
+
+-- Every public fixture, positive, refusal and budget alike, with a failing expectation in the middle.
+fixtureBatch :: FilePath -> FilePath -> IO Int
+fixtureBatch runner checker=withTemporary "fuji-batch-fixtures"$ \root->do
+ names<-sort.filter((`elem`[".json",".bin"]).takeExtension)<$>listDirectory "emulation/fixtures"
+ forM_ names$ \name->copyFile("emulation/fixtures"</>name)(root</>name)
+ cases<-forM[name|name<-names,takeExtension name==".json"]$ \name->do
+  fixture<-B.readFile(root</>name)>>=jsonRead
+  pure(str(get fixture "id"),name)
+ arithmetic<-B.readFile(root</>"arithmetic.json")>>=jsonRead
+ B.writeFile(root</>"expectation-mismatch.json")(encodeCanonical(merge arithmetic[("id",s "expectation-mismatch"),("expected",set "registers"(obj[("r0",s "0x00000004")])(get arithmetic "expected"))]))
+ let (early,late)=splitAt(length cases`div`2)cases
+     entries=early++[("expectation-mismatch","expectation-mismatch.json")]++late
+ (summary,reports)<-sameAsAlone runner checker root entries
+ ensure(not(batchPassed summary) && statusesOf reports==[(ident,if ident=="expectation-mismatch" then "failed" else "passed")|(ident,_)<-entries])("fixture batch statuses: "++show(statusesOf reports))
+ pure(length entries)
+
+hexWord :: Word32 -> Value
+hexWord value=s("0x"++replicate(8-length text)'0'++text) where text=showHex value ""
+
+wordBytes :: [Word32] -> B.ByteString
+wordBytes ws=B.pack[fromIntegral(w`shiftR`k)|w<-ws,k<-[0,8,16,24]]
+
+-- One function of code at 0x8000, a data word at 0x9000 seeded with 0x11223344 from the shared
+-- seed.bin, the exit at 0xa000 and a 32-byte stack below SP 0xb020. Unnamed registers start at
+-- zero and CPSR at 0x10.
+isolationCase :: FilePath -> String -> [Word32] -> [(String,Word32)] -> (Integer,Integer) -> Value -> IO (String,FilePath)
+isolationCase root ident code initial(instructions,wallMs)expected=do
+ let seed=wordBytes[0x11223344]
+     bytes=wordBytes code
+     size=toInteger(B.length bytes)
+ B.writeFile(root</>"seed.bin")seed
+ B.writeFile(root</>ident<.>"bin")bytes
+ seedDigest<-sha256 seed
+ digest<-sha256 bytes
+ let region name address size' permissions initial'=obj[("id",s name),("address",hexWord address),("size",n size'),("permissions",s permissions),("initial",initial')]
+     slice artifact len=obj[("artifact",s artifact),("offset",n 0),("length",n len)]
+     zero=obj[("zero",b True)]
+     registers=merge(obj([("r"++show i,hexWord 0)|i<-[0..12::Int]]++[("sp",hexWord 0xb020),("lr",hexWord 0xa000),("cpsr",hexWord 0x10)]))[(k,hexWord v)|(k,v)<-initial]
+     fixture=obj
+      [("schema_version",n 1),("id",s ident),("origin",s "synthetic"),("provenance",s "NativeTests.hs: batch isolation control")
+      ,("cpu",obj[("architecture",s "arm"),("model",s "cortex-r5f"),("mode",s "arm"),("endian",s "little")])
+      ,("artifacts",arr[obj[("id",s "code"),("path",s(ident<.>"bin")),("size",n size),("sha256",s digest)],obj[("id",s "seed"),("path",s "seed.bin"),("size",n 4),("sha256",s seedDigest)]])
+      ,("entry",hexWord 0x8000),("exit",hexWord 0xa000),("registers",registers)
+      ,("regions",arr[region "code" 0x8000 size "rx"(slice "code" size),region "data" 0x9000 4 "rw"(slice "seed" 4),region "exit" 0xa000 4 "rx" zero,region "stack" 0xb000 32 "rw" zero])
+      ,("functions",arr[obj[("address",hexWord 0x8000),("size",n size)]]),("stubs",arr[])
+      ,("limits",obj[("instructions",n instructions),("wall_ms",n wallMs)]),("expected",expected)
+      ,("exclusions",arr[s "batch isolation control"])]
+ B.writeFile(root</>ident<.>"json")(encodeCanonical fixture)
+ pure(ident,ident<.>"json")
+
+expectation :: String -> [(String,Word32)] -> [String] -> Value
+expectation status registers memory=obj[("status",s status),("registers",obj[(k,hexWord v)|(k,v)<-registers]),("memory",arr[obj[("region",s "data"),("offset",n 0),("hex",s m)]|m<-memory]),("events",arr[])]
+
+writerCase, readerCase :: FilePath -> IO (String,FilePath)
+-- STR r0,[r2]: stores 0xdeadbeef over the seed.
+writerCase root=isolationCase root "writer"[0xe5820000,0xe12fff1e][("r0",0xdeadbeef),("r2",0x9000)](100,1000)(expectation "returned"[("r0",0xdeadbeef),("pc",0xa000)]["efbeadde"])
+-- LDR r1,[r2]: reads its own seed.
+readerCase root=isolationCase root "reader"[0xe5921000,0xe12fff1e][("r2",0x9000)](100,1000)(expectation "returned"[("r1",0x11223344),("pc",0xa000)][])
+
+-- Each case would observe a different result if anything of an earlier case carried over.
+isolationBatch :: FilePath -> FilePath -> IO ()
+isolationBatch runner checker=withTemporary "fuji-batch-isolation"$ \root->do
+ entries<-sequence
+  [ writerCase root
+  , readerCase root
+  -- MOVS r0,#0 sets Z; MVN r12,#0 and MOV r5,#0x55 change two more registers.
+  , isolationCase root "dirty"[0xe3b00000,0xe3e0c000,0xe3a05055,0xe12fff1e][("r0",7)](100,1000)(expectation "returned"[("r0",0),("r5",0x55),("r12",0xffffffff),("cpsr",0x40000010)][])
+  -- ADDEQ r0,r0,#1 and MOVNE r5,#7 under its own Z=0.
+  , isolationCase root "flags"[0x02800001,0x13a05007,0xe12fff1e][("r0",0x10)](100,1000)(expectation "returned"[("r0",0x10),("r5",7),("r12",0),("cpsr",0x10)][])
+  , isolationCase root "exhaust-instructions"[0xeafffffe][](1000,1000)(expectation "instruction_budget"[("pc",0x8000)][])
+  -- Three instructions under a budget of exactly three.
+  , isolationCase root "exact-budget"[0xe3a00001,0xe2800002,0xe12fff1e][](3,1000)(expectation "returned"[("r0",3),("pc",0xa000)][])
+  -- Expects the writer's word; reading its own seed fails it.
+  , isolationCase root "expects-carried-value"[0xe5921000,0xe12fff1e][("r2",0x9000)](100,1000)(expectation "returned"[("r1",0xdeadbeef)][])
+  , isolationCase root "exhaust-wall"[0xeafffffe][](4000000,1)(expectation "wall_budget"[("pc",0x8000)][])
+  -- MOVW/MOVT r0,#250000, then SUBS/BNE to zero: 500,003 instructions under exactly that budget.
+  , isolationCase root "countdown"[0xe30d0090,0xe3400003,0xe2500001,0x1afffffd,0xe12fff1e][](500003,10000)(expectation "returned"[("r0",0),("cpsr",0x60000010),("pc",0xa000)][])
+  ]
+ (summary,reports)<-sameAsAlone runner checker root entries
+ ensure(not(batchPassed summary) && statusesOf reports==[(ident,if ident=="expects-carried-value" then "failed" else "passed")|(ident,_)<-entries])("isolation statuses: "++show(statusesOf reports))
+
+-- A whole-process failure fails the batch at the case whose frame was due; a runner refusal of
+-- the batch framing fails no case.
+batchFailures :: FilePath -> FilePath -> IO ()
+batchFailures runner checker=withTemporary "fuji-batch-failures"$ \root->do
+ entries<-sequence[writerCase root,readerCase root]
+ path<-writeBatchFile root entries
+ let substitute name script=do
+      let file=root</>name
+      BC.writeFile file(BC.pack script)
+      setFileMode file 0o700
+      collectBatch file path
+     statuses summary=map batchCaseStatus(summaryCases summary)
+ (hang,hangReports)<-substitute "hanging-runner" "#!/bin/sh\ncat >/dev/null\nprintf 'FUJI_NATIVE_BATCH_CASE 0 1\\n'\ntrap '' TERM\nsleep 30\n"
+ ensure(summaryStatus hang==BatchHostTimeout && summaryFailedCase hang==Just(CaseId "writer") && statuses hang==[CaseHostTimeout,CaseNotRun]
+  && statusesOf hangReports==[("writer","host_timeout")] && "FUJI_NATIVE_BATCH_CASE 0 1"`isInfixOf`str(get(reportValue(head hangReports))"stdout"))("hanging runner: "++show hang)
+ real<-canonicalizePath runner
+ (crash,crashReports)<-substitute "crashing-runner"("#!/bin/sh\n'"++real++"' --batch | { IFS= read -r header; printf '%s\\n' \"$header\"; IFS= read -r observation; printf '%s\\n' \"$observation\"; }\nkill -SEGV $$\n")
+ ensure(summaryStatus crash==BatchRunnerFailure && summaryFailedCase crash==Just(CaseId "reader") && summaryRunnerExit crash==Just(ExitFailure(-11))
+  && statusesOf crashReports==[("writer","passed"),("reader","runner_failure")])("crashing runner: "++show crash)
+ (refusal,refusalReports)<-substitute "refusing-runner" "#!/bin/sh\ncat >/dev/null\nprintf 'FUJI_NATIVE_BATCH_INVALID substitute refusal\\n'\nexit 1\n"
+ ensure(summaryStatus refusal==BatchInvalid && summaryFailedCase refusal==Nothing && statuses refusal==[CaseNotRun,CaseNotRun] && null refusalReports
+  && fmap("substitute refusal"`isInfixOf`)(summaryReason refusal)==Just True)("refusing runner: "++show refusal)
+ schemaDefinition checker "batchSummary"(map summaryJson[hang,crash,refusal])
+ reader<-sharedArtifactReader
+ admitted<-forM entries(\(ident,file)->snd<$>admitCase reader(BatchEntry(CaseId ident)(root</>file)))
+ let artifacts=batchArtifacts admitted
+     index=M.fromList(zip(map artifactDigest artifacts)[0..])
+     bodies=map(batchBody index)admitted
+     frameHeaders out=[line|(i,line)<-zip[0::Int ..](BC.lines out),even i]
+     runWire label wire=do
+      (timed,exit,out,_)<-runBounded 120000000(64*1024*1024)runner["--batch"]wire
+      ensure(not timed)(label++": runner timed out")
+      pure(exit,out)
+     refusedWire label wire=do
+      (exit,out)<-runWire label wire
+      ensure(exit==ExitFailure 1 && BC.pack "FUJI_NATIVE_BATCH_INVALID "`B.isPrefixOf`out)(label++": "++BC.unpack(B.take 4096 out))
+     ranWire label count wire=do
+      (exit,out)<-runWire label wire
+      ensure(exit==ExitSuccess && frameHeaders out==map BC.pack(["FUJI_NATIVE_BATCH_CASE "++show k++" 0"|k<-[0..count-1]]++["FUJI_NATIVE_BATCH_END "++show count]))(label++": "++BC.unpack(B.take 4096 out))
+ -- The runner reports a case whose slice names an artifact index equal to the artifact count as
+ -- that case's invalid_case.
+ let seedSlice=BC.pack(" s "++show(head[i|(i,artifact)<-zip[0::Int ..]artifacts,artifactBytes artifact==wordBytes[0x11223344]])++" 0 4")
+     replaceSlice body=let (before,after)=B.breakSubstring seedSlice body in before<>BC.pack(" s "++show(length artifacts)++" 0 4")<>B.drop(B.length seedSlice)after
+     wire=BL.toStrict(batchWire artifacts[head bodies,replaceSlice(bodies!!1)])
+ ensure(seedSlice`B.isInfixOf`(bodies!!1))("reader body lacks the seed slice: "++BC.unpack(bodies!!1))
+ (exit,out)<-runWire "per-case wire refusal" wire
+ observations<-mapM jsonRead[line|(i,line)<-zip[0::Int ..](BC.lines out),odd i,i<4]
+ ensure(exit==ExitSuccess && frameHeaders out==map BC.pack["FUJI_NATIVE_BATCH_CASE 0 0","FUJI_NATIVE_BATCH_CASE 1 1","FUJI_NATIVE_BATCH_END 2"]
+  && map(`get`"status")observations==[s "returned",s "invalid_case"])("per-case wire refusal: "++BC.unpack out)
+ forM_[BC.pack "FUJI_NATIVE_BATCH_V2"<>B.drop 20 wire,B.take(B.length wire-8)wire,BC.pack "FUJI_NATIVE_BATCH_V1\n0 0\n",wire<>BC.pack "trailing\n"]$
+  refusedWire "batch framing refusal"
+ -- The runner's own batch limits: the case count and the distinct artifact bytes.
+ let writerBody=head bodies
+ ranWire "case count at the limit"batchCaseCount(BL.toStrict(batchWire artifacts(replicate batchCaseCount writerBody)))
+ refusedWire "case count past the limit"(BL.toStrict(batchWire artifacts(replicate(batchCaseCount+1)writerBody)))
+ let used=sum(map(B.length . artifactBytes)artifacts)
+     full=B.replicate sizeBytes 0x5a
+     padding extra=let room=batchArtifactBytes-used+extra; (whole,part)=room`divMod`sizeBytes in replicate whole full++[B.replicate part 0x5a|part>0]
+     padded extra=BL.toStrict(batchWire(artifacts++[Artifact(ArtifactDigest "padding")bytes|bytes<-padding extra])[writerBody])
+ ranWire "artifact bytes at the limit"1(padded 0)
+ refusedWire "artifact bytes past the limit"(padded 1)
+
+-- The batch limits admit a batch at each limit and refuse one past it.
+batchLimits :: FilePath -> IO ()
+batchLimits runner=withTemporary "fuji-batch-limits"$ \root->do
+ let refused label path=do
+      (summary,reports)<-collectBatch runner path
+      ensure(summaryStatus summary==BatchInvalid && null reports)(label++" past the limit: "++show summary)
+     admitted label path=do
+      (summary,_)<-collectBatch runner path
+      ensure(summaryStatus summary==BatchComplete)(label++" at the limit: "++show summary)
+     missing count=[("c"++show i,"missing-"++show i<.>"json")|i<-[1..count]]
+ writeBatchFile root(missing batchCaseCount)>>=admitted "case count"
+ writeBatchFile root(missing(batchCaseCount+1))>>=refused "case count"
+ let sparse name size=B.writeFile(root</>name)B.empty>>setFileSize(root</>name)(fromIntegral size)
+     sized=[("j"++show i,"j"++show i<.>"json")|i<-[1..16::Int]]
+ path<-writeBatchFile root sized
+ batchSize<-B.length<$>B.readFile path
+ forM_(init sized)$ \(_,file)->sparse file caseBytes
+ let lastSize=batchJsonBytes-15*caseBytes-batchSize
+ sparse(snd(last sized))lastSize>>admitted "JSON bytes" path
+ sparse(snd(last sized))(lastSize+1)>>refused "JSON bytes" path
+ -- Distinct artifact bytes read: the writer's 8 code bytes and 4 seed bytes, plus one declared,
+ -- unsliced blob per case. The last case's blob copies the first one's bytes under another path,
+ -- which adds nothing.
+ (_,writerFile)<-writerCase root
+ writer<-B.readFile(root</>writerFile)>>=jsonRead
+ let blobs=batchArtifactBytes`div`sizeBytes
+     blobCase i size=do
+      let ident="blob"++show i; artifact=ident<.>"bin"
+      B.writeFile(root</>artifact)(B.pack(map fromIntegral[i`div`256,i`mod`256]))
+      setFileSize(root</>artifact)(fromIntegral size)
+      blobCopy ident artifact size
+     blobCopy ident artifact size=do
+      digest<-B.readFile(root</>artifact)>>=sha256
+      let fixture=merge writer[("id",s ident),("artifacts",arr(list(get writer "artifacts")++[obj[("id",s "blob"),("path",s artifact),("size",n(toInteger size)),("sha256",s digest)]]))]
+      B.writeFile(root</>ident<.>"json")(encodeCanonical fixture)
+      pure(ident,ident<.>"json")
+     sizedBlobs lastSize=do
+      full<-forM[1..blobs-1]$ \i->blobCase i sizeBytes
+      final<-blobCase blobs lastSize
+      copyFile(root</>"blob1.bin")(root</>"copy.bin")
+      copied<-blobCopy "copy""copy.bin"sizeBytes
+      pure(full++[final,copied])
+ sizedBlobs(sizeBytes-12)>>=writeBatchFile root>>=admitted "artifact bytes"
+ sizedBlobs(sizeBytes-11)>>=writeBatchFile root>>=refused "artifact bytes"
+
+-- The owned-case batch API yields each case's observation as loadObserved does alone.
+ownedBatchApi :: FilePath -> IO ()
+ownedBatchApi runner=withTemporary "fuji-owned-batch"$ \root->do
+ let spec ident code initial expected memory=O.CaseSpec
+      { O.caseId=ident
+      , O.caseProvenance="NativeTests.hs: owned batch API"
+      , O.caseExclusion="batch API control"
+      , O.caseEntry=N.GuestAddress 0x8000
+      , O.caseExit=N.GuestAddress 0xa000
+      , O.caseRegions=
+         [ O.mkRegion(N.RegionId "code")(N.GuestAddress 0x8000)(4*length code)O.ReadExecute(O.assemble code)
+         , O.mkRegion(N.RegionId "data")(N.GuestAddress 0x9000)4 O.ReadWrite(O.word32le 0x11223344)
+         , O.mkRegion(N.RegionId "exit")(N.GuestAddress 0xa000)4 O.ReadExecute(B.replicate 4 0)
+         , O.mkRegion(N.RegionId "stack")(N.GuestAddress 0xb000)32 O.ReadWrite(B.replicate 32 0)
+         ]
+      , O.caseFunctions=[(N.GuestAddress 0x8000,4*fromIntegral(length code))]
+      , O.caseInitial=[(r,fromMaybe 0(lookup r initial))|r<-[N.R0 .. N.R12]]++[(N.Sp,0xb020),(N.Lr,0xa000),(N.Cpsr,0x10)]
+      , O.caseExpectedStatus=N.Returned
+      , O.caseExpectedRegisters=expected
+      , O.caseExpectedMemory=memory
+      }
+     specs=
+      [ spec "writer"[0xe5820000,0xe12fff1e][(N.R0,0xdeadbeef),(N.R2,0x9000)][(N.R0,0xdeadbeef)][(N.RegionId "data",O.word32le 0xdeadbeef)]
+      , spec "reader"[0xe5921000,0xe12fff1e][(N.R2,0x9000)][(N.R1,0x11223344)][]
+      ]
+ alone<-forM specs$ \one->O.writeCase(root</>"alone"</>O.caseId one)one>>=O.loadObserved runner
+ batched<-O.writeBatch(root</>"batch")specs>>=O.loadObservedBatch runner
+ ensure(batched==zip(map(CaseId . O.caseId)specs)alone)("owned batch observations differ from single-case observations: "++show batched)
+ -- A case without an observation fails the call after the batch, naming it.
+ let broken=(spec "broken"[0xe12fff1e][][(N.R0,0)][]){O.caseFunctions=[(N.GuestAddress 0x7000,4)]}
+ failed<-try(O.writeBatch(root</>"failing")(specs++[broken])>>=O.loadObservedBatch runner>>=evaluate . length)
+ case failed of
+  Left(e::SomeException)->ensure("broken: invalid_case"`isInfixOf`show e)("loadObservedBatch failure names: "++show e)
+  Right _->failH "loadObservedBatch returned for a batch with an invalid case"
+
 main :: IO ()
 main=do
- [runner,generator]<-getArgs
+ [runner,generator,checker]<-getArgs
  names<-sort.filter((==".json").takeExtension) <$> listDirectory "emulation/fixtures"
  forM_ names$ \name->do
   let path="emulation/fixtures" </> name
@@ -293,6 +578,11 @@ main=do
  contractLimitRegressions runner
  readOnlyRegressions runner
  schemaContract
+ batched<-fixtureBatch runner checker
+ isolationBatch runner checker
+ batchFailures runner checker
+ batchLimits runner
+ ownedBatchApi runner
  withTemporary "fuji-native-tests"$ \root->do
   artifacts<-filter((==".bin").takeExtension) <$> listDirectory "emulation/fixtures"
   forM_ artifacts$ \name->copyFile("emulation/fixtures" </> name)(root </> name)
@@ -362,3 +652,4 @@ main=do
   result<-jsonRead out
   ensure(not timed && code==ExitFailure 1 && get result "status"==s "invalid_case")"independent wire rejection failed"
  putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, "++show(length bad)++" independent wire rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries and schema agreement passed")
+ putStrLn(show batched++"-case fixture batch, 9 isolation controls, batch failure and framing controls, batch limit boundaries and the owned-case batch API passed")
