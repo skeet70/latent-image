@@ -1,8 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.StartupConsumers.JoinedHost
   ( HostAdmission, HostPolicyBytes, HostError
-  , HostRequest(..), HostEnvironment(..), runHostAdmission
-  , hostPolicyFor, policyBytes, policyCaptureDigest, policyObserverDigest, hostSummary
+  , HostRequest(..), HostEnvironment(..), CheckerExecutable(..), ProducerExecutable(..), runHostAdmission
+  , hostPolicyFor, policyBytes, policyCaptureDigest, policyObserverDigest, policyCheckerDigest, hostSummary
   ) where
 
 import Control.Exception (Exception)
@@ -22,22 +22,28 @@ import System.Directory (createDirectory, getPermissions, setOwnerExecutable, se
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>))
 
--- Fields: host checker executable, capture producer executable, analysis root, output root. The output root must not exist when admission starts.
-data HostEnvironment = HostEnvironment FilePath FilePath FilePath FilePath
+newtype CheckerExecutable = CheckerExecutable FilePath
+newtype ProducerExecutable = ProducerExecutable FilePath
+-- Fields after the executables: analysis root, output root. The output root must not exist when admission starts.
+data HostEnvironment = HostEnvironment CheckerExecutable ProducerExecutable FilePath FilePath
 data HostRequest = Qualify FilePath | Compare FilePath FilePath | RefusalControls FilePath FilePath
 
 data HostError = PolicyUnavailable Wire.CaptureRole deriving (Show)
 instance Exception HostError
 
-data HostPolicyBytes = HostPolicyBytes B.ByteString K.Digest K.Digest K.Digest K.Digest
+-- Fields: policy bytes, capture digest, producer digest, result digest, policy file digest, checker digest.
+data HostPolicyBytes = HostPolicyBytes B.ByteString K.Digest K.Digest K.Digest K.Digest K.Digest
 data HostAdmission = HostAdmission [(Wire.CaptureRole,HostPolicyBytes)] J.Value
+data Executables = Executables K.Digest K.Digest
 
 policyBytes :: HostPolicyBytes -> B.ByteString
-policyBytes (HostPolicyBytes bytes _ _ _ _) = bytes
+policyBytes (HostPolicyBytes bytes _ _ _ _ _) = bytes
 policyCaptureDigest :: HostPolicyBytes -> K.Digest
-policyCaptureDigest (HostPolicyBytes _ capture _ _ _) = capture
+policyCaptureDigest (HostPolicyBytes _ capture _ _ _ _) = capture
 policyObserverDigest :: HostPolicyBytes -> K.Digest
-policyObserverDigest (HostPolicyBytes _ _ observer _ _) = observer
+policyObserverDigest (HostPolicyBytes _ _ observer _ _ _) = observer
+policyCheckerDigest :: HostPolicyBytes -> K.Digest
+policyCheckerDigest (HostPolicyBytes _ _ _ _ _ checker) = checker
 hostPolicyFor :: HostAdmission -> Wire.CaptureRole -> Either HostError HostPolicyBytes
 hostPolicyFor (HostAdmission policies _) role = maybe (Left (PolicyUnavailable role)) Right (lookup role policies)
 hostSummary :: HostAdmission -> J.Value
@@ -161,17 +167,17 @@ checkCaptureUnchanged (CaptureInput root _ digest) = do
   bytes <- H.readRegular 0x40000000 (root </> "startup-joined.json")
   H.ensure (hash bytes==digest) "host input capture changed during admission"
 
-checkPolicy :: K.Digest -> K.Digest -> FilePath -> FilePath -> CaptureInput -> Wire.FileBinding -> IO HostPolicyBytes
-checkPolicy observer resultDigest root name input binding = do
+checkPolicy :: Executables -> K.Digest -> FilePath -> FilePath -> CaptureInput -> Wire.FileBinding -> IO HostPolicyBytes
+checkPolicy (Executables observer checker) resultDigest root name input binding = do
   bytes <- readNamedBound root name binding
   PolicyBinding schema scope capture trace contract <- readJson bytes
   let envelope = captureEnvelope input
       contracts = [Wire.bindingDigest file | file <- Wire.captureArtifacts envelope,Wire.bindingPath file==Wire.artifactFilename Wire.JoinedContract]
   H.ensure (schema==1 && scope==SharedExternalObservationPolicy && capture==captureDigest input
     && trace==Wire.bindingDigest (Wire.captureTrace envelope) && contracts==[contract]) "host observation policy does not bind these inputs"
-  pure (HostPolicyBytes bytes capture observer resultDigest (Wire.bindingDigest binding))
+  pure (HostPolicyBytes bytes capture observer resultDigest (Wire.bindingDigest binding) checker)
 
-checkSingle :: K.Digest -> FilePath -> CaptureInput -> IO HostAdmission
+checkSingle :: Executables -> FilePath -> CaptureInput -> IO HostAdmission
 checkSingle observer root input = do
   bytes <- H.readRegular 0x100000 (root </> "shared-verification.json")
   HostVerification schema scope accepted failure receipt role route dispatcher policy <- readJson bytes
@@ -183,7 +189,7 @@ checkSingle observer root input = do
   summary <- readJson bytes
   pure (HostAdmission [(role,capability)] summary)
 
-checkComparison :: K.Digest -> FilePath -> B.ByteString -> CaptureInput -> CaptureInput -> IO HostAdmission
+checkComparison :: Executables -> FilePath -> B.ByteString -> CaptureInput -> CaptureInput -> IO HostAdmission
 checkComparison observer root bytes retained joined = do
   HostComparison schema scope accepted failure retainedDigest joinedDigest retainedRoute joinedRoute retainedDispatcher joinedDispatcher retainedPolicy joinedPolicy <- readJson bytes
   H.ensure (schema==1 && scope==SharedRouteAndDispatcher && accepted && failure==Nothing
@@ -198,7 +204,7 @@ checkComparison observer root bytes retained joined = do
   summary <- readJson bytes
   pure (HostAdmission [(Wire.RetainedCapture,left),(Wire.JoinedCapture,right)] summary)
 
-checkControls :: K.Digest -> FilePath -> CaptureInput -> CaptureInput -> IO HostAdmission
+checkControls :: Executables -> FilePath -> CaptureInput -> CaptureInput -> IO HostAdmission
 checkControls observer root retained joined = do
   bytes <- H.readRegular 0x100000 (root </> "shared-refusal-controls.json")
   HostControls schema scope accepted failure (HostBaseline baselineDigest)
@@ -231,7 +237,7 @@ runHost checker root (K.Digest checkerHex) (K.Digest producerHex) arguments = do
   H.ensure (not limited && status==ExitSuccess) ("route/dispatcher host refusal: "++C8.unpack (B.take 2048 (out<>err)))
 
 runHostAdmission :: HostEnvironment -> HostRequest -> IO HostAdmission
-runHostAdmission (HostEnvironment checker producer analysis output) request = do
+runHostAdmission (HostEnvironment (CheckerExecutable checker) (ProducerExecutable producer) analysis output) request = do
   createDirectory output
   producerDigest <- hash <$> H.readRegular 0x10000000 producer
   executable <- H.readRegular 0x10000000 checker
@@ -256,10 +262,11 @@ runHostAdmission (HostEnvironment checker producer analysis output) request = do
   executed <- H.readRegular 0x10000000 frozenChecker
   H.ensure (hash executed==checkerDigest) "executed host checker changed during admission"
   forM_ inputs checkCaptureUnchanged
+  let executables = Executables producerDigest checkerDigest
   case (request,inputs) of
-    (Qualify _,[input]) -> checkSingle producerDigest hostOutput input
+    (Qualify _,[input]) -> checkSingle executables hostOutput input
     (Compare _ _,[retained,joined]) -> do
       bytes <- H.readRegular 0x100000 (hostOutput </> "shared-comparison.json")
-      checkComparison producerDigest hostOutput bytes retained joined
-    (RefusalControls _ _,[retained,joined]) -> checkControls producerDigest hostOutput retained joined
+      checkComparison executables hostOutput bytes retained joined
+    (RefusalControls _ _,[retained,joined]) -> checkControls executables hostOutput retained joined
     _ -> H.failH "host capture request differs"

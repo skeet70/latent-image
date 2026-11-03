@@ -179,7 +179,7 @@ fn inspect_watch(raw:&ReplayWatch,epoch:&Epoch,report:RouteView<'_>,program:&Pro
     let bootstrap=epoch.stage==owner::WatchStage::Bootstrap;
     require(raw.views==if bootstrap {owner::WatchViews::Observe}else{owner::WatchViews::Fixed},"shared watch views differ")?;
     if bootstrap {for loader in loaders {require(raw.records.iter().filter(|row|loader_copy(row,loader.copy)).count()==1,"shared bootstrap loader copy census differs")?;}}
-    let mut previous=epoch.start.0;let mut lower=None;
+    let mut previous=epoch.start.0;let mut lower=None;let mut terminal_cores=BTreeSet::new();
     let mut future=raw.records.iter().enumerate().filter(|(_,row)|matches!(row.source,Access::CpuRead|Access::CpuFetch|Access::CpuWrite)).peekable();
     for (index,row) in raw.records.iter().enumerate(){
         require(in_class(row,&raw.classes)?,"shared memory access exceeds declared classes")?;
@@ -195,7 +195,8 @@ fn inspect_watch(raw:&ReplayWatch,epoch:&Epoch,report:RouteView<'_>,program:&Pro
             terminal_attempt=row.source==Access::CpuFetch&&Some(at)==epoch.end.0.checked_add(1)&&stopped(epoch.end.0);
             require(row.core.is_some()&&row.pc.is_some()&&(epoch.start.0<at||boundary_attempt)&&(at<=epoch.end.0||terminal_attempt)&&previous<=at,"shared CPU access attribution differs")?;
             previous=at;lower=Some(at);require(future.next().is_some_and(|(position,_)|position==index),"shared CPU chronology differs")?;
-            require(!terminal_attempt||future.peek().is_none(),"shared terminal fetch attempt is not the last CPU access")?;
+            require(terminal_cores.is_empty()||terminal_attempt,"shared terminal fetch attempt is not the last CPU access")?;
+            if terminal_attempt {require(terminal_cores.insert(row.core),"shared terminal fetch attempts repeat a core")?;}
         }
         let upper=future.peek().and_then(|(_,row)|row.instructions).map(|count|count.0);
         if row.source==Access::CpuFetch {
@@ -222,8 +223,8 @@ fn inspect_watch(raw:&ReplayWatch,epoch:&Epoch,report:RouteView<'_>,program:&Pro
                 }
             }
         }
-        if loader_timer_check::relevant(row){timer_rows.push(row.legacy);}
         if terminal_attempt {continue;}
+        if loader_timer_check::relevant(row){timer_rows.push(row.legacy);}
         let attribution=if row.source==Access::CpuRead&&row.pc==Some(Guest(0x657194)) {
             row.core_instructions.map(|own|DataAttribution {own,
                 before:row.before.as_deref().and_then(|bytes|bytes.try_into().ok()),byte_order:row.byte_order,latest:row.latest_fetch.clone()})

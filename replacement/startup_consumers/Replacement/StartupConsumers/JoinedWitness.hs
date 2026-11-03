@@ -31,7 +31,8 @@ data ObservedFiles = ObservedFiles
   ,observedArtifacts :: [CapturedArtifact],observedWatches :: [CapturedWatch]}
 data Inputs = Inputs Source.SourceFiles NativeInputs Witness.LoaderProducerFiles LS.LoaderStagedCandidate Witness.Inputs
 data Cohort = Cohort K.Digest K.Digest K.Digest K.Digest deriving (Eq)
-data QualifiedCapture = QualifiedCapture S.CaptureRole Cohort K.Digest K.Digest Witness.Projection
+-- Fields: role, cohort, capture digest, policy digest, host checker digest, projection.
+data QualifiedCapture = QualifiedCapture S.CaptureRole Cohort K.Digest K.Digest K.Digest Witness.Projection
 
 data JoinedError = ComponentInputsRejected Witness.WitnessError | ConsumerRejected Witness.WitnessError
   | SharedDecodeRejected | SharedIdentityRejected | SharedArtifactRejected | SharedStatusRejected
@@ -85,7 +86,7 @@ admitCapture :: Inputs -> Host.HostPolicyBytes -> ObservedFiles -> Either Joined
 admitCapture inputs admitted files = do
   policy <- capturePolicy inputs admitted files
   (role,cohort,projection) <- admitWithPolicy inputs policy files
-  pure (QualifiedCapture role cohort (hash (observedCapture files)) (hash (Host.policyBytes admitted)) projection)
+  pure (QualifiedCapture role cohort (hash (observedCapture files)) (hash (Host.policyBytes admitted)) (Host.policyCheckerDigest admitted) projection)
 
 -- Checks mutated files against the policy issued for the unmutated capture; an admitted mutation yields Right ().
 checkMutation :: Inputs -> Host.HostPolicyBytes -> ObservedFiles -> ObservedFiles -> Either JoinedError ()
@@ -269,13 +270,13 @@ checkEpochs files capture actualCounts = do
     && length watchBindings == Set.size (Set.fromList (map S.bindingPath watchBindings))) SharedGuardRejected
 
 compareCaptures :: QualifiedCapture -> QualifiedCapture -> Either JoinedError ()
-compareCaptures (QualifiedCapture before beforeCohort _ _ beforeProjection) (QualifiedCapture after afterCohort _ _ afterProjection) = do
-  require (before == S.RetainedCapture && after == S.JoinedCapture && beforeCohort == afterCohort) SharedComparisonRejected
+compareCaptures (QualifiedCapture before beforeCohort _ _ beforeChecker beforeProjection) (QualifiedCapture after afterCohort _ _ afterChecker afterProjection) = do
+  require (before == S.RetainedCapture && after == S.JoinedCapture && beforeCohort == afterCohort && beforeChecker == afterChecker) SharedComparisonRejected
   either (const (Left SharedComparisonRejected)) Right (Witness.compareLoaderSemanticProjections beforeProjection afterProjection)
 
 qualificationValue :: QualifiedCapture -> J.Value
-qualificationValue (QualifiedCapture role _ (K.Digest receipt) (K.Digest policy) _) = J.object
+qualificationValue (QualifiedCapture role _ (K.Digest receipt) (K.Digest policy) (K.Digest checker) _) = J.object
   ["schema" J..= (1::Int),"qualification" J..= ("source-admitted-shared-startup-consumers"::String)
-  ,"role" J..= show role,"receipt_sha256" J..= receipt,"observation_policy_sha256" J..= policy
+  ,"role" J..= show role,"receipt_sha256" J..= receipt,"observation_policy_sha256" J..= policy,"host_checker_sha256" J..= checker
   ,"comparison_scope" J..= ("source-proved-loader-caller-and-exact-outer-public-effects-and-selected-operation-boundaries"::String)
   ,"post_return_scheduler_equality" J..= False]

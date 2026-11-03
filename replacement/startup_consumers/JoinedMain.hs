@@ -82,7 +82,7 @@ execute tools (StageDirectory stage) runPath romPath observerPath checkerPath an
   scratch <- Image4.validateScratchDirectory scratchPath
   candidate <- LS.stageCandidate tools scratch source artifact
   inputs <- admitted (Witness.admitInputs sources natives producer candidate)
-  let host = Host.HostEnvironment checkerPath observerPath analysis (output </> "host")
+  let host = Host.HostEnvironment (Host.CheckerExecutable checkerPath) (Host.ProducerExecutable observerPath) analysis (output </> "host")
   case mode of
     Qualify directory@(ObservationDirectory path) -> do
       files <- readObserved directory
