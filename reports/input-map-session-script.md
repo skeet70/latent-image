@@ -46,7 +46,7 @@ Do not touch during the session: the POWER switch, the lens release, the card do
 
 ## 3. The note sheet
 
-One row per act. "What the camera showed" is the screen and LED as you saw them; in maintenance mode the expected answer is blank screen and steady green LED for every press, because the keys reach no action there (E-SERVICE-SHOOT-01, static-inference). Any change of screen or LED during a press is worth recording as a finding.
+One row per act. "What the camera showed" is the screen and LED as you saw them; in maintenance mode the expected answer is blank screen and steady green LED for every press, because the keys reach no action there (E-SERVICE-SHOOT-150, static-inference). Any change of screen or LED during a press is worth recording as a finding.
 
 10/9/26 6:36 AM UTC, X-M1 1.50, dial at AUTO
 

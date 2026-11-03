@@ -3,7 +3,12 @@ module Main (main) where
 import Control.Exception (IOException, try)
 import Control.Monad (forM_, unless)
 import qualified Xm1Viewer as Viewer
-import Xm1RamPushE2E (ModalDiagnostic (..), ModalLifetimeGuard (..))
+import Xm1RamPushE2E (ModalDiagnostic (..), ModalLifetimeGuard (..), ModalOwnedPackage (..), loadModalOwnedPackage)
+import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as BC
+import System.Directory (createDirectoryIfMissing, getTemporaryDirectory)
+import System.Environment (lookupEnv)
+import System.FilePath ((</>))
 
 check :: String -> Bool -> IO ()
 check label accepted = unless accepted (ioError (userError label))
@@ -77,3 +82,19 @@ main = do
   refuses "lifetime guard is a closed flag" (stock ++ ["--modal-lifetime-guard=continuous"])
   help <- Viewer.parseCommand [guard, "--help"]
   check "help opens no inputs and requires no route" (case help of Viewer.Help -> True; _ -> False)
+  scratch <- maybe getTemporaryDirectory pure =<< lookupEnv "TEST_TMPDIR"
+  let directory = scratch </> "modal75-owned-package"
+      identity = concat (replicate 16 "a5") ++ concat (replicate 16 "3c")
+      identityBytes = B.pack (replicate 16 0xa5 ++ replicate 16 0x3c)
+      document = "{\"schema\":2,\"image5_sha256\":\"3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a\",\"table_identity\":\""
+        ++ identity ++ "\",\"retired\":[{\"callback\":\"0x00c7a7e4\",\"start\":13084644,\"end\":13084680}]}"
+      load archiveBytes = do
+        B.writeFile (directory </> "bank.a") archiveBytes
+        B.writeFile (directory </> "retired.json") (BC.pack document)
+        try (loadModalOwnedPackage (directory </> "bank.a") (directory </> "retired.json")) :: IO (Either IOException ModalOwnedPackage)
+  createDirectoryIfMissing True directory
+  carried <- load (BC.pack "!<arch>\n" <> identityBytes <> BC.pack "rest")
+  check "an archive carrying the retired document's table identity loads"
+    (either (const False) ((== identity) . ownedTableIdentity) carried)
+  missing <- load (BC.pack "!<arch>\n" <> B.reverse identityBytes)
+  check "an archive without the retired document's table identity refuses" (either (const True) (const False) missing)
