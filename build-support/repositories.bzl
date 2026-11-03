@@ -234,6 +234,7 @@ def _lab_dependencies_impl(_ctx):
         ("lab_jq", "jq", "jq"),
         ("lab_rustc", "rustc", "rustc"),
         ("lab_exiftool", "exiftool", "exiftool"),
+        ("lab_git", "git", "git"),
     ]:
         nixpkgs_package(
             name = name,

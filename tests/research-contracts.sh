@@ -3,6 +3,7 @@ set -euo pipefail
 
 fuji_af_schema_checker="$1"
 fuji_af_jq="$2"
+fuji_af_git="$3"
 
 "$fuji_af_schema_checker" --check-metaschema schemas/*.schema.json
 
@@ -33,6 +34,35 @@ for fuji_af_empty_ledger in '' $' \t\n\n'; do
     exit 1
   fi
 done
+
+fuji_af_duplicate_ids="$("$fuji_af_jq" -rs 'group_by(.id) | map(select(length > 1) | .[0].id) | .[]' docs/evidence.jsonl)"
+if [[ -n "$fuji_af_duplicate_ids" ]]; then
+  printf 'Duplicate evidence ids:\n%s\n' "$fuji_af_duplicate_ids" >&2
+  exit 1
+fi
+
+# Every E- token in a tracked file, the ledger included, names a current record. Tokens followed by a signed
+# or decimal number are camera key names. E-D is the exposure-compensation dial; E-MODEL is a placeholder file name.
+# The runfiles ledger links back to the checkout.
+fuji_af_ledger="$(readlink -f docs/evidence.jsonl)"
+"$fuji_af_git" -C "${fuji_af_ledger%/docs/evidence.jsonl}" grep -I -n -o -P \
+  '(?<![A-Za-z0-9_-])E-[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*(?![A-Za-z0-9_]|[-+=.][0-9])' \
+  > "$TEST_TMPDIR/citations" || [[ $? -eq 1 ]]
+fuji_af_dangling_citations() {
+  "$fuji_af_jq" -rs --rawfile citations "$1" '
+    (map({key: .id, value: true}) | from_entries + {"E-D": true, "E-MODEL": true}) as $known
+    | $citations | split("\n")[] | select(. != "" and ($known[split(":") | last] | not))' docs/evidence.jsonl
+}
+fuji_af_dangling="$(fuji_af_dangling_citations "$TEST_TMPDIR/citations")"
+if [[ -n "$fuji_af_dangling" ]]; then
+  printf 'Evidence ids cited but not in docs/evidence.jsonl (file:line:id):\n%s\n' "$fuji_af_dangling" >&2
+  exit 1
+fi
+printf 'reports/example.md:1:E-NOT-A-RECORD-150\n' >> "$TEST_TMPDIR/citations"
+if [[ -z "$(fuji_af_dangling_citations "$TEST_TMPDIR/citations")" ]]; then
+  echo 'Citation of a missing evidence id incorrectly accepted' >&2
+  exit 1
+fi
 
 "$fuji_af_jq" '.sources[0].revision = null' manifests/sources.json > "$TEST_TMPDIR/invalid.json"
 if "$fuji_af_schema_checker" --schemafile schemas/sources.schema.json "$TEST_TMPDIR/invalid.json"; then

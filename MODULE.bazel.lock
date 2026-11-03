@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "nwOri6qFhgeOgyVzLP674OxUIsG3UutAwi0FGx74XoU=",
+        "bzlTransitiveDigest": "MKQJZe4SiudYnwMw2nchctR7Xal8sKFK/JW/hfW64vc=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -385,6 +385,23 @@
               "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
               "repositories": {},
               "build_file_content": "exports_files([\"bin/exiftool\"], visibility = [\"//visibility:public\"])",
+              "nixopts": [],
+              "quiet": false,
+              "fail_not_supported": true
+            }
+          },
+          "lab_git": {
+            "bzlFile": "@@rules_nixpkgs_core~//:nixpkgs.bzl",
+            "ruleClassName": "_nixpkgs_package",
+            "attributes": {
+              "unmangled_name": "lab_git",
+              "attribute_path": "git",
+              "nix_file_deps": {},
+              "nix_file_content": "",
+              "nix_license_path": "",
+              "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
+              "repositories": {},
+              "build_file_content": "exports_files([\"bin/git\"], visibility = [\"//visibility:public\"])",
               "nixopts": [],
               "quiet": false,
               "fail_not_supported": true
