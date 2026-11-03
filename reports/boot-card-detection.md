@@ -20,7 +20,7 @@ The payload writes its signature into its own staged span at `0x40000000`, the a
 
 The consequence for the byte values: after an ordinary boot the byte at `0x00000100` is the first record's byte at that offset, `0xff` in the pinned record (`private-data/analysis/x-m1-1.50/decode/boot-40048.bin` offset `0x100` is sixteen `0xff` bytes), not the payload's signature. Whether some later stage also writes the address is unproved and cannot restore the signature.
 
-The region is not free RAM while the application runs either: the live `0x00000000` window captured in a maintenance boot holds the boot record's vector table with seven rewritten target words, which is the staged record's content, not spare space (hardware-observed, E-BOOTROM-EXTENT-150, window `00000000.bin`, SHA-256 `ceb2d5dc1c5431ead2e60c7d6abf4da496fd847e771ac21cbcd0f16878050ea7`).
+The region is not free RAM while the application runs either: the live `0x00000000` window captured in a maintenance boot holds the boot record's vector table with seven rewritten target words, which is the staged record's content, not spare space (hardware-observed, E-BOOTROM-DISCRIMINATOR-150, window `00000000.bin`, SHA-256 `ceb2d5dc1c5431ead2e60c7d6abf4da496fd847e771ac21cbcd0f16878050ea7`).
 
 The write is also not conditional on which outcome the attempt had: a failed entry boots normally and stages as above, and a successful entry halts with the signature in place but with no route to a reader. The one exit from a halted body is a battery pull, which removes power from DRAM and leaves retention unestablished for every address.
 
@@ -58,4 +58,4 @@ The RAM channel is the one the current payload uses, and it is the one that cann
 - The live low RAM: `sha256sum private-data/sessions/20261008T035458Z-probe-bootrom/windows/00000000.bin` must read `ceb2d5dc1c5431ead2e60c7d6abf4da496fd847e771ac21cbcd0f16878050ea7`.
 - The card itself: `devenv shell -- bazel test //host/firmware:boot-card-tests --test_output=errors`, and the `build` and `verify` subcommands of `//host/firmware:build-boot-card` ([reproduction](diagnostic-sd-boot-card.md#reproduction)).
 
-Related records: E-SDBOOT-CARD-IMAGE-150 for the built image, E-SDBOOT-RAM-SIGNATURE-150 for this verdict, E-BOOTROM-EXTENT-150 for the low-RAM capture, E-SDBOOT-CARD-BUILDABLE-150 for the construction verdict, and [the recovery status](recovery-status.md) for the entry gate that stands.
+Related records: E-SDBOOT-CARD-IMAGE-150 for the built image, this verdict and the construction verdict, E-BOOTROM-DISCRIMINATOR-150 for the low-RAM capture, and [the recovery status](recovery-status.md) for the entry gate that stands.

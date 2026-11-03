@@ -8,9 +8,9 @@ Installed-image correspondence. On installed 1.50 the probe addresses are the ru
 
 ## Static basis
 
-The gate: every routine of D0 opcode `0x200001` returns without acting while `0x0069f8fc(0xf7)` is zero. `0x00d803cc` dispatches; `0x00647b1c` (function 2) returns 2 at its gate test, which reaches error pair `(1,0xffff)` ([E-DEBUG-ERROR-MAP](../docs/evidence.jsonl), [E-END-SETTING-GATEFREE-NEGATIVE-150](../docs/evidence.jsonl)). The byte reads `0x00` on this body under both 1.00 and 1.50 ([E-ADJ-GATE-BYTE-ZERO](../docs/evidence.jsonl), [E-ADJ-GATE-BYTE-150](../docs/evidence.jsonl)).
+The gate: every routine of D0 opcode `0x200001` returns without acting while `0x0069f8fc(0xf7)` is zero. `0x00d803cc` dispatches; `0x00647b1c` (function 2) returns 2 at its gate test, which reaches error pair `(1,0xffff)` ([E-DEBUG-ERROR-MAP](../docs/evidence.jsonl), [E-EXIT-ENTRY-PRODUCERS-150](../docs/evidence.jsonl)). The byte reads `0x00` on this body under both 1.00 and 1.50 ([E-ADJ-GATE-BYTE-150](../docs/evidence.jsonl)).
 
-The enable write: config opcode `0x1a0002` function 3 reaches `0x00dc7564`, which writes the adjustment cache through `0x0069fc94` after its `0x420000` range check and before the mailbox and index tests, posts queue-7 `0x1707` only for start index `0x80`, and returns success for any other index. The whole-area storage writer is reachable only through that post, the update configuration completion or the on-camera editor exit, so a session that never writes index `0x80` leaves the byte in RAM ([E-ENABLE-COMMITFREE-150](../docs/evidence.jsonl), [E-ADJ-COMMIT-MAP](../docs/evidence.jsonl)). The public fffw tool writes and restores the same byte around every debug command ([E-FFFW-NO-END-SETTING](../docs/evidence.jsonl)).
+The enable write: config opcode `0x1a0002` function 3 reaches `0x00dc7564`, which writes the adjustment cache through `0x0069fc94` after its `0x420000` range check and before the mailbox and index tests, posts queue-7 `0x1707` only for start index `0x80`, and returns success for any other index. The whole-area storage writer is reachable only through that post, the update configuration completion or the on-camera editor exit, so a session that never writes index `0x80` leaves the byte in RAM ([E-GATE-ENABLE-SEQUENCE](../docs/evidence.jsonl), [E-ADJ-COMMIT-MAP](../docs/evidence.jsonl)). The public fffw tool writes and restores the same byte around every debug command ([E-FFFW-NO-END-SETTING](../docs/evidence.jsonl)).
 
 Function 2: `0x00d803cc` calls `0x00647b1c(length, source, destination)`; the destination is reply `+0x24` (literal `0x00d8061c` = `0x014698c0`), the address and length echoes are at `+0x1c`/`+0x20` (`0x014698b8`/`0x014698bc`), and the advertised available reply length is `0x11c` (284) at `0x00d80608`/`0x00d8060c` on every exit. 284 is less than `0x24 + 0x100`, so a reply exposes only 248 data bytes; each 256-byte window is therefore read as two 128-byte halves, whose replies are exactly `0x24 + 0x80` = 164 bytes (the service-command map `private-data/analysis/x-m1-1.50/service-commands/findings.md` is private; the private end-setting error map `private-data/analysis/x-m1-1.50/end-setting/error-mapping.md` and an `llvm-objdump` read of `0x00d80618`/`0x00d8061c`/`0x00d80620` confirmed the constants on 2026-10-07; public service context is in [the service feasibility report](service-shoot-feasibility.md)).
 
@@ -78,7 +78,7 @@ The session budget is `transferTimeoutMs` times 184 transfers (8 fixed, 16 for t
 
 ## Run
 
-1. Note date, time, language and one value in the C slot: the jig exit resets them as usual ([E-JIG-OBSERVED](../docs/evidence.jsonl)). Fully charged battery; no firmware file on the card.
+1. Note date, time, language and one value in the C slot: the jig exit resets them as usual ([E-JIG-CYCLE-D-150](../docs/evidence.jsonl)). Fully charged battery; no firmware file on the card.
 2. Power off, then enter jig mode as usual with USB connected.
 3. Run `devenv shell -- bazel run //transport:camera -- probe-ram`. The command selects the single `04cb:ff80` device, journals every outgoing frame, writes its session under `private-data/sessions/` and prints `probe-ram: 20 windows`.
 4. Exit jig mode, power-cycle, take a shot and play it back, and report the result in chat.
@@ -123,7 +123,7 @@ The four added windows establish these mid-session facts:
 - The area-3 live copy at `0x0089f838` and snapshot at `0x0089f874` are byte-identical across all `0x28` bytes. This is a mid-session consistency check, not proof that the area-3 boot read succeeded, because its fallback repairs both copies.
 - The discriminator cells at `0x0089f814`, `0x0089f818` and `0x0089f81c` read `0x10`, `0x02` and `0x01`. For input `0x10`, the table row at `0x007cb7ac` selects output 2. The earlier description of outputs 1/2/3 as an alternate boot program that cannot coexist with the service application is wrong: this live service session has output 2 and answered all image-5 requests. Output 2 selects the nonzero return from `0x0069cfa4`; it does not by itself identify the area-2 invalidation.
 
-The owner then completed an orderly ordinary-mode power-off after the expected setup pass. The run did not observe the later ordinary boot that tests area 2. The owner subsequently reported normal-functionality boots, but date, language and C-slot settings have not remained intact after any observed jig power-off, including this cycle (E-RESET-PROBE-POST-BOOT-150).
+The owner then completed an orderly ordinary-mode power-off after the expected setup pass. The run did not observe the later ordinary boot that tests area 2. The owner subsequently reported normal-functionality boots, but date, language and C-slot settings have not remained intact after any observed jig power-off, including this cycle (E-JIG-CYCLE-D-150).
 
 ## What a result means
 

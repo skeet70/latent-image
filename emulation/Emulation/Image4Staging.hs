@@ -1,5 +1,5 @@
 module Emulation.Image4Staging
-  ( Tools (..), ScratchDirectory, validateScratchDirectory, StagedCandidate, runImage4Staging
+  ( Tools (..), ScratchDirectory, validateScratchDirectory, scratchDirectoryPath, StagedCandidate, runImage4Staging
   , candidateDat, candidateSha256, candidateImage4Sha256
   ) where
 
@@ -55,6 +55,9 @@ validateScratchDirectory configured = do
   H.ensure (any ((== ["private-data","scratch"]) . take 2) (tails (splitDirectories resolved)))
     "image4 staging scratch directory is outside private-data/scratch"
   pure (ScratchDirectory resolved)
+
+scratchDirectoryPath :: ScratchDirectory -> FilePath
+scratchDirectoryPath (ScratchDirectory path) = path
 
 -- The second DAT carries startup edits; its image4 record is still canonical.
 runImage4Staging :: Tools -> ScratchDirectory -> B.ByteString -> B.ByteString -> B.ByteString -> IO StagedCandidate

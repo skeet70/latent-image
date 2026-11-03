@@ -1,10 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.CriticalPair
   ( Original, LinkedArtifact, Staging, deriveOriginal, deriveLinkedArtifact
-  , stageStartup, startupDat, patchedImage4, stagingValue, verifyFinalDat
+  , stageStartup, startupDat, patchedImage4, stagingValue, stagingPremises, verifyFinalDat
   , Guest (..), FrameBytes (..), WitnessLayout (..), witnessLayout
   , CriticalProof, criticalProof, criticalExecutionPcs, criticalCounterStorePcs, criticalPrivateStorePcs
-  , linkedBytes, linkedSymbols
+  , linkedBytes, linkedSymbols, primaryBindings
   ) where
 
 import qualified A32 as A
@@ -37,6 +37,11 @@ data CriticalProof = CriticalProof
 data BodyProof = BodyProof FrameBytes CriticalProof
 data LinkedArtifact = LinkedArtifact B.ByteString B.ByteString [F.Symbol] Guest Guest BodyProof BodyProof
 data Staging = Staging B.ByteString B.ByteString B.ByteString [ImageWordPatch] [Services] LinkedArtifact
+
+-- | Core-0 interface offsets and the retained code each must publish.
+primaryBindings :: Original -> [(Word32, Word32)]
+primaryBindings (Original _ _ _ bindings) =
+  [(offset, target) | Services Core0 _ _ slots <- bindings, (InterfaceOffset offset, RetainedCode target) <- slots]
 
 require :: Bool -> String -> Either String ()
 require condition message = unless condition (Left message)
@@ -713,9 +718,14 @@ stagingValue (Staging reference staged patched patches bindings (LinkedArtifact 
       ,"slots" .= [object ["offset" .= offset,"target" .= target] | (InterfaceOffset offset,RetainedCode target) <- slots]]
       | Services core (Guest table) digest slots <- bindings]
   , "qualification" .= ("source-only; no natural acceptance, retirement or SDK protocol claim" :: String)
-  , "premises" .= (["record-2 padding remains executable, coherent and unmodified through the natural task103 return"
-      ,"task103 supplies an eight-byte-aligned writable stack, disjoint from roots, tables, counter and retained lock"
-      ,"normalized CP14 identity and the installed A/B service publications remain stable across the paired boundary"
-      ,"retained IRQ, exclusive-monitor and MCR p15,c7,c10,5 ordering semantics remain dependencies"
-      ,"no scheduler ownership, acquisition inference, finite contention bound or general caller/alias closure is established"] :: [String])
+  , "premises" .= stagingPremises
+  ]
+
+stagingPremises :: [String]
+stagingPremises =
+  [ "record-2 padding remains executable, coherent and unmodified through the natural task103 return"
+  , "task103 supplies an eight-byte-aligned writable stack, disjoint from roots, tables, counter and retained lock"
+  , "normalized CP14 identity and the installed A/B service publications remain stable across the paired boundary"
+  , "retained IRQ, exclusive-monitor and MCR p15,c7,c10,5 ordering semantics remain dependencies"
+  , "no scheduler ownership, acquisition inference, finite contention bound or general caller/alias closure is established"
   ]

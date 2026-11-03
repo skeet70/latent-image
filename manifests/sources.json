@@ -7,8 +7,8 @@
       "revision": "40406daf52228ace99cb1a3e322f3193f96b0283",
       "status": "pin-selected",
       "evidence_ids": [
-        "E-X70-GRANT-150",
-        "E-XM1-VIEWER-BOOT-150"
+        "E-X70-REDISTRIBUTION-PERMISSION-150",
+        "E-XM1-VIEWER-MENUS-150"
       ]
     },
     {
@@ -17,10 +17,8 @@
       "revision": "62876536052549cbcba1e9f6abc1437e773dba2f",
       "status": "pin-selected",
       "evidence_ids": [
-        "E-XM1-DECOMP-CHECKPOINTS-150",
         "E-XM1-MATCHING-C-PILOT-150",
-        "E-XM1-MATCHING-C-UNIT-PATCH-150",
-        "E-XM1-MATCHING-C-RECIPE-CENSUS-150"
+        "E-XM1-MATCHING-C-UNIT-PATCH-150"
       ]
     },
     {
@@ -29,7 +27,6 @@
       "revision": "ecf0e25a2a4c308655e30e1d3198d148c4fc0819",
       "status": "pin-selected",
       "evidence_ids": [
-        "E-UNICORN-X70-SPEEDUP-150",
         "E-UNICORN-EMBEDDER-REPIN-150"
       ]
     },
