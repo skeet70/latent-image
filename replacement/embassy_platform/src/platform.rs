@@ -1,19 +1,23 @@
 //! Phase 1: one embassy executor per domain inside a stock task, woken through the stock task
 //! wakeup queue, timed by the stock tick and kernel timer counter.
+//!
+//! The two cores' L1 data caches are not coherent. Every block one core writes through its cache
+//! is 32-byte aligned and padded, and state both cores touch goes through the uncached alias.
 
 use core::cell::{RefCell, UnsafeCell};
-use core::future::poll_fn;
+use core::future::Future;
 use core::mem::MaybeUninit;
+use core::pin::Pin;
 use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, Ordering};
-use core::task::{Poll, Waker};
+use core::task::{Context, Poll, Waker};
 
-use critical_section::{CriticalSection, Mutex};
+use critical_section::Mutex;
 use embassy_executor::raw;
 use embassy_time::{Duration, Instant, Timer};
 use embassy_time_queue_utils::Queue;
 
-use crate::clock::{sleep_timeout, Clock, CounterDirection};
+use crate::clock::{sleep_timeout, Clock, CounterDirection, RELOAD};
 use crate::ids::{Domain, EncodedId, SlotStatus, TaskId};
 use crate::kernel;
 use crate::wake::{wake_path, Caller, WakePath};
@@ -27,8 +31,8 @@ const DIRECTION: CounterDirection = CounterDirection::Down;
 #[cfg(not(any(feature = "counter-up", feature = "counter-down")))]
 compile_error!("select one of counter-up and counter-down");
 
-/// Absent from every stock creation path: the class table at 0x7cad9c covers ids 1..104 and the
-/// stack check at 0x69cc18 cycles through ids 1..104 only.
+/// Outside the class table at 0x7cad9c and the stack check at 0x69cc18, which cover ids 1..104;
+/// `+0x0` refuses with -41 if a record already exists.
 const HOST_TASK: TaskId = match TaskId::new(119) {
     Some(id) => id,
     None => panic!(),
@@ -38,6 +42,7 @@ const STACK_WORDS: usize = 512;
 const TICKER_PERIOD: Duration = Duration::from_millis(100);
 const DOORBELL_EVERY: u32 = 10;
 const DOMAINS: [Domain; 2] = [Domain::A, Domain::B];
+const NOT_CALLED: i32 = i32::MIN;
 
 fn uncached<T>(pointer: *mut T) -> *mut T {
     (pointer as usize | 0x4000_0000) as *mut T
@@ -46,8 +51,7 @@ fn uncached<T>(pointer: *mut T) -> *mut T {
 struct StockCpuLock;
 critical_section::set_impl!(StockCpuLock);
 
-// SAFETY: masking IRQ on the executing core excludes every other owned context of that core;
-// owned state is per domain, so nothing is shared with the other core under this lock.
+// SAFETY: masking IRQ on the executing core excludes every other owned context of that core.
 unsafe impl critical_section::Impl for StockCpuLock {
     unsafe fn acquire() -> bool {
         let was_masked = kernel::irq_masked();
@@ -64,7 +68,9 @@ unsafe impl critical_section::Impl for StockCpuLock {
     }
 }
 
-struct Host {
+/// Everything one domain's host task writes, touched only by that domain's core.
+#[repr(C, align(32))]
+struct DomainState {
     executor: UnsafeCell<MaybeUninit<raw::Executor>>,
     queue: Mutex<RefCell<Queue>>,
     clock: Mutex<RefCell<Clock>>,
@@ -72,15 +78,16 @@ struct Host {
     doorbell_delivered: Mutex<RefCell<u32>>,
     pending: AtomicBool,
     polling: AtomicBool,
+    ticker: raw::TaskStorage<Ticker>,
+    waiter: raw::TaskStorage<DoorbellWaiter>,
 }
 
-// SAFETY: each Host is touched only from its own domain's core, apart from the executor reference
-// the pender never dereferences.
-unsafe impl Sync for Host {}
+// SAFETY: each DomainState is used from its own domain's core only.
+unsafe impl Sync for DomainState {}
 
-impl Host {
-    const fn new() -> Host {
-        Host {
+impl DomainState {
+    const fn new() -> DomainState {
+        DomainState {
             executor: UnsafeCell::new(MaybeUninit::uninit()),
             queue: Mutex::new(RefCell::new(Queue::new())),
             clock: Mutex::new(RefCell::new(Clock::new())),
@@ -88,22 +95,33 @@ impl Host {
             doorbell_delivered: Mutex::new(RefCell::new(0)),
             pending: AtomicBool::new(false),
             polling: AtomicBool::new(false),
+            ticker: raw::TaskStorage::new(),
+            waiter: raw::TaskStorage::new(),
         }
     }
 }
 
-static HOSTS: [Host; 2] = [Host::new(), Host::new()];
+static DOMAIN_STATE: [DomainState; 2] = [DomainState::new(), DomainState::new()];
 
-fn host(domain: Domain) -> &'static Host {
-    &HOSTS[domain.index()]
+fn state(domain: Domain) -> &'static DomainState {
+    &DOMAIN_STATE[domain.index()]
 }
 
-#[repr(C, align(8))]
-struct Stacks([[u32; STACK_WORDS]; 2]);
-#[no_mangle]
-static mut EMBASSY_STACKS: Stacks = Stacks([[0; STACK_WORDS]; 2]);
+#[repr(C, align(32))]
+struct Stack(UnsafeCell<[u32; STACK_WORDS]>);
 
-/// Read through the uncached alias, so the other core and `read-ram` see current values.
+// SAFETY: a stack is written by the start hook before its task exists, then by that task only.
+unsafe impl Sync for Stack {}
+
+#[no_mangle]
+static EMBASSY_STACKS: [Stack; 2] = [Stack(UnsafeCell::new([0; STACK_WORDS])), Stack(UnsafeCell::new([0; STACK_WORDS]))];
+
+#[repr(C, align(32))]
+struct LineFlag(AtomicBool);
+
+static STARTED: LineFlag = LineFlag(AtomicBool::new(false));
+
+/// Read and written only through the uncached alias.
 #[repr(C)]
 pub struct DomainRecord {
     pub entered: u32,
@@ -112,7 +130,7 @@ pub struct DomainRecord {
     pub ticker_iterations: u32,
     pub first_tick: u32,
     pub last_tick: u32,
-    pub early_wakes: u32,
+    pub early_kernel_wakes: u32,
     pub late_max: u32,
     pub late_over_two_ticks: u32,
     pub sleeps_woken: u32,
@@ -126,17 +144,21 @@ pub struct DomainRecord {
     pub last_pender_error: i32,
     pub doorbell_received: u32,
     pub doorbell_latency_max: u32,
+    pub clock_regressions: u32,
+    pub clock_regression_max: u32,
     pub stack_base: u32,
     pub stack_bytes: u32,
 }
 
-#[repr(C)]
+/// Read and written only through the uncached alias.
+#[repr(C, align(32))]
 pub struct Demo {
     pub magic: u32,
     pub start_calls: u32,
     pub start_skipped: u32,
     pub started: u32,
-    /// Per domain: `+0x80`, `+0x0`, `+0xc` raw results.
+    pub panics: u32,
+    /// Per domain: `+0x80`, `+0x0`, `+0xc` raw results; `NOT_CALLED` until called.
     pub start_status: [[i32; 3]; 2],
     pub doorbell_sent: u32,
     pub doorbell_seq: u32,
@@ -152,7 +174,7 @@ const DOMAIN_RECORD_ZERO: DomainRecord = DomainRecord {
     ticker_iterations: 0,
     first_tick: 0,
     last_tick: 0,
-    early_wakes: 0,
+    early_kernel_wakes: 0,
     late_max: 0,
     late_over_two_ticks: 0,
     sleeps_woken: 0,
@@ -166,17 +188,20 @@ const DOMAIN_RECORD_ZERO: DomainRecord = DomainRecord {
     last_pender_error: 0,
     doorbell_received: 0,
     doorbell_latency_max: 0,
+    clock_regressions: 0,
+    clock_regression_max: 0,
     stack_base: 0,
     stack_bytes: 0,
 };
 
 #[no_mangle]
 pub static mut EMBASSY_DEMO: Demo = Demo {
-    magic: u32::from_le_bytes(*b"EMB1"),
+    magic: u32::from_le_bytes(*b"EMB2"),
     start_calls: 0,
     start_skipped: 0,
     started: 0,
-    start_status: [[0; 3]; 2],
+    panics: 0,
+    start_status: [[NOT_CALLED; 3]; 2],
     doorbell_sent: 0,
     doorbell_seq: 0,
     doorbell_sent_lo: 0,
@@ -189,28 +214,39 @@ fn demo() -> *mut Demo {
 }
 
 fn record(domain: Domain) -> *mut DomainRecord {
-    // SAFETY: `demo()` is a valid pointer for the payload's lifetime.
+    // SAFETY: `demo()` is valid for the payload's lifetime.
     unsafe { addr_of_mut!((*demo()).domains[domain.index()]) }
 }
 
-fn get(field: *mut u32) -> u32 {
-    // SAFETY: fields of the demonstration record.
-    unsafe { read_volatile(field) }
-}
+/// Fields of the demonstration record, through the uncached alias.
+mod field {
+    use core::ptr::{read_volatile, write_volatile};
 
-fn set(field: *mut u32, value: u32) {
-    // SAFETY: fields of the demonstration record.
-    unsafe { write_volatile(field, value) }
-}
-
-fn increment(field: *mut u32) {
-    set(field, get(field).wrapping_add(1));
-}
-
-fn raise(field: *mut u32, value: u32) {
-    if value > get(field) {
-        set(field, value);
+    pub fn get(field: *mut u32) -> u32 {
+        // SAFETY: callers pass a field of `EMBASSY_DEMO` through the uncached alias.
+        unsafe { read_volatile(field) }
     }
+
+    pub fn set(field: *mut u32, value: u32) {
+        // SAFETY: callers pass a field of `EMBASSY_DEMO` through the uncached alias.
+        unsafe { write_volatile(field, value) }
+    }
+
+    pub fn increment(field: *mut u32) {
+        set(field, get(field).wrapping_add(1));
+    }
+
+    pub fn raise(field: *mut u32, value: u32) {
+        if value > get(field) {
+            set(field, value);
+        }
+    }
+}
+
+use field::{get, increment, raise, set};
+
+fn saturate(value: u64) -> u32 {
+    value.min(u32::MAX as u64) as u32
 }
 
 struct StockTickDriver;
@@ -221,7 +257,16 @@ fn domain_now(domain: Domain) -> u64 {
         let count = kernel::timer_count();
         let after = kernel::tick();
         if before == after {
-            return critical_section::with(|cs| host(domain).clock.borrow_ref_mut(cs).now(after, count, DIRECTION));
+            let sample = critical_section::with(|cs| state(domain).clock.borrow_ref_mut(cs).now(after, count, DIRECTION));
+            if sample.regression > 0 {
+                let r = record(domain);
+                // SAFETY: fields of the demonstration record.
+                unsafe {
+                    increment(addr_of_mut!((*r).clock_regressions));
+                    raise(addr_of_mut!((*r).clock_regression_max), saturate(sample.regression));
+                }
+            }
+            return sample.now;
         }
     }
 }
@@ -233,7 +278,7 @@ impl embassy_time_driver::Driver for StockTickDriver {
 
     fn schedule_wake(&self, at: u64, waker: &Waker) {
         let domain = kernel::executing_domain();
-        let earlier = critical_section::with(|cs| host(domain).queue.borrow_ref_mut(cs).schedule_wake(at, waker));
+        let earlier = critical_section::with(|cs| state(domain).queue.borrow_ref_mut(cs).schedule_wake(at, waker));
         if earlier {
             pend(domain);
         }
@@ -259,8 +304,8 @@ fn measure_direction(domain: Domain) {
             None
         }
     });
-    // SAFETY: fields of the demonstration record.
     let r = record(domain);
+    // SAFETY: fields of the demonstration record.
     unsafe {
         set(addr_of_mut!((*r).direction_measured), match measured {
             Some(CounterDirection::Up) => 1,
@@ -269,7 +314,7 @@ fn measure_direction(domain: Domain) {
         });
     }
     if measured != Some(DIRECTION) {
-        critical_section::with(|cs| host(domain).clock.borrow_ref_mut(cs).use_ticks_only());
+        critical_section::with(|cs| state(domain).clock.borrow_ref_mut(cs).use_ticks_only());
         unsafe { set(addr_of_mut!((*r).ticks_only), 1) };
     }
 }
@@ -297,17 +342,17 @@ fn pend(target: Domain) {
         domain,
         handler_context: kernel::handler_context(),
         irq_masked: kernel::irq_masked(),
-        in_host_poll_of: if host(domain).polling.load(Ordering::Acquire) { Some(domain) } else { None },
+        in_host_poll_of: if state(domain).polling.load(Ordering::Acquire) { Some(domain) } else { None },
     };
     if domain == target {
-        host(target).pending.store(true, Ordering::Release);
+        state(target).pending.store(true, Ordering::Release);
     }
     let r = record(target);
     let id = EncodedId::new(target, HOST_TASK);
+    // SAFETY (each block below): fields of the demonstration record.
     let status = match wake_path(target, caller) {
         WakePath::None => return,
         WakePath::Unavailable => {
-            // SAFETY: fields of the demonstration record.
             unsafe { increment(addr_of_mut!((*r).pender_unavailable)) };
             return;
         }
@@ -349,28 +394,37 @@ fn raw_status(status: SlotStatus) -> i32 {
     }
 }
 
+fn region<T>(value: &'static T) -> (usize, usize) {
+    (value as *const T as usize, core::mem::size_of::<T>())
+}
+
 extern "C" fn host_main(argument: u32) -> ! {
     let domain = if argument == 0 { Domain::A } else { Domain::B };
-    let state = host(domain);
+    let own = state(domain);
+    for (start, bytes) in [region(own), region(&EMBASSY_STACKS[domain.index()])] {
+        kernel::clean_dcache(start, bytes);
+    }
     let r = record(domain);
+    // SAFETY (each block in this function): fields of the demonstration record.
     unsafe { set(addr_of_mut!((*r).entered), 1) };
     measure_direction(domain);
     // SAFETY: only this task touches its domain's executor slot, once, before any poll.
-    let executor: &'static raw::Executor = unsafe { (*state.executor.get()).write(raw::Executor::new(context_of(domain))) };
+    let executor: &'static raw::Executor = unsafe { (*own.executor.get()).write(raw::Executor::new(context_of(domain))) };
     let spawner = executor.spawner();
-    spawner.spawn(ticker(domain).unwrap());
+    own.polling.store(true, Ordering::Release);
+    spawner.spawn(own.ticker.spawn(|| Ticker::new(domain)).unwrap());
     if domain == Domain::B {
-        spawner.spawn(doorbell_waiter().unwrap());
+        spawner.spawn(own.waiter.spawn(|| DoorbellWaiter { consumed: 0 }).unwrap());
     }
     loop {
-        state.pending.store(false, Ordering::Release);
-        state.polling.store(true, Ordering::Release);
+        own.pending.store(false, Ordering::Release);
+        own.polling.store(true, Ordering::Release);
         // SAFETY: this loop is the only caller of poll for this executor, and the pender never polls.
         unsafe { executor.poll() };
         let now = domain_now(domain);
-        let next = critical_section::with(|cs| state.queue.borrow_ref_mut(cs).next_expiration(now));
-        state.polling.store(false, Ordering::Release);
-        if state.pending.load(Ordering::Acquire) {
+        let next = critical_section::with(|cs| own.queue.borrow_ref_mut(cs).next_expiration(now));
+        own.polling.store(false, Ordering::Release);
+        if own.pending.load(Ordering::Acquire) {
             continue;
         }
         match kernel::sleep(sleep_timeout(now, next)) {
@@ -378,7 +432,12 @@ extern "C" fn host_main(argument: u32) -> ! {
                 unsafe { increment(addr_of_mut!((*r).sleeps_woken)) };
                 deliver_doorbell(domain);
             }
-            SlotStatus::Timeout => unsafe { increment(addr_of_mut!((*r).sleeps_timed_out)) },
+            SlotStatus::Timeout => unsafe {
+                increment(addr_of_mut!((*r).sleeps_timed_out));
+                if domain_now(domain) < next {
+                    increment(addr_of_mut!((*r).early_kernel_wakes));
+                }
+            },
             other => unsafe {
                 increment(addr_of_mut!((*r).sleeps_other));
                 set(addr_of_mut!((*r).last_sleep_other) as *mut u32, raw_status(other) as u32);
@@ -387,35 +446,52 @@ extern "C" fn host_main(argument: u32) -> ! {
     }
 }
 
-#[embassy_executor::task(pool_size = 2)]
-async fn ticker(domain: Domain) {
-    let r = record(domain);
-    let mut deadline = Instant::now() + TICKER_PERIOD;
-    loop {
-        Timer::at(deadline).await;
-        let now = Instant::now();
-        let tick = kernel::tick();
-        // SAFETY: fields of the demonstration record.
-        unsafe {
-            if now < deadline {
-                increment(addr_of_mut!((*r).early_wakes));
-            } else {
-                let late = (now - deadline).as_ticks();
-                raise(addr_of_mut!((*r).late_max), late.min(u32::MAX as u64) as u32);
-                if late > 2 * crate::clock::RELOAD as u64 {
+/// Every `TICKER_PERIOD`: records the wake against its deadline; domain A rings domain B's
+/// doorbell every `DOORBELL_EVERY` iterations.
+struct Ticker {
+    domain: Domain,
+    deadline: Instant,
+    timer: Timer,
+}
+
+impl Ticker {
+    fn new(domain: Domain) -> Ticker {
+        let deadline = Instant::now() + TICKER_PERIOD;
+        Ticker { domain, deadline, timer: Timer::at(deadline) }
+    }
+}
+
+impl Future for Ticker {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let this = self.get_mut();
+        loop {
+            if Pin::new(&mut this.timer).poll(cx).is_pending() {
+                return Poll::Pending;
+            }
+            let now = Instant::now();
+            let tick = kernel::tick();
+            let r = record(this.domain);
+            let late = (now - this.deadline).as_ticks();
+            // SAFETY: fields of the demonstration record.
+            unsafe {
+                raise(addr_of_mut!((*r).late_max), saturate(late));
+                if late > 2 * RELOAD as u64 {
                     increment(addr_of_mut!((*r).late_over_two_ticks));
                 }
+                if get(addr_of_mut!((*r).ticker_iterations)) == 0 {
+                    set(addr_of_mut!((*r).first_tick), tick);
+                }
+                set(addr_of_mut!((*r).last_tick), tick);
+                increment(addr_of_mut!((*r).ticker_iterations));
+                if this.domain == Domain::A && get(addr_of_mut!((*r).ticker_iterations)) % DOORBELL_EVERY == 0 {
+                    ring_doorbell(now.as_ticks());
+                }
             }
-            if get(addr_of_mut!((*r).ticker_iterations)) == 0 {
-                set(addr_of_mut!((*r).first_tick), tick);
-            }
-            set(addr_of_mut!((*r).last_tick), tick);
-            increment(addr_of_mut!((*r).ticker_iterations));
-            if domain == Domain::A && get(addr_of_mut!((*r).ticker_iterations)) % DOORBELL_EVERY == 0 {
-                ring_doorbell(now.as_ticks());
-            }
+            this.deadline += TICKER_PERIOD;
+            this.timer = Timer::at(this.deadline);
         }
-        deadline += TICKER_PERIOD;
     }
 }
 
@@ -431,51 +507,58 @@ fn ring_doorbell(now: u64) {
     pend(Domain::B);
 }
 
-/// Hands a doorbell to domain B's waiter after its host task was woken through the kernel.
+/// Called only after domain B's host task was woken through the kernel.
 fn deliver_doorbell(domain: Domain) {
     if domain != Domain::B {
         return;
     }
     let d = demo();
+    // SAFETY: a field of the demonstration record.
     let seq = unsafe { get(addr_of_mut!((*d).doorbell_seq)) };
-    critical_section::with(|cs| {
-        let state = host(domain);
-        let mut delivered = state.doorbell_delivered.borrow_ref_mut(cs);
-        if *delivered != seq {
-            *delivered = seq;
-            if let Some(waker) = state.doorbell_waker.borrow_ref_mut(cs).take() {
-                waker.wake();
-            }
+    let own = state(domain);
+    let waker = critical_section::with(|cs| {
+        let mut delivered = own.doorbell_delivered.borrow_ref_mut(cs);
+        if *delivered == seq {
+            return None;
         }
+        *delivered = seq;
+        own.doorbell_waker.borrow_ref_mut(cs).take()
     });
+    if let Some(waker) = waker {
+        waker.wake();
+    }
 }
 
-#[embassy_executor::task]
-async fn doorbell_waiter() {
-    let state = host(Domain::B);
-    let r = record(Domain::B);
-    let d = demo();
-    let mut consumed = 0u32;
-    loop {
-        consumed = poll_fn(|cx| {
-            critical_section::with(|cs: CriticalSection| {
-                let delivered = *state.doorbell_delivered.borrow_ref(cs);
-                if delivered != consumed {
-                    Poll::Ready(delivered)
-                } else {
-                    *state.doorbell_waker.borrow_ref_mut(cs) = Some(cx.waker().clone());
-                    Poll::Pending
-                }
-            })
-        })
-        .await;
-        // SAFETY: fields of the demonstration record.
-        unsafe {
-            let sent = (get(addr_of_mut!((*d).doorbell_sent_hi)) as u64) << 32 | get(addr_of_mut!((*d).doorbell_sent_lo)) as u64;
-            let latency = Instant::now().as_ticks().saturating_sub(sent);
-            raise(addr_of_mut!((*r).doorbell_latency_max), latency.min(u32::MAX as u64) as u32);
-            increment(addr_of_mut!((*r).doorbell_received));
+struct DoorbellWaiter {
+    consumed: u32,
+}
+
+impl Future for DoorbellWaiter {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let this = self.get_mut();
+        let own = state(Domain::B);
+        let delivered = critical_section::with(|cs| {
+            let delivered = *own.doorbell_delivered.borrow_ref(cs);
+            if delivered == this.consumed {
+                *own.doorbell_waker.borrow_ref_mut(cs) = Some(cx.waker().clone());
+            }
+            delivered
+        });
+        if delivered != this.consumed {
+            this.consumed = delivered;
+            let d = demo();
+            let r = record(Domain::B);
+            // SAFETY: fields of the demonstration record.
+            unsafe {
+                let sent = (get(addr_of_mut!((*d).doorbell_sent_hi)) as u64) << 32 | get(addr_of_mut!((*d).doorbell_sent_lo)) as u64;
+                raise(addr_of_mut!((*r).doorbell_latency_max), saturate(Instant::now().as_ticks().saturating_sub(sent)));
+                increment(addr_of_mut!((*r).doorbell_received));
+            }
+            cx.waker().wake_by_ref();
         }
+        Poll::Pending
     }
 }
 
@@ -484,57 +567,64 @@ extern "C" {
     static __experiment_code_end: u8;
 }
 
-static STARTED: AtomicBool = AtomicBool::new(false);
-
 /// Experiment hook in front of the stock modal dispatcher 0x00bfb028; the first call from task
 /// context with IRQ unmasked creates and activates both host tasks.
 #[no_mangle]
 pub extern "C" fn embassy_on_dispatch(_registers: *mut u32) {
     let d = demo();
-    // SAFETY: fields of the demonstration record.
+    // SAFETY (each block in this function): fields of the demonstration record.
     unsafe { increment(addr_of_mut!((*d).start_calls)) };
-    if STARTED.load(Ordering::Acquire) {
+    if STARTED.0.load(Ordering::Acquire) {
         return;
     }
     if kernel::handler_context() || kernel::irq_masked() {
         unsafe { increment(addr_of_mut!((*d).start_skipped)) };
         return;
     }
-    if STARTED.swap(true, Ordering::AcqRel) {
+    if STARTED.0.swap(true, Ordering::AcqRel) {
         return;
     }
     unsafe { set(addr_of_mut!((*d).started), 1) };
     if cfg!(feature = "control-no-executors") {
         return;
     }
-    let (start, end) = (addr_of!(__ram_push_start) as usize, addr_of!(__experiment_code_end) as usize);
     for domain in DOMAINS {
-        // SAFETY: each stack belongs to one domain's host task, which does not run yet.
-        let stack = unsafe { addr_of_mut!(EMBASSY_STACKS.0[domain.index()]) as *mut u32 };
+        let stack = EMBASSY_STACKS[domain.index()].0.get() as *mut u32;
         for word in 0..STACK_WORDS {
-            unsafe { write_volatile(uncached(stack.add(word)), HOST_TASK.fill_word()) };
+            // SAFETY: the stack's task does not exist yet.
+            unsafe { write_volatile(stack.add(word), HOST_TASK.fill_word()) };
         }
-        let packet = kernel::CreatePacket {
-            flags: 2,
-            argument: domain.index() as u32,
-            entry: host_main as *const () as usize as u32,
-            priority: HOST_PRIORITY,
-            stack_bytes: (STACK_WORDS * 4) as u32,
-            stack_base: stack as u32,
-        };
         let r = record(domain);
         unsafe {
             set(addr_of_mut!((*r).stack_base), stack as u32);
             set(addr_of_mut!((*r).stack_bytes), (STACK_WORDS * 4) as u32);
-            (*d).start_status[domain.index()][0] = raw_status(kernel::register_auxiliary(domain, HOST_TASK));
-            (*d).start_status[domain.index()][1] = raw_status(kernel::create(domain, HOST_TASK, &packet));
         }
     }
+    let (start, end) = (addr_of!(__ram_push_start) as usize, addr_of!(__experiment_code_end) as usize);
     kernel::clean_dcache(start, end - start);
+    {
+        let _pair = kernel::CriticalPair::enter();
+        for domain in DOMAINS {
+            let packet = kernel::CreatePacket {
+                flags: 2,
+                argument: domain.index() as u32,
+                entry: host_main as *const () as usize as u32,
+                priority: HOST_PRIORITY,
+                stack_bytes: (STACK_WORDS * 4) as u32,
+                stack_base: EMBASSY_STACKS[domain.index()].0.get() as u32,
+            };
+            let status = unsafe { addr_of_mut!((*d).start_status[domain.index()]) };
+            unsafe {
+                write_volatile(addr_of_mut!((*status)[0]), raw_status(kernel::register_auxiliary(domain, HOST_TASK)));
+                write_volatile(addr_of_mut!((*status)[1]), raw_status(kernel::create(domain, HOST_TASK, &packet)));
+            }
+        }
+    }
     for domain in DOMAINS {
+        let status = unsafe { addr_of_mut!((*d).start_status[domain.index()]) };
         unsafe {
-            if (*d).start_status[domain.index()][1] == 0 {
-                (*d).start_status[domain.index()][2] = raw_status(kernel::activate(EncodedId::new(domain, HOST_TASK)));
+            if read_volatile(addr_of!((*status)[1])) == 0 {
+                write_volatile(addr_of_mut!((*status)[2]), raw_status(kernel::activate(EncodedId::new(domain, HOST_TASK))));
             }
         }
     }
@@ -542,6 +632,13 @@ pub extern "C" fn embassy_on_dispatch(_registers: *mut u32) {
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
+    // SAFETY: a field of the demonstration record.
+    unsafe { increment(addr_of_mut!((*demo()).panics)) };
+    if !kernel::irq_masked() && !kernel::handler_context() {
+        loop {
+            kernel::sleep(-1);
+        }
+    }
     loop {
         core::hint::spin_loop();
     }

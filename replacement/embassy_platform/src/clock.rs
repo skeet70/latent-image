@@ -59,7 +59,7 @@ impl Clock {
 
     /// `tick` and `count` must come from one tick: read the tick cell, the counter, then the
     /// tick cell again, and retry while the two tick reads differ.
-    pub fn now(&mut self, tick: u32, count: u32, direction: CounterDirection) -> u64 {
+    pub fn now(&mut self, tick: u32, count: u32, direction: CounterDirection) -> Sample {
         if tick < self.last_tick {
             self.epoch = self.epoch.wrapping_add(1);
         }
@@ -67,11 +67,19 @@ impl Clock {
         let ticks = (self.epoch as u64) << 32 | tick as u64;
         let sub = if self.sub_tick_valid { direction.sub_tick(count) } else { 0 };
         let value = ticks * RELOAD as u64 + sub as u64;
+        let regression = self.last_now.saturating_sub(value);
         if value > self.last_now {
             self.last_now = value;
         }
-        self.last_now
+        Sample { now: self.last_now, regression }
     }
+}
+
+/// A clamped time and how far below the previous value the raw reading fell (0 when it did not).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sample {
+    pub now: u64,
+    pub regression: u64,
 }
 
 /// Root `+0x28` timeout: -1 without a deadline, otherwise whole ticks rounded up, at least one,
@@ -110,32 +118,32 @@ mod tests {
     #[test]
     fn now_combines_ticks_and_sub_ticks() {
         let mut clock = Clock::new();
-        assert_eq!(clock.now(3, 1_000, CounterDirection::Up), 91_000);
-        assert_eq!(clock.now(3, 29_000, CounterDirection::Down), 91_000);
-        assert_eq!(clock.now(4, 29_000, CounterDirection::Down), 121_000);
+        assert_eq!(clock.now(3, 1_000, CounterDirection::Up).now, 91_000);
+        assert_eq!(clock.now(3, 29_000, CounterDirection::Down).now, 91_000);
+        assert_eq!(clock.now(4, 29_000, CounterDirection::Down).now, 121_000);
     }
 
     #[test]
     fn now_never_runs_backwards_across_a_late_tick_update() {
         let mut clock = Clock::new();
-        assert_eq!(clock.now(7, 29_990, CounterDirection::Up), 239_990);
+        assert_eq!(clock.now(7, 29_990, CounterDirection::Up), Sample { now: 239_990, regression: 0 });
         // Counter wrapped before the tick IRQ advanced the cell.
-        assert_eq!(clock.now(7, 10, CounterDirection::Up), 239_990);
-        assert_eq!(clock.now(8, 20, CounterDirection::Up), 240_020);
+        assert_eq!(clock.now(7, 10, CounterDirection::Up), Sample { now: 239_990, regression: 29_980 });
+        assert_eq!(clock.now(8, 20, CounterDirection::Up), Sample { now: 240_020, regression: 0 });
     }
 
     #[test]
     fn now_extends_the_tick_cell_past_its_wrap() {
         let mut clock = Clock::new();
         clock.now(u32::MAX, 0, CounterDirection::Up);
-        assert_eq!(clock.now(0, 0, CounterDirection::Up), (1u64 << 32) * RELOAD as u64);
+        assert_eq!(clock.now(0, 0, CounterDirection::Up).now, (1u64 << 32) * RELOAD as u64);
     }
 
     #[test]
     fn ticks_only_mode_drops_the_counter() {
         let mut clock = Clock::new();
         clock.use_ticks_only();
-        assert_eq!(clock.now(2, 12_345, CounterDirection::Up), 60_000);
+        assert_eq!(clock.now(2, 12_345, CounterDirection::Up).now, 60_000);
     }
 
     #[test]

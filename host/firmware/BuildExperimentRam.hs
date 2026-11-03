@@ -219,10 +219,14 @@ build base linked out experiment images hooks = do
       runtime = overlay (raw <> B.replicate (fromIntegral allocationBytes - B.length raw) 0) (fromIntegral (table - base)) tableBytes
   runtimeHash <- H.sha256 runtime
   experimentFiles <- sort . filter ((`elem` [".rs", ".c", ".h", ".S", ".json"]) . takeExtension) <$> listDirectory experiment
-  linkedObjects <- filterM doesFileExist [linked </> "libexperiment.a", linked </> "experiment-prelinked.o"]
-  identities <- forM (map (experiment </>) experimentFiles ++ linkedObjects ++ builderSources) $ \path -> do
+  linkedObjects <- filterM (doesFileExist . (linked </>)) ["libexperiment.a", "experiment-prelinked.o"]
+  sourceIdentities <- forM (map (experiment </>) experimentFiles ++ builderSources) $ \path -> do
     digest <- H.sha256 =<< B.readFile path
     pure (path, H.s digest)
+  objectIdentities <- forM linkedObjects $ \name -> do
+    digest <- H.sha256 =<< B.readFile (linked </> name)
+    pure (name, H.s digest)
+  let identities = sourceIdentities ++ objectIdentities
   let entries = H.obj [("install", H.s (hex install)), ("rollback", H.s (hex rollback)), ("status", H.s (hex status))]
       manifest = H.obj
         [ ("schema", H.n 1)

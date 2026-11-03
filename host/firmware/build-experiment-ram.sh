@@ -47,6 +47,7 @@ if [[ -f "$EXPERIMENT/prelinked.json" ]]; then
   [[ ! -f "$EXPERIMENT/lib.rs" ]] || { printf 'an experiment has lib.rs or prelinked.json, not both\n' >&2; exit 1; }
   prelinked="$(tr -d '"\n' < "$EXPERIMENT/prelinked.json")"
   case "$prelinked" in
+    *..*) printf 'prelinked.json must not name a path with ..\n' >&2; exit 1 ;;
     bazel-bin/*.o) ;;
     *) printf 'prelinked.json must name a bazel-bin/*.o object\n' >&2; exit 1 ;;
   esac

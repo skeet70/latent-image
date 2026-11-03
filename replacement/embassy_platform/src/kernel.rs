@@ -10,8 +10,12 @@ use crate::ids::{Domain, EncodedId, SlotStatus, TaskId};
 const ROOT_CELLS: usize = 0x0096_bd20;
 const TICK_CELL: usize = 0x400c_0800;
 const TIMER_COUNTER: usize = 0xfff9_1000;
-/// Stock loader routine `(address, bytes)` that cleans and invalidates D-cache lines.
+/// Stock loader routine `(address, bytes)` that cleans and invalidates D-cache lines on the calling core.
 const CLEAN_DCACHE: usize = 0x0004_2634;
+/// Image-4 critical pair that task creation 0x725dd8 holds around `+0x80`/`+0x0`: enter masks IRQ
+/// through `+0x164` and takes the cross-core lock through `+0x161c`, returning the prior mask.
+const CRITICAL_ENTER: usize = 0x0072_35d8;
+const CRITICAL_LEAVE: usize = 0x0072_36b0;
 
 mod offset {
     pub const CREATE: usize = 0x0;
@@ -165,8 +169,8 @@ impl InterruptPriority {
     }
 }
 
-/// Root `+0x160` with `{ignored, handler, priority, 0, 1}`, the mode stock line 32 and 120 use.
-/// The handler runs under the stock IRQ entry, acknowledge and EOI with CPSR.I clear.
+/// Root `+0x160` with `{ignored, handler, priority, 0, 1}`: `+0x100` bit 0 and mode 1, as stock
+/// line 120. The handler runs under the stock IRQ entry, acknowledge and EOI with CPSR.I clear.
 pub fn define_interrupt(line: InterruptLine, handler: extern "C" fn(), priority: InterruptPriority) -> SlotStatus {
     let packet = [0u32, handler as usize as u32, priority.0 as u32, 0, 1];
     SlotStatus::from_raw(call2(executing_root(), offset::INTERRUPT_DEFINE, line.0 as u32, packet.as_ptr() as u32))
@@ -197,4 +201,23 @@ pub fn clean_dcache(start: usize, bytes: usize) {
     // SAFETY: the stock routine takes an address and a byte count and touches only cache state.
     let f: Slot2 = unsafe { transmute(CLEAN_DCACHE) };
     f(start as u32, bytes as u32);
+}
+
+/// Holds the stock cross-core critical pair until dropped.
+pub struct CriticalPair(u32);
+
+impl CriticalPair {
+    pub fn enter() -> CriticalPair {
+        // SAFETY: the stock routine takes no arguments and returns the prior mask.
+        let f: Slot0 = unsafe { transmute(CRITICAL_ENTER) };
+        CriticalPair(f() as u32)
+    }
+}
+
+impl Drop for CriticalPair {
+    fn drop(&mut self) {
+        // SAFETY: the stock routine takes the mask its pair returned.
+        let f: Slot1 = unsafe { transmute(CRITICAL_LEAVE) };
+        f(self.0);
+    }
 }
