@@ -1344,7 +1344,7 @@
 +mod tests;
 --- /dev/null
 +++ b/crates/emulator/src/board/observation/composite/tests.rs
-@@ -0,0 +1,1048 @@
+@@ -0,0 +1,1054 @@
 +use super::*;
 +use crate::board::{
 +    bus::{self, Bus},
@@ -1684,6 +1684,12 @@
 +    }
 +    fn hook_watched(&self, hook: HookId, watched: bool) -> Result<(), String> {
 +        self.inner.hook_watched(hook, watched)
++    }
++    fn precise_store_pc(&self, on: bool) -> Result<(), String> {
++        self.inner.precise_store_pc(on)
++    }
++    fn exit_counters(&self) -> Result<std::collections::BTreeMap<&'static str, u64>, String> {
++        self.inner.exit_counters()
 +    }
 +}
 +/// Both processors share one `Faults`, so budgets count calls across cores.
