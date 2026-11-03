@@ -42,7 +42,18 @@ for src in "$EXPERIMENT"/*.c "$EXPERIMENT"/*.S; do
   esac
   objects+=("$obj")
 done
-if [[ -f "$EXPERIMENT/lib.rs" ]]; then
+if [[ -f "$EXPERIMENT/prelinked.json" ]]; then
+  # A JSON string naming a Bazel-built relocatable object that replaces lib.rs.
+  [[ ! -f "$EXPERIMENT/lib.rs" ]] || { printf 'an experiment has lib.rs or prelinked.json, not both\n' >&2; exit 1; }
+  prelinked="$(tr -d '"\n' < "$EXPERIMENT/prelinked.json")"
+  case "$prelinked" in
+    bazel-bin/*.o) ;;
+    *) printf 'prelinked.json must name a bazel-bin/*.o object\n' >&2; exit 1 ;;
+  esac
+  [[ -f "$prelinked" ]] || { printf 'prelinked object %s is missing; build it first\n' "$prelinked" >&2; exit 1; }
+  cp "$prelinked" "$OUT/experiment-prelinked.o"
+  objects+=("$OUT/experiment-prelinked.o")
+elif [[ -f "$EXPERIMENT/lib.rs" ]]; then
   "$RUSTC" --crate-name=experiment --edition=2021 --crate-type=staticlib -C opt-level=z \
     --target=armv7r-none-eabi -C panic=abort -C relocation-model=static -C target-cpu=cortex-r4f \
     -C codegen-units=1 -C debuginfo=0 "$EXPERIMENT/lib.rs" -o "$OUT/libexperiment.a"

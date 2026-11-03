@@ -1,0 +1,47 @@
+NIX_INPUTS = [
+    "Cargo.lock",
+    "Cargo.toml",
+    "embassy-platform.nix",
+    "//:devenv.lock",
+    "//build-support:nixpkgs.nix",
+    "//replacement/toolchain:xm1-rust.nix",
+] + glob(["src/*.rs"])
+
+# Objects named by experiments/embassy_phase1*/prelinked.json: the demonstration and its controls.
+VARIANTS = {
+    "embassy-platform-demo": '[ \\"counter-down\\" ]',
+    "embassy-platform-counter-up": '[ \\"counter-up\\" ]',
+    "embassy-platform-no-pender-kernel": '[ \\"counter-down\\" \\"control-no-pender-kernel\\" ]',
+    "embassy-platform-no-executors": '[ \\"counter-down\\" \\"control-no-executors\\" ]',
+}
+
+# The experiment link has no --gc-sections, so only sections reachable from the hook handler and
+# the exported records are kept here.
+[genrule(
+    name = name,
+    srcs = NIX_INPUTS,
+    outs = [name + ".o"],
+    cmd = """
+set -eu
+output=$$(nix-build --no-out-link --max-jobs 1 --cores 2 --arg features "{features}" $(location embassy-platform.nix))
+$(location @lab_lld//:bin/ld.lld) -m armelf -r --gc-sections \
+  -u embassy_on_dispatch -u EMBASSY_DEMO -u EMBASSY_STACKS \
+  "$$output/lib/libxm1_embassy_platform.a" -o $@
+""".format(features = features),
+    local = True,
+    tags = ["manual"],
+    tools = ["@lab_lld//:bin/ld.lld"],
+) for name, features in VARIANTS.items()]
+
+genrule(
+    name = "embassy-platform-host-tests",
+    srcs = NIX_INPUTS,
+    outs = ["embassy-platform-host-tests.log"],
+    cmd = """
+set -eu
+output=$$(nix-build --no-out-link --max-jobs 1 --cores 2 --arg hostTests true $(location embassy-platform.nix))
+cp "$$output/test.log" $@
+""",
+    local = True,
+    tags = ["manual"],
+)

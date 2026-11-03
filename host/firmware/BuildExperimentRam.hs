@@ -8,7 +8,7 @@ module Main where
 import A32 (decode)
 import ExperimentHook (positionIndependent)
 import ArmElf (Elf (..), Section (..), Symbol (..), SymbolKind (..), parseElf)
-import Control.Monad (forM, forM_, unless, when)
+import Control.Monad (filterM, forM, forM_, unless, when)
 import Data.Aeson (Value (..))
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
@@ -18,7 +18,7 @@ import Data.List (isPrefixOf, nub, sort)
 import qualified Data.Text as T
 import Data.Word (Word32)
 import Numeric (readHex, showHex)
-import System.Directory (listDirectory)
+import System.Directory (doesFileExist, listDirectory)
 import System.Environment (getArgs, lookupEnv)
 import System.FilePath (takeExtension, (</>))
 import System.Posix.Files (setFileMode)
@@ -219,7 +219,8 @@ build base linked out experiment images hooks = do
       runtime = overlay (raw <> B.replicate (fromIntegral allocationBytes - B.length raw) 0) (fromIntegral (table - base)) tableBytes
   runtimeHash <- H.sha256 runtime
   experimentFiles <- sort . filter ((`elem` [".rs", ".c", ".h", ".S", ".json"]) . takeExtension) <$> listDirectory experiment
-  identities <- forM (map (experiment </>) experimentFiles ++ builderSources) $ \path -> do
+  linkedObjects <- filterM doesFileExist [linked </> "libexperiment.a", linked </> "experiment-prelinked.o"]
+  identities <- forM (map (experiment </>) experimentFiles ++ linkedObjects ++ builderSources) $ \path -> do
     digest <- H.sha256 =<< B.readFile path
     pure (path, H.s digest)
   let entries = H.obj [("install", H.s (hex install)), ("rollback", H.s (hex rollback)), ("status", H.s (hex status))]
