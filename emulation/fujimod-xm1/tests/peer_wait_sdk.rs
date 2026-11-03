@@ -1356,7 +1356,6 @@ mod composed_nand_fixture;
 mod composed_interleaving {
     use super::*;
     use super::composed_nand_fixture::{Timing, Transfer};
-    use fujimod_catalog::configuration::ResolvedConfiguration;
     use serde::Serialize;
     use sha2::{Digest, Sha256};
 
@@ -1636,7 +1635,7 @@ mod composed_interleaving {
         fujimod_emulator_exr2_board::register_board_builder();
         fujimod_emulator_models::register();
         let document = RunDocument::parse(include_bytes!("../data/xm1-150.json")).unwrap();
-        let resolved = ResolvedConfiguration::with_overlays(&document.catalog_configuration.0, &[]).unwrap();
+        let resolved = fujimod_xm1::run::resolved(&document).unwrap();
         let mut graph = fujimod_emulator::boot::graph::assemble_with_starts(
             &resolved.reference, document.execution.instructions_per_tick, None, &[],
         ).unwrap();
@@ -1968,7 +1967,7 @@ mod composed_interleaving {
             assert_eq!(receipt.schema, 4);
             assert_eq!(receipt.result, ResultStatus::Failed);
             assert!(receipt.machine_failure.is_none());
-            assert_eq!(receipt.cp14_identities, [0x4003, 0x5003]);
+            assert_eq!(receipt.cp14_identities, [0x4003, 0x8003]);
             assert_eq!(receipt.negative_evidence.unwrap().invalid_core_identity, 0x6003);
             let entry = receipt.stops.iter().find(|stop| stop.label == Label::PrefixEntry).unwrap();
             let refused = receipt.stops.iter().find(|stop| stop.label == boundary).unwrap();

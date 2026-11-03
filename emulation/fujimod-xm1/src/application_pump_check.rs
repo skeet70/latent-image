@@ -219,7 +219,7 @@ fn raw_views<'a>(root: &Path, binding: &FileBinding, projections: impl Iterator<
 enum KernelDomain { A, B }
 impl KernelDomain {
     fn from_identity(identity: u32) -> Result<Self, Failure> {
-        match identity { 0x4003 => Ok(Self::A), 0x5003 => Ok(Self::B), _ => Err(refusal(Refusal::TaskContext, "modeled kernel identity is unadmitted")) }
+        match fujimod_xm1::run::CoreIdentities::domain(identity) { Some(0) => Ok(Self::A), Some(_) => Ok(Self::B), None => Err(refusal(Refusal::TaskContext, "modeled kernel identity is unadmitted")) }
     }
     fn from_selector(selector: u32) -> Result<Self, Failure> {
         match selector { 0 => Ok(Self::A), 1 => Ok(Self::B), _ => Err(refusal(Refusal::QueueProvenance, "kernel selector is outside two domains")) }
@@ -227,6 +227,7 @@ impl KernelDomain {
     fn index(self) -> usize { match self { Self::A => 0, Self::B => 1 } }
 }
 fn task_context(sample: &Sample) -> Result<(), Failure> {
+    require(fujimod_xm1::run::CoreIdentities::of(sample.identities).is_some(), Refusal::TaskContext, "sample core identities are not one recorded model")?;
     let domain = KernelDomain::from_identity(sample.identities[usize::from(sample.core)])?;
     let layout = capture::TASK_LAYOUTS[domain.index()];
     let creation = layout.creation.0;
@@ -262,6 +263,7 @@ fn sequences(report: &PumpReport, proof: &Profile) -> Result<Sequence, Failure> 
     let mut received = false;
     let mut pending = false;
     let mut backedge_due = false;
+    require(report.samples.iter().all(|sample| report.samples.first().is_some_and(|first| first.identities == sample.identities)), Refusal::TaskContext, "sample core identities change within the receipt")?;
     for sample in &report.samples {
         let pc = physical(sample.pc);
         if is_ui(pc) { task_context(sample)?; }

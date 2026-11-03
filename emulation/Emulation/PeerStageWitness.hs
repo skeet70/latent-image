@@ -18,7 +18,7 @@ import qualified Data.ByteString as B
 import Data.Bits ((.&.))
 import Data.List (sort)
 import Data.Word (Word8, Word32, Word64)
-import Emulation.FirstStageWitness (Core (..), Cpsr (..), GuestAddress (..), WitnessResult (..), encodeLeWord, leWordAt)
+import Emulation.FirstStageWitness (Core (..), Cpsr (..), GuestAddress (..), WitnessResult (..), encodeLeWord, leWordAt, recordedCp14Identities)
 import Emulation.WatchObservation (ByteOrder (..), CpuAccess (..), Instructions (..), Tick (..), TransferAccess (..), WatchObservation (..), WatchRecord (..))
 import qualified Emulation.WatchObservation as W
 import FujiAF.JSON (decodeStrictIntegers)
@@ -249,7 +249,7 @@ nondecreasing values = and (zipWith (<=) values (drop 1 values))
 validateReceipt :: Argument -> Receipt -> Either String ()
 validateReceipt expected receipt = do
   unless (receiptResult receipt == Passed && receiptError receipt == Nothing && receiptMachineFailure receipt == Nothing) (Left "peer witness failed")
-  unless (receiptIdentities receipt == (0x4003,0x5003)) (Left "peer CP14 identities differ")
+  unless (receiptIdentities receipt `elem` recordedCp14Identities) (Left "peer CP14 identities differ")
   unless (receiptInstructions receipt > Instructions 0 && receiptInstructions receipt <= Instructions 20000000) (Left "peer instruction budget exceeded")
   let stops = receiptStops receipt
   unless (map stopLabel stops == [Record2Entry,RendezvousTail,Record2Handoff,LoaderBEntry]) (Left "peer stop ordering differs")

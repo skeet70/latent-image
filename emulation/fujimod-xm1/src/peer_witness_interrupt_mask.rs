@@ -194,7 +194,7 @@ fn aliases(machine: &Machine, runner: &Runner<'_>, tcm: &TcmWords,
     tcm_disjoint_views(&runner.committed, tcm, &guarded)?;
     let mut buffer = [0; (TABLE.1 - TABLE.0) as usize];
     for core in 0..2 {
-        require(machine.session.board.cpu(core)?.rprofile_identity(None)? == [0x4003, 0x5003][core], "consumer CP14 identity differs")?;
+        require(machine.session.board.cpu(core)?.rprofile_identity(None)? == crate::run::CoreIdentities::Xm1.words()[core], "consumer CP14 identity differs")?;
         for ((&(start, end), views), hash) in resources.iter().map(|(extent, views)| (extent, *views)).zip(hashes) {
             for guest in [start, ZERO_GUEST + start] {
                 require(runner.physical_of(core, guest, end - start)? == start, "consumer alias mapping differs")?;

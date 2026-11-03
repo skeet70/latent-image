@@ -151,9 +151,51 @@ pub fn nand_base(document:&RunDocument,update:&ValidatedUpdate)->Result<NandBase
 /// to the period; beyond it is unmeasured.
 pub const BOOT_ROM_DECODE_BYTES: u64 = 0x10_4000;
 
-pub(crate) fn graph(document: &RunDocument) -> Result<(ResolvedConfiguration, factory::Graph), String> {
+/// CP14 identities of cores 0 and 1 in each model a receipt can come from: the catalog's, and the
+/// camera's (`E-RAM-PUSH-INSTALL-150`), which `open` configures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoreIdentities {
+    Catalog,
+    Xm1,
+}
+
+impl CoreIdentities {
+    pub const RECORDED: [Self; 2] = [Self::Catalog, Self::Xm1];
+
+    pub const fn words(self) -> [u32; 2] {
+        match self {
+            Self::Catalog => [0x4003, 0x5003],
+            Self::Xm1 => [0x4003, 0x8003],
+        }
+    }
+
+    /// The model whose cores read `pair`.
+    pub fn of(pair: [u32; 2]) -> Option<Self> {
+        Self::RECORDED.into_iter().find(|model| model.words() == pair)
+    }
+
+    /// Whether `identity` is core `core`'s identity in a recorded model.
+    pub fn recorded(core: usize, identity: u32) -> bool {
+        Self::RECORDED.iter().any(|model| model.words().get(core) == Some(&identity))
+    }
+
+    /// Kernel domain (0 for A, 1 for B) of a core reading `identity` in a recorded model; stock
+    /// code selects A only for `0x4003`.
+    pub fn domain(identity: u32) -> Option<usize> {
+        (0..2).find(|&core| Self::recorded(core, identity))
+    }
+}
+
+/// The catalog configuration with the X-M1 boot-ROM decode and core identities applied.
+pub fn resolved(document: &RunDocument) -> Result<ResolvedConfiguration, String> {
     let mut resolved = ResolvedConfiguration::with_overlays(&document.catalog_configuration.0, &[])?;
     extend_boot_rom_decode(&mut resolved.reference.soc, document.boot_rom.address.0)?;
+    set_core_identities(&mut resolved.reference.soc)?;
+    Ok(resolved)
+}
+
+pub(crate) fn graph(document: &RunDocument) -> Result<(ResolvedConfiguration, factory::Graph), String> {
+    let resolved = resolved(document)?;
     let graph = fujimod_emulator::boot::graph::assemble_with_starts(
         &resolved.reference,
         document.execution.instructions_per_tick,
@@ -162,6 +204,18 @@ pub(crate) fn graph(document: &RunDocument) -> Result<(ResolvedConfiguration, fa
     )?;
     graph.validate()?;
     Ok((resolved, graph))
+}
+
+fn set_core_identities(soc: &mut Soc) -> Result<(), String> {
+    let catalog = CoreIdentities::Catalog.words();
+    let cores: Vec<_> = soc.processors.iter_mut().filter_map(|core| core.rprofile.as_mut()).collect();
+    if cores.len() != 2 || cores.iter().map(|core| core.cp14_identity).ne(catalog) {
+        return Err("catalog CP14 identities differ from the two-core catalog model".into());
+    }
+    for (core, identity) in cores.into_iter().zip(CoreIdentities::Xm1.words()) {
+        core.cp14_identity = identity;
+    }
+    Ok(())
 }
 
 /// Widens the catalog's 16 KiB boot-ROM region, its physical-bus map and each core's identity map
@@ -313,5 +367,20 @@ mod tests {
             assert!(session.board.read_memory(core, end, &mut [0; 4]).is_err(), "core {core}");
         }
         assert!(session.board.read_physical(end, &mut [0; 4]).is_err());
+    }
+
+    #[test]
+    fn cores_read_the_camera_cp14_identities() {
+        let session = session(&[0; 0x4000]);
+        for (core, identity) in [(0, 0x4003), (1, 0x8003)] {
+            assert_eq!(session.board.cpu(core).unwrap().rprofile_identity(None).unwrap(), identity, "core {core}");
+        }
+    }
+
+    #[test]
+    fn recorded_identities_select_kernel_domains() {
+        assert_eq!([0x4003, 0x5003, 0x8003, 0x6003].map(CoreIdentities::domain), [Some(0), Some(1), Some(1), None]);
+        assert!(CoreIdentities::recorded(1, 0x5003) && CoreIdentities::recorded(1, 0x8003));
+        assert!(!CoreIdentities::recorded(0, 0x8003) && !CoreIdentities::recorded(1, 0x4003));
     }
 }

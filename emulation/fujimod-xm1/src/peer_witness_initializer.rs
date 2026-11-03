@@ -321,7 +321,7 @@ fn append_aliases(machine: &Machine, runner: &Runner<'_>, tcm: &TcmWords, result
     };
     let resources = [snapshot(RECORD)?, snapshot(LOADER_B)?, snapshot(ZERO)?];
     for core in 0..2 {
-        require(machine.session.board.cpu(core)?.rprofile_identity(None)? == [0x4003, 0x5003][core],
+        require(machine.session.board.cpu(core)?.rprofile_identity(None)? == crate::run::CoreIdentities::Xm1.words()[core],
             "initializer CP14 identity changed")?;
         for resource in &resources {
             let start = resource.span.start.0;

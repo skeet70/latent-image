@@ -108,7 +108,7 @@ checkContext :: Context -> Either WitnessError ()
 checkContext context = require
   (length (contextRegisters context) == 13 && length (contextCounts context) == 2
     && length (contextTcm context) == 2 && all ((==2) . length) (contextTcm context)
-    && contextIdentities context == [WordValue 0x4003,WordValue 0x5003]
+    && contextIdentities context `elem` recordedCoreIdentities
     && number (contextCpsr context) .&. 0x07f0ffff == 0xd3) ContextRejected
 
 sameControl :: Context -> Context -> Bool
@@ -273,6 +273,7 @@ admitReceipt inputs observed = do
   cacheReturn <- required CacheRejected (observationCacheReturn observation)
   after <- required TerminalRejected (observationAfter observation)
   mapM_ checkContext [entry,cache,cacheReturn,after]
+  require (oneRecordedModel (map contextIdentities [entry,cache,cacheReturn,after])) ContextRejected
   require (all (\context -> all ((<=8300000) . count) (contextCounts context)
     && sum (map count (contextCounts context)) <= 8300000) [entry,cache,cacheReturn,after]
     && sum (map count (contextCounts entry)) <= 8000000) ContextRejected

@@ -115,7 +115,7 @@ checkContext context = do
   let state = contextMachine context
   require (length (K.contextRegisters state) == 13 && length (K.contextCounts state) == 2
     && length (K.contextTcm state) == 2 && all ((==2) . length) (K.contextTcm state)
-    && K.contextIdentities state == map WordValue [0x4003,0x5003]
+    && K.contextIdentities state `elem` K.recordedCoreIdentities
     && all ((<= Count 0x20000000)) (K.contextCounts state) && sum (map count (K.contextCounts state)) <= 0x20000000
     && number (K.contextCpsr state) .&. 0x01000020 == 0) ContextRejected
 
@@ -587,6 +587,10 @@ checkSegmentsWithPolicy policy receipt = do
     && segmentStart initial == K.contextCounts (machine outer)
     && and (zipWith (\a b -> segmentEnd a == segmentStart b && segmentEndContexts a == segmentStartContexts b) segments (drop 1 segments))) SegmentRejected
   checkWatchFailures receipt
+  require (K.oneRecordedModel ([K.contextIdentities (machine probe) | probe <- receiptProbes receipt]
+    ++ [K.contextIdentities (contextMachine context) | segment <- segments, context <- segmentStartContexts segment ++ segmentEndContexts segment]
+    ++ [K.contextIdentities (contextMachine context) | resource <- receiptResources receipt, context <- resourceAdmitted resource : maybe [] pure (resourceClosed resource)]
+    ++ [K.contextIdentities (contextMachine (payloadContext payload)) | payload <- receiptPayloads receipt])) ContextRejected
   checkDeclaredFetchPolicyWithPolicy policy receipt
   mapM_ (check (K.contextTcm (machine outer))) segments
   mapM_ (checkFetches receipt) segments
