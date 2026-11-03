@@ -18,7 +18,7 @@ use embassy_time::{Duration, Instant, Timer};
 use embassy_time_queue_utils::Queue;
 
 use crate::clock::{sleep_timeout, Clock, CounterDirection, RELOAD};
-use crate::ids::{Domain, EncodedId, SlotStatus, TaskId};
+use crate::ids::{allocated_id, Domain, EncodedId, SlotStatus, TaskId};
 use crate::kernel;
 use crate::wake::{wake_path, Caller, WakePath};
 
@@ -31,9 +31,10 @@ const DIRECTION: CounterDirection = CounterDirection::Down;
 #[cfg(not(any(feature = "counter-up", feature = "counter-down")))]
 compile_error!("select one of counter-up and counter-down");
 
-/// Outside the class table at 0x7cad9c and the stack check at 0x69cc18, which cover ids 1..104;
-/// `+0x0` refuses with -41 if a record already exists.
-const HOST_TASK: TaskId = match TaskId::new(119) {
+/// Domain B's host id: outside the class table at 0x7cad9c and the stack check at 0x69cc18, which
+/// cover ids 1..104, and in class 2, where the allocator 0x728804 does not create. Domain A's
+/// host takes its id from that allocator.
+const HOST_TASK_B: TaskId = match TaskId::new(119) {
     Some(id) => id,
     None => panic!(),
 };
@@ -122,6 +123,18 @@ static EMBASSY_STACKS: [Stack; 2] = [Stack(UnsafeCell::new([0; STACK_WORDS])), S
 struct LineFlag(AtomicU32);
 
 static STARTED: LineFlag = LineFlag(AtomicU32::new(0));
+/// Domain A's encoded host id once the allocator has returned it; 0 before.
+static HOST_A: LineFlag = LineFlag(AtomicU32::new(0));
+
+fn host_id(domain: Domain) -> Option<EncodedId> {
+    match domain {
+        Domain::A => match HOST_A.0.load(Ordering::Acquire) {
+            0 => None,
+            raw => Some(EncodedId::from_raw(raw)),
+        },
+        Domain::B => Some(EncodedId::new(Domain::B, HOST_TASK_B)),
+    }
+}
 
 /// Read and written only through the uncached alias.
 #[repr(C)]
@@ -160,7 +173,8 @@ pub struct Demo {
     pub start_skipped: u32,
     pub started: u32,
     pub panics: u32,
-    /// Per domain: `+0x80`, `+0x0`, `+0xc` raw results; `NOT_CALLED` until called.
+    /// Domain A: `[NOT_CALLED, allocator 0x728804 result (the id when positive), NOT_CALLED]`.
+    /// Domain B: `+0x80`, `+0x0`, `+0xc` raw results. `NOT_CALLED` until called.
     pub start_status: [[i32; 3]; 2],
     pub doorbell_sent: u32,
     pub doorbell_seq: u32,
@@ -350,11 +364,10 @@ fn pend(target: Domain) {
         state(target).pending.store(true, Ordering::Release);
     }
     let r = record(target);
-    let id = EncodedId::new(target, HOST_TASK);
     // SAFETY (each block below): fields of the demonstration record.
-    let status = match wake_path(target, caller) {
-        WakePath::None => return,
-        WakePath::Unavailable => {
+    let (path, id) = match (wake_path(target, caller), host_id(target)) {
+        (WakePath::None, _) => return,
+        (WakePath::Unavailable, _) | (_, None) => {
             unsafe { increment(addr_of_mut!((*r).pender_unavailable)) };
             return;
         }
@@ -362,14 +375,14 @@ fn pend(target: Domain) {
             unsafe { increment(addr_of_mut!((*r).pender_unavailable)) };
             return;
         }
-        WakePath::Task => {
-            unsafe { increment(addr_of_mut!((*r).pender_task_calls)) };
-            kernel::wakeup(id)
-        }
-        WakePath::Handler => {
-            unsafe { increment(addr_of_mut!((*r).pender_handler_calls)) };
-            kernel::wakeup_from_handler(id)
-        }
+        (path, Some(id)) => (path, id),
+    };
+    let status = if path == WakePath::Task {
+        unsafe { increment(addr_of_mut!((*r).pender_task_calls)) };
+        kernel::wakeup(id)
+    } else {
+        unsafe { increment(addr_of_mut!((*r).pender_handler_calls)) };
+        kernel::wakeup_from_handler(id)
     };
     match status {
         SlotStatus::Ok | SlotStatus::QueueOverflow => {}
@@ -571,7 +584,7 @@ extern "C" {
 }
 
 /// Experiment hook in front of the stock modal dispatcher 0x00bfb028; the first call from task
-/// context with IRQ unmasked creates and activates both host tasks.
+/// context with IRQ unmasked creates and activates both host tasks, A through the allocator.
 #[no_mangle]
 pub extern "C" fn embassy_on_dispatch(_registers: *mut u32) {
     let d = demo();
@@ -591,44 +604,52 @@ pub extern "C" fn embassy_on_dispatch(_registers: *mut u32) {
     if cfg!(feature = "control-no-executors") {
         return;
     }
+    let b_stack = EMBASSY_STACKS[Domain::B.index()].0.get() as *mut u32;
+    for word in 0..STACK_WORDS {
+        // SAFETY: the stack's task does not exist yet.
+        unsafe { write_volatile(b_stack.add(word), HOST_TASK_B.fill_word()) };
+    }
     for domain in DOMAINS {
-        let stack = EMBASSY_STACKS[domain.index()].0.get() as *mut u32;
-        for word in 0..STACK_WORDS {
-            // SAFETY: the stack's task does not exist yet.
-            unsafe { write_volatile(stack.add(word), HOST_TASK.fill_word()) };
-        }
         let r = record(domain);
         unsafe {
-            set(addr_of_mut!((*r).stack_base), stack as u32);
+            set(addr_of_mut!((*r).stack_base), EMBASSY_STACKS[domain.index()].0.get() as u32);
             set(addr_of_mut!((*r).stack_bytes), (STACK_WORDS * 4) as u32);
         }
     }
     let (start, end) = (addr_of!(__ram_push_start) as usize, addr_of!(__experiment_code_end) as usize);
     kernel::clean_dcache(start, end - start);
+    let entry = host_main as *const () as usize as u32;
+    let b_status = unsafe { addr_of_mut!((*d).start_status[Domain::B.index()]) };
     {
         let _pair = kernel::CriticalPair::enter();
-        for domain in DOMAINS {
-            let packet = kernel::CreatePacket {
-                flags: 2,
-                argument: domain.index() as u32,
-                entry: host_main as *const () as usize as u32,
-                priority: HOST_PRIORITY,
-                stack_bytes: (STACK_WORDS * 4) as u32,
-                stack_base: EMBASSY_STACKS[domain.index()].0.get() as u32,
-            };
-            let status = unsafe { addr_of_mut!((*d).start_status[domain.index()]) };
-            unsafe {
-                write_volatile(addr_of_mut!((*status)[0]), raw_status(kernel::register_auxiliary(domain, HOST_TASK)));
-                write_volatile(addr_of_mut!((*status)[1]), raw_status(kernel::create(domain, HOST_TASK, &packet)));
-            }
+        let packet = kernel::CreatePacket {
+            flags: 2,
+            argument: Domain::B.index() as u32,
+            entry,
+            priority: HOST_PRIORITY,
+            stack_bytes: (STACK_WORDS * 4) as u32,
+            stack_base: b_stack as u32,
+        };
+        unsafe {
+            write_volatile(addr_of_mut!((*b_status)[0]), raw_status(kernel::register_auxiliary(Domain::B, HOST_TASK_B)));
+            write_volatile(addr_of_mut!((*b_status)[1]), raw_status(kernel::create(Domain::B, HOST_TASK_B, &packet)));
         }
     }
-    for domain in DOMAINS {
-        let status = unsafe { addr_of_mut!((*d).start_status[domain.index()]) };
-        unsafe {
-            if read_volatile(addr_of!((*status)[1])) == 0 {
-                write_volatile(addr_of_mut!((*status)[2]), raw_status(kernel::activate(EncodedId::new(domain, HOST_TASK))));
-            }
+    let packet = kernel::AllocatePacket {
+        entry,
+        priority: HOST_PRIORITY,
+        stack_bytes: (STACK_WORDS * 4) as u32,
+        stack_base: EMBASSY_STACKS[Domain::A.index()].0.get() as u32,
+        argument: Domain::A.index() as u32,
+    };
+    let raw = kernel::allocate_and_activate(&packet);
+    unsafe { write_volatile(addr_of_mut!((*d).start_status[Domain::A.index()][1]), raw) };
+    if let Ok(id) = allocated_id(raw) {
+        HOST_A.0.store(EncodedId::new(Domain::A, id).raw(), Ordering::Release);
+    }
+    unsafe {
+        if read_volatile(addr_of!((*b_status)[1])) == 0 {
+            write_volatile(addr_of_mut!((*b_status)[2]), raw_status(kernel::activate(EncodedId::new(Domain::B, HOST_TASK_B))));
         }
     }
 }

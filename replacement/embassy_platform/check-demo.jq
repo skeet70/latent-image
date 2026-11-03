@@ -14,8 +14,10 @@ def run_clean:
   and ([.observations[].steps[].matched] | all)
   and .forbidden_execution.complete == true and .forbidden_execution.forbidden_fetch_count == 0;
 def wake_hits($r0): [.observations[].trace_hits[]? | select((.site | startswith("wakeup-")) and .r0 == $r0)] | length;
-def fill_words: bytes as $b | [range(0; ($b | length) / 4) as $w | ($b[($w * 4):($w * 4 + 4)] == [119, 119, 119, 119])];
+# Stack words still holding the fill: byte 0 for A (the allocator's fill), the id byte 119 for B.
+def fill_words($byte): bytes as $b | [range(0; ($b | length) / 4) as $w | ($b[($w * 4):($w * 4 + 4)] == [$byte, $byte, $byte, $byte])];
 def high_water($stack): ($stack | index(false)) as $first | if $first == null then 0 else 2048 - 4 * $first end;
+def allocated_id: type == "number" and . >= 105 and . <= 120;
 # ticker_iterations against the tick span: each iteration is 10 ticks (100 ms) after the first.
 def on_schedule($d): $d.ticker_iterations >= 10 and ((($d.last_tick - $d.first_tick) / 10 - ($d.ticker_iterations - 1)) | fabs) <= 1;
 # Both tickers advanced between the handback read and the after-unload read.
@@ -25,7 +27,7 @@ def both_continue($before; $after): $after.magic == "EMB2"
 def timers_run($run): ($run | record("handback")) as $h | ($run | record("unloaded-shooting")) as $a
   | $h != null and $a != null and ([$h.domains[] | on_schedule(.)] | all) and both_continue($h; $a);
 def started_hosts($d): $d != null and $d.magic == "EMB2"
-  and ($d.start_status.A == [0, 0, 0] or $d.start_status.A == [-41, 0, 0])
+  and $d.start_status.A[0] == "not-called" and ($d.start_status.A[1] | allocated_id) and $d.start_status.A[2] == "not-called"
   and ($d.start_status.B == [0, 0, 0] or $d.start_status.B == [-41, 0, 0])
   and $d.domains.A.entered == 1 and $d.domains.B.entered == 1;
 def no_faults($run): [$run | record("handback"), record("unloaded-shooting")] as $reads
@@ -53,8 +55,8 @@ def is_variant($name; $object): .relink.source_identity["experiments/" + $name +
 | ($run | record("handback")) as $d
 | ($run | record("unloaded-shooting")) as $after
 | ($run | read_at("handback"; "stacks")) as $stacks_hex
-| (if $stacks_hex == null then null else $stacks_hex | fill_words end) as $stacks
-| (if $stacks == null then null else {A: high_water($stacks[0:512]), B: high_water($stacks[512:1024])} end) as $water
+| (if $stacks_hex == null then null else {A: ($stacks_hex[0:4096] | fill_words(0)), B: ($stacks_hex[4096:8192] | fill_words(119))} end) as $stacks
+| (if $stacks == null then null else $stacks | map_values(high_water(.)) end) as $water
 | {
     runs: {
       each_named_variant: ([$runs[] | .name as $n | .object as $o | .run | is_variant($n; $o)] | all),
@@ -79,6 +81,7 @@ def is_variant($name; $object): .relink.source_identity["experiments/" + $name +
         and $d.domains.B.pender_task_calls >= $d.doorbell_sent and ($run | wake_hits("0x00020077")) >= 1),
       stacks_within_bounds: ($water != null and $water.A > 0 and $water.A < 2048 and $water.B > 0 and $water.B < 2048),
       measures: {
+        host_a_id: $d.start_status.A[1],
         stack_high_water_bytes: $water,
         iterations: ($d.domains | map_values(.ticker_iterations)),
         tick_span: ($d.domains | map_values(.last_tick - .first_tick)),

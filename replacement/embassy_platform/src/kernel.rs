@@ -17,6 +17,12 @@ const CLEAN_DCACHE: usize = 0x0004_2634;
 /// holds it, retries `+0x161c` until it takes it; it returns the prior mask.
 const CRITICAL_ENTER: usize = 0x0072_35d8;
 const CRITICAL_LEAVE: usize = 0x0072_36b0;
+/// Image-4 dynamic task allocator `(0, activate, packet)`, called the same way by its four plain-image
+/// callers. It fills the stack with byte 0 and cleans it, then tries root A `+0x0` with ids from
+/// cursor 0x40a0fc34 down to 105, moving to the next id when one fails, and stores the cursor
+/// below the id it took. With `activate` 1 the `+0x0` flags are 2 and it activates the task
+/// through the executing core's `+0xc`.
+const ALLOCATE_TASK: usize = 0x0072_8804;
 
 mod offset {
     pub const CREATE: usize = 0x0;
@@ -39,6 +45,7 @@ mod offset {
 type Slot0 = extern "C" fn() -> i32;
 type Slot1 = extern "C" fn(u32) -> i32;
 type Slot2 = extern "C" fn(u32, u32) -> i32;
+type Slot3 = extern "C" fn(u32, u32, u32) -> i32;
 
 fn root(domain: Domain) -> usize {
     // SAFETY: the publication cells hold the two root addresses once the kernel is installed.
@@ -118,6 +125,23 @@ pub struct CreatePacket {
 pub fn register_auxiliary(domain: Domain, id: TaskId) -> SlotStatus {
     let packet = [0u32; 2];
     SlotStatus::from_raw(call2(root(domain), offset::REGISTER_AUXILIARY, EncodedId::new(domain, id).raw(), packet.as_ptr() as u32))
+}
+
+/// The allocator's packet; it builds the `+0x0` packet from these fields.
+#[repr(C)]
+pub struct AllocatePacket {
+    pub entry: u32,
+    pub priority: u32,
+    pub stack_bytes: u32,
+    pub stack_base: u32,
+    pub argument: u32,
+}
+
+/// Creates and activates a class-1 task through the allocator.
+pub fn allocate_and_activate(packet: &AllocatePacket) -> i32 {
+    // SAFETY: the stock routine follows AAPCS and reads the packet only during the call.
+    let f: Slot3 = unsafe { transmute(ALLOCATE_TASK) };
+    f(0, 1, packet as *const AllocatePacket as u32)
 }
 
 /// Root `+0x0` of the owning domain; it writes that domain's records whatever core runs it.
