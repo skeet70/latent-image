@@ -3,7 +3,8 @@ module Main (main) where
 
 import Control.Exception (IOException, bracket, catch, displayException, finally)
 import Control.Monad (forM, forM_, void, when)
-import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, withObject, (.:), (.=))
+import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, toJSON, withObject, (.:), (.=))
+import qualified Data.Aeson.Key as K
 import Data.Aeson.Types (parseMaybe)
 import Data.Bits (shiftL, (.|.))
 import qualified Data.ByteString as B
@@ -12,6 +13,7 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Char (isAlphaNum, toLower)
 import Data.List (isPrefixOf)
 import Data.Word (Word32)
+import Numeric (showHex)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, routeKey, routeKeyHex)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.Sha256 (sha256File, sha256Hex)
@@ -76,21 +78,23 @@ terminalState = parseMaybe $ withObject "diagnostic state" $ \state ->
       else fail "not the stock power-off halt")
 
 data InputControl = MainUp | MainDown | HalfPress | FullPress | Movie deriving (Eq, Show)
-data Case = DefaultCases | ControlsCase | ModesCase | FullPressCase | CheckpointRestoreCase deriving (Eq)
+data Case = DefaultCases | ControlsCase | ModesCase | FullPressCase | CheckpointRestoreCase | PowerDestructorCase deriving (Eq)
 data Options = Options (Maybe InputPath) (Maybe InputPath) (Maybe ReceiptPath) (Maybe Firmware) Case Bool
 
-data RunCase = ModeRun ModeDial | ControlsRun | FullPressRun
+data RunCase = ModeRun ModeDial | ControlsRun | FullPressRun | PowerDestructorRun
 data CaseReceipt = CaseReceipt
   { baselineRecord :: Value
   , modeRecords :: [Value]
   , controlRecords :: [Value]
   , s2Records :: [Value]
+  , destructorRecords :: [Value]
   }
 
 caseName :: RunCase -> FilePath
 caseName (ModeRun position) = "mode-" ++ show (fromEnum position)
 caseName ControlsRun = "controls"
 caseName FullPressRun = "s2"
+caseName PowerDestructorRun = "power-destructor"
 
 newtype ModeInputRow = ModeInputRow Word32
 
@@ -126,7 +130,7 @@ consumerState control = ConsumerState $ case control of
   Movie -> 0x0d
 
 usage :: String
-usage = "xm1-viewer-inputs-e2e --installed-nand NAND --receipt-output DIR [--sd-card-image CARD --firmware DAT --case controls|modes|s2|checkpoint-restore --fresh-boot]\nHost-only stock input consumers and isolated mode state. S2 runs only with --case s2, in a fresh run with no card or a private card copy. checkpoint-restore requires an existing cardless attach checkpoint, restores it twice and checks that mode changes do not survive restoration.\n"
+usage = "xm1-viewer-inputs-e2e --installed-nand NAND --receipt-output DIR [--sd-card-image CARD --firmware DAT --case controls|modes|s2|checkpoint-restore|power-destructor --fresh-boot]\nHost-only stock input consumers and isolated mode state. S2 runs only with --case s2, in a fresh run with no card or a private card copy. checkpoint-restore requires an existing cardless attach checkpoint, restores it twice and checks that mode changes do not survive restoration. power-destructor records kernel object tables before and after a stock POWER OFF and the entries of the image4 queue destructor 0x724f08 and its kernel callees during it.\n"
 
 parseOptions :: [String] -> IO Options
 parseOptions = go (Options Nothing Nothing Nothing Nothing DefaultCases False)
@@ -143,6 +147,7 @@ parseOptions = go (Options Nothing Nothing Nothing Nothing DefaultCases False)
         "modes" -> pure ModesCase
         "s2" -> pure FullPressCase
         "checkpoint-restore" -> pure CheckpointRestoreCase
+        "power-destructor" -> pure PowerDestructorCase
         _ -> ioError (userError usage)
       go (Options nand card receipt firmware selected fresh) rest
     go _ _ = ioError (userError usage)
@@ -230,6 +235,68 @@ checkControls emulator receipt = do
   require (shutdown == Just StockPowerOff) "POWER OFF did not reach the stock terminal power-off loop"
   pure (controls ++ [result])
 
+-- | A guest RAM range read whole before and after POWER OFF.
+data MemoryWindow = MemoryWindow { windowName :: String, windowAddress :: Word32, windowBytes :: Int }
+
+destructorWindows :: [MemoryWindow]
+destructorWindows =
+  [ MemoryWindow "a-mailbox-and-eventflag-creation" 0x4005d16c 0x56c
+  , MemoryWindow "b-mailbox-and-eventflag-creation" 0x400ed12c 0x56c
+  , MemoryWindow "a-eventflag-control-to-boot-stack-top" 0x400624b4 0xfac
+  , MemoryWindow "b-eventflag-control-to-boot-stack-top" 0x400f2474 0xfac
+  , MemoryWindow "a-data-queue-creation" 0x4005988c 0x780
+  , MemoryWindow "b-data-queue-creation" 0x400e984c 0x780
+  , MemoryWindow "task41-module-state" 0x008faef0 0x30
+  , MemoryWindow "exit-barrier-mask" 0x015c1e5c 4
+  ]
+
+destructorSites :: [(Word32, String)]
+destructorSites =
+  [ (0x00ec6708, "exit-after-barrier"), (0x006e4ab4, "task41-stop-request"), (0x006e9dec, "task41-stop-sequence")
+  , (0x006e9f68, "task41-stop-final"), (0x00724f08, "destructor-entry"), (0x00724fa0, "destructor-pool-delete-call")
+  , (0x00724ffc, "destructor-d0-call"), (0x00725000, "destructor-d0-return"), (0x0072612c, "task-delete-entry")
+  , (0x00724558, "flag-set-wrapper"), (0x00ec31f0, "exit-terminal-action")
+  , (0x0004d39c, "a-80"), (0x0004d434, "a-84"), (0x0004813c, "a-88"), (0x0004839c, "a-8c"), (0x00048b30, "a-9c")
+  , (0x0004d540, "a-a4"), (0x0004d654, "a-d0"), (0x0004d790, "a-e8")
+  , (0x000dd360, "b-80"), (0x000dd3f8, "b-84"), (0x000d80fc, "b-88"), (0x000d835c, "b-8c"), (0x000d8af0, "b-9c")
+  , (0x000dd504, "b-a4"), (0x000dd618, "b-d0"), (0x000dd754, "b-e8")
+  ]
+
+readWindows :: Emulator -> IO Value
+readWindows emulator = object <$> forM destructorWindows (\window -> do
+  bytes <- emulatorReadMemory emulator (windowAddress window) (windowBytes window)
+  require (B.length bytes == windowBytes window) (windowName window ++ " read returned a short window")
+  pure (K.fromString (windowName window) .= object
+    ["address" .= ("0x" ++ showHex (windowAddress window) ""), "bytes" .= concatMap byteHex (B.unpack bytes)]))
+  where byteHex byte = (if byte < 16 then ('0' :) else id) (showHex byte "")
+
+hitValue :: TraceHit -> Value
+hitValue hit = object
+  [ "site" .= traceSite hit, "core" .= traceCore hit, "instructions" .= traceInstructions hit
+  , "r0" .= word (traceR0 hit), "r1" .= word (traceR1 hit), "r2" .= word (traceR2 hit), "r3" .= word (traceR3 hit) ]
+  where word value = "0x" ++ showHex value ""
+
+checkPowerDestructor :: Emulator -> FilePath -> IO Value
+checkPowerDestructor emulator receipt = do
+  before <- readWindows emulator
+  writeJson (receipt </> "destructor-before.json") before
+  emulatorTraceSites emulator destructorSites
+  (start, _) <- emulatorTraceHits emulator 0
+  response <- pulse emulator "power"
+  diagnostics <- either (ioError . userError) pure . eitherDecodeStrict'
+    =<< B.readFile (receipt </> "bridge/state.json")
+  (_, hits) <- emulatorTraceHits emulator start
+  writeJson (receipt </> "destructor-hits.json") (toJSON (map hitValue hits))
+  after <- readWindows emulator
+  writeJson (receipt </> "destructor-after.json") after
+  let result = object ["control" .= String "power", "reply" .= response,
+                       "terminal_state" .= (parseMaybe (withObject "state" (.: "failure")) diagnostics :: Maybe Value),
+                       "sites" .= [object ["address" .= ("0x" ++ showHex address ""), "label" .= label] | (address, label) <- destructorSites],
+                       "hit_count" .= length hits]
+  writeJson (receipt </> "power-destructor.json") result
+  require (terminalState diagnostics == Just StockPowerOff) "POWER OFF did not reach the stock terminal power-off loop"
+  pure result
+
 checkMode :: Emulator -> FilePath -> ModeDial -> IO Value
 checkMode emulator receipt position = do
   when (position == ModeDialShutter) (void (emulatorModeDial emulator ModeDialProgram))
@@ -278,6 +345,7 @@ run (Options nandInput cardInput receiptInput firmware selected fresh) = do
       requested = [ModeRun position | selected `elem` [DefaultCases, ModesCase], position <- [minBound .. maxBound]]
         ++ [ControlsRun | selected `elem` [DefaultCases, ControlsCase]]
         ++ [FullPressRun | selected == FullPressCase]
+        ++ [PowerDestructorRun | selected == PowerDestructorCase]
   executable <- getExecutablePath
   let bridgeFor directory = case card of
         Nothing -> ((executable ++ ".runfiles") </> "_main/emulation/cardless-ram-push-bridge",
@@ -294,13 +362,16 @@ run (Options nandInput cardInput receiptInput firmware selected fresh) = do
           case request of
             ModeRun position -> do
               result <- checkMode emulator directory position
-              pure (CaseReceipt baseline [result] [] [])
+              pure (CaseReceipt baseline [result] [] [] [])
             ControlsRun -> do
               results <- checkControls emulator directory
-              pure (CaseReceipt baseline [] results [])
+              pure (CaseReceipt baseline [] results [] [])
             FullPressRun -> do
               result <- checkControl emulator directory FullPress
-              pure (CaseReceipt baseline [] [] [result])
+              pure (CaseReceipt baseline [] [] [result] [])
+            PowerDestructorRun -> do
+              result <- checkPowerDestructor emulator directory
+              pure (CaseReceipt baseline [] [] [] [result])
       restoreRun name = do
         let directory = receipt </> name
             (bridge, bridgeArgs) = bridgeFor directory
@@ -313,7 +384,7 @@ run (Options nandInput cardInput receiptInput firmware selected fresh) = do
             changed <- checkMode emulator directory (if before == ManualState then ModeDialProgram else ModeDialManual)
             pure (before, CaseReceipt
               (object ["case" .= name, "start" .= startRecord start, "restored_mode" .= show before])
-              [changed] [] [])
+              [changed] [] [] [])
       restoreCase = do
         (firstMode, first) <- restoreRun "restore-first"
         (secondMode, second) <- restoreRun "restore-second"
@@ -325,9 +396,10 @@ run (Options nandInput cardInput receiptInput firmware selected fresh) = do
         require (before == after) "The original virtual-card image changed"
   results <- (if selected == CheckpointRestoreCase then restoreCase else mapM runOne requested) `finally` unchanged
   writeJson (receipt </> "result.json") (object
-    ["schema" .= (2 :: Int), "baselines" .= map baselineRecord results, "modes" .= concatMap modeRecords results,
-     "controls" .= concatMap controlRecords results, "s2" .= concatMap s2Records results])
-  when (selected /= FullPressCase) (putStrLn "Default viewer-input trajectories exclude S2")
+    ["schema" .= (3 :: Int), "baselines" .= map baselineRecord results, "modes" .= concatMap modeRecords results,
+     "controls" .= concatMap controlRecords results, "s2" .= concatMap s2Records results,
+     "power_destructor" .= concatMap destructorRecords results])
+  when (selected `notElem` [FullPressCase, PowerDestructorCase]) (putStrLn "Default viewer-input trajectories exclude S2")
   putStrLn ("Viewer input acceptance recorded: " ++ receipt </> "result.json")
 
 main :: IO ()
