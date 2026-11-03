@@ -2,7 +2,7 @@
 module Emulation.PrimaryInitializerConsumerSource
   ( ConsumerSource, DescriptorId, DescriptorAccess (..), descriptorId, descriptorIdentifier
   , CodeSite (..), CodeRegion (..), consumerCode, consumerSource, consumerImageDigest
-  , bindConsumerSource, descriptorAccess, consumerSourceValue
+  , bindConsumerSource, descriptorAccess, consumerSourceValue, runtimePremiseNames
   ) where
 
 import Control.Monad (forM_, unless)
@@ -171,10 +171,13 @@ consumerSourceValue consumer@(ConsumerSource source imageDigest _) =
           , "cpsr_mask" .= (0x07f0ffff :: Word32), "cpsr_value" .= (0x153 :: Word32)
           , "observation" .= ("instruction-boundary-snapshots" :: String)
           ]
-      , "unproved_runtime_premises" .= map premiseName
-          [ NaturalPrimaryArrival,OwnedCarrierCommittedAndImmutable,CurrentDecoderAndBothCoreAliases,BothCoreTcmExclusions
-          , CallerFrameAndDerivedScratchBacking,ConsumerCallerStackBacking,RootPairInstallationObserved,PrimaryCp14SelectionObserved
-          , DescriptorIdentifierBounded,RetainedPoolBackingAndContents,ConsumerCodeFetchable
-          , NoInterveningSelectedWordOrSelectorWriter,AlternateAndComputedCallerClosureOpen
-          ]
+      , "unproved_runtime_premises" .= runtimePremiseNames
       ]
+
+runtimePremiseNames :: [String]
+runtimePremiseNames = map premiseName
+  [ NaturalPrimaryArrival,OwnedCarrierCommittedAndImmutable,CurrentDecoderAndBothCoreAliases,BothCoreTcmExclusions
+  , CallerFrameAndDerivedScratchBacking,ConsumerCallerStackBacking,RootPairInstallationObserved,PrimaryCp14SelectionObserved
+  , DescriptorIdentifierBounded,RetainedPoolBackingAndContents,ConsumerCodeFetchable
+  , NoInterveningSelectedWordOrSelectorWriter,AlternateAndComputedCallerClosureOpen
+  ]

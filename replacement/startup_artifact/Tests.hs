@@ -1,0 +1,388 @@
+{-# LANGUAGE OverloadedStrings #-}
+-- | Synthetic stager tests: refusals and postconditions of the composed
+-- startup stager over a synthetic container.
+module Main where
+
+import Control.Monad (unless)
+import qualified Data.Aeson as J
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Bits (complement)
+import qualified Data.ByteString as B
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
+import qualified Data.Map.Strict as M
+import qualified Data.Set as Set
+import Data.Text (Text)
+import qualified Data.Vector as V
+import Data.Word (Word32)
+import Fixtures
+import qualified FujiAF.UpdateContainer as U
+import Replacement.StartupArtifact.Compose
+import Replacement.StartupArtifact.Contract
+import Replacement.StartupArtifact.Manifest
+import Replacement.StartupArtifact.Joins (JoinKind, registeredJoins)
+import Replacement.StartupArtifact.Targets
+import Replacement.StartupArtifact.Types
+import System.Environment (getArgs)
+
+data TestJoin = TestJoin deriving (Eq, Show)
+
+instance JoinName TestJoin where
+  joinName TestJoin = "test-join"
+
+check :: IORef Int -> String -> Bool -> IO ()
+check counter name ok = do
+  unless ok (fail ("failed: " ++ name))
+  modifyIORef' counter (+ 1)
+
+refusal :: Either Refusal a -> Maybe Refusal
+refusal = either Just (const Nothing)
+
+at :: Target -> Word32 -> Word32 -> Span
+at target start end = Span target (Guest start) (Guest end)
+
+slice :: Int -> Int -> B.ByteString -> B.ByteString
+slice offset count = B.take count . B.drop offset
+
+-- | An edit whose every byte differs from the canonical target.
+flip' :: TargetBytes -> Span -> Edit
+flip' targets range@(Span target (Guest start) _) =
+  let offset = fromIntegral (start - targetBase target)
+      bytes = B.map complement (slice offset (spanLength range) (targetOf targets target))
+   in maybe (error "flip' builds an exact-length edit") id (edit range bytes)
+
+emptyCatalog :: Catalog
+emptyCatalog = Catalog [] [] (EnumeratedWrites [] Proved) []
+
+piece :: PieceKind -> [Area] -> [Span] -> [Edit] -> [Footprint] -> Piece
+piece kind areas carriers edits footprint = Piece kind (Set.fromList areas) carriers edits footprint [] emptyCatalog NoFacts
+
+-- | An edit writing one little-endian word.
+wordEdit :: Target -> Word32 -> Word32 -> Edit
+wordEdit target address value = maybe (error "wordEdit builds an exact-length edit") id (edit (at target address (address + 4)) (U.putWord32 value))
+
+reads' :: Footprint
+reads' = Footprint (at LoaderA 0x40400 0x40500) AdmissionRead (Citation "synthetic")
+
+rebuilt :: Canonical -> U.Parts -> IO B.ByteString
+rebuilt source parts = either fail pure (U.rebuildContainer (canonicalParsed source) parts)
+
+declaration :: PieceKind -> [Span] -> [Footprint] -> PieceDeclaration
+declaration kind carriers footprint = PieceDeclaration kind (Set.singleton FirstStageArea) carriers footprint [] emptyCatalog NoFacts
+
+keyPaths :: J.Value -> Set.Set [Text]
+keyPaths value = case value of
+  J.Object fields -> Set.unions [Set.insert [Key.toText key] (Set.map (Key.toText key :) (keyPaths inner)) | (key, inner) <- KeyMap.toList fields]
+  J.Array items -> Set.unions (map keyPaths (V.toList items))
+  _ -> Set.empty
+
+boundary :: Label -> BoundaryKind -> Core -> Word32 -> Bool -> Boundary
+boundary name kind core pc stop = boundaryOn name kind [core] pc stop
+
+boundaryOn :: Label -> BoundaryKind -> [Core] -> Word32 -> Bool -> Boundary
+boundaryOn name kind listed pc stop = Boundary name kind set (Pc pc) (Just (Pc (pc + 0x100000))) stop CompareSequence once
+  where
+    once = maybe (error "positive record limit") id (recordLimit 1)
+    set = maybe (error "nonempty cores") id (cores listed)
+
+labelled :: PieceKind -> Text -> IO Label
+labelled kind name = either (fail . show) pure (label kind name)
+
+main :: IO ()
+main = do
+  arguments <- getArgs
+  fixturePath <- case arguments of
+    [path] -> pure path
+    _ -> fail "usage: startup-artifact-tests COMPOSED_CONTRACT_FIXTURE"
+  counter <- newIORef 0
+  let ok = check counter
+  source <- either (fail . show) pure (canonical fixtureDat fixtureImage4 fixtureImage5)
+  let parts = U.parsedParts (canonicalParsed source)
+      targets = canonicalTargets source
+      pre = U.partPreTable parts
+
+  -- Targets are the uncomplemented pre-table bytes at their slots and segments.
+  ok "record1 is the complemented slot" (targetOf targets Record1 == B.map complement (slice 0x40000 0x10000 pre))
+  ok "record2 is the complemented slot" (targetOf targets Record2 == B.map complement (slice 0x50000 0x10000 pre))
+  ok "loader A is the complemented segment" (targetOf targets LoaderA == B.map complement (slice 0x60000 0xdae0 pre))
+  ok "loader B is the complemented segment" (targetOf targets LoaderB == B.map complement (slice 0x70000 0xdaa0 pre))
+  ok "image targets are the decoded images" (targetOf targets Image4 == fixtureImage4 && targetOf targets Image5 == fixtureImage5)
+  let moved = parts {U.partSegments = [if U.segId s == 0 then s {U.segLoad = 0x41000} else s | s <- U.partSegments parts]}
+  ok "loader A at another load address refuses" (refusal (extractPreTable moved) == Just (TargetGeometryRefused LoaderA))
+  ok "canonical with a short image refuses" (refusal (canonical fixtureDat (B.drop 1 fixtureImage4) fixtureImage5) == Just CanonicalRefused)
+
+  -- Complement round trip.
+  let e1 = flip' targets (at Record1 0x6000 0x6010)
+      e2 = flip' targets (at LoaderB 0xd0100 0xd0108)
+      e3 = flip' targets (at LoaderA 0x40430 0x40440)
+  edited <- either (fail . show) pure (applyPreTableEdits [e1, e2, e3] parts)
+  expected <- either (fail . show) pure (applyTargetEdits [e1, e2, e3] targets)
+  extracted <- either (fail . show) pure (extractPreTable edited)
+  ok "extracting applied edits yields the edited targets"
+    (and [M.lookup target extracted == Just (targetOf expected target) | target <- preTableTargets])
+  ok "applied edits are stored complemented"
+    (slice (0x40000 + 0x6000) 16 (U.partPreTable edited) == B.map complement (editBytes e1)
+      && slice (0x70000 + 0x100) 8 (U.partPreTable edited) == B.map complement (editBytes e2))
+  let undo = [flip' expected (editSpan change) | change <- [e1, e2, e3]]
+  ok "re-applying canonical bytes restores the parts" (applyPreTableEdits undo edited == Right parts)
+  editedDat <- rebuilt source edited
+  ok "edited parts rebuild and reparse to the edited targets"
+    ((U.parseContainer editedDat >>= either (Left . show) Right . extractPreTable . U.parsedParts) == Right extracted)
+  ok "image edits are not pre-table edits"
+    (refusal (applyPreTableEdits [flip' targets (at Image4 0x61c400 0x61c404)] parts) == Just (TargetGeometryRefused Image4))
+
+  -- Piece derivation.
+  let stagedOf edits = either (fail . show) pure (applyPreTableEdits edits parts) >>= rebuilt source
+  stagedE1 <- stagedOf [e1]
+  let derived carriers = derivePiece source (declaration FirstStage carriers []) (StagedOutput stagedE1 Nothing Nothing)
+  ok "a change inside its carrier derives that edit" (fmap pieceEdits (derived [at Record1 0x6000 0x7000]) == Right [e1])
+  ok "an edit may span abutting carriers"
+    (fmap pieceEdits (derived [at Record1 0x6000 0x6008, at Record1 0x6008 0x6010]) == Right [e1])
+  ok "a change outside its carriers refuses"
+    (refusal (derived [at Record1 0x6000 0x6008]) == Just (EditOutsideCarriers FirstStage (at Record1 0x6000 0x6010)))
+  outsideDat <- rebuilt source parts {U.partPreTable = B.take 0x100 pre <> B.singleton (complement (B.index pre 0x100)) <> B.drop 0x101 pre}
+  ok "a change outside every target refuses"
+    (refusal (derivePiece source (declaration FirstStage [at Record1 0 0x10000] []) (StagedOutput outsideDat Nothing Nothing))
+      == Just (PieceChangesOutsideTargets FirstStage))
+  ok "an unparsable staged DAT refuses"
+    (refusal (derivePiece source (declaration FirstStage [] []) (StagedOutput (B.take 100 fixtureDat) Nothing Nothing))
+      == Just (PieceChangesOutsideTargets FirstStage))
+  let record4 = U.partRecord4 parts
+      stream = U.recStream record4
+  record4Dat <- rebuilt source parts {U.partRecord4 = record4 {U.recStream = B.map complement stream}}
+  ok "an undeclared image record change refuses"
+    (refusal (derivePiece source (declaration FirstStage [at Image4 0x61c400 0x89ec00] []) (StagedOutput record4Dat Nothing Nothing))
+      == Just (PieceChangesUndecodedImage FirstStage Image4))
+  let image4Edit = flip' targets (at Image4 0x700000 0x700008)
+  image4After <- either (fail . show) pure (applyTargetEdits [image4Edit] targets)
+  ok "a declared image change derives image edits"
+    (fmap pieceEdits (derivePiece source (declaration Record2Link [at Image4 0x700000 0x700010] [])
+      (StagedOutput fixtureDat (Just (targetOf image4After Image4)) Nothing)) == Right [image4Edit])
+  ok "own carriers are subtracted from the footprint"
+    (fmap pieceFootprint (derivePiece source (declaration FirstStage [at Record1 0x6000 0x7000] [Footprint (at Record1 0 0x10000) AdmissionRead (Citation "c")])
+      (StagedOutput stagedE1 Nothing Nothing))
+      == Right [Footprint (at Record1 0 0x6000) AdmissionRead (Citation "c"), Footprint (at Record1 0x7000 0x10000) AdmissionRead (Citation "c")])
+
+  -- Composition rules.
+  let composeWith :: [Join TestJoin] -> [Piece] -> Either Refusal (Composition TestJoin)
+      composeWith joins = compose joins source
+      first = piece FirstStage [FirstStageArea] [at Record1 0x6000 0x6010] [e1] [reads']
+      publisher = piece PrimaryPublisher [PrimaryInitializerArea] [at LoaderA 0x40430 0x409ac] [e3] []
+      overlap = at LoaderA 0x40430 0x40500
+      join spans members basis = Join TestJoin (Set.fromList members) spans basis []
+      proved name predicate = Join TestJoin (Set.fromList [FirstStage, PrimaryPublisher]) [overlap] (HostProof "synthetic") [HostCheck name predicate]
+  ok "duplicate piece kinds refuse" (refusal (composeWith [] [first, first]) == Just (DuplicatePieceKind FirstStage))
+  ok "shared areas refuse"
+    (refusal (composeWith [] [first, piece PrimaryPublisher [FirstStageArea] [] [] []]) == Just (SharedArea FirstStage PrimaryPublisher FirstStageArea))
+  ok "overlapping carriers refuse"
+    (refusal (composeWith [] [first {pieceFootprint = []}, piece Record2Link [CriticalPairArea] [at Record1 0x600c 0x6020] [] []])
+      == Just (CarrierOverlap FirstStage Record2Link (at Record1 0x600c 0x6010)))
+  ok "an edit outside its carriers refuses at composition"
+    (refusal (composeWith [] [piece FirstStage [FirstStageArea] [at Record1 0x6000 0x6008] [e1] []])
+      == Just (EditOutsideCarriers FirstStage (at Record1 0x6000 0x6010)))
+  ok "a footprint over another piece's carrier refuses without a join"
+    (refusal (composeWith [] [first, publisher]) == Just (FootprintOverlap FirstStage PrimaryPublisher overlap))
+  let observed = join [overlap] [FirstStage, PrimaryPublisher] (ObservationQualified "synthetic")
+  ok "a registered join covering the conflict admits it as pending"
+    (fmap compositionQualification (composeWith [observed] [first, publisher]) == Right (Pending ["test-join"]))
+  ok "a join covering part of the conflict refuses the rest"
+    (refusal (composeWith [join [at LoaderA 0x40430 0x40480] [FirstStage, PrimaryPublisher] (ObservationQualified "partial")] [first, publisher])
+      == Just (FootprintOverlap FirstStage PrimaryPublisher (at LoaderA 0x40480 0x40500)))
+  ok "a join with an absent member does not apply"
+    (refusal (composeWith [join [overlap] [FirstStage, PrimaryPublisher, Record2Link] (ObservationQualified "absent")] [first, publisher])
+      == Just (FootprintOverlap FirstStage PrimaryPublisher overlap))
+  ok "a join span that is not a conflict refuses"
+    (refusal (composeWith [join [overlap, at LoaderA 0x41000 0x41004] [FirstStage, PrimaryPublisher] (ObservationQualified "stale")] [first, publisher])
+      == Just (JoinSpanNotConflicting "test-join" (at LoaderA 0x41000 0x41004)))
+  ok "a failing host check refuses"
+    (refusal (composeWith [proved "never" (const False)] [first, publisher]) == Just (HostProofFailed "test-join" "never"))
+  ok "a passing host proof composes host-qualified"
+    (fmap compositionQualification (composeWith [proved "always" (const True)] [first, publisher]) == Right HostComposed)
+
+  -- Registered J1 joins over synthetic pieces.
+  let composeRegistered :: [Piece] -> Either Refusal (Composition JoinKind)
+      composeRegistered = compose registeredJoins source
+      firstEntry = 0x6000
+      secondaryEntry = 0x10400
+      starter entry = (piece FirstStage [FirstStageArea] [at Record1 0x20 0x24, at Record1 0x6000 0x64ac]
+          [wordEdit Record1 0x20 firstEntry, flip' targets (at Record1 0x6000 0x6004)]
+          [Footprint (at Record2 0x10000 0x20000) RuntimePremise (Citation "synthetic")])
+        {pieceFacts = FirstStageFacts (Pc entry)}
+      link entry bindings' footprint = (piece Record2Link [CriticalPairArea] [at Record2 0x10020 0x10024, at Record2 0x10400 0x110e0]
+          [wordEdit Record2 0x10020 secondaryEntry, flip' targets (at Record2 0x10400 0x10404)] footprint)
+        {pieceFacts = Record2LinkFacts (Pc entry) bindings' (LinkedBytes (B.replicate 0x40 0) "")}
+      onRecord1 = [Footprint (at Record1 0 0x10000) RuntimePremise (Citation "synthetic")]
+      rendezvousName = "first-stage-secondary-rendezvous"
+  ok "the rendezvous join refuses a record-2 image whose prefix facts do not derive on the composed images"
+    (refusal (composeRegistered [starter firstEntry, link secondaryEntry [] onRecord1])
+      == Just (HostProofFailed rendezvousName "prefix-owned-facts-on-composed-images"))
+  ok "the rendezvous join refuses a first-stage entry that is not the record-1 reset literal"
+    (refusal (composeRegistered [starter 0x6004, link secondaryEntry [] onRecord1])
+      == Just (HostProofFailed rendezvousName "record1-reset-literal-is-first-stage-entry"))
+  ok "the rendezvous join refuses a secondary entry that is not the record-2 reset literal"
+    (refusal (composeRegistered [starter firstEntry, link 0x10404 [] onRecord1])
+      == Just (HostProofFailed rendezvousName "record2-reset-literal-is-secondary-entry"))
+  let root = U.word32At (targetOf targets LoaderA) 0x10
+      bound = [ServiceBinding 0x164 0x41140, ServiceBinding 0x168 0x41164]
+      onLoaderA = [Footprint (at LoaderA 0x40430 0x409ac) AdmissionRead (Citation "synthetic")]
+      emitter rows extra = (piece PrimaryPublisher [PrimaryInitializerArea] ([at LoaderA 0x40430 0x409ac] ++ map editSpan extra)
+          (flip' targets (at LoaderA 0x40430 0x40434) : extra) [])
+        {pieceFacts = PublisherFacts rows}
+      emitted = [Publication (Guest (root + offset)) target | ServiceBinding offset target <- bound]
+      bindingsName = "critical-pair-publisher-bindings"
+  ok "the binding join admits the record-2 link and publisher host-qualified"
+    (fmap compositionQualification (composeRegistered [link secondaryEntry bound onLoaderA, emitter emitted []]) == Right HostComposed)
+  ok "the binding join refuses a publication with another target"
+    (refusal (composeRegistered [link secondaryEntry bound onLoaderA, emitter (Publication (Guest (root + 0x164)) 0x41144 : drop 1 emitted) []])
+      == Just (HostProofFailed bindingsName "core0-bindings-published-once"))
+  ok "the binding join refuses a binding published twice"
+    (refusal (composeRegistered [link secondaryEntry bound onLoaderA, emitter (emitted ++ take 1 emitted) []])
+      == Just (HostProofFailed bindingsName "core0-bindings-published-once"))
+  ok "the binding join refuses publications at another root"
+    (refusal (composeRegistered [link secondaryEntry bound onLoaderA, emitter [Publication (Guest (root + 4 + offset)) target | ServiceBinding offset target <- bound] []])
+      == Just (HostProofFailed bindingsName "core0-bindings-published-once"))
+  ok "the binding join refuses a changed loader-A root header"
+    (refusal (composeRegistered [link secondaryEntry bound onLoaderA, emitter emitted [wordEdit LoaderA 0x40010 (complement root)]])
+      == Just (HostProofFailed bindingsName "loader-a-root-unchanged"))
+  ok "registered joins whose members are absent are ignored"
+    (fmap (\composition -> (compositionQualification composition, length (compositionJoins composition))) (composeRegistered [link secondaryEntry bound onRecord1])
+      == Right (HostComposed, 0))
+
+  -- Catalog validation.
+  entryLabel <- labelled FirstStage "entry"
+  readLabel' <- labelled FirstStage "cells"
+  ok "labels outside kebab case refuse" (refusal (label FirstStage "Entry") == Just (CatalogRefused FirstStage (InvalidLabel "Entry")))
+  let catalogOf boundaries code rows = Catalog boundaries code (UnenumeratedWrites (Premise "p")) rows
+      withCatalog p catalog = p {pieceCatalog = catalog}
+      firstCatalog = catalogOf [boundary entryLabel EntryBoundary Core0 0x6000 False] [CodeSpan 0x6000 0x6010] []
+  ok "an entry outside owned code refuses"
+    (refusal (composeWith [] [withCatalog first (catalogOf [boundary entryLabel EntryBoundary Core0 0x5000 False] [CodeSpan 0x6000 0x6010] [])] )
+      == Just (CatalogRefused FirstStage (OwnedBoundaryOutsideOwnedCode entryLabel)))
+  ok "a read at a boundary that does not stop refuses"
+    (refusal (composeWith [] [withCatalog first (catalogOf [boundary entryLabel EntryBoundary Core0 0x6000 False] [CodeSpan 0x6000 0x6010]
+      [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing])])
+      == Just (CatalogRefused FirstStage (ReadBoundaryDoesNotStop entryLabel)))
+  ok "TCM writes on a core without boundaries refuse"
+    (refusal (composeWith [] [withCatalog first (Catalog [boundary entryLabel EntryBoundary Core0 0x6000 False] [CodeSpan 0x6000 0x6010]
+      (EnumeratedWrites [WriteRange (TcmTarget Core1 DataBank) 0 0x100] Proved) [])])
+      == Just (CatalogRefused FirstStage (TcmCoreWithoutBoundary Core1)))
+  publisherEntry <- labelled PrimaryPublisher "entry"
+  ok "a composed PC shared by two pieces refuses"
+    (refusal (composeWith [observed] [withCatalog first firstCatalog
+      , withCatalog publisher (catalogOf [boundary publisherEntry ReturnBoundary Core0 0x6000 False] [] [])])
+      == Just (CatalogRefused PrimaryPublisher (DuplicateComposedPc (Pc 0x6000))))
+  ok "owned code shared by two pieces refuses, alias spelling included"
+    (refusal (composeWith [observed] [withCatalog first firstCatalog
+      , withCatalog publisher (catalogOf [] [CodeSpan 0x4000600c 0x40006020] [])])
+      == Just (CatalogRefused PrimaryPublisher (OwnedCodeOverlap FirstStage)))
+  let unretained = (boundary entryLabel EntryBoundary Core0 0x6000 True) {boundaryRetainedPc = Nothing}
+  ok "a read at a boundary without a retained PC needs a difference"
+    (refusal (composeWith [] [withCatalog first (catalogOf [unretained] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing])])
+      == Just (CatalogRefused FirstStage (ReadNeedsDiffers readLabel')))
+  ok "a read at a boundary without a retained PC with a stated difference composes"
+    (either (const False) (const True)
+      (composeWith [] [withCatalog first (catalogOf [unretained] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 (Just "owned only")])]))
+  ok "a composition without edits refuses"
+    (refusal (composeWith [] [piece FirstStage [FirstStageArea] [at Record1 0x6000 0x6010] [] []]) == Just CompositionUnchanged)
+  ok "the guard attach boundary stops"
+    (fmap (map boundaryStop . concatMap (catalogBoundaries . pieceCatalog)) (attachGuard entryLabel [withCatalog first firstCatalog]) == Right [True])
+  ok "an unknown guard attach boundary refuses"
+    (refusal (attachGuard publisherEntry [withCatalog first firstCatalog]) == Just (ManifestRefused (GuardAttachUnknown "primary-publisher/entry")))
+
+  -- Postconditions, with abutting edits from two pieces.
+  let left = flip' targets (at Record1 0x6000 0x6004)
+      right = flip' targets (at Record1 0x6004 0x6008)
+      pieceLeft = piece FirstStage [FirstStageArea] [at Record1 0x6000 0x6004] [left] []
+      pieceRight = piece PrimaryPublisher [PrimaryInitializerArea] [at Record1 0x6004 0x6008, at Image4 0x700000 0x700010] [right, image4Edit] []
+  abutting <- either (fail . show) pure (composeWith [] [pieceLeft, pieceRight])
+  composedDat <- either (fail . show) pure (preTableDat source abutting)
+  let composedImage4 = targetOf (compositionTargets abutting) Image4
+  ok "abutting edits from two pieces compose and verify"
+    (fmap (`targetOf` Record1) (verifyComposed source abutting composedDat composedImage4 fixtureImage5)
+      == Right (targetOf (compositionTargets abutting) Record1))
+  ok "a composed image missing its edit refuses"
+    (refusal (verifyComposed source abutting composedDat fixtureImage4 fixtureImage5) == Just (ComposedDiffMismatch Image4))
+  ok "a composed image with an extra change refuses"
+    (refusal (verifyComposed source abutting composedDat composedImage4 (B.map complement fixtureImage5)) == Just (ComposedDiffMismatch Image5))
+  composedParts <- either fail (pure . U.parsedParts) (U.parseContainer composedDat)
+  extraDat <- either (fail . show) pure (applyPreTableEdits [flip' targets (at Record1 0x6100 0x6101)] composedParts) >>= rebuilt source
+  ok "a composed target change outside the edits refuses"
+    (refusal (verifyComposed source abutting extraDat composedImage4 fixtureImage5) == Just (ComposedDiffMismatch Record1))
+  let composedPre = U.partPreTable composedParts
+  strayDat <- rebuilt source composedParts {U.partPreTable = B.take 0x100 composedPre <> B.singleton (complement (B.index composedPre 0x100)) <> B.drop 0x101 composedPre}
+  ok "a composed change outside every target refuses"
+    (refusal (verifyComposed source abutting strayDat composedImage4 fixtureImage5) == Just ComposedRestoreMismatch)
+  ok "an unparsable composed DAT refuses"
+    (refusal (verifyComposed source abutting (B.take 100 composedDat) composedImage4 fixtureImage5) == Just ComposedUnparsed)
+
+  -- Manifest.
+  let manifestText = "{\"schema\":1,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a.bin\",\"symbols\":\"a.symbols\"}}]}"
+  ok "a manifest parses"
+    (parseManifest manifestText == Right (Manifest entryLabel [ManifestPiece FirstStage (LinkedPaths "a.bin" "a.symbols")]))
+  ok "an unknown top-level key refuses"
+    (refusal (parseManifest "{\"schema\":1,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[],\"extra\":1}")
+      == Just (ManifestRefused (ManifestUnknownKey "manifest.extra")))
+  ok "an unknown input key refuses"
+    (refusal (parseManifest "{\"schema\":1,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\",\"dat\":\"c\"}}]}")
+      == Just (ManifestRefused (ManifestUnknownKey "piece.inputs.dat")))
+  ok "an unknown kind refuses"
+    (refusal (parseManifest "{\"schema\":1,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[{\"kind\":\"loader-startup\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}}]}")
+      == Just (ManifestRefused (ManifestUnknownKind "loader-startup")))
+  ok "another schema refuses"
+    (refusal (parseManifest "{\"schema\":2,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}") == Just (ManifestRefused ManifestSchemaUnsupported))
+  ok "duplicate manifest kinds refuse"
+    (refusal (parseManifest "{\"schema\":1,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}},{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"c\",\"symbols\":\"d\"}}]}")
+      == Just (DuplicatePieceKind FirstStage))
+  ok "an attach that is not a label refuses"
+    (refusal (parseManifest "{\"schema\":1,\"guard\":{\"attach\":\"nowhere\"},\"pieces\":[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}}]}")
+      == Just (ManifestRefused (GuardAttachUnknown "nowhere")))
+
+  -- Footprint normalization and write resolution.
+  ok "overlapping footprints normalize to disjoint spans with merged citations"
+    (normalizeFootprint [Footprint (at LoaderA 0x40000 0x40010) AdmissionRead (Citation "a"), Footprint (at LoaderA 0x40008 0x40020) RuntimePremise (Citation "b")]
+      == [ (at LoaderA 0x40000 0x40008, AdmissionRead, [Citation "a"])
+         , (at LoaderA 0x40008 0x40010, AdmissionRead, [Citation "a", Citation "b"])
+         , (at LoaderA 0x40010 0x40020, RuntimePremise, [Citation "b"]) ])
+  ok "unenumerated writes emit no allow ranges"
+    (allowRanges [] (UnenumeratedWrites (Premise "p")) == EmittedWrites [] "unenumerated" (Just "p"))
+  ok "premised allow ranges are physical and exclude every owned carrier"
+    (allowRanges [at LoaderA 0x40430 0x409ac]
+      (EnumeratedWrites [WriteRange PhysicalTarget 0x40040000 0x40041000, WriteRange (TcmTarget Core0 DataBank) 0 0x100] (Premised (Premise "p")))
+      == EmittedWrites [WriteRange PhysicalTarget 0x40000 0x40430, WriteRange PhysicalTarget 0x409ac 0x41000, WriteRange (TcmTarget Core0 DataBank) 0 0x100] "premised" (Just "p"))
+  ok "the alias window ends at 0x60000000"
+    (allowRanges [] (EnumeratedWrites [WriteRange PhysicalTarget 0x5fff0000 0x60000000, WriteRange PhysicalTarget 0x60000000 0x60001000] Proved)
+      == EmittedWrites [WriteRange PhysicalTarget 0x1fff0000 0x20000000, WriteRange PhysicalTarget 0x60000000 0x60001000] "proved" Nothing)
+  ok "a multi-core attach boundary refuses"
+    (refusal (attachGuard entryLabel [withCatalog first (catalogOf [boundaryOn entryLabel EntryBoundary [Core0, Core1] 0x6000 False] [CodeSpan 0x6000 0x6010] [])])
+      == Just (ManifestRefused (GuardAttachUnsuitable "first-stage/entry")))
+  ok "an attach boundary without a retained PC refuses"
+    (refusal (attachGuard entryLabel [withCatalog first (catalogOf [unretained] [CodeSpan 0x6000 0x6010] [])])
+      == Just (ManifestRefused (GuardAttachUnsuitable "first-stage/entry")))
+
+  -- Contract shape against the shared fixture.
+  fixture <- B.readFile fixturePath >>= maybe (fail "fixture is not JSON") pure . J.decodeStrict
+  handoffLabel <- labelled FirstStage "handoff"
+  returnLabel <- labelled PrimaryPublisher "return"
+  tableLabel <- labelled PrimaryPublisher "table-a"
+  let contractFirst = withCatalog first (Catalog
+        [boundary entryLabel EntryBoundary Core0 0x6000 False, boundary handoffLabel SiteBoundary Core0 0x6008 True]
+        [CodeSpan 0x6000 0x6010] (UnenumeratedWrites (Premise "first-stage stores are not enumerated"))
+        [CatalogRead readLabel' handoffLabel 0x40020000 8 Nothing])
+      contractPublisher = withCatalog publisher (Catalog
+        [boundary publisherEntry EntryBoundary Core0 0x40430 False, boundary returnLabel ReturnBoundary Core0 0x409e0 True]
+        [CodeSpan 0x40430 0x40580]
+        (EnumeratedWrites [WriteRange PhysicalTarget 0x4dae0 0x4f10c] (Premised (Premise "scratch")))
+        [CatalogRead tableLabel returnLabel 0x4004dae0 0x162c Nothing])
+  contracted <- either (fail . show) pure (composeWith [observed] [contractFirst, contractPublisher])
+  contractDat <- either (fail . show) pure (preTableDat source contracted)
+  contractTargets <- either (fail . show) pure (verifyComposed source contracted contractDat fixtureImage4 fixtureImage5)
+  let contractJson = contractValue source manifestText contracted contractDat contractTargets entryLabel
+  ok "the contract has exactly the fixture's keys" (keyPaths contractJson == keyPaths fixture)
+  ok "a pending contract names its joins"
+    (case contractJson of
+      J.Object fields -> KeyMap.lookup "qualification" fields == Just (J.String "pending")
+        && KeyMap.lookup "pending_joins" fields == Just (J.toJSON ["test-join" :: Text])
+      _ -> False)
+
+  passed <- readIORef counter
+  putStrLn ("startup-artifact-tests: " ++ show passed ++ " checks passed")
