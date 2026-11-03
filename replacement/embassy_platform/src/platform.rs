@@ -9,7 +9,7 @@ use core::future::Future;
 use core::mem::MaybeUninit;
 use core::pin::Pin;
 use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use core::task::{Context, Poll, Waker};
 
 use critical_section::Mutex;
@@ -116,10 +116,11 @@ unsafe impl Sync for Stack {}
 #[no_mangle]
 static EMBASSY_STACKS: [Stack; 2] = [Stack(UnsafeCell::new([0; STACK_WORDS])), Stack(UnsafeCell::new([0; STACK_WORDS]))];
 
+/// Word-sized: FujiMod stops on byte and halfword exclusives.
 #[repr(C, align(32))]
-struct LineFlag(AtomicBool);
+struct LineFlag(AtomicU32);
 
-static STARTED: LineFlag = LineFlag(AtomicBool::new(false));
+static STARTED: LineFlag = LineFlag(AtomicU32::new(0));
 
 /// Read and written only through the uncached alias.
 #[repr(C)]
@@ -575,14 +576,14 @@ pub extern "C" fn embassy_on_dispatch(_registers: *mut u32) {
     let d = demo();
     // SAFETY (each block in this function): fields of the demonstration record.
     unsafe { increment(addr_of_mut!((*d).start_calls)) };
-    if STARTED.0.load(Ordering::Acquire) {
+    if STARTED.0.load(Ordering::Acquire) != 0 {
         return;
     }
     if kernel::handler_context() || kernel::irq_masked() {
         unsafe { increment(addr_of_mut!((*d).start_skipped)) };
         return;
     }
-    if STARTED.0.swap(true, Ordering::AcqRel) {
+    if STARTED.0.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire).is_err() {
         return;
     }
     unsafe { set(addr_of_mut!((*d).started), 1) };
