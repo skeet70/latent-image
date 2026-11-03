@@ -153,7 +153,7 @@ allowedFetch inputs program core pc = case core of
   where cachePcs = [0x42634,0x42638] ++ [0x4264c,0x42650..0x4266c] ++ [0x4268c,0x42690..0x426a4]
 
 backedRanges :: [[Word64]]
-backedRanges = [[0,0x20000000],[0x3fff0000,0x3fff1000],[0x80000000,0x80004000],[0x90000000,0x90020000],[0xfff00000,0xfff01000]]
+backedRanges = [[0,0x20000000],[0x3fff0000,0x3fff1000],[0x80000000,0x80104000],[0x90000000,0x90020000],[0xfff00000,0xfff01000]]
 
 data FetchStamp = FetchStamp {fetchPc :: Address, fetchClock :: Count}
 data FetchProgress = FetchProgress

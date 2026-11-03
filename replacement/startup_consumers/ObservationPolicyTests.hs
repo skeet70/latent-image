@@ -51,10 +51,10 @@ initialSites = sort (map K.Address
   ,0x723608,0x412c4,0x412c8,0x427b8,0x725dd8,0x725c6c,0x723470,0x724cdc,0x72503c,0x725318,0x69ce00])
 completeRanges :: [W.FetchRange]
 completeRanges = [W.FetchRange (W.PhysicalBoundary low) (W.PhysicalBoundary high)
-  | (low,high) <- [(0,0x20000000),(0x3fff0000,0x3fff1000),(0x80000000,0x80004000),(0x90000000,0x90020000),(0xfff00000,0xfff01000)]]
+  | (low,high) <- [(0,0x20000000),(0x3fff0000,0x3fff1000),(0x80000000,0x80104000),(0x90000000,0x90020000),(0xfff00000,0xfff01000)]]
 completeWatch :: K.Watch
 completeWatch = K.Watch True ranges [K.WatchClass range [K.CpuFetch] | range <- ranges] "fixed" [] Nothing
-  where ranges = [[0,0x20000000],[0x3fff0000,0x3fff1000],[0x80000000,0x80004000],[0x90000000,0x90020000],[0xfff00000,0xfff01000]]
+  where ranges = [[0,0x20000000],[0x3fff0000,0x3fff1000],[0x80000000,0x80104000],[0x90000000,0x90020000],[0xfff00000,0xfff01000]]
 segment :: W.SegmentId -> W.Context -> W.Context -> W.ProbeRange -> [K.Address] -> W.Segment
 segment ident begin end probes sites = W.Segment ident (K.contextCounts (W.contextMachine begin))
   (K.contextCounts (W.contextMachine end)) [begin] [end]

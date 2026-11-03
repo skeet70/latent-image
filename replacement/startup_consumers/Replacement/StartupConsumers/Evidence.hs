@@ -621,7 +621,7 @@ checkSegmentsWithPolicy policy receipt = do
         else require (eventCore event == Nothing && eventPc event == Nothing && eventInstructions event == Nothing && eventTick event == Nothing) EventRejected) (watchRecords watch)
 
 backedRanges :: [(Word64,Word64)]
-backedRanges = [(0,0x20000000),(0x3fff0000,0x3fff1000),(0x80000000,0x80004000),(0x90000000,0x90020000),(0xfff00000,0xfff01000)]
+backedRanges = [(0,0x20000000),(0x3fff0000,0x3fff1000),(0x80000000,0x80104000),(0x90000000,0x90020000),(0xfff00000,0xfff01000)]
 
 checkStops :: Receipt -> Probe -> Either WitnessError ()
 checkStops receipt outer = forM_ [probe | probe <- receiptProbes receipt,probeClock probe >= probeClock outer,probeKind probe /= OuterEntry] $ \probe -> do

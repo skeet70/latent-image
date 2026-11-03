@@ -5,6 +5,7 @@ use crate::provenance::{Guest, Provenance, RamFact, plan_windows};
 use fujimod_catalog::configuration::{
     GeneratedSceneAsset, ResolvedConfiguration, RunEngine, RunExecution, RunExecutionMode,
 };
+use fujimod_catalog::reference::{MemoryKind, RegionSize, Soc};
 use fujimod_emulator::{
     board::{
         bus::{Bus, Mode},
@@ -143,8 +144,16 @@ pub fn nand_base(document:&RunDocument,update:&ValidatedUpdate)->Result<NandBase
     Ok(NandBase(flash.iter().map(|byte|!byte).collect()))
 }
 
+/// Physical extent over which the X-M1 boot ROM decode returns its 16 KiB image repeated every
+/// `0x4000`: body reads of `0x80004000-0x80007fff` return the whole image, and 256-byte reads at
+/// `0x80008000`, `0x80010000` and `0x80100000` return its first 256 bytes (E-BOOTROM-EXTENT-150,
+/// E-BOOTROM-DISCRIMINATOR-150, E-STRAP-READ-150). The end is the last observed read rounded up
+/// to the period; beyond it is unmeasured.
+pub const BOOT_ROM_DECODE_BYTES: u64 = 0x10_4000;
+
 pub(crate) fn graph(document: &RunDocument) -> Result<(ResolvedConfiguration, factory::Graph), String> {
-    let resolved = ResolvedConfiguration::with_overlays(&document.catalog_configuration.0, &[])?;
+    let mut resolved = ResolvedConfiguration::with_overlays(&document.catalog_configuration.0, &[])?;
+    extend_boot_rom_decode(&mut resolved.reference.soc, document.boot_rom.address.0)?;
     let graph = fujimod_emulator::boot::graph::assemble_with_starts(
         &resolved.reference,
         document.execution.instructions_per_tick,
@@ -153,6 +162,32 @@ pub(crate) fn graph(document: &RunDocument) -> Result<(ResolvedConfiguration, fa
     )?;
     graph.validate()?;
     Ok((resolved, graph))
+}
+
+/// Widens the catalog's 16 KiB boot-ROM region, its physical-bus map and each core's identity map
+/// of it to `BOOT_ROM_DECODE_BYTES`; `open` fills the widened region with the repeated image.
+fn extend_boot_rom_decode(soc: &mut Soc, base: u64) -> Result<(), String> {
+    let rom = RegionSize::Bytes { bytes: 0x4000 };
+    let widened = RegionSize::Bytes { bytes: BOOT_ROM_DECODE_BYTES };
+    let mut regions = soc.memory_regions.iter_mut().filter(|region| region.base == base);
+    match (regions.next(), regions.next()) {
+        (Some(region), None) if region.kind == MemoryKind::Rom && region.size == rom => region.size = widened,
+        _ => return Err("catalog boot-ROM region differs from the 16 KiB X-M1 decode base".into()),
+    }
+    let mut bus = soc.dma_mappings.iter_mut().filter(|mapping| mapping.address == base && mapping.physical == base);
+    match (bus.next(), bus.next()) {
+        (Some(mapping), None) if mapping.size == rom => mapping.size = widened,
+        _ => return Err("catalog lacks one 16 KiB physical-bus boot-ROM map".into()),
+    }
+    for processor in &soc.processors {
+        let mut maps = soc.mappings.iter_mut()
+            .filter(|mapping| mapping.core == processor.id && mapping.address == base && mapping.physical == base);
+        match (maps.next(), maps.next()) {
+            (Some(mapping), None) if mapping.size == rom => mapping.size = widened,
+            _ => return Err(format!("catalog lacks one 16 KiB boot-ROM identity map for {}", processor.id)),
+        }
+    }
+    Ok(())
 }
 
 /// The processors' memory maps of the session `open` builds.
@@ -204,7 +239,12 @@ pub fn open(document: &RunDocument, update: &ValidatedUpdate, boot_rom: &[u8]) -
     for controller in built.core_interrupts {
         board.configure_core_interrupts(controller.core, controller.device, Box::new(controller.inputs))?;
     }
-    board.write_physical(document.boot_rom.address.0, boot_rom)?;
+    if !BOOT_ROM_DECODE_BYTES.is_multiple_of(boot_rom.len() as u64) {
+        return Err("boot ROM image does not tile the X-M1 decode extent".into());
+    }
+    for offset in (0..BOOT_ROM_DECODE_BYTES).step_by(boot_rom.len()) {
+        board.write_physical(document.boot_rom.address.0 + offset, boot_rom)?;
+    }
     let cores: BTreeMap<&str, usize> =
         resolved.reference.soc.processors.iter().enumerate().map(|(index, p)| (p.id.as_str(), index)).collect();
     for write in &resolved.reference.soc.reset.coprocessor_writes {
@@ -234,4 +274,44 @@ pub fn open(document: &RunDocument, update: &ValidatedUpdate, boot_rom: &[u8]) -
         contacts: built.contacts,
         recording_frames: Default::default(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(rom: &[u8]) -> Session {
+        fujimod_emulator_exr2_board::register_board_builder();
+        fujimod_emulator_models::register();
+        let document = RunDocument::parse(include_bytes!("../data/xm1-150.json")).unwrap();
+        let update = ValidatedUpdate(vec![0xff; document.update_flash_offset + 2048]);
+        open(&document, &update, rom).unwrap()
+    }
+
+    #[test]
+    fn boot_rom_reads_repeat_every_16_kib_through_the_observed_extent() {
+        let rom: Vec<u8> = (0..0x4000u32).map(|index| (index * 7 + index / 251) as u8).collect();
+        let session = session(&rom);
+        let window = |address: u64| {
+            let mut bytes = vec![0; 0x100];
+            session.board.read_physical(address, &mut bytes).unwrap();
+            bytes
+        };
+        for base in [0x8000_4000, 0x8000_8000, 0x8001_0000, 0x8010_0000] {
+            assert_eq!(window(base), rom[..0x100], "{base:#x}");
+        }
+        assert_eq!(window(0x8000_7f00), rom[0x3f00..], "footer repeats");
+        let end = 0x8000_0000 + BOOT_ROM_DECODE_BYTES;
+        for core in 0..2 {
+            let mut straddle = [0; 32];
+            session.board.read_memory(core, 0x8000_3ff0, &mut straddle).unwrap();
+            assert_eq!(straddle[..16], rom[0x3ff0..], "core {core}");
+            assert_eq!(straddle[16..], rom[..16], "core {core}");
+            let mut last = [0; 4];
+            session.board.read_memory(core, end - 4, &mut last).unwrap();
+            assert_eq!(last, rom[0x3ffc..], "core {core}");
+            assert!(session.board.read_memory(core, end, &mut [0; 4]).is_err(), "core {core}");
+        }
+        assert!(session.board.read_physical(end, &mut [0; 4]).is_err());
+    }
 }
