@@ -952,3 +952,21 @@ Not proven: decompiler signatures are inference, not a read-before-write proof. 
 The owned path reads the full cell word, and for a positive high halfword the selected transition entry, before the action; stock reads neither at that point. This difference is intentional: the modal lifetime guard watches writes and fetches only, not reads.
 
 No layer-(a) cell or direct-state cell lies on the recorded FILMSIM or packaged guard-pair domains (state 0, events 2, 8, 13, 50). Their four cells select `0xc6eb44`, `0xc72e10`, `0xc76650` and `0xc7a528`, which all stay stock in this increment. No guest was run; the evidence is host-only (E-MODAL75-GENERIC-HOST-150).
+
+#### Controller75 owned package and retired-body guard
+
+The continuous lifetime guard now takes the nine layer-(a) stock body extents as retired CPU-fetch classes. In a watch with instruction guards, an accepted fetch outside every guard records a `cpu-fetch` row when a class selects it (`build-support/fujimod-fetch-attribution.patch`); before, every fetch in a guarded watch was silent. The monitor refuses a fetch starting in a retired extent with `retired_fetch` from the install entry through the last reverse publication write, through any mapped or decoder alias on either core; outside that window the restored stock dispatcher may fetch them, and the completed Haskell check accepts those rows only before the first or after the last publication-writer row. Retired extents must avoid the runtime, every write-watched extent and every guarded instruction site. SDK tests show canonical, aliased and decoder-alias fetches on both cores refusing, and the phase window with adjacent extents (`0xc7aef4`, `0xc7af6c`, `0xc7afc8`).
+
+`--modal75-owned-archive` and `--modal75-retired` link an owner-built bank archive (`--cfg rb_modal_scoped --cfg rb_modal75_owned`, `RB_MODAL75_TABLE` = the private table) and the generator's retired document, which names schema 1, the pinned image5 and the table digest. The first owned archive pulled `core::slice::index::slice_index_fail` and `__aeabi_memcpy` into `rb_modal_dispatch`; the RAM-push link has no section GC, so `.text` overlapped `.ram_push.text`. `modal75.rs` now references table actions and iterates route pairs without slicing. Relinked at the reference base `0x00c40000`, the owned archive passes the bank allowlist with 0 violations (443 proven stores, 987 proven branches against stock's 439 and 986), and its bank object has stock's undefined-symbol set. Four independent review rounds preceded the runs (E-MODAL75-OWNED-PACKAGE-HOST-150).
+
+No owned run followed: the stock223 control refuses on both crawl-3 routes to layer-(a) cells, because stock firmware changes a guarded live-setting byte (E-MODAL75-ROUTE-STOCK-REFUSAL-150).
+
+| Run | Route | Reached | Refusing write |
+| --- | --- | --- | --- |
+| `run-stock223` | MENU, OK (live view), then OK into `(1,321,17)` | shooting menu `(1,5,2)` | `0x0096ccd2` `0x89`→`0xc9`, pc `0x0062ad3c`, instruction 1,522,403,269 |
+| `run-stock223b` | MENU, MENU, then OK into `(1,321,17)` | same | identical row stream (duplicate input) |
+| `run-q-stock223` | MENU, Q, then BACK | Q menu `(122,5,1)`, `retired-c7a7e4` hit 3 times | `0x0096ccca` `0x20`→`0x21`, pc `0x0062ff58`, instruction 1,520,318,916 |
+
+Both refusing writes fall in the key after the last completed segment. The shooting-menu runs match the passing packaged stock run row for row through instruction 1,522,242,231. The packaged FILMSIM route stays the only guard-qualified route, and its controller-75 domain has no layer-(a) cell.
+
+**Proposed follow-up for the integration owner.** The lifetime guard forbids any value change in the 450-byte live-settings block and the resident bank, even when stock code makes it. A cutover must preserve stock effects, not suppress them. The guard should instead record every value-changing write to those blocks with its writer PC, value and the triggering key segment, in both the stock and owned roles of a matched pair, and the pair check should require the two sequences to be equal. Writes from owned runtime code to those blocks stay forbidden. Until then, routes that leave a menu item or the Q menu cannot qualify an owned controller under the guard.
