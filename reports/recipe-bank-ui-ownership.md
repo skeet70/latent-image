@@ -788,9 +788,55 @@ The maintainer scoped #128 as functional replacement: the camera's menu behaviou
 
 Each screen records its frame, the menu reading (node id and setting id at the pointer `0x009571d0`, cursor at `+8`), the open node's 48-byte descriptor and all 174 state and event cells. Each press records the bridge settle result and every entry of eight traced sites: dispatcher context `0xbfb0a0` (r0 controller, r1 state, r2 event), action call `0xbfb0c8` (r3 target, paired per core with the latest context), direct-state store `0xbfb114`, property write `0x0061c91c`, setter `0x00624694`, commit dispatcher `0x00d4fc74`, mailbox writer `0x0063270c` and application sender `0x006334dc`. A screen is new unless its frame was seen before or its menu reading and state cells match a known screen. The keys are OK (also MENU), DOWN, UP, RIGHT, LEFT, BACK (also DISP), Q, both sub-command dial turns and PLAY; screens with controller 74 in state `0x18` use only the first six, because in the first run every Q, PLAY and dial press from such a screen reached a known screen and DIAL-RIGHT equalled DOWN in 194 of 195 cases. [Sources: `emulation/menu-crawl.json`; first-run journal `private-data/scratch/ControllerStrategy/crawl-1/crawl-trials.jsonl`.]
 
-The pointer at `0x009571d0` is not cleared when a menu closes: live view keeps the first-start date node's reading `(67,56,0)`. Controller 74 (modal `0x4a`) separates the two: it is `0x04` on the live-view root and `0x18` on menu screens reached through MENU. The census therefore keys menu behaviour by (node id, setting id) on screens with controller 74 in `0x18` and lists all other screens separately.
+Depth-first discovery order fixes a screen's recorded depth, so a long list walked early pushes everything beneath it to the depth limit. After each root's depth-first pass the crawl computes the fewest-press recorded path to every depth-limited screen, replays it from the root, accepts the landing by the same frame-first rule and expands the screen from there. A replay that lands elsewhere is recorded as diverged and leaves the screen depth-limited.
+
+The pointer at `0x009571d0` is not cleared when a menu closes: live view keeps the first-start date node's reading `(67,56,0)`. Controller 74 (modal `0x4a`) separates the cases: `0x04` on the live-view root, `0x11`, `0x19` and `0x1c` on live-view overlays such as drive and white balance, `0x01` on the LCD BRIGHTNESS slider, `0x18` on the menus MENU and Q open, and `0x00` under the SET-UP pages. The census keys menu behaviour by (node id, setting id) on screens in `0x18` or `0x00` and lists all other screens separately.
 
 Limits: the attach route consumes the first-start language and date screens with fixed keys before the crawl starts; there is no card, lens, sensor image or S1/S2 press; the mode dial stays at its boot position; live view is the synthetic scene. These screens and paths are left to the camera-side harness below.
+
+#### Runs
+
+| Run | Mechanism | Result | Receipt under `private-data/scratch/ControllerStrategy/` |
+| --- | --- | --- | --- |
+| crawl-1 | Snapshot crawl, all ten keys on every screen | Stopped at trial 1,996 after about 230 screens: BACK from SET-UP page 1 settled with no display plane and the capture error ended the session. Fix: a press advances in 2M-instruction steps, up to 60M, until a plane is presented, and a missing plane is a stopped edge. | `crawl-1/`, `crawl-1.log` |
+| crawl-2 | Plus the plane wait and menu-state keys | Killed at trial 388 by an orchestrator restart, not by its input | `crawl-2/` |
+| crawl-3 | Same input as crawl-2 | 309 screens, 1,948 trials, 72 min, 5 plane stops; 25 screens depth-limited at 16 whose recorded shortest paths are 3 to 10 presses, so the SET-UP subtree was unexplored | `crawl-3/` |
+| crawl-4 | Plus shortest-path replay | 564 screens (1,089 frames), 4,544 trials and 250 replay presses in 177 min; 25 replays expanded and 6 diverged; 14 screens depth-limited; 16 stopped presses: 7 with no plane (a live-view overlay `(16,472)` and GEOTAGGING SET-UP `(73,71)`) and 9 on an unsupported Wi-Fi SDIO command (PC AUTO SAVE SIMPLE SETUP `(83,177)`) | `crawl-4/`, `census-4-menus.json` |
+
+The six diverged replays took a shorter path through state the frame does not show, such as a menu reopened at its remembered cursor. The 14 remaining depth-limited screens are positions deep in long value lists plus those six; two of them, Fn BUTTON SETTING `(40,252)` and DISPLAY CUSTOM SETTING `(24,389)`, were seen on one screen each.
+
+#### Behaviour counts
+
+The census groups crawl-4's 495 menu screens into 87 keys and leaves 69 live-view and overlay screens outside menus. Presses dispatched 371 distinct actions of 38 controllers; those actions fall in 295 helper-bound shapes whose members are 753 of the 5,795 table callbacks. An action can serve keys of several classes, so the per-class action counts overlap. [Sources: E-MODAL-MENU-CRAWL-150; `private-data/scratch/ControllerStrategy/census-4-menus.json`.]
+
+| Class (census rule) | Keys | Examples | Actions | Shapes |
+| --- | --- | --- | --- | --- |
+| Navigation list: opens keys that are not its ancestors | 18 | shooting-menu pages `(1,5)`, SET-UP pages `(63,5)`, tab strip `(0,5)`, ISO AUTO CONTROL `(36,330)`, SCREEN SET-UP `(78,7)` | 235 | 197 |
+| Value list: cursor moves commit a property | 38 | ISO `(1,321)`, WHITE BALANCE `(11,237)`, DATE/TIME fields `(67,56..59)`, language `(68,52)`, VOLUME `(72,45)` | 111 | 96 |
+| Toggle: a value list with two positions | 25 | SILENT MODE `(63,525)`, sensor-cleaning timing `(127,209)`, `(127,210)` | 95 | 83 |
+| Other | 6 | Q menu `(122,5)`, name keyboard `(86,182)`, password digits `(126,201)`, previous-connection details `(85,183)`, `(40,252)`, `(24,389)` | 58 | 42 |
+| Confirmation: commits its own setting | 0 | see below | 0 | 0 |
+| Outside menus (69 screens) | | live view, drive, focus-area, white-balance and other arrow-key overlays | 131 | 105 |
+
+Value-list and toggle moves commit through `0x00d4fc74`; editors such as DATE/TIME commit their field (`0x39`, `0x3a`, `0x3b`) without a property write. Frames show five OK/CANCEL confirmation dialogs: SET OK?, CUSTOM RESET, SHOOTING MENU RESET, SET-UP RESET and RESET WIRELESS SETTINGS. Each keeps its parent's menu reading and opens on CANCEL, and its cursor is in neither the reading nor the state cells, so the crawl treats OK and CANCEL as frame variants of one screen and never pressed OK. The census therefore counts them inside their parents.
+
+Twenty-one actions, of controllers 0, 30, 41, 42, 74, 75, 76, 100, 101 and 107, run on at least 10% of presses (454 of 4,544); presses average 15.1 dispatches. **[INFERENCE]** These form the per-press dispatch path rather than menu behaviour.
+
+**[INFERENCE]** Generic behaviours that cover every reached screen, each driven by recovered menu data (node, setting, property id, value array, row targets) rather than by the stock action bodies:
+
+| Generic behaviour | Covers in crawl-4 |
+| --- | --- |
+| List navigation with page tabs | 18 navigation keys |
+| Value picker committing on each move; a toggle is the two-value case | 63 value-list and toggle keys |
+| Multi-field editor: LEFT/RIGHT between fields, each field a picker | DATE/TIME `(67,56..59)`, TIME DIFFERENCE `(65,64..66)` |
+| Character and digit entry | name keyboard `(86,182)`, SSID `(125,192)`, password `(126,201)` |
+| Slider | VOLUME `(72,45)`, LCD BRIGHTNESS (state `0x01`) |
+| Confirmation dialog defaulting to CANCEL | 5 dialogs |
+| Q menu grid | `(122,5)` |
+| Live-view key overlay strip | drive, focus area, white balance and the other outside screens |
+| Information or progress screen | sensor cleaning run, previous-connection details, PC auto-save connection |
+
+**[INFERENCE]** Nine generic behaviours therefore cover the 87 menu keys, five dialogs and the live-view overlays the emulator reaches, where the stock firmware spends 371 actions in 295 shapes across 38 controllers. For #128 this moves the functional unit from the callback to the menu table: an owned dispatcher plus these behaviours replaces the reached actions once the menu, property and value tables are recovered as data. The scope still open is what the emulator cannot reach: card, lens, mode-dial, S1/S2 and Wi-Fi paths, OK on confirmations, and the 14 depth-limited screens.
 
 #### Camera-side validation harness (design)
 

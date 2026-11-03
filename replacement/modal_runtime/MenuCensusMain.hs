@@ -162,33 +162,34 @@ topState node = fromIntegral (B.index states (2 * topController)) .|. (fromInteg
  where
   states = nodeStates node
 
--- | Controller 74's state on every menu screen the crawl reaches through MENU.
-menuState :: Word32
-menuState = 0x18
+-- | Controller 74's states on menu screens: 0x18 on the menus MENU and Q open from live view,
+-- 0x00 under the SET-UP pages (crawl-4 frames).
+menuStates :: [Word32]
+menuStates = [0x18, 0x00]
 
--- | A behaviour unit: the stored menu node and setting id of a screen in `menuState`. Screens in
--- any other controller 74 state are outside menus and form no key.
+-- | A behaviour unit: the stored menu node and setting id of a screen in one of `menuStates`.
+-- Screens in any other controller 74 state are outside menus and form no key.
 data MenuKey = MenuKey Word32 Word32 deriving (Eq, Ord, Show)
 
 keyOf :: Node -> Maybe MenuKey
 keyOf node = case nodeMenu node of
-  Just menu | topState node == menuState -> Just (MenuKey (menuNode menu) (menuSetting menu))
+  Just menu | topState node `elem` menuStates -> Just (MenuKey (menuNode menu) (menuSetting menu))
   _ -> Nothing
 
 -- | Observed behaviour of one menu key, from the edges leaving its screens.
 data MenuBehaviour = MenuBehaviour
   { behaviourCursors :: S.Set Word32
   , behaviourCursorMoves :: Int
-  , behaviourLiveWrites :: Int
+  , behaviourSettingMoves :: Int
   , behaviourCommits :: Int
   , behaviourEnters :: S.Set MenuKey
   , behaviourOutside :: Int
   }
 
--- | The behaviour classes counted, decided in this order: a key whose cursor moves write a
+-- | The behaviour classes counted, decided in this order: a key whose cursor moves commit a
 -- property is a value list, a toggle when it has two positions; otherwise one that opens keys
--- that are not its ancestors is a navigation list; otherwise one with a commit of its own
--- setting id is a confirmation; the rest are other.
+-- that are not its ancestors is a navigation list; otherwise one with a commit of its own setting
+-- id is a confirmation; the rest are other.
 data BehaviourClass = Toggle | ValueList | NavigationList | Confirmation | OtherMenu deriving (Eq, Ord, Show, Enum, Bounded)
 
 classText :: BehaviourClass -> String
@@ -201,13 +202,13 @@ classText kind = case kind of
 
 classify :: MenuBehaviour -> BehaviourClass
 classify behaviour
-  | behaviourLiveWrites behaviour > 0 = if S.size (behaviourCursors behaviour) == 2 then Toggle else ValueList
+  | behaviourSettingMoves behaviour > 0 = if S.size (behaviourCursors behaviour) == 2 then Toggle else ValueList
   | not (S.null (behaviourEnters behaviour)) = NavigationList
   | behaviourCommits behaviour > 0 = Confirmation
   | otherwise = OtherMenu
 
-writes :: Edge -> Bool
-writes edge = any ((`elem` [PropertyWrite, PropertySetter]) . effectSite) (edgeEffects edge)
+commits :: Edge -> Bool
+commits edge = any ((== PropertyCommit) . effectSite) (edgeEffects edge)
 
 hex :: Word32 -> String
 hex value = "0x" ++ showHex value ""
@@ -251,7 +252,7 @@ main = do
         in MenuBehaviour
           { behaviourCursors = S.fromList [menuCursor menu | node <- screensOf menuKey, Just menu <- [nodeMenu node]]
           , behaviourCursorMoves = length (filter moved own)
-          , behaviourLiveWrites = length [() | edge <- own, moved edge, writes edge]
+          , behaviourSettingMoves = length [() | edge <- own, moved edge, commits edge]
           , behaviourCommits = length [() | edge <- own, any (\effect -> effectSite effect == PropertyCommit && take 1 (effectArguments effect) == [setting]) (edgeEffects edge)]
           , behaviourEnters = S.fromList [target | edge <- own, not (returns edge), Just target <- [targetKey edge], target /= menuKey]
           , behaviourOutside = length [() | edge <- own, isNothing (edgeStopped edge), isJust (edgeTo edge), isNothing (targetKey edge)]
@@ -291,7 +292,7 @@ main = do
             , "edges" .= length edges, "stopped_edges" .= length [() | edge <- edges, Just _ <- [edgeStopped edge]]
             , "frontier_screens" .= length [() | node <- graphNodes graph, Just _ <- [nodeFrontier node]] ]
         , "menus" .= object
-            [ "root_controller_74_state" .= rootTop, "menu_controller_74_state" .= menuState
+            [ "root_controller_74_state" .= rootTop, "menu_controller_74_states" .= menuStates
             , "menu_keys" .= S.size menuKeys
             , "by_class" .= object [ K.fromString (classText kind) .= length [() | c <- M.elems classes, c == kind] | kind <- [minBound .. maxBound] ]
             , "by_descriptor_type" .= M.toList (M.fromListWith (+) [(maybe "none" hex (typeWord menuKey), 1 :: Int) | menuKey <- S.toList menuKeys])
@@ -299,7 +300,7 @@ main = do
                 [ "key" .= keyValue menuKey, "class" .= classText (classes M.! menuKey), "descriptor" .= map hex (descriptorOf menuKey)
                 , "screens" .= length (screensOf menuKey)
                 , "cursors" .= S.toList (behaviourCursors behaviour), "cursor_moves" .= behaviourCursorMoves behaviour
-                , "live_writes" .= behaviourLiveWrites behaviour, "commits" .= behaviourCommits behaviour
+                , "setting_moves" .= behaviourSettingMoves behaviour, "commits" .= behaviourCommits behaviour
                 , "enters" .= map keyValue (S.toList (behaviourEnters behaviour)), "edges_outside_menus" .= behaviourOutside behaviour
                 , "image" .= firstImage menuKey ]
               | (menuKey, behaviour) <- M.toList behaviours ] ]
