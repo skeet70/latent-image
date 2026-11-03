@@ -106,6 +106,8 @@ impl Program {
                     let pc = Guest(CARRIER[0] + 4 * index as u32);
                     let word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
                     require(word >> 25 != 0x7d, "image5 linked code contains an immediate BLX")?;
+                    require(!((word >> 24) & 0xf == 0xb && word >> 28 < 0xe), "image5 linked code contains a conditional BL")?;
+                    require(word & 0x0fff_fff0 != 0x012f_ff30, "image5 linked code contains a register BLX")?;
                     match decode_call(pc, word)? {
                         Some(StaticCall { target: CallTarget::Register(_), .. }) => return Err("image5 linked code contains a register-indirect call".into()),
                         Some(call) if matches!(call.target, CallTarget::Direct(target) if !(CARRIER[0]..CARRIER[1]).contains(&target.0)) => emitted.push(call),

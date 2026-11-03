@@ -406,7 +406,7 @@ fn guards(root: &Path, report: &Report, catalog: &Catalog, evidence: &Evidence, 
     let mut fetches = BTreeSet::new(); let mut saved_writes = BTreeSet::new();
     let slots = program.saved_slots(sp, &entry.registers.r, entry.registers.lr);
     let mut copied: Vec<Vec<[u64; 2]>> = vec![Vec::new(); BLOCKS as usize];
-    let mut clears = Vec::new(); let mut completions = Vec::new(); let mut exits = Vec::new(); let mut done_stores = Vec::new();
+    let mut clears = Vec::new(); let mut completions = Vec::new(); let mut flag_reads = Vec::new(); let mut done_stores = Vec::new();
     let completion = report.events.iter().find(|observed| observed.pc == FILL_STORE_PC && between(observed, fill.entered, returned)).ok_or(missing(MissingEvidence::FillCompletion))?;
     require(report.events.iter().any(|observed| observed.pc == FILL_CALLBACK && observed.core == completion.core && fill.entered.id.0 < observed.id.0 && observed.id.0 < completion.id.0), missing(MissingEvidence::FillCompletion))?;
     let expected_attribution = attribution_ranges(catalog)?;
@@ -483,14 +483,18 @@ fn guards(root: &Path, report: &Report, catalog: &Catalog, evidence: &Evidence, 
                 }
                 if row.source == Access::CpuWrite && row.pc == Some(Guest(0x73b6ac)) && row.physical == Guest(0x944440) && row.value == Some(1) && clock.is_some_and(|clock| entry.instructions.0 < clock) { done_stores.push(clock.ok_or(Refusal::CoverageDiffers)?); }
             }
-            if during && row.source == Access::CpuRead && row.core == Some(entry.core) && row.size == 4 {
-                if row.pc == Some(Guest(0x657194)) && row.physical == Guest(0x61c008) && row.value == Some(0) && clock.is_some_and(|clock| mode.entered.instructions.0 < clock && clock <= mode.finished.instructions.0) { mode_read = true; }
-                if producer_pc {
-                    let clock = clock.ok_or(Refusal::CoverageDiffers)?;
-                    if overlaps(low, high, pointer, pointer + 4 * SEGMENT_WORDS as u32) { record_reads.push((clock, row.physical.0 - pointer, row.value)); }
-                    if row.physical == FILL_FLAG && row.value.is_some_and(|value| value != 0) { exits.push(clock); }
+            if during && row.source == Access::CpuRead && producer_pc {
+                let clock = clock.ok_or(Refusal::CoverageDiffers)?;
+                if overlaps(low, high, pointer, pointer + 4 * SEGMENT_WORDS as u32) {
+                    let offset = row.physical.0.checked_sub(pointer).filter(|offset| offset % 4 == 0 && row.size == 4 && row.core == Some(entry.core)).ok_or(Refusal::FieldReadsDiffer)?;
+                    record_reads.push((clock, offset, row.value));
+                }
+                if overlaps(low, high, FILL_FLAG.0, FILL_FLAG.0 + 4) {
+                    require(row.physical == FILL_FLAG && row.size == 4 && row.core == Some(entry.core), Refusal::FlagOrderDiffers { step: FlagStep::WaitExit })?;
+                    flag_reads.push((clock, row.value));
                 }
             }
+            if during && row.source == Access::CpuRead && row.core == Some(entry.core) && row.size == 4 && row.pc == Some(Guest(0x657194)) && row.physical == Guest(0x61c008) && row.value == Some(0) && clock.is_some_and(|clock| mode.entered.instructions.0 < clock && clock <= mode.finished.instructions.0) { mode_read = true; }
         }
     }
     require(mode_read && record_reads.len() >= expected_reads.len(), missing(MissingEvidence::InputReads))?;
@@ -512,13 +516,15 @@ fn guards(root: &Path, report: &Report, catalog: &Catalog, evidence: &Evidence, 
     }
     require(clears.len() == 1, missing(MissingEvidence::FlagClear))?;
     require(completions.len() == 1, missing(MissingEvidence::FillCompletion))?;
-    let exit = exits.iter().copied().filter(|&clock| completions[0] < clock && clock <= returned.instructions.0).max();
-    let exit = exit.filter(|_| exits.iter().all(|&clock| completions[0] < clock)).ok_or(Refusal::PrematurePublication { boundary: PublicationBoundary::ReturnBeforeFlag })?;
     let index = |wanted: fn(Step) -> bool| calls.iter().position(|call| wanted(call.step)).map(|index| OperationIndex(index as u32));
     let clear = position(calls, clears[0]);
-    require(clear == FlagPosition { after: index(|step| matches!(step, Step::Marker(MarkerId::MainStart))), before: index(|step| matches!(step, Step::Fill)) }, Refusal::FlagOrderDiffers { step: FlagStep::Clear })?;
+    let length_read = record_reads.iter().find(|read| read.1 == Field::BssLength.offset()).map(|read| read.0).ok_or(missing(MissingEvidence::InputReads))?;
+    require(clear == FlagPosition { after: index(|step| matches!(step, Step::Marker(MarkerId::MainStart))), before: index(|step| matches!(step, Step::Fill)) } && length_read < clears[0], Refusal::FlagOrderDiffers { step: FlagStep::Clear })?;
+    flag_reads.sort_unstable_by_key(|read| read.0);
+    let window = FlagPosition { after: index(|step| matches!(step, Step::Marker(MarkerId::DecodeEnd))), before: index(|step| matches!(step, Step::Marker(MarkerId::MainEnd))) };
+    require(flag_reads.iter().all(|read| position(calls, read.0) == window), Refusal::FlagOrderDiffers { step: FlagStep::WaitExit })?;
+    let exit = flag_reads.last().filter(|read| read.1.is_some_and(|value| value != 0) && completions[0] < read.0).map(|read| read.0).ok_or(Refusal::PrematurePublication { boundary: PublicationBoundary::ReturnBeforeFlag })?;
     let wait = position(calls, exit);
-    require(wait == FlagPosition { after: index(|step| matches!(step, Step::Marker(MarkerId::DecodeEnd))), before: index(|step| matches!(step, Step::Marker(MarkerId::MainEnd))) }, Refusal::FlagOrderDiffers { step: FlagStep::WaitExit })?;
     require(done_stores.iter().all(|&clock| returned.instructions.0 < clock), Refusal::PrematurePublication { boundary: PublicationBoundary::FlashloaderDone })?;
     Ok((reads, FlagEffect { clear, completed_by: Writer::Retained(FILL_STORE_PC), completion_callback: FILL_CALLBACK, wait }))
 }
