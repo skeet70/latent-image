@@ -106,7 +106,7 @@ The Q cell's values pointer moves from its own five-row array to the installed s
 
 ## 3. Placement, geometry and the running byte budget
 
-**Byte-read:** the free window is `[0x0061c1fc, 0x0061c400)`, 516 bytes. The table-block tail holds the last plain-extent terminator `0xffffffff` at `0x0061c1f8` and reads `0` at `0x0061c1fc` (payload-complement.bin at media `0x140228`), so retained content ends at `0x0061c1fb` and the floor claim of E-RECIPE-PREFIX-TAIL-150 is reproduced from bytes.
+**Byte-read:** the free window is `[0x0061c1fc, 0x0061c400)`, 516 bytes. The table-block tail holds the last plain-extent terminator `0xffffffff` at `0x0061c1f8` and reads `0` at `0x0061c1fc` (payload-complement.bin at media `0x140228`), so retained content ends at `0x0061c1fb` and the floor claim of E-FILMSIM-PREFIX-WIDENING-150 is reproduced from bytes.
 
 | Placement | Range | Bytes | Used | Free after |
 | --- | --- | --- | --- | --- |

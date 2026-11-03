@@ -8,7 +8,7 @@ This answers the instrument half of AF-OBSERVE-01: which of the instruments buil
 
 The static map binds the AF request, completion and confirmation paths. The current [observation plan](af-observation-plan.md) starts with the stock message trace and coherent observations in ordinary boot, then adds hooks only for missing signals.
 
-Ordinary-boot RAM extraction is now hardware-observed with stored `0xf7 = 1` (E-BULK-READ-RUN1-150 through E-BULK-READ-RUN3-150). The [bulk-read report](ff80-bulk-read.md) supersedes this survey's former maintenance-only access premise. No ordinary AF timeline or coherent sensor-frame export is established by those reads. The store still must be extracted within its boot.
+Ordinary-boot RAM extraction is now hardware-observed with stored `0xf7 = 1` (E-BULK-READ-RUN2-150, E-BULK-READ-RUN3-150). The [bulk-read report](ff80-bulk-read.md) supersedes this survey's former maintenance-only access premise. No ordinary AF timeline or coherent sensor-frame export is established by those reads. The store still must be extracted within its boot.
 
 ## 2. The five instruments
 

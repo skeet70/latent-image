@@ -14,7 +14,7 @@ The X70 emulator's author wants to record autofocus traces on a camera and repla
 
 What a third party takes from this: the request shape, the fixed window list, the gate discipline and the stop rules are published and reimplementable. The wire bytes are X-M1 1.50's service surface, so whether another body's firmware exposes the same opcodes is **unproved**; a different body needs its own equivalent read channel, and the store format of section 2 is what that read must return.
 
-Ordinary-boot `read-ram`/`read-bulk` are now a separate reviewed extraction route ([bulk-read report](ff80-bulk-read.md), E-BULK-READ-RUN1-150 through E-BULK-READ-RUN3-150). This supersedes the maintenance-only access premise, not the decoder's coherence limits. The [AF observation plan](af-observation-plan.md) still requires actual stock AF under USB and same-boot extraction to be demonstrated.
+Ordinary-boot `read-ram`/`read-bulk` are now a separate reviewed extraction route ([bulk-read report](ff80-bulk-read.md), E-BULK-READ-RUN2-150, E-BULK-READ-RUN3-150). This supersedes the maintenance-only access premise, not the decoder's coherence limits. The [AF observation plan](af-observation-plan.md) still requires actual stock AF under USB and same-boot extraction to be demonstrated.
 
 ### 1.2 The format knowledge: what the decoders are
 

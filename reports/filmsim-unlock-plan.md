@@ -181,7 +181,7 @@ Prerequisite states in recipe-design section 11 (byte-read of the design):
 | Unbound | P16 | how a slot-record write reaches the settings-image mirror and whether it commits area 3 on the spot |
 | Residuals noted | P14, P8 | the second AUTO row's display; long-exposure NR's field |
 
-The RC1 build work (compiled table, label records, host validator) can start on the bound prerequisites now; the C-target cases run with the bound P15/P16 expectations (E-RECIPE-PREREQ-CLARIFY-150, E-CPOS-EDIT-VOLATILITY-150).
+The RC1 build work (compiled table, label records, host validator) can start on the bound prerequisites now; the C-target cases run with the bound P15/P16 expectations (E-RECIPE-DESIGN-150, E-CPOS-EDIT-VOLATILITY-150).
 
 ## Work ownership
 
