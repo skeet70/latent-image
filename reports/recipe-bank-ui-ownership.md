@@ -1055,7 +1055,51 @@ The build is opt-in: `--cfg rb_menu_picker_owned` (which requires `rb_modal_scop
 - an owned-set policy in the lifetime guard and scope contract (`modal_permit.rs`, `emulation/Emulation/ModalObservation.hs`, `modal_trace.rs`, a `controllers` array in `modal-scope.json`);
 - qualification of the dispatcher port for those ids (`Qualify.hs` takes controller 75 as fixed; entry fixtures; the closure diagnostic per id; a register and frame census of their action bodies).
 
-**[INFERENCE]** The table-driven value step belongs to the menu engine, which runs in the UILIB task rather than in modal dispatch, so the next increment investigates the UILIB list state instead.
+**[INFERENCE]** The table-driven value step belongs to the stock menu engine, which runs inside modal dispatch as controller 100's stage consumer (next section), so the next increment investigates that engine.
+
+#### Stock menu engine and the owned target
+
+One observed DOWN at the last row of the setting-246 picker (`--menu-observe`, `emulation/menu-observe-picker-down.json`) produced 174 trace hits and 1,270 PC-recorded writes with no watch violation. Together with the decompilation it fixes the stock menu engine's shape. [Sources: E-MENU-ENGINE-OBSERVE-150; `private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c`.]
+
+**Event path.** All events cross one fixed block, not a queue:
+1. Controller 75's DOWN action `0xc6eb44` calls stage open `0xd3d858(4, 1)`, which writes event `0x1e` (kind 4, node 1, id 1) into the fixed event block `0x0094f64c..0x0094f660` through `0x0063270c`.
+2. The stock dispatcher then runs controller 100 (state 1, event `0x15`), whose action `0xca4674` consumes the block.
+3. `0xca4674` enters `0xd4dd2c`, the engine wrapper `0xbf95c8` and the kind switch `0xbfa234` (all.c:331301). Kind 1 opens a node at its remembered row; 2 closes and remembers the row; 4, 5 and `0x45` to `0x48` move within the open node; 6 to `0xb` wrap a move between a pop and a push (6, 7) or a push and a pop (8 to `0xb`, with 10 and `0xb` first calling `0xbfad04`); `0xe` and `0xf` push and pop through `0xbfab98`; `0x10` to `0x12` push or pop two or three levels; `0x13` re-opens.
+4. The move `0xbf9f44` steps through `0xbf9b1c` (all.c:330967; code `0x16` up, anything else down). The step wraps unless node word 4 is 1, skips rows whose state is 2 or 3 unless node word 5 is 1, and then sets the visible ordinal from the row's value token and the visible count.
+5. The move then recomputes the scroll top (`0xbf988c`) and stores 44-byte snapshots through `0x0061ceac`.
+
+**Value step.** `0xca4674` asks `0xd586bc(3, P, V)` whether the move changes a setting. In the observed press it did: `0xd3d620` posted event `0x1d` with property `0xf6` (246), token 1 and `0xf000`, and controller 30 was dispatched (`0xc0028c`). Controller 30's action `0xc2d8ec` called the commit dispatcher `0xd4fc74(0xf6, 1)`, and the property writer `0x0061c91c` was then entered for properties `0xf6`, `0xf9`, `0x161` and `0x1e5`, in that order.
+
+**State.** The engine's state is a set of globals:
+- the open node pointer `0x009571d0`;
+- cursor `0x009571d8`, visible ordinal `0x009571dc`, visible count `0x009571e0`, scroll top `0x009571e4`, total rows `0x009571e8`;
+- per-row states `0x009571f0` (0 offered, 1 variant, 2 disabled, 3 hidden), saved-row copies `0x0095732c..`;
+- a cursor stack `0x00957554` indexed by depth `0x009575f4`;
+- remembered rows `0x0095733c[node]`.
+
+The observed press wrapped the cursor, the visible ordinal and the scroll top from 8, 8 and 2 to 0 (writers `0x00bf9bec`, `0x00bf9c04`, `0x00bf9c10` and `0x00bfa1c8`). `0x0061cd14` (all.c:10050) then rewrote the depth-2 snapshot of node 1 at `0x00941300` as `{depth 2, node words 1, 0, 246, cursor-row token 1, saved-row token 1, cursor 0, ordinal 0, visible 9, page word 1, top 0}`.
+
+**Rendering.** The engine requests a redraw through `0xd4c8d4` and `0xd3d894` (codes `0x837`, then `0x816`); notifications `0xd38d98(0x50b)` and `(0x400)` set the flags `0x009503d0` and `0x009503d4`. Draw functions in `0x0116xxxx` read 44-byte copies of the engine state through `0x0061cd14` (live) or `0x0061ce1c` (saved) rather than the globals. After the redraw requests, the row-availability function `0xd52684` was entered 106 times, 53 of them from `0x00bf8dbc` and 16 from `0x00bf924c`. Most writes to `0x00a85000..0x00a88000` come from `0x008409bc`, `0x00840a48` and `0x006d8518..0x006d85f8`.
+
+**Target and shims.** **[INFERENCE]** The target for the menu subsystem is:
+- a declarative menu tree built from the decoded tables (nodes, rows, labels, availability rules);
+- one owned menu engine implementing these kinds over typed state;
+- the nine generic widgets;
+- a typed settings service;
+- a render layer.
+
+The stock modal-dispatch hook becomes a thin event adapter. The stock code the owned engine still meets is wrapped in named shims, each removed when its condition holds:
+
+| Shim | What it does | Removal condition |
+| --- | --- | --- |
+| Stage-event adapter | Takes the `0x1e` stage events that stock key actions post and feeds them to the owned engine, at the single engine entry `0xbf95c8` | The owned key layer delivers key events to the engine directly |
+| Stock-state mirror | The owned engine writes the stock globals above and the `0x0061ceac` snapshots, so stock readers and the stock renderer stay consistent | Every reader of those globals and snapshots is owned |
+| Value-event adapter | Posts `0x1d (P, V)` and dispatches controller 30, so stock commit arms apply the value | The typed settings service owns the commit arm of every property the tree uses |
+| Stock redraw path | Redraw requests `0x837`/`0x816` and notifications through `0xd38d98` | The owned render layer draws menus |
+| Stock availability | Row states from `0xd52684` | Availability is declared in the menu tree |
+| Picker key cells | Increment 1's seven owned controller-75 cells | The owned key layer replaces them (no further per-cell ownership is added) |
+
+Next observations, each a single `--menu-observe` run: open (kind 1, remembered row), page moves, push and pop with the cursor stack, a list with a disabled or hidden row, and a confirmation dialog.
 
 #### Camera-side validation harness (design)
 
