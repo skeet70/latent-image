@@ -1466,6 +1466,12 @@ sh_binary(
 )
 
 sh_binary(
+    name = "root-compact",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-root-compact"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
     name = "task-storage",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-task-storage"],
     visibility = ["//visibility:public"],
@@ -3156,6 +3162,7 @@ haskell_library(
         "//host:bytestring",
         "//host:containers",
         "//host:json",
+        "//host:text",
         "//host:update-container",
         "//host/firmware:bank-allowlist",
         "//replacement/kernel_install:kernel-install-artifact",
@@ -3176,5 +3183,25 @@ haskell_binary(
         ":task-memory-witness-lib",
         ":task-witness-cli-lib",
         "//host:base",
+    ],
+)
+
+haskell_binary(
+    name = "root-compact-equivalence",
+    srcs = ["RootCompactEquivalenceMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:json",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
     ],
 )
