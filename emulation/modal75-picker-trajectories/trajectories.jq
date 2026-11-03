@@ -24,20 +24,25 @@ def trace_sites: [
   ["00c7afc8", "retired-c7afc8"]
 ];
 def segment($phase; $capture; $list): {"phase": $phase, "capture": $capture, "steps": steps($list), "reads": reads, "read_preservations": keep_resident};
+# The installed package appends two rows to the shooting root (menu/recipe_bank_ui.h), rows 33 and 34,
+# so UP from row 2 wraps to row 34, where crawl-5's uninstalled route wraps to row 32.
+def package_route($route): if $route[1] == ["up", [1, 5, 32]] then [$route[0], ["up", [1, 5, 34]], ["up", [1, 5, 33]]] + $route[1:] else $route end;
 [ .[] as $c
   | ($c.keys | .[0:1]) as $enter
+  | package_route($c.route) as $route
   | { name: "picker-\($c.setting)",
       doc: {
         "schema": 1,
         "entry": "Stock-dispatcher control and owned-picker candidate for the setting-\($c.setting) picker (crawl-5 node \($c.picker)). The qualified package prefix uses MENU to reach the live view (67,56,0), crawl-5 root 0; the route follows crawl-5's recorded path to the picker's row. In the picker, DOWN and UP move one row and back, RIGHT leaves the picker open, LEFT and OK leave it with the selected value, and BACK leaves it; DOWN, UP and entering post the property's value event 0x1d when 0x00d586bc reports it and BACK may post property 0x27d (E-MENU-ENGINE-OBSERVE-150); live-setting stores are admitted only from the stock property setter, in both roles. After rollback OK and BACK run through the restored stock dispatcher and are observed, not asserted: in the first picker-239 stock run, OK after unload opened the picker of the row above the cursor. Every expected menu tuple is a crawl-5 edge's landing\(if $c.setting == 214 then ", except the DOWN and UP pair, which crawl-5 did not expand from the picker's second and third rows and which this file observes" else "" end).",
         "source_bindings": [
           {"source": "private-data/scratch/ControllerStrategy/crawl-5/crawl-graph.json (mechanism d49b2c80, E-MODAL-MENU-OKPATHS-150): node \($c.picker) path \($c.route | map(.[0]) + ["ok"] | join(","))", "expectation": "Each step's menu tuple is the landing of the crawl-5 edge for that key from the previous step's screen."},
+          {"source": "menu/recipe_bank_ui.h and private-data/scratch/ControllerStrategy/picker-runs/picker-15-stock (UP from (1,5,2) landed on (1,5,34))", "expectation": "With the package installed the shooting root has two more rows, 33 and 34, so a route whose first move is UP from row 2 passes rows 34 and 33 before crawl-5's row 32."},
           {"source": "private-data/scratch/ControllerStrategy/picker-fold/picker-document.json", "expectation": "Controller-75 state-0 cells for events 0, 2, 4, 6, 8, 13 and 49 are picker cells, and node \($c.setting)'s record is a picker node."}
         ],
         "trace_sites": trace_sites,
         "before_unload": (
           [ {"phase": "package-menu-prefix", "capture": "picker-live-view", "steps": [["menu", 67, 56, 0]], "reads": reads},
-            segment("picker-route"; "picker-parent"; $c.route) ]
+            segment("picker-route"; "picker-parent"; $route) ]
           + (if $c.setting == 214
              then [ segment("owned-picker-enter"; "owned-picker-entered"; $enter),
                     (segment("owned-picker-move"; "owned-picker-moved"; [["down", [1, 214, 1]], ["up", [1, 214, 0]]]) + {"observe": true}),

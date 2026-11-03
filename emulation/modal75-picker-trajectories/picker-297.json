@@ -7,6 +7,10 @@
       "expectation": "Each step's menu tuple is the landing of the crawl-5 edge for that key from the previous step's screen."
     },
     {
+      "source": "menu/recipe_bank_ui.h and private-data/scratch/ControllerStrategy/picker-runs/picker-15-stock (UP from (1,5,2) landed on (1,5,34))",
+      "expectation": "With the package installed the shooting root has two more rows, 33 and 34, so a route whose first move is UP from row 2 passes rows 34 and 33 before crawl-5's row 32."
+    },
+    {
       "source": "private-data/scratch/ControllerStrategy/picker-fold/picker-document.json",
       "expectation": "Controller-75 state-0 cells for events 0, 2, 4, 6, 8, 13 and 49 are picker cells, and node 297's record is a picker node."
     }
@@ -162,6 +166,18 @@
           1,
           5,
           2
+        ],
+        [
+          "up",
+          1,
+          5,
+          34
+        ],
+        [
+          "up",
+          1,
+          5,
+          33
         ],
         [
           "up",
