@@ -12,7 +12,7 @@ struct InterfaceCall {
     succeeded: Option<bool>, errno_before: Option<u32>, errno_after: Option<u32>,
 }
 
-pub(super) fn observe(recorder: &mut Recorder, raw: &RawBoundary) -> Result<(), String> {
+pub(super) fn observe(recorder: &mut Recorder, raw: &RawBoundary, role: Role) -> Result<(), String> {
     let snapshot = &raw.boundary.snapshot;
     let returning = recorder.return_operation(snapshot.context, snapshot.pc, Address(snapshot.registers[13]));
     let operation = returning.or_else(|| heap_state::entry(Address(snapshot.pc.0 & !0x40000000)));
@@ -37,6 +37,17 @@ pub(super) fn observe(recorder: &mut Recorder, raw: &RawBoundary) -> Result<(), 
             && (snapshot.owner, snapshot.depth) != (frame.entry.owner, frame.entry.depth) {
             let resize = frame.operation == Operation::Realloc && frame.entry.registers[1] != 0 && frame.entry.registers[2] > MAX_STOCK_REQUEST;
             return Err(format!("interface returned with unbalanced heap lock{}", if resize { " (approved redesign oversized-resize-rejected-before-lock)" } else { "" }));
+        }
+        if let (Role::Owned, Some(header)) = (role, raw.header) {
+            let request = match frame.operation {
+                Operation::Malloc => Some(u64::from(frame.entry.registers[1])),
+                Operation::Calloc => Some(u64::from(frame.entry.registers[1]) * u64::from(frame.entry.registers[2])),
+                Operation::Realloc => Some(u64::from(frame.entry.registers[2])),
+                _ => None,
+            };
+            if let Some(request) = request {
+                require(u64::from(header & !3) == ((request + 11) & !7).max(16), "owned allocation size class differs from its request")?;
+            }
         }
         if frame.operation == Operation::Lock {
             require(frame.entry.depth.checked_add(1) == Some(snapshot.depth) && snapshot.owner != 0, "heap lock return has no balanced acquisition")?;
@@ -186,7 +197,13 @@ fn consume(inputs: &Inputs, directory: &Path, role: Role, fault: Option<Fault>) 
         Some(Fault::HeaderCorruption) => {
             if let Some(raw) = boundaries.iter_mut().find(|raw| raw.header.is_some()) { raw.header = raw.header.map(|header| header ^ 2); targeted = true; }
         }
-        Some(Fault::WrongSizeClass) => return contract::geometry_control(&inputs.contract).and_then(|_| consume(inputs, directory, role, None)),
+        Some(Fault::WrongSizeClass) => {
+            if let Some(raw) = boundaries.iter_mut().find(|raw| raw.header.is_some() && heap_state::entry(Address(raw.boundary.snapshot.pc.0 & !0x40000000)).is_none()) {
+                raw.header = raw.header.map(|header| header + 8);
+                raw.boundary.snapshot.chunk += 8;
+                targeted = true;
+            }
+        }
         _ => {}
     }
     let mut recorder = Recorder::new();
@@ -213,7 +230,7 @@ fn consume(inputs: &Inputs, directory: &Path, role: Role, fault: Option<Fault>) 
             boundary.snapshot.counts, Some(boundary), raw.image4_seal.as_deref(), &raw.sentinel, images)?;
         let code = admit_image5(boundary, images, lifecycle.phase(), index == 0).map_err(|error| error.to_string())?;
         lifecycle.observe(&boundary.snapshot, code).map_err(|error| format!("raw image5 lifecycle differs: {error:?}"))?;
-        observe(&mut recorder, raw)?;
+        observe(&mut recorder, raw, role)?;
         if role == Role::Owned {
             for allocation in recorder.summary().live_allocations {
                 contract::admit_pointer(&inputs.contract, allocation.address, allocation.usable.0)?;

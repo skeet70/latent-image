@@ -17,12 +17,8 @@ pub(super) fn classes(recorder: &Recorder) -> Vec<WatchClass> {
         [start, start + allocation.requested.0.max(1)]
     }).collect();
     extents.sort_unstable();
-    let group = extents.len().div_ceil((256 - result.len()) / 2).max(1);
+    let group = extents.len().div_ceil(256 - result.len()).max(1);
     for chunk in extents.chunks(group) {
-        result.push(WatchClass {
-            range: [chunk[0][0] - 4, chunk.last().map(|extent| extent[0]).unwrap_or(chunk[0][0])],
-            kinds: vec![Access::CpuRead],
-        });
         result.push(WatchClass {
             range: [chunk[0][0], chunk.iter().map(|extent| extent[1]).max().unwrap_or(chunk[0][1])],
             kinds: vec![Access::CpuWrite],
@@ -165,11 +161,12 @@ impl Guard {
             }
             if row.source == Access::CpuWrite {
                 let pc = u32::try_from(row.pc.ok_or("payload write has no PC")?).map_err(|error| error.to_string())? & !0x40000000;
-                let allocator = CODE.iter().any(|(low, high)| *low <= pc && pc < *high) || owned.contains(&pc)
-                    || (0x89d908..0x89da3c).contains(&pc) || (0x43550..0x4357c).contains(&pc);
-                if !allocator { continue; }
                 let core = row.core.ok_or("payload write has no core")?;
                 let pending = || summary.pending.iter().filter(|frame| Some(frame.entry.context) == contexts[core]);
+                let helper = (0x89d908..0x89da3c).contains(&pc) || (0x43550..0x4357c).contains(&pc);
+                let allocator = CODE.iter().any(|(low, high)| *low <= pc && pc < *high) || owned.contains(&pc)
+                    || helper && pending().any(|frame| matches!(frame.operation, Operation::Malloc | Operation::Free | Operation::Realloc | Operation::Calloc));
+                if !allocator { continue; }
                 for allocation in &summary.live_allocations {
                     let low = u64::from(allocation.address.0 & !0x40000000);
                     if !overlaps(low, low + allocation.requested.0, row) { continue; }

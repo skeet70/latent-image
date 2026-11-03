@@ -181,7 +181,7 @@ fn execute(inputs: &Inputs, role: Role, output: &Path) -> Result<(), String> {
                     raw.boundary.snapshot.counts, Some(&raw.boundary), raw.image4_seal.as_deref(), &raw.sentinel, images)?;
                 let code = admit_image5(&raw.boundary, images, lifecycle.phase(), boundaries.is_empty()).map_err(|error| error.to_string())?;
                 lifecycle.observe(&raw.boundary.snapshot, code).map_err(|error| format!("natural image5 lifecycle: {error:?}"))?;
-                check::observe(&mut recorder, &raw)?;
+                check::observe(&mut recorder, &raw, role)?;
                 begin = raw.boundary.snapshot.counts;
                 boundaries.push(raw);
                 processed = machine.traces.hits.len();

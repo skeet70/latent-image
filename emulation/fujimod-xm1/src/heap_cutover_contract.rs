@@ -59,8 +59,6 @@ pub(super) struct Admitted {
     pub images: Vec<Image>,
     pub owned: BTreeSet<u32>,
     pub premises: Vec<String>,
-    metadata_address: u32,
-    geometry: Geometry,
     arena: Arena,
 }
 
@@ -94,14 +92,6 @@ pub(super) fn admit_pointer(admitted: &Admitted, pointer: Address, bytes: u64) -
     require(pointer.0 & 7 == 0 && low >= u64::from(admitted.arena.pool_start)
         && low.checked_add(bytes).is_some_and(|high| high <= u64::from(admitted.arena.pool_end)),
         "owned payload escapes charged pool")
-}
-
-pub(super) fn geometry_control(admitted: &Admitted) -> Result<(), String> {
-    let mut wrong = admitted.geometry.clone();
-    wrong.second_level_bins *= 2;
-    let mut words = metadata(&admitted.images, admitted.metadata_address)?;
-    words[8] = wrong.second_level_bins;
-    geometry_words(words, &wrong, &admitted.arena)
 }
 
 fn carrier(pc: u32) -> bool { pc & 3 == 0 && CARRIERS.iter().any(|(low, high, _)| *low <= pc && pc.checked_add(4).is_some_and(|end| end <= *high)) }
@@ -347,5 +337,5 @@ pub(super) fn admit(contract_path: &Path, canonical_dat: &Path, candidate_dat: &
     let metadata_address = *contract.symbols.get("XM1_HEAP_METADATA").ok_or("owned backend metadata symbol absent")?;
     geometry(&images, metadata_address, &contract.backend_geometry, &contract.arena)?;
     Ok(Admitted { contract_digest: Digest(sha256(&bytes)), candidate: ValidatedUpdate(candidate), images, owned, premises: contract.conditional_premises,
-        metadata_address, geometry: contract.backend_geometry, arena: contract.arena })
+        arena: contract.arena })
 }
