@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "WpWTcr9ypVuekWi+O1C1mLSRYspLmSDs/kcai4jAIC4=",
+        "bzlTransitiveDigest": "crIr/lt0T1m+jTbOSNCf1Pp0lUmFAHyvzsre6hUVUFw=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -530,6 +530,10 @@
                 "@@//emulation:fujimod-xm1/src/plain_wire.rs": "//emulation:fujimod-xm1/src/plain_wire.rs",
                 "@@//emulation:fujimod-xm1/src/plain_runtime.rs": "//emulation:fujimod-xm1/src/plain_runtime.rs",
                 "@@//emulation:fujimod-xm1/src/plain_check.rs": "//emulation:fujimod-xm1/src/plain_check.rs",
+                "@@//emulation:fujimod-xm1/src/image5_program.rs": "//emulation:fujimod-xm1/src/image5_program.rs",
+                "@@//emulation:fujimod-xm1/src/image5_wire.rs": "//emulation:fujimod-xm1/src/image5_wire.rs",
+                "@@//emulation:fujimod-xm1/src/image5_runtime.rs": "//emulation:fujimod-xm1/src/image5_runtime.rs",
+                "@@//emulation:fujimod-xm1/src/image5_check.rs": "//emulation:fujimod-xm1/src/image5_check.rs",
                 "@@//emulation:fujimod-xm1/src/lib.rs": "//emulation:fujimod-xm1/src/lib.rs",
                 "@@//emulation:fujimod-xm1/src/loader_code.rs": "//emulation:fujimod-xm1/src/loader_code.rs",
                 "@@//emulation:fujimod-xm1/src/machine.rs": "//emulation:fujimod-xm1/src/machine.rs",

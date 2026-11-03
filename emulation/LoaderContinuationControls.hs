@@ -37,7 +37,7 @@ newtype InstructionCount = InstructionCount Integer
 data Verdict = Admit | Refuse deriving Eq
 data Origin = ActualMutation | SerializedSynthetic
 data CallKind = Loader | Image5Wait | Image5Entry | Image5Service | Image5Constructor
-  | PlainProducer | PlainService | PlainHook | Deferred | Task deriving Eq
+  | PlainProducer | PlainService | PlainHook | Deferred | Task | Image5Producer | Image5ProducerService deriving Eq
 data Resource = LoaderA | LoaderB | Image5 | Image5Bss | Plain | Plain0 | Plain2 | Plain3 deriving Eq
 data Access = CpuFetch | CpuRead | CpuWrite | HostRead | HostWrite | ModelBusRead | ModelBusWrite deriving Eq
 data ClockMode = AtBegin | AfterEnd | ReversedClock | ResumedBegin | AtEnd deriving Eq
@@ -156,6 +156,7 @@ parseCallKind value = textAt [field "kind"] value >>= \kind -> case kind of
   "image5-service" -> Right Image5Service; "image5-constructor" -> Right Image5Constructor
   "plain-producer" -> Right PlainProducer; "plain-service" -> Right PlainService
   "plain-hook" -> Right PlainHook; "deferred" -> Right Deferred; "task" -> Right Task
+  "image5-producer" -> Right Image5Producer; "image5-producer-service" -> Right Image5ProducerService
   _ -> Left "unknown wire call kind"
 
 instance J.ToJSON CallKind where
@@ -163,7 +164,8 @@ instance J.ToJSON CallKind where
     Loader -> "loader"; Image5Wait -> "image5-wait"; Image5Entry -> "image5-entry"
     Image5Service -> "image5-service"; Image5Constructor -> "image5-constructor"
     PlainProducer -> "plain-producer"; PlainService -> "plain-service"
-    PlainHook -> "plain-hook"; Deferred -> "deferred"; Task -> "task" :: String)
+    PlainHook -> "plain-hook"; Deferred -> "deferred"; Task -> "task"
+    Image5Producer -> "image5-producer"; Image5ProducerService -> "image5-producer-service" :: String)
 
 parseResource :: J.Value -> Either String Resource
 parseResource value = textAt [field "resource"] value >>= \resource -> case resource of

@@ -1,0 +1,111 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_binary(
+    name = "image5-load-source",
+    srcs = ["SourceMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//emulation:case-sha256",
+        "//host:directory",
+        "//replacement/media_permit:stock-inventory",
+    ],
+)
+
+xm1_rust_staticlib(
+    name = "image5-load-rust",
+    src = "src.rs",
+    crate_name = "xm1_image5_load",
+)
+
+xm1_rust_elf(
+    name = "image5-load-image",
+    rust_staticlib = ":image5-load-rust",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_image5_load_entry",
+    link_script = "image5-load.ld",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
+
+haskell_library(
+    name = "image5-load-artifact",
+    srcs = [
+        "Replacement/Image5Load/Admission.hs",
+        "Replacement/Image5Load/Artifact.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "stage-image5-load",
+    srcs = ["StageMain.hs"],
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+    ],
+    data = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":image5-load-artifact",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "image5-load-tests",
+    srcs = ["Tests.hs", "Fixtures.hs"],
+    main_file = "Tests.hs",
+    args = [
+        "$(rootpath :image5-load-image.bin)",
+        "$(rootpath :image5-load-image.symbols)",
+    ],
+    data = [":image5-load-image.bin", ":image5-load-image.symbols"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":image5-load-artifact",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:update-container",
+    ],
+)
+
+haskell_test(
+    name = "image5-load-artifact-tests",
+    srcs = ["ArtifactTests.hs"],
+    args = [
+        "$(rootpath :image5-load-image.bin)",
+        "$(rootpath :image5-load-image.symbols)",
+    ],
+    data = [":image5-load-image.bin", ":image5-load-image.symbols"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":image5-load-artifact",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
