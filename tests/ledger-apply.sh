@@ -53,9 +53,11 @@ done
 
 printf '%s' '{}' > transform.json
 for bad_ledger in \
-  '{"id":"x-a"}\n{"id":"x-a"}\n' \
-  '{"id":"x-a"}\n\n{"id":"x-b"}\n' \
   '{"id":"x-a"}{"id":"x-b"}\n' \
+  '{"id":"x-a"}{"id":"x-b"}\n{"id":"x-c",\n"v":1}\n' \
+  '{"id":"x-a\\tx"}\n' \
+  '{"id":"x-a"}\n\n{"id":"x-b"}\n' \
+  '{"id":"x-a"}\n{"id":"x-a"}\n' \
   '{"id":"x-a"}'; do
   printf "$bad_ledger" > ledger.jsonl
   cp ledger.jsonl before.jsonl

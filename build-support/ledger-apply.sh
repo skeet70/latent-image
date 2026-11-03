@@ -17,9 +17,9 @@ refuse() {
 }
 
 [[ -s "$ledger" && "$(tail -c 1 "$ledger" | od -An -c | tr -d ' ')" == '\n' ]] || refuse "$ledger must end with a newline"
-awk 'NF == 0 { exit 1 }' "$ledger" || refuse "$ledger has a blank line"
+"$jq" -nRe 'all(inputs; [fromjson?] | length == 1 and (.[0] | type) == "object")' "$ledger" > /dev/null \
+  || refuse "$ledger must hold exactly one record per line"
 "$jq" -r .id "$ledger" > "$work/ids"
-[[ "$(wc -l < "$work/ids")" -eq "$(wc -l < "$ledger")" ]] || refuse "$ledger must hold exactly one record per line"
 "$jq" -s -e 'length == 1 and (.[0] | type) == "object"' "$transform" > /dev/null || refuse "$transform must hold one JSON object"
 
 "$jq" -r --rawfile ids "$work/ids" '
