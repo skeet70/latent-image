@@ -253,10 +253,11 @@ timeDrivenBlock = S.fromList [0x1c9, 0x1c8, 0x27f, 0x280]
 timeDrivenExclusion :: T.Text
 timeDrivenExclusion = T.unwords
   [ "These edges write only the 0x1c9/0x1c8/0x27f/0x280 block, which recurs in blocks of four on 1,120 of"
-  , "crawl-4's 4,528 reached edges, so their effect count follows elapsed instructions, not the keys. In natural-1 run 3,"
-  , "crawl-trial-01462's last step exhausted its 90M budget retained (32 block calls, as in crawl-4) and"
-  , "settled owned after 32.5M (16 calls, then 0x278 and 0x279 on both banks); the getter (lr, r0-r3,"
-  , "result) sets agree with no conflicting result, and every other route's effects matched in both roles." ]
+  , "crawl-4's 4,528 reached edges; all of them exhausted their 90M budget in crawl-4, so whether their key"
+  , "is accepted depends on render-drain timing. In natural-1 run 3, crawl-trial-01462's OK was not consumed"
+  , "within 90M retained (32 block calls, as in crawl-4), while owned consumed it after 32.5M and opened"
+  , "SHOOTING MENU (1,5,2), setting 0x278 and 0x279 on both banks, as stock crawl-4 trial 1364 does from the"
+  , "same live view without the overlay; the getter (lr, r0-r3, result) sets agree with no conflicting result." ]
 
 -- | Why `selectCrawlRoutes` leaves out edges from the screen PLAY opens without a card.
 playbackExclusion :: T.Text
