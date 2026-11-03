@@ -1,0 +1,51 @@
+def reads: [["dispatcher-first-word", "00bfb028", 4], ["modal75-state", "0146761e", 2], ["modal75-event", "0146777a", 2], ["open-node", "009571d0", 4], ["resident", "runtime:rb_resident", 1024], ["live-settings", "0096cc64", 450]];
+def keep_resident: [{"read": "resident", "phase": "package-menu-prefix", "source_read": "resident"}];
+def steps($list): [$list[] | [.[0]] + .[1]];
+def trace_sites: [
+  ["00bfb028", "shared-modal-entry"],
+  ["00bfb02c", "stock-fallback-body"],
+  ["runtime:rb_call_transition", "owned-transition-call"],
+  ["runtime:rb_call_stage_open", "stage-open-call"],
+  ["00c6e378", "stock-picker-up"],
+  ["00c6eb44", "stock-picker-down"],
+  ["00c6f14c", "stock-picker-left"],
+  ["00c70528", "stock-picker-right"],
+  ["00c72e10", "stock-picker-ok"],
+  ["00c76650", "stock-picker-back"],
+  ["00c7a514", "stock-picker-router-tail"],
+  ["00c7985c", "retired-c7985c"],
+  ["00c79a40", "retired-c79a40"],
+  ["00c7a6ac", "retired-c7a6ac"],
+  ["00c7a7e4", "retired-c7a7e4"],
+  ["00c7a978", "retired-c7a978"],
+  ["00c7ac84", "retired-c7ac84"],
+  ["00c7aef4", "retired-c7aef4"],
+  ["00c7af6c", "retired-c7af6c"],
+  ["00c7afc8", "retired-c7afc8"]
+];
+def segment($phase; $capture; $list): {"phase": $phase, "capture": $capture, "steps": steps($list), "reads": reads, "read_preservations": keep_resident};
+[ .[] as $c
+  | ($c.keys | .[0:1]) as $enter
+  | { name: "picker-\($c.setting)",
+      doc: {
+        "schema": 1,
+        "entry": "Stock-dispatcher control and owned-picker candidate for the setting-\($c.setting) picker (crawl-5 node \($c.picker)). The qualified package prefix uses MENU to reach the live view (67,56,0), crawl-5 root 0; the route follows crawl-5's recorded path to the picker's row. In the picker, DOWN and UP move one row and back, RIGHT leaves the picker open, LEFT and OK leave it with the selected value, and BACK leaves it; DOWN, UP and entering post the property's value event 0x1d when 0x00d586bc reports it and BACK may post property 0x27d (E-MENU-ENGINE-OBSERVE-150); live-setting stores are admitted only from the stock property setter, in both roles. After rollback OK and BACK run through the restored stock dispatcher. Every expected menu tuple is a crawl-5 edge's landing\(if $c.setting == 214 then ", except the DOWN and UP pair, which crawl-5 did not expand from the picker's second and third rows and which this file observes" else "" end).",
+        "source_bindings": [
+          {"source": "private-data/scratch/ControllerStrategy/crawl-5/crawl-graph.json (mechanism d49b2c80, E-MODAL-MENU-OKPATHS-150): node \($c.picker) path \($c.route | map(.[0]) + ["ok"] | join(","))", "expectation": "Each step's menu tuple is the landing of the crawl-5 edge for that key from the previous step's screen."},
+          {"source": "private-data/scratch/ControllerStrategy/picker-fold/picker-document.json", "expectation": "Controller-75 state-0 cells for events 0, 2, 4, 6, 8, 13 and 49 are picker cells, and node \($c.setting)'s record is a picker node."}
+        ],
+        "trace_sites": trace_sites,
+        "before_unload": (
+          [ {"phase": "package-menu-prefix", "capture": "picker-live-view", "steps": [["menu", 67, 56, 0]], "reads": reads},
+            segment("picker-route"; "picker-parent"; $c.route) ]
+          + (if $c.setting == 214
+             then [ segment("owned-picker-enter"; "owned-picker-entered"; $enter),
+                    (segment("owned-picker-move"; "owned-picker-moved"; [["down", [1, 214, 1]], ["up", [1, 214, 0]]]) + {"observe": true}),
+                    segment("owned-picker-keys"; "owned-picker-keys"; $c.from_picker) ]
+             else [ segment("owned-picker-keys"; "owned-picker-keys"; $c.keys) ]
+             end)),
+        "after_unload": [
+          (segment("unloaded-picker"; "unloaded-picker"; (if $c.setting == 214 then $c.from_picker_after else $c.after end)) + {"read_expectations": [{"read": "dispatcher-first-word", "hex": "f04f2de9"}]})
+        ]
+      } } ]
+

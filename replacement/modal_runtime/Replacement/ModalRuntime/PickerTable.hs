@@ -1,9 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The owned picker table (`picker.rs` PickerTable expression): picker nodes
--- from census-5 and the decoded menu tables, checked against image4, and the
--- controller-75 key cells from image5, checked against the controller
--- manifest.
+-- | The picker document `//replacement/modal_runtime:controller75-table`
+-- takes as `--picker`: picker nodes from census-5 and the decoded menu
+-- tables, checked against image4, and the controller-75 key cells from
+-- image5, checked against the controller manifest.
 module Replacement.ModalRuntime.PickerTable
   ( Image (..)
   , NodeAddress (..)
@@ -31,8 +31,7 @@ module Replacement.ModalRuntime.PickerTable
   , contractCells
   , pickerDispatches
   , generate
-  , rustTable
-  , reportJson
+  , pickerDocument
   ) where
 
 import Control.Monad (unless, when)
@@ -87,8 +86,8 @@ data PickerNode = PickerNode {pickerNode :: NodeAddress, pickerProperty :: Prope
 data PickerAction = Up | Down | Left' | Right' | Ok | Back | RouterTail
   deriving (Eq, Show, Enum, Bounded)
 
-rustAction :: PickerAction -> String
-rustAction action = case action of
+actionName :: PickerAction -> String
+actionName action = case action of
   Left' -> "Left"
   Right' -> "Right"
   _ -> show action
@@ -346,21 +345,8 @@ resolveCell image (Manifest controllers) spec@(CellSpec (Controller c) (State s)
 
 -- * Output
 
-rustTable :: [String] -> Generated -> String
-rustTable header generated = unlines
-  ( map ("// " ++) header
-    ++ ["PickerTable {", "    nodes: &["]
-    ++ [ "        PickerNode { node: NodeAddress(" ++ hex address ++ "), property: PropertyId(" ++ show p ++ ") },"
-       | PickerNode (NodeAddress address) (PropertyId p) <- generatedNodes generated ]
-    ++ ["    ],", "    cells: &["]
-    ++ [ "        PickerCell { controller: " ++ show c ++ ", state: " ++ show s ++ ", event: " ++ show e
-           ++ ", word: " ++ hex word ++ ", target: " ++ hex target ++ ", action: PickerAction::" ++ rustAction (specAction spec) ++ " },"
-       | PickerCell spec (CellWord word) (ActionAddress target) <- generatedCells generated
-       , let Controller c = specController spec; State s = specState spec; Event e = specEvent spec ]
-    ++ ["    ],", "}"] )
-
-reportJson :: [(String, String)] -> Generated -> J.Value
-reportJson digests generated = J.object
+pickerDocument :: [(String, String)] -> Generated -> J.Value
+pickerDocument digests generated = J.object
   [ "schema" .= (2 :: Int)
   , "inputs_sha256" .= M.fromList digests
   , "node_selection" .= J.object
@@ -374,7 +360,7 @@ reportJson digests generated = J.object
   , "cells" .= [ J.object
                   [ "controller" .= c, "state" .= s, "event" .= e
                   , "word" .= hex word, "target" .= hex target
-                  , "action" .= rustAction (specAction spec)
+                  , "action" .= actionName (specAction spec)
                   , "manifest" .= ("equal" :: String)
                   ]
                | PickerCell spec (CellWord word) (ActionAddress target) <- generatedCells generated
