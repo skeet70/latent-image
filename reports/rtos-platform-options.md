@@ -486,7 +486,7 @@ Order of work:
   - Stack high-water was 304 bytes on each domain; A's is a lower bound, since the allocator fills its stack with zeros.
 - **No executors:** the same hook and route with nothing created produce the same four captures as the demonstration (PNG and source-plane digests).
 - **No pender kernel:** the tickers keep running, and B receives none of its 3 doorbells, with no traced `+0x2c` for B.
-- **Counter down:** both domains measure the up-counting model, fall back to tick-only time, keep their timers on schedule and still receive every doorbell.
+- **Counter down:** both domains measure the up-counting model, fall back to tick-only time and keep their timers on schedule, and B still receives every doorbell.
 
 **Limits:**
 
