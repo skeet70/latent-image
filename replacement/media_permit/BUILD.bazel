@@ -152,12 +152,10 @@ haskell_binary(
     ],
 )
 
-haskell_binary(
-    name = "file-manifest",
-    srcs = ["FileManifestMain.hs"],
-    main_file = "FileManifestMain.hs",
+haskell_library(
+    name = "service-inventory",
+    srcs = ["ServiceInventory.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    visibility = ["//visibility:public"],
     deps = [
         ":stock-inventory",
         "//host:aeson",
@@ -165,8 +163,41 @@ haskell_binary(
         "//host:bytestring",
         "//host:containers",
         "//host:cryptohash-sha256",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "file-manifest",
+    srcs = ["FileManifestMain.hs"],
+    main_file = "FileManifestMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":service-inventory",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
         "//host:directory",
         "//host:json",
         "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "render-manifest",
+    srcs = ["RenderManifestMain.hs"],
+    main_file = "RenderManifestMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":service-inventory",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:json",
     ],
 )
