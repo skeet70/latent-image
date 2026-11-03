@@ -262,6 +262,27 @@ Each role passes one unchanged serialized admission and fourteen exact typed ref
 
 Qualification is `natural-read-success-observed-boundaries`. Paused mapping samples do not exclude transient remaps; sampled frames do not prove continuous stack confinement; finite halos do not prove whole-machine write confinement. Nonzero mode, missing-segment nonreturn, read-failure/error-side publication, nonreturning hooks, complete retained-service/resource lifetimes, copied-body/computed-caller closure and physical cache coherence remain unqualified. A composite scoped/classified SDK guard is separate work; see report 8.15.
 
+## Image5 producer
+
+`replacement/image5_load` owns the second #153 component, the image5 producer `[0x6a96c0,0x6a9844)` (source contract `//replacement/image5_load:image5-load-source`). Retained services are segment lookup `0x657114`, loader-A marker `0x42188`, fill request `0x66609c` with fill-done callback `0x6a8bec`, mode `0x657184`, decoder init/feed/finish `0x6ae360 / 0x6ae500 / 0x6ae3f4`, storage read `0x6a8f1c`, CPU fill `0x7221c8` and cache maintenance `0x42634`, all bound by `image5-load.ld`. The decoder, its IRQ98 completion `0x6ae310`, engine and resource `0x48` stay retained.
+
+Rust follows the stock order: `0x657114(5)` with a NULL self-loop; `+0x14`, `+0x18`; marker `MAIN_S`; `+0xc`, and `+0x10` only when the base is word-aligned. With both aligned it stores 0 to flag `0x89f8ac` and requests `0x66609c(base,length>>2,0,0x6a8bec)`; result 0 selects the polled completion, anything else the CPU fill. Read mode (`0x657184()==0`) emits `LMAIN_S`, reads `+0x4`, calls decoder init with staging `0x43e40000`, storage read `(block,count,0x43e40000,0x6ae500,1)`, `LMAIN_E`, `DMAIN_S`, decoder finish and `DMAIN_E`; skip mode calls only the storage read with a NULL feed. Then it polls the flag until nonzero, or rereads `+0xc`/`+0x10` and calls `0x7221c8(base,0,length)` and `0x42634(0,0)`. It emits `MAIN_E` and returns the storage status in both modes.
+
+The adapter saves `{r11,lr}`, calls Rust, sets LR to the stock final value `0x422b8` with MOVW/MOVT and pops. The image links to exactly 388 bytes: a 20-byte adapter plus 368 Rust bytes, of which 20 are literals. The admitted Rust entry is `0x6a96d4`, NULL refusal `0x6a9790` and adapter return `0x6a96d0`; caller scratch reaches incoming SP-48, versus the original producer's SP-40.
+
+Admission extends the plain symbolic machine with an independently written stock-ordered effect oracle: per-ordinal temporal field reads, a fill-flag store that must be 0, flag reads drawn from finite scenarios (zero k times, then nonzero), fifth stack argument 1 and LR `0x422b8`. The corpus covers both modes, aligned/misaligned base and length, accepted and rejected fill results, wait lengths, rounding/wrapping lengths, storage statuses, fixed and varying ignored results and the NULL segment. `image5-load-tests` admits the emitted image and runs 78 hand-assembled programs: four positive controls and 74 exact typed refusals, including wrong call order or argument, missing or wrong flag store, missing or inverted wait, wrong fifth argument, wrong or stale-continuation LR, unrestored register, extra external call and carrier overflow.
+
+```sh
+devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" test --jobs=2 \
+  //replacement/image5_load:image5-load-tests \
+  //replacement/image5_load:image5-load-artifact-tests
+devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
+  //replacement/image5_load:stage-image5-load -- \
+  "$SOURCE_DAT" "$IMAGE4" "$LINKED_BIN" "$SYMBOLS" "$NEW_OUTPUT_DIR"
+```
+
+The stager creates `NEW_OUTPUT_DIR` under `private-data/scratch` and writes `candidate.DAT`, `image5-load-v1.bin`, `image5-load-v1.symbols` and `owned-image5-stage-v1-contract.json`. The contract's `image5_load` object carries the derived execution PCs, call sites, return PCs, NULL refusal PC and scratch low-water, plus `fill_callback`, `feed_callback`, `fill_flag` and `return_lr`. Admission is conditional on a nonaliasing segment record, a flag written only by the producer and `0x6a8bec`, and retained AAPCS services. It does not qualify natural loading, decoded image5 bytes or BSS contents.
+
 ## Shared initial idle task (#152)
 
 `replacement/idle_task` implements the complete shared idle102/103 entry `[0x69cbf0,0x69cc00)` as a Rust divergent WFI loop. The linker enforces the16-byte carrier and excludes writable sections. There is no production stock fallback, allocation, shared predicate, retained service call or return. Root104, standby93, task creation, scheduler/trampolines and interrupt/device services remain retained.
