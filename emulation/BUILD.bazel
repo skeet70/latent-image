@@ -871,7 +871,7 @@ haskell_test(
 
 haskell_test(
     name = "fujimod-xm1-tests",
-    size = "small",
+    size = "medium",
     srcs = ["FujimodXm1Tests.hs"],
     args = ["$(rootpath @lab_fujimod_xm1//:test-manifest)"],
     data = [
@@ -1057,6 +1057,24 @@ haskell_binary(
         ":render-comparison-lib",
         "//host:base",
         "//host:filepath",
+    ],
+)
+
+haskell_binary(
+    name = "modal-settings-compare",
+    srcs = ["ModalSettingsCompare.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        ":modal-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
     ],
 )
 
@@ -1462,6 +1480,12 @@ sh_binary(
 sh_binary(
     name = "rtos-census",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-rtos-census"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
+    name = "root-compact",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-root-compact"],
     visibility = ["//visibility:public"],
 )
 
@@ -3033,6 +3057,12 @@ sh_binary(
 )
 
 sh_binary(
+    name = "loader-startup-capture",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-loader-continuations"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
     name = "idle-tasks",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-idle-tasks"],
     visibility = ["//visibility:public"],
@@ -3150,6 +3180,7 @@ haskell_library(
         "//host:bytestring",
         "//host:containers",
         "//host:json",
+        "//host:text",
         "//host:update-container",
         "//host/firmware:bank-allowlist",
         "//replacement/kernel_install:kernel-install-artifact",
@@ -3170,5 +3201,25 @@ haskell_binary(
         ":task-memory-witness-lib",
         ":task-witness-cli-lib",
         "//host:base",
+    ],
+)
+
+haskell_binary(
+    name = "root-compact-equivalence",
+    srcs = ["RootCompactEquivalenceMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:json",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
     ],
 )

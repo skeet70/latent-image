@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "entry": "Matched default223 stock-dispatcher control and owned-generic modal224 candidate. The qualified package prefix uses MENU to reach the live view (67,56,0), crawl-3 root 0. Q opens the Q menu, where controller 75 moves from state 0 to 43 and dispatches event 50, the owned layer-(a) cell whose stock action is 0x00c7a7e4. BACK returns to the live view through (43,13) and (43,50) and leaves controller 75 in state 0; the menu tuple keeps the Q menu's (122,5,1), as the packaged route keeps (1,5,6) after its BACK to the live view. After rollback the same keys run through the restored stock dispatcher. Resident and live-setting bytes are observed without host seeding. The live-setting snapshot is preserved only through the Q menu: BACK makes the stock property setter store 0x0096ccca 0x20->0x21 in both roles, which the lifetime guard's settings-write comparison covers. The retired-body and owned-transition trace sites fire only at controller-75 layer-(a) dispatches.",
+  "source_bindings": [
+    {"source": "emulation/modal75-packaged-route-trajectories.json: package-menu-prefix, modal75-handback and unloaded-shooting", "expectation": "The installed package uses the qualified MENU prefix to the live view, and a BACK to the live view keeps the last menu tuple."},
+    {"source": "private-data/scratch/ControllerStrategy/crawl-3/crawl-graph.json (mechanism 557024fc): edge 0->150 q (trial 1934) and edge 150->247 back (trial 1440); node 150 menu (122,5,1)", "expectation": "From the live view Q reaches the Q-menu frame with controller 75 state 0 to 43 and dispatches (0,50) 0x00c7a528 and (43,50) 0x00c7a7e4. BACK from the Q menu, observed only for node 150 reached through node 247, dispatches (43,13) 0x00c763bc and (43,50) 0x00c7a7e4 and returns controller 75 to state 0."},
+    {"source": "private-data/scratch/ControllerPilot75/run-stock223 and run-stock223b", "expectation": "The crawl-3 shooting-menu route to (36,330,0) changes live-setting byte 0x0096ccd2 under the stock dispatcher at the OK entering (1,321,17), which the lifetime guard refuses."},
+    {"source": "reports/recipe-bank-ui-ownership.md section Controller75 generic controller, host evidence", "expectation": "(state 43, event 50) is an owned RouteToTransition cell, Generic(3); stock bodies of all nine layer-(a) callbacks are retired."}
+  ],
+  "trace_sites": [
+    ["00bfb028", "shared-modal-entry"],
+    ["00bfb02c", "stock-fallback-body"],
+    ["runtime:rb_call_transition", "owned-transition-call"],
+    ["00c7985c", "retired-c7985c"],
+    ["00c79a40", "retired-c79a40"],
+    ["00c7a6ac", "retired-c7a6ac"],
+    ["00c7a7e4", "retired-c7a7e4"],
+    ["00c7a978", "retired-c7a978"],
+    ["00c7ac84", "retired-c7ac84"],
+    ["00c7aef4", "retired-c7aef4"],
+    ["00c7af6c", "retired-c7af6c"],
+    ["00c7afc8", "retired-c7afc8"]
+  ],
+  "before_unload": [
+    {"phase": "package-menu-prefix", "capture": "owned75-live-view",
+     "steps": [["menu", 67, 56, 0]],
+     "reads": [["dispatcher-first-word", "00bfb028", 4], ["modal75-state", "0146761e", 2], ["modal75-event", "0146777a", 2], ["modal75-cell-43-50", "00cd3f80", 4], ["modal75-action-278", "00d044d8", 4], ["resident", "runtime:rb_resident", 1024], ["live-settings", "0096cc64", 450]]},
+    {"phase": "owned75-qmenu", "capture": "owned75-qmenu",
+     "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000},
+     "steps": [["q", 122, 5, 1]],
+     "reads": [["dispatcher-first-word", "00bfb028", 4], ["modal75-state", "0146761e", 2], ["modal75-event", "0146777a", 2], ["modal75-cell-43-50", "00cd3f80", 4], ["modal75-action-278", "00d044d8", 4], ["resident", "runtime:rb_resident", 1024], ["live-settings", "0096cc64", 450]],
+     "read_preservations": [{"read": "resident", "phase": "package-menu-prefix", "source_read": "resident"}, {"read": "live-settings", "phase": "package-menu-prefix", "source_read": "live-settings"}]},
+    {"phase": "owned75-handback", "capture": "owned75-handback",
+     "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000},
+     "steps": [["back", 122, 5, 1]],
+     "reads": [["dispatcher-first-word", "00bfb028", 4], ["modal75-state", "0146761e", 2], ["modal75-event", "0146777a", 2], ["resident", "runtime:rb_resident", 1024], ["live-settings", "0096cc64", 450]],
+     "read_preservations": [{"read": "resident", "phase": "package-menu-prefix", "source_read": "resident"}]}
+  ],
+  "after_unload": [
+    {"phase": "unloaded-qmenu", "capture": "unloaded-qmenu",
+     "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000},
+     "steps": [["q", 122, 5, 1]],
+     "reads": [["dispatcher-first-word", "00bfb028", 4], ["modal75-state", "0146761e", 2], ["modal75-event", "0146777a", 2], ["resident", "runtime:rb_resident", 1024], ["live-settings", "0096cc64", 450]],
+     "read_preservations": [{"read": "resident", "phase": "package-menu-prefix", "source_read": "resident"}],
+     "read_expectations": [{"read": "dispatcher-first-word", "hex": "f04f2de9"}]},
+    {"phase": "unloaded-handback", "capture": "unloaded-handback",
+     "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000},
+     "steps": [["back", 122, 5, 1]],
+     "reads": [["dispatcher-first-word", "00bfb028", 4], ["modal75-state", "0146761e", 2], ["modal75-event", "0146777a", 2], ["resident", "runtime:rb_resident", 1024], ["live-settings", "0096cc64", 450]],
+     "read_preservations": [{"read": "resident", "phase": "package-menu-prefix", "source_read": "resident"}],
+     "read_expectations": [{"read": "dispatcher-first-word", "hex": "f04f2de9"}]}
+  ]
+}
