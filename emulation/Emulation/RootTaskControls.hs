@@ -5,6 +5,7 @@ import qualified A32 as A
 import Control.Monad (foldM, unless, zipWithM)
 import qualified Data.Aeson as J
 import qualified Data.Aeson.KeyMap as KM
+import Data.Aeson.Types (parseEither)
 import Data.Bits ((.&.), (.|.), xor)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
@@ -132,7 +133,7 @@ refusalControls role sources original = do
   baseline <- either (Left . BaselineRejected) Right (admitReceipt inputs original)
   receiptValue <- either (const (Left (MutationRejected MissingSample))) Right (decodeStrictIntegers (observedReceipt original))
   watchValue <- either (const (Left (MutationRejected WrongRawSidecar))) Right (decodeStrictIntegers (observedWatch original))
-  receipt <- parse MissingSample receiptValue
+  receipt <- either (const (Left (MutationRejected MissingSample))) Right (parseEither (receiptWith (observedBytes original)) receiptValue)
   watch <- parse WrongRawSidecar watchValue
   results <- mapM (run inputs receiptValue watchValue receipt watch) [minBound..maxBound]
   withoutSummaries <- modifyAt MissingSample [field "samples"] (\raw -> do
@@ -155,6 +156,21 @@ refusalControls role sources original = do
       let plain value = Right (Nothing,original {observedReceipt=encode value})
           source value = Right (Just value,original)
           changedWatch value = do observed <- withHash control original receiptValue value; pure (Nothing,observed)
+          flipStackByte index = do
+            let path = [field "samples",Element index,field "interrupt_stack",field "bytes"]
+            holder <- pathAt control path receiptValue
+            case holder of
+              J.Array _ -> do
+                old <- pathAt control (path++[Element 12]) receiptValue >>= parse control :: Either ControlError Word32
+                set control (path++[Element 12]) (old `xor` 1) receiptValue >>= plain
+              J.Object _ -> do
+                offset <- pathAt control (path++[field "offset"]) receiptValue >>= parse control :: Either ControlError Int
+                let blob = observedBytes original; location = offset+12
+                unless (location < B.length blob) (Left (MutationRejected control))
+                let changed = B.take location blob <> B.singleton (B.index blob location `xor` 1) <> B.drop (location+1) blob
+                bound <- set control [field "compact",field "blob_sha256"] (hash changed) receiptValue
+                pure (Nothing,original {observedReceipt=encode bound,observedBytes=changed})
+              _ -> Left (MutationRejected control)
           samples = receiptSamples receipt
           sampleAt index = samples !! index
           primary sample = contextCore (sampleContext sample) == S.PrimaryKernel
@@ -306,11 +322,7 @@ refusalControls role sources original = do
           unless (not (IntSet.null excluded)) (Left (MutationRejected control))
           dropSamples control excluded receiptValue >>= plain
         MaskedCallbackInterrupt -> alterContext (callback 0x69cc18) "cpsr" (.|. 0x80)
-        WrongCallbackDispatcherFrame -> do
-          entered <- callback 0x69cc18
-          let path = [field "samples",Element entered,field "interrupt_stack",field "bytes",Element 12]
-          old <- pathAt control path receiptValue >>= parse control :: Either ControlError Word32
-          set control path (old `xor` 1) receiptValue >>= plain
+        WrongCallbackDispatcherFrame -> callback 0x69cc18 >>= flipStackByte
         MissingCallbackInterruptStack -> do
           entered <- callback 0x69cc18
           set control [field "samples",Element entered,field "interrupt_stack"] J.Null receiptValue >>= plain
@@ -319,9 +331,7 @@ refusalControls role sources original = do
           ending <- after control receipt entered (\sample -> pc sample == 0x69cc68 && contextCore (sampleContext sample) == contextCore (sampleContext (sampleAt entered)))
           returned <- after control receipt ending (\sample -> pc sample == Plan.physical (address (W.contextLr (state (sampleAt entered))))
             && contextCore (sampleContext sample) == contextCore (sampleContext (sampleAt entered)))
-          let path = [field "samples",Element returned,field "interrupt_stack",field "bytes",Element 12]
-          old <- pathAt control path receiptValue >>= parse control :: Either ControlError Word32
-          set control path (old `xor` 1) receiptValue >>= plain
+          flipStackByte returned
         DisabledCallbackAtcm -> do
           entered <- callback 0x69cc18
           set control [field "samples",Element entered,field "context",field "tcm",Element 0,Element 1] (0 :: Word32) receiptValue >>= plain

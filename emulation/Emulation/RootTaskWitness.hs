@@ -1055,7 +1055,8 @@ checkRootInterval _ entry episodes (CompletionWitness completion ending) watch =
 
 admitReceipt :: Inputs -> ObservedFiles -> Either WitnessError QualifiedReceipt
 admitReceipt inputs observed = do
-  receipt <- parse ReceiptDecodeRejected (observedReceipt observed)
+  value <- either (const (Left ReceiptDecodeRejected)) Right (decodeStrictIntegers (observedReceipt observed))
+  receipt <- either (const (Left ReceiptDecodeRejected)) Right (parseEither (receiptWith (observedBytes observed)) value)
   require (receiptSchema receipt == 1 && receiptRole receipt == inputRole inputs && receiptOutcome receipt == S.ObservedMenu
     && receiptError receipt == Nothing && receiptMachineFailure receipt == Nothing && receiptWatchEndError receipt == Nothing
     && receiptWatch receipt == S.WatchOk True Nothing && receiptMenu receipt == S.MenuOk (Just [1,5,2])) StatusRejected
