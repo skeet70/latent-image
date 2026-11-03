@@ -1,6 +1,14 @@
 //! A cell named by the build-time table runs its owned action while the live
 //! cell word, action target and, for a positive high halfword, transition
 //! entry still equal the table's; every other cell runs the stock action.
+//!
+//! The owned path reads the full cell word and the selected transition entry
+//! before the action; stock reads neither then. The modal guard watches
+//! writes and fetches only.
+//!
+//! Premise `transition-router-register-inputs` (E-MODAL75-TRANSITION-PREMISE-150):
+//! `0xc12aac` and its callees read no incoming r0-r3 or r11 beyond their
+//! declared arguments.
 
 #![cfg_attr(not(test), allow(dead_code))]
 
