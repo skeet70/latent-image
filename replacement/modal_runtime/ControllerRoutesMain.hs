@@ -39,7 +39,7 @@ data CellField = StateCell | EventCell deriving (Eq, Ord, Show)
 -- A value the router reads from outside its own registers. Memory words are
 -- identified by address only: see `stableMemoryPremise`.
 data Symbol
-  = MemorySymbol AccessBytes Word32
+  = MemorySymbol AccessBytes Bool Word32
   | ResultSymbol CodeAddress CodeAddress
   | QuerySymbol CodeAddress [Word32]
   | ArgumentSymbol Int
@@ -70,6 +70,8 @@ data PathState = PathState
   { pathPc :: Word32
   , pathRegisters :: M.Map A.Reg Val
   , pathFlags :: Flags
+  -- Outcomes chosen for conditions on the current unmodelled flags.
+  , pathDecided :: [(A.Cond, Bool)]
   , pathMemory :: M.Map Word32 (A.Width, Val)
   , pathDomains :: M.Map Symbol Domain
   , pathAtoms :: [Atom]
@@ -77,6 +79,9 @@ data PathState = PathState
   , pathCalls :: [Call]
   , pathVisits :: M.Map Word32 Int
   }
+
+withFlags :: Flags -> PathState -> PathState
+withFlags flags state = state {pathFlags = flags, pathDecided = []}
 
 data Route = Route
   { routeRouter :: Router
@@ -247,28 +252,28 @@ resultDomain (A.Cond condition) = case condition of
   5 -> Just (normalize [(0, 0x7fffffff)])
   _ -> Nothing
 
-evaluate :: A.Cond -> Word32 -> Maybe Bool
-evaluate condition value = do
-  Domain spans <- compareDomain condition 0
-  pure (any (\(a, b) -> toInteger value >= a && toInteger value <= b) spans)
-
 -- Splits a state on a condition into the states where it holds and fails.
 branchOn :: CodeAddress -> A.Cond -> PathState -> [(Bool, PathState)]
 branchOn site condition state
   | condition == A.Cond 14 = [(True, state)]
   | otherwise = case pathFlags state of
-      CompareFlags (Known x) c -> decided (evaluate condition (x - c))
+      CompareFlags (Known x) c -> decided (member x <$> compareDomain condition c)
       ResultFlags (Known x) -> decided (resultDomain condition >>= \domain -> pure (member x domain))
       CompareFlags (Offset symbol k) c | Just holds <- compareDomain condition c -> constrained symbol k holds
       ResultFlags (Offset symbol k) | Just holds <- resultDomain condition -> constrained symbol k holds
-      _ -> [(outcome, state {pathAtoms = UnmodelledCondition site condition outcome operands : pathAtoms state}) | outcome <- [True, False]]
+      _ -> unmodelled
   where
     member x (Domain spans) = any (\(a, b) -> toInteger x >= a && toInteger x <= b) spans
     decided (Just outcome) = [(outcome, state)]
-    decided Nothing = [(outcome, state {pathAtoms = UnmodelledCondition site condition outcome Nothing : pathAtoms state}) | outcome <- [True, False]]
+    decided Nothing = unmodelled
     operands = case pathFlags state of
       OperandFlags left right -> Just (left, right)
       _ -> Nothing
+    -- Unmodelled flags tested again on one path keep their first outcome.
+    unmodelled = case [outcome | (tested, outcome) <- pathDecided state, tested == condition] ++ [not outcome | (tested, outcome) <- pathDecided state, tested == A.negateCond condition] of
+      outcome : _ -> [(outcome, state)]
+      [] -> [ (outcome, state {pathAtoms = UnmodelledCondition site condition outcome operands : pathAtoms state, pathDecided = (condition, outcome) : pathDecided state})
+            | outcome <- [True, False] ]
     constrained symbol k holds =
       [ (outcome, state {pathDomains = M.insert symbol narrowed (pathDomains state)})
       | (outcome, values) <- [(True, holds), (False, complementDomain holds)]
@@ -305,15 +310,19 @@ registerValue state pc register
 setRegister :: A.Reg -> Val -> PathState -> PathState
 setRegister register value state = state {pathRegisters = M.insert register value (pathRegisters state)}
 
-loadValue :: B.ByteString -> PathState -> Word32 -> A.Reg -> A.Width -> Val -> Maybe (A.Reg, A.Shift, Int, Bool) -> Val
-loadValue bytes state pc base width address index = case (address, index) of
+loadValue :: B.ByteString -> PathState -> Word32 -> A.Reg -> A.Width -> Bool -> Val -> Maybe (A.Reg, A.Shift, Int, Bool) -> Val
+loadValue bytes state pc base width signedLoad address index = case (address, index) of
   (Known at, Nothing)
     | base == A.pc, width == A.Word -> maybe Unknown Known (wordAt bytes at)
-    | Just (storedWidth, value) <- M.lookup at (pathMemory state), storedWidth == width -> value
-    | width `elem` [A.Word, A.Half, A.Byte] -> Offset (MemorySymbol (AccessBytes (accessBytes width)) at) 0
+    | Just (storedWidth, value) <- M.lookup at (pathMemory state), storedWidth == width, not signedLoad -> value
+    | any (overlapsStore at) (M.toList (pathMemory state)) -> Unknown
+    | width `elem` [A.Word, A.Half, A.Byte] -> Offset (MemorySymbol (AccessBytes (accessBytes width)) signedLoad at) 0
   (Known at, Just (register, A.LSL, scale, True))
     | Offset symbol k <- registerValue state pc register -> TableEntry at (AccessBytes (accessBytes width)) symbol k scale
   _ -> Unknown
+  where
+    size = toInteger (accessBytes width)
+    overlapsStore at (stored, (storedWidth, _)) = toInteger stored < toInteger at + size && toInteger at < toInteger stored + toInteger (accessBytes storedWidth)
 
 -- One instruction. Returns successor states, or an ending.
 step :: B.ByteString -> PathState -> Either Ending [PathState]
@@ -334,7 +343,7 @@ step bytes state = case wordAt bytes pc of
         Known low -> Known ((low .&. 0xffff) .|. (value `shiftL` 16))
         _ -> Unknown) current)]
       A.DataProcessing _ operation setsFlags destination source operand
-        | operation `elem` [A.CMP, A.CMN, A.TST, A.TEQ] -> Right [next (current {pathFlags = testFlags operation (registerValue current pc source) (operandValue current pc operand)})]
+        | operation `elem` [A.CMP, A.CMN, A.TST, A.TEQ] -> Right [next (withFlags (testFlags operation (registerValue current pc source) (operandValue current pc operand)) current)]
         | destination == A.pc -> Left (Unresolved site "data-processing write to PC")
         | otherwise ->
             let left = registerValue current pc source
@@ -351,20 +360,20 @@ step bytes state = case wordAt bytes pc of
                   (A.EOR, Known x, Known y) -> Known (x `xorWord` y)
                   (A.BIC, Known x, Known y) -> Known (x .&. complement y)
                   _ -> Unknown
-                flags
-                  | not setsFlags = pathFlags current
-                  | operation == A.SUB, Known k <- right = CompareFlags left k
-                  | otherwise = ResultFlags result
-             in Right [next ((setRegister destination result current) {pathFlags = flags})]
-      A.Load _ width _ destination base offset indexing -> do
+                flagged
+                  | not setsFlags = id
+                  | operation == A.SUB, Known k <- right = withFlags (CompareFlags left k)
+                  | otherwise = withFlags (ResultFlags result)
+             in Right [next (flagged (setRegister destination result current))]
+      A.Load _ width signedLoad destination base offset indexing -> do
         when (destination == A.pc) (Left (Unresolved site "load to PC"))
         let baseValue = registerValue current pc base
             (address, index) = case offset of
               A.OffsetImmediate delta -> (if indexing == A.PostIndexed then baseValue else addValue baseValue (fromIntegral delta), Nothing)
               A.OffsetRegister added register shift amount -> case registerValue current pc register of
-                Known k -> (if indexing == A.PostIndexed then baseValue else addValue baseValue (scaled added shift amount k), Nothing)
+                Known k -> (if indexing == A.PostIndexed then baseValue else maybe Unknown (addValue baseValue) (scaled added shift amount k), Nothing)
                 _ -> (baseValue, Just (register, shift, amount, added))
-            loaded = if width == A.Dual then Unknown else loadValue bytes current pc base width address index
+            loaded = if width == A.Dual then Unknown else loadValue bytes current pc base width signedLoad address index
             written = writeback base indexing offset baseValue current
         Right [next (setRegister destination loaded written)]
       A.Store _ width source base offset indexing ->
@@ -372,11 +381,11 @@ step bytes state = case wordAt bytes pc of
             address = case offset of
               A.OffsetImmediate delta -> if indexing == A.PostIndexed then baseValue else addValue baseValue (fromIntegral delta)
               A.OffsetRegister added register shift amount -> case registerValue current pc register of
-                Known k -> if indexing == A.PostIndexed then baseValue else addValue baseValue (scaled added shift amount k)
+                Known k -> if indexing == A.PostIndexed then baseValue else maybe Unknown (addValue baseValue) (scaled added shift amount k)
                 _ -> Unknown
             value = registerValue current pc source
             stored = case address of
-              Known at -> current {pathMemory = M.insert at (width, value) (pathMemory current), pathStores = Store site at width value : pathStores current}
+              Known at -> current {pathMemory = M.insert at (width, value) (M.filterWithKey (\other (otherWidth, _) -> not (toInteger other < toInteger at + toInteger (accessBytes width) && toInteger at < toInteger other + toInteger (accessBytes otherWidth))) (pathMemory current)), pathStores = Store site at width value : pathStores current}
               -- A store through an unknown address may change any recorded word.
               _ | base == A.sp || base == A.Reg 11 -> current
                 | otherwise -> current {pathMemory = M.empty}
@@ -396,7 +405,7 @@ step bytes state = case wordAt bytes pc of
       A.Multiply _ destination _ _ _ -> Right [next (setRegister destination Unknown current)]
       A.ZeroExtend _ destination _ _ _ -> Right [next (setRegister destination Unknown current)]
       A.ReadStatus _ destination -> Right [next (setRegister destination Unknown current)]
-      A.WriteApplicationFlags _ _ -> Right [next (current {pathFlags = UnknownFlags})]
+      A.WriteApplicationFlags _ _ -> Right [next (withFlags UnknownFlags current)]
       A.Rejected reason -> Left (Unresolved site (A.forbiddenReason reason))
     called target current =
       let arguments = map (registerValue current pc . A.Reg) [0 .. 3]
@@ -404,15 +413,16 @@ step bytes state = case wordAt bytes pc of
             Just arity | known <- [x | Known x <- take arity arguments], length known == arity -> QuerySymbol target known
             _ -> ResultSymbol site target
           returned = setRegister (A.Reg 0) (Offset result 0) (clobberCall current)
-       in next (returned {pathFlags = UnknownFlags, pathCalls = Call site target arguments : pathCalls current})
+       in next (withFlags UnknownFlags returned {pathCalls = Call site target arguments : pathCalls current})
+    -- CMN x, k gives the N and Z of x + k; its C and V are not modelled.
     testFlags operation left right = case (operation, right) of
       (A.CMP, Known k) -> CompareFlags left k
-      (A.CMN, Known k) -> CompareFlags left (negate k)
+      (A.CMN, Known k) -> ResultFlags (addValue left k)
       (A.CMP, _) -> OperandFlags left right
       _ -> UnknownFlags
     scaled added shift amount k = case shift of
-      A.LSL -> (if added then id else negate) (k `shiftL` amount)
-      _ -> 0
+      A.LSL -> Just ((if added then id else negate) (k `shiftL` amount))
+      _ -> Nothing
     writeback base indexing offset baseValue current
       | indexing == A.OffsetOnly = current
       | otherwise = setRegister base (case offset of
@@ -446,7 +456,7 @@ conditionOf instruction = case instruction of
 explore :: B.ByteString -> Router -> Exploration
 explore bytes router@(Router (CodeAddress entry)) = go [initial] (Exploration M.empty 0 M.empty [] [] 0)
   where
-    initial = PathState entry (M.fromList [(A.Reg n, Offset (ArgumentSymbol n) 0) | n <- [0 .. 3]]) UnknownFlags M.empty M.empty [] [] [] M.empty
+    initial = PathState entry (M.fromList [(A.Reg n, Offset (ArgumentSymbol n) 0) | n <- [0 .. 3]]) UnknownFlags [] M.empty M.empty [] [] [] M.empty
     go [] result = result
     go (state : pending) result
       | explorationSteps result > stepLimit = result {explorationUnresolved = (CodeAddress (pathPc state), "step limit") : explorationUnresolved result}
@@ -484,7 +494,7 @@ explore bytes router@(Router (CodeAddress entry)) = go [initial] (Exploration M.
           arguments = map (registerValue s pc . A.Reg) [0 .. 3]
           cleared = foldl' (\current register -> setRegister register Unknown current) s (map A.Reg [1, 2, 3, 12, 14])
        in (setRegister (A.Reg 0) (Offset (ResultSymbol (CodeAddress pc) dispatcher) 0) cleared)
-            {pathPc = pc + 4, pathFlags = UnknownFlags, pathMemory = M.empty, pathCalls = Call (CodeAddress pc) dispatcher arguments : pathCalls s}
+            {pathPc = pc + 4, pathFlags = UnknownFlags, pathDecided = [], pathMemory = M.empty, pathCalls = Call (CodeAddress pc) dispatcher arguments : pathCalls s}
 
 -- Manifest --------------------------------------------------------------------
 
@@ -522,7 +532,7 @@ instance FromJSON Manifest where
 
 symbolJson :: Symbol -> Value
 symbolJson symbol = case symbol of
-  MemorySymbol (AccessBytes size) address -> object ["kind" .= ("memory" :: String), "bytes" .= size, "address" .= hex address]
+  MemorySymbol (AccessBytes size) signedLoad address -> object ["kind" .= ("memory" :: String), "bytes" .= size, "signed" .= signedLoad, "address" .= hex address]
   ResultSymbol site target -> object ["kind" .= ("call-result" :: String), "site" .= codeText site, "callee" .= codeText target]
   QuerySymbol target known -> object ["kind" .= ("query-result" :: String), "callee" .= codeText target, "arguments" .= known]
   ArgumentSymbol n -> object ["kind" .= ("incoming-argument" :: String), "register" .= ("r" ++ show n)]
@@ -578,14 +588,19 @@ routeEvent route = case routeTarget route of
       value : _ -> Just value
       [] -> Nothing
 
+-- Whether an incoming argument selects the route: its guard, unmodelled
+-- compares, target or event value.
 dependsOnArguments :: Route -> Bool
-dependsOnArguments route = any argument (M.keys (routeDomains route)) || targetArgument
+dependsOnArguments route = any argument (M.keys (routeDomains route)) || any argumentValue (routeTarget route : eventValues ++ compared)
   where
     argument (ArgumentSymbol _) = True
     argument _ = False
-    targetArgument = case routeTarget route of
-      Offset (ArgumentSymbol _) _ -> True
+    argumentValue value = case value of
+      Offset symbol _ -> argument symbol
+      TableEntry _ _ symbol _ _ -> argument symbol
       _ -> False
+    eventValues = [value | Just (_, Just value) <- [routeEvent route]]
+    compared = concat [[left, right] | UnmodelledCondition _ _ _ (Just (left, right)) <- routeAtoms route]
 
 main :: IO ()
 main = do
@@ -632,6 +647,7 @@ main = do
         , "symbols_constrained_on_some_path" .= map symbolJson (S.toList (aggSymbols aggregate))
         , "paths_with_unmodelled_conditions" .= aggUnmodelled aggregate
         , "depends_on_incoming_arguments" .= aggArguments aggregate
+        , "query_contingent" .= [symbolJson symbol | symbol@(QuerySymbol {}) <- S.toList (aggSymbols aggregate)]
         , "sample_path" .= let route = aggSample aggregate in object
             [ "guard" .= guardJson (routeDomains route) (routeAtoms route)
             , "cell_writes" .= [storeJson bytes (routeDomains route) store | store@(Store _ address _ _) <- routeStores route, cellOf address /= Nothing]
@@ -663,7 +679,7 @@ main = do
             , "visit_limit_per_path" .= visitLimit, "step_limit" .= stepLimit
             , "premises" .= [stableMemoryPremise, queryPremise, "image5-literals-static: PC-relative literal words and enumerated table entries read from the pinned image5 bytes are their runtime values" :: String]
             , "query_arity" .= [object ["callee" .= codeText callee, "arguments" .= arity] | (callee, arity) <- M.toList queryArity]
-            , "callee_model" .= ("calls clobber r0-r3, r12, LR and flags; r0 becomes the call's result symbol; stores through unknown non-frame addresses forget recorded memory" :: String)
+            , "callee_model" .= ("calls clobber r0-r3, r12, LR and flags; r0 becomes the call's result symbol (a query-result symbol for callees in query_arity); the dispatcher call also forgets recorded memory, other calls keep it under the stable-memory premise; stores through unknown non-frame addresses forget recorded memory" :: String)
             , "callers" .= ("every aligned non-0xF-condition A32 B/BL word in image5 targeting a router; data words that decode as branches are candidates, attributed to a manifest callback only when inside its structural code extent" :: String) ]
         , "routers" .= map routerJson explorations
         , "callers" .= [ object
