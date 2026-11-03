@@ -34,7 +34,7 @@ data Control = WrongSource | WrongArtifact | WrongCandidate | WrongContract | Du
   | WrongFlagIdentity | WrongFlagTarget | WrongFlagResult | WrongConstructorTarget | WrongConstructorResult | WrongWrapperRegister | WrongCleanupSelector | WrongCleanupMask
   | WrongCallbackArgument | WrongCallbackResult | WrongCallbackFrame | WrongCallbackRestoration | MissingPostCleanupCallback
   | MaskedCallbackInterrupt | WrongCallbackDispatcherFrame | MissingCallbackInterruptStack | WrongCallbackReturnFrame
-  | DisabledCallbackAtcm | LowCallbackStack | WrongCallbackIrqSavedSp | MissingCallbackIrqHost
+  | DisabledCallbackAtcm | LowCallbackStack | WrongCallbackIrqSavedSp | MissingCallbackIrqHost | WrongSelectedContinuationStack
   | WrongIrqStatus | WrongIrqFrame | WrongIrqReturn | WrongIrqRestoration deriving (Eq, Show, Enum, Bounded)
 data ControlError = BaselineRejected WitnessError | MutationRejected Control | WrongRefusal Control WitnessError (Maybe WitnessError)
   | ProducerSummaryChangedQualification deriving (Eq, Show)
@@ -62,9 +62,11 @@ pc :: Sample -> Word32
 pc = Plan.physical . address . W.contextPc . state
 register :: Sample -> Int -> Maybe Word32
 register sample index = case drop index (W.contextRegisters (state sample)) of value:_ -> Just (word value); [] -> Nothing
+currentIs :: Word32 -> Sample -> Bool
+currentIs node sample = any (\view -> viewObject view == Current && viewCore view == S.PrimaryKernel
+  && let W.Bytes body = viewBytes view in B.length body == 4 && decodeWord body == node) (sampleViews sample)
 currentRoot :: Sample -> Bool
-currentRoot sample = any (\view -> viewObject view == Current && viewCore view == S.PrimaryKernel
-  && let W.Bytes body = viewBytes view in B.length body == 4 && decodeWord body == 0x40061594) (sampleViews sample)
+currentRoot = currentIs 0x40061594
 rootTerminated :: Sample -> Bool
 rootTerminated sample = any (\view -> viewObject view == CreationRecord && viewCore view == S.PrimaryKernel
   && let W.Bytes body = viewBytes view in B.length body == 40 && decodeWord (B.drop 8 body) == Plan.rootLow
@@ -93,7 +95,7 @@ expected control = case control of
   WrongCallbackRestoration -> ReturnRejected; MissingPostCleanupCallback -> CompletionRejected
   MaskedCallbackInterrupt -> IrqRejected; WrongCallbackDispatcherFrame -> FrameRejected; MissingCallbackInterruptStack -> FrameRejected
   WrongCallbackReturnFrame -> FrameRejected; DisabledCallbackAtcm -> IrqRejected; LowCallbackStack -> IrqRejected
-  WrongCallbackIrqSavedSp -> IrqRejected; MissingCallbackIrqHost -> IrqRejected
+  WrongCallbackIrqSavedSp -> IrqRejected; MissingCallbackIrqHost -> IrqRejected; WrongSelectedContinuationStack -> FrameRejected
   WrongIrqStatus -> IrqRejected; WrongIrqFrame -> FrameRejected; WrongIrqReturn -> ReturnRejected; WrongIrqRestoration -> ReturnRejected
 withHash :: Control -> ObservedFiles -> J.Value -> J.Value -> Either ControlError ObservedFiles
 withHash control original receipt watch = do
@@ -353,6 +355,13 @@ refusalControls role sources original = do
           entered <- callback 0x69cc18
           frame <- levelZeroFrame entered
           dropSample control frame receiptValue >>= plain
+        WrongSelectedContinuationStack -> do
+          transfer <- position control (\sample -> primary sample && rootTerminated sample && pc sample == 0x436e8) receipt
+          selected <- maybe (Left (MutationRejected control)) Right (register (sampleAt transfer) 1)
+          let node = Plan.physical selected+0x40000000
+          resumed <- after control receipt transfer (\sample -> primary sample && pc sample `elem` [0x4366c,0x4372c,0x437a8]
+            && currentIs node sample)
+          alterContext (Right resumed) "sp" (+ (0x01000000 :: Word32))
         WrongIrqStatus -> alterContext irq "spsr" (\value -> value .&. 0xffffffe0 .|. 0x12)
         WrongIrqFrame -> alterContext (irqAfter IrqFrame) "sp" (+4)
         WrongIrqReturn -> alterContext (irqAfter IrqReturn) "spsr" (`xor` 0x20000000)

@@ -1,6 +1,6 @@
 module Emulation.RootTaskPlan
   ( RootPlan(..), PlanError(..), derivePlan, rootLow, rootHigh, stackLow, stackHigh
-  , taskLayout, callbackResources, sourceBodies, sourceWord, declaredBoundary, physical, conditionHolds
+  , taskLayout, callbackResources, sourceBodies, sourceWord, labelAgrees, physical, conditionHolds
   , SyncRecords(..), SyncCallback(..), irqNest, irqStack, irqAtcm, irqCallbackDepth, loaderDispatchReturn
   ) where
 
@@ -34,7 +34,7 @@ data SyncRecords = SyncRecords
   { syncCore :: T.KernelCore, syncBase :: W.Address, syncCallbacks :: [SyncCallback] } deriving (Eq, Show)
 data RootPlan = RootPlan
   { memoryPlan :: Memory.CapturePlan, tableA :: B.ByteString, tableB :: B.ByteString
-  , serviceWords :: S.Set Word32, serviceInstructions :: S.Set Word32, unresolvedTransfers :: S.Set Word32, serviceEntries :: S.Set Word32
+  , serviceWords :: S.Set Word32, serviceInstructions :: S.Set Word32, unresolvedTransfers :: S.Set Word32
   , rootCallMap :: M.Map Word32 Root.CallSite, requiredSites :: S.Set Word32, syncRecords :: [SyncRecords] }
 rootLow, rootHigh, stackLow, stackHigh :: Word32
 rootLow = 0x69d160
@@ -101,8 +101,6 @@ irqSites = [(0x40204,IrqEntry),(0xd0204,IrqEntry),(0x40234,IrqFrame),(0xd0234,Ir
 cleanupSites :: [Word32]
 cleanupSites = [0x72614c,0x726150,0x72615c,0x726160,0x726198,0x72619c,0x7261a4,0x7261a8
   ,0x7261b8,0x7261bc,0x7261c4,0x7261c8,0x7261cc,0x453f0,0x453f4,0x454e8,0x436e8]
-continuations :: [Word32]
-continuations = [0x43668,0x4366c,0x43728,0x4372c,0x437a4,0x437a8]
 spanOf :: (Word64,Word64) -> Memory.PhysicalSpan
 spanOf (low,high) = Memory.PhysicalSpan (PhysicalBoundary low) (PhysicalBoundary high)
 fetchSpans :: [Memory.PhysicalSpan]
@@ -179,11 +177,11 @@ sourcePublishedEntries files sources records = do
     _ <- sourceWord sources entry
     pure ()) (S.toList entries)
   pure entries
-footprints :: SourceFiles -> S.Set Word32 -> Either PlanError (S.Set Word32,S.Set Word32,S.Set Word32,S.Set Word32)
+footprints :: SourceFiles -> S.Set Word32 -> Either PlanError (S.Set Word32,S.Set Word32,S.Set Word32)
 footprints files initial = walk (S.toList initial) S.empty S.empty S.empty S.empty
   where
     sources = sourceBodies files (sourceImage files)
-    walk [] entries words' instructions unresolved = Right (entries,words',instructions,unresolved)
+    walk [] _ words' instructions unresolved = Right (words',instructions,unresolved)
     walk (entry:pending) entries words' instructions unresolved
       | S.member entry entries || rootLow <= entry && entry < rootHigh = walk pending entries words' instructions unresolved
       | S.size entries >= 2048 = Left ServiceGraphLimitExceeded
@@ -230,7 +228,7 @@ derivePlan files proof runtime = do
         ++ [0x69c9f8,0x69cc00,0x69cc18,0x725b74,0x72835c,0x726478,0x725dd8,0x724924,0x72337c
            ,0x4d434,0x41140,0x4d1a4,0x453f0,0x43dd0,0x43688,0x412bc,0x4118c,0x43728]
         ++ filter (/=0) (tableTargets primary++tableTargets secondary) ++ S.toList publications)
-  (entries,guarded,instructions,unresolved) <- footprints files staticSeeds
+  (guarded,instructions,unresolved) <- footprints files staticSeeds
   let mutableLoaderCell pc = any (\(base,lastByte) -> pc >= base && pc < lastByte && not (any (\(low,high) -> fromIntegral pc >= low && fromIntegral pc < high) loaderProtected))
         [(0x40000,0x4dae0),(0xd0000,0xddaa0)]
       callbackCells = [physical cell | record <- records,SyncCallback (W.Address cell) _ <- syncCallbacks record]
@@ -246,36 +244,21 @@ derivePlan files proof runtime = do
       calls = M.fromList [(Root.callPc site,site) | site <- Root.callSites proof]
       required = S.fromList ([rootLow,rootLow+4..rootHigh-4]++[0x725dd8,0x724924,0x725f08,0x725f0c,0x725fa8,0x725fac]
         ++[0x69cc18,0x69cc1c..0x69cc68]++cleanupSites++map fst irqSites)
-  pure (RootPlan capture primary secondary guarded (S.union instructions (S.fromList (Root.executionPcs proof))) unresolved entries calls required records)
+  pure (RootPlan capture primary secondary guarded (S.union instructions (S.fromList (Root.executionPcs proof))) unresolved calls required records)
 
-declaredBoundary :: RootPlan -> [(Word32,B.ByteString)] -> Word32 -> Boundary -> Bool
-declaredBoundary plan sources location boundary = case boundary of
-  Start -> pc == 0x725dd8
-  RootEntry -> pc == rootLow
-  RootInstruction -> rootLow <= pc && pc < rootHigh
-  ServiceEntry -> M.member pc (rootCallMap plan) || S.member pc (serviceEntries plan)
-    || pc `elem` cleanupSites || pc == 0x724924 || isIndirect pc
-  ServiceReturn -> any (\site -> Root.callPc site+4 == pc) (M.elems (rootCallMap plan))
-    || pc `elem` cleanupSites || afterCall pc
-  TaskSubmit -> pc == 0x725dd8
-  PeriodicCallback -> 0x69cc18 <= pc && pc <= 0x69cc68
-  IrqEntry -> lookup pc irqSites == Just IrqEntry
-  IrqFrame -> lookup pc irqSites == Just IrqFrame
-  IrqReturn -> lookup pc irqSites == Just IrqReturn
-  PostCleanup -> pc `elem` continuations || pc `elem` [0x453f0,0x453f4] || afterCall pc || S.member pc (serviceInstructions plan)
-  where
-    pc = physical location
-    isIndirect target = case sourceWord sources target of
-      Right raw -> case A.decode target raw of
-        A.BranchExchange {} -> True
-        A.DataProcessing _ A.MOV _ destination _ _ -> destination == A.pc
-        A.Branch _ False destination -> destination == target
-        _ -> False
-      Left _ -> False
-    afterCall target | target < 4 = False
-    afterCall target = case sourceWord sources (target-4) of
-      Right raw -> case A.decode (target-4) raw of A.Branch _ True _ -> True; A.BranchExchange _ True _ -> True; _ -> False
-      Left _ -> False
+-- | The boundary class a PC alone determines: the task-submit wrapper and the loader IRQ entry, frame and return points.
+pcBoundary :: Word32 -> Maybe Boundary
+pcBoundary location
+  | physical location == 0x725dd8 = Just TaskSubmit
+  | otherwise = lookup (physical location) irqSites
+-- | Whether a producer label is admitted at a PC, `first` marking sample 0. A PC-determined class must match exactly;
+-- elsewhere the label names the producer's dynamic role assignment and only may not claim a PC-determined class.
+labelAgrees :: Bool -> Word32 -> Boundary -> Bool
+labelAgrees first location label
+  | first = label == Start && physical location == 0x725dd8
+  | otherwise = case pcBoundary location of
+      Just expected -> label == expected
+      Nothing -> label `notElem` [Start,TaskSubmit,IrqEntry,IrqFrame,IrqReturn]
 
 conditionHolds :: A.Cond -> W.WordValue -> Bool
 conditionHolds (A.Cond condition) (W.WordValue flags) = case condition of

@@ -299,11 +299,10 @@ checkSample inputs plan receipt hit index sample previous = do
   total <- clock sample
   require (sampleHit sample == index && length (W.contextRegisters state) == 13 && length (W.contextTcm state) == 2
     && W.contextIdentities state == map W.WordValue [0x4003,0x5003]
-    && Plan.declaredBoundary plan sources (address (W.contextPc state)) (sampleBoundary sample)) ContextRejected
-  require (index == 0 && sampleBoundary sample == Start
-    || M.member (W.contextPc state) (receiptSites receipt)) ContextRejected
+    && Plan.labelAgrees (index == 0) pc (sampleBoundary sample) && Plan.labelAgrees (index == 0) pc (hitBoundary hit)) ContextRejected
+  require (index == 0 || M.lookup (W.contextPc state) (receiptSites receipt) == Just (hitBoundary hit)) ContextRejected
   let recorded = hitState hit
-  require (hitBoundary hit == sampleBoundary sample && hitCore hit == contextCore context && count (hitCount hit) == total
+  require (hitCore hit == contextCore context && count (hitCount hit) == total
     && W.contextPc recorded == W.contextPc state && W.contextRegisters recorded == W.contextRegisters state
     && W.contextSp recorded == W.contextSp state && W.contextLr recorded == W.contextLr state
     && W.contextCpsr recorded == W.contextCpsr state) ContextRejected
@@ -794,9 +793,15 @@ checkCleanup inputs executions entry episodes pairs = do
             require (physical (address (W.contextSp (stateOf sample))) == savedSp) FrameRejected
             loaded <- executed executions sample 0x436e8
             require loaded CompletionRejected
+            -- 0x43668, 0x43728 and 0x437a4 are scheduler code shared by every task's saved PC; the current cell, which
+            -- holds the selected node at 0x436e8, names whose resume a sample is.
+            let resumes target candidate after = do
+                  later <- clock candidate
+                  pure (coreOf candidate == S.PrimaryKernel && pcOf candidate == target && later > time
+                    && readWord CleanupRejected after (physical current) == Right (selected+0x40000000))
             candidates <- foldM (\found (candidate,after) -> do
-              later <- clock candidate
-              if coreOf candidate /= S.PrimaryKernel || pcOf candidate /= saved || later <= time then pure found else do
+              own <- resumes saved candidate after
+              if not own then pure found else do
                 restored <- executed executions candidate saved
                 isDead <- retired after
                 require (restored && isDead) CompletionRejected
@@ -804,8 +809,9 @@ checkCleanup inputs executions entry episodes pairs = do
             first <- need CompletionRejected (case candidates of value:_ -> Just value; [] -> Nothing)
             firstTime <- clock first
             continuations <- foldM (\found (candidate,after) -> do
+              own <- resumes (saved+4) candidate after
               later <- clock candidate
-              if coreOf candidate /= S.PrimaryKernel || pcOf candidate /= saved+4 || later <= firstTime then pure found else do
+              if not own || later <= firstTime then pure found else do
                 isDead <- retired after
                 require isDead CompletionRejected
                 (_,_,stack,size) <- allocatedTask after S.PrimaryKernel (selected+0x40000000)
@@ -1100,8 +1106,7 @@ admitReceipt inputs observed = do
   plan <- either (Left . PlanRejected) Right (Plan.derivePlan (inputSource inputs) (inputProof inputs) (inputImage inputs))
   memoryResult (Memory.checkWatch (Plan.memoryPlan plan) watch)
   require (Plan.requiredSites plan `Set.isSubsetOf` Set.map (physical . address) (M.keysSet (receiptSites receipt))) ContextRejected
-  let sources = Plan.sourceBodies (inputSource inputs) (inputImage inputs)
-  mapM_ (\(pc,boundary) -> require (Plan.declaredBoundary plan sources (address pc) boundary) ContextRejected) (M.toList (receiptSites receipt))
+  mapM_ (\(pc,boundary) -> require (Plan.labelAgrees False (address pc) boundary) ContextRejected) (M.toList (receiptSites receipt))
   (memories,executions) <- replay inputs plan receipt watch
   let pairs = zip (receiptSamples receipt) memories
   checkTransfers inputs plan pairs
