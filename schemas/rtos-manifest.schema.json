@@ -28,7 +28,7 @@
     },
     "slot": {
       "type": "object", "additionalProperties": false,
-      "required": ["offset", "target", "recovery", "operation", "analogue", "arguments", "result", "errors", "context", "objects", "preconditions", "directImage4Calls", "computedWrapperEntries", "callerClosure", "extent", "evidence"],
+      "required": ["offset", "target", "recovery", "operation", "analogue", "arguments", "result", "errors", "context", "objects", "preconditions", "directImage4Calls", "computedWrapperEntries", "experiments", "gaps", "domainNotes", "callerClosure", "extent", "evidence"],
       "properties": {
         "offset": {"$ref": "#/$defs/address"}, "target": {"$ref": "#/$defs/address"},
         "recovery": {"enum": ["recovered", "partial", "unknown"]}, "operation": {"type": "string"}, "analogue": {"$ref": "#/$defs/nullableContract"},
@@ -36,6 +36,7 @@
         "errors": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["value", "meaning"], "properties": {"value": {"type": "integer"}, "meaning": {"type": "string"}}}},
         "preconditions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["name", "statement"], "properties": {"name": {"type": "string"}, "statement": {"type": "string"}}}},
         "objects": {"$ref": "#/$defs/strings"}, "directImage4Calls": {"type": "array", "items": {"$ref": "#/$defs/address"}}, "computedWrapperEntries": {"type": "array", "items": {"$ref": "#/$defs/address"}},
+        "experiments": {"$ref": "#/$defs/strings"}, "gaps": {"$ref": "#/$defs/nullableContract"}, "domainNotes": {"$ref": "#/$defs/nullableContract"},
         "callerClosure": {"type": "string"}, "extent": {"$ref": "#/$defs/extent"}, "evidence": {"$ref": "#/$defs/evidence"}
       }
     },
