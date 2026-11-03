@@ -1,11 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.StartupConsumers.Witness
-  ( NativeFiles (..), ProducerFiles (..), ObservedFiles (..), Inputs, Projection, QualifiedReceipt
-  , WitnessError (..), admitInputs, admitReceipt, validateReceipt, compareReceipts, qualificationValue
-  , qualifiedProjection, compareSemanticProjections
+  ( NativeFiles (..), ProducerFiles (..), LoaderProducerFiles (..), ObservedFiles (..), Inputs, Projection, QualifiedReceipt
+  , WitnessError (..), admitInputs, admitLoaderJoinedInputs, joinedLoaderProvider, admitReceipt, validateReceipt, validateReceiptWithPolicy, compareReceipts, qualificationValue
+  , qualifiedProjection, compareSemanticProjections, compareLoaderSemanticProjections
   ) where
 
 import Control.Monad (forM, forM_, foldM)
+import qualified A32 as A
 import qualified Data.Aeson as J
 import qualified Data.Aeson.KeyMap as KM
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
@@ -21,9 +22,12 @@ import qualified Replacement.KernelInstall.Wire as K
 import qualified Replacement.KernelInstall.Artifact as I
 import qualified Replacement.KernelInstall.Admission as IA
 import qualified Replacement.StartupComposition.Artifact as C
+import qualified Replacement.StartupComposition.LoaderStartup as LS
+import qualified Replacement.LoaderOrchestration.Interface as LI
 import qualified Replacement.StartupDispatch.Artifact as D
 import Replacement.StartupConsumers.Evidence
 import Replacement.StartupConsumers.Effects (ConsumerProjection, checkConsumers, consumerProjectionValue)
+import qualified Replacement.StartupConsumers.ObservationPolicy as Policy
 import qualified Replacement.StartupConsumers.Source as S
 import Replacement.StartupConsumers.Wire
 
@@ -31,11 +35,16 @@ data NativeFiles = NativeFiles {nativeImage :: B.ByteString, nativeSymbols :: B.
 data ProducerFiles = ProducerFiles
   {producerExecutable :: B.ByteString, producerRun :: B.ByteString, producerRom :: B.ByteString
   ,producerInstallerDat :: B.ByteString, producerJoinedDat :: B.ByteString, producerJoinedContract :: B.ByteString}
+data LoaderProducerFiles = LoaderProducerFiles
+  {loaderProducerExecutable :: B.ByteString,loaderProducerRun :: B.ByteString,loaderProducerRom :: B.ByteString
+  ,loaderProducerDat :: B.ByteString,loaderProducerContract :: B.ByteString}
+data BoundProducer = StandaloneProducer ProducerFiles | LoaderJoinedProducer LoaderProducerFiles
+data LoaderProvider = CanonicalLoaderProvider | JoinedLoaderProvider LS.LoaderJoinedArtifact LS.LoaderStagedCandidate
 data ObservedFiles = ObservedFiles {observedReceipt :: B.ByteString, observedCheckpoint :: B.ByteString}
 data Inputs = Inputs
-  {inputSource :: S.SourceModel, inputInstaller :: NativeFiles, inputDispatcher :: NativeFiles, inputProducer :: ProducerFiles
+  {inputSource :: S.SourceModel, inputInstaller :: NativeFiles, inputDispatcher :: NativeFiles, inputProducer :: BoundProducer
   ,inputInstallerImage :: B.ByteString, inputJoinedImage :: B.ByteString, inputJoinedProof :: C.JoinedProof
-  ,inputInstallerProof :: IA.InstallationProof}
+  ,inputInstallerProof :: IA.InstallationProof,inputLoaders :: LoaderProvider}
 data CallerState = CallerState Address [WordValue] WordValue K.Bytes deriving (Eq)
 data BoundaryMemory = BoundaryMemory ResourceKind Address Count K.Bytes K.Bytes deriving (Eq)
 data OuterProjection = OuterProjection CallerState CallerState K.Bytes [BoundaryMemory] deriving (Eq)
@@ -76,9 +85,61 @@ admitInputs sources installer dispatcher producer installerCandidate dispatcherC
     && producerJoinedContract producer == L.toStrict (J.encode (C.candidateContractValue joinedCandidate))
     && producerInstallerDat producer == I.candidateBytes installerCandidate
     && producerJoinedDat producer == C.candidateBytes joinedCandidate) ContractRejected
-  pure (Inputs model installer dispatcher producer
+  pure (Inputs model installer dispatcher (StandaloneProducer producer)
     (I.stagedBytes (I.stageImage4 installationSource (C.installerArtifact joined)))
-    (C.stagedBytes (C.stageImage4 canonical joined)) (C.joinedProof joined) (I.installationProof (C.installerArtifact joined)))
+    (C.stagedBytes (C.stageImage4 canonical joined)) (C.joinedProof joined) (I.installationProof (C.installerArtifact joined)) CanonicalLoaderProvider)
+
+admitLoaderJoinedInputs :: S.SourceFiles -> C.NativeFiles -> C.NativeFiles -> C.NativeFiles -> C.NativeFiles
+  -> LoaderProducerFiles -> LS.LoaderStagedCandidate -> Either WitnessError Inputs
+admitLoaderJoinedInputs sources loaderA loaderB dispatcher installer producer candidate = do
+  model <- either (const (Left SourceRejected)) Right (S.deriveSource sources)
+  canonical <- either (const (Left SourceRejected)) Right
+    (LS.canonicalSource (C.SourceFiles (S.sourceDat sources) (S.sourceImage4 sources) (S.sourceLoaderA sources) (S.sourceLoaderB sources)))
+  artifact <- either (const (Left ArtifactRejected)) Right (LS.deriveArtifact loaderA loaderB dispatcher installer)
+  installationSource <- either (const (Left SourceRejected)) Right
+    (I.canonicalSource (S.sourceDat sources) (S.sourceImage4 sources) (S.sourceLoaderA sources) (S.sourceLoaderB sources))
+  let manifest = loaderProducerContract producer
+      composition = LS.dispatcherInstallerArtifact artifact
+      native files = NativeFiles (C.nativeBytes files) (C.nativeSymbols files) manifest
+      inner (J.Object fields) = required ContractRejected (KM.lookup "composition" fields)
+      inner _ = Left ContractRejected
+  recorded <- inner (LS.candidateContractValue candidate)
+  require (recorded == LS.contractValue canonical artifact
+    && manifest == L.toStrict (J.encode (LS.candidateContractValue candidate))
+    && loaderProducerDat producer == LS.candidateBytes candidate) ContractRejected
+  require (hash (loaderProducerRun producer) == Digest "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"
+    && hash (loaderProducerRom producer) == Digest "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be"
+    && not (B.null (loaderProducerExecutable producer))) IdentityRejected
+  pure (Inputs model (native installer) (native dispatcher) (LoaderJoinedProducer producer)
+    (I.stagedBytes (I.stageImage4 installationSource (C.installerArtifact composition)))
+    (LS.candidateImage4 candidate) (C.joinedProof composition) (I.installationProof (C.installerArtifact composition))
+    (JoinedLoaderProvider artifact candidate))
+
+boundExecutable :: BoundProducer -> B.ByteString
+boundExecutable (StandaloneProducer producer) = producerExecutable producer
+boundExecutable (LoaderJoinedProducer producer) = loaderProducerExecutable producer
+boundRun :: BoundProducer -> B.ByteString
+boundRun (StandaloneProducer producer) = producerRun producer
+boundRun (LoaderJoinedProducer producer) = loaderProducerRun producer
+boundRom :: BoundProducer -> B.ByteString
+boundRom (StandaloneProducer producer) = producerRom producer
+boundRom (LoaderJoinedProducer producer) = loaderProducerRom producer
+boundContract :: BoundProducer -> B.ByteString
+boundContract (StandaloneProducer producer) = producerJoinedContract producer
+boundContract (LoaderJoinedProducer producer) = loaderProducerContract producer
+
+roleUpdate :: Inputs -> Role -> Either WitnessError B.ByteString
+roleUpdate inputs Retained = Right (S.sourceDat (S.sourceFiles (inputSource inputs)))
+roleUpdate inputs role = case (inputProducer inputs,role) of
+  (StandaloneProducer producer,Installer) -> Right (producerInstallerDat producer)
+  (StandaloneProducer producer,Joined) -> Right (producerJoinedDat producer)
+  (LoaderJoinedProducer producer,Joined) -> Right (loaderProducerDat producer)
+  _ -> Left IdentityRejected
+
+joinedLoaderProvider :: Inputs -> Maybe LS.LoaderJoinedArtifact
+joinedLoaderProvider inputs = case inputLoaders inputs of
+  CanonicalLoaderProvider -> Nothing
+  JoinedLoaderProvider artifact _ -> Just artifact
 
 admitReceipt :: Inputs -> ObservedFiles -> Either WitnessError QualifiedReceipt
 admitReceipt inputs files = do
@@ -95,7 +156,10 @@ admitReceipt inputs files = do
   pure (QualifiedReceipt (receiptRole receipt) (receiptIdentity receipt) (hash (observedReceipt files)) (receiptCheckpoint receipt) coverage projection)
 
 validateReceipt :: Inputs -> Receipt -> Either WitnessError Projection
-validateReceipt inputs receipt = do
+validateReceipt = validateReceiptWithPolicy Policy.standalonePolicy
+
+validateReceiptWithPolicy :: Policy.ObservationPolicy -> Inputs -> Receipt -> Either WitnessError Projection
+validateReceiptWithPolicy policy inputs receipt = do
   require (receiptSchema receipt == 1) DecodeRejected
   checkIdentity inputs receipt
   checkWatchFailures receipt
@@ -103,15 +167,35 @@ validateReceipt inputs receipt = do
   require (receiptOutcome receipt == Observed && receiptError receipt == Nothing && receiptFailure receipt == Nothing) StatusRejected
   checkLimits receipt
   checkProbes inputs receipt
-  checkSegments receipt
+  checkSegmentsWithPolicy policy receipt
   checkSourcePublications inputs receipt
   checkResources receipt
+  case inputProducer inputs of
+    StandaloneProducer _ -> pure ()
+    LoaderJoinedProducer _ -> checkJoinedPreimages inputs receipt
   outer <- checkOuter inputs receipt
   checkInstallation inputs receipt
   checkCompletion inputs receipt
-  checkFetchPolicies receipt
+  checkFetchPoliciesWithPolicy policy receipt
   consumers <- checkConsumers (inputSource inputs) receipt
   pure (Projection outer consumers)
+
+checkJoinedPreimages :: Inputs -> Receipt -> Either WitnessError ()
+checkJoinedPreimages inputs receipt = do
+  outer <- probeAt receipt OuterEntry
+  forM_ [(0x61c008,4),(0x7caf3c,4),(0x40000,32),(0xd0000,32)] $ \(location,size) -> do
+    resource <- one EffectRejected [value | value <- receiptResources receipt,resourceKind value == Header
+      ,resourcePhysical value == Address location,resourceSize value == Count size]
+    require (clock (resourceAdmitted resource) == probeClock outer && resourceLifetime resource == ObservationLifetime) EffectRejected
+    checkViews resource (resourceInitial resource) >> pure ()
+  committed <- memoryAt receipt outer
+  forM_ [(0x61c008,0),(0x7caf3c,3)] $ \(location,expected) ->
+    wordAt EffectRejected committed location >>= \actual -> require (actual == expected) EffectRejected
+  let sources = S.sourceFiles (inputSource inputs)
+  forM_ [(0x40000,S.sourceLoaderA sources),(0xd0000,S.sourceLoaderB sources)] $ \(base,bytes) ->
+    forM_ [0,4..28] $ \offset ->
+      wordAt EffectRejected committed (base+fromIntegral offset) >>= \actual ->
+        require (actual == U.word32At bytes offset) EffectRejected
 
 checkIdentity :: Inputs -> Receipt -> Either WitnessError ()
 checkIdentity inputs receipt = do
@@ -119,12 +203,12 @@ checkIdentity inputs receipt = do
       sources = S.sourceFiles (inputSource inputs)
       producer = inputProducer inputs
       native kind files = Component kind (hash (nativeImage files)) (hash (nativeSymbols files)) (hash (nativeContract files))
-      update = case receiptRole receipt of Retained -> S.sourceDat sources; Installer -> producerInstallerDat producer; Joined -> producerJoinedDat producer
-  require (identityRun identity == hash (producerRun producer) && identityRom identity == hash (producerRom producer)
+  update <- roleUpdate inputs (receiptRole receipt)
+  require (identityRun identity == hash (boundRun producer) && identityRom identity == hash (boundRom producer)
     && identityUpdate identity == hash update && identityCanonical identity == hash (S.sourceDat sources)
     && identityImage4 identity == hash (S.sourceImage4 sources) && identityLoaderA identity == hash (S.sourceLoaderA sources)
-    && identityLoaderB identity == hash (S.sourceLoaderB sources) && identityObserver identity == hash (producerExecutable producer)
-    && identityJoinedContract identity == hash (producerJoinedContract producer)
+    && identityLoaderB identity == hash (S.sourceLoaderB sources) && identityObserver identity == hash (boundExecutable producer)
+    && identityJoinedContract identity == hash (boundContract producer)
     && sortOn componentKind (identityComponents identity) == sortOn componentKind [native InstallerComponent (inputInstaller inputs),native DispatcherComponent (inputDispatcher inputs)]) IdentityRejected
 
 checkLimits :: Receipt -> Either WitnessError ()
@@ -182,7 +266,10 @@ sourceWord inputs role guest = do
   let site = physical guest
       sources = S.sourceFiles (inputSource inputs)
       image = case role of Retained -> S.sourceImage4 sources; Installer -> inputInstallerImage inputs; Joined -> inputJoinedImage inputs
-      candidates = [(0x40000,S.sourceLoaderA sources),(0xd0000,S.sourceLoaderB sources),(0x61c400,image)]
+      loader side = case (inputLoaders inputs,role) of
+        (JoinedLoaderProvider _ candidate,Joined) -> LS.candidateLoader candidate side
+        _ -> case side of LS.LoaderA -> S.sourceLoaderA sources; LS.LoaderB -> S.sourceLoaderB sources
+      candidates = [(0x40000,loader LS.LoaderA),(0xd0000,loader LS.LoaderB),(0x61c400,image)]
   (base,bytes) <- one SourceWordRejected [(base,bytes) | (base,bytes) <- candidates,site >= base,toInteger site+4 <= toInteger base+toInteger (B.length bytes)]
   pure (U.word32At bytes (fromIntegral (site-base)))
 
@@ -237,6 +324,47 @@ checkFetchedCode inputs receipt = do
       Just site -> fromIntegral site >= fromIntegral backing+eventSize event
       Nothing -> True) WriterRejected
 
+loaderAddress :: LI.CodeAddress -> Address
+loaderAddress (LI.CodeAddress value) = Address value
+
+outerContinuation :: Inputs -> Role -> Either WitnessError Address
+outerContinuation inputs role = case (inputLoaders inputs,role) of
+  (JoinedLoaderProvider artifact _,Joined) ->
+    one FrameRejected [loaderAddress (LS.boundaryContinuation boundary)
+      | boundary <- LS.loaderBoundaries (LS.joinedProof artifact) LS.LoaderA
+      ,LS.boundaryScenario boundary == LI.Scenario LI.Primary LI.InitiallyPublished LI.SetupReturns
+      ,LS.boundaryPhase boundary == LI.Setup]
+  _ -> Right (Address 0x40a00)
+
+data InstallationFrame = InstallationFrame Address Address
+installationFrame :: Inputs -> Role -> Address -> Address -> Either WitnessError InstallationFrame
+installationFrame inputs Joined (Address incoming) (Address observedLink) = do
+  boundary <- one FrameRejected [value | value <- C.installationBoundaries (inputJoinedProof inputs)
+    ,C.codeAddressValue (C.boundaryContinuation value) == observedLink
+    ,C.codeAddressValue (C.boundaryInstruction value)+4 == observedLink]
+  pure (InstallationFrame (Address (incoming+fromIntegral (C.stackOffsetValue (C.boundaryStack boundary))))
+    (Address (C.codeAddressValue (C.boundaryContinuation boundary))))
+installationFrame _ _ (Address incoming) _ = Right (InstallationFrame (Address (incoming-48)) (Address 0x69ce38))
+
+data CompletionSites = CompletionSites
+  {siteCompletionStore :: Address,siteCompletionBeforeDsb :: Address,siteCompletionAfterDsb :: Address
+  ,sitePeerPoll :: Address,sitePeerPostload :: Address,sitePeerBranch :: Address,sitePeerDestination :: A.Reg
+  ,siteInitializerCall :: Address,siteInitializerEntry :: Address,siteInitializerReturn :: Address}
+
+completionSites :: Inputs -> Role -> CompletionSites
+completionSites inputs role = case (inputLoaders inputs,role) of
+  (JoinedLoaderProvider artifact _,Joined) ->
+    let primary = LS.loaderSites artifact LS.LoaderA
+        secondary = LS.loaderSites artifact LS.LoaderB
+    in CompletionSites (loaderAddress (LS.completionStore primary)) (loaderAddress (LS.completionBeforeDsb primary))
+      (loaderAddress (LS.completionAfterDsb primary)) (loaderAddress (LS.peerPoll secondary))
+      (loaderAddress (LS.peerPollPostload secondary)) (loaderAddress (LS.peerPollBranch secondary))
+      (LS.peerPollDestination secondary) (loaderAddress (LS.initializerCall secondary))
+      (loaderAddress (LS.initializerEntry secondary)) (loaderAddress (LS.initializerReturn secondary))
+  _ -> CompletionSites (Address 0x40a08) (Address 0x40a0c) (Address 0x40a10)
+    (Address 0xd0a44) (Address 0xd0a48) (Address 0xd0a4c) (A.Reg 3)
+    (Address 0xd0aac) (Address 0xd0430) (Address 0xd0ab0)
+
 checkOuter :: Inputs -> Receipt -> Either WitnessError OuterProjection
 checkOuter inputs receipt = do
   entry <- probeAt receipt OuterEntry
@@ -246,18 +374,18 @@ checkOuter inputs receipt = do
   cache <- probeAt receipt CacheEntry
   cached <- probeAt receipt CacheReturn
   phase <- register entry 0
-  require (core entry == Primary && pc entry == 0x69cdf8 && phase == 0 && sp entry == 0x40063450 && lr entry == 0x40a00
-    && pc returned == 0x40a00 && sp returned == sp entry && core returned == Primary
+  encodedReturn <- outerContinuation inputs (receiptRole receipt)
+  require (core entry == Primary && pc entry == 0x69cdf8 && phase == 0 && sp entry == 0x40063450 && lr entry == address encodedReturn
+    && pc returned == address encodedReturn && sp returned == sp entry && core returned == Primary
     && take 8 (drop 4 (K.contextRegisters (machine returned))) == take 8 (drop 4 (K.contextRegisters (machine entry)))
     && probeId entry < probeId installation && probeId installed < probeId returned) FrameRejected
-  let expectedStack = case receiptRole receipt of Joined -> sp entry-64; _ -> sp entry-48
-      continuation = case receiptRole receipt of Joined -> 0x69cf1c; _ -> 0x69ce38
-      minimumStack = case receiptRole receipt of
+  InstallationFrame expectedStack continuation <- installationFrame inputs (receiptRole receipt) (K.contextSp (machine entry)) (K.contextLr (machine installation))
+  let minimumStack = case receiptRole receipt of
         Joined -> fromIntegral (C.stackOffsetValue (C.joinedLow (inputJoinedProof inputs)))
         Retained -> -56
         Installer -> -48 + fromIntegral (IA.scratchLow (inputInstallerProof inputs))
-  require (core installation == Primary && pc installation == 0x725a04 && sp installation == expectedStack
-    && lr installation == continuation && pc installed == continuation && sp installed == expectedStack) FrameRejected
+  require (core installation == Primary && pc installation == 0x725a04 && sp installation == address expectedStack
+    && lr installation == address continuation && pc installed == address continuation && sp installed == address expectedStack) FrameRejected
   before <- memoryAt receipt entry
   after <- memoryAt receipt returned
   callerBefore <- bytesAt FrameRejected before (physical (sp entry)) 16
@@ -428,24 +556,28 @@ checkCompletion inputs receipt = do
   called <- probeAt receipt InitializerCall
   initializer <- probeAt receipt InitializerEntry
   initialized <- probeAt receipt InitializerReturn
+  let sites = completionSites inputs (receiptRole receipt)
   require (map pc [stored,beforeDsb,afterDsb,poll,loaded,branch,called,initializer,initialized]
-    == [0x40a08,0x40a0c,0x40a10,0xd0a44,0xd0a48,0xd0a4c,0xd0aac,0xd0430,0xd0ab0]
+    == map address [siteCompletionStore sites,siteCompletionBeforeDsb sites,siteCompletionAfterDsb sites
+      ,sitePeerPoll sites,sitePeerPostload sites,sitePeerBranch sites,siteInitializerCall sites,siteInitializerEntry sites,siteInitializerReturn sites]
     && all ((== Primary) . core) [stored,beforeDsb,afterDsb]
     && all ((== Secondary) . core) [poll,loaded,branch,called,initializer,initialized]
     && probeId installed < probeId outer && probeId outer < probeId stored && probeId stored < probeId beforeDsb && probeId beforeDsb < probeId afterDsb
     && probeId poll < probeId loaded && probeId loaded < probeId branch && probeId branch < probeId called
     && probeId called < probeId initializer && probeId initializer < probeId initialized) CompletionRejected
-  nonzero <- register loaded 3
-  require (nonzero /= 0 && sp initializer == 0x400f3410 && lr initializer == 0xd0ab0
-    && sp initialized == sp initializer && lr initialized == 0xd0ab0
+  let A.Reg pollRegister = sitePeerDestination sites
+      initializerLink = address (siteInitializerReturn sites)
+  nonzero <- register loaded (fromIntegral pollRegister)
+  require (nonzero /= 0 && sp initializer == 0x400f3410 && lr initializer == initializerLink
+    && sp initialized == sp initializer && lr initialized == initializerLink
     && take 8 (drop 4 (K.contextRegisters (machine initializer))) == take 8 (drop 4 (K.contextRegisters (machine initialized)))) InitializerRejected
   forM_ [beforeDsb,afterDsb] $ \probe -> do
     contents <- memoryAt receipt probe
     value <- wordAt CompletionRejected contents 0x400a00c4
     require (value == 1) CompletionRejected
-  require (any (\event -> eventSource event == CpuWrite && eventCore event == Just Primary && eventPc event == Just (Address 0x40a08)
+  require (any (\event -> eventSource event == CpuWrite && eventCore event == Just Primary && eventPc event == Just (siteCompletionStore sites)
     && eventAddress event == 0x400a00c4 && eventSize event == 4 && eventValue event == Just 1) (allEvents receipt)) CompletionRejected
-  require (any (\event -> eventSource event == CpuRead && eventCore event == Just Secondary && eventPc event == Just (Address 0xd0a44)
+  require (any (\event -> eventSource event == CpuRead && eventCore event == Just Secondary && eventPc event == Just (sitePeerPoll sites)
     && eventAddress event == 0x400a00c4 && eventValue event == Just (fromIntegral nonzero)) (allEvents receipt)) CompletionRejected
   require (take 4 (K.contextRegisters (machine initialized)) == map WordValue [0x400ebe6c,0x400ed120,0x400f18f0,0x400def40]
     && drop 12 (K.contextRegisters (machine initialized)) == [WordValue 120]
@@ -595,6 +727,13 @@ qualifiedProjection (QualifiedReceipt _ _ _ _ _ projection) = projection
 
 compareSemanticProjections :: Projection -> Projection -> Either WitnessError ()
 compareSemanticProjections before after = require (before == after) ComparisonRejected
+
+compareLoaderSemanticProjections :: Projection -> Projection -> Either WitnessError ()
+compareLoaderSemanticProjections
+  (Projection (OuterProjection (CallerState beforeSp _ beforeControl beforeFrame) _ _ before) consumersBefore)
+  (Projection (OuterProjection (CallerState afterSp _ afterControl afterFrame) _ _ after) consumersAfter) =
+    require (beforeSp == afterSp && beforeControl == afterControl && beforeFrame == afterFrame
+      && before == after && consumersBefore == consumersAfter) ComparisonRejected
 
 qualificationValue :: QualifiedReceipt -> J.Value
 qualificationValue (QualifiedReceipt role identity (Digest digest) (Digest checkpoint) coverage

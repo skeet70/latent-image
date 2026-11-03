@@ -435,7 +435,7 @@ On the legacy native runner, all 307 pairs match their literal expectations and 
 
 The composed bank image no longer fits between the native suites' former default base `0x00be1f00` and the package plan's name record `0x00beb784`: linked there it ends at `0x00bebbb4`, and 51 of the 55 UI cases stop as `memory_guard` where the plan overwrites bank data. `emulation/build-recipe-bank-cases.sh`, `emulation/build-recipe-bank-ui-cases.sh` and both generators now default to `0x00be0000`, a native-case placement only, and both scripts refuse a kernel image that ends past `RB_NAME_RECORD`. The default UI command passes 55/55 with its controls rejected.
 
-The default SD kernel/model link succeeds with the full model's `0x144` synthetic data bytes in `0x7f000000..0x7f001000`. Link controls reject both the full model in the `0xe4` media tail and a widened tail; the media-only model still links in that tail with byte-identical data. The complete SD workload remains unqualified: its guarded execution stopped at the thermal limit before producing aggregate results. Its last intermediate case result is `unknown_call` for `rb_assert_one` in `c-select-iso-manual-after-auto`, not a completed suite verdict. Artifacts are under `private-data/analysis/x-m1-1.50/recipes/issue117-model-layout-sol/kernel-cases-default`. FujiMod native-backend qualification remains separate.
+The default SD kernel/model link succeeds with the full model's `0x144` synthetic data bytes in `0x7f000000..0x7f001000`. Link controls reject both the full model in the `0xe4` media tail and a widened tail; the media-only model still links in that tail with byte-identical data. The complete SD workload remains unqualified: its execution stopped before producing aggregate results. Its last intermediate case result is `unknown_call` for `rb_assert_one` in `c-select-iso-manual-after-auto`, not a completed suite verdict. Artifacts are under `private-data/analysis/x-m1-1.50/recipes/issue117-model-layout-sol/kernel-cases-default`. FujiMod native-backend qualification remains separate.
 
 Global retirement stays open. The 3,027 stock call sites still enter the stock bodies; retiring them needs reviewed entry publications at the eleven stock entries, a forbidden-fetch guard on the retired bodies in a packaged menu route, which the packaged FujiMod route does not yet provide, and a device-driven packaged run with that guard.
 
@@ -488,16 +488,16 @@ Run the control with `--trajectories emulation/recipe-bank-route-ram-push-contro
 
 The #118 fixed workload is the behavior-preserving refactor of these two classifiers. Baseline same-invocation samples are 45.29 s total (1.07 s build, 44.22 s case generation and execution) for the unmodified tree, and 42.58 s (0.98 s, 41.59 s) for the C refactor, under warm Nix/Bazel and page caches, two jobs and sibling load.
 
-The guarded repeat used source `290faba`, the exact reviewed C range-helper patch and Rust wrapping-subtraction patch, the fixed `package-20261024b/image` inputs and fresh `RepeatRust`/`RepeatC` output bases and empty disk caches. Rust ran before C. Unrefactored setup was separate and build-only: Rust build log `58.266 s` (`59.900 s` outer), C build log `60.676 s` (`62.644 s` outer), each including the four targets and `//replacement/bank:bank`.
+The repeat used source `290faba`, the exact reviewed C range-helper patch and Rust wrapping-subtraction patch, the fixed `package-20261024b/image` inputs and fresh `RepeatRust`/`RepeatC` output bases and empty disk caches. Rust ran before C. Unrefactored setup was separate and build-only: Rust build log `58.266 s` (`59.900 s` outer), C build log `60.676 s` (`62.644 s` outer), each including the four targets and `//replacement/bank:bank`.
 
-| Guarded same-invocation sample | C | Rust |
+| Repeat same-invocation sample | C | Rust |
 | --- | ---: | ---: |
 | Incremental build, `--batch` | 12.669 s | 12.778 s |
 | UI workload, all 55 + 5 controls | 95.413 s | 97.417 s |
 | Plan gate, `--batch` | 14.135 s | 12.824 s |
 | Total | 122.224 s | 123.024 s |
 
-Both variants passed 55/55 with five rejected controls and the plan gate. Setup, timed build and plan gate all used Bazel `--batch` inside `thermal-guard-slot-1.service`; no persistent server existed between them. The timed payload recorded the slot cgroup and affinity `0,1`. C peaked at 3,251,122,176 bytes with Tctl 53.5 to 63.6 C; Rust peaked at 4,148,891,648 bytes with Tctl 52.2 to 62.2 C; both had zero swap. The C compiler log has 12 clang invocations including the `menu/recipe_bank_*.c` action units. The Rust execution log records the actual `rustc --crate-name=bank` action with `cacheHit: false`, exit 0 and 0.094 s; the C bank target was cached. No separate Nix bank derivation was found, so no forced Nix bank rebuild was used. Status, registers, ABI validity, effects, mismatches and controls are identical; full projections differ only in `kdata` ABI workspace offsets and provenance totals/retained counts (C 12,571,972/207,059, Rust 12,577,308/207,119). The earlier `98.552 s` C and `97.956 s` Rust samples remain limited measurements, not a matched speedup; the repeat totals are close and no speedup is claimed. Historical two-job samples remain confounded.
+Both variants passed 55/55 with five rejected controls and the plan gate. Setup, timed build and plan gate all used Bazel `--batch` inside emulator slot 1; no persistent server existed between them. The timed payload recorded the slot cgroup. C peaked at 3,251,122,176 bytes and Rust at 4,148,891,648 bytes; both had zero swap. The C compiler log has 12 clang invocations including the `menu/recipe_bank_*.c` action units. The Rust execution log records the actual `rustc --crate-name=bank` action with `cacheHit: false`, exit 0 and 0.094 s; the C bank target was cached. No separate Nix bank derivation was found, so no forced Nix bank rebuild was used. Status, registers, ABI validity, effects, mismatches and controls are identical; full projections differ only in `kdata` ABI workspace offsets and provenance totals/retained counts (C 12,571,972/207,059, Rust 12,577,308/207,119). The earlier `98.552 s` C and `97.956 s` Rust samples remain limited measurements, not a matched speedup; the repeat totals are close and no speedup is claimed. Historical two-job samples remain confounded.
 
 ## Reproduce
 
@@ -512,8 +512,6 @@ Run the 55-case UI workload into fresh directories through the existing emulator
 ```sh
 XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=8G \
   bazel-bin/emulation/emulator-slot \
-  taskset -c 0,1 \
-  nix shell nixpkgs#cpulimit -c cpulimit --include-children --limit=75 -- \
   env RB_RUST_ARCHIVE="$PWD/bazel-bin/replacement/bank/bank.a" BUILD_DIR="$PWD/private-data/analysis/x-m1-1.50/recipes/issue117-ui-proof/ui-build" OUT_DIR="$PWD/private-data/analysis/x-m1-1.50/recipes/issue117-ui-proof/ui-cases" JOBS=1 \
   devenv shell -- bash emulation/build-recipe-bank-ui-cases.sh
 ```
@@ -953,6 +951,26 @@ The owned path reads the full cell word, and for a positive high halfword the se
 
 No layer-(a) cell or direct-state cell lies on the recorded FILMSIM or packaged guard-pair domains (state 0, events 2, 8, 13, 50). Their four cells select `0xc6eb44`, `0xc72e10`, `0xc76650` and `0xc7a528`, which all stay stock in this increment. No guest was run; the evidence is host-only (E-MODAL75-GENERIC-HOST-150).
 
+#### Controller75 owned package and retired-body guard
+
+The continuous lifetime guard now takes the nine layer-(a) stock body extents as retired CPU-fetch classes. In a watch with instruction guards, an accepted fetch outside every guard records a `cpu-fetch` row when a class selects it (`build-support/fujimod-fetch-attribution.patch`); before, every fetch in a guarded watch was silent. The monitor refuses a fetch starting in a retired extent with `retired_fetch` from the install entry through the last reverse publication write, through any mapped or decoder alias on either core; outside that window the restored stock dispatcher may fetch them, and the completed Haskell check accepts those rows only before the first or after the last publication-writer row. Retired extents must avoid the runtime, every write-watched extent and every guarded instruction site. SDK tests show canonical, aliased and decoder-alias fetches on both cores refusing, and the phase window with adjacent extents (`0xc7aef4`, `0xc7af6c`, `0xc7afc8`).
+
+`--modal75-owned-archive` and `--modal75-retired` link an owner-built bank archive (`--cfg rb_modal_scoped --cfg rb_modal75_owned`, `RB_MODAL75_TABLE` = the private table) and the generator's retired document, which names schema 1, the pinned image5 and the table digest. The first owned archive pulled `core::slice::index::slice_index_fail` and `__aeabi_memcpy` into `rb_modal_dispatch`; the RAM-push link has no section GC, so `.text` overlapped `.ram_push.text`. `modal75.rs` now references table actions and iterates route pairs without slicing. Relinked at the reference base `0x00c40000`, the owned archive passes the bank allowlist with 0 violations (443 proven stores, 987 proven branches against stock's 439 and 986), and its bank object has stock's undefined-symbol set. Eight independent review rounds covered the guard, package, trajectories and settings rule (E-MODAL75-OWNED-PACKAGE-HOST-150).
+
+Under the original guard the stock223 control refused on both crawl-3 routes to layer-(a) cells, because the stock property setter changes a guarded live-setting byte (E-MODAL75-ROUTE-STOCK-REFUSAL-150).
+
+| Run | Route | Reached | Refusing write |
+| --- | --- | --- | --- |
+| `run-stock223` | MENU, OK (live view), then OK into `(1,321,17)` | shooting menu `(1,5,2)` | `0x0096ccd2` `0x89`→`0xc9`, pc `0x0062ae3c`, instruction 1,522,403,269 |
+| `run-stock223b` | MENU, MENU, then OK into `(1,321,17)` | same | identical row stream (duplicate input) |
+| `run-q-stock223` | MENU, Q, then BACK | Q menu `(122,5,1)`, `retired-c7a7e4` hit 3 times | `0x0096ccca` `0x20`→`0x21`, pc `0x0062fed8`, instruction 1,520,318,916 |
+
+Both refusing writes fall in the key after the last completed segment, inside the stock property setter. The shooting-menu runs match the passing packaged stock run row for row through instruction 1,522,242,231.
+
+**Settings rule.** A value-changing store to the 450-byte live-settings block is now admitted only from a declared settings writer; both roles bind the stock property setter `[0x624694, 0x6309c4)`, its jump-table arms fenced by the next function. Each admitted store is counted in the receipt, re-derived from the final watch and written with its instruction count, PC, address and old and new bytes to `e2e-modal-settings-writes.json`. `//emulation:modal-settings-compare` re-derives both roles' stores from their bound receipts and requires the same ordered (address, width, value) sequence. Any other writer, and any resident-bank change, still refuses. The comparison covers the watched block at bank slot 0, not the setter's mirror at `0x0089ec00` or other slots. Owned code declares no settings binding.
+
+**Q-route pair.** Under the new mechanism the Q route ran once per role (E-MODAL75-OWNED-Q-ROUTE-150). Both runs pass install, trajectory and unload with the completed lifetime check and one admitted setter store, `0x0096ccca` `0x20`→`0x21`. The stock control fetched `0xc7a7e4` four times at controller 75 `(43,50)`. The owned candidate ran the owned generic action instead (`owned-transition-call` 4 times, 6 owned handoffs among 1,521 balanced entries), with no retired-body trace hit and no CPU-fetch row in its 573,333 guard rows. The settings sequences and all five captures compare equal. Only the `(43,50)` cell is exercised; the other eight retired bodies are not reached on this route.
+
 ### Behavioural census
 
 The maintainer scoped #128 as functional replacement: the camera's menu behaviour, not every stock callback. This section measures that behaviour by crawling the emulated stock UI and maps what it reaches onto the callback measurements above. [Sources: E-MODAL-MENU-CRAWL-150; E-MODAL-CONTROLLER-SCALE-150.]
@@ -1011,7 +1029,36 @@ Twenty-one actions, of controllers 0, 30, 41, 42, 74, 75, 76, 100, 101 and 107, 
 | Live-view key overlay strip | drive, focus area, white balance and the other outside screens |
 | Information or progress screen | sensor cleaning run, previous-connection details, PC auto-save connection |
 
-**[INFERENCE]** Nine generic behaviours therefore cover the 87 menu keys, five dialogs and the live-view overlays the emulator reaches, where the stock firmware spends 371 actions in 295 shapes across 38 controllers. For #128 this moves the functional unit from the callback to the menu table: an owned dispatcher plus these behaviours replaces the reached actions once the menu, property and value tables are recovered as data. The scope still open is what the emulator cannot reach: card, lens, mode-dial, S1/S2 and Wi-Fi paths, OK on confirmations, and the 14 depth-limited screens.
+**[INFERENCE]** Nine generic behaviours therefore cover the 87 menu keys, five dialogs and the live-view overlays the emulator reaches, where the stock firmware spends 371 actions in 295 shapes across 38 controllers. For #128 this moves the functional unit from the callback to the menu table: an owned dispatcher plus these behaviours replaces the reached actions once the menu, property and value tables are recovered as data, which the next section does. The scope still open is what the emulator cannot reach: card, lens, mode-dial, S1/S2 and Wi-Fi paths, and the depth-limited screens.
+
+#### Menu tables, confirmation paths and the behaviour map
+
+`//replacement/modal_runtime:menu-tables` decodes the stock menu data from the pinned image-4 decode and the English string slot. The node registry at `0x0081babc` has 0x86 slots (bound from the walk in `FUN_0061d038`), 111 of them filled. With parents and row children the decode holds 332 node records of 11 words: id, type, property or class, kind, two zero words, flag, parent, values, labels and a last word of unknown use. Values are `{row, child}` pairs ending at `{0x7ffffffe, 0}` (`FUN_00bf9794`); labels are `{preview icon, list icon, help, name}` string-id records; 142 property conversion tables come from `*(0x0081b09c + 4*property)` for properties up to `0x286` (`FUN_00631a00`). Most row labels resolve to the camera's private-use glyph font rather than plain English text. [Sources: E-MODAL-MENU-TABLES-150; `private-data/scratch/ControllerStrategy/menu-tables.json`.]
+
+Every menu key of crawl-5 matches exactly one stock node by its 44-byte record. The crawl reached 88 of the 332 nodes; 63 of the 244 it did not reach are row children of reached nodes, and which paths open the other 181 is not established. **[INFERENCE]** The decoded tables carry the menu data the nine generic behaviours need, including for menus the emulator does not reach.
+
+The confirmation cursor is the word `0x009503c0`. Two `--ram-diff` runs sampled `[0x00600000,0x03300000)`: in the SHOOTING MENU RESET dialog, DOWN changes it from 0 to 1, a second DOWN or UP restores it, and Q leaves it; DOWN on the RESET list behind the dialog does not change it. Of the small words with that pattern it is the only one in image-4 data; the others lie in repeated structures at `0x00a4d9xx..0x00a87dxx`, `0x0165xxxx` and `0x0207xxxx..0x0283xxxx`. Crawl-5 adds it to screen identity and marks OK from a dialog as a terminal press, so each OK is pressed once from its dialog's own snapshot and the state after the confirmation is never explored. With it, the OK positions of all five dialogs became separate screens. Dialogs are recognised by controller state: controller 75 in `0x0d` for SET OK?, controller 76 in `0x21` for CUSTOM RESET, SHOOTING MENU RESET and SET-UP RESET, and controller 76 in `0x25` for RESET WIRELESS SETTINGS.
+
+| OK path (crawl-5) | Distinct properties set | Landing |
+| --- | --- | --- |
+| RESET WIRELESS SETTINGS | 10 | SET-UP tab column, known screen |
+| CUSTOM RESET | 92 | SET-UP tab column, known screen |
+| SHOOTING MENU RESET | 304 | SET-UP tab column, known screen |
+| SET-UP RESET | 69 | START MENU language page `(69,52,12)`, new screen, not expanded |
+| SET OK? | not pressed: its OK position stayed depth-limited after its replay diverged | |
+
+None of the four confirmations goes through the commit dispatcher `0x00d4fc74`; each writes its properties through the setter `0x00624694` and sends application message `0x816` with `0xa05`, `0xa0e` or both. Crawl-5 otherwise matches crawl-4: 570 screens, 4,584 trials, 88 menu keys (the new key is the START MENU page), 380 distinct actions in 301 shapes, 15 screens depth-limited. [Sources: E-MODAL-MENU-OKPATHS-150.]
+
+`census-5.json` maps each of the 88 keys to its stock node (address, row count, row names), its controllers and every dispatched `(controller, state, event, action)` with the manifest cell index and action slot; the 21 per-press actions are flagged. Grouping keys by the set of actions they dispatch, other than per-press ones:
+
+| Class | Keys | Distinct action sets |
+| --- | --- | --- |
+| Navigation list | 18 | 18 |
+| Value list | 38 | 17 |
+| Toggle | 25 | 12 |
+| Other | 7 | 5 |
+
+The 63 pickers use 117 distinct actions. Twenty-one shooting-menu pickers dispatch the identical set of ten actions of controllers 30, 74, 75 and 100, so the stock firmware already runs them through one generic picker path; the SET-UP pickers fall into smaller groups (at most five keys) with setting-specific controller-76 actions. **[INFERENCE]** A generic owned picker driven by the decoded node, values and conversion table reproduces both groups; the setting-specific controller-76 actions are the residual whose side effects (properties written, application messages) the census lists per key and a replacement must keep.
 
 #### Camera-side validation harness (design)
 
@@ -1021,7 +1068,7 @@ Twenty-one actions, of controllers 0, 30, 41, 42, 74, 75, 76, 100, 101 and 107, 
 | --- | --- | --- | --- |
 | Key script | Generate per-screen key sequences from the emulator graph: a path from a known start to the target screen, then the edges to check, each with its expected next screen. Exclude every edge whose emulator activity commits durable state (storage, format, reset, save) or that leads to one. | Graph edges with their traced commits, mailbox codes and dispatches | Script generator |
 | Phase 0 input, no camera code | The owner presses the scripted keys by hand at a host prompt; the webcam records. | Physical key codes and release forms bound by the act-logged capture: OK `0x01`, UP `0x02`, DOWN `0x03`, LEFT `0x04`, RIGHT `0x05`, DISP/BACK `0x09`, PLAY `0x0b`, Q `0x32`, Fn `0x28`, sub-command push `0x2b`, release `code \| 0x80` (E-PRESS-MAP-150) | Prompt tool |
-| Phase 1 input, RAM-side hook | A RAM-push payload extends the stock key-scan callback `0x006a33f0` (task 37, period 25; E-XM1-KEY-SAMPLING-PATH-150): on a scan tick it takes one pending key record from a mailbox in its allocation and publishes it through the stock publisher `0x006a1c50`, the GPIO handler's route into the queue-1 key message, so injected presses take the stock debounce and dispatch path. The host writes the mailbox with the existing function-3 RAM write. | RAM-push install and rollback on the body (E-RAM-PUSH-INSTALL-150, E-RAM-PUSH-SESSION-150 and the E-RAM-PUSH253 runs); publisher route `0x006a1c50 -> 0x006a1b40` and sender `0x006334dc` from static analysis only | Hook bytes; proof that calling `0x006a1c50` from the scan callback's task context matches the GPIO handler's; queue-1 message layout; physical debounce and release timing (#53 is open with no measurements; #111 covers emulator release caps only) |
+| Phase 1 input, RAM-side hook | A RAM-push payload extends the stock key-scan callback `0x006a33f0` (task 37, period 25; E-XM1-KEY-SAMPLING-PATH-150): on a scan tick it takes one pending key record from a mailbox in its allocation and publishes it through the stock publisher `0x006a1c50`, the GPIO handler's route into the queue-1 key message, so injected presses take the stock debounce and dispatch path. The host writes the mailbox with the existing function-3 RAM write. | RAM-push install and rollback on the body (E-RAM-PUSH-INSTALL-150, E-RAM-PUSH-SESSION-150 and the RAM-push 253 runs, E-RAM-PUSH253-INSTALL-150); publisher route `0x006a1c50 -> 0x006a1b40` and sender `0x006334dc` from static analysis only | Hook bytes; proof that calling `0x006a1c50` from the scan callback's task context matches the GPIO handler's; queue-1 message layout; physical debounce and release timing (#53 is open with no measurements; #111 covers emulator release caps only) |
 | State readback | After each press, `read-ram` the menu record (`0x009571d0`, 16 bytes, already the first planned live window), the controller state and event cells `[0x01467588,0x01467840)` in three windows and the 48-byte node descriptor. This is the emulator graph's own screen identity, independent of video. | Standing read grant for `read-ram` and `read-config` (E-CAMERA-READ-GRANT-150; spec 07 section 3.4); `transport/README.md` `read-ram` plans, at most 2,032 requests per run | Plan generator; the cells have not been read on the body |
 | Video | Record the webcam with ffmpeg through v4l2; rectify each frame by a homography fitted once on a calibration screen whose emulator image is known (SHOOTING MENU page 1); compare rectified frames with the expected node's emulator PNG and with its alternatives. | Pinned ffmpeg and ffprobe; `//af-session` presentation-timestamp listing and frame extraction; phone-video precedent E-RAM-PUSH253-SELECT-VIDEO-150 | Capture command, rectification, image comparator |
 | Alignment | No subtraction across host, camera and video clocks (spec 08). Order suffices: each press is followed by one readback and by the first video frame that differs from the previous settled screen. A step passes when the readback matches the expected node's menu reading and cells and the frame matches its image; otherwise the observed screen becomes a new node. | Graph identity rules above | Step matcher |

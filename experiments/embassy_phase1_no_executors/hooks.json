@@ -1,0 +1,5 @@
+{
+  "hooks": [
+    { "address": "0x00bfb028", "handler": "embassy_on_dispatch" }
+  ]
+}

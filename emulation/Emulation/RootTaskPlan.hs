@@ -1,12 +1,12 @@
 module Emulation.RootTaskPlan
   ( RootPlan(..), PlanError(..), derivePlan, rootLow, rootHigh, stackLow, stackHigh
-  , taskLayout, callbackResources, sourceBodies, sourceWord, declaredBoundary, physical, conditionHolds
-  , SyncRecords(..), SyncCallback(..)
+  , taskLayout, callbackResources, sourceBodies, sourceWord, labelAgrees, physical, conditionHolds
+  , SyncRecords(..), SyncCallback(..), irqNest, irqStack, irqAtcm, irqCallbackDepth, loaderDispatchReturn
   ) where
 
 import qualified A32 as A
 import Control.Monad (unless)
-import Data.Bits ((.&.), (.|.), shiftL, testBit)
+import Data.Bits ((.&.), (.|.), shiftL, shiftR, testBit)
 import qualified Data.ByteString as B
 import Data.List (find, sortOn)
 import qualified Data.Map.Strict as M
@@ -27,13 +27,14 @@ import StockInventory (GuestAddress(..), CodeFootprint(..), FootprintError, deri
 
 data PlanError = SourceWordRejected | PublicationTableRejected | CallbackPublicationRejected GuestAddress
   | ServiceGraphLimitExceeded | ServiceSourceMissing GuestAddress
-  | ServiceFootprintRejected GuestAddress FootprintError | UnresolvedServiceTransfer GuestAddress A.Instruction | SiteRejected deriving (Eq, Show)
+  | ServiceFootprintRejected GuestAddress FootprintError | UnresolvedServiceTransfer GuestAddress A.Instruction | SiteRejected
+  | IrqCallbackSourceRejected GuestAddress deriving (Eq, Show)
 data SyncCallback = SyncCallback { callbackCell :: W.Address, callbackTarget :: W.Address } deriving (Eq, Show)
 data SyncRecords = SyncRecords
   { syncCore :: T.KernelCore, syncBase :: W.Address, syncCallbacks :: [SyncCallback] } deriving (Eq, Show)
 data RootPlan = RootPlan
   { memoryPlan :: Memory.CapturePlan, tableA :: B.ByteString, tableB :: B.ByteString
-  , serviceWords :: S.Set Word32, serviceInstructions :: S.Set Word32, unresolvedTransfers :: S.Set Word32, serviceEntries :: S.Set Word32
+  , serviceWords :: S.Set Word32, serviceInstructions :: S.Set Word32, unresolvedTransfers :: S.Set Word32
   , rootCallMap :: M.Map Word32 Root.CallSite, requiredSites :: S.Set Word32, syncRecords :: [SyncRecords] }
 rootLow, rootHigh, stackLow, stackHigh :: Word32
 rootLow = 0x69d160
@@ -55,15 +56,51 @@ taskLayout T.PrimaryKernel = (0x4005beac+40*103,0x4005ff0c+56*103,0x40054760,0x4
 taskLayout T.SecondaryKernel = (0x400ebe6c+40*102,0x400efecc+56*102,0x400e4720,0x400e4728,0xa10200,0xa10600,T.TaskId 103)
 callbackResources :: [(Word32,Int)]
 callbackResources = [(0x96ca4c,4),(0x828094,4),(0x8e1f28,4),(0x9c3500,0x404),(0x89ea8c,12)
-  ,(0x5d178+12*103,12),(0x624b4+16*103,16)]
+  ,(0x5d178+12*103,12),(0x624b4+16*103,16),(irqNest,4)]
+-- | Loader A 0x400545a4 (literal 0x40418): 0x40240 increments it on IRQ entry and 0x4031c decrements it on exit;
+-- boot 0x43848 and the scheduler idle window 0x436f0..0x43720 also hold it at 1.
+irqNest :: Word32
+irqNest = 0x545a4
+irqAtcm :: Word32
+irqAtcm = 0x70000011
+-- | Core0 ATCM window of 'irqAtcm'; its top is the first-level IRQ stack that 0x40250 loads from 0x40370.
+irqStack :: (Word32,Word32)
+irqStack = (base,base+(512 `shiftL` fromIntegral ((irqAtcm `shiftR` 2) .&. 31)))
+  where base = irqAtcm .&. 0xfffff000
+-- | Callback frame plus the 24-byte 0x725b74 and 8-byte 0x412bc frames on its success path.
+irqCallbackDepth :: Word32
+irqCallbackDepth = 8+32
+-- | Return address that dispatcher 0x72337c saves when loader A 0x4bf08 calls it.
+loaderDispatchReturn :: Word32
+loaderDispatchReturn = 0x4bf0c
+-- | Loader A IRQ entry, handler call and exit with their literals, the I-clearing dispatch at 0x4bef0..0x4bf08,
+-- dispatcher 0x72337c, the 0x725424 dispatcher selection and table stores, and the callback's frame push and pop.
+irqCallbackSource :: [(Word32,[Word32])]
+irqCallbackSource =
+  [(0x40204,[0xe3a0d0d3,0xe129f00d,0xe92dd00f,0xe3a000d2,0xe129f000,0xe24e0004,0xe14f1000,0xe2012040,0xe3822093,0xe129f002
+    ,0xe58d0018,0xe92d0002,0xe59f21dc,0xe5923000,0xe2830001,0xe5820000,0xe3530000,0x1b000002,0xe1a0200d,0xe59fd118,0xe92d0004])
+  ,(0x402c0,[0xe59f0158,0xe12fff30,0xe10f2000,0xe3c22080,0xe129f002,0xe3500000,0x11a0e00f,0x11a0f000,0xe10f2000,0xe2022040
+    ,0xe3822093,0xe129f002,0xe59f212c,0xe12fff32,0xe59f2118,0xe5921000,0xe2411001,0xe3510000,0x059f010c,0x0b00093a
+    ,0xe59f2100,0xe5921000,0xe2413001,0xe5823000,0xe3530000,0x1a000008,0xe8bd0001,0xe1a0d000,0xe59f10f0,0xe5910000
+    ,0xe3500000,0x0a000002,0xe3a00000,0xe5810000,0xea000d03,0xe8bd0002,0xe10f2000,0xe2022040,0xe3c11040,0xe1811002
+    ,0xe169f001,0xe8fdd00f])
+  ,(0x40370,[snd irqStack]),(0x40418,[0x40000000 .|. irqNest]),(0x40420,[0x00040d50,0x00040d60,0x400546d8])
+  ,(0x4bef0,[0xe10f3000,0xe3c33080,0xe129f003,0xe5942000,0xe5923008,0xe5920004,0xe12fff33])
+  ,(0x72337c,[0xe92d4800,0xe28db004,0xe3033500,0xe344309c,0xe7933100,0xe12fff33,0xe8bd8800])
+  ,(0x725464,[0xe3580000,0x0303337c,0x03403072]),(0x725540,[0xe3a02001,0xe5892304])
+  ,(0x7255b8,[0xe3033500,0xe344309c,0xe7837104,0xe5932000,0xe0831104,0xe5812100,0xe581a200]),(0x7255f4,[0xe5862000])
+  ,(0x69cc18,[0xe92d4800]),(0x69cc68,[0xe8bd8800])]
+checkIrqCallbackSource :: [(Word32,B.ByteString)] -> Either PlanError ()
+checkIrqCallbackSource sources = do
+  mapM_ (\(base,expected) -> mapM_ (\(location,word') -> do
+    actual <- sourceWord sources location
+    unless (actual == word') (Left (IrqCallbackSourceRejected (GuestAddress location)))) (zip [base,base+4..] expected)) irqCallbackSource
 irqSites :: [(Word32,Boundary)]
 irqSites = [(0x40204,IrqEntry),(0xd0204,IrqEntry),(0x40234,IrqFrame),(0xd0234,IrqFrame)
   ,(0x40364,IrqReturn),(0xd0364,IrqReturn),(0x437d8,IrqReturn),(0xd37d8,IrqReturn)]
 cleanupSites :: [Word32]
 cleanupSites = [0x72614c,0x726150,0x72615c,0x726160,0x726198,0x72619c,0x7261a4,0x7261a8
   ,0x7261b8,0x7261bc,0x7261c4,0x7261c8,0x7261cc,0x453f0,0x453f4,0x454e8,0x436e8]
-continuations :: [Word32]
-continuations = [0x43668,0x4366c,0x43728,0x4372c,0x437a4,0x437a8]
 spanOf :: (Word64,Word64) -> Memory.PhysicalSpan
 spanOf (low,high) = Memory.PhysicalSpan (PhysicalBoundary low) (PhysicalBoundary high)
 fetchSpans :: [Memory.PhysicalSpan]
@@ -140,11 +177,11 @@ sourcePublishedEntries files sources records = do
     _ <- sourceWord sources entry
     pure ()) (S.toList entries)
   pure entries
-footprints :: SourceFiles -> S.Set Word32 -> Either PlanError (S.Set Word32,S.Set Word32,S.Set Word32,S.Set Word32)
+footprints :: SourceFiles -> S.Set Word32 -> Either PlanError (S.Set Word32,S.Set Word32,S.Set Word32)
 footprints files initial = walk (S.toList initial) S.empty S.empty S.empty S.empty
   where
     sources = sourceBodies files (sourceImage files)
-    walk [] entries words' instructions unresolved = Right (entries,words',instructions,unresolved)
+    walk [] _ words' instructions unresolved = Right (words',instructions,unresolved)
     walk (entry:pending) entries words' instructions unresolved
       | S.member entry entries || rootLow <= entry && entry < rootHigh = walk pending entries words' instructions unresolved
       | S.size entries >= 2048 = Left ServiceGraphLimitExceeded
@@ -181,6 +218,7 @@ derivePlan files proof runtime = do
   (primary,secondary) <- publishedTables files
   let sources = sourceBodies files (sourceImage files)
   records <- sourceSyncRecords sources
+  checkIrqCallbackSource sources
   publications <- sourcePublishedEntries files sources records
   canonicalCalls <- fmap concat $ mapM (\pc -> do
     raw <- sourceWord sources pc
@@ -190,7 +228,7 @@ derivePlan files proof runtime = do
         ++ [0x69c9f8,0x69cc00,0x69cc18,0x725b74,0x72835c,0x726478,0x725dd8,0x724924,0x72337c
            ,0x4d434,0x41140,0x4d1a4,0x453f0,0x43dd0,0x43688,0x412bc,0x4118c,0x43728]
         ++ filter (/=0) (tableTargets primary++tableTargets secondary) ++ S.toList publications)
-  (entries,guarded,instructions,unresolved) <- footprints files staticSeeds
+  (guarded,instructions,unresolved) <- footprints files staticSeeds
   let mutableLoaderCell pc = any (\(base,lastByte) -> pc >= base && pc < lastByte && not (any (\(low,high) -> fromIntegral pc >= low && fromIntegral pc < high) loaderProtected))
         [(0x40000,0x4dae0),(0xd0000,0xddaa0)]
       callbackCells = [physical cell | record <- records,SyncCallback (W.Address cell) _ <- syncCallbacks record]
@@ -206,36 +244,21 @@ derivePlan files proof runtime = do
       calls = M.fromList [(Root.callPc site,site) | site <- Root.callSites proof]
       required = S.fromList ([rootLow,rootLow+4..rootHigh-4]++[0x725dd8,0x724924,0x725f08,0x725f0c,0x725fa8,0x725fac]
         ++[0x69cc18,0x69cc1c..0x69cc68]++cleanupSites++map fst irqSites)
-  pure (RootPlan capture primary secondary guarded (S.union instructions (S.fromList (Root.executionPcs proof))) unresolved entries calls required records)
+  pure (RootPlan capture primary secondary guarded (S.union instructions (S.fromList (Root.executionPcs proof))) unresolved calls required records)
 
-declaredBoundary :: RootPlan -> [(Word32,B.ByteString)] -> Word32 -> Boundary -> Bool
-declaredBoundary plan sources location boundary = case boundary of
-  Start -> pc == 0x725dd8
-  RootEntry -> pc == rootLow
-  RootInstruction -> rootLow <= pc && pc < rootHigh
-  ServiceEntry -> M.member pc (rootCallMap plan) || S.member pc (serviceEntries plan)
-    || pc `elem` cleanupSites || pc == 0x724924 || isIndirect pc
-  ServiceReturn -> any (\site -> Root.callPc site+4 == pc) (M.elems (rootCallMap plan))
-    || pc `elem` cleanupSites || afterCall pc
-  TaskSubmit -> pc == 0x725dd8
-  PeriodicCallback -> 0x69cc18 <= pc && pc <= 0x69cc68
-  IrqEntry -> lookup pc irqSites == Just IrqEntry
-  IrqFrame -> lookup pc irqSites == Just IrqFrame
-  IrqReturn -> lookup pc irqSites == Just IrqReturn
-  PostCleanup -> pc `elem` continuations || pc `elem` [0x453f0,0x453f4] || afterCall pc || S.member pc (serviceInstructions plan)
-  where
-    pc = physical location
-    isIndirect target = case sourceWord sources target of
-      Right raw -> case A.decode target raw of
-        A.BranchExchange {} -> True
-        A.DataProcessing _ A.MOV _ destination _ _ -> destination == A.pc
-        A.Branch _ False destination -> destination == target
-        _ -> False
-      Left _ -> False
-    afterCall target | target < 4 = False
-    afterCall target = case sourceWord sources (target-4) of
-      Right raw -> case A.decode (target-4) raw of A.Branch _ True _ -> True; A.BranchExchange _ True _ -> True; _ -> False
-      Left _ -> False
+-- | The boundary class a PC alone determines: the task-submit wrapper and the loader IRQ entry, frame and return points.
+pcBoundary :: Word32 -> Maybe Boundary
+pcBoundary location
+  | physical location == 0x725dd8 = Just TaskSubmit
+  | otherwise = lookup (physical location) irqSites
+-- | Whether a producer label is admitted at a PC, `first` marking sample 0. A PC-determined class must match exactly;
+-- elsewhere the label names the producer's dynamic role assignment and only may not claim a PC-determined class.
+labelAgrees :: Bool -> Word32 -> Boundary -> Bool
+labelAgrees first location label
+  | first = label == Start && physical location == 0x725dd8
+  | otherwise = case pcBoundary location of
+      Just expected -> label == expected
+      Nothing -> label `notElem` [Start,TaskSubmit,IrqEntry,IrqFrame,IrqReturn]
 
 conditionHolds :: A.Cond -> W.WordValue -> Bool
 conditionHolds (A.Cond condition) (W.WordValue flags) = case condition of

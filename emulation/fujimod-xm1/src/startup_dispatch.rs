@@ -1,6 +1,9 @@
 #[path = "memory_view.rs"]
 mod memory_view;
+#[path = "startup_dispatch_check.rs"]
 mod startup_dispatch_check;
+#[path = "startup_dispatch_shared.rs"]
+pub(crate) mod shared;
 
 use fujimod_emulator::board::factory::MemoryMap;
 use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
@@ -69,7 +72,7 @@ impl TryFrom<u32> for Phase {
 enum Service { Mode, Clear, Install, Task }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-enum Source { CpuFetch, CpuRead, CpuWrite, HostRead, HostWrite, ModelBusRead, ModelBusWrite }
+pub(crate) enum Source { CpuFetch, CpuRead, CpuWrite, HostRead, HostWrite, ModelBusRead, ModelBusWrite }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(transparent)]
 struct Count(u64);

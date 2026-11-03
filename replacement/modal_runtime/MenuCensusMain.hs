@@ -49,6 +49,8 @@ data Node = Node
   { nodeId :: NodeId
   , nodeMenu :: Maybe MenuReading
   , nodeDescriptor :: Maybe [Word32]
+  -- | The first 44 descriptor bytes as lowercase hex: one stock node record.
+  , nodeRecordHex :: Maybe String
   , nodeFrames :: [FrameDigest]
   , nodeImage :: FilePath
   , nodePath :: [String]
@@ -56,7 +58,7 @@ data Node = Node
   , nodeStates :: B.ByteString
   }
 
-data Dispatch = Dispatch { dispatchController :: ControllerId, dispatchAction :: Maybe Target }
+data Dispatch = Dispatch { dispatchController :: ControllerId, dispatchState :: Word32, dispatchEvent :: Word32, dispatchAction :: Maybe Target }
 data Effect = Effect { effectSite :: EffectSite, effectArguments :: [Word32] }
 data Edge = Edge
   { edgeFrom :: NodeId
@@ -88,17 +90,18 @@ instance FromJSON MenuReading where
 
 instance FromJSON Node where
   parseJSON = withObject "node" $ \fields -> do
-    descriptor <- fields .:? "menu_node_bytes" >>= traverse (either fail (pure . words32) . hexBytes)
+    descriptorHex <- fields .:? "menu_node_bytes"
+    descriptor <- traverse (either fail (pure . words32) . hexBytes) descriptorHex
     states <- fields .: "states" >>= either fail pure . hexBytes
     unless (B.length states == 2 * 174) (fail "a node records 174 state halfwords")
-    Node <$> (NodeId <$> fields .: "id") <*> fields .:? "menu" <*> pure descriptor
+    Node <$> (NodeId <$> fields .: "id") <*> fields .:? "menu" <*> pure descriptor <*> pure (take 88 <$> descriptorHex)
       <*> (map FrameDigest <$> fields .: "frames") <*> fields .: "image" <*> fields .: "path" <*> fields .:? "frontier"
       <*> pure states
 
 instance FromJSON Dispatch where
   parseJSON = withObject "dispatch" $ \fields -> do
     action <- fields .:? "action" >>= traverse (either fail (pure . Target) . hexWord)
-    Dispatch <$> (ControllerId <$> fields .: "controller") <*> pure action
+    Dispatch <$> (ControllerId <$> fields .: "controller") <*> fields .: "state" <*> fields .: "event" <*> pure action
 
 instance FromJSON Effect where
   parseJSON = withObject "effect" $ \fields -> do
@@ -121,24 +124,63 @@ instance FromJSON Graph where
     withObject "graph" (\fields -> Graph <$> fields .: "nodes" <*> fields .: "edges" <*> fields .: "complete"
       <*> fields .: "trials" <*> fields .:? "limit") graph
 
--- | Action-table targets per controller from the controller manifest.
-newtype Ownership = Ownership (M.Map Target ControllerId)
+-- | A cell of a controller's state/event matrix: its index in the cell table and its action slot.
+data CellRef = CellRef { cellIndex :: Int, cellSlot :: Int } deriving (Eq, Show)
 
-instance FromJSON Ownership where
+-- | From the controller manifest: action-table targets per controller, and each controller's cells
+-- by (state, event) coordinate.
+data Manifest = Manifest { manifestOwners :: M.Map Target ControllerId, manifestCells :: M.Map (ControllerId, Word32, Word32) CellRef }
+
+instance FromJSON Manifest where
   parseJSON = withObject "manifest" $ \manifest -> do
     controllers <- manifest .: "controllers" :: Parser [J.Value]
-    pairs <- concat <$> mapM controller controllers
-    pure (Ownership (M.fromList pairs))
+    parsed <- mapM controller controllers
+    let cells = concatMap snd parsed
+        cellMap = M.fromList cells
+    unless (M.size cellMap == length cells) (fail "a controller repeats a (state, event) cell coordinate")
+    pure (Manifest (M.fromList (concatMap fst parsed)) cellMap)
    where
     controller = withObject "controller" $ \fields -> do
-      identity <- fields .: "id"
+      identity <- ControllerId <$> fields .: "id"
       tables <- fields .: "tables" :: Parser [J.Value]
-      targets <- concat <$> mapM (withObject "table" (\table -> do
+      parsed <- mapM (withObject "table" (\table -> do
         kind <- table .: "kind"
-        if kind == ("Actions" :: String)
-          then table .: "words" >>= mapM (either fail pure . hexWord)
-          else pure [])) tables
-      pure [(Target target, ControllerId identity) | target <- targets, target /= 0]
+        case kind :: String of
+          "Actions" -> do
+            targets <- table .: "words" >>= mapM (either fail pure . hexWord)
+            pure ([(Target target, identity) | target <- targets, target /= 0], [])
+          "Cells" -> do
+            decoded <- table .: "decoded_cells" >>= mapM (withObject "cell" (\cell -> do
+              state <- cell .: "state_coordinate"
+              event <- cell .: "event_coordinate"
+              reference <- CellRef <$> cell .: "index" <*> cell .: "action_slot"
+              pure ((identity, state, event), reference)))
+            pure ([], decoded)
+          _ -> pure ([], []))) tables
+      pure (concatMap fst parsed, concatMap snd parsed)
+
+-- | A stock menu node from the menu-tables output: its address, row count and row names.
+data TableNode = TableNode { tableAddress :: String, tableRows :: Maybe Int, tableRowNames :: [Maybe String] }
+
+-- | Menu-tables nodes by the hex of their 44-byte record.
+newtype MenuTables = MenuTables (M.Map String TableNode)
+
+instance FromJSON MenuTables where
+  parseJSON = withObject "menu tables" $ \document -> do
+    nodes <- document .: "nodes" :: Parser [J.Value]
+    entries <- mapM (withObject "menu node" (\fields -> do
+      raw <- fields .:? "raw_hex"
+      address <- fields .: "address"
+      rows <- fields .:? "rows" :: Parser (Maybe J.Value)
+      labels <- fields .:? "labels" :: Parser (Maybe J.Value)
+      names <- case labels of
+        Just (J.Array items) -> mapM labelName (foldr (:) [] items)
+        _ -> pure []
+      let count = case rows of Just (J.Array items) -> Just (length items); _ -> Nothing
+      pure (fmap (\hexText -> (hexText, TableNode address count names)) raw))) nodes
+    pure (MenuTables (M.fromList [entry | Just entry <- entries]))
+   where
+    labelName = withObject "label" (\label -> label .:? "name" >>= maybe (pure Nothing) (withObject "string" (.:? "text")))
 
 data Shape = Shape { shapeHash :: ShapeHash, shapeConditional :: Bool }
 data Scale = Scale { scaleShapes :: M.Map Target Shape, scaleSizes :: M.Map ShapeHash Int }
@@ -220,17 +262,20 @@ main = do
   graphPath <- required "--graph"
   scalePath <- required "--scale"
   manifestPath <- required "--manifest"
+  tablesPath <- required "--tables"
   outputPath <- required "--out"
   exists <- doesPathExist outputPath
   when exists (fail "output already exists")
   graphBytes <- B.readFile graphPath
   scaleBytes <- B.readFile scalePath
   manifestBytes <- B.readFile manifestPath
+  tablesBytes <- B.readFile tablesPath
   unless (sha256Hex (sha256 scaleBytes) == "f69a020dede2d506ce847a411a22af13bd9eaf970b7c924d6dc074e8fdf5967a") (fail "scale identity differs")
   unless (sha256Hex (sha256 manifestBytes) == "f27b35628371e150cdc0cfea84b11424b52c8022f7604f832a04bb890273cd67") (fail "manifest identity differs")
   graph <- either fail pure (J.eitherDecodeStrict graphBytes)
-  Ownership owners <- either fail pure (J.eitherDecodeStrict manifestBytes)
+  Manifest owners cellsByCoordinate <- either fail pure (J.eitherDecodeStrict manifestBytes)
   scale <- either fail pure (J.eitherDecodeStrict scaleBytes)
+  MenuTables tableNodes <- either fail pure (J.eitherDecodeStrict tablesBytes)
   let nodes = M.fromList [(nodeId node, node) | node <- graphNodes graph]
       edges = graphEdges graph
   rootTop <- case M.lookup (NodeId 0) nodes of
@@ -262,6 +307,12 @@ main = do
       descriptorOf menuKey = case [words' | node <- screensOf menuKey, Just words' <- [nodeDescriptor node]] of
         words' : _ -> words'
         [] -> []
+      -- Stock node records whose 44 bytes equal a recorded descriptor of the key's screens.
+      tableNodesOf menuKey = [ (record, M.lookup record tableNodes)
+        | record <- S.toList (S.fromList [record | node <- screensOf menuKey, Just record <- [nodeRecordHex node]]) ]
+      tableNodeValue (record, found) = case found of
+        Just table -> object ["address" .= tableAddress table, "rows" .= tableRows table, "row_names" .= tableRowNames table]
+        Nothing -> object ["unmatched_record" .= record]
       firstImage menuKey = case map nodeImage (screensOf menuKey) of
         image : _ -> image
         [] -> ""
@@ -273,8 +324,22 @@ main = do
       shapes = S.fromList (map shapeHash (mapMaybe shapeOf (S.toList targets)))
       sizeOf hash = M.findWithDefault 0 hash (scaleSizes scale)
       familyTargets kind = S.fromList [action | edge <- edges, Just menuKey <- [keyAt (edgeFrom edge)]
-        , M.lookup menuKey classes == Just kind, Dispatch _ (Just action) <- edgeDispatches edge]
-      outsideTargets = S.fromList [action | edge <- edges, isNothing (keyAt (edgeFrom edge)), Dispatch _ (Just action) <- edgeDispatches edge]
+        , M.lookup menuKey classes == Just kind, Dispatch { dispatchAction = Just action } <- edgeDispatches edge]
+      outsideTargets = S.fromList [action | edge <- edges, isNothing (keyAt (edgeFrom edge)), Dispatch { dispatchAction = Just action } <- edgeDispatches edge]
+      -- Actions on at least 10% of presses.
+      perPress = S.fromList [action | (action, count) <- M.toList (M.fromListWith (+)
+        [(action, 1 :: Int) | edge <- edges, action <- S.toList (S.fromList (mapMaybe dispatchAction (edgeDispatches edge)))]), 10 * count >= length edges]
+      dispatchesOf menuKey = M.toList (M.fromListWith (+)
+        [ (coordinate, 1 :: Int)
+        | edge <- edges, keyAt (edgeFrom edge) == Just menuKey
+        , coordinate <- S.toList (S.fromList [(dispatchController d, dispatchState d, dispatchEvent d, action) | d <- edgeDispatches edge, Just action <- [dispatchAction d]]) ])
+      dispatchValue ((ControllerId controller, state, event, Target action), count) = object
+        [ "controller" .= controller, "state" .= state, "event" .= event, "action" .= hex action, "edges" .= count
+        , "cell_index" .= fmap cellIndex (M.lookup (ControllerId controller, state, event) cellsByCoordinate)
+        , "action_slot" .= fmap cellSlot (M.lookup (ControllerId controller, state, event) cellsByCoordinate)
+        , "per_press" .= S.member (Target action) perPress ]
+      behaviourControllers menuKey = S.toList (S.fromList
+        [controller | ((ControllerId controller, _, _, action), _) <- dispatchesOf menuKey, not (S.member action perPress)])
       shapesOf actions = S.fromList (map shapeHash (mapMaybe shapeOf (S.toList actions)))
       familyValue actions = object
         [ "actions" .= S.size actions, "shapes" .= S.size (shapesOf actions), "members_of_shapes" .= sum (map sizeOf (S.toList (shapesOf actions))) ]
@@ -285,12 +350,14 @@ main = do
         , "scope" .= ("behaviour census of one emulated crawl; classes are rule-based from observed edges, not firmware semantics" :: String)
         , "inputs" .= object
             [ "graph" .= graphPath, "graph_sha256" .= sha256Hex (sha256 graphBytes)
-            , "scale_sha256" .= sha256Hex (sha256 scaleBytes), "manifest_sha256" .= sha256Hex (sha256 manifestBytes) ]
+            , "scale_sha256" .= sha256Hex (sha256 scaleBytes), "manifest_sha256" .= sha256Hex (sha256 manifestBytes)
+            , "tables" .= tablesPath, "tables_sha256" .= sha256Hex (sha256 tablesBytes) ]
         , "crawl" .= object
             [ "complete" .= graphComplete graph, "trials" .= graphTrials graph, "limit" .= graphLimit graph
             , "screens" .= M.size nodes, "frames" .= S.size (S.fromList (concatMap nodeFrames (graphNodes graph)))
             , "edges" .= length edges, "stopped_edges" .= length [() | edge <- edges, Just _ <- [edgeStopped edge]]
-            , "frontier_screens" .= length [() | node <- graphNodes graph, Just _ <- [nodeFrontier node]] ]
+            , "frontier_screens" .= length [() | node <- graphNodes graph, Just frontier <- [nodeFrontier node], frontier /= "terminal"]
+            , "terminal_screens" .= length [() | node <- graphNodes graph, nodeFrontier node == Just "terminal"] ]
         , "menus" .= object
             [ "root_controller_74_state" .= rootTop, "menu_controller_74_states" .= menuStates
             , "menu_keys" .= S.size menuKeys
@@ -302,7 +369,10 @@ main = do
                 , "cursors" .= S.toList (behaviourCursors behaviour), "cursor_moves" .= behaviourCursorMoves behaviour
                 , "setting_moves" .= behaviourSettingMoves behaviour, "commits" .= behaviourCommits behaviour
                 , "enters" .= map keyValue (S.toList (behaviourEnters behaviour)), "edges_outside_menus" .= behaviourOutside behaviour
-                , "image" .= firstImage menuKey ]
+                , "image" .= firstImage menuKey
+                , "controllers" .= behaviourControllers menuKey
+                , "dispatches" .= map dispatchValue (dispatchesOf menuKey)
+                , "stock_nodes" .= map tableNodeValue (tableNodesOf menuKey) ]
               | (menuKey, behaviour) <- M.toList behaviours ] ]
         , "outside_menu_screens" .= [ object
             [ "id" .= identity, "path" .= nodePath node, "image" .= nodeImage node, "frontier" .= nodeFrontier node
@@ -311,7 +381,8 @@ main = do
             | node <- outside, let NodeId identity = nodeId node ]
         , "callbacks" .= object
             [ "dispatches" .= length dispatches
-            , "controllers_dispatched" .= S.toList (S.fromList [identity | Dispatch (ControllerId identity) _ <- dispatches])
+            , "controllers_dispatched" .= S.toList (S.fromList [identity | Dispatch { dispatchController = ControllerId identity } <- dispatches])
+            , "per_press_actions" .= [hex action | Target action <- S.toList perPress]
             , "distinct_actions" .= S.size targets
             , "actions_outside_manifest" .= [hex target | Target target <- S.toList targets, isNothing (M.lookup (Target target) owners)]
             , "controllers_owning_actions" .= S.toList (S.fromList [identity | target <- S.toList targets, Just (ControllerId identity) <- [M.lookup target owners]])
@@ -325,7 +396,7 @@ main = do
                 [ "target" .= hex target, "controller" .= fmap (\(ControllerId identity) -> identity) (M.lookup (Target target) owners)
                 , "shape_members" .= maybe 0 (sizeOf . shapeHash) (shapeOf (Target target))
                 , "invocations" .= count ]
-              | (Target target, count) <- sortOn (negate . snd) (M.toList (M.fromListWith (+) [(action, 1 :: Int) | Dispatch _ (Just action) <- dispatches])) ] ]
+              | (Target target, count) <- sortOn (negate . snd) (M.toList (M.fromListWith (+) [(action, 1 :: Int) | Dispatch { dispatchAction = Just action } <- dispatches])) ] ]
         , "effects" .= object
             [ "properties_written" .= map hex (S.toList (properties [PropertyWrite, PropertySetter]))
             , "properties_committed" .= map hex (S.toList (properties [PropertyCommit]))

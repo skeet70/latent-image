@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "entry": "Embassy phase-1 demonstration (#156), shared byte-identical by the demonstration and its three controls. The first entry into the stock modal dispatcher 0x00bfb028 from task context runs the experiment hook, which creates and activates one host task per domain (id 119, class 1 and 2). The stock FILM SIMULATION route of emulation/modal75-packaged-route-trajectories.json then runs while both executors keep 100 ms timers and domain A rings domain B's doorbell on every tenth ticker iteration (every 100 kernel ticks). Reads capture the demonstration record (EMB2, 256 bytes) and both host stacks. Segments observe; the checker requires every step matched and compares menu outcomes with the no-executors control.",
+  "forbidden_execution": [["00040128", "00040184"], ["000d0128", "000d0184"], ["00040cac", "00040cb0"], ["000d0cac", "000d0cb0"], ["0069cc38", "0069cc40"]],
+  "trace_sites": [
+    ["runtime:embassy_on_dispatch", "owned-start-hook"],
+    ["0004d094", "create-a-root"],
+    ["000dd054", "create-b-root"],
+    ["00044f2c", "activate-a-root"],
+    ["000d4eec", "activate-b-root"],
+    ["00046004", "wakeup-a-root"],
+    ["000d5fc4", "wakeup-b-root"],
+    ["00045e54", "sleep-a-root"],
+    ["000d5e14", "sleep-b-root"]
+  ],
+  "before_unload": [
+    {
+      "phase": "start",
+      "observe": true,
+      "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000},
+      "steps": [["menu", 67, 56, 0]],
+      "reads": [["demo", "runtime:EMBASSY_DEMO", 256]]
+    },
+    {
+      "phase": "shooting",
+      "observe": true,
+      "capture": "shooting",
+      "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000},
+      "steps": [["menu", 1, 5, 2]],
+      "reads": [["demo", "runtime:EMBASSY_DEMO", 256]]
+    },
+    {
+      "phase": "film",
+      "observe": true,
+      "capture": "film",
+      "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000},
+      "steps": [["down", 1, 5, 3], ["down", 1, 5, 4], ["down", 1, 5, 5], ["down", 1, 5, 6], ["ok", 1, 254, 0]],
+      "reads": [["demo", "runtime:EMBASSY_DEMO", 256]]
+    },
+    {
+      "phase": "returned",
+      "observe": true,
+      "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000},
+      "steps": [["back", 1, 5, 6]]
+    },
+    {
+      "phase": "film-repeated",
+      "observe": true,
+      "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000},
+      "steps": [["ok", 1, 254, 0]]
+    },
+    {
+      "phase": "returned-repeated",
+      "observe": true,
+      "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000},
+      "steps": [["back", 1, 5, 6]]
+    },
+    {
+      "phase": "handback",
+      "observe": true,
+      "capture": "handback",
+      "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000},
+      "steps": [["back", 1, 5, 6]],
+      "reads": [["demo", "runtime:EMBASSY_DEMO", 256], ["stacks", "runtime:EMBASSY_STACKS", 4096]]
+    }
+  ],
+  "after_unload": [
+    {
+      "phase": "unloaded-shooting",
+      "observe": true,
+      "capture": "unloaded-shooting",
+      "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000},
+      "steps": [["menu", 1, 5, 6], ["menu", 1, 5, 6]],
+      "reads": [["demo", "runtime:EMBASSY_DEMO", 256]]
+    }
+  ]
+}

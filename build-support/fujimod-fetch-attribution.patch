@@ -1491,7 +1491,7 @@ index 0000000..f909cfd
 +            entry.ok_or(InstructionGuardFailure::MissingEntry)
 +                .and_then(|entry| capture.validate_guard(CoreIndex(self.core), entry, physical, address, size))
 +        };
-+        let protected = matches!(result, Ok(Some(_)));
++        let (protected, unprotected) = (matches!(result, Ok(Some(_))), matches!(result, Ok(None)));
 +        let failure = match result {
 +            Err(failure) => Some(failure),
 +            Ok(_) => {
@@ -1521,6 +1521,6 @@ index 0000000..f909cfd
 +            drop(records);
 +            if cpu.stop_before_instruction().is_err() { let _ = cpu.stop(); }
 +        }
-+        true
++        !unprotected || failure.is_some()
 +    }
 +}

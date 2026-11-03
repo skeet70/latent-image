@@ -85,6 +85,10 @@ path = "src/rtos_census.rs"
 name = "fujimod-xm1-composed-startup"
 path = "src/composed_startup.rs"
 
+[[bin]]
+name = "fujimod-xm1-root-compact"
+path = "src/root_compact.rs"
+
 # Compiles the schema-4 loader-prefix observer against an engine carrying
 # build-support/fujimod-scoped-watch.patch.
 [features]

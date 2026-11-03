@@ -64,8 +64,12 @@ runtimeSources body decoder (InputFile dat) scratch base = do
   decoded <- decodeImage4 body decoder scratch runtime
   pure base {runDat=runtime,runDecoded=decoded}
 observed :: TaskBody -> ObservationDirectory -> IO ObservedFiles
-observed body (ObservationDirectory root) = ObservedFiles <$> H.readRegular 0x20000000 (root </> receiptFile body)
-  <*> H.readRegular 0x20000000 (root </> "memory-watch.json") <*> H.readRegular 0x10000000 (root </> "reset.fujimod")
+observed body (ObservationDirectory root) = do
+  let sidecar = root </> "root-task.bytes"
+  compact <- case body of RootBody -> doesPathExist sidecar; IdleBody -> pure False
+  ObservedFiles <$> H.readRegular 0x20000000 (root </> receiptFile body)
+    <*> H.readRegular 0x20000000 (root </> "memory-watch.json") <*> H.readRegular 0x10000000 (root </> "reset.fujimod")
+    <*> (if compact then H.readRegular 0x40000000 sidecar else pure B.empty)
 role :: TaskBody -> String -> IO Role
 role _ "retained" = pure Retained
 role _ "owned" = pure Owned
