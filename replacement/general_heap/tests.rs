@@ -123,40 +123,74 @@ unsafe fn stock_usable(payload: NonNull<u8>) -> usize {
 }
 
 #[test]
-fn rejected_sizes_and_products_do_not_lock_or_initialize() {
+fn oversized_malloc_requests_return_null_without_locking() {
     let host = Host::new(32 * 1024);
     let bridge = StockBridge::new(&host);
     for bytes in [MAX_STOCK_BYTES, MAX_STOCK_BYTES + 1, u32::MAX, 32 * 1024] {
         assert!(bridge.malloc(bytes).unwrap().is_none());
-        assert!(unsafe { bridge.realloc(None, bytes) }.unwrap().is_none());
-    }
-    for (count, bytes) in [(u32::MAX, 2), (65536, 65536), (0x8000_0000, 2)] {
-        assert!(bridge.calloc(count, bytes).unwrap().is_none());
     }
     unsafe { bridge.free(None).unwrap(); }
     assert_eq!(host.errno.get(), 12);
     assert_eq!(host.acquisitions.get(), 0);
     assert_eq!(host.initializations.get(), 0);
-    assert_eq!(bridge.trim(0), 0);
-    assert_eq!(bridge.trim(u32::MAX), 0);
+}
+
+#[test]
+fn redesign_checked_calloc_product_rejects_wrapping_products_before_locking() {
+    let host = Host::new(32 * 1024);
+    let bridge = StockBridge::new(&host);
+    for (count, bytes) in [(u32::MAX, 2), (65536, 65536), (0x8000_0000, 2)] {
+        assert!(bridge.calloc(count, bytes).unwrap().is_none(), "checked-calloc-product: stock allocates the wrapped product {}", count.wrapping_mul(bytes));
+    }
+    assert_eq!(host.errno.get(), 12, "checked-calloc-product: overflow reports errno 12");
+    assert_eq!(host.acquisitions.get(), 0, "checked-calloc-product: overflow rejects before locking");
+}
+
+#[test]
+fn redesign_oversized_resize_rejected_before_lock() {
+    let host = Host::new(32 * 1024);
+    let bridge = StockBridge::new(&host);
+    let live = bridge.malloc(32).unwrap().unwrap();
+    let acquisitions = host.acquisitions.get();
+    unsafe { fill(live, &[0x5c; 32]); }
+    for bytes in [MAX_STOCK_BYTES + 1, u32::MAX] {
+        assert!(unsafe { bridge.realloc(Some(live), bytes) }.unwrap().is_none(), "oversized-resize-rejected-before-lock: request {bytes:#x}");
+        assert!(unsafe { bridge.realloc(None, bytes) }.unwrap().is_none());
+    }
+    assert_eq!(host.errno.get(), 12, "oversized-resize-rejected-before-lock: errno 12 as stock");
+    assert_eq!(host.acquisitions.get(), acquisitions, "oversized-resize-rejected-before-lock: stock leaks one recursive depth (#147)");
+    assert_eq!(unsafe { bytes_at(live, 32) }, vec![0x5c; 32]);
+    unsafe { bridge.free(Some(live)).unwrap(); }
+    host.balanced();
+}
+
+#[test]
+fn redesign_trim_returns_zero_without_releasing_backing() {
+    let host = Host::new(32 * 1024);
+    let bridge = StockBridge::new(&host);
+    assert_eq!(bridge.trim(0), 0, "trim-returns-zero: stock may release top backing and return 1");
+    assert_eq!(bridge.trim(u32::MAX), 0, "trim-returns-zero");
     assert_eq!(host.initializations.get(), 1);
     host.balanced();
 }
 
 #[test]
-fn zero_products_and_zero_resizes_keep_live_nonnull_allocations() {
+fn redesign_zero_request_minimum_allocation_keeps_live_nonnull_allocations() {
     let host = Host::new(32 * 1024);
     let bridge = StockBridge::new(&host);
+    let empty = bridge.malloc(0).unwrap().unwrap();
+    assert_eq!(unsafe { stock_usable(empty) }, 12, "zero-request-minimum-allocation: stock minimum chunk has 12 usable bytes");
     let first = bridge.calloc(0, u32::MAX).unwrap().unwrap();
     let second = bridge.calloc(u32::MAX, 0).unwrap().unwrap();
-    assert_ne!(first, second);
+    assert_ne!(first, second, "zero-request-minimum-allocation: zero products are distinct live allocations");
     for payload in [first, second] {
         let usable = unsafe { stock_usable(payload) };
         assert_eq!(unsafe { bytes_at(payload, usable) }, vec![0; usable]);
     }
     let first = unsafe { bridge.realloc(Some(first), 0) }.unwrap().unwrap();
-    assert_ne!(first, second);
+    assert_ne!(first, second, "zero-request-minimum-allocation: zero resize returns a live allocation");
     unsafe {
+        bridge.free(Some(empty)).unwrap();
         bridge.free(Some(first)).unwrap();
         bridge.free(Some(second)).unwrap();
     }

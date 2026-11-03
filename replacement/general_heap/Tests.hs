@@ -96,3 +96,5 @@ main = do
   check "sentinel initialized nonzero rejected" (case deriveArtifact (replace 0x89d4f8 (U.putWord32 1) linked) symbols of Left ExtentRejected -> True; _ -> False)
   check "missing operation entry rejected" (case deriveArtifact linked (C.unlines (drop 1 (C.lines symbols))) of Left SymbolsRejected -> True; _ -> False)
   check "canonical source mismatch rejected" (case canonicalSource B.empty B.empty B.empty of Left SourceMismatch -> True; _ -> False)
+  check "contract names exactly the four approved redesign items"
+    (map redesignId [minBound..maxBound] == ["checked-calloc-product","oversized-resize-rejected-before-lock","zero-request-minimum-allocation","trim-returns-zero"])

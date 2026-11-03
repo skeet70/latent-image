@@ -3,6 +3,7 @@ module Replacement.GeneralHeap.Admission
   ( AdmissionError (..), Carrier (..), Image (..), FrameProof, carriers, entrySymbols, retainedCallees
   , deriveFrames, frameValue, instructionPCs, literalWords, validateStockHeader, validateFetch
   , BackendGeometry, ArenaLayout, decodeGeometry, geometryValue, arenaValue
+  , RedesignItem (..), redesignId, redesignValue
   ) where
 
 import qualified A32 as A
@@ -54,6 +55,42 @@ entrySymbols = [("xm1_heap_malloc_entry",0x89cda4),("xm1_heap_free_entry",0x89cd
 -- Stock recursive lock, unlock and memmove.
 retainedCallees :: [Word32]
 retainedCallees = [0x72b164,0x72b1cc,0x89d908]
+
+-- Approved intentional differences from the stock allocator.
+data RedesignItem = CheckedCallocProduct | OversizedResizeRejectedBeforeLock | ZeroRequestMinimumAllocation | TrimReturnsZero
+  deriving (Eq, Ord, Show, Enum, Bounded)
+
+redesignId :: RedesignItem -> String
+redesignId item = case item of
+  CheckedCallocProduct -> "checked-calloc-product"
+  OversizedResizeRejectedBeforeLock -> "oversized-resize-rejected-before-lock"
+  ZeroRequestMinimumAllocation -> "zero-request-minimum-allocation"
+  TrimReturnsZero -> "trim-returns-zero"
+
+redesignValue :: RedesignItem -> Value
+redesignValue item = object ["id" .= redesignId item,"stock" .= stock,"owned" .= owned,"why" .= why,"dependence_signal" .= signal]
+  where
+    (stock,owned,why,signal) = case item of
+      CheckedCallocProduct ->
+        ("calloc 0xbf1c44 computes count*size with mul, modulo 2^32, and allocates the wrapped size" :: String
+        ,"a product above 2^32-1 returns null with errno 12 before locking" :: String
+        ,"a wrapped product hands the caller fewer bytes than count*size" :: String
+        ,"a calloc whose 64-bit request exceeds 0xffffffff succeeds in stock and returns null in owned" :: String)
+      OversizedResizeRejectedBeforeLock ->
+        ("resize of a live allocation to [0x7ffffff5,0xffffffff] writes errno 12, returns null and leaks one recursive lock depth (#147)"
+        ,"the same requests return null with errno 12 without acquiring the lock"
+        ,"the leaked depth keeps the heap lock owned by the caller's task"
+        ,"a realloc request above 0x7ffffff4; stock returns with lock depth one higher than at entry")
+      ZeroRequestMinimumAllocation ->
+        ("zero-byte malloc/resize requests take the minimum 16-byte chunk (12 usable bytes, tag 0x11)"
+        ,"zero-byte requests return a live allocation with the same 12-byte usable extent and tag, from rlsf behind a 16-byte owned prefix"
+        ,"the stock tag and usable extent stay readable at payload-4 for retained header readers"
+        ,"a zero-byte malloc/realloc whose success, null or usable extent differs between stock and owned")
+      TrimReturnsZero ->
+        ("trim may release page-rounded top backing through 0x72b110 and returns 1 when it does"
+        ,"trim takes and releases the lock and returns 0 without releasing backing"
+        ,"the owned pool is the fixed charged arena with no backing break to lower"
+        ,"a trim that returns 1 in stock and 0 in owned, or a later backing request expecting released memory")
 
 instructionPCs :: [FrameProof] -> [Word32]
 instructionPCs proofs = S.toAscList (S.fromList [pc | FrameProof _ _ _ _ pcs _ <- proofs, pc <- pcs])

@@ -33,8 +33,10 @@ pub(super) fn observe(recorder: &mut Recorder, raw: &RawBoundary) -> Result<(), 
         let summary = recorder.summary();
         let frame = summary.pending.iter().find(|frame| frame.entry.context == snapshot.context
             && frame.entry.registers[14] == snapshot.pc.0 && frame.entry.registers[13] == snapshot.registers[13]).ok_or("return has no invocation")?;
-        if matches!(frame.operation, Operation::Malloc | Operation::Free | Operation::Realloc | Operation::Calloc | Operation::Trim) {
-            require((snapshot.owner, snapshot.depth) == (frame.entry.owner, frame.entry.depth), "interface returned with unbalanced heap lock")?;
+        if matches!(frame.operation, Operation::Malloc | Operation::Free | Operation::Realloc | Operation::Calloc | Operation::Trim)
+            && (snapshot.owner, snapshot.depth) != (frame.entry.owner, frame.entry.depth) {
+            let resize = frame.operation == Operation::Realloc && frame.entry.registers[1] != 0 && frame.entry.registers[2] > MAX_STOCK_REQUEST;
+            return Err(format!("interface returned with unbalanced heap lock{}", if resize { " (approved redesign oversized-resize-rejected-before-lock)" } else { "" }));
         }
         if frame.operation == Operation::Lock {
             require(frame.entry.depth.checked_add(1) == Some(snapshot.depth) && snapshot.owner != 0, "heap lock return has no balanced acquisition")?;
@@ -242,10 +244,36 @@ fn by_context(calls: &[InterfaceCall]) -> BTreeMap<ContextKey, Vec<&InterfaceCal
     grouped
 }
 
+const MAX_STOCK_REQUEST: u32 = 0x7fff_fff4;
+
+/// The approved redesign a differing stock/owned call falls under.
+fn redesign(stock: &InterfaceCall, owned: &InterfaceCall) -> Option<contract::Redesign> {
+    if stock.operation != owned.operation || stock.request != owned.request { return None; }
+    match stock.operation {
+        Operation::Trim => Some(contract::Redesign::TrimReturnsZero),
+        Operation::Calloc if stock.request > u64::from(u32::MAX) => Some(contract::Redesign::CheckedCallocProduct),
+        Operation::Realloc if stock.request > u64::from(MAX_STOCK_REQUEST) => Some(contract::Redesign::OversizedResizeRejectedBeforeLock),
+        Operation::Malloc | Operation::Calloc | Operation::Realloc if stock.request == 0 => Some(contract::Redesign::ZeroRequestMinimumAllocation),
+        _ => None,
+    }
+}
+
+fn first_difference(stock: &[InterfaceCall], owned: &[InterfaceCall]) -> Option<String> {
+    let (stock, owned) = (by_context(stock), by_context(owned));
+    let contexts: BTreeSet<_> = stock.keys().chain(owned.keys()).copied().collect();
+    contexts.into_iter().find_map(|context| {
+        let (left, right) = (stock.get(&context).map_or(&[][..], Vec::as_slice), owned.get(&context).map_or(&[][..], Vec::as_slice));
+        let index = (0..left.len().max(right.len())).find(|index| left.get(*index) != right.get(*index))?;
+        let named = left.get(index).zip(right.get(index)).and_then(|(left, right)| redesign(left, right));
+        Some(format!("stock/owned interface calls differ for {context:?} at call {index}{}",
+            named.map_or(String::new(), |item| format!(" (approved redesign {item:?})"))))
+    })
+}
+
 pub(super) fn pair(inputs: &Inputs, directory: &Path, output: &Path) -> Result<(), String> {
     let stock = consume(inputs, &directory.join("stock"), Role::Stock, None)?;
     let owned = consume(inputs, &directory.join("owned"), Role::Owned, None)?;
-    require(by_context(&stock.calls) == by_context(&owned.calls), "stock/owned per-context interface lifetimes, success/error, errno or allocation identity differ")?;
+    if let Some(difference) = first_difference(&stock.calls, &owned.calls) { return Err(difference); }
     require(stock.receipt.menus == owned.receipt.menus, "stock/owned natural menu outcomes differ")?;
     let global_order_identical = stock.calls == owned.calls;
     #[derive(Serialize)]

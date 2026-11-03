@@ -37,6 +37,11 @@ struct SymbolName(String);
 impl std::borrow::Borrow<str> for SymbolName {
     fn borrow(&self) -> &str { &self.0 }
 }
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum Redesign { CheckedCallocProduct, OversizedResizeRejectedBeforeLock, ZeroRequestMinimumAllocation, TrimReturnsZero }
+#[derive(Deserialize)]
+struct RedesignItem { id: Redesign, stock: String, owned: String, why: String, dependence_signal: String }
 #[derive(Deserialize)]
 struct Contract {
     schema: u32, qualification: Qualification, canonical_source: Canonical,
@@ -45,6 +50,7 @@ struct Contract {
     symbols: BTreeMap<SymbolName, u32>, function_symbols: BTreeMap<SymbolName, u32>,
     owned_instruction_pcs: Vec<u32>, literal_words: Vec<Literal>,
     frame_metadata: Vec<Frame>, conditional_premises: Vec<String>, backend_geometry: Geometry, arena: Arena,
+    redesign_items: Vec<RedesignItem>,
 }
 
 pub(super) struct Admitted {
@@ -333,6 +339,11 @@ pub(super) fn admit(contract_path: &Path, canonical_dat: &Path, candidate_dat: &
         && contract.literal_words.iter().map(|literal| (literal.address, literal.value)).collect::<BTreeMap<_, _>>() == literals,
         "artifact instruction or literal inventory differs from reconstructed bytes")?;
     require(!contract.conditional_premises.is_empty(), "artifact conditional scope absent")?;
+    let redesigns: BTreeSet<_> = contract.redesign_items.iter().map(|item| item.id).collect();
+    require(redesigns.len() == contract.redesign_items.len()
+        && redesigns == [Redesign::CheckedCallocProduct, Redesign::OversizedResizeRejectedBeforeLock, Redesign::ZeroRequestMinimumAllocation, Redesign::TrimReturnsZero].into_iter().collect()
+        && contract.redesign_items.iter().all(|item| [&item.stock, &item.owned, &item.why, &item.dependence_signal].iter().all(|text| !text.is_empty())),
+        "artifact redesign items are not exactly the four approved differences")?;
     let metadata_address = *contract.symbols.get("XM1_HEAP_METADATA").ok_or("owned backend metadata symbol absent")?;
     geometry(&images, metadata_address, &contract.backend_geometry, &contract.arena)?;
     Ok(Admitted { contract_digest: Digest(sha256(&bytes)), candidate: ValidatedUpdate(candidate), images, owned, premises: contract.conditional_premises,

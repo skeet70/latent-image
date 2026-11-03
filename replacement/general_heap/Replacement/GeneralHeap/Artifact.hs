@@ -204,7 +204,7 @@ contractValue path4 path5 (StagedImages (CanonicalSource dat source4 source5 sto
   ,"retained_dependencies" .= ([0x72b110,0x72b164,0x72b1cc,0x89d908,0x890ef8,0x890ee8,0x890ed8,0x6dbf38,0x72a7ac,0x72a7fc]::[Word32])
   ,"graphics_callback_table" .= [object ["address" .= address,"target" .= target] | (address,target) <- ([(0x890f08,0x890ed8),(0x890f0c,0x890ef8),(0x890f10,0x890ecc),(0x890f14,0x890ee8)]::[(Word32,Word32)])]
   ,"conditional_premises" .= premises
-  ,"redesign_items" .= [object ["original" .= original,"replacement" .= replacement] | (original,replacement) <- redesign]
+  ,"redesign_items" .= map redesignValue [minBound..maxBound]
   ]
   where
     textNames = functionNames symbols symbolBytes
@@ -222,5 +222,3 @@ contractValue path4 path5 (StagedImages (CanonicalSource dat source4 source5 sto
       ,"Unchanged graphics/adapters and callback table words forward to the patched stock entries."
       ,"Cold boot only; no warm-checkpoint allocator ownership migration is admitted."
       ,"Finite host checks do not qualify silicon contention/deadlines or capture, development and storage workloads."]
-    redesign :: [(String,String)]
-    redesign = [("calloc multiplies modulo 2^32","checked calloc product rejects overflow before locking"),("oversized non-null resize leaks recursive lock depth","checked oversized resize rejects before locking"),("zero malloc/resize takes a minimum allocation","zero requests retain a minimum nonnull allocation on success"),("trim may release page-rounded top backing and return 1","trim always returns 0 without backing release")]
