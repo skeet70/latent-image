@@ -21,7 +21,7 @@ import Data.Word (Word32)
 import qualified FujiAF.JSON as JSON
 import GHC.Generics (Generic)
 import Numeric (readHex, showHex)
-import StockInventory (FunctionDeclaration (..), FunctionDerivation (..), FunctionSize (..), FunctionWindow (..), GuestAddress (..), deriveFunction, returnPremiseLabel)
+import StockInventory (FunctionDeclaration (..), FunctionDerivation (..), FunctionSize (..), FunctionWindow (..), GuestAddress (..), SavedStackArray (..), deriveFunction, returnPremiseLabel, xm1TaskRecords, xm1TaskRecordsA, xm1TaskRecordsB)
 import System.Directory (doesPathExist)
 import System.Environment (getArgs)
 
@@ -141,11 +141,22 @@ functionStarts listing = mapMaybe start (lines listing)
         [(number, "")] -> Just number
         _ -> Nothing
 
+-- Both loaders' T task records are declared for every domain.
+savedStackArrays :: [(Domain, SavedStackArray)]
+savedStackArrays = [(A, xm1TaskRecordsA), (B, xm1TaskRecordsB)]
+
+savedStackEvidence :: Domain -> [String]
+savedStackEvidence domain =
+  [ "reports/replacement-inventory-baseline.md:444", "reports/replacement-inventory-baseline.md:1111", "reports/replacement-inventory-baseline.md:1124" ]
+  ++ [listing ++ ":" ++ line | line <- ["3449", "3487", "3531"]]
+  where
+    listing = "private-data/analysis/x-m1-1.50/decode/" ++ (if domain == A then "loader-40000.dis" else "loader-d0000.dis")
+
 extent :: Word32 -> B.ByteString -> [Word32] -> EntryAddress -> Value
 extent base image starts (EntryAddress address) =
   let imageEnd = base + fromIntegral (B.length image)
       fence = minimum (imageEnd : [entry | entry <- starts, entry > address])
-      outcome = deriveFunction (GuestAddress base) image (FunctionWindow (GuestAddress address) (GuestAddress fence)) []
+      outcome = deriveFunction xm1TaskRecords (GuestAddress base) image (FunctionWindow (GuestAddress address) (GuestAddress fence)) []
   in case outcome of
     Right derived -> case derivedDeclaration derived of
       FunctionDeclaration _ (FunctionSize bytes) -> object
@@ -294,7 +305,11 @@ main = do
         [ "schemaVersion" .= (1 :: Int), "firmware" .= ("X-M1 1.50" :: String)
         , "scope" .= ("Source inventory; unknowns and extent refusals block complete RTOS replacement. No new guest qualification." :: String)
         , "inputs" .= [InputIdentity path (B.length bytes) (digest bytes) | (path,bytes) <- [(publisherA,publisherBytesA),(publisherB,publisherBytesB),(loaderA,bytesA),(loaderB,bytesB),(listingA,listingBytes),(image4,imageBytes),(surfacePath,surfaceBytes),(boundaryPath,boundaryBytes)]]
-        , "extentMethod" .= ("StockInventory.deriveFunction; no external tails admitted; fence=min(next published entry, direct BL target, A Ghidra export, reviewed function boundary bound to the same domain loader digest, image end). A exports and boundaries never transferred to B. Refusals preserve missing extents." :: String)
+        , "extentMethod" .= ("StockInventory.deriveFunction with both loaders' savedStackArrays; no external tails admitted; fence=min(next published entry, direct BL target, A Ghidra export, reviewed function boundary bound to the same domain loader digest, image end). A exports and boundaries never transferred to B. Refusals preserve missing extents." :: String)
+        , "savedStackArrays" .= [object
+            [ "domain" .= show domain, "start" .= hex start, "stride" .= stride, "count" .= count, "field" .= hex field
+            , "evidence" .= savedStackEvidence domain
+            ] | (domain, SavedStackArray (GuestAddress start) stride count field) <- savedStackArrays]
         , "functionBoundaries" .= [object
             [ "domain" .= show (boundaryDomain boundary), "start" .= hex start
             , "loaderSha256" .= (let Sha256 text = loaderSha256 boundary in text)

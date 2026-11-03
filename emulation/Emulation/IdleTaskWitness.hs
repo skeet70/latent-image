@@ -24,7 +24,7 @@ import qualified FujiAF.UpdateContainer as U
 import qualified Replacement.IdleTask.Admission as A
 import qualified Replacement.IdleTask.Artifact as I
 import qualified Replacement.KernelInstall.Wire as W
-import StockInventory (FunctionDeclaration (..), FunctionSize (..), FunctionWindow (..), GuestAddress (..), deriveFunction, derivedDeclaration)
+import StockInventory (FunctionDeclaration (..), FunctionSize (..), FunctionWindow (..), GuestAddress (..), deriveFunction, derivedDeclaration, xm1TaskRecords)
 
 data SourceFiles = SourceFiles
   { sourceDat :: B.ByteString, runDat :: B.ByteString, runDecoded :: B.ByteString, sourceRun :: B.ByteString, sourceRom :: B.ByteString
@@ -127,7 +127,7 @@ admitInputs role source = do
     ,(sourceRom source,"4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be")]
   mapM_ (\(low,high) -> do
     derived <- either (const (Left CodeRejected)) Right
-      (deriveFunction (GuestAddress 0x61c400) (sourceImage source) (FunctionWindow (GuestAddress low) (GuestAddress high)) [])
+      (deriveFunction xm1TaskRecords (GuestAddress 0x61c400) (sourceImage source) (FunctionWindow (GuestAddress low) (GuestAddress high)) [])
     require (derivedDeclaration derived == FunctionDeclaration (GuestAddress low) (FunctionSize (fromIntegral (high-low)))) CodeRejected) image4CodeWindows
   canonical <- either (const (Left ArtifactRejected)) Right (I.canonicalSource (sourceDat source) (sourceImage source))
   artifact <- either (const (Left ArtifactRejected)) Right (I.deriveArtifact (sourceLinked source) (sourceSymbols source))

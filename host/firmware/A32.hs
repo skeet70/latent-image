@@ -17,8 +17,10 @@ module A32
   , StatusField (..)
   , StatusSource (..)
   , StatusWrite (..)
+  , SignExtension (..)
   , decode
   , statusWrite
+  , signExtension
   , sp
   , lr
   , pc
@@ -152,6 +154,19 @@ statusWrite word
   target = if testBit word 22 then SavedStatus else CurrentStatus
   fields = [bits | (bits, index) <- zip [minBound .. maxBound] [16 ..], testBit word index]
   write = StatusWrite (Cond (field 31 28 word)) target fields
+
+-- | Destination, source, rotation and width of SXTB or SXTH, which `decode`
+-- returns as Compute. PC operands give Nothing.
+data SignExtension = SignExtension Cond Reg Reg Int Int deriving (Eq, Show)
+
+signExtension :: Word32 -> Maybe SignExtension
+signExtension word
+  | field 31 28 word == 15 || pc `elem` [reg 12 word, reg 0 word] = Nothing
+  | word .&. 0x0fff03f0 == 0x06af0070 = Just (extend 8)
+  | word .&. 0x0fff03f0 == 0x06bf0070 = Just (extend 16)
+  | otherwise = Nothing
+ where
+  extend = SignExtension (Cond (field 31 28 word)) (reg 12 word) (reg 0 word) (8 * fromIntegral (field 11 10 word))
 
 field :: Int -> Int -> Word32 -> Word32
 field high low word = (word `shiftR` low) .&. ((1 `shiftL` (high - low + 1)) - 1)

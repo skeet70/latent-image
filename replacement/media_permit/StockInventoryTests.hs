@@ -23,7 +23,7 @@ deriveWith tails words' = do
   pure (address, size)
 
 deriveResult :: [Word32] -> [Word32] -> Either String FunctionDerivation
-deriveResult tails words' = deriveFunction (GuestAddress 0x1000) (bytes words')
+deriveResult tails words' = deriveFunction [] (GuestAddress 0x1000) (bytes words')
   (FunctionWindow (GuestAddress 0x1000) (GuestAddress (0x1000 + 4 * fromIntegral (length words'))))
   (map GuestAddress tails)
 
@@ -63,7 +63,7 @@ main = do
   check "the frame pointer can restore the incoming return slot"
     (derive [0xe92d4800,0xe28db004,0xe24dd008,0xe24bd004,0xe8bd8800] == Right (0x1000,20))
   -- The unknown incoming r0 could alias the saved LR without UnexposedFrameIsolation.
-  underPremise <- either fail pure (deriveFunction (GuestAddress 0x1000) (bytes [0xe92d4000,0xeb0003fd,0xe8bd8000])
+  underPremise <- either fail pure (deriveFunction [] (GuestAddress 0x1000) (bytes [0xe92d4000,0xeb0003fd,0xe8bd8000])
     (FunctionWindow (GuestAddress 0x1000) (GuestAddress 0x100c)) [])
   check "an unknown-pointer call is accepted only under the named isolation premise"
     (derivedDeclaration underPremise == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 12)
@@ -148,7 +148,7 @@ main = do
   check "a reused local word is not protected by an earlier saved-register lifetime"
     (refused (derive [0xe92d4000,0xe8bd4000,0xe24dd004,0xe58de000,0xe1a0000d,0xeb0003f9,0xe8bd8000]))
   check "a shortened window cannot silently discard its omitted epilogue"
-    (refused (deriveFunction (GuestAddress 0x1000) (bytes [0xea000000,0xe1a00000,0xe12fff1e])
+    (refused (deriveFunction [] (GuestAddress 0x1000) (bytes [0xea000000,0xe1a00000,0xe12fff1e])
       (FunctionWindow (GuestAddress 0x1000) (GuestAddress 0x1004)) []))
   check "an undeclared external tail refuses"
     (refused (derive [0xea00003e]))
@@ -162,21 +162,21 @@ main = do
   check "the production comparison accepts the independently specified code extent" (compareExtent 8 == Right ())
   check "the production comparison rejects a shortened declaration" (refused (compareExtent 4))
   check "the production comparison rejects a declaration that includes the literal" (refused (compareExtent 12))
-  structural <- either fail pure (inspectFunction (GuestAddress 0x1000) (bytes [0xe3a0e000,0xe12fff1e])
+  structural <- either fail pure (inspectFunction [] (GuestAddress 0x1000) (bytes [0xe3a0e000,0xe12fff1e])
     (FunctionWindow (GuestAddress 0x1000) (GuestAddress 0x1008)) [])
   check "structural inventory retains an extent without admitting an overwritten return"
     (inspectedDeclaration structural == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 8)
       && inspectedCodeWords structural == [GuestAddress 0x1000, GuestAddress 0x1004]
       && null (inspectedLiteralWords structural)
       && refused (inspectedReturn structural))
-  withLiteral <- either fail pure (inspectFunction (GuestAddress 0x1000) (bytes [0xe59f0000,0xe12fff1e,0x12345678])
+  withLiteral <- either fail pure (inspectFunction [] (GuestAddress 0x1000) (bytes [0xe59f0000,0xe12fff1e,0x12345678])
     (FunctionWindow (GuestAddress 0x1000) (GuestAddress 0x100c)) [])
   check "structural inventory separates a referenced literal from executable words"
     (inspectedCodeWords withLiteral == [GuestAddress 0x1000, GuestAddress 0x1004]
       && inspectedLiteralWords withLiteral == [GuestAddress 0x1008]
       && inspectedReturn withLiteral == Right [])
   check "structural inventory also refuses unclassified trailing storage"
-    (refused (inspectFunction (GuestAddress 0x1000) (bytes [0xe12fff1e,0x12345678])
+    (refused (inspectFunction [] (GuestAddress 0x1000) (bytes [0xe12fff1e,0x12345678])
       (FunctionWindow (GuestAddress 0x1000) (GuestAddress 0x1008)) []))
   let unpremised result size = derivedDeclaration result == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize size)
         && null (derivationPremises result) && null (derivationPremiseUses result)
@@ -239,7 +239,103 @@ main = do
     (refused (derive [0xe10f0000,0xe129f000,0xe1b0f00e]))
   check "an SPSR-restoring load-multiple refuses"
     (refused (derive [0xe92d4000,0xe8fd8000]))
-  unproven <- either fail pure (inspectFunction (GuestAddress 0x1000) (bytes [0xe121f000,0xe12fff1e])
+  unproven <- either fail pure (inspectFunction [] (GuestAddress 0x1000) (bytes [0xe121f000,0xe12fff1e])
     (FunctionWindow (GuestAddress 0x1000) (GuestAddress 0x1008)) [])
   check "structural inventory classifies an unproven control write as linear code"
     (inspectedCodeWords unproven == [GuestAddress 0x1000, GuestAddress 0x1004] && refused (inspectedReturn unproven))
+  signedIndex <- either fail pure (deriveResult [] [0xe92d4010,0xe3033000,0xe6bf0070,0xe0833100,0xe5831000,0xe8bd8010])
+  check "a sign-extended halfword index into a global is accepted under global-object separation"
+    (derivedDeclaration signedIndex == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 24) && globalStore signedIndex 0x1010)
+  signedByteIndex <- either fail pure (deriveResult [] [0xe92d4010,0xe3033000,0xe6af0070,0xe0833100,0xe5831000,0xe8bd8010])
+  check "a sign-extended byte index into a global is accepted under global-object separation"
+    (derivedDeclaration signedByteIndex == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 24) && globalStore signedByteIndex 0x1010)
+  check "a sign-extended frame address remains frame-derived"
+    (refused (derive [0xe92d4010,0xe6bf007d,0xe5801000,0xe8bd8010]))
+  check "a sign-extend-and-add result has no tracked source"
+    (refused (derive [0xe92d4010,0xe3033000,0xe6b20070,0xe0833100,0xe5831000,0xe8bd8010]))
+  let loadedStore result uses = derivationPremises result == [LoadedObjectFrameIsolation]
+        && derivationPremiseUses result == [PremiseUse (ProgramCounter use) LoadedObjectFrameIsolation | use <- uses]
+  loadedPointer <- either fail pure (deriveResult [] [0xe92d4010,0xe3033000,0xe5932000,0xe5821004,0xe8bd8010])
+  check "a store through a word loaded from a global is accepted under loaded-object isolation at the store"
+    (derivedDeclaration loadedPointer == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 20) && loadedStore loadedPointer [0x100c]
+      && map returnPremiseLabel (derivationPremises loadedPointer) == ["loaded-object-frame-isolation"])
+  loadedIndex <- either fail pure (deriveResult [] [0xe92d4010,0xe3033000,0xe5932000,0xe0822100,0xe5821000,0xe8bd8010])
+  check "an indexed loaded object keeps loaded-object isolation while the frame is private"
+    (derivedDeclaration loadedIndex == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 24) && loadedStore loadedIndex [0x1010])
+  loadedBeforeCall <- either fail pure (deriveResult [] [0xe92d4010,0xe24dd004,0xe3033000,0xe5934000,0xe1a0000d,0xeb0003f9,0xe5841000,0xe28dd004,0xe8bd8010])
+  check "a word loaded before the frame is exposed keeps its premise after exposure"
+    (derivedDeclaration loadedBeforeCall == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 36)
+      && derivationPremiseUses loadedBeforeCall == [PremiseUse (ProgramCounter 0x1014) UnexposedFrameIsolation, PremiseUse (ProgramCounter 0x1018) LoadedObjectFrameIsolation])
+  loadedLeaf <- either fail pure (deriveResult [] [0xe3033000,0xe5932000,0xe5821000,0xe12fff1e])
+  check "a loaded-object store with no tracked frame words records no premise" (unpremised loadedLeaf 16)
+  check "a word loaded after the frame is exposed can alias the saved return"
+    (refused (derive [0xe92d4010,0xe24dd004,0xe1a0000d,0xeb0003fb,0xe3033000,0xe5932000,0xe5821000,0xe28dd004,0xe8bd8010]))
+  check "a loaded object indexed by an unknown value after exposure can alias the saved return"
+    (refused (derive [0xe92d4010,0xe24dd004,0xe3033000,0xe5934000,0xe1a0000d,0xeb0003f9,0xe0842005,0xe5821000,0xe28dd004,0xe8bd8010]))
+  check "an unknown word reloaded from the frame is not a loaded object"
+    (refused (derive [0xe92d4010,0xe24dd004,0xe59d2000,0xe5821000,0xe28dd004,0xe8bd8010]))
+  check "a loaded byte is not a loaded object"
+    (refused (derive [0xe92d4010,0xe3033000,0xe5d32000,0xe5821000,0xe8bd8010]))
+  check "a loaded object joined with an incoming pointer can alias the saved return"
+    (refused (derive [0xe92d4010,0xe3033000,0xe5932000,0xe3500000,0x01a02001,0xe5820000,0xe8bd8010]))
+  loadedPair <- either fail pure (deriveResult [] [0xe92d4010,0xe3033000,0xe1c300d0,0xe5812000,0xe8bd8010])
+  check "the second register of a loaded pair is a loaded object"
+    (derivedDeclaration loadedPair == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 20) && loadedStore loadedPair [0x100c])
+  loadedChain <- either fail pure (deriveResult [] [0xe92d4010,0xe3033000,0xe5932000,0xe5922008,0xe5821000,0xe8bd8010])
+  check "a word loaded through a loaded object is a loaded object while the frame is private"
+    (derivedDeclaration loadedChain == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 24) && loadedStore loadedChain [0x1010])
+  check "a word loaded through a loaded object after exposure can alias the saved return"
+    (refused (derive [0xe92d4010,0xe24dd004,0xe3033000,0xe5934000,0xe1a0000d,0xeb0003f9,0xe5942008,0xe5821000,0xe28dd004,0xe8bd8010]))
+  check "a conditional load joined with a frame address can alias the saved return"
+    (refused (derive [0xe92d4010,0xe1a0200d,0xe3033000,0xe3500000,0x05932000,0xe5821000,0xe8bd8010]))
+  let tasks = [SavedStackArray (GuestAddress 0x3000) 56 4 0x18]
+      deriveTasks words' = deriveFunction tasks (GuestAddress 0x1000) (bytes words')
+        (FunctionWindow (GuestAddress 0x1000) (GuestAddress (0x1000 + 4 * fromIntegral (length words')))) []
+      savedSpStore = [0xe92d4010,0xe3023000,0xe5932000,0xe5922018,0xe5821000,0xe8bd8010]
+  check "a store through a loaded record's declared saved stack pointer refuses"
+    (refused (deriveTasks savedSpStore))
+  check "without a declaration the same store is accepted under loaded-object isolation"
+    (fmap derivationPremises (deriveResult [] savedSpStore) == Right [LoadedObjectFrameIsolation])
+  check "a saved stack pointer reached by adding the field offset refuses"
+    (refused (deriveTasks [0xe92d4010,0xe3023000,0xe5932000,0xe2822018,0xe5922000,0xe5821000,0xe8bd8010]))
+  otherField <- either fail pure (deriveTasks [0xe92d4010,0xe3023000,0xe5932000,0xe5922014,0xe5821000,0xe8bd8010])
+  check "another field of a loaded record stays a loaded object" (loadedStore otherField [0x1010])
+  check "a saved stack pointer read at its absolute address refuses"
+    (refused (deriveTasks [0xe92d4010,0xe3033018,0xe5932000,0xe5821000,0xe8bd8010]))
+  absoluteOther <- either fail pure (deriveTasks [0xe92d4010,0xe3033014,0xe5932000,0xe5821000,0xe8bd8010])
+  check "another absolute word of a declared record stays a loaded object" (loadedStore absoluteOther [0x100c])
+  check "a word read through a global indexed inside a declared array refuses"
+    (refused (deriveTasks [0xe92d4010,0xe3033000,0xe0833180,0xe5932008,0xe5821000,0xe8bd8010]))
+  outsideGlobal <- either fail pure (deriveTasks [0xe92d4010,0xe3043000,0xe0833180,0xe5932008,0xe5821000,0xe8bd8010])
+  check "a word read through a global indexed outside the declared arrays stays a loaded object" (loadedStore outsideGlobal [0x1010])
+  check "an indexed loaded record keeps its displacement for the saved stack pointer"
+    (refused (deriveTasks [0xe92d4010,0xe3023000,0xe5932000,0xe0822180,0xe5922018,0xe5821000,0xe8bd8010]))
+  check "a word read through an incoming pointer is not a loaded object"
+    (refused (derive [0xe92d4010,0xe5902008,0xe5821000,0xe8bd8010]))
+  joinedObject <- either fail pure (deriveTasks [0xe92d4010,0xe3024000,0xe3043000,0xe0833180,0xe3510000,0x15943000,0xe5830000,0xe8bd8010])
+  check "a loaded record joined with an outside global records both premises at the store"
+    (derivationPremiseUses joinedObject == [PremiseUse (ProgramCounter 0x1018) GlobalObjectStackSeparation, PremiseUse (ProgramCounter 0x1018) LoadedObjectFrameIsolation])
+  check "the next record's saved stack pointer reached by adding a stride refuses"
+    (refused (deriveTasks [0xe92d4010,0xe3023000,0xe5932000,0xe2822038,0xe5922018,0xe5821000,0xe8bd8010]))
+  check "the next record's saved stack pointer at an immediate offset refuses"
+    (refused (deriveTasks [0xe92d4010,0xe3023000,0xe5932000,0xe5922050,0xe5821000,0xe8bd8010]))
+  check "the previous record's saved stack pointer at a negative offset refuses"
+    (refused (deriveTasks [0xe92d4010,0xe3023000,0xe5932000,0xe5122020,0xe5821000,0xe8bd8010]))
+  check "a global base one record before a declared array reaches its saved stack pointers"
+    (refused (deriveTasks [0xe92d4010,0xe3023fe0,0xe7932180,0xe5821000,0xe8bd8010]))
+  check "a constant displacement after indexing moves a global base into a declared array"
+    (refused (deriveTasks [0xe92d4010,0xe3023f00,0xe0833180,0xe5932118,0xe5821000,0xe8bd8010]))
+  check "the second word of a loaded pair at the saved stack pointer refuses"
+    (refused (deriveTasks [0xe92d4010,0xe3023000,0xe5932000,0xe1c201d4,0xe5813000,0xe8bd8010]))
+  check "an unaligned word overlapping the saved stack pointer refuses"
+    (refused (deriveTasks [0xe92d4010,0xe3023000,0xe5932000,0xe5922016,0xe5821000,0xe8bd8010]))
+  check "loaded records joined at different displacements refuse a read at the field offset"
+    (refused (deriveTasks [0xe92d4010,0xe3023000,0xe5932000,0xe3500000,0x12822004,0xe5922018,0xe5821000,0xe8bd8010]))
+  check "loaded records joined at different displacements refuse a read at offset zero"
+    (refused (deriveTasks [0xe92d4010,0xe3023000,0xe5932000,0xe3500000,0x12822004,0xe5922000,0xe5821000,0xe8bd8010]))
+  check "a loaded record joined with a global inside a declared array refuses"
+    (refused (deriveTasks [0xe92d4010,0xe3024000,0xe3033000,0xe0833180,0xe3510000,0x15943000,0xe5932004,0xe5820000,0xe8bd8010]))
+  check "a word straddling into the next record's saved stack pointer at offset zero refuses"
+    (refused (deriveFunction [SavedStackArray (GuestAddress 0x3000) 56 4 0] (GuestAddress 0x1000)
+      (bytes [0xe92d4010,0xe3023000,0xe5932000,0xe5922036,0xe5821000,0xe8bd8010])
+      (FunctionWindow (GuestAddress 0x1000) (GuestAddress 0x1018)) []))

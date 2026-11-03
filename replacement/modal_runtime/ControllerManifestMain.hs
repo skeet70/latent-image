@@ -188,7 +188,7 @@ functionJson bytes functions callbackTargets entry@(GuestAddress low) = object
   inspected = case fence of
     Nothing -> Left "no source/callback function fence"
     Just high | low < imageBase -> Left "target is outside supplied image5"
-              | otherwise -> inspectFunction (GuestAddress imageBase) bytes (FunctionWindow entry high) tails
+              | otherwise -> inspectFunction xm1TaskRecords (GuestAddress imageBase) bytes (FunctionWindow entry high) tails
   (witnesses, unresolved) = classify functions callbackTargets entry
   categories = S.fromList ([category | (category,_,_) <- witnesses] ++ [Unclassified | null witnesses || not (S.null unresolved)])
 
