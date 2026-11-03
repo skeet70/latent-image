@@ -2,6 +2,8 @@
 pub mod adapters;
 pub mod adjustment;
 pub mod bridge;
+pub mod composed_catalog;
+pub mod composed_receipt;
 pub mod ff80;
 pub mod frame_capture;
 pub mod guest;

@@ -5,7 +5,7 @@ module Emulation.LoaderPrefixWitness
   , Guest (..), Span (..), RegisterIndex, registerIndex
   , ProgramKind (..), programKindName, Polling (..), Program (..), ProgramFacts (..)
   , Contract (..), StartupFacts, budget, contractValue, parseContract, isComposed
-  , retainedFacts, deriveOwnedFacts, deriveScenarioOwnedFacts, StagedImages (..), stagedImages, verifyStagedOwned
+  , retainedFacts, deriveOwnedFacts, deriveScenarioOwnedFacts, StagedImages (..), stagedImages, stagedImagesFromParts, verifyStagedOwned
   , deriveComposedContract
   , ReceiptScope (..), Receipt, ValidatedReceipt, receiptArgument, parseReceipt, validateReceipt, compareReceipts
   , PrefixExitContext (..), prefixExitContext

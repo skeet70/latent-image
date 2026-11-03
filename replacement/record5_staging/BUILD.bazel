@@ -1,0 +1,50 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_library", "haskell_test")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_library(
+    name = "record5-staging",
+    srcs = ["Replacement/Record5Staging.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:image4-staging-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:process",
+        "//host:update-container",
+    ],
+)
+
+_TOOLS = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"]
+
+_IMAGES = [
+    "//replacement/general_heap:general-heap-image.bin",
+    "//replacement/general_heap:general-heap-image.symbols",
+    "//replacement/application_pump:application-pump-image.bin",
+    "//replacement/application_pump:application-pump-image.symbols",
+]
+
+# Canonical inputs come from private-data; SCRATCH_DIR must lie under private-data/scratch/app154:
+# bazel run //replacement/record5_staging:record5-staging-canonical-tests -- CANONICAL_DAT IMAGE4 IMAGE5 SCRATCH_DIR
+haskell_test(
+    name = "record5-staging-canonical-tests",
+    srcs = ["CanonicalTests.hs"],
+    args = ["$(rootpath %s)" % label for label in _TOOLS + _IMAGES],
+    data = _TOOLS + _IMAGES,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    tags = ["manual"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:image4-staging-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:host-support",
+        "//replacement/application_pump:application-pump-artifact",
+        "//replacement/general_heap:general-heap-artifact",
+    ],
+)
