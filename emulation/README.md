@@ -1739,7 +1739,7 @@ Joined admission independently rederives all three artifacts and restages the ca
 
 `//emulation:property-pair-check` has `qualify ROLE`, `compare`, `refusal-controls ROLE` and `control`. `qualify` replays every write row against region bytes, pairs calls by stack and return address, refuses any guarded fetch, requires each crawl route's last step to show its recorded effects and the declared route to show a setter entry and an area-3 append, bounds each accessor store by its range and matches it to its write row, and refuses settings writes from carrier code other than the accessor stores. `compare` requires per route equal ordered setter calls, area-3 appends, byte-changing writes, transfers and final regions, equal getter (caller, arguments, result) sets, equal menus and equal settle statuses where neither press exhausted its budget.
 
-Status: the retained run on the 116-route file before the playback exclusion qualified (34,542 hits, 248 steps). The owned run on that file was refused at the playback step, which led to the exclusion; retained, owned and control have not been run on the current route file.
+Status (E-PROPERTY-SERVICE-NATURAL-150): on the 113-route file, retained and owned qualify and compare equal over all 113 routes, both roles' nine serialized refusal controls refuse as expected, and the guest control refuses at its restored arm 0x62d760. Earlier runs on the 116-route files led to the playback and time-driven exclusions recorded in the route file. In crawl-trial-01462 the owned OK opened SHOOTING MENU (1,5,2), as stock crawl-4 trial 1364 does, while the retained OK was not consumed within 90M instructions; the time-driven exclusion's recorded reason describes this as block counting.
 
 ### Owned first-stage witness
 
