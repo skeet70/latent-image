@@ -265,8 +265,10 @@ main = do
         , CrawlEdge 15 [KeyBack, KeyBack, KeyOk] [SetterEffect 5]
         , CrawlEdge 18 [KeyPlay, KeyOk] [SetterEffect 6]
         , CrawlEdge 19 [KeyOk, KeyPlay] [SetterEffect 7]
+        , CrawlEdge 21 [KeyRight] [SetterEffect 0x1c9, SetterEffect 0x1c8, SetterEffect 0x27f, SetterEffect 0x280]
+        , CrawlEdge 22 [KeyLeft] [SetterEffect 0x1c9, SetterEffect 0x278]
         ]
-      (selected, playbackTrials) = selectCrawlRoutes edges
+      (selected, playbackTrials, timeDrivenTrials) = selectCrawlRoutes edges
       file routes = RouteFile (replicate 64 '0') "test" [Exclusion "reason" playbackTrials] routes
       roundTrip routes = decodeRouteFile (BL.toStrict (encodeRouteFile (file routes)))
       valid = phaseRoutes ++ selected ++ declaredRoutes
@@ -279,8 +281,9 @@ main = do
       guardHit address = ownedWith (stepHits ownedStep ++ [hit (Guard RetiredGetterArm) address [] stackPointer 0])
   results <- sequence
     [ check "one route per ordered effect sequence, fewest presses then lowest trial"
-        (map routeKeys selected == [[KeyOk, KeyOk], [KeyDown], [KeyBack, KeyBack, KeyOk], [KeyOk, KeyPlay]])
+        (map routeKeys selected == [[KeyOk, KeyOk], [KeyDown], [KeyBack, KeyBack, KeyOk], [KeyOk, KeyPlay], [KeyLeft]])
     , check "an edge leaving the screen PLAY opened is left out and listed" (playbackTrials == [18])
+    , check "an edge whose only effects are the time-driven block is left out and listed, one with another setter is kept" (timeDrivenTrials == [21])
     , check "an edge without a property effect is not a route" (all ((/= [KeyOk]) . routeKeys) selected)
     , check "a crawl route keeps its edge's effects" (map routeBody (take 1 selected) == [KeyRoute [KeyOk, KeyOk] (CrawlTrial 7 [SetterEffect 4, CommitEffect])])
     , check "route files round-trip" (roundTrip valid == Right (file valid))

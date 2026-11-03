@@ -17,6 +17,8 @@ module Emulation.PropertyPairRoutes
   , decodeCrawlEdges
   , selectCrawlRoutes
   , playbackExclusion
+  , timeDrivenBlock
+  , timeDrivenExclusion
   , declaredRoutes
   , phaseRoutes
   , routeKeys
@@ -220,21 +222,41 @@ decodeCrawlEdges bytes = do
       pure [CrawlEdge trial (path ++ [key]) decoded | reached /= Nothing]
 
 -- | One route per distinct ordered effect sequence among edges with a property write or commit,
--- other than edges leaving the no-card playback screen: the fewest presses, then the lowest
--- trial. Also the trials of the left-out playback edges.
-selectCrawlRoutes :: [CrawlEdge] -> ([Route], [Int])
+-- other than edges leaving the no-card playback screen and edges whose effects are only the
+-- time-driven block: the fewest presses, then the lowest trial. Also the trials of the left-out
+-- playback edges and of the left-out time-driven edges.
+selectCrawlRoutes :: [CrawlEdge] -> ([Route], [Int], [Int])
 selectCrawlRoutes edges =
   ( [ Route (RouteName (printf "crawl-trial-%05d" (crawlTrial edge))) (KeyRoute (crawlKeys edge) (CrawlTrial (crawlTrial edge) (crawlEffects edge)))
     | edge <- sortOn crawlTrial (M.elems chosen) ]
-  , sort [crawlTrial edge | edge <- effective, fromPlayback edge] )
+  , sort [crawlTrial edge | edge <- effective, fromPlayback edge]
+  , sort [crawlTrial edge | edge <- effective, not (fromPlayback edge), timeDriven edge] )
  where
   effective = filter (not . null . crawlEffects) edges
-  chosen = M.fromListWith shorter [(crawlEffects edge, edge) | edge <- effective, not (fromPlayback edge)]
+  chosen = M.fromListWith shorter [(crawlEffects edge, edge) | edge <- effective, not (fromPlayback edge), not (timeDriven edge)]
   shorter a b = if rank a <= rank b then a else b
   rank edge = (length (crawlKeys edge), crawlTrial edge)
   fromPlayback edge = case reverse (crawlKeys edge) of
     _ : KeyPlay : _ -> True
     _ -> False
+  timeDriven edge = all inBlock (crawlEffects edge)
+  inBlock effect = case effect of
+    SetterEffect property -> property `S.member` timeDrivenBlock
+    CommitEffect -> False
+
+-- | Setter properties written through 0x6309c4 (lr 0x630a04), value 0, bank 0, slot 1, in repeating
+-- blocks of four; the block recurs on 1,120 of crawl-4's 4,528 reached edges.
+timeDrivenBlock :: S.Set Word32
+timeDrivenBlock = S.fromList [0x1c9, 0x1c8, 0x27f, 0x280]
+
+-- | Why `selectCrawlRoutes` leaves out edges whose only effects are the time-driven block.
+timeDrivenExclusion :: T.Text
+timeDrivenExclusion = T.unwords
+  [ "These edges write only the 0x1c9/0x1c8/0x27f/0x280 block, which recurs in blocks of four on 1,120 of"
+  , "crawl-4's 4,528 reached edges, so their effect count follows elapsed instructions, not the keys. In natural-1 run 3,"
+  , "crawl-trial-01462's last step exhausted its 90M budget retained (32 block calls, as in crawl-4) and"
+  , "settled owned after 32.5M (16 calls, then 0x278 and 0x279 on both banks); the getter (lr, r0-r3,"
+  , "result) sets agree with no conflicting result, and every other route's effects matched in both roles." ]
 
 -- | Why `selectCrawlRoutes` leaves out edges from the screen PLAY opens without a card.
 playbackExclusion :: T.Text
