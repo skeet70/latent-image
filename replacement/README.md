@@ -15,6 +15,7 @@ Owned X-M1 replacement code is built through the existing Bazel/Nix graph. Each 
 - `plain_load/`: [#153](https://github.com/skeet70/latent-image/issues/153) complete plain-image orchestration at `[0x6a9844,0x6a9938)`. Freestanding Rust preserves both mode branches, temporal reads, missing-segment halt, ignored resource statuses and fresh unconditional final-length progress. The reviewed artifact fits exactly 244 bytes: a 16-byte, four-instruction A32 adapter plus 228 Rust bytes. Host admission/staging and one natural retained/owned read-success pair qualify the finite producer (`E-LATER-PLAIN-PRODUCER-HOST-150`, `E-LATER-PLAIN-PRODUCER-NATURAL-150`). Derived caller scratch reaches SP-40. The independent comparison binds all 27 fresh blocks, extent/hook publications and actual consumer entries; transient remaps, complete stack/resource confinement, other modes/failures and universal retirement remain unqualified.
 - `task_submission/`: [#151](https://github.com/skeet70/latent-image/issues/151) complete wrapper/release interval `[0x725dd8,0x72612c)`. The linker requires all 852 bytes, fixed submit/release entries and the retained lock-literal address. `E-STARTUP-TASK-WRAPPER-QUALIFIED-150` qualifies one natural retained/owned pair and ten controlled pairs. Creation, activation, logging, synchronization and scheduling remain named dependencies; four phase submissions do not establish global caller retirement.
 - `startup_composition/`: [#155](https://github.com/skeet70/latent-image/issues/155) joint admission and canonical staging for the owned #146 dispatcher and #150 interface installer. Typed call-state metadata derives every Install call SP and live caller word; eight-byte call alignment and disjoint private frames yield the current joined owned bound `S-104`. The single staged image changes only the two admitted component windows. `//replacement/startup_composition:startup-composition-tests` covers aligned compositions, a component-admitted misaligned call, missing component files and a changed retained target. `//replacement/startup_composition:stage-startup-composition` takes canonical DAT, image4, loader A, loader B, dispatcher image/symbols, installer image/symbols, fresh scratch directory and output DAT/contract paths. The host-admitted artifact does not establish natural backing, later consumer equivalence, retained callee bounds or application independence; see report 8.12 and `E-STARTUP-COMPOSITION-HOST-150`.
+- `general_heap/`: conditionally admitted whole general-heap cutover using direct `rlsf` 0.2.3, with all nine stock operation addresses preserved. Its scattered linker admits only retired allocation/bin, resize and trim/free carriers; image5 carries calloc entry stubs only. Backing, recursive synchronization and the move helper remain retained. Artifact admission derives stock function extents, emitted stack/call metadata, backend geometry and charged arena extents. Unknown interior entries, unknown metadata readers beyond `payload-4`, retired-state readers and compiler/retained AAPCS effects remain named premises, not full closure claims.
 
 The first-stage witness checks the guest handoff target against loader A's entry word and the staged owned bytes against the supplied candidate. A producer receipt with `result: passed` records completed observation, not consumer acceptance. The negative controls reach the handoff and collect all twelve reads without a model failure: the faulty candidate exposes target `0xdeadbe00` instead of `0x40020`, while the mismatched-image control runs the correct DAT against the faulty candidate's expected image digest. Both return nonzero from the witness consumer. The correct DAT also boots from natural reset through the fresh-settings English/date route to a rendered SHOOTING MENU page 1; visual acceptance remains the owner's check.
 
@@ -46,6 +47,21 @@ for image in secondary-stage-image secondary-stage-publication-fault-image secon
     --expect-slot-sha256 909db53de40a0319541a30314bd942cb119eca3de1147e2b856eecf71c1a4809
 done
 ```
+
+## General heap production staging
+
+`//replacement/general_heap:general-heap-image` builds the original arena variant; `general-heap-recipe-image` selects ceiling `0xbe1a00` instead of `0xbf1a00`. Both charge state to the arena prefix and keep the 32-byte guard. The linker fails on carrier overflow without selecting a relocated fallback. `//replacement/general_heap:general-heap-tests` contains host-only source/artifact/header/geometry/fetch controls. `heap-bridge-replay` consumes the admitted lifetime tape through the production stock bridge.
+
+`//replacement/general_heap:general-heap-host-tests` and `general-heap-recipe-host-tests` build the pinned Nix host-test derivations for the original and recipe ceilings. Each runs the behavioral Rust oracle inside the derivation and exports its Cargo lockfile only after success; these are Bazel build targets, not separate Cargo test commands.
+
+`//replacement/general_heap:stage-general-heap` takes `SOURCE_DAT IMAGE4 IMAGE5 LINKED_BIN SYMBOLS SCRATCH_DIR OUT_IMAGE4 OUT_IMAGE5 OUT_DAT OUT_CONTRACT` after its Bazel-supplied encoder/rebuilder/decoder arguments. Inputs must match canonical X-M1 1.50 identities. The scratch directory must exist below `private-data/scratch`. It stages image4 with `Emulation.Image4Staging`, replaces record5 through the existing container machinery, decodes both carried streams and rejects every outside-byte change except the corresponding container checksum.
+
+The schema1 contract records canonical identities, staged image paths/digests, candidate DAT digest, five disjoint carrier/immutable intervals, the separately mutable sentinel at `0x89d4f8`, fixed stock entries, all symbols and sized function roots, owned instruction PCs, literals and emitted frame/call boundaries. Backend geometry and state/pool extents come from the linked `XM1_HEAP_METADATA` object and must match `Tlsf<'static,u32,u16,17,16>`, 16-byte granularity, the 16-byte stock prefix and stock alignment 8. Runtime consumers must reject stale owned bytes, fetches outside the derived instruction set and carrier writes other than admitted image publication. The sentinel starts at zero before first allocation and lies below phase0 clearing.
+
+The linker scatters owned code across the retired carriers with `--enable-non-contiguous-regions`: rlsf resize/allocate and the stock resize path are pinned to the resize carrier, backend initialization to the free carrier, and the remaining text spills from the malloc carrier through the bin, resize, trim and free carriers. `memcpy`, `memmove` and their AEABI forms resolve to the retained stock memmove at `0x89d908`; stock lock, unlock and that memmove are the only admitted external callees. The standalone image carries no native GlobalAlloc shims, because with them the owned text exceeds the carrier union. The `allocator()` API in the accompanying rlib exposes the same backend through `Allocator` and `GlobalAlloc` over the fixed arena-prefix state, sentinel and retained lock, so a Rust consumer links those front ends into its own image.
+
+Intentional redesigns are checked calloc multiplication instead of wrapping, oversized resize rejection before locking instead of a leaked recursive depth, minimum nonnull-on-success zero requests, and trim always returning zero instead of releasing top backing. Stock `payload-4` remains a boundary tag with `PREV_INUSE=1`; its decoded usable extent must stay inside the allocation. Native Layout front ends do not carry that stock prefix. The unchanged graphics forwarding adapters and callback table words depend on the patched stock addresses. Cold-boot ownership, runtime guard coverage and retained lock semantics remain admission conditions; source admission alone is not natural-run or silicon qualification.
+
 
 ## Selected volatile bank publication groups (#128, #129)
 
@@ -268,6 +284,28 @@ devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
 Tests exercise public artifact derivation with alternate valid arrangements and malformed behaviors, plus the emitted artifact. The optional canonical DAT/image4 test branch is not invoked in this qualification; the actual stager and independent runtime checker establish candidate confinement. `E-INITIAL-IDLE-NATURAL-QUALIFIED-150` admits both idle tasks through modeled IRQ restoration and repeated WFI in retained/owned runs, and accepts their semantic comparison. Their four-byte and eight-byte private frames are observed separately. `E-INITIAL-IDLE-CONTROLS-150` adds 43 passing host-side refusal mutations per role. Root/standby bodies, global original-copy/caller closure and retained service lifetimes beyond the watched interval remain open.
 
 The contract's `idle_task` object contains `entry`, `replaced_extent`, `linked_bytes`, `linked_sha256`, `symbols_sha256`, `staged_image4_sha256`, `scratch_low_from_entry_sp`, `execution_pcs`, `wfi_pc` and `resume_pc`. The outer contract binds candidate DAT/image4 identities. [The idle lifecycle observer and independent checker](../emulation/README.md#initial-task-body-boundary-152) consume these actual identities without borrowing an earlier run's pins.
+
+## Root initialization task source (#152)
+
+`replacement/root_task` defines the complete root104 body over `[0x69d160,0x69d2b4)` in Rust. There is no assembly body or production stock fallback. The linker retains the strict 340-byte carrier and rejects writable sections. Its emitted size, admission fixtures, staging and natural retained/owned comparison are not yet exercised.
+
+`deriveRootProof` admits the emitted caller orchestration against the canonical root behavior for 256 checked-status/mode/query combinations. Retained service bodies are opaque; ignored results and volatile state remain unknown. The proof checks ordered calls and arguments, both mode arms, source-required halts, the cleanup `-63` handback, callee-save/stack preservation, closed instruction/literal coverage and bounded private scratch. The user-ARM native profile is unchanged.
+
+The root-only stager leaves the shared idle body and every retained service unchanged. The contract's `root_task` object binds actual execution/call/halt/return PCs, call kinds, scratch, linked bytes and symbols. Source review and subsequent emitted admission must precede staging or execution.
+
+```sh
+devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" build --jobs=2 \
+  //replacement/root_task:root-task-image //replacement/root_task:stage-root-task \
+  //emulation:idle-tasks //emulation:root-task-check //emulation:idle-task-check \
+  //emulation:emulator-slot
+devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" test --jobs=2 \
+  //replacement/root_task:root-task-tests //replacement/media_permit:stock-inventory-tests
+devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
+  //replacement/root_task:stage-root-task -- \
+  "$SOURCE_DAT" "$IMAGE4" "$LINKED_BIN" "$SYMBOLS" "$SCRATCH" "$OUT_DAT" "$OUT_CONTRACT"
+```
+
+The opt-in observer and independent consumer are documented with the [initial task-body boundary](../emulation/README.md#initial-task-body-boundary-152). Root ownership requires the actual resource and constructor effects, modeled IRQ restoration, conditional cleanup and a completed surviving periodic callback after cleanup. Standby93, later application ownership and general retained-service retirement remain separate.
 
 ## Task-submission wrapper and release (#151)
 

@@ -243,7 +243,7 @@ run arguments = do
   id5 <- readBound id5Path 5185120
   id5Digest <- either error pure (parseSha256Hex "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a")
   unless (B.length id5 == 5185120 && sha256 id5 == id5Digest) $ error "id5 identity mismatch"
-  derived <- either error pure (SI.deriveFunction (SI.GuestAddress 0x00bf1a00) id5 (SI.FunctionWindow (SI.GuestAddress stockEntry) (SI.GuestAddress 0x00bfb124)) [])
+  derived <- either error pure (SI.deriveFunction SI.xm1TaskRecords (SI.GuestAddress 0x00bf1a00) id5 (SI.FunctionWindow (SI.GuestAddress stockEntry) (SI.GuestAddress 0x00bfb124)) [])
   either error pure (SI.checkDeclarations [SI.FunctionDeclaration (SI.GuestAddress stockEntry) (SI.FunctionSize 0xfc)] [SI.derivedDeclaration derived])
   kernel <- readBound kernelPath (2 * 1024 * 1024)
   binding <- either error pure (bindEntry (entryKernelDigest options) kernel)

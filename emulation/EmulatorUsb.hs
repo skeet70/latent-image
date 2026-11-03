@@ -30,6 +30,8 @@ module EmulatorUsb
   , emulatorWatchObservation
   , emulatorExecutionWatchBegin
   , emulatorWatchStateRaw
+  , emulatorWatchStateLine
+  , decodeBridgeWatchLine
   , ModalResponse (..)
   , emulatorModalObservationBegin
   , emulatorModalObservationReport
@@ -133,12 +135,14 @@ watchRpc :: Emulator -> Value -> IO Value
 watchRpc = bridgeWatchRpc . exchangeLine
 
 bridgeWatchRpc :: BridgeExchange -> Value -> IO Value
-bridgeWatchRpc exchange request = do
-  line <- exchange (encode request)
-  pure $ case eitherDecodeStrict' line of
-    Left problem -> object ["wire_bytes" .= B.unpack line, "decode_error" .= problem]
-    Right (Object fields) | M.lookup "ok" fields == Just (Bool True) -> Object (M.delete "ok" fields)
-    Right value -> value
+bridgeWatchRpc exchange request = decodeBridgeWatchLine <$> exchange (encode request)
+
+-- | A watch response line as a value; undecodable bytes and refusals are retained rather than thrown.
+decodeBridgeWatchLine :: B.ByteString -> Value
+decodeBridgeWatchLine line = case eitherDecodeStrict' line of
+  Left problem -> object ["wire_bytes" .= B.unpack line, "decode_error" .= problem]
+  Right (Object fields) | M.lookup "ok" fields == Just (Bool True) -> Object (M.delete "ok" fields)
+  Right value -> value
 
 data CaptureCommand
   = BeginSaveLifecycle Lifecycle.Program
@@ -444,6 +448,10 @@ emulatorExecutionWatchBegin emulator protected forbidden limit = watchRpc emulat
 
 emulatorWatchStateRaw :: Emulator -> IO Value
 emulatorWatchStateRaw emulator = watchRpc emulator (object ["command" .= String "watch-state"])
+
+-- | The undecoded watch-state response line, for callers that store it before decoding.
+emulatorWatchStateLine :: Emulator -> IO B.ByteString
+emulatorWatchStateLine emulator = exchangeLine emulator (encode (object ["command" .= String "watch-state"]))
 
 
 data ModalResponse = ModalResponse

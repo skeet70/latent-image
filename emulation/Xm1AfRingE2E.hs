@@ -278,7 +278,7 @@ run options = do
           pure (fromIntegral value, traceSiteLabel site)
       emulatorTraceSites emulator (installerSites ++ [(synthetic, "af-ring-synthetic")] ++ trajectorySites)
       ensurePrivateDirectory pushDirectory
-      pushed <- steppingClock >>= \clock -> runUnreviewedRamPush retained manifest clock api pushDirectory
+      pushed <- steppingClock >>= \clock -> runUnreviewedRamPush NoRamPushObserver retained manifest clock api pushDirectory
       pushStatePath <- case pushed of
         RamPushInstalled path -> pure path
         other -> ioError (userError ("AF ring ram-push failed: " ++ show other))

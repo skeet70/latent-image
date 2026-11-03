@@ -169,7 +169,7 @@ analyze :: B.ByteString -> CellMap -> Callback -> Either String Analysis
 analyze bytes cells (Callback ident@(CallbackId entry@(GuestAddress low)) end@(GuestAddress high) tails) = do
   let window = FunctionWindow entry end
       encoded = [(address,wordAt bytes address) | address <- [low,low+4..high-4]]
-  inspection <- inspectFunction (GuestAddress imageBase) bytes window (S.toList tails)
+  inspection <- inspectFunction xm1TaskRecords (GuestAddress imageBase) bytes window (S.toList tails)
   let code = S.fromList [address | GuestAddress address <- inspectedCodeWords inspection]
       literals = S.fromList [address | GuestAddress address <- inspectedLiteralWords inspection]
       decodeAt address word = A.decode address word

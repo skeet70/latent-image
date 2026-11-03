@@ -56,6 +56,8 @@ The platform depends on actual dual-core identity, mapped code/data and aliases,
 
 **[INFERENCE]** This has the largest runtime-retirement leverage: several roughly 50 KiB service-entry address spans plus image4 wrappers and shared objects, with no defensible exact code total yet. Develop it as a single platform project, with internally testable task/scheduler/synchronization/message families rather than a public ticket per function. Start after recovering the complete 97-slot semantic manifest and direct/vector surface, and grounding IRQ/timer/context laws. A task/message-only initial cut is possible, but must retain the IRQ/timer backend explicitly and must not be called whole-kernel retirement. The immediate blockers are interface semantic coverage, raw-object consumers, exception/context closure, cross-core lock/wakeup laws and resource reclamation. [Grounding: #127 runtime ranks3-7; Inventory §§8.12-8.17.]
 
+[RTOS platform options](rtos-platform-options.md) tests the µITRON 4.0 hypothesis against the 97-slot manifest, surveys reusable kernels and Rust runtimes, and records the selected base: a mainstream Rust runtime (embassy) under a shrinking stock-ABI compatibility shim, with the board glue and thread layer still to write.
+
 ## B. General heap and distinct allocator/resource families
 
 ### 1. Interface, count, ABI and errors
@@ -212,6 +214,8 @@ Retained loader division `0x4d978`, frame/value/slot lifetime and bounds, SVC/ex
 ### 1. Interface and count
 
 At least **four asynchronous file-operation entries** are recovered: open `0x71c648(cb,path,mode)->tag`, read `0x71c6fc(cb,handle,length,buffer)`, write `0x71c75c(cb,handle,length,source)` and close `0x71c7bc(cb,handle,0,0)`. They route requests 0x2c17..0x2c1a to media task0x1c. Synchronous base forms and completion callbacks extend the surface; this is not a complete filesystem API census. Open modes 0/1/2/3 are read/create-truncate/append/“s”. Completion codes 0,3,0xe,8,6 mean success, prepare, commit, raw0x24 class and missing-file respectively; task-context refusal uses callback 9. [Source: File report §6.2 lines190-205; Inventory §8.3 lines343-346.]
+
+The interface inventory is [the file-service manifest draft](file-service-manifest-draft.md) (E-FILE-SERVICE-MANIFEST-150): 34 media-task requests, 40 caller-facing and blocking wrappers and 230 entry contracts in all. Posters send to the mediamsg task `0x65`, which serializes opens and forwards to media task `0x1c`.
 
 ### 2. Extent, data and initialization
 

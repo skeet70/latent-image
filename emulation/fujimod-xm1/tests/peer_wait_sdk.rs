@@ -2786,3 +2786,312 @@ fn default_classified_watches_do_not_add_attribution_fields() {
     assert_eq!(observed.records.len(), 3);
     assert!(observed.records.iter().all(|row| row.core_instructions.is_none() && row.latest_fetch.is_none()));
 }
+
+#[test]
+fn mutable_points_preserve_stopped_fetch_clocks_attribution_and_watch_cap() {
+    use fujimod_emulator::board::observation::{CpuDataAttribution, FetchAttribution, ViewPolicy, WatchKinds, WatchRange};
+    let mut machine = machine(&[0xe5810000, 0xe2800001, 0xe5810004, 0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[0], 0x22b).unwrap();
+    machine.session.board.write_register(0, arm::CORE[1], 0x3000).unwrap();
+    machine.traces.arm_mutable(&machine.session, BTreeMap::from([
+        (0x1000, "start".into()), (0x1002, "halfword-aligned-unused".into()),
+        (0x1004, "root-entry".into()), (0x100c, "end".into()),
+    ])).unwrap();
+    machine.traces.stop_labels = ["start".into(), "root-entry".into(), "end".into()].into_iter().collect();
+    machine.run(10);
+    machine.require_running().unwrap();
+    assert_eq!(machine.instructions(), 0);
+    let attribution = FetchAttribution::new(CpuDataAttribution::Writes, vec![
+        WatchRange { start: 0x1000, end: 0x1010, kinds: WatchKinds::CPU_FETCH },
+    ]).unwrap();
+    let mut watch = machine.session.board.memory_watch_begin_with_fetch_attribution(vec![
+        WatchRange { start: 0x1000, end: 0x1010, kinds: WatchKinds::CPU_FETCH },
+        WatchRange { start: 0x3000, end: 0x3008, kinds: WatchKinds::WRITES },
+    ], attribution, 8, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
+    machine.traces.replace_sites(&machine.session, BTreeMap::from([
+        (0x1002, "halfword-aligned-unused".into()), (0x1004, "root-entry".into()), (0x100c, "end".into()),
+    ])).unwrap();
+    machine.run(10);
+    machine.require_running().unwrap();
+    let entry: AttributedWatch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    let fetches = |observed: &AttributedWatch| observed.records.iter().filter(|row| row.event.source == Source::CpuFetch)
+        .map(|row| (row.event.pc, row.event.instructions, row.core_instructions)).collect::<Vec<_>>();
+    assert_eq!(fetches(&entry), [
+        (Some(0x1000), Some(1), Some(CoreInstructionOrdinal(1))),
+        (Some(0x1004), Some(1), Some(CoreInstructionOrdinal(1))),
+    ]);
+    assert_eq!(machine.instructions(), 1);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 0x22b);
+    machine.traces.add_sites(&machine.session, BTreeMap::from([(0x1008, "irq-resume".into())])).unwrap();
+    machine.traces.remove_sites(&machine.session, &[Guest(0x1002)]).unwrap();
+    machine.run(10);
+    machine.require_running().unwrap();
+    let resumed: AttributedWatch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    assert_eq!(fetches(&resumed), [
+        (Some(0x1000), Some(1), Some(CoreInstructionOrdinal(1))),
+        (Some(0x1004), Some(1), Some(CoreInstructionOrdinal(1))),
+        (Some(0x1004), Some(2), Some(CoreInstructionOrdinal(2))),
+        (Some(0x1008), Some(2), Some(CoreInstructionOrdinal(2))),
+    ]);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 0x22c);
+    assert!(machine.traces.replace_sites(&machine.session, BTreeMap::from([(0x1003, "invalid".into())])).is_err());
+    machine.traces.remove_sites(&machine.session, &[Guest(0x1008)]).unwrap();
+    machine.run(10);
+    machine.require_running().unwrap();
+    let completed: AttributedWatch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    assert!(completed.violation.is_none());
+    assert_eq!(completed.records.len(), 8);
+    assert_eq!(fetches(&completed), [
+        (Some(0x1000), Some(1), Some(CoreInstructionOrdinal(1))),
+        (Some(0x1004), Some(1), Some(CoreInstructionOrdinal(1))),
+        (Some(0x1004), Some(2), Some(CoreInstructionOrdinal(2))),
+        (Some(0x1008), Some(2), Some(CoreInstructionOrdinal(2))),
+        (Some(0x1008), Some(3), Some(CoreInstructionOrdinal(3))),
+        (Some(0x100c), Some(3), Some(CoreInstructionOrdinal(3))),
+    ]);
+    let writes: Vec<_> = completed.records.iter().filter(|row| row.event.source == Source::CpuWrite)
+        .map(|row| (row.event.physical, row.event.value, row.latest_fetch.as_ref().unwrap().event.pc)).collect();
+    assert_eq!(writes, [(0x3000, Some(0x22b), Some(0x1000)), (0x3004, Some(0x22c), Some(0x1008))]);
+    assert!(completed.fetch_attribution.as_ref().unwrap().sources == [Source::CpuWrite]);
+    assert_eq!(machine.instructions(), 3);
+    machine.session.board.write_physical(0x3000, &[0, 0, 0, 0]).unwrap();
+    let capped: AttributedWatch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(capped.violation.is_some());
+    assert_eq!(capped.records.len(), 8);
+    assert_eq!(fetches(&capped), fetches(&completed));
+}
+
+#[test]
+fn removing_a_mutable_resume_point_does_not_stop_the_next_loop_iteration() {
+    use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
+    let mut machine = machine(&[0xe2800001, 0xeafffffd]);
+    machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
+    machine.traces.arm_mutable(&machine.session, BTreeMap::from([(0x1000, "resume".into()), (0x1004, "backedge".into())])).unwrap();
+    machine.traces.stop_labels = ["resume".into(), "backedge".into()].into_iter().collect();
+    machine.run(10);
+    machine.require_running().unwrap();
+    let mut watch = machine.session.board.memory_watch_begin_classified(vec![
+        WatchRange { start: 0x1000, end: 0x1008, kinds: WatchKinds::CPU_FETCH },
+    ], 8, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
+    machine.run(10);
+    machine.require_running().unwrap();
+    machine.traces.remove_sites(&machine.session, &[Guest(0x1000)]).unwrap();
+    machine.run(10);
+    machine.require_running().unwrap();
+    let observed: Watch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(observed.violation.is_none());
+    let fetches: Vec<_> = observed.records.iter().filter(|row| row.source == Source::CpuFetch)
+        .map(|row| (row.pc, row.instructions)).collect();
+    assert_eq!(fetches, [
+        (Some(0x1000), Some(1)), (Some(0x1004), Some(1)),
+        (Some(0x1004), Some(2)), (Some(0x1000), Some(3)), (Some(0x1004), Some(3)),
+    ]);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 2);
+    assert_eq!(machine.instructions(), 3);
+}
+
+#[test]
+fn readding_a_removed_current_point_stops_its_first_return() {
+    use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
+    let mut machine = machine(&[0xe2800001, 0xeafffffd]);
+    machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
+    machine.traces.arm_mutable(&machine.session, BTreeMap::from([(0x1000, "entry".into())])).unwrap();
+    machine.traces.stop_labels.insert("entry".into());
+    machine.run(10);
+    machine.require_running().unwrap();
+    assert_eq!(machine.instructions(), 0);
+    let mut watch = machine.session.board.memory_watch_begin_classified(vec![
+        WatchRange { start: 0x1000, end: 0x1008, kinds: WatchKinds::CPU_FETCH },
+    ], 8, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
+    machine.traces.remove_sites(&machine.session, &[Guest(0x1000)]).unwrap();
+    machine.run(1);
+    machine.require_running().unwrap();
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 1);
+    machine.traces.add_sites(&machine.session, BTreeMap::from([(0x1000, "entry".into())])).unwrap();
+    machine.run(10);
+    machine.require_running().unwrap();
+    let observed: Watch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(observed.violation.is_none());
+    let fetches: Vec<_> = observed.records.iter().filter(|row| row.source == Source::CpuFetch)
+        .map(|row| (row.pc, row.instructions)).collect();
+    assert_eq!(fetches, [(Some(0x1000), Some(1)), (Some(0x1004), Some(2)), (Some(0x1000), Some(2))]);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 1);
+    assert_eq!(machine.session.board.read_register(0, Register::Pc).unwrap(), 0x1000);
+    assert_eq!(machine.instructions(), 2);
+}
+
+fn stop_sites(addresses: &[u32]) -> BTreeMap<u32, String> {
+    addresses.iter().map(|&address| (address, "stop".to_owned())).collect()
+}
+
+fn hit_positions(machine: &Machine) -> Vec<(usize, u32, u64)> {
+    machine.traces.hits.iter()
+        .map(|hit| (hit.core, u32::from_str_radix(hit.address.trim_start_matches("0x"), 16).unwrap(), hit.instructions))
+        .collect()
+}
+
+fn stopped_at(machine: &mut Machine, pc: u64, instructions: u64) {
+    assert_eq!(machine.run(20), RunOutcome::Stopped);
+    machine.require_running().unwrap();
+    assert_eq!(machine.instructions(), instructions);
+    assert_eq!(machine.session.board.read_register(0, Register::Pc).unwrap(), pc);
+}
+
+#[test]
+fn persistent_points_keep_stopped_fetch_rows_exact_through_every_site_and_mode_transition() {
+    use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
+    use fujimod_xm1::trace::DisarmedPoints;
+    let mut program = vec![0xe2800001; 16];
+    program.push(0xeafffffe);
+    let mut machine = machine(&program);
+    machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
+    machine.traces.set_disarmed_points(DisarmedPoints::Retain);
+    machine.traces.arm_mutable(&machine.session, stop_sites(&[0x1000])).unwrap();
+    machine.traces.stop_labels.insert("stop".into());
+    stopped_at(&mut machine, 0x1000, 0);
+    let mut watch = machine.session.board.memory_watch_begin_classified(vec![
+        WatchRange { start: 0x1000, end: 0x1044, kinds: WatchKinds::CPU_FETCH },
+    ], 64, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
+    machine.traces.arm_mutable(&machine.session, stop_sites(&[0x1000, 0x1008])).unwrap();
+    stopped_at(&mut machine, 0x1000, 0);
+    stopped_at(&mut machine, 0x1008, 2);
+    machine.traces.add_sites(&machine.session, stop_sites(&[0x1010])).unwrap();
+    machine.traces.remove_sites(&machine.session, &[Guest(0x1008)]).unwrap();
+    stopped_at(&mut machine, 0x1010, 4);
+    machine.traces.add_sites(&machine.session, stop_sites(&[0x1018])).unwrap();
+    machine.traces.disarm(&machine.session).unwrap();
+    assert!(!machine.traces.armed());
+    machine.traces.rearm(&machine.session).unwrap();
+    stopped_at(&mut machine, 0x1018, 6);
+    machine.traces.disarm(&machine.session).unwrap();
+    assert_eq!(machine.run(2), RunOutcome::Completed);
+    machine.traces.rearm(&machine.session).unwrap();
+    assert!(machine.traces.armed());
+    machine.traces.arm_mutable(&machine.session, stop_sites(&[0x1024, 0x102c])).unwrap();
+    stopped_at(&mut machine, 0x1024, 9);
+    machine.traces.arm_mutable(&machine.session, stop_sites(&[0x1024, 0x102c])).unwrap();
+    stopped_at(&mut machine, 0x1024, 9);
+    stopped_at(&mut machine, 0x102c, 11);
+    machine.traces.replace_sites(&machine.session, stop_sites(&[0x1034])).unwrap();
+    stopped_at(&mut machine, 0x1034, 13);
+    machine.traces.remove_sites(&machine.session, &[Guest(0x1034)]).unwrap();
+    assert_eq!(machine.run(3), RunOutcome::Completed);
+    machine.require_running().unwrap();
+    let observed: Watch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(observed.violation.is_none());
+    assert!(observed.records.iter().all(|row| row.source == Source::CpuFetch && row.core == Some(0)));
+    let fetches: Vec<_> = observed.records.iter().map(|row| (row.pc.unwrap(), row.instructions.unwrap())).collect();
+    assert_eq!(fetches, [
+        (0x1000, 0),
+        (0x1000, 1), (0x1004, 2), (0x1008, 2),
+        (0x1008, 3), (0x100c, 4), (0x1010, 4),
+        (0x1010, 5), (0x1014, 6), (0x1018, 6),
+        (0x1018, 7), (0x101c, 8),
+        (0x1020, 9), (0x1024, 9),
+        (0x1024, 9),
+        (0x1024, 10), (0x1028, 11), (0x102c, 11),
+        (0x102c, 12), (0x1030, 13), (0x1034, 13),
+        (0x1034, 14), (0x1038, 15), (0x103c, 16),
+    ]);
+    assert_eq!(hit_positions(&machine), [
+        (0, 0x1000, 0), (0, 0x1000, 0), (0, 0x1008, 2), (0, 0x1010, 4), (0, 0x1018, 6),
+        (0, 0x1024, 9), (0, 0x1024, 9), (0, 0x102c, 11), (0, 0x1034, 13),
+    ]);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 16);
+    assert_eq!(machine.session.board.read_register(0, Register::Pc).unwrap(), 0x1040);
+    assert_eq!(machine.instructions(), 16);
+}
+
+#[test]
+fn arm_primary_leaves_persistent_points_for_fixed_primary_points() {
+    use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
+    let mut program = vec![0xe2800001; 1023];
+    program.push(0xeafffffe);
+    let mut machine = machine(&program);
+    assert_eq!(machine.run(1000), RunOutcome::Completed);
+    assert_eq!(machine.session.board.instruction_counts(), [1000, 0]);
+    machine.traces.arm_primary(&machine.session, stop_sites(&[0x2008])).unwrap();
+    machine.traces.stop_labels.insert("stop".into());
+    let mut watch = machine.session.board.memory_watch_begin_classified(vec![
+        WatchRange { start: 0x2000, end: 0x2020, kinds: WatchKinds::CPU_FETCH },
+    ], 32, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
+    assert_eq!(machine.run(4), RunOutcome::Completed);
+    assert_eq!(machine.session.board.instruction_counts(), [1000, 4]);
+    assert!(machine.traces.hits.is_empty());
+    machine.traces.arm_mutable(&machine.session, stop_sites(&[0x2008, 0x2014])).unwrap();
+    assert_eq!(machine.run(10), RunOutcome::Stopped);
+    assert_eq!(machine.session.board.instruction_counts(), [1000, 5]);
+    assert_eq!(machine.session.board.read_register(1, Register::Pc).unwrap(), 0x2014);
+    machine.traces.arm_primary(&machine.session, stop_sites(&[0x2014, 0x201c])).unwrap();
+    assert_eq!(machine.run(4), RunOutcome::Completed);
+    machine.require_running().unwrap();
+    let observed: Watch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(observed.violation.is_none());
+    assert!(observed.records.iter().all(|row| row.source == Source::CpuFetch && row.core == Some(1)));
+    let fetches: Vec<_> = observed.records.iter().map(|row| (row.pc.unwrap(), row.instructions.unwrap())).collect();
+    assert_eq!(fetches, [
+        (0x2000, 1001), (0x2004, 1002), (0x2008, 1003), (0x200c, 1004),
+        (0x2010, 1005), (0x2014, 1006),
+        (0x2014, 1006), (0x2018, 1007), (0x201c, 1008),
+    ]);
+    assert_eq!(hit_positions(&machine), [(1, 0x2014, 1005)]);
+    assert_eq!(machine.session.board.instruction_counts(), [1000, 9]);
+}
+
+#[test]
+fn checkpoint_teardown_reinstalls_persistent_points_with_a_once_only_resume() {
+    let mut machine = machine(&[0xe2800001, 0xe2800001, 0xe2800001, 0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
+    machine.traces.arm_mutable(&machine.session, stop_sites(&[0x1000, 0x1008])).unwrap();
+    machine.traces.stop_labels.insert("stop".into());
+    stopped_at(&mut machine, 0x1000, 0);
+    machine.disarm().unwrap();
+    machine.rearm().unwrap();
+    assert!(machine.traces.armed());
+    stopped_at(&mut machine, 0x1008, 2);
+    assert_eq!(hit_positions(&machine), [(0, 0x1000, 0), (0, 0x1008, 2)]);
+    assert_eq!(machine.session.board.read_register(0, arm::CORE[0]).unwrap(), 2);
+}
+
+/// Stops at 0x1000, disarms under `policy`, begins a fetch watch, rearms and runs through the stop at 0x1008.
+fn fetches_after_disarm_then_watch(policy: fujimod_xm1::trace::DisarmedPoints) -> Vec<(u64, u64)> {
+    use fujimod_emulator::board::observation::{ViewPolicy, WatchKinds, WatchRange};
+    let mut machine = machine(&[0xe2800001, 0xe2800001, 0xe2800001, 0xeafffffe]);
+    machine.session.board.write_register(0, arm::CORE[0], 0).unwrap();
+    machine.traces.set_disarmed_points(policy);
+    machine.traces.arm_mutable(&machine.session, stop_sites(&[0x1000, 0x1008])).unwrap();
+    machine.traces.stop_labels.insert("stop".into());
+    stopped_at(&mut machine, 0x1000, 0);
+    machine.traces.disarm(&machine.session).unwrap();
+    assert!(!machine.traces.armed());
+    let mut watch = machine.session.board.memory_watch_begin_classified(vec![
+        WatchRange { start: 0x1000, end: 0x1010, kinds: WatchKinds::CPU_FETCH },
+    ], 8, machine.session.board.mappings().to_vec(), ViewPolicy::Observe).unwrap();
+    machine.traces.rearm(&machine.session).unwrap();
+    stopped_at(&mut machine, 0x1008, 2);
+    assert_eq!(machine.run(1), RunOutcome::Completed);
+    machine.require_running().unwrap();
+    let observed: Watch = serde_json::from_value(watch.records.borrow().state()).unwrap();
+    machine.session.board.memory_watch_end(&mut watch).unwrap();
+    assert!(observed.violation.is_none());
+    assert_eq!(hit_positions(&machine), [(0, 0x1000, 0), (0, 0x1008, 2)]);
+    assert_eq!(machine.instructions(), 3);
+    observed.records.iter().map(|row| (row.pc.unwrap(), row.instructions.unwrap())).collect()
+}
+
+#[test]
+fn released_disarm_reinstalls_points_behind_a_later_watch() {
+    assert_eq!(fetches_after_disarm_then_watch(fujimod_xm1::trace::DisarmedPoints::Release),
+        [(0x1000, 1), (0x1004, 2), (0x1008, 3), (0x1008, 3)]);
+}
+
+#[test]
+fn retained_disarm_keeps_points_ahead_of_a_later_watch() {
+    assert_eq!(fetches_after_disarm_then_watch(fujimod_xm1::trace::DisarmedPoints::Retain),
+        [(0x1000, 1), (0x1004, 2), (0x1008, 2), (0x1008, 3)]);
+}

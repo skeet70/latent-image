@@ -1,4 +1,4 @@
-module Main where
+module Xm1Viewer where
 
 import Control.Exception (IOException, catch, displayException)
 import Control.Monad (when)
@@ -7,7 +7,7 @@ import Emulation.Ff80Rehearsal (runFujiModRehearsal)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
-import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, experimentPayload, parseSymbolRead, runMenuCrawlE2E, runRamPushE2E, warmAttachCheckpoint)
+import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, experimentPayload, parseSymbolRead, runMenuCrawlE2E, runRamPushE2E, warmAttachCheckpoint)
 import Data.List (isPrefixOf, nub)
 import Data.Char (isAscii, isAlphaNum)
 import qualified Data.Text as T
@@ -65,6 +65,7 @@ data Options = Options
   , bindOption :: Bind
   , warmCheckpointOption :: Bool
   , modalDiagnosticOption :: ModalDiagnostic
+  , modalLifetimeGuardOption :: ModalLifetimeGuard
   , runDocumentOption :: Maybe FujiModRunFile
   , menuCrawlOption :: Maybe CrawlConfigFile
   }
@@ -110,15 +111,20 @@ usage = unlines
   , "                         Requires --ram-push-e2e --cardless --fujimod --flash-candidate"
   , "  --menu-crawl PATH      Crawl the stock screens from held snapshots with a crawl config"
   , "                         Requires --ram-push-e2e --cardless --fujimod --flash-candidate"
+  , "  --modal-lifetime-guard Opt-in continuous publication-to-unload guard for the default 223 bank"
+  , "                         Requires --ram-push-e2e --cardless --fujimod --unreviewed-relink,"
+  , "                         enforced allowlist, a full nonsegmented route and successful unload"
+  , "                         Refuses --modal-observation, --flash-candidate, --warm-checkpoint and other payloads"
   , "  --classic-chrome       --ram-push-e2e: push the Classic Chrome payload in place of the recipe bank and D3"
   , "  --classic-chrome-icon  --ram-push-e2e: push the Classic Chrome payload with its icon and live-view words"
   , "  --experiment NAME      --ram-push-e2e: push experiments/NAME with no card unless --sd-card-image is supplied"
   , "  --ram-push-modal-scoped Select the separate unqualified 224-publication scoped modal bank"
   , "                         Requires --ram-push-e2e --cardless --fujimod --unreviewed-relink"
+  , "                         Automatically guards the full nonsegmented route through successful unload"
   , "  --ram-push-lifecycle   Select the unqualified 226-publication lifecycle variant"
-  , "                         Composes with --ram-push-modal-scoped for the 227-publication variant"
+  , "                         Cannot combine with the continuously guarded --ram-push-modal-scoped route"
   , "                         Requires --ram-push-e2e --fujimod --unreviewed-relink"
-  , "                         Virtual-card capture requires a terminal save_lifecycle trajectory; modal composition is cardless"
+  , "                         Virtual-card capture requires a terminal save_lifecycle trajectory"
   , "  --fujimod-run-document PATH  Select a run document for the FujiMod RAM-push e2e"
   , "  --read SYMBOL[:LENGTH] Read an experiment export after its trajectory (repeatable; default LENGTH 64)"
   , "  --attach-hold-q        --ram-push-e2e: hold Q across the attach edge of every boot (USB-toggle candidates)"
@@ -145,8 +151,8 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False NoModalDiagnostic Nothing Nothing
-    go options [] = pure options
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False NoModalDiagnostic NoModalLifetimeGuard Nothing Nothing
+    go options [] = validateModalLifetimeOptions options >> pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
         Just number | number >= 0 && number <= 65535 -> pure (Port (fromInteger number))
@@ -191,13 +197,18 @@ parseCommand args
       let names = filter (not . T.null) (T.splitOn (T.singleton ',') (T.pack value))
       require (not (null names) && nub names == names) "--segments must name distinct segments"
       go options { segmentsOption = Just names } rest
-    go options ("--flash-candidate" : rest) =
+    go options ("--flash-candidate" : rest) = do
+      require (pushModeOption options == RamPush) "--flash-candidate may appear only once"
       go options { pushModeOption = FlashCandidate } rest
-    go options ("--modal-observation" : rest) =
+    go options ("--modal-observation" : rest) = do
+      require (modalDiagnosticOption options == NoModalDiagnostic) "--modal-observation may appear only once"
       go options { modalDiagnosticOption = RetainedFilmModalDiagnostic } rest
     go options ("--menu-crawl" : value : rest) = do
       require (not (null value) && menuCrawlOption options == Nothing) "--menu-crawl takes one nonempty config path"
       go options { menuCrawlOption = Just (CrawlConfigFile value) } rest
+    go options ("--modal-lifetime-guard" : rest) = do
+      require (modalLifetimeGuardOption options == NoModalLifetimeGuard) "--modal-lifetime-guard may appear only once"
+      go options { modalLifetimeGuardOption = ContinuousModalLifetimeGuard } rest
     go options ("--ram-push-modal-scoped" : rest) = do
       selected <- case ramPayloadOption options of
         BankD3Choice -> pure BankModal75Choice
@@ -245,6 +256,24 @@ parseCommand args
       frame <- either (ioError . userError) pure (parseFixedSceneFrame value)
       go options { fixedSceneFrameOption = Just frame } rest
     go _ (argument : _) = ioError (userError ("Unknown option or missing value: " ++ argument ++ "\n" ++ usage))
+
+validateModalLifetimeOptions :: Options -> IO ()
+validateModalLifetimeOptions options =
+  when (modalLifetimeGuardOption options == ContinuousModalLifetimeGuard
+    || ramPayloadOption options `elem` [BankModal75Choice, BankModalLifecycleChoice]) $ do
+    require (ramPushE2EOption options && not (ff80RehearsalOption options))
+      "modal lifetime guard requires --ram-push-e2e without --ff80-rehearsal"
+    require (cardModeOption options == WithoutCard && virtualSDImageOption options == Nothing)
+      "modal lifetime guard requires --cardless without --sd-card-image"
+    require (runtimeOption options == FujiModChoice) "modal lifetime guard requires --fujimod"
+    require (relinkModeOption options == UnreviewedRelink EnforceAllowlist && allowlistOverrideOption options == Nothing)
+      "modal lifetime guard requires --unreviewed-relink without an allowlist override"
+    require (pushModeOption options == RamPush) "modal lifetime guard cannot use --flash-candidate"
+    require (ramPayloadOption options `elem` [BankD3Choice, BankModal75Choice])
+      "modal lifetime guard supports only the default 223 bank or scoped 224 bank"
+    require (modalDiagnosticOption options == NoModalDiagnostic) "modal lifetime guard cannot use --modal-observation"
+    require (segmentsOption options == Nothing) "modal lifetime guard requires a full nonsegmented route"
+    require (not (warmCheckpointOption options)) "modal lifetime guard cannot use --warm-checkpoint"
 
 validateVirtualSDImage :: Workspace -> VirtualSDImage -> IO VirtualSDImage
 validateVirtualSDImage root (VirtualSDImage supplied) = do
@@ -430,6 +459,7 @@ launch options = do
                 ExperimentChoice (ExperimentName name) -> experimentPayload name)
               (attachHoldOption options)
               (uiConversionProfileOption options) cardInput (fixedSceneFrameOption options) Nothing runtime dat (readSymbolsOption options) (modalDiagnosticOption options)
+              (modalLifetimeGuardOption options)
         trajectory <- case trajectoriesOption options of
           Just (TrajectoryFile path) -> pure (Just (resolve root path))
           Nothing -> do

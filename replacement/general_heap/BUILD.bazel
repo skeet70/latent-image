@@ -1,0 +1,44 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load(":general_heap.bzl", "general_heap_host_tests", "general_heap_subject")
+load(":replay.bzl", "heap_bridge_replay")
+
+package(default_visibility = ["//visibility:public"])
+
+general_heap_subject(name = "general-heap-image")
+general_heap_subject(name = "general-heap-recipe-image", recipe_arena = True)
+general_heap_host_tests(name = "general-heap-host-tests")
+general_heap_host_tests(name = "general-heap-recipe-host-tests", recipe_arena = True)
+heap_bridge_replay(name = "heap-bridge-replay")
+
+haskell_library(
+    name = "general-heap-artifact",
+    srcs = ["Replacement/GeneralHeap/Admission.hs", "Replacement/GeneralHeap/Artifact.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256", "//emulation:image4-staging-lib",
+        "//host:aeson", "//host:base", "//host:bytestring", "//host:containers",
+        "//host:directory", "//host:filepath", "//host:first-stage", "//host:host-support",
+        "//host:process", "//host:update-container", "//host/firmware:bank-allowlist",
+        "//replacement/media_permit:stock-inventory",
+    ],
+)
+
+haskell_binary(
+    name = "stage-general-heap",
+    srcs = ["StageMain.hs"],
+    args = ["$(rootpath //lz:lz-encode)", "$(rootpath //host/firmware:rebuild-update)", "$(rootpath //lz:fflzd)"],
+    data = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":general-heap-artifact", "//emulation:image4-staging-lib", "//host:aeson", "//host:base",
+        "//host:bytestring", "//host:directory", "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "general-heap-tests",
+    srcs = ["Tests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [":general-heap-artifact", "//host:base", "//host:bytestring", "//host:update-container"],
+)

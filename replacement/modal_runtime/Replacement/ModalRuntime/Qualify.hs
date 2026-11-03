@@ -1158,7 +1158,7 @@ runQualification options = do
       windows = [(stockEntry, 0x00bfb124), (prehookAddr, 0x00d0cc9c), (noopAddr, 0x00d3cdfc)]
       declaration (address, size) = SI.FunctionDeclaration (SI.GuestAddress address) (SI.FunctionSize size)
   derived <- either error pure $
-    mapM (\(low, high) -> SI.deriveFunction (SI.GuestAddress id5BaseValue) id5 (SI.FunctionWindow (SI.GuestAddress low) (SI.GuestAddress high)) []) windows
+    mapM (\(low, high) -> SI.deriveFunction SI.xm1TaskRecords (SI.GuestAddress id5BaseValue) id5 (SI.FunctionWindow (SI.GuestAddress low) (SI.GuestAddress high)) []) windows
   either error pure (SI.checkDeclarations (map declaration declarations) (map SI.derivedDeclaration derived))
   kernelBytes <- readBounded (optionBuild options </> "kernel.elf") (2 * 1024 * 1024)
   suppliedText <- readBounded (optionBuild options </> "kernel-text.bin") kernelTextLimit

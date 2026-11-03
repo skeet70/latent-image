@@ -4,6 +4,7 @@ module FujiAF.RamPush
   , RamPushEntries(..), RamPushManifest(..), RamAllocState(..), RetainedAllocation(..), RamPushState(..)
   , PeerCacheAvailability(..), xm1PeerCacheAvailability
   , RamAllocOutcome(..), RamPushOutcome(..), RamFreeOutcome(..), RamUnloadOutcome(..)
+  , RamPushObserver(..)
   , bootstrapAddress, bootstrapBytes, peerPrepareBytes, freeBootstrapBytes, callbackSlotAddress
   , callbackTablePointerAddress, callbackTableAddress, callbackStockWord
   , queryOutputAddress, configGateIndex, mailboxBytes
@@ -70,6 +71,10 @@ data Publication = Publication
   , publicationNew :: WordValue
   , publicationCore :: CoreScope
   } deriving (Eq, Show)
+
+data RamPushObserver
+  = NoRamPushObserver
+  | BeforeRamPublication (IO ())
 data RamPushEntries = RamPushEntries
   { installEntry :: Address
   , rollbackEntry :: Address
@@ -1301,10 +1306,10 @@ runRamPush contract retained supplied clock api directory = do
   authenticated <- try (requireLivePayload (allocSize allocation) >> requireUnconsumed retained >> authenticateReviewedManifest contract allocation supplied)
   case authenticated of
     Left (failure::SomeException) -> pure (RamPushRefused (displayException failure))
-    Right manifest -> runRamPushWith xm1PeerCacheAvailability allocation manifest clock api directory
+    Right manifest -> runRamPushWith xm1PeerCacheAvailability NoRamPushObserver allocation manifest clock api directory
 
-runRamPushWith :: PeerCacheAvailability -> RamAllocState -> RamPushManifest -> Clock -> UsbApi -> FilePath -> IO RamPushOutcome
-runRamPushWith availability allocation manifest clock api directory
+runRamPushWith :: PeerCacheAvailability -> RamPushObserver -> RamAllocState -> RamPushManifest -> Clock -> UsbApi -> FilePath -> IO RamPushOutcome
+runRamPushWith availability observer allocation manifest clock api directory
   | availability == PeerCacheUnbound = pure (RamPushRefused "X-M1 peer-core cache binding is unbound; no camera write sent")
   | Nothing <- payloadOfSize (allocSize allocation) = pure (RamPushRefused ("retained allocation size "++show (allocSize allocation)++" is no payload's extent"))
   | allocationSize manifest /= allocSize allocation = pure (RamPushRefused "manifest size differs from the retained allocation's extent")
@@ -1333,6 +1338,9 @@ runRamPushWith availability allocation manifest clock api directory
         writeIORef active True
         uploadRuntime live manifest
         synchronizeUploaded live
+        case observer of
+          NoRamPushObserver -> pure ()
+          BeforeRamPublication observe -> observe
         nonce <- pure (nonceFor manifest)
         mailbox <- retargetOutputCall live (allocationBase manifest) (allocationSize manifest) (unAddress (installEntry (manifestEntries manifest))) nonce
         installed <- mailboxStatus payload mailbox nonce 1
