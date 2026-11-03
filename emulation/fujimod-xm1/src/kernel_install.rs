@@ -299,7 +299,7 @@ fn drive() -> Result<(),String> {
         let entry = context(&machine)?;
         observation.entry = Some(entry.clone());
         require(entry.pc == Address(ENTRY) && entry.sp == Address(0x40063420) && entry.lr == Address(RETURN)
-            && entry.cpsr.0 & 0x07f0ffff == 0xd3 && entry.identities == [Word(0x4003),Word(0x5003)]
+            && entry.cpsr.0 & 0x07f0ffff == 0xd3 && entry.identities == fujimod_xm1::run::CoreIdentities::Xm1.words().map(Word)
             && entry.registers[0] == Word(0) && read_word(&machine,Address(0x61c008))? == Word(0), "natural phase0 context differs")?;
         let mut buffer = vec![0; expected.len()];
         for core in 0..2 {

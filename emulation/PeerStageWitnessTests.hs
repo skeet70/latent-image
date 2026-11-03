@@ -197,4 +197,7 @@ main = do
   assertLeft "receipt size overflow" (parseReceipt (B.replicate (maxReceiptBytes + 1) 32))
   assertLeft "duplicate JSON key" (parseReceipt "{\"schema\":1,\"schema\":1}")
   assertLeft "noninteger JSON token" (parseReceipt "{\"schema\":1e0}")
+  let identities pair = set "cp14_identities" (Array (V.fromList (map number pair))) valid
+  _ <- assertRight "camera-model CP14 identities admitted" (accept (identities [0x4003,0x8003]))
+  forM_ [[0x8003,0x4003],[0x4003,0x6003],[0x5003,0x8003]] $ \pair -> assertLeft "unrecorded CP14 identities" (accept (identities pair))
   putStrLn "peer-stage witness consumer tests: pass"

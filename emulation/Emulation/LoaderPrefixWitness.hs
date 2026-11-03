@@ -28,7 +28,7 @@ import Data.List (nub, sort, sortOn, stripPrefix)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Word (Word32, Word64, Word8)
-import Emulation.FirstStageWitness (Core (..), Cpsr (..), WitnessResult (..), encodeLeWord, leWordAt, sha256Hex)
+import Emulation.FirstStageWitness (Core (..), Cpsr (..), WitnessResult (..), encodeLeWord, leWordAt, recordedCp14Identities, sha256Hex)
 import Emulation.PeerStageWitness (Registers (..))
 import qualified Emulation.PeerStageWitness as P
 import qualified Emulation.PeerStartupWitness as S
@@ -1506,7 +1506,7 @@ validateReceipt contract receipt = do
   require (Refusal `notElem` map stopLabel stops) "core-1 prefix refusal reached"
   require (receiptResult receipt == Passed && isNothing (receiptError receipt) && isNothing (receiptMachineFailure receipt))
     ("loader-prefix receipt did not pass: " ++ fromMaybe "" (receiptError receipt))
-  require (receiptIdentities receipt == (0x4003, 0x5003)) "CP14 identities differ"
+  require (receiptIdentities receipt `elem` recordedCp14Identities) "CP14 identities differ"
   require (sort [stopLabel stop | stop <- stops, stopLabel stop /= PostLoad]
     == sort (requiredLabels scenario ++ [label | isJust selected, label <- [FirstStageHandoff, KernelVectorsInstalled]]))
     "stop labels differ from the scenario"

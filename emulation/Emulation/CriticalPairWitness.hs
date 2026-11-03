@@ -450,8 +450,8 @@ flags old result carryOverflow = (old .&. 0x0fffffff) .|. (result .&. 0x80000000
 data Machine = Machine Context (M.Map Word64 Word8) [PairEvent]
 
 -- Core-1 data events are consumed by their source instruction.
-step :: Contract -> Machine -> Context -> Either String Machine
-step contract (Machine before bytes pendingEvents) after = do
+step :: Contract -> Word32 -> Machine -> Context -> Either String Machine
+step contract core1Identity (Machine before bytes pendingEvents) after = do
   events <- drainPeerReads bytes pendingEvents
   let pc = pcOf before
       cpsr = cpsrOf before
@@ -565,7 +565,7 @@ step contract (Machine before bytes pendingEvents) after = do
         | word .&. 0x0ffffff0 `elem` [0x0121f000,0x0128f000,0x012cf000] -> do
             let reg = A.Reg (fromIntegral (word .&. 15)); mask = case (word `shiftR` 16) .&. 15 of 1 -> 0xff; 8 -> 0xff000000; 12 -> 0xffff0000; _ -> 0
             finish oldRegisters (pc+4) ((cpsr .&. complement mask) .|. (readReg reg .&. mask)) bytes events
-        | word == 0xee121e10 && pc `elem` [0x427b8,0xd27b8] -> finish (set [(A.Reg 1,0x5003)]) (pc+4) cpsr bytes events
+        | word == 0xee121e10 && pc `elem` [0x427b8,0xd27b8] -> finish (set [(A.Reg 1,core1Identity)]) (pc+4) cpsr bytes events
         | word .&. 0x0fffffff == 0x0e072fba && pc `elem` [0x427ec,0x42818,0xd27ec,0xd2818] -> unchanged
         | word .&. 0x0ff00fff == 0x01900f9f -> do
             let base = A.Reg (fromIntegral ((word `shiftR` 16) .&. 15)); destination = A.Reg (fromIntegral ((word `shiftR` 12) .&. 15))
@@ -586,8 +586,8 @@ boundaryResult (Boundary _ returned _ _ _ _) = maybe (Left "critical boundary di
 boundaryIncoming :: Boundary -> Context
 boundaryIncoming (Boundary incoming _ _ _ _ _) = incoming
 
-validateBoundary :: Contract -> Resource -> [PairEvent] -> FrameBytes -> Boundary -> Either String (Context,M.Map Word64 Word8,[PairEvent])
-validateBoundary contract callerFrame preceding (FrameBytes frameBytes) boundary@(Boundary incoming _ steps before after watch) = do
+validateBoundary :: Contract -> Word32 -> Resource -> [PairEvent] -> FrameBytes -> Boundary -> Either String (Context,M.Map Word64 Word8,[PairEvent])
+validateBoundary contract core1Identity callerFrame preceding (FrameBytes frameBytes) boundary@(Boundary incoming _ steps before after watch) = do
   returned <- boundaryResult boundary
   mapM_ contextShape (incoming:returned:steps)
   first <- case steps of [] -> Left "critical boundary contains no instruction steps"; context:_ -> Right context
@@ -608,7 +608,7 @@ validateBoundary contract callerFrame preceding (FrameBytes frameBytes) boundary
   let dataEvents = wordEvents [event | event@(PairEvent (Event source _ _ _ _ _ _ _ _) _ _) <- events,source /= CpuFetch]
   validateBoundaryFetches incoming returned steps preceding events
   initialMemory <- memory (before++[callerFrame])
-  Machine _ finalMemory pending <- foldM (step contract) (Machine first initialMemory dataEvents) (drop 1 steps++[returned])
+  Machine _ finalMemory pending <- foldM (step contract core1Identity) (Machine first initialMemory dataEvents) (drop 1 steps++[returned])
   remaining <- drainPeerReads finalMemory pending
   require (null remaining) "critical boundary contains unconsumed data effects"
   afterMemory <- memory (after++[callerFrame])
@@ -699,7 +699,7 @@ validateEvidence contract bytes = do
   checked SourceBindingMismatch (require (take commonResourceCount entryBefore == resources) "critical initial resources differ from entry snapshots")
   preludeEvents <- checked MalformedEvidence (validateWatch contract Prelude origin prelude)
   checked MalformedEvidence (validatePrelude origin incoming resources preludeEvents)
-  (entryReturned,_,entryEvents) <- checked InstructionEffectsMismatch (validateBoundary contract callerBefore preludeEvents (entryFrame contract) entry)
+  (entryReturned,_,entryEvents) <- checked InstructionEffectsMismatch (validateBoundary contract (snd (I.initializerCp14Identities initializer)) callerBefore preludeEvents (entryFrame contract) entry)
   checked SourceContractMismatch $ do
     validateSourceEntry entry entryReturned entryEvents
     require (pcOf entryReturned == 0x725e00 && register entryReturned (A.Reg 0) == cpsrOf incoming .&. 0x80 && cpsrOf entryReturned .&. 0x80 == 0x80) "critical entry prior-mask result or masked IRQ state differs"
@@ -709,7 +709,7 @@ validateEvidence contract bytes = do
   transitionEvents <- checked TransitionMismatch (validateWatch contract Transition entryReturned transition)
   transitionFrame <- checked TransitionMismatch (replayWrapper entryReturned exitIncoming entryAfter callerBefore transitionEvents)
   checked TransitionMismatch (validateTransition contract entryReturned exitIncoming transitionEvents entryAfter exitBefore)
-  (exitReturned,_,exitEvents) <- checked InstructionEffectsMismatch (validateBoundary contract transitionFrame transitionEvents (exitFrame contract) exit)
+  (exitReturned,_,exitEvents) <- checked InstructionEffectsMismatch (validateBoundary contract (snd (I.initializerCp14Identities initializer)) transitionFrame transitionEvents (exitFrame contract) exit)
   checked SourceContractMismatch (validateSourceExit exit exitReturned exitEvents)
   callerEvents <- checked MalformedEvidence (validateWatch contract Transition exitReturned caller)
   finalFrame <- checked InstructionEffectsMismatch (replayWrapper exitReturned final exitAfter transitionFrame callerEvents)

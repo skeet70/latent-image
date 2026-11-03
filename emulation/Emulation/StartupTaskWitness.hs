@@ -351,7 +351,7 @@ checkSample inputs@(Inputs _ _ program) receipt probe sample previous = do
   total <- checkedCounts (W.contextCounts state)
   hit <- at ContextRejected (receiptHits receipt) (index (sampleHit sample))
   require (length (W.contextRegisters state) == 13 && length (W.contextTcm state) == 2
-    && W.contextIdentities state == map W.WordValue [0x4003,0x5003] && contextCore context == hitCore hit
+    && W.contextIdentities state `elem` W.recordedCoreIdentities && contextCore context == hitCore hit
     && W.contextPc state == hitAddress hit && sampleBoundary sample == hitBoundary hit
     && M.lookup (W.contextPc state) (expectedSites inputs (receiptSchema receipt)) == Just (sampleBoundary sample)
     && total == hitInstructions hit
@@ -674,6 +674,7 @@ replay :: Inputs -> Receipt -> Maybe C.ProbeRecord -> W.Watch -> Either WitnessE
 replay inputs@(Inputs sources _ program) receipt probe watch = do
   first <- at SnapshotRejected (receiptSamples receipt) 0
   require (sampleCursor first == Cursor 0) SnapshotRejected
+  require (W.oneRecordedModel [W.contextIdentities (contextState (sampleContext sample)) | sample <- receiptSamples receipt]) ContextRejected
   let offset = 0x89ea8c-0x61c400
       initialTail = View Control (W.Address 0x89ea8c) (W.Bytes (B.drop offset (P.programImage4 program (sourceImage sources)))) []
       declared = maybe [] C.probePatches probe

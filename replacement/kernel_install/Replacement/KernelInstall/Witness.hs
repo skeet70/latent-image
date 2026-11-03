@@ -108,7 +108,7 @@ checkContext :: Context -> Either WitnessError ()
 checkContext context = require
   (length (contextRegisters context) == 13 && length (contextCounts context) == 2
     && length (contextTcm context) == 2 && all ((==2) . length) (contextTcm context)
-    && contextIdentities context == [WordValue 0x4003,WordValue 0x5003]
+    && contextIdentities context `elem` recordedCoreIdentities
     && number (contextCpsr context) .&. 0x07f0ffff == 0xd3) ContextRejected
 
 sameControl :: Context -> Context -> Bool
@@ -151,9 +151,6 @@ allowedFetch inputs program core pc = case core of
     Owned -> pc `elem` executionPcs (inputProof inputs)
     Retained -> pc >= 0x725a04 && pc < 0x725b44 && pc `mod` 4 == 0
   where cachePcs = [0x42634,0x42638] ++ [0x4264c,0x42650..0x4266c] ++ [0x4268c,0x42690..0x426a4]
-
-backedRanges :: [[Word64]]
-backedRanges = [[0,0x20000000],[0x3fff0000,0x3fff1000],[0x80000000,0x80004000],[0x90000000,0x90020000],[0xfff00000,0xfff01000]]
 
 data FetchStamp = FetchStamp {fetchPc :: Address, fetchClock :: Count}
 data FetchProgress = FetchProgress
@@ -203,8 +200,8 @@ checkContinuity observation events = do
 
 checkEvents :: Inputs -> Receipt -> Context -> Context -> Memory -> Watch -> Either WitnessError Memory
 checkEvents inputs receipt entry after initial watch = do
-  require (watchEnabled watch && watchRanges watch == backedRanges
-    && watchClasses watch == [WatchClass range [CpuRead,CpuWrite,CpuFetch,HostWrite,ModelBusWrite] | range <- backedRanges]
+  require (watchEnabled watch && watchRanges watch `elem` map backedRanges [minBound..maxBound]
+    && watchClasses watch == [WatchClass range [CpuRead,CpuWrite,CpuFetch,HostWrite,ModelBusWrite] | range <- watchRanges watch]
     && watchViews watch == "observe" && watchViolation watch == Nothing
     && not (null events) && length events < 32768) WatchRejected
   let clocks = [clock | event <- events, Just clock <- [eventInstructions event]]
@@ -276,6 +273,7 @@ admitReceipt inputs observed = do
   cacheReturn <- required CacheRejected (observationCacheReturn observation)
   after <- required TerminalRejected (observationAfter observation)
   mapM_ checkContext [entry,cache,cacheReturn,after]
+  require (oneRecordedModel (map contextIdentities [entry,cache,cacheReturn,after])) ContextRejected
   require (all (\context -> all ((<=8300000) . count) (contextCounts context)
     && sum (map count (contextCounts context)) <= 8300000) [entry,cache,cacheReturn,after]
     && sum (map count (contextCounts entry)) <= 8000000) ContextRejected

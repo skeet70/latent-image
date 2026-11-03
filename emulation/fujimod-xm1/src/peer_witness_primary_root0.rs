@@ -460,7 +460,7 @@ fn aliases(machine: &Machine, maps: &[factory::MemoryMap], tcm: &TcmWords,
     tcm_disjoint_views(maps, tcm, &extents)?;
     let mut buffer = vec![0; resources.iter().map(|(_,view)| view.physical.len()).max().unwrap_or(0)];
     for core in 0..2 {
-        require(machine.session.board.cpu(core)?.rprofile_identity(None)? == [0x4003,0x5003][core], "root0 active CP14 differs")?;
+        require(machine.session.board.cpu(core)?.rprofile_identity(None)? == crate::run::CoreIdentities::Xm1.words()[core], "root0 active CP14 differs")?;
         for ((&(low,high),view), hash) in resources.iter().map(|(extent,view)| (extent,*view)).zip(hashes) {
             for guest in [low,ZERO_GUEST + low] {
                 require(static_span(maps, MemoryCore(core), MemoryAddress(guest)..MemoryAddress(guest + high - low))?.physical.0 == low,

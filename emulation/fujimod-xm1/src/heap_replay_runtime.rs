@@ -486,7 +486,7 @@ fn prepare<'a>(inputs: &'a Inputs, tape: &Tape, output: &'a Path, case: &mut Cas
     require(word(&session.board, &maps, 0x89c970)?.0 == REENT && word(&session.board, &maps, seed.root.0 + 0x16c)?.0 == 0x4118c
         && word(&session.board, &maps, seed.root.0 + 0x1618)?.0 == 0x412bc, Failure::Context)?;
     let peer_identity = session.board.cpu(1).map_err(execution)?.rprofile_identity(None).map_err(execution)?;
-    require(peer_identity == 0x5003, Failure::Context)?;
+    require(fujimod_xm1::run::CoreIdentities::recorded(1, peer_identity), Failure::Context)?;
     let mut runtime = Runtime { inputs, output, session, maps, guard: Guard::default(), watch: None, ranges: Vec::new(), live: BTreeMap::new(),
         scratch: Vec::with_capacity(tape.maximum_request().0 as usize), physical_scratch: Vec::with_capacity(tape.maximum_request().0 as usize), peer_identity,
         quantum: ProcessorQuantum(std::num::NonZeroUsize::new(document.execution.quantum).ok_or(Failure::Context)?) };

@@ -4,6 +4,7 @@ module Replacement.KernelInstall.Wire where
 import Data.Aeson
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as B
+import Data.List (nub)
 import Data.Word (Word8, Word32, Word64)
 
 newtype Address = Address Word32 deriving (Eq, Ord, Show)
@@ -18,6 +19,26 @@ data Outcome = Returned | Nonreturning | Refused deriving (Eq, Show)
 data Source = CpuRead | CpuWrite | CpuFetch | HostRead | HostWrite | ModelBusRead | ModelBusWrite deriving (Eq, Show)
 data ByteOrder = Little | Big deriving (Eq, Show)
 data ObjectKind = Roots | ServiceStorage | TaskStorage | Stack | Code | Cache | Header0 | Header1 | Marker | Mode | PeerCode | Completion deriving (Eq, Ord, Show)
+-- | Boot-ROM backing of the model a receipt was recorded on: the catalog's 16 KiB region, or the
+-- X-M1 decode repeated through 0x80104000 (E-BOOT-ROM-DECODE-150).
+data RomBacking = CatalogRom | RepeatedRom deriving (Bounded, Enum, Eq, Show)
+
+-- | Physical backings of a model with the given boot-ROM backing.
+backedRanges :: RomBacking -> [[Word64]]
+backedRanges rom = [[0,0x20000000],[0x3fff0000,0x3fff1000],[0x80000000,romEnd],[0x90000000,0x90020000],[0xfff00000,0xfff01000]]
+  where romEnd = case rom of CatalogRom -> 0x80004000; RepeatedRom -> 0x80104000
+
+-- | CP14 identities of cores 0 and 1 in each model a receipt can come from: the catalog's, and
+-- the camera's (E-RAM-PUSH-INSTALL-150), which the current SDK configures.
+recordedCoreIdentities :: [[WordValue]]
+recordedCoreIdentities = [map WordValue [0x4003, 0x5003], map WordValue [0x4003, 0x8003]]
+
+-- | Whether every identity list names the same recorded model.
+oneRecordedModel :: [[WordValue]] -> Bool
+oneRecordedModel identities = case nub identities of
+  [pair] -> pair `elem` recordedCoreIdentities
+  _ -> False
+
 data Context = Context
   { contextPc :: Address, contextRegisters :: [WordValue], contextSp :: Address, contextLr :: Address
   , contextCpsr :: WordValue, contextCounts :: [Count], contextTcm :: [[WordValue]], contextIdentities :: [WordValue]
