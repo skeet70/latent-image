@@ -351,6 +351,11 @@ main = do
                      (ownedWith (stepHits ownedStep ++ [getterIn, returning 0xac, getterIn, returning 0xab])) == Left (GetterResultsDiffer crawlRoute)
             && compared (retainedStep { stepHits = stepHits retainedStep ++ [getterIn, returning 0xac] })
                         (ownedWith (stepHits ownedStep ++ [getterIn, returning 0xac, getterIn, returning 0xac])) == Right ())
+    , check "getter calls under different arguments interleave freely"
+        (let other = hit GetterEntry getterEntry [6] stackPointer (getterCall + 4)
+             returning value = hit GetterReturn (getterCall + 4) [value] stackPointer 0
+         in compared (retainedStep { stepHits = stepHits retainedStep ++ [other, returning 0xcd] })
+                     (ownedWith (stepHits ownedStep ++ [other, returning 0xcd, getterIn, getterOut])) == Right ())
     , check "a write that leaves its preimage is not compared"
         (compared retainedStep ownedStep { stepRows = stepRows ownedStep ++ [cpuWrite 0x96cc80 1 (Just 0) [0] retiredSetter] } == Right ())
     , check "settle status differs only through an exhausted budget; the menu always counts"
