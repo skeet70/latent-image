@@ -34,7 +34,8 @@ def no_faults($run): [$run | record("handback"), record("unloaded-shooting")] as
   | ($reads | all(. != null)) and ([$reads[] | .panics == 0] | all)
   and ([$reads[1].domains[] | .sleeps_other == 0 and .pender_errors == 0 and .early_kernel_wakes == 0 and .clock_regressions == 0] | all);
 def screens: [.menu_receipts[] | {label, menu, png: .sha256, planes: .scanout_evidence.source_bytes.sha256}];
-def start_point: .emulator_start | {directory, inputs, key, start};
+# The checkpoint key hashes the start inputs; whether a run booted cold or restored that checkpoint is reported, not judged.
+def start_point: .emulator_start | {directory, inputs, key};
 def builder_identity: .relink.source_identity | with_entries(select((.key | startswith("experiments/") or startswith("prelinked-source:")) | not)) | del(.["experiment-prelinked.o"]);
 def variant_file_digest($name; $file): .relink.source_identity["experiments/" + $name + "/" + $file];
 # Source digests the builder recorded for the linked object; receipts relinked before that listing existed have none.
@@ -61,6 +62,7 @@ def is_variant($name; $object): .relink.source_identity["experiments/" + $name +
     runs: {
       each_named_variant: ([$runs[] | .name as $n | .object as $o | .run | is_variant($n; $o)] | all),
       same_emulator_start: ([$runs[] | .run | start_point] | unique | length == 1),
+      start_modes: [$runs[] | .run.emulator_start.start],
       same_trajectory: ([$runs[] | .name as $n | .run | variant_file_digest($n; "trajectory.json")] | unique | (length == 1 and .[0] != null)),
       same_hooks: ([$runs[] | .name as $n | .run | variant_file_digest($n; "hooks.json")] | unique | (length == 1 and .[0] != null)),
       same_builder_identity: ([$runs[] | .run | builder_identity] | unique | length == 1),
