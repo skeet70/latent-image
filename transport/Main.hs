@@ -515,7 +515,7 @@ ramSession kind policy payload requested = do
         createOutput pushed
         pure (retained, manifest)) `onException` retainedNotice
       putStrLn ("output: "++pushed)
-      runRamPushWith xm1PeerCacheAvailability (retainedAllocation retained) manifest realClock nativeApi pushed >>= ramPushLine >>= putStrLn
+      runRamPushWith xm1PeerCacheAvailability NoRamPushObserver (retainedAllocation retained) manifest realClock nativeApi pushed >>= ramPushLine >>= putStrLn
   where
     -- Waiving the pins keeps the compiled installer entry offsets.
     requireCompiledEntries base built =

@@ -45,7 +45,7 @@ index ea20a6b..24bba4d 100644
              continuation: Default::default(),
          })
 diff --git a/crates/emulator/src/board/mod.rs b/crates/emulator/src/board/mod.rs
-index 01d5dee..e03ea34 100644
+index 75630e7..7351759 100644
 --- a/crates/emulator/src/board/mod.rs
 +++ b/crates/emulator/src/board/mod.rs
 @@ -24,6 +24,8 @@ mod preservation_tests;
@@ -58,6 +58,7 @@ index 01d5dee..e03ea34 100644
  #[cfg(test)]
  mod tests;
 diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/board/observation.rs
+index 2c429d7..87695e3 100644
 --- a/crates/emulator/src/board/observation.rs
 +++ b/crates/emulator/src/board/observation.rs
 @@ -1,8 +1,9 @@
@@ -66,12 +67,12 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 +pub mod scoped;
  mod fetch_attribution;
  pub use fetch_attribution::{CpuDataAttribution, FetchAttribution};
--use fetch_attribution::{AccessBytes, ByteOrder, CoreIndex, CpuAttribution, CpuCapture, CpuObservation, CpuSource, GuestAddress, ObservedWord, PhysicalAddress};
-+use fetch_attribution::{AccessBytes, Attribution, ByteOrder, CoreIndex, CpuAttribution, CpuCapture, CpuObservation, CpuSource, GuestAddress, ObservedWord, PhysicalAddress};
+-use fetch_attribution::{CpuAttribution, CpuCapture, CpuObservation, CpuSource, ObservedWord};
++use fetch_attribution::{Attribution, CpuAttribution, CpuCapture, CpuObservation, CpuSource, ObservedWord};
+ pub use fetch_attribution::{AccessBytes, ByteOrder, CoreIndex, FetchEvent, GuestAddress, InstructionCores, InstructionExecutionState, InstructionGuardFailure, InstructionGuardRefusal, InstructionGuardStatus, PhysicalAddress, PhysicalInstructionGuard};
  use super::{Board, State, factory::MemoryMap, scalar};
  use fujimod_emulator_cpu::{Access, Cpu, Hook, HookId, HookRange, Model, Register, arm};
- use serde_json::{Value, json};
-@@ -78,6 +79,7 @@
+@@ -80,6 +81,7 @@ pub struct Records {
      /// Empty for an unclassified watch, which records every source.
      classes: Vec<WatchRange>,
      views: ViewPolicy,
@@ -79,7 +80,7 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
      fetch_attribution: Option<fetch_attribution::FetchCapture>,
  }
  impl Records {
-@@ -102,10 +104,14 @@
+@@ -109,10 +111,14 @@ impl Records {
              return;
          }
          if self.rows.len() == self.limit {
@@ -98,9 +99,9 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
          } else {
              self.rows.push(row);
          }
-@@ -120,14 +126,18 @@
-     }
+@@ -131,14 +137,18 @@ impl Records {
      pub(super) fn view_changed(&mut self) {
+         if let Some(capture) = &mut self.fetch_attribution { capture.view_changed(); }
          if self.views == ViewPolicy::Fixed {
 -            self.violation
 -                .get_or_insert_with(|| "Memory decoding changed under a fixed-view memory watch".into());
@@ -120,7 +121,7 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
              state["classes"] = self
                  .classes
                  .iter()
-@@ -138,6 +148,9 @@
+@@ -149,6 +159,9 @@ impl Records {
                  ViewPolicy::Fixed => "fixed",
              });
          }
@@ -130,13 +131,19 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
          if let Some(capture) = &self.fetch_attribution { capture.describe(&mut state); }
          state
      }
-@@ -146,6 +159,16 @@
-     pub records: Rc<RefCell<Records>>,
+@@ -159,6 +172,8 @@ pub struct MemoryWatch {
      contexts: Vec<Box<MemoryContext>>,
      hooks: Vec<(usize, HookId)>,
+     refusal: Option<ExecutionRefusal>,
 +    lifetime: WatchLifetime,
 +    owner: Weak<super::memory::Memory>,
-+}
+ }
+ impl Drop for MemoryWatch {
+     fn drop(&mut self) {
+@@ -168,6 +183,14 @@ impl Drop for MemoryWatch {
+         }
+     }
+ }
 +/// Whether a legacy watch still counts in `Memory::armed_watches`.
 +#[derive(Clone, Copy, PartialEq, Eq)]
 +enum WatchLifetime {
@@ -144,10 +151,11 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 +    Ended,
 +    /// A hook removal failed; the watch stays counted.
 +    Stuck,
- }
++}
  struct MemoryContext {
      state: Weak<RefCell<State>>,
-@@ -154,6 +177,11 @@
+     cpu: Weak<dyn Cpu>,
+@@ -175,6 +198,11 @@ struct MemoryContext {
      maps: Vec<MemoryMap>,
      core: usize,
  }
@@ -159,7 +167,7 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
  impl MemoryContext {
      fn physical(&self, state: &State, address: u64, size: u64) -> Option<u64> {
          state.decoders.observed_physical(self.core, address, size).or_else(|| {
-@@ -314,6 +342,9 @@
+@@ -343,6 +371,9 @@ impl Board {
          if self.preservation_active() {
              return Err("A preservation observation conflicts with memory watch".into());
          }
@@ -169,7 +177,7 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
          let ranges = union(ranges);
          self.watch_backing(&ranges)?;
          let records = Rc::new(RefCell::new(Records {
-@@ -321,11 +352,7 @@
+@@ -350,12 +381,7 @@ impl Board {
              limit,
              ..Default::default()
          }));
@@ -177,12 +185,13 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 -            records: records.clone(),
 -            contexts: vec![],
 -            hooks: vec![],
+-            refusal: None,
 -        });
-+        let mut watch = self.armed_watch(records.clone());
++        let mut watch = self.armed_watch(records.clone(), None);
          for (core, cpu) in self.cpus.iter().enumerate() {
              let mut views = maps
                  .iter()
-@@ -430,6 +457,9 @@
+@@ -466,6 +492,9 @@ impl Board {
          if self.preservation_active() {
              return Err("A preservation observation conflicts with memory watch".into());
          }
@@ -192,7 +201,7 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
          let ranges = union(classes.iter().map(|range| (range.start, range.end)).collect());
          self.watch_backing(&ranges)?;
          let records = Rc::new(RefCell::new(Records {
-@@ -439,11 +469,7 @@
+@@ -475,12 +504,7 @@ impl Board {
              views,
              ..Default::default()
          }));
@@ -200,22 +209,24 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 -            records: records.clone(),
 -            contexts: vec![],
 -            hooks: vec![],
+-            refusal,
 -        });
-+        let mut watch = self.armed_watch(records.clone());
-         for (core, cpu) in self.cpus.iter().enumerate() {
-             let mut processor_views = maps
-                 .iter()
-@@ -514,11 +540,35 @@
++        let mut watch = self.armed_watch(records.clone(), refusal);
+         if let Some(gate) = watch.refusal.clone() {
+             for cpu in self.cpus.iter() {
+                 if let Err(error) = cpu.arm_execution_refusal(gate.clone()) {
+@@ -561,9 +585,25 @@ impl Board {
              .replace(Some(Rc::downgrade(&records)));
          Ok(watch)
      }
-+    fn armed_watch(&self, records: Rc<RefCell<Records>>) -> Box<MemoryWatch> {
++    fn armed_watch(&self, records: Rc<RefCell<Records>>, refusal: Option<ExecutionRefusal>) -> Box<MemoryWatch> {
 +        let armed = &self.physical_memory.armed_watches;
 +        armed.set(armed.get() + 1);
 +        Box::new(MemoryWatch {
 +            records,
 +            contexts: vec![],
 +            hooks: vec![],
++            refusal,
 +            lifetime: WatchLifetime::Armed,
 +            owner: Rc::downgrade(&self.physical_memory),
 +        })
@@ -224,13 +235,17 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 +        if !Weak::ptr_eq(&watch.owner, &Rc::downgrade(&self.physical_memory)) {
 +            return Err("memory watch belongs to a different board".into());
 +        }
-         for (core, hook) in watch.hooks.drain(..) {
--            self.cpus[core].remove_hook(hook)?;
-+            if let Err(error) = self.cpus[core].remove_hook(hook) {
+         while let Some(&(core, hook)) = watch.hooks.last() {
+             if let Err(error) = self.cpus[core].remove_hook(hook) {
 +                watch.lifetime = WatchLifetime::Stuck;
-+                return Err(error);
-+            }
-+        }
+                 if let Some(gate) = &watch.refusal { gate.refuse(); }
+                 if let Some(capture) = &mut watch.records.borrow_mut().fetch_attribution { capture.observation_failed(); }
+                 return Err(error);
+@@ -571,7 +611,14 @@ impl Board {
+             let _ = watch.hooks.pop();
+         }
+         watch.disarm_instruction_guard(self)?;
+-        self.physical_memory.observation.replace(None);
 +        if watch.lifetime == WatchLifetime::Armed {
 +            watch.lifetime = WatchLifetime::Ended;
 +            let armed = &self.physical_memory.armed_watches;
@@ -238,8 +253,7 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 +        }
 +        if !self.scoped_watch_active() {
 +            self.physical_memory.observation.replace(None);
-         }
--        self.physical_memory.observation.replace(None);
++        }
          Ok(())
      }
  }

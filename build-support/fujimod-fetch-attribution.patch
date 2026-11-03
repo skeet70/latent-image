@@ -1,16 +1,574 @@
+diff --git a/crates/emulator-cpu-unicorn/src/ffi.rs b/crates/emulator-cpu-unicorn/src/ffi.rs
+index 748c8b8..51b6eea 100644
+--- a/crates/emulator-cpu-unicorn/src/ffi.rs
++++ b/crates/emulator-cpu-unicorn/src/ffi.rs
+@@ -9,6 +9,8 @@ pub type Error = c_int;
+ pub const FEATURE_PAUSE_ACCOUNTING_LAYOUT: u32 = 1 << 3;
+ pub const FEATURE_PARALLEL_TCG: u32 = 1 << 4;
+ pub const FEATURE_ACCESS_REFUSAL: u32 = 1 << 5;
++pub const FEATURE_EXECUTION_REFUSAL: u32 = 1 << 6;
++pub const FEATURE_INTRINSIC_REFUSAL_BOUNDARY: u32 = 1 << 7;
+ pub const ERR_MODE: Error = 4;
+ pub const ERR_EMBEDDER_REFUSED: Error = 23;
+ pub const fn ctl(kind: u32, count: u32, direction: u32) -> u32 {
+@@ -70,6 +72,12 @@ impl Extensions {
+                 "The Unicorn accounting ABI predates asynchronous pause support; rebuild the matching Unicorn library".into(),
+             );
+         }
++        if self.features & FEATURE_EXECUTION_REFUSAL == 0 {
++            return Err("The Unicorn accounting ABI predates execution refusal; rebuild the matching Unicorn library".into());
++        }
++        if self.features & FEATURE_INTRINSIC_REFUSAL_BOUNDARY == 0 {
++            return Err("The Unicorn accounting ABI lacks intrinsic-refusal boundaries; rebuild the matching Unicorn library".into());
++        }
+         let missing: Vec<_> = [
+             (
+                 self.write_hook_pc_sync.is_some(),
+@@ -125,6 +133,8 @@ pub struct Accounting {
+     pub mask: u64,
+     pub enabled: u64,
+     pub pause_requested: *const u32,
++    pub execution_refused: *const u32,
++    pub intrinsic_refusal_pc: u64,
+ }
+ pub type InsnFilter = unsafe extern "C" fn(*mut c_void, u64, u32) -> c_int;
+ pub type Restart = unsafe extern "C" fn(*mut c_void, u64);
+diff --git a/crates/emulator-cpu-unicorn/src/lib.rs b/crates/emulator-cpu-unicorn/src/lib.rs
+index 4a26db6..4e6102c 100644
+--- a/crates/emulator-cpu-unicorn/src/lib.rs
++++ b/crates/emulator-cpu-unicorn/src/lib.rs
+@@ -482,10 +482,11 @@ impl Cpu for Core {
+             translation_filter: e.insn_filter.is_some()
+                 && e.retry_block.is_some()
+                 && e.request_restart.is_some(),
+-            // The R-profile backend writes the appended pause pointer. Require
+-            // its ABI bit before exposing the accounting record to that backend.
++            // R-profile writes the execution-refusal pointer and reads its boundary.
+             block_accounting: e.features & 2 != 0
+                 && e.features & ffi::FEATURE_PAUSE_ACCOUNTING_LAYOUT != 0
++                && e.features & ffi::FEATURE_EXECUTION_REFUSAL != 0
++                && e.features & ffi::FEATURE_INTRINSIC_REFUSAL_BOUNDARY != 0
+                 && e.features & ffi::FEATURE_PARALLEL_TCG != 0
+                 && e.set_parallel_cpus.is_some()
+                 && e.accounting.is_some(),
+diff --git a/crates/emulator-cpu-unicorn/src/rprofile/accounting.rs b/crates/emulator-cpu-unicorn/src/rprofile/accounting.rs
+index 92f89c2..347f834 100644
+--- a/crates/emulator-cpu-unicorn/src/rprofile/accounting.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/accounting.rs
+@@ -150,6 +150,8 @@ mod tests {
+             mask: 3,
+             enabled: 1,
+             pause_requested: std::ptr::null(),
++            execution_refused: std::ptr::null(),
++            intrinsic_refusal_pc: u64::MAX,
+         }
+     }
+     #[test]
+diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core.rs b/crates/emulator-cpu-unicorn/src/rprofile/core.rs
+index 9cca628..8f24564 100644
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core.rs
+@@ -100,6 +100,9 @@ pub(super) struct Execution {
+     observer_index: RefCell<observers::Index>,
+     at_block: Cell<bool>,
+     at_instruction: Cell<bool>,
++    entry: Cell<Option<InstructionEntry>>,
++    entry_serial: Cell<Option<InstructionEntryId>>,
++    refusal: RefCell<Option<ExecutionRefusal>>,
+ }
+ 
+ pub struct Core {
+@@ -202,6 +205,9 @@ impl Core {
+             observer_index: RefCell::new(observers::Index::default()),
+             at_block: Cell::new(false),
+             at_instruction: Cell::new(false),
++            entry: Cell::new(None),
++            entry_serial: Cell::new(None),
++            refusal: RefCell::new(None),
+         });
+         e.id.set(e.memory.register(Rc::downgrade(&e)));
+         unsafe {
+@@ -210,6 +216,8 @@ impl Core {
+             r.mask = 63;
+             r.enabled = 1;
+             r.pause_requested = Arc::as_ptr(&e.pause_requested);
++            r.execution_refused = std::ptr::null();
++            r.intrinsic_refusal_pc = u64::MAX;
+             r.head = 0;
+             r.budget = 0;
+         }
+@@ -585,6 +593,22 @@ impl Execution {
+                     .ok_or("R-profile instruction count overflow")?,
+             );
+         }
++        let entry = if self.observer_index.borrow().instructions.at(address).is_empty() {
++            None
++        } else {
++            let id = InstructionEntryId::after(self.cpu.identity(), self.entry_serial.get())?;
++            self.entry_serial.set(Some(id));
++            Some(InstructionEntry {
++                id, address, bytes: size, progress: self.count.get(),
++                pstate: self.scalar(arm::CPSR)?,
++                physical: self.maps.borrow().iter()
++                    .find(|map| map.address <= address && address.saturating_add(u64::from(size)) <= map.end())
++                    .and_then(|map| map.physical.map(|physical| physical + address - map.address)),
++                tcm: std::array::from_fn(|bank| self.tcm[bank].extent()
++                    .map(|(address, bytes)| InstructionTcm { address, bytes })),
++            })
++        };
++        self.entry.set(entry);
+         self.at_instruction.set(true);
+         let result = self.execute_observed(address, size);
+         self.at_instruction.set(false);
+diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs b/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs
+index 0b6bcb7..d413c16 100644
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs
+@@ -25,7 +25,7 @@ impl Cpu for Core {
+         if e.active.get() {
+             return Err("loop window requires a stopped processor".into());
+         }
+-        e.loops.window.set(stable);
++        e.loops.window.set(stable && e.refusal.borrow().is_none());
+         Ok(())
+     }
+     fn identity(&self) -> Identity {
+@@ -371,6 +371,32 @@ impl Cpu for Core {
+     fn invalidate_code(&self, range: Option<(u64, u64)>) -> Result<(), String> {
+         self.execution.cpu.invalidate_code(range)
+     }
++    fn execution_refused(&self) -> bool {
++        self.execution.refusal.borrow().as_ref().is_some_and(ExecutionRefusal::is_refused)
++    }
++    fn arm_execution_refusal(&self, gate: ExecutionRefusal) -> Result<(), String> {
++        let e = &self.execution;
++        if e.active.get() || e.refusal.borrow().is_some() {
++            return Err("execution-refusal gate requires an unarmed stopped processor".into());
++        }
++        e.cpu.invalidate_code(None)?;
++        unsafe { (*e.record.as_ptr()).execution_refused = gate.as_ptr(); }
++        e.loops.window.set(false);
++        e.refusal.replace(Some(gate));
++        Ok(())
++    }
++    fn disarm_execution_refusal(&self, gate: &ExecutionRefusal) -> Result<(), String> {
++        let e = &self.execution;
++        if e.active.get() { return Err("execution-refusal gate requires a stopped processor".into()); }
++        let bound = e.refusal.borrow();
++        let Some(current) = bound.as_ref() else { return Ok(()); };
++        if !current.same(gate) { return Err("execution-refusal gate belongs to another owner".into()); }
++        e.cpu.invalidate_code(None)?;
++        unsafe { (*e.record.as_ptr()).execution_refused = std::ptr::null(); }
++        drop(bound);
++        e.refusal.take();
++        Ok(())
++    }
+     fn run(&self, request: Run) -> Result<Exit, ExecutionError> {
+         let e = &self.execution;
+         let _guest_tick_scope = crate::rprofile::GuestTickScope::new();
+@@ -382,6 +408,10 @@ impl Cpu for Core {
+         e.clock_overshoot.set(0);
+         e.count.set(0);
+         e.last_span.set(None);
++        e.entry.set(None);
++        if e.refusal.borrow().as_ref().is_some_and(ExecutionRefusal::is_refused) {
++            return Ok(Exit::Stopped);
++        }
+         if request.until.is_some() || request.instructions.is_none() {
+             e.loops.window.set(false);
+         }
+@@ -441,6 +471,9 @@ impl Cpu for Core {
+     fn instruction_progress(&self) -> Option<u64> {
+         self.execution.progress()
+     }
++    fn instruction_entry(&self) -> Option<InstructionEntry> {
++        self.execution.entry.get()
++    }
+     fn stop(&self) -> Result<(), String> {
+         self.execution.user_stop.set(true);
+         self.execution.cpu.stop()
+diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core/run.rs b/crates/emulator-cpu-unicorn/src/rprofile/core/run.rs
+index 8264e0e..9f60007 100644
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core/run.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/run.rs
+@@ -5,6 +5,7 @@ impl Core {
+     pub(super) fn execute(&self, request: Run, mut begin: u64) -> Result<Exit, ExecutionError> {
+         let e = &self.execution;
+         loop {
++            unsafe { (*e.record.as_ptr()).intrinsic_refusal_pc = u64::MAX; }
+             e.memory.start(e.id.get())?;
+             e.active.set(true);
+             let result = e.cpu.run(Run {
+@@ -13,7 +14,13 @@ impl Core {
+                 watchdog_us: 0,
+                 ..request
+             });
+-            let settlement = if result.is_err() {
++            let refusal_pc = unsafe { e.record.as_ref() }.intrinsic_refusal_pc;
++            let intrinsic_refusal = (refusal_pc != u64::MAX).then_some(refusal_pc);
++            let settlement = if let Some(pc) = intrinsic_refusal {
++                e.user_stop.set(true);
++                let tail = if e.thumb.get() { 0 } else { e.tail(pc, false) };
++                e.settle(tail, true)
++            } else if result.is_err() {
+                 e.scalar(arm::PC)
+                     .and_then(|pc| e.settle(e.tail(pc as u64, true), true))
+             } else {
+diff --git a/crates/emulator-cpu-unicorn/src/rprofile/worker.rs b/crates/emulator-cpu-unicorn/src/rprofile/worker.rs
+index cb06b2b..5185153 100644
+--- a/crates/emulator-cpu-unicorn/src/rprofile/worker.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/worker.rs
+@@ -51,6 +51,8 @@ pub struct CpuWorker {
+     running: Cell<bool>,
+     active_run: Cell<Option<RunToken>>,
+     stopped_progress: Cell<Option<u64>>,
++    stopped_entry: Cell<Option<InstructionEntry>>,
++    execution_refusal: RefCell<Option<ExecutionRefusal>>,
+     stopped_pc: Cell<Option<u32>>,
+     stopped_pstate: Cell<Option<u32>>,
+     loop_window: Cell<Option<bool>>,
+@@ -142,6 +144,8 @@ pub fn spawn(config: Config) -> Result<CpuWorker, String> {
+                 running: Cell::new(false),
+                 active_run: Cell::new(None),
+                 stopped_progress: Cell::new(None),
++                stopped_entry: Cell::new(None),
++                execution_refusal: RefCell::new(None),
+                 stopped_pc: Cell::new(None),
+                 stopped_pstate: Cell::new(None),
+                 loop_window: Cell::new(Some(false)),
+@@ -185,6 +189,7 @@ enum Event {
+         callback: usize,
+         call: CallbackCall,
+         progress: Option<u64>,
++        entry: Option<InstructionEntry>,
+         pc: Option<u32>,
+         pstate: Option<u32>,
+     },
+@@ -293,6 +298,8 @@ enum Operation {
+     SetLoopMode(loops::LoopMode),
+     SetLoopWindow(bool),
+     SetExecutionPolicy(ExecutionPolicy),
++    ArmExecutionRefusal(ExecutionRefusal),
++    DisarmExecutionRefusal(ExecutionRefusal),
+     CheckpointBackings,
+     Fingerprint,
+     SetGuestClock(Clock),
+@@ -471,6 +478,7 @@ impl Operation {
+             Self::SetLoopMode(_) => WorkerRpcCounter::SetLoopMode,
+             Self::SetLoopWindow(_) => WorkerRpcCounter::SetLoopWindow,
+             Self::SetExecutionPolicy(_) => WorkerRpcCounter::SetExecutionPolicy,
++            Self::ArmExecutionRefusal(_) | Self::DisarmExecutionRefusal(_) => return None,
+             Self::CheckpointBackings => WorkerRpcCounter::CheckpointBackings,
+             Self::Fingerprint => WorkerRpcCounter::Fingerprint,
+             Self::SetGuestClock(_) => WorkerRpcCounter::SetGuestClock,
+@@ -643,6 +651,7 @@ impl WorkerLoop {
+                 callback,
+                 call,
+                 progress,
++                entry: cpu.instruction_entry(),
+                 pc,
+                 pstate,
+             })
+@@ -1061,6 +1070,14 @@ fn dispatch(context: &WorkerLoop, cpu: &core::Core, operation: Operation) -> Res
+             cpu.stop_before_instruction()?;
+             Value::Unit
+         }
++        Operation::ArmExecutionRefusal(gate) => {
++            cpu.arm_execution_refusal(gate)?;
++            Value::Unit
++        }
++        Operation::DisarmExecutionRefusal(gate) => {
++            cpu.disarm_execution_refusal(&gate)?;
++            Value::Unit
++        }
+         Operation::RprofileIdentity(value) => Value::Identity(cpu.rprofile_identity(value)?),
+         Operation::SetInterrupt(line, asserted) => {
+             cpu.set_interrupt(line, asserted)?;
+@@ -1311,6 +1328,7 @@ impl CpuWorker {
+                 callback,
+                 call,
+                 progress,
++                entry,
+                 pc,
+                 pstate,
+             } => {
+@@ -1325,6 +1343,7 @@ impl CpuWorker {
+                 let count = &self.callback_counts[callback_counter as usize];
+                 count.set(count.get().saturating_add(1));
+                 self.stopped_progress.set(progress);
++                self.stopped_entry.set(entry);
+                 self.stopped_pc.set(pc);
+                 self.stopped_pstate.set(pstate);
+                 *self.pending_callback.borrow_mut() =
+@@ -1804,12 +1823,32 @@ impl Cpu for CpuWorker {
+             _ => None,
+         }
+     }
++    fn instruction_entry(&self) -> Option<InstructionEntry> {
++        if self.callback_depth.get() != 0 || self.pending_callback.borrow().is_some() {
++            self.stopped_entry.get()
++        } else {
++            None
++        }
++    }
+     fn stop(&self) -> Result<(), String> {
+         self.unit(Operation::Stop)
+     }
+     fn stop_before_instruction(&self) -> Result<(), String> {
+         self.unit(Operation::StopBeforeInstruction)
+     }
++    fn arm_execution_refusal(&self, gate: ExecutionRefusal) -> Result<(), String> {
++        self.unit(Operation::ArmExecutionRefusal(gate.clone()))?;
++        self.execution_refusal.replace(Some(gate));
++        Ok(())
++    }
++    fn disarm_execution_refusal(&self, gate: &ExecutionRefusal) -> Result<(), String> {
++        self.unit(Operation::DisarmExecutionRefusal(gate.clone()))?;
++        self.execution_refusal.take();
++        Ok(())
++    }
++    fn execution_refused(&self) -> bool {
++        self.execution_refusal.borrow().as_ref().is_some_and(ExecutionRefusal::is_refused)
++    }
+     fn rprofile_identity(&self, value: Option<u32>) -> Result<u32, String> {
+         match self.rpc(Operation::RprofileIdentity(value))? {
+             Value::Identity(value) => Ok(value),
+diff --git a/crates/emulator-cpu-unicorn/vendor/unicorn/include/uc_priv.h b/crates/emulator-cpu-unicorn/vendor/unicorn/include/uc_priv.h
+index 1460b17..83d459c 100644
+--- a/crates/emulator-cpu-unicorn/vendor/unicorn/include/uc_priv.h
++++ b/crates/emulator-cpu-unicorn/vendor/unicorn/include/uc_priv.h
+@@ -498,6 +498,8 @@ struct uc_struct {
+         uint64_t mask;
+         uint64_t enabled;
+         const uint32_t *pause_requested;
++        const uint32_t *execution_refused;
++        uint64_t intrinsic_refusal_pc;
+     } embedder_acct;
+     // Observational host counters, never serialized in a CPU context. Entries
+     // 0..6 are actual jumps by call site; 7..9 are request origins; 10..11
+diff --git a/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/accel/tcg/tcg-runtime.c b/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/accel/tcg/tcg-runtime.c
+index 7ac184b..ed7a430 100644
+--- a/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/accel/tcg/tcg-runtime.c
++++ b/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/accel/tcg/tcg-runtime.c
+@@ -167,6 +167,11 @@ void HELPER(exit_atomic)(CPUArchState *env)
+ 
+ void HELPER(check_exit_request)(void *p, uint32_t in_delay_slot) {
+     uc_engine *uc = p;
++    if (uc->embedder_acct.execution_refused &&
++        uc->embedder_acct.intrinsic_refusal_pc != UINT64_MAX) {
++        uc->stop_request = true;
++        cpu_exit(uc->cpu);
++    }
+ 
+     // embedder: the block hook asked for this block with fewer instructions. A
+     // pending exit wins; the block is then reconsidered when execution resumes.
+diff --git a/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/target/arm/translate.c b/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/target/arm/translate.c
+index c42011a..d472fb4 100644
+--- a/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/target/arm/translate.c
++++ b/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/target/arm/translate.c
+@@ -11454,6 +11454,35 @@ static void arm_post_translate_insn(DisasContext *dc)
+     translator_loop_temp_check(&dc->base);
+ }
+ 
++static void gen_execution_refusal(DisasContext *s)
++{
++    const uint32_t *gate = s->uc->embedder_acct.execution_refused;
++    if (!gate) {
++        return;
++    }
++    TCGContext *tcg_ctx = s->uc->tcg_ctx;
++    TCGLabel *admitted = gen_new_label(tcg_ctx);
++    TCGv_ptr flag = tcg_const_ptr(tcg_ctx, gate);
++    TCGv_i32 refused = tcg_temp_new_i32(tcg_ctx);
++    tcg_gen_ld_i32(tcg_ctx, refused, flag, 0);
++    tcg_gen_mb(tcg_ctx, TCG_MO_ALL | TCG_BAR_LDAQ);
++    tcg_gen_brcondi_i32(tcg_ctx, TCG_COND_EQ, refused, 0, admitted);
++    tcg_temp_free_i32(tcg_ctx, refused);
++    tcg_temp_free_ptr(tcg_ctx, flag);
++    TCGv_ptr boundary = tcg_const_ptr(tcg_ctx, &s->uc->embedder_acct.intrinsic_refusal_pc);
++    TCGv_i64 pc = tcg_const_i64(tcg_ctx, s->pc_curr);
++    tcg_gen_st_i64(tcg_ctx, pc, boundary, 0);
++    tcg_temp_free_i64(tcg_ctx, pc);
++    tcg_temp_free_ptr(tcg_ctx, boundary);
++    gen_set_pc_im(s, s->pc_curr);
++    gen_set_condexec(s);
++    bool no_exit = s->uc->no_exit_request;
++    s->uc->no_exit_request = false;
++    check_exit_request(tcg_ctx);
++    s->uc->no_exit_request = no_exit;
++    gen_set_label(tcg_ctx, admitted);
++}
++
+ static void arm_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
+ {
+     DisasContext *dc = container_of(dcbase, DisasContext, base);
+@@ -11490,6 +11519,7 @@ static void arm_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
+         dc->base.pc_next += 4;
+         dc->uc->embedder_insn_decision = dc->uc->embedder_insn_filter
+             ? dc->uc->embedder_insn_filter(dc->uc->embedder_filter_user, dc->pc_curr, insn) : 1;
++        gen_execution_refusal(dc);
+         disas_arm_insn(dc, insn);
+ 
+         arm_post_translate_insn(dc);
+@@ -11585,6 +11615,7 @@ static void thumb_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
+ 
+     // Unicorn: trace this instruction on request
+     insn_size = is_16bit ? 2 : 4;
++    gen_execution_refusal(dc);
+     if (HOOK_EXISTS_BOUNDED(uc, UC_HOOK_CODE, dc->base.pc_next - insn_size)) {
+         
+         // Publish the current architectural state before the callback.
+diff --git a/crates/emulator-cpu-unicorn/vendor/unicorn/uc.c b/crates/emulator-cpu-unicorn/vendor/unicorn/uc.c
+index de0401d..4b1b921 100644
+--- a/crates/emulator-cpu-unicorn/vendor/unicorn/uc.c
++++ b/crates/emulator-cpu-unicorn/vendor/unicorn/uc.c
+@@ -3311,10 +3311,12 @@ uc_err uc_embedder_refuse_access(uc_engine *uc)
+ // 8: accounting record includes the asynchronous pause_requested field.
+ // 16: per-engine CF_PARALLEL selection for R-profile multi-core TCG.
+ // 32: uc_embedder_refuse_access.
++// 64: accounting record includes the per-instruction execution_refused gate.
++// 128: accounting record includes the intrinsic-refusal instruction boundary.
+ UNICORN_EXPORT
+ uint32_t uc_embedder_features(void)
+ {
+-    return 1 | 2 | 4 | 8 | 16 | 32;
++    return 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128;
+ }
+ 
+ // Select parallel TCG translation semantics for this engine. The caller must
+@@ -3348,10 +3350,10 @@ uc_err uc_embedder_set_block_exits(uc_engine *uc, bool enabled)
+     return UC_ERR_OK;
+ }
+ 
+-// embedder: the budgeted block accounting record (uc_priv.h): the embedder reads
+-// and writes budget and head directly; ring/mask/enabled/pause_requested are
+-// set while no emulation runs. Layout: int64 budget, u64 head, u64 *ring,
+-// u64 mask, u64 enabled, u32 *pause_requested.
++// embedder: the budgeted block accounting record (uc_priv.h).
++// ring/mask/enabled/pause_requested/execution_refused are configured while stopped.
++// Layout: int64 budget, u64 head, u64 *ring, u64 mask, u64 enabled,
++// u32 *pause_requested, u32 *execution_refused, u64 intrinsic_refusal_pc.
+ UNICORN_EXPORT
+ void *uc_embedder_accounting(uc_engine *uc)
+ {
+diff --git a/crates/emulator-cpu/src/lib.rs b/crates/emulator-cpu/src/lib.rs
+index 5d60452..119e254 100644
+--- a/crates/emulator-cpu/src/lib.rs
++++ b/crates/emulator-cpu/src/lib.rs
+@@ -50,6 +50,44 @@ impl Identity {
+         Self(NEXT.fetch_add(1, Ordering::Relaxed))
+     }
+ }
++#[derive(Clone, Default)]
++pub struct ExecutionRefusal(Arc<AtomicU32>);
++impl ExecutionRefusal {
++    pub fn refuse(&self) { self.0.store(1, Ordering::Release); }
++    pub fn is_refused(&self) -> bool { self.0.load(Ordering::Acquire) != 0 }
++    pub fn as_ptr(&self) -> *const AtomicU32 { Arc::as_ptr(&self.0) }
++    pub fn same(&self, other: &Self) -> bool { Arc::ptr_eq(&self.0, &other.0) }
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct InstructionEntryId {
++    owner: Identity,
++    serial: std::num::NonZeroU64,
++}
++impl InstructionEntryId {
++    pub fn after(owner: Identity, previous: Option<Self>) -> Result<Self, String> {
++        let serial = previous.map_or(Some(1), |previous| {
++            (previous.owner == owner).then(|| previous.serial.get().checked_add(1)).flatten()
++        }).and_then(std::num::NonZeroU64::new)
++            .ok_or("instruction-entry identity exhausted or changed owner")?;
++        Ok(Self { owner, serial })
++    }
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct InstructionTcm {
++    pub address: u64,
++    pub bytes: usize,
++}
++/// Captured before instruction observers. Resume creates a new identity.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct InstructionEntry {
++    pub id: InstructionEntryId,
++    pub address: u64,
++    pub bytes: u32,
++    pub progress: u64,
++    pub pstate: u32,
++    pub physical: Option<u64>,
++    pub tcm: [Option<InstructionTcm>; 2],
++}
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub struct HookId {
+     pub owner: Identity,
+@@ -553,6 +591,9 @@ pub struct BlockAccounting {
+     pub mask: u64,
+     pub enabled: u64,
+     pub pause_requested: *const AtomicU32,
++    pub execution_refused: *const AtomicU32,
++    /// u64::MAX until the intrinsic gate rejects an unentered instruction.
++    pub intrinsic_refusal_pc: u64,
+ }
+ /// A checkpoint associated with an owning processor. Durable export carries
+ /// data only; `Cpu::import_snapshot` binds that data to a receiving processor.
+@@ -773,6 +814,10 @@ pub trait Cpu {
+     fn instruction_progress(&self) -> Option<u64> {
+         None
+     }
++    /// Current observer entry, immutable across stop-before callbacks.
++    fn instruction_entry(&self) -> Option<InstructionEntry> {
++        None
++    }
+     fn stop(&self) -> Result<(), String>;
+     /// Explicit isolated-call interception: omit the current instruction entry.
+     /// Valid only inside an instruction observer, before any guest effects.
+@@ -787,6 +832,15 @@ pub trait Cpu {
+     fn refuse_access(&self) -> Result<(), AccessRefusalError> {
+         Err(AccessRefusalError::Unsupported)
+     }
++    fn arm_execution_refusal(&self, _gate: ExecutionRefusal) -> Result<(), String> {
++        Err("backend has no instruction execution-refusal gate".into())
++    }
++    fn disarm_execution_refusal(&self, _gate: &ExecutionRefusal) -> Result<(), String> {
++        Err("backend has no instruction execution-refusal gate".into())
++    }
++    fn execution_refused(&self) -> bool {
++        false
++    }
+     /// Declared R-profile CP14 identity input, changed only while paused.
+     fn rprofile_identity(&self, _value: Option<u32>) -> Result<u32, String> {
+         Err("backend has no R-profile identity input".into())
+diff --git a/crates/emulator/src/board/mod.rs b/crates/emulator/src/board/mod.rs
+index 01d5dee..75630e7 100644
+--- a/crates/emulator/src/board/mod.rs
++++ b/crates/emulator/src/board/mod.rs
+@@ -698,6 +698,9 @@ impl Board {
+         loop {
+             let mut s = self.state.borrow_mut();
+             s.apply_memory(&self.cpus)?;
++            if self.cpus.iter().any(|cpu| cpu.execution_refused()) {
++                return Ok(());
++            }
+             s.refresh_processors()?;
+             s.due(&self.cpus)?;
+             s.push_pins(&self.cpus)?;
 diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/board/observation.rs
+index c919039..2c429d7 100644
 --- a/crates/emulator/src/board/observation.rs
 +++ b/crates/emulator/src/board/observation.rs
-@@ -1,5 +1,8 @@
+@@ -1,7 +1,12 @@
  //! Explicit, bounded CPU/bus observation. No device consumes these records.
  pub mod calls;
 +mod fetch_attribution;
 +pub use fetch_attribution::{CpuDataAttribution, FetchAttribution};
-+use fetch_attribution::{AccessBytes, ByteOrder, CoreIndex, CpuAttribution, CpuCapture, CpuObservation, CpuSource, GuestAddress, ObservedWord, PhysicalAddress};
++use fetch_attribution::{CpuAttribution, CpuCapture, CpuObservation, CpuSource, ObservedWord};
++pub use fetch_attribution::{AccessBytes, ByteOrder, CoreIndex, FetchEvent, GuestAddress, InstructionCores, InstructionExecutionState, InstructionGuardFailure, InstructionGuardRefusal, InstructionGuardStatus, PhysicalAddress, PhysicalInstructionGuard};
  use super::{Board, State, factory::MemoryMap, scalar};
  use fujimod_emulator_cpu::{Access, Cpu, Hook, HookId, HookRange, Model, Register, arm};
++use fujimod_emulator_cpu::{ExecutionRefusal, InstructionEntry};
  use serde_json::{Value, json};
-@@ -75,6 +78,7 @@
+ use std::{
+     cell::{Cell, RefCell},
+@@ -75,6 +80,7 @@ pub struct Records {
      /// Empty for an unclassified watch, which records every source.
      classes: Vec<WatchRange>,
      views: ViewPolicy,
@@ -18,7 +576,37 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
  }
  impl Records {
      fn overlaps(&self, address: u64, bytes: u64) -> bool {
-@@ -134,6 +138,7 @@
+@@ -93,6 +99,11 @@ impl Records {
+             range.kinds.contains(kind) && address < range.end && range.start < address.saturating_add(bytes)
+         })
+     }
++    pub fn rows_since(&self, cursor: usize) -> Result<&[Value], String> {
++        self.rows.get(cursor..).ok_or_else(|| "Memory watch row cursor exceeds the retained rows".into())
++    }
++    pub fn row_count(&self) -> usize { self.rows.len() }
++    pub fn violation(&self) -> Option<&str> { self.violation.as_deref() }
+     fn push(&mut self, row: Value) {
+         if self.violation.is_some() {
+             return;
+@@ -105,6 +116,9 @@ impl Records {
+         } else {
+             self.rows.push(row);
+         }
++        if self.violation.is_some() {
++            if let Some(capture) = &mut self.fetch_attribution { capture.observation_failed(); }
++        }
+     }
+     pub(super) fn transfer(&mut self, source: &str, physical: u64, address: u64, bytes: usize) {
+         if self.wants(source, physical, bytes as u64) {
+@@ -115,6 +129,7 @@ impl Records {
+         }
+     }
+     pub(super) fn view_changed(&mut self) {
++        if let Some(capture) = &mut self.fetch_attribution { capture.view_changed(); }
+         if self.views == ViewPolicy::Fixed {
+             self.violation
+                 .get_or_insert_with(|| "Memory decoding changed under a fixed-view memory watch".into());
+@@ -134,13 +149,24 @@ impl Records {
                  ViewPolicy::Fixed => "fixed",
              });
          }
@@ -26,7 +614,24 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
          state
      }
  }
-@@ -150,92 +155,47 @@
++/// Dropping an unended guarded watch refuses execution and retains callback storage.
+ pub struct MemoryWatch {
+     pub records: Rc<RefCell<Records>>,
+     contexts: Vec<Box<MemoryContext>>,
+     hooks: Vec<(usize, HookId)>,
++    refusal: Option<ExecutionRefusal>,
++}
++impl Drop for MemoryWatch {
++    fn drop(&mut self) {
++        if let Some(gate) = &self.refusal {
++            gate.refuse();
++            std::mem::forget(std::mem::take(&mut self.contexts));
++        }
++    }
+ }
+ struct MemoryContext {
+     state: Weak<RefCell<State>>,
+@@ -150,95 +176,57 @@ struct MemoryContext {
      core: usize,
  }
  impl MemoryContext {
@@ -69,7 +674,8 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 -            } else {
 -                Ok(())
 -            };
--        };
++            } else { Ok(()) };
+         };
 -        if !records.wants(source, physical, size) {
 -            return Ok(());
 -        }
@@ -80,12 +686,6 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 -            "big"
 -        } else {
 -            "little"
-+            } else { Ok(()) };
-         };
--        let before = if source != "cpu-fetch" {
--            if !(1..=16).contains(&size) {
--                return Err("Memory watch cannot capture this CPU access width".into());
--            }
 +        let logged = records.wants(source.name(), physical, size);
 +        let cached = source == CpuSource::CpuFetch && records.fetch_attribution.as_ref().is_some_and(|capture| capture.wants(PhysicalAddress(physical),AccessBytes(size)));
 +        let capture = match (logged,cached) {
@@ -93,7 +693,11 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 +            (true,false) => CpuCapture::Classified,
 +            (false,true) => CpuCapture::Cached,
 +            (false,false) => return Ok(()),
-+        };
+         };
+-        let before = if source != "cpu-fetch" {
+-            if !(1..=16).contains(&size) {
+-                return Err("Memory watch cannot capture this CPU access width".into());
+-            }
 +        if tcm_overlap(&*cpu, address, size)? { return Err("Memory watch intersects a CPU-private TCM overlay".into()); }
 +        let byte_order = ByteOrder::of(&*cpu)?;
 +        let before = if source != CpuSource::CpuFetch {
@@ -101,9 +705,17 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
              let mut bytes = vec![0; size as usize];
              cpu.read_memory(address, &mut bytes)?;
              Some(bytes)
--        } else {
++        } else { None };
++        let value = if source == CpuSource::CpuRead && size <= 8 {
++            Some(byte_order.decode(before.as_ref().unwrap()))
++        } else { value };
++        let attributed = records.fetch_attribution.as_ref().is_some_and(fetch_attribution::FetchCapture::attributes_data);
++        let attribution = if source != CpuSource::CpuFetch && attributed {
++            CpuAttribution::capture_data(&state, &*cpu, CoreIndex(self.core))?
+         } else {
 -            None
--        };
++            CpuAttribution::capture(&state, &*cpu, CoreIndex(self.core), source == CpuSource::CpuFetch && records.fetch_attribution.is_some())?
+         };
 -        let value = if source == "cpu-read" && size <= 8 {
 -            let bytes = before.as_ref().unwrap();
 -            Some(if byte_order == "little" {
@@ -138,11 +750,6 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 -            "instructions":instructions,"tick":tick}),
 -        );
 -        Ok(())
-+        } else { None };
-+        let value = if source == CpuSource::CpuRead && size <= 8 {
-+            Some(byte_order.decode(before.as_ref().unwrap()))
-+        } else { value };
-+        let attribution = CpuAttribution::capture(&state, &*cpu, CoreIndex(self.core), records.fetch_attribution.is_some())?;
 +        records.record_cpu(CpuObservation {
 +            source, capture, address: GuestAddress(address), physical: PhysicalAddress(physical), size: AccessBytes(size),
 +            value: value.map(ObservedWord), before, byte_order,
@@ -150,8 +757,14 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 +        })
      }
      fn fail(&self, error: String) {
-         self.records.borrow_mut().violation.get_or_insert(error);
-@@ -251,9 +211,9 @@
+-        self.records.borrow_mut().violation.get_or_insert(error);
++        let mut records = self.records.borrow_mut();
++        records.violation.get_or_insert(error);
++        if let Some(capture) = &mut records.fetch_attribution { capture.observation_failed(); }
+     }
+ }
+ unsafe fn access(access: Access, address: u64, size: i32, value: i64, data: *mut c_void) {
+@@ -251,9 +239,9 @@ unsafe fn access(access: Access, address: u64, size: i32, value: i64, data: *mut
              }
              context.record(
                  if access == Access::Write {
@@ -163,277 +776,90 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
                  },
                  address,
                  size,
-@@ -267,7 +227,7 @@
+@@ -267,7 +255,8 @@ unsafe fn access(access: Access, address: u64, size: i32, value: i64, data: *mut
  }
  unsafe fn fetch(address: u64, size: u32, data: *mut c_void) {
      let context = unsafe { &*data.cast::<MemoryContext>() };
 -    if let Err(error) = context.record("cpu-fetch", address, size as u64, None) {
++    if context.guarded_fetch(address, u64::from(size)) { return; }
 +    if let Err(error) = context.record(CpuSource::CpuFetch, address, size as u64, None) {
          context.fail(error);
      }
  }
-diff --git a/crates/emulator/src/board/observation/fetch_attribution.rs b/crates/emulator/src/board/observation/fetch_attribution.rs
-new file mode 100644
---- /dev/null
-+++ b/crates/emulator/src/board/observation/fetch_attribution.rs
-@@ -0,0 +1,246 @@
-+use super::{Board, MemoryContext, MemoryMap, MemoryWatch, Records, Span, State, ViewPolicy, WatchKinds, WatchRange, fetch, scalar, union};
-+use fujimod_emulator_cpu::{Cpu, Hook, HookRange, Register};
-+use serde_json::{Value, json};
-+
-+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-+pub enum CpuDataAttribution { Writes, ReadsAndWrites }
-+
-+pub struct FetchAttribution {
-+    sources: CpuDataAttribution,
-+    ranges: Vec<WatchRange>,
-+}
-+impl FetchAttribution {
-+    pub fn new(sources: CpuDataAttribution, mut ranges: Vec<WatchRange>) -> Result<Self, String> {
-+        if ranges.is_empty() || ranges.len() > 64 || ranges.iter().any(|range| {
-+            range.start >= range.end || range.end > 1 << 32 || range.kinds != WatchKinds::CPU_FETCH
-+        }) {
-+            return Err("Fetch attribution requires bounded physical CPU-fetch ranges".into());
-+        }
-+        ranges.sort_unstable_by_key(|range| range.start);
-+        let mut kept = 0usize;
-+        for index in 0..ranges.len() {
-+            let range = ranges[index];
-+            if kept != 0 && range.start <= ranges[kept - 1].end {
-+                ranges[kept - 1].end = ranges[kept - 1].end.max(range.end);
-+            } else {
-+                ranges[kept] = range;
-+                kept += 1;
-+            }
-+        }
-+        ranges.truncate(kept);
-+        Ok(Self { sources, ranges })
-+    }
-+    fn wants(&self, physical: PhysicalAddress, size: AccessBytes) -> bool {
-+        self.ranges.iter().any(|range| physical.0 < range.end && range.start < physical.0.saturating_add(size.0))
-+    }
-+    fn selected(&self, source: CpuSource) -> bool {
-+        source == CpuSource::CpuWrite || (source == CpuSource::CpuRead && self.sources == CpuDataAttribution::ReadsAndWrites)
-+    }
-+}
-+
-+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
-+#[serde(rename_all = "kebab-case")]
-+pub(super) enum CpuSource { CpuRead, CpuWrite, CpuFetch }
-+impl CpuSource {
-+    pub(super) fn name(self) -> &'static str {
-+        match self { Self::CpuRead => "cpu-read", Self::CpuWrite => "cpu-write", Self::CpuFetch => "cpu-fetch" }
-+    }
-+}
-+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
-+#[serde(rename_all = "lowercase")]
-+pub(super) enum ByteOrder { Little, Big }
-+impl ByteOrder {
-+    pub(super) fn of(cpu: &dyn Cpu) -> Result<Self, String> {
-+        Ok(if scalar(cpu, Register::Pstate)? & (1 << 9) != 0 { Self::Big } else { Self::Little })
-+    }
-+    pub(super) fn decode(self, bytes: &[u8]) -> u64 {
-+        match self {
-+            Self::Little => bytes.iter().rev().fold(0u64, |value, byte| (value << 8) | u64::from(*byte)),
-+            Self::Big => bytes.iter().fold(0u64, |value, byte| (value << 8) | u64::from(*byte)),
-+        }
-+    }
-+}
-+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-+pub(super) struct CoreIndex(pub(super) usize);
-+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-+pub(super) struct CoreInstructionCount(u64);
-+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-+pub(super) struct GuestAddress(pub(super) u64);
-+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-+pub(super) struct PhysicalAddress(pub(super) u64);
-+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-+pub(super) struct AccessBytes(pub(super) u64);
-+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-+pub(super) struct ObservedWord(pub(super) u64);
-+
-+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-+pub(super) struct Attribution {
-+    pub(super) pc: u64,
-+    pub(super) instructions: u64,
-+    pub(super) tick: u64,
-+}
-+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-+pub(super) struct CpuAttribution {
-+    core: CoreIndex,
-+    pub(super) clock: Attribution,
-+    core_instructions: CoreInstructionCount,
-+}
-+impl CpuAttribution {
-+    #[inline]
-+    pub(super) fn capture(state: &State, cpu: &dyn Cpu, core: CoreIndex, require_progress: bool) -> Result<Self, String> {
-+        let progress = cpu.instruction_progress();
-+        if require_progress && progress.is_none() { return Err("Fetch attribution requires actual CPU instruction progress".into()); }
-+        let extra = progress.unwrap_or(state.accounted[core.0]).saturating_sub(state.accounted[core.0]);
-+        let instructions = state.instructions.iter().sum::<u64>().saturating_add(extra);
-+        let elapsed = state.timeline.ratio().advance_phase(state.timeline.phase(), extra)?.0;
-+        let tick = state.timeline.now().saturating_add(elapsed.min(u64::MAX as u128) as u64);
-+        Ok(Self {
-+            core,
-+            clock: Attribution { pc: scalar(cpu, Register::Pc)?, instructions, tick },
-+            core_instructions: CoreInstructionCount(state.instructions[core.0].saturating_add(extra)),
-+        })
-+    }
-+}
-+
-+#[derive(Clone, Copy)]
-+pub(super) enum CpuCapture { Classified, Cached, ClassifiedAndCached }
-+impl CpuCapture {
-+    fn cached(self) -> bool { matches!(self, Self::Cached | Self::ClassifiedAndCached) }
-+    fn classified(self) -> bool { matches!(self, Self::Classified | Self::ClassifiedAndCached) }
-+}
-+
-+pub(super) struct CpuObservation {
-+    pub(super) source: CpuSource,
-+    pub(super) capture: CpuCapture,
-+    pub(super) address: GuestAddress,
-+    pub(super) physical: PhysicalAddress,
-+    pub(super) size: AccessBytes,
-+    pub(super) value: Option<ObservedWord>,
-+    pub(super) before: Option<Vec<u8>>,
-+    pub(super) byte_order: ByteOrder,
-+    pub(super) attribution: CpuAttribution,
-+}
-+#[derive(Clone, Copy)]
-+struct CapturedFetch {
-+    address: GuestAddress,
-+    physical: PhysicalAddress,
-+    size: AccessBytes,
-+    byte_order: ByteOrder,
-+    attribution: CpuAttribution,
-+}
-+impl CapturedFetch {
-+    fn value(self) -> Value {
-+        json!({"source":"cpu-fetch","address":self.address.0,"physical":self.physical.0,"size":self.size.0,
-+            "value":null,"before":null,"byte_order":self.byte_order,"core":self.attribution.core.0,
-+            "pc":self.attribution.clock.pc,"instructions":self.attribution.clock.instructions,
-+            "core_instructions":self.attribution.core_instructions.0,"tick":self.attribution.clock.tick})
-+    }
-+}
-+pub(super) struct FetchCapture {
-+    specification: FetchAttribution,
-+    latest: [Option<CapturedFetch>; 2],
-+}
-+impl FetchCapture {
-+    pub(super) fn wants(&self, physical: PhysicalAddress, size: AccessBytes) -> bool { self.specification.wants(physical, size) }
-+    pub(super) fn describe(&self, state: &mut Value) {
-+        let sources = match self.specification.sources {
-+            CpuDataAttribution::Writes => json!(["cpu-write"]),
-+            CpuDataAttribution::ReadsAndWrites => json!(["cpu-read","cpu-write"]),
-+        };
-+        state["fetch_attribution"] = json!({"sources":sources,"ranges":self.specification.ranges.iter()
-+            .map(|range| [range.start,range.end]).collect::<Vec<_>>()});
-+    }
-+}
-+impl Records {
-+    pub(super) fn record_cpu(&mut self, observed: CpuObservation) -> Result<(), String> {
-+        let captured = self.fetch_attribution.is_some();
-+        let mut latest = None;
-+        let mut selected = false;
-+        if let Some(capture) = &mut self.fetch_attribution {
-+            let core = observed.attribution.core.0;
-+            if observed.source == CpuSource::CpuFetch && observed.capture.cached() {
-+                if !matches!(observed.size.0, 2 | 4) || observed.address.0 != observed.attribution.clock.pc {
-+                    return Err("Fetch attribution observed an invalid instruction fetch".into());
-+                }
-+                capture.latest[core] = Some(CapturedFetch {
-+                    address: observed.address, physical: observed.physical, size: observed.size,
-+                    byte_order: observed.byte_order, attribution: observed.attribution,
-+                });
-+            }
-+            selected = capture.specification.selected(observed.source);
-+            if selected {
-+                latest = capture.latest[core].filter(|fetch| fetch.attribution == observed.attribution && fetch.byte_order == observed.byte_order);
-+            }
-+        }
-+        if !observed.capture.classified() { return Ok(()); }
-+        let mut row = json!({"source":observed.source,"address":observed.address.0,"physical":observed.physical.0,
-+            "size":observed.size.0,"value":observed.value.map(|value| value.0),"before":observed.before,
-+            "byte_order":observed.byte_order,"core":observed.attribution.core.0,"pc":observed.attribution.clock.pc,
-+            "instructions":observed.attribution.clock.instructions,"tick":observed.attribution.clock.tick});
-+        if captured {
-+            row["core_instructions"] = json!(observed.attribution.core_instructions.0);
-+            if selected { row["latest_fetch"] = latest.map(CapturedFetch::value).unwrap_or(Value::Null); }
-+        }
-+        self.push(row);
-+        if selected && latest.is_none() {
-+            self.violation.get_or_insert_with(|| "Monitored CPU data access lacks its matching actual instruction fetch".into());
-+        }
-+        Ok(())
-+    }
-+}
-+
-+fn mapped_spans<'a>(maps: impl Iterator<Item = &'a MemoryMap>, ranges: &[WatchRange]) -> Vec<Span> {
-+    let mut spans = Vec::new();
-+    for map in maps {
-+        for range in ranges {
-+            if !range.kinds.contains(WatchKinds::CPU_FETCH) { continue; }
-+            let start = range.start.max(map.physical);
-+            let end = range.end.min(map.physical + map.size as u64);
-+            if start < end { spans.push(((map.address + start - map.physical).saturating_sub(15), map.address + end - map.physical)); }
-+        }
-+    }
-+    union(spans)
-+}
-+impl Board {
-+    pub fn memory_watch_begin_with_fetch_attribution(
-+        &self, classes: Vec<WatchRange>, attribution: FetchAttribution, limit: usize,
-+        maps: Vec<MemoryMap>, views: ViewPolicy,
+@@ -365,6 +354,7 @@ impl Board {
+             records: records.clone(),
+             contexts: vec![],
+             hooks: vec![],
++            refusal: None,
+         });
+         for (core, cpu) in self.cpus.iter().enumerate() {
+             let mut views = maps
+@@ -455,6 +445,12 @@ impl Board {
+         limit: usize,
+         maps: Vec<MemoryMap>,
+         views: ViewPolicy,
 +    ) -> Result<Box<MemoryWatch>, String> {
-+        if self.cpus.len() > 2 { return Err("Fetch attribution supports at most two processors".into()); }
-+        for range in &attribution.ranges { self.watch_backing(&[(range.start,range.end)])?; }
-+        let mut watch = self.memory_watch_begin_classified(classes, limit, maps, views)?;
-+        watch.records.borrow_mut().fetch_attribution = Some(FetchCapture { specification: attribution, latest: [None; 2] });
-+        let result = (|| -> Result<(), String> {
-+            for (core, cpu) in self.cpus.iter().enumerate() {
-+                let context: &MemoryContext = &watch.contexts[core];
-+                let decoder_maps = self.state.borrow().decoders.observation_maps(core);
-+                let (cached, ordinary) = {
-+                    let records = watch.records.borrow();
-+                    let capture = records.fetch_attribution.as_ref().ok_or("Fetch attribution configuration absent")?;
-+                    (mapped_spans(context.maps.iter().chain(&decoder_maps), &capture.specification.ranges),
-+                        mapped_spans(context.maps.iter().chain(&decoder_maps), &records.classes))
-+                };
-+                let data = (context as *const MemoryContext).cast_mut().cast();
-+                for (mut begin, end) in cached {
-+                    let mut install = |start, stop| -> Result<(), String> {
-+                        let id = unsafe { cpu.install_hook(Hook::Instruction { callback: fetch, data,
-+                            range: HookRange::Inclusive { begin: start, end: stop - 1 } }) }?;
-+                        watch.hooks.push((core,id));
-+                        Ok(())
-+                    };
-+                    for &(low,high) in &ordinary {
-+                        if high <= begin { continue; }
-+                        if low >= end { break; }
-+                        if begin < low { install(begin,low.min(end))?; }
-+                        begin = begin.max(high).min(end);
-+                        if begin == end { break; }
-+                    }
-+                    if begin < end { install(begin,end)?; }
++        self.memory_watch_begin_classified_with_refusal(classes, limit, maps, views, None)
++    }
++    fn memory_watch_begin_classified_with_refusal(
++        &self, classes: Vec<WatchRange>, limit: usize, maps: Vec<MemoryMap>, views: ViewPolicy,
++        refusal: Option<ExecutionRefusal>,
+     ) -> Result<Box<MemoryWatch>, String> {
+         if classes.is_empty()
+             || classes.len() > 256
+@@ -483,7 +479,18 @@ impl Board {
+             records: records.clone(),
+             contexts: vec![],
+             hooks: vec![],
++            refusal,
+         });
++        if let Some(gate) = watch.refusal.clone() {
++            for cpu in self.cpus.iter() {
++                if let Err(error) = cpu.arm_execution_refusal(gate.clone()) {
++                    return Err(match self.memory_watch_end(&mut watch) {
++                        Ok(()) => error,
++                        Err(cleanup) => format!("{error}; instruction-guard rollback failed: {cleanup}"),
++                    });
 +                }
 +            }
-+            Ok(())
-+        })();
-+        if let Err(error) = result { self.memory_watch_end(&mut watch)?; return Err(error); }
-+        Ok(watch)
-+    }
++        }
+         for (core, cpu) in self.cpus.iter().enumerate() {
+             let mut processor_views = maps
+                 .iter()
+@@ -555,79 +562,144 @@ impl Board {
+         Ok(watch)
+     }
+     pub fn memory_watch_end(&self, watch: &mut MemoryWatch) -> Result<(), String> {
+-        for (core, hook) in watch.hooks.drain(..) {
+-            self.cpus[core].remove_hook(hook)?;
++        while let Some(&(core, hook)) = watch.hooks.last() {
++            if let Err(error) = self.cpus[core].remove_hook(hook) {
++                if let Some(gate) = &watch.refusal { gate.refuse(); }
++                if let Some(capture) = &mut watch.records.borrow_mut().fetch_attribution { capture.observation_failed(); }
++                return Err(error);
++            }
++            let _ = watch.hooks.pop();
+         }
++        watch.disarm_instruction_guard(self)?;
+         self.physical_memory.observation.replace(None);
+         Ok(())
+     }
+ }
+ 
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct InstructionPointEvent {
++    pub core: CoreIndex,
++    pub entry: InstructionEntry,
 +}
-
-diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/board/observation.rs
---- a/crates/emulator/src/board/observation.rs
-+++ b/crates/emulator/src/board/observation.rs
-@@ -362,13 +362,34 @@
+ /// Repeated entry observations stop before the selected instruction. Resume
  /// executes that instruction once, even when it is itself a loop target.
  pub struct InstructionPoints {
      cpu: Weak<dyn Cpu>,
 +    addresses: PointAddresses,
      pause: Rc<Cell<bool>>,
      event: RefCell<Option<u64>>,
++    context: Cell<Option<InstructionPointEvent>>,
++    core: CoreIndex,
      skip: Cell<Option<u64>>,
      hooks: Vec<HookId>,
  }
@@ -462,10 +888,18 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
      if points.skip.get() == Some(pc) {
          points.skip.set(None);
          return;
-@@ -381,48 +402,74 @@
+     }
+     if let Some(cpu) = points.cpu.upgrade() {
+         points.event.replace(Some(pc));
++        points.context.set(cpu.instruction_entry().map(|entry| InstructionPointEvent { core: points.core, entry }));
+         points.skip.set(Some(pc));
+         points.pause.set(true);
+         let _ = cpu.stop_before_instruction();
      }
  }
  impl InstructionPoints {
++    /// Inspect after the run settles all callbacks for the stopped entry.
++    pub fn event_context(&self) -> Option<InstructionPointEvent> { self.context.get() }
 +    pub fn replace_addresses(&self, addresses: Vec<u64>) -> Result<(), String> {
 +        let PointAddresses::Mutable(current) = &self.addresses else {
 +            return Err("Instruction point addresses are fixed".into());
@@ -524,6 +958,8 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
 +            },
              pause: self.host_pause.clone(),
              event: RefCell::new(None),
++            context: Cell::new(None),
++            core: CoreIndex(core),
              skip: Cell::new(None),
              hooks: vec![],
          });
@@ -559,3 +995,532 @@ diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/boar
          }
          Ok(points)
      }
+diff --git a/crates/emulator/src/board/observation/fetch_attribution.rs b/crates/emulator/src/board/observation/fetch_attribution.rs
+new file mode 100644
+index 0000000..f909cfd
+--- /dev/null
++++ b/crates/emulator/src/board/observation/fetch_attribution.rs
+@@ -0,0 +1,523 @@
++use super::{Board, MemoryContext, MemoryMap, MemoryWatch, Records, Span, State, ViewPolicy, WatchKinds, WatchRange, fetch, scalar, union};
++use fujimod_emulator_cpu::{Cpu, ExecutionRefusal, Hook, HookRange, InstructionEntry, InstructionEntryId, Register};
++use serde_json::{Value, json};
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum CpuDataAttribution {
++    /// Cache fetch tokens without asserting fetch provenance for data rows.
++    None,
++    Writes,
++    ReadsAndWrites,
++}
++
++pub struct FetchAttribution {
++    sources: CpuDataAttribution,
++    ranges: Vec<WatchRange>,
++    guards: Vec<PhysicalInstructionGuard>,
++}
++impl FetchAttribution {
++    pub fn new(sources: CpuDataAttribution, mut ranges: Vec<WatchRange>) -> Result<Self, String> {
++        if ranges.is_empty() || ranges.len() > 64 || ranges.iter().any(|range| {
++            range.start >= range.end || range.end > 1 << 32 || range.kinds != WatchKinds::CPU_FETCH
++        }) {
++            return Err("Fetch attribution requires bounded physical CPU-fetch ranges".into());
++        }
++        ranges.sort_unstable_by_key(|range| range.start);
++        let mut kept = 0usize;
++        for index in 0..ranges.len() {
++            let range = ranges[index];
++            if kept != 0 && range.start <= ranges[kept - 1].end {
++                ranges[kept - 1].end = ranges[kept - 1].end.max(range.end);
++            } else {
++                ranges[kept] = range;
++                kept += 1;
++            }
++        }
++        ranges.truncate(kept);
++        Ok(Self { sources, ranges, guards: Vec::new() })
++    }
++    pub fn with_instruction_guards(mut self, guards: Vec<PhysicalInstructionGuard>) -> Result<Self, String> {
++        if guards.is_empty() || guards.len() > 64 || guards.iter().enumerate().any(|(index, guard)| {
++            !self.ranges.iter().any(|range| range.start <= guard.physical.start && guard.physical.end <= range.end)
++                || guards[..index].iter().any(|other| guard.physical.start < other.physical.end && other.physical.start < guard.physical.end)
++        }) {
++            return Err("Instruction guards require disjoint attributed physical intervals".into());
++        }
++        self.guards = guards;
++        Ok(self)
++    }
++    fn wants(&self, physical: PhysicalAddress, size: AccessBytes) -> bool {
++        self.ranges.iter().any(|range| physical.0 < range.end && range.start < physical.0.saturating_add(size.0))
++    }
++    fn selected(&self, source: CpuSource) -> bool {
++        self.sources != CpuDataAttribution::None
++            && (source == CpuSource::CpuWrite || (source == CpuSource::CpuRead && self.sources == CpuDataAttribution::ReadsAndWrites))
++    }
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
++#[serde(rename_all = "kebab-case")]
++pub(super) enum CpuSource { CpuRead, CpuWrite, CpuFetch }
++impl CpuSource {
++    pub(super) fn name(self) -> &'static str {
++        match self { Self::CpuRead => "cpu-read", Self::CpuWrite => "cpu-write", Self::CpuFetch => "cpu-fetch" }
++    }
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
++#[serde(rename_all = "lowercase")]
++pub enum ByteOrder { Little, Big }
++impl ByteOrder {
++    pub(super) fn of(cpu: &dyn Cpu) -> Result<Self, String> {
++        Ok(if scalar(cpu, Register::Pstate)? & (1 << 9) != 0 { Self::Big } else { Self::Little })
++    }
++    pub(super) fn decode(self, bytes: &[u8]) -> u64 {
++        match self {
++            Self::Little => bytes.iter().rev().fold(0u64, |value, byte| (value << 8) | u64::from(*byte)),
++            Self::Big => bytes.iter().fold(0u64, |value, byte| (value << 8) | u64::from(*byte)),
++        }
++    }
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct CoreIndex(pub usize);
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) struct CoreInstructionCount(u64);
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct GuestAddress(pub u64);
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct PhysicalAddress(pub u64);
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct AccessBytes(pub u64);
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) struct ObservedWord(pub(super) u64);
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) struct Attribution {
++    pub(super) pc: u64,
++    pub(super) instructions: u64,
++    pub(super) tick: u64,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(super) struct CpuAttribution {
++    core: CoreIndex,
++    pub(super) clock: Attribution,
++    core_instructions: CoreInstructionCount,
++    entry: Option<InstructionEntry>,
++}
++impl CpuAttribution {
++    #[inline]
++    pub(super) fn capture(state: &State, cpu: &dyn Cpu, core: CoreIndex, require_entry: bool) -> Result<Self, String> {
++        let entry = require_entry.then(|| cpu.instruction_entry()).flatten();
++        if require_entry && entry.is_none() { return Err("Fetch attribution requires an actual instruction-entry context".into()); }
++        // A stopped entry's clock is the settled count; the entry keeps its own progress for identity.
++        let progress = cpu.instruction_progress();
++        if require_entry && progress.is_none() { return Err("Fetch attribution requires actual CPU instruction progress".into()); }
++        let pc = match entry { Some(entry) => entry.address, None => scalar(cpu, Register::Pc)? };
++        Self::coordinates(state, core, pc, progress, entry)
++    }
++    pub(super) fn capture_data(state: &State, cpu: &dyn Cpu, core: CoreIndex) -> Result<Self, String> {
++        let pc = scalar(cpu, Register::Pc)?;
++        let progress = cpu.instruction_progress();
++        let entry = cpu.instruction_entry().filter(|entry| entry.address == pc && Some(entry.progress) == progress);
++        Self::coordinates(state, core, pc, progress, entry)
++    }
++    fn coordinates(state: &State, core: CoreIndex, pc: u64, progress: Option<u64>, entry: Option<InstructionEntry>) -> Result<Self, String> {
++        let extra = progress.unwrap_or(state.accounted[core.0]).saturating_sub(state.accounted[core.0]);
++        let instructions = state.instructions.iter().sum::<u64>().saturating_add(extra);
++        let elapsed = state.timeline.ratio().advance_phase(state.timeline.phase(), extra)?.0;
++        let tick = state.timeline.now().saturating_add(elapsed.min(u64::MAX as u128) as u64);
++        Ok(Self {
++            core,
++            clock: Attribution { pc, instructions, tick },
++            core_instructions: CoreInstructionCount(state.instructions[core.0].saturating_add(extra)),
++            entry,
++        })
++    }
++}
++
++#[derive(Clone, Copy)]
++pub(super) enum CpuCapture { Classified, Cached, ClassifiedAndCached }
++impl CpuCapture {
++    fn cached(self) -> bool { matches!(self, Self::Cached | Self::ClassifiedAndCached) }
++    fn classified(self) -> bool { matches!(self, Self::Classified | Self::ClassifiedAndCached) }
++}
++
++pub(super) struct CpuObservation {
++    pub(super) source: CpuSource,
++    pub(super) capture: CpuCapture,
++    pub(super) address: GuestAddress,
++    pub(super) physical: PhysicalAddress,
++    pub(super) size: AccessBytes,
++    pub(super) value: Option<ObservedWord>,
++    pub(super) before: Option<Vec<u8>>,
++    pub(super) byte_order: ByteOrder,
++    pub(super) attribution: CpuAttribution,
++}
++#[derive(Clone, Copy)]
++struct CapturedFetch {
++    address: GuestAddress,
++    physical: PhysicalAddress,
++    size: AccessBytes,
++    byte_order: ByteOrder,
++    attribution: CpuAttribution,
++}
++impl CapturedFetch {
++    fn value(self) -> Value {
++        json!({"source":"cpu-fetch","address":self.address.0,"physical":self.physical.0,"size":self.size.0,
++            "value":null,"before":null,"byte_order":self.byte_order,"core":self.attribution.core.0,
++            "pc":self.attribution.clock.pc,"instructions":self.attribution.clock.instructions,
++            "core_instructions":self.attribution.core_instructions.0,"tick":self.attribution.clock.tick})
++    }
++}
++pub(super) struct FetchCapture {
++    specification: FetchAttribution,
++    latest: [Option<CapturedFetch>; 2],
++    guard_status: InstructionGuardStatus,
++    pause: std::rc::Rc<std::cell::Cell<bool>>,
++    refusal: Option<ExecutionRefusal>,
++}
++impl FetchCapture {
++    pub(super) fn wants(&self, physical: PhysicalAddress, size: AccessBytes) -> bool { self.specification.wants(physical, size) }
++    pub(super) fn attributes_data(&self) -> bool { self.specification.sources != CpuDataAttribution::None }
++    pub(super) fn describe(&self, state: &mut Value) {
++        let sources = match self.specification.sources {
++            CpuDataAttribution::None => json!([]),
++            CpuDataAttribution::Writes => json!(["cpu-write"]),
++            CpuDataAttribution::ReadsAndWrites => json!(["cpu-read","cpu-write"]),
++        };
++        state["fetch_attribution"] = json!({"sources":sources,"ranges":self.specification.ranges.iter()
++            .map(|range| [range.start,range.end]).collect::<Vec<_>>()});
++    }
++}
++impl Records {
++    pub(super) fn record_cpu(&mut self, observed: CpuObservation) -> Result<(), String> {
++        let captured = self.fetch_attribution.as_ref().is_some_and(FetchCapture::attributes_data);
++        let mut latest = None;
++        let mut selected = false;
++        if let Some(capture) = &mut self.fetch_attribution {
++            let core = observed.attribution.core.0;
++            if observed.source == CpuSource::CpuFetch && observed.capture.cached() {
++                if !matches!(observed.size.0, 2 | 4) || observed.address.0 != observed.attribution.clock.pc {
++                    return Err("Fetch attribution observed an invalid instruction fetch".into());
++                }
++                capture.latest[core] = Some(CapturedFetch {
++                    address: observed.address, physical: observed.physical, size: observed.size,
++                    byte_order: observed.byte_order, attribution: observed.attribution,
++                });
++            }
++            selected = capture.specification.selected(observed.source);
++            if selected {
++                latest = capture.latest[core].filter(|fetch| fetch.attribution == observed.attribution && fetch.byte_order == observed.byte_order);
++            }
++        }
++        if !observed.capture.classified() { return Ok(()); }
++        let mut row = json!({"source":observed.source,"address":observed.address.0,"physical":observed.physical.0,
++            "size":observed.size.0,"value":observed.value.map(|value| value.0),"before":observed.before,
++            "byte_order":observed.byte_order,"core":observed.attribution.core.0,"pc":observed.attribution.clock.pc,
++            "instructions":observed.attribution.clock.instructions,"tick":observed.attribution.clock.tick});
++        if captured {
++            row["core_instructions"] = json!(observed.attribution.core_instructions.0);
++            if selected { row["latest_fetch"] = latest.map(CapturedFetch::value).unwrap_or(Value::Null); }
++        }
++        self.push(row);
++        if selected && latest.is_none() {
++            self.violation.get_or_insert_with(|| "Monitored CPU data access lacks its matching actual instruction fetch".into());
++            if let Some(capture) = &mut self.fetch_attribution { capture.observation_failed(); }
++        }
++        Ok(())
++    }
++}
++
++fn mapped_spans<'a>(maps: impl Iterator<Item = &'a MemoryMap>, ranges: &[WatchRange]) -> Vec<Span> {
++    let mut spans = Vec::new();
++    for map in maps {
++        for range in ranges {
++            if !range.kinds.contains(WatchKinds::CPU_FETCH) { continue; }
++            let start = range.start.max(map.physical);
++            let end = range.end.min(map.physical + map.size as u64);
++            if start < end { spans.push(((map.address + start - map.physical).saturating_sub(15), map.address + end - map.physical)); }
++        }
++    }
++    union(spans)
++}
++impl Board {
++    pub fn memory_watch_begin_with_fetch_attribution(
++        &self, classes: Vec<WatchRange>, attribution: FetchAttribution, limit: usize,
++        maps: Vec<MemoryMap>, views: ViewPolicy,
++    ) -> Result<Box<MemoryWatch>, String> {
++        if self.cpus.len() > 2 { return Err("Fetch attribution supports at most two processors".into()); }
++        if !attribution.guards.is_empty() && views != ViewPolicy::Fixed {
++            return Err("Physical instruction guards require fixed memory views".into());
++        }
++        for range in &attribution.ranges { self.watch_backing(&[(range.start,range.end)])?; }
++        let refusal = (!attribution.guards.is_empty()).then(ExecutionRefusal::default);
++        let mut watch = self.memory_watch_begin_classified_with_refusal(classes, limit, maps, views, refusal)?;
++        watch.records.borrow_mut().fetch_attribution = Some(FetchCapture {
++            specification: attribution, latest: [None; 2], guard_status: InstructionGuardStatus::default(),
++            pause: self.host_pause.clone(),
++            refusal: watch.refusal.clone(),
++        });
++        let result = (|| -> Result<(), String> {
++            for (core, cpu) in self.cpus.iter().enumerate() {
++                let context: &MemoryContext = &watch.contexts[core];
++                let decoder_maps = self.state.borrow().decoders.observation_maps(core);
++                let (cached, ordinary) = {
++                    let records = watch.records.borrow();
++                    let capture = records.fetch_attribution.as_ref().ok_or("Fetch attribution configuration absent")?;
++                    (mapped_spans(context.maps.iter().chain(&decoder_maps), &capture.specification.ranges),
++                        mapped_spans(context.maps.iter().chain(&decoder_maps), &records.classes))
++                };
++                let data = (context as *const MemoryContext).cast_mut().cast();
++                for (mut begin, end) in cached {
++                    let mut install = |start, stop| -> Result<(), String> {
++                        let id = unsafe { cpu.install_hook(Hook::Instruction { callback: fetch, data,
++                            range: HookRange::Inclusive { begin: start, end: stop - 1 } }) }?;
++                        watch.hooks.push((core,id));
++                        Ok(())
++                    };
++                    for &(low,high) in &ordinary {
++                        if high <= begin { continue; }
++                        if low >= end { break; }
++                        if begin < low { install(begin,low.min(end))?; }
++                        begin = begin.max(high).min(end);
++                        if begin == end { break; }
++                    }
++                    if begin < end { install(begin,end)?; }
++                }
++            }
++            Ok(())
++        })();
++        if let Err(error) = result { self.memory_watch_end(&mut watch)?; return Err(error); }
++        Ok(watch)
++    }
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum InstructionCores { Core0, Core1, Both }
++impl InstructionCores {
++    fn admits(self, core: CoreIndex) -> bool {
++        matches!((self, core.0), (Self::Core0 | Self::Both, 0) | (Self::Core1 | Self::Both, 1))
++    }
++}
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub enum InstructionExecutionState {
++    #[default]
++    A32Little,
++    UnmaskedSvcA32Little,
++}
++impl InstructionExecutionState {
++    fn admits(self, pstate: u32) -> bool {
++        const A32_LITTLE_MASK: u32 = (1 << 24) | (1 << 9) | (1 << 5);
++        const UNMASKED_SVC_MASK: u32 = (1 << 24) | (1 << 9) | (1 << 7) | (1 << 5) | 0x1f;
++        match self {
++            Self::A32Little => pstate & A32_LITTLE_MASK == 0,
++            Self::UnmaskedSvcA32Little => pstate & UNMASKED_SVC_MASK == 0x13,
++        }
++    }
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct PhysicalInstructionGuard {
++    physical: WatchRange,
++    canonical: GuestAddress,
++    cores: InstructionCores,
++    execution_state: InstructionExecutionState,
++}
++impl PhysicalInstructionGuard {
++    pub fn arm32_little(physical: WatchRange, canonical: GuestAddress, cores: InstructionCores) -> Result<Self, String> {
++        if physical.kinds != WatchKinds::CPU_FETCH || physical.start >= physical.end || physical.end > 1 << 32
++            || physical.start & 3 != 0 || physical.end & 3 != 0 || canonical.0 & 3 != 0
++            || canonical.0.checked_add(physical.end - physical.start).is_none_or(|end| end > 1 << 32)
++        {
++            return Err("Instruction guards require aligned ARM32 physical and canonical intervals".into());
++        }
++        Ok(Self { physical, canonical, cores, execution_state: InstructionExecutionState::A32Little })
++    }
++    pub fn with_execution_state(mut self, state: InstructionExecutionState) -> Self {
++        self.execution_state = state;
++        self
++    }
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct FetchEvent {
++    pub entry: InstructionEntry,
++    pub core: CoreIndex,
++    pub address: GuestAddress,
++    pub physical: PhysicalAddress,
++    pub size: AccessBytes,
++    pub byte_order: ByteOrder,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum InstructionGuardFailure {
++    ViewChanged,
++    ObservationFailed,
++    MissingEntry,
++    EntryMismatch,
++    UnresolvedBacking,
++    BackingChanged,
++    Tcm,
++    InvalidWidth,
++    Straddling,
++    Alias,
++    CoreNotAdmitted,
++    ByteOrder,
++    ExecutionState,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct InstructionGuardRefusal {
++    pub kind: InstructionGuardFailure,
++    pub core: Option<CoreIndex>,
++    pub entry: Option<InstructionEntry>,
++}
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub struct InstructionGuardStatus {
++    pub hook_entries: u64,
++    pub protected_entries: u64,
++    pub accepted_entries: u64,
++    pub refused_entries: u64,
++    pub first_failure: Option<InstructionGuardRefusal>,
++}
++impl FetchCapture {
++    pub(super) fn guarded(&self) -> bool { !self.specification.guards.is_empty() }
++    pub(super) fn observation_failed(&mut self) {
++        if self.guarded() {
++            self.guard_status.first_failure.get_or_insert(InstructionGuardRefusal {
++                kind: InstructionGuardFailure::ObservationFailed, core: None, entry: None,
++            });
++            self.latest = [None; 2];
++            self.pause.set(true);
++            if let Some(gate) = &self.refusal { gate.refuse(); }
++        }
++    }
++    pub(super) fn view_changed(&mut self) {
++        if self.guarded() {
++            self.guard_status.first_failure.get_or_insert(InstructionGuardRefusal {
++                kind: InstructionGuardFailure::ViewChanged, core: None, entry: None,
++            });
++            self.latest = [None; 2];
++            self.pause.set(true);
++            if let Some(gate) = &self.refusal { gate.refuse(); }
++        }
++    }
++    fn refuse(&mut self, kind: InstructionGuardFailure, core: CoreIndex, entry: Option<InstructionEntry>) {
++        self.guard_status.refused_entries = self.guard_status.refused_entries.saturating_add(1);
++        self.guard_status.first_failure.get_or_insert(InstructionGuardRefusal { kind, core: Some(core), entry });
++        self.latest[core.0] = None;
++        self.pause.set(true);
++        if let Some(gate) = &self.refusal { gate.refuse(); }
++    }
++    fn validate_guard(&mut self, core: CoreIndex, entry: InstructionEntry, physical: Option<u64>, address: u64, size: u64)
++        -> Result<Option<PhysicalAddress>, InstructionGuardFailure>
++    {
++        self.guard_status.hook_entries = self.guard_status.hook_entries.saturating_add(1);
++        if entry.address != address || u64::from(entry.bytes) != size {
++            return Err(InstructionGuardFailure::EntryMismatch);
++        }
++        if entry.tcm.iter().flatten().any(|tcm| address < tcm.address + tcm.bytes as u64 && tcm.address < address.saturating_add(size)) {
++            return Err(InstructionGuardFailure::Tcm);
++        }
++        let physical = physical.ok_or(InstructionGuardFailure::UnresolvedBacking)?;
++        let actual = entry.physical.ok_or(InstructionGuardFailure::UnresolvedBacking)?;
++        if actual != physical { return Err(InstructionGuardFailure::BackingChanged); }
++        let Some(guard) = self.specification.guards.iter().find(|guard| {
++            physical < guard.physical.end && guard.physical.start < physical.saturating_add(size)
++        }) else { return Ok(None); };
++        self.guard_status.protected_entries = self.guard_status.protected_entries.saturating_add(1);
++        if physical < guard.physical.start || physical.checked_add(size).is_none_or(|end| end > guard.physical.end) {
++            return Err(InstructionGuardFailure::Straddling);
++        }
++        if size != 4 || address & 3 != 0 || physical & 3 != 0 || entry.pstate & (1 << 5) != 0 {
++            return Err(InstructionGuardFailure::InvalidWidth);
++        }
++        if entry.pstate & (1 << 9) != 0 { return Err(InstructionGuardFailure::ByteOrder); }
++        if !guard.execution_state.admits(entry.pstate) {
++            return Err(InstructionGuardFailure::ExecutionState);
++        }
++        if !guard.cores.admits(core) { return Err(InstructionGuardFailure::CoreNotAdmitted); }
++        if address != guard.canonical.0 + physical - guard.physical.start {
++            return Err(InstructionGuardFailure::Alias);
++        }
++        Ok(Some(PhysicalAddress(physical)))
++    }
++}
++impl MemoryWatch {
++    pub(super) fn disarm_instruction_guard(&mut self, board: &Board) -> Result<(), String> {
++        let Some(gate) = &self.refusal else { return Ok(()); };
++        for (core, cpu) in board.cpus.iter().enumerate() {
++            if let Err(error) = cpu.disarm_execution_refusal(gate) {
++                gate.refuse();
++                for previous in &board.cpus[..core] {
++                    previous.arm_execution_refusal(gate.clone())?;
++                }
++                return Err(error);
++            }
++        }
++        self.refusal = None;
++        Ok(())
++    }
++    /// A later entry cannot satisfy this lookup.
++    pub fn fetch_event(&self, core: CoreIndex, entry: InstructionEntryId) -> Option<FetchEvent> {
++        let records = self.records.borrow();
++        let capture = records.fetch_attribution.as_ref()?;
++        if capture.guard_status.first_failure.is_some() { return None; }
++        let fetch = capture.latest.get(core.0).copied().flatten()?;
++        let observed = fetch.attribution.entry?;
++        (observed.id == entry).then_some(FetchEvent {
++            entry: observed, core, address: fetch.address, physical: fetch.physical,
++            size: fetch.size, byte_order: fetch.byte_order,
++        })
++    }
++    pub fn instruction_guard_status(&self) -> Option<InstructionGuardStatus> {
++        let records = self.records.borrow();
++        let capture = records.fetch_attribution.as_ref()?;
++        capture.guarded().then_some(capture.guard_status)
++    }
++}
++impl MemoryContext {
++    pub(super) fn guarded_fetch(&self, address: u64, size: u64) -> bool {
++        let guarded = self.records.borrow().fetch_attribution.as_ref().is_some_and(FetchCapture::guarded);
++        if !guarded { return false; }
++        let (Some(state), Some(cpu)) = (self.state.upgrade(), self.cpu.upgrade()) else { return true; };
++        let state = state.borrow();
++        let physical = self.physical(&state, address, size);
++        let entry = cpu.instruction_entry();
++        let mut records = self.records.borrow_mut();
++        let observation_failed = records.violation.is_some();
++        let capture = records.fetch_attribution.as_mut().unwrap();
++        let result = if capture.guard_status.first_failure.is_some() || observation_failed {
++            Err(InstructionGuardFailure::ObservationFailed)
++        } else {
++            entry.ok_or(InstructionGuardFailure::MissingEntry)
++                .and_then(|entry| capture.validate_guard(CoreIndex(self.core), entry, physical, address, size))
++        };
++        let protected = matches!(result, Ok(Some(_)));
++        let failure = match result {
++            Err(failure) => Some(failure),
++            Ok(_) => {
++                if let (Some(physical), Some(entry)) = (physical, entry) {
++                    if capture.wants(PhysicalAddress(physical), AccessBytes(size)) {
++                        match CpuAttribution::capture(&state, &*cpu, CoreIndex(self.core), true) {
++                            Ok(attribution) => {
++                                capture.latest[self.core] = Some(CapturedFetch {
++                                    address: GuestAddress(address), physical: PhysicalAddress(physical), size: AccessBytes(size),
++                                    byte_order: if entry.pstate & (1 << 9) == 0 { ByteOrder::Little } else { ByteOrder::Big },
++                                    attribution,
++                                });
++                                None
++                            }
++                            Err(_) => Some(InstructionGuardFailure::MissingEntry),
++                        }
++                    } else { None }
++                } else { Some(InstructionGuardFailure::UnresolvedBacking) }
++            }
++        };
++        if failure.is_none() && protected {
++            capture.guard_status.accepted_entries = capture.guard_status.accepted_entries.saturating_add(1);
++        }
++        if let Some(failure) = failure {
++            capture.refuse(failure, CoreIndex(self.core), entry);
++            records.violation.get_or_insert_with(|| "Physical instruction guard refused execution".into());
++            drop(records);
++            if cpu.stop_before_instruction().is_err() { let _ = cpu.stop(); }
++        }
++        true
++    }
++}
