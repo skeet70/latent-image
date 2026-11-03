@@ -11,23 +11,34 @@ jq="${JQ:-jq}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-"$jq" -r .id "$ledger" > "$work/ids"
-if [[ "$(wc -l < "$work/ids")" -ne "$(wc -l < "$ledger")" ]]; then
-  printf 'ledger-apply: %s must hold exactly one record per line\n' "$ledger" >&2
+refuse() {
+  printf 'ledger-apply: %s\n' "$@" >&2
   exit 1
-fi
+}
+
+[[ -s "$ledger" && "$(tail -c 1 "$ledger" | od -An -c | tr -d ' ')" == '\n' ]] || refuse "$ledger must end with a newline"
+awk 'NF == 0 { exit 1 }' "$ledger" || refuse "$ledger has a blank line"
+"$jq" -r .id "$ledger" > "$work/ids"
+[[ "$(wc -l < "$work/ids")" -eq "$(wc -l < "$ledger")" ]] || refuse "$ledger must hold exactly one record per line"
+"$jq" -s -e 'length == 1 and (.[0] | type) == "object"' "$transform" > /dev/null || refuse "$transform must hold one JSON object"
 
 "$jq" -r --rawfile ids "$work/ids" '
+  def bad_id: type != "string" or test("[\t\n]") or length == 0;
   ($ids | split("\n") | map(select(. != ""))) as $have
   | ($have | map({key: ., value: true}) | from_entries) as $known
-  | ([.remove[]?] + [.replace[]?.id] + [.add[]?.id]) as $named
   | [ ((keys - ["add", "remove", "replace"])[] | "unknown transform key: " + .),
+      (("add", "remove", "replace") as $k | select(has($k) and (.[$k] | type) != "array") | $k + " must be an array"),
       ($have | group_by(.) | map(select(length > 1))[] | "duplicate id in ledger: " + .[0]),
-      ($named | group_by(.) | map(select(length > 1))[] | "id named more than once in transform: " + .[0]),
-      ($named[] | select(type != "string") | "record without a string id"),
-      ((.remove[]?, .replace[]?.id) | strings | select($known[.] | not) | "no such id: " + .),
-      (.add[]?.id | strings | select($known[.]) | "id already exists: " + .) ]
-  | .[]' "$transform" > "$work/errors"
+      ($have[] | select(test("\t")) | "bad id in ledger: " + tojson)
+    ] as $structural
+  | if $structural != [] then $structural[] else
+      ([.remove[]?] + [.replace[]? | .id?] + [.add[]? | .id?]) as $named
+      | ( ((.replace[]?, .add[]?) | select(type != "object") | "replace and add entries must be records"),
+          ($named[] | select(bad_id) | "bad id: " + tojson),
+          ($named | map(select(bad_id | not)) | group_by(.) | map(select(length > 1))[] | "id named more than once in transform: " + .[0]),
+          ((.remove[]?, (.replace[]? | .id?)) | select(bad_id | not) | select($known[.] | not) | "no such id: " + .),
+          (.add[]? | .id? | select(bad_id | not) | select($known[.]) | "id already exists: " + .) )
+    end' "$transform" > "$work/errors"
 if [[ -s "$work/errors" ]]; then
   sed 's/^/ledger-apply: /' "$work/errors" >&2
   exit 1
@@ -35,7 +46,7 @@ fi
 
 "$jq" -r '(.remove[]? | "R\t" + .), (.replace[]? | "P\t" + .id + "\t" + tojson)' "$transform" > "$work/ops"
 paste "$work/ids" "$ledger" | awk -F'\t' '
-  NR == FNR { if ($1 == "R") gone[$2] = 1; else swap[$2] = substr($0, length($2) + 4); next }
+  FILENAME == ARGV[1] { if ($1 == "R") gone[$2] = 1; else swap[$2] = substr($0, length($2) + 4); next }
   { id = $1; line = substr($0, length(id) + 2) }
   id in gone { next }
   id in swap { print swap[id]; next }

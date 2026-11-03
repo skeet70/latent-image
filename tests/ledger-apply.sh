@@ -5,46 +5,63 @@ export JQ="$PWD/$1"
 apply="$PWD/$2"
 cd "$TEST_TMPDIR"
 
-fresh_ledger() {
-  printf '%s\n' \
-    '{"id":"E-A","claim":"caf\u00e9 kept as written"}' \
-    '{"id":"E-B","claim":"old"}' \
-    '{"id":"E-C","claim":"gone"}' > ledger.jsonl
+printf '%s\n' \
+  '{"id":"x-a","claim":"caf\u00e9 kept as written"}' \
+  '{"id":"x-b","claim":"old"}' \
+  '{"id":"x-c","claim":"gone"}' > original.jsonl
+
+accepted() {
+  cp original.jsonl ledger.jsonl
+  printf '%s' "$1" > transform.json
+  "$apply" ledger.jsonl transform.json
+  cmp ledger.jsonl expected.jsonl
 }
 
-fresh_ledger
-printf '%s' '{"remove":["E-C"],"replace":[{"id":"E-B","claim":"new"}],"add":[{"id":"E-D","claim":"added"}]}' > transform.json
-"$apply" ledger.jsonl transform.json
 printf '%s\n' \
-  '{"id":"E-A","claim":"caf\u00e9 kept as written"}' \
-  '{"id":"E-B","claim":"new"}' \
-  '{"id":"E-D","claim":"added"}' > expected.jsonl
-cmp ledger.jsonl expected.jsonl
+  '{"id":"x-a","claim":"caf\u00e9 kept as written"}' \
+  '{"id":"x-b","claim":"new"}' \
+  '{"id":"x-d","claim":"added"}' > expected.jsonl
+accepted '{"remove":["x-c"],"replace":[{"id":"x-b","claim":"new"}],"add":[{"id":"x-d","claim":"added"}]}'
+
+{ cat original.jsonl; printf '%s\n' '{"id":"x-d"}'; } > expected.jsonl
+accepted '{"add":[{"id":"x-d"}]}'
+
+cp original.jsonl expected.jsonl
+accepted '{}'
 
 for refused in \
-  '{"remove":["E-X"]}' \
-  '{"replace":[{"id":"E-X","claim":"x"}]}' \
-  '{"add":[{"id":"E-A","claim":"x"}]}' \
-  '{"remove":["E-B"],"replace":[{"id":"E-B","claim":"x"}]}' \
-  '{"remove":["E-B","E-B"]}' \
+  '{"remove":["x-z"]}' \
+  '{"replace":[{"id":"x-z","claim":"z"}]}' \
+  '{"add":[{"id":"x-a","claim":"z"}]}' \
+  '{"remove":["x-b"],"replace":[{"id":"x-b","claim":"z"}]}' \
+  '{"remove":["x-b","x-b"]}' \
   '{"add":[{"claim":"no id"}]}' \
-  '{"delete":["E-B"]}'; do
-  fresh_ledger
+  '{"add":["x-d"]}' \
+  '{"remove":"x-b"}' \
+  '{"remove":{"k":"x-b"}}' \
+  '{"delete":["x-b"]}' \
+  '{"add":[{"id":"x-d"}]} {"add":[{"id":"x-d"}]}' \
+  '[]'; do
+  cp original.jsonl ledger.jsonl
   printf '%s' "$refused" > transform.json
   if "$apply" ledger.jsonl transform.json 2> /dev/null; then
     echo "Transform incorrectly accepted: $refused" >&2
     exit 1
   fi
-  printf '%s\n' \
-    '{"id":"E-A","claim":"caf\u00e9 kept as written"}' \
-    '{"id":"E-B","claim":"old"}' \
-    '{"id":"E-C","claim":"gone"}' > unchanged.jsonl
-  cmp ledger.jsonl unchanged.jsonl
+  cmp ledger.jsonl original.jsonl
 done
 
-printf '%s\n' '{"id":"E-A"}' '{"id":"E-A"}' > ledger.jsonl
-printf '%s' '{"remove":[]}' > transform.json
-if "$apply" ledger.jsonl transform.json 2> /dev/null; then
-  echo 'Ledger with a duplicate id incorrectly accepted' >&2
-  exit 1
-fi
+printf '%s' '{}' > transform.json
+for bad_ledger in \
+  '{"id":"x-a"}\n{"id":"x-a"}\n' \
+  '{"id":"x-a"}\n\n{"id":"x-b"}\n' \
+  '{"id":"x-a"}{"id":"x-b"}\n' \
+  '{"id":"x-a"}'; do
+  printf "$bad_ledger" > ledger.jsonl
+  cp ledger.jsonl before.jsonl
+  if "$apply" ledger.jsonl transform.json 2> /dev/null; then
+    echo "Ledger incorrectly accepted: $bad_ledger" >&2
+    exit 1
+  fi
+  cmp ledger.jsonl before.jsonl
+done
