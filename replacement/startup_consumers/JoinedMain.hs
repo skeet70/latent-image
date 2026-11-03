@@ -52,7 +52,7 @@ main :: IO ()
 main = do
   arguments <- getArgs
   case arguments of
-    encoder:rebuild:decoder:modeText:stagePath:runPath:romPath:observerPath:analysis:scratchPath:outputPath:observations -> do
+    encoder:rebuild:decoder:modeText:stagePath:runPath:romPath:observerPath:checkerPath:analysis:scratchPath:outputPath:observations -> do
       mode <- case (modeText,observations) of
         ("qualify",[directory]) -> pure (Qualify (ObservationDirectory directory))
         ("compare",[retained,joined]) -> pure (Pair CompareEffects (ObservationDirectory retained) (ObservationDirectory joined))
@@ -60,7 +60,7 @@ main = do
         _ -> H.failH usage
       let output = OutputDirectory outputPath
       createDirectory outputPath
-      result <- try (execute (Image4.Tools encoder rebuild decoder) (StageDirectory stagePath) runPath romPath observerPath analysis scratchPath output mode)
+      result <- try (execute (Image4.Tools encoder rebuild decoder) (StageDirectory stagePath) runPath romPath observerPath checkerPath analysis scratchPath output mode)
       case result of
         Right value -> writeJson (outputPath </> "qualification.json") value
         Left exception -> do
@@ -68,8 +68,8 @@ main = do
           H.failH (displayException exception)
     _ -> H.failH usage
 
-execute :: Image4.Tools -> StageDirectory -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> OutputDirectory -> Mode -> IO J.Value
-execute tools (StageDirectory stage) runPath romPath observerPath analysis scratchPath (OutputDirectory output) mode = do
+execute :: Image4.Tools -> StageDirectory -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> OutputDirectory -> Mode -> IO J.Value
+execute tools (StageDirectory stage) runPath romPath observerPath checkerPath analysis scratchPath (OutputDirectory output) mode = do
   let staged name = H.readRegular 0x4000000 (stage </> name)
       native image symbols = C.NativeFiles <$> staged image <*> staged symbols
   sources <- Source.SourceFiles <$> staged "canonical.dat" <*> staged "canonical-image4.bin" <*> staged "canonical-loader-a.bin" <*> staged "canonical-loader-b.bin"
@@ -82,7 +82,7 @@ execute tools (StageDirectory stage) runPath romPath observerPath analysis scrat
   scratch <- Image4.validateScratchDirectory scratchPath
   candidate <- LS.stageCandidate tools scratch source artifact
   inputs <- admitted (Witness.admitInputs sources natives producer candidate)
-  let host = Host.HostEnvironment observerPath analysis (output </> "host")
+  let host = Host.HostEnvironment checkerPath observerPath analysis (output </> "host")
   case mode of
     Qualify directory@(ObservationDirectory path) -> do
       files <- readObserved directory
@@ -110,4 +110,4 @@ execute tools (StageDirectory stage) runPath romPath observerPath analysis scrat
         ,"route_dispatcher" J..= Host.hostSummary admission,"controls" J..= checks])
 
 usage :: String
-usage = "usage: startup-joined-check ENCODER REBUILD DECODER qualify|compare|refusal-controls STAGED_DIR RUN_JSON BOOT_ROM OBSERVER ANALYSIS_ROOT SCRATCH_DIR NEW_OUTPUT_DIR [CAPTURE_DIR|RETAINED_DIR JOINED_DIR]"
+usage = "usage: startup-joined-check ENCODER REBUILD DECODER qualify|compare|refusal-controls STAGED_DIR RUN_JSON BOOT_ROM OBSERVER HOST_CHECKER ANALYSIS_ROOT SCRATCH_DIR NEW_OUTPUT_DIR [CAPTURE_DIR|RETAINED_DIR JOINED_DIR]"

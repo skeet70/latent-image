@@ -22,8 +22,8 @@ import System.Directory (createDirectory, getPermissions, setOwnerExecutable, se
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>))
 
--- The output root must not exist when admission starts.
-data HostEnvironment = HostEnvironment FilePath FilePath FilePath
+-- Fields: host checker executable, capture producer executable, analysis root, output root. The output root must not exist when admission starts.
+data HostEnvironment = HostEnvironment FilePath FilePath FilePath FilePath
 data HostRequest = Qualify FilePath | Compare FilePath FilePath | RefusalControls FilePath FilePath
 
 data HostError = PolicyUnavailable Wire.CaptureRole deriving (Show)
@@ -139,7 +139,7 @@ readCapture :: K.Digest -> FilePath -> IO CaptureInput
 readCapture observer root = do
   bytes <- H.readRegular 0x40000000 (root </> "startup-joined.json")
   capture <- readJson bytes
-  H.ensure (Wire.identityExecutable (Wire.captureIdentity capture)==observer) "executed host observer differs from capture executable"
+  H.ensure (Wire.identityExecutable (Wire.captureIdentity capture)==observer) "capture producer differs from the admitted observer"
   _ <- readNamedBound root "trace.json" (Wire.captureTrace capture)
   _ <- readNamedBound root "timer-transactions.json" (Wire.captureTimers capture)
   _ <- readNamedBound root "input-update.DAT" (Wire.identityUpdateFile (Wire.captureIdentity capture))
@@ -220,44 +220,46 @@ checkControls observer root retained joined = do
   summary <- readJson bytes
   pure (HostAdmission policies summary)
 
-runHost :: FilePath -> FilePath -> [String] -> IO ()
-runHost observer root arguments = do
-  (limited,status,out,err) <- H.runBounded 1800000000 (16*1024*1024) observer arguments B.empty
+runHost :: FilePath -> FilePath -> K.Digest -> K.Digest -> [String] -> IO ()
+runHost checker root (K.Digest checkerHex) (K.Digest producerHex) arguments = do
+  (limited,status,out,err) <- H.runBounded 1800000000 (16*1024*1024) checker arguments B.empty
   B.writeFile (root </> "host-stdout.log") out
   B.writeFile (root </> "host-stderr.log") err
   writeJson (root </> "host-invocation.json") (J.object ["arguments" J..= arguments,"limited" J..= limited
-    ,"exit" J..= case status of ExitSuccess -> (0::Int); ExitFailure code -> code])
+    ,"exit" J..= (case status of ExitSuccess -> (0::Int); ExitFailure code -> code)
+    ,"checker_sha256" J..= checkerHex,"producer_sha256" J..= producerHex])
   H.ensure (not limited && status==ExitSuccess) ("route/dispatcher host refusal: "++C8.unpack (B.take 2048 (out<>err)))
 
 runHostAdmission :: HostEnvironment -> HostRequest -> IO HostAdmission
-runHostAdmission (HostEnvironment observer analysis output) request = do
+runHostAdmission (HostEnvironment checker producer analysis output) request = do
   createDirectory output
-  executable <- H.readRegular 0x10000000 observer
-  let observerDigest = hash executable
-      frozenObserver = output </> "host-observer"
+  producerDigest <- hash <$> H.readRegular 0x10000000 producer
+  executable <- H.readRegular 0x10000000 checker
+  let checkerDigest = hash executable
+      frozenChecker = output </> "host-checker"
       hostOutput = output </> "route-dispatcher"
       paths = case request of Qualify capture -> [capture]; Compare retained joined -> [retained,joined]; RefusalControls retained joined -> [retained,joined]
-  inputs <- forM paths (readCapture observerDigest)
+  inputs <- forM paths (readCapture producerDigest)
   case inputs of
     [retained,joined] -> H.ensure (Wire.captureRole (captureEnvelope retained)==Wire.RetainedCapture
       && Wire.captureRole (captureEnvelope joined)==Wire.JoinedCapture) "host comparison capture roles differ"
     _ -> pure ()
-  B.writeFile frozenObserver executable
-  permissions <- getPermissions frozenObserver
-  setPermissions frozenObserver (setOwnerExecutable True permissions)
+  B.writeFile frozenChecker executable
+  permissions <- getPermissions frozenChecker
+  setPermissions frozenChecker (setOwnerExecutable True permissions)
   let arguments = (case request of
         Qualify capture -> ["--shared-check",capture]
         Compare retained joined -> ["--shared-compare-retained",retained,"--shared-compare-joined",joined]
         RefusalControls retained joined -> ["--shared-refusal-controls",retained,"--shared-refusal-joined",joined])
         ++["--analysis",analysis,"--output",hostOutput]
-  runHost frozenObserver output arguments
-  executed <- H.readRegular 0x10000000 frozenObserver
-  H.ensure (hash executed==observerDigest) "executed host observer changed during admission"
+  runHost frozenChecker output checkerDigest producerDigest arguments
+  executed <- H.readRegular 0x10000000 frozenChecker
+  H.ensure (hash executed==checkerDigest) "executed host checker changed during admission"
   forM_ inputs checkCaptureUnchanged
   case (request,inputs) of
-    (Qualify _,[input]) -> checkSingle observerDigest hostOutput input
+    (Qualify _,[input]) -> checkSingle producerDigest hostOutput input
     (Compare _ _,[retained,joined]) -> do
       bytes <- H.readRegular 0x100000 (hostOutput </> "shared-comparison.json")
-      checkComparison observerDigest hostOutput bytes retained joined
-    (RefusalControls _ _,[retained,joined]) -> checkControls observerDigest hostOutput retained joined
+      checkComparison producerDigest hostOutput bytes retained joined
+    (RefusalControls _ _,[retained,joined]) -> checkControls producerDigest hostOutput retained joined
     _ -> H.failH "host capture request differs"
