@@ -7,7 +7,7 @@ import Emulation.Ff80Rehearsal (runFujiModRehearsal)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
-import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, experimentPayload, parseSymbolRead, runMenuCrawlE2E, runRamPushE2E, warmAttachCheckpoint)
+import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, experimentPayload, parseSymbolRead, runMenuCrawlE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint)
 import Data.List (isPrefixOf, nub)
 import Data.Char (isAscii, isAlphaNum)
 import qualified Data.Text as T
@@ -67,10 +67,11 @@ data Options = Options
   , modalDiagnosticOption :: ModalDiagnostic
   , modalLifetimeGuardOption :: ModalLifetimeGuard
   , runDocumentOption :: Maybe FujiModRunFile
-  , menuCrawlOption :: Maybe CrawlConfigFile
+  , screenProbeOption :: Maybe ScreenProbe
   }
 
-newtype CrawlConfigFile = CrawlConfigFile FilePath deriving (Eq)
+-- | A no-install observation that drives its own keys from held snapshots, with its config path.
+data ScreenProbe = MenuCrawlProbe FilePath | RamDiffProbe FilePath deriving (Eq)
 
 data Command = Help | Validate Firmware | Launch Options
 
@@ -110,6 +111,8 @@ usage = unlines
   , "  --modal-observation    Opt-in stock FILMSIM canonical permit and physical writer audit"
   , "                         Requires --ram-push-e2e --cardless --fujimod --flash-candidate"
   , "  --menu-crawl PATH      Crawl the stock screens from held snapshots with a crawl config"
+  , "                         Requires --ram-push-e2e --cardless --fujimod --flash-candidate"
+  , "  --ram-diff PATH        Find the guest words one key toggles on one screen, with a RAM diff config"
   , "                         Requires --ram-push-e2e --cardless --fujimod --flash-candidate"
   , "  --modal-lifetime-guard Opt-in continuous publication-to-unload guard for the default 223 bank"
   , "                         Requires --ram-push-e2e --cardless --fujimod --unreviewed-relink,"
@@ -204,8 +207,11 @@ parseCommand args
       require (modalDiagnosticOption options == NoModalDiagnostic) "--modal-observation may appear only once"
       go options { modalDiagnosticOption = RetainedFilmModalDiagnostic } rest
     go options ("--menu-crawl" : value : rest) = do
-      require (not (null value) && menuCrawlOption options == Nothing) "--menu-crawl takes one nonempty config path"
-      go options { menuCrawlOption = Just (CrawlConfigFile value) } rest
+      require (not (null value) && screenProbeOption options == Nothing) "--menu-crawl takes one nonempty config path and excludes --ram-diff"
+      go options { screenProbeOption = Just (MenuCrawlProbe value) } rest
+    go options ("--ram-diff" : value : rest) = do
+      require (not (null value) && screenProbeOption options == Nothing) "--ram-diff takes one nonempty config path and excludes --menu-crawl"
+      go options { screenProbeOption = Just (RamDiffProbe value) } rest
     go options ("--modal-lifetime-guard" : rest) = do
       require (modalLifetimeGuardOption options == NoModalLifetimeGuard) "--modal-lifetime-guard may appear only once"
       go options { modalLifetimeGuardOption = ContinuousModalLifetimeGuard } rest
@@ -339,12 +345,12 @@ launch options = do
       "--modal-observation requires --ram-push-e2e --cardless --fujimod --flash-candidate"
     require (not (warmCheckpointOption options)) "--modal-observation runs a physical-key route, not --warm-checkpoint"
     require (trajectoriesOption options /= Nothing) "--modal-observation requires --trajectories emulation/modal75-stock-route-trajectories.json"
-  when (menuCrawlOption options /= Nothing) $ do
+  when (screenProbeOption options /= Nothing) $ do
     require (e2e && cardless && runtimeOption options == FujiModChoice && pushModeOption options == FlashCandidate)
-      "--menu-crawl requires --ram-push-e2e --cardless --fujimod --flash-candidate"
+      "--menu-crawl and --ram-diff require --ram-push-e2e --cardless --fujimod --flash-candidate"
     require (modalDiagnosticOption options == NoModalDiagnostic && not (warmCheckpointOption options)
       && trajectoriesOption options == Nothing && segmentsOption options == Nothing)
-      "--menu-crawl runs its own crawl, not --modal-observation, --warm-checkpoint, --trajectories or --segments"
+      "--menu-crawl and --ram-diff drive their own keys, not --modal-observation, --warm-checkpoint, --trajectories or --segments"
   when (ramPayloadOption options `elem` [BankModal75Choice, BankLifecycleChoice, BankModalLifecycleChoice]) $ do
     require (e2e && (cardless || (ramPayloadOption options == BankLifecycleChoice
       && trajectoriesOption options /= Nothing && media /= Nothing))
@@ -465,10 +471,12 @@ launch options = do
           Nothing -> do
             present <- doesFileExist (resolve root defaultTrajectories)
             pure (if experiment && not present then Nothing else Just (resolve root defaultTrajectories))
-        case (warmCheckpointOption options, menuCrawlOption options) of
+        case (warmCheckpointOption options, screenProbeOption options) of
           (True, _) -> warmAttachCheckpoint settings executable stagedFirmwarePath nandPath (destination </> "warm-attach")
-          (False, Just (CrawlConfigFile path)) ->
+          (False, Just (MenuCrawlProbe path)) ->
             runMenuCrawlE2E settings executable workspacePath (resolve root path) stagedFirmwarePath nandPath receiptPath
+          (False, Just (RamDiffProbe path)) ->
+            runRamDiffE2E settings executable workspacePath (resolve root path) stagedFirmwarePath nandPath receiptPath
           (False, Nothing) -> runRamPushE2E settings executable workspacePath trajectory stagedFirmwarePath nandPath receiptPath
       else do
         let Port port = portOption options
