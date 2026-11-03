@@ -211,7 +211,12 @@ sharedPolicy admitted artifact capture trace = do
       after <- ownedSites afterSnapshot
       require (after == successor) PolicyOwnersRejected
       let observation = SegmentObservation (W.segmentStart segment) (W.segmentEnd segment) stops (M.keys before)
-      pure (laterActions,laterHits,next,successor,(ident,observation):observations)
+      pure $! forceObservation observation `seq` (laterActions,laterHits,next,successor,(ident,observation):observations)
+
+-- Forces every field so the retained policy does not keep its source segment or decoded snapshot alive.
+forceObservation :: SegmentObservation -> ()
+forceObservation (SegmentObservation start end stops external) =
+  foldr seq () start `seq` foldr seq () end `seq` foldr seq () stops `seq` foldr seq () external
 
 matchesContext :: J.TraceHit -> W.Context -> Bool
 matchesContext hit context =

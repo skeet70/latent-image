@@ -134,29 +134,30 @@ controls =
       changed <- removeHeader address root
       pure files {Q.observedCapture=L.toStrict (J.encode changed)}
 
+-- The caller admits and compares both captures first; each role's unmutated capture is admitted again here once under its own issued policy.
 checkRefusals :: Q.Inputs -> Host.HostPolicyBytes -> Host.HostPolicyBytes -> Q.ObservedFiles -> Q.ObservedFiles -> Either String J.Value
 checkRefusals inputs retainedPolicy joinedPolicy retained joined = do
-  before <- either (Left . show) Right (Q.admitCapture inputs retainedPolicy retained)
-  after <- either (Left . show) Right (Q.admitCapture inputs joinedPolicy joined)
-  either (Left . show) Right (Q.compareCaptures before after)
   let crossBinding = Q.SharedPolicyRejected Policy.PolicyBindingRejected
   crossed <- forM [("retained capture with joined policy",joinedPolicy,retained),("joined capture with retained policy",retainedPolicy,joined)] $ \(label,policy,files) ->
     case Q.admitCapture inputs policy files of
       Left actual | actual==crossBinding -> pure (J.object ["control" J..= (label::String),"rejection" J..= show crossBinding])
       Left actual -> Left (label++": expected "++show crossBinding++", got "++show actual)
       Right _ -> Left (label++": admitted")
-  rows <- forM [(retainedPolicy,retained),(joinedPolicy,joined)] $ \(policy,files) -> do
+  checked <- forM [(retainedPolicy,retained),(joinedPolicy,joined)] $ \(policy,files) -> do
+    (observation,check) <- either (Left . show) Right (Q.mutationChecker inputs policy files)
     root <- J.eitherDecodeStrict' (Q.observedCapture files)
-    forM controls $ \(Control name expected mutate) -> do
+    row <- forM controls $ \(Control name expected mutate) -> do
       changed <- mutate root files
-      case Q.checkMutation inputs policy files changed of
+      case check changed of
         Left actual | actual==expected -> pure (J.object ["control" J..= show name,"rejection" J..= show expected])
         Left actual -> Left (show name++": expected "++show expected++", got "++show actual)
         Right () -> Left (show name++": mutation admitted")
+    pure (observation,row)
+  (retainedObservation,joinedObservation,rows) <- case checked of
+    [(left,leftRows),(right,rightRows)] -> Right (left,right,[leftRows,rightRows])
+    _ -> Left "control role census differs"
   retainedCapture <- J.eitherDecodeStrict' (Q.observedCapture retained)
   joinedCapture <- J.eitherDecodeStrict' (Q.observedCapture joined)
-  retainedObservation <- either (Left . show) Right (Q.capturePolicy inputs retainedPolicy retained)
-  joinedObservation <- either (Left . show) Right (Q.capturePolicy inputs joinedPolicy joined)
   consumer <- Consumer.checkLoaderPairRefusals retainedObservation joinedObservation (Q.consumerInputs inputs)
     (S.consumerEvidence (S.captureConsumer retainedCapture)) (S.consumerEvidence (S.captureConsumer joinedCapture))
   pure (J.object ["schema" J..= (1::Int),"qualification" J..= ("exact-shared-startup-refusals"::String)

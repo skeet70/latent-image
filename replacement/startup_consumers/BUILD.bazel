@@ -99,7 +99,8 @@ haskell_binary(
         "$(rootpath //lz:fflzd)",
     ],
     data = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    # Compacting old-generation collection keeps peak residency near the live set of two shared captures and their policies.
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2", "-with-rtsopts=-c"],
     deps = [
         ":startup-consumers-lib",
         "//emulation:case-sha256",

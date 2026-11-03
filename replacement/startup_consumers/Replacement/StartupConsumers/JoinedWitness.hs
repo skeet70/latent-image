@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.StartupConsumers.JoinedWitness
   ( NativeInputs(..), CapturedArtifact(..), CapturedWatch(..), ObservedFiles(..), Inputs, QualifiedCapture
-  , JoinedError(..), admitInputs, consumerInputs, capturePolicy, admitCapture, checkMutation, compareCaptures, qualificationValue
+  , JoinedError(..), admitInputs, consumerInputs, capturePolicy, admitCapture, mutationChecker, compareCaptures, qualificationValue
   ) where
 
 import Control.Monad (foldM, forM_, unless)
@@ -88,13 +88,12 @@ admitCapture inputs admitted files = do
   (role,cohort,projection) <- admitWithPolicy inputs policy files
   pure (QualifiedCapture role cohort (hash (observedCapture files)) (hash (Host.policyBytes admitted)) (Host.policyCheckerDigest admitted) projection)
 
--- Checks mutated files against the policy issued for the unmutated capture; an admitted mutation yields Right ().
-checkMutation :: Inputs -> Host.HostPolicyBytes -> ObservedFiles -> ObservedFiles -> Either JoinedError ()
-checkMutation inputs admitted original mutated = do
+-- Admits the unmutated capture under its issued policy and returns that policy with a checker for mutations of it; an admitted mutation yields Right ().
+mutationChecker :: Inputs -> Host.HostPolicyBytes -> ObservedFiles -> Either JoinedError (Policy.ObservationPolicy,ObservedFiles -> Either JoinedError ())
+mutationChecker inputs admitted original = do
   policy <- capturePolicy inputs admitted original
   _ <- admitWithPolicy inputs policy original
-  _ <- admitWithPolicy inputs policy mutated
-  pure ()
+  pure (policy,\mutated -> () <$ admitWithPolicy inputs policy mutated)
 
 admitWithPolicy :: Inputs -> Policy.ObservationPolicy -> ObservedFiles -> Either JoinedError (S.CaptureRole,Cohort,Witness.Projection)
 admitWithPolicy inputs@(Inputs _ _ producer _ checked) policy files = do
