@@ -435,7 +435,7 @@ On the legacy native runner, all 307 pairs match their literal expectations and 
 
 The composed bank image no longer fits between the native suites' former default base `0x00be1f00` and the package plan's name record `0x00beb784`: linked there it ends at `0x00bebbb4`, and 51 of the 55 UI cases stop as `memory_guard` where the plan overwrites bank data. `emulation/build-recipe-bank-cases.sh`, `emulation/build-recipe-bank-ui-cases.sh` and both generators now default to `0x00be0000`, a native-case placement only, and both scripts refuse a kernel image that ends past `RB_NAME_RECORD`. The default UI command passes 55/55 with its controls rejected.
 
-The default SD kernel/model link succeeds with the full model's `0x144` synthetic data bytes in `0x7f000000..0x7f001000`. Link controls reject both the full model in the `0xe4` media tail and a widened tail; the media-only model still links in that tail with byte-identical data. The complete SD workload remains unqualified: its guarded execution stopped at the thermal limit before producing aggregate results. Its last intermediate case result is `unknown_call` for `rb_assert_one` in `c-select-iso-manual-after-auto`, not a completed suite verdict. Artifacts are under `private-data/analysis/x-m1-1.50/recipes/issue117-model-layout-sol/kernel-cases-default`. FujiMod native-backend qualification remains separate.
+The default SD kernel/model link succeeds with the full model's `0x144` synthetic data bytes in `0x7f000000..0x7f001000`. Link controls reject both the full model in the `0xe4` media tail and a widened tail; the media-only model still links in that tail with byte-identical data. The complete SD workload remains unqualified: its execution stopped before producing aggregate results. Its last intermediate case result is `unknown_call` for `rb_assert_one` in `c-select-iso-manual-after-auto`, not a completed suite verdict. Artifacts are under `private-data/analysis/x-m1-1.50/recipes/issue117-model-layout-sol/kernel-cases-default`. FujiMod native-backend qualification remains separate.
 
 Global retirement stays open. The 3,027 stock call sites still enter the stock bodies; retiring them needs reviewed entry publications at the eleven stock entries, a forbidden-fetch guard on the retired bodies in a packaged menu route, which the packaged FujiMod route does not yet provide, and a device-driven packaged run with that guard.
 
@@ -488,16 +488,16 @@ Run the control with `--trajectories emulation/recipe-bank-route-ram-push-contro
 
 The #118 fixed workload is the behavior-preserving refactor of these two classifiers. Baseline same-invocation samples are 45.29 s total (1.07 s build, 44.22 s case generation and execution) for the unmodified tree, and 42.58 s (0.98 s, 41.59 s) for the C refactor, under warm Nix/Bazel and page caches, two jobs and sibling load.
 
-The guarded repeat used source `290faba`, the exact reviewed C range-helper patch and Rust wrapping-subtraction patch, the fixed `package-20261024b/image` inputs and fresh `RepeatRust`/`RepeatC` output bases and empty disk caches. Rust ran before C. Unrefactored setup was separate and build-only: Rust build log `58.266 s` (`59.900 s` outer), C build log `60.676 s` (`62.644 s` outer), each including the four targets and `//replacement/bank:bank`.
+The repeat used source `290faba`, the exact reviewed C range-helper patch and Rust wrapping-subtraction patch, the fixed `package-20261024b/image` inputs and fresh `RepeatRust`/`RepeatC` output bases and empty disk caches. Rust ran before C. Unrefactored setup was separate and build-only: Rust build log `58.266 s` (`59.900 s` outer), C build log `60.676 s` (`62.644 s` outer), each including the four targets and `//replacement/bank:bank`.
 
-| Guarded same-invocation sample | C | Rust |
+| Repeat same-invocation sample | C | Rust |
 | --- | ---: | ---: |
 | Incremental build, `--batch` | 12.669 s | 12.778 s |
 | UI workload, all 55 + 5 controls | 95.413 s | 97.417 s |
 | Plan gate, `--batch` | 14.135 s | 12.824 s |
 | Total | 122.224 s | 123.024 s |
 
-Both variants passed 55/55 with five rejected controls and the plan gate. Setup, timed build and plan gate all used Bazel `--batch` inside `thermal-guard-slot-1.service`; no persistent server existed between them. The timed payload recorded the slot cgroup and affinity `0,1`. C peaked at 3,251,122,176 bytes with Tctl 53.5 to 63.6 C; Rust peaked at 4,148,891,648 bytes with Tctl 52.2 to 62.2 C; both had zero swap. The C compiler log has 12 clang invocations including the `menu/recipe_bank_*.c` action units. The Rust execution log records the actual `rustc --crate-name=bank` action with `cacheHit: false`, exit 0 and 0.094 s; the C bank target was cached. No separate Nix bank derivation was found, so no forced Nix bank rebuild was used. Status, registers, ABI validity, effects, mismatches and controls are identical; full projections differ only in `kdata` ABI workspace offsets and provenance totals/retained counts (C 12,571,972/207,059, Rust 12,577,308/207,119). The earlier `98.552 s` C and `97.956 s` Rust samples remain limited measurements, not a matched speedup; the repeat totals are close and no speedup is claimed. Historical two-job samples remain confounded.
+Both variants passed 55/55 with five rejected controls and the plan gate. Setup, timed build and plan gate all used Bazel `--batch` inside emulator slot 1; no persistent server existed between them. The timed payload recorded the slot cgroup. C peaked at 3,251,122,176 bytes and Rust at 4,148,891,648 bytes; both had zero swap. The C compiler log has 12 clang invocations including the `menu/recipe_bank_*.c` action units. The Rust execution log records the actual `rustc --crate-name=bank` action with `cacheHit: false`, exit 0 and 0.094 s; the C bank target was cached. No separate Nix bank derivation was found, so no forced Nix bank rebuild was used. Status, registers, ABI validity, effects, mismatches and controls are identical; full projections differ only in `kdata` ABI workspace offsets and provenance totals/retained counts (C 12,571,972/207,059, Rust 12,577,308/207,119). The earlier `98.552 s` C and `97.956 s` Rust samples remain limited measurements, not a matched speedup; the repeat totals are close and no speedup is claimed. Historical two-job samples remain confounded.
 
 ## Reproduce
 
@@ -512,8 +512,6 @@ Run the 55-case UI workload into fresh directories through the existing emulator
 ```sh
 XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=8G \
   bazel-bin/emulation/emulator-slot \
-  taskset -c 0,1 \
-  nix shell nixpkgs#cpulimit -c cpulimit --include-children --limit=75 -- \
   env RB_RUST_ARCHIVE="$PWD/bazel-bin/replacement/bank/bank.a" BUILD_DIR="$PWD/private-data/analysis/x-m1-1.50/recipes/issue117-ui-proof/ui-build" OUT_DIR="$PWD/private-data/analysis/x-m1-1.50/recipes/issue117-ui-proof/ui-cases" JOBS=1 \
   devenv shell -- bash emulation/build-recipe-bank-ui-cases.sh
 ```

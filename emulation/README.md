@@ -63,7 +63,7 @@ env XM1_EMULATOR_SLOTS=1 "$PEER_STAGE_WITNESS" \
 
 The natural-baseline child command is exactly `DRIVER --run RUN_JSON --update DAT --boot-rom ROM --output DIR --peer-witness DIR/peer-witness-contract.json`. It does not use an implicit SDK resolver, candidate image or symbol file. Host-consumer verification belongs to `//emulation:peer-stage-witness-tests`.
 
-`--launch` acquires `Emulation.EmulatorSlot` internally before preparation or guest execution; do not double-wrap it. `FujiAF.Host.runBounded` limits both decoder and driver to 120 seconds per child and 1 MiB per stdout/stderr stream, with process-group cleanup and preserved process logs. The fresh combined-SDK baseline reaches 5,845,535 aggregate entered instructions with 5,063 watch rows and no violation, stopping before executing loader-B entry. Its launcher verifies 4 GiB memory, zero swap, 25% CPU quota and point-in-time affinity of all 13 service-member tasks to CPUs 4,5, then admits its sole start sample at 56.625°C. This is process/thread affinity, not hard cgroup cpuset containment. The older observer baseline's 55.125°C sample and SDK identity remain historical evidence, not the new run's admission.
+`--launch` acquires `Emulation.EmulatorSlot` internally before preparation or guest execution; do not double-wrap it. `FujiAF.Host.runBounded` limits both decoder and driver to 120 seconds per child and 1 MiB per stdout/stderr stream, with process-group cleanup and preserved process logs. The fresh combined-SDK baseline reaches 5,845,535 aggregate entered instructions with 5,063 watch rows and no violation, stopping before executing loader-B entry. Its launcher verifies 4 GiB memory and zero swap.
 
 ### Source-bound guest-side wait controls
 
@@ -102,7 +102,7 @@ All six host suites pass: first-stage/peer-stage/peer-wait receipt consumers, fi
 
 ### Peer-witness qualification
 
-SDK374 on public model `3d90035d` passes natural, held-sentinel and delayed-release production receipt consumption. It retains the older CLI `246cf6b`/c546975-era host/guard cohort, not post-PR122 affinity propagation. The [current startup qualification](../reports/replacement-inventory-baseline.md#current-secondary-startup-qualification) records each proof and links exact ledger artifacts.
+SDK374 on public model `3d90035d` passes natural, held-sentinel and delayed-release production receipt consumption. It retains the older CLI `246cf6b`/c546975-era host cohort. The [current startup qualification](../reports/replacement-inventory-baseline.md#current-secondary-startup-qualification) records each proof and links exact ledger artifacts.
 
 Natural execution qualifies the four core-1 pre-execution boundaries and separate write-attempt/readback attribution. Held sentinel qualifies its own core-0 gate and four completed sentinel loads without handoff; the fourth CMP/branch and final private-stack resample remain unobserved. Delayed release independently qualifies its gate, later veneer acknowledgment, one-entry original-STR completion with immediate physical zero before another CPU entry, and ordered core-1 publication/handoff/loader entry. Aggregate entered counts are not retirement.
 
@@ -474,11 +474,11 @@ The public `primary-initializer-source-tests` cover descriptor-identifier admiss
 
 The input identities are closed: the captured RAM is `private-data/sessions/20261025T050355Z-read-bulk/ram-00000000-05aa0000.bin` (SHA256 `fa933fcf723ff46d435161cfecf48edc4a29cc4dc4c0ff5232fd0c70e7a6fee2`), and the stock image is `private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin` (SHA256 `f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16`). The worker rejects other bytes. Proprietary inputs and detailed receipts remain private.
 
-Set `EMULATOR_SLOT` to the absolute path of the existing verified `emulator-slot` binary ([guard contract](../build-support/README.md)). Use one slot, payload CPUs 0-3, 8 GiB memory and zero swap. From the repository root, use an exclusive compiler lease for this normal Bazel target command. `--script_path` builds and writes the upstream launcher without executing the target; both the launcher path and output directory must be fresh.
+Set `EMULATOR_SLOT` to the absolute path of the existing verified `emulator-slot` binary ([emulator-slot contract](../build-support/README.md#commands)). Use one slot, 8 GiB memory and zero swap. From the repository root, use an exclusive compiler lease for this normal Bazel target command. `--script_path` builds and writes the upstream launcher without executing the target; both the launcher path and output directory must be fresh.
 
 ```sh
 env XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=8G \
-  "$EMULATOR_SLOT" taskset -c 0-3 devenv shell -- \
+  "$EMULATOR_SLOT" devenv shell -- \
   bazel --batch --output_base="$HOME/.cache/bazel/latent-image-queue-boundary" run \
     --script_path="$PWD/private-data/analysis/issue16-closure/queue-boundary-launcher.sh" \
     //emulation:queue-boundary --jobs=2 --local_resources=cpu=4 --local_resources=memory=8192 -- \
@@ -1998,7 +1998,7 @@ The source-controlled `//emulation:media-route-smoke` is the supported Haskell e
 
 The output directory must be new beneath `private-data/` with an existing parent. The CLI verifies the selected bridge digest, copies the declared 4 GiB fixture card to a distinct output file and drives only that copy. Without `--checkpoints`, it cold-boots with `--fresh-boot` into `OUTPUT/checkpoints`; an explicit checkpoint directory permits a matching keyed attach restore or a cold boot. A changed bridge/run-document identity requires its own checkpoint qualification; the old SourceBit0 A checkpoint is not a new-cohort result.
 
-Build the public target through the checked-in devenv/Bazel graph with a separate agent output base. Finish CPU-heavy compilation before guest execution. This CLI does not acquire an emulator slot internally. Execute its reviewed built launcher through the canonical [emulator-slot contract](../build-support/README.md#commands) with one slot. An answering systemd user manager provides the configured memory cap, 8G by default, and zero swap; otherwise the launcher reports its uncapped fallback. Recorded thermal, CPU-affinity and quota values describe their frozen cohorts, not requirements for new runs. Emulated contact inputs are not physical camera authority; this diagnostic route does not authorize camera/USB operations or state-changing hardware commands.
+Build the public target through the checked-in devenv/Bazel graph with a separate agent output base. Finish CPU-heavy compilation before guest execution. This CLI does not acquire an emulator slot internally. Execute its reviewed built launcher through the canonical [emulator-slot contract](../build-support/README.md#commands) with one slot. An answering systemd user manager provides the configured memory cap, 8G by default, and zero swap; otherwise the launcher reports its uncapped fallback. Emulated contact inputs are not physical camera authority; this diagnostic route does not authorize camera/USB operations or state-changing hardware commands.
 
 The source observer retains the following read-only contract; its implementation adds no device behavior:
 
