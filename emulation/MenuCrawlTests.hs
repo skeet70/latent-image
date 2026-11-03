@@ -11,6 +11,7 @@ import Data.List (sort)
 import qualified Data.Map.Strict as M
 import Data.Maybe (isNothing)
 import Emulation.MenuCrawl
+import qualified Emulation.MenuObserve as MenuObserve
 import qualified Emulation.RamDiff as RamDiff
 import EmulatorUsb (ModeDial (..), SnapshotName (..), SnapshotPress (..), TraceHit (..))
 import System.Exit (exitFailure)
@@ -260,6 +261,16 @@ main = do
   check "RAM diff configs refuse overlapping windows"
     (either (const True) (const False) (diffConfig "[{\"start\":\"0x100\",\"end\":\"0x200\"},{\"start\":\"0x1fc\",\"end\":\"0x300\"}]"))
   check "RAM diff configs refuse more than 64 MiB" (either (const True) (const False) (diffConfig "[{\"start\":\"0x0\",\"end\":\"0x4000004\"}]"))
+  let observeConfig sites ranges = MenuObserve.decodeMenuObserveConfig (C.pack ("{\"schema\":1,\"path\":[\"ok\"],\"key\":\"down\",\"trace_sites\":"
+        ++ sites ++ ",\"write_ranges\":" ++ ranges ++ ",\"limit\":16}"))
+      site address label = "{\"address\":\"" ++ address ++ "\",\"label\":\"" ++ label ++ "\"}"
+  check "a menu observe config decodes its sites and ranges"
+    (fmap (\decoded -> (MenuObserve.observeSites decoded, MenuObserve.observeWrites decoded)) (observeConfig ("[" ++ site "0xbf9b1c" "engine-step" ++ "]") "[{\"start\":\"0x100\",\"end\":\"0x200\"}]")
+      == Right ([MenuObserve.TraceSite 0xbf9b1c "engine-step"], [GuestRange 0x100 0x200]))
+  check "menu observe configs refuse adjacent write ranges"
+    (either (const True) (const False) (observeConfig "[]" "[{\"start\":\"0x100\",\"end\":\"0x200\"},{\"start\":\"0x200\",\"end\":\"0x300\"}]"))
+  check "menu observe configs refuse a repeated site label"
+    (either (const True) (const False) (observeConfig ("[" ++ site "0x10" "a" ++ "," ++ site "0x20" "a" ++ "]") "[{\"start\":\"0x100\",\"end\":\"0x200\"}]"))
 
   count <- readIORef failures
   if count == 0 then putStrLn "menu crawl tests passed" else exitFailure
