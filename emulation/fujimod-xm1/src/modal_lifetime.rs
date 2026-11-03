@@ -35,6 +35,8 @@ pub struct LifetimeRequest {
     publications: Vec<PublicationRequest>,
     #[serde(default)]
     retired: Vec<[u32; 2]>,
+    #[serde(default)]
+    settings_writers: Vec<[u32; 2]>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -76,6 +78,8 @@ pub struct LifetimeConfig {
     /// Stock code no CPU may fetch through any alias from the install entry
     /// through the last reverse publication write.
     retired: Vec<PhysicalExtent>,
+    /// Code whose value-changing stores to the live-settings block are admitted and counted.
+    settings_writers: Vec<PhysicalExtent>,
     sites: Vec<CodeSite>,
 }
 
@@ -103,6 +107,7 @@ fn settings_extent() -> PhysicalExtent {
 
 const MAX_RUNTIME_BYTES: usize = 1 << 20;
 const MAX_RETIRED_EXTENTS: usize = 64;
+const MAX_SETTINGS_WRITERS: usize = 8;
 
 impl LifetimeRequest {
     pub fn into_config(self, immutable_sources: Vec<PhysicalExtent>) -> Result<LifetimeConfig> {
@@ -210,7 +215,15 @@ impl LifetimeRequest {
         if retired.len() > MAX_RETIRED_EXTENTS || retired.windows(2).any(|pair| pair[0].overlaps(pair[1])) {
             return Err(LifetimeFailure::InvalidRequest);
         }
-        Ok(LifetimeConfig { runtime, resident, readonly, sources: immutable_sources, install, rollback, publications, publication_addresses: addresses, watched: merged, retired, sites })
+        let mut settings_writers = self.settings_writers.into_iter().map(|[start, end]| {
+            if start % 4 != 0 || end % 4 != 0 { return Err(LifetimeFailure::InvalidExtent); }
+            extent(start, end)
+        }).collect::<Result<Vec<_>>>()?;
+        settings_writers.sort_by_key(|range| range.start());
+        if settings_writers.len() > MAX_SETTINGS_WRITERS || settings_writers.windows(2).any(|pair| pair[0].overlaps(pair[1])) {
+            return Err(LifetimeFailure::InvalidRequest);
+        }
+        Ok(LifetimeConfig { runtime, resident, readonly, sources: immutable_sources, install, rollback, publications, publication_addresses: addresses, watched: merged, retired, settings_writers, sites })
     }
 }
 
@@ -240,6 +253,7 @@ impl LifetimeConfig {
         self.readonly.iter().map(|image| (image.extent, image.bytes.as_slice()))
     }
     pub fn retired_extents(&self) -> &[PhysicalExtent] { &self.retired }
+    pub fn settings_writers(&self) -> &[PhysicalExtent] { &self.settings_writers }
 }
 
 pub trait LifetimeMemory {
@@ -264,6 +278,8 @@ pub struct LifetimeReceipt {
     pub checked_context_writes: u64,
     pub checked_vfp_owner_writes: u64,
     pub audited_writes: u64,
+    /// Value-changing live-settings stores from a settings writer.
+    pub admitted_settings_writes: u64,
     pub failure: Option<LifetimeFailure>,
 }
 
@@ -420,7 +436,7 @@ impl LifetimeMonitor {
             phase: LifetimePhase::Prepared, publication_count, forward_writes: 0, reverse_writes: 0,
             pending_stores: 0, install_core: None, rollback_core: None, checked_resource_writes: 0,
             checked_identity_writes: 0, checked_scheduler_writes: 0, checked_context_writes: 0, checked_vfp_owner_writes: 0,
-            audited_writes: 0, failure: None,
+            audited_writes: 0, admitted_settings_writes: 0, failure: None,
         } })
     }
     pub fn config(&self) -> &LifetimeConfig { &self.config }
@@ -603,16 +619,28 @@ impl LifetimeMonitor {
         }
         if self.config.resident.overlaps(target) || settings_extent().overlaps(target) {
             self.receipt.checked_resource_writes += 1;
+            let admitted = contains(settings_extent(), target)
+                && self.config.settings_writers.iter().any(|writer| writer.start() <= attempt.pc && attempt.pc < writer.end());
+            let mut changed = false;
             for index in 0..width {
                 let address = attempt.physical.0 + index as u32;
+                let new = ((value >> (index * 8)) & 255) as u8;
                 let expected = if self.config.resident.start().0 <= address && address < self.config.resident.end().0 { Some(0) }
                     else if SETTINGS_START <= address && address < SETTINGS_START + SETTINGS_BYTES as u32 { Some(self.settings[(address - SETTINGS_START) as usize]) }
                     else { None };
                 if let Some(expected) = expected {
-                    if attempt.before.byte(index) != Some(expected) || ((value >> (index * 8)) & 255) as u8 != expected {
-                        return Err(LifetimeFailure::ResourceChanged);
+                    if attempt.before.byte(index) != Some(expected) { return Err(LifetimeFailure::ResourceChanged); }
+                    if new != expected {
+                        if !admitted { return Err(LifetimeFailure::ResourceChanged); }
+                        changed = true;
                     }
                 }
+            }
+            if changed {
+                for index in 0..width {
+                    self.settings[(attempt.physical.0 - SETTINGS_START) as usize + index] = ((value >> (index * 8)) & 255) as u8;
+                }
+                self.receipt.admitted_settings_writes += 1;
             }
         }
         let resources = fixed_resources();

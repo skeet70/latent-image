@@ -1060,6 +1060,24 @@ haskell_binary(
     ],
 )
 
+haskell_binary(
+    name = "modal-settings-compare",
+    srcs = ["ModalSettingsCompare.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        ":modal-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+    ],
+)
+
 haskell_test(
     name = "render-comparison-tests",
     size = "small",

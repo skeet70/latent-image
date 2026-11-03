@@ -477,7 +477,7 @@ completedReceipt count = object
   , "pending_stores" .= (0 :: Int), "install_core" .= (0 :: Int), "rollback_core" .= (1 :: Int)
   , "checked_resource_writes" .= (7 :: Int), "checked_identity_writes" .= (0 :: Int)
   , "checked_scheduler_writes" .= (10 :: Int), "checked_context_writes" .= (40 :: Int), "checked_vfp_owner_writes" .= (2 :: Int)
-  , "audited_writes" .= (12 :: Int)
+  , "audited_writes" .= (12 :: Int), "admitted_settings_writes" .= (0 :: Int)
   , "failure" .= Null ]
 
 healthyGuard :: Value
@@ -747,7 +747,7 @@ runtimeBindingTests = do
           (cpu 1 address address 4 clock))) | (address,clock) <- zip (reverse addresses) [224 ..]]
       fullWatch = watch expectedWrites writes
       exactReceipt = foldr (\key value -> set key (Number 0) value) (completedReceipt 223)
-        ["checked_resource_writes","checked_identity_writes","checked_scheduler_writes","checked_context_writes","checked_vfp_owner_writes","audited_writes"]
+        ["checked_resource_writes","checked_identity_writes","checked_scheduler_writes","checked_context_writes","checked_vfp_owner_writes","audited_writes","admitted_settings_writes"]
       clean = set "watch" (withoutRecords fullWatch) (set "lifetime" exactReceipt (set "task_identity_verified" (Bool False)
         (set "task_entries" (array []) (completedEnvelope 223))))
   rangeBound <- either error pure (watchRangeLimit (length expectedWrites))
@@ -850,6 +850,32 @@ runtimeBindingTests = do
   check "a request without retired extents refuses a retired-extent fetch row"
     (not (completes scopedRequest (set "classes" (get "classes" scopedWatch) (set "ranges" (get "ranges" scopedWatch)
       (retiredWatch (published ++ [fetchRow 0x00c7aef4 9000]))))))
+  let settingsRow pc = set "pc" (Number pc) (set "value" (Number 0x21) (set "before" (array [Number 0x20]) (cpu 0 0x0096ccca 0x0096ccca 1 100)))
+      settingsWatch pc = set "fetch_attribution" (fetchJson helperFetches) (watch scopedWrites (take 100 published ++ [settingsRow pc] ++ drop 100 published))
+      settingsCompletes admitted rowsWatch = either (const False) (const True) $ do
+        audit_ <- checkLifetimeArrayAudit scopedRequest (Right rowsWatch) (parseFinalModalWatch rowsWatch)
+        final_ <- parseFinalModalWatch rowsWatch
+        report_ <- parseModalReport permitLimit (set "watch" (withoutRecords rowsWatch) (set "lifetime"
+          (set "admitted_settings_writes" (Number admitted) (set "checked_resource_writes" (Number 1) scopedReceipt)) completedScoped))
+        checkCompletedModalLifetime scopedRequest audit_ final_ report_
+  check "a counted settings change from the stock property setter completes" (settingsCompletes 1 (settingsWatch 0x0062ff54))
+  check "an uncounted settings change from the stock property setter refuses" (not (settingsCompletes 0 (settingsWatch 0x0062ff54)))
+  check "a settings change from outside every settings writer refuses" (not (settingsCompletes 1 (settingsWatch 0x0072212c)))
+  check "the completed settings writes name the setter row"
+    (fmap (map (get "pc") . values . get "writes" . settingsWritesJson)
+      (parseFinalModalWatch (settingsWatch 0x0062ff54) >>= completedSettingsWrites scopedRequest) == Right [Number 0x0062ff54])
+  let settingsWrite address value = object ["instructions" .= (1 :: Int), "pc" .= (0x0062ff54 :: Word32), "address" .= (address :: Word32)
+        , "size" .= (1 :: Int), "before" .= [0x20 :: Int], "value" .= (value :: Int)]
+      sequenceOf writes_ = either error id (parseSettingsWrites (object ["schema" .= (1 :: Int), "writes" .= writes_]))
+      stockSequence = sequenceOf [settingsWrite 0x0096ccca 0x21, settingsWrite 0x0096ccd2 0xc9]
+  check "equal stock and owned settings sequences compare equal"
+    (compareSettingsWrites stockSequence (sequenceOf [settingsWrite 0x0096ccca 0x21, settingsWrite 0x0096ccd2 0xc9]) == Right ())
+  check "a reordered owned settings sequence fails comparison"
+    (isLeft (compareSettingsWrites stockSequence (sequenceOf [settingsWrite 0x0096ccd2 0xc9, settingsWrite 0x0096ccca 0x21])))
+  check "an extra owned settings write fails comparison"
+    (isLeft (compareSettingsWrites stockSequence (sequenceOf [settingsWrite 0x0096ccca 0x21, settingsWrite 0x0096ccd2 0xc9, settingsWrite 0x0096ccca 0x20])))
+  check "a different owned settings value fails comparison"
+    (isLeft (compareSettingsWrites stockSequence (sequenceOf [settingsWrite 0x0096ccca 0x21, settingsWrite 0x0096ccd2 0xc8])))
   let withoutSettings = filter (\span_ -> let (low,high) = watchRangeBounds span_ in not (low <= 0x96cc64 && 0x96ce26 <= high)) expectedWrites
       incompleteWatch = watch withoutSettings writes
   check "array audit requires settings and all other expected write classes" $

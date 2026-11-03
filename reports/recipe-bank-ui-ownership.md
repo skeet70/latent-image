@@ -963,9 +963,9 @@ No owned run followed: the stock223 control refuses on both crawl-3 routes to la
 
 | Run | Route | Reached | Refusing write |
 | --- | --- | --- | --- |
-| `run-stock223` | MENU, OK (live view), then OK into `(1,321,17)` | shooting menu `(1,5,2)` | `0x0096ccd2` `0x89`→`0xc9`, pc `0x0062ad3c`, instruction 1,522,403,269 |
+| `run-stock223` | MENU, OK (live view), then OK into `(1,321,17)` | shooting menu `(1,5,2)` | `0x0096ccd2` `0x89`→`0xc9`, pc `0x0062ae3c`, instruction 1,522,403,269 |
 | `run-stock223b` | MENU, MENU, then OK into `(1,321,17)` | same | identical row stream (duplicate input) |
-| `run-q-stock223` | MENU, Q, then BACK | Q menu `(122,5,1)`, `retired-c7a7e4` hit 3 times | `0x0096ccca` `0x20`→`0x21`, pc `0x0062ff58`, instruction 1,520,318,916 |
+| `run-q-stock223` | MENU, Q, then BACK | Q menu `(122,5,1)`, `retired-c7a7e4` hit 3 times | `0x0096ccca` `0x20`→`0x21`, pc `0x0062fed8`, instruction 1,520,318,916 |
 
 Both refusing writes fall in the key after the last completed segment. The shooting-menu runs match the passing packaged stock run row for row through instruction 1,522,242,231. The packaged FILMSIM route stays the only guard-qualified route, and its controller-75 domain has no layer-(a) cell.
 

@@ -132,6 +132,46 @@ fn transient_resource_change_cannot_be_repaired_by_a_later_store() {
     }
 }
 
+const SETTER: u32 = 0x0062_ff54;
+
+fn settings_fixture() -> LifetimeMonitor {
+    let mut value = request();
+    value["settings_writers"] = json!([[0x0062_4694, 0x0063_09c4]]);
+    let config = config(value).unwrap();
+    let mut memory = Memory::default();
+    for (extent, bytes) in config.readonly_images() { memory.store(extent.start().0, bytes); }
+    memory.store(SETTINGS, &[0x5a; 450]);
+    LifetimeMonitor::new(config, &memory).unwrap()
+}
+fn write_from(monitor: &mut LifetimeMonitor, pc: u32, address: u32, before: &[u8], value: u64) -> Result<(), LifetimeFailure> {
+    monitor.observe_write(WriteAttempt::cpu(CoreId(0), Guest(pc), Guest(address), Guest(address), before, value))
+}
+
+#[test]
+fn settings_writer_changes_are_admitted_counted_and_become_the_expected_bytes() {
+    let mut monitor = settings_fixture();
+    write_from(&mut monitor, SETTER, SETTINGS + 0x66, &[0x5a], 0x5b).unwrap();
+    assert_eq!(monitor.receipt().admitted_settings_writes, 1);
+    write_from(&mut monitor, 0x1000, SETTINGS + 0x66, &[0x5b], 0x5b).unwrap();
+    assert_eq!(monitor.receipt().admitted_settings_writes, 1);
+    assert_eq!(write_from(&mut monitor, 0x1000, SETTINGS + 0x66, &[0x5a], 0x5a), Err(LifetimeFailure::ResourceChanged));
+}
+
+#[test]
+fn settings_changes_outside_a_settings_writer_or_the_block_refuse() {
+    for (pc, address, before, value) in [
+        (0x0062_4690, SETTINGS + 0x66, vec![0x5a], 0x5b),
+        (0x0063_09c4, SETTINGS + 0x66, vec![0x5a], 0x5b),
+        (SETTER, RESIDENT, vec![0], 1),
+    ] {
+        let mut monitor = settings_fixture();
+        assert_eq!(write_from(&mut monitor, pc, address, &before, value), Err(LifetimeFailure::ResourceChanged), "{pc:#x} {address:#x}");
+        assert_eq!(monitor.receipt().admitted_settings_writes, 0);
+    }
+    let (mut monitor, _) = fixture();
+    assert_eq!(write_from(&mut monitor, SETTER, SETTINGS + 0x66, &[0x5a], 0x5b), Err(LifetimeFailure::ResourceChanged));
+}
+
 #[test]
 fn immutable_roots_width_tables_and_code_refuse_even_identity_stores() {
     for address in [0x00cf_e3d4, 0x00d0_0268, 0x00cd_5f0e, 0x00cd_1ae4,
