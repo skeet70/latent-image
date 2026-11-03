@@ -370,6 +370,15 @@ fn attribution_ranges(catalog: &Catalog) -> Result<Vec<[u64; 2]>> {
     Ok(normalized)
 }
 
+/// Requires exactly the `carrier_chunks()` projections, in order.
+fn entry_carrier(state: &[Words]) -> Result<Vec<u32>> {
+    let views = state.iter().filter(|view| overlaps(u64::from(view.mapping.guest.0), u64::from(view.mapping.guest.0) + 4 * view.values.len() as u64, CARRIER[0], CARRIER[1])).collect::<Vec<_>>();
+    let chunks = super::image5_runtime::carrier_chunks();
+    require(views.len() == chunks.len() && views.iter().zip(&chunks).all(|(view, &(start, count))| view.mapping.guest == start && view.values.len() == count), missing(MissingEvidence::CodeGuard))?;
+    let mut values = Vec::with_capacity(((CARRIER[1] - CARRIER[0]) / 4) as usize);
+    for view in views { words(view).map_err(projection_error)?; values.extend_from_slice(&view.values); }
+    Ok(values)
+}
 fn guards(root: &Path, report: &Report, catalog: &Catalog, evidence: &Evidence, interval: &Interval<'_>, calls: &[Call<'_>], program: &Program) -> Result<(Vec<FieldRead>, FlagEffect)> {
     let (entry, returned) = (interval.entry, interval.returned);
     let lease = evidence.stack.as_ref().ok_or(missing(MissingEvidence::Frame))?;
@@ -381,9 +390,7 @@ fn guards(root: &Path, report: &Report, catalog: &Catalog, evidence: &Evidence, 
     let code_view = evidence.code.as_ref().ok_or(missing(MissingEvidence::CodeGuard))?;
     let code = untyped_view(root, code_view, entry.id, CARRIER[0], CARRIER[1])?;
     for (index, bytes) in code.chunks_exact(4).enumerate() { require(catalog.word(Guest(CARRIER[0] + 4 * index as u32)).map_err(source_error)?.1 == u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]), Refusal::WrongImageIdentity)?; }
-    let entry_code = entry.state.iter().find(|view| view.mapping.guest == Guest(CARRIER[0]) && view.values.len() == code.len() / 4).ok_or(missing(MissingEvidence::CodeGuard))?;
-    words(entry_code).map_err(projection_error)?;
-    for (index, &value) in entry_code.values.iter().enumerate() { require(catalog.word(Guest(CARRIER[0] + 4 * index as u32)).map_err(source_error)?.1 == value, Refusal::WrongImageIdentity)?; }
+    for (index, value) in entry_carrier(&entry.state)?.into_iter().enumerate() { require(catalog.word(Guest(CARRIER[0] + 4 * index as u32)).map_err(source_error)?.1 == value, Refusal::WrongImageIdentity)?; }
     let stack_base = lease.creation.values[5] & !0x40000000; let stack_size = lease.creation.values[4];
     let stack_end = stack_base.checked_add(stack_size).ok_or(Refusal::BadFrame)?;
     let sp = entry.registers.sp.0; let frame_low = sp - program.frame_bytes();
@@ -895,6 +902,23 @@ mod tests {
         assert!(record(&payload[..at + 16]).is_err());
         payload[at] ^= 1;
         assert!(record(&payload).is_err());
+    }
+
+    fn projected(start: u32, values: Vec<u32>) -> Words {
+        Words { mapping: Mapping { guest: Guest(start), physical: Guest(start), bytes: Bytes(4 * values.len() as u32), decoder: DramChoice::One, tcm: [[0; 2]; 2] }, values, guest_equal: [true; 2] }
+    }
+    #[test]
+    fn the_entry_carrier_must_be_exactly_its_projection_chunks() {
+        let words = ((CARRIER[1] - CARRIER[0]) / 4) as usize;
+        let carrier: Vec<u32> = (0..words as u32).collect();
+        let chunked = vec![projected(0x61c000, vec![7; 8]), projected(CARRIER[0], carrier[..80].to_vec()), projected(CARRIER[0] + 320, carrier[80..].to_vec())];
+        assert_eq!(entry_carrier(&chunked), Ok(carrier.clone()));
+        assert_eq!(entry_carrier(&chunked[..2]), Err(missing(MissingEvidence::CodeGuard)));
+        assert_eq!(entry_carrier(&[projected(CARRIER[0], carrier[..80].to_vec()), projected(CARRIER[0] + 324, carrier[81..].to_vec())]), Err(missing(MissingEvidence::CodeGuard)));
+        let mut overlapping = chunked.clone(); overlapping.push(projected(CARRIER[0] + 316, vec![0; 2]));
+        assert_eq!(entry_carrier(&overlapping), Err(missing(MissingEvidence::CodeGuard)));
+        let mut unequal = chunked; unequal[2].guest_equal = [true, false];
+        assert!(matches!(entry_carrier(&unequal), Err(Refusal::Artifact { .. })));
     }
 
     fn receipt(update: &str, sources: Vec<super::super::SourceBinding>) -> Report {

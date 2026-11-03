@@ -27,6 +27,12 @@ pub(super) const DECODER_SITES: [u32; 11] = [0x6ae310, 0x6ae358, 0x6ae35c, 0x6ae
 /// Flashloader publication after the producer returns: done store, resource release call, request callback BLX.
 pub(super) const PUBLICATION_SITES: [u32; 3] = [0x73b6ac, 0x73b6c4, 0x73b6e8];
 
+/// Largest admitted word projection.
+pub(super) const CARRIER_CHUNK_WORDS: usize = 80;
+pub(super) fn carrier_chunks() -> Vec<(Guest, usize)> {
+    let words = ((CARRIER[1] - CARRIER[0]) / 4) as usize;
+    (0..words).step_by(CARRIER_CHUNK_WORDS).map(|first| (Guest(CARRIER[0] + 4 * first as u32), CARRIER_CHUNK_WORDS.min(words - first))).collect()
+}
 pub(super) fn bind_payload(analysis: &Path, output: &Path) -> Result<(FileBinding, Vec<u8>), String> {
     let path = analysis.join("payload.bin");
     let bytes = fujimod_xm1::bridge::read(&path)?;
@@ -107,8 +113,7 @@ impl Runtime {
             if self.evidence.entry.is_some() { return Err("image5 producer entered more than once".into()); }
             self.evidence.entry = Some(event.id);
             self.entry_sp = Some(event.registers.sp);
-            let words = ((CARRIER[1] - CARRIER[0]) / 4) as usize;
-            event.state.push(continuation_view::words(&machine.session, maps, pc, words)?);
+            for (start, count) in carrier_chunks() { event.state.push(continuation_view::words(&machine.session, maps, start, count)?); }
             let image = catalog.0.iter().find(|image| image.binding.kind == SourceKind::Image4).ok_or("image5 carrier source absent")?;
             let low = (CARRIER[0] - image.binding.start.0) as usize;
             let expected = image.bytes.get(low..low + (CARRIER[1] - CARRIER[0]) as usize).ok_or("image5 carrier source extent")?;
