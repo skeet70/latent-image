@@ -32,7 +32,8 @@ data Control = WrongSource | WrongArtifact | WrongCandidate | WrongContract | Du
   | WrongResourceArgument | MissingResourceCall | WrongResourceIdentity | WrongCheckedStatus | MissingSubmission | WrongDescriptorAddress
   | WrongFlagIdentity | WrongFlagTarget | WrongFlagResult | WrongConstructorTarget | WrongConstructorResult | WrongWrapperRegister | WrongCleanupSelector | WrongCleanupMask
   | WrongCallbackArgument | WrongCallbackResult | WrongCallbackFrame | WrongCallbackRestoration | MissingPostCleanupCallback
-  | MaskedCallbackInterrupt | WrongCallbackDispatcherFrame | MissingCallbackInterruptStack
+  | MaskedCallbackInterrupt | WrongCallbackDispatcherFrame | MissingCallbackInterruptStack | WrongCallbackReturnFrame
+  | DisabledCallbackAtcm | LowCallbackStack
   | WrongIrqStatus | WrongIrqFrame | WrongIrqReturn | WrongIrqRestoration deriving (Eq, Show, Enum, Bounded)
 data ControlError = BaselineRejected WitnessError | MutationRejected Control | WrongRefusal Control WitnessError (Maybe WitnessError)
   | ProducerSummaryChangedQualification deriving (Eq, Show)
@@ -90,6 +91,7 @@ expected control = case control of
   WrongCallbackArgument -> CallbackRejected; WrongCallbackResult -> CallbackRejected; WrongCallbackFrame -> FrameRejected
   WrongCallbackRestoration -> ReturnRejected; MissingPostCleanupCallback -> CompletionRejected
   MaskedCallbackInterrupt -> IrqRejected; WrongCallbackDispatcherFrame -> FrameRejected; MissingCallbackInterruptStack -> FrameRejected
+  WrongCallbackReturnFrame -> FrameRejected; DisabledCallbackAtcm -> IrqRejected; LowCallbackStack -> IrqRejected
   WrongIrqStatus -> IrqRejected; WrongIrqFrame -> FrameRejected; WrongIrqReturn -> ReturnRejected; WrongIrqRestoration -> ReturnRejected
 withHash :: Control -> ObservedFiles -> J.Value -> J.Value -> Either ControlError ObservedFiles
 withHash control original receipt watch = do
@@ -312,6 +314,18 @@ refusalControls role sources original = do
         MissingCallbackInterruptStack -> do
           entered <- callback 0x69cc18
           set control [field "samples",Element entered,field "interrupt_stack"] J.Null receiptValue >>= plain
+        WrongCallbackReturnFrame -> do
+          entered <- callback 0x69cc18
+          ending <- after control receipt entered (\sample -> pc sample == 0x69cc68 && contextCore (sampleContext sample) == contextCore (sampleContext (sampleAt entered)))
+          returned <- after control receipt ending (\sample -> pc sample == Plan.physical (address (W.contextLr (state (sampleAt entered))))
+            && contextCore (sampleContext sample) == contextCore (sampleContext (sampleAt entered)))
+          let path = [field "samples",Element returned,field "interrupt_stack",field "bytes",Element 12]
+          old <- pathAt control path receiptValue >>= parse control :: Either ControlError Word32
+          set control path (old `xor` 1) receiptValue >>= plain
+        DisabledCallbackAtcm -> do
+          entered <- callback 0x69cc18
+          set control [field "samples",Element entered,field "context",field "tcm",Element 0,Element 1] (0 :: Word32) receiptValue >>= plain
+        LowCallbackStack -> alterContext (callback 0x69cc18) "sp" (\(_ :: Word32) -> 0x70000020)
         WrongIrqStatus -> alterContext irq "spsr" (\value -> value .&. 0xffffffe0 .|. 0x12)
         WrongIrqFrame -> alterContext (irqAfter IrqFrame) "sp" (+4)
         WrongIrqReturn -> alterContext (irqAfter IrqReturn) "spsr" (`xor` 0x20000000)

@@ -459,18 +459,19 @@ const ROOT_RESOURCES: [(u32, usize); 8] = [
     (0x96ca4c, 4), (0x828094, 4), (0x8e1f28, 4), (0x9c3500, 0x404),
     (0x89ea8c, 12), (0x5d178 + 12 * 103, 12), (0x624b4 + 16 * 103, 16), (IRQ_NEST, 4),
 ];
-/// Loader A IRQ nesting counter: 0x40234 loads 0x400545a4 from literal 0x40418, increments it on entry
-/// and 0x4031c decrements it on exit; nonzero means interrupt context.
+/// Loader A 0x400545a4 (literal 0x40418): 0x40240 increments it on IRQ entry and 0x4031c decrements it on exit.
+/// The scheduler also stores 0 at 0x43690/0x43720 and 1 at 0x436f0 around its idle IRQ window, and 0x43848 stores 1.
 const IRQ_NEST: u32 = 0x545a4;
 /// Core0 ATCM window of register 0x70000011; its top is the first-level IRQ stack loaded at 0x40250 from 0x40370.
 const IRQ_STACK: (u32, u32) = (0x70000000, 0x70002000);
 const IRQ_ATCM: u32 = 0x70000011;
-/// Callback frame plus the 32-byte private frame of its 0x725b74 call.
+/// Callback frame plus the 24-byte 0x725b74 and 8-byte 0x412bc frames on its success path.
 const IRQ_CALLBACK_DEPTH: u32 = 8 + 32;
 const DISPATCH_RETURN: u32 = 0x723394;
 const LOADER_DISPATCH_RETURN: u32 = 0x4bf0c;
-/// Source words of the periodic-callback interrupt contract: loader A IRQ entry, handler call and exit,
-/// their literals, the loader A timer dispatch at 0x4bf08, dispatcher 0x72337c and the 0x725424 table stores.
+/// Source words of the periodic-callback interrupt contract: loader A IRQ entry, handler call and exit with their
+/// literals, the I-clearing dispatch at 0x4bef0..0x4bf08, dispatcher 0x72337c, the 0x725424 dispatcher selection
+/// and table stores, and the callback's frame push and pop.
 const IRQ_CALLBACK_SOURCE: [(u32, &[u32]); 13] = [
     (0x40204, &[0xe3a0d0d3, 0xe129f00d, 0xe92dd00f, 0xe3a000d2, 0xe129f000, 0xe24e0004, 0xe14f1000, 0xe2012040, 0xe3822093,
         0xe129f002, 0xe58d0018, 0xe92d0002, 0xe59f21dc, 0xe5923000, 0xe2830001, 0xe5820000, 0xe3530000, 0x1b000002,
@@ -483,7 +484,7 @@ const IRQ_CALLBACK_SOURCE: [(u32, &[u32]); 13] = [
     (0x40370, &[IRQ_STACK.1]),
     (0x40418, &[0x40000000 | IRQ_NEST]),
     (0x40420, &[0x00040d50, 0x00040d60, 0x400546d8]),
-    (0x4bf00, &[0xe5923008, 0xe5920004, 0xe12fff33]),
+    (0x4bef0, &[0xe10f3000, 0xe3c33080, 0xe129f003, 0xe5942000, 0xe5923008, 0xe5920004, 0xe12fff33]),
     (0x72337c, &[0xe92d4800, 0xe28db004, 0xe3033500, 0xe344309c, 0xe7933100, 0xe12fff33, 0xe8bd8800]),
     (0x725464, &[0xe3580000, 0x0303337c, 0x03403072]),
     (0x725540, &[0xe3a02001, 0xe5892304]),
@@ -1461,12 +1462,11 @@ impl RootProducer {
         Ok(())
     }
 }
-/// Loader A IRQ context of a periodic-callback boundary: nesting counter nonzero, SVC with I clear and A/F set,
-/// room for the callback and its 0x725b74 frame, and dispatcher 0x72337c's saved LR naming loader A 0x4bf08.
+/// F is inherited from the interrupted context; I is cleared at 0x4bef8 before the 0x4bf08 dispatch.
 fn interrupt_dispatch(sample: &Sample) -> Result<(), String> {
     let state = &sample.context;
     let nest = sample.views.iter().find(|view| view.physical == Address(IRQ_NEST)).ok_or("IRQ nesting counter absent")?;
-    require(word(&nest.bytes, 0)? != 0 && state.cpsr.0 & 0x07f0ffff == 0x153
+    require(word(&nest.bytes, 0)? != 0 && state.cpsr.0 & 0x07f0ffbf == 0x113
         && (IRQ_STACK.0 + IRQ_CALLBACK_DEPTH..=IRQ_STACK.1 - 8).contains(&state.sp.0)
         && callback_frame(sample, state.sp.0)?[1] == LOADER_DISPATCH_RETURN,
         "periodic callback lacks the loader A IRQ dispatch context")
@@ -1480,7 +1480,7 @@ fn root_fixed_sites(binding: &RootBinding, sources: &[Code]) -> Result<BTreeMap<
             sites.insert(pc.checked_add(4).ok_or("task wrapper return PC overflow")?, "service-return".into());
         }
     }
-    sites.insert(0x723394, "service-return".into());
+    sites.insert(DISPATCH_RETURN, "service-return".into());
     for pc in [0x43668, 0x43728, 0x437a4] {
         require(binding.fetch_spans.iter().any(|&(low, high)| low <= u64::from(pc) && u64::from(pc) + 8 <= high),
             "selected task continuation has no complete actual-fetch coverage")?;
@@ -2171,6 +2171,7 @@ mod tests {
     fn periodic_callback_requires_loader_irq_dispatch_context() {
         assert!(interrupt_dispatch(&callback_entry(0x70001fc4, 0x60000153, 1, LOADER_DISPATCH_RETURN)).is_ok());
         assert!(interrupt_dispatch(&callback_entry(0x70000028, 0x153, 2, LOADER_DISPATCH_RETURN)).is_ok());
+        assert!(interrupt_dispatch(&callback_entry(0x70001fc4, 0x113, 1, LOADER_DISPATCH_RETURN)).is_ok());
         for (sp, cpsr, nest, lr) in [
             (0x70001fc4, 0x60000153, 0, LOADER_DISPATCH_RETURN),
             (0x70001fc4, 0x600001d3, 1, LOADER_DISPATCH_RETURN),

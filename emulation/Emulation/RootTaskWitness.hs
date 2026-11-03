@@ -831,16 +831,14 @@ interruptWords sample location = do
     && location >= low && toInteger location+8 <= toInteger top) FrameRejected
   let offset = fromIntegral (location-low)
   pure [U.word32At body offset,U.word32At body (offset+4)]
--- | Loader A IRQ dispatch of a periodic-callback boundary: nesting counter nonzero, core0 ATCM bank,
--- SVC with I clear and A/F set, room for the callback and its 0x725b74 frame, and dispatcher 0x72337c's
--- saved LR naming loader A 0x4bf08.
+-- | F is inherited from the interrupted context; I is cleared at 0x4bef8 before the 0x4bf08 dispatch.
 interruptDispatch :: Sample -> Memory -> Either WitnessError ()
 interruptDispatch sample memory = do
   let state = stateOf sample; sp = address (W.contextSp state); (bottom,top) = Plan.irqStack
   nest <- readWord IrqRejected memory Plan.irqNest
   require (nest /= 0 && coreOf sample == S.PrimaryKernel
     && take 1 (W.contextTcm state) == [[W.WordValue 0,W.WordValue Plan.irqAtcm]]
-    && word (W.contextCpsr state) .&. 0x07f0ffff == 0x153 && sp `mod` 4 == 0
+    && word (W.contextCpsr state) .&. 0x07f0ffbf == 0x113 && sp `mod` 4 == 0
     && sp >= bottom+Plan.irqCallbackDepth && toInteger sp+8 <= toInteger top) IrqRejected
   dispatcher <- interruptWords sample sp
   require (drop 1 dispatcher == [Plan.loaderDispatchReturn]) FrameRejected
@@ -887,6 +885,7 @@ checkCallbacks executions (CompletionWitness _ completed) pairs = do
             0x69cc18 -> do
               ran <- executed executions caller 0x69cc18
               require (not ran && preserved caller sample && W.contextRegisters (stateOf caller) == W.contextRegisters (stateOf sample)) CallbackRejected
+              interruptDispatch sample memory
               pure (Just tracked {callbackEntry=sample},cycles)
             0x69cc1c -> do
               ran <- executed executions caller 0x69cc18
