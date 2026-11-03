@@ -29,6 +29,8 @@ The single reviewed host invocation emitted all194 slot instances. Each domain h
 | IRQ/context `+0x164/+0x168/+0x16c`, extensions `+0x1618..+0x1624` | Selected-root save/restore and current-task query; query refuses masked/non-task context with `-25`. Identity returns0 exactly for CP14 discriminator `0x4003`, else1. Critical pair retains private prior mask in r10 and uses retry/release/observe extensions. [Inventory §§8.8,8.13,8.15; E-TASK103-CRITICAL-PAIR-SOURCE-150.] | Full nested/IRQ/FIQ ABI, lock ownership and cross-core laws; physical identity and coherence. |
 | Other slots | Exact A/B targets and conservative extent attempts are included. [Publishers and generated manifest.] | Operation, complete arguments/results/errors/context, touched objects and callers remain explicit unknowns. Conventional ITRON names or sibling-model headers do not fill these gaps. |
 
+[RTOS platform options](rtos-platform-options.md) §2 tests the µITRON 4.0 service model against these families as a hypothesis: matching error values, creation packets and chapter-ordered slots give candidate names for the unknown slots, which stay `unknown` here until X-M1 body evidence binds them. Its §4 records the base selection for the platform project and the first build trial.
+
 ## Non-root executable and shared-layout surface
 
 | Surface | Evidenced entries and retained contract | Evidence |

@@ -269,6 +269,28 @@ Tests exercise public artifact derivation with alternate valid arrangements and 
 
 The contract's `idle_task` object contains `entry`, `replaced_extent`, `linked_bytes`, `linked_sha256`, `symbols_sha256`, `staged_image4_sha256`, `scratch_low_from_entry_sp`, `execution_pcs`, `wfi_pc` and `resume_pc`. The outer contract binds candidate DAT/image4 identities. [The idle lifecycle observer and independent checker](../emulation/README.md#initial-task-body-boundary-152) consume these actual identities without borrowing an earlier run's pins.
 
+## Root initialization task source (#152)
+
+`replacement/root_task` defines the complete root104 body over `[0x69d160,0x69d2b4)` in Rust. There is no assembly body or production stock fallback. The linker retains the strict 340-byte carrier and rejects writable sections. Its emitted size, admission fixtures, staging and natural retained/owned comparison are not yet exercised.
+
+`deriveRootProof` admits the emitted caller orchestration against the canonical root behavior for 256 checked-status/mode/query combinations. Retained service bodies are opaque; ignored results and volatile state remain unknown. The proof checks ordered calls and arguments, both mode arms, source-required halts, the cleanup `-63` handback, callee-save/stack preservation, closed instruction/literal coverage and bounded private scratch. The user-ARM native profile is unchanged.
+
+The root-only stager leaves the shared idle body and every retained service unchanged. The contract's `root_task` object binds actual execution/call/halt/return PCs, call kinds, scratch, linked bytes and symbols. Source review and subsequent emitted admission must precede staging or execution.
+
+```sh
+devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" build --jobs=2 \
+  //replacement/root_task:root-task-image //replacement/root_task:stage-root-task \
+  //emulation:idle-tasks //emulation:root-task-check //emulation:idle-task-check \
+  //emulation:emulator-slot
+devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" test --jobs=2 \
+  //replacement/root_task:root-task-tests //replacement/media_permit:stock-inventory-tests
+devenv shell -- bazel --batch --output_base="$BAZEL_OUTPUT_BASE" run --jobs=2 \
+  //replacement/root_task:stage-root-task -- \
+  "$SOURCE_DAT" "$IMAGE4" "$LINKED_BIN" "$SYMBOLS" "$SCRATCH" "$OUT_DAT" "$OUT_CONTRACT"
+```
+
+The opt-in observer and independent consumer are documented with the [initial task-body boundary](../emulation/README.md#initial-task-body-boundary-152). Root ownership requires the actual resource and constructor effects, modeled IRQ restoration, conditional cleanup and a completed surviving periodic callback after cleanup. Standby93, later application ownership and general retained-service retirement remain separate.
+
 ## Task-submission wrapper and release (#151)
 
 The Bazel targets are `//replacement/task_submission:task-submission-image` (ELF, flat `.bin`, `.symbols` and disassembly), `:task-submission-artifact`, `:task-submission-artifact-tests` and `:stage-task-submission`. The native target links `src.rs` with `entry.S` through `task-submission.ld`. The linker rejects Rust bodies extending into the fixed release entry at `0x726098`, a moved lock literal at `0x726128`, a carrier end other than `0x72612c`, writable statics and unplaced sections.

@@ -848,6 +848,9 @@ impl Server {
             Request::ModalObservationBegin(request) => {
                 let machine = &mut self.bridge.machine;
                 let config = request.into_config(machine.session.board.mappings().to_vec())?;
+                if config.owns_memory_watch() && (self.watch.is_some() || self.preservation.is_some()) {
+                    return Err("installed modal observation requires exclusive memory-watch ownership".into());
+                }
                 machine.traces.begin_modal_observation(&machine.session, config)?;
                 serde_json::to_value(machine.traces.modal_observation_report())
                     .map_err(|failure| format!("modal-observation-begin: {failure}"))?
@@ -968,6 +971,9 @@ impl Server {
                 json!({"first": read.first.0, "count": read.count.get(), "bytes": encode_hex(&read.bytes)})
             }
             Request::WatchBegin { ranges, limit, views, write_ranges, fetch_ranges } => {
+                if self.bridge.machine.traces.modal_observation_active() {
+                    return Err("active modal observation refuses memory-watch replacement".into());
+                }
                 if self.watch.is_some() {
                     return Err("a memory watch is already armed".into());
                 }
@@ -1024,9 +1030,15 @@ impl Server {
             }
             Request::WatchState => match &self.watch {
                 Some(watch) => watch.records.borrow().state(),
-                None => return Err("watch-state requires an armed memory watch".into()),
+                None => match self.bridge.machine.traces.modal_watch_state() {
+                    Some(state) => state?,
+                    None => return Err("watch-state requires an armed memory watch".into()),
+                },
             },
             Request::PreservationBegin { ranges } => {
+                if self.bridge.machine.traces.modal_observation_active() {
+                    return Err("active modal observation refuses preservation replacement".into());
+                }
                 if self.preservation.is_some() {
                     return Err("a preservation observation is already armed".into());
                 }

@@ -1,82 +1,8 @@
-diff --git a/crates/emulator-cpu/src/lib.rs b/crates/emulator-cpu/src/lib.rs
-index 5d60452..e1a3739 100644
---- a/crates/emulator-cpu/src/lib.rs
-+++ b/crates/emulator-cpu/src/lib.rs
-@@ -179,6 +179,42 @@ impl ExecutionPolicy {
-         }
-     }
- }
-+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-+pub enum MutationOrigin {
-+    Guest,
-+    Host,
-+}
-+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-+pub enum MappingMutation {
-+    MapBacking,
-+    MapPhysical,
-+    ReplacePhysical,
-+    MapZeroed,
-+    MapMmio,
-+    Unmap,
-+    Protect,
-+}
-+/// A validated mutation transaction, reported before its first effect.
-+/// Admission does not promise completion or rollback of later failures.
-+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-+pub enum CpuMutation {
-+    HostWrite { address: u64, bytes: usize },
-+    Tcm {
-+        register: arm::Coprocessor,
-+        previous: u32,
-+        next: u32,
-+        origin: MutationOrigin,
-+    },
-+    Mapping {
-+        operation: MappingMutation,
-+        address: u64,
-+        physical: Option<u64>,
-+        bytes: usize,
-+        permissions: Option<u32>,
-+    },
-+    Restore,
-+    ExecutionPolicy { before: ExecutionPolicy, after: ExecutionPolicy },
-+}
- /// Guest-clock anchor for architectural registers implemented by a backend.
- /// Its phase and ratio are supplied by the execution owner, never host time.
- #[derive(Clone, Copy, Debug)]
-@@ -475,6 +511,15 @@ pub struct Block {
- }
- #[derive(Clone, Copy)]
- pub enum Hook {
-+    /// Opt-in transaction admission. False refuses before the first effect.
-+    /// Runs before any other observer of the transaction. While it runs, hook
-+    /// registration, removal and mutations through the same CPU are refused,
-+    /// and such a refused mutation also refuses the transaction.
-+    /// Callback contexts must remain live until successful removal.
-+    Mutation {
-+        callback: unsafe fn(CpuMutation, *mut c_void) -> bool,
-+        data: *mut c_void,
-+    },
-     Instruction {
-         callback: unsafe fn(u64, u32, *mut c_void),
-         data: *mut c_void,
-@@ -576,6 +621,10 @@ pub struct BackingObserver {
- 
- pub trait Cpu {
-     fn identity(&self) -> Identity;
-+    /// Whether this processor reports every CpuMutation transaction to Hook::Mutation observers.
-+    fn supports_mutation_observation(&self) -> bool {
-+        false
-+    }
-     /// Configure instruction-proven loops; statistics remain observational.
-     fn set_loop_mode(&self, mode: loops::LoopMode) -> Result<(), String> {
-         if mode == loops::LoopMode::Disabled {
 diff --git a/crates/emulator-cpu-unicorn/src/lib.rs b/crates/emulator-cpu-unicorn/src/lib.rs
-index 4a26db6..904da9c 100644
+index 4e6102c..4a5b1cc 100644
 --- a/crates/emulator-cpu-unicorn/src/lib.rs
 +++ b/crates/emulator-cpu-unicorn/src/lib.rs
-@@ -795,6 +795,9 @@ impl Cpu for Core {
+@@ -796,6 +796,9 @@ impl Cpu for Core {
      }
      unsafe fn install_hook(&self, hook: Hook) -> Result<HookId, String> {
          let (kind, callback, span) = match hook {
@@ -86,8 +12,36 @@ index 4a26db6..904da9c 100644
              Hook::Instruction { range, .. } => (4, instruction as *const (), range),
              Hook::Block { range, .. } => (8, block as *const (), range),
              Hook::Exception { .. } => (1, exception as *const (), HookRange::All),
+diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core.rs b/crates/emulator-cpu-unicorn/src/rprofile/core.rs
+index 8f24564..83d44a4 100644
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core.rs
+@@ -20,6 +20,7 @@ mod backend;
+ mod exclusive;
+ mod loops;
+ mod mapping;
++mod mutation;
+ mod observers;
+ mod pmu;
+ mod run;
+@@ -103,6 +104,7 @@ pub(super) struct Execution {
+     entry: Cell<Option<InstructionEntry>>,
+     entry_serial: Cell<Option<InstructionEntryId>>,
+     refusal: RefCell<Option<ExecutionRefusal>>,
++    mutation: mutation::Admission,
+ }
+ 
+ pub struct Core {
+@@ -208,6 +210,7 @@ impl Core {
+             entry: Cell::new(None),
+             entry_serial: Cell::new(None),
+             refusal: RefCell::new(None),
++            mutation: mutation::Admission::default(),
+         });
+         e.id.set(e.memory.register(Rc::downgrade(&e)));
+         unsafe {
 diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs b/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs
-index 0b6bcb7..1ddc146 100644
+index d413c16..80d9abb 100644
 --- a/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs
 +++ b/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs
 @@ -9,6 +9,16 @@ fn host_write_selected(range: HookRange, address: u64, bytes: usize) -> bool {
@@ -492,7 +446,7 @@ index 0b6bcb7..1ddc146 100644
      }
      fn invalidate_code(&self, range: Option<(u64, u64)>) -> Result<(), String> {
          self.execution.cpu.invalidate_code(range)
-@@ -495,6 +580,9 @@ impl Cpu for Core {
+@@ -528,6 +613,9 @@ impl Cpu for Core {
      }
      unsafe fn install_hook(&self, hook: Hook) -> Result<HookId, String> {
          let e = &self.execution;
@@ -502,7 +456,7 @@ index 0b6bcb7..1ddc146 100644
          e.observer_index
              .try_borrow_mut()
              .map(|_| ())
-@@ -502,6 +590,14 @@ impl Cpu for Core {
+@@ -535,6 +623,14 @@ impl Cpu for Core {
          if e.active.get() {
              return Err("cannot install a hook during R-profile execution".into());
          }
@@ -517,7 +471,7 @@ index 0b6bcb7..1ddc146 100644
          let key = e.next_observer.get();
          let next = key
              .checked_add(1)
-@@ -517,9 +613,9 @@ impl Cpu for Core {
+@@ -550,9 +646,9 @@ impl Cpu for Core {
              // Owner synchronization is raised explicitly by the R-profile
              // execution adapter at sensitive memory operations.
              Hook::Synchronization { .. } => None,
@@ -530,7 +484,7 @@ index 0b6bcb7..1ddc146 100644
              Hook::CompletedStore { range, .. } => {
                  // The permanent coherence hook already dispatches stores on
                  // watched pages. Reuse it instead of creating native hooks
-@@ -550,6 +646,9 @@ impl Cpu for Core {
+@@ -583,6 +679,9 @@ impl Cpu for Core {
      }
      fn remove_hook(&self, hook: HookId) -> Result<(), String> {
          let e = &self.execution;
@@ -615,6 +569,125 @@ index 575c251..e6f923d 100644
      }
      pub(super) fn remove_external(&self, address: u64, bytes: usize) {
          let end = address + bytes as u64;
+diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core/mutation.rs b/crates/emulator-cpu-unicorn/src/rprofile/core/mutation.rs
+new file mode 100644
+index 0000000..166baf8
+--- /dev/null
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/mutation.rs
+@@ -0,0 +1,113 @@
++//! Synchronous mutation admission, independent of board observation state.
++use super::*;
++
++pub(super) const MAX_MUTATION_OBSERVERS: usize = 16;
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum Refusal {
++    Observer,
++    Panicked,
++    Reentered,
++}
++impl Refusal {
++    fn error(self) -> String {
++        match self {
++            Self::Observer => "CPU mutation observer refused the transaction",
++            Self::Panicked => "CPU mutation observer panicked",
++            Self::Reentered => "CPU mutation during mutation dispatch is refused",
++        }
++        .into()
++    }
++}
++
++/// `refusal` holds the first refusal while any admitted transaction is open.
++#[derive(Default)]
++pub(super) struct Admission {
++    dispatching: Cell<bool>,
++    depth: Cell<u32>,
++    refusal: Cell<Option<Refusal>>,
++}
++impl Admission {
++    pub(super) fn dispatching(&self) -> bool {
++        self.dispatching.get()
++    }
++    fn refuse(&self, refusal: Refusal) -> String {
++        let first = self.refusal.get().unwrap_or(refusal);
++        self.refusal.set(Some(first));
++        first.error()
++    }
++}
++
++struct Open<'a>(&'a Admission);
++impl Drop for Open<'_> {
++    fn drop(&mut self) {
++        let depth = self.0.depth.get() - 1;
++        self.0.depth.set(depth);
++        if depth == 0 {
++            self.0.refusal.set(None);
++        }
++    }
++}
++
++struct Dispatch<'a>(&'a Admission);
++impl Drop for Dispatch<'_> {
++    fn drop(&mut self) {
++        self.0.dispatching.set(false);
++    }
++}
++
++impl Execution {
++    /// Offers `event` to every mutation observer in installation order, then
++    /// runs `apply`, which must start at the first potentially mutating step.
++    /// A refusal recorded by a nested transaction fails every enclosing one.
++    pub(super) fn mutate<T>(
++        &self,
++        event: CpuMutation,
++        apply: impl FnOnce() -> Result<T, String>,
++    ) -> Result<T, String> {
++        let admission = &self.mutation;
++        if admission.dispatching.get() {
++            return Err(admission.refuse(Refusal::Reentered));
++        }
++        if let Some(first) = admission.refusal.get() {
++            return Err(first.error());
++        }
++        admission.depth.set(admission.depth.get() + 1);
++        let _open = Open(admission);
++        {
++            let observers = self.observer_index.borrow();
++            admission.dispatching.set(true);
++            let _dispatch = Dispatch(admission);
++            for &(_, hook) in &observers.mutations {
++                let Hook::Mutation { callback, data } = hook else {
++                    continue;
++                };
++                let refusal =
++                    match catch_unwind(AssertUnwindSafe(|| unsafe { callback(event, data) })) {
++                        Ok(true) => admission.refusal.get(),
++                        Ok(false) => Some(Refusal::Observer),
++                        Err(_) => Some(Refusal::Panicked),
++                    };
++                if let Some(refusal) = refusal {
++                    return Err(admission.refuse(refusal));
++                }
++            }
++        }
++        let result = apply();
++        match admission.refusal.get() {
++            Some(first) => Err(first.error()),
++            None => result,
++        }
++    }
++
++    /// Fails an admitted transaction once a nested transaction was refused.
++    pub(super) fn mutation_refusal(&self) -> Result<(), String> {
++        self.mutation
++            .refusal
++            .get()
++            .map_or(Ok(()), |first| Err(first.error()))
++    }
++}
++
++#[cfg(test)]
++mod tests;
 diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core/mutation/tests.rs b/crates/emulator-cpu-unicorn/src/rprofile/core/mutation/tests.rs
 new file mode 100644
 index 0000000..8a7f630
@@ -1297,125 +1370,6 @@ index 0000000..8a7f630
 +        [mapping(MappingMutation::MapMmio, 0xd000, None, 0x1000, None)]
 +    );
 +}
-diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core/mutation.rs b/crates/emulator-cpu-unicorn/src/rprofile/core/mutation.rs
-new file mode 100644
-index 0000000..166baf8
---- /dev/null
-+++ b/crates/emulator-cpu-unicorn/src/rprofile/core/mutation.rs
-@@ -0,0 +1,113 @@
-+//! Synchronous mutation admission, independent of board observation state.
-+use super::*;
-+
-+pub(super) const MAX_MUTATION_OBSERVERS: usize = 16;
-+
-+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-+enum Refusal {
-+    Observer,
-+    Panicked,
-+    Reentered,
-+}
-+impl Refusal {
-+    fn error(self) -> String {
-+        match self {
-+            Self::Observer => "CPU mutation observer refused the transaction",
-+            Self::Panicked => "CPU mutation observer panicked",
-+            Self::Reentered => "CPU mutation during mutation dispatch is refused",
-+        }
-+        .into()
-+    }
-+}
-+
-+/// `refusal` holds the first refusal while any admitted transaction is open.
-+#[derive(Default)]
-+pub(super) struct Admission {
-+    dispatching: Cell<bool>,
-+    depth: Cell<u32>,
-+    refusal: Cell<Option<Refusal>>,
-+}
-+impl Admission {
-+    pub(super) fn dispatching(&self) -> bool {
-+        self.dispatching.get()
-+    }
-+    fn refuse(&self, refusal: Refusal) -> String {
-+        let first = self.refusal.get().unwrap_or(refusal);
-+        self.refusal.set(Some(first));
-+        first.error()
-+    }
-+}
-+
-+struct Open<'a>(&'a Admission);
-+impl Drop for Open<'_> {
-+    fn drop(&mut self) {
-+        let depth = self.0.depth.get() - 1;
-+        self.0.depth.set(depth);
-+        if depth == 0 {
-+            self.0.refusal.set(None);
-+        }
-+    }
-+}
-+
-+struct Dispatch<'a>(&'a Admission);
-+impl Drop for Dispatch<'_> {
-+    fn drop(&mut self) {
-+        self.0.dispatching.set(false);
-+    }
-+}
-+
-+impl Execution {
-+    /// Offers `event` to every mutation observer in installation order, then
-+    /// runs `apply`, which must start at the first potentially mutating step.
-+    /// A refusal recorded by a nested transaction fails every enclosing one.
-+    pub(super) fn mutate<T>(
-+        &self,
-+        event: CpuMutation,
-+        apply: impl FnOnce() -> Result<T, String>,
-+    ) -> Result<T, String> {
-+        let admission = &self.mutation;
-+        if admission.dispatching.get() {
-+            return Err(admission.refuse(Refusal::Reentered));
-+        }
-+        if let Some(first) = admission.refusal.get() {
-+            return Err(first.error());
-+        }
-+        admission.depth.set(admission.depth.get() + 1);
-+        let _open = Open(admission);
-+        {
-+            let observers = self.observer_index.borrow();
-+            admission.dispatching.set(true);
-+            let _dispatch = Dispatch(admission);
-+            for &(_, hook) in &observers.mutations {
-+                let Hook::Mutation { callback, data } = hook else {
-+                    continue;
-+                };
-+                let refusal =
-+                    match catch_unwind(AssertUnwindSafe(|| unsafe { callback(event, data) })) {
-+                        Ok(true) => admission.refusal.get(),
-+                        Ok(false) => Some(Refusal::Observer),
-+                        Err(_) => Some(Refusal::Panicked),
-+                    };
-+                if let Some(refusal) = refusal {
-+                    return Err(admission.refuse(refusal));
-+                }
-+            }
-+        }
-+        let result = apply();
-+        match admission.refusal.get() {
-+            Some(first) => Err(first.error()),
-+            None => result,
-+        }
-+    }
-+
-+    /// Fails an admitted transaction once a nested transaction was refused.
-+    pub(super) fn mutation_refusal(&self) -> Result<(), String> {
-+        self.mutation
-+            .refusal
-+            .get()
-+            .map_or(Ok(()), |first| Err(first.error()))
-+    }
-+}
-+
-+#[cfg(test)]
-+mod tests;
 diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core/observers.rs b/crates/emulator-cpu-unicorn/src/rprofile/core/observers.rs
 index b38e681..f9f3a48 100644
 --- a/crates/emulator-cpu-unicorn/src/rprofile/core/observers.rs
@@ -1443,10 +1397,10 @@ index b38e681..f9f3a48 100644
              Hook::Block { range, .. } => self.blocks.remove(key, range),
              Hook::CompletedStore { range, .. } => self.stores.remove(key, range),
 diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core/run.rs b/crates/emulator-cpu-unicorn/src/rprofile/core/run.rs
-index 8264e0e..fe13ffd 100644
+index 9f60007..fb18d56 100644
 --- a/crates/emulator-cpu-unicorn/src/rprofile/core/run.rs
 +++ b/crates/emulator-cpu-unicorn/src/rprofile/core/run.rs
-@@ -47,7 +47,7 @@ impl Core {
+@@ -54,7 +54,7 @@ impl Core {
              let exit = result?;
              let remap = e.tcm_pending.take();
              if let Some((bank, value)) = remap {
@@ -1527,39 +1481,11 @@ index e5bc27f..48af5c3 100644
          let value = self.validate_tcm(bank, value)?;
          let b = &self.tcm[bank];
          if value == b.register.get() {
-diff --git a/crates/emulator-cpu-unicorn/src/rprofile/core.rs b/crates/emulator-cpu-unicorn/src/rprofile/core.rs
-index 9cca628..7c78717 100644
---- a/crates/emulator-cpu-unicorn/src/rprofile/core.rs
-+++ b/crates/emulator-cpu-unicorn/src/rprofile/core.rs
-@@ -20,6 +20,7 @@ mod backend;
- mod exclusive;
- mod loops;
- mod mapping;
-+mod mutation;
- mod observers;
- mod pmu;
- mod run;
-@@ -100,6 +101,7 @@ pub(super) struct Execution {
-     observer_index: RefCell<observers::Index>,
-     at_block: Cell<bool>,
-     at_instruction: Cell<bool>,
-+    mutation: mutation::Admission,
- }
- 
- pub struct Core {
-@@ -202,6 +204,7 @@ impl Core {
-             observer_index: RefCell::new(observers::Index::default()),
-             at_block: Cell::new(false),
-             at_instruction: Cell::new(false),
-+            mutation: mutation::Admission::default(),
-         });
-         e.id.set(e.memory.register(Rc::downgrade(&e)));
-         unsafe {
 diff --git a/crates/emulator-cpu-unicorn/src/rprofile/worker.rs b/crates/emulator-cpu-unicorn/src/rprofile/worker.rs
-index cb06b2b..2d231a8 100644
+index 5185153..e3720cf 100644
 --- a/crates/emulator-cpu-unicorn/src/rprofile/worker.rs
 +++ b/crates/emulator-cpu-unicorn/src/rprofile/worker.rs
-@@ -1872,9 +1872,9 @@ impl Cpu for CpuWorker {
+@@ -1911,9 +1911,9 @@ impl Cpu for CpuWorker {
          }
          if hooks
              .iter()
@@ -1571,7 +1497,7 @@ index cb06b2b..2d231a8 100644
          }
          let mut pending = Vec::with_capacity(hooks.len());
          for &hook in hooks {
-@@ -1888,8 +1888,8 @@ impl Cpu for CpuWorker {
+@@ -1927,8 +1927,8 @@ impl Cpu for CpuWorker {
                      read, write, range, ..
                  } => HookKind::Memory { read, write, range },
                  Hook::CompletedStore { range, .. } => HookKind::CompletedStore(range),
@@ -1582,7 +1508,7 @@ index cb06b2b..2d231a8 100644
                  }
                  Hook::Fault { .. } => HookKind::Fault,
              };
-@@ -2107,6 +2107,37 @@ mod tests {
+@@ -2146,6 +2146,37 @@ mod tests {
          }
      }
  
@@ -1620,3 +1546,77 @@ index cb06b2b..2d231a8 100644
  
      #[test]
      fn observer_groups_use_one_rpc_and_retire_callback_contexts() {
+diff --git a/crates/emulator-cpu/src/lib.rs b/crates/emulator-cpu/src/lib.rs
+index 119e254..d05d3b8 100644
+--- a/crates/emulator-cpu/src/lib.rs
++++ b/crates/emulator-cpu/src/lib.rs
+@@ -217,6 +217,42 @@ impl ExecutionPolicy {
+         }
+     }
+ }
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum MutationOrigin {
++    Guest,
++    Host,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum MappingMutation {
++    MapBacking,
++    MapPhysical,
++    ReplacePhysical,
++    MapZeroed,
++    MapMmio,
++    Unmap,
++    Protect,
++}
++/// A validated mutation transaction, reported before its first effect.
++/// Admission does not promise completion or rollback of later failures.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum CpuMutation {
++    HostWrite { address: u64, bytes: usize },
++    Tcm {
++        register: arm::Coprocessor,
++        previous: u32,
++        next: u32,
++        origin: MutationOrigin,
++    },
++    Mapping {
++        operation: MappingMutation,
++        address: u64,
++        physical: Option<u64>,
++        bytes: usize,
++        permissions: Option<u32>,
++    },
++    Restore,
++    ExecutionPolicy { before: ExecutionPolicy, after: ExecutionPolicy },
++}
+ /// Guest-clock anchor for architectural registers implemented by a backend.
+ /// Its phase and ratio are supplied by the execution owner, never host time.
+ #[derive(Clone, Copy, Debug)]
+@@ -513,6 +549,15 @@ pub struct Block {
+ }
+ #[derive(Clone, Copy)]
+ pub enum Hook {
++    /// Opt-in transaction admission. False refuses before the first effect.
++    /// Runs before any other observer of the transaction. While it runs, hook
++    /// registration, removal and mutations through the same CPU are refused,
++    /// and such a refused mutation also refuses the transaction.
++    /// Callback contexts must remain live until successful removal.
++    Mutation {
++        callback: unsafe fn(CpuMutation, *mut c_void) -> bool,
++        data: *mut c_void,
++    },
+     Instruction {
+         callback: unsafe fn(u64, u32, *mut c_void),
+         data: *mut c_void,
+@@ -617,6 +662,10 @@ pub struct BackingObserver {
+ 
+ pub trait Cpu {
+     fn identity(&self) -> Identity;
++    /// Whether this processor reports every CpuMutation transaction to Hook::Mutation observers.
++    fn supports_mutation_observation(&self) -> bool {
++        false
++    }
+     /// Configure instruction-proven loops; statistics remain observational.
+     fn set_loop_mode(&self, mode: loops::LoopMode) -> Result<(), String> {
+         if mode == loops::LoopMode::Disabled {

@@ -1,3 +1,5 @@
+diff --git a/crates/emulator/src/board/decoder.rs b/crates/emulator/src/board/decoder.rs
+index 9bf1bfd..fe71001 100644
 --- a/crates/emulator/src/board/decoder.rs
 +++ b/crates/emulator/src/board/decoder.rs
 @@ -2,6 +2,7 @@
@@ -8,7 +10,7 @@
  };
  use fujimod_emulator_cpu::Cpu;
  use serde_json::{Value, json};
-@@ -57,6 +58,12 @@
+@@ -57,6 +58,12 @@ impl Decoders {
              .cloned()
              .collect()
      }
@@ -21,7 +23,7 @@
  
      pub(super) fn checkpoint(&self) -> Checkpoint {
          Checkpoint {
-@@ -137,10 +144,11 @@
+@@ -137,10 +144,11 @@ impl Decoders {
          if let Some(error) = &self.failure {
              return Err(error.clone());
          }
@@ -34,12 +36,15 @@
              let result = (|| {
                  for map in &slot.choices[choice].processors {
                      let (base, backing) = memory
+diff --git a/crates/emulator/src/board/factory.rs b/crates/emulator/src/board/factory.rs
+index 19da835..1dd12f3 100644
 --- a/crates/emulator/src/board/factory.rs
 +++ b/crates/emulator/src/board/factory.rs
-@@ -267,6 +267,16 @@
+@@ -266,6 +266,16 @@ impl Graph {
+         options: Options,
          bus: Bus,
          interrupts: Option<InterruptMap>,
-     ) -> Result<Board, String> {
++    ) -> Result<Board, String> {
 +        self.build_with(options, bus, interrupts, |_, cpu| cpu)
 +    }
 +    /// Builds with each processor passed through `wrap`, by core index.
@@ -49,11 +54,10 @@
 +        bus: Bus,
 +        interrupts: Option<InterruptMap>,
 +        mut wrap: impl FnMut(usize, Box<dyn Cpu>) -> Box<dyn Cpu>,
-+    ) -> Result<Board, String> {
+     ) -> Result<Board, String> {
          self.validate()?;
          // Validate maps before creating a process-wide native VM.
-         let ram = super::memory::Memory::new(
-@@ -281,7 +291,8 @@
+@@ -281,7 +291,8 @@ impl Graph {
          let cpus = self
              .processors
              .iter()
@@ -63,9 +67,11 @@
              .collect::<Result<Vec<_>, _>>()?;
          for (core, cpu) in cpus.iter().enumerate() {
              for a in self.mappings.iter().filter(|a| a.core == core) {
+diff --git a/crates/emulator/src/board/keyframe.rs b/crates/emulator/src/board/keyframe.rs
+index eea30e6..88459cd 100644
 --- a/crates/emulator/src/board/keyframe.rs
 +++ b/crates/emulator/src/board/keyframe.rs
-@@ -129,6 +129,7 @@
+@@ -129,6 +129,7 @@ impl State {
              parallel: _,
              decoders: _,
              memory_access: _,
@@ -73,7 +79,7 @@
              continuation: _,
          } = self;
          Saved {
-@@ -321,6 +322,7 @@
+@@ -321,6 +322,7 @@ impl Board {
              .lock()
              .map_err(|_| "exclusive monitors poisoned")?
              .validate_checkpoint(&saved.exclusive)?;
@@ -81,6 +87,8 @@
          let result = (|| {
              let memory = state.memory.clone();
              state
+diff --git a/crates/emulator/src/board/memory.rs b/crates/emulator/src/board/memory.rs
+index ea20a6b..3794360 100644
 --- a/crates/emulator/src/board/memory.rs
 +++ b/crates/emulator/src/board/memory.rs
 @@ -1,6 +1,7 @@
@@ -91,7 +99,7 @@
  use std::{
      cell::{Ref, RefCell},
      ptr::NonNull,
-@@ -65,9 +66,24 @@
+@@ -65,9 +66,24 @@ enum Access {
      Read,
      Write,
  }
@@ -116,7 +124,7 @@
      regions: Vec<(u64, Backing)>,
      mappings: RefCell<Vec<BusMapping>>,
      trackers: Vec<fujimod_emulator_cpu::memory::pages::Tracker>,
-@@ -326,6 +342,7 @@
+@@ -326,6 +342,7 @@ impl Memory {
              .collect();
          Ok(Self {
              regions,
@@ -124,7 +132,7 @@
              mappings: RefCell::new(mappings),
              trackers,
              observation: Default::default(),
-@@ -422,26 +439,53 @@
+@@ -422,26 +439,53 @@ impl Memory {
          domain: &exclusive::Shared,
          address: u64,
          bytes: &[u8],
@@ -189,7 +197,7 @@
      pub(super) fn write_host(
          &self,
          cpus: &[Rc<dyn Cpu>],
-@@ -454,7 +498,7 @@
+@@ -454,7 +498,7 @@ impl Memory {
              address,
              bytes.len(),
          );
@@ -198,7 +206,7 @@
          self.observe_transfer("host-write", address, bytes.len());
          Ok(())
      }
-@@ -470,7 +514,7 @@
+@@ -470,7 +514,7 @@ impl Memory {
              address,
              bytes.len(),
          );
@@ -207,9 +215,11 @@
          self.observe_transfer("model-bus-write", address, bytes.len());
          if let Some(stops) = self
              .continuation
+diff --git a/crates/emulator/src/board/mod.rs b/crates/emulator/src/board/mod.rs
+index 75630e7..b83cd63 100644
 --- a/crates/emulator/src/board/mod.rs
 +++ b/crates/emulator/src/board/mod.rs
-@@ -110,6 +110,8 @@
+@@ -110,6 +110,8 @@ struct State {
      parallel: Option<interactive::Epoch>,
      decoders: decoder::Decoders,
      memory_access: bool,
@@ -218,7 +228,7 @@
  }
  struct Binding {
      state: Rc<RefCell<State>>,
-@@ -125,6 +127,8 @@
+@@ -125,6 +127,8 @@ pub struct Board {
      run_wakeup: fujimod_emulator_cpu::RunWakeup,
      bindings: Vec<Box<Binding>>,
      hooks: Vec<(usize, HookId)>,
@@ -227,7 +237,7 @@
      mmio: Vec<(usize, u64, usize)>,
      next_core: Cell<usize>,
      slice_left: Cell<usize>,
-@@ -329,6 +333,7 @@
+@@ -329,6 +333,7 @@ impl Board {
              parallel: None,
              decoders: decoder::Decoders::default(),
              memory_access: false,
@@ -235,7 +245,7 @@
          }));
          let mut board = Self {
              run_wakeup: Default::default(),
-@@ -683,6 +688,9 @@
+@@ -683,6 +688,9 @@ impl Board {
          pause_after: Option<u64>,
          quantum: usize,
      ) -> Result<(), String> {
@@ -245,7 +255,7 @@
          prepare_device_workers(self.execution_policy(), self.device_worker_preference())?;
          if quantum == 0 {
              return Err("zero processor quantum".into());
-@@ -965,6 +973,9 @@
+@@ -968,6 +976,9 @@ impl Board {
  }
  impl Drop for Board {
      fn drop(&mut self) {
@@ -255,9 +265,11 @@
          let _ = self.continuation_end();
          let _ = self.release_store_watch();
          // The board exclusively owns processors; bindings hold only Weak
+diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/board/observation.rs
+index 2c429d7..849ab84 100644
 --- a/crates/emulator/src/board/observation.rs
 +++ b/crates/emulator/src/board/observation.rs
-@@ -11,6 +11,15 @@
+@@ -13,6 +13,15 @@ use std::{
      ffi::c_void,
      rc::{Rc, Weak},
  };
@@ -273,7 +285,7 @@
  type Span = (u64, u64);
  /// Access sources one classified watch range records.
  #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-@@ -75,6 +84,7 @@
+@@ -77,6 +86,7 @@ pub struct Records {
      limit: usize,
      rows: Vec<Value>,
      violation: Option<String>,
@@ -281,7 +293,30 @@
      /// Empty for an unclassified watch, which records every source.
      classes: Vec<WatchRange>,
      views: ViewPolicy,
-@@ -311,6 +321,7 @@
+@@ -153,21 +163,13 @@ impl Records {
+         state
+     }
+ }
+-/// Dropping an unended guarded watch refuses execution and retains callback storage.
++/// Dropping an unended guarded watch refuses execution.
+ pub struct MemoryWatch {
+     pub records: Rc<RefCell<Records>>,
+     contexts: Vec<Box<MemoryContext>>,
+     hooks: Vec<(usize, HookId)>,
+     refusal: Option<ExecutionRefusal>,
+ }
+-impl Drop for MemoryWatch {
+-    fn drop(&mut self) {
+-        if let Some(gate) = &self.refusal {
+-            gate.refuse();
+-            std::mem::forget(std::mem::take(&mut self.contexts));
+-        }
+-    }
+-}
+ struct MemoryContext {
+     state: Weak<RefCell<State>>,
+     cpu: Weak<dyn Cpu>,
+@@ -340,6 +342,7 @@ impl Board {
          {
              return Err("Memory watch requires bounded ranges and R-profile processors".into());
          }
@@ -289,7 +324,7 @@
          if self.preservation_active() {
              return Err("A preservation observation conflicts with memory watch".into());
          }
-@@ -318,6 +329,7 @@
+@@ -347,6 +350,7 @@ impl Board {
          self.watch_backing(&ranges)?;
          let records = Rc::new(RefCell::new(Records {
              ranges: ranges.clone(),
@@ -297,7 +332,7 @@
              limit,
              ..Default::default()
          }));
-@@ -387,6 +399,7 @@
+@@ -417,6 +421,7 @@ impl Board {
                  }
              }
          }
@@ -305,7 +340,7 @@
          self.physical_memory
              .observation
              .replace(Some(Rc::downgrade(&records)));
-@@ -427,6 +440,7 @@
+@@ -463,6 +468,7 @@ impl Board {
          {
              return Err("Memory watch requires bounded classified ranges and R-profile processors".into());
          }
@@ -313,7 +348,7 @@
          if self.preservation_active() {
              return Err("A preservation observation conflicts with memory watch".into());
          }
-@@ -434,6 +448,7 @@
+@@ -470,6 +476,7 @@ impl Board {
          self.watch_backing(&ranges)?;
          let records = Rc::new(RefCell::new(Records {
              ranges,
@@ -321,7 +356,7 @@
              limit,
              classes,
              views,
-@@ -509,29 +524,33 @@
+@@ -556,23 +563,14 @@ impl Board {
                  }
              }
          }
@@ -332,15 +367,22 @@
          Ok(watch)
      }
      pub fn memory_watch_end(&self, watch: &mut MemoryWatch) -> Result<(), String> {
--        for (core, hook) in watch.hooks.drain(..) {
--            self.cpus[core].remove_hook(hook)?;
+-        while let Some(&(core, hook)) = watch.hooks.last() {
+-            if let Err(error) = self.cpus[core].remove_hook(hook) {
+-                if let Some(gate) = &watch.refusal { gate.refuse(); }
+-                if let Some(capture) = &mut watch.records.borrow_mut().fetch_attribution { capture.observation_failed(); }
+-                return Err(error);
+-            }
+-            let _ = watch.hooks.pop();
 -        }
+-        watch.disarm_instruction_guard(self)?;
 -        self.physical_memory.observation.replace(None);
 -        Ok(())
 +        self.memory_watch_release(watch)
      }
  }
  
+@@ -584,14 +582,21 @@ pub struct InstructionPointEvent {
  /// Repeated entry observations stop before the selected instruction. Resume
  /// executes that instruction once, even when it is itself a loop target.
  pub struct InstructionPoints {
@@ -356,13 +398,16 @@
      addresses: PointAddresses,
      pause: Rc<Cell<bool>>,
 -    event: RefCell<Option<u64>>,
+-    context: Cell<Option<InstructionPointEvent>>,
 +    event: Cell<Option<u64>>,
++    entry: Cell<Option<InstructionPointEvent>>,
+     core: CoreIndex,
      skip: Cell<Option<u64>>,
 -    hooks: Vec<HookId>,
  }
  #[derive(Clone, Copy)]
  enum PointSetMode { Fixed, Mutable }
-@@ -553,36 +572,66 @@
+@@ -613,15 +618,16 @@ fn normalize_point_addresses(mut addresses: Vec<u64>) -> Result<Vec<u64>, String
      Ok(addresses)
  }
  unsafe fn instruction(pc: u64, _: u32, data: *mut c_void) {
@@ -376,13 +421,18 @@
      }
      if let Some(cpu) = points.cpu.upgrade() {
 -        points.event.replace(Some(pc));
+-        points.context.set(cpu.instruction_entry().map(|entry| InstructionPointEvent { core: points.core, entry }));
 +        points.event.set(Some(pc));
++        points.entry.set(cpu.instruction_entry().map(|entry| InstructionPointEvent { core: points.core, entry }));
          points.skip.set(Some(pc));
          points.pause.set(true);
          let _ = cpu.stop_before_instruction();
-     }
+@@ -629,23 +635,52 @@ unsafe fn instruction(pc: u64, _: u32, data: *mut c_void) {
  }
  impl InstructionPoints {
+     /// Inspect after the run settles all callbacks for the stopped entry.
+-    pub fn event_context(&self) -> Option<InstructionPointEvent> { self.context.get() }
++    pub fn event_context(&self) -> Option<InstructionPointEvent> { self.context.entry.get() }
 +    /// Requires a paused board.
      pub fn replace_addresses(&self, addresses: Vec<u64>) -> Result<(), String> {
 -        let PointAddresses::Mutable(current) = &self.addresses else {
@@ -436,7 +486,7 @@
      }
  }
  impl Board {
-@@ -609,26 +658,33 @@
+@@ -672,28 +707,35 @@ impl Board {
      ) -> Result<Box<InstructionPoints>, String> {
          let cpu = self.cpu(core)?;
          let addresses = normalize_point_addresses(addresses)?;
@@ -449,7 +499,10 @@
              },
              pause: self.host_pause.clone(),
 -            event: RefCell::new(None),
+-            context: Cell::new(None),
 +            event: Cell::new(None),
++            entry: Cell::new(None),
+             core: CoreIndex(core),
              skip: Cell::new(None),
 +        });
 +        let mut points = Box::new(InstructionPoints {
@@ -475,7 +528,7 @@
              PointAddresses::Fixed(addresses) => addresses.iter().try_for_each(|&pc| install(HookRange::Inclusive { begin: pc, end: pc })),
              PointAddresses::Mutable(_) => install(HookRange::All),
          };
-@@ -643,10 +699,11 @@
+@@ -708,10 +750,11 @@ impl Board {
          core: usize,
          points: &mut InstructionPoints,
      ) -> Result<(), String> {
@@ -490,6 +543,9 @@
      }
  }
  
+diff --git a/crates/emulator/src/board/observation/composite.rs b/crates/emulator/src/board/observation/composite.rs
+new file mode 100644
+index 0000000..f17b045
 --- /dev/null
 +++ b/crates/emulator/src/board/observation/composite.rs
 @@ -0,0 +1,849 @@
@@ -1342,9 +1398,12 @@
 +
 +#[cfg(test)]
 +mod tests;
+diff --git a/crates/emulator/src/board/observation/composite/tests.rs b/crates/emulator/src/board/observation/composite/tests.rs
+new file mode 100644
+index 0000000..dfe8769
 --- /dev/null
 +++ b/crates/emulator/src/board/observation/composite/tests.rs
-@@ -0,0 +1,1107 @@
+@@ -0,0 +1,1119 @@
 +use super::*;
 +use crate::board::{
 +    bus::{self, Bus},
@@ -1356,7 +1415,7 @@
 +use fujimod_emulator_cpu::{
 +    AccessRefusalError, BackingObserver, BlockAccounting, Clock, ExecutionError, Exit, FastMmioRead, Features,
 +    Identity, Interrupt, MappingMutation, MemoryRegion, Mmio, MutationOrigin, Run, RunStatus, RunToken, RunWakeup,
-+    Snapshot, TranslationHooks, exclusive, loops, timeline::Ratio,
++    Snapshot, TranslationHooks, exclusive, loops, timeline::Ratio, ExecutionRefusal, InstructionEntry,
 +};
 +use fujimod_emulator_cpu_unicorn::rprofile;
 +use fujimod_emulator_devices::{Cx, Device};
@@ -1651,6 +1710,18 @@
 +    }
 +    fn refuse_access(&self) -> Result<(), AccessRefusalError> {
 +        self.inner.refuse_access()
++    }
++    fn instruction_entry(&self) -> Option<InstructionEntry> {
++        self.inner.instruction_entry()
++    }
++    fn arm_execution_refusal(&self, gate: ExecutionRefusal) -> Result<(), String> {
++        self.inner.arm_execution_refusal(gate)
++    }
++    fn disarm_execution_refusal(&self, gate: &ExecutionRefusal) -> Result<(), String> {
++        self.inner.disarm_execution_refusal(gate)
++    }
++    fn execution_refused(&self) -> bool {
++        self.inner.execution_refused()
 +    }
 +    fn rprofile_identity(&self, value: Option<u32>) -> Result<u32, String> {
 +        self.inner.rprofile_identity(value)
@@ -2452,9 +2523,12 @@
 +    assert!(board.instruction_points_end(1, &mut points).is_err());
 +    board.instruction_points_end(0, &mut points).unwrap();
 +}
+diff --git a/crates/emulator/src/board/observation/lifecycle.rs b/crates/emulator/src/board/observation/lifecycle.rs
+new file mode 100644
+index 0000000..1c4b588
 --- /dev/null
 +++ b/crates/emulator/src/board/observation/lifecycle.rs
-@@ -0,0 +1,173 @@
+@@ -0,0 +1,223 @@
 +//! Hook ownership for memory watches, instruction points and guards. A failed
 +//! removal keeps the hook's identity and context and blocks board execution.
 +use super::{
@@ -2556,10 +2630,11 @@
 +}
 +
 +impl MemoryWatch {
-+    /// Ends classified then guard registrations. A failure leaves the
-+    /// remaining hooks and the guard attached.
-+    fn release(&mut self) -> Result<(), String> {
-+        let owner = self.records.borrow().lease.owner.upgrade();
++    /// Ends classified registrations, the instruction guard when `board` is
++    /// given, then the composite guard. A failure leaves the remaining hooks
++    /// and both guards attached.
++    fn release(&mut self, board: Option<&Board>) -> Result<(), String> {
++        let owner = self.records.try_borrow().ok().and_then(|records| records.lease.owner.upgrade());
 +        let contexts = &self.contexts;
 +        let classified = remove_hooks(&mut self.hooks, |&(core, hook)| {
 +            match contexts.iter().find(|context| context.core == core) {
@@ -2568,10 +2643,31 @@
 +            }
 +        });
 +        if let Err(error) = classified {
-+            self.records.borrow_mut().lease.fail(owner.as_ref());
++            if let Some(gate) = &self.refusal {
++                gate.refuse();
++            }
++            match self.records.try_borrow_mut() {
++                Ok(mut records) => {
++                    if let Some(capture) = &mut records.fetch_attribution {
++                        capture.observation_failed();
++                    }
++                    records.lease.fail(owner.as_ref());
++                }
++                Err(_) => fail_owner(owner.as_ref()),
++            }
 +            return Err(error);
 +        }
-+        let guard = self.records.borrow_mut().lease.guard.take();
++        if let Some(board) = board {
++            self.disarm_instruction_guard(board)?;
++        }
++        let Ok(mut records) = self.records.try_borrow_mut() else {
++            return match board {
++                Some(_) => Err("memory watch records are borrowed".into()),
++                None => self.release_borrowed(owner),
++            };
++        };
++        let guard = records.lease.guard.take();
++        drop(records);
 +        if let Some(mut guard) = guard
 +            && let Err(error) = guard.remove()
 +        {
@@ -2586,29 +2682,57 @@
 +            records.lease.phase = LeasePhase::Ended;
 +            armed
 +        };
-+        if let Some(memory) = owner {
-+            if ended {
-+                let live = &memory.observers.live_watches;
-+                live.set(live.get().saturating_sub(1));
-+            }
-+            let mut slot = memory.observation.borrow_mut();
-+            if slot.as_ref().and_then(Weak::upgrade).is_some_and(|current| Rc::ptr_eq(&current, &self.records)) {
-+                *slot = None;
-+            }
-+        }
++        end_owner(owner, ended, &self.records);
 +        Ok(())
++    }
++    /// Final release of a dropped watch whose records another holder borrows.
++    /// An attached composite guard cannot be removed and blocks execution.
++    fn release_borrowed(&self, owner: Option<Rc<Memory>>) -> Result<(), String> {
++        let Ok(records) = self.records.try_borrow() else {
++            fail_owner(owner.as_ref());
++            return Err("memory watch records are mutably borrowed".into());
++        };
++        if records.lease.guard.is_some() {
++            fail_owner(owner.as_ref());
++            return Err("memory watch records are borrowed; its composite guard stays attached".into());
++        }
++        let armed = records.lease.phase == LeasePhase::Armed;
++        drop(records);
++        end_owner(owner, armed, &self.records);
++        Ok(())
++    }
++}
++fn fail_owner(owner: Option<&Rc<Memory>>) {
++    if let Some(memory) = owner {
++        memory.observers.cleanup_failed.set(true);
++    }
++}
++/// Retires an armed watch and clears the observation slot only if it still names `records`.
++fn end_owner(owner: Option<Rc<Memory>>, armed: bool, records: &Rc<RefCell<super::Records>>) {
++    let Some(memory) = owner else { return };
++    if armed {
++        let live = &memory.observers.live_watches;
++        live.set(live.get().saturating_sub(1));
++    }
++    let mut slot = memory.observation.borrow_mut();
++    if slot.as_ref().and_then(Weak::upgrade).is_some_and(|current| Rc::ptr_eq(&current, records)) {
++        *slot = None;
 +    }
 +}
 +impl Drop for MemoryWatch {
 +    fn drop(&mut self) {
-+        if self.release().is_ok() || self.hooks.is_empty() {
++        if let Some(gate) = &self.refusal {
++            gate.refuse();
++        }
++        let owner = self.records.try_borrow().ok().and_then(|records| records.lease.owner.upgrade());
++        if self.release(None).is_ok() || self.hooks.is_empty() {
 +            return;
 +        }
-+        let owner = self.records.borrow().lease.owner.upgrade();
-+        if let Some(memory) = owner {
-+            memory
-+                .observers
-+                .retain(Box::new((std::mem::take(&mut self.contexts), std::mem::take(&mut self.hooks))));
++        let contexts = std::mem::take(&mut self.contexts);
++        let hooks = std::mem::take(&mut self.hooks);
++        match owner {
++            Some(memory) => memory.observers.retain(Box::new((contexts, hooks))),
++            None => std::mem::forget((contexts, hooks)),
 +        }
 +    }
 +}
@@ -2625,6 +2749,6 @@
 +        if !watch.records.borrow().lease.owned_by(&self.physical_memory) {
 +            return Err("memory watch belongs to a different board".into());
 +        }
-+        watch.release()
++        watch.release(Some(self))
 +    }
 +}

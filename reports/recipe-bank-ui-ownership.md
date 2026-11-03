@@ -657,3 +657,123 @@ Every row is **[INFERENCE] proposed acceptance**, not new execution. Extend revi
 Immediate blockers are table/index/mutation lifetime closure; the 951 unresolved callback return proofs; unknown service/computed-call frontiers; actual private-ABI consumers; state/event initialization and nested/asynchronous writers; callers/physical aliases; cold/Q/SETUP/generic-editor reachability; task/queue/pending-work and acknowledged rendering; and independently incomplete storage/capture/playback/device contracts. The 174-ID census is an obligation inventory, not 174 accepted trajectories. [Sources: E-MODAL-CONTROLLER-MANIFEST-150; open premises, scoped diagnostic, published storage, lifecycle and snapshot sections above; Inventory §§8.2,8.18; E-MODAL-CALLER-CONTINUATIONS-150.]
 
 **Proposed #117/#127 project text:** Own modal dispatch and all174 controllers' decision/state code behind one typed event/controller/action interface, absorbing frame snapshots and existing menu/editor implementations. Qualify at retained property, frame/editor/buffer, rendering, input, runtime, storage and device interfaces and through cold first-start/shooting, Q/SETUP, accepted controller trajectories, entry/BACK/reentry, unhandled input and editor cancel/confirm scenarios. Start from the manifest and FILMSIM connected set; keep unobserved controllers and device-dependent scenarios explicit. Completion removes scoped stock fallback and proves caller/callback/data/init/lifetime closure plus continuous original-body/data exclusion within the full accepted scenario/artifact scope.
+
+### Replacement strategy at callback scale
+
+The project is not 5,795 handwritten callback ports. This section measures what the callback population is, how much of it existing trajectories reach, and what each replacement strategy would have to do with it. Shape clusters are syntactic measurements, not behavior equivalence. [Sources: E-MODAL-CONTROLLER-SCALE-150; E-MODAL-CONTROLLER-MANIFEST-150.]
+
+#### Callback structure
+
+[`//replacement/modal_runtime:controller-scale`](../replacement/modal_runtime/ControllerScaleMain.hs) reinspects every manifest callback with `StockInventory.inspectFunction` over the pinned image5 bytes, hashes three normal forms, projects the recorded trajectory domains and scans constant-address controller-cell accesses. It refuses a different manifest or image5 digest. Private outputs, each from one reviewed run, are `private-data/scratch/ControllerManifest/scale.json` (clusters only), `scale-cells.json` (first cell scan, immediate offsets only, superseded) and `scale-cells-regoffset.json` (also resolves constant register offsets, which controllers 128 and above need; authoritative). All three have byte-identical `cluster_summary`. Reproduce with owner-supplied inputs and a fresh output path:
+
+```sh
+devenv shell -- bazel --batch --output_base="$HOME/.cache/bazel/latent-image-ControllerManifest" build --jobs=2 //replacement/modal_runtime:controller-scale
+bazel-bin/replacement/modal_runtime/controller-scale \
+  --manifest private-data/scratch/ControllerManifest/manifest.json \
+  --id5 private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin \
+  --out <fresh private path>
+```
+
+| Code span | Callbacks | Bytes |
+| --- | ---: | ---: |
+| 16 to 32 bytes | 1,295 | 30,024 |
+| 33 to 64 | 1,595 | 77,332 |
+| 65 to 128 | 1,497 | 139,520 |
+| 129 to 256 | 812 | 142,780 |
+| 257 to 512 | 434 | 154,416 |
+| 513 to 1,024 | 122 | 80,816 |
+| 1,025 to 4,096 | 34 | 46,436 |
+| over 4,096 | 6 | 38,828 |
+
+The median callback is 68 bytes (p25 36, p75 128, p90 264, p95 380, p99 808, maximum 12,244). Counts and bytes diverge: the 4,387 callbacks of at most 128 bytes hold 34.8% of the 710,152 code bytes, while the 162 callbacks over 512 bytes hold 23.4% and the 100 largest hold 18.5%. The largest are controller64's `0xc4b588` (12,244) and `0xc486ac` (8,220), controller75's SET delegate `0xc72e10` (5,272) and key-right `0xc70528` (4,536), and controller76's `0xc7e2bc` and `0xc7c338` (4,316 and 4,240). Every callback is registered under exactly one controller: per-controller unique action counts sum to 5,795. Identical bodies occur as separate copies, for example 109 return-`-1` bodies across 103 controllers.
+
+| Normal form | Shapes | Singleton shapes | Callbacks in repeated shapes | Largest shape | Callbacks in top 10 / top 100 shapes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Exact stored words | 5,612 | 5,603 | 192 | 109 | 193 / 283 |
+| Helper-bound: immediates, MOVW/MOVT halves, literal values and offset magnitudes parameterized; registers, conditions, operations, internal branch offsets and helper identities exact | 4,058 | 3,471 | 2,324 (40.1%; 176,832 bytes, 24.9%) | 109 | 549 / 1,191 |
+| Helper-erased: also parameterizes external call identities, an upper bound | 2,588 | 1,994 | 3,801 (65.6%) | 226 | 1,235 / 2,479 |
+
+Under the helper-bound form, 59.9% of callbacks and 75.1% of bytes are singleton shapes. The representative repeated shapes below are small bodies in one compiler style: an r11 frame prologue, MOVW/MOVT absolute globals, conditional execution and direct BL calls. Listing lines are in `private-data/analysis/x-m1-1.50/filmsim/id5.dis`:
+
+| Members | Shape | Listing |
+| ---: | --- | --- |
+| 109 (103 controllers) | return `-1` | 227985-227990 |
+| 92 (63 controllers) | return a constant | 227979-227984 |
+| 100 (25 controllers) | query `0xd38870(0)`, then two `0xd3b198(4,0x130,…)` input-record appends, return 1 or 0 | 227708-227725 |
+| 48 | `0xd3a2b8(0)` release-state producer, then router `0xc0dbf8` | 224182-224187 |
+| 45 | warning selection `0xd3b64c(0)`, compare, conditional controller-state store | 206745-206752 |
+| 226 helper-erased (196 different helpers) | one call, then return a constant | 227254-227258 |
+| 158 helper-erased (33 helper-bound, all `0xc0dbf8`) | tail call returning the helper's result | 228131-228134 |
+
+All 5,795 structural instruction sets decode within the closed `host/firmware/A32.hs` decoder; none has an indirect-call or external-branch candidate, so every outgoing transfer is a direct BL. They call 1,926 distinct helpers: 613 are called by one callback and 59 by at least 50; 5,563 callbacks call at least one, and the 20 most shared helpers are called by 3,855. The two most shared are routers. `0xc0dbf8` (1,362 callbacks) and transition service `0xc12aac` (738) read the application mailbox code `u32[0x0094f64c]`, write an event into a fixed controller's event cell and reenter dispatcher `0xbfb028` (id5.dis:28760-28790, 33797-33834); 2,093 callbacks call at least one of them. Next come notification `0xd38d98` (667), postlude `0xd38f34` (665), stage open `0xd3d858` (437) and property read `0x0061c93c` (429). [Sources: E-MODAL-CONTROLLER-SCALE-150 `sizes`, `cluster_summary`, `helper_bound_clusters`, `shared_helpers`, `call_patterns`; manifest `functions[].indirect_call_candidates`, `external_branch_candidates`; `reports/cardless-capture-feasibility.md:248,260` mailbox and UI actor; `reports/af-observation-plan.md:77,153` for `0xd3b64c` and `0xd3b198`; `reports/autofocus-static-map.md:493` for `0xd3a2b8`; `menu/recipe_bank_arm.S:225-275` for the named services.]
+
+#### Next-state encoding and table-driven variants
+
+All 348 transition words are zero, yet 2,609 callbacks (45.0%) contain 4,545 halfword stores to a constant controller state cell. 4,454 store a known constant, 52 distinct values occur, and 1,154 sites are conditional. Every recorded store targets the callback's own controller; 124 controllers' state cells are written this way. No callback stores to an event cell or loads a cell through a constant address. Event writes and cross-controller dispatch go through helpers such as the two routers. Next-state logic therefore lives in callback code as `state[own] := constant`, not in the transition tables. Among repeated helper-bound shapes, 245 (746 callbacks) contain such stores, and 143 have members whose ordered store signatures differ: the same code shape with different next-state constants or store counts. That is the measured table-driven-variant population. The scan resolves only straight-line constant addresses, so absence of a record is not absence of a write. [Sources: E-MODAL-CONTROLLER-SCALE-150 `scale-cells-regoffset.json` `controller_cell_summary`, `callback_index[].controller_cell_accesses`; manifest `controllers[].state_address`.]
+
+The same stores explain almost all return-proof refusals. 950 of the 951 unresolved return derivations cite `global-object-stack-separation` at one global store, and for 932 that store is a recorded state-cell store. The other 18 cite other global stores, such as `0xc240d0` into the `0x00944580` block (id5.dis:51586-51602); one cites none. **[INFERENCE]** One address-space fact, that the controller cell span and the few other global objects are disjoint from every caller frame, would discharge the dominant refusal premise. It is not established here and does not by itself prove the returns. [Sources: manifest `functions[].extent.return_proof.reason` joined to `scale-cells-regoffset.json` store sites; E-MODAL-CONTROLLER-SCALE-150.]
+
+#### Natural coverage and accepted capability demand
+
+| Recorded domain | Paired coordinates | Contexts | Selected pinned-stock action identities | Denominator |
+| --- | ---: | ---: | ---: | --- |
+| Retained FILMSIM navigation | 29 | 134 | 25 | 5,795 globally, 1,179 registered under its six witnessed IDs |
+| Packaged repeated FILMSIM navigation | 41 | 254 | 36 | Same denominators |
+| Union | 41 | Separate observations, not additive coverage | 36 | 36/5,795; the retained set is a subset |
+
+The analyzer's static projection reproduces 25 and 36 from the manifest's paired domains. The retained receipt independently records 25 distinct r3 targets at the dispatcher action-call site `0xbfb0c8`, agreeing with the projection. That is selected-target observation, not a callback-body-entry instrument. The packaged 36-target result projects paired entry domains through pinned stock tables: publication and interposition change implementations, so it is not evidence of 36 executed stock callbacks or 36 owned bodies. The bank lifecycle separately records three owned body identities, SET once, confirm twice and leave once. [Sources: E-MODAL-CONTROLLER-SCALE-150 `trajectory_projection`; E-MODAL-RETAINED-FILM-ROUTE-150, `private-data/scratch/modal128/retained-film-route/segment-retained-film-route/e2e-result.json` action trace r3; E-MODAL224-PACKAGED-FILMSIM-150, captured domains; E-MODAL75-PACKAGED-DEVICE-150, labeled owned-entry hits; `private-data/scratch/ControllerManifest/scale-coverage.json`.]
+
+The witnessed set gives almost no template leverage. Its 36 targets fall into 35 helper-bound shapes with 146 members in total, and 109 of those are the shared return-`-1` shape; the other shapes have at most three members. Under the helper-erased upper bound, 635 callbacks share a shape with a witnessed target. Eight of the 36 store controller state and two have unresolved return proofs. Retiring the observed route by template would therefore retire roughly the observed route.
+
+| ID | Unique nonnull registered action targets | Retained-domain selected targets | Packaged-domain selected targets | Evidenced visible area or role |
+| --- | ---: | ---: | ---: | --- |
+| 0 | 104 | 2 | 2 | Participates in this menu route; no exclusive visible-area identity recovered |
+| 30 | 203 | 8 | 15 | Participates; not controller75 state30 |
+| 74 | 499 | 6 | 10 | Participates; no exclusive visible-area identity recovered |
+| 75 | 297 | 4 | 4 | Shooting-menu/FILMSIM navigation; separately bank list/editor states 0 and 30 |
+| 100 | 61 | 4 | 4 | Nested transition dispatch destination, not an exclusive menu area |
+| 107 | 15 | 1 | 1 | Participates; no exclusive visible-area identity recovered |
+| 76 | Outside the counted route | Not witnessed | Not witnessed | Source-backed Wireless Settings → General Settings → NAME, state36 |
+
+Controller75 participates in a menu family, not only FILMSIM. The source-backed controller76 NAME route is not observed generic75 cancellation. Other controller/menu-area mappings remain unknown; first-start `(69,52,12)`, date `(67,56,0)` and shooting `(1,5,2)` are menu tuples, not controller IDs. [Sources: existing trajectory and reachable stock modal75 sections above; `ghidra/all.c:341168-341273` event75 producer; `id5.dis:33797-33834` nested controller100 dispatch; manifest controller tables; E-APPLICATION-ENTRY-LOOP-SOURCE-150.]
+
+The accepted capability inventory requires controls/menus, startup/shutdown, live view, AF/manual focus, exposure/capture, development, save/playback, persistent settings, calibration consumption, external interfaces and failure recovery. These traces establish a bounded menu/navigation/editor slice and some handback/render outcomes, not the controller sets required by every accepted area. FILMSIM selection is not development execution; bank SAVE CURRENT is not image save or durable persistence; RAM-push/rollback is not ownership of firmware external interfaces or general recovery. Cold/Q/SETUP, other modes, shutdown, capture/development/playback/storage and failures need their own observed domains and effects. No accepted-capability callback count exists, so neither 36 nor 1,179 is a port budget. [Sources: Inventory §§2,8.3; E-MODAL-CONTROLLER-MANIFEST-150; packaged lifecycle and render scopes above.]
+
+#### Strategy comparison
+
+Strategy and effort judgments are **[INFERENCE]** from the measurements above. Effort is stated as the units of work each strategy multiplies, not person-time.
+
+| Measurement | Value | Bears on |
+| --- | ---: | --- |
+| Callbacks / code bytes | 5,795 / 710,152 | Total retained, translated or re-specified surface |
+| Helper-bound shapes / singletons | 4,058 / 3,471 | Template retirement (a) and per-template qualification (b) |
+| Helper-erased shapes | 2,588 | Template count once helpers become typed parameters |
+| Distinct helpers / single-use | 1,926 / 613 | Service binding surface for every strategy |
+| Callbacks storing constant next states | 2,609 | Transitions recoverable as data (c) |
+| Callbacks calling dispatch routers | 2,093 | Reentrant dispatch is required by every strategy |
+| Unresolved return proofs / citing a state-cell store | 951 / 932 | Callback ABI admission for retained or translated bodies |
+| Native cases needed at 256 declared functions each | at least 23 | Differential partitioning for (b) |
+
+| Strategy | Work it multiplies | How qualification scales | Principal risk |
+| --- | --- | --- | --- |
+| **(a) Owned dispatcher and typed interface; retain stock callbacks, retire clusters by template** | One dispatcher, interface and stock-compatible callback envelope, then one owned implementation per retired shape. Helper-bound templates reach at most 40.1% of callbacks and 24.9% of bytes; 3,471 singleton shapes remain one-offs. | Subsystem matrix once; envelope once; per retired template a contract and per-member binding checks. Retained callbacks are not retired and keep the ABI obligations, including 951 return refusals. | A long mixed period presented as ownership. The envelope must reproduce the stock r4-r11/r11/LR frame for every retained callback, and the routers reenter dispatch from 2,093 callbacks. |
+| **(b) Mechanical A32 translation to Rust, qualified per cluster** | Translation rules over the closed decoder's admitted forms (every callback decodes; transfers are direct BL), plus 1,926 helper bindings. Effort grows with rules and bindings, not with callback count. Output keeps absolute globals (`0x00944580` block, state cells) and helper identities. | Rules qualified once with wrong-behavior controls; every member then needs a differential against its original body, at least 23 native cases at the 256-function limit, with helper effects stubbed. Register-only stubs cannot represent helper memory effects. | Ownership of bytes, not of design: translated code stays coupled to stock memory layout and services. A rule bug replicates across members. |
+| **(c) Re-specify from tables and strings; generic owned controllers** | Menu content is already data: image4 nodes `{id, type, property, kind, …, parent, values, labels}`, `{row, child}` values arrays, string-id label quadruples, conversion tables and availability matrices; the stock SET delegate `0xc72e10` is a generic leaf handler with frame-class special cases. Next states are constants in 2,609 callbacks and mailbox-to-event routing is switch-coded in routers. Work is extracting those tables and writing a small set of generic primitives. | Generic primitives qualified once over their parameter domains; every extracted instance validated mechanically against stock bytes; behavior compared against stock execution of the same data in the system matrix. | Tables do not hold side effects: 4,525 targets have a property-gate path, 1,472 a render path, and 380 only an unclassified category. No complete menu-node census exists. 168 controllers have no observed domain. |
+
+Strategy (a) is an integration architecture, not permission to use the scoped modal75 adapter globally; `src/dispatch.S` and source-level argument equality do not reproduce the stock frame. Strategy (b) must preserve 32-bit wrapping, signed halfword behavior, predication/NZCV, instruction-visible PC, access widths, volatile/shared read order and call-clobber rules, and must keep the 951 return refusals as exceptions until their premise is proven. Strategy (c) must preserve the lifecycle's repeated queries, post-transition reads, buffer mutations and result-dependent notifications, or specify an accepted difference. No production A32-to-Rust/C translator exists in the repository: the matching pipeline compiles already-recovered x70view C and checks bound bytes. New owned logic defaults to Rust. [Sources: dispatcher ABI sections above; `replacement/modal_runtime/src/dispatch.S`; `replacement/owned_menu/src/lifecycle.rs:141-220`; `matching/README.md:3-28`; `emulation/README.md:558-584`; `reports/filmsim-offer-mechanism.md:22-26`; `reports/recipe-design.md:80,460`; `reports/firmware-extraction.md:116`; spec §§Compatibility and redesign, Automatic verification, Independent evidence; `docs/principles.md:17-29`.]
+
+#### Recommended composition
+
+**[INFERENCE]** No single strategy fits the measured population. Use each where the measurements favor it, inside the one subsystem:
+
+1. **(a) as the frame.** One owned reentrant dispatcher and typed `ControllerId`/`Event`/`ControllerState`/`ActionResult` interface, reached by every router and by the stock entry. This is required by every strategy.
+2. **(c) for the state-machine and menu layer.** Recover per-controller next-state constants, router mailbox-to-event maps and menu node/values/labels tables into owned typed data, and drive them with generic controllers and one generic menu engine. The zero transition tables, the 2,609 constant next-state callbacks and the existing node data make this the layer where re-specification is cheapest and most maintainable.
+3. **(b) for the residual action bodies.** The 3,471 singleton shapes hold 75.1% of the bytes; template retirement cannot reach them and re-specification needs service contracts that do not yet exist. Translate them to Rust through typed service bindings, cluster by cluster, as a bridge to later re-specification. Keep untranslated bodies explicitly stock until their cluster qualifies.
+
+Qualification then grows with generic primitives, translation rules, helper bindings and accepted scenarios rather than with callbacks; every callback still gets a recorded disposition (generic instance, translated member, exceptional owned body or retained stock) with its binding provenance and open premises. Shape equality never reduces per-member binding checks to one representative.
+
+Next evidence, in order: prove the controller-cell and global-object stack-separation premise once and rerun return derivation; extract router mailbox-to-event maps from the helpers that reenter `0xbfb028`; run an instruction-form census to size translation rules; capture cold, Q and SETUP dispatch domains; then pilot all three layers on controller75 (297 targets, with the most existing route, lifecycle and owned-body evidence) before scaling. The existing native-case format holds at most 256 declared functions and 16 regions per case, so differential qualification is partitioned by execution and service closure. [Source: `emulation/README.md:558-584`.]
+
+Mechanical and contract-based implementations are both eligible for publication under provenance and redistribution review. Neither a generated label nor changed source structure clears copied firmware tables, strings, resources or instruction material. Keep raw extraction and shape artifacts private, publish tools and reproducible owner-input derivation, and review embedded data and upstream notices independently of behavioral qualification. [Sources: spec §Publication; `docs/principles.md:64-74`; `third_party/README.md:23-33`.]
+
+**Proposed #128 strategy text:** Replace the 174-controller subsystem as three layers behind one owned reentrant dispatcher: typed state-machine and menu data recovered from stock tables and constant next-state stores, driven by generic owned controllers; residual action bodies translated to Rust through typed service bindings and qualified per cluster; and explicitly retained stock bodies until their cluster qualifies. Start with the controller-cell stack-separation premise, router maps, an instruction-form census and cold/Q/SETUP domains, then pilot controller75. Completion keeps the subsystem acceptance of the project text above.

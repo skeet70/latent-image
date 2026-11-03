@@ -1,15 +1,22 @@
 use crate::{
-    modal_permit::{CodeRange, CoreId, Cpsr, Layout, Monitor, Observation, ObservationLimit, Policy,
-        Snapshot, StockFrame, STOCK_END, STOCK_ENTRY, STOCK_RESUME},
+    modal_guard::{BoundFetch, GuardConfig, GuardReport, InstalledGuard, WatchEvidence},
+    modal_lifetime::{LifetimeMemory, LifetimeReceipt, LifetimeRequest, Word},
+    modal_memory::FixedMemory,
+    modal_permit::{CodeRange, ControllerId, CoreId, Cpsr, EntryInstruction, Layout, Monitor,
+        Observation, ObservationLimit, Policy, Route, Snapshot, StockFrame, STOCK_END,
+        STOCK_ENTRY, STOCK_RESUME},
+    modal_task::{self, KernelId, TaskError, TaskExecution},
     provenance::Guest,
     trace::{InstructionCount, read_identity_bytes, read_mapped_bytes, sample_bound_word},
 };
-use fujimod_emulator::{board::factory::MemoryMap, session::Session};
+use fujimod_emulator::{board::{factory::MemoryMap, observation::InstructionPointEvent}, session::Session};
 use fujimod_emulator_cpu::{Register, arm};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
 use std::{collections::BTreeMap, num::NonZeroU64};
 
 const MAX_OBSERVATIONS: u64 = 65_536;
+/// Installed-lifetime bound, equal to the guard's write-row limit.
+const MAX_LIFETIME_OBSERVATIONS: u64 = 1 << 20;
 const MAX_LINKED_BYTES: usize = 1024 * 1024;
 const MAX_RETURN_SITES: usize = 4096;
 const DEPTH: usize = 32;
@@ -30,7 +37,12 @@ pub struct BeginRequest {
     seam: Option<[u32; 2]>,
     owned: Option<[u32; 2]>,
     owned_prehook: Option<u32>,
+    #[serde(default)]
+    helpers: Vec<[u32; 2]>,
     limit: u64,
+    #[serde(default)]
+    context_sources: Vec<LinkedSource>,
+    lifetime: Option<LifetimeRequest>,
 }
 
 impl BeginRequest {
@@ -43,11 +55,28 @@ impl BeginRequest {
                 .map_err(|failure| failure.to_string())?,
             _ => return Err("modal seam and owned ranges must be supplied together".into()),
         };
+        let layout = match self.helpers.as_slice() {
+            [] => layout,
+            [first, second] => layout.with_helpers([range(*first)?, range(*second)?])
+                .map_err(|failure| failure.to_string())?,
+            _ => return Err("modal helpers must be absent or the complete two-function pair".into()),
+        };
         let linked = self.linked.map(|source| SourceImage::new(Guest(source.start), source.bytes)).transpose()?;
         let limit = ObservationLimit(NonZeroU64::new(self.limit)
             .ok_or("modal observation limit must be positive")?);
-        Config::new(layout, self.stock, linked, maps, limit)?
-            .with_owned_prehook(self.owned_prehook.map(Guest))
+        let bound = if self.lifetime.is_some() { MAX_LIFETIME_OBSERVATIONS } else { MAX_OBSERVATIONS };
+        let config = Config::bounded(layout, self.stock, linked, maps, limit, bound)?
+            .with_owned_prehook(self.owned_prehook.map(Guest))?;
+        match self.lifetime {
+            Some(lifetime) => {
+                let contexts = self.context_sources.into_iter()
+                    .map(|source| SourceImage::new(Guest(source.start), source.bytes))
+                    .collect::<Result<Vec<_>, _>>()?;
+                config.with_lifetime(contexts, lifetime)
+            }
+            None if self.context_sources.is_empty() => Ok(config),
+            None => Err("task context sources require an installed-lifetime observation".into()),
+        }
     }
 }
 
@@ -66,6 +95,9 @@ impl SourceImage {
         Ok(Self { start, bytes })
     }
 
+    pub(crate) fn start(&self) -> Guest { self.start }
+    pub(crate) fn bytes(&self) -> &[u8] { &self.bytes }
+
     fn contains(&self, range: CodeRange) -> bool {
         self.start <= range.start()
             && u64::from(range.end().0) <= u64::from(self.start.0) + self.bytes.len() as u64
@@ -82,24 +114,33 @@ pub struct Config {
     images: Vec<SourceImage>,
     maps: Vec<MemoryMap>,
     owned_prehook: Option<Guest>,
+    entry_branch: Option<Word>,
+    guard: Option<GuardConfig>,
 }
 
 impl Config {
-    pub fn new(layout: Layout, mut stock: Vec<u8>, linked: Option<SourceImage>,
+    pub fn new(layout: Layout, stock: Vec<u8>, linked: Option<SourceImage>,
         maps: Vec<MemoryMap>, limit: ObservationLimit) -> Result<Self, String> {
+        Self::bounded(layout, stock, linked, maps, limit, MAX_OBSERVATIONS)
+    }
+
+    fn bounded(layout: Layout, mut stock: Vec<u8>, linked: Option<SourceImage>,
+        maps: Vec<MemoryMap>, limit: ObservationLimit, bound: u64) -> Result<Self, String> {
         if stock.len() != (STOCK_END.0 - STOCK_ENTRY.0) as usize
             || stock.get(..4) != Some(0xe92d_4ff0u32.to_le_bytes().as_slice()) {
             return Err("modal stock source is not the complete pinned dispatcher".into());
         }
-        if limit.0.get() > MAX_OBSERVATIONS {
+        if limit.0.get() > bound {
             return Err("modal observation limit exceeds its bound".into());
         }
+        let mut entry_branch = None;
         match (layout.policy(), linked.as_ref()) {
             (Policy::StockBaseline, None) => {}
             (Policy::ScopedOwned75, Some(image)) => {
                 let seam = layout.seam().ok_or("modal seam is missing")?;
                 let owned = layout.owned().ok_or("owned modal range is missing")?;
                 if !image.contains(seam) || !image.contains(owned)
+                    || layout.helpers().any(|range| !image.contains(range))
                     || image.includes(STOCK_ENTRY) || image.includes(Guest(STOCK_END.0 - 4)) {
                     return Err("linked modal ranges leave their bound source image".into());
                 }
@@ -109,13 +150,14 @@ impl Config {
                 }
                 let branch = 0xea00_0000 | (((delta as u32) >> 2) & 0x00ff_ffff);
                 stock[..4].copy_from_slice(&branch.to_le_bytes());
+                entry_branch = Some(Word(branch));
             }
             _ => return Err("modal source images disagree with the selected policy".into()),
         }
         let mut images = Vec::with_capacity(2);
         images.push(SourceImage::new(STOCK_ENTRY, stock)?);
         images.extend(linked);
-        Ok(Self { layout, limit, images, maps, owned_prehook: None })
+        Ok(Self { layout, limit, images, maps, owned_prehook: None, entry_branch, guard: None })
     }
 
     pub fn with_owned_prehook(mut self, pc: Option<Guest>) -> Result<Self, String> {
@@ -129,13 +171,42 @@ impl Config {
         Ok(self)
     }
 
+    fn with_lifetime(mut self, contexts: Vec<SourceImage>, request: LifetimeRequest) -> Result<Self, String> {
+        if self.layout.policy() == Policy::ScopedOwned75 {
+            let mut helpers = self.layout.helpers();
+            let prehook = helpers.next().ok_or("scoped lifetime requires both complete owned modal helpers")?;
+            if helpers.count() != 1 || self.owned_prehook != Some(prehook.start()) {
+                return Err("scoped lifetime prehook does not bind its complete helper pair".into());
+            }
+        }
+        self.images[0].bytes[..4].copy_from_slice(&0xe92d_4ff0u32.to_le_bytes());
+        self.guard = Some(GuardConfig::new(contexts, request, &self.images, self.entry_branch)?);
+        Ok(self)
+    }
+
+    fn entry_instruction(&self, pc: Guest, word: Word) -> Result<EntryInstruction, String> {
+        if pc != STOCK_ENTRY { return Ok(EntryInstruction::NotEntry); }
+        if word == Word(0xe92d_4ff0) { return Ok(EntryInstruction::OriginalPush); }
+        if Some(word) == self.entry_branch { return Ok(EntryInstruction::ScopedBranch); }
+        Err("modal shared entry differs from its original or published source instruction".into())
+    }
+
+    pub fn owns_memory_watch(&self) -> bool { self.guard.is_some() }
+
+    pub(crate) fn refuses_prior_stop(&self, pc: Guest) -> bool {
+        self.guard.as_ref().is_some_and(|guard| guard.contains(pc)
+            || self.instruction_sites().any(|site| site == pc))
+    }
+
     pub fn instruction_sites(&self) -> impl Iterator<Item = Guest> + '_ {
         let stock = (STOCK_ENTRY.0..STOCK_END.0).step_by(4).map(Guest);
         let seam = self.layout.seam().into_iter()
             .flat_map(|range| (range.start().0..range.end().0).step_by(4).map(Guest));
         let owned = self.layout.owned().into_iter()
             .flat_map(|range| (range.start().0..range.end().0).step_by(4).map(Guest));
-        stock.chain(seam).chain(owned).chain(self.owned_prehook)
+        let helpers = self.layout.helpers()
+            .flat_map(|range| (range.start().0..range.end().0).step_by(4).map(Guest));
+        stock.chain(seam).chain(owned).chain(helpers).chain(self.owned_prehook)
     }
 }
 
@@ -160,6 +231,43 @@ pub struct CapturedDomain {
     pub event: u32,
 }
 
+#[derive(Clone, Copy)]
+struct TaskIdentityEvidence(TaskExecution);
+impl Serialize for TaskIdentityEvidence {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let identity = self.0.identity();
+        let stack = self.0.stack().physical();
+        let mut state = serializer.serialize_map(Some(5))?;
+        state.serialize_entry("kernel", match identity.kernel {
+            KernelId::Primary => "primary", KernelId::Secondary => "secondary",
+        })?;
+        state.serialize_entry("id", &identity.id.get())?;
+        state.serialize_entry("node", &identity.node.address().0)?;
+        state.serialize_entry("creation", &identity.creation.address().0)?;
+        state.serialize_entry("stack", &[stack.start().0, stack.end().0])?;
+        state.end()
+    }
+}
+
+#[derive(Clone, Copy, Serialize)]
+struct TaskEntry {
+    #[serde(serialize_with = "serialize_core")]
+    core: CoreId,
+    #[serde(serialize_with = "serialize_guest")]
+    pc: Guest,
+    instructions: InstructionCount,
+    #[serde(serialize_with = "serialize_controller")]
+    controller: ControllerId,
+    #[serde(serialize_with = "serialize_guest")]
+    sp: Guest,
+    #[serde(serialize_with = "serialize_guest")]
+    lr: Guest,
+    #[serde(serialize_with = "serialize_cpsr")]
+    cpsr: Cpsr,
+    identity: TaskIdentityEvidence,
+    fetch: BoundFetch,
+}
+
 #[derive(Serialize)]
 pub struct Counts {
     pub observations: u64,
@@ -182,6 +290,11 @@ pub struct Report<'a> {
     pub failure: Option<&'a str>,
     pub physical_fetch_coverage: bool,
     pub task_identity_verified: bool,
+    physical_guard: Option<GuardReport<'a>>,
+    context_source_spans: usize,
+    task_entries: &'a [TaskEntry],
+    lifetime: Option<LifetimeReceipt>,
+    watch: Option<WatchEvidence<'a>>,
 }
 
 impl Report<'_> {
@@ -194,6 +307,8 @@ impl Report<'_> {
             },
             stock_fetches: &[], captured_domains: &[], failure: None,
             physical_fetch_coverage: false, task_identity_verified: false,
+            physical_guard: None, context_source_spans: 0, task_entries: &[],
+            lifetime: None, watch: None,
         }
     }
 }
@@ -204,6 +319,14 @@ fn serialize_core<S: serde::Serializer>(core: &CoreId, serializer: S) -> Result<
 
 fn serialize_guest<S: serde::Serializer>(guest: &Guest, serializer: S) -> Result<S::Ok, S::Error> {
     serializer.serialize_u32(guest.0)
+}
+
+fn serialize_controller<S: Serializer>(controller: &ControllerId, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u32(controller.0)
+}
+
+fn serialize_cpsr<S: Serializer>(cpsr: &Cpsr, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u32(cpsr.0)
 }
 
 fn serialize_policy<S: serde::Serializer>(policy: &Policy, serializer: S) -> Result<S::Ok, S::Error> {
@@ -219,12 +342,14 @@ pub(crate) struct ModalTrace {
     returns: BTreeMap<Guest, [u8; 4]>,
     stock_fetches: Vec<StockFetch>,
     captured_domains: Vec<CapturedDomain>,
+    task_entries: Vec<TaskEntry>,
+    guard: Option<InstalledGuard>,
     failure: Option<String>,
     enabled: bool,
 }
 
 impl ModalTrace {
-    pub(crate) fn new(config: Config, session: &Session) -> Result<Self, String> {
+    pub(crate) fn new(mut config: Config, session: &Session) -> Result<Self, String> {
         if session.board.instruction_counts().len() != 2 {
             return Err("modal observation requires the two X-M1 cores".into());
         }
@@ -245,13 +370,19 @@ impl ModalTrace {
         }
         let capacity = config.limit.0.get() as usize;
         let monitor = Monitor::new(config.layout, config.limit);
+        let guard = config.guard.take().map(|guard| InstalledGuard::new(guard, session,
+            &config.maps, config.instruction_sites(), config.layout)).transpose()?;
+        let task_capacity = if guard.is_some() && config.layout.policy() == Policy::ScopedOwned75 { capacity } else { 0 };
         Ok(Self { config, monitor, returns: BTreeMap::new(),
-            stock_fetches: Vec::with_capacity(capacity),
-            captured_domains: Vec::with_capacity(capacity), failure: None, enabled: true })
+            stock_fetches: Vec::with_capacity(capacity.min(MAX_OBSERVATIONS as usize)),
+            captured_domains: Vec::with_capacity(capacity.min(MAX_OBSERVATIONS as usize)),
+            task_entries: Vec::with_capacity(task_capacity.min(MAX_OBSERVATIONS as usize)),
+            guard, failure: None, enabled: true })
     }
 
     pub(crate) fn sites(&self) -> impl Iterator<Item = Guest> + '_ {
-        self.config.instruction_sites().chain(self.returns.keys().copied())
+        self.config.instruction_sites().chain(self.guard.iter().flat_map(InstalledGuard::sites))
+            .chain(self.returns.keys().copied())
     }
 
     pub(crate) fn active(&self) -> bool { self.enabled }
@@ -260,32 +391,74 @@ impl ModalTrace {
         (STOCK_ENTRY <= pc && pc < STOCK_END)
             || [self.config.layout.seam(), self.config.layout.owned()].into_iter().flatten()
                 .any(|range| range.start() <= pc && pc < range.end())
+            || self.config.layout.helpers().any(|range| range.start() <= pc && pc < range.end())
             || self.config.owned_prehook == Some(pc) || self.returns.contains_key(&pc)
+            || self.guard.as_ref().is_some_and(|guard| guard.contains(pc))
     }
 
     pub(crate) fn fail(&mut self, failure: String) {
         self.failure.get_or_insert(failure);
     }
 
-    pub(crate) fn observe(&mut self, session: &Session, core: usize, pc: Guest,
-        instructions: InstructionCount) -> Result<Option<Guest>, String> {
+    pub(crate) fn guarded(&self) -> bool { self.guard.is_some() }
+
+    pub(crate) fn check_interval(&mut self) -> Result<(), String> {
         if let Some(failure) = &self.failure { return Err(failure.clone()); }
-        let observed = self.observe_inner(session, core, pc, instructions);
+        if let Some(guard) = &mut self.guard {
+            if let Err(failure) = guard.check() {
+                self.failure = Some(failure.clone());
+                return Err(failure);
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn observe(&mut self, session: &Session, core: usize, pc: Guest,
+        instructions: InstructionCount, point: Option<InstructionPointEvent>) -> Result<Option<Guest>, String> {
+        if let Some(failure) = &self.failure { return Err(failure.clone()); }
+        let observed = self.observe_inner(session, core, pc, instructions, point);
         if let Err(failure) = &observed { self.failure = Some(failure.clone()); }
         observed
     }
 
     fn observe_inner(&mut self, session: &Session, core: usize, pc: Guest,
-        instructions: InstructionCount) -> Result<Option<Guest>, String> {
-        if let Some(image) = self.config.images.iter().find(|image| image.includes(pc)) {
-            sample_bound_word(session, core, pc.0, image.start.0, &image.bytes, &self.config.maps)?
-                .ok_or("monitored instruction leaves its bound source image")?;
-        }
-        if let Some(expected) = self.returns.get(&pc) {
+        instructions: InstructionCount, point: Option<InstructionPointEvent>) -> Result<Option<Guest>, String> {
+        if !self.contains(pc) { return Err("instruction point outside modal observation".into()); }
+        let cpsr = Cpsr(read_register(session, core, arm::Register::Cpsr)?);
+        let word = if self.guard.is_some() && pc == STOCK_ENTRY {
+            let mut bytes = [0; 4];
+            LifetimeMemory::read(&FixedMemory { session, maps: &self.config.maps }, pc, &mut bytes)
+                .map_err(|failure| failure.to_string())?;
+            Word(u32::from_le_bytes(bytes))
+        } else if let Some(image) = self.config.images.iter().find(|image| image.includes(pc)) {
+            if self.guard.is_none() {
+                sample_bound_word(session, core, pc.0, image.start.0, &image.bytes, &self.config.maps)?
+                    .ok_or("monitored instruction leaves its bound source image")?;
+            }
+            let offset = (pc.0 - image.start.0) as usize;
+            Word(u32::from_le_bytes(image.bytes[offset..offset + 4].try_into()
+                .map_err(|_| "modal source word is truncated")?))
+        } else if let Some(word) = self.guard.as_ref().and_then(|guard| guard.source_word(pc)) {
+            word
+        } else if let Some(expected) = self.returns.get(&pc) {
             sample_bound_word(session, core, pc.0, pc.0, expected, &self.config.maps)?
                 .ok_or("modal return instruction leaves its source word")?;
+            Word(u32::from_le_bytes(*expected))
+        } else {
+            return Err("modal instruction has no bound source word".into());
+        };
+        let bound_fetch = if let Some(guard) = &mut self.guard {
+            let point = point.ok_or("modal point lacks its stable instruction-entry identity")?;
+            if session.board.read_register(core, Register::Pc)? != u64::from(pc.0) {
+                return Err("modal point does not name the current instruction".into());
+            }
+            guard.bind_point(CoreId(core), pc, point, cpsr, word)?
+        } else { None };
+        if let Some(guard) = self.guard.as_mut().filter(|guard| guard.contains(pc)) {
+            guard.observe_source(session, &self.config.maps, CoreId(core), pc, word, cpsr)?;
+            return Ok(None);
         }
-        if !self.contains(pc) { return Err("instruction point outside modal observation".into()); }
+        let entry_instruction = self.config.entry_instruction(pc, word)?;
         if self.stock_fetches.len() == self.config.limit.0.get() as usize
             || self.captured_domains.len() == self.config.limit.0.get() as usize {
             return Err("modal evidence limit reached".into());
@@ -296,7 +469,6 @@ impl ModalTrace {
         }
         let sp = Guest(read_register(session, core, arm::Register::R(13))?);
         let lr = Guest(read_register(session, core, arm::Register::R(14))?);
-        let cpsr = Cpsr(read_register(session, core, arm::Register::Cpsr)?);
         if STOCK_RESUME <= pc && pc < STOCK_END {
             self.stock_fetches.push(StockFetch { core: CoreId(core), pc, instructions });
         }
@@ -306,7 +478,8 @@ impl ModalTrace {
                 controller: registers[0], state: registers[1], event: registers[2],
             });
             let in_owned = self.config.layout.owned()
-                .is_some_and(|range| range.start() <= pc && pc < range.end());
+                .is_some_and(|range| range.start() <= pc && pc < range.end())
+                || self.config.layout.helpers().any(|range| range.start() <= pc && pc < range.end());
             if pc != STOCK_PREHOOK && !in_owned && !self.returns.contains_key(&pc) {
                 if cpsr.0 & (1 << 5 | 1 << 24) != 0 || sp.0 % 4 != 0 {
                     return Err("captured modal prehook is not in aligned A32 state".into());
@@ -323,9 +496,24 @@ impl ModalTrace {
             });
             Some(StockFrame(words))
         } else { None };
+        let needs_task = self.guard.is_some() && (self.monitor.has_owned_frame(CoreId(core))
+            || (entry_instruction == EntryInstruction::ScopedBranch && registers[0] == 75));
+        let task = if needs_task {
+            modal_task::sample(&FixedMemory { session, maps: &self.config.maps }, CoreId(core), sp, cpsr)
+        } else { Err(TaskError::Unavailable) };
         let observation = self.monitor.observe(Snapshot {
-            core: CoreId(core), pc, registers, sp, lr, cpsr, saved_stock_frame,
+            core: CoreId(core), pc, registers, sp, lr, cpsr, saved_stock_frame, task, entry_instruction,
         }).map_err(|failure| failure.to_string())?;
+        if let Observation::Entry { route: Route::Owned75, .. } = observation {
+            if self.task_entries.len() == self.config.limit.0.get() as usize {
+                return Err("modal task-entry evidence limit reached".into());
+            }
+            self.task_entries.push(TaskEntry {
+                core: CoreId(core), pc, instructions, controller: ControllerId(registers[0]), sp, lr, cpsr,
+                identity: TaskIdentityEvidence(task.map_err(|failure| format!("{failure:?}"))?),
+                fetch: bound_fetch.ok_or("owned entry lacks its physical fetch binding")?,
+            });
+        }
         match observation {
             Observation::Entry { arm_return, .. } if !self.returns.contains_key(&arm_return) => {
                 if self.returns.len() == MAX_RETURN_SITES {
@@ -342,6 +530,8 @@ impl ModalTrace {
 
     pub(crate) fn report(&self) -> Report<'_> {
         let counts = self.monitor.receipt();
+        let healthy_guard = self.failure.is_none() && self.guard.as_ref().is_some_and(InstalledGuard::healthy);
+        let context_source_spans = self.guard.as_ref().map_or(0, InstalledGuard::context_count);
         Report {
             enabled: self.enabled, policy: self.config.layout.policy(),
             counts: Counts {
@@ -351,24 +541,42 @@ impl ModalTrace {
                 peak_core_depth: counts.peak_core_depth.0,
             },
             stock_fetches: &self.stock_fetches, captured_domains: &self.captured_domains,
-            failure: self.failure.as_deref(), physical_fetch_coverage: false, task_identity_verified: false,
+            failure: self.failure.as_deref(), physical_fetch_coverage: healthy_guard,
+            task_identity_verified: healthy_guard && context_source_spans == 16 && !self.task_entries.is_empty(),
+            physical_guard: self.guard.as_ref().and_then(InstalledGuard::report),
+            context_source_spans, task_entries: &self.task_entries,
+            lifetime: self.guard.as_ref().map(InstalledGuard::receipt),
+            watch: self.guard.as_ref().map(InstalledGuard::watch_summary),
         }
     }
 
-    pub(crate) fn check_finish(&mut self) -> Result<(), String> {
+    pub(crate) fn watch_evidence(&self) -> Option<WatchEvidence<'_>> {
+        self.guard.as_ref().map(InstalledGuard::watch_evidence)
+    }
+
+    pub(crate) fn check_finish(&mut self, session: &Session) -> Result<(), String> {
         if !self.enabled { return Err("modal observation is not active".into()); }
-        if let Some(failure) = &self.failure { return Err(failure.clone()); }
+        self.check_interval()?;
         if let Err(failure) = self.monitor.finish() {
             let failure = failure.to_string();
             self.failure = Some(failure.clone());
             return Err(failure);
         }
+        if let Some(guard) = &mut self.guard {
+            if let Err(failure) = guard.prepare_finish(session, &self.config.maps, self.monitor.receipt().active_frames.0) {
+                self.failure = Some(failure.clone());
+                return Err(failure);
+            }
+        }
         Ok(())
     }
 
-    pub(crate) fn disable(&mut self) {
-        self.enabled = false;
+    pub(crate) fn finish_guard(&mut self, session: &Session) -> Result<(), String> {
+        if let Some(guard) = &mut self.guard { guard.close(session)?; }
+        Ok(())
     }
+
+    pub(crate) fn disable(&mut self) { self.enabled = false; }
 }
 
 fn read_register(session: &Session, core: usize, register: arm::Register) -> Result<u32, String> {

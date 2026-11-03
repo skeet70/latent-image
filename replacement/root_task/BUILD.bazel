@@ -1,0 +1,81 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "root-task-rust",
+    src = "src.rs",
+    crate_name = "xm1_root_task_runtime",
+)
+
+xm1_rust_elf(
+    name = "root-task-image",
+    rust_staticlib = ":root-task-rust",
+    entry = "xm1_root_task",
+    link_script = "root-task.ld",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
+
+haskell_library(
+    name = "root-task-artifact",
+    srcs = [
+        "Replacement/RootTask/Admission.hs",
+        "Replacement/RootTask/Artifact.hs",
+        "Replacement/RootTask/Services.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+        "//replacement/media_permit:stock-inventory",
+    ],
+)
+
+haskell_binary(
+    name = "stage-root-task",
+    srcs = ["StageMain.hs"],
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+    ],
+    data = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":root-task-artifact",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "root-task-tests",
+    srcs = ["Tests.hs", "Fixtures.hs"],
+    main_file = "Tests.hs",
+    args = [
+        "$(rootpath :root-task-image.bin)",
+        "$(rootpath :root-task-image.symbols)",
+    ],
+    data = [":root-task-image.bin", ":root-task-image.symbols"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":root-task-artifact",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:update-container",
+    ],
+)
