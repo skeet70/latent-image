@@ -546,7 +546,7 @@ impl ModalTrace {
             physical_guard: self.guard.as_ref().and_then(InstalledGuard::report),
             context_source_spans, task_entries: &self.task_entries,
             lifetime: self.guard.as_ref().map(InstalledGuard::receipt),
-            watch: self.guard.as_ref().map(InstalledGuard::watch_evidence),
+            watch: self.guard.as_ref().map(InstalledGuard::watch_summary),
         }
     }
 

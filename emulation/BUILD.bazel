@@ -2341,6 +2341,7 @@ haskell_test(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:text",
         "//transport:camera-core",
     ],
 )

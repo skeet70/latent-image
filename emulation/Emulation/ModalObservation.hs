@@ -51,6 +51,10 @@ module Emulation.ModalObservation
   , parseModalLifetimeWatchAck
   , parseModalLifetimeWatch
   , checkCompletedModalLifetime
+  , FinalModalWatch
+  , parseFinalModalWatch
+  , finalModalWatchSummary
+  , modalReportDescribesFinalWatch
   , modalLifetimeCoverage
   , modalPhysicalCoverage
   , modalTaskIdentityVerified
@@ -312,7 +316,7 @@ data ModalReport = ModalReport
   , modalGuard :: Maybe PhysicalGuard
   , modalTaskEntries :: [TaskEntry]
   , modalLifetimeReceipt :: Maybe LifetimeReceipt
-  , modalWatchEvidence :: Maybe ModalWatchEvidence
+  , modalWatchSummary :: Maybe ModalWatchSummary
   , modalPhysicalCoverage :: Bool
   , modalTaskIdentityVerified :: Bool
   , modalContextSourceSpans :: ModalCount
@@ -339,7 +343,7 @@ modalReportJson report = object
   , "physical_guard" .= fmap physicalGuardJson (modalGuard report)
   , "task_entries" .= map taskEntryJson (modalTaskEntries report)
   , "lifetime" .= fmap lifetimeReceiptJson (modalLifetimeReceipt report)
-  , "watch" .= fmap (\(ModalWatchEvidence _ raw) -> raw) (modalWatchEvidence report)
+  , "watch" .= fmap (\(ModalWatchSummary _ raw) -> raw) (modalWatchSummary report)
   , "context_source_spans" .= countValue (modalContextSourceSpans report)
   ]
  where
@@ -407,7 +411,7 @@ parseModalReport limit value = do
   guard <- modalField "physical_guard" value >>= parseNullable parsePhysicalGuard
   tasks <- modalField "task_entries" value >>= modalList limit >>= mapM parseTaskEntry
   lifetime <- modalField "lifetime" value >>= parseNullable parseLifetimeReceipt
-  watch <- modalField "watch" value >>= parseNullable (\raw -> ModalWatchEvidence <$> parseModalLifetimeWatch modalLifetimeWriterLimit raw <*> pure raw)
+  watch <- modalField "watch" value >>= parseNullable parseModalWatchSummary
   countsValue <- modalField "counts" value
   modalKeys ["observations", "entries", "owned_handoffs", "fallback_handoffs", "returns", "active_frames", "peak_core_depth"] countsValue
   let count key = ModalCount <$> (modalField key countsValue >>= modalWord)
@@ -822,9 +826,55 @@ projectCacheOnlyWatch value = do
   parsed <- mapM parseModalExtent ranges
   unless (not (null parsed) && length (nub parsed) == length parsed)
     (Left "modal lifetime cache-only fetch ranges must be nonempty and unique")
+  WatchRowDigest count _ <- parseWatchRowDigest value
   case value of
-    Object fields -> Right (Object (KM.delete "fetch_attribution" fields))
+    Object fields -> do
+      forM_ (KM.lookup "records" fields) $ \records -> case records of
+        Array rows | toInteger (V.length rows) == toInteger count -> Right ()
+        _ -> Left "modal lifetime watch row count differs from its rows"
+      Right (Object (foldr KM.delete fields ["fetch_attribution", "record_count", "records_sha256"]))
     _ -> Left "modal lifetime watch is not an object"
+
+-- | Row count and SHA-256 the SDK maintains over the guard watch's append-only rows.
+data WatchRowDigest = WatchRowDigest Word64 T.Text deriving (Eq, Show)
+
+parseWatchRowDigest :: Value -> Either String WatchRowDigest
+parseWatchRowDigest value = do
+  count <- modalField "record_count" value >>= modalWord
+  digest <- modalField "records_sha256" value >>= \entry -> case entry of
+    String text | T.length text == 64 && T.all (`elem` ("0123456789abcdef" :: String)) text -> Right text
+    _ -> Left "modal lifetime watch digest is not lowercase SHA-256 hex"
+  pure (WatchRowDigest count digest)
+
+-- | A modal report's guard watch: every watch-state field except the rows.
+data ModalWatchSummary = ModalWatchSummary WatchRowDigest Value deriving (Eq, Show)
+
+parseModalWatchSummary :: Value -> Either String ModalWatchSummary
+parseModalWatchSummary raw = do
+  modalKeys ["enabled", "ranges", "record_count", "records_sha256", "violation", "classes", "views", "fetch_attribution"] raw
+  digest <- parseWatchRowDigest raw
+  _ <- projectCacheOnlyWatch raw
+  pure (ModalWatchSummary digest raw)
+
+-- | The final watch-state's rows, and its remaining fields for comparison with report summaries.
+data FinalModalWatch = FinalModalWatch FixedWatchObservation Value
+
+parseFinalModalWatch :: Value -> Either String FinalModalWatch
+parseFinalModalWatch value = do
+  observation <- parseModalLifetimeWatch modalLifetimeWriterLimit value
+  case value of
+    Object fields -> Right (FinalModalWatch observation (Object (KM.delete "records" fields)))
+    _ -> Left "modal lifetime watch is not an object"
+
+finalModalWatchSummary :: FinalModalWatch -> Value
+finalModalWatchSummary (FinalModalWatch _ summary) = summary
+
+-- | Equal row counts and digests identify the same append-only rows.
+summaryDescribes :: FinalModalWatch -> ModalWatchSummary -> Bool
+summaryDescribes (FinalModalWatch _ final) (ModalWatchSummary _ summary) = final == summary
+
+modalReportDescribesFinalWatch :: FinalModalWatch -> ModalReport -> Bool
+modalReportDescribesFinalWatch final = maybe False (summaryDescribes final) . modalWatchSummary
 
 parseModalExtent :: Value -> Either String WatchRange
 parseModalExtent (Array pair) | V.length pair == 2 = do
@@ -930,7 +980,6 @@ lifetimeReceiptJson receipt = object
   ]
 
 data PhysicalGuard = PhysicalGuard ModalCount ModalCount ModalCount ModalCount (Maybe ModalFailure) deriving (Eq, Show)
-data ModalWatchEvidence = ModalWatchEvidence FixedWatchObservation Value deriving (Eq, Show)
 
 parsePhysicalGuard :: Value -> Either String PhysicalGuard
 parsePhysicalGuard value = do
@@ -1039,8 +1088,8 @@ modalLifetimeCoverage report = case modalLifetimeReceipt report of
       && not (modalReportEnabled report) && countValue (modalActiveFrames (modalReportCounts report)) == 0
       && modalPhysicalCoverage report && countValue (modalContextSourceSpans report) == 16
 
-checkCompletedModalLifetime :: ModalRequest -> ArrayWriteReport -> ModalReport -> Either String ()
-checkCompletedModalLifetime (ModalRequest (ModalStock stock) scoped _ source) audit report = do
+checkCompletedModalLifetime :: ModalRequest -> ArrayWriteReport -> FinalModalWatch -> ModalReport -> Either String ()
+checkCompletedModalLifetime (ModalRequest (ModalStock stock) scoped _ source) audit final@(FinalModalWatch observation _) report = do
   checkModalEnd report
   unless (modalReportPolicy report == maybe StockBaseline (const ScopedOwned75) scoped)
     (Left "completed modal policy differs from the source-bound request")
@@ -1059,7 +1108,8 @@ checkCompletedModalLifetime (ModalRequest (ModalStock stock) scoped _ source) au
       _ -> Left "scoped modal lifetime lacks its unique shared-entry publication"
   forM_ (modalTaskEntries report) $ \(TaskEntry _ _ _ _ _ _ _ _ (TaskFetch _ _ bytes _ _)) ->
     unless (bytes == entryBytes) (Left "owned modal task fetch differs from the installed entry publication")
-  ModalWatchEvidence observation _ <- maybe (Left "modal lifetime lacks raw watch evidence") Right (modalWatchEvidence report)
+  summary <- maybe (Left "modal lifetime lacks its watch summary") Right (modalWatchSummary report)
+  unless (summaryDescribes final summary) (Left "modal report watch summary differs from the final watch-state rows")
   let rows = fixedWatchRecords observation
       expectedWrites = sum (map (toInteger . countValue)
         [receiptForwardWrites receipt, receiptReverseWrites receipt, receiptResourceWrites receipt

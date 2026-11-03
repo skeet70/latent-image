@@ -29,7 +29,7 @@ import System.Posix.Files (setFileMode)
 import System.Posix.Temp (mkdtemp)
 import Text.Read (readMaybe)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, hostProcedure, procedureHex, routeKey, routeKeyHex)
-import Emulation.Sha256 (sha256File, sha256Hex)
+import Emulation.Sha256 (sha256, sha256File, sha256Hex)
 import Emulation.SegmentReceipt (SegmentReceipt (..), SegmentResult (..), elapsedSeconds, segmentName, segmentNameText)
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
 import Emulation.PreservationObservation
@@ -1673,9 +1673,13 @@ finishModalLifetime emulator receipt session = do
   finish attempt = do
     let request = lifetimeAttemptRequest attempt
         limit = modalRequestLimit request
-    finalWatch <- if lifetimeAttemptOwnsObserver attempt
-      then rawWatch (emulatorWatchStateRaw emulator)
+    let finalPath = receipt </> "e2e-modal-watch-final.json"
+    finalLine <- if lifetimeAttemptOwnsObserver attempt
+      then (Right <$> emulatorWatchStateLine emulator) `catch` \(failure :: SomeException) -> pure (Left (displayException failure))
       else pure (Left "modal observation was not armed")
+    forM_ finalLine (writePrivateBytes finalPath)
+    let finalWatch = decodeBridgeWatchLine <$> finalLine
+        final = finalWatch >>= parseFinalModalWatch
     beforeEnd <- captureModalResponse (emulatorModalObservationReport emulator limit)
     ended <- if lifetimeAttemptOwnsObserver attempt
       then captureModalResponse (emulatorModalObservationEnd emulator limit)
@@ -1687,17 +1691,12 @@ finishModalLifetime emulator receipt session = do
           writes <- audit
           _ <- ended >>= modalParsedResponse
           report <- afterEnd >>= modalParsedResponse
-          finalRaw <- finalWatch
+          finalRows <- final
           forM_ [beforeEnd, ended, afterEnd] $ \response -> do
-            responseValue <- modalRawResponse <$> response
-            let unchanged = case (finalRaw, responseValue) of
-                  (Object watched, Object fields) -> case KM.lookup "watch" fields of
-                    Just (Object snapshot) -> all (\key -> KM.lookup key watched == KM.lookup key snapshot) ["ranges", "records"]
-                    _ -> False
-                  _ -> False
-            unless unchanged
-              (Left "modal watch records or ranges changed during no-execution teardown")
-          checkCompletedModalLifetime request writes report
+            parsed <- response >>= modalParsedResponse
+            unless (modalReportDescribesFinalWatch finalRows parsed)
+              (Left "modal watch summary, row count or row digest changed during no-execution teardown")
+          checkCompletedModalLifetime request writes finalRows report
           unless (lifetimeAttemptBoundaries attempt == [UploadSynchronized, InstallationReadback, RollbackReadback, AfterUnloadKeys])
             (Left "modal lifetime host boundaries are incomplete or out of order")
           forM_ (lifetimeAttemptProblems attempt) Left
@@ -1722,8 +1721,10 @@ finishModalLifetime emulator receipt session = do
           , "watch_acknowledgement_error" .= either Just (const Nothing) (lifetimeAttemptArmed attempt >>= lifetimeWatchAcknowledgement)
           , "watch_armed" .= either (const Null) id (lifetimeAttemptArmed attempt)
           , "watch_armed_error" .= either Just (const Nothing) (lifetimeAttemptArmed attempt)
-          , "watch_final" .= either (const Null) id finalWatch
-          , "watch_final_error" .= either Just (const Nothing) finalWatch
+          , "watch_final_file" .= either (const Null) (\line -> object
+              [ "path" .= takeFileName finalPath, "bytes" .= B.length line, "sha256" .= sha256Hex (sha256 line) ]) finalLine
+          , "watch_final_summary" .= either (const Null) finalModalWatchSummary final
+          , "watch_final_error" .= either Just (const Nothing) (final >> Right ())
           , "array_write_audit" .= either (const Null) arrayWriteReportJson audit
           , "array_write_audit_error" .= either Just (const Nothing) audit
           , "permit_before_end" .= raw beforeEnd, "permit_before_end_error" .= modalResponseProblem beforeEnd

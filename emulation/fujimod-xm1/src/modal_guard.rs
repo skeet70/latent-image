@@ -13,6 +13,8 @@ use fujimod_emulator::{board::{factory::MemoryMap, observation::{ByteOrder, Core
     MemoryWatch, PhysicalInstructionGuard, WatchKinds, WatchRange}}, session::Session};
 use fujimod_emulator_cpu::{Register, arm};
 use serde::{Serialize, Serializer, ser::{SerializeMap, SerializeSeq}};
+use sha2::{Digest, Sha256};
+use std::cell::RefCell;
 
 const WRITE_LIMIT: usize = 1 << 20;
 
@@ -134,6 +136,24 @@ pub(crate) struct InstalledGuard {
     protected_sites: Vec<Guest>,
     row_cursor: usize,
     physical_failure: Option<String>,
+    row_digest: RefCell<RowDigest>,
+}
+
+/// SHA-256 over each retained row's compact JSON encoding followed by LF, in row order.
+#[derive(Default)]
+struct RowDigest { rows: usize, hasher: Sha256 }
+impl RowDigest {
+    fn advance(&mut self, rows: &[serde_json::Value]) -> Result<(), String> {
+        for row in rows {
+            self.hasher.update(serde_json::to_vec(row).map_err(|failure| failure.to_string())?);
+            self.hasher.update(b"\n");
+        }
+        self.rows += rows.len();
+        Ok(())
+    }
+    fn hex(&self) -> String {
+        self.hasher.clone().finalize().iter().map(|byte| format!("{byte:02x}")).collect()
+    }
 }
 
 fn merged_ranges(sites: &[Guest]) -> Vec<WatchRange> {
@@ -210,7 +230,7 @@ impl InstalledGuard {
         let watch = session.board.memory_watch_begin_with_fetch_attribution(write_ranges.clone(),
             attribution, WRITE_LIMIT, maps.to_vec(), fujimod_emulator::board::observation::ViewPolicy::Fixed)?;
         Ok(Self { contexts: config.contexts, lifetime, watch, write_ranges, fetch_ranges,
-            protected_sites, row_cursor: 0, physical_failure: None })
+            protected_sites, row_cursor: 0, physical_failure: None, row_digest: RefCell::default() })
     }
 
     pub(crate) fn sites(&self) -> impl Iterator<Item = Guest> + '_ {
@@ -370,10 +390,14 @@ impl InstalledGuard {
             failure: self.physical_failure.as_deref(),
         })
     }
-    pub(crate) fn watch_evidence(&self) -> WatchEvidence<'_> { WatchEvidence(self) }
+    pub(crate) fn watch_evidence(&self) -> WatchEvidence<'_> { WatchEvidence { guard: self, records: WatchRecords::Rows } }
+    pub(crate) fn watch_summary(&self) -> WatchEvidence<'_> { WatchEvidence { guard: self, records: WatchRecords::Count } }
 }
 
-pub(crate) struct WatchEvidence<'a>(&'a InstalledGuard);
+/// Watch-state carries the rows; modal reports carry only their count and digest.
+#[derive(Clone, Copy)]
+enum WatchRecords { Rows, Count }
+pub(crate) struct WatchEvidence<'a> { guard: &'a InstalledGuard, records: WatchRecords }
 struct RangeEvidence<'a>(&'a [WatchRange]);
 impl Serialize for RangeEvidence<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -399,12 +423,19 @@ impl Serialize for WatchEvidence<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         #[derive(Serialize)]
         struct Attribution<'a> { sources: [&'static str; 0], ranges: RangeEvidence<'a> }
-        let guard = self.0;
+        let guard = self.guard;
         let records = guard.watch.records.borrow();
-        let mut state = serializer.serialize_map(Some(7))?;
+        let mut digest = guard.row_digest.borrow_mut();
+        let pending = records.rows_since(digest.rows).map_err(serde::ser::Error::custom)?;
+        digest.advance(pending).map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_map(Some(if matches!(self.records, WatchRecords::Rows) { 9 } else { 8 }))?;
         state.serialize_entry("enabled", &true)?;
         state.serialize_entry("ranges", &RangeEvidence(&guard.write_ranges))?;
-        state.serialize_entry("records", records.rows_since(0).map_err(serde::ser::Error::custom)?)?;
+        if matches!(self.records, WatchRecords::Rows) {
+            state.serialize_entry("records", records.rows_since(0).map_err(serde::ser::Error::custom)?)?;
+        }
+        state.serialize_entry("record_count", &digest.rows)?;
+        state.serialize_entry("records_sha256", &digest.hex())?;
         state.serialize_entry("violation", &records.violation())?;
         state.serialize_entry("classes", &ClassEvidence(&guard.write_ranges))?;
         state.serialize_entry("views", "fixed")?;
@@ -426,5 +457,23 @@ mod tests {
         let decoded: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(decoded, serde_json::json!({"guest":0x00bf_b028,"physical":0x00bf_b028,
             "bytes":[0xbc,0x0a,0x10,0xea],"core":0,"entry_progress":91,"byte_order":"little"}));
+    }
+
+    #[test]
+    fn row_digest_is_incremental_and_binds_row_content_and_order() {
+        let rows = [serde_json::json!({"pc":1,"value":2}), serde_json::json!({"pc":3,"value":4})];
+        let mut whole = RowDigest::default();
+        whole.advance(&rows).unwrap();
+        let mut stepped = RowDigest::default();
+        stepped.advance(&rows[..1]).unwrap();
+        stepped.advance(&rows[1..]).unwrap();
+        assert_eq!((stepped.rows, stepped.hex()), (whole.rows, whole.hex()));
+        let mut reordered = RowDigest::default();
+        reordered.advance(&[rows[1].clone(), rows[0].clone()]).unwrap();
+        let mut changed = RowDigest::default();
+        changed.advance(&[rows[0].clone(), serde_json::json!({"pc":3,"value":5})]).unwrap();
+        assert_ne!(reordered.hex(), whole.hex());
+        assert_ne!(changed.hex(), whole.hex());
+        assert_eq!(RowDigest::default().hex(), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
     }
 }
