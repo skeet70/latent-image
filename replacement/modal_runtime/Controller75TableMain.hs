@@ -58,7 +58,8 @@ newtype PickerNodeAddress = PickerNodeAddress Word32 deriving (Eq, Ord, Show)
 newtype PickerProperty = PickerProperty Word16 deriving (Eq, Show)
 data PickerNode = PickerNode PickerNodeAddress PickerProperty
 data PickerCell = PickerCell State Event Word32 Word32 PickerKey
-data PickerDocument = PickerDocument [PickerNode] [PickerCell]
+-- | Nodes, cells and the image5 SHA-256 the picker generator was pinned to.
+data PickerDocument = PickerDocument [PickerNode] [PickerCell] String
 
 pickerKeyName :: PickerKey -> String
 pickerKeyName key = case key of
@@ -77,7 +78,11 @@ instance FromJSON PickerDocument where
       name <- c .: "action"
       key <- maybe (fail ("unknown picker action " ++ name)) pure (lookup name [(pickerKeyName k, k) | k <- [minBound .. maxBound]])
       PickerCell <$> (State <$> c .: "state") <*> (Event <$> c .: "event") <*> (parseHex =<< c .: "word") <*> (parseHex =<< c .: "target") <*> pure key)) =<< fields .: "cells"
-    pure (PickerDocument nodes cells)
+    image5 <- (.: "image5") =<< fields .: "inputs_sha256"
+    pure (PickerDocument nodes cells image5)
+
+image5Sha256 :: String
+image5Sha256 = "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"
 
 parseHex :: String -> Parser Word32
 parseHex text = case text of
@@ -471,13 +476,14 @@ main = do
     Just other -> fail ("unknown control " ++ other)
   pickerInput <- forM (optional "--picker") $ \path -> do
     pickerBytes <- B.readFile path
-    document <- either (fail . ("picker document: " ++)) pure (J.eitherDecodeStrict pickerBytes)
+    document@(PickerDocument _ _ documentImage5) <- either (fail . ("picker document: " ++)) pure (J.eitherDecodeStrict pickerBytes)
+    unless (documentImage5 == image5Sha256) (fail "picker document names another image5")
     pure (sha256Hex (sha256 pickerBytes), document)
   inventoryBytes <- B.readFile inventoryPath
   unless (sha256Hex (sha256 inventoryBytes) == "153bfd3c9f960e9b888cfc6991edf157ccc85a09bce8de1f36ff59ec4265d0e8") (fail "inventory identity differs")
   bytes <- B.readFile imagePath
   let digest = sha256Hex (sha256 bytes)
-  unless (B.length bytes == 5185120 && digest == "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a") (fail "image5 identity differs")
+  unless (B.length bytes == 5185120 && digest == image5Sha256) (fail "image5 identity differs")
   Inventory callbacks direct <- either fail pure (J.eitherDecodeStrict inventoryBytes)
   let generic = [(callback, size, cells) | InventoryCallback callback size layer cells <- callbacks, layer == "a-generic-instance"]
   outcome <- either fail pure $ do
@@ -498,7 +504,7 @@ main = do
       Nothing -> Left "action without inventory callback"
     pickerCells <- case pickerInput of
       Nothing -> Right []
-      Just (_, PickerDocument nodes picked) -> do
+      Just (_, PickerDocument nodes picked _) -> do
         let addresses = [address | PickerNode address _ <- nodes]
             pickedAt = [(s, e) | PickerCell s e _ _ _ <- picked]
         when (null nodes || length (nub addresses) /= length addresses) (Left "picker nodes must be present and distinct")
@@ -520,7 +526,7 @@ main = do
         Nothing -> Right [vector 0 Nothing []]
     pure (actions', cells', vectors)
   let (actions, cells, vectors) = outcome
-      pickerNodes = maybe [] (\(_, PickerDocument nodes _) -> nodes) pickerInput
+      pickerNodes = maybe [] (\(_, PickerDocument nodes _ _) -> nodes) pickerInput
   let body = rustTable digest (fst <$> pickerInput) actions cells pickerNodes
       identity = sha256Hex (sha256 (B.pack (map (fromIntegral . fromEnum) body)))
   writeFile outputPath (withIdentity identity body)
