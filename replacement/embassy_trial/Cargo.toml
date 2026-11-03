@@ -1,0 +1,21 @@
+[package]
+name = "xm1-embassy-trial"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+path = "src.rs"
+crate-type = ["staticlib"]
+
+[dependencies]
+aarch32-cpu = { version = "=0.4.0", features = ["critical-section-single-core"] }
+aarch32-rt = { version = "=0.5.0", features = ["eabi-fpu"] }
+embassy-executor = { version = "=0.10.0", features = ["platform-cortex-ar", "executor-thread"] }
+
+[profile.release]
+opt-level = "z"
+debug = false
+panic = "abort"
+codegen-units = 1

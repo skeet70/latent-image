@@ -1,0 +1,37 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf")
+
+genrule(
+    name = "embassy-trial-core",
+    srcs = [
+        "Cargo.lock",
+        "Cargo.toml",
+        "embassy-trial.nix",
+        "src.rs",
+        "//:devenv.lock",
+        "//build-support:nixpkgs.nix",
+        "//replacement/toolchain:xm1-rust.nix",
+    ],
+    outs = [
+        "embassy-trial-core.a",
+        "aarch32-rt-link.x",
+        "host-proc-macros.txt",
+    ],
+    cmd = """
+set -eu
+output=$$(nix-build --no-out-link --max-jobs 1 --cores 2 $(location embassy-trial.nix))
+cp "$$output/lib/libxm1_embassy_trial.a" $(location embassy-trial-core.a)
+cp "$$output/lib/aarch32-rt-link.x" $(location aarch32-rt-link.x)
+cp "$$output/share/embassy-trial/host-proc-macros.txt" $(location host-proc-macros.txt)
+""",
+    local = True,
+    tags = ["manual"],
+)
+
+xm1_rust_elf(
+    name = "embassy-trial",
+    rust_staticlib = ":embassy-trial-core.a",
+    link_script = ":aarch32-rt-link.x",
+    link_includes = ["memory.x"],
+    entry = "_start",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
