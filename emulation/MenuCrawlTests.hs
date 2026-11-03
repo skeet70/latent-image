@@ -158,6 +158,29 @@ main = do
   check "a depth-limited screen reached by a shorter path is expanded" (map (\node -> (nodeDepth node, nodeFrontier node)) (screenAt 3) == [(1, Nothing)]
     && map nodeDepth (screenAt 4) == [2])
 
+  -- OK from 0 lands on screen 2 by frame; with cell 7 the following UP shows a different screen 3.
+  let detour hidden _ (Synthetic menu frame cell) key = Just (case (menu, key) of
+        (0, KeyOk) -> Synthetic 2 2 hidden
+        (_, KeyUp) | menu < 4 -> Synthetic (menu + 1) (if cell == 7 then (menu + 1) * 10 else menu + 1) cell
+        _ -> Synthetic menu frame cell)
+  (detourFake, detourDriver) <- fake (Synthetic 0 0 0) (detour 2)
+  deepened <- crawl (config [KeyUp, KeyOk] 1000 100 3) detourDriver
+  let deepAt number = [node | node <- graphNodes deepened, menuOf node == Just number]
+  check "a depth-limited screen with a shorter recorded path is replayed and expanded"
+    (map (\node -> (nodeDepth node, nodeFrontier node)) (deepAt 3) == [(2, Nothing)]
+    && map (\node -> (nodeDepth node, nodeFrontier node)) (deepAt 4) == [(3, Just DepthLimit)]
+    && map (\entry -> (replayPath entry, replayOutcome entry)) (graphReplays deepened) == [([KeyOk, KeyUp], Replayed)]
+    && graphReplayPresses deepened == 2)
+  check "replays release their snapshots" . M.null =<< readIORef (fakeSnapshots detourFake)
+
+  (_, divergingDriver) <- fake (Synthetic 0 0 0) (detour 7)
+  diverging <- crawl (config [KeyUp, KeyOk] 1000 100 3) divergingDriver
+  check "a replay that lands elsewhere leaves the screen depth-limited"
+    (map (\node -> (nodeDepth node, nodeFrontier node)) [node | node <- graphNodes diverging, menuOf node == Just 3] == [(3, Just DepthLimit)]
+    && case map replayOutcome (graphReplays diverging) of
+         [Diverged (FrameDigest "30") _] -> True
+         _ -> False)
+
   let variant _ (Synthetic menu frame cell) key = Just (case key of
         KeyUp -> Synthetic menu (frame + 1) cell
         _ -> Synthetic (menu + 1) (frame + 100) cell)

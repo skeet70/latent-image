@@ -1,6 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Depth-first crawl of the X-M1 screens reachable by physical keys. Every press starts from a
 -- held guest snapshot of its source screen, so no press observes state left by a sibling branch.
+-- After the depth-first pass, depth-limited screens that recorded edges reach from the root in
+-- fewer presses are replayed along that path and expanded.
 module Emulation.MenuCrawl
   ( CrawlKey (..)
   , crawlKeyWire
@@ -31,7 +33,10 @@ module Emulation.MenuCrawl
   , Match (..)
   , EdgeOutcome (..)
   , Edge (..)
+  , ReplayOutcome (..)
+  , Replay (..)
   , CrawlGraph (..)
+  , shortestPaths
   , crawl
   , graphValue
   , edgeValue
@@ -46,6 +51,7 @@ import Data.IORef
 import Data.List (sort)
 import qualified Data.Map.Strict as M
 import Data.Maybe (isJust, isNothing)
+import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.Word (Word16, Word32)
 import EmulatorUsb (MenuReading, ModeDial, SnapshotName (..), SnapshotPress (..), TraceHit (..), modeDialName)
@@ -331,10 +337,22 @@ data Edge = Edge
   , edgeOutcome :: EdgeOutcome
   } deriving (Eq, Show)
 
+-- | The result of replaying a shorter recorded path to a depth-limited screen.
+data ReplayOutcome
+  = Replayed
+  | Diverged { divergedFrame :: FrameDigest, divergedImage :: FilePath }
+  | ReplayStopped { replayStepsTaken :: Int, replayFailure :: String }
+  deriving (Eq, Show)
+
+data Replay = Replay { replayNode :: NodeId, replayPath :: [CrawlKey], replayOutcome :: ReplayOutcome }
+  deriving (Eq, Show)
+
 data CrawlGraph = CrawlGraph
   { graphNodes :: [Node]
   , graphEdges :: [Edge]
+  , graphReplays :: [Replay]
   , graphTrials :: Int
+  , graphReplayPresses :: Int
   , graphSeconds :: Double
   , graphLimit :: Maybe Frontier
   } deriving (Eq, Show)
@@ -344,15 +362,30 @@ data CrawlState = CrawlState
   , stateByFrame :: M.Map FrameDigest NodeId
   , stateByCells :: M.Map (MenuReading, B.ByteString) NodeId
   , stateEdges :: [Edge]
+  , stateReplays :: [Replay]
   , stateTrials :: Int
+  , stateReplayPresses :: Int
   , stateLimit :: Maybe Frontier
   }
+
+-- | The fewest-press key path from the origin to each node over reached edges; ties go to the
+-- earlier edge.
+shortestPaths :: NodeId -> [Edge] -> M.Map NodeId [CrawlKey]
+shortestPaths origin edges = go (M.singleton origin []) [origin]
+ where
+  outgoing = M.fromListWith (flip (++)) [(edgeFrom edge, [(edgeKey edge, reachedNode outcome)]) | edge <- edges, outcome@Reached {} <- [edgeOutcome edge]]
+  go paths [] = paths
+  go paths frontier = let (paths', next) = foldl' visit (paths, []) frontier in go paths' (reverse next)
+  visit (paths, next) from = foldl' (step from) (paths, next) (M.findWithDefault [] from outgoing)
+  step from (paths, next) (key, to)
+    | M.member to paths = (paths, next)
+    | otherwise = (M.insert to (paths M.! from ++ [key]) paths, to : next)
 
 -- | Explores every configured root depth-first within the configured budgets.
 crawl :: CrawlConfig -> Driver -> IO CrawlGraph
 crawl config driver = do
   started <- driverClock driver
-  state <- newIORef (CrawlState M.empty M.empty M.empty [] 0 Nothing)
+  state <- newIORef (CrawlState M.empty M.empty M.empty [] [] 0 0 Nothing)
   let boot = SnapshotName "boot"
   driverSave driver boot
   forM_ (zip [0 :: Int ..] (configRoots config)) $ \(index, root) -> do
@@ -363,7 +396,9 @@ crawl config driver = do
     driverSave driver snapshot
     screen <- driverObserve driver ("root-" ++ show index)
     (node, match) <- intern state root 0 [] screen
-    when (match == NewScreen) (expand started state root node snapshot)
+    when (match == NewScreen) $ do
+      expand started state root node snapshot
+      deepen started state root (nodeId node) snapshot S.empty
     driverDrop driver snapshot
   driverDrop driver boot
   ended <- driverClock driver
@@ -371,7 +406,9 @@ crawl config driver = do
   pure CrawlGraph
     { graphNodes = M.elems (stateNodes final)
     , graphEdges = reverse (stateEdges final)
+    , graphReplays = reverse (stateReplays final)
     , graphTrials = stateTrials final
+    , graphReplayPresses = stateReplayPresses final
     , graphSeconds = ended - started
     , graphLimit = stateLimit final
     }
@@ -383,15 +420,16 @@ crawl config driver = do
       limit <- stateLimit <$> readIORef state
       updateNode state (nodeId node) (\current -> current { nodeUntried = reverse untried, nodeFrontier = limit })
 
+  budgetLimit started current now
+    | isJust (stateLimit current) = stateLimit current
+    | stateTrials current >= configMaxTrials config = Just TrialLimit
+    | now - started >= configMaxSeconds config = Just TimeLimit
+    | otherwise = Nothing
+
   tryKey started state root node snapshot untried key = do
     current <- readIORef state
     now <- driverClock driver
-    let limit
-          | isJust (stateLimit current) = stateLimit current
-          | stateTrials current >= configMaxTrials config = Just TrialLimit
-          | now - started >= configMaxSeconds config = Just TimeLimit
-          | otherwise = Nothing
-    case limit of
+    case budgetLimit started current now of
       Just reason -> do
         modifyIORef' state (\s -> s { stateLimit = Just reason })
         pure (key : untried)
@@ -411,27 +449,95 @@ crawl config driver = do
                 after = screenCells screen
             record state (Edge trial (nodeId node) key activity (Reached (nodeId child) match (screenFrame screen) settle instructions
               (cellChanges (cellStates before) (cellStates after)) (cellChanges (cellEvents before) (cellEvents after))))
-            let depth = nodeDepth node + 1
-                reopens = match /= NewScreen && nodeFrontier child == Just DepthLimit && depth < nodeDepth child
-            when (match == NewScreen || reopens) $ do
-              let baseline = screen { screenImage = screenImage (nodeScreen child), screenFrame = screenFrame (nodeScreen child) }
-              updateNode state (nodeId child) (\n -> n { nodeDepth = depth, nodePath = nodePath node ++ [key], nodeScreen = baseline
-                , nodeUntried = [], nodeFrontier = Nothing })
-              when reopens $
-                driverRecord driver . (\n -> object ["node" .= nodeValue n]) . (M.! nodeId child) . stateNodes =<< readIORef state
-              nodes <- M.size . stateNodes <$> readIORef state
-              if depth >= configMaxDepth config
-                then updateNode state (nodeId child) (\n -> n { nodeUntried = keysFor config (nodeScreen n), nodeFrontier = Just DepthLimit })
-                else if nodes > configMaxNodes config
-                  then updateNode state (nodeId child) (\n -> n { nodeUntried = keysFor config (nodeScreen n), nodeFrontier = Just NodeLimit })
-                  else do
-                    let NodeId number = nodeId child
-                        childSnapshot = SnapshotName ("node-" ++ show number)
-                    expanded <- (M.! nodeId child) . stateNodes <$> readIORef state
-                    driverSave driver childSnapshot
-                    expand started state root expanded childSnapshot
-                    driverDrop driver childSnapshot
+            let reopens = match /= NewScreen && nodeFrontier child == Just DepthLimit && nodeDepth node + 1 < nodeDepth child
+            when (match == NewScreen || reopens) $
+              open started state root (nodeId child) (nodePath node ++ [key]) screen reopens
         pure untried
+
+  -- Places a node at a path and, unless a limit applies, expands it from the current guest state.
+  open started state root identity path screen reopened = do
+    let depth = length path
+    stored <- (M.! identity) . stateNodes <$> readIORef state
+    let baseline = screen { screenImage = screenImage (nodeScreen stored), screenFrame = screenFrame (nodeScreen stored) }
+    updateNode state identity (\n -> n { nodeDepth = depth, nodePath = path, nodeScreen = baseline, nodeUntried = [], nodeFrontier = Nothing })
+    when reopened $
+      driverRecord driver . (\n -> object ["node" .= nodeValue n]) . (M.! identity) . stateNodes =<< readIORef state
+    nodes <- M.size . stateNodes <$> readIORef state
+    if depth >= configMaxDepth config
+      then updateNode state identity (\n -> n { nodeUntried = keysFor config (nodeScreen n), nodeFrontier = Just DepthLimit })
+      else if nodes > configMaxNodes config
+        then updateNode state identity (\n -> n { nodeUntried = keysFor config (nodeScreen n), nodeFrontier = Just NodeLimit })
+        else do
+          let NodeId number = identity
+              snapshot = SnapshotName ("node-" ++ show number)
+          expanded <- (M.! identity) . stateNodes <$> readIORef state
+          driverSave driver snapshot
+          expand started state root expanded snapshot
+          driverDrop driver snapshot
+
+  -- Replays the shortest recorded path to each depth-limited screen of this root, nearest first,
+  -- once per screen, until none is closer than its recorded depth or a budget runs out.
+  deepen started state root origin rootSnapshot attempted = do
+    current <- readIORef state
+    now <- driverClock driver
+    let paths = shortestPaths origin (reverse (stateEdges current))
+        candidates = sort
+          [ (length path, nodeId node, path)
+          | node <- M.elems (stateNodes current), nodeRoot node == rootName root, nodeFrontier node == Just DepthLimit
+          , S.notMember (nodeId node) attempted
+          , Just path <- [M.lookup (nodeId node) paths], length path < nodeDepth node, length path < configMaxDepth config ]
+    case (candidates, budgetLimit started current now) of
+      ([], _) -> pure ()
+      (_, Just reason) -> modifyIORef' state (\s -> s { stateLimit = Just reason })
+      ((_, identity, path) : _, Nothing) -> do
+        replay started state root identity path rootSnapshot
+        deepen started state root origin rootSnapshot (S.insert identity attempted)
+
+  replay started state root identity path rootSnapshot = do
+    let NodeId number = identity
+    walked <- walk number rootSnapshot Nothing (zip [0 ..] path)
+    case walked of
+      Left (steps, failure) -> note (Replay identity path (ReplayStopped steps failure))
+      Right () -> do
+        screen <- driverObserve driver ("replay-" ++ show number)
+        current <- readIORef state
+        let target = stateNodes current M.! identity
+            frame = screenFrame screen
+            known = M.lookup frame (stateByFrame current)
+            sameCells = (screenMenu screen, cellStates (screenCells screen)) == (screenMenu (nodeScreen target), cellStates (screenCells (nodeScreen target)))
+        -- The frame decides first, as in intern.
+        case known of
+          Just owner | owner == identity -> do
+            driverDiscardImage driver (screenImage screen)
+            note (Replay identity path Replayed)
+            open started state root identity path screen True
+          Nothing | sameCells -> do
+            modifyIORef' state (\s -> s
+              { stateByFrame = M.insert frame identity (stateByFrame s)
+              , stateNodes = M.adjust (\n -> n { nodeFrames = nodeFrames n ++ [frame] }) identity (stateNodes s) })
+            note (Replay identity path Replayed)
+            open started state root identity path screen True
+          _ -> note (Replay identity path (Diverged frame (screenImage screen)))
+   where
+    note entry = do
+      modifyIORef' state (\s -> s { stateReplays = entry : stateReplays s })
+      driverRecord driver (object ["replay" .= replayValue entry])
+    -- Presses each key from the previous step's snapshot; the last step's guest state is kept live.
+    walk _ _ held [] = mapM_ (driverDrop driver) held >> pure (Right ())
+    walk number source held ((index, key) : rest) = do
+      mark <- driverTraceMark driver
+      pressed <- driverPress driver source key
+      _ <- driverTraceSince driver mark
+      mapM_ (driverDrop driver) held
+      modifyIORef' state (\s -> s { stateReplayPresses = stateReplayPresses s + 1 })
+      case pressed of
+        SnapshotStopped failure _ -> pure (Left (index, failure))
+        SnapshotPressed {}
+          | null rest -> pure (Right ())
+          | otherwise -> do
+              let name = SnapshotName ("replay-" ++ show number ++ "-" ++ show index)
+              driverSave driver name
+              walk number name (Just name) rest
 
   record state edge = do
     modifyIORef' state (\s -> s { stateEdges = edge : stateEdges s })
@@ -516,6 +622,13 @@ edgeValue (Edge trial (NodeId from) key activity outcome) = object
       , "state_changes" .= map changeValue states, "event_changes" .= map changeValue events ]
     Stopped failure instructions -> ["stopped" .= failure, "instructions" .= instructions])
 
+replayValue :: Replay -> Value
+replayValue (Replay (NodeId node) path outcome) = object
+  ([ "node" .= node, "path" .= path ] ++ case outcome of
+    Replayed -> [ "outcome" .= String "replayed" ]
+    Diverged (FrameDigest frame) image -> [ "outcome" .= String "diverged", "frame_sha256" .= frame, "image" .= image ]
+    ReplayStopped steps failure -> [ "outcome" .= String "stopped", "steps" .= steps, "stopped" .= failure ])
+
 nodeValue :: Node -> Value
 nodeValue node = object
   [ "id" .= let NodeId number = nodeId node in number
@@ -547,9 +660,11 @@ graphValue config graph = object
       , "max_depth" .= configMaxDepth config, "max_seconds" .= configMaxSeconds config ]
   , "trace_sites" .= [object ["label" .= crawlSiteLabel site, "address" .= hex (crawlSiteAddress site)] | site <- crawlSites]
   , "trials" .= graphTrials graph
+  , "replay_presses" .= graphReplayPresses graph
   , "seconds" .= graphSeconds graph
   , "limit" .= fmap frontierText (graphLimit graph)
   , "complete" .= (isNothing (graphLimit graph) && all (\node -> isNothing (nodeFrontier node)) (graphNodes graph))
   , "nodes" .= map nodeValue (graphNodes graph)
   , "edges" .= map edgeValue (graphEdges graph)
+  , "replays" .= map replayValue (graphReplays graph)
   ]
