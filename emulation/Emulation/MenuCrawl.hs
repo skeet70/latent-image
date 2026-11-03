@@ -7,6 +7,7 @@ module Emulation.MenuCrawl
   , RootName
   , rootNameText
   , CrawlRoot (..)
+  , ContextKeys (..)
   , CrawlConfig (..)
   , decodeCrawlConfig
   , FrameDigest (..)
@@ -105,8 +106,19 @@ instance FromJSON CrawlRoot where
       Just position -> pure position
       Nothing -> fail ("unsupported mode-dial position: " ++ T.unpack text)
 
+-- | Keys pressed instead of the configured keys on screens where one controller holds one state.
+data ContextKeys = ContextKeys { contextController :: Int, contextState :: Word16, contextKeys :: [CrawlKey] } deriving (Eq, Show)
+
+instance FromJSON ContextKeys where
+  parseJSON = withObject "context keys" $ \fields -> do
+    unless (sort (KM.keys fields) == ["controller", "keys", "state"]) (fail "context keys take exactly controller, state and keys")
+    context <- ContextKeys <$> fields .: "controller" <*> fields .: "state" <*> fields .: "keys"
+    unless (contextController context >= 0 && contextController context < controllerCount) (fail "context controller must be 0..173")
+    pure context
+
 data CrawlConfig = CrawlConfig
   { configKeys :: [CrawlKey]
+  , configContextKeys :: Maybe ContextKeys
   , configRoots :: [CrawlRoot]
   , configMaxTrials :: Int
   , configMaxNodes :: Int
@@ -120,14 +132,19 @@ maxCrawlDepth = 20
 
 instance FromJSON CrawlConfig where
   parseJSON = withObject "crawl config" $ \document -> do
-    unless (sort (KM.keys document) == ["keys", "max_depth", "max_nodes", "max_seconds", "max_trials", "roots", "schema"])
-      (fail "crawl config takes exactly schema, keys, roots, max_trials, max_nodes, max_depth and max_seconds")
+    let required = ["keys", "max_depth", "max_nodes", "max_seconds", "max_trials", "roots", "schema"]
+    unless (sort (filter (/= "context_keys") (KM.keys document)) == required)
+      (fail "crawl config takes exactly schema, keys, roots, max_trials, max_nodes, max_depth and max_seconds, and optionally context_keys")
     schema <- document .: "schema"
     unless (schema == (1 :: Int)) (fail "unsupported crawl config schema")
-    config <- CrawlConfig <$> document .: "keys" <*> document .: "roots" <*> document .: "max_trials"
+    config <- CrawlConfig <$> document .: "keys" <*> document .:? "context_keys" <*> document .: "roots" <*> document .: "max_trials"
       <*> document .: "max_nodes" <*> document .: "max_depth" <*> document .: "max_seconds"
     let distinct values = length values == M.size (M.fromList [(value, ()) | value <- values])
     unless (not (null (configKeys config)) && distinct (configKeys config)) (fail "crawl keys must be nonempty and distinct")
+    case configContextKeys config of
+      Just context -> unless (not (null (contextKeys context)) && distinct (contextKeys context) && all (`elem` configKeys config) (contextKeys context))
+        (fail "context keys must be a nonempty distinct subset of the crawl keys")
+      Nothing -> pure ()
     unless (not (null (configRoots config)) && distinct (map rootName (configRoots config)))
       (fail "crawl roots must be nonempty with distinct names")
     unless (configMaxTrials config > 0 && configMaxNodes config > 0 && configMaxSeconds config > 0)
@@ -135,6 +152,16 @@ instance FromJSON CrawlConfig where
     unless (configMaxDepth config >= 1 && configMaxDepth config <= maxCrawlDepth)
       (fail ("max_depth must be 1.." ++ show maxCrawlDepth))
     pure config
+
+-- | The keys a screen is crawled with.
+keysFor :: CrawlConfig -> Screen -> [CrawlKey]
+keysFor config screen = case configContextKeys config of
+  Just context | stateOf (contextController context) == Just (contextState context) -> contextKeys context
+  _ -> configKeys config
+ where
+  stateOf controller = case drop controller (halfwords (cellStates (screenCells screen))) of
+    value : _ -> Just value
+    [] -> Nothing
 
 decodeCrawlConfig :: B.ByteString -> Either String CrawlConfig
 decodeCrawlConfig = eitherDecodeStrict'
@@ -350,7 +377,7 @@ crawl config driver = do
     }
  where
   expand started state root node snapshot = do
-    let keys = configKeys config
+    let keys = keysFor config (nodeScreen node)
     untried <- foldM (tryKey started state root node snapshot) [] keys
     unless (null untried) $ do
       limit <- stateLimit <$> readIORef state
@@ -394,9 +421,9 @@ crawl config driver = do
                 driverRecord driver . (\n -> object ["node" .= nodeValue n]) . (M.! nodeId child) . stateNodes =<< readIORef state
               nodes <- M.size . stateNodes <$> readIORef state
               if depth >= configMaxDepth config
-                then updateNode state (nodeId child) (\n -> n { nodeUntried = configKeys config, nodeFrontier = Just DepthLimit })
+                then updateNode state (nodeId child) (\n -> n { nodeUntried = keysFor config (nodeScreen n), nodeFrontier = Just DepthLimit })
                 else if nodes > configMaxNodes config
-                  then updateNode state (nodeId child) (\n -> n { nodeUntried = configKeys config, nodeFrontier = Just NodeLimit })
+                  then updateNode state (nodeId child) (\n -> n { nodeUntried = keysFor config (nodeScreen n), nodeFrontier = Just NodeLimit })
                   else do
                     let NodeId number = nodeId child
                         childSnapshot = SnapshotName ("node-" ++ show number)
@@ -512,6 +539,8 @@ graphValue config graph = object
   [ "schema" .= (1 :: Int)
   , "scope" .= String "emulated X-M1 1.50 screens reachable by physical keys from held snapshots; static listing semantics are not implied"
   , "keys" .= configKeys config
+  , "context_keys" .= fmap (\context -> object ["controller" .= contextController context, "state" .= contextState context
+      , "keys" .= contextKeys context]) (configContextKeys config)
   , "roots" .= [object ["name" .= rootName root, "mode_dial" .= fmap modeDialName (rootModeDial root)] | root <- configRoots config]
   , "budgets" .= object
       [ "max_trials" .= configMaxTrials config, "max_nodes" .= configMaxNodes config

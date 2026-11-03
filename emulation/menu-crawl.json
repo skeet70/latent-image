@@ -1,6 +1,7 @@
 {
   "schema": 1,
   "keys": ["ok", "down", "up", "right", "left", "back", "q", "dial-right", "dial-left", "play"],
+  "context_keys": {"controller": 74, "state": 24, "keys": ["ok", "down", "up", "right", "left", "back"]},
   "roots": [{"name": "default"}],
   "max_trials": 30000,
   "max_nodes": 5000,

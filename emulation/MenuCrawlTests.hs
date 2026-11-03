@@ -29,7 +29,7 @@ data Fake = Fake
   }
 
 config :: [CrawlKey] -> Int -> Int -> Int -> CrawlConfig
-config keys trials nodes depth = CrawlConfig keys [CrawlRoot (rootOf "default") Nothing] trials nodes depth 1000
+config keys trials nodes depth = CrawlConfig keys Nothing [CrawlRoot (rootOf "default") Nothing] trials nodes depth 1000
 
 rootOf :: String -> RootName
 rootOf name = either error rootName (decodeRoot name)
@@ -143,6 +143,11 @@ main = do
   check "a depth limit leaves a frontier" (any (\node -> nodeFrontier node == Just DepthLimit && nodeDepth node == 3) (graphNodes deep))
   check "no node is deeper than the limit" (all ((<= 3) . nodeDepth) (graphNodes deep))
 
+  (_, contextDriver) <- fake (Synthetic 0 0 0) ring
+  contextual <- crawl ((config keys 1000 100 10) { configContextKeys = Just (ContextKeys 0 10 [KeyBack]) }) contextDriver
+  let fromMenu number = [edgeKey edge | edge <- graphEdges contextual, Just source <- [lookup (edgeFrom edge) [(nodeId node, node) | node <- graphNodes contextual]], menuOf source == Just number]
+  check "a screen in the context state is pressed with the context keys only" (fromMenu 10 == [KeyBack] && length (fromMenu 0) == length keys)
+
   let shortcut _ (Synthetic menu _ _) key = Just (case (menu, key) of
         (0, KeyUp) -> Synthetic 3 3 3
         (_, KeyOk) -> Synthetic (menu + 1) (menu + 1) (menu + 1)
@@ -169,7 +174,7 @@ main = do
 
   let climbing _ (Synthetic menu _ _) _ = Just (let next = min 3 (menu + 1) in Synthetic next next next)
   (_, dialDriver) <- fake (Synthetic 0 0 0) climbing
-  dialGraph <- crawl (CrawlConfig [KeyUp] [CrawlRoot (rootOf "default") Nothing, CrawlRoot (rootOf "auto") (Just ModeDialAuto)] 1000 100 10 1000) dialDriver
+  dialGraph <- crawl (CrawlConfig [KeyUp] Nothing [CrawlRoot (rootOf "default") Nothing, CrawlRoot (rootOf "auto") (Just ModeDialAuto)] 1000 100 10 1000) dialDriver
   check "each root starts from the boot snapshot" (sort [menu | node <- graphNodes dialGraph, nodeDepth node == 0, Just menu <- [menuOf node]] == [0, 50])
 
   let activity = stepActivity

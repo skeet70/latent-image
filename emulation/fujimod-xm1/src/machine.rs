@@ -429,6 +429,10 @@ impl Machine {
         CapturedFrame::new(self.document.scanout.clone(), instance, InstructionCount::from_board(&self.session)?, state, frame)
     }
 
+    pub fn presents_display_plane(&self) -> Result<bool, String> {
+        Ok(self.observed_frame()?.is_some())
+    }
+
     fn observed_frame(&self) -> Result<Option<(serde_json::Value, usize, ScanoutFrame)>, String> {
         let name = &self.document.scanout.0;
         let state = self.session.scanout_state(name)?;

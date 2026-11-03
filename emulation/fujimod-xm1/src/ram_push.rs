@@ -457,6 +457,9 @@ struct Server {
 /// About 120 MB per held snapshot of the X-M1 run document.
 const SNAPSHOT_LIMIT: usize = 24;
 
+const DISPLAY_STEP: u64 = 2_000_000;
+const DISPLAY_WAIT: u64 = 60_000_000;
+
 /// A client-chosen snapshot name: 1..=64 lowercase ASCII letters, digits or '-'.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(try_from = "String", into = "String")]
@@ -867,6 +870,21 @@ impl Server {
         Ok(cleared)
     }
 
+    /// Advances in DISPLAY_STEP slices until a scanout instance presents graphics and returns the
+    /// instructions spent; a press can settle while no plane is presented.
+    fn await_display_plane(&mut self) -> Result<u64, String> {
+        let mut waited = 0;
+        while !self.bridge.machine.presents_display_plane()? {
+            if waited >= DISPLAY_WAIT {
+                return Err(format!("no display plane after {waited} instructions"));
+            }
+            self.bridge.advance(DISPLAY_STEP)?;
+            self.bridge.machine.require_running()?;
+            waited += DISPLAY_STEP;
+        }
+        Ok(waited)
+    }
+
     fn handle(&mut self, request: Request) -> Result<Option<Value>, String> {
         let tail_request = matches!(&request, Request::CaptureObservationHits { .. } | Request::CaptureObservationAck { .. }
             | Request::CaptureObservationState | Request::WatchState | Request::Finish
@@ -1203,16 +1221,17 @@ impl Server {
                 let started = Instant::now();
                 let before = self.bridge.machine.instructions();
                 let pressed = self.bridge.settled_key(key.press, default_pulse(key.press), MAX_SETTLE)
-                    .and_then(|settle| self.bridge.machine.require_running().map(|()| settle));
+                    .and_then(|settle| self.bridge.machine.require_running().map(|()| settle))
+                    .and_then(|settle| self.await_display_plane().map(|waited| (settle, waited)));
                 let instructions = self.bridge.machine.instructions() - before;
-                let (settle, menu, failure) = match pressed {
-                    Ok(settle) => (json!(settle), menu_value(self.bridge.machine.menu()?), Value::Null),
-                    Err(failure) => (Value::Null, Value::Null, json!(failure)),
+                let (settle, display_wait, menu, failure) = match pressed {
+                    Ok((settle, waited)) => (json!(settle), json!(waited), menu_value(self.bridge.machine.menu()?), Value::Null),
+                    Err(failure) => (Value::Null, Value::Null, Value::Null, json!(failure)),
                 };
                 self.key_log.push(json!({"key": key.name, "snapshot": name, "seconds": started.elapsed().as_secs_f64(),
-                    "instructions": instructions, "settle": settle, "failure": failure}));
+                    "instructions": instructions, "settle": settle, "display_wait_instructions": display_wait, "failure": failure}));
                 json!({"snapshot": name, "key": key.name, "menu": menu, "settle": settle, "instructions": instructions,
-                    "failure": failure, "cleared_failure": cleared_failure})
+                    "display_wait_instructions": display_wait, "failure": failure, "cleared_failure": cleared_failure})
             }
             Request::SnapshotDrop { name } => {
                 self.snapshots.remove(&name).ok_or_else(|| format!("snapshot {} is not held", name.0))?;
