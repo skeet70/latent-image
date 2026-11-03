@@ -173,9 +173,11 @@ inspectFunction arrays (GuestAddress imageBase) image (FunctionWindow (GuestAddr
     step address encoded = case A.decode address encoded of
       A.Rejected A.SystemRegister | Just write <- A.statusWrite encoded -> WritesStatus write
       A.Compute _ _ | Just extension <- A.signExtension encoded -> SignExtends extension
+      A.Compute _ _ | Just insertion <- A.bitFieldInsert encoded -> InsertsBits insertion
       instruction -> Executes instruction
     edges address (WritesStatus _) = pure ([address+4], [])
     edges address (SignExtends _) = pure ([address+4], [])
+    edges address (InsertsBits _) = pure ([address+4], [])
     edges address (Executes instruction) = case instruction of
       A.Branch _ True _ -> pure ([address+4], [])
       A.Branch condition False target -> do

@@ -248,6 +248,46 @@ unsafe extern "C" {
     fn rb_modal_call(target: u32, first: u32, second: u32, third: u32) -> u64;
 }
 
+#[cfg(rb_modal75_owned)]
+#[path = "modal75.rs"]
+mod modal75;
+
+#[cfg(rb_modal75_owned)]
+unsafe extern "C" {
+    fn rb_call_transition() -> u32;
+}
+
+#[cfg(rb_modal75_owned)]
+struct ArmServices;
+
+#[cfg(rb_modal75_owned)]
+impl modal75::GenericServices for ArmServices {
+    fn transition(&mut self) -> u32 {
+        unsafe { rb_call_transition() }
+    }
+
+    fn write_state(&mut self, state: modal75::State75) {
+        unsafe { core::ptr::write_volatile(state_cell(ControllerId::new(75)), state.raw()) };
+    }
+}
+
+/// Reads the whole cell word, and for a positive high halfword the selected
+/// transition entry, before the action.
+#[cfg(rb_modal75_owned)]
+#[inline(always)]
+fn owned_plan(controller: ControllerId, captured: &Captured, cell: CellAddress, action: Option<ActionTarget>) -> modal75::Plan {
+    if controller.word() != 75 {
+        return modal75::Plan::Stock;
+    }
+    let transition = cell.high().positive_index().map(|index| captured.transition.entry(index).map_or(0, TransitionTarget::word));
+    modal75::plan(
+        &modal75::TABLE,
+        captured.event.0,
+        captured.state.0,
+        modal75::LiveCell { word: unsafe { read_word(cell.0) }, target: action.map_or(0, ActionTarget::word), transition },
+    )
+}
+
 /// # Safety
 ///
 /// Every action and transition entry the captured tables can select must be
@@ -275,6 +315,7 @@ pub unsafe extern "C" fn rb_modal_dispatch(controller: u32) -> u32 {
     let cell = CellAddress(CellAddress::offset(cell_base.0, index));
     let action = captured.action.entry(cell.action_index());
 
+    #[cfg(not(rb_modal75_owned))]
     let (carried_first, carried_second, result) = match action {
         Some(target) => {
             // The retained prehook returns with r2 still holding the event.
@@ -291,6 +332,28 @@ pub unsafe extern "C" fn rb_modal_dispatch(controller: u32) -> u32 {
         None => (prehook.first, prehook.second, 0),
     };
 
+    #[cfg(rb_modal75_owned)]
+    let owned = owned_plan(controller, &captured, cell, action);
+    #[cfg(rb_modal75_owned)]
+    let (carried_first, carried_second, result) = match (owned, action) {
+        (modal75::Plan::Owned { action: modal75::OwnedAction::Generic(generic), .. }, _) => {
+            let result = modal75::run_generic(generic, &mut ArmServices).0;
+            (result, prehook.second, result)
+        }
+        (_, Some(target)) => {
+            let action_residue = residue(unsafe {
+                rb_modal_call(
+                    target.word(),
+                    prehook.first,
+                    prehook.second,
+                    u32::from(captured.event.0),
+                )
+            });
+            (action_residue.first, action_residue.second, action_residue.first)
+        }
+        (_, None) => (prehook.first, prehook.second, 0),
+    };
+
     let high = cell.high();
     if let Some(index) = high.positive_index() {
         if let Some(target) = captured.transition.entry(index) {
@@ -304,7 +367,10 @@ pub unsafe extern "C" fn rb_modal_dispatch(controller: u32) -> u32 {
             };
         }
     } else {
+        #[cfg(not(rb_modal75_owned))]
         unsafe { core::ptr::write_volatile(state_cell(controller), high.state_value().0) };
+        #[cfg(rb_modal75_owned)]
+        unsafe { core::ptr::write_volatile(state_cell(controller), modal75::post_action_state(owned, high.0).unwrap_or(high.state_value().0)) };
     }
 
     result

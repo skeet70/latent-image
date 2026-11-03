@@ -5,7 +5,10 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 exports_files(
     ["recovery-task-state-tests.sh"],
-    visibility = ["//replacement/recipe_ui:__pkg__"],
+    visibility = [
+        "//replacement/modal_runtime:__pkg__",
+        "//replacement/recipe_ui:__pkg__",
+    ],
 )
 
 exports_files(
@@ -953,6 +956,36 @@ haskell_test(
     ],
 )
 
+haskell_library(
+    name = "menu-crawl-lib",
+    srcs = ["Emulation/MenuCrawl.hs", "Emulation/RamDiff.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":emulator-usb",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
+    ],
+)
+
+haskell_test(
+    name = "menu-crawl-tests",
+    size = "small",
+    srcs = ["MenuCrawlTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":emulator-usb",
+        ":menu-crawl-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
+)
+
 # bazel run //emulation:trajectory-variant-check -- RETAINED.json VARIANT.json
 haskell_binary(
     name = "trajectory-variant-check",
@@ -1111,6 +1144,7 @@ haskell_binary(
         ":watch-observation",
         ":modal-observation",
         ":ui-trajectory-lib",
+        ":menu-crawl-lib",
         ":capture-stream-lib",
         ":save-lifecycle-lib",
         ":save-lifecycle-run",
@@ -1154,6 +1188,7 @@ haskell_test(
         ":watch-observation",
         ":modal-observation",
         ":ui-trajectory-lib",
+        ":menu-crawl-lib",
         ":capture-stream-lib",
         ":save-lifecycle-lib",
         ":save-lifecycle-run",

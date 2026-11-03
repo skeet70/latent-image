@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runRamPushE2E, warmAttachCheckpoint) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint) where
 
 import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, evaluate, finally, throwIO, try)
@@ -21,10 +21,10 @@ import Data.Bits (shiftL, shiftR, (.|.))
 import Data.Int (Int32)
 import Data.Word (Word32)
 import Numeric (readHex, showFFloat, showHex)
-import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectory, removeDirectoryRecursive, setCurrentDirectory)
+import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectory, removeDirectoryRecursive, removeFile, setCurrentDirectory)
 import System.Environment (getExecutablePath, lookupEnv)
-import System.FilePath (takeDirectory, takeFileName, (</>))
-import System.IO (BufferMode (LineBuffering), hSetBuffering, stdout)
+import System.FilePath (isAbsolute, replaceExtension, takeDirectory, takeFileName, (</>))
+import System.IO (BufferMode (LineBuffering), IOMode (WriteMode), hFlush, hSetBuffering, stdout, withFile)
 import System.Posix.Files (setFileMode)
 import System.Posix.Temp (mkdtemp)
 import Text.Read (readMaybe)
@@ -37,6 +37,8 @@ import Emulation.ModalObservation
 import qualified Emulation.CaptureStream as CaptureJournal
 import qualified Emulation.SaveLifecycle as SaveLifecycle
 import Emulation.SaveLifecycleRun (runSaveLifecycle)
+import qualified Emulation.MenuCrawl as Crawl
+import qualified Emulation.RamDiff as RamDiff
 import Emulation.UiTrajectory
 import Emulation.WatchObservation
 import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
@@ -1484,6 +1486,183 @@ runFlashSession settings python runtime installedMedia adjustmentNand plan e2e =
           (nub (map segmentPhase (filter (not . segmentObserve) (planBefore plan))))
       , "observations" .= (observed :: [Value])
       ])) <> "\n")
+
+-- | X-M1 1.50 `firmware.current_menu` in `emulation/fujimod-xm1/data/xm1-150.json`: the open
+-- node pointer at +0 and the cursor at +8.
+currentMenuRecord :: Word32
+currentMenuRecord = 0x009571d0
+
+-- | Crawls the stock screens of the no-install cardless FujiMod route from held snapshots, journals
+-- each trial to RECEIPT/crawl-trials.jsonl and writes RECEIPT/crawl-graph.json.
+runMenuCrawlE2E :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+runMenuCrawlE2E given python workspace configFile installedMedia adjustmentNand receipt = do
+  hSetBuffering stdout LineBuffering
+  require (pushMode given == FlashCandidate && emulationCardMode given == Cardless
+    && case emulationRuntime given of FujiModRuntime _ -> True; RetainedRuntime -> False)
+    "the menu crawl requires the no-install --cardless --fujimod --flash-candidate route"
+  require (modalDiagnostic given == NoModalDiagnostic && segmentSelection given == Nothing)
+    "the menu crawl takes no modal diagnostic or segment selection"
+  require (isAbsolute receipt) "the menu crawl receipt path must be absolute"
+  configBytes <- B.readFile configFile
+  config <- either (ioError . userError . ("invalid menu crawl config: " ++)) pure (Crawl.decodeCrawlConfig configBytes)
+  exists <- doesDirectoryExist receipt
+  when exists $ do
+    entries <- listDirectory receipt
+    require (null entries) "menu crawl receipt directory must be fresh or empty"
+    removeDirectory receipt
+  runtime <- getCurrentDirectory
+  datDigest <- sha256File (runtime </> installedMedia)
+  require (sha256Hex datDigest == "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490")
+    "the menu crawl requires the pinned stock X-M1 1.50 DAT"
+  setCurrentDirectory workspace
+  (executable, arguments) <- sessionBridge given python installedMedia adjustmentNand (bootMode given) receipt
+  bracket (startEmulator executable runtime arguments (\_ -> pure (Nothing, ()))) (\(emulator, _, _) -> stopEmulator emulator) $
+    \(emulator, start, ()) -> do
+      setFileMode receipt 0o700
+      ensurePrivateDirectory receipt
+      writePrivateBytes (receipt </> "crawl-config.json") configBytes
+      configDigest <- sha256File (receipt </> "crawl-config.json")
+      emulatorTraceSites emulator [(Crawl.crawlSiteAddress site, Crawl.crawlSiteLabel site) | site <- Crawl.crawlSites]
+      hitCursor <- newIORef . fst =<< emulatorTraceHits emulator 0
+      let screenshot label = receipt </> "screenshots" </> (label ++ ".png")
+          word bytes offset = foldr (\index value -> (value `shiftL` 8) .|. fromIntegral (B.index bytes (offset + index))) 0 [0 .. 3] :: Word32
+          observeScreen label = do
+            shot <- emulatorCapture emulator label
+            digest <- case shot of
+              Object fields | Just (String text) <- KM.lookup "sha256" fields -> pure (T.unpack text)
+              _ -> ioError (userError "capture reply lacks its sha256")
+            written <- doesFileExist (screenshot label)
+            require written ("capture did not write " ++ screenshot label)
+            removeFile (replaceExtension (screenshot label) "planes.bin")
+            cells <- emulatorReadMemory emulator 0x01467588 (4 * Crawl.controllerCount)
+            record <- emulatorReadMemory emulator currentMenuRecord 12
+            let pointer = word record 0
+            node <- if pointer == 0 then pure Nothing else Just <$> emulatorReadMemory emulator pointer 48
+            identity <- B.concat <$> mapM (\range -> emulatorReadMemory emulator (Crawl.rangeStart range) (fromIntegral (Crawl.rangeEnd range - Crawl.rangeStart range)))
+              (Crawl.configIdentityReads config)
+            pure Crawl.Screen
+              { Crawl.screenMenu = fmap (\bytes -> (word bytes 0, word bytes 8, word record 8)) node
+              , Crawl.screenFrame = Crawl.FrameDigest digest
+              , Crawl.screenImage = screenshot label
+              , Crawl.screenCells = Crawl.ControllerCells (B.take (2 * Crawl.controllerCount) cells) (B.drop (2 * Crawl.controllerCount) cells)
+              , Crawl.screenNode = node
+              , Crawl.screenIdentity = identity
+              }
+      withFile (receipt </> "crawl-trials.jsonl") WriteMode $ \journal -> do
+        let driver = Crawl.Driver
+              { Crawl.driverSave = emulatorSnapshotSave emulator
+              , Crawl.driverRestore = \name -> () <$ emulatorSnapshotRestore emulator name
+              , Crawl.driverDrop = emulatorSnapshotDrop emulator
+              , Crawl.driverPress = \name key -> emulatorSnapshotKey emulator name (Crawl.crawlKeyWire key)
+              , Crawl.driverModeDial = \position -> () <$ emulatorModeDial emulator position
+              , Crawl.driverObserve = observeScreen
+              , Crawl.driverTraceMark = readIORef hitCursor
+              , Crawl.driverTraceSince = \mark -> do
+                  (count, hits) <- emulatorTraceHits emulator mark
+                  writeIORef hitCursor count
+                  pure hits
+              , Crawl.driverDiscardImage = \image -> removeFile image >> removeFile (replaceExtension image "scanout.json")
+              , Crawl.driverClock = getMonotonicTime
+              , Crawl.driverRecord = \value -> BL.hPut journal (encode value <> "\n") >> hFlush journal
+              }
+        graph <- Crawl.crawl config driver
+        writePrivateBytes (receipt </> "crawl-graph.json") (BL.toStrict (encode (object
+          [ "inputs" .= object
+              [ "dat_sha256" .= sha256Hex datDigest, "config_sha256" .= sha256Hex configDigest
+              , "adjustment_nand" .= adjustmentNand ]
+          , "emulator_start" .= startRecord start
+          , "graph" .= Crawl.graphValue config graph
+          ])) <> "\n")
+        putStrLn ("menu crawl: " ++ show (length (Crawl.graphNodes graph)) ++ " screens, " ++ show (Crawl.graphTrials graph)
+          ++ " trials, " ++ seconds (Crawl.graphSeconds graph) ++ maybe "" (const ", budget-limited") (Crawl.graphLimit graph))
+
+-- | From the no-install cardless FujiMod root, presses a key path to one screen, then samples the
+-- configured windows before a key, after it, after a second press and after a control press from
+-- the same screen, and writes RECEIPT/ram-diff.json with the words the key toggles.
+runRamDiffE2E :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+runRamDiffE2E given python workspace configFile installedMedia adjustmentNand receipt = do
+  hSetBuffering stdout LineBuffering
+  require (pushMode given == FlashCandidate && emulationCardMode given == Cardless
+    && case emulationRuntime given of FujiModRuntime _ -> True; RetainedRuntime -> False)
+    "the RAM diff requires the no-install --cardless --fujimod --flash-candidate route"
+  require (modalDiagnostic given == NoModalDiagnostic && segmentSelection given == Nothing)
+    "the RAM diff takes no modal diagnostic or segment selection"
+  require (isAbsolute receipt) "the RAM diff receipt path must be absolute"
+  configBytes <- B.readFile configFile
+  config <- either (ioError . userError . ("invalid RAM diff config: " ++)) pure (RamDiff.decodeRamDiffConfig configBytes)
+  exists <- doesDirectoryExist receipt
+  when exists $ do
+    entries <- listDirectory receipt
+    require (null entries) "RAM diff receipt directory must be fresh or empty"
+    removeDirectory receipt
+  runtime <- getCurrentDirectory
+  datDigest <- sha256File (runtime </> installedMedia)
+  require (sha256Hex datDigest == "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490")
+    "the RAM diff requires the pinned stock X-M1 1.50 DAT"
+  setCurrentDirectory workspace
+  (executable, arguments) <- sessionBridge given python installedMedia adjustmentNand (bootMode given) receipt
+  bracket (startEmulator executable runtime arguments (\_ -> pure (Nothing, ()))) (\(emulator, _, _) -> stopEmulator emulator) $
+    \(emulator, start, ()) -> do
+      setFileMode receipt 0o700
+      ensurePrivateDirectory receipt
+      writePrivateBytes (receipt </> "ram-diff-config.json") configBytes
+      configDigest <- sha256File (receipt </> "ram-diff-config.json")
+      let windows = RamDiff.diffWindows config
+          sample = mapM (\window -> B.concat <$> mapM (uncurry (emulatorReadMemory emulator)) (RamDiff.rangeChunks window)) windows
+          frame label = do
+            shot <- emulatorCapture emulator label
+            case shot of
+              Object fields | Just (String text) <- KM.lookup "sha256" fields -> pure (T.unpack text)
+              _ -> ioError (userError "capture reply lacks its sha256")
+          pressFrom source key = do
+            pressed <- emulatorSnapshotKey emulator source (Crawl.crawlKeyWire key)
+            case pressed of
+              SnapshotPressed {} -> pure ()
+              SnapshotStopped failure _ -> ioError (userError ("RAM diff press " ++ Crawl.crawlKeyWire key ++ " stopped: " ++ failure))
+          walk source [] = pure source
+          walk source ((index, key) : rest) = do
+            pressFrom source key
+            let name = SnapshotName ("diff-path-" ++ show (index :: Int))
+            emulatorSnapshotSave emulator name
+            when (source /= SnapshotName "diff-root") (emulatorSnapshotDrop emulator source)
+            walk name rest
+      emulatorSnapshotSave emulator (SnapshotName "diff-root")
+      target <- walk (SnapshotName "diff-root") (zip [0 ..] (RamDiff.diffPath config))
+      _ <- emulatorSnapshotRestore emulator target
+      targetFrame <- frame "target"
+      before <- sample
+      pressFrom target (RamDiff.diffKey config)
+      onceFrame <- frame "once"
+      once <- sample
+      emulatorSnapshotSave emulator (SnapshotName "diff-once")
+      returns <- mapM (\key -> do
+        pressFrom (SnapshotName "diff-once") key
+        returnFrame <- frame ("return-" ++ Crawl.crawlKeyWire key)
+        returned <- sample
+        pure (key, returnFrame, returned)) (RamDiff.diffReturnKeys config)
+      pressFrom target (RamDiff.diffControl config)
+      controlFrame <- frame "control"
+      control <- sample
+      let restoredBy = RamDiff.byReturnKey
+            [ (key, concat (zipWith5 RamDiff.toggledWords windows before once returned control)) | (key, _, returned) <- returns ]
+          hex32 value = "0x" ++ showHex (value :: Word32) ""
+      writePrivateBytes (receipt </> "ram-diff.json") (BL.toStrict (encode (object
+        [ "inputs" .= object
+            [ "dat_sha256" .= sha256Hex datDigest, "config_sha256" .= sha256Hex configDigest, "adjustment_nand" .= adjustmentNand ]
+        , "emulator_start" .= startRecord start
+        , "frames" .= object (["target" .= targetFrame, "once" .= onceFrame, "control" .= controlFrame]
+            ++ [K.fromString ("return-" ++ Crawl.crawlKeyWire key) .= returnFrame | (key, returnFrame, _) <- returns])
+        , "changed_words" .= object
+            ([ "once" .= sum (zipWith RamDiff.changedWords before once)
+             , "control" .= sum (zipWith RamDiff.changedWords before control) ]
+            ++ [K.fromString ("return-" ++ Crawl.crawlKeyWire key) .= sum (zipWith RamDiff.changedWords before returned) | (key, _, returned) <- returns])
+        , "candidates" .= [ object ["address" .= hex32 (RamDiff.candidateAddress candidate), "before" .= hex32 (RamDiff.candidateBefore candidate)
+            , "after_key" .= hex32 (RamDiff.candidateAfterKey candidate), "restored_by" .= keys] | (candidate, keys) <- restoredBy ]
+        ])) <> "\n")
+      putStrLn ("RAM diff: " ++ show (length restoredBy) ++ " toggled words")
+ where
+  zipWith5 f (a : as) (b : bs) (c : cs) (d : ds) (e : es) = f a b c d e : zipWith5 f as bs cs ds es
+  zipWith5 _ _ _ _ _ _ = []
 
 observeRetainedModal :: Emulator -> FilePath -> ModalStock -> Value -> IO a -> IO a
 observeRetainedModal emulator receipt stock source action = do
