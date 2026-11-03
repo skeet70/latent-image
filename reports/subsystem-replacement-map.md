@@ -215,6 +215,8 @@ Retained loader division `0x4d978`, frame/value/slot lifetime and bounds, SVC/ex
 
 At least **four asynchronous file-operation entries** are recovered: open `0x71c648(cb,path,mode)->tag`, read `0x71c6fc(cb,handle,length,buffer)`, write `0x71c75c(cb,handle,length,source)` and close `0x71c7bc(cb,handle,0,0)`. They route requests 0x2c17..0x2c1a to media task0x1c. Synchronous base forms and completion callbacks extend the surface; this is not a complete filesystem API census. Open modes 0/1/2/3 are read/create-truncate/append/“s”. Completion codes 0,3,0xe,8,6 mean success, prepare, commit, raw0x24 class and missing-file respectively; task-context refusal uses callback 9. [Source: File report §6.2 lines190-205; Inventory §8.3 lines343-346.]
 
+The interface inventory is [the file-service manifest draft](file-service-manifest-draft.md) (E-FILE-SERVICE-MANIFEST-150): 34 media-task requests, 40 caller-facing and blocking wrappers and 230 entry contracts in all. Posters send to the mediamsg task `0x65`, which serializes opens and forwards to media task `0x1c`.
+
 ### 2. Extent, data and initialization
 
 Known workers include open `0x7115a4`, read `0x71edbc`, write `0x7116e4`, close `0x711768`; handle allocation `0x71ef18`, release `0x71eff4`; 16 handle slots at `0x9101c0`; callback slot `0x91028c`; two-slot volume registry `0x814730/0x814738`; close resolves tables `0x8fc880/0x8fc87c` and capacity `0x944468`. Whole file/media implementation bytes, complete initialization and filesystem metadata layout remain unknown in this evidence set. [Source: Heap survey line65; File report §§6.2,6.8 lines282-299.]
@@ -240,6 +242,8 @@ Tags are allocation lifetimes, not durable identities. Producers can ignore enqu
 ### 1. Interface and count
 
 UILIB task33 entry `0x1109130`, queue33 `{count 0x30,size 0x14}`, and VGLIB task73 entry `0x6d7540`, queue73 `{0x30,0x38}`, are recovered actor interfaces. UILIB's finite receive/dispatch step is `[0x11090a4,0x1109130)`. The row-availability probe `0xd52684(field,row)->state` is a separate synchronous service: 0 offered, 2 disabled, 3 hidden. These are at least two actor seams plus one probe, **not a complete rendering API count**. [Source: Inventory §8.18 lines1676-1694; `replacement/service/README.md:9-10,32-44`.]
+
+The interface inventory is [the render-service manifest draft](render-service-manifest-draft.md) (E-RENDER-SERVICE-MANIFEST-150): UILIB task 33, graphic task 40, VGLIB task 73 and the vector-engine tasks 71/72, their command families, the main UI submission path, the shadow-to-scanout commit and the probe, in 860 entry contracts. The probe also returns 1, a property-5 variant of disabled.
 
 ### 2. Extent, data and initialization
 

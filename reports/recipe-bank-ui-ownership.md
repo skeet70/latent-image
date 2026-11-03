@@ -970,3 +970,79 @@ No owned run followed: the stock223 control refuses on both crawl-3 routes to la
 Both refusing writes fall in the key after the last completed segment. The shooting-menu runs match the passing packaged stock run row for row through instruction 1,522,242,231. The packaged FILMSIM route stays the only guard-qualified route, and its controller-75 domain has no layer-(a) cell.
 
 **Proposed follow-up for the integration owner.** The lifetime guard forbids any value change in the 450-byte live-settings block and the resident bank, even when stock code makes it. A cutover must preserve stock effects, not suppress them. The guard should instead record every value-changing write to those blocks with its writer PC, value and the triggering key segment, in both the stock and owned roles of a matched pair, and the pair check should require the two sequences to be equal. Writes from owned runtime code to those blocks stay forbidden. Until then, routes that leave a menu item or the Q menu cannot qualify an owned controller under the guard.
+
+### Behavioural census
+
+The maintainer scoped #128 as functional replacement: the camera's menu behaviour, not every stock callback. This section measures that behaviour by crawling the emulated stock UI and maps what it reaches onto the callback measurements above. [Sources: E-MODAL-MENU-CRAWL-150; E-MODAL-CONTROLLER-SCALE-150.]
+
+#### Crawl mechanism
+
+`//emulation:xm1-viewer -- --ram-push-e2e --cardless --fujimod --flash-candidate --menu-crawl emulation/menu-crawl.json` boots or restores the stock no-install attach checkpoint and crawls depth-first from live view. The FujiMod RAM-push bridge holds up to 24 in-memory guest snapshots (`snapshot-save`, `snapshot-restore`, `snapshot-key`, `snapshot-drop`). Every key press restores the snapshot of its source screen, so no press sees state a sibling branch left behind, and a strict stop is returned as data and cleared by the next restore together with a fresh R4F guard. After a press the bridge advances until a scanout instance presents graphics. [Sources: `emulation/fujimod-xm1/src/ram_push.rs` snapshot requests; `emulation/Emulation/MenuCrawl.hs`; `emulation/Xm1RamPushE2E.hs` `runMenuCrawlE2E`.]
+
+Each screen records its frame, the menu reading (node id and setting id at the pointer `0x009571d0`, cursor at `+8`), the open node's 48-byte descriptor and all 174 state and event cells. Each press records the bridge settle result and every entry of eight traced sites: dispatcher context `0xbfb0a0` (r0 controller, r1 state, r2 event), action call `0xbfb0c8` (r3 target, paired per core with the latest context), direct-state store `0xbfb114`, property write `0x0061c91c`, setter `0x00624694`, commit dispatcher `0x00d4fc74`, mailbox writer `0x0063270c` and application sender `0x006334dc`. A screen is new unless its frame was seen before or its menu reading and state cells match a known screen. The keys are OK (also MENU), DOWN, UP, RIGHT, LEFT, BACK (also DISP), Q, both sub-command dial turns and PLAY; screens with controller 74 in state `0x18` use only the first six, because in the first run every Q, PLAY and dial press from such a screen reached a known screen and DIAL-RIGHT equalled DOWN in 194 of 195 cases. [Sources: `emulation/menu-crawl.json`; first-run journal `private-data/scratch/ControllerStrategy/crawl-1/crawl-trials.jsonl`.]
+
+Depth-first discovery order fixes a screen's recorded depth, so a long list walked early pushes everything beneath it to the depth limit. After each root's depth-first pass the crawl computes the fewest-press recorded path to every depth-limited screen, replays it from the root, accepts the landing by the same frame-first rule and expands the screen from there. A replay that lands elsewhere is recorded as diverged and leaves the screen depth-limited.
+
+The pointer at `0x009571d0` is not cleared when a menu closes: live view keeps the first-start date node's reading `(67,56,0)`. Controller 74 (modal `0x4a`) separates the cases: `0x04` on the live-view root, `0x11`, `0x19` and `0x1c` on live-view overlays such as drive and white balance, `0x01` on the LCD BRIGHTNESS slider, `0x18` on the menus MENU and Q open, and `0x00` under the SET-UP pages. The census keys menu behaviour by (node id, setting id) on screens in `0x18` or `0x00` and lists all other screens separately.
+
+Limits: the attach route consumes the first-start language and date screens with fixed keys before the crawl starts; there is no card, lens, sensor image or S1/S2 press; the mode dial stays at its boot position; live view is the synthetic scene. These screens and paths are left to the camera-side harness below.
+
+#### Runs
+
+| Run | Mechanism | Result | Receipt under `private-data/scratch/ControllerStrategy/` |
+| --- | --- | --- | --- |
+| crawl-1 | Snapshot crawl, all ten keys on every screen | Stopped at trial 1,996 after about 230 screens: BACK from SET-UP page 1 settled with no display plane and the capture error ended the session. Fix: a press advances in 2M-instruction steps, up to 60M, until a plane is presented, and a missing plane is a stopped edge. | `crawl-1/`, `crawl-1.log` |
+| crawl-2 | Plus the plane wait and menu-state keys | Killed at trial 388 by an orchestrator restart, not by its input | `crawl-2/` |
+| crawl-3 | Same input as crawl-2 | 309 screens, 1,948 trials, 72 min, 5 plane stops; 25 screens depth-limited at 16 whose recorded shortest paths are 3 to 10 presses, so the SET-UP subtree was unexplored | `crawl-3/` |
+| crawl-4 | Plus shortest-path replay | 564 screens (1,089 frames), 4,544 trials and 250 replay presses in 177 min; 25 replays expanded and 6 diverged; 14 screens depth-limited; 16 stopped presses: 7 with no plane (a live-view overlay `(16,472)` and GEOTAGGING SET-UP `(73,71)`) and 9 on an unsupported Wi-Fi SDIO command (PC AUTO SAVE SIMPLE SETUP `(83,177)`) | `crawl-4/`, `census-4-menus.json` |
+
+The six diverged replays took a shorter path through state the frame does not show, such as a menu reopened at its remembered cursor. The 14 remaining depth-limited screens are positions deep in long value lists plus those six; two of them, Fn BUTTON SETTING `(40,252)` and DISPLAY CUSTOM SETTING `(24,389)`, were seen on one screen each.
+
+#### Behaviour counts
+
+The census groups crawl-4's 495 menu screens into 87 keys and leaves 69 live-view and overlay screens outside menus. Presses dispatched 371 distinct actions of 38 controllers; those actions fall in 295 helper-bound shapes whose members are 753 of the 5,795 table callbacks. An action can serve keys of several classes, so the per-class action counts overlap. [Sources: E-MODAL-MENU-CRAWL-150; `private-data/scratch/ControllerStrategy/census-4-menus.json`.]
+
+| Class (census rule) | Keys | Examples | Actions | Shapes |
+| --- | --- | --- | --- | --- |
+| Navigation list: opens keys that are not its ancestors | 18 | shooting-menu pages `(1,5)`, SET-UP pages `(63,5)`, tab strip `(0,5)`, ISO AUTO CONTROL `(36,330)`, SCREEN SET-UP `(78,7)` | 235 | 197 |
+| Value list: cursor moves commit a property | 38 | ISO `(1,321)`, WHITE BALANCE `(11,237)`, DATE/TIME fields `(67,56..59)`, language `(68,52)`, VOLUME `(72,45)` | 111 | 96 |
+| Toggle: a value list with two positions | 25 | SILENT MODE `(63,525)`, sensor-cleaning timing `(127,209)`, `(127,210)` | 95 | 83 |
+| Other | 6 | Q menu `(122,5)`, name keyboard `(86,182)`, password digits `(126,201)`, previous-connection details `(85,183)`, `(40,252)`, `(24,389)` | 58 | 42 |
+| Confirmation: commits its own setting | 0 | see below | 0 | 0 |
+| Outside menus (69 screens) | | live view, drive, focus-area, white-balance and other arrow-key overlays | 131 | 105 |
+
+Value-list and toggle moves commit through `0x00d4fc74`; editors such as DATE/TIME commit their field (`0x39`, `0x3a`, `0x3b`) without a property write. Frames show five OK/CANCEL confirmation dialogs: SET OK?, CUSTOM RESET, SHOOTING MENU RESET, SET-UP RESET and RESET WIRELESS SETTINGS. Each keeps its parent's menu reading and opens on CANCEL, and its cursor is in neither the reading nor the state cells, so the crawl treats OK and CANCEL as frame variants of one screen and never pressed OK. The census therefore counts them inside their parents.
+
+Twenty-one actions, of controllers 0, 30, 41, 42, 74, 75, 76, 100, 101 and 107, run on at least 10% of presses (454 of 4,544); presses average 15.1 dispatches. **[INFERENCE]** These form the per-press dispatch path rather than menu behaviour.
+
+**[INFERENCE]** Generic behaviours that cover every reached screen, each driven by recovered menu data (node, setting, property id, value array, row targets) rather than by the stock action bodies:
+
+| Generic behaviour | Covers in crawl-4 |
+| --- | --- |
+| List navigation with page tabs | 18 navigation keys |
+| Value picker committing on each move; a toggle is the two-value case | 63 value-list and toggle keys |
+| Multi-field editor: LEFT/RIGHT between fields, each field a picker | DATE/TIME `(67,56..59)`, TIME DIFFERENCE `(65,64..66)` |
+| Character and digit entry | name keyboard `(86,182)`, SSID `(125,192)`, password `(126,201)` |
+| Slider | VOLUME `(72,45)`, LCD BRIGHTNESS (state `0x01`) |
+| Confirmation dialog defaulting to CANCEL | 5 dialogs |
+| Q menu grid | `(122,5)` |
+| Live-view key overlay strip | drive, focus area, white balance and the other outside screens |
+| Information or progress screen | sensor cleaning run, previous-connection details, PC auto-save connection |
+
+**[INFERENCE]** Nine generic behaviours therefore cover the 87 menu keys, five dialogs and the live-view overlays the emulator reaches, where the stock firmware spends 371 actions in 295 shapes across 38 controllers. For #128 this moves the functional unit from the callback to the menu table: an owned dispatcher plus these behaviours replaces the reached actions once the menu, property and value tables are recovered as data. The scope still open is what the emulator cannot reach: card, lens, mode-dial, S1/S2 and Wi-Fi paths, OK on confirmations, and the 14 depth-limited screens.
+
+#### Camera-side validation harness (design)
+
+**[INFERENCE]** Purpose: check the emulator graph against the body for the screens the emulator cannot reach (first-start language and date, card-backed playback and storage dialogs, lens and focus menus, other mode-dial positions, wireless, flash, movie, Fn assignments, S1/S2 flows) and for screens it may render differently (live view, timing-dependent overlays). The owner's webcam records the LCD while keys are pressed and the body's own state is read back.
+
+| Part | Design | Existing support | Missing |
+| --- | --- | --- | --- |
+| Key script | Generate per-screen key sequences from the emulator graph: a path from a known start to the target screen, then the edges to check, each with its expected next screen. Exclude every edge whose emulator activity commits durable state (storage, format, reset, save) or that leads to one. | Graph edges with their traced commits, mailbox codes and dispatches | Script generator |
+| Phase 0 input, no camera code | The owner presses the scripted keys by hand at a host prompt; the webcam records. | Physical key codes and release forms bound by the act-logged capture: OK `0x01`, UP `0x02`, DOWN `0x03`, LEFT `0x04`, RIGHT `0x05`, DISP/BACK `0x09`, PLAY `0x0b`, Q `0x32`, Fn `0x28`, sub-command push `0x2b`, release `code \| 0x80` (E-PRESS-MAP-150) | Prompt tool |
+| Phase 1 input, RAM-side hook | A RAM-push payload extends the stock key-scan callback `0x006a33f0` (task 37, period 25; E-XM1-KEY-SAMPLING-PATH-150): on a scan tick it takes one pending key record from a mailbox in its allocation and publishes it through the stock publisher `0x006a1c50`, the GPIO handler's route into the queue-1 key message, so injected presses take the stock debounce and dispatch path. The host writes the mailbox with the existing function-3 RAM write. | RAM-push install and rollback on the body (E-RAM-PUSH-INSTALL-150, E-RAM-PUSH-SESSION-150 and the E-RAM-PUSH253 runs); publisher route `0x006a1c50 -> 0x006a1b40` and sender `0x006334dc` from static analysis only | Hook bytes; proof that calling `0x006a1c50` from the scan callback's task context matches the GPIO handler's; queue-1 message layout; physical debounce and release timing (#53 is open with no measurements; #111 covers emulator release caps only) |
+| State readback | After each press, `read-ram` the menu record (`0x009571d0`, 16 bytes, already the first planned live window), the controller state and event cells `[0x01467588,0x01467840)` in three windows and the 48-byte node descriptor. This is the emulator graph's own screen identity, independent of video. | Standing read grant for `read-ram` and `read-config` (E-CAMERA-READ-GRANT-150; spec 07 section 3.4); `transport/README.md` `read-ram` plans, at most 2,032 requests per run | Plan generator; the cells have not been read on the body |
+| Video | Record the webcam with ffmpeg through v4l2; rectify each frame by a homography fitted once on a calibration screen whose emulator image is known (SHOOTING MENU page 1); compare rectified frames with the expected node's emulator PNG and with its alternatives. | Pinned ffmpeg and ffprobe; `//af-session` presentation-timestamp listing and frame extraction; phone-video precedent E-RAM-PUSH253-SELECT-VIDEO-150 | Capture command, rectification, image comparator |
+| Alignment | No subtraction across host, camera and video clocks (spec 08). Order suffices: each press is followed by one readback and by the first video frame that differs from the previous settled screen. A step passes when the readback matches the expected node's menu reading and cells and the frame matches its image; otherwise the observed screen becomes a new node. | Graph identity rules above | Step matcher |
+| Procedure | Phase 0 is owner operation plus H1 reads under the standing grant. Phase 1 is H2: independent review of the hook bytes, the same payload exercised first in the emulator with the crawl driving it through the hook and its edges compared with the physical-key edges, then the owner's go. Every session ends by removing the battery, so picker changes are not committed by an orderly switch-off. | `spec/07-governance-and-handoff.md` sections 3.1 to 3.4 | Review and go |
+
+**[INFERENCE]** Order: phase 0 on the unreachable areas first, since it needs no camera code and decides which emulator gaps matter; phase 1 only if the scripted volume makes manual presses impractical. The attach-time `0xff` fill of `0x43360000..0x45a9ffff` overlaps display buffers (`transport/README.md`), so each session's comparison starts after a full redraw.
