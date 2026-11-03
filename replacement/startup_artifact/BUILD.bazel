@@ -1,0 +1,112 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_library(
+    name = "startup-artifact",
+    srcs = [
+        "Replacement/StartupArtifact/Adapters.hs",
+        "Replacement/StartupArtifact/Compose.hs",
+        "Replacement/StartupArtifact/Contract.hs",
+        "Replacement/StartupArtifact/Footprint/FirstStage.hs",
+        "Replacement/StartupArtifact/Footprint/PrimaryPublisher.hs",
+        "Replacement/StartupArtifact/Footprint/Record2Link.hs",
+        "Replacement/StartupArtifact/Joins.hs",
+        "Replacement/StartupArtifact/Manifest.hs",
+        "Replacement/StartupArtifact/Stage.hs",
+        "Replacement/StartupArtifact/Targets.hs",
+        "Replacement/StartupArtifact/Types.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//emulation:critical-pair-lib",
+        "//emulation:image4-staging-lib",
+        "//emulation:interface-initializer-lib",
+        "//emulation:loader-prefix-witness-lib",
+        "//emulation:primary-initializer-artifact-lib",
+        "//emulation:primary-initializer-source-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:first-stage",
+        "//host:host-support",
+        "//host:scientific",
+        "//host:text",
+        "//host:update-container",
+        "//host:vector",
+        "//host/firmware:stage-build",
+        "//host/firmware:startup-stage-contract",
+        "//replacement/record5_staging:record5-staging",
+    ],
+)
+
+_TOOLS = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"]
+
+_TOOL_ARGS = ["$(rootpath %s)" % tool for tool in _TOOLS]
+
+haskell_binary(
+    name = "stage-startup-artifact",
+    srcs = ["StageMain.hs"],
+    args = _TOOL_ARGS,
+    data = _TOOLS,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":startup-artifact",
+        "//emulation:image4-staging-lib",
+        "//host:base",
+        "//host:host-support",
+    ],
+)
+
+_TEST_DEPS = [
+    ":startup-artifact",
+    "//emulation:case-sha256",
+    "//emulation:image4-staging-lib",
+    "//host:aeson",
+    "//host:base",
+    "//host:bytestring",
+    "//host:containers",
+    "//host:directory",
+    "//host:filepath",
+    "//host:host-support",
+    "//host:text",
+    "//host:update-container",
+    "//host:vector",
+]
+
+haskell_test(
+    name = "startup-artifact-tests",
+    size = "small",
+    srcs = ["Fixtures.hs", "Tests.hs"],
+    args = ["$(rootpath //emulation:fujimod-xm1/tests/data/composed-contract-v1.json)"],
+    data = ["//emulation:fujimod-xm1/tests/data/composed-contract-v1.json"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    main_file = "Tests.hs",
+    deps = _TEST_DEPS,
+)
+
+_IMAGES = [
+    "//replacement/first_stage:first-stage-image.bin",
+    "//replacement/first_stage:first-stage-image.symbols",
+    "//replacement/critical_pair:critical-pair-image.bin",
+    "//replacement/critical_pair:critical-pair-image.symbols",
+    "//replacement/primary_initializer:primary-initializer-image.bin",
+    "//replacement/primary_initializer:primary-initializer-image.symbols",
+]
+
+# Canonical inputs come from private-data:
+# bazel run //replacement/startup_artifact:startup-artifact-canonical-tests -- CANONICAL_DAT SCRATCH_DIR
+haskell_test(
+    name = "startup-artifact-canonical-tests",
+    srcs = ["CanonicalTests.hs"],
+    args = _TOOL_ARGS + ["$(rootpath %s)" % image for image in _IMAGES] + ["$(rootpath //emulation:fujimod-xm1/tests/data/composed-contract-v1.json)"],
+    data = _TOOLS + _IMAGES + ["//emulation:fujimod-xm1/tests/data/composed-contract-v1.json"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    tags = ["manual"],
+    deps = _TEST_DEPS,
+)

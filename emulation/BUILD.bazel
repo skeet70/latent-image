@@ -16,6 +16,11 @@ exports_files(
     visibility = ["//replacement/general_heap:__pkg__"],
 )
 
+exports_files(
+    ["fujimod-xm1/tests/data/composed-contract-v1.json"],
+    visibility = ["//replacement/startup_artifact:__pkg__"],
+)
+
 # Copies a card image to a new path and writes named files into its FAT
 # partition with mtools, for --sd-card-image inputs.
 haskell_binary(
@@ -455,7 +460,10 @@ haskell_library(
     name = "loader-prefix-witness-lib",
     srcs = ["Emulation/LoaderPrefixWitness.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    visibility = ["//replacement/startup_consumers:__pkg__"],
+    visibility = [
+        "//replacement/startup_artifact:__pkg__",
+        "//replacement/startup_consumers:__pkg__",
+    ],
     deps = [
         ":first-stage-witness-lib",
         ":peer-stage-witness-lib",
@@ -482,7 +490,10 @@ haskell_library(
         "Emulation/InterfaceInitializerConsumer.hs",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    visibility = ["//replacement/startup_consumers:__pkg__"],
+    visibility = [
+        "//replacement/startup_artifact:__pkg__",
+        "//replacement/startup_consumers:__pkg__",
+    ],
     deps = [
         ":first-stage-witness-lib",
         ":loader-prefix-witness-lib",
@@ -1528,6 +1539,12 @@ sh_binary(
 sh_binary(
     name = "startup-consumers",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-startup-consumers"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
+    name = "composed-startup",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-composed-startup"],
     visibility = ["//visibility:public"],
 )
 

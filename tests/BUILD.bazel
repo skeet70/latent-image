@@ -23,3 +23,17 @@ sh_test(
         "local",
     ],
 )
+
+sh_test(
+    name = "ledger-apply",
+    size = "small",
+    srcs = ["ledger-apply.sh"],
+    args = [
+        "$(location @lab_jq//:bin/jq)",
+        "$(location //build-support:ledger-apply.sh)",
+    ],
+    data = [
+        "//build-support:ledger-apply.sh",
+        "@lab_jq//:bin/jq",
+    ],
+)

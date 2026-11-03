@@ -86,7 +86,7 @@ routeName route = case route of
   FujiModUsbToggleE8 -> "fujimod-usb-toggle-e8"
   FujiModUsbToggleEmu -> "fujimod-usb-toggle-emu"
 
--- | The recorded routes of E-MERGE-EMULATOR-REVERIFY-150 decide the run's
+-- | The recorded routes of E-VERIFY-CANDIDATE-150 decide the run's
 -- result; the FujiMod routes and their retained counterparts are reported only.
 routeGating :: Route -> Bool
 routeGating route = route `elem`

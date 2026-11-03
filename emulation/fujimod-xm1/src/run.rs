@@ -146,8 +146,8 @@ pub fn nand_base(document:&RunDocument,update:&ValidatedUpdate)->Result<NandBase
 
 /// Physical extent over which the X-M1 boot ROM decode returns its 16 KiB image repeated every
 /// `0x4000`: body reads of `0x80004000-0x80007fff` return the whole image, and 256-byte reads at
-/// `0x80008000`, `0x80010000` and `0x80100000` return its first 256 bytes (E-BOOTROM-EXTENT-150,
-/// E-BOOTROM-DISCRIMINATOR-150, E-STRAP-READ-150). The end is the last observed read rounded up
+/// `0x80008000`, `0x80010000` and `0x80100000` return its first 256 bytes
+/// (E-BOOTROM-DISCRIMINATOR-150, E-STRAP-READ-150). The end is the last observed read rounded up
 /// to the period; beyond it is unmeasured.
 pub const BOOT_ROM_DECODE_BYTES: u64 = 0x10_4000;
 
