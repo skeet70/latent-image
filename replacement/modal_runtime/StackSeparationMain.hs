@@ -319,8 +319,16 @@ main = do
         , "derived_using_separation" .= length usesSeparation
         , "cited_unresolved_now_derived" .= length citedNowDerived
         , "premises" .= ([ "callee-preserves-r4-r11: a constant held in r4-r11 across a call is unchanged after it, the AAPCS assumption StockInventory's derivation already makes for opaque calls; discharges that rely on it are counted separately."
-                         , "recovered-stack-allocation-completeness: every stack pointer installed while callbacks run lies in a listed region. The task pool bound comes from the reservation source and the 84 hardware-observed task stacks; other task-creation callers and stack sources are not closed."
-                         , "Store sites whose address is not a constant, including indexed globals and loaded objects joined with globals, keep global-object-stack-separation."
+                         , "recovered-stack-allocation-completeness: see named_assumptions." ] :: [String])
+        , "named_assumptions" .= [ object
+            [ "name" .= ("recovered-stack-allocation-completeness" :: String)
+            , "statement" .= ("Every stack pointer installed while a controller callback or anything it interrupts runs lies in one of the recovered stack regions." :: String)
+            , "recovered_sources" .= [object ["kind" .= show kind, "physical" .= intervalJson region, "evidence" .= evidence] | StackRegion kind region evidence <- stackRegions]
+            , "supporting_observation" .= ("all 84 task stacks of the E-RAM-CALIBRATION-150 hardware task table lie in the task pool" :: String)
+            , "not_closed" .= ([ "task-creation callers that pass stack memory not obtained from reservation 0x725c6c or 0x723470"
+                               , "stacks installed by code not in the recovered loader, record-2, kernel scheduler and exception-entry sources"
+                               , "image4 exception entries that copy SP from another mode reuse a listed region only if that mode's SP was set by a recovered source" ] :: [String]) ] ]
+        , "premise_notes" .= ([ "Store sites whose address is not a constant, including indexed globals and loaded objects joined with globals, keep global-object-stack-separation."
                          , "The constant-address scan is straight-line and resets at joins; an unresolved scan leaves the premise in place." ] :: [String])
         ]
   L.writeFile outputPath (J.encode document)

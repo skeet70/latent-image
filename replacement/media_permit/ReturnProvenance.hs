@@ -19,7 +19,7 @@ module ReturnProvenance
 
 import qualified A32 as A
 import Control.Monad (foldM, unless, when)
-import Data.Bits (rotateR, shiftL, shiftR, (.&.), (.|.))
+import Data.Bits (complement, rotateR, shiftL, shiftR, (.&.), (.|.))
 import Data.Int (Int32)
 import qualified Data.Map.Strict as M
 import Data.Maybe (isNothing)
@@ -39,8 +39,9 @@ data SavedStackArray = SavedStackArray
 newtype ProgramCounter = ProgramCounter Word32 deriving (Eq, Ord, Show)
 newtype FrameOffset = FrameOffset Int32 deriving (Eq, Ord, Show)
 -- | WritesStatus carries an MSR that `A.decode` rejects as SystemRegister;
--- SignExtends carries an SXTB or SXTH that `A.decode` returns as Compute.
-data Step = Executes A.Instruction | WritesStatus A.StatusWrite | SignExtends A.SignExtension
+-- SignExtends carries an SXTB or SXTH and InsertsBits a BFI or BFC that
+-- `A.decode` returns as Compute.
+data Step = Executes A.Instruction | WritesStatus A.StatusWrite | SignExtends A.SignExtension | InsertsBits A.BitFieldInsert
 data CodeNode = CodeNode ProgramCounter Step [ProgramCounter] A.Cond
 newtype LiteralWord = LiteralWord Word32 deriving (Eq, Show)
 data PremiseUse = PremiseUse ProgramCounter ReturnPremise deriving (Eq, Ord, Show)
@@ -438,6 +439,16 @@ executeStep _ _ (ProgramCounter pc) (WritesStatus (A.StatusWrite _ target fields
       A.StatusFromImmediate _ -> Nothing
 executeStep _ _ _ (SignExtends (A.SignExtension _ destination source _ _)) state =
   pure (setRegister destination (derivedFrom [M.lookup source (registers state)]) state)
+-- Constant operands give the inserted constant; BFC inserts zeros.
+executeStep _ _ _ (InsertsBits (A.BitFieldInsert _ destination source lsb width)) state =
+  pure (setRegister destination inserted state)
+  where
+    mask = (((1 :: Word32) `shiftL` width) - 1) `shiftL` lsb
+    old = M.lookup destination (registers state)
+    new = maybe (Just (Constant 0)) (\register -> M.lookup register (registers state)) source
+    inserted = case (old, new) of
+      (Just (Constant kept), Just (Constant value)) -> Just (Constant ((kept .&. complement mask) .|. ((value `shiftL` lsb) .&. mask)))
+      _ -> derivedFrom [old, new]
 
 execute :: [SavedStackArray] -> M.Map ProgramCounter LiteralWord -> ProgramCounter -> A.Instruction -> FrameState -> Either String FrameState
 execute arrays literals (ProgramCounter pc) instruction state = case instruction of

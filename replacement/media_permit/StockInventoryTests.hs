@@ -91,6 +91,12 @@ main = do
     (refused (derive [0xe92d4800,0xe3500000,0x03073588,0x13403146,0x03a02000,0x01c321b4,0xe8bd8800]))
   check "an executed flag-setting member does not make the rest of the run execute"
     (refused (derive [0xe92d4800,0xe3500000,0x058d1004,0x01b02001,0x058de004,0xe8bd8800]))
+  insertedIndex <- either fail pure (deriveResult [] [0xe92d4010,0xe3a02064,0xe3a04001,0xe7df2814,0xe3043580,0xe3403094,0xe3a01000,0xe7831002,0xe8bd8010])
+  check "a BFI of constants gives a constant index for a global store"
+    (derivedDeclaration insertedIndex == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 36)
+      && derivationPremiseUses insertedIndex == [PremiseUse (ProgramCounter 0x101c) GlobalObjectStackSeparation])
+  check "a BFI from the stack pointer gives a frame-derived address"
+    (refused (derive [0xe92d4010,0xe3a02000,0xe7df201d,0xe5821000,0xe8bd8010]))
   check "an overwritten LR is not an incoming register return"
     (refused (derive [0xe3a0e000,0xe12fff1e]))
   check "an unsaved LR after a call is not the incoming return"

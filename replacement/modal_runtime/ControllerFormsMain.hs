@@ -145,6 +145,7 @@ classify address word = case A.decode address word of
     | otherwise -> Occurrence (FormName ("rejected " ++ A.forbiddenReason reason)) RejectedForm conditional
   A.Compute _ _
     | Just _ <- A.signExtension word -> Occurrence (FormName (computeName word)) StockInventoryOnly conditional
+    | Just _ <- A.bitFieldInsert word -> Occurrence (FormName (computeName word)) StockInventoryOnly conditional
     | otherwise -> Occurrence (FormName (computeName word)) DestinationsOnly conditional
   instruction -> Occurrence (FormName (semanticName instruction)) Semantic conditional
   where
@@ -235,7 +236,7 @@ main = do
         , "decoder_status_definition" .= object
             [ "a32-operand-semantics" .= ("host/firmware/A32.hs decode returns an operand-level constructor" :: String)
             , "a32-destinations-only" .= ("A32.hs returns Compute: it knows only the written registers" :: String)
-            , "stock-inventory-operand-step" .= ("A32.hs rejects (MSR) or returns Compute (SXTB/SXTH); StockInventory's statusWrite/signExtension decode the operands" :: String)
+            , "stock-inventory-operand-step" .= ("A32.hs rejects (MSR) or returns Compute (SXTB/SXTH, BFI/BFC); A32.statusWrite/signExtension/bitFieldInsert decode the operands for StockInventory" :: String)
             , "rejected" .= ("A32.hs Rejected and not recovered by StockInventory" :: String) ]
         , "callbacks" .= length censuses
         , "instructions" .= length occurrences

@@ -21,6 +21,8 @@ module A32
   , decode
   , statusWrite
   , signExtension
+  , BitFieldInsert (..)
+  , bitFieldInsert
   , sp
   , lr
   , pc
@@ -167,6 +169,19 @@ signExtension word
   | otherwise = Nothing
  where
   extend = SignExtension (Cond (field 31 28 word)) (reg 12 word) (reg 0 word) (8 * fromIntegral (field 11 10 word))
+
+-- | Destination, source (Nothing for BFC), lsb and width of BFI or BFC, which
+-- `decode` returns as Compute. PC operands and msb below lsb give Nothing.
+data BitFieldInsert = BitFieldInsert Cond Reg (Maybe Reg) Int Int deriving (Eq, Show)
+
+bitFieldInsert :: Word32 -> Maybe BitFieldInsert
+bitFieldInsert word
+  | field 31 28 word == 15 || word .&. 0x0fe00070 /= 0x07c00010 || reg 12 word == pc || msb < lsb = Nothing
+  | otherwise = Just (BitFieldInsert (Cond (field 31 28 word)) (reg 12 word) source (fromIntegral lsb) (fromIntegral (msb - lsb + 1)))
+ where
+  msb = field 20 16 word
+  lsb = field 11 7 word
+  source = if field 3 0 word == 15 then Nothing else Just (reg 0 word)
 
 field :: Int -> Int -> Word32 -> Word32
 field high low word = (word `shiftR` low) .&. ((1 `shiftL` (high - low + 1)) - 1)
