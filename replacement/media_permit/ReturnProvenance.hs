@@ -2,6 +2,7 @@
 
 module ReturnProvenance
   ( ProgramCounter (..)
+  , Step (..)
   , CodeNode (..)
   , LiteralWord (..)
   , PremiseUse (..)
@@ -22,7 +23,9 @@ import Numeric (showHex)
 
 newtype ProgramCounter = ProgramCounter Word32 deriving (Eq, Ord, Show)
 newtype FrameOffset = FrameOffset Int32 deriving (Eq, Ord, Show)
-data CodeNode = CodeNode ProgramCounter A.Instruction [ProgramCounter] A.Cond
+-- | WritesStatus carries an MSR that `A.decode` rejects as SystemRegister.
+data Step = Executes A.Instruction | WritesStatus A.StatusWrite
+data CodeNode = CodeNode ProgramCounter Step [ProgramCounter] A.Cond
 newtype LiteralWord = LiteralWord Word32 deriving (Eq, Show)
 data PremiseUse = PremiseUse ProgramCounter ReturnPremise deriving (Eq, Ord, Show)
 
@@ -39,7 +42,10 @@ returnPremiseLabel :: ReturnPremise -> String
 returnPremiseLabel UnexposedFrameIsolation = "unexposed-caller-frame-isolation"
 returnPremiseLabel GlobalObjectStackSeparation = "global-object-stack-separation"
 
-data Value = IncomingReturn | FrameAddress FrameOffset | FrameDerived | ReturnedObject | GlobalObject | ScaledIndex | Constant Word32 deriving (Eq, Show)
+-- StatusWord: CPSR bits `executionState` equal the current CPSR's.
+-- StatusNeutral: bits `executionState` are zero.
+data Value = IncomingReturn | FrameAddress FrameOffset | FrameDerived | ReturnedObject | GlobalObject | ScaledIndex | Constant Word32
+  | StatusWord | StatusNeutral deriving (Eq, Show)
 data FrameExposure = PrivateFrame | ExposedFrame deriving (Eq, Ord, Show)
 data Accumulation = ProductOnly | Addend (Maybe Value)
 data FrameState = FrameState
@@ -61,14 +67,14 @@ verifyReturns literals entry nodes = walk [(entry, initial)] M.empty S.empty
       if M.lookup address states == Just joined
         then walk pending states dependencies
         else do
-          CodeNode _ instruction successors condition <- maybe (Left "return proof leaves the classified code") Right (M.lookup address graph)
-          executed <- case execute literals address instruction joined of
+          CodeNode _ step successors condition <- maybe (Left "return proof leaves the classified code") Right (M.lookup address graph)
+          executed <- case executeStep literals address step joined of
             Left problem -> Left (problem ++ "; premise uses: " ++ show
               [showHex at "" ++ "=" ++ returnPremiseLabel premise | PremiseUse (ProgramCounter at) premise <- S.toList dependencies])
             Right result -> Right result
           let nextDependencies = S.union dependencies (S.map (PremiseUse address) (instructionPremises executed))
               propagated = executed {instructionPremises = S.empty}
-              actual = [(next, propagated) | next <- successors, not (returns instruction)]
+              actual = [(next, propagated) | next <- successors, not (stepReturns step)]
               skipped = case (address, condition) of
                 (ProgramCounter pc, A.Cond c) -> [(ProgramCounter (pc+4), joined) | c /= 14]
           walk (actual ++ skipped ++ pending) (M.insert address joined states) nextDependencies
@@ -115,6 +121,10 @@ returns instruction = case instruction of
   A.DataProcessing _ A.MOV _ destination _ (A.ShiftedImmediate source A.LSL 0) -> destination == A.pc && source == A.lr
   _ -> False
 
+stepReturns :: Step -> Bool
+stepReturns (Executes instruction) = returns instruction
+stepReturns (WritesStatus _) = False
+
 setRegister :: A.Reg -> Maybe Value -> FrameState -> FrameState
 setRegister register value state = state
   { registers = maybe (M.delete register) (M.insert register) value (registers state)
@@ -156,6 +166,36 @@ multiplyValue exposure left right accumulator = case derivedFrom [left, right, c
     (Just (Constant _), _, _) -> Just ScaledIndex
     (_, Just (Constant _), _) -> Just ScaledIndex
     _ -> Nothing
+
+-- CPSR mode M[4:0], T [5] and E [9] bits.
+executionState :: Word32
+executionState = 0x23f
+
+statusNeutral :: Maybe Value -> Bool
+statusNeutral (Just StatusNeutral) = True
+statusNeutral (Just (Constant value)) = value .&. executionState == 0
+statusNeutral _ = False
+
+coversExecutionState :: Maybe Value -> Bool
+coversExecutionState (Just (Constant mask)) = mask .&. executionState == executionState
+coversExecutionState _ = False
+
+-- AND, EOR, ORR and BIC; other operations give derivedFrom.
+bitwiseValue :: A.DataOp -> Maybe Value -> Maybe Value -> Maybe Value
+bitwiseValue operation left right = case derivedFrom [left, right] of
+  Just FrameDerived -> Just FrameDerived
+  unknown -> case (operation, left, right) of
+    (A.AND, _, _) | statusNeutral left || statusNeutral right -> Just StatusNeutral
+    (A.AND, Just StatusWord, _) | coversExecutionState right -> Just StatusWord
+    (A.AND, _, Just StatusWord) | coversExecutionState left -> Just StatusWord
+    (A.BIC, _, _) | statusNeutral left || coversExecutionState right -> Just StatusNeutral
+    (A.BIC, Just StatusWord, _) | statusNeutral right -> Just StatusWord
+    _ | operation `elem` [A.ORR, A.EOR] -> case (left, right) of
+      _ | statusNeutral left && statusNeutral right -> Just StatusNeutral
+      (Just StatusWord, _) | statusNeutral right -> Just StatusWord
+      (_, Just StatusWord) | statusNeutral left -> Just StatusWord
+      _ -> unknown
+    _ -> unknown
 
 shiftConstant :: A.Shift -> Int -> Word32 -> Maybe Word32
 shiftConstant shift amount value = case shift of
@@ -238,6 +278,19 @@ blockWriteback base mode enabled count original state
   where
     direction = if mode `elem` [A.IncrementAfter,A.IncrementBefore] then 1 else -1
 
+executeStep :: M.Map ProgramCounter LiteralWord -> ProgramCounter -> Step -> FrameState -> Either String FrameState
+executeStep literals address (Executes instruction) state = execute literals address instruction state
+executeStep _ (ProgramCounter pc) (WritesStatus (A.StatusWrite _ target fields source)) state
+  | target == A.SavedStatus = Left ("unadmitted SPSR write at " ++ showHex pc "")
+  -- The status and flags fields hold no mode, T or E bit.
+  | all (`elem` [A.StatusBits, A.FlagBits]) fields = pure state
+  | value == Just StatusWord = pure state
+  | otherwise = Left ("CPSR write may change the mode or endianness at " ++ showHex pc "")
+  where
+    value = case source of
+      A.StatusFromRegister register -> M.lookup register (registers state)
+      A.StatusFromImmediate _ -> Nothing
+
 execute :: M.Map ProgramCounter LiteralWord -> ProgramCounter -> A.Instruction -> FrameState -> Either String FrameState
 execute literals (ProgramCounter pc) instruction state = case instruction of
   A.MoveWide _ destination value -> pure (setRegister destination (Just (Constant value)) state)
@@ -255,8 +308,8 @@ execute literals (ProgramCounter pc) instruction state = case instruction of
         A.SUB -> case operandValue state operand of
           Just (Constant value) -> add (reg source) (negate (fromIntegral value))
           _ -> indexedAddress (frameExposure state) (reg source) (operandValue state operand)
-        _ -> derivedFrom [reg source, operandValue state operand]) state)
-  A.ReadStatus _ destination -> pure (setRegister destination Nothing state)
+        _ -> bitwiseValue operation (reg source) (operandValue state operand)) state)
+  A.ReadStatus _ destination -> pure (setRegister destination (Just StatusWord) state)
   A.ZeroExtend _ destination source _ _ -> pure (setRegister destination (derivedFrom [reg source]) state)
   A.Multiply _ destination left right accumulator ->
     pure (setRegister destination (multiplyValue (frameExposure state) (reg left) (reg right) (maybe ProductOnly (Addend . reg) accumulator)) state)
@@ -306,11 +359,11 @@ execute literals (ProgramCounter pc) instruction state = case instruction of
     reg register = M.lookup register (registers state)
     nextRegister (A.Reg number) = A.Reg (number+1)
     requireReturn value = unless (value == Just IncomingReturn) (Left ("PC load is not proven to be the incoming return at " ++ showHex pc ""))
-    -- Opaque calls assume the admitted AAPCS preserves SP and r4-r11.
+    -- Opaque calls assume the admitted AAPCS preserves SP and r4-r11, not the CPSR.
     callee current = usePremise UnexposedFrameIsolation (current
-      { registers = M.insert (A.Reg 0) ReturnedObject (foldr M.delete (registers current) (A.lr : A.Reg 12 : map A.Reg [0..3]))
+      { registers = M.insert (A.Reg 0) ReturnedObject (M.filter (/= StatusWord) (foldr M.delete (registers current) (A.lr : A.Reg 12 : map A.Reg [0..3])))
       , frameWords = case M.lookup A.sp (registers current) of
-          Just (FrameAddress boundary) -> M.filterWithKey (\offset _ -> offset >= boundary)
+          Just (FrameAddress boundary) -> M.filterWithKey (\offset value -> offset >= boundary && value /= StatusWord)
             (if exposure == PrivateFrame then frameWords current else savedWords current)
           _ -> M.empty
       , frameExposure = exposure

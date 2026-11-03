@@ -28,7 +28,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Word (Word32)
 import Numeric (showHex)
-import ReturnProvenance (CodeNode (..), LiteralWord (..), PremiseUse (..), ProgramCounter (..), ReturnPremise (..), requiredReturnPremises, returnPremiseLabel, verifyReturns)
+import ReturnProvenance (CodeNode (..), LiteralWord (..), PremiseUse (..), ProgramCounter (..), ReturnPremise (..), Step (..), requiredReturnPremises, returnPremiseLabel, verifyReturns)
 
 newtype GuestAddress = GuestAddress Word32 deriving (Eq, Ord, Show)
 data FunctionWindow = FunctionWindow GuestAddress GuestAddress deriving (Eq, Show)
@@ -103,11 +103,11 @@ inspectFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low
   (code, literals) <- walk [low] S.empty S.empty
   graph <- forM (S.toList code) $ \address -> do
     encoded <- word address
-    let instruction = A.decode address encoded
+    let instruction = step address encoded
     (successors, _) <- edges address instruction
     pure (address, instruction, successors, A.Cond (encoded `shiftR` 28))
   forM_ graph $ \(address, instruction, _, _) -> case instruction of
-    A.Load _ _ _ destination base (A.OffsetRegister _ _ _ _) _ | destination == A.pc && base == A.pc -> do
+    Executes (A.Load _ _ _ destination base (A.OffsetRegister _ _ _ _) _) | destination == A.pc && base == A.pc -> do
       let predecessors = S.fromList [source | (source, _, successors, _) <- graph, address `elem` successors]
       unless (address /= low && predecessors == S.singleton (address-4)) (Left "dispatch bound is bypassed")
     _ -> pure ()
@@ -134,7 +134,7 @@ inspectFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low
       | S.member address code = walk pending code literals
       | not (inside address) = Left ("fallthrough leaves function window at " ++ showHex address "")
       | otherwise = do
-          instruction <- A.decode address <$> word address
+          instruction <- step address <$> word address
           (successors, pools) <- edges address instruction
           unless (all inside pools) (Left "literal leaves function window")
           walk (successors ++ pending) (S.insert address code) (S.union literals (S.fromList pools))
@@ -143,7 +143,11 @@ inspectFunction (GuestAddress imageBase) image (FunctionWindow (GuestAddress low
       unless (target .&. 3 == 0 && (inside target || GuestAddress target `elem` externalTails))
         (Left ("undeclared external tail at " ++ showHex target ""))
       pure ([target | inside target] ++ fallthrough address condition)
-    edges address instruction = case instruction of
+    step address encoded = case A.decode address encoded of
+      A.Rejected A.SystemRegister | Just write <- A.statusWrite encoded -> WritesStatus write
+      instruction -> Executes instruction
+    edges address (WritesStatus _) = pure ([address+4], [])
+    edges address (Executes instruction) = case instruction of
       A.Branch _ True _ -> pure ([address+4], [])
       A.Branch condition False target -> do
         successors <- branch address condition target

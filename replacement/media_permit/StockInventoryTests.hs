@@ -178,3 +178,68 @@ main = do
   check "structural inventory also refuses unclassified trailing storage"
     (refused (inspectFunction (GuestAddress 0x1000) (bytes [0xe12fff1e,0x12345678])
       (FunctionWindow (GuestAddress 0x1000) (GuestAddress 0x1008)) []))
+  let unpremised result size = derivedDeclaration result == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize size)
+        && null (derivationPremises result) && null (derivationPremiseUses result)
+  irqSave <- either fail pure (deriveResult [] [0xe52db004,0xe28db000,0xe10f0000,0xe3801080,0xe121f001,0xe2000080,0xe28bd000,0xe8bd0800,0xe12fff1e])
+  check "an interrupt-masking control write from the read status word is accepted without premises" (unpremised irqSave 36)
+  irqRestore <- either fail pure (deriveResult [] [0xe52db004,0xe28db000,0xe2000080,0xe10f1000,0xe3c11080,0xe1800001,0xe121f000,0xe28bd000,0xe8bd0800,0xe12fff1e])
+  check "a caller mask confined to the I bit merges into the status word without premises" (unpremised irqRestore 40)
+  serviceBody <- either fail pure (deriveResult [] [0xe92d4010,0xe10f3000,0xe3833080,0xe129f003,0xeb0003fa,0xe10f3000,0xe3c33080,0xe129f003,0xe8bd8010])
+  check "flags and control writes from status words read on each side of a call keep only the call's premise"
+    (derivedDeclaration serviceBody == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 36)
+      && derivationPremiseUses serviceBody == [PremiseUse (ProgramCounter 0x1010) UnexposedFrameIsolation])
+  flagsOnly <- either fail pure (deriveResult [] [0xe12cf000,0xe328f4f0,0xe12fff1e])
+  check "status and flags field writes from an unknown register or an immediate are accepted" (unpremised flagsOnly 12)
+  stackedStatus <- either fail pure (deriveResult [] [0xe92d4010,0xe24dd008,0xe10f0000,0xe58d0000,0xe59d1000,0xe121f001,0xe28dd008,0xe8bd8010])
+  check "a status word reloaded from its private frame word is accepted" (unpremised stackedStatus 32)
+  check "a control write from an unknown register refuses"
+    (refused (derive [0xe121f000,0xe12fff1e]))
+  check "a control write from an immediate refuses"
+    (refused (derive [0xe321f0d3,0xe12fff1e]))
+  check "a status word with mode bits set refuses"
+    (refused (derive [0xe10f0000,0xe380001f,0xe121f000,0xe12fff1e]))
+  check "a status word with mode bits cleared refuses"
+    (refused (derive [0xe10f0000,0xe3c0001f,0xe121f000,0xe12fff1e]))
+  check "a status word with a toggled mode bit refuses"
+    (refused (derive [0xe10f0000,0xe2200001,0xe121f000,0xe12fff1e]))
+  check "a status word with the T bit set refuses"
+    (refused (derive [0xe10f0000,0xe3800020,0xe121f000,0xe12fff1e]))
+  check "an extension write with the E bit set refuses"
+    (refused (derive [0xe10f0000,0xe3800c02,0xe122f000,0xe12fff1e]))
+  check "a control and extension write after masking off the E bit refuses"
+    (refused (derive [0xe10f0000,0xe20000ff,0xe123f000,0xe12fff1e]))
+  maskedStatus <- either fail pure (deriveResult [] [0xe10f0000,0xe30f1fff,0xe0000001,0xe121f000,0xe12fff1e])
+  check "a status word masked by a register constant covering the mode, T and E bits is accepted without premises"
+    (unpremised maskedStatus 20)
+  check "a status word merged with an unknown value whose mode bits alone were cleared refuses"
+    (refused (derive [0xe300201f,0xe1c30002,0xe10f1000,0xe1800001,0xe121f000,0xe12fff1e]))
+  check "the exclusive or of two status words refuses"
+    (refused (derive [0xe10f0000,0xe10f1000,0xe0200001,0xe121f000,0xe12fff1e]))
+  check "a status write with an empty field mask refuses"
+    (refused (derive [0xe120f000,0xe12fff1e]))
+  check "an unmasked caller value merged into the status word refuses"
+    (refused (derive [0xe52db004,0xe28db000,0xe10f1000,0xe3c11080,0xe1800001,0xe121f000,0xe28bd000,0xe8bd0800,0xe12fff1e]))
+  check "a status word held in a callee-saved register across a call refuses"
+    (refused (derive [0xe92d4010,0xe10f4000,0xeb0003fd,0xe121f004,0xe8bd8010]))
+  check "a status word held in a frame word across a call refuses"
+    (refused (derive [0xe92d4010,0xe24dd008,0xe10f0000,0xe58d0000,0xeb0003fb,0xe59d1000,0xe121f001,0xe28dd008,0xe8bd8010]))
+  check "a status word joined with an unknown value refuses"
+    (refused (derive [0xe10f0000,0x11a00001,0xe121f000,0xe12fff1e]))
+  check "an SPSR write refuses"
+    (refused (derive [0xe16ff000,0xe12fff1e]))
+  check "an SPSR read refuses"
+    (refused (derive [0xe14f0000,0xe12fff1e]))
+  check "a banked register write refuses"
+    (refused (derive [0xe12df200,0xe12fff1e]))
+  check "a banked register read refuses"
+    (refused (derive [0xe10d0200,0xe12fff1e]))
+  check "a status write from PC refuses"
+    (refused (derive [0xe121f00f,0xe12fff1e]))
+  check "an SPSR-restoring PC write after a status write refuses"
+    (refused (derive [0xe10f0000,0xe129f000,0xe1b0f00e]))
+  check "an SPSR-restoring load-multiple refuses"
+    (refused (derive [0xe92d4000,0xe8fd8000]))
+  unproven <- either fail pure (inspectFunction (GuestAddress 0x1000) (bytes [0xe121f000,0xe12fff1e])
+    (FunctionWindow (GuestAddress 0x1000) (GuestAddress 0x1008)) [])
+  check "structural inventory classifies an unproven control write as linear code"
+    (inspectedCodeWords unproven == [GuestAddress 0x1000, GuestAddress 0x1004] && refused (inspectedReturn unproven))
