@@ -18,7 +18,7 @@ data Fault = Control | EquivalentImmediate | UnreachableNop | EquivalentLr | Sta
   | WrongStaging | MissingDecoderInit | WrongFeed | SkipFeedNonNull | WrongFifthArgument | FifthBelowSp
   | WrongReadBlock | WrongStorageTarget | LostReadStatus | LostSkipStatus | MissingDecodeStart
   | MissingDecoderFinish | WrongDecodeEnd
-  | MissingWait | SingleFlagRead | InvertedWait | WrongWaitAddress
+  | MissingWait | SingleFlagRead | InvertedWait | WrongWaitAddress | WaitSkipsReload | StaleRefillBase
   | MissingCpuFill | DroppedRefillLength | WrongFillByte | MissingCache | WrongCacheArgument
   | MissingMainEnd | ExtraRetainedCall | UnknownExternalCall | WrongErrorStatus
   | WrongRestore | WrongLr | PcRelativeFlagWrite
@@ -27,7 +27,7 @@ data Fault = Control | EquivalentImmediate | UnreachableNop | EquivalentLr | Sta
   | StoreOverlapFault | LoadOverlapFault | PushSp | PopSp | CarrierOverflow
   deriving (Eq, Show, Enum, Bounded)
 
-data Label = Body | Policy | Skip | Complete | Wait | Fill | Final | BodyReturn | Spin | Padding
+data Label = Body | Policy | Skip | Complete | Wait | WaitTest | Fill | Final | BodyReturn | Spin | Padding
   deriving (Eq, Ord, Show)
 data Site = AdapterPush | AdapterCall | AdapterLow | AdapterHigh | AdapterReturn | BodyPush
   | LookupArg | LookupCall | SaveSegment | NullCompare | NullBranch | OffsetLoad | LengthLoad
@@ -41,7 +41,7 @@ data Site = AdapterPush | AdapterCall | AdapterLow | AdapterHigh | AdapterReturn
   | DecodeEndArg | DecodeEndCall | SkipJoin | SkipBlock | SkipCount | SkipStaging | SkipFeed | SkipCall
   | SkipStatus | PolicyCompare | PolicyBranch | WaitLow | WaitHigh | WaitLoad | WaitCompare | WaitBack
   | WaitExit | FillBaseLoad | FillByte | FillLengthLoad | CpuFillCall | CacheStart | CacheLength | CacheCall
-  | MainEndArg | FinalProbe | MainEndCall | StatusMove | ReturnBody | SpinBranch | PaddingWord
+  | MainEndArg | FinalProbe | MainEndCall | StatusMove | ReturnBody | SpinBranch | PaddingWord | InjectedValue
   deriving (Eq, Ord, Show)
 data Op = Raw Word32 | Jump Word32 Label | Invoke Word32
 data Item = Mark Label | At Site Op
@@ -55,6 +55,8 @@ fixture fault = B.concat (map U.putWord32 (reverse encoded)) <> overflow
     overflow = if fault == CarrierOverflow then B.replicate 20 0 else B.empty
     items = concatMap alter program
     alter (At AdapterHigh _) | fault `elem` [StaleContinuationLr,PcRelativeFlagWrite] = []
+    alter item@(At BaseLoad _) | fault == StaleRefillBase = [item,At InjectedValue (Raw 0xe1a0b000)]
+    alter item@(At FillBaseLoad _) | fault == StaleRefillBase = [item,At InjectedValue (Raw 0xe1a0000b)]
     alter item = [item]
     (_,labels) = foldl locate (origin,M.empty) items
     locate (pc,found) (Mark label) = (pc,M.insert label pc found)
@@ -111,7 +113,8 @@ program =
   , At SkipFeed (Raw 0xe3a03000),At SkipCall (Invoke 0x6a8f1c),At SkipStatus (Raw 0xe1a04000)
   , Mark Complete,At PolicyCompare (Raw 0xe3560000),At PolicyBranch (Jump 0x1a000000 Fill)
   , At WaitLow (Raw (wide 3 0xf8ac)),At WaitHigh (Raw (top 3 0x89))
-  , Mark Wait,At WaitLoad (Raw 0xe5932000),At WaitCompare (Raw 0xe3520000),At WaitBack (Jump 0x0a000000 Wait)
+  , Mark Wait,At WaitLoad (Raw 0xe5932000),Mark WaitTest,At WaitCompare (Raw 0xe3520000)
+  , At WaitBack (Jump 0x0a000000 Wait)
   , At WaitExit (Jump 0xea000000 Final)
   , Mark Fill,At FillBaseLoad (Raw 0xe595000c),At FillByte (Raw 0xe3a01000),At FillLengthLoad (Raw 0xe5952010)
   , At CpuFillCall (Invoke 0x7221c8),At CacheStart (Raw 0xe3a00000),At CacheLength (Raw 0xe3a01000)
@@ -172,6 +175,8 @@ changes fault = case fault of
   SingleFlagRead -> [(WaitBack,nop)]
   InvertedWait -> [(WaitBack,Jump 0x1a000000 Wait)]
   WrongWaitAddress -> [(WaitLow,Raw (wide 3 0xf8b0))]
+  WaitSkipsReload -> [(WaitBack,Jump 0x0a000000 WaitTest)]
+  StaleRefillBase -> [(FillBaseLoad,Raw 0xe595c00c)]
   MissingCpuFill -> [(CpuFillCall,nop)]
   DroppedRefillLength -> [(FillLengthLoad,Raw 0xe3a02000)]
   WrongFillByte -> [(FillByte,Raw 0xe3a010ff)]
@@ -253,6 +258,8 @@ expectedRefusal fault = case fault of
   SingleFlagRead -> Just OrderedEffectsDiffer
   InvertedWait -> Just OrderedEffectsDiffer
   WrongWaitAddress -> Just ReadProvenanceRejected
+  WaitSkipsReload -> Just ExecutionBoundExceeded
+  StaleRefillBase -> Just CallArgumentsDiffer
   MissingCpuFill -> Just OrderedEffectsDiffer
   DroppedRefillLength -> Just OrderedEffectsDiffer
   WrongFillByte -> Just CallArgumentsDiffer

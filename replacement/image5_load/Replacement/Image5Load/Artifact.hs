@@ -119,8 +119,8 @@ contractValue (StagedImage4 (CanonicalSource _ _ (SourceIdentities datIdentity i
   , "execution_pcs" .= executionPcs proof, "return_pcs" .= returnPcs proof
   , "call_sites" .= [object ["pc" .= pc,"target" .= target] | (pc,target) <- callSites proof]
   , "retained_calls" .= retainedTargets
-  , "fill_callback" .= (0x6a8bec :: Word32), "feed_callback" .= (0x6ae500 :: Word32)
-  , "fill_flag" .= (0x89f8ac :: Word32), "return_lr" .= (0x422b8 :: Word32)
+  , "fill_callback" .= fillCallback, "feed_callback" .= feedCallback
+  , "fill_flag" .= fillFlag, "return_lr" .= finalLr
   , "caller_abi" .=
       ([ "AAPCS r4-r11 and incoming SP preserved; r0 is the saved storage-read status in both modes"
        , "successful return restores LR0x422b8, the stock value left by the final marker's last call; r1-r3,r12 and NZCV are volatile"

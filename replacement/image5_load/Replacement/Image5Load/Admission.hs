@@ -1,7 +1,7 @@
 module Replacement.Image5Load.Admission
   ( AdmissionError (..), ProducerProof, deriveProducerProof
   , scratchLow, refusalPc, executionPcs, callSites, returnPcs
-  , carrierBytes, retainedTargets
+  , carrierBytes, retainedTargets, fillCallback, feedCallback, fillFlag, finalLr
   ) where
 
 import qualified A32 as A
@@ -77,9 +77,11 @@ callSites (ProducerProof _ _ _ sites _) = sites
 returnPcs :: ProducerProof -> [Word32]
 returnPcs (ProducerProof _ _ _ _ pcs) = pcs
 
-origin, fillFlag, stagingBuffer, finalLr :: Word32
+origin, fillFlag, fillCallback, feedCallback, stagingBuffer, finalLr :: Word32
 origin = 0x6a96c0
 fillFlag = 0x89f8ac
+fillCallback = 0x6a8bec
+feedCallback = 0x6ae500
 stagingBuffer = 0x43e40000
 finalLr = 0x422b8
 
@@ -165,7 +167,7 @@ sourceEffects scenario = Retained SegmentLookup [constant 5] : if nullSegment sc
       | otherwise =
           ( [ FieldRead BssBase first,FieldRead BssLength first,FlagStore (constant 0)
             , Retained FillRequest
-                [field BssBase first base0,field BssLength first (length0 `shiftR` 2),constant 0,constant 0x6a8bec] ]
+                [field BssBase first base0,field BssLength first (length0 `shiftR` 2),constant 0,constant fillCallback] ]
           , fillResult scenario == 0 )
     lengthOrdinal = if aligned base0 then second else first
     storage feed = Retained StorageRead [block,count,constant stagingBuffer,constant feed,constant 1]
@@ -173,7 +175,7 @@ sourceEffects scenario = Retained SegmentLookup [constant 5] : if nullSegment sc
       | modeWord scenario == 0 =
           [ marker LoadStart,FieldRead Destination first
           , Retained DecoderInit [field Destination first (destinationWord scenario),constant stagingBuffer]
-          , storage 0x6ae500,marker LoadEnd,marker DecodeStart,Retained DecoderFinish [],marker DecodeEnd ]
+          , storage feedCallback,marker LoadEnd,marker DecodeStart,Retained DecoderFinish [],marker DecodeEnd ]
       | otherwise = [storage 0]
     waits = length (takeWhile (== 0) (map (flagValue (flagReads scenario)) [0..]))
     completion
