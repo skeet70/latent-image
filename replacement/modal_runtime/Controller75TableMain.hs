@@ -14,7 +14,7 @@ import Data.Aeson.Types (Parser)
 import Data.Bits (complement, shiftL, shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import Data.Int (Int16, Int32)
-import Data.List (intercalate, nub, sort)
+import Data.List (intercalate, nub, sort, sortOn)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Word (Word16, Word32)
@@ -375,6 +375,15 @@ rustTable digest actions cells = unlines
 
 data StockVector = StockVector Event State Word32 Word32 (Maybe Word32) Word32 (Maybe Word32) [Word16]
 
+-- The code extents of the stock bodies the generic actions replace, for the
+-- continuous guard's retired-fetch watch.
+retiredDocument :: String -> String -> [(Callback, Int)] -> String
+retiredDocument digest table extents =
+  "{\"schema\":1,\"image5_sha256\":\"" ++ digest ++ "\",\"table_sha256\":\"" ++ table ++ "\",\"retired\":["
+    ++ intercalate "," [ "{\"callback\":\"" ++ hex entry ++ "\",\"start\":" ++ show entry ++ ",\"end\":" ++ show (entry + fromIntegral size) ++ "}"
+                       | (Callback entry, size) <- sortOn (\(Callback entry, _) -> entry) extents ]
+    ++ "]}\n"
+
 -- Stock outcomes per owned cell and router result, for `modal75::check_vectors`.
 rustVectors :: String -> [StockVector] -> String
 rustVectors digest vectors = unlines
@@ -398,6 +407,9 @@ main = do
   vectorsPath <- required "--vectors-out"
   vectorsExist <- doesPathExist vectorsPath
   when vectorsExist (fail "vectors output already exists")
+  retiredPath <- required "--retired-out"
+  retiredExist <- doesPathExist retiredPath
+  when retiredExist (fail "retired output already exists")
   inventoryPath <- required "--inventory"
   imagePath <- required "--id5"
   control <- case optional "--control" of
@@ -442,5 +454,7 @@ main = do
   let (actions, cells, vectors) = outcome
   writeFile outputPath (rustTable digest actions cells)
   writeFile vectorsPath (rustVectors digest vectors)
+  tableBytes <- B.readFile outputPath
+  writeFile retiredPath (retiredDocument digest (sha256Hex (sha256 tableBytes)) [(callback, size) | (callback, _) <- actions, (c, size, _) <- generic, c == callback])
   putStrLn ("wrote " ++ outputPath ++ " and " ++ vectorsPath ++ "; actions=" ++ show (length actions) ++ "; cells=" ++ show (length cells)
     ++ "; direct-state=" ++ show (length [() | cell <- cells, SetState _ <- [cellAfter cell]]) ++ "; vectors=" ++ show (length vectors))

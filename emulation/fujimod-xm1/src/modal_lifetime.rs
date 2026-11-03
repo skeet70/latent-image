@@ -15,7 +15,7 @@ pub enum LifetimeFailure {
     InvalidCore, MalformedRow, NonCpuWrite, InvalidWrite, OutsideWatch, ImmutableWrite,
     ResourceChanged, IdentityWrite, MissingPermit, PendingStore, WrongPhase, WrongEntry,
     WrongWriter, WrongOrder, WrongCore, WrongBefore, WrongValue, WrongAddress, WrongWidth,
-    InvalidContext, ActiveFrames, IncompleteRollback,
+    InvalidContext, ActiveFrames, IncompleteRollback, RetiredFetch,
 }
 impl std::fmt::Display for LifetimeFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{self:?}") }
@@ -33,6 +33,8 @@ pub struct LifetimeRequest {
     install: ServiceRequest,
     rollback: ServiceRequest,
     publications: Vec<PublicationRequest>,
+    #[serde(default)]
+    retired: Vec<[u32; 2]>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,6 +73,9 @@ pub struct LifetimeConfig {
     publications: Vec<Publication>,
     publication_addresses: Vec<Guest>,
     watched: Vec<PhysicalExtent>,
+    /// Stock code no CPU may fetch through any alias from the install entry
+    /// through the last reverse publication write.
+    retired: Vec<PhysicalExtent>,
     sites: Vec<CodeSite>,
 }
 
@@ -97,6 +102,7 @@ fn settings_extent() -> PhysicalExtent {
 }
 
 const MAX_RUNTIME_BYTES: usize = 1 << 20;
+const MAX_RETIRED_EXTENTS: usize = 64;
 
 impl LifetimeRequest {
     pub fn into_config(self, immutable_sources: Vec<PhysicalExtent>) -> Result<LifetimeConfig> {
@@ -192,7 +198,19 @@ impl LifetimeRequest {
             }
             merged.push(range);
         }
-        Ok(LifetimeConfig { runtime, resident, readonly, sources: immutable_sources, install, rollback, publications, publication_addresses: addresses, watched: merged, sites })
+        let mut retired = self.retired.into_iter().map(|[start, end]| {
+            if start % 4 != 0 || end % 4 != 0 { return Err(LifetimeFailure::InvalidExtent); }
+            let candidate = extent(start, end)?;
+            if merged.iter().any(|range| range.overlaps(candidate)) || candidate.overlaps(runtime) {
+                return Err(LifetimeFailure::InvalidSource);
+            }
+            Ok(candidate)
+        }).collect::<Result<Vec<_>>>()?;
+        retired.sort_by_key(|range| range.start());
+        if retired.len() > MAX_RETIRED_EXTENTS || retired.windows(2).any(|pair| pair[0].overlaps(pair[1])) {
+            return Err(LifetimeFailure::InvalidRequest);
+        }
+        Ok(LifetimeConfig { runtime, resident, readonly, sources: immutable_sources, install, rollback, publications, publication_addresses: addresses, watched: merged, retired, sites })
     }
 }
 
@@ -221,6 +239,7 @@ impl LifetimeConfig {
     pub fn readonly_images(&self) -> impl Iterator<Item = (PhysicalExtent, &[u8])> {
         self.readonly.iter().map(|image| (image.extent, image.bytes.as_slice()))
     }
+    pub fn retired_extents(&self) -> &[PhysicalExtent] { &self.retired }
 }
 
 pub trait LifetimeMemory {
@@ -515,8 +534,17 @@ impl LifetimeMonitor {
         self.pending[core.0] = Some(permit);
         Ok(())
     }
+    /// A retired fetch refuses from the install entry until the last reverse
+    /// publication write.
     pub fn observe_row(&mut self, row: &Value) -> Result<()> {
         self.healthy()?;
+        if row.get("source").and_then(Value::as_str) == Some("cpu-fetch") {
+            let retired = row.get("physical").and_then(Value::as_u64).and_then(|physical| u32::try_from(physical).ok())
+                .is_some_and(|physical| self.config.retired.iter().any(|extent| extent.start().0 <= physical && physical < extent.end().0));
+            let published = matches!(self.receipt.phase, LifetimePhase::Publishing | LifetimePhase::Installed | LifetimePhase::RollingBack);
+            if retired && !published { return Ok(()); }
+            return Err(self.refuse(if retired { LifetimeFailure::RetiredFetch } else { LifetimeFailure::MalformedRow }));
+        }
         let attempt = WriteAttempt::from_row(row);
         match attempt { Ok(attempt) => self.observe_write(attempt), Err(failure) => Err(self.refuse(failure)) }
     }

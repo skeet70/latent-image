@@ -809,6 +809,47 @@ runtimeBindingTests = do
   let stockTask = set "fetch" (set "bytes" (array (replicate 4 (Number 0))) (get "fetch" taskEntry)) taskEntry
   stockReport <- either error pure (parseModalReport permitLimit (set "task_entries" (array [stockTask]) completedScoped))
   check "owned fetch rejects the pre-install stock word" (isLeft (checkCompletedModalLifetime scopedRequest scopedAudit finalScoped stockReport))
+  let retiredPairs = [[0x00c7aef4, 0x00c7af6c], [0x00c7af6c, 0x00c7afc8]] :: [[Word32]]
+      retiredSpans = [range 0x00c7aef4 0x00c7af6c, range 0x00c7af6c 0x00c7afc8]
+      retiredDeclarationWith pairs = set "limit" lifetimeLimit (set "context_sources" (array context)
+        (set "lifetime" (set "retired" (get "r" (object ["r" .= (pairs :: [[Word32]])])) scopedLifetime) (modalBeginRequestJson scopedBase)))
+  retiredRequest <- either (error . ("retired declaration fixture: " ++)) pure (parseModalBeginRequest (retiredDeclarationWith retiredPairs))
+  check "typed lifetime request preserves adjacent retired extents" (modalBeginRequestJson retiredRequest == retiredDeclarationWith retiredPairs)
+  mapM_ (\(label, pairs) -> check ("lifetime request refuses retired " ++ label) (isLeft (parseModalBeginRequest (retiredDeclarationWith pairs))))
+    [ ("overlap", [[0x00c7aef4, 0x00c7af70], [0x00c7af6c, 0x00c7afc8]])
+    , ("unaligned", [[0x00c7aef6, 0x00c7af6c]])
+    , ("empty extent", [[0x00c7aef4, 0x00c7aef4]])
+    , ("inside runtime", [[0x10000, 0x10010]])
+    , ("65 extents", [[0x00c00000 + index * 8, 0x00c00004 + index * 8] | index <- [0 .. 64]]) ]
+  check "retired extent over the watched action table refuses its watch ranges"
+    (isLeft (parseModalBeginRequest (retiredDeclarationWith [[0x00d04080, 0x00d04090]]) >>= modalLifetimeWatchRanges))
+  check "adjacent retired extents merge in the watched union" (unionWatchRanges retiredSpans == [range 0x00c7aef4 0x00c7afc8])
+  let fetchRow physical clock = set "source" (String "cpu-fetch") (set "value" Null (set "before" Null
+        (set "pc" (Number (fromIntegral physical)) (cpu 0 physical physical 4 clock))))
+      retiredWatch records = set "fetch_attribution" (fetchJson helperFetches) (digested (object
+        [ "enabled" .= True, "views" .= ("fixed" :: String), "ranges" .= map pair (unionWatchRanges (scopedWrites ++ retiredSpans))
+        , "records" .= records, "violation" .= Null
+        , "classes" .= ([object ["range" .= pair span_, "kinds" .= (["cpu-write","host-write","model-bus-write"] :: [String])] | span_ <- scopedWrites]
+            ++ [object ["range" .= pair span_, "kinds" .= (["cpu-fetch"] :: [String])] | span_ <- retiredSpans])
+        , "fetch_attribution" .= fetchJson fetches ]))
+      published = take 223 writes ++ [forwardEntry, reverseEntry] ++ reverseRows
+      completes request_ rowsWatch = either (const False) (const True) $ do
+        audit_ <- checkLifetimeArrayAudit request_ (Right rowsWatch) (parseFinalModalWatch rowsWatch)
+        final_ <- parseFinalModalWatch rowsWatch
+        report_ <- parseModalReport permitLimit (set "watch" (withoutRecords rowsWatch) completedScoped)
+        checkCompletedModalLifetime request_ audit_ final_ report_
+  check "completed lifetime accepts the retired watch without fetch rows" (completes retiredRequest (retiredWatch published))
+  check "completed lifetime accepts a retired fetch before the first forward write"
+    (completes retiredRequest (retiredWatch (fetchRow 0x00c7af6c 0 : published)))
+  check "completed lifetime accepts a retired fetch after the last reverse write"
+    (completes retiredRequest (retiredWatch (published ++ [fetchRow 0x00c7aef4 9000])))
+  check "completed lifetime refuses a retired fetch between publication writes"
+    (not (completes retiredRequest (retiredWatch (take 10 published ++ [fetchRow 0x00c7af6c 10] ++ drop 10 published))))
+  check "completed lifetime refuses a fetch outside every retired extent"
+    (not (completes retiredRequest (retiredWatch (published ++ [fetchRow 0x00c7afc8 9000]))))
+  check "a request without retired extents refuses a retired-extent fetch row"
+    (not (completes scopedRequest (set "classes" (get "classes" scopedWatch) (set "ranges" (get "ranges" scopedWatch)
+      (retiredWatch (published ++ [fetchRow 0x00c7aef4 9000]))))))
   let withoutSettings = filter (\span_ -> let (low,high) = watchRangeBounds span_ in not (low <= 0x96cc64 && 0x96ce26 <= high)) expectedWrites
       incompleteWatch = watch withoutSettings writes
   check "array audit requires settings and all other expected write classes" $

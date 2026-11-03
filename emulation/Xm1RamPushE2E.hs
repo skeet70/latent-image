@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runRamPushE2E, warmAttachCheckpoint) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runRamPushE2E, warmAttachCheckpoint) where
 
 import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, evaluate, finally, throwIO, try)
@@ -43,7 +43,7 @@ import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
 import EmulatorUsb
 import FujiAF.RamPush
 import FujiAF.Transport (ensurePrivateDirectory, realClock, writePrivateBytes)
-import Xm1UnreviewedRelink (runUnreviewedRamPush, runUnreviewedRamUnload, withUnreviewedBuild)
+import Xm1UnreviewedRelink (runUnreviewedRamPush, runUnreviewedRamUnload, withUnreviewedBuild, withUnreviewedBuildArchive)
 import RamPushReviewedPins (reviewedContract)
 import RamPushProcedure (procedureSourcesDigest)
 import RamPushCcReviewedPins (reviewedCcContract)
@@ -151,7 +151,48 @@ data E2ESettings = E2ESettings
   , experimentReads :: [SymbolRead]
   , modalDiagnostic :: ModalDiagnostic
   , modalLifetimeGuard :: ModalLifetimeGuard
+  , modalOwnedPackage :: Maybe ModalOwnedPackage
   }
+
+-- | A bank Rust archive built with the owned controller-75 table, and the
+-- stock extents its generic actions retire.
+data ModalOwnedPackage = ModalOwnedPackage
+  { ownedArchivePath :: FilePath
+  , ownedArchiveDigest :: String
+  , ownedRetiredPath :: FilePath
+  , ownedRetiredDigest :: String
+  -- | The generated table the retired document names.
+  , ownedTableDigest :: String
+  , ownedRetired :: [WatchRange]
+  }
+
+-- | Reads the archive and the generator's retired-extent document, which must
+-- name the pinned image5.
+loadModalOwnedPackage :: FilePath -> FilePath -> IO ModalOwnedPackage
+loadModalOwnedPackage archive retired = do
+  archiveBytes <- B.readFile archive
+  require (not (B.null archiveBytes) && B.length archiveBytes <= 16 * 1024 * 1024) "owned modal75 archive is empty or exceeds 16 MiB"
+  document <- B.readFile retired
+  require (B.length document <= 1024 * 1024) "owned modal75 retired document exceeds 1 MiB"
+  (table, extents) <- either (ioError . userError . ("invalid owned modal75 retired document: " ++)) pure $ do
+    value <- eitherDecodeStrict' document
+    flip parseEither value $ withObject "retired document" $ \fields -> do
+      schema <- fields .: "schema"
+      unless (schema == (1 :: Int)) (fail "schema is not 1")
+      image <- fields .: "image5_sha256"
+      unless (image == ("3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a" :: String)) (fail "image5_sha256 is not the pinned X-M1 1.50 image5")
+      table <- fields .: "table_sha256"
+      unless (length table == 64 && all (`elem` ("0123456789abcdef" :: String)) table) (fail "table_sha256 is not a SHA-256")
+      rows <- fields .: "retired"
+      extents <- forM rows $ withObject "retired extent" $ \row -> do
+        callback <- row .: "callback"
+        low <- row .: "start"
+        high <- row .: "end"
+        unless (callback == hexAddress low) (fail "retired callback differs from its start")
+        either fail pure (watchRange (watchAddress low) (watchAddress high))
+      pure (table, extents)
+  require (not (null extents)) "owned modal75 retired document names no extent"
+  pure (ModalOwnedPackage archive (sha256Hex (sha256 archiveBytes)) retired (sha256Hex (sha256 document)) table extents)
 
 -- | The card attach checkpoint key: the staged guest state and the session's inputs.
 cardAttachRouteKey :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO RouteKey
@@ -697,7 +738,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
             withRelinkedBuildUsing relinker EnforceAllowlist base action
         | otherwise = case relinkMode settings of
             ReviewedRelink -> withPinnedReviewedBuild (payloadContract selected) selected base action
-            UnreviewedRelink policy -> withUnreviewedBuild selected policy base action
+            UnreviewedRelink policy -> case modalOwnedPackage settings of
+              Just owned -> withUnreviewedBuildArchive (ownedArchivePath owned) selected policy base action
+              Nothing -> withUnreviewedBuild selected policy base action
       pushWith observer retained
         | experimental = runRamPushWith xm1PeerCacheAvailability observer (retainedAllocation retained)
         | otherwise = case relinkMode settings of
@@ -741,6 +784,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
             pure (case matches of
               (candidate, relinked) : _ -> (Just candidate, Just (candidate, relinked))
               [] -> (Nothing, Nothing))
+  require (maybe True (const (payloadKind selected == RecipeBankModal75 && relinkMode settings /= ReviewedRelink)) (modalOwnedPackage settings))
+    "the owned modal75 package requires the scoped modal75 payload and an unreviewed relink"
   when scoped $
     require (any (not . null . segmentSteps) (planBefore plan))
       "scoped modal observation requires selected post-install physical-key segments"
@@ -813,7 +858,15 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
       elfBytes <- B.readFile (relinkDirectory </> "kernel.elf")
       loaderA <- B.readFile "private-data/analysis/x-m1-1.50/decode/loader-40000.bin"
       loaderB <- B.readFile "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin"
-      lifetimeSource <- either (ioError . userError) pure (bindModalLifetimeSource manifest elfBytes loaderA loaderB)
+      lifetimeBound <- either (ioError . userError) pure (bindModalLifetimeSource manifest elfBytes loaderA loaderB)
+      lifetimeSource <- either (ioError . userError) pure (maybe (Right lifetimeBound)
+        (\owned -> withRetiredExecution (ownedRetired owned) lifetimeBound) (modalOwnedPackage settings))
+      forM_ (modalOwnedPackage settings) $ \owned ->
+        writePrivateBytes (e2e </> "e2e-modal-owned-package.json") (BL.toStrict (encode (object
+          [ "archive" .= ownedArchivePath owned, "archive_sha256" .= ownedArchiveDigest owned
+          , "retired_document" .= ownedRetiredPath owned, "retired_document_sha256" .= ownedRetiredDigest owned
+          , "table_sha256" .= ownedTableDigest owned
+          , "retired" .= [[low, high] | range <- ownedRetired owned, let (low, high) = watchRangeBounds range] ])) <> "\n")
       writePrivateBytes (relinkDirectory </> "loader-a.bin") loaderA
       writePrivateBytes (relinkDirectory </> "loader-b.bin") loaderB
       (stock, stockSource) <- loadModalStock

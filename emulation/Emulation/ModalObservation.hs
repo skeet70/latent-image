@@ -48,6 +48,7 @@ module Emulation.ModalObservation
   , bindModalLifetimeSource
   , modalLifetimeSourceJson
   , lifetimeModalRequest
+  , withRetiredExecution
   , parseModalLifetimeWatchAck
   , parseModalLifetimeWatch
   , checkCompletedModalLifetime
@@ -654,7 +655,28 @@ data ModalLifetimeSource = ModalLifetimeSource
   , lifetimeContext :: [SourceImage]
   , lifetimeElfDigest :: Maybe Sha256
   , lifetimeRuntimeDigest :: Maybe Sha256
+  -- | Stock code no CPU may fetch through any alias from the first through the
+  -- last publication-writer row.
+  , lifetimeRetired :: [WatchRange]
   } deriving (Eq)
+
+-- | Up to 64 sorted, word-aligned, nonempty, pairwise disjoint canonical extents.
+checkRetiredExtents :: [WatchRange] -> Either String ()
+checkRetiredExtents retired = do
+  let bounds = map watchRangeBounds retired
+  unless (length retired <= 64 && all (\(low, high) -> low < high && low `mod` 4 == 0 && high `mod` 4 == 0 && high <= 0x20000000) bounds
+    && map fst bounds == sort (map fst bounds)
+    && and (zipWith (\(_, high) (low, _) -> high <= low) bounds (drop 1 bounds)))
+    (Left "modal retired extents must be at most 64 sorted aligned disjoint canonical extents")
+
+-- | Adds retired extents to a bound lifetime source; they must lie outside its runtime.
+withRetiredExecution :: [WatchRange] -> ModalLifetimeSource -> Either String ModalLifetimeSource
+withRetiredExecution retired source = do
+  let sorted = sortOn watchRangeBounds retired
+  checkRetiredExtents sorted
+  unless (not (any (rangesOverlap (lifetimeRuntime source)) sorted))
+    (Left "modal retired extents overlap the uploaded runtime")
+  pure source { lifetimeRetired = sorted }
 
 sourceImageJson :: SourceImage -> Value
 sourceImageJson (SourceImage start bytes) = object ["start" .= watchAddressValue start, "bytes" .= B.unpack bytes]
@@ -677,6 +699,7 @@ lifetimeRequestJson source = object
   , "rollback" .= routine (lifetimeRollback source)
   , "publications" .= [object ["address" .= watchAddressValue address, "old" .= old, "new" .= new]
       | PublicationBinding address (Ram.WordValue old) (Ram.WordValue new) <- lifetimePublications source]
+  , "retired" .= map extentJson (lifetimeRetired source)
   ]
  where
   instruction (SourceInstruction pc (InstructionWord word)) = object ["pc" .= watchAddressValue pc, "word" .= word]
@@ -792,7 +815,7 @@ bindModalRuntimeSource manifest elfBytes = do
   rollback <- routine "ram_push_rollback" (Ram.unAddress (Ram.rollbackEntry (Ram.manifestEntries manifest))) "restore_old_words"
   let bindings = [PublicationBinding (watchAddress (Ram.unAddress (Ram.publicationAddress publication)))
         (Ram.publicationOld publication) (Ram.publicationNew publication) | publication <- publications]
-  pure (ModalRuntimeSource (ModalLifetimeSource runtimeExtent residentExtent readonly install rollback bindings [] (Just (sha256 elfBytes)) (Just runtimeDigest)))
+  pure (ModalRuntimeSource (ModalLifetimeSource runtimeExtent residentExtent readonly install rollback bindings [] (Just (sha256 elfBytes)) (Just runtimeDigest) []))
 
 littleWord :: Word32 -> B.ByteString
 littleWord word = B.pack [fromIntegral (word `div` (256 ^ index)) | index <- [0 .. 3 :: Int]]
@@ -889,7 +912,7 @@ data LifetimeFailure
   = InvalidRequest | InvalidExtent | InvalidSource | InitialResident | InitialReadonly | Memory | InvalidCore
   | MalformedRow | NonCpuWrite | InvalidWrite | OutsideWatch | ImmutableWrite | ResourceChanged | IdentityWrite
   | MissingPermit | PendingStore | WrongPhase | WrongEntry | WrongWriter | WrongOrder | WrongCore | WrongBefore
-  | WrongValue | WrongAddress | WrongWidth | InvalidContext | ActiveFrames | IncompleteRollback
+  | WrongValue | WrongAddress | WrongWidth | InvalidContext | ActiveFrames | IncompleteRollback | RetiredFetch
   deriving (Eq, Show, Enum, Bounded)
 data LifetimeReceipt = LifetimeReceipt
   { receiptPhase :: LifetimePhase
@@ -922,7 +945,7 @@ lifetimeFailureText failure = case failure of
   MissingPermit -> "missing_permit"; PendingStore -> "pending_store"; WrongPhase -> "wrong_phase"; WrongEntry -> "wrong_entry"
   WrongWriter -> "wrong_writer"; WrongOrder -> "wrong_order"; WrongCore -> "wrong_core"; WrongBefore -> "wrong_before"
   WrongValue -> "wrong_value"; WrongAddress -> "wrong_address"; WrongWidth -> "wrong_width"; InvalidContext -> "invalid_context"
-  ActiveFrames -> "active_frames"; IncompleteRollback -> "incomplete_rollback"
+  ActiveFrames -> "active_frames"; IncompleteRollback -> "incomplete_rollback"; RetiredFetch -> "retired_fetch"
 
 parseClosed :: (Bounded a, Enum a) => (a -> T.Text) -> Value -> Either String a
 parseClosed render (String text) = case [value | value <- [minBound .. maxBound], render value == text] of
@@ -1114,9 +1137,10 @@ checkCompletedModalLifetime (ModalRequest (ModalStock stock) scoped _ source) au
       expectedWrites = sum (map (toInteger . countValue)
         [receiptForwardWrites receipt, receiptReverseWrites receipt, receiptResourceWrites receipt
         , receiptSchedulerWrites receipt, receiptContextWrites receipt, receiptVfpOwnerWrites receipt, receiptAuditedWrites receipt])
-  unless (toInteger (length rows) == expectedWrites
-    && toInteger (length (arrayWrites audit)) == toInteger (countValue (receiptAuditedWrites receipt))
-    && all (\row -> case row of CpuRecord { cpuAccess = CpuWrite } -> True; _ -> False) rows)
+      writes = [row | row@CpuRecord { cpuAccess = CpuWrite } <- rows]
+  stockFetches <- retiredStockFetches binding rows
+  unless (toInteger (length writes) == expectedWrites && length writes + stockFetches == length rows
+    && toInteger (length (arrayWrites audit)) == toInteger (countValue (receiptAuditedWrites receipt)))
     (Left "modal lifetime accepted write counters differ from raw CPU rows or array audit")
   case scoped of
     Nothing -> do
@@ -1128,6 +1152,24 @@ checkCompletedModalLifetime (ModalRequest (ModalStock stock) scoped _ source) au
       checkScopedModalRoute report
       unless (modalTaskIdentityVerified report && not (null (modalTaskEntries report)))
         (Left "scoped modal lifetime lacks verified owned task execution")
+
+-- | Counts fetch rows, each of which must start inside a retired extent and
+-- fall before the first or after the last publication-writer row.
+retiredStockFetches :: ModalLifetimeSource -> [WatchRecord] -> Either String Int
+retiredStockFetches binding rows = do
+  let writer (PublicationRoutine _ (SourceInstruction pc _)) = pc
+      writers = [writer (lifetimeInstall binding), writer (lifetimeRollback binding)]
+      published = [index | (index, CpuRecord { cpuAccess = CpuWrite, cpuPc = pc }) <- zip [0 :: Int ..] rows, pc `elem` writers]
+      outside index = case published of
+        [] -> True
+        first : _ -> index < first || index > maximum published
+      retired physical = any (\range -> let (low, high) = watchRangeBounds range
+                                            address = toInteger (watchAddressValue physical)
+                                        in toInteger low <= address && address < toInteger high) (lifetimeRetired binding)
+      fetches = [(index, physical) | (index, CpuRecord { cpuAccess = CpuFetch, cpuPhysical = physical }) <- zip [0 :: Int ..] rows]
+  unless (all (\(index, physical) -> retired physical && outside index) fetches)
+    (Left "modal lifetime fetched a retired body while the owned entry was published, or recorded a non-retired fetch")
+  pure (length fetches)
 
 optionalField :: K.Key -> Value -> Maybe Value
 optionalField key (Object fields) = KM.lookup key fields
@@ -1150,7 +1192,7 @@ parseSourceImage value = do
 
 parseLifetimeBinding :: Maybe (ModalLinked, ModalScope) -> Value -> Value -> Either String ModalLifetimeSource
 parseLifetimeBinding scoped contextValue value = do
-  modalKeys ["runtime", "resident", "readonly", "install", "rollback", "publications"] value
+  modalKeys ["runtime", "resident", "readonly", "install", "rollback", "publications", "retired"] value
   runtime <- modalField "runtime" value >>= parseModalExtent
   resident <- modalField "resident" value >>= parseModalExtent
   let (runtimeLow, runtimeHigh) = watchRangeBounds runtime
@@ -1203,7 +1245,10 @@ parseLifetimeBinding scoped contextValue value = do
   let addresses = [address | PublicationBinding address _ _ <- publications]
   unless (length publications == maybe 223 (const 224) scoped && length (nub addresses) == length addresses)
     (Left "modal lifetime publication count or uniqueness differs from route")
-  pure (ModalLifetimeSource runtime resident allImages install rollback publications context Nothing Nothing)
+  retired <- modalField "retired" value >>= modalList (either error id (modalLimit 64)) >>= mapM parseModalExtent
+  checkRetiredExtents retired
+  unless (not (any (rangesOverlap runtime) retired)) (Left "modal retired extents overlap the uploaded runtime")
+  pure (ModalLifetimeSource runtime resident allImages install rollback publications context Nothing Nothing retired)
 
 modalLifetimeWatchRanges :: ModalRequest -> Either String [WatchRange]
 modalLifetimeWatchRanges (ModalRequest _ scoped _ source) = do
@@ -1219,7 +1264,10 @@ modalLifetimeWatchRanges (ModalRequest _ scoped _ source) = do
     , (0x54760,0x54764), (0x545a4,0x545a8), (0x5ff0c,0x6194c), (0x5beac,0x5d16c)
     , (0xe4720,0xe4724), (0xe4564,0xe4568), (0xefecc,0xf190c), (0xebe6c,0xed12c) ]
   publications <- mapM (\(PublicationBinding address _ _) -> range (watchAddressValue address) (watchAddressValue address + 4)) (lifetimePublications binding)
-  pure (unionWatchRanges (lifetimeResident binding : fixed ++ imageRanges ++ publications))
+  let watched = unionWatchRanges (lifetimeResident binding : fixed ++ imageRanges ++ publications)
+  unless (not (or [rangesOverlap retired span_ | retired <- lifetimeRetired binding, span_ <- watched]))
+    (Left "modal retired extents overlap a write-watched extent")
+  pure watched
 
 checkModalLifetimeWatchSources :: ModalRequest -> Value -> Either String ()
 checkModalLifetimeWatchSources (ModalRequest _ scoped _ source) value = do
@@ -1266,8 +1314,9 @@ checkLifetimeArrayAudit request armed final = do
   checkModalLifetimeWatchSources request armedValue
   checkModalLifetimeWatchSources request finalSummary
   acknowledgement <- lifetimeWatchAcknowledgement armedValue >>= parseModalLifetimeWatchAck
-  rangeLimit <- watchRangeLimit (length expected)
-  gate <- checkExecutionWritesWithRangeLimit rangeLimit ForbidProtectedWrites modalLifetimeWriterLimit expected [] acknowledgement observation
+  let retired = maybe [] lifetimeRetired (case request of ModalRequest _ _ _ source -> source)
+  rangeLimit <- watchRangeLimit (length expected + length retired)
+  gate <- checkExecutionWritesWithRangeLimit rangeLimit ForbidProtectedWrites modalLifetimeWriterLimit expected retired acknowledgement observation
   pure (ArrayWriteReport (writesInArrays observation) gate)
 
 modalLifetimeWriterLimit :: WatchLimit

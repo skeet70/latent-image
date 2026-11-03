@@ -65,7 +65,7 @@ impl Route {
     }
 
     pub fn next_state(&self, result: u32) -> Option<State75> {
-        self.pairs[..usize::from(self.len)].iter().find(|(value, _)| *value == result).map(|(_, state)| *state)
+        self.pairs.iter().take(usize::from(self.len)).find(|(value, _)| *value == result).map(|(_, state)| *state)
     }
 }
 
@@ -127,7 +127,7 @@ pub enum Plan {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OwnedAction {
     Retained,
-    Generic(GenericAction),
+    Generic(&'static GenericAction),
 }
 
 pub fn plan(table: &Table75, event: u16, state: u16, live: LiveCell) -> Plan {
@@ -143,10 +143,11 @@ pub fn plan(table: &Table75, event: u16, state: u16, live: LiveCell) -> Plan {
     if cell.after == AfterAction::KeepActionState && live.transition != Some(0) {
         return Plan::Stock;
     }
+    let actions: &'static [GenericAction] = table.actions;
     let action = match cell.action {
         CellAction::Retained => OwnedAction::Retained,
-        CellAction::Generic(index) => match table.actions.get(usize::from(index)) {
-            Some(action) => OwnedAction::Generic(*action),
+        CellAction::Generic(index) => match actions.get(usize::from(index)) {
+            Some(action) => OwnedAction::Generic(action),
             None => return Plan::Stock,
         },
     };
@@ -158,7 +159,7 @@ pub trait GenericServices {
     fn write_state(&mut self, state: State75);
 }
 
-pub fn run_generic(action: GenericAction, services: &mut impl GenericServices) -> ActionResult {
+pub fn run_generic(action: &GenericAction, services: &mut impl GenericServices) -> ActionResult {
     match action {
         GenericAction::RouteToTransition(route) => {
             let result = services.transition();
@@ -167,7 +168,7 @@ pub fn run_generic(action: GenericAction, services: &mut impl GenericServices) -
             }
             ActionResult(result)
         }
-        GenericAction::ConstantResult(result) => result,
+        GenericAction::ConstantResult(result) => *result,
     }
 }
 
