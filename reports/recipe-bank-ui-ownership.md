@@ -782,20 +782,33 @@ Mechanical and contract-based implementations are both eligible for publication 
 
 Three host-only tools in `replacement/modal_runtime` read the pinned image5 and the cited manifest (`f27b3562…`). Outputs are private under `private-data/scratch/ControllerPilotPrep/`. Each tool had one independent review, and the findings were fixed.
 
-**Return proofs.** `ReturnProvenance` used to send a failed conditional instruction to pc+4 with its pre-state. A `movweq/movteq/strheq` run then joined the constant base with the unconditional path's register, and the store discarded the saved frame. The not-executed edge now continues after the run of consecutive instructions with the identical condition field. Executed edges are unchanged. Re-derivation with unchanged inputs only adds results:
+**Return proofs.** `ReturnProvenance` used to send a failed conditional instruction to pc+4 with its pre-state. A `movweq/movteq/strheq` run then joined the constant base with the unconditional path's register, and the store discarded the saved frame. The not-executed edge now continues after the run of consecutive instructions with the identical condition field. Executed edges are unchanged. A second change models `BFI`/`BFC`: `A32.bitFieldInsert` decodes the fields, and constant operands give the inserted constant. Re-derivation with unchanged inputs only adds results:
 
-| Consumer | Before | After |
+| Consumer | Before | Predicated runs | Plus `BFI` |
+| --- | --- | --- | --- |
+| Media-permit stock inventory (21 windows) | All derive | Byte-identical | Byte-identical |
+| RTOS manifest generator (v3 inputs) | 148 derived, 46 unknown | 160 / 34 | 160 / 34, identical |
+| Controller manifest | 4,841 conditional, 954 unresolved | 5,776 / 19 | 5,795 / 0 |
+
+No previously derived extent changes its premise list. The baseline at the current head has 954 rather than the cited 951 because the saved-stack exclusion already refuses `0xc6e798`, `0xc6ee04` and `0xc7b1f0`. The 19 that the predicated-run change left refused all contain `BFI`, and with the `BFI` model all 954 derive.
+
+**Stack separation.** `//replacement/modal_runtime:controller-stack-separation` recomputes each derivation and resolves every `global-object-stack-separation` store site with a straight-line predicated constant scan. It then checks the stored interval against the recovered stack regions, folding DRAM aliases onto their physical address. The state and event arrays `[0x1467588,0x1467840)` lie in image5 BSS and are disjoint from every region.
+
+There are 5,646 sites, and 5,622 of them are constant and disjoint from every region. 70 of those depend on a constant held in r4-r11 across a call, which is the same AAPCS callee assumption the derivation already makes. The remaining 24 are indexed from `0x00944580` and keep the premise; they include the stores whose index the scan does not compute through `BFI`. Of the cited 951, 935 have the premise discharged at every site, 931 of them without the callee-preservation assumption. The proof itself clears none of the 951, because the derivation was already assuming the premise. It removes the premise from 2,944 derivations.
+
+The discharge rests on one named assumption, `recovered-stack-allocation-completeness`: every stack pointer installed while a controller callback or anything it interrupts runs lies in a recovered stack region. The output records each region with its evidence:
+
+| Recovered stack source | Physical extent | Evidence |
 | --- | --- | --- |
-| Media-permit stock inventory (21 windows) | All derive | Byte-identical output |
-| RTOS manifest generator (v3 inputs) | 148 derived, 46 unknown | 160 derived, 34 unknown |
-| Controller manifest | 4,841 conditional, 954 unresolved | 5,776 conditional, 19 unresolved |
+| Task reservation `0x725c6c` pool | `[0xa10200,0xa5b200)` | E-KERNEL-PHASE0-RESOURCE-ORDER-SOURCE-150; all 84 hardware-observed task stacks lie here (E-RAM-CALIBRATION-150) |
+| Separate-storage reservation `0x723470` pool | `[0x9c4460,0xa0f460)` | E-KERNEL-PHASE0-RESOURCE-ORDER-SOURCE-150 |
+| Loader A and B boot stacks | `[0x62c54,0x63460)`, `[0xf2c14,0xf3420)` | Inventory 8.13; E-STARTUP-TASK-RETAINED-STACK-SOURCE-150 |
+| Kernel A and B runtime below the idle tops `0xa0000`, `0x130000` | `[0x60000,0xa0000)`, `[0xf0000,0x130000)` | `classic-chrome-patch.md` stacks; `ram-calibration.md` regions |
+| TCM exception-mode stacks | `[0x70000000,0x70002000)` | E-PEER-ENTRY-FRAME-HANDOFF-SOURCE-150; loader IRQ top reload |
+| Boot ROM stack | `[0xfff00000,0xfff01000)` | `bootrom-window.md` |
 
-No previously derived extent changes its premise list. The baseline at the current head has 954 rather than the cited 951 because the saved-stack exclusion already refuses `0xc6e798`, `0xc6ee04` and `0xc7b1f0`. Of the cited 951, 935 now derive and 16 remain refused. All 19 remaining refusals contain `BFI`, which `A32.hs` decodes as destinations-only.
-
-**Stack separation.** `//replacement/modal_runtime:controller-stack-separation` recomputes each derivation and resolves every `global-object-stack-separation` store site with a straight-line predicated constant scan. It then checks the stored interval against the recovered stack regions: the task pool `[0xa10200,0xa5b200)`, the separate-storage pool `[0x9c4460,0xa0f460)`, both loader boot stacks, the kernel A/B runtime partitions below the constant idle tops, TCM `[0x70000000,0x70002000)` and the boot ROM stack. DRAM aliases fold onto their physical address. All 84 hardware-observed task stacks lie inside the task pool. The state and event arrays `[0x1467588,0x1467840)` lie in image5 BSS and are disjoint from every region.
-
-There are 5,592 sites, and 5,584 of them are constant and disjoint from every region. 66 of those depend on a constant held in r4-r11 across a call, which is the same AAPCS callee assumption the derivation already makes. The remaining 8 are indexed from `0x00944580` and keep the premise. All 935 newly derived cited refusals have the premise discharged at every site; 931 do so without the callee-preservation assumption. The proof itself clears none of the 951, because the derivation was already assuming the premise. It removes the premise from 2,941 derivations. The residual premise is that the recovered stack sources are complete: other task-creation callers are not closed.
+Not closed: task-creation callers that pass stack memory not obtained from either reservation, stacks installed by code outside the recovered loader, record-2, scheduler and exception-entry sources, and exception entries that copy SP from a mode whose SP no recovered source set.
 
 **Router maps.** `//replacement/modal_runtime:controller-routes` explores every path through both routers with interval domains over loaded words. Both routers ignore their arguments. `0xc0dbf8` always dispatches controller 80 from 81 sites, and the mailbox `u32[0x94f64c]` selects event values 0..81 (for example, 358 gives event 0 and 359..361 give event 1). `0xc12aac` always dispatches controller 100 from 91 sites, with events 0..92 except 26. Its selectors are the mailbox, `u32[0x944580]`, query results `0x632a3c(0x2380/0x20c0)`, `0x63a0e0`, `0xd35fbc` and `0xd1740c(mailbox)`, plus 28 routes that compare `u32[0x944584]` with halfword fields near `0x94f6de`. Two routes, c0dbf8 event 80 and c12aac event 7, require `0x63a0e0` to return something other than 1, while its decompilation returns 1. The 3,412 B/BL caller sites lie in 2,093 callbacks of 38 controllers, which gives 40 typed controller-to-controller edges. These results depend on two premises: the routers' callees preserve the compared words, and repeated queries with the same constant arguments return the same value.
 
-**Instruction forms.** `//replacement/modal_runtime:controller-forms` classifies the 177,461 code words of the 5,795 callbacks into 56 forms in 33 families. `A32.hs` decodes the operands of 55 forms, used by all callbacks. `BFI` (19 instructions, 19 callbacks) is destinations-only. The top 30 forms cover 5,391 callbacks completely, and the top 50 cover 5,785. 28,395 instructions are predicated.
+**Instruction forms.** `//replacement/modal_runtime:controller-forms` classifies the 177,461 code words of the 5,795 callbacks into 56 forms in 33 families. `A32.decode` decodes the operands of 55 forms, used by all callbacks. `BFI` (19 instructions, 19 callbacks) decodes as `Compute`; `A32.bitFieldInsert` supplies its operands to the return derivation. The top 30 forms cover 5,391 callbacks completely, and the top 50 cover 5,785. 28,395 instructions are predicated.

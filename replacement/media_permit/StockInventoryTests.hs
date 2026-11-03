@@ -95,7 +95,7 @@ main = do
   check "a BFI of constants gives a constant index for a global store"
     (derivedDeclaration insertedIndex == FunctionDeclaration (GuestAddress 0x1000) (FunctionSize 36)
       && derivationPremiseUses insertedIndex == [PremiseUse (ProgramCounter 0x101c) GlobalObjectStackSeparation])
-  check "a BFI from the stack pointer gives a frame-derived address"
+  check "a BFI from the stack pointer gives an address that may alias the frame"
     (refused (derive [0xe92d4010,0xe3a02000,0xe7df201d,0xe5821000,0xe8bd8010]))
   check "an overwritten LR is not an incoming register return"
     (refused (derive [0xe3a0e000,0xe12fff1e]))
@@ -406,6 +406,10 @@ main = do
   let excluded words' = refused (deriveTasks words') && either (const False) (const True) (deriveResult [] words')
       refusesWith message words' = either (message `isInfixOf`) (const False) (deriveTasks words')
       savedIndex = [0xe92d4010,0xe3023000,0xe5932000,0xe5922018,0xe3043000,0xe0833002,0xe5831000,0xe8bd8010]
+  check "a BFC keeps a saved stack pointer's taint as an index"
+    (excluded [0xe92d4010,0xe3023000,0xe5932000,0xe5922018,0xe7df241f,0xe3043000,0xe0833002,0xe5831000,0xe8bd8010])
+  check "a BFI of a saved stack pointer taints the destination as an index"
+    (excluded [0xe92d4010,0xe3023000,0xe5932000,0xe5922018,0xe3a00000,0xe7c90112,0xe3043000,0xe0833000,0xe5831000,0xe8bd8010])
   check "a saved stack pointer used as an index from a constant base refuses"
     (refused (deriveTasks savedIndex))
   check "without a declaration the same index is accepted under global-object separation"

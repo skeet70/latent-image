@@ -171,7 +171,8 @@ signExtension word
   extend = SignExtension (Cond (field 31 28 word)) (reg 12 word) (reg 0 word) (8 * fromIntegral (field 11 10 word))
 
 -- | Destination, source (Nothing for BFC), lsb and width of BFI or BFC, which
--- `decode` returns as Compute. PC operands and msb below lsb give Nothing.
+-- `decode` returns as Compute. A PC destination, msb below lsb and condition 15
+-- give Nothing.
 data BitFieldInsert = BitFieldInsert Cond Reg (Maybe Reg) Int Int deriving (Eq, Show)
 
 bitFieldInsert :: Word32 -> Maybe BitFieldInsert
