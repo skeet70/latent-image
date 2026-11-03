@@ -6,11 +6,16 @@ use std::{collections::{BTreeMap, BTreeSet}, num::NonZeroUsize, path::{Path, Pat
 
 mod continuation_view;
 mod loader_continuations_check;
+mod application_pump;
 mod loader_orchestration_owned;
+mod plain_program;
+mod plain_wire;
+mod plain_runtime;
+mod plain_check;
 use loader_orchestration_owned::{Program, ProgramBinding, Side};
 use continuation_view::{ByteCount, Digest, EventId, FileBinding, Resource, Snapshot, Words};
 
-const USAGE: &str = "loader-continuations --run RUN --update DAT --boot-rom ROM --analysis ROOT [--owned-artifact STAGED_DIR] --output NEW_DIR; --verify DIR --analysis ROOT validates raw evidence; --compare-retained DIR --compare-owned DIR --analysis ROOT --output NEW_DIR compares independently admitted receipts; --source-calls NEW_DIR --analysis ROOT emits the canonical call model without guest execution";
+const USAGE: &str = "loader-continuations --run RUN --update DAT --boot-rom ROM --analysis ROOT [--owned-artifact STAGED_DIR | --plain-witness retained|owned [--plain-artifact DIR]] --output NEW_DIR; --verify DIR | --verify-plain DIR --analysis ROOT; --compare-retained DIR --compare-owned DIR | --compare-plain-retained DIR --compare-plain-owned DIR --analysis ROOT --output NEW_DIR; --plain-controls DIR --analysis ROOT --output NEW_DIR; --source-calls NEW_DIR --analysis ROOT; --application-pump retained|owned --original-update ORIGINAL_DAT --update ACTUAL_DAT --pump-code BIN --pump-symbols SYMBOLS --pump-admission CONTRACT --run RUN --boot-rom ROM --analysis ROOT --output NEW_APP154_DIR; --verify-application-pump DIR --analysis ROOT; --compare-application-pump RETAINED --owned-pump OWNED --analysis ROOT --output NEW_APP154_DIR; --controls-application-pump OWNED --analysis ROOT --output NEW_APP154_DIR";
 const TRACE_LIMIT: usize = 16384;
 const DIAGNOSTICS: [(u32, u32); 7] = [(0x40cac,0x40d50),(0xd0cac,0xd0d50),(0x40d70,0x40d98),(0xd0d70,0xd0d98),(0x69cc6c,0x69cd58),(0xed468c,0xed485c),(0xed4a8c,0xed4a9c)];
 
@@ -115,19 +120,23 @@ enum ReleaseOutcome { Debounced, Deadline }
 #[derive(Deserialize, Serialize)]
 struct Pulse {key:Key,pressed:Count,released:Option<Count>,finished:Option<Count>,outcome:Option<ReleaseOutcome>}
 #[derive(Deserialize, Serialize)]
-struct Report {schema:u32,program:ProgramBinding,origin:Option<EventId>,identity:InputIdentity,checkpoint:Digest,instructions:Count,menu:Result<Option<[u32;3]>,String>,error:Option<String>,machine_failure:Option<String>,events:Vec<Event>,calls:Vec<Call>,snapshots:Vec<Snapshot>,pulses:Vec<Pulse>,epochs:Vec<Epoch>,trace:FileBinding,timer_transactions:FileBinding,static_calls:Vec<StaticCall>}
+struct Report {schema:u32,program:ProgramBinding,#[serde(default,skip_serializing_if="Option::is_none")] plain:Option<plain_wire::Evidence>,origin:Option<EventId>,identity:InputIdentity,checkpoint:Digest,instructions:Count,menu:Result<Option<[u32;3]>,String>,error:Option<String>,machine_failure:Option<String>,events:Vec<Event>,calls:Vec<Call>,snapshots:Vec<Snapshot>,pulses:Vec<Pulse>,epochs:Vec<Epoch>,trace:FileBinding,timer_transactions:FileBinding,static_calls:Vec<StaticCall>}
 const TIMER_RANGE:[Guest;2]=[Guest(0xfff91000),Guest(0xfff91008)];
 const TIMER_LIMIT:usize=3_000_000;
 #[derive(Serialize)]
 struct TimerWatch {start:Count,end:Count,range:[Guest;2],limit:usize,batch:Option<TransactionBatch>,error:Option<String>}
 
 #[derive(Default)]
-struct Observation {events:Vec<Event>,calls:Vec<Call>,snapshots:Vec<Snapshot>,pulses:Vec<Pulse>,cursor:usize,plain_views:BTreeSet<u32>,image5_seen:bool,loader_sp:[Option<Guest>;2],first_loader:Option<EventId>}
+struct Observation {events:Vec<Event>,calls:Vec<Call>,snapshots:Vec<Snapshot>,pulses:Vec<Pulse>,cursor:usize,plain_views:BTreeSet<u32>,image5_seen:bool,loader_sp:[Option<Guest>;2],first_loader:Option<EventId>,plain:Option<plain_runtime::Runtime>}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase { Setup, Root, DiagnosticReturn, Idle0, Idle1AndStandby }
 impl Phase {
     fn parse(value:u32)->Result<Self,String>{match value{0=>Ok(Self::Setup),1=>Ok(Self::Root),2=>Ok(Self::DiagnosticReturn),3=>Ok(Self::Idle0),4=>Ok(Self::Idle1AndStandby),_=>Err("phase is outside the loader producer set".into())}}
+}
+fn dispatch_phase(pc:Guest)->Option<Phase>{
+    carrier(pc)?;
+    match pc.0&0xffff{0x09fc=>Some(Phase::Setup),0x0a34=>Some(Phase::Root),0x0a3c=>Some(Phase::Idle0),0x0a68=>Some(Phase::DiagnosticReturn),0x0aec=>Some(Phase::Idle1AndStandby),_=>None}
 }
 fn carrier(pc:Guest)->Option<Side>{[Side::LoaderA,Side::LoaderB].into_iter().find(|side|(side.base().0+0x9ac..side.base().0+0xb00).contains(&(pc.0&!0x40000000)))}
 fn decode_call(site:Guest,word:u32)->Result<Option<StaticCall>,String>{
@@ -138,27 +147,37 @@ fn startup_calls(catalog:&Catalog)->Result<Vec<StaticCall>,String>{
     let mut calls=Vec::new();for (start,end) in [(0x409ac,0x40af4),(0xd09ac,0xd0af4),(0xd985a4,0xd986ac),(0x6a9844,0x6a9934),(0x73b554,0x73b558)]{for pc in (start..end).step_by(4){if let Some(call)=decode_call(Guest(pc),catalog.word(Guest(pc))?.1)?{calls.push(call);}}}Ok(calls)
 }
 fn diagnostics(pc:Guest)->bool{let physical=pc.0&!0x40000000;DIAGNOSTICS.iter().any(|&(start,end)|(start..end).contains(&physical))}
-fn sites(calls:&[StaticCall],program:&Program)->BTreeMap<u32,String>{
+fn base_sites(calls:&[StaticCall])->BTreeMap<u32,String>{
     let mut points=BTreeMap::new();for call in calls{points.insert(call.site.0,"source-call".into());points.insert(call.continuation.0,"source-return".into());}
     for base in [0x40000,0xd0000]{for offset in [0x9ac,0x9cc,0x9d0,0xa08,0xa0c,0xa8c,0xa90,0xaa8,0xaac,0xab0]{points.insert(base+offset,"loader-boundary".into());}}
     for &(start,end) in &DIAGNOSTICS{for pc in (start..end).step_by(4){points.insert(pc,"diagnostic-refusal".into());}}
     for pc in [0x43688,0xd3688,0x436e4,0xd36e4,0x436e8,0xd36e8,0x43728,0xd3728,0x43758,0xd3758,0x69cbf0,0x69cd58,0x69d160,0x69d2b4,0x69d2e0,0x69d2e4,0x69cf84,0x69cf94,0x69cf98,0xd985a4,0xd985c0,0xd985c4,0xd985e0,0xd985e4,0x6a96c0,0x6a9734,0x6a9840,0x6a9844,0x6a9934,0x6ae360,0x6ae3f4,0x6ae500,0x73b3a0,0x73b4ac,0x73b554,0x73b924,0x73b950,0x73b9c4,0x73bc54,0x73bd24,0x73be5c,0x73be60,0x73be70,0x73be74,0x73beac,0x73beb0,0x73cdc0,0x73e048,0x725dd8,0x1109130,0x11e6e14,0x125cdfc,0x1273f60,0x1279828,0x127aabc,0x127bdf4,0x127cbb0,0x127da94,0x127f658,0x12812c4,0x128becc,0x13e36fc,0x13e9c0c,0x13eb548]{points.insert(pc,"continuation".into());}
     for pc in [0xd9858c,0xd98590,0xd986ac,0xd986c8,0xd986cc,0xd986dc,0xd986e0,0x107277c,0x1066304,0x1062114,0x1071ca4,0x106ceec,0x1064224,0x6a97bc]{points.insert(pc,"image5-continuation".into());}
     for pc in [0x6a8bec,0x6a8c00,0x6a8c04]{points.insert(pc,"bss-completion".into());}
-    for pc in [0x41ad4,0x41ad8,0x41adc,0x41ae0,0x41ae4,0x41ae8,0x41b78,0x41b7c,0x41b80]{points.insert(pc,"elapsed-source".into());}
     points.insert(0x69d2d8,"source-spin-refusal".into());
+    points
+}
+fn sites(calls:&[StaticCall],program:&Program)->BTreeMap<u32,String>{
+    let mut points=base_sites(calls);
+    for pc in [0x41ad4,0x41ad8,0x41adc,0x41ae0,0x41ae4,0x41ae8,0x41b78,0x41b7c,0x41b80]{points.insert(pc,"elapsed-source".into());}
     for pc in program.refusal_sites(){points.insert(pc.0,"unsupported-carrier-fetch".into());}
     points
 }
-fn classes(stage:WatchStage)->Vec<WatchRange>{
-    let early=stage.early();
-    let mut spans=vec![(0x61c000,0x61c220),(0x40000,0x40020),(0xd0000,0xd0020),(0xa00c4,0xa00c8),(0x5927c,0x59280),(0xe923c,0xe9240),(0x4f10c,0x4f118),(0xdf0cc,0xdf0d8),(0x89f794,0x89f798),(0x96bd20,0x96bd28),(0x89f8ac,0x89f8b0),(0x944440,0x944464),(0x914834,0x914838),(0x972e88,0x972e94),(0x14c100c,0x14c1010),(0x14c1018,0x14c101c),(0x14c113c,0x14c1140),(0x9662d4,0x9662d8)];
-    spans.extend([(0x89f784,0x89f788),(0x89f78c,0x89f790),(0xa0800,0xa0838)]);
-    if early{spans.extend([(0x545a4,0x545a8),(0x54760,0x5476c),(0xe4564,0xe4568),(0xe4720,0xe472c),(0x63450,0x63460),(0xf3410,0xf3420),(0x63460,0x63498),(0xf3420,0xf3458),(0xa0800,0xc0900)]);}
+const LOADER_SPANS:[(u64,u64);20]=[(0x61c000,0x61c220),(0x40000,0x40020),(0xd0000,0xd0020),(0xa00c4,0xa00c8),(0x5927c,0x59280),(0xe923c,0xe9240),(0x4f10c,0x4f118),(0xdf0cc,0xdf0d8),(0x89f794,0x89f798),(0x96bd20,0x96bd28),(0x89f8ac,0x89f8b0),(0x944440,0x944464),(0x914834,0x914838),(0x972e88,0x972e94),(0x14c100c,0x14c1010),(0x14c1018,0x14c101c),(0x14c113c,0x14c1140),(0x9662d4,0x9662d8),(0x89f784,0x89f788),(0x89f78c,0x89f790)];
+const EARLY_SPANS:[(u64,u64);8]=[(0x545a4,0x545a8),(0x54760,0x5476c),(0xe4564,0xe4568),(0xe4720,0xe472c),(0x63450,0x63460),(0xf3410,0xf3420),(0x63460,0x63498),(0xf3420,0xf3458)];
+const RING_HEADER:(u64,u64)=(0xa0800,0xa0838);
+fn loader_classes(spans:Vec<(u64,u64)>,elapsed:&[(u64,u64)],carrier:WatchKinds)->Vec<WatchRange>{
+    let fetched=WatchKinds::CPU_FETCH.union(WatchKinds::WRITES);
     let mut result:Vec<_>=spans.into_iter().map(|(start,end)|WatchRange {start,end,kinds:WatchKinds::WRITES}).collect();
-    result.extend(DIAGNOSTICS.map(|(start,end)|WatchRange {start:u64::from(start),end:u64::from(end),kinds:WatchKinds::CPU_FETCH.union(WatchKinds::WRITES)}));
-    if stage==WatchStage::Startup{result.extend([(0x41ad4,0x41aec),(0x41b78,0x41b84)].map(|(start,end)|WatchRange {start,end,kinds:WatchKinds::CPU_FETCH.union(WatchKinds::WRITES)}));}
-    result.extend([(0x409ac,0x40b00),(0xd09ac,0xd0b00)].map(|(start,end)|WatchRange {start,end,kinds:if stage==WatchStage::Bootstrap {WatchKinds::WRITES}else{WatchKinds::CPU_FETCH.union(WatchKinds::WRITES)}}));result
+    result.extend(DIAGNOSTICS.map(|(start,end)|WatchRange {start:u64::from(start),end:u64::from(end),kinds:fetched}));
+    result.extend(elapsed.iter().map(|&(start,end)|WatchRange {start,end,kinds:fetched}));
+    result.extend([(0x409ac,0x40b00),(0xd09ac,0xd0b00)].map(|(start,end)|WatchRange {start,end,kinds:carrier}));result
+}
+fn classes(stage:WatchStage)->Vec<WatchRange>{
+    let mut spans=LOADER_SPANS.to_vec();spans.push(RING_HEADER);
+    if stage.early(){spans.extend(EARLY_SPANS);spans.push((0xa0800,0xc0900));}
+    let elapsed:&[(u64,u64)]=if stage==WatchStage::Startup{&[(0x41ad4,0x41aec),(0x41b78,0x41b84)]}else{&[]};
+    loader_classes(spans,elapsed,if stage==WatchStage::Bootstrap{WatchKinds::WRITES}else{WatchKinds::CPU_FETCH.union(WatchKinds::WRITES)})
 }
 fn registers(machine:&Machine,core:Core)->Result<Registers,String>{
     let index=usize::from(core);let mut r=[0;13];for (number,value) in r.iter_mut().enumerate(){*value=u32::try_from(machine.session.board.read_register(index,Register::Arm32(arm::Register::R(number as u8)))?).map_err(|_|"register exceeds word")?;}
@@ -200,6 +219,7 @@ impl Observation {
             let first_carrier=self.first_loader.is_none()&&carrier(pc).is_some();
             if first_carrier&&(pc!=Guest(0xd09ac)||core!=Core::Secondary||machine.instructions()!=5_861_929){return Err("first carrier fetch differs from the canonical reset caller".into());}
             let id=self.capture(machine,catalog,maps,core,pc)?;self.cursor+=1;
+            if let Some(plain)=&mut self.plain {plain.capture(machine,maps,output,&mut self.events[id.0],catalog)?;}
             if first_carrier{self.first_loader=Some(id);}
             if diagnostics(pc){return Err("natural route reached a diagnostic body before execution".into());}
             if pc.0==0x69d2d8||(!program.owned()&&matches!(pc.0,0x40aa8|0xd0aa8)){return Err("selected route reached an unexpected returned-context or header-lookup spin".into());}
@@ -242,6 +262,7 @@ impl Observation {
                 0x73be5c|0x73be70 if self.plain_views.insert(regs.r[7])=>vec![match regs.r[7]{0=>Resource::Plain0,2=>Resource::Plain2,3=>Resource::Plain3,_=>return Err("plain extent ID differs from the canonical three-entry table".into())}],_=>Vec::new(),
             };
             for resource in resources{self.snapshots.push(continuation_view::snapshot(&machine.session,maps,output,id,resource,catalog.expected(resource)?)?);}
+            if self.plain.as_ref().is_some_and(|plain|plain.program.owned()&&pc==plain.program.return_pc()){self.snapshots.push(continuation_view::snapshot(&machine.session,maps,output,id,Resource::Plain,catalog.expected(Resource::Plain)?)?);}
         }
         Ok(())
     }
@@ -265,7 +286,8 @@ fn pulse(machine:&mut Machine,observation:&mut Observation,catalog:&Catalog,maps
 }
 fn epoch(machine:&mut Machine,observation:&mut Observation,catalog:&Catalog,maps:&[MemoryMap],output:&Path,permanent:&BTreeMap<u32,String>,calls:&[StaticCall],stage:WatchStage,program:&Program)->Result<(Epoch,Result<(),String>),String>{
     let start=Count(machine.instructions());let views=match stage.views(){WatchViews::Observe=>ViewPolicy::Observe,WatchViews::Fixed=>ViewPolicy::Fixed};
-    let mut watch=machine.session.board.memory_watch_begin_classified(classes(stage),3_000_000,maps.to_vec(),views)?;
+    let mut ranges=classes(stage);
+    let mut watch=if let Some(plain)=&observation.plain {ranges.extend(plain.classes());machine.session.board.memory_watch_begin_with_fetch_attribution(ranges,plain.attribution(catalog,machine)?,3_000_000,maps.to_vec(),views)?} else {machine.session.board.memory_watch_begin_classified(ranges,3_000_000,maps.to_vec(),views)?};
     let result=(||->Result<(),String>{
         if stage==WatchStage::Bootstrap {
             advance(machine,observation,catalog,maps,output,permanent,calls,8_000_000,program,Until::FirstCarrier)?;
@@ -289,12 +311,31 @@ fn epoch(machine:&mut Machine,observation:&mut Observation,catalog:&Catalog,maps
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum OptionKey { Run,Update,Rom,Analysis,Output,Verify,SourceCalls,OwnedArtifact,CompareRetained,CompareOwned }
-impl OptionKey {fn parse(value:&std::ffi::OsStr)->Result<Self,String>{match value.to_str(){Some("--run")=>Ok(Self::Run),Some("--update")=>Ok(Self::Update),Some("--boot-rom")=>Ok(Self::Rom),Some("--analysis")=>Ok(Self::Analysis),Some("--output")=>Ok(Self::Output),Some("--verify")=>Ok(Self::Verify),Some("--source-calls")=>Ok(Self::SourceCalls),Some("--owned-artifact")=>Ok(Self::OwnedArtifact),Some("--compare-retained")=>Ok(Self::CompareRetained),Some("--compare-owned")=>Ok(Self::CompareOwned),_=>Err(USAGE.into())}}}
+enum OptionKey { Run,Update,Rom,Analysis,Output,Verify,SourceCalls,OwnedArtifact,CompareRetained,CompareOwned,PlainWitness,PlainArtifact,VerifyPlain,ComparePlainRetained,ComparePlainOwned,PlainControls,ApplicationPump,VerifyApplicationPump,CompareApplicationPump,OwnedPump,ControlsApplicationPump,OriginalUpdate,PumpCode,PumpSymbols,PumpAdmission }
+impl OptionKey {fn parse(value:&std::ffi::OsStr)->Result<Self,String>{match value.to_str(){Some("--run")=>Ok(Self::Run),Some("--update")=>Ok(Self::Update),Some("--boot-rom")=>Ok(Self::Rom),Some("--analysis")=>Ok(Self::Analysis),Some("--output")=>Ok(Self::Output),Some("--verify")=>Ok(Self::Verify),Some("--source-calls")=>Ok(Self::SourceCalls),Some("--owned-artifact")=>Ok(Self::OwnedArtifact),Some("--compare-retained")=>Ok(Self::CompareRetained),Some("--compare-owned")=>Ok(Self::CompareOwned),Some("--plain-witness")=>Ok(Self::PlainWitness),Some("--plain-artifact")=>Ok(Self::PlainArtifact),Some("--verify-plain")=>Ok(Self::VerifyPlain),Some("--compare-plain-retained")=>Ok(Self::ComparePlainRetained),Some("--compare-plain-owned")=>Ok(Self::ComparePlainOwned),Some("--plain-controls")=>Ok(Self::PlainControls),Some("--application-pump")=>Ok(Self::ApplicationPump),Some("--verify-application-pump")=>Ok(Self::VerifyApplicationPump),Some("--compare-application-pump")=>Ok(Self::CompareApplicationPump),Some("--owned-pump")=>Ok(Self::OwnedPump),Some("--controls-application-pump")=>Ok(Self::ControlsApplicationPump),Some("--original-update")=>Ok(Self::OriginalUpdate),Some("--pump-code")=>Ok(Self::PumpCode),Some("--pump-symbols")=>Ok(Self::PumpSymbols),Some("--pump-admission")=>Ok(Self::PumpAdmission),_=>Err(USAGE.into())}}}
 fn drive()->Result<(),String>{
     let mut arguments=std::env::args_os().skip(1);let mut options=BTreeMap::new();
     while let Some(flag)=arguments.next(){if options.insert(OptionKey::parse(&flag)?,PathBuf::from(arguments.next().ok_or(USAGE)?)).is_some(){return Err(USAGE.into());}}
     let analysis=options.remove(&OptionKey::Analysis).ok_or(USAGE)?;
+    if let Some(output)=options.remove(&OptionKey::VerifyApplicationPump){if !options.is_empty(){return Err(USAGE.into());}return application_pump::verify(&output,&analysis);}
+    if let Some(retained)=options.remove(&OptionKey::CompareApplicationPump){
+        let owned=options.remove(&OptionKey::OwnedPump).ok_or(USAGE)?;
+        let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;
+        if !options.is_empty(){return Err(USAGE.into());}
+        return application_pump::compare(&retained,&owned,&analysis,&output);
+    }
+    if let Some(source)=options.remove(&OptionKey::ControlsApplicationPump){
+        let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;
+        if !options.is_empty(){return Err(USAGE.into());}
+        return application_pump::controls(&source,&analysis,&output);
+    }
+    if let Some(mode)=options.remove(&OptionKey::ApplicationPump){
+        let mode=application_pump::Mode::parse(&mode)?;
+        let mut take=|key|options.remove(&key).ok_or_else(||USAGE.to_owned());
+        let request=application_pump::Request {mode,analysis,run:take(OptionKey::Run)?,update:take(OptionKey::Update)?,original_update:take(OptionKey::OriginalUpdate)?,boot_rom:take(OptionKey::Rom)?,output:take(OptionKey::Output)?,code:take(OptionKey::PumpCode)?,symbols:take(OptionKey::PumpSymbols)?,admission:take(OptionKey::PumpAdmission)?};
+        if !options.is_empty(){return Err(USAGE.into());}
+        return application_pump::run(request);
+    }
     if let Some(output)=options.remove(&OptionKey::SourceCalls){
         if !options.is_empty(){return Err(USAGE.into());}
         let catalog=Catalog::open(&analysis)?;std::fs::create_dir(&output).map_err(|error|error.to_string())?;
@@ -303,25 +344,39 @@ fn drive()->Result<(),String>{
     }
     if let Some(output)=options.remove(&OptionKey::Verify){if !options.is_empty(){return Err(USAGE.into());}let verified=loader_continuations_check::check(&output,&analysis)?;println!("{}",serde_json::to_string(&verified).map_err(|error|error.to_string())?);return Ok(());}
     if let Some(retained)=options.remove(&OptionKey::CompareRetained){let owned=options.remove(&OptionKey::CompareOwned).ok_or(USAGE)?;let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;if !options.is_empty(){return Err(USAGE.into());}return loader_continuations_check::compare(&retained,&owned,&analysis,&output);}
+    if let Some(root)=options.remove(&OptionKey::VerifyPlain){if !options.is_empty(){return Err(USAGE.into());}let receipt=loader_continuations_check::check_plain(&root,&analysis)?;println!("{}",serde_json::to_string(&receipt).map_err(|error|error.to_string())?);return Ok(());}
+    if let Some(retained)=options.remove(&OptionKey::ComparePlainRetained){let owned=options.remove(&OptionKey::ComparePlainOwned).ok_or(USAGE)?;let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;if !options.is_empty(){return Err(USAGE.into());}return loader_continuations_check::compare_plain(&retained,&owned,&analysis,&output);}
+    if let Some(root)=options.remove(&OptionKey::PlainControls){let output=options.remove(&OptionKey::Output).ok_or(USAGE)?;if !options.is_empty(){return Err(USAGE.into());}return loader_continuations_check::controls_plain(&root,&analysis,&output);}
     let owned_artifact=options.remove(&OptionKey::OwnedArtifact);
+    let plain_role=options.remove(&OptionKey::PlainWitness).map(|value|match value.to_str(){Some("retained")=>Ok(plain_wire::Role::Retained),Some("owned")=>Ok(plain_wire::Role::Owned),_=>Err("plain witness role must be retained or owned".to_owned())}).transpose()?;
+    let plain_artifact=options.remove(&OptionKey::PlainArtifact);
+    if (plain_role.is_some()&&owned_artifact.is_some())||(plain_role.is_none()&&plain_artifact.is_some()){return Err("plain witness is separate from owned loader composition".into());}
     let mut take=|key|options.remove(&key).ok_or_else(||USAGE.to_owned());let run_path=take(OptionKey::Run)?;let update_path=take(OptionKey::Update)?;let rom_path=take(OptionKey::Rom)?;let output=take(OptionKey::Output)?;
     if !options.is_empty(){return Err(USAGE.into());}std::fs::create_dir(&output).map_err(|error|error.to_string())?;
     let result=(||->Result<(),String>{
         let run_bytes=read(&run_path)?;let update=read(&update_path)?;let rom=read(&rom_path)?;let mut catalog=Catalog::open(&analysis)?;
         let program=match &owned_artifact {Some(stage)=>Program::from_staged(stage,&output,&mut catalog)?,None=>Program::Retained};
+        let mut calls=startup_calls(&catalog)?;
+        let plain=plain_role.map(|role|{
+            let payload=plain_runtime::bind_payload(&analysis,&output,&catalog)?;
+            plain_program::Program::from_staged(role,plain_artifact.as_deref(),&output,&mut catalog).map(|program|plain_runtime::Runtime::new(program,payload))
+        }).transpose()?;
+        if let Some(plain)=&plain {calls.retain(|call|!(0x6a9844..0x6a9938).contains(&call.site.0));calls.extend(plain.program.call_sites());}
         let update_digest=Digest::of(&update);
         let identity=InputIdentity {run:Digest::of(&run_bytes),update:update_digest.clone(),update_file:FileBinding {path:"input-update.DAT".into(),sha256:update_digest},rom:Digest::of(&rom),executable:Digest::of(&read(&std::env::current_exe().map_err(|error|error.to_string())?)?),sources:catalog.0.iter().map(|image|image.binding.clone()).collect()};
-        if identity.run.as_str()!="efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"||identity.update.as_str()!=program.update()||identity.rom.as_str()!="4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be"{return Err("observer inputs differ from the admitted reset route and program".into());}
+        if identity.run.as_str()!="efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"||identity.update.as_str()!=plain.as_ref().map_or_else(||program.update(),|plain|plain.program.update())||identity.rom.as_str()!="4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be"{return Err("observer inputs differ from the admitted reset route and program".into());}
         std::fs::hard_link(&update_path,output.join(&identity.update_file.path)).map_err(|error|format!("cannot retain the validated DAT input: {error}"))?;
-        persist(&output.join("inputs.json"),&identity)?;let calls=startup_calls(&catalog)?;persist(&output.join("source-graph.json"),&calls)?;
+        persist(&output.join("inputs.json"),&identity)?;persist(&output.join("source-graph.json"),&calls)?;
         fujimod_emulator_exr2_board::register_board_builder();fujimod_emulator_models::register();let document=RunDocument::parse(&run_bytes)?;let maps=run::memory_maps(&document)?;
         let mut session=run::open(&document,&ValidatedUpdate(update),&rom)?;session.board.set_execution_policy(document.execution_policy.into())?;let mut machine=Machine::new(document,session)?;
         machine.disarm()?;let checkpoint=machine.session.checkpoint(None)?.export()?;write(&output.join("reset.fujimod"),&checkpoint)?;let restored=machine.session.import_snapshot(&checkpoint)?;machine.session.restore(&restored)?;machine.rearm()?;
         if machine.instructions()!=0{return Err("saved reset checkpoint is not preexecution".into());}
-        let permanent=sites(&calls,&program);let mut initial=permanent.clone();
+        let mut permanent=sites(&calls,&program);
+        if let Some(plain)=&plain {for pc in plain.sites(){permanent.insert(pc.0,"plain-witness".into());}}
+        let mut initial=permanent.clone();
         for side in [Side::LoaderA,Side::LoaderB]{for pc in (side.base().0+0x9ac..side.base().0+0xb00).step_by(4){initial.entry(pc).or_insert_with(||"first-carrier-fetch".into());}}
         machine.traces.bound_full_registers(NonZeroUsize::new(TRACE_LIMIT).ok_or("zero trace bound")?);machine.traces.stop_labels=initial.values().cloned().chain(["temporary-boundary".into()]).collect();
-        let mut observation=Observation::default();let mut epochs=Vec::new();
+        let mut observation=Observation {plain,..Observation::default()};let mut epochs=Vec::new();
         let mut timer=TimerWatch {start:Count(0),end:Count(0),range:TIMER_RANGE,limit:TIMER_LIMIT,batch:None,error:None};let mut timer_active=false;
         let outcome=(||->Result<(),String>{
             machine.traces.arm(&machine.session,initial)?;
@@ -343,7 +398,7 @@ fn drive()->Result<(),String>{
         if timer_active{timer.end=Count(machine.instructions());match machine.session.board.transaction_watch_end(){Ok(batch)=>timer.batch=Some(batch),Err(error)=>timer.error=Some(error)}}
         persist(&output.join("timer-transactions.json"),&timer)?;
         persist(&output.join("trace.json"),&machine.traces.hits)?;
-        let report=Report {schema:3,program:program.binding(),origin:observation.first_loader,identity,checkpoint:Digest::of(&checkpoint),instructions:Count(machine.instructions()),menu:machine.menu().map(|menu|menu.map(|menu|[menu.menu_id,menu.setting_id,menu.cursor])),error:outcome.err(),machine_failure:machine.failure.clone(),events:observation.events,calls:observation.calls,snapshots:observation.snapshots,pulses:observation.pulses,epochs,trace:binding(&output,"trace.json")?,timer_transactions:binding(&output,"timer-transactions.json")?,static_calls:calls};
+        let report=Report {schema:3,program:program.binding(),plain:observation.plain.map(|plain|plain.evidence),origin:observation.first_loader,identity,checkpoint:Digest::of(&checkpoint),instructions:Count(machine.instructions()),menu:machine.menu().map(|menu|menu.map(|menu|[menu.menu_id,menu.setting_id,menu.cursor])),error:outcome.err(),machine_failure:machine.failure.clone(),events:observation.events,calls:observation.calls,snapshots:observation.snapshots,pulses:observation.pulses,epochs,trace:binding(&output,"trace.json")?,timer_transactions:binding(&output,"timer-transactions.json")?,static_calls:calls};
         persist(&output.join("continuations.json"),&report)?;
         if report.error.is_some()||report.machine_failure.is_some(){return Err("continuation observation did not complete".into());}
         drop(catalog);let verified=loader_continuations_check::check(&output,&analysis)?;persist(&output.join("verification.json"),&verified)

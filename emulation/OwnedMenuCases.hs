@@ -353,7 +353,7 @@ main = do
   unless (id5Base == 0x00bf1a00 && B.length id5 == 5185120 && sha256Hex (sha256 id5) == "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a") $
     error "id5 differs from the pinned X-M1 1.50 image"
   derived <- either error pure $
-    SI.deriveFunction (SI.GuestAddress id5Base) id5
+    SI.deriveFunction SI.xm1TaskRecords (SI.GuestAddress id5Base) id5
       (SI.FunctionWindow (SI.GuestAddress (guestWord stockEntry)) (SI.GuestAddress 0x00c777fc)) []
   let declaration (address, size) = SI.FunctionDeclaration (SI.GuestAddress address) (SI.FunctionSize size)
   either error pure (SI.checkDeclarations [declaration (guestWord stockEntry, stockBytesCount)] [SI.derivedDeclaration derived])

@@ -60,7 +60,7 @@ canonicalSource dat four five = do
     [segment] -> U.segLoad segment == 0x61c400 && U.segBss segment == 0x89ec00 && U.segBssLen segment == 0x352e00
     _ -> False) SourceMismatch
   proofs <- mapM (\(image,low,high,tails) -> either (Left . StockDerivationRejected) Right
-    (Stock.deriveExtent (Stock.GuestAddress (if image == Image4 then 0x61c400 else 0xbf1a00))
+    (Stock.inspectedDeclaration <$> Stock.inspectFunction Stock.xm1TaskRecords (Stock.GuestAddress (if image == Image4 then 0x61c400 else 0xbf1a00))
       (if image == Image4 then four else five) (Stock.FunctionWindow (Stock.GuestAddress low) (Stock.GuestAddress high)) (map Stock.GuestAddress tails))) stockWindows
   pure (CanonicalSource dat four five proofs)
 

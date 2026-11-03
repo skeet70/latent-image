@@ -4,7 +4,7 @@ use crate::provenance::Guest;
 use crate::memory_view::{MemoryAddress, MemoryCore, TcmRegister, static_span, tcm_window};
 use crate::modal_trace::{Config as ModalConfig, ModalTrace, Report as ModalReport};
 use fujimod_emulator::board::factory::{Graph, MemoryMap};
-use fujimod_emulator::board::observation::InstructionPoints;
+use fujimod_emulator::board::observation::{InstructionPointEvent, InstructionPoints};
 use fujimod_emulator::session::Session;
 use fujimod_emulator_cpu::{Register, arm};
 use serde::{Deserialize, Serialize, Serializer, ser::SerializeSeq};
@@ -753,15 +753,195 @@ enum CoreSelection {
     Primary,
 }
 
+impl CoreSelection {
+    fn includes(self, core: usize) -> bool {
+        matches!(self, Self::All) || core == 0
+    }
+}
+
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+enum PointSetMode {
+    /// Per-address hooks, reinstalled on every site change.
+    #[default]
+    Fixed,
+    /// One all-PC set per core whose membership follows site changes.
+    Persistent(Arming),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Arming {
+    Armed,
+    Disarmed,
+}
+
+/// What `TraceSites::disarm` does to persistent point sets.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DisarmedPoints {
+    /// Removes the sets; `rearm` installs new ones.
+    #[default]
+    Release,
+    /// Empties their membership and keeps them installed ahead of later watches.
+    Retain,
+}
+
 enum PointScope {
     User,
     UserAndModal,
 }
 
-struct EnteredInstructions(u64);
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct EnteredInstructions(pub u64);
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "TraceStackScopeFields")]
+pub struct TraceStackScopeConfig {
+    stack: [Guest; 2],
+    owner: Guest,
+    current: [Guest; 2],
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TraceStackScopeFields {
+    stack: [Guest; 2],
+    owner: Guest,
+    current: [Guest; 2],
+}
+
+impl TryFrom<TraceStackScopeFields> for TraceStackScopeConfig {
+    type Error = String;
+
+    fn try_from(value: TraceStackScopeFields) -> Result<Self, Self::Error> {
+        Self::new(value.stack, value.owner, value.current)
+    }
+}
+
+impl TraceStackScopeConfig {
+    pub fn new(stack: [Guest; 2], owner: Guest, current: [Guest; 2]) -> Result<Self, String> {
+        if stack.into_iter().chain([owner]).chain(current).any(|value| value.0 % 4 != 0 || value.0 >= 0x20000000)
+            || stack[0] >= stack[1] || owner.0 == 0 || current[0] == current[1] {
+            return Err("stack scope requires aligned physical DRAM bounds, owner and distinct current-task cells".into());
+        }
+        Ok(Self { stack, owner, current })
+    }
+
+    pub const fn stack(&self) -> [Guest; 2] { self.stack }
+    pub const fn owner(&self) -> Guest { self.owner }
+    pub const fn current(&self) -> [Guest; 2] { self.current }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct ScopedHitCount(pub u64);
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraceStackSkip {
+    pub core: usize,
+    pub site: Guest,
+    pub instructions: EnteredInstructions,
+    pub sp: Guest,
+    pub current: Guest,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum TraceStackViolation {
+    OwnerOutsideStack { hit: TraceStackSkip },
+    SkipLimit { hit: TraceStackSkip },
+    CounterOverflow { site: Guest, core: usize },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraceStackSiteSummary {
+    pub site: Guest,
+    pub entered: EnteredInstructions,
+    pub recorded: [ScopedHitCount; 2],
+    pub outside: [ScopedHitCount; 2],
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraceStackScopeSummary {
+    pub config: TraceStackScopeConfig,
+    pub sites: Vec<TraceStackSiteSummary>,
+    pub violation: Option<TraceStackViolation>,
+}
+
+const STACK_SKIP_LIMIT: usize = 65536;
+
+struct StackScope {
+    summary: TraceStackScopeSummary,
+    skips: Vec<TraceStackSkip>,
+}
+
+enum StackPoint {
+    Unscoped,
+    Inside { index: usize, next: ScopedHitCount },
+    Outside,
+}
+
+fn stack_physical(value: Guest) -> Guest {
+    match value.0 {
+        0x40000000..0x60000000 => Guest(value.0 - 0x40000000),
+        _ => value,
+    }
+}
+
+impl StackScope {
+    fn fail(&mut self, violation: TraceStackViolation) -> String {
+        self.summary.violation = Some(violation);
+        "trace stack scope refused".into()
+    }
+
+    fn observe(&mut self, session: &Session, core: usize, site: Guest, instructions: EnteredInstructions) -> Result<StackPoint, String> {
+        let Ok(index) = self.summary.sites.binary_search_by_key(&site, |entry| entry.site) else {
+            return Ok(StackPoint::Unscoped);
+        };
+        let cell = self.summary.config.current.get(core).ok_or("stack scope core exceeds two cores")?;
+        let sp = Guest(register(session, core, arm::Register::R(13))?);
+        let mut bytes = [0; 4];
+        session.board.read_physical(u64::from(cell.0), &mut bytes)?;
+        let current = stack_physical(Guest(u32::from_le_bytes(bytes)));
+        let physical_sp = stack_physical(sp);
+        let [start, end] = self.summary.config.stack;
+        if start <= physical_sp && physical_sp <= end {
+            let Some(next) = self.summary.sites[index].recorded[core].0.checked_add(1) else {
+                return Err(self.fail(TraceStackViolation::CounterOverflow { site, core }));
+            };
+            return Ok(StackPoint::Inside { index, next: ScopedHitCount(next) });
+        }
+        let hit = TraceStackSkip { core, site, instructions, sp, current };
+        if self.skips.len() == STACK_SKIP_LIMIT {
+            return Err(self.fail(TraceStackViolation::SkipLimit { hit }));
+        }
+        let Some(next) = self.summary.sites[index].outside[core].0.checked_add(1) else {
+            return Err(self.fail(TraceStackViolation::CounterOverflow { site, core }));
+        };
+        self.skips.push(hit);
+        self.summary.sites[index].outside[core] = ScopedHitCount(next);
+        if current == self.summary.config.owner {
+            return Err(self.fail(TraceStackViolation::OwnerOutsideStack { hit }));
+        }
+        Ok(StackPoint::Outside)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ModalPointState { Unobserved, Observed }
+#[derive(Clone, Copy)]
+struct PendingPoint {
+    pc: Guest,
+    point: Option<InstructionPointEvent>,
+}
+
 struct ResumeMarker {
     pc: Guest,
     entered: EnteredInstructions,
+    point: Option<InstructionPointEvent>,
+    modal: ModalPointState,
 }
 
 #[derive(Default)]
@@ -772,13 +952,17 @@ pub struct TraceSites {
     pub hits: Vec<Hit>,
     hit_limit: Option<std::num::NonZeroUsize>,
     code_binding: Option<CodeBinding>,
+    /// Persistent sets are in core order; a set whose removal failed stays here.
     points: Vec<(usize, Box<InstructionPoints>)>,
     cores: CoreSelection,
+    point_set_mode: PointSetMode,
+    disarmed_points: DisarmedPoints,
     resumed: BTreeMap<usize, ResumeMarker>,
     capture_observation: Option<CaptureObservation>,
-    pending_points: Vec<Option<u64>>,
+    pending_points: Vec<Option<PendingPoint>>,
     capture_memory: Option<CaptureMemory>,
     modal_observation: Option<ModalTrace>,
+    stack_scope: Option<StackScope>,
 }
 
 fn register(session: &Session, core: usize, register: arm::Register) -> Result<u32, String> {
@@ -787,6 +971,50 @@ fn register(session: &Session, core: usize, register: arm::Register) -> Result<u
 }
 
 impl TraceSites {
+    pub fn begin_stack_scope(&mut self, config: TraceStackScopeConfig) -> Result<(), String> {
+        if self.stack_scope.is_some() || self.modal_observation_active() || self.capture_observation_active() {
+            return Err("stack scope requires no existing stack, modal or capture observation".into());
+        }
+        self.stack_scope = Some(StackScope {
+            summary: TraceStackScopeSummary { config, sites: Vec::new(), violation: None },
+            skips: Vec::with_capacity(STACK_SKIP_LIMIT),
+        });
+        Ok(())
+    }
+
+    pub fn scope_stack_sites(&mut self, session: &Session, sites: &[Guest]) -> Result<(), String> {
+        if self.modal_observation_active() || self.capture_observation_active() {
+            return Err("stack scope conflicts with modal or capture observation".into());
+        }
+        if session.board.instruction_counts().len() != 2 {
+            return Err("stack scope requires two executing core slots".into());
+        }
+        if sites.iter().any(|site| site.0 % 4 != 0 || RamAddress::parse(site.0, 4).is_none()) {
+            return Err("stack scope sites must be aligned DRAM instruction addresses".into());
+        }
+        let entered = EnteredInstructions(InstructionCount::from_board(session)?.0);
+        let scope = self.stack_scope.as_mut().ok_or("stack scope has not begun")?;
+        if scope.summary.violation.is_some() {
+            return Err("trace stack scope has already refused".into());
+        }
+        for &site in sites {
+            if let Err(index) = scope.summary.sites.binary_search_by_key(&site, |entry| entry.site) {
+                scope.summary.sites.insert(index, TraceStackSiteSummary {
+                    site, entered, recorded: [ScopedHitCount(0); 2], outside: [ScopedHitCount(0); 2],
+                });
+            }
+        }
+        Ok(())
+    }
+
+    pub fn drain_stack_scope_skips(&mut self) -> impl Iterator<Item = TraceStackSkip> + '_ {
+        self.stack_scope.iter_mut().flat_map(|scope| scope.skips.drain(..))
+    }
+
+    pub fn stack_scope_summary(&self) -> Option<&TraceStackScopeSummary> {
+        self.stack_scope.as_ref().map(|scope| &scope.summary)
+    }
+
     pub fn bound_full_registers(&mut self, limit: std::num::NonZeroUsize) {
         self.hit_limit = Some(limit);
     }
@@ -823,24 +1051,40 @@ impl TraceSites {
         self.modal_observation.as_ref().map(ModalTrace::report).unwrap_or_else(ModalReport::inactive)
     }
 
+    /// The installed-lifetime guard's memory watch, which the modal observation owns exclusively.
+    pub fn modal_watch_state(&self) -> Option<Result<serde_json::Value, String>> {
+        self.modal_observation.as_ref().and_then(ModalTrace::watch_evidence)
+            .map(|evidence| serde_json::to_value(evidence).map_err(|failure| format!("modal watch state: {failure}")))
+    }
+
     pub fn begin_modal_observation(&mut self, session: &Session, config: ModalConfig) -> Result<(), String> {
+        if self.stack_scope.is_some() {
+            return Err("modal observation conflicts with stack scope".into());
+        }
         if self.modal_observation_active() || self.capture_observation_active() {
             return Err("modal observation requires no active modal or capture observation".into());
         }
-        let mut monitor = ModalTrace::new(config, session)?;
         let counts = session.board.instruction_counts();
-        let instructions = InstructionCount::from_board(session)?;
-        let observed = self.resumed.iter().try_for_each(|(&core, marker)| {
-            if monitor.contains(marker.pc) && counts[core] == marker.entered.0
+        for (&core, marker) in &self.resumed {
+            if config.refuses_prior_stop(marker.pc) && counts.get(core).copied() == Some(marker.entered.0)
                 && session.board.read_register(core, Register::Pc)? == u64::from(marker.pc.0) {
-                monitor.observe(session, core, marker.pc, instructions)?;
+                return Err("installed-lifetime observation requires a fresh protected instruction entry".into());
+            }
+        }
+        let mut monitor = ModalTrace::new(config, session)?;
+        let instructions = InstructionCount::from_board(session)?;
+        let observed = self.resumed.iter_mut().try_for_each(|(&core, marker)| {
+            if !monitor.guarded() && monitor.contains(marker.pc)
+                && counts.get(core).copied() == Some(marker.entered.0)
+                && session.board.read_register(core, Register::Pc)? == u64::from(marker.pc.0) {
+                monitor.observe(session, core, marker.pc, instructions, marker.point)?;
+                marker.modal = ModalPointState::Observed;
             }
             Ok::<(), String>(())
         });
         if let Err(failure) = &observed { monitor.fail(failure.clone()); }
-        self.end_points(session)?;
         self.modal_observation = Some(monitor);
-        if let Err(failure) = self.rearm(session).and_then(|()| self.restore_resume(session)) {
+        if let Err(failure) = self.rearm_points(session, PointScope::UserAndModal) {
             if let Some(modal) = &mut self.modal_observation { modal.fail(failure.clone()); }
             return Err(failure);
         }
@@ -848,12 +1092,10 @@ impl TraceSites {
     }
 
     pub fn end_modal_observation(&mut self, session: &Session) -> Result<(), String> {
-        self.modal_observation.as_mut().ok_or("modal observation has not begun")?.check_finish()?;
-        let teardown = self.end_points(session)
-            .and_then(|()| self.rearm_scope(session, PointScope::User))
-            .and_then(|()| self.restore_resume(session));
+        self.modal_observation.as_mut().ok_or("modal observation has not begun")?.check_finish(session)?;
+        let teardown = self.rearm_points(session, PointScope::User);
         let modal = self.modal_observation.as_mut().ok_or("modal observation disappeared")?;
-        match teardown {
+        match teardown.and_then(|()| modal.finish_guard(session)) {
             Ok(()) => {
                 modal.disable();
                 Ok(())
@@ -870,6 +1112,9 @@ impl TraceSites {
     }
 
     pub fn begin_capture_observation(&mut self, scope: CaptureScope) -> Result<(), String> {
+        if self.stack_scope.is_some() {
+            return Err("capture observation conflicts with stack scope".into());
+        }
         if self.modal_observation_active() {
             return Err("capture observation refuses an active modal observation".into());
         }
@@ -993,7 +1238,7 @@ impl TraceSites {
     }
 
     pub fn armed(&self) -> bool {
-        !self.points.is_empty()
+        !self.points.is_empty() && self.point_set_mode != PointSetMode::Persistent(Arming::Disarmed)
     }
 
     /// Replaces the armed sites on every core.
@@ -1005,41 +1250,145 @@ impl TraceSites {
         self.arm_selection(session, sites, CoreSelection::Primary)
     }
 
-    fn arm_selection(
-        &mut self,
-        session: &Session,
-        sites: BTreeMap<u32, String>,
-        cores: CoreSelection,
-    ) -> Result<(), String> {
+    /// Arms `sites` on every core through one persistent all-PC point set per core. Later site and modal changes,
+    /// and `rearm` after a retained disarm, update only its membership; `disarm` follows `set_disarmed_points`.
+    pub fn arm_mutable(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
+        if self.stack_scope.is_some() {
+            return Err("stack scope sites cannot be replaced".into());
+        }
         if self.modal_observation_active() {
             return Err("modal observation sites are frozen until successful finish".into());
         }
         if self.capture_observation_active() {
             return Err("capture observation sites are frozen until the session ends".into());
         }
-        self.disarm(session)?;
+        if self.point_set_mode == PointSetMode::Fixed {
+            self.end_points(session)?;
+        }
+        let memberships = self.memberships(session, sites.keys().copied(), CoreSelection::All, PointScope::UserAndModal);
+        self.apply(session, memberships)?;
+        self.discard_events();
+        self.resumed.clear();
+        self.sites = sites;
+        self.cores = CoreSelection::All;
+        self.point_set_mode = PointSetMode::Persistent(Arming::Armed);
+        self.restore_resume(session)
+    }
+
+    /// Applies at the next persistent `disarm` or `reinstall`.
+    pub fn set_disarmed_points(&mut self, policy: DisarmedPoints) {
+        self.disarmed_points = policy;
+    }
+
+    pub fn replace_sites(&mut self, session: &Session, sites: BTreeMap<u32, String>) -> Result<(), String> {
+        if self.modal_observation_active() {
+            return Err("modal observation sites are frozen until successful finish".into());
+        }
+        if self.capture_observation_active() {
+            return Err("capture observation sites are frozen until the session ends".into());
+        }
+        if self.point_set_mode != PointSetMode::Persistent(Arming::Armed) {
+            return Err("mutable instruction points are not armed".into());
+        }
+        let memberships = self.memberships(session, sites.keys().copied(), self.cores, PointScope::UserAndModal);
+        self.apply(session, memberships)?;
+        self.sites = sites;
+        self.restore_resume(session)
+    }
+
+    fn arm_selection(
+        &mut self,
+        session: &Session,
+        sites: BTreeMap<u32, String>,
+        cores: CoreSelection,
+    ) -> Result<(), String> {
+        if self.stack_scope.is_some() {
+            return Err("stack scope sites cannot be replaced".into());
+        }
+        if self.modal_observation_active() {
+            return Err("modal observation sites are frozen until successful finish".into());
+        }
+        if self.capture_observation_active() {
+            return Err("capture observation sites are frozen until the session ends".into());
+        }
+        self.end_points(session)?;
         self.sites = sites;
         self.cores = cores;
+        self.point_set_mode = PointSetMode::Fixed;
         self.resumed.clear();
         self.rearm(session)
     }
 
+    /// Removes fixed points. Persistent sets are removed or emptied according to `set_disarmed_points`.
     pub fn disarm(&mut self, session: &Session) -> Result<(), String> {
         if self.modal_observation_active() {
             return Err("modal observation sites cannot be disarmed before successful finish".into());
         }
-        self.end_points(session)
+        match (self.point_set_mode, self.disarmed_points) {
+            (PointSetMode::Fixed, _) => self.end_points(session),
+            (PointSetMode::Persistent(_), DisarmedPoints::Release) => {
+                self.end_points(session)?;
+                self.point_set_mode = PointSetMode::Persistent(Arming::Disarmed);
+                Ok(())
+            }
+            (PointSetMode::Persistent(_), DisarmedPoints::Retain) => {
+                if !self.points.is_empty() {
+                    self.apply(session, vec![Vec::new(); session.board.instruction_counts().len()])?;
+                    self.discard_events();
+                }
+                self.point_set_mode = PointSetMode::Persistent(Arming::Disarmed);
+                Ok(())
+            }
+        }
     }
 
-    fn end_points(&mut self, session: &Session) -> Result<(), String> {
-        for (core, mut points) in self.points.drain(..) {
-            session.board.instruction_points_end(core, &mut points)?;
+    pub fn rearm(&mut self, session: &Session) -> Result<(), String> {
+        match self.point_set_mode {
+            PointSetMode::Fixed => self.rearm_scope(session, PointScope::UserAndModal),
+            PointSetMode::Persistent(Arming::Armed) if !self.points.is_empty() => Err("trace sites are already armed".into()),
+            PointSetMode::Persistent(_) => self.arm_membership(session, PointScope::UserAndModal),
         }
-        self.pending_points.clear();
+    }
+
+    /// Removes every installed point before a session checkpoint, keeping the arming for `reinstall`.
+    pub fn teardown(&mut self, session: &Session) -> Result<(), String> {
+        match self.point_set_mode {
+            PointSetMode::Fixed => self.disarm(session),
+            PointSetMode::Persistent(_) => {
+                if self.modal_observation_active() {
+                    return Err("modal observation sites cannot be disarmed before successful finish".into());
+                }
+                self.end_points(session)
+            }
+        }
+    }
+
+    pub fn reinstall(&mut self, session: &Session) -> Result<(), String> {
+        match (self.point_set_mode, self.disarmed_points) {
+            (PointSetMode::Fixed, _) => self.rearm(session),
+            (PointSetMode::Persistent(Arming::Armed), _) => self.arm_membership(session, PointScope::UserAndModal),
+            (PointSetMode::Persistent(Arming::Disarmed), DisarmedPoints::Release) => Ok(()),
+            (PointSetMode::Persistent(Arming::Disarmed), DisarmedPoints::Retain) => {
+                self.apply(session, vec![Vec::new(); session.board.instruction_counts().len()])
+            }
+        }
+    }
+
+    /// Removes from the last core; a set whose removal fails stays owned.
+    fn end_points(&mut self, session: &Session) -> Result<(), String> {
+        while let Some((core, points)) = self.points.last_mut() {
+            session.board.instruction_points_end(*core, points)?;
+            self.points.pop();
+            self.pending_points.pop();
+        }
         Ok(())
     }
 
     pub fn remove_sites(&mut self, session: &Session, addresses: &[Guest]) -> Result<(), String> {
+        if self.stack_scope.as_ref().is_some_and(|scope| addresses.iter()
+            .any(|address| scope.summary.sites.binary_search_by_key(address, |entry| entry.site).is_ok())) {
+            return Err("stack scope sites cannot be removed".into());
+        }
         if self.modal_observation_active() {
             return Err("modal observation sites are frozen until successful finish".into());
         }
@@ -1050,7 +1399,15 @@ impl TraceSites {
         if addresses.iter().any(|address| !self.sites.contains_key(&address.0)) {
             return Err("trace site is not armed".into());
         }
-        self.disarm(session)?;
+        let persistent = self.point_set_mode != PointSetMode::Fixed;
+        if persistent {
+            if self.point_set_mode == PointSetMode::Persistent(Arming::Disarmed) {
+                return Err("mutable instruction points are not armed".into());
+            }
+            let remaining = self.sites.keys().copied().filter(|site| !addresses.iter().any(|removed| removed.0 == *site));
+            let memberships = self.memberships(session, remaining, self.cores, PointScope::UserAndModal);
+            self.apply(session, memberships)?;
+        } else { self.disarm(session)?; }
         for address in addresses {
             if let Some(label) = self.sites.remove(&address.0) {
                 if !self.sites.values().any(|other| other == &label) {
@@ -1058,7 +1415,7 @@ impl TraceSites {
                 }
             }
         }
-        self.rearm(session)?;
+        if !persistent { self.rearm(session)?; }
         self.restore_resume(session)
     }
 
@@ -1073,18 +1430,28 @@ impl TraceSites {
         if sites.keys().any(|address| self.sites.contains_key(address)) {
             return Err("trace site is already armed".into());
         }
-        self.disarm(session)?;
+        let persistent = self.point_set_mode != PointSetMode::Fixed;
+        if persistent {
+            if self.point_set_mode == PointSetMode::Persistent(Arming::Disarmed) {
+                return Err("mutable instruction points are not armed".into());
+            }
+            let memberships = self.memberships(session, self.sites.keys().chain(sites.keys()).copied(), self.cores, PointScope::UserAndModal);
+            self.apply(session, memberships)?;
+        } else { self.disarm(session)?; }
         for label in sites.values() {
             if !self.stop_labels.contains(label) {
                 self.stop_labels.insert(label.clone());
             }
         }
         self.sites.extend(sites);
-        self.rearm(session)?;
+        if !persistent { self.rearm(session)?; }
         self.restore_resume(session)
     }
 
     fn restore_resume(&self, session: &Session) -> Result<(), String> {
+        if self.point_set_mode != PointSetMode::Fixed {
+            return self.restore_persistent_resume(session);
+        }
         let counts = session.board.instruction_counts();
         for (core, points) in &self.points {
             if let Some(marker) = self.resumed.get(core) {
@@ -1097,8 +1464,27 @@ impl TraceSites {
         Ok(())
     }
 
-    pub fn rearm(&mut self, session: &Session) -> Result<(), String> {
-        self.rearm_scope(session, PointScope::UserAndModal)
+    /// Re-derives each core's once-only resume from its undelivered entry or its still-current marker.
+    fn restore_persistent_resume(&self, session: &Session) -> Result<(), String> {
+        let counts = session.board.instruction_counts();
+        for ((core, points), pending) in self.points.iter().zip(&self.pending_points) {
+            let current = session.board.read_register(*core, Register::Pc)?;
+            let marker = self.resumed.get(core).filter(|marker| counts[*core] == marker.entered.0)
+                .map(|marker| u64::from(marker.pc.0));
+            // `resume` keeps a skip only for a member observed at the current PC, so `!current` cancels it.
+            points.resume(current, pending.map(|pending| u64::from(pending.pc.0)).or(marker).unwrap_or(!current));
+        }
+        Ok(())
+    }
+
+    /// Re-arms the current sites under `scope`: fixed points are reinstalled, persistent sets change membership.
+    fn rearm_points(&mut self, session: &Session, scope: PointScope) -> Result<(), String> {
+        match self.point_set_mode {
+            PointSetMode::Fixed => self.end_points(session)
+                .and_then(|()| self.rearm_scope(session, scope))
+                .and_then(|()| self.restore_resume(session)),
+            PointSetMode::Persistent(_) => self.arm_membership(session, scope),
+        }
     }
 
     fn rearm_scope(&mut self, session: &Session, scope: PointScope) -> Result<(), String> {
@@ -1128,12 +1514,87 @@ impl TraceSites {
         Ok(())
     }
 
+    /// Each core's persistent membership. A modal scope selects every core; otherwise unselected cores are empty.
+    fn memberships(&self, session: &Session, user: impl Iterator<Item = u32>, cores: CoreSelection, scope: PointScope) -> Vec<Vec<u64>> {
+        let modal = self.modal_observation.as_ref()
+            .filter(|modal| matches!(scope, PointScope::UserAndModal) && modal.active());
+        let mut addresses: BTreeSet<u64> = user.map(u64::from).collect();
+        if let Some(modal) = modal {
+            addresses.extend(modal.sites().map(|pc| u64::from(pc.0)));
+        }
+        let addresses: Vec<u64> = addresses.into_iter().collect();
+        (0..session.board.instruction_counts().len())
+            .map(|core| if modal.is_some() || cores.includes(core) { addresses.clone() } else { Vec::new() })
+            .collect()
+    }
+
+    /// Arms the current sites under `scope` in the persistent sets, resuming each stopped core once.
+    fn arm_membership(&mut self, session: &Session, scope: PointScope) -> Result<(), String> {
+        let memberships = self.memberships(session, self.sites.keys().copied(), self.cores, scope);
+        self.apply(session, memberships)?;
+        self.point_set_mode = PointSetMode::Persistent(Arming::Armed);
+        self.restore_resume(session)
+    }
+
+    /// Sets each persistent core's membership, installing the sets when none are installed.
+    fn apply(&mut self, session: &Session, memberships: Vec<Vec<u64>>) -> Result<(), String> {
+        if self.points.is_empty() {
+            return self.install(session, memberships);
+        }
+        if self.points.len() != memberships.len() {
+            return Err("trace instruction points were not fully removed".into());
+        }
+        self.take_events()?;
+        for ((_, points), addresses) in self.points.iter().zip(memberships) {
+            points.replace_addresses(addresses)?;
+        }
+        Ok(())
+    }
+
+    fn install(&mut self, session: &Session, memberships: Vec<Vec<u64>>) -> Result<(), String> {
+        for (core, addresses) in memberships.into_iter().enumerate() {
+            match session.board.instruction_points_begin_mutable(core, addresses) {
+                Ok(points) => {
+                    self.points.push((core, points));
+                    self.pending_points.push(None);
+                }
+                Err(failure) => {
+                    self.end_points(session)?;
+                    return Err(failure);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn take_events(&mut self) -> Result<(), String> {
+        for ((_, points), pending) in self.points.iter().zip(&mut self.pending_points) {
+            if pending.is_none() {
+                *pending = points.event().map(|pc| {
+                    Ok::<_, String>(PendingPoint {
+                        pc: Guest(u32::try_from(pc).map_err(|_| "trace site exceeds32bits")?),
+                        point: points.event_context(),
+                    })
+                }).transpose()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn discard_events(&mut self) {
+        for ((_, points), pending) in self.points.iter().zip(&mut self.pending_points) {
+            points.event();
+            *pending = None;
+        }
+    }
+
     /// Pending hooks are retained until their details fit in the capture arena.
     pub fn collect(&mut self, session: &Session, instructions: InstructionCount) -> Result<CollectionOutcome, String> {
-        if self.modal_observation_active() {
-            if let Some(failure) = self.modal_observation_report().failure {
-                return Err(failure.to_owned());
-            }
+        if self.stack_scope.as_ref().is_some_and(|scope| scope.summary.violation.is_some()) {
+            return Err("trace stack scope has already refused".into());
+        }
+        if let Some(modal) = self.modal_observation.as_mut().filter(|modal| modal.active()) {
+            modal.check_interval()?;
         }
         if self.capture_page_outstanding() {
             return Ok(CollectionOutcome::DrainRequired);
@@ -1146,17 +1607,14 @@ impl TraceSites {
         let mut new_returns = [None; 2];
         let mut observed_modal = [None; 2];
         let counts = session.board.instruction_counts();
-        for (index, (_, points)) in self.points.iter().enumerate() {
-            if self.pending_points[index].is_none() {
-                self.pending_points[index] = points.event();
-            }
-        }
+        self.take_events()?;
         for (point_index, (core, points)) in self.points.iter().enumerate() {
-            let Some(pc) = self.pending_points[point_index] else { continue };
-            let address = u32::try_from(pc).map_err(|_| "trace site exceeds 32 bits")?;
+            let Some(pending) = self.pending_points[point_index] else { continue };
+            let address = pending.pc.0;
+            let pc = u64::from(address);
             if let Some(modal) = self.modal_observation.as_mut().filter(|modal| modal.active()) {
                 if modal.contains(Guest(address)) {
-                    new_returns[*core] = modal.observe(session, *core, Guest(address), instructions)?;
+                    new_returns[*core] = modal.observe(session, *core, Guest(address), instructions, pending.point)?;
                     observed_modal[*core] = Some(Guest(address));
                 }
             }
@@ -1166,13 +1624,17 @@ impl TraceSites {
                 points.resume(current, pc);
                 self.pending_points[point_index] = None;
                 if current == pc {
-                    self.resumed.insert(*core, ResumeMarker { pc: Guest(address), entered: EnteredInstructions(counts[*core]) });
+                    self.resumed.insert(*core, ResumeMarker {
+                        pc: Guest(address), entered: EnteredInstructions(counts[*core]), point: pending.point,
+                        modal: if observed_modal[*core] == Some(Guest(address)) {
+                            ModalPointState::Observed
+                        } else { ModalPointState::Unobserved },
+                    });
                 } else {
                     self.resumed.remove(core);
                 }
                 continue;
             };
-            stop |= self.stop_labels.contains(site);
             if let Some(observation) = &mut self.capture_observation {
                 if self.stop_labels.contains(site) {
                     return Err("capture observation encountered a rendezvous stop".into());
@@ -1223,49 +1685,65 @@ impl TraceSites {
                 points.resume(current, pc);
                 continue;
             }
-            if self.hit_limit.is_some_and(|limit| self.hits.len() >= limit.get()) {
-                return Err("trace hit limit reached".into());
+            let scoped = self.stack_scope.as_mut().map(|scope| {
+                scope.observe(session, *core, Guest(address), EnteredInstructions(instructions.0))
+            }).transpose()?.unwrap_or(StackPoint::Unscoped);
+            if !matches!(scoped, StackPoint::Outside) {
+                stop |= self.stop_labels.contains(site);
+                if self.hit_limit.is_some_and(|limit| self.hits.len() >= limit.get()) {
+                    return Err("trace hit limit reached".into());
+                }
+                let instructions = counts.iter().sum();
+                let site = site.clone();
+                let registers = (0..if self.hit_limit.is_some() { 13u8 } else { 4u8 })
+                    .map(|index| {
+                        let name = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12"][usize::from(index)];
+                        register(session, *core, arm::Register::R(index)).map(|value| (name, format!("{value:#x}")))
+                    })
+                    .collect::<Result<_, String>>()?;
+                self.hits.push(Hit {
+                    site,
+                    address: format!("{address:#x}"),
+                    core: *core,
+                    instructions,
+                    registers,
+                    sp: format!("{:#x}", register(session, *core, arm::Register::R(13))?),
+                    lr: format!("{:#x}", register(session, *core, arm::Register::R(14))?),
+                    cpsr: register(session, *core, arm::Register::Cpsr)?,
+                    code_word: self.code_binding.as_ref().map(|binding| binding.sample(session, *core, address)).transpose()?.flatten(),
+                });
+                if let StackPoint::Inside { index, next } = scoped {
+                    if let Some(scope) = &mut self.stack_scope {
+                        scope.summary.sites[index].recorded[*core] = next;
+                    }
+                }
             }
-            let instructions = counts.iter().sum();
-            let site = site.clone();
-            let registers = (0..if self.hit_limit.is_some() { 13u8 } else { 4u8 })
-                .map(|index| {
-                    let name = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12"][usize::from(index)];
-                    register(session, *core, arm::Register::R(index)).map(|value| (name, format!("{value:#x}")))
-                })
-                .collect::<Result<_, String>>()?;
-            self.hits.push(Hit {
-                site,
-                address: format!("{address:#x}"),
-                core: *core,
-                instructions,
-                registers,
-                sp: format!("{:#x}", register(session, *core, arm::Register::R(13))?),
-                lr: format!("{:#x}", register(session, *core, arm::Register::R(14))?),
-                cpsr: register(session, *core, arm::Register::Cpsr)?,
-                code_word: self.code_binding.as_ref().map(|binding| binding.sample(session, *core, address)).transpose()?.flatten(),
-            });
             let current = session.board.read_register(*core, Register::Pc)?;
             points.resume(current, pc);
             self.pending_points[point_index] = None;
             if current == pc {
-                self.resumed.insert(*core, ResumeMarker { pc: Guest(address), entered: EnteredInstructions(counts[*core]) });
+                self.resumed.insert(*core, ResumeMarker {
+                    pc: Guest(address), entered: EnteredInstructions(counts[*core]), point: pending.point,
+                    modal: if observed_modal[*core] == Some(Guest(address)) {
+                        ModalPointState::Observed
+                    } else { ModalPointState::Unobserved },
+                });
             } else {
                 self.resumed.remove(core);
             }
         }
         if new_returns.iter().any(Option::is_some) {
             if let Some(modal) = &mut self.modal_observation {
-                for (&core, marker) in &self.resumed {
-                    if new_returns.contains(&Some(marker.pc)) && observed_modal[core] != Some(marker.pc)
+                for (&core, marker) in &mut self.resumed {
+                    if new_returns.contains(&Some(marker.pc)) && marker.modal == ModalPointState::Unobserved
                         && counts[core] == marker.entered.0
                         && session.board.read_register(core, Register::Pc)? == u64::from(marker.pc.0) {
-                        modal.observe(session, core, marker.pc, instructions)?;
+                        modal.observe(session, core, marker.pc, instructions, marker.point)?;
+                        marker.modal = ModalPointState::Observed;
                     }
                 }
             }
-            let rearmed = self.end_points(session).and_then(|()| self.rearm(session))
-                .and_then(|()| self.restore_resume(session));
+            let rearmed = self.rearm_points(session, PointScope::UserAndModal);
             if let Err(failure) = rearmed {
                 if let Some(modal) = &mut self.modal_observation { modal.fail(failure.clone()); }
                 return Err(failure);

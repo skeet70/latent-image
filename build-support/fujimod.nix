@@ -14,11 +14,14 @@ let
     # uc_context's data starts 8 bytes past a 16-byte boundary, and the
     # optimized Unicorn build reads the CPUARMState copy there with movdqa.
     # The classified memory watch adds per-range access kinds and a
-    # fixed-view policy.
+    # fixed-view policy. The composite patches add CPU mutation admission and
+    # the opt-in composite write and mapping guard.
     patches = [
       ./fujimod-unicorn-context-align.patch
       ./fujimod-classified-watch.patch
       ./fujimod-fetch-attribution.patch
+      ./fujimod-composite-cpu.patch
+      ./fujimod-composite-watch.patch
     ] ++ extraPatches;
   };
   # Upstream's mise.toml pins Rust 1.99.1; cargo 1.98 rejects the workspace's

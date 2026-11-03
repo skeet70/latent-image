@@ -157,13 +157,13 @@ impl Machine {
 
     /// Removes host instrumentation before a session checkpoint.
     pub fn disarm(&mut self) -> Result<(), String> {
-        self.traces.disarm(&self.session)?;
+        self.traces.teardown(&self.session)?;
         self.guard.disarm(&self.session.board)
     }
 
     pub fn rearm(&mut self) -> Result<(), String> {
         self.guard.arm(&self.session.board)?;
-        self.traces.rearm(&self.session)
+        self.traces.reinstall(&self.session)
     }
 
     pub fn instructions(&self) -> u64 {
