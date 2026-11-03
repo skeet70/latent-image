@@ -215,6 +215,8 @@ Retained loader division `0x4d978`, frame/value/slot lifetime and bounds, SVC/ex
 
 At least **four asynchronous file-operation entries** are recovered: open `0x71c648(cb,path,mode)->tag`, read `0x71c6fc(cb,handle,length,buffer)`, write `0x71c75c(cb,handle,length,source)` and close `0x71c7bc(cb,handle,0,0)`. They route requests 0x2c17..0x2c1a to media task0x1c. Synchronous base forms and completion callbacks extend the surface; this is not a complete filesystem API census. Open modes 0/1/2/3 are read/create-truncate/append/“s”. Completion codes 0,3,0xe,8,6 mean success, prepare, commit, raw0x24 class and missing-file respectively; task-context refusal uses callback 9. [Source: File report §6.2 lines190-205; Inventory §8.3 lines343-346.]
 
+The interface inventory is [the file-service manifest draft](file-service-manifest-draft.md) (E-FILE-SERVICE-MANIFEST-150): 34 media-task requests, 40 caller-facing and blocking wrappers and 230 entry contracts in all. Posters send to the mediamsg task `0x65`, which serializes opens and forwards to media task `0x1c`.
+
 ### 2. Extent, data and initialization
 
 Known workers include open `0x7115a4`, read `0x71edbc`, write `0x7116e4`, close `0x711768`; handle allocation `0x71ef18`, release `0x71eff4`; 16 handle slots at `0x9101c0`; callback slot `0x91028c`; two-slot volume registry `0x814730/0x814738`; close resolves tables `0x8fc880/0x8fc87c` and capacity `0x944468`. Whole file/media implementation bytes, complete initialization and filesystem metadata layout remain unknown in this evidence set. [Source: Heap survey line65; File report §§6.2,6.8 lines282-299.]

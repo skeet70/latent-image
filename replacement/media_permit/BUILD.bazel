@@ -151,3 +151,22 @@ haskell_binary(
         "//host/firmware:bank-allowlist",
     ],
 )
+
+haskell_binary(
+    name = "file-manifest",
+    srcs = ["FileManifestMain.hs"],
+    main_file = "FileManifestMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":stock-inventory",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:json",
+        "//host/firmware:bank-allowlist",
+    ],
+)
