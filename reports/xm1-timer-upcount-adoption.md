@@ -1,14 +1,14 @@
 # Kernel-timer up-count fix: patch and adoption assessment
 
-Decision input for the maintainer. [The timer laws report](xm1-timer-interrupt-laws.md) (`E-XM1-TIMER-IRQ-LAWS-150`) found from two hardware console captures that the X-M1 kernel counter `0xfff91000` rises within each tick in control mode `0x23`, while pinned FujiMod `3d90035d` counts it down. This branch prepares the fix as an opt-in SDK variant and assesses what adopting it would invalidate. Nothing here changes the default SDK or any guest run. Ledger: `E-TIMER-UPCOUNT-PATCH-150`.
+[The timer laws report](xm1-timer-interrupt-laws.md) (`E-XM1-TIMER-IRQ-LAWS-150`) found from two hardware console captures that the X-M1 kernel counter `0xfff91000` rises within each tick in control mode `0x23`, while pinned FujiMod `3d90035d` counts it down. The up-count patch is the default FujiMod model (section 5, `E-TIMER-UPCOUNT-DEFAULT-150`); sections 1 to 4 are the patch and the assessment the maintainer decided on. Ledger: `E-TIMER-UPCOUNT-PATCH-150`.
 
 ## 1. The patch
 
-`build-support/fujimod-timer-upcount.patch` (applied after the five default patches through `build-support/fujimod-timer-upcount.nix`; SDK `build-support/fujimod-xm1-timer-upcount.nix`) changes only what a guest read of `0xfff91000` returns while the kernel timer is in mode `0x23`: `reload − remaining`, where `remaining` is the model's existing count of ticks to the next expiry. Both the settled read and the clocked fast read use one mapping.
+`build-support/fujimod-timer-upcount.patch` (in the default stack of `build-support/fujimod.nix`, after the five earlier patches) changes only what a guest read of `0xfff91000` returns while the kernel timer is in mode `0x23`: `reload − remaining`, where `remaining` is the model's existing count of ticks to the next expiry. Both the settled read and the clocked fast read use one mapping.
 
 Unchanged: expiry ticks, the line-32 edge to both cores, mode `0x63`, channels `+0x10..+0x3c`, writes, the `+0x04/+0x08` reads and the checkpoint state format. Declared assumptions (in `MAIN_ASSUMPTION` and the doc comment): the register range is `0..reload−1`, and after the stock sequence writes the first-period reload, starts `0x23` and then writes 30000, the register continues from `30000 − remaining`. The stock loader does not read the counter between those writes (`0x40c3c`, `0x40c44`). A stopped or zero-reload timer reads its stored count, as before.
 
-Model tests added to the timer crate (all pass in the variant's check phase, together with the existing ones, one of which changes from 2 to 1 because the register now reads `reload − remaining`):
+Model tests added to the timer crate (all pass in the default check phase, together with the existing ones, one of which changes from 2 to 1 because the register now reads `reload − remaining`):
 
 - `kernel_counter_rises_within_each_period_and_wraps_at_expiry`: after the stock switch sequence, `reload − count` falls within each period, rises only at the two expiries, and line 32 reaches both cores at each.
 - `first_period_keeps_its_reload_and_expiry_tick`: the first period still expires after the first-period reload, then every 30000 counts.
@@ -66,3 +66,11 @@ Recommendation [INFERENCE]: option 2 now, with option 1 scheduled when the curre
 Patch: independent review found no required change and six advisories, all applied (assumptions declared, fast-path test extended to a short first period, test variable and bound comments corrected, README entry).
 
 Assessment: independent review sampled 21 ids and found three required corrections, all applied: `E-STOCK-HEAP-REPLAY-150` moved from (b) to (a) with nine runs; two cited post-switch records added to (a); earlier-pin FujiMod records classified explicitly as (b) route records or (d). Advisories applied: checkpoint keying, two more borderline records, cost units and slot counts, options wording, `VerifyCandidate.hs` line range, the two non-`emulated` re-consumers.
+
+## 5. Decision: default model
+
+The maintainer adopted the patch as the default emulator model on 2026-11-03. `build-support/fujimod.nix` applies it to every FujiMod build, so the default SDK, `lab_fujimod`, `lab_fujimod_xm1` and the scoped-watch and enable-readback variants all count up; the opt-in `fujimod-timer-upcount.nix` and `fujimod-xm1-timer-upcount.nix` are removed. Existing records stay valid as evidence about the down-counting model. The (a) and (b) items of section 2 are re-recorded or re-consumed under the default only when each next comes up for re-recording for its own reasons, and a post-switch checkpoint taken under the old model is not restored into the new one. The binary-keyed checkpoints miss automatically; the heap-replay seed passed by `--seed` does not and must be regenerated before reuse. The reported-only `fujimod-flash-boot-check` baseline of `verify-candidate` was recorded on the old model.
+
+The (d) records' citations in `emulation/README.md` carry a note that the model changed. The embassy phase-1 demonstration (`E-EMBASSY-PHASE1-EMULATED-150`) measured the down-counting model and built its demo as `counter-down`; its flip to a `counter-up` demo with a `counter-down` mismatch control is made on the embassy branch and merged together with this cutover.
+
+The retained `xm1-upstream` engine keeps its down-counting timer for now: it is the acceptance reference for 10 of the 12 gating `verify-candidate` routes, so the fix would change those baselines at once, and it is frozen legacy Python. The change it would take is in [the device-fidelity audit](emulator-device-fidelity-audit.md#5-retained-engine-timer).
