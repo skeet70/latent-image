@@ -408,3 +408,42 @@ haskell_binary(
         "//host:directory",
     ],
 )
+
+haskell_library(
+    name = "menu-tables-decode",
+    srcs = ["Replacement/ModalRuntime/MenuTables.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
+)
+
+haskell_binary(
+    name = "menu-tables",
+    srcs = ["MenuTablesMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":menu-tables-decode",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+    ],
+)
+
+haskell_test(
+    name = "menu-tables-tests",
+    srcs = ["MenuTablesTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        ":menu-tables-decode",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
