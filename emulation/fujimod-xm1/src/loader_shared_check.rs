@@ -184,11 +184,16 @@ fn inspect_watch(raw:&ReplayWatch,epoch:&Epoch,report:RouteView<'_>,program:&Pro
     for (index,row) in raw.records.iter().enumerate(){
         require(in_class(row,&raw.classes)?,"shared memory access exceeds declared classes")?;
         let end=u64::from(row.physical.0).checked_add(row.size).ok_or("shared memory extent overflow")?;
+        let mut terminal_attempt=false;
         if matches!(row.source,Access::CpuRead|Access::CpuFetch|Access::CpuWrite){
             let at=row.instructions.ok_or("shared CPU access clock absent")?.0;
-            let boundary_attempt=row.source==Access::CpuFetch&&at==epoch.start.0&&report.events.iter().any(|event|event.instructions.0==at&&Some(event.core)==row.core&&Some(event.pc)==row.pc&&event.pc==row.address);
-            require(row.core.is_some()&&row.pc.is_some()&&(epoch.start.0<at||boundary_attempt)&&at<=epoch.end.0&&previous<=at,"shared CPU access attribution differs")?;
+            let stopped=|clock:u64|report.events.iter().any(|event|event.instructions.0==clock&&Some(event.core)==row.core&&Some(event.pc)==row.pc&&event.pc==row.address);
+            let boundary_attempt=row.source==Access::CpuFetch&&at==epoch.start.0&&stopped(at);
+            // The stop that ends an epoch leaves its rolled-back fetch stamped one past the end; the next epoch records the execution.
+            terminal_attempt=row.source==Access::CpuFetch&&Some(at)==epoch.end.0.checked_add(1)&&stopped(epoch.end.0);
+            require(row.core.is_some()&&row.pc.is_some()&&(epoch.start.0<at||boundary_attempt)&&(at<=epoch.end.0||terminal_attempt)&&previous<=at,"shared CPU access attribution differs")?;
             previous=at;lower=Some(at);require(future.next().is_some_and(|(position,_)|position==index),"shared CPU chronology differs")?;
+            require(!terminal_attempt||future.peek().is_none(),"shared terminal fetch attempt is not the last CPU access")?;
         }
         let upper=future.peek().and_then(|(_,row)|row.instructions).map(|count|count.0);
         if row.source==Access::CpuFetch {
@@ -205,7 +210,7 @@ fn inspect_watch(raw:&ReplayWatch,epoch:&Epoch,report:RouteView<'_>,program:&Pro
                 Access::CpuFetch=>{
                     require(!bootstrap&&row.size==4&&row.address==row.physical&&row.pc==Some(row.address)&&row.core==Some(loader.core)
                         &&row.address.0%4==0&&program.execution_allowed(row.address),"shared carrier fetch is outside admitted source")?;
-                    missing.remove(&(loader.core,row.address,row.instructions.ok_or("carrier fetch clock absent")?.0));
+                    if !terminal_attempt {missing.remove(&(loader.core,row.address,row.instructions.ok_or("carrier fetch clock absent")?.0));}
                 },Access::CpuWrite|Access::HostWrite|Access::ModelBusWrite=>require(bootstrap&&loader_copy(row,loader.copy)&&upper.is_some_and(|at|at<loader.entry.instructions.0),"shared carrier write lacks earlier bootstrap copy")?,_=>{},
             }}
             if u64::from(row.physical.0)<loader.frame[1]&&loader.frame[0]<end {
@@ -216,6 +221,7 @@ fn inspect_watch(raw:&ReplayWatch,epoch:&Epoch,report:RouteView<'_>,program:&Pro
             }
         }
         if loader_timer_check::relevant(row){timer_rows.push(row.legacy);}
+        if terminal_attempt {continue;}
         let attribution=if row.source==Access::CpuRead&&row.pc==Some(Guest(0x657194)) {
             row.core_instructions.map(|own|DataAttribution {own,
                 before:row.before.as_deref().and_then(|bytes|bytes.try_into().ok()),byte_order:row.byte_order,latest:row.latest_fetch.clone()})
