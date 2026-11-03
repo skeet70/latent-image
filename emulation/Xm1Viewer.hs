@@ -7,7 +7,7 @@ import Emulation.Ff80Rehearsal (runFujiModRehearsal)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
-import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, experimentPayload, loadModalOwnedPackage, parseSymbolRead, runMenuCrawlE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint)
+import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, experimentPayload, loadModalOwnedPackage, parseSymbolRead, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint)
 import Data.List (isPrefixOf, nub)
 import Data.Maybe (isJust)
 import Data.Char (isAscii, isAlphaNum)
@@ -74,7 +74,7 @@ data Options = Options
   }
 
 -- | A no-install observation that drives its own keys from held snapshots, with its config path.
-data ScreenProbe = MenuCrawlProbe FilePath | RamDiffProbe FilePath deriving (Eq)
+data ScreenProbe = MenuCrawlProbe FilePath | RamDiffProbe FilePath | MenuObserveProbe FilePath deriving (Eq)
 
 data Command = Help | Validate Firmware | Launch Options
 
@@ -116,6 +116,8 @@ usage = unlines
   , "  --menu-crawl PATH      Crawl the stock screens from held snapshots with a crawl config"
   , "                         Requires --ram-push-e2e --cardless --fujimod --flash-candidate"
   , "  --ram-diff PATH        Find the guest words one key toggles on one screen, with a RAM diff config"
+  , "                         Requires --ram-push-e2e --cardless --fujimod --flash-candidate"
+  , "  --menu-observe PATH    Trace one key press on one screen with sites and a write watch"
   , "                         Requires --ram-push-e2e --cardless --fujimod --flash-candidate"
   , "  --modal-lifetime-guard Opt-in continuous publication-to-unload guard for the default 223 bank"
   , "                         Requires --ram-push-e2e --cardless --fujimod --unreviewed-relink,"
@@ -214,11 +216,14 @@ parseCommand args
       require (modalDiagnosticOption options == NoModalDiagnostic) "--modal-observation may appear only once"
       go options { modalDiagnosticOption = RetainedFilmModalDiagnostic } rest
     go options ("--menu-crawl" : value : rest) = do
-      require (not (null value) && screenProbeOption options == Nothing) "--menu-crawl takes one nonempty config path and excludes --ram-diff"
+      require (not (null value) && screenProbeOption options == Nothing) "--menu-crawl takes one nonempty config path and excludes the other screen probes"
       go options { screenProbeOption = Just (MenuCrawlProbe value) } rest
     go options ("--ram-diff" : value : rest) = do
-      require (not (null value) && screenProbeOption options == Nothing) "--ram-diff takes one nonempty config path and excludes --menu-crawl"
+      require (not (null value) && screenProbeOption options == Nothing) "--ram-diff takes one nonempty config path and excludes the other screen probes"
       go options { screenProbeOption = Just (RamDiffProbe value) } rest
+    go options ("--menu-observe" : value : rest) = do
+      require (not (null value) && screenProbeOption options == Nothing) "--menu-observe takes one nonempty config path and excludes the other screen probes"
+      go options { screenProbeOption = Just (MenuObserveProbe value) } rest
     go options ("--modal-lifetime-guard" : rest) = do
       require (modalLifetimeGuardOption options == NoModalLifetimeGuard) "--modal-lifetime-guard may appear only once"
       go options { modalLifetimeGuardOption = ContinuousModalLifetimeGuard } rest
@@ -374,10 +379,10 @@ launch options = do
     require (trajectoriesOption options /= Nothing) "--modal-observation requires --trajectories emulation/modal75-stock-route-trajectories.json"
   when (screenProbeOption options /= Nothing) $ do
     require (e2e && cardless && runtimeOption options == FujiModChoice && pushModeOption options == FlashCandidate)
-      "--menu-crawl and --ram-diff require --ram-push-e2e --cardless --fujimod --flash-candidate"
+      "--menu-crawl, --ram-diff and --menu-observe require --ram-push-e2e --cardless --fujimod --flash-candidate"
     require (modalDiagnosticOption options == NoModalDiagnostic && not (warmCheckpointOption options)
       && trajectoriesOption options == Nothing && segmentsOption options == Nothing)
-      "--menu-crawl and --ram-diff drive their own keys, not --modal-observation, --warm-checkpoint, --trajectories or --segments"
+      "screen probes drive their own keys, not --modal-observation, --warm-checkpoint, --trajectories or --segments"
   when (ramPayloadOption options `elem` [BankModal75Choice, BankLifecycleChoice, BankModalLifecycleChoice]) $ do
     require (e2e && (cardless || (ramPayloadOption options == BankLifecycleChoice
       && trajectoriesOption options /= Nothing && media /= Nothing))
@@ -510,6 +515,8 @@ launch options = do
             runMenuCrawlE2E settings executable workspacePath (resolve root path) stagedFirmwarePath nandPath receiptPath
           (False, Just (RamDiffProbe path)) ->
             runRamDiffE2E settings executable workspacePath (resolve root path) stagedFirmwarePath nandPath receiptPath
+          (False, Just (MenuObserveProbe path)) ->
+            runMenuObserveE2E settings executable workspacePath (resolve root path) stagedFirmwarePath nandPath receiptPath
           (False, Nothing) -> runRamPushE2E settings executable workspacePath trajectory stagedFirmwarePath nandPath receiptPath
       else do
         let Port port = portOption options
