@@ -3132,3 +3132,23 @@ haskell_binary(
         "//host:base",
     ],
 )
+
+haskell_binary(
+    name = "root-compact-equivalence",
+    srcs = ["RootCompactEquivalenceMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:json",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
