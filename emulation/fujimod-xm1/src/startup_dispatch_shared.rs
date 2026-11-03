@@ -366,7 +366,9 @@ impl Capture {
             ||sample.cell.address!=Guest(0x61c008)||sample.cell.physical!=Guest(0x61c008)||sample.cell.words!=[0]
             ||sample.cell.other_words.len()!=1||sample.cell.physical_words.len()!=1
             ||call.entry.instructions.0>sample.boundary.instructions.0||sample.boundary.instructions.0>=returned.instructions.0
-            ||sample.boundary.registers.lr!=call.entry.registers.lr||sample.boundary.registers.r[3]!=0x61c000
+            // The getter pushes {r11,lr} and calls 0x6570f4 for the cell base before the load, so LR is that call's continuation.
+            ||sample.boundary.registers.lr!=Guest(0x657190)||Some(sample.boundary.registers.sp.0)!=call.entry.registers.sp.0.checked_sub(8)
+            ||sample.boundary.registers.r[3]!=0x61c000
             ||returned.registers.r[0]!=0||installer.entry.registers.r[0]!=0 {
             return Err("mode getter committed sample is not the source cell in its enclosing call".into());
         }
