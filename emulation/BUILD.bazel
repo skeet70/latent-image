@@ -1426,6 +1426,12 @@ sh_binary(
 )
 
 sh_binary(
+    name = "root-compact",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-root-compact"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
     name = "task-storage",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-task-storage"],
     visibility = ["//visibility:public"],
@@ -3110,6 +3116,7 @@ haskell_library(
         "//host:bytestring",
         "//host:containers",
         "//host:json",
+        "//host:text",
         "//host:update-container",
         "//host/firmware:bank-allowlist",
         "//replacement/kernel_install:kernel-install-artifact",
