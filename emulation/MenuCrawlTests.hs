@@ -1,0 +1,197 @@
+{-# LANGUAGE OverloadedStrings #-}
+-- | The menu crawl over a synthetic screen machine reached through a fake bridge.
+module Main (main) where
+
+import Control.Monad (unless, when)
+import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as C
+import Data.Aeson (Value (..))
+import Data.IORef
+import Data.List (sort)
+import qualified Data.Map.Strict as M
+import Data.Maybe (isNothing)
+import Emulation.MenuCrawl
+import EmulatorUsb (ModeDial (..), SnapshotName (..), SnapshotPress (..), TraceHit (..))
+import System.Exit (exitFailure)
+
+-- | A synthetic screen: a menu reading, a frame number and a controller-cell value.
+data Synthetic = Synthetic { syntheticMenu :: Int, syntheticFrame :: Int, syntheticCell :: Int } deriving (Eq, Ord, Show)
+
+-- | The fake bridge's guest: the current screen plus the dial position.
+data Guest = Guest { guestScreen :: Synthetic, guestDial :: Maybe ModeDial } deriving (Eq, Show)
+
+-- | What a test reads back from the fake bridge after a crawl.
+data Fake = Fake
+  { fakeSnapshots :: IORef (M.Map SnapshotName Guest)
+  , fakePeak :: IORef Int
+  , fakeDiscarded :: IORef [FilePath]
+  , fakeRecords :: IORef Int
+  }
+
+config :: [CrawlKey] -> Int -> Int -> Int -> CrawlConfig
+config keys trials nodes depth = CrawlConfig keys [CrawlRoot (rootOf "default") Nothing] trials nodes depth 1000
+
+rootOf :: String -> RootName
+rootOf name = either error rootName (decodeRoot name)
+ where
+  decodeRoot text = decodeCrawlConfig (C.pack ("{\"schema\":1,\"keys\":[\"up\"],\"roots\":[{\"name\":\"" ++ text
+    ++ "\"}],\"max_trials\":1,\"max_nodes\":1,\"max_depth\":1,\"max_seconds\":1}")) >>= \decoded -> case configRoots decoded of
+      [root] -> Right root
+      _ -> Left "one root expected"
+
+-- | Builds a fake bridge over a transition function; Nothing makes the press a strict stop.
+fake :: Synthetic -> (Maybe ModeDial -> Synthetic -> CrawlKey -> Maybe Synthetic) -> IO (Fake, Driver)
+fake start step = do
+  current <- newIORef (Guest start Nothing)
+  snapshots <- newIORef M.empty
+  peak <- newIORef 0
+  hits <- newIORef []
+  clock <- newIORef 0
+  discarded <- newIORef []
+  records <- newIORef 0
+  let state = Fake snapshots peak discarded records
+      held name = M.lookup name <$> readIORef snapshots >>= maybe (ioError (userError ("not held: " ++ show name))) pure
+      driver = Driver
+        { driverSave = \name -> do
+            existing <- M.member name <$> readIORef snapshots
+            when existing (ioError (userError "snapshot already held"))
+            guest <- readIORef current
+            modifyIORef' snapshots (M.insert name guest)
+            count <- M.size <$> readIORef snapshots
+            when (count > 24) (ioError (userError "more than 24 snapshots held"))
+            modifyIORef' peak (max count)
+        , driverRestore = \name -> held name >>= writeIORef current
+        , driverDrop = \name -> do
+            _ <- held name
+            modifyIORef' snapshots (M.delete name)
+        , driverPress = \name key -> do
+            guest <- held name
+            modifyIORef' clock (+ 1)
+            modifyIORef' hits (++ [TraceHit "crawl-dispatch-context" 0 0 (fromIntegral (syntheticMenu (guestScreen guest))) 0 (fromIntegral (fromEnum key)) 0
+                                  , TraceHit "crawl-dispatch-action" 0 0 0 0 0 (0x00c00000 + fromIntegral (fromEnum key))])
+            case step (guestDial guest) (guestScreen guest) key of
+              Just next -> do
+                writeIORef current guest { guestScreen = next }
+                pure (SnapshotPressed (Just (fromIntegral (syntheticMenu next), 0, 0)) Null 10)
+              Nothing -> pure (SnapshotStopped "synthetic stop" 3)
+        , driverModeDial = \position -> modifyIORef' current (\(Guest (Synthetic menu _ _) _) ->
+            Guest (Synthetic (menu + 50) (menu + 50) (menu + 50)) (Just position))
+        , driverObserve = \label -> do
+            Guest screen _ <- readIORef current
+            pure (Screen (Just (fromIntegral (syntheticMenu screen), 0, 0)) (FrameDigest (show (syntheticFrame screen))) label
+              (ControllerCells (B.pack [fromIntegral (syntheticCell screen), 0]) (B.pack [0, 0])) Nothing)
+        , driverTraceMark = length <$> readIORef hits
+        , driverTraceSince = \mark -> drop mark <$> readIORef hits
+        , driverDiscardImage = \path -> modifyIORef' discarded (path :)
+        , driverClock = readIORef clock
+        , driverRecord = \_ -> modifyIORef' records (+ 1)
+        }
+  pure (state, driver)
+
+-- | Screens 0..4 in a ring: UP moves forward, DOWN back, OK opens menu 10 from screen 0 only and
+-- BACK returns from it to screen 0.
+ring :: Maybe ModeDial -> Synthetic -> CrawlKey -> Maybe Synthetic
+ring _ (Synthetic menu _ _) key = Just $ case (menu, key) of
+  (10, KeyBack) -> screen 0
+  (10, _) -> screen 10
+  (0, KeyOk) -> screen 10
+  (_, KeyUp) -> screen ((menu + 1) `mod` 5)
+  (_, KeyDown) -> screen ((menu + 4) `mod` 5)
+  _ -> screen menu
+ where
+  screen number = Synthetic number number number
+
+menuOf :: Node -> Maybe Int
+menuOf node = fmap (\(menu, _, _) -> fromIntegral menu) (screenMenu (nodeScreen node))
+
+main :: IO ()
+main = do
+  failures <- newIORef (0 :: Int)
+  let check label ok = unless ok (putStrLn ("FAIL " ++ label) >> modifyIORef' failures (+ 1))
+
+  (ringFake, ringDriver) <- fake (Synthetic 0 0 0) ring
+  let keys = [KeyUp, KeyDown, KeyOk, KeyBack]
+  graph <- crawl (config keys 1000 100 10) ringDriver
+  let menus = sort [menu | Just menu <- map menuOf (graphNodes graph)]
+      byId = M.fromList [(nodeId node, node) | node <- graphNodes graph]
+      reachedMenu edge = case edgeOutcome edge of
+        Reached target _ _ _ _ _ _ -> menuOf (byId M.! target)
+        Stopped _ _ -> Nothing
+      expected edge = do
+        source <- menuOf (byId M.! edgeFrom edge)
+        ring Nothing (Synthetic source source source) (edgeKey edge) >>= Just . syntheticMenu
+  check "every reachable screen is one node" (menus == [0, 1, 2, 3, 4, 10])
+  check "every node tries every key once" (length (graphEdges graph) == 6 * length keys)
+  check "each edge reaches the screen its key leads to" (all (\edge -> reachedMenu edge == expected edge) (graphEdges graph))
+  check "an unbudgeted crawl is complete" (isNothing (graphLimit graph) && all (isNothing . nodeFrontier) (graphNodes graph))
+  check "edges carry the paired dispatch action" (all (\edge -> case activityDispatches (edgeActivity edge) of
+    [dispatch] -> dispatchAction dispatch == Just (0x00c00000 + fromIntegral (fromEnum (edgeKey edge)))
+    _ -> False) (graphEdges graph))
+  check "edges and new screens are journaled as produced" . (== length (graphEdges graph) + length (graphNodes graph)) =<< readIORef (fakeRecords ringFake)
+  check "all snapshots are released" . M.null =<< readIORef (fakeSnapshots ringFake)
+  check "held snapshots stay within one root and the open depth" . (<= 2 + 10) =<< readIORef (fakePeak ringFake)
+  check "duplicate frames are discarded" . (== length [() | edge <- graphEdges graph, isSameFrame edge]) . length =<< readIORef (fakeDiscarded ringFake)
+
+  (_, budgetDriver) <- fake (Synthetic 0 0 0) ring
+  budgeted <- crawl (config keys 5 100 10) budgetDriver
+  check "a trial budget stops the crawl" (graphTrials budgeted == 5 && graphLimit budgeted == Just TrialLimit)
+  check "untried keys stay explicit" (any (not . null . nodeUntried) (graphNodes budgeted))
+
+  let chain _ (Synthetic menu _ _) key = Just (if key == KeyOk then Synthetic (menu + 1) (menu + 1) (menu + 1) else Synthetic menu menu menu)
+  (_, chainDriver) <- fake (Synthetic 0 0 0) chain
+  deep <- crawl (config [KeyOk] 1000 100 3) chainDriver
+  check "a depth limit leaves a frontier" (any (\node -> nodeFrontier node == Just DepthLimit && nodeDepth node == 3) (graphNodes deep))
+  check "no node is deeper than the limit" (all ((<= 3) . nodeDepth) (graphNodes deep))
+
+  let shortcut _ (Synthetic menu _ _) key = Just (case (menu, key) of
+        (0, KeyUp) -> Synthetic 3 3 3
+        (_, KeyOk) -> Synthetic (menu + 1) (menu + 1) (menu + 1)
+        _ -> Synthetic menu menu menu)
+  (_, shortcutDriver) <- fake (Synthetic 0 0 0) shortcut
+  reopened <- crawl (config [KeyOk, KeyUp] 1000 100 3) shortcutDriver
+  let screenAt number = [node | node <- graphNodes reopened, menuOf node == Just number]
+  check "a depth-limited screen reached by a shorter path is expanded" (map (\node -> (nodeDepth node, nodeFrontier node)) (screenAt 3) == [(1, Nothing)]
+    && map nodeDepth (screenAt 4) == [2])
+
+  let variant _ (Synthetic menu frame cell) key = Just (case key of
+        KeyUp -> Synthetic menu (frame + 1) cell
+        _ -> Synthetic (menu + 1) (frame + 100) cell)
+  (_, variantDriver) <- fake (Synthetic 0 0 0) variant
+  variants <- crawl (config [KeyUp] 1000 100 10) variantDriver
+  check "a frame-only difference is a variant of the same screen" (length (graphNodes variants) == 1
+    && any (\edge -> case edgeOutcome edge of Reached _ SameMenuAndCells _ _ _ _ _ -> True; _ -> False) (graphEdges variants))
+
+  let stopping _ (Synthetic menu _ _) key = if key == KeyBack then Nothing else ring Nothing (Synthetic menu menu menu) key
+  (_, stopDriver) <- fake (Synthetic 0 0 0) stopping
+  stopped <- crawl (config keys 1000 100 10) stopDriver
+  check "a strict stop is an edge and the crawl continues" (length [() | edge <- graphEdges stopped, isStopped edge] == 6
+    && length (graphNodes stopped) == 6)
+
+  let climbing _ (Synthetic menu _ _) _ = Just (let next = min 3 (menu + 1) in Synthetic next next next)
+  (_, dialDriver) <- fake (Synthetic 0 0 0) climbing
+  dialGraph <- crawl (CrawlConfig [KeyUp] [CrawlRoot (rootOf "default") Nothing, CrawlRoot (rootOf "auto") (Just ModeDialAuto)] 1000 100 10 1000) dialDriver
+  check "each root starts from the boot snapshot" (sort [menu | node <- graphNodes dialGraph, nodeDepth node == 0, Just menu <- [menuOf node]] == [0, 50])
+
+  let activity = stepActivity
+        [ TraceHit "crawl-dispatch-context" 0 1 75 0 2 0
+        , TraceHit "crawl-dispatch-context" 1 2 30 0 4 0
+        , TraceHit "crawl-dispatch-action" 0 3 0 0 0 0xc72e10
+        , TraceHit "crawl-dispatch-context" 0 4 100 0 0 0
+        , TraceHit "crawl-dispatch-action" 0 5 0 0 0 0xc12aac
+        , TraceHit "crawl-dispatch-action" 0 6 0 0 0 0xdead00
+        , TraceHit "crawl-property-write" 0 7 0xfe 3 0 0
+        ]
+  check "actions pair with their own core's latest context" (map (\d -> (dispatchController d, dispatchAction d)) (activityDispatches activity)
+    == [(75, Just 0xc72e10), (30, Nothing), (100, Just 0xc12aac)])
+  check "an action with no open context is an orphan" (activityOrphanActions activity == [0xdead00])
+  check "effects keep their arguments" (map effectArguments (activityEffects activity) == [[0xfe, 3, 0, 0]])
+  check "cell changes name the controller" (cellChanges (B.pack [1, 0, 2, 0]) (B.pack [1, 0, 5, 0]) == [CellChange 1 2 5])
+
+  check "configs refuse unknown keys" (either (const True) (const False) (decodeCrawlConfig "{\"schema\":1,\"keys\":[\"menu\"],\"roots\":[{\"name\":\"a\"}],\"max_trials\":1,\"max_nodes\":1,\"max_depth\":1,\"max_seconds\":1}"))
+  check "configs refuse a depth beyond the snapshot budget" (either (const True) (const False) (decodeCrawlConfig "{\"schema\":1,\"keys\":[\"up\"],\"roots\":[{\"name\":\"a\"}],\"max_trials\":1,\"max_nodes\":1,\"max_depth\":21,\"max_seconds\":1}"))
+
+  count <- readIORef failures
+  if count == 0 then putStrLn "menu crawl tests passed" else exitFailure
+ where
+  isSameFrame edge = case edgeOutcome edge of Reached _ SameFrame _ _ _ _ _ -> True; _ -> False
+  isStopped edge = case edgeOutcome edge of Stopped _ _ -> True; _ -> False

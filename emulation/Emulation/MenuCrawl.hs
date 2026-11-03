@@ -1,0 +1,526 @@
+{-# LANGUAGE OverloadedStrings #-}
+-- | Depth-first crawl of the X-M1 screens reachable by physical keys. Every press starts from a
+-- held guest snapshot of its source screen, so no press observes state left by a sibling branch.
+module Emulation.MenuCrawl
+  ( CrawlKey (..)
+  , crawlKeyWire
+  , RootName
+  , rootNameText
+  , CrawlRoot (..)
+  , CrawlConfig (..)
+  , decodeCrawlConfig
+  , FrameDigest (..)
+  , ControllerCells (..)
+  , controllerCount
+  , Screen (..)
+  , Driver (..)
+  , CrawlSite (..)
+  , crawlSites
+  , crawlSiteAddress
+  , crawlSiteLabel
+  , Dispatch (..)
+  , Effect (..)
+  , Activity (..)
+  , stepActivity
+  , CellChange (..)
+  , cellChanges
+  , NodeId (..)
+  , Frontier (..)
+  , Node (..)
+  , Match (..)
+  , EdgeOutcome (..)
+  , Edge (..)
+  , CrawlGraph (..)
+  , crawl
+  , graphValue
+  , edgeValue
+  ) where
+
+import Control.Monad (foldM, forM_, unless, when)
+import Data.Aeson (FromJSON (..), ToJSON (..), Value (..), eitherDecodeStrict', object, withObject, withText, (.:), (.:?), (.=))
+import qualified Data.Aeson.KeyMap as KM
+import Data.Bits (shiftL, (.|.))
+import qualified Data.ByteString as B
+import Data.IORef
+import Data.List (sort)
+import qualified Data.Map.Strict as M
+import Data.Maybe (isJust, isNothing)
+import qualified Data.Text as T
+import Data.Word (Word16, Word32)
+import EmulatorUsb (MenuReading, ModeDial, SnapshotName (..), SnapshotPress (..), TraceHit (..), modeDialName)
+import Numeric (showHex)
+
+-- | A physical press the bridge accepts; MENU is OK and DISP is BACK on this body.
+data CrawlKey = KeyUp | KeyDown | KeyLeft | KeyRight | KeyOk | KeyBack | KeyQ | KeyDialLeft | KeyDialRight | KeyPlay
+  deriving (Eq, Ord, Show, Enum, Bounded)
+
+crawlKeyWire :: CrawlKey -> String
+crawlKeyWire key = case key of
+  KeyUp -> "up"
+  KeyDown -> "down"
+  KeyLeft -> "left"
+  KeyRight -> "right"
+  KeyOk -> "ok"
+  KeyBack -> "back"
+  KeyQ -> "q"
+  KeyDialLeft -> "dial-left"
+  KeyDialRight -> "dial-right"
+  KeyPlay -> "play"
+
+instance FromJSON CrawlKey where
+  parseJSON = withText "crawl key" $ \text ->
+    case lookup (T.unpack text) [(crawlKeyWire key, key) | key <- [minBound .. maxBound]] of
+      Just key -> pure key
+      Nothing -> fail ("unsupported crawl key: " ++ T.unpack text)
+
+instance ToJSON CrawlKey where
+  toJSON = toJSON . crawlKeyWire
+
+-- | 1..16 lowercase ASCII letters, digits or '-'.
+newtype RootName = RootName String deriving (Eq, Ord, Show)
+
+rootNameText :: RootName -> String
+rootNameText (RootName name) = name
+
+instance FromJSON RootName where
+  parseJSON = withText "root name" $ \text -> do
+    let name = T.unpack text
+    unless (not (null name) && length name <= 16 && all (`elem` (['a' .. 'z'] ++ ['0' .. '9'] ++ "-")) name)
+      (fail "root name must be 1..16 lowercase letters, digits or '-'")
+    pure (RootName name)
+
+instance ToJSON RootName where
+  toJSON = toJSON . rootNameText
+
+-- | A crawl start: the attach state, optionally with the mode dial turned first.
+data CrawlRoot = CrawlRoot { rootName :: RootName, rootModeDial :: Maybe ModeDial } deriving (Eq, Show)
+
+instance FromJSON CrawlRoot where
+  parseJSON = withObject "crawl root" $ \root -> do
+    unless (all (`elem` ["name", "mode_dial"]) (KM.keys root)) (fail "a crawl root takes only name and mode_dial")
+    dial <- root .:? "mode_dial"
+    CrawlRoot <$> root .: "name" <*> traverse modeDial dial
+   where
+    modeDial text = case lookup (T.unpack text) [(modeDialName position, position) | position <- [minBound .. maxBound]] of
+      Just position -> pure position
+      Nothing -> fail ("unsupported mode-dial position: " ++ T.unpack text)
+
+data CrawlConfig = CrawlConfig
+  { configKeys :: [CrawlKey]
+  , configRoots :: [CrawlRoot]
+  , configMaxTrials :: Int
+  , configMaxNodes :: Int
+  , configMaxDepth :: Int
+  , configMaxSeconds :: Double
+  } deriving (Eq, Show)
+
+-- | The bridge holds at most 24 snapshots: the boot state, one root and one per open depth.
+maxCrawlDepth :: Int
+maxCrawlDepth = 20
+
+instance FromJSON CrawlConfig where
+  parseJSON = withObject "crawl config" $ \document -> do
+    unless (sort (KM.keys document) == ["keys", "max_depth", "max_nodes", "max_seconds", "max_trials", "roots", "schema"])
+      (fail "crawl config takes exactly schema, keys, roots, max_trials, max_nodes, max_depth and max_seconds")
+    schema <- document .: "schema"
+    unless (schema == (1 :: Int)) (fail "unsupported crawl config schema")
+    config <- CrawlConfig <$> document .: "keys" <*> document .: "roots" <*> document .: "max_trials"
+      <*> document .: "max_nodes" <*> document .: "max_depth" <*> document .: "max_seconds"
+    let distinct values = length values == M.size (M.fromList [(value, ()) | value <- values])
+    unless (not (null (configKeys config)) && distinct (configKeys config)) (fail "crawl keys must be nonempty and distinct")
+    unless (not (null (configRoots config)) && distinct (map rootName (configRoots config)))
+      (fail "crawl roots must be nonempty with distinct names")
+    unless (configMaxTrials config > 0 && configMaxNodes config > 0 && configMaxSeconds config > 0)
+      (fail "crawl budgets must be positive")
+    unless (configMaxDepth config >= 1 && configMaxDepth config <= maxCrawlDepth)
+      (fail ("max_depth must be 1.." ++ show maxCrawlDepth))
+    pure config
+
+decodeCrawlConfig :: B.ByteString -> Either String CrawlConfig
+decodeCrawlConfig = eitherDecodeStrict'
+
+-- | SHA-256 of a captured frame's PNG, lowercase hex.
+newtype FrameDigest = FrameDigest String deriving (Eq, Ord, Show)
+
+-- | The 174 state halfwords at 0x01467588 and the 174 event halfwords at 0x014676e4.
+data ControllerCells = ControllerCells { cellStates :: B.ByteString, cellEvents :: B.ByteString }
+  deriving (Eq, Ord, Show)
+
+controllerCount :: Int
+controllerCount = 174
+
+data Screen = Screen
+  { screenMenu :: MenuReading
+  , screenFrame :: FrameDigest
+  , screenImage :: FilePath
+  , screenCells :: ControllerCells
+  -- | The 48 bytes of the open menu node descriptor.
+  , screenNode :: Maybe B.ByteString
+  } deriving (Eq, Show)
+
+-- | The emulator operations a crawl uses. A capture label is lowercase ASCII.
+data Driver = Driver
+  { driverSave :: SnapshotName -> IO ()
+  , driverRestore :: SnapshotName -> IO ()
+  , driverDrop :: SnapshotName -> IO ()
+  , driverPress :: SnapshotName -> CrawlKey -> IO SnapshotPress
+  , driverModeDial :: ModeDial -> IO ()
+  , driverObserve :: String -> IO Screen
+  , driverTraceMark :: IO Int
+  , driverTraceSince :: Int -> IO [TraceHit]
+  , driverDiscardImage :: FilePath -> IO ()
+  , driverClock :: IO Double
+  , driverRecord :: Value -> IO ()
+  }
+
+-- | Code sites the crawl arms. Dispatch sites are inside 0xbfb028; the others are entries.
+data CrawlSite
+  = DispatchContext
+  | DispatchAction
+  | DispatchDirectState
+  | PropertyWrite
+  | PropertySetter
+  | PropertyCommit
+  | MailboxWrite
+  | ApplicationSend
+  deriving (Eq, Ord, Show, Enum, Bounded)
+
+crawlSites :: [CrawlSite]
+crawlSites = [minBound .. maxBound]
+
+crawlSiteAddress :: CrawlSite -> Word32
+crawlSiteAddress site = case site of
+  DispatchContext -> 0x00bfb0a0
+  DispatchAction -> 0x00bfb0c8
+  DispatchDirectState -> 0x00bfb114
+  PropertyWrite -> 0x0061c91c
+  PropertySetter -> 0x00624694
+  PropertyCommit -> 0x00d4fc74
+  MailboxWrite -> 0x0063270c
+  ApplicationSend -> 0x006334dc
+
+crawlSiteLabel :: CrawlSite -> String
+crawlSiteLabel site = case site of
+  DispatchContext -> "crawl-dispatch-context"
+  DispatchAction -> "crawl-dispatch-action"
+  DispatchDirectState -> "crawl-dispatch-direct-state"
+  PropertyWrite -> "crawl-property-write"
+  PropertySetter -> "crawl-property-setter"
+  PropertyCommit -> "crawl-property-commit"
+  MailboxWrite -> "crawl-mailbox-write"
+  ApplicationSend -> "crawl-application-send"
+
+siteFromLabel :: String -> Maybe CrawlSite
+siteFromLabel label = lookup label [(crawlSiteLabel site, site) | site <- crawlSites]
+
+-- | One dispatcher entry with a nonnull cell table: at the prehook call r0 is the controller, r1
+-- the state and r2 the event; the action is r3 at the following `blx r3` on the same core.
+data Dispatch = Dispatch
+  { dispatchCore :: Int
+  , dispatchInstructions :: Integer
+  , dispatchController :: Word32
+  , dispatchState :: Word32
+  , dispatchEvent :: Word32
+  , dispatchAction :: Maybe Word32
+  } deriving (Eq, Show)
+
+-- | A non-dispatch site entry with r0-r3. At 0xbfb114 r3 is the stored state and the controller
+-- is in r5, which the bridge does not record.
+data Effect = Effect { effectSite :: CrawlSite, effectCore :: Int, effectInstructions :: Integer, effectArguments :: [Word32] }
+  deriving (Eq, Show)
+
+data Activity = Activity
+  { activityDispatches :: [Dispatch]
+  , activityEffects :: [Effect]
+  -- | Action entries with no preceding unpaired context on their core.
+  , activityOrphanActions :: [Word32]
+  } deriving (Eq, Show)
+
+-- | Pairs each action with the latest unpaired context hit on its core; only the prehook runs
+-- between the two.
+stepActivity :: [TraceHit] -> Activity
+stepActivity hits = finish (foldl' step (M.empty, [], [], []) hits)
+ where
+  step (open, dispatches, effects, orphans) hit = case siteFromLabel (traceSite hit) of
+    Just DispatchContext ->
+      let dispatch = Dispatch (traceCore hit) (traceInstructions hit) (traceR0 hit) (traceR1 hit) (traceR2 hit) Nothing
+      in (M.insert (traceCore hit) (length dispatches) open, dispatches ++ [dispatch], effects, orphans)
+    Just DispatchAction -> case M.lookup (traceCore hit) open of
+      Just index ->
+        let annotate position dispatch = if position == index then dispatch { dispatchAction = Just (traceR3 hit) } else dispatch
+        in (M.delete (traceCore hit) open, zipWith annotate [0 ..] dispatches, effects, orphans)
+      Nothing -> (open, dispatches, effects, orphans ++ [traceR3 hit])
+    Just site -> (open, dispatches, effects ++ [Effect site (traceCore hit) (traceInstructions hit) [traceR0 hit, traceR1 hit, traceR2 hit, traceR3 hit]], orphans)
+    Nothing -> (open, dispatches, effects, orphans)
+  finish (_, dispatches, effects, orphans) = Activity dispatches effects orphans
+
+-- | A controller whose state or event halfword differs between two readings.
+data CellChange = CellChange { changeController :: Int, changeBefore :: Word16, changeAfter :: Word16 } deriving (Eq, Show)
+
+halfwords :: B.ByteString -> [Word16]
+halfwords bytes = [fromIntegral (B.index bytes (2 * index)) .|. (fromIntegral (B.index bytes (2 * index + 1)) `shiftL` 8)
+  | index <- [0 .. B.length bytes `div` 2 - 1]]
+
+cellChanges :: B.ByteString -> B.ByteString -> [CellChange]
+cellChanges before after = [CellChange controller old new | (controller, old, new) <- zip3 [0 ..] (halfwords before) (halfwords after), old /= new]
+
+newtype NodeId = NodeId Int deriving (Eq, Ord, Show)
+
+-- | Why a reached screen was not, or not completely, expanded.
+data Frontier = DepthLimit | NodeLimit | TrialLimit | TimeLimit deriving (Eq, Show)
+
+data Node = Node
+  { nodeId :: NodeId
+  , nodeRoot :: RootName
+  , nodeDepth :: Int
+  , nodePath :: [CrawlKey]
+  , nodeScreen :: Screen
+  , nodeFrames :: [FrameDigest]
+  , nodeUntried :: [CrawlKey]
+  , nodeFrontier :: Maybe Frontier
+  } deriving (Eq, Show)
+
+-- | How a reached screen was identified with an existing node.
+data Match = NewScreen | SameFrame | SameMenuAndCells deriving (Eq, Show)
+
+data EdgeOutcome
+  = Reached
+      { reachedNode :: NodeId
+      , reachedMatch :: Match
+      , reachedFrame :: FrameDigest
+      , reachedSettle :: Value
+      , reachedInstructions :: Integer
+      , reachedStates :: [CellChange]
+      , reachedEvents :: [CellChange]
+      }
+  | Stopped { stoppedFailure :: String, stoppedInstructions :: Integer }
+  deriving (Eq, Show)
+
+data Edge = Edge
+  { edgeTrial :: Int
+  , edgeFrom :: NodeId
+  , edgeKey :: CrawlKey
+  , edgeActivity :: Activity
+  , edgeOutcome :: EdgeOutcome
+  } deriving (Eq, Show)
+
+data CrawlGraph = CrawlGraph
+  { graphNodes :: [Node]
+  , graphEdges :: [Edge]
+  , graphTrials :: Int
+  , graphSeconds :: Double
+  , graphLimit :: Maybe Frontier
+  } deriving (Eq, Show)
+
+data CrawlState = CrawlState
+  { stateNodes :: M.Map NodeId Node
+  , stateByFrame :: M.Map FrameDigest NodeId
+  , stateByCells :: M.Map (MenuReading, B.ByteString) NodeId
+  , stateEdges :: [Edge]
+  , stateTrials :: Int
+  , stateLimit :: Maybe Frontier
+  }
+
+-- | Explores every configured root depth-first within the configured budgets.
+crawl :: CrawlConfig -> Driver -> IO CrawlGraph
+crawl config driver = do
+  started <- driverClock driver
+  state <- newIORef (CrawlState M.empty M.empty M.empty [] 0 Nothing)
+  let boot = SnapshotName "boot"
+  driverSave driver boot
+  forM_ (zip [0 :: Int ..] (configRoots config)) $ \(index, root) -> do
+    driverRestore driver boot
+    mapM_ (driverModeDial driver) (rootModeDial root)
+    _ <- driverTraceSince driver =<< driverTraceMark driver
+    let snapshot = SnapshotName ("root-" ++ show index)
+    driverSave driver snapshot
+    screen <- driverObserve driver ("root-" ++ show index)
+    (node, match) <- intern state root 0 [] screen
+    when (match == NewScreen) (expand started state root node snapshot)
+    driverDrop driver snapshot
+  driverDrop driver boot
+  ended <- driverClock driver
+  final <- readIORef state
+  pure CrawlGraph
+    { graphNodes = M.elems (stateNodes final)
+    , graphEdges = reverse (stateEdges final)
+    , graphTrials = stateTrials final
+    , graphSeconds = ended - started
+    , graphLimit = stateLimit final
+    }
+ where
+  expand started state root node snapshot = do
+    let keys = configKeys config
+    untried <- foldM (tryKey started state root node snapshot) [] keys
+    unless (null untried) $ do
+      limit <- stateLimit <$> readIORef state
+      updateNode state (nodeId node) (\current -> current { nodeUntried = reverse untried, nodeFrontier = limit })
+
+  tryKey started state root node snapshot untried key = do
+    current <- readIORef state
+    now <- driverClock driver
+    let limit
+          | isJust (stateLimit current) = stateLimit current
+          | stateTrials current >= configMaxTrials config = Just TrialLimit
+          | now - started >= configMaxSeconds config = Just TimeLimit
+          | otherwise = Nothing
+    case limit of
+      Just reason -> do
+        modifyIORef' state (\s -> s { stateLimit = Just reason })
+        pure (key : untried)
+      Nothing -> do
+        mark <- driverTraceMark driver
+        pressed <- driverPress driver snapshot key
+        activity <- stepActivity <$> driverTraceSince driver mark
+        trial <- stateTrials <$> readIORef state
+        modifyIORef' state (\s -> s { stateTrials = trial + 1 })
+        case pressed of
+          SnapshotStopped failure instructions ->
+            record state (Edge trial (nodeId node) key activity (Stopped failure instructions))
+          SnapshotPressed _ settle instructions -> do
+            screen <- driverObserve driver ("trial-" ++ show trial)
+            (child, match) <- intern state root (nodeDepth node + 1) (nodePath node ++ [key]) screen
+            let before = screenCells (nodeScreen node)
+                after = screenCells screen
+            record state (Edge trial (nodeId node) key activity (Reached (nodeId child) match (screenFrame screen) settle instructions
+              (cellChanges (cellStates before) (cellStates after)) (cellChanges (cellEvents before) (cellEvents after))))
+            let depth = nodeDepth node + 1
+                reopens = match /= NewScreen && nodeFrontier child == Just DepthLimit && depth < nodeDepth child
+            when (match == NewScreen || reopens) $ do
+              let baseline = screen { screenImage = screenImage (nodeScreen child), screenFrame = screenFrame (nodeScreen child) }
+              updateNode state (nodeId child) (\n -> n { nodeDepth = depth, nodePath = nodePath node ++ [key], nodeScreen = baseline
+                , nodeUntried = [], nodeFrontier = Nothing })
+              when reopens $
+                driverRecord driver . (\n -> object ["node" .= nodeValue n]) . (M.! nodeId child) . stateNodes =<< readIORef state
+              nodes <- M.size . stateNodes <$> readIORef state
+              if depth >= configMaxDepth config
+                then updateNode state (nodeId child) (\n -> n { nodeUntried = configKeys config, nodeFrontier = Just DepthLimit })
+                else if nodes > configMaxNodes config
+                  then updateNode state (nodeId child) (\n -> n { nodeUntried = configKeys config, nodeFrontier = Just NodeLimit })
+                  else do
+                    let NodeId number = nodeId child
+                        childSnapshot = SnapshotName ("node-" ++ show number)
+                    expanded <- (M.! nodeId child) . stateNodes <$> readIORef state
+                    driverSave driver childSnapshot
+                    expand started state root expanded childSnapshot
+                    driverDrop driver childSnapshot
+        pure untried
+
+  record state edge = do
+    modifyIORef' state (\s -> s { stateEdges = edge : stateEdges s })
+    driverRecord driver (object ["edge" .= edgeValue edge])
+
+  updateNode state identity change =
+    modifyIORef' state (\s -> s { stateNodes = M.adjust change identity (stateNodes s) })
+
+  -- The frame decides first; a frame-only difference under the same menu reading and state cells
+  -- is a variant of the same screen.
+  intern state root depth path screen = do
+    current <- readIORef state
+    let cellsKey = (screenMenu screen, cellStates (screenCells screen))
+        frame = screenFrame screen
+    case (M.lookup frame (stateByFrame current), M.lookup cellsKey (stateByCells current)) of
+      (Just identity, _) -> do
+        driverDiscardImage driver (screenImage screen)
+        pure (stateNodes current M.! identity, SameFrame)
+      (Nothing, Just identity) -> do
+        let node = stateNodes current M.! identity
+        writeIORef state current
+          { stateByFrame = M.insert frame identity (stateByFrame current)
+          , stateNodes = M.insert identity node { nodeFrames = nodeFrames node ++ [frame] } (stateNodes current)
+          }
+        pure (node, SameMenuAndCells)
+      (Nothing, Nothing) -> do
+        let identity = NodeId (M.size (stateNodes current))
+            node = Node identity (rootName root) depth path screen [frame] [] Nothing
+        writeIORef state current
+          { stateNodes = M.insert identity node (stateNodes current)
+          , stateByFrame = M.insert frame identity (stateByFrame current)
+          , stateByCells = M.insert cellsKey identity (stateByCells current)
+          }
+        driverRecord driver (object ["node" .= nodeValue node])
+        pure (node, NewScreen)
+
+hex :: Integral a => a -> String
+hex value = "0x" ++ showHex value ""
+
+hexBytes :: B.ByteString -> String
+hexBytes = concatMap (\byte -> let digits = showHex byte "" in if length digits == 1 then '0' : digits else digits) . B.unpack
+
+menuValue :: MenuReading -> Value
+menuValue reading = case reading of
+  Nothing -> Null
+  Just (node, setting, cursor) -> object ["menu_id" .= node, "setting_id" .= setting, "cursor" .= cursor]
+
+frontierText :: Frontier -> String
+frontierText reason = case reason of
+  DepthLimit -> "depth-limit"
+  NodeLimit -> "node-limit"
+  TrialLimit -> "trial-limit"
+  TimeLimit -> "time-limit"
+
+matchText :: Match -> String
+matchText match = case match of
+  NewScreen -> "new-screen"
+  SameFrame -> "same-frame"
+  SameMenuAndCells -> "same-menu-and-cells"
+
+changeValue :: CellChange -> Value
+changeValue (CellChange controller before after) = object ["controller" .= controller, "before" .= before, "after" .= after]
+
+activityValue :: Activity -> Value
+activityValue (Activity dispatches effects orphans) = object
+  [ "dispatches" .= [object
+      [ "core" .= dispatchCore dispatch, "instructions" .= dispatchInstructions dispatch, "controller" .= dispatchController dispatch
+      , "state" .= dispatchState dispatch, "event" .= dispatchEvent dispatch, "action" .= fmap hex (dispatchAction dispatch) ]
+      | dispatch <- dispatches]
+  , "effects" .= [object
+      [ "site" .= crawlSiteLabel (effectSite effect), "core" .= effectCore effect, "instructions" .= effectInstructions effect
+      , "arguments" .= map hex (effectArguments effect) ]
+      | effect <- effects]
+  , "orphan_actions" .= map hex orphans
+  ]
+
+edgeValue :: Edge -> Value
+edgeValue (Edge trial (NodeId from) key activity outcome) = object
+  ([ "trial" .= trial, "from" .= from, "key" .= key, "activity" .= activityValue activity ] ++ case outcome of
+    Reached (NodeId to) match (FrameDigest frame) settle instructions states events ->
+      [ "to" .= to, "match" .= matchText match, "frame_sha256" .= frame, "settle" .= settle, "instructions" .= instructions
+      , "state_changes" .= map changeValue states, "event_changes" .= map changeValue events ]
+    Stopped failure instructions -> ["stopped" .= failure, "instructions" .= instructions])
+
+nodeValue :: Node -> Value
+nodeValue node = object
+  [ "id" .= let NodeId number = nodeId node in number
+  , "root" .= nodeRoot node
+  , "depth" .= nodeDepth node
+  , "path" .= nodePath node
+  , "menu" .= menuValue (screenMenu screen)
+  , "frames" .= [frame | FrameDigest frame <- nodeFrames node]
+  , "image" .= screenImage screen
+  , "states" .= hexBytes (cellStates (screenCells screen))
+  , "events" .= hexBytes (cellEvents (screenCells screen))
+  , "menu_node_bytes" .= fmap hexBytes (screenNode screen)
+  , "untried_keys" .= nodeUntried node
+  , "frontier" .= fmap frontierText (nodeFrontier node)
+  ]
+ where
+  screen = nodeScreen node
+
+graphValue :: CrawlConfig -> CrawlGraph -> Value
+graphValue config graph = object
+  [ "schema" .= (1 :: Int)
+  , "scope" .= String "emulated X-M1 1.50 screens reachable by physical keys from held snapshots; static listing semantics are not implied"
+  , "keys" .= configKeys config
+  , "roots" .= [object ["name" .= rootName root, "mode_dial" .= fmap modeDialName (rootModeDial root)] | root <- configRoots config]
+  , "budgets" .= object
+      [ "max_trials" .= configMaxTrials config, "max_nodes" .= configMaxNodes config
+      , "max_depth" .= configMaxDepth config, "max_seconds" .= configMaxSeconds config ]
+  , "trace_sites" .= [object ["label" .= crawlSiteLabel site, "address" .= hex (crawlSiteAddress site)] | site <- crawlSites]
+  , "trials" .= graphTrials graph
+  , "seconds" .= graphSeconds graph
+  , "limit" .= fmap frontierText (graphLimit graph)
+  , "complete" .= (isNothing (graphLimit graph) && all (\node -> isNothing (nodeFrontier node)) (graphNodes graph))
+  , "nodes" .= map nodeValue (graphNodes graph)
+  , "edges" .= map edgeValue (graphEdges graph)
+  ]

@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "keys": ["ok", "down", "up", "right", "left", "back", "q", "dial-right", "dial-left", "play"],
+  "roots": [{"name": "default"}],
+  "max_trials": 30000,
+  "max_nodes": 5000,
+  "max_depth": 16,
+  "max_seconds": 21600
+}

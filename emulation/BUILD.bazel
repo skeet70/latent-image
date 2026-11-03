@@ -948,6 +948,36 @@ haskell_test(
     ],
 )
 
+haskell_library(
+    name = "menu-crawl-lib",
+    srcs = ["Emulation/MenuCrawl.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":emulator-usb",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
+    ],
+)
+
+haskell_test(
+    name = "menu-crawl-tests",
+    size = "small",
+    srcs = ["MenuCrawlTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":emulator-usb",
+        ":menu-crawl-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
+)
+
 # bazel run //emulation:trajectory-variant-check -- RETAINED.json VARIANT.json
 haskell_binary(
     name = "trajectory-variant-check",
@@ -1105,6 +1135,7 @@ haskell_binary(
         ":watch-observation",
         ":modal-observation",
         ":ui-trajectory-lib",
+        ":menu-crawl-lib",
         ":capture-stream-lib",
         ":save-lifecycle-lib",
         ":save-lifecycle-run",
