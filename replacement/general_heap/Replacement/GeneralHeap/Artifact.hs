@@ -194,7 +194,9 @@ contractValue path4 path5 (StagedImages (CanonicalSource dat source4 source5 sto
   ,"sentinel" .= object ["address" .= (0x89d4f8::Word32),"initial" .= (0::Word32)]
   ,"symbols" .= M.fromList [(F.symbolName symbol,F.symbolAddress symbol) | symbol <- symbols]
   ,"function_symbols" .= M.fromList [(F.symbolName symbol,F.symbolAddress symbol) | symbol <- symbols, F.symbolName symbol `elem` textNames]
-  ,"native_allocator_api" .= ("Rust GlobalAlloc and Allocator are rlib front ends over the fixed state and retained lock; this image carries no native allocator entry"::String)
+  ,"native_allocator_api" .= object ["image_shims" .= False,"decision" .= ("maintainer-approved"::String)
+    ,"front_end" .= ("Rust GlobalAlloc and Allocator ship in the rlib over the fixed arena-prefix state, sentinel and retained lock"::String)
+    ,"reason" .= ("resident GlobalAlloc shims exceed the retired carrier union"::String)]
   ,"owned_instruction_pcs" .= instructionPCs frames,"literal_words" .= [object ["address" .= address,"value" .= value] | (address,value) <- literalWords frames]
   ,"frame_metadata" .= map frameValue frames
   ,"backend" .= ("rlsf-0.2.3/u32/u16/17/16"::String),"stock_header" .= ("boundary-tag-prev-inuse"::String)

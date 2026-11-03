@@ -1303,8 +1303,10 @@ The cutover contract records each as a typed `redesign_items` entry (id, stock a
 | --- | --- | --- | --- |
 | `checked-calloc-product` | `0x00bf1c44` multiplies count and size modulo 2^32 and allocates the wrapped size | product above `0xffffffff` returns null, errno 12, before locking | a calloc with 64-bit request above `0xffffffff` succeeds in stock and returns null in owned |
 | `oversized-resize-rejected-before-lock` | resize of a live allocation to `[0x7ffffff5,0xffffffff]` returns null, errno 12, and leaks one lock depth (#147) | same result without acquiring the lock | realloc request above `0x7ffffff4`; stock returns with lock depth one higher than at entry |
-| `zero-request-minimum-allocation` | zero-byte malloc/resize takes the minimum 16-byte chunk (12 usable, tag `0x11`) | live allocation with the same usable extent and tag from rlsf behind a 16-byte owned prefix | a zero-byte call whose success, null or usable extent differs |
+| `zero-request-minimum-allocation` | zero-byte malloc takes the minimum 16-byte chunk (12 usable, tag `0x11`); `realloc(p, 0)` rounds to the same minimum, does not free, and shrinks `p` in place, returning `p` (`0x0089da80`..`0x0089dad0`) | same usable extent and tag from rlsf behind a 16-byte owned prefix; `realloc(p, 0)` returns a live 12-byte allocation that may move | a `realloc(p, 0)` caller relying on the result equalling `p`, or a zero-byte call whose success or usable extent differs |
 | `trim-returns-zero` | trim may release page-rounded top backing through `0x0072b110` and returns 1 | locks, returns 0, releases nothing from the fixed arena | a trim returning 1 in stock and 0 in owned, or a later backing request expecting released memory |
+
+The in-place heap image carries no native `GlobalAlloc` shims; with them the owned code exceeds the retired carriers. The Rust `Allocator`/`GlobalAlloc` front end ships in the library and reaches the same arena-prefix state, sentinel and retained lock, so a Rust consumer links it into its own image (maintainer-approved; contract field `native_allocator_api`).
 
 ### 8.15 Later executable loading and publication (#153)
 
