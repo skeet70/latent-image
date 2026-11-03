@@ -19,11 +19,26 @@ pub(crate) struct CallFact {
 }
 impl CallFact {
     pub(crate) fn validate(&self,image4:&[u8])->Result<(),String> {
-        let offset=self.instruction.0.checked_sub(0x61c400).ok_or("dispatcher call precedes image4")? as usize;
-        let raw=u32::from_le_bytes(image4.get(offset..offset+4).ok_or("dispatcher call exceeds image4")?.try_into().map_err(|_|"dispatcher call word")?);
-        let displacement=(((raw&0xffffff)<<8) as i32>>6) as u32;
-        if !(START..END).contains(&self.instruction.0) || raw&0xff000000!=0xeb000000 || self.instruction.0.wrapping_add(8).wrapping_add(displacement)!=self.target.0
-            || self.instruction.0.checked_add(4)!=Some(self.continuation.0) || !(-4096..=-48).contains(&self.stack_from_dispatcher_entry)
+        let word=|address:u32|->Result<u32,String>{
+            let offset=address.checked_sub(0x61c400).ok_or("dispatcher call precedes image4")? as usize;
+            Ok(u32::from_le_bytes(image4.get(offset..offset+4).ok_or("dispatcher call exceeds image4")?.try_into().map_err(|_|"dispatcher call word")?))
+        };
+        let destination=|address:u32,raw:u32|address.wrapping_add(8).wrapping_add((((raw&0xffffff)<<8) as i32>>6) as u32);
+        let raw=word(self.instruction.0)?;
+        // A BL returns to its next word; a B tail call returns to the word after the BL that entered the helper containing it.
+        let linked=match raw&0xff000000 {
+            0xeb000000=>self.instruction.0.checked_add(4)==Some(self.continuation.0),
+            0xea000000=>match self.continuation.0.checked_sub(4) {
+                Some(caller) if (START..END).contains(&caller)=>{
+                    let entry=word(caller)?;
+                    entry&0xff000000==0xeb000000 && (START..=self.instruction.0).contains(&destination(caller,entry))
+                },
+                _=>false,
+            },
+            _=>false,
+        };
+        if !(START..END).contains(&self.instruction.0) || !linked || destination(self.instruction.0,raw)!=self.target.0
+            || !(-4096..=-48).contains(&self.stack_from_dispatcher_entry)
             || self.stack_from_dispatcher_entry%8!=0 || self.caller_live_words.len()>1024
             || self.caller_live_words.windows(2).any(|pair|pair[0]>=pair[1])
             || self.caller_live_words.iter().any(|offset|*offset<self.stack_from_dispatcher_entry || *offset>=0 || *offset%4!=0 || *offset == -20) {
@@ -446,6 +461,23 @@ mod tests {
         assert!(call("[-64,-20,-16,-12,-8,-4]").validate(&image).is_err());
         let mut foreign=image;foreign[0x69cdf8-0x61c400..0x69cdfc-0x61c400].copy_from_slice(&0xeb000000u32.to_le_bytes());
         assert!(call("[-64,-60,-56,-52,-16,-12,-8,-4]").validate(&foreign).is_err());
+    }
+    fn tail(continuation:u32)->CallFact {
+        serde_json::from_str(&format!(r#"{{"phase":"Root","instruction":6934192,"continuation":{continuation},"target":7495128,"stack_from_dispatcher_entry":-64,"caller_live_words":[-64,-60,-56,-52,-44,-40,-36,-32,-28,-24,-16,-12,-8,-4]}}"#)).expect("source-bound tail call input")
+    }
+    fn helper_image(caller_word:u32)->Vec<u8> {
+        let mut image=source();
+        image[0x69ceb0-0x61c400..0x69ceb4-0x61c400].copy_from_slice(&0xea0223c8u32.to_le_bytes());
+        image[0x69cf60-0x61c400..0x69cf64-0x61c400].copy_from_slice(&caller_word.to_le_bytes());
+        image
+    }
+    #[test]
+    fn tail_call_admission_binds_the_helper_entry_link() {
+        assert!(tail(0x69cf64).validate(&helper_image(0xebffffab)).is_ok());
+        assert!(tail(0x69cf68).validate(&helper_image(0xebffffab)).is_err());
+        assert!(tail(0x69ceb4).validate(&helper_image(0xebffffab)).is_err());
+        assert!(tail(0x69cf64).validate(&helper_image(0xebffffd5)).is_err());
+        assert!(tail(0x69cf64).validate(&helper_image(0xeaffffab)).is_err());
     }
     fn captured()->Capture {
         serde_json::from_str(r#"{"invocations":[],"publications":[],"mode_reads":[],"live_words":[{"core":0,"start":10,"end":20,"words":[1074140144],"preimage":[]}]}"#).expect("live caller subobservation")
