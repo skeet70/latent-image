@@ -1,0 +1,36 @@
+module Replacement.RootTask.Services (serviceSymbols) where
+
+import Data.Word (Word32)
+
+serviceSymbols :: [(String,Word32)]
+serviceSymbols =
+  [ ("root_platform_init",0x649624)
+  , ("root_runtime_init",0x7284ec)
+  , ("root_mark",0x72872c)
+  , ("root_install_table",0x725b54)
+  , ("root_create_resource",0x7247ac)
+  , ("root_create_workers",0x69ca24)
+  , ("root_init_676054",0x676054)
+  , ("root_init_662e48",0x662e48)
+  , ("root_init_665224",0x665224)
+  , ("root_init_649070",0x649070)
+  , ("root_init_6490dc",0x6490dc)
+  , ("root_checked_init_a",0x6a9354)
+  , ("root_checked_init_b",0x6ac2b4)
+  , ("root_init_69f204",0x69f204)
+  , ("root_init_656788",0x656788)
+  , ("root_init_7262cc",0x7262cc)
+  , ("root_install_descriptor",0x724cbc)
+  , ("root_init_6a5634",0x6a5634)
+  , ("root_config_write",0x6a59b8)
+  , ("root_mode",0x69cfa4)
+  , ("root_config_query",0x6a5920)
+  , ("root_init_6a564c",0x6a564c)
+  , ("root_init_6a5c08",0x6a5c08)
+  , ("root_init_6568ec",0x6568ec)
+  , ("root_submit_later",0x69ca44)
+  , ("root_register_periodic",0x725424)
+  , ("root_cleanup",0x72612c)
+  , ("root_periodic_callback",0x69cc18)
+  , ("root_periodic_context",0x96ca4c)
+  ]

@@ -157,13 +157,13 @@ impl Machine {
 
     /// Removes host instrumentation before a session checkpoint.
     pub fn disarm(&mut self) -> Result<(), String> {
-        self.traces.disarm(&self.session)?;
+        self.traces.teardown(&self.session)?;
         self.guard.disarm(&self.session.board)
     }
 
     pub fn rearm(&mut self) -> Result<(), String> {
         self.guard.arm(&self.session.board)?;
-        self.traces.rearm(&self.session)
+        self.traces.reinstall(&self.session)
     }
 
     pub fn instructions(&self) -> u64 {
@@ -427,6 +427,10 @@ impl Machine {
     pub fn capture_frame(&self) -> Result<CapturedFrame, String> {
         let (state, instance, frame) = self.observed_frame()?.ok_or("no display plane to capture")?;
         CapturedFrame::new(self.document.scanout.clone(), instance, InstructionCount::from_board(&self.session)?, state, frame)
+    }
+
+    pub fn presents_display_plane(&self) -> Result<bool, String> {
+        Ok(self.observed_frame()?.is_some())
     }
 
     fn observed_frame(&self) -> Result<Option<(serde_json::Value, usize, ScanoutFrame)>, String> {

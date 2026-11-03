@@ -25,6 +25,8 @@ module Emulation.WatchObservation
   , WatchLimit
   , watchLimit
   , watchLimitValue
+  , WatchRangeLimit
+  , watchRangeLimit
   , WatchGate (..)
   , ProtectedWriteSummary (..)
   , protectedCpuWritesValue
@@ -57,6 +59,7 @@ module Emulation.WatchObservation
   , checkExecution
   , judgeExecution
   , checkExecutionWrites
+  , checkExecutionWritesWithRangeLimit
   , WritePolicy (..)
   , writePolicyLabel
   , ExecutionWriteGate (..)
@@ -252,6 +255,13 @@ watchLimit :: Int -> Either String WatchLimit
 watchLimit value
   | value >= 1 && value <= 1 `shiftL` 20 = Right (WatchLimit value)
   | otherwise = Left "watch limit must be 1..2^20"
+
+newtype WatchRangeLimit = WatchRangeLimit Int deriving (Eq, Show)
+
+watchRangeLimit :: Int -> Either String WatchRangeLimit
+watchRangeLimit value
+  | value >= 1 && value <= 1 `shiftL` 16 = Right (WatchRangeLimit value)
+  | otherwise = Left "watch range limit must be 1..2^16"
 
 newtype ProtectedCpuWrites = ProtectedCpuWrites { protectedCpuWritesValue :: Int } deriving (Eq, Show)
 newtype ProtectedHostWrites = ProtectedHostWrites { protectedHostWritesValue :: Int } deriving (Eq, Show)
@@ -493,7 +503,10 @@ parseFixedWatchObservation limit value = do
     _ -> Left "execution watch is not an object"
 
 checkExecutionWrites :: WritePolicy -> WatchLimit -> [WatchRange] -> [WatchRange] -> FixedWatchAck -> FixedWatchObservation -> Either String ExecutionWriteGate
-checkExecutionWrites policy limit protected forbidden (FixedWatchAck ack ackClasses) (FixedWatchObservation observation classes) = do
+checkExecutionWrites = checkExecutionWritesWithRangeLimit (WatchRangeLimit 8)
+
+checkExecutionWritesWithRangeLimit :: WatchRangeLimit -> WritePolicy -> WatchLimit -> [WatchRange] -> [WatchRange] -> FixedWatchAck -> FixedWatchObservation -> Either String ExecutionWriteGate
+checkExecutionWritesWithRangeLimit (WatchRangeLimit rangeLimit) policy limit protected forbidden (FixedWatchAck ack ackClasses) (FixedWatchObservation observation classes) = do
   let expected = map (`GuardClass` GuardWrites) protected ++ map (`GuardClass` GuardFetches) forbidden
       watched = unionWatchRanges (protected ++ forbidden)
       matches record (GuardClass range access) = case (record, access) of
@@ -502,7 +515,7 @@ checkExecutionWrites policy limit protected forbidden (FixedWatchAck ack ackClas
         (TransferRecord{transferAccess = HostWrite, transferPhysical = physical, transferBytes = bytes}, GuardWrites) -> overlapsWatchRange range physical bytes
         (TransferRecord{transferAccess = ModelBusWrite, transferPhysical = physical, transferBytes = bytes}, GuardWrites) -> overlapsWatchRange range physical bytes
         _ -> False
-  unless (not (null watched) && length watched <= 8 && classes == expected && ackClasses == expected)
+  unless (not (null watched) && length watched <= rangeLimit && classes == expected && ackClasses == expected)
     (Left "execution watch classes differ from the declared write and fetch ranges")
   forM_ (watchRecords observation) $ \record -> do
     unless (any (matches record) classes) (Left "execution watch record is outside its declared access classes")

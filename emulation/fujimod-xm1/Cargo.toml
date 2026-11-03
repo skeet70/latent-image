@@ -77,6 +77,10 @@ path = "src/heap_replay.rs"
 name = "fujimod-xm1-startup-consumers"
 path = "src/startup_consumers.rs"
 
+[[bin]]
+name = "fujimod-xm1-rtos-census"
+path = "src/rtos_census.rs"
+
 # Compiles the schema-4 loader-prefix observer against an engine carrying
 # build-support/fujimod-scoped-watch.patch.
 [features]

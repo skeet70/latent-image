@@ -325,6 +325,10 @@ enum Request {
     MediaState,
     Capture { label: String },
     SaveInstallCheckpoint { base: String, manifest_sha256: String, runtime_sha256: String, host: Value },
+    SnapshotSave { name: SnapshotName },
+    SnapshotRestore { name: SnapshotName },
+    SnapshotKey { name: SnapshotName, key: PressName },
+    SnapshotDrop { name: SnapshotName },
     Finish,
 }
 
@@ -358,6 +362,10 @@ enum RequestKind {
     MediaState,
     Capture,
     SaveInstallCheckpoint,
+    SnapshotSave,
+    SnapshotRestore,
+    SnapshotKey,
+    SnapshotDrop,
     Finish,
 }
 
@@ -391,6 +399,10 @@ impl Request {
             Request::MediaState => RequestKind::MediaState,
             Request::Capture { .. } => RequestKind::Capture,
             Request::SaveInstallCheckpoint { .. } => RequestKind::SaveInstallCheckpoint,
+            Request::SnapshotSave { .. } => RequestKind::SnapshotSave,
+            Request::SnapshotRestore { .. } => RequestKind::SnapshotRestore,
+            Request::SnapshotKey { .. } => RequestKind::SnapshotKey,
+            Request::SnapshotDrop { .. } => RequestKind::SnapshotDrop,
             Request::Finish => RequestKind::Finish,
         }
     }
@@ -438,6 +450,52 @@ struct Server {
     rendezvous: RendezvousInputs,
     pending_capture: Option<PendingCapture>,
     capture_evidence_error: Option<String>,
+    /// In-memory guest snapshots by client name.
+    snapshots: BTreeMap<SnapshotName, Vec<u8>>,
+}
+
+/// About 120 MB per held snapshot of the X-M1 run document.
+const SNAPSHOT_LIMIT: usize = 24;
+
+const DISPLAY_STEP: u64 = 2_000_000;
+const DISPLAY_WAIT: u64 = 60_000_000;
+
+/// A client-chosen snapshot name: 1..=64 lowercase ASCII letters, digits or '-'.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(try_from = "String", into = "String")]
+struct SnapshotName(String);
+
+impl TryFrom<String> for SnapshotName {
+    type Error = String;
+    fn try_from(name: String) -> Result<Self, String> {
+        if (1..=64).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
+            Ok(Self(name))
+        } else {
+            Err("snapshot name must be 1..64 lowercase ASCII letters, digits or '-'".into())
+        }
+    }
+}
+
+impl From<SnapshotName> for String {
+    fn from(name: SnapshotName) -> Self {
+        name.0
+    }
+}
+
+/// A physical press as named on the wire, parsed once.
+#[derive(Clone, Deserialize)]
+#[serde(try_from = "String")]
+struct PressName {
+    name: String,
+    press: Press,
+}
+
+impl TryFrom<String> for PressName {
+    type Error = String;
+    fn try_from(name: String) -> Result<Self, String> {
+        let press = Press::parse(&name)?;
+        Ok(Self { name, press })
+    }
 }
 
 fn parse_address(text: &str) -> Result<u32, String> {
@@ -796,11 +854,44 @@ impl Server {
         Ok(count)
     }
 
+    /// Returns the terminal stop the restored guest state replaced. After a stop the R4F guard
+    /// restarts empty: its entered-block set holds blocks the refusal left undecoded.
+    fn restore_snapshot(&mut self, name: &SnapshotName) -> Result<Option<String>, String> {
+        let bytes = self.snapshots.get(name).ok_or_else(|| format!("snapshot {} is not held", name.0))?;
+        let machine = &mut self.bridge.machine;
+        let snapshot = machine.session.import_snapshot(bytes)?;
+        machine.disarm()?;
+        machine.session.restore(&snapshot)?;
+        let cleared = machine.failure.take();
+        if cleared.is_some() {
+            machine.guard = Default::default();
+        }
+        machine.rearm()?;
+        Ok(cleared)
+    }
+
+    /// Advances in DISPLAY_STEP slices until a scanout instance presents graphics and returns the
+    /// instructions spent; a press can settle while no plane is presented.
+    fn await_display_plane(&mut self) -> Result<u64, String> {
+        let mut waited = 0;
+        while !self.bridge.machine.presents_display_plane()? {
+            if waited >= DISPLAY_WAIT {
+                return Err(format!("no display plane after {waited} instructions"));
+            }
+            self.bridge.advance(DISPLAY_STEP)?;
+            self.bridge.machine.require_running()?;
+            waited += DISPLAY_STEP;
+        }
+        Ok(waited)
+    }
+
     fn handle(&mut self, request: Request) -> Result<Option<Value>, String> {
         let tail_request = matches!(&request, Request::CaptureObservationHits { .. } | Request::CaptureObservationAck { .. }
             | Request::CaptureObservationState | Request::WatchState | Request::Finish
             | Request::ModalObservationReport | Request::ModalObservationEnd);
-        if self.bridge.machine.failure.is_some() && !tail_request {
+        let recovers = matches!(&request, Request::TraceHits { .. } | Request::SnapshotRestore { .. }
+            | Request::SnapshotKey { .. } | Request::SnapshotDrop { .. });
+        if self.bridge.machine.failure.is_some() && !tail_request && !recovers {
             return Err(self.bridge.machine.failure.as_ref().ok_or("terminal failure disappeared")?.clone());
         }
         let read_only = tail_request || matches!(&request, Request::List | Request::TraceHits { .. }
@@ -823,6 +914,13 @@ impl Server {
         if self.bridge.machine.traces.modal_observation_active()
             && matches!(&request, Request::SaveInstallCheckpoint { .. }) {
             return Err("active modal observation refuses checkpoint replacement".into());
+        }
+        if matches!(&request, Request::SnapshotSave { .. } | Request::SnapshotRestore { .. } | Request::SnapshotKey { .. }) {
+            let traces = &self.bridge.machine.traces;
+            if self.watch.is_some() || self.preservation.is_some() || traces.modal_observation_active()
+                || traces.capture_observation_active() || self.bridge.rendezvous_active() {
+                return Err("snapshot save and restore require no armed watch, preservation, capture, modal or rendezvous observation".into());
+            }
         }
         Ok(Some(match request {
             Request::List => {
@@ -848,6 +946,9 @@ impl Server {
             Request::ModalObservationBegin(request) => {
                 let machine = &mut self.bridge.machine;
                 let config = request.into_config(machine.session.board.mappings().to_vec())?;
+                if config.owns_memory_watch() && (self.watch.is_some() || self.preservation.is_some()) {
+                    return Err("installed modal observation requires exclusive memory-watch ownership".into());
+                }
                 machine.traces.begin_modal_observation(&machine.session, config)?;
                 serde_json::to_value(machine.traces.modal_observation_report())
                     .map_err(|failure| format!("modal-observation-begin: {failure}"))?
@@ -968,6 +1069,9 @@ impl Server {
                 json!({"first": read.first.0, "count": read.count.get(), "bytes": encode_hex(&read.bytes)})
             }
             Request::WatchBegin { ranges, limit, views, write_ranges, fetch_ranges } => {
+                if self.bridge.machine.traces.modal_observation_active() {
+                    return Err("active modal observation refuses memory-watch replacement".into());
+                }
                 if self.watch.is_some() {
                     return Err("a memory watch is already armed".into());
                 }
@@ -1024,9 +1128,15 @@ impl Server {
             }
             Request::WatchState => match &self.watch {
                 Some(watch) => watch.records.borrow().state(),
-                None => return Err("watch-state requires an armed memory watch".into()),
+                None => match self.bridge.machine.traces.modal_watch_state() {
+                    Some(state) => state?,
+                    None => return Err("watch-state requires an armed memory watch".into()),
+                },
             },
             Request::PreservationBegin { ranges } => {
+                if self.bridge.machine.traces.modal_observation_active() {
+                    return Err("active modal observation refuses preservation replacement".into());
+                }
                 if self.preservation.is_some() {
                     return Err("a preservation observation is already armed".into());
                 }
@@ -1094,6 +1204,50 @@ impl Server {
                     json!({"directory": std::fs::canonicalize(&target).map_err(|e| e.to_string())?, "saved": true,
                         "existing": false, "seconds": started.elapsed().as_secs_f64()})
                 }
+            }
+            Request::SnapshotSave { name } => {
+                if self.snapshots.contains_key(&name) {
+                    return Err(format!("snapshot {} is already held", name.0));
+                }
+                if self.snapshots.len() >= SNAPSHOT_LIMIT {
+                    return Err(format!("at most {SNAPSHOT_LIMIT} snapshots are held"));
+                }
+                let machine = &mut self.bridge.machine;
+                machine.disarm()?;
+                let exported = machine.session.checkpoint(None).and_then(|snapshot| snapshot.export());
+                machine.rearm()?;
+                let bytes = exported?;
+                let response = json!({"name": name, "bytes": bytes.len(), "instructions": machine.instructions(),
+                    "menu": menu_value(machine.menu()?)});
+                self.snapshots.insert(name, bytes);
+                response
+            }
+            Request::SnapshotRestore { name } => {
+                let cleared_failure = self.restore_snapshot(&name)?;
+                let machine = &self.bridge.machine;
+                json!({"snapshot": name, "instructions": machine.instructions(), "menu": menu_value(machine.menu()?),
+                    "cleared_failure": cleared_failure})
+            }
+            Request::SnapshotKey { name, key } => {
+                let cleared_failure = self.restore_snapshot(&name)?;
+                let started = Instant::now();
+                let before = self.bridge.machine.instructions();
+                let pressed = self.bridge.settled_key(key.press, default_pulse(key.press), MAX_SETTLE)
+                    .and_then(|settle| self.bridge.machine.require_running().map(|()| settle))
+                    .and_then(|settle| self.await_display_plane().map(|waited| (settle, waited)));
+                let instructions = self.bridge.machine.instructions() - before;
+                let (settle, display_wait, menu, failure) = match pressed {
+                    Ok((settle, waited)) => (json!(settle), json!(waited), menu_value(self.bridge.machine.menu()?), Value::Null),
+                    Err(failure) => (Value::Null, Value::Null, Value::Null, json!(failure)),
+                };
+                self.key_log.push(json!({"key": key.name, "snapshot": name, "seconds": started.elapsed().as_secs_f64(),
+                    "instructions": instructions, "settle": settle, "display_wait_instructions": display_wait, "failure": failure}));
+                json!({"snapshot": name, "key": key.name, "menu": menu, "settle": settle, "instructions": instructions,
+                    "display_wait_instructions": display_wait, "failure": failure, "cleared_failure": cleared_failure})
+            }
+            Request::SnapshotDrop { name } => {
+                self.snapshots.remove(&name).ok_or_else(|| format!("snapshot {} is not held", name.0))?;
+                json!({"name": name, "held": self.snapshots.len()})
             }
             Request::Finish => {
                 if self.bridge.machine.traces.modal_observation_active() {
@@ -1328,6 +1482,7 @@ fn drive() -> Result<(), String> {
         rendezvous,
         pending_capture: None,
         capture_evidence_error: None,
+        snapshots: BTreeMap::new(),
     };
     server.arm(&BTreeMap::new())?;
     server.serve()
@@ -1564,7 +1719,7 @@ mod tests {
             screenshots: Vec::new(), watch: None, preservation: None,
             key_log: Vec::new(), requests: RequestProfile::default(),
             rendezvous: RendezvousInputs::MenuUp, pending_capture: None,
-            capture_evidence_error: None,
+            capture_evidence_error: None, snapshots: BTreeMap::new(),
         }
     }
 
@@ -1580,6 +1735,57 @@ mod tests {
         let receipt = serde_json::from_slice(&std::fs::read(server.output.join("emulator-session.json")).unwrap()).unwrap();
         std::fs::remove_dir_all(&server.output).unwrap();
         (responses, receipt)
+    }
+
+    fn request(value: Value) -> Request {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn snapshot_key_rewinds_to_the_saved_guest_and_clears_a_terminal_stop() {
+        let mut server = server(&[0xe2800001, 0xeafffffd]);
+        assert_eq!(server.bridge.machine.run(1000), RunOutcome::Completed);
+        let saved = server.handle(request(json!({"command": "snapshot-save", "name": "n0"}))).unwrap().unwrap();
+        let at_save = saved["instructions"].as_u64().unwrap();
+        assert_eq!(server.bridge.machine.run(1000), RunOutcome::Completed);
+        server.bridge.machine.failure = Some("synthetic terminal fault".into());
+        assert!(server.handle(request(json!({"command": "snapshot-save", "name": "n1"}))).is_err());
+        let pressed = server.handle(request(json!({"command": "snapshot-key", "name": "n0", "key": "up"}))).unwrap().unwrap();
+        assert_eq!(pressed["cleared_failure"], "synthetic terminal fault");
+        assert_eq!(server.bridge.machine.instructions(), at_save + pressed["instructions"].as_u64().unwrap());
+        let again = server.handle(request(json!({"command": "snapshot-key", "name": "n0", "key": "up"}))).unwrap().unwrap();
+        assert_eq!(again["instructions"], pressed["instructions"]);
+        let restored = server.handle(request(json!({"command": "snapshot-restore", "name": "n0"}))).unwrap().unwrap();
+        assert_eq!(restored["instructions"].as_u64(), Some(at_save));
+        assert_eq!(server.bridge.machine.instructions(), at_save);
+        server.handle(request(json!({"command": "snapshot-drop", "name": "n0"}))).unwrap();
+        assert!(server.handle(request(json!({"command": "snapshot-key", "name": "n0", "key": "up"}))).is_err());
+    }
+
+    #[test]
+    fn a_stopped_guest_answers_trace_hits_but_no_other_request_until_restored() {
+        let mut server = server(&[0xeafffffe]);
+        server.handle(request(json!({"command": "snapshot-save", "name": "n0"}))).unwrap();
+        server.bridge.machine.failure = Some("synthetic terminal fault".into());
+        assert!(server.handle(request(json!({"command": "trace-hits", "from": 0}))).is_ok());
+        assert!(server.handle(request(json!({"command": "read-memory", "address": 0, "count": 4}))).is_err());
+        let restored = server.handle(request(json!({"command": "snapshot-restore", "name": "n0"}))).unwrap().unwrap();
+        assert_eq!(restored["cleared_failure"], "synthetic terminal fault");
+        assert!(server.handle(request(json!({"command": "read-memory", "address": 0, "count": 4}))).is_ok());
+    }
+
+    #[test]
+    fn snapshots_refuse_an_armed_watch() {
+        let mut server = server(&[0xeafffffe]);
+        server.handle(request(json!({"command": "watch-begin", "ranges": [[0x01467588u64, 0x01467840u64]], "limit": 16}))).unwrap();
+        assert!(server.handle(request(json!({"command": "snapshot-save", "name": "n0"}))).is_err());
+    }
+
+    #[test]
+    fn snapshot_requests_refuse_malformed_names_and_keys() {
+        assert!(serde_json::from_value::<Request>(json!({"command": "snapshot-save", "name": "N0"})).is_err());
+        assert!(serde_json::from_value::<Request>(json!({"command": "snapshot-save", "name": ""})).is_err());
+        assert!(serde_json::from_value::<Request>(json!({"command": "snapshot-key", "name": "n0", "key": "shutter"})).is_err());
     }
 
     #[test]

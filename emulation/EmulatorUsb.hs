@@ -30,6 +30,8 @@ module EmulatorUsb
   , emulatorWatchObservation
   , emulatorExecutionWatchBegin
   , emulatorWatchStateRaw
+  , emulatorWatchStateLine
+  , decodeBridgeWatchLine
   , ModalResponse (..)
   , emulatorModalObservationBegin
   , emulatorModalObservationReport
@@ -42,6 +44,13 @@ module EmulatorUsb
   , emulatorMediaState
   , CaptureCommand (..)
   , emulatorCaptureCommand
+  , SnapshotName (..)
+  , MenuReading
+  , SnapshotPress (..)
+  , emulatorSnapshotSave
+  , emulatorSnapshotRestore
+  , emulatorSnapshotDrop
+  , emulatorSnapshotKey
   ) where
 
 import Control.Concurrent.MVar
@@ -126,12 +135,14 @@ watchRpc :: Emulator -> Value -> IO Value
 watchRpc = bridgeWatchRpc . exchangeLine
 
 bridgeWatchRpc :: BridgeExchange -> Value -> IO Value
-bridgeWatchRpc exchange request = do
-  line <- exchange (encode request)
-  pure $ case eitherDecodeStrict' line of
-    Left problem -> object ["wire_bytes" .= B.unpack line, "decode_error" .= problem]
-    Right (Object fields) | M.lookup "ok" fields == Just (Bool True) -> Object (M.delete "ok" fields)
-    Right value -> value
+bridgeWatchRpc exchange request = decodeBridgeWatchLine <$> exchange (encode request)
+
+-- | A watch response line as a value; undecodable bytes and refusals are retained rather than thrown.
+decodeBridgeWatchLine :: B.ByteString -> Value
+decodeBridgeWatchLine line = case eitherDecodeStrict' line of
+  Left problem -> object ["wire_bytes" .= B.unpack line, "decode_error" .= problem]
+  Right (Object fields) | M.lookup "ok" fields == Just (Bool True) -> Object (M.delete "ok" fields)
+  Right value -> value
 
 data CaptureCommand
   = BeginSaveLifecycle Lifecycle.Program
@@ -438,6 +449,10 @@ emulatorExecutionWatchBegin emulator protected forbidden limit = watchRpc emulat
 emulatorWatchStateRaw :: Emulator -> IO Value
 emulatorWatchStateRaw emulator = watchRpc emulator (object ["command" .= String "watch-state"])
 
+-- | The undecoded watch-state response line, for callers that store it before decoding.
+emulatorWatchStateLine :: Emulator -> IO B.ByteString
+emulatorWatchStateLine emulator = exchangeLine emulator (encode (object ["command" .= String "watch-state"]))
+
 
 data ModalResponse = ModalResponse
   { modalRawResponse :: Value
@@ -508,3 +523,57 @@ emulatorReadMemory emulator address count = do
       bytes <- hexField "bytes" fields
       require (B.length bytes == chunkBytes) "emulator memory read length mismatch"
       pure bytes
+
+-- | A guest snapshot the bridge holds in memory under this name: 1..64 lowercase ASCII letters,
+-- digits or '-'.
+newtype SnapshotName = SnapshotName String deriving (Eq, Ord, Show)
+
+-- | The firmware's current menu node id, its setting id and cursor; Nothing when no node is open.
+type MenuReading = Maybe (Word32, Word32, Word32)
+
+-- | One press from a held snapshot: the menu reading, the bridge's settle record and the guest
+-- instructions it ran, or the strict stop the press reached.
+data SnapshotPress
+  = SnapshotPressed MenuReading Value Integer
+  | SnapshotStopped String Integer
+  deriving (Eq, Show)
+
+emulatorSnapshotSave :: Emulator -> SnapshotName -> IO ()
+emulatorSnapshotSave emulator (SnapshotName name) =
+  () <$ rpc emulator (object ["command" .= String "snapshot-save", "name" .= name])
+
+emulatorSnapshotRestore :: Emulator -> SnapshotName -> IO MenuReading
+emulatorSnapshotRestore emulator (SnapshotName name) =
+  rpc emulator (object ["command" .= String "snapshot-restore", "name" .= name]) >>= menuReading
+
+emulatorSnapshotDrop :: Emulator -> SnapshotName -> IO ()
+emulatorSnapshotDrop emulator (SnapshotName name) =
+  () <$ rpc emulator (object ["command" .= String "snapshot-drop", "name" .= name])
+
+-- | Restores the snapshot, then presses one bridge key name with the bridge's default pulse.
+emulatorSnapshotKey :: Emulator -> SnapshotName -> String -> IO SnapshotPress
+emulatorSnapshotKey emulator (SnapshotName name) key = do
+  fields <- rpc emulator (object ["command" .= String "snapshot-key", "name" .= name, "key" .= key])
+  instructions <- objectField "instructions" fields >>= \value -> case fromJSON value of
+    Success count -> pure count
+    Error message -> ioError (userError ("invalid snapshot-key instruction count: " ++ message))
+  objectField "failure" fields >>= \failure -> case failure of
+    Null -> SnapshotPressed <$> menuReading fields <*> objectField "settle" fields <*> pure instructions
+    String message -> pure (SnapshotStopped (T.unpack message) instructions)
+    _ -> ioError (userError "snapshot-key failure must be null or text")
+
+menuReading :: M.KeyMap Value -> IO MenuReading
+menuReading fields = objectField "menu" fields >>= \value -> case value of
+  Object menu -> do
+    let word name = objectField name menu >>= \field -> case field of
+          Null -> pure Nothing
+          _ -> case fromJSON field of
+            Success number -> pure (Just number)
+            Error message -> ioError (userError ("invalid menu " ++ name ++ ": " ++ message))
+    reading <- (,,) <$> word "menu_id" <*> word "setting_id" <*> word "cursor"
+    case reading of
+      (Just node, Just setting, Just cursor) -> pure (Just (node, setting, cursor))
+      (Nothing, Nothing, Nothing) -> pure Nothing
+      _ -> ioError (userError "menu reading is partially null")
+  Null -> pure Nothing
+  _ -> ioError (userError "menu reading must be an object")

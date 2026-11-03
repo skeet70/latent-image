@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "keys": ["ok", "down", "up", "right", "left", "back", "q", "dial-right", "dial-left", "play"],
+  "context_keys": {"controller": 74, "state": 24, "keys": ["ok", "down", "up", "right", "left", "back"]},
+  "identity_reads": [{"start": "0x009503c0", "end": "0x009503c4"}],
+  "terminal_presses": [
+    {"controller": 75, "state": 13, "key": "ok"},
+    {"controller": 76, "state": 33, "key": "ok"},
+    {"controller": 76, "state": 37, "key": "ok"}
+  ],
+  "roots": [{"name": "default"}],
+  "max_trials": 30000,
+  "max_nodes": 5000,
+  "max_depth": 16,
+  "max_seconds": 21600
+}

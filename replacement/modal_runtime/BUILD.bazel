@@ -1,4 +1,5 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 filegroup(
     name = "module",
@@ -25,6 +26,45 @@ filegroup(
         "//menu:__pkg__",
         "//replacement/bank:__pkg__",
         "//transport:__pkg__",
+    ],
+)
+
+filegroup(
+    name = "modal75-owned-sources",
+    srcs = ["src/modal75.rs"],
+    visibility = ["//replacement/bank:__pkg__"],
+)
+
+genrule(
+    name = "modal75-tests-build",
+    srcs = ["src/modal75.rs"],
+    outs = ["modal75-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/modal75.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
+)
+
+sh_test(
+    name = "modal75-tests",
+    size = "small",
+    srcs = ["//emulation:recovery-task-state-tests.sh"],
+    args = ["$(location :modal75-tests-build)"],
+    data = [":modal75-tests-build"],
+)
+
+haskell_binary(
+    name = "controller75-table",
+    srcs = ["Controller75TableMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host/firmware:bank-allowlist",
     ],
 )
 
@@ -221,6 +261,188 @@ haskell_test(
     deps = [
         ":entry-binding",
         "//emulation:case-sha256",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_binary(
+    name = "controller-manifest",
+    srcs = ["ControllerManifestMain.hs"],
+    ghcopts = ["-XGHC2021", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":service-categories",
+        "//emulation:case-sha256",
+        "//replacement/media_permit:stock-inventory",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "controller-scale",
+    srcs = ["ControllerScaleMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//replacement/media_permit:stock-inventory",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "controller-routes",
+    srcs = ["ControllerRoutesMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "controller-forms",
+    srcs = ["ControllerFormsMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":instruction-form",
+        "//emulation:case-sha256",
+        "//replacement/media_permit:stock-inventory",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "controller-stack-separation",
+    srcs = ["StackSeparationMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//replacement/media_permit:stock-inventory",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_library(
+    name = "instruction-form",
+    srcs = ["Replacement/ModalRuntime/InstructionForm.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_library(
+    name = "service-categories",
+    srcs = ["Replacement/ModalRuntime/ServiceCategories.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//replacement/media_permit:stock-inventory",
+        "//host:base",
+        "//host:containers",
+    ],
+)
+
+haskell_binary(
+    name = "controller75-inventory",
+    srcs = ["Controller75InventoryMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":instruction-form",
+        ":service-categories",
+        "//emulation:case-sha256",
+        "//replacement/media_permit:stock-inventory",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "menu-census",
+    srcs = ["MenuCensusMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+    ],
+)
+
+haskell_library(
+    name = "menu-tables-decode",
+    srcs = ["Replacement/ModalRuntime/MenuTables.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
+)
+
+haskell_binary(
+    name = "menu-tables",
+    srcs = ["MenuTablesMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":menu-tables-decode",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+    ],
+)
+
+haskell_test(
+    name = "menu-tables-tests",
+    srcs = ["MenuTablesTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        ":menu-tables-decode",
         "//host:base",
         "//host:bytestring",
     ],

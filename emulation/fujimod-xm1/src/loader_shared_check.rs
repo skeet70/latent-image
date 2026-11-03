@@ -353,7 +353,7 @@ fn verified(root:&Path,analysis:&Path)->Result<Checked,String>{
     }
     require(cursor==capture.instructions.0&&core_cursor==*actual_counts&&split&&segment_cursor==consumer.window.segments.len()&&missing.is_empty(),"shared route evidence is incomplete")?;
     let timer=loader_timer_check::admit_interval(root,report,&timer_rows,origin.instructions,owner::Count(8_000_000))?;
-    let (_,_,effects)=semantic_calls(root,report,&catalog,&publications)?;
+    let (_,_,effects)=semantic_calls(root,report,&catalog,&publications,None,None)?;
     let callers=report.calls.iter().filter(|call|call.kind==CallKind::Loader&&call.target==Guest(0x69cdf8)).map(|call|{
         let entered=event(report,call.entry.ok_or("dispatcher loader entry absent")?)?;Ok((usize::from(call.core),entered.registers.r[0],call.continuation.0))
     }).collect::<Result<Vec<_>,String>>()?;
