@@ -9,10 +9,10 @@ NIX_INPUTS = [
 
 # Objects named by experiments/embassy_phase1*/prelinked.json: the demonstration and its controls.
 VARIANTS = {
-    "embassy-platform-demo": '[ \\"counter-down\\" ]',
-    "embassy-platform-counter-up": '[ \\"counter-up\\" ]',
-    "embassy-platform-no-pender-kernel": '[ \\"counter-down\\" \\"control-no-pender-kernel\\" ]',
-    "embassy-platform-no-executors": '[ \\"counter-down\\" \\"control-no-executors\\" ]',
+    "embassy-platform-demo": '[ \\"counter-up\\" ]',
+    "embassy-platform-counter-down": '[ \\"counter-down\\" ]',
+    "embassy-platform-no-pender-kernel": '[ \\"counter-up\\" \\"control-no-pender-kernel\\" ]',
+    "embassy-platform-no-executors": '[ \\"counter-up\\" \\"control-no-executors\\" ]',
 }
 
 # The experiment link has no --gc-sections, so only sections reachable from the hook handler and

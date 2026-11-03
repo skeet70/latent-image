@@ -1,5 +1,5 @@
 { pkgs ? import ../../build-support/nixpkgs.nix { config = { }; overlays = [ ]; }
-, features ? [ "counter-down" ]
+, features ? [ "counter-up" ]
 , hostTests ? false
 }:
 # Target builds produce the staticlib; hostTests runs the crate's host unit tests instead.
