@@ -815,7 +815,7 @@ checkCleanup inputs executions entry episodes pairs = do
             Just <$> need CompletionRejected (case continuations of value:_ -> Just value; [] -> Nothing)
 
 data CallbackTrack = CallbackTrack
-  { callbackEntry :: Sample, callbackCounter :: W.WordValue, callbackFrameSeen :: Bool
+  { callbackEntry :: Sample, callbackHost :: Sample, callbackCounter :: W.WordValue, callbackFrameSeen :: Bool
   , callbackCall :: Maybe Sample, callbackServiceEntered :: Bool, callbackIncrementSeen :: Bool, callbackEpilogue :: Maybe Sample }
 currentNode :: Memory -> S.KernelCore -> Either WitnessError Word32
 currentNode memory core = do
@@ -850,14 +850,47 @@ checkCallbackFrame tracked sample = do
   frame <- interruptWords sample (sp-8)
   incomingFp <- register caller 11
   require (frame == [incomingFp,address (W.contextLr (stateOf caller))]) FrameRejected
-checkCallbacks :: Executions -> CompletionWitness -> [(Sample,Memory)] -> Either WitnessError [CallbackCycle]
-checkCallbacks executions (CompletionWitness _ completed) pairs = do
+-- | Watch rows, by index, that write any byte of the loader A IRQ nesting counter.
+counterWrites :: [CapturedEvent] -> [(Int,W.MemoryEvent)]
+counterWrites rows = [(index,event) | (index,captured) <- zip [0..] rows,let event = eventRecord captured,touches event]
+  where
+    nest = toInteger Plan.irqNest
+    touches event = W.eventSource event `notElem` [W.CpuRead,W.CpuFetch,W.HostRead,W.ModelBusRead]
+      && maybe False (\target -> toInteger target < nest+4 && toInteger target+toInteger (W.eventSize event) > nest) (W.eventPhysical event)
+-- | Checks that `host`, the last core0 0x40234 sample whose counter is 0, hosts a callback entry or return, and returns it:
+-- after it the first counter write is 0x40240 storing 1, no write stores 0, and ATCM 0x70001ffc holds its SP, saved at 0x40254.
+irqHost :: Executions -> [(Int,W.MemoryEvent)] -> Maybe Sample -> Sample -> Either WitnessError Sample
+irqHost executions counter host sample = do
+  frame <- need IrqRejected host
+  ran <- executed executions frame 0x40234
+  let writes = map snd (takeWhile ((< sampleCursor sample) . fst) (dropWhile ((< sampleCursor frame) . fst) counter))
+      exact event = W.eventSource event == W.CpuWrite && W.eventCore event == Just W.Primary && W.eventSize event == 4
+        && W.eventPhysical event == Just (fromIntegral Plan.irqNest) && maybe False (/=0) (W.eventValue event)
+  first <- need IrqRejected (listToMaybe writes)
+  require (ran && all exact writes && fmap (physical . address) (W.eventPc first) == Just 0x40240
+    && W.eventValue first == Just 1) IrqRejected
+  saved <- interruptWords sample 0x70001ff8
+  require (drop 1 saved == [address (W.contextSp (stateOf frame))]) IrqRejected
+  pure frame
+checkCallbacks :: Executions -> CompletionWitness -> [CapturedEvent] -> [(Sample,Memory)] -> Either WitnessError [CallbackCycle]
+checkCallbacks executions (CompletionWitness _ completed) rows pairs = do
   beginning <- clock completed
-  (pending,cycles) <- foldM (step beginning) (Nothing,[]) pairs
+  (_,pending,cycles) <- foldM (\(host,pending,cycles) (sample,memory) -> do
+    framed <- if coreOf sample == S.PrimaryKernel && pcOf sample == 0x40234 then do
+        nest <- readWord IrqRejected memory Plan.irqNest
+        pure (if nest == 0 then Just sample else host)
+      else pure host
+    (pending',cycles') <- step beginning framed (pending,cycles) (sample,memory)
+    pure (framed,pending',cycles')) (Nothing,Nothing,[]) pairs
   require (not (isJust pending) && not (null cycles)) CompletionRejected
   pure (reverse cycles)
   where
-    step beginning (pending,cycles) (sample,memory) = do
+    nestWrites = counterWrites rows
+    step beginning host (pending,cycles) (sample,memory) = do
+      let hosted = interruptDispatch sample memory >> irqHost executions nestWrites host sample
+          sameHost tracked = do
+            frame <- hosted
+            require (sampleHit frame == sampleHit (callbackHost tracked)) IrqRejected
       time <- clock sample
       if time < beginning then pure (pending,cycles) else case pending of
         Nothing | pcOf sample == 0x69cc18 -> do
@@ -872,10 +905,10 @@ checkCallbacks executions (CompletionWitness _ completed) pairs = do
           require (readWord CallbackRejected memory (physical creation+36) == Right 0) CallbackRejected
           dead <- readBytes CallbackRejected memory (physical node+12) 1
           require (B.head dead == 0) CallbackRejected
-          interruptDispatch sample memory
+          frame <- hosted
           counter <- readWord CallbackRejected memory 0x828094
           require (counter >= 1 && counter <= 104) CallbackRejected
-          pure (Just (CallbackTrack sample (W.WordValue counter) False Nothing False False Nothing),cycles)
+          pure (Just (CallbackTrack sample frame (W.WordValue counter) False Nothing False False Nothing),cycles)
         Nothing -> pure (Nothing,cycles)
         Just tracked | coreOf sample /= coreOf (callbackEntry tracked) -> pure (pending,cycles)
         Just tracked -> do
@@ -885,7 +918,7 @@ checkCallbacks executions (CompletionWitness _ completed) pairs = do
             0x69cc18 -> do
               ran <- executed executions caller 0x69cc18
               require (not ran && preserved caller sample && W.contextRegisters (stateOf caller) == W.contextRegisters (stateOf sample)) CallbackRejected
-              interruptDispatch sample memory
+              sameHost tracked
               pure (Just tracked {callbackEntry=sample},cycles)
             0x69cc1c -> do
               ran <- executed executions caller 0x69cc18
@@ -919,7 +952,7 @@ checkCallbacks executions (CompletionWitness _ completed) pairs = do
               require (ran && preserved caller sample
                 && word (W.contextCpsr (stateOf sample)) .&. 0x3ff == word (W.contextCpsr (stateOf caller)) .&. 0x3ff
                 && readWord CallbackRejected memory 0x828094 == Right expected) ReturnRejected
-              interruptDispatch sample memory
+              sameHost tracked
               pure (Nothing,CallbackCycle (callbackCounter tracked) (W.WordValue expected):cycles)
             _ -> pure (pending,cycles)
 
@@ -1077,7 +1110,7 @@ admitReceipt inputs observed = do
   checkResources episodes pairs
   publications <- checkSubmissions episodes executions pairs
   completed@(CompletionWitness completion _) <- checkCleanup inputs executions entry episodes pairs
-  callbacks <- checkCallbacks executions completed pairs
+  callbacks <- checkCallbacks executions completed (captureEvents watch) pairs
   checkRootInterval executions entry episodes completed watch
   final <- need SnapshotRejected (case reverse (receiptSamples receipt) of sample:_ -> Just sample; [] -> Nothing)
   let endingCounts = W.contextCounts (stateOf final)

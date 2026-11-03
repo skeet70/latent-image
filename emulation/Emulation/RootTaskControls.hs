@@ -34,7 +34,7 @@ data Control = WrongSource | WrongArtifact | WrongCandidate | WrongContract | Du
   | WrongFlagIdentity | WrongFlagTarget | WrongFlagResult | WrongConstructorTarget | WrongConstructorResult | WrongWrapperRegister | WrongCleanupSelector | WrongCleanupMask
   | WrongCallbackArgument | WrongCallbackResult | WrongCallbackFrame | WrongCallbackRestoration | MissingPostCleanupCallback
   | MaskedCallbackInterrupt | WrongCallbackDispatcherFrame | MissingCallbackInterruptStack | WrongCallbackReturnFrame
-  | DisabledCallbackAtcm | LowCallbackStack
+  | DisabledCallbackAtcm | LowCallbackStack | WrongCallbackIrqSavedSp | MissingCallbackIrqHost
   | WrongIrqStatus | WrongIrqFrame | WrongIrqReturn | WrongIrqRestoration deriving (Eq, Show, Enum, Bounded)
 data ControlError = BaselineRejected WitnessError | MutationRejected Control | WrongRefusal Control WitnessError (Maybe WitnessError)
   | ProducerSummaryChangedQualification deriving (Eq, Show)
@@ -93,6 +93,7 @@ expected control = case control of
   WrongCallbackRestoration -> ReturnRejected; MissingPostCleanupCallback -> CompletionRejected
   MaskedCallbackInterrupt -> IrqRejected; WrongCallbackDispatcherFrame -> FrameRejected; MissingCallbackInterruptStack -> FrameRejected
   WrongCallbackReturnFrame -> FrameRejected; DisabledCallbackAtcm -> IrqRejected; LowCallbackStack -> IrqRejected
+  WrongCallbackIrqSavedSp -> IrqRejected; MissingCallbackIrqHost -> IrqRejected
   WrongIrqStatus -> IrqRejected; WrongIrqFrame -> FrameRejected; WrongIrqReturn -> ReturnRejected; WrongIrqRestoration -> ReturnRejected
 withHash :: Control -> ObservedFiles -> J.Value -> J.Value -> Either ControlError ObservedFiles
 withHash control original receipt watch = do
@@ -156,17 +157,18 @@ refusalControls role sources original = do
       let plain value = Right (Nothing,original {observedReceipt=encode value})
           source value = Right (Just value,original)
           changedWatch value = do observed <- withHash control original receiptValue value; pure (Nothing,observed)
-          flipStackByte index = do
+          flipStackByte index offset = do
             let path = [field "samples",Element index,field "interrupt_stack",field "bytes"]
             holder <- pathAt control path receiptValue
             case holder of
               J.Array _ -> do
-                old <- pathAt control (path++[Element 12]) receiptValue >>= parse control :: Either ControlError Word32
-                set control (path++[Element 12]) (old `xor` 1) receiptValue >>= plain
+                old <- pathAt control (path++[Element offset]) receiptValue >>= parse control :: Either ControlError Word32
+                set control (path++[Element offset]) (old `xor` 1) receiptValue >>= plain
               J.Object _ -> do
-                offset <- pathAt control (path++[field "offset"]) receiptValue >>= parse control :: Either ControlError Int
-                let blob = observedBytes original; location = offset+12
-                unless (location < B.length blob) (Left (MutationRejected control))
+                start <- pathAt control (path++[field "offset"]) receiptValue >>= parse control :: Either ControlError Int
+                size <- pathAt control (path++[field "length"]) receiptValue >>= parse control :: Either ControlError Int
+                let blob = observedBytes original; location = start+offset
+                unless (offset >= 0 && offset < size && start >= 0 && start+size <= B.length blob) (Left (MutationRejected control))
                 let changed = B.take location blob <> B.singleton (B.index blob location `xor` 1) <> B.drop (location+1) blob
                 bound <- set control [field "compact",field "blob_sha256"] (hash changed) receiptValue
                 pure (Nothing,original {observedReceipt=encode bound,observedBytes=changed})
@@ -181,6 +183,12 @@ refusalControls role sources original = do
           resourceCall = position control (\sample -> callTo 0x7247ac sample && register sample 0 == Just 42) receipt
           submission = position control (\sample -> primary sample && currentRoot sample && sampleBoundary sample == TaskSubmit) receipt
           callback location = position control (\sample -> rootTerminated sample && pc sample == location) receipt
+          nest sample = [decodeWord body | view <- sampleViews sample,viewPhysical view == W.Address Plan.irqNest
+            ,let W.Bytes body = viewBytes view,B.length body == 4]
+          levelZeroFrame entered = case reverse [index | (index,sample) <- zip [0..entered-1] samples
+            ,primary sample && pc sample == 0x40234 && nest sample == [0]] of
+            index:_ -> Right index
+            [] -> Left (MutationRejected control)
           irq = position control (\sample -> primary sample && currentRoot sample && sampleBoundary sample == IrqEntry
             && Plan.physical (address (W.contextLr (state sample)))-4 `notElem` [0x725dd8,0x724924,0x725f08,0x725fa8]) receipt
           irqAfter boundary = do index <- irq; after control receipt index (\sample -> primary sample && currentRoot sample && sampleBoundary sample == boundary)
@@ -322,7 +330,7 @@ refusalControls role sources original = do
           unless (not (IntSet.null excluded)) (Left (MutationRejected control))
           dropSamples control excluded receiptValue >>= plain
         MaskedCallbackInterrupt -> alterContext (callback 0x69cc18) "cpsr" (.|. 0x80)
-        WrongCallbackDispatcherFrame -> callback 0x69cc18 >>= flipStackByte
+        WrongCallbackDispatcherFrame -> do entered <- callback 0x69cc18; flipStackByte entered 12
         MissingCallbackInterruptStack -> do
           entered <- callback 0x69cc18
           set control [field "samples",Element entered,field "interrupt_stack"] J.Null receiptValue >>= plain
@@ -331,11 +339,20 @@ refusalControls role sources original = do
           ending <- after control receipt entered (\sample -> pc sample == 0x69cc68 && contextCore (sampleContext sample) == contextCore (sampleContext (sampleAt entered)))
           returned <- after control receipt ending (\sample -> pc sample == Plan.physical (address (W.contextLr (state (sampleAt entered))))
             && contextCore (sampleContext sample) == contextCore (sampleContext (sampleAt entered)))
-          flipStackByte returned
+          flipStackByte returned 12
         DisabledCallbackAtcm -> do
           entered <- callback 0x69cc18
           set control [field "samples",Element entered,field "context",field "tcm",Element 0,Element 1] (0 :: Word32) receiptValue >>= plain
         LowCallbackStack -> alterContext (callback 0x69cc18) "sp" (\(_ :: Word32) -> 0x70000020)
+        WrongCallbackIrqSavedSp -> do
+          entered <- callback 0x69cc18
+          InterruptStack (W.Address low) _ <- maybe (Left (MutationRejected control)) Right (sampleInterruptStack (sampleAt entered))
+          unless (low <= 0x70001ffc) (Left (MutationRejected control))
+          flipStackByte entered (fromIntegral (0x70001ffc-low))
+        MissingCallbackIrqHost -> do
+          entered <- callback 0x69cc18
+          frame <- levelZeroFrame entered
+          dropSample control frame receiptValue >>= plain
         WrongIrqStatus -> alterContext irq "spsr" (\value -> value .&. 0xffffffe0 .|. 0x12)
         WrongIrqFrame -> alterContext (irqAfter IrqFrame) "sp" (+4)
         WrongIrqReturn -> alterContext (irqAfter IrqReturn) "spsr" (`xor` 0x20000000)
