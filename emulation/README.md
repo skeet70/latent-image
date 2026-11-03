@@ -1615,6 +1615,12 @@ The fixed-view policy refuses decoder changes. Each watched carrier fetch checks
 
 Dynamic call-entry/return sites use `TraceSites::add_sites`. Added labels are stopping labels even after the last earlier site with that label has drained. The public SDK regression exercises two consecutive remove/add transitions and checks the stopped guest PC, register value and entered count.
 
+By default `TraceSites` installs per-address instruction hooks: `arm`, `arm_primary`, `add_sites`, `remove_sites`, `rearm` and modal begin/end reinstall them, and `disarm` removes them. Each reinstall places the points behind every memory watch already begun.
+
+`arm_mutable` opts in to persistent points: one all-PC mutable set per core, installed ahead of later watches. `replace_sites`, `add_sites`, `remove_sites`, modal begin/end and modal-return replacement then change only each core's membership, and a core stopped at a point resumes that instruction once while its entered count and PC are unchanged and the address remains a member. `arm_mutable` restarts reporting, so a core stopped at a site in the new set reports that entry again; `arm` and `arm_primary` remove the sets and return to per-address hooks. The heap observer opts in. Installed persistent sets cost one host callback per executed instruction on every core.
+
+`TraceSites::set_disarmed_points` selects what a persistent `disarm` does. `DisarmedPoints::Release`, the default, removes the sets, so a watch begun before `rearm` is ahead of the reinstalled points. `DisarmedPoints::Retain` empties the membership and keeps the sets, their ordering ahead of later watches and their per-instruction cost. `Machine::disarm` removes every set before a checkpoint, and `Machine::rearm` reinstalls them with the unchanged arming and policy.
+
 Both image5 and plain producer-return boundaries are required independently of the projection schedule. Removing a return event together with its resource files does not reduce the admission requirements.
 
 The consumer admits exactly one source-bound, untimed 131,072-byte model-bus copy at each physical loader base `0x40000` and `0xd0000`, only when a later raw CPU row has a clock strictly before the canonical entry projection. CPU, host, partial, misplaced, duplicate and ambiguously ordered carrier writes refuse. Untimed saved-frame writes require raw CPU bounds wholly outside the entry-to-first-scheduler-transfer lifetime. Neither an epoch summary nor a caller-supplied cut assigns a clock or changes attribution.
