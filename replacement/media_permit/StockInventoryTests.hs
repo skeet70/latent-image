@@ -89,7 +89,7 @@ main = do
       && derivationPremiseUses predicatedRun == [PremiseUse (ProgramCounter 0x1014) GlobalObjectStackSeparation])
   check "a different condition ends the run, so the store base is unknown"
     (refused (derive [0xe92d4800,0xe3500000,0x03073588,0x13403146,0x03a02000,0x01c321b4,0xe8bd8800]))
-  check "after an executed flag-setting member, the rest of the run may be skipped"
+  check "an executed flag-setting member does not make the rest of the run execute"
     (refused (derive [0xe92d4800,0xe3500000,0x058d1004,0x01b02001,0x058de004,0xe8bd8800]))
   check "an overwritten LR is not an incoming register return"
     (refused (derive [0xe3a0e000,0xe12fff1e]))
