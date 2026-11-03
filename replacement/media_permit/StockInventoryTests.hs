@@ -470,7 +470,7 @@ main = do
   check "a multiply-accumulate keeps its loaded record addend for the saved stack pointer"
     (excluded accumulatedRecord && refusesWith "store through a saved stack pointer" accumulatedRecord)
   let walkReturn = [0xe3022000,0xe0822100,0xe4921004,0xe3510000,0x1afffffc,0xe12fff1e]
-  check "a word loaded through a post-incremented global pointer that can step into a declared array is excluded"
+  check "a word loaded through a post-incremented global pointer is excluded"
     (excluded walkReturn && refusesWith "returned" walkReturn)
   walkStore <- either fail pure (deriveTasks [0xe3022000,0xe0822100,0xe4921004,0xe5020004,0xe3510000,0x1afffffb,0xe3a01000,0xe12fff1e])
   check "a store through a post-incremented global pointer keeps global-object separation"
