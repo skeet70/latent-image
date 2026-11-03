@@ -24,6 +24,7 @@ const OWNED: OwnedIdentity = OwnedIdentity {
     update: "c3c049a2e2c8ea833d44f42ae655e64d3084e1ad833257bc7d9035b6a6aabc9c",
 };
 const NOP: u32 = 0xe320f000;
+const CANONICAL_IMAGE4: &str = "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16";
 
 #[derive(Deserialize)]
 struct Call { pc: Guest, target: Guest }
@@ -87,7 +88,7 @@ impl Program {
                 let producer = manifest.image5_load;
                 require(manifest.schema == 1 && manifest.candidate_dat_sha256.as_str() == reviewed.update && manifest.candidate_image4_sha256.as_str() == reviewed.image, "image5 candidate identity differs")?;
                 let frame_bytes = u32::try_from(producer.scratch_low_from_entry_sp.checked_neg().ok_or("image5 frame low-water overflows")?).map_err(|_| "image5 frame low-water lies above the entry stack pointer")?;
-                require(producer.entry == Guest(CARRIER[0]) && producer.replaced_extent == [Guest(CARRIER[0]), Guest(CARRIER[1])] && producer.return_pcs.len() == 1 && frame_bytes >= 8 && frame_bytes % 8 == 0 && frame_bytes <= 0x200, "image5 emitted frame or boundaries differ")?;
+                require(producer.entry == Guest(CARRIER[0]) && producer.rust_entry == Guest(0x6a96d4) && producer.replaced_extent == [Guest(CARRIER[0]), Guest(CARRIER[1])] && producer.return_pcs == [Guest(0x6a96d0)] && producer.null_refusal_pc == Guest(0x6a9790) && producer.scratch_low_from_entry_sp == -48 && frame_bytes == 48, "image5 emitted frame or boundaries differ")?;
                 let mut services: Vec<Guest> = producer.retained_calls.clone();services.sort_unstable();services.dedup();
                 require(services.iter().map(|target| target.0).eq(RETAINED_SERVICES) && producer.fill_callback == FILL_CALLBACK && producer.feed_callback == FEED_CALLBACK && producer.fill_flag == FILL_FLAG && producer.return_lr == STOCK_RETURN_LR, "image5 retained services or callback identities differ")?;
                 require(producer.linked_sha256.as_str() == reviewed.linked && producer.symbols_sha256.as_str() == reviewed.symbols && producer.staged_image4_sha256.as_str() == reviewed.image && producer.source_dat_image4_sha256[0].as_str() == super::loader_orchestration_owned::SOURCE_UPDATE, "image5 source/artifact identity differs")?;
@@ -100,13 +101,19 @@ impl Program {
                 let high = low + (CARRIER[1] - CARRIER[0]) as usize;
                 let padded = staged.get(low + linked.len()..high).is_some_and(|tail| linked.len() % 4 == 0 && tail.chunks_exact(4).all(|word| word == NOP.to_le_bytes()));
                 require(producer.source_dat_image4_sha256[1].as_str() == image.binding.sha256.as_str() && staged.len() == image.bytes.len() && staged[..low] == image.bytes[..low] && staged[high..] == image.bytes[high..] && staged.get(low..low + linked.len()) == Some(linked.as_slice()) && padded, "image5 image4 changes bytes outside reviewed carrier")?;
-                for call in &producer.call_sites {
-                    let offset = call.pc.0.checked_sub(CARRIER[0]).ok_or("image5 call outside carrier")? as usize;
-                    let word = u32::from_le_bytes(linked.get(offset..offset + 4).ok_or("image5 call outside carrier")?.try_into().map_err(|_| "image5 call word")?);
-                    let decoded = decode_call(call.pc, word)?.ok_or("image5 metadata call is not emitted")?;
-                    require(matches!(decoded.target, CallTarget::Direct(target) if target == call.target) && RETAINED_SERVICES.contains(&call.target.0), "image5 emitted call target differs")?;
-                    calls.push(decoded);
+                let mut emitted = Vec::new();
+                for (index, bytes) in linked.chunks_exact(4).enumerate() {
+                    let pc = Guest(CARRIER[0] + 4 * index as u32);
+                    let word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    require(word >> 25 != 0x7d, "image5 linked code contains an immediate BLX")?;
+                    match decode_call(pc, word)? {
+                        Some(StaticCall { target: CallTarget::Register(_), .. }) => return Err("image5 linked code contains a register-indirect call".into()),
+                        Some(call) if matches!(call.target, CallTarget::Direct(target) if !(CARRIER[0]..CARRIER[1]).contains(&target.0)) => emitted.push(call),
+                        _ => {}
+                    }
                 }
+                require(emitted.len() == producer.call_sites.len() && emitted.iter().zip(&producer.call_sites).all(|(decoded, call)| decoded.site == call.pc && matches!(decoded.target, CallTarget::Direct(target) if target == call.target) && RETAINED_SERVICES.contains(&call.target.0)), "image5 emitted external calls differ from the manifest")?;
+                calls = emitted;
                 let inside = |pc: Guest| (CARRIER[0]..CARRIER[1]).contains(&pc.0) && pc.0 % 4 == 0;
                 require(producer.execution_pcs.iter().copied().all(inside) && inside(producer.rust_entry) && inside(producer.return_pcs[0]) && inside(producer.null_refusal_pc) && producer.execution_pcs.contains(&producer.rust_entry) && producer.execution_pcs.contains(&producer.return_pcs[0]), "image5 emitted execution points differ")?;
                 image.binding.sha256 = Digest::of(&staged);
@@ -121,6 +128,7 @@ impl Program {
     pub(super) fn role(&self) -> Role { self.binding.role }
     pub(super) fn owned(&self) -> bool { self.owned.is_some() }
     pub(super) fn update(&self) -> &'static str { self.owned.as_ref().map_or(super::loader_orchestration_owned::SOURCE_UPDATE, |owned| owned.update) }
+    pub(super) fn image4(&self) -> &'static str { if self.owned() { OWNED.image } else { CANONICAL_IMAGE4 } }
     pub(super) fn call_sites(&self) -> Vec<StaticCall> { self.calls.clone() }
     pub(super) fn is_call_site(&self, pc: Guest) -> bool { self.calls.iter().any(|call| call.site == pc) }
     pub(super) fn return_pc(&self) -> Guest { self.owned.as_ref().map_or(Guest(0x6a9840), |owned| owned.return_pc) }

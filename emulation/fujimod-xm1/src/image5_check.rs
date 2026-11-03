@@ -53,6 +53,9 @@ pub(super) enum CallbackRole { FillDone, StorageFeed }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum PublicationBoundary { FlashloaderDone, Image5Fetch, ReturnBeforeFlag, RequestCallback }
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum FlagStep { Clear, WaitExit }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "refusal", rename_all = "kebab-case")]
 pub(super) enum Refusal {
@@ -68,6 +71,8 @@ pub(super) enum Refusal {
     CpuFillNotCredited,
     StorageReadFailed { status: u32 },
     PrematurePublication { boundary: PublicationBoundary },
+    FlagOrderDiffers { step: FlagStep },
+    FieldReadsDiffer,
     BssNotZero { address: u32 },
     DecodedByteMismatch { address: u32 },
     StagingByteMismatch { address: u32 },
@@ -140,9 +145,14 @@ enum ReadPhase { BeforeFirstMarker, BeforeFillRequest, BeforeDecoderInit }
 struct FieldRead { field: Field, phase: ReadPhase, value: u32 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", content = "pc", rename_all = "kebab-case")]
-enum Writer { Producer, Retained(Guest) }
+enum Writer { Retained(Guest) }
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(transparent)]
+struct OperationIndex(u32);
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+struct FlagPosition { after: Option<OperationIndex>, before: Option<OperationIndex> }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-struct FlagEffect { cleared_by: Writer, completed_by: Writer, completion_callback: Guest, wait_exit_after_finish: bool }
+struct FlagEffect { clear: FlagPosition, completed_by: Writer, completion_callback: Guest, wait: FlagPosition }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 struct FrameEffect { status: Status, restored: bool, link: Guest }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -162,9 +172,9 @@ struct DecoderObservation { completions: usize, takes: usize, completion_gives: 
 enum Scope { NaturalReadSuccessObservedBoundaries }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum UnqualifiedBoundary { SkipMode, CpuFillPath, StorageFailure, DecoderFailure, MissingSegmentNonreturn, InteriorCpuWritesBetweenViews, RetainedDecoderOwnership, PhysicalCacheCoherence, TransientRemapExclusion, PostConsumerAndWholeMachineLifetime }
+enum UnqualifiedBoundary { SkipMode, CpuFillPath, StorageFailure, DecoderFailure, MissingSegmentNonreturn, InteriorCpuWritesBetweenViews, HaloCpuWritesRecordedNotRefused, RetainedDecoderOwnership, PhysicalCacheCoherence, TransientRemapExclusion, PostConsumerAndWholeMachineLifetime }
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct Admission { schema: u32, role: Role, scope: Scope, limits: Vec<Limit>, unqualified: [UnqualifiedBoundary; 10], decoder: DecoderObservation, effects: Effects }
+pub(super) struct Admission { schema: u32, role: Role, scope: Scope, limits: Vec<Limit>, unqualified: [UnqualifiedBoundary; 11], decoder: DecoderObservation, effects: Effects }
 
 fn range_mapping(view: &RangeSnapshot, start: u32, end: u32) -> Result<()> {
     mapping(&view.mapping).map_err(projection_error)?; mapping(&view.alias_mapping).map_err(projection_error)?;
@@ -208,7 +218,7 @@ fn untyped_view(root: &Path, view: &RangeSnapshot, event: EventId, start: u32, e
 
 fn identity(report: &Report, catalog: &Catalog, program: &Program) -> Result<()> {
     require(report.identity.update.as_str() == program.update(), Refusal::WrongImageIdentity)?;
-    for (kind, digest) in [(SourceKind::Image5, "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"), (SourceKind::Image4, "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16")] {
+    for (kind, digest) in [(SourceKind::Image5, "3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a"), (SourceKind::Image4, program.image4())] {
         let image = catalog.0.iter().find(|image| image.binding.kind == kind).ok_or(Refusal::WrongImageIdentity)?;
         require(report.identity.sources.iter().filter(|source| source.kind == kind && source.sha256.as_str() == digest && source.start == image.binding.start && source.bytes.0 == image.binding.bytes.0).count() == 1, Refusal::WrongImageIdentity)?;
     }
@@ -247,7 +257,7 @@ pub(super) fn admit(root: &Path, report: &Report, catalog: &Catalog, program: &P
     let publication = publication(report, &interval)?;
     let image5 = image5_effect(report)?;
     let task1 = task1(report)?;
-    Ok(Admission { schema: 1, role: program.role(), scope: Scope::NaturalReadSuccessObservedBoundaries, limits: evidence.limits.clone(), unqualified: [UnqualifiedBoundary::SkipMode, UnqualifiedBoundary::CpuFillPath, UnqualifiedBoundary::StorageFailure, UnqualifiedBoundary::DecoderFailure, UnqualifiedBoundary::MissingSegmentNonreturn, UnqualifiedBoundary::InteriorCpuWritesBetweenViews, UnqualifiedBoundary::RetainedDecoderOwnership, UnqualifiedBoundary::PhysicalCacheCoherence, UnqualifiedBoundary::TransientRemapExclusion, UnqualifiedBoundary::PostConsumerAndWholeMachineLifetime], decoder, effects: Effects { reads, operations, progress: evidence.progress.iter().map(|progress| ByteCount(progress.cumulative.0)).collect(), views, flag, frame: FrameEffect { status: Status(status), restored: true, link: returned.registers.lr }, publication, image5, task1 } })
+    Ok(Admission { schema: 1, role: program.role(), scope: Scope::NaturalReadSuccessObservedBoundaries, limits: evidence.limits.clone(), unqualified: [UnqualifiedBoundary::SkipMode, UnqualifiedBoundary::CpuFillPath, UnqualifiedBoundary::StorageFailure, UnqualifiedBoundary::DecoderFailure, UnqualifiedBoundary::MissingSegmentNonreturn, UnqualifiedBoundary::InteriorCpuWritesBetweenViews, UnqualifiedBoundary::HaloCpuWritesRecordedNotRefused, UnqualifiedBoundary::RetainedDecoderOwnership, UnqualifiedBoundary::PhysicalCacheCoherence, UnqualifiedBoundary::TransientRemapExclusion, UnqualifiedBoundary::PostConsumerAndWholeMachineLifetime], decoder, effects: Effects { reads, operations, progress: evidence.progress.iter().map(|progress| ByteCount(progress.cumulative.0)).collect(), views, flag, frame: FrameEffect { status: Status(status), restored: true, link: returned.registers.lr }, publication, image5, task1 } })
 }
 
 fn operations<'a>(report: &'a Report, interval: &Interval<'_>) -> Result<(Vec<Operation>, Vec<Call<'a>>)> {
@@ -392,7 +402,7 @@ fn guards(root: &Path, report: &Report, catalog: &Catalog, evidence: &Evidence, 
     let finish = call(calls, |step| matches!(step, Step::DecoderFinish))?;
     let windows = [(ReadPhase::BeforeFirstMarker, segment, first_marker.entered), (ReadPhase::BeforeFillRequest, first_marker.finished, fill.entered), (ReadPhase::BeforeDecoderInit, second_marker.finished, init.entered)];
     let expected_reads = [(Field::FlashOffset, ReadPhase::BeforeFirstMarker), (Field::FlashLength, ReadPhase::BeforeFirstMarker), (Field::BssBase, ReadPhase::BeforeFillRequest), (Field::BssLength, ReadPhase::BeforeFillRequest), (Field::Destination, ReadPhase::BeforeDecoderInit)];
-    let mut reads = BTreeSet::new(); let mut mode_read = false;
+    let mut record_reads = Vec::new(); let mut mode_read = false;
     let mut fetches = BTreeSet::new(); let mut saved_writes = BTreeSet::new();
     let slots = program.saved_slots(sp, &entry.registers.r, entry.registers.lr);
     let mut copied: Vec<Vec<[u64; 2]>> = vec![Vec::new(); BLOCKS as usize];
@@ -445,6 +455,7 @@ fn guards(root: &Path, report: &Report, catalog: &Catalog, evidence: &Evidence, 
                     if frame_store { for &(address, value) in &slots { if low <= u64::from(address) && u64::from(address) + 4 <= high { if row.size == 4 && address >= sp - 8 { require(row.value == Some(u64::from(value)), Refusal::BadFrame)?; } saved_writes.insert(address); } } }
                 }
                 if may_live && overlaps(low, high, frame_low, sp) && !producer_pc { return Err(Refusal::BadFrame); }
+                if during && !producer_pc && row.source == Access::CpuWrite && overlaps(low, high, STAGING[0], STAGING[1]) { return Err(Refusal::Abi { boundary: Boundary::WriteConfinement }); }
                 if may_live && overlaps(low, high, sp, stack_end) { return Err(Refusal::BadFrame); }
                 if flag && may_live {
                     if producer_pc { clears.push(clock.ok_or(Refusal::CoverageDiffers)?); }
@@ -476,17 +487,22 @@ fn guards(root: &Path, report: &Report, catalog: &Catalog, evidence: &Evidence, 
                 if row.pc == Some(Guest(0x657194)) && row.physical == Guest(0x61c008) && row.value == Some(0) && clock.is_some_and(|clock| mode.entered.instructions.0 < clock && clock <= mode.finished.instructions.0) { mode_read = true; }
                 if producer_pc {
                     let clock = clock.ok_or(Refusal::CoverageDiffers)?;
-                    for &(field, phase) in &expected_reads {
-                        let (_, after, until) = windows.iter().find(|window| window.0 == phase).ok_or(Refusal::CoverageDiffers)?;
-                        let value = SEGMENT[(field.offset() / 4) as usize];
-                        if row.physical == Guest(pointer + field.offset()) && row.value == Some(u64::from(value)) && after.instructions.0 < clock && clock <= until.instructions.0 { reads.insert(FieldRead { field, phase, value }); }
-                    }
+                    if overlaps(low, high, pointer, pointer + 4 * SEGMENT_WORDS as u32) { record_reads.push((clock, row.physical.0 - pointer, row.value)); }
                     if row.physical == FILL_FLAG && row.value.is_some_and(|value| value != 0) { exits.push(clock); }
                 }
             }
         }
     }
-    require(reads.len() == expected_reads.len() && mode_read, missing(MissingEvidence::InputReads))?;
+    require(mode_read && record_reads.len() >= expected_reads.len(), missing(MissingEvidence::InputReads))?;
+    record_reads.sort_unstable_by_key(|read| read.0);
+    let mut reads = Vec::with_capacity(expected_reads.len());
+    for (&(clock, offset, value), &(field, phase)) in record_reads.iter().zip(&expected_reads) {
+        let (_, after, until) = windows.iter().find(|window| window.0 == phase).ok_or(Refusal::CoverageDiffers)?;
+        let expected = SEGMENT[(field.offset() / 4) as usize];
+        require(offset == field.offset() && value == Some(u64::from(expected)) && after.instructions.0 < clock && clock <= until.instructions.0, Refusal::FieldReadsDiffer)?;
+        reads.push(FieldRead { field, phase, value: expected });
+    }
+    require(record_reads.len() == expected_reads.len(), Refusal::FieldReadsDiffer)?;
     for observed in report.events.iter().filter(|event| carrier(event.pc)) { require(fetches.contains(&(observed.pc.0, observed.instructions.0 + 1)), missing(MissingEvidence::CodeGuard))?; }
     require(slots.iter().all(|(address, _)| saved_writes.contains(address)), missing(MissingEvidence::Frame))?;
     for (index, coverage) in copied.iter_mut().enumerate() {
@@ -494,12 +510,21 @@ fn guards(root: &Path, report: &Report, catalog: &Catalog, evidence: &Evidence, 
         for span in coverage.iter() { require(span[0] <= committed, missing(MissingEvidence::StagingWrites))?; committed = committed.max(span[1]); }
         require(committed == start + u64::from(BLOCK), missing(MissingEvidence::StagingWrites))?;
     }
-    require(clears.len() == 1 && clears[0] <= fill.entered.instructions.0, missing(MissingEvidence::FlagClear))?;
+    require(clears.len() == 1, missing(MissingEvidence::FlagClear))?;
     require(completions.len() == 1, missing(MissingEvidence::FillCompletion))?;
-    require(exits.iter().any(|&clock| finish.finished.instructions.0 < clock && completions[0] < clock && clock <= returned.instructions.0) && exits.iter().all(|&clock| completions[0] < clock), Refusal::PrematurePublication { boundary: PublicationBoundary::ReturnBeforeFlag })?;
+    let exit = exits.iter().copied().filter(|&clock| completions[0] < clock && clock <= returned.instructions.0).max();
+    let exit = exit.filter(|_| exits.iter().all(|&clock| completions[0] < clock)).ok_or(Refusal::PrematurePublication { boundary: PublicationBoundary::ReturnBeforeFlag })?;
+    let index = |wanted: fn(Step) -> bool| calls.iter().position(|call| wanted(call.step)).map(|index| OperationIndex(index as u32));
+    let clear = position(calls, clears[0]);
+    require(clear == FlagPosition { after: index(|step| matches!(step, Step::Marker(MarkerId::MainStart))), before: index(|step| matches!(step, Step::Fill)) }, Refusal::FlagOrderDiffers { step: FlagStep::Clear })?;
+    let wait = position(calls, exit);
+    require(wait == FlagPosition { after: index(|step| matches!(step, Step::Marker(MarkerId::DecodeEnd))), before: index(|step| matches!(step, Step::Marker(MarkerId::MainEnd))) }, Refusal::FlagOrderDiffers { step: FlagStep::WaitExit })?;
     require(done_stores.iter().all(|&clock| returned.instructions.0 < clock), Refusal::PrematurePublication { boundary: PublicationBoundary::FlashloaderDone })?;
-    let reads = reads.into_iter().collect();
-    Ok((reads, FlagEffect { cleared_by: Writer::Producer, completed_by: Writer::Retained(FILL_STORE_PC), completion_callback: FILL_CALLBACK, wait_exit_after_finish: true }))
+    Ok((reads, FlagEffect { clear, completed_by: Writer::Retained(FILL_STORE_PC), completion_callback: FILL_CALLBACK, wait }))
+}
+/// The last operation returned before `clock` and the first entered at or after it.
+fn position(calls: &[Call<'_>], clock: u64) -> FlagPosition {
+    FlagPosition { after: calls.iter().rposition(|call| call.finished.instructions.0 < clock).map(|index| OperationIndex(index as u32)), before: calls.iter().position(|call| clock <= call.entered.instructions.0).map(|index| OperationIndex(index as u32)) }
 }
 
 fn samples(root: &Path, report: &Report, catalog: &Catalog, evidence: &Evidence, interval: &Interval<'_>, calls: &[Call<'_>], views: &mut Vec<ViewEffect>) -> Result<()> {
@@ -605,8 +630,8 @@ pub(super) fn compare(retained: &Admission, owned: &Admission) -> Result<()> {
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-enum Control { Unchanged, WrongImage, WrongSegment, WrongDestination, WrongStaging, WrongEntry, WrongFillCallback, WrongFeedCallback, PrematureDone, PrematureImage5, ReturnBeforeFlag, BssNotZero, DecodedByteMismatch, MissingFreshBlock, MissingStagingWrites, OutOfRangeWrite, WrongFifthArgument, BadFrame, BadStatus, SyntheticSkipMode, MissingCodeGuard, AliasDisagreement }
-const CONTROLS: [Control; 22] = [Control::Unchanged, Control::WrongImage, Control::WrongSegment, Control::WrongDestination, Control::WrongStaging, Control::WrongEntry, Control::WrongFillCallback, Control::WrongFeedCallback, Control::PrematureDone, Control::PrematureImage5, Control::ReturnBeforeFlag, Control::BssNotZero, Control::DecodedByteMismatch, Control::MissingFreshBlock, Control::MissingStagingWrites, Control::OutOfRangeWrite, Control::WrongFifthArgument, Control::BadFrame, Control::BadStatus, Control::SyntheticSkipMode, Control::MissingCodeGuard, Control::AliasDisagreement];
+enum Control { Unchanged, WrongImage, WrongSegment, WrongDestination, WrongStaging, WrongEntry, WrongFillCallback, WrongFeedCallback, PrematureDone, PrematureImage5, ReturnBeforeFlag, BssNotZero, DecodedByteMismatch, StagingByteMismatch, MissingFreshBlock, MissingStagingWrites, OutOfRangeWrite, FlagWriterDiffers, FlagClearOrder, FieldReadOrder, WrongFifthArgument, BadFrame, BadStatus, SyntheticSkipMode, MissingCodeGuard, AliasDisagreement }
+const CONTROLS: [Control; 26] = [Control::Unchanged, Control::WrongImage, Control::WrongSegment, Control::WrongDestination, Control::WrongStaging, Control::WrongEntry, Control::WrongFillCallback, Control::WrongFeedCallback, Control::PrematureDone, Control::PrematureImage5, Control::ReturnBeforeFlag, Control::BssNotZero, Control::DecodedByteMismatch, Control::StagingByteMismatch, Control::MissingFreshBlock, Control::MissingStagingWrites, Control::OutOfRangeWrite, Control::FlagWriterDiffers, Control::FlagClearOrder, Control::FieldReadOrder, Control::WrongFifthArgument, Control::BadFrame, Control::BadStatus, Control::SyntheticSkipMode, Control::MissingCodeGuard, Control::AliasDisagreement];
 impl Control {
     fn name(self) -> String { serde_json::to_value(self).ok().and_then(|value| value.as_str().map(str::to_owned)).unwrap_or_default() }
     fn expected(self) -> Option<Refusal> {
@@ -633,6 +658,10 @@ impl Control {
             Self::SyntheticSkipMode => Some(Refusal::SyntheticSkipMode),
             Self::MissingCodeGuard => Some(missing(MissingEvidence::CodeGuard)),
             Self::AliasDisagreement => Some(Refusal::Abi { boundary: Boundary::Mapping }),
+            Self::StagingByteMismatch => Some(Refusal::StagingByteMismatch { address: STAGING[0] }),
+            Self::FlagWriterDiffers => Some(Refusal::FlagWriterDiffers { address: FILL_FLAG.0 }),
+            Self::FlagClearOrder => Some(Refusal::FlagOrderDiffers { step: FlagStep::Clear }),
+            Self::FieldReadOrder => Some(Refusal::FieldReadsDiffer),
         }
     }
 }
@@ -767,6 +796,34 @@ fn mutate(control: Control, root: &Path, report: &mut Report) -> std::result::Re
         Control::BadStatus => { report.events[returned].registers.r[0] = 1; }
         Control::SyntheticSkipMode => { let finished = service(report, MODE_QUERY)?.returned.ok_or("mode return absent")?.0; report.events[finished].registers.r[0] = 1; }
         Control::MissingCodeGuard => { report.image5.as_mut().ok_or("image5 evidence absent")?.code = None; }
+        Control::StagingByteMismatch => {
+            let fresh = report.image5.as_mut().and_then(|image5| image5.progress.first_mut()).and_then(|progress| progress.fresh.as_mut()).ok_or("fresh block absent")?;
+            rebind_view(root, fresh, "control-staging.bin", |bytes, view| { bytes[0] ^= 0xff; view.expected_equal = false; view.first_difference = Some(view.mapping.guest); })?;
+        }
+        Control::FlagWriterDiffers => rewrite_watches(root, report, |watch| {
+            let Some(record) = watch.records.iter_mut().find(|record| record.row.source == Access::CpuWrite && record.row.pc == Some(FILL_STORE_PC) && record.row.physical == FILL_FLAG && record.row.instructions.is_some_and(|clock| entry_clock < clock && clock <= returned_clock)) else { return Ok(false) };
+            let writer = Guest(FILL_STORE_PC.0 - 4);
+            record.row.pc = Some(writer); let fetch = record.latest_fetch.as_mut().ok_or("flag writer fetch absent")?; fetch.pc = writer; fetch.address = writer; fetch.physical = writer; Ok(true)
+        })?,
+        Control::FlagClearOrder => {
+            let marked = service(report, MARKER)?.returned.ok_or("first marker return absent")?.0;
+            let clock = report.events[marked].instructions;
+            rewrite_watches(root, report, |watch| {
+                let Some(record) = watch.records.iter_mut().find(|record| record.row.source == Access::CpuWrite && record.row.pc.is_some_and(carrier) && record.row.physical == FILL_FLAG && record.row.instructions.is_some_and(|row| entry_clock < row && row <= returned_clock)) else { return Ok(false) };
+                record.row.instructions = Some(clock); record.latest_fetch.as_mut().ok_or("flag clear fetch absent")?.instructions = clock; Ok(true)
+            })?;
+        }
+        Control::FieldReadOrder => {
+            let segment = service(report, SEGMENT_LOOKUP)?.returned.ok_or("segment return absent")?.0;
+            let pointer = report.events[segment].registers.r[0] & !0x40000000;
+            rewrite_watches(root, report, |watch| {
+                let field = |record: &super::plain_check::AttributedRow, offset: u32| record.row.source == Access::CpuRead && record.row.pc.is_some_and(carrier) && record.row.physical == Guest(pointer + offset) && record.row.instructions.is_some_and(|clock| entry_clock < clock && clock <= returned_clock);
+                let (Some(first), Some(second)) = (watch.records.iter().position(|record| field(record, 0x14)), watch.records.iter().position(|record| field(record, 0x18))) else { return Ok(false) };
+                let (early, late) = (watch.records[first].row.instructions.ok_or("read clock absent")?, watch.records[second].row.instructions.ok_or("read clock absent")?);
+                for (index, clock) in [(first, late), (second, early)] { watch.records[index].row.instructions = Some(clock); watch.records[index].latest_fetch.as_mut().ok_or("read fetch absent")?.instructions = clock; }
+                Ok(true)
+            })?;
+        }
         Control::AliasDisagreement => {
             let fresh = report.image5.as_mut().and_then(|image5| image5.progress.first_mut()).and_then(|progress| progress.fresh.as_mut()).ok_or("fresh block absent")?;
             let mut bytes = read(&artifact(root, &fresh.files[2])?)?; bytes[0] ^= 1;
@@ -834,10 +891,16 @@ mod tests {
         assert!(record(&payload).is_err());
     }
 
+    fn receipt(update: &str, sources: Vec<super::super::SourceBinding>) -> Report {
+        let digest = Digest::of(b"synthetic image5 identity");
+        let identity = super::super::InputIdentity { run: digest.clone(), update: Digest::try_from(update.to_owned()).expect("update digest"), update_file: FileBinding { path: "input-update.DAT".into(), sha256: digest.clone() }, rom: digest.clone(), executable: digest.clone(), sources };
+        Report { schema: 3, program: super::super::loader_orchestration_owned::ProgramBinding::Retained, plain: None, image5: None, origin: None, identity, checkpoint: digest.clone(), instructions: super::super::Count(0), menu: Ok(None), error: None, machine_failure: None, events: Vec::new(), calls: Vec::new(), snapshots: Vec::new(), pulses: Vec::new(), epochs: Vec::new(), trace: FileBinding { path: "trace.json".into(), sha256: digest.clone() }, timer_transactions: FileBinding { path: "timer-transactions.json".into(), sha256: digest }, static_calls: Vec::new() }
+    }
     fn admission(role: Role, status: u32) -> Admission {
-        let flag = FlagEffect { cleared_by: Writer::Producer, completed_by: Writer::Retained(FILL_STORE_PC), completion_callback: FILL_CALLBACK, wait_exit_after_finish: true };
+        let position = FlagPosition { after: Some(OperationIndex(1)), before: Some(OperationIndex(2)) };
+        let flag = FlagEffect { clear: position, completed_by: Writer::Retained(FILL_STORE_PC), completion_callback: FILL_CALLBACK, wait: FlagPosition { after: Some(OperationIndex(10)), before: Some(OperationIndex(11)) } };
         let effects = Effects { reads: Vec::new(), operations: vec![Operation::DecoderFinish], progress: vec![ByteCount(BLOCK)], views: Vec::new(), flag, frame: FrameEffect { status: Status(status), restored: true, link: Guest(0x422b8) }, publication: vec![PublicationStep::ProducerReturn], image5: Image5Effect { core: Core::Primary, entry: IMAGE5_ENTRY, initializer: Vec::new(), outcome: IMAGE5_OUTCOME }, task1: Task1Effect { core: Core::Primary, entry: TASK1_ENTRY, priority: 6, stack: 0xc00, argument: 0, status: Status(0) } };
-        Admission { schema: 1, role, scope: Scope::NaturalReadSuccessObservedBoundaries, limits: Vec::new(), unqualified: [UnqualifiedBoundary::SkipMode; 10], decoder: DecoderObservation { completions: 1, takes: 2, completion_gives: 1 }, effects }
+        Admission { schema: 1, role, scope: Scope::NaturalReadSuccessObservedBoundaries, limits: Vec::new(), unqualified: [UnqualifiedBoundary::SkipMode; 11], decoder: DecoderObservation { completions: 1, takes: 2, completion_gives: 1 }, effects }
     }
     #[test]
     fn comparison_requires_retained_then_owned_roles_and_equal_effects() {
@@ -871,6 +934,10 @@ mod tests {
         assert!(program.owned() && program.return_pc() == Guest(0x6a96d0) && program.return_lr() == Guest(0x422b8) && program.fill_return_pc() == Some(Guest(0x6a973c)));
         let image4 = catalog.0.iter().find(|image| image.binding.kind == SourceKind::Image4).expect("image4");
         assert_eq!(image4.binding.sha256.as_str(), "4808c1c321f3605fb36163614819d52efb11cf7f6ac6825f014b728dccb25f77");
+        let staged_sources: Vec<_> = catalog.0.iter().map(|image| image.binding.clone()).collect();
+        assert_eq!(identity(&receipt(program.update(), staged_sources), &catalog, &program), Ok(()));
+        let canonical_sources: Vec<_> = Catalog::open(&analysis).expect("canonical catalog").0.iter().map(|image| image.binding.clone()).collect();
+        assert_eq!(identity(&receipt(program.update(), canonical_sources), &catalog, &program), Err(Refusal::WrongImageIdentity));
         let changed = Temporary::new();
         for name in ["image5-load-v1.bin", "image5-load-v1.symbols"] { std::fs::copy(stage.join(name), changed.0.join(name)).expect("copy stage"); }
         let mut contract = read(&stage.join("owned-image5-stage-v1-contract.json")).expect("contract"); contract.push(b'\n');
