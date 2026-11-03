@@ -2,10 +2,10 @@
 module Emulation.InterfaceInitializer
   ( Role (..), Contract, parseOriginalSource, deriveContract, contractValue, declarations, validateReceipt
   , contractRole, contractSourceSha256, ValidatedInitializer, initializerExit, initializerTable, validateReceiptEvidence
+  , ExpectedStore (..), originalStores
   , Context (..), Views (..), Source (..), ByteOrder (..), Event (..), Mode (..)
   , PhysicalSpan (..), Window (..), BankSnapshot (..), TcmSnapshot (..), bankSnapshot
   , WatchClass (..), FixedViews (..), NoFault (..), Rule (..), Watch (..), Alias (..), Decoder (..)
-  , ExpectedStore (..), originalStores
   ) where
 
 import qualified A32 as A

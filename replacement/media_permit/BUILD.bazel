@@ -78,7 +78,7 @@ xm1_rust_elf(
 
 haskell_library(
     name = "stock-inventory",
-    srcs = ["StockInventory.hs"],
+    srcs = ["StockInventory.hs", "ReturnProvenance.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     visibility = ["//visibility:public"],
     deps = [
@@ -129,6 +129,25 @@ haskell_test(
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "rtos-manifest",
+    srcs = ["RtosManifestMain.hs"],
+    main_file = "RtosManifestMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":stock-inventory",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:json",
         "//host/firmware:bank-allowlist",
     ],
 )

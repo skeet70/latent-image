@@ -57,26 +57,26 @@ struct GraphicsSave {
     engine: GraphicsEngine,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-struct Graphics {
-    idle: bool,
-    started: u64,
-    completed: u64,
-    bytes_completed: u64,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct Graphics {
+    pub idle: bool,
+    pub started: u64,
+    pub completed: u64,
+    pub bytes_completed: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-struct Probe {
-    copied_command: u16,
-    packet_token: u8,
-    sender_token: u8,
-    consumer_token: u8,
-    sender_command: u16,
-    staged_render_command: u16,
-    staged_render_token: u8,
-    drained: bool,
-    uilib_waiting: bool,
-    graphics: Graphics,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct Probe {
+    pub copied_command: u16,
+    pub packet_token: u8,
+    pub sender_token: u8,
+    pub consumer_token: u8,
+    pub sender_command: u16,
+    pub staged_render_command: u16,
+    pub staged_render_token: u8,
+    pub drained: bool,
+    pub uilib_waiting: bool,
+    pub graphics: Graphics,
 }
 
 /// Where a settled press ended.
@@ -132,7 +132,7 @@ impl RenderFacts {
         Ok(statuses)
     }
 
-    fn probe(&self, machine: &Machine) -> Result<Probe, String> {
+    pub fn probe(&self, machine: &Machine) -> Result<Probe, String> {
         let read = |address: Address, bytes: usize| value(machine, address, bytes);
         let statuses = self.task_statuses(machine)?;
         let keys_released = machine
@@ -190,7 +190,7 @@ impl RenderFacts {
 }
 
 impl Probe {
-    fn auxiliary_acknowledged(&self) -> bool {
+    pub fn auxiliary_acknowledged(&self) -> bool {
         self.copied_command == 0x8000
             && self.sender_command == 0x8000
             && self.packet_token == 0
@@ -200,7 +200,7 @@ impl Probe {
             && self.sender_token != 0
     }
 
-    fn consumer_finished(&self) -> bool {
+    pub fn consumer_finished(&self) -> bool {
         self.uilib_waiting
             && self.sender_token != 0
             && (self.packet_token == self.sender_token && self.sender_token == self.consumer_token

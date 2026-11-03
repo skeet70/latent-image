@@ -17,7 +17,7 @@ import qualified Replacement.KernelInstall.Wire as W
 data ComparisonError = ComparisonScopeRejected | ComparisonCaseRejected | ComparisonCheckpointRejected
   | ComparisonSnapshotRejected | ComparisonStackRejected | ComparisonTaskRejected TaskId Boundary
   | ComparisonReadyRejected KernelCore | ComparisonFirstEntryRejected KernelCore
-  | ComparisonControlRejected ProbeCase | ComparisonStorageRejected TaskId
+  | ComparisonControlRejected ProbeCase | ComparisonStorageRejected TaskId | ComparisonCriticalRejected
   deriving (Eq, Show)
 data ComparisonProof = ComparisonProof (Maybe ProbeCase) deriving (Eq, Show)
 data StackAlias = PhysicalStack | CachedStack deriving (Eq, Show)
@@ -26,6 +26,7 @@ data TaskRecord = TaskRecord TaskId B.ByteString Pointer B.ByteString B.ByteStri
 data StorageRecord = StorageRecord Pointer Word32 Pointer Word32 Word32 deriving (Eq, Show)
 data FirstEntry = FirstEntry TaskId W.Address W.Address W.Address Pointer [W.WordValue] W.Address Word32 Pointer W.Address deriving (Eq, Show)
 data ReadySet = ReadySet [TaskRecord] [(ObjectKind,W.Address,W.Bytes)] W.Address W.Address W.Address deriving (Eq, Show)
+data CriticalState = CriticalState Word32 Word32 deriving (Eq, Show)
 type Memory = M.Map Word32 Word8
 
 ensure :: ComparisonError -> Bool -> Either ComparisonError ()
@@ -226,26 +227,72 @@ compareProbe retained owned left right = do
       leftStorage' <- storageRecord a ident; rightStorage' <- storageRecord b ident
       ensure problem (leftTask == rightTask && leftStorage' == rightStorage')) [(leftEntry,rightEntry),(leftRelease,rightRelease)]
     else pure ()
+criticalState :: Sample -> Either ComparisonError CriticalState
+criticalState sample = do
+  mapM_ (\(kind,address) -> do
+    view <- unique ComparisonCriticalRejected (filter ((==kind) . viewObject) (sampleLocal sample))
+    ensure ComparisonCriticalRejected (viewPhysical view == W.Address address && B.length (bytes (viewBytes view)) == 4))
+    [(CriticalCounter,0xa0f824),(CriticalLock,0xc0804)]
+  memory <- memoryAt sample
+  CriticalState <$> readWord memory 0xa0f824 <*> readWord memory 0xc0804
+
+compareCriticalTransition :: Sample -> Sample -> Sample -> Sample -> Either ComparisonError ()
+compareCriticalTransition leftBefore leftAfter rightBefore rightAfter = do
+  before <- criticalState leftBefore; after <- criticalState leftAfter
+  before' <- criticalState rightBefore; after' <- criticalState rightAfter
+  ensure ComparisonCriticalRejected (before == before' && after == after')
+
+compareCritical :: Receipt -> Receipt -> Maybe ProbeRecord -> Maybe ProbeRecord -> Either ComparisonError ()
+compareCritical retained owned leftProbe rightProbe = do
+  leftInitial <- need ComparisonCheckpointRejected (case receiptSamples retained of sample:_ -> Just sample; [] -> Nothing)
+  rightInitial <- need ComparisonCheckpointRejected (case receiptSamples owned of sample:_ -> Just sample; [] -> Nothing)
+  leftNatural <- naturalEnd retained leftProbe; rightNatural <- naturalEnd owned rightProbe
+  compareCriticalTransition leftInitial leftNatural rightInitial rightNatural
+  case (leftProbe,rightProbe) of
+    (Nothing,Nothing) -> pure ()
+    (Just left,Just right) -> do
+      leftBefore <- sampleAt retained (probeInitialHit left); rightBefore <- sampleAt owned (probeInitialHit right)
+      leftAfter <- probeSample retained left; rightAfter <- probeSample owned right
+      compareCriticalTransition leftBefore leftAfter rightBefore rightAfter
+    _ -> Left ComparisonCaseRejected
+  where
+    naturalEnd receipt (Just probe) = sampleAt receipt (probeInitialHit probe)
+    naturalEnd receipt Nothing = do
+      entered <- mapM (need ComparisonCheckpointRejected . firstEnteredHit) (receiptFirstTasks receipt)
+      ensure ComparisonCheckpointRejected (length entered == 2)
+      sampleAt receipt (maximum entered)
+
 
 sameResetEnvironment :: Receipt -> Receipt -> Bool
 sameResetEnvironment retained owned =
   let Identity leftRun _ leftRom leftObserver leftSources = receiptIdentity retained
       Identity rightRun _ rightRom rightObserver rightSources = receiptIdentity owned
       loaders = filter (\(SourceIdentity kind _ _ _) -> kind `elem` [LoaderA,LoaderB])
-  in leftRun == rightRun && leftRom == rightRom && leftObserver == rightObserver && loaders leftSources == loaders rightSources
+      loaderA = filter (\(SourceIdentity kind _ _ _) -> kind == LoaderA)
+      sameSources = case (receiptSchema retained,receiptSchema owned) of
+        (TaskSubmissionProtocol,TaskSubmissionProtocol) -> loaders leftSources == loaders rightSources
+        (JoinedTaskProtocol,JoinedTaskProtocol) -> loaderA leftSources == loaderA rightSources
+          && length (loaderA leftSources) == 1
+        _ -> False
+  in leftRun == rightRun && leftRom == rightRom && leftObserver == rightObserver && sameSources
 
 compareReceipts :: QualifiedReceipt -> QualifiedReceipt -> Either ComparisonError ComparisonProof
 compareReceipts retainedInput ownedInput = do
   let retained = qualifiedReceiptData retainedInput; owned = qualifiedReceiptData ownedInput
       retainedProbe = qualifiedProbeData retainedInput; ownedProbe = qualifiedProbeData ownedInput
-  ensure ComparisonScopeRejected (receiptSchema retained == TaskSubmissionProtocol && receiptSchema owned == TaskSubmissionProtocol
-    && case (receiptProgram retained,receiptProgram owned) of (StockProgram,OwnedProgram _ _ _) -> True; _ -> False)
-  ensure ComparisonScopeRejected (case (receiptScope retained,receiptScope owned,retainedProbe,ownedProbe) of
-    (StockStartupScope,OwnedStartupScope,Nothing,Nothing) -> True
-    (StockProbeScope,OwnedProbeScope,Just _,Just _) -> True
+  ensure ComparisonScopeRejected (case (receiptSchema retained,receiptSchema owned,receiptProgram retained,receiptProgram owned) of
+    (TaskSubmissionProtocol,TaskSubmissionProtocol,StockProgram,OwnedProgram _ _ _) -> True
+    (JoinedTaskProtocol,JoinedTaskProtocol,StockProgram,JoinedProgram _) -> True
+    _ -> False)
+  ensure ComparisonScopeRejected (case (receiptSchema retained,receiptScope retained,receiptScope owned,retainedProbe,ownedProbe) of
+    (TaskSubmissionProtocol,StockStartupScope,OwnedStartupScope,Nothing,Nothing) -> True
+    (TaskSubmissionProtocol,StockProbeScope,OwnedProbeScope,Just _,Just _) -> True
+    (JoinedTaskProtocol,StockJoinedStartupScope,JoinedStartupScope,Nothing,Nothing) -> True
+    (JoinedTaskProtocol,StockJoinedProbeScope,JoinedProbeScope,Just _,Just _) -> True
     _ -> False)
   ensure ComparisonCheckpointRejected (receiptCheckpointReused retained && receiptCheckpointReused owned && sameResetEnvironment retained owned)
   compareNatural retained owned
+  if receiptSchema retained == JoinedTaskProtocol then compareCritical retained owned retainedProbe ownedProbe else pure ()
   case (retainedProbe,ownedProbe) of
     (Nothing,Nothing) -> pure (ComparisonProof Nothing)
     (Just left,Just right) -> compareProbe retained owned left right >> pure (ComparisonProof (Just (probeCase left)))
@@ -255,4 +302,4 @@ comparisonValue :: ComparisonProof -> J.Value
 comparisonValue (ComparisonProof probe) = J.object
   ["schema" J..= (1 :: Int),"comparison" J..= ("retained-owned-task-submission" :: String)
   ,"probe" J..= fmap show probe
-  ,"scope" J..= ("Four committed task creation/return records, complete per-core auto-ready queues, defined first-entry ABI and qualified per-receipt prologues; controlled source-service effects at the declared bounded endpoint" :: String)]
+  ,"scope" J..= ("Four committed task creation/return records, complete per-core auto-ready queues, defined first-entry ABI and qualified per-receipt prologues; controlled source-service effects at the declared bounded endpoint; composed receipts also compare critical counter and lock initial/final natural and controlled state" :: String)]

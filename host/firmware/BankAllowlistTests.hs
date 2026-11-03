@@ -97,6 +97,10 @@ main = do
     [(frameSetup, ForbiddenInstruction SupervisorCall)]
   expect "interrupt mask change" (fixture frameSetup 0xf10c0080)
     [(frameSetup, ForbiddenInstruction InterruptMask)]
+  expect "MOVW with PC as destination" (fixture frameSetup 0xe300f000)
+    [(frameSetup, ForbiddenInstruction Unadmitted)]
+  expect "MOVT with PC as destination" (fixture frameSetup 0xe340f000)
+    [(frameSetup, ForbiddenInstruction Unadmitted)]
   -- Signed halfword multiplies in place of `mov r11, sp`.
   expect "SMLABB" (fixture frameSetup 0xe1030281) []
   expect "SMLALBB" (fixture frameSetup 0xe1432281)

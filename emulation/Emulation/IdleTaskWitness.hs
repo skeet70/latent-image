@@ -27,7 +27,7 @@ import qualified FujiAF.UpdateContainer as U
 import qualified Replacement.IdleTask.Admission as A
 import qualified Replacement.IdleTask.Artifact as I
 import qualified Replacement.KernelInstall.Wire as W
-import StockInventory (FunctionWindow (..), GuestAddress (..), deriveFunction)
+import StockInventory (FunctionDeclaration (..), FunctionSize (..), FunctionWindow (..), GuestAddress (..), deriveFunction, derivedDeclaration)
 
 data Inputs = Inputs SourceFiles Role Identity I.LinkedArtifact B.ByteString
 data QualifiedReceipt = QualifiedReceipt Receipt [Lifecycle]
@@ -114,7 +114,7 @@ admitInputs role source = do
   mapM_ (\(low,high) -> do
     derived <- either (const (Left CodeRejected)) Right
       (deriveFunction (GuestAddress 0x61c400) (sourceImage source) (FunctionWindow (GuestAddress low) (GuestAddress high)) [])
-    require (derived == (low,fromIntegral (high-low))) CodeRejected) image4CodeWindows
+    require (derivedDeclaration derived == FunctionDeclaration (GuestAddress low) (FunctionSize (fromIntegral (high-low)))) CodeRejected) image4CodeWindows
   canonical <- either (const (Left ArtifactRejected)) Right (I.canonicalSource (sourceDat source) (sourceImage source))
   artifact <- either (const (Left ArtifactRejected)) Right (I.deriveArtifact (sourceLinked source) (sourceSymbols source))
   let staged = I.stageImage4 canonical artifact; expectedImage = I.stagedBytes staged

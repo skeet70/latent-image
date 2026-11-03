@@ -133,7 +133,7 @@ artifactSymbols :: Artifact -> B.ByteString
 artifactSymbols (Artifact _ _ symbols _) = symbols
 
 artifactPublications :: Artifact -> [EmittedPublication]
-artifactPublications (Artifact _ _ _ publications) = publications
+artifactPublications (Artifact _ _ _ emitted) = emitted
 
 artifactAccesses :: Artifact -> [Access]
 artifactAccesses = metadataAccesses . artifactMetadata

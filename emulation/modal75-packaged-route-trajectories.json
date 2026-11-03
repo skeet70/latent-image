@@ -1,0 +1,839 @@
+{
+  "schema": 1,
+  "entry": "Matched default223 stock-dispatcher and selected modal224 package routes. The qualified package prefix uses MENU to reach (67,56,0), then MENU opens the shooting menu. Four DOWN keys and OK open FILM SIMULATION; BACK returns without selecting a film. A second entry/exit and BACK hand back to the live view. After rollback, MENU/MENU/OK/BACK/BACK exercise unmodified-stock handback. All menu, state, event, resident and live-setting bytes are observed without host seeding. Generic state30 cancellation is not requested.",
+  "source_bindings": [
+    {
+      "source": "emulation/ram-push-e2e-trajectories.json:5-8",
+      "expectation": "The installed package uses the qualified two-MENU prefix before shooting-menu navigation."
+    },
+    {
+      "source": "emulation/modal75-stock-route-trajectories.json:14-35",
+      "expectation": "The natural FILMSIM path reaches shooting (1,5,2), film list (1,254,0) and returned shooting (1,5,6) through MENU, four DOWN, OK and BACK."
+    },
+    {
+      "source": "emulation/ram-push-e2e-trajectories.json: stock-film-before-unload and stock-menu-after-unload",
+      "expectation": "BACK closes the shooting menu while retained menu fields remain (1,5,6). The post-unload service handback uses the qualified two-MENU prefix before OK opens the film list."
+    }
+  ],
+  "trace_sites": [
+    [
+      "00bfb028",
+      "shared-modal-entry"
+    ],
+    [
+      "00bfb02c",
+      "stock-fallback-body"
+    ],
+    [
+      "00c77794",
+      "generic-editor-cancel"
+    ]
+  ],
+  "before_unload": [
+    {
+      "phase": "package-menu-prefix",
+      "steps": [
+        [
+          "menu",
+          67,
+          56,
+          0
+        ]
+      ]
+    },
+    {
+      "phase": "modal75-shooting",
+      "capture": "modal75-shooting",
+      "key_pulse": {
+        "hold_instructions": 8000000,
+        "release_instructions": 8000000
+      },
+      "steps": [
+        [
+          "menu",
+          1,
+          5,
+          2
+        ]
+      ],
+      "reads": [
+        [
+          "dispatcher-first-word",
+          "00bfb028",
+          4
+        ],
+        [
+          "modal75-state",
+          "0146761e",
+          2
+        ],
+        [
+          "modal75-event",
+          "0146777a",
+          2
+        ],
+        [
+          "resident",
+          "runtime:rb_resident",
+          1024
+        ],
+        [
+          "live-settings",
+          "0096cc64",
+          450
+        ],
+        [
+          "presentation-root",
+          "015e4894",
+          4
+        ],
+        [
+          "presentation-class",
+          "015e4898",
+          4
+        ],
+        [
+          "presentation-mode",
+          "015e489c",
+          4
+        ],
+        [
+          "viewport",
+          "015e66b2",
+          8
+        ]
+      ]
+    },
+    {
+      "phase": "modal75-film",
+      "capture": "modal75-film",
+      "key_pulse": {
+        "hold_instructions": 8000000,
+        "release_instructions": 8000000
+      },
+      "steps": [
+        [
+          "down",
+          1,
+          5,
+          3
+        ],
+        [
+          "down",
+          1,
+          5,
+          4
+        ],
+        [
+          "down",
+          1,
+          5,
+          5
+        ],
+        [
+          "down",
+          1,
+          5,
+          6
+        ],
+        [
+          "ok",
+          1,
+          254,
+          0
+        ]
+      ],
+      "reads": [
+        [
+          "dispatcher-first-word",
+          "00bfb028",
+          4
+        ],
+        [
+          "modal75-state",
+          "0146761e",
+          2
+        ],
+        [
+          "modal75-event",
+          "0146777a",
+          2
+        ],
+        [
+          "resident",
+          "runtime:rb_resident",
+          1024
+        ],
+        [
+          "live-settings",
+          "0096cc64",
+          450
+        ],
+        [
+          "presentation-root",
+          "015e4894",
+          4
+        ],
+        [
+          "presentation-class",
+          "015e4898",
+          4
+        ],
+        [
+          "presentation-mode",
+          "015e489c",
+          4
+        ],
+        [
+          "viewport",
+          "015e66b2",
+          8
+        ]
+      ],
+      "read_preservations": [
+        {
+          "read": "resident",
+          "phase": "modal75-shooting",
+          "source_read": "resident"
+        },
+        {
+          "read": "live-settings",
+          "phase": "modal75-shooting",
+          "source_read": "live-settings"
+        }
+      ]
+    },
+    {
+      "phase": "modal75-returned",
+      "capture": "modal75-returned",
+      "key_pulse": {
+        "hold_instructions": 8000000,
+        "release_instructions": 8000000
+      },
+      "steps": [
+        [
+          "back",
+          1,
+          5,
+          6
+        ]
+      ],
+      "reads": [
+        [
+          "dispatcher-first-word",
+          "00bfb028",
+          4
+        ],
+        [
+          "modal75-state",
+          "0146761e",
+          2
+        ],
+        [
+          "modal75-event",
+          "0146777a",
+          2
+        ],
+        [
+          "resident",
+          "runtime:rb_resident",
+          1024
+        ],
+        [
+          "live-settings",
+          "0096cc64",
+          450
+        ],
+        [
+          "presentation-root",
+          "015e4894",
+          4
+        ],
+        [
+          "presentation-class",
+          "015e4898",
+          4
+        ],
+        [
+          "presentation-mode",
+          "015e489c",
+          4
+        ],
+        [
+          "viewport",
+          "015e66b2",
+          8
+        ]
+      ],
+      "read_preservations": [
+        {
+          "read": "resident",
+          "phase": "modal75-shooting",
+          "source_read": "resident"
+        },
+        {
+          "read": "live-settings",
+          "phase": "modal75-shooting",
+          "source_read": "live-settings"
+        }
+      ]
+    },
+    {
+      "phase": "modal75-film-repeated",
+      "capture": "modal75-film-repeated",
+      "key_pulse": {
+        "hold_instructions": 8000000,
+        "release_instructions": 8000000
+      },
+      "steps": [
+        [
+          "ok",
+          1,
+          254,
+          0
+        ]
+      ],
+      "reads": [
+        [
+          "dispatcher-first-word",
+          "00bfb028",
+          4
+        ],
+        [
+          "modal75-state",
+          "0146761e",
+          2
+        ],
+        [
+          "modal75-event",
+          "0146777a",
+          2
+        ],
+        [
+          "resident",
+          "runtime:rb_resident",
+          1024
+        ],
+        [
+          "live-settings",
+          "0096cc64",
+          450
+        ],
+        [
+          "presentation-root",
+          "015e4894",
+          4
+        ],
+        [
+          "presentation-class",
+          "015e4898",
+          4
+        ],
+        [
+          "presentation-mode",
+          "015e489c",
+          4
+        ],
+        [
+          "viewport",
+          "015e66b2",
+          8
+        ]
+      ],
+      "read_preservations": [
+        {
+          "read": "resident",
+          "phase": "modal75-shooting",
+          "source_read": "resident"
+        },
+        {
+          "read": "live-settings",
+          "phase": "modal75-shooting",
+          "source_read": "live-settings"
+        }
+      ]
+    },
+    {
+      "phase": "modal75-returned-repeated",
+      "capture": "modal75-returned-repeated",
+      "key_pulse": {
+        "hold_instructions": 8000000,
+        "release_instructions": 8000000
+      },
+      "steps": [
+        [
+          "back",
+          1,
+          5,
+          6
+        ]
+      ],
+      "reads": [
+        [
+          "dispatcher-first-word",
+          "00bfb028",
+          4
+        ],
+        [
+          "modal75-state",
+          "0146761e",
+          2
+        ],
+        [
+          "modal75-event",
+          "0146777a",
+          2
+        ],
+        [
+          "resident",
+          "runtime:rb_resident",
+          1024
+        ],
+        [
+          "live-settings",
+          "0096cc64",
+          450
+        ],
+        [
+          "presentation-root",
+          "015e4894",
+          4
+        ],
+        [
+          "presentation-class",
+          "015e4898",
+          4
+        ],
+        [
+          "presentation-mode",
+          "015e489c",
+          4
+        ],
+        [
+          "viewport",
+          "015e66b2",
+          8
+        ]
+      ],
+      "read_preservations": [
+        {
+          "read": "resident",
+          "phase": "modal75-shooting",
+          "source_read": "resident"
+        },
+        {
+          "read": "live-settings",
+          "phase": "modal75-shooting",
+          "source_read": "live-settings"
+        }
+      ]
+    },
+    {
+      "phase": "modal75-handback",
+      "capture": "modal75-handback",
+      "key_pulse": {
+        "hold_instructions": 8000000,
+        "release_instructions": 8000000
+      },
+      "steps": [
+        [
+          "back",
+          1,
+          5,
+          6
+        ]
+      ],
+      "reads": [
+        [
+          "dispatcher-first-word",
+          "00bfb028",
+          4
+        ],
+        [
+          "modal75-state",
+          "0146761e",
+          2
+        ],
+        [
+          "modal75-event",
+          "0146777a",
+          2
+        ],
+        [
+          "resident",
+          "runtime:rb_resident",
+          1024
+        ],
+        [
+          "live-settings",
+          "0096cc64",
+          450
+        ],
+        [
+          "presentation-root",
+          "015e4894",
+          4
+        ],
+        [
+          "presentation-class",
+          "015e4898",
+          4
+        ],
+        [
+          "presentation-mode",
+          "015e489c",
+          4
+        ],
+        [
+          "viewport",
+          "015e66b2",
+          8
+        ]
+      ],
+      "read_preservations": [
+        {
+          "read": "resident",
+          "phase": "modal75-shooting",
+          "source_read": "resident"
+        },
+        {
+          "read": "live-settings",
+          "phase": "modal75-shooting",
+          "source_read": "live-settings"
+        }
+      ]
+    }
+  ],
+  "after_unload": [
+    {
+      "phase": "unloaded-shooting",
+      "capture": "unloaded-shooting",
+      "key_pulse": {
+        "hold_instructions": 8000000,
+        "release_instructions": 8000000
+      },
+      "steps": [
+        [
+          "menu",
+          1,
+          5,
+          6
+        ],
+        [
+          "menu",
+          1,
+          5,
+          6
+        ]
+      ],
+      "reads": [
+        [
+          "dispatcher-first-word",
+          "00bfb028",
+          4
+        ],
+        [
+          "modal75-state",
+          "0146761e",
+          2
+        ],
+        [
+          "modal75-event",
+          "0146777a",
+          2
+        ],
+        [
+          "resident",
+          "runtime:rb_resident",
+          1024
+        ],
+        [
+          "live-settings",
+          "0096cc64",
+          450
+        ],
+        [
+          "presentation-root",
+          "015e4894",
+          4
+        ],
+        [
+          "presentation-class",
+          "015e4898",
+          4
+        ],
+        [
+          "presentation-mode",
+          "015e489c",
+          4
+        ],
+        [
+          "viewport",
+          "015e66b2",
+          8
+        ]
+      ],
+      "read_preservations": [
+        {
+          "read": "resident",
+          "phase": "modal75-shooting",
+          "source_read": "resident"
+        },
+        {
+          "read": "live-settings",
+          "phase": "modal75-shooting",
+          "source_read": "live-settings"
+        }
+      ],
+      "read_expectations": [
+        {
+          "read": "dispatcher-first-word",
+          "hex": "f04f2de9"
+        }
+      ]
+    },
+    {
+      "phase": "unloaded-film",
+      "capture": "unloaded-film",
+      "key_pulse": {
+        "hold_instructions": 8000000,
+        "release_instructions": 8000000
+      },
+      "steps": [
+        [
+          "ok",
+          1,
+          254,
+          0
+        ]
+      ],
+      "reads": [
+        [
+          "dispatcher-first-word",
+          "00bfb028",
+          4
+        ],
+        [
+          "modal75-state",
+          "0146761e",
+          2
+        ],
+        [
+          "modal75-event",
+          "0146777a",
+          2
+        ],
+        [
+          "resident",
+          "runtime:rb_resident",
+          1024
+        ],
+        [
+          "live-settings",
+          "0096cc64",
+          450
+        ],
+        [
+          "presentation-root",
+          "015e4894",
+          4
+        ],
+        [
+          "presentation-class",
+          "015e4898",
+          4
+        ],
+        [
+          "presentation-mode",
+          "015e489c",
+          4
+        ],
+        [
+          "viewport",
+          "015e66b2",
+          8
+        ]
+      ],
+      "read_preservations": [
+        {
+          "read": "resident",
+          "phase": "modal75-shooting",
+          "source_read": "resident"
+        },
+        {
+          "read": "live-settings",
+          "phase": "modal75-shooting",
+          "source_read": "live-settings"
+        }
+      ],
+      "read_expectations": [
+        {
+          "read": "dispatcher-first-word",
+          "hex": "f04f2de9"
+        }
+      ]
+    },
+    {
+      "phase": "unloaded-returned",
+      "capture": "unloaded-returned",
+      "key_pulse": {
+        "hold_instructions": 8000000,
+        "release_instructions": 8000000
+      },
+      "steps": [
+        [
+          "back",
+          1,
+          5,
+          6
+        ]
+      ],
+      "reads": [
+        [
+          "dispatcher-first-word",
+          "00bfb028",
+          4
+        ],
+        [
+          "modal75-state",
+          "0146761e",
+          2
+        ],
+        [
+          "modal75-event",
+          "0146777a",
+          2
+        ],
+        [
+          "resident",
+          "runtime:rb_resident",
+          1024
+        ],
+        [
+          "live-settings",
+          "0096cc64",
+          450
+        ],
+        [
+          "presentation-root",
+          "015e4894",
+          4
+        ],
+        [
+          "presentation-class",
+          "015e4898",
+          4
+        ],
+        [
+          "presentation-mode",
+          "015e489c",
+          4
+        ],
+        [
+          "viewport",
+          "015e66b2",
+          8
+        ]
+      ],
+      "read_preservations": [
+        {
+          "read": "resident",
+          "phase": "modal75-shooting",
+          "source_read": "resident"
+        },
+        {
+          "read": "live-settings",
+          "phase": "modal75-shooting",
+          "source_read": "live-settings"
+        }
+      ],
+      "read_expectations": [
+        {
+          "read": "dispatcher-first-word",
+          "hex": "f04f2de9"
+        }
+      ]
+    },
+    {
+      "phase": "unloaded-handback",
+      "capture": "unloaded-handback",
+      "key_pulse": {
+        "hold_instructions": 8000000,
+        "release_instructions": 8000000
+      },
+      "steps": [
+        [
+          "back",
+          1,
+          5,
+          6
+        ]
+      ],
+      "reads": [
+        [
+          "dispatcher-first-word",
+          "00bfb028",
+          4
+        ],
+        [
+          "modal75-state",
+          "0146761e",
+          2
+        ],
+        [
+          "modal75-event",
+          "0146777a",
+          2
+        ],
+        [
+          "resident",
+          "runtime:rb_resident",
+          1024
+        ],
+        [
+          "live-settings",
+          "0096cc64",
+          450
+        ],
+        [
+          "presentation-root",
+          "015e4894",
+          4
+        ],
+        [
+          "presentation-class",
+          "015e4898",
+          4
+        ],
+        [
+          "presentation-mode",
+          "015e489c",
+          4
+        ],
+        [
+          "viewport",
+          "015e66b2",
+          8
+        ]
+      ],
+      "read_preservations": [
+        {
+          "read": "resident",
+          "phase": "modal75-shooting",
+          "source_read": "resident"
+        },
+        {
+          "read": "live-settings",
+          "phase": "modal75-shooting",
+          "source_read": "live-settings"
+        }
+      ],
+      "read_expectations": [
+        {
+          "read": "dispatcher-first-word",
+          "hex": "f04f2de9"
+        }
+      ]
+    }
+  ]
+}

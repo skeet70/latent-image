@@ -53,6 +53,7 @@ data Admission = Admission
   , admissionAccesses :: [Access]
   , admissionReturnPaths :: ReturnPaths
   , admissionPremises :: [Premise]
+  , admissionExecutionPcs :: [InstructionAddress]
   } deriving (Eq, Show)
 
 data WordValue
@@ -393,10 +394,10 @@ returned target frame = do
 proveFrame :: InstructionAddress -> B.ByteString -> InstructionAddress -> InstructionAddress -> Either String Admission
 proveFrame origin image start end = do
   require (addressNumber start .&. 3 == 0 && addressNumber end .&. 3 == 0 && start < end) "task-storage Rust extent is not complete A32 words"
-  walk 0 [(start,Set.empty,initial)] 0 Set.empty 0
+  walk 0 [(start,Set.empty,initial)] 0 Set.empty 0 Set.empty
   where
     environment = Environment origin image
-    walk steps pending maximumDepth observed returns = do
+    walk steps pending maximumDepth observed returns executed = do
       require (steps <= (4096 :: Int)) "task-storage frame proof exceeds its finite context policy"
       case pending of
         [] -> do
@@ -405,7 +406,7 @@ proveFrame origin image start end = do
             (Scratch (ByteCount (fromInteger maximumDepth)) (FrameOffset (negate maximumDepth)) (FrameOffset 0))
             (Set.toAscList observed) (ReturnPaths returns)
             [IncomingAapcsStack,OwnFrameStableStorage,ReachedGuestWordSemantics,GuestWritesDisjointImageAndAllocatedFrame
-            ,RuntimeAliasAndTcmResolution,RetainedLiteralAndImageLifetime])
+            ,RuntimeAliasAndTcmResolution,RetainedLiteralAndImageLifetime] (Set.toAscList executed))
         (pc,seen,frame):rest -> do
           require (pc >= start && toInteger (addressNumber pc) + 4 <= toInteger (addressNumber end) && addressNumber pc .&. 3 == 0) "task-storage control leaves its Rust body"
           require (Set.notMember pc seen) "task-storage frame proof does not admit a control cycle"
@@ -420,7 +421,7 @@ proveFrame origin image start end = do
               returned value changed
               pure (queued,max depth (deepest changed),Set.union allAccesses (accesses changed),count + 1))
             (rest,maximumDepth,observed,returns) successors
-          walk (steps + 1) queued depth allAccesses count
+          walk (steps + 1) queued depth allAccesses count (Set.insert pc executed)
 
 admissionValue :: Admission -> Value
 admissionValue admission =

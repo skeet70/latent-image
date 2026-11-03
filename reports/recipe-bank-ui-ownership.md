@@ -210,6 +210,16 @@ The host checks retain15 passing test targets across the corrected runs, includi
 
 This cohort does not execute a packaged guest route or discharge callback-frame, caller continuation, object initialization, asynchronous writer, alias-fetch or task-identity obligations. The producer and selected package interfaces are implemented, but their existence is not route admission. Natural generic state30 cancellation still needs an identified X-M1 route; wireless NAME remains controller76, not that route.
 
+### Packaged modal75 FILMSIM route
+
+`E-MODAL224-PACKAGED-FILMSIM-150` qualifies the selected modal224 package's bounded cardless FILMSIM behavior on the corrected SDK. The matched default223 control retains the stock dispatcher and the already-owned bank actions. Both execute the same16 physical keys: the qualified package prefix, shooting-menu navigation, FILM SIMULATION entry/BACK, repeated entry/exit, live-view handback and post-rollback stock navigation. The candidate installs122040 bytes, completes every segment and verifies all224 original publication words after rollback. The control verifies223. The production default remains223.
+
+The canonical permit interval records254 completed entries:40 owned75 handoffs and214 stock+4 fallback handoffs for controllers0,30,74,100,107. All254 return with no active frame or failure; peak per-core nesting is5. Every observed entry is on core0. The40 captured75 domains have state0 and events2,8,13,50. The complete-array physical writer audit records274 CPU0 write attempts, zero host/model writes and no observer integrity violation. Forty two-byte event75 writes carry exactly2,8,13,50; no state75 write is recorded. Its strict-protected-write classification is retained audit evidence, not a no-write verdict.
+
+`E-MODAL224-RENDER-DIFFERENTIAL-150` compares all ten capture pairs on one SDK with exact artifact bindings. PNGs, native source-plane bytes, complete native frame and scanout states, ordered source spans and pixel metadata all match. Capture clocks differ and are retained, not normalized into equality. Resident1024-byte and live-setting450-byte snapshots remain unchanged at each declared capture; these checks do not exclude transient changes between snapshots. Both final sessions have zero SD commands and accepted writes.
+
+The raw route outcome remains `unqualified-scoped-diagnostic`. Observation begins after installation and ends before rollback. Physical-fetch alias coverage, task identity, whole-installed-lifetime coverage, table/root/width immutability and general caller/private-frame/object closure remain unproved. Same-route migration onto a core already holding a permit is not detected. Generic state30 cancellation remains separately native-qualified without a natural X-M1 route. The two failed inputs and the earlier-backend stock pass remain retained in `E-MODAL224-PACKAGED-ATTEMPTS-150`.
+
 ### Published modal storage obligations
 
 Modal75 storage is loaded image5 data, not an established read-only hardware region. Its cell table spans `[0x00cd1ae4,0x00cd3f8c)`, action table `[0x00d04080,0x00d0452c)` and transition table `[0x00d01370,0x00d01378)`; the next controller-table bases match these upper bounds. Root pointer words are `0x00cf59e4`, `0x00cfe3d4` and `0x00d00268`; width is the halfword at `0x00cd5f0e`. Bank publication deliberately changes cell/action words. The static census reports no resolved direct table store but does not establish absence of stores through unresolved pointers. All 286 computed-store obligations concern the state/event arrays.
@@ -526,3 +536,244 @@ XM1_EMULATOR_SLOTS=1 devenv shell -- bazel --output_base="$HOME/.cache/bazel/lat
 ## Remaining
 
 The final link uses one bank staticlib from `//replacement/bank:bank` and one panic handler. `replacement/bank/lib.rs` includes this module as `#[path = "../recipe_ui/src/lib.rs"] mod recipe_ui_route;`; a second UI archive or panic handler is not kept. The bank manifest binds `replacement/recipe_ui/src/lib.rs`, the bank archive digest under `rust_object_replacement_bank`, `RB_RUST_BUILD_FACTS` under `rust_toolchain_replacement_bank`, and the #119 toolchain facts. Primary packaged aggregate effect observation and its accepted changed-store control qualify the scoped #121 pilot for the 450-byte range on one route. #117 full application/runtime/startup milestones remain open; #85 is hardware blocked and persistence is unpursued. Visual acceptance is carried only by byte-identical PNGs, not a new human approval or reviewed live publication. Existing modal-75 and source-retirement limits and the sourceMode94 correction are unchanged; no application/runtime retirement, startup, hardware or migration default cutover is claimed.
+
+## Modal/controller subsystem project
+
+This is the first-deliverable plan for owning the dispatcher and all174 controllers' decision/state code as one subsystem, folding #128, #132 and #133 into #117/#127. Existing qualification stays scoped: modal224 retains stock+4 fallback for non75 IDs, and neither snapshot nor bank action migration retires every stock caller. Function boundaries may change internally; retained interfaces and accepted capability scenarios remain the qualification boundary. [Sources: [replacement contract](../spec/11-incremental-firmware-replacement.md#goal-and-completion-boundary); E-MODAL224-PACKAGED-FILMSIM-150; E-MENU-FRAME-SNAPSHOT-NATIVE-150; E-MODAL75-PACKAGED-DEVICE-150.]
+
+### Machine-readable inventory and limits
+
+[`//replacement/modal_runtime:controller-manifest`](../replacement/modal_runtime/ControllerManifestMain.hs) consumes pinned image5 bytes, the pinned decompiler function inventory and a receipt projection. Its private output is `private-data/scratch/ControllerManifest/manifest.json`; copied table contents remain private. Every ID records three root words, width, state/event addresses, candidate table intervals, raw contents and decoded cell coordinates. Each distinct nonnull callback records its source/callback-head window, `StockInventory.inspectFunction` structural extent, separately checked return proof, premises, decoded calls, service witnesses and private-ABI leads. `deriveFunction` retains its strict return-admission behavior. A source window alone is not a recovered extent. The helper's opaque-callee SP/r4-r11-preservation assumption is explicit. [Sources: extractor; `replacement/media_permit/StockInventory.hs`; `replacement/media_permit/ReturnProvenance.hs:302-305`; E-MODAL-CONTROLLER-MANIFEST-150.]
+
+| Inventory quantity | Result |
+| --- | ---: |
+| Controller registrations | 174 |
+| Candidate physical cell words | 50,534 |
+| Physical action slots | 6,143 |
+| Physical transition slots | 348 |
+| Unique nonnull action targets | 5,795 |
+| Unique nonnull transition targets in these stock table bytes | 0 |
+| Structurally inspected callback extents | 5,795 |
+| Conditional successful return derivations | 4,844 |
+| Structural extents with unresolved return provenance | 951 |
+| Sum of callback code-address spans | 710,152 bytes |
+| Actually classified callback instruction words | 709,844 bytes |
+| Classified literal words | 330 words / 1,320 bytes |
+
+All348 transition words are zero in the pinned stock image; this does not close later writers or exclude a future nonnull transition publication. All5,795 targets have structurally complete instruction/literal classification. The951 return refusals remain ABI/integrity obligations, not failed extent recovery. The232 callbacks missing Ghidra function headers derive from table-entry and neighboring-head evidence; all232 have no direct call, indirect call or external branch in their structural instruction sets, which is not a purity or memory-effect claim. The final callback's explicit `0xcd0c78` code/data fence is listing-bound and independently reviewed. The byte totals exclude dispatcher, transitive retained services, initialization and resources. [Source: E-MODAL-CONTROLLER-MANIFEST-150; private manifest `counts`, `functions[].extent`, `function_fence_evidence`; independent review record.]
+
+Reproduce with owner-supplied inputs and a fresh output path:
+
+```sh
+devenv shell -- bazel --batch --output_base="$HOME/.cache/bazel/latent-image-ControllerManifest" build --jobs=2 //replacement/modal_runtime:controller-manifest
+bazel-bin/replacement/modal_runtime/controller-manifest \
+  --id5 private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin \
+  --decompilation private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c \
+  --reachability private-data/scratch/ControllerManifest/reachability.json \
+  --out private-data/scratch/ControllerManifest/manifest.json
+```
+
+The previous 49,738 cells describe the closure checker's captured state/event expansion, not physical table length or distinct functions. Modal75's captured 2,208 cells, 294 action slots and one transition slot similarly differ from its 299-entry physical action table. Root adjacency gives candidate storage fences, not valid index domains or lifetime immutability. Bank publication deliberately changes cell and action words. Unresolved return proofs, unclassified service frontiers and source-window instruction candidates stay unresolved. [Sources: retained modal contract, scoped diagnostic and published storage sections above; `Replacement/ModalRuntime/Closure.hs:1761-1816`; E-MODAL75-SCOPED-DIAGNOSTIC-150.]
+
+### Existing trajectory coverage
+
+The receipt-backed dispatched-ID union is `{0,30,74,75,100,107}`. The retained FILMSIM trace records134 contexts across those IDs, including25 controller75 contexts at state0/events2,8,13,50. The packaged modal224 interval records254 completed contexts,40 owned75 and214 fallback, on core0 with the same75 state/event set. The manifest preserves each trajectory's exact paired state/event domains rather than taking a Cartesian product. These are selected navigation intervals, not a continuous reset-to-menu witness. [Sources: E-MODAL-RETAINED-FILM-ROUTE-150, `retained-film-route/segment-retained-film-route/e2e-result.json` trace hits; E-MODAL224-PACKAGED-FILMSIM-150, `packaged224-owned-corrected/e2e-modal-observation.json` captured domains; private manifest `reachability`.]
+
+The recipe-bank lifecycle observes owned action entries and controller75 RAM snapshots in states0/30, not a full dispatcher-ID/context trace. Direct native editor composition establishes action semantics with modeled services, not natural reachability. Cold first-start records language/date/live-view/shooting endpoints but no complete dispatched-controller set. Therefore168 IDs have no dispatched-ID witness in these receipts; that is missing coverage, not evidence of unreachability. Controller ID30 and controller75 state30 are different coordinates. [Sources: E-MODAL75-PACKAGED-DEVICE-150, `private-data/scratch/modal133/fetch-positive-corrected/e2e-result.json`; E-MODAL75-EDITOR-NATIVE-150; E-APPLICATION-ENTRY-LOOP-SOURCE-150; `private-data/scratch/ControllerManifest/reachability.json`.]
+
+### Retained service categories
+
+Categories overlap. Direct decompiled call expressions and source-window encoded call candidates are recorded separately. Source paths to named services are static evidence, not execution coverage. Unknown callees, indirect calls, memory effects and device descendants remain obligations; a seed names a proposed retained seam, not a closed implementation. In particular transition service `0xc12aac` writes controller100's event cell and reenters `0xbfb028`. [Sources: extractor; `menu/recipe_bank_arm.S:225-275`; `private-data/analysis/x-m1-1.50/filmsim/id5.dis:33797-33834`.]
+
+| Category | Grounded seams | Ownership boundary |
+| --- | --- | --- |
+| Settings/property gates | Query `0x63a0f8(0x53)`, predicates `0x6394d0/0x6394e8`, bank-declared property read/write/availability/conversion/commit entries | Own branch selection and typed decisions; retain explicit property/mode operations. A commit name does not establish durable output. |
+| Frame/editor/buffers | Snapshot11, saved reader `0x61ce1c`, editor `0xd4ad38`, prepare/open `0xd45ce4/0xd45cf8`, copy/clear `0x722a50/0x722178/0x7221c8` | Absorb snapshot early; retain editor engine, frame/value/slot lifetime and buffer primitives until migrated. Read the new frame after transitions. |
+| Rendering | Notification `0xd38d98`, redraw `0xd38e1c`, row probe `0xd52684`, text/draw bindings, UILIB/VGLIB | Own controller intent and required ordering; compare acknowledged full-plane results over an explicit renderer/resource/device seam. |
+| Persistence | File operations `0x71c648/0x71c6fc/0x71c75c/0x71c7bc`, media worker continuations, settings append `0x6ad3f4` | Separate property changes, RAM bank state and durable effects; preserve file/handle/callback lifetime and errors. |
+| Capture/playback/device | Playback mode apply `0x6439ac`, REC actor `0xe00a80`, playback actor `0x1215480` | Keep accepted branches in the inventory; full scenarios depend on their independently grounded device/output laws. |
+| Input | Menu left/right `0xc6f14c/0xc70528`, queue1 adapter `0xdb5124` | Normalize typed events; distinguish receive-backed input, pending internal work and unhandled-input handback. |
+| Controller/runtime support | Dispatcher, prehook, stage, transition, postlude; queue/task/heap/division | Migrate decision callbacks together while retaining explicit RTOS, allocation, exception and service-reentry interfaces. |
+
+Address meanings are grounded in `menu/recipe_bank_arm.S:225-275`, `menu/recipe_bank_allowlist.json:47-154,219-223`, the lifecycle/snapshot sections above, [file-service recovery](named-recipe-reach.md), [heap survey](stock-heap-survey.md) and [Inventory §8.18](replacement-inventory-baseline.md#818-application-entry-main-ui-actor-and-first-owned-loop-boundary-154). No category is inferred from address proximity.
+
+| Static category witness | Targets calling a seed directly in decompiled source | Targets with a source path to a seed, or themselves a seed |
+| --- | ---: | ---: |
+| Settings/property gates | 1,397 | 4,525 |
+| Frame/editor/buffers | 423 | 3,695 |
+| Rendering | 668 | 1,472 |
+| Persistence | 0 | 152 |
+| Capture/playback/device | 2 | 2 |
+| Input | 0 | 2 |
+| Controller support | 1,612 | 4,448 |
+| Runtime support | 0 | 1,980 |
+
+These counts overlap and do not measure scenario coverage or complete semantic closure. There are 5,338 targets with an unclassified frontier and 380 whose only category is unclassified. The latter include the 232 structurally call-free callbacks missing Ghidra heads. Every target has a record; missing category evidence stays explicit rather than assigning an address-range meaning. Zero direct seed matches does not mean no persistence, input or runtime dependence. [Source: E-MODAL-CONTROLLER-MANIFEST-150; manifest `functions[].direct_service_categories`, `service_categories`, `unclassified_frontier`, `source` and decoded transfers.]
+
+### Private callback ABI blockers
+
+At action entry, stock supplies r4=cell offset, r5=ID, r6=cell table, r7=event, r8=width, r9=action table, r10=cell address, r11=`S-4`, LR=`0xbfb0cc`, SP=`S-48`. Transition changes r4 to the action result and LR to `0xbfb0fc`, and carries action residues in r0/r1/r12. `[S-44]` holds the transition root; `[S-48]` and `[S-40]` are unwritten, not guaranteed zero. Owned dispatch instead uses r11=`S-8`, different register roles/scratch and glue LR/r12. These are actual compatibility obligations wherever retained consumers observe them. [Sources: dispatcher register and frame contract above; E-MODAL-DISPATCHER-ABI-150; E-MODAL-DISPATCHER-LINKED-ABI-150.]
+
+Selected SET/confirm/leave/cancel prologues save incoming r11/LR and establish local r11. Confirm and leave also save/restore entry r3, creating a concrete outgoing volatile-r3 dependency. No incoming-LR-as-data consumer or dispatcher-scratch read is positively established by these excerpts; that is not absence across all callbacks/descendants. Manifest `unaff_r11`, `in_lr` and stack-input tokens are leads only. Decoded literal-pool words are not ABI evidence. [Sources: `private-data/analysis/x-m1-1.50/filmsim/id5.dis:132318-132321,135439-135463,135918-135924,136174-136177,137023-137046,33797-33834`; open premises/caller-continuation sections above.]
+
+**[INFERENCE] Cutover rule:** AAPCS is insufficient while callbacks, saved frames, LR, volatile residues or scratch are externally observable. Internal identities/layouts cease to be comparison fields only after every consumer migrates inside the unit or an actual retained contract excludes those observations. Keep conservative caller/storage/alias/writer obligations; do not accumulate174 routing exemptions.
+
+### Snapshot service folded into the project
+
+Absorb classifier `[0x61ca2c,0x61cd14)`744 bytes, snapshot `[0x61cd14,0x61ce1c)`264, store `[0x61ceac,0x61cf14)`104 and eight80-byte accessors as one11-entry component totaling1,752 original bytes. Compare11 semantic words, result, slot choice and permitted writes, including null destination, detached defaults, zero-row division and invalid values. Preserve live-frame read order. Saved reader, three slot tables, frame/value lifetime and loader divide/SVC remain named retained dependencies. The307 native pairs and bank-store migration are regressions, not global retirement of3,027 stock call sites. [Source: owned menu-frame snapshot section; E-MENU-FRAME-SNAPSHOT-NATIVE-150.]
+
+### One typed interface and internal milestone order
+
+**[INFERENCE] Interface:** one dispatch operation over validated `ControllerId`, controller-specific typed `Event`, logical `ControllerState` and action-specific `ActionResult`. Unknown physical input becomes explicit unhandled input, not an unchecked table index. Keep action/transition/frame/node/row/property IDs and retained statuses typed at adapters. Own selection, post-action state decisions, registration changes and reentry internally. Do not invent a universal error enum: stock returns the action result and discards the transition result. Preserve captured inputs and post-action transition evaluation until every mutation consumer migrates. [Grounding: E-MODAL-DISPATCHER-ABI-150; `replacement/owned_menu/src/lifecycle.rs`; spec §Replacement contract.]
+
+1. **[INFERENCE] Manifest/boundary closure:** resolve table/code fences, source/byte correspondence, index and result domains, service frontiers and actual ABI consumers. Bind static obligations and scenario coverage to the same artifact.
+2. **[INFERENCE] Integrate existing pieces:** snapshot11, classifiers, row binding, dispatcher and SET/confirm/leave/cancel become components of one artifact with one property/frame/editor/render/runtime/device service layer. Publish/retire all11 snapshot entries together.
+3. **[INFERENCE] Connected menus:** own the decision closure of observed IDs `{0,30,74,75,100,107}`, not only four modal75 cells. Reuse FILMSIM entry/BACK/reentry, nested dispatch, unhandled input, handback and completed rendering.
+4. **[INFERENCE] Editor lifecycle:** qualify bank cancel/confirm/leave, ordinary-setting preservation and reentry over explicit editor/buffer/frame services. Keep native generic state30 cancellation separate until a natural route is identified; wireless NAME is controller76/state36.
+5. **[INFERENCE] Complete trajectories:** cold first-start/shooting readiness, Q/SETUP and every accepted controller trajectory. Prioritize property/frame/render groups before persistence and capture/playback/device groups without deleting the latter from scope.
+6. **[INFERENCE] Global cutover:** migrate every caller/registration/callback to the typed interface, remove stock+4 routing, and qualify continuous retired-code/data exclusion, initialization/publication and the full accepted matrix.
+
+These are milestones inside one174-controller project, not new per-leaf acceptance units. [Grounding: existing FILMSIM/lifecycle/snapshot evidence; Inventory §§8.1-8.5,8.18; #117/#127; spec §§Ownership stages, Automatic verification.]
+
+### Scenario matrix and proposed runs
+
+Every row is **[INFERENCE] proposed acceptance**, not new execution. Extend reviewed trajectories, journals, typed receipts, render comparison and actual-content exclusion; independently review changed mechanisms before use. Each corrected input runs once, with failures preserved.
+
+| Scenario | Reusable evidence | Required observation or gap |
+| --- | --- | --- |
+| Cold first-start language/date, live view, shooting menu | E-APPLICATION-ENTRY-LOOP-SOURCE-150 | Cold controller trace, executable publication, initialized state/event ownership, actual task1/pump readiness and acknowledged frames; screen endpoints are not controller IDs. |
+| Shooting menu, FILMSIM, BACK, repeated reentry | E-MODAL-RETAINED-FILM-ROUTE-150; E-MODAL224-PACKAGED-FILMSIM-150; E-MODAL224-RENDER-DIFFERENTIAL-150 | All connected decisions/results/effects, nested dispatch, handback and next input; extend the selected interval and declare remaining alias/task/lifetime limits. |
+| Q and SETUP | Accepted menu capability inventory | Physical navigation/BACK/reentry, gates, property preservation and render completion; collect real controller/state/event domains. |
+| Bank Save Current, Rename, A-cancel, B-confirm, leave/reentry | E-MODAL75-PACKAGED-DEVICE-150; E-MODAL75-RENDER-DIFFERENTIAL-150 | Name/buffer/cursor/frame outcomes, retained-service ordering, transient-setting preservation, render output and rollback; RAM success is not durable file persistence. |
+| Generic75 state30 cancel/confirm | E-MODAL75-EDITOR-NATIVE-150; E-MODAL-NATIVE-LIFECYCLE-150 | Identify a natural producer, then dispatcher context, effects, post-action transition and repeated handback. Injected state is not reachability. |
+| Unhandled/no-op input, pending work, reentry | Native dispatcher boundaries; Inventory §8.18 | Results/public state, no unintended effects, balanced lifetime, task1 handback followed by next input; pending work need not receive a packet. |
+| Every accepted device/persistence controller trajectory | Capability inventory and separately admitted device/storage records | Typed errors, completion/cancel/order and final artifacts; unresolved capture/JPEG/media/device laws block broader acceptance, not static inclusion. |
+| Wrong artifact/target/context/lifetime, forbidden old execution/data | Existing dispatcher/seam/editor/preservation/render controls | Reject plausible wrong results/state/ordering, caller writes, stale publication, transient setting changes and actual restored-old-body execution. |
+
+**[INFERENCE] First proposed cohort:** retained cold-reset/menu/Q/SETUP coverage capture, then owned connected-menu comparison on identical admitted inputs, expanding the same matrix as editor/service contracts close. No guest was needed for this manifest task. No camera, SD or persistent operation is part of this deliverable. [Grounding: spec §§Repeatable replacement loop, Independent evidence; existing route limits above.]
+
+### Blockers and proposed issue text
+
+Immediate blockers are table/index/mutation lifetime closure; the 951 unresolved callback return proofs; unknown service/computed-call frontiers; actual private-ABI consumers; state/event initialization and nested/asynchronous writers; callers/physical aliases; cold/Q/SETUP/generic-editor reachability; task/queue/pending-work and acknowledged rendering; and independently incomplete storage/capture/playback/device contracts. The 174-ID census is an obligation inventory, not 174 accepted trajectories. [Sources: E-MODAL-CONTROLLER-MANIFEST-150; open premises, scoped diagnostic, published storage, lifecycle and snapshot sections above; Inventory §§8.2,8.18; E-MODAL-CALLER-CONTINUATIONS-150.]
+
+**Proposed #117/#127 project text:** Own modal dispatch and all174 controllers' decision/state code behind one typed event/controller/action interface, absorbing frame snapshots and existing menu/editor implementations. Qualify at retained property, frame/editor/buffer, rendering, input, runtime, storage and device interfaces and through cold first-start/shooting, Q/SETUP, accepted controller trajectories, entry/BACK/reentry, unhandled input and editor cancel/confirm scenarios. Start from the manifest and FILMSIM connected set; keep unobserved controllers and device-dependent scenarios explicit. Completion removes scoped stock fallback and proves caller/callback/data/init/lifetime closure plus continuous original-body/data exclusion within the full accepted scenario/artifact scope.
+
+### Replacement strategy at callback scale
+
+The project is not 5,795 handwritten callback ports. This section measures what the callback population is, how much of it existing trajectories reach, and what each replacement strategy would have to do with it. Shape clusters are syntactic measurements, not behavior equivalence. [Sources: E-MODAL-CONTROLLER-SCALE-150; E-MODAL-CONTROLLER-MANIFEST-150.]
+
+#### Callback structure
+
+[`//replacement/modal_runtime:controller-scale`](../replacement/modal_runtime/ControllerScaleMain.hs) reinspects every manifest callback with `StockInventory.inspectFunction` over the pinned image5 bytes, hashes three normal forms, projects the recorded trajectory domains and scans constant-address controller-cell accesses. It refuses a different manifest or image5 digest. Private outputs, each from one reviewed run, are `private-data/scratch/ControllerManifest/scale.json` (clusters only), `scale-cells.json` (first cell scan, immediate offsets only, superseded) and `scale-cells-regoffset.json` (also resolves constant register offsets, which controllers 128 and above need; authoritative). All three have byte-identical `cluster_summary`. Reproduce with owner-supplied inputs and a fresh output path:
+
+```sh
+devenv shell -- bazel --batch --output_base="$HOME/.cache/bazel/latent-image-ControllerManifest" build --jobs=2 //replacement/modal_runtime:controller-scale
+bazel-bin/replacement/modal_runtime/controller-scale \
+  --manifest private-data/scratch/ControllerManifest/manifest.json \
+  --id5 private-data/analysis/x-m1-1.50/lz/id5-00bf1a00.bin \
+  --out <fresh private path>
+```
+
+| Code span | Callbacks | Bytes |
+| --- | ---: | ---: |
+| 16 to 32 bytes | 1,295 | 30,024 |
+| 33 to 64 | 1,595 | 77,332 |
+| 65 to 128 | 1,497 | 139,520 |
+| 129 to 256 | 812 | 142,780 |
+| 257 to 512 | 434 | 154,416 |
+| 513 to 1,024 | 122 | 80,816 |
+| 1,025 to 4,096 | 34 | 46,436 |
+| over 4,096 | 6 | 38,828 |
+
+The median callback is 68 bytes (p25 36, p75 128, p90 264, p95 380, p99 808, maximum 12,244). Counts and bytes diverge: the 4,387 callbacks of at most 128 bytes hold 34.8% of the 710,152 code bytes, while the 162 callbacks over 512 bytes hold 23.4% and the 100 largest hold 18.5%. The largest are controller64's `0xc4b588` (12,244) and `0xc486ac` (8,220), controller75's SET delegate `0xc72e10` (5,272) and key-right `0xc70528` (4,536), and controller76's `0xc7e2bc` and `0xc7c338` (4,316 and 4,240). Every callback is registered under exactly one controller: per-controller unique action counts sum to 5,795. Identical bodies occur as separate copies, for example 109 return-`-1` bodies across 103 controllers.
+
+| Normal form | Shapes | Singleton shapes | Callbacks in repeated shapes | Largest shape | Callbacks in top 10 / top 100 shapes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Exact stored words | 5,612 | 5,603 | 192 | 109 | 193 / 283 |
+| Helper-bound: immediates, MOVW/MOVT halves, literal values and offset magnitudes parameterized; registers, conditions, operations, internal branch offsets and helper identities exact | 4,058 | 3,471 | 2,324 (40.1%; 176,832 bytes, 24.9%) | 109 | 549 / 1,191 |
+| Helper-erased: also parameterizes external call identities, an upper bound | 2,588 | 1,994 | 3,801 (65.6%) | 226 | 1,235 / 2,479 |
+
+Under the helper-bound form, 59.9% of callbacks and 75.1% of bytes are singleton shapes. The representative repeated shapes below are small bodies in one compiler style: an r11 frame prologue, MOVW/MOVT absolute globals, conditional execution and direct BL calls. Listing lines are in `private-data/analysis/x-m1-1.50/filmsim/id5.dis`:
+
+| Members | Shape | Listing |
+| ---: | --- | --- |
+| 109 (103 controllers) | return `-1` | 227985-227990 |
+| 92 (63 controllers) | return a constant | 227979-227984 |
+| 100 (25 controllers) | query `0xd38870(0)`, then two `0xd3b198(4,0x130,…)` input-record appends, return 1 or 0 | 227708-227725 |
+| 48 | `0xd3a2b8(0)` release-state producer, then router `0xc0dbf8` | 224182-224187 |
+| 45 | warning selection `0xd3b64c(0)`, compare, conditional controller-state store | 206745-206752 |
+| 226 helper-erased (196 different helpers) | one call, then return a constant | 227254-227258 |
+| 158 helper-erased (33 helper-bound, all `0xc0dbf8`) | tail call returning the helper's result | 228131-228134 |
+
+All 5,795 structural instruction sets decode within the closed `host/firmware/A32.hs` decoder; none has an indirect-call or external-branch candidate, so every outgoing transfer is a direct BL. They call 1,926 distinct helpers: 613 are called by one callback and 59 by at least 50; 5,563 callbacks call at least one, and the 20 most shared helpers are called by 3,855. The two most shared are routers. `0xc0dbf8` (1,362 callbacks) and transition service `0xc12aac` (738) read the application mailbox code `u32[0x0094f64c]`, write an event into a fixed controller's event cell and reenter dispatcher `0xbfb028` (id5.dis:28760-28790, 33797-33834); 2,093 callbacks call at least one of them. Next come notification `0xd38d98` (667), postlude `0xd38f34` (665), stage open `0xd3d858` (437) and property read `0x0061c93c` (429). [Sources: E-MODAL-CONTROLLER-SCALE-150 `sizes`, `cluster_summary`, `helper_bound_clusters`, `shared_helpers`, `call_patterns`; manifest `functions[].indirect_call_candidates`, `external_branch_candidates`; `reports/cardless-capture-feasibility.md:248,260` mailbox and UI actor; `reports/af-observation-plan.md:77,153` for `0xd3b64c` and `0xd3b198`; `reports/autofocus-static-map.md:493` for `0xd3a2b8`; `menu/recipe_bank_arm.S:225-275` for the named services.]
+
+#### Next-state encoding and table-driven variants
+
+All 348 transition words are zero, yet 2,609 callbacks (45.0%) contain 4,545 halfword stores to a constant controller state cell. 4,454 store a known constant, 52 distinct values occur, and 1,154 sites are conditional. Every recorded store targets the callback's own controller; 124 controllers' state cells are written this way. No callback stores to an event cell or loads a cell through a constant address. Event writes and cross-controller dispatch go through helpers such as the two routers. Next-state logic therefore lives in callback code as `state[own] := constant`, not in the transition tables. Among repeated helper-bound shapes, 245 (746 callbacks) contain such stores, and 143 have members whose ordered store signatures differ: the same code shape with different next-state constants or store counts. That is the measured table-driven-variant population. The scan resolves only straight-line constant addresses, so absence of a record is not absence of a write. [Sources: E-MODAL-CONTROLLER-SCALE-150 `scale-cells-regoffset.json` `controller_cell_summary`, `callback_index[].controller_cell_accesses`; manifest `controllers[].state_address`.]
+
+The same stores explain almost all return-proof refusals. 950 of the 951 unresolved return derivations cite `global-object-stack-separation` at one global store, and for 932 that store is a recorded state-cell store. The other 18 cite other global stores, such as `0xc240d0` into the `0x00944580` block (id5.dis:51586-51602); one cites none. **[INFERENCE]** One address-space fact, that the controller cell span and the few other global objects are disjoint from every caller frame, would discharge the dominant refusal premise. It is not established here and does not by itself prove the returns. [Sources: manifest `functions[].extent.return_proof.reason` joined to `scale-cells-regoffset.json` store sites; E-MODAL-CONTROLLER-SCALE-150.]
+
+#### Natural coverage and accepted capability demand
+
+| Recorded domain | Paired coordinates | Contexts | Selected pinned-stock action identities | Denominator |
+| --- | ---: | ---: | ---: | --- |
+| Retained FILMSIM navigation | 29 | 134 | 25 | 5,795 globally, 1,179 registered under its six witnessed IDs |
+| Packaged repeated FILMSIM navigation | 41 | 254 | 36 | Same denominators |
+| Union | 41 | Separate observations, not additive coverage | 36 | 36/5,795; the retained set is a subset |
+
+The analyzer's static projection reproduces 25 and 36 from the manifest's paired domains. The retained receipt independently records 25 distinct r3 targets at the dispatcher action-call site `0xbfb0c8`, agreeing with the projection. That is selected-target observation, not a callback-body-entry instrument. The packaged 36-target result projects paired entry domains through pinned stock tables: publication and interposition change implementations, so it is not evidence of 36 executed stock callbacks or 36 owned bodies. The bank lifecycle separately records three owned body identities, SET once, confirm twice and leave once. [Sources: E-MODAL-CONTROLLER-SCALE-150 `trajectory_projection`; E-MODAL-RETAINED-FILM-ROUTE-150, `private-data/scratch/modal128/retained-film-route/segment-retained-film-route/e2e-result.json` action trace r3; E-MODAL224-PACKAGED-FILMSIM-150, captured domains; E-MODAL75-PACKAGED-DEVICE-150, labeled owned-entry hits; `private-data/scratch/ControllerManifest/scale-coverage.json`.]
+
+The witnessed set gives almost no template leverage. Its 36 targets fall into 35 helper-bound shapes with 146 members in total, and 109 of those are the shared return-`-1` shape; the other shapes have at most three members. Under the helper-erased upper bound, 635 callbacks share a shape with a witnessed target. Eight of the 36 store controller state and two have unresolved return proofs. Retiring the observed route by template would therefore retire roughly the observed route.
+
+| ID | Unique nonnull registered action targets | Retained-domain selected targets | Packaged-domain selected targets | Evidenced visible area or role |
+| --- | ---: | ---: | ---: | --- |
+| 0 | 104 | 2 | 2 | Participates in this menu route; no exclusive visible-area identity recovered |
+| 30 | 203 | 8 | 15 | Participates; not controller75 state30 |
+| 74 | 499 | 6 | 10 | Participates; no exclusive visible-area identity recovered |
+| 75 | 297 | 4 | 4 | Shooting-menu/FILMSIM navigation; separately bank list/editor states 0 and 30 |
+| 100 | 61 | 4 | 4 | Nested transition dispatch destination, not an exclusive menu area |
+| 107 | 15 | 1 | 1 | Participates; no exclusive visible-area identity recovered |
+| 76 | Outside the counted route | Not witnessed | Not witnessed | Source-backed Wireless Settings → General Settings → NAME, state36 |
+
+Controller75 participates in a menu family, not only FILMSIM. The source-backed controller76 NAME route is not observed generic75 cancellation. Other controller/menu-area mappings remain unknown; first-start `(69,52,12)`, date `(67,56,0)` and shooting `(1,5,2)` are menu tuples, not controller IDs. [Sources: existing trajectory and reachable stock modal75 sections above; `ghidra/all.c:341168-341273` event75 producer; `id5.dis:33797-33834` nested controller100 dispatch; manifest controller tables; E-APPLICATION-ENTRY-LOOP-SOURCE-150.]
+
+The accepted capability inventory requires controls/menus, startup/shutdown, live view, AF/manual focus, exposure/capture, development, save/playback, persistent settings, calibration consumption, external interfaces and failure recovery. These traces establish a bounded menu/navigation/editor slice and some handback/render outcomes, not the controller sets required by every accepted area. FILMSIM selection is not development execution; bank SAVE CURRENT is not image save or durable persistence; RAM-push/rollback is not ownership of firmware external interfaces or general recovery. Cold/Q/SETUP, other modes, shutdown, capture/development/playback/storage and failures need their own observed domains and effects. No accepted-capability callback count exists, so neither 36 nor 1,179 is a port budget. [Sources: Inventory §§2,8.3; E-MODAL-CONTROLLER-MANIFEST-150; packaged lifecycle and render scopes above.]
+
+#### Strategy comparison
+
+Strategy and effort judgments are **[INFERENCE]** from the measurements above. Effort is stated as the units of work each strategy multiplies, not person-time.
+
+| Measurement | Value | Bears on |
+| --- | ---: | --- |
+| Callbacks / code bytes | 5,795 / 710,152 | Total retained, translated or re-specified surface |
+| Helper-bound shapes / singletons | 4,058 / 3,471 | Template retirement (a) and per-template qualification (b) |
+| Helper-erased shapes | 2,588 | Template count once helpers become typed parameters |
+| Distinct helpers / single-use | 1,926 / 613 | Service binding surface for every strategy |
+| Callbacks storing constant next states | 2,609 | Transitions recoverable as data (c) |
+| Callbacks calling dispatch routers | 2,093 | Reentrant dispatch is required by every strategy |
+| Unresolved return proofs / citing a state-cell store | 951 / 932 | Callback ABI admission for retained or translated bodies |
+| Native cases needed at 256 declared functions each | at least 23 | Differential partitioning for (b) |
+
+| Strategy | Work it multiplies | How qualification scales | Principal risk |
+| --- | --- | --- | --- |
+| **(a) Owned dispatcher and typed interface; retain stock callbacks, retire clusters by template** | One dispatcher, interface and stock-compatible callback envelope, then one owned implementation per retired shape. Helper-bound templates reach at most 40.1% of callbacks and 24.9% of bytes; 3,471 singleton shapes remain one-offs. | Subsystem matrix once; envelope once; per retired template a contract and per-member binding checks. Retained callbacks are not retired and keep the ABI obligations, including 951 return refusals. | A long mixed period presented as ownership. The envelope must reproduce the stock r4-r11/r11/LR frame for every retained callback, and the routers reenter dispatch from 2,093 callbacks. |
+| **(b) Mechanical A32 translation to Rust, qualified per cluster** | Translation rules over the closed decoder's admitted forms (every callback decodes; transfers are direct BL), plus 1,926 helper bindings. Effort grows with rules and bindings, not with callback count. Output keeps absolute globals (`0x00944580` block, state cells) and helper identities. | Rules qualified once with wrong-behavior controls; every member then needs a differential against its original body, at least 23 native cases at the 256-function limit, with helper effects stubbed. Register-only stubs cannot represent helper memory effects. | Ownership of bytes, not of design: translated code stays coupled to stock memory layout and services. A rule bug replicates across members. |
+| **(c) Re-specify from tables and strings; generic owned controllers** | Menu content is already data: image4 nodes `{id, type, property, kind, …, parent, values, labels}`, `{row, child}` values arrays, string-id label quadruples, conversion tables and availability matrices; the stock SET delegate `0xc72e10` is a generic leaf handler with frame-class special cases. Next states are constants in 2,609 callbacks and mailbox-to-event routing is switch-coded in routers. Work is extracting those tables and writing a small set of generic primitives. | Generic primitives qualified once over their parameter domains; every extracted instance validated mechanically against stock bytes; behavior compared against stock execution of the same data in the system matrix. | Tables do not hold side effects: 4,525 targets have a property-gate path, 1,472 a render path, and 380 only an unclassified category. No complete menu-node census exists. 168 controllers have no observed domain. |
+
+Strategy (a) is an integration architecture, not permission to use the scoped modal75 adapter globally; `src/dispatch.S` and source-level argument equality do not reproduce the stock frame. Strategy (b) must preserve 32-bit wrapping, signed halfword behavior, predication/NZCV, instruction-visible PC, access widths, volatile/shared read order and call-clobber rules, and must keep the 951 return refusals as exceptions until their premise is proven. Strategy (c) must preserve the lifecycle's repeated queries, post-transition reads, buffer mutations and result-dependent notifications, or specify an accepted difference. No production A32-to-Rust/C translator exists in the repository: the matching pipeline compiles already-recovered x70view C and checks bound bytes. New owned logic defaults to Rust. [Sources: dispatcher ABI sections above; `replacement/modal_runtime/src/dispatch.S`; `replacement/owned_menu/src/lifecycle.rs:141-220`; `matching/README.md:3-28`; `emulation/README.md:558-584`; `reports/filmsim-offer-mechanism.md:22-26`; `reports/recipe-design.md:80,460`; `reports/firmware-extraction.md:116`; spec §§Compatibility and redesign, Automatic verification, Independent evidence; `docs/principles.md:17-29`.]
+
+#### Recommended composition
+
+**[INFERENCE]** No single strategy fits the measured population. Use each where the measurements favor it, inside the one subsystem:
+
+1. **(a) as the frame.** One owned reentrant dispatcher and typed `ControllerId`/`Event`/`ControllerState`/`ActionResult` interface, reached by every router and by the stock entry. This is required by every strategy.
+2. **(c) for the state-machine and menu layer.** Recover per-controller next-state constants, router mailbox-to-event maps and menu node/values/labels tables into owned typed data, and drive them with generic controllers and one generic menu engine. The zero transition tables, the 2,609 constant next-state callbacks and the existing node data make this the layer where re-specification is cheapest and most maintainable.
+3. **(b) for the residual action bodies.** The 3,471 singleton shapes hold 75.1% of the bytes; template retirement cannot reach them and re-specification needs service contracts that do not yet exist. Translate them to Rust through typed service bindings, cluster by cluster, as a bridge to later re-specification. Keep untranslated bodies explicitly stock until their cluster qualifies.
+
+Qualification then grows with generic primitives, translation rules, helper bindings and accepted scenarios rather than with callbacks; every callback still gets a recorded disposition (generic instance, translated member, exceptional owned body or retained stock) with its binding provenance and open premises. Shape equality never reduces per-member binding checks to one representative.
+
+Next evidence, in order: prove the controller-cell and global-object stack-separation premise once and rerun return derivation; extract router mailbox-to-event maps from the helpers that reenter `0xbfb028`; run an instruction-form census to size translation rules; capture cold, Q and SETUP dispatch domains; then pilot all three layers on controller75 (297 targets, with the most existing route, lifecycle and owned-body evidence) before scaling. The existing native-case format holds at most 256 declared functions and 16 regions per case, so differential qualification is partitioned by execution and service closure. [Source: `emulation/README.md:558-584`.]
+
+Mechanical and contract-based implementations are both eligible for publication under provenance and redistribution review. Neither a generated label nor changed source structure clears copied firmware tables, strings, resources or instruction material. Keep raw extraction and shape artifacts private, publish tools and reproducible owner-input derivation, and review embedded data and upstream notices independently of behavioral qualification. [Sources: spec §Publication; `docs/principles.md:64-74`; `third_party/README.md:23-33`.]
+
+**Proposed #128 strategy text:** Replace the 174-controller subsystem as three layers behind one owned reentrant dispatcher: typed state-machine and menu data recovered from stock tables and constant next-state stores, driven by generic owned controllers; residual action bodies translated to Rust through typed service bindings and qualified per cluster; and explicitly retained stock bodies until their cluster qualifies. Start with the controller-cell stack-separation premise, router maps, an instruction-form census and cold/Q/SETUP domains, then pilot controller75. Completion keeps the subsystem acceptance of the project text above.

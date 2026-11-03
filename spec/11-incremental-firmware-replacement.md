@@ -32,11 +32,13 @@ Apply the existing [publication and asset boundaries](../docs/principles.md#publ
 
 ## Ownership stages
 
+The default replacement unit is a whole subsystem behind its interface: one artifact, one interface contract and one scenario matrix. Existing leaf proofs become internal regression evidence. Keep exact data layout only where a retained consumer reads it. Use function-level units only where a subsystem has no usable boundary yet or as internal milestones of a subsystem project. The [X-M1 1.50 subsystem unit plan](../reports/subsystem-replacement-map.md) maps the recovered interfaces, existing proofs and qualification gaps to those projects.
+
 | Stage | Outcome | Incremental unit | Exit evidence |
 | --- | --- | --- | --- |
 | Extend stock | Normally compiled features operate through bounded stock interfaces | Feature or adapter | Qualified entry, behavior, effects and lifecycle |
-| Own the application | Our state machines own user-facing behavior over retained services | Complete behavior, including cancellation and handback | Capability scenarios pass without relying on the replaced stock behavior |
-| Replace the platform | Our implementations replace stock services, runtime and drivers | Service and its dependency boundary | Callers, callbacks, shared data, startup and hardware contracts are accounted for; the retired implementation is no longer required |
+| Own the application | Our state machines own user-facing behavior over retained services | Application subsystem, including cancellation and handback | Capability scenarios pass without relying on the replaced stock behavior |
+| Replace the platform | Our implementations replace stock services, runtime and drivers | Whole platform subsystem behind its service interfaces | Callers, callbacks, shared data, startup and hardware contracts are accounted for; the retired implementation is no longer required |
 
 Stages overlap across subsystems. Do not wait for application-wide replacement before replacing an isolated service. Do not count bypassed entry points or unobserved execution as proof that a dependency is retired. Preserve the original firmware as a private verification reference, not an indefinite second production implementation.
 
@@ -61,14 +63,14 @@ Qualification maps existing execution diagnostics onto pass within scope, behavi
 
 ## Repeatable replacement loop
 
-1. Select a useful boundary from the capability/dependency inventory. Prefer high feature leverage, observable behavior and bounded effects over raw function count.
-2. Establish original behavior and the boundary contract from source, original-binary execution and available hardware observations. Record unsupported paths before implementing the replacement.
-3. Implement or translate the candidate using the normal build. Generated code is a candidate, not evidence of correctness. Keep recovered addresses and layouts in the adapter rather than throughout application code.
-4. Run bounded component checks, effect guards and negative controls. Reduce failures to reproducible counterexamples.
-5. Exercise the actual integrated candidate through device-driven emulator scenarios, including entry, repeated use, cancellation and handback. Keep injected-state probes separate from reachable-state acceptance.
-6. Run affected scenarios during iteration and the existing complete candidate matrix before qualification or live promotion. Review intentional differences rather than weakening comparisons or re-recording baselines to manufacture agreement.
+1. Select a whole subsystem behind a usable interface from the capability/dependency inventory. Prefer high feature leverage, observable behavior and bounded effects over raw function count. Use function-level units only where no usable subsystem boundary exists yet or as internal subsystem milestones.
+2. Establish original behavior, one interface contract and one scenario matrix from source, original-binary execution and available hardware observations. Record unsupported paths before implementing the replacement.
+3. Implement or translate the candidate as one subsystem artifact using the normal build. Generated code is a candidate, not evidence of correctness. Keep compatibility adapters separate from owned internals, with recovered addresses and layouts confined to retained interfaces. Preserve exact layout only where a retained consumer reads it.
+4. Reuse existing leaf proofs as internal regressions, then run bounded component checks, effect guards and negative controls. Reduce failures to reproducible counterexamples.
+5. Qualify the actual integrated subsystem at its interface and through device-driven system scenarios, including entry, repeated use, cancellation and handback. Keep injected-state probes separate from reachable-state acceptance.
+6. Maintain one subsystem acceptance matrix. Run affected scenarios during iteration and the existing complete candidate matrix before qualification or live promotion. Compare timing changes by semantic ordering, required synchronization edges and grounded deadlines, not instruction-count equality. Review intentional differences rather than weakening comparisons or re-recording baselines to manufacture agreement.
 7. Request the least-risk human or hardware check that answers a named remaining question. Apply the existing camera-run procedure independently of task completion.
-8. Record the scoped decision, integrate the candidate and update the capability/dependency inventory. Remove obsolete production paths after cutover and select the next bounded target from exposed dependencies.
+8. Record the scoped decision, integrate the candidate and update the capability/dependency inventory. Remove obsolete production paths and compatibility adapters after cutover and select the next subsystem from exposed dependencies.
 
 Reuse [Emulation.CheckpointKey](../emulation/Emulation/CheckpointKey.hs) and its existing guest-state, procedure and route identities (E-XM1-EMU-CHECKPOINT-KEYS-150, refined by E-XM1-EMU-CHECKPOINT-PROCEDURE-150). Invalidate checkpoints when initialization, executable memory or dependency assumptions change; startup changes require cold-boot scenarios. Qualification must exercise the packaged artifact and installation/boot path being claimed, not only a separately linked component.
 

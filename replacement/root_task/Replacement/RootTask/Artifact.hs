@@ -49,7 +49,7 @@ canonicalSource dat image = do
     && identityText imageIdentity == "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16") SourceMismatch
   derived <- either (const (Left SourceMismatch)) Right (Stock.deriveFunction (Stock.GuestAddress 0x61c400) image
     (Stock.FunctionWindow (Stock.GuestAddress origin) (Stock.GuestAddress limit)) [])
-  require (derived == (origin,340)) SourceMismatch
+  require (Stock.derivedDeclaration derived == Stock.FunctionDeclaration (Stock.GuestAddress origin) (Stock.FunctionSize 340)) SourceMismatch
   proof <- either (Left . CodeRejected) Right
     (deriveRootProof (B.take 340 (B.drop (fromIntegral (origin-0x61c400)) image)))
   pure (CanonicalSource (OriginalDat dat) (DecodedImage4 image) (SourceIdentities datIdentity imageIdentity) proof)

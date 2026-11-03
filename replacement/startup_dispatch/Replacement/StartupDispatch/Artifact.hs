@@ -3,10 +3,12 @@ module Replacement.StartupDispatch.Artifact
   ( CanonicalSource, LinkedArtifact, StagedImage4, StagedCandidate, ArtifactError (..)
   , canonicalSource, deriveArtifact, stageImage4, stagedBytes, contractValue
   , stageCandidate, candidateBytes, candidateContractValue
+  , linkedBytes, frameProof, artifactValue, sourceValue
   ) where
 
 import Control.Monad (forM_, unless)
 import Data.Aeson (Value, object, (.=))
+import Data.Aeson.Types (Pair)
 import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import Data.Word (Word32)
@@ -63,6 +65,12 @@ deriveArtifact bytes symbolBytes = do
   proof <- either (Left . CodeRejected) Right (deriveFrameProof bytes)
   pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) (CodeAddress rust) proof)
 
+linkedBytes :: LinkedArtifact -> B.ByteString
+linkedBytes (LinkedArtifact bytes _ _ _ _) = bytes
+
+frameProof :: LinkedArtifact -> FrameProof
+frameProof (LinkedArtifact _ _ _ _ proof) = proof
+
 stageImage4 :: CanonicalSource -> LinkedArtifact -> StagedImage4
 stageImage4 source@(CanonicalSource _ original _) artifact@(LinkedArtifact linked _ _ _ _) =
   let offset = 0x69cdf8 - 0x61c400
@@ -90,11 +98,22 @@ candidateContractValue (StagedCandidate staged candidate) = object
   ]
 
 contractValue :: StagedImage4 -> Value
-contractValue (StagedImage4 (CanonicalSource _ _ sources) (LinkedArtifact _ linked symbols (CodeAddress rust) proof) staged) = object
+contractValue (StagedImage4 source artifact staged) = object
+  (artifactFields artifact ++ sourceFields source ++ ["staged_image4_sha256" .= identityText (identity staged)])
+
+sourceValue :: CanonicalSource -> Value
+sourceValue = object . sourceFields
+
+sourceFields :: CanonicalSource -> [Pair]
+sourceFields (CanonicalSource _ _ sources) = ["source_dat_image4_loader_a_loader_b_sha256" .= map identityText sources]
+
+artifactValue :: LinkedArtifact -> Value
+artifactValue = object . artifactFields
+
+artifactFields :: LinkedArtifact -> [Pair]
+artifactFields (LinkedArtifact _ linked symbols (CodeAddress rust) proof) =
   [ "schema" .= (1 :: Int), "qualification" .= ("conditional-source-only" :: String)
-  , "source_dat_image4_loader_a_loader_b_sha256" .= map identityText sources
   , "linked_sha256" .= identityText linked, "symbols_sha256" .= identityText symbols
-  , "staged_image4_sha256" .= identityText (identity staged)
   , "patch" .= ([0x69cdf8,0x69cf84] :: [Word32]), "rust_entry" .= rust
   , "incoming_sp_relative" .= object
       [ "guest_frame_bottom" .= (-48 :: Int), "descriptor" .= (-44 :: Int)

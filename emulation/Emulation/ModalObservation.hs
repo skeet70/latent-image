@@ -36,6 +36,7 @@ module Emulation.ModalObservation
   , parseModalReport
   , checkModalBegin
   , checkModalEnd
+  , checkScopedModalRoute
   , ScopedModalSource
   , parseScopedModalSource
   , scopedModalRequest
@@ -396,6 +397,21 @@ checkModalEnd report = do
   unless (not (modalReportEnabled report)) (Left "modal observation remains active")
   unless (countValue (modalActiveFrames (modalReportCounts report)) == 0) (Left "modal observation ended with active frames")
   forM_ (modalReportFailure report) (Left . T.unpack)
+
+checkScopedModalRoute :: ModalReport -> Either String ()
+checkScopedModalRoute report = do
+  checkModalEnd report
+  unless (modalReportPolicy report == ScopedOwned75) (Left "modal route requires scoped-owned75 policy")
+  let counts = modalReportCounts report
+      owned = toInteger (countValue (modalOwnedHandoffs counts))
+      fallback = toInteger (countValue (modalFallbackHandoffs counts))
+      entries = toInteger (countValue (modalEntries counts))
+      returns = toInteger (countValue (modalReturns counts))
+  unless (owned > 0 && fallback > 0) (Left "modal route requires owned and fallback handoffs")
+  unless (entries == owned + fallback && entries == returns) (Left "modal route entries, handoffs and returns are unbalanced")
+  unless (any controller75 (modalCapturedDomains report)) (Left "modal route lacks a captured controller75 domain")
+ where
+  controller75 (ModalDomain _ (CapturedController controller) _ _) = controller == 75
 
 parseModalBeginRequest :: Value -> Either String ModalRequest
 parseModalBeginRequest value = do

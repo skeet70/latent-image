@@ -985,9 +985,9 @@ impl Server {
                         return Err("classified write/fetch ranges require fixed views".into()),
                     WatchViews::Fixed => {
                         let mut classes: Vec<_> = write_ranges.iter().chain(&fetch_ranges).copied().collect();
-                        if fetch_ranges.is_empty() || classes.len() > 16
+                        if classes.is_empty() || classes.len() > 16
                             || classes.iter().any(|range| range[0] >= range[1] || range[1] > u32::MAX as u64) {
-                            return Err("fixed watch requires bounded write/fetch classes and forbidden fetch ranges".into());
+                            return Err("fixed watch requires nonempty bounded write/fetch classes".into());
                         }
                         classes.sort_unstable();
                         let mut union: Vec<[u64; 2]> = Vec::with_capacity(classes.len());
@@ -1380,6 +1380,9 @@ mod tests {
         message: Option<String>,
         protocol: Option<u32>,
         state: Option<ProgressState>,
+        armed: Option<bool>,
+        enabled: Option<bool>,
+        views: Option<WatchViews>,
         current_phase: Option<u8>,
         instructions: Option<u64>,
         intended_endpoint: Option<u64>,
@@ -1577,6 +1580,37 @@ mod tests {
         let receipt = serde_json::from_slice(&std::fs::read(server.output.join("emulator-session.json")).unwrap()).unwrap();
         std::fs::remove_dir_all(&server.output).unwrap();
         (responses, receipt)
+    }
+
+    #[test]
+    fn fixed_watch_protocol_accepts_a_write_only_class() {
+        let mut server = server(&[0xeafffffe]);
+        let begin = json!({
+            "command": "watch-begin", "ranges": [[0x01467588u64, 0x01467840u64]],
+            "limit": 16, "views": "fixed",
+            "write_ranges": [[0x01467588u64, 0x01467840u64]], "fetch_ranges": []
+        });
+        let (responses, receipt) = exchange(&mut server,
+            &format!("{begin}\n{{\"command\":\"watch-state\"}}\n{{\"command\":\"finish\"}}\n"));
+        assert!(receipt.bridge_error.is_none());
+        assert!(responses.iter().all(|response| response.ok));
+        assert!(responses.iter().any(|response|
+            response.armed == Some(true) && response.views == Some(WatchViews::Fixed)));
+        assert!(responses.iter().any(|response|
+            response.enabled == Some(true) && response.views == Some(WatchViews::Fixed)));
+    }
+
+    #[test]
+    fn fixed_watch_protocol_refuses_absent_write_and_fetch_classes() {
+        let mut server = server(&[0xeafffffe]);
+        let begin = json!({
+            "command": "watch-begin", "ranges": [[0x01467588u64, 0x01467840u64]],
+            "limit": 16, "views": "fixed", "write_ranges": [], "fetch_ranges": []
+        });
+        let (responses, receipt) = exchange(&mut server, &format!("{begin}\n"));
+        assert!(receipt.bridge_error.is_some());
+        assert!(responses.last().is_some_and(|response| !response.ok));
+        assert!(!responses.iter().any(|response| response.armed == Some(true)));
     }
 
     #[test]
