@@ -21,7 +21,7 @@ import Data.Word (Word32)
 import qualified FujiAF.JSON as JSON
 import GHC.Generics (Generic)
 import Numeric (readHex, showHex)
-import StockInventory (FunctionDeclaration (..), FunctionDerivation (..), FunctionSize (..), FunctionWindow (..), GuestAddress (..), SavedStackArray (..), deriveFunction, returnPremiseLabel, xm1TaskRecords, xm1TaskRecordsA, xm1TaskRecordsB)
+import StockInventory (FunctionDeclaration (..), FunctionDerivation (..), FunctionSize (..), FunctionWindow (..), GuestAddress (..), SavedStackArray (..), deriveFunction, returnPremiseLabel, savedStackTaintResidualLabel, savedStackTaintResidualStatement, xm1TaskRecords, xm1TaskRecordsA, xm1TaskRecordsB)
 import System.Directory (doesPathExist)
 import System.Environment (getArgs)
 
@@ -42,6 +42,32 @@ data Contract = Contract
   , evidence :: [String]
   , recovery :: Recovery
   } deriving (Show)
+
+-- | A condition the caller must establish because the slot body does not check it.
+data Precondition = Precondition { preconditionName :: String, statement :: String }
+
+slotPreconditions :: SlotOffset -> [Precondition]
+slotPreconditions (SlotOffset offset) = maybe [] pure (M.lookup offset unchecked)
+  where
+    validId table sites = Precondition "valid-object-id"
+      ("Caller passes 1 <= uxth(r0) <= the capacity of " ++ table ++ "; the body indexes uxth(r0)-1 without a range check (" ++ sites ++ "), so other ids write outside the table")
+    unchecked = M.fromList
+      [ (0x0, validId "the 120 task creation records (A 0x4005beac / B 0x400ebe6c, stride 40)" "uxth A 0x4d0a8 / B 0xdd068")
+      , (0x4, validId "the 120 task creation records and T nodes" "uxth A 0x4d1b8 / B 0xdd17c")
+      , (0x64, validId "the 250 semaphore records (A 0x4005dfd8 / B 0x400edf98, stride 16)" "uxth A 0x4d2bc / B 0xdd280")
+      , (0x68, validId "the 250 semaphore records and control blocks" "uxth A 0x4d348 / B 0xdd30c")
+      , (0x80, validId "the 120 eventflag records (A 0x4005d178 / B 0x400ed138, stride 12)" "uxth A 0x4d3b0 / B 0xdd374")
+      , (0x84, validId "the 120 eventflag records and control blocks" "uxth A 0x4d444 / B 0xdd408")
+      , (0xa0, validId "the data-queue creation records (A 0x4005988c / B 0x400e984c, stride 16; count at domain record +0x60)" "uxth A 0x4d4b0 / B 0xdd474")
+      , (0xa4, validId "the data-queue creation and runtime records" "uxth A 0x4d550 / B 0xdd514")
+      , (0xcc, validId "its 12-byte creation table (capacity not yet read)" "uxth A 0x4d5d0 / B 0xdd594")
+      , (0xd0, validId "its creation table (capacity not yet read)" "uxth A 0x4d664 / B 0xdd628")
+      , (0xe4, validId "its 20-byte pool creation table (capacity not yet read)" "uxth A 0x4d6d8 / B 0xdd69c")
+      , (0xe8, validId "its 20-byte creation table (capacity not yet read)" "uxth A 0x4d7a0 / B 0xdd764")
+      , (0x108, validId "the 64 cyclic creation records (A 0x4005ef78 / B 0x400eef38, stride 24)" "uxth A 0x4d82c / B 0xdd7f0")
+      , (0x10c, validId "the 64 cyclic creation records" "uxth A 0x4d8b8 / B 0xdd87c")
+      ]
+
 data InputIdentity = InputIdentity { inputPath :: FilePath, inputBytes :: Int, inputSha256 :: String } deriving (Generic)
 instance ToJSON InputIdentity
 
@@ -294,6 +320,7 @@ main = do
                   , "operation" .= operation info, "analogue" .= analogue info, "arguments" .= arguments info, "result" .= result info
                   , "errors" .= [object ["value" .= status,"meaning" .= meaning] | (status,meaning) <- errors info]
                   , "context" .= context info, "objects" .= objects info
+                  , "preconditions" .= [object ["name" .= preconditionName p, "statement" .= statement p] | p <- slotPreconditions offset]
                   , "directImage4Calls" .= [hex site | (site,A.Branch _ True target) <- callers,target == address]
                   , "computedWrapperEntries" .= map hex (computedWrappers info)
                   , "callerClosure" .= ("open: named wrappers are source-evidenced lower bounds, not exhaustive computed/Thumb/tail/alias closure; linear BL matches may be data" :: String)
@@ -310,6 +337,7 @@ main = do
             [ "domain" .= show domain, "start" .= hex start, "stride" .= stride, "count" .= count, "field" .= hex field
             , "evidence" .= savedStackEvidence domain
             ] | (domain, SavedStackArray (GuestAddress start) stride count field) <- savedStackArrays]
+        , "savedStackTaintResiduals" .= [object ["name" .= savedStackTaintResidualLabel residual, "statement" .= savedStackTaintResidualStatement residual] | residual <- [minBound .. maxBound]]
         , "functionBoundaries" .= [object
             [ "domain" .= show (boundaryDomain boundary), "start" .= hex start
             , "loaderSha256" .= (let Sha256 text = loaderSha256 boundary in text)

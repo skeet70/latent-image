@@ -13,6 +13,9 @@ module StockInventory
   , ReturnPremise (..)
   , requiredReturnPremises
   , returnPremiseLabel
+  , SavedStackTaintResidual (..)
+  , savedStackTaintResidualLabel
+  , savedStackTaintResidualStatement
   , checkDeclarations
   , deriveFunction
   , xm1TaskRecordsA
@@ -33,7 +36,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Word (Word32)
 import Numeric (showHex)
-import ReturnProvenance (CodeNode (..), GuestAddress (..), LiteralWord (..), PremiseUse (..), ProgramCounter (..), ReturnPremise (..), SavedStackArray (..), Step (..), requiredReturnPremises, returnPremiseLabel, verifyReturns)
+import ReturnProvenance (CodeNode (..), GuestAddress (..), LiteralWord (..), PremiseUse (..), ProgramCounter (..), ReturnPremise (..), SavedStackArray (..), SavedStackTaintResidual (..), Step (..), requiredReturnPremises, returnPremiseLabel, savedStackTaintResidualLabel, savedStackTaintResidualStatement, verifyReturns)
 
 data FunctionWindow = FunctionWindow GuestAddress GuestAddress deriving (Eq, Show)
 newtype FunctionSize = FunctionSize Int deriving (Eq, Ord, Show)

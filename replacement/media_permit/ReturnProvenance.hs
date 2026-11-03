@@ -11,11 +11,14 @@ module ReturnProvenance
   , ReturnPremise (..)
   , requiredReturnPremises
   , returnPremiseLabel
+  , SavedStackTaintResidual (..)
+  , savedStackTaintResidualLabel
+  , savedStackTaintResidualStatement
   , verifyReturns
   ) where
 
 import qualified A32 as A
-import Control.Monad (foldM, unless)
+import Control.Monad (foldM, unless, when)
 import Data.Bits (rotateR, shiftL, shiftR, (.&.), (.|.))
 import Data.Int (Int32)
 import qualified Data.Map.Strict as M
@@ -47,12 +50,13 @@ data PremiseUse = PremiseUse ProgramCounter ReturnPremise deriving (Eq, Ord, Sho
 -- Absolute and indexed global-object addresses stay inside their objects and
 -- do not alias allocated task or boot stacks.
 -- A word loaded through an address not derived from the frame, while the frame
--- is unexposed, does not address its unexposed words. Loads that may read a
--- declared saved stack pointer give unknown instead; a loaded pointer is taken
--- to address the start of its record and a register index to select whole
--- records, so a pointer into a record's interior defeats that exclusion. An
--- indexed global's constant base plus its constant displacement lies in its
--- array or at most one record before it.
+-- is unexposed, does not address its unexposed words. Word and doubleword loads
+-- that may read a declared saved stack pointer give a saved-stack value
+-- instead; a loaded pointer is taken to address the start of its record and a
+-- register index to select whole records, so a pointer into a record's
+-- interior defeats that exclusion. An indexed global's constant base plus its
+-- constant displacement lies in its array or at most one record before it.
+-- Not covered: the open residuals in `SavedStackTaintResidual`.
 data ReturnPremise = UnexposedFrameIsolation | GlobalObjectStackSeparation | LoadedObjectFrameIsolation deriving (Eq, Ord, Show)
 
 requiredReturnPremises :: [ReturnPremise]
@@ -63,14 +67,40 @@ returnPremiseLabel UnexposedFrameIsolation = "unexposed-caller-frame-isolation"
 returnPremiseLabel GlobalObjectStackSeparation = "global-object-stack-separation"
 returnPremiseLabel LoadedObjectFrameIsolation = "loaded-object-frame-isolation"
 
+-- Open residuals: routes by which a saved stack pointer reaches a value without
+-- the saved-stack taint. The derivation claims nothing for them.
+data SavedStackTaintResidual = SubWordLoad | SubWordOrUnalignedStore | UntrackedPointer
+  | JoinedAddress | UnknownFirstOperandAddress | CallBoundary deriving (Bounded, Enum, Eq, Show)
+
+savedStackTaintResidualLabel :: SavedStackTaintResidual -> String
+savedStackTaintResidualLabel residual = case residual of
+  SubWordLoad -> "sub-word-load"
+  SubWordOrUnalignedStore -> "sub-word-or-unaligned-store"
+  UntrackedPointer -> "untracked-pointer"
+  JoinedAddress -> "joined-address"
+  UnknownFirstOperandAddress -> "unknown-first-operand-address"
+  CallBoundary -> "call-boundary"
+
+savedStackTaintResidualStatement :: SavedStackTaintResidual -> String
+savedStackTaintResidualStatement residual = case residual of
+  SubWordLoad -> "A byte or halfword loaded from a saved stack pointer, and any value built from such loads, is not tainted."
+  SubWordOrUnalignedStore -> "A saved stack pointer written by a byte or halfword store, or by an unaligned word store into the frame, and read back is not tainted."
+  UntrackedPointer -> "A word loaded through an address not tracked as a constant, global object, loaded object, frame-derived or saved-stack value is not tainted, even when it addresses a declared record. Untracked addresses include incoming and callee-returned pointers, pointers obtained by load-multiple or by loads after the frame is exposed, pointers reloaded from frame words the analysis dropped, and pointers loaded through untracked addresses."
+  JoinedAddress -> "A word loaded through an address that converging paths give as different constants, as a constant or returned object and another kind of address, or on only one path, is not tainted."
+  UnknownFirstOperandAddress -> "A word loaded through an address whose first ADD or SUB operand is unknown or a scaled index, with a constant, global or loaded table address as the second operand, or formed from a table address by any other data-processing operation, is not tainted."
+  CallBoundary -> "A saved stack pointer crossing a call is not tainted on the receiving side: entry arguments in registers or on the stack, a callee's return value, and words a callee writes through a pointer it was given. The sending function refuses only register arguments, external tails and r0/r1 at its own return."
+
 -- StatusWord: CPSR bits `executionState` equal the current CPSR's.
 -- StatusNeutral: bits `executionState` are zero.
 -- LoadedObject: a word loaded from outside the frame while it was private, with
 -- its constant displacement (if known) and the bases of global objects it was
 -- joined with.
 -- GlobalObject: the possible constant bases of an absolute or indexed global.
+-- SavedStack: a word or a value derived from one that may be a declared saved
+-- stack pointer. No premise admits an index built from it; a store through it,
+-- storing it outside the frame, passing it to a call or returning it refuses.
 data Value = IncomingReturn | FrameAddress FrameOffset | FrameDerived | ReturnedObject | GlobalObject (S.Set Word32) | ScaledIndex | Constant Word32
-  | StatusWord | StatusNeutral | LoadedObject (Maybe Int32) (S.Set Word32) deriving (Eq, Show)
+  | StatusWord | StatusNeutral | LoadedObject (Maybe Int32) (S.Set Word32) | SavedStack deriving (Eq, Show)
 data FrameExposure = PrivateFrame | ExposedFrame deriving (Eq, Ord, Show)
 data Accumulation = ProductOnly | Addend (Maybe Value)
 data FrameState = FrameState
@@ -93,6 +123,10 @@ verifyReturns arrays literals entry nodes = walk [(entry, initial)] M.empty S.em
         then walk pending states dependencies
         else do
           CodeNode _ step successors condition <- maybe (Left "return proof leaves the classified code") Right (M.lookup address graph)
+          case (address, step) of
+            (ProgramCounter pc, Executes (A.Branch _ False target)) | not (M.member (ProgramCounter target) graph) ->
+              requireUntaintedCall (registers joined) pc Nothing
+            _ -> Right ()
           executed <- case executeStep arrays literals address step joined of
             Left problem -> Left (problem ++ "; premise uses: " ++ show
               [showHex at "" ++ "=" ++ returnPremiseLabel premise | PremiseUse (ProgramCounter at) premise <- S.toList dependencies])
@@ -126,6 +160,7 @@ joinState left right = FrameState
 
 derivedFrom :: [Maybe Value] -> Maybe Value
 derivedFrom values
+  | Just SavedStack `elem` values = Just SavedStack
   | any isFrameValue values = Just FrameDerived
   | otherwise = Nothing
 
@@ -170,6 +205,7 @@ add (Just (Constant value)) delta = Just (Constant (value + fromIntegral delta))
 add (Just ReturnedObject) _ = Just ReturnedObject
 add (Just (LoadedObject displacement bases)) delta = Just (LoadedObject ((+ delta) <$> displacement) (S.map (+ fromIntegral delta) bases))
 add (Just FrameDerived) _ = Just FrameDerived
+add (Just SavedStack) _ = Just SavedStack
 add (Just (GlobalObject bases)) delta = Just (GlobalObject (S.map (+ fromIntegral delta) bases))
 add (Just ScaledIndex) delta = Just (if delta == 0 then ScaledIndex else GlobalObject (S.singleton (fromIntegral delta)))
 add value 0 = value
@@ -177,25 +213,27 @@ add _ _ = Nothing
 
 indexedAddress :: FrameExposure -> Maybe Value -> Maybe Value -> Maybe Value
 indexedAddress exposure base index = case derivedFrom [base, index] of
-  Just FrameDerived -> Just FrameDerived
+  Just tainted -> Just tainted
   _ -> case base of
-    -- After exposure an unknown operand can be a reloaded frame address.
-    Just (Constant base') | exposure == PrivateFrame -> Just (GlobalObject (S.singleton base'))
-    Just (GlobalObject bases) | exposure == PrivateFrame -> Just (GlobalObject bases)
     Just ReturnedObject -> Just ReturnedObject
+    Just (Constant base') | exposure == PrivateFrame -> Just (GlobalObject (S.singleton base'))
+    Just global@(GlobalObject _) | exposure == PrivateFrame -> Just global
     Just loaded@(LoadedObject _ _) | exposure == PrivateFrame -> Just loaded
+    -- After exposure an unknown operand can be a reloaded frame address.
+    Just (Constant _) -> Just FrameDerived
+    Just (GlobalObject _) -> Just FrameDerived
+    Just (LoadedObject _ _) -> Just FrameDerived
     _ -> Nothing
 
 multiplyValue :: FrameExposure -> Maybe Value -> Maybe Value -> Accumulation -> Maybe Value
 multiplyValue exposure left right accumulator = case derivedFrom [left, right, case accumulator of ProductOnly -> Nothing; Addend value -> value] of
-  Just FrameDerived -> Just FrameDerived
+  Just tainted -> Just tainted
   _ -> case (left, right, accumulator) of
     (Just (Constant a), Just (Constant b), Addend (Just (Constant c))) -> Just (Constant (a*b+c))
     (Just (Constant a), Just (Constant b), ProductOnly) -> Just (Constant (a*b))
+    (_, _, Addend addend) -> indexedAddress exposure addend Nothing
     -- After exposure an unknown operand can be a reloaded frame address.
     _ | exposure == ExposedFrame -> Nothing
-    (_, _, Addend (Just (Constant base))) -> Just (GlobalObject (S.singleton base))
-    (_, _, Addend (Just (GlobalObject bases))) -> Just (GlobalObject bases)
     (Just (Constant _), _, _) -> Just ScaledIndex
     (_, Just (Constant _), _) -> Just ScaledIndex
     _ -> Nothing
@@ -216,7 +254,7 @@ coversExecutionState _ = False
 -- AND, EOR, ORR and BIC; other operations give derivedFrom.
 bitwiseValue :: A.DataOp -> Maybe Value -> Maybe Value -> Maybe Value
 bitwiseValue operation left right = case derivedFrom [left, right] of
-  Just FrameDerived -> Just FrameDerived
+  Just tainted -> Just tainted
   unknown -> case (operation, left, right) of
     (A.AND, _, _) | statusNeutral left || statusNeutral right -> Just StatusNeutral
     (A.AND, Just StatusWord, _) | coversExecutionState right -> Just StatusWord
@@ -283,10 +321,11 @@ readFrame _ _ = Nothing
 writeFrame :: Maybe Value -> Word32 -> Maybe Value -> FrameState -> FrameState
 writeFrame (Just (FrameAddress offset@(FrameOffset raw))) size value state = (exposeFrame value state) {frameWords = stored}
   where
-    untouched = M.filterWithKey (\(FrameOffset other) _ ->
+    untouched = M.filterWithKey (\(FrameOffset other) known ->
       let forward = fromIntegral (other-raw) :: Word32
           backward = fromIntegral (raw-other) :: Word32
-       in forward >= size && backward >= 4) (frameWords state)
+          replaced = other == raw && size == 4 && raw .&. 3 == 0
+       in (known == SavedStack && not replaced) || (forward >= size && backward >= 4)) (frameWords state)
     stored = case value of
       Just known | size == 4 && raw .&. 3 == 0 -> M.insert offset known untouched
       _ -> untouched
@@ -294,15 +333,55 @@ writeFrame (Just (Constant _)) _ value state = usePremise GlobalObjectStackSepar
 writeFrame (Just (GlobalObject _)) _ value state = usePremise GlobalObjectStackSeparation (exposeFrame value state)
 writeFrame (Just ReturnedObject) _ value state =
   usePremise UnexposedFrameIsolation ((exposeFrame value state)
-    {frameWords = if frameExposure state == PrivateFrame then frameWords state else savedWords state})
+    {frameWords = if frameExposure state == PrivateFrame then frameWords state else keptWords state})
 -- An empty frame map has nothing for the store to clobber.
 writeFrame (Just (LoadedObject _ bases)) _ value state
   | M.null (frameWords state) = globalBases (exposeFrame value state)
   | otherwise = globalBases (usePremise LoadedObjectFrameIsolation ((exposeFrame value state)
-      {frameWords = if frameExposure state == PrivateFrame then frameWords state else savedWords state}))
+      {frameWords = if frameExposure state == PrivateFrame then frameWords state else keptWords state}))
   where
     globalBases = if S.null bases then id else usePremise GlobalObjectStackSeparation
-writeFrame _ _ value state = (exposeFrame value state) {frameWords = M.empty}
+writeFrame _ _ value state = (exposeFrame value state) {frameWords = taintedWords state}
+
+-- Discarded frame words keep their saved-stack taint.
+taintedWords :: FrameState -> M.Map FrameOffset Value
+taintedWords = M.filter (== SavedStack) . frameWords
+
+keptWords :: FrameState -> M.Map FrameOffset Value
+keptWords state = M.union (savedWords state) (taintedWords state)
+
+isFrameAddress :: Maybe Value -> Bool
+isFrameAddress (Just (FrameAddress _)) = True
+isFrameAddress _ = False
+
+-- The register holding a BLX target is not an argument.
+requireUntaintedCall :: M.Map A.Reg Value -> Word32 -> Maybe A.Reg -> Either String ()
+requireUntaintedCall held pc target =
+  when (any (\register -> M.lookup register held == Just SavedStack) [register | register <- map A.Reg [0..3], Just register /= target])
+    (Left ("saved stack pointer passed to a call at " ++ showHex pc ""))
+
+-- Addresses whose possible targets the model follows; a load through any
+-- other address is not tainted.
+trackedAddress :: Maybe Value -> Bool
+trackedAddress pointer = case pointer of
+  Just (Constant _) -> True
+  Just (GlobalObject _) -> True
+  Just (LoadedObject _ _) -> True
+  Just FrameDerived -> True
+  Just SavedStack -> True
+  _ -> False
+
+-- Whether a word read at this address provably misses every declared saved stack pointer.
+readableAddress :: [SavedStackArray] -> Maybe Value -> Bool
+readableAddress arrays pointer = case pointer of
+  Just (Constant absolute) -> not (readsSavedStack arrays absolute)
+  Just (GlobalObject bases) -> not (any (reachesSavedStacks arrays) bases)
+  Just (LoadedObject (Just displacement) bases) ->
+    not (any (`overlapsSavedStack` toInteger displacement) arrays || any (reachesSavedStacks arrays) bases)
+  _ -> False
+
+mayReadSavedStack :: [SavedStackArray] -> Maybe Value -> Bool
+mayReadSavedStack arrays pointer = not (null arrays) && trackedAddress pointer && not (readableAddress arrays pointer)
 
 -- Whether a word `displacement` bytes from a record start overlaps the saved
 -- stack pointer of that record or of the next one.
@@ -364,7 +443,7 @@ execute arrays literals (ProgramCounter pc) instruction state = case instruction
     value' -> derivedFrom [value']) state)
   A.DataProcessing _ operation _ destination source operand
     | operation `elem` [A.TST,A.TEQ,A.CMP,A.CMN] -> pure state
-    | destination == A.pc && returns instruction -> requireReturn (reg A.lr) >> pure state
+    | destination == A.pc && returns instruction -> requireReturn (registers state) (reg A.lr) >> pure state
     | otherwise -> pure (setRegister destination (case operation of
         A.MOV -> operandValue state operand
         A.ADD -> case operandValue state operand of
@@ -391,14 +470,10 @@ execute arrays literals (ProgramCounter pc) instruction state = case instruction
           (True, A.OffsetImmediate delta, A.OffsetOnly) -> add (Just (Constant (pc+8))) delta
           (True, _, _) -> Nothing
           _ -> address
-        readable pointer = case pointer of
-          Just (Constant absolute) -> not (readsSavedStack arrays absolute)
-          Just (GlobalObject bases) -> not (any (reachesSavedStacks arrays) bases)
-          Just (LoadedObject (Just displacement) bases) ->
-            not (any (`overlapsSavedStack` toInteger displacement) arrays || any (reachesSavedStacks arrays) bases)
-          _ -> False
+        readable = readableAddress arrays
         loadedObject pointer value
           | isNothing value && frameExposure state == PrivateFrame && readable pointer = Just (LoadedObject (Just 0) S.empty)
+          | isNothing value && mayReadSavedStack arrays pointer = Just SavedStack
           | otherwise = value
         loaded = if width `elem` [A.Word,A.Dual] then loadedObject actualAddress (loadWord actualAddress) else Nothing
         first = setRegister destination loaded updated
@@ -406,6 +481,8 @@ execute arrays literals (ProgramCounter pc) instruction state = case instruction
     pure (if width == A.Dual then setRegister (nextRegister destination) (loadedObject second (loadWord second)) first else first)
   A.Store _ width source base offset indexing -> do
     let (address, updated) = accessAddress state base offset indexing
+        values = [reg source | width `elem` [A.Word,A.Dual]] ++ [reg (nextRegister source) | width == A.Dual]
+    requireUntaintedStore address values
     pure (if width == A.Dual
       then writeFrame (add address 4) 4 (reg (nextRegister source)) (writeFrame address 4 (reg source) updated)
       else writeFrame address (widthBytes width) (reg source) updated)
@@ -417,30 +494,40 @@ execute arrays literals (ProgramCounter pc) instruction state = case instruction
           Just (FrameAddress first) | base == A.sp && mode == A.DecrementBefore && writeback && reg A.lr == Just IncomingReturn && A.lr `elem` listed ->
             S.fromList [offset | (index, A.Reg number) <- zip [0..] listed, number `elem` ([4..11] ++ [14]), Just (FrameAddress offset) <- [add (Just (FrameAddress first)) (4*index)]]
           _ -> S.empty
+    requireUntaintedStore start (map reg listed)
     pure (blockWriteback base mode writeback (length listed) original
       (stored {savedRegisters = S.union (savedRegisters stored) protected}))
   A.LoadMultiple _ base mode writeback listed -> do
     let original = reg base
         start = blockStart original mode (length listed)
     loaded <- foldM (\current (index, destination) -> do
-      let value = readFrame (add start (4*index)) state
-      if destination == A.pc then requireReturn value >> pure current else pure (setRegister destination value current)) state (zip [0..] listed)
+      let value = case readFrame (add start (4*index)) state of
+            Nothing | mayReadSavedStack arrays (add start (4*index)) -> Just SavedStack
+            framed -> framed
+      if destination == A.pc then requireReturn (registers current) value >> pure current else pure (setRegister destination value current)) state (zip [0..] listed)
     pure (blockWriteback base mode writeback (length listed) original loaded)
-  A.Branch _ True _ -> pure (callee state)
-  A.BranchExchange _ True _ -> pure (callee state)
-  A.BranchExchange _ False register | register == A.lr -> requireReturn (reg A.lr) >> pure state
+  A.Branch _ True _ -> requireUntaintedArguments Nothing >> pure (callee state)
+  A.BranchExchange _ True target -> requireUntaintedArguments (Just target) >> pure (callee state)
+  A.BranchExchange _ False register | register == A.lr -> requireReturn (registers state) (reg A.lr) >> pure state
   _ -> pure state
   where
     reg register = M.lookup register (registers state)
     nextRegister (A.Reg number) = A.Reg (number+1)
-    requireReturn value = unless (value == Just IncomingReturn) (Left ("PC load is not proven to be the incoming return at " ++ showHex pc ""))
+    tainted = (== Just SavedStack)
+    requireReturn held value = do
+      unless (value == Just IncomingReturn) (Left ("PC load is not proven to be the incoming return at " ++ showHex pc ""))
+      when (any (\register -> M.lookup register held == Just SavedStack) [A.Reg 0, A.Reg 1]) (Left ("saved stack pointer returned at " ++ showHex pc ""))
+    requireUntaintedArguments target = requireUntaintedCall (registers state) pc target
+    requireUntaintedStore address values = do
+      when (tainted address) (Left ("store through a saved stack pointer at " ++ showHex pc ""))
+      when (any tainted values && not (isFrameAddress address)) (Left ("saved stack pointer stored outside the frame at " ++ showHex pc ""))
     -- Opaque calls assume the admitted AAPCS preserves SP and r4-r11, not the CPSR.
     callee current = usePremise UnexposedFrameIsolation (current
       { registers = M.insert (A.Reg 0) ReturnedObject (M.filter (/= StatusWord) (foldr M.delete (registers current) (A.lr : A.Reg 12 : map A.Reg [0..3])))
       , frameWords = case M.lookup A.sp (registers current) of
           Just (FrameAddress boundary) -> M.filterWithKey (\offset value -> offset >= boundary && value /= StatusWord)
-            (if exposure == PrivateFrame then frameWords current else savedWords current)
-          _ -> M.empty
+            (if exposure == PrivateFrame then frameWords current else keptWords current)
+          _ -> taintedWords current
       , frameExposure = exposure
       })
       where
