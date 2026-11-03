@@ -248,26 +248,26 @@ fn frames(report:&Report,evidence:&Evidence,entry:&Event,returned:&Event,program
 }
 
 #[derive(Deserialize,Serialize)]
-struct AttributedRow {
+pub(super) struct AttributedRow {
     #[serde(flatten)]
-    row:super::Row,
-    latest_fetch:Option<Fetch>,
-    core_instructions:Option<u64>,
-    before:Option<AccessBytes>,
-    byte_order:Option<ByteOrder>,
+    pub(super) row:super::Row,
+    pub(super) latest_fetch:Option<Fetch>,
+    pub(super) core_instructions:Option<u64>,
+    pub(super) before:Option<AccessBytes>,
+    pub(super) byte_order:Option<ByteOrder>,
 }
 #[derive(Deserialize,Serialize)]
-struct Fetch {source:Access,address:Guest,physical:Guest,size:u64,core:Core,pc:Guest,instructions:super::Count,tick:super::Tick,core_instructions:u64,byte_order:ByteOrder,value:Option<u64>,before:Option<AccessBytes>}
+pub(super) struct Fetch {pub(super) source:Access,pub(super) address:Guest,pub(super) physical:Guest,pub(super) size:u64,pub(super) core:Core,pub(super) pc:Guest,pub(super) instructions:super::Count,pub(super) tick:super::Tick,pub(super) core_instructions:u64,pub(super) byte_order:ByteOrder,pub(super) value:Option<u64>,pub(super) before:Option<AccessBytes>}
 #[derive(Deserialize,Serialize,PartialEq,Eq)]
 #[serde(rename_all="lowercase")]
-enum ByteOrder {Little,Big}
+pub(super) enum ByteOrder {Little,Big}
 #[derive(Deserialize,Serialize)]
-struct Attribution {sources:Vec<Access>,ranges:Vec<[u64;2]>}
+pub(super) struct Attribution {pub(super) sources:Vec<Access>,pub(super) ranges:Vec<[u64;2]>}
 #[derive(Deserialize,Serialize)]
-struct Watch {enabled:bool,violation:Option<String>,views:super::WatchViews,classes:Vec<super::Class>,records:Vec<AttributedRow>,fetch_attribution:Option<Attribution>}
+pub(super) struct Watch {pub(super) enabled:bool,pub(super) violation:Option<String>,pub(super) views:super::WatchViews,pub(super) classes:Vec<super::Class>,pub(super) records:Vec<AttributedRow>,pub(super) fetch_attribution:Option<Attribution>}
 #[derive(Deserialize,Serialize)]
 #[serde(transparent)]
-struct AccessBytes(Vec<u8>);
+pub(super) struct AccessBytes(pub(super) Vec<u8>);
 
 fn guards(root:&Path,report:&Report,catalog:&Catalog,evidence:&Evidence,entry:&Event,returned:&Event,program:&Program)->Result<()> {
     let lease=evidence.stack.as_ref().ok_or(missing(MissingEvidence::Frame))?;
