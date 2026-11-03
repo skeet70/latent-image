@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "entry": "Stock-dispatcher control and owned-picker candidate for the setting-15 picker (crawl-5 node 157). The qualified package prefix uses MENU to reach the live view (67,56,0), crawl-5 root 0; the route follows crawl-5's recorded path to the picker's row. In the picker, DOWN and UP move one row and back, RIGHT leaves the picker open, LEFT and OK leave it with the selected value, and BACK leaves it; DOWN, UP and entering post the property's value event 0x1d when 0x00d586bc reports it and BACK may post property 0x27d (E-MENU-ENGINE-OBSERVE-150); live-setting stores are admitted only from the stock property setter, in both roles. After rollback OK and BACK run through the restored stock dispatcher. Every expected menu tuple is a crawl-5 edge's landing.",
+  "entry": "Stock-dispatcher control and owned-picker candidate for the setting-15 picker (crawl-5 node 157). The qualified package prefix uses MENU to reach the live view (67,56,0), crawl-5 root 0; the route follows crawl-5's recorded path to the picker's row. In the picker, DOWN and UP move one row and back, RIGHT leaves the picker open, LEFT and OK leave it with the selected value, and BACK leaves it; DOWN, UP and entering post the property's value event 0x1d when 0x00d586bc reports it and BACK may post property 0x27d (E-MENU-ENGINE-OBSERVE-150); live-setting stores are admitted only from the stock property setter, in both roles. After rollback OK and BACK run through the restored stock dispatcher and are observed, not asserted: in the first picker-239 stock run, OK after unload opened the picker of the row above the cursor. Every expected menu tuple is a crawl-5 edge's landing.",
   "source_bindings": [
     {
       "source": "private-data/scratch/ControllerStrategy/crawl-5/crawl-graph.json (mechanism d49b2c80, E-MODAL-MENU-OKPATHS-150): node 157 path ok,up,ok",
@@ -352,6 +352,7 @@
           "source_read": "resident"
         }
       ],
+      "observe": true,
       "read_expectations": [
         {
           "read": "dispatcher-first-word",
