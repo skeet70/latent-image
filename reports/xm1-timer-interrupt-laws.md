@@ -177,7 +177,7 @@ No value exceeds 30000, so none comes from the boot `0x63` mode with reload `0xf
 
 Effects of the direction mismatch, **static-inference** from the model source, not run: in the model `reload − count` rises, so `0x723ffc` takes the wrap branch on the first observed change and returns after about one counter step instead of the requested time; sub-tick values recorded by loader and log writers run the opposite way within the period from hardware. Existing emulated comparisons that bind these values (E-LOADER-ORCHESTRATION-NATURAL-QUALIFIED-150) compare model against model and are unaffected as comparisons.
 
-The retained Python model `emulation/xm1-upstream/emulator/interrupts.py` is not used by current runs. It records the same 12 MHz/prescaler inference and needs the `kernel-active-scan-order` tie fixture for equal priorities.
+The retained engine `emulation/xm1-upstream` (timer in `emulator/interrupts.py`) still carries the gating `verify-candidate` routes (`emulation/VerifyCandidate.hs:89-94`). It counts mode `0x23` down as well (`interrupts.py:343,690-695`), records the same 12 MHz/prescaler inference and needs the `kernel-active-scan-order` tie fixture for equal priorities. The opt-in FujiMod fix and its adoption assessment are in [xm1-timer-upcount-adoption.md](xm1-timer-upcount-adoption.md).
 
 ## 8. Unknowns and least-risk experiments
 
