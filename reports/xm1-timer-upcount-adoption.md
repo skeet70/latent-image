@@ -26,6 +26,8 @@ Inventory over all 279 `emulated` ledger records, `emulation/README.md`, consume
 | (d) evidence about the prior model only; adopting needs an adoption note where cited | 5 | 0 |
 | (c) nothing | 222 | 0 |
 
+Counts are of the ledger at `5aaff17c`. The later #148 ledger curation folded the pair's journal-control record into the pair record and removed three refused heap-observer records; the lists below name current records.
+
 (a) families, runs in parentheses:
 
 - #149 loader elapsed relation 6368/6370 and the 382M/menu(1,5,2) natural route: `E-LOADER-ELAPSED-CAPTURE-RETRY-REFUSED-150` (2), `E-LOADER-CONTINUATIONS-NATURAL-REFUSED-150`, `E-LATER-PLAIN-PRODUCER-NATURAL-150` (3), `E-IMAGE4-DISPATCH-CALLERS-NATURAL-150`, `E-IMAGE4-DISPATCH-CALLERS-OWNED-A-NATURAL-150`, `E-PRIMARY-OWNED-MENU-CONTINUATION-150`, `E-PRIMARY-LEAF-DATA-READS-150` (4), `E-STARTUP-DISPATCH-NATURAL-150` (4).

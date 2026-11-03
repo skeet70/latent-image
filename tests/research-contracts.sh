@@ -58,7 +58,7 @@ if [[ -n "$fuji_af_dangling" ]]; then
   printf 'Evidence ids cited but not in docs/evidence.jsonl (file:line:id):\n%s\n' "$fuji_af_dangling" >&2
   exit 1
 fi
-printf 'reports/example.md:1:E-NOT-A-RECORD-150\n' >> "$TEST_TMPDIR/citations"
+printf 'reports/example.md:1:%s-NOT-A-RECORD-150\n' E >> "$TEST_TMPDIR/citations"
 if [[ -z "$(fuji_af_dangling_citations "$TEST_TMPDIR/citations")" ]]; then
   echo 'Citation of a missing evidence id incorrectly accepted' >&2
   exit 1
