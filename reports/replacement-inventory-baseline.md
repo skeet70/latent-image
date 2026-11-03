@@ -1308,6 +1308,8 @@ The cutover contract records each as a typed `redesign_items` entry (id, stock a
 
 The in-place heap image carries no native `GlobalAlloc` shims; with them the owned code exceeds the retired carriers. The Rust `Allocator`/`GlobalAlloc` front end ships in the library and reaches the same arena-prefix state, sentinel and retained lock, so a Rust consumer links it into its own image (maintainer-approved; contract field `native_allocator_api`).
 
+The staged cutover passes one natural no-card stock/owned pair: both reach the same menus and final frame over 450,000,000 instructions, all 8,529 logical calls compare with identical order, the owned role fetches only owned code in the retired carriers, and four journal controls refuse as intended (E-GENERAL-HEAP-CUTOVER-NATURAL-PAIR-150, E-GENERAL-HEAP-CUTOVER-CONTROLS-150; [pair details](stock-heap-survey.md#natural-stockowned-pair)). The route makes no calloc, realloc or trim call, so none of the intentional differences above is exercised on it.
+
 ### 8.15 Later executable loading and publication (#153)
 
 `E-LATER-EXECUTABLE-SOURCE-150` binds the canonical image4, image5, plain image and payload separately. The following is source inference from the X-M1 1.50 listings and table bytes, not a new guest observation or an owned loading qualification. The table-dispatched later executable producers are image5 and the plain image; images0/1/4 belong to earlier loading. Other flashloader cases have the data or zero-transfer consumers listed below. This inventory is not a whole-program computed-reference closure.
