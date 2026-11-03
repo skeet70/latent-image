@@ -58,7 +58,7 @@ Coverage excludes other records, parity-byte mutations inside the 352/61,776 enu
 
 ## Qualified run
 
-The complete capability run passed on 2026-10-28 under the fixed containment. Outside the slot: `XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=8G`. Inside the canonical emulator-slot payload: `taskset -c 0,1 cpulimit -i -l75 -- env 'GHCRTS=-N1 -M4G -A16m' area3-qualify ... --jobs 1`. `-i` includes the native runner children, and the RTS limits apply only to the real command. The unchanged 85 C guard and the 8 GiB swap-free cap apply to the whole slot.
+The complete capability run passed on 2026-10-28 under the fixed containment. Outside the slot: `XM1_EMULATOR_SLOTS=1 XM1_EMULATOR_MEMORY_MAX=8G`. Inside the canonical emulator-slot payload: `env 'GHCRTS=-N1 -M4G -A16m' area3-qualify ... --jobs 1`. The RTS limits apply only to the real command. The 8 GiB swap-free cap applies to the whole slot.
 
 - Anchors 3/3; original closure 62,184/62,184; ARM candidate 62,184/62,184; refusal probes 6/6.
 - 352 single-bit, 61,776 two-bit and 56 record/parity subjects all returned and matched under both executions, with preserved ABI state and permitted effects.
