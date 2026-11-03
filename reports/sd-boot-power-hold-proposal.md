@@ -52,7 +52,7 @@ Write the whole image to the expendable 7.2 GB SDHC card with the guarded write 
 
 ## Stops and risks
 
-Stop on any unexpected display, sound, heat or smell: remove the battery. A blinking body that ignores the switch is an expected outcome of B, not a fault; battery removal ends it. With bit 0 held, a ROM hang in an apply wait may also keep the body powered after switch OFF; battery removal ends that too. The ROM path issues no write command to the card or internal media and the payload touches only `0xfff88084` and the LED GPIO, so no persistent state changes. The body's 1.50 adjustment backup exists in two locations (E-ADJ-BACKUP-DURABLE-150).
+Stop on any unexpected display, sound, heat or smell: remove the battery. A blinking body that ignores the switch is an expected outcome of B, not a fault; battery removal ends it. With bit 0 held, a ROM hang in an apply wait may also keep the body powered after switch OFF; battery removal ends that too. The ROM path issues no write command to the card or internal media and the payload touches only `0xfff88084` and the LED GPIO, so no persistent state changes. The body's 1.50 adjustment backup exists in two locations (E-ADJ-BACKUP-GAP-READ-150).
 
 ## Review record
 

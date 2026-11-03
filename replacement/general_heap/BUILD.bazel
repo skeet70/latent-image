@@ -18,9 +18,8 @@ haskell_library(
     deps = [
         "//emulation:case-sha256", "//emulation:image4-staging-lib",
         "//host:aeson", "//host:base", "//host:bytestring", "//host:containers",
-        "//host:directory", "//host:filepath", "//host:first-stage", "//host:host-support",
-        "//host:process", "//host:update-container", "//host/firmware:bank-allowlist",
-        "//replacement/media_permit:stock-inventory",
+        "//host:first-stage", "//host:update-container", "//host/firmware:bank-allowlist",
+        "//replacement/media_permit:stock-inventory", "//replacement/record5_staging:record5-staging",
     ],
 )
 
@@ -40,5 +39,8 @@ haskell_test(
     name = "general-heap-tests",
     srcs = ["Tests.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    deps = [":general-heap-artifact", "//host:base", "//host:bytestring", "//host:update-container"],
+    deps = [
+        ":general-heap-artifact", "//host:base", "//host:bytestring", "//host:update-container",
+        "//replacement/record5_staging:record5-staging",
+    ],
 )

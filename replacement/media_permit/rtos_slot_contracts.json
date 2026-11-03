@@ -1706,11 +1706,11 @@
         },
         {
           "name": "destructor-id-overrun",
-          "statement": "Destructor 0x724f08 passes data-queue ids to +0xd0; with n >= 2 the body writes {2, 32, 0} over eventflag creation record n-1 (A 0x4005d178 + (n-2)*12 / B 0x400ed138 + (n-2)*12), clearing its +8 exists word, and writes a self-link at +0x0/+0x4 and 0 at +0xc of the 20-byte slot A 0x40062c34 + (n-1)*20 / B 0x400f2bf4 + (n-1)*20, past the single control block (loader-40000.dis:13691-13718)."
+          "statement": "Destructor 0x724f08(n) passes its message queue's encoded data-queue/pool id (class<<16)|n to +0xd0 of the executing core's root where data-queue delete +0xa4 belongs, so data queue n stays created. For n >= 2 the body writes {2, 32, 0} over the per-task eventflag creation record of task n-1 (A 0x4005d178 + (n-2)*12 / B 0x400ed138 + (n-2)*12); its cleared exists word makes later flag set/wait/clear/poll on task n-1 return -42. It also writes a self-link at +0x0/+0x4 and 0 at +0xc of A 0x40062c34 + (n-1)*20 / B 0x400f2bf4 + (n-1)*20, below the boot stack top A 0x40063460 / B 0x400f3420 (loader-40000.dis:13691-13718). Observed on the stock POWER OFF route: n = 8 and n = 41 on core 0 in domain A; task 7 and task 40 records changed from {4, 0, 1} to {2, 0x20, 0}."
         }
       ],
       "experiments": [
-        "Census arm: capture entry r0 and return at A/B +0xd0 under a stock route that reaches destructor 0x724f08 (constant-argument direct callers pass ids 5..81, e.g. 0x6e306c id 30, 0x6e308c id 29, 0x6e30ac id 27, 0x774854 id 81; 0x6b089c passes five ids read from RAM table 0x4089e9f8 at stride 20, id4.dis:151842-151857), and snapshot A 0x4005d16c + (uxth(r0)-1)*12 and 0x40062c34 + (uxth(r0)-1)*20 before and after to confirm the out-of-table writes.",
+        "Census arm: a route that continues running after task 8 (image5 0xec2f70) or task 41 (image5 0xec6708) is stopped, if one exists, recording flag calls on tasks 7 and 40 and their -42 results.",
         "Native case: a synthetic task blocks in +0xd8(0x10001) and another task calls +0xd0(0x10001); observe that the receiver never resumes and cb+0x0 is self-linked."
       ],
       "evidence": [
@@ -1722,10 +1722,11 @@
         "private-data/analysis/x-m1-1.50/lz/id4.dis:276546-276590 (wrapper 0x72a4f4(id): +0xd0(0x10000|uxth(id)); nonzero reported with code 27 and stored to 0x9121b8; on 0 raises counter 0x40a0fc3c to id under +0x164/+0x168 and returns 0)",
         "private-data/analysis/x-m1-1.50/lz/id4.dis:271047-271123 (0x724f08(n): id = (0x7cad9c[n-1] << 16) | n; loops +0xc4(id, &local) and +0xf8(id, local) until +0xc4 fails, then +0xe8(id), then +0xd0(id) at 0x724ff4; nonzero reported with code 27)",
         "private-data/analysis/x-m1-1.50/lz/id4.dis:270908-271046 (constructor 0x724cdc: pairs +0xa0 data-queue create with +0xe4 pool create for the same n, calls +0xa4 when +0xe4 fails)",
-        "private-data/analysis/x-m1-1.50/lz/id4.dis:203552-203568,352537-352538 (direct callers of 0x724f08 with n = 30, 29, 27, 81)",
-        "E-RTOS-SLOT-CENSUS-STOCK-150: 0 calls in both domains"
+        "private-data/analysis/x-m1-1.50/lz/id4.dis: 18 direct BL sites to 0x724f08 and no literal, MOVW/MOVT or cross-image reference; 14 sit in functions with no detected caller; reached routes: image5 0xec2f70 -> 0x69d2f8 -> 0x6b15e8 (message 0x1800+1 to queue 8) -> task 8 dispatcher 0x6b1308 -> 0x6b0e74 -> 0x724f08(8), and image5 0xec6708 -> 0x6e4ab4 (0x3900 to queue 41) -> 0x6e9dec -> sequence 0x7d1c28 -> 0x3906 -> table 0x8292b0[83] 0x6e9f68 -> 0x724f08(41); ids 5 (0x6eaacc on 0x1500) and 9 (0x69c6f4) have no detected producer",
+        "E-RTOS-SLOT-CENSUS-STOCK-150: 0 calls in both domains on the cold-start/FILM SIMULATION route",
+        "E-IMAGE4-QUEUE-DESTRUCTOR-POWEROFF-150: stock POWER OFF runs A +0xd0 with 0x10008 and 0x10029 from 0x724ffc; private-data/scratch/MailboxDefect/power-destructor-1/power-destructor/"
       ],
-      "gaps": "None for the static contract. Whether stock routes into 0x724f08 actually execute (and so pass ids above 1) is runtime; census reached neither domain.",
+      "gaps": "Whether any route keeps running after 0x724f08 executes, so that tasks 7 or 40 use their overwritten eventflag records, is open; on the observed POWER OFF route neither flag is used before terminal 0xec5818, and the cold-start/FILM SIMULATION census never sets or waits on them.",
       "domainNotes": "A and B bodies are instruction-identical apart from relocated helper calls (0x42560/0x42568 vs 0xd2560/0xd2568) and table addresses (0x4005d16c/0x40062c34 vs 0x400ed12c/0x400f2bf4)."
     },
     {

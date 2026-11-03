@@ -14,6 +14,7 @@ module EmulatorUsb
   , TraceHit (..)
   , emulatorTraceHits
   , emulatorTraceHitsRaw
+  , emulatorTraceHitsPage
   , ReleaseSegment
   , releaseSegment
   , emulatorReleaseContext
@@ -375,9 +376,15 @@ emulatorTraceHits emulator start = do
       TraceHit site core instructions <$> register "r0" <*> register "r1" <*> register "r2" <*> register "r3"
     hit _ = ioError (userError "emulator trace hit must be an object")
 
--- | At most `limit` of the bridge's recorded hits from index `start` on, undecoded.
-emulatorTraceHitsRaw :: Emulator -> Int -> Int -> IO Value
-emulatorTraceHitsRaw emulator start limit = Object <$> rpc emulator (object ["command" .= String "trace-hits", "from" .= start, "limit" .= limit])
+-- | The bridge's hit records from index `start` on, unchanged, with their `lr`, `sp` and `cpsr`.
+emulatorTraceHitsRaw :: Emulator -> Int -> IO Value
+emulatorTraceHitsRaw emulator start = do
+  fields <- rpc emulator (object ["command" .= String "trace-hits", "from" .= start])
+  objectField "hits" fields
+
+-- | The bridge's trace-hits reply for at most `limit` recorded hits from index `start` on, undecoded.
+emulatorTraceHitsPage :: Emulator -> Int -> Int -> IO Value
+emulatorTraceHitsPage emulator start limit = Object <$> rpc emulator (object ["command" .= String "trace-hits", "from" .= start, "limit" .= limit])
 
 -- | A key's hold and debounced-release cap in guest instructions, both positive.
 data KeyPulse = KeyPulse { keyPulseHold :: Word32, keyPulseRelease :: Word32 } deriving (Eq, Show)

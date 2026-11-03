@@ -15,7 +15,7 @@ pub enum LifetimeFailure {
     InvalidCore, MalformedRow, NonCpuWrite, InvalidWrite, OutsideWatch, ImmutableWrite,
     ResourceChanged, IdentityWrite, MissingPermit, PendingStore, WrongPhase, WrongEntry,
     WrongWriter, WrongOrder, WrongCore, WrongBefore, WrongValue, WrongAddress, WrongWidth,
-    InvalidContext, ActiveFrames, IncompleteRollback,
+    InvalidContext, ActiveFrames, IncompleteRollback, RetiredFetch,
 }
 impl std::fmt::Display for LifetimeFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{self:?}") }
@@ -33,6 +33,10 @@ pub struct LifetimeRequest {
     install: ServiceRequest,
     rollback: ServiceRequest,
     publications: Vec<PublicationRequest>,
+    #[serde(default)]
+    retired: Vec<[u32; 2]>,
+    #[serde(default)]
+    settings_writers: Vec<[u32; 2]>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,6 +75,11 @@ pub struct LifetimeConfig {
     publications: Vec<Publication>,
     publication_addresses: Vec<Guest>,
     watched: Vec<PhysicalExtent>,
+    /// Stock code no CPU may fetch through any alias from the install entry
+    /// through the last reverse publication write.
+    retired: Vec<PhysicalExtent>,
+    /// Code whose value-changing stores to the live-settings block are admitted and counted.
+    settings_writers: Vec<PhysicalExtent>,
     sites: Vec<CodeSite>,
 }
 
@@ -97,6 +106,8 @@ fn settings_extent() -> PhysicalExtent {
 }
 
 const MAX_RUNTIME_BYTES: usize = 1 << 20;
+const MAX_RETIRED_EXTENTS: usize = 64;
+const MAX_SETTINGS_WRITERS: usize = 8;
 
 impl LifetimeRequest {
     pub fn into_config(self, immutable_sources: Vec<PhysicalExtent>) -> Result<LifetimeConfig> {
@@ -192,7 +203,27 @@ impl LifetimeRequest {
             }
             merged.push(range);
         }
-        Ok(LifetimeConfig { runtime, resident, readonly, sources: immutable_sources, install, rollback, publications, publication_addresses: addresses, watched: merged, sites })
+        let mut retired = self.retired.into_iter().map(|[start, end]| {
+            if start % 4 != 0 || end % 4 != 0 { return Err(LifetimeFailure::InvalidExtent); }
+            let candidate = extent(start, end)?;
+            if merged.iter().any(|range| range.overlaps(candidate)) || candidate.overlaps(runtime) {
+                return Err(LifetimeFailure::InvalidSource);
+            }
+            Ok(candidate)
+        }).collect::<Result<Vec<_>>>()?;
+        retired.sort_by_key(|range| range.start());
+        if retired.len() > MAX_RETIRED_EXTENTS || retired.windows(2).any(|pair| pair[0].overlaps(pair[1])) {
+            return Err(LifetimeFailure::InvalidRequest);
+        }
+        let mut settings_writers = self.settings_writers.into_iter().map(|[start, end]| {
+            if start % 4 != 0 || end % 4 != 0 { return Err(LifetimeFailure::InvalidExtent); }
+            extent(start, end)
+        }).collect::<Result<Vec<_>>>()?;
+        settings_writers.sort_by_key(|range| range.start());
+        if settings_writers.len() > MAX_SETTINGS_WRITERS || settings_writers.windows(2).any(|pair| pair[0].overlaps(pair[1])) {
+            return Err(LifetimeFailure::InvalidRequest);
+        }
+        Ok(LifetimeConfig { runtime, resident, readonly, sources: immutable_sources, install, rollback, publications, publication_addresses: addresses, watched: merged, retired, settings_writers, sites })
     }
 }
 
@@ -221,6 +252,8 @@ impl LifetimeConfig {
     pub fn readonly_images(&self) -> impl Iterator<Item = (PhysicalExtent, &[u8])> {
         self.readonly.iter().map(|image| (image.extent, image.bytes.as_slice()))
     }
+    pub fn retired_extents(&self) -> &[PhysicalExtent] { &self.retired }
+    pub fn settings_writers(&self) -> &[PhysicalExtent] { &self.settings_writers }
 }
 
 pub trait LifetimeMemory {
@@ -245,6 +278,8 @@ pub struct LifetimeReceipt {
     pub checked_context_writes: u64,
     pub checked_vfp_owner_writes: u64,
     pub audited_writes: u64,
+    /// Value-changing live-settings stores from a settings writer.
+    pub admitted_settings_writes: u64,
     pub failure: Option<LifetimeFailure>,
 }
 
@@ -401,7 +436,7 @@ impl LifetimeMonitor {
             phase: LifetimePhase::Prepared, publication_count, forward_writes: 0, reverse_writes: 0,
             pending_stores: 0, install_core: None, rollback_core: None, checked_resource_writes: 0,
             checked_identity_writes: 0, checked_scheduler_writes: 0, checked_context_writes: 0, checked_vfp_owner_writes: 0,
-            audited_writes: 0, failure: None,
+            audited_writes: 0, admitted_settings_writes: 0, failure: None,
         } })
     }
     pub fn config(&self) -> &LifetimeConfig { &self.config }
@@ -515,8 +550,17 @@ impl LifetimeMonitor {
         self.pending[core.0] = Some(permit);
         Ok(())
     }
+    /// A retired fetch refuses from the install entry until the last reverse
+    /// publication write.
     pub fn observe_row(&mut self, row: &Value) -> Result<()> {
         self.healthy()?;
+        if row.get("source").and_then(Value::as_str) == Some("cpu-fetch") {
+            let retired = row.get("physical").and_then(Value::as_u64).and_then(|physical| u32::try_from(physical).ok())
+                .is_some_and(|physical| self.config.retired.iter().any(|extent| extent.start().0 <= physical && physical < extent.end().0));
+            let published = matches!(self.receipt.phase, LifetimePhase::Publishing | LifetimePhase::Installed | LifetimePhase::RollingBack);
+            if retired && !published { return Ok(()); }
+            return Err(self.refuse(if retired { LifetimeFailure::RetiredFetch } else { LifetimeFailure::MalformedRow }));
+        }
         let attempt = WriteAttempt::from_row(row);
         match attempt { Ok(attempt) => self.observe_write(attempt), Err(failure) => Err(self.refuse(failure)) }
     }
@@ -575,16 +619,28 @@ impl LifetimeMonitor {
         }
         if self.config.resident.overlaps(target) || settings_extent().overlaps(target) {
             self.receipt.checked_resource_writes += 1;
+            let admitted = contains(settings_extent(), target)
+                && self.config.settings_writers.iter().any(|writer| writer.start() <= attempt.pc && attempt.pc < writer.end());
+            let mut changed = false;
             for index in 0..width {
                 let address = attempt.physical.0 + index as u32;
+                let new = ((value >> (index * 8)) & 255) as u8;
                 let expected = if self.config.resident.start().0 <= address && address < self.config.resident.end().0 { Some(0) }
                     else if SETTINGS_START <= address && address < SETTINGS_START + SETTINGS_BYTES as u32 { Some(self.settings[(address - SETTINGS_START) as usize]) }
                     else { None };
                 if let Some(expected) = expected {
-                    if attempt.before.byte(index) != Some(expected) || ((value >> (index * 8)) & 255) as u8 != expected {
-                        return Err(LifetimeFailure::ResourceChanged);
+                    if attempt.before.byte(index) != Some(expected) { return Err(LifetimeFailure::ResourceChanged); }
+                    if new != expected {
+                        if !admitted { return Err(LifetimeFailure::ResourceChanged); }
+                        changed = true;
                     }
                 }
+            }
+            if changed {
+                for index in 0..width {
+                    self.settings[(attempt.physical.0 - SETTINGS_START) as usize + index] = ((value >> (index * 8)) & 255) as u8;
+                }
+                self.receipt.admitted_settings_writes += 1;
             }
         }
         let resources = fixed_resources();

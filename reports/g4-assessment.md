@@ -12,31 +12,31 @@ Issue #71 defines the gate's acceptance around the AF payload: hardware evidence
 
 ### 1. Target identity and patch sites verified
 
-Met for the bank mechanism. Fresh preflights verify the X-M1 product oracle, stored `0xf7`, service mode, table `0x015c22a0`, slot `0x00dc7874`, channel 58 and the trace state, and match all 253 publication old words immediately before each push (E-RAM-PUSH253-VOLATILE-PREFLIGHT-150, E-RAM-PUSH253-CONVERGED-RUN-150, E-SELECT-BLINK-83-RUN-150). Relinks enforce the bank ELF allowlist and pass independent actual-base review with byte reproduction (E-RAM-PUSH253-VOLATILE-ACTUAL-150; the reviews named in run B and the #83 run).
+Met for the bank mechanism. Fresh preflights verify the X-M1 product oracle, stored `0xf7`, service mode, table `0x015c22a0`, slot `0x00dc7874`, channel 58 and the trace state, and match all 253 publication old words immediately before each push (E-RAM-PUSH-PREFLIGHT-150, E-RAM-PUSH253-CONVERGED-RUN-150, E-SELECT-BLINK-83-RUN-150). Relinks enforce the bank ELF allowlist and pass independent actual-base review with byte reproduction (the reviews named in E-RAM-PUSH253-CONVERGED-RUN-150 and the #83 run).
 
 Missing for AF: the six AF publications are pinned in source only (E-AF-RAM-RING-DESIGN-150). No body preflight of the AF entry words has run, and the frozen patch sites are rejected (E-AF-RING-REVIEW-CORRECTION-150).
 
 ### 2. Owned RAM
 
-Met for the bank mechanism. `ram-alloc` returns camera-retained allocations with owned bases and stored guards: `0x00a85fd8` (E-RAM-ALLOC-JOURNAL-STOP-150), `0x00aa0d60` (E-RAM-PUSH-INSTALL-150), `0x00a83bb0` (E-RAM-PUSH253-ALLOC-150), `0x00a85e38` (E-RAM-PUSH253-VOLATILE-ACTUAL-150), `0x00a83608` in run B, `0x00a83b38` with owned extent `[0x00a83b38, 0x00aa1530)` in the #83 run. Lifetime is established: the allocation, push state and manifest are valid only inside the powered session and are invalid after full power removal ([session script](ram-push-session-script.md) sections 1 and 5, E-RAM-PUSH253-VOLATILE-RESTART-150).
+Met for the bank mechanism. `ram-alloc` returns camera-retained allocations with owned bases and stored guards: `0x00a85fd8` and `0x00aa0d60` (E-RAM-PUSH-INSTALL-150), `0x00a83bb0` (E-RAM-PUSH253-INSTALL-150), `0x00a85e38` and `0x00a83608` (E-RAM-PUSH253-CONVERGED-RUN-150, the 6e5c226 trial and run B), `0x00a83b38` with owned extent `[0x00a83b38, 0x00aa1530)` in the #83 run. Lifetime is established: the allocation, push state and manifest are valid only inside the powered session and are invalid after full power removal ([session script](ram-push-session-script.md) sections 1 and 5, E-RAM-PUSH253-CONVERGED-RUN-150).
 
 Missing for AF: the 0x6800-byte AF allocation exists in the emulator only (E-AF-RAM-RING-E2E-150 at `0x00a81d00`).
 
 ### 3. Demonstrated enter/return/cleanup
 
-Met for the bank mechanism. The payload entered through the retargeted callback slot and returned to stock code across owner-observed menu use, C1 apply and NONE restoration (E-RAM-PUSH253-VOLATILE-FIRST-SELECT-150 through E-RAM-PUSH253-VOLATILE-APPLY-RESTORE-150; the owner replies recorded in run B and the #83 run). Cleanup is demonstrated by full power removal with post-reboot stock-word verification: all 253 words at their old values and the callback slot at `0x00dc7874` (E-RAM-PUSH253-VOLATILE-RECOVERED-150, run B, and the #83 run, whose exit used "no hot unload, free, restore or retry"). An earlier body `ram-unload` once returned rollback verified (E-RAM-PUSH-SESSION-150), but current procedure forbids using it ([session script](ram-push-session-script.md) section 4 step 7).
+Met for the bank mechanism. The payload entered through the retargeted callback slot and returned to stock code across owner-observed menu use, C1 apply and NONE restoration (E-RAM-PUSH253-CONVERGED-RUN-150, both trials; the owner replies recorded in the #83 run). Cleanup is demonstrated by full power removal with post-reboot stock-word verification: all 253 words at their old values and the callback slot at `0x00dc7874` (E-RAM-PUSH253-CONVERGED-RUN-150, both trials, and the #83 run, whose exit used "no hot unload, free, restore or retry"). An earlier body `ram-unload` once returned rollback verified (E-RAM-PUSH-INSTALL-150), but current procedure forbids using it ([session script](ram-push-session-script.md) section 4 step 7).
 
 Missing for AF entirely: no AF payload has entered, returned or been removed on the body. Emulator unload is not a substitute ([AF plan](af-observation-plan.md) camera-run proposal step 6).
 
 ### 4. Reviewed external-call set
 
-Met for the bank mechanism: the bank ELF allowlist check, `transport/ram-push-review.json` pins, ImportSafetyReview, MechReview (E-RAM-PUSH-MECHANISM-REVIEW-150) and the per-run actual-base reviews.
+Met for the bank mechanism: the bank ELF allowlist check, `transport/ram-push-review.json` pins, ImportSafetyReview, MechReview (E-RAM-PUSH-MECHANISM-CONVERGE-150) and the per-run actual-base reviews.
 
 Missing for AF: the only reviewed AF call set is rejected (E-AF-RING-REVIEW-CORRECTION-150), and no hook has passed the per-hook necessity gate ([AF plan](af-observation-plan.md) "Per-hook necessity gate before rework"). Live `ram-relink`, `ram-push` and `ram-unload` refuse the AF payload.
 
 ### 5. Recovery level recorded
 
-Met. [Recovery status](recovery-status.md#historical-recorder-failure-r4-decision-2026-10-27) records R1 accepted, R2 and R3 demonstrated, and R4 accepted only for the historical recorder-v2-v5 block-14 repair with block-71 residue retained. The SD recovery route is unavailable (E-XM1-CARD-SLOT-UNAVAILABLE-150, [#85](https://github.com/skeet70/latent-image/issues/85)), and each go and session script section 2 describes that remaining limitation and the no-card exit exception (E-RAM-PUSH253-NO-CARD-EXIT-150), which satisfies G4's R2-conditional wording. Historical R4 supplies no present rescue assurance or AF execution/cleanup acceptance.
+Met. [Recovery status](recovery-status.md#historical-recorder-failure-r4-decision-2026-10-27) records R1 accepted, R2 and R3 demonstrated, and R4 accepted only for the historical recorder-v2-v5 block-14 repair with block-71 residue retained. The SD recovery route is unavailable (E-XM1-CARD-SLOT-UNAVAILABLE-150, [#85](https://github.com/skeet70/latent-image/issues/85)), and each go and session script section 2 describes that remaining limitation and the no-card exit exception (E-RAM-PUSH253-CONVERGED-RUN-150), which satisfies G4's R2-conditional wording. Historical R4 supplies no present rescue assurance or AF execution/cleanup acceptance.
 
 ### 6. No unexplained state changes
 
@@ -44,13 +44,13 @@ Met for the bank mechanism. The earlier full-session hang is attributed (E-SAVE-
 
 ### 7. Session scope covers this execution
 
-Met for the bank mechanism: per-run owner goes naming source identity and the bounded sequence, journals under `private-data/sessions/`, and standing read-grant coverage for pre/post reads (E-CAMERA-READ-GRANT-150, E-RAM-PUSH253-OWNER-GO-150, run B and the #83 run).
+Met for the bank mechanism: per-run owner goes naming source identity and the bounded sequence, journals under `private-data/sessions/`, and standing read-grant coverage for pre/post reads (E-CAMERA-READ-GRANT-150, E-RAM-PUSH253-INSTALL-150, run B and the #83 run).
 
 Missing for AF: the AF trial exists only as a proposal, not authorization ([AF plan](af-observation-plan.md) "Camera-run proposal, not authorization"). A future AF run needs its own H2 go naming the revised contract and actual-base digest.
 
 ## Phase 4 steps the acceptance line does not name
 
-- Step 1, AF and useful preview/statistic production with the ordinary-boot route: partially met. Ordinary-boot RAM reads are hardware-observed (E-BULK-READ-RUN1-150, E-BULK-READ-RUN2-150, E-BULK-READ-RUN3-150) and the stock message trace is readable (E-AF-ORDINARY-TRACE-ROUTE-150, E-AF-STOCK-CONSOLE-RUN3-150), but the one ordinary AF attempt on 2026-10-25 stopped at the cardless CARD ERROR indication before any AF search (E-AF-CARDLESS-S1-BLOCKED-150).
+- Step 1, AF and useful preview/statistic production with the ordinary-boot route: partially met. Ordinary-boot RAM reads are hardware-observed (E-BULK-READ-RUN2-150, E-BULK-READ-RUN3-150) and the stock message trace is readable (E-AF-ORDINARY-TRACE-ROUTE-150, E-AF-LENS-TRAFFIC-150), but the one ordinary AF attempt on 2026-10-25 stopped at the cardless CARD ERROR indication before any AF search (E-AF-CARDLESS-S1-BLOCKED-150).
 - Step 3, characterization of the call mechanism: met for the bank (mailbox, rendezvous, spin bounds, peer reports in E-RAM-PUSH-INSTALL-150 and E-RAM-PUSH253-INSTALL-150) except cache coherence, which is inferred from verified readback, not observed. Reentrancy of the AF hooks is unsettled: the suspended-context hazard is the review's blocking finding (E-AF-RING-REVIEW-CORRECTION-150).
 - Step 4, constant-or-checksum first payload: no such body run is in the ledger. The bank hooks' verified returns and original-word restorations serve the step's purpose for the shared mechanism, but the literal step has not been executed and should be folded into the first AF entry as record-only ring writes.
 - Step 5, capture/match/verify/activate: met for the bank (72-window pre-push match, installer old-word validation, readback and mailbox verification).
@@ -67,8 +67,8 @@ It closes no acceptance criterion. Criteria 1 to 7 stand as recorded for the ban
 
 What the decision leaves in force:
 
-- Issue #71's acceptance still requires the physical cleanup route recorded, with every supply including USB removed for at least ten seconds. The demonstrated route satisfies it (E-RAM-PUSH253-VOLATILE-RECOVERED-150, run B and the #83 run).
-- Hot unload stays unproven for a new payload: one historical body `ram-unload` succeeded (E-RAM-PUSH-SESSION-150), and no rule or review carries it forward. A new payload's exit is power removal.
+- Issue #71's acceptance still requires the physical cleanup route recorded, with every supply including USB removed for at least ten seconds. The demonstrated route satisfies it (E-RAM-PUSH253-CONVERGED-RUN-150, both trials, and the #83 run).
+- Hot unload stays unproven for a new payload: one historical body `ram-unload` succeeded (E-RAM-PUSH-INSTALL-150), and no rule or review carries it forward. A new payload's exit is power removal.
 - A setting a payload changed persists only after an orderly switch-off, which commits the ordinary settings in area 2 (E-AREA2-WRITERS-150); a battery pull does not. A run that changes a setting and must not persist it ends by battery removal.
 
 ## Smallest experiments that would close the gaps

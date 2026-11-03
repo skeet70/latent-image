@@ -133,6 +133,7 @@ pub(crate) struct InstalledGuard {
     watch: Box<MemoryWatch>,
     write_ranges: Vec<WatchRange>,
     fetch_ranges: Vec<WatchRange>,
+    retired_ranges: Vec<WatchRange>,
     protected_sites: Vec<Guest>,
     row_cursor: usize,
     physical_failure: Option<String>,
@@ -227,9 +228,16 @@ impl InstalledGuard {
         let write_ranges: Vec<_> = lifetime.config().watched_extents().iter().map(|extent| WatchRange {
             start: u64::from(extent.start().0), end: u64::from(extent.end().0), kinds: WatchKinds::WRITES,
         }).collect();
-        let watch = session.board.memory_watch_begin_with_fetch_attribution(write_ranges.clone(),
+        let retired_ranges: Vec<_> = lifetime.config().retired_extents().iter().map(|extent| WatchRange {
+            start: u64::from(extent.start().0), end: u64::from(extent.end().0), kinds: WatchKinds::CPU_FETCH,
+        }).collect();
+        if retired_ranges.iter().any(|retired| fetch_ranges.iter().any(|site| site.start < retired.end && retired.start < site.end)) {
+            return Err("modal retired extent overlaps a guarded instruction site".into());
+        }
+        let watch = session.board.memory_watch_begin_with_fetch_attribution(
+            write_ranges.iter().chain(&retired_ranges).cloned().collect(),
             attribution, WRITE_LIMIT, maps.to_vec(), fujimod_emulator::board::observation::ViewPolicy::Fixed)?;
-        Ok(Self { contexts: config.contexts, lifetime, watch, write_ranges, fetch_ranges,
+        Ok(Self { contexts: config.contexts, lifetime, watch, write_ranges, fetch_ranges, retired_ranges,
             protected_sites, row_cursor: 0, physical_failure: None, row_digest: RefCell::default() })
     }
 
@@ -406,15 +414,32 @@ impl Serialize for RangeEvidence<'_> {
         sequence.end()
     }
 }
-struct ClassEvidence<'a>(&'a [WatchRange]);
+/// Union of the watched ranges with adjacent ranges merged.
+fn union_ranges(writes: &[WatchRange], fetches: &[WatchRange]) -> Vec<[u64; 2]> {
+    let mut bounds: Vec<[u64; 2]> = writes.iter().chain(fetches).map(|range| [range.start, range.end]).collect();
+    bounds.sort_unstable();
+    let mut merged: Vec<[u64; 2]> = Vec::with_capacity(bounds.len());
+    for [start, end] in bounds {
+        match merged.last_mut() {
+            Some(previous) if start <= previous[1] => previous[1] = previous[1].max(end),
+            _ => merged.push([start, end]),
+        }
+    }
+    merged
+}
+/// Write classes for the lifetime extents, then one fetch class per retired extent.
+struct ClassEvidence<'a> { writes: &'a [WatchRange], fetches: &'a [WatchRange] }
 impl Serialize for ClassEvidence<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         #[derive(Serialize)]
-        struct Class { range: [u64; 2], kinds: [&'static str; 3] }
-        let mut sequence = serializer.serialize_seq(Some(self.0.len()))?;
-        for range in self.0 {
+        struct Class { range: [u64; 2], kinds: &'static [&'static str] }
+        let mut sequence = serializer.serialize_seq(Some(self.writes.len() + self.fetches.len()))?;
+        for range in self.writes {
             sequence.serialize_element(&Class { range: [range.start, range.end],
-                kinds: ["cpu-write", "host-write", "model-bus-write"] })?;
+                kinds: &["cpu-write", "host-write", "model-bus-write"] })?;
+        }
+        for range in self.fetches {
+            sequence.serialize_element(&Class { range: [range.start, range.end], kinds: &["cpu-fetch"] })?;
         }
         sequence.end()
     }
@@ -430,14 +455,14 @@ impl Serialize for WatchEvidence<'_> {
         digest.advance(pending).map_err(serde::ser::Error::custom)?;
         let mut state = serializer.serialize_map(Some(if matches!(self.records, WatchRecords::Rows) { 9 } else { 8 }))?;
         state.serialize_entry("enabled", &true)?;
-        state.serialize_entry("ranges", &RangeEvidence(&guard.write_ranges))?;
+        state.serialize_entry("ranges", &union_ranges(&guard.write_ranges, &guard.retired_ranges))?;
         if matches!(self.records, WatchRecords::Rows) {
             state.serialize_entry("records", records.rows_since(0).map_err(serde::ser::Error::custom)?)?;
         }
         state.serialize_entry("record_count", &digest.rows)?;
         state.serialize_entry("records_sha256", &digest.hex())?;
         state.serialize_entry("violation", &records.violation())?;
-        state.serialize_entry("classes", &ClassEvidence(&guard.write_ranges))?;
+        state.serialize_entry("classes", &ClassEvidence { writes: &guard.write_ranges, fetches: &guard.retired_ranges })?;
         state.serialize_entry("views", "fixed")?;
         state.serialize_entry("fetch_attribution", &Attribution { sources: [], ranges: RangeEvidence(&guard.fetch_ranges) })?;
         state.end()
@@ -475,5 +500,21 @@ mod tests {
         assert_ne!(reordered.hex(), whole.hex());
         assert_ne!(changed.hex(), whole.hex());
         assert_eq!(RowDigest::default().hex(), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    }
+
+    #[test]
+    fn adjacent_retired_extents_merge_in_ranges_and_stay_separate_fetch_classes() {
+        let writes = [WatchRange { start: 0x0146_7588, end: 0x0146_7840, kinds: WatchKinds::WRITES }];
+        let retired = [
+            WatchRange { start: 0x00c7_aef4, end: 0x00c7_af6c, kinds: WatchKinds::CPU_FETCH },
+            WatchRange { start: 0x00c7_af6c, end: 0x00c7_afc8, kinds: WatchKinds::CPU_FETCH },
+        ];
+        assert_eq!(union_ranges(&writes, &retired), vec![[0x00c7_aef4, 0x00c7_afc8], [0x0146_7588, 0x0146_7840]]);
+        let classes = serde_json::to_value(ClassEvidence { writes: &writes, fetches: &retired }).unwrap();
+        assert_eq!(classes, serde_json::json!([
+            {"range": [0x0146_7588, 0x0146_7840], "kinds": ["cpu-write", "host-write", "model-bus-write"]},
+            {"range": [0x00c7_aef4, 0x00c7_af6c], "kinds": ["cpu-fetch"]},
+            {"range": [0x00c7_af6c, 0x00c7_afc8], "kinds": ["cpu-fetch"]},
+        ]));
     }
 }

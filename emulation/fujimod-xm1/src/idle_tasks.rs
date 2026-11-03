@@ -105,8 +105,15 @@ struct Kernel {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum Boundary { Start, Entry, Instruction, RootEntry, RootInstruction, ServiceEntry, ServiceReturn, TaskSubmit, PeriodicCallback, IrqEntry, IrqFrame, IrqReturn, PostCleanup }
+/// Core0 ATCM bytes from 8 below the sample SP to the IRQ stack top, read through core 0.
 #[derive(Serialize)]
-struct Sample { hit: usize, boundary: Boundary, context: Context, code_word: Word, watch_cursor: usize, views: Vec<View>, kernels: [Kernel; 2] }
+struct InterruptStack { low: Address, bytes: Vec<u8> }
+#[derive(Serialize)]
+struct Sample {
+    hit: usize, boundary: Boundary, context: Context, code_word: Word, watch_cursor: usize, views: Vec<View>, kernels: [Kernel; 2],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interrupt_stack: Option<InterruptStack>,
+}
 #[derive(Deserialize, Serialize)]
 struct WatchSummary { enabled: bool, violation: Option<String> }
 #[derive(Clone, Copy, Deserialize, Eq, PartialEq)]
@@ -236,7 +243,7 @@ fn sample(machine: &Machine, maps: &[MemoryMap], sources: &[Code], hit: usize, s
     let observed = view(machine, maps, &state, Object::Code, state.core, state.pc.0, 4)?;
     require(word(&observed.bytes, 0)? == expected.0, "instruction word differs from installed source")?;
     views.push(observed);
-    Ok(Sample { hit, boundary, context: state, code_word: expected, watch_cursor, views, kernels })
+    Ok(Sample { hit, boundary, context: state, code_word: expected, watch_cursor, views, kernels, interrupt_stack: None })
 }
 fn sources(root: &Path) -> Result<Vec<Code>, String> {
     [("decode/loader-40000.bin", 0x40000, "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"),
@@ -448,10 +455,54 @@ const TASK_RECORD_POOLS: [(Core, u32, u32); 2] = [
     (Core::Primary, 0x5beac, 0x5ff0c), (Core::Secondary, 0xebe6c, 0xefecc),
 ];
 const TASK_FLAG_POOLS: [(Core, u32); 2] = [(Core::Primary, 0x5d178), (Core::Secondary, 0xed138)];
-const ROOT_RESOURCES: [(u32, usize); 7] = [
+const ROOT_RESOURCES: [(u32, usize); 8] = [
     (0x96ca4c, 4), (0x828094, 4), (0x8e1f28, 4), (0x9c3500, 0x404),
-    (0x89ea8c, 12), (0x5d178 + 12 * 103, 12), (0x624b4 + 16 * 103, 16),
+    (0x89ea8c, 12), (0x5d178 + 12 * 103, 12), (0x624b4 + 16 * 103, 16), (IRQ_NEST, 4),
 ];
+/// Loader A 0x400545a4 (literal 0x40418): 0x40240 increments it on IRQ entry and 0x4031c decrements it on exit.
+/// The scheduler also stores 0 at 0x43690/0x43720 and 1 at 0x436f0 around its idle IRQ window, and 0x43848 stores 1.
+const IRQ_NEST: u32 = 0x545a4;
+/// Core0 ATCM window of register 0x70000011; its top is the first-level IRQ stack loaded at 0x40250 from 0x40370.
+const IRQ_STACK: (u32, u32) = (0x70000000, 0x70002000);
+const IRQ_ATCM: u32 = 0x70000011;
+/// Callback frame plus the 24-byte 0x725b74 and 8-byte 0x412bc frames on its success path.
+const IRQ_CALLBACK_DEPTH: u32 = 8 + 32;
+const DISPATCH_RETURN: u32 = 0x723394;
+const LOADER_DISPATCH_RETURN: u32 = 0x4bf0c;
+/// Source words of the periodic-callback interrupt contract: loader A IRQ entry, handler call and exit with their
+/// literals, the I-clearing dispatch at 0x4bef0..0x4bf08, dispatcher 0x72337c, the 0x725424 dispatcher selection
+/// and table stores, and the callback's frame push and pop.
+const IRQ_CALLBACK_SOURCE: [(u32, &[u32]); 13] = [
+    (0x40204, &[0xe3a0d0d3, 0xe129f00d, 0xe92dd00f, 0xe3a000d2, 0xe129f000, 0xe24e0004, 0xe14f1000, 0xe2012040, 0xe3822093,
+        0xe129f002, 0xe58d0018, 0xe92d0002, 0xe59f21dc, 0xe5923000, 0xe2830001, 0xe5820000, 0xe3530000, 0x1b000002,
+        0xe1a0200d, 0xe59fd118, 0xe92d0004]),
+    (0x402c0, &[0xe59f0158, 0xe12fff30, 0xe10f2000, 0xe3c22080, 0xe129f002, 0xe3500000, 0x11a0e00f, 0x11a0f000, 0xe10f2000,
+        0xe2022040, 0xe3822093, 0xe129f002, 0xe59f212c, 0xe12fff32, 0xe59f2118, 0xe5921000, 0xe2411001, 0xe3510000,
+        0x059f010c, 0x0b00093a, 0xe59f2100, 0xe5921000, 0xe2413001, 0xe5823000, 0xe3530000, 0x1a000008, 0xe8bd0001,
+        0xe1a0d000, 0xe59f10f0, 0xe5910000, 0xe3500000, 0x0a000002, 0xe3a00000, 0xe5810000, 0xea000d03, 0xe8bd0002,
+        0xe10f2000, 0xe2022040, 0xe3c11040, 0xe1811002, 0xe169f001, 0xe8fdd00f]),
+    (0x40370, &[IRQ_STACK.1]),
+    (0x40418, &[0x40000000 | IRQ_NEST]),
+    (0x40420, &[0x00040d50, 0x00040d60, 0x400546d8]),
+    (0x4bef0, &[0xe10f3000, 0xe3c33080, 0xe129f003, 0xe5942000, 0xe5923008, 0xe5920004, 0xe12fff33]),
+    (0x72337c, &[0xe92d4800, 0xe28db004, 0xe3033500, 0xe344309c, 0xe7933100, 0xe12fff33, 0xe8bd8800]),
+    (0x725464, &[0xe3580000, 0x0303337c, 0x03403072]),
+    (0x725540, &[0xe3a02001, 0xe5892304]),
+    (0x7255b8, &[0xe3033500, 0xe344309c, 0xe7837104, 0xe5932000, 0xe0831104, 0xe5812100, 0xe581a200]),
+    (0x7255f4, &[0xe5862000]),
+    (0x69cc18, &[0xe92d4800]),
+    (0x69cc68, &[0xe8bd8800]),
+];
+fn irq_callback_source(sources: &[Code]) -> Result<(), String> {
+    require(tcm_window(TcmRegister(IRQ_ATCM))? == Some((u64::from(IRQ_STACK.0), u64::from(IRQ_STACK.1))),
+        "IRQ stack differs from the core0 ATCM window")?;
+    for (base, words) in IRQ_CALLBACK_SOURCE {
+        for (index, &expected) in words.iter().enumerate() {
+            require(code_word(sources, base + 4 * index as u32)? == expected, "periodic callback interrupt source differs")?;
+        }
+    }
+    Ok(())
+}
 #[derive(Clone, Copy)]
 enum TaskScope { Idle, Root }
 impl TaskScope {
@@ -741,6 +792,7 @@ fn bind_root_artifact(role: Role, linked: &[u8], symbols: &[u8], contract: &[u8]
             (execution, calls, BTreeSet::from([0x69d1d0, 0x69d1e0, 0x69d278]), BTreeSet::from([0x69d2b0]))
         }
     };
+    irq_callback_source(sources)?;
     let mut service_entries: BTreeSet<u32> = calls.iter().map(|site| site.target.0).collect();
     service_entries.extend([0x69c9f8, 0x69cc00, 0x69cc18, 0x725b74, 0x72835c, 0x726478,
         0x725dd8, 0x4d434, 0x41140, 0x4d1a4, 0x453f0, 0x43dd0, 0x43688, 0x412bc, 0x4118c, 0x72337c, 0x43728]);
@@ -798,36 +850,19 @@ fn root_boundary(pc: u32, binding: &RootBinding) -> Result<Boundary, String> {
         || [0x724924, 0x725f08, 0x725fa8, 0x454e8, 0x436e8, 0x453f4].contains(&pc) { return Ok(Boundary::ServiceEntry); }
     Err("unknown root observation boundary".into())
 }
-fn callback_task_views(machine: &Machine, maps: &[MemoryMap], state: &Context, current: Address, views: &mut Vec<View>) -> Result<(), String> {
-    let (_, creations, nodes) = TASK_RECORD_POOLS[state.core.index()];
-    let physical = current.0 & !0x40000000;
-    let offset = physical.checked_sub(nodes).ok_or("callback current task leaves source node pool")?;
-    require(offset % 56 == 0 && offset / 56 < 120, "callback current task has invalid source node index")?;
-    let index = offset / 56;
-    let node = view(machine, maps, state, Object::TaskNode, state.core, current.0, 56)?;
-    let creation_address = 0x40000000 | (creations + 40 * index);
-    require(word(&node.bytes, 8)? == creation_address, "callback current task creation pointer differs")?;
-    let creation = view(machine, maps, state, Object::CreationRecord, state.core, creation_address, 40)?;
-    require(word(&creation.bytes, 32)? == index + 1 && word(&creation.bytes, 36)? == 1, "callback current task is not a live source creation")?;
-    let stack = word(&creation.bytes, 20)? & !0x40000000;
-    let size = word(&creation.bytes, 16)?;
-    let high = stack.checked_add(size).ok_or("callback stack extent overflow")?;
-    let cursor = view(machine, maps, state, Object::ResourceState, state.core, 0x89ea98, 4)?;
-    let cursor_address = word(&cursor.bytes, 0)? & !0x40000000;
-    require((TASK_STACK_POOL.0..=TASK_STACK_POOL.1).contains(&cursor_address)
-        && size != 0 && stack >= TASK_STACK_POOL.0 && high <= cursor_address && size % 4 == 0
-        && (stack..=high).contains(&(state.sp.0 & !0x40000000)),
-        "callback stack lacks complete allocated task-pool coverage; IRQ/TCM stack requires a source fact")?;
-    views.push(view(machine, maps, state, Object::Stack, state.core, stack, size as usize)?);
-    views.extend([node, creation, cursor]);
-    Ok(())
+fn interrupt_stack(machine: &Machine, state: &Context) -> Result<InterruptStack, String> {
+    require(state.core == Core::Primary && state.tcm[0] == [Word(0), Word(IRQ_ATCM)],
+        "periodic callback stack bank is not the primary core0 ATCM")?;
+    let sp = state.sp.0;
+    let low = sp.checked_sub(8).ok_or("periodic callback SP underflows")?;
+    require(sp % 4 == 0 && low >= IRQ_STACK.0 && sp <= IRQ_STACK.1, "periodic callback SP leaves the loader A IRQ stack")?;
+    let mut bytes = vec![0; (IRQ_STACK.1 - low) as usize];
+    machine.session.board.read_memory(Core::Primary.index(), u64::from(low), &mut bytes)?;
+    Ok(InterruptStack { low: Address(low), bytes })
 }
 fn callback_frame(sample: &Sample, address: u32) -> Result<[u32; 2], String> {
-    let physical = address & !0x40000000;
-    let stack = sample.views.iter().find(|view| matches!(view.object, Object::Stack) && view.core == sample.context.core
-        && physical >= view.physical.0 && u64::from(physical) + 8 <= u64::from(view.physical.0) + view.bytes.len() as u64)
-        .ok_or("callback private frame has no live allocated stack view")?;
-    let offset = (physical - stack.physical.0) as usize;
+    let stack = sample.interrupt_stack.as_ref().ok_or("periodic callback frame has no interrupt stack view")?;
+    let offset = address.checked_sub(stack.low.0).ok_or("periodic callback frame leaves its interrupt stack view")? as usize;
     Ok([word(&stack.bytes, offset)?, word(&stack.bytes, offset + 4)?])
 }
 fn submission_views(machine: &Machine, maps: &[MemoryMap], state: &Context, task: &SubmittedTask, views: &mut Vec<View>) -> Result<(), String> {
@@ -854,7 +889,7 @@ fn root_sample(machine: &Machine, maps: &[MemoryMap], sources: &[Code], binding:
         kernel_at(machine, maps, &state, Core::Primary, root_layout(), TaskScope::Root, &mut views)?,
         kernel(machine, maps, &state, Core::Secondary, &mut views)?,
     ];
-    if callback_context { callback_task_views(machine, maps, &state, kernels[state.core.index()].current, &mut views)?; }
+    let interrupt_stack = if callback_context { Some(interrupt_stack(machine, &state)?) } else { None };
     let roots = view(machine, maps, &state, Object::InterfaceRoots, Core::Primary, 0x96bd20, 8)?;
     for core in [Core::Primary, Core::Secondary] {
         require(word(&roots.bytes, 4 * core.index())? == core.layout().table, "installed root interface differs")?;
@@ -898,7 +933,7 @@ fn root_sample(machine: &Machine, maps: &[MemoryMap], sources: &[Code], binding:
     let observed = view(machine, maps, &state, Object::Code, state.core, state.pc.0, 4)?;
     require(word(&observed.bytes, 0)? == expected, "root boundary instruction differs from installed source")?;
     views.push(observed);
-    Ok(Sample { hit, boundary, context: state, code_word: Word(expected), watch_cursor, views, kernels })
+    Ok(Sample { hit, boundary, context: state, code_word: Word(expected), watch_cursor, views, kernels, interrupt_stack })
 }
 fn merged_spans(mut spans: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
     spans.sort_unstable();
@@ -1392,10 +1427,11 @@ impl RootProducer {
             let table = sample.views.iter().find(|view| view.physical == Address(0x9c3500)).ok_or("periodic live callback table absent")?;
             let handle = word(&handle.bytes, 0)?;
             let index = usize::try_from(state.registers[0].0).map_err(|_| "periodic callback index exceeds host size")?;
-            require((1..=64).contains(&index) && state.lr == Address(0x723394)
+            require((1..=64).contains(&index) && state.lr == Address(DISPATCH_RETURN)
                 && word(&table.bytes, 4 * index)? == 0x69cc18 && word(&table.bytes, 0x100 + 4 * index)? == handle
                 && word(&table.bytes, 0x200 + 4 * index)? == 30, "periodic callback is not bound to live root dispatch")?;
             require(self.callback.is_none(), "overlapping root periodic callback invocation")?;
+            interrupt_dispatch(sample)?;
             let value = word(&counter.bytes, 0)?;
             require((1..=104).contains(&value), "periodic callback counter leaves source range")?;
             let after_cleanup = sample.kernels[0].created == Word(0) && sample.kernels[0].state == 0
@@ -1419,11 +1455,21 @@ impl RootProducer {
             let callback = self.callback.as_ref().ok_or("periodic callback context absent")?;
             require(callback.epilogue_executed && state.sp == callback.caller.sp && state.registers[4..12] == callback.caller.registers[4..12],
                 "periodic callback did not execute and restore caller context")?;
+            interrupt_dispatch(sample)?;
             if callback.after_cleanup { self.post_cleanup_callbacks += 1; }
             self.callback = None;
         }
         Ok(())
     }
+}
+/// F is inherited from the interrupted context; I is cleared at 0x4bef8 before the 0x4bf08 dispatch.
+fn interrupt_dispatch(sample: &Sample) -> Result<(), String> {
+    let state = &sample.context;
+    let nest = sample.views.iter().find(|view| view.physical == Address(IRQ_NEST)).ok_or("IRQ nesting counter absent")?;
+    require(word(&nest.bytes, 0)? != 0 && state.cpsr.0 & 0x07f0ffbf == 0x113
+        && (IRQ_STACK.0 + IRQ_CALLBACK_DEPTH..=IRQ_STACK.1 - 8).contains(&state.sp.0)
+        && callback_frame(sample, state.sp.0)?[1] == LOADER_DISPATCH_RETURN,
+        "periodic callback lacks the loader A IRQ dispatch context")
 }
 
 fn root_fixed_sites(binding: &RootBinding, sources: &[Code]) -> Result<BTreeMap<u32, String>, String> {
@@ -1434,7 +1480,7 @@ fn root_fixed_sites(binding: &RootBinding, sources: &[Code]) -> Result<BTreeMap<
             sites.insert(pc.checked_add(4).ok_or("task wrapper return PC overflow")?, "service-return".into());
         }
     }
-    sites.insert(0x723394, "service-return".into());
+    sites.insert(DISPATCH_RETURN, "service-return".into());
     for pc in [0x43668, 0x43728, 0x437a4] {
         require(binding.fetch_spans.iter().any(|&(low, high)| low <= u64::from(pc) && u64::from(pc) + 8 <= high),
             "selected task continuation has no complete actual-fetch coverage")?;
@@ -1844,7 +1890,8 @@ mod tests {
             sp: Address(core.layout().stack + 1024), lr: Address(match core { Core::Primary => 0x453f0, Core::Secondary => 0xd53b0 }),
             cpsr: Word(0x53), spsr: Word(0xdeadbeef), counts, identities: [Word(0), Word(1)], tcm: [[Word(0); 2]; 2],
         };
-        Sample { hit: 0, boundary, context: state, code_word: Word(0), watch_cursor: 0, views: Vec::new(), kernels: [synthetic_kernel(Core::Primary), synthetic_kernel(Core::Secondary)] }
+        Sample { hit: 0, boundary, context: state, code_word: Word(0), watch_cursor: 0, views: Vec::new(),
+            kernels: [synthetic_kernel(Core::Primary), synthetic_kernel(Core::Secondary)], interrupt_stack: None }
     }
     fn synthetic_entry_and_wait(core: Core) -> [Sample; 2] {
         let entry = synthetic_sample(core, Boundary::Entry, Address(ENTRY), 10);
@@ -2108,5 +2155,36 @@ mod tests {
             assert!(sites.contains_key(&pc) && sites.contains_key(&(pc | 0x40000000)));
         }
         assert!(!sites.contains_key(&0x6b07f8) && !sites.contains_key(&0x406b07f8));
+    }
+    fn callback_entry(sp: u32, cpsr: u32, nest: u32, dispatcher_lr: u32) -> Sample {
+        let mut sample = synthetic_sample(Core::Primary, Boundary::PeriodicCallback, Address(0x69cc18), 10);
+        sample.context.sp = Address(sp); sample.context.cpsr = Word(cpsr);
+        let low = sp.saturating_sub(8).max(IRQ_STACK.0);
+        let mut bytes = vec![0; (IRQ_STACK.1 - low) as usize];
+        if let Some(slot) = bytes.get_mut((sp + 4 - low) as usize..(sp + 8 - low) as usize) { slot.copy_from_slice(&dispatcher_lr.to_le_bytes()); }
+        sample.interrupt_stack = Some(InterruptStack { low: Address(low), bytes });
+        sample.views.push(View { object: Object::CallbackResource, core: Core::Primary, physical: Address(IRQ_NEST),
+            bytes: nest.to_le_bytes().to_vec(), aliases: std::array::from_fn(|_| std::array::from_fn(|_| Digest(String::new()))) });
+        sample
+    }
+    #[test]
+    fn periodic_callback_requires_loader_irq_dispatch_context() {
+        assert!(interrupt_dispatch(&callback_entry(0x70001fc4, 0x60000153, 1, LOADER_DISPATCH_RETURN)).is_ok());
+        assert!(interrupt_dispatch(&callback_entry(0x70000028, 0x153, 2, LOADER_DISPATCH_RETURN)).is_ok());
+        assert!(interrupt_dispatch(&callback_entry(0x70001fc4, 0x113, 1, LOADER_DISPATCH_RETURN)).is_ok());
+        for (sp, cpsr, nest, lr) in [
+            (0x70001fc4, 0x60000153, 0, LOADER_DISPATCH_RETURN),
+            (0x70001fc4, 0x600001d3, 1, LOADER_DISPATCH_RETURN),
+            (0x70001fc4, 0x60000152, 1, LOADER_DISPATCH_RETURN),
+            (0x70001fc4, 0x60000173, 1, LOADER_DISPATCH_RETURN),
+            (0x70001fc4, 0x60000153, 1, 0x4bf10),
+            (0x70000024, 0x153, 1, LOADER_DISPATCH_RETURN),
+            (0x70001ffc, 0x153, 1, LOADER_DISPATCH_RETURN),
+        ] {
+            assert!(interrupt_dispatch(&callback_entry(sp, cpsr, nest, lr)).is_err());
+        }
+        let mut missing = callback_entry(0x70001fc4, 0x60000153, 1, LOADER_DISPATCH_RETURN);
+        missing.interrupt_stack = None;
+        assert!(interrupt_dispatch(&missing).is_err());
     }
 }

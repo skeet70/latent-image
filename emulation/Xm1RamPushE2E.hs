@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runRamPushE2E, warmAttachCheckpoint) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint) where
 
 import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, evaluate, finally, throwIO, try)
@@ -38,13 +38,15 @@ import qualified Emulation.CaptureStream as CaptureJournal
 import qualified Emulation.SaveLifecycle as SaveLifecycle
 import Emulation.SaveLifecycleRun (runSaveLifecycle)
 import qualified Emulation.MenuCrawl as Crawl
+import qualified Emulation.MenuObserve as MenuObserve
+import qualified Emulation.RamDiff as RamDiff
 import Emulation.UiTrajectory
 import Emulation.WatchObservation
 import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
 import EmulatorUsb
 import FujiAF.RamPush
 import FujiAF.Transport (ensurePrivateDirectory, realClock, writePrivateBytes)
-import Xm1UnreviewedRelink (runUnreviewedRamPush, runUnreviewedRamUnload, withUnreviewedBuild)
+import Xm1UnreviewedRelink (runUnreviewedRamPush, runUnreviewedRamUnload, withUnreviewedBuild, withUnreviewedBuildArchive)
 import RamPushReviewedPins (reviewedContract)
 import RamPushProcedure (procedureSourcesDigest)
 import RamPushCcReviewedPins (reviewedCcContract)
@@ -152,7 +154,53 @@ data E2ESettings = E2ESettings
   , experimentReads :: [SymbolRead]
   , modalDiagnostic :: ModalDiagnostic
   , modalLifetimeGuard :: ModalLifetimeGuard
+  , modalOwnedPackage :: Maybe ModalOwnedPackage
   }
+
+-- | A bank Rust archive built with the owned controller-75 table, and the
+-- stock extents its generic actions retire.
+data ModalOwnedPackage = ModalOwnedPackage
+  { ownedArchivePath :: FilePath
+  , ownedArchiveDigest :: String
+  , ownedRetiredPath :: FilePath
+  , ownedRetiredDigest :: String
+  -- | The generated table's identity, which the archive's static table carries.
+  , ownedTableIdentity :: String
+  , ownedRetired :: [WatchRange]
+  }
+
+-- | Reads the archive and the generator's retired-extent document, which must
+-- name the pinned image5 and the table identity the archive carries.
+loadModalOwnedPackage :: FilePath -> FilePath -> IO ModalOwnedPackage
+loadModalOwnedPackage archive retired = do
+  archiveBytes <- B.readFile archive
+  require (not (B.null archiveBytes) && B.length archiveBytes <= 16 * 1024 * 1024) "owned modal75 archive is empty or exceeds 16 MiB"
+  document <- B.readFile retired
+  require (B.length document <= 1024 * 1024) "owned modal75 retired document exceeds 1 MiB"
+  (table, extents) <- either (ioError . userError . ("invalid owned modal75 retired document: " ++)) pure $ do
+    value <- eitherDecodeStrict' document
+    flip parseEither value $ withObject "retired document" $ \fields -> do
+      schema <- fields .: "schema"
+      unless (schema == (2 :: Int)) (fail "schema is not 2")
+      image <- fields .: "image5_sha256"
+      unless (image == ("3cd501c07533938ae4d9347616986fd1649005a588c36b5abf05e36ef4fd892a" :: String)) (fail "image5_sha256 is not the pinned X-M1 1.50 image5")
+      table <- fields .: "table_identity"
+      unless (length table == 64 && all (`elem` ("0123456789abcdef" :: String)) table) (fail "table_identity is not a SHA-256")
+      rows <- fields .: "retired"
+      extents <- forM rows $ withObject "retired extent" $ \row -> do
+        callback <- row .: "callback"
+        low <- row .: "start"
+        high <- row .: "end"
+        unless (callback == hexAddress low) (fail "retired callback differs from its start")
+        either fail pure (watchRange (watchAddress low) (watchAddress high))
+      pure (table, extents)
+  require (not (null extents)) "owned modal75 retired document names no extent"
+  require (hexBytesOf table `B.isInfixOf` archiveBytes) "owned modal75 archive does not carry the retired document's table identity"
+  pure (ModalOwnedPackage archive (sha256Hex (sha256 archiveBytes)) retired (sha256Hex (sha256 document)) table extents)
+ where
+  hexBytesOf digits = B.pack [byte | pair <- pairsOf digits, (byte, "") <- readHex pair]
+  pairsOf (high : low : rest) = [high, low] : pairsOf rest
+  pairsOf _ = []
 
 -- | The card attach checkpoint key: the staged guest state and the session's inputs.
 cardAttachRouteKey :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO RouteKey
@@ -698,7 +746,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
             withRelinkedBuildUsing relinker EnforceAllowlist base action
         | otherwise = case relinkMode settings of
             ReviewedRelink -> withPinnedReviewedBuild (payloadContract selected) selected base action
-            UnreviewedRelink policy -> withUnreviewedBuild selected policy base action
+            UnreviewedRelink policy -> case modalOwnedPackage settings of
+              Just owned -> withUnreviewedBuildArchive (ownedArchivePath owned) selected policy base action
+              Nothing -> withUnreviewedBuild selected policy base action
       pushWith observer retained
         | experimental = runRamPushWith xm1PeerCacheAvailability observer (retainedAllocation retained)
         | otherwise = case relinkMode settings of
@@ -742,6 +792,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
             pure (case matches of
               (candidate, relinked) : _ -> (Just candidate, Just (candidate, relinked))
               [] -> (Nothing, Nothing))
+  require (maybe True (const (payloadKind selected == RecipeBankModal75 && relinkMode settings /= ReviewedRelink)) (modalOwnedPackage settings))
+    "the owned modal75 package requires the scoped modal75 payload and an unreviewed relink"
   when scoped $
     require (any (not . null . segmentSteps) (planBefore plan))
       "scoped modal observation requires selected post-install physical-key segments"
@@ -814,7 +866,15 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
       elfBytes <- B.readFile (relinkDirectory </> "kernel.elf")
       loaderA <- B.readFile "private-data/analysis/x-m1-1.50/decode/loader-40000.bin"
       loaderB <- B.readFile "private-data/analysis/x-m1-1.50/decode/loader-d0000.bin"
-      lifetimeSource <- either (ioError . userError) pure (bindModalLifetimeSource manifest elfBytes loaderA loaderB)
+      lifetimeBound <- either (ioError . userError) pure (bindModalLifetimeSource manifest elfBytes loaderA loaderB)
+      lifetimeSource <- either (ioError . userError) pure (maybe (Right lifetimeBound)
+        (\owned -> withRetiredExecution (ownedRetired owned) lifetimeBound) (modalOwnedPackage settings))
+      forM_ (modalOwnedPackage settings) $ \owned ->
+        writePrivateBytes (e2e </> "e2e-modal-owned-package.json") (BL.toStrict (encode (object
+          [ "archive" .= ownedArchivePath owned, "archive_sha256" .= ownedArchiveDigest owned
+          , "retired_document" .= ownedRetiredPath owned, "retired_document_sha256" .= ownedRetiredDigest owned
+          , "table_identity" .= ownedTableIdentity owned
+          , "retired" .= [[low, high] | range <- ownedRetired owned, let (low, high) = watchRangeBounds range] ])) <> "\n")
       writePrivateBytes (relinkDirectory </> "loader-a.bin") loaderA
       writePrivateBytes (relinkDirectory </> "loader-b.bin") loaderB
       (stock, stockSource) <- loadModalStock
@@ -1495,41 +1555,16 @@ currentMenuRecord = 0x009571d0
 -- each trial to RECEIPT/crawl-trials.jsonl and writes RECEIPT/crawl-graph.json.
 runMenuCrawlE2E :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
 runMenuCrawlE2E given python workspace configFile installedMedia adjustmentNand receipt = do
-  hSetBuffering stdout LineBuffering
-  require (pushMode given == FlashCandidate && emulationCardMode given == Cardless
-    && case emulationRuntime given of FujiModRuntime _ -> True; RetainedRuntime -> False)
-    "the menu crawl requires the no-install --cardless --fujimod --flash-candidate route"
-  require (modalDiagnostic given == NoModalDiagnostic && segmentSelection given == Nothing)
-    "the menu crawl takes no modal diagnostic or segment selection"
-  require (isAbsolute receipt) "the menu crawl receipt path must be absolute"
   configBytes <- B.readFile configFile
   config <- either (ioError . userError . ("invalid menu crawl config: " ++)) pure (Crawl.decodeCrawlConfig configBytes)
-  exists <- doesDirectoryExist receipt
-  when exists $ do
-    entries <- listDirectory receipt
-    require (null entries) "menu crawl receipt directory must be fresh or empty"
-    removeDirectory receipt
-  runtime <- getCurrentDirectory
-  datDigest <- sha256File (runtime </> installedMedia)
-  require (sha256Hex datDigest == "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490")
-    "the menu crawl requires the pinned stock X-M1 1.50 DAT"
-  setCurrentDirectory workspace
-  (executable, arguments) <- sessionBridge given python installedMedia adjustmentNand (bootMode given) receipt
-  bracket (startEmulator executable runtime arguments (\_ -> pure (Nothing, ()))) (\(emulator, _, _) -> stopEmulator emulator) $
-    \(emulator, start, ()) -> do
-      setFileMode receipt 0o700
-      ensurePrivateDirectory receipt
-      writePrivateBytes (receipt </> "crawl-config.json") configBytes
-      configDigest <- sha256File (receipt </> "crawl-config.json")
+  withScreenProbe "menu crawl" given python workspace "crawl-config.json" installedMedia adjustmentNand receipt configBytes $
+    \emulator inputs -> do
       emulatorTraceSites emulator [(Crawl.crawlSiteAddress site, Crawl.crawlSiteLabel site) | site <- Crawl.crawlSites]
       hitCursor <- newIORef . fst =<< emulatorTraceHits emulator 0
       let screenshot label = receipt </> "screenshots" </> (label ++ ".png")
           word bytes offset = foldr (\index value -> (value `shiftL` 8) .|. fromIntegral (B.index bytes (offset + index))) 0 [0 .. 3] :: Word32
           observeScreen label = do
-            shot <- emulatorCapture emulator label
-            digest <- case shot of
-              Object fields | Just (String text) <- KM.lookup "sha256" fields -> pure (T.unpack text)
-              _ -> ioError (userError "capture reply lacks its sha256")
+            digest <- probeFrame emulator label
             written <- doesFileExist (screenshot label)
             require written ("capture did not write " ++ screenshot label)
             removeFile (replaceExtension (screenshot label) "planes.bin")
@@ -1537,12 +1572,15 @@ runMenuCrawlE2E given python workspace configFile installedMedia adjustmentNand 
             record <- emulatorReadMemory emulator currentMenuRecord 12
             let pointer = word record 0
             node <- if pointer == 0 then pure Nothing else Just <$> emulatorReadMemory emulator pointer 48
+            identity <- B.concat <$> mapM (\range -> emulatorReadMemory emulator (Crawl.rangeStart range) (fromIntegral (Crawl.rangeEnd range - Crawl.rangeStart range)))
+              (Crawl.configIdentityReads config)
             pure Crawl.Screen
               { Crawl.screenMenu = fmap (\bytes -> (word bytes 0, word bytes 8, word record 8)) node
               , Crawl.screenFrame = Crawl.FrameDigest digest
               , Crawl.screenImage = screenshot label
               , Crawl.screenCells = Crawl.ControllerCells (B.take (2 * Crawl.controllerCount) cells) (B.drop (2 * Crawl.controllerCount) cells)
               , Crawl.screenNode = node
+              , Crawl.screenIdentity = identity
               }
       withFile (receipt </> "crawl-trials.jsonl") WriteMode $ \journal -> do
         let driver = Crawl.Driver
@@ -1563,14 +1601,179 @@ runMenuCrawlE2E given python workspace configFile installedMedia adjustmentNand 
               }
         graph <- Crawl.crawl config driver
         writePrivateBytes (receipt </> "crawl-graph.json") (BL.toStrict (encode (object
-          [ "inputs" .= object
-              [ "dat_sha256" .= sha256Hex datDigest, "config_sha256" .= sha256Hex configDigest
-              , "adjustment_nand" .= adjustmentNand ]
-          , "emulator_start" .= startRecord start
+          [ "inputs" .= inputs
           , "graph" .= Crawl.graphValue config graph
           ])) <> "\n")
         putStrLn ("menu crawl: " ++ show (length (Crawl.graphNodes graph)) ++ " screens, " ++ show (Crawl.graphTrials graph)
           ++ " trials, " ++ seconds (Crawl.graphSeconds graph) ++ maybe "" (const ", budget-limited") (Crawl.graphLimit graph))
+
+-- | Starts the no-install cardless FujiMod route for a screen probe named `probe`, writes its
+-- configuration to RECEIPT/CONFIG_NAME and runs `body` with the emulator and the input record.
+withScreenProbe :: String -> E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> B.ByteString
+  -> (Emulator -> Value -> IO ()) -> IO ()
+withScreenProbe probe given python workspace configName installedMedia adjustmentNand receipt configBytes body = do
+  hSetBuffering stdout LineBuffering
+  require (pushMode given == FlashCandidate && emulationCardMode given == Cardless
+    && case emulationRuntime given of FujiModRuntime _ -> True; RetainedRuntime -> False)
+    ("the " ++ probe ++ " requires the no-install --cardless --fujimod --flash-candidate route")
+  require (modalDiagnostic given == NoModalDiagnostic && segmentSelection given == Nothing)
+    ("the " ++ probe ++ " takes no modal diagnostic or segment selection")
+  require (isAbsolute receipt) ("the " ++ probe ++ " receipt path must be absolute")
+  exists <- doesDirectoryExist receipt
+  when exists $ do
+    entries <- listDirectory receipt
+    require (null entries) (probe ++ " receipt directory must be fresh or empty")
+    removeDirectory receipt
+  runtime <- getCurrentDirectory
+  datDigest <- sha256File (runtime </> installedMedia)
+  require (sha256Hex datDigest == "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490")
+    ("the " ++ probe ++ " requires the pinned stock X-M1 1.50 DAT")
+  setCurrentDirectory workspace
+  (executable, arguments) <- sessionBridge given python installedMedia adjustmentNand (bootMode given) receipt
+  bracket (startEmulator executable runtime arguments (\_ -> pure (Nothing, ()))) (\(emulator, _, _) -> stopEmulator emulator) $
+    \(emulator, start, ()) -> do
+      setFileMode receipt 0o700
+      ensurePrivateDirectory receipt
+      writePrivateBytes (receipt </> configName) configBytes
+      configDigest <- sha256File (receipt </> configName)
+      body emulator (object
+        [ "dat_sha256" .= sha256Hex datDigest, "config_sha256" .= sha256Hex configDigest, "adjustment_nand" .= adjustmentNand
+        , "emulator_start" .= startRecord start ])
+
+-- | The capture's PNG sha256.
+probeFrame :: Emulator -> String -> IO String
+probeFrame emulator label = do
+  shot <- emulatorCapture emulator label
+  case shot of
+    Object fields | Just (String text) <- KM.lookup "sha256" fields -> pure (T.unpack text)
+    _ -> ioError (userError "capture reply lacks its sha256")
+
+-- | Restores `source` and presses `key`; a strict stop is an error.
+probePress :: Emulator -> SnapshotName -> Crawl.CrawlKey -> IO ()
+probePress emulator source key = do
+  pressed <- emulatorSnapshotKey emulator source (Crawl.crawlKeyWire key)
+  case pressed of
+    SnapshotPressed {} -> pure ()
+    SnapshotStopped failure _ -> ioError (userError ("probe press " ++ Crawl.crawlKeyWire key ++ " stopped: " ++ failure))
+
+-- | Saves the current guest as `probe-root`, presses the path from it and returns the snapshot
+-- of the last screen, holding only `probe-root` and that snapshot.
+probeWalk :: Emulator -> [Crawl.CrawlKey] -> IO SnapshotName
+probeWalk emulator path = do
+  let root = SnapshotName "probe-root"
+      walk source [] = pure source
+      walk source ((index, key) : rest) = do
+        probePress emulator source key
+        let name = SnapshotName ("probe-path-" ++ show (index :: Int))
+        emulatorSnapshotSave emulator name
+        when (source /= root) (emulatorSnapshotDrop emulator source)
+        walk name rest
+  emulatorSnapshotSave emulator root
+  walk root (zip [0 ..] path)
+
+-- | From the no-install cardless FujiMod root, presses a key path to one screen, then samples the
+-- configured windows before a key, after it, after each return key and after a control press from
+-- the same screen, and writes RECEIPT/ram-diff.json with the words the key toggles.
+runRamDiffE2E :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+runRamDiffE2E given python workspace configFile installedMedia adjustmentNand receipt = do
+  configBytes <- B.readFile configFile
+  config <- either (ioError . userError . ("invalid RAM diff config: " ++)) pure (RamDiff.decodeRamDiffConfig configBytes)
+  withScreenProbe "RAM diff" given python workspace "ram-diff-config.json" installedMedia adjustmentNand receipt configBytes $
+    \emulator inputs -> do
+      let windows = RamDiff.diffWindows config
+          sample = mapM (\window -> B.concat <$> mapM (uncurry (emulatorReadMemory emulator)) (RamDiff.rangeChunks window)) windows
+          frame = probeFrame emulator
+          pressFrom = probePress emulator
+      target <- probeWalk emulator (RamDiff.diffPath config)
+      _ <- emulatorSnapshotRestore emulator target
+      targetFrame <- frame "target"
+      before <- sample
+      pressFrom target (RamDiff.diffKey config)
+      onceFrame <- frame "once"
+      once <- sample
+      emulatorSnapshotSave emulator (SnapshotName "diff-once")
+      returns <- mapM (\key -> do
+        pressFrom (SnapshotName "diff-once") key
+        returnFrame <- frame ("return-" ++ Crawl.crawlKeyWire key)
+        returned <- sample
+        pure (key, returnFrame, returned)) (RamDiff.diffReturnKeys config)
+      pressFrom target (RamDiff.diffControl config)
+      controlFrame <- frame "control"
+      control <- sample
+      let restoredBy = RamDiff.byReturnKey
+            [ (key, concat (zipWith5 RamDiff.toggledWords windows before once returned control)) | (key, _, returned) <- returns ]
+          hex32 value = "0x" ++ showHex (value :: Word32) ""
+      writePrivateBytes (receipt </> "ram-diff.json") (BL.toStrict (encode (object
+        [ "inputs" .= inputs
+        , "frames" .= object (["target" .= targetFrame, "once" .= onceFrame, "control" .= controlFrame]
+            ++ [K.fromString ("return-" ++ Crawl.crawlKeyWire key) .= returnFrame | (key, returnFrame, _) <- returns])
+        , "changed_words" .= object
+            ([ "once" .= sum (zipWith RamDiff.changedWords before once)
+             , "control" .= sum (zipWith RamDiff.changedWords before control) ]
+            ++ [K.fromString ("return-" ++ Crawl.crawlKeyWire key) .= sum (zipWith RamDiff.changedWords before returned) | (key, _, returned) <- returns])
+        , "candidates" .= [ object ["address" .= hex32 (RamDiff.candidateAddress candidate), "before" .= hex32 (RamDiff.candidateBefore candidate)
+            , "after_key" .= hex32 (RamDiff.candidateAfterKey candidate), "restored_by" .= keys] | (candidate, keys) <- restoredBy ]
+        ])) <> "\n")
+      putStrLn ("RAM diff: " ++ show (length restoredBy) ++ " toggled words")
+ where
+  zipWith5 f (a : as) (b : bs) (c : cs) (d : ds) (e : es) = f a b c d e : zipWith5 f as bs cs ds es
+  zipWith5 _ _ _ _ _ _ = []
+
+-- | The menu globals `[0x009571d0,0x00957600)`, read before and after the observed press.
+menuGlobals :: (Word32, Int)
+menuGlobals = (0x009571d0, 0x430)
+
+-- | From the no-install cardless FujiMod root, presses a key path to one screen, arms the
+-- configured trace sites and a write watch over the configured ranges, presses the observed key
+-- once without a snapshot restore, and writes RECEIPT/menu-observe.json with the bridge's trace
+-- hits, the watch state and the menu globals before and after, then RECEIPT/menu-observe-after.json
+-- with the frame after the press.
+runMenuObserveE2E :: E2ESettings -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+runMenuObserveE2E given python workspace configFile installedMedia adjustmentNand receipt = do
+  configBytes <- B.readFile configFile
+  config <- either (ioError . userError . ("invalid menu observe config: " ++)) pure (MenuObserve.decodeMenuObserveConfig configBytes)
+  withScreenProbe "menu observation" given python workspace "menu-observe-config.json" installedMedia adjustmentNand receipt configBytes $
+    \emulator inputs -> do
+      target <- probeWalk emulator (MenuObserve.observePath config)
+      _ <- emulatorSnapshotRestore emulator target
+      beforeFrame <- probeFrame emulator "before"
+      globalsBefore <- uncurry (emulatorReadMemory emulator) menuGlobals
+      emulatorTraceSites emulator [(MenuObserve.traceSiteAddress site, MenuObserve.traceSiteLabel site) | site <- MenuObserve.observeSites config]
+      (mark, _) <- emulatorTraceHits emulator 0
+      ranges <- either (ioError . userError) pure (sequence
+        [ watchRange (watchAddress (Crawl.rangeStart range)) (watchAddress (Crawl.rangeEnd range)) | range <- MenuObserve.observeWrites config ])
+      limit <- either (ioError . userError) pure (watchLimit (MenuObserve.observeLimit config))
+      armed <- emulatorExecutionWatchBegin emulator ranges [] limit
+      reply <- emulatorKey emulator defaultKeyTiming (Crawl.crawlKeyWire (MenuObserve.observeKey config))
+      watch <- emulatorWatchStateRaw emulator
+      hits <- emulatorTraceHitsRaw emulator mark
+      globalsAfter <- uncurry (emulatorReadMemory emulator) menuGlobals
+      let hex32 value = "0x" ++ showHex (value :: Word32) ""
+          receiptFields =
+            [ "inputs" .= inputs
+            , "key" .= Crawl.crawlKeyWire (MenuObserve.observeKey config)
+            , "key_reply" .= reply
+            , "watch_armed" .= armed
+            , "menu_globals" .= object
+                [ "address" .= hex32 (fst menuGlobals), "before" .= hexBytes globalsBefore, "after" .= hexBytes globalsAfter ]
+            , "trace_hits" .= hits
+            , "watch" .= watch
+            ]
+          writeJson name fields = writePrivateBytes (receipt </> name) (BL.toStrict (encode (object fields)) <> "\n")
+          count field = case watch of
+            Object fields | Just (Array items) <- KM.lookup field fields -> length items
+            _ -> 0
+          violation = case watch of
+            Object fields | Just (String text) <- KM.lookup "violation" fields -> T.unpack text
+            _ -> "none"
+          hitCount = case hits of
+            Array items -> length items
+            _ -> 0
+      writeJson "menu-observe.json" (("frames" .= object ["before" .= beforeFrame]) : receiptFields)
+      afterFrame <- probeFrame emulator "after"
+      writeJson "menu-observe-after.json" ["frame" .= afterFrame]
+      putStrLn ("menu observation: " ++ show hitCount ++ " trace hits, " ++ show (count "records") ++ " watch records, violation "
+        ++ violation)
 
 
 observeRetainedModal :: Emulator -> FilePath -> ModalStock -> Value -> IO a -> IO a
@@ -1777,6 +1980,7 @@ finishModalLifetime emulator receipt session = do
       else pure (Left "modal observation was not armed by this route")
     afterEnd <- captureModalResponse (emulatorModalObservationReport emulator limit)
     let audit = checkLifetimeArrayAudit request (lifetimeAttemptArmed attempt) final
+        settingsWrites = final >>= completedSettingsWrites request
         checked = do
           _ <- lifetimeAttemptBegin attempt >>= modalParsedResponse
           writes <- audit
@@ -1822,9 +2026,13 @@ finishModalLifetime emulator receipt session = do
           , "permit_end" .= raw ended, "permit_end_error" .= modalResponseProblem ended
           , "permit_after_end" .= raw afterEnd, "permit_after_end_error" .= modalResponseProblem afterEnd
           , "failures" .= lifetimeAttemptProblems attempt
+          , "settings_writes" .= either (const Null) settingsWritesJson settingsWrites
+          , "settings_writes_error" .= either Just (const Nothing) settingsWrites
           , "observation_error" .= either Just (const Nothing) checked ]
         completed = either (const Nothing) Just checked
     writePrivateBytes (receipt </> "e2e-modal-observation.json") (BL.toStrict (encode evidence) <> "\n")
+    forM_ (checked >> settingsWrites) $ \writes ->
+      writePrivateBytes (receipt </> "e2e-modal-settings-writes.json") (BL.toStrict (encode (settingsWritesJson writes)) <> "\n")
     writeIORef session (ModalLifetimeFinished completed)
     case (lifetimeAttemptProblems attempt, checked) of
       ([], Left problem) -> ioError (userError problem)

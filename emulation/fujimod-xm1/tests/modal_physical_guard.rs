@@ -13,7 +13,9 @@ use fujimod_emulator::board::{
 use fujimod_emulator_cpu::{Cpu, ExecutionPolicy, ExecutionRefusal, Hook, HookRange, Model, Register, Run, arm, timeline::Ratio};
 use fujimod_emulator_cpu_unicorn::rprofile;
 use fujimod_emulator_devices::{Cx, Device};
-use fujimod_xm1::modal_permit::Cpsr;
+use fujimod_xm1::modal_permit::{CoreId, Cpsr};
+use fujimod_xm1::{modal_lifetime::{LifetimeFailure, LifetimeMemory, LifetimeMonitor, LifetimeRequest, Word},
+    modal_task::PhysicalExtent, provenance::Guest};
 
 const CODE: u64 = 0x1000;
 const ALIAS: u64 = 0x4000_1000;
@@ -877,4 +879,78 @@ fn refused_board_runs_return_without_satisfying_or_retrying_the_instruction_budg
         board.run_for_instructions(2, 1).unwrap();
         assert!(board.instruction_counts().iter().any(|count| *count > 0));
     }
+}
+
+struct LifetimeBytes(std::collections::BTreeMap<u32, u8>);
+impl LifetimeMemory for LifetimeBytes {
+    fn read(&self, address: Guest, output: &mut [u8]) -> Result<(), LifetimeFailure> {
+        for (index, byte) in output.iter_mut().enumerate() {
+            *byte = self.0.get(&(address.0 + index as u32)).copied().unwrap_or(0);
+        }
+        Ok(())
+    }
+}
+
+/// A lifetime monitor over a synthetic 223-publication request, past its
+/// install entry, whose retired extent is [CODE, CODE+8).
+fn retired_monitor() -> LifetimeMonitor {
+    const INSTALL: u32 = 0x0100_0000;
+    let words = [0xe92d_4010u32, 0xe581_3000, 0xe92d_4010, 0xe581_3000];
+    let bytes: Vec<_> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+    let publications: Vec<_> = (0..223u32).map(|index| serde_json::json!({
+        "address": 0x0120_0000 + index * 4, "old": 0, "new": index + 1,
+    })).collect();
+    let request: LifetimeRequest = serde_json::from_value(serde_json::json!({
+        "runtime": [INSTALL, INSTALL + 0x10000], "resident": [INSTALL + 0x8000, INSTALL + 0x8400],
+        "readonly": [{"start": INSTALL, "bytes": bytes}],
+        "install": {"entry": {"pc": INSTALL, "word": words[0]}, "writer": {"pc": INSTALL + 4, "word": words[1]}},
+        "rollback": {"entry": {"pc": INSTALL + 8, "word": words[2]}, "writer": {"pc": INSTALL + 12, "word": words[3]}},
+        "publications": publications,
+        "retired": [[CODE as u32, CODE as u32 + 8]],
+    })).unwrap();
+    let config = request.into_config(vec![
+        PhysicalExtent::new(Guest(0x40000), 0xdae0).unwrap(),
+        PhysicalExtent::new(Guest(0xd0000), 0xdaa0).unwrap(),
+    ]).unwrap();
+    let mut memory = LifetimeBytes(Default::default());
+    for (extent, image) in config.readonly_images() {
+        memory.0.extend(image.iter().enumerate().map(|(index, byte)| (extent.start().0 + index as u32, *byte)));
+    }
+    let mut monitor = LifetimeMonitor::new(config, &memory).unwrap();
+    monitor.observe_entry(CoreId(0), Guest(INSTALL), Word(words[0])).unwrap();
+    monitor
+}
+
+#[test]
+fn retired_lifetime_extents_refuse_canonical_and_aliased_fetches_on_both_cores() {
+    for (core, pc) in [(0, CODE), (1, CODE), (0, ALIAS), (1, ALIAS), (0, DECODER), (1, DECODER)] {
+        let (board, _) = board(&[0xe2800001, 0xeafffffe]);
+        let protected = range(0x2000, 0x2004);
+        let attribution = FetchAttribution::new(CpuDataAttribution::None, vec![protected]).unwrap()
+            .with_instruction_guards(vec![PhysicalInstructionGuard::arm32_little(
+                protected, GuestAddress(0x2000), InstructionCores::Both,
+            ).unwrap()]).unwrap();
+        let mut watch = board.memory_watch_begin_with_fetch_attribution(vec![
+            WatchRange { start: DATA, end: DATA + 8, kinds: WatchKinds::WRITES },
+            range(CODE, CODE + 8),
+        ], attribution, 16, board.mappings().to_vec(), ViewPolicy::Fixed).unwrap();
+        run(&board, core, pc, 1);
+        let records = watch.records.borrow();
+        let rows = records.rows_since(0).unwrap();
+        let fetch = rows.iter().find(|row| row["source"] == "cpu-fetch").expect("a retired fetch row");
+        assert_eq!(fetch["physical"].as_u64(), Some(CODE));
+        assert_eq!(fetch["core"].as_u64(), Some(core as u64));
+        let mut monitor = retired_monitor();
+        assert_eq!(monitor.observe_row(fetch), Err(LifetimeFailure::RetiredFetch));
+        assert_eq!(monitor.receipt().failure, Some(LifetimeFailure::RetiredFetch));
+        drop(records);
+        board.memory_watch_end(&mut watch).unwrap();
+    }
+}
+
+#[test]
+fn fetch_rows_outside_retired_extents_do_not_disappear() {
+    let mut monitor = retired_monitor();
+    let row = serde_json::json!({"source": "cpu-fetch", "address": 0x2000, "physical": 0x2000, "size": 4, "core": 0, "pc": 0x2000, "instructions": 1});
+    assert_eq!(monitor.observe_row(&row), Err(LifetimeFailure::MalformedRow));
 }

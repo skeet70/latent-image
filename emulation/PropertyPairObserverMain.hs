@@ -224,7 +224,7 @@ run options output record = do
     stepCounter <- newIORef (0 :: Int)
     let drainHits = \emulator -> do
           start <- readIORef cursor
-          reply <- emulatorTraceHitsRaw emulator start hitPage
+          reply <- emulatorTraceHitsPage emulator start hitPage
           hits <- case field "hits" reply of
             Just (Array values) -> pure (V.toList values)
             _ -> refuse (BridgeFailed "trace-hits reply lacks hits")

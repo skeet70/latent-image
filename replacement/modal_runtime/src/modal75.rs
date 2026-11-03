@@ -65,7 +65,7 @@ impl Route {
     }
 
     pub fn next_state(&self, result: u32) -> Option<State75> {
-        self.pairs[..usize::from(self.len)].iter().find(|(value, _)| *value == result).map(|(_, state)| *state)
+        self.pairs.iter().take(usize::from(self.len)).find(|(value, _)| *value == result).map(|(_, state)| *state)
     }
 }
 
@@ -102,11 +102,14 @@ pub struct OwnedCell {
 pub struct Table75 {
     pub actions: &'static [GenericAction],
     pub cells: &'static [OwnedCell],
+    /// SHA-256 of the generated table text without its identity line.
+    pub identity: [u8; 32],
 }
 
 /// The owned table, generated from owner-supplied image5 bytes by
 /// `//replacement/modal_runtime:controller75-table`.
 #[cfg(any(rb_modal75_owned, rb_modal75_vectors))]
+#[used]
 pub static TABLE: Table75 = include!(env!("RB_MODAL75_TABLE"));
 
 /// Live words read before the action. `transition` is the entry the positive
@@ -127,7 +130,7 @@ pub enum Plan {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum OwnedAction {
     Retained,
-    Generic(GenericAction),
+    Generic(&'static GenericAction),
 }
 
 pub fn plan(table: &Table75, event: u16, state: u16, live: LiveCell) -> Plan {
@@ -143,10 +146,11 @@ pub fn plan(table: &Table75, event: u16, state: u16, live: LiveCell) -> Plan {
     if cell.after == AfterAction::KeepActionState && live.transition != Some(0) {
         return Plan::Stock;
     }
+    let actions: &'static [GenericAction] = table.actions;
     let action = match cell.action {
         CellAction::Retained => OwnedAction::Retained,
-        CellAction::Generic(index) => match table.actions.get(usize::from(index)) {
-            Some(action) => OwnedAction::Generic(*action),
+        CellAction::Generic(index) => match actions.get(usize::from(index)) {
+            Some(action) => OwnedAction::Generic(action),
             None => return Plan::Stock,
         },
     };
@@ -158,7 +162,7 @@ pub trait GenericServices {
     fn write_state(&mut self, state: State75);
 }
 
-pub fn run_generic(action: GenericAction, services: &mut impl GenericServices) -> ActionResult {
+pub fn run_generic(action: &GenericAction, services: &mut impl GenericServices) -> ActionResult {
     match action {
         GenericAction::RouteToTransition(route) => {
             let result = services.transition();
@@ -167,7 +171,7 @@ pub fn run_generic(action: GenericAction, services: &mut impl GenericServices) -
             }
             ActionResult(result)
         }
-        GenericAction::ConstantResult(result) => result,
+        GenericAction::ConstantResult(result) => *result,
     }
 }
 
@@ -278,7 +282,7 @@ mod tests {
         OwnedCell { event: Event75(4), state: State75(13), cell_word: 0x0000_0030, stock_target: 0x00c6_f994, action: CellAction::Retained, after: AfterAction::SetState(State75(0)) },
     ];
 
-    static TABLE: Table75 = Table75 { actions: &ACTIONS, cells: &CELLS };
+    static TABLE: Table75 = Table75 { actions: &ACTIONS, cells: &CELLS, identity: [0; 32] };
 
     const ROUTED: LiveCell = LiveCell { word: 0x0001_0110, target: 0x00c7_a978, transition: Some(0) };
     const CONSTANT: LiveCell = LiveCell { word: 0xffe3_00f7, target: 0x00c7_9a40, transition: None };
@@ -333,7 +337,7 @@ mod tests {
     fn control_wrong_next_state_refuses() {
         let mut actions = ACTIONS.to_vec();
         actions[0] = GenericAction::RouteToTransition(Route::new([(64, state(0)), (49, state(23)), (0, state(0)), (0, state(0))], 2));
-        let wrong = Table75 { actions: leak(actions), cells: &CELLS };
+        let wrong = Table75 { actions: leak(actions), cells: &CELLS, identity: [0; 32] };
         assert_eq!(check_vectors(&wrong, &VECTORS), Err(VectorMismatch::States { event: 50, state: 5, router: 49 }));
     }
 
@@ -341,7 +345,7 @@ mod tests {
     fn control_wrong_direct_state_refuses() {
         let mut cells = CELLS.to_vec();
         cells[2].after = AfterAction::SetState(state(1));
-        let wrong = Table75 { actions: &ACTIONS, cells: leak(cells) };
+        let wrong = Table75 { actions: &ACTIONS, cells: leak(cells), identity: [0; 32] };
         assert_eq!(check_vectors(&wrong, &VECTORS), Err(VectorMismatch::States { event: 4, state: 13, router: 0 }));
     }
 
@@ -349,7 +353,7 @@ mod tests {
     fn control_wrong_action_result_refuses() {
         let mut actions = ACTIONS.to_vec();
         actions[1] = GenericAction::ConstantResult(ActionResult(0));
-        let wrong = Table75 { actions: leak(actions), cells: &CELLS };
+        let wrong = Table75 { actions: leak(actions), cells: &CELLS, identity: [0; 32] };
         assert_eq!(check_vectors(&wrong, &VECTORS), Err(VectorMismatch::Result { event: 41, state: 0, router: 0 }));
     }
 
@@ -357,7 +361,7 @@ mod tests {
     fn control_wrong_route_event_refuses() {
         let mut cells = CELLS.to_vec();
         cells[0].event = Event75(49);
-        let wrong = Table75 { actions: &ACTIONS, cells: leak(cells) };
+        let wrong = Table75 { actions: &ACTIONS, cells: leak(cells), identity: [0; 32] };
         assert_eq!(check_vectors(&wrong, &VECTORS), Err(VectorMismatch::StockBodyFetch { event: 50, state: 5 }));
     }
 
@@ -365,7 +369,7 @@ mod tests {
     fn control_retained_body_fetch_guard_refuses_stale_table() {
         let mut cells = CELLS.to_vec();
         cells[1].cell_word ^= 1;
-        let wrong = Table75 { actions: &ACTIONS, cells: leak(cells) };
+        let wrong = Table75 { actions: &ACTIONS, cells: leak(cells), identity: [0; 32] };
         assert_eq!(check_vectors(&wrong, &VECTORS), Err(VectorMismatch::StockBodyFetch { event: 41, state: 0 }));
     }
 
@@ -395,7 +399,7 @@ mod tests {
                 route.pairs[0].1 = State75((route.pairs[0].1 .0 + 1) % 46);
                 actions[index] = GenericAction::RouteToTransition(route);
             }
-            let wrong_state = Table75 { actions: leak(actions), cells: TABLE.cells };
+            let wrong_state = Table75 { actions: leak(actions), cells: TABLE.cells, identity: TABLE.identity };
             assert!(matches!(check_vectors(&wrong_state, OWNER_VECTORS), Err(VectorMismatch::States { .. })));
 
             let mut actions = TABLE.actions.to_vec();
@@ -403,13 +407,13 @@ mod tests {
             if let GenericAction::ConstantResult(ActionResult(value)) = actions[index] {
                 actions[index] = GenericAction::ConstantResult(ActionResult(value.wrapping_add(1)));
             }
-            let wrong_result = Table75 { actions: leak(actions), cells: TABLE.cells };
+            let wrong_result = Table75 { actions: leak(actions), cells: TABLE.cells, identity: TABLE.identity };
             assert!(matches!(check_vectors(&wrong_result, OWNER_VECTORS), Err(VectorMismatch::Result { .. })));
 
             let mut cells = TABLE.cells.to_vec();
             let index = cells.iter().position(|c| matches!(c.action, CellAction::Generic(_)) && c.event.raw() + 1 < EVENTS).expect("generic cell");
             cells[index].event = Event75(cells[index].event.0 + 1);
-            let wrong_event = Table75 { actions: TABLE.actions, cells: leak(cells) };
+            let wrong_event = Table75 { actions: TABLE.actions, cells: leak(cells), identity: TABLE.identity };
             assert!(check_vectors(&wrong_event, OWNER_VECTORS).is_err());
 
             let mut cells = TABLE.cells.to_vec();
@@ -417,13 +421,13 @@ mod tests {
             if let AfterAction::SetState(next) = cells[index].after {
                 cells[index].after = AfterAction::SetState(State75((next.0 + 1) % 46));
             }
-            let wrong_after = Table75 { actions: TABLE.actions, cells: leak(cells) };
+            let wrong_after = Table75 { actions: TABLE.actions, cells: leak(cells), identity: TABLE.identity };
             assert!(matches!(check_vectors(&wrong_after, OWNER_VECTORS), Err(VectorMismatch::States { .. })));
 
             let mut cells = TABLE.cells.to_vec();
             let index = cells.iter().position(|c| matches!(c.action, CellAction::Generic(_))).expect("generic cell");
             cells[index].cell_word ^= 1;
-            let stale = Table75 { actions: TABLE.actions, cells: leak(cells) };
+            let stale = Table75 { actions: TABLE.actions, cells: leak(cells), identity: TABLE.identity };
             assert!(matches!(check_vectors(&stale, OWNER_VECTORS), Err(VectorMismatch::StockBodyFetch { .. })));
         }
     }

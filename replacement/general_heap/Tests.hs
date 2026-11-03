@@ -9,6 +9,7 @@ import qualified FujiAF.UpdateContainer as U
 import Numeric (showHex)
 import Replacement.GeneralHeap.Admission
 import Replacement.GeneralHeap.Artifact
+import Replacement.Record5Staging (Record5Refusal (..), Record5Window (..), validateRecord5Confinement)
 
 check :: String -> Bool -> IO ()
 check label condition = unless condition (fail label)
@@ -87,9 +88,9 @@ main = do
       record5 = Record5Window 0x400 0x500
   check "record5-window changes admitted" (validateRecord5Confinement record5 originalDat (changeFile 0x410) == Right ())
   check "main checksum change confined" (validateRecord5Confinement record5 originalDat (changeFile U.mainChecksumOffset) == Right ())
-  check "retained plain suffix mutation rejected" (validateRecord5Confinement record5 originalDat (changeFile 0x510) == Left ExtentRejected)
-  check "preceding retained bytes mutation rejected" (validateRecord5Confinement record5 originalDat (changeFile 0x3f0) == Left ExtentRejected)
-  check "candidate length change rejected" (validateRecord5Confinement record5 originalDat (originalDat <> B.singleton 0) == Left ExtentRejected)
+  check "retained plain suffix mutation rejected" (validateRecord5Confinement record5 originalDat (changeFile 0x510) == Left Record5OutsideWindow)
+  check "preceding retained bytes mutation rejected" (validateRecord5Confinement record5 originalDat (changeFile 0x3f0) == Left Record5OutsideWindow)
+  check "candidate length change rejected" (validateRecord5Confinement record5 originalDat (originalDat <> B.singleton 0) == Left Record5OutsideWindow)
   let (linked,symbols) = fixture
   check "complete synthetic production artifact admitted" (accepted (deriveArtifact linked symbols))
   check "wrong emitted size class rejected" (case deriveArtifact (replace (0x89d500+7*4) (U.putWord32 18) linked) symbols of Left (MetadataRejected GeometryRejected) -> True; _ -> False)

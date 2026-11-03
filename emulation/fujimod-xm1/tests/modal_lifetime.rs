@@ -132,6 +132,46 @@ fn transient_resource_change_cannot_be_repaired_by_a_later_store() {
     }
 }
 
+const SETTER: u32 = 0x0062_ff54;
+
+fn settings_fixture() -> LifetimeMonitor {
+    let mut value = request();
+    value["settings_writers"] = json!([[0x0062_4694, 0x0063_09c4]]);
+    let config = config(value).unwrap();
+    let mut memory = Memory::default();
+    for (extent, bytes) in config.readonly_images() { memory.store(extent.start().0, bytes); }
+    memory.store(SETTINGS, &[0x5a; 450]);
+    LifetimeMonitor::new(config, &memory).unwrap()
+}
+fn write_from(monitor: &mut LifetimeMonitor, pc: u32, address: u32, before: &[u8], value: u64) -> Result<(), LifetimeFailure> {
+    monitor.observe_write(WriteAttempt::cpu(CoreId(0), Guest(pc), Guest(address), Guest(address), before, value))
+}
+
+#[test]
+fn settings_writer_changes_are_admitted_counted_and_become_the_expected_bytes() {
+    let mut monitor = settings_fixture();
+    write_from(&mut monitor, SETTER, SETTINGS + 0x66, &[0x5a], 0x5b).unwrap();
+    assert_eq!(monitor.receipt().admitted_settings_writes, 1);
+    write_from(&mut monitor, 0x1000, SETTINGS + 0x66, &[0x5b], 0x5b).unwrap();
+    assert_eq!(monitor.receipt().admitted_settings_writes, 1);
+    assert_eq!(write_from(&mut monitor, 0x1000, SETTINGS + 0x66, &[0x5a], 0x5a), Err(LifetimeFailure::ResourceChanged));
+}
+
+#[test]
+fn settings_changes_outside_a_settings_writer_or_the_block_refuse() {
+    for (pc, address, before, value) in [
+        (0x0062_4690, SETTINGS + 0x66, vec![0x5a], 0x5b),
+        (0x0063_09c4, SETTINGS + 0x66, vec![0x5a], 0x5b),
+        (SETTER, RESIDENT, vec![0], 1),
+    ] {
+        let mut monitor = settings_fixture();
+        assert_eq!(write_from(&mut monitor, pc, address, &before, value), Err(LifetimeFailure::ResourceChanged), "{pc:#x} {address:#x}");
+        assert_eq!(monitor.receipt().admitted_settings_writes, 0);
+    }
+    let (mut monitor, _) = fixture();
+    assert_eq!(write_from(&mut monitor, SETTER, SETTINGS + 0x66, &[0x5a], 0x5b), Err(LifetimeFailure::ResourceChanged));
+}
+
 #[test]
 fn immutable_roots_width_tables_and_code_refuse_even_identity_stores() {
     for address in [0x00cf_e3d4, 0x00d0_0268, 0x00cd_5f0e, 0x00cd_1ae4,
@@ -327,6 +367,67 @@ fn request_validation_refuses_aliases_duplicate_addresses_identity_publications_
     let mut value = request();
     value["qualification"] = json!(true);
     assert!(serde_json::from_value::<LifetimeRequest>(value).is_err());
+}
+
+#[test]
+fn retired_extents_are_aligned_disjoint_bounded_and_outside_every_watched_source() {
+    let mut accepted = request();
+    accepted["retired"] = json!([[0x00c7_a6ac, 0x00c7_a6ec], [0x00c7_985c, 0x00c7_986c]]);
+    let accepted = config(accepted).unwrap();
+    let starts: Vec<_> = accepted.retired_extents().iter().map(|extent| extent.start().0).collect();
+    assert_eq!(starts, vec![0x00c7_985c, 0x00c7_a6ac]);
+    for retired in [
+        json!([[0x00c7_a6ae, 0x00c7_a6ec]]),
+        json!([[0x00c7_a6ac, 0x00c7_a6ac]]),
+        json!([[0x00c7_a6ac, 0x00c7_a6ec], [0x00c7_a6e8, 0x00c7_a700]]),
+        json!([[INSTALL, INSTALL + 8]]),
+        json!([[SETTINGS & !3, (SETTINGS & !3) + 8]]),
+        json!([[0x0004_0000, 0x0004_0010]]),
+        json!((0..65u32).map(|index| [0x00c0_0000 + index * 8, 0x00c0_0004 + index * 8]).collect::<Vec<_>>()),
+    ] {
+        let mut value = request();
+        value["retired"] = retired;
+        assert!(config(value).is_err());
+    }
+    assert!(config(request()).unwrap().retired_extents().is_empty());
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Stage { Prepared, Publishing, Installed, RollingBack, RollbackStored }
+
+fn retired_at(stage: Stage) -> LifetimeMonitor {
+    let mut value = request();
+    value["retired"] = json!([[0x00c7_aef4, 0x00c7_af6c], [0x00c7_af6c, 0x00c7_afc8]]);
+    let config = config(value).unwrap();
+    let mut memory = Memory::default();
+    for (extent, bytes) in config.readonly_images() { memory.store(extent.start().0, bytes); }
+    memory.store(SETTINGS, &[0x5a; 450]);
+    let mut monitor = LifetimeMonitor::new(config, &memory).unwrap();
+    if stage == Stage::Prepared { return monitor; }
+    entry(&mut monitor, 0, false).unwrap();
+    if stage == Stage::Publishing { return monitor; }
+    publish(&mut monitor, &mut memory, 0, false);
+    if stage == Stage::Installed { return monitor; }
+    entry(&mut monitor, 0, true).unwrap();
+    if stage == Stage::RollingBack { return monitor; }
+    publish(&mut monitor, &mut memory, 0, true);
+    monitor
+}
+
+#[test]
+fn retired_fetches_refuse_from_install_entry_through_the_last_reverse_write() {
+    for physical in [0x00c7_aef4u32, 0x00c7_af68, 0x00c7_af6c, 0x00c7_afc4] {
+        let row = json!({"source": "cpu-fetch", "address": physical, "physical": physical, "size": 4, "core": 1, "pc": physical, "instructions": 1});
+        for (stage, refused) in [(Stage::Prepared, false), (Stage::Publishing, true), (Stage::Installed, true), (Stage::RollingBack, true), (Stage::RollbackStored, false)] {
+            let mut monitor = retired_at(stage);
+            let result = monitor.observe_row(&row);
+            assert_eq!(result, if refused { Err(LifetimeFailure::RetiredFetch) } else { Ok(()) }, "{stage:?} {physical:#x}");
+            assert_eq!(monitor.receipt().failure, result.err());
+        }
+    }
+    let mut monitor = retired_at(Stage::Prepared);
+    let outside = json!({"source": "cpu-fetch", "address": 0x00c7_afc8, "physical": 0x00c7_afc8, "size": 4, "core": 0, "pc": 0x00c7_afc8, "instructions": 1});
+    assert_eq!(monitor.observe_row(&outside), Err(LifetimeFailure::MalformedRow));
 }
 
 #[test]

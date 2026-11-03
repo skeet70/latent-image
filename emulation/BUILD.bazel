@@ -16,6 +16,11 @@ exports_files(
     visibility = ["//replacement/general_heap:__pkg__"],
 )
 
+exports_files(
+    ["fujimod-xm1/tests/data/composed-contract-v1.json"],
+    visibility = ["//replacement/startup_artifact:__pkg__"],
+)
+
 # Copies a card image to a new path and writes named files into its FAT
 # partition with mtools, for --sd-card-image inputs.
 haskell_binary(
@@ -455,7 +460,10 @@ haskell_library(
     name = "loader-prefix-witness-lib",
     srcs = ["Emulation/LoaderPrefixWitness.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    visibility = ["//replacement/startup_consumers:__pkg__"],
+    visibility = [
+        "//replacement/startup_artifact:__pkg__",
+        "//replacement/startup_consumers:__pkg__",
+    ],
     deps = [
         ":first-stage-witness-lib",
         ":peer-stage-witness-lib",
@@ -482,7 +490,10 @@ haskell_library(
         "Emulation/InterfaceInitializerConsumer.hs",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    visibility = ["//replacement/startup_consumers:__pkg__"],
+    visibility = [
+        "//replacement/startup_artifact:__pkg__",
+        "//replacement/startup_consumers:__pkg__",
+    ],
     deps = [
         ":first-stage-witness-lib",
         ":loader-prefix-witness-lib",
@@ -871,7 +882,7 @@ haskell_test(
 
 haskell_test(
     name = "fujimod-xm1-tests",
-    size = "small",
+    size = "medium",
     srcs = ["FujimodXm1Tests.hs"],
     args = ["$(rootpath @lab_fujimod_xm1//:test-manifest)"],
     data = [
@@ -958,7 +969,7 @@ haskell_test(
 
 haskell_library(
     name = "menu-crawl-lib",
-    srcs = ["Emulation/MenuCrawl.hs"],
+    srcs = ["Emulation/MenuCrawl.hs", "Emulation/MenuObserve.hs", "Emulation/RamDiff.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     src_strip_prefix = ".",
     deps = [
@@ -1057,6 +1068,24 @@ haskell_binary(
         ":render-comparison-lib",
         "//host:base",
         "//host:filepath",
+    ],
+)
+
+haskell_binary(
+    name = "modal-settings-compare",
+    srcs = ["ModalSettingsCompare.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        ":modal-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
     ],
 )
 
@@ -1466,6 +1495,12 @@ sh_binary(
 )
 
 sh_binary(
+    name = "root-compact",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-root-compact"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
     name = "task-storage",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-task-storage"],
     visibility = ["//visibility:public"],
@@ -1504,6 +1539,12 @@ sh_binary(
 sh_binary(
     name = "startup-consumers",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-startup-consumers"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
+    name = "composed-startup",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-composed-startup"],
     visibility = ["//visibility:public"],
 )
 
@@ -3043,6 +3084,12 @@ sh_binary(
 )
 
 sh_binary(
+    name = "loader-startup-capture",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-loader-continuations"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
     name = "idle-tasks",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-idle-tasks"],
     visibility = ["//visibility:public"],
@@ -3160,6 +3207,7 @@ haskell_library(
         "//host:bytestring",
         "//host:containers",
         "//host:json",
+        "//host:text",
         "//host:update-container",
         "//host/firmware:bank-allowlist",
         "//replacement/kernel_install:kernel-install-artifact",
@@ -3180,6 +3228,26 @@ haskell_binary(
         ":task-memory-witness-lib",
         ":task-witness-cli-lib",
         "//host:base",
+    ],
+)
+
+haskell_binary(
+    name = "root-compact-equivalence",
+    srcs = ["RootCompactEquivalenceMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:json",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
     ],
 )
 

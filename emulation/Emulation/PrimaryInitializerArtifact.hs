@@ -15,7 +15,7 @@ module Emulation.PrimaryInitializerArtifact
   , artifactImage, artifactSymbols, artifactPublications, artifactAccesses
   , artifactMetadata
   , deriveArtifact
-  , stageArtifact
+  , stageArtifact, obligationName
   , artifactValue
   ) where
 
@@ -595,11 +595,13 @@ artifactValue (Artifact metadata _ _ _) = object
       ScratchWrite -> "scratch-write"
       ImageRead -> "image-read"
       PublicationWrite -> "publication-write"
-    obligationName obligation = case obligation of
-      NaturalCallerContext -> "natural-caller-context" :: String
-      BothCoreLowHighRamAliases -> "both-core-low-high-ram-aliases"
-      CurrentRamDecoder -> "current-ram-decoder"
-      BothCoreItcmExclusion -> "both-core-itcm-exclusion"
-      BothCoreDtcmExclusion -> "both-core-dtcm-exclusion"
-      EarlyCarrierLifetime -> "early-carrier-lifetime"
-      ScratchLifetime -> "scratch-lifetime"
+
+obligationName :: Obligation -> String
+obligationName obligation = case obligation of
+  NaturalCallerContext -> "natural-caller-context"
+  BothCoreLowHighRamAliases -> "both-core-low-high-ram-aliases"
+  CurrentRamDecoder -> "current-ram-decoder"
+  BothCoreItcmExclusion -> "both-core-itcm-exclusion"
+  BothCoreDtcmExclusion -> "both-core-dtcm-exclusion"
+  EarlyCarrierLifetime -> "early-carrier-lifetime"
+  ScratchLifetime -> "scratch-lifetime"
