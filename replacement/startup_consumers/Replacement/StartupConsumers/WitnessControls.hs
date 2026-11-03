@@ -1,11 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.StartupConsumers.WitnessControls (checkRefusals,checkLoaderPairRefusals) where
 
-import Control.Monad (foldM, forM, forM_)
+import Control.Monad (foldM, forM, forM_, unless)
+import Data.Either (lefts, rights)
 import qualified Data.Aeson as J
 import Data.Bits (shiftL, xor)
 import qualified Data.ByteString as B
-import Data.List (sort)
+import Data.List (intercalate, sort)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
 import Data.Word (Word8, Word32)
@@ -35,7 +36,7 @@ checkRefusals inputs retained installer joined = do
     ,expectComparison (ControlName "missing joined role") (compareReceipts qualifiedRetained qualifiedInstaller qualifiedInstaller)]
   receipts <- mapM (either (const (Left "control receipt decode failed")) Right . J.eitherDecodeStrict' . observedReceipt) [retained,installer,joined]
   rows <- forM (zip receipts [qualifiedRetained,qualifiedInstaller,qualifiedJoined]) $ \(receipt,qualified) ->
-    checkReceiptControls compareSemanticProjections (validateReceipt inputs) [] receipt (qualifiedProjection qualified)
+    checkReceiptControls compareSemanticProjections (validateReceipt inputs) mutations receipt (qualifiedProjection qualified)
   forM_ [retained,installer,joined] $ \files ->
     case admitReceipt inputs (files {observedCheckpoint = observedCheckpoint files <> B.singleton 0}) of
       Left CheckpointRejected -> Right ()
@@ -55,17 +56,26 @@ checkLoaderPairRefusals retainedPolicy joinedPolicy inputs retained joined = do
   either (Left . show) Right (compareLoaderSemanticProjections before after)
   retainedExtra <- policyControls retainedPolicy retained
   joinedExtra <- policyControls joinedPolicy joined
-  rows <- sequence [checkReceiptControls compareLoaderSemanticProjections (validateReceiptWithPolicy retainedPolicy inputs) retainedExtra retained before
-    ,checkReceiptControls compareLoaderSemanticProjections (validateReceiptWithPolicy joinedPolicy inputs) joinedExtra joined after]
-  pure (J.object ["schema" J..= (1::Int),"qualification" J..= ("exact-loader-joined-consumer-refusals"::String),"roles" J..= rows])
+  let outcomes = [checkReceiptControls compareLoaderSemanticProjections (validateReceiptWithPolicy retainedPolicy inputs) (map sharedExpectation mutations ++ retainedExtra) retained before
+        ,checkReceiptControls compareLoaderSemanticProjections (validateReceiptWithPolicy joinedPolicy inputs) (map sharedExpectation mutations ++ joinedExtra) joined after]
+  unless (null (lefts outcomes)) (Left (intercalate " | " (lefts outcomes)))
+  pure (J.object ["schema" J..= (1::Int),"qualification" J..= ("exact-loader-joined-consumer-refusals"::String),"roles" J..= rights outcomes])
 
+-- Shared captures commit the mode cell as a header resource, so a changed mode read first contradicts that committed preimage.
+sharedExpectation :: Control -> Control
+sharedExpectation (Control (ControlName "consumed startup mode differs") _ mutate) = Control (ControlName "consumed startup mode differs") PreimageRejected mutate
+sharedExpectation control = control
+
+-- Every control runs; all mismatches are reported together.
 checkReceiptControls :: (Projection -> Projection -> Either WitnessError ()) -> (Receipt -> Either WitnessError Projection) -> [Control] -> Receipt -> Projection -> Either String J.Value
-checkReceiptControls compareProjection validate extra receipt baseline = do
-  controls <- forM (mutations ++ extra) $ \(Control (ControlName name) expected mutate) ->
-    case validate (mutate receipt) of
-      Left actual | actual == expected -> Right (J.object ["control" J..= name,"rejection" J..= show expected])
-      Left actual -> Left (name ++ ": expected " ++ show expected ++ ", got " ++ show actual)
-      Right _ -> Left (name ++ ": mutation was accepted")
+checkReceiptControls compareProjection validate selected receipt baseline = do
+  let outcomes = [case validate (mutate receipt) of
+        Left actual | actual == expected -> Right (J.object ["control" J..= name,"rejection" J..= show expected])
+        Left actual -> Left (name ++ ": expected " ++ show expected ++ ", got " ++ show actual)
+        Right _ -> Left (name ++ ": mutation was accepted")
+        | Control (ControlName name) expected mutate <- selected]
+  unless (null (lefts outcomes)) (Left (intercalate "; " (lefts outcomes)))
+  let controls = rights outcomes
   coherent <- forM [DescriptorTailCase,PayloadByteCase,CallerByteCase] $ \which -> do
     changed <- prepareCoherent which receipt
     case changed of
