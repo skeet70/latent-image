@@ -200,7 +200,7 @@ fn consume(inputs: &Inputs, directory: &Path, role: Role, fault: Option<Fault>) 
         Some(Fault::WrongSizeClass) => {
             if let Some(raw) = boundaries.iter_mut().find(|raw| raw.header.is_some() && heap_state::entry(Address(raw.boundary.snapshot.pc.0 & !0x40000000)).is_none()) {
                 raw.header = raw.header.map(|header| header + 8);
-                raw.boundary.snapshot.chunk += 8;
+                raw.boundary.snapshot.chunk = raw.boundary.snapshot.chunk.map(|chunk| chunk + 8);
                 targeted = true;
             }
         }
