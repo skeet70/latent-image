@@ -2,7 +2,7 @@
 module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runRamPushE2E, warmAttachCheckpoint) where
 
 import Control.Applicative ((<|>))
-import Control.Exception (IOException, SomeException, bracket, catch, displayException, finally, throwIO, try)
+import Control.Exception (IOException, SomeException, bracket, catch, displayException, evaluate, finally, throwIO, try)
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', encode, object, toJSON, withObject, (.:), (.=))
 import Data.Aeson.Types (parseEither)
@@ -1645,7 +1645,7 @@ armModalLifetime emulator receipt session = do
           , "watch_error" .= either Just (const Nothing) armed, "boundary" .= boundaryText UploadSynchronized ])) <> "\n")
       either (ioError . userError) (const (pure ())) $ do
         _ <- begun >>= modalParsedResponse
-        _ <- checkLifetimeArrayAudit request armed armed
+        _ <- checkLifetimeArrayAudit request armed (armed >>= parseFinalModalWatch)
         pure ()
     _ -> ioError (userError "modal lifetime publication callback is not prepared or was invoked twice")
 
@@ -1678,14 +1678,17 @@ finishModalLifetime emulator receipt session = do
       then (Right <$> emulatorWatchStateLine emulator) `catch` \(failure :: SomeException) -> pure (Left (displayException failure))
       else pure (Left "modal observation was not armed")
     forM_ finalLine (writePrivateBytes finalPath)
-    let finalWatch = decodeBridgeWatchLine <$> finalLine
-        final = finalWatch >>= parseFinalModalWatch
+    finalFile <- traverse (\line -> do
+      let !bytes = B.length line
+          !digest = sha256Hex (sha256 line)
+      pure (bytes, digest)) finalLine
+    final <- either Left id <$> traverse (evaluate . parseFinalModalWatch . decodeBridgeWatchLine) finalLine
     beforeEnd <- captureModalResponse (emulatorModalObservationReport emulator limit)
     ended <- if lifetimeAttemptOwnsObserver attempt
       then captureModalResponse (emulatorModalObservationEnd emulator limit)
       else pure (Left "modal observation was not armed by this route")
     afterEnd <- captureModalResponse (emulatorModalObservationReport emulator limit)
-    let audit = checkLifetimeArrayAudit request (lifetimeAttemptArmed attempt) finalWatch
+    let audit = checkLifetimeArrayAudit request (lifetimeAttemptArmed attempt) final
         checked = do
           _ <- lifetimeAttemptBegin attempt >>= modalParsedResponse
           writes <- audit
@@ -1721,8 +1724,8 @@ finishModalLifetime emulator receipt session = do
           , "watch_acknowledgement_error" .= either Just (const Nothing) (lifetimeAttemptArmed attempt >>= lifetimeWatchAcknowledgement)
           , "watch_armed" .= either (const Null) id (lifetimeAttemptArmed attempt)
           , "watch_armed_error" .= either Just (const Nothing) (lifetimeAttemptArmed attempt)
-          , "watch_final_file" .= either (const Null) (\line -> object
-              [ "path" .= takeFileName finalPath, "bytes" .= B.length line, "sha256" .= sha256Hex (sha256 line) ]) finalLine
+          , "watch_final_file" .= either (const Null) (\(bytes, digest) -> object
+              [ "path" .= takeFileName finalPath, "bytes" .= bytes, "sha256" .= digest ]) finalFile
           , "watch_final_summary" .= either (const Null) finalModalWatchSummary final
           , "watch_final_error" .= either Just (const Nothing) (final >> Right ())
           , "array_write_audit" .= either (const Null) arrayWriteReportJson audit

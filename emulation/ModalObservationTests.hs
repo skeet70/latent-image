@@ -760,7 +760,7 @@ runtimeBindingTests = do
     isLeft (checkExecutionWritesWithRangeLimit shortRangeBound ForbidProtectedWrites modalLifetimeWriterLimit expectedWrites [] fullAcknowledgement fullObservation)
   check "source-bound checker accepts its complete finite range bound" $
     not (isLeft (checkExecutionWritesWithRangeLimit rangeBound ForbidProtectedWrites modalLifetimeWriterLimit expectedWrites [] fullAcknowledgement fullObservation))
-  audit <- either error pure (checkLifetimeArrayAudit request (Right fullWatch) (Right fullWatch))
+  audit <- either error pure (checkLifetimeArrayAudit request (Right fullWatch) (parseFinalModalWatch fullWatch))
   report <- either error pure (parseModalReport permitLimit clean)
   finalFull <- either error pure (parseFinalModalWatch fullWatch)
   check "stock223 full lifetime binds to its request and every raw write" (checkCompletedModalLifetime request audit finalFull report == Right ())
@@ -802,7 +802,7 @@ runtimeBindingTests = do
       completedScoped = set "policy" (String "scoped-owned75") (set "counts" scopedCounts
         (set "captured_domains" (array [set "controller" (Number 75) domain])
         (set "task_entries" (array [installedTask]) (set "watch" scopedSummary (set "lifetime" scopedReceipt (completedEnvelope 224))))))
-  scopedAudit <- either error pure (checkLifetimeArrayAudit scopedRequest (Right scopedWatch) (Right scopedWatch))
+  scopedAudit <- either error pure (checkLifetimeArrayAudit scopedRequest (Right scopedWatch) (parseFinalModalWatch scopedWatch))
   installedReport <- either error pure (parseModalReport permitLimit completedScoped)
   finalScoped <- either error pure (parseFinalModalWatch scopedWatch)
   check "owned fetch binds the installed branch publication" (checkCompletedModalLifetime scopedRequest scopedAudit finalScoped installedReport == Right ())
@@ -812,7 +812,7 @@ runtimeBindingTests = do
   let withoutSettings = filter (\span_ -> let (low,high) = watchRangeBounds span_ in not (low <= 0x96cc64 && 0x96ce26 <= high)) expectedWrites
       incompleteWatch = watch withoutSettings writes
   check "array audit requires settings and all other expected write classes" $
-    isLeft (checkLifetimeArrayAudit request (Right incompleteWatch) (Right incompleteWatch))
+    isLeft (checkLifetimeArrayAudit request (Right incompleteWatch) (parseFinalModalWatch incompleteWatch))
   wrongCount <- either error pure (parseModalReport permitLimit (set "lifetime" (set "publication_count" (Number 224) exactReceipt) clean))
   check "completed receipt count must match source vector" (isLeft (checkCompletedModalLifetime request audit finalFull wrongCount))
   let shortWatch = watch expectedWrites (drop 1 writes)
@@ -827,7 +827,7 @@ runtimeBindingTests = do
   let vfpOwnerRow = set "pc" (Number 0x42440) (set "value" (Number 7) (set "before" (array (replicate 4 (Number 0xff)))
         (cpu 0 0x4dad4 0x4dad4 4 500)))
       vfpWatch = watch expectedWrites (writes ++ [vfpOwnerRow])
-  vfpAudit <- either error pure (checkLifetimeArrayAudit request (Right vfpWatch) (Right vfpWatch))
+  vfpAudit <- either error pure (checkLifetimeArrayAudit request (Right vfpWatch) (parseFinalModalWatch vfpWatch))
   finalVfp <- either error pure (parseFinalModalWatch vfpWatch)
   vfpCounted <- either error pure (parseModalReport permitLimit (set "watch" (withoutRecords vfpWatch)
     (set "lifetime" (set "checked_vfp_owner_writes" (Number 1) exactReceipt) clean)))

@@ -857,19 +857,19 @@ parseModalWatchSummary raw = do
   pure (ModalWatchSummary digest raw)
 
 -- | The final watch-state's rows, and its remaining fields for comparison with report summaries.
-data FinalModalWatch = FinalModalWatch FixedWatchObservation Value
+data FinalModalWatch = FinalModalWatch FixedWatchObservation !Value
 
 parseFinalModalWatch :: Value -> Either String FinalModalWatch
 parseFinalModalWatch value = do
   observation <- parseModalLifetimeWatch modalLifetimeWriterLimit value
   case value of
-    Object fields -> Right (FinalModalWatch observation (Object (KM.delete "records" fields)))
+    Object fields -> let !summary = KM.delete "records" fields in Right (FinalModalWatch observation (Object summary))
     _ -> Left "modal lifetime watch is not an object"
 
 finalModalWatchSummary :: FinalModalWatch -> Value
 finalModalWatchSummary (FinalModalWatch _ summary) = summary
 
--- | Equal row counts and digests identify the same append-only rows.
+-- | Compares every field but the rows, including the SDK row count and digest.
 summaryDescribes :: FinalModalWatch -> ModalWatchSummary -> Bool
 summaryDescribes (FinalModalWatch _ final) (ModalWatchSummary _ summary) = final == summary
 
@@ -1258,20 +1258,17 @@ lifetimeWatchAcknowledgement state = do
       pure (Object (KM.insert "armed" enabled (foldr KM.delete fields ["enabled", "records", "violation"])))
     _ -> Left "modal lifetime watch is not an object"
 
-checkLifetimeArrayAudit :: ModalRequest -> Either String Value -> Either String Value -> Either String ArrayWriteReport
+checkLifetimeArrayAudit :: ModalRequest -> Either String Value -> Either String FinalModalWatch -> Either String ArrayWriteReport
 checkLifetimeArrayAudit request armed final = do
   expected <- modalLifetimeWatchRanges request
   armedValue <- armed
-  finalValue <- final
+  FinalModalWatch observation finalSummary <- final
   checkModalLifetimeWatchSources request armedValue
-  checkModalLifetimeWatchSources request finalValue
-  acknowledgement <- armed >>= lifetimeWatchAcknowledgement >>= parseModalLifetimeWatchAck
-  observation <- final >>= parseModalLifetimeWatch bound
+  checkModalLifetimeWatchSources request finalSummary
+  acknowledgement <- lifetimeWatchAcknowledgement armedValue >>= parseModalLifetimeWatchAck
   rangeLimit <- watchRangeLimit (length expected)
-  gate <- checkExecutionWritesWithRangeLimit rangeLimit ForbidProtectedWrites bound expected [] acknowledgement observation
+  gate <- checkExecutionWritesWithRangeLimit rangeLimit ForbidProtectedWrites modalLifetimeWriterLimit expected [] acknowledgement observation
   pure (ArrayWriteReport (writesInArrays observation) gate)
- where
-  bound = modalLifetimeWriterLimit
 
 modalLifetimeWriterLimit :: WatchLimit
 modalLifetimeWriterLimit = either error id (watchLimit 1048576)
