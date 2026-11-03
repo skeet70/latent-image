@@ -6,7 +6,7 @@
     .global xm1_first_stage_entry
     .type xm1_first_stage_entry, %function
 xm1_first_stage_entry:
-    @ Current flags and IF, System on return, for every exception mode.
+    @ Current flags and IF, A clear, System on return, for every exception mode (stock 0x1854-0x18b0).
     mrs r0, cpsr
     orr r0, r0, #0xc0
     bic r0, r0, #0x1f
@@ -16,19 +16,19 @@ xm1_first_stage_entry:
     mov r4, r1
 
     orr r2, r4, #0x1b
-    msr cpsr_c, r2
+    msr cpsr_fsxc, r2
     msr spsr_fsxc, r0
     orr r2, r4, #0x17
-    msr cpsr_c, r2
+    msr cpsr_fsxc, r2
     msr spsr_fsxc, r0
     orr r2, r4, #0x11
-    msr cpsr_c, r2
+    msr cpsr_fsxc, r2
     msr spsr_fsxc, r0
     orr r2, r4, #0x12
-    msr cpsr_c, r2
+    msr cpsr_fsxc, r2
     msr spsr_fsxc, r0
     orr r2, r4, #0x13
-    msr cpsr_c, r2
+    msr cpsr_fsxc, r2
     msr spsr_fsxc, r0
 
     @ ATCM 0x70000000, 8 KiB, CP15 c9,c1,1.
