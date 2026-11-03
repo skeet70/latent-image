@@ -507,6 +507,8 @@ checkActions inputs plan executions irqs pairs = do
         require (coreOf sample == S.PrimaryKernel && register sample 0 == Right 0
           && W.contextSp (stateOf sample) == W.Address 0xa10e00
           && W.contextLr (stateOf sample) == W.Address 0x453f0) EntryRejected
+        -- First-entry trampoline 0x43728 selects A32 SVC.
+        require (word (W.contextCpsr (stateOf sample)) .&. 0x23f == 0x13) ContextRejected
         rootHeader memory True
         case actionEntry tracked of
           Nothing -> pure tracked {actionEntry=Just sample}
