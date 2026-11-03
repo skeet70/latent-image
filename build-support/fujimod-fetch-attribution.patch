@@ -997,10 +997,10 @@ index c919039..2c429d7 100644
      }
 diff --git a/crates/emulator/src/board/observation/fetch_attribution.rs b/crates/emulator/src/board/observation/fetch_attribution.rs
 new file mode 100644
-index 0000000..53bc94e
+index 0000000..f909cfd
 --- /dev/null
 +++ b/crates/emulator/src/board/observation/fetch_attribution.rs
-@@ -0,0 +1,521 @@
+@@ -0,0 +1,523 @@
 +use super::{Board, MemoryContext, MemoryMap, MemoryWatch, Records, Span, State, ViewPolicy, WatchKinds, WatchRange, fetch, scalar, union};
 +use fujimod_emulator_cpu::{Cpu, ExecutionRefusal, Hook, HookRange, InstructionEntry, InstructionEntryId, Register};
 +use serde_json::{Value, json};
@@ -1111,7 +1111,9 @@ index 0000000..53bc94e
 +    pub(super) fn capture(state: &State, cpu: &dyn Cpu, core: CoreIndex, require_entry: bool) -> Result<Self, String> {
 +        let entry = require_entry.then(|| cpu.instruction_entry()).flatten();
 +        if require_entry && entry.is_none() { return Err("Fetch attribution requires an actual instruction-entry context".into()); }
-+        let progress = entry.map(|entry| entry.progress).or_else(|| cpu.instruction_progress());
++        // A stopped entry's clock is the settled count; the entry keeps its own progress for identity.
++        let progress = cpu.instruction_progress();
++        if require_entry && progress.is_none() { return Err("Fetch attribution requires actual CPU instruction progress".into()); }
 +        let pc = match entry { Some(entry) => entry.address, None => scalar(cpu, Register::Pc)? };
 +        Self::coordinates(state, core, pc, progress, entry)
 +    }
