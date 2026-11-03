@@ -1,6 +1,6 @@
 # Judges the embassy phase-1 demonstration and its three controls from their e2e-result.json files:
 #   jq -n -L replacement/embassy_platform --slurpfile demo D --slurpfile no_executors E \
-#     --slurpfile no_pender_kernel P --slurpfile counter_up U --rawfile objects OBJECTS_SHA256 \
+#     --slurpfile no_pender_kernel P --slurpfile counter_down C --rawfile objects OBJECTS_SHA256 \
 #     -f replacement/embassy_platform/check-demo.jq
 # OBJECTS_SHA256 is `sha256sum bazel-bin/replacement/embassy_platform/*.o` taken before the runs.
 # Expected values follow the `entry` of experiments/embassy_phase1/trajectory.json and the record
@@ -49,7 +49,7 @@ def is_variant($name; $object): .relink.source_identity["experiments/" + $name +
   {run: $demo[0], name: "embassy_phase1", object: "embassy-platform-demo.o"},
   {run: $no_executors[0], name: "embassy_phase1_no_executors", object: "embassy-platform-no-executors.o"},
   {run: $no_pender_kernel[0], name: "embassy_phase1_no_pender_kernel", object: "embassy-platform-no-pender-kernel.o"},
-  {run: $counter_up[0], name: "embassy_phase1_counter_up", object: "embassy-platform-counter-up.o"}
+  {run: $counter_down[0], name: "embassy_phase1_counter_down", object: "embassy-platform-counter-down.o"}
 ] as $runs
 | ($demo[0]) as $run
 | ($run | record("handback")) as $d
@@ -74,7 +74,7 @@ def is_variant($name; $object): .relink.source_identity["experiments/" + $name +
       run_clean: ($run | run_clean),
       hosts_started: started_hosts($d),
       no_faults: no_faults($run),
-      direction_down_with_sub_ticks: ([$d.domains[] | .direction_measured == 2 and .ticks_only == 0] | all),
+      direction_up_with_sub_ticks: ([$d.domains[] | .direction_measured == 1 and .ticks_only == 0] | all),
       timers_on_schedule_and_continuing: timers_run($run),
       doorbell_through_kernel: ($d.doorbell_sent >= 1 and $d.domains.B.doorbell_received >= 1
         and $d.domains.B.doorbell_received >= $d.doorbell_sent - 1
@@ -111,21 +111,21 @@ def is_variant($name; $object): .relink.source_identity["experiments/" + $name +
       [$quiet | record("handback"), record("unloaded-shooting")] as $reads
       | ($reads | all(. != null)) and ([$reads[] | .panics == 0] | all)
       and ([$reads[1].domains[] | .sleeps_other == 0 and .early_kernel_wakes == 0 and .clock_regressions == 0] | all)),
-    direction_down_with_sub_ticks: ([$q.domains[] | .direction_measured == 2 and .ticks_only == 0] | all),
+    direction_up_with_sub_ticks: ([$q.domains[] | .direction_measured == 1 and .ticks_only == 0] | all),
     timers_still_run: timers_run($quiet),
     doorbell_not_delivered: ($q.doorbell_sent >= 1 and $q.domains.B.doorbell_received == 0
       and $q.domains.B.pender_unavailable >= $q.doorbell_sent and ($quiet | wake_hits("0x00020077")) == 0)
   }
-| ($counter_up[0]) as $up
-| ($up | record("handback")) as $u
-| .counter_up = {
-    run_clean: ($up | run_clean),
-    hosts_started: started_hosts($u),
-    no_faults: no_faults($up),
-    mismatch_falls_back_to_ticks: ([$u.domains[] | .direction_measured == 2 and .ticks_only == 1] | all),
-    timers_still_run: timers_run($up),
-    doorbell_through_kernel: ($u.doorbell_sent >= 1 and $u.domains.B.doorbell_received >= 1
-      and $u.domains.B.doorbell_received >= $u.doorbell_sent - 1
-      and $u.domains.B.pender_task_calls >= $u.doorbell_sent and ($up | wake_hits("0x00020077")) >= 1)
+| ($counter_down[0]) as $down
+| ($down | record("handback")) as $c
+| .counter_down = {
+    run_clean: ($down | run_clean),
+    hosts_started: started_hosts($c),
+    no_faults: no_faults($down),
+    mismatch_falls_back_to_ticks: ([$c.domains[] | .direction_measured == 1 and .ticks_only == 1] | all),
+    timers_still_run: timers_run($down),
+    doorbell_through_kernel: ($c.doorbell_sent >= 1 and $c.domains.B.doorbell_received >= 1
+      and $c.domains.B.doorbell_received >= $c.doorbell_sent - 1
+      and $c.domains.B.pender_task_calls >= $c.doorbell_sent and ($down | wake_hits("0x00020077")) >= 1)
   }
-| .verdict = ([.runs, .demo, .no_executors, .no_pender_kernel, .counter_up | to_entries[] | .value | select(type == "boolean")] | all)
+| .verdict = ([.runs, .demo, .no_executors, .no_pender_kernel, .counter_down | to_entries[] | .value | select(type == "boolean")] | all)

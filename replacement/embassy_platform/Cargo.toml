@@ -10,8 +10,8 @@ path = "src/lib.rs"
 crate-type = ["staticlib", "rlib"]
 
 [features]
-default = ["counter-down"]
-# counter-up for the camera, counter-down for the pinned FujiMod model.
+default = ["counter-up"]
+# The camera and the default FujiMod model count up; counter-down is the mismatch control.
 counter-up = []
 counter-down = []
 # Refusal controls for the emulator demonstration.
