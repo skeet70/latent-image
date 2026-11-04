@@ -492,8 +492,8 @@ main = do
         (comparedChains [retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xac }, childWith []]
                         [ownedStep, childWith (getterPair 5 0xac)] == Right ())
     , check "a stale value inside a run of a getter key's results is refused"
-        (compared (retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xab ++ getterPair 5 0xab })
-                  (ownedWith (stepHits ownedStep ++ getterPair 5 0xac ++ getterPair 5 0xab)) == Left (GetterSequenceDiffers getterKey5 1))
+        (compared (retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xac ++ getterPair 5 0xac ++ getterPair 5 0xac })
+                  (ownedWith (stepHits ownedStep ++ getterPair 5 0xac ++ getterPair 5 0xab ++ getterPair 5 0xac)) == Left (GetterSequenceDiffers getterKey5 2))
     , check "a getter key present in only one role is refused"
         (compared retainedStep (ownedWith (stepHits ownedStep ++ getterPair 6 0xcd)) == Left (GetterSequenceDiffers getterKey6 0))
     , check "getter calls under different keys interleave freely"
@@ -504,6 +504,13 @@ main = do
              retained = observation RetainedRole retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xab ++ getterPair 5 0xab ++ getterPair 5 0xac }
          in case runControl bindings OwnedRole owned retained StaleGetterResult of
               Right result -> controlStale result == Just (StaleGetter getterKey5 1 7 0xab 0xac)
+                && controlObserved result == Left (GetterSequenceDiffers getterKey5 2)
+              Left _ -> False)
+    , check "the stale getter control sets a call inside a later run to the previous distinct value and is refused"
+        (let owned = observation OwnedRole (ownedWith (stepHits ownedStep ++ getterPair 5 0xac ++ getterPair 5 0xac ++ getterPair 5 0xac))
+             retained = observation RetainedRole retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xac ++ getterPair 5 0xac ++ getterPair 5 0xac }
+         in case runControl bindings OwnedRole owned retained StaleGetterResult of
+              Right result -> controlStale result == Just (StaleGetter getterKey5 2 9 0xac 0xab)
                 && controlObserved result == Left (GetterSequenceDiffers getterKey5 2)
               Left _ -> False)
     , check "a write that leaves its preimage is not compared"
