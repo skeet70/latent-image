@@ -99,7 +99,7 @@ sourcePaths =
   , "host/firmware/build-usb-toggle-ram.sh", "host/firmware/BuildUsbToggleRam.hs", "host/firmware/UsbToggleRam.hs"
   , "host/firmware/ArmElf.hs", "host/firmware/RamPushLayout.hs"
   , "host/FujiAF/Host.hs", "host/FujiAF/JSON.hs", "host/FujiAF/UsbToggle.hs", "host/FujiAF/ClassicChrome.hs"
-  , "host/firmware/BUILD.bazel", "host/firmware/classic-chrome-ram-builder-digest.sh", "host/firmware/ram-push-toolchain.sh"
+  , "host/firmware/classic-chrome-ram-builder-digest.sh", "host/firmware/ram-push-toolchain.sh"
   ]
 
 wordAt :: B.ByteString -> Int -> Word32
