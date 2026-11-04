@@ -72,15 +72,19 @@ converts :: [SiteEntry] -> Bool
 converts = any isConverterEntry
 
 -- | A converter pass split by idle passes merges only when the continuation repeats the first
--- part's entries before its first converter; the duplicate prefix is dropped once.
+-- part's entries before its first converter; the duplicate prefix is dropped once. Settings
+-- converter entries before the first marker join the first pass when that pass is idle.
 passes :: [T.Text] -> [[T.Text]]
 passes = map (map entryText) . developPasses . map parseEntry
 
 developPasses :: [SiteEntry] -> [[SiteEntry]]
-developPasses entries = trim (map NE.head (NE.group (merge (split entries))))
+developPasses entries = trim (map NE.head (NE.group (merge (lead (split entries)))))
   where
     split [] = []
     split (first : rest) = let (pass, more) = break (== EntryMarker) rest in (first : pass) : split more
+    lead (settings : pass : rest)
+      | all (== EntrySettingsConverter) settings, not (converts pass) = (pass ++ settings) : rest
+    lead chunks = chunks
     merge [] = []
     merge (pass : rest)
       | Just parts <- passParts pass = absorb (passPrefix parts) [pass] rest
