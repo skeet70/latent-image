@@ -1,7 +1,8 @@
 {-# LANGUAGE GHC2021 #-}
 
 -- | Writes the owned menu engine's generated Rust tree and record side table from the pinned
--- menu tables JSON of //replacement/modal_runtime:menu-tables.
+-- menu tables JSON of //replacement/modal_runtime:menu-tables, optionally composed with the
+-- installed package's rows from a recipe-bank `bank-plan.json` (`--package-plan`).
 module Main where
 
 import Control.Monad (forM_, unless, when)
@@ -30,7 +31,13 @@ main = do
   bytes <- B.readFile tablesPath
   let tablesSha = sha256Hex (sha256 bytes)
   unless (tablesSha == tablesSha256) (fail "menu tables identity differs")
-  document <- either (fail . ("menu tables: " ++)) pure (J.eitherDecodeStrict bytes)
+  stock <- either (fail . ("menu tables: " ++)) pure (J.eitherDecodeStrict bytes)
+  document <- case dropWhile (/= "--package-plan") arguments of
+    _ : planPath : _ -> do
+      plan <- B.readFile planPath >>= either (fail . ("package plan: " ++)) pure . J.eitherDecodeStrict
+      overlay <- either (fail . ("package plan: " ++)) pure (parsePackagePlan plan)
+      either (fail . ("package overlay: " ++)) pure (composePackage overlay stock)
+    _ -> pure stock
   let digest text = sha256Hex (sha256 (B.pack (map (fromIntegral . fromEnum) text)))
   generated <- either fail pure (generate digest tablesSha document)
   writeFile treePath (generatedTree generated)

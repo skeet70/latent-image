@@ -2,7 +2,6 @@
 //! only module that knows stock addresses.
 
 use core::hint::black_box;
-use core::mem::MaybeUninit;
 
 use super::engine::SnapshotSlot;
 use super::frame::{FrameDepth, MenuClass, RowIndex, RowToken, ScrollTop, VisibleCount, VisibleOrdinal};
@@ -144,10 +143,22 @@ pub fn decode(
 }
 
 pub fn decode_words<B: BlockWords>(block: &B, tree: &Tree, records: &RecordTable) -> Result<EngineState, DecodeError> {
+    let mut state = EngineState::EMPTY;
+    decode_into(block, tree, records, &mut state)?;
+    Ok(state)
+}
+
+/// On an error `state` is partly written.
+pub fn decode_into<B: BlockWords>(
+    block: &B,
+    tree: &Tree,
+    records: &RecordTable,
+    state: &mut EngineState,
+) -> Result<(), DecodeError> {
     if !records.serves(tree) {
         return Err(DecodeError::TableMismatch);
     }
-    let node = match block.block_word(NODE) {
+    state.node = match block.block_word(NODE) {
         0 => None,
         raw => {
             let address = RecordAddress::new(raw);
@@ -155,54 +166,37 @@ pub fn decode_words<B: BlockWords>(block: &B, tree: &Tree, records: &RecordTable
         }
     };
     // `black_box` keeps each store's bound check, which `check-bank-allowlist` needs to prove the store.
-    let mut row_states = [RowState::Offered; ROW_STATES];
     for row in 0..ROW_STATES {
         let raw = block.block_word(ROW_STATE_WORDS + 4 * row);
-        let state = RowState::parse(raw).ok_or(DecodeError::RowState { row, raw })?;
-        if let Some(slot) = row_states.get_mut(black_box(row)) {
-            *slot = state;
+        let parsed = RowState::parse(raw).ok_or(DecodeError::RowState { row, raw })?;
+        if let Some(slot) = state.row_states.get_mut(black_box(row)) {
+            *slot = parsed;
         }
     }
-    // Every slot is written below, so the array needs no zero fill, whose loop the checker cannot bound.
-    let mut remembered = MaybeUninit::<[RowToken; REGISTRY_SLOTS]>::uninit();
-    let slots = remembered.as_mut_ptr().cast::<RowToken>();
     for index in 0..REGISTRY_SLOTS {
-        let slot = black_box(index);
-        if slot < REGISTRY_SLOTS {
-            // SAFETY: `slot` is `index`, below `REGISTRY_SLOTS`.
-            unsafe { slots.add(slot).write(RowToken::new(block.block_word(REMEMBERED + 4 * index))) };
+        if let Some(slot) = state.remembered.get_mut(black_box(index)) {
+            *slot = RowToken::new(block.block_word(REMEMBERED + 4 * index));
         }
     }
-    // SAFETY: the loop wrote every slot.
-    let remembered = unsafe { remembered.assume_init() };
-    let mut stack = [CursorFrame::ZERO; STACK_FRAMES];
     for index in 0..STACK_FRAMES {
-        if let Some(slot) = stack.get_mut(black_box(index)) {
+        if let Some(slot) = state.stack.get_mut(black_box(index)) {
             *slot = cursor_frame(block, STACK + 16 * index);
         }
     }
     let classifier = block.block_word(PUSH_CLASSIFIER);
     let open = block.block_word(MENU_OPEN);
     let word10 = block.block_word(WORD10);
-    Ok(EngineState {
-        node,
-        word10: NodeWord10::new(word10 as u16),
-        word10_high: ((word10 >> 16) as u16).to_le_bytes(),
-        live: cursor_frame(block, LIVE),
-        total: RowCount::new(block.block_word(TOTAL)),
-        visible_at_open: VisibleCount::new(block.block_word(VISIBLE_AT_OPEN)),
-        row_states,
-        saved: cursor_frame(block, SAVED),
-        remembered,
-        stack,
-        depth: StackDepth::new(block.block_word(DEPTH)),
-        push_classifier: FrameDepth::parse(classifier).ok_or(DecodeError::PushClassifier(classifier))?,
-        menu_open: MenuOpen::parse(open).ok_or(DecodeError::MenuOpen(open))?,
-        last_move: LastMove {
-            class: MenuClass::new(block.last_move_word(0)),
-            token: RowToken::new(block.last_move_word(1)),
-        },
-    })
+    state.word10 = NodeWord10::new(word10 as u16);
+    state.word10_high = ((word10 >> 16) as u16).to_le_bytes();
+    state.live = cursor_frame(block, LIVE);
+    state.total = RowCount::new(block.block_word(TOTAL));
+    state.visible_at_open = VisibleCount::new(block.block_word(VISIBLE_AT_OPEN));
+    state.saved = cursor_frame(block, SAVED);
+    state.depth = StackDepth::new(block.block_word(DEPTH));
+    state.push_classifier = FrameDepth::parse(classifier).ok_or(DecodeError::PushClassifier(classifier))?;
+    state.menu_open = MenuOpen::parse(open).ok_or(DecodeError::MenuOpen(open))?;
+    state.last_move = LastMove { class: MenuClass::new(block.last_move_word(0)), token: RowToken::new(block.last_move_word(1)) };
+    Ok(())
 }
 
 /// The block word at a 4-aligned offset below `BLOCK_LEN`.

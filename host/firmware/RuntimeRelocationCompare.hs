@@ -106,6 +106,8 @@ instance FromJSON Manifest where
     size <- o .: "size"
     variant <- case [variant | variant <- [L.standardBankVariant, L.modalScopedBankVariant, L.lifecycleBankVariant, L.modalLifecycleBankVariant], size == fromIntegral (L.runtimeAllocationSizeFor variant)] of
       [variant] -> pure variant
+      _ | size == fromIntegral (L.runtimeAllocationSizeFor L.modalEngineBankVariant) ->
+            fail "the menu-engine package is not compared: its .menu_engine section and engine region are outside this comparison"
       _ -> fail "unknown composed bank allocation extent"
     Manifest <$> o .: "base" <*> pure size <*> o .: "publications" <*> pure entries <*> pure variant
 instance FromJSON PlanRegion where

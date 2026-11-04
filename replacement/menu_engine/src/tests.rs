@@ -1,14 +1,14 @@
 use crate::block::{decode, mirror, DecodeError, RecordAddress, RecordTable, BLOCK_LEN, LAST_MOVE_LEN};
 use crate::engine::{
     apply, Effect, EngineResult, EngineServices, KindSwitchCall, MenuEvent, NotOwned, Notify, SeekCall, SnapshotSlot,
-    StageEvent, StageExtra, StageId, StageKind, StageNode, Transition,
+    StageEvent, StageExtra, StageId, StageKind, StageNode,
 };
 use crate::frame::{
     FrameDepth, MenuClass, MenuFrameSnapshot, NodeId, NodeType, PageNumber, RowIndex, RowToken, RowsPerPage,
     ScrollTop, VisibleCount, VisibleOrdinal,
 };
 use crate::state::{CursorFrame, EngineState, LastMove, MenuOpen, RowCount, RowState, StackDepth, ROW_STATES, STACK_FRAMES};
-use crate::tree::{Availability, Node, NodeRef, NodeWord10, Remember, Row, Tree, TreeIdentity, Wrap, REGISTRY_SLOTS};
+use crate::tree::{Availability, Node, NodeRef, NodeWord10, Remember, Row, RowChild, Tree, TreeIdentity, Wrap, REGISTRY_SLOTS};
 
 const TOP: NodeRef = NodeRef::new(0);
 const PAGE: NodeRef = NodeRef::new(1);
@@ -18,7 +18,13 @@ const LONG: NodeRef = NodeRef::new(4);
 const FRAMED: NodeRef = NodeRef::new(5);
 
 const fn row(token: u32, child: Option<NodeRef>) -> Row {
-    Row { token: RowToken::new(token), child }
+    Row {
+        token: RowToken::new(token),
+        child: match child {
+            Some(node) => RowChild::Node(node),
+            None => RowChild::Leaf,
+        },
+    }
 }
 
 static TOP_ROWS: [Row; 1] = [row(0x10, Some(PAGE))];
@@ -159,14 +165,18 @@ impl EngineServices for Answers {
         self.initial_row.remove(0)
     }
 
-    fn kind_switch(&mut self, _: &EngineState, call: KindSwitchCall) -> (EngineState, EngineResult) {
+    fn kind_switch(&mut self, state: &mut EngineState, call: KindSwitchCall) -> EngineResult {
         self.calls.push(Call::KindSwitch(call));
-        self.kind_switch.take().expect("kind switch answer")
+        let (decoded, result) = self.kind_switch.take().expect("kind switch answer");
+        *state = decoded;
+        result
     }
 
-    fn seek(&mut self, _: &EngineState, call: SeekCall) -> (EngineState, EngineResult) {
+    fn seek(&mut self, state: &mut EngineState, call: SeekCall) -> EngineResult {
         self.calls.push(Call::Seek(call));
-        self.seek.take().expect("seek answer")
+        let (decoded, result) = self.seek.take().expect("seek answer");
+        *state = decoded;
+        result
     }
 
     fn token_past_rows(&mut self, _: &EngineState, row: RowIndex) -> RowToken {
@@ -215,8 +225,16 @@ fn event(kind: u32, node: u32, id: u32, state: &EngineState) -> MenuEvent {
     MenuEvent::decode(StageEvent { kind, node, id, extra: 0 }, &TREE, state)
 }
 
+/// The result and the state `apply` leaves.
+struct Transition {
+    result: EngineResult,
+    state: EngineState,
+}
+
 fn run(state: &EngineState, kind: u32, node: u32, id: u32, answers: &mut Answers) -> Result<Transition, NotOwned> {
-    apply(&TREE, state, event(kind, node, id, state), answers)
+    let mut after = *state;
+    let result = apply(&TREE, &mut after, event(kind, node, id, state), answers)?;
+    Ok(Transition { result, state: after })
 }
 
 #[test]
@@ -502,11 +520,11 @@ impl EngineServices for Unasked {
         panic!("initial row asked")
     }
 
-    fn kind_switch(&mut self, _: &EngineState, _: KindSwitchCall) -> (EngineState, EngineResult) {
+    fn kind_switch(&mut self, _: &mut EngineState, _: KindSwitchCall) -> EngineResult {
         panic!("kind switch asked")
     }
 
-    fn seek(&mut self, _: &EngineState, _: SeekCall) -> (EngineState, EngineResult) {
+    fn seek(&mut self, _: &mut EngineState, _: SeekCall) -> EngineResult {
         panic!("seek asked")
     }
 
@@ -544,9 +562,9 @@ fn every_other_class_is_refused_before_any_service_call() {
         (closed(), StageEvent { kind: 1, node: 2, id: 0, extra: 0 }),
         (closed(), StageEvent { kind: 1, node: 1, id: 0xe, extra: 0 }),
     ];
-    for (state, raw) in refused {
+    for (mut state, raw) in refused {
         let decoded = MenuEvent::decode(raw, &TREE, &state);
-        assert!(apply(&TREE, &state, decoded, &mut Unasked).is_err(), "{raw:?}");
+        assert!(apply(&TREE, &mut state, decoded, &mut Unasked).is_err(), "{raw:?}");
     }
 }
 
@@ -560,7 +578,32 @@ fn push_into_a_node_that_stops_at_its_ends_is_refused_before_any_service_call() 
         node(2, 0x104, Wrap::Stops, Some(PAGE), &PICKER_ROWS),
     ];
     let tree = Tree { nodes: &STOP_NODES, registry: registry(), identity: TreeIdentity([7; 32]) };
-    let state = at(PAGE, frame(0, 0, 1, 0), 1, 1);
+    let mut state = at(PAGE, frame(0, 0, 1, 0), 1, 1);
     let decoded = MenuEvent::decode(StageEvent { kind: 0xe, node: 1, id: 0x1d, extra: 0 }, &tree, &state);
-    assert!(apply(&tree, &state, decoded, &mut Unasked).is_err());
+    assert!(apply(&tree, &mut state, decoded, &mut Unasked).is_err());
+}
+
+#[test]
+fn a_block_total_other_than_the_open_nodes_rows_is_refused_before_any_service_call() {
+    let mut state = at(PAGE, frame(1, 1, 3, 0), 3, 1);
+    state.total = RowCount::new(5);
+    for kind in [4, 5, 0xe, 0xf, 1] {
+        let mut copy = state;
+        let decoded = event(kind, 1, if kind == 4 || kind == 5 { 1 } else { 0x1d }, &copy);
+        assert_eq!(apply(&TREE, &mut copy, decoded, &mut Unasked), Err(NotOwned::RowTotal), "kind {kind:#x}");
+    }
+}
+
+#[test]
+fn push_from_a_row_whose_child_is_a_package_node_is_refused_before_any_service_call() {
+    static OVERLAY_ROWS: [Row; 2] = [row(0x20, Some(PICKER)), Row { token: RowToken::new(0x7d), child: RowChild::Package }];
+    static OVERLAY_NODES: [Node; 3] = [
+        node(0, 5, Wrap::Wraps, None, &TOP_ROWS),
+        node(1, 5, Wrap::Wraps, Some(TOP), &OVERLAY_ROWS),
+        node(1, 0x104, Wrap::Wraps, Some(PAGE), &PICKER_ROWS),
+    ];
+    let tree = Tree { nodes: &OVERLAY_NODES, registry: registry(), identity: TreeIdentity([9; 32]) };
+    let mut state = at(PAGE, frame(1, 1, 2, 0), 2, 1);
+    let decoded = MenuEvent::decode(StageEvent { kind: 0xe, node: 1, id: 0x1d, extra: 0 }, &tree, &state);
+    assert_eq!(apply(&tree, &mut state, decoded, &mut Unasked), Err(NotOwned::PackageChild));
 }

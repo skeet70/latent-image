@@ -13,10 +13,8 @@ module Replacement.ModalRuntime.MenuEnginePair
   , RoleSummary (..)
   , checkRole
   , comparePair
-  , stageEntrySite
-  , kindSwitchSite
-  , eventPostSite
-  , guardSite
+  , Site (..)
+  , parseSite
   , fallbackReturn
   , engineReads
   ) where
@@ -34,9 +32,23 @@ import Replacement.ModalRuntime.MenuEngineClass
 
 data Role = StockRole | OwnedRole deriving (Eq, Show)
 
--- | One recorded trace hit: label, core, r0-r3, lr and the site's reads at entry.
+-- | A trace site of the pair trajectories (`emulation/menu-engine-pair-trajectories`); every other
+-- label is 'OtherSite'.
+data Site = StageEntry | KindSwitch | Seek | EventPost | GuardTrap | OtherSite T.Text
+  deriving (Eq, Show)
+
+parseSite :: T.Text -> Site
+parseSite label = case label of
+  "menu-stage-entry" -> StageEntry
+  "menu-kind-switch" -> KindSwitch
+  "menu-seek" -> Seek
+  "menu-event-post" -> EventPost
+  "menu-engine-guard-failure" -> GuardTrap
+  other -> OtherSite other
+
+-- | One recorded trace hit: site, core, r0-r3, lr and the site's reads at entry.
 data Hit = Hit
-  { hitSite :: T.Text
+  { hitSite :: Site
   , hitCore :: Int
   , hitRegisters :: (Word32, Word32, Word32, Word32)
   , hitLr :: Maybe Word32
@@ -47,13 +59,6 @@ data Hit = Hit
 -- | One segment's observation: its phase, labelled reads and trace hits in recording order.
 data Observation = Observation {observationPhase :: T.Text, observationReads :: [(T.Text, B.ByteString)], observationHits :: [Hit]}
   deriving (Eq, Show)
-
--- | Trajectory labels of the pair sites (`emulation/menu-engine-pair-trajectories`).
-stageEntrySite, kindSwitchSite, eventPostSite, guardSite :: T.Text
-stageEntrySite = "menu-stage-entry"
-kindSwitchSite = "menu-kind-switch"
-eventPostSite = "menu-event-post"
-guardSite = "menu-engine-guard-failure"
 
 -- | The return address of `0xbf95c8`'s call to `0xbfa234`: the owned adapter's fallback resumes
 -- stock there, and every service call into `0xbfa234` returns elsewhere.
@@ -87,7 +92,7 @@ parseObservation = J.withObject "e2e observation" $ \fields -> do
     registers <- (,,,) <$> register "r0" <*> register "r1" <*> register "r2" <*> register "r3"
     lr <- traverse hexWord =<< hit .:? "lr"
     memory <- maybe (pure []) (mapM hexBytes) =<< hit .:? "memory"
-    Hit <$> hit .: "site" <*> hit .: "core" <*> pure registers <*> pure lr <*> pure memory)
+    Hit <$> (parseSite <$> hit .: "site") <*> hit .: "core" <*> pure registers <*> pure lr <*> pure memory)
   pure (Observation phase segmentReads hits)
 
 -- | A role's events by class and its fallback-site entries.
@@ -112,7 +117,7 @@ checkRole tree role observations = do
     failures -> Left (unlines (reverse failures))
  where
   step walk (phase, hit)
-    | hitSite hit == stageEntrySite = do
+    | hitSite hit == StageEntry = do
         block <- case hitMemory hit of
           bytes : _ -> menuBlock bytes
           [] -> Left ("stage entry without its block read in " ++ T.unpack phase)
@@ -124,7 +129,7 @@ checkRole tree role observations = do
           , walkSummary = summary
               { summaryClasses = M.insertWith (+) (show class_) 1 (summaryClasses summary)
               , summaryEvents = summaryEvents summary + 1 } }
-    | hitSite hit == kindSwitchSite && hitLr hit == Just fallbackReturn = do
+    | hitSite hit == KindSwitch && hitLr hit == Just fallbackReturn = do
         let summary = walkSummary walk
             counted = walk {walkSummary = summary {summaryFallbackEntries = summaryFallbackEntries summary + 1}}
         pure $ case (role, M.lookup (hitCore hit) (walkLatest walk)) of
@@ -133,9 +138,9 @@ checkRole tree role observations = do
           (OwnedRole, Nothing) ->
             counted {walkFailures = ("fallback entry with no stage entry on its core in " ++ T.unpack phase) : walkFailures walk}
           _ -> counted
-    | hitSite hit == kindSwitchSite && hitLr hit == Nothing =
+    | hitSite hit == KindSwitch && hitLr hit == Nothing =
         Left ("kind-switch entry without lr in " ++ T.unpack phase)
-    | hitSite hit == guardSite =
+    | hitSite hit == GuardTrap =
         pure walk {walkFailures = ("adapter guard trap entered in " ++ T.unpack phase) : walkFailures walk}
     | otherwise = pure walk
 
@@ -155,6 +160,6 @@ comparePair stock owned = do
       pure [T.unpack (observationPhase left) ++ " " ++ T.unpack label | a /= b])
   when (concat differences /= []) (Left ("engine reads differ: " ++ unwords (concat differences)))
   let posts observations = [(r1, r2, r3) | observation <- observations, hit <- observationHits observation
-        , hitSite hit == eventPostSite, let (r0, r1, r2, r3) = hitRegisters hit, r0 == 0x1d]
+        , hitSite hit == EventPost, let (r0, r1, r2, r3) = hitRegisters hit, r0 == 0x1d]
   unless (posts stock == posts owned)
     (Left ("0x1d posts differ: stock " ++ show (posts stock) ++ ", owned " ++ show (posts owned)))

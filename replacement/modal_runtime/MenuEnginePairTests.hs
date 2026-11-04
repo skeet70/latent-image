@@ -20,35 +20,45 @@ node at ident type_ parent rows = TableNode
   , nodeWord10 = 0, nodeRows = rows, nodeLabels = Nothing }
 
 -- A grandparent (id 5), the registered node at slot 3 (id 1) whose row 0 leads to a child with
--- its parent's id and whose row 1 leads to a type-5 node, and a node that does not wrap.
+-- its parent's id and whose row 1 leads to a type-5 node, a node that does not wrap, and a node
+-- whose one row leads to a package node.
 tree :: MenuTree
 tree = menuTree (TablesDocument "image4" "strings"
   [RegistryEntry 3 (Just (Address 0x1000)), RegistryEntry 4 Nothing, RegistryEntry 6 (Just (Address 0x4000))]
-  [ node 0x500 5 0 Nothing (Just [TableRow 0 (Just (Address 0x1000))])
-  , node 0x1000 1 0 (Just 0x500) (Just [TableRow 0 (Just (Address 0x2000)), TableRow 1 (Just (Address 0x3000))])
-  , node 0x2000 1 0 (Just 0x1000) (Just [TableRow 0 Nothing])
-  , node 0x3000 7 5 (Just 0x1000) (Just [TableRow 0 Nothing])
-  , (node 0x4000 8 0 (Just 0x500) (Just [TableRow 0 Nothing])) {nodeNoWrap = 1} ])
+  [ node 0x500 5 0 Nothing (Just [TableRow 0 (NodeChild (Address 0x1000))])
+  , node 0x1000 1 0 (Just 0x500) (Just [TableRow 0 (NodeChild (Address 0x2000)), TableRow 1 (NodeChild (Address 0x3000))])
+  , node 0x2000 1 0 (Just 0x1000) (Just [TableRow 0 LeafChild])
+  , node 0x3000 7 5 (Just 0x1000) (Just [TableRow 0 LeafChild])
+  , (node 0x4000 8 0 (Just 0x500) (Just [TableRow 0 LeafChild])) {nodeNoWrap = 1}
+  , node 0x7000 1 0 (Just 0x500) (Just [TableRow 0x7d (PackageChild (Address 0x00c4a000))]) ])
 
-blockBytesFor :: Word32 -> Word32 -> B.ByteString
-blockBytesFor record cursor = word record <> B.replicate 4 0 <> word cursor <> B.replicate (0x430 - 12) 0
+-- | The rows of each test node, the block total stock keeps for it.
+rowsIn :: Word32 -> Word32
+rowsIn record = case record of
+  0x1000 -> 2
+  0 -> 0
+  _ -> 1
+
+blockBytesFor :: Word32 -> Word32 -> Word32 -> B.ByteString
+blockBytesFor record cursor total =
+  word record <> B.replicate 4 0 <> word cursor <> B.replicate 12 0 <> word total <> B.replicate (0x430 - 0x1c) 0
  where word value = B.pack [fromIntegral (value `shiftR` shift) | shift <- [0, 8, 16, 24]]
 
 classOf :: Word32 -> Word32 -> StageEvent -> Either String EventClass
-classOf record cursor event = (\block -> deriveClass tree block event) <$> menuBlock (blockBytesFor record cursor)
+classOf record cursor event = (\block -> deriveClass tree block event) <$> menuBlock (blockBytesFor record cursor (rowsIn record))
 
 stage :: Word32 -> Word32 -> Word32 -> StageEvent
 stage kind slot ident = StageEvent kind slot ident 0
 
 entry :: Int -> Word32 -> Word32 -> StageEvent -> Hit
 entry core record cursor (StageEvent kind slot ident extra) =
-  Hit stageEntrySite core (kind, slot, ident, extra) (Just 0xca4680) [blockBytesFor record cursor, B.replicate 8 0]
+  Hit StageEntry core (kind, slot, ident, extra) (Just 0xca4680) [blockBytesFor record cursor (rowsIn record), B.replicate 8 0]
 
 fallback :: Int -> Hit
-fallback core = Hit kindSwitchSite core (0, 0, 0, 0) (Just fallbackReturn) []
+fallback core = Hit KindSwitch core (0, 0, 0, 0) (Just fallbackReturn) []
 
 post :: Word32 -> Hit
-post token = Hit eventPostSite 0 (0x1d, 0xf6, token, 0xf000) (Just 0xca47f0) []
+post token = Hit EventPost 0 (0x1d, 0xf6, token, 0xf000) (Just 0xca47f0) []
 
 segment :: [(B.ByteString)] -> [Hit] -> Observation
 segment blocks hits = Observation "picker-keys"
@@ -82,9 +92,12 @@ main = do
         , ("the stock role reaches the fallback site for every class",
             fmap summaryFallbackEntries (checkRole tree StockRole [segment [] [entry 0 0x1000 0 (stage 0xe 3 0x1d), fallback 0]]) == Right 1)
         , ("an entry to the adapter's guard trap fails the role",
-            isLeft (checkRole tree OwnedRole [segment [] [Hit guardSite 0 (0, 0, 0, 0) (Just 0) []]]))
+            isLeft (checkRole tree OwnedRole [segment [] [Hit GuardTrap 0 (0, 0, 0, 0) (Just 0) []]]))
         , ("a stage entry without its block read refuses",
-            isLeft (checkRole tree OwnedRole [segment [] [Hit stageEntrySite 0 (4, 3, 1, 0) Nothing []]]))
+            isLeft (checkRole tree OwnedRole [segment [] [Hit StageEntry 0 (4, 3, 1, 0) Nothing []]]))
+        , ("a block total other than the open node's rows falls back for every kind",
+            all (\kind -> fmap (\block -> deriveClass tree block (stage kind 3 1)) (menuBlock (blockBytesFor 0x1000 0 3)) == Right (FallbackEvent RowTotal)) [4, 5, 0xe, 0xf, 1])
+        , ("a push to a package node falls back", classOf 0x7000 0 (stage 0xe 3 0x1d) == Right (FallbackEvent PackageChildRow))
         , ("equal reads and posts pair", comparePair [segment [B.replicate 0x430 2] [post 1]] [segment [B.replicate 0x430 2] [post 1]] == Right ())
         , ("a differing block read fails the pair", isLeft (comparePair [segment [B.replicate 0x430 2] []] [segment [B.replicate 0x430 3] []]))
         , ("a differing 0x1d post fails the pair", isLeft (comparePair [segment [B.replicate 0x430 2] [post 1]] [segment [B.replicate 0x430 2] [post 2]]))

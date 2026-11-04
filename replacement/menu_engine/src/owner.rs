@@ -18,7 +18,7 @@ use super::tree::{Node, Tree};
 use super::{
     block::RecordAddress,
     frame::{NodeId, NodeType, RowsPerPage},
-    tree::{Availability, Label, NodeRef, NodeWord10, Remember, Row, StringId, TreeIdentity, Wrap},
+    tree::{Availability, Label, NodeRef, NodeWord10, Remember, Row, RowChild, StringId, TreeIdentity, Wrap},
 };
 
 include!(env!("RB_MENU_ENGINE_TREE"));
@@ -147,14 +147,14 @@ impl EngineServices for Answers<'_> {
         }
     }
 
-    fn kind_switch(&mut self, state: &EngineState, call: KindSwitchCall) -> (EngineState, EngineResult) {
+    fn kind_switch(&mut self, _: &mut EngineState, call: KindSwitchCall) -> EngineResult {
         self.mismatch.get_or_insert(format!("call {} {call:x?}: no receipt shows a nested kind switch", self.next));
-        (*state, EngineResult::Rejected)
+        EngineResult::Rejected
     }
 
-    fn seek(&mut self, state: &EngineState, call: SeekCall) -> (EngineState, EngineResult) {
+    fn seek(&mut self, _: &mut EngineState, call: SeekCall) -> EngineResult {
         self.mismatch.get_or_insert(format!("call {} {call:x?}: no receipt shows a seek", self.next));
-        (*state, EngineResult::Rejected)
+        EngineResult::Rejected
     }
 
     fn token_past_rows(&mut self, _: &EngineState, row: RowIndex) -> RowToken {
@@ -190,12 +190,12 @@ fn record_writes(address: u32, record: &MenuFrameSnapshot) -> impl Iterator<Item
 
 fn run_case<R: Rules>(case: &Case) -> Result<(), String> {
     let before_pair = last_move_before(case);
-    let state = decode(&case.before, &last_move_bytes(before_pair), &TREE, &RECORDS).map_err(|error| format!("decode {error:?}"))?;
+    let mut state = decode(&case.before, &last_move_bytes(before_pair), &TREE, &RECORDS).map_err(|error| format!("decode {error:?}"))?;
     let event = MenuEvent::decode(case.event, &TREE, &state);
     let mut answers = Answers { case, next: 0, snapshot_writes: Vec::new(), mismatch: None, page_entries: 0 };
-    let applied = catch_unwind(AssertUnwindSafe(|| apply_with::<R, _>(&TREE, &state, event, &mut answers)))
+    let applied = catch_unwind(AssertUnwindSafe(|| apply_with::<R, _, _>(&TREE, &mut state, event, &mut answers)))
         .map_err(|_| "engine panicked".to_string())?;
-    let transition = applied.map_err(|reason| format!("not owned: {reason:?}"))?;
+    let result = applied.map_err(|reason| format!("not owned: {reason:?}"))?;
     if let Some(mismatch) = answers.mismatch {
         return Err(mismatch);
     }
@@ -206,7 +206,7 @@ fn run_case<R: Rules>(case: &Case) -> Result<(), String> {
     if answers.page_entries != opens {
         return Err(format!("{} page entries for {opens} initial-row calls", answers.page_entries));
     }
-    let (block, _) = mirror(&transition.state, &RECORDS);
+    let (block, _) = mirror(&state, &RECORDS);
     let differing: Vec<usize> = (0..BLOCK_LEN).filter(|&offset| block[offset] != case.after[offset]).collect();
     if !differing.is_empty() {
         let words: Vec<String> = differing
@@ -234,8 +234,8 @@ fn run_case<R: Rules>(case: &Case) -> Result<(), String> {
             LastMoveWrite::Token(token) => expected_pair.token = token,
         }
     }
-    if transition.state.last_move != expected_pair {
-        return Err(format!("last move {:?}, expected {:?}", transition.state.last_move, expected_pair));
+    if state.last_move != expected_pair {
+        return Err(format!("last move {:?}, expected {:?}", state.last_move, expected_pair));
     }
     if answers.snapshot_writes != case.snapshot_writes {
         let owned = &answers.snapshot_writes;
@@ -248,8 +248,8 @@ fn run_case<R: Rules>(case: &Case) -> Result<(), String> {
             first.map(|index| case.snapshot_writes[index]),
         ));
     }
-    if transition.result != case.result {
-        return Err(format!("result {:?}, expected {:?}", transition.result, case.result));
+    if result != case.result {
+        return Err(format!("result {:?}, expected {:?}", result, case.result));
     }
     Ok(())
 }

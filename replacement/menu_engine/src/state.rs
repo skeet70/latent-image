@@ -108,3 +108,23 @@ pub struct EngineState {
     pub menu_open: MenuOpen,
     pub last_move: LastMove,
 }
+
+impl EngineState {
+    /// The state an all-zero block decodes to.
+    pub const EMPTY: Self = Self {
+        node: None,
+        word10: NodeWord10::new(0),
+        word10_high: [0; 2],
+        live: CursorFrame::ZERO,
+        total: RowCount::new(0),
+        visible_at_open: VisibleCount::new(0),
+        row_states: [RowState::Offered; ROW_STATES],
+        saved: CursorFrame::ZERO,
+        remembered: [RowToken::new(0); REGISTRY_SLOTS],
+        stack: [CursorFrame::ZERO; STACK_FRAMES],
+        depth: StackDepth::new(0),
+        push_classifier: FrameDepth::Root,
+        menu_open: MenuOpen::Closed,
+        last_move: LastMove { class: MenuClass::new(0), token: RowToken::new(0) },
+    };
+}

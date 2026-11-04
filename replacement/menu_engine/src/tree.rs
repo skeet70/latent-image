@@ -79,10 +79,19 @@ word!(
     StringId
 );
 
+/// What a row's child word names.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RowChild {
+    Leaf,
+    Node(NodeRef),
+    /// A node the installed package adds, outside the decoded tables.
+    Package,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Row {
     pub token: RowToken,
-    pub child: Option<NodeRef>,
+    pub child: RowChild,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

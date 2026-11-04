@@ -67,7 +67,7 @@ treeGeneration = do
   let tree = T.generatedTree generated
       records = T.generatedRecords generated
   check "page node refers to the picker by position"
-    ("Row { token: RowToken::new(0x0), child: Some(NodeRef::new(1)) }" `isInfixOf` tree)
+    ("Row { token: RowToken::new(0x0), child: RowChild::Node(NodeRef::new(1)) }" `isInfixOf` tree)
   check "picker node names its parent and flags"
     ("wrap: Wrap::Wraps, availability: Availability::Queried, remember: Remember::On, parent: Some(NodeRef::new(0))" `isInfixOf` tree)
   check "labels move to their own output" ("list_icon: StringId::new(0x780140)" `isInfixOf` T.generatedLabels generated && not ("StringId" `isInfixOf` tree))
@@ -83,6 +83,36 @@ treeGeneration = do
   check "a short registry refuses" (isLeft (generateFrom (tablesJson T.image4Pin [page, picker] (take 4 registryOf))))
   check "an unresolved node refuses"
     (isLeft (generateFrom (J.object ["schema" .= (1 :: Int), "inputs" .= J.object ["image4_sha256" .= T.image4Pin, "strings_sha256" .= T.stringsPin], "registry" .= ([] :: [Int]), "nodes" .= [J.object ["address" .= ("0x1" :: String), "unresolved" .= ("pointer outside image" :: String)]]])))
+  let wordsHex = concatMap (\value -> concat [pad (showHex ((value `div` (256 ^ i)) `mod` 256) "") | i <- [0 :: Int .. 3]])
+      pad digits = replicate (2 - length digits) '0' ++ digits
+      planWrite role at values = J.object ["address" .= show at, "new" .= wordsHex values, "role" .= (role :: String), "region" .= ("menu_parent" :: String)]
+      planJson values labels = J.object ["writes" .=
+        [ planWrite "parent node +0x20 values pointer" (0x78ea98 + 0x20 :: Word32) [0x00c4a800]
+        , planWrite "parent values array with the two items" (0x00c4a800 :: Word32) values
+        , planWrite "parent labels array with the two items" (0x00c4a920 :: Word32) labels ]]
+      stockValues = [0, 0x789ea4, 1, 0] :: [Word32]
+      stockLabels = [0, 0x780140, 0x12, 0x34] :: [Word32]
+      overlaid :: [Word32] -> [Word32] -> Either String T.Generated
+      overlaid values labels = do
+        document <- decode (tablesJson T.image4Pin [page, picker] registryOf)
+        overlay <- T.parsePackagePlan (planJson values labels)
+        composed <- T.composePackage overlay document
+        T.generate (const (replicate 64 'a')) "tables-sha" composed
+      ends = [0x7ffffffe, 0] :: [Word32]
+      labelEnd = replicate 4 0xffffffff :: [Word32]
+  composed <- either fail pure (overlaid (stockValues ++ [0x7d, 0x00c4b000] ++ ends) (stockLabels ++ [0x846, 0, 0, 0] ++ labelEnd))
+  check "an appended row with a package child is a package row"
+    ("Row { token: RowToken::new(0x7d), child: RowChild::Package }" `isInfixOf` T.generatedTree composed)
+  check "the composed node keeps its decoded rows first"
+    ("[Row; 3] = [Row { token: RowToken::new(0x0), child: RowChild::Node(NodeRef::new(1)) }" `isInfixOf` T.generatedTree composed)
+  check "the composed tree has another identity" (T.generatedIdentity composed == replicate 64 'a')
+  check "an appended row whose child is a decoded node keeps it"
+    (either (const False) (("Row { token: RowToken::new(0x7e), child: RowChild::Node(NodeRef::new(1)) }" `isInfixOf`) . T.generatedTree)
+      (overlaid (stockValues ++ [0x7e, 0x789ea4] ++ ends) (stockLabels ++ [0x847, 0, 0, 0] ++ labelEnd)))
+  check "a package whose rows do not begin with the decoded rows refuses"
+    (isLeft (overlaid ([5, 0x789ea4, 1, 0, 0x7d, 0x00c4b000] ++ ends) (stockLabels ++ [0x846, 0, 0, 0] ++ labelEnd)))
+  check "a package values array without its terminator refuses"
+    (isLeft (overlaid (stockValues ++ [0x7d, 0x00c4b000]) (stockLabels ++ labelEnd)))
 
 -- * Case extractor
 

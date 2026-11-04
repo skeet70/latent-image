@@ -6,7 +6,7 @@
 use core::ptr::{read_volatile, write_volatile};
 
 use crate::menu_engine::block::{
-    self, decode_words, mirror_last_move_word, mirror_word, BlockWords, RecordTable, BLOCK_ADDRESS, BLOCK_LEN,
+    self, decode_into, mirror_last_move_word, mirror_word, BlockWords, RecordTable, BLOCK_ADDRESS, BLOCK_LEN,
     FIRST_DEPTH_SNAPSHOTS, LAST_MOVE_ADDRESS, ROOT_SNAPSHOT, SECOND_DEPTH_SNAPSHOTS, SNAPSHOT_LEN,
 };
 use crate::menu_engine::engine::{
@@ -19,7 +19,7 @@ use crate::menu_engine::tree::Tree;
 use crate::menu_engine::{
     block::RecordAddress,
     frame::{NodeType, RowsPerPage},
-    tree::{Availability, Label, Node, NodeRef, NodeWord10, Remember, Row, StringId, TreeIdentity, Wrap},
+    tree::{Availability, Label, Node, NodeRef, NodeWord10, Remember, Row, RowChild, StringId, TreeIdentity, Wrap},
 };
 
 // `//replacement/modal_runtime:menu-engine-tree`: `TREE` and `RECORDS`.
@@ -79,10 +79,9 @@ fn write_state(state: &EngineState) {
     }
 }
 
-fn read_state() -> EngineState {
-    match decode_words(&Live, &TREE, &RECORDS) {
-        Ok(state) => state,
-        Err(_) => unsafe { rb_menu_engine_guard_failure() },
+fn read_state(state: &mut EngineState) {
+    if decode_into(&Live, &TREE, &RECORDS, state).is_err() {
+        unsafe { rb_menu_engine_guard_failure() }
     }
 }
 
@@ -152,13 +151,14 @@ impl EngineServices for Stock {
         RowToken::new(unsafe { read_volatile(address as usize as *const u32) })
     }
 
-    fn kind_switch(&mut self, state: &EngineState, call: KindSwitchCall) -> (EngineState, EngineResult) {
+    fn kind_switch(&mut self, state: &mut EngineState, call: KindSwitchCall) -> EngineResult {
         write_state(state);
         let raw = unsafe { rb_menu_engine_call_kind_switch(call.kind.raw(), call.node.get(), call.id.get(), call.extra.get()) };
-        (read_state(), result_of(raw))
+        read_state(state);
+        result_of(raw)
     }
 
-    fn seek(&mut self, state: &EngineState, call: SeekCall) -> (EngineState, EngineResult) {
+    fn seek(&mut self, state: &mut EngineState, call: SeekCall) -> EngineResult {
         write_state(state);
         let raw = unsafe {
             rb_menu_engine_call_seek(
@@ -170,7 +170,8 @@ impl EngineServices for Stock {
                 call.target.get(),
             )
         };
-        (read_state(), result_of(raw))
+        read_state(state);
+        result_of(raw)
     }
 
     fn invariant_failure(&mut self) -> ! {
@@ -178,24 +179,60 @@ impl EngineServices for Stock {
     }
 }
 
+/// The one in-progress state, in bank data: task 1's stack is 0xc00 bytes.
+static mut ENGINE_STATE: EngineState = EngineState::EMPTY;
+/// Set while an event runs; a nested entry through a stock service falls
+/// back to stock and leaves `ENGINE_STATE` to the outer event.
+static mut ENGINE_BUSY: bool = false;
+
+/// `ENGINE_STATE` by its link address, so the engine's frames carry no
+/// pointer to it.
+struct StaticState;
+
+impl core::ops::Deref for StaticState {
+    type Target = EngineState;
+
+    fn deref(&self) -> &EngineState {
+        // SAFETY: `ENGINE_BUSY` admits one event at a time.
+        unsafe { &*core::ptr::addr_of!(ENGINE_STATE) }
+    }
+}
+
+impl core::ops::DerefMut for StaticState {
+    fn deref_mut(&mut self) -> &mut EngineState {
+        // SAFETY: `ENGINE_BUSY` admits one event at a time.
+        unsafe { &mut *core::ptr::addr_of_mut!(ENGINE_STATE) }
+    }
+}
+
 /// Returns 0 when the event falls back to stock, otherwise 1 + the result
 /// `FUN_00bf95c8` returns.
 #[no_mangle]
 pub extern "C" fn rb_menu_engine_apply(kind: u32, node: u32, id: u32, extra: u32) -> u32 {
-    let Ok(state) = decode_words(&Live, &TREE, &RECORDS) else {
+    let busy = core::ptr::addr_of_mut!(ENGINE_BUSY);
+    if unsafe { read_volatile(busy) } {
         return 0;
-    };
-    let event = MenuEvent::decode(StageEvent { kind, node, id, extra }, &TREE, &state);
-    match apply(&TREE, &state, event, &mut Stock) {
+    }
+    unsafe { write_volatile(busy, true) };
+    let mut state = StaticState;
+    let answer = match decode_into(&Live, &TREE, &RECORDS, &mut state) {
         Err(_) => 0,
-        Ok(transition) => {
-            write_state(&transition.state);
-            match transition.result {
-                EngineResult::Rejected => 1,
-                EngineResult::Accepted => 2,
+        Ok(()) => {
+            let event = MenuEvent::decode(StageEvent { kind, node, id, extra }, &TREE, &state);
+            match apply(&TREE, StaticState, event, &mut Stock) {
+                Err(_) => 0,
+                Ok(result) => {
+                    write_state(&state);
+                    match result {
+                        EngineResult::Rejected => 1,
+                        EngineResult::Accepted => 2,
+                    }
+                }
             }
         }
-    }
+    };
+    unsafe { write_volatile(busy, false) };
+    answer
 }
 
 const _: () = assert!(block::BLOCK_LEN % 4 == 0);

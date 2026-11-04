@@ -101,11 +101,13 @@ __aeabi_memclr8:
     bx      lr
 .size __aeabi_memclr4, .-__aeabi_memclr4
 
-@ The run's checker fails on any entry here.
+@ The run's checker fails on any entry here; the trace site is the entry nop.
 .section .text.rb_menu_engine_guard_failure,"ax",%progbits
 .balign 4
 .global rb_menu_engine_guard_failure
 .type rb_menu_engine_guard_failure,%function
 rb_menu_engine_guard_failure:
-    b       rb_menu_engine_guard_failure
+    nop
+1:
+    b       1b
 .size rb_menu_engine_guard_failure, .-rb_menu_engine_guard_failure

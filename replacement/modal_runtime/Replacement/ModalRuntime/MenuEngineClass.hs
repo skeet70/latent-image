@@ -23,15 +23,15 @@ import Data.Bits (shiftL, (.|.))
 import Data.Maybe (fromMaybe)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
-import Replacement.ModalRuntime.MenuEngineTree (Address (..), RegistryEntry (..), TableNode (..), TableRow (..), TablesDocument (..))
+import Replacement.ModalRuntime.MenuEngineTree (Address (..), RegistryEntry (..), RowChild (..), TableNode (..), TableRow (..), TablesDocument (..))
 
 -- | The four words `0xd4dd2c` receives in r0-r3: kind, node, id, extra.
 data StageEvent = StageEvent {stageKind :: Word32, stageNode :: Word32, stageId :: Word32, stageExtra :: Word32}
   deriving (Eq, Show)
 
--- | The block words the class reads: the open node record (`0x009571d0`) and the cursor
--- (`0x009571d8`).
-data MenuBlock = MenuBlock {blockOpenRecord :: Maybe Address, blockCursor :: Word32}
+-- | The block words the class reads: the open node record (`0x009571d0`), the cursor
+-- (`0x009571d8`) and the total rows (`0x009571e8`).
+data MenuBlock = MenuBlock {blockOpenRecord :: Maybe Address, blockCursor :: Word32, blockTotal :: Word32}
   deriving (Eq, Show)
 
 blockBytes :: Int
@@ -41,7 +41,7 @@ blockBytes = 0x430
 menuBlock :: B.ByteString -> Either String MenuBlock
 menuBlock bytes
   | B.length bytes /= blockBytes = Left "a menu block is 0x430 bytes"
-  | otherwise = Right (MenuBlock (if record == 0 then Nothing else Just (Address record)) (word 8))
+  | otherwise = Right (MenuBlock (if record == 0 then Nothing else Just (Address record)) (word 8) (word 0x18))
  where
   record = word 0
   word offset = foldr (\index acc -> (acc `shiftL` 8) .|. fromIntegral (B.index bytes (offset + index))) 0 [0 .. 3]
@@ -77,6 +77,8 @@ data Fallback
   | FramedTarget
   | TargetWithoutRows
   | TargetRows
+  | RowTotal
+  | PackageChildRow
   deriving (Eq, Show)
 
 data EventClass = OwnedEvent OwnedClass | FallbackEvent Fallback deriving (Eq, Show)
@@ -92,7 +94,7 @@ seekClassNode = 0x38
 rowStates = 0x4f
 
 deriveClass :: MenuTree -> MenuBlock -> StageEvent -> EventClass
-deriveClass tree block event = either FallbackEvent OwnedEvent $ case stageKind event of
+deriveClass tree block event = either FallbackEvent OwnedEvent $ rowTotal *> case stageKind event of
   4 -> rowMove Down
   5 -> rowMove Up
   0xe -> push
@@ -100,6 +102,12 @@ deriveClass tree block event = either FallbackEvent OwnedEvent $ case stageKind 
   1 -> open
   other -> Left (KindNotOwned other)
  where
+  -- The engine refuses before any call when the open node's tree rows differ from the block's total.
+  rowTotal = case blockOpenRecord block of
+    Nothing -> Right ()
+    Just at -> do
+      current <- node at
+      if maybe 0 length (nodeRows current) == fromIntegral (blockTotal block) then Right () else Left RowTotal
   node at = maybe (Left (UnknownRecord at)) Right (M.lookup at (treeNodes tree))
   source = maybe (Left NoOpenNode) node (blockOpenRecord block)
   wrapsAndQueried candidate = nodeNoWrap candidate == 0 && nodeNoAvailability candidate == 0
@@ -137,7 +145,8 @@ deriveClass tree block event = either FallbackEvent OwnedEvent $ case stageKind 
     if same then Left RememberBranch else Right ()
     let cursor = fromIntegral (blockCursor block)
     child <- case drop cursor (fromMaybe [] (nodeRows current)) of
-      row : _ | Just at <- rowChild row -> node at
+      row : _ | NodeChild at <- rowChild row -> node at
+      row : _ | PackageChild _ <- rowChild row -> Left PackageChildRow
       _ -> Left NoChild
     target child
     pure Push

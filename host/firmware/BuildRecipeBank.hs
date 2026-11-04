@@ -27,6 +27,7 @@ import qualified FujiAF.ClassicChromeRam as CC
 import RamPushLayout
 import RamPushToolchain
 import qualified ArmElf as ELF
+import EngineStack (StackReport (..), checkEngineStack, taskOneBudget)
 import BankAllowlistComposition (bankAllowlistSourcePaths, composeBankAllowlist)
 
 -- | The four label texts the submenu pages carry, in the order the actions
@@ -1158,6 +1159,12 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
       unless (engineStart == menuEngineRegionStart base && engineStart >= linkedEnd
           && engineEnd <= menuEngineRegionStart base + menuEngineRegionExtent && resume == 0x00bf95cc) $
         H.failH "ram-push: menu engine region differs from the layout contract"
+      elf <- B.readFile (linkedDir ++ "/kernel.elf") >>= either H.failH pure . ELF.parseElf
+      let inRuntime address = base <= address && address - base < runtimeAllocationSizeFor variant
+      stack <- either (H.failH . ("ram-push: " ++)) pure (checkEngineStack taskOneBudget elf inRuntime)
+      putStrLn
+        ( "menu engine stack: engine " ++ show (reportEngine stack) ++ " + modal dispatcher "
+            ++ show (reportModal stack) ++ " bytes, limit " ++ show (reportLimit stack) )
       pure engineEnd
     else do
       when (any ((== "__rb_menu_engine_start") . symbolName) symbols) $

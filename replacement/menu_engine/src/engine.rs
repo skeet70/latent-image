@@ -18,13 +18,15 @@
 //! `0xbfa800`'s empty arm: it returns 0 at a node without a parent, and
 //! otherwise calls the stock kind switch for the nested pop as stock does.
 
+use core::ops::DerefMut;
+
 use super::frame::{
     self, FrameCells, FrameDepth, FrameNode, MenuClass, MenuFrameSnapshot, PageNumber, RowIndex, RowToken, RowValues,
     RowsPerPage, ScrollTop, VisibleCount, VisibleOrdinal,
 };
 use super::frame::{word, NodeId, NodeType};
 use super::state::{CursorFrame, EngineState, LastMove, MenuOpen, RowCount, RowState, StackDepth, ROW_STATES, STACK_FRAMES};
-use super::tree::{Availability, Node, NodeIndex, NodeRef, NodeWord10, Remember, Row, Tree, Wrap};
+use super::tree::{Availability, Node, NodeIndex, NodeRef, NodeWord10, Remember, Row, RowChild, Tree, Wrap};
 
 word!(
     /// The node word of a stage event, and the node argument the engine passes
@@ -230,6 +232,10 @@ pub enum NotOwned {
     /// `0xbfad04` pushes or pops again for a node of type 5 or 7.
     FramedNode,
     NoChild,
+    /// A row whose child is a package node outside the tree.
+    PackageChild,
+    /// The block's total rows differ from the open node's rows in the tree.
+    RowTotal,
     NoParent,
     /// A node without rows, which `0xbfa800` treats as empty.
     EmptyNode,
@@ -280,18 +286,12 @@ pub struct SeekCall {
     pub target: StageExtra,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Transition {
-    pub result: EngineResult,
-    pub state: EngineState,
-}
-
 /// What the engine asks of stock, in stock's order. Before each call the
 /// adapter writes `state` to the block. `kind_switch` and `seek` tail-call
-/// stock and return the block decoded afterwards with the function's result,
-/// which stock limits to 0 and 1. Every call comes after `apply` has
-/// committed to the event, so an answer or block that does not decode is a
-/// run-failing guard event in the adapter.
+/// stock, decode the block afterwards back into `state` and return the
+/// function's result, which stock limits to 0 and 1. Every call comes after
+/// `apply` has committed to the event, so an answer or block that does not
+/// decode is a run-failing guard event in the adapter.
 pub trait EngineServices {
     fn perform(&mut self, state: &EngineState, effect: Effect);
     /// `FUN_00d52684(class, token)`.
@@ -302,8 +302,8 @@ pub trait EngineServices {
     /// The token word of `values[row]` of the open node for a row past its
     /// terminator, which stock reads from whatever follows the array.
     fn token_past_rows(&mut self, state: &EngineState, row: RowIndex) -> RowToken;
-    fn kind_switch(&mut self, state: &EngineState, call: KindSwitchCall) -> (EngineState, EngineResult);
-    fn seek(&mut self, state: &EngineState, call: SeekCall) -> (EngineState, EngineResult);
+    fn kind_switch(&mut self, state: &mut EngineState, call: KindSwitchCall) -> EngineResult;
+    fn seek(&mut self, state: &mut EngineState, call: SeekCall) -> EngineResult;
     /// A check that holds before the first call failed after it.
     fn invariant_failure(&mut self) -> !;
 }
@@ -335,25 +335,27 @@ const PROPERTY_NODE: StageNode = StageNode::new(0x7a);
 /// `0xbfad04` writes `0x009573e4` for this node index and class `0x228`.
 const SEEK_CLASS_NODE: StageNode = StageNode::new(0x38);
 
-/// Returns `NotOwned` only before its first service call.
-pub fn apply<S: EngineServices>(
+/// Runs `event` on `state` in place. Returns `NotOwned` only before its
+/// first service call, leaving `state` partly changed; the block is then
+/// still what stock last left there.
+pub fn apply<S: EngineServices, P: DerefMut<Target = EngineState>>(
     tree: &Tree,
-    state: &EngineState,
+    state: P,
     event: MenuEvent,
     services: &mut S,
-) -> Result<Transition, NotOwned> {
-    apply_with::<Stock, S>(tree, state, event, services)
+) -> Result<EngineResult, NotOwned> {
+    apply_with::<Stock, S, P>(tree, state, event, services)
 }
 
-pub(crate) fn apply_with<R: Rules, S: EngineServices>(
+pub(crate) fn apply_with<R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>>(
     tree: &Tree,
-    state: &EngineState,
+    state: P,
     event: MenuEvent,
     services: &mut S,
-) -> Result<Transition, NotOwned> {
-    let mut machine = Machine::<R, S> {
+) -> Result<EngineResult, NotOwned> {
+    let mut machine = Machine::<R, S, P> {
         tree,
-        state: *state,
+        state,
         services,
         called: false,
         delegated: false,
@@ -361,8 +363,7 @@ pub(crate) fn apply_with<R: Rules, S: EngineServices>(
     };
     match machine.run(event) {
         Err(_) if machine.called => machine.services.invariant_failure(),
-        Err(reason) => Err(reason),
-        Ok(result) => Ok(Transition { result, state: machine.state }),
+        result => result,
     }
 }
 
@@ -401,9 +402,11 @@ enum RememberBranch {
     SameParentId,
 }
 
-struct Machine<'a, R, S> {
+/// `P` is the in-progress state: a borrow on the host, and in the guest a
+/// zero-sized handle on the adapter's static state.
+struct Machine<'a, R, S, P> {
     tree: &'a Tree,
-    state: EngineState,
+    state: P,
     services: &'a mut S,
     called: bool,
     /// A stock call has replaced `state`.
@@ -415,8 +418,13 @@ fn framed(node: &Node) -> bool {
     FRAMED_TYPES.contains(&node.node_type)
 }
 
-impl<'a, R: Rules, S: EngineServices> Machine<'a, R, S> {
+impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine<'a, R, S, P> {
     fn run(&mut self, event: MenuEvent) -> Result<EngineResult, NotOwned> {
+        if let Some(open) = self.state.node {
+            if self.node(open)?.rows.map_or(0, <[Row]>::len) != self.state.total.get() as usize {
+                return Err(NotOwned::RowTotal);
+            }
+        }
         let result = match event {
             MenuEvent::Move { direction, step: Step::Rows(count), node } => self.move_rows(direction, node, count)?,
             MenuEvent::Push { node, id, .. } => self.push_pop(StageKind::Push, node, id)?,
@@ -649,9 +657,7 @@ impl<'a, R: Rules, S: EngineServices> Machine<'a, R, S> {
     fn kind_switch(&mut self, call: KindSwitchCall) -> EngineResult {
         self.called = true;
         self.delegated = true;
-        let (state, result) = self.services.kind_switch(&self.state, call);
-        self.state = state;
-        result
+        self.services.kind_switch(&mut self.state, call)
     }
 
     /// `0xbfad04` after an open that succeeded. Its arms other than the
@@ -672,9 +678,7 @@ impl<'a, R: Rules, S: EngineServices> Machine<'a, R, S> {
         self.called = true;
         self.delegated = true;
         let call = SeekCall { kind, node, node_type: current.node_type, id, seek, target };
-        let (state, result) = self.services.seek(&self.state, call);
-        self.state = state;
-        Ok(result)
+        Ok(self.services.seek(&mut self.state, call))
     }
 
     /// `0xbf976c`.
@@ -838,7 +842,11 @@ impl<'a, R: Rules, S: EngineServices> Machine<'a, R, S> {
                 if self.remember_branch(source)? != RememberBranch::OtherParentId {
                     return Err(NotOwned::RememberBranch);
                 }
-                let child = Self::row(source, self.state.live.cursor)?.and_then(|row| row.child).ok_or(NotOwned::NoChild)?;
+                let child = match Self::row(source, self.state.live.cursor)?.map(|row| row.child) {
+                    Some(RowChild::Node(child)) => child,
+                    Some(RowChild::Package) => return Err(NotOwned::PackageChild),
+                    Some(RowChild::Leaf) | None => return Err(NotOwned::NoChild),
+                };
                 let restored = *self.state.stack.get(depth + 1).ok_or(NotOwned::StackBounds)?;
                 Self::check_open(self.node(child)?, restored.cursor)?;
                 self.remember(index)?;
@@ -953,7 +961,7 @@ impl RowValues for RowsView {
     }
 
     fn has_child(self, row: RowIndex) -> bool {
-        self.0.and_then(|rows| rows.get(row.get() as usize)).is_some_and(|row| row.child.is_some())
+        self.0.and_then(|rows| rows.get(row.get() as usize)).is_some_and(|row| row.child != RowChild::Leaf)
     }
 }
 

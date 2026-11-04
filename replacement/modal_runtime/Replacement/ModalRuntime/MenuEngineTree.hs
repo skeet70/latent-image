@@ -9,6 +9,10 @@ module Replacement.ModalRuntime.MenuEngineTree
   , RegistryEntry (..)
   , TableNode (..)
   , TableRow (..)
+  , RowChild (..)
+  , PackageOverlay (..)
+  , parsePackagePlan
+  , composePackage
   , TableLabel (..)
   , Generated (..)
   , image4Pin
@@ -36,7 +40,10 @@ newtype Address = Address Word32 deriving (Eq, Ord, Show)
 
 data RegistryEntry = RegistryEntry {registrySlot :: Word32, registryAddress :: Maybe Address} deriving (Eq, Show)
 
-data TableRow = TableRow {rowToken :: Word32, rowChild :: Maybe Address} deriving (Eq, Show)
+-- | A row's child: none, a decoded node, or a node the installed package adds.
+data RowChild = LeafChild | NodeChild Address | PackageChild Address deriving (Eq, Show)
+
+data TableRow = TableRow {rowToken :: Word32, rowChild :: RowChild} deriving (Eq, Show)
 
 data TableLabel = TableLabel {labelPreview :: Word32, labelList :: Word32, labelHelp :: Word32, labelName :: Word32}
   deriving (Eq, Show)
@@ -111,7 +118,7 @@ instance J.FromJSON TablesDocument where
         <*> node .: "word10"
         <*> (walkOf tableRow =<< node .: "rows")
         <*> (walkOf tableLabel =<< node .: "labels")
-    tableRow = J.withObject "row" $ \row -> TableRow <$> row .: "row" <*> (traverse address =<< row .: "child")
+    tableRow = J.withObject "row" $ \row -> TableRow <$> row .: "row" <*> (maybe LeafChild NodeChild <$> (traverse address =<< row .: "child"))
     tableLabel = J.withObject "label" $ \label -> do
       let string key = (hexWord =<<) . (.: "id") =<< label .: key
       TableLabel <$> string "preview_icon" <*> string "list_icon" <*> string "help" <*> string "name"
@@ -166,8 +173,12 @@ generate digest tablesSha document = do
     availability <- flag "word5" "Availability::Queried" "Availability::Fixed" (nodeNoAvailability node)
     remember <- flag "flag" "Remember::Off" "Remember::On" (nodeRemember node)
     parent <- traverse (refOf "parent") (nodeParent node)
-    rows <- traverse (mapM (\row -> (,) (rowToken row) <$> traverse (refOf "row child") (rowChild row))) (nodeRows node)
-    let rowText (token, child) = "Row { token: RowToken::new(" ++ hex token ++ "), child: " ++ maybe "None" (\c -> "Some(NodeRef::new(" ++ show c ++ "))") child ++ " }"
+    let childText child = case child of
+          LeafChild -> Right "RowChild::Leaf"
+          NodeChild at' -> (\c -> "RowChild::Node(NodeRef::new(" ++ show c ++ "))") <$> refOf "row child" at'
+          PackageChild _ -> Right "RowChild::Package"
+    rows <- traverse (mapM (\row -> (,) (rowToken row) <$> childText (rowChild row))) (nodeRows node)
+    let rowText (token, child) = "Row { token: RowToken::new(" ++ hex token ++ "), child: " ++ child ++ " }"
         rowsName = "MENU_ENGINE_ROWS_" ++ show index
         rowsItem = fmap (\items -> [engineSection, "static " ++ rowsName ++ ": [Row; " ++ show (length items) ++ "] = [" ++ intercalate ", " (map rowText items) ++ "];"]) rows
         nodeText =
@@ -209,3 +220,80 @@ generate digest tablesSha document = do
                | node@TableNode {nodeAddress = Address at} <- nodes]
             ++ ["];"] )
   pure (Generated tree records labels identity)
+
+-- | The installed package's republished values and labels of one node, from the recipe-bank
+-- builder's `bank-plan.json`: the node whose `+0x20` values pointer it writes, and the arrays it
+-- writes for it, through their terminators.
+data PackageOverlay = PackageOverlay
+  { overlayNode :: Address
+  , overlayRows :: [(Word32, Maybe Address)]
+  , overlayLabels :: [TableLabel]
+  }
+  deriving (Eq, Show)
+
+-- | Little-endian words of a hex byte string.
+hexWords :: String -> Either String [Word32]
+hexWords text = case splitAt 8 text of
+  ([], []) -> Right []
+  (chunk, rest) | length chunk == 8, Just bytes <- mapM byte (pairsOf chunk) ->
+    (sum [fromIntegral b * 256 ^ i | (i, b) <- zip [0 :: Int ..] bytes] :) <$> hexWords rest
+  _ -> Left "plan bytes are not whole hex words"
+ where
+  byte pair = case readHex pair of [(value, "")] -> Just (value :: Integer); _ -> Nothing
+  pairsOf (high : low : more) = [high, low] : pairsOf more
+  pairsOf _ = []
+
+parsePackagePlan :: J.Value -> Either String PackageOverlay
+parsePackagePlan = J.parseEither $ J.withObject "bank plan" $ \plan -> do
+  writes <- plan .: "writes"
+  let byRole role = [write | write <- writes, J.parseMaybe (.: "role") write == Just (role :: String)]
+      single role = case byRole role of
+        [write] -> pure write
+        _ -> fail ("bank plan needs exactly one write with role " ++ role)
+      fields write = do
+        at <- write .: "address" >>= \text -> maybe (fail "write address is not decimal") pure (decimal text)
+        bytes <- write .: "new" >>= either fail pure . hexWords
+        pure (at, bytes)
+      decimal text = case reads text of [(value, "")] | value <= toInteger (maxBound :: Word32) -> Just (fromInteger value :: Word32); _ -> Nothing
+  (pointerAt, pointer) <- single "parent node +0x20 values pointer" >>= fields
+  (valuesAt, values) <- single "parent values array with the two items" >>= fields
+  (_, labelWords) <- single "parent labels array with the two items" >>= fields
+  unless (pointer == [valuesAt]) (fail "the values pointer write does not name the values array write")
+  rows <- either fail pure (valueRows values)
+  labels <- either fail pure (labelRecords labelWords)
+  pure (PackageOverlay (Address (pointerAt - 0x20)) rows labels)
+ where
+  valueRows (0x7ffffffe : 0 : _) = Right []
+  valueRows (token : child : more) = ((token, if child == 0 then Nothing else Just (Address child)) :) <$> valueRows more
+  valueRows _ = Left "plan values array has no terminator"
+  labelRecords (0xffffffff : 0xffffffff : 0xffffffff : 0xffffffff : _) = Right []
+  labelRecords (preview : list : help : name : more) = (TableLabel preview list help name :) <$> labelRecords more
+  labelRecords _ = Left "plan labels array has no terminator"
+
+-- | The tables as stock sees them with the package installed: the overlay node's rows and labels
+-- become the package's, whose prefix must be the node's own. An appended row whose child is a
+-- decoded node keeps it; any other child is a 'PackageChild'.
+composePackage :: PackageOverlay -> TablesDocument -> Either String TablesDocument
+composePackage overlay document = do
+  let nodes = documentNodes document
+      known = M.fromList [(nodeAddress node, ()) | node <- nodes]
+  target <- case [node | node <- nodes, nodeAddress node == overlayNode overlay] of
+    [node] -> Right node
+    _ -> Left "the package overlay names no decoded node"
+  stockRows <- maybe (Left "the overlay node has no decoded rows") Right (nodeRows target)
+  stockLabels <- maybe (Left "the overlay node has no decoded labels") Right (nodeLabels target)
+  let (prefix, appended) = splitAt (length stockRows) (overlayRows overlay)
+      childOf = maybe LeafChild (\at -> if M.member at known then NodeChild at else PackageChild at)
+  unless (map (\row -> (rowToken row, childAddress (rowChild row))) stockRows == prefix)
+    (Left "the package's rows do not begin with the node's decoded rows")
+  unless (take (length stockLabels) (overlayLabels overlay) == stockLabels)
+    (Left "the package's labels do not begin with the node's decoded labels")
+  let composed = target
+        { nodeRows = Just (stockRows ++ [TableRow token (childOf child) | (token, child) <- appended])
+        , nodeLabels = Just (overlayLabels overlay) }
+  pure document {documentNodes = [if nodeAddress node == overlayNode overlay then composed else node | node <- nodes]}
+ where
+  childAddress child = case child of
+    LeafChild -> Nothing
+    NodeChild at -> Just at
+    PackageChild at -> Just at

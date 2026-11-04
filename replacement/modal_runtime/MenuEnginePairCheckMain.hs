@@ -1,9 +1,10 @@
 {-# LANGUAGE GHC2021 #-}
 
--- | menu-engine-pair-check --tables MENU-TABLES.json --stock RECEIPT --owned RECEIPT
+-- | menu-engine-pair-check --tables MENU-TABLES.json --package-plan BANK-PLAN.json --stock RECEIPT --owned RECEIPT
 --
--- Checks one owned menu engine guest pair: each role's e2e observations by
--- "Replacement.ModalRuntime.MenuEnginePair", then the two roles against each other.
+-- Checks one owned menu engine guest pair against the menu tables composed with the installed
+-- package's rows: each role's e2e observations by "Replacement.ModalRuntime.MenuEnginePair", then
+-- the two roles against each other.
 module Main (main) where
 
 import Control.Monad (forM, unless)
@@ -15,7 +16,7 @@ import Data.List (sortOn, stripPrefix)
 import qualified Data.Map.Strict as M
 import Replacement.ModalRuntime.MenuEngineClass (menuTree)
 import Replacement.ModalRuntime.MenuEnginePair
-import Replacement.ModalRuntime.MenuEngineTree (TablesDocument)
+import Replacement.ModalRuntime.MenuEngineTree (TablesDocument, composePackage, parsePackagePlan)
 import System.Directory (listDirectory)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
@@ -34,10 +35,13 @@ observations directory = do
 main :: IO ()
 main = do
   arguments <- getArgs
-  (tablesPath, stockPath, ownedPath) <- case arguments of
-    ["--tables", tables, "--stock", stock, "--owned", owned] -> pure (tables, stock, owned)
-    _ -> hPutStrLn stderr "usage: menu-engine-pair-check --tables MENU-TABLES.json --stock RECEIPT --owned RECEIPT" >> exitFailure
-  document <- B.readFile tablesPath >>= either fail pure . (J.eitherDecodeStrict' :: B.ByteString -> Either String TablesDocument)
+  (tablesPath, planPath, stockPath, ownedPath) <- case arguments of
+    ["--tables", tables, "--package-plan", plan, "--stock", stock, "--owned", owned] -> pure (tables, plan, stock, owned)
+    _ -> hPutStrLn stderr "usage: menu-engine-pair-check --tables MENU-TABLES.json --package-plan BANK-PLAN.json --stock RECEIPT --owned RECEIPT" >> exitFailure
+  stockTables <- B.readFile tablesPath >>= either fail pure . (J.eitherDecodeStrict' :: B.ByteString -> Either String TablesDocument)
+  plan <- B.readFile planPath >>= either fail pure . J.eitherDecodeStrict'
+  overlay <- either (fail . ("package plan: " ++)) pure (parsePackagePlan plan)
+  document <- either (fail . ("package overlay: " ++)) pure (composePackage overlay stockTables)
   let tree = menuTree document
   stock <- observations stockPath
   owned <- observations ownedPath
