@@ -24,7 +24,7 @@ import qualified FujiAF.UpdateContainer as U
 import Replacement.StartupArtifact.Adapters
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Contract (contractCarriers)
-import Replacement.StartupArtifact.Joins (JoinKind, registeredJoins)
+import Replacement.StartupArtifact.Joins (JoinKind (..), registeredJoins)
 import Replacement.StartupArtifact.Stage
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
@@ -71,12 +71,15 @@ main :: IO ()
 main = do
   arguments <- getArgs
   (encoder, rebuild, decoder, imagePaths, fixturePath, datPath, scratchPath) <- case arguments of
-    [encoder, rebuild, decoder, firstBin, firstSymbols, pairBin, pairSymbols, publisherBin, publisherSymbols, orchestrationBin, orchestrationSymbols, fixture, dat, scratch] ->
-      pure (encoder, rebuild, decoder, [firstBin, firstSymbols, pairBin, pairSymbols, publisherBin, publisherSymbols, orchestrationBin, orchestrationSymbols], fixture, dat, scratch)
-    _ -> H.failH "usage: startup-artifact-canonical-tests ENCODER REBUILD DECODER FIRST_BIN FIRST_SYMBOLS PAIR_BIN PAIR_SYMBOLS PUBLISHER_BIN PUBLISHER_SYMBOLS ORCHESTRATION_B_BIN ORCHESTRATION_B_SYMBOLS CONTRACT_FIXTURE CANONICAL_DAT SCRATCH_DIR"
+    [encoder, rebuild, decoder, firstBin, firstSymbols, pairBin, pairSymbols, publisherBin, publisherSymbols, orchestrationBin, orchestrationSymbols
+      , orchestrationABin, orchestrationASymbols, dispatcherBin, dispatcherSymbols, installerBin, installerSymbols, fixture, dat, scratch] ->
+      pure (encoder, rebuild, decoder, [firstBin, firstSymbols, pairBin, pairSymbols, publisherBin, publisherSymbols, orchestrationBin, orchestrationSymbols
+        , orchestrationABin, orchestrationASymbols, dispatcherBin, dispatcherSymbols, installerBin, installerSymbols], fixture, dat, scratch)
+    _ -> H.failH "usage: startup-artifact-canonical-tests ENCODER REBUILD DECODER FIRST_BIN FIRST_SYMBOLS PAIR_BIN PAIR_SYMBOLS PUBLISHER_BIN PUBLISHER_SYMBOLS ORCHESTRATION_B_BIN ORCHESTRATION_B_SYMBOLS ORCHESTRATION_A_BIN ORCHESTRATION_A_SYMBOLS DISPATCHER_BIN DISPATCHER_SYMBOLS INSTALLER_BIN INSTALLER_SYMBOLS CONTRACT_FIXTURE CANONICAL_DAT SCRATCH_DIR"
   resolved <- mapM canonicalizePath imagePaths
   tools <- Tools.Tools <$> canonicalizePath encoder <*> canonicalizePath rebuild <*> canonicalizePath decoder
-  [firstBin, firstSymbols, pairBin, pairSymbols, publisherBin, publisherSymbols, orchestrationBin, orchestrationSymbols] <- pure resolved
+  [firstBin, firstSymbols, pairBin, pairSymbols, publisherBin, publisherSymbols, orchestrationBin, orchestrationSymbols
+    , orchestrationABin, orchestrationASymbols, dispatcherBin, dispatcherSymbols, installerBin, installerSymbols] <- pure resolved
   counter <- newIORef 0
   let ok = check counter
   scratch <- Tools.validateScratchDirectory scratchPath
@@ -173,7 +176,7 @@ main = do
       replaced target address word = either (const j2Targets) id
         (maybe (Left CompositionUnchanged) (\change -> applyTargetEdits [change] j2Targets) (edit (at target address (address + 4)) (U.putWord32 word)))
       withScratch scratch' = [piece {pieceFacts = case pieceFacts piece of
-          Record2LinkFacts entry bindings' image _ -> Record2LinkFacts entry bindings' image (ScratchBytes scratch')
+          Record2LinkFacts entry bindings' image _ frame -> Record2LinkFacts entry bindings' image (ScratchBytes scratch') frame
           other -> other} | piece <- j2Pieces]
       j2Checks = [ "prefix-exit-enters-orchestration", "orchestration-entry-pushes-the-caller-frame", "published-initializer-entry"
                  , "initializer-scratch-in-window", "first-stage-zeroes-the-completion-cell" ]
@@ -192,6 +195,94 @@ main = do
   forM_ [Record1, Record2, LoaderA, LoaderB, Image4] $ \target ->
     ok ("J2 composed " ++ show target ++ " differs from canonical exactly at the edits")
       (normalizeSpans (diffSpans target (targetOf targets target) (targetOf j2Observed target)) == editSpansOf target [first, pair, publisher, orchestration])
+
+  -- J3: loader orchestration A and B, dispatcher and installer as one piece.
+  loaderStartupImages <- LoaderStartupImages <$> linked orchestrationABin orchestrationASymbols <*> linked orchestrationBin orchestrationSymbols
+    <*> linked dispatcherBin dispatcherSymbols <*> linked installerBin installerSymbols
+  startup <- either (H.failH . show) pure (derivePieceOf source loaderStartupImages)
+  ok "loader-startup edits loaders A and B and image 4 inside its four carriers"
+    (editTargets startup == Set.fromList [LoaderA, LoaderB, Image4]
+      && pieceCarriers startup == [at LoaderA 0x409ac 0x40b00, at LoaderB 0xd09ac 0xd0b00, at Image4 0x69cdf8 0x69cf84, at Image4 0x725a04 0x725b54]
+      && editsInsideCarriers startup && footprintOutsideCarriers startup)
+  ok "loader-startup and loader-B orchestration refuse on the shared area"
+    (case composeOf [pair, startup, orchestration] of
+      Left (SharedArea _ _ LoaderOrchestrationBArea) -> True
+      _ -> False)
+  ok "without joins, the publisher and loader-startup refuse on loader A"
+    (case composeUnjoined [publisher, startup] of
+      Left (FootprintOverlap _ _ range) -> spanTarget range == LoaderA
+      _ -> False)
+  ok "without joins, the record-2 link and loader-startup refuse"
+    (case composeUnjoined [pair, startup] of
+      Left (FootprintOverlap _ _ _) -> True
+      _ -> False)
+  j3 <- either (H.failH . show) pure (composeOf [first, pair, publisher, startup])
+  let appliedJ3 name = [spans | AppliedJoin join spans <- compositionJoins j3, joinName (joinKind join) == name]
+      j3Catalog kind = [pieceCatalog piece | piece <- compositionPieces j3, pieceKind piece == kind]
+      j3Names = [ "first-stage-secondary-rendezvous", "critical-pair-publisher-bindings", "prefix-orchestration-b", "first-stage-completion-zero"
+                , "loader-startup-publisher", "publisher-installer-roots", "critical-pair-installer-roots", "dispatcher-critical-pair" ]
+  forM_ j3Names $ \name -> putStrLn ("J3 " ++ T.unpack name ++ ": " ++ show (appliedJ3 name))
+  putStrLn ("J3 loader-startup footprint: " ++ show [range | Footprint range _ _ <- pieceFootprint startup])
+  ok "J3 composes pending the observation-qualified joins"
+    (compositionQualification j3 == Pending [ "first-stage-secondary-rendezvous", "prefix-orchestration-b", "first-stage-completion-zero"
+                                            , "loader-startup-publisher", "dispatcher-critical-pair" ])
+  ok "every J3 join applies once" (all (\name -> length (appliedJ3 name) == 1) j3Names)
+  forM_ [LoaderStartupPublisher, PublisherInstallerRoots, CriticalPairInstallerRoots, DispatcherCriticalPair] $ \kind ->
+    let without = [join | join <- registeredJoins, joinKind join /= kind]
+        bounds = concat [joinBounds join | join <- registeredJoins, joinKind join == kind]
+    in ok ("without " ++ T.unpack (joinName kind) ++ ", J3 refuses on a span inside its bounds")
+      (case compose without source [first, pair, publisher, startup] of
+        Left (FootprintOverlap _ _ range) -> coveredBy range bounds
+        _ -> False)
+  ok "the installer root joins cover the root-pair words"
+    (appliedJ3 "publisher-installer-roots" == [[at Image4 0x725a04 0x725a34]]
+      && appliedJ3 "critical-pair-installer-roots" == [[at Image4 0x725a0c 0x725a34]])
+  ok "dispatcher-critical-pair covers the image-4 pair and loader-A orchestration"
+    (case appliedJ3 "dispatcher-critical-pair" of
+      [spans] -> any ((== Image4) . spanTarget) spans && any ((== LoaderA) . spanTarget) spans
+        && all (\range -> coveredBy range [at Image4 0x7235d8 0x723790, at LoaderA 0x409ac 0x40b00]) spans
+      _ -> False)
+  ok "the publisher's caller returns and table reads yield to loader-startup"
+    (map (map (labelText . boundaryLabel) . catalogBoundaries) (j3Catalog PrimaryPublisher) == [["primary-publisher/entry-core0"]]
+      && map catalogReads (j3Catalog PrimaryPublisher) == [[]])
+  let j3Targets = compositionTargets j3
+      j3Pieces = compositionPieces j3
+      holdsIn name targets' pieces' = not (null (named name)) && all ($ evidence targets' pieces') (named name)
+      replacedIn base target address word = either (const base) id
+        (maybe (Left CompositionUnchanged) (\change -> applyTargetEdits [change] base) (edit (at target address (address + 4)) (U.putWord32 word)))
+      withFacts change = [piece {pieceFacts = change (pieceFacts piece)} | piece <- j3Pieces]
+      j3Checks = j2Checks ++
+        [ "orchestration-a-calls-publisher-entry", "loader-a-entry-stack-unchanged", "publisher-caller-sp-is-orchestration-frame"
+        , "loader-headers-unchanged", "submission-depth-in-stack-window" ]
+  initializerCallA <- case [composed | Boundary label' _ _ (Pc composed) _ _ _ _ _ <- concatMap catalogBoundaries (j3Catalog LoaderStartup)
+                                     , labelText label' == "loader-startup/a-initializer-call"] of
+    [site] -> pure site
+    _ -> H.failH "loader-startup lacks its loader-A initializer call"
+  ok "every J3 host check holds on the J3 composition" (all (\name -> holdsIn name j3Targets j3Pieces) j3Checks)
+  ok "a loader-A initializer call to 0x40434 fails the publisher-entry check"
+    (let moved = replacedIn j3Targets LoaderA initializerCallA (0xeb000000 + (((0x40434 - initializerCallA - 8) `div` 4) `mod` 0x1000000))
+     in not (holdsIn "orchestration-a-calls-publisher-entry" moved j3Pieces))
+  ok "a changed loader-A stack load fails the entry-stack and caller-SP checks"
+    (let moved = replacedIn j3Targets LoaderA 0x400a8 0xe59f4000
+     in not (holdsIn "loader-a-entry-stack-unchanged" moved j3Pieces) && not (holdsIn "publisher-caller-sp-is-orchestration-frame" moved j3Pieces))
+  ok "a publisher caller SP other than the orchestration frame fails"
+    (not (holdsIn "publisher-caller-sp-is-orchestration-frame" j3Targets (withFacts (\facts -> case facts of
+      PublisherFacts (PublisherFrame entry _) rows -> PublisherFacts (PublisherFrame entry (Guest 0x40063440)) rows
+      other -> other))))
+  ok "a changed loader-A header fails the installer root check"
+    (not (holdsIn "loader-headers-unchanged" (replacedIn j3Targets LoaderA 0x40010 0x4004dae4) j3Pieces))
+  ok "a task submission below the core-1 window fails the submission-depth check"
+    (not (holdsIn "submission-depth-in-stack-window" j3Targets (withFacts (\facts -> case facts of
+      LoaderStartupFacts a b calls -> LoaderStartupFacts a b (SubmitCall Core1 (StackDepth 0x800) : calls)
+      other -> other))))
+  ok "a critical-pair frame reaching below the boot-stack window fails the submission-depth check"
+    (not (holdsIn "submission-depth-in-stack-window" j3Targets (withFacts (\facts -> case facts of
+      Record2LinkFacts entry bindings' image scratch' _ -> Record2LinkFacts entry bindings' image scratch' (StackDepth 0x800)
+      other -> other))))
+  (_, j3Observed) <- stageComposition tools scratch source j3
+  forM_ [Record1, Record2, LoaderA, LoaderB, Image4] $ \target ->
+    ok ("J3 composed " ++ show target ++ " differs from canonical exactly at the edits")
+      (normalizeSpans (diffSpans target (targetOf targets target) (targetOf j3Observed target)) == editSpansOf target [first, pair, publisher, startup])
 
   allThree <- either (H.failH . show) pure (composeOf [first, pair, publisher])
   H.withTemporaryAt (Tools.scratchDirectoryPath scratch) "startup-canonical-" $ \root -> do
