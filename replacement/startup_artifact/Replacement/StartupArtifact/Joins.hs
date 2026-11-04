@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | The registered joins.
 module Replacement.StartupArtifact.Joins
-  ( JoinKind (..), registeredJoins, initializesBeforeDispatch
+  ( JoinKind (..), registeredJoins
   ) where
 
 import qualified A32 as A
@@ -282,9 +282,9 @@ loaderStartupPublisher = Join LoaderStartupPublisher (Set.fromList [LoaderStartu
       case (initializerCallA evidence, publisherFrame evidence) of
         (Just (A.Branch (A.Cond 14) True target), Just (PublisherFrame (Pc entry) _)) -> target == entry
         _ -> False
-  , HostCheck "orchestration-a-entry-frame" $ \evidence ->
-      pushesCallerFrame (targetWord (evidenceComposed evidence) LoaderA) loaderAStart
-        && loaderAStackLiteral (evidenceComposed evidence) == loaderAStackLiteral (evidenceCanonical evidence)
+  -- The frame push itself is loader-A orchestration's admission (Admission.hs requireFrame).
+  , HostCheck "loader-a-entry-stack-unchanged" $ \evidence ->
+      loaderAStackLiteral (evidenceComposed evidence) == loaderAStackLiteral (evidenceCanonical evidence)
         && loaderAStackLiteral (evidenceCanonical evidence) /= Nothing
         && all (\address -> targetWord (evidenceComposed evidence) LoaderA address == targetWord (evidenceCanonical evidence) LoaderA address)
              [loaderAStackLoad, loaderAStackLoad + 4]
@@ -331,29 +331,13 @@ criticalEntryFrame = 128
 dispatcherCriticalPair :: Join JoinKind
 dispatcherCriticalPair = Join DispatcherCriticalPair (Set.fromList [Record2Link, LoaderStartup])
   [at Image4 0x7235d8 0x723790, at LoaderA loaderAStart 0x40b00]
-  (ObservationQualified "the owned dispatcher submits tasks through the stock wrapper 0x725dd8, which enters the owned critical pair; loader-A orchestration fills the core-0 table the pair reads before it dispatches; qualified by a composed natural comparison")
-  [ HostCheck "orchestration-a-initializes-before-dispatch" $ \evidence ->
-      initializerCallA evidence == Just (A.Branch (A.Cond 14) True 0x40430)
-        && maybe False (initializesBeforeDispatch . LA.proofPaths . L.linkedProof) (orchestrationArtifact LI.LoaderA evidence)
-  , HostCheck "submission-depth-in-stack-window" $ \evidence ->
+  (ObservationQualified "the owned dispatcher submits tasks through the stock wrapper 0x725dd8, which enters the owned critical pair; loader-A orchestration's admission orders its call of the initializer at 0x40430, which fills the core-0 table the pair reads, before its first dispatch (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs expected); qualified by a composed natural comparison")
+  [ HostCheck "submission-depth-in-stack-window" $ \evidence ->
       case submissions evidence of
         Just calls@(_ : _) -> all (\(SubmitCall core (StackDepth depth)) ->
           toInteger (serviceSp core) - toInteger depth - wrapperFrame - criticalEntryFrame >= toInteger (stackFloor core)) calls
         _ -> False
   ]
-
--- | On every primary path, the initializer call precedes the first dispatch.
-initializesBeforeDispatch :: [LA.PathProof] -> Bool
-initializesBeforeDispatch = all ordered
-  where
-    initializes effect = case effect of LA.ServiceCall LI.PrivateInitialize _ -> True; _ -> False
-    dispatches effect = case effect of LA.DispatchCall _ -> True; _ -> False
-    ordered (LA.PathProof (LI.Scenario role _ _) effects _)
-      | role /= LI.Primary = True
-      | otherwise = case (findIndex initializes effects, findIndex dispatches effects) of
-          (Just called, Just dispatched) -> called < dispatched
-          (_, Nothing) -> True
-          _ -> False
 
 registeredJoins :: [Join JoinKind]
 registeredJoins =

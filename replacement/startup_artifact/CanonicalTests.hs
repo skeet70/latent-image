@@ -248,21 +248,19 @@ main = do
         (maybe (Left CompositionUnchanged) (\change -> applyTargetEdits [change] base) (edit (at target address (address + 4)) (U.putWord32 word)))
       withFacts change = [piece {pieceFacts = change (pieceFacts piece)} | piece <- j3Pieces]
       j3Checks = j2Checks ++
-        [ "orchestration-a-calls-publisher-entry", "orchestration-a-entry-frame", "publisher-caller-sp-is-orchestration-frame"
-        , "loader-headers-unchanged", "orchestration-a-initializes-before-dispatch", "submission-depth-in-stack-window" ]
+        [ "orchestration-a-calls-publisher-entry", "loader-a-entry-stack-unchanged", "publisher-caller-sp-is-orchestration-frame"
+        , "loader-headers-unchanged", "submission-depth-in-stack-window" ]
   initializerCallA <- case [composed | Boundary label' _ _ (Pc composed) _ _ _ _ _ <- concatMap catalogBoundaries (j3Catalog LoaderStartup)
                                      , labelText label' == "loader-startup/a-initializer-call"] of
     [site] -> pure site
     _ -> H.failH "loader-startup lacks its loader-A initializer call"
   ok "every J3 host check holds on the J3 composition" (all (\name -> holdsIn name j3Targets j3Pieces) j3Checks)
-  ok "a loader-A initializer call to 0x40434 fails the publisher-entry and initialize-before-dispatch checks"
+  ok "a loader-A initializer call to 0x40434 fails the publisher-entry check"
     (let moved = replacedIn j3Targets LoaderA initializerCallA (0xeb000000 + (((0x40434 - initializerCallA - 8) `div` 4) `mod` 0x1000000))
-     in not (holdsIn "orchestration-a-calls-publisher-entry" moved j3Pieces) && not (holdsIn "orchestration-a-initializes-before-dispatch" moved j3Pieces))
-  ok "a loader-A orchestration without the stock frame push fails the entry-frame check"
-    (not (holdsIn "orchestration-a-entry-frame" (replacedIn j3Targets LoaderA 0x409ac 0xe92d4810) j3Pieces))
-  ok "a changed loader-A stack load fails the entry-frame and caller-SP checks"
+     in not (holdsIn "orchestration-a-calls-publisher-entry" moved j3Pieces))
+  ok "a changed loader-A stack load fails the entry-stack and caller-SP checks"
     (let moved = replacedIn j3Targets LoaderA 0x400a8 0xe59f4000
-     in not (holdsIn "orchestration-a-entry-frame" moved j3Pieces) && not (holdsIn "publisher-caller-sp-is-orchestration-frame" moved j3Pieces))
+     in not (holdsIn "loader-a-entry-stack-unchanged" moved j3Pieces) && not (holdsIn "publisher-caller-sp-is-orchestration-frame" moved j3Pieces))
   ok "a publisher caller SP other than the orchestration frame fails"
     (not (holdsIn "publisher-caller-sp-is-orchestration-frame" j3Targets (withFacts (\facts -> case facts of
       PublisherFacts (PublisherFrame entry _) rows -> PublisherFacts (PublisherFrame entry (Guest 0x40063440)) rows
