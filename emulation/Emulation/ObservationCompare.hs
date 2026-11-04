@@ -5,15 +5,14 @@ module Emulation.ObservationCompare
   ( e2eIgnored
   , toggleIgnored
   , normalize
-  , passes
   , differences
   ) where
 
-import Data.Aeson (Value (..), encode)
+import Data.Aeson (Value (..), encode, object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy.Char8 as BL
-import Data.List (dropWhileEnd, sort)
+import Data.List (sort)
 import qualified Data.List.NonEmpty as NE
 import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
@@ -40,11 +39,6 @@ data SiteEntry
 newtype SiteLabel = SiteLabel T.Text
   deriving (Eq)
 
-data PassParts = PassParts
-  { passPrefix :: [SiteEntry]
-  , passBody :: [SiteEntry]
-  }
-
 parseEntry :: T.Text -> SiteEntry
 parseEntry name
   | name == "cc-entry-marker" = EntryMarker
@@ -63,57 +57,31 @@ isConverterEntry EntrySettingsConverter = True
 isConverterEntry EntryCaptureConverter = True
 isConverterEntry _ = False
 
-passParts :: [SiteEntry] -> Maybe PassParts
-passParts pass = case break isConverterEntry pass of
-  (_, []) -> Nothing
-  (prefix, body) -> Just (PassParts prefix body)
+-- | A converting segment's site entries as two sequences compared apart: every converter entry
+-- in order, and the develop passes with their converter entries removed, consecutive identical
+-- passes counted once. How the two interleave is not kept.
+data SiteSequences = SiteSequences [T.Text] [[T.Text]]
 
-converts :: [SiteEntry] -> Bool
-converts = any isConverterEntry
-
--- | A converter pass split by idle passes merges only when the continuation repeats the first
--- part's entries before its first converter; the duplicate prefix is dropped once. A run of
--- settings converter entries before the first marker joins the next pass when that pass is
--- idle. After merging, when the first converting pass holds only settings converters after
--- its prefix and every earlier pass equals that prefix, its converter entries count as entries
--- before the first pass.
-passes :: [T.Text] -> [[T.Text]]
-passes = map (map entryText) . developPasses . map parseEntry
-
-developPasses :: [SiteEntry] -> [[SiteEntry]]
-developPasses entries = trim (map NE.head (NE.group (hoist (merge (lead (split entries))))))
+-- | 'Nothing' when no entry converts.
+siteSequences :: [T.Text] -> Maybe SiteSequences
+siteSequences names
+  | not (any isConverterEntry entries) = Nothing
+  | otherwise = Just (SiteSequences (map entryText (filter isConverterEntry entries)) (map (map entryText) developed))
   where
+    entries = map parseEntry names
+    developed = map NE.head (NE.group (filter (not . null) (map (filter (not . isConverterEntry)) (split entries))))
     split [] = []
     split (first : rest) = let (pass, more) = break (== EntryMarker) rest in (first : pass) : split more
-    lead (settings : pass : rest)
-      | all (== EntrySettingsConverter) settings, not (converts pass) = (pass ++ settings) : rest
-    lead chunks = chunks
-    hoist chunks = case span (not . converts) chunks of
-      (idle, pass : rest)
-        | Just parts <- passParts pass, take 1 (passPrefix parts) == [EntryMarker], all (== passPrefix parts) idle
-        , all (== EntrySettingsConverter) (passBody parts) ->
-            passBody parts : idle ++ [passPrefix parts] ++ rest
-      _ -> chunks
-    merge [] = []
-    merge (pass : rest)
-      | Just parts <- passParts pass = absorb (passPrefix parts) [pass] rest
-      | otherwise = pass : merge rest
-    absorb prefix parts rest = case span (not . converts) rest of
-      (idle, next : after)
-        | Just nextParts <- passParts next, passPrefix nextParts == prefix, not (null idle) ->
-            absorb prefix (passBody nextParts : parts) after
-      _ -> concat (reverse parts) : merge rest
-    trim = dropWhileEnd (not . converts) . dropWhile (not . converts)
 
 -- | VALUE without the fields named in KEYS at any depth. A segment's
--- @classic_chrome_site_entries@ become its 'passes' when one of them converts, and stay
+-- @classic_chrome_site_entries@ become its 'siteSequences' when one of them converts, and stay
 -- the exact list otherwise.
 normalize :: [K.Key] -> Value -> Value
 normalize keys (Object fields) = Object (KM.mapWithKey site (KM.filterWithKey (\key _ -> key `notElem` keys) fields))
   where
     site "classic_chrome_site_entries" (Array items)
-      | Just names <- mapM text (V.toList items), let developed = passes names, not (null developed) =
-          Array (V.fromList [Array (V.fromList (map String pass)) | pass <- developed])
+      | Just names <- mapM text (V.toList items), Just (SiteSequences converters developed) <- siteSequences names =
+          object ["converters" .= converters, "passes" .= developed]
     site _ value = normalize keys value
     text (String name) = Just name
     text _ = Nothing
