@@ -515,7 +515,7 @@ wrapperIdleErrorCallback = Join WrapperIdleErrorCallback (Set.fromList [TaskSubm
           all (either (const False) (const True) . submissionStackWith (idleCallbackDemand low) joined) calls
         _ -> False ]
 
--- | Owned carriers root's closure may enter, with the entries their pieces admit: the wrapper and release
+-- | Owned carriers a root or producer closure may enter, with the entries their pieces admit: the wrapper and release
 -- (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:87-91), the critical-pair branch words
 -- (record-2 staging) and the storage transition, which only the retained prelude enters.
 admittedEntries :: [((Word32, Word32), [Word32])]
@@ -543,13 +543,13 @@ rootTaskServices = Join RootTaskServices (Set.fromList [RootTask, Record2Link, T
 
 -- | The producer's closure calls the critical pair, and every call into an owned carrier targets an admitted entry.
 producerEntersAtEntries :: Producers.Producer -> JoinEvidence -> Bool
-producerEntersAtEntries producer evidence = not (null calls) && all (uncurry elem) calls
+producerEntersAtEntries producer evidence = any (\(target, _) -> target >= 0x7235d8 && target < 0x723790) calls && all (uncurry elem) calls
   where calls = entering (Producers.closureCalls producer (targetOf (evidenceCanonical evidence) Image4))
 
 producerServices :: JoinKind -> PieceKind -> Producers.Producer -> Join JoinKind
 producerServices kind piece producer = Join kind (Set.fromList [piece, Record2Link])
   [at Image4 0x7235d8 0x723790]
-  (ObservationQualified ("the producer's retained services reach the critical-pair entry words 0x7235d8 and 0x7236b0 of the record-2 link; " <> joinName kind <> "-closure-enters-carriers-at-entries checks that every direct call from the producer's closure into the wrapper, critical-pair and storage carriers targets an entry the owning piece admits (critical-pair words: replacement/startup_artifact/Replacement/StartupArtifact/Adapters.hs:199); qualified by the producer's call sequence and reads in the composed comparison"))
+  (ObservationQualified ("the producer's retained services reach the critical-pair entry words 0x7235d8 and 0x7236b0 of the record-2 link; " <> joinName kind <> "-closure-enters-carriers-at-entries checks that every direct call from the producer's closure into the wrapper, critical-pair and storage carriers targets an entry the owning piece admits (critical-pair words: replacement/startup_artifact/Replacement/StartupArtifact/Adapters.hs:199-200); qualified by the producer's call sequence and reads in the composed comparison"))
   [HostCheck (joinName kind <> "-closure-enters-carriers-at-entries") (producerEntersAtEntries producer)]
 
 image5ProducerServices, plainProducerServices :: Join JoinKind

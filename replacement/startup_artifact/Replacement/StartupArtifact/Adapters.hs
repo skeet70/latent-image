@@ -912,7 +912,7 @@ callerReturn kind image4 site entryPc = case A.decode site (U.word32At image4 (f
 producerWritesPremise :: T.Text -> T.Text
 producerWritesPremise proof = T.intercalate "; "
   [ proof
-  , "the base is the producer entry SP 0xa1c1e0 in task60 on core 0 that the leaf routes recorded (reports/replacement-inventory-baseline.md:1450,1477); task60's allocation [0xa1b600,0xa1c200) comes from root's submission, compared by root-task/a-creation-all and submission-storage-records; another entry SP faults the first push" ]
+  , "the base is the producer entry SP 0xa1c1e0 in task60 on core 0 that the leaf routes recorded (reports/replacement-inventory-baseline.md:1450,1477); task60's allocation [0xa1b600,0xa1c200) comes from root's submission, compared by root-task/a-creation-all and submission-storage-records; another entry SP faults an entry push" ]
 
 -- | Replacement.Image5Load.Artifact over //replacement/image5_load:image5-load-image.
 deriveImage5Producer :: Canonical -> LinkedImage -> Either Refusal Piece
