@@ -4,26 +4,15 @@ use crate::attach_state::{
     self, AllowanceLabel, AttachDifferences, AttachRefusal, AttachState, AttachVerdict, BoardLeaf, ContextRegister, RoleCapture, Space,
     SpaceSpan, StackCheck, UnusedEntry,
 };
+use crate::application_observation::{self, ApplicationReceipt, ApplicationRefusal, PairField};
 use crate::composed_catalog::{
-    BoundaryKind, Compare, Contract, Core, Declaration, Label, PiecePolicy, PieceKind, Role, Sha256, Target,
+    BoundaryKind, Compare, Contract, Core, Declaration, Label, PiecePolicy, PieceKind, Role, Schema, Sha256, Target,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(try_from = "u32", into = "u32")]
-pub struct SchemaFour;
-
-impl TryFrom<u32> for SchemaFour {
-    type Error = String;
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        if value == 4 { Ok(Self) } else { Err("schema must be 4".into()) }
-    }
-}
-
-impl From<SchemaFour> for u32 {
-    fn from(_: SchemaFour) -> Self { 4 }
-}
+/// The receipt's filename in its role's directory.
+pub const RECEIPT_FILE: &str = "composed-startup.json";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -354,7 +343,7 @@ pub struct RecordedPolicy {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Receipt {
-    pub schema: SchemaFour,
+    pub schema: Schema,
     pub kind: ReceiptKind,
     pub role: Role,
     pub identity: Identity,
@@ -373,6 +362,9 @@ pub struct Receipt {
     pub attach_sources: Option<AttachSources>,
     pub guard: Option<GuardObservation>,
     pub menu: MenuObservation,
+    /// Schema 5: the application phase.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application: Option<ApplicationReceipt>,
 }
 
 impl Receipt {
@@ -386,6 +378,8 @@ impl Receipt {
 #[serde(rename_all = "kebab-case")]
 pub enum IdentityField {
     Kind,
+    /// The receipt's schema is not the contract's.
+    Schema,
     Role,
     Contract,
     Run,
@@ -429,6 +423,10 @@ pub enum Difference {
     AttachMemory { space: Space, start: u64, end: u64, differing_bytes: u64, runs: Vec<SpaceSpan> },
     UnusedAllowance { entry: UnusedEntry },
     AttachRelation { role: Role, failure: RelationFailure },
+    /// A schema-5 application check refused the role's evidence.
+    Application { role: Role, refusal: ApplicationRefusal },
+    /// The roles' application evidence differs.
+    ApplicationPair { field: PairField },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -440,7 +438,7 @@ pub enum VerdictKind {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Verdict {
-    pub schema: SchemaFour,
+    pub schema: Schema,
     pub verdict: VerdictKind,
     pub first_difference: Option<Difference>,
     /// From the composed receipt.
@@ -472,6 +470,8 @@ fn declarations(contract: &Contract, role: Role, guard: &GuardObservation) -> Re
 fn identity(contract: &Contract, digest: &Sha256, receipt: &Receipt, role: Role) -> Result<(), Difference> {
     let field = if receipt.kind != ReceiptKind::ComposedStartupReceipt {
         IdentityField::Kind
+    } else if receipt.schema != contract.schema() {
+        IdentityField::Schema
     } else if receipt.role != role {
         IdentityField::Role
     } else if &receipt.identity.contract != digest {
@@ -650,6 +650,22 @@ fn differences(contract: &Contract, digest: &Sha256, retained: &Receipt, owned: 
     compare_rows(contract, retained, owned)?;
     compare_presence(contract, retained, owned)?;
     compare_reads(contract, retained, owned)?;
+    if let Some(application) = contract.application() {
+        let mut sections = [None, None];
+        for (slot, (role, receipt, directory)) in sections.iter_mut()
+            .zip([(Role::Retained, retained, directories.retained), (Role::Composed, owned, directories.owned)])
+        {
+            let section = receipt.application.as_ref().ok_or_else(|| Difference::Application {
+                role, refusal: ApplicationRefusal::new(application_observation::ApplicationCheck::CaptureBound, "the receipt has no application section"),
+            })?;
+            application_observation::check_role(application, role, section, directory)
+                .map_err(|refusal| Difference::Application { role, refusal })?;
+            *slot = Some(section);
+        }
+        if let [Some(retained), Some(owned)] = sections {
+            application_observation::check_pair(retained, owned).map_err(|field| Difference::ApplicationPair { field })?;
+        }
+    }
     Ok(attach)
 }
 
@@ -661,7 +677,7 @@ pub fn compare(contract: &Contract, digest: &Sha256, retained: &Receipt, owned: 
         Err(refusal) => (None, Some(refusal.first), refusal.attach),
     };
     Verdict {
-        schema: SchemaFour,
+        schema: contract.schema(),
         verdict: if first_difference.is_none() { VerdictKind::Equal } else { VerdictKind::Different },
         first_difference,
         policies: owned.policies.clone(),

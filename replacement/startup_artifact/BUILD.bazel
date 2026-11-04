@@ -6,6 +6,7 @@ haskell_library(
     name = "startup-artifact",
     srcs = [
         "Replacement/StartupArtifact/Adapters.hs",
+        "Replacement/StartupArtifact/Application.hs",
         "Replacement/StartupArtifact/AttachState.hs",
         "Replacement/StartupArtifact/Compose.hs",
         "Replacement/StartupArtifact/Contract.hs",

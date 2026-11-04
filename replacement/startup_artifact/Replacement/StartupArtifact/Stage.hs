@@ -16,6 +16,7 @@ import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
 import Replacement.Record5Staging (decodeRecord, stageRecord5, stagedRecord5Dat)
 import Replacement.StartupArtifact.Adapters
+import Replacement.StartupArtifact.Application (RoleImages (..), application, plainImage)
 import Replacement.StartupArtifact.AttachState (AttachSources (..), attachStateValue)
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Contract
@@ -115,4 +116,11 @@ runStager tools canonicalPath manifestPath scratchPath output = do
     LoaderStartupPiece _ -> pure [])
   let sources = AttachSources (canonicalDat source) dat (canonicalTargets source) observed ownedSymbols (compositionPieces composition) attach
   attachState <- refused (attachStateValue sources (manifestAttachRules manifest) (contractCarriers composition))
-  writeOutputs output dat observed (contractValue source manifestBytes composition dat observed attach attachState)
+  section <- case manifestApplication manifest of
+    WithoutApplication -> pure Nothing
+    WithApplication -> refused $ do
+      composedParts <- either (const (Left ComposedUnparsed)) (Right . U.parsedParts) (U.parseContainer dat)
+      retained <- RoleImages (canonicalTargets source) <$> plainImage (U.parsedParts (canonicalParsed source))
+      composed <- RoleImages observed <$> plainImage composedParts
+      Just <$> application (contractCarriers composition) retained composed
+  writeOutputs output dat observed (contractValue source manifestBytes composition dat observed attach attachState section)

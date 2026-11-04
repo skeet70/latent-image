@@ -1,4 +1,5 @@
-//! Strict parse of `composed-contract.json` (schema 4) and the observation plan derived from it.
+//! Strict parse of `composed-contract.json` (schema 4, or 5 with the `application` section) and the observation plan
+//! derived from it.
 use crate::attach_state::{AttachRuleRefusal, AttachRules, RawAttachRules, RuleContext, Span};
 use fujimod_emulator::board::observation::{
     CompositeGuardConfig, DeclaredMutation, DecoderChoice, DecoderIndex, DestinationPolicy, GuardCore, GuardRange,
@@ -640,14 +641,31 @@ struct RawGuard {
     declared: DeclaredLists,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(try_from = "u32")]
-struct SchemaFour;
+/// Contract, receipt and verdict schema; 5 carries the `application` section.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(try_from = "u32", into = "u32")]
+pub enum Schema {
+    Four,
+    Five,
+}
 
-impl TryFrom<u32> for SchemaFour {
+impl TryFrom<u32> for Schema {
     type Error = String;
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        if value == 4 { Ok(Self) } else { Err("contract schema must be 4".into()) }
+        match value {
+            4 => Ok(Self::Four),
+            5 => Ok(Self::Five),
+            _ => Err("schema must be 4 or 5".into()),
+        }
+    }
+}
+
+impl From<Schema> for u32 {
+    fn from(value: Schema) -> Self {
+        match value {
+            Schema::Four => 4,
+            Schema::Five => 5,
+        }
     }
 }
 
@@ -660,8 +678,7 @@ enum ContractKind {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawContract {
-    #[allow(dead_code)]
-    schema: SchemaFour,
+    schema: Schema,
     #[allow(dead_code)]
     kind: ContractKind,
     qualification: Qualification,
@@ -672,6 +689,8 @@ struct RawContract {
     guard: RawGuard,
     joins: Vec<Join>,
     pieces: Vec<RawPiece>,
+    #[serde(default)]
+    application: Option<RawApplication>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -727,6 +746,7 @@ pub enum CatalogRefusal {
     BoundaryBound { role: Role, core: Core, count: usize },
     ReadNotRetained(Label),
     IdenticalDats,
+    Application(ApplicationProblem),
 }
 
 impl std::fmt::Display for CatalogRefusal {
@@ -752,6 +772,8 @@ pub struct Contract {
     declared: DeclaredLists,
     policies: Vec<PiecePolicy>,
     classes: Vec<WatchRange>,
+    schema: Schema,
+    application: Option<Application>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1111,8 +1133,14 @@ impl Contract {
         guards.iter().try_for_each(check_guard)?;
         let classes: Vec<WatchRange> = merged.into_iter()
             .map(|range| WatchRange { start: range.span.start, end: range.span.end, kinds: WatchKinds::WRITES }).collect();
-        if classes.is_empty() || classes.len() > WATCH_CLASS_LIMIT {
-            return Err(CatalogRefusal::GuardBound(GuardBound::WatchClasses(classes.len())));
+        let application = match (raw.schema, raw.application) {
+            (Schema::Four, None) => None,
+            (Schema::Five, Some(raw)) => Some(application(raw, &pieces, &boundaries).map_err(CatalogRefusal::Application)?),
+            _ => return Err(CatalogRefusal::Application(ApplicationProblem::Section)),
+        };
+        let application_classes = application.as_ref().map_or(0, |application| application.code.len());
+        if classes.is_empty() || classes.len() + application_classes > WATCH_CLASS_LIMIT {
+            return Err(CatalogRefusal::GuardBound(GuardBound::WatchClasses(classes.len() + application_classes)));
         }
         let cores = boundaries.values().flat_map(|boundary| boundary.cores.iter()).collect();
         let context = RuleContext { attach_core, cores, boundaries: &boundaries, carriers: carrier_spans };
@@ -1133,8 +1161,15 @@ impl Contract {
             guards,
             policies,
             classes,
+            schema: raw.schema,
+            application,
         })
     }
+
+    pub fn schema(&self) -> Schema { self.schema }
+
+    /// The schema-5 `application` section.
+    pub fn application(&self) -> Option<&Application> { self.application.as_ref() }
 
     pub fn identities(&self, role: Role) -> &Identities {
         match role {
@@ -1187,6 +1222,7 @@ impl Contract {
         Plan {
             roles: [Role::Retained, Role::Composed].into_iter().map(|role| self.role_plan(role)).collect(),
             relations: self.attach_rules.relations.clone(),
+            application: self.application.clone(),
         }
     }
 
@@ -1215,6 +1251,8 @@ impl Contract {
 pub struct Plan {
     pub roles: Vec<RolePlan>,
     pub relations: crate::attach_relations::Relations,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application: Option<Application>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1297,4 +1335,352 @@ impl PolicyPlan {
             }).collect(),
         }
     }
+}
+
+/// The physical address of a DRAM address in either spelling.
+pub fn physical_address(address: u32) -> u32 {
+    if (ALIAS_BASE..ALIAS_END).contains(&u64::from(address)) { address - ALIAS_BASE as u32 } else { address }
+}
+
+/// A code word as a role's decoded image holds it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct CodeWord(pub u32);
+
+/// Instructions entered across both cores.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct Instructions(pub u64);
+
+macro_rules! address_label {
+    ($name:ident, $prefix:literal, $what:literal) => {
+        /// The prefix and the stock PC in lowercase hexadecimal.
+        #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+        #[serde(try_from = "String", into = "String")]
+        pub struct $name(String);
+        impl TryFrom<String> for $name {
+            type Error = String;
+            fn try_from(value: String) -> Result<Self, Self::Error> {
+                let parsed = value.strip_prefix($prefix)
+                    .and_then(|hex| u32::from_str_radix(hex, 16).ok().filter(|pc| format!("{pc:x}") == hex));
+                match parsed {
+                    Some(_) => Ok(Self(value)),
+                    None => Err(concat!($what, " is not ", $prefix, "<lowercase hex>").into()),
+                }
+            }
+        }
+        impl From<$name> for String {
+            fn from(value: $name) -> Self { value.0 }
+        }
+        impl $name {
+            pub fn of(pc: Pc) -> Self { Self(format!(concat!($prefix, "{:x}"), pc.0)) }
+            pub fn as_str(&self) -> &str { &self.0 }
+        }
+    };
+}
+
+address_label!(SiteLabel, "app-", "application site label");
+address_label!(QueueLabel, "queue-", "queue site label");
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SiteKind {
+    Task1,
+    Pump,
+    HookTarget,
+    Adapter,
+    Uilib,
+    Shared,
+    Publication,
+    Initializer,
+}
+
+impl SiteKind {
+    /// Sites only task1 executes; its committed context is checked at each.
+    pub fn task1(self) -> bool { matches!(self, Self::Task1 | Self::Pump | Self::HookTarget | Self::Adapter) }
+}
+
+/// Every site a schema-5 contract lists, by stock PC.
+pub const APPLICATION_SITES: [(u32, SiteKind); 57] = {
+    use SiteKind::{Adapter, HookTarget, Initializer, Publication, Pump, Shared, Task1, Uilib};
+    [
+        (0xc22f60, Task1), (0xc22f64, Task1), (0xc22f6c, Task1), (0xc22f70, Task1), (0xc22f74, Task1), (0xc22f84, Task1),
+        (0xbfb124, Task1), (0xc22bd0, Task1), (0xc22fb4, Task1), (0xc22fd4, Task1), (0xc22fd8, Task1), (0xc23094, Task1),
+        (0xc230a0, Task1), (0xc230b4, Task1), (0xc230c0, Task1), (0xc230d8, Task1), (0xc230f4, Task1), (0xc23104, Task1),
+        (0xc23114, Task1), (0xc2311c, Task1), (0xc2312c, Task1), (0xc2314c, Task1), (0xc23150, Task1), (0xc231ec, Task1),
+        (0xc231fc, Task1), (0xc23274, Task1), (0xc23278, Task1),
+        (0xbfbd20, Pump), (0xbfbd24, Pump), (0xbfbd28, Pump), (0xbfbd2c, Pump), (0xbfbd30, Pump), (0xbfbd34, Pump),
+        (0xbfbd38, Pump), (0xbfbd3c, Pump),
+        (0xbfb1b8, HookTarget), (0xbfb20c, HookTarget), (0xbfb1e0, HookTarget),
+        (0xdb5124, Adapter), (0xdb515c, Adapter), (0xdb5170, Adapter), (0xdb5174, Adapter), (0xdb5178, Adapter),
+        (0xdb51d0, Adapter),
+        (0x725214, Shared),
+        (0x11090a4, Uilib), (0x1109130, Uilib), (0x1108a2c, Uilib), (0x110f9d8, Uilib),
+        (0x6a9840, Publication), (0x6a9844, Publication), (0x6a9934, Publication),
+        (0x69d2e0, Initializer), (0x69d2e4, Initializer), (0xd985a4, Initializer), (0xd985c8, Initializer),
+        (0xd985d8, Initializer),
+    ]
+};
+
+/// The shared queue code's scope points on task1's stack.
+pub const QUEUE_SITES: [u32; 9] = [0x725318, 0x725378, 0x72537c, 0x7253c0, 0x7253f8, 0x7253fc, 0x725414, 0x725418, 0x72541c];
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApplicationSite {
+    pub label: SiteLabel,
+    pub kind: SiteKind,
+    pub retained_pc: Pc,
+    pub composed_pc: Pc,
+    pub word: CodeWord,
+}
+
+impl ApplicationSite {
+    pub fn pc(&self, role: Role) -> Pc {
+        match role {
+            Role::Retained => self.retained_pc,
+            Role::Composed => self.composed_pc,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct QueueSite {
+    pub label: QueueLabel,
+    pub pc: Pc,
+    pub word: CodeWord,
+}
+
+/// Kernel domain A (`0`) or B (`1`).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(try_from = "u8", into = "u8")]
+pub enum Domain {
+    A,
+    B,
+}
+
+impl TryFrom<u8> for Domain {
+    type Error = String;
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::A),
+            1 => Ok(Self::B),
+            _ => Err("domain is not 0 or 1".into()),
+        }
+    }
+}
+
+impl From<Domain> for u8 {
+    fn from(value: Domain) -> Self { value.index() as u8 }
+}
+
+impl Domain {
+    pub const ALL: [Self; 2] = [Self::A, Self::B];
+    pub fn index(self) -> usize {
+        match self {
+            Self::A => 0,
+            Self::B => 1,
+        }
+    }
+    /// The domain of a core reading CP14 identity `identity` in a recorded model.
+    pub fn of_identity(identity: u32) -> Option<Self> {
+        crate::run::CoreIdentities::domain(identity).map(|index| [Self::A, Self::B][index])
+    }
+}
+
+/// A kernel cell's guest address.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct Cell(pub u32);
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskLayout {
+    pub domain: Domain,
+    pub creation: Cell,
+    pub task: Cell,
+    pub ids: Cell,
+    pub domains: Cell,
+    pub current: Cell,
+    pub selected: Cell,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodeLabel {
+    Task1Body,
+    Task1Setup,
+    Pump,
+}
+
+/// Physical `[start, end)` of stock application code with each role's image digest of it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodeRange {
+    pub label: CodeLabel,
+    pub start: u64,
+    pub end: u64,
+    pub retained_sha256: Sha256,
+    pub composed_sha256: Sha256,
+}
+
+impl CodeRange {
+    pub fn sha256(&self, role: Role) -> &Sha256 {
+        match role {
+            Role::Retained => &self.retained_sha256,
+            Role::Composed => &self.composed_sha256,
+        }
+    }
+    pub fn overlaps(&self, start: u64, end: u64) -> bool { start < self.end && self.start < end }
+}
+
+/// The settle interval after a first-ready candidate and the instruction count the search must end by.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Readiness {
+    pub settle: Instructions,
+    pub end: Instructions,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct HookCall {
+    pub site: Pc,
+    pub target: Pc,
+    pub continuation: Pc,
+}
+
+/// The pump's hook calls in order (prehook, normalizer, posthook) and its return instruction, decoded from the
+/// contract's code words.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct PumpProfile {
+    pub entry: Pc,
+    pub calls: [HookCall; 3],
+    pub returned: Pc,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawApplication {
+    sites: Vec<ApplicationSite>,
+    queue_sites: Vec<QueueSite>,
+    task_layouts: Vec<TaskLayout>,
+    code: Vec<CodeRange>,
+    readiness: Readiness,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct Application {
+    pub sites: Vec<ApplicationSite>,
+    pub queue_sites: Vec<QueueSite>,
+    /// Domain A, then B.
+    pub task_layouts: [TaskLayout; 2],
+    pub code: Vec<CodeRange>,
+    pub readiness: Readiness,
+    pub pump: PumpProfile,
+}
+
+impl Application {
+    pub fn site(&self, label: &SiteLabel) -> Option<&ApplicationSite> { self.sites.iter().find(|site| &site.label == label) }
+    pub fn queue(&self, label: &QueueLabel) -> Option<&QueueSite> { self.queue_sites.iter().find(|site| &site.label == label) }
+    pub fn layout(&self, domain: Domain) -> &TaskLayout { &self.task_layouts[domain.index()] }
+    pub fn code_range(&self, label: CodeLabel) -> Option<&CodeRange> { self.code.iter().find(|range| range.label == label) }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ApplicationProblem {
+    /// Schema 5 without an `application` section, or schema 4 with one.
+    Section,
+    SiteLabel(Pc),
+    /// The sites' stock PCs and kinds differ from `APPLICATION_SITES`, or a composed PC is unaligned.
+    Sites,
+    QueueLabel(Pc),
+    QueueSites,
+    /// A composed-role site inside a piece's owned code.
+    SiteInPiece(Pc),
+    /// A site at a contract boundary's PC in the same role.
+    SiteCollision(Pc),
+    TaskLayouts,
+    CodeRanges,
+    Readiness,
+    /// The pump's words do not decode to three calls of the hook targets and a return.
+    Pump,
+}
+
+fn branch_target(pc: u32, word: u32) -> Option<u32> {
+    (word >> 24 == 0xeb).then(|| (i64::from(pc) + 8 + i64::from(((word << 8) as i32) >> 6)) as u32)
+}
+
+/// `bx lr` or `pop {..., pc}`.
+fn returns(word: u32) -> bool { word == 0xe12f_ff1e || (word & 0xffff_0000 == 0xe8bd_0000 && word & (1 << 15) != 0) }
+
+fn pump_profile(sites: &[ApplicationSite]) -> Option<PumpProfile> {
+    let mut pump: Vec<&ApplicationSite> = sites.iter().filter(|site| site.kind == SiteKind::Pump).collect();
+    pump.sort_by_key(|site| site.retained_pc);
+    let mut calls = Vec::with_capacity(3);
+    let mut returned = None;
+    for site in &pump {
+        let pc = site.retained_pc.0;
+        if let Some(target) = branch_target(pc, site.word.0) {
+            calls.push(HookCall { site: site.retained_pc, target: Pc(target), continuation: Pc(pc + 4) });
+        } else if returns(site.word.0) {
+            returned = Some(site.retained_pc);
+            break;
+        }
+    }
+    let hooks: BTreeSet<Pc> = sites.iter().filter(|site| site.kind == SiteKind::HookTarget).map(|site| site.retained_pc).collect();
+    let calls: [HookCall; 3] = calls.try_into().ok()?;
+    let targets: BTreeSet<Pc> = calls.iter().map(|call| call.target).collect();
+    let continued = calls.iter().all(|call| pump.iter().any(|site| site.retained_pc == call.continuation));
+    let entry = pump.first()?.retained_pc;
+    (targets == hooks && continued).then_some(PumpProfile { entry, calls, returned: returned? })
+}
+
+fn application(raw: RawApplication, pieces: &[Piece], boundaries: &BTreeMap<Label, Boundary>) -> Result<Application, ApplicationProblem> {
+    if let Some(site) = raw.sites.iter().find(|site| site.label != SiteLabel::of(site.retained_pc)) {
+        return Err(ApplicationProblem::SiteLabel(site.retained_pc));
+    }
+    let listed: BTreeMap<u32, SiteKind> = raw.sites.iter().map(|site| (site.retained_pc.0, site.kind)).collect();
+    let required: BTreeMap<u32, SiteKind> = APPLICATION_SITES.into_iter().collect();
+    if listed.len() != raw.sites.len() || listed != required || raw.sites.iter().any(|site| site.composed_pc.0 % 4 != 0) {
+        return Err(ApplicationProblem::Sites);
+    }
+    if let Some(site) = raw.queue_sites.iter().find(|site| site.label != QueueLabel::of(site.pc)) {
+        return Err(ApplicationProblem::QueueLabel(site.pc));
+    }
+    let queued: BTreeSet<u32> = raw.queue_sites.iter().map(|site| site.pc.0).collect();
+    if queued.len() != raw.queue_sites.len() || queued != QUEUE_SITES.into_iter().collect() {
+        return Err(ApplicationProblem::QueueSites);
+    }
+    let owned: Vec<Interval> = pieces.iter().flat_map(|piece| &piece.catalog.owned_code).map(|span| span.physical().unwrap_or(*span)).collect();
+    let composed = raw.sites.iter().map(|site| site.composed_pc).chain(raw.queue_sites.iter().map(|site| site.pc));
+    if let Some(pc) = composed.into_iter().find(|pc| owned.iter().any(|span| span.holds(u64::from(physical_address(pc.0))))) {
+        return Err(ApplicationProblem::SiteInPiece(pc));
+    }
+    for role in [Role::Retained, Role::Composed] {
+        let armed: BTreeSet<u32> = boundaries.values().filter_map(|boundary| boundary.pc(role)).map(|pc| physical_address(pc.0)).collect();
+        let mut sites = raw.sites.iter().map(|site| site.pc(role)).chain(raw.queue_sites.iter().map(|site| site.pc));
+        if let Some(pc) = sites.find(|pc| armed.contains(&physical_address(pc.0))) {
+            return Err(ApplicationProblem::SiteCollision(pc));
+        }
+    }
+    let task_layouts = match raw.task_layouts[..] {
+        [a, b] if a.domain == Domain::A && b.domain == Domain::B => [a, b],
+        _ => return Err(ApplicationProblem::TaskLayouts),
+    };
+    let cells = task_layouts.iter().flat_map(|layout| [layout.creation, layout.task, layout.ids, layout.domains, layout.current, layout.selected]);
+    if cells.into_iter().any(|cell| cell.0 == 0 || cell.0 % 4 != 0) {
+        return Err(ApplicationProblem::TaskLayouts);
+    }
+    let labels: BTreeSet<CodeLabel> = raw.code.iter().map(|range| range.label).collect();
+    let malformed = raw.code.iter().any(|range| range.start >= range.end || range.end > ADDRESS_END);
+    let overlapping = raw.code.iter().enumerate().any(|(index, range)| raw.code[..index].iter().any(|other| range.overlaps(other.start, other.end)));
+    if raw.code.len() != 3 || labels.len() != 3 || malformed || overlapping {
+        return Err(ApplicationProblem::CodeRanges);
+    }
+    if raw.readiness.settle.0 == 0 || raw.readiness.settle >= raw.readiness.end {
+        return Err(ApplicationProblem::Readiness);
+    }
+    let pump = pump_profile(&raw.sites).ok_or(ApplicationProblem::Pump)?;
+    Ok(Application { sites: raw.sites, queue_sites: raw.queue_sites, task_layouts, code: raw.code, readiness: raw.readiness, pump })
 }

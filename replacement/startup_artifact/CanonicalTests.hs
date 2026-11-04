@@ -22,6 +22,7 @@ import qualified Emulation.Sha256 as SHA
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
 import Replacement.StartupArtifact.Adapters
+import Replacement.StartupArtifact.Application
 import Replacement.StartupArtifact.AttachState (AttachSources (..), attachStateValue, parseAttachRules)
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Contract (contractCarriers)
@@ -311,10 +312,27 @@ main = do
   ok "an entry state whose service call no longer BLs to the attach PC refuses"
     (let moved = replacedIn j3Targets LoaderA initializerCallA (0xeb000000 + (((0x40434 - initializerCallA - 8) `div` 4) `mod` 0x1000000))
      in either (const True) (const False) (registersOf moved [registerJson "r6" (rowOf "loader-startup/a-entry") entryState]))
-  (_, j3Observed) <- stageComposition tools scratch source j3
+  (j3Dat, j3Observed) <- stageComposition tools scratch source j3
   forM_ [Record1, Record2, LoaderA, LoaderB, Image4] $ \target ->
     ok ("J3 composed " ++ show target ++ " differs from canonical exactly at the edits")
       (normalizeSpans (diffSpans target (targetOf targets target) (targetOf j3Observed target)) == editSpansOf target [first, pair, publisher, startup])
+  j3Parts <- either H.failH (pure . U.parsedParts) (U.parseContainer j3Dat)
+  j3Section <- either (H.failH . show) pure $ do
+    retainedImages <- RoleImages targets <$> plainImage (U.parsedParts (canonicalParsed source))
+    composedImages <- RoleImages j3Observed <$> plainImage j3Parts
+    application (contractCarriers j3) retainedImages composedImages
+  U.MediaImage canonicalPlain <- either H.failH pure (U.extractPlain (U.parsedParts (canonicalParsed source)))
+  let canonicalWord (Pc pc)
+        | pc >= 0x1100000 = U.word32At canonicalPlain (fromIntegral (pc - 0x1100000))
+        | pc >= targetBase Image5 = U.word32At (targetOf targets Image5) (fromIntegral (pc - targetBase Image5))
+        | otherwise = U.word32At (targetOf targets Image4) (fromIntegral (pc - targetBase Image4))
+  ok "on J3 every application site and queue site holds the canonical word"
+    (length (applicationSites j3Section) == 57 && length (applicationQueueSites j3Section) == 9
+      && all (\site -> siteWord site == CodeWord (canonicalWord (sitePc site))) (applicationSites j3Section)
+      && all (\site -> queueWord site == CodeWord (canonicalWord (queuePc site))) (applicationQueueSites j3Section))
+  pumpDigest <- Sha256Hex <$> sha256Text (B.take 0x20 (B.drop (0xbfbd20 - 0xbf1a00) (targetOf targets Image5)))
+  ok "on J3 the pump code digest is the canonical one in both roles"
+    ([(digestRetained code, digestComposed code) | code <- applicationCode j3Section, digestRegion code == PumpCode] == [(pumpDigest, pumpDigest)])
 
   allThree <- either (H.failH . show) pure (composeOf [first, pair, publisher])
   H.withTemporaryAt (Tools.scratchDirectoryPath scratch) "startup-canonical-" $ \root -> do

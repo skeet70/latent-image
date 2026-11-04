@@ -3,6 +3,7 @@ use fujimod_emulator::board::observation::{
     WatchRange,
 };
 use fujimod_xm1::{
+    application_observation::{self, Recorder as ApplicationRecorder},
     attach_relations::{self, AttachSources, TimerState, TransactionWriter},
     attach_state::{self, AttachState},
     bridge::{read, sha256, write},
@@ -10,18 +11,19 @@ use fujimod_xm1::{
     composed_mutations::{self, CensusRow},
     composed_receipt::{
         self, Admission, CaptureDirectories, CarrierWrites, DeclaredUse, GuardObservation, GuardState, HexBytes, Identity,
-        LabelCount, MenuObservation, Outcome, ReadCapture, Receipt, ReceiptKind, RecordedPolicy, Row, SchemaFour,
-        VerdictKind, WatchRow, Word,
+        LabelCount, MenuObservation, Outcome, ReadCapture, Receipt, ReceiptKind, RecordedPolicy, Row, VerdictKind, WatchRow, Word,
+        RECEIPT_FILE as RECEIPT,
     },
     guest::Press,
     machine::{KeyPulse, Machine, RunOutcome},
+    provenance::Guest,
     run::{self, RunDocument, ValidatedUpdate},
     trace::Hit,
 };
 use std::{collections::BTreeMap, num::NonZeroUsize, path::{Path, PathBuf}, process::ExitCode};
 
-const USAGE: &str = "composed-startup --role retained|composed --contract CONTRACT --run RUN --update DAT --boot-rom ROM --output NEW_DIR [--attach-diagnostic RANGES | --mutation-census]\n       composed-startup --compare RETAINED_RECEIPT OWNED_RECEIPT --contract CONTRACT\n       composed-startup --check-contract CONTRACT --output NEW_FILE";
-const RECEIPT: &str = "composed-startup.json";
+const USAGE: &str = "composed-startup --role retained|composed --contract CONTRACT --run RUN --update DAT --boot-rom ROM --output NEW_DIR [--attach-diagnostic RANGES | --mutation-census]\n       composed-startup --compare RETAINED_RECEIPT OWNED_RECEIPT --contract CONTRACT\n       composed-startup --check-contract CONTRACT --output NEW_FILE\n       composed-startup --application-controls RUN_DIR --contract CONTRACT --output NEW_DIR";
+const CONTROLS: &str = "application-controls.json";
 const CENSUS: &str = "mutation-census.json";
 const WRITERS: &str = "attach-writers.json";
 const DEADLINE: u64 = 80_000_000;
@@ -29,7 +31,7 @@ const DEADLINE: u64 = 80_000_000;
 const SLICE: u64 = 250_000;
 const HIT_BOUND: usize = 65_536;
 const WATCH_LIMIT: usize = 1_048_576;
-/// Classes of the one guarded watch: carriers, the log span and diagnostic classes.
+/// Classes of the one guarded watch: carriers, the log span, diagnostic classes and application code.
 const WATCH_CLASS_LIMIT: usize = 256;
 const RUN_SHA256: &str = "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef";
 const ROM_SHA256: &str = "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be";
@@ -48,6 +50,7 @@ enum Command {
     Observe { role: Role, contract: PathBuf, run: PathBuf, update: PathBuf, rom: PathBuf, output: PathBuf, mode: Mode },
     Compare { retained: PathBuf, owned: PathBuf, contract: PathBuf },
     CheckContract { contract: PathBuf, output: PathBuf },
+    Controls { run: PathBuf, contract: PathBuf, output: PathBuf },
 }
 
 fn require(value: bool, message: &str) -> Result<(), String> { if value { Ok(()) } else { Err(message.into()) } }
@@ -60,7 +63,7 @@ fn put<T>(slot: &mut Option<T>, value: T) -> Result<(), String> {
 
 fn arguments() -> Result<Command, String> {
     let (mut role, mut contract, mut run, mut update, mut rom, mut output, mut compare) = (None, None, None, None, None, None, None);
-    let (mut check, mut mode) = (None, None);
+    let (mut check, mut mode, mut controls) = (None, None, None);
     let mut arguments = std::env::args_os().skip(1);
     while let Some(flag) = arguments.next() {
         let flag = flag.into_string().map_err(|_| USAGE)?;
@@ -76,14 +79,16 @@ fn arguments() -> Result<Command, String> {
             "--check-contract" => put(&mut check, value()?)?,
             "--attach-diagnostic" => put(&mut mode, Mode::Diagnostic(value()?))?,
             "--mutation-census" => put(&mut mode, Mode::Census)?,
+            "--application-controls" => put(&mut controls, value()?)?,
             _ => return Err(USAGE.into()),
         }
     }
-    match (check, contract, compare, role, run, update, rom, output, mode) {
-        (Some(contract), None, None, None, None, None, None, Some(output), None) => Ok(Command::CheckContract { contract, output }),
-        (None, Some(contract), Some((retained, owned)), None, None, None, None, None, None) => Ok(Command::Compare { retained, owned, contract }),
-        (None, Some(contract), None, Some(role), Some(run), Some(update), Some(rom), Some(output), mode) =>
+    match (check, contract, compare, role, run, update, rom, output, mode, controls) {
+        (Some(contract), None, None, None, None, None, None, Some(output), None, None) => Ok(Command::CheckContract { contract, output }),
+        (None, Some(contract), Some((retained, owned)), None, None, None, None, None, None, None) => Ok(Command::Compare { retained, owned, contract }),
+        (None, Some(contract), None, Some(role), Some(run), Some(update), Some(rom), Some(output), mode, None) =>
             Ok(Command::Observe { role, contract, run, update, rom, output, mode: mode.unwrap_or(Mode::Evidence) }),
+        (None, Some(contract), None, None, None, None, None, Some(output), None, Some(run)) => Ok(Command::Controls { run, contract, output }),
         _ => Err(USAGE.into()),
     }
 }
@@ -239,17 +244,38 @@ fn observe_hit(machine: &Machine, contract: &Contract, role: Role, sites: &BTree
     Ok(())
 }
 
-fn trace(machine: &mut Machine, contract: &Contract, role: Role, state: &mut Observation, output: &Path) -> Result<(), String> {
+fn watch_row_count(watch: &MemoryWatch) -> Result<u64, String> {
+    watch.records.borrow().state()["records"].as_array().map(|rows| rows.len() as u64).ok_or_else(|| "watch records are not an array".into())
+}
+
+fn watch_rows(recorder: &Recorder) -> Result<u64, String> {
+    match recorder {
+        Recorder::Guarded(guarded) => watch_row_count(&guarded.watch),
+        Recorder::Census(_) => Err("a mutation census has no watch".into()),
+    }
+}
+
+/// Application hits go to `application` before the contract label lookup.
+fn trace(machine: &mut Machine, contract: &Contract, role: Role, state: &mut Observation, output: &Path,
+    mut application: Option<&mut ApplicationRecorder>) -> Result<(), String> {
     let plan = contract.sites(role);
     machine.traces.bound_full_registers(NonZeroUsize::new(HIT_BOUND).ok_or("invalid hit bound")?);
     machine.traces.stop_labels.extend(plan.stop_labels());
-    machine.traces.arm_mutable(&machine.session, plan.trace_sites())?;
+    let mut sites = plan.trace_sites();
+    if let Some(recorder) = application.as_deref() {
+        let armed = recorder.trace_sites();
+        machine.traces.stop_labels.extend(armed.values().cloned());
+        sites.extend(armed);
+    }
+    machine.traces.arm_mutable(&machine.session, sites)?;
     let board_state = machine.session.board.state();
     let (reset, windows) = attach_relations::reset_sources(&board_state)?;
     machine.session.board.transaction_watch_begin(windows.clone(), attach_relations::DRAIN_LIMIT)?;
     state.transactions = Some(Transactions { windows, writer: TransactionWriter::create(output)?, reset });
     while machine.instructions() < DEADLINE {
-        let outcome = machine.run(SLICE.min(DEADLINE - machine.instructions()));
+        let now = machine.instructions();
+        let settle = application.as_deref().and_then(ApplicationRecorder::settle_end).map_or(u64::MAX, |end| end.saturating_sub(now).max(1));
+        let outcome = machine.run(SLICE.min(DEADLINE - now).min(settle));
         machine.require_running()?;
         require(matches!(outcome, RunOutcome::Completed | RunOutcome::Stopped), "composed observation run did not settle")?;
         if let Some(transactions) = state.transactions.as_mut() {
@@ -258,7 +284,13 @@ fn trace(machine: &mut Machine, contract: &Contract, role: Role, state: &mut Obs
         }
         let hits: Vec<Hit> = machine.traces.hits.drain(..).collect();
         for hit in &hits {
-            observe_hit(machine, contract, role, &plan.sites, state, hit, output)?;
+            match application.as_deref_mut() {
+                Some(recorder) if recorder.owns(hit) => recorder.hit(machine, hit, &|| watch_rows(&state.recorder))?,
+                _ => observe_hit(machine, contract, role, &plan.sites, state, hit, output)?,
+            }
+        }
+        if let Some(recorder) = application.as_deref_mut() {
+            recorder.after_run(machine)?;
         }
         if let Recorder::Guarded(guarded) = &state.recorder
             && let Some(fault) = guarded.token.report().first_fault
@@ -304,7 +336,7 @@ fn diagnostic_classes(path: &Path) -> Result<Vec<(u64, u64)>, String> {
 /// The census file of `--mutation-census`; `--compare` does not read it.
 #[derive(serde::Serialize)]
 struct Census<'a> {
-    schema: SchemaFour,
+    schema: fujimod_xm1::composed_catalog::Schema,
     kind: ReceiptKind,
     role: Role,
     identity: &'a Identity,
@@ -336,8 +368,13 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
     if let (Some(span), Some(classes)) = (log, &diagnostic) {
         require(!classes.iter().any(|&(start, end)| start < span.end && span.start < end), "a diagnostic class overlaps the log span")?;
     }
-    let class_count = carriers.len() + usize::from(log.is_some()) + diagnostic.as_ref().map_or(0, Vec::len);
-    require(class_count <= WATCH_CLASS_LIMIT, "carrier, log and diagnostic classes exceed the watch class bound")?;
+    let application = contract.application().filter(|_| mode != Mode::Census);
+    if let Some(application) = application {
+        require(application.readiness.end.0 == DEADLINE, "the readiness search end is not the first press")?;
+    }
+    let code: Vec<(u64, u64)> = application.iter().flat_map(|application| &application.code).map(|range| (range.start, range.end)).collect();
+    let class_count = carriers.len() + usize::from(log.is_some()) + diagnostic.as_ref().map_or(0, Vec::len) + code.len();
+    require(class_count <= WATCH_CLASS_LIMIT, "carrier, log, diagnostic and application classes exceed the watch class bound")?;
     let kind = match mode {
         Mode::Evidence => ReceiptKind::ComposedStartupReceipt,
         Mode::Diagnostic(_) => ReceiptKind::ComposedStartupDiagnostic,
@@ -356,6 +393,7 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
         let classes: Vec<WatchRange> = carriers.iter().copied()
             .chain(log.iter().map(|span| (span.start, span.end)))
             .chain(diagnostic.iter().flatten().copied())
+            .chain(code.iter().copied())
             .map(|(start, end)| WatchRange { start, end, kinds: WatchKinds::WRITES }).collect();
         let maps = run::memory_maps(&machine.document)?;
         let mut watch = machine.session.board.memory_watch_begin_classified(classes, WATCH_LIMIT, maps, ViewPolicy::Observe)?;
@@ -371,14 +409,19 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
         rows: vec![], counts: BTreeMap::new(), recorded: BTreeMap::new(), off_core: BTreeMap::new(),
         attach: None, sources: None, transactions: None, recorder, boundary: None, census: None,
     };
-    let traced = trace(&mut machine, &contract, role, &mut state, &output);
-    let disarmed = machine.traces.disarm(&machine.session);
-    machine.traces.stop_labels.clear();
+    let mut recorder = application.map(|application| ApplicationRecorder::new(application, role, &output)).transpose()?;
+    let traced = trace(&mut machine, &contract, role, &mut state, &output, recorder.as_mut());
+    let disarm = |machine: &mut Machine| {
+        let disarmed = machine.traces.disarm(&machine.session);
+        machine.traces.stop_labels.clear();
+        disarmed
+    };
+    let disarmed = if recorder.is_none() { disarm(&mut machine) } else { Ok(()) };
     if let Some(rows) = &state.census {
         traced.and(disarmed)?;
         let first_difference = composed_mutations::census_difference(contract.declared(role), &choice_maps, rows)?;
         let census = Census {
-            schema: SchemaFour,
+            schema: contract.schema(),
             kind,
             role,
             identity: &identity,
@@ -393,9 +436,23 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
         return traced.and(disarmed).and(Err("mutation census ended before the boundary".into()));
     };
     let mut menu = MenuObservation { erased_settings: false, shooting: false };
-    let routed = traced.and(disarmed).and_then(|()| menu_route(&mut machine, &mut menu));
+    let routed = match recorder.as_mut() {
+        None => traced.and(disarmed).and_then(|()| menu_route(&mut machine, &mut menu)),
+        Some(application) => traced.and_then(|()| {
+            let boundaries: Vec<Guest> = contract.sites(role).sites.keys().map(|pc| Guest(pc.0)).collect();
+            machine.traces.remove_sites(&machine.session, &boundaries)?;
+            application.route(&mut machine, &mut menu, &|| watch_row_count(&guarded.watch))
+        }),
+    };
     let end_instructions = machine.instructions();
     let watch_state = guarded.watch.records.borrow().state();
+    let late = recorder.is_some();
+    let application = recorder.map(|application| application.finish(&mut machine, &watch_state)).transpose();
+    let disarmed = if late { disarm(&mut machine) } else { Ok(()) };
+    let (application, application_error) = match application {
+        Ok(application) => (application, Ok(())),
+        Err(error) => (None, Err(error)),
+    };
     let watch_end_error = machine.session.board.memory_watch_end(&mut guarded.watch).err();
     let owned_code = contract.owned_code_spellings();
     let boundary_row = state.boundary.as_ref().map_or(0, |boundary| boundary.row);
@@ -440,11 +497,11 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
         watch_violation: watch_state["violation"].as_str().map(str::to_owned),
         watch_end_error,
     };
-    let result = routed.and(summaries.map(|_| ())).and_then(|()| {
+    let result = routed.and(disarmed).and(application_error).and(summaries.map(|_| ())).and_then(|()| {
         require(guard.clean(), "composite guard report is not clean")
     });
     let receipt = Receipt {
-        schema: SchemaFour,
+        schema: contract.schema(),
         kind,
         role,
         identity,
@@ -460,6 +517,7 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
         attach_sources: state.sources,
         guard: Some(guard),
         menu,
+        application,
     };
     write(&output.join(RECEIPT), &serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?)?;
     result
@@ -496,12 +554,22 @@ fn check_contract(contract_path: PathBuf, output: PathBuf) -> Result<(), String>
         .map_err(|error| format!("{}: {error}", output.display()))
 }
 
+/// `RUN_DIR` holds `retained/` and `composed/`, each one role's observation directory.
+fn application_controls(run: PathBuf, contract_path: PathBuf, output: PathBuf) -> Result<bool, String> {
+    let contract_bytes = read(&contract_path)?;
+    let contract = Contract::parse(&contract_bytes).map_err(|refusal| refusal.to_string())?;
+    let report = application_observation::run_controls(&contract, &digest(&contract_bytes)?, &run, &output)?;
+    write(&output.join(CONTROLS), &serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?)?;
+    Ok(report.passed)
+}
+
 fn main() -> ExitCode {
     let result = arguments().and_then(|command| match command {
         Command::Observe { role, contract, run, update, rom, output, mode } =>
             observe(role, contract, run, update, rom, output, mode).map(|()| true),
         Command::Compare { retained, owned, contract } => compare(retained, owned, contract).map(|verdict| verdict == VerdictKind::Equal),
         Command::CheckContract { contract, output } => check_contract(contract, output).map(|()| true),
+        Command::Controls { run, contract, output } => application_controls(run, contract, output),
     });
     match result {
         Ok(true) => ExitCode::SUCCESS,
