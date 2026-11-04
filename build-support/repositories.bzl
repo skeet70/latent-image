@@ -56,6 +56,7 @@ _FUJIMOD_NIX_DEPS = [
     "//build-support:fujimod-fetch-attribution.patch",
     "//build-support:fujimod-timer-upcount.patch",
     "//build-support:fujimod-unicorn-context-align.patch",
+    "//build-support:fujimod-wifi-unanswered-cmd53.patch",
     "//build-support:fujimod.nix",
     "//build-support:nixpkgs.nix",
 ]

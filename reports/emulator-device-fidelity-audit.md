@@ -36,6 +36,7 @@ Three laws besides the timer are contradicted by hardware reads: the boot-ROM ex
 | Image-input enable gate `0x38c` | no hardware evidence; static reading conflicts | 2.6 |
 | I²C buses, image companion `fe80` | no hardware evidence | 2.6 |
 | Other windows (section 2.7) | not audited law by law | 2.7 |
+| Wi-Fi SDIO module (`sdio`), CMD53 | no hardware evidence; declared assumption | 2.8 |
 
 ## 2. Devices
 
@@ -91,6 +92,16 @@ Three laws besides the timer are contradicted by hardware reads: the boot-ROM ex
 ### 2.7 Windows not audited law by law
 
 The run document also maps `graphics` (`0xfff78000`), `power_peripherals` (`0xfff02080`, `0xfff46080`, `0xfff84000`, `0xfff98500`), `pulse` (`0xfffa9000`), `lens_serial` (`0xfff84080`), `usb` (`0xfff54000`, `0xfff55000`), `sdio`, `audio_registers`, `hdmi` and the imaging, codec and statistics blocks (`image_input`, `input_auxiliary`, `image_output_0/1`, `statistics`, `raw_statistics`, `phase_detection`, `prefilter`, `parameters`, `face_detector`, `still_processor`, `raw_conversion`, `image_combination`, `ui_conversion`, `warp`, `jpeg_encoder`, `jpeg_decoder`, `video_encoder`, `output`). Which of them the cold route writes was not traced, and the repository holds no hardware read of their registers except the `0x38c` analysis above; the menu PNG and the RAM calibration bind their combined effect only. USB enumeration (ff80) happens after the menu and is outside the route.
+
+### 2.8 Wi-Fi SDIO module (`sdio`, `0xfff51000`)
+
+Not on the cold boot to the menu: the Run-3 camera dump holds the WLAN driver state byte `0x014be62c` = 0 at the shooting screen, so the camera had not started Wi-Fi there, and the FujiMod calibration dump agrees. Opening PC AUTO SAVE SETTING > SIMPLE SETUP, menu (83,177), starts it; the property-pair rerun stopped there on both roles (`private-data/scratch/PropertyService/natural-3/`; `reports/recipe-bank-ui-ownership.md:997`).
+
+- Firmware, static (plain image listing `private-data/analysis/x-m1-1.50/filmsim/plain.dis`): `WLAN_Start` `0x013e40cc` runs host and card init (CMD5/3/7/52) and probe `0x012af3ac`, whose module reset `0x01292024` issues the first CMD53 at `0x0129216c`: byte-mode write to function 1 register `0x8c` of `0x8000`, command word `0x353a0001`, argument `0x90011804`, DMA from `0x014760c0`. The wait `0x0128fb48` ends on transfer complete or on error status `& 0x17ff`; the request path `0x012918e8`/`0x01291884` turns every CMD53 failure into success. The reset then writes `0x8c` = 0, sleeps, and polls a CMD53 read of `0x8c` for bit `0x800` up to 512 times before returning `0xC0000001`; the probe fails and `WLAN_Start` returns −255 through an empty logging stub.
+- Model: the module part `crates/emulator-parts-io/src/wifi_module.rs` declares CCCR bytes and, in protocol `rom_download` only, a reset, size and firmware-download register machine; the X-M1 run document selects `enumeration`, under which the pinned host refused every CMD53 and stopped the machine. The retained engine's `wifi_sdio.py` profiles bind addresses outside the X-M1 plain image.
+- Hardware evidence: none for the module's answers. The service manual names the module DWM-W094 and the FCC filing shows a different part (`E-RAW-ENTRY-SOURCES-150`); no capture reads `0xfff51000` or records the driver after Wi-Fi start.
+- Change, declared assumption (`fujimod-wifi-unanswered-cmd53.patch`, `E-WIFI-CMD53-UNANSWERED-150`): under `enumeration`, a four-byte byte-mode DMA CMD53 to function 1 (`0x353a0001` or `0x353a0011`) in the Transfer state completes with a command timeout (error status bit 0) and no data; block, PIO and other forms still stop the machine. The driver polls `0x30`/`0x32` directly (wait `0x0128fb48`), leaves on the error bit and masks the failure; its reset poll reads no `0x800` from the untouched buffer, and Wi-Fi start fails without a retry. A command timeout is the only outcome that asserts nothing about the module, since R5 flags, data errors or a zero-response success would each mean the module answered. A module that answers would need its register map and firmware image, which nothing in the repository measures for X-M1.
+- To settle it: a camera read of the WLAN driver state after opening SIMPLE SETUP, or of `0x014760c0` after a reset poll, would show whether the real module answers.
 
 ## 3. Proposed fixes
 
