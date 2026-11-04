@@ -37,7 +37,7 @@ import Data.List (nub, sort, stripPrefix)
 import qualified Data.Text as T
 import Data.Word (Word32)
 import Emulation.PreservationObservation (PreservationRanges, checkPreservationRangeCount, preservationRangeList, preservationRanges)
-import Emulation.WatchObservation (ExecutionInterval (..), executionIntervalLabel, WatchAddress, WatchRange, unionWatchRanges, watchAddress, watchAddressValue, watchRange, watchRangeBounds)
+import Emulation.WatchObservation (ExecutionInterval (..), executionIntervalLabel, Instructions (..), WatchAddress, WatchRange, unionWatchRanges, watchAddress, watchAddressValue, watchRange, watchRangeBounds)
 import EmulatorUsb (KeyPulse (..), KeyTiming (..), ModeDial (..), SettleBudget (..), defaultKeyTiming, modeDialName)
 import Numeric (readHex)
 
@@ -107,25 +107,32 @@ instance FromJSON ReadExpectation where
           _ -> fail "invalid read expectation byte"
         bytes _ = fail "incomplete read expectation byte"
     ReadExpectation label . B.pack <$> bytes (T.unpack text)
-data Step = Step { stepKey :: String, stepExpected :: MenuState, stepTiming :: KeyTiming } deriving (Eq, Show)
+-- | `stepIdle` is the guest instructions run with no input before the press (FujiMod only).
+data Step = Step { stepKey :: String, stepExpected :: MenuState, stepTiming :: KeyTiming, stepIdle :: Maybe Instructions } deriving (Eq, Show)
+
+-- | The bridge's largest `idle` request, its MAX_SETTLE.
+maxStepIdle :: Integer
+maxStepIdle = 90000000
 
 instance FromJSON Step where
   parseJSON = withArray "step" $ \items -> case toList items of
-    [key, menu, setting, cursor] -> step key menu setting cursor defaultKeyTiming
+    [key, menu, setting, cursor] -> step key menu setting cursor (defaultKeyTiming, Nothing)
     [key, menu, setting, cursor, timing] -> step key menu setting cursor =<< withObject "step timing" keyTiming timing
     _ -> fail "a step is [key, menu, setting, cursor] with an optional timing object"
     where
-      step key menu setting cursor timing =
-        Step <$> parseJSON key <*> (MenuState <$> parseJSON menu <*> parseJSON setting <*> parseJSON cursor) <*> pure timing
+      step key menu setting cursor (timing, idle) =
+        Step <$> parseJSON key <*> (MenuState <$> parseJSON menu <*> parseJSON setting <*> parseJSON cursor) <*> pure timing <*> pure idle
       keyTiming timing = do
-        unless (all (`elem` ["hold_instructions", "release_instructions", "settle_instructions"]) (KM.keys timing))
-          (fail "step timing takes only hold_instructions, release_instructions and settle_instructions")
+        unless (all (`elem` ["hold_instructions", "release_instructions", "settle_instructions", "idle_instructions"]) (KM.keys timing))
+          (fail "step timing takes only hold_instructions, release_instructions, settle_instructions and idle_instructions")
         pulse <- if KM.member "hold_instructions" timing || KM.member "release_instructions" timing
           then Just <$> keyPulse timing
           else pure Nothing
         settle <- timing .:? "settle_instructions"
         when (settle == Just 0) (fail "settle_instructions must be positive")
-        pure (KeyTiming pulse (SettleBudget <$> settle))
+        idle <- timing .:? "idle_instructions"
+        unless (all (\count -> count >= 1 && count <= maxStepIdle) idle) (fail ("idle_instructions must be 1.." ++ show maxStepIdle))
+        pure (KeyTiming pulse (SettleBudget <$> settle), Instructions . fromInteger <$> idle)
 
 data LifecycleRole = RetainedLifecycle | OwnedLifecycle deriving (Eq, Show)
 data LifecycleAction = LifecycleAction

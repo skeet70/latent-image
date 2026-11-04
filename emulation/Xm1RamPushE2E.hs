@@ -392,6 +392,7 @@ stepKeyTiming segmentPulse step = KeyTiming (keyTimingPulse timing <|> segmentPu
 
 press :: Emulator -> Maybe KeyPulse -> Step -> IO ()
 press emulator pulse step = do
+  forM_ (stepIdle step) (emulatorIdle emulator)
   (_, actual) <- pressStep emulator (stepKeyTiming pulse step) (stepKey step)
   require (actual == stepExpected step)
     ("menu trajectory after " ++ stepKey step ++ ": expected " ++ show (stepExpected step) ++ ", got " ++ show actual)
@@ -405,6 +406,7 @@ observe :: Emulator -> Maybe KeyPulse -> [Step] -> IO [Value]
 observe emulator pulse = mapM $ \step -> do
   let MenuState em es ec = stepExpected step
   started <- getMonotonicTime
+  forM_ (stepIdle step) (emulatorIdle emulator)
   (pressed, MenuState am as ac) <- pressStep emulator (stepKeyTiming pulse step) (stepKey step)
   ended <- getMonotonicTime
   pure (object [ "key" .= stepKey step, "pressed" .= length pressed
@@ -645,10 +647,10 @@ runRamPushE2EUsing given python workspace trajectoryFile installedMedia adjustme
       && all ((== "retained-film-route") . segmentPhase) (beforeUnload trajectories))
       "modal observation requires the retained-film-route physical-key trajectory"
   let settleCaps = [ () | segment <- beforeUnload trajectories ++ afterUnload trajectories
-                        , step <- segmentSteps segment, isJust (keyTimingSettle (stepTiming step)) ]
+                        , step <- segmentSteps segment, isJust (keyTimingSettle (stepTiming step)) || isJust (stepIdle step) ]
   case emulationRuntime given of
     RetainedRuntime | not (null settleCaps) ->
-      ioError (userError "settle_instructions is FujiMod press timing; the retained bridge takes no settle cap")
+      ioError (userError "settle_instructions and idle_instructions are FujiMod press timing; the retained bridge takes neither")
     _ -> pure ()
   exists <- doesDirectoryExist receipt
   when exists $ do
