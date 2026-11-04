@@ -1760,7 +1760,7 @@ pub fn compare(rules: &AttachRules, attach_core: Core, retained: &RoleCapture, o
     let mut relations = evaluate_relations(rules, captures, &boards, &mut out);
     let registers = compare_context(rules, attach_core, retained.state, owned.state, &mut out);
     compare_peers(rules, retained.state, owned.state, &mut out);
-    let submitted = rules.relations.lz.as_ref().and_then(|lz| lz.submitted.as_ref());
+    let submitted = rules.relations.lz.as_ref().and_then(|lz| lz.submitted.as_ref()).and_then(|word| word.span().map(|span| (word, span)));
     let mut extract: [Vec<(Extract, Span)>; 2] = [Vec::new(), Vec::new()];
     for (slot, role) in extract.iter_mut().zip(&relations.roles) {
         if let (Some(log), Some(Ok(_))) = (&rules.relations.log, &role.log) {
@@ -1770,14 +1770,14 @@ pub fn compare(rules: &AttachRules, attach_core: Core, retained: &RoleCapture, o
             if plan.end > plan.start {
                 slot.push((Extract::LzSource, Span { start: plan.start, end: plan.end }));
             }
-            if let Some(word) = submitted {
-                slot.push((Extract::LzSubmitted, word.span()));
+            if let Some((_, span)) = submitted {
+                slot.push((Extract::LzSubmitted, span));
             }
         }
     }
     let mut memory_out = Collector::default();
     let mut held: Vec<(HeldBy, Span)> = relations.log_words.iter().map(|span| (HeldBy::Log, *span)).collect();
-    held.extend(submitted.map(|word| (HeldBy::LzSubmitted, word.span())));
+    held.extend(submitted.map(|(_, span)| (HeldBy::LzSubmitted, span)));
     let extras = MemoryExtras { held, extract };
     let (allowances, extracted) = if shapes_agree && memory_paths.len() == 2 {
         match compare_memory(rules, retained, owned, &memory_paths, &extras, &mut memory_out) {
@@ -1818,7 +1818,7 @@ pub fn compare(rules: &AttachRules, attach_core: Core, retained: &RoleCapture, o
                 Some(Ok((mut lz, leaves))) => {
                     let captured = extracted.bytes[index].iter().find(|(kind, _)| *kind == Extract::LzSubmitted)
                         .map(|(_, bytes)| u32::from_le_bytes(bytes.as_slice().try_into().expect("four bytes")));
-                    if let (Some(word), Some(captured)) = (submitted, captured) {
+                    if let (Some((word, _)), Some(captured)) = (submitted, captured) {
                         match attach_relations::check_submitted(plan, captured, word.record_length.of(role.role)) {
                             Ok(()) => {
                                 lz.submitted = Some(Word(captured));

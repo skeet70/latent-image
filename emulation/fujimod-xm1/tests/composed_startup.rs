@@ -1343,36 +1343,55 @@ fn a_later_non_logger_write_makes_a_timestamp_word_compared_again() {
 const LZ_BASE: u64 = 0xfff4_3000;
 const LZ_INPUT: u64 = 0x1000;
 
-/// Adds one LZ job over `compressed` at `LZ_INPUT`, the device's stream after it, and the job's register writes.
-fn with_lz(spec: &mut Spec, compressed: &[u8]) {
+/// Contiguous LZ job counts over one input; with `pending`, the last job is still running on the board.
+#[derive(Clone, Copy)]
+struct Jobs<'a> {
+    counts: &'a [usize],
+    pending: bool,
+}
+
+const ONE_JOB: Jobs<'static> = Jobs { counts: &[], pending: false };
+
+/// Adds `jobs` over `compressed` at `LZ_INPUT` (one job over all of it when `jobs.counts` is empty), the device's
+/// stream after the fed jobs, and the jobs' register writes.
+fn with_lz(spec: &mut Spec, compressed: &[u8], jobs: Jobs) {
     for (index, byte) in compressed.iter().enumerate() {
         spec.bytes.insert((Space::Physical, LZ_INPUT + index as u64), *byte);
     }
+    let whole = [compressed.len()];
+    let counts = if jobs.counts.is_empty() { &whole[..] } else { jobs.counts };
+    let fed: usize = counts[..counts.len() - usize::from(jobs.pending)].iter().sum();
     let mut stream = fujimod_emulator_devices::compression::method4::Stream::default();
-    stream.feed(compressed, &mut [0u8; 256]).unwrap();
+    stream.feed(&compressed[..fed], &mut [0u8; 256]).unwrap();
+    let pending = if jobs.pending { json!({"job": "Lz"}) } else { Value::Null };
     spec.board["bus"]["devices"].as_array_mut().unwrap().push(json!({
         "kind": "exr2-lz", "windows": [{"base": LZ_BASE, "size": 256}], "native_dependencies": [],
-        "state": {"state": {"stream": serde_json::to_value(&stream).unwrap(), "pending": null}},
+        "state": {"state": {"stream": serde_json::to_value(&stream).unwrap(), "pending": pending}},
     }));
     let sources = spec.sources.as_mut().unwrap();
-    let tick = sources.rows.last().unwrap().tick;
-    for (step, (offset, value)) in [(0x40, LZ_INPUT as u32), (0x44, compressed.len() as u32), (0x04, 2)].into_iter().enumerate() {
-        sources.rows.push(TransactionRow {
-            tick: tick + 1 + step as u64, core: Some(Core::Primary), pc: Pc(0x7000), address: (LZ_BASE + offset) as u32, size: 4,
-            access: Access::Write, accepted: true, value,
-        });
+    let mut tick = sources.rows.last().unwrap().tick;
+    let mut source = LZ_INPUT as u32;
+    for &count in counts {
+        for (offset, value) in [(0x40, source), (0x44, count as u32), (0x04, 2)] {
+            tick += 1;
+            sources.rows.push(TransactionRow {
+                tick, core: Some(Core::Primary), pc: Pc(0x7000), address: (LZ_BASE + offset) as u32, size: 4,
+                access: Access::Write, accepted: true, value,
+            });
+        }
+        source += count as u32;
     }
 }
 
 const RETAINED_LZ_INPUT: [u8; 6] = [3, b'a', b'b', b'c', 0x80, 0x36];
 const OWNED_LZ_INPUT: [u8; 10] = [9, b'a', b'b', b'c', b'a', b'b', b'c', b'a', b'b', b'c'];
 
-/// Both roles with one LZ job each, over inputs of different lengths.
-fn lz_roles() -> (Spec, Spec) {
+/// Both roles with LZ jobs over inputs of different lengths: one job in the retained role, `owned` in the composed.
+fn lz_roles(owned_jobs: Jobs) -> (Spec, Spec) {
     let mut retained = relation_spec(Role::Retained, &timer_steps(100, 200, RETAINED_SITE), RETAINED_SITE);
     let mut owned = relation_spec(Role::Composed, &timer_steps(160, 300, COMPOSED_SITE), COMPOSED_SITE);
-    with_lz(&mut retained, &RETAINED_LZ_INPUT);
-    with_lz(&mut owned, &OWNED_LZ_INPUT);
+    with_lz(&mut retained, &RETAINED_LZ_INPUT, ONE_JOB);
+    with_lz(&mut owned, &OWNED_LZ_INPUT, owned_jobs);
     (retained, owned)
 }
 
@@ -1390,7 +1409,7 @@ fn lz_contract(lz: Value) -> Value {
 
 #[test]
 fn the_lz_tallies_follow_each_role_s_pinned_input() {
-    let (retained, owned) = lz_roles();
+    let (retained, owned) = lz_roles(ONE_JOB);
     let verdict = relation_verdict(&lz_contract(json!({"citation": "lz.rs"})), &retained, &owned);
     assert_eq!(verdict.first_difference, None, "{:?}", verdict.attach_differences);
     let tallies = verdict.attach.unwrap().relations.iter().map(|role| role.lz.as_ref().map(|lz| (lz.literals, lz.matches))).collect::<Vec<_>>();
@@ -1411,9 +1430,9 @@ fn submitted_contract(retained_length: u32, composed_length: u32) -> Value {
     }}))
 }
 
-/// Each role's job total and record length, with each word as `words` sets it.
-fn submitted_verdict(words: [u32; 2], lengths: [u32; 2]) -> Verdict {
-    let (mut retained, mut owned) = lz_roles();
+/// Each role's jobs and record length, with each word as `words` sets it.
+fn submitted_verdict(words: [u32; 2], lengths: [u32; 2], owned_jobs: Jobs) -> Verdict {
+    let (mut retained, mut owned) = lz_roles(owned_jobs);
     set_word(&mut retained, SUBMITTED, words[0]);
     set_word(&mut owned, SUBMITTED, words[1]);
     relation_verdict(&submitted_contract(lengths[0], lengths[1]), &retained, &owned)
@@ -1423,15 +1442,25 @@ const SUBMITTED_LENGTHS: [u32; 2] = [RETAINED_LZ_INPUT.len() as u32 + 0x14, OWNE
 
 #[test]
 fn the_submitted_word_differs_between_roles_when_each_matches_its_jobs_and_record() {
-    let verdict = submitted_verdict([6, 10], SUBMITTED_LENGTHS);
+    let verdict = submitted_verdict([6, 10], SUBMITTED_LENGTHS, ONE_JOB);
     assert_eq!(verdict.first_difference, None, "{:?}", verdict.attach_differences);
     let words = verdict.attach.unwrap().relations.iter().map(|role| role.lz.as_ref().and_then(|lz| lz.submitted)).collect::<Vec<_>>();
     assert_eq!(words, [Some(Word(6)), Some(Word(10))]);
 }
 
+/// The board's pending job and unfed stream history still differ between roles; only the relation is asserted.
+#[test]
+fn a_pending_last_job_counts_in_the_submitted_word() {
+    let (failures, compared) = submitted_failures(&submitted_verdict([6, 10], SUBMITTED_LENGTHS, Jobs { counts: &[4, 6], pending: true }));
+    assert_eq!(failures, []);
+    assert!(!compared);
+    let (failures, compared) = submitted_failures(&submitted_verdict([6, 4], SUBMITTED_LENGTHS, Jobs { counts: &[4, 6], pending: true }));
+    assert_eq!(failures, [RelationFailure::LzSubmittedDrain { captured: Word(4), started: 10, last: 6 }]);
+    assert!(compared);
+}
+
 /// The composed role's relation failures, and whether the submitted word reached the memory comparison.
-fn submitted_failures(words: [u32; 2], lengths: [u32; 2]) -> (Vec<RelationFailure>, bool) {
-    let verdict = submitted_verdict(words, lengths);
+fn submitted_failures(verdict: &Verdict) -> (Vec<RelationFailure>, bool) {
     let entries = &verdict.attach_differences.entries;
     let failures = entries.iter().filter_map(|entry| match entry {
         Difference::AttachRelation { role: Role::Composed, failure } => Some(failure.clone()),
@@ -1443,28 +1472,33 @@ fn submitted_failures(words: [u32; 2], lengths: [u32; 2]) -> (Vec<RelationFailur
 
 #[test]
 fn a_submitted_word_off_its_jobs_and_record_is_compared() {
-    let (failures, compared) = submitted_failures([6, 11], SUBMITTED_LENGTHS);
+    let (failures, compared) = submitted_failures(&submitted_verdict([6, 11], SUBMITTED_LENGTHS, ONE_JOB));
     assert_eq!(failures, [RelationFailure::LzSubmitted { captured: Word(11), started: 10, stream: 10 }]);
     assert!(compared);
 }
 
 #[test]
 fn a_record_length_that_disagrees_with_the_job_total_refuses() {
-    let (failures, compared) = submitted_failures([6, 10], [SUBMITTED_LENGTHS[0], SUBMITTED_LENGTHS[1] + 1]);
+    let (failures, compared) = submitted_failures(&submitted_verdict([6, 10], [SUBMITTED_LENGTHS[0], SUBMITTED_LENGTHS[1] + 1], ONE_JOB));
     assert_eq!(failures, [RelationFailure::LzSubmitted { captured: Word(10), started: 10, stream: 11 }]);
     assert!(compared);
 }
 
 #[test]
 fn a_last_job_missing_from_a_complete_stream_is_the_drain_step() {
-    let (failures, compared) = submitted_failures([6, 0], SUBMITTED_LENGTHS);
+    let (failures, compared) = submitted_failures(&submitted_verdict([6, 0], SUBMITTED_LENGTHS, ONE_JOB));
     assert_eq!(failures, [RelationFailure::LzSubmittedDrain { captured: Word(0), started: 10, last: 10 }]);
     assert!(compared);
+    let (failures, compared) = submitted_failures(&submitted_verdict([6, 4], SUBMITTED_LENGTHS, Jobs { counts: &[4, 6], pending: false }));
+    assert_eq!(failures, [RelationFailure::LzSubmittedDrain { captured: Word(4), started: 10, last: 6 }]);
+    assert!(compared);
+    let (failures, _) = submitted_failures(&submitted_verdict([6, 3], SUBMITTED_LENGTHS, Jobs { counts: &[4, 6], pending: false }));
+    assert_eq!(failures, [RelationFailure::LzSubmitted { captured: Word(3), started: 10, stream: 10 }]);
 }
 
 #[test]
 fn a_submitted_word_must_be_aligned_and_clear_of_allowances() {
-    for (address, length) in [(SUBMITTED + 2, 0x20), (LZ_INPUT, 0x20), (LOG, 0x20), (SUBMITTED, 0x13)] {
+    for (address, length) in [(SUBMITTED + 2, 0x20), (LZ_INPUT, 0x20), (LOG, 0x20), (SUBMITTED, 0x13), (0x2000_0000, 0x20), (u64::MAX - 1, 0x20)] {
         let mut value = submitted_contract(length, length);
         value["guard"]["attach_state"]["relations"]["lz"]["submitted"]["address"] = json!(address);
         assert!(matches!(parse(&value), Err(CatalogRefusal::AttachState(AttachRuleRefusal::LzSubmittedWord))), "{address:#x}");

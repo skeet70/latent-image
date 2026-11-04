@@ -102,7 +102,11 @@ pub struct SubmittedWord {
 }
 
 impl SubmittedWord {
-    pub fn span(&self) -> Span { Span { start: self.address.0, end: self.address.0 + 4 } }
+    /// `None` when the word does not lie inside DRAM.
+    pub fn span(&self) -> Option<Span> {
+        let start = self.address.0;
+        start.checked_add(4).filter(|end| *end <= DRAM_END).map(|end| Span { start, end })
+    }
 }
 
 /// A counter read and the timestamp store that follows it, on one core in one role.
@@ -158,11 +162,11 @@ impl Relations {
             }
         }
         if let Some(submitted) = self.lz.as_ref().and_then(|lz| lz.submitted.as_ref()) {
-            let span = submitted.span();
+            let Some(span) = submitted.span() else { return Err(AttachRuleRefusal::LzSubmittedWord) };
             let short = [submitted.record_length.retained, submitted.record_length.composed].iter().any(|length| length.0 < RECORD_HEADER);
             let overlaps = allowances.iter().any(|allowance| allowance.space == Space::Physical && allowance.span.intersects(span))
                 || self.log.as_ref().is_some_and(|log| log.span.intersects(span));
-            if span.start % 4 != 0 || span.end > DRAM_END || short || overlaps {
+            if span.start % 4 != 0 || short || overlaps {
                 return Err(AttachRuleRefusal::LzSubmittedWord);
             }
         }
