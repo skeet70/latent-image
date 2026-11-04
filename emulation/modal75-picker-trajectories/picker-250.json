@@ -195,10 +195,13 @@
     {
       "phase": "picker-route",
       "capture": "picker-parent",
-      "key_pulse": {
-        "hold_instructions": 8000000,
-        "release_instructions": 8000000
-      },
+      "read_preservations": [
+        {
+          "read": "resident",
+          "phase": "package-menu-prefix",
+          "source_read": "resident"
+        }
+      ],
       "steps": [
         [
           "ok",
@@ -300,22 +303,18 @@
           "0096cc64",
           450
         ]
-      ],
+      ]
+    },
+    {
+      "phase": "owned-picker-keys",
+      "capture": "owned-picker-keys",
       "read_preservations": [
         {
           "read": "resident",
           "phase": "package-menu-prefix",
           "source_read": "resident"
         }
-      ]
-    },
-    {
-      "phase": "owned-picker-keys",
-      "capture": "owned-picker-keys",
-      "key_pulse": {
-        "hold_instructions": 8000000,
-        "release_instructions": 8000000
-      },
+      ],
       "steps": [
         [
           "ok",
@@ -453,13 +452,6 @@
           "0096cc64",
           450
         ]
-      ],
-      "read_preservations": [
-        {
-          "read": "resident",
-          "phase": "package-menu-prefix",
-          "source_read": "resident"
-        }
       ]
     }
   ],
@@ -467,10 +459,12 @@
     {
       "phase": "unloaded-picker",
       "capture": "unloaded-picker",
-      "key_pulse": {
-        "hold_instructions": 8000000,
-        "release_instructions": 8000000
-      },
+      "read_expectations": [
+        {
+          "read": "dispatcher-first-word",
+          "hex": "f04f2de9"
+        }
+      ],
       "steps": [
         [
           "ok",
@@ -574,13 +568,7 @@
           "source_read": "resident"
         }
       ],
-      "observe": true,
-      "read_expectations": [
-        {
-          "read": "dispatcher-first-word",
-          "hex": "f04f2de9"
-        }
-      ]
+      "observe": true
     }
   ]
 }

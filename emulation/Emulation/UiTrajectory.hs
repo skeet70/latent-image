@@ -24,6 +24,7 @@ module Emulation.UiTrajectory
   , TrajectoryExpect (..)
   , expectLabel
   , phaseNames
+  , instructionPinnedPhases
   , decodeTrajectories
   , variantMismatches
   , checkModalObserverConfiguration
@@ -38,6 +39,7 @@ import Data.Aeson.Types (Object, Parser)
 import qualified Data.ByteString as B
 import Data.Foldable (toList)
 import Data.List (nub, sort, stripPrefix)
+import Data.Maybe (isJust)
 import qualified Data.Text as T
 import Data.Word (Word32)
 import Emulation.PreservationObservation (PreservationRanges, checkPreservationRangeCount, preservationRangeList, preservationRanges)
@@ -384,6 +386,13 @@ hexWord text = case readHex (T.unpack text) of
 
 phaseNames :: Trajectories -> [T.Text]
 phaseNames trajectories = nub (map segmentPhase (beforeUnload trajectories ++ afterUnload trajectories))
+
+-- | Phases whose segment `key_pulse` or a step's hold/release pins an instruction hold, which
+-- only the retained engine takes.
+instructionPinnedPhases :: Trajectories -> [T.Text]
+instructionPinnedPhases trajectories = nub
+  [ segmentPhase segment | segment <- beforeUnload trajectories ++ afterUnload trajectories
+  , isJust (segmentKeyPulse segment) || any (isJust . keyTimingPulse . stepTiming) (segmentSteps segment) ]
 
 -- | Decodes a trajectory file and checks that every required phase names a segment.
 decodeTrajectories :: B.ByteString -> Either String Trajectories

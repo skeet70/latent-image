@@ -1,6 +1,7 @@
 module Replacement.PlainLoad.Admission
   ( AdmissionError (..), ProducerProof, deriveProducerProof
   , scratchLow, refusalPc, executionPcs, callSites, returnPcs
+  , Service (..), serviceAddress, retainedTargets
   ) where
 
 import qualified A32 as A
@@ -27,7 +28,7 @@ data AdmissionError
   deriving (Eq, Show)
 
 data Service = SegmentLookup | ExtentGetter | ModeGetter | StorageRead | Progress | Take | Give | Delay
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Show, Enum, Bounded)
 data Field = FlashOffset | InitialLength | FinalLength | Destination deriving (Eq, Ord, Show)
 data Source = FieldSource Field | ModeSource | ReadStatusSource | IgnoredResult Int deriving (Eq, Ord, Show)
 data Root = SegmentRoot | ExtentRoot deriving (Eq, Show)
@@ -234,17 +235,24 @@ consume effect machine = case remaining machine of
     pure machine {remaining = rest}
   [] -> Left OrderedEffectsDiffer
 
+serviceAddress :: Service -> Word32
+serviceAddress service = case service of
+  SegmentLookup -> 0x657114
+  ExtentGetter -> 0x6571a0
+  ModeGetter -> 0x657184
+  StorageRead -> 0x6a8f1c
+  Progress -> 0x73b924
+  Take -> 0x724b68
+  Give -> 0x724c00
+  Delay -> 0x69b9c4
+
+retainedTargets :: [Word32]
+retainedTargets = map serviceAddress [minBound .. maxBound]
+
 serviceAt :: Word32 -> Either AdmissionError Service
-serviceAt target = case target of
-  0x657114 -> Right SegmentLookup
-  0x6571a0 -> Right ExtentGetter
-  0x657184 -> Right ModeGetter
-  0x6a8f1c -> Right StorageRead
-  0x73b924 -> Right Progress
-  0x724b68 -> Right Take
-  0x724c00 -> Right Give
-  0x69b9c4 -> Right Delay
-  _ -> Left ExternalCallRejected
+serviceAt target = case [service | service <- [minBound .. maxBound], serviceAddress service == target] of
+  service:_ -> Right service
+  [] -> Left ExternalCallRejected
 
 deriveProducerProof :: B.ByteString -> Either AdmissionError ProducerProof
 deriveProducerProof bytes = do

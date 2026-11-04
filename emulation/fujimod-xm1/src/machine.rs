@@ -26,14 +26,54 @@ pub enum RunOutcome {
     DrainRequired,
     Failed,
 }
-/// Fixed hold and debounced-release cap in guest instructions.
+/// How long a press holds its input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hold {
+    Instructions(u64),
+    /// Board ticks of guest time.
+    BoardTicks(u64),
+}
+
+/// A hold, and a debounced-release cap in guest instructions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeyPulse {
-    pub hold: u64,
+    pub hold: Hold,
     pub release: u64,
 }
 
-pub const MENU_PULSE: KeyPulse = KeyPulse { hold: 4_000_000, release: 6_000_000 };
+impl KeyPulse {
+    pub const fn instructions(hold: u64, release: u64) -> Self {
+        Self { hold: Hold::Instructions(hold), release }
+    }
+}
+
+/// Board ticks between two X-M1 key-scanner samples (period argument 25, 25 ms at 12 MHz).
+pub const SCAN_INTERVAL_TICKS: u64 = 300_000;
+
+/// Two scan intervals, the longest an ADC key row waits for its second matching sample, plus
+/// 120,000 ticks (10 ms); 2.4 of the 40 scans before rows 14..20 repeat.
+pub const SCANNED_HOLD: Hold = Hold::BoardTicks(2 * SCAN_INTERVAL_TICKS + 120_000);
+
+pub const MENU_PULSE: KeyPulse = KeyPulse { hold: SCANNED_HOLD, release: 6_000_000 };
+pub const DIRECTIONAL_PULSE: KeyPulse = KeyPulse { hold: SCANNED_HOLD, release: 12_000_000 };
+
+/// The default pulse of an ADC key.
+pub fn key_pulse(key: RouteKey) -> KeyPulse {
+    match key {
+        RouteKey::Up | RouteKey::Down | RouteKey::Left | RouteKey::Right => DIRECTIONAL_PULSE,
+        RouteKey::Ok | RouteKey::Back | RouteKey::Q => MENU_PULSE,
+    }
+}
+
+/// A press's key-table row at the end of its hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Latch {
+    Latched,
+    /// The row read released at `hold_end` guest instructions.
+    Unlatched { hold_end: u64 },
+    /// The sub-command dial has no key-table row.
+    Untracked,
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(transparent)]
@@ -172,6 +212,11 @@ impl Machine {
 
     /// Records every armed site entered, and returns early after a stop label's entry.
     pub fn run(&mut self, count: u64) -> RunOutcome {
+        self.run_until(count, None)
+    }
+
+    /// Runs at most `count` instructions, ending at board tick `until` when given.
+    pub fn run_until(&mut self, count: u64, until: Option<u64>) -> RunOutcome {
         if self.failure.is_some() {
             return RunOutcome::Failed;
         }
@@ -198,12 +243,12 @@ impl Machine {
             }
         }
         loop {
-            if current.value() >= end {
+            if current.value() >= end || until.is_some_and(|tick| self.session.board.now() >= tick) {
                 return RunOutcome::Completed;
             }
             let window = end.min(current.value().saturating_add(GUARD_WINDOW));
             self.traces.begin_advance();
-            let result = self.session.board.run_window(window, self.document.execution.quantum, None, None);
+            let result = self.session.board.run_window(window, self.document.execution.quantum, None, until);
             let refused = self.guard.scan(&self.session.board);
             if let Err(error) = refused.and(result) {
                 self.failure = Some(error);
@@ -228,19 +273,37 @@ impl Machine {
         }
     }
 
-    pub fn dial_push(&mut self, pulse: KeyPulse) -> Result<(), String> {
+    /// The instructions `ticks` board ticks take with no core waiting.
+    pub fn hold_bound(&self, ticks: u64) -> u64 {
+        let rate = &self.document.execution.instructions_per_tick;
+        (ticks * rate.numerator).div_ceil(rate.denominator)
+    }
+
+    fn hold(&mut self, hold: Hold) {
+        match hold {
+            Hold::Instructions(count) => {
+                self.run(count);
+            }
+            Hold::BoardTicks(ticks) => {
+                let until = self.session.board.now().saturating_add(ticks);
+                self.run_until(self.hold_bound(ticks), Some(until));
+            }
+        }
+    }
+
+    pub fn dial_push(&mut self, pulse: KeyPulse) -> Result<Latch, String> {
         self.require_running()?;
         let key = self.document.firmware.dial_push(&self.session)?;
         self.gpio_press(key, GpioReleaseKey::DialPush, pulse)
     }
 
-    pub fn play(&mut self, pulse: KeyPulse) -> Result<(), String> {
+    pub fn play(&mut self, pulse: KeyPulse) -> Result<Latch, String> {
         self.require_running()?;
         let key = self.document.firmware.play(&self.session)?;
         self.gpio_press(key, GpioReleaseKey::Play, pulse)
     }
 
-    pub fn shutter(&mut self, stage: ShutterStage, pulse: KeyPulse) -> Result<(), String> {
+    pub fn shutter(&mut self, stage: ShutterStage, pulse: KeyPulse) -> Result<Latch, String> {
         self.require_running()?;
         let key = self.document.firmware.shutter(&self.session, stage)?;
         let release = match stage {
@@ -275,15 +338,17 @@ impl Machine {
     }
 
     /// Releases the pad after the hold and waits for the row's debounced release byte.
-    fn gpio_press(&mut self, key: GpioKey, release: GpioReleaseKey, pulse: KeyPulse) -> Result<(), String> {
+    fn gpio_press(&mut self, key: GpioKey, release: GpioReleaseKey, pulse: KeyPulse) -> Result<Latch, String> {
         let released = self.document.firmware.key_table.base.0
             + key.row * self.document.firmware.key_table.row_bytes
             + self.document.firmware.key_table.released_offset;
         self.session.gpio(&self.document.gpio.0, key.port, key.pin, key.pressed_high)?;
-        self.run(pulse.hold);
+        self.hold(pulse.hold);
         self.session.gpio(&self.document.gpio.0, key.port, key.pin, !key.pressed_high)?;
         let start = self.instructions();
         let mut sampled = [0];
+        self.session.board.read_physical(released, &mut sampled)?;
+        let latch = if sampled[0] == 0 { Latch::Unlatched { hold_end: start } } else { Latch::Latched };
         while self.failure.is_none() {
             self.session.board.read_physical(released, &mut sampled)?;
             if sampled[0] == 0 {
@@ -296,7 +361,8 @@ impl Machine {
             }
             self.run((pulse.release - spent).min(RELEASE_POLL));
         }
-        self.require_running()
+        self.require_running()?;
+        Ok(latch)
     }
 
     pub fn require_running(&self) -> Result<(), String> {
@@ -310,12 +376,23 @@ impl Machine {
         self.document.firmware.menu(&self.session)
     }
 
-    pub fn press_once(&mut self, press: Press, pulse: KeyPulse) -> Result<(), String> {
+    pub fn press_once(&mut self, press: Press, pulse: KeyPulse) -> Result<Latch, String> {
         match press {
             Press::Key(key) => self.key(key, pulse),
-            Press::Dial(turn) => self.turn_dial(turn, pulse),
+            Press::Dial(turn) => self.turn_dial(turn, pulse).map(|()| Latch::Untracked),
             Press::Shutter(stage) => self.shutter(stage, pulse),
             Press::Play => self.play(pulse),
+        }
+    }
+
+    /// Presses once and fails when the key-table row read released at the end of the hold.
+    pub fn press_latched(&mut self, press: Press, pulse: KeyPulse) -> Result<(), String> {
+        let latch = self.press_once(press, pulse)?;
+        self.require_running()?;
+        match latch {
+            Latch::Unlatched { hold_end } => Err(format!(
+                "{press:?} press was not latched: its key row read released when the hold ended, at instruction {hold_end}")),
+            Latch::Latched | Latch::Untracked => Ok(()),
         }
     }
 
@@ -332,7 +409,10 @@ impl Machine {
         }
         let (port, pins) = (self.document.firmware.subcommand.port, self.document.firmware.subcommand.pins);
         let gpio = self.document.gpio.0.clone();
-        let phase_budget = pulse.hold / 4;
+        let Hold::Instructions(hold) = pulse.hold else {
+            return Err("the sub-command dial takes an instruction hold".into());
+        };
+        let phase_budget = hold / 4;
         for (pin8, pin9) in turn.phases() {
             self.session.gpio(&gpio, port, pins[0], pin8)?;
             self.session.gpio(&gpio, port, pins[1], pin9)?;
@@ -367,16 +447,17 @@ impl Machine {
         }
     }
 
-    pub fn key(&mut self, key: RouteKey, pulse: KeyPulse) -> Result<(), String> {
+    pub fn key(&mut self, key: RouteKey, pulse: KeyPulse) -> Result<Latch, String> {
         if self.failure.is_some() {
             return Err("Restore the checkpoint before another input after a strict stop".into());
         }
         let (channel, sample) = self.document.firmware.pressed_sample(&self.session, key)?;
         set_adc(&mut self.session, &self.document.adc, channel, sample)?;
-        self.run(pulse.hold);
+        self.hold(pulse.hold);
         let released = self.document.firmware.released_sample;
         set_adc(&mut self.session, &self.document.adc, channel, released)?;
         let start = self.instructions();
+        let latch = if self.document.firmware.released(&self.session, key)? { Latch::Unlatched { hold_end: start } } else { Latch::Latched };
         while self.failure.is_none() && !self.document.firmware.released(&self.session, key)? {
             let spent = self.instructions() - start;
             if spent >= pulse.release {
@@ -386,7 +467,7 @@ impl Machine {
             }
             self.run((pulse.release - spent).min(RELEASE_POLL));
         }
-        Ok(())
+        Ok(latch)
     }
 
     /// Holds the ADC key `key` pressed until `release_key`; returns the held sample.
@@ -557,7 +638,7 @@ mod tests {
         let mut machine = machine();
         let row = machine.document.firmware.shutter.full.row.get();
         write_row(&machine, row, &full_press_record(1));
-        machine.shutter(ShutterStage::Full, KeyPulse { hold: 0, release: 3 }).unwrap();
+        machine.shutter(ShutterStage::Full, KeyPulse::instructions(0, 3)).unwrap();
         let observed = serde_json::to_value(&machine.key_release_observations).unwrap();
         assert_eq!(observed.as_array().unwrap().len(), 1);
         assert_eq!(observed[0]["key"].as_str(), Some("full-press"));
@@ -573,6 +654,62 @@ mod tests {
         let mut record = play_record(0);
         record[9] = 3;
         write_row(&machine, row, &record);
-        assert!(machine.play(KeyPulse { hold: 0, release: 0 }).is_err());
+        assert!(machine.play(KeyPulse::instructions(0, 0)).is_err());
+    }
+
+    /// Registers the scanner and loads disjoint calibrated intervals, each row reading
+    /// `released_byte` at `+0x15`.
+    fn adc_keys(machine: &Machine, released_byte: u8) {
+        const CALIBRATION: u64 = 0x00a0_0000;
+        let firmware = &machine.document.firmware;
+        let board = &machine.session.board;
+        board.write_physical(firmware.scanner_registered.0, &1u32.to_le_bytes()).unwrap();
+        board.write_physical(firmware.calibration_pointer.0, &(CALIBRATION as u32).to_le_bytes()).unwrap();
+        for (index, binding) in firmware.keys.iter().enumerate() {
+            let low = 100 * index as u16 + 10;
+            board.write_physical(CALIBRATION + u64::from(binding.low_tag), &low.to_le_bytes()).unwrap();
+            board.write_physical(CALIBRATION + u64::from(binding.high_tag), &(low + 50).to_le_bytes()).unwrap();
+            let mut record = [0u8; 28];
+            record[0..4].copy_from_slice(&binding.code.to_le_bytes());
+            record[9] = 1;
+            record[12..16].copy_from_slice(&(binding.channel as u32).to_le_bytes());
+            record[16..18].copy_from_slice(&binding.low_tag.to_le_bytes());
+            record[18..20].copy_from_slice(&binding.high_tag.to_le_bytes());
+            record[21] = released_byte;
+            write_row(machine, binding.row, &record);
+        }
+    }
+
+    #[test]
+    fn a_press_whose_row_never_latches_fails_at_that_press() {
+        let mut machine = machine();
+        adc_keys(&machine, 0);
+        assert!(machine.press_latched(Press::Key(RouteKey::Ok), KeyPulse::instructions(0, 3)).is_err());
+    }
+
+    #[test]
+    fn a_press_whose_row_latches_passes() {
+        let mut machine = machine();
+        adc_keys(&machine, 1);
+        machine.press_latched(Press::Key(RouteKey::Ok), KeyPulse::instructions(0, 3)).unwrap();
+    }
+
+    #[test]
+    fn a_gpio_press_whose_row_never_latches_fails_at_that_press() {
+        let mut machine = machine();
+        let row = machine.document.firmware.shutter.full.row.get();
+        write_row(&machine, row, &full_press_record(0));
+        assert!(machine.press_latched(Press::Shutter(ShutterStage::Full), KeyPulse::instructions(0, 3)).is_err());
+    }
+
+    #[test]
+    fn a_board_tick_hold_holds_for_that_guest_time() {
+        let mut machine = machine();
+        let row = machine.document.firmware.shutter.full.row.get();
+        write_row(&machine, row, &full_press_record(0));
+        let ticks = machine.session.board.now();
+        machine.press_once(Press::Shutter(ShutterStage::Full), KeyPulse { hold: Hold::BoardTicks(10_000), release: 1 }).unwrap();
+        let held = machine.session.board.now() - ticks;
+        assert!((10_000..10_100).contains(&held), "held {held} ticks");
     }
 }

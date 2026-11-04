@@ -14,6 +14,7 @@ haskell_library(
         "Replacement/StartupArtifact/Footprint/LoaderOrchestration.hs",
         "Replacement/StartupArtifact/Footprint/LoaderStartup.hs",
         "Replacement/StartupArtifact/Footprint/PrimaryPublisher.hs",
+        "Replacement/StartupArtifact/Footprint/Producers.hs",
         "Replacement/StartupArtifact/Footprint/Record2Link.hs",
         "Replacement/StartupArtifact/Footprint/RootTask.hs",
         "Replacement/StartupArtifact/Footprint/TaskStorage.hs",
@@ -50,6 +51,8 @@ haskell_library(
         "//host/firmware:bank-allowlist",
         "//host/firmware:startup-stage-contract",
         "//replacement/idle_task:idle-task-artifact",
+        "//replacement/image5_load:image5-load-artifact",
+        "//replacement/plain_load:plain-load-artifact",
         "//replacement/record5_staging:record5-staging",
         "//replacement/kernel_install:kernel-install-artifact",
         "//replacement/loader_orchestration:loader-orchestration-artifact",
@@ -195,5 +198,27 @@ haskell_test(
         "//host:scientific",
         "//replacement/startup_composition:task-composition-artifact",
         "//replacement/task_submission:task-submission-artifact",
+    ],
+)
+
+_J6_IMAGES = _J5_IMAGES + [
+    "//replacement/image5_load:image5-load-image.bin",
+    "//replacement/image5_load:image5-load-image.symbols",
+    "//replacement/plain_load:plain-load-image.bin",
+    "//replacement/plain_load:plain-load-image.symbols",
+]
+
+# Canonical inputs come from private-data:
+# bazel run //replacement/startup_artifact:startup-artifact-j6-canonical-tests -- CANONICAL_DAT SCRATCH_DIR
+haskell_test(
+    name = "startup-artifact-j6-canonical-tests",
+    srcs = ["J6CanonicalTests.hs"],
+    args = _TOOL_ARGS + ["$(rootpath %s)" % image for image in _J6_IMAGES],
+    data = _TOOLS + _J6_IMAGES,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    tags = ["manual"],
+    deps = _TEST_DEPS + [
+        "//replacement/image5_load:image5-load-artifact",
+        "//replacement/plain_load:plain-load-artifact",
     ],
 )

@@ -45,11 +45,7 @@
           "ok",
           1,
           254,
-          0,
-          {
-            "hold_instructions": 8000000,
-            "release_instructions": 8000000
-          }
+          0
         ]
       ],
       "reads": [
@@ -290,11 +286,7 @@
           "down",
           1,
           5,
-          9,
-          {
-            "hold_instructions": 8000000,
-            "release_instructions": 8000000
-          }
+          9
         ],
         [
           "down",
@@ -328,10 +320,7 @@
     {
       "phase": "cc-film-list-after-unload",
       "observe": true,
-      "key_pulse": {
-        "hold_instructions": 8000000,
-        "release_instructions": 8000000
-      },
+      "capture": "cc-film-list-after-unload",
       "requires": [
         "cc-stock-menu"
       ],
@@ -430,8 +419,7 @@
           "0078bd7c",
           8
         ]
-      ],
-      "capture": "cc-film-list-after-unload"
+      ]
     }
   ]
 }

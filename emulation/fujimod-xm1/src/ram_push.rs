@@ -7,7 +7,7 @@ use fujimod_xm1::adjustment::AdjustmentNand;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, load_card, menu_value, read, restore, sha256, write};
 use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, encode_hex};
 use fujimod_xm1::guest::{DialTurn, ModeDialPosition, PhysicalShutterPosition, Press, RouteKey};
-use fujimod_xm1::machine::{KeyPulse, Machine, MENU_PULSE, ReleaseSegment, RunOutcome};
+use fujimod_xm1::machine::{KeyPulse, Machine, ReleaseSegment, RunOutcome, key_pulse};
 use fujimod_xm1::modal_trace::BeginRequest as ModalBeginRequest;
 use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::run::{self, NodeName};
@@ -39,13 +39,13 @@ const INSTALL_RECORD: &str = "ram-push-install.json";
 const RESET_OBSERVATION_RECORD: &str = "reset-observation.json";
 const CHECKPOINT_SCHEMA: u32 = 1;
 const FIRST_START_SCREEN: u64 = 100_000_000;
-const FIRST_START_PULSE: KeyPulse = KeyPulse { hold: 8_000_000, release: 8_000_000 };
+const FIRST_START_PULSE: KeyPulse = KeyPulse::instructions(8_000_000, 8_000_000);
 const LIVE_VIEW_SETTLE: u64 = 40_000_000;
 const MODE_DIAL_SETTLE: u64 = 40_000_000;
-const DIRECTIONAL_PULSE: KeyPulse = KeyPulse { hold: 3_000_000, release: 12_000_000 };
-const GPIO_PULSE: KeyPulse = KeyPulse { hold: 8_000_000, release: 8_000_000 };
+const GPIO_HOLD: u64 = 8_000_000;
+const GPIO_PULSE: KeyPulse = KeyPulse::instructions(GPIO_HOLD, 8_000_000);
 /// `tools/probe_setup_menus.py` DIAL_PULSE.
-const DIAL_PULSE: KeyPulse = KeyPulse { hold: 4_000_000, release: 1_000_000 };
+const DIAL_PULSE: KeyPulse = KeyPulse::instructions(4_000_000, 1_000_000);
 const MAX_PHASE: u64 = 15_000_000;
 /// `tools/continue_rec_scanout.py` ATTACH_HOLD_PULSE: the held key's lead before the cable rises
 /// and its settle after release.
@@ -551,8 +551,7 @@ fn parse_site_reads(sites: &BTreeMap<String, String>, reads: &BTreeMap<String, V
 
 fn default_pulse(key: Press) -> KeyPulse {
     match key {
-        Press::Key(RouteKey::Up | RouteKey::Down | RouteKey::Left | RouteKey::Right) => DIRECTIONAL_PULSE,
-        Press::Key(RouteKey::Ok | RouteKey::Back | RouteKey::Q) => MENU_PULSE,
+        Press::Key(key) => key_pulse(key),
         Press::Dial(DialTurn::Left | DialTurn::Right) => DIAL_PULSE,
         Press::Shutter(_) | Press::Play => GPIO_PULSE,
     }
@@ -752,7 +751,7 @@ impl ShutterPhaseIndex {
 
     fn duration(self) -> GuestInstructions {
         GuestInstructions(match self {
-            Self::HalfLead | Self::Full => GPIO_PULSE.hold,
+            Self::HalfLead | Self::Full => GPIO_HOLD,
             Self::HalfRelease | Self::Released => GPIO_PULSE.release / 2,
         })
     }
@@ -1079,7 +1078,7 @@ impl Server {
                 let pulse = match (hold_instructions, release_instructions) {
                     (None, None) => default_pulse(route),
                     (Some(hold), Some(release)) if (1..=MAX_PHASE).contains(&hold) && (1..=MAX_PHASE).contains(&release) => {
-                        KeyPulse { hold, release }
+                        KeyPulse::instructions(hold, release)
                     }
                     _ => return Err(format!("hold and release must both be 1..{MAX_PHASE}")),
                 };
@@ -1090,7 +1089,14 @@ impl Server {
                 };
                 let started = Instant::now();
                 let before = self.bridge.machine.instructions();
-                let settle = self.bridge.settled_key(route, pulse, budget)?;
+                let settle = match self.bridge.settled_key(route, pulse, budget) {
+                    Ok(settle) => settle,
+                    Err(failure) => {
+                        self.key_log.push(json!({"key": key, "seconds": started.elapsed().as_secs_f64(),
+                            "instructions": self.bridge.machine.instructions() - before, "failure": failure}));
+                        return Err(failure);
+                    }
+                };
                 self.bridge.machine.require_running()?;
                 self.key_log.push(json!({"key": key, "seconds": started.elapsed().as_secs_f64(),
                     "instructions": self.bridge.machine.instructions() - before, "settle": settle}));
@@ -1101,8 +1107,8 @@ impl Server {
                     return Ok(Some(self.start_capture_operation(CaptureOperation::ShutterSequence)?));
                 }
                 let phases = [
-                    shutter_phase(&mut self.bridge, PhysicalShutterPosition::Half, GuestInstructions(GPIO_PULSE.hold))?,
-                    shutter_phase(&mut self.bridge, PhysicalShutterPosition::Full, GuestInstructions(GPIO_PULSE.hold))?,
+                    shutter_phase(&mut self.bridge, PhysicalShutterPosition::Half, GuestInstructions(GPIO_HOLD))?,
+                    shutter_phase(&mut self.bridge, PhysicalShutterPosition::Full, GuestInstructions(GPIO_HOLD))?,
                     shutter_phase(&mut self.bridge, PhysicalShutterPosition::Half, GuestInstructions(GPIO_PULSE.release / 2))?,
                     shutter_phase(&mut self.bridge, PhysicalShutterPosition::Released, GuestInstructions(GPIO_PULSE.release / 2))?,
                 ];

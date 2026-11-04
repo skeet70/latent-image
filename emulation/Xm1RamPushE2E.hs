@@ -653,6 +653,9 @@ runRamPushE2EUsing given python workspace trajectoryFile installedMedia adjustme
   case emulationRuntime given of
     RetainedRuntime | not (null settleCaps) ->
       ioError (userError "settle_instructions and idle_instructions are FujiMod press timing; the retained bridge takes neither")
+    FujiModRuntime _ | phase : _ <- instructionPinnedPhases trajectories ->
+      ioError (userError ("segment " ++ T.unpack phase ++ " pins an instruction hold, which only the retained engine takes;"
+        ++ " FujiMod presses use the bridge's tick hold (run the NAME.fujimod.json variant without pins)"))
     _ -> pure ()
   exists <- doesDirectoryExist receipt
   when exists $ do

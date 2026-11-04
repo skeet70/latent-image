@@ -28,7 +28,7 @@ const BULK_IN_PORT: usize = 1;
 const RENDEZVOUS_HOLD: u64 = 4_000_000;
 pub const VENDOR_PRODUCT: [u8; 4] = [0xcb, 0x04, 0x80, 0xff];
 const KEEPALIVE_PERIOD: u64 = 32;
-const KEEPALIVE_PULSE: KeyPulse = KeyPulse { hold: 2_000_000, release: 2_000_000 };
+const KEEPALIVE_PULSE: KeyPulse = KeyPulse::instructions(2_000_000, 2_000_000);
 /// Trace labels the e2e arms on its runtime's rendezvous symbols.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RendezvousSite {
@@ -602,6 +602,11 @@ impl Ff80 {
 
     pub fn key(&mut self, key: RouteKey, pulse: KeyPulse) -> Result<(), String> {
         self.machine.key(key, pulse)?;
+        self.observe()
+    }
+
+    pub fn latched_key(&mut self, key: RouteKey, pulse: KeyPulse) -> Result<(), String> {
+        self.machine.press_latched(Press::Key(key), pulse)?;
         self.observe()
     }
 
