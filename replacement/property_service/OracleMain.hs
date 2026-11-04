@@ -10,10 +10,10 @@ import qualified A32 as A
 import Control.Exception (evaluate)
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (Value, eitherDecodeStrict', object, (.=))
+import Data.Bits (shiftR, (.&.))
 import qualified Data.ByteString as B
 import Data.List (isPrefixOf)
 import qualified Data.Map.Strict as M
-import Data.Bits (shiftR, (.&.))
 import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe)
 import Data.String (fromString)
 import Data.Word (Word32)
@@ -224,9 +224,12 @@ oracle arguments runner linkedPath symbolsPath = do
   let tableWord (PropertyId n) = tableAddress + 4 * (n - 1)
       accessorAt name = listToMaybe [start | FunctionExtent (FunctionName functionName) (P.GuestAddress start) _ <- artifactFunctions artifact, functionName == name]
       slotIndexOf identifier = listToMaybe [SlotIndex index | (index, Property other _ _ _) <- zip [0 ..] [p | p@(Property _ _ _ (Owned (OwnedSlotField _))) <- classified], other == identifier]
-      widthName width = case width of
-        Byte -> "8"
-        Half -> "16"
+      loadOf width = case width of
+        Byte -> Load8
+        Half -> Load16
+      storeOf width = case width of
+        Byte -> Store8
+        Half -> Store16
       basePatches site before after = [Patch site (movwWord before) (movwWord after), Patch (site + 4) (movtWord before) (movtWord after)]
       slotControl name control = case exposingSlot fx control classified of
         Nothing -> Left (name ++ ": no slot field exposes the mutation")
@@ -236,27 +239,23 @@ oracle arguments runner linkedPath symbolsPath = do
               BankBranch (BankOffset bankAt) _ _ _ = bankArm arm
               cases = [OracleCase identifier o | o <- slotControlOperations control]
               changed before after address = [Patch address before after | before /= after]
-              accessorPatches accessor before after = case accessorAt accessor of
-                Nothing -> Left (name ++ ": no " ++ accessor)
-                Just site -> Right (basePatches site before after, (site, after))
-          (patches, note, bases) <- case mutation of
-            MutatedArm mutated -> do
+              accessorPatches accessor before after = case accessorAt (accessorName accessor) of
+                Nothing -> Left (name ++ ": no " ++ accessorName accessor)
+                Just site -> Right (basePatches site before after, [(site, after)], accessorName accessor ++ " base " ++ hex before ++ " -> " ++ hex after ++ " for " ++ propertyHex identifier)
+          (patches, bases, note) <- case (mutation, control) of
+            (MutatedArm mutated, _) -> do
               let EncodedEntry entryBefore = encodeEntry (SlotEntry (bankArm arm) index)
                   EncodedEntry entryAfter = encodeEntry (SlotEntry (bankArm mutated) index)
                   EncodedSlot slotBefore = encodeSlot arm
                   EncodedSlot slotAfter = encodeSlot mutated
-              Right (changed entryBefore entryAfter (tableWord identifier) ++ changed slotBefore slotAfter (slotTableAddress + 4 * slotIndex), "PROPERTIES and SLOTS words of " ++ propertyHex identifier, [])
-            MutatedLayout layout
-              | layoutRecordSave layout /= layoutRecordSave stockLayout ->
-                  let moved = saveBase + fromIntegral bankAt - (recordBase + fromIntegral recordAt)
-                   in (\(ps, b) -> (ps, "xm1_save_store" ++ widthName recordWidth' ++ " base " ++ hex saveBase ++ " -> " ++ hex moved ++ ": " ++ propertyHex identifier ++ "'s slot-0 record save lands at its bank offset", [b]))
-                        <$> accessorPatches ("xm1_save_store" ++ widthName recordWidth') saveBase moved
-              | layoutSlotDefaults layout /= layoutSlotDefaults stockLayout ->
-                  (\(ps, b) -> (ps, "xm1_slot_defaults_load" ++ widthName recordWidth' ++ " base " ++ hex slotDefaultsBase ++ " -> " ++ hex (layoutSlotDefaults layout) ++ " for " ++ propertyHex identifier, [b]))
-                    <$> accessorPatches ("xm1_slot_defaults_load" ++ widthName recordWidth') slotDefaultsBase (layoutSlotDefaults layout)
-              | otherwise ->
-                  (\(ps, b) -> (ps, "xm1_tail_defaults_load8 base " ++ hex tailDefaultsBase ++ " -> " ++ hex (layoutTailDefaults layout) ++ " for " ++ propertyHex identifier, [b]))
-                    <$> accessorPatches "xm1_tail_defaults_load8" tailDefaultsBase (layoutTailDefaults layout)
+              Right (changed entryBefore entryAfter (tableWord identifier) ++ changed slotBefore slotAfter (slotTableAddress + 4 * slotIndex), [], "PROPERTIES and SLOTS words of " ++ propertyHex identifier)
+            (MutatedLayout _, RecordSavedAtBankOffset) ->
+              accessorPatches (Accessor SaveImage (storeOf recordWidth')) saveBase (saveBase + fromIntegral bankAt - (recordBase + fromIntegral recordAt))
+            (MutatedLayout layout, SlotDefaultsMoved) ->
+              accessorPatches (Accessor SlotDefaultsImage (loadOf recordWidth')) slotDefaultsBase (layoutSlotDefaults layout)
+            (MutatedLayout layout, TailDefaultsMoved) ->
+              accessorPatches (Accessor TailDefaultsImage Load8) tailDefaultsBase (layoutTailDefaults layout)
+            (MutatedLayout _, _) -> Left (name ++ ": the control changes no accessor")
           Right (Control name MustFail patches cases note, bases)
       slotControls =
         [ slotControl "c-record-offset" RecordOffsetMoved

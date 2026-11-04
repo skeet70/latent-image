@@ -158,6 +158,11 @@ recordStride = 0x28
 -- | The largest default or tail offset the table encoding holds.
 maxDefault = 0x3ff
 
+-- | The getter post-dispatch the owned getter stub branches to, and the setter shared exit.
+getterContinuationAddress, setterContinuationAddress :: Word32
+getterContinuationAddress = 0x624400
+setterContinuationAddress = 0x630200
+
 -- | Every property of both tables with its class, or why the tables are not the expected form.
 classify :: Image -> Either String [Property]
 classify image = do
@@ -170,11 +175,15 @@ classify image = do
     one getterFallback setterFallback getter setter =
       let getterShared = armTarget getter == getterFallback
           setterShared = armTarget setter == setterFallback
+          identifier = armProperty getter
           verdict = decide getterShared setterShared (getterArm image getterTable getter) (setterArm image setterTable setter)
+            (getterContinuation image identifier getterContinuationAddress) (setterContinuation image identifier setterContinuationAddress)
       in Property (armProperty getter) (GuestAddress (armTarget getter)) (GuestAddress (armTarget setter)) verdict
 
-decide :: Bool -> Bool -> Outcome -> Outcome -> Class
-decide getterShared setterShared getter setter
+-- | The last two outcomes are the getter post-dispatch and the setter shared exit run alone for the
+-- property; a slot arm needs both to pop at once, since its stock record branch pops without them.
+decide :: Bool -> Bool -> Outcome -> Outcome -> Outcome -> Outcome -> Class
+decide getterShared setterShared getter setter getterExit setterExit
   | not (outcomeComplete getter) = Delegated (ExplorationIncomplete GetterArms)
   | not (outcomeComplete setter) = Delegated (ExplorationIncomplete SetterArms)
   | not (all exitComplete exits) = Delegated (ExplorationIncomplete SetterExits)
@@ -182,10 +191,15 @@ decide getterShared setterShared getter setter
   | getterShared && setterShared = either (Delegated . uncurry Shape) (const (Owned OwnedUnassigned)) (unassigned getter setter)
   | getterShared = Delegated (OneSidedFallback Getter)
   | setterShared = Delegated (OneSidedFallback Setter)
+  | slotSelected getter, not (bareExit getterExit) || (any (returns . pathEnd) (outcomePaths setter) && not (bareExit setterExit)) = Delegated ExitAdjusts
   | slotSelected getter = either (Delegated . uncurry Shape) (Owned . OwnedSlotField) (slotField getter setter)
   | otherwise = either (Delegated . uncurry Shape) (Owned . OwnedField) (field getter setter)
   where
     exits = [exit | path <- outcomePaths setter, Just exit <- [pathExit path]]
+    returns end = case end of
+      EndReturn _ -> True
+      _ -> False
+    bareExit outcome = outcomeComplete outcome && outcomePaths outcome == [PathRecord [] [] [] (EndReturn ReturnsIncoming) Nothing]
 
 -- | The exit pops at once with r0 as the arm left it, deciding nothing beyond the arm path's guards.
 plainExit :: (PathRecord, ExitRecord) -> Bool

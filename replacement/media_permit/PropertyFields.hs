@@ -26,6 +26,8 @@ module PropertyFields
   , setterTable
   , getterArm
   , setterArm
+  , getterContinuation
+  , setterContinuation
   , maxPaths
   , maxSteps
   ) where
@@ -204,6 +206,16 @@ setterArm image table (Arm (PropertyId property) target) =
           in path { pathExit = Just (ExitRecord (outcomePaths exitOutcome) (outcomeComplete exitOutcome)) }
         _ -> path
   in outcome { outcomePaths = map continued exits }
+
+-- | The getter code at `address` run from the getter arm registers with r0 marked incoming.
+getterContinuation :: Image -> PropertyId -> Word32 -> Outcome
+getterContinuation image (PropertyId property) address =
+  fst (explore image Nothing DefaultUnlinked [] (seed [(12, Const property), (0, Incoming), (1, Arg (ArgumentIndex 1)), (2, Arg (ArgumentIndex 2)), (3, Arg (ArgumentIndex 3))]) address)
+
+-- | The setter code at `address` run from the setter arm registers with r0 marked incoming.
+setterContinuation :: Image -> PropertyId -> Word32 -> Outcome
+setterContinuation image (PropertyId property) address =
+  fst (explore image Nothing DefaultLinked [] (seed [(4, Const property), (0, Incoming), (3, Const (property - 1)), (5, Arg (ArgumentIndex 1)), (6, Arg (ArgumentIndex 2)), (8, Arg (ArgumentIndex 3)), (1, Arg (ArgumentIndex 1)), (2, Arg (ArgumentIndex 2)), (7, DefaultRequested)]) address)
 
 maxSteps, maxPaths :: Int
 maxSteps = 48

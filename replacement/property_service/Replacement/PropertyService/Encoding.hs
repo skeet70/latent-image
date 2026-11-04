@@ -10,7 +10,6 @@ module Replacement.PropertyService.Encoding
   , TableEntry (..)
   , EncodedTables (..)
   , EncodingError (..)
-  , slotTableCapacity
   , encodeEntry
   , encodeSlot
   , encodeTables

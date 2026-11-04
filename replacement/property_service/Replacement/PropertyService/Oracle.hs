@@ -195,9 +195,11 @@ data Fixture = Fixture
 bankStrideBytes :: Int
 bankStrideBytes = 0x1c2
 
--- | Three bank images: slot 3 of bank 1 reaches into the third.
-bankCount, previousBytes, slotDefaultsBytes, tailDefaultsBytes :: Int
+-- | Three bank images, since slot 3 of bank 1 reaches into the third.
+bankCount :: Int
 bankCount = 3
+
+previousBytes, slotDefaultsBytes, tailDefaultsBytes :: Int
 previousBytes = 0x1e0
 slotDefaultsBytes = 0xc8
 tailDefaultsBytes = 0x1c2
@@ -533,7 +535,6 @@ slice image address size = B.take size (B.drop (fromIntegral (address - image4Ba
 region :: RegionId -> Word32 -> Int -> Permission -> B.ByteString -> CaseRegion
 region ident address = mkRegion ident (N.GuestAddress (fromIntegral address))
 
-
 -- | One native case of a role's image4 bytes and declared functions.
 caseSpec :: B.ByteString -> [FunctionSpan] -> Fixture -> CaseLabel -> Standing -> OracleCase -> Expectation -> CaseSpec
 caseSpec image functions fx (CaseLabel label) standing (OracleCase (PropertyId identifier) operation) expected =
@@ -570,7 +571,6 @@ caseSpec image functions fx (CaseLabel label) standing (OracleCase (PropertyId i
       Set bank slot@(SlotArgument slotWord) choice -> (0x624694, "setter 0x624694", [identifier, setValue standing slot choice, bankWord bank, slotWord])
     bankWord = fromIntegral . fromEnum
 
-
 -- | One image4 word replaced; 'applyPatches' refuses when the word is not 'patchBefore'.
 data Patch = Patch { patchAddress :: Word32, patchBefore :: Word32, patchAfter :: Word32 } deriving (Eq, Show)
 
@@ -583,7 +583,6 @@ applyPatches patches image = foldM one image patches
       let found = readWordAt bytes at
       unless (found == before) (Left ("word at 0x" ++ showHex address "" ++ " is 0x" ++ showHex found "" ++ ", not 0x" ++ showHex before ""))
       Right (B.take at bytes <> word32le after <> B.drop (at + 4) bytes)
-
 
 -- | A change to one owned field's PROPERTIES entry.
 data EntryControl = OffsetMoved | SaveCleared | DefaultFlipped deriving (Eq, Show, Enum, Bounded)
@@ -679,13 +678,13 @@ slotControlOperations control = filter relevant operations
       SlotDefaultsMoved -> defaultRead operation && slotOf operation `elem` map SlotArgument [0, 2, 0xffffffff]
       TailDefaultsMoved -> defaultRead operation && bankBranchSelected (slotOf operation)
 
--- | The first slot field whose mutation changes the model on one of the control's operations.
+-- | The first slot field whose mutation changes the model, both inside the fixture, on one of the control's operations.
 exposingSlot :: Fixture -> SlotControl -> [Property] -> Maybe (Property, SlotArm, SlotMutation)
 exposingSlot fx control properties = listToMaybe
   [ (property, arm, mutation)
   | property@(Property _ _ _ (Owned (OwnedSlotField arm))) <- properties
   , Just mutation <- [mutateSlot fx control arm]
-  , any (\operation -> modelEffect fx (OwnedSlotField arm) operation /= mutated mutation arm operation) (slotControlOperations control)
+  , or [before /= after | operation <- slotControlOperations control, Just before <- [modelEffect fx (OwnedSlotField arm) operation], Just after <- [mutated mutation arm operation]]
   ]
   where
     mutated mutation arm operation = case mutation of
