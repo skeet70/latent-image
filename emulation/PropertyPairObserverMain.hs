@@ -44,12 +44,17 @@ data Options = Options
   , optBootRom :: FilePath
   , optNand :: FilePath
   , optOutput :: FilePath
+  , optProbe :: Maybe Probe
   }
+
+-- | A discriminating run: only this key path from the root, with the guest idle for the given
+-- instructions before its last key.
+data Probe = Probe [CrawlKey] (Maybe Instructions)
 
 usage :: String
 usage = "usage: property-pair-observe --role retained|owned|control --routes ROUTES --update DAT --analysis ROOT \
   \--linked BIN --symbols SYMBOLS --contract CONTRACT [--control MANIFEST] --run RUN --boot-rom ROM \
-  \--adjustment-nand NAND --output NEW_DIRECTORY"
+  \--adjustment-nand NAND --output NEW_DIRECTORY [--probe-path KEY,KEY,... [--probe-idle INSTRUCTIONS]]"
 
 parseOptions :: [String] -> Either String Options
 parseOptions arguments = do
@@ -59,10 +64,25 @@ parseOptions arguments = do
   unless (all ((`elem` names) . fst) pairs && length pairs == length (M.fromList pairs)) (Left usage)
   role <- need "--role" >>= parseRole
   unless ((role == ControlRole) == (value "--control" /= Nothing)) (Left "--control names the control role's manifest")
+  probe <- case (value "--probe-path", value "--probe-idle") of
+    (Nothing, Nothing) -> Right Nothing
+    (Nothing, Just _) -> Left "--probe-idle needs --probe-path"
+    (Just path, idle) -> do
+      keys <- mapM parseKey (splitOn path)
+      when (null keys) (Left "--probe-path names at least one key")
+      instructions <- forM idle $ \text -> case reads text of
+        [(count, "")] | count >= 1 && count <= instructionsValue maxIdle -> Right (Instructions count)
+        _ -> Left ("--probe-idle must be 1.." ++ show (instructionsValue maxIdle))
+      Right (Just (Probe keys instructions))
   Options role <$> need "--routes" <*> need "--update" <*> need "--analysis" <*> need "--linked" <*> need "--symbols"
     <*> need "--contract" <*> pure (value "--control") <*> need "--run" <*> need "--boot-rom" <*> need "--adjustment-nand" <*> need "--output"
+    <*> pure probe
  where
-  names = ["--role", "--routes", "--update", "--analysis", "--linked", "--symbols", "--contract", "--control", "--run", "--boot-rom", "--adjustment-nand", "--output"]
+  names = ["--role", "--routes", "--update", "--analysis", "--linked", "--symbols", "--contract", "--control", "--run", "--boot-rom", "--adjustment-nand", "--output", "--probe-path", "--probe-idle"]
+  parseKey wire = maybe (Left ("unknown key " ++ wire)) Right (lookup wire [(crawlKeyWire key, key) | key <- [minBound .. maxBound]])
+  splitOn text = case break (== ',') text of
+    (key, []) -> [key]
+    (key, _ : rest) -> key : splitOn rest
   collect (name : value : rest) = ((name, value) :) <$> collect rest
   collect [] = Right []
   collect _ = Left usage
@@ -216,7 +236,9 @@ run options output record = do
   limit <- either (refuse . InputRefused) pure (W.watchLimit watchLimit)
   ranges <- either (refuse . InputRefused) pure
     (mapM (\range -> W.watchRange (W.watchAddress (rangeStart range)) (W.watchAddress (rangeEnd range))) settingsRanges)
-  routeKeyPaths <- pure [routeKeys route | route <- routeList routes, not (null (routeKeys route))]
+  record "probe" (maybe Null (\(Probe path idle) -> object ["path" .= map crawlKeyWire path, "idle_instructions" .= fmap instructionsValue idle]) (optProbe options))
+  record "pre_key_idle_instructions" (maybe (A.toJSON (instructionsValue preKeyIdle)) (const Null) (optProbe options))
+  let routeKeyPaths = maybe [routeKeys route | route <- routeList routes, not (null (routeKeys route))] (\(Probe path _) -> [path]) (optProbe options)
   let trie = foldl (flip insertPath) (Trie []) routeKeyPaths
   withBinaryFile (output </> "hits.jsonl") WriteMode $ \hitsFile -> do
     cursor <- newIORef 0
@@ -260,6 +282,10 @@ run options output record = do
                 hitsStart <- readIORef cursor
                 armed <- emulatorExecutionWatchBegin emulator ranges [] limit
                 unless (field "armed" armed == Just (Bool True)) (refuse (BridgeFailed ("watch-begin refused: " ++ show armed)))
+                idled <- case optProbe options of
+                  Nothing -> Just <$> emulatorIdle emulator preKeyIdle
+                  Just (Probe probed (Just instructions)) | keys == probed -> Just <$> emulatorIdle emulator instructions
+                  Just _ -> pure Nothing
                 press <- emulatorDisplayKey emulator key
                 case field "failure" press of
                   Just Null -> pure ()
@@ -271,7 +297,7 @@ run options output record = do
                 hitsEnd <- drainHits emulator
                 modifyIORef' steps (object
                   [ "step" .= stepId, "parent" .= parentStep, "keys" .= map crawlKeyWire keys
-                  , "hits" .= [hitsStart, hitsEnd], "press" .= press, "watch" .= watch
+                  , "hits" .= [hitsStart, hitsEnd], "idle" .= idled, "press" .= press, "watch" .= watch
                   , "regions_before" .= before, "regions_after" .= after ] :)
                 printf "step %d %s: hits %d..%d\n" stepId (unwords (map crawlKeyWire keys)) hitsStart hitsEnd
                 walk keys stepId child

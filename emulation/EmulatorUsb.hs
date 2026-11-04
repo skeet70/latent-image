@@ -57,6 +57,7 @@ module EmulatorUsb
   , CrawlKey (..)
   , crawlKeyWire
   , emulatorDisplayKey
+  , emulatorIdle
   ) where
 
 import Control.Concurrent.MVar
@@ -612,6 +613,10 @@ instance ToJSON CrawlKey where
 -- reply is undecoded.
 emulatorDisplayKey :: Emulator -> CrawlKey -> IO Value
 emulatorDisplayKey emulator key = Object <$> rpc emulator (object ["command" .= String "display-key", "key" .= crawlKeyWire key])
+
+-- | Runs the guest for the given instructions with no input; the reply is undecoded.
+emulatorIdle :: Emulator -> Instructions -> IO Value
+emulatorIdle emulator instructions = Object <$> rpc emulator (object ["command" .= String "idle", "instructions" .= instructionsValue instructions])
 
 menuReading :: M.KeyMap Value -> IO MenuReading
 menuReading fields = objectField "menu" fields >>= \value -> case value of

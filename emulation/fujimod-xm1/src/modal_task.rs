@@ -16,6 +16,10 @@ impl KernelId {
     pub const fn current_cell(self) -> Guest {
         match self { Self::Primary => Guest(0x4005_4760), Self::Secondary => Guest(0x400e_4720) }
     }
+    /// Make-ready on either core (0x43d08, 0xd3cc4) can write either kernel's cell.
+    pub const fn selected_cell(self) -> Guest {
+        match self { Self::Primary => Guest(0x4005_4768), Self::Secondary => Guest(0x400e_4728) }
+    }
     pub const fn context_cell(self) -> Guest {
         match self { Self::Primary => Guest(0x4005_45a4), Self::Secondary => Guest(0x400e_4564) }
     }
@@ -95,6 +99,7 @@ pub struct SourceLayout {
     pub kernel: KernelId,
     pub context: PhysicalExtent,
     pub current: PhysicalExtent,
+    pub selected: PhysicalExtent,
     pub nodes: PhysicalExtent,
     pub creations: PhysicalExtent,
     pub vfp_owner: PhysicalExtent,
@@ -108,6 +113,7 @@ pub fn source_layouts() -> [SourceLayout; 2] {
         };
         SourceLayout {
             kernel, current: extent(kernel.current_cell(), 4),
+            selected: extent(kernel.selected_cell(), 4),
             context: extent(kernel.context_cell(), 4),
             nodes: extent(kernel.nodes(), NODE_BYTES * TASK_COUNT),
             creations: extent(kernel.creations(), CREATION_BYTES * TASK_COUNT),
