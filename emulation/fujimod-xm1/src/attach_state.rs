@@ -686,6 +686,9 @@ pub enum AttachRuleRefusal {
     /// A log site's store is not the instruction after its read, or its key or label repeats.
     LogSite(SiteLabel),
     LogSpanOverlap(AllowanceLabel),
+    /// The LZ submitted word is unaligned, outside DRAM, over an allowance or the log span, or a record length is
+    /// shorter than its header.
+    LzSubmittedWord,
 }
 
 /// Contract facts the attach rules are checked against.
@@ -1757,19 +1760,25 @@ pub fn compare(rules: &AttachRules, attach_core: Core, retained: &RoleCapture, o
     let mut relations = evaluate_relations(rules, captures, &boards, &mut out);
     let registers = compare_context(rules, attach_core, retained.state, owned.state, &mut out);
     compare_peers(rules, retained.state, owned.state, &mut out);
-    let mut extract: [Vec<Span>; 2] = [Vec::new(), Vec::new()];
+    let submitted = rules.relations.lz.as_ref().and_then(|lz| lz.submitted.as_ref());
+    let mut extract: [Vec<(Extract, Span)>; 2] = [Vec::new(), Vec::new()];
     for (slot, role) in extract.iter_mut().zip(&relations.roles) {
         if let (Some(log), Some(Ok(_))) = (&rules.relations.log, &role.log) {
-            slot.push(log.span);
+            slot.push((Extract::Log, log.span));
         }
         if let Some(Ok(plan)) = &role.lz {
             if plan.end > plan.start {
-                slot.push(Span { start: plan.start, end: plan.end });
+                slot.push((Extract::LzSource, Span { start: plan.start, end: plan.end }));
+            }
+            if let Some(word) = submitted {
+                slot.push((Extract::LzSubmitted, word.span()));
             }
         }
     }
     let mut memory_out = Collector::default();
-    let extras = MemoryExtras { held: relations.log_words.clone(), extract };
+    let mut held: Vec<(HeldBy, Span)> = relations.log_words.iter().map(|span| (HeldBy::Log, *span)).collect();
+    held.extend(submitted.map(|word| (HeldBy::LzSubmitted, word.span())));
+    let extras = MemoryExtras { held, extract };
     let (allowances, extracted) = if shapes_agree && memory_paths.len() == 2 {
         match compare_memory(rules, retained, owned, &memory_paths, &extras, &mut memory_out) {
             Ok(result) => result,
@@ -1784,11 +1793,12 @@ pub fn compare(rules: &AttachRules, attach_core: Core, retained: &RoleCapture, o
     let mut fixed: BTreeSet<String> = BTreeSet::new();
     let mut summaries = Vec::new();
     let mut log_held = !relations.log_words.is_empty();
+    let mut submitted_held = 0usize;
     let mut lz_leaves: Vec<Vec<String>> = Vec::new();
     for (index, role) in relations.roles.iter_mut().enumerate() {
         let mut summary = RoleRelationSummary { role: role.role, transactions: role.rows, timestamps: Vec::new(), lz: None };
         if let (Some(log), Some(Ok(words))) = (&rules.relations.log, &role.log) {
-            let bytes = extracted.bytes[index].first();
+            let bytes = extracted.bytes[index].iter().find(|(kind, _)| *kind == Extract::Log).map(|(_, bytes)| bytes);
             let word_at = |address: u64| bytes.and_then(|bytes| {
                 let at = (address - log.span.start) as usize;
                 bytes.get(at..at + 4).map(|word| u32::from_le_bytes(word.try_into().expect("four bytes")))
@@ -1802,9 +1812,21 @@ pub fn compare(rules: &AttachRules, attach_core: Core, retained: &RoleCapture, o
             }
         }
         if let Some(Ok(plan)) = &role.lz {
-            let bytes = if plan.end > plan.start { extracted.bytes[index].last().map(Vec::as_slice) } else { Some(&[][..]) };
+            let source = extracted.bytes[index].iter().find(|(kind, _)| *kind == Extract::LzSource).map(|(_, bytes)| bytes.as_slice());
+            let bytes = if plan.end > plan.start { source } else { Some(&[][..]) };
             match bytes.map(|bytes| attach_relations::derive_lz(plan, bytes)) {
-                Some(Ok((lz, leaves))) => {
+                Some(Ok((mut lz, leaves))) => {
+                    let captured = extracted.bytes[index].iter().find(|(kind, _)| *kind == Extract::LzSubmitted)
+                        .map(|(_, bytes)| u32::from_le_bytes(bytes.as_slice().try_into().expect("four bytes")));
+                    if let (Some(word), Some(captured)) = (submitted, captured) {
+                        match attach_relations::check_submitted(plan, captured, word.record_length.of(role.role)) {
+                            Ok(()) => {
+                                lz.submitted = Some(Word(captured));
+                                submitted_held += 1;
+                            }
+                            Err(failure) => relations.failures.push((role.role, failure)),
+                        }
+                    }
                     summary.lz = Some(lz);
                     lz_leaves.push(leaves);
                 }
@@ -1846,10 +1868,14 @@ pub fn compare(rules: &AttachRules, attach_core: Core, retained: &RoleCapture, o
     };
     verify_stacks(rules, captures, &mut out);
     out.append(memory_out);
-    if !log_held && !extracted.held.is_empty() {
-        let start = extracted.held[0];
-        let runs = extracted.held.iter().take(DIFFERING_RUN_LIMIT).map(|&address| SpaceSpan { space: Space::Physical, start: address, end: address + 1 }).collect();
-        out.push(Difference::AttachMemory { space: Space::Physical, start, end: start + 1, differing_bytes: extracted.held.len() as u64, runs });
+    let released = |by: HeldBy| match by {
+        HeldBy::Log => !log_held,
+        HeldBy::LzSubmitted => submitted_held < 2,
+    };
+    let differing: Vec<u64> = extracted.held.iter().filter(|(by, _)| released(*by)).map(|(_, address)| *address).collect();
+    if let Some(&start) = differing.first() {
+        let runs = differing.iter().take(DIFFERING_RUN_LIMIT).map(|&address| SpaceSpan { space: Space::Physical, start: address, end: address + 1 }).collect();
+        out.push(Difference::AttachMemory { space: Space::Physical, start, end: start + 1, differing_bytes: differing.len() as u64, runs });
     }
     if let Some(first) = out.first {
         return Err(AttachRefusal { first, differences: out.differences });
@@ -1862,16 +1888,30 @@ pub fn compare(rules: &AttachRules, attach_core: Core, retained: &RoleCapture, o
 
 /// Physical spans the memory comparison holds aside (`held`) or copies out per role (`extract`).
 struct MemoryExtras {
-    held: Vec<Span>,
-    extract: [Vec<Span>; 2],
+    held: Vec<(HeldBy, Span)>,
+    extract: [Vec<(Extract, Span)>; 2],
+}
+
+/// The relation whose result releases a held span to the comparison.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HeldBy {
+    Log,
+    LzSubmitted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Extract {
+    Log,
+    LzSource,
+    LzSubmitted,
 }
 
 #[derive(Default)]
 struct MemoryExtracted {
     /// Per role, one buffer per `extract` span.
-    bytes: [Vec<Vec<u8>>; 2],
+    bytes: [Vec<(Extract, Vec<u8>)>; 2],
     /// Differing bytes inside `held` spans.
-    held: Vec<u64>,
+    held: Vec<(HeldBy, u64)>,
 }
 
 /// Differences in the captured bytes go to `out`; an inconsistent capture is the `Err`.
@@ -1926,7 +1966,7 @@ fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCaptu
     let mut extracted = MemoryExtracted::default();
     let mut filled: [Vec<u64>; 2] = [Vec::new(), Vec::new()];
     for role in 0..2 {
-        extracted.bytes[role] = extras.extract[role].iter().map(|span| vec![0u8; span.len() as usize]).collect();
+        extracted.bytes[role] = extras.extract[role].iter().map(|(kind, span)| (*kind, vec![0u8; span.len() as usize])).collect();
         filled[role] = vec![0; extras.extract[role].len()];
     }
     let mut pages = [vec![0u8; PAGE], vec![0u8; PAGE]];
@@ -1957,10 +1997,10 @@ fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCaptu
             }
             if *space == Space::Physical {
                 for role in 0..2 {
-                    for (slot, span) in extras.extract[role].iter().enumerate().filter(|(_, span)| span.intersects(page_span)) {
+                    for (slot, (_, span)) in extras.extract[role].iter().enumerate().filter(|(_, (_, span))| span.intersects(page_span)) {
                         let from = span.start.max(page_span.start);
                         let to = span.end.min(page_span.end);
-                        extracted.bytes[role][slot][(from - span.start) as usize..(to - span.start) as usize]
+                        extracted.bytes[role][slot].1[(from - span.start) as usize..(to - span.start) as usize]
                             .copy_from_slice(&pages[role][(from - base) as usize..(to - base) as usize]);
                         filled[role][slot] += to - from;
                     }
@@ -1975,8 +2015,8 @@ fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCaptu
                     if hashed.iter().any(|item| item.space == *space && item.span.holds(address)) {
                         continue;
                     }
-                    if *space == Space::Physical && extras.held.iter().any(|span| span.holds(address)) {
-                        extracted.held.push(address);
+                    if let Some((by, _)) = extras.held.iter().find(|(_, span)| *space == Space::Physical && span.holds(address)) {
+                        extracted.held.push((*by, address));
                         continue;
                     }
                     if let Some(absorber) = absorbers.iter_mut().find(|item| item.space == *space && item.span.holds(address)) {
@@ -2049,7 +2089,7 @@ fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCaptu
         out.push(Difference::UnusedAllowance { entry: UnusedEntry::Memory(unused.label.clone()) });
     }
     for role in 0..2 {
-        if extras.extract[role].iter().zip(&filled[role]).any(|(span, filled)| *filled != span.len()) {
+        if extras.extract[role].iter().zip(&filled[role]).any(|((_, span), filled)| *filled != span.len()) {
             return Err(snapshot_error(roles[role], "a relation span lies outside the captured physical regions"));
         }
     }

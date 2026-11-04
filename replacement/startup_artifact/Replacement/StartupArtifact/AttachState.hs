@@ -24,6 +24,7 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Word (Word32, Word64)
 import qualified Emulation.Sha256 as SHA
+import qualified FujiAF.UpdateContainer as U
 import qualified FujiAF.FirstStage as F
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
@@ -93,7 +94,15 @@ data LogRelation = LogRelation Word64 Word64 [LogSite] deriving (Eq, Show)
 data Relations = Relations
   { timerRelation :: Maybe Text
   , logRelation :: Maybe LogRelation
-  , lzRelation :: Maybe Text
+  , lzRelation :: Maybe LzRelation
+  } deriving (Eq, Show)
+
+data LzRelation = LzRelation Text (Maybe SubmittedWord) deriving (Eq, Show)
+
+-- | The physical record-1 word counting the record-4 stream bytes submitted to the LZ device.
+data SubmittedWord = SubmittedWord
+  { submittedAddress :: Word64
+  , submittedCitation :: Text
   } deriving (Eq, Show)
 
 data AttachRules = AttachRules [Peer] [CarrierPart] [Allowance] [RegisterEntry] [BoardEntry] Relations deriving (Eq, Show)
@@ -306,12 +315,20 @@ logSite value = do
   LogSite name <$> named (context "role") roleName (field fields "role") <*> core (context "core") (field fields "core")
     <*> sourceOf (context "source") (field fields "source") <*> text (context "citation") (field fields "citation")
 
--- | @{"timer"?:{"citation"},"log"?:{"span":{start,end},"sites":[...]},"lz"?:{"citation"}}@.
+-- | @{"timer"?:{"citation"},"log"?:{"span":{start,end},"sites":[...]},"lz"?:{"citation","submitted"?:{"address","citation"}}}@.
 relations :: J.Value -> Either Refusal Relations
 relations value = do
   fields <- object "relations" [] ["timer", "log", "lz"] value
   timer <- citationMember "relations" fields "timer"
-  lz <- citationMember "relations" fields "lz"
+  lz <- if not (present fields "lz") then pure Nothing else do
+    inner <- object "relations.lz" ["citation"] ["submitted"] (field fields "lz")
+    citation <- text "relations.lz.citation" (field inner "citation")
+    submitted <- if not (present inner "submitted") then pure Nothing else do
+      word <- object "relations.lz.submitted" ["address", "citation"] [] (field inner "submitted")
+      address <- integral "relations.lz.submitted.address" (field word "address")
+      unless (address `mod` 4 == 0 && address + 4 <= 0x20000000) (refuse "relations.lz.submitted.address is unaligned or outside DRAM")
+      Just . SubmittedWord address <$> text "relations.lz.submitted.citation" (field word "citation")
+    pure (Just (LzRelation citation submitted))
   logged <- if not (present fields "log") then pure Nothing else do
     inner <- object "relations.log" ["span", "sites"] [] (field fields "log")
     (start, end) <- object "relations.log.span" ["start", "end"] [] (field inner "span") >>= interval "relations.log.span"
@@ -336,6 +353,11 @@ parseAttachRules value = do
   forM_ (logRelation related) $ \(LogRelation start end _) ->
     forM_ allowances $ \entry -> when (allowanceSpace entry == PhysicalSpace && allowanceStart entry < end && start < allowanceEnd entry)
       (refuse ("allowance " <> allowanceLabel entry <> " overlaps the log span"))
+  forM_ (lzRelation related) $ \(LzRelation _ submitted) -> forM_ submitted $ \(SubmittedWord address _) -> do
+    let overlaps start end = start < address + 4 && address < end
+    forM_ allowances $ \entry -> when (allowanceSpace entry == PhysicalSpace && overlaps (allowanceStart entry) (allowanceEnd entry))
+      (refuse ("allowance " <> allowanceLabel entry <> " overlaps the LZ submitted word"))
+    forM_ (logRelation related) $ \(LogRelation start end _) -> when (overlaps start end) (refuse "the LZ submitted word overlaps the log span")
   AttachRules <$> (rows "peers" >>= mapM peer) <*> (rows "carriers" >>= mapM carrierPart) <*> pure allowances
     <*> (rows "registers" >>= mapM registerEntry) <*> (rows "board" >>= mapM boardEntry) <*> pure related
 
@@ -408,7 +430,19 @@ relationsValue sources (Relations timer logged lz) = do
                    | (site, (readPc, storePc)) <- resolved ]
       ]
   let citationValue = fmap (\citation -> J.object ["citation" .= citation])
-  pure (J.object ["timer" .= citationValue timer, "log" .= logValue, "lz" .= citationValue lz])
+  lzValue <- forM lz $ \(LzRelation citation submitted) -> do
+    submittedValue <- forM submitted $ \(SubmittedWord address wordCitation) -> do
+      retained <- record4Length (canonicalDatBytes sources)
+      composed <- record4Length (composedDatBytes sources)
+      pure (J.object ["address" .= address, "citation" .= wordCitation, "record_length" .= J.object ["retained" .= retained, "composed" .= composed]])
+    pure (J.object (("citation" .= citation) : maybe [] (\value -> ["submitted" .= value]) submittedValue))
+  pure (J.object ["timer" .= citationValue timer, "log" .= logValue, "lz" .= lzValue])
+
+-- | The record-4 total length word, header included.
+record4Length :: B.ByteString -> Either Refusal Word32
+record4Length dat = case U.parseContainer dat of
+  Left _ -> refuse "a DAT does not parse for its record-4 length"
+  Right parsed -> pure (U.recTotalLen (U.recHeader (U.partRecord4 (U.parsedParts parsed))))
 
 sha256 :: B.ByteString -> Text
 sha256 = T.pack . SHA.sha256Hex . SHA.sha256

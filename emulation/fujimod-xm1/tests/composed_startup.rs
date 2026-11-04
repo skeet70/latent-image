@@ -1364,34 +1364,111 @@ fn with_lz(spec: &mut Spec, compressed: &[u8]) {
     }
 }
 
-#[test]
-fn the_lz_tallies_follow_each_role_s_pinned_input() {
-    let retained_input = [3, b'a', b'b', b'c', 0x80, 0x36];
-    let owned_input = [9, b'a', b'b', b'c', b'a', b'b', b'c', b'a', b'b', b'c'];
+const RETAINED_LZ_INPUT: [u8; 6] = [3, b'a', b'b', b'c', 0x80, 0x36];
+const OWNED_LZ_INPUT: [u8; 10] = [9, b'a', b'b', b'c', b'a', b'b', b'c', b'a', b'b', b'c'];
+
+/// Both roles with one LZ job each, over inputs of different lengths.
+fn lz_roles() -> (Spec, Spec) {
     let mut retained = relation_spec(Role::Retained, &timer_steps(100, 200, RETAINED_SITE), RETAINED_SITE);
     let mut owned = relation_spec(Role::Composed, &timer_steps(160, 300, COMPOSED_SITE), COMPOSED_SITE);
-    with_lz(&mut retained, &retained_input);
-    with_lz(&mut owned, &owned_input);
+    with_lz(&mut retained, &RETAINED_LZ_INPUT);
+    with_lz(&mut owned, &OWNED_LZ_INPUT);
+    (retained, owned)
+}
+
+/// The relations fixture with `lz` and a copy allowance pinning each role's LZ input.
+fn lz_contract(lz: Value) -> Value {
     let padded = |input: &[u8]| { let mut bytes = input.to_vec(); bytes.resize(16, 0); Sha256::of(&bytes) };
-    let with_copy = |lz: Value| {
-        let mut value = with_relations(fixture());
-        value["guard"]["attach_state"]["relations"]["lz"] = lz;
-        attach_rules(&mut value)["allowances"] = json!([{
-            "label": "lz-input", "kind": "copy", "space": {"target": "physical"}, "start": LZ_INPUT, "end": LZ_INPUT + 16, "reason": "r",
-            "source": {"dat": {"offset": 0, "transform": "identity"}}, "canonical_sha256": padded(&retained_input), "composed_sha256": padded(&owned_input),
-        }]);
-        value
-    };
-    let verdict = relation_verdict(&with_copy(json!({"citation": "lz.rs"})), &retained, &owned);
+    let mut value = with_relations(fixture());
+    value["guard"]["attach_state"]["relations"]["lz"] = lz;
+    attach_rules(&mut value)["allowances"] = json!([{
+        "label": "lz-input", "kind": "copy", "space": {"target": "physical"}, "start": LZ_INPUT, "end": LZ_INPUT + 16, "reason": "r",
+        "source": {"dat": {"offset": 0, "transform": "identity"}}, "canonical_sha256": padded(&RETAINED_LZ_INPUT), "composed_sha256": padded(&OWNED_LZ_INPUT),
+    }]);
+    value
+}
+
+#[test]
+fn the_lz_tallies_follow_each_role_s_pinned_input() {
+    let (retained, owned) = lz_roles();
+    let verdict = relation_verdict(&lz_contract(json!({"citation": "lz.rs"})), &retained, &owned);
     assert_eq!(verdict.first_difference, None, "{:?}", verdict.attach_differences);
     let tallies = verdict.attach.unwrap().relations.iter().map(|role| role.lz.as_ref().map(|lz| (lz.literals, lz.matches))).collect::<Vec<_>>();
     assert_eq!(tallies, [Some((1, 1)), Some((1, 0))]);
-    let without = relation_verdict(&with_copy(Value::Null), &retained, &owned).first_difference;
+    let without = relation_verdict(&lz_contract(Value::Null), &retained, &owned).first_difference;
     assert!(matches!(without, Some(Difference::AttachBoard { .. })), "{without:?}");
-    let mut overlap = with_copy(json!({"citation": "lz.rs"}));
+    let mut overlap = lz_contract(json!({"citation": "lz.rs"}));
     attach_rules(&mut overlap)["board"] = json!([{"pointer": "/bus/devices/1/state/state/stream/literals", "kind": "declared", "reason": "r", "citation": "c"}]);
     let entries = relation_verdict(&overlap, &retained, &owned).attach_differences.entries;
     assert!(entries.iter().any(|entry| matches!(entry, Difference::AttachRelation { failure: RelationFailure::RelationOverlap { .. }, .. })));
+}
+
+const SUBMITTED: u64 = 0x42a4;
+
+fn submitted_contract(retained_length: u32, composed_length: u32) -> Value {
+    lz_contract(json!({"citation": "lz.rs", "submitted": {
+        "address": SUBMITTED, "citation": "boot-40048.dis 0x3ffc", "record_length": {"retained": retained_length, "composed": composed_length},
+    }}))
+}
+
+/// Each role's job total and record length, with each word as `words` sets it.
+fn submitted_verdict(words: [u32; 2], lengths: [u32; 2]) -> Verdict {
+    let (mut retained, mut owned) = lz_roles();
+    set_word(&mut retained, SUBMITTED, words[0]);
+    set_word(&mut owned, SUBMITTED, words[1]);
+    relation_verdict(&submitted_contract(lengths[0], lengths[1]), &retained, &owned)
+}
+
+const SUBMITTED_LENGTHS: [u32; 2] = [RETAINED_LZ_INPUT.len() as u32 + 0x14, OWNED_LZ_INPUT.len() as u32 + 0x14];
+
+#[test]
+fn the_submitted_word_differs_between_roles_when_each_matches_its_jobs_and_record() {
+    let verdict = submitted_verdict([6, 10], SUBMITTED_LENGTHS);
+    assert_eq!(verdict.first_difference, None, "{:?}", verdict.attach_differences);
+    let words = verdict.attach.unwrap().relations.iter().map(|role| role.lz.as_ref().and_then(|lz| lz.submitted)).collect::<Vec<_>>();
+    assert_eq!(words, [Some(Word(6)), Some(Word(10))]);
+}
+
+/// The composed role's relation failures, and whether the submitted word reached the memory comparison.
+fn submitted_failures(words: [u32; 2], lengths: [u32; 2]) -> (Vec<RelationFailure>, bool) {
+    let verdict = submitted_verdict(words, lengths);
+    let entries = &verdict.attach_differences.entries;
+    let failures = entries.iter().filter_map(|entry| match entry {
+        Difference::AttachRelation { role: Role::Composed, failure } => Some(failure.clone()),
+        _ => None,
+    }).collect();
+    let compared = entries.iter().any(|entry| matches!(entry, Difference::AttachMemory { start: SUBMITTED, .. }));
+    (failures, compared)
+}
+
+#[test]
+fn a_submitted_word_off_its_jobs_and_record_is_compared() {
+    let (failures, compared) = submitted_failures([6, 11], SUBMITTED_LENGTHS);
+    assert_eq!(failures, [RelationFailure::LzSubmitted { captured: Word(11), started: 10, stream: 10 }]);
+    assert!(compared);
+}
+
+#[test]
+fn a_record_length_that_disagrees_with_the_job_total_refuses() {
+    let (failures, compared) = submitted_failures([6, 10], [SUBMITTED_LENGTHS[0], SUBMITTED_LENGTHS[1] + 1]);
+    assert_eq!(failures, [RelationFailure::LzSubmitted { captured: Word(10), started: 10, stream: 11 }]);
+    assert!(compared);
+}
+
+#[test]
+fn a_last_job_missing_from_a_complete_stream_is_the_drain_step() {
+    let (failures, compared) = submitted_failures([6, 0], SUBMITTED_LENGTHS);
+    assert_eq!(failures, [RelationFailure::LzSubmittedDrain { captured: Word(0), started: 10, last: 10 }]);
+    assert!(compared);
+}
+
+#[test]
+fn a_submitted_word_must_be_aligned_and_clear_of_allowances() {
+    for (address, length) in [(SUBMITTED + 2, 0x20), (LZ_INPUT, 0x20), (LOG, 0x20), (SUBMITTED, 0x13)] {
+        let mut value = submitted_contract(length, length);
+        value["guard"]["attach_state"]["relations"]["lz"]["submitted"]["address"] = json!(address);
+        assert!(matches!(parse(&value), Err(CatalogRefusal::AttachState(AttachRuleRefusal::LzSubmittedWord))), "{address:#x}");
+    }
 }
 
 #[test]
