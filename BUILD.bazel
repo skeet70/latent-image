@@ -6,7 +6,7 @@ exports_files([
 ])
 
 filegroup(
-    name = "experiment-trajectories",
-    srcs = glob(["experiments/*/trajectory.json"]),
+    name = "embassy-trajectories",
+    srcs = glob(["experiments/embassy_phase1*/trajectory.json"]),
     visibility = ["//emulation:__pkg__"],
 )
