@@ -169,7 +169,7 @@ baseline = ReceiptSpec
       , write 172 0x943190 [0, 0] 1 2
       , write 250 0x9571f0 [2, 0, 0, 0] 0 4
       ]
-  , after = [(0x20, 2)]
+  , after = []
   , configSha = "config-sha"
   , datSha = C.datSha256
   }
@@ -182,11 +182,31 @@ receiptJson spec = J.object
   , "watch" .= J.object ["enabled" .= True, "violation" .= J.Null, "ranges" .= [[start, end] | (start, end) <- ranges], "records" .= writes spec]
   ]
 
-extractWith :: J.Value -> ReceiptSpec -> Either String C.Case
-extractWith config spec = do
+pushEvent :: [C.ExpectedEvent]
+pushEvent = [C.ExpectedEvent True (0xe, 1, 0x1d)]
+
+extractEvents :: J.Value -> [C.ExpectedEvent] -> ReceiptSpec -> Either String [Maybe C.Case]
+extractEvents config events spec = do
   parsedConfig <- decode config
   receipt <- decode (receiptJson spec)
-  C.extract "config-sha" parsedConfig receipt
+  C.extract "config-sha" parsedConfig events receipt
+
+extractWith :: J.Value -> ReceiptSpec -> Either String C.Case
+extractWith config spec = extractEvents config pushEvent spec >>= \windows -> case windows of
+  [Just one] -> Right one
+  _ -> Left "expected one case"
+
+-- | A second press in the same receipt: a kind 4 window from consumer 101 whose consumer restores
+-- the block, with a property write in the engine.
+secondWindow :: [J.Value]
+secondWindow =
+  [ hit "stage-entry" 400 0xca4f10 [4, 1, 1, 0]
+  , hit "engine-notify" 410 0xbf9fe0 [4, 1, 0x1d, 0x104]
+  , hit "property-write" 415 0xbf9b00 [0x285, 9, 0, 0]
+  , hit "frame-snapshot" 420 0xbf95ec [1, 0, 0, 0]
+  , hit "rollback-restore" 430 0xca4f40 [0, 0, 0, 0]
+  , hit "initial-row" 500 0xd430cc [0xf, 1, 0x104, 0]
+  ]
 
 caseExtraction :: IO ()
 caseExtraction = do
@@ -202,11 +222,12 @@ caseExtraction = do
            , C.ServiceCall (C.CallAvailability 0x104 0 2) written
            , C.ServiceCall (C.CallInitialRow 0xe 1 0x104 Nothing) written
            , C.ServiceCall (C.CallStore 1) written ] )
-  check "after block replays the engine writes" (B.index (C.caseAfter extracted) 0x20 == 2)
+  check "the window's after block replays its writes" (B.index (C.caseAfter extracted) 0x20 == 2)
+  check "an accepted window" (C.caseResult extracted == C.Accepted)
   check "snapshot writes in the areas, in order" (C.caseSnapshotWrites extracted == [(0x93eba0, 1)])
   check "no last-move writes" (null (C.caseLastMoveWrites extracted) && C.caseLastMoveBefore extracted == (Nothing, Nothing))
-  let withoutPost = baseline {hits = filter (/= hit "special-post" 200 0xca46fc [0xe, 1, 0x1d, 0]) (hits baseline), after = []}
-  check "a rejected receipt refuses" (isLeft (extractSpec withoutPost))
+  let withoutPost = baseline {hits = filter (/= hit "special-post" 200 0xca46fc [0xe, 1, 0x1d, 0]) (hits baseline)}
+  check "a window with neither verdict refuses" (isLeft (extractSpec withoutPost))
   check "another firmware refuses" (isLeft (extractSpec baseline {datSha = "00"}))
   moved <- either fail pure (extractSpec baseline {writes = writes baseline ++ [write 165 0x1467584 [1, 0, 0, 0] 0 4]})
   check "last-move writes and the word's prior value"
@@ -214,11 +235,34 @@ caseExtraction = do
   check "missing initial-row-return site refuses" (isLeft (extractWith (configJson (filter ((/= "initial-row-return") . fst) sites) ranges) baseline))
   check "uncovered last-move range refuses" (isLeft (extractWith (configJson sites (take 2 ranges)) baseline))
   check "another config refuses" (isLeft (extractSpec baseline {configSha = "other"}))
-  check "a second stage entry refuses" (isLeft (extractSpec baseline {hits = hits baseline ++ [hit "stage-entry" 400 0xca46c4 [4, 1, 1, 0]]}))
-  check "a stage entry from another consumer refuses" (isLeft (extractSpec baseline {hits = hit "stage-entry" 100 0xca0100 [0xe, 1, 0x1d, 0] : drop 1 (hits baseline)}))
-  check "an after block differing from the replay refuses" (isLeft (extractSpec baseline {after = [(0x20, 3)]}))
+  check "a stage entry the events do not list refuses" (isLeft (extractSpec baseline {hits = hits baseline ++ [hit "stage-entry" 400 0xca46c4 [4, 1, 1, 0]]}))
+  check "a stage entry other than the listed event refuses" (isLeft (extractEvents config [C.ExpectedEvent True (0xf, 1, 0x1d)] baseline))
+  check "a stage entry from neither consumer refuses" (isLeft (extractSpec baseline {hits = hit "stage-entry" 100 0xca0100 [0xe, 1, 0x1d, 0] : drop 1 (hits baseline)}))
+  check "an after block differing from the replay of every block write refuses" (isLeft (extractSpec baseline {after = [(0x20, 2)]}))
   check "a block write over other bytes refuses" (isLeft (extractSpec baseline {writes = [write 125 0x9571f0 [7, 0, 0, 0] 2 4]}))
   check "a block write before the stage entry refuses" (isLeft (extractSpec baseline {writes = write 90 0x9571f4 [0, 0, 0, 0] 1 4 : writes baseline}))
   check "an availability state outside 0..3 refuses"
     (isLeft (extractSpec baseline {hits = [if h == hit "availability-return" 140 0x61ce00 [2, 0, 0, 0] then hit "availability-return" 140 0x61ce00 [4, 0, 0, 0] else h | h <- hits baseline]}))
   check "Rust case text" ("result: EngineResult::Accepted" `isInfixOf` C.rustCases [("push", "r", "c", extracted)])
+  let tracedRestore = configJson (sites ++ [("rollback-restore", 0x61d3a8), ("property-write", 0x61c91c)]) ranges
+      twoPresses = baseline {hits = hits baseline ++ secondWindow, writes = writes baseline ++ [write 412 0x9571f0 [0, 0, 0, 0] 5 4, write 431 0x9571f0 [5, 0, 0, 0] 0 4]}
+      bothEvents = [C.ExpectedEvent True (0xe, 1, 0x1d), C.ExpectedEvent True (4, 1, 1)]
+  windows <- either fail pure (extractEvents tracedRestore bothEvents twoPresses)
+  case windows of
+    [Just first, Just second] -> do
+      check "the first window's verdict ignores the second's restore" (C.caseResult first == C.Accepted)
+      check "a window ended by its consumer's rollback restore is rejected" (C.caseResult second == C.Rejected)
+      check "a later window starts from the block replayed to its stage entry" (C.caseBefore second == zeros)
+      check "a rejected window's after block replays its own writes" (B.index (C.caseAfter second) 0x20 == 5)
+      check "a property write in the engine is a call"
+        (map C.serviceCall (C.caseCalls second) == [C.CallNotify (4, 1, 0x1d, 0x104), C.CallPropertyWrite 0x285 9 0, C.CallStore 1])
+      check "Rust text of a rejected case with a property write"
+        (all (`isInfixOf` C.rustCases [("second", "r", "c", second)]) ["result: EngineResult::Rejected", "Expected::PropertyWrite { property: 0x285, value: 0x9, flags: 0x0 }"])
+    _ -> fail "two presses give two cases"
+  marked <- either fail pure (extractEvents tracedRestore [C.ExpectedEvent True (0xe, 1, 0x1d), C.ExpectedEvent False (4, 1, 1)] twoPresses)
+  check "a window marked as a fallback class is no case" (case marked of [Just _, Nothing] -> True; _ -> False)
+  check "a second window with no verdict refuses"
+    (isLeft (extractEvents tracedRestore bothEvents twoPresses {hits = filter (/= hit "rollback-restore" 430 0xca4f40 [0, 0, 0, 0]) (hits twoPresses)}))
+  check "events parse with and without 0x, and with the fallback mark"
+    (C.parseEvents "0xe,1,1d;-1,0x3f,0x17" == Right [C.ExpectedEvent True (0xe, 1, 0x1d), C.ExpectedEvent False (1, 0x3f, 0x17)])
+  check "an event with two words refuses" (isLeft (C.parseEvents "4,1"))

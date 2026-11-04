@@ -39,13 +39,21 @@ rowsIn record = case record of
   0 -> 0
   _ -> 1
 
-blockBytesFor :: Word32 -> Word32 -> Word32 -> B.ByteString
-blockBytesFor record cursor total =
-  word record <> B.replicate 4 0 <> word cursor <> B.replicate 12 0 <> word total <> B.replicate (0x430 - 0x1c) 0
+-- | A block with the open record, cursor and total at their offsets and the stack depth at
+-- `0x424`; every stack frame is zero.
+blockBytesAt :: Word32 -> Word32 -> Word32 -> Word32 -> B.ByteString
+blockBytesAt depth record cursor total =
+  word record <> B.replicate 4 0 <> word cursor <> B.replicate 12 0 <> word total <> B.replicate (0x424 - 0x1c) 0 <> word depth <> B.replicate 8 0
  where word value = B.pack [fromIntegral (value `shiftR` shift) | shift <- [0, 8, 16, 24]]
 
+blockBytesFor :: Word32 -> Word32 -> Word32 -> B.ByteString
+blockBytesFor = blockBytesAt 1
+
+classOfAt :: Word32 -> Word32 -> Word32 -> StageEvent -> Either String EventClass
+classOfAt depth record cursor event = (\block -> deriveClass tree block event) <$> menuBlock (blockBytesAt depth record cursor (rowsIn record))
+
 classOf :: Word32 -> Word32 -> StageEvent -> Either String EventClass
-classOf record cursor event = (\block -> deriveClass tree block event) <$> menuBlock (blockBytesFor record cursor (rowsIn record))
+classOf = classOfAt 1
 
 stage :: Word32 -> Word32 -> Word32 -> StageEvent
 stage kind slot ident = StageEvent kind slot ident 0
@@ -81,19 +89,29 @@ main = do
   let cases =
         [ ("a row step on a wrapping queried node is owned", classOf 0x1000 0 (stage 4 3 1) == Right (OwnedEvent (RowMove Down)))
         , ("a step of the node's rows per page is a page move", classOf 0x1000 0 (stage 5 3 9) == Right (FallbackEvent PageStep))
-        , ("a row step on a node that does not wrap falls back", classOf 0x4000 0 (stage 4 6 1) == Right (FallbackEvent NodeFlags))
+        , ("a row step on a node that does not wrap is owned", classOf 0x4000 0 (stage 4 6 1) == Right (OwnedEvent (RowMove Down)))
         , ("a move with no open node falls back", classOf 0 0 (stage 4 3 1) == Right (FallbackEvent NoOpenNode))
         , ("a push to the cursor row's child is owned", classOf 0x1000 0 (stage 0xe 3 0x1d) == Right (OwnedEvent Push))
         , ("a push onto a type-5 node falls back", classOf 0x1000 1 (stage 0xe 3 0x1d) == Right (FallbackEvent FramedTarget))
         , ("a push past the rows has no child", classOf 0x1000 2 (stage 0xe 3 0x1d) == Right (FallbackEvent NoChild))
         , ("a seeking push falls back", classOf 0x1000 0 (stage 0xe 3 0x17) == Right (FallbackEvent SeekingId))
-        , ("a push from node 0x7a falls back", classOf 0x1000 0 (stage 0xe 0x7a 0x1d) == Right (FallbackEvent PropertyNode))
+        , ("a push from node 0x7a is owned", classOf 0x1000 0 (stage 0xe 0x7a 0x1d) == Right (OwnedEvent Push))
         , ("a pop from a node with its parent's id is owned", classOf 0x2000 0 (stage 0xf 3 0x1d) == Right (OwnedEvent Pop))
-        , ("a pop from a node with another parent id falls back", classOf 0x1000 0 (stage 0xf 3 0x1d) == Right (FallbackEvent RememberBranch))
+        , ("a pop from a node with another parent id is owned", classOf 0x1000 0 (stage 0xf 3 0x1d) == Right (OwnedEvent Pop))
+        , ("a pop at stack depth 0 falls back", classOfAt 0 0x2000 0 (stage 0xf 3 0x1d) == Right (FallbackEvent StackBounds))
         , ("an open of a registered node is owned", classOf 0 0 (stage 1 3 0x1d) == Right (OwnedEvent Open))
         , ("an open of node 0x38 falls back", classOf 0 0 (stage 1 0x38 0x1d) == Right (FallbackEvent SeekClassNode))
         , ("an open of an empty registry slot falls back", classOf 0 0 (stage 1 4 0x1d) == Right (FallbackEvent Unregistered))
-        , ("a frame move falls back by kind", classOf 0x1000 0 (stage 6 3 1) == Right (FallbackEvent (KindNotOwned 6)))
+        , ("a close of the open node is owned", classOf 0x1000 0 (stage 2 3 0x1d) == Right (OwnedEvent Close))
+        , ("a close with no open node falls back", classOf 0 0 (stage 2 3 0x1d) == Right (FallbackEvent NoOpenNode))
+        , ("a group move is owned", classOf 0x1000 0 (stage 0x48 3 1) == Right (OwnedEvent (GroupMove 0x48)))
+        , ("a re-open of the open node is owned", classOf 0x1000 0 (stage 0x13 3 1) == Right (OwnedEvent Reopen))
+        , ("a pop, move and push whose targets all open is owned", classOf 0x2000 0 (stage 6 3 1) == Right (OwnedEvent (FrameMove 6)))
+        , ("a pop, move and push whose inner move is a page step falls back", classOf 0x2000 0 (stage 6 3 9) == Right (FallbackEvent InnerMove))
+        , ("a seek that makes no step, then a push, move and pop, is owned", classOf 0x1000 0 (StageEvent 0xa 3 1 0) == Right (OwnedEvent (FrameMove 0xa)))
+        , ("a seek on a type-5 node falls back", classOf 0x3000 0 (StageEvent 0xa 3 1 0) == Right (FallbackEvent FramedSource))
+        , ("a push, move and pop into a package node falls back", classOf 0x7000 0 (stage 8 3 1) == Right (FallbackEvent PackageChildRow))
+        , ("an unowned kind falls back by kind", classOf 0x1000 0 (stage 3 3 1) == Right (FallbackEvent (KindNotOwned 3)))
         , ("a short block refuses", isLeft (menuBlock (B.replicate 0x42f 0)))
         , ("an owned class reaching the fallback site fails the owned role",
             isLeft (checkRole tree OwnedRole [segment [] [entry 0 0x1000 0 (stage 0xe 3 0x1d), fallback 0]]))
