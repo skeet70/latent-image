@@ -1,10 +1,11 @@
 -- Relinks every payload that has a compiled reviewed contract at its lower
 -- reference base, from the checkout's sources and private inputs, and requires
--- the manifest's source identity and publication contract to equal that
--- contract. The argument is a checked-in file whose runfile links into the
--- checkout.
+-- 'validateReviewedContract' to accept the manifest, listing each identity and
+-- publication-contract difference. The argument is a checked-in file whose
+-- runfile links into the checkout.
 module Main where
 
+import Control.Exception (SomeException, displayException, try)
 import Control.Monad (forM, unless)
 import System.Directory (canonicalizePath)
 import System.Environment (getArgs, setEnv)
@@ -42,8 +43,11 @@ main = do
   findings <- fmap concat $ forM reviewedPayloads $ \(label, payload, contract) -> do
     relinker <- runfilesRelinker payload
     manifest <- withRelinkedBuildUsing relinker EnforceAllowlist (Address (fst (payloadReferenceBases payload))) (pure . pinnedManifest)
-    let found = contractFindings contract manifest
-    putStrLn (label ++ ": " ++ (if null found then "relink matches its compiled reviewed contract" else show (length found) ++ " differences"))
+    validation <- try (validateReviewedContract contract manifest)
+    let found = case validation of
+          Right () -> []
+          Left (refusal :: SomeException) -> displayException refusal : contractFindings contract manifest
+    putStrLn (label ++ ": " ++ (if null found then "relink matches its compiled reviewed contract" else "refused"))
     pure (map ((label ++ ": ") ++) found)
   mapM_ putStrLn findings
   unless (null findings) $ do
