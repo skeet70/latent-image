@@ -187,7 +187,7 @@ covering subjects paths = do
   if any (null . snd) grouped then Left ModeNotCovered else Right grouped
 
 bankField :: ArgumentIndex -> Loc -> Maybe (BankOffset, Width)
-bankField index (Loc base (Just (argument, stride)) offset bytes)
+bankField index (Loc base [(argument, stride)] offset bytes)
   | base == bankBase, stride == bankStride, argument == index, offset >= 0, offset < fromIntegral bankStride = (,) (BankOffset (fromIntegral offset)) <$> widthOf bytes
 bankField _ _ = Nothing
 
@@ -252,7 +252,7 @@ setterField offset width bits paths = do
       -- A store inserts the low bits of its source, so a source supplies the field when its extract
       -- starts at the field's lsb and is at least as wide.
       supplies (Extract sourceLsb sourceBits signed) = not signed && sourceLsb == rangeLsb bits && sourceBits >= rangeBits bits
-      isSave (StoreRecord (Loc base Nothing o b) e (FromField (Loc sourceBase Nothing so sb) se)) =
+      isSave (StoreRecord (Loc base [] o b) e (FromField (Loc sourceBase [] so sb) se)) =
         base == saveBase && o == offsetValue && b == bytes && e == extract && sourceBase == bankBase && so == offsetValue && sb == bytes && supplies se
       isSave _ = False
       isBank source (StoreRecord loc e actual) = loc == bankLoc (ArgumentIndex 2) && e == extract && source actual
@@ -277,4 +277,4 @@ setterField offset width bits paths = do
       Half -> 2
     extract = case bits of
       BitRange lsb count -> Extract lsb count False
-    bankLoc index = Loc bankBase (Just (index, bankStride)) offsetValue bytes
+    bankLoc index = Loc bankBase [(index, bankStride)] offsetValue bytes

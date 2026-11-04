@@ -545,8 +545,7 @@
       "additionalProperties": false,
       "required": [
         "base",
-        "indexArgument",
-        "indexStride",
+        "terms",
         "offset",
         "bytes"
       ],
@@ -554,14 +553,25 @@
         "base": {
           "$ref": "#/$defs/address"
         },
-        "indexArgument": {
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "indexStride": {
-          "$ref": "#/$defs/nullableAddress"
+        "terms": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "argument",
+              "stride"
+            ],
+            "properties": {
+              "argument": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "stride": {
+                "$ref": "#/$defs/address"
+              }
+            }
+          }
         },
         "offset": {
           "type": "integer"

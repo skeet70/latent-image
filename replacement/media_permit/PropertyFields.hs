@@ -74,24 +74,58 @@ tableArms image table = do
           pure (fallback, [Arm (PropertyId (fromIntegral index + 1)) target | (index, target) <- zip [0 :: Int ..] targets])
     _ -> Left "dispatch is not cmp #bound; ldrls pc, [pc, rN, lsl #2]; b default"
 
--- | Memory a field lives in: a fixed base, optionally plus a stride times an incoming argument.
-data Loc = Loc { locBase :: Word32, locIndex :: Maybe (ArgumentIndex, Word32), locOffset :: Int32, locBytes :: Int } deriving (Eq, Ord, Show)
+-- | Memory a field lives in: a fixed base plus, for each term, a stride times an incoming argument,
+-- with the terms in argument order, one per argument and no zero stride.
+data Loc = Loc { locBase :: Word32, locTerms :: [(ArgumentIndex, Word32)], locOffset :: Int32, locBytes :: Int } deriving (Eq, Ord, Show)
 
 -- | Bit range of a loaded or inserted value.
 data Extract = Extract { extractLsb :: Int, extractBits :: Int, extractSigned :: Bool } deriving (Eq, Ord, Show)
 
 data Source = FromArgument ArgumentIndex | FromField Loc Extract | FromConstant Word32 | FromOther deriving (Eq, Ord, Show)
 
+-- | Linear holds at least one term and is never a single unit term over base 0, which is Arg.
 data Val
   = Const Word32
   | Arg ArgumentIndex
-  | Indexed Word32 ArgumentIndex Word32
+  | Linear Word32 [(ArgumentIndex, Word32)]
   | Field Loc [Step]
   | Inserted Loc [Step] Source Int Int
   | DefaultRequested
   | Incoming
   | Other
   deriving (Eq, Show)
+
+-- | A value's base and terms when it is a constant plus strides times arguments.
+linearOf :: Val -> Maybe (Word32, [(ArgumentIndex, Word32)])
+linearOf value = case value of
+  Const c -> Just (c, [])
+  Arg n -> Just (0, [(n, 1)])
+  Linear base terms -> Just (base, terms)
+  _ -> Nothing
+
+-- | The canonical value of base plus the terms, strides summed mod 2^32 per argument.
+linear :: Word32 -> [(ArgumentIndex, Word32)] -> Val
+linear base terms = case M.toAscList (M.filter (/= 0) (M.fromListWith (+) terms)) of
+  [] -> Const base
+  [(n, 1)] | base == 0 -> Arg n
+  summed -> Linear base summed
+
+plus :: Val -> Val -> Val
+plus left right = case (linearOf left, linearOf right) of
+  (Just (leftBase, leftTerms), Just (rightBase, rightTerms)) -> linear (leftBase + rightBase) (leftTerms ++ rightTerms)
+  _ -> Other
+
+scaled :: Word32 -> Val -> Val
+scaled factor value = case linearOf value of
+  Just (base, terms) -> linear (factor * base) [(n, factor * stride) | (n, stride) <- terms]
+  Nothing -> Other
+
+-- | A product with a constant factor.
+times :: Val -> Val -> Val
+times left right = case (left, right) of
+  (Const factor, _) -> scaled factor right
+  (_, Const factor) -> scaled factor left
+  _ -> Other
 
 data Step = Ubfx Int Int | Sbfx Int Int | Lsr Int | Mask Word32 deriving (Eq, Show)
 
@@ -302,7 +336,7 @@ explore image exit link prior initial start = go [Path start initial NoFlags 0 (
                 executed = case flagsAfter regs instruction of
                   Just after -> after
                   Nothing -> if wanted == Always then flags else assume flags wanted True
-                taken = (step raw instruction address regs, executed, trace)
+                taken = (step image raw instruction address regs, executed, trace)
                 skipped = (Continue (address + 4) regs, assume flags wanted False, trace)
                 forked k holds (effect, flags', Trace guards s c) = (effect, flags', Trace (guardOf flags k holds : guards) s c)
                 forks = case wanted of
@@ -351,20 +385,22 @@ bitExtract raw
   where
     form signed = BitExtract signed (A.Reg (fromIntegral ((raw `shiftR` 12) .&. 15))) (A.Reg (fromIntegral (raw .&. 15))) (fromIntegral ((raw `shiftR` 7) .&. 31)) (fromIntegral ((raw `shiftR` 16) .&. 31) + 1)
 
+-- | `[rN, #imm]`, or `[rN, rM, lsl #k]` at offset 0, over linear values.
 memory :: Regs -> A.Reg -> A.Offset -> A.Width -> Maybe Loc
-memory regs base offset width = case (valueOf regs base, offset) of
-  (Const c, A.OffsetImmediate o) -> Just (Loc c Nothing o bytes)
-  (Indexed c n stride, A.OffsetImmediate o) -> Just (Loc c (Just (n, stride)) o bytes)
+memory regs base offset width = case offset of
+  A.OffsetImmediate o | base /= A.pc -> located (valueOf regs base) o
+  A.OffsetRegister True index A.LSL k | base /= A.pc, index /= A.pc -> located (plus (valueOf regs base) (scaled (1 `shiftL` k) (valueOf regs index))) 0
   _ -> Nothing
   where
+    located value o = (\(b, terms) -> Loc b terms o bytes) <$> linearOf value
     bytes = case width of
       A.Byte -> 1
       A.Half -> 2
       A.Word -> 4
       A.Dual -> 8
 
-step :: Word32 -> A.Instruction -> Word32 -> Regs -> Effect
-step raw instruction address regs
+step :: Image -> Word32 -> A.Instruction -> Word32 -> Regs -> Effect
+step image raw instruction address regs
   | Just (BitExtract signed destination source lsb width) <- bitExtract raw =
       let value = case valueOf regs source of
             Field loc steps -> Field loc (steps ++ [if signed then Sbfx lsb width else Ubfx lsb width])
@@ -388,6 +424,12 @@ step raw instruction address regs
         Continue next (M.insert destination (shifted (valueOf regs source) n) regs)
       A.DataProcessing _ A.AND _ destination source (A.Immediate mask) ->
         Continue next (M.insert destination (masked (valueOf regs source) mask) regs)
+      A.DataProcessing _ A.ADD _ destination source (A.Immediate value) | source /= A.pc ->
+        Continue next (M.insert destination (plus (valueOf regs source) (Const value)) regs)
+      A.DataProcessing _ A.SUB _ destination source (A.Immediate value) | source /= A.pc ->
+        Continue next (M.insert destination (plus (valueOf regs source) (Const (negate value))) regs)
+      A.DataProcessing _ A.ADD _ destination source (A.ShiftedImmediate operand A.LSL k) | source /= A.pc, operand /= A.pc ->
+        Continue next (M.insert destination (plus (valueOf regs source) (scaled (1 `shiftL` k) (valueOf regs operand))) regs)
       A.DataProcessing _ op _ _ _ _ | op `elem` [A.CMP, A.CMN, A.TST, A.TEQ] -> Continue next regs
       A.DataProcessing _ _ _ destination _ _ -> Continue next (M.insert destination Other regs)
       A.ZeroExtend _ destination source rotation bits ->
@@ -396,10 +438,12 @@ step raw instruction address regs
               | rotation + bits <= 32 = shifted (valueOf regs source) rotation
               | otherwise = Other
         in Continue next (M.insert destination (masked rotated ((1 `shiftL` bits) - 1)) regs)
-      A.Multiply _ destination left right (Just accumulator) -> Continue next (M.insert destination (indexed (valueOf regs left) (valueOf regs right) (valueOf regs accumulator)) regs)
-      A.Multiply _ destination _ _ Nothing -> Continue next (M.insert destination Other regs)
+      A.Multiply _ destination left right accumulator ->
+        Continue next (M.insert destination (maybe id (plus . valueOf regs) accumulator (times (valueOf regs left) (valueOf regs right))) regs)
+      A.Load _ A.Word False destination base (A.OffsetImmediate o) A.OffsetOnly
+        | base == A.pc, destination /= A.pc -> Continue next (M.insert destination (maybe Other Const (imageWord image (address + 8 + fromIntegral o))) regs)
       A.Load _ width False destination base offset A.OffsetOnly
-        | base /= A.pc, Just loc <- memory regs base offset width -> Continue next (M.insert destination (Field loc []) regs)
+        | Just loc <- memory regs base offset width -> Continue next (M.insert destination (Field loc []) regs)
       A.Load _ _ _ destination _ _ _ -> if destination == A.pc then Abandon else Continue next (M.insert destination Other regs)
       A.Store _ width source base offset A.OffsetOnly
         | Just loc <- memory regs base offset width -> StoreThen (storeRecord loc (valueOf regs source)) next regs
@@ -423,10 +467,6 @@ step raw instruction address regs
     masked value mask = case value of
       Field loc steps -> Field loc (steps ++ [Mask mask])
       Const c -> Const (c .&. mask)
-      _ -> Other
-    indexed left right accumulator = case (left, right, accumulator) of
-      (Const stride, Arg n, Const base) -> Indexed base n stride
-      (Arg n, Const stride, Const base) -> Indexed base n stride
       _ -> Other
     storeRecord loc value = case value of
       Inserted original steps source lsb width | original == loc, null steps -> StoreRecord loc (Extract lsb width False) source
