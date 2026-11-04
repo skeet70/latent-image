@@ -19,7 +19,7 @@ import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Runtime (..), freshRuntime, resolve, validateFirmware, workspace)
 import EmulatorUsb
 import FujiAF.Identify (ProductModel (..), runIdentify)
-import FujiAF.Transport (UsbApi (..), realClock)
+import FujiAF.Transport (UsbApi (..))
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
 import System.Directory (createDirectory)
 import System.Environment (getArgs)
@@ -100,7 +100,7 @@ check (Options output (Firmware supplied) nandSupplied) = do
       candidates <- usbList api 1000
       record "list" (length candidates == 1) (Number (fromIntegral (length candidates)))
       createDirectory (directory </> "identify")
-      identified <- try (runIdentify realClock api (directory </> "identify"))
+      identified <- try (emulatedClock >>= \clock -> runIdentify clock api (directory </> "identify"))
       case identified of
         Right (ProductModel model) -> record "transfer" (model == "X-M1") (text model)
         Left problem -> record "transfer" False (text (displayException (problem :: SomeException)))

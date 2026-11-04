@@ -27,11 +27,11 @@ import Emulation.CheckpointKey (CheckpointRoute (..), GuestState, Interpreter (.
 import qualified Emulation.Sha256 as Digest
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame (..), Python (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, stageViewerRuntime, validateFirmware, workspace)
-import EmulatorUsb (BridgeExchange, bridgeUsbApi)
+import EmulatorUsb (BridgeExchange, bridgeUsbApi, emulatedClock)
 import qualified FujiAF.Broker as P
 import FujiModPaths (fujimodRun, fujimodToggleBridge)
 import FujiAF.Read (ReadWindow (..), decodeReadReply, readReplyBytes, readRequestBytes, readRequestFrame)
-import FujiAF.Transport (UsbApi (..), realClock)
+import FujiAF.Transport (UsbApi (..))
 import FujiAF.UsbToggle (extentLength, extentStart, hookSite)
 import qualified FujiAF.RamPush as Ram
 import RamPushToggleReviewedPins (reviewedToggleContract)
@@ -936,14 +936,14 @@ pushToggle ctx = do
   forM_ [allocDirectory, linkedDirectory, pushDirectory] $ \path -> do
     createDirectory path
     setFileMode path 0o700
-  allocation <- Ram.runRamAlloc (Ram.payloadAllocationSize Ram.usbTogglePayload) realClock api allocDirectory
+  allocation <- emulatedClock >>= \clock -> Ram.runRamAlloc (Ram.payloadAllocationSize Ram.usbTogglePayload) clock api allocDirectory
   allocationPath <- case allocation of
     Ram.RamAllocated path -> pure path
     other -> ioError (userError ("toggle allocation failed: " ++ show other))
   retained <- Ram.readRetainedAllocation allocationPath
   manifestPath <- Ram.runRamRelink reviewedToggleContract retained linkedDirectory
   manifest <- Ram.readRamPushManifest manifestPath
-  installed <- Ram.runRamPush reviewedToggleContract retained manifest realClock api pushDirectory
+  installed <- emulatedClock >>= \clock -> Ram.runRamPush reviewedToggleContract retained manifest clock api pushDirectory
   case installed of
     Ram.RamPushInstalled _ -> pure ()
     other -> ioError (userError ("toggle push failed: " ++ show other))
