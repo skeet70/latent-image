@@ -333,3 +333,19 @@ fn core_identity_is_zero_only_for_0x4003() {
         assert_eq!(slot_1618(&m), Flag(flag), "identity {identity:#x}");
     }
 }
+
+#[test]
+fn domain_words_are_the_stock_addresses() {
+    let expected = [
+        (Domain::A, [0x4005_45a4, 0x4005_4760, 0x4005_4764, 0x4005_476c, 0x4005_4774, 0x4005_ff0c]),
+        (Domain::B, [0x400e_4564, 0x400e_4720, 0x400e_4724, 0x400e_472c, 0x400e_4734, 0x400e_fecc]),
+    ];
+    for (domain, words) in expected {
+        let w = domain.words();
+        assert_eq!(
+            [w.handler_context, w.current_task, w.dispatch_enabled, w.timer_base, w.time_offset, w.task_table],
+            words.map(GuestAddress),
+            "{domain:?}"
+        );
+    }
+}
