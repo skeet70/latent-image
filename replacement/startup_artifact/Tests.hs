@@ -453,7 +453,7 @@ main = do
   contracted <- either (fail . show) pure (composeWith [observed] [contractFirst, contractPublisher])
   contractDat <- either (fail . show) pure (preTableDat source contracted)
   contractTargets <- either (fail . show) pure (verifyComposed source contracted contractDat fixtureImage4 fixtureImage5)
-  let sources = AttachSources (canonicalDat source) contractDat (canonicalTargets source) contractTargets []
+  let sources = AttachSources (canonicalDat source) contractDat (canonicalTargets source) contractTargets [] (compositionPieces contracted) entryLabel
       carriersOf = contractCarriers contracted
       absentPart (_, Span target (Guest start) (Guest end)) =
         J.object ["target" .= targetName target, "start" .= start, "end" .= end, "residency" .= ("absent" :: Text), "reason" .= ("illustrative" :: Text)]
@@ -653,6 +653,35 @@ main = do
       J.Object fields -> J.Object (KeyMap.insert "relations" (J.object ["log" .= J.object
         ["span" .= J.object ["start" .= (0xa0042 :: Int), "end" .= (0xa00c8 :: Int)], "sites" .= ([] :: [J.Value])]]) fields)
       other -> other))
+
+  -- Register sources: a word or row passes through; call_return and entry_state resolve against the composition.
+  let registerRule :: J.Value -> J.Value -> J.Value
+      registerRule retained composed = J.object ["core" .= (0 :: Int), "register" .= ("r5" :: Text), "mask" .= (0xffffffff :: Word32)
+        , "retained" .= retained, "composed" .= composed, "reason" .= ("r" :: Text)]
+      withRegisters entries = case rulesJson [] [] of
+        J.Object fields -> J.Object (KeyMap.insert "registers" (J.toJSON entries) fields)
+        other -> other
+      registerOut sources' retained composed =
+        element 0 . member "registers" <$> (rulesFrom (withRegisters [registerRule retained composed]) >>= \rules -> attachStateValue sources' rules [])
+      refusesWith sources' retained composed = either (const True) (const False) (registerOut sources' retained composed)
+      word :: Int -> J.Value
+      word = J.toJSON
+      rowOf name = J.object ["row" .= (name :: Text)]
+      callReturn name = J.object ["call_return" .= (name :: Text)]
+      entryState = J.object ["entry_state" .= J.object ["side" .= ("loader-a" :: Text), "service" .= ("private-initialize" :: Text)]]
+      blToEntry = withWords Record1 0x6008 [0xebfffffc] (composedTargetBytes sources)
+  ok "word register values render unchanged"
+    (fmap (\value -> (member "retained" value, member "composed" value, member "reason" value)) (registerOut sources (word 1) (word 2))
+      == Right (word 1, word 2, J.String "r"))
+  ok "a row register value renders as its label"
+    (fmap (member "composed") (registerOut sources (word 0) (rowOf "first-stage/handoff")) == Right (rowOf "first-stage/handoff"))
+  ok "a row register value naming no composed boundary refuses" (refusesWith sources (word 0) (rowOf "first-stage/absent"))
+  ok "an unknown register source refuses" (refusedRules (withRegisters [registerRule (word 0) (J.object ["bogus" .= (1 :: Int)])]))
+  ok "a call_return site that is not a BL to the attach PC refuses" (refusesWith sources (word 0) (callReturn "first-stage/handoff"))
+  ok "a call_return site that BLs to the attach PC resolves to its PC plus 4"
+    (fmap (member "composed") (registerOut sources {composedTargetBytes = blToEntry} (word 0) (callReturn "first-stage/handoff")) == Right (word 0x600c))
+  ok "a retained entry_state refuses" (refusesWith sources entryState (word 0))
+  ok "an entry_state without a loader-A orchestration piece refuses" (refusesWith sources (word 0) entryState)
 
   passed <- readIORef counter
   putStrLn ("startup-artifact-tests: " ++ show passed ++ " checks passed")

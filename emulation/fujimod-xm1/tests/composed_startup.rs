@@ -802,6 +802,9 @@ fn attach_rules_refuse_overlaps_sizes_masks_and_shapes() {
         AttachRuleRefusal::RegisterMask { core: Core::Primary, register: ContextRegister::R7 });
     assert_eq!(attach_refused(|rules| rules["registers"] = json!([{"core": 0, "register": "cpsr", "mask": 0x100, "retained": 0, "composed": 0x200, "reason": "r"}])),
         AttachRuleRefusal::RegisterMask { core: Core::Primary, register: ContextRegister::Cpsr });
+    assert_eq!(attach_refused(|rules| rules["registers"] = json!([{"core": 0, "register": "cpsr", "mask": 0x100,
+        "retained": {"row": "first-stage/handoff"}, "composed": 0x100, "reason": "r"}])),
+        AttachRuleRefusal::RegisterRow { core: Core::Primary, register: ContextRegister::Cpsr });
     assert_eq!(attach_refused(|rules| rules["peers"] = json!([])), AttachRuleRefusal::Peers);
     assert_eq!(attach_refused(|rules| rules["carriers"][0]["parts"][0]["end"] = json!(25000)),
         AttachRuleRefusal::CarrierTiling { piece: first_stage() });
@@ -924,6 +927,55 @@ fn context_differences_need_an_exact_masked_register_entry() {
     assert_eq!(attach_verdict(&fixture(), |owned| owned.cores[1].pc = Word(0x20000)).0,
         Some(Difference::AttachPeer { core: Core::Secondary, role: Role::Composed, pc: Word(0x20000) }));
     assert_eq!(attach_verdict(&fixture(), |owned| owned.cores[1].r[3] = Word(9)).0, None);
+}
+
+#[test]
+fn a_row_valued_register_expectation_reads_that_roles_last_row_before_attach() {
+    let run = |row: &str, register: u32, instructions: [u64; 2]| {
+        let mut value = fixture();
+        attach_rules(&mut value)["registers"] = json!([{"core": 0, "register": "r5", "mask": 0xffff_ffffu32,
+            "retained": 0, "composed": {"row": row}, "reason": "r"}]);
+        let bytes = serde_json::to_vec(&value).unwrap();
+        let contract = Contract::parse(&bytes).unwrap();
+        let digest = Sha256::of(&bytes);
+        let (retained, owned) = (receipt(&contract, &digest, Role::Retained), receipt(&contract, &digest, Role::Composed));
+        full_compare_with(&contract, &digest, retained, owned, |owned| owned.cores[0].r[5] = Word(register),
+            |_, owned| owned.attach.as_mut().unwrap().instructions = instructions)
+    };
+    let attach = [5_000_000, 886_999];
+    let result = run("first-stage/handoff", 5, attach);
+    assert_eq!(result.first_difference, None);
+    assert_eq!(result.attach.unwrap().registers.len(), 1);
+    assert!(matches!(run("first-stage/handoff", 9, attach).first_difference,
+        Some(Difference::AttachContext { register: ContextRegister::R5, .. })));
+    let row_refused = |verdict: Verdict| verdict.attach_differences.entries.iter()
+        .any(|entry| matches!(entry, Difference::AttachRegisterRow { register: ContextRegister::R5, role: Role::Composed, .. }));
+    assert!(row_refused(run("first-stage/entry", 5, attach)));
+    assert_eq!(run("first-stage/handoff", 5, [600, 600]).first_difference, None);
+    assert!(row_refused(run("first-stage/handoff", 5, [500, 400])));
+}
+
+#[test]
+fn a_row_valued_register_expectation_takes_the_last_of_several_rows_in_either_role() {
+    let mut value = publisher_limit(2);
+    attach_rules(&mut value)["registers"] = json!([{"core": 0, "register": "r5", "mask": 0xffff_ffffu32,
+        "retained": {"row": "primary-publisher/entry-core0"}, "composed": 0x50, "reason": "r"}]);
+    let bytes = serde_json::to_vec(&value).unwrap();
+    let contract = Contract::parse(&bytes).unwrap();
+    let digest = Sha256::of(&bytes);
+    let run = |attach_r5: u32| {
+        let (mut retained, mut owned) = (receipt(&contract, &digest, Role::Retained), receipt(&contract, &digest, Role::Composed));
+        interleave(&mut retained, [0, 1, 0, 1], 4);
+        interleave(&mut owned, [0, 1, 0, 1], 4);
+        retained.rows[1].r5 = Word(0x70);
+        retained.rows[3].r5 = Word(0x80);
+        let (mut retained_spec, mut owned_spec) = (spec(Role::Retained), spec(Role::Composed));
+        retained_spec.cores[0].r[5] = Word(attach_r5);
+        owned_spec.cores[0].r[5] = Word(0x50);
+        compare_specs(&contract, &digest, retained, owned, &retained_spec, &owned_spec, |_, _| {})
+    };
+    assert_eq!(run(0x80).first_difference, None);
+    assert!(matches!(run(0x70).first_difference, Some(Difference::AttachContext { register: ContextRegister::R5, .. })));
 }
 
 #[test]

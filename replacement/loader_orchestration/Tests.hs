@@ -49,11 +49,29 @@ checkDispatcherBoundaries side artifact = do
     assert "dispatcher boundary is not an emitted indirect call" (case actual of A.BranchExchange _ True _ -> True; _ -> False)
     assert "dispatcher edge differs from the existing call census" (lookup (boundaryInstruction entry) (callBoundaries proof)==Just Dispatcher)
 
+checkServiceEntries :: LinkedArtifact -> IO ()
+checkServiceEntries artifact = do
+  let proof = linkedProof artifact
+      entries = serviceEntryStates proof
+      calls = [(site,service) | (site,Retained service) <- callBoundaries proof]
+  assert "service entry states differ from the retained call census"
+    (all (\entry -> lookup (entrySite entry) calls==Just (entryService entry)) entries
+      && all (\(site,_) -> any ((==site) . entrySite) entries) calls)
+  forM_ entries $ \entry -> do
+    let CodeAddress site = entrySite entry
+    assert "service entry lr is not the call return" (entryRegister entry A.lr==Word (site+4))
+    assert "service entry is not at the sixteen-byte frame" (entryRegister entry A.sp==Stack (StackOffset (-16)))
+  forM_ scenarios $ \scenario ->
+    assert ("service entries differ from the effect order for "++show scenario)
+      ([entryService entry | entry <- entries, entryScenario entry==scenario]
+        ==[service | ServiceCall service _ <- concat [effects | PathProof selected effects _ <- proofPaths proof, selected==scenario]])
+
 check :: LoaderSide -> B.ByteString -> B.ByteString -> IO ()
 check side bytes symbols = do
   artifact <- either (ioError . userError . show) pure (deriveArtifact side bytes symbols)
   assert "service frame does not preserve the source sixteen bytes" (frameLow (linkedProof artifact)==StackOffset (-16))
   checkDispatcherBoundaries side artifact
+  checkServiceEntries artifact
   changed <- either (ioError . userError) pure (mutations side artifact symbols)
   forM_ changed $ \(Mutation fault mutant mutantSymbols expected) -> expectRefusal (show side++" "++show fault) expected (deriveArtifact side mutant mutantSymbols)
   expectRefusal "unbound symbols" SymbolRejected (deriveArtifact side bytes B.empty)
