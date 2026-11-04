@@ -605,11 +605,12 @@ pub(crate) struct RegisterPlan {
 pub(crate) enum OutputRule {
     Zero,
     LastFed,
+    /// No job start and no stream reset was recorded.
     Underived,
 }
 
 /// The derived descriptor registers, absent where the scan does not fix one.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct LzRegisters {
     pub count: Option<Word>,
     pub destination: Option<Word>,
@@ -820,7 +821,7 @@ pub(crate) fn evaluate(relations: &Relations, input: &RoleInput) -> RoleRelation
     out
 }
 
-/// One role's LZ descriptor writes and stream events, in transaction order.
+/// One role's LZ descriptor writes and stream events.
 #[derive(Default)]
 struct LzScan {
     source: u64,

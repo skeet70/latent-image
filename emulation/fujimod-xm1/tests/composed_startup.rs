@@ -1396,9 +1396,9 @@ const LZ_BASE: u64 = 0xfff4_3000;
 const LZ_INPUT: u64 = 0x1000;
 const LZ_OUTPUT: u32 = 0x4080_0000;
 
-/// Contiguous LZ job counts over one input; with `pending`, the last job is still running on the board. After the
-/// jobs, `reset` writes a stream reset, `count` writes the count register again, and `resize` leaves a MOVRSZ job
-/// pending.
+/// Contiguous LZ job counts over one input; with `pending`, the last job is still running on the board. The last
+/// start writes `destination` instead of the previous job's end. After the jobs, `reset` writes a stream reset,
+/// `count` writes the count register again, and `resize` leaves a MOVRSZ job pending.
 #[derive(Clone, Copy)]
 struct Jobs<'a> {
     counts: &'a [usize],
@@ -1406,9 +1406,10 @@ struct Jobs<'a> {
     reset: bool,
     count: Option<u32>,
     resize: bool,
+    destination: Option<u32>,
 }
 
-const ONE_JOB: Jobs<'static> = Jobs { counts: &[], pending: false, reset: false, count: None, resize: false };
+const ONE_JOB: Jobs<'static> = Jobs { counts: &[], pending: false, reset: false, count: None, resize: false, destination: None };
 
 /// Adds `jobs` over `compressed` at `LZ_INPUT` (one job over all of it when `jobs.counts` is empty), the jobs'
 /// register writes, and the device's stream and registers as lz.rs leaves them: each fed job's source in one
@@ -1432,7 +1433,8 @@ fn with_lz(spec: &mut Spec, compressed: &[u8], jobs: Jobs) {
     };
     let (mut source, mut destination) = (0usize, LZ_OUTPUT);
     for (index, &count) in counts.iter().enumerate() {
-        for (offset, value) in [(0x40, LZ_INPUT as u32 + source as u32), (0x44, count as u32), (0x48, destination), (0x04, 2)] {
+        let written = if index == counts.len() - 1 { jobs.destination.unwrap_or(destination) } else { destination };
+        for (offset, value) in [(0x40, LZ_INPUT as u32 + source as u32), (0x44, count as u32), (0x48, written), (0x04, 2)] {
             write(offset, value);
             regs[offset as usize / 4] = value;
         }
@@ -1467,14 +1469,16 @@ fn with_lz(spec: &mut Spec, compressed: &[u8], jobs: Jobs) {
 const RETAINED_LZ_INPUT: [u8; 6] = [3, b'a', b'b', b'c', 0x80, 0x36];
 const OWNED_LZ_INPUT: [u8; 10] = [9, b'a', b'b', b'c', b'a', b'b', b'c', b'a', b'b', b'c'];
 
-/// Both roles with LZ jobs over inputs of different lengths: one job in the retained role, `owned` in the composed.
-fn lz_roles(owned_jobs: Jobs) -> (Spec, Spec) {
+/// Both roles with LZ jobs over inputs of different lengths: `retained` in the retained role, `owned` in the composed.
+fn lz_roles_with(retained_jobs: Jobs, owned_jobs: Jobs) -> (Spec, Spec) {
     let mut retained = relation_spec(Role::Retained, &timer_steps(100, 200, RETAINED_SITE), RETAINED_SITE);
     let mut owned = relation_spec(Role::Composed, &timer_steps(160, 300, COMPOSED_SITE), COMPOSED_SITE);
-    with_lz(&mut retained, &RETAINED_LZ_INPUT, ONE_JOB);
+    with_lz(&mut retained, &RETAINED_LZ_INPUT, retained_jobs);
     with_lz(&mut owned, &OWNED_LZ_INPUT, owned_jobs);
     (retained, owned)
 }
+
+fn lz_roles(owned_jobs: Jobs) -> (Spec, Spec) { lz_roles_with(ONE_JOB, owned_jobs) }
 
 /// The relations fixture with `lz` and a copy allowance pinning each role's LZ input.
 fn lz_contract(lz: Value) -> Value {
@@ -1503,24 +1507,30 @@ fn the_lz_tallies_follow_each_role_s_pinned_input() {
     assert!(entries.iter().any(|entry| matches!(entry, Difference::AttachRelation { failure: RelationFailure::RelationOverlap { .. }, .. })));
 }
 
-/// The composed role's relation failures and its board differences under the LZ relation, with `edit` applied to
-/// the composed board's LZ registers.
-fn lz_register_outcome(owned_jobs: Jobs, edit: impl FnOnce(&mut Vec<Value>)) -> (Vec<RelationFailure>, Vec<String>, Option<LzRegisters>) {
-    let (retained, mut owned) = lz_roles(owned_jobs);
-    let devices = owned.board["bus"]["devices"].as_array_mut().unwrap();
+/// `role`'s relation failures, the board differences and `role`'s derived LZ registers, with `edit` applied to that
+/// role's captured LZ registers.
+fn lz_role_outcome(role: Role, jobs: [Jobs; 2], edit: impl FnOnce(&mut Vec<Value>)) -> (Vec<RelationFailure>, Vec<String>, Option<LzRegisters>) {
+    let (mut retained, mut owned) = lz_roles_with(jobs[0], jobs[1]);
+    let spec = match role { Role::Retained => &mut retained, Role::Composed => &mut owned };
+    let devices = spec.board["bus"]["devices"].as_array_mut().unwrap();
     edit(devices.last_mut().unwrap()["state"]["state"]["regs"].as_array_mut().unwrap());
     let verdict = relation_verdict(&lz_contract(json!({"citation": "lz.rs"})), &retained, &owned);
     let entries = &verdict.attach_differences.entries;
     let failures = entries.iter().filter_map(|entry| match entry {
-        Difference::AttachRelation { role: Role::Composed, failure } => Some(failure.clone()),
+        Difference::AttachRelation { role: failed, failure } if *failed == role => Some(failure.clone()),
         _ => None,
     }).collect();
     let boards = entries.iter().filter_map(|entry| match entry {
         Difference::AttachBoard { pointer, .. } => Some(pointer.0.clone()),
         _ => None,
     }).collect();
-    let registers = verdict.attach.and_then(|attach| attach.relations.get(1).and_then(|role| role.lz.as_ref().map(|lz| lz.registers.clone())));
+    let index = match role { Role::Retained => 0, Role::Composed => 1 };
+    let registers = verdict.attach.and_then(|attach| attach.relations.get(index).and_then(|role| role.lz.as_ref().map(|lz| lz.registers.clone())));
     (failures, boards, registers)
+}
+
+fn lz_register_outcome(owned_jobs: Jobs, edit: impl FnOnce(&mut Vec<Value>)) -> (Vec<RelationFailure>, Vec<String>, Option<LzRegisters>) {
+    lz_role_outcome(Role::Composed, [ONE_JOB, owned_jobs], edit)
 }
 
 const LZ_REGISTERS: [&str; 3] = ["/bus/devices/1/state/state/regs/17", "/bus/devices/1/state/state/regs/18", "/bus/devices/1/state/state/regs/19"];
@@ -1536,6 +1546,19 @@ fn the_lz_count_destination_and_output_registers_follow_each_role_s_jobs() {
         assert_eq!(failures, []);
         assert!(!boards.iter().any(|pointer| LZ_REGISTERS.contains(&pointer.as_str())), "{boards:?}");
     }
+}
+
+/// The retained input split inside its match token: the first job emits `abc`, the last the 6-byte match.
+#[test]
+fn the_destination_and_output_count_the_output_before_and_of_the_last_job() {
+    let split = Jobs { counts: &[5, 1], ..ONE_JOB };
+    let (failures, _, _) = lz_role_outcome(Role::Retained, [split, ONE_JOB], |regs| {
+        assert_eq!((regs[18].as_u64(), regs[19].as_u64()), (Some(u64::from(LZ_OUTPUT) + 3), Some(6)));
+    });
+    assert_eq!(failures, []);
+    let written = Jobs { destination: Some(LZ_OUTPUT), ..split };
+    let (failures, _, _) = lz_role_outcome(Role::Retained, [written, ONE_JOB], |_| {});
+    assert!(matches!(failures.as_slice(), [RelationFailure::LzRegister { leaf, .. }] if leaf.0 == LZ_REGISTERS[1]), "{failures:?}");
 }
 
 #[test]
