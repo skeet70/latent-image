@@ -695,7 +695,7 @@ pub enum GuardBound {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CatalogRefusal {
-    /// JSON that does not have the schema-3 shape, including unknown keys and invalid scalars.
+    /// JSON that does not have the schema-4 shape, including unknown keys and invalid scalars.
     Shape(String),
     Qualification,
     NoPieces,

@@ -573,6 +573,26 @@ main = do
         && case element 0 (member "board" value) of J.Object fields -> KeyMap.member "retained" fields; _ -> False)
     Left problem -> fail (show problem)
 
+  -- LZ submitted word: each role's record-4 length comes from its own DAT.
+  let shortened = U.partRecord4 parts
+      header4 = U.recHeader shortened
+      streamKept = B.length (U.recStream shortened) - 4
+      shorterParts = parts
+        { U.partRecord4 = shortened { U.recHeader = header4 { U.recTotalLen = U.recTotalLen header4 - 4 }, U.recStream = B.take streamKept (U.recStream shortened) }
+        , U.partGap45 = B.drop streamKept (U.recStream shortened) <> U.partGap45 parts }
+  shorterDat <- rebuilt source shorterParts
+  let withLz submitted allowances = case rulesJson [] allowances of
+        J.Object fields -> J.Object (KeyMap.insert "relations" (J.object ["lz" .= J.object ["citation" .= ("lz" :: Text), "submitted" .= submitted]]) fields)
+        other -> other
+      submittedAt address = J.object ["address" .= (address :: Int), "citation" .= ("c" :: Text)]
+  case rulesFrom (withLz (submittedAt 0x42a4) []) >>= \rules -> attachStateValue sources { composedDatBytes = shorterDat } rules [] of
+    Right value -> ok "the submitted word carries each role's record-4 length from its own DAT"
+      (member "record_length" (member "submitted" (member "lz" (member "relations" value)))
+        == J.object ["retained" .= U.recTotalLen header4, "composed" .= (U.recTotalLen header4 - 4)])
+    Left problem -> fail (show problem)
+  ok "a submitted word inside an allowance refuses" (refusedRules (withLz (submittedAt 0) [declared 4]))
+  ok "an unaligned submitted word refuses" (refusedRules (withLz (submittedAt 0x42a6) []))
+
   -- Log sites: an owned site resolves from its piece's symbols, and both sites are word-checked in their role's image.
   let wordBytes :: Word32 -> B.ByteString
       wordBytes word = B.pack [fromIntegral (word `div` (256 ^ index)) | index <- [0 .. 3 :: Int]]
