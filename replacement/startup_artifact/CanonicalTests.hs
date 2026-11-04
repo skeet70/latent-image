@@ -274,7 +274,7 @@ main = do
     (not (holdsIn "loader-headers-unchanged" (replacedIn j3Targets LoaderA 0x40010 0x4004dae4) j3Pieces))
   ok "a task submission below the core-1 window fails the submission-depth check"
     (not (holdsIn "submission-depth-in-stack-window" j3Targets (withFacts (\facts -> case facts of
-      LoaderStartupFacts a b calls -> LoaderStartupFacts a b (SubmitCall Core1 (StackDepth 0x800) : calls)
+      LoaderStartupFacts a b calls starts -> LoaderStartupFacts a b (SubmitCall Core1 (StackDepth 0x800) : calls) starts
       other -> other))))
   ok "a critical-pair frame reaching below the boot-stack window fails the submission-depth check"
     (not (holdsIn "submission-depth-in-stack-window" j3Targets (withFacts (\facts -> case facts of

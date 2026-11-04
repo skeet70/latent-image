@@ -176,7 +176,7 @@ main = do
       holdsIn name pieces' = not (null (named name)) && all ($ evidence pieces') (named name)
       withFacts change = [piece {pieceFacts = change (pieceFacts piece)} | piece <- j4Pieces]
       j4Checks = ["owned-calls-join", "table-b-service-slots-stored", "submission-joined-stack-in-boot-window", "loader-headers-unchanged", "task-service-slots-published-once"]
-      deeper extra = [SubmitCall core (StackDepth (depth + extra)) | LoaderStartupFacts _ _ calls <- map pieceFacts j4Pieces, SubmitCall core (StackDepth depth) <- calls]
+      deeper extra = [SubmitCall core (StackDepth (depth + extra)) | LoaderStartupFacts _ _ calls _ <- map pieceFacts j4Pieces, SubmitCall core (StackDepth depth) <- calls]
   ok "every J4 host check holds on the J4 composition" (all (`holdsIn` j4Pieces) j4Checks)
   joined <- maybe (H.failH "J4 task pieces do not join") pure (joinedTasks (evidence j4Pieces))
   ok "every dispatcher submission 0x600 bytes deeper still fits its boot-stack window"
@@ -187,7 +187,7 @@ main = do
       _ -> False) (deeper 0x700))
   ok "a dispatcher submission at a misaligned depth fails the joined-stack check"
     (not (holdsIn "submission-joined-stack-in-boot-window" (withFacts (\facts -> case facts of
-      LoaderStartupFacts a b calls -> LoaderStartupFacts a b [SubmitCall core (StackDepth (depth + 4)) | SubmitCall core (StackDepth depth) <- calls]
+      LoaderStartupFacts a b calls starts -> LoaderStartupFacts a b [SubmitCall core (StackDepth (depth + 4)) | SubmitCall core (StackDepth depth) <- calls] starts
       other -> other))))
   let ImageBytes submissionBytes = case submissionImage of LinkedImage image _ -> image
       SymbolBytes submissionSymbolBytes = case submissionImage of LinkedImage _ symbols -> symbols

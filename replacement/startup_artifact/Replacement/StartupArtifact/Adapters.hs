@@ -5,14 +5,15 @@
 module Replacement.StartupArtifact.Adapters
   ( LinkedImage (..), ImageBytes (..), SymbolBytes (..), PieceImages (..)
   , deriveFirstStage, deriveRecord2Link, derivePrimaryPublisher, deriveLoaderOrchestrationB, deriveLoaderStartup, derivePieceOf
-  , deriveTaskSubmission, deriveTaskStorage
+  , deriveTaskSubmission, deriveTaskStorage, deriveIdleTask, deriveRootTask
   ) where
 
 import qualified A32 as A
 import Control.Monad (unless)
 import Data.Bifunctor (first)
 import qualified Data.ByteString as B
-import Data.List (nub)
+import Data.List (nub, sortOn)
+import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import Data.Word (Word32, Word64)
@@ -39,12 +40,19 @@ import qualified Replacement.StartupArtifact.Footprint.PrimaryPublisher as Publi
 import qualified Replacement.StartupArtifact.Footprint.Record2Link as Record2Footprint
 import qualified Replacement.StartupArtifact.Footprint.LoaderOrchestration as OrchestrationFootprint
 import qualified Replacement.StartupArtifact.Footprint.LoaderStartup as StartupFootprint
+import qualified Replacement.StartupArtifact.Footprint.IdleTask as IdleFootprint
+import qualified Replacement.StartupArtifact.Footprint.RootTask as RootFootprint
 import qualified Replacement.StartupArtifact.Footprint.TaskStorage as TaskStorageFootprint
 import qualified Replacement.StartupArtifact.Footprint.TaskSubmission as TaskSubmissionFootprint
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
 import StageBuild (StageDeclarations (..))
 import qualified StartupStageContract as Stage
+import qualified Replacement.IdleTask.Admission as IA
+import qualified Replacement.IdleTask.Artifact as IT
+import qualified Replacement.RootTask.Admission as RA
+import qualified Replacement.RootTask.Artifact as RT
+import Replacement.RootTask.Services (serviceSymbols)
 import qualified Replacement.TaskStorage.Artifact as TSt
 import qualified Replacement.TaskSubmission.Admission as WA
 import qualified Replacement.TaskSubmission.Artifact as W
@@ -72,6 +80,8 @@ derivePieceOf source images = case images of
     LoaderStartup -> Left (AdapterRefused kind "loader-startup takes four linked images")
     TaskSubmission -> deriveTaskSubmission source image
     TaskStorage -> deriveTaskStorage source image
+    IdleTask -> deriveIdleTask source image
+    RootTask -> deriveRootTask source image
 
 admitted :: PieceKind -> Either String a -> Either Refusal a
 admitted kind = first (AdapterRefused kind . T.pack)
@@ -476,6 +486,8 @@ deriveLoaderStartup source a b dispatcher installer = do
       phase -> Left (AdapterRefused kind ("task submission in phase " <> T.pack (show phase)))
     pure (SubmitCall core (StackDepth (fromIntegral (negate (DA.stackOffsetValue (DA.callStack call)))))))
     [call | call <- calls, case DA.callEffect call of DA.Submit _ -> True; _ -> False]
+  let starts = [ TaskStart (TaskNumber task) (Pc entry) (StackBytes bytes)
+               | call <- calls, DA.Submit (DA.Descriptor (DA.TaskId task) _ _ (DA.StackBytes bytes) (DA.EntryAddress entry) _) <- [DA.callEffect call] ]
   carriers <- sequence
     [ spanOf kind LoaderA 0x409ac 0x40b00, spanOf kind LoaderB 0xd09ac 0xd0b00
     , spanOf kind Image4 dispatcherLow dispatcherHigh, spanOf kind Image4 installerLow installerHigh ]
@@ -532,7 +544,7 @@ deriveLoaderStartup source a b dispatcher installer = do
           , "retained mode getter 0x657184, clear 0x7221a0 and task submission 0x725dd8 behave as stock (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs:226-236)"
           , "retained cache service 0x42634 returns under its pinned contract (replacement/kernel_install/Replacement/KernelInstall/Admission.hs:184-189)"
           , "owned-component stack lows exclude transitive retained-service depth and interrupt frames (replacement/startup_composition/Replacement/StartupComposition/LoaderStartup.hs contractValue open_premises)" ])
-        catalog (LoaderStartupFacts (linked a) (linked b) submits)
+        catalog (LoaderStartupFacts (linked a) (linked b) submits starts)
   derivePiece source declaration (StagedOutput dat (Just image4) Nothing)
 
 -- | Task-stack windows: the A and B boot stacks (reports/replacement-inventory-baseline.md:1206) and the
@@ -695,3 +707,166 @@ deriveTaskStorage source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)
           , "callers pass index u32[D]-1 below 120 and the wrapper record W (reports/replacement-inventory-baseline.md:1088)" ])
         catalog (TaskStorageFacts (LinkedBytes bin symbolBytes))
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (TSt.stagedBytes (TSt.stageImage4 storageSource artifact))) Nothing)
+
+-- | Allocation tops of the startup tasks under the reservation order J4 observed in both roles
+-- (B103, B93, A104, A102 from 0xa10200, 0x400 bytes each; E-STARTUP-J4-COMPOSED-NATURAL-150).
+idleTopA, idleTopB, rootTop :: Word64
+idleTopA = 0xa11200
+idleTopB = 0xa10600
+rootTop = 0xa10e00
+
+orderPremise :: T.Text
+orderPremise = "the base is the task's allocation top under the reservation order B103, B93, A104, A102 that J4 observed in both roles (E-STARTUP-J4-COMPOSED-NATURAL-150); another order faults the first push"
+
+-- | Replacement.IdleTask.Artifact over //replacement/idle_task:idle-task-image.
+deriveIdleTask :: Canonical -> LinkedImage -> Either Refusal Piece
+deriveIdleTask source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) = do
+  let kind = IdleTask
+      shown :: Show e => Either e a -> Either Refusal a
+      shown = first (AdapterRefused kind . T.pack . show)
+      targets = canonicalTargets source
+  refuseUnless kind (IdleFootprint.trampolinesMatch (targetOf targets LoaderA) (targetOf targets LoaderB))
+    "loader-B first-entry trampoline differs from loader A's beyond the documented literal pairs"
+  idleSource <- shown (IT.canonicalSource (canonicalDat source) (targetOf targets Image4))
+  artifact <- shown (IT.deriveArtifact bin symbolBytes)
+  let proof = IT.artifactProof artifact
+      frame = fromIntegral (negate (IA.scratchLow proof)) :: Word64
+  refuseUnless kind (frame > 0) "idle frame is empty"
+  carrier <- spanOf kind Image4 0x69cbf0 0x69cc00
+  code <- ownedCode kind 0x69cbf0 (0x69cbf0 + fromIntegral (B.length bin))
+  both <- coreSet kind [Core0, Core1]
+  few <- limit kind 4
+  twice <- limit kind 2
+  let boundary name kind' composed retainedPc compare' limit' = do
+        named <- label kind name
+        pure (Boundary named kind' both (Pc composed) (Just (Pc retainedPc)) False compare' limit' Nothing)
+  -- Stock WFI 0x69cbf8 and backedge 0x69cbfc (replacement/idle_task/Replacement/IdleTask/Artifact.hs:52).
+  boundaries <- sequence
+    [ boundary "first-entry" ReturnBoundary 0x69cbf0 0x69cbf0 CompareSequence twice
+    , boundary "wait" SiteBoundary (IA.wfiPc proof) 0x69cbf8 ComparePresence few
+    , boundary "resume" SiteBoundary (IA.resumePc proof) 0x69cbfc ComparePresence few ]
+  firstEntry <- label kind "first-entry"
+  let writes = EnumeratedWrites
+        [ WriteRange (CorePhysicalTarget Core0) (idleTopA - frame) idleTopA
+        , WriteRange (CorePhysicalTarget Core1) (idleTopB - frame) idleTopB ]
+        (Premised (Premise (T.intercalate "; "
+          [ "the width is proved: the idle body stores only its entry frame below the entry SP (replacement/idle_task/Replacement/IdleTask/Admission.hs:67-78,112-118)"
+          , "A102 on core 0 and B103 on core 1 enter at their allocation tops 0xa11200 and 0xa10600; " <> orderPremise ])))
+      catalog = Catalog boundaries code writes []
+      declaration = PieceDeclaration kind (Set.singleton IdleTaskArea) [carrier] IdleFootprint.footprint
+        (map Premise
+          [ "entry is A32 SVC on an aligned allocated live stack at least 32 bytes deeper than the admitted frame (replacement/idle_task/Replacement/IdleTask/Artifact.hs:130-131)"
+          , "wakeups come from the retained IRQ entry and exit, which save and restore the interrupted context on the interrupted stack (reports/replacement-inventory-baseline.md:1640-1646)" ])
+        catalog (IdleTaskFacts (LinkedBytes bin symbolBytes) [firstEntry])
+  derivePiece source declaration (StagedOutput (canonicalDat source) (Just (IT.stagedBytes (IT.stageImage4 idleSource artifact))) Nothing)
+
+-- | Kebab name of a root call target (replacement/root_task/Replacement/RootTask/Services.hs).
+rootServiceName :: Word32 -> Maybe T.Text
+rootServiceName target = case [name | (name, address) <- serviceSymbols, address == target] of
+  [name] -> T.replace "_" "-" <$> T.stripPrefix "root_" (T.pack name)
+  _ -> Nothing
+
+-- | Owned and stock call sites paired by the effect positions they serve; a site serving no common set refuses.
+pairRootSites :: [(RA.CallSite, [RA.EffectPosition])] -> [(RA.CallSite, [RA.EffectPosition])]
+  -> Maybe [(RA.CallSite, RA.CallSite, [RA.EffectPosition])]
+pairRootSites owned stock
+  | M.keys ownedSites /= M.keys stockSites = Nothing
+  | otherwise = sequence
+      [ case (ownedSites M.! positions, stockSites M.! positions) of
+          ([o], [s]) | RA.callTarget o == RA.callTarget s -> Just (o, s, positions)
+          _ -> Nothing
+      | positions <- M.keys ownedSites ]
+  where
+    bySet sites = M.fromListWith (++) [(positions, [site]) | (site, positions) <- sites]
+    ownedSites = bySet owned
+    stockSites = bySet stock
+
+-- | Replacement.RootTask.Artifact over //replacement/root_task:root-task-image.
+deriveRootTask :: Canonical -> LinkedImage -> Either Refusal Piece
+deriveRootTask source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) = do
+  let kind = RootTask
+      shown :: Show e => Either e a -> Either Refusal a
+      shown = first (AdapterRefused kind . T.pack . show)
+      targets = canonicalTargets source
+      image4 = targetOf targets Image4
+  rootSource <- shown (RT.canonicalSource (canonicalDat source) image4)
+  artifact <- shown (RT.deriveArtifact bin symbolBytes)
+  let proof = RT.artifactProof artifact
+      frame = fromIntegral (negate (RA.scratchLow proof)) :: Word64
+  refuseUnless kind (frame > 0) "root frame is empty"
+  paired <- maybe (Left (AdapterRefused kind "owned and stock root call sites do not pair by the effect positions they serve")) Right
+    (pairRootSites (RA.callPositions proof) (RA.callPositions (RT.canonicalProof rootSource)))
+  carrier <- spanOf kind Image4 0x69d160 0x69d2b4
+  -- The NOP padding after the linked bytes is never executed.
+  code <- ownedCode kind 0x69d160 (0x69d160 + fromIntegral (B.length bin))
+  primary <- coreSet kind [Core0]
+  once <- limit kind 1
+  let byTarget = M.fromListWith (flip (++)) [(RA.callTarget owned, [(owned, stock, positions)]) | (owned, stock, positions) <- paired]
+      numbered = concat
+        [ [ (owned, stock, positions, if length group == 1 then Nothing else Just index)
+          | (index, (owned, stock, positions)) <- zip [1 :: Int ..] (sortOn (\(_, _, served) -> take 1 served) group) ]
+        | group <- M.elems byTarget ]
+      -- Executions of a site in its busiest scenario.
+      busiest positions = maximum (M.elems (M.fromListWith (+) [((a, b, mode, query), 1 :: Int) | RA.EffectPosition a b mode query _ <- positions]))
+      reading = ["create-workers-call", "init-6a5634-call", "register-periodic-call", "mark-2-call"]
+  calls <- mapM (\(owned, stock, positions, index) -> do
+      service <- maybe (Left (AdapterRefused kind ("root call target outside its service list: " <> hexName (RA.callTarget owned)))) Right
+        (rootServiceName (RA.callTarget owned))
+      let name = service <> maybe "" (\n -> "-" <> T.pack (show n)) index <> "-call"
+      named <- label kind name
+      count <- limit kind (busiest positions)
+      pure (Boundary named SiteBoundary primary (Pc (RA.callPc owned)) (Just (Pc (RA.callPc stock))) (name `elem` reading) CompareSequence count Nothing))
+    numbered
+  (laterOwned, laterStock) <- case [(owned, stock) | (owned, stock, _) <- paired, RA.callTarget owned == 0x69ca44] of
+    [pair] -> Right pair
+    _ -> Left (AdapterRefused kind "root lacks a unique 0x69ca44 call")
+  laterLabel <- label kind "later-returned"
+  callbackLabel <- label kind "periodic-callback"
+  -- Stock root calls 0x69ca44 at 0x69d27c (private-data/analysis/x-m1-1.50/lz/id4.dis:132004-132005); callback
+  -- 0x69cc18 recurs every 30 ticks, so it compares by presence.
+  let presence =
+        [ Boundary laterLabel SiteBoundary primary (Pc (RA.callPc laterOwned + 4)) (Just (Pc (RA.callPc laterStock + 4))) False ComparePresence once Nothing
+        , Boundary callbackLabel ReturnBoundary primary (Pc 0x69cc18) (Just (Pc 0x69cc18)) True ComparePresence once Nothing ]
+      read' name stopping guest bytes = do
+        named <- label kind name
+        at <- label kind stopping
+        pure (CatalogRead named at guest bytes Nothing)
+  -- Resources: 0x7247ac stores the kernel index at 0x93e6f4+4*(id-1) (private-data/analysis/x-m1-1.50/lz/id4.dis:270633-270675)
+  -- and creates each through root-0 slot +0x64, whose creation records are 16 bytes from 0x4005dfd8
+  -- (replacement/media_permit/RtosManifestMain.hs:66,252,271). Task creation records are 40 bytes from 0x4005beac (A) and
+  -- 0x400ebe6c (B) indexed by id-1 (emulation/fujimod-xm1/src/idle_tasks.rs:606-607; emulation/Emulation/RootTaskPlan.hs:56).
+  rows <- sequence
+    [ read' "error-callback" "create-workers-call" 0x0089ea8c 4
+    , read' "resource-kernels" "create-workers-call" 0x0093e6f4 388
+    , read' "resource-records" "create-workers-call" 0x4005dfd8 1552
+    , read' "message-callback" "init-6a5634-call" 0x0089ea94 4
+    , read' "submission-storage-records" "register-periodic-call" 0x40a0fc44 1248
+    , read' "submission-wrapper-records" "register-periodic-call" 0x40a5b204 832
+    , read' "submission-cursor" "register-periodic-call" 0x4089ea98 4
+    , read' "submission-error-word" "register-periodic-call" 0x40a0f82c 4
+    , read' "a-creation-all" "register-periodic-call" 0x4005beac 4160
+    , read' "b-creation-all" "register-periodic-call" 0x400ebe6c 4160
+    , read' "periodic-table" "mark-2-call" 0x409c3500 0x404
+    , read' "periodic-context" "mark-2-call" 0x0096ca4c 4
+    , read' "callback-sequence" "periodic-callback" 0x00828094 4
+    , read' "irq-nesting" "periodic-callback" 0x400545a4 4 ]
+  recordsRead <- label kind "submission-storage-records"
+  wrapperRead <- label kind "submission-wrapper-records"
+  creationA <- label kind "a-creation-all"
+  creationB <- label kind "b-creation-all"
+  let pool =
+        [ AllocationWords recordsRead 0 12 AllocationBase, AllocationWords wrapperRead 0 8 AllocationBase
+        , AllocationWords creationA 20 40 AllocationBase, AllocationWords creationB 20 40 AllocationBase ]
+      writes = EnumeratedWrites [WriteRange (CorePhysicalTarget Core0) (rootTop - frame) rootTop]
+        (Premised (Premise (T.intercalate "; "
+          [ "the width is proved: root code stores only to its own stack, at offsets from the admitted frame low to the entry SP (replacement/root_task/Replacement/RootTask/Admission.hs:70,92-103,241-244)"
+          , "root enters at its allocation top 0xa10e00; " <> orderPremise ])))
+      catalog = Catalog (calls ++ presence) code writes rows
+      declaration = PieceDeclaration kind (Set.singleton RootTaskArea) [carrier]
+        (RootFootprint.footprint (targetOf targets LoaderA) (targetOf targets LoaderB) image4)
+        (map Premise
+          [ "retained callees behave as stock from their entries, including error dispatch from 0x725b74 in IRQ context (replacement/root_task/Replacement/RootTask/Artifact.hs:145; reports/replacement-inventory-baseline.md:1702-1704)"
+          , "root is entered once on core 0 by the first-entry trampoline with r0 = 0 and SP = the A104 allocation top (reports/replacement-inventory-baseline.md:1130,1622)"
+          , "the 32 bytes below the admitted frame bound hold the source IRQ frame; retained callee demand on root's stack is not proved" ])
+        catalog (RootTaskFacts (LinkedBytes bin symbolBytes) pool)
+  derivePiece source declaration (StagedOutput (canonicalDat source) (Just (RT.stagedBytes (RT.stageImage4 rootSource artifact))) Nothing)
