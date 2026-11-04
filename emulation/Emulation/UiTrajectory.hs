@@ -16,6 +16,7 @@ module Emulation.UiTrajectory
   , ExecutionInterval (..)
   , executionIntervalLabel
   , TraceSite (..)
+  , SiteRead (..)
   , Trajectories (..)
   , TrajectoryProtection (..)
   , TrajectoryExpect (..)
@@ -26,7 +27,8 @@ module Emulation.UiTrajectory
   , checkModalObserverConfiguration
   ) where
 
-import Control.Monad (unless, when)
+import Control.Applicative ((<|>))
+import Control.Monad (forM, unless, when)
 import Data.Aeson (FromJSON (..), Value, eitherDecodeStrict', withArray, withObject, (.!=), (.:?), (.:))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
@@ -234,8 +236,12 @@ keyPulse budget = do
   when (keyPulseHold pulse == 0 || keyPulseRelease pulse == 0) (fail "key_pulse budgets must be positive")
   pure pulse
 
--- | An A32 instruction address whose every entry the bridge records with r0-r3, under a label.
-data TraceSite = TraceSite { traceSiteAddress :: ReadAddress, traceSiteLabel :: String } deriving (Eq, Show)
+-- | An A32 instruction address whose every entry the bridge records with r0-r3 and lr, under a
+-- label, together with the site's physical reads at entry.
+data TraceSite = TraceSite { traceSiteAddress :: ReadAddress, traceSiteLabel :: String, traceSiteReads :: [SiteRead] } deriving (Eq, Show)
+
+-- | A physical range a trace site reads at each entry: start and byte count, 1..4096.
+data SiteRead = SiteRead { siteReadStart :: Word32, siteReadCount :: Int } deriving (Eq, Show)
 
 -- | Labels the e2e arms itself.
 reservedLabels :: [String]
@@ -243,7 +249,8 @@ reservedLabels = ["menu-message", "d3-hook"]
 
 instance FromJSON TraceSite where
   parseJSON value = do
-    (address, label) <- parseJSON value
+    (address, label, entryReads) <- (\(address, label) -> (address, label, [])) <$> parseJSON value
+      <|> parseJSON value
     site <- either fail pure (readAddress address)
     case site of
       FixedAddress word -> do
@@ -251,7 +258,11 @@ instance FromJSON TraceSite where
         when (word `mod` 4 /= 0) (fail ("trace site address must be word aligned: " ++ T.unpack address))
       RuntimeSymbol _ offset -> when (offset `mod` 4 /= 0) (fail ("trace site offset must be word aligned: " ++ T.unpack address))
     when (null label || label `elem` reservedLabels) (fail ("trace site label is empty or reserved: " ++ label))
-    pure (TraceSite site label)
+    siteReads <- forM (entryReads :: [(T.Text, Int)]) $ \(start, count) -> case readAddress start of
+      Right (FixedAddress word) | T.length start == 8, count >= 1, count <= 4096, toInteger word + toInteger count <= 0x100000000 ->
+        pure (SiteRead word count)
+      _ -> fail ("trace site read must be eight hex digits and 1..4096 bytes: " ++ T.unpack start)
+    pure (TraceSite site label siteReads)
 
 -- | The declared protected state. A route declares at most one protection form.
 data TrajectoryProtection

@@ -1,6 +1,9 @@
 //! Decode from and mirror to the stock engine block and last-move pair. The
 //! only module that knows stock addresses.
 
+use core::hint::black_box;
+use core::mem::MaybeUninit;
+
 use super::engine::SnapshotSlot;
 use super::frame::{FrameDepth, MenuClass, RowIndex, RowToken, ScrollTop, VisibleCount, VisibleOrdinal};
 use super::state::{
@@ -15,7 +18,6 @@ pub const LAST_MOVE_LEN: usize = 8;
 
 const NODE: usize = 0x00;
 const WORD10: usize = 0x04;
-const WORD10_HIGH: usize = 0x06;
 const LIVE: usize = 0x08;
 const TOTAL: usize = 0x18;
 const VISIBLE_AT_OPEN: usize = 0x1c;
@@ -32,10 +34,10 @@ const _: () = assert!(REMEMBERED + 4 * REGISTRY_SLOTS == STACK);
 const _: () = assert!(STACK + 16 * STACK_FRAMES == DEPTH);
 const _: () = assert!(MENU_OPEN + 4 == BLOCK_LEN);
 
-const ROOT_SNAPSHOT: u32 = 0x0094_4414;
-const FIRST_DEPTH_SNAPSHOTS: u32 = 0x0093_eb74;
-const SECOND_DEPTH_SNAPSHOTS: u32 = 0x0094_12d4;
-const SNAPSHOT_LEN: u32 = 0x2c;
+pub const ROOT_SNAPSHOT: u32 = 0x0094_4414;
+pub const FIRST_DEPTH_SNAPSHOTS: u32 = 0x0093_eb74;
+pub const SECOND_DEPTH_SNAPSHOTS: u32 = 0x0094_12d4;
+pub const SNAPSHOT_LEN: u32 = 0x2c;
 
 /// A stock node record address.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -63,13 +65,18 @@ impl RecordTable {
         self.tree == tree.identity && self.records.len() == tree.nodes.len()
     }
 
-    fn address(&self, node: NodeRef) -> RecordAddress {
-        self.records[node.index()]
+    fn address(&self, node: NodeRef) -> Option<RecordAddress> {
+        self.records.get(node.index()).copied()
     }
 
     fn node(&self, address: RecordAddress) -> Option<NodeRef> {
         self.records.iter().position(|&record| record == address).map(|index| NodeRef::new(index as u16))
     }
+}
+
+/// Word `+0x20` of a node record.
+pub fn values_pointer_address(records: &RecordTable, node: NodeRef) -> Option<u32> {
+    records.address(node).map(|record| record.get().wrapping_add(0x20))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -89,20 +96,42 @@ fn put(bytes: &mut [u8], offset: usize, value: u32) {
     bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 }
 
-fn cursor_frame(bytes: &[u8], offset: usize) -> CursorFrame {
+fn cursor_frame<B: BlockWords>(block: &B, offset: usize) -> CursorFrame {
     CursorFrame {
-        cursor: RowIndex::new(word(bytes, offset)),
-        ordinal: VisibleOrdinal::new(word(bytes, offset + 4)),
-        count: VisibleCount::new(word(bytes, offset + 8)),
-        scroll: ScrollTop::new(word(bytes, offset + 12)),
+        cursor: RowIndex::new(block.block_word(offset)),
+        ordinal: VisibleOrdinal::new(block.block_word(offset + 4)),
+        count: VisibleCount::new(block.block_word(offset + 8)),
+        scroll: ScrollTop::new(block.block_word(offset + 12)),
     }
 }
 
-fn put_cursor_frame(bytes: &mut [u8], offset: usize, frame: CursorFrame) {
-    put(bytes, offset, frame.cursor.get());
-    put(bytes, offset + 4, frame.ordinal.get());
-    put(bytes, offset + 8, frame.count.get());
-    put(bytes, offset + 12, frame.scroll.get());
+fn cursor_frame_word(frame: CursorFrame, offset: usize) -> u32 {
+    match offset {
+        0 => frame.cursor.get(),
+        4 => frame.ordinal.get(),
+        8 => frame.count.get(),
+        _ => frame.scroll.get(),
+    }
+}
+
+/// Word reads of the block and the last-move pair.
+pub trait BlockWords {
+    /// The word at a 4-aligned offset below `BLOCK_LEN`.
+    fn block_word(&self, offset: usize) -> u32;
+    /// Word 0 (class) or 1 (token) of the last-move pair.
+    fn last_move_word(&self, index: usize) -> u32;
+}
+
+struct Images<'a>(&'a [u8; BLOCK_LEN], &'a [u8; LAST_MOVE_LEN]);
+
+impl BlockWords for Images<'_> {
+    fn block_word(&self, offset: usize) -> u32 {
+        word(self.0, offset)
+    }
+
+    fn last_move_word(&self, index: usize) -> u32 {
+        word(self.1, 4 * index)
+    }
 }
 
 pub fn decode(
@@ -111,73 +140,102 @@ pub fn decode(
     tree: &Tree,
     records: &RecordTable,
 ) -> Result<EngineState, DecodeError> {
+    decode_words(&Images(block, last_move), tree, records)
+}
+
+pub fn decode_words<B: BlockWords>(block: &B, tree: &Tree, records: &RecordTable) -> Result<EngineState, DecodeError> {
     if !records.serves(tree) {
         return Err(DecodeError::TableMismatch);
     }
-    let node = match word(block, NODE) {
+    let node = match block.block_word(NODE) {
         0 => None,
         raw => {
             let address = RecordAddress::new(raw);
             Some(records.node(address).ok_or(DecodeError::UnknownRecord(address))?)
         }
     };
+    // `black_box` keeps each store's bound check, which `check-bank-allowlist` needs to prove the store.
     let mut row_states = [RowState::Offered; ROW_STATES];
-    for (row, state) in row_states.iter_mut().enumerate() {
-        let raw = word(block, ROW_STATE_WORDS + 4 * row);
-        *state = RowState::parse(raw).ok_or(DecodeError::RowState { row, raw })?;
+    for row in 0..ROW_STATES {
+        let raw = block.block_word(ROW_STATE_WORDS + 4 * row);
+        let state = RowState::parse(raw).ok_or(DecodeError::RowState { row, raw })?;
+        if let Some(slot) = row_states.get_mut(black_box(row)) {
+            *slot = state;
+        }
     }
-    let mut remembered = [RowToken::new(0); REGISTRY_SLOTS];
-    for (index, token) in remembered.iter_mut().enumerate() {
-        *token = RowToken::new(word(block, REMEMBERED + 4 * index));
+    // Every slot is written below, so the array needs no zero fill, whose loop the checker cannot bound.
+    let mut remembered = MaybeUninit::<[RowToken; REGISTRY_SLOTS]>::uninit();
+    let slots = remembered.as_mut_ptr().cast::<RowToken>();
+    for index in 0..REGISTRY_SLOTS {
+        let slot = black_box(index);
+        if slot < REGISTRY_SLOTS {
+            // SAFETY: `slot` is `index`, below `REGISTRY_SLOTS`.
+            unsafe { slots.add(slot).write(RowToken::new(block.block_word(REMEMBERED + 4 * index))) };
+        }
     }
+    // SAFETY: the loop wrote every slot.
+    let remembered = unsafe { remembered.assume_init() };
     let mut stack = [CursorFrame::ZERO; STACK_FRAMES];
-    for (index, frame) in stack.iter_mut().enumerate() {
-        *frame = cursor_frame(block, STACK + 16 * index);
+    for index in 0..STACK_FRAMES {
+        if let Some(slot) = stack.get_mut(black_box(index)) {
+            *slot = cursor_frame(block, STACK + 16 * index);
+        }
     }
-    let classifier = word(block, PUSH_CLASSIFIER);
-    let open = word(block, MENU_OPEN);
+    let classifier = block.block_word(PUSH_CLASSIFIER);
+    let open = block.block_word(MENU_OPEN);
+    let word10 = block.block_word(WORD10);
     Ok(EngineState {
         node,
-        word10: NodeWord10::new(u16::from_le_bytes([block[WORD10], block[WORD10 + 1]])),
-        word10_high: [block[WORD10_HIGH], block[WORD10_HIGH + 1]],
+        word10: NodeWord10::new(word10 as u16),
+        word10_high: ((word10 >> 16) as u16).to_le_bytes(),
         live: cursor_frame(block, LIVE),
-        total: RowCount::new(word(block, TOTAL)),
-        visible_at_open: VisibleCount::new(word(block, VISIBLE_AT_OPEN)),
+        total: RowCount::new(block.block_word(TOTAL)),
+        visible_at_open: VisibleCount::new(block.block_word(VISIBLE_AT_OPEN)),
         row_states,
         saved: cursor_frame(block, SAVED),
         remembered,
         stack,
-        depth: StackDepth::new(word(block, DEPTH)),
+        depth: StackDepth::new(block.block_word(DEPTH)),
         push_classifier: FrameDepth::parse(classifier).ok_or(DecodeError::PushClassifier(classifier))?,
         menu_open: MenuOpen::parse(open).ok_or(DecodeError::MenuOpen(open))?,
-        last_move: LastMove { class: MenuClass::new(word(last_move, 0)), token: RowToken::new(word(last_move, 4)) },
+        last_move: LastMove {
+            class: MenuClass::new(block.last_move_word(0)),
+            token: RowToken::new(block.last_move_word(1)),
+        },
     })
+}
+
+/// The block word at a 4-aligned offset below `BLOCK_LEN`.
+pub fn mirror_word(state: &EngineState, records: &RecordTable, offset: usize) -> u32 {
+    match offset {
+        NODE => state.node.and_then(|node| records.address(node)).map_or(0, RecordAddress::get),
+        WORD10 => u32::from(state.word10.get()) | (u32::from(u16::from_le_bytes(state.word10_high)) << 16),
+        TOTAL => state.total.get(),
+        VISIBLE_AT_OPEN => state.visible_at_open.get(),
+        DEPTH => state.depth.get(),
+        PUSH_CLASSIFIER => state.push_classifier.raw(),
+        MENU_OPEN => state.menu_open.raw(),
+        _ if (LIVE..TOTAL).contains(&offset) => cursor_frame_word(state.live, offset - LIVE),
+        _ if (ROW_STATE_WORDS..SAVED).contains(&offset) => state.row_states.get((offset - ROW_STATE_WORDS) / 4).map_or(0, |row| row.raw()),
+        _ if (SAVED..REMEMBERED).contains(&offset) => cursor_frame_word(state.saved, offset - SAVED),
+        _ if (REMEMBERED..STACK).contains(&offset) => state.remembered.get((offset - REMEMBERED) / 4).map_or(0, |token| token.get()),
+        _ => state.stack.get((offset - STACK) / 16).map_or(0, |frame| cursor_frame_word(*frame, (offset - STACK) % 16)),
+    }
+}
+
+/// Word 0 (class) or 1 (token) of the last-move pair.
+pub fn mirror_last_move_word(state: &EngineState, index: usize) -> u32 {
+    if index == 0 { state.last_move.class.get() } else { state.last_move.token.get() }
 }
 
 pub fn mirror(state: &EngineState, records: &RecordTable) -> ([u8; BLOCK_LEN], [u8; LAST_MOVE_LEN]) {
     let mut block = [0u8; BLOCK_LEN];
-    put(&mut block, NODE, state.node.map_or(0, |node| records.address(node).get()));
-    block[WORD10..WORD10 + 2].copy_from_slice(&state.word10.get().to_le_bytes());
-    block[WORD10_HIGH..WORD10_HIGH + 2].copy_from_slice(&state.word10_high);
-    put_cursor_frame(&mut block, LIVE, state.live);
-    put(&mut block, TOTAL, state.total.get());
-    put(&mut block, VISIBLE_AT_OPEN, state.visible_at_open.get());
-    for (row, row_state) in state.row_states.iter().enumerate() {
-        put(&mut block, ROW_STATE_WORDS + 4 * row, row_state.raw());
+    for offset in (0..BLOCK_LEN).step_by(4) {
+        put(&mut block, offset, mirror_word(state, records, offset));
     }
-    put_cursor_frame(&mut block, SAVED, state.saved);
-    for (index, token) in state.remembered.iter().enumerate() {
-        put(&mut block, REMEMBERED + 4 * index, token.get());
-    }
-    for (index, frame) in state.stack.iter().enumerate() {
-        put_cursor_frame(&mut block, STACK + 16 * index, *frame);
-    }
-    put(&mut block, DEPTH, state.depth.get());
-    put(&mut block, PUSH_CLASSIFIER, state.push_classifier.raw());
-    put(&mut block, MENU_OPEN, state.menu_open.raw());
     let mut last_move = [0u8; LAST_MOVE_LEN];
-    put(&mut last_move, 0, state.last_move.class.get());
-    put(&mut last_move, 4, state.last_move.token.get());
+    put(&mut last_move, 0, mirror_last_move_word(state, 0));
+    put(&mut last_move, 4, mirror_last_move_word(state, 1));
     (block, last_move)
 }
 

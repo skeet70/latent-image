@@ -82,6 +82,16 @@ main = do
   refuses "lifetime guard is a closed flag" (stock ++ ["--modal-lifetime-guard=continuous"])
   help <- Viewer.parseCommand [guard, "--help"]
   check "help opens no inputs and requires no route" (case help of Viewer.Help -> True; _ -> False)
+  let owned = ["--modal75-owned-archive", "bank.a", "--modal75-retired", "retired.json"]
+      engine = "--menu-engine-owned"
+  forM_ [stock ++ [scoped, engine] ++ owned, engine : owned ++ scoped : stock] $ \arguments -> do
+    candidate <- acceptedOptions arguments
+    check "the owned engine selects the scoped payload with the engine" (Viewer.menuEngineOwnedOption candidate && Viewer.ramPayloadOption candidate == Viewer.BankModal75Choice)
+  scopedOwned <- acceptedOptions (stock ++ [scoped] ++ owned)
+  check "the owned modal role alone carries no engine" (not (Viewer.menuEngineOwnedOption scopedOwned))
+  refuses "the owned engine requires the scoped selection" (stock ++ [guard, engine] ++ owned)
+  refuses "the owned engine requires an owned archive" (stock ++ [scoped, engine])
+  refuses "the owned engine appears once" (stock ++ [scoped, engine, engine] ++ owned)
   scratch <- maybe getTemporaryDirectory pure =<< lookupEnv "TEST_TMPDIR"
   let directory = scratch </> "modal75-owned-package"
       identity = concat (replicate 16 "a5") ++ concat (replicate 16 "3c")

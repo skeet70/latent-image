@@ -70,7 +70,8 @@ treeGeneration = do
     ("Row { token: RowToken::new(0x0), child: Some(NodeRef::new(1)) }" `isInfixOf` tree)
   check "picker node names its parent and flags"
     ("wrap: Wrap::Wraps, availability: Availability::Queried, remember: Remember::On, parent: Some(NodeRef::new(0))" `isInfixOf` tree)
-  check "labels carry string ids" ("list_icon: StringId::new(0x780140)" `isInfixOf` tree)
+  check "labels move to their own output" ("list_icon: StringId::new(0x780140)" `isInfixOf` T.generatedLabels generated && not ("StringId" `isInfixOf` tree))
+  check "tree data sits in the engine section" ("#[link_section = \".menu_engine.rodata\"]\nstatic TREE: Tree" `isInfixOf` tree)
   check "registry slot 1 is the page" ("        Some(NodeRef::new(0)), // 0x1" `isInfixOf` tree)
   check "tree carries the identity" (("identity: TreeIdentity([" ++ concat (replicate 31 "0xaa, ") ++ "0xaa])") `isInfixOf` tree)
   check "records carry the same identity and addresses in node order"

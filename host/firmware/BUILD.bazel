@@ -1734,6 +1734,22 @@ filegroup(
     ],
 )
 
+# The modal75,menu-engine relinker links an owner-built archive (`--cfg
+# rb_menu_engine_owned`); bank-modal.a stands in until one is supplied.
+filegroup(
+    name = "ram-push-modal-engine-relinker",
+    srcs = [
+        "build-recipe-bank-modal-engine-ram.sh",
+        "build-recipe-bank-ram.sh",
+        ":build-recipe-bank",
+        "//menu:recipe_bank_menu_engine_allowlist_fragment.json",
+        "//menu:recipe_bank_modal_allowlist_fragment.json",
+        "//menu:recipe_bank_ram_engine.ld",
+        "//replacement/bank:bank-modal",
+        "//replacement/bank:build-facts",
+    ],
+)
+
 haskell_library(
     name = "ram-push-layout",
     srcs = ["RamPushLayout.hs"],

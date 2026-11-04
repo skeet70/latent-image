@@ -522,6 +522,53 @@ haskell_test(
 )
 
 haskell_library(
+    name = "menu-engine-pair-lib",
+    srcs = [
+        "Replacement/ModalRuntime/MenuEngineClass.hs",
+        "Replacement/ModalRuntime/MenuEnginePair.hs",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":menu-engine-tree-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "menu-engine-pair-check",
+    srcs = ["MenuEnginePairCheckMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":menu-engine-pair-lib",
+        ":menu-engine-tree-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
+
+haskell_test(
+    name = "menu-engine-pair-tests",
+    srcs = ["MenuEnginePairTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        ":menu-engine-pair-lib",
+        ":menu-engine-tree-lib",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_library(
     name = "picker-table-lib",
     srcs = ["Replacement/ModalRuntime/PickerTable.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],

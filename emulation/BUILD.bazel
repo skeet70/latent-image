@@ -2420,6 +2420,7 @@ haskell_library(
     deps = [
         ":case-sha256",
         "//host/firmware:bank-allowlist",
+        "//host/firmware:ram-push-layout",
         ":watch-observation",
         ":loader-code-layout",
         "//transport:camera-core",

@@ -7,7 +7,7 @@ import Emulation.Ff80Rehearsal (runFujiModRehearsal)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), FixedSceneFrame, Python (..), Runtime (..), StagedRuntime (..), StockOriginal (..), Workspace (..), fixedSceneFrameArguments, parseFixedSceneFrame, require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
-import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, experimentPayload, loadModalOwnedPackage, parseSymbolRead, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint)
+import Xm1RamPushE2E (AllowlistPolicy (..), AttachHold (..), BootMode (..), CardMode (..), E2ESettings (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), OverrideReason (..), PushMode (..), RelinkMode (..), SymbolRead, UiConversionProfile (..), bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromeIconPayload, classicChromePayload, experimentPayload, loadModalOwnedPackage, parseSymbolRead, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint)
 import Data.List (isPrefixOf, nub)
 import Data.Maybe (isJust)
 import Data.Char (isAscii, isAlphaNum)
@@ -70,6 +70,7 @@ data Options = Options
   , runDocumentOption :: Maybe FujiModRunFile
   , modal75ArchiveOption :: Maybe FilePath
   , modal75RetiredOption :: Maybe FilePath
+  , menuEngineOwnedOption :: Bool
   , screenProbeOption :: Maybe ScreenProbe
   }
 
@@ -133,6 +134,9 @@ usage = unlines
   , "                         with --cfg rb_modal75_owned) instead of the runfiles bank-modal archive"
   , "  --modal75-retired PATH Retired stock extents the continuous guard refuses to see fetched"
   , "                         (required with --modal75-owned-archive)"
+  , "  --menu-engine-owned    With --modal75-owned-archive: link the archive (built also with"
+  , "                         --cfg rb_menu_engine_owned) into the 225-publication bank that"
+  , "                         publishes the owned menu engine at 0xbf95c8"
   , "  --ram-push-lifecycle   Select the unqualified 226-publication lifecycle variant"
   , "                         Cannot combine with the continuously guarded --ram-push-modal-scoped route"
   , "                         Requires --ram-push-e2e --fujimod --unreviewed-relink"
@@ -163,7 +167,7 @@ parseCommand args
   | "--help" `elem` args = pure Help
   | otherwise = Launch <$> go defaults args
   where
-    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False NoModalDiagnostic NoModalLifetimeGuard Nothing Nothing Nothing Nothing
+    defaults = Options Nothing Nothing Nothing Nothing Nothing Nothing False False ReviewedRelink Nothing CheckpointedBoot Nothing RamPush Nothing BankD3Choice [] NoAttachHold DeclaredUiCpuFallback Nothing WithCard RetainedChoice (Port 0) IPv4Loopback False NoModalDiagnostic NoModalLifetimeGuard Nothing Nothing Nothing False Nothing
     go options [] = validateModalLifetimeOptions options >> pure options
     go options ("--port" : value : rest) = do
       port <- case readMaybe value :: Maybe Integer of
@@ -279,6 +283,9 @@ parseCommand args
     go options ("--modal75-retired" : value : rest) = do
       require (not (null value) && modal75RetiredOption options == Nothing) "--modal75-retired must be nonempty and appear once"
       go options { modal75RetiredOption = Just value } rest
+    go options ("--menu-engine-owned" : rest) = do
+      require (not (menuEngineOwnedOption options)) "--menu-engine-owned may appear only once"
+      go options { menuEngineOwnedOption = True } rest
     go _ (argument : _) = ioError (userError ("Unknown option or missing value: " ++ argument ++ "\n" ++ usage))
 
 validateModalLifetimeOptions :: Options -> IO ()
@@ -302,6 +309,9 @@ validateModalLifetimeOptions options = do
     require (isJust (modal75ArchiveOption options) && isJust (modal75RetiredOption options))
       "--modal75-owned-archive and --modal75-retired are required together"
     require (ramPayloadOption options == BankModal75Choice) "the owned modal75 archive requires --ram-push-modal-scoped"
+  when (menuEngineOwnedOption options) $
+    require (ramPayloadOption options == BankModal75Choice && isJust (modal75ArchiveOption options))
+      "--menu-engine-owned requires --ram-push-modal-scoped and --modal75-owned-archive"
 
 -- | A regular file beneath workspace/private-data/.
 privateRegularInput :: Workspace -> String -> FilePath -> IO FilePath
@@ -495,7 +505,8 @@ launch options = do
               (pushModeOption options)
               (case ramPayloadOption options of
                 BankD3Choice -> bankD3Payload
-                BankModal75Choice -> bankModal75Payload
+                BankModal75Choice | menuEngineOwnedOption options -> bankModalEnginePayload
+                                  | otherwise -> bankModal75Payload
                 BankLifecycleChoice -> bankLifecyclePayload
                 BankModalLifecycleChoice -> bankModalLifecyclePayload
                 ClassicChromeChoice -> classicChromePayload

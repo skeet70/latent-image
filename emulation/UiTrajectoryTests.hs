@@ -91,7 +91,7 @@ main = do
     [ expect "the checked-in trajectory files are present" (not (null files))
     , expect "a trace site decodes to its address and label" $
         sitesOf (document "[[\"0114b6c4\",\"film-icon\"]]" "[\"a\"]")
-          == Just [TraceSite (FixedAddress 0x0114b6c4) "film-icon"]
+          == Just [TraceSite (FixedAddress 0x0114b6c4) "film-icon" []]
     , expect "a file without trace sites declares none" $
         sitesOf (C.pack "{\"schema\":1,\"before_unload\":[],\"after_unload\":[]}") == Just []
     , expect "a retained save lifecycle action retains its source paths" $
@@ -114,7 +114,14 @@ main = do
         refused (document "[[\"0114b6c4\",\"x\"],[\"01146cf0\",\"x\"]]" "[]")
     , expect "a runtime trace site decodes to its symbol, offset and label" $
         sitesOf (document "[[\"runtime:rb_call_stock_probe+0x10\",\"svc-stock-return\"]]" "[]")
-          == Just [TraceSite (RuntimeSymbol "rb_call_stock_probe" 0x10) "svc-stock-return"]
+          == Just [TraceSite (RuntimeSymbol "rb_call_stock_probe" 0x10) "svc-stock-return" []]
+    , expect "a trace site decodes its entry reads" $
+        sitesOf (document "[[\"00d4dd2c\",\"stage-entry\",[[\"009571d0\",1072],[\"01467580\",8]]]]" "[]")
+          == Just [TraceSite (FixedAddress 0x00d4dd2c) "stage-entry" [SiteRead 0x009571d0 1072, SiteRead 0x01467580 8]]
+    , expect "an empty trace site read is refused" $
+        refused (document "[[\"00d4dd2c\",\"stage-entry\",[[\"009571d0\",0]]]]" "[]")
+    , expect "a trace site read longer than 4096 bytes is refused" $
+        refused (document "[[\"00d4dd2c\",\"stage-entry\",[[\"009571d0\",4097]]]]" "[]")
     , expect "a runtime trace site without an offset is refused when unaligned" $
         refused (document "[[\"runtime:rb_call_stock_probe+0x6\",\"svc-stock-return\"]]" "[]")
     , expect "a runtime trace site needs a symbol" $

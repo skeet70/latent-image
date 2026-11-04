@@ -49,7 +49,6 @@ const fn node(id: u32, class: u32, wrap: Wrap, parent: Option<NodeRef>, rows: &'
         parent,
         word10: NodeWord10::new(0x2a),
         rows: Some(rows),
-        labels: None,
     }
 }
 
@@ -173,6 +172,10 @@ impl EngineServices for Answers {
     fn token_past_rows(&mut self, _: &EngineState, row: RowIndex) -> RowToken {
         self.calls.push(Call::PastRows(row));
         self.past_rows.remove(0)
+    }
+
+    fn invariant_failure(&mut self) -> ! {
+        panic!("invariant failure after {} calls", self.calls.len())
     }
 }
 
@@ -332,10 +335,10 @@ fn push_notifies_before_it_asks_availability_and_opens_the_child_at_its_initial_
     assert_eq!(&after.row_states[..5], &[RowState::Offered, RowState::Offered, RowState::Disabled, RowState::Disabled, RowState::Offered]);
     assert_eq!(after.last_move, state.last_move);
     let notify = Notify { kind: StageKind::Push, node: StageNode::new(1), id: StageId::new(0x1d), class: MenuClass::new(5) };
-    let mut expected = vec![Call::Perform(Effect::Notify(notify))];
+    let mut expected = vec![Call::Perform(Effect::Notify(notify)), Call::Perform(Effect::PageEntry)];
     expected.extend((0..4).map(|token| Call::Availability(MenuClass::new(0x104), RowToken::new(token))));
     expected.push(Call::InitialRow(StageKind::Push, StageNode::new(1), MenuClass::new(0x104)));
-    assert_eq!(&answers.calls[..6], &expected[..]);
+    assert_eq!(&answers.calls[..7], &expected[..]);
     assert_eq!(answers.stores(), [(FrameDepth::Second, SnapshotSlot::new(1)), (FrameDepth::Second, SnapshotSlot::new(1))]);
 }
 
@@ -362,8 +365,8 @@ fn push_keeping_a_restored_cursor_past_the_rows_reads_the_word_after_them() {
     let transition = run(&state, 0xe, 1, 0x1d, &mut answers).expect("owned");
     assert_eq!(transition.result, EngineResult::Accepted);
     assert_eq!(transition.state.live, frame(20, 2, 4, 0));
-    assert_eq!(&answers.calls[6..8], &[Call::PastRows(RowIndex::new(20)), Call::PastRows(RowIndex::new(20))]);
-    assert_eq!(answers.calls[8], Call::Perform(Effect::StoreFromBlock { slot: SnapshotSlot::new(1) }));
+    assert_eq!(&answers.calls[7..9], &[Call::PastRows(RowIndex::new(20)), Call::PastRows(RowIndex::new(20))]);
+    assert_eq!(answers.calls[9], Call::Perform(Effect::StoreFromBlock { slot: SnapshotSlot::new(1) }));
 }
 
 #[test]
@@ -390,7 +393,7 @@ fn a_nested_pop_landing_on_a_framed_node_runs_the_stock_seek() {
         target: StageExtra::new(0),
     };
     assert_eq!(
-        &answers.calls[5..],
+        &answers.calls[6..],
         &[
             Call::KindSwitch(KindSwitchCall { kind: StageKind::Pop, node: StageNode::new(1), id: StageId::NESTED_POP, extra: StageExtra::new(0) }),
             Call::Perform(Effect::StoreFromBlock { slot: SnapshotSlot::new(1) }),
@@ -414,9 +417,9 @@ fn push_into_a_node_without_selectable_rows_runs_the_stock_nested_pop() {
     assert_eq!(transition.result, EngineResult::Accepted);
     assert_eq!(transition.state, popped);
     let call = KindSwitchCall { kind: StageKind::Pop, node: StageNode::new(1), id: StageId::NESTED_POP, extra: StageExtra::new(0) };
-    assert_eq!(answers.calls[5], Call::KindSwitch(call));
+    assert_eq!(answers.calls[6], Call::KindSwitch(call));
     assert_eq!(
-        &answers.calls[6..],
+        &answers.calls[7..],
         &[
             Call::Perform(Effect::StoreFromBlock { slot: SnapshotSlot::new(1) }),
             Call::Perform(Effect::StoreFromBlock { slot: SnapshotSlot::new(1) })
@@ -509,6 +512,10 @@ impl EngineServices for Unasked {
 
     fn token_past_rows(&mut self, _: &EngineState, _: RowIndex) -> RowToken {
         panic!("token past rows asked")
+    }
+
+    fn invariant_failure(&mut self) -> ! {
+        panic!("invariant failure")
     }
 }
 

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -euo pipefail
+RB_PUBLICATION_GROUPS=modal75,menu-engine exec "${BASH:?}" "${0%/*}/build-recipe-bank-ram.sh" "$@"

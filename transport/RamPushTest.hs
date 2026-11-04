@@ -21,7 +21,7 @@ import FujiAF.SHA256 (sha256)
 import FujiAF.Rehearsal (rehearseRamAlloc, rehearseRamPush, rehearseRamFree, rehearseRamUnload)
 import FujiAF.Transport
 import qualified FujiAF.Broker as P
-import RamPushLayout (installerInstallOffset, installerRollbackOffset, installerStatusOffset, runtimeAllocationSize, runtimeAllocationSizeFor, runtimeInstallerBase, standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant)
+import RamPushLayout (installerInstallOffset, installerRollbackOffset, installerStatusOffset, runtimeAllocationSize, runtimeAllocationSizeFor, runtimeInstallerBase, standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant, modalEngineBankVariant)
 import RamPushModel
 
 contract :: ReviewedContract
@@ -171,7 +171,8 @@ main = do
       variants =
         [ (bankModal75Payload, modalScopedBankVariant, RecipeBankModal75, 0x1dcb8, 224, "build-recipe-bank-modal-ram.sh", "bank-modal.a")
         , (bankLifecyclePayload, lifecycleBankVariant, RecipeBankLifecycle, 0x1dcd8, 226, "build-recipe-bank-lifecycle-ram.sh", "bank-lifecycle.a")
-        , (bankModalLifecyclePayload, modalLifecycleBankVariant, RecipeBankModalLifecycle, 0x1dcf8, 227, "build-recipe-bank-modal-lifecycle-ram.sh", "bank-modal-lifecycle.a") ]
+        , (bankModalLifecyclePayload, modalLifecycleBankVariant, RecipeBankModalLifecycle, 0x1dcf8, 227, "build-recipe-bank-modal-lifecycle-ram.sh", "bank-modal-lifecycle.a")
+        , (bankModalEnginePayload, modalEngineBankVariant, RecipeBankModal75MenuEngine, 0x2dcc0, 225, "build-recipe-bank-modal-engine-ram.sh", "bank-modal.a") ]
   _ <- parse standard
   let fullIdentity = [("synthetic-source-" ++ show index, replicate 64 'a') | index <- [1..68 :: Int]]
   fullIdentityManifest <- parse (standard { sourceIdentity = fullIdentity })

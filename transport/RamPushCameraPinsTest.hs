@@ -127,7 +127,8 @@ main = do
   forM_
     [ (bankModal75Payload, "scoped modal-75 payload has no approved live reviewed contract")
     , (bankLifecyclePayload, "lifecycle payload has no approved live reviewed contract")
-    , (bankModalLifecyclePayload, "modal lifecycle payload has no approved live reviewed contract") ] $ \(selected, refusal) -> do
+    , (bankModalLifecyclePayload, "modal lifecycle payload has no approved live reviewed contract")
+    , (bankModalEnginePayload, "menu engine payload has no approved live reviewed contract") ] $ \(selected, refusal) -> do
     let name = show (payloadKind selected)
         selectedRoot = root </> name
         selectedRuntime = runtime selected

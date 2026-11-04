@@ -24,7 +24,7 @@ use super::frame::{
 };
 use super::frame::{word, NodeId, NodeType};
 use super::state::{CursorFrame, EngineState, LastMove, MenuOpen, RowCount, RowState, StackDepth, ROW_STATES, STACK_FRAMES};
-use super::tree::{Availability, Node, NodeIndex, NodeRef, Remember, Row, Tree, Wrap};
+use super::tree::{Availability, Node, NodeIndex, NodeRef, NodeWord10, Remember, Row, Tree, Wrap};
 
 word!(
     /// The node word of a stage event, and the node argument the engine passes
@@ -180,7 +180,7 @@ impl MenuEvent {
             return Self::Unknown { kind: raw.kind };
         };
         let step = || match state.node {
-            Some(open) if tree.node(open).rows_per_page.get() == raw.id && raw.node != 0 => Step::Page,
+            Some(open) if tree.node(open).is_some_and(|node| node.rows_per_page.get() == raw.id) && raw.node != 0 => Step::Page,
             _ => Step::Rows(StepCount::new(raw.id)),
         };
         match kind {
@@ -233,6 +233,8 @@ pub enum NotOwned {
     NoParent,
     /// A node without rows, which `0xbfa800` treats as empty.
     EmptyNode,
+    /// A `NodeRef` past the tree's nodes.
+    TreeBounds,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -253,6 +255,9 @@ pub enum Effect {
     /// after a stock call replaced the state, or where the record reads past
     /// the tree's rows.
     StoreFromBlock { slot: SnapshotSlot },
+    /// The installed bank's `rb_bank_page_entry` work at each call of
+    /// `0xbfa800` (`menu/recipe_bank_arm.S`), before `0xbfa800` runs.
+    PageEntry,
 }
 
 /// `0xbfa234(kind, node, id, extra)`.
@@ -299,6 +304,8 @@ pub trait EngineServices {
     fn token_past_rows(&mut self, state: &EngineState, row: RowIndex) -> RowToken;
     fn kind_switch(&mut self, state: &EngineState, call: KindSwitchCall) -> (EngineState, EngineResult);
     fn seek(&mut self, state: &EngineState, call: SeekCall) -> (EngineState, EngineResult);
+    /// A check that holds before the first call failed after it.
+    fn invariant_failure(&mut self) -> !;
 }
 
 /// Stock decisions the negative controls replace.
@@ -353,7 +360,7 @@ pub(crate) fn apply_with<R: Rules, S: EngineServices>(
         rules: core::marker::PhantomData,
     };
     match machine.run(event) {
-        Err(reason) if machine.called => unreachable!("{reason:?} after a service call"),
+        Err(_) if machine.called => machine.services.invariant_failure(),
         Err(reason) => Err(reason),
         Ok(result) => Ok(Transition { result, state: machine.state }),
     }
@@ -427,7 +434,11 @@ impl<'a, R: Rules, S: EngineServices> Machine<'a, R, S> {
     }
 
     fn current(&self) -> Result<&'a Node, NotOwned> {
-        Ok(self.tree.node(self.current_ref()?))
+        self.node(self.current_ref()?)
+    }
+
+    fn node(&self, node: NodeRef) -> Result<&'a Node, NotOwned> {
+        self.tree.node(node).ok_or(NotOwned::TreeBounds)
     }
 
     fn rows(node: &Node) -> Result<&'static [Row], NotOwned> {
@@ -437,10 +448,10 @@ impl<'a, R: Rules, S: EngineServices> Machine<'a, R, S> {
     /// `values[row]`; the row after the last reads the terminator pair.
     fn row(node: &Node, row: RowIndex) -> Result<Option<&'static Row>, NotOwned> {
         let rows = Self::rows(node)?;
-        match (row.get() as usize).cmp(&rows.len()) {
-            core::cmp::Ordering::Less => Ok(Some(&rows[row.get() as usize])),
-            core::cmp::Ordering::Equal => Ok(None),
-            core::cmp::Ordering::Greater => Err(NotOwned::RowBounds),
+        match rows.get(row.get() as usize) {
+            Some(entry) => Ok(Some(entry)),
+            None if row.get() as usize == rows.len() => Ok(None),
+            None => Err(NotOwned::RowBounds),
         }
     }
 
@@ -462,7 +473,7 @@ impl<'a, R: Rules, S: EngineServices> Machine<'a, R, S> {
         if rows > ROW_STATES {
             return Err(NotOwned::RowBounds);
         }
-        Ok(Some(&self.state.row_states[..rows]))
+        Ok(self.state.row_states.get(..rows))
     }
 
     /// `0xbf985c` / `0xbf9794`.
@@ -489,7 +500,7 @@ impl<'a, R: Rules, S: EngineServices> Machine<'a, R, S> {
                 return Ok((index as u32).wrapping_sub(hidden));
             }
             if let (Some(states), OrdinalMode::Visible) = (states, mode) {
-                if states[index] == RowState::Hidden {
+                if states.get(index) == Some(&RowState::Hidden) {
                     hidden += 1;
                 }
             }
@@ -667,28 +678,31 @@ impl<'a, R: Rules, S: EngineServices> Machine<'a, R, S> {
     }
 
     /// `0xbf976c`.
-    fn set_node(&mut self, node: NodeRef) {
+    fn set_node(&mut self, node: NodeRef) -> Result<(), NotOwned> {
+        let word10 = self.node(node)?.word10;
         self.state.node = Some(node);
-        self.state.word10 = self.tree.node(node).word10;
+        self.state.word10 = word10;
+        Ok(())
     }
 
-    fn remember_branch(&self, node: &Node) -> RememberBranch {
-        match (node.remember, node.parent) {
+    fn remember_branch(&self, node: &Node) -> Result<RememberBranch, NotOwned> {
+        Ok(match (node.remember, node.parent) {
             (Remember::Off, _) => RememberBranch::Off,
             (Remember::On, None) => RememberBranch::NoParent,
-            (Remember::On, Some(parent)) if self.tree.node(parent).id != node.id => RememberBranch::OtherParentId,
+            (Remember::On, Some(parent)) if self.node(parent)?.id != node.id => RememberBranch::OtherParentId,
             (Remember::On, Some(_)) => RememberBranch::SameParentId,
-        }
+        })
     }
 
     /// `0xbf9a5c` for a node index other than `0x7a`.
     fn remember(&mut self, index: NodeIndex) -> Result<(), NotOwned> {
         let node = self.current()?;
-        match self.remember_branch(node) {
+        match self.remember_branch(node)? {
             RememberBranch::Off | RememberBranch::SameParentId => {}
             RememberBranch::NoParent | RememberBranch::OtherParentId => {
                 if node.rows.is_some() {
-                    self.state.remembered[index.index()] = Self::token_at(node, self.state.live.cursor)?;
+                    let token = Self::token_at(node, self.state.live.cursor)?;
+                    *self.state.remembered.get_mut(index.index()).ok_or(NotOwned::StageNode)? = token;
                 }
             }
         }
@@ -716,19 +730,21 @@ impl<'a, R: Rules, S: EngineServices> Machine<'a, R, S> {
 
     /// `0xbfa800` for kinds other than `0x13`, on a node `check_open` passed.
     fn open_rows(&mut self, kind: StageKind, node_word: StageNode) -> Result<bool, NotOwned> {
+        self.perform(Effect::PageEntry);
         let node = self.current()?;
         let rows = Self::rows(node)?;
         let total = self.count(CountMode::All)?;
         self.state.total = RowCount::new(total);
         self.state.row_states = [RowState::Offered; ROW_STATES];
-        for row in &rows[..total as usize] {
+        for row in rows.iter().take(total as usize) {
             let answer = self.availability(node.class, row.token);
-            if let Some(first) = rows[..total as usize].iter().position(|other| other.token == row.token) {
-                self.state.row_states[first] = answer;
+            let first = rows.iter().position(|other| other.token == row.token);
+            if let Some(slot) = first.and_then(|first| self.state.row_states.get_mut(first)) {
+                *slot = answer;
             }
         }
         self.state.visible_at_open = VisibleCount::new(self.count(CountMode::Visible)?);
-        if !self.state.row_states[..total as usize].iter().any(|&state| R::selectable(state)) {
+        if !self.state.row_states.iter().take(total as usize).any(|&state| R::selectable(state)) {
             if node.parent.is_none() {
                 return Ok(false);
             }
@@ -819,37 +835,36 @@ impl<'a, R: Rules, S: EngineServices> Machine<'a, R, S> {
         let depth = self.state.depth.get() as usize;
         match kind {
             StageKind::Push => {
-                if self.remember_branch(source) != RememberBranch::OtherParentId {
+                if self.remember_branch(source)? != RememberBranch::OtherParentId {
                     return Err(NotOwned::RememberBranch);
                 }
                 let child = Self::row(source, self.state.live.cursor)?.and_then(|row| row.child).ok_or(NotOwned::NoChild)?;
-                if depth + 1 >= STACK_FRAMES {
-                    return Err(NotOwned::StackBounds);
-                }
-                Self::check_open(self.tree.node(child), self.state.stack[depth + 1].cursor)?;
+                let restored = *self.state.stack.get(depth + 1).ok_or(NotOwned::StackBounds)?;
+                Self::check_open(self.node(child)?, restored.cursor)?;
                 self.remember(index)?;
                 self.check_cursor()?;
                 if R::PUSH_CLASSIFIER {
                     self.state.push_classifier = frame::classify(&self.view());
                 }
-                self.set_node(child);
-                self.state.stack[depth] = self.state.live;
-                self.state.live = self.state.stack[depth + 1];
+                self.set_node(child)?;
+                *self.state.stack.get_mut(depth).ok_or(NotOwned::StackBounds)? = self.state.live;
+                self.state.live = restored;
                 self.state.depth = StackDepth::new(depth as u32 + 1);
             }
             _ => {
-                if self.remember_branch(source) != RememberBranch::SameParentId {
+                if self.remember_branch(source)? != RememberBranch::SameParentId {
                     return Err(NotOwned::RememberBranch);
                 }
                 let parent = source.parent.ok_or(NotOwned::NoParent)?;
-                if depth == 0 || depth >= STACK_FRAMES {
+                let restored = *depth.checked_sub(1).and_then(|below| self.state.stack.get(below)).ok_or(NotOwned::StackBounds)?;
+                if depth >= STACK_FRAMES {
                     return Err(NotOwned::StackBounds);
                 }
-                Self::check_open(self.tree.node(parent), self.state.stack[depth - 1].cursor)?;
+                Self::check_open(self.node(parent)?, restored.cursor)?;
                 self.remember(index)?;
-                self.set_node(parent);
-                self.state.stack[depth] = self.state.live;
-                self.state.live = self.state.stack[depth - 1];
+                self.set_node(parent)?;
+                *self.state.stack.get_mut(depth).ok_or(NotOwned::StackBounds)? = self.state.live;
+                self.state.live = restored;
                 self.state.depth = StackDepth::new(depth as u32 - 1);
             }
         }
@@ -875,14 +890,14 @@ impl<'a, R: Rules, S: EngineServices> Machine<'a, R, S> {
         let index = NodeIndex::parse(node_word.get()).ok_or(NotOwned::StageNode)?;
         let target = self.tree.registered(index).ok_or(NotOwned::StageNode)?;
         self.state.menu_open = MenuOpen::Open;
-        self.set_node(target);
+        self.set_node(target)?;
         self.state.depth = StackDepth::new(1);
         self.state.stack = [CursorFrame::ZERO; STACK_FRAMES];
         self.state.live = CursorFrame::ZERO;
         self.state.total = RowCount::new(self.count(CountMode::All)?);
-        let remembered = self.state.remembered[index.index()];
+        let remembered = *self.state.remembered.get(index.index()).ok_or(NotOwned::StageNode)?;
         self.state.live.cursor = RowIndex::new(self.ordinal(remembered, OrdinalMode::Index)?);
-        Self::check_open(self.tree.node(target), self.state.live.cursor)?;
+        Self::check_open(self.node(target)?, self.state.live.cursor)?;
         if self.open_rows(StageKind::Open, node_word)? {
             let class = self.current()?.class;
             self.notify(StageKind::Open, node_word, StageId::VALUE, class);
@@ -897,6 +912,21 @@ impl<'a, R: Rules, S: EngineServices> Machine<'a, R, S> {
 
 /// Node types for which `0xbfad04` pushes or pops again.
 const FRAMED_TYPES: [NodeType; 2] = [NodeType::new(5), NodeType::new(7)];
+
+/// The node `View::reload` gives when no node is open, which `frame::fill`
+/// does not reach.
+static NO_NODE: Node = Node {
+    id: NodeId::DETACHED,
+    node_type: NodeType::DETACHED,
+    class: MenuClass::new(0),
+    rows_per_page: RowsPerPage::new(1),
+    wrap: Wrap::Wraps,
+    availability: Availability::Queried,
+    remember: Remember::Off,
+    parent: None,
+    word10: NodeWord10::new(0),
+    rows: None,
+};
 
 /// The frame cells of an in-progress state.
 struct View<'a> {
@@ -947,7 +977,8 @@ impl<'a> FrameNode for NodeView<'a> {
     }
 
     fn parent(self) -> Option<Self> {
-        self.node.parent.map(|parent| NodeView { tree: self.tree, node: self.tree.node(parent) })
+        let node = self.tree.node(self.node.parent?)?;
+        Some(NodeView { tree: self.tree, node })
     }
 
     fn values(self) -> RowsView {
@@ -959,11 +990,12 @@ impl<'a> FrameCells for View<'a> {
     type Node = NodeView<'a>;
 
     fn current(&self) -> Option<NodeView<'a>> {
-        self.state.node.map(|node| NodeView { tree: self.tree, node: self.tree.node(node) })
+        let node = self.tree.node(self.state.node?)?;
+        Some(NodeView { tree: self.tree, node })
     }
 
     fn reload(&self) -> NodeView<'a> {
-        self.current().expect("checked by check_view")
+        self.current().unwrap_or(NodeView { tree: self.tree, node: &NO_NODE })
     }
 
     fn cursor(&self) -> RowIndex {
@@ -986,9 +1018,25 @@ impl<'a> FrameCells for View<'a> {
         self.state.saved.cursor
     }
 
-    /// A zero `RowsPerPage` enters the panic handler where stock enters the
-    /// loader's fatal divide.
     fn page(&self, rows: RowsPerPage, visible: VisibleOrdinal) -> PageNumber {
-        PageNumber::new(rows.get().wrapping_add(visible.get()) / rows.get())
+        PageNumber::new(divide(rows.get().wrapping_add(visible.get()), rows.get()))
     }
+}
+
+/// Unsigned division without a library call; a zero divisor gives 0 where
+/// stock enters the loader's fatal divide.
+fn divide(numerator: u32, divisor: u32) -> u32 {
+    if divisor == 0 {
+        return 0;
+    }
+    let mut quotient = 0u32;
+    let mut remainder = 0u32;
+    for bit in (0..32).rev() {
+        remainder = (remainder << 1) | ((numerator >> bit) & 1);
+        if remainder >= divisor {
+            remainder -= divisor;
+            quotient |= 1 << bit;
+        }
+    }
+    quotient
 }

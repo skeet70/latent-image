@@ -9,7 +9,7 @@ module FujiAF.RamPush
   , callbackTablePointerAddress, callbackTableAddress, callbackStockWord
   , queryOutputAddress, configGateIndex, mailboxBytes
   , reviewedAllocationSize, installerAbiVersion, publicationCount, setupCount, activationCount
-  , PayloadKind(..), Payload(..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload, experimentHookCapacity, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
+  , PayloadKind(..), Payload(..), bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload, experimentHookCapacity, payloads, payloadOfSize, payloadPublicationCount, payloadEntries
   , readRamPushManifest, parseRamPushManifest, readRamAllocState, readRetainedAllocation, readRamPushState
   , consumedMarkerPath, writeAllocStateFile, writeStateFile
   , ramAllocArguments, ramPushArguments, ramFreeArguments, ramUnloadArguments, ramRelinkArguments
@@ -152,7 +152,7 @@ data ReviewedContract = ReviewedContract
   , reviewedPublicationContractDigest :: String
   }
 
-data PayloadKind = RecipeBankD3 | RecipeBankModal75 | RecipeBankLifecycle | RecipeBankModalLifecycle | ClassicChrome | ClassicChromeIcon | UsbToggle | AfRing | Experiment deriving (Eq, Show)
+data PayloadKind = RecipeBankD3 | RecipeBankModal75 | RecipeBankLifecycle | RecipeBankModalLifecycle | RecipeBankModal75MenuEngine | ClassicChrome | ClassicChromeIcon | UsbToggle | AfRing | Experiment deriving (Eq, Show)
 
 -- | What a payload kind's relink links, and the allocation, ABI word, counts
 -- and installer start it has. A runtime's allocation size names its kind.
@@ -226,6 +226,17 @@ bankModalLifecyclePayload = bankD3Payload
   , payloadActivationCount = Layout.publicationActivationCountFor Layout.modalLifecycleBankVariant
   , payloadRelinkScript = "build-recipe-bank-modal-lifecycle-ram.sh"
   , payloadBankVariant = Just Layout.modalLifecycleBankVariant
+  }
+
+-- | The scoped modal75 bank with the owned menu engine's 0x00bf95c8 seam and
+-- engine region; host-only, with an owner-built archive.
+bankModalEnginePayload :: Payload
+bankModalEnginePayload = bankD3Payload
+  { payloadKind = RecipeBankModal75MenuEngine
+  , payloadAllocationSize = fromIntegral (Layout.runtimeAllocationSizeFor Layout.modalEngineBankVariant)
+  , payloadActivationCount = Layout.publicationActivationCountFor Layout.modalEngineBankVariant
+  , payloadRelinkScript = "build-recipe-bank-modal-engine-ram.sh"
+  , payloadBankVariant = Just Layout.modalEngineBankVariant
   }
 
 -- | reports/classic-chrome-patch.md section 8.2: 84 setup and 47 activation
@@ -327,7 +338,7 @@ experimentPayload name = Payload
   }
 
 payloads :: [Payload]
-payloads = [bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload ""]
+payloads = [bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, bankModalEnginePayload, classicChromePayload, classicChromeIconPayload, usbTogglePayload, afRingPayload, experimentPayload ""]
 
 payloadOfSize :: Int -> Maybe Payload
 payloadOfSize size = case filter ((== size) . payloadAllocationSize) payloads of
@@ -342,6 +353,7 @@ unreviewedBankRefusal kind = case kind of
   RecipeBankModal75 -> Just "scoped modal-75 payload has no approved live reviewed contract; use the host-only --ram-push-modal-scoped --unreviewed-relink emulator path"
   RecipeBankLifecycle -> Just "lifecycle payload has no approved live reviewed contract; use the host-only --ram-push-lifecycle --unreviewed-relink emulator path"
   RecipeBankModalLifecycle -> Just "modal lifecycle payload has no approved live reviewed contract; use the host-only --ram-push-lifecycle --ram-push-modal-scoped --unreviewed-relink emulator path"
+  RecipeBankModal75MenuEngine -> Just "menu engine payload has no approved live reviewed contract; use the host-only --ram-push-modal-scoped --menu-engine-owned --unreviewed-relink emulator path"
   _ -> Nothing
 
 requireLivePayload :: Int -> IO Payload
@@ -1129,6 +1141,7 @@ runfilesRelinker payload = do
     RecipeBankModal75 -> Just <$> (RustBankInputs <$> rustServiceObject RecipeBankModal75 <*> rustServiceFacts)
     RecipeBankLifecycle -> Just <$> (RustBankInputs <$> rustServiceObject RecipeBankLifecycle <*> rustServiceFacts)
     RecipeBankModalLifecycle -> Just <$> (RustBankInputs <$> rustServiceObject RecipeBankModalLifecycle <*> rustServiceFacts)
+    RecipeBankModal75MenuEngine -> Just <$> (RustBankInputs <$> rustServiceObject RecipeBankModal75MenuEngine <*> rustServiceFacts)
     _ -> pure Nothing
   let relinker = RamPushRelinker (firmware </> payloadRelinkScript payload) (firmware </> payloadRelinkBuilder payload) ramPushToolchain payload rust
   forM_ [relinkerScript relinker, relinkerBuilder relinker] $ \path -> do
@@ -1144,6 +1157,7 @@ rustServiceObject kind = do
         RecipeBankModal75 -> "bank-modal.a"
         RecipeBankLifecycle -> "bank-lifecycle.a"
         RecipeBankModalLifecycle -> "bank-modal-lifecycle.a"
+        RecipeBankModal75MenuEngine -> "bank-modal.a"
         _ -> "bank.a"
       path = (executable ++ ".runfiles") </> "_main" </> "replacement" </> "bank" </> archive
   present <- doesFileExist path

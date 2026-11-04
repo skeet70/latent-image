@@ -124,6 +124,18 @@ filegroup(
 )
 
 filegroup(
+    name = "modal-engine-relink-sources",
+    srcs = [
+        ":modal-relink-sources",
+        "//replacement/menu_engine:adapter-sources",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
+filegroup(
     name = "lifecycle-relink-sources",
     srcs = [
         ":relink-sources",

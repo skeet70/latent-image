@@ -21,8 +21,8 @@ use super::{
     tree::{Availability, Label, NodeRef, NodeWord10, Remember, Row, StringId, TreeIdentity, Wrap},
 };
 
-static TREE: Tree = include!(env!("RB_MENU_ENGINE_TREE"));
-static RECORDS: RecordTable = include!(env!("RB_MENU_ENGINE_RECORDS"));
+include!(env!("RB_MENU_ENGINE_TREE"));
+include!(env!("RB_MENU_ENGINE_RECORDS"));
 static CASES: &[Case] = include!(env!("RB_MENU_ENGINE_CASES"));
 
 struct LastMoveBefore {
@@ -71,6 +71,7 @@ struct Answers<'c> {
     next: usize,
     snapshot_writes: Vec<(u32, u32)>,
     mismatch: Option<String>,
+    page_entries: usize,
 }
 
 impl<'c> Answers<'c> {
@@ -98,6 +99,11 @@ impl<'c> Answers<'c> {
 
 impl EngineServices for Answers<'_> {
     fn perform(&mut self, state: &EngineState, effect: Effect) {
+        // No receipt traces rb_bank_page_entry.
+        if effect == Effect::PageEntry {
+            self.page_entries += 1;
+            return;
+        }
         let index = self.next;
         let asked = format!("{effect:x?}");
         let Some(expected) = self.take(state, &asked) else { return };
@@ -155,6 +161,10 @@ impl EngineServices for Answers<'_> {
         self.mismatch.get_or_insert(format!("call {} values[{row:?}]: no receipt shows a read past the rows", self.next));
         RowToken::TERMINATOR
     }
+
+    fn invariant_failure(&mut self) -> ! {
+        panic!("invariant failure after call {}", self.next)
+    }
 }
 
 fn last_move_before(case: &Case) -> LastMove {
@@ -182,7 +192,7 @@ fn run_case<R: Rules>(case: &Case) -> Result<(), String> {
     let before_pair = last_move_before(case);
     let state = decode(&case.before, &last_move_bytes(before_pair), &TREE, &RECORDS).map_err(|error| format!("decode {error:?}"))?;
     let event = MenuEvent::decode(case.event, &TREE, &state);
-    let mut answers = Answers { case, next: 0, snapshot_writes: Vec::new(), mismatch: None };
+    let mut answers = Answers { case, next: 0, snapshot_writes: Vec::new(), mismatch: None, page_entries: 0 };
     let applied = catch_unwind(AssertUnwindSafe(|| apply_with::<R, _>(&TREE, &state, event, &mut answers)))
         .map_err(|_| "engine panicked".to_string())?;
     let transition = applied.map_err(|reason| format!("not owned: {reason:?}"))?;
@@ -191,6 +201,10 @@ fn run_case<R: Rules>(case: &Case) -> Result<(), String> {
     }
     if answers.next != case.calls.len() {
         return Err(format!("engine made {} calls; the receipt has {}", answers.next, case.calls.len()));
+    }
+    let opens = case.calls.iter().filter(|(expected, _)| matches!(expected, Expected::InitialRow { .. })).count();
+    if answers.page_entries != opens {
+        return Err(format!("{} page entries for {opens} initial-row calls", answers.page_entries));
     }
     let (block, _) = mirror(&transition.state, &RECORDS);
     let differing: Vec<usize> = (0..BLOCK_LEN).filter(|&offset| block[offset] != case.after[offset]).collect();

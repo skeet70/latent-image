@@ -16,6 +16,18 @@ filegroup(
     ],
 )
 
+filegroup(
+    name = "adapter-sources",
+    srcs = [
+        "adapter/entry.S",
+        "adapter/mod.rs",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//replacement/bank:__pkg__",
+    ],
+)
+
 genrule(
     name = "menu-engine-tests-build",
     srcs = [

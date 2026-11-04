@@ -107,7 +107,6 @@ pub struct Node {
     pub word10: NodeWord10,
     /// `None` for a null values pointer.
     pub rows: Option<&'static [Row]>,
-    pub labels: Option<&'static [Label]>,
 }
 
 /// SHA-256 of the generated tree text without its identity line.
@@ -122,11 +121,11 @@ pub struct Tree {
 }
 
 impl Tree {
-    pub fn node(&self, node: NodeRef) -> &Node {
-        &self.nodes[node.index()]
+    pub fn node(&self, node: NodeRef) -> Option<&Node> {
+        self.nodes.get(node.index())
     }
 
     pub fn registered(&self, index: NodeIndex) -> Option<NodeRef> {
-        self.registry[index.index()]
+        self.registry.get(index.index()).copied().flatten()
     }
 }

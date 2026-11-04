@@ -23,7 +23,8 @@ main = do
   tablesPath <- required "--tables"
   treePath <- required "--tree-out"
   recordsPath <- required "--records-out"
-  forM_ [treePath, recordsPath] $ \path -> do
+  labelsPath <- required "--labels-out"
+  forM_ [treePath, recordsPath, labelsPath] $ \path -> do
     exists <- doesPathExist path
     when exists (fail (path ++ " already exists"))
   bytes <- B.readFile tablesPath
@@ -34,4 +35,5 @@ main = do
   generated <- either fail pure (generate digest tablesSha document)
   writeFile treePath (generatedTree generated)
   writeFile recordsPath (generatedRecords generated)
+  writeFile labelsPath (generatedLabels generated)
   putStrLn ("menu-engine-tree: " ++ show (length (documentNodes document)) ++ " nodes; identity " ++ generatedIdentity generated)

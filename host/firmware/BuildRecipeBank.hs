@@ -102,7 +102,7 @@ main = do
       pure (s, o, d, RamPush variant (hexValue base) linkedDir rc0Id4 rc0Id5 rc0Plain)
     _ ->
       H.failH
-        "usage: build-recipe-bank SPEC.json OUT.json OUT_DIR | --complete SPEC.json OUT.json OUT_DIR KERNEL_DIR BOOT_DIR D3_DIR STOCK_DAT | --ram-push-allocation-size | --ram-push-variant-allocation-size GROUPS | --ram-push BASE SPEC.json OUT.json OUT_DIR LINKED_DIR RC0_ID4 RC0_ID5 RC0_PLAIN | --ram-push-variant GROUPS BASE SPEC.json OUT.json OUT_DIR LINKED_DIR RC0_ID4 RC0_ID5 RC0_PLAIN (GROUPS: lifecycle | modal75 | lifecycle,modal75)"
+        "usage: build-recipe-bank SPEC.json OUT.json OUT_DIR | --complete SPEC.json OUT.json OUT_DIR KERNEL_DIR BOOT_DIR D3_DIR STOCK_DAT | --ram-push-allocation-size | --ram-push-variant-allocation-size GROUPS | --ram-push BASE SPEC.json OUT.json OUT_DIR LINKED_DIR RC0_ID4 RC0_ID5 RC0_PLAIN | --ram-push-variant GROUPS BASE SPEC.json OUT.json OUT_DIR LINKED_DIR RC0_ID4 RC0_ID5 RC0_PLAIN (GROUPS: lifecycle | modal75 | lifecycle,modal75 | modal75,menu-engine)"
   original <- H.jsonRead =<< B.readFile specPath
   spec <- case buildMode of
     PreBootstrap -> pure original
@@ -1150,6 +1150,19 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
         && linkedEnd - base <= runtimeAllocationSizeFor variant
     ) $
     H.failH "ram-push: linked runtime does not match the fixed allocation contract"
+  linkedImageEnd <- if hasPublicationGroup MenuEnginePublication variant
+    then do
+      engineStart <- linked symbols "__rb_menu_engine_start"
+      engineEnd <- linked symbols "__rb_menu_engine_end"
+      resume <- linked symbols "__rb_menu_engine_stock_resume"
+      unless (engineStart == menuEngineRegionStart base && engineStart >= linkedEnd
+          && engineEnd <= menuEngineRegionStart base + menuEngineRegionExtent && resume == 0x00bf95cc) $
+        H.failH "ram-push: menu engine region differs from the layout contract"
+      pure engineEnd
+    else do
+      when (any ((== "__rb_menu_engine_start") . symbolName) symbols) $
+        H.failH "ram-push: unselected menu engine region is linked"
+      pure linkedEnd
   let size = runtimeAllocationSizeFor variant
       runtimeRegions = ["menu_values", "menu_labels", "name_records", "menu_parent", "edit_half"]
       runtimeWrites =
@@ -1276,6 +1289,15 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
       when (any ((== "rb_modal_entry") . symbolName) symbols) $
         H.failH "ram-push: unselected scoped modal entry is linked"
       pure []
+  enginePublications <- if hasPublicationGroup MenuEnginePublication variant
+    then do
+      target <- linked symbols "rb_menu_engine_entry"
+      word <- either H.failH pure (menuEngineHookWordFor variant base target (readWord rc0Id5 0x00bf1a00 0x00bf95c8))
+      pure [RamPublication 0x00bf95c8 0xe92d4818 word]
+    else do
+      when (any ((== "rb_menu_engine_entry") . symbolName) symbols) $
+        H.failH "ram-push: unselected menu engine entry is linked"
+      pure []
   let capturePublication = RamPublication 0x00e9e038 0xe92d4870 captureWord
       reserved = map ramAddress (legacyOrdered ++ lifecycleOrdered ++ d3Activation)
       ccKept = [p | p <- ccPublications, let CC.Address address = CC.publicationAddress p,
@@ -1284,7 +1306,7 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
                    in RamPublication address (CC.publicationOld p) (CC.publicationNew p)
       ccSetup = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Setup]
       ccActivation = map convert [p | p <- ccKept, CC.publicationPhase p == CC.Activation]
-      logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra <> [capturePublication] <> lifecycleOrdered <> modalPublications
+      logical = legacyOrdered <> ccSetup <> ccActivation <> d3Activation <> extra <> [capturePublication] <> lifecycleOrdered <> modalPublications <> enginePublications
   safeOrder <- either H.failH pure (safePublicationOrderForVariant variant (map (PublicationAddress . ramAddress) logical))
   let ordered = [logical !! publicationIndex index | index <- safeOrder]
       allocationEnd = toInteger base + toInteger size
@@ -1312,7 +1334,7 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
   unless (B.length store == 60) $
     H.failH "ram-push: exact sixty-byte flash store image required"
   linkedBytes <- B.readFile (linkedDir ++ "/linked.bin")
-  unless (B.length linkedBytes == fromIntegral (linkedEnd - linkedStart)) $
+  unless (B.length linkedBytes == fromIntegral (linkedImageEnd - linkedStart)) $
     H.failH "ram-push: linked binary extent differs from its symbols"
   modalScope <- if hasPublicationGroup Modal75Publication variant
     then Just <$> modalScopeMetadata base linkedDir symbols linkedStart linkedBytes
@@ -1390,10 +1412,16 @@ emitRamPush variant base plan specPath linkedDir rc0Id4Path rc0Id5Path rc0PlainP
             , "replacement/modal_runtime/src/dispatch.S"
             , "replacement/modal_runtime/src/entry.S"
             ]]
+          ++ [path | hasPublicationGroup MenuEnginePublication variant, path <-
+            [ "replacement/menu_engine/adapter/mod.rs"
+            , "replacement/menu_engine/adapter/entry.S"
+            , "menu/recipe_bank_ram_engine.ld"
+            ]]
           ++ case publicationGroups variant of
             [] -> []
             [Modal75Publication] -> ["host/firmware/build-recipe-bank-modal-ram.sh"]
             [LifecyclePublications] -> ["host/firmware/build-recipe-bank-lifecycle-ram.sh"]
+            [Modal75Publication, MenuEnginePublication] -> ["host/firmware/build-recipe-bank-modal-engine-ram.sh"]
             _ -> ["host/firmware/build-recipe-bank-modal-lifecycle-ram.sh"]
           ++ [path | hasPublicationGroup LifecyclePublications variant, path <-
           [ "replacement/save/src/lib.rs"
@@ -1516,7 +1544,8 @@ parseBankVariant text = case text of
   "lifecycle" -> bankVariant [LifecyclePublications]
   "modal75" -> bankVariant [Modal75Publication]
   "lifecycle,modal75" -> bankVariant [LifecyclePublications, Modal75Publication]
-  _ -> Left "publication groups must be lifecycle, modal75 or lifecycle,modal75"
+  "modal75,menu-engine" -> bankVariant [Modal75Publication, MenuEnginePublication]
+  _ -> Left "publication groups must be lifecycle, modal75, lifecycle,modal75 or modal75,menu-engine"
 
 assemble :: Word32 -> [(Word32, B.ByteString)] -> IO B.ByteString
 assemble size chunks = do

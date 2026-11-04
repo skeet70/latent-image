@@ -11,6 +11,7 @@ module EmulatorUsb
   , BridgeExchange
   , bridgeUsbApi
   , emulatorTraceSites
+  , emulatorTraceSitesReading
   , TraceHit (..)
   , emulatorTraceHits
   , emulatorTraceHitsRaw
@@ -334,14 +335,21 @@ bridgeUsbApi exchange = UsbApi
       pure (count, bytes)
 
 emulatorTraceSites :: Emulator -> [(Word32, String)] -> IO ()
-emulatorTraceSites emulator sites = do
+emulatorTraceSites emulator sites = emulatorTraceSitesReading emulator [(site, label, []) | (site, label) <- sites]
+
+-- | Arms the sites; each hit of a site also records its physical reads `(address, count)` at entry.
+emulatorTraceSitesReading :: Emulator -> [(Word32, String, [(Word32, Int)])] -> IO ()
+emulatorTraceSitesReading emulator sites = do
   let address value = "0x" ++ showHex value ""
-  _ <- rpc emulator (object ["command" .= String "trace-sites",
-                             "sites" .= object [K.fromString (address site) .= label | (site,label) <- sites]])
+  let siteReads = [K.fromString (address site) .= [[toInteger start, toInteger count] | (start, count) <- ranges]
+        | (site, _, ranges) <- sites, not (null ranges)]
+  _ <- rpc emulator (object (["command" .= String "trace-sites",
+                              "sites" .= object [K.fromString (address site) .= label | (site, label, _) <- sites]]
+                             ++ ["reads" .= object siteReads | not (null siteReads)]))
   pure ()
 
--- | One recorded entry into a traced site: its label, the core, the guest instruction count and
--- r0-r3 at entry.
+-- | One recorded entry into a traced site: its label, the core, the guest instruction count,
+-- r0-r3 and lr at entry, and the site's reads at entry.
 data TraceHit = TraceHit
   { traceSite :: String
   , traceCore :: Int
@@ -350,6 +358,8 @@ data TraceHit = TraceHit
   , traceR1 :: Word32
   , traceR2 :: Word32
   , traceR3 :: Word32
+  , traceLr :: Maybe Word32
+  , traceMemory :: [B.ByteString]
   } deriving (Eq, Show)
 
 -- | The hit count so far and the hits recorded from index `start` on.
@@ -362,6 +372,13 @@ emulatorTraceHits emulator start = do
     _ -> ioError (userError "emulator trace hits must be an array")
   pure (count, hits)
   where
+    hexWord name text = case text of
+      '0' : 'x' : digits | [(word, "")] <- readHex digits -> pure word
+      _ -> ioError (userError ("invalid emulator trace register " ++ name ++ ": " ++ text))
+    hexBytes text = case text of
+      [] -> pure []
+      high : low : rest | [(byte, "")] <- readHex [high, low] -> (byte :) <$> hexBytes rest
+      _ -> ioError (userError "invalid emulator trace hit memory")
     hit (Object item) = do
       site <- textField "site" item
       core <- integerField "core" item
@@ -371,10 +388,19 @@ emulatorTraceHits emulator start = do
       registers <- objectField "registers" item >>= \value -> case value of
         Object registers -> pure registers
         _ -> ioError (userError "emulator trace hit registers must be an object")
-      let register name = textField name registers >>= \text -> case text of
-            '0' : 'x' : digits | [(word, "")] <- readHex digits -> pure word
-            _ -> ioError (userError ("invalid emulator trace register " ++ name ++ ": " ++ text))
+      let register name = textField name registers >>= hexWord name
+      lr <- case M.lookup "lr" item of
+        Nothing -> pure Nothing
+        Just (String text) -> Just <$> hexWord "lr" (T.unpack text)
+        Just _ -> ioError (userError "emulator trace hit lr must be a hex string")
+      memory <- case M.lookup "memory" item of
+        Nothing -> pure []
+        Just (Array entries) -> mapM (\entry -> case entry of
+          String text -> B.pack <$> hexBytes (T.unpack text)
+          _ -> ioError (userError "emulator trace hit memory must be hex strings")) (foldr (:) [] entries)
+        Just _ -> ioError (userError "emulator trace hit memory must be an array")
       TraceHit site core instructions <$> register "r0" <*> register "r1" <*> register "r2" <*> register "r3"
+        <*> pure lr <*> pure memory
     hit _ = ioError (userError "emulator trace hit must be an object")
 
 -- | The bridge's hit records from index `start` on, unchanged, with their `lr`, `sp` and `cpsr`.
