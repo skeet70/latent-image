@@ -139,13 +139,13 @@ scanDepth label = case label of
   _ -> InstructionsAndWords
 
 -- | The largest maximal run of consecutive distinct setter arm targets whose properties are all owned
--- fields, lowest address on a tie; a run ends at the next distinct target, else at the setter fallback.
+-- fields or slot fields, lowest address on a tie; a run ends at the next distinct target, else at the setter fallback.
 deriveCarrier :: [Property] -> Either PlacementError Carrier
 deriveCarrier properties = case sortOn (\(GuestAddress start, GuestAddress end) -> (Down (end - start), start)) runs of
   (start, end) : _ -> Right (Carrier start end)
   [] -> Left NoOwnedRun
   where
-    targets = M.toAscList (M.fromListWith (&&) [(propertySetterArm p, ownedField (propertyClass p)) | p <- properties])
+    targets = M.toAscList (M.fromListWith (&&) [(propertySetterArm p, ownsArm (propertyClass p)) | p <- properties])
     bounded = zip targets (map (Just . fst) (drop 1 targets) ++ [Nothing])
     runs = collect bounded
     collect entries = case dropWhile (not . snd . fst) entries of
@@ -157,8 +157,9 @@ deriveCarrier properties = case sortOn (\(GuestAddress start, GuestAddress end) 
               Nothing | setterFallback > fst (fst (last run)) -> Just setterFallback
               Nothing -> Nothing
         in maybe id (\e -> ((start, e) :)) end (collect rest)
-    ownedField verdict = case verdict of
+    ownsArm verdict = case verdict of
       Owned (OwnedField _) -> True
+      Owned (OwnedSlotField _) -> True
       _ -> False
 
 -- | The stock word before the carrier when it transfers unconditionally: B with condition AL or
