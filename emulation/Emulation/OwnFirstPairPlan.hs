@@ -116,8 +116,8 @@ data SlotReads = SlotReads
 slotReads :: Slot -> SlotReads
 slotReads slot = case slot of
   Slot60 -> SlotReads [CurrentTask] True NoPointee []
-  SlotFc -> SlotReads [ContextWord, TimerBase] False PointeeAtEntry [TimeOffset]
-  Slot100 -> SlotReads [ContextWord, TimerBase, TimeOffset] False PointeeAtEntryAndReturn []
+  SlotFc -> SlotReads [ContextWord, TimerBase] False PointeeAtEntry [TimeOffset, TimerBase]
+  Slot100 -> SlotReads [ContextWord, TimerBase, TimeOffset] False PointeeAtEntryAndReturn [TimerBase]
   Slot128 -> SlotReads [ContextWord, CurrentTask] False PointeeAtEntryAndReturn []
   Slot12c -> SlotReads [ContextWord, CurrentTask] False PointeeAtEntryAndReturn []
   Slot130 -> context

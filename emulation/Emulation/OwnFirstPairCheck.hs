@@ -18,11 +18,16 @@ module Emulation.OwnFirstPairCheck
   , Observation (..)
   , decodeObservation
   , RefusalKind (..)
+  , ReadbackPhase (..)
   , Refusal (..)
   , refusalKind
   , checkCall
   , Qualified (..)
+  , runDocumentSha256
+  , bootRomSha256
+  , requiredSlots
   , qualify
+  , controlSatisfied
   , qualifiedValue
   , RouteDifference (..)
   , compareRoutes
@@ -110,6 +115,7 @@ data Milestone = Milestone
   , milestoneExpected :: MenuTriple
   , milestoneObserved :: Maybe MenuTriple
   , milestoneReached :: Bool
+  , milestoneFinished :: Word64
   } deriving (Eq, Show)
 
 data Reached = Reached {reachedDomain :: Domain, reachedSlot :: Slot, reachedCalls :: Int, reachedReturns :: Int, reachedPending :: Int}
@@ -117,7 +123,8 @@ data Reached = Reached {reachedDomain :: Domain, reachedSlot :: Slot, reachedCal
 
 data Observation = Observation
   { obsRole :: Role
-  , obsInputs :: [String]
+  , -- | Plan, run document, DAT, boot ROM, trajectory and observer executable digests, in that order.
+    obsInputs :: [String]
   , obsEntries :: Int
   , obsReturns :: Int
   , obsUntracked :: Int
@@ -130,7 +137,8 @@ data Observation = Observation
   , obsMilestones :: [Milestone]
   , obsReached :: [Reached]
   , obsClasses :: [CallClass]
-  , obsPending :: Int
+  , -- | The entry instruction count of each call still open at the end.
+    obsPending :: [Word64]
   , obsError :: Maybe T.Text
   , obsMachineFailure :: Maybe T.Text
   } deriving (Eq, Show)
@@ -205,7 +213,7 @@ instance FromJSON Observation where
       key <- traverse (withObject "pulse" (.: "key")) pulse
       reached <- milestone .:? "reached" :: Parser (Maybe Word64)
       Milestone <$> milestone .: "phase" <*> pure key <*> (milestone .: "expected" >>= menuOf)
-        <*> (milestone .:? "observed" >>= traverse menuOf) <*> pure (isJust reached))
+        <*> (milestone .:? "observed" >>= traverse menuOf) <*> pure (isJust reached) <*> milestone .: "finished")
     reached <- fields .: "reached" >>= mapM (withObject "reached slot" $ \row -> do
       (domain, slot) <- row .: "slot" >>= slotId
       Reached domain slot <$> row .: "calls" <*> row .: "returns" <*> row .: "pending")
@@ -223,7 +231,7 @@ instance FromJSON Observation where
         ResultState <$> state .: "r0" <*> state .: "cpsr" <*> (state .: "words" >>= wordsOf)
           <*> (state .:? "pointee" >>= traverse readOf))
       CallClass entry result <$> row .: "tail_hits" <*> row .: "count" <*> row .: "first")
-    pending <- fields .: "pending" >>= withArrayLength
+    pending <- fields .: "pending" >>= mapM (withObject "pending call" (.: "entered"))
     Observation role inputs <$> fields .: "entries" <*> fields .: "returns" <*> sampleCount "untracked"
       <*> sampleCount "unarmed_entries" <*> sampleCount "unmatched_tails" <*> fields .:? "fill_fetch"
       <*> pure armings <*> pure segments <*> pure final <*> pure milestones <*> pure reached <*> pure classes
@@ -240,11 +248,15 @@ decodeObservation = A.eitherDecodeStrict'
 data RefusalKind = BindingRefusal | ReadbackRefusal | ImmutableRefusal | FillRefusal | ObserverRefusal | TrackingRefusal | SemanticRefusal | RouteRefusal
   deriving (Eq, Ord, Show, Enum, Bounded)
 
+-- | Which readback a `ReadbackDiffers` comes from.
+data ReadbackPhase = ArmingReadback | FinalReadback deriving (Eq, Show)
+
 data Refusal
   = PlanDigestDiffers
   | RoleDiffers Role Role
   | DatDiffers
-  | ReadbackDiffers Domain Word32 T.Text
+  | InputPinDiffers String
+  | ReadbackDiffers ReadbackPhase Domain Word32 T.Text
   | GuardNotArmed Domain
   | FinalReadbackMissing
   | ImmutableWrite Int
@@ -256,7 +268,11 @@ data Refusal
   | UnarmedEntries Int
   | UnmatchedTails Int
   | CountsDiffer
-  | CallMismatch Domain Slot String
+  | PendingBeforeRouteEnd Word64
+  | -- | The entry CPSR of the refused class.
+    CallMismatch Domain Slot Word32 String
+  | NoCheckedCalls
+  | SlotNotReached Domain Slot
   | RouteIncomplete T.Text
   deriving (Eq, Show)
 
@@ -265,6 +281,7 @@ refusalKind refusal = case refusal of
   PlanDigestDiffers -> BindingRefusal
   RoleDiffers _ _ -> BindingRefusal
   DatDiffers -> BindingRefusal
+  InputPinDiffers _ -> BindingRefusal
   ReadbackDiffers {} -> ReadbackRefusal
   GuardNotArmed _ -> ReadbackRefusal
   FinalReadbackMissing -> ReadbackRefusal
@@ -277,7 +294,10 @@ refusalKind refusal = case refusal of
   UnarmedEntries _ -> TrackingRefusal
   UnmatchedTails _ -> TrackingRefusal
   CountsDiffer -> TrackingRefusal
+  PendingBeforeRouteEnd _ -> TrackingRefusal
   CallMismatch {} -> SemanticRefusal
+  NoCheckedCalls -> RouteRefusal
+  SlotNotReached _ _ -> RouteRefusal
   RouteIncomplete _ -> RouteRefusal
 
 refuseWhen :: Bool -> Refusal -> Either Refusal ()
@@ -323,6 +343,8 @@ checkCall tails (CallClass entry result tailHits _ _) = do
       pointeeIs value = do
         after <- committed "returned *r0" (resultPointee result)
         expect ("*r0 " ++ hex after ++ " differs from " ++ hex value) (after == value)
+      -- A returned base is absent from plans that predate it.
+      bases = word TimerBase >>= \base -> pure (base : [returnedBase | Just (Committed returnedBase) <- [M.lookup TimerBase (resultWords result)]])
       guarded admits okPath = if admits && not masked
         then expectR0 0 >> unchangedControl >> okPath
         else expectR0 contextError >> unchangedControl
@@ -335,17 +357,19 @@ checkCall tails (CallClass entry result tailHits _ _) = do
       expectR0 (flag clear) >> unchangedControl
     SlotFc -> do
       context <- word ContextWord
-      base <- word TimerBase
+      candidates <- bases
       guarded (context == 0) $ do
         time <- committed "entry *r0" (entryPointee entry)
         offset <- returned TimeOffset
-        expect "time offset differs from *r0 - timer base" (offset == time - base)
+        expect "time offset differs from *r0 - timer base" (any (\base -> offset == time - base) candidates)
     Slot100 -> do
       context <- word ContextWord
-      base <- word TimerBase
+      candidates <- bases
       offset <- word TimeOffset
       if context == 0 && not masked then pure () else pointeeUnchanged
-      guarded (context == 0) (pointeeIs (base + offset))
+      guarded (context == 0) $ do
+        after <- committed "returned *r0" (resultPointee result)
+        expect "*r0 differs from timer base + time offset" (any (\base -> after == base + offset) candidates)
     Slot128 -> do
       context <- word ContextWord
       current <- word CurrentTask
@@ -395,6 +419,7 @@ checkCall tails (CallClass entry result tailHits _ _) = do
 
 data Qualified = Qualified
   { qualifiedRole :: Role
+  , qualifiedInputs :: [String]
   , qualifiedCalls :: Int
   , qualifiedClasses :: Int
   , qualifiedPending :: Int
@@ -402,23 +427,33 @@ data Qualified = Qualified
   , qualifiedMilestones :: [Milestone]
   } deriving (Eq, Show)
 
-checkReadback :: Plan -> Readback -> Domain -> Either Refusal ()
-checkReadback plan readback domain = do
+-- | `emulation/fujimod-xm1/data/xm1-150.json` and the 1.50 boot ROM the pair runs on.
+runDocumentSha256, bootRomSha256 :: String
+runDocumentSha256 = "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef"
+bootRomSha256 = "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be"
+
+-- | Every qualifying observation must reach these.
+requiredSlots :: [(Domain, Slot)]
+requiredSlots = [(DomainA, Slot1618), (DomainA, Slot164), (DomainA, Slot168)]
+
+checkReadback :: Plan -> ReadbackPhase -> Readback -> Domain -> Either Refusal ()
+checkReadback plan phase readback domain = do
   let expected = [range | range <- planGuarded plan, guardedDomain range == domain]
       observed = [range | range <- readbackRanges readback, readbackDomain range == domain]
+      differs = ReadbackDiffers phase domain
   refuseWhen (map (\range -> (guardedStart range, guardedEnd range)) expected /= map (\range -> (readbackStart range, readbackEnd range)) observed)
-    (ReadbackDiffers domain 0 "the readback does not cover the plan's extents")
+    (differs 0 "the readback does not cover the plan's extents")
   forM_ (zip expected observed) $ \(range, seen) -> do
     let digest = guardedSha256 range
         start = guardedStart range
         views = sort [(viewCore view, viewAddress view) | view <- readbackViews seen]
-    refuseWhen (readbackPhysical seen /= digest) (ReadbackDiffers domain start "physical")
+    refuseWhen (readbackPhysical seen /= digest) (differs start "physical")
     refuseWhen (views /= sort [(core, address) | core <- [0, 1], address <- [start, start + 0x40000000]])
-      (ReadbackDiffers domain start "views do not cover both cores at the low address and the alias")
+      (differs start "views do not cover both cores at the low address and the alias")
     forM_ (readbackViews seen) $ \view -> case viewDigest view of
       Right value | value == digest -> pure ()
-      Right _ -> Left (ReadbackDiffers domain start (T.pack ("core " ++ show (viewCore view) ++ " view at 0x" ++ showHex (viewAddress view) "")))
-      Left failure -> Left (ReadbackDiffers domain start failure)
+      Right _ -> Left (differs start (T.pack ("core " ++ show (viewCore view) ++ " view at 0x" ++ showHex (viewAddress view) "")))
+      Left failure -> Left (differs start failure)
 
 checkSegments :: Plan -> [Arming] -> Readback -> [Segment] -> Either Refusal ()
 checkSegments plan armings final segments = do
@@ -441,17 +476,21 @@ checkSegments plan armings final segments = do
  where
   lastMaybe items = if null items then Nothing else Just (last items)
 
--- | `planBytes` and `datDigest` are what the observation's first and third inputs must hash to.
+-- | The observation's inputs must be the plan, the pinned run document, the plan's DAT and the pinned ROM.
 qualify :: B.ByteString -> Plan -> Observation -> Either Refusal Qualified
 qualify planBytes plan observation = do
-  refuseWhen (take 1 (obsInputs observation) /= [sha256Hex (sha256 planBytes)]) PlanDigestDiffers
+  let inputs = obsInputs observation
+  refuseWhen (take 1 inputs /= [sha256Hex (sha256 planBytes)]) PlanDigestDiffers
   refuseWhen (obsRole observation /= planRole plan) (RoleDiffers (planRole plan) (obsRole observation))
-  refuseWhen (take 1 (drop 2 (obsInputs observation)) /= [planDatSha256 plan]) DatDiffers
-  forM_ (obsArmings observation) $ \arming -> checkReadback plan (armingReadback arming) (armingDomain arming)
+  refuseWhen (take 1 (drop 1 inputs) /= [runDocumentSha256]) (InputPinDiffers "run document")
+  refuseWhen (take 1 (drop 2 inputs) /= [planDatSha256 plan]) DatDiffers
+  refuseWhen (take 1 (drop 3 inputs) /= [bootRomSha256]) (InputPinDiffers "boot ROM")
+  refuseWhen (length inputs /= 6) (InputPinDiffers "input count")
+  forM_ (obsArmings observation) $ \arming -> checkReadback plan ArmingReadback (armingReadback arming) (armingDomain arming)
   forM_ domains $ \domain -> refuseWhen (domain `notElem` map armingDomain (obsArmings observation)) (GuardNotArmed domain)
   refuseWhen (length (obsArmings observation) /= length domains) (WatchCoverage "a loader armed twice")
   final <- maybe (Left FinalReadbackMissing) Right (obsFinal observation)
-  forM_ domains (checkReadback plan final)
+  forM_ domains (checkReadback plan FinalReadback final)
   checkSegments plan (obsArmings observation) final (obsSegments observation)
   forM_ (obsFillFetch observation) (Left . FillFetched)
   forM_ (obsError observation) (Left . ObserverStopped)
@@ -460,26 +499,43 @@ qualify planBytes plan observation = do
   refuseWhen (obsUnarmedEntries observation /= 0) (UnarmedEntries (obsUnarmedEntries observation))
   refuseWhen (obsUnmatchedTails observation /= 0) (UnmatchedTails (obsUnmatchedTails observation))
   let checked = sum (map classCount (obsClasses observation))
-  refuseWhen (checked /= obsReturns observation || obsReturns observation + obsPending observation /= obsEntries observation) CountsDiffer
+      pending = obsPending observation
+  refuseWhen (checked /= obsReturns observation || obsReturns observation + length pending /= obsEntries observation) CountsDiffer
+  let routeEnd = maximum (0 : map milestoneFinished (obsMilestones observation))
+  forM_ pending $ \entered -> refuseWhen (entered < routeEnd) (PendingBeforeRouteEnd entered)
   let entries = [(planEntryDomain entry, planEntrySlot entry) | entry <- planEntries plan]
       tailsOf domain = length [() | tailEntry <- planTails plan, planTailDomain tailEntry == domain]
   forM_ (obsClasses observation) $ \call -> do
     let entry = classEntry call
         key = (entryDomain entry, entrySlot entry)
-    refuseWhen (key `notElem` entries) (CallMismatch (entryDomain entry) (entrySlot entry) "the slot is not in the plan")
-    either (Left . CallMismatch (entryDomain entry) (entrySlot entry)) pure (checkCall (tailsOf (entryDomain entry)) call)
+        mismatch = CallMismatch (entryDomain entry) (entrySlot entry) (entryCpsr entry)
+    refuseWhen (key `notElem` entries) (mismatch "the slot is not in the plan")
+    either (Left . mismatch) pure (checkCall (tailsOf (entryDomain entry)) call)
   forM_ (obsMilestones observation) $ \milestone ->
     refuseWhen (not (milestoneReached milestone) || milestoneObserved milestone /= Just (milestoneExpected milestone))
       (RouteIncomplete (milestonePhase milestone))
   refuseWhen (null (obsMilestones observation)) (RouteIncomplete "no milestone")
+  refuseWhen (checked == 0) NoCheckedCalls
+  let reached = filter ((> 0) . reachedCalls) (obsReached observation)
+  forM_ requiredSlots $ \(domain, slot) ->
+    refuseWhen ((domain, slot) `notElem` [(reachedDomain row, reachedSlot row) | row <- reached]) (SlotNotReached domain slot)
   pure Qualified
     { qualifiedRole = obsRole observation
+    , qualifiedInputs = inputs
     , qualifiedCalls = checked
     , qualifiedClasses = length (obsClasses observation)
-    , qualifiedPending = obsPending observation
-    , qualifiedReached = filter ((> 0) . reachedCalls) (obsReached observation)
+    , qualifiedPending = length pending
+    , qualifiedReached = reached
     , qualifiedMilestones = obsMilestones observation
     }
+
+-- | Whether a control role's observation was refused where its control acts: the restored A
+-- +0x164 extent at A's arming readback, or a wrong-I A +0x164 class entered with I clear.
+controlSatisfied :: Role -> Either Refusal Qualified -> Bool
+controlSatisfied role outcome = case (role, outcome) of
+  (ControlRestoredRole, Left (ReadbackDiffers ArmingReadback DomainA 0x41140 _)) -> True
+  (ControlWrongIRole, Left (CallMismatch DomainA Slot164 cpsr _)) -> cpsr .&. 0x80 == 0
+  _ -> False
 
 reachedValue :: Reached -> Value
 reachedValue row = object
@@ -507,15 +563,20 @@ qualifiedValue result = object
 data RouteDifference = RouteDifference {differenceIndex :: Int, differenceStock :: Maybe Milestone, differenceOwned :: Maybe Milestone}
   deriving (Eq, Show)
 
-compareRoutes :: Qualified -> Qualified -> [RouteDifference]
-compareRoutes stock owned =
-  [ RouteDifference index left right
-  | index <- [0 .. max (length stockSteps) (length ownedSteps) - 1]
-  , let left = at stockSteps index
-        right = at ownedSteps index
-  , fmap step left /= fmap step right ]
+-- | Refuses unless both runs share the run document, boot ROM, trajectory and observer executable.
+compareRoutes :: Qualified -> Qualified -> Either [Int] [RouteDifference]
+compareRoutes stock owned = do
+  let differing = [index | index <- [1, 3, 4, 5], at (qualifiedInputs stock) index /= at (qualifiedInputs owned) index]
+  unless (null differing) (Left differing)
+  pure
+    [ RouteDifference index left right
+    | index <- [0 .. max (length stockSteps) (length ownedSteps) - 1]
+    , let left = at stockSteps index
+          right = at ownedSteps index
+    , fmap step left /= fmap step right ]
  where
   stockSteps = qualifiedMilestones stock
   ownedSteps = qualifiedMilestones owned
   step milestone = (milestonePhase milestone, milestoneKey milestone, milestoneExpected milestone, milestoneObserved milestone)
+  at :: [a] -> Int -> Maybe a
   at items index = if index < length items then Just (items !! index) else Nothing

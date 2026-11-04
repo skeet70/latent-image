@@ -19,7 +19,7 @@ usage :: String
 usage = unlines
   [ "usage: own-first-pair-check qualify PLAN OBSERVATION_DIR OUTPUT"
   , "       own-first-pair-check compare STOCK_PLAN STOCK_OBSERVATION_DIR OWNED_PLAN OWNED_OBSERVATION_DIR OUTPUT"
-  , "       own-first-pair-check control readback|semantic PLAN OBSERVATION_DIR OUTPUT" ]
+  , "       own-first-pair-check control CONTROL_PLAN OBSERVATION_DIR OUTPUT" ]
 
 load :: FilePath -> FilePath -> IO (B.ByteString, Plan, Observation)
 load planPath directory = do
@@ -59,8 +59,9 @@ main = getArgs >>= \arguments -> case arguments of
     stock <- qualified "stock" stockPlan stockDirectory
     owned <- qualified "owned" ownedPlan ownedDirectory
     unless (qualifiedRole stock == StockRole && qualifiedRole owned == OwnedRole) (die "own-first-pair-check: compare takes a stock and an owned observation")
-    let differences = compareRoutes stock owned
-        step = maybe A.Null (\milestone -> object ["phase" .= milestonePhase milestone, "key" .= milestoneKey milestone
+    differences <- either (\indices -> die ("own-first-pair-check: observation inputs " ++ show indices ++ " differ between the runs")) pure
+      (compareRoutes stock owned)
+    let step = maybe A.Null (\milestone -> object ["phase" .= milestonePhase milestone, "key" .= milestoneKey milestone
           , "expected" .= show (milestoneExpected milestone), "observed" .= show (milestoneObserved milestone)])
     write output (object
       [ "equal" .= null differences
@@ -69,17 +70,13 @@ main = getArgs >>= \arguments -> case arguments of
     if null differences
       then putStrLn ("own-first-pair-check: route steps and menu states equal over " ++ show (length (qualifiedMilestones stock)) ++ " steps")
       else putStrLn ("own-first-pair-check: " ++ show (length differences) ++ " route steps differ") >> exitFailure
-  ["control", expectation, planPath, directory, output] -> do
-    expected <- case expectation of
-      "readback" -> pure ReadbackRefusal
-      "semantic" -> pure SemanticRefusal
-      _ -> die usage
+  ["control", planPath, directory, output] -> do
     (planBytes, plan, observed) <- load planPath directory
     unless (planRole plan `elem` [ControlRestoredRole, ControlWrongIRole]) (die "own-first-pair-check: control takes a control plan")
     let outcome = qualify planBytes plan observed
-        passed = either ((== expected) . refusalKind) (const False) outcome
+        passed = controlSatisfied (planRole plan) outcome
     write output (object
-      [ "expected" .= show expected, "passed" .= passed
+      [ "role" .= roleWire (planRole plan), "passed" .= passed
       , "observed" .= either refusalValue (const (A.String "qualified")) outcome ])
     putStrLn ("own-first-pair-check: control " ++ (if passed then "refused as expected: " else "not refused as expected: ")
       ++ either show (const "qualified") outcome)

@@ -27,9 +27,9 @@ digestOf = sha256Hex . sha256 . C.pack
 ranges :: [(Domain, Word32, Word32)]
 ranges = [(DomainA, 0x41140, 0x41164), (DomainB, 0xd1140, 0xd1164)]
 
-plan :: Plan
-plan = Plan
-  { planRole = OwnedRole
+planFor :: Role -> Plan
+planFor role = Plan
+  { planRole = role
   , planDatSha256 = digestOf "dat"
   , planEntries = [PlanEntry DomainA Slot164 0x41140, PlanEntry DomainB Slot164 0xd1140]
   , planTails = []
@@ -37,8 +37,8 @@ plan = Plan
   , planFills = []
   }
 
-planBytes :: B.ByteString
-planBytes = BL.toStrict (A.encode (planValue plan))
+planBytesFor :: Role -> B.ByteString
+planBytesFor role = BL.toStrict (A.encode (planValue (planFor role)))
 
 domainText :: Domain -> String
 domainText domain = if domain == DomainA then "a" else "b"
@@ -59,21 +59,34 @@ segment armed started ended = object
       [ "enabled" .= True, "records" .= ([] :: [Value]), "violation" .= Null
       , "classes" .= [object ["range" .= [start, end], "kinds" .= ["cpu-write", "host-write", "model-bus-write" :: String]] | (domain, start, end) <- ranges, domain `elem` armed] ] ]
 
--- | +0x164 entered on core 0 with I clear.
-call :: Word32 -> Word32 -> Value
-call resultR0 resultCpsr = object
+-- | +0x164 entered on core 0.
+callFrom :: Word32 -> Word32 -> Word32 -> Value
+callFrom entryCpsr resultR0 resultCpsr = object
   [ "entry" .= object
       [ "slot" .= object ["domain" .= ("a" :: String), "slot" .= ("0x164" :: String)], "core" .= ("primary" :: String)
-      , "cpsr" .= (0x6000001f :: Word32), "r0" .= (0 :: Word32), "lr" .= ("0x41a60" :: String), "identity" .= (0x4003 :: Word32)
+      , "cpsr" .= entryCpsr, "r0" .= (0 :: Word32), "lr" .= ("0x41a60" :: String), "identity" .= (0x4003 :: Word32)
       , "words" .= object [] ]
   , "result" .= object ["r0" .= resultR0, "cpsr" .= resultCpsr, "words" .= object []]
   , "tail_hits" .= (0 :: Int), "count" .= (3 :: Int), "first" .= (300 :: Int), "last" .= (400 :: Int) ]
 
-valid :: Value
-valid = object
-  [ "schema" .= (1 :: Int), "role" .= ("owned" :: String)
-  , "inputs" .= [object ["path" .= name, "sha256" .= digest] | (name, digest) <-
-      [("plan" :: String, sha256Hex (sha256 planBytes)), ("run", digestOf "run"), ("dat", digestOf "dat"), ("rom", digestOf "rom")]]
+-- | Entered with I clear.
+call :: Word32 -> Word32 -> Value
+call = callFrom 0x6000001f
+
+reachedRow :: String -> Value
+reachedRow slot = object ["slot" .= object ["domain" .= ("a" :: String), "slot" .= slot], "calls" .= (3 :: Int), "returns" .= (3 :: Int), "pending" .= (0 :: Int)]
+
+-- | Inputs: plan, run document, DAT, boot ROM, trajectory, observer executable; `replaced` swaps digests by index.
+inputsFor :: Role -> [(Int, String)] -> Value
+inputsFor role replaced = toJSONList
+  [ object ["path" .= name, "sha256" .= maybe digest id (lookup index replaced)]
+  | (index, name, digest) <- zip3 [0 ..] ["plan", "run", "dat", "rom", "trajectory", "observer" :: String]
+      [sha256Hex (sha256 (planBytesFor role)), runDocumentSha256, digestOf "dat", bootRomSha256, digestOf "trajectory", digestOf "observer"] ]
+
+observationFor :: Role -> Value
+observationFor role = object
+  [ "schema" .= (1 :: Int), "role" .= roleWire role
+  , "inputs" .= inputsFor role []
   , "entries" .= (3 :: Int), "returns" .= (3 :: Int)
   , "untracked" .= emptySample, "unarmed_entries" .= emptySample, "unmatched_tails" .= emptySample
   , "fill_fetch" .= Null
@@ -81,20 +94,29 @@ valid = object
                  , object ["domain" .= ("b" :: String), "stop" .= object [], "readback" .= readback 200 [DomainB]] ]
   , "segments" .= [segment [DomainA] 100 200, segment [DomainA, DomainB] 200 900]
   , "final_readback" .= readback 900 [DomainA, DomainB]
-  , "milestones" .= [object ["phase" .= ("cold-start" :: String), "pulse" .= Null, "expected" .= menu, "reached" .= (5 :: Int), "observed" .= menu, "finished" .= (5 :: Int)]]
-  , "reached" .= [object ["slot" .= object ["domain" .= ("a" :: String), "slot" .= ("0x164" :: String)], "calls" .= (3 :: Int), "returns" .= (3 :: Int), "pending" .= (0 :: Int)]]
+  , "milestones" .= [object ["phase" .= ("cold-start" :: String), "pulse" .= Null, "expected" .= menu, "reached" .= (5 :: Int), "observed" .= menu, "finished" .= (800 :: Int)]]
+  , "reached" .= map reachedRow ["0x164", "0x168", "0x1618"]
   , "classes" .= [call 0 0x6000009f]
   , "pending" .= ([] :: [Value]), "error" .= Null, "machine_failure" .= Null ]
  where
   emptySample = object ["count" .= (0 :: Int), "sample" .= ([] :: [Value])]
   menu = object ["menu" .= (69 :: Int), "setting" .= (52 :: Int), "cursor" .= (12 :: Int)]
 
+valid :: Value
+valid = observationFor OwnedRole
+
+toJSONList :: [Value] -> Value
+toJSONList = Array . V.fromList
+
 set :: KM.Key -> Value -> Value -> Value
 set key value (Object fields) = Object (KM.insert key value fields)
 set _ _ other = other
 
+outcomeFor :: Role -> Value -> Either String (Either Refusal Qualified)
+outcomeFor role value = qualify (planBytesFor role) (planFor role) <$> decodeObservation (BL.toStrict (A.encode value))
+
 outcome :: Value -> Either String (Either Refusal Qualified)
-outcome value = qualify planBytes plan <$> decodeObservation (BL.toStrict (A.encode value))
+outcome = outcomeFor OwnedRole
 
 refusedAs :: RefusalKind -> Value -> Bool
 refusedAs kind value = case outcome value of
@@ -131,11 +153,55 @@ main = do
         , ("+0x168 dropping the flags refuses", checkCall 0 (callClass (entryState Slot168 0xf0000093 0 [] Nothing) 0x13 0x13 Nothing) /= Right ())
         , ("+0x1618 returns 1 for core 1's identity", checkCall 0 (callClass ((entryState Slot1618 0x13 0 [] Nothing) {entryIdentity = 0x8003}) 1 0x13 Nothing) == Right ())
         , ("an owned +0x1618 call that skipped its tail refuses", checkCall 1 (callClass (entryState Slot1618 0x13 0 [] Nothing) 0 0x13 Nothing) /= Right ())
+        , ("the restored control is satisfied by A's arming readback at 0x41140", controlCheck ControlRestoredRole
+            (set "armings" (toJSONList [arming "a" (swapDigest (readback 100 [DomainA])), arming "b" (readback 200 [DomainB])]) (observationFor ControlRestoredRole)))
+        , ("the restored control is not satisfied by a final readback difference", not (controlCheck ControlRestoredRole
+            (set "final_readback" (swapDigest (readback 900 [DomainA, DomainB])) (observationFor ControlRestoredRole))))
+        , ("the restored control is not satisfied by an unarmed loader", not (controlCheck ControlRestoredRole
+            (set "armings" (toJSONList [arming "a" (readback 100 [DomainA])]) (observationFor ControlRestoredRole))))
+        , ("the restored control is not satisfied by a missing final readback", not (controlCheck ControlRestoredRole
+            (set "final_readback" Null (observationFor ControlRestoredRole))))
+        , ("the restored control is not satisfied by a qualifying run", not (controlCheck ControlRestoredRole (observationFor ControlRestoredRole)))
+        , ("the wrong-I control is satisfied by A +0x164 entered with I clear", controlCheck ControlWrongIRole
+            (set "classes" (toJSONList [call 0x80 0x6000009f]) (observationFor ControlWrongIRole)))
+        , ("the wrong-I control is not satisfied by A +0x164 entered with I set", not (controlCheck ControlWrongIRole
+            (set "classes" (toJSONList [callFrom 0x6000009f 0 0x6000009f]) (observationFor ControlWrongIRole))))
+        , ("the wrong-I control is not satisfied by a readback difference", not (controlCheck ControlWrongIRole
+            (set "armings" (toJSONList [arming "a" (swapDigest (readback 100 [DomainA])), arming "b" (readback 200 [DomainB])]) (observationFor ControlWrongIRole))))
+        , ("a run document other than the pinned one refuses", refusedAs BindingRefusal (set "inputs" (inputsFor OwnedRole [(1, digestOf "run")]) valid))
+        , ("a boot ROM other than the pinned one refuses", refusedAs BindingRefusal (set "inputs" (inputsFor OwnedRole [(3, digestOf "rom")]) valid))
+        , ("compare accepts runs with equal run, ROM, trajectory and observer", compared [] == Just True)
+        , ("compare refuses runs with different trajectories", compared [(4, digestOf "other trajectory")] == Nothing)
+        , ("compare refuses runs with different observers", compared [(5, digestOf "other observer")] == Nothing)
+        , ("a call pending since before the route ended refuses", refusedAs TrackingRefusal (pendingAt 700))
+        , ("a call entered at the route end may stay pending", either (const False) (either (const False) ((== 1) . qualifiedPending)) (outcome (pendingAt 800)))
+        , ("+0xfc accepts the returned timer base", checkCall 0 (getTime 120 (1000 - 120)) == Right ())
+        , ("+0xfc accepts the entry timer base", checkCall 0 (getTime 120 (1000 - 100)) == Right ())
+        , ("+0xfc refuses an offset from neither base", checkCall 0 (getTime 120 (1000 - 130)) /= Right ())
+        , ("+0x100 accepts the returned timer base", checkCall 0 (setTime 120 125) == Right ())
+        , ("+0x100 accepts the entry timer base", checkCall 0 (setTime 120 105) == Right ())
+        , ("+0x100 refuses a time from neither base", checkCall 0 (setTime 120 200) /= Right ())
+        , ("a run with no checked call refuses", refusedAs RouteRefusal
+            (set "entries" (Number 0) (set "returns" (Number 0) (set "classes" (toJSONList []) valid))))
+        , ("a run that never reached A +0x168 refuses", refusedAs RouteRefusal (set "reached" (toJSONList (map reachedRow ["0x164", "0x1618"])) valid))
+        , ("a run that never reached A +0x1618 refuses", refusedAs RouteRefusal (set "reached" (toJSONList (map reachedRow ["0x164", "0x168"])) valid))
         ]
   mapM_ (\(name, passed) -> putStrLn ((if passed then "ok   " else "FAIL ") ++ name)) checks
   unless (all snd checks) exitFailure
  where
-  toJSONList = Array . V.fromList
+  arming domain value = object ["domain" .= (domain :: String), "stop" .= object [], "readback" .= value]
+  controlCheck role value = either (const False) (controlSatisfied role) (outcomeFor role value)
+  compared replaced = do
+    stock <- either (const Nothing) (either (const Nothing) Just) (outcomeFor StockRole (observationFor StockRole))
+    owned <- either (const Nothing) (either (const Nothing) Just) (outcome (set "inputs" (inputsFor OwnedRole replaced) valid))
+    either (const Nothing) (Just . null) (compareRoutes stock owned)
+  pendingAt :: Int -> Value
+  pendingAt entered = set "entries" (Number 4) (set "pending" (toJSONList [object ["entered" .= entered]]) valid)
+  timeClass slot entryWords pointee returnedWords returnedPointee = CallClass
+    (EntryState DomainA slot 0 0x13 0x1000 0x41a60 0x4003 (M.fromList [(name, Committed value) | (name, value) <- entryWords]) Nothing (Just (Committed pointee)))
+    (ResultState 0 0x13 (M.fromList [(name, Committed value) | (name, value) <- returnedWords]) (Committed <$> returnedPointee)) 0 1 1
+  getTime returnedBase offset = timeClass SlotFc [(ContextWord, 0), (TimerBase, 100)] 1000 [(TimeOffset, offset), (TimerBase, returnedBase)] Nothing
+  setTime returnedBase time = timeClass Slot100 [(ContextWord, 0), (TimerBase, 100), (TimeOffset, 5)] 7 [(TimerBase, returnedBase)] (Just time)
   swapDigest = mapRanges (set "physical_sha256" (String "00"))
   aliasDiffers = mapRanges (\range -> case range of
     Object fields | Just (Array views) <- KM.lookup "views" fields ->
