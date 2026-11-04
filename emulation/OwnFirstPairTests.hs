@@ -176,10 +176,25 @@ main = do
             == Just (True, Just "menu endpoint differs"))
         , ("the wrong-I control does not hold under a machine failure", fmap fst (verdictOf ControlWrongIRole
             (set "machine_failure" (String "core 0 halted") stoppedWrongI)) == Just False)
-        , ("+0x164 returning with A and F changed qualifies", either (const False) (either (const False) (const True))
-            (outcome (set "classes" (toJSONList [call 0 0x600001df]) valid)))
-        , ("+0x128 resuming with F and A from another context qualifies", checkCall 0
+        , ("+0x164 returning with A changed qualifies", either (const False) (either (const False) (const True))
+            (outcome (set "classes" (toJSONList [call 0 0x6000019f]) valid)))
+        , ("+0x164 returning with F changed refuses", refusedAs SemanticRefusal (set "classes" (toJSONList [call 0 0x600000df]) valid))
+        , ("+0x128 resuming with A from another context qualifies", checkCall 0
             (callClass (entryState Slot128 0x80000153 0x1000 [(ContextWord, 0), (CurrentTask, current)] (Just 7)) 0 0x60000053 (Just index)) == Right ())
+        , ("the wrong-I control does not hold with a final readback difference", wrongIHolds
+            (set "final_readback" (swapDigest (readback 900 [DomainA, DomainB])) stoppedWrongI) == Just False)
+        , ("the wrong-I control does not hold with a watch gap", wrongIHolds
+            (set "segments" (toJSONList [segment [DomainA] 100 150, segment [DomainA, DomainB] 200 900]) stoppedWrongI) == Just False)
+        , ("the wrong-I control does not hold after a fill fetch", wrongIHolds
+            (set "fill_fetch" (object ["core" .= ("primary" :: String), "address" .= ("0x4115c" :: String)]) stoppedWrongI) == Just False)
+        , ("the wrong-I control does not hold with an unarmed entry", wrongIHolds
+            (set "unarmed_entries" (object ["count" .= (1 :: Int), "sample" .= ([] :: [Value])]) stoppedWrongI) == Just False)
+        , ("the wrong-I control does not hold with an untracked call", wrongIHolds
+            (set "untracked" (object ["count" .= (1 :: Int), "sample" .= ([] :: [Value])]) stoppedWrongI) == Just False)
+        , ("the wrong-I control does not hold when the mismatching +0x164 returned other than 0x80", wrongIHolds
+            (set "classes" (toJSONList [call 0 0x6000001f]) stoppedWrongI) == Just False)
+        , ("the wrong-I control does not hold for a +0x164 class first seen before A armed", wrongIHolds
+            (set "classes" (toJSONList [set "first" (Number 50) (call 0x80 0x6000009f)]) stoppedWrongI) == Just False)
         , ("+0x164 resuming in another mode refuses", refusedAs SemanticRefusal (set "classes" (toJSONList [call 0 0x60000093]) valid))
         , ("a run document other than the pinned one refuses", refusedAs BindingRefusal (set "inputs" (inputsFor OwnedRole [(1, digestOf "run")]) valid))
         , ("a boot ROM other than the pinned one refuses", refusedAs BindingRefusal (set "inputs" (inputsFor OwnedRole [(3, digestOf "rom")]) valid))
@@ -208,6 +223,7 @@ main = do
   verdictOf role value = either (const Nothing)
     (\observed -> let verdict = controlVerdict (planBytesFor role) (planFor role) observed in Just (controlHolds verdict, controlStopped verdict))
     (decodeObservation (BL.toStrict (A.encode value)))
+  wrongIHolds value = fmap fst (verdictOf ControlWrongIRole value)
   stoppedWrongI = set "error" (String "menu endpoint differs")
     (set "milestones" (toJSONList [object ["phase" .= ("cold-start" :: String), "pulse" .= Null, "expected" .= object ["menu" .= (69 :: Int), "setting" .= (52 :: Int), "cursor" .= (12 :: Int)]
       , "reached" .= Null, "observed" .= object ["menu" .= (1 :: Int), "setting" .= (5 :: Int), "cursor" .= (2 :: Int)], "finished" .= routeEnd]])

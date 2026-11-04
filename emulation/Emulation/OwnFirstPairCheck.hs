@@ -305,9 +305,9 @@ refusalKind refusal = case refusal of
 refuseWhen :: Bool -> Refusal -> Either Refusal ()
 refuseWhen condition refusal = when condition (Left refusal)
 
--- | Mode, T and I. Stock task resume (loader A 0x4034c-0x40364, 0x437c0-0x437d8) rebuilds SPSR with F from the current CPSR and leaves A unwritten.
+-- | Mode, T, F and I. A is excluded: stock task resume (loader A 0x4034c-0x40364, 0x437c0-0x437d8) rebuilds SPSR with `msr SPSR_fc`, which never writes A.
 control :: Word32 -> Word32
-control cpsr = cpsr .&. 0xbf
+control cpsr = cpsr .&. 0xff
 
 irqMasked :: Word32 -> Bool
 irqMasked cpsr = cpsr .&. 0x80 /= 0
@@ -557,25 +557,45 @@ data ControlVerdict = ControlVerdict {controlHolds :: Bool, controlRefusal :: Ma
   deriving (Eq, Show)
 
 -- | The restored control holds when qualification refuses at A's arming readback of the restored
--- +0x164 extent. The wrong-I control holds, even when the observer stopped, when the bindings and
--- arming readbacks pass, no machine failure is recorded, and an A +0x164 class entered with I
--- clear breaks the slot semantics.
+-- +0x164 extent. The wrong-I control holds, even when the observer stopped, when bindings, arming
+-- and final readbacks and watch segments pass, no fill fetch, machine failure, unarmed entry or
+-- untracked call is recorded, and an A +0x164 class entered with I clear at or after A's arming
+-- returned 0x80 and breaks the slot semantics.
 controlVerdict :: B.ByteString -> Plan -> Observation -> ControlVerdict
 controlVerdict planBytes plan observation = case planRole plan of
   ControlRestoredRole -> case qualify planBytes plan observation of
     Left refusal@(ReadbackDiffers ArmingReadback DomainA 0x41140 _) -> ControlVerdict True (Just refusal) stopped
     Left refusal -> ControlVerdict False (Just refusal) stopped
     Right _ -> ControlVerdict False Nothing stopped
-  ControlWrongIRole -> case checkBindings planBytes plan observation >> checkArmings plan observation of
+  ControlWrongIRole -> case guarded of
     Left refusal -> ControlVerdict False (Just refusal) stopped
-    Right ()
-      | Just failure <- obsMachineFailure observation -> ControlVerdict False (Just (ObserverStopped failure)) stopped
-      | otherwise -> case [refusal | refusal@(CallMismatch DomainA Slot164 cpsr _) <- classRefusals plan observation, cpsr .&. 0x80 == 0] of
-          refusal : _ -> ControlVerdict True (Just refusal) stopped
-          [] -> ControlVerdict False (either Just (const Nothing) (qualify planBytes plan observation)) stopped
+    Right armedA -> case [ CallMismatch DomainA Slot164 (entryCpsr entry) reason
+                         | call <- obsClasses observation
+                         , let entry = classEntry call
+                         , entryDomain entry == DomainA, entrySlot entry == Slot164
+                         , not (irqMasked (entryCpsr entry)), resultR0 (classResult call) == 0x80
+                         , classFirst call >= armedA
+                         , Left reason <- [checkCall 0 call] ] of
+      refusal : _ -> ControlVerdict True (Just refusal) stopped
+      [] -> ControlVerdict False (either Just (const Nothing) (qualify planBytes plan observation)) stopped
   _ -> ControlVerdict False Nothing stopped
  where
   stopped = obsError observation
+  guarded = do
+    checkBindings planBytes plan observation
+    checkArmings plan observation
+    final <- maybe (Left FinalReadbackMissing) Right (obsFinal observation)
+    forM_ domains (checkReadback plan FinalReadback final)
+    checkSegments plan (obsArmings observation) final (obsSegments observation)
+    forM_ (obsFillFetch observation) (Left . FillFetched)
+    forM_ (obsMachineFailure observation) (Left . ObserverStopped)
+    refuseWhen (obsUnarmedEntries observation /= 0) (UnarmedEntries (obsUnarmedEntries observation))
+    refuseWhen (obsUntracked observation /= 0) (UntrackedCalls (obsUntracked observation))
+    maybe (Left (GuardNotArmed DomainA)) (Right . readbackInstructions . armingReadback)
+      (lookupArming DomainA)
+  lookupArming domain = case [arming | arming <- obsArmings observation, armingDomain arming == domain] of
+    arming : _ -> Just arming
+    [] -> Nothing
 
 reachedValue :: Reached -> Value
 reachedValue row = object
