@@ -2,7 +2,8 @@ module Replacement.TaskSubmission.Admission
   ( AdmissionError (..), EntryPoint (..), FixedService (..), CallTarget (..)
   , CodeAddress (..), StackOffset (..), CodeExtent (..), NativeLayout (..)
   , ArgumentProvenance (..), ParameterWord (..), FrameProof, CallBoundary (..)
-  , scratchLow, callBoundaries, executionPcs, globalWrites, deriveFrameProof
+  , scratchLow, callBoundaries, executionPcs, globalWrites, deriveFrameProof, fixed
+  , RootOffset (..), rootServiceOffsets, stockCalleeDemand
   , StackInterval (..), StackContext (..), CalleeDemand (..), JoinedStack (..), joinStack
   ) where
 
@@ -94,6 +95,29 @@ fixed location = FixedService <$> lookup location
   [(0x7235d8,CriticalEnter),(0x7236b0,CriticalExit),(0x725c6c,Reservation)
   ,(0x7221c8,Fill),(0x42634,Cache),(0x41a34,Log),(0x723398,ErrorCallback)
   ,(0x427d4,TryLock),(0x427fc,Unlock)]
+
+-- | Offset of a service pointer in a published interface root.
+newtype RootOffset = RootOffset Word32 deriving (Eq, Ord, Show)
+
+-- | The root slots the wrapper and release load service pointers from.
+rootServiceOffsets :: [(RootOffset,CallTarget)]
+rootServiceOffsets =
+  [(RootOffset 0x1618,CurrentCoreService),(RootOffset 0x164,SaveMaskService),(RootOffset 0x168,RestoreMaskService)
+  ,(RootOffset 0x80,AuxiliaryService),(RootOffset 0,CreationService),(RootOffset 0xc,ActivationService)]
+
+-- | Synchronous stack demand of each stock-bodied service below its actual call SP
+-- (E-STARTUP-TASK-RETAINED-STACK-SOURCE-150, reports/replacement-inventory-baseline.md:1190-1202).
+-- Log assumes trace callback 0 or 0x6470fc; error dispatch assumes callback 0x723330 or the
+-- 4-byte stock idle body at 0x69cbf0.
+stockCalleeDemand :: CallTarget -> CalleeDemand
+stockCalleeDemand target = CalleeDemand target (StackOffset (negate bytes))
+  where
+    bytes = case target of
+      FixedService service -> case service of
+        CriticalEnter -> 40; CriticalExit -> 32; Reservation -> 40; Fill -> 12; Cache -> 36
+        Log -> 160; ErrorCallback -> 12; TryLock -> 0; Unlock -> 0
+      AuxiliaryService -> 16; CreationService -> 16; ActivationService -> 40
+      CurrentCoreService -> 8; SaveMaskService -> 4; RestoreMaskService -> 4
 
 constant :: Word32 -> Scalar
 constant location = case lookup location [(0x7cad9c,ClassTable),(0x40a5b204,Wrapper),(0x40a0fc44,State),(0x96bd20,Roots),(0x40a0f82c,ErrorWord),(0x409c280c,Lock)] of
@@ -220,14 +244,8 @@ load bytes width location machine = do
       require (width == A.Word && maybe True (\n -> n == 0 || n == 4) offset) ReadProvenanceRejected
       pure (Guest Root (Just 0),machine,Nothing)
     Guest Root offset -> do
-      target <- case offset of
-        Just 0x1618 -> Right CurrentCoreService
-        Just 0x164 -> Right SaveMaskService
-        Just 0x168 -> Right RestoreMaskService
-        Just 0x80 -> Right AuxiliaryService
-        Just 0 -> Right CreationService
-        Just 0xc -> Right ActivationService
-        _ -> Left ReadProvenanceRejected
+      target <- maybe (Left ReadProvenanceRejected) Right
+        (offset >>= \value -> lookup value [(toInteger slot,service) | (RootOffset slot,service) <- rootServiceOffsets])
       require (width == A.Word) ReadProvenanceRejected
       pure (Service target,machine,Nothing)
     Guest Descriptor offset -> do

@@ -5,8 +5,9 @@ use crate::attach_state::{
     SpaceSpan, StackCheck, UnusedEntry,
 };
 use crate::composed_catalog::{
-    BoundaryKind, Compare, Contract, Core, Declaration, Label, PiecePolicy, PieceKind, Role, Sha256, Target,
+    AllocationPosition, BoundaryKind, Compare, Contract, Core, Declaration, Label, PiecePolicy, PieceKind, PoolAllocation, Role, Sha256, Target,
 };
+use crate::pool_allocation::{self, AllocationProblem, Allocations, Captures};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
 
@@ -429,6 +430,8 @@ pub enum Difference {
     AttachMemory { space: Space, start: u64, end: u64, differing_bytes: u64, runs: Vec<SpaceSpan> },
     UnusedAllowance { entry: UnusedEntry },
     AttachRelation { role: Role, failure: RelationFailure },
+    /// A role's storage records and cursor do not tile the pool.
+    PoolAllocation { role: Role, problem: AllocationProblem },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -488,7 +491,25 @@ fn reached(receipt: &Receipt) -> bool {
     receipt.outcome == Outcome::Observed && receipt.menu.erased_settings && receipt.menu.shooting
 }
 
-fn compare_rows(contract: &Contract, retained: &Receipt, owned: &Receipt) -> Result<(), Difference> {
+/// The contract's pool-allocation relation with each role's allocations, retained first.
+struct PoolRelation<'a> {
+    relation: &'a PoolAllocation,
+    allocations: [Allocations; 2],
+}
+
+impl Captures for Receipt {
+    fn captures(&self, label: &Label) -> Vec<&[u8]> {
+        self.rows.iter().flat_map(|row| &row.reads).filter(|capture| &capture.label == label).map(|capture| capture.bytes.0.as_slice()).collect()
+    }
+}
+
+fn pool_relation<'a>(contract: &'a Contract, retained: &Receipt, owned: &Receipt) -> Result<Option<PoolRelation<'a>>, Difference> {
+    let Some(relation) = contract.pool_allocation() else { return Ok(None) };
+    let allocations = pool_allocation::roles(relation, retained, owned).map_err(|(role, problem)| Difference::PoolAllocation { role, problem })?;
+    Ok(Some(PoolRelation { relation, allocations }))
+}
+
+fn compare_rows(contract: &Contract, retained: &Receipt, owned: &Receipt, pool: Option<&PoolRelation>) -> Result<(), Difference> {
     let sequenced = || contract.boundaries().filter(|boundary| boundary.compare == Compare::Sequence && boundary.retained_pc.is_some());
     for boundary in sequenced() {
         for (role, receipt) in [(Role::Retained, retained), (Role::Composed, owned)] {
@@ -518,7 +539,13 @@ fn compare_rows(contract: &Contract, retained: &Receipt, owned: &Receipt) -> Res
                 Some(BoundaryKind::Return) => &[Register::R0, Register::Sp],
                 _ => &[],
             };
-            if let Some(&register) = registers.iter().find(|&&register| a.register(register) != b.register(register)) {
+            let stack_top = pool.filter(|pool| pool.relation.stack_tops.contains(&a.label));
+            let differs = |register: Register| match (register, stack_top) {
+                (Register::Sp, Some(pool)) => pool.allocations[0].normalize(a.sp.0, AllocationPosition::Top)
+                    != pool.allocations[1].normalize(b.sp.0, AllocationPosition::Top),
+                _ => a.register(register) != b.register(register),
+            };
+            if let Some(&register) = registers.iter().find(|&&register| differs(register)) {
                 return Err(Difference::Register {
                     label: a.label.clone(), core, occurrence: *occurrence, register,
                     retained: a.register(register), owned: b.register(register),
@@ -541,12 +568,18 @@ fn compare_presence(contract: &Contract, retained: &Receipt, owned: &Receipt) ->
     Ok(())
 }
 
-fn compare_reads(contract: &Contract, retained: &Receipt, owned: &Receipt) -> Result<(), Difference> {
+fn compare_reads(contract: &Contract, retained: &Receipt, owned: &Receipt, pool: Option<&PoolRelation>) -> Result<(), Difference> {
     for read in contract.reads().filter(|read| read.differs.is_none()) {
-        let captures = |receipt: &'_ Receipt| receipt.rows.iter().flat_map(|row| &row.reads)
-            .filter(|capture| capture.label == read.label).map(|capture| capture.bytes.clone()).collect::<Vec<_>>();
-        let (a, b) = (captures(retained), captures(owned));
-        if let Some(occurrence) = (0..a.len().max(b.len())).find(|&index| a.get(index) != b.get(index)) {
+        let (a, b) = (retained.captures(&read.label), owned.captures(&read.label));
+        let differs = |index: usize| match (a.get(index), b.get(index), pool) {
+            (Some(left), Some(right), Some(pool)) if pool.relation.words.iter().any(|words| words.read == read.label) =>
+                left.len() != right.len()
+                    || pool.allocations[0].words(pool.relation, &read.label, left).is_none_or(|left| {
+                        pool.allocations[1].words(pool.relation, &read.label, right).is_none_or(|right| left != right)
+                    }),
+            (left, right, _) => left != right,
+        };
+        if let Some(occurrence) = (0..a.len().max(b.len())).find(|&index| differs(index)) {
             return Err(Difference::Read { label: read.label.clone(), occurrence });
         }
     }
@@ -647,9 +680,10 @@ fn differences(contract: &Contract, digest: &Sha256, retained: &Receipt, owned: 
         }.into());
     }
     compare_carriers(&retained_guard.carrier_writes, &owned_guard.carrier_writes)?;
-    compare_rows(contract, retained, owned)?;
+    let pool = pool_relation(contract, retained, owned)?;
+    compare_rows(contract, retained, owned, pool.as_ref())?;
     compare_presence(contract, retained, owned)?;
-    compare_reads(contract, retained, owned)?;
+    compare_reads(contract, retained, owned, pool.as_ref())?;
     Ok(attach)
 }
 
