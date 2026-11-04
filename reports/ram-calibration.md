@@ -87,7 +87,7 @@ There is no evidence that a running stock path still reaches the recorder. “In
 `//emulation:ram-calibration` is the Haskell capture/comparison tool. All dump, frame, bridge-state and analysis outputs stay under ignored `private-data/`. Capture outputs must be fresh directories. The retained path stages the supported runtime and reuses the cardless embedded-Haskell bridge; FujiMod reuses its existing bridge. Both use a fresh ordinary boot, not an installed-payload checkpoint.
 
 ```sh
-export XM1_EMULATOR_SLOTS=8
+export XM1_EMULATOR_SLOTS=1
 B=--output_base="$HOME/.cache/bazel/latent-image-RamCompare"
 DAT=private-data/analysis/x-m1-1.50/update/prefix/FWUP0002-prefix.DAT
 NAND=private-data/analysis/x-m1-1.50/stored-f7/emulation/inputs/f7-1.nand

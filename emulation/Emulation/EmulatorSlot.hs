@@ -1,7 +1,8 @@
--- | Host admission for full-system emulator runs. A run holds one of N slot
--- locks under @~/.cache/xm1-emulator-slots/@, shared by every checkout on the
--- host, and runs inside a systemd user scope with a memory cap and no swap
--- when the host has a systemd user session.
+-- | Host admission for full-system emulator runs. A run holds one of the host's
+-- 'hostSlots' slot locks under @~/.cache/xm1-emulator-slots/@, whichever is free,
+-- shared by every checkout and agent on the host, and runs inside a systemd user
+-- scope with a memory cap and no swap when the host has a systemd user session.
+-- @XM1_EMULATOR_SLOTS@ is how many slots a caller such as verify-candidate may hold at once.
 module Emulation.EmulatorSlot
   ( SlotCount (..)
   , MemoryMax
@@ -47,17 +48,21 @@ slotVariable = "XM1_EMULATOR_SLOT"
 slotsVariable = "XM1_EMULATOR_SLOTS"
 memoryVariable = "XM1_EMULATOR_MEMORY_MAX"
 
--- | Two slots of 8G by default; @XM1_EMULATOR_SLOTS@ (1..16) and
+-- | The host budget: slot locks 1 and 2.
+hostSlots :: Int
+hostSlots = 2
+
+-- | All host slots at 8G by default; @XM1_EMULATOR_SLOTS@ (1..'hostSlots') and
 -- @XM1_EMULATOR_MEMORY_MAX@ override them.
 slotPolicyFromEnvironment :: IO SlotPolicy
 slotPolicyFromEnvironment = do
-  slots <- lookupEnv slotsVariable >>= maybe (pure (SlotCount 2)) parseSlots
+  slots <- lookupEnv slotsVariable >>= maybe (pure (SlotCount hostSlots)) parseSlots
   memory <- lookupEnv memoryVariable >>= maybe (pure (MemoryMax "8G")) parseMemory
   pure (SlotPolicy slots memory)
   where
     parseSlots text = case readMaybe text of
-      Just count | count >= 1 && count <= 16 -> pure (SlotCount count)
-      _ -> ioError (userError (slotsVariable ++ " must be an integer 1..16"))
+      Just count | count >= 1 && count <= hostSlots -> pure (SlotCount count)
+      _ -> ioError (userError (slotsVariable ++ " must be an integer 1.." ++ show hostSlots ++ ", the host's slots"))
     parseMemory text = case span isDigit text of
       (digits@(_ : _), suffix) | suffix `elem` ["", "K", "M", "G", "T"], read digits > (0 :: Integer) ->
         pure (MemoryMax (digits ++ suffix))
@@ -77,7 +82,7 @@ reexecInSlot policy arguments = do
     Just _ -> pure ()
     Nothing -> do
       directory <- slotDirectory
-      Slot slot <- acquire directory policy
+      Slot slot <- acquire directory
       setEnv slotVariable (show slot)
       executable <- pinExecutable directory
       scoped <- userScopeAvailable
@@ -115,16 +120,15 @@ slotDirectory = do
   createDirectoryIfMissing True directory
   pure directory
 
-acquire :: FilePath -> SlotPolicy -> IO Slot
-acquire directory policy = do
-  let SlotCount count = slotCount policy
-      attempt announced = do
-        free <- firstFree directory [1 .. count]
+acquire :: FilePath -> IO Slot
+acquire directory = do
+  let attempt announced = do
+        free <- firstFree directory [1 .. hostSlots]
         case free of
           Just slot -> pure slot
           Nothing -> do
             unless announced $ do
-              hPutStrLn stderr ("Waiting for one of " ++ show count ++ " emulator slots in " ++ directory)
+              hPutStrLn stderr ("Waiting for one of the host's " ++ show hostSlots ++ " emulator slots in " ++ directory)
               hFlush stderr
             threadDelay 2000000
             attempt True
