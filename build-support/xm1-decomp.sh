@@ -198,7 +198,7 @@ case $command in
         for (i = 1; i <= m; i++) for (j = i + 1; j <= m; j++) if (rest[j] < rest[i]) { t = rest[i]; rest[i] = rest[j]; rest[j] = t }
         for (i = 1; i <= m; i++) print "outside function-ranges", rest[i], other[rest[i]]
         print "nonmatching definitions without a marker directly above", away + 0
-        print "exact definitions under a marker the build does not apply", unapplied + 0
+        print "exact definitions shown from above their head (a NONMATCHING comment or a straddled #if)", unapplied + 0
         print "definitions in preprocessor-excluded code", excluded + 0
       }' "$index"
     ;;

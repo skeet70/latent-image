@@ -86,7 +86,7 @@ Functions are function-ranges rows. With C: at least one non-excluded definition
 | overlays | 11,316 | 10,665 | 6,875 | 3,717 | 73 | 10,692 | 6,893 | 3,717 | 76 | 6 |
 | all | 41,910 | 40,866 | 26,008 | 14,785 | 73 | 40,894 | 26,027 | 14,785 | 76 | 6 |
 
-The Functions to Unverified columns count functions, the rest definitions. That is 97.5% of functions with C and 62.1% exact (kernels 91.4%); by bytes, 95.4% and 30.4% of 8,672,100. The 1,044 functions without C have no compiled definition the index recognizes. 256 definitions lie in preprocessor-excluded code, 255 of them in hostap headers such as the `CONFIG_X70_RTOS` branches of `wpabuf.h` (`wpabuf_len` at `0x01333a74` among them). Definitions exceed functions with C by 28 because some functions are defined more than once. One exact definition sits under a NONMATCHING comment the build does not apply to it. Outside the ranges: 660 app, 27 kernel0 and 27 kernel1 definitions have no symbol, and one app NONMATCHING definition (`FUN_01d8c388`) has a symbol but no range row.
+The Functions to Unverified columns count functions, the rest definitions. That is 97.5% of functions with C and 62.1% exact (kernels 91.4%); by bytes, 95.4% and 30.4% of 8,672,100. The 1,044 functions without C have no compiled definition the index recognizes. 256 definitions lie in preprocessor-excluded code, 255 of them in hostap headers such as the `CONFIG_X70_RTOS` branches of `wpabuf.h` (`wpabuf_len` at `0x01333a74` among them). Definitions exceed functions with C by 28 because some functions are defined more than once. Outside the ranges: 660 app, 27 kernel0 and 27 kernel1 definitions have no symbol, and one app NONMATCHING definition (`FUN_01d8c388`) has a symbol but no range row.
 
 ## Boundary check
 

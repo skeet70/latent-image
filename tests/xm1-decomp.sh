@@ -186,11 +186,11 @@ coverage_rows=$(lines \
   $'outside function-ranges\tapp\tunplaced\t1')
 expect coverage "$(lines $'commit\t'"$first"$'\tHEAD~2' "$coverage_head" "$coverage_rows" \
   $'nonmatching definitions without a marker directly above\t1' \
-  $'exact definitions under a marker the build does not apply\t1' \
+  $'exact definitions shown from above their head (a NONMATCHING comment or a straddled #if)\t1' \
   $'definitions in preprocessor-excluded code\t2')" "$("$helper" coverage --rev HEAD~2)"
 expect coverage-prototype-marker "$(lines $'commit\t'"$second"$'\tHEAD~1' "$coverage_head" "$coverage_rows" \
   $'nonmatching definitions without a marker directly above\t2' \
-  $'exact definitions under a marker the build does not apply\t1' \
+  $'exact definitions shown from above their head (a NONMATCHING comment or a straddled #if)\t1' \
   $'definitions in preprocessor-excluded code\t2')" "$("$helper" coverage --rev HEAD~1)"
 
 status=0
