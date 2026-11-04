@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | The registered joins.
 module Replacement.StartupArtifact.Joins
-  ( JoinKind (..), registeredJoins
+  ( JoinKind (..), registeredJoins, initializesBeforeDispatch
   ) where
 
 import qualified A32 as A
@@ -334,15 +334,18 @@ dispatcherCriticalPair = Join DispatcherCriticalPair (Set.fromList [Record2Link,
   (ObservationQualified "the owned dispatcher submits tasks through the stock wrapper 0x725dd8, which enters the owned critical pair; loader-A orchestration fills the core-0 table the pair reads before it dispatches; qualified by a composed natural comparison")
   [ HostCheck "orchestration-a-initializes-before-dispatch" $ \evidence ->
       initializerCallA evidence == Just (A.Branch (A.Cond 14) True 0x40430)
-        && maybe False initializesBeforeDispatch (orchestrationArtifact LI.LoaderA evidence)
+        && maybe False (initializesBeforeDispatch . LA.proofPaths . L.linkedProof) (orchestrationArtifact LI.LoaderA evidence)
   , HostCheck "submission-depth-in-stack-window" $ \evidence ->
       case submissions evidence of
         Just calls@(_ : _) -> all (\(SubmitCall core (StackDepth depth)) ->
           toInteger (serviceSp core) - toInteger depth - wrapperFrame - criticalEntryFrame >= toInteger (stackFloor core)) calls
         _ -> False
   ]
+
+-- | On every primary path, the initializer call precedes the first dispatch.
+initializesBeforeDispatch :: [LA.PathProof] -> Bool
+initializesBeforeDispatch = all ordered
   where
-    initializesBeforeDispatch artifact = all ordered (LA.proofPaths (L.linkedProof artifact))
     initializes effect = case effect of LA.ServiceCall LI.PrivateInitialize _ -> True; _ -> False
     dispatches effect = case effect of LA.DispatchCall _ -> True; _ -> False
     ordered (LA.PathProof (LI.Scenario role _ _) effects _)

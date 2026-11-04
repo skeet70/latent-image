@@ -86,6 +86,7 @@ _TEST_DEPS = [
     "//host:text",
     "//host:update-container",
     "//host:vector",
+    "//replacement/loader_orchestration:loader-orchestration-artifact",
 ]
 
 haskell_test(

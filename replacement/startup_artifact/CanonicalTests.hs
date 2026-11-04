@@ -24,7 +24,7 @@ import qualified FujiAF.UpdateContainer as U
 import Replacement.StartupArtifact.Adapters
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Contract (contractCarriers)
-import Replacement.StartupArtifact.Joins (JoinKind, registeredJoins)
+import Replacement.StartupArtifact.Joins (JoinKind (..), registeredJoins)
 import Replacement.StartupArtifact.Stage
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
@@ -223,6 +223,13 @@ main = do
     (compositionQualification j3 == Pending [ "first-stage-secondary-rendezvous", "prefix-orchestration-b", "first-stage-completion-zero"
                                             , "loader-startup-publisher", "dispatcher-critical-pair" ])
   ok "every J3 join applies once" (all (\name -> length (appliedJ3 name) == 1) j3Names)
+  forM_ [LoaderStartupPublisher, PublisherInstallerRoots, CriticalPairInstallerRoots, DispatcherCriticalPair] $ \kind ->
+    let without = [join | join <- registeredJoins, joinKind join /= kind]
+        bounds = concat [joinBounds join | join <- registeredJoins, joinKind join == kind]
+    in ok ("without " ++ T.unpack (joinName kind) ++ ", J3 refuses on a span inside its bounds")
+      (case compose without source [first, pair, publisher, startup] of
+        Left (FootprintOverlap _ _ range) -> coveredBy range bounds
+        _ -> False)
   ok "the installer root joins cover the root-pair words"
     (appliedJ3 "publisher-installer-roots" == [[at Image4 0x725a04 0x725a34]]
       && appliedJ3 "critical-pair-installer-roots" == [[at Image4 0x725a0c 0x725a34]])

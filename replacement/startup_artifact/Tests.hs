@@ -24,7 +24,9 @@ import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.AttachState
 import Replacement.StartupArtifact.Contract
 import Replacement.StartupArtifact.Manifest
-import Replacement.StartupArtifact.Joins (JoinKind, registeredJoins)
+import Replacement.StartupArtifact.Joins (JoinKind, initializesBeforeDispatch, registeredJoins)
+import qualified Replacement.LoaderOrchestration.Admission as LA
+import qualified Replacement.LoaderOrchestration.Interface as LI
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
 import System.Environment (getArgs)
@@ -361,6 +363,12 @@ main = do
   let manifestText = manifestWith "first-stage/entry" emptyRules onePiece
   ok "a manifest parses"
     (parseManifest manifestText == Right (Manifest entryLabel emptyAttachRules [SingleImagePiece FirstStage (LinkedPaths "a.bin" "a.symbols")]))
+  let primaryPath effects = LA.PathProof (LI.Scenario LI.Primary LI.InitiallyPublished LI.SetupReturns) effects LA.EnteredScheduler
+      initialize = LA.ServiceCall LI.PrivateInitialize []
+  ok "a primary path that initializes before its first dispatch satisfies the dispatcher-critical-pair order"
+    (initializesBeforeDispatch [primaryPath [initialize, LA.DispatchCall LI.Setup, LA.DispatchCall LI.Root]])
+  ok "a primary path that dispatches before it initializes fails the dispatcher-critical-pair order"
+    (not (initializesBeforeDispatch [primaryPath [LA.DispatchCall LI.Setup, initialize, LA.DispatchCall LI.Root]]))
   let linkedJson name = "{\"image\":\"" <> name <> ".bin\",\"symbols\":\"" <> name <> ".symbols\"}"
       startupInputs = "{\"loader_a\":" <> linkedJson "a" <> ",\"loader_b\":" <> linkedJson "b" <> ",\"dispatcher\":"
         <> linkedJson "d" <> ",\"installer\":" <> linkedJson "i" <> "}"

@@ -339,7 +339,9 @@ orchestrationCatalog kind prefix continuations artifact = do
         , boundary "schedule-call" SiteBoundary schedule 0xa94 True CompareSequence twice
         ]
       rows <- sequence
-        [ read' "frame" "initializer-call" 0x40063450 16
+        -- The saved r11 at 0x40063458 is the first-stage handoff r11, which differs by role.
+        [ read' "frame-r4-r5" "initializer-call" 0x40063450 8
+        , read' "frame-lr" "initializer-call" 0x4006345c 4
         , read' "table" "initializer-return" tableA interfaceTableBytes
         , read' "ready" "schedule-call" 0x4005927c 4
         , read' "completion" "schedule-call" 0x400a00c4 4
@@ -428,12 +430,15 @@ deriveLoaderStartup source a b dispatcher installer = do
       calls = DA.callBoundaries (SD.frameProof dispatcherArtifact)
       instruction = DA.instructionAddressValue . DA.callInstruction
       proof = LS.joinedProof joined
+      -- Core 0 runs loader A as the primary, core 1 runs loader B as the peer (emulation/README.md:222).
+      naturalRole side = case side of LI.LoaderA -> LI.Primary; LI.LoaderB -> LI.Peer
       ownedLow side = minimum (LS.stackOffsetValue (LS.loaderFrameLow proof)
-        : map (LS.stackOffsetValue . LS.boundaryOwnedLow) (LS.loaderBoundaries proof side))
+        : [ LS.stackOffsetValue (LS.boundaryOwnedLow boundary) | boundary <- LS.loaderBoundaries proof side
+          , let LI.Scenario role _ _ = LS.boundaryScenario boundary, role == naturalRole side ])
       window top side = WriteRange (CorePhysicalTarget (sideCore side)) (top - fromIntegral (negate (ownedLow side))) top
       sideCore side = case side of LI.LoaderA -> Core0; LI.LoaderB -> Core1
-      (dispatcherLow, dispatcherHigh) = StartupFootprint.dispatcherCarrier
-      (installerLow, installerHigh) = StartupFootprint.installerCarrier
+      L.CodeWindow (LI.CodeAddress dispatcherLow) (LI.CodeAddress dispatcherHigh) = StartupFootprint.dispatcherCarrier
+      L.CodeWindow (LI.CodeAddress installerLow) (LI.CodeAddress installerHigh) = StartupFootprint.installerCarrier
   modeCall <- uniqueOf kind "mode getter call" [instruction call | call <- calls, DA.callEffect call == DA.ModeRead]
   installReturn <- uniqueOf kind "installer continuation"
     [DA.instructionAddressValue continuation | call <- calls, DA.callEffect call == DA.Install, Just continuation <- [DA.callContinuation call]]
@@ -466,7 +471,7 @@ deriveLoaderStartup source a b dispatcher installer = do
         at <- label kind stopping
         pure (CatalogRead named at guest bytes Nothing)
   -- Retained dispatcher PCs: stock 0x69ce0c (ModeRead call) and 0x69ce38 (Install continuation),
-  -- private-data/analysis/x-m1-1.50/decode/id4.dis.
+  -- private-data/analysis/x-m1-1.50/lz/id4.dis.
   boundaries <- sequence
     [ boundary "dispatcher-entry" SiteBoundary bothCores dispatcherLow dispatcherLow False dispatches
     , boundary "mode-call" SiteBoundary primaryCore modeCall 0x69ce0c True twice
