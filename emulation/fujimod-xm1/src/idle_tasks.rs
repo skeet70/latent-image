@@ -440,7 +440,7 @@ fn inspect_watch(raw: &serde_json::Value, processed: &mut usize, stopped: &[Hit]
 fn menu_route(machine: &mut Machine) -> Result<(), String> {
     machine.run(DEADLINE.saturating_sub(machine.instructions())); machine.require_running()?;
     require(machine.menu()?.is_some_and(|menu| (menu.menu_id, menu.setting_id, menu.cursor) == (69, 52, 12)), "startup did not reach erased-settings menu")?;
-    let pulse = KeyPulse { hold: 8_000_000, release: 8_000_000 };
+    let pulse = KeyPulse::instructions(8_000_000, 8_000_000);
     for key in std::iter::repeat_n("up", 12).chain(["ok", "ok"]) { machine.press_once(Press::parse(key)?, pulse)?; }
     machine.run(40_000_000); machine.require_running()?;
     machine.press_once(Press::parse("menu")?, pulse)?;

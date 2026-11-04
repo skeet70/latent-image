@@ -126,7 +126,7 @@ fn command(driver: &mut Driver, line: &str) -> Result<bool, String> {
         }
         ["key", name, hold, release] => {
             let key = Press::parse(name)?;
-            driver.machine.press_once(key, KeyPulse { hold: count(hold)?, release: count(release)? })?;
+            driver.machine.press_once(key, KeyPulse::instructions(count(hold)?, count(release)?))?;
             Ok(true)
         }
         _ => Err(format!("unknown command: {line}")),

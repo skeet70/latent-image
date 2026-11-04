@@ -164,7 +164,7 @@ fn route(machine: &mut Machine) -> Result<Outcome, String> {
     if !initial.is_some_and(|menu| (menu.menu_id, menu.setting_id, menu.cursor) == (69, 52, 12)) {
         return Ok(Outcome::Deadline);
     }
-    let pulse = KeyPulse { hold: 8_000_000, release: 8_000_000 };
+    let pulse = KeyPulse::instructions(8_000_000, 8_000_000);
     for key in std::iter::repeat_n("up", 12).chain(["ok", "ok"]) {
         machine.press_once(Press::parse(key)?, pulse)?;
     }
