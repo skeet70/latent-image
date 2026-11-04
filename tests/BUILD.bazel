@@ -2,7 +2,7 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 sh_test(
     name = "research-contracts",
-    size = "small",
+    size = "medium",
     srcs = ["research-contracts.sh"],
     args = [
         "$(location @lab_jsonschema//:bin/check-jsonschema)",
