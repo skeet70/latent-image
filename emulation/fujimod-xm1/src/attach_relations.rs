@@ -48,6 +48,8 @@ const LZ_SOURCE: u32 = 0x40;
 const LZ_COUNT: u32 = 0x44;
 const LZ_START_JOB: u32 = 2;
 const LZ_DEFAULT_COUNT: u64 = 0x80000;
+/// Bytes of a DAT record header before its stream.
+const RECORD_HEADER: u32 = 0x14;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -59,6 +61,52 @@ pub struct TimerRelation {
 #[serde(deny_unknown_fields)]
 pub struct LzRelation {
     pub citation: Citation,
+    #[serde(default)]
+    pub submitted: Option<SubmittedWord>,
+}
+
+/// Physical, 4-aligned.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct WordAddress(pub u64);
+
+/// A record's total length word, header included.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct RecordLength(pub u32);
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoleLengths {
+    pub retained: RecordLength,
+    pub composed: RecordLength,
+}
+
+impl RoleLengths {
+    pub fn of(&self, role: Role) -> RecordLength {
+        match role {
+            Role::Retained => self.retained,
+            Role::Composed => self.composed,
+        }
+    }
+}
+
+/// The record-1 word counting the record-4 stream bytes submitted to the LZ device, with each role's record-4
+/// length from its DAT.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedWord {
+    pub address: WordAddress,
+    pub citation: Citation,
+    pub record_length: RoleLengths,
+}
+
+impl SubmittedWord {
+    /// `None` when the word does not lie inside DRAM.
+    pub fn span(&self) -> Option<Span> {
+        let start = self.address.0;
+        start.checked_add(4).filter(|end| *end <= DRAM_END).map(|end| Span { start, end })
+    }
 }
 
 /// A counter read and the timestamp store that follows it, on one core in one role.
@@ -93,24 +141,34 @@ impl Relations {
     pub fn any(&self) -> bool { self.timer.is_some() || self.log.is_some() || self.lz.is_some() }
 
     pub(crate) fn validate(&self, allowances: &[Allowance]) -> Result<(), AttachRuleRefusal> {
-        let Some(log) = &self.log else { return Ok(()) };
-        let span = log.span;
-        if span.start % 4 != 0 || span.end % 4 != 0 || span.len() > LOG_SPAN_LIMIT || span.end > DRAM_END {
-            return Err(AttachRuleRefusal::LogSpan);
-        }
-        if log.sites.len() > SITE_LIMIT {
-            return Err(AttachRuleRefusal::Bound);
-        }
-        let mut labels = BTreeSet::new();
-        let mut keys = BTreeSet::new();
-        for site in &log.sites {
-            if site.store_pc.0 != site.read_pc.0.wrapping_add(4) || !labels.insert(&site.label)
-                || !keys.insert((site.role, site.core, site.read_pc)) {
-                return Err(AttachRuleRefusal::LogSite(site.label.clone()));
+        if let Some(log) = &self.log {
+            let span = log.span;
+            if span.start % 4 != 0 || span.end % 4 != 0 || span.len() > LOG_SPAN_LIMIT || span.end > DRAM_END {
+                return Err(AttachRuleRefusal::LogSpan);
+            }
+            if log.sites.len() > SITE_LIMIT {
+                return Err(AttachRuleRefusal::Bound);
+            }
+            let mut labels = BTreeSet::new();
+            let mut keys = BTreeSet::new();
+            for site in &log.sites {
+                if site.store_pc.0 != site.read_pc.0.wrapping_add(4) || !labels.insert(&site.label)
+                    || !keys.insert((site.role, site.core, site.read_pc)) {
+                    return Err(AttachRuleRefusal::LogSite(site.label.clone()));
+                }
+            }
+            if let Some(allowance) = allowances.iter().find(|allowance| allowance.space == Space::Physical && allowance.span.intersects(span)) {
+                return Err(AttachRuleRefusal::LogSpanOverlap(allowance.label.clone()));
             }
         }
-        if let Some(allowance) = allowances.iter().find(|allowance| allowance.space == Space::Physical && allowance.span.intersects(span)) {
-            return Err(AttachRuleRefusal::LogSpanOverlap(allowance.label.clone()));
+        if let Some(submitted) = self.lz.as_ref().and_then(|lz| lz.submitted.as_ref()) {
+            let Some(span) = submitted.span() else { return Err(AttachRuleRefusal::LzSubmittedWord) };
+            let short = [submitted.record_length.retained, submitted.record_length.composed].iter().any(|length| length.0 < RECORD_HEADER);
+            let overlaps = allowances.iter().any(|allowance| allowance.space == Space::Physical && allowance.span.intersects(span))
+                || self.log.as_ref().is_some_and(|log| log.span.intersects(span));
+            if span.start % 4 != 0 || short || overlaps {
+                return Err(AttachRuleRefusal::LzSubmittedWord);
+            }
         }
         Ok(())
     }
@@ -386,6 +444,11 @@ pub enum RelationFailure {
     LzSourceUnpinned { start: u64, end: u64 },
     LzDecode { reason: String },
     LzStream { leaf: BoardLeaf },
+    /// The submitted word differs from the started jobs' total or from the record length less its header.
+    LzSubmitted { captured: Word, started: u64, stream: u64 },
+    /// Every stream byte was started but the word lacks the last job: the record-1 drain step (boot-40048 0x3dc0)
+    /// submitted it without storing the word.
+    LzSubmittedDrain { captured: Word, started: u64, last: u64 },
     RelationOverlap { pointer: BoardPointer },
 }
 
@@ -509,6 +572,10 @@ pub(crate) struct LzPlan {
     /// A stream reset was written after reset of the board.
     pub reset: bool,
     pub captured: Value,
+    /// Total count of the jobs started since the last reset, a pending one included.
+    pub started: u64,
+    /// Count of the last started job; 0 without one.
+    pub last: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -523,6 +590,7 @@ pub struct LzSummary {
     pub end: u64,
     pub literals: u64,
     pub matches: u64,
+    pub submitted: Option<Word>,
 }
 
 /// One role's relation results before the memory stream.
@@ -741,6 +809,8 @@ struct PendingJob {
 fn lz_plan(index: usize, input: &RoleInput, mut jobs: Vec<(u64, u64)>, reset: bool) -> Result<LzPlan, RelationFailure> {
     let saved = &input.board["bus"]["devices"][index]["state"]["state"];
     let pending: Option<PendingJob> = serde_json::from_value(saved["pending"].clone()).map_err(|_| RelationFailure::LzPendingJob)?;
+    let started = jobs.iter().map(|(_, count)| count).sum();
+    let last = jobs.last().map_or(0, |(_, count)| *count);
     if matches!(pending, Some(PendingJob { job: JobKind::Lz })) {
         jobs.pop();
     }
@@ -756,7 +826,20 @@ fn lz_plan(index: usize, input: &RoleInput, mut jobs: Vec<(u64, u64)>, reset: bo
             return Err(RelationFailure::LzSourceUnpinned { start, end });
         }
     }
-    Ok(LzPlan { device: index, start, end, reset, captured: saved["stream"].clone() })
+    Ok(LzPlan { device: index, start, end, reset, captured: saved["stream"].clone(), started, last })
+}
+
+/// Checks one role's captured submitted word against its started jobs and its record-4 length.
+pub(crate) fn check_submitted(plan: &LzPlan, captured: u32, length: RecordLength) -> Result<(), RelationFailure> {
+    let stream = u64::from(length.0 - RECORD_HEADER);
+    let word = u64::from(captured);
+    if word == plan.started && word == stream {
+        return Ok(());
+    }
+    if plan.started == stream && plan.last > 0 && word + plan.last == plan.started {
+        return Err(RelationFailure::LzSubmittedDrain { captured: Word(captured), started: plan.started, last: plan.last });
+    }
+    Err(RelationFailure::LzSubmitted { captured: Word(captured), started: plan.started, stream })
 }
 
 /// The physical source `[start, end)` the fed jobs consumed, each starting where the previous one ended.
@@ -808,7 +891,7 @@ pub(crate) fn derive_lz(plan: &LzPlan, bytes: &[u8]) -> Result<(LzSummary, Vec<S
     let leaves = ["literals", "matches", "pending_len"].into_iter().map(|field| stream_leaf(plan.device, field).0)
         .chain((0..pending).map(|position| stream_leaf(plan.device, &format!("pending/{position}")).0)).collect();
     let number = |field: &str| derived[field].as_u64().unwrap_or(0);
-    Ok((LzSummary { start: plan.start, end: plan.end, literals: number("literals"), matches: number("matches") }, leaves))
+    Ok((LzSummary { start: plan.start, end: plan.end, literals: number("literals"), matches: number("matches"), submitted: None }, leaves))
 }
 
 /// Timer leaves the replay fixes.
@@ -853,7 +936,8 @@ mod tests {
     }
 
     fn plan(captured: Value, reset: bool) -> LzPlan {
-        LzPlan { device: 29, start: 0x1000, end: 0x1000 + COMPRESSED.len() as u64, reset, captured }
+        let count = COMPRESSED.len() as u64;
+        LzPlan { device: 29, start: 0x1000, end: 0x1000 + count, reset, captured, started: count, last: count }
     }
 
     #[test]

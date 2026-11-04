@@ -9,13 +9,13 @@ use fujimod_xm1::attach_state::{
     Occupant, ProcessorAddress, ReadPath, RegionRead, Space, SpaceSpan, Span, StackCheck, UnusedEntry,
 };
 use fujimod_xm1::composed_catalog::{
-    Bank, CatalogRefusal, Contract, Core, GuardBound, Label, Pc, PiecePolicy, PieceKind, PlanSpan, RangePlan, Role, Sha256,
-    Target, UnconfinedCode, WritesBasis,
+    Bank, CatalogRefusal, Contract, Core, DeclarationProblem, GuardBound, Label, Pc, PiecePolicy, PieceKind, PlanSpan,
+    RangePlan, Role, Sha256, Target, WritesBasis,
 };
 use fujimod_xm1::composed_receipt::{
-    ByteRange, CaptureDirectories, CarrierField, CarrierWrites, Difference, GuardObservation, GuardState, HexBytes, Identity,
-    IdentityField, LabelCount, MenuObservation, Outcome, ReadCapture, Receipt, ReceiptKind, RecordedPolicy, Register, Row, SchemaThree,
-    Verdict, VerdictKind, WatchRow, Word, WriteKind, Writer, WriterCount, carrier_writes, compare,
+    Admission, ByteRange, CaptureDirectories, CarrierField, CarrierWrites, DeclaredUse, Difference, GuardObservation, GuardState,
+    HexBytes, Identity, IdentityField, LabelCount, MenuObservation, Outcome, ReadCapture, Receipt, ReceiptKind, RecordedPolicy,
+    Register, Row, SchemaFour, Verdict, VerdictKind, WatchRow, Word, WriteKind, Writer, WriterCount, carrier_writes, compare,
 };
 use serde_json::{Value, json};
 use std::{
@@ -24,7 +24,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-const FIXTURE: &str = include_str!("data/composed-contract-v3.json");
+const FIXTURE: &str = include_str!("data/composed-contract-v4.json");
 const END: u64 = 1 << 32;
 
 fn fixture() -> Value { serde_json::from_str(FIXTURE).unwrap() }
@@ -152,18 +152,40 @@ fn write_allow_overlap_caps_aliases_and_foreign_tcm_refuse() {
 }
 
 #[test]
-fn core_sets_and_unenumerated_writes_refuse_when_malformed() {
+fn core_sets_and_write_bases_refuse_when_malformed() {
     for cores in [json!([]), json!([1, 0]), json!([0, 0]), json!([2])] {
         assert!(matches!(refused(|v| v["pieces"][1]["catalog"]["boundaries"][1]["cores"] = cores), CatalogRefusal::Shape(_)));
     }
     assert_eq!(refused(|v| v["pieces"][1]["catalog"]["boundaries"][0]["cores"] = json!([0, 1])),
         CatalogRefusal::AttachCores(label("primary-publisher/entry-core0")));
-    assert!(matches!(refused(|v| v["pieces"][0]["catalog"]["writes"]["allow"] = json!([{"target": "physical", "start": 0, "end": 16}])),
-        CatalogRefusal::UnenumeratedAllow(_)));
     assert!(matches!(refused(|v| v["pieces"][0]["catalog"]["writes"]["premise"] = Value::Null), CatalogRefusal::WritesPremise(_)));
-    let publisher: PieceKind = "primary-publisher".to_owned().try_into().unwrap();
-    assert_eq!(refused(|v| v["pieces"][1]["catalog"]["writes"] = json!({"allow": [], "basis": "unenumerated", "premise": "p"})),
-        CatalogRefusal::UnenumeratedPiece(publisher));
+    assert!(matches!(refused(|v| v["pieces"][0]["catalog"]["writes"]["basis"] = json!("proved")), CatalogRefusal::WritesPremise(_)));
+    assert!(matches!(refused(|v| v["pieces"][0]["catalog"]["writes"] = json!({"allow": [], "basis": "unenumerated", "premise": "p"})),
+        CatalogRefusal::Shape(_)));
+}
+
+#[test]
+fn declarations_parse_per_role_and_refuse_when_malformed() {
+    let contract = parse(&fixture()).unwrap();
+    assert_eq!(contract.declared(Role::Retained).len(), 2);
+    assert_eq!(contract.guard_config(Role::Composed).declared, contract.declared(Role::Composed).iter().map(|d| d.guard()).collect::<Vec<_>>());
+    assert_eq!(contract.plan().roles[1].declared, contract.declared(Role::Composed));
+    fn tcm(v: &mut Value) -> &mut Value { &mut v["guard"]["declared"]["composed"][1] }
+    let refusal = |problem| CatalogRefusal::Declaration { role: Role::Composed, problem };
+    assert_eq!(refused(|v| tcm(v)["next"] = json!(4294934545u64)), refusal(DeclarationProblem::Unchanged(1)));
+    assert_eq!(refused(|v| tcm(v)["writer"] = json!(24670)), refusal(DeclarationProblem::UnalignedWriter(1)));
+    assert_eq!(refused(|v| {
+        let copy = tcm(v).clone();
+        v["guard"]["declared"]["composed"].as_array_mut().unwrap().push(copy);
+    }), refusal(DeclarationProblem::SharedPrevious(2)));
+    assert!(matches!(refused(|v| tcm(v)["extra"] = json!(1)), CatalogRefusal::Shape(_)));
+    assert!(matches!(refused(|v| tcm(v)["bank"] = json!("other")), CatalogRefusal::Shape(_)));
+    assert!(matches!(refused(|v| { v["guard"].as_object_mut().unwrap().remove("declared"); }), CatalogRefusal::Shape(_)));
+    let many: Vec<Value> = (0..17u32).map(|index| json!({
+        "kind": "tcm-region", "core": 0, "bank": "data", "previous": index, "next": index + 1, "writer": 4 * index, "citation": "c",
+    })).collect();
+    assert_eq!(refused(|v| v["guard"]["declared"]["retained"] = Value::Array(many)), CatalogRefusal::GuardBound(GuardBound::Declared(17)));
+    assert!(matches!(refused(|v| v["schema"] = json!(3)), CatalogRefusal::Shape(_)));
 }
 
 #[test]
@@ -224,25 +246,19 @@ fn each_piece_gets_its_own_partition_on_every_core() {
     let policies = contract.policies(Role::Composed);
     assert_eq!(policies.len(), 4);
     let config = contract.guard_config(Role::Composed);
+    let first = policy_on(&policies, &first_stage(), Core::Primary);
+    assert_eq!((first.basis, first.spans.clone()), (WritesBasis::Premised, spellings(24576, 25772)));
+    assert_eq!(first.allow, [physical_plan(17152, 21120), RangePlan::Tcm { core: 0, bank: Bank::Instruction, start: 0, end: 8192 }]);
+    assert!(policy_on(&policies, &first_stage(), Core::Secondary).allow.is_empty());
     for core in Core::ALL {
-        let unenumerated = policy_on(&policies, &first_stage(), core);
-        assert_eq!((unenumerated.basis, unenumerated.spans.clone()), (WritesBasis::Unenumerated, spellings(24576, 25772)));
-        assert_eq!(unenumerated.allow, [
-            physical_plan(0, END),
-            RangePlan::Tcm { core: core.index(), bank: Bank::Data, start: 0, end: END },
-            RangePlan::Tcm { core: core.index(), bank: Bank::Instruction, start: 0, end: END },
-        ]);
-        assert_eq!(unenumerated.forbid, [physical_plan(24576, 25772), physical_plan(263216, 264620)]);
         let enumerated = policy_on(&policies, &publisher(), core);
         assert_eq!(enumerated.spans, spellings(263216, 263924));
         assert_eq!(enumerated.allow, [physical_plan(318176, 323852), physical_plan(404564, 406624)]);
-        assert!(enumerated.forbid.is_empty());
         assert_eq!(config.sources[core.index()].partitions.len(), 2);
+        assert!(config.sources[core.index()].partitions.iter().all(|partition| partition.destinations.forbid.is_empty()));
     }
-    assert_eq!(contract.unconfined(Role::Composed), [UnconfinedCode { piece: first_stage(), start: 24576, end: 25772 }]);
     assert!(contract.policies(Role::Retained).is_empty());
     assert!(contract.guard_config(Role::Retained).sources.iter().all(|source| source.partitions.is_empty()));
-    assert!(contract.unconfined(Role::Retained).is_empty());
 }
 
 #[test]
@@ -320,15 +336,14 @@ fn receipt(contract: &Contract, contract_digest: &Sha256, role: Role) -> Receipt
     ];
     let counts = rows.iter().map(|row| LabelCount { label: row.label.clone(), core: Core::Primary, total: 1 }).collect();
     Receipt {
-        schema: SchemaThree,
+        schema: SchemaFour,
         kind: ReceiptKind::ComposedStartupReceipt,
         role,
         identity: Identity {
             run: digest('a'), update: contract.identities(role).dat_sha256.clone(), boot_rom: digest('b'),
             observer: digest('c'), contract: contract_digest.clone(),
         },
-        policies: contract.policies(role).into_iter().map(|policy| RecordedPolicy { policy, checks: 3 }).collect(),
-        unconfined: contract.unconfined(role),
+        policies: contract.policies(role).into_iter().map(|policy| RecordedPolicy { policy, checks_before_boundary: 1, checks: 3 }).collect(),
         outcome: Outcome::Observed,
         error: None,
         machine_failure: None,
@@ -336,13 +351,16 @@ fn receipt(contract: &Contract, contract_digest: &Sha256, role: Role) -> Receipt
         rows,
         counts,
         off_core: vec![],
-        unguarded: vec![],
         attach: None,
         attach_sources: None,
         guard: Some(GuardObservation {
-            attach_instructions: 900, end_instructions: 250_000_000, status: GuardState::Ended, first_fault: None,
-            write_checks: 12, mutation_attempts: 0, carrier_writes: carriers(contract, &stock_writes()), watch_violation: None,
-            watch_end_error: None,
+            boundary_instructions: 900, boundary_row: 0, end_instructions: 250_000_000, status: GuardState::Ended, first_fault: None,
+            write_checks: 12, mutation_attempts: 0, mutations_admitted: 2,
+            declared: contract.declared(role).iter().map(|declaration| DeclaredUse {
+                declaration: declaration.clone(), admitted: Some(Admission { core: Core::Primary, instructions: Some(100) }),
+            }).collect(),
+            carrier_writes_before_boundary: carriers(contract, &[]), carrier_writes: carriers(contract, &stock_writes()),
+            watch_violation: None, watch_end_error: None,
         }),
         menu: MenuObservation { erased_settings: true, shooting: true },
     }
@@ -500,11 +518,37 @@ fn equal_receipts_compare_equal() {
 }
 
 #[test]
-fn owned_only_boundaries_and_unguarded_occurrences_do_not_differ() {
+fn owned_only_boundaries_do_not_differ() {
     assert_eq!(verdict(&fixture(), |owned| {
         owned.rows.insert(0, row("first-stage/entry", [9, 9, 9, 9], 0x1000, vec![]));
-        owned.unguarded.push(LabelCount { label: label("first-stage/entry"), core: Core::Primary, total: 1 });
     }), None);
+}
+
+#[test]
+fn declarations_must_match_the_contract_and_be_admitted_by_the_boundary() {
+    assert_eq!(verdict(&fixture(), |owned| owned.guard.as_mut().unwrap().declared[1].admitted = None),
+        Some(Difference::DeclarationUnused { role: Role::Composed, index: 1 }));
+    assert_eq!(verdict(&fixture(), |owned| { owned.guard.as_mut().unwrap().declared.pop(); }),
+        Some(Difference::DeclarationList { role: Role::Composed }));
+    let mut value = fixture();
+    value["guard"]["declared"]["composed"][1]["writer"] = json!(24672);
+    let bytes = serde_json::to_vec(&value).unwrap();
+    let contract = Contract::parse(&bytes).unwrap();
+    let digest = Sha256::of(&bytes);
+    let retained = receipt(&contract, &digest, Role::Retained);
+    let mut owned = receipt(&contract, &digest, Role::Composed);
+    owned.guard.as_mut().unwrap().declared = receipt(&parse(&fixture()).unwrap(), &digest, Role::Composed).guard.unwrap().declared;
+    assert_eq!(compare_with(&contract, &digest, retained, owned, |_| {}, |_, _| {}).0,
+        Some(Difference::DeclarationList { role: Role::Composed }));
+}
+
+#[test]
+fn an_owned_code_write_into_a_carrier_before_the_boundary_differs() {
+    let write = write_row("cpu-write", 24580, Some(0), Some(24600));
+    assert!(matches!(verdict(&fixture(), |owned| {
+        let contract = parse(&fixture()).unwrap();
+        owned.guard.as_mut().unwrap().carrier_writes_before_boundary = carriers(&contract, &[write]);
+    }), Some(Difference::OwnedCodeWrite { start: 24576, end: 25772, .. })));
 }
 
 #[test]
@@ -691,7 +735,7 @@ fn identities_and_reads_differ_unless_declared() {
 }
 
 #[test]
-fn host_plan_lists_each_roles_armed_sites_guard_and_unconfined_code() {
+fn host_plan_lists_each_roles_armed_sites_guard_and_declarations() {
     use fujimod_xm1::composed_catalog::{ArmedSite, SourcePlan};
     let mut value = fixture();
     value["pieces"][1]["catalog"]["boundaries"][1]["cores"] = json!([0, 1]);
@@ -711,8 +755,8 @@ fn host_plan_lists_each_roles_armed_sites_guard_and_unconfined_code() {
     assert_eq!(composed.watch_classes, [PlanSpan { start: 24576, end: 25772 }, PlanSpan { start: 263216, end: 264620 }]);
     assert_eq!(composed.policies.len(), 4);
     assert!(retained.policies.is_empty());
-    assert_eq!(composed.unconfined, [UnconfinedCode { piece: first_stage(), start: 24576, end: 25772 }]);
-    assert!(retained.unconfined.is_empty());
+    assert_eq!(composed.declared.len(), 2);
+    assert_eq!(retained.declared.len(), 2);
     let cpu1 = composed.guard.iter().find(|policy| policy.source == SourcePlan::Cpu { core: 1 }).unwrap();
     assert!(cpu1.allow.contains(&RangePlan::Tcm { core: 1, bank: Bank::Instruction, start: 0, end: END }));
     let partition = &cpu1.partitions[1];
@@ -1299,55 +1343,166 @@ fn a_later_non_logger_write_makes_a_timestamp_word_compared_again() {
 const LZ_BASE: u64 = 0xfff4_3000;
 const LZ_INPUT: u64 = 0x1000;
 
-/// Adds one LZ job over `compressed` at `LZ_INPUT`, the device's stream after it, and the job's register writes.
-fn with_lz(spec: &mut Spec, compressed: &[u8]) {
+/// Contiguous LZ job counts over one input; with `pending`, the last job is still running on the board.
+#[derive(Clone, Copy)]
+struct Jobs<'a> {
+    counts: &'a [usize],
+    pending: bool,
+}
+
+const ONE_JOB: Jobs<'static> = Jobs { counts: &[], pending: false };
+
+/// Adds `jobs` over `compressed` at `LZ_INPUT` (one job over all of it when `jobs.counts` is empty), the device's
+/// stream after the fed jobs, and the jobs' register writes.
+fn with_lz(spec: &mut Spec, compressed: &[u8], jobs: Jobs) {
     for (index, byte) in compressed.iter().enumerate() {
         spec.bytes.insert((Space::Physical, LZ_INPUT + index as u64), *byte);
     }
+    let whole = [compressed.len()];
+    let counts = if jobs.counts.is_empty() { &whole[..] } else { jobs.counts };
+    let fed: usize = counts[..counts.len() - usize::from(jobs.pending)].iter().sum();
     let mut stream = fujimod_emulator_devices::compression::method4::Stream::default();
-    stream.feed(compressed, &mut [0u8; 256]).unwrap();
+    stream.feed(&compressed[..fed], &mut [0u8; 256]).unwrap();
+    let pending = if jobs.pending { json!({"job": "Lz"}) } else { Value::Null };
     spec.board["bus"]["devices"].as_array_mut().unwrap().push(json!({
         "kind": "exr2-lz", "windows": [{"base": LZ_BASE, "size": 256}], "native_dependencies": [],
-        "state": {"state": {"stream": serde_json::to_value(&stream).unwrap(), "pending": null}},
+        "state": {"state": {"stream": serde_json::to_value(&stream).unwrap(), "pending": pending}},
     }));
     let sources = spec.sources.as_mut().unwrap();
-    let tick = sources.rows.last().unwrap().tick;
-    for (step, (offset, value)) in [(0x40, LZ_INPUT as u32), (0x44, compressed.len() as u32), (0x04, 2)].into_iter().enumerate() {
-        sources.rows.push(TransactionRow {
-            tick: tick + 1 + step as u64, core: Some(Core::Primary), pc: Pc(0x7000), address: (LZ_BASE + offset) as u32, size: 4,
-            access: Access::Write, accepted: true, value,
-        });
+    let mut tick = sources.rows.last().unwrap().tick;
+    let mut source = LZ_INPUT as u32;
+    for &count in counts {
+        for (offset, value) in [(0x40, source), (0x44, count as u32), (0x04, 2)] {
+            tick += 1;
+            sources.rows.push(TransactionRow {
+                tick, core: Some(Core::Primary), pc: Pc(0x7000), address: (LZ_BASE + offset) as u32, size: 4,
+                access: Access::Write, accepted: true, value,
+            });
+        }
+        source += count as u32;
     }
+}
+
+const RETAINED_LZ_INPUT: [u8; 6] = [3, b'a', b'b', b'c', 0x80, 0x36];
+const OWNED_LZ_INPUT: [u8; 10] = [9, b'a', b'b', b'c', b'a', b'b', b'c', b'a', b'b', b'c'];
+
+/// Both roles with LZ jobs over inputs of different lengths: one job in the retained role, `owned` in the composed.
+fn lz_roles(owned_jobs: Jobs) -> (Spec, Spec) {
+    let mut retained = relation_spec(Role::Retained, &timer_steps(100, 200, RETAINED_SITE), RETAINED_SITE);
+    let mut owned = relation_spec(Role::Composed, &timer_steps(160, 300, COMPOSED_SITE), COMPOSED_SITE);
+    with_lz(&mut retained, &RETAINED_LZ_INPUT, ONE_JOB);
+    with_lz(&mut owned, &OWNED_LZ_INPUT, owned_jobs);
+    (retained, owned)
+}
+
+/// The relations fixture with `lz` and a copy allowance pinning each role's LZ input.
+fn lz_contract(lz: Value) -> Value {
+    let padded = |input: &[u8]| { let mut bytes = input.to_vec(); bytes.resize(16, 0); Sha256::of(&bytes) };
+    let mut value = with_relations(fixture());
+    value["guard"]["attach_state"]["relations"]["lz"] = lz;
+    attach_rules(&mut value)["allowances"] = json!([{
+        "label": "lz-input", "kind": "copy", "space": {"target": "physical"}, "start": LZ_INPUT, "end": LZ_INPUT + 16, "reason": "r",
+        "source": {"dat": {"offset": 0, "transform": "identity"}}, "canonical_sha256": padded(&RETAINED_LZ_INPUT), "composed_sha256": padded(&OWNED_LZ_INPUT),
+    }]);
+    value
 }
 
 #[test]
 fn the_lz_tallies_follow_each_role_s_pinned_input() {
-    let retained_input = [3, b'a', b'b', b'c', 0x80, 0x36];
-    let owned_input = [9, b'a', b'b', b'c', b'a', b'b', b'c', b'a', b'b', b'c'];
-    let mut retained = relation_spec(Role::Retained, &timer_steps(100, 200, RETAINED_SITE), RETAINED_SITE);
-    let mut owned = relation_spec(Role::Composed, &timer_steps(160, 300, COMPOSED_SITE), COMPOSED_SITE);
-    with_lz(&mut retained, &retained_input);
-    with_lz(&mut owned, &owned_input);
-    let padded = |input: &[u8]| { let mut bytes = input.to_vec(); bytes.resize(16, 0); Sha256::of(&bytes) };
-    let with_copy = |lz: Value| {
-        let mut value = with_relations(fixture());
-        value["guard"]["attach_state"]["relations"]["lz"] = lz;
-        attach_rules(&mut value)["allowances"] = json!([{
-            "label": "lz-input", "kind": "copy", "space": {"target": "physical"}, "start": LZ_INPUT, "end": LZ_INPUT + 16, "reason": "r",
-            "source": {"dat": {"offset": 0, "transform": "identity"}}, "canonical_sha256": padded(&retained_input), "composed_sha256": padded(&owned_input),
-        }]);
-        value
-    };
-    let verdict = relation_verdict(&with_copy(json!({"citation": "lz.rs"})), &retained, &owned);
+    let (retained, owned) = lz_roles(ONE_JOB);
+    let verdict = relation_verdict(&lz_contract(json!({"citation": "lz.rs"})), &retained, &owned);
     assert_eq!(verdict.first_difference, None, "{:?}", verdict.attach_differences);
     let tallies = verdict.attach.unwrap().relations.iter().map(|role| role.lz.as_ref().map(|lz| (lz.literals, lz.matches))).collect::<Vec<_>>();
     assert_eq!(tallies, [Some((1, 1)), Some((1, 0))]);
-    let without = relation_verdict(&with_copy(Value::Null), &retained, &owned).first_difference;
+    let without = relation_verdict(&lz_contract(Value::Null), &retained, &owned).first_difference;
     assert!(matches!(without, Some(Difference::AttachBoard { .. })), "{without:?}");
-    let mut overlap = with_copy(json!({"citation": "lz.rs"}));
+    let mut overlap = lz_contract(json!({"citation": "lz.rs"}));
     attach_rules(&mut overlap)["board"] = json!([{"pointer": "/bus/devices/1/state/state/stream/literals", "kind": "declared", "reason": "r", "citation": "c"}]);
     let entries = relation_verdict(&overlap, &retained, &owned).attach_differences.entries;
     assert!(entries.iter().any(|entry| matches!(entry, Difference::AttachRelation { failure: RelationFailure::RelationOverlap { .. }, .. })));
+}
+
+const SUBMITTED: u64 = 0x42a4;
+
+fn submitted_contract(retained_length: u32, composed_length: u32) -> Value {
+    lz_contract(json!({"citation": "lz.rs", "submitted": {
+        "address": SUBMITTED, "citation": "boot-40048.dis 0x3ffc", "record_length": {"retained": retained_length, "composed": composed_length},
+    }}))
+}
+
+/// Each role's jobs and record length, with each word as `words` sets it.
+fn submitted_verdict(words: [u32; 2], lengths: [u32; 2], owned_jobs: Jobs) -> Verdict {
+    let (mut retained, mut owned) = lz_roles(owned_jobs);
+    set_word(&mut retained, SUBMITTED, words[0]);
+    set_word(&mut owned, SUBMITTED, words[1]);
+    relation_verdict(&submitted_contract(lengths[0], lengths[1]), &retained, &owned)
+}
+
+const SUBMITTED_LENGTHS: [u32; 2] = [RETAINED_LZ_INPUT.len() as u32 + 0x14, OWNED_LZ_INPUT.len() as u32 + 0x14];
+
+#[test]
+fn the_submitted_word_differs_between_roles_when_each_matches_its_jobs_and_record() {
+    let verdict = submitted_verdict([6, 10], SUBMITTED_LENGTHS, ONE_JOB);
+    assert_eq!(verdict.first_difference, None, "{:?}", verdict.attach_differences);
+    let words = verdict.attach.unwrap().relations.iter().map(|role| role.lz.as_ref().and_then(|lz| lz.submitted)).collect::<Vec<_>>();
+    assert_eq!(words, [Some(Word(6)), Some(Word(10))]);
+}
+
+/// The board's pending job and unfed stream history still differ between roles; only the relation is asserted.
+#[test]
+fn a_pending_last_job_counts_in_the_submitted_word() {
+    let (failures, compared) = submitted_failures(&submitted_verdict([6, 10], SUBMITTED_LENGTHS, Jobs { counts: &[4, 6], pending: true }));
+    assert_eq!(failures, []);
+    assert!(!compared);
+    let (failures, compared) = submitted_failures(&submitted_verdict([6, 4], SUBMITTED_LENGTHS, Jobs { counts: &[4, 6], pending: true }));
+    assert_eq!(failures, [RelationFailure::LzSubmittedDrain { captured: Word(4), started: 10, last: 6 }]);
+    assert!(compared);
+}
+
+/// The composed role's relation failures, and whether the submitted word reached the memory comparison.
+fn submitted_failures(verdict: &Verdict) -> (Vec<RelationFailure>, bool) {
+    let entries = &verdict.attach_differences.entries;
+    let failures = entries.iter().filter_map(|entry| match entry {
+        Difference::AttachRelation { role: Role::Composed, failure } => Some(failure.clone()),
+        _ => None,
+    }).collect();
+    let compared = entries.iter().any(|entry| matches!(entry, Difference::AttachMemory { start: SUBMITTED, .. }));
+    (failures, compared)
+}
+
+#[test]
+fn a_submitted_word_off_its_jobs_and_record_is_compared() {
+    let (failures, compared) = submitted_failures(&submitted_verdict([6, 11], SUBMITTED_LENGTHS, ONE_JOB));
+    assert_eq!(failures, [RelationFailure::LzSubmitted { captured: Word(11), started: 10, stream: 10 }]);
+    assert!(compared);
+}
+
+#[test]
+fn a_record_length_that_disagrees_with_the_job_total_refuses() {
+    let (failures, compared) = submitted_failures(&submitted_verdict([6, 10], [SUBMITTED_LENGTHS[0], SUBMITTED_LENGTHS[1] + 1], ONE_JOB));
+    assert_eq!(failures, [RelationFailure::LzSubmitted { captured: Word(10), started: 10, stream: 11 }]);
+    assert!(compared);
+}
+
+#[test]
+fn a_last_job_missing_from_a_complete_stream_is_the_drain_step() {
+    let (failures, compared) = submitted_failures(&submitted_verdict([6, 0], SUBMITTED_LENGTHS, ONE_JOB));
+    assert_eq!(failures, [RelationFailure::LzSubmittedDrain { captured: Word(0), started: 10, last: 10 }]);
+    assert!(compared);
+    let (failures, compared) = submitted_failures(&submitted_verdict([6, 4], SUBMITTED_LENGTHS, Jobs { counts: &[4, 6], pending: false }));
+    assert_eq!(failures, [RelationFailure::LzSubmittedDrain { captured: Word(4), started: 10, last: 6 }]);
+    assert!(compared);
+    let (failures, _) = submitted_failures(&submitted_verdict([6, 3], SUBMITTED_LENGTHS, Jobs { counts: &[4, 6], pending: false }));
+    assert_eq!(failures, [RelationFailure::LzSubmitted { captured: Word(3), started: 10, stream: 10 }]);
+}
+
+#[test]
+fn a_submitted_word_must_be_aligned_and_clear_of_allowances() {
+    for (address, length) in [(SUBMITTED + 2, 0x20), (LZ_INPUT, 0x20), (LOG, 0x20), (SUBMITTED, 0x13), (0x2000_0000, 0x20), (u64::MAX - 1, 0x20)] {
+        let mut value = submitted_contract(length, length);
+        value["guard"]["attach_state"]["relations"]["lz"]["submitted"]["address"] = json!(address);
+        assert!(matches!(parse(&value), Err(CatalogRefusal::AttachState(AttachRuleRefusal::LzSubmittedWord))), "{address:#x}");
+    }
 }
 
 #[test]
@@ -1375,4 +1530,64 @@ fn log_sites_and_spans_are_checked_at_parse() {
     value["guard"]["attach_state"]["relations"]["log"]["sites"][2]["read_pc"] = json!(RETAINED_SITE);
     value["guard"]["attach_state"]["relations"]["log"]["sites"][2]["store_pc"] = json!(RETAINED_SITE + 4);
     assert!(matches!(parse(&value), Err(CatalogRefusal::AttachState(AttachRuleRefusal::LogSite(_)))));
+}
+
+#[test]
+fn the_census_passes_only_on_the_declared_rows_and_their_choice_maps() {
+    use fujimod_xm1::composed_mutations::{CensusMutation, CensusRow, ChoiceMap, MappingKind, Origin, census_difference};
+    let contract = parse(&fixture()).unwrap();
+    let declared = contract.declared(Role::Composed);
+    let map = |core| ChoiceMap { core, address: 0, physical: 0, bytes: 0x4000, permissions: 7 };
+    let maps = vec![vec![vec![], vec![map(Core::Primary), map(Core::Secondary)]]];
+    let row = |core, mutation, writer| CensusRow { core: Some(core), mutation, pc: Some(4), cpsr: None, writer, instructions: Some(5) };
+    let commit = row(Core::Primary, CensusMutation::DecoderCommit { decoder: 0, previous: 0, next: 1 }, Some(0x8000_22a8));
+    let replaced = |core| row(core, CensusMutation::Mapping {
+        operation: MappingKind::ReplacePhysical, address: 0, physical: Some(0), bytes: 0x4000, permissions: Some(7),
+    }, None);
+    let tcm = |writer| row(Core::Primary, CensusMutation::TcmRegion {
+        bank: Some(Bank::Instruction), previous: 0xffff_8011, next: 0x7000_0011, origin: Origin::Guest,
+    }, Some(writer));
+    let passing = vec![commit, replaced(Core::Primary), replaced(Core::Secondary), tcm(0x605c)];
+    assert_eq!(census_difference(declared, &maps, &passing), Ok(None));
+    let interleaved = vec![tcm(0x605c), commit, replaced(Core::Primary), replaced(Core::Secondary)];
+    assert_eq!(census_difference(declared, &maps, &interleaved), Ok(None));
+    let failing = [
+        vec![commit, replaced(Core::Primary), tcm(0x605c)],
+        vec![commit, replaced(Core::Primary), replaced(Core::Secondary), tcm(0x6060)],
+        vec![replaced(Core::Primary), commit, replaced(Core::Secondary), tcm(0x605c)],
+        vec![commit, replaced(Core::Primary), replaced(Core::Secondary), tcm(0x605c),
+            row(Core::Secondary, CensusMutation::HostWrite { address: 0, bytes: 4 }, None)],
+    ];
+    for rows in failing {
+        assert!(matches!(census_difference(declared, &maps, &rows), Ok(Some(_))), "{rows:?}");
+    }
+}
+
+#[test]
+fn rom_declarations_bind_the_boot_rom_words_and_the_run_graph_decoder() {
+    use fujimod_xm1::composed_mutations::{ROM_SELECT_POOL, ROM_SELECT_STORE, check_rom_declarations, choice_maps};
+    use fujimod_xm1::run::RunDocument;
+    fujimod_emulator_exr2_board::register_board_builder();
+    fujimod_emulator_models::register();
+    let document = RunDocument::parse(include_bytes!("../data/xm1-150.json")).unwrap();
+    let mut rom = vec![0u8; document.boot_rom.bytes];
+    for (address, word) in [ROM_SELECT_STORE, ROM_SELECT_POOL] {
+        let offset = (address - 0x8000_0000) as usize;
+        rom[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
+    }
+    let contract = parse(&fixture()).unwrap();
+    let declared = contract.declared(Role::Composed).to_vec();
+    assert_eq!(check_rom_declarations(&document, &rom, &declared), Ok(()));
+    let mut changed = rom.clone();
+    changed[0x22a8] ^= 1;
+    assert!(check_rom_declarations(&document, &changed, &declared).is_err());
+    let mut value = fixture();
+    value["guard"]["declared"]["composed"][0]["writer"] = json!(0x8000_22acu32);
+    assert!(check_rom_declarations(&document, &rom, parse(&value).unwrap().declared(Role::Composed)).is_err());
+    value["guard"]["declared"]["composed"][0]["writer"] = json!(0x8000_22a8u32);
+    value["guard"]["declared"]["composed"][0]["previous"] = json!(1);
+    value["guard"]["declared"]["composed"][0]["next"] = json!(0);
+    assert!(check_rom_declarations(&document, &rom, parse(&value).unwrap().declared(Role::Composed)).is_err());
+    let maps = choice_maps(&document).unwrap();
+    assert!(maps.first().and_then(|choices| choices.get(1)).is_some_and(|choice| !choice.is_empty()));
 }

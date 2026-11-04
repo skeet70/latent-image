@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "kind": "composed-startup-contract",
   "qualification": "pending",
   "pending_joins": [
@@ -91,6 +91,48 @@
         "log": null,
         "lz": null
       }
+    },
+    "declared": {
+      "retained": [
+        {
+          "kind": "decoder-commit",
+          "decoder": 0,
+          "previous": 0,
+          "next": 1,
+          "core": 0,
+          "writer": 2147492520,
+          "citation": "boot ROM selection store"
+        },
+        {
+          "kind": "tcm-region",
+          "core": 0,
+          "bank": "instruction",
+          "previous": 4294934545,
+          "next": 1879048209,
+          "writer": 6340,
+          "citation": "stock record 1"
+        }
+      ],
+      "composed": [
+        {
+          "kind": "decoder-commit",
+          "decoder": 0,
+          "previous": 0,
+          "next": 1,
+          "core": 0,
+          "writer": 2147492520,
+          "citation": "boot ROM selection store"
+        },
+        {
+          "kind": "tcm-region",
+          "core": 0,
+          "bank": "instruction",
+          "previous": 4294934545,
+          "next": 1879048209,
+          "writer": 24668,
+          "citation": "owned first stage"
+        }
+      ]
     }
   },
   "joins": [
@@ -178,9 +220,24 @@
           }
         ],
         "writes": {
-          "allow": [],
-          "basis": "unenumerated",
-          "premise": "first-stage stores are not enumerated"
+          "allow": [
+            {
+              "target": "physical",
+              "core": 0,
+              "bank": null,
+              "start": 17152,
+              "end": 21120
+            },
+            {
+              "target": "tcm",
+              "core": 0,
+              "bank": "instruction",
+              "start": 0,
+              "end": 8192
+            }
+          ],
+          "basis": "premised",
+          "premise": "first-stage stores from source"
         },
         "reads": [
           {

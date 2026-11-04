@@ -1,29 +1,90 @@
+diff --git a/.cargo/config.toml b/.cargo/config.toml
+index 7ec825f..efbc3ca 100644
+--- a/.cargo/config.toml
++++ b/.cargo/config.toml
+@@ -1,9 +1,5 @@
+-# The Python extension uses the stable ABI, so PyO3 needs no interpreter. Without
+-# this, its build script follows PATH and rebuilds whenever a shell's PATH differs.
+-[env]
+-PYO3_NO_PYTHON = "1"
++[source.vendored-source-registry-0]
++directory = "/nix/store/fhfz32smvy6s2968drvibglrqsf7pz41-fujimod-emulator-0.1.0-3d90035d-vendor/source-registry-0"
+ 
+-[target.wasm32-unknown-unknown]
+-# nusb's WebUSB backend uses web-sys's gated USB bindings.
+-rustflags = ["--cfg=web_sys_unstable_apis"]
+-runner = "wasm-bindgen-test-runner"
++[source.crates-io]
++replace-with = "vendored-source-registry-0"
 diff --git a/crates/emulator/src/board/decoder.rs b/crates/emulator/src/board/decoder.rs
-index 9bf1bfd..fe71001 100644
+index 9bf1bfd..c573e77 100644
 --- a/crates/emulator/src/board/decoder.rs
 +++ b/crates/emulator/src/board/decoder.rs
 @@ -2,6 +2,7 @@
  use super::{
      factory::MemoryMap,
      memory::{BusMapping, Memory},
-+    observation::GuardMutation,
++    observation::{GuardMutation, SelectionWriter},
  };
  use fujimod_emulator_cpu::Cpu;
  use serde_json::{Value, json};
-@@ -57,6 +58,12 @@ impl Decoders {
+@@ -29,6 +30,8 @@ struct Slot {
+     choices: Vec<Choice>,
+     selected: usize,
+     pending: Option<usize>,
++    /// The store that made the pending selection, when a guest store did.
++    writer: Option<SelectionWriter>,
+ }
+ #[derive(serde::Serialize, serde::Deserialize)]
+ #[serde(deny_unknown_fields)]
+@@ -57,6 +60,13 @@ impl Decoders {
              .cloned()
              .collect()
      }
-+    pub(super) fn selected_maps(&self, core: usize) -> impl Iterator<Item = &MemoryMap> {
-+        self.slots
-+            .iter()
-+            .flat_map(|s| &s.choices[s.selected].processors)
-+            .filter(move |m| m.core == core)
++    /// Per decoder the selected choice, and per decoder and choice its processor maps.
++    pub(super) fn guard_tables(&self) -> (Vec<usize>, Vec<Vec<Vec<MemoryMap>>>) {
++        (
++            self.slots.iter().map(|s| s.selected).collect(),
++            self.slots.iter().map(|s| s.choices.iter().map(|c| c.processors.clone()).collect()).collect(),
++        )
 +    }
  
      pub(super) fn checkpoint(&self) -> Checkpoint {
          Checkpoint {
-@@ -137,10 +144,11 @@ impl Decoders {
+@@ -89,6 +99,7 @@ impl Decoders {
+         self.failure = None;
+         for (slot, &(selected, _)) in self.slots.iter_mut().zip(&saved.slots) {
+             slot.pending = (slot.selected != selected).then_some(selected);
++            slot.writer = None;
+         }
+         self.apply(cpus, memory)?;
+         for (slot, &(_, pending)) in self.slots.iter_mut().zip(&saved.slots) {
+@@ -105,6 +116,7 @@ impl Decoders {
+                     choices: d.choices,
+                     selected: d.initial,
+                     pending: None,
++                    writer: None,
+                 })
+                 .collect(),
+             failure: None,
+@@ -113,7 +125,7 @@ impl Decoders {
+     pub fn pending(&self) -> bool {
+         self.slots.iter().any(|s| s.pending.is_some())
+     }
+-    pub fn select(&mut self, decoder: usize, choice: usize, defer: bool) -> Result<(), String> {
++    pub fn select(&mut self, decoder: usize, choice: usize, defer: bool, writer: Option<SelectionWriter>) -> Result<(), String> {
+         if let Some(error) = &self.failure {
+             return Err(error.clone());
+         }
+@@ -130,6 +142,7 @@ impl Decoders {
+                 return Err("memory decoding change requires a stopped boundary".into());
+             }
+             slot.pending = Some(choice);
++            slot.writer = writer;
+         }
+         Ok(())
+     }
+@@ -137,10 +150,12 @@ impl Decoders {
          if let Some(error) = &self.failure {
              return Err(error.clone());
          }
@@ -32,10 +93,23 @@ index 9bf1bfd..fe71001 100644
              let Some(choice) = slot.pending else {
                  continue;
              };
-+            memory.admit_transaction(GuardMutation::Decoder { decoder, choice })?;
++            let writer = slot.writer.take();
++            memory.admit_transaction(GuardMutation::Decoder { decoder, previous: slot.selected, choice, writer })?;
              let result = (|| {
                  for map in &slot.choices[choice].processors {
                      let (base, backing) = memory
+@@ -163,9 +178,10 @@ impl Decoders {
+                     }
+                 }
+                 memory.replace_views(&slot.choices[choice].dma)?;
+-                Ok::<_, String>(())
++                memory.close_transaction()
+             })();
+             if let Err(error) = result {
++                memory.abort_transaction();
+                 // A backend mapping failure may follow successful peer changes.
+                 // Keep the board unusable rather than execute a partial decode.
+                 self.failure = Some(format!("memory decoding failed: {error}"));
 diff --git a/crates/emulator/src/board/factory.rs b/crates/emulator/src/board/factory.rs
 index 19da835..1dd12f3 100644
 --- a/crates/emulator/src/board/factory.rs
@@ -68,18 +142,19 @@ index 19da835..1dd12f3 100644
          for (core, cpu) in cpus.iter().enumerate() {
              for a in self.mappings.iter().filter(|a| a.core == core) {
 diff --git a/crates/emulator/src/board/keyframe.rs b/crates/emulator/src/board/keyframe.rs
-index eea30e6..88459cd 100644
+index eea30e6..5b861ce 100644
 --- a/crates/emulator/src/board/keyframe.rs
 +++ b/crates/emulator/src/board/keyframe.rs
-@@ -129,6 +129,7 @@ impl State {
+@@ -129,6 +129,8 @@ impl State {
              parallel: _,
              decoders: _,
              memory_access: _,
++            access_pc: _,
 +            observation_cleanup_failed: _,
              continuation: _,
          } = self;
          Saved {
-@@ -321,6 +322,7 @@ impl Board {
+@@ -321,6 +323,7 @@ impl Board {
              .lock()
              .map_err(|_| "exclusive monitors poisoned")?
              .validate_checkpoint(&saved.exclusive)?;
@@ -216,19 +291,21 @@ index ea20a6b..3794360 100644
          if let Some(stops) = self
              .continuation
 diff --git a/crates/emulator/src/board/mod.rs b/crates/emulator/src/board/mod.rs
-index 75630e7..b83cd63 100644
+index 75630e7..7f9a76d 100644
 --- a/crates/emulator/src/board/mod.rs
 +++ b/crates/emulator/src/board/mod.rs
-@@ -110,6 +110,8 @@ struct State {
+@@ -110,6 +110,10 @@ struct State {
      parallel: Option<interactive::Epoch>,
      decoders: decoder::Decoders,
      memory_access: bool,
++    /// PC of the guest store whose MMIO access is in progress.
++    access_pc: Option<u64>,
 +    /// Set when an observation hook could not be removed; execution is refused.
 +    observation_cleanup_failed: Rc<Cell<bool>>,
  }
  struct Binding {
      state: Rc<RefCell<State>>,
-@@ -125,6 +127,8 @@ pub struct Board {
+@@ -125,6 +129,8 @@ pub struct Board {
      run_wakeup: fujimod_emulator_cpu::RunWakeup,
      bindings: Vec<Box<Binding>>,
      hooks: Vec<(usize, HookId)>,
@@ -237,15 +314,16 @@ index 75630e7..b83cd63 100644
      mmio: Vec<(usize, u64, usize)>,
      next_core: Cell<usize>,
      slice_left: Cell<usize>,
-@@ -329,6 +333,7 @@ impl Board {
+@@ -329,6 +335,8 @@ impl Board {
              parallel: None,
              decoders: decoder::Decoders::default(),
              memory_access: false,
++            access_pc: None,
 +            observation_cleanup_failed: memory.observers.cleanup_failed.clone(),
          }));
          let mut board = Self {
              run_wakeup: Default::default(),
-@@ -683,6 +688,9 @@ impl Board {
+@@ -683,6 +691,9 @@ impl Board {
          pause_after: Option<u64>,
          quantum: usize,
      ) -> Result<(), String> {
@@ -255,7 +333,7 @@ index 75630e7..b83cd63 100644
          prepare_device_workers(self.execution_policy(), self.device_worker_preference())?;
          if quantum == 0 {
              return Err("zero processor quantum".into());
-@@ -968,6 +976,9 @@ impl Board {
+@@ -968,6 +979,9 @@ impl Board {
  }
  impl Drop for Board {
      fn drop(&mut self) {
@@ -265,27 +343,76 @@ index 75630e7..b83cd63 100644
          let _ = self.continuation_end();
          let _ = self.release_store_watch();
          // The board exclusively owns processors; bindings hold only Weak
+@@ -1248,6 +1262,7 @@ impl State {
+             decoders,
+             active_slice,
+             memory_access,
++            access_pc,
+             ..
+         } = self;
+         let mut host = Services {
+@@ -1273,6 +1288,7 @@ impl State {
+             decoders,
+             active_core: active_slice.map(|s| s.core),
+             memory_access: *memory_access,
++            writer: active_slice.map(|s| s.core).zip(*access_pc).map(|(core, pc)| observation::SelectionWriter { core, pc }),
+         };
+         let result = f(bus, &mut host);
+         if self::continuation::fired(&self.continuation) {
+@@ -1412,10 +1428,12 @@ impl State {
+             }
+         }
+         self.memory_access = value.is_some();
++        self.access_pc = value.is_some().then_some(pc);
+         let result = self.with_host(cpus, |bus, host| {
+             bus.access(host, core, pc, address, size, value)
+         });
+         self.memory_access = false;
++        self.access_pc = None;
+         let result = result?;
+         self.refresh_deadlines()?;
+         self.refresh_processors()?;
+@@ -1513,6 +1531,7 @@ struct Services<'a> {
+     decoders: &'a mut decoder::Decoders,
+     active_core: Option<usize>,
+     memory_access: bool,
++    writer: Option<observation::SelectionWriter>,
+ }
+ impl Services<'_> {
+     fn remember(&mut self, result: Result<(), String>) {
+@@ -1532,6 +1551,7 @@ impl Host for Services<'_> {
+             decoder,
+             choice,
+             self.active_core.is_none() || self.memory_access,
++            self.writer,
+         )?;
+         if !self.decoders.pending() {
+             return Ok(());
 diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/board/observation.rs
-index 2c429d7..84020e6 100644
+index 2c429d7..5cd2e8c 100644
 --- a/crates/emulator/src/board/observation.rs
 +++ b/crates/emulator/src/board/observation.rs
-@@ -13,6 +13,15 @@ use std::{
+@@ -13,6 +13,19 @@ use std::{
      ffi::c_void,
      rc::{Rc, Weak},
  };
 +mod composite;
++mod journal;
 +mod lifecycle;
 +pub use composite::{
-+    CompositeGuardConfig, DestinationPolicy, FailurePhase, GuardAttachError, GuardCore, GuardFault, GuardHook,
-+    GuardLocation, GuardMutation, GuardRange, GuardReport, GuardSpan, GuardStatus, GuardStatusToken, GuardTarget,
-+    MAX_GUARD_BYTES, MAX_GUARD_CORES, MAX_GUARD_PARTITIONS, MAX_GUARD_PC_SPANS, MAX_GUARD_RANGES, MAX_GUARD_VIEWS,
-+    PartitionId, PcPartition, SourcePolicy, TcmBank, WriteFaultReason, WriteOutcome, WriteSource,
++    AdmittedAt, CompositeGuardConfig, DeclarationId, DeclaredField, DeclaredMutation, DeclaredUse, DecoderChoice,
++    DecoderIndex, DestinationPolicy, FailurePhase, GuardAttachError, GuardCore, GuardFault, GuardHook, GuardLocation,
++    GuardMutation, GuardRange, GuardReport, GuardSpan, GuardStatus, GuardStatusToken, GuardTarget, MAX_GUARD_BYTES,
++    MAX_GUARD_CORES, MAX_GUARD_DECLARED_MUTATIONS, MAX_GUARD_PARTITIONS, MAX_GUARD_PC_SPANS, MAX_GUARD_RANGES,
++    MAX_GUARD_VIEWS, MutationRefusal, PartitionId, PcPartition, SelectionWriter, SourcePolicy, TcmBank, TcmRegister,
++    WriteFaultReason, WriteOutcome, WriteSource, WriterPc,
 +};
++pub use journal::{MAX_JOURNAL_ROWS, MutationJournal, MutationRow};
 +pub(in crate::board) use lifecycle::ObservationRegistry;
  type Span = (u64, u64);
  /// Access sources one classified watch range records.
  #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-@@ -77,6 +86,7 @@ pub struct Records {
+@@ -77,6 +90,7 @@ pub struct Records {
      limit: usize,
      rows: Vec<Value>,
      violation: Option<String>,
@@ -293,7 +420,7 @@ index 2c429d7..84020e6 100644
      /// Empty for an unclassified watch, which records every source.
      classes: Vec<WatchRange>,
      views: ViewPolicy,
-@@ -153,21 +163,13 @@ impl Records {
+@@ -153,21 +167,13 @@ impl Records {
          state
      }
  }
@@ -316,7 +443,7 @@ index 2c429d7..84020e6 100644
  struct MemoryContext {
      state: Weak<RefCell<State>>,
      cpu: Weak<dyn Cpu>,
-@@ -340,6 +342,7 @@ impl Board {
+@@ -340,6 +346,7 @@ impl Board {
          {
              return Err("Memory watch requires bounded ranges and R-profile processors".into());
          }
@@ -324,7 +451,7 @@ index 2c429d7..84020e6 100644
          if self.preservation_active() {
              return Err("A preservation observation conflicts with memory watch".into());
          }
-@@ -347,6 +350,7 @@ impl Board {
+@@ -347,6 +354,7 @@ impl Board {
          self.watch_backing(&ranges)?;
          let records = Rc::new(RefCell::new(Records {
              ranges: ranges.clone(),
@@ -332,7 +459,7 @@ index 2c429d7..84020e6 100644
              limit,
              ..Default::default()
          }));
-@@ -417,6 +421,7 @@ impl Board {
+@@ -417,6 +425,7 @@ impl Board {
                  }
              }
          }
@@ -340,7 +467,7 @@ index 2c429d7..84020e6 100644
          self.physical_memory
              .observation
              .replace(Some(Rc::downgrade(&records)));
-@@ -463,6 +468,7 @@ impl Board {
+@@ -463,6 +472,7 @@ impl Board {
          {
              return Err("Memory watch requires bounded classified ranges and R-profile processors".into());
          }
@@ -348,7 +475,7 @@ index 2c429d7..84020e6 100644
          if self.preservation_active() {
              return Err("A preservation observation conflicts with memory watch".into());
          }
-@@ -470,6 +476,7 @@ impl Board {
+@@ -470,6 +480,7 @@ impl Board {
          self.watch_backing(&ranges)?;
          let records = Rc::new(RefCell::new(Records {
              ranges,
@@ -356,7 +483,7 @@ index 2c429d7..84020e6 100644
              limit,
              classes,
              views,
-@@ -556,23 +563,14 @@ impl Board {
+@@ -556,23 +567,14 @@ impl Board {
                  }
              }
          }
@@ -382,7 +509,7 @@ index 2c429d7..84020e6 100644
      }
  }
  
-@@ -584,14 +582,21 @@ pub struct InstructionPointEvent {
+@@ -584,14 +586,21 @@ pub struct InstructionPointEvent {
  /// Repeated entry observations stop before the selected instruction. Resume
  /// executes that instruction once, even when it is itself a loop target.
  pub struct InstructionPoints {
@@ -407,7 +534,7 @@ index 2c429d7..84020e6 100644
  }
  #[derive(Clone, Copy)]
  enum PointSetMode { Fixed, Mutable }
-@@ -613,15 +618,16 @@ fn normalize_point_addresses(mut addresses: Vec<u64>) -> Result<Vec<u64>, String
+@@ -613,15 +622,16 @@ fn normalize_point_addresses(mut addresses: Vec<u64>) -> Result<Vec<u64>, String
      Ok(addresses)
  }
  unsafe fn instruction(pc: u64, _: u32, data: *mut c_void) {
@@ -427,7 +554,7 @@ index 2c429d7..84020e6 100644
          points.skip.set(Some(pc));
          points.pause.set(true);
          let _ = cpu.stop_before_instruction();
-@@ -629,23 +635,52 @@ unsafe fn instruction(pc: u64, _: u32, data: *mut c_void) {
+@@ -629,23 +639,52 @@ unsafe fn instruction(pc: u64, _: u32, data: *mut c_void) {
  }
  impl InstructionPoints {
      /// Inspect after the run settles all callbacks for the stopped entry.
@@ -486,7 +613,7 @@ index 2c429d7..84020e6 100644
      }
  }
  impl Board {
-@@ -672,28 +707,35 @@ impl Board {
+@@ -672,28 +711,35 @@ impl Board {
      ) -> Result<Box<InstructionPoints>, String> {
          let cpu = self.cpu(core)?;
          let addresses = normalize_point_addresses(addresses)?;
@@ -528,7 +655,7 @@ index 2c429d7..84020e6 100644
              PointAddresses::Fixed(addresses) => addresses.iter().try_for_each(|&pc| install(HookRange::Inclusive { begin: pc, end: pc })),
              PointAddresses::Mutable(_) => install(HookRange::All),
          };
-@@ -708,10 +750,11 @@ impl Board {
+@@ -708,10 +754,11 @@ impl Board {
          core: usize,
          points: &mut InstructionPoints,
      ) -> Result<(), String> {
@@ -545,21 +672,27 @@ index 2c429d7..84020e6 100644
  
 diff --git a/crates/emulator/src/board/observation/composite.rs b/crates/emulator/src/board/observation/composite.rs
 new file mode 100644
-index 0000000..9317386
+index 0000000..e971177
 --- /dev/null
 +++ b/crates/emulator/src/board/observation/composite.rs
-@@ -0,0 +1,930 @@
+@@ -0,0 +1,1356 @@
 +//! Opt-in write and mutation admission attached to the current classified
 +//! memory watch. The guard retains bounded policy, checked counters and the
-+//! first typed fault; it adds no rows to the watch.
-+use super::{Board, MemoryWatch, State, lifecycle::LeasePhase};
++//! first typed fault; it adds no rows to the watch. Declared TCM region writes
++//! and memory decoder commits are admitted once each, in their declared order,
++//! and move the pinned TCM windows and processor views with them.
++use super::{Board, MemoryWatch, State, ViewPolicy, lifecycle::LeasePhase};
 +use crate::board::{
++    factory::MemoryMap,
 +    memory::{BulkWrite, Memory},
 +    scalar,
 +};
-+use fujimod_emulator_cpu::{Access, Cpu, CpuMutation, ExecutionPolicy, Hook, HookId, HookRange, Model, Register, arm};
++use fujimod_emulator_cpu::{
++    Access, Cpu, CpuMutation, ExecutionPolicy, Hook, HookId, HookRange, MappingMutation, Model, MutationOrigin,
++    Register, arm,
++};
 +use std::{
-+    cell::Cell,
++    cell::{Cell, RefCell},
 +    ffi::c_void,
 +    rc::{Rc, Weak},
 +};
@@ -572,10 +705,15 @@ index 0000000..9317386
 +pub const MAX_GUARD_PARTITIONS: usize = 64;
 +/// Pinned processor views per core.
 +pub const MAX_GUARD_VIEWS: usize = 256;
++pub const MAX_GUARD_DECLARED_MUTATIONS: usize = 16;
 +/// Heap bytes retained for one configuration's policy storage.
 +pub const MAX_GUARD_BYTES: usize = 1 << 20;
 +const ADDRESS_END: u64 = 1 << 32;
 +const GUEST_WIDTHS: [usize; 5] = [1, 2, 4, 8, 16];
++/// A32 `MCR p15,0,Rt,c9,c1,opc2` with cond and Rt masked out; opc2 is ORed in at bit 5.
++const TCM_REGION_MCR: u32 = 0x0e09_0f11;
++const TCM_REGION_MCR_MASK: u32 = 0x0fff_0fff;
++const CPSR_THUMB: u64 = 0x20;
 +
 +#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 +pub struct GuardCore(u8);
@@ -624,20 +762,21 @@ index 0000000..9317386
 +    Instruction,
 +}
 +impl TcmBank {
-+    const ALL: [Self; 2] = [Self::Data, Self::Instruction];
-+    fn register(self) -> arm::Coprocessor {
-+        arm::Coprocessor {
-+            cp: 15,
-+            opc1: 0,
-+            crn: 9,
-+            crm: 1,
-+            opc2: match self {
-+                Self::Data => 0,
-+                Self::Instruction => 1,
-+            },
-+            secure: 0,
-+            wide: false,
++    pub const ALL: [Self; 2] = [Self::Data, Self::Instruction];
++    fn opc2(self) -> u32 {
++        match self {
++            Self::Data => 0,
++            Self::Instruction => 1,
 +        }
++    }
++    fn index(self) -> usize {
++        self.opc2() as usize
++    }
++    pub fn register(self) -> arm::Coprocessor {
++        arm::Coprocessor { cp: 15, opc1: 0, crn: 9, crm: 1, opc2: self.opc2(), secure: 0, wide: false }
++    }
++    fn of(register: arm::Coprocessor) -> Option<Self> {
++        Self::ALL.into_iter().find(|bank| bank.register() == register)
 +    }
 +}
 +/// A TCM span is an offset range within that core's bank.
@@ -690,11 +829,45 @@ index 0000000..9317386
 +    /// `Cpu` sources only; span sets pairwise disjoint.
 +    pub partitions: Vec<PcPartition>,
 +}
++/// A TCM region register value as the CPU stores it after normalization.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub struct TcmRegister(pub u32);
++/// Address of the A32 instruction that requested a mutation.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
++pub struct WriterPc(pub u32);
++#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
++pub struct DecoderIndex(pub u16);
++#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
++pub struct DecoderChoice(pub u16);
++/// Index into `CompositeGuardConfig::declared`.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
++pub struct DeclarationId(u8);
++impl DeclarationId {
++    pub fn get(self) -> usize {
++        usize::from(self.0)
++    }
++}
++/// The guest store that selected a memory decoder choice.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub struct SelectionWriter {
++    pub core: usize,
++    pub pc: u64,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub enum DeclaredMutation {
++    /// A guest A32 `MCR p15,0,Rt,c9,c1,{0,1}` at `writer` on `core`.
++    TcmRegion { core: GuardCore, bank: TcmBank, previous: TcmRegister, next: TcmRegister, writer: WriterPc },
++    /// A memory decoder commit selected by a guest store at `writer` on `core`.
++    DecoderCommit { decoder: DecoderIndex, previous: DecoderChoice, next: DecoderChoice, core: GuardCore, writer: WriterPc },
++}
 +/// Exactly one policy for every `Cpu` and `CoreHost` core, `PhysicalHost`
 +/// and `ModelBus`.
 +#[derive(Clone, Debug, PartialEq, Eq)]
 +pub struct CompositeGuardConfig {
 +    pub sources: Vec<SourcePolicy>,
++    /// Each admits one occurrence. Per TCM register and per decoder the
++    /// declarations form one chain starting at the value read at attach.
++    pub declared: Vec<DeclaredMutation>,
 +}
 +#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 +pub enum GuardHook {
@@ -725,6 +898,15 @@ index 0000000..9317386
 +    BoundExceeded,
 +    InvalidMapping,
 +    CpuInspection,
++    /// A declaration names an absent core, bank, decoder or choice, or keeps its value.
++    InvalidDeclaration,
++    /// The declarations of one register or decoder do not form one chain from its attach-time value.
++    DeclarationChain,
++    DuplicateDeclaration,
++    /// A declared decoder commit on a fixed-view watch.
++    FixedViewsWithDeclaredCommit,
++    /// A mutation journal is recording.
++    MutationJournal,
 +    /// Installation failed and every hook installed before it was removed.
 +    HookInstallation { core: GuardCore, hook: GuardHook },
 +}
@@ -768,9 +950,43 @@ index 0000000..9317386
 +pub enum GuardMutation {
 +    Cpu(CpuMutation),
 +    /// A memory decoder choice, including one that changes only DMA windows.
-+    Decoder { decoder: usize, choice: usize },
++    /// `writer` is absent for a selection no guest store made.
++    Decoder { decoder: usize, previous: usize, choice: usize, writer: Option<SelectionWriter> },
 +    /// A board keyframe restore.
 +    Restore,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum DeclaredField {
++    Next,
++    Writer,
++    WriterCore,
++    /// The word at the writer is not a TCM region MCR for the bank.
++    Instruction,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum MutationRefusal {
++    /// No declaration names this register or decoder with this `previous`.
++    Undeclared,
++    Mismatch { declaration: DeclarationId, field: DeclaredField },
++    Consumed(DeclarationId),
++    /// PC, CPSR or the writer word could not be read, or the core was in T32 state.
++    WriterUnresolved,
++    HostOrigin,
++    /// A mapping change outside an open declared commit or outside its choice.
++    UnexpectedMapping,
++    /// A declared commit failed or left maps of its choice unapplied.
++    CommitIncomplete,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct AdmittedAt {
++    pub core: GuardCore,
++    /// The writer core's entered instruction count, when the backend reports it.
++    pub instructions: Option<u64>,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct DeclaredUse {
++    pub declaration: DeclaredMutation,
++    pub admitted: Option<AdmittedAt>,
 +}
 +/// A resolved destination: a physical address, or an offset within a TCM bank.
 +#[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -793,10 +1009,11 @@ index 0000000..9317386
 +        reason: WriteFaultReason,
 +        outcome: WriteOutcome,
 +    },
-+    /// Refused before its first effect.
++    /// Refused before its first effect, except `CommitIncomplete`.
 +    Mutation {
 +        core: Option<GuardCore>,
 +        mutation: GuardMutation,
++        reason: MutationRefusal,
 +    },
 +    /// An admitted bulk write failed.
 +    Operational {
@@ -813,7 +1030,9 @@ index 0000000..9317386
 +    pub status: GuardStatus,
 +    pub first_fault: Option<GuardFault>,
 +    pub write_checks: u64,
++    /// Refused mutations.
 +    pub mutation_attempts: u64,
++    pub mutations_admitted: u64,
 +}
 +/// Read-only; the attached watch owns the guard.
 +#[derive(Clone)]
@@ -826,9 +1045,87 @@ index 0000000..9317386
 +    pub fn partition_checks(&self, core: GuardCore) -> Vec<u64> {
 +        self.0.partition_checks.get(core.get()).map_or_else(Vec::new, |checks| checks.iter().map(Cell::get).collect())
 +    }
++    /// Every declaration in configuration order with its admission.
++    pub fn declared(&self) -> Vec<DeclaredUse> {
++        self.0
++            .declared
++            .iter()
++            .zip(&self.0.admitted)
++            .map(|(&declaration, admitted)| DeclaredUse { declaration, admitted: admitted.get() })
++            .collect()
++    }
 +}
 +
-+/// Policy and report shared by every guard callback, without Records or State.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++struct TcmWindow {
++    base: u64,
++    end: u64,
++}
++/// A processor RAM or MMIO view as it is pinned now.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++struct PinnedView {
++    start: u64,
++    end: u64,
++    physical: u64,
++}
++/// The inputs of a core's pinned views; rebuilt from these after a declared commit.
++struct ViewTables {
++    /// The board graph's processor mappings.
++    graph: Vec<MemoryMap>,
++    /// Per decoder, per choice: its processor maps.
++    choices: Vec<Vec<Vec<MemoryMap>>>,
++    /// Per decoder.
++    selected: Vec<Cell<usize>>,
++    /// Per core: MMIO bindings.
++    mmio: Vec<Vec<PinnedView>>,
++}
++impl ViewTables {
++    fn views(&self, core: usize) -> Result<Vec<PinnedView>, GuardAttachError> {
++        let mut views = Vec::new();
++        let mut push = |address: u64, physical: u64, size: usize| {
++            if views.len() == MAX_GUARD_VIEWS {
++                return Err(GuardAttachError::BoundExceeded);
++            }
++            let size = size as u64;
++            let end = address.checked_add(size).filter(|&end| size != 0 && end <= ADDRESS_END);
++            let (Some(end), Some(_)) = (end, physical.checked_add(size)) else {
++                return Err(GuardAttachError::InvalidMapping);
++            };
++            views.push(PinnedView { start: address, end, physical });
++            Ok(())
++        };
++        for map in self.graph.iter().filter(|map| map.core == core) {
++            let map = self
++                .choices
++                .iter()
++                .zip(&self.selected)
++                .flat_map(|(choices, selected)| &choices[selected.get()])
++                .find(|chosen| chosen.core == core && chosen.address == map.address && chosen.size == map.size)
++                .unwrap_or(map);
++            push(map.address, map.physical, map.size)?;
++        }
++        for view in self.mmio.get(core).into_iter().flatten() {
++            push(view.start, view.physical, (view.end - view.start) as usize)?;
++        }
++        views.sort_unstable_by_key(|view| view.start);
++        if views.windows(2).any(|pair| pair[1].start < pair[0].end) {
++            return Err(GuardAttachError::InvalidMapping);
++        }
++        views.shrink_to_fit();
++        Ok(views)
++    }
++}
++/// A declared decoder commit between its admission and its close.
++struct OpenCommit {
++    declaration: DeclarationId,
++    decoder: usize,
++    choice: usize,
++    core: GuardCore,
++    /// Processor maps of the choice not yet replaced.
++    remaining: Vec<MemoryMap>,
++}
++
++/// Policy, pins and report shared by every guard callback, without Records or State.
 +pub(in crate::board) struct GuardLatch {
 +    /// Indexed by `slot`.
 +    policies: Vec<SourcePolicy>,
@@ -837,6 +1134,16 @@ index 0000000..9317386
 +    /// Per `Cpu` core, indexed by `PartitionId`.
 +    partition_checks: Vec<Vec<Cell<u64>>>,
 +    cores: usize,
++    cpus: Vec<Weak<dyn Cpu>>,
++    declared: Vec<DeclaredMutation>,
++    /// Indexed like `declared`.
++    admitted: Vec<Cell<Option<AdmittedAt>>>,
++    /// Per core, indexed like `TcmBank::ALL`.
++    tcm: Vec<Cell<[Option<TcmWindow>; 2]>>,
++    /// Per core; sorted and disjoint.
++    views: Vec<RefCell<Vec<PinnedView>>>,
++    tables: ViewTables,
++    open: RefCell<Option<OpenCommit>>,
 +    report: Cell<GuardReport>,
 +    /// Set by `Board::drop`; callbacks then admit without counting.
 +    released: Cell<bool>,
@@ -845,6 +1152,7 @@ index 0000000..9317386
 +enum Counter {
 +    Write,
 +    Mutation,
++    Admitted,
 +}
 +impl GuardLatch {
 +    pub(in crate::board) fn release(&self) {
@@ -863,6 +1171,7 @@ index 0000000..9317386
 +        let value = match counter {
 +            Counter::Write => &mut report.write_checks,
 +            Counter::Mutation => &mut report.mutation_attempts,
++            Counter::Admitted => &mut report.mutations_admitted,
 +        };
 +        match value.checked_add(1) {
 +            Some(next) => {
@@ -905,9 +1214,157 @@ index 0000000..9317386
 +        report.status = GuardStatus::CleanupFailed;
 +        self.report.set(report);
 +    }
-+    fn refuse(&self, core: Option<GuardCore>, mutation: GuardMutation) {
++    fn refuse(&self, core: Option<GuardCore>, mutation: GuardMutation, reason: MutationRefusal) {
 +        self.count(Counter::Mutation);
-+        self.record(GuardFault::Mutation { core, mutation });
++        self.record(GuardFault::Mutation { core, mutation, reason });
++    }
++    fn declaration(&self, key: impl Fn(&DeclaredMutation) -> bool) -> Option<(DeclarationId, DeclaredMutation)> {
++        self.declared
++            .iter()
++            .position(key)
++            .map(|index| (DeclarationId(index as u8), self.declared[index]))
++    }
++    fn admit(&self, id: DeclarationId, core: GuardCore) {
++        let instructions = self.cpus.get(core.get()).and_then(Weak::upgrade).and_then(|cpu| cpu.instruction_progress());
++        self.admitted[id.get()].set(Some(AdmittedAt { core, instructions }));
++        self.count(Counter::Admitted);
++    }
++    /// A guest TCM region write on `core`, offered before it applies.
++    fn tcm_write(&self, core: GuardCore, cpu: &dyn Cpu, bank: TcmBank, previous: u32, next: u32) -> Result<(), MutationRefusal> {
++        let (id, declaration) = self
++            .declaration(|declared| {
++                matches!(*declared, DeclaredMutation::TcmRegion { core: owner, bank: declared_bank, previous: TcmRegister(value), .. }
++                    if owner == core && declared_bank == bank && value == previous)
++            })
++            .ok_or(MutationRefusal::Undeclared)?;
++        let DeclaredMutation::TcmRegion { next: TcmRegister(declared_next), writer: WriterPc(writer), .. } = declaration else {
++            unreachable!("the selector matched a TCM declaration");
++        };
++        if self.admitted[id.get()].get().is_some() {
++            return Err(MutationRefusal::Consumed(id));
++        }
++        if declared_next != next {
++            return Err(MutationRefusal::Mismatch { declaration: id, field: DeclaredField::Next });
++        }
++        let (pc, cpsr) = scalar(cpu, Register::Pc)
++            .ok()
++            .zip(scalar(cpu, Register::Pstate).ok())
++            .ok_or(MutationRefusal::WriterUnresolved)?;
++        if cpsr & CPSR_THUMB != 0 {
++            return Err(MutationRefusal::WriterUnresolved);
++        }
++        // A deferred TCM write applies after `advance` moved PC past the MCR.
++        if pc.wrapping_sub(4) != u64::from(writer) {
++            return Err(MutationRefusal::Mismatch { declaration: id, field: DeclaredField::Writer });
++        }
++        let mut word = [0; 4];
++        cpu.read_memory(u64::from(writer), &mut word).map_err(|_| MutationRefusal::WriterUnresolved)?;
++        if u32::from_le_bytes(word) & TCM_REGION_MCR_MASK != TCM_REGION_MCR | (bank.opc2() << 5) {
++            return Err(MutationRefusal::Mismatch { declaration: id, field: DeclaredField::Instruction });
++        }
++        let window = tcm_window(next).map_err(|_| MutationRefusal::WriterUnresolved)?;
++        let mut windows = self.tcm[core.get()].get();
++        windows[bank.index()] = window;
++        self.tcm[core.get()].set(windows);
++        self.admit(id, core);
++        Ok(())
++    }
++    /// A processor mapping replacement on `core`; admitted only inside an open declared commit.
++    fn mapping(&self, core: GuardCore, address: u64, physical: Option<u64>, bytes: usize, permissions: Option<u32>) -> Result<(), MutationRefusal> {
++        let mut open = self.open.borrow_mut();
++        let commit = open.as_mut().ok_or(MutationRefusal::UnexpectedMapping)?;
++        let index = commit
++            .remaining
++            .iter()
++            .position(|map| {
++                map.core == core.get()
++                    && map.address == address
++                    && Some(map.physical) == physical
++                    && map.size == bytes
++                    && Some(map.permissions) == permissions
++            })
++            .ok_or(MutationRefusal::UnexpectedMapping)?;
++        commit.remaining.swap_remove(index);
++        Ok(())
++    }
++    /// A board transaction: a decoder commit or a keyframe restore.
++    fn board(&self, mutation: GuardMutation) -> Result<(), (Option<GuardCore>, MutationRefusal)> {
++        let GuardMutation::Decoder { decoder, previous, choice, writer } = mutation else {
++            return Err((None, MutationRefusal::Undeclared));
++        };
++        let writer_core = writer.and_then(|writer| GuardCore::new(writer.core).ok());
++        let refuse = |reason| Err((writer_core, reason));
++        if self.open.borrow().is_some() {
++            return refuse(MutationRefusal::CommitIncomplete);
++        }
++        let Some((id, declaration)) = self.declaration(|declared| {
++            matches!(*declared, DeclaredMutation::DecoderCommit { decoder: DecoderIndex(index), previous: DecoderChoice(from), .. }
++                if usize::from(index) == decoder && usize::from(from) == previous)
++        }) else {
++            return refuse(MutationRefusal::Undeclared);
++        };
++        let DeclaredMutation::DecoderCommit { next: DecoderChoice(next), core, writer: WriterPc(pc), .. } = declaration else {
++            unreachable!("the selector matched a decoder declaration");
++        };
++        if self.admitted[id.get()].get().is_some() {
++            return refuse(MutationRefusal::Consumed(id));
++        }
++        if usize::from(next) != choice {
++            return refuse(MutationRefusal::Mismatch { declaration: id, field: DeclaredField::Next });
++        }
++        let Some(writer) = writer else {
++            return refuse(MutationRefusal::Mismatch { declaration: id, field: DeclaredField::Writer });
++        };
++        if writer.core != core.get() {
++            return refuse(MutationRefusal::Mismatch { declaration: id, field: DeclaredField::WriterCore });
++        }
++        if writer.pc != u64::from(pc) {
++            return refuse(MutationRefusal::Mismatch { declaration: id, field: DeclaredField::Writer });
++        }
++        let remaining = self.tables.choices[decoder][choice].clone();
++        self.open.replace(Some(OpenCommit { declaration: id, decoder, choice, core, remaining }));
++        Ok(())
++    }
++    /// Moves the pinned views to the committed choice.
++    fn close(&self) -> Result<(), String> {
++        let Some(commit) = self.open.take() else {
++            return Ok(());
++        };
++        let mutation = GuardMutation::Decoder {
++            decoder: commit.decoder,
++            previous: self.tables.selected[commit.decoder].get(),
++            choice: commit.choice,
++            writer: None,
++        };
++        let incomplete = || {
++            self.record(GuardFault::Mutation { core: Some(commit.core), mutation, reason: MutationRefusal::CommitIncomplete });
++            Err("composite guard: a declared decoder commit was incomplete".to_string())
++        };
++        if !commit.remaining.is_empty() {
++            return incomplete();
++        }
++        let previous = self.tables.selected[commit.decoder].replace(commit.choice);
++        let views: Result<Vec<_>, _> = (0..self.cores).map(|core| self.tables.views(core)).collect();
++        let Ok(views) = views else {
++            self.tables.selected[commit.decoder].set(previous);
++            return incomplete();
++        };
++        for (slot, views) in self.views.iter().zip(views) {
++            slot.replace(views);
++        }
++        self.admit(commit.declaration, commit.core);
++        Ok(())
++    }
++    fn abort(&self) {
++        if let Some(commit) = self.open.take() {
++            let mutation = GuardMutation::Decoder {
++                decoder: commit.decoder,
++                previous: self.tables.selected[commit.decoder].get(),
++                choice: commit.choice,
++                writer: None,
++            };
++            self.record(GuardFault::Mutation { core: Some(commit.core), mutation, reason: MutationRefusal::CommitIncomplete });
++        }
 +    }
 +    /// Checks every chunk of a bulk transfer before its first copy.
 +    pub(in crate::board) fn admit_bulk(
@@ -946,6 +1403,28 @@ index 0000000..9317386
 +    }
 +    pub(in crate::board) fn operational(&self, source: BulkWrite, address: u64, bytes: usize, phase: FailurePhase) {
 +        self.record(GuardFault::Operational { source: source.into(), address, bytes, phase });
++    }
++    /// The location of `cursor` on `core` and the end of its contiguous chunk below `end`.
++    fn resolve(&self, core: GuardCore, cursor: u64, end: u64) -> Option<(GuardLocation, u64)> {
++        let tcm = self.tcm[core.get()].get();
++        for (bank, window) in TcmBank::ALL.into_iter().zip(tcm) {
++            if let Some(window) = window
++                && window.base <= cursor
++                && cursor < window.end
++            {
++                let target = GuardTarget::Tcm { core, bank };
++                return Some((GuardLocation { target, address: cursor - window.base }, end.min(window.end)));
++            }
++        }
++        let views = self.views[core.get()].borrow();
++        let view = views.iter().find(|view| view.start <= cursor && cursor < view.end)?;
++        let next = tcm
++            .iter()
++            .flatten()
++            .filter(|window| cursor < window.base)
++            .fold(end.min(view.end), |next, window| next.min(window.base));
++        let address = view.physical + (cursor - view.start);
++        Some((GuardLocation { target: GuardTarget::Physical, address }, next))
 +    }
 +}
 +fn slot(source: WriteSource, cores: usize) -> usize {
@@ -987,51 +1466,14 @@ index 0000000..9317386
 +    }
 +}
 +
-+#[derive(Clone, Copy)]
-+struct TcmWindow {
-+    base: u64,
-+    end: u64,
-+}
-+/// A processor RAM or MMIO view as it was when the guard attached.
-+#[derive(Clone, Copy)]
-+struct PinnedView {
-+    start: u64,
-+    end: u64,
-+    physical: u64,
-+}
 +type Denial = (WriteFaultReason, Option<GuardLocation>);
 +struct GuardContext {
 +    core: GuardCore,
 +    cpu: Weak<dyn Cpu>,
 +    latch: Rc<GuardLatch>,
 +    pause: Rc<Cell<bool>>,
-+    /// Indexed like `TcmBank::ALL`.
-+    tcm: [Option<TcmWindow>; 2],
-+    /// Sorted and disjoint.
-+    views: Vec<PinnedView>,
 +}
 +impl GuardContext {
-+    /// The location of `cursor` and the end of its contiguous chunk below `end`.
-+    fn resolve(&self, cursor: u64, end: u64) -> Option<(GuardLocation, u64)> {
-+        for (bank, window) in TcmBank::ALL.into_iter().zip(self.tcm) {
-+            if let Some(window) = window
-+                && window.base <= cursor
-+                && cursor < window.end
-+            {
-+                let target = GuardTarget::Tcm { core: self.core, bank };
-+                return Some((GuardLocation { target, address: cursor - window.base }, end.min(window.end)));
-+            }
-+        }
-+        let view = self.views.iter().find(|view| view.start <= cursor && cursor < view.end)?;
-+        let next = self
-+            .tcm
-+            .iter()
-+            .flatten()
-+            .filter(|window| cursor < window.base)
-+            .fold(end.min(view.end), |next, window| next.min(window.base));
-+        let address = view.physical + (cursor - view.start);
-+        Some((GuardLocation { target: GuardTarget::Physical, address }, next))
-+    }
 +    fn admit(&self, policy: &DestinationPolicy, address: u64, bytes: usize) -> Result<(), Denial> {
 +        let end = address
 +            .checked_add(bytes as u64)
@@ -1039,7 +1481,8 @@ index 0000000..9317386
 +            .ok_or((WriteFaultReason::Overflow, None))?;
 +        let mut cursor = address;
 +        while cursor < end {
-+            let (location, next) = self.resolve(cursor, end).ok_or((WriteFaultReason::Unresolved, None))?;
++            let (location, next) =
++                self.latch.resolve(self.core, cursor, end).ok_or((WriteFaultReason::Unresolved, None))?;
 +            let chunk_end = location.address + (next - cursor);
 +            if !permits(policy, location.target, location.address, chunk_end) {
 +                return Err((WriteFaultReason::Denied, Some(location)));
@@ -1083,10 +1526,30 @@ index 0000000..9317386
 +        if self.latch.released.get() {
 +            return true;
 +        }
-+        let CpuMutation::HostWrite { address, bytes } = event else {
-+            self.latch.refuse(Some(self.core), GuardMutation::Cpu(event));
-+            return false;
++        let decision = match event {
++            CpuMutation::HostWrite { address, bytes } => return self.host_write(address, bytes),
++            CpuMutation::Tcm { origin: MutationOrigin::Host, .. } => Err(MutationRefusal::HostOrigin),
++            CpuMutation::Tcm { register, previous, next, origin: MutationOrigin::Guest } => {
++                match (TcmBank::of(register), self.cpu.upgrade()) {
++                    (Some(bank), Some(cpu)) => self.latch.tcm_write(self.core, &*cpu, bank, previous, next),
++                    _ => Err(MutationRefusal::WriterUnresolved),
++                }
++            }
++            CpuMutation::Mapping { operation: MappingMutation::ReplacePhysical, address, physical, bytes, permissions } => {
++                self.latch.mapping(self.core, address, physical, bytes, permissions)
++            }
++            CpuMutation::Mapping { .. } => Err(MutationRefusal::UnexpectedMapping),
++            _ => Err(MutationRefusal::Undeclared),
 +        };
++        match decision {
++            Ok(()) => true,
++            Err(reason) => {
++                self.latch.refuse(Some(self.core), GuardMutation::Cpu(event), reason);
++                false
++            }
++        }
++    }
++    fn host_write(&self, address: u64, bytes: usize) -> bool {
 +        let source = WriteSource::CoreHost(self.core);
 +        self.latch.count(Counter::Write);
 +        let (policy, _) = self.latch.destinations(source, None);
@@ -1196,6 +1659,7 @@ index 0000000..9317386
 +    policies: Vec<SourcePolicy>,
 +    /// Per `Cpu` core: partition spans sorted by start.
 +    partition_spans: Vec<Vec<(GuardSpan, PartitionId)>>,
++    declared: Vec<DeclaredMutation>,
 +}
 +impl CompositeGuardConfig {
 +    /// Returns the policies indexed by `slot`.
@@ -1220,9 +1684,22 @@ index 0000000..9317386
 +        if self.sources.len() > expected
 +            || ranges > MAX_GUARD_RANGES
 +            || pc_spans > MAX_GUARD_PC_SPANS
++            || self.declared.len() > MAX_GUARD_DECLARED_MUTATIONS
 +            || self.sources.iter().any(|policy| policy.partitions.len() > MAX_GUARD_PARTITIONS)
 +        {
 +            return Err(BoundExceeded);
++        }
++        for (index, declared) in self.declared.iter().enumerate() {
++            if self.declared[..index].contains(declared) {
++                return Err(DuplicateDeclaration);
++            }
++            let (core, unchanged) = match *declared {
++                DeclaredMutation::TcmRegion { core, previous, next, .. } => (core, previous == next),
++                DeclaredMutation::DecoderCommit { core, previous, next, .. } => (core, previous == next),
++            };
++            if core.get() >= cores || unchanged {
++                return Err(InvalidDeclaration);
++            }
 +        }
 +        let mut slots: Vec<Option<SourcePolicy>> = (0..expected).map(|_| None).collect();
 +        let mut partition_spans: Vec<Vec<(GuardSpan, PartitionId)>> = vec![Vec::new(); cores];
@@ -1280,62 +1757,71 @@ index 0000000..9317386
 +        if bytes > MAX_GUARD_BYTES {
 +            return Err(BoundExceeded);
 +        }
-+        Ok(ValidatedConfig { policies, partition_spans })
++        Ok(ValidatedConfig { policies, partition_spans, declared: self.declared })
 +    }
 +}
-+fn pin_tcm(cpu: &dyn Cpu) -> Result<[Option<TcmWindow>; 2], GuardAttachError> {
-+    let mut windows = [None; 2];
-+    for (bank, window) in TcmBank::ALL.into_iter().zip(&mut windows) {
-+        let register = cpu
++/// The window a TCM region register value maps, absent when disabled.
++fn tcm_window(register: u32) -> Result<Option<TcmWindow>, GuardAttachError> {
++    if register & 1 == 0 {
++        return Ok(None);
++    }
++    let base = u64::from(register & 0xffff_f000);
++    let end = (512u64 << ((register >> 2) & 31))
++        .checked_add(base)
++        .filter(|&end| end <= ADDRESS_END)
++        .ok_or(GuardAttachError::InvalidMapping)?;
++    Ok(Some(TcmWindow { base, end }))
++}
++fn tcm_registers(cpu: &dyn Cpu) -> Result<[u32; 2], GuardAttachError> {
++    let mut registers = [0; 2];
++    for (bank, register) in TcmBank::ALL.into_iter().zip(&mut registers) {
++        *register = cpu
 +            .coprocessor(bank.register(), None)
 +            .ok()
 +            .and_then(|value| u32::try_from(value).ok())
 +            .ok_or(GuardAttachError::CpuInspection)?;
-+        if register & 1 != 0 {
-+            let base = u64::from(register & 0xffff_f000);
-+            let end = (512u64 << ((register >> 2) & 31))
-+                .checked_add(base)
-+                .filter(|&end| end <= ADDRESS_END)
-+                .ok_or(GuardAttachError::InvalidMapping)?;
-+            *window = Some(TcmWindow { base, end });
++    }
++    Ok(registers)
++}
++/// Requires the declarations of each key to form one chain from `start(key)`.
++fn check_chains<K: PartialEq + Copy>(
++    declared: &[DeclaredMutation],
++    key: impl Fn(&DeclaredMutation) -> Option<(K, u32, u32)>,
++    start: impl Fn(K) -> Result<u32, GuardAttachError>,
++) -> Result<(), GuardAttachError> {
++    let links: Vec<(K, u32, u32)> = declared.iter().filter_map(&key).collect();
++    for (index, &(owner, previous, _)) in links.iter().enumerate() {
++        if links[..index].iter().any(|&(other, from, _)| other == owner && from == previous) {
++            return Err(GuardAttachError::DeclarationChain);
 +        }
 +    }
-+    Ok(windows)
++    let mut visited = vec![false; links.len()];
++    for &(owner, _, _) in &links {
++        let mut cursor = start(owner)?;
++        while let Some(index) = links.iter().position(|&(other, from, _)| other == owner && from == cursor) {
++            if visited[index] {
++                break;
++            }
++            visited[index] = true;
++            cursor = links[index].2;
++        }
++    }
++    if visited.iter().all(|&seen| seen) { Ok(()) } else { Err(GuardAttachError::DeclarationChain) }
 +}
 +impl Board {
-+    fn pin_views(&self, state: &State, core: usize) -> Result<Vec<PinnedView>, GuardAttachError> {
-+        let mut views = Vec::new();
-+        let mut push = |address: u64, physical: u64, size: usize| {
-+            if views.len() == MAX_GUARD_VIEWS {
-+                return Err(GuardAttachError::BoundExceeded);
-+            }
-+            let size = size as u64;
-+            let end = address.checked_add(size).filter(|&end| size != 0 && end <= ADDRESS_END);
-+            let (Some(end), Some(_)) = (end, physical.checked_add(size)) else {
-+                return Err(GuardAttachError::InvalidMapping);
-+            };
-+            views.push(PinnedView { start: address, end, physical });
-+            Ok(())
-+        };
-+        for map in self.mappings.iter().filter(|map| map.core == core) {
-+            let map = state
-+                .decoders
-+                .selected_maps(core)
-+                .find(|selected| selected.address == map.address && selected.size == map.size)
-+                .unwrap_or(map);
-+            push(map.address, map.physical, map.size)?;
-+        }
++    fn view_tables(&self, state: &State) -> Result<ViewTables, GuardAttachError> {
++        let (selected, choices) = state.decoders.guard_tables();
++        let mut mmio = vec![Vec::new(); self.cpus.len()];
 +        for (binding, &(owner, address, bytes)) in self.bindings[self.cpus.len()..].iter().zip(&self.mmio) {
-+            if owner == core {
-+                push(address, binding.base, bytes)?;
-+            }
++            let end = address.checked_add(bytes as u64).filter(|&end| bytes != 0 && end <= ADDRESS_END);
++            let views: &mut Vec<PinnedView> = mmio.get_mut(owner).ok_or(GuardAttachError::InvalidMapping)?;
++            views.push(PinnedView { start: address, end: end.ok_or(GuardAttachError::InvalidMapping)?, physical: binding.base });
 +        }
-+        views.sort_unstable_by_key(|view| view.start);
-+        if views.windows(2).any(|pair| pair[1].start < pair[0].end) {
-+            return Err(GuardAttachError::InvalidMapping);
++        let maps = choices.iter().flatten().map(Vec::len).sum::<usize>() + self.mappings.len();
++        if maps.checked_mul(size_of::<MemoryMap>()).is_none_or(|bytes| bytes > MAX_GUARD_BYTES) {
++            return Err(GuardAttachError::BoundExceeded);
 +        }
-+        views.shrink_to_fit();
-+        Ok(views)
++        Ok(ViewTables { graph: self.mappings.clone(), choices, selected: selected.into_iter().map(Cell::new).collect(), mmio })
 +    }
 +    /// Attach write and mutation admission to the current classified watch,
 +    /// keeping its records, classes, fetch capture, bounds and hooks.
@@ -1364,7 +1850,10 @@ index 0000000..9317386
 +        {
 +            return Err(UnsupportedBackend);
 +        }
-+        {
++        if observers.journal_active() {
++            return Err(MutationJournal);
++        }
++        let fixed_views = {
 +            let records = watch.records.borrow();
 +            if !records.lease.owned_by(&self.physical_memory) {
 +                return Err(WrongOwner);
@@ -1381,7 +1870,8 @@ index 0000000..9317386
 +            if records.classes.is_empty() {
 +                return Err(NotClassified);
 +            }
-+        }
++            records.views == ViewPolicy::Fixed
++        };
 +        let current = self
 +            .physical_memory
 +            .observation
@@ -1397,6 +1887,48 @@ index 0000000..9317386
 +        }
 +        let cores = self.cpus.len();
 +        let validated = config.validate(cores)?;
++        let tables = self.view_tables(&state)?;
++        let registers = self.cpus.iter().map(|cpu| tcm_registers(&**cpu)).collect::<Result<Vec<_>, _>>()?;
++        for declared in &validated.declared {
++            if let DeclaredMutation::DecoderCommit { decoder: DecoderIndex(decoder), previous, next, .. } = *declared {
++                let choices = tables.choices.get(usize::from(decoder)).ok_or(InvalidDeclaration)?;
++                if [previous, next].iter().any(|&DecoderChoice(choice)| usize::from(choice) >= choices.len()) {
++                    return Err(InvalidDeclaration);
++                }
++                if fixed_views {
++                    return Err(FixedViewsWithDeclaredCommit);
++                }
++            }
++        }
++        check_chains(
++            &validated.declared,
++            |declared| match *declared {
++                DeclaredMutation::TcmRegion { core, bank, previous: TcmRegister(from), next: TcmRegister(to), .. } => {
++                    Some(((core, bank), from, to))
++                }
++                DeclaredMutation::DecoderCommit { .. } => None,
++            },
++            |(core, bank)| Ok(registers[core.get()][bank.index()]),
++        )?;
++        check_chains(
++            &validated.declared,
++            |declared| match *declared {
++                DeclaredMutation::DecoderCommit { decoder, previous: DecoderChoice(from), next: DecoderChoice(to), .. } => {
++                    Some((decoder, u32::from(from), u32::from(to)))
++                }
++                DeclaredMutation::TcmRegion { .. } => None,
++            },
++            |DecoderIndex(decoder)| {
++                let selected = tables.selected.get(usize::from(decoder)).ok_or(InvalidDeclaration)?;
++                u32::try_from(selected.get()).map_err(|_| InvalidDeclaration)
++            },
++        )?;
++        let mut tcm = Vec::with_capacity(cores);
++        let mut views = Vec::with_capacity(cores);
++        for (core, registers) in registers.iter().enumerate() {
++            tcm.push(Cell::new([tcm_window(registers[0])?, tcm_window(registers[1])?]));
++            views.push(RefCell::new(tables.views(core)?));
++        }
 +        let partition_checks = (0..cores)
 +            .map(|core| validated.policies[core].partitions.iter().map(|_| Cell::new(0)).collect())
 +            .collect();
@@ -1405,11 +1937,19 @@ index 0000000..9317386
 +            partition_spans: validated.partition_spans,
 +            partition_checks,
 +            cores,
++            cpus: self.cpus.iter().map(Rc::downgrade).collect(),
++            admitted: validated.declared.iter().map(|_| Cell::new(None)).collect(),
++            declared: validated.declared,
++            tcm,
++            views,
++            tables,
++            open: RefCell::new(None),
 +            report: Cell::new(GuardReport {
 +                status: GuardStatus::Armed,
 +                first_fault: None,
 +                write_checks: 0,
 +                mutation_attempts: 0,
++                mutations_admitted: 0,
 +            }),
 +            released: Cell::new(false),
 +        });
@@ -1420,8 +1960,6 @@ index 0000000..9317386
 +                cpu: Rc::downgrade(cpu),
 +                latch: latch.clone(),
 +                pause: self.host_pause.clone(),
-+                tcm: pin_tcm(&**cpu)?,
-+                views: self.pin_views(&state, core)?,
 +            }));
 +        }
 +        drop(state);
@@ -1465,14 +2003,29 @@ index 0000000..9317386
 +    }
 +}
 +impl Memory {
-+    /// Refuses `mutation` before its first effect while a guard is attached.
++    /// Offers a board transaction to the mutation journal, then to the guard,
++    /// which refuses it before its first effect unless it is declared.
 +    pub(in crate::board) fn admit_transaction(&self, mutation: GuardMutation) -> Result<(), String> {
-+        match self.observers.guard() {
-+            Some(guard) => {
-+                guard.refuse(None, mutation);
-+                Err(format!("composite guard refused {mutation:?}"))
-+            }
-+            None => Ok(()),
++        self.observers.journal_board(mutation);
++        let Some(guard) = self.observers.guard() else {
++            return Ok(());
++        };
++        if guard.released.get() {
++            return Ok(());
++        }
++        guard.board(mutation).map_err(|(core, reason)| {
++            guard.refuse(core, mutation, reason);
++            format!("composite guard refused {mutation:?}: {reason:?}")
++        })
++    }
++    /// Ends an admitted decoder commit after every map and DMA view of its choice applied.
++    pub(in crate::board) fn close_transaction(&self) -> Result<(), String> {
++        self.observers.guard().map_or(Ok(()), |guard| guard.close())
++    }
++    /// Faults the open declared commit as incomplete.
++    pub(in crate::board) fn abort_transaction(&self) {
++        if let Some(guard) = self.observers.guard() {
++            guard.abort();
 +        }
 +    }
 +}
@@ -1481,17 +2034,17 @@ index 0000000..9317386
 +mod tests;
 diff --git a/crates/emulator/src/board/observation/composite/tests.rs b/crates/emulator/src/board/observation/composite/tests.rs
 new file mode 100644
-index 0000000..d0f3ed2
+index 0000000..9b1aaa8
 --- /dev/null
 +++ b/crates/emulator/src/board/observation/composite/tests.rs
-@@ -0,0 +1,1275 @@
+@@ -0,0 +1,1562 @@
 +use super::*;
 +use crate::board::{
 +    bus::{self, Bus},
 +    decoder::{Choice, Decoder},
 +    factory::{Engine, Graph, MemoryMap, Options, Peripheral, Processor, Ram},
 +    memory::BusMapping,
-+    observation::{CpuDataAttribution, FetchAttribution, InstructionPoints, ViewPolicy, WatchKinds, WatchRange},
++    observation::{CpuDataAttribution, FetchAttribution, InstructionPoints, MAX_JOURNAL_ROWS, ViewPolicy, WatchKinds, WatchRange},
 +};
 +use fujimod_emulator_cpu::{
 +    AccessRefusalError, BackingObserver, BlockAccounting, Clock, ExecutionError, Exit, FastMmioRead, Features,
@@ -1506,6 +2059,8 @@ index 0000000..d0f3ed2
 +const ATCM: u64 = 0x10000;
 +const BTCM: u64 = 0x50000;
 +const DMA: u64 = 0x8000000;
++/// A store of `n` here selects choice `n` of decoder 0.
++const SELECT: u64 = DMA + 0x100;
 +
 +/// Writes four bytes at the bus address it is given.
 +#[derive(serde::Serialize, serde::Deserialize)]
@@ -1534,6 +2089,36 @@ index 0000000..d0f3ed2
 +    }
 +    fn write(&mut self, cx: &mut Cx<'_>, _: u64, _: u8, value: u64) {
 +        if let Err(error) = cx.ram_write(value, &0x5a5a_5a5au32.to_le_bytes()) {
++            cx.fail(error);
++        }
++    }
++}
++#[derive(serde::Serialize, serde::Deserialize)]
++struct Select;
++impl Device for Select {
++    fn name(&self) -> &'static str {
++        "composite-guard-select"
++    }
++    fn fingerprint(&self) -> Result<serde_json::Value, String> {
++        serde_json::to_value(self).map_err(|error| error.to_string())
++    }
++    fn checkpoint(&self) -> Result<fujimod_emulator_devices::checkpoint::Checkpoint, String> {
++        fujimod_emulator_devices::checkpoint::Checkpoint::encode(self.name(), self)
++    }
++    fn validate_checkpoint(&self, saved: &fujimod_emulator_devices::checkpoint::Checkpoint) -> Result<(), String> {
++        let _: Self = saved.decode(self.name())?;
++        Ok(())
++    }
++    fn restore_checkpoint(&mut self, saved: &fujimod_emulator_devices::checkpoint::Checkpoint) -> Result<(), String> {
++        *self = saved.decode(self.name())?;
++        Ok(())
++    }
++    fn read(&mut self, cx: &mut Cx<'_>, _: u64, _: u8) -> u64 {
++        cx.unmodeled();
++        0
++    }
++    fn write(&mut self, cx: &mut Cx<'_>, _: u64, _: u8, value: u64) {
++        if let Err(error) = cx.select_memory(0, value as usize) {
 +            cx.fail(error);
 +        }
 +    }
@@ -1609,6 +2194,7 @@ index 0000000..d0f3ed2
 +fn devices() -> Bus {
 +    let mut bus = Bus::new(bus::Mode::Strict);
 +    bus.register(DMA, 4, Box::new(Dma)).unwrap();
++    bus.register(SELECT, 4, Box::new(Select)).unwrap();
 +    bus
 +}
 +fn board_with(released: [bool; 2], decoders: bool) -> Board {
@@ -1896,7 +2482,7 @@ index 0000000..d0f3ed2
 +fn config(policy: impl Fn(WriteSource) -> DestinationPolicy) -> CompositeGuardConfig {
 +    let sources =
 +        every_source(2).into_iter().map(|source| SourcePolicy { source, destinations: policy(source), partitions: vec![] });
-+    CompositeGuardConfig { sources: sources.collect() }
++    CompositeGuardConfig { sources: sources.collect(), declared: vec![] }
 +}
 +fn forbidding(denied: WriteSource, forbidden: GuardRange) -> CompositeGuardConfig {
 +    config(|source| {
@@ -1971,8 +2557,8 @@ index 0000000..d0f3ed2
 +fn at(target: GuardTarget, address: u64) -> GuardLocation {
 +    GuardLocation { target, address }
 +}
-+fn mutation_fault(core: Option<GuardCore>, mutation: GuardMutation) -> Option<GuardFault> {
-+    Some(GuardFault::Mutation { core, mutation })
++fn mutation_fault(core: Option<GuardCore>, mutation: GuardMutation, reason: MutationRefusal) -> Option<GuardFault> {
++    Some(GuardFault::Mutation { core, mutation, reason })
 +}
 +/// A guest store that `forbidding` denied: it either did not happen and the
 +/// run failed, or it was attempted and the board paused at it.
@@ -2150,7 +2736,7 @@ index 0000000..d0f3ed2
 +    board.set_execution_policy(ExecutionPolicy::Interactive).unwrap();
 +    assert_eq!(board.memory_guard_attach(&mut watch, config(open)).err(), Some(GuardAttachError::UnsupportedBackend));
 +    board.set_execution_policy(ExecutionPolicy::Exact).unwrap();
-+    board.state.borrow_mut().decoders.select(0, 1, true).unwrap();
++    board.state.borrow_mut().decoders.select(0, 1, true, None).unwrap();
 +    assert_eq!(board.memory_guard_attach(&mut watch, config(open)).err(), Some(GuardAttachError::PendingDecode));
 +}
 +
@@ -2441,6 +3027,7 @@ index 0000000..d0f3ed2
 +        Some(GuardFault::Mutation {
 +            core: Some(owner),
 +            mutation: GuardMutation::Cpu(CpuMutation::Tcm { origin: MutationOrigin::Host, .. }),
++            reason: MutationRefusal::HostOrigin,
 +        }) if owner == core(0)
 +    ));
 +    assert_eq!((report.status, report.mutation_attempts), (GuardStatus::Faulted, 1));
@@ -2462,6 +3049,7 @@ index 0000000..d0f3ed2
 +        Some(GuardFault::Mutation {
 +            core: Some(owner),
 +            mutation: GuardMutation::Cpu(CpuMutation::Tcm { origin: MutationOrigin::Guest, .. }),
++            reason: MutationRefusal::Undeclared,
 +        }) if owner == core(0)
 +    ));
 +}
@@ -2487,7 +3075,10 @@ index 0000000..d0f3ed2
 +        bytes: 0x1000,
 +        permissions: None,
 +    };
-+    assert_eq!(report.first_fault, mutation_fault(Some(core(0)), GuardMutation::Cpu(unmap)));
++    assert_eq!(
++        report.first_fault,
++        mutation_fault(Some(core(0)), GuardMutation::Cpu(unmap), MutationRefusal::UnexpectedMapping)
++    );
 +    assert_eq!(report.mutation_attempts, 4);
 +}
 +
@@ -2498,9 +3089,10 @@ index 0000000..d0f3ed2
 +        board.write_physical(0x30000, &[3; 4]).unwrap();
 +        let mut watch = watch(&board, 64);
 +        let token = board.memory_guard_attach(&mut watch, config(open)).unwrap();
-+        board.state.borrow_mut().decoders.select(decoder, 1, true).unwrap();
++        board.state.borrow_mut().decoders.select(decoder, 1, true, None).unwrap();
 +        assert!(board.run_until(4, 1).is_err());
-+        assert_eq!(token.report().first_fault, mutation_fault(None, GuardMutation::Decoder { decoder, choice: 1 }));
++        let mutation = GuardMutation::Decoder { decoder, previous: 0, choice: 1, writer: None };
++        assert_eq!(token.report().first_fault, mutation_fault(None, mutation, MutationRefusal::Undeclared));
 +        assert_eq!(physical_word(&board, 0x70000), 0x0303_0303);
 +        assert_eq!(word(&board, 0, 0x70000), 0x0303_0303);
 +    }
@@ -2518,7 +3110,7 @@ index 0000000..d0f3ed2
 +    assert!(board.cpu(0).unwrap().restore(&*snapshot).is_err());
 +    assert_eq!(physical_word(&board, 0x40000), 0x0808_0808);
 +    let report = token.report();
-+    assert_eq!(report.first_fault, mutation_fault(None, GuardMutation::Restore));
++    assert_eq!(report.first_fault, mutation_fault(None, GuardMutation::Restore, MutationRefusal::Undeclared));
 +    assert_eq!(report.mutation_attempts, 2);
 +}
 +
@@ -2760,17 +3352,445 @@ index 0000000..d0f3ed2
 +    assert!(board.instruction_points_end(1, &mut points).is_err());
 +    board.instruction_points_end(0, &mut points).unwrap();
 +}
++
++const MCR_ATCM_R0: u32 = 0xee09_0f31; // mcr p15,0,r0,c9,c1,1
++const MCR_ATCM_R3: u32 = 0xee09_3f31; // mcr p15,0,r3,c9,c1,1
++const STR_R0_R1: u32 = 0xe581_0000; // str r0,[r1]
++const STR_R2_R1: u32 = 0xe581_2000; // str r2,[r1]
++const STR_R2_R3: u32 = 0xe583_2000; // str r2,[r3]
++const HALT: u32 = 0xeaff_fffe; // b .
++
++/// The normalized region register of an enabled 4 KiB bank at `base`.
++fn atcm(base: u32) -> u32 {
++    base | (3 << 2) | 1
++}
++fn load(board: &Board, words: &[u32], registers: &[(usize, u64)]) {
++    let code: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
++    board.write_memory(0, 0x30000, &code).unwrap();
++    board.write_register(0, Register::Pc, 0x30000).unwrap();
++    for &(index, value) in registers {
++        board.write_register(0, arm::CORE[index], value).unwrap();
++    }
++}
++fn tcm(previous: u32, next: u32, writer: u32) -> DeclaredMutation {
++    DeclaredMutation::TcmRegion {
++        core: core(0),
++        bank: TcmBank::Instruction,
++        previous: TcmRegister(previous),
++        next: TcmRegister(next),
++        writer: WriterPc(writer),
++    }
++}
++fn commit(writer: u32) -> DeclaredMutation {
++    DeclaredMutation::DecoderCommit {
++        decoder: DecoderIndex(0),
++        previous: DecoderChoice(0),
++        next: DecoderChoice(1),
++        core: core(0),
++        writer: WriterPc(writer),
++    }
++}
++fn declaring(mut config: CompositeGuardConfig, declared: Vec<DeclaredMutation>) -> CompositeGuardConfig {
++    config.declared = declared;
++    config
++}
++fn refusal(token: &GuardStatusToken) -> Option<MutationRefusal> {
++    match token.report().first_fault {
++        Some(GuardFault::Mutation { reason, .. }) => Some(reason),
++        _ => None,
++    }
++}
++
++#[test]
++fn a_declared_tcm_write_moves_the_window() {
++    let mut board = board();
++    load(&board, &[MCR_ATCM_R0, STR_R2_R1, HALT], &[(0, 0x60001), (1, 0x60010), (2, 0x77)]);
++    assert_eq!(tcm_register(&board, 0, TcmBank::Instruction), u64::from(atcm(0x10000)));
++    let mut watch = watch(&board, 64);
++    let atcm_word = range(GuardTarget::Tcm { core: core(0), bank: TcmBank::Instruction }, 0x10, 0x14);
++    let config = declaring(forbidding(WriteSource::Cpu(core(0)), atcm_word), vec![tcm(atcm(0x10000), atcm(0x60000), 0x30000)]);
++    let token = board.memory_guard_attach(&mut watch, config).unwrap();
++    let _ = board.run_until(8, 1);
++    assert_eq!(tcm_register(&board, 0, TcmBank::Instruction), u64::from(atcm(0x60000)));
++    let location = at(GuardTarget::Tcm { core: core(0), bank: TcmBank::Instruction }, 0x10);
++    assert_eq!(
++        token.report().first_fault,
++        denied(WriteSource::Cpu(core(0)), 0x60010, 4, Some(0x30004), location, outcome(&board, 0))
++    );
++    assert_eq!(token.report().mutations_admitted, 1);
++    assert!(token.declared()[0].admitted.is_some_and(|admitted| admitted.core == core(0)));
++}
++
++#[test]
++fn undeclared_and_mismatched_tcm_writes_are_refused_before_they_apply() {
++    let (from, to) = (atcm(0x10000), atcm(0x60000));
++    let first = DeclarationId(0);
++    for (declared, reason) in [
++        (vec![], MutationRefusal::Undeclared),
++        (vec![tcm(from, atcm(0x70000), 0x30000)], MutationRefusal::Mismatch { declaration: first, field: DeclaredField::Next }),
++        (vec![tcm(from, to, 0x30004)], MutationRefusal::Mismatch { declaration: first, field: DeclaredField::Writer }),
++    ] {
++        let mut board = board();
++        load(&board, &[MCR_ATCM_R0, HALT], &[(0, 0x60001)]);
++        let mut watch = watch(&board, 64);
++        let token = board.memory_guard_attach(&mut watch, declaring(config(open), declared)).unwrap();
++        assert!(board.run_until(4, 1).is_err());
++        assert_eq!(tcm_register(&board, 0, TcmBank::Instruction), u64::from(from));
++        assert_eq!(refusal(&token), Some(reason));
++        assert_eq!(token.report().mutations_admitted, 0);
++    }
++}
++
++#[test]
++fn each_declaration_admits_one_occurrence() {
++    let (from, to) = (atcm(0x10000), atcm(0x60000));
++    let mut board = board();
++    load(&board, &[MCR_ATCM_R0, MCR_ATCM_R3, MCR_ATCM_R0, HALT], &[(0, 0x60001), (3, 0x10001)]);
++    let mut watch = watch(&board, 64);
++    let config = declaring(config(open), vec![tcm(from, to, 0x30000), tcm(to, from, 0x30004)]);
++    let token = board.memory_guard_attach(&mut watch, config).unwrap();
++    assert!(board.run_until(8, 1).is_err());
++    assert_eq!(tcm_register(&board, 0, TcmBank::Instruction), u64::from(from));
++    assert_eq!(refusal(&token), Some(MutationRefusal::Consumed(DeclarationId(0))));
++    assert_eq!(token.report().mutations_admitted, 2);
++    assert!(token.declared().iter().all(|used| used.admitted.is_some()));
++}
++
++#[test]
++fn a_host_tcm_write_matching_a_declaration_is_refused() {
++    let board = board();
++    let mut watch = watch(&board, 64);
++    let config = declaring(config(open), vec![tcm(atcm(0x10000), atcm(0x60000), 0x30000)]);
++    let token = board.memory_guard_attach(&mut watch, config).unwrap();
++    assert!(board.cpu(0).unwrap().coprocessor(TcmBank::Instruction.register(), Some(0x60001)).is_err());
++    assert_eq!(tcm_register(&board, 0, TcmBank::Instruction), u64::from(atcm(0x10000)));
++    assert_eq!(refusal(&token), Some(MutationRefusal::HostOrigin));
++    assert_eq!(token.declared()[0].admitted, None);
++}
++
++#[test]
++fn a_declared_decoder_commit_switches_the_views() {
++    let mut board = board_with([true, false], true);
++    load(&board, &[STR_R0_R1, STR_R2_R3, HALT], &[(0, 1), (1, SELECT), (2, 0x99), (3, 0x70010)]);
++    let mut watch = watch(&board, 64);
++    let config = declaring(forbidding(WriteSource::Cpu(core(0)), physical(0x40010, 0x40014)), vec![commit(0x30000)]);
++    let token = board.memory_guard_attach(&mut watch, config).unwrap();
++    let _ = board.run_until(8, 1);
++    assert_eq!(board.state()["memory_decoders"]["choices"], serde_json::json!([1, 0]));
++    assert_eq!(
++        token.report().first_fault,
++        denied(WriteSource::Cpu(core(0)), 0x70010, 4, Some(0x30004), at(GuardTarget::Physical, 0x40010), outcome(&board, 0))
++    );
++    assert_eq!(token.report().mutations_admitted, 1);
++    assert!(token.declared()[0].admitted.is_some_and(|admitted| admitted.core == core(0)));
++}
++
++#[test]
++fn a_commit_without_its_declared_writer_is_refused() {
++    for writer in [None, Some(0x30004)] {
++        let mut board = board_with([true, false], true);
++        load(&board, &[STR_R0_R1, HALT], &[(0, 1), (1, SELECT)]);
++        board.write_physical(0x30000 + 0x10, &[3; 4]).unwrap();
++        let mut watch = watch(&board, 64);
++        let token = board.memory_guard_attach(&mut watch, declaring(config(open), vec![commit(0x30000)])).unwrap();
++        match writer {
++            None => board.state.borrow_mut().decoders.select(0, 1, true, None).unwrap(),
++            Some(pc) => load(&board, &[HALT, STR_R0_R1, HALT], &[(0, 1), (1, SELECT), (15, pc)]),
++        }
++        assert!(board.run_until(8, 1).is_err());
++        assert_eq!(board.state()["memory_decoders"]["choices"], serde_json::json!([0, 0]));
++        assert_eq!(word(&board, 0, 0x70010), 0x0303_0303);
++        assert_eq!(
++            refusal(&token),
++            Some(MutationRefusal::Mismatch { declaration: DeclarationId(0), field: DeclaredField::Writer })
++        );
++    }
++}
++
++#[test]
++fn declaration_refusals_are_typed() {
++    use GuardAttachError::*;
++    let (from, to) = (atcm(0x10000), atcm(0x60000));
++    let board = board_with([true, false], true);
++    let mut watch = watch(&board, 8);
++    let mut attach = |declared| board.memory_guard_attach(&mut watch, declaring(config(open), declared)).err();
++    assert_eq!(attach(vec![tcm(to, from, 0x30000)]), Some(DeclarationChain));
++    assert_eq!(attach(vec![tcm(from, to, 0x30000), tcm(from, atcm(0x70000), 0x30004)]), Some(DeclarationChain));
++    assert_eq!(attach(vec![tcm(from, to, 0x30000), tcm(atcm(0x70000), from, 0x30004)]), Some(DeclarationChain));
++    assert_eq!(attach(vec![tcm(from, to, 0x30000), tcm(from, to, 0x30000)]), Some(DuplicateDeclaration));
++    assert_eq!(attach(vec![tcm(from, from, 0x30000)]), Some(InvalidDeclaration));
++    let absent_decoder = DeclaredMutation::DecoderCommit {
++        decoder: DecoderIndex(5),
++        previous: DecoderChoice(0),
++        next: DecoderChoice(1),
++        core: core(0),
++        writer: WriterPc(0x30000),
++    };
++    assert_eq!(attach(vec![absent_decoder]), Some(InvalidDeclaration));
++    let absent_choice = DeclaredMutation::DecoderCommit {
++        decoder: DecoderIndex(0),
++        previous: DecoderChoice(0),
++        next: DecoderChoice(9),
++        core: core(0),
++        writer: WriterPc(0x30000),
++    };
++    assert_eq!(attach(vec![absent_choice]), Some(InvalidDeclaration));
++    let absent_core = DeclaredMutation::TcmRegion {
++        core: core(2),
++        bank: TcmBank::Instruction,
++        previous: TcmRegister(from),
++        next: TcmRegister(to),
++        writer: WriterPc(0x30000),
++    };
++    assert_eq!(attach(vec![absent_core]), Some(InvalidDeclaration));
++    let too_many = (0..=MAX_GUARD_DECLARED_MUTATIONS as u32).map(|index| tcm(from, to, 0x30000 + 4 * index)).collect();
++    assert_eq!(attach(too_many), Some(BoundExceeded));
++    assert_eq!(attach(vec![commit(0x30000), tcm(from, to, 0x30000)]), None);
++
++    let board = board_with([true, false], true);
++    let mut fixed = board.memory_watch_begin_classified(classes(), 8, board.mappings().to_vec(), ViewPolicy::Fixed).unwrap();
++    let commit_only = declaring(config(open), vec![commit(0x30000)]);
++    assert_eq!(board.memory_guard_attach(&mut fixed, commit_only).err(), Some(FixedViewsWithDeclaredCommit));
++    board.memory_guard_attach(&mut fixed, declaring(config(open), vec![tcm(from, to, 0x30000)])).unwrap();
++}
++
++#[test]
++fn the_journal_records_mutations_with_the_writers_the_guard_derives() {
++    let mut board = board_with([true, false], true);
++    load(&board, &[MCR_ATCM_R0, STR_R2_R1, HALT], &[(0, 0x60001), (1, SELECT), (2, 1)]);
++    let mut journal = board.mutation_journal_begin(MAX_JOURNAL_ROWS).unwrap();
++    let mut watch = watch(&board, 8);
++    assert_eq!(board.memory_guard_attach(&mut watch, config(open)).err(), Some(GuardAttachError::MutationJournal));
++    board.run_until(8, 1).unwrap();
++    let rows = board.mutation_journal_end(&mut journal).unwrap();
++    let replaced = GuardMutation::Cpu(CpuMutation::Mapping {
++        operation: MappingMutation::ReplacePhysical,
++        address: 0x70000,
++        physical: Some(0x40000),
++        bytes: 0x1000,
++        permissions: Some(7),
++    });
++    let tcm_write = GuardMutation::Cpu(CpuMutation::Tcm {
++        register: TcmBank::Instruction.register(),
++        previous: atcm(0x10000),
++        next: atcm(0x60000),
++        origin: MutationOrigin::Guest,
++    });
++    let selection = SelectionWriter { core: 0, pc: 0x30004 };
++    let commit = GuardMutation::Decoder { decoder: 0, previous: 0, choice: 1, writer: Some(selection) };
++    assert_eq!(
++        rows.iter().map(|row| (row.core, row.mutation, row.writer)).collect::<Vec<_>>(),
++        [
++            (Some(0), tcm_write, Some(0x30000)),
++            (Some(0), commit, Some(0x30004)),
++            (Some(0), replaced, None),
++            (Some(1), replaced, None),
++        ]
++    );
++    board.memory_guard_attach(&mut watch, config(open)).unwrap();
++    assert!(board.mutation_journal_begin(MAX_JOURNAL_ROWS).is_err());
++}
++
++#[test]
++fn the_journal_refuses_once_its_bound_is_exceeded() {
++    let mut board = board();
++    load(&board, &[MCR_ATCM_R0, MCR_ATCM_R3, HALT], &[(0, 0x60001), (3, 0x10001)]);
++    let mut journal = board.mutation_journal_begin(1).unwrap();
++    board.run_until(8, 1).unwrap();
++    assert!(board.mutation_journal_end(&mut journal).is_err());
++    assert!(board.mutation_journal_begin(1).is_ok());
++}
+diff --git a/crates/emulator/src/board/observation/journal.rs b/crates/emulator/src/board/observation/journal.rs
+new file mode 100644
+index 0000000..b27e812
+--- /dev/null
++++ b/crates/emulator/src/board/observation/journal.rs
+@@ -0,0 +1,173 @@
++//! A recording of every CPU and board mutation transaction, admitted as it is
++//! offered. It cannot run beside a composite guard.
++use super::{Board, composite::GuardMutation, lifecycle::remove_hooks};
++use crate::board::{memory::Memory, scalar};
++use fujimod_emulator_cpu::{Cpu, CpuMutation, Hook, HookId, MutationOrigin, Register};
++use std::{
++    cell::{Cell, RefCell},
++    ffi::c_void,
++    rc::{Rc, Weak},
++};
++
++pub const MAX_JOURNAL_ROWS: usize = 4096;
++const CPSR_THUMB: u64 = 0x20;
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct MutationRow {
++    /// The offering core for a CPU row; the selecting core for a decoder row.
++    pub core: Option<usize>,
++    pub mutation: GuardMutation,
++    /// PC at dispatch; absent for board rows.
++    pub pc: Option<u64>,
++    pub cpsr: Option<u32>,
++    /// The requesting instruction as the guard derives it: PC minus 4 for an
++    /// A32 guest TCM write, the selecting store for a decoder commit.
++    pub writer: Option<u64>,
++    /// The offering core's entered instruction count; absent for board rows.
++    pub instructions: Option<u64>,
++}
++
++pub(super) struct JournalLatch {
++    rows: RefCell<Vec<MutationRow>>,
++    limit: usize,
++    overflow: Cell<bool>,
++}
++impl JournalLatch {
++    fn push(&self, row: MutationRow) {
++        let mut rows = self.rows.borrow_mut();
++        if rows.len() == self.limit {
++            self.overflow.set(true);
++        } else {
++            rows.push(row);
++        }
++    }
++    pub(super) fn board(&self, mutation: GuardMutation) {
++        let writer = match mutation {
++            GuardMutation::Decoder { writer, .. } => writer,
++            _ => None,
++        };
++        self.push(MutationRow {
++            core: writer.map(|writer| writer.core),
++            mutation,
++            pc: None,
++            cpsr: None,
++            writer: writer.map(|writer| writer.pc),
++            instructions: None,
++        });
++    }
++}
++struct JournalContext {
++    core: usize,
++    cpu: Weak<dyn Cpu>,
++    latch: Rc<JournalLatch>,
++}
++unsafe fn record(event: CpuMutation, data: *mut c_void) -> bool {
++    // SAFETY: `data` is a `JournalContext` its journal keeps until this hook is removed.
++    let context = unsafe { &*data.cast::<JournalContext>() };
++    let cpu = context.cpu.upgrade();
++    let pc = cpu.as_ref().and_then(|cpu| scalar(&**cpu, Register::Pc).ok());
++    let cpsr = cpu.as_ref().and_then(|cpu| scalar(&**cpu, Register::Pstate).ok());
++    let writer = match event {
++        CpuMutation::Tcm { origin: MutationOrigin::Guest, .. } => {
++            pc.zip(cpsr).filter(|&(_, cpsr)| cpsr & CPSR_THUMB == 0).map(|(pc, _)| pc.wrapping_sub(4))
++        }
++        _ => None,
++    };
++    context.latch.push(MutationRow {
++        core: Some(context.core),
++        mutation: GuardMutation::Cpu(event),
++        pc,
++        cpsr: cpsr.and_then(|cpsr| u32::try_from(cpsr).ok()),
++        writer,
++        instructions: cpu.and_then(|cpu| cpu.instruction_progress()),
++    });
++    true
++}
++
++/// Dropping it with a hook still installed hands the hooks and contexts to the board.
++pub struct MutationJournal {
++    latch: Rc<JournalLatch>,
++    owner: Weak<Memory>,
++    contexts: Vec<Box<JournalContext>>,
++    hooks: Vec<(Weak<dyn Cpu>, HookId)>,
++}
++impl MutationJournal {
++    fn remove(&mut self) -> Result<(), String> {
++        let result = remove_hooks(&mut self.hooks, |(cpu, hook)| cpu.upgrade().map_or(Ok(()), |cpu| cpu.remove_hook(*hook)));
++        if result.is_ok()
++            && let Some(memory) = self.owner.upgrade()
++        {
++            memory.observers.set_journal(None);
++        }
++        result
++    }
++}
++impl Drop for MutationJournal {
++    fn drop(&mut self) {
++        if self.hooks.is_empty() || self.remove().is_ok() {
++            return;
++        }
++        if let Some(memory) = self.owner.upgrade() {
++            memory.observers.retain(Box::new((std::mem::take(&mut self.contexts), std::mem::take(&mut self.hooks))));
++        }
++    }
++}
++impl Board {
++    /// Records mutations from now until `mutation_journal_end`, at most `limit` rows.
++    pub fn mutation_journal_begin(&self, limit: usize) -> Result<Box<MutationJournal>, String> {
++        let state = self.state.try_borrow().map_err(|_| "mutation journal requires a paused board")?;
++        if state.active_slice.is_some() || state.parallel.is_some() || state.memory_access {
++            return Err("mutation journal requires a paused board".into());
++        }
++        drop(state);
++        if limit == 0 || limit > MAX_JOURNAL_ROWS {
++            return Err("mutation journal row bound is outside 1..=4096".into());
++        }
++        let observers = &self.physical_memory.observers;
++        if observers.cleanup_failed.get() {
++            return Err("an observation hook could not be removed".into());
++        }
++        if observers.guard().is_some() || observers.journal_active() {
++            return Err("a composite guard or another mutation journal is active".into());
++        }
++        if self.cpus.iter().any(|cpu| !cpu.supports_mutation_observation()) {
++            return Err("mutation journal requires mutation observation on every processor".into());
++        }
++        let latch = Rc::new(JournalLatch { rows: RefCell::new(Vec::new()), limit, overflow: Cell::new(false) });
++        let mut journal = Box::new(MutationJournal {
++            latch: latch.clone(),
++            owner: Rc::downgrade(&self.physical_memory),
++            contexts: self
++                .cpus
++                .iter()
++                .enumerate()
++                .map(|(core, cpu)| Box::new(JournalContext { core, cpu: Rc::downgrade(cpu), latch: latch.clone() }))
++                .collect(),
++            hooks: Vec::with_capacity(self.cpus.len()),
++        });
++        for (cpu, context) in self.cpus.iter().zip(&journal.contexts) {
++            let data = (&**context as *const JournalContext).cast_mut().cast();
++            // SAFETY: the journal keeps the boxed context until this hook is removed.
++            match unsafe { cpu.install_hook(Hook::Mutation { callback: record, data }) } {
++                Ok(id) => journal.hooks.push((Rc::downgrade(cpu), id)),
++                Err(error) => {
++                    journal.remove()?;
++                    return Err(error);
++                }
++            }
++        }
++        observers.set_journal(Some(&latch));
++        Ok(journal)
++    }
++    /// Removes the journal's hooks; refuses if the row bound was exceeded.
++    pub fn mutation_journal_end(&self, journal: &mut MutationJournal) -> Result<Vec<MutationRow>, String> {
++        if !journal.owner.upgrade().is_some_and(|owner| Rc::ptr_eq(&owner, &self.physical_memory)) {
++            return Err("mutation journal belongs to a different board".into());
++        }
++        journal.remove()?;
++        if journal.latch.overflow.get() {
++            return Err("mutation journal exceeded its row bound".into());
++        }
++        Ok(journal.latch.rows.take())
++    }
++}
 diff --git a/crates/emulator/src/board/observation/lifecycle.rs b/crates/emulator/src/board/observation/lifecycle.rs
 new file mode 100644
-index 0000000..1c4b588
+index 0000000..c3a465d
 --- /dev/null
 +++ b/crates/emulator/src/board/observation/lifecycle.rs
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,236 @@
 +//! Hook ownership for memory watches, instruction points and guards. A failed
 +//! removal keeps the hook's identity and context and blocks board execution.
 +use super::{
 +    Board, MemoryWatch,
-+    composite::{GuardLatch, GuardLease},
++    composite::{GuardLatch, GuardLease, GuardMutation},
++    journal::JournalLatch,
 +};
 +use crate::board::memory::Memory;
 +use std::{
@@ -2787,6 +3807,7 @@ index 0000000..1c4b588
 +    /// Armed legacy and classified watches whose end has not completed.
 +    live_watches: Cell<usize>,
 +    guard: RefCell<Option<Weak<GuardLatch>>>,
++    journal: RefCell<Option<Weak<JournalLatch>>>,
 +    /// Callback contexts of hooks that may still be installed. Processors
 +    /// drop before the board's memory.
 +    retained: RefCell<Vec<Box<dyn Any>>>,
@@ -2806,6 +3827,17 @@ index 0000000..1c4b588
 +    }
 +    pub(super) fn live_watches(&self) -> usize {
 +        self.live_watches.get()
++    }
++    pub(super) fn journal_active(&self) -> bool {
++        self.journal.borrow().as_ref().is_some_and(|journal| journal.strong_count() > 0)
++    }
++    pub(super) fn set_journal(&self, latch: Option<&Rc<JournalLatch>>) {
++        self.journal.replace(latch.map(Rc::downgrade));
++    }
++    pub(in crate::board) fn journal_board(&self, mutation: GuardMutation) {
++        if let Some(journal) = self.journal.borrow().as_ref().and_then(Weak::upgrade) {
++            journal.board(mutation);
++        }
 +    }
 +    pub(super) fn retain(&self, contexts: Box<dyn Any>) {
 +        self.cleanup_failed.set(true);
