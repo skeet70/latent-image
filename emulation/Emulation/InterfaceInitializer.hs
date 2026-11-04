@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.InterfaceInitializer
   ( Role (..), Contract, parseOriginalSource, deriveContract, contractValue, declarations, validateReceipt
-  , contractRole, contractSourceSha256, ValidatedInitializer, initializerExit, initializerTable, validateReceiptEvidence
+  , contractRole, contractSourceSha256, ValidatedInitializer, initializerExit, initializerTable, initializerCp14Identities, validateReceiptEvidence
   , ExpectedStore (..), originalStores
   , Context (..), Views (..), Source (..), ByteOrder (..), Event (..), Mode (..)
   , PhysicalSpan (..), Window (..), BankSnapshot (..), TcmSnapshot (..), bankSnapshot
@@ -19,7 +19,7 @@ import Data.List (sort)
 import qualified Data.Set as Set
 import Data.Word (Word8, Word32, Word64)
 import qualified Emulation.LoaderPrefixWitness as P
-import Emulation.FirstStageWitness (Cpsr (..), leWordAt, sha256Hex)
+import Emulation.FirstStageWitness (Cpsr (..), leWordAt, recordedCp14Identities, sha256Hex)
 import qualified Emulation.PeerStageWitness as W
 import qualified Emulation.PollPeriod as K
 import FujiAF.ClassicChrome (stockFirmwareSha256)
@@ -670,6 +670,7 @@ validateReceipt contract bytes = validateReceiptEvidence contract bytes >> pure 
 data ValidatedInitializer = ValidatedInitializer
   { initializerExit :: Context
   , initializerTable :: Views
+  , initializerCp14Identities :: (Word32, Word32)
   }
 
 validateReceiptEvidence :: Contract -> B.ByteString -> Either String ValidatedInitializer
@@ -682,7 +683,10 @@ validateReceiptEvidence (Contract role prefix (P.Guest entry) (P.Span rustStart 
   Receipt schema result failure machineFailure identities observation <- case J.fromJSON document of
     J.Error message -> Left message
     J.Success receipt -> Right receipt
-  require (schema == 6 && result == Passed && failure == Nothing && machineFailure == Nothing && identities == [0x4003,0x5003])
+  cp14 <- case identities of
+    [core0, core1] | (core0, core1) `elem` recordedCp14Identities -> Right (core0, core1)
+    _ -> Left "initializer SDK receipt CP14 identities are not one recorded model"
+  require (schema == 6 && result == Passed && failure == Nothing && machineFailure == Nothing)
     "initializer SDK receipt did not pass its distinct schema-6 role"
   let Observation (Identity observedRole observedEntry rust observedScratch observedSource observedImage observedSymbols body)
         before entered after frameBefore frameAfter tableBefore tableAfter tailBefore tailAfter poolsBefore poolsAfter
@@ -791,4 +795,4 @@ validateReceiptEvidence (Contract role prefix (P.Guest entry) (P.Span rustStart 
   require (all (== P.factLoader prefixFacts) (digestFor 0xd0000 aliases)
     && consistent (digestFor 0x10000 aliases) && consistent (digestFor 0xddaa0 (take 12 aliases))
     && consistent (digestFor 0xddaa0 (drop 12 aliases))) "initializer full-image or workspace alias identity differs"
-  pure (ValidatedInitializer after tableAfter)
+  pure (ValidatedInitializer after tableAfter cp14)

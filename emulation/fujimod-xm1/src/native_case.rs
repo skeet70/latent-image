@@ -1,7 +1,8 @@
 //! Bounded native cases on the pinned FujiMod Cortex-R5F core with the
 //! Cortex-R4F exclusions of `r4f::classify_a32`. Input is the
-//! `FUJI_NATIVE_V1` wire written by `Emulation.NativeCase`; output is the
-//! runner observation read by `Emulation.NativeObservation`.
+//! `FUJI_NATIVE_V1` wire written by `Emulation.NativeCase`, or a
+//! `FUJI_NATIVE_BATCH_V1` wire of such cases; output is the runner
+//! observation read by `Emulation.NativeObservation`, one per case.
 //!
 //! Engine pages carry the union of the permissions of the regions they touch.
 //! The memory hook admits each access against exact logical regions and
@@ -34,6 +35,12 @@ use std::time::{Duration, Instant};
 
 /// Wire bound read by the binary; a complete 4 MiB case is about 8.4 MB.
 pub const MAX_WIRE_BYTES: usize = 16 * 1024 * 1024;
+/// Batch wire bound: 256 MiB of distinct artifacts plus case bodies, each
+/// shorter than its case JSON, of which a batch carries at most 256 MiB.
+pub const MAX_BATCH_WIRE_BYTES: usize = 768 * 1024 * 1024;
+const MAX_BATCH_CASES: u32 = 4096;
+const MAX_BATCH_ARTIFACTS: u32 = MAX_BATCH_CASES * 20;
+const MAX_BATCH_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_REGIONS: u32 = 16;
 const MAX_REGION_BYTES: u32 = 2 * 1024 * 1024;
 const MAX_MAPPED_BYTES: u64 = 4 * 1024 * 1024;
@@ -67,11 +74,14 @@ pub struct Outcome {
 /// Validates one wire, executes it and renders its observation.
 pub fn run(wire: &[u8]) -> Outcome {
     let case = parse(wire);
-    let observation = match &case {
+    render(&match &case {
         Ok(case) => execute(case),
         Err(error) => Observation::invalid(*error),
-    };
-    match serde_json::to_vec(&observation) {
+    })
+}
+
+fn render(observation: &Observation<'_>) -> Outcome {
+    match serde_json::to_vec(observation) {
         Ok(mut json) => {
             json.push(b'\n');
             Outcome { returned: observation.status == Status::Returned, json }
@@ -85,6 +95,35 @@ pub fn run(wire: &[u8]) -> Outcome {
             .into_bytes(),
         },
     }
+}
+
+/// Checks the batch framing, then runs each case as `run` would and writes
+/// `FUJI_NATIVE_BATCH_CASE <index> <exit>` and its observation line, flushed per
+/// case, then `FUJI_NATIVE_BATCH_END <count>`. Each case parses its own regions
+/// from the shared artifacts and executes on a newly opened engine. Returns
+/// false for a refused batch framing, which runs no case.
+pub fn run_batch(wire: &[u8], out: &mut impl std::io::Write) -> std::io::Result<bool> {
+    let batch = match frame(wire) {
+        Ok(batch) => batch,
+        Err(error) => {
+            writeln!(out, "FUJI_NATIVE_BATCH_INVALID {}", error.0)?;
+            out.flush()?;
+            return Ok(false);
+        }
+    };
+    for (index, body) in batch.cases.iter().enumerate() {
+        let case = parse_case(body, |tokens, bytes| slice(tokens, &batch.artifacts, bytes));
+        let outcome = render(&match &case {
+            Ok(case) => execute(case),
+            Err(error) => Observation::invalid(*error),
+        });
+        writeln!(out, "FUJI_NATIVE_BATCH_CASE {index} {}", if outcome.returned { 0 } else { 1 })?;
+        out.write_all(&outcome.json)?;
+        out.flush()?;
+    }
+    writeln!(out, "FUJI_NATIVE_BATCH_END {}", batch.cases.len())?;
+    out.flush()?;
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +359,17 @@ impl<'a> Tokens<'a> {
             Err(WireError("wire has trailing tokens"))
         }
     }
+
+    /// The `count` bytes after the single newline that ends the previous token.
+    fn raw(&mut self, count: u32) -> Result<&'a [u8], WireError> {
+        let rest = self.rest.strip_prefix(b"\n").ok_or(WireError("raw bytes must follow one newline"))?;
+        if rest.len() < count as usize {
+            return Err(WireError("raw bytes end early"));
+        }
+        let (bytes, rest) = rest.split_at(count as usize);
+        self.rest = rest;
+        Ok(bytes)
+    }
 }
 
 fn nibble(digit: u8) -> Option<u8> {
@@ -334,6 +384,14 @@ fn parse(wire: &[u8]) -> Result<Case, WireError> {
     if wire.len() > MAX_WIRE_BYTES {
         return Err(WireError("wire exceeds its byte limit"));
     }
+    parse_case(wire, |tokens, bytes| tokens.bytes(bytes))
+}
+
+/// One case wire whose region rows end in the form `initial` reads.
+fn parse_case(
+    wire: &[u8],
+    mut initial: impl FnMut(&mut Tokens<'_>, u32) -> Result<Box<[u8]>, WireError>,
+) -> Result<Case, WireError> {
     let mut tokens = Tokens { rest: wire };
     tokens.literal(b"FUJI_NATIVE_V1", "wire version must be FUJI_NATIVE_V1")?;
     tokens.literal(b"cortex-r5f-arm-le", "CPU profile must be cortex-r5f-arm-le")?;
@@ -390,7 +448,7 @@ fn parse(wire: &[u8]) -> Result<Case, WireError> {
         if regions.iter().any(|region| region.span.overlaps(span)) {
             return Err(WireError("regions overlap"));
         }
-        let initial = tokens.bytes(bytes)?;
+        let initial = initial(&mut tokens, bytes)?;
         regions.push(Region { span, permission, initial });
     }
 
@@ -481,6 +539,65 @@ fn validate(case: &Case) -> Result<(), WireError> {
         }
     }
     Ok(())
+}
+
+struct Batch<'a> {
+    artifacts: Vec<&'a [u8]>,
+    cases: Vec<&'a [u8]>,
+}
+
+/// `FUJI_NATIVE_BATCH_V1`, artifact and case counts, then each artifact and each
+/// case body as a decimal length, one newline and that many raw bytes.
+fn frame(wire: &[u8]) -> Result<Batch<'_>, WireError> {
+    if wire.len() > MAX_BATCH_WIRE_BYTES {
+        return Err(WireError("batch wire exceeds its byte limit"));
+    }
+    let mut tokens = Tokens { rest: wire };
+    tokens.literal(b"FUJI_NATIVE_BATCH_V1", "batch version must be FUJI_NATIVE_BATCH_V1")?;
+    let artifact_count = tokens.count(MAX_BATCH_ARTIFACTS)?;
+    let case_count = tokens.count(MAX_BATCH_CASES)?;
+    if case_count == 0 {
+        return Err(WireError("a batch needs a case"));
+    }
+    let mut artifacts = Vec::with_capacity(artifact_count as usize);
+    let mut total = 0u64;
+    for _ in 0..artifact_count {
+        let length = tokens.count(MAX_REGION_BYTES)?;
+        total += u64::from(length);
+        if length == 0 || total > MAX_BATCH_ARTIFACT_BYTES {
+            return Err(WireError("artifacts must be nonempty and at most 256 MiB in total"));
+        }
+        artifacts.push(tokens.raw(length)?);
+    }
+    let mut cases = Vec::with_capacity(case_count as usize);
+    for _ in 0..case_count {
+        let length = tokens.count(MAX_WIRE_BYTES as u32)?;
+        cases.push(tokens.raw(length)?);
+    }
+    tokens.finish()?;
+    Ok(Batch { artifacts, cases })
+}
+
+/// A batch region's initial bytes: `z` for zeros, or `s <artifact> <offset> <length>`
+/// for an artifact slice followed by zeros.
+fn slice(tokens: &mut Tokens<'_>, artifacts: &[&[u8]], bytes: u32) -> Result<Box<[u8]>, WireError> {
+    let mut initial = vec![0u8; bytes as usize];
+    match tokens.next()? {
+        b"z" => {}
+        b"s" => {
+            let artifact = tokens.count(MAX_BATCH_ARTIFACTS)?;
+            let offset = tokens.count(MAX_REGION_BYTES)? as usize;
+            let length = tokens.count(bytes)? as usize;
+            let source = artifacts
+                .get(artifact as usize)
+                .and_then(|source| source.get(offset..offset + length))
+                .filter(|_| length != 0)
+                .ok_or(WireError("region slice lies outside its artifact"))?;
+            initial[..length].copy_from_slice(source);
+        }
+        _ => return Err(WireError("region initial must be z or s")),
+    }
+    Ok(initial.into())
 }
 
 // ---------------------------------------------------------------------------

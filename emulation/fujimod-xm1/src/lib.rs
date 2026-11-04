@@ -2,6 +2,8 @@
 pub mod adapters;
 pub mod adjustment;
 pub mod bridge;
+pub mod composed_catalog;
+pub mod composed_receipt;
 pub mod ff80;
 pub mod frame_capture;
 pub mod guest;
@@ -22,6 +24,7 @@ pub mod provenance;
 pub mod r4f;
 pub mod render;
 pub mod run;
+pub mod reset_observation;
 pub mod sd_host;
 pub mod startup_sites;
 pub mod trace;

@@ -21,7 +21,9 @@ data SourceFiles = SourceFiles
   { sourceDat :: B.ByteString, runDat :: B.ByteString, runDecoded :: B.ByteString, sourceRun :: B.ByteString, sourceRom :: B.ByteString
   , sourceA :: B.ByteString, sourceB :: B.ByteString, sourceImage :: B.ByteString, sourceObserver :: B.ByteString
   , sourceLinked :: B.ByteString, sourceSymbols :: B.ByteString, sourceContract :: B.ByteString }
-data ObservedFiles = ObservedFiles {observedReceipt :: B.ByteString, observedWatch :: B.ByteString, observedReset :: B.ByteString}
+-- | 'observedBytes' is the compact receipt's byte sidecar, empty for an inline receipt.
+data ObservedFiles = ObservedFiles
+  {observedReceipt :: B.ByteString, observedWatch :: B.ByteString, observedReset :: B.ByteString, observedBytes :: B.ByteString}
 
 newtype PhysicalBoundary = PhysicalBoundary Word64 deriving (Eq, Show)
 data FetchRange = FetchRange PhysicalBoundary PhysicalBoundary deriving (Eq, Show)

@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "path": ["ok", "down"],
+  "key": "ok",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00c0028c", "label": "controller30-dispatch"},
+    {"address": "0x00c2d8ec", "label": "value-change"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"},
+    {"address": "0x00d4c8d4", "label": "request-copy"},
+    {"address": "0x00d3d894", "label": "request-send"},
+    {"address": "0x00d38d98", "label": "redraw-notify"},
+    {"address": "0x006355dc", "label": "redraw-flag-a"},
+    {"address": "0x00635600", "label": "redraw-flag-b"},
+    {"address": "0x00d38e1c", "label": "redraw-dispatch"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x00a85000", "end": "0x00a88000"},
+    {"start": "0x015e6540", "end": "0x015e6760"}
+  ],
+  "limit": 65536
+}

@@ -10,7 +10,7 @@ This is the whole process for any camera operation.
 2. **Owner:** confirms in chat, with a go for this run or a standing confirmation in section 3.4 that covers it. For H3 the go is per run and names the operation and the image or payload digest.
 3. **Owner:** puts the camera in the mode the operation needs, for example jig mode, and leaves it attached. **Model:** runs the single command, e.g. `devenv shell -- bazel run //transport:camera -- end-setting`. The command picks the one connected `04cb:ff80` device, journals every outgoing byte before sending it, writes its output under `private-data/sessions/` and prints the result, which the model reports in chat.
 4. **Owner:** exits jig mode, power-cycles, takes a shot and plays it back, and tells the model the result in chat, with photos or logs only if something looked wrong. For a payload in owned RAM the power cycle is a battery removal, which also ends the payload (section 3.4).
-5. **Model:** keeps the session record under `private-data/sessions/`. At a milestone or decision it records the result in the relevant report, posts it to the GitHub issue under [issues and comments](../docs/principles.md#issues-and-comments), adds an evidence-ledger entry if it is a durable research claim, and commits.
+5. **Model:** keeps the session record under `private-data/sessions/`. At a milestone or decision it records the result in the relevant report, posts it to the GitHub issue under [issues and comments](../docs/principles.md#issues-and-comments), records a durable research claim in [the evidence ledger](../docs/principles.md#evidence-ledger), and commits.
 
 A failed or stopped run needs no cleanup record. Fix the code, rehearse, commit, and go back to step 2.
 
@@ -34,7 +34,7 @@ For the RAM push the mechanical payload check is the bank ELF allowlist check `/
 
 - Camera code exposes only closed operations with internally built bytes. It has no raw command path, never retries, and stops on any unexpected reply, status or disconnect.
 - Do not write guessed values into configuration offsets, GPIOs, regulator registers, lens command mailboxes or boot controls.
-- Never restore another camera's dump onto this body. Keep this body's calibration backup in two verified locations; it exists for the 1.00 adjustment area (E-S03-DURABLE-PRESERVATION) and the 1.50 adjustment area (E-ADJ-BACKUP-DURABLE-150).
+- Never restore another camera's dump onto this body. Keep this body's calibration backup in two verified locations; it exists for the 1.00 adjustment area (E-S03-DURABLE-PRESERVATION) and the 1.50 adjustment area (E-ADJ-BACKUP-GAP-READ-150).
 - Do not deliberately corrupt the owner's only camera to prove recovery.
 - After unexpected camera behavior, stop camera runs and describe it to the owner. Host work continues.
 

@@ -21,7 +21,7 @@ The owner asked the author the questions this assessment raised and reports his 
 - A port belongs on our side rather than contributed into his repository, which he describes as already a mess.
 - The measured-versus-inferred status of the media geometry is asked and awaiting a response; the boot-ROM capture procedure question has a reported answer (section 1.4).
 
-The initial 2026-10-09 report is preserved as historical evidence `E-X70-GRANT-150`. On 2026-10-14 jitl (justjake) explicitly permitted redistribution of his x70view work provided he is credited, recorded as `E-X70-REDISTRIBUTION-PERMISSION-150`. The grant supplies no author-provided SPDX license, sublicensing authority or downstream modification terms. Do not describe the inherited implementation as AGPL on the strength of the project's original-code license.
+The initial 2026-10-09 report and the 2026-10-14 permission are recorded together as `E-X70-REDISTRIBUTION-PERMISSION-150`: on 2026-10-14 jitl (justjake) explicitly permitted redistribution of his x70view work provided he is credited. The grant supplies no author-provided SPDX license, sublicensing authority or downstream modification terms. Do not describe the inherited implementation as AGPL on the strength of the project's original-code license.
 
 The permission does not grant rights to Fujifilm's X70 1.10 `FPUPDATE.DAT`, per-unit RAM captures or other proprietary inputs. Vendored components retain their own terms, but this report's upstream dependency note does not settle the license of each retained binding, header or source file. [The licensing review](../LICENSING.md) owns the actual component classification and remaining artifact obligations.
 
@@ -274,7 +274,7 @@ The exact revision-3 candidate was exported and run from ROM with the DTCM fixtu
 
 ## 6. Files and labels
 
-Rows: E-X70-EMULATOR-TERMS-150, E-BOOTROM-X70-IDENTITY-150, E-X70-SOC-CROSSCHECK-150, E-X70-SOC-LABELS-150 and E-X70-REFERENCE-ASSESS-150 from the first assessment; E-X70-GRANT-150 records the author's grant and replaces the use-only reading E-X70-EMULATOR-TERMS-150 took before his answers arrived, whose file facts stand; E-X70-ASKS-REVISED-150 records the two asked facts, whose capture-procedure answer is now reported (section 1.4), E-X70-T1-COST-REVISION-150 the revised estimate, E-X70-TARGET-ADD-PLAN-150 the experiment, E-X70-TARGET-ADD-150 the executed result of sections 5.7 and 5.8, E-AF-RECORDER-RESIDENCY-EMU-150 the installed-candidate reproduction and E-AF-RECORDER-STAGE-EMU-150 the revision-3 activation result of section 5.9. Existing reports are not rewritten from a sibling model.
+Rows: E-BOOTROM-X70-IDENTITY-150, E-X70-SOC-CROSSCHECK-150 (block comparison and the sibling-derived label readings) and E-X70-REFERENCE-ASSESS-150 (the assessment with the revised T1 estimate) from the first assessment; E-X70-REDISTRIBUTION-PERMISSION-150 records the checkout's licence facts, the author's grant and the later credited redistribution permission; E-X70-ROM-CAPTURE-METHOD-150 records the reported capture procedure and the open media-geometry question; E-X70-TARGET-ADD-150 the experiment and its executed result of sections 5.6 to 5.8; E-AF-RECORDER-RESIDENCY-EMU-150 the installed-candidate reproduction and E-AF-RECORDER-STAGE-EMU-150 the revision-3 activation result of section 5.9. Existing reports are not rewritten from a sibling model.
 
 ## 7. Limits
 

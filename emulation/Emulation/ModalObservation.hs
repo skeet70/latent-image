@@ -48,9 +48,15 @@ module Emulation.ModalObservation
   , bindModalLifetimeSource
   , modalLifetimeSourceJson
   , lifetimeModalRequest
+  , withRetiredExecution
   , parseModalLifetimeWatchAck
   , parseModalLifetimeWatch
   , checkCompletedModalLifetime
+  , SettingsWrite
+  , completedSettingsWrites
+  , settingsWritesJson
+  , parseSettingsWrites
+  , compareSettingsWrites
   , FinalModalWatch
   , parseFinalModalWatch
   , finalModalWatchSummary
@@ -654,7 +660,36 @@ data ModalLifetimeSource = ModalLifetimeSource
   , lifetimeContext :: [SourceImage]
   , lifetimeElfDigest :: Maybe Sha256
   , lifetimeRuntimeDigest :: Maybe Sha256
+  -- | Stock code no CPU may fetch through any alias from the first through the
+  -- last publication-writer row.
+  , lifetimeRetired :: [WatchRange]
+  -- | Code whose value-changing live-settings stores the guard admits and records.
+  , lifetimeSettingsWriters :: [WatchRange]
   } deriving (Eq)
+
+-- | The stock property setter `0x624694` with its jump-table arms, fenced by the
+-- next settings-manifest entry `0x6309c4` (E-SETTINGS-SERVICE-MANIFEST-150 claims
+-- no end for the setter).
+stockPropertySetter :: WatchRange
+stockPropertySetter = either error id (watchRange (watchAddress 0x00624694) (watchAddress 0x006309c4))
+
+-- | Up to 64 sorted, word-aligned, nonempty, pairwise disjoint canonical extents.
+checkRetiredExtents :: [WatchRange] -> Either String ()
+checkRetiredExtents retired = do
+  let bounds = map watchRangeBounds retired
+  unless (length retired <= 64 && all (\(low, high) -> low < high && low `mod` 4 == 0 && high `mod` 4 == 0 && high <= 0x20000000) bounds
+    && map fst bounds == sort (map fst bounds)
+    && and (zipWith (\(_, high) (low, _) -> high <= low) bounds (drop 1 bounds)))
+    (Left "modal retired extents must be at most 64 sorted aligned disjoint canonical extents")
+
+-- | Adds retired extents to a bound lifetime source; they must lie outside its runtime.
+withRetiredExecution :: [WatchRange] -> ModalLifetimeSource -> Either String ModalLifetimeSource
+withRetiredExecution retired source = do
+  let sorted = sortOn watchRangeBounds retired
+  checkRetiredExtents sorted
+  unless (not (any (rangesOverlap (lifetimeRuntime source)) sorted))
+    (Left "modal retired extents overlap the uploaded runtime")
+  pure source { lifetimeRetired = sorted }
 
 sourceImageJson :: SourceImage -> Value
 sourceImageJson (SourceImage start bytes) = object ["start" .= watchAddressValue start, "bytes" .= B.unpack bytes]
@@ -677,6 +712,8 @@ lifetimeRequestJson source = object
   , "rollback" .= routine (lifetimeRollback source)
   , "publications" .= [object ["address" .= watchAddressValue address, "old" .= old, "new" .= new]
       | PublicationBinding address (Ram.WordValue old) (Ram.WordValue new) <- lifetimePublications source]
+  , "retired" .= map extentJson (lifetimeRetired source)
+  , "settings_writers" .= map extentJson (lifetimeSettingsWriters source)
   ]
  where
   instruction (SourceInstruction pc (InstructionWord word)) = object ["pc" .= watchAddressValue pc, "word" .= word]
@@ -792,7 +829,7 @@ bindModalRuntimeSource manifest elfBytes = do
   rollback <- routine "ram_push_rollback" (Ram.unAddress (Ram.rollbackEntry (Ram.manifestEntries manifest))) "restore_old_words"
   let bindings = [PublicationBinding (watchAddress (Ram.unAddress (Ram.publicationAddress publication)))
         (Ram.publicationOld publication) (Ram.publicationNew publication) | publication <- publications]
-  pure (ModalRuntimeSource (ModalLifetimeSource runtimeExtent residentExtent readonly install rollback bindings [] (Just (sha256 elfBytes)) (Just runtimeDigest)))
+  pure (ModalRuntimeSource (ModalLifetimeSource runtimeExtent residentExtent readonly install rollback bindings [] (Just (sha256 elfBytes)) (Just runtimeDigest) [] [stockPropertySetter]))
 
 littleWord :: Word32 -> B.ByteString
 littleWord word = B.pack [fromIntegral (word `div` (256 ^ index)) | index <- [0 .. 3 :: Int]]
@@ -889,7 +926,7 @@ data LifetimeFailure
   = InvalidRequest | InvalidExtent | InvalidSource | InitialResident | InitialReadonly | Memory | InvalidCore
   | MalformedRow | NonCpuWrite | InvalidWrite | OutsideWatch | ImmutableWrite | ResourceChanged | IdentityWrite
   | MissingPermit | PendingStore | WrongPhase | WrongEntry | WrongWriter | WrongOrder | WrongCore | WrongBefore
-  | WrongValue | WrongAddress | WrongWidth | InvalidContext | ActiveFrames | IncompleteRollback
+  | WrongValue | WrongAddress | WrongWidth | InvalidContext | ActiveFrames | IncompleteRollback | RetiredFetch
   deriving (Eq, Show, Enum, Bounded)
 data LifetimeReceipt = LifetimeReceipt
   { receiptPhase :: LifetimePhase
@@ -905,6 +942,7 @@ data LifetimeReceipt = LifetimeReceipt
   , receiptContextWrites :: ModalCount
   , receiptVfpOwnerWrites :: ModalCount
   , receiptAuditedWrites :: ModalCount
+  , receiptSettingsWrites :: ModalCount
   , receiptFailure :: Maybe LifetimeFailure
   } deriving (Eq, Show)
 
@@ -922,7 +960,7 @@ lifetimeFailureText failure = case failure of
   MissingPermit -> "missing_permit"; PendingStore -> "pending_store"; WrongPhase -> "wrong_phase"; WrongEntry -> "wrong_entry"
   WrongWriter -> "wrong_writer"; WrongOrder -> "wrong_order"; WrongCore -> "wrong_core"; WrongBefore -> "wrong_before"
   WrongValue -> "wrong_value"; WrongAddress -> "wrong_address"; WrongWidth -> "wrong_width"; InvalidContext -> "invalid_context"
-  ActiveFrames -> "active_frames"; IncompleteRollback -> "incomplete_rollback"
+  ActiveFrames -> "active_frames"; IncompleteRollback -> "incomplete_rollback"; RetiredFetch -> "retired_fetch"
 
 parseClosed :: (Bounded a, Enum a) => (a -> T.Text) -> Value -> Either String a
 parseClosed render (String text) = case [value | value <- [minBound .. maxBound], render value == text] of
@@ -948,7 +986,7 @@ parseLifetimeReceipt :: Value -> Either String LifetimeReceipt
 parseLifetimeReceipt value = do
   modalKeys ["phase", "publication_count", "forward_writes", "reverse_writes", "pending_stores",
     "install_core", "rollback_core", "checked_resource_writes", "checked_identity_writes",
-    "checked_scheduler_writes", "checked_context_writes", "checked_vfp_owner_writes", "audited_writes", "failure"] value
+    "checked_scheduler_writes", "checked_context_writes", "checked_vfp_owner_writes", "audited_writes", "admitted_settings_writes", "failure"] value
   let count key = ModalCount <$> (modalField key value >>= modalWord)
   phase <- modalField "phase" value >>= parseClosed lifetimePhaseText
   failure <- modalField "failure" value >>= parseNullable (\entry -> do
@@ -959,7 +997,7 @@ parseLifetimeReceipt value = do
     <*> (modalField "rollback_core" value >>= parseNullable parseCore)
     <*> count "checked_resource_writes" <*> count "checked_identity_writes"
     <*> count "checked_scheduler_writes" <*> count "checked_context_writes" <*> count "checked_vfp_owner_writes"
-    <*> count "audited_writes" <*> pure failure
+    <*> count "audited_writes" <*> count "admitted_settings_writes" <*> pure failure
 
 lifetimeReceiptJson :: LifetimeReceipt -> Value
 lifetimeReceiptJson receipt = object
@@ -976,6 +1014,7 @@ lifetimeReceiptJson receipt = object
   , "checked_context_writes" .= countValue (receiptContextWrites receipt)
   , "checked_vfp_owner_writes" .= countValue (receiptVfpOwnerWrites receipt)
   , "audited_writes" .= countValue (receiptAuditedWrites receipt)
+  , "admitted_settings_writes" .= countValue (receiptSettingsWrites receipt)
   , "failure" .= fmap (\failure -> object ["kind" .= lifetimeFailureText failure]) (receiptFailure receipt)
   ]
 
@@ -1114,10 +1153,14 @@ checkCompletedModalLifetime (ModalRequest (ModalStock stock) scoped _ source) au
       expectedWrites = sum (map (toInteger . countValue)
         [receiptForwardWrites receipt, receiptReverseWrites receipt, receiptResourceWrites receipt
         , receiptSchedulerWrites receipt, receiptContextWrites receipt, receiptVfpOwnerWrites receipt, receiptAuditedWrites receipt])
-  unless (toInteger (length rows) == expectedWrites
-    && toInteger (length (arrayWrites audit)) == toInteger (countValue (receiptAuditedWrites receipt))
-    && all (\row -> case row of CpuRecord { cpuAccess = CpuWrite } -> True; _ -> False) rows)
+      writes = [row | row@CpuRecord { cpuAccess = CpuWrite } <- rows]
+  stockFetches <- retiredStockFetches binding rows
+  unless (toInteger (length writes) == expectedWrites && length writes + stockFetches == length rows
+    && toInteger (length (arrayWrites audit)) == toInteger (countValue (receiptAuditedWrites receipt)))
     (Left "modal lifetime accepted write counters differ from raw CPU rows or array audit")
+  settingsWrites <- lifetimeSettingsWrites binding rows
+  unless (fromIntegral (length settingsWrites) == countValue (receiptSettingsWrites receipt))
+    (Left "modal lifetime admitted settings writes differ from the value-changing settings rows")
   case scoped of
     Nothing -> do
       let counts = modalReportCounts report
@@ -1128,6 +1171,94 @@ checkCompletedModalLifetime (ModalRequest (ModalStock stock) scoped _ source) au
       checkScopedModalRoute report
       unless (modalTaskIdentityVerified report && not (null (modalTaskEntries report)))
         (Left "scoped modal lifetime lacks verified owned task execution")
+
+-- | Counts fetch rows, each of which must start inside a retired extent and
+-- fall before the first or after the last publication-writer row.
+retiredStockFetches :: ModalLifetimeSource -> [WatchRecord] -> Either String Int
+retiredStockFetches binding rows = do
+  let writer (PublicationRoutine _ (SourceInstruction pc _)) = pc
+      writers = [writer (lifetimeInstall binding), writer (lifetimeRollback binding)]
+      published = [index | (index, CpuRecord { cpuAccess = CpuWrite, cpuPc = pc }) <- zip [0 :: Int ..] rows, pc `elem` writers]
+      outside index = case published of
+        [] -> True
+        first : _ -> index < first || index > maximum published
+      retired physical = any (\range -> let (low, high) = watchRangeBounds range
+                                            address = toInteger (watchAddressValue physical)
+                                        in toInteger low <= address && address < toInteger high) (lifetimeRetired binding)
+      fetches = [(index, physical) | (index, CpuRecord { cpuAccess = CpuFetch, cpuPhysical = physical }) <- zip [0 :: Int ..] rows]
+  unless (all (\(index, physical) -> retired physical && outside index) fetches)
+    (Left "modal lifetime fetched a retired body while the owned entry was published, or recorded a non-retired fetch")
+  pure (length fetches)
+
+-- | A value-changing store into the live-settings block.
+data SettingsWrite = SettingsWrite
+  { settingsInstructions :: Instructions
+  , settingsPc :: WatchAddress
+  , settingsAddress :: WatchAddress
+  , settingsBefore :: B.ByteString
+  , settingsValue :: Word64
+  } deriving (Eq, Show)
+
+liveSettingsBlock :: WatchRange
+liveSettingsBlock = either error id (watchRange (watchAddress 0x0096cc64) (watchAddress 0x0096ce26))
+
+-- | The value-changing live-settings stores in row order; each must lie wholly in
+-- the block and come from a declared settings writer.
+lifetimeSettingsWrites :: ModalLifetimeSource -> [WatchRecord] -> Either String [SettingsWrite]
+lifetimeSettingsWrites binding rows = concat <$> forM rows (\row -> case row of
+  CpuRecord { cpuAccess = CpuWrite, cpuPhysical = physical, cpuBytes = bytes, cpuValue = Just value
+            , cpuBefore = Just before, cpuByteOrder = order, cpuPc = pc, cpuInstructions = instructions }
+    | overlapsWatchRange liveSettingsBlock physical bytes && changes order before value -> do
+        let (low, high) = watchRangeBounds liveSettingsBlock
+            start = toInteger (watchAddressValue physical)
+            at = toInteger (watchAddressValue pc)
+            within range = let (from, to) = watchRangeBounds range in toInteger from <= at && at < toInteger to
+        unless (toInteger low <= start && start + toInteger (B.length before) <= toInteger high
+          && any within (lifetimeSettingsWriters binding))
+          (Left "modal lifetime changed a live setting outside a declared settings writer")
+        pure [SettingsWrite instructions pc physical before value]
+  _ -> pure [])
+ where
+  changes order before value = or
+    [ B.index before index /= fromIntegral (value `div` (256 ^ shift))
+    | index <- [0 .. B.length before - 1]
+    , let shift = case order of LittleEndian -> index; BigEndian -> B.length before - 1 - index ]
+
+completedSettingsWrites :: ModalRequest -> FinalModalWatch -> Either String [SettingsWrite]
+completedSettingsWrites (ModalRequest _ _ _ source) (FinalModalWatch observation _) = do
+  binding <- maybe (Left "modal request has no installed lifetime binding") Right source
+  lifetimeSettingsWrites binding (fixedWatchRecords observation)
+
+settingsWritesJson :: [SettingsWrite] -> Value
+settingsWritesJson writes = object
+  [ "schema" .= (1 :: Int)
+  , "writes" .= [ object [ "instructions" .= instructionsValue (settingsInstructions write), "pc" .= watchAddressValue (settingsPc write)
+                         , "address" .= watchAddressValue (settingsAddress write), "size" .= B.length (settingsBefore write)
+                         , "before" .= B.unpack (settingsBefore write), "value" .= settingsValue write ]
+                | write <- writes ] ]
+
+parseSettingsWrites :: Value -> Either String [SettingsWrite]
+parseSettingsWrites value = do
+  modalKeys ["schema", "writes"] value
+  schema <- modalField "schema" value >>= modalWord
+  unless (schema == 1) (Left "settings writes schema is not 1")
+  modalField "writes" value >>= modalList (either error id (modalLimit 65536)) >>= mapM (\entry -> do
+    modalKeys ["instructions", "pc", "address", "size", "before", "value"] entry
+    instructions <- modalField "instructions" entry >>= modalWord
+    pc <- modalField "pc" entry >>= modalWord32
+    address <- modalField "address" entry >>= modalWord32
+    size <- modalField "size" entry >>= modalWord
+    before <- modalField "before" entry >>= parseModalBytes 8
+    written <- modalField "value" entry >>= modalWord
+    unless (size >= 1 && fromIntegral size == B.length before) (Left "settings write size differs from its before bytes")
+    pure (SettingsWrite (instructionCount instructions) (watchAddress pc) (watchAddress address) before written))
+
+-- | Stock and owned roles must make the same ordered settings stores: address, width and value.
+compareSettingsWrites :: [SettingsWrite] -> [SettingsWrite] -> Either String ()
+compareSettingsWrites stock owned =
+  let key write = (settingsAddress write, B.length (settingsBefore write), settingsValue write)
+  in unless (map key stock == map key owned)
+       (Left ("settings write sequences differ: stock " ++ show (length stock) ++ ", owned " ++ show (length owned)))
 
 optionalField :: K.Key -> Value -> Maybe Value
 optionalField key (Object fields) = KM.lookup key fields
@@ -1150,7 +1281,7 @@ parseSourceImage value = do
 
 parseLifetimeBinding :: Maybe (ModalLinked, ModalScope) -> Value -> Value -> Either String ModalLifetimeSource
 parseLifetimeBinding scoped contextValue value = do
-  modalKeys ["runtime", "resident", "readonly", "install", "rollback", "publications"] value
+  modalKeys ["runtime", "resident", "readonly", "install", "rollback", "publications", "retired", "settings_writers"] value
   runtime <- modalField "runtime" value >>= parseModalExtent
   resident <- modalField "resident" value >>= parseModalExtent
   let (runtimeLow, runtimeHigh) = watchRangeBounds runtime
@@ -1203,7 +1334,15 @@ parseLifetimeBinding scoped contextValue value = do
   let addresses = [address | PublicationBinding address _ _ <- publications]
   unless (length publications == maybe 223 (const 224) scoped && length (nub addresses) == length addresses)
     (Left "modal lifetime publication count or uniqueness differs from route")
-  pure (ModalLifetimeSource runtime resident allImages install rollback publications context Nothing Nothing)
+  retired <- modalField "retired" value >>= modalList (either error id (modalLimit 64)) >>= mapM parseModalExtent
+  checkRetiredExtents retired
+  unless (not (any (rangesOverlap runtime) retired)) (Left "modal retired extents overlap the uploaded runtime")
+  settingsWriters <- modalField "settings_writers" value >>= modalList (either error id (modalLimit 8)) >>= mapM parseModalExtent
+  let writerBounds = map watchRangeBounds settingsWriters
+  unless (all (\(low, high) -> low `mod` 4 == 0 && high `mod` 4 == 0) writerBounds
+    && and (zipWith (\(_, high) (low, _) -> high <= low) writerBounds (drop 1 writerBounds)))
+    (Left "modal settings writers must be sorted aligned disjoint extents")
+  pure (ModalLifetimeSource runtime resident allImages install rollback publications context Nothing Nothing retired settingsWriters)
 
 modalLifetimeWatchRanges :: ModalRequest -> Either String [WatchRange]
 modalLifetimeWatchRanges (ModalRequest _ scoped _ source) = do
@@ -1219,7 +1358,10 @@ modalLifetimeWatchRanges (ModalRequest _ scoped _ source) = do
     , (0x54760,0x54764), (0x545a4,0x545a8), (0x5ff0c,0x6194c), (0x5beac,0x5d16c)
     , (0xe4720,0xe4724), (0xe4564,0xe4568), (0xefecc,0xf190c), (0xebe6c,0xed12c) ]
   publications <- mapM (\(PublicationBinding address _ _) -> range (watchAddressValue address) (watchAddressValue address + 4)) (lifetimePublications binding)
-  pure (unionWatchRanges (lifetimeResident binding : fixed ++ imageRanges ++ publications))
+  let watched = unionWatchRanges (lifetimeResident binding : fixed ++ imageRanges ++ publications)
+  unless (not (or [rangesOverlap retired span_ | retired <- lifetimeRetired binding, span_ <- watched]))
+    (Left "modal retired extents overlap a write-watched extent")
+  pure watched
 
 checkModalLifetimeWatchSources :: ModalRequest -> Value -> Either String ()
 checkModalLifetimeWatchSources (ModalRequest _ scoped _ source) value = do
@@ -1266,8 +1408,9 @@ checkLifetimeArrayAudit request armed final = do
   checkModalLifetimeWatchSources request armedValue
   checkModalLifetimeWatchSources request finalSummary
   acknowledgement <- lifetimeWatchAcknowledgement armedValue >>= parseModalLifetimeWatchAck
-  rangeLimit <- watchRangeLimit (length expected)
-  gate <- checkExecutionWritesWithRangeLimit rangeLimit ForbidProtectedWrites modalLifetimeWriterLimit expected [] acknowledgement observation
+  let retired = maybe [] lifetimeRetired (case request of ModalRequest _ _ _ source -> source)
+  rangeLimit <- watchRangeLimit (length expected + length retired)
+  gate <- checkExecutionWritesWithRangeLimit rangeLimit ForbidProtectedWrites modalLifetimeWriterLimit expected retired acknowledgement observation
   pure (ArrayWriteReport (writesInArrays observation) gate)
 
 modalLifetimeWriterLimit :: WatchLimit

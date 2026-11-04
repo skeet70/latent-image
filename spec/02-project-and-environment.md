@@ -11,7 +11,7 @@ This repository is the Latent Image research platform. Package READMEs own suppo
 | `MODULE.bazel`, `MODULE.bazel.lock`, `.bazelversion`, `.bazelrc` | Pinned build rules and shared build settings; A | Bazel build/test graph; preserved Rust engine built with locked Nix |
 | `build-support/`, package `BUILD.bazel` files | Nix-backed host toolchains and declared targets; A | GHC/Rust/GCC/Unicorn and validation tools use the locked Nixpkgs input |
 | [GitHub Issues](https://github.com/skeet70/latent-image/issues), `docs/principles.md` | Open work and current decisions | Current work, open gates and rules |
-| `docs/evidence.jsonl` | Scoped evidence ledger | Compact durable claims with evidence labels |
+| `docs/evidence.jsonl` | Curated evidence ledger ([rules](../docs/principles.md#evidence-ledger)) | One current record per topic: established findings, unexplained observations and negative results, with evidence labels |
 | `manifests/`, `schemas/` | Versioned identities, maps, experiments and evidence/trial contracts; coordinator | Public provenance and offline contracts; unknown fields stay explicit |
 | `broker/FujiAF/` | Protocol profile and packet types shared with `transport/` | Haskell library |
 | `transport/` | `//transport:camera`: closed camera operations and the narrow native USB provider | Host-tested Haskell/C; live commands run per [the camera-run procedure](07-governance-and-handoff.md#31-procedure) |

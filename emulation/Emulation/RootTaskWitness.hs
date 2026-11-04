@@ -298,12 +298,11 @@ checkSample inputs plan receipt hit index sample previous = do
   let state = stateOf sample; context = sampleContext sample; pc = pcOf sample
   total <- clock sample
   require (sampleHit sample == index && length (W.contextRegisters state) == 13 && length (W.contextTcm state) == 2
-    && W.contextIdentities state == map W.WordValue [0x4003,0x5003]
-    && Plan.declaredBoundary plan sources (address (W.contextPc state)) (sampleBoundary sample)) ContextRejected
-  require (index == 0 && sampleBoundary sample == Start
-    || M.member (W.contextPc state) (receiptSites receipt)) ContextRejected
+    && W.contextIdentities state `elem` W.recordedCoreIdentities
+    && Plan.labelAgrees (index == 0) pc (sampleBoundary sample) && Plan.labelAgrees (index == 0) pc (hitBoundary hit)) ContextRejected
+  require (index == 0 || M.lookup (W.contextPc state) (receiptSites receipt) == Just (hitBoundary hit)) ContextRejected
   let recorded = hitState hit
-  require (hitBoundary hit == sampleBoundary sample && hitCore hit == contextCore context && count (hitCount hit) == total
+  require (hitCore hit == contextCore context && count (hitCount hit) == total
     && W.contextPc recorded == W.contextPc state && W.contextRegisters recorded == W.contextRegisters state
     && W.contextSp recorded == W.contextSp state && W.contextLr recorded == W.contextLr state
     && W.contextCpsr recorded == W.contextCpsr state) ContextRejected
@@ -386,6 +385,7 @@ replay inputs plan receipt watch = do
   first <- need SnapshotRejected (case samples of sample:_ -> Just sample; [] -> Nothing)
   hit <- need ContextRejected (case hits of item:_ -> Just item; [] -> Nothing)
   require (sampleBoundary first == Start && sampleCursor first == 0 && sampleHit first == 0) SnapshotRejected
+  require (W.oneRecordedModel [W.contextIdentities (stateOf sample) | sample <- samples]) ContextRejected
   initial <- checkSample inputs plan receipt hit 0 first (Memory M.empty)
   (_,cursor,remaining,_,memories,events) <- foldM next (first,0,rows,initial,[initial],Set.empty)
     (zip3 [1..] (drop 1 samples) (drop 1 hits))
@@ -508,6 +508,8 @@ checkActions inputs plan executions irqs pairs = do
         require (coreOf sample == S.PrimaryKernel && register sample 0 == Right 0
           && W.contextSp (stateOf sample) == W.Address 0xa10e00
           && W.contextLr (stateOf sample) == W.Address 0x453f0) EntryRejected
+        -- First-entry trampoline 0x43728 selects A32 SVC.
+        require (word (W.contextCpsr (stateOf sample)) .&. 0x23f == 0x13) ContextRejected
         rootHeader memory True
         case actionEntry tracked of
           Nothing -> pure tracked {actionEntry=Just sample}
@@ -794,9 +796,15 @@ checkCleanup inputs executions entry episodes pairs = do
             require (physical (address (W.contextSp (stateOf sample))) == savedSp) FrameRejected
             loaded <- executed executions sample 0x436e8
             require loaded CompletionRejected
+            -- 0x43668, 0x43728 and 0x437a4 are scheduler code shared by every task's saved PC; the current cell, which
+            -- holds the selected node at 0x436e8, names whose resume a sample is.
+            let resumes target candidate after = do
+                  later <- clock candidate
+                  pure (coreOf candidate == S.PrimaryKernel && pcOf candidate == target && later > time
+                    && readWord CleanupRejected after (physical current) == Right (selected+0x40000000))
             candidates <- foldM (\found (candidate,after) -> do
-              later <- clock candidate
-              if coreOf candidate /= S.PrimaryKernel || pcOf candidate /= saved || later <= time then pure found else do
+              own <- resumes saved candidate after
+              if not own then pure found else do
                 restored <- executed executions candidate saved
                 isDead <- retired after
                 require (restored && isDead) CompletionRejected
@@ -804,8 +812,9 @@ checkCleanup inputs executions entry episodes pairs = do
             first <- need CompletionRejected (case candidates of value:_ -> Just value; [] -> Nothing)
             firstTime <- clock first
             continuations <- foldM (\found (candidate,after) -> do
+              own <- resumes (saved+4) candidate after
               later <- clock candidate
-              if coreOf candidate /= S.PrimaryKernel || pcOf candidate /= saved+4 || later <= firstTime then pure found else do
+              if not own || later <= firstTime then pure found else do
                 isDead <- retired after
                 require isDead CompletionRejected
                 (_,_,stack,size) <- allocatedTask after S.PrimaryKernel (selected+0x40000000)
@@ -815,31 +824,82 @@ checkCleanup inputs executions entry episodes pairs = do
             Just <$> need CompletionRejected (case continuations of value:_ -> Just value; [] -> Nothing)
 
 data CallbackTrack = CallbackTrack
-  { callbackEntry :: Sample, callbackCounter :: W.WordValue, callbackFrameSeen :: Bool
+  { callbackEntry :: Sample, callbackHost :: Sample, callbackCounter :: W.WordValue, callbackFrameSeen :: Bool
   , callbackCall :: Maybe Sample, callbackServiceEntered :: Bool, callbackIncrementSeen :: Bool, callbackEpilogue :: Maybe Sample }
 currentNode :: Memory -> S.KernelCore -> Either WitnessError Word32
 currentNode memory core = do
   let (_,_,current,_,_,_,_) = Plan.taskLayout core
   readWord TaskRejected memory (physical current)
-checkCallbackFrame :: CallbackTrack -> Sample -> Memory -> Either WitnessError ()
-checkCallbackFrame tracked sample memory = do
-  let caller = callbackEntry tracked; sp = physical (address (W.contextSp (stateOf caller)))
+-- | Two words at a guest address inside the sample's core0 ATCM interrupt-stack bytes.
+interruptWords :: Sample -> Word32 -> Either WitnessError [Word32]
+interruptWords sample location = do
+  InterruptStack (W.Address low) (W.Bytes body) <- need FrameRejected (sampleInterruptStack sample)
+  let sp = address (W.contextSp (stateOf sample)); (bottom,top) = Plan.irqStack
+  require (coreOf sample == S.PrimaryKernel && sp >= bottom+8 && low == sp-8
+    && toInteger low+toInteger (B.length body) == toInteger top
+    && location >= low && toInteger location+8 <= toInteger top) FrameRejected
+  let offset = fromIntegral (location-low)
+  pure [U.word32At body offset,U.word32At body (offset+4)]
+-- | F is inherited from the interrupted context; I is cleared at 0x4bef8 before the 0x4bf08 dispatch.
+interruptDispatch :: Sample -> Memory -> Either WitnessError ()
+interruptDispatch sample memory = do
+  let state = stateOf sample; sp = address (W.contextSp state); (bottom,top) = Plan.irqStack
+  nest <- readWord IrqRejected memory Plan.irqNest
+  require (nest /= 0 && coreOf sample == S.PrimaryKernel
+    && take 1 (W.contextTcm state) == [[W.WordValue 0,W.WordValue Plan.irqAtcm]]
+    && word (W.contextCpsr state) .&. 0x07f0ffbf == 0x113 && sp `mod` 4 == 0
+    && sp >= bottom+Plan.irqCallbackDepth && toInteger sp+8 <= toInteger top) IrqRejected
+  dispatcher <- interruptWords sample sp
+  require (drop 1 dispatcher == [Plan.loaderDispatchReturn]) FrameRejected
+checkCallbackFrame :: CallbackTrack -> Sample -> Either WitnessError ()
+checkCallbackFrame tracked sample = do
+  let caller = callbackEntry tracked; sp = address (W.contextSp (stateOf caller))
   require (sp >= 8 && coreOf caller == coreOf sample
-    && physical (address (W.contextSp (stateOf sample))) == sp-8) FrameRejected
-  frame <- wordsAt FrameRejected memory (sp-8) 8
+    && address (W.contextSp (stateOf sample)) == sp-8) FrameRejected
+  frame <- interruptWords sample (sp-8)
   incomingFp <- register caller 11
   require (frame == [incomingFp,address (W.contextLr (stateOf caller))]) FrameRejected
-  node <- currentNode memory (coreOf sample)
-  (_,_,low,size) <- allocatedTask memory (coreOf sample) node
-  require (sp-8 >= low && toInteger sp <= toInteger low+toInteger size) FrameRejected
-checkCallbacks :: Executions -> CompletionWitness -> [(Sample,Memory)] -> Either WitnessError [CallbackCycle]
-checkCallbacks executions (CompletionWitness _ completed) pairs = do
+-- | Watch rows, by index, that write any byte of the loader A IRQ nesting counter.
+counterWrites :: [CapturedEvent] -> [(Int,W.MemoryEvent)]
+counterWrites rows = [(index,event) | (index,captured) <- zip [0..] rows,let event = eventRecord captured,touches event]
+  where
+    nest = toInteger Plan.irqNest
+    touches event = W.eventSource event `notElem` [W.CpuRead,W.CpuFetch,W.HostRead,W.ModelBusRead]
+      && maybe False (\target -> toInteger target < nest+4 && toInteger target+toInteger (W.eventSize event) > nest) (W.eventPhysical event)
+-- | Checks that `host`, the last core0 0x40234 sample whose counter is 0, hosts a callback entry or return, and returns it:
+-- after it the first counter write is 0x40240 storing 1, no write stores 0, and ATCM 0x70001ffc holds its SP, saved at 0x40254.
+irqHost :: Executions -> [(Int,W.MemoryEvent)] -> Maybe Sample -> Sample -> Either WitnessError Sample
+irqHost executions counter host sample = do
+  frame <- need IrqRejected host
+  ran <- executed executions frame 0x40234
+  let writes = map snd (takeWhile ((< sampleCursor sample) . fst) (dropWhile ((< sampleCursor frame) . fst) counter))
+      exact event = W.eventSource event == W.CpuWrite && W.eventCore event == Just W.Primary && W.eventSize event == 4
+        && W.eventPhysical event == Just (fromIntegral Plan.irqNest) && maybe False (/=0) (W.eventValue event)
+  first <- need IrqRejected (listToMaybe writes)
+  require (ran && all exact writes && fmap (physical . address) (W.eventPc first) == Just 0x40240
+    && W.eventValue first == Just 1) IrqRejected
+  saved <- interruptWords sample 0x70001ff8
+  require (drop 1 saved == [address (W.contextSp (stateOf frame))]) IrqRejected
+  pure frame
+checkCallbacks :: Executions -> CompletionWitness -> [CapturedEvent] -> [(Sample,Memory)] -> Either WitnessError [CallbackCycle]
+checkCallbacks executions (CompletionWitness _ completed) rows pairs = do
   beginning <- clock completed
-  (pending,cycles) <- foldM (step beginning) (Nothing,[]) pairs
+  (_,pending,cycles) <- foldM (\(host,pending,cycles) (sample,memory) -> do
+    framed <- if coreOf sample == S.PrimaryKernel && pcOf sample == 0x40234 then do
+        nest <- readWord IrqRejected memory Plan.irqNest
+        pure (if nest == 0 then Just sample else host)
+      else pure host
+    (pending',cycles') <- step beginning framed (pending,cycles) (sample,memory)
+    pure (framed,pending',cycles')) (Nothing,Nothing,[]) pairs
   require (not (isJust pending) && not (null cycles)) CompletionRejected
   pure (reverse cycles)
   where
-    step beginning (pending,cycles) (sample,memory) = do
+    nestWrites = counterWrites rows
+    step beginning host (pending,cycles) (sample,memory) = do
+      let hosted = interruptDispatch sample memory >> irqHost executions nestWrites host sample
+          sameHost tracked = do
+            frame <- hosted
+            require (sampleHit frame == sampleHit (callbackHost tracked)) IrqRejected
       time <- clock sample
       if time < beginning then pure (pending,cycles) else case pending of
         Nothing | pcOf sample == 0x69cc18 -> do
@@ -854,13 +914,10 @@ checkCallbacks executions (CompletionWitness _ completed) pairs = do
           require (readWord CallbackRejected memory (physical creation+36) == Right 0) CallbackRejected
           dead <- readBytes CallbackRejected memory (physical node+12) 1
           require (B.head dead == 0) CallbackRejected
-          owner <- currentNode memory (coreOf sample)
-          (_,_,low,size) <- allocatedTask memory (coreOf sample) owner
-          let sp = physical (address (W.contextSp (stateOf sample)))
-          require (sp >= low+8 && toInteger sp <= toInteger low+toInteger size && sp `mod` 8 == 0) FrameRejected
+          frame <- hosted
           counter <- readWord CallbackRejected memory 0x828094
           require (counter >= 1 && counter <= 104) CallbackRejected
-          pure (Just (CallbackTrack sample (W.WordValue counter) False Nothing False False Nothing),cycles)
+          pure (Just (CallbackTrack sample frame (W.WordValue counter) False Nothing False False Nothing),cycles)
         Nothing -> pure (Nothing,cycles)
         Just tracked | coreOf sample /= coreOf (callbackEntry tracked) -> pure (pending,cycles)
         Just tracked -> do
@@ -870,15 +927,16 @@ checkCallbacks executions (CompletionWitness _ completed) pairs = do
             0x69cc18 -> do
               ran <- executed executions caller 0x69cc18
               require (not ran && preserved caller sample && W.contextRegisters (stateOf caller) == W.contextRegisters (stateOf sample)) CallbackRejected
+              sameHost tracked
               pure (Just tracked {callbackEntry=sample},cycles)
             0x69cc1c -> do
               ran <- executed executions caller 0x69cc18
               require ran CallbackRejected
-              checkCallbackFrame tracked sample memory
+              checkCallbackFrame tracked sample
               pure (Just tracked {callbackFrameSeen=True},cycles)
             0x69cc2c -> do
               require (callbackFrameSeen tracked && register sample 0 == Right before) CallbackRejected
-              checkCallbackFrame tracked sample memory
+              checkCallbackFrame tracked sample
               pure (Just tracked {callbackCall=Just sample},cycles)
             0x725b74 -> do
               call <- need CallbackRejected (callbackCall tracked)
@@ -887,7 +945,7 @@ checkCallbacks executions (CompletionWitness _ completed) pairs = do
               pure (Just tracked {callbackServiceEntered=True},cycles)
             0x69cc30 -> do
               require (callbackServiceEntered tracked && register sample 0 /= Right 0xffffffc0) CallbackRejected
-              checkCallbackFrame tracked sample memory
+              checkCallbackFrame tracked sample
               pure (pending,cycles)
             0x69cc54 -> do
               require (callbackServiceEntered tracked && readWord CallbackRejected memory 0x828094 == Right (before+1)) CallbackRejected
@@ -895,7 +953,7 @@ checkCallbacks executions (CompletionWitness _ completed) pairs = do
             0x69cc68 -> do
               require (callbackFrameSeen tracked && callbackIncrementSeen tracked
                 && readWord CallbackRejected memory 0x828094 == Right expected) CallbackRejected
-              checkCallbackFrame tracked sample memory
+              checkCallbackFrame tracked sample
               pure (Just tracked {callbackEpilogue=Just sample},cycles)
             _ | pc == physical (address (W.contextLr (stateOf caller))) -> do
               epilogue <- need CallbackRejected (callbackEpilogue tracked)
@@ -903,6 +961,7 @@ checkCallbacks executions (CompletionWitness _ completed) pairs = do
               require (ran && preserved caller sample
                 && word (W.contextCpsr (stateOf sample)) .&. 0x3ff == word (W.contextCpsr (stateOf caller)) .&. 0x3ff
                 && readWord CallbackRejected memory 0x828094 == Right expected) ReturnRejected
+              sameHost tracked
               pure (Nothing,CallbackCycle (callbackCounter tracked) (W.WordValue expected):cycles)
             _ -> pure (pending,cycles)
 
@@ -1038,7 +1097,8 @@ checkRootInterval _ entry episodes (CompletionWitness completion ending) watch =
 
 admitReceipt :: Inputs -> ObservedFiles -> Either WitnessError QualifiedReceipt
 admitReceipt inputs observed = do
-  receipt <- parse ReceiptDecodeRejected (observedReceipt observed)
+  value <- either (const (Left ReceiptDecodeRejected)) Right (decodeStrictIntegers (observedReceipt observed))
+  receipt <- either (const (Left ReceiptDecodeRejected)) Right (parseEither (receiptWith (observedBytes observed)) value)
   require (receiptSchema receipt == 1 && receiptRole receipt == inputRole inputs && receiptOutcome receipt == S.ObservedMenu
     && receiptError receipt == Nothing && receiptMachineFailure receipt == Nothing && receiptWatchEndError receipt == Nothing
     && receiptWatch receipt == S.WatchOk True Nothing && receiptMenu receipt == S.MenuOk (Just [1,5,2])) StatusRejected
@@ -1049,8 +1109,7 @@ admitReceipt inputs observed = do
   plan <- either (Left . PlanRejected) Right (Plan.derivePlan (inputSource inputs) (inputProof inputs) (inputImage inputs))
   memoryResult (Memory.checkWatch (Plan.memoryPlan plan) watch)
   require (Plan.requiredSites plan `Set.isSubsetOf` Set.map (physical . address) (M.keysSet (receiptSites receipt))) ContextRejected
-  let sources = Plan.sourceBodies (inputSource inputs) (inputImage inputs)
-  mapM_ (\(pc,boundary) -> require (Plan.declaredBoundary plan sources (address pc) boundary) ContextRejected) (M.toList (receiptSites receipt))
+  mapM_ (\(pc,boundary) -> require (Plan.labelAgrees False (address pc) boundary) ContextRejected) (M.toList (receiptSites receipt))
   (memories,executions) <- replay inputs plan receipt watch
   let pairs = zip (receiptSamples receipt) memories
   checkTransfers inputs plan pairs
@@ -1059,7 +1118,7 @@ admitReceipt inputs observed = do
   checkResources episodes pairs
   publications <- checkSubmissions episodes executions pairs
   completed@(CompletionWitness completion _) <- checkCleanup inputs executions entry episodes pairs
-  callbacks <- checkCallbacks executions completed pairs
+  callbacks <- checkCallbacks executions completed (captureEvents watch) pairs
   checkRootInterval executions entry episodes completed watch
   final <- need SnapshotRejected (case reverse (receiptSamples receipt) of sample:_ -> Just sample; [] -> Nothing)
   let endingCounts = W.contextCounts (stateOf final)
@@ -1091,6 +1150,7 @@ qualificationValue (QualifiedReceipt receipt summary) = J.object
   , "resources" J..= [J.object ["id" J..= identifier,"status" J..= word status] | ResourceResult (ResourceId identifier) (RetainedResult status) <- summaryResources summary]
   , "publications" J..= map publicationValue (summaryPublications summary),"completion" J..= completionName (summaryCompletion summary)
   , "irq_cycles" J..= cycles,"post_cleanup_callbacks" J..= [J.object ["before" J..= word before,"after" J..= word after] | CallbackCycle before after <- summaryCallbacks summary]
+  , "callback_interrupt_stack" J..= [fst Plan.irqStack,snd Plan.irqStack]
   , "watched_end_counts" J..= fmap (map count) (receiptEndCounts receipt)
   , "scope" J..= ("Root104 caller orchestration, resource/constructor effects, conditional cleanup and a surviving periodic consumer; retained services and later application ownership remain separate" :: String)]
   where IrqCycles cycles = summaryIrqs summary

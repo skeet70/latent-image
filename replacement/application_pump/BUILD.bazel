@@ -38,9 +38,9 @@ haskell_library(
         "//host:filepath",
         "//host:first-stage",
         "//host:host-support",
-        "//host:process",
         "//host:update-container",
         "//host/firmware:bank-allowlist",
+        "//replacement/record5_staging:record5-staging",
     ],
 )
 

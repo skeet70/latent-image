@@ -74,7 +74,7 @@ cmp --bytes=1896 --ignore-initial=21276128:0 \
   private-data/analysis/x-m1-1.50/af-recorder/rev-2/af-recorder.bin
 ```
 
-**Static analysis of captured bytes, E-RUN3-RECORDER-INERT-150:** the remainder is inert at the captured stock hook routes. The media receive hook at `0x0071feb4` holds stock `0xebffffdc`, `bl 0x0071fe2c`, not rev-2 `0xeb34a9c9`. The later post-id-6 activation site at `0x0073b564` holds stock `0xebffa12a`, `bl 0x00723a14`, not rev-3 `0xeb343d0d`. The old prefix location `0x0061c1fc` is zero, as is `0x0061c340`. The recorder's state/trailer remain identical to the never-run emitted initialization.
+**Static analysis of captured bytes, E-RUN3-RECORDER-RESIDUE-150:** the remainder is inert at the captured stock hook routes. The media receive hook at `0x0071feb4` holds stock `0xebffffdc`, `bl 0x0071fe2c`, not rev-2 `0xeb34a9c9`. The later post-id-6 activation site at `0x0073b564` holds stock `0xebffa12a`, `bl 0x00723a14`, not rev-3 `0xeb343d0d`. The old prefix location `0x0061c1fc` is zero, as is `0x0061c340`. The recorder's state/trailer remain identical to the never-run emitted initialization.
 
 The Haskell static scan covers aligned A32 B/BL candidates in captured image 4 including its prefix, image 5 and plain, and matching-condition/register MOVW/MOVT constructor candidates within 64 bytes. It finds **zero incoming branch candidates and zero external constructor candidates** into the recorder span. The 28 branch hits and six constructor hits are all inside the recorder itself.
 
