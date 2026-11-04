@@ -49,7 +49,7 @@ data Options = Options
 
 -- | A discriminating run: only this key path from the root, with the guest idle for the given
 -- instructions before its last key.
-data Probe = Probe [CrawlKey] (Maybe Integer)
+data Probe = Probe [CrawlKey] (Maybe Instructions)
 
 usage :: String
 usage = "usage: property-pair-observe --role retained|owned|control --routes ROUTES --update DAT --analysis ROOT \
@@ -71,8 +71,8 @@ parseOptions arguments = do
       keys <- mapM parseKey (splitOn path)
       when (null keys) (Left "--probe-path names at least one key")
       instructions <- forM idle $ \text -> case reads text of
-        [(count, "")] | count >= 1 && count <= 90000000 -> Right count
-        _ -> Left "--probe-idle must be 1..90000000"
+        [(count, "")] | count >= 1 && count <= instructionsValue maxIdle -> Right (Instructions count)
+        _ -> Left ("--probe-idle must be 1.." ++ show (instructionsValue maxIdle))
       Right (Just (Probe keys instructions))
   Options role <$> need "--routes" <*> need "--update" <*> need "--analysis" <*> need "--linked" <*> need "--symbols"
     <*> need "--contract" <*> pure (value "--control") <*> need "--run" <*> need "--boot-rom" <*> need "--adjustment-nand" <*> need "--output"
@@ -236,8 +236,8 @@ run options output record = do
   limit <- either (refuse . InputRefused) pure (W.watchLimit watchLimit)
   ranges <- either (refuse . InputRefused) pure
     (mapM (\range -> W.watchRange (W.watchAddress (rangeStart range)) (W.watchAddress (rangeEnd range))) settingsRanges)
-  record "probe" (maybe Null (\(Probe path idle) -> object ["path" .= map crawlKeyWire path, "idle_instructions" .= idle]) (optProbe options))
-  record "pre_key_idle_instructions" (maybe (A.toJSON preKeyIdle) (const Null) (optProbe options))
+  record "probe" (maybe Null (\(Probe path idle) -> object ["path" .= map crawlKeyWire path, "idle_instructions" .= fmap instructionsValue idle]) (optProbe options))
+  record "pre_key_idle_instructions" (maybe (A.toJSON (instructionsValue preKeyIdle)) (const Null) (optProbe options))
   let routeKeyPaths = maybe [routeKeys route | route <- routeList routes, not (null (routeKeys route))] (\(Probe path _) -> [path]) (optProbe options)
   let trie = foldl (flip insertPath) (Trie []) routeKeyPaths
   withBinaryFile (output </> "hits.jsonl") WriteMode $ \hitsFile -> do

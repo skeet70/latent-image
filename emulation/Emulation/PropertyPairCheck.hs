@@ -507,7 +507,7 @@ qualify bindings role observation = do
   bounds <- either (Left . ReceiptShape) Right (field "bounds" receipt)
   require (ReceiptShape "bounds") (bounds == object ["hit_limit" .= hitLimit, "watch_limit" .= watchLimit])
   require (ReceiptShape "probe") (either (const False) (== Null) (field "probe" receipt))
-  require (ReceiptShape "pre-key idle") (either (const False) (== A.toJSON preKeyIdle) (field "pre_key_idle_instructions" receipt))
+  require (ReceiptShape "pre-key idle") (either (const False) (== A.toJSON (instructionsValue preKeyIdle)) (field "pre_key_idle_instructions" receipt))
   routes <- either (Left . InputDigest . ("routes: " ++)) Right (decodeRouteFile (bindRoutes bindings))
   let inputs = PlanInputs role contract (bindImages bindings) (bindLinked bindings) Nothing
   plan <- either (Left . InputDigest) Right (derivePlan inputs)
@@ -616,7 +616,7 @@ phaseIntervals reset = do
 parseStep :: Int -> Value -> Parse ([CrawlKey], Int, Interval)
 parseStep expected value = do
   fields <- asObject value
-  exact ["step", "parent", "keys", "hits", "press", "watch", "regions_before", "regions_after"] fields
+  exact ["step", "parent", "keys", "hits", "idle", "press", "watch", "regions_before", "regions_after"] fields
   number <- at "step" fields >>= asInt
   unless (number == expected) (Left "steps are out of order")
   parent <- at "parent" fields >>= asInt
@@ -627,6 +627,8 @@ parseStep expected value = do
   range <- case hits of
     [from, to] | from <= to -> Right (from, to)
     _ -> Left "step hit range is malformed"
+  ran <- at "idle" fields >>= \idle -> field "ran" idle >>= asInt
+  unless (toInteger ran == toInteger (instructionsValue preKeyIdle)) (Left "step did not run the pre-key idle")
   press <- at "press" fields
   unless (either (const False) (== Null) (field "failure" press)) (Left "step press failed")
   statusText <- field "settle" press >>= field "status" >>= asText

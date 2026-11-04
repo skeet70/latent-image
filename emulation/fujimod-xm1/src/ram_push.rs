@@ -347,7 +347,7 @@ enum Request {
     /// A `snapshot-key` press from the current guest.
     DisplayKey { key: PressName },
     /// Runs the guest for `instructions` with no input.
-    Idle { instructions: u64 },
+    Idle { instructions: GuestInstructions },
     SnapshotDrop { name: SnapshotName },
     Finish,
 }
@@ -539,7 +539,7 @@ fn default_pulse(key: Press) -> KeyPulse {
     }
 }
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(transparent)]
 struct GuestInstructions(u64);
 
@@ -1291,13 +1291,15 @@ impl Server {
                 response
             }
             Request::DisplayKey { key } => self.display_press(&key, None)?,
-            Request::Idle { instructions } => {
+            Request::Idle { instructions: GuestInstructions(instructions) } => {
                 if !(1..=MAX_SETTLE).contains(&instructions) {
                     return Err(format!("idle instructions must be 1..{MAX_SETTLE}"));
                 }
+                let before = self.bridge.machine.instructions();
                 self.bridge.advance(instructions)?;
                 self.bridge.machine.require_running()?;
-                json!({"instructions": self.bridge.machine.instructions()})
+                let after = self.bridge.machine.instructions();
+                json!({"instructions": GuestInstructions(after), "ran": GuestInstructions(after - before)})
             }
             Request::SnapshotDrop { name } => {
                 self.snapshots.remove(&name).ok_or_else(|| format!("snapshot {} is not held", name.0))?;
