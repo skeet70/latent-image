@@ -14,6 +14,12 @@ import Data.Word (Word32)
 import qualified Emulation.Image4Staging as Tools
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
+import qualified Data.Aeson as J
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KeyMap
+import qualified Data.Vector as V
+import Data.Scientific (toBoundedInteger)
+import Replacement.StartupArtifact.Contract (poolAllocationValue)
 import Replacement.StartupArtifact.Adapters
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Joins (JoinKind (..), joinedTasks, registeredJoins, submissionStack)
@@ -98,6 +104,46 @@ main = do
     (and [ (boundaryCompare boundary == CompareSequence) == (labelText (boundaryLabel boundary) `elem` ["task-submission/a104-first-entry", "task-submission/b93-first-entry"])
          | boundary <- catalogBoundaries (pieceCatalog submission) ++ catalogBoundaries (pieceCatalog storage) ])
   ok "task-storage catalogs its transition entry" (labelsOf storage == ["task-storage/transition-entry"])
+
+  -- The pool-allocation relation as the contract emits it.
+  let keysOf value = case value of
+        J.Object fields -> Set.fromList (map Key.toText (KeyMap.keys fields))
+        _ -> Set.empty
+      member name value = case value of
+        J.Object fields -> KeyMap.lookup (Key.fromText name) fields
+        _ -> Nothing
+      items name value = case member name value of
+        Just (J.Array rows) -> V.toList rows
+        _ -> []
+      text name value = case member name value of
+        Just (J.String content) -> Just content
+        _ -> Nothing
+      catalog = pieceCatalog submission
+      readLengths = [(labelText (readLabel row), readLength row) | row <- catalogReads catalog]
+      returns = [labelText (boundaryLabel boundary) | boundary <- catalogBoundaries catalog, boundaryKind boundary == ReturnBoundary]
+      number name value = case member name value of
+        Just (J.Number content) -> toBoundedInteger content :: Maybe Word32
+        _ -> Nothing
+      layout row = case (text "read" row >>= (`lookup` readLengths), number "offset" row, number "stride" row) of
+        (Just bytes, Just offset, Just stride) -> stride > 0 && offset + 4 <= stride && bytes `mod` stride == 0
+        _ -> False
+  relation <- maybe (H.failH "J4 pieces emit no pool-allocation relation") pure (poolAllocationValue [first, pair, publisher, startup, submission, storage])
+  ok "the relation carries exactly the consumer's keys"
+    (keysOf relation == Set.fromList ["pool", "records", "cursor", "words", "stack_tops", "owners", "citation"]
+      && maybe False ((== Set.fromList ["start", "end"]) . keysOf) (member "pool" relation)
+      && all ((== Set.fromList ["read", "offset", "stride", "position"]) . keysOf) (items "words" relation)
+      && all ((== Set.fromList ["core", "read", "offset", "stride"]) . keysOf) (items "owners" relation))
+  ok "the relation names the piece's reads with whole records, a one-word cursor and words inside their strides"
+    ((text "records" relation >>= (`lookup` readLengths)) == Just 1248 && (text "cursor" relation >>= (`lookup` readLengths)) == Just 4
+      && length (items "words" relation) == 6 && all layout (items "words" relation)
+      && length (items "owners" relation) == 2 && all layout (items "owners" relation)
+      && all (\row -> text "position" row `elem` [Just "base", Just "top"]) (items "words" relation))
+  ok "the relation's stack tops are the piece's first-entry return boundaries"
+    ([content | J.String content <- items "stack_tops" relation] == ["task-submission/a104-first-entry", "task-submission/b93-first-entry"]
+      && all (`elem` returns) ["task-submission/a104-first-entry", "task-submission/b93-first-entry"])
+  ok "no relation is emitted without task storage, or without the task pieces"
+    (poolAllocationValue [first, pair, publisher, startup, submission] == Nothing
+      && poolAllocationValue [first, pair, publisher, startup] == Nothing)
 
   -- Composition.
   let pieces = [first, pair, publisher, startup, submission, storage]

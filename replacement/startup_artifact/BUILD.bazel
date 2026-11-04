@@ -164,6 +164,7 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     tags = ["manual"],
     deps = _TEST_DEPS + [
+        "//host:scientific",
         "//replacement/startup_composition:task-composition-artifact",
         "//replacement/task_submission:task-submission-artifact",
     ],

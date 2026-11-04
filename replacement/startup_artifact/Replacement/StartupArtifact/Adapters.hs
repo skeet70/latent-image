@@ -647,7 +647,9 @@ deriveTaskSubmission source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByt
         , AllocationWords creationA 20 40 AllocationBase, AllocationWords creationB 20 40 AllocationBase
         , AllocationWords nodesA 24 56 AllocationTop, AllocationWords nodesB 24 56 AllocationTop ]
         [entryA, entryB]
-        (Citation "pool [0x40a10200,0x40a5b200) and record layout {base, size, reserved}: replacement/task_storage/src.rs; reservation order across cores is a race (reports/replacement-inventory-baseline.md:1134,1621-1624)")
+        -- Core 0 creates tasks 102 and 104 in kernel A, core 1 tasks 93 and 103 in kernel B (reports/replacement-inventory-baseline.md:1063-1068,1108-1116).
+        [AllocationOwner Core0 creationA 20 40, AllocationOwner Core1 creationB 20 40]
+        (Citation "pool [0x40a10200,0x40a5b200) and record layout {base, size, reserved}: replacement/task_storage/src.rs; reservation order across cores is a race, within a core program order (reports/replacement-inventory-baseline.md:1134,1621-1624)")
   let writes = EnumeratedWrites
         (taskStackWindows ++ [wrapperRecords, WriteRange PhysicalTarget 0xa0f82c 0xa0f830, storageRecords])
         (Premised (Premise (T.intercalate "; "

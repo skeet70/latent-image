@@ -324,7 +324,7 @@ wrapperFrame = 56
 dispatcherCriticalPair :: Join JoinKind
 dispatcherCriticalPair = Join DispatcherCriticalPair (Set.fromList [Record2Link, LoaderStartup])
   [at Image4 0x7235d8 0x723790, at LoaderA loaderAStart 0x40b00]
-  (ObservationQualified "the owned dispatcher submits tasks through the wrapper at 0x725dd8, which enters the owned critical pair; with the owned wrapper composed, dispatcher-task-composition bounds the joined stack and this check keeps the stock wrapper's 56-byte frame; loader-A orchestration's admission orders its call of the initializer at 0x40430, which fills the core-0 table the pair reads, before its first dispatch (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs expected); qualified by a composed natural comparison")
+  (ObservationQualified "the owned dispatcher submits tasks through the stock wrapper 0x725dd8, which enters the owned critical pair; loader-A orchestration's admission orders its call of the initializer at 0x40430, which fills the core-0 table the pair reads, before its first dispatch (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs expected); qualified by a composed natural comparison")
   [ HostCheck "submission-depth-in-stack-window" $ \evidence ->
       case (submissions evidence, criticalFrame evidence) of
         (Just calls@(_ : _), Just (StackDepth pairFrame)) -> all (\(SubmitCall core (StackDepth depth)) ->
@@ -354,8 +354,8 @@ joinedTasks evidence = do
     single [linked] = Just linked
     single _ = Nothing
 
--- | Root-1 table slots the canonical loader-B initializer stores; the owned record-2 initializer
--- reproduces exactly these stores (emulation/Emulation/InterfaceInitializer.hs:472,510-534).
+-- | Root-1 table slots the canonical loader-B initializer stores (emulation/Emulation/InterfaceInitializer.hs:510-534); the
+-- owned record-2 initializer's stores are checked against them by receipt validation (:785-795) and the record2-link/table-b read.
 tableBSlotsStored :: JoinEvidence -> Bool
 tableBSlotsStored evidence =
   case (targetWord (evidenceCanonical evidence) LoaderB 0xd0010, I.originalStores (targetOf (evidenceCanonical evidence) LoaderB)) of

@@ -12,7 +12,7 @@ module Replacement.StartupArtifact.Types
   , TcmRegister (..), DecoderIndex (..), DecoderChoice (..), DeclaredMutation (..)
   , Piece (..), PieceFacts (..), ServiceBinding (..), Publication (..), LinkedBytes (..), ScratchBytes (..)
   , PublisherFrame (..), SubmitCall (..), StackDepth (..)
-  , AllocationPosition (..), allocationPositionName, AllocationWords (..), PoolSpan (..), PoolAllocation (..)
+  , AllocationPosition (..), allocationPositionName, AllocationWords (..), AllocationOwner (..), PoolSpan (..), PoolAllocation (..)
   , Refusal (..), CatalogProblem (..), ManifestProblem (..)
   ) where
 
@@ -267,14 +267,19 @@ data AllocationWords = AllocationWords
   { allocationRead :: Label, allocationOffset :: Word32, allocationStride :: Word32, allocationPosition :: AllocationPosition }
   deriving (Eq, Show)
 
+-- | A read whose base word, every stride bytes from the offset, names an allocation the core reserved.
+data AllocationOwner = AllocationOwner { ownerCore :: Core, ownerRead :: Label, ownerOffset :: Word32, ownerStride :: Word32 }
+  deriving (Eq, Show)
+
 -- | Physical [start, end) of the task reservation pool.
 data PoolSpan = PoolSpan Word32 Word32 deriving (Eq, Show)
 
 -- | Each role's allocations come from the storage-record and cursor reads; the listed words and the SP of
--- each stack-top return boundary compare as (task, offset) within that role's own allocations.
+-- each stack-top return boundary compare as (task, offset) within that role's own allocations, and each
+-- core's tasks, ordered by base, must match between the roles.
 data PoolAllocation = PoolAllocation
   { poolSpan :: PoolSpan, poolRecords :: Label, poolCursor :: Label
-  , poolWords :: [AllocationWords], poolStackTops :: [Label], poolCitation :: Citation }
+  , poolWords :: [AllocationWords], poolStackTops :: [Label], poolOwners :: [AllocationOwner], poolCitation :: Citation }
   deriving (Eq, Show)
 
 -- | Artifact values that registered joins check across pieces.

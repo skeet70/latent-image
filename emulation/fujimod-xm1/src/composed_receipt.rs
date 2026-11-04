@@ -573,7 +573,10 @@ fn compare_reads(contract: &Contract, retained: &Receipt, owned: &Receipt, pool:
         let (a, b) = (retained.captures(&read.label), owned.captures(&read.label));
         let differs = |index: usize| match (a.get(index), b.get(index), pool) {
             (Some(left), Some(right), Some(pool)) if pool.relation.words.iter().any(|words| words.read == read.label) =>
-                pool.allocations[0].words(pool.relation, &read.label, left) != pool.allocations[1].words(pool.relation, &read.label, right),
+                left.len() != right.len()
+                    || pool.allocations[0].words(pool.relation, &read.label, left).is_none_or(|left| {
+                        pool.allocations[1].words(pool.relation, &read.label, right).is_none_or(|right| left != right)
+                    }),
             (left, right, _) => left != right,
         };
         if let Some(occurrence) = (0..a.len().max(b.len())).find(|&index| differs(index)) {
