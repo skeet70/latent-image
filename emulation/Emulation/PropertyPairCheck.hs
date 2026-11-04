@@ -506,6 +506,8 @@ qualify bindings role observation = do
   require (ObservationRefused outcome) (either (const False) (== String "completed") (field "status" outcome))
   bounds <- either (Left . ReceiptShape) Right (field "bounds" receipt)
   require (ReceiptShape "bounds") (bounds == object ["hit_limit" .= hitLimit, "watch_limit" .= watchLimit])
+  require (ReceiptShape "probe") (either (const False) (== Null) (field "probe" receipt))
+  require (ReceiptShape "pre-key idle") (either (const False) (== A.toJSON preKeyIdle) (field "pre_key_idle_instructions" receipt))
   routes <- either (Left . InputDigest . ("routes: " ++)) Right (decodeRouteFile (bindRoutes bindings))
   let inputs = PlanInputs role contract (bindImages bindings) (bindLinked bindings) Nothing
   plan <- either (Left . InputDigest) Right (derivePlan inputs)

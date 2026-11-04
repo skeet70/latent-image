@@ -40,6 +40,7 @@ module Emulation.PropertyPairPlan
   , specValue
   , hitLimit
   , watchLimit
+  , preKeyIdle
   , word32At
   ) where
 
@@ -238,6 +239,12 @@ settingsRanges = [PhysicalRange 0x89ec00 0x89edc2, PhysicalRange 0x96cc64 0x96cf
 hitLimit, watchLimit :: Int
 hitLimit = 1500000
 watchLimit = 262144
+
+-- | Guest instructions run with no input before every press, ahead of the bridge's render-drain
+-- gate; in natural-2 step 226 owned dropped a RIGHT pressed at the drain point and accepted it
+-- after 20M idle instructions.
+preKeyIdle :: Integer
+preKeyIdle = 20000000
 
 data Plan = Plan
   { planRole :: Role

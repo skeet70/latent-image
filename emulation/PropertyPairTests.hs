@@ -5,6 +5,7 @@ import Control.Monad (unless)
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
+import qualified Data.Aeson.KeyMap as KM
 import Data.Bits (shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
@@ -212,7 +213,9 @@ chain role chained = Observation receipt spec reset hits steps session
         [ "spec.json" .= digestOf spec, "reset-observation.json" .= digestOf reset, "hits.jsonl" .= digestOf hits
         , "steps.json" .= digestOf steps, "emulator-session.json" .= session ]
     , "outcome" .= object ["status" .= ("completed" :: T.Text)]
-    , "bounds" .= object ["hit_limit" .= hitLimit, "watch_limit" .= watchLimit] ]))
+    , "bounds" .= object ["hit_limit" .= hitLimit, "watch_limit" .= watchLimit]
+    , "probe" .= Null
+    , "pre_key_idle_instructions" .= preKeyIdle ]))
 
 stackPointer, written :: Word32
 stackPointer = 0x1000
@@ -339,6 +342,14 @@ main = do
         (refusal OwnedRole (ownedWith [setterIn, commit, storeHit BankStore8 0x10 0xac, setterOut]) == Just (AccessorStoreUnmatched (StepInterval 1))
           && refusal OwnedRole (ownedWith [setterIn, commit, setterOut]) == Just (AccessorStoreUnmatched (StepInterval 1)))
 
+    , check "a probe receipt, or one with another pre-key idle, is refused"
+        (let base = observation OwnedRole ownedStep
+             edited key value = base { obsReceipt = case A.eitherDecodeStrict' (obsReceipt base) of
+               Right (Object fields) -> BL.toStrict (A.encode (Object (KM.insert key value fields)))
+               _ -> error "test receipt is not an object" }
+             refusedWith key value = either Just (const Nothing) (qualify bindings OwnedRole (edited key value))
+         in refusedWith "probe" (object ["path" .= ["right" :: T.Text]]) == Just (ReceiptShape "probe")
+              && refusedWith "pre_key_idle_instructions" (A.toJSON (0 :: Int)) == Just (ReceiptShape "pre-key idle"))
     , check "a crawl route whose last step lacks its recorded effects is refused"
         (refusal OwnedRole (ownedWith (filter (/= commit) (stepHits ownedStep))) == Just (RouteEffectsDiffer crawlRoute))
 

@@ -237,6 +237,7 @@ run options output record = do
   ranges <- either (refuse . InputRefused) pure
     (mapM (\range -> W.watchRange (W.watchAddress (rangeStart range)) (W.watchAddress (rangeEnd range))) settingsRanges)
   record "probe" (maybe Null (\(Probe path idle) -> object ["path" .= map crawlKeyWire path, "idle_instructions" .= idle]) (optProbe options))
+  record "pre_key_idle_instructions" (maybe (A.toJSON preKeyIdle) (const Null) (optProbe options))
   let routeKeyPaths = maybe [routeKeys route | route <- routeList routes, not (null (routeKeys route))] (\(Probe path _) -> [path]) (optProbe options)
   let trie = foldl (flip insertPath) (Trie []) routeKeyPaths
   withBinaryFile (output </> "hits.jsonl") WriteMode $ \hitsFile -> do
@@ -281,11 +282,10 @@ run options output record = do
                 hitsStart <- readIORef cursor
                 armed <- emulatorExecutionWatchBegin emulator ranges [] limit
                 unless (field "armed" armed == Just (Bool True)) (refuse (BridgeFailed ("watch-begin refused: " ++ show armed)))
-                case optProbe options of
-                  Just (Probe probed (Just instructions)) | keys == probed -> do
-                    idled <- emulatorIdle emulator (fromIntegral instructions)
-                    record "probe_idle" idled
-                  _ -> pure ()
+                idled <- case optProbe options of
+                  Nothing -> Just <$> emulatorIdle emulator preKeyIdle
+                  Just (Probe probed (Just instructions)) | keys == probed -> Just <$> emulatorIdle emulator instructions
+                  Just _ -> pure Nothing
                 press <- emulatorDisplayKey emulator key
                 case field "failure" press of
                   Just Null -> pure ()
@@ -297,7 +297,7 @@ run options output record = do
                 hitsEnd <- drainHits emulator
                 modifyIORef' steps (object
                   [ "step" .= stepId, "parent" .= parentStep, "keys" .= map crawlKeyWire keys
-                  , "hits" .= [hitsStart, hitsEnd], "press" .= press, "watch" .= watch
+                  , "hits" .= [hitsStart, hitsEnd], "idle" .= idled, "press" .= press, "watch" .= watch
                   , "regions_before" .= before, "regions_after" .= after ] :)
                 printf "step %d %s: hits %d..%d\n" stepId (unwords (map crawlKeyWire keys)) hitsStart hitsEnd
                 walk keys stepId child
