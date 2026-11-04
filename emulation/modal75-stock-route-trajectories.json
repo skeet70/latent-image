@@ -2,36 +2,175 @@
   "schema": 1,
   "entry": "Stock X-M1 1.50 FILM SIMULATION entry and BACK through physical menu keys, with no bank installation. The initial shooting-menu and film-list states come from the existing stock control trajectory. Fixed traces observe controller/state/event and selected action/transition targets. This is not a state30 generic editor-cancellation trajectory.",
   "trace_sites": [
-    ["00c0bae8", "stock-forward-modal75"],
-    ["00bfb028", "stock-dispatch-entry"],
-    ["00bfb0a0", "stock-dispatch-context"],
-    ["00bfb0c8", "stock-dispatch-action"],
-    ["00bfb0d8", "stock-dispatch-high"],
-    ["00bfb0f8", "stock-dispatch-transition"],
-    ["00bfb114", "stock-dispatch-direct-state"],
-    ["00c77794", "stock-generic-editor-cancel"]
+    [
+      "00c0bae8",
+      "stock-forward-modal75"
+    ],
+    [
+      "00bfb028",
+      "stock-dispatch-entry"
+    ],
+    [
+      "00bfb0a0",
+      "stock-dispatch-context"
+    ],
+    [
+      "00bfb0c8",
+      "stock-dispatch-action"
+    ],
+    [
+      "00bfb0d8",
+      "stock-dispatch-high"
+    ],
+    [
+      "00bfb0f8",
+      "stock-dispatch-transition"
+    ],
+    [
+      "00bfb114",
+      "stock-dispatch-direct-state"
+    ],
+    [
+      "00c77794",
+      "stock-generic-editor-cancel"
+    ]
   ],
   "before_unload": [
     {
       "phase": "retained-film-route",
       "capture": "stock-shooting-menu",
-      "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000},
-      "steps": [["menu", 1, 5, 2]],
-      "reads": [["dispatcher-first-word", "00bfb028", 4], ["modal75-state", "0146761e", 2], ["modal75-event", "0146777a", 2]]
+      "reads": [
+        [
+          "dispatcher-first-word",
+          "00bfb028",
+          4
+        ],
+        [
+          "modal75-state",
+          "0146761e",
+          2
+        ],
+        [
+          "modal75-event",
+          "0146777a",
+          2
+        ]
+      ],
+      "steps": [
+        [
+          "menu",
+          1,
+          5,
+          2
+        ]
+      ]
     },
     {
       "phase": "retained-film-route",
       "capture": "stock-film-list",
-      "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000},
-      "steps": [["down", 1, 5, 3], ["down", 1, 5, 4], ["down", 1, 5, 5], ["down", 1, 5, 6], ["ok", 1, 254, 0]],
-      "reads": [["modal75-state", "0146761e", 2], ["modal75-event", "0146777a", 2], ["modal76-state", "01467620", 2], ["modal76-event", "0146777c", 2], ["editor-cursor", "00954384", 1], ["editor-buffer-a", "00954385", 14], ["editor-buffer-b", "00954394", 24], ["generic-cancel-cell", "00cd24b4", 4]]
+      "reads": [
+        [
+          "modal75-state",
+          "0146761e",
+          2
+        ],
+        [
+          "modal75-event",
+          "0146777a",
+          2
+        ],
+        [
+          "modal76-state",
+          "01467620",
+          2
+        ],
+        [
+          "modal76-event",
+          "0146777c",
+          2
+        ],
+        [
+          "editor-cursor",
+          "00954384",
+          1
+        ],
+        [
+          "editor-buffer-a",
+          "00954385",
+          14
+        ],
+        [
+          "editor-buffer-b",
+          "00954394",
+          24
+        ],
+        [
+          "generic-cancel-cell",
+          "00cd24b4",
+          4
+        ]
+      ],
+      "steps": [
+        [
+          "down",
+          1,
+          5,
+          3
+        ],
+        [
+          "down",
+          1,
+          5,
+          4
+        ],
+        [
+          "down",
+          1,
+          5,
+          5
+        ],
+        [
+          "down",
+          1,
+          5,
+          6
+        ],
+        [
+          "ok",
+          1,
+          254,
+          0
+        ]
+      ]
     },
     {
       "phase": "retained-film-route",
       "capture": "stock-film-returned",
-      "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000},
-      "steps": [["back", 1, 5, 6]],
-      "reads": [["modal75-state", "0146761e", 2], ["modal75-event", "0146777a", 2], ["dispatcher-first-word", "00bfb028", 4]]
+      "reads": [
+        [
+          "modal75-state",
+          "0146761e",
+          2
+        ],
+        [
+          "modal75-event",
+          "0146777a",
+          2
+        ],
+        [
+          "dispatcher-first-word",
+          "00bfb028",
+          4
+        ]
+      ],
+      "steps": [
+        [
+          "back",
+          1,
+          5,
+          6
+        ]
+      ]
     }
   ],
   "after_unload": []

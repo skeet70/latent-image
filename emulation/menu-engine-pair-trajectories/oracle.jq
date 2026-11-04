@@ -16,8 +16,7 @@ $graph[0].graph as $g
   def package_step: if . == ["up", 1, 5, 32] then ["up", 1, 5, 34] else . end;
   def reads: [["dispatcher-first-word", "00bfb028", 4], ["resident", "runtime:rb_resident", 1024], ["live-settings", "0096cc64", 450]] + engine_reads;
   def keep_resident: [{"read": "resident", "phase": "package-menu-prefix", "source_read": "resident"}];
-  def pulse: {"hold_instructions": 8000000, "release_instructions": 8000000};
-  def segment($phase; $capture; $steps): {"phase": $phase, "capture": $capture, "key_pulse": pulse, "steps": $steps, "reads": reads, "read_preservations": keep_resident};
+  def segment($phase; $capture; $steps): {"phase": $phase, "capture": $capture, "steps": $steps, "reads": reads, "read_preservations": keep_resident};
   walk(0; $c.path + [$c.key]) as $walked
 | ($walked.steps | map(package_step)) as $steps
 | {

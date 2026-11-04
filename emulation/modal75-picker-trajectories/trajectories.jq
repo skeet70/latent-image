@@ -23,8 +23,8 @@ def trace_sites: [
   ["00c7af6c", "retired-c7af6c"],
   ["00c7afc8", "retired-c7afc8"]
 ];
-# The pilot's pulse; the default 3M directional hold went unconsumed in stock-role routes.
-def segment($phase; $capture; $list): {"phase": $phase, "capture": $capture, "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000}, "steps": steps($list), "reads": reads, "read_preservations": keep_resident};
+# Keys take the FujiMod bridge's default tick hold.
+def segment($phase; $capture; $list): {"phase": $phase, "capture": $capture, "steps": steps($list), "reads": reads, "read_preservations": keep_resident};
 # The installed package appends two rows to the shooting root (menu/recipe_bank_ui.h), rows 33 and 34,
 # so UP from row 2 wraps to row 34, where crawl-5's uninstalled route wraps to row 32.
 def package_route($route): if $route[1] == ["up", [1, 5, 32]] then [$route[0], ["up", [1, 5, 34]], ["up", [1, 5, 33]]] + $route[1:] else $route end;
@@ -48,9 +48,6 @@ def package_route($route): if $route[1] == ["up", [1, 5, 32]] then [$route[0], [
              then [ segment("owned-picker-enter"; "owned-picker-entered"; $enter),
                     (segment("owned-picker-move"; "owned-picker-moved"; [["down", [1, 214, 1]], ["up", [1, 214, 0]]]) + {"observe": true}),
                     segment("owned-picker-keys"; "owned-picker-keys"; $c.from_picker) ]
-             elif $c.setting == 246
-             # With the 8M hold, UP after DOWN left cursor 1 in both roles of the first picker-246 run.
-             then [ segment("owned-picker-keys"; "owned-picker-keys"; $c.keys) | del(.key_pulse) ]
              else [ segment("owned-picker-keys"; "owned-picker-keys"; $c.keys) ]
              end)),
         "after_unload": [

@@ -14,7 +14,7 @@ import Data.Word (Word8, Word32)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, routeKey, routeKeyHex)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.Sha256 (sha256File, sha256Hex)
-import Emulation.UiTrajectory (ReadAddress (..), Segment (..), Step (..), TraceSite (..), Trajectories (..), decodeTrajectories)
+import Emulation.UiTrajectory (ReadAddress (..), Segment (..), Step (..), TraceSite (..), Trajectories (..), decodeTrajectories, instructionPinnedPhases)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, resolve, stageViewerRuntime, stagedFirmwarePath)
 import qualified Emulation.ViewerRuntime as Runtime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
@@ -202,8 +202,13 @@ run options = do
   receipt <- freshReceipt root (optReceipt options)
   ensurePrivateDirectory (workspace </> "private-data/analysis/x-m1-1.50/af-ring")
   ensurePrivateDirectory (workspace </> payloadBuildRoot afRingPayload)
-  trajectoryBytes <- B.readFile (workspace </> "emulation/af-ring-e2e-trajectories.json")
+  let trajectoryFile = case optEngine options of
+        FujiMod -> "emulation/af-ring-e2e-trajectories.fujimod.json"
+        Retained -> "emulation/af-ring-e2e-trajectories.json"
+  trajectoryBytes <- B.readFile (workspace </> trajectoryFile)
   trajectory <- either (ioError . userError) pure (decodeTrajectories trajectoryBytes)
+  require (optEngine options == Retained || null (instructionPinnedPhases trajectory))
+    "FujiMod AF-ring presses use the bridge's default holds; the trajectory must carry no instruction pins"
   writePrivateBytes (receipt </> "trajectory.json") trajectoryBytes
   let fallback = UniqueRuntime "xm1-af-ring-e2e"
   (runtime, executable, bridgeArguments) <- case optEngine options of

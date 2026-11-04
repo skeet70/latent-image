@@ -57,6 +57,14 @@ pub const SCANNED_HOLD: Hold = Hold::BoardTicks(2 * SCAN_INTERVAL_TICKS + 120_00
 pub const MENU_PULSE: KeyPulse = KeyPulse { hold: SCANNED_HOLD, release: 6_000_000 };
 pub const DIRECTIONAL_PULSE: KeyPulse = KeyPulse { hold: SCANNED_HOLD, release: 12_000_000 };
 
+/// The default pulse of an ADC key.
+pub fn key_pulse(key: RouteKey) -> KeyPulse {
+    match key {
+        RouteKey::Up | RouteKey::Down | RouteKey::Left | RouteKey::Right => DIRECTIONAL_PULSE,
+        RouteKey::Ok | RouteKey::Back | RouteKey::Q => MENU_PULSE,
+    }
+}
+
 /// A press's key-table row at the end of its hold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Latch {
@@ -208,7 +216,7 @@ impl Machine {
     }
 
     /// Runs at most `count` instructions, ending at board tick `until` when given.
-    fn run_until(&mut self, count: u64, until: Option<u64>) -> RunOutcome {
+    pub fn run_until(&mut self, count: u64, until: Option<u64>) -> RunOutcome {
         if self.failure.is_some() {
             return RunOutcome::Failed;
         }
@@ -265,16 +273,20 @@ impl Machine {
         }
     }
 
+    /// The instructions `ticks` board ticks take with no core waiting.
+    pub fn hold_bound(&self, ticks: u64) -> u64 {
+        let rate = &self.document.execution.instructions_per_tick;
+        (ticks * rate.numerator).div_ceil(rate.denominator)
+    }
+
     fn hold(&mut self, hold: Hold) {
         match hold {
             Hold::Instructions(count) => {
                 self.run(count);
             }
             Hold::BoardTicks(ticks) => {
-                let rate = &self.document.execution.instructions_per_tick;
-                let bound = (ticks * rate.numerator).div_ceil(rate.denominator);
                 let until = self.session.board.now().saturating_add(ticks);
-                self.run_until(bound, Some(until));
+                self.run_until(self.hold_bound(ticks), Some(until));
             }
         }
     }
