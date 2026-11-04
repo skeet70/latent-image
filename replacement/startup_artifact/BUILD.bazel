@@ -14,6 +14,8 @@ haskell_library(
         "Replacement/StartupArtifact/Footprint/LoaderStartup.hs",
         "Replacement/StartupArtifact/Footprint/PrimaryPublisher.hs",
         "Replacement/StartupArtifact/Footprint/Record2Link.hs",
+        "Replacement/StartupArtifact/Footprint/TaskStorage.hs",
+        "Replacement/StartupArtifact/Footprint/TaskSubmission.hs",
         "Replacement/StartupArtifact/Joins.hs",
         "Replacement/StartupArtifact/Manifest.hs",
         "Replacement/StartupArtifact/Stage.hs",
@@ -51,6 +53,9 @@ haskell_library(
         "//replacement/startup_composition:loader-startup-composition-artifact",
         "//replacement/startup_composition:startup-composition-artifact",
         "//replacement/startup_dispatch:startup-dispatch-artifact",
+        "//replacement/startup_composition:task-composition-artifact",
+        "//replacement/task_storage:task-storage-artifact",
+        "//replacement/task_submission:task-submission-artifact",
     ],
 )
 
@@ -126,4 +131,40 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     tags = ["manual"],
     deps = _TEST_DEPS,
+)
+
+_J4_IMAGES = [
+    "//replacement/first_stage:first-stage-image.bin",
+    "//replacement/first_stage:first-stage-image.symbols",
+    "//replacement/critical_pair:critical-pair-image.bin",
+    "//replacement/critical_pair:critical-pair-image.symbols",
+    "//replacement/primary_initializer:primary-initializer-image.bin",
+    "//replacement/primary_initializer:primary-initializer-image.symbols",
+    "//replacement/loader_orchestration:loader-a-orchestration-image.bin",
+    "//replacement/loader_orchestration:loader-a-orchestration-image.symbols",
+    "//replacement/loader_orchestration:loader-b-orchestration-image.bin",
+    "//replacement/loader_orchestration:loader-b-orchestration-image.symbols",
+    "//replacement/startup_dispatch:startup-dispatch-image.bin",
+    "//replacement/startup_dispatch:startup-dispatch-image.symbols",
+    "//replacement/kernel_install:kernel-install-image.bin",
+    "//replacement/kernel_install:kernel-install-image.symbols",
+    "//replacement/task_submission:task-submission-image.bin",
+    "//replacement/task_submission:task-submission-image.symbols",
+    "//replacement/task_storage:task-storage-image.bin",
+    "//replacement/task_storage:task-storage-image.symbols",
+]
+
+# Canonical inputs come from private-data:
+# bazel run //replacement/startup_artifact:startup-artifact-j4-canonical-tests -- CANONICAL_DAT SCRATCH_DIR
+haskell_test(
+    name = "startup-artifact-j4-canonical-tests",
+    srcs = ["J4CanonicalTests.hs"],
+    args = _TOOL_ARGS + ["$(rootpath %s)" % image for image in _J4_IMAGES],
+    data = _TOOLS + _J4_IMAGES,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    tags = ["manual"],
+    deps = _TEST_DEPS + [
+        "//replacement/startup_composition:task-composition-artifact",
+        "//replacement/task_submission:task-submission-artifact",
+    ],
 )

@@ -1,14 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | The registered joins.
 module Replacement.StartupArtifact.Joins
-  ( JoinKind (..), registeredJoins
+  ( JoinKind (..), registeredJoins, joinedTasks, submissionStack
   ) where
 
 import qualified A32 as A
 import qualified Data.ByteString as B
-import Data.Maybe (mapMaybe)
+import Data.List (nub)
+import Data.Maybe (isJust, mapMaybe)
 import qualified Data.Set as Set
 import Data.Word (Word32)
+import qualified Emulation.InterfaceInitializer as I
 import qualified Emulation.LoaderPrefixWitness as P
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
@@ -18,11 +20,16 @@ import qualified Replacement.LoaderOrchestration.Interface as LI
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
+import qualified Replacement.StartupComposition.Artifact as SC
 import qualified Replacement.StartupComposition.LoaderStartup as LS
+import qualified Replacement.StartupComposition.TaskSubmission as TS
+import qualified Replacement.TaskSubmission.Admission as WA
+import qualified Replacement.TaskSubmission.Artifact as W
 import qualified StartupStageContract as Stage
 
 data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | PrefixOrchestrationB | FirstStageCompletionZero
   | LoaderStartupPublisher | PublisherInstallerRoots | CriticalPairInstallerRoots | DispatcherCriticalPair
+  | TaskCompositionOwnedCalls | DispatcherTaskComposition | PublisherTaskServices
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 instance JoinName JoinKind where
@@ -34,6 +41,9 @@ instance JoinName JoinKind where
   joinName PublisherInstallerRoots = "publisher-installer-roots"
   joinName CriticalPairInstallerRoots = "critical-pair-installer-roots"
   joinName DispatcherCriticalPair = "dispatcher-critical-pair"
+  joinName TaskCompositionOwnedCalls = "task-composition-owned-calls"
+  joinName DispatcherTaskComposition = "dispatcher-task-composition"
+  joinName PublisherTaskServices = "publisher-task-services"
 
 at :: Target -> Word32 -> Word32 -> Span
 at target start end = Span target (Guest start) (Guest end)
@@ -314,7 +324,7 @@ wrapperFrame = 56
 dispatcherCriticalPair :: Join JoinKind
 dispatcherCriticalPair = Join DispatcherCriticalPair (Set.fromList [Record2Link, LoaderStartup])
   [at Image4 0x7235d8 0x723790, at LoaderA loaderAStart 0x40b00]
-  (ObservationQualified "the owned dispatcher submits tasks through the stock wrapper 0x725dd8, which enters the owned critical pair; loader-A orchestration's admission orders its call of the initializer at 0x40430, which fills the core-0 table the pair reads, before its first dispatch (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs expected); qualified by a composed natural comparison")
+  (ObservationQualified "the owned dispatcher submits tasks through the wrapper at 0x725dd8, which enters the owned critical pair; with the owned wrapper composed, dispatcher-task-composition bounds the joined stack and this check keeps the stock wrapper's 56-byte frame; loader-A orchestration's admission orders its call of the initializer at 0x40430, which fills the core-0 table the pair reads, before its first dispatch (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs expected); qualified by a composed natural comparison")
   [ HostCheck "submission-depth-in-stack-window" $ \evidence ->
       case (submissions evidence, criticalFrame evidence) of
         (Just calls@(_ : _), Just (StackDepth pairFrame)) -> all (\(SubmitCall core (StackDepth depth)) ->
@@ -327,4 +337,80 @@ registeredJoins =
   [ rendezvous, bindings
   , prefixOrchestration LoaderOrchestrationB, prefixOrchestration LoaderStartup
   , completionZero LoaderOrchestrationB, completionZero LoaderStartup
-  , loaderStartupPublisher, publisherInstallerRoots, criticalPairInstallerRoots, dispatcherCriticalPair ]
+  , loaderStartupPublisher, publisherInstallerRoots, criticalPairInstallerRoots, dispatcherCriticalPair
+  , taskCompositionOwnedCalls, dispatcherTaskComposition, publisherTaskServices ]
+
+-- | The task wrapper, the record-2 critical pair and the task-storage transition joined as in
+-- replacement/startup_composition/Replacement/StartupComposition/TaskSubmission.hs:63-97.
+joinedTasks :: JoinEvidence -> Maybe TS.JoinedArtifact
+joinedTasks evidence = do
+  LinkedBytes wrapper wrapperSymbols <- single [linked | TaskSubmissionFacts linked <- facts]
+  LinkedBytes storage storageSymbols <- single [linked | TaskStorageFacts linked <- facts]
+  (_, _, LinkedBytes critical criticalSymbols, _) <- secondaryFacts evidence
+  either (const Nothing) Just (TS.deriveArtifact (SC.NativeFiles wrapper wrapperSymbols)
+    (SC.NativeFiles critical criticalSymbols) (SC.NativeFiles storage storageSymbols))
+  where
+    facts = map pieceFacts (evidencePieces evidence)
+    single [linked] = Just linked
+    single _ = Nothing
+
+-- | Root-1 table slots the canonical loader-B initializer stores; the owned record-2 initializer
+-- reproduces exactly these stores (emulation/Emulation/InterfaceInitializer.hs:472,510-534).
+tableBSlotsStored :: JoinEvidence -> Bool
+tableBSlotsStored evidence =
+  case (targetWord (evidenceCanonical evidence) LoaderB 0xd0010, I.originalStores (targetOf (evidenceCanonical evidence) LoaderB)) of
+    (Just root, Right stores) -> all (\(WA.RootOffset offset, _) ->
+      length [() | I.ExpectedStore (P.Guest guest) _ <- stores, guest == root + offset] == 1) WA.rootServiceOffsets
+    _ -> False
+
+taskCompositionOwnedCalls :: Join JoinKind
+taskCompositionOwnedCalls = Join TaskCompositionOwnedCalls (Set.fromList [Record2Link, TaskSubmission, TaskStorage])
+  [at Image4 0x7235d8 0x723790, at Image4 0x725cc4 0x725da8, at Image4 0x725dd8 0x72612c, at LoaderB initializerSite (initializerSite + 4)]
+  (ObservationQualified "the owned wrapper calls the record-2 critical pair through the entry words at 0x7235d8 and 0x7236b0 and the storage transition through the retained prelude at 0x725c6c; its call targets are wrapper-admission constants (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:93-97), call-SP alignment, live words and continuations are checked by that admission's external calls, and the storage adapter ABI by the storage admission (replacement/task_storage/Replacement/TaskStorage/Artifact.hs:118-125); owned-calls-join derives each owned callee's frame low at the wrapper's actual call SPs, which submission-joined-stack-in-boot-window bounds, and with admitted pieces fails only on a missing owned call; on core 1 the wrapper and the storage prelude load root-1 slots that the record-2 initializer publishes; exit receiving enter's token and the reservation arguments are source properties qualified by a composed natural comparison")
+  [ HostCheck "owned-calls-join" (isJust . joinedTasks)
+  , HostCheck "table-b-service-slots-stored" tableBSlotsStored ]
+
+-- | The dispatcher passes descriptor D = S-44 (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs:234),
+-- of which the wrapper reads 28 bytes (replacement/task_submission/Replacement/TaskSubmission/Admission.hs Guest Descriptor).
+descriptorOffset, descriptorBytes :: WA.StackOffset
+descriptorOffset = WA.StackOffset 44
+descriptorBytes = WA.StackOffset 28
+
+-- | The owned wrapper's joined stack at a dispatcher submission: entered at the boot stack's service SP
+-- less the call depth, written only inside that core's boot-stack window, disjoint from the descriptor.
+submissionStack :: TS.JoinedArtifact -> SubmitCall -> Either TS.JoinError WA.JoinedStack
+submissionStack joined (SubmitCall core (StackDepth depth)) = TS.joinStack joined WA.Submission context retained
+  where
+    wrapperSp = toInteger (serviceSp core) - toInteger depth
+    WA.StackOffset offset = descriptorOffset
+    WA.StackOffset bytes = descriptorBytes
+    descriptor = toInteger depth - offset
+    context = WA.StackContext (fromInteger wrapperSp)
+      (WA.StackInterval (WA.StackOffset (toInteger (stackFloor core) - wrapperSp)) (WA.StackOffset 0))
+      [WA.StackInterval (WA.StackOffset descriptor) (WA.StackOffset (descriptor + bytes))]
+    owned = map WA.FixedService [WA.CriticalEnter, WA.CriticalExit, WA.Reservation]
+    retained = [ WA.stockCalleeDemand target
+               | target <- nub (map WA.callTarget (WA.callBoundaries (W.frameProof (TS.wrapperArtifact joined)))), target `notElem` owned ]
+
+dispatcherTaskComposition :: Join JoinKind
+dispatcherTaskComposition = Join DispatcherTaskComposition (Set.fromList [LoaderStartup, Record2Link, TaskSubmission, TaskStorage])
+  [ at Image4 0x69cdf8 0x69cf84, at Image4 0x725a04 0x725b54, at LoaderA loaderAStart 0x40b00, at LoaderB loaderStartup 0xd0b00
+  , at Image4 0x725cc4 0x725da8, at Image4 0x725dd8 0x72612c ]
+  (ObservationQualified "the owned dispatcher hands D = S-44 to the owned wrapper at S-64 on each core's boot stack; the descriptor contents, r0 and the descriptor stores before each call are the dispatcher's admission (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs:206-211,225,233-237), tables A and B are filled before the first dispatch by the orchestration admission (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs:219-240,261), and the class roots are the installer's stores of the loader headers (replacement/kernel_install/Replacement/KernelInstall/Admission.hs RootWrite); qualified by a composed natural comparison")
+  [ HostCheck "submission-joined-stack-in-boot-window" $ \evidence ->
+      case (submissions evidence, joinedTasks evidence) of
+        (Just calls@(_ : _), Just joined) -> all (\call -> either (const False) (const True) (submissionStack joined call)) calls
+        _ -> False
+  , loaderHeadersUnchanged ]
+
+publisherTaskServices :: Join JoinKind
+publisherTaskServices = Join PublisherTaskServices (Set.fromList [PrimaryPublisher, TaskSubmission, TaskStorage])
+  [at LoaderA 0x40430 0x409ac]
+  (HostProof "the owned publisher emits its complete ordered stock source publication (emulation/Emulation/PrimaryInitializerArtifact.hs:297-302,470), so each slot it publishes holds the stock service; the wrapper and the storage prelude load service pointers from the root slots replacement/task_submission/Replacement/TaskSubmission/Admission.hs rootServiceOffsets names")
+  [ HostCheck "task-service-slots-published-once" $ \evidence ->
+      case (targetWord (evidenceCanonical evidence) LoaderA rootHeader, publications evidence) of
+        (Just root, Just emitted) -> all (\(WA.RootOffset offset, _) ->
+          length [() | row <- emitted, physicalOf (publicationGuest row) == physicalOf (Guest (root + offset))] == 1) WA.rootServiceOffsets
+        _ -> False ]
+  where
+    physicalOf (Guest address) = physicalAddress (fromIntegral address)

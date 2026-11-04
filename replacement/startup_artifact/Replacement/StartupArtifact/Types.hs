@@ -62,7 +62,7 @@ editSpan (Edit range _) = range
 editBytes :: Edit -> B.ByteString
 editBytes (Edit _ bytes) = bytes
 
-data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup
+data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup | TaskSubmission | TaskStorage
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 pieceKindName :: PieceKind -> Text
@@ -72,9 +72,11 @@ pieceKindName kind = case kind of
   PrimaryPublisher -> "primary-publisher"
   LoaderOrchestrationB -> "loader-orchestration-b"
   LoaderStartup -> "loader-startup"
+  TaskSubmission -> "task-submission"
+  TaskStorage -> "task-storage"
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
-  | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea
+  | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea | TaskSubmissionArea | TaskStorageArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 areaName :: Area -> Text
@@ -89,6 +91,8 @@ areaName area = case area of
   LoaderOrchestrationBArea -> "loader-orchestration-b"
   PhaseDispatcherArea -> "phase-dispatcher"
   KernelInstallArea -> "kernel-install"
+  TaskSubmissionArea -> "task-submission"
+  TaskStorageArea -> "task-storage"
 
 data FootprintBasis = AdmissionRead | RuntimePremise deriving (Eq, Ord, Show)
 
@@ -265,6 +269,10 @@ data PieceFacts
   -- | The linked loader-A and loader-B orchestration images and the dispatcher's task submissions.
   | LoaderStartupFacts LinkedBytes LinkedBytes [SubmitCall]
   | NoFacts
+  -- | The linked task wrapper/release image.
+  | TaskSubmissionFacts LinkedBytes
+  -- | The linked task-storage transition image.
+  | TaskStorageFacts LinkedBytes
   deriving (Eq, Show)
 
 data Piece = Piece
