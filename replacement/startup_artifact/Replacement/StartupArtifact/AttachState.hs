@@ -482,8 +482,8 @@ resolveRegister sources owner register role source = do
     hex value = T.pack (showHex value "")
     sideName side = case side of LI.LoaderA -> "A"; LI.LoaderB -> "B"
     orchestrationImages side facts = case (side, facts) of
-      (LI.LoaderA, LoaderStartupFacts linked _ _) -> [linked]
-      (LI.LoaderB, LoaderStartupFacts _ linked _) -> [linked]
+      (LI.LoaderA, LoaderStartupFacts linked _ _ _) -> [linked]
+      (LI.LoaderB, LoaderStartupFacts _ linked _ _) -> [linked]
       (LI.LoaderB, LoaderOrchestrationFacts linked) -> [linked]
       _ -> []
 
