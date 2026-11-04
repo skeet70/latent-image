@@ -35,6 +35,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import Data.List (find, sort)
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Scientific (toBoundedInteger)
@@ -505,6 +506,8 @@ qualify bindings role observation = do
   require (ObservationRefused outcome) (either (const False) (== String "completed") (field "status" outcome))
   bounds <- either (Left . ReceiptShape) Right (field "bounds" receipt)
   require (ReceiptShape "bounds") (bounds == object ["hit_limit" .= hitLimit, "watch_limit" .= watchLimit])
+  require (ReceiptShape "probe") (either (const False) (== Null) (field "probe" receipt))
+  require (ReceiptShape "pre-key idle") (either (const False) (== A.toJSON (instructionsValue preKeyIdle)) (field "pre_key_idle_instructions" receipt))
   routes <- either (Left . InputDigest . ("routes: " ++)) Right (decodeRouteFile (bindRoutes bindings))
   let inputs = PlanInputs role contract (bindImages bindings) (bindLinked bindings) Nothing
   plan <- either (Left . InputDigest) Right (derivePlan inputs)
@@ -613,7 +616,7 @@ phaseIntervals reset = do
 parseStep :: Int -> Value -> Parse ([CrawlKey], Int, Interval)
 parseStep expected value = do
   fields <- asObject value
-  exact ["step", "parent", "keys", "hits", "press", "watch", "regions_before", "regions_after"] fields
+  exact ["step", "parent", "keys", "hits", "idle", "press", "watch", "regions_before", "regions_after"] fields
   number <- at "step" fields >>= asInt
   unless (number == expected) (Left "steps are out of order")
   parent <- at "parent" fields >>= asInt
@@ -624,6 +627,8 @@ parseStep expected value = do
   range <- case hits of
     [from, to] | from <= to -> Right (from, to)
     _ -> Left "step hit range is malformed"
+  ran <- at "idle" fields >>= \idle -> field "ran" idle >>= asInt
+  unless (toInteger ran == toInteger (instructionsValue preKeyIdle)) (Left "step did not run the pre-key idle")
   press <- at "press" fields
   unless (either (const False) (== Null) (field "failure" press)) (Left "step press failed")
   statusText <- field "settle" press >>= field "status" >>= asText
@@ -638,9 +643,9 @@ parseStep expected value = do
 -- Comparison.
 
 -- | Per route: the ordered setter calls, area-3 appends, byte-changing writes and transfers, the
--- final regions and each press's menu must be equal; getter calls are compared as the set of
--- (caller, arguments, result) over returned calls; settle statuses only where neither press
--- exhausted its budget.
+-- final regions and each press's menu must be equal; for each (caller, arguments) of a returned
+-- getter call, the results in call order with consecutive repeats collapsed must be equal; settle
+-- statuses only where neither press exhausted its budget.
 compareRoles :: Qualified -> Qualified -> Either Refusal [(RouteResult, RouteResult)]
 compareRoles retained owned = do
   unless (qualifiedRole retained == RetainedRole && qualifiedRole owned == OwnedRole) (Left (CohortDiffers "roles"))
@@ -651,11 +656,11 @@ compareRoles retained owned = do
     let name = resultRoute left
         differs refusal select = when (select left /= select right) (Left (refusal name))
         writeKey write = (effectAddress write, effectWidth write, effectBytes write)
-        getterSet result = S.fromList [(callReturn call, callArguments call, value) | call <- resultGetters result, Just value <- [callResult call]]
+        getterResults result = M.map (map NE.head . NE.group) (M.fromListWith (flip (++)) [((callReturn call, callArguments call), [value]) | call <- resultGetters result, Just value <- [callResult call]])
         pressAgrees (Press leftStatus leftMenu) (Press rightStatus rightMenu) = leftMenu == rightMenu
           && (leftStatus == rightStatus || BudgetExhausted `elem` [leftStatus, rightStatus])
     differs SetterSequenceDiffers resultSetters
-    differs GetterResultsDiffer getterSet
+    differs GetterResultsDiffer getterResults
     differs WriteSequenceDiffers (map writeKey . filter effectChanges . resultWrites)
     differs TransferSequenceDiffers resultTransfers
     differs AppendSequenceDiffers resultAppends
