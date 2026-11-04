@@ -7,6 +7,7 @@ haskell_library(
     srcs = [
         "Replacement/RtosOwnFirst/Artifact.hs",
         "Replacement/RtosOwnFirst/Frame.hs",
+        "Replacement/RtosOwnFirst/Pins.hs",
         "Replacement/RtosOwnFirst/Regions.hs",
     ],
     src_strip_prefix = ".",
