@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "R3C55jCsUu4X1UvzxqCKDtikeIxIbPFu8Wz4UQAlWQw=",
+        "bzlTransitiveDigest": "l4LxzlVmWm9upKOstmI+/UI2so9l+LKgbZ9WSXiHx88=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -585,6 +585,7 @@
                 "@@//emulation:fujimod-xm1/src/peer_witness_startup.rs": "//emulation:fujimod-xm1/src/peer_witness_startup.rs",
                 "@@//emulation:fujimod-xm1/src/peer_witness_vectors.rs": "//emulation:fujimod-xm1/src/peer_witness_vectors.rs",
                 "@@//emulation:fujimod-xm1/src/peer_witness_wait.rs": "//emulation:fujimod-xm1/src/peer_witness_wait.rs",
+                "@@//emulation:fujimod-xm1/src/power_hold.rs": "//emulation:fujimod-xm1/src/power_hold.rs",
                 "@@//emulation:fujimod-xm1/src/provenance.rs": "//emulation:fujimod-xm1/src/provenance.rs",
                 "@@//emulation:fujimod-xm1/src/provenance_main.rs": "//emulation:fujimod-xm1/src/provenance_main.rs",
                 "@@//emulation:fujimod-xm1/src/queue_boundary.rs": "//emulation:fujimod-xm1/src/queue_boundary.rs",

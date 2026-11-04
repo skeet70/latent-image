@@ -4,7 +4,7 @@
 use fujimod_xm1::guest::Press;
 use fujimod_xm1::machine::{KeyPulse, Machine};
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
-use fujimod_xm1::{peer_witness, witness};
+use fujimod_xm1::{peer_witness, power_hold::PowerHold, witness};
 use sha2::{Digest, Sha256};
 use std::{
     io::{BufRead, Write},
@@ -141,6 +141,10 @@ fn drive() -> Result<(), String> {
     let update = ValidatedUpdate(read(&arguments.update)?);
     let boot_rom = read(&arguments.boot_rom)?;
     std::fs::create_dir_all(&arguments.output).map_err(|e| format!("{}: {e}", arguments.output.display()))?;
+    let power_hold_log = std::env::var_os("XM1_POWER_HOLD_LOG").map(PathBuf::from);
+    if power_hold_log.is_some() && (arguments.witness.is_some() || arguments.peer_witness.is_some()) {
+        return Err("XM1_POWER_HOLD_LOG applies only to the route driver, not a witness".into());
+    }
     if let Some(path) = &arguments.peer_witness {
         let contract = peer_witness::PeerContract::parse(&read(path)?)?;
         let machine = contract.open_machine(&run_bytes, &update, &boot_rom)?;
@@ -156,8 +160,25 @@ fn drive() -> Result<(), String> {
         let contract = witness::WitnessContract::parse(&read(contract_path)?)?;
         return witness::run(machine, contract, &output);
     }
+    let mut power_hold = match &power_hold_log {
+        Some(path) => Some(PowerHold::begin(&machine, path)?),
+        None => None,
+    };
     let mut driver = Driver { machine, output, frames: 0 };
+    let result = interact(&mut driver, boot, &mut power_hold);
+    match (result, power_hold.map(|log| log.finish(&driver.machine))) {
+        (Err(route), Some(Err(log))) => Err(format!("{route}; power-hold log: {log}")),
+        (Err(route), _) => Err(route),
+        (Ok(()), Some(Err(log))) => Err(format!("power-hold log: {log}")),
+        (Ok(()), _) => Ok(()),
+    }
+}
+
+fn interact(driver: &mut Driver, boot: u64, power_hold: &mut Option<PowerHold>) -> Result<(), String> {
     driver.machine.run(boot);
+    if let Some(log) = power_hold {
+        log.stop(&driver.machine, "boot");
+    }
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     driver.print_state(&mut out)?;
@@ -167,7 +188,11 @@ fn drive() -> Result<(), String> {
         if line.trim().is_empty() {
             continue;
         }
-        match command(&mut driver, &line) {
+        let result = command(driver, &line);
+        if let (Some(log), Ok(true) | Err(_)) = (power_hold.as_mut(), &result) {
+            log.stop(&driver.machine, &line);
+        }
+        match result {
             Ok(false) => break,
             Ok(true) => driver.print_state(&mut out)?,
             Err(error) => writeln!(out, "{}", one_line(&error)).map_err(|e| e.to_string())?,
