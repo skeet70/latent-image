@@ -1,8 +1,8 @@
 # Owned menu engine, increment 3: event classes (#128)
 
-Status: design for increment 3 of [the engine design](owned-menu-engine-design.md), cleared by MenuEngineIncrement3DesignReview and built on the host: all 28 configs ran once, each gives an oracle case that passes, and each control fails the cases of its class (`replacement/README.md#owned-menu-engine-increment-3-128`, results below); guest pairs for the new classes are not run. Before this increment, increments 1 and 2 owned kind 4 and 5 row steps, kind `0xe` push, kind `0xf` pop and kind 1 open on wrapping nodes with queried availability (E-MENU-ENGINE-HOST-ORACLE-150, E-MENU-ENGINE-GUEST-PAIRS-150). This document takes each remaining class in value order and gives its stock branch, its reach on the no-install route, the `--menu-observe` config that records it, the negative control its oracle case must fail, and the engine and checker changes that own it.
+Status: design for increment 3 of [the engine design](owned-menu-engine-design.md), cleared by MenuEngineIncrement3DesignReview and built on the host: all 28 configs ran once, each gives an oracle case that passes, and each control fails cases of its class (`replacement/README.md#owned-menu-engine-increment-3-128`, results below); guest pairs for the new classes are not run. Before this increment, increments 1 and 2 owned kind 4 and 5 row steps, kind `0xe` push, kind `0xf` pop and kind 1 open on wrapping nodes with queried availability (E-MENU-ENGINE-HOST-ORACLE-150, E-MENU-ENGINE-GUEST-PAIRS-150). This document takes each remaining class in value order and gives its stock branch, its reach on the no-install route, the `--menu-observe` config that records it, the negative control its oracle case must fail, and the engine and checker changes that own it.
 
-Host results at 2c3ad14a (`private-data/scratch/ControllerStrategy/menu-engine/host-oracle-2c3ad14a/owner-test.log`): every case passes. `frame-seek-step` passes and `NoSeekStep` fails it, so the one-step seek of class 3 is owned, with the pre-check over every row's child. `frame-push-probe`'s stage entry is `(8, 0x7a, 1)` and its case passes, so class 12 is owned with class 4's change and `FrameNotifyId` fails it. No receipt contradicts the design. `GroupAsRowStep` cannot fail `group-left` and `group-right`, which land where a one-row step lands; it fails the other six group cases, including both wrap cases of kinds `0x45` and `0x46`. The extractor requires the `rollback-restore` site only for a window without a special post, so the increment-1 configs, whose windows are all accepted, keep extracting.
+Host results at 330a5c3c (`private-data/scratch/ControllerStrategy/menu-engine/host-oracle-330a5c3c/owner-test.log`): every case passes. `frame-seek-step` passes and `NoSeekStep` fails it, so the one-step seek of class 3 is owned, with the pre-check over every row's child. `frame-push-probe`'s stage entry is `(8, 0x7a, 1)` and its case passes, so kind 8 of class 12 is owned with class 4's change and `FrameNotifyId` fails it; kind 9 has no case and falls back. No receipt contradicts the design. `GroupAsRowStep` cannot fail `group-left` and `group-right`, which land where a one-row step lands; it fails the other six group cases, including both wrap cases of kinds `0x45` and `0x46`. The extractor requires the `rollback-restore` site only for a window without a special post, so the increment-1 configs, whose windows are all accepted, keep extracting. The oracle's limits are listed under "Limits of the oracle".
 
 Stock facts cite `private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c` (the export of the id5 image `private-data/analysis/x-m1-1.50/lz/id5.dis`), node facts the decoded tables `private-data/scratch/ControllerStrategy/menu-tables.json` (E-MODAL-MENU-TABLES-150), controller cells the manifest `private-data/scratch/ControllerManifest/manifest.json` (E-MODAL-CONTROLLER-MANIFEST-150), and reach the crawl-5 graph (E-MODAL-MENU-OKPATHS-150). **[INFERENCE]** marks what the evidence does not show directly.
 
@@ -296,6 +296,16 @@ Effect on the plan:
 - Shortened: the per-class runs stop being discovery. Each class still needs its oracle receipt, because every engine function it exercises is a draft. The case's purpose is byte qualification of the owned engine against stock, which a draft cannot give.
 - Used in this revision: the byte-verified controller 75 actions 7, 8, 25 and 44 fix class 3's extra words and give the one-step seek case; `ui_m75_event_dispatch` (a draft) maps command codes to controller 75 events for class 12, though not codes to keys.
 - Still possible: finding which actions enter controller 75 state 27 (class 13) and 42 and controller 74 state 27 (class 17) from the C, before any run.
+
+## Limits of the oracle
+
+A wrong engine still passes the cases in these places:
+
+- Group-move scroll: node `0x7a` is one 16-row page, so `ScrollRule::Keep` is indistinguishable from any other scroll rule in the group cases.
+- Property value: a value equal to the cursor's row index passes `close-property`, because the remember write just stored the cursor's token.
+- `group-left` and `group-right`: node `0x7a` has no hidden or disabled rows, so `0xbf9c1c`'s arms away from a group boundary land where a one-row step lands; the wrap cases cover the boundary arms.
+
+Kind 9 (push, move up, pop) has no receipt, so `apply` and the checker leave it to stock.
 
 ## Decisions
 
