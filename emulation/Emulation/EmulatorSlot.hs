@@ -9,6 +9,7 @@ module Emulation.EmulatorSlot
   , SlotPolicy (..)
   , slotPolicyFromEnvironment
   , reexecInSlot
+  , insideSlot
   ) where
 
 import Control.Concurrent (threadDelay)
@@ -51,6 +52,10 @@ memoryVariable = "XM1_EMULATOR_MEMORY_MAX"
 -- | The host budget: slot locks 1 and 2.
 hostSlots :: Int
 hostSlots = 2
+
+-- | Whether this process or an ancestor holds a slot.
+insideSlot :: IO Bool
+insideSlot = maybe False (const True) <$> lookupEnv slotVariable
 
 -- | All host slots at 8G by default; @XM1_EMULATOR_SLOTS@ (1..'hostSlots') and
 -- @XM1_EMULATOR_MEMORY_MAX@ override them.
