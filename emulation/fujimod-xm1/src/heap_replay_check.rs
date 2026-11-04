@@ -273,7 +273,7 @@ pub fn admit(inputs: &Inputs, tape: &Tape, case: &Case) -> Result<CaseSummary, F
         || tape.steps().len() == 8529, Failure::Tape)?;
     let spans = admit_code(inputs, tape, case)?;
     let mut previous_counts = if inputs.bindings.events.0 == "798b8dd160509598a2b01d4f37bb811794c3bd247028bcd7c48510fe528e6bab" {
-        Some([Instructions(26_185_192), Instructions(3_214_362)])
+        Some([Instructions(26_267_839), Instructions(3_215_110)])
     } else { None };
     for (index, call) in case.calls.iter().enumerate() {
         require(call.identity == CallId(index), Failure::Evidence)?;
