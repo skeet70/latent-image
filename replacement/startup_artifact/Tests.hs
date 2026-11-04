@@ -11,6 +11,7 @@ import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Bits (complement)
 import qualified Data.ByteString as B
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
+import Data.List (sort)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -27,6 +28,7 @@ import Replacement.StartupArtifact.Manifest
 import Replacement.StartupArtifact.Joins (JoinKind, registeredJoins)
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
+import qualified Replacement.StartupArtifact.Footprint.FirstStage as FirstStageFootprint
 import System.Environment (getArgs)
 
 data TestJoin = TestJoin deriving (Eq, Show)
@@ -41,6 +43,9 @@ check counter name ok = do
 
 refusal :: Either Refusal a -> Maybe Refusal
 refusal = either Just (const Nothing)
+
+refusal' :: Either Text a -> Bool
+refusal' = either (const True) (const False)
 
 at :: Target -> Word32 -> Word32 -> Span
 at target start end = Span target (Guest start) (Guest end)
@@ -92,10 +97,10 @@ boundaryOn name kind listed pc stop = Boundary name kind set (Pc pc) (Just (Pc (
 labelled :: PieceKind -> Text -> IO Label
 labelled kind name = either (fail . show) pure (label kind name)
 
--- | A schema-3 manifest with the given guard and pieces JSON.
+-- | A schema-4 manifest with the given guard and pieces JSON.
 manifestWith :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString
 manifestWith attach rules pieces =
-  "{\"schema\":3,\"guard\":{\"attach\":\"" <> attach <> "\",\"attach_state\":" <> rules <> "},\"pieces\":" <> pieces <> "}"
+  "{\"schema\":4,\"guard\":{\"attach\":\"" <> attach <> "\",\"attach_state\":" <> rules <> "},\"pieces\":" <> pieces <> "}"
 
 emptyRules :: B.ByteString
 emptyRules = "{\"peers\":[],\"carriers\":[],\"allowances\":[],\"registers\":[],\"board\":[],\"relations\":{}}"
@@ -286,7 +291,7 @@ main = do
   entryLabel <- labelled FirstStage "entry"
   readLabel' <- labelled FirstStage "cells"
   ok "labels outside kebab case refuse" (refusal (label FirstStage "Entry") == Just (CatalogRefused FirstStage (InvalidLabel "Entry")))
-  let catalogOf boundaries code rows = Catalog boundaries code (UnenumeratedWrites (Premise "p")) rows
+  let catalogOf boundaries code rows = Catalog boundaries code (EnumeratedWrites [] (Premised (Premise "p"))) rows
       withCatalog p catalog = p {pieceCatalog = catalog}
       firstCatalog = catalogOf [boundary entryLabel EntryBoundary Core0 0x6000 False] [CodeSpan 0x6000 0x6010] []
   ok "an entry outside owned code refuses"
@@ -376,7 +381,7 @@ main = do
   ok "a single-image piece with four linked images refuses"
     (unknownKey (parseManifest (manifestWith "first-stage/entry" emptyRules ("[{\"kind\":\"loader-orchestration-b\",\"inputs\":" <> startupInputs <> "}]"))))
   ok "an unknown top-level key refuses"
-    (refusal (parseManifest "{\"schema\":3,\"guard\":{\"attach\":\"first-stage/entry\",\"attach_state\":{}},\"pieces\":[],\"extra\":1}")
+    (refusal (parseManifest "{\"schema\":4,\"guard\":{\"attach\":\"first-stage/entry\",\"attach_state\":{}},\"pieces\":[],\"extra\":1}")
       == Just (ManifestRefused (ManifestUnknownKey "manifest.extra")))
   ok "an unknown input key refuses"
     (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\",\"dat\":\"c\"}}]"))
@@ -387,8 +392,11 @@ main = do
   ok "another schema refuses"
     (refusal (parseManifest "{\"schema\":2,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}") == Just (ManifestRefused ManifestSchemaUnsupported))
   ok "a manifest without attach_state refuses"
-    (refusal (parseManifest "{\"schema\":3,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}")
+    (refusal (parseManifest "{\"schema\":4,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}")
       == Just (ManifestRefused (ManifestMalformed "guard lacks attach_state")))
+  ok "a schema-3 manifest refuses"
+    (refusal (parseManifest "{\"schema\":3,\"guard\":{\"attach\":\"first-stage/entry\",\"attach_state\":{}},\"pieces\":[]}")
+      == Just (ManifestRefused ManifestSchemaUnsupported))
   ok "duplicate manifest kinds refuse"
     (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}},{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"c\",\"symbols\":\"d\"}}]"))
       == Just (DuplicatePieceKind FirstStage))
@@ -401,8 +409,11 @@ main = do
       == [ (at LoaderA 0x40000 0x40008, AdmissionRead, [Citation "a"])
          , (at LoaderA 0x40008 0x40010, AdmissionRead, [Citation "a", Citation "b"])
          , (at LoaderA 0x40010 0x40020, RuntimePremise, [Citation "b"]) ])
-  ok "unenumerated writes emit no allow ranges"
-    (allowRanges [] (UnenumeratedWrites (Premise "p")) == EmittedWrites [] "unenumerated" (Just "p"))
+  ok "the first stage's writes are enumerated on core 0 and premised"
+    (case allowRanges [at Record1 0x6000 0x64d8] (EnumeratedWrites FirstStageFootprint.writes (Premised FirstStageFootprint.writesPremise)) of
+      EmittedWrites ranges "premised" (Just _) -> ranges == sort FirstStageFootprint.writes
+        && all (\(WriteRange target _ _) -> target `elem` [CorePhysicalTarget Core0, TcmTarget Core0 InstructionBank]) ranges
+      _ -> False)
   ok "premised allow ranges are physical and exclude every owned carrier"
     (allowRanges [at LoaderA 0x40430 0x409ac]
       (EnumeratedWrites [WriteRange PhysicalTarget 0x40040000 0x40041000, WriteRange (TcmTarget Core0 DataBank) 0 0x100] (Premised (Premise "p")))
@@ -432,7 +443,7 @@ main = do
   tableLabel <- labelled PrimaryPublisher "table-a"
   let contractFirst = withCatalog first (Catalog
         [boundary entryLabel EntryBoundary Core0 0x6000 False, boundary handoffLabel SiteBoundary Core0 0x6008 True]
-        [CodeSpan 0x6000 0x6010] (UnenumeratedWrites (Premise "first-stage stores are not enumerated"))
+        [CodeSpan 0x6000 0x6010] (EnumeratedWrites [WriteRange (CorePhysicalTarget Core0) 0x4300 0x5280] (Premised (Premise "first-stage stores")))
         [CatalogRead readLabel' handoffLabel 0x40020000 8 Nothing])
       contractPublisher = withCatalog publisher (Catalog
         [boundary publisherEntry EntryBoundary Core0 0x40430 False, boundary returnLabel ReturnBoundary Core0 0x409e0 True]
@@ -459,6 +470,39 @@ main = do
       J.Object fields -> KeyMap.lookup "qualification" fields == Just (J.String "pending")
         && KeyMap.lookup "pending_joins" fields == Just (J.toJSON ["test-join" :: Text])
       _ -> False)
+
+  -- Declared mutations.
+  let linked words' = LinkedBytes (B.concat (map U.putWord32 words')) "00006000 00000000 T __first_stage_start\n"
+      atcmWrite = [0xe59f0004, 0xee090f31, 0xeafffffe, 0x70000011]
+      ownedAtcm = TcmRegionWrite Core0 InstructionBank (TcmRegister 0xffff8011) (TcmRegister 0x70000011) (Pc 0x6004)
+      writerOf mutation = case mutation of
+        TcmRegionWrite core bank previous next writer _ -> Just (core, bank, previous, next, writer)
+        DecoderCommit {} -> Nothing
+  ok "the first stage's TCM write is the unique ATCM MCR after its literal load"
+    (fmap writerOf (FirstStageFootprint.tcmRegionWrite (linked atcmWrite)) == Right (writerOf (ownedAtcm (Citation "c"))))
+  ok "a second TCM region write refuses"
+    (refusal' (FirstStageFootprint.tcmRegionWrite (linked (atcmWrite ++ [0xee090f11]))))
+  ok "a conditional MCR refuses"
+    (refusal' (FirstStageFootprint.tcmRegionWrite (linked [0xe59f0004, 0x0e090f31, 0xeafffffe, 0x70000011])))
+  ok "a literal other than 0x70000011 refuses"
+    (refusal' (FirstStageFootprint.tcmRegionWrite (linked [0xe59f0004, 0xee090f31, 0xeafffffe, 0x70000013])))
+  ok "an image without a TCM region write refuses"
+    (refusal' (FirstStageFootprint.tcmRegionWrite (linked [0xe59f0004, 0xe1a00000, 0xeafffffe, 0x70000011])))
+  let (retainedDeclared, composedDeclared) = declaredMutations contracted
+      writers = map (\mutation -> case mutation of
+        TcmRegionWrite core _ _ _ (Pc writer) _ -> (coreIndex core, writer)
+        DecoderCommit _ _ _ core (Pc writer) _ -> (coreIndex core, writer))
+  ok "the retained role declares the ROM commit and both stock ATCM writes"
+    (writers retainedDeclared == [(0, 0x800022a8), (0, 0x18c4), (1, 0x118c4)])
+  ok "a first stage without its TCM write declares none in the composed role"
+    (writers composedDeclared == [(0, 0x800022a8), (1, 0x118c4)])
+  withOwned <- either (fail . show) pure
+    (composeWith [observed] [contractFirst {pieceFacts = FirstStageFacts (Pc 0x6000) (linked atcmWrite)}, contractPublisher])
+  ok "the composed role takes the first stage's ATCM write in place of stock record 1's"
+    (writers (snd (declaredMutations withOwned)) == [(0, 0x800022a8), (0, 0x6004), (1, 0x118c4)])
+  ok "a composition without a first stage keeps stock record 1's ATCM write"
+    (either (const False) (\composition -> writers (snd (declaredMutations composition)) == [(0, 0x800022a8), (0, 0x18c4), (1, 0x118c4)])
+      (composeWith [] [contractPublisher]))
 
   -- Attach-state rules and their contract form.
   let firstCarrier = at Record1 0x6000 0x6010

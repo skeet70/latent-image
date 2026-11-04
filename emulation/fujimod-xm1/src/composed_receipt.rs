@@ -5,32 +5,34 @@ use crate::attach_state::{
     SpaceSpan, StackCheck, UnusedEntry,
 };
 use crate::composed_catalog::{
-    BoundaryKind, Compare, Contract, Core, Label, PiecePolicy, PieceKind, Role, Sha256, Target, UnconfinedCode,
+    BoundaryKind, Compare, Contract, Core, Declaration, Label, PiecePolicy, PieceKind, Role, Sha256, Target,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(try_from = "u32", into = "u32")]
-pub struct SchemaThree;
+pub struct SchemaFour;
 
-impl TryFrom<u32> for SchemaThree {
+impl TryFrom<u32> for SchemaFour {
     type Error = String;
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        if value == 3 { Ok(Self) } else { Err("schema must be 3".into()) }
+        if value == 4 { Ok(Self) } else { Err("schema must be 4".into()) }
     }
 }
 
-impl From<SchemaThree> for u32 {
-    fn from(_: SchemaThree) -> Self { 3 }
+impl From<SchemaFour> for u32 {
+    fn from(_: SchemaFour) -> Self { 4 }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReceiptKind {
     ComposedStartupReceipt,
-    /// An observation with a pre-attach diagnostic watch; not evidence.
+    /// An observation with diagnostic classes; not evidence.
     ComposedStartupDiagnostic,
+    /// The mutation census from reset to the attach-state boundary; not evidence.
+    ComposedStartupMutationCensus,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -283,17 +285,42 @@ pub fn carrier_writes(classes: &[(u64, u64)], owned_code: &[(u64, u64)], rows: &
     Ok(summaries)
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Admission {
+    pub core: Core,
+    /// The writer core's entered instruction count.
+    pub instructions: Option<u64>,
+}
+
+/// One contract declaration of the role and where the guard admitted it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeclaredUse {
+    pub declaration: Declaration,
+    pub admitted: Option<Admission>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GuardObservation {
-    pub attach_instructions: u64,
+    /// The guard attaches before the first instruction; these are the counts at the attach-state boundary.
+    pub boundary_instructions: u64,
+    /// Watch rows recorded before the boundary.
+    pub boundary_row: u64,
     /// Instruction count when the watch and guard ended, after the menu route.
     pub end_instructions: u64,
     pub status: GuardState,
     /// `Debug` form of the guard's first `GuardFault`.
     pub first_fault: Option<String>,
     pub write_checks: u64,
+    /// Refused mutations.
     pub mutation_attempts: u64,
+    pub mutations_admitted: u64,
+    /// The role's declarations as admitted at the boundary.
+    pub declared: Vec<DeclaredUse>,
+    /// Carrier writes before the boundary; data, except `owned_code_writes`.
+    pub carrier_writes_before_boundary: Vec<CarrierWrites>,
     pub carrier_writes: Vec<CarrierWrites>,
     pub watch_violation: Option<String>,
     pub watch_end_error: Option<String>,
@@ -320,18 +347,18 @@ pub struct MenuObservation {
 #[serde(deny_unknown_fields)]
 pub struct RecordedPolicy {
     pub policy: PiecePolicy,
+    pub checks_before_boundary: u64,
     pub checks: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Receipt {
-    pub schema: SchemaThree,
+    pub schema: SchemaFour,
     pub kind: ReceiptKind,
     pub role: Role,
     pub identity: Identity,
     pub policies: Vec<RecordedPolicy>,
-    pub unconfined: Vec<UnconfinedCode>,
     pub outcome: Outcome,
     pub error: Option<String>,
     pub machine_failure: Option<String>,
@@ -340,11 +367,9 @@ pub struct Receipt {
     pub counts: Vec<LabelCount>,
     /// Hits on a core outside the boundary's declared cores; they carry no row and no count.
     pub off_core: Vec<LabelCount>,
-    /// Owned entry and site boundary occurrences before the guard attached.
-    pub unguarded: Vec<LabelCount>,
-    /// Captured at the attach stop, before the guard attached.
+    /// Captured at the attach-state boundary.
     pub attach: Option<AttachState>,
-    /// Timer and LZ accesses and log writes from reset to the attach stop.
+    /// Timer and LZ accesses and log writes from reset to the attach-state boundary.
     pub attach_sources: Option<AttachSources>,
     pub guard: Option<GuardObservation>,
     pub menu: MenuObservation,
@@ -375,6 +400,10 @@ pub enum Difference {
     Identity { role: Role, field: IdentityField },
     Menu { role: Role },
     Guard { role: Role },
+    /// The receipt's declarations differ from the contract's for the role.
+    DeclarationList { role: Role },
+    /// A declaration the guard had not admitted by the boundary.
+    DeclarationUnused { role: Role, index: usize },
     CarrierWrites { start: u64, end: u64, field: CarrierField },
     /// A composed-role CPU write from owned code landed in a carrier.
     OwnedCodeWrite { start: u64, end: u64, first: Option<CarrierWrite> },
@@ -409,16 +438,33 @@ pub enum VerdictKind {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Verdict {
-    pub schema: SchemaThree,
+    pub schema: SchemaFour,
     pub verdict: VerdictKind,
     pub first_difference: Option<Difference>,
     /// From the composed receipt.
     pub policies: Vec<RecordedPolicy>,
-    pub unconfined: Vec<UnconfinedCode>,
-    pub unguarded: Vec<LabelCount>,
+    pub declared: RoleDeclarations,
     pub attach: Option<AttachVerdict>,
     /// Empty unless the attach-state comparison ran and refused.
     pub attach_differences: AttachDifferences,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct RoleDeclarations {
+    pub retained: Vec<DeclaredUse>,
+    pub composed: Vec<DeclaredUse>,
+}
+
+/// The recorded declarations must be the contract's for the role, each admitted by the boundary.
+fn declarations(contract: &Contract, role: Role, guard: &GuardObservation) -> Result<(), Difference> {
+    let recorded: Vec<&Declaration> = guard.declared.iter().map(|used| &used.declaration).collect();
+    if !recorded.iter().copied().eq(contract.declared(role)) {
+        return Err(Difference::DeclarationList { role });
+    }
+    match guard.declared.iter().position(|used| used.admitted.is_none()) {
+        Some(index) => Err(Difference::DeclarationUnused { role, index }),
+        None => Ok(()),
+    }
 }
 
 fn identity(contract: &Contract, digest: &Sha256, receipt: &Receipt, role: Role) -> Result<(), Difference> {
@@ -576,6 +622,8 @@ fn differences(contract: &Contract, digest: &Sha256, retained: &Receipt, owned: 
     }
     let clean = |role, receipt: &Receipt| receipt.guard.clone().filter(GuardObservation::clean).ok_or(Difference::Guard { role });
     let (retained_guard, owned_guard) = (clean(Role::Retained, retained)?, clean(Role::Composed, owned)?);
+    declarations(contract, Role::Retained, &retained_guard)?;
+    declarations(contract, Role::Composed, &owned_guard)?;
     for (role, receipt) in [(Role::Retained, retained), (Role::Composed, owned)] {
         if let Some(hit) = receipt.off_core.first() {
             return Err(Difference::OffCore { label: hit.label.clone(), core: hit.core, role }.into());
@@ -591,6 +639,11 @@ fn differences(contract: &Contract, digest: &Sha256, retained: &Receipt, owned: 
         &RoleCapture { role: Role::Retained, state: retained_state, rows: &retained.rows, directory: directories.retained, sources: retained.attach_sources.as_ref() },
         &RoleCapture { role: Role::Composed, state: owned_state, rows: &owned.rows, directory: directories.owned, sources: owned.attach_sources.as_ref() },
     )?;
+    if let Some(carrier) = owned_guard.carrier_writes_before_boundary.iter().find(|carrier| carrier.owned_code_writes > 0) {
+        return Err(Difference::OwnedCodeWrite {
+            start: carrier.start, end: carrier.end, first: carrier.first_owned_code_writes.first().cloned(),
+        }.into());
+    }
     compare_carriers(&retained_guard.carrier_writes, &owned_guard.carrier_writes)?;
     compare_rows(contract, retained, owned)?;
     compare_presence(contract, retained, owned)?;
@@ -606,12 +659,14 @@ pub fn compare(contract: &Contract, digest: &Sha256, retained: &Receipt, owned: 
         Err(refusal) => (None, Some(refusal.first), refusal.attach),
     };
     Verdict {
-        schema: SchemaThree,
+        schema: SchemaFour,
         verdict: if first_difference.is_none() { VerdictKind::Equal } else { VerdictKind::Different },
         first_difference,
         policies: owned.policies.clone(),
-        unconfined: owned.unconfined.clone(),
-        unguarded: owned.unguarded.clone(),
+        declared: RoleDeclarations {
+            retained: retained.guard.as_ref().map_or_else(Vec::new, |guard| guard.declared.clone()),
+            composed: owned.guard.as_ref().map_or_else(Vec::new, |guard| guard.declared.clone()),
+        },
         attach,
         attach_differences,
     }

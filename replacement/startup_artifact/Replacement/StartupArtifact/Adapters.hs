@@ -119,6 +119,7 @@ deriveFirstStage source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes))
   twice <- limit kind 2
   primaryCore <- coreSet kind [Core0]
   code <- codeOf kind load (load + fromIntegral (B.length bin))
+  _ <- either (Left . AdapterRefused kind) Right (FirstStageFootprint.tcmRegionWrite (LinkedBytes bin symbolBytes))
   let entry = F.armEntryAddress (F.planEntry plan)
       boundaries =
         -- Stock record-1 entry 0x1800: emulation/Emulation/LoaderPrefixWitness.hs:212-213.
@@ -126,7 +127,7 @@ deriveFirstStage source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes))
         -- Stock handoff 0x183c: replacement/first_stage/entry.S:86.
         , Boundary handoffLabel SiteBoundary primaryCore (Pc handoff) (Just (Pc 0x183c)) False CompareSequence twice Nothing
         ]
-      catalog = Catalog boundaries [code] (UnenumeratedWrites (Premise "first-stage stores are not enumerated")) []
+      catalog = Catalog boundaries [code] (EnumeratedWrites FirstStageFootprint.writes (Premised FirstStageFootprint.writesPremise)) []
       declaration = PieceDeclaration kind (Set.singleton FirstStageArea) carriers FirstStageFootprint.footprint
         FirstStageFootprint.premises catalog (FirstStageFacts (Pc entry) (LinkedBytes bin symbolBytes))
   derivePiece source declaration (StagedOutput staged Nothing Nothing)
@@ -208,8 +209,9 @@ tableB, tableBBytes :: Word32
 tableB = 0x400ddaa0
 tableBBytes = 0x162c
 
--- | Destinations of record-2 code that runs after the guard attaches: the core-1
--- prefix workspace clear and interface initializer, and the critical-pair bodies.
+-- | Destinations of record-2 code: the core-1 secondary, prefix and its
+-- workspace clear before the attach-state boundary, then the interface
+-- initializer and the critical-pair bodies.
 record2Destinations :: [WriteRange]
 record2Destinations =
   [ WriteRange PhysicalTarget 0xa0f824 0xa0f828
@@ -218,7 +220,14 @@ record2Destinations =
   , WriteRange (CorePhysicalTarget Core1) 0xddaa0 0xf3420
   , WriteRange (TcmTarget Core0 InstructionBank) 0 0x2000
   , WriteRange (TcmTarget Core1 InstructionBank) 0 0x2000
-  ]
+  ] ++ map (\(start, end) -> WriteRange (CorePhysicalTarget Core1) start end)
+  [ (0x14c60, 0x14c64), (0x14c68, 0x14c6c), (0x14c80, 0x14ca0)
+  , (0x20004, 0x20008)
+  , (0xa0080, 0xa00c4), (0xa0140, 0xa0148)
+  , (0x3fff0024, 0x3fff0040)
+  ] ++ [ WriteRange (CorePhysicalTarget Core1) register (register + 4)
+       | register <- [ 0xfff8900c, 0xfff89080, 0xfff89084, 0xfff89090, 0xfff89344, 0xfff8934c, 0xfff89350, 0xfff89358
+                     , 0xfffb3060, 0xfffb3100, 0xfffb3120, 0xfffb3140, 0xfffb3180, 0xfffb343c, 0xfffb383c ] ]
 
 record2Premise :: T.Text
 record2Premise = T.intercalate "; "
@@ -229,6 +238,12 @@ record2Premise = T.intercalate "; "
   , "initializer scratch [0xf33f0,0xf3410) lies inside the B boot stack (InterfaceInitializer.hs:768)"
   , "ATCM [0,0x2000) on each core: IRQ-context callers and core-1 prefix frames (baseline.md:927,1688)"
   , "every caller of the critical pair runs on one of these stacks [INFERENCE]; stock callees run under the default policy"
+  , "before the boundary on core 1: log pointer 0x40014c60 and core-1 index 0x40014c68, publication globals [0x14c80,0x14ca0) (replacement/secondary_stage/src.rs:78-80,115-117,133,245-246; adapter.rs:10-11,18-20)"
+  , "secondary peer cell 0x40020004 (src.rs:230-231)"
+  , "core-1 log slots [0x400a0080,0x400a00c4): canonical index 0x10 (record-2 word 0x14c68) advancing by 2, slot above 31 returns (src.rs:119-134); its last word 0x400a00c0 is also the companion sample (src.rs:202-205, adapter.rs:28), as in stock; the window stops below the completion word 0x400a00c4"
+  , "companion power and status [0x400a0140,0x400a0148) (src.rs:211-216; adapter.rs:33-34)"
+  , "loader-B vector slots 0xffff0024..0xffff003f through the core-1 view of secondary SRAM, physical [0x3fff0024,0x3fff0040) (replacement/loader_prefix/src.rs:44-49,69-82; adapter.rs:9-15)"
+  , "companion power registers 0xfff8900c, 0xfff89080, 0xfff89084, 0xfff89090, 0xfff89344, 0xfff8934c, 0xfff89350, 0xfff89358 and 0xfffb3060, 0xfffb3100, 0xfffb3120, 0xfffb3140, 0xfffb3180, 0xfffb343c, 0xfffb383c (secondary_stage/src.rs:164-195)"
   ]
 
 -- | Emulation.PrimaryInitializerArtifact over //replacement/primary_initializer:primary-initializer-image.

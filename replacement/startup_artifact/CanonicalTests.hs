@@ -313,7 +313,7 @@ main = do
           , logSite "first-stage-core0" "composed" 0 (owned "first-stage"), logSite "first-stage-core1" "composed" 1 (owned "first-stage")
           , logSite "record2-core0" "composed" 0 (owned "record2-link"), logSite "record2-core1" "composed" 1 (owned "record2-link") ]
         manifest = J.object
-          [ "schema" J..= (3 :: Int)
+          [ "schema" J..= (4 :: Int)
           , "guard" J..= J.object ["attach" J..= ("primary-publisher/entry-core0" :: Text), "attach_state" J..= attachState]
           , "pieces" J..= [ J.object ["kind" J..= ("first-stage" :: Text), "inputs" J..= J.object ["image" J..= firstBin, "symbols" J..= firstSymbols]]
                           , J.object ["kind" J..= ("record2-link" :: Text), "inputs" J..= J.object ["image" J..= pairBin, "symbols" J..= pairSymbols]]
@@ -373,13 +373,32 @@ main = do
         number :: Int -> Maybe J.Value
         number = Just . J.toJSON
         physicalOn core start end = (Just (J.String "physical"), core, number start, number end)
-    ok "the record-2 link enumerates its post-attach destinations per core"
+    ok "the record-2 link enumerates its destinations per core, pre-boundary core-1 stores included"
       ([field "basis" writes | writes <- writesOf "record2-link"] == [Just (J.String "premised")]
-        && allowOf "record2-link" ==
+        && all (`elem` allowOf "record2-link")
           [ physicalOn (Just J.Null) 0xa0f824 0xa0f828, physicalOn (Just J.Null) 0xa10200 0xa5b200
           , physicalOn (number 0) 0x62c54 0x63460, physicalOn (number 1) 0xddaa0 0xf3420
-          , (Just (J.String "tcm"), number 0, number 0, number 0x2000), (Just (J.String "tcm"), number 1, number 0, number 0x2000) ])
-    ok "only the first stage stays unenumerated" ([field "basis" writes | writes <- writesOf "first-stage"] == [Just (J.String "unenumerated")])
+          , (Just (J.String "tcm"), number 0, number 0, number 0x2000), (Just (J.String "tcm"), number 1, number 0, number 0x2000)
+          , physicalOn (number 1) 0x14c60 0x14c64, physicalOn (number 1) 0x14c80 0x14ca0, physicalOn (number 1) 0x20004 0x20008
+          , physicalOn (number 1) 0xa0080 0xa00c4, physicalOn (number 1) 0x3fff0024 0x3fff0040, physicalOn (number 1) 0xfffb383c 0xfffb3840 ]
+        && length (allowOf "record2-link") == 28)
+    ok "the first stage's writes are premised and enumerated on core 0"
+      ([field "basis" writes | writes <- writesOf "first-stage"] == [Just (J.String "premised")]
+        && length (allowOf "first-stage") == 14
+        && all (\(_, core, _, _) -> core == number 0) (allowOf "first-stage"))
+    let declaredOf role = case field "guard" contract >>= field "declared" >>= field role of
+          Just (J.Array rows) -> [(field "kind" row, field "core" row, field "writer" row) | row <- V.toList rows]
+          _ -> []
+        tcmAt core writer = (Just (J.String "tcm-region"), number core, number writer)
+        romCommit = (Just (J.String "decoder-commit"), number 0, number 0x800022a8)
+    ok "the retained role declares the ROM commit and both stock ATCM writes"
+      (declaredOf "retained" == [romCommit, tcmAt 0 0x18c4, tcmAt 1 0x118c4])
+    ok "the composed role declares the first stage's own ATCM write"
+      (declaredOf "composed" == [romCommit, tcmAt 0 0x605c, tcmAt 1 0x118c4])
+    let wordOf target address = U.word32At (targetOf targets target) (fromIntegral (address - targetBase target))
+    ok "the stock ATCM declarations name each record's mcr p15,0,r1,c9,c1,1 after its literal 0x70000000"
+      (and [ wordOf target writer == 0xee091f31 && wordOf target literal == 0x70000000
+           | (target, writer, literal) <- [(Record1, 0x18c4, 0x1acc), (Record2, 0x118c4, 0x11acc)] ])
     composedLoaderA <- H.readRegular (16*1024*1024) (output </> "loader-a.bin")
     canonicalDigest <- sha256Text (B.take 0x57c (B.drop 0x430 (targetOf targets LoaderA)))
     composedCarrierDigest <- sha256Text (B.take 0x57c (B.drop 0x430 composedLoaderA))
