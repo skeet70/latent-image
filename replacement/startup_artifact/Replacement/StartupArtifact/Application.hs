@@ -83,7 +83,7 @@ sites = [(Pc pc, kind) | (kind, pcs) <- table, pc <- pcs]
       , (AdapterSite, [0xdb5124, 0xdb515c, 0xdb5170, 0xdb5174, 0xdb5178, 0xdb51d0])
       , (UilibSite, [0x11090a4, 0x1109130, 0x1108a2c, 0x110f9d8])
       , (SharedSite, [0x725214])
-      , (PublicationSite, [0x6a9840, 0x6a9844, 0x6a9934])
+      , (PublicationSite, [0x73b4b0, 0x73b558])
       , (InitializerSite, [0x69d2e0, 0x69d2e4, 0xd985a4, 0xd985c8, 0xd985d8])
       ]
 

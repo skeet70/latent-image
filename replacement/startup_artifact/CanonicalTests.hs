@@ -327,7 +327,7 @@ main = do
         | pc >= targetBase Image5 = U.word32At (targetOf targets Image5) (fromIntegral (pc - targetBase Image5))
         | otherwise = U.word32At (targetOf targets Image4) (fromIntegral (pc - targetBase Image4))
   ok "on J3 every application site and queue site holds the canonical word"
-    (length (applicationSites j3Section) == 57 && length (applicationQueueSites j3Section) == 9
+    (length (applicationSites j3Section) == 56 && length (applicationQueueSites j3Section) == 9
       && all (\site -> siteWord site == CodeWord (canonicalWord (sitePc site))) (applicationSites j3Section)
       && all (\site -> queueWord site == CodeWord (canonicalWord (queuePc site))) (applicationQueueSites j3Section))
   pumpDigest <- Sha256Hex <$> sha256Text (B.take 0x20 (B.drop (0xbfbd20 - 0xbf1a00) (targetOf targets Image5)))

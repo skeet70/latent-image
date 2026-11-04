@@ -3,9 +3,10 @@
 use super::checks::{locate, ApplicationCheck, FIRST_SETTLED, HANDBACK, KERNEL_RECEIVE, PUMP_CALL, RELEASE_CALL, TASK1_RESET};
 use super::planes;
 use super::readiness::KERNEL_RETURN;
+use super::checks::PairField;
 use super::{
-    read_evidence, view_word, write_evidence, ApplicationWrite, CoreIdentity, Evidence, InputIndex, Instructions, Sample, SampleIndex, SideFile,
-    ReadinessIndex, SiteRef,
+    read_evidence, view_word, write_evidence, ApplicationWrite, CoreIdentity, Evidence, InputIndex, Instructions, RawView, Sample, SampleIndex,
+    SideFile, ReadinessIndex, SiteRef, UiWorkViews, MENU_LEVEL, PRIORITY_COUNT,
 };
 use crate::composed_catalog::{physical_address as physical, Application, CodeLabel, Contract, Core, Sha256};
 use crate::composed_receipt::{compare, CaptureDirectories, Difference, Receipt, VerdictKind, WriteKind, RECEIPT_FILE};
@@ -33,6 +34,8 @@ pub enum Control {
     PacketCopy,
     FrozenStackBound,
     ReadinessUnstable,
+    UiWorkPending,
+    FirstReadyMenu,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -40,6 +43,7 @@ pub enum Control {
 pub enum Expected {
     Identity,
     Application(ApplicationCheck),
+    Pair(PairField),
 }
 
 impl Expected {
@@ -47,8 +51,24 @@ impl Expected {
         match self {
             Self::Identity => matches!(difference, Difference::Identity { .. }),
             Self::Application(check) => matches!(difference, Difference::Application { refusal, .. } if refusal.check == check),
+            Self::Pair(field) => matches!(difference, Difference::ApplicationPair { field: actual } if *actual == field),
         }
     }
+}
+
+/// Physically and in every spelling.
+fn set_word(view: &mut RawView, address: u32, value: u32) -> Result<(), String> {
+    let offset = physical(address).checked_sub(physical(view.address.0)).map(|offset| offset as usize)
+        .filter(|offset| offset % 4 == 0 && offset + 4 <= view.physical.0.len()).ok_or("the view does not hold the word")?;
+    for bytes in std::iter::once(&mut view.physical).chain(view.spellings.iter_mut().flatten()) {
+        bytes.0[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    Ok(())
+}
+
+fn first_ready_ui<'a>(receipt: &Receipt, evidence: &'a mut Evidence) -> Result<&'a mut UiWorkViews, String> {
+    let first = receipt.application.as_ref().and_then(|section| section.first_ready).ok_or("no first-ready")?;
+    Ok(&mut evidence.readiness.get_mut(first.readiness.0 as usize).ok_or("the first-ready sample is absent")?.ui)
 }
 
 fn stock_of(application: &Application, sample: &Sample) -> Option<u32> { locate(application, sample).map(|(stock, _)| stock) }
@@ -107,10 +127,10 @@ fn insert_sample(receipt: &mut Receipt, evidence: &mut Evidence, at: usize, samp
 }
 
 impl Control {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 17] = [
         Self::CanonicalInput, Self::StopClock, Self::RawAlias, Self::KernelIdentity, Self::MissingInitialization, Self::NormalizerResult,
         Self::LostCalleeSave, Self::RelabelledOlderSample, Self::RenderReadiness, Self::TruncatedPlane, Self::WatchCoverage, Self::PublishedWrite,
-        Self::PacketCopy, Self::FrozenStackBound, Self::ReadinessUnstable,
+        Self::PacketCopy, Self::FrozenStackBound, Self::ReadinessUnstable, Self::UiWorkPending, Self::FirstReadyMenu,
     ];
 
     pub fn name(self) -> &'static str {
@@ -130,6 +150,8 @@ impl Control {
             Self::PacketCopy => "packet-copy",
             Self::FrozenStackBound => "frozen-stack-bound",
             Self::ReadinessUnstable => "readiness-unstable",
+            Self::UiWorkPending => "ui-work-pending",
+            Self::FirstReadyMenu => "first-ready-menu",
         }
     }
 
@@ -137,6 +159,7 @@ impl Control {
         use ApplicationCheck as Check;
         Expected::Application(match self {
             Self::CanonicalInput => return Expected::Identity,
+            Self::FirstReadyMenu => return Expected::Pair(PairField::ReadinessMenu),
             Self::StopClock | Self::RawAlias => Check::Mapping,
             Self::KernelIdentity => Check::TaskContext,
             Self::MissingInitialization => Check::Initializer,
@@ -147,20 +170,33 @@ impl Control {
             Self::PublishedWrite => Check::CodeIdentity,
             Self::PacketCopy => Check::QueueProvenance,
             Self::FrozenStackBound => Check::StackContext,
-            Self::ReadinessUnstable => Check::Readiness,
+            Self::ReadinessUnstable | Self::UiWorkPending => Check::Readiness,
         })
     }
 
     /// Mutates one role's receipt and evidence, and its side files in `directory`, which must be that role's copy.
     pub fn apply(self, application: &Application, receipt: &mut Receipt, evidence: &mut Evidence, directory: &Path) -> Result<(), String> {
-        if self == Self::CanonicalInput {
-            receipt.identity.update = Sha256::of(b"canonical-input control");
-            return Ok(());
+        match self {
+            Self::CanonicalInput => {
+                receipt.identity.update = Sha256::of(b"canonical-input control");
+                return Ok(());
+            }
+            Self::UiWorkPending => {
+                let ui = first_ready_ui(receipt, evidence)?;
+                let view = ui.words.iter_mut().find(|view| physical(view.address.0) == PRIORITY_COUNT).ok_or("no priority-queue count view")?;
+                return set_word(view, PRIORITY_COUNT, 1);
+            }
+            Self::FirstReadyMenu => {
+                let ui = first_ready_ui(receipt, evidence)?;
+                let level = ui.depth.word(MENU_LEVEL).ok_or("no level word")?;
+                return set_word(&mut ui.depth, MENU_LEVEL, level.wrapping_add(1));
+            }
+            _ => {}
         }
         let section = receipt.application.as_mut().ok_or("the receipt has no application section")?;
         let samples = &mut evidence.samples;
         match self {
-            Self::CanonicalInput => {}
+            Self::CanonicalInput | Self::UiWorkPending | Self::FirstReadyMenu => {}
             Self::StopClock => samples.first_mut().ok_or("no sample")?.resume.0 += 1,
             Self::RawAlias => *samples.first_mut().ok_or("no sample")?.code.spellings[1][1].0.first_mut().ok_or("an empty view")? ^= 1,
             Self::KernelIdentity => {

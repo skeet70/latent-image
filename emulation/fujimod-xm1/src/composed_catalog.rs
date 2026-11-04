@@ -1257,7 +1257,7 @@ impl Contract {
             .map(|range| WatchRange { start: range.span.start, end: range.span.end, kinds: WatchKinds::WRITES }).collect();
         let application = match (raw.schema, raw.application) {
             (Schema::Four, None) => None,
-            (Schema::Five, Some(raw)) => Some(application(raw, &pieces, &boundaries).map_err(CatalogRefusal::Application)?),
+            (Schema::Five, Some(raw)) => Some(application(raw, &pieces).map_err(CatalogRefusal::Application)?),
             _ => return Err(CatalogRefusal::Application(ApplicationProblem::Section)),
         };
         let application_classes = application.as_ref().map_or(0, |application| application.code.len());
@@ -1526,7 +1526,7 @@ impl SiteKind {
 }
 
 /// Every site a schema-5 contract lists, by stock PC.
-pub const APPLICATION_SITES: [(u32, SiteKind); 57] = {
+pub const APPLICATION_SITES: [(u32, SiteKind); 56] = {
     use SiteKind::{Adapter, HookTarget, Initializer, Publication, Pump, Shared, Task1, Uilib};
     [
         (0xc22f60, Task1), (0xc22f64, Task1), (0xc22f6c, Task1), (0xc22f70, Task1), (0xc22f74, Task1), (0xc22f84, Task1),
@@ -1541,7 +1541,7 @@ pub const APPLICATION_SITES: [(u32, SiteKind); 57] = {
         (0xdb51d0, Adapter),
         (0x725214, Shared),
         (0x11090a4, Uilib), (0x1109130, Uilib), (0x1108a2c, Uilib), (0x110f9d8, Uilib),
-        (0x6a9840, Publication), (0x6a9844, Publication), (0x6a9934, Publication),
+        (0x73b4b0, Publication), (0x73b558, Publication),
         (0x69d2e0, Initializer), (0x69d2e4, Initializer), (0xd985a4, Initializer), (0xd985c8, Initializer),
         (0xd985d8, Initializer),
     ]
@@ -1723,8 +1723,6 @@ pub enum ApplicationProblem {
     QueueSites,
     /// A composed-role site inside a piece's owned code.
     SiteInPiece(Pc),
-    /// A site at a contract boundary's PC in the same role.
-    SiteCollision(Pc),
     TaskLayouts,
     CodeRanges,
     Readiness,
@@ -1761,7 +1759,7 @@ fn pump_profile(sites: &[ApplicationSite]) -> Option<PumpProfile> {
     (targets == hooks && continued).then_some(PumpProfile { entry, calls, returned: returned? })
 }
 
-fn application(raw: RawApplication, pieces: &[Piece], boundaries: &BTreeMap<Label, Boundary>) -> Result<Application, ApplicationProblem> {
+fn application(raw: RawApplication, pieces: &[Piece]) -> Result<Application, ApplicationProblem> {
     if let Some(site) = raw.sites.iter().find(|site| site.label != SiteLabel::of(site.retained_pc)) {
         return Err(ApplicationProblem::SiteLabel(site.retained_pc));
     }
@@ -1781,13 +1779,6 @@ fn application(raw: RawApplication, pieces: &[Piece], boundaries: &BTreeMap<Labe
     let composed = raw.sites.iter().map(|site| site.composed_pc).chain(raw.queue_sites.iter().map(|site| site.pc));
     if let Some(pc) = composed.into_iter().find(|pc| owned.iter().any(|span| span.holds(u64::from(physical_address(pc.0))))) {
         return Err(ApplicationProblem::SiteInPiece(pc));
-    }
-    for role in [Role::Retained, Role::Composed] {
-        let armed: BTreeSet<u32> = boundaries.values().filter_map(|boundary| boundary.pc(role)).map(|pc| physical_address(pc.0)).collect();
-        let mut sites = raw.sites.iter().map(|site| site.pc(role)).chain(raw.queue_sites.iter().map(|site| site.pc));
-        if let Some(pc) = sites.find(|pc| armed.contains(&physical_address(pc.0))) {
-            return Err(ApplicationProblem::SiteCollision(pc));
-        }
     }
     let task_layouts = match raw.task_layouts[..] {
         [a, b] if a.domain == Domain::A && b.domain == Domain::B => [a, b],

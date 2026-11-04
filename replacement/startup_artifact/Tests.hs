@@ -714,7 +714,7 @@ main = do
           && map (member "word") (rowsOf "queue_sites" "queue-725318" value) == [number 0x5a5a5a5a])
       ok "the section lists every pump site and the publication and initializer sites"
         (case member "sites" value of
-          J.Array rows -> V.length rows == 57 && all (\name -> length (rowsOf "sites" name value) == 1) ["app-6a9934", "app-d985d8", "app-69d2e0", "app-110f9d8"]
+          J.Array rows -> V.length rows == 56 && all (\name -> length (rowsOf "sites" name value) == 1) ["app-73b4b0", "app-73b558", "app-d985d8", "app-69d2e0", "app-110f9d8"]
           _ -> False)
     Left problem -> fail (show problem)
   ok "a site inside a piece's carrier refuses"

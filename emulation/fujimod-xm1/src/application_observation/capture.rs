@@ -9,10 +9,10 @@ use super::{
     hex_word, ApplicationReceipt, ApplicationWrite, ByteView, CodeObservation, CoreIdentity, DynamicTarget, EvidenceWriter, GraphicsState,
     InputIndex, InputPurpose, Menu, Publication, RawView, ReadinessIndex, ReadinessKind, ReadinessSample, Registers, RenderViews, RouteInput,
     Sample, SampleIndex, ScopeObservation, SideFile, SiteRef, Task1, TaskTableViews, VisibleCapture, ALIAS, EVIDENCE, TASK_ROW_BYTES,
-    TASK_ROW_LIMIT, VIEW_WORDS, view_word,
+    TASK_ROW_LIMIT, UiWorkViews, VIEW_WORDS, view_word,
 };
 use crate::composed_catalog::{
-    physical_address as physical, Application, CodeLabel, CodeWord, Core, Domain, Instructions, Pc, Role, Sha256, QUEUE_SITES,
+    physical_address as physical, Application, CodeLabel, CodeWord, Core, Domain, Instructions, Pc, Role, Sha256, SitePlan, QUEUE_SITES,
 };
 use crate::composed_receipt::{ByteRange, MenuObservation, WatchRow};
 use crate::guest::RouteKey;
@@ -44,6 +44,23 @@ enum Armed {
     Site(usize),
     Queue(usize),
     Target,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Observers {
+    Catalog,
+    Application,
+    CatalogThenApplication,
+}
+
+/// The observers a hit at `pc` goes to; a PC neither arms goes to the catalog, which refuses it.
+pub fn hit_observers(catalog: &SitePlan, application: Option<&Recorder>, pc: u32) -> Observers {
+    let armed = application.is_some_and(|recorder| recorder.armed.contains_key(&pc));
+    match (catalog.sites.contains_key(&Pc(pc)), armed) {
+        (true, true) => Observers::CatalogThenApplication,
+        (false, true) => Observers::Application,
+        (_, false) => Observers::Catalog,
+    }
 }
 
 /// An open queue1 receive on task1's stack, keyed by the SP at the queue entry.
@@ -229,6 +246,11 @@ impl<'a> Recorder<'a> {
 
     pub fn owns(&self, hit: &Hit) -> bool { hex_word(&hit.address).is_ok_and(|pc| self.armed.contains_key(&pc)) }
 
+    /// The catalog PCs to disarm at the end of the boundary phase: those the application does not also arm.
+    pub fn released_boundaries(&self, catalog: &SitePlan) -> Vec<Guest> {
+        catalog.sites.keys().filter(|pc| !self.armed.contains_key(&pc.0)).map(|pc| Guest(pc.0)).collect()
+    }
+
     /// The instruction count the next run must stop at to take a settle-end sample.
     pub fn settle_end(&self) -> Option<u64> { self.search.settle_end() }
 
@@ -378,7 +400,7 @@ impl<'a> Recorder<'a> {
         let graphics = GraphicsState::of(&session.board.device_save(session.node(&facts.graphics.0)?)?)?;
         let sample = ReadinessSample {
             index: ReadinessIndex(self.readiness), preceding: self.samples, instructions: Instructions(machine.instructions()), receive, kind, probe,
-            tasks, render, graphics,
+            tasks, ui: UiWorkViews::read(&machine.session)?, render, graphics,
         };
         self.search.readiness(&sample).map_err(|fault| format!("readiness search: {fault:?}"))?;
         self.writer()?.readiness(&sample)?;

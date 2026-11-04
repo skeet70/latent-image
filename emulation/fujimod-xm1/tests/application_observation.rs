@@ -1,8 +1,9 @@
 use fujimod_xm1::application_observation::{
     check_evidence, check_pair, read_evidence, write_evidence, ApplicationCheck, ApplicationReceipt, ApplicationRefusal, ApplicationWrite,
-    ByteView, CodeObservation, Control, CoreIdentity, DynamicTarget, Evidence, Expected, FirstReady, GraphicsState, InputIndex, InputPurpose,
-    Menu, PairField, Publication, RawView, ReadinessIndex, ReadinessKind, ReadinessSample, Registers, RenderViews, RoleEvidence, RouteInput,
-    Sample, SampleIndex, ScopeObservation, SideFile, SiteRef, Task1, TaskTableViews, VisibleCapture, EVIDENCE,
+    ByteView, CodeObservation, Control, CoreIdentity, DynamicTarget, Evidence, Expected, FirstReady, GraphicsState, hit_observers, InputIndex,
+    InputPurpose, Menu, PairField, Publication, RawView, ReadinessIndex, ReadinessKind, ReadinessSample, Recorder, Registers, RenderViews,
+    RoleEvidence, RoleSummary, RouteInput, Sample, SampleIndex, ScopeObservation, SideFile, SiteRef, Task1, TaskTableViews, UiWorkViews,
+    VisibleCapture, Observers, EVIDENCE,
 };
 use fujimod_xm1::composed_catalog::{
     Application, ApplicationProblem, CatalogRefusal, CodeLabel, CodeWord, Contract, Core, Domain, Instructions, Pc, QueueLabel, Role, Schema,
@@ -16,7 +17,7 @@ use fujimod_xm1::run::CoreIdentities;
 use fujimod_xm1::trace::{EnteredInstructions, ScopedHitCount, TraceStackScopeConfig, TraceStackScopeSummary, TraceStackSiteSummary};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const FIXTURE: &str = include_str!("data/composed-contract-v4.json");
@@ -44,6 +45,7 @@ const TABLE_RECORD: u32 = 0x510000;
 const TABLE: u32 = 0x520000;
 const DESCRIPTORS: u32 = 0x530000;
 const ENTRIES: [u32; 4] = [0xc22f60, 0x111000, 0x112000, 0x113000];
+const MENU_NODE: u32 = 0x540000;
 const PERIOD: u64 = 250_000;
 const NORMALIZED: u32 = 0x77;
 
@@ -147,8 +149,23 @@ fn site_labels_sets_and_placement_refuse() {
         CatalogRefusal::Application(ApplicationProblem::QueueSites));
     let owned = |value: &mut Value| value["pieces"][1]["catalog"]["owned_code"] = json!([{"start": 263216, "end": 263924}, {"start": 0xc22f00u32, "end": 0xc23000u32}]);
     assert_eq!(refused(owned), CatalogRefusal::Application(ApplicationProblem::SiteInPiece(Pc(0xc22f60))));
-    let collide = |value: &mut Value| value["pieces"][0]["catalog"]["boundaries"][1]["retained_pc"] = json!(0x725214u32);
-    assert_eq!(refused(collide), CatalogRefusal::Application(ApplicationProblem::SiteCollision(Pc(0x725214))));
+}
+
+#[test]
+fn a_pc_shared_by_a_boundary_and_an_application_site_reaches_both_and_stays_armed() {
+    let mut value = schema5();
+    value["pieces"][0]["catalog"]["boundaries"][1]["retained_pc"] = json!(0x725214u32);
+    let contract = parse(&value).unwrap();
+    let plan = contract.sites(Role::Retained);
+    let directory = scratch();
+    let recorder = Recorder::new(contract.application().unwrap(), Role::Retained, &directory).unwrap();
+    let observers = |pc| hit_observers(&plan, Some(&recorder), pc);
+    assert_eq!(observers(0x725214), Observers::CatalogThenApplication);
+    assert_eq!(observers(263216), Observers::Catalog);
+    assert_eq!(observers(0xc22f60), Observers::Application);
+    assert_eq!(hit_observers(&plan, None, 0x725214), Observers::Catalog);
+    let released = recorder.released_boundaries(&plan);
+    assert!(released.contains(&Guest(263216)) && !released.contains(&Guest(0x725214)));
 }
 
 #[test]
@@ -238,6 +255,9 @@ impl<'a> Builder<'a> {
                 memory.set(address, value);
             }
         }
+        for (address, value) in [(0x9571d0, MENU_NODE), (0x9571d8, 2), (0x9575f4, 1), (MENU_NODE, 1), (MENU_NODE + 8, 5)] {
+            memory.set(address, value);
+        }
         Self { application, memory, samples: Vec::new(), readiness: Vec::new(), clock: 1000, input: None, first_ready: None, targets: Vec::new() }
     }
 
@@ -291,8 +311,8 @@ impl<'a> Builder<'a> {
 
     fn startup(&mut self) -> SampleIndex {
         let secondary = |r: [u32; 13], sp| registers(r, sp, 0);
-        self.site_on(Core::Secondary, 0x6a9840, secondary(BASE, 0x300000), Vec::new());
-        self.site_on(Core::Secondary, 0x6a9934, secondary(BASE, 0x300000), Vec::new());
+        self.site_on(Core::Secondary, 0x73b4b0, secondary(BASE, 0x300000), Vec::new());
+        self.site_on(Core::Secondary, 0x73b558, secondary(BASE, 0x300000), Vec::new());
         self.site_on(Core::Secondary, 0x69d2e0, secondary(with(BASE, &[(3, 0xd985a4)]), 0x300000), Vec::new());
         self.site_on(Core::Secondary, 0xd985a4, secondary(BASE, 0x2ffff8), Vec::new());
         self.site_on(Core::Secondary, 0xd985c8, secondary(BASE, 0x2ffff0), Vec::new());
@@ -323,9 +343,16 @@ impl<'a> Builder<'a> {
             rows: vec![self.memory.view(TABLE, 14 * ENTRIES.len() as u32)],
             descriptors: (0..ENTRIES.len() as u32).map(|index| self.memory.view(DESCRIPTORS + 0x40 * index, 10)).collect(),
         };
+        let ui = UiWorkViews {
+            queues: [self.memory.view(0x949dd0, 2), self.memory.view(0x94f5d8, 2)],
+            words: [0x950098, 0x950148, 0x951424, 0x951528].map(|address| self.memory.view(address, 1)).to_vec(),
+            menu: self.memory.view(0x9571d0, 3),
+            depth: self.memory.view(0x9575f4, 1),
+            node: Some(self.memory.view(MENU_NODE, 3)),
+        };
         self.readiness.push(ReadinessSample {
             index: ReadinessIndex(self.readiness.len() as u64), preceding, instructions: Instructions(self.clock), receive, kind,
-            probe: Probe { drained: ready, ..probe(1) }, tasks, render, graphics: graphics(1),
+            probe: Probe { drained: ready, ..probe(1) }, tasks, ui, render, graphics: graphics(1),
         });
     }
 
@@ -511,11 +538,17 @@ impl Scenario {
     fn new() -> Self { Self::with(&[Plan::Stable, Plan::Quiet]) }
 
     /// Receives before the route, one per plan.
-    fn with(plans: &[Plan]) -> Self {
+    fn with(plans: &[Plan]) -> Self { Self::with_memory(plans, &[]) }
+
+    /// `words` written over the builder's memory before any sample.
+    fn with_memory(plans: &[Plan], words: &[(u32, u32)]) -> Self {
         let contract = parse(&schema5()).unwrap();
         let directory = scratch();
         let application = contract.application().unwrap();
         let mut builder = Builder::new(application);
+        for &(address, value) in words {
+            builder.memory.set(address, value);
+        }
         let entry = builder.startup();
         for &plan in plans {
             builder.cycle(plan);
@@ -573,14 +606,22 @@ impl Scenario {
 
     fn section(&self) -> &ApplicationReceipt { self.receipt.application.as_ref().unwrap() }
 
-    fn check(&self) -> Result<(), ApplicationRefusal> {
+    fn summary(&self) -> Result<RoleSummary, ApplicationRefusal> {
         check_evidence(&RoleEvidence {
             application: self.contract.application().unwrap(), role: Role::Composed, receipt: self.section(), evidence: &self.evidence,
             directory: &self.directory,
         })
     }
 
+    fn check(&self) -> Result<(), ApplicationRefusal> { self.summary().map(|_| ()) }
+
     fn refusal(&self) -> Option<ApplicationCheck> { self.check().err().map(|refusal| refusal.check) }
+
+    /// `retained` against this scenario as the composed role.
+    fn pair(&self, retained: &Scenario) -> Result<(), PairField> {
+        let summaries = [retained.summary().unwrap(), self.summary().unwrap()];
+        check_pair(retained.section(), self.section(), [retained.directory.as_path(), self.directory.as_path()], [&summaries[0], &summaries[1]])
+    }
 
     fn control(mut self, control: Control) -> Self {
         let application = self.contract.application().unwrap().clone();
@@ -600,11 +641,29 @@ fn a_coherent_scenario_passes_every_check() {
 }
 
 #[test]
-fn every_control_is_refused_by_its_named_check() {
-    for control in Control::ALL.into_iter().filter(|control| *control != Control::CanonicalInput) {
-        let Expected::Application(check) = control.expected() else { panic!("{control:?} expects an application refusal") };
+fn every_role_control_is_refused_by_its_named_check() {
+    for control in Control::ALL {
+        let Expected::Application(check) = control.expected() else { continue };
         assert_eq!(Scenario::new().control(control).refusal(), Some(check), "{control:?}");
     }
+}
+
+#[test]
+fn a_first_ready_menu_that_differs_across_roles_is_a_pair_refusal() {
+    let retained = Scenario::new();
+    assert_eq!(Scenario::new().pair(&retained), Ok(()));
+    let controlled = Scenario::new().control(Control::FirstReadyMenu);
+    assert_eq!(controlled.check(), Ok(()));
+    assert_eq!(controlled.pair(&retained), Err(PairField::ReadinessMenu));
+}
+
+#[test]
+fn deferred_ui_work_keeps_samples_from_being_candidates() {
+    let main_tail = (0x94f5d8, 1 << 16);
+    assert_eq!(Scenario::with_memory(&[Plan::Stable, Plan::Quiet], &[main_tail]).refusal(), Some(ApplicationCheck::Readiness));
+    assert_eq!(Scenario::with_memory(&[Plan::Stable, Plan::Quiet], &[main_tail, (0x94f5dc, 1)]).check(), Ok(()));
+    assert_eq!(Scenario::with_memory(&[Plan::Stable, Plan::Quiet], &[(0x949dd0, 1 << 16)]).refusal(), Some(ApplicationCheck::Readiness));
+    assert_eq!(Scenario::with_memory(&[Plan::Stable, Plan::Quiet], &[(0x949dd4, 1)]).refusal(), Some(ApplicationCheck::Readiness));
 }
 
 #[test]
@@ -618,9 +677,9 @@ fn the_canonical_input_control_changes_the_update_identity() {
 }
 
 #[test]
-fn the_fifteen_controls_have_distinct_names() {
+fn the_seventeen_controls_have_distinct_names() {
     let names: BTreeSet<&str> = Control::ALL.iter().map(|control| control.name()).collect();
-    assert_eq!(names.len(), 15);
+    assert_eq!(names.len(), 17);
 }
 
 #[test]
@@ -780,6 +839,10 @@ fn a_changed_evidence_file_is_a_capture_bound_refusal() {
 #[test]
 fn the_pair_check_compares_inputs_menus_graphics_planes_mailbox_words_and_targets() {
     let (retained, owned) = (Scenario::new(), Scenario::new());
+    let summary = retained.summary().unwrap();
+    let check_pair = |retained: &ApplicationReceipt, owned: &ApplicationReceipt, directories: [&Path; 2]| {
+        check_pair(retained, owned, directories, [&summary, &summary])
+    };
     let directories = [retained.directory.as_path(), owned.directory.as_path()];
     assert_eq!(check_pair(retained.section(), owned.section(), directories), Ok(()));
     let mut differing = owned.section().clone();
