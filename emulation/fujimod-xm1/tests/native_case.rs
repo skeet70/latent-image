@@ -1070,44 +1070,26 @@ fn a_cp14_read_without_a_case_identity_or_in_user_mode_is_refused() {
     }
 }
 
-/// Loader A (base 0x40000) +0x1618 body 0x412bc-0x412cc and its helper
-/// 0x427b8-0x427d4, from private-data/analysis/x-m1-1.50/decode/loader-40000.dis.
-const STOCK_A_1618: [u32; 4] = [0xe92d_4800, 0xe28d_b004, 0xeb00_053b, 0xe8bd_8800];
-const STOCK_A_1618_HELPER: [u32; 7] =
-    [0xee12_1e10, 0xe3a0_2901, 0xe282_2003, 0xe151_0002, 0x03a0_0000, 0x13a0_0001, 0xe12f_ff1e];
+const HELPER: u32 = 0x1040;
 
-fn stock_a_1618(identity: u32) -> Observed {
-    const BASE: u32 = 0x41000;
-    const EXIT_A: u32 = BASE;
-    let mut bytes = vec![0u8; 0x2000];
-    bytes[0x2bc..0x2cc].copy_from_slice(&words(&STOCK_A_1618));
-    bytes[0x17b8..0x17d4].copy_from_slice(&words(&STOCK_A_1618_HELPER));
-    let mut registers = [0x5a5a_5a5a; 16];
-    registers[13] = SP;
-    registers[14] = EXIT_A;
-    let case = Case {
-        entry: 0x412bc,
-        exit: EXIT_A,
-        registers,
-        instructions: 100,
-        wall_ms: 1000,
-        regions: vec![
-            Region { address: BASE, size: 0x2000, permission: READ_EXECUTE, bytes },
-            Region { address: STACK, size: 0x100, permission: READ_WRITE, bytes: vec![0; 0x100] },
-        ],
-        functions: vec![(0x412bc, 0x10), (0x427b8, 0x1c)],
-        stubs: Vec::new(),
-        identity: None,
-    };
+/// push {r11, lr}; bl HELPER; pop {r11, pc}.
+fn identity_probe(identity: u32) -> Observed {
+    // mrc p14, 0, r1, c2, c0, 0; movw r2, #0x4003; cmp r1, r2; moveq r0, #0; movne r0, #1; bx lr
+    let helper = [MRC_P14_R0_IDENTITY | 1 << 12, 0xe304_2003, 0xe151_0002, 0x03a0_0000, 0x13a0_0001, BX_LR];
+    let mut case = Case::new(&[PUSH_LR | 1 << 11, branch(CODE + 4, HELPER, true), POP_PC | 1 << 11])
+        .code(HELPER, &helper)
+        .function(HELPER, 4 * helper.len() as u32);
+    for index in 0..13 {
+        case.registers[index] = 0x5a5a_5a5a;
+    }
     case.privileged(SVC_ENTRY, Some(identity)).run()
 }
 
 #[test]
-fn the_stock_a_1618_body_returns_zero_only_for_identity_4003() {
+fn an_identity_probe_returns_zero_only_for_identity_4003() {
     for (identity, expected) in [(0x4003, 0), (0x4002, 1)] {
-        let observed = stock_a_1618(identity);
-        assert_eq!(observed.status(), Status::Returned, "{identity:#x}");
-        assert_eq!(observed.register("pc"), 0x41000);
+        let observed = identity_probe(identity);
+        observed.assert_returned();
         assert_eq!(observed.register("r0"), expected, "{identity:#x}");
         assert_eq!(observed.register("r1"), identity);
         assert_eq!(observed.register("r11"), 0x5a5a_5a5a);
