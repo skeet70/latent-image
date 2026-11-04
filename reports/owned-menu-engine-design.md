@@ -1,6 +1,6 @@
 # Owned menu engine: design (#128)
 
-Status: revision 2, cleared by MenuEngineDesignReview; increment 1's host part exists (`replacement/README.md#owned-menu-engine-increment-1-128`) and no guest code exists.
+Status: revision 2, cleared by MenuEngineDesignReview; increment 1's host part passes its ten oracle cases (E-MENU-ENGINE-HOST-ORACLE-150, `replacement/README.md#owned-menu-engine-increment-1-128`) and no guest code exists.
 
 Facts cite the ledger or `private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c`; **[INFERENCE]** marks what the evidence does not show directly.
 
