@@ -1,0 +1,1557 @@
+# Owned menu engine, increment 3: event classes (#128)
+
+Status: design for increment 3 of [the engine design](owned-menu-engine-design.md), not reviewed. Nothing in it is built or run. Increments 1 and 2 own kind 4 and 5 row steps, kind `0xe` push, kind `0xf` pop and kind 1 open on wrapping nodes with queried availability (E-MENU-ENGINE-HOST-ORACLE-150, E-MENU-ENGINE-GUEST-PAIRS-150); every other class falls back to the stock kind switch. This document takes each remaining class in value order and gives its stock branch, its reach on the no-install route, the `--menu-observe` config that records it, the negative control its oracle case must fail, and the engine and checker changes that own it.
+
+Stock facts cite `private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c` (the export of the id5 image `private-data/analysis/x-m1-1.50/lz/id5.dis`), node facts the decoded tables `private-data/scratch/ControllerStrategy/menu-tables.json` (E-MODAL-MENU-TABLES-150), controller cells the manifest `private-data/scratch/ControllerManifest/manifest.json` (E-MODAL-CONTROLLER-MANIFEST-150), and reach the crawl-5 graph (E-MODAL-MENU-OKPATHS-150). **[INFERENCE]** marks what the evidence does not show directly.
+
+## How reach was derived
+
+Crawl-5 records, for each of its 4,584 trials, the from-screen's key path, the 44 bytes of the record at `*0x009571d0` and the cursor `0x009571d8`, the controller dispatches with controller, state and event, and every entry of `0x0063270c` with r0-r3. An entry with r0 = `0x1e` is a stage post (code, kind, node, id); the extra word is not recorded. All 570 screens' records match a decoded node. The first stage post of a trial was classified from the from-screen's record and cursor by the rules of `MenuEngineClass.deriveClass` and the branches below; a later post of the same trial only by its kind and arguments, because the block between posts is not recorded. Counts are trials.
+
+A path is crawl-5's key path from the cardless no-install root to the from-screen, the root `--menu-observe` walks from (`replacement/README.md`, `--menu-observe CONFIG`); the observed key is that trial's key, and each config names its crawl-5 node and trial. Crawl-5 replayed from held snapshots and 7 of its 25 replays diverged, so a path is expected, not known, to reach the same screen from the root **[INFERENCE]**. The extractor change below refuses a receipt whose stage entries differ from the expected events in the table.
+
+Stage posts reach the engine through two consumers in crawl-5: `0x00ca4674` (controller 100, 1,568 dispatches) and `0x00ca4e98` (controller 101, 1,795). Both save the block (`0x0061d384`), call `0xd4dd2c`, restore the block (`0x0061d3a8`) when it returns 0 and otherwise run the special post `0xd42a64` (all.c:457563-457633, 458265-458340). The increment-1 extractor accepts only `0x00ca4674`.
+
+## Class table
+
+Ordered by value: first what the 19 picker pairs and the shooting menu exercise, then by crawl-5 trial count. Crawl counts are first posts of a trial unless noted. Owned paths in crawl-5 are not listed.
+
+| # | Class | Stock branch (all.c) | Crawl-5 trials | Reachable on keys | Path, key (crawl node, trial) | Expected stage event (kind, node, id) | Config `emulation/menu-oracle-*.json` | Negative control |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1a | Pop with the remember write (parent id differs) | 330948-330955, 331582-331605 | 208 | yes; 5 of the 7 guest-pair RememberBranch events | `ok up up up up up up up ok`, `back` (192, 1070) | `0xf, 0x1f, 0x1a` | `pop-remember` | `PopNoRemember` |
+| 1b | Pop from a node with Remember off | 330945-330947 | 69 | yes; picker 312's pop | `ok up up up up ok`, `back` (177, 1007) | `0xf, 0x1e, 0x1a` | `pop-remember-off` | `RememberIgnoresFlag` |
+| 1c | Push from a node whose parent has its id | 330953-330955, 331562-331580 | 4 | yes; oracle-push-classifier's fallback push | `ok ok down down`, `ok` (4, 6) | `0xe, 0x1, 0x1d` | `push-same-parent` | `RememberIgnoresParentId` |
+| 1d | Push from a node with Remember off | 330945-330947 | 49 | yes, shooting menu | `ok up up up up ok`, `ok` (177, 966) | `0xe, 0x1e, 0x1d` | `push-remember-off` | `RememberIgnoresFlag` |
+| 2 | Close (kind 2) | 331325-331335 | 230 posts | yes, shooting menu | `ok`, `back` (1, 1292) | `2, 0x1, 0x1d` | `close` | `CloseKeepsMenuOpen` |
+| 3 | Kinds `0xa`, `0xb`: seek `0x17`, push, move, pop | 331371-331384, 331627-331670 | 31 each | yes, shooting menu | `ok up left up ok up up ok ok ok`, `up` / `down` (215, 4110 / 4109) | `0xa, 0x81, 0x1` / `0xb, 0x81, 0x1` | `frame-seek-down`, `frame-seek-up` | `NoSeekStep` |
+| 4 | Kinds 6, 7: pop, move, push | 331347-331358 | 70 / 95 | yes | `down`, `down` (146, 1295); `down down`, `up` (237, 1884) | `6, 0x5f, 0x1` / `7, 0x5f, 0x1` | `frame-pop-down`, `frame-pop-up` | `FrameNotifyId` |
+| 5 | Fixed availability (node word 5 = 1): open and move | 331435-331438, 331518-331534, 331001 | 116 moves | yes | `ok up left down ok ok down down`, `right` (449, 3275); `ok up left down ok ok down down right`, `down` (450, 3277) | `6, 0x43, 0x2` / `4, 0x43, 0x1` | `frame-fixed-open`, `fixed-wrap` | `QueryFixed`; existing `NoWrap` |
+| 6 | Node `0x7a`'s property `0x285` write | 330956-330960 | 30 | yes, close of the screen Q opens | `q down down`, `back` (254, 3217) | `2, 0x7a, 0x1d` | `close-property` | `NoPropertyWrite` |
+| 7 | Kinds `0x45`..`0x48` | 331210-331213, 331268-331281, 331018-331180 | 15 each | yes, the screen Q opens | `q down down`, `left` / `right` / `up` / `down` (254, 3216 / 3161 / 3160 / 3159); wrap presses from nodes 262, 256, 259 (trials 3177, 3194, 3183, 3192) | `0x45`..`0x48`, `0x7a`, `0x1` | `group-left`, `group-right`, `group-up`, `group-down`, `group-right-wrap`, `group-left-wrap`, `group-down-wrap`, `group-up-wrap` | `GroupAsRowStep` |
+| 8 | No-wrap node (node word 4 = 1) | 330980-331006 | 60 moves | yes | `ok left up ok down down down ok`, `right` / `left` (370, 2529 / 2600) | `4, 0x7d, 0x1` / `5, 0x7d, 0x1` (rejected) | `nowrap`, `nowrap-edge` | `AlwaysWrap` |
+| 9 | Seek on open (kind 1, id `0x17`) | 331307-331323, 331649-331670 | 8 (second post) | yes, two stage events in one press | `ok left up ok down down down ok`, `back` (370, 2601) | `2, 0x7d, 0x1a` then `1, 0x3f, 0x17` | `open-seek` | `NoSeekStep` |
+| 10 | Re-open (kind `0x13`) | 331408-331409, 331511-331548 | 1 | yes | `ok left up ok down ok down down ok ok`, `back` (363, 2393) | `0x13, 0x55, 0x1` | `reopen` | `ReopenNotifies` |
+| 11 | Row step with id > 1 (owned today without a case) | 331215-331266 | 86 | yes | `ok left up ok down ok ok ok down`, `down` (324, 2067) | `4, 0x56, 0xd` | `step-rows` | `SingleStep` |
+| 12 | Kinds 8, 9: push, move, pop | 331359-331370 | 0 | not on crawl-5's key set | probe: `q down down`, `dial-right` (254, untried) | `8, 0x7a, 0x1` **[INFERENCE]** | `frame-push-probe` | `FrameNotifyId` |
+| 13 | Page step (kinds 4, 5, id = rows per page) | 331201-331209, 331219-331266 | 0 | no | none | none | none | none |
+| 14 | Multi-level (kinds `0x10`..`0x12`) | 331395-331407 | 0 | no | none | none | none | none |
+| 15 | Empty node | 331459-331465 | 0 | no | none | none | none | none |
+| 16 | Restored cursor past the rows with no initial row (`token_past_rows`) | 331505-331509, 331545-331548 | 0 | no | none | none | none | none |
+| 17 | Seek id `0x18`; kinds `0xe`, `0xf` with id `0x17` or `0x18`; kind 1 with id `0xe`..`0x12` | 331385-331393, 331627-331670 | 0 | no | none | none | none | none |
+
+Classes 1 to 11 become owned with an oracle case each; 12 is owned only if its probe records a kind 8 event; 13 to 17 stay fallback (see "Classes that stay fallback").
+
+## Changes shared by all classes
+
+### Extractor (`MenuEngineCases.hs`)
+
+- Accept a stage entry from either consumer body, `[0x00ca4674, 0x00ca4834)` or `[0x00ca4e98, 0x00ca5088)`, and take the special post and the rollback restore from the same body.
+- One case per stage entry. Window i runs from stage entry i to the first hit after its wrapper store (`frame-snapshot` with lr `0xbf95ec`). Its before block is the receipt's before block replayed through every block write before stage entry i; the refusal of a block or last-move write before the stage entry applies to window 1 only. Cases are named `NAME-i` when a receipt has more than one window.
+- Rejected cases. A window with no special post from its consumer body, followed by a `rollback-restore` hit (`0x0061d3a8`) with lr in that body, gives a case with `result: EngineResult::Rejected`; its after block is the replay to the window's end, as for accepted cases.
+- Replace "replayed engine writes equal the recorded after block" by "replaying every block write of the receipt gives the recorded after block", which holds for rejected receipts whose restore rewrites the block.
+- A new call `CallPropertyWrite property value flags` from `property-write` hits (`0x0061c91c`) with lr in the engine body, ordered with the other calls.
+- Required sites gain `rollback-restore` (`0x0061d3a8`).
+- `menu-engine-cases` takes `NAME=DIR:KIND,NODE,ID[;KIND,NODE,ID...]` and refuses a receipt whose stage entries' r0-r2 differ from the expected events.
+
+### Owner oracle (`menu_engine/src/owner.rs`)
+
+- `Case.result` comes from the extractor; `Expected::PropertyWrite { property, value }` answers the new effect.
+- Every control below is a `Rules` switch in `engine.rs`, listed in `owner_controls_fail`; each must fail at least one case. A case whose before state makes its control unable to fail (for example `remembered[index]` already equal to the token the write stores) does not count, and its path is changed until the control fails.
+
+### Engine invariant for compound kinds
+
+`apply` returns `NotOwned` only before its first service call. Kinds 6..`0xb` and the seek loops run several stock steps whose targets depend on availability answers, so the engine checks every target such an event can reach before the first call: for kinds 6 and 7 every row child of the source's parent and the restored frame `stack[depth]`; for kinds 8..`0xb` the cursor row's child, the source itself as the pop target and `stack[depth + 1]`; for seeks every row of the open node. The check is static over the tree. It can refuse an event stock would complete, never the reverse.
+
+### Checker (`MenuEngineClass.hs`) and pairs
+
+- `deriveClass` mirrors each class's ownership and the compound pre-checks above. `Fallback` loses `RememberBranch`, `PropertyNode` and `NodeFlags`, and `KindNotOwned` stops covering kinds 2, 6, 7, `0xa`, `0xb`, `0x13` and `0x45`..`0x48`.
+- `oracle.jq` turns each new config into a pair trajectory over crawl-5's landings, as for the ten increment-2 paths, and the pair runs repeat the 29 existing pairs. The stage-entry, kind-switch and seek sites of `picker.jq` are unchanged.
+- The engine's static stack bound (808 bytes at increment 2) grows with the compound kinds; the pair check recomputes it from the relinked `kernel.elf` and fails a stage entry whose sp less the bound and the margin falls below task 1's stack base.
+
+### Config base
+
+Every config below uses the same 28 trace sites and six write ranges: the nine sites the extractor requires, `rollback-restore`, `stage-consumer-101` (`0x00ca4e98`), the engine functions `0xbf9f44`, `0xbf9b1c`, `0xbf988c`, `0xbfa800`, `0xbfab98`, `0xbfad04`, `0xbf9a5c`, `0xbf9a2c`, `0x0061d0e4`, the value and commit sites of the increment-1 configs, `rollback-save` and `property-write`; the group configs add `0xbf9c1c`. The write ranges are those of `emulation/menu-oracle-push-classifier.json` (snapshot areas, event block, `0x009503d0`, the engine block, `0x0096cc64`, the last-move pair). Key-specific action sites of the increment-1 configs (`down-action`) and the redraw sites are left out; the redraw and render comparison is the pair runs' job. The JSON blocks are in the appendix.
+
+## Classes
+
+### 1. RememberBranch: push and pop with the other `0xbf9a5c` branches
+
+Stock. `0xbfab98` calls `0xbf9a5c(node)` before switching nodes on push (all.c:331562-331580) and pop (331582-331601). `0xbf9a5c` returns when no node is open or node word 6 (Remember) is not 1 (330942-330947); otherwise it stores the cursor row's token at `0x0095733c[node]` when the node has no parent, or when the parent's id differs from the node's (330948-330955). Increment 2 owns only a push whose write runs (parent id differs) and a pop whose write does not (parent id equal).
+
+Value. All 7 RememberBranch events of the guest pairs: 5 pops in the unloaded-picker segments of pickers 26, 163, 214, 312 and 314, and in oracle-push-classifier one push with the same parent id and one pop with another parent id (E-MENU-ENGINE-GUEST-PAIRS-150; classified from each pair's stage-entry registers and block). Picker 312's pop is from node `0x1e` (record `0x0078c790`, Remember 0); the other four pop with the write. Crawl-5: 208 pops with the write (including `left` on the shooting root, `ok`, `left`), 69 pops and 49 pushes with Remember off, 4 pushes with the same parent id.
+
+Paths. `pop-remember` pops node `0x1f` (record `0x0078cf64`, the node of picker 26's pop, cursor 1) to the shooting root. `pop-remember-off` pops node `0x1e` (`0x0078c790`, picker 312's node) and `push-remember-off` pushes from it into `0x0078e078`. `push-same-parent` pushes from `0x00783de0` (id 1, parent `0x0078ea98` with id 1, cursor 20) into `0x0077c890`, the push oracle-push-classifier falls back on.
+
+Controls. `PopNoRemember` (a pop never writes) fails `pop-remember`; `RememberIgnoresFlag` (writes with Remember 0) fails `pop-remember-off` and `push-remember-off`; `RememberIgnoresParentId` (writes when the parent has the node's id) fails `push-same-parent`. Each needs `remembered[node]` before the event to differ from the token written; the receipts show it.
+
+Engine. Remove the two gates in `push_pop`; `remember()` already has all four branches. Remove `NotOwned::RememberBranch`. `stage_index` keeps refusing node `0x7a` until class 6 lands.
+
+Checker. `pushPop`, `push` and `pop` lose their Remember and parent-id conditions.
+
+### 2. Close (kind 2)
+
+Stock. For id `0x1a`..`0x1d`: notify `0xd5b350(2, node, id, class of the open node)`, `0xbf9a5c(node)`, menu-open flag `0x009575fc` = 0, result 1; any other id gives 0 with no call (all.c:331325-331335). The wrapper then stores the snapshot at the open node's id as for every kind.
+
+Value. Every menu session ends in a close: crawl-5 has 230 close posts, ids `0x1d` (169 first posts), `0x1a` (23), `0x1b` (2, each followed by a kind 1 open of node 0 in the same press). `back` on the shooting root closes it (node 1, id `0x1d`).
+
+Path. `close`: `ok`, then `back`.
+
+Control. `CloseKeepsMenuOpen` leaves `0x009575fc` at 1.
+
+Engine. `MenuEvent::Close` gets an arm: refuse with `NoOpenNode` when no node is open and `StageNode` for a node at or above `0x86`; for an id outside `0x1a..=0x1d` return `Rejected` with no call; otherwise notify, `remember(index)`, clear `menu_open`, `Accepted`. Close on node `0x7a` is class 6.
+
+Checker. Kind 2 is owned for an open node and a node below `0x86` other than `0x7a`.
+
+### 3. Kinds `0xa` and `0xb`: seek, push, move, pop
+
+Stock. `0xbfad04(kind, node, type of the open node, 0x1d, 0x17, extra)`, then `0xbfab98(0xe, node, 0x15, 0)`, `0xbf9f44(4 or 5, node, id)` and `0xbfab98(0xf, node, 0x15, 0)`, each run only when the previous returned 1 (all.c:331371-331384). In `0xbfad04` kinds 1, `0xa`, `0xb` and `0xe` (mask `0x4c02`) take the switch on the seek id (331627); id `0x17` steps the cursor down with `0xbf9f44(4, node, 1)` until the cursor row's token equals `extra`, at most total-rows times (331649-331670), and id `0x18` pushes when it is found. An open node of type 5 or 7 pushes instead (331620-331625).
+
+Value. Shooting menu: node `0x81` (record `0x0078cf38`, three rows whose children `0x007912c0`, `0x0078ecac`, `0x00789f24` have 10 rows each), under node `0x80`, under the shooting root. `up` posts kind `0xa` and `down` kind `0xb` there; the screen's cursor stays at 0 (crawl-5 match "same-menu-and-cells"). Crawl-5: 31 trials each, also on node `0xc` (`0x0078231c`).
+
+Paths. `frame-seek-down` and `frame-seek-up`, both from node 215.
+
+Control. `NoSeekStep` skips the seek loop; it fails only when the cursor row's token differs from `extra` at entry, which the receipt shows (crawl-5 does not record `extra`).
+
+Engine. `MenuEvent::FrameMove` for kinds `0xa` and `0xb`: an owned seek loop for ids `0x17` and `0x18` on an open node of type other than 5 and 7 (refuse `FramedNode` otherwise), then an owned `0xbfab98` step without `0xbfad04` (`push_pop` split into the node switch plus `open_rows`, and the `0xbfad04` tail), `move_rows`, and the pop. The inner steps pass notify id 0 (the fourth argument of `0xbfab98`, 331374-331383), and `open_rows` takes `0xbfab98`'s third argument as the direction of its step. Each step's 0 result ends the event with `Rejected`; the steps already made stand and the consumer's rollback restores the block.
+
+Checker. Kinds `0xa`, `0xb` owned under the compound pre-check.
+
+### 4. Kinds 6 and 7: pop, move, push
+
+Stock. Kind 6: `0xbfab98(0xf, node, 0x15, 0)`, `0xbf9f44(4, node, id)`, `0xbfab98(0xe, node, 0x15, 0)`; kind 7 the same with the pop's direction `0x16` and move kind 5 (all.c:331347-331358). No `0xbfad04` runs, so the parent of type 5 or 7 that these kinds move in is not re-pushed.
+
+Value. The framed groups: node `0x5f` (type 7, record `0x00787cbc`, six pages of type 7, opened from crawl-5's root screen by `down` as a kind 1 open of a type 7 node), and node `0x43` (type 5, `0x00783d94`, no-wrap, four pages, two of them with fixed availability, class 5 below). Crawl-5: kind 6 70 trials, kind 7 95, ids 1, 2 and 3.
+
+Paths. `frame-pop-down` moves from the one-row page `0x00791294` to `0x0077d59c` (cursor 2 after). `frame-pop-up` moves from `0x0077d59c` at cursor 2 back into the one-row page `0x00791294`, so `0xbfa800` opens a one-row node with restored cursor 2; crawl-5 lands at cursor 0, so `0xd588b8` returned a row token there **[INFERENCE from the landing cursor]**. If the receipt shows `0x7ffffffe`, this case also covers class 16.
+
+Control. `FrameNotifyId` passes the event id instead of 0 to the inner notifications.
+
+Engine. As class 3 without the seek; the pop's direction is `Direction::Up` for kind 7. Inner steps may open nodes of type 5 or 7, since `0xbfad04` does not follow them: `check_open` loses `FramedNode` for these steps and keeps it where `0xbfad04` follows.
+
+Checker. Kinds 6 and 7 owned under the compound pre-check.
+
+### 5. Fixed availability (node word 5 = 1)
+
+Stock. `0xbfa800` on such a node sets the total, clears the row states with `FUN_007221a0(0x009571f0, 0, 0x4f)`, queries no availability, has no empty arm (331435-331438) and keeps the initial or restored cursor without a step (331514-331534). The step `0xbf9b1c` accepts every row (331001) and the count and ordinal functions get no row-state array (`0xbf985c`, `0xbf9a2c`).
+
+Value. The fixed nodes are `0x00784afc` (51 rows) and `0x00789b8c` (12 rows), both pages of framed group `0x43`. Crawl-5: 116 moves on them, and kinds 6 and 7 enter them.
+
+Paths. `frame-fixed-open`: kind 6 with id 2 from `0x0078ecd8` (cursor 2) into `0x00789b8c`, which opens a fixed node and moves the no-wrap parent two pages. `fixed-wrap`: kind 4 at the last row (11) of `0x00789b8c`, which wraps to 0.
+
+Controls. `QueryFixed` asks availability on a fixed node and fails `frame-fixed-open`; the existing `NoWrap` fails `fixed-wrap`.
+
+Engine. `move_rows` and `check_open` lose the availability condition; `open_rows` gets the fixed arm. Whether `FUN_007221a0` clears `0x4f` words or `0x4f` bytes is not established; `0x007221c8` clears `0xa0` bytes for the stack (331311), and a separate function suggests a word count **[INFERENCE]**. The case's write watch decides it before the arm is written.
+
+Checker. `wrapsAndQueried` loses its availability half.
+
+### 6. Node `0x7a`: property `0x285`
+
+Stock. After the remember branches, `0xbf9a5c(0x7a)` writes property `0x285` through `0x0061c91c(0x285, 0xbf9a2c(0x0095733c[0x7a], 0), 0)`, the row index of the remembered token in the open node (all.c:330956-330960). It runs on close, push and pop with node `0x7a`.
+
+Value. Node `0x7a` is registry slot `0x7a`, record `0x0078e4a0` (16 rows, Remember 1, no parent), opened by `q` on crawl-5's root screen (trial 1934 posted `1, 0x7a, 0`). Crawl-5: 30 closes of node `0x7a` (`back` or `ok`), no push or pop with it.
+
+Path. `close-property`: `q`, `down`, `down` (two kind `0x48` moves to cursor 9), then `back`.
+
+Control. `NoPropertyWrite` omits the effect. A control that writes the cursor's row index instead does not discriminate here, because the remember write just stored the cursor's token.
+
+Engine. `Effect::PropertyWrite { property: PropertyId::new(0x285), value }` performed through `0x0061c91c` at stock's point; the shim "Engine property write `0x285`" of the design takes effect. `stage_index` stops refusing `0x7a`. Design line 51 ("No owned class has the `0x285` write") is replaced.
+
+Checker. `PropertyNode` is removed.
+
+### 7. Kinds `0x45`..`0x48`
+
+Stock. `0xbf9f44` calls `0xbf9c1c(0x45, 0x16)`, `(0x46, 0x15)`, `(0x47, 0x16)` or `(0x48, 0x15)` (all.c:331210-331213, 331268-331281). Kinds `0x47` and `0x48` step one row at a time with wrap, count rows not hidden, and accept at the fourth when its state is below 2, at most total-1 steps (331034-331072). Kinds `0x45` and `0x46` move within a group of four by the row's visible ordinal modulo 4 (331074-331180). On success the shared tail scrolls with `0xbf988c(..., kind)`, which for these kinds keeps the top unless the total is below rows per page (330827-330878), notifies, writes the last-move pair and stores (331283-331296).
+
+Value. The screen Q opens (node `0x7a`, 16 rows, controller 75 state 43): `left` `0x45`, `right` `0x46`, `up` `0x47`, `down` `0x48`. From cursor 9 crawl-5 lands at 8, 10, 5 and 13.
+
+Paths. `group-left`, `group-right`, `group-up`, `group-down`, all from node 254 (cursor 9; crawl-5 lands at 8, 10, 5, 13), stay inside the rows and inside a group of four. The wrap set takes the other code: `group-right-wrap` from cursor 7 (node 262, lands at 4), `group-left-wrap` and `group-up-wrap` from cursor 4 (node 256, land at 7 and 12), `group-down-wrap` from cursor 12 (node 259, lands at 4, past row 0, which no crawl-5 screen of this node has as its cursor).
+
+Control. `GroupAsRowStep` runs a kind 4 or 5 one-row step.
+
+Engine. `MenuEvent::GroupMove` gets the arms of `0xbf9c1c` and the move tail with a new `ScrollRule::Keep`. The arms read row states, so the node needs queried availability or the fixed rule of class 5.
+
+Checker. Kinds `0x45`..`0x48` owned on the conditions of a row move.
+
+### 8. No-wrap nodes (node word 4 = 1)
+
+Stock. `0xbf9b1c` returns 0 at the first or last row instead of wrapping (all.c:330980-331006); `0xbf9f44` then returns 0 and the consumer restores the block (457579-457584, 458281-458286).
+
+Value. Nodes `0x7d` (`0x007830d0`, class `0xc0`), `0x7e` (`0x00787b78`, class `0xc9`) and `0x48` (`0x00786d50`), and framed group `0x43`'s parent. Crawl-5: 60 moves, 6 at an edge.
+
+Paths. `nowrap`: kind 4 at cursor 0 of `0x007830d0` (lands at 1). `nowrap-edge`: kind 5 at cursor 0, rejected.
+
+Control. `AlwaysWrap` ignores node word 4 and fails `nowrap-edge`.
+
+Engine. `move_rows` and `check_open` lose the wrap condition; `step` already has the rule. `nowrap-edge` is the first rejected oracle case.
+
+Checker. `wrapsAndQueried` loses its wrap half.
+
+### 9. Seek on open (kind 1 with id `0x17`)
+
+Stock. Kind 1 calls `0xbfad04(1, node, type, 0x1d, id, extra)` after the open (all.c:331307-331323); with id `0x17` it runs class 3's seek loop (331649-331670). The tail for node `0x38` and class `0x228` (331676-331679) is a separate branch the engine keeps refusing.
+
+Value. `back` on node `0x7d` posts a close of `0x7d` with id `0x1a`, then an open of node `0x3f` (registry `0x3f`, `0x00789228`) with id `0x17`, through `0x00ca4e98`; crawl-5 lands on `0x00789228` at cursor 17. Crawl-5: 8 trials, always as the second post.
+
+Path. `open-seek`, two windows.
+
+Control. `NoSeekStep`, with the condition of class 3.
+
+Engine. `StageId::seeks` narrows to `0xe..=0x12` for kind 1; the seek loop of class 3 runs after the open on a node of type other than 5 and 7.
+
+Checker. Kind 1 with id `0x17` owned.
+
+### 10. Re-open (kind `0x13`)
+
+Stock. `0xbfa800(0x13, node, 0x15)` (all.c:331408-331409): availability or the fixed clear, initial row (`0xd588b8` returns `0x7ffffffe` for kind `0x13` on class 5, 550689-550690), the row-state test and step, then skips the scroll and the saved frame (331511, 331535) and recomputes the ordinal and count (331545-331548). Kind `0x13` has no notification.
+
+Value. Crawl-5: one trial, `back` on node `0x55` (`0x0078c29c`) through `0x00ca4e98`.
+
+Path. `reopen`.
+
+Control. `ReopenNotifies` notifies as kind 1 does after a successful open.
+
+Engine. `MenuEvent::Reopen` runs `open_rows` with a `Reopen` mode that skips the scroll and saved frame. `Effect::PageEntry` runs before it, since the bank hook is on `0xbfa800`.
+
+Checker. Kind `0x13` owned on the open-target conditions.
+
+### 11. Row steps with id above 1
+
+Stock. Kinds 4 and 5 repeat the step until `id` steps are made or the cursor passes its start (all.c:331215-331266). The engine and checker own every nonzero non-page id, but the ten oracle cases all have id 1.
+
+Value. Node `0x56` (`0x007894e0`, type 6, 43 rows, 42 per page) posts ids 4 to `0xd` from `FUN_00d48ab4` (540908); crawl-5 has 86 such trials.
+
+Path. `step-rows`: `down` at cursor 0 posts id `0xd`.
+
+Control. `SingleStep` makes one step.
+
+Engine and checker. None.
+
+### 12. Kinds 8 and 9: push, move, pop
+
+Stock. `0xbfab98(0xe, node, 0x15, 0)`, `0xbf9f44(4 or 5, node, id)`, `0xbfab98(0xf, node, 0x15 or 0x16, 0)` (all.c:331359-331370). The only posters are `FUN_00c7900c` (8) and `FUN_00c79178` (9), controller 75 action slots 212 and 217 at state 43, events 30 and 33, and 31 and 34 (manifest; all.c:425583, 425679).
+
+Value. Controller 75 is in state 43 on the screen Q opens. Crawl-5 tried only `ok`, `down`, `up`, `right`, `left` and `back` there (controller 74 state 24 is its context), and controller 75 received events 0, 2, 4, 6, 8, 13, 47, 49 and 50 only. Which key sends events 30 to 34 is not established; the command dial is a candidate **[INFERENCE]**.
+
+Path. `frame-push-probe`: `q`, `down`, `down`, then `dial-right`. If its stage entry is kind 8, the class is owned with class 4's engine change and control; otherwise the probe is dropped.
+
+### 13 to 17
+
+See "Classes that stay fallback".
+
+## Classes that stay fallback
+
+Each stays behind the shim "Fallback classes through the stock kind switch" (design, "Shims for this unit"), whose removal condition is that every class is owned; the class row in the checker stays `FallbackEvent`.
+
+- Page step (kinds 4 and 5 with id equal to rows per page and a nonzero node, all.c:331201-331209). The posters with an id that can equal a node's rows per page are `0xd3d858(4, 4)` and `(5, 4)` in `FUN_00c6ed28` and `FUN_00c6e658`, controller 75 slots 28 and 11 at state 27, events 0 to 3 (all.c:418670, 418276), and in `FUN_00c4803c` and `FUN_00c47f3c`, controller 64 slots 11 and 6 at state 8 (387662, 387590). The six nodes with 4 rows per page include `0x007823a4`, the film-simulation offer list of `emulation/ClassicChromeSiteCases.hs`, which crawl-5 visited at controller 75 state 0. Crawl-5 never reached controller 75 state 27, and controller 64 is in state 0 on all 570 screens. State 27 is set by `FUN_00c6fe98`, `FUN_00c726bc`, `FUN_00c75914`, `FUN_00c75c70`, `FUN_00c77670`, `FUN_00c7ad48` and `FUN_00c7ade8` (all.c:419544-427359); two of them follow a push whose last-move class is 299 with token 2 or 3. Observation needs a route into either state, which no crawl records. The `0xd48ab4` steps (4 to `0xd`) are row steps on node `0x56` (class 11).
+- Multi-level (kinds `0x10`..`0x12`, all.c:331395-331407). Posters: controller 74 state 26, events 22, 28, 37 (`FUN_00c5c3a0`, `FUN_00c5d9bc`, `FUN_00c60e8c`; the first two post only for last-move classes `0x213` and `0x21a`..`0x21d`, all.c:403506-403510, 404516-404529); controller 75 state 4 event 8 (`FUN_00c74424`, class `0xee`), state 9 event 8 (`FUN_00c74b34`), states 25 and 29 event 50 (`FUN_00c7abd8`, `FUN_00c7ade8`). Crawl-5 never reached controller 74 state 26 or controller 75 states 4, 25 and 29; it reached state 9 on node `0xc` twice (trials 1322, 1324), where `FUN_00c74b34` posted kind 2 because `0x009544f8` = 1 or `0x00956864` is 8 or 9 (all.c:422188-422194). Kind 1 with ids `0xe`..`0x12` (the same `0xbfad04` arms, 331633-331645) was not posted. Observation needs a state where `FUN_00c74b34` reaches 422206.
+- Empty node (`0xbfa800`'s arm at all.c:331459-331465). No crawl-5 push or open landed elsewhere because its target had no selectable row: every push or open whose landing record differs from the target is a type 5 or 7 target re-pushed by `0xbfad04`. OK on rows whose child has no rows posted kind 2 or no stage event. The engine keeps its owned empty arm (synthetic tests only) with the `kind_switch` service, and `NotOwned::EmptyNode` for a node without rows.
+- Restored cursor past the rows with `0xd588b8` returning `0x7ffffffe` (`token_past_rows`). No crawl-5 screen has a cursor at or past its node's rows; for a node with queried availability the open's step moves such a cursor unless the node has one row, and a fixed node keeps it. `frame-pop-up` (class 4) records the answer for the one-row page `0x00791294` entered with cursor 2. The shim "Values past the rows" stays.
+- Seek id `0x18`, kinds `0xe` and `0xf` with id `0x17` or `0x18`. No `0xd3d858` call in all.c passes `0x17` or `0x18` as the id, and crawl-5's kind 1 posts carry ids 0 and `0x17` only. Kind `0xf` is outside `0xbfad04`'s seek mask, so only its `0xbfab98` runs (331385-331393, 331627).
+
+## Shims
+
+New or changed by this increment; the rest of the design's table stands.
+
+| Shim | What it does | Removal condition |
+| --- | --- | --- |
+| Engine property write `0x285` (changed: now performed) | `Effect::PropertyWrite` for node `0x7a` through `0x0061c91c` | The settings service owns property `0x285` |
+| Stock rollback restore for rejected events (new use) | Rejected owned events rely on the consumer's `0x0061d3a8` restoring the block | Owned stage consumers decide the result without a byte restore |
+| Two stock stage consumers (changed) | Owned events arrive through `0x00ca4674` and `0x00ca4e98` | Owned stage consumers |
+| Fixed-availability row-state clear | The engine reproduces `FUN_007221a0(0x009571f0, 0, 0x4f)` in the block | The tree declares availability and nothing reads row states of a fixed node |
+| Fallback classes through the stock kind switch (narrowed) | Classes 13 to 17 and the framed `0xbfad04` re-push | Every class is owned |
+
+No class adds an owned key cell; the seven frozen picker cells stay as they are.
+
+## Decisions
+
+- Class 11: the engine owns row steps with id above 1 without an oracle case. Either `step-rows` lands in this increment, or the engine and checker narrow row moves to id 1 until it does.
+- Framed `0xbfad04` targets (`NotOwned::FramedNode`) are outside the assignment's list but frequent: crawl-5 has 131 pops from a page of group `0x43` onto its type 5 parent, 22 opens of node `0x5f` by `down` on the root screen, and 4 pushes into type 5 or 7 nodes. Owning them replaces the `seek` service; it needs `0xbfad04`'s framed arm (all.c:331620-331625) and cases such as `ok up left down ok ok`, `back` (crawl-5 trial 3593). Include in this increment or the next.
+- The compound pre-check refuses kinds 6..`0xb` when any reachable target fails the open conditions, where stock would complete. The alternative, letting `apply` refuse after a call, breaks the design's rule that the event completes once committed.
+- `frame-push-probe` is a run whose outcome decides whether class 12 is owned.
+- The fallback classes 13 to 17 stay stock-backed; #128's acceptance covers the observed presses and the picker pairs, which none of them reach.
+
+## Appendix: configs
+
+Each block is ready to commit as `emulation/menu-oracle-<name>.json`. The expected events are those of the class table.
+
+### `menu-oracle-pop-remember.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["ok", "up", "up", "up", "up", "up", "up", "up", "ok"],
+  "key": "back",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-pop-remember-off.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["ok", "up", "up", "up", "up", "ok"],
+  "key": "back",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-push-same-parent.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["ok", "ok", "down", "down"],
+  "key": "ok",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-push-remember-off.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["ok", "up", "up", "up", "up", "ok"],
+  "key": "ok",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-close.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["ok"],
+  "key": "back",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-frame-seek-down.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["ok", "up", "left", "up", "ok", "up", "up", "ok", "ok", "ok"],
+  "key": "up",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-frame-seek-up.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["ok", "up", "left", "up", "ok", "up", "up", "ok", "ok", "ok"],
+  "key": "down",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-frame-pop-down.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["down"],
+  "key": "down",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-frame-pop-up.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["down", "down"],
+  "key": "up",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-frame-fixed-open.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["ok", "up", "left", "down", "ok", "ok", "down", "down"],
+  "key": "right",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-fixed-wrap.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["ok", "up", "left", "down", "ok", "ok", "down", "down", "right"],
+  "key": "down",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-close-property.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["q", "down", "down"],
+  "key": "back",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-group-left.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["q", "down", "down"],
+  "key": "left",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"},
+    {"address": "0x00bf9c1c", "label": "engine-group-move"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-group-right.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["q", "down", "down"],
+  "key": "right",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"},
+    {"address": "0x00bf9c1c", "label": "engine-group-move"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-group-up.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["q", "down", "down"],
+  "key": "up",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"},
+    {"address": "0x00bf9c1c", "label": "engine-group-move"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-group-down.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["q", "down", "down"],
+  "key": "down",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"},
+    {"address": "0x00bf9c1c", "label": "engine-group-move"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-group-right-wrap.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["q", "down", "down", "right", "down", "right", "up", "up"],
+  "key": "right",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"},
+    {"address": "0x00bf9c1c", "label": "engine-group-move"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-group-left-wrap.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["q", "down", "down", "right", "down", "right", "up", "up", "right"],
+  "key": "left",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"},
+    {"address": "0x00bf9c1c", "label": "engine-group-move"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-group-down-wrap.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["q", "down", "down", "right", "down", "right", "up", "up", "right", "down", "down"],
+  "key": "down",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"},
+    {"address": "0x00bf9c1c", "label": "engine-group-move"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-group-up-wrap.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["q", "down", "down", "right", "down", "right", "up", "up", "right"],
+  "key": "up",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"},
+    {"address": "0x00bf9c1c", "label": "engine-group-move"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-nowrap.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["ok", "left", "up", "ok", "down", "down", "down", "ok"],
+  "key": "right",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-nowrap-edge.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["ok", "left", "up", "ok", "down", "down", "down", "ok"],
+  "key": "left",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-open-seek.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["ok", "left", "up", "ok", "down", "down", "down", "ok"],
+  "key": "back",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-reopen.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["ok", "left", "up", "ok", "down", "ok", "down", "down", "ok", "ok"],
+  "key": "back",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-step-rows.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["ok", "left", "up", "ok", "down", "ok", "ok", "ok", "down"],
+  "key": "down",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
+
+### `menu-oracle-frame-push-probe.json`
+
+```json
+{
+  "schema": 1,
+  "path": ["q", "down", "down"],
+  "key": "dial-right",
+  "trace_sites": [
+    {"address": "0x00d3d858", "label": "stage-open"},
+    {"address": "0x0063270c", "label": "event-post"},
+    {"address": "0x00ca4674", "label": "stage-consumer"},
+    {"address": "0x00ca4e98", "label": "stage-consumer-101"},
+    {"address": "0x0061d384", "label": "rollback-save"},
+    {"address": "0x0061d3a8", "label": "rollback-restore"},
+    {"address": "0x00d4dd2c", "label": "stage-entry"},
+    {"address": "0x00bfa234", "label": "engine-kind"},
+    {"address": "0x00bf9f44", "label": "engine-move"},
+    {"address": "0x00bf9b1c", "label": "engine-step"},
+    {"address": "0x00bf988c", "label": "engine-scroll"},
+    {"address": "0x00bfa800", "label": "engine-open"},
+    {"address": "0x00bfab98", "label": "engine-push-pop"},
+    {"address": "0x00bfad04", "label": "engine-seek"},
+    {"address": "0x00bf9a5c", "label": "engine-remember"},
+    {"address": "0x0061d0e4", "label": "push-classifier"},
+    {"address": "0x00bf9a2c", "label": "row-of-token"},
+    {"address": "0x0061ceac", "label": "frame-snapshot"},
+    {"address": "0x00d52684", "label": "row-availability"},
+    {"address": "0x00bfa914", "label": "availability-return"},
+    {"address": "0x00d588b8", "label": "initial-row"},
+    {"address": "0x00bfaa3c", "label": "initial-row-return"},
+    {"address": "0x00d5b350", "label": "engine-notify"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00d586bc", "label": "value-mode"},
+    {"address": "0x00d3d620", "label": "value-post"},
+    {"address": "0x00d4fc74", "label": "commit"},
+    {"address": "0x0061c91c", "label": "property-write"}
+  ],
+  "write_ranges": [
+    {"start": "0x0093eb74", "end": "0x00944440"},
+    {"start": "0x0094f64c", "end": "0x0094f660"},
+    {"start": "0x009503d0", "end": "0x009503d8"},
+    {"start": "0x009571d0", "end": "0x00957600"},
+    {"start": "0x0096cc64", "end": "0x0096ce28"},
+    {"start": "0x01467580", "end": "0x01467588"}
+  ],
+  "limit": 65536
+}
+```
