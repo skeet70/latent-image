@@ -126,8 +126,12 @@ crawlRoute :: RouteName
 crawlRoute = RouteName "crawl-trial-00001"
 
 routesBytes :: B.ByteString
-routesBytes = BL.toStrict (encodeRouteFile (RouteFile (replicate 64 '0') "test" CrawlEffectsSource []
-  (phaseRoutes ++ [Route crawlRoute (KeyRoute [KeyOk] (CrawlTrial 1 [SetterEffect 5, CommitEffect]))])))
+routesBytes = routesWith [SetterEffect 5, CommitEffect]
+
+-- | A route file whose crawl route records the given effects.
+routesWith :: [CrawlEffect] -> B.ByteString
+routesWith effects = BL.toStrict (encodeRouteFile (RouteFile (replicate 64 '0') "test" CrawlEffectsSource []
+  (phaseRoutes ++ [Route crawlRoute (KeyRoute [KeyOk] (CrawlTrial 1 effects))])))
 
 bindings :: Bindings
 bindings = Bindings sourceDat ownedDat routesBytes contractBytes linked symbols images observer
@@ -183,7 +187,10 @@ observation :: Role -> Step -> Observation
 observation role step = chain role [step]
 
 chain :: Role -> [Step] -> Observation
-chain role chained = Observation receipt spec reset hits steps session
+chain = chainWith routesBytes
+
+chainWith :: B.ByteString -> Role -> [Step] -> Observation
+chainWith routes role chained = Observation receipt spec reset hits steps session
  where
   plan = either error id (derivePlan (PlanInputs role (either error id (decodeContract contractBytes)) images linked Nothing))
   spec = BL.toStrict (A.encode (specValue plan))
@@ -207,7 +214,7 @@ chain role chained = Observation receipt spec reset hits steps session
   receipt = BL.toStrict (A.encode (object
     [ "role" .= roleWire role
     , "inputs" .= object
-        [ "dat" .= same (if role == RetainedRole then sourceDat else ownedDat), "routes" .= digest routesBytes
+        [ "dat" .= same (if role == RetainedRole then sourceDat else ownedDat), "routes" .= digest routes
         , "contract" .= digest contractBytes, "linked" .= digest linked, "symbols" .= same symbols, "observer" .= same observer
         , "run" .= digest "run", "boot_rom" .= digest "rom", "adjustment_nand" .= digest "nand", "bridge" .= digest "bridge"
         , "analysis" .= object [K.fromText (imageNameWire name) .= digestOf bytes | (name, bytes) <- M.toList images]
@@ -264,7 +271,22 @@ compared retained owned = do
 comparedSetters :: [Call] -> [Call] -> Either Refusal [(RouteResult, RouteResult)]
 comparedSetters retained owned = compareRoles (qualifiedWith RetainedRole retained) (qualifiedWith OwnedRole owned)
  where
-  qualifiedWith role setters = Qualified role [] 0 1 [RouteResult crawlRoute CrawlClass [] setters [] [] [] [] []]
+  qualifiedWith role setters = Qualified role [] 0 1 [RouteResult crawlRoute CrawlClass [] setters [] [] [] [] [] []]
+
+-- | The retained crawl route's effect block runs when its route file records `recorded` and its
+-- step's hits end with `extra` after the standard setter, commit and getter calls.
+effectBlocksWith :: [CrawlEffect] -> [Value] -> Either Refusal [(Int, Int)]
+effectBlocksWith recorded extra = do
+  let routes = routesWith recorded
+  result <- qualify bindings { bindRoutes = routes } RetainedRole (chainWith routes RetainedRole [retainedStep { stepHits = stepHits retainedStep ++ extra }])
+  pure (concat [resultEffectBlocks route | route <- qualifiedRoutes result, resultRoute route == crawlRoute])
+
+-- | A setter entry for the property and its return.
+setterPair :: Word32 -> [Value]
+setterPair property = [hit SetterEntry setterEntry [property, 0] stackPointer (setterCall + 4), hit SetterReturn (setterCall + 4) [0] stackPointer 0]
+
+blockHits :: [Value]
+blockHits = concatMap setterPair timeDrivenSequence
 
 -- | The retained and owned setter block runs of the first compared route, as (position, first call, repeats).
 blockRunsOf :: [(RouteResult, RouteResult)] -> Maybe ([(Int, Int, Int)], [(Int, Int, Int)])
@@ -427,6 +449,13 @@ main = do
               _ -> False)
     , check "a crawl route whose last step lacks its recorded effects is refused"
         (refusal OwnedRole (ownedWith (filter (/= commit) (stepHits ownedStep))) == Just (RouteEffectsDiffer crawlRoute))
+    , check "recorded and observed effects that differ only in a time-driven block's repeat count qualify, with the observed count"
+        (effectBlocksWith ([SetterEffect 5, CommitEffect] ++ map SetterEffect timeDrivenSequence) (blockHits ++ blockHits ++ blockHits) == Right [(2, 3)])
+    , check "recorded and observed effects that differ outside the block are refused"
+        (effectBlocksWith ([SetterEffect 5, CommitEffect] ++ map SetterEffect timeDrivenSequence) (blockHits ++ setterPair 6 ++ blockHits)
+           == Left (RouteEffectsDiffer crawlRoute)
+          && effectBlocksWith ([SetterEffect 5, CommitEffect] ++ map SetterEffect timeDrivenSequence) (setterPair 6 ++ blockHits)
+               == Left (RouteEffectsDiffer crawlRoute))
 
     , check "getter calls compare per (caller, arguments) as result sequences with repeats collapsed"
         (compared retainedStep (ownedWith (stepHits ownedStep ++ [getterIn, getterOut])) == Right ()

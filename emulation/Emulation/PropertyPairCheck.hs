@@ -157,6 +157,8 @@ data RouteResult = RouteResult
   , resultTransfers :: [TransferEffect]
   , resultFinal :: [(Word32, B.ByteString)]
   , resultPresses :: [Press]
+  -- | The last step's setter/commit effects' time-driven block runs: index among the collapsed effects, block count.
+  , resultEffectBlocks :: [(Int, Int)]
   } deriving (Eq, Show)
 
 data Qualified = Qualified
@@ -569,7 +571,7 @@ qualify bindings role observation = do
     routeClass <- case routeBody route of
       PhaseRoute _ -> pure PhaseClass
       KeyRoute _ (CrawlTrial _ expected) -> do
-        require (RouteEffectsDiffer name) (lastEffects == expected)
+        require (RouteEffectsDiffer name) (map effectItemShape (collapseEffects lastEffects) == map effectItemShape (collapseEffects expected))
         pure CrawlClass
       KeyRoute _ (Declared _) -> do
         require (DeclaredRouteInert name) (PlanSite SetterEntry `elem` lastSites && PlanSite Area3Append `elem` lastSites)
@@ -585,6 +587,7 @@ qualify bindings role observation = do
       , resultTransfers = concatMap snd effects
       , resultFinal = M.toList (intervalAfter (last own))
       , resultPresses = [press | Just press <- map intervalPress own]
+      , resultEffectBlocks = [(position, count) | (position, EffectBlockRun count) <- zip [0 ..] (collapseEffects lastEffects)]
       }
   cohort <- forM [["inputs", "run", "sha256"], ["inputs", "boot_rom", "sha256"], ["inputs", "adjustment_nand", "sha256"], ["inputs", "bridge", "sha256"]
                  , ["inputs", "routes", "sha256"], ["inputs", "linked", "sha256"], ["inputs", "contract", "sha256"], ["inputs", "observer", "sha256"]] $ \path ->
@@ -704,6 +707,26 @@ blockRuns calls = [ (position, first, count)
     SingleSetter _ -> 1
     BlockRun block count -> length block * count
 
+-- | One effect, or a run of consecutive `timeDrivenSequence` setter effects with its block count.
+data EffectItem = SingleEffect CrawlEffect | EffectBlockRun Int
+
+effectItemShape :: EffectItem -> Maybe CrawlEffect
+effectItemShape item = case item of
+  SingleEffect effect -> Just effect
+  EffectBlockRun _ -> Nothing
+
+collapseEffects :: [CrawlEffect] -> [EffectItem]
+collapseEffects effects
+  | isBlock effects = let (repeats, rest) = count (drop 4 effects) in EffectBlockRun (1 + repeats) : collapseEffects rest
+  | effect : rest <- effects = SingleEffect effect : collapseEffects rest
+  | otherwise = []
+ where
+  block = map SetterEffect timeDrivenSequence
+  isBlock remaining = take 4 remaining == block
+  count remaining
+    | isBlock remaining = let (repeats, rest) = count (drop 4 remaining) in (repeats + 1, rest)
+    | otherwise = (0 :: Int, remaining)
+
 -- | Admits the guest control's refusal: its observation stopped at its first guarded hit, which is
 -- the restored setter word's retired arm entered for that word's property, and every earlier hit is
 -- an armed site of the control plan.
@@ -771,6 +794,7 @@ routeSummary result = object
   , "accessor_writes" .= length [() | write <- resultWrites result, effectWriter write == OwnedAccessor]
   , "transfers" .= length (resultTransfers result)
   , "area3_appends" .= length (resultAppends result)
+  , "effect_block_runs" .= [object ["position" .= position, "repeats" .= count] | (position, count) <- resultEffectBlocks result]
   ]
 
 propertiesWritten :: RouteResult -> [Word32]
