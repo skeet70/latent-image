@@ -57,27 +57,31 @@ commit=$("$git_bin" -C "$repo" rev-parse --verify --quiet "$rev^{commit}") || {
 
 say_commit() { printf 'commit\t%s\t%s\n' "$commit" "$rev"; }
 
+tree=
+partial=
+trap 'for leftover in "$tree" "$partial"; do [[ -z $leftover ]] || rm -rf "$leftover"; done' EXIT
+
+# Sets tree to a temporary directory holding decomp/firmwares/xm1-150 and decomp/include at the commit.
 extract() {
-  local tree paths=(decomp/firmwares/xm1-150)
+  local paths=(decomp/firmwares/xm1-150)
   tree=$(mktemp -d)
   if [[ -n $("$git_bin" -C "$repo" ls-tree "$commit" decomp/include) ]]; then
     paths+=(decomp/include)
   fi
   "$git_bin" -C "$repo" archive "$commit" "${paths[@]}" | tar -x -C "$tree"
-  printf '%s\n' "$tree"
 }
 
+# Sets index to the commit's index file, building it when absent.
 index_file() {
-  local file tree
-  file=$cache/$commit-$(sha256sum < "$indexer" | cut -c1-12).tsv
-  if [[ ! -s $file ]]; then
+  index=$cache/$commit-$(sha256sum < "$indexer" | cut -c1-12).tsv
+  if [[ ! -s $index ]]; then
     mkdir -p "$cache"
-    tree=$(extract)
-    "$indexer" index "$tree/decomp" > "$file.partial" || { rm -rf "$tree" "$file.partial"; exit 1; }
-    rm -rf "$tree"
-    mv "$file.partial" "$file"
+    extract
+    partial=$index.partial
+    "$indexer" index "$tree/decomp" > "$partial"
+    mv "$partial" "$index"
+    partial=
   fi
-  printf '%s\n' "$file"
 }
 
 # Index rows naming the target: range rows, then sym and def rows of each selected address.
@@ -130,7 +134,8 @@ case $command in
     ;;
   lookup)
     ((${#args[@]} == 1)) || usage
-    rows=$(select_rows "$(index_file)" "${args[0]}")
+    index_file
+    rows=$(select_rows "$index" "${args[0]}")
     say_commit
     if [[ -z $rows ]]; then
       echo "xm1-decomp: no function, symbol or definition matches ${args[0]}" >&2
@@ -140,7 +145,8 @@ case $command in
     ;;
   show)
     ((${#args[@]} == 1)) || usage
-    rows=$(select_rows "$(index_file)" "${args[0]}")
+    index_file
+    rows=$(select_rows "$index" "${args[0]}")
     say_commit
     defs=$(awk -F '\t' '$1 == "def"' <<< "$rows")
     if [[ -z $defs ]]; then
@@ -155,38 +161,46 @@ case $command in
     ;;
   coverage)
     ((${#args[@]} == 0)) || usage
-    file=$(index_file)
+    index_file
     say_commit
-    # Columns 9 and 10 differ when a NONMATCHING comment sits directly above the definition.
+    # A function is nonmatching when any of its definitions is, else exact when one is, else
+    # unverified. Columns 9 and 10 differ when a NONMATCHING comment sits directly above.
     awk -F '\t' -v OFS='\t' '
-      $1 == "range" { key = $2 "/" $3; functions[key]++; all++ }
+      $1 == "range" { key = $2 "/" $3; functions[key]++; functions["all"]++ }
+      $1 == "def" && $12 == "excluded" { excluded++; next }
       $1 == "def" && $3 != "-" {
         key = $3 "/" $4; fn = $3 SUBSEP $6
-        defs[key]++; total++
-        if ($12 == "exact") { exactdefs[key]++; totalexact++ } else { nmdefs[key]++; totalnm++; marked[fn] = 1 }
-        if (!(fn in withc)) { withc[fn] = key; count[key]++; totalc++ }
+        count[key, $12]++; count["all", $12]++; count[key, "definitions"]++; count["all", "definitions"]++
+        section[fn] = key
+        if ($12 == "nonmatching") marked[fn] = 1
+        else if ($12 == "exact") exact[fn] = 1
         if ($12 == "nonmatching" && $9 == $10) away++
         if ($12 == "exact" && $9 != $10) unapplied++
       }
       $1 == "def" && $3 == "-" { other[$2 "\t" $12]++ }
       END {
-        print "unit/section", "functions", "with_c", "exact", "nonmatching", "definitions", "exact_definitions", "nonmatching_definitions"
-        n = 0
-        for (key in functions) keys[++n] = key
-        for (i = 1; i <= n; i++) for (j = i + 1; j <= n; j++) if (keys[j] < keys[i]) { t = keys[i]; keys[i] = keys[j]; keys[j] = t }
-        for (fn in marked) { nm[withc[fn]]++; totalmarked++ }
-        for (i = 1; i <= n; i++) {
-          key = keys[i]
-          print key, functions[key], count[key] + 0, count[key] - nm[key], nm[key] + 0, defs[key] + 0, exactdefs[key] + 0, nmdefs[key] + 0
+        for (fn in section) {
+          kind = (fn in marked) ? "nonmatching" : (fn in exact) ? "exact" : "unverified"
+          functionsof[section[fn], kind]++; functionsof["all", kind]++; withc[section[fn]]++; withc["all"]++
         }
-        print "all", all, totalc + 0, totalc - totalmarked, totalmarked + 0, total + 0, totalexact + 0, totalnm + 0
+        print "unit/section", "functions", "with_c", "exact", "nonmatching", "unverified", "definitions", "exact_definitions", "nonmatching_definitions", "header_definitions", "conditional_definitions"
+        n = 0
+        for (key in functions) if (key != "all") keys[++n] = key
+        for (i = 1; i <= n; i++) for (j = i + 1; j <= n; j++) if (keys[j] < keys[i]) { t = keys[i]; keys[i] = keys[j]; keys[j] = t }
+        keys[++n] = "all"
+        for (i = 1; i <= n; i++) {
+          k = keys[i]
+          print k, functions[k], withc[k] + 0, functionsof[k, "exact"] + 0, functionsof[k, "nonmatching"] + 0, functionsof[k, "unverified"] + 0,
+            count[k, "definitions"] + 0, count[k, "exact"] + 0, count[k, "nonmatching"] + 0, count[k, "header"] + 0, count[k, "conditional"] + 0
+        }
         m = 0
         for (k in other) rest[++m] = k
         for (i = 1; i <= m; i++) for (j = i + 1; j <= m; j++) if (rest[j] < rest[i]) { t = rest[i]; rest[i] = rest[j]; rest[j] = t }
         for (i = 1; i <= m; i++) print "outside function-ranges", rest[i], other[rest[i]]
         print "nonmatching definitions without a marker directly above", away + 0
         print "exact definitions under a marker the build does not apply", unapplied + 0
-      }' "$file"
+        print "definitions in preprocessor-excluded code", excluded + 0
+      }' "$index"
     ;;
   boundary)
     images=("${args[@]}")
@@ -205,11 +219,8 @@ case $command in
       )
     fi
     say_commit
-    tree=$(extract)
-    status=0
-    "$indexer" boundary "$tree/decomp" "${images[@]}" || status=$?
-    rm -rf "$tree"
-    exit "$status"
+    extract
+    "$indexer" boundary "$tree/decomp" "${images[@]}"
     ;;
   *) usage ;;
 esac

@@ -56,6 +56,12 @@ unitSymbols Kernel0 = "firmwares/xm1-150/symbols/kernel0.txt"
 unitSymbols Kernel1 = "firmwares/xm1-150/symbols/kernel1.txt"
 unitSymbols App = "firmwares/xm1-150/symbols/app"
 
+-- The unit's -D options (build_target.py); its -I option is its source directory.
+unitDefines :: BuildUnit -> M.Map B.ByteString B.ByteString
+unitDefines Kernel0 = M.singleton "KERNEL_CORE" "0"
+unitDefines Kernel1 = M.singleton "KERNEL_CORE" "1"
+unitDefines App = M.empty
+
 -- function-ranges.json `unit` values each build unit links.
 rangeUnits :: BuildUnit -> [T.Text]
 rangeUnits Kernel0 = ["kernel0"]
@@ -88,13 +94,45 @@ data Parsed = Parsed
   , pNewlines :: U.Vector Int
   -- Names the build treats as NONMATCHING when this file is the translation unit.
   , pMarked :: M.Map B.ByteString Marker
+  , pDirectives :: [(Int, Directive)]
+  , pFacts :: Facts
   }
 
-data Status = Exact | Nonmatching | Unranged | Unplaced deriving (Eq)
+-- Preprocessor state of a region: compiled, skipped, or not decided by `evaluate`.
+data Cond = Live | Dead | Unknown deriving (Eq)
+
+data Opening = Guard | Test B.ByteString
+
+data Directive
+  = Open Opening
+  | Elif B.ByteString
+  | Else
+  | Endif
+  | Define B.ByteString (Maybe [B.ByteString]) B.ByteString
+  | Undef B.ByteString
+
+-- Macros of one file or translation unit: unconditional definitions with their bodies,
+-- every name defined anywhere, and every name undefined anywhere.
+data Facts = Facts
+  { fDefined :: M.Map B.ByteString B.ByteString
+  , fEver :: S.Set B.ByteString
+  , fUndefined :: S.Set B.ByteString
+  }
+
+instance Semigroup Facts where
+  Facts a b c <> Facts x y z = Facts (M.union a x) (S.union b y) (S.union c z)
+
+instance Monoid Facts where
+  mempty = Facts M.empty S.empty S.empty
+
+data Status = Exact | Nonmatching | Header | Conditional | Excluded | Unranged | Unplaced deriving (Eq)
 
 statusName :: Status -> String
 statusName Exact = "exact"
 statusName Nonmatching = "nonmatching"
+statusName Header = "header"
+statusName Excluded = "excluded"
+statusName Conditional = "conditional"
 statusName Unranged = "unranged"
 statusName Unplaced = "unplaced"
 
@@ -352,8 +390,9 @@ markerBefore raw headOffset = do
   Just (Marker open (stripB (C.dropWhile (== ':') (B.drop (B.length key) comment))))
 
 -- build_step.compare_result's marker pattern
--- `/\*\s*NONMATCHING:\s*(.*?)\s*\*/\s*\n[^\n(]*?\b(\w+)\(`: the comment names the
--- first `identifier(` on the next nonblank line, a prototype as well as a definition.
+-- `/\*\s*NONMATCHING:\s*(.*?)\s*\*/\s*\n[^\n(]*?\b(\w+)\(` under re.S: the comment names the
+-- first `identifier(` on the next nonblank line, a prototype as well as a definition. When
+-- that line has none, the lazy reason extends to a later `*/` in the file.
 buildMarkers :: B.ByteString -> M.Map B.ByteString Marker
 buildMarkers raw = M.fromList (go 0)
  where
@@ -363,16 +402,20 @@ buildMarkers raw = M.fromList (go 0)
     let (before, rest) = B.breakSubstring (C.pack "/*") (B.drop from raw)
         s = from + B.length before
         a = skipSpace raw (s + 2)
-        (body, close) = B.breakSubstring (C.pack "*/") (B.drop (a + B.length key) raw)
-        e = a + B.length key + B.length body + 2
+        reasonStart = a + B.length key
+        attempts = [(c, found) | c <- closes reasonStart, Just found <- [lastNewline (c + 2) (skipSpace raw (c + 2)) >>= firstCall]]
      in if B.null rest
           then []
           else
-            if not (key `B.isPrefixOf` B.drop a raw) || B.null close
+            if not (key `B.isPrefixOf` B.drop a raw)
               then go (s + 2)
-              else case lastNewline e (skipSpace raw e) >>= firstCall of
-                Just (name, resume) -> (name, Marker s (stripB body)) : go resume
-                Nothing -> go (s + 2)
+              else case attempts of
+                (c, (name, resume)) : _ -> (name, Marker s (stripB (slice raw reasonStart c))) : go resume
+                [] -> go (s + 2)
+  closes i =
+    let (before, rest) = B.breakSubstring (C.pack "*/") (B.drop i raw)
+        c = i + B.length before
+     in if B.null rest then [] else c : closes (c + 1)
   lastNewline lo hi = case [i | i <- [hi - 1, hi - 2 .. lo], at raw i == '\n'] of
     i : _ -> Just (i + 1)
     [] -> Nothing
@@ -423,15 +466,238 @@ flagsOf raw = go (B.take 2000 raw)
                 (value, close) = B.breakSubstring (C.pack "*/") line
              in if B.null close then go (B.drop (B.length key) rest) else value : go (B.drop (B.length key) rest)
 
+------------------------------------------------------------------------------
+-- Preprocessor: conditional directives and macro definitions, by logical line.
+
+directivesOf :: B.ByteString -> [(Int, Int, Directive)]
+directivesOf t = guards (go 0)
+ where
+  go r = case nextLineStart t r of
+    Nothing -> []
+    Just ls ->
+      let p = skipBlank t ls
+          e = logicalEnd p
+          body = C.map (\ch -> if ch == '\n' || ch == '\\' then ' ' else ch) (slice t (p + 1) e)
+          (word, rest) = C.span isWord (C.dropWhile isSpaceC body)
+          name = C.takeWhile isWord (C.dropWhile isSpaceC rest)
+          directive = case word of
+            "if" -> Just (Open (Test (stripB rest)))
+            "ifdef" -> Just (Open (Test ("defined(" <> name <> ")")))
+            "ifndef" -> Just (Open (Test ("!defined(" <> name <> ")")))
+            "elif" -> Just (Elif (stripB rest))
+            "else" -> Just Else
+            "endif" -> Just Endif
+            "define" -> Just (defineOf (C.dropWhile isSpaceC rest))
+            "undef" -> Just (Undef name)
+            _ -> Nothing
+       in if at t p /= '#' then go (ls + 1) else maybe id (\d -> ((p, e, d) :)) directive (go e)
+  logicalEnd i = case C.elemIndex '\n' (B.drop i t) of
+    Nothing -> B.length t
+    Just k -> let j = i + k in if at t (j - 1) == '\\' then logicalEnd (j + 1) else j
+  defineOf s =
+    let (name, after) = C.span isWord s
+     in case C.uncons after of
+          Just ('(', params) ->
+            let (list, close) = C.break (== ')') params
+             in Define name (Just (map stripB (C.split ',' list))) (stripB (B.drop 1 close))
+          _ -> Define name Nothing (stripB after)
+  -- `#ifndef X` (or `#if !defined(X)`) directly followed by `#define X`.
+  guards ((s, e, Open (Test cond)) : rest@((s', _, Define name _ _) : _))
+    | guardName cond == Just name && skipSpace t e == s' = (s, e, Open Guard) : guards rest
+  guards (x : rest) = x : guards rest
+  guards [] = []
+  guardName cond =
+    let s = C.filter (not . isSpaceC) cond
+     in if "!defined(" `B.isPrefixOf` s && ")" `B.isSuffixOf` s
+          then Just (B.drop 9 (B.take (B.length s - 1) s))
+          else if "!defined" `B.isPrefixOf` s then Just (B.drop 8 s) else Nothing
+
+-- Definitions outside every conditional except include guards count as unconditional.
+fileFacts :: [(Int, Directive)] -> Facts
+fileFacts = go [] mempty
+ where
+  go _ acc [] = acc
+  go stack acc ((_, d) : rest) = case d of
+    Open Guard -> go (True : stack) acc rest
+    Open (Test _) -> go (False : stack) acc rest
+    Endif -> go (drop 1 stack) acc rest
+    Define name _ body -> go stack (acc <> Facts (if and stack then M.singleton name body else M.empty) (S.singleton name) S.empty) rest
+    Undef name -> go stack (acc <> Facts M.empty S.empty (S.singleton name)) rest
+    _ -> go stack acc rest
+
+definedness :: Facts -> B.ByteString -> Maybe Bool
+definedness facts name
+  | S.member name (fUndefined facts) = Nothing
+  | M.member name (fDefined facts) = Just True
+  | not (S.member name (fEver facts)) && not ("__" `B.isPrefixOf` name) = Just False
+  | otherwise = Nothing
+
+data Token = TNum Integer | TId B.ByteString | TOp B.ByteString deriving (Eq)
+
+tokens :: B.ByteString -> Maybe [Token]
+tokens s0 = case C.uncons s of
+  Nothing -> Just []
+  Just (c, _)
+    | c >= '0' && c <= '9' -> let (d, r) = C.span isWord s in (:) <$> (TNum <$> integer d) <*> tokens r
+    | isIdentStart c -> let (w, r) = C.span isWord s in (TId w :) <$> tokens r
+    | otherwise -> case [op | op <- ["&&", "||", "==", "!=", "<=", ">=", "<", ">", "!", "(", ")"], op `B.isPrefixOf` s] of
+        op : _ -> (TOp op :) <$> tokens (B.drop (B.length op) s)
+        [] -> Nothing
+ where
+  s = C.dropWhile isSpaceC s0
+  integer d =
+    let digits = C.unpack (C.dropWhileEnd (`elem` ("uUlL" :: String)) d)
+     in case digits of
+          '0' : x : hex | x `elem` ("xX" :: String), (v, "") : _ <- readHex hex -> Just v
+          _ | not (null digits), all (`elem` ['0' .. '9']) digits -> Just (read digits)
+          _ -> Nothing
+
+-- `#if` expression value: Nothing inside Just when it depends on what the facts leave open.
+expression :: Facts -> [Token] -> Maybe (Maybe Integer, [Token])
+expression facts = disjunction
+ where
+  disjunction ts = conjunction ts >>= uncurry (chain "||" conjunction orValue)
+  conjunction ts = comparison ts >>= uncurry (chain "&&" comparison andValue)
+  chain op next combine a (TOp o : r) | o == op = next r >>= \(b, r') -> chain op next combine (combine a b) r'
+  chain _ _ _ a r = Just (a, r)
+  comparison ts = do
+    (a, r) <- unary ts
+    case r of
+      TOp o : r' | Just f <- lookup o comparisons -> unary r' >>= \(b, r'') -> Just (f <$> a <*> b, r'')
+      _ -> Just (a, r)
+  comparisons = [("==", truth (==)), ("!=", truth (/=)), ("<", truth (<)), (">", truth (>)), ("<=", truth (<=)), (">=", truth (>=))]
+  truth f x y = if f x y then 1 else 0
+  unary (TOp "!" : r) = unary r >>= \(a, r') -> Just ((\x -> if x == 0 then 1 else 0) <$> a, r')
+  unary (TOp "(" : r) = disjunction r >>= \(a, r') -> case r' of
+    TOp ")" : r'' -> Just (a, r'')
+    _ -> Nothing
+  unary (TId "defined" : TOp "(" : TId x : TOp ")" : r) = Just (fromBool <$> definedness facts x, r)
+  unary (TId "defined" : TId x : r) = Just (fromBool <$> definedness facts x, r)
+  unary (TNum v : r) = Just (Just v, r)
+  unary (TId x : r) = Just (value x, r)
+  unary _ = Nothing
+  fromBool b = if b then 1 else 0
+  value x = case definedness facts x of
+    Just False -> Just 0
+    Just True -> M.lookup x (fDefined facts) >>= literal
+    Nothing -> Nothing
+  literal body = case tokens body of
+    Just [TNum v] -> Just v
+    Just (TOp "(" : rest) | Just (TOp ")") <- lastMaybe rest, [TNum v] <- init rest -> Just v
+    _ -> Nothing
+  lastMaybe xs = if null xs then Nothing else Just (last xs)
+  orValue (Just x) _ | x /= 0 = Just 1
+  orValue _ (Just y) | y /= 0 = Just 1
+  orValue (Just 0) (Just 0) = Just 0
+  orValue _ _ = Nothing
+  andValue (Just 0) _ = Just 0
+  andValue _ (Just 0) = Just 0
+  andValue (Just _) (Just _) = Just 1
+  andValue _ _ = Nothing
+
+evaluate :: Facts -> B.ByteString -> Cond
+evaluate facts e = case tokens e >>= expression facts of
+  Just (Just v, []) -> if v == 0 then Dead else Live
+  _ -> Unknown
+
+-- The state following each directive, keyed by the directive's end offset.
+regions :: Facts -> [(Int, Directive)] -> M.Map Int Cond
+regions facts = M.fromList . go []
+ where
+  go _ [] = []
+  go stack ((offset, d) : rest) = let stack' = step stack d in (offset, effective stack') : go stack' rest
+  step stack d = case (d, stack) of
+    (Open Guard, _) -> (Live, Live) : stack
+    (Open (Test e), _) -> let c = evaluate facts e in (c, c) : stack
+    (Elif e, (_, taken) : s) ->
+      let c = case taken of
+            Live -> Dead
+            Dead -> evaluate facts e
+            Unknown -> if evaluate facts e == Dead then Dead else Unknown
+       in (c, either3 taken c) : s
+    (Else, (_, taken) : s) -> (negate3 taken, Live) : s
+    (Endif, _ : s) -> s
+    _ -> stack
+  effective s
+    | any ((== Dead) . fst) s = Dead
+    | any ((== Unknown) . fst) s = Unknown
+    | otherwise = Live
+  either3 a b
+    | a == Live || b == Live = Live
+    | a == Dead && b == Dead = Dead
+    | otherwise = Unknown
+  negate3 Live = Dead
+  negate3 Dead = Live
+  negate3 Unknown = Unknown
+
+stateAt :: M.Map Int Cond -> Int -> Cond
+stateAt states offset = maybe Live snd (M.lookupLE offset states)
+
+-- `#define M(..., p, ...) ... prefix##p(...) {` makes each line-start `M(..., arg, ...)` a
+-- definition of `prefix` followed by that argument.
+generatedDefs :: B.ByteString -> B.ByteString -> [(B.ByteString, [B.ByteString], B.ByteString)] -> (Int -> Bool) -> [Def]
+generatedDefs raw t macros inDefine =
+  [ Def (prefix <> stripB arg) p close (markerBefore raw p)
+  | (name, params, body) <- macros
+  , Just (prefix, k) <- [pattern params body]
+  , (p, close, args) <- invocations name
+  , arg <- take 1 (drop k args)
+  ]
+ where
+  n = B.length t
+  pattern params body = do
+    let (before, after) = B.breakSubstring "##" body
+        lead = C.dropWhileEnd isSpaceC before
+        prefix = C.takeWhileEnd isWord lead
+        (param, rest) = C.span isWord (C.dropWhile isSpaceC (B.drop 2 after))
+    unless (not (B.null after) && "(" `B.isPrefixOf` C.dropWhile isSpaceC rest && C.elem '{' rest) Nothing
+    unless (not (C.any (`elem` (";{}=(" :: String)) (B.take (B.length lead - B.length prefix) lead))) Nothing
+    k <- lookup param (zip params [0 ..])
+    Just (prefix, k)
+  invocations name = go 0
+   where
+    go r = case nextLineStart t r of
+      Nothing -> []
+      Just ls ->
+        let p = skipBlank t ls
+            e = identEnd t p
+            o = skipSpace t e
+         in if slice t p e == name && at t o == '(' && not (inDefine p)
+              then case arguments (o + 1) (0 :: Int) (o + 1) [] of
+                Just (args, close) -> (p, close, args) : go close
+                Nothing -> go (ls + 1)
+              else go (ls + 1)
+    arguments j depth start acc
+      | j >= n = Nothing
+      | c == '(' = arguments (j + 1) (depth + 1) start acc
+      | c == ')' && depth == 0 = Just (reverse (slice t start j : acc), j + 1)
+      | c == ')' = arguments (j + 1) (depth - 1) start acc
+      | c == ',' && depth == 0 = arguments (j + 1) depth (j + 1) (slice t start j : acc)
+      | otherwise = arguments (j + 1) depth start acc
+     where
+      c = at t j
+
 parseSource :: B.ByteString -> Parsed
 parseSource raw =
   let spans = lexSpans raw
       commentless = blankRanges raw [(s, e) | (s, e, Comment) <- spans]
       literalless = blankRanges raw [(s, e) | (s, e, _) <- spans]
       clean = blankRanges literalless (attributeRanges literalless)
-      found = sortOn (\(_, h, _) -> h) (heads clean ++ stateMachineHeads commentless)
-      defs = [Def name h (bodyEnd clean brace) (markerBefore raw h) | (name, h, brace) <- found]
-   in Parsed defs (includesOf commentless) (flagsOf raw) (U.fromList (C.elemIndices '\n' raw)) (buildMarkers raw)
+      listed = directivesOf commentless
+      defineSpans = M.fromList [(s, e) | (s, e, Define {}) <- listed]
+      inDefine h = maybe False (\(_, e) -> h < e) (M.lookupLE h defineSpans)
+      found = sortOn (\(_, h, _) -> h) [x | x@(_, h, _) <- heads clean ++ stateMachineHeads commentless, not (inDefine h)]
+      bodies = [Def name h (bodyEnd clean brace) (markerBefore raw h) | (name, h, brace) <- found]
+      macros = [(name, params, body) | (_, _, Define name (Just params) body) <- listed]
+      defs = sortOn dHead (outermost (-1) bodies ++ generatedDefs raw clean macros inDefine)
+      directives = [(e, d) | (_, e, d) <- listed]
+   in Parsed defs (includesOf commentless) (flagsOf raw) (U.fromList (C.elemIndices '\n' raw)) (buildMarkers raw) directives (fileFacts directives)
+ where
+  -- A head inside an earlier definition's body is a statement, not a definition.
+  outermost _ [] = []
+  outermost limit (d : ds)
+    | dHead d < limit = outermost limit ds
+    | otherwise = d : outermost (dEnd d) ds
 
 lineOf :: Parsed -> Int -> Int
 lineOf parsed offset = 1 + search 0 (U.length nl)
@@ -551,31 +817,50 @@ buildIndex root ranges = do
     found <- fmap concat . forM sources $ \source -> do
       parsed <- parseFile source
       let stem = stemOf source
-          search = [root </> "include", takeDirectory source]
-            ++ [root </> C.unpack (B.drop 6 arg) | flags <- pFlags parsed, arg <- C.words flags, C.pack "-Isrc/" `B.isPrefixOf` arg]
-          own = [(source, parsed, d, resolve stem (dName d), source, parsed) | d <- pDefs parsed]
+          options = concatMap C.words (pFlags parsed)
+          fromSrc arg = root </> C.unpack (B.drop 4 arg)
+          search = [root </> "include", takeDirectory source, root </> unitSources unit]
+            ++ [fromSrc (B.drop 2 arg) | arg <- options, "-Isrc/" `B.isPrefixOf` arg]
+          forced = [C.pack (fromSrc path) | ("-include", path) <- zip options (drop 1 options), "src/" `B.isPrefixOf` path]
+          defines = M.union (M.fromList [(name, B.drop 1 value) | arg <- options, "-D" `B.isPrefixOf` arg, let (name, value) = C.break (== '=') (B.drop 2 arg)]) (unitDefines unit)
       start <- realPath source
-      included <- walk parseFile realPath search (S.singleton start) [(source, parsed)]
-      let fromHeaders = [(header, hp, d, Just a, source, parsed) | (header, hp) <- included, d <- pDefs hp, Just a <- [resolve stem (dName d)]]
-      pure (own ++ fromHeaders)
+      included <- walk parseFile realPath search (S.singleton start) [(source, parsed {pIncludes = forced ++ pIncludes parsed})]
+      let closure = (source, parsed) : included
+          facts = Facts defines (M.keysSet defines) S.empty <> mconcat (map (pFacts . snd) closure)
+          states = M.fromList [(f, regions facts (pDirectives p)) | (f, p) <- closure]
+          -- At the body's closing brace: a head can straddle `#if` branches (supplicant_events.c).
+          condition f d = maybe Live (`stateAt` (dEnd d - 1)) (M.lookup f states)
+          own = [(source, parsed, d, a, c, parsed) | d <- pDefs parsed, let a = resolve stem (dName d), let c = condition source d, c /= Dead || a /= Nothing]
+          fromHeaders =
+            [ (header, hp, d, Just a, condition header d, parsed)
+            | (header, hp) <- included, d <- pDefs hp, Just a <- [resolve stem (dName d)]
+            ]
+      pure [(f, p, d, a, c, source, tu) | (f, p, d, a, c, tu) <- own ++ fromHeaders]
     writeIORef cache M.empty
-    let entry (file, parsed, d, address, unitFile, unitParsed) =
+    let entry (file, parsed, d, address, condition, unitFile, unitParsed) =
           let range = case fromMaybe [] (address >>= (`M.lookup` unitRanges)) of
                 r : _ -> Just r
                 [] -> Nothing
               marker = M.lookup (dName d) (pMarked unitParsed)
               status
                 | Nothing <- address = Unplaced
+                | condition == Dead = Excluded
                 | Just _ <- marker = Nonmatching
+                | condition == Unknown = Conditional
+                | takeExtension file /= ".c" = Header
                 | Nothing <- range = Unranged
                 | otherwise = Exact
            in Entry unit address range (dName d) (makeRelative root file)
                 (lineOf parsed (maybe (dHead d) mOffset (dAdjacent d))) (lineOf parsed (dHead d))
                 (lineOf parsed (max (dHead d) (dEnd d - 1))) status
                 ((\m -> (makeRelative root unitFile, lineOf unitParsed (mOffset m), mReason m)) <$> marker)
-        marked e = eStatus e == Nonmatching
-        keep new old = if marked old && not (marked new) then old else new
-    pure (M.elems (M.fromListWith keep [((f, dHead d, a), entry x) | x@(f, _, d, a, _, _) <- found]))
+        rank e = case eStatus e of
+          Nonmatching -> 0 :: Int
+          Conditional -> 1
+          Excluded -> 3
+          _ -> 2
+        keep new old = if rank old < rank new then old else new
+    pure (M.elems (M.fromListWith keep [((f, dHead d, a), entry x) | x@(f, _, d, a, _, _, _) <- found]))
  where
   walk parseFile realPath search visited0 start = go visited0 start []
    where
@@ -621,9 +906,7 @@ indexRows ranges symbolTables entries =
     <> mconcat
       [ tsv ["sym", unitName unit, hexAddress a, C.unpack key]
       | (unit, table) <- M.toList symbolTables
-      , let starts = S.fromList [rStart r | r <- ranges, rUnit r `elem` rangeUnits unit]
       , (key, a) <- M.toList table
-      , S.member a starts
       ]
     <> mconcat
       [ tsv
