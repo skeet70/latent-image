@@ -17,7 +17,7 @@ exports_files(
 )
 
 exports_files(
-    ["fujimod-xm1/tests/data/composed-contract-v3.json"],
+    ["fujimod-xm1/tests/data/composed-contract-v4.json"],
     visibility = ["//replacement/startup_artifact:__pkg__"],
 )
 

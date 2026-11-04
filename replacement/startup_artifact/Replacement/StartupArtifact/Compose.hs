@@ -241,10 +241,8 @@ validateCatalogs pieces = do
         unless (boundaryStop boundary) (refuse kind (ReadBoundaryDoesNotStop (readBoundary row)))
         when (boundaryRetainedPc boundary == Nothing && readDiffers row == Nothing) (refuse kind (ReadNeedsDiffers (readLabel row)))
       _ -> refuse kind (ReadBoundaryUnknown (readBoundary row))
-    let tcmCores = case catalogWrites catalog of
-          UnenumeratedWrites _ -> []
-          EnumeratedWrites ranges _ ->
-            [core | WriteRange (TcmTarget core _) _ _ <- ranges] ++ [core | WriteRange (CorePhysicalTarget core) _ _ <- ranges]
+    let EnumeratedWrites ranges _ = catalogWrites catalog
+        tcmCores = [core | WriteRange (TcmTarget core _) _ _ <- ranges] ++ [core | WriteRange (CorePhysicalTarget core) _ _ <- ranges]
     forM_ tcmCores $ \core -> unless (core `elem` boundaryCoreSet) (refuse kind (TcmCoreWithoutBoundary core))
 
 maxBoundariesPerCore :: Int

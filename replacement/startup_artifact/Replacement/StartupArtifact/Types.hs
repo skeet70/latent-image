@@ -9,6 +9,7 @@ module Replacement.StartupArtifact.Types
   , Cores, cores, coreList, physicalAddress
   , Boundary (..), CodeSpan (..), codeSpan, TcmBank (..), tcmBankName, WriteTarget (..), WriteRange (..)
   , WriteBasis (..), WritesPolicy (..), CatalogRead (..), Catalog (..)
+  , TcmRegister (..), DecoderIndex (..), DecoderChoice (..), DeclaredMutation (..)
   , Piece (..), PieceFacts (..), ServiceBinding (..), Publication (..), LinkedBytes (..), ScratchBytes (..)
   , Refusal (..), CatalogProblem (..), ManifestProblem (..)
   ) where
@@ -18,7 +19,7 @@ import Data.Char (isAsciiLower, isDigit)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Word (Word32, Word64)
+import Data.Word (Word16, Word32, Word64)
 
 data Target = Record1 | Record2 | LoaderA | LoaderB | Image4 | Image5
   deriving (Eq, Ord, Show, Enum, Bounded)
@@ -191,10 +192,22 @@ data WriteRange = WriteRange WriteTarget Word64 Word64 deriving (Eq, Ord, Show)
 
 data WriteBasis = Proved | Premised Premise deriving (Eq, Show)
 
-data WritesPolicy
-  = EnumeratedWrites [WriteRange] WriteBasis
-  -- | Destinations are not enumerated; the observer derives the policy.
-  | UnenumeratedWrites Premise
+data WritesPolicy = EnumeratedWrites [WriteRange] WriteBasis
+  deriving (Eq, Show)
+
+-- | A TCM region register value as the CPU stores it after normalization.
+newtype TcmRegister = TcmRegister Word32 deriving (Eq, Show)
+
+newtype DecoderIndex = DecoderIndex Word16 deriving (Eq, Show)
+
+newtype DecoderChoice = DecoderChoice Word16 deriving (Eq, Show)
+
+-- | A mutation the composite guard admits once in a role: a guest TCM region
+-- register write (core, bank, previous, next, writer) or a memory decoder
+-- commit (decoder, previous, next, writer core, writer).
+data DeclaredMutation
+  = TcmRegionWrite Core TcmBank TcmRegister TcmRegister Pc Citation
+  | DecoderCommit DecoderIndex DecoderChoice DecoderChoice Core Pc Citation
   deriving (Eq, Show)
 
 data CatalogRead = CatalogRead
