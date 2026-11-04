@@ -339,9 +339,13 @@ otherSetter :: Call
 otherSetter = Call [5, 1, 0, 0] (setterCall + 4) (Just 0)
 
 retainedSidecars :: Role -> T.Text -> RetainedObservation
-retainedSidecars role status = RetainedObservation receipt (obsSteps base) (obsHits base)
+retainedSidecars role status = retainedSidecarsWith role status [retainedStep]
+
+-- | Sidecars for a chain whose steps carry the given hits.
+retainedSidecarsWith :: Role -> T.Text -> [Step] -> RetainedObservation
+retainedSidecarsWith role status steps' = RetainedObservation receipt (obsSteps base) (obsHits base)
  where
-  base = observation role retainedStep
+  base = chain role steps'
   receipt = case A.eitherDecodeStrict' (obsReceipt base) of
     Right (Object fields) -> BL.toStrict (A.encode (Object (KM.insert "outcome" (object ["status" .= status]) fields)))
     _ -> error "test receipt is not an object"
@@ -397,8 +401,22 @@ main = do
          in isLeft (roundTrip CrawlEffectsSource silent) && roundTrip retainedSource silent == Right (file retainedSource silent))
 
     , check "a retained observation's last step supplies each crawl route's effects"
-        (fmap (map routeBody . snd) (retainedEffects (retainedSidecars RetainedRole "completed") [Route crawlRoute (KeyRoute [KeyOk] (CrawlTrial 1 [CommitEffect]))])
+        (fmap (map routeBody . rebasedEffectsRoutes) (retainedEffects (retainedSidecars RetainedRole "completed") [Route crawlRoute (KeyRoute [KeyOk] (CrawlTrial 1 [CommitEffect]))])
           == Right [KeyRoute [KeyOk] (CrawlTrial 1 [SetterEffect 5, CommitEffect])])
+    , check "a re-based route with only the time-driven block is dropped and listed, one with empty effects and one with another setter are kept"
+        (let routes =
+               [ Route (RouteName "crawl-trial-00031") (KeyRoute [KeyOk] (CrawlTrial 31 [CommitEffect]))
+               , Route (RouteName "crawl-trial-00032") (KeyRoute [KeyOk, KeyOk] (CrawlTrial 32 [CommitEffect]))
+               , Route (RouteName "crawl-trial-00033") (KeyRoute [KeyOk, KeyOk, KeyOk] (CrawlTrial 33 [CommitEffect]))
+               ]
+             steps' =
+               [ retainedStep { stepHits = blockHits }
+               , retainedStep { stepHits = [getterIn, getterOut] }
+               , retainedStep { stepHits = setterIn : blockHits }
+               ]
+             result = retainedEffects (retainedSidecarsWith RetainedRole "completed" steps') routes
+         in fmap (\rebased -> (map routeName (rebasedEffectsRoutes rebased), rebasedEffectsTimeDrivenTrials rebased)) result
+              == Right ([RouteName "crawl-trial-00032", RouteName "crawl-trial-00033"], [31]))
     , check "effects are refused from an owned or uncompleted observation, or one without a route's last step"
         (let routes = [Route crawlRoute (KeyRoute [KeyOk] (CrawlTrial 1 [CommitEffect]))]
              refused sidecars chosen = either Just (const Nothing) (retainedEffects sidecars chosen)
