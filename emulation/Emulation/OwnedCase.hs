@@ -13,6 +13,9 @@ module Emulation.OwnedCase
   , CaseSpec (..)
   , writeCase
   , loadObserved
+  , CaseId (..)
+  , writeBatch
+  , loadObservedBatch
   , registerValue
   , regionBytesOf
   , cpsrControl
@@ -25,15 +28,17 @@ module Emulation.OwnedCase
   , required
   ) where
 
-import Control.Monad (foldM, forM_, when)
+import Control.Monad (foldM, forM_, unless, when)
 import Data.Aeson (Value, object, (.=))
 import qualified Data.ByteString as B
 import Data.Bits (shiftR, (.&.))
+import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.List (nub)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.String (fromString)
 import Data.Word (Word32)
-import Emulation.NativeCase (Region (..), loadCase, runCase)
+import Emulation.NativeCase (BatchCase (..), BatchStatus (..), BatchSummary (..), CaseId (..), CaseReport (..), CaseStatus (..), Region (..), batchStatusLabel, loadCase, runBatch, runCase)
 import Emulation.NativeObservation
   ( GuestAddress (..)
   , NativeObservation (..)
@@ -51,7 +56,7 @@ import Emulation.NativeObservation
   , runnerStatusLabel
   )
 import Emulation.Sha256 (sha256, sha256Hex)
-import FujiAF.Host (get)
+import FujiAF.Host (get, str)
 import FujiAF.JSON (encodeCanonical)
 import Numeric (showHex)
 import System.Directory (createDirectoryIfMissing)
@@ -179,24 +184,25 @@ regionJson (CaseRegion region permission) =
         )
     ]
 
-artifactJson :: CaseRegion -> Value
-artifactJson (CaseRegion region _) =
+artifactJson :: (Region -> FilePath) -> CaseRegion -> Value
+artifactJson file (CaseRegion region _) =
   object
     [ "id" .= regionName (regionIdOf region)
-    , "path" .= (regionName (regionIdOf region) ++ ".bin")
+    , "path" .= file region
     , "size" .= B.length (regionBytes region)
     , "sha256" .= sha256Hex (sha256 (regionBytes region))
     ]
 
-caseValue :: CaseSpec -> Value
-caseValue spec =
+-- | The case JSON; @file@ names the artifact file holding a region's initial bytes.
+caseValue :: (Region -> FilePath) -> CaseSpec -> Value
+caseValue file spec =
   object
     [ "schema_version" .= (1 :: Int)
     , "id" .= caseId spec
     , "origin" .= ("synthetic" :: String)
     , "provenance" .= caseProvenance spec
     , "cpu" .= object ["architecture" .= ("arm" :: String), "model" .= ("cortex-r5f" :: String), "mode" .= ("arm" :: String), "endian" .= ("little" :: String)]
-    , "artifacts" .= [artifactJson r | r <- caseRegions spec, not (B.all (== 0) (regionBytes (caseRegion r)))]
+    , "artifacts" .= [artifactJson file r | r <- caseRegions spec, not (B.all (== 0) (regionBytes (caseRegion r)))]
     , "entry" .= hexAddress (caseEntry spec)
     , "exit" .= hexAddress (caseExit spec)
     , "registers" .= object [fromString (registerLabel r) .= hexWord32 value | (r, value) <- caseInitial spec]
@@ -223,11 +229,12 @@ caseValue spec =
 writeCase :: FilePath -> CaseSpec -> IO FilePath
 writeCase directory spec = do
   createDirectoryIfMissing True directory
+  let file region = regionName (regionIdOf region) ++ ".bin"
   forM_ (caseRegions spec) $ \(CaseRegion region _) ->
     when (not (B.all (== 0) (regionBytes region))) $
-      B.writeFile (directory </> (regionName (regionIdOf region) ++ ".bin")) (regionBytes region)
+      B.writeFile (directory </> file region) (regionBytes region)
   let path = directory </> "case.json"
-  B.writeFile path (encodeCanonical (caseValue spec))
+  B.writeFile path (encodeCanonical (caseValue file spec))
   pure path
 
 loadObserved :: FilePath -> FilePath -> IO NativeObservation
@@ -237,6 +244,58 @@ loadObserved runner path = do
   B.writeFile (takeDirectory path </> "native-result.json") (encodeCanonical report)
   exit <- either (error . renderObservationError) pure (reportRunnerExit report)
   either (error . renderObservationError) pure (observeNative exit regions (get report "runner"))
+
+-- | Writes the cases into one directory as @ID.case.json@, every distinct initial-bytes artifact
+-- once as @SHA256.bin@, and the batch file @batch.json@, whose path is returned.
+writeBatch :: FilePath -> [CaseSpec] -> IO FilePath
+writeBatch directory specs = do
+  let ids = map caseId specs
+  when (nub ids /= ids) (error "writeBatch: duplicate case id")
+  createDirectoryIfMissing True directory
+  let file bytes = sha256Hex (sha256 bytes) ++ ".bin"
+      caseFile spec = caseId spec ++ ".case.json"
+      artifacts = M.fromList [(file bytes, bytes) | spec <- specs, CaseRegion region _ <- caseRegions spec, let bytes = regionBytes region, not (B.all (== 0) bytes)]
+  forM_ (M.toList artifacts) $ \(name, bytes) -> B.writeFile (directory </> name) bytes
+  forM_ specs $ \spec -> B.writeFile (directory </> caseFile spec) (encodeCanonical (caseValue (file . regionBytes) spec))
+  let path = directory </> "batch.json"
+  B.writeFile path $
+    encodeCanonical
+      ( object
+          [ "schema_version" .= (1 :: Int)
+          , "cases" .= [object ["id" .= caseId spec, "path" .= caseFile spec] | spec <- specs]
+          ]
+      )
+  pure path
+
+-- | Runs a batch in one runner process, writes each case's report beside the batch as
+-- @ID.native-result.json@ and returns every case's observation in batch order, as
+-- 'loadObserved' gives it for that case alone. Fails after the batch has run, naming each case
+-- without an observation.
+loadObservedBatch :: FilePath -> FilePath -> IO [(CaseId, NativeObservation)]
+loadObservedBatch runner path = do
+  collected <- newIORef []
+  summary <- runBatch runner path $ \report -> do
+    B.writeFile (takeDirectory path </> (caseIdText (reportCase report) ++ ".native-result.json")) (encodeCanonical (reportValue report))
+    let value = reportValue report
+        observed = case reportRegions report of
+          Nothing -> Left (str (get value "status") ++ ": " ++ str (get value "reason"))
+          Just regions -> either (Left . (\problem -> str (get value "status") ++ ": " ++ renderObservationError problem)) Right $ do
+            exit <- reportRunnerExit value
+            observeNative exit regions (get value "runner")
+    modifyIORef' collected ((reportCase report, observed) :)
+  results <- reverse <$> readIORef collected
+  let missing =
+        [caseIdText ident ++ ": " ++ reason | (ident, Left reason) <- results]
+          ++ [caseIdText (batchCaseId c) ++ ": not_run" | c <- summaryCases summary, batchCaseStatus c == CaseNotRun]
+      headline =
+        unwords
+          ( ["native batch", path ++ ":", batchStatusLabel (summaryStatus summary)]
+              ++ maybe [] (\reason -> [reason]) (summaryReason summary)
+              ++ maybe [] (\ident -> ["at", caseIdText ident]) (summaryFailedCase summary)
+          )
+  unless (summaryStatus summary == BatchComplete && null missing) $
+    error (unlines (headline : missing))
+  pure [(ident, observation) | (ident, Right observation) <- results]
 
 registerValue :: NativeObservation -> Register -> Word32
 registerValue observation register =

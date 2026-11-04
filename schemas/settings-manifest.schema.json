@@ -19,7 +19,8 @@
     "properties",
     "entries",
     "objects",
-    "families"
+    "families",
+    "pathMethod"
   ],
   "properties": {
     "schemaVersion": {
@@ -187,6 +188,9 @@
       "items": {
         "$ref": "#/$defs/property"
       }
+    },
+    "pathMethod": {
+      "type": "string"
     }
   },
   "$defs": {
@@ -723,7 +727,8 @@
           "required": [
             "returns",
             "calls",
-            "complete"
+            "complete",
+            "paths"
           ],
           "properties": {
             "returns": {
@@ -740,6 +745,12 @@
             },
             "complete": {
               "type": "boolean"
+            },
+            "paths": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/path"
+              }
             }
           }
         },
@@ -749,30 +760,14 @@
           "required": [
             "stores",
             "calls",
-            "complete"
+            "complete",
+            "paths"
           ],
           "properties": {
             "stores": {
               "type": "array",
               "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "location",
-                  "extract",
-                  "source"
-                ],
-                "properties": {
-                  "location": {
-                    "$ref": "#/$defs/location"
-                  },
-                  "extract": {
-                    "$ref": "#/$defs/bitRange"
-                  },
-                  "source": {
-                    "$ref": "#/$defs/value"
-                  }
-                }
+                "$ref": "#/$defs/store"
               }
             },
             "calls": {
@@ -783,6 +778,12 @@
             },
             "complete": {
               "type": "boolean"
+            },
+            "paths": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/path"
+              }
             }
           }
         },
@@ -814,6 +815,414 @@
         },
         "setterShared": {
           "type": "boolean"
+        }
+      }
+    },
+    "store": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location",
+        "extract",
+        "source"
+      ],
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/location"
+        },
+        "extract": {
+          "$ref": "#/$defs/bitRange"
+        },
+        "source": {
+          "$ref": "#/$defs/value"
+        }
+      }
+    },
+    "guard": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "subject",
+            "constant",
+            "condition",
+            "holds"
+          ],
+          "properties": {
+            "subject": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "argument"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "argument"
+                },
+                "argument": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "constant": {
+              "$ref": "#/$defs/address"
+            },
+            "condition": {
+              "$ref": "#/$defs/condition"
+            },
+            "holds": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "subject",
+            "constant",
+            "condition",
+            "holds"
+          ],
+          "properties": {
+            "subject": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "default-requested"
+                }
+              }
+            },
+            "constant": {
+              "$ref": "#/$defs/address"
+            },
+            "condition": {
+              "$ref": "#/$defs/condition"
+            },
+            "holds": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "subject",
+            "constant",
+            "condition",
+            "holds"
+          ],
+          "properties": {
+            "subject": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "unmodelled"
+                }
+              }
+            },
+            "constant": {
+              "$ref": "#/$defs/nullableAddress"
+            },
+            "condition": {
+              "$ref": "#/$defs/condition"
+            },
+            "holds": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "guards",
+        "stores",
+        "calls",
+        "end",
+        "exit"
+      ],
+      "properties": {
+        "guards": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/guard"
+          }
+        },
+        "stores": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pathStore"
+          }
+        },
+        "calls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/address"
+          }
+        },
+        "end": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "result"
+              ],
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "return",
+                    "exit"
+                  ]
+                },
+                "result": {
+                  "$ref": "#/$defs/value"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/cut"
+            }
+          ]
+        },
+        "exit": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "paths",
+                "complete"
+              ],
+              "properties": {
+                "paths": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/exitPath"
+                  }
+                },
+                "complete": {
+                  "type": "boolean"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "exitValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "location",
+            "extract"
+          ],
+          "properties": {
+            "kind": {
+              "const": "field"
+            },
+            "location": {
+              "$ref": "#/$defs/location"
+            },
+            "extract": {
+              "$ref": "#/$defs/bitRange"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "constant"
+            },
+            "value": {
+              "$ref": "#/$defs/address"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "argument"
+          ],
+          "properties": {
+            "kind": {
+              "const": "argument"
+            },
+            "argument": {
+              "type": "integer"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "other"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "incoming"
+            }
+          }
+        }
+      ]
+    },
+    "condition": {
+      "type": "string",
+      "pattern": "^(eq|ne|hs|lo|hi|ls|code-[0-9]+)$"
+    },
+    "pathStore": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "store"
+          ],
+          "properties": {
+            "kind": {
+              "const": "modelled"
+            },
+            "store": {
+              "$ref": "#/$defs/store"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "instruction"
+          ],
+          "properties": {
+            "kind": {
+              "const": "unmodelled"
+            },
+            "instruction": {
+              "$ref": "#/$defs/address"
+            }
+          }
+        }
+      ]
+    },
+    "cut": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "reason"
+      ],
+      "properties": {
+        "kind": {
+          "const": "cut"
+        },
+        "reason": {
+          "enum": [
+            "step-limit",
+            "outside-image",
+            "unrecognized"
+          ]
+        }
+      }
+    },
+    "exitPath": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "guards",
+        "stores",
+        "calls",
+        "end",
+        "exit"
+      ],
+      "properties": {
+        "guards": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/guard"
+          }
+        },
+        "stores": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pathStore"
+          }
+        },
+        "calls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/address"
+          }
+        },
+        "end": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "result"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "return"
+                },
+                "result": {
+                  "$ref": "#/$defs/exitValue"
+                }
+              }
+            },
+            {
+              "$ref": "#/$defs/cut"
+            }
+          ]
+        },
+        "exit": {
+          "type": "null"
         }
       }
     }
