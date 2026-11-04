@@ -306,10 +306,13 @@
     {
       "phase": "owned-picker-keys",
       "capture": "owned-picker-keys",
-      "key_pulse": {
-        "hold_instructions": 8000000,
-        "release_instructions": 8000000
-      },
+      "read_preservations": [
+        {
+          "read": "resident",
+          "phase": "package-menu-prefix",
+          "source_read": "resident"
+        }
+      ],
       "steps": [
         [
           "ok",
@@ -447,13 +450,6 @@
           "0096cc64",
           450
         ]
-      ],
-      "read_preservations": [
-        {
-          "read": "resident",
-          "phase": "package-menu-prefix",
-          "source_read": "resident"
-        }
       ]
     }
   ],
