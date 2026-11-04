@@ -15,6 +15,7 @@ const PAGE: NodeRef = NodeRef::new(1);
 const PICKER: NodeRef = NodeRef::new(2);
 const STOPPING_PICKER: NodeRef = NodeRef::new(3);
 const LONG: NodeRef = NodeRef::new(4);
+const FRAMED: NodeRef = NodeRef::new(5);
 
 const fn row(token: u32, child: Option<NodeRef>) -> Row {
     Row { token: RowToken::new(token), child }
@@ -52,12 +53,13 @@ const fn node(id: u32, class: u32, wrap: Wrap, parent: Option<NodeRef>, rows: &'
     }
 }
 
-static NODES: [Node; 5] = [
+static NODES: [Node; 6] = [
     node(0, 5, Wrap::Wraps, None, &TOP_ROWS),
     node(1, 5, Wrap::Wraps, Some(TOP), &PAGE_ROWS),
     node(1, 0x104, Wrap::Wraps, Some(PAGE), &PICKER_ROWS),
     node(2, 0x104, Wrap::Stops, Some(PAGE), &PICKER_ROWS),
     node(3, 0x105, Wrap::Wraps, Some(PAGE), &LONG_ROWS),
+    Node { node_type: NodeType::new(7), ..node(4, 0x106, Wrap::Wraps, Some(PAGE), &PICKER_ROWS) },
 ];
 
 const fn registry() -> [Option<NodeRef>; REGISTRY_SLOTS] {
@@ -70,12 +72,13 @@ const fn registry() -> [Option<NodeRef>; REGISTRY_SLOTS] {
 
 static TREE: Tree = Tree { nodes: &NODES, registry: registry(), identity: TreeIdentity([7; 32]) };
 
-static RECORD_ADDRESSES: [RecordAddress; 5] = [
+static RECORD_ADDRESSES: [RecordAddress; 6] = [
     RecordAddress::new(0x0078_0000),
     RecordAddress::new(0x0078_0040),
     RecordAddress::new(0x0078_0080),
     RecordAddress::new(0x0078_00c0),
     RecordAddress::new(0x0078_0100),
+    RecordAddress::new(0x0078_0140),
 ];
 
 static RECORDS: RecordTable = RecordTable { tree: TreeIdentity([7; 32]), records: &RECORD_ADDRESSES };
@@ -127,6 +130,7 @@ enum Call {
     Availability(MenuClass, RowToken),
     InitialRow(StageKind, StageNode, MenuClass),
     KindSwitch(KindSwitchCall),
+    Seek(SeekCall),
     PastRows(RowIndex),
 }
 
@@ -137,6 +141,7 @@ struct Answers {
     initial_row: Vec<Option<RowToken>>,
     kind_switch: Option<(EngineState, EngineResult)>,
     past_rows: Vec<RowToken>,
+    seek: Option<(EngineState, EngineResult)>,
     calls: Vec<Call>,
 }
 
@@ -160,8 +165,9 @@ impl EngineServices for Answers {
         self.kind_switch.take().expect("kind switch answer")
     }
 
-    fn seek(&mut self, _: &EngineState, _: SeekCall) -> (EngineState, EngineResult) {
-        panic!("seek asked")
+    fn seek(&mut self, _: &EngineState, call: SeekCall) -> (EngineState, EngineResult) {
+        self.calls.push(Call::Seek(call));
+        self.seek.take().expect("seek answer")
     }
 
     fn token_past_rows(&mut self, _: &EngineState, row: RowIndex) -> RowToken {
@@ -358,6 +364,40 @@ fn push_keeping_a_restored_cursor_past_the_rows_reads_the_word_after_them() {
     assert_eq!(transition.state.live, frame(20, 2, 4, 0));
     assert_eq!(&answers.calls[6..8], &[Call::PastRows(RowIndex::new(20)), Call::PastRows(RowIndex::new(20))]);
     assert_eq!(answers.calls[8], Call::Perform(Effect::StoreFromBlock { slot: SnapshotSlot::new(1) }));
+}
+
+#[test]
+fn a_nested_pop_landing_on_a_framed_node_runs_the_stock_seek() {
+    let mut state = at(PAGE, frame(1, 1, 3, 0), 3, 1);
+    state.stack[2] = frame(2, 2, 4, 0);
+    let popped = at(FRAMED, frame(0, 0, 4, 0), 4, 1);
+    let sought = at(PAGE, frame(2, 2, 3, 0), 3, 1);
+    let mut answers = Answers {
+        availability: vec![RowState::Disabled; 4],
+        kind_switch: Some((popped, EngineResult::Accepted)),
+        seek: Some((sought, EngineResult::Rejected)),
+        ..Answers::default()
+    };
+    let transition = run(&state, 0xe, 1, 0x1d, &mut answers).expect("owned");
+    assert_eq!(transition.result, EngineResult::Rejected);
+    assert_eq!(transition.state, sought);
+    let seek = SeekCall {
+        kind: StageKind::Push,
+        node: StageNode::new(4),
+        node_type: NodeType::new(7),
+        id: StageId::new(0x1d),
+        seek: StageId::new(0),
+        target: StageExtra::new(0),
+    };
+    assert_eq!(
+        &answers.calls[5..],
+        &[
+            Call::KindSwitch(KindSwitchCall { kind: StageKind::Pop, node: StageNode::new(1), id: StageId::NESTED_POP, extra: StageExtra::new(0) }),
+            Call::Perform(Effect::StoreFromBlock { slot: SnapshotSlot::new(1) }),
+            Call::Seek(seek),
+            Call::Perform(Effect::StoreFromBlock { slot: SnapshotSlot::new(1) }),
+        ]
+    );
 }
 
 #[test]

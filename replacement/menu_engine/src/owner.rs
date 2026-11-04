@@ -258,7 +258,7 @@ fn owner_receipt_blocks_round_trip() {
 
 #[test]
 fn owner_cases_match_stock() {
-    assert_eq!(CASES.len(), 8);
+    assert_eq!(CASES.len(), 10);
     let results = outcomes::<Stock>();
     for (name, outcome) in &results {
         println!("case {name}: {}", outcome.as_ref().map_or_else(|reason| format!("FAIL {reason}"), |_| "pass".into()));
@@ -301,6 +301,18 @@ impl Rules for NoPushClassifier {
     const PUSH_CLASSIFIER: bool = false;
 }
 
+/// Kind 4's scroll keeps the top when the row leaves the page.
+struct DownScrollKeepsTop;
+impl Rules for DownScrollKeepsTop {
+    const DOWN_BOTTOM_ARM: bool = false;
+}
+
+/// The open rule's scroll stays 0 when the row is below the first page.
+struct OpenScrollAtZero;
+impl Rules for OpenScrollAtZero {
+    const OPEN_BOTTOM_ARM: bool = false;
+}
+
 fn control<R: Rules>(label: &str) -> usize {
     let results = outcomes::<R>();
     let failed: Vec<_> = results.iter().filter(|(_, outcome)| outcome.is_err()).collect();
@@ -319,6 +331,8 @@ fn owner_controls_fail() {
         ("no-last-move", control::<NoLastMove>("no-last-move")),
         ("zero-scroll", control::<ZeroScroll>("zero-scroll")),
         ("no-push-classifier", control::<NoPushClassifier>("no-push-classifier")),
+        ("down-scroll-keeps-top", control::<DownScrollKeepsTop>("down-scroll-keeps-top")),
+        ("open-scroll-at-zero", control::<OpenScrollAtZero>("open-scroll-at-zero")),
     ];
     for (label, failed) in counts {
         assert!(failed > 0, "control {label} matches every case");

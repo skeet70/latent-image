@@ -282,8 +282,11 @@ pub struct Transition {
 }
 
 /// What the engine asks of stock, in stock's order. Before each call the
-/// adapter writes `state` to the block. The two stock calls return the block
-/// decoded afterwards and the function's result, which stock limits to 0 and 1.
+/// adapter writes `state` to the block. `kind_switch` and `seek` tail-call
+/// stock and return the block decoded afterwards with the function's result,
+/// which stock limits to 0 and 1. Every call comes after `apply` has
+/// committed to the event, so an answer or block that does not decode is a
+/// run-failing guard event in the adapter.
 pub trait EngineServices {
     fn perform(&mut self, state: &EngineState, effect: Effect);
     /// `FUN_00d52684(class, token)`.
@@ -312,6 +315,8 @@ pub(crate) trait Rules {
     const LAST_MOVE: bool = true;
     const SCROLL: bool = true;
     const PUSH_CLASSIFIER: bool = true;
+    const DOWN_BOTTOM_ARM: bool = true;
+    const OPEN_BOTTOM_ARM: bool = true;
 }
 
 pub(crate) struct Stock;
@@ -553,11 +558,12 @@ impl<'a, R: Rules, S: EngineServices> Machine<'a, R, S> {
                 if page <= new { from_bottom } else { 0 }
             }
             ScrollRule::Down if new >= top && on_page => top,
-            ScrollRule::Down => from_bottom,
+            ScrollRule::Down if R::DOWN_BOTTOM_ARM => from_bottom,
+            ScrollRule::Down => top,
             ScrollRule::Up if new < top && on_page => new,
             ScrollRule::Up if new >= top && on_page => top,
             ScrollRule::Up => self.count(CountMode::Visible)?.wrapping_sub(page),
-            ScrollRule::Open if page <= new => from_bottom,
+            ScrollRule::Open if page <= new && R::OPEN_BOTTOM_ARM => from_bottom,
             ScrollRule::Open => 0,
         };
         Ok(ScrollTop::new(scrolled))
