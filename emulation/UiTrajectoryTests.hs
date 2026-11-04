@@ -87,11 +87,16 @@ main = do
       expect ("checked-in " ++ file ++ " asserts what " ++ retainedFile ++ " asserts")
         (either (const False) null (variantMismatches <$> retained <*> variant)))
     variants
-  -- The modal75 routes and the variants run only on FujiMod.
-  unpinned <- mapM (\file -> do
-      decoded <- decodeTrajectories <$> C.readFile ("emulation" </> file)
-      expect ("checked-in FujiMod " ++ file ++ " pins no instruction hold") (either (const False) (null . instructionPinnedPhases) decoded))
-    (variants ++ filter ("modal75-" `isPrefixOf`) files)
+  pickers <- map ("emulation/modal75-picker-trajectories" </>) . sort . filter (".json" `isSuffixOf`)
+    <$> listDirectory "emulation/modal75-picker-trajectories"
+  embassy <- map (\directory -> "experiments" </> directory </> "trajectory.json") . sort . filter ("embassy_phase1" `isPrefixOf`)
+    <$> listDirectory "experiments"
+  -- The modal75 routes and pickers, the embassy experiments and the variants run only on FujiMod.
+  unpinned <- mapM (\path -> do
+      decoded <- decodeTrajectories <$> C.readFile path
+      expect ("checked-in FujiMod " ++ path ++ " pins no instruction hold") (either (const False) (null . instructionPinnedPhases) decoded))
+    (map ("emulation" </>) (variants ++ filter ("modal75-" `isPrefixOf`) files) ++ pickers ++ embassy)
+  expectedFiles <- expect "the picker and embassy trajectory files are present" (length pickers == 21 && length embassy == 4)
   results <- sequence
     [ expect "the checked-in trajectory files are present" (not (null files))
     , expect "a trace site decodes to its address and label" $
@@ -568,7 +573,7 @@ main = do
               checkPreservation preservedRange accepted observation
          in isLeft result
     ]
-  unless (and (checkedIn ++ checkedInVariants ++ unpinned ++ results)) exitFailure
+  unless (and (checkedIn ++ checkedInVariants ++ unpinned ++ expectedFiles : results)) exitFailure
 
 rangesOf :: [(Int, Int)] -> PreservationRanges
 rangesOf bounds = either (error "preservation ranges") id

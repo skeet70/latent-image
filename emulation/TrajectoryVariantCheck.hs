@@ -1,9 +1,10 @@
 -- | Checks that a FujiMod trajectory variant asserts exactly what its retained trajectory file
--- asserts, differing at most in press timing (segment key pulses and step timing).
+-- asserts, differing at most in press timing, and pins no instruction hold.
 module Main (main) where
 
 import qualified Data.ByteString as B
-import Emulation.UiTrajectory (decodeTrajectories, variantMismatches)
+import qualified Data.Text as T
+import Emulation.UiTrajectory (decodeTrajectories, instructionPinnedPhases, variantMismatches)
 import System.Directory (makeAbsolute)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitFailure)
@@ -21,6 +22,8 @@ main = do
   variant <- resolve variantPath >>= B.readFile
   case (,) <$> decodeTrajectories retained <*> decodeTrajectories variant of
     Left message -> putStrLn ("trajectory-variant-check: " ++ message) >> exitFailure
-    Right (old, new) -> case variantMismatches old new of
+    Right (old, new) -> case variantMismatches old new ++ map pinned (instructionPinnedPhases new) of
       [] -> putStrLn ("trajectory-variant-check: " ++ variantPath ++ " asserts what " ++ retainedPath ++ " asserts")
       mismatches -> mapM_ (putStrLn . ("trajectory-variant-check: " ++)) mismatches >> exitFailure
+  where
+    pinned phase = "variant segment " ++ T.unpack phase ++ " pins an instruction hold"

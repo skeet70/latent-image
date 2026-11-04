@@ -944,7 +944,7 @@ haskell_test(
     name = "ui-trajectory-tests",
     size = "small",
     srcs = ["UiTrajectoryTests.hs"],
-    data = glob(["*-trajectories.json", "*-trajectories.fujimod.json"]),
+    data = glob(["*-trajectories.json", "*-trajectories.fujimod.json", "modal75-picker-trajectories/*.json"]) + ["//:experiment-trajectories"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":emulator-usb",
@@ -1001,6 +1001,7 @@ haskell_binary(
         "//host:bytestring",
         "//host:directory",
         "//host:filepath",
+        "//host:text",
     ],
 )
 

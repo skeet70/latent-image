@@ -4,3 +4,9 @@ exports_files([
     "devenv.lock",
     "devenv.nix",
 ])
+
+filegroup(
+    name = "experiment-trajectories",
+    srcs = glob(["experiments/*/trajectory.json"]),
+    visibility = ["//emulation:__pkg__"],
+)
