@@ -24,11 +24,22 @@ haskell_library(
     ],
 )
 
-# bazel run //replacement/rtos_own_first/stage:stage-own-first -- REGIONS_JSON BIN_A SYMBOLS_A BIN_B SYMBOLS_B SOURCE_DAT LOADER_A LOADER_B NEW_OUTPUT_DIRECTORY
+_LINKED = [
+    "//replacement/rtos_own_first:regions.json",
+    "//replacement/rtos_own_first:own-first-a.bin",
+    "//replacement/rtos_own_first:own-first-a.symbols",
+    "//replacement/rtos_own_first:own-first-b.bin",
+    "//replacement/rtos_own_first:own-first-b.symbols",
+]
+
+# Canonical inputs come from private-data:
+# bazel run //replacement/rtos_own_first/stage:stage-own-first -- SOURCE_DAT LOADER_A LOADER_B NEW_OUTPUT_DIRECTORY
 haskell_binary(
     name = "stage-own-first",
     srcs = ["StageMain.hs"],
     main_file = "StageMain.hs",
+    args = ["$(rootpath %s)" % linked for linked in _LINKED],
+    data = _LINKED,
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":own-first-artifact",
