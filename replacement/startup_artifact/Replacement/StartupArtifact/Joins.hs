@@ -123,7 +123,7 @@ rootHeader = 0x40010
 bindings :: Join JoinKind
 bindings = Join CriticalPairPublisherBindings (Set.fromList [Record2Link, PrimaryPublisher])
   [at LoaderA 0x40430 0x409ac]
-  (HostProof "the owned publisher emits every core-0 interface binding the critical pair consumes at the unchanged loader-A root; its proof requires every store before its return (emulation/Emulation/PrimaryInitializerArtifact.hs:300,337), and core 1 reads the core-0 table only after the loader-B wait observes the core-0 completion store at 0x40a08, which follows the return at 0x409e0; the wait is the stock one or, with loader-B orchestration composed, the one join prefix-orchestration-b checks")
+  (HostProof "the owned publisher emits every core-0 interface binding the critical pair consumes at the unchanged loader-A root; its proof requires every store before its return (emulation/Emulation/PrimaryInitializerArtifact.hs:300,337), and core 1 reads the core-0 table only after the loader-B wait observes the core-0 completion store, which follows the publisher's return: stock 0x40a08 after the return at 0x409e0, or loader-A orchestration's, which its admission orders after the initializer call (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs expected); the wait is the stock one or, with loader-B orchestration composed, the one join prefix-orchestration-b checks")
   [ HostCheck "loader-a-root-unchanged" $ \evidence ->
       targetWord (evidenceComposed evidence) LoaderA rootHeader == targetWord (evidenceCanonical evidence) LoaderA rootHeader
         && targetWord (evidenceCanonical evidence) LoaderA rootHeader /= Nothing
