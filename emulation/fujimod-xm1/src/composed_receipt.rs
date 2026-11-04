@@ -697,7 +697,8 @@ fn differences(contract: &Contract, digest: &Sha256, retained: &Receipt, owned: 
             *slot = Some(section);
         }
         if let [Some(retained), Some(owned)] = sections {
-            application_observation::check_pair(retained, owned).map_err(|field| Difference::ApplicationPair { field })?;
+            application_observation::check_pair(retained, owned, [directories.retained, directories.owned])
+                .map_err(|field| Difference::ApplicationPair { field })?;
         }
     }
     Ok(attach)

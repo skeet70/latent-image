@@ -455,10 +455,13 @@ fn scanout(png: &SideFile, planes: &SideFile) -> Value {
         "pixels": {"width": 4, "height": 2, "rgb_bytes": 24, "rgb_sha256": digest('c')},
         "png": {"path": format!("/out/{}", png.path.as_str()), "sha256": png.sha256, "bytes": png.bytes},
         "source_bytes": {"path": format!("/out/{}", planes.path.as_str()), "sha256": planes.sha256, "bytes": planes.bytes},
-        "source_planes": [{"kind": "main", "native_source_address": 0x100000, "offset": 0, "bytes": 16}],
+        "source_planes": [{"kind": "main", "native_source_address": 0x100000, "offset": 0, "bytes": 16},
+            {"kind": "graphics", "layer": 1, "channel": 0, "native_source_address": 0x200000, "offset": 16, "bytes": 16}],
         "native_scanout_state": {"instances": [{"instance": 0, "image_base": "0xfff6b000",
-            "registers": {"0xfff6b000": "0x00000001", "0xfff6b028": "0x00030001", "0xfff6b02c": "0x00100000"}}], "backdrop_profile": null},
+            "registers": {"0xfff6b000": "0x00000001", "0xfff6b010": "0x00030001", "0xfff6b028": "0x00030001", "0xfff6b02c": "0x00100000",
+                "0xfff6b090": "0x00000001", "0xfff6b0a4": "0x00030001", "0xfff6b0b4": "0x00200000"}}], "backdrop_profile": null},
         "native_frame_state": {"instance": 0, "image_base": "0xfff6b000", "width": 4, "height": 2,
+            "graphics": [{"layer": 1, "channel": 0, "width": 4, "height": 2, "source": "0x00200000", "origin": [0, 0], "visible": null, "stride_bytes": 8}],
             "main": {"width": 4, "height": 2, "source": "0x00100000", "stride": 8}, "source": null, "stride": null, "canvas": null},
     })
 }
@@ -469,7 +472,7 @@ fn visible(directory: &std::path::Path, inputs: &[RouteInput], memory: &Memory) 
         let input = (index > 0).then(|| InputIndex(14 + index as u64));
         let probe = input.map_or(probe(2), |id| inputs[id.0 as usize].after.unwrap());
         let png = SideFile::replace(directory, &format!("{name}.png"), format!("png {index}").as_bytes()).unwrap();
-        let planes = SideFile::replace(directory, &format!("{name}.planes.bin"), &[index as u8; 16]).unwrap();
+        let planes = SideFile::replace(directory, &format!("{name}.planes.bin"), &planes_bytes(index as u8, 0xa0 + index as u8)).unwrap();
         let scanout = SideFile::replace(directory, &format!("{name}.scanout.json"), &serde_json::to_vec(&scanout(&png, &planes)).unwrap()).unwrap();
         let counter = probe.graphics.started;
         let save = json!({"engine": {"regs": [], "busy": false, "command_pending": null, "jobs_started": counter, "jobs_completed": counter,
@@ -480,6 +483,15 @@ fn visible(directory: &std::path::Path, inputs: &[RouteInput], memory: &Memory) 
             input, instructions, probe, menu: Some(Menu { menu: 1, setting: 5, cursor: 2 }), controller: memory.view(0x944580, 20), png, planes, scanout, graphics,
         }
     }).collect()
+}
+
+fn planes_bytes(main: u8, graphics: u8) -> Vec<u8> { [[main; 16], [graphics; 16]].concat() }
+
+/// Rewrites `capture`'s planes file and its scanout record in `directory`, rebinding both.
+fn replace_planes(directory: &std::path::Path, capture: &mut VisibleCapture, bytes: &[u8]) {
+    capture.planes = SideFile::replace(directory, capture.planes.path.as_str(), bytes).unwrap();
+    let record = serde_json::to_vec(&scanout(&capture.png, &capture.planes)).unwrap();
+    capture.scanout = SideFile::replace(directory, capture.scanout.path.as_str(), &record).unwrap();
 }
 
 struct Scenario {
@@ -760,18 +772,32 @@ fn a_changed_evidence_file_is_a_capture_bound_refusal() {
 }
 
 #[test]
-fn the_pair_check_compares_inputs_visible_state_and_targets() {
+fn the_pair_check_compares_inputs_menus_graphics_planes_mailbox_words_and_targets() {
     let (retained, owned) = (Scenario::new(), Scenario::new());
-    assert_eq!(check_pair(retained.section(), owned.section()), Ok(()));
+    let directories = [retained.directory.as_path(), owned.directory.as_path()];
+    assert_eq!(check_pair(retained.section(), owned.section(), directories), Ok(()));
     let mut differing = owned.section().clone();
     differing.inputs[15].key = RouteKey::Right;
-    assert_eq!(check_pair(retained.section(), &differing), Err(PairField::Inputs));
+    assert_eq!(check_pair(retained.section(), &differing, directories), Err(PairField::Inputs));
     let mut differing = owned.section().clone();
     differing.visible[2].menu = None;
-    assert_eq!(check_pair(retained.section(), &differing), Err(PairField::Visible));
+    assert_eq!(check_pair(retained.section(), &differing, directories), Err(PairField::Visible));
+    let mut differing = owned.section().clone();
+    differing.visible[3].controller.physical.0[12] ^= 1;
+    assert_eq!(check_pair(retained.section(), &differing, directories), Ok(()));
+    differing.visible[3].controller.physical.0[0] ^= 1;
+    assert_eq!(check_pair(retained.section(), &differing, directories), Err(PairField::Visible));
+    let mut differing = owned.section().clone();
+    differing.visible[3].controller.physical.0[20] ^= 1;
+    assert_eq!(check_pair(retained.section(), &differing, directories), Err(PairField::Visible));
     let mut differing = owned.section().clone();
     differing.targets[0].word = CodeWord(0);
-    assert_eq!(check_pair(retained.section(), &differing), Err(PairField::Targets));
+    assert_eq!(check_pair(retained.section(), &differing, directories), Err(PairField::Targets));
+    let mut differing = owned.section().clone();
+    replace_planes(&owned.directory, &mut differing.visible[2], &planes_bytes(0x77, 0xa2));
+    assert_eq!(check_pair(retained.section(), &differing, directories), Ok(()));
+    replace_planes(&owned.directory, &mut differing.visible[2], &planes_bytes(2, 0x5a));
+    assert_eq!(check_pair(retained.section(), &differing, directories), Err(PairField::Visible));
 }
 
 #[test]

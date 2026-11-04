@@ -771,6 +771,7 @@ pub fn render_completion(evidence: &RoleEvidence) -> Result<(), ApplicationRefus
         require(settled(input.before) && settled(input.after) && input.settled.is_some_and(|at| at >= input.debounced), check,
             "a settled input lacks a drained handback")?;
     }
+    let mut previous_graphics = None;
     for (index, visible) in receipt.visible.iter().enumerate() {
         let input = (index > 0).then(|| InputIndex((FIRST_SETTLED - 1 + index) as u64));
         require(visible.input == input, check, "a visible capture's input attribution differs")?;
@@ -782,6 +783,7 @@ pub fn render_completion(evidence: &RoleEvidence) -> Result<(), ApplicationRefus
         let scanout = visible.scanout.read(evidence.directory).map_err(bound)?;
         let planes = visible.planes.read(evidence.directory).map_err(bound)?;
         planes::complete(&scanout, &visible.png, &visible.planes, planes.len() as u64).map_err(|error| ApplicationRefusal::new(check, error))?;
+        let graphics_digest = planes::graphics_digest(&scanout, &planes).map_err(|error| ApplicationRefusal::new(check, error))?;
         if let Some(id) = visible.input {
             let input = receipt.inputs.get(id.0 as usize).ok_or_else(|| ApplicationRefusal::new(check, "a visible capture names no input"))?;
             require(input.settled == Some(visible.instructions) && input.after == Some(visible.probe), check,
@@ -791,9 +793,11 @@ pub fn render_completion(evidence: &RoleEvidence) -> Result<(), ApplicationRefus
                 let advanced = visible.probe.graphics.started > before.probe.graphics.started
                     && visible.probe.graphics.completed > before.probe.graphics.completed
                     && visible.probe.graphics.bytes_completed > before.probe.graphics.bytes_completed;
-                require(before.png.sha256 != visible.png.sha256 && advanced, check, "an input has no newly acknowledged visible result")?;
+                // The main plane alternates with the generated live source, so only the graphics planes show the input.
+                require(previous_graphics.as_ref() != Some(&graphics_digest) && advanced, check, "an input has no newly acknowledged visible result")?;
             }
         }
+        previous_graphics = Some(graphics_digest);
     }
     Ok(())
 }
@@ -834,19 +838,34 @@ pub fn capture_bound(evidence: &RoleEvidence) -> Result<(), ApplicationRefusal> 
 pub enum PairField {
     /// Input keys and purposes.
     Inputs,
-    /// Visible planes, menus and controller records.
+    /// Menus, plane layouts, graphics planes and the controller record outside its timing words.
     Visible,
     /// Dynamic targets and their words.
     Targets,
 }
 
-pub fn check_pair(retained: &ApplicationReceipt, owned: &ApplicationReceipt) -> Result<(), PairField> {
+/// Controller words `0x94458c` and `0x944590`, which differ with each role's timing; the other 18 words are compared.
+const TIMING_WORDS: std::ops::Range<usize> = 12..20;
+
+/// `directories` are the roles' run directories holding their visible side files.
+pub fn check_pair(retained: &ApplicationReceipt, owned: &ApplicationReceipt, directories: [&Path; 2]) -> Result<(), PairField> {
     let keys = |receipt: &ApplicationReceipt| receipt.inputs.iter().map(|input| (input.key, input.purpose)).collect::<Vec<_>>();
     if keys(retained) != keys(owned) {
         return Err(PairField::Inputs);
     }
+    let planes = |capture: &super::VisibleCapture, directory: &Path| -> Option<(String, crate::composed_catalog::Sha256)> {
+        let scanout = capture.scanout.read(directory).ok()?;
+        Some((planes::layout(&scanout).ok()?, planes::graphics_digest(&scanout, &capture.planes.read(directory).ok()?).ok()?))
+    };
+    let controller = |capture: &super::VisibleCapture| {
+        let bytes = &capture.controller.physical.0;
+        (bytes.len() >= TIMING_WORDS.end).then(|| [&bytes[..TIMING_WORDS.start], &bytes[TIMING_WORDS.end..]].concat())
+    };
     let same = retained.visible.len() == owned.visible.len()
-        && retained.visible.iter().zip(&owned.visible).all(|(a, b)| a.planes.sha256 == b.planes.sha256 && a.menu == b.menu && a.controller.physical == b.controller.physical);
+        && retained.visible.iter().zip(&owned.visible).all(|(a, b)| {
+            let (left, right) = (planes(a, directories[0]), planes(b, directories[1]));
+            a.menu == b.menu && left.is_some() && left == right && controller(a).is_some() && controller(a) == controller(b)
+        });
     if !same {
         return Err(PairField::Visible);
     }

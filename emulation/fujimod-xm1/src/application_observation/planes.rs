@@ -312,6 +312,25 @@ pub(crate) fn complete(scanout: &[u8], png: &SideFile, planes: &SideFile, planes
     full_planes(&scanout)
 }
 
+/// Graphics planes only, in scanout order: the main plane shows the run's generated live source.
+pub(crate) fn graphics_digest(scanout: &[u8], planes: &[u8]) -> Result<Sha256, String> {
+    let scanout: Scanout = serde_json::from_slice(scanout).map_err(|error| format!("scanout: {error}"))?;
+    let mut bytes = Vec::new();
+    for plane in scanout.source_planes.iter().filter(|plane| matches!(plane.kind, PlaneKind::Graphics { .. })) {
+        let start = usize::try_from(plane.offset).map_err(|error| error.to_string())?;
+        let end = start.checked_add(usize::try_from(plane.bytes).map_err(|error| error.to_string())?).ok_or("plane extent overflows")?;
+        bytes.extend_from_slice(planes.get(start..end).ok_or("a graphics plane lies outside the planes file")?);
+    }
+    require(!bytes.is_empty(), "the scanout selects no graphics plane")?;
+    Ok(Sha256::of(&bytes))
+}
+
+/// The selected planes' kinds, sources, offsets and lengths as JSON, for comparison across roles.
+pub(crate) fn layout(scanout: &[u8]) -> Result<String, String> {
+    let scanout: Scanout = serde_json::from_slice(scanout).map_err(|error| format!("scanout: {error}"))?;
+    serde_json::to_string(&scanout.source_planes).map_err(|error| error.to_string())
+}
+
 /// The scanout record and planes with the last selected plane one byte short, consistently rebound.
 pub(crate) fn truncate(scanout: &[u8], planes: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
     let mut scanout: Scanout = serde_json::from_slice(scanout).map_err(|error| format!("scanout: {error}"))?;
