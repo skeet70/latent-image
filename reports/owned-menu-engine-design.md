@@ -1,6 +1,6 @@
 # Owned menu engine: design (#128)
 
-Status: design for review. No owned engine code exists yet. Facts cite the ledger or `private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c`; **[INFERENCE]** marks what the evidence does not show directly.
+Status: design for review, revision 2 (after MenuEngineDesignReview). No owned engine code exists yet. Facts cite the ledger or `private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c`; **[INFERENCE]** marks what the evidence does not show directly.
 
 ## Target and acceptance
 
@@ -10,80 +10,81 @@ Acceptance, from #128: for the observed presses (E-MENU-ENGINE-OBSERVE-150) and 
 
 ## The stock engine this replaces
 
-All facts in this section are from E-MENU-ENGINE-OBSERVE-150 and `reports/recipe-bank-ui-ownership.md#stock-menu-engine-and-the-owned-target`.
+Facts from E-MENU-ENGINE-OBSERVE-150, `reports/recipe-bank-ui-ownership.md#stock-menu-engine-and-the-owned-target` and the review of revision 1.
 
 - Events cross one fixed block `0x0094f64c..0x0094f660` written by `0x0063270c`: code, kind, node, id, extra. Stage events have code `0x1e` and are posted through `0xd3d858(kind, id)`.
-- Controller 100's action `0xca4674` consumes the block. It saves the 0x430-byte state block (`0x0061d384`), calls `0xd4dd2c` → engine wrapper `0xbf95c8` → kind switch `0xbfa234` and then `0x0061ceac` (snapshot store), restores the block (`0x0061d3a8`) when the engine returns 0, then runs the special post `0xd42a64` and, for kinds 4, 5 and `0xe`, the value post of event `0x1d` and controller 30.
-- Engine state is the block `[0x009571d0,0x00957600)`: open node pointer `0x009571d0`, `0x009571d4` (role not established), cursor `0x009571d8`, visible ordinal `0x009571dc`, visible count `0x009571e0`, scroll top `0x009571e4`, total rows `0x009571e8`, visible count at open `0x009571ec`, row states `0x009571f0[0x4f]` (0 offered, 1 variant, 2 disabled, 3 hidden), saved cursor, ordinal and count from `0x0095732c`, remembered rows `0x0095733c[node]`, cursor stack `0x00957554` indexed by depth `0x009575f4`, menu-open flag `0x009575fc`.
-- Kinds (`0xbfa234`, all.c:331301): 1 open, 2 close, 4, 5 and `0x45`..`0x48` move, 6..`0xb` a move wrapped in a pop and push, `0xe`/`0xf` push and pop, `0x10`..`0x12` multi-level push and pop, `0x13` re-open. Kinds 1, 4, `0xe` and `0xf` were observed; the others are read from code only.
-- The step `0xbf9b1c` (all.c:330967) wraps unless node word 4 (`+0x10`) is 1 and skips row states 2 and 3 unless node word 5 (`+0x14`) is 1.
-- Draw code reads 44-byte copies of the state through `0x0061cd14` (live) or `0x0061ce1c` (snapshots at `0x00944414`, `0x0093eb74+0x2c*node`, `0x009412d4+0x2c*node`), not the globals. The snapshot service is already ported, unwired, as `replacement/owned_menu` module `frame`.
-- Writers of the block in the four observed presses were all in `0x00bf977c..0x00bfacb0` plus the clear `0x007221c8`; statically `0x0061d384`/`0x0061d3a8` (rollback bracket) and `0x0061cf14` (clear) also write it.
+- Four stage consumers call `0xd4dd2c`: `0xca4674` (controller 100), `0xca0080`, `0xca4e98` and `0xcc45ac`. `0xca4674` saves the 0x430-byte block (`0x0061d384`), calls `0xd4dd2c`, restores the block (`0x0061d3a8`) when the engine returns 0, then runs the special post `0xd42a64` and, for kinds 4, 5 and `0xe`, the value post of event `0x1d`. `0xd4dd2c` does work of its own before and after the engine (`0xd4d7a4`, `0x0063807c`, copies of `0x944580` and the event block).
+- `0xd4dd2c` calls the engine wrapper `0xbf95c8`, which calls the kind switch `0xbfa234` and then the snapshot store `0x0061ceac(*0x009571d0)`, also when the switch returns 0. `0xbfa800` (open and re-open, reached by kinds 1, `0x13` and every push and pop through `0xbfab98`) also calls `0xbfa234` directly.
+- Kinds (`0xbfa234`, all.c:331301): 1 open, 2 close, 4, 5 and `0x45`..`0x48` move, 6..`0xb` a move wrapped in a pop and push, `0xe`/`0xf` push and pop, `0x10`..`0x12` multi-level push and pop, `0x13` re-open. Each kind branches further on its arguments and node flags: a move whose id equals the node's rows per page is a page move; push and pop with ids `0x17`/`0x18` seek through `0xbfad04`; a parent of type 5 or 7 changes push and pop; kind 1 on an empty node recurses into kind `0xf`. Kinds 1, 4, `0xe` and `0xf` were observed, each in one argument class.
+- Engine state, the block `[0x009571d0,0x00957600)`: open node pointer `0x009571d0`; node word 10 (`*(u16 *)(record + 0x28)`, written by `0xbf976c`) at `0x009571d4`; cursor `0x009571d8`; visible ordinal `0x009571dc`; visible count `0x009571e0`; scroll top `0x009571e4`; total rows `0x009571e8`; visible count at open `0x009571ec`; row states `0x009571f0[0x4f]` (0 offered, 1 variant, 2 disabled, 3 hidden); saved cursor, ordinal and count from `0x0095732c`; remembered rows `0x0095733c[node]`; cursor stack `0x00957554` indexed by depth `0x009575f4`, with the visible count saved on pop at `0x0095757c`; the push classifier save `0x009575f8` (`0x0061d0e4`); menu-open flag `0x009575fc`.
+- Outside the block, the move `0xbf9f44` stores the moved row's class and token at `0x01467580`/`0x01467584` (all.c:331291); the special post `0xd42a64` posts `0x1d` from them for kinds 8..`0xb`, and `0xcc453c` reads them.
+- Snapshot stores: `0xbf9f44` at the event's node index, `0xbfab98` at each new record id at each depth it passes, `0xbf95c8` at `*0x009571d0`. Areas `0x00944414` (root), `0x0093eb74+0x2c*id` (depth 1), `0x009412d4+0x2c*id` (depth 2). Registry index and record id differ for some nodes (`0x78fdd4` is registry 82 with id 63).
+- Initial row: `0xbfa800` sets the cursor from `0xd588b8(kind, node, class)` (all.c:331505); its default arm reads the property's current value (`0x0061c93c`) and converts it to a row token (`0x0061d514`), and its class-5 arm reads the block.
+- The engine calls `0xd5b350` on open, close, move, push and pop (which calls `0x00637ed0`), `0xd52684` for row states, and `0xbf9a5c` writes property `0x285` through `0x0061c91c` for node `0x7a` (all.c:330959).
+- Writers of the block outside the engine: the rollback bracket `0x0061d384`/`0x0061d3a8`; the commit and restore pair `0x006364e8`/`0x006364a4` over the copy at `0x0096b58c`, called from controller actions (all.c:364176-364261, 463715); the initialisers `0x0061cf14`, `0x0061cf84` and `0x0061d038`.
+- Draw code reads 44-byte copies through `0x0061cd14` (live) or `0x0061ce1c` (snapshots), not the globals. The redraw `0xd4c8d4` calls `0xbf9a2c` through `0xbf95a8`.
 
 ## Engine boundary
 
-The engine is a `no_std` Rust library with no stock addresses in its core. It takes typed events, reads the declarative tree and a row-availability service, and produces typed state plus effects. Everything stock-specific sits in adapters around it.
+The engine is a `no_std` Rust library whose core holds no stock addresses. Its one operation is a pure transition.
 
 ```text
-            stage event (kind, node, id, extra)
-stock 0xca4674 ──► engine-entry adapter (0xbf95c8) ──► Engine::apply(MenuEvent) ──► EngineState
-                                                         │            │
-                                       Tree (generated)  │            ├─► Effects { snapshot, notify, value_changed }
-                                       Availability ◄────┘            └─► state mirror ──► 0x9571d0 block, snapshots
+apply(state: EngineState, event: MenuEvent, services: &mut impl EngineServices) -> Transition
+Transition { result: EngineResult, state: EngineState, effects: [Effect] }
 ```
 
-- `MenuEvent` is a closed enum decoded from `(kind, node, id, extra)` at the adapter: `Open { node }`, `Close { id }`, `Move { direction, extra }`, `MoveInFrame { direction, pop_first: bool }` for 6..`0xb`, `Push { id }`, `Pop { id }`, `PushPop { levels }` for `0x10`..`0x12`, `Reopen`. A kind outside this set, or one not yet owned, decodes to `Unhandled(kind)`, and the adapter runs the stock kind switch for it.
-- `EngineState` is typed: `NodeRef` (generated tree index), `RowIndex`, `VisibleOrdinal`, `RowCount`, `ScrollTop`, `RowState` (closed enum of the four states), a fixed-depth `Frame` stack, a `MenuOpen` flag and a remembered-row table indexed by `NodeId`. It is not stored in the stock layout; the mirror writes that layout.
-- `Tree` is a static generated from the decoded menu tables (E-MODAL-MENU-TABLES-150) by a new generator next to `MenuTablesMain.hs`, pinned to the image4 and strings identities. Each node carries its id, type, class or property, rows per page, `no_wrap`, `no_availability`, `remember`, parent, rows `{token, child}` and labels, plus the stock record address the mirror must publish. The three node and token newtype families now spread over `owned_menu`, `recipe_ui` and `modal_runtime` collapse into the engine's.
-- `Availability` is a trait the engine calls on open, push, pop and re-open to fill row states. Its first implementation calls stock `0xd52684` (shim below); the declared implementation comes when the tree carries availability rules.
+- `MenuEvent` carries every argument a kind uses: `node: NodeIndex`, `id: StageId`, `extra: StageExtra`, decoded into typed variants (`Open`, `Close`, `Move { direction, step }`, `MoveInFrame`, `Push`, `Pop`, `PushPop { levels }`, `Reopen`), each keeping node, id and extra as the kind reads them. A move's `step` distinguishes a row step from a page step (id equal to rows per page).
+- `EngineResult` is `Accepted` or `Rejected`, the value `0xd4dd2c`, the bracket, `0xd42a64` and the value post branch on.
+- `EngineState` is the typed form of the block plus the last-move pair `0x01467580`/`0x01467584`: `NodeIndex`, `NodeWord10`, `RowIndex`, `VisibleOrdinal`, `RowCount`, `ScrollTop`, `RowState` per row, the saved triple, the remembered-row table, a `Frame` stack with the pop-saved visible count and push-saved classifier, `MenuOpen`, and `LastMove { class, token }`.
+- `Effect` is an ordered list: `StoreSnapshot { area, slot }`, `Notify(0xd5b350 arguments)`, `WriteProperty { property, value }` (the `0x285` write), `Classify` (`0x0061d0e4`). The adapter performs them in order through stock services while those are shims.
+- `EngineServices` is the trait for what the engine asks stock: `availability(node) -> [RowState]` (`0xd52684`) and `initial_row(kind, node, class) -> RowToken` (`0xd588b8`). Before each service call the adapter writes the engine's in-progress state to the block, since both stock services read it.
+- `Tree` is generated from the decoded menu tables (E-MODAL-MENU-TABLES-150) by a new generator next to `MenuTablesMain.hs`, pinned to the image4 and strings identities. A node carries id, type, class or property, rows per page, `no_wrap` (`+0x10`), `no_availability` (`+0x14`), `remember`, parent, word 10, rows `{token, child}` and labels. Stock record addresses are not in the tree: the generator emits a separate `NodeIndex` to record address table that only the decode and mirror shim reads.
+- The tree and engine types are unconditional modules of the bank crate; only the adapter, its seam assembly and its publication are behind `rb_menu_engine_owned`. The node and token newtypes now repeated in `owned_menu`, `recipe_ui` and `modal_runtime` move to the engine's module.
 
 ## Placement in the guest
 
-The adapter hooks the engine wrapper `0xbf95c8`, the single entry for every stage event whether a stock or an owned key action posted it. This is the report's "Stage-event adapter" placement (b). Placement (a), calling the engine from the owned picker cells, would cover only the frozen picker cells and leave stock-posted events on the stock engine.
+The adapter hooks the engine wrapper `0xbf95c8`, reached by all four stage consumers through `0xd4dd2c`, so stage events from stock and owned key actions both reach it.
 
 - Seam: one published branch at `0xbf95c8`, built like the controller-75 seam (`replacement/modal_runtime/src/entry.S`, one RAM-push publication with rollback).
-- Retired code, the end state: the kind switch `0xbfa234` and the engine functions it reaches that write the block (`0xbf976c`, `0xbf985c`, `0xbf988c`, `0xbf9a2c`, `0xbf9a5c`, `0xbf9b1c`, `0xbf9c1c`, `0xbf9f44`, `0xbfa800`, `0xbfab98`, `0xbfad04` and their extents). While some kinds still fall back to stock (below), only functions that no fallback kind reaches are retired. Each retired extent becomes a guard fetch watch, as the controller-75 generic bodies are. Before retirement, a reference scan over image4 and image5 (pointer tables, instruction-built addresses) must show no caller outside the replaced extent set; any other caller becomes a retained interface or blocks retirement of that function.
-- Retained around the engine: `0xca4674` (with the rollback bracket, special post and value post), `0xd4dd2c`, `0x0061ceac`, `0xd52684`, the renderer and the commit path. Each is a shim below.
-- Build: a `rb_menu_engine_owned` cfg in the bank crate, independent of `rb_modal75_owned`, so that the engine runs against both the stock controller 75 and the owned one.
-
-## The stock-state mirror
-
-Stock code outside the engine reads the block and the snapshots: draw code through `0x0061cd14`/`0x0061ce1c`, the frame accessors `0x61d154`..`0x61d334`, `0xca4674`'s rollback bracket, and controller actions that read the cursor or node. Until each reader is owned, the engine writes the stock layout after every event.
-
-- The mirror writes the whole block image the engine's state implies, in one pass, at the end of `apply`, then calls the snapshot store as `0xbf95c8` does. Writing only changed words would let a stale stock value survive where the owned state has none; a whole-image write makes the block a function of the owned state.
-- The open node pointer must be the stock record address, since stock readers dereference it. The tree carries it per node.
-- `0x009571d4` and the row-state and saved fields not yet explained are mirrored from the values the decoded semantics produce; the host oracle below compares the whole 0x430 bytes, so an unexplained word that differs fails the oracle instead of passing unnoticed.
+- On entry the adapter decodes `EngineState` from the block and the last-move pair. The block stays the source of truth while stock code also writes it (the bracket restore, `0x006364a4`, the initialisers, fallback kinds), so every event starts from what stock last left there.
+- Coverage is by event class, not kind: a class is (kind, argument class, node flags), for example kind 4 with a row step on a node with `no_wrap = 0` and `no_availability = 0`. The adapter runs `apply` only for classes with an oracle case (below); any other class runs the stock kind switch and the stock snapshot store, exactly as `0xbf95c8` did.
+- After `apply`, the adapter writes the whole block and the last-move pair from the returned state, then performs the effects in order, then returns the result to `0xd4dd2c`.
+- Retirement: nothing is retired while any fallback class reaches the stock engine functions, and every function under `0xbfa234` is reachable from some fallback class today. `0xbf9a2c` is a retained interface (the redraw calls it). Instead of a retired-fetch watch, the guard checks owned coverage directly: an entry to `0xbfa234` from the adapter's fallback call whose event is in an owned class fails the run. The retired set grows when a function's last fallback class becomes owned; a reference scan over image4 and image5 (pointer tables, instruction-built addresses) must then show no other caller.
 
 ## Verification
 
-- Host oracle, before any guest run. The four `--menu-observe` receipts hold the 0x430-byte block before and after one press and the event block arguments (E-MENU-ENGINE-OBSERVE-150). A host test decodes the before block into `EngineState`, applies the event with an availability fake that answers from the recorded after block's row states, and requires the mirrored after block to equal the recorded one byte for byte and the stored snapshot to equal the recorded snapshot words. Each new observation (page moves, no-wrap and no-availability nodes, dialogs) adds a case. A press with no receipt has no oracle and is not owned.
-- Kind fallback: kinds without an oracle case decode to `Unhandled` and run the stock kind switch through the adapter. That keeps those kinds unretired, so the retired set grows only with oracle coverage.
-- Guest pairs on the picker route. The 20 picker trajectories and the menu-observe paths run once per role, stock against the owned-engine build, under the modal lifetime guard. Each segment adds reads of the block and the three snapshot areas; event posts are counted with a trace site on `0x0063270c` (r0 = `0x1d`). Comparison: the block and snapshot reads equal, the `0x1d` post sequence equal, `modal-settings-compare` equal, render-compare content equal, and no fetch of a retired extent.
-- Picker 246's open stall (E-MODAL75-PICKER-PAIRS-150) is excluded until its cause is known.
+- Host decode and mirror round trip: decoding each of the eight before and after images in the four receipts and mirroring it back gives the same 0x430 bytes.
+- Host oracle per event class: the receipt's before block and event, through `apply` with services answered from the receipt, must give the recorded after block byte for byte, the recorded writes to `0x01467580`/`0x01467584`, every recorded snapshot word write in order (the receipts' watch over `[0x0093eb74,0x00944540)`), the `0x285` write when present, and the recorded result (the special post's presence). Receipts so far record neither `0xd588b8`'s nor `0xd52684`'s return value or the last-move pair, so new `--menu-observe` receipts add trace sites at the returns of `0xd588b8` and `0xd52684` and a watch on `0x01467580..0x01467588`. The four existing receipts are re-observed with those additions before they serve as cases.
+- Negative controls: deliberately wrong engines must fail the oracle: one that ignores `no_wrap`, one with the skip rule inverted, one without initial-row selection, one that drops the last-move pair. A picker case whose current value is not at the restored row is needed for the initial-row control to discriminate.
+- Guest pairs: the 20 picker trajectories (except picker 246 while its stall is open) and the `--menu-observe` paths run once per role, stock against the owned-engine build, under the modal lifetime guard. Each segment reads the block, the last-move pair and the three snapshot areas; event posts are counted with a trace site on `0x0063270c` (r0 = `0x1d`). Comparison: those reads equal, the `0x1d` post sequence equal, `modal-settings-compare` equal (it already covers the `0x285` write and the settings copies), render-compare content equal, and no fallback entry for an owned class.
 
 ## Shims for this unit
 
 | Shim | What it does | Removal condition |
 | --- | --- | --- |
-| Engine-entry adapter at `0xbf95c8` | Decodes stage events from stock `0xd4dd2c` into `MenuEvent` | The owned key layer and an owned stage consumer call the engine directly |
-| Stock stage consumer `0xca4674` | Rollback bracket, special post (`0xd42a64`, leave post `0x27d`) and value post of `0x1d` around the engine | The engine reports value changes and leaves to the typed settings service and owns the bracket's decision |
-| Stock-state mirror | Writes the 0x430-byte block and the snapshots from owned state | Every reader of the block and snapshots is owned |
-| Stock node records as identity | The mirror publishes stock record addresses as the open node | Every reader of `0x009571d0` is owned |
-| Stock availability `0xd52684` | Fills row states | The tree declares availability |
-| Unhandled kinds through the stock kind switch | Runs kinds without an oracle case in stock code | Every kind has an oracle case and is owned |
+| Engine-entry adapter at `0xbf95c8` | Decodes stage events from `0xd4dd2c` into `MenuEvent` and returns `EngineResult` | The owned key layer and owned stage consumers call the engine directly |
+| Stock stage consumers `0xca4674`, `0xca0080`, `0xca4e98`, `0xcc45ac` | Post events and handle the result: bracket, special post (leave post `0x27d`, last-move posts), value post `0x1d` | The engine reports value changes and leaves to the typed settings service and owned consumers decide the result |
+| `0xd4dd2c` work around the engine | `0xd4d7a4`, `0x0063807c`, copies of `0x944580` and the event block | Owned stage consumers |
+| Block as source of truth | Decode from and mirror to the 0x430-byte block and `0x01467580/84` on every event | No stock code writes or reads the block: owned bracket, owned commit and restore, owned initialisers, no fallback classes, owned readers |
+| Stock commit and restore `0x006364e8`/`0x006364a4` | Copies the block to and from `0x0096b58c` for controller actions | Those controller actions are owned |
+| Stock node records as identity | The mirror publishes record addresses from the side table | Every reader of `0x009571d0` and the snapshots is owned |
+| Initial row `0xd588b8` | Places the cursor on open, push and pop from the property's value | The tree and the settings service give the initial row |
+| Stock availability `0xd52684` | Row states | The tree declares availability |
+| Notification `0xd5b350`, classifier `0x0061d0e4` | Effects the adapter performs | Their consumers are owned |
+| Engine property write `0x285` | Effect performed through `0x0061c91c` | The settings service owns property `0x285` |
+| Fallback classes through the stock kind switch | Runs event classes without an oracle case | Every class is owned |
 | Stock redraw and render path | Redraw requests after the engine | The render layer owns menu drawing |
 | Stock settings reload and restore | Copies around each property write and on BACK | The typed settings service owns the image and its backup |
 | Picker key cells (frozen) | The seven owned controller-75 cells | The owned key layer replaces them |
 
 ## Increments
 
-1. Host: the tree generator and its tests, the engine library for kinds 1, 4, 5, `0xe` and `0xf`, the mirror, and the host oracle over the four receipts. Reviewed before any guest code.
-2. Guest: the `0xbf95c8` seam, the adapter with kind fallback, the reference scan and retired set for the owned kinds, and the guest pairs. Reviewed before runs.
-3. Observations and kinds: `--menu-observe` runs for page moves (kinds 6..`0xb`), no-wrap and no-availability nodes, multi-level moves and re-open, each followed by its oracle case and the kind's ownership.
+1. Host: the tree generator with the record side table, the engine library, decode and mirror, and the oracle with negative controls, for the classes with receipts. Before that, one `--menu-observe` run per existing case with the added return sites and the last-move watch, so that each case records initial row, availability and the last-move pair. Reviewed before any guest code.
+2. Guest: the `0xbf95c8` seam, the adapter with class coverage and fallback, the fallback-entry guard check, and the guest pairs. Reviewed before runs.
+3. Observations and classes: `--menu-observe` runs for page moves (kind 4 page steps and kinds 6..`0xb`), no-wrap and no-availability nodes, kind 5, seeks (ids `0x17`/`0x18`), multi-level moves, re-open and an empty node, each followed by its oracle case and the class's ownership.
 
 ## Open questions
 
-- The meaning of `0x009571d4`, node word 10 and the `0x0095757c` slot written on pop.
-- Whether the rollback bracket ever restores in practice (the engine returning 0), and for which events.
+- Whether the rollback bracket restores in practice, and for which events.
 - The meaning of property `0x27d` in the leave post.
-- The cause of picker 246's stall after DOWN on the current emulator model.
+- The cause of picker 246's stall after DOWN on the current emulator model (E-MODAL75-PICKER-PAIRS-150).
