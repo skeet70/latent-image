@@ -393,7 +393,7 @@ tableBSlotsStored evidence =
 taskCompositionOwnedCalls :: Join JoinKind
 taskCompositionOwnedCalls = Join TaskCompositionOwnedCalls (Set.fromList [Record2Link, TaskSubmission, TaskStorage])
   [at Image4 0x7235d8 0x723790, at Image4 0x725cc4 0x725da8, at Image4 0x725dd8 0x72612c, at LoaderB initializerSite (initializerSite + 4)]
-  (ObservationQualified "the owned wrapper calls the record-2 critical pair through the entry words at 0x7235d8 and 0x7236b0 and the storage transition through the retained prelude at 0x725c6c; its call targets are wrapper-admission constants (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:93-97), call-SP alignment, live words and continuations are checked by that admission's external calls, and the storage adapter ABI by the storage admission (replacement/task_storage/Replacement/TaskStorage/Artifact.hs:118-125); owned-calls-join derives each owned callee's frame low at the wrapper's actual call SPs, which submission-joined-stack-in-boot-window bounds, and with admitted pieces fails only on a missing owned call; on core 1 the wrapper and the storage prelude load root-1 slots that the record-2 initializer publishes; exit receiving enter's token and the reservation arguments are source properties qualified by a composed natural comparison; over the composed images outside owned code, wrapper-callers-closed pins the stock calls of 0x725dd8 and finds no formed address of the wrapper, prelude, release or cleanup, storage-prelude-sole-caller finds no other entry into [0x725c6c,0x725dd8), wrapper-caller-ids finds every stock descriptor id an immediate in 1..120 except the data-driven sites 0x6b07f0 and 0xe9231c, and error-callback-writers finds the only store to the error callback word 0x4089ea8c at 0x725b64 in dispatch_set_error_callback, which no stock code calls")
+  (ObservationQualified "the owned wrapper calls the record-2 critical pair through the entry words at 0x7235d8 and 0x7236b0 and the storage transition through the retained prelude at 0x725c6c; its call targets are wrapper-admission constants (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:93-97), call-SP alignment, live words and continuations are checked by that admission's external calls, and the storage adapter ABI by the storage admission (replacement/task_storage/Replacement/TaskStorage/Artifact.hs:118-125); owned-calls-join derives each owned callee's frame low at the wrapper's actual call SPs, which submission-joined-stack-in-boot-window bounds, and with admitted pieces fails only on a missing owned call; on core 1 the wrapper and the storage prelude load root-1 slots that the record-2 initializer publishes; exit receiving enter's token and the reservation arguments are source properties qualified by a composed natural comparison; over the composed images outside owned code, wrapper-callers-closed pins the stock calls of 0x725dd8 and finds no formed address of the wrapper, prelude, release or cleanup, storage-prelude-sole-caller finds no other entry into [0x725c6c,0x725dd8), wrapper-caller-ids finds every stock descriptor id an immediate in 1..120 except the data-driven sites 0x6b07f0 and 0xe9231c, and error-callback-writers finds the only store to the error callback word 0x4089ea8c at 0x725b64 in dispatch_set_error_callback, whose only stock call is stock root's at 0x69d184 with r0 = 0x72835c")
   [ HostCheck "owned-calls-join" (isJust . joinedTasks)
   , HostCheck "table-b-service-slots-stored" tableBSlotsStored
   , HostCheck "wrapper-callers-closed" wrapperCallersClosed
@@ -790,12 +790,15 @@ wrapperCallerIds evidence =
     && sort [site | (site, SB.DataId) <- ids] == sort (outsideOwned evidence dataIdSites)
   where ids = SB.descriptorIds (composedSegments evidence) (ownedOf evidence)
 
+-- | The setter's only stock call is cpu_root_task's at 0x69d184 with r0 = 0x72835c (when root is stock).
 errorCallbackWriters :: JoinEvidence -> Bool
 errorCallbackWriters evidence =
   SB.storesReaching segments owned SB.errorCallbackWord == outsideOwned evidence [0x725b64]
-    && null (SB.branchSites segments owned (== SB.errorCallbackSetter))
+    && map fst (SB.branchSites segments owned (== SB.errorCallbackSetter)) == calls
+    && (null calls || map (targetWord (evidenceComposed evidence) Image4) [0x69d17c, 0x69d180] == [Just 0xe308035c, Just 0xe3400072])
     && null (SB.addressFormations segments owned (== SB.errorCallbackSetter))
   where
+    calls = outsideOwned evidence [0x69d184]
     segments = composedSegments evidence
     owned = ownedOf evidence
 
