@@ -4,6 +4,7 @@ module Replacement.LoaderOrchestration.Admission
   , DispatcherBoundary, boundarySide, boundaryScenario, boundaryPhase, boundaryInstruction, boundaryContinuation
   , boundaryStack, boundaryFramePointer, boundaryLiveWords, dispatcherBoundaries
   , EffectSite, effectSites, effectScenario, effectKind, effectInstruction
+  , ServiceEntryState, serviceEntryStates, entryScenario, entrySite, entryService, entryRegister
   , deriveFrameProof, proofPaths, executionPcs, callBoundaries, frameLow
   ) where
 
@@ -34,11 +35,13 @@ data PathProof = PathProof Scenario [Effect] Terminal deriving (Eq, Show)
 data DispatcherBoundary = DispatcherBoundary LoaderSide Scenario Phase CodeAddress CodeAddress
   StackOffset StackOffset (M.Map StackOffset Scalar) deriving (Eq, Show)
 data EffectSite = EffectSite Scenario Effect CodeAddress deriving (Eq, Show)
-data FrameProof = FrameProof [PathProof] (S.Set CodeAddress) (M.Map CodeAddress CallTarget) [DispatcherBoundary] [EffectSite]
+-- | The registers as a retained service is entered: its call site, the service and the state with lr the continuation.
+data ServiceEntryState = ServiceEntryState Scenario CodeAddress Service (M.Map A.Reg Scalar) deriving (Eq, Show)
+data FrameProof = FrameProof [PathProof] (S.Set CodeAddress) (M.Map CodeAddress CallTarget) [DispatcherBoundary] [EffectSite] [ServiceEntryState]
 data PathResult = PathResult
   { resultPath :: PathProof, resultPcs :: S.Set CodeAddress
   , resultCalls :: M.Map CodeAddress CallTarget, resultDispatcherCalls :: [DispatcherBoundary]
-  , resultLocations :: [EffectSite]
+  , resultLocations :: [EffectSite], resultServiceEntries :: [ServiceEntryState]
   }
 data AdmissionError = ExtentRejected | CompilerPrologueRejected | UnsupportedInstruction CodeAddress
   | FrameRejected | OperandRejected | ConditionRejected | MemoryRejected | CallRejected CodeAddress
@@ -50,21 +53,32 @@ data Machine = Machine
   { registers :: M.Map A.Reg Scalar, stack :: M.Map StackOffset Scalar, zero :: Maybe Bool
   , effects :: [Effect], visited :: S.Set CodeAddress, boundaries :: M.Map CodeAddress CallTarget, dispatcherEdges :: [DispatcherBoundary]
   , polls :: PollCount, checkpoint :: Maybe PollCheckpoint, calls :: CallOrdinal, steps :: StepCount, terminal :: Maybe Terminal
-  , locations :: [(Effect,CodeAddress)]
+  , locations :: [(Effect,CodeAddress)], serviceEntries :: [(CodeAddress,Service,M.Map A.Reg Scalar)]
   }
 
 proofPaths :: FrameProof -> [PathProof]
-proofPaths (FrameProof paths _ _ _ _) = paths
+proofPaths (FrameProof paths _ _ _ _ _) = paths
 executionPcs :: FrameProof -> [CodeAddress]
-executionPcs (FrameProof _ points _ _ _) = S.toAscList points
+executionPcs (FrameProof _ points _ _ _ _) = S.toAscList points
 callBoundaries :: FrameProof -> [(CodeAddress,CallTarget)]
-callBoundaries (FrameProof _ _ points _ _) = M.toAscList points
+callBoundaries (FrameProof _ _ points _ _ _) = M.toAscList points
 frameLow :: FrameProof -> StackOffset
 frameLow _ = StackOffset (-16)
 dispatcherBoundaries :: FrameProof -> [DispatcherBoundary]
-dispatcherBoundaries (FrameProof _ _ _ entries _) = entries
+dispatcherBoundaries (FrameProof _ _ _ entries _ _) = entries
 effectSites :: FrameProof -> [EffectSite]
-effectSites (FrameProof _ _ _ _ entries) = entries
+effectSites (FrameProof _ _ _ _ entries _) = entries
+serviceEntryStates :: FrameProof -> [ServiceEntryState]
+serviceEntryStates (FrameProof _ _ _ _ _ entries) = entries
+entryScenario :: ServiceEntryState -> Scenario
+entryScenario (ServiceEntryState scenario _ _ _) = scenario
+entrySite :: ServiceEntryState -> CodeAddress
+entrySite (ServiceEntryState _ site _ _) = site
+entryService :: ServiceEntryState -> Service
+entryService (ServiceEntryState _ _ service _) = service
+-- | A register's symbolic value as the service is entered.
+entryRegister :: ServiceEntryState -> A.Reg -> Scalar
+entryRegister (ServiceEntryState _ _ _ values) register = M.findWithDefault (Incoming register) register values
 effectScenario :: EffectSite -> Scenario
 effectScenario (EffectSite scenario _ _) = scenario
 effectKind :: EffectSite -> Effect
@@ -192,7 +206,8 @@ callService (Scenario role _ _) site continuation service machine = do
   requireFrame machine
   require (service/=Schedule || get machine (A.Reg 0)==Word 0xfffffff6) EffectRejected
   let arguments = [(register,get machine register) | register <- liveRegisters service]
-      captured = emit site (ServiceCall service arguments) machine {boundaries=M.insert site (Retained service) (boundaries machine)}
+      captured = (emit site (ServiceCall service arguments) machine {boundaries=M.insert site (Retained service) (boundaries machine)})
+        {serviceEntries=(site,service,M.insert A.lr (case continuation of CodeAddress pc -> Word pc) (registers machine)):serviceEntries machine}
       CallOrdinal ordinal = calls machine
       result = case service of
         Identity -> case role of Primary -> Word 0; Peer -> NonzeroWord
@@ -248,11 +263,11 @@ deriveFrameProof side bytes (CodeAddress compilerPc) = do
   require (compilerPc==first+12&&compilerPc+8<=end&&word compilerPc==0xe92d4800&&word (compilerPc+4)==0xe1a0b00d) CompilerPrologueRejected
   results <- traverse (run start end) scenarios
   pure (FrameProof (map resultPath results) (S.unions (map resultPcs results)) (M.unions (map resultCalls results))
-    (concatMap resultDispatcherCalls results) (concatMap resultLocations results))
+    (concatMap resultDispatcherCalls results) (concatMap resultLocations results) (concatMap resultServiceEntries results))
   where
     targets = serviceTable side
     run start end scenario = do
-      let initial = Machine (M.fromList [(A.Reg 0,DispatchCapability),(A.sp,Stack (StackOffset 0)),(A.lr,IncomingLink)]) M.empty Nothing [] S.empty M.empty [] (PollCount 0) Nothing (CallOrdinal 0) (StepCount 0) Nothing []
+      let initial = Machine (M.fromList [(A.Reg 0,DispatchCapability),(A.sp,Stack (StackOffset 0)),(A.lr,IncomingLink)]) M.empty Nothing [] S.empty M.empty [] (PollCount 0) Nothing (CallOrdinal 0) (StepCount 0) Nothing [] []
       final <- execute start initial
       requireFrame final
       stopped <- maybe (Left EffectRejected) Right (terminal final)
@@ -260,7 +275,8 @@ deriveFrameProof side bytes (CodeAddress compilerPc) = do
       let observed = reverse (effects final)
       require ((observed,stopped)==expected scenario) EffectRejected
       pure (PathResult (PathProof scenario observed stopped) (visited final) (boundaries final) (reverse (dispatcherEdges final))
-        [EffectSite scenario effect site | (effect,site) <- reverse (locations final)])
+        [EffectSite scenario effect site | (effect,site) <- reverse (locations final)]
+        [ServiceEntryState scenario site service values | (site,service,values) <- reverse (serviceEntries final)])
       where
         CodeAddress first = start
         readLiteral at = do

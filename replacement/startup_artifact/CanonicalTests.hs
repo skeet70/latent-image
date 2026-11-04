@@ -22,6 +22,7 @@ import qualified Emulation.Sha256 as SHA
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
 import Replacement.StartupArtifact.Adapters
+import Replacement.StartupArtifact.AttachState (AttachSources (..), attachStateValue, parseAttachRules)
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Contract (contractCarriers)
 import Replacement.StartupArtifact.Joins (JoinKind (..), registeredJoins)
@@ -273,12 +274,43 @@ main = do
     (not (holdsIn "loader-headers-unchanged" (replacedIn j3Targets LoaderA 0x40010 0x4004dae4) j3Pieces))
   ok "a task submission below the core-1 window fails the submission-depth check"
     (not (holdsIn "submission-depth-in-stack-window" j3Targets (withFacts (\facts -> case facts of
-      LoaderStartupFacts a b calls -> LoaderStartupFacts a b (SubmitCall Core1 (StackDepth 0x800) : calls)
+      LoaderStartupFacts a b calls starts -> LoaderStartupFacts a b (SubmitCall Core1 (StackDepth 0x800) : calls) starts
       other -> other))))
   ok "a critical-pair frame reaching below the boot-stack window fails the submission-depth check"
     (not (holdsIn "submission-depth-in-stack-window" j3Targets (withFacts (\facts -> case facts of
       Record2LinkFacts entry bindings' image scratch' _ -> Record2LinkFacts entry bindings' image scratch' (StackDepth 0x800)
       other -> other))))
+  attachLabel <- either (H.failH . show) pure (label PrimaryPublisher "entry-core0")
+  let j3Sources targets' = AttachSources (canonicalDat source) (canonicalDat source) targets targets' [] j3Pieces attachLabel
+      registerJson :: Text -> J.Value -> J.Value -> J.Value
+      registerJson name retained composed = J.object ["core" J..= (0 :: Int), "register" J..= name, "mask" J..= (0xffffffff :: Word32)
+        , "retained" J..= retained, "composed" J..= composed, "reason" J..= ("r" :: Text)]
+      registersOf targets' entries = do
+        rules <- parseAttachRules (J.object [ "peers" J..= ([] :: [J.Value]), "carriers" J..= ([] :: [J.Value]), "allowances" J..= ([] :: [J.Value])
+                                            , "registers" J..= entries, "board" J..= ([] :: [J.Value]), "relations" J..= J.object [] ])
+        value <- attachStateValue (j3Sources targets') rules []
+        case value of
+          J.Object fields | Just (J.Array rows) <- KeyMap.lookup "registers" fields ->
+            pure [(KeyMap.lookup "retained" row, KeyMap.lookup "composed" row) | J.Object row <- V.toList rows]
+          _ -> pure []
+      word :: Word32 -> J.Value
+      word = J.toJSON
+      rowOf name = J.object ["row" J..= (name :: Text)]
+      callReturn = J.object ["call_return" J..= ("loader-startup/a-initializer-call" :: Text)]
+      entryState = J.object ["entry_state" J..= J.object ["side" J..= ("loader-a" :: Text), "service" J..= ("private-initialize" :: Text)]]
+      derived = [ registerJson "r5" (rowOf "loader-startup/a-entry") entryState, registerJson "r6" (rowOf "loader-startup/a-entry") entryState
+                , registerJson "lr" callReturn entryState ]
+  ok "the J3 attach r5, r6 and lr derive from the a-entry row, the stock initializer call and loader-A's PrivateInitialize entry state"
+    (registersOf j3Targets derived == Right
+      [ (Just (rowOf "loader-startup/a-entry"), Just (word 0)), (Just (rowOf "loader-startup/a-entry"), Just (word 0x400a00c4))
+      , (Just (word 0x409e0), Just (word 0x409ec)) ])
+  ok "the composed initializer call's return agrees with the admitted lr"
+    (registersOf j3Targets [registerJson "lr" callReturn callReturn] == Right [(Just (word 0x409e0), Just (word 0x409ec))])
+  ok "a retained call_return at a site that does not BL to the attach PC refuses"
+    (either (const True) (const False) (registersOf j3Targets [registerJson "lr" (J.object ["call_return" J..= ("loader-startup/a-entry" :: Text)]) entryState]))
+  ok "an entry state whose service call no longer BLs to the attach PC refuses"
+    (let moved = replacedIn j3Targets LoaderA initializerCallA (0xeb000000 + (((0x40434 - initializerCallA - 8) `div` 4) `mod` 0x1000000))
+     in either (const True) (const False) (registersOf moved [registerJson "r6" (rowOf "loader-startup/a-entry") entryState]))
   (_, j3Observed) <- stageComposition tools scratch source j3
   forM_ [Record1, Record2, LoaderA, LoaderB, Image4] $ \target ->
     ok ("J3 composed " ++ show target ++ " differs from canonical exactly at the edits")
@@ -313,7 +345,7 @@ main = do
           , logSite "first-stage-core0" "composed" 0 (owned "first-stage"), logSite "first-stage-core1" "composed" 1 (owned "first-stage")
           , logSite "record2-core0" "composed" 0 (owned "record2-link"), logSite "record2-core1" "composed" 1 (owned "record2-link") ]
         manifest = J.object
-          [ "schema" J..= (3 :: Int)
+          [ "schema" J..= (4 :: Int)
           , "guard" J..= J.object ["attach" J..= ("primary-publisher/entry-core0" :: Text), "attach_state" J..= attachState]
           , "pieces" J..= [ J.object ["kind" J..= ("first-stage" :: Text), "inputs" J..= J.object ["image" J..= firstBin, "symbols" J..= firstSymbols]]
                           , J.object ["kind" J..= ("record2-link" :: Text), "inputs" J..= J.object ["image" J..= pairBin, "symbols" J..= pairSymbols]]
@@ -373,13 +405,32 @@ main = do
         number :: Int -> Maybe J.Value
         number = Just . J.toJSON
         physicalOn core start end = (Just (J.String "physical"), core, number start, number end)
-    ok "the record-2 link enumerates its post-attach destinations per core"
+    ok "the record-2 link enumerates its destinations per core, pre-boundary core-1 stores included"
       ([field "basis" writes | writes <- writesOf "record2-link"] == [Just (J.String "premised")]
-        && allowOf "record2-link" ==
+        && all (`elem` allowOf "record2-link")
           [ physicalOn (Just J.Null) 0xa0f824 0xa0f828, physicalOn (Just J.Null) 0xa10200 0xa5b200
           , physicalOn (number 0) 0x62c54 0x63460, physicalOn (number 1) 0xddaa0 0xf3420
-          , (Just (J.String "tcm"), number 0, number 0, number 0x2000), (Just (J.String "tcm"), number 1, number 0, number 0x2000) ])
-    ok "only the first stage stays unenumerated" ([field "basis" writes | writes <- writesOf "first-stage"] == [Just (J.String "unenumerated")])
+          , (Just (J.String "tcm"), number 0, number 0, number 0x2000), (Just (J.String "tcm"), number 1, number 0, number 0x2000)
+          , physicalOn (number 1) 0x14c60 0x14c64, physicalOn (number 1) 0x14c80 0x14ca0, physicalOn (number 1) 0x20004 0x20008
+          , physicalOn (number 1) 0xa0080 0xa00c4, physicalOn (number 1) 0x3fff0024 0x3fff0040, physicalOn (number 1) 0xfffb383c 0xfffb3840 ]
+        && length (allowOf "record2-link") == 28)
+    ok "the first stage's writes are premised and enumerated on core 0"
+      ([field "basis" writes | writes <- writesOf "first-stage"] == [Just (J.String "premised")]
+        && length (allowOf "first-stage") == 14
+        && all (\(_, core, _, _) -> core == number 0) (allowOf "first-stage"))
+    let declaredOf role = case field "guard" contract >>= field "declared" >>= field role of
+          Just (J.Array rows) -> [(field "kind" row, field "core" row, field "writer" row) | row <- V.toList rows]
+          _ -> []
+        tcmAt core writer = (Just (J.String "tcm-region"), number core, number writer)
+        romCommit = (Just (J.String "decoder-commit"), number 0, number 0x800022a8)
+    ok "the retained role declares the ROM commit and both stock ATCM writes"
+      (declaredOf "retained" == [romCommit, tcmAt 0 0x18c4, tcmAt 1 0x118c4])
+    ok "the composed role declares the first stage's own ATCM write"
+      (declaredOf "composed" == [romCommit, tcmAt 0 0x605c, tcmAt 1 0x118c4])
+    let wordOf target address = U.word32At (targetOf targets target) (fromIntegral (address - targetBase target))
+    ok "the stock ATCM declarations name each record's mcr p15,0,r1,c9,c1,1 after its literal 0x70000000"
+      (and [ wordOf target writer == 0xee091f31 && wordOf target literal == 0x70000000
+           | (target, writer, literal) <- [(Record1, 0x18c4, 0x1acc), (Record2, 0x118c4, 0x11acc)] ])
     composedLoaderA <- H.readRegular (16*1024*1024) (output </> "loader-a.bin")
     canonicalDigest <- sha256Text (B.take 0x57c (B.drop 0x430 (targetOf targets LoaderA)))
     composedCarrierDigest <- sha256Text (B.take 0x57c (B.drop 0x430 composedLoaderA))

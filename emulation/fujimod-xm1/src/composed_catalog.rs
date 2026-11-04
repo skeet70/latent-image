@@ -1,8 +1,9 @@
-//! Strict parse of `composed-contract.json` (schema 3) and the observation plan derived from it.
+//! Strict parse of `composed-contract.json` (schema 4) and the observation plan derived from it.
 use crate::attach_state::{AttachRuleRefusal, AttachRules, RawAttachRules, RuleContext, Span};
 use fujimod_emulator::board::observation::{
-    CompositeGuardConfig, DestinationPolicy, GuardCore, GuardRange, GuardSpan, GuardTarget, MAX_GUARD_PARTITIONS,
-    MAX_GUARD_PC_SPANS, MAX_GUARD_RANGES, PcPartition, SourcePolicy, TcmBank, WatchKinds, WatchRange, WriteSource,
+    CompositeGuardConfig, DeclaredMutation, DecoderChoice, DecoderIndex, DestinationPolicy, GuardCore, GuardRange,
+    GuardSpan, GuardTarget, MAX_GUARD_DECLARED_MUTATIONS, MAX_GUARD_PARTITIONS, MAX_GUARD_PC_SPANS, MAX_GUARD_RANGES,
+    PcPartition, SourcePolicy, TcmBank, TcmRegister, WatchKinds, WatchRange, WriteSource, WriterPc,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -231,12 +232,7 @@ pub enum FootprintBasis {
 pub enum WritesBasis {
     Proved,
     Premised,
-    /// No enumerated destinations; the piece's partition allows everything except the owned carriers.
-    Unenumerated,
 }
-
-/// Piece kinds that may declare `unenumerated` writes.
-const UNENUMERATED_PIECES: [&str; 1] = ["first-stage"];
 
 /// The guard's `PartitionId` of one piece on one core: the partition's index in that core's `SourcePolicy`.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -259,16 +255,72 @@ pub struct PiecePolicy {
     pub premise: Option<Premise>,
     pub spans: Vec<PlanSpan>,
     pub allow: Vec<RangePlan>,
-    pub forbid: Vec<RangePlan>,
 }
 
-/// Owned code of an unenumerated piece.
+/// One mutation the guard admits once in a role, with the instruction that requests it.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum Declaration {
+    TcmRegion { core: Core, bank: Bank, previous: u32, next: u32, writer: u32, citation: Citation },
+    DecoderCommit { decoder: u16, previous: u16, next: u16, core: Core, writer: u32, citation: Citation },
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Mutated {
+    Tcm(Core, Bank),
+    Decoder(u16),
+}
+
+impl Declaration {
+    pub fn guard(&self) -> DeclaredMutation {
+        match *self {
+            Self::TcmRegion { core, bank, previous, next, writer, .. } => DeclaredMutation::TcmRegion {
+                core: core.guard(),
+                bank: bank.guard(),
+                previous: TcmRegister(previous),
+                next: TcmRegister(next),
+                writer: WriterPc(writer),
+            },
+            Self::DecoderCommit { decoder, previous, next, core, writer, .. } => DeclaredMutation::DecoderCommit {
+                decoder: DecoderIndex(decoder),
+                previous: DecoderChoice(previous),
+                next: DecoderChoice(next),
+                core: core.guard(),
+                writer: WriterPc(writer),
+            },
+        }
+    }
+    fn link(&self) -> (Mutated, u32, u32) {
+        match *self {
+            Self::TcmRegion { core, bank, previous, next, .. } => (Mutated::Tcm(core, bank), previous, next),
+            Self::DecoderCommit { decoder, previous, next, .. } => (Mutated::Decoder(decoder), previous.into(), next.into()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct UnconfinedCode {
-    pub piece: PieceKind,
-    pub start: u64,
-    pub end: u64,
+pub struct DeclaredLists {
+    pub retained: Vec<Declaration>,
+    pub composed: Vec<Declaration>,
+}
+
+impl DeclaredLists {
+    pub fn role(&self, role: Role) -> &[Declaration] {
+        match role {
+            Role::Retained => &self.retained,
+            Role::Composed => &self.composed,
+        }
+    }
+}
+
+/// Each names the declaration's index in its role's list.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeclarationProblem {
+    Unchanged(usize),
+    UnalignedWriter(usize),
+    /// Another declaration of the same register or decoder leaves the same value.
+    SharedPrevious(usize),
 }
 
 /// A nonempty, strictly ascending list of cores.
@@ -546,10 +598,6 @@ pub struct Piece {
     pub catalog: Catalog,
 }
 
-impl Piece {
-    pub fn enumerated(&self) -> bool { self.catalog.writes.basis != WritesBasis::Unenumerated }
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Join {
@@ -589,16 +637,17 @@ pub struct GuardAttach {
 struct RawGuard {
     attach: Label,
     attach_state: RawAttachRules,
+    declared: DeclaredLists,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(try_from = "u32")]
-struct SchemaThree;
+struct SchemaFour;
 
-impl TryFrom<u32> for SchemaThree {
+impl TryFrom<u32> for SchemaFour {
     type Error = String;
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        if value == 3 { Ok(Self) } else { Err("contract schema must be 3".into()) }
+        if value == 4 { Ok(Self) } else { Err("contract schema must be 4".into()) }
     }
 }
 
@@ -612,7 +661,7 @@ enum ContractKind {
 #[serde(deny_unknown_fields)]
 struct RawContract {
     #[allow(dead_code)]
-    schema: SchemaThree,
+    schema: SchemaFour,
     #[allow(dead_code)]
     kind: ContractKind,
     qualification: Qualification,
@@ -623,6 +672,123 @@ struct RawContract {
     guard: RawGuard,
     joins: Vec<Join>,
     pieces: Vec<RawPiece>,
+    pool_allocation: Option<PoolAllocation>,
+}
+
+/// Where a normalized word points in an allocation: from its base (inclusive) or up to its end (inclusive).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AllocationPosition {
+    Base,
+    Top,
+}
+
+/// Words of a read that hold pool addresses: every `stride` bytes from `offset`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AllocationWords {
+    pub read: Label,
+    pub offset: u32,
+    pub stride: u32,
+    pub position: AllocationPosition,
+}
+
+/// Physical `[start, end)` of the task reservation pool.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PoolSpan {
+    pub start: u32,
+    pub end: u32,
+}
+
+/// A read whose base word, every `stride` bytes from `offset`, names an allocation reserved by `core`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AllocationOwner {
+    pub core: Core,
+    pub read: Label,
+    pub offset: u32,
+    pub stride: u32,
+}
+
+/// Each role's allocations come from its storage-record read and its cursor read; listed read words
+/// and the SP of each listed return boundary compare as (task, offset) within that role's own allocations,
+/// and each core's tasks, ordered by base, must match between the roles.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PoolAllocation {
+    pub pool: PoolSpan,
+    pub records: Label,
+    pub cursor: Label,
+    pub words: Vec<AllocationWords>,
+    pub stack_tops: Vec<Label>,
+    pub owners: Vec<AllocationOwner>,
+    pub citation: Citation,
+}
+
+/// Storage records are `{base, size, reserved}` words (replacement/task_storage/src.rs).
+pub const ALLOCATION_RECORD_BYTES: u32 = 12;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PoolAllocationProblem {
+    Pool,
+    UnknownRead(Label),
+    RecordLayout(Label),
+    CursorLength(Label),
+    WordLayout(Label),
+    StackTop(Label),
+    DuplicateWords(Label),
+    Differs(Label),
+    OwnerLayout(Label),
+}
+
+/// One word every `stride` bytes from `offset` fits each item of a `length`-byte read.
+fn word_layout(offset: u32, stride: u32, length: u32) -> bool {
+    stride != 0 && stride % 4 == 0 && offset % 4 == 0 && offset.checked_add(4).is_some_and(|end| end <= stride) && length % stride == 0
+}
+
+/// The relation's reads exist, are compared, and have whole records, a one-word cursor and words inside
+/// their stride; each read has at most one `words` entry, and each stack top names a return boundary.
+fn check_pool_allocation<'a>(relation: &PoolAllocation, boundaries: &BTreeMap<Label, Boundary>, reads: impl Iterator<Item = &'a Read>)
+    -> Result<(), CatalogRefusal> {
+    let refuse = |problem| Err(CatalogRefusal::PoolAllocation(problem));
+    let reads: BTreeMap<&Label, &Read> = reads.map(|read| (&read.label, read)).collect();
+    let read = |label: &Label| {
+        let read = reads.get(label).copied().ok_or_else(|| CatalogRefusal::PoolAllocation(PoolAllocationProblem::UnknownRead(label.clone())))?;
+        if read.differs.is_some() {
+            return Err(CatalogRefusal::PoolAllocation(PoolAllocationProblem::Differs(label.clone())));
+        }
+        Ok(read)
+    };
+    if relation.pool.start >= relation.pool.end || relation.pool.start % 4 != 0 || relation.pool.end % 4 != 0 {
+        return refuse(PoolAllocationProblem::Pool);
+    }
+    if read(&relation.records)?.length % ALLOCATION_RECORD_BYTES != 0 {
+        return refuse(PoolAllocationProblem::RecordLayout(relation.records.clone()));
+    }
+    if read(&relation.cursor)?.length != 4 {
+        return refuse(PoolAllocationProblem::CursorLength(relation.cursor.clone()));
+    }
+    let mut listed = BTreeSet::new();
+    for words in &relation.words {
+        if !word_layout(words.offset, words.stride, read(&words.read)?.length) {
+            return refuse(PoolAllocationProblem::WordLayout(words.read.clone()));
+        }
+        if !listed.insert(&words.read) {
+            return refuse(PoolAllocationProblem::DuplicateWords(words.read.clone()));
+        }
+    }
+    for owner in &relation.owners {
+        if !word_layout(owner.offset, owner.stride, read(&owner.read)?.length) {
+            return refuse(PoolAllocationProblem::OwnerLayout(owner.read.clone()));
+        }
+    }
+    for label in &relation.stack_tops {
+        if boundaries.get(label).is_none_or(|boundary| boundary.kind != BoundaryKind::Return) {
+            return refuse(PoolAllocationProblem::StackTop(label.clone()));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -641,11 +807,12 @@ pub enum GuardBound {
     PcSpans(usize),
     WatchClasses(usize),
     Partitions(usize),
+    Declared(usize),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CatalogRefusal {
-    /// JSON that does not have the schema-3 shape, including unknown keys and invalid scalars.
+    /// JSON that does not have the schema-4 shape, including unknown keys and invalid scalars.
     Shape(String),
     Qualification,
     NoPieces,
@@ -661,9 +828,7 @@ pub enum CatalogRefusal {
     AttachNotStop(Label),
     AttachNotRetained(Label),
     AttachCores(Label),
-    UnenumeratedAllow(PieceKind),
-    /// `unenumerated` writes on a piece kind outside `UNENUMERATED_PIECES`.
-    UnenumeratedPiece(PieceKind),
+    Declaration { role: Role, problem: DeclarationProblem },
     AttachState(AttachRuleRefusal),
     WriteRangeShape(PieceKind),
     WritesPremise(PieceKind),
@@ -679,6 +844,7 @@ pub enum CatalogRefusal {
     BoundaryBound { role: Role, core: Core, count: usize },
     ReadNotRetained(Label),
     IdenticalDats,
+    PoolAllocation(PoolAllocationProblem),
 }
 
 impl std::fmt::Display for CatalogRefusal {
@@ -701,8 +867,10 @@ pub struct Contract {
     pub pieces: Vec<Piece>,
     boundaries: BTreeMap<Label, Boundary>,
     guards: [CompositeGuardConfig; 2],
+    declared: DeclaredLists,
     policies: Vec<PiecePolicy>,
     classes: Vec<WatchRange>,
+    pool_allocation: Option<PoolAllocation>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -749,14 +917,8 @@ fn merge(mut ranges: Vec<WriteRange>) -> Vec<WriteRange> {
 
 fn writes(kind: &PieceKind, raw: RawWrites, cores: &BTreeSet<Core>) -> Result<Writes, CatalogRefusal> {
     match (raw.basis, &raw.premise) {
-        (WritesBasis::Premised | WritesBasis::Unenumerated, Some(_)) | (WritesBasis::Proved, None) => {}
+        (WritesBasis::Premised, Some(_)) | (WritesBasis::Proved, None) => {}
         _ => return Err(CatalogRefusal::WritesPremise(kind.clone())),
-    }
-    if raw.basis == WritesBasis::Unenumerated && !raw.allow.is_empty() {
-        return Err(CatalogRefusal::UnenumeratedAllow(kind.clone()));
-    }
-    if raw.basis == WritesBasis::Unenumerated && !UNENUMERATED_PIECES.contains(&kind.as_str()) {
-        return Err(CatalogRefusal::UnenumeratedPiece(kind.clone()));
     }
     let mut allow = Vec::with_capacity(raw.allow.len());
     for range in raw.allow {
@@ -886,8 +1048,8 @@ fn range_plan(range: &GuardRange) -> RangePlan {
 }
 
 /// One policy per source in the order Cpu cores, CoreHost cores, PhysicalHost, ModelBus; in the composed role each
-/// Cpu core gets one partition per piece. `carriers` are every piece's carriers in physical addresses.
-fn guard_config(pieces: &[Piece], carriers: &[Interval], role: Role) -> (CompositeGuardConfig, Vec<PiecePolicy>) {
+/// Cpu core gets one partition per piece.
+fn guard_config(pieces: &[Piece], declared: &[Declaration], role: Role) -> (CompositeGuardConfig, Vec<PiecePolicy>) {
     let physical_only = DestinationPolicy {
         allow: vec![GuardRange { target: GuardTarget::Physical, span: Interval { start: 0, end: ADDRESS_END }.guard() }],
         forbid: vec![],
@@ -897,17 +1059,10 @@ fn guard_config(pieces: &[Piece], carriers: &[Interval], role: Role) -> (Composi
         let partitions: Vec<PcPartition> = match role {
             Role::Retained => vec![],
             Role::Composed => pieces.iter().map(|piece| {
-                let writes = &piece.catalog.writes;
-                let destinations = match writes.basis {
-                    WritesBasis::Unenumerated => DestinationPolicy {
-                        allow: stock(core).allow,
-                        forbid: carriers.iter().map(|span| GuardRange { target: GuardTarget::Physical, span: span.guard() }).collect(),
-                    },
-                    WritesBasis::Proved | WritesBasis::Premised => DestinationPolicy {
-                        allow: writes.allow.iter().filter(|range| range.space.binds(core))
-                            .map(|range| GuardRange { target: range.space.guard(), span: range.span.guard() }).collect(),
-                        forbid: vec![],
-                    },
+                let destinations = DestinationPolicy {
+                    allow: piece.catalog.writes.allow.iter().filter(|range| range.space.binds(core))
+                        .map(|range| GuardRange { target: range.space.guard(), span: range.span.guard() }).collect(),
+                    forbid: vec![],
                 };
                 PcPartition { spans: owned_spans(std::iter::once(piece)).iter().map(|span| span.guard()).collect(), destinations }
             }).collect(),
@@ -921,7 +1076,6 @@ fn guard_config(pieces: &[Piece], carriers: &[Interval], role: Role) -> (Composi
                 premise: piece.catalog.writes.premise.clone(),
                 spans: partition.spans.iter().map(|span| PlanSpan { start: span.start(), end: span.end() }).collect(),
                 allow: partition.destinations.allow.iter().map(range_plan).collect(),
-                forbid: partition.destinations.forbid.iter().map(range_plan).collect(),
             });
         }
         SourcePolicy { source: WriteSource::Cpu(core.guard()), destinations: stock(core), partitions }
@@ -929,7 +1083,33 @@ fn guard_config(pieces: &[Piece], carriers: &[Interval], role: Role) -> (Composi
     let host = Core::ALL.into_iter().map(|core| SourcePolicy { source: WriteSource::CoreHost(core.guard()), destinations: stock(core), partitions: vec![] });
     let bus = [WriteSource::PhysicalHost, WriteSource::ModelBus].into_iter()
         .map(|source| SourcePolicy { source, destinations: physical_only.clone(), partitions: vec![] });
-    (CompositeGuardConfig { sources: cpu.into_iter().chain(host).chain(bus).collect() }, policies)
+    let declared = declared.iter().map(Declaration::guard).collect();
+    (CompositeGuardConfig { sources: cpu.into_iter().chain(host).chain(bus).collect(), declared }, policies)
+}
+
+/// Per role: at most `MAX_GUARD_DECLARED_MUTATIONS`, each changing its register or decoder, TCM writers word aligned,
+/// and no two declarations of one register or decoder leaving the same value.
+fn check_declared(lists: &DeclaredLists) -> Result<(), CatalogRefusal> {
+    for role in [Role::Retained, Role::Composed] {
+        let list = lists.role(role);
+        if list.len() > MAX_GUARD_DECLARED_MUTATIONS {
+            return Err(CatalogRefusal::GuardBound(GuardBound::Declared(list.len())));
+        }
+        let refuse = |problem| Err(CatalogRefusal::Declaration { role, problem });
+        for (index, declaration) in list.iter().enumerate() {
+            let (mutated, previous, next) = declaration.link();
+            if previous == next {
+                return refuse(DeclarationProblem::Unchanged(index));
+            }
+            if matches!(declaration, Declaration::TcmRegion { writer, .. } if writer % 4 != 0) {
+                return refuse(DeclarationProblem::UnalignedWriter(index));
+            }
+            if list[..index].iter().map(Declaration::link).any(|(other, from, _)| other == mutated && from == previous) {
+                return refuse(DeclarationProblem::SharedPrevious(index));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn check_guard(config: &CompositeGuardConfig) -> Result<(), CatalogRefusal> {
@@ -1033,6 +1213,9 @@ impl Contract {
         if read_bytes > READ_BYTE_LIMIT {
             return Err(CatalogRefusal::ReadBudget(read_bytes));
         }
+        if let Some(relation) = &raw.pool_allocation {
+            check_pool_allocation(relation, &boundaries, pieces.iter().flat_map(|piece| &piece.catalog.reads))?;
+        }
         let mut carriers = Vec::new();
         let mut carrier_spans = Vec::new();
         for piece in &pieces {
@@ -1043,9 +1226,9 @@ impl Contract {
             }
         }
         let merged = merge(carriers);
-        let carrier_physical: Vec<Interval> = merged.iter().map(|range| range.span).collect();
-        let (retained_guard, _) = guard_config(&pieces, &carrier_physical, Role::Retained);
-        let (composed_guard, policies) = guard_config(&pieces, &carrier_physical, Role::Composed);
+        check_declared(&raw.guard.declared)?;
+        let (retained_guard, _) = guard_config(&pieces, &raw.guard.declared.retained, Role::Retained);
+        let (composed_guard, policies) = guard_config(&pieces, &raw.guard.declared.composed, Role::Composed);
         let guards = [retained_guard, composed_guard];
         guards.iter().try_for_each(check_guard)?;
         let classes: Vec<WatchRange> = merged.into_iter()
@@ -1063,6 +1246,7 @@ impl Contract {
             canonical: raw.canonical,
             composed: raw.composed,
             guard: GuardAttach { attach: raw.guard.attach },
+            declared: raw.guard.declared,
             attach_core,
             attach_rules,
             joins: raw.joins,
@@ -1071,6 +1255,7 @@ impl Contract {
             guards,
             policies,
             classes,
+            pool_allocation: raw.pool_allocation,
         })
     }
 
@@ -1086,6 +1271,8 @@ impl Contract {
     pub fn boundaries(&self) -> impl Iterator<Item = &Boundary> { self.boundaries.values() }
 
     pub fn reads(&self) -> impl Iterator<Item = &Read> { self.pieces.iter().flat_map(|piece| &piece.catalog.reads) }
+
+    pub fn pool_allocation(&self) -> Option<&PoolAllocation> { self.pool_allocation.as_ref() }
 
     pub fn sites(&self, role: Role) -> SitePlan {
         let armed = || self.boundaries.values().filter_map(|boundary| boundary.pc(role).map(|pc| (pc, boundary)));
@@ -1111,15 +1298,7 @@ impl Contract {
 
     pub fn attach_core(&self) -> Core { self.attach_core }
 
-    pub fn unconfined(&self, role: Role) -> Vec<UnconfinedCode> {
-        if role == Role::Retained {
-            return vec![];
-        }
-        self.pieces.iter().filter(|piece| !piece.enumerated())
-            .flat_map(|piece| piece.catalog.owned_code.iter()
-                .map(|span| UnconfinedCode { piece: piece.kind.clone(), start: span.start, end: span.end }))
-            .collect()
-    }
+    pub fn declared(&self, role: Role) -> &[Declaration] { self.declared.role(role) }
 
     /// Write classes over every owned code carrier, in physical addresses.
     pub fn watch_classes(&self) -> Vec<WatchRange> { self.classes.clone() }
@@ -1151,7 +1330,7 @@ impl Contract {
             watch_classes: self.classes.iter().map(|class| PlanSpan { start: class.start, end: class.end }).collect(),
             guard: self.guard_config(role).sources.iter().map(PolicyPlan::of).collect(),
             policies: self.policies(role),
-            unconfined: self.unconfined(role),
+            declared: self.declared(role).to_vec(),
         }
     }
 }
@@ -1171,7 +1350,7 @@ pub struct RolePlan {
     pub watch_classes: Vec<PlanSpan>,
     pub guard: Vec<PolicyPlan>,
     pub policies: Vec<PiecePolicy>,
-    pub unconfined: Vec<UnconfinedCode>,
+    pub declared: Vec<Declaration>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

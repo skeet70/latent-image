@@ -107,6 +107,9 @@ manifestSources =
   , "replacement/bank/lib.rs", "replacement/service/lib.rs"
   , "replacement/service/rb_service_stock.S", "replacement/service/rb_service.h"
   , "replacement/recipe_ui/src/lib.rs", "replacement/owned_menu/src/lib.rs"
+  , "replacement/menu_engine/src/lib.rs", "replacement/menu_engine/src/block.rs"
+  , "replacement/menu_engine/src/engine.rs", "replacement/menu_engine/src/frame.rs"
+  , "replacement/menu_engine/src/state.rs", "replacement/menu_engine/src/tree.rs"
   , "replacement/capture/src/lib.rs", "replacement/capture/rb_capture_stock.S" ]
 
 build :: Tools -> OutDir -> FilePath -> FilePath -> FilePath -> Sha256 -> IO ()

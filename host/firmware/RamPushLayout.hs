@@ -26,6 +26,11 @@ module RamPushLayout
   , modalScopedBankVariant
   , lifecycleBankVariant
   , modalLifecycleBankVariant
+  , modalEngineBankVariant
+  , menuEngineHookAddress
+  , menuEngineHookWordFor
+  , menuEngineRegionStart
+  , menuEngineRegionExtent
   , publicationCountFor
   , publicationActivationCountFor
   , runtimeInstallerExtentFor
@@ -146,17 +151,20 @@ runtimeInstallerExtent = installerExtent publicationCount
 runtimeAllocationSize :: Word32
 runtimeAllocationSize = 0x1dc98
 
-data PublicationGroup = LifecyclePublications | Modal75Publication
+data PublicationGroup = LifecyclePublications | Modal75Publication | MenuEnginePublication
   deriving (Eq, Ord, Show)
 
 newtype BankVariant = BankVariant [PublicationGroup]
   deriving (Eq, Show)
 
+-- | The menu-engine group composes only with the modal75 group alone.
 bankVariant :: [PublicationGroup] -> Either String BankVariant
 bankVariant groups = do
   let ordered = sort groups
   when (or (zipWith (==) ordered (drop 1 ordered))) $
     Left "duplicate publication group"
+  when (MenuEnginePublication `elem` ordered && ordered /= [Modal75Publication, MenuEnginePublication]) $
+    Left "the menu-engine group requires exactly the modal75 group"
   pure (BankVariant ordered)
 
 publicationGroups :: BankVariant -> [PublicationGroup]
@@ -165,17 +173,19 @@ publicationGroups (BankVariant groups) = groups
 hasPublicationGroup :: PublicationGroup -> BankVariant -> Bool
 hasPublicationGroup group = elem group . publicationGroups
 
-standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant :: BankVariant
+standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant, modalEngineBankVariant :: BankVariant
 standardBankVariant = BankVariant []
 modalScopedBankVariant = BankVariant [Modal75Publication]
 lifecycleBankVariant = BankVariant [LifecyclePublications]
 modalLifecycleBankVariant = BankVariant [LifecyclePublications, Modal75Publication]
+modalEngineBankVariant = BankVariant [Modal75Publication, MenuEnginePublication]
 
 publicationCountFor :: BankVariant -> Int
 publicationCountFor variant = publicationCount + sum (map groupCount (publicationGroups variant))
  where
   groupCount LifecyclePublications = 3
   groupCount Modal75Publication = 1
+  groupCount MenuEnginePublication = 1
 
 publicationActivationCountFor :: BankVariant -> Int
 publicationActivationCountFor variant = publicationCountFor variant - publicationSetupCount
@@ -186,9 +196,12 @@ runtimeInstallerExtentFor variant
   | otherwise = installerExtent (publicationCountFor variant)
 
 runtimeAllocationSizeFor :: BankVariant -> Word32
-runtimeAllocationSizeFor variant =
-  runtimeAllocationSize + runtimeInstallerExtentFor variant - runtimeInstallerExtent
-    + if variant == modalLifecycleBankVariant then 32 else 0
+runtimeAllocationSizeFor variant
+  | hasPublicationGroup MenuEnginePublication variant =
+      menuEngineRegionStart 0 + menuEngineRegionExtent
+  | otherwise =
+      runtimeAllocationSize + runtimeInstallerExtentFor variant - runtimeInstallerExtent
+        + if variant == modalLifecycleBankVariant then 32 else 0
 
 newtype PublicationAddress = PublicationAddress { publicationAddress :: Word32 }
   deriving (Eq, Ord, Show)
@@ -248,6 +261,18 @@ safePublicationOrderFor addresses = do
 modalHookAddress :: PublicationAddress
 modalHookAddress = PublicationAddress 0x00bfb028
 
+-- | The engine wrapper `FUN_00bf95c8`.
+menuEngineHookAddress :: PublicationAddress
+menuEngineHookAddress = PublicationAddress 0x00bf95c8
+
+-- | The owned engine's code and tree, placed after the scoped modal
+-- allocation's end.
+menuEngineRegionStart :: Word32 -> Word32
+menuEngineRegionStart base = base + ((runtimeAllocationSizeFor modalScopedBankVariant + 31) .&. 0xffffffe0)
+
+menuEngineRegionExtent :: Word32
+menuEngineRegionExtent = 0x10000
+
 lifecycleHookAddresses :: [PublicationAddress]
 lifecycleHookAddresses = map PublicationAddress [0x00e99e8c, 0x00e6a754, 0x00e6bb90]
 
@@ -259,12 +284,16 @@ safePublicationOrderForVariant variant addresses = do
   when (or (zipWith (==) sortedAddresses (drop 1 sortedAddresses))) $
     Left "duplicate logical publication address"
   let modalSelected = hasPublicationGroup Modal75Publication variant
-  when (modalSelected && (last addresses /= modalHookAddress || modalHookAddress `elem` init addresses)) $
+      engineSelected = hasPublicationGroup MenuEnginePublication variant
+      finalHooks = [modalHookAddress | modalSelected] <> [menuEngineHookAddress | engineSelected]
+  when (not (null finalHooks) && drop (length addresses - length finalHooks) addresses /= finalHooks) $
     Left "scoped modal hook must occur once at the final logical index"
   when (not modalSelected && modalHookAddress `elem` addresses) $
     Left "modal hook present without its publication group"
+  when (not engineSelected && menuEngineHookAddress `elem` addresses) $
+    Left "menu engine hook present without its publication group"
   let lifecycleAddresses = if hasPublicationGroup LifecyclePublications variant then lifecycleHookAddresses else []
-      selectedAddresses = lifecycleAddresses <> [modalHookAddress | modalSelected]
+      selectedAddresses = lifecycleAddresses <> finalHooks
   when (drop publicationCount addresses /= selectedAddresses) $
     Left "publication group destinations or logical order differ"
   order <- safePublicationOrderFor (take publicationCount addresses)
@@ -274,19 +303,33 @@ modalHookWordFor :: BankVariant -> Word32 -> Word32 -> Word32 -> Either String W
 modalHookWordFor variant base target source = do
   when (not (hasPublicationGroup Modal75Publication variant)) $
     Left "modal hook requires the modal75 publication group"
-  when (base .&. 7 /= 0 || base > maxBound - runtimeAllocationSizeFor variant) $
-    Left "scoped allocation leaves the aligned address domain"
-  let hook = publicationAddress modalHookAddress
-      allocationEnd = toInteger base + toInteger (runtimeAllocationSizeFor variant)
-      delta = toInteger target - toInteger hook - 8
   when (source /= 0xe92d4ff0) $
     Left "stock modal entry is not push r4-r11,lr"
-  when (not (toInteger hook + 4 <= toInteger base || toInteger hook >= allocationEnd)) $
-    Left "modal hook overlaps the allocation"
   when (target .&. 3 /= 0 || target < runtimeExecutableBase base || target >= runtimeDataBase base) $
     Left "modal target leaves bank executable storage"
+  hookBranchWord variant base modalHookAddress target
+
+-- | The branch at `0xbf95c8` to the owned engine entry in the engine region.
+menuEngineHookWordFor :: BankVariant -> Word32 -> Word32 -> Word32 -> Either String Word32
+menuEngineHookWordFor variant base target source = do
+  when (not (hasPublicationGroup MenuEnginePublication variant)) $
+    Left "menu engine hook requires the menu-engine publication group"
+  when (source /= 0xe92d4818) $
+    Left "stock engine wrapper entry is not push r3,r4,r11,lr"
+  when (target .&. 3 /= 0 || target < menuEngineRegionStart base || target >= menuEngineRegionStart base + menuEngineRegionExtent) $
+    Left "menu engine target leaves the engine region"
+  hookBranchWord variant base menuEngineHookAddress target
+
+hookBranchWord :: BankVariant -> Word32 -> PublicationAddress -> Word32 -> Either String Word32
+hookBranchWord variant base (PublicationAddress hook) target = do
+  when (base .&. 7 /= 0 || base > maxBound - runtimeAllocationSizeFor variant) $
+    Left "scoped allocation leaves the aligned address domain"
+  let allocationEnd = toInteger base + toInteger (runtimeAllocationSizeFor variant)
+      delta = toInteger target - toInteger hook - 8
+  when (not (toInteger hook + 4 <= toInteger base || toInteger hook >= allocationEnd)) $
+    Left "hook overlaps the allocation"
   when (delta `mod` 4 /= 0 || delta < -0x2000000 || delta > 0x1fffffc) $
-    Left "modal hook leaves the A32 branch domain"
+    Left "hook leaves the A32 branch domain"
   pure (0xea000000 .|. (fromInteger (delta `div` 4) .&. 0x00ffffff))
 
 staleFixedReferences :: Word32 -> Word32 -> B.ByteString -> [(Int, Word32)]

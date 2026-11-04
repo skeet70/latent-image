@@ -1,12 +1,17 @@
-use fujimod_emulator::board::observation::{GuardCore, GuardStatus, GuardStatusToken, MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
+use fujimod_emulator::board::observation::{
+    GuardCore, GuardStatus, GuardStatusToken, MAX_JOURNAL_ROWS, MemoryWatch, MutationJournal, ViewPolicy, WatchKinds,
+    WatchRange,
+};
 use fujimod_xm1::{
-    attach_relations::{self, AttachSources, LogWrite, TimerState, TransactionWriter},
-    attach_state::{self, AttachState, Span},
+    attach_relations::{self, AttachSources, TimerState, TransactionWriter},
+    attach_state::{self, AttachState},
     bridge::{read, sha256, write},
     composed_catalog::{Contract, Core, Label, Pc, Role, ROW_LIMIT, Sha256},
+    composed_mutations::{self, CensusRow},
     composed_receipt::{
-        self, CaptureDirectories, GuardObservation, GuardState, HexBytes, Identity, LabelCount, MenuObservation, Outcome,
-        ReadCapture, Receipt, ReceiptKind, RecordedPolicy, Row, SchemaThree, VerdictKind, Word,
+        self, Admission, CaptureDirectories, CarrierWrites, DeclaredUse, GuardObservation, GuardState, HexBytes, Identity,
+        LabelCount, MenuObservation, Outcome, ReadCapture, Receipt, ReceiptKind, RecordedPolicy, Row, SchemaFour,
+        VerdictKind, WatchRow, Word,
     },
     guest::Press,
     machine::{KeyPulse, Machine, RunOutcome},
@@ -15,21 +20,32 @@ use fujimod_xm1::{
 };
 use std::{collections::BTreeMap, num::NonZeroUsize, path::{Path, PathBuf}, process::ExitCode};
 
-const USAGE: &str = "composed-startup --role retained|composed --contract CONTRACT --run RUN --update DAT --boot-rom ROM --output NEW_DIR [--attach-diagnostic RANGES]\n       composed-startup --compare RETAINED_RECEIPT OWNED_RECEIPT --contract CONTRACT\n       composed-startup --check-contract CONTRACT --output NEW_FILE";
+const USAGE: &str = "composed-startup --role retained|composed --contract CONTRACT --run RUN --update DAT --boot-rom ROM --output NEW_DIR [--attach-diagnostic RANGES | --mutation-census]\n       composed-startup --compare RETAINED_RECEIPT OWNED_RECEIPT --contract CONTRACT\n       composed-startup --check-contract CONTRACT --output NEW_FILE";
 const RECEIPT: &str = "composed-startup.json";
+const CENSUS: &str = "mutation-census.json";
 const WRITERS: &str = "attach-writers.json";
 const DEADLINE: u64 = 80_000_000;
 /// Instructions per run between hit drains.
 const SLICE: u64 = 250_000;
 const HIT_BOUND: usize = 65_536;
 const WATCH_LIMIT: usize = 1_048_576;
-const DIAGNOSTIC_CLASS_LIMIT: usize = 256;
+/// Classes of the one guarded watch: carriers, the log span and diagnostic classes.
+const WATCH_CLASS_LIMIT: usize = 256;
 const RUN_SHA256: &str = "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef";
 const ROM_SHA256: &str = "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be";
 const CANONICAL_DAT_SHA256: &str = "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490";
 
+#[derive(Clone, PartialEq, Eq)]
+enum Mode {
+    Evidence,
+    /// Physical classes whose writers before the boundary are summarized; not evidence.
+    Diagnostic(PathBuf),
+    /// Records every mutation from reset to the boundary instead of guarding; not evidence.
+    Census,
+}
+
 enum Command {
-    Observe { role: Role, contract: PathBuf, run: PathBuf, update: PathBuf, rom: PathBuf, output: PathBuf, diagnostic: Option<PathBuf> },
+    Observe { role: Role, contract: PathBuf, run: PathBuf, update: PathBuf, rom: PathBuf, output: PathBuf, mode: Mode },
     Compare { retained: PathBuf, owned: PathBuf, contract: PathBuf },
     CheckContract { contract: PathBuf, output: PathBuf },
 }
@@ -44,7 +60,7 @@ fn put<T>(slot: &mut Option<T>, value: T) -> Result<(), String> {
 
 fn arguments() -> Result<Command, String> {
     let (mut role, mut contract, mut run, mut update, mut rom, mut output, mut compare) = (None, None, None, None, None, None, None);
-    let (mut check, mut diagnostic) = (None, None);
+    let (mut check, mut mode) = (None, None);
     let mut arguments = std::env::args_os().skip(1);
     while let Some(flag) = arguments.next() {
         let flag = flag.into_string().map_err(|_| USAGE)?;
@@ -58,15 +74,16 @@ fn arguments() -> Result<Command, String> {
             "--output" => put(&mut output, value()?)?,
             "--compare" => { let retained = value()?; put(&mut compare, (retained, value()?))? }
             "--check-contract" => put(&mut check, value()?)?,
-            "--attach-diagnostic" => put(&mut diagnostic, value()?)?,
+            "--attach-diagnostic" => put(&mut mode, Mode::Diagnostic(value()?))?,
+            "--mutation-census" => put(&mut mode, Mode::Census)?,
             _ => return Err(USAGE.into()),
         }
     }
-    match (check, contract, compare, role, run, update, rom, output, diagnostic) {
+    match (check, contract, compare, role, run, update, rom, output, mode) {
         (Some(contract), None, None, None, None, None, None, Some(output), None) => Ok(Command::CheckContract { contract, output }),
         (None, Some(contract), Some((retained, owned)), None, None, None, None, None, None) => Ok(Command::Compare { retained, owned, contract }),
-        (None, Some(contract), None, Some(role), Some(run), Some(update), Some(rom), Some(output), diagnostic) =>
-            Ok(Command::Observe { role, contract, run, update, rom, output, diagnostic }),
+        (None, Some(contract), None, Some(role), Some(run), Some(update), Some(rom), Some(output), mode) =>
+            Ok(Command::Observe { role, contract, run, update, rom, output, mode: mode.unwrap_or(Mode::Evidence) }),
         _ => Err(USAGE.into()),
     }
 }
@@ -79,33 +96,47 @@ fn hit_register(hit: &Hit, name: &str) -> Result<Word, String> {
     number(hit.registers.get(name).ok_or("hit lacks full registers")?).map(Word)
 }
 
-/// The watch from reset to the attach stop over the log span and any diagnostic classes.
-struct PreAttach {
-    diagnostic: Option<Vec<(u64, u64)>>,
-    log: Option<Span>,
-    watch: Option<Box<MemoryWatch>>,
-}
-
-/// Timer and LZ bus accesses from reset, drained at every hit drain until the attach stop.
+/// Timer and LZ bus accesses from reset, drained at every hit drain until the boundary.
 struct Transactions {
     windows: Vec<(u64, u64)>,
     writer: TransactionWriter,
     reset: TimerState,
 }
 
+/// The guard and the one classified watch it rides on, both from reset.
+struct Guarded {
+    watch: Box<MemoryWatch>,
+    token: GuardStatusToken,
+    /// Carrier classes, then the log span when present, then diagnostic classes.
+    carriers: Vec<(u64, u64)>,
+    log: Option<attach_state::Span>,
+    diagnostic: Option<Vec<(u64, u64)>>,
+}
+
+/// Guard state recorded at the attach-state boundary.
+struct AtBoundary {
+    instructions: u64,
+    row: usize,
+    checks: BTreeMap<Core, Vec<u64>>,
+    declared: Vec<DeclaredUse>,
+}
+
+enum Recorder {
+    Guarded(Guarded),
+    Census(Box<MutationJournal>),
+}
+
 struct Observation {
     rows: Vec<Row>,
     counts: BTreeMap<(Label, Core), u64>,
     recorded: BTreeMap<Label, u32>,
-    unguarded: BTreeMap<(Label, Core), u64>,
     off_core: BTreeMap<(Label, Core), u64>,
     attach: Option<AttachState>,
     sources: Option<AttachSources>,
-    pre_attach: PreAttach,
     transactions: Option<Transactions>,
-    watch: Option<Box<MemoryWatch>>,
-    token: Option<GuardStatusToken>,
-    attach_instructions: u64,
+    recorder: Recorder,
+    boundary: Option<AtBoundary>,
+    census: Option<Vec<CensusRow>>,
 }
 
 fn drain_transactions(machine: &Machine, transactions: &mut Transactions) -> Result<(), String> {
@@ -114,21 +145,59 @@ fn drain_transactions(machine: &Machine, transactions: &mut Transactions) -> Res
     transactions.writer.append(&batch.transactions)
 }
 
-/// Also writes the diagnostic summary.
-fn end_pre_attach(machine: &Machine, pre: &mut PreAttach, output: &Path) -> Result<Vec<LogWrite>, String> {
-    let Some(mut watch) = pre.watch.take() else { return Ok(Vec::new()) };
-    let state = watch.records.borrow().state();
-    machine.session.board.memory_watch_end(&mut watch)?;
-    require(state["violation"].is_null(), "pre-attach watch reported a violation")?;
-    if let Some(classes) = &pre.diagnostic {
-        let rows: Vec<composed_receipt::WatchRow> = serde_json::from_value(state["records"].clone())
-            .map_err(|error| format!("diagnostic watch rows: {error}"))?;
-        let rows: Vec<_> = rows.into_iter()
-            .filter(|row| classes.iter().any(|&(start, end)| row.physical < end && start < row.physical + row.size)).collect();
-        let summaries = composed_receipt::carrier_writes(classes, &[], &rows)?;
-        write(&output.join(WRITERS), &serde_json::to_vec_pretty(&summaries).map_err(|error| error.to_string())?)?;
+fn checks(token: &GuardStatusToken) -> BTreeMap<Core, Vec<u64>> {
+    Core::ALL.into_iter().map(|core| {
+        let guard_core = GuardCore::new(core.index()).expect("two cores are within the guard core bound");
+        (core, token.partition_checks(guard_core))
+    }).collect()
+}
+
+fn declared(contract: &Contract, role: Role, token: &GuardStatusToken) -> Result<Vec<DeclaredUse>, String> {
+    let uses = token.declared();
+    require(uses.len() == contract.declared(role).len(), "guard declarations differ from the contract")?;
+    contract.declared(role).iter().zip(uses).map(|(declaration, used)| {
+        let admitted = used.admitted.map(|at| Ok::<_, String>(Admission { core: Core::from_index(at.core.get())?, instructions: at.instructions }))
+            .transpose()?;
+        Ok(DeclaredUse { declaration: declaration.clone(), admitted })
+    }).collect()
+}
+
+/// At the boundary: the relation sources, the diagnostic summary, the guard's counts and declarations, and the
+/// attach-state capture; in census mode, the journal's rows instead of the guard state.
+fn at_boundary(machine: &Machine, contract: &Contract, role: Role, state: &mut Observation, output: &Path) -> Result<(), String> {
+    let mut transactions = state.transactions.take().ok_or("relation transaction watch is not active")?;
+    drain_transactions(machine, &mut transactions)?;
+    let log_writes = match &mut state.recorder {
+        Recorder::Census(journal) => {
+            let rows = machine.session.board.mutation_journal_end(journal)?;
+            state.census = Some(rows.iter().map(CensusRow::of).collect::<Result<_, _>>()?);
+            Vec::new()
+        }
+        Recorder::Guarded(guarded) => {
+            let records = guarded.watch.records.borrow().state()["records"].clone();
+            let rows = records.as_array().ok_or("watch records are not an array")?;
+            if let Some(classes) = &guarded.diagnostic {
+                let rows: Vec<WatchRow> = serde_json::from_value(records.clone()).map_err(|error| format!("diagnostic watch rows: {error}"))?;
+                let rows: Vec<_> = rows.into_iter()
+                    .filter(|row| classes.iter().any(|&(start, end)| row.physical < end && start < row.physical + row.size)).collect();
+                let summaries = composed_receipt::carrier_writes(classes, &[], &rows)?;
+                write(&output.join(WRITERS), &serde_json::to_vec_pretty(&summaries).map_err(|error| error.to_string())?)?;
+            }
+            state.boundary = Some(AtBoundary {
+                instructions: machine.instructions(),
+                row: rows.len(),
+                checks: checks(&guarded.token),
+                declared: declared(contract, role, &guarded.token)?,
+            });
+            guarded.log.map_or(Ok(Vec::new()), |span| attach_relations::log_writes(&records, span))?
+        }
+    };
+    state.sources = Some(AttachSources { timer_reset: transactions.reset, transactions: transactions.writer.finish()?, log_writes });
+    if matches!(state.recorder, Recorder::Guarded(_)) {
+        let plan = attach_state::capture_plan(&machine.document)?;
+        state.attach = Some(attach_state::capture(&machine.session.board, &plan, output)?);
     }
-    pre.log.map_or(Ok(Vec::new()), |span| attach_relations::log_writes(&state["records"], span))
+    Ok(())
 }
 
 fn observe_hit(machine: &Machine, contract: &Contract, role: Role, sites: &BTreeMap<Pc, Label>, state: &mut Observation, hit: &Hit,
@@ -142,9 +211,6 @@ fn observe_hit(machine: &Machine, contract: &Contract, role: Role, sites: &BTree
         return Ok(());
     }
     *state.counts.entry((label.clone(), core)).or_default() += 1;
-    if role == Role::Composed && state.watch.is_none() && boundary.owned() && label != &contract.guard.attach {
-        *state.unguarded.entry((label.clone(), core)).or_default() += 1;
-    }
     if boundary.stop {
         let current = machine.session.board.read_register(core.index(), fujimod_emulator_cpu::Register::Pc)?;
         require(current == u64::from(pc.0), "stopped core moved past its boundary")?;
@@ -167,21 +233,8 @@ fn observe_hit(machine: &Machine, contract: &Contract, role: Role, sites: &BTree
             sp: Word(number(&hit.sp)?), lr: Word(number(&hit.lr)?), cpsr: Word(hit.cpsr), reads,
         });
     }
-    if label == &contract.guard.attach && state.watch.is_none() {
-        let mut transactions = state.transactions.take().ok_or("relation transaction watch is not active")?;
-        drain_transactions(machine, &mut transactions)?;
-        let log_writes = end_pre_attach(machine, &mut state.pre_attach, output)?;
-        state.sources = Some(AttachSources {
-            timer_reset: transactions.reset, transactions: transactions.writer.finish()?, log_writes,
-        });
-        let plan = attach_state::capture_plan(&machine.document)?;
-        state.attach = Some(attach_state::capture(&machine.session.board, &plan, output)?);
-        let maps = run::memory_maps(&machine.document)?;
-        let mut watch = machine.session.board.memory_watch_begin_classified(contract.watch_classes(), WATCH_LIMIT, maps, ViewPolicy::Observe)?;
-        let attached = machine.session.board.memory_guard_attach(&mut watch, contract.guard_config(role));
-        state.watch = Some(watch);
-        state.token = Some(attached.map_err(|error| error.to_string())?);
-        state.attach_instructions = machine.instructions();
+    if label == &contract.guard.attach && state.sources.is_none() {
+        at_boundary(machine, contract, role, state, output)?;
     }
     Ok(())
 }
@@ -195,13 +248,6 @@ fn trace(machine: &mut Machine, contract: &Contract, role: Role, state: &mut Obs
     let (reset, windows) = attach_relations::reset_sources(&board_state)?;
     machine.session.board.transaction_watch_begin(windows.clone(), attach_relations::DRAIN_LIMIT)?;
     state.transactions = Some(Transactions { windows, writer: TransactionWriter::create(output)?, reset });
-    let classes: Vec<WatchRange> = state.pre_attach.log.iter().map(|span| (span.start, span.end))
-        .chain(state.pre_attach.diagnostic.iter().flatten().copied())
-        .map(|(start, end)| WatchRange { start, end, kinds: WatchKinds::WRITES }).collect();
-    if !classes.is_empty() {
-        let maps = run::memory_maps(&machine.document)?;
-        state.pre_attach.watch = Some(machine.session.board.memory_watch_begin_classified(classes, WATCH_LIMIT, maps, ViewPolicy::Observe)?);
-    }
     while machine.instructions() < DEADLINE {
         let outcome = machine.run(SLICE.min(DEADLINE - machine.instructions()));
         machine.require_running()?;
@@ -214,11 +260,16 @@ fn trace(machine: &mut Machine, contract: &Contract, role: Role, state: &mut Obs
         for hit in &hits {
             observe_hit(machine, contract, role, &plan.sites, state, hit, output)?;
         }
-        if let Some(fault) = state.token.as_ref().and_then(|token| token.report().first_fault) {
+        if let Recorder::Guarded(guarded) = &state.recorder
+            && let Some(fault) = guarded.token.report().first_fault
+        {
             return Err(format!("composite guard fault: {fault:?}"));
         }
+        if state.census.is_some() {
+            return Ok(());
+        }
     }
-    require(state.watch.is_some(), "guard attach boundary was not reached")
+    require(state.sources.is_some(), "attach-state boundary was not reached")
 }
 
 fn menu_route(machine: &mut Machine, menu: &mut MenuObservation) -> Result<(), String> {
@@ -226,7 +277,7 @@ fn menu_route(machine: &mut Machine, menu: &mut MenuObservation) -> Result<(), S
     machine.require_running()?;
     menu.erased_settings = machine.menu()?.is_some_and(|menu| (menu.menu_id, menu.setting_id, menu.cursor) == (69, 52, 12));
     require(menu.erased_settings, "startup did not reach erased-settings menu")?;
-    let pulse = KeyPulse { hold: 8_000_000, release: 8_000_000 };
+    let pulse = KeyPulse::instructions(8_000_000, 8_000_000);
     for key in std::iter::repeat_n("up", 12).chain(["ok", "ok"]) { machine.press_once(Press::parse(key)?, pulse)?; }
     machine.run(40_000_000);
     machine.require_running()?;
@@ -245,13 +296,27 @@ fn digest(bytes: &[u8]) -> Result<Sha256, String> { Sha256::try_from(sha256(byte
 
 /// `[{start,end}]` physical classes for the diagnostic watch.
 fn diagnostic_classes(path: &Path) -> Result<Vec<(u64, u64)>, String> {
-    let spans: Vec<Span> = serde_json::from_slice(&read(path)?).map_err(|error| format!("{}: {error}", path.display()))?;
-    require(!spans.is_empty() && spans.len() <= DIAGNOSTIC_CLASS_LIMIT, "diagnostic class count is outside its bound")?;
+    let spans: Vec<attach_state::Span> = serde_json::from_slice(&read(path)?).map_err(|error| format!("{}: {error}", path.display()))?;
+    require(!spans.is_empty(), "diagnostic class list is empty")?;
     Ok(spans.into_iter().map(|span| (span.start, span.end)).collect())
 }
 
+/// The census file of `--mutation-census`; `--compare` does not read it.
+#[derive(serde::Serialize)]
+struct Census<'a> {
+    schema: SchemaFour,
+    kind: ReceiptKind,
+    role: Role,
+    identity: &'a Identity,
+    boundary_instructions: u64,
+    declared: &'a [fujimod_xm1::composed_catalog::Declaration],
+    rows: &'a [CensusRow],
+    /// `None` when the rows are the declarations' prediction.
+    first_difference: Option<String>,
+}
+
 fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: PathBuf, rom_path: PathBuf, output: PathBuf,
-    diagnostic: Option<PathBuf>) -> Result<(), String> {
+    mode: Mode) -> Result<(), String> {
     let contract_bytes = read(&contract_path)?;
     let contract = Contract::parse(&contract_bytes).map_err(|refusal| refusal.to_string())?;
     let (run_bytes, update, rom) = (read(&run_path)?, read(&update_path)?, read(&rom_path)?);
@@ -263,77 +328,127 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
     require(identity.run.as_str() == RUN_SHA256 && identity.boot_rom.as_str() == ROM_SHA256, "observer run/ROM identity differs")?;
     require(identity.update == contract.identities(role).dat_sha256, "update DAT differs from the contract identity for this role")?;
     require(role == Role::Composed || identity.update.as_str() == CANONICAL_DAT_SHA256, "retained update is not the canonical X-M1 1.50 DAT")?;
-    let diagnostic = diagnostic.as_deref().map(diagnostic_classes).transpose()?;
+    let document = RunDocument::parse(&run_bytes)?;
+    composed_mutations::check_rom_declarations(&document, &rom, contract.declared(role))?;
+    let carriers: Vec<(u64, u64)> = contract.watch_classes().iter().map(|class| (class.start, class.end)).collect();
     let log = contract.attach_rules().relations.log.as_ref().map(|log| log.span);
+    let diagnostic = match &mode { Mode::Diagnostic(path) => Some(diagnostic_classes(path)?), _ => None };
     if let (Some(span), Some(classes)) = (log, &diagnostic) {
-        require(classes.len() < DIAGNOSTIC_CLASS_LIMIT, "the log span leaves room for 255 diagnostic classes")?;
         require(!classes.iter().any(|&(start, end)| start < span.end && span.start < end), "a diagnostic class overlaps the log span")?;
     }
-    let kind = if diagnostic.is_some() { ReceiptKind::ComposedStartupDiagnostic } else { ReceiptKind::ComposedStartupReceipt };
+    let class_count = carriers.len() + usize::from(log.is_some()) + diagnostic.as_ref().map_or(0, Vec::len);
+    require(class_count <= WATCH_CLASS_LIMIT, "carrier, log and diagnostic classes exceed the watch class bound")?;
+    let kind = match mode {
+        Mode::Evidence => ReceiptKind::ComposedStartupReceipt,
+        Mode::Diagnostic(_) => ReceiptKind::ComposedStartupDiagnostic,
+        Mode::Census => ReceiptKind::ComposedStartupMutationCensus,
+    };
     std::fs::create_dir(&output).map_err(|error| format!("{}: {error}", output.display()))?;
     fujimod_emulator_exr2_board::register_board_builder();
     fujimod_emulator_models::register();
-    let document = RunDocument::parse(&run_bytes)?;
+    let choice_maps = composed_mutations::choice_maps(&document)?;
     let mut session = run::open(&document, &ValidatedUpdate(update), &rom)?;
     session.board.set_execution_policy(document.execution_policy.into())?;
     let mut machine = Machine::new(document, session)?;
+    let recorder = if mode == Mode::Census {
+        Recorder::Census(machine.session.board.mutation_journal_begin(MAX_JOURNAL_ROWS)?)
+    } else {
+        let classes: Vec<WatchRange> = carriers.iter().copied()
+            .chain(log.iter().map(|span| (span.start, span.end)))
+            .chain(diagnostic.iter().flatten().copied())
+            .map(|(start, end)| WatchRange { start, end, kinds: WatchKinds::WRITES }).collect();
+        let maps = run::memory_maps(&machine.document)?;
+        let mut watch = machine.session.board.memory_watch_begin_classified(classes, WATCH_LIMIT, maps, ViewPolicy::Observe)?;
+        match machine.session.board.memory_guard_attach(&mut watch, contract.guard_config(role)) {
+            Ok(token) => Recorder::Guarded(Guarded { watch, token, carriers: carriers.clone(), log, diagnostic }),
+            Err(error) => {
+                let ended = machine.session.board.memory_watch_end(&mut watch);
+                return Err(format!("{error}{}", ended.err().map_or(String::new(), |end| format!("; watch end: {end}"))));
+            }
+        }
+    };
     let mut state = Observation {
-        rows: vec![], counts: BTreeMap::new(), recorded: BTreeMap::new(), unguarded: BTreeMap::new(), off_core: BTreeMap::new(),
-        attach: None, sources: None, pre_attach: PreAttach { diagnostic, log, watch: None }, transactions: None, watch: None, token: None,
-        attach_instructions: 0,
+        rows: vec![], counts: BTreeMap::new(), recorded: BTreeMap::new(), off_core: BTreeMap::new(),
+        attach: None, sources: None, transactions: None, recorder, boundary: None, census: None,
     };
     let traced = trace(&mut machine, &contract, role, &mut state, &output);
     let disarmed = machine.traces.disarm(&machine.session);
     machine.traces.stop_labels.clear();
+    if let Some(rows) = &state.census {
+        traced.and(disarmed)?;
+        let first_difference = composed_mutations::census_difference(contract.declared(role), &choice_maps, rows)?;
+        let census = Census {
+            schema: SchemaFour,
+            kind,
+            role,
+            identity: &identity,
+            boundary_instructions: machine.instructions(),
+            declared: contract.declared(role),
+            rows,
+            first_difference,
+        };
+        return write(&output.join(CENSUS), &serde_json::to_vec_pretty(&census).map_err(|error| error.to_string())?);
+    }
+    let Recorder::Guarded(mut guarded) = state.recorder else {
+        return traced.and(disarmed).and(Err("mutation census ended before the boundary".into()));
+    };
     let mut menu = MenuObservation { erased_settings: false, shooting: false };
     let routed = traced.and(disarmed).and_then(|()| menu_route(&mut machine, &mut menu));
     let end_instructions = machine.instructions();
-    let watch_state = state.watch.as_ref().map(|watch| watch.records.borrow().state());
-    let watch_end_error = state.watch.as_mut().and_then(|watch| machine.session.board.memory_watch_end(watch).err());
-    let classes: Vec<(u64, u64)> = contract.watch_classes().iter().map(|class| (class.start, class.end)).collect();
+    let watch_state = guarded.watch.records.borrow().state();
+    let watch_end_error = machine.session.board.memory_watch_end(&mut guarded.watch).err();
     let owned_code = contract.owned_code_spellings();
-    let carriers = watch_state.as_ref().map(|state| {
-        let rows: Vec<composed_receipt::WatchRow> = serde_json::from_value(state["records"].clone())
+    let boundary_row = state.boundary.as_ref().map_or(0, |boundary| boundary.row);
+    let summaries = (|| -> Result<(Vec<CarrierWrites>, Vec<CarrierWrites>), String> {
+        let rows: Vec<WatchRow> = serde_json::from_value(watch_state["records"].clone())
             .map_err(|error| format!("carrier watch rows: {error}"))?;
-        composed_receipt::carrier_writes(&classes, &owned_code, &rows)
-    }).transpose();
-    let checks: BTreeMap<Core, Vec<u64>> = Core::ALL.into_iter().map(|core| {
-        let guard_core = GuardCore::new(core.index()).expect("two cores are within the guard core bound");
-        (core, state.token.as_ref().map_or_else(Vec::new, |token| token.partition_checks(guard_core)))
-    }).collect();
+        let carrier_rows = |rows: &[WatchRow]| -> Vec<WatchRow> {
+            rows.iter().filter(|row| guarded.carriers.iter().any(|&(start, end)| row.physical < end && start < row.physical + row.size.max(1)))
+                .cloned().collect()
+        };
+        let (before, after) = rows.split_at(boundary_row.min(rows.len()));
+        Ok((
+            composed_receipt::carrier_writes(&guarded.carriers, &owned_code, &carrier_rows(before))?,
+            composed_receipt::carrier_writes(&guarded.carriers, &owned_code, &carrier_rows(after))?,
+        ))
+    })();
+    let end_checks = checks(&guarded.token);
     let policies = contract.policies(role).into_iter().map(|policy| {
-        let checks = checks[&policy.core].get(policy.partition.position()).copied().unwrap_or(0);
-        RecordedPolicy { policy, checks }
+        let at = |checks: &BTreeMap<Core, Vec<u64>>| checks.get(&policy.core).and_then(|list| list.get(policy.partition.position())).copied().unwrap_or(0);
+        let checks_before_boundary = state.boundary.as_ref().map_or(0, |boundary| at(&boundary.checks));
+        RecordedPolicy { checks_before_boundary, checks: at(&end_checks), policy }
     }).collect();
-    let guard = state.token.as_ref().map(|token| {
-        let report = token.report();
-        GuardObservation {
-            attach_instructions: state.attach_instructions,
-            end_instructions,
-            status: match report.status {
-                GuardStatus::Armed => GuardState::Armed,
-                GuardStatus::Faulted => GuardState::Faulted,
-                GuardStatus::Ended => GuardState::Ended,
-                GuardStatus::CleanupFailed => GuardState::CleanupFailed,
-            },
-            first_fault: report.first_fault.map(|fault| format!("{fault:?}")),
-            write_checks: report.write_checks,
-            mutation_attempts: report.mutation_attempts,
-            carrier_writes: carriers.as_ref().ok().cloned().flatten().unwrap_or_default(),
-            watch_violation: watch_state.as_ref().and_then(|state| state["violation"].as_str()).map(str::to_owned),
-            watch_end_error,
-        }
-    });
-    let result = routed.and(carriers.map(|_| ())).and_then(|()| {
-        require(guard.as_ref().is_some_and(GuardObservation::clean), "composite guard report is not clean")
+    let report = guarded.token.report();
+    let (before, after) = summaries.as_ref().ok().cloned().unwrap_or_default();
+    let guard = GuardObservation {
+        boundary_instructions: state.boundary.as_ref().map_or(0, |boundary| boundary.instructions),
+        boundary_row: boundary_row as u64,
+        end_instructions,
+        status: match report.status {
+            GuardStatus::Armed => GuardState::Armed,
+            GuardStatus::Faulted => GuardState::Faulted,
+            GuardStatus::Ended => GuardState::Ended,
+            GuardStatus::CleanupFailed => GuardState::CleanupFailed,
+        },
+        first_fault: report.first_fault.map(|fault| format!("{fault:?}")),
+        write_checks: report.write_checks,
+        mutation_attempts: report.mutation_attempts,
+        mutations_admitted: report.mutations_admitted,
+        declared: state.boundary.as_ref().map_or_else(Vec::new, |boundary| boundary.declared.clone()),
+        carrier_writes_before_boundary: before,
+        carrier_writes: after,
+        watch_violation: watch_state["violation"].as_str().map(str::to_owned),
+        watch_end_error,
+    };
+    let result = routed.and(summaries.map(|_| ())).and_then(|()| {
+        require(guard.clean(), "composite guard report is not clean")
     });
     let receipt = Receipt {
-        schema: SchemaThree,
+        schema: SchemaFour,
         kind,
         role,
         identity,
         policies,
-        unconfined: contract.unconfined(role),
         outcome: if result.is_ok() { Outcome::Observed } else { Outcome::Refused },
         error: result.as_ref().err().cloned(),
         machine_failure: machine.failure.clone(),
@@ -341,10 +456,9 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
         rows: state.rows,
         counts: counts(state.counts),
         off_core: counts(state.off_core),
-        unguarded: counts(state.unguarded),
         attach: state.attach,
         attach_sources: state.sources,
-        guard,
+        guard: Some(guard),
         menu,
     };
     write(&output.join(RECEIPT), &serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?)?;
@@ -384,8 +498,8 @@ fn check_contract(contract_path: PathBuf, output: PathBuf) -> Result<(), String>
 
 fn main() -> ExitCode {
     let result = arguments().and_then(|command| match command {
-        Command::Observe { role, contract, run, update, rom, output, diagnostic } =>
-            observe(role, contract, run, update, rom, output, diagnostic).map(|()| true),
+        Command::Observe { role, contract, run, update, rom, output, mode } =>
+            observe(role, contract, run, update, rom, output, mode).map(|()| true),
         Command::Compare { retained, owned, contract } => compare(retained, owned, contract).map(|verdict| verdict == VerdictKind::Equal),
         Command::CheckContract { contract, output } => check_contract(contract, output).map(|()| true),
     });

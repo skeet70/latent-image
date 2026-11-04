@@ -24,7 +24,7 @@ import Data.Time.Format (defaultTimeLocale, formatTime)
 import Emulation.SegmentReceipt (SegmentReceipt (..), SegmentResult (..), decodeDeclaredReceipts, segmentNameText)
 import Emulation.WatchObservation (WatchJudgement (..))
 import Emulation.CandidateBaseline
-import Emulation.EmulatorSlot (SlotCount (..), SlotPolicy (..), slotPolicyFromEnvironment)
+import Emulation.EmulatorSlot (SlotCount (..), SlotPolicy (..), insideSlot, slotPolicyFromEnvironment)
 import Emulation.KeyReleaseObservation (KeyReleaseObservation, readReleaseObservationLog, readReleaseObservationReceipt, writeReleaseObservationReceipt)
 import GHC.Clock (getMonotonicTime)
 import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectoryRecursive)
@@ -811,14 +811,17 @@ main = do
         (Just directory, _) -> (Existing, Just directory)
         (Nothing, Just earlier) -> (Existing, Just (earlier </> "receipts" </> routeName route))
         (Nothing, Nothing) -> (Execute, Nothing)
+      toExecute = [route | route <- selected, fst (sourceOf route) == Execute]
   earlier <- maybe (pure Map.empty) earlierExecutions fromRun
+  inSlot <- insideSlot
+  require (not (inSlot && not (null toExecute)))
+    "verify-candidate runs each emulator route in a slot of its own; start it outside //emulation:emulator-slot"
   started <- stamp
   run <- beneathPrivate root (fromMaybe ("private-data/verify-candidate/runs" </> started) (optionOutput options)) "--output"
   createDirectory run
   setFileMode run 0o700
   baselines <- beneathPrivate root (fromMaybe "private-data/verify-candidate/baselines" (optionBaselines options)) "--baselines"
-  let toExecute = [route | route <- selected, fst (sourceOf route) == Execute]
-      receiptOf route = fromMaybe (run </> "receipts" </> routeName route) (snd (sourceOf route))
+  let receiptOf route = fromMaybe (run </> "receipts" </> routeName route) (snd (sourceOf route))
   commit <- readProcessWithExitCode "git" ["-C", let Workspace path = root in path, "rev-parse", "HEAD"] ""
   executable <- getExecutablePath
   runfiles <- fromMaybe (executable ++ ".runfiles") <$> lookupEnv "RUNFILES_DIR"

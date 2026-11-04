@@ -34,11 +34,12 @@ result start seconds cursor = C.concat
 writeCardReceipts :: FilePath -> Bool -> Bool -> IO ()
 writeCardReceipts root present coldPresent = do
   createDirectoryIfMissing True (root </> "cold-restart")
-  writeCard "e2e-result.json" present
-  writeCard ("cold-restart" </> "e2e-cold-restart.json") coldPresent
+  writeCard "e2e-result.json" present [media present]
+  writeCard ("cold-restart" </> "e2e-cold-restart.json") coldPresent []
   where
-    writeCard file isPresent = BL.writeFile (root </> file) (encode (object
-      [ "card" .= object ["image" .= (root </> "private-card" </> "card.img"), "present" .= isPresent] ]))
+    card isPresent = object ["image" .= (root </> "private-card" </> "card.img"), "present" .= isPresent]
+    media isPresent = "media" .= object ["scope" .= ("card" :: T.Text), "card" .= card isPresent]
+    writeCard file isPresent extra = BL.writeFile (root </> file) (encode (object (("card" .= card isPresent) : extra)))
 
 check :: String -> Bool -> IO Bool
 check name passed = do
@@ -188,7 +189,7 @@ main = do
         (null (compareObservations (withoutExcluded cardSpec (baselineFields historicalCardBaseline)) cardPathsMoved))
     , check "RAM-push card presence remains compared"
         (map (renderFieldName . differenceField) (compareObservations cardBaseline cardMetadataChanged)
-          == ["e2e-result.json#/card/present"])
+          == ["e2e-result.json#/card/present", "e2e-result.json#/media/card/present"])
     , check "cold-restart card presence remains compared against historical fields"
         (map (renderFieldName . differenceField)
           (compareObservations (withoutExcluded cardSpec (baselineFields historicalCardBaseline)) coldCardMetadataChanged)

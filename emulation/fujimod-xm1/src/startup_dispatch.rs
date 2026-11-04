@@ -380,7 +380,7 @@ fn route(machine: &mut Machine, observation: &mut Observation, maps: &[MemoryMap
     advance(machine,observation,maps,80_000_000u64.checked_sub(machine.instructions()).ok_or("startup prefix exceeds the initial cursor deadline")?)?;
     if !machine.menu()?.is_some_and(|menu|(menu.menu_id,menu.setting_id,menu.cursor)==(69,52,12)) { return Err("initial natural cursor differs".into()); }
     machine.traces.stop_labels.clear();
-    let pulse=KeyPulse {hold:8_000_000,release:8_000_000};
+    let pulse=KeyPulse::instructions(8_000_000, 8_000_000);
     for key in std::iter::repeat_n("up",12).chain(["ok","ok"]) { machine.press_once(Press::parse(key)?,pulse)?; }
     machine.run(40_000_000); machine.require_running()?;
     machine.press_once(Press::parse("menu")?,pulse)?;

@@ -1,0 +1,18 @@
+/* Added to recipe_bank_ram.ld for the modal75,menu-engine package: the owned
+ * menu engine region at RAM_PUSH_MENU_ENGINE_START (RamPushLayout
+ * menuEngineRegionStart, past the installer). build-recipe-bank-ram.sh renames
+ * the engine's input sections to .menu_engine.* so .text's wildcards miss them. */
+__rb_menu_engine_stock_resume = 0x00bf95cc;
+
+SECTIONS {
+  .menu_engine RAM_PUSH_MENU_ENGINE_START : {
+    __rb_menu_engine_start = .;
+    *(.menu_engine.*)
+    . = ALIGN(4);
+    __rb_menu_engine_end = .;
+  }
+}
+
+ASSERT(__rb_menu_engine_start == RAM_PUSH_MENU_ENGINE_START, "menu engine region placement changed")
+ASSERT(__rb_menu_engine_end <= RAM_PUSH_MENU_ENGINE_END, "menu engine overflows its region")
+ASSERT(RAM_PUSH_MENU_ENGINE_START >= __ram_push_end, "menu engine region overlaps the installer")

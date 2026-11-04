@@ -440,7 +440,7 @@ fn inspect_watch(raw: &serde_json::Value, processed: &mut usize, stopped: &[Hit]
 fn menu_route(machine: &mut Machine) -> Result<(), String> {
     machine.run(DEADLINE.saturating_sub(machine.instructions())); machine.require_running()?;
     require(machine.menu()?.is_some_and(|menu| (menu.menu_id, menu.setting_id, menu.cursor) == (69, 52, 12)), "startup did not reach erased-settings menu")?;
-    let pulse = KeyPulse { hold: 8_000_000, release: 8_000_000 };
+    let pulse = KeyPulse::instructions(8_000_000, 8_000_000);
     for key in std::iter::repeat_n("up", 12).chain(["ok", "ok"]) { machine.press_once(Press::parse(key)?, pulse)?; }
     machine.run(40_000_000); machine.require_running()?;
     machine.press_once(Press::parse("menu")?, pulse)?;
@@ -2031,7 +2031,7 @@ mod tests {
         ]});
         let hit = Hit {
             site: "instruction".into(), address: format!("{:#x}", WFI.0), core: 1, instructions: 42,
-            registers: BTreeMap::new(), sp: "0x0".into(), lr: "0x0".into(), cpsr: 0x53, code_word: None,
+            registers: BTreeMap::new(), sp: "0x0".into(), lr: "0x0".into(), cpsr: 0x53, code_word: None, memory: Vec::new(),
         };
         let mut cursor = 0;
         assert_eq!(inspect_watch(&raw, &mut cursor, &[hit], &mut producer).unwrap(), 1);

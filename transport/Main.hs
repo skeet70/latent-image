@@ -378,6 +378,7 @@ contractFor size = case payloadKind <$> payloadOfSize size of
   Just RecipeBankModal75 -> error "scoped modal-75 payload has no compiled reviewed contract"
   Just RecipeBankLifecycle -> error "lifecycle payload has no compiled reviewed contract"
   Just RecipeBankModalLifecycle -> error "modal lifecycle payload has no compiled reviewed contract"
+  Just RecipeBankModal75MenuEngine -> error "menu engine payload has no compiled reviewed contract"
   _ -> reviewedContract
 
 -- | Payload kinds without a live review record.
@@ -386,6 +387,7 @@ refuseUnpinnedKindLive size = case payloadKind <$> payloadOfSize size of
   Just RecipeBankModal75 -> P.reject "scoped modal-75 payload has no approved live reviewed contract; use the host-only --ram-push-modal-scoped --unreviewed-relink emulator path"
   Just RecipeBankLifecycle -> P.reject "lifecycle payload has no approved live reviewed contract; use the host-only --ram-push-lifecycle --unreviewed-relink emulator path"
   Just RecipeBankModalLifecycle -> P.reject "modal lifecycle payload has no approved live reviewed contract; use the host-only --ram-push-lifecycle --ram-push-modal-scoped --unreviewed-relink emulator path"
+  Just RecipeBankModal75MenuEngine -> P.reject "menu engine payload has no approved live reviewed contract; use the host-only --ram-push-modal-scoped --menu-engine-owned --unreviewed-relink emulator path"
   Just AfRing -> P.reject "AF ring has no approved live reviewed contract; use the host-only AF ring harness"
   Just Experiment -> P.reject "experiments relink and push only through ram-session experiment NAME, and come out by removing the battery"
   _ -> pure ()

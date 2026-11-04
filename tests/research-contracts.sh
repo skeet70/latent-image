@@ -64,6 +64,13 @@ if [[ -z "$(fuji_af_dangling_citations "$TEST_TMPDIR/citations")" ]]; then
   exit 1
 fi
 
+fuji_af_markers="$("$fuji_af_git" -C "${fuji_af_ledger%/docs/evidence.jsonl}" grep -I -n -E \
+  '^(<<<<<<< |>>>>>>> |=======$)' || [[ $? -eq 1 ]])"
+if [[ -n "$fuji_af_markers" ]]; then
+  printf 'Merge conflict markers in tracked files (file:line):\n%s\n' "$(cut -d: -f1,2 <<< "$fuji_af_markers")" >&2
+  exit 1
+fi
+
 "$fuji_af_jq" '.sources[0].revision = null' manifests/sources.json > "$TEST_TMPDIR/invalid.json"
 if "$fuji_af_schema_checker" --schemafile schemas/sources.schema.json "$TEST_TMPDIR/invalid.json"; then
   echo 'Selected source without a commit incorrectly accepted' >&2

@@ -1,8 +1,9 @@
 -- | Probe for @//emulation:emulator-slot-tests@: takes an emulator slot
--- through the library and reports reaching the in-slot run.
+-- through the library, reports reaching the in-slot run and holds the slot
+-- until its stdin closes.
 module Main (main) where
 
-import Control.Exception (IOException, catch, displayException)
+import Control.Exception (IOException, catch, displayException, evaluate)
 import Data.Maybe (fromMaybe)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import System.Environment (lookupEnv)
@@ -22,3 +23,5 @@ main = run `catch` \failure -> do
       slot <- lookupEnv "XM1_EMULATOR_SLOT"
       putStrLn ("probe-in-slot " ++ fromMaybe "unassigned" slot)
       hFlush stdout
+      _ <- getContents >>= evaluate . length
+      pure ()

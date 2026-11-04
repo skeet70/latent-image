@@ -95,8 +95,9 @@ instructionTimingExclusions file =
 
 ramPushCardImageExclusions :: [Exclusion]
 ramPushCardImageExclusions =
-  [ Exclusion (filePattern file) (pointerPattern "/card/image") RunLocation
-  | file <- ["e2e-result.json", "cold-restart/e2e-cold-restart.json", "segment-*/e2e-result.json"] ]
+  [ Exclusion (filePattern file) (pointerPattern pointer) RunLocation
+  | file <- ["e2e-result.json", "cold-restart/e2e-cold-restart.json", "segment-*/e2e-result.json"]
+  , pointer <- ["/card/image", "/media/card/image"] ]
 
 flashBootSpec :: ObservationSpec
 flashBootSpec = ObservationSpec

@@ -8,6 +8,7 @@ allocation_size=0x1dc98
 publication_count=223
 activation_count=92
 modal_link=()
+engine_link=()
 case "${RB_PUBLICATION_GROUPS:-}" in
   "") ;;
   modal75)
@@ -29,6 +30,14 @@ case "${RB_PUBLICATION_GROUPS:-}" in
     publication_count=227
     activation_count=96
     modal_link=(-Wl,--undefined=rb_modal_entry)
+    ;;
+  modal75,menu-engine)
+    builder_mode=(--ram-push-variant modal75,menu-engine)
+    allocation_size=0x2dcc0
+    publication_count=225
+    activation_count=94
+    modal_link=(-Wl,--undefined=rb_modal_entry -Wl,--undefined=rb_menu_engine_entry)
+    engine_link=(-Wl,-T,menu/recipe_bank_ram_engine.ld)
     ;;
   *) printf 'invalid RB_PUBLICATION_GROUPS selection\n' >&2; exit 1 ;;
 esac
@@ -71,6 +80,12 @@ installer_start=$(((name_record + 0x800 + 31) & 0xffffffe0))
 printf -v rb_name_record '0x%08xu' "$name_record"
 printf -v rb_bank_end '0x%08x' "$bank_end"
 printf -v rb_installer_start '0x%08x' "$installer_start"
+if (( ${#engine_link[@]} )); then
+  engine_start=$((base_value + 0x1dcc0))
+  printf -v rb_engine_start '0x%08x' "$engine_start"
+  printf -v rb_engine_end '0x%08x' "$((engine_start + 0x10000))"
+  engine_link+=(-Wl,--defsym=RAM_PUSH_MENU_ENGINE_START="$rb_engine_start" -Wl,--defsym=RAM_PUSH_MENU_ENGINE_END="$rb_engine_end")
+fi
 
 ARM=(--target=armv7r-none-eabi -march=armv7-r -marm)
 FREE=(-ffreestanding -nostdlib -fno-builtin -mno-unaligned-access)
@@ -97,7 +112,23 @@ for src in menu/recipe_bank_arm.S menu/recipe_bank_probe.c menu/recipe_bank_hook
   esac
   objects+=("$obj")
 done
-objects+=("$RB_RUST_ARCHIVE")
+if (( ${#engine_link[@]} )); then
+  # The engine's sections, by their Rust paths, move to .menu_engine.* for
+  # menu/recipe_bank_ram_engine.ld.
+  engine_section='^\.(text|rodata)\.(rb_menu_engine_|.*(11menu_engine(6engine|5block|5state|4tree)|19menu_engine_adapter))'
+  declare -A renamed=()
+  renames=()
+  while read -r _ section _; do
+    if [[ $section =~ $engine_section && -z ${renamed[$section]:-} ]]; then
+      renamed[$section]=1
+      renames+=(--rename-section "$section=.menu_engine$section")
+    fi
+  done < <("$OBJDUMP" -h "$RB_RUST_ARCHIVE")
+  "$OBJCOPY" "${renames[@]}" "$RB_RUST_ARCHIVE" "$OUT/rust-engine.a"
+  objects+=("$OUT/rust-engine.a")
+else
+  objects+=("$RB_RUST_ARCHIVE")
+fi
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${FREE[@]}" -Oz -Wall -Wextra \
   -DRAM_PUSH_PUBLICATION_COUNT="${publication_count}u" -DRAM_PUSH_SETUP_COUNT=131u \
   -DRAM_PUSH_ACTIVATION_COUNT="${activation_count}u" -DRAM_PUSH_ABI_VERSION=5u \
@@ -109,7 +140,7 @@ objects+=("$OUT/classic_chrome_ram.o")
 NIX_HARDENING_ENABLE= "$CLANG" "${ARM[@]}" "${LINK[@]}" -Wl,-T,menu/recipe_bank_ram.ld \
   -Wl,--defsym=RAM_PUSH_BASE="$BASE" -Wl,--defsym=RAM_PUSH_BANK_END="$rb_bank_end" \
   -Wl,--defsym=RAM_PUSH_INSTALLER_START="$rb_installer_start" \
-  -Wl,--defsym=RAM_PUSH_PUBLICATION_COUNT="$publication_count" "${modal_link[@]}" "${lifecycle_link[@]}" \
+  -Wl,--defsym=RAM_PUSH_PUBLICATION_COUNT="$publication_count" "${modal_link[@]}" "${lifecycle_link[@]}" "${engine_link[@]}" \
   -Wl,menu/classic_chrome_ram_stock.ld -Wl,--emit-relocs \
   "${objects[@]}" -o "$OUT/kernel.elf"
 "$OBJCOPY" -O binary "$OUT/kernel.elf" "$OUT/linked.bin"

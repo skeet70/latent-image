@@ -9,8 +9,10 @@ module Replacement.StartupArtifact.Types
   , Cores, cores, coreList, physicalAddress
   , Boundary (..), CodeSpan (..), codeSpan, TcmBank (..), tcmBankName, WriteTarget (..), WriteRange (..)
   , WriteBasis (..), WritesPolicy (..), CatalogRead (..), Catalog (..)
+  , TcmRegister (..), DecoderIndex (..), DecoderChoice (..), DeclaredMutation (..)
   , Piece (..), PieceFacts (..), ServiceBinding (..), Publication (..), LinkedBytes (..), ScratchBytes (..)
-  , PublisherFrame (..), SubmitCall (..), StackDepth (..)
+  , PublisherFrame (..), SubmitCall (..), StackDepth (..), TaskNumber (..), StackBytes (..), TaskStart (..)
+  , AllocationPosition (..), allocationPositionName, AllocationWords (..), AllocationOwner (..), PoolSpan (..), PoolAllocation (..)
   , Refusal (..), CatalogProblem (..), ManifestProblem (..)
   ) where
 
@@ -19,7 +21,7 @@ import Data.Char (isAsciiLower, isDigit)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Word (Word32, Word64)
+import Data.Word (Word16, Word32, Word64)
 
 data Target = Record1 | Record2 | LoaderA | LoaderB | Image4 | Image5
   deriving (Eq, Ord, Show, Enum, Bounded)
@@ -61,7 +63,8 @@ editSpan (Edit range _) = range
 editBytes :: Edit -> B.ByteString
 editBytes (Edit _ bytes) = bytes
 
-data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup
+data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup | TaskSubmission | TaskStorage
+  | IdleTask | RootTask
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 pieceKindName :: PieceKind -> Text
@@ -71,9 +74,14 @@ pieceKindName kind = case kind of
   PrimaryPublisher -> "primary-publisher"
   LoaderOrchestrationB -> "loader-orchestration-b"
   LoaderStartup -> "loader-startup"
+  TaskSubmission -> "task-submission"
+  TaskStorage -> "task-storage"
+  IdleTask -> "idle-task"
+  RootTask -> "root-task"
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
-  | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea
+  | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea | TaskSubmissionArea | TaskStorageArea
+  | IdleTaskArea | RootTaskArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 areaName :: Area -> Text
@@ -88,6 +96,10 @@ areaName area = case area of
   LoaderOrchestrationBArea -> "loader-orchestration-b"
   PhaseDispatcherArea -> "phase-dispatcher"
   KernelInstallArea -> "kernel-install"
+  TaskSubmissionArea -> "task-submission"
+  TaskStorageArea -> "task-storage"
+  IdleTaskArea -> "idle-task"
+  RootTaskArea -> "root-task"
 
 data FootprintBasis = AdmissionRead | RuntimePremise deriving (Eq, Ord, Show)
 
@@ -196,10 +208,22 @@ data WriteRange = WriteRange WriteTarget Word64 Word64 deriving (Eq, Ord, Show)
 
 data WriteBasis = Proved | Premised Premise deriving (Eq, Show)
 
-data WritesPolicy
-  = EnumeratedWrites [WriteRange] WriteBasis
-  -- | Destinations are not enumerated; the observer derives the policy.
-  | UnenumeratedWrites Premise
+data WritesPolicy = EnumeratedWrites [WriteRange] WriteBasis
+  deriving (Eq, Show)
+
+-- | A TCM region register value as the CPU stores it after normalization.
+newtype TcmRegister = TcmRegister Word32 deriving (Eq, Show)
+
+newtype DecoderIndex = DecoderIndex Word16 deriving (Eq, Show)
+
+newtype DecoderChoice = DecoderChoice Word16 deriving (Eq, Show)
+
+-- | A mutation the composite guard admits once in a role: a guest TCM region
+-- register write (core, bank, previous, next, writer) or a memory decoder
+-- commit (decoder, previous, next, writer core, writer).
+data DeclaredMutation
+  = TcmRegionWrite Core TcmBank TcmRegister TcmRegister Pc Citation
+  | DecoderCommit DecoderIndex DecoderChoice DecoderChoice Core Pc Citation
   deriving (Eq, Show)
 
 data CatalogRead = CatalogRead
@@ -237,6 +261,40 @@ newtype StackDepth = StackDepth Word32 deriving (Eq, Show)
 -- | One task-submission tail call of the owned dispatcher: its core and stack depth at the branch.
 data SubmitCall = SubmitCall { submitCore :: Core, submitStack :: StackDepth } deriving (Eq, Show)
 
+newtype TaskNumber = TaskNumber Word32 deriving (Eq, Show)
+
+newtype StackBytes = StackBytes Word32 deriving (Eq, Show)
+
+-- | A task the owned dispatcher submits: its id, entry and requested stack.
+data TaskStart = TaskStart { startTask :: TaskNumber, startEntry :: Pc, startStack :: StackBytes } deriving (Eq, Show)
+
+-- | Where a normalized word points in an allocation: from its base (inclusive) or up to its end (inclusive).
+data AllocationPosition = AllocationBase | AllocationTop deriving (Eq, Show)
+
+allocationPositionName :: AllocationPosition -> Text
+allocationPositionName AllocationBase = "base"
+allocationPositionName AllocationTop = "top"
+
+-- | Words of a read that hold pool addresses: every stride bytes from the offset.
+data AllocationWords = AllocationWords
+  { allocationRead :: Label, allocationOffset :: Word32, allocationStride :: Word32, allocationPosition :: AllocationPosition }
+  deriving (Eq, Show)
+
+-- | A read whose base word, every stride bytes from the offset, names an allocation the core reserved.
+data AllocationOwner = AllocationOwner { ownerCore :: Core, ownerRead :: Label, ownerOffset :: Word32, ownerStride :: Word32 }
+  deriving (Eq, Show)
+
+-- | Physical [start, end) of the task reservation pool.
+data PoolSpan = PoolSpan Word32 Word32 deriving (Eq, Show)
+
+-- | Each role's allocations come from the storage-record and cursor reads; the listed words and the SP of
+-- each stack-top return boundary compare as (task, offset) within that role's own allocations, and each
+-- core's tasks, ordered by base, must match between the roles.
+data PoolAllocation = PoolAllocation
+  { poolSpan :: PoolSpan, poolRecords :: Label, poolCursor :: Label
+  , poolWords :: [AllocationWords], poolStackTops :: [Label], poolOwners :: [AllocationOwner], poolCitation :: Citation }
+  deriving (Eq, Show)
+
 -- | Artifact values that registered joins check across pieces.
 data PieceFacts
   -- | First-stage entry and the linked record-1 image.
@@ -249,9 +307,17 @@ data PieceFacts
   | PublisherFacts PublisherFrame [Publication]
   -- | The linked loader-B orchestration image.
   | LoaderOrchestrationFacts LinkedBytes
-  -- | The linked loader-A and loader-B orchestration images and the dispatcher's task submissions.
-  | LoaderStartupFacts LinkedBytes LinkedBytes [SubmitCall]
+  -- | The linked loader-A and loader-B orchestration images, the dispatcher's task submissions and the tasks they start.
+  | LoaderStartupFacts LinkedBytes LinkedBytes [SubmitCall] [TaskStart]
   | NoFacts
+  -- | The linked task wrapper/release image and the pool-allocation relation over its reads.
+  | TaskSubmissionFacts LinkedBytes PoolAllocation
+  -- | The linked task-storage transition image.
+  | TaskStorageFacts LinkedBytes
+  -- | The linked idle image and the stack-top return boundaries it adds to the pool-allocation relation.
+  | IdleTaskFacts LinkedBytes [Label]
+  -- | The linked root image and the pool-address words of its reads.
+  | RootTaskFacts LinkedBytes [AllocationWords]
   deriving (Eq, Show)
 
 data Piece = Piece

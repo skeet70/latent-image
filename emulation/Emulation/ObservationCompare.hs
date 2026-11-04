@@ -19,8 +19,9 @@ import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 
+-- | Fields left out at any depth. Only FujiMod menu receipts carry @scanout_evidence@.
 e2eIgnored :: [K.Key]
-e2eIgnored = ["seconds", "instructions", "virtual_ticks", "sp", "path", "frame_number", "sha256"]
+e2eIgnored = ["seconds", "instructions", "virtual_ticks", "sp", "path", "frame_number", "sha256", "scanout_evidence"]
 
 -- | Also the access probe's device-model transfers, which come from each engine's own models;
 -- the C0 session id, which differs between hardware sessions too; and an attach's cells at the
@@ -71,15 +72,28 @@ converts :: [SiteEntry] -> Bool
 converts = any isConverterEntry
 
 -- | A converter pass split by idle passes merges only when the continuation repeats the first
--- part's entries before its first converter; the duplicate prefix is dropped once.
+-- part's entries before its first converter; the duplicate prefix is dropped once. A run of
+-- settings converter entries before the first marker joins the next pass when that pass is
+-- idle. After merging, when the first converting pass holds only settings converters after
+-- its prefix and every earlier pass equals that prefix, its converter entries count as entries
+-- before the first pass.
 passes :: [T.Text] -> [[T.Text]]
 passes = map (map entryText) . developPasses . map parseEntry
 
 developPasses :: [SiteEntry] -> [[SiteEntry]]
-developPasses entries = trim (map NE.head (NE.group (merge (split entries))))
+developPasses entries = trim (map NE.head (NE.group (hoist (merge (lead (split entries))))))
   where
     split [] = []
     split (first : rest) = let (pass, more) = break (== EntryMarker) rest in (first : pass) : split more
+    lead (settings : pass : rest)
+      | all (== EntrySettingsConverter) settings, not (converts pass) = (pass ++ settings) : rest
+    lead chunks = chunks
+    hoist chunks = case span (not . converts) chunks of
+      (idle, pass : rest)
+        | Just parts <- passParts pass, take 1 (passPrefix parts) == [EntryMarker], all (== passPrefix parts) idle
+        , all (== EntrySettingsConverter) (passBody parts) ->
+            passBody parts : idle ++ [passPrefix parts] ++ rest
+      _ -> chunks
     merge [] = []
     merge (pass : rest)
       | Just parts <- passParts pass = absorb (passPrefix parts) [pass] rest

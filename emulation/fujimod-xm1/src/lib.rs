@@ -6,6 +6,8 @@ pub mod attach_state;
 pub mod bridge;
 pub mod composed_catalog;
 pub mod composed_receipt;
+pub mod composed_mutations;
+pub mod pool_allocation;
 pub mod ff80;
 pub mod frame_capture;
 pub mod guest;
