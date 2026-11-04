@@ -177,7 +177,7 @@ struct Receipt<'a> {
     release_limit_ticks: u64,
     writer_sites: Vec<String>,
     reset: HoldState,
-    /// The route ended and both watches were closed.
+    /// Written by `finish`.
     finished: bool,
     intervals: Vec<Interval<'a>>,
     fetch_rows: usize,
