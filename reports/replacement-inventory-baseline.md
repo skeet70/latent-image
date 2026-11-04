@@ -1894,6 +1894,8 @@ Each step stages one DAT through `stage-startup-artifact`, whose composition rul
 8. J8: add the pump after its owned leaf run; observe task1 entry, the first owned pump call and repeated input.
 9. The single reset-to-menu run with all pieces and continuous guards, then the #155 scenario matrix.
 
+Reaching #154's ready application takes three more owned units after J8 (J9 image5 initialization, J10 task constructors, J11 the task1 actor body with the pump inside it) and a composed-run endpoint that is a semantic first-ready check instead of menu equality; scope, retained seams and prerequisites are in [startup-application-readiness.md](startup-application-readiness.md).
+
 Run order follows the steps; each step's runs wait on its host admission and reviews. Step 2's host work can proceed beside step 0; step 1 needs 0(a) and 0(b).
 
 #### Step 0 mechanisms
