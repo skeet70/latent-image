@@ -455,6 +455,73 @@ haskell_test(
 )
 
 haskell_library(
+    name = "menu-engine-tree-lib",
+    srcs = ["Replacement/ModalRuntime/MenuEngineTree.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:containers",
+    ],
+)
+
+haskell_binary(
+    name = "menu-engine-tree",
+    srcs = ["MenuEngineTreeMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":menu-engine-tree-lib",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+    ],
+)
+
+haskell_library(
+    name = "menu-engine-cases-lib",
+    srcs = ["Replacement/ModalRuntime/MenuEngineCases.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_binary(
+    name = "menu-engine-cases",
+    srcs = ["MenuEngineCasesMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":menu-engine-cases-lib",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+    ],
+)
+
+haskell_test(
+    name = "menu-engine-generator-tests",
+    srcs = ["MenuEngineGeneratorTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        ":menu-engine-cases-lib",
+        ":menu-engine-tree-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
+haskell_library(
     name = "picker-table-lib",
     srcs = ["Replacement/ModalRuntime/PickerTable.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],

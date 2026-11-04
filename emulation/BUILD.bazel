@@ -6,6 +6,7 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 exports_files(
     ["recovery-task-state-tests.sh"],
     visibility = [
+        "//replacement/menu_engine:__pkg__",
         "//replacement/modal_runtime:__pkg__",
         "//replacement/recipe_ui:__pkg__",
     ],

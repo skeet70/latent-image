@@ -424,3 +424,19 @@ devenv shell -- bazel run //replacement/property_service:property-oracle -- \
 ```
 
 Each batch directory holds the case files, every case's native result (about 170 KB each, so about 7 GB for both roles) and a `summary.json`. `results.json` records the input and runner digests, batch digests, totals per class and id, model agreement, verdicts, status distributions, control outcomes and the first 20 differences of each kind. The command exits nonzero unless the model agrees, every candidate case passes and every control holds.
+
+## Owned menu engine, increment 1 (#128)
+
+`menu_engine/` is the host part of increment 1 of [the engine design](../reports/owned-menu-engine-design.md): a `no_std` library with `MenuEvent`, `EngineState`, `Effect`, `EngineServices`, `Tree` and `apply`, plus `block::decode`/`block::mirror` over the 0x430-byte block at `0x009571d0` and the last-move pair `0x01467580`. It owns four event classes, each with an oracle case: kind 4 row step down on a wrapping node with queried availability, kind `0xe` push from a node whose remember write runs, kind `0xf` pop to a parent with the same id, and kind 1 open; `engine.rs` lists the exact conditions. Every other event returns `NotOwned` with no effects. The pure classifier and snapshot of `FUN_0061ca2c`/`FUN_0061cd14` live in `menu_engine/src/frame.rs`; `owned_menu::frame` runs them over the live cells. The crate is an unconditional module of the bank crate; `llvm-nm -u` of the four bank archives is unchanged by it.
+
+`//replacement/menu_engine:menu-engine-tests` runs the synthetic tests. `//replacement/modal_runtime:menu-engine-tree` writes the generated `Tree` and the `RecordTable` side table from the pinned menu tables JSON, both carrying the tree identity. `//replacement/modal_runtime:menu-engine-cases` writes one Rust case per `--menu-observe` receipt directory and refuses a receipt whose config, trace sites or watch ranges lack what the case needs. `//replacement/modal_runtime:menu-engine-generator-tests` covers both on synthetic JSON. The owner run checks the after block, last-move pair, ordered snapshot word writes, notifications and result of each case, and four mutant engines (no wrap, inverted skip rule, no initial-row selection, no last-move pair):
+
+```sh
+S=private-data/scratch/ControllerStrategy; O=$S/menu-engine
+bazel-bin/replacement/modal_runtime/menu-engine-tree --tables $S/menu-tables.json --tree-out $O/menu-tree.rs --records-out $O/menu-records.rs
+bazel-bin/replacement/modal_runtime/menu-engine-cases --out $O/menu-cases.rs wrap=$S/menu-oracle-wrap push=$S/menu-oracle-push \
+  pop=$S/menu-oracle-pop open=$S/menu-oracle-open push-restored=$S/menu-oracle-push-restored
+RB_MENU_ENGINE_TREE=$O/menu-tree.rs RB_MENU_ENGINE_RECORDS=$O/menu-records.rs RB_MENU_ENGINE_CASES=$O/menu-cases.rs \
+  <lab_rustc>/bin/rustc --edition=2021 --test --cfg rb_menu_engine_cases -C linker=<lab_clang>/bin/clang \
+  replacement/menu_engine/src/lib.rs -o FRESH_PATH && FRESH_PATH --nocapture
+```

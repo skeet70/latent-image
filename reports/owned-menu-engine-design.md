@@ -1,6 +1,6 @@
 # Owned menu engine: design (#128)
 
-Status: design for review, revision 2 (after MenuEngineDesignReview). No owned engine code exists yet. Facts cite the ledger or `private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c`; **[INFERENCE]** marks what the evidence does not show directly.
+Status: revision 2, cleared by MenuEngineDesignReview. Increment 1's host part exists in `replacement/menu_engine` with the generator and case extractor in `replacement/modal_runtime` (`replacement/README.md#owned-menu-engine-increment-1-128`): the owner oracle passes on the wrap, push, pop, open and push-restored receipts and each of the four negative controls fails at least one of them. It differs from this text in three places: `EngineServices::availability` takes one row's (class, token) as `0xd52684` does, `apply` takes the `Tree`, and no class with the `0x285` write is owned yet, so `Effect` has no `WriteProperty`. No guest code exists. Facts cite the ledger or `private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c`; **[INFERENCE]** marks what the evidence does not show directly.
 
 ## Target and acceptance
 

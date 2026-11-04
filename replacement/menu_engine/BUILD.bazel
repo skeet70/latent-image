@@ -1,0 +1,38 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+filegroup(
+    name = "module",
+    srcs = [
+        "src/block.rs",
+        "src/engine.rs",
+        "src/frame.rs",
+        "src/lib.rs",
+        "src/state.rs",
+        "src/tree.rs",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//replacement/bank:__pkg__",
+    ],
+)
+
+genrule(
+    name = "menu-engine-tests-build",
+    srcs = [
+        ":module",
+        "src/lib.rs",
+        "src/tests.rs",
+    ],
+    outs = ["menu-engine-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
+)
+
+sh_test(
+    name = "menu-engine-tests",
+    size = "small",
+    srcs = ["//emulation:recovery-task-state-tests.sh"],
+    args = ["$(location :menu-engine-tests-build)"],
+    data = [":menu-engine-tests-build"],
+)

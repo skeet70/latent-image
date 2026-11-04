@@ -11,6 +11,9 @@ mod service;
 #[path = "../recipe_ui/src/lib.rs"]
 mod recipe_ui_route;
 
+#[path = "../menu_engine/src/lib.rs"]
+mod menu_engine;
+
 #[path = "../owned_menu/src/lib.rs"]
 mod owned_menu;
 
