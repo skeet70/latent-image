@@ -7,18 +7,20 @@ use fujimod_emulator::board::bus::Transaction;
 use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
 use fujimod_emulator_devices::exr2::clock::{BASE, POWER_HOLD_RELEASE_LIMIT_TICKS};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{Seek, Write};
+use std::path::Path;
 
-pub const HOLD: u64 = BASE + 0x84;
+pub const HOLD: Address = Address(BASE + 0x84);
 const HOLD_INDEX: usize = 0x84 / 4;
 /// The run document's clock-control node.
 const CLOCKS: &str = "clocks";
 const ACCESS_LIMIT: usize = 65_536;
 const FETCH_LIMIT: usize = 65_536;
 
-/// Every store in the captured 1.50 ROM (`bootrom.dis`) whose address is the
-/// hold word or a configuration-block word, and the image-4 stop routine's
-/// store at `0x00656a20` (`lz/id4.dis`).
+/// Stores in the captured 1.50 ROM (`bootrom.dis`) to the hold word or to an
+/// address loaded from the configuration block, and the image-4 stop
+/// routine's store at `0x00656a20` (`lz/id4.dis`).
 pub const WRITER_SITES: [u32; 14] = [
     0x800000ec, 0x800002fc, 0x80000330, 0x80000754, 0x8000085c, 0x80000980, 0x80000ae0,
     0x80000b48, 0x80000524, 0x80000538, 0x80000614, 0x80000628, 0x80000700, 0x00656a20,
@@ -33,14 +35,29 @@ pub struct Tick(pub u64);
 pub struct Instructions(pub u64);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct Core(pub usize);
+
+/// A CPU-view instruction address.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct Pc(pub u64);
+
+/// A physical bus address.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct Address(pub u64);
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Operation { Read, Write }
 
-/// One bus transaction on the hold word.
+/// One bus transaction overlapping the hold word.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Access {
-    pub core: usize,
-    pub pc: u64,
+    pub core: Core,
+    pub pc: Pc,
+    pub address: Address,
     pub size: u8,
     pub operation: Operation,
     pub value: u64,
@@ -58,8 +75,8 @@ enum FetchSource { CpuFetch }
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct FetchRow {
     source: FetchSource,
-    pub core: usize,
-    pub pc: u64,
+    pub core: Core,
+    pub pc: Pc,
     pub instructions: Instructions,
     pub tick: Tick,
 }
@@ -91,7 +108,8 @@ pub struct Stop {
     pub instructions: Instructions,
     pub core_instructions: Vec<Instructions>,
     pub tick: Tick,
-    pub state: HoldState,
+    /// Absent when the model state could not be read.
+    pub state: Option<HoldState>,
     pub failure: Option<String>,
     pub accesses: Vec<Access>,
     pub omitted: u64,
@@ -100,17 +118,23 @@ pub struct Stop {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "event", rename_all = "kebab-case")]
 pub enum DeadlineEvent {
-    Armed { tick: Tick, core: usize, pc: u64, due: Tick },
-    Disarmed { tick: Tick, core: usize, pc: u64 },
+    Armed { tick: Tick, core: Core, pc: Pc, due: Tick },
+    Disarmed { tick: Tick, core: Core, pc: Pc },
 }
 
-/// The deadline transitions the stores of `stop` make from the state
-/// `before`, under the model law (`exr2/clock.rs`, `Clocks::write`), and
-/// whether they end in the state the model reported at `stop`.
-pub fn transitions(before: HoldState, stop: &Stop) -> (Vec<DeadlineEvent>, bool) {
+#[derive(Debug, PartialEq)]
+pub struct Transitions {
+    pub events: Vec<DeadlineEvent>,
+    pub end: HoldState,
+}
+
+/// The deadline transitions `accesses` make from `before` under the model
+/// law (`exr2/clock.rs`, `Clocks::write`).
+pub fn transitions(before: HoldState, accesses: &[Access]) -> Transitions {
     let mut state = before;
     let mut events = Vec::new();
-    for access in stop.accesses.iter().filter(|a| a.operation == Operation::Write && a.accepted && a.size == 4) {
+    let writes = accesses.iter().filter(|a| a.operation == Operation::Write && a.accepted && a.size == 4 && a.address == HOLD);
+    for access in writes {
         state.held = access.value & 1 != 0;
         if state.held {
             if state.power_off_due.take().is_some() {
@@ -122,7 +146,7 @@ pub fn transitions(before: HoldState, stop: &Stop) -> (Vec<DeadlineEvent>, bool)
             events.push(DeadlineEvent::Armed { tick: access.tick, core: access.core, pc: access.pc, due });
         }
     }
-    (events, state == stop.state)
+    Transitions { events, end: state }
 }
 
 pub fn attribute(accesses: &mut [Access], rows: &[FetchRow]) {
@@ -137,106 +161,147 @@ pub fn attribute(accesses: &mut [Access], rows: &[FetchRow]) {
 }
 
 #[derive(Serialize)]
-struct Interval<'a> { stop: &'a Stop, events: Vec<DeadlineEvent>, consistent: bool }
+struct Interval<'a> {
+    stop: &'a Stop,
+    events: Vec<DeadlineEvent>,
+    /// Whether the replayed state equals the model state at the stop.
+    matches_model: Option<bool>,
+    /// No access of the interval exceeded the transaction limit.
+    complete: bool,
+}
 
 #[derive(Serialize)]
 struct Receipt<'a> {
     schema: u32,
-    word: String,
+    word: Address,
     release_limit_ticks: u64,
     writer_sites: Vec<String>,
     reset: HoldState,
+    /// The route ended and both watches were closed.
+    finished: bool,
     intervals: Vec<Interval<'a>>,
     fetch_rows: usize,
     fetch_violation: Option<String>,
-    error: Option<String>,
+    errors: &'a [String],
 }
 
 pub struct PowerHold {
-    path: PathBuf,
+    file: File,
     watch: Box<MemoryWatch>,
     reset: HoldState,
     stops: Vec<Stop>,
-    error: Option<String>,
+    errors: Vec<String>,
 }
 
 impl PowerHold {
-    pub fn begin(machine: &Machine, path: PathBuf) -> Result<Self, String> {
+    /// Creates the receipt file and begins both watches.
+    pub fn begin(machine: &Machine, path: &Path) -> Result<Self, String> {
+        if !path.is_absolute() {
+            return Err(format!("XM1_POWER_HOLD_LOG must be absolute: {}", path.display()));
+        }
         if machine.instructions() != 0 {
             return Err("the power-hold observation begins before the first guest instruction".into());
         }
         let reset = HoldState::read(machine)?;
+        let file = File::options().write(true).create_new(true).open(path).map_err(|error| format!("{}: {error}", path.display()))?;
         let maps = crate::run::memory_maps(&machine.document)?;
         let classes = WRITER_SITES.iter().map(|&site| WatchRange { start: u64::from(site), end: u64::from(site) + 4, kinds: WatchKinds::CPU_FETCH }).collect();
         let watch = machine.session.board.memory_watch_begin_classified(classes, FETCH_LIMIT, maps, ViewPolicy::Observe)?;
-        machine.session.board.transaction_watch_begin(vec![(HOLD, HOLD + 4)], ACCESS_LIMIT)?;
-        Ok(Self { path, watch, reset, stops: Vec::new(), error: None })
+        machine.session.board.transaction_watch_begin(vec![(HOLD.0, HOLD.0 + 4)], ACCESS_LIMIT)?;
+        let mut log = Self { file, watch, reset, stops: Vec::new(), errors: Vec::new() };
+        log.write(false)?;
+        Ok(log)
     }
 
-    /// Closes the interval since the previous stop.
+    /// Closes the interval since the previous stop and rewrites the receipt.
     pub fn stop(&mut self, machine: &Machine, label: &str) {
-        if let Err(error) = self.try_stop(machine, label) {
-            self.error.get_or_insert(error);
+        self.close(machine, label, true);
+        if let Err(error) = self.write(false) {
+            self.errors.push(format!("{label}: {error}"));
         }
     }
 
-    fn try_stop(&mut self, machine: &Machine, label: &str) -> Result<(), String> {
+    /// Closes the final interval, ends both watches and rewrites the receipt.
+    pub fn finish(mut self, machine: &Machine) -> Result<(), String> {
+        self.close(machine, "finish", false);
+        if let Err(error) = machine.session.board.memory_watch_end(&mut self.watch) {
+            self.errors.push(format!("finish: {error}"));
+        }
+        self.write(true)
+    }
+
+    fn close(&mut self, machine: &Machine, label: &str, restart: bool) {
         let board = &machine.session.board;
-        let batch = board.transaction_watch_end()?;
-        board.transaction_watch_begin(vec![(HOLD, HOLD + 4)], ACCESS_LIMIT)?;
-        let accesses = batch.transactions.into_iter().map(access).collect::<Result<_, _>>()?;
+        let (accesses, omitted) = match board.transaction_watch_end() {
+            Ok(batch) => {
+                let mut accesses = Vec::with_capacity(batch.transactions.len());
+                for transaction in batch.transactions {
+                    match access(transaction) {
+                        Ok(access) => accesses.push(access),
+                        Err(error) => self.errors.push(format!("{label}: {error}")),
+                    }
+                }
+                (accesses, batch.omitted)
+            }
+            Err(error) => {
+                self.errors.push(format!("{label}: {error}"));
+                (Vec::new(), 0)
+            }
+        };
+        if restart && let Err(error) = board.transaction_watch_begin(vec![(HOLD.0, HOLD.0 + 4)], ACCESS_LIMIT) {
+            self.errors.push(format!("{label}: {error}"));
+        }
+        let state = HoldState::read(machine).map_err(|error| self.errors.push(format!("{label}: {error}"))).ok();
+        if !restart && accesses.is_empty() && omitted == 0 {
+            return;
+        }
         self.stops.push(Stop {
             label: label.to_owned(),
             instructions: Instructions(machine.instructions()),
             core_instructions: board.instruction_counts().into_iter().map(Instructions).collect(),
             tick: Tick(board.now()),
-            state: HoldState::read(machine)?,
+            state,
             failure: machine.failure.clone(),
             accesses,
-            omitted: batch.omitted,
+            omitted,
         });
-        Ok(())
     }
 
-    pub fn finish(mut self, machine: &Machine) -> Result<(), String> {
-        let board = &machine.session.board;
-        if let Err(error) = board.transaction_watch_end() {
-            self.error.get_or_insert(error);
+    fn write(&mut self, finished: bool) -> Result<(), String> {
+        let watched = self.watch.records.borrow().state();
+        let fetch_violation = watched.get("violation").and_then(serde_json::Value::as_str).map(str::to_owned);
+        let mut rows = Vec::new();
+        for row in watched.get("records").and_then(serde_json::Value::as_array).into_iter().flatten() {
+            match serde_json::from_value::<FetchRow>(row.clone()) {
+                Ok(row) => rows.push(row),
+                Err(error) => return Err(format!("fetch row: {error}")),
+            }
         }
-        let state = self.watch.records.borrow().state();
-        if let Err(error) = board.memory_watch_end(&mut self.watch) {
-            self.error.get_or_insert(error);
-        }
-        let fetch_violation = state.get("violation").and_then(serde_json::Value::as_str).map(str::to_owned);
-        let rows = state.get("records").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
-        let rows = rows.into_iter().map(|row| serde_json::from_value::<FetchRow>(row).map_err(|error| format!("fetch row: {error}")))
-            .collect::<Result<Vec<_>, _>>();
-        let rows = match rows {
-            Ok(rows) => rows,
-            Err(error) => { self.error.get_or_insert(error); Vec::new() }
-        };
-        for stop in &mut self.stops {
+        let mut stops = self.stops.clone();
+        for stop in &mut stops {
             attribute(&mut stop.accesses, &rows);
         }
         let mut before = self.reset;
-        let intervals = self.stops.iter().map(|stop| {
-            let (events, consistent) = transitions(before, stop);
-            before = stop.state;
-            Interval { stop, events, consistent }
+        let intervals = stops.iter().map(|stop| {
+            let Transitions { events, end } = transitions(before, &stop.accesses);
+            before = stop.state.unwrap_or(end);
+            Interval { stop, events, matches_model: stop.state.map(|state| state == end), complete: stop.omitted == 0 }
         }).collect();
         let receipt = Receipt {
             schema: 1,
-            word: format!("{HOLD:#x}"),
+            word: HOLD,
             release_limit_ticks: POWER_HOLD_RELEASE_LIMIT_TICKS,
             writer_sites: WRITER_SITES.iter().map(|site| format!("{site:#010x}")).collect(),
             reset: self.reset,
+            finished,
             intervals,
             fetch_rows: rows.len(),
             fetch_violation,
-            error: self.error.clone(),
+            errors: &self.errors,
         };
         let bytes = serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?;
-        std::fs::write(&self.path, bytes).map_err(|error| format!("{}: {error}", self.path.display()))
+        self.file.set_len(0).and_then(|()| self.file.rewind()).and_then(|()| self.file.write_all(&bytes))
+            .map_err(|error| format!("power-hold receipt: {error}"))
     }
 }
 
@@ -247,8 +312,9 @@ fn access(transaction: Transaction) -> Result<Access, String> {
         other => return Err(format!("hold-word transaction operation {other}")),
     };
     Ok(Access {
-        core: transaction.cpu,
-        pc: transaction.pc,
+        core: Core(transaction.cpu),
+        pc: Pc(transaction.pc),
+        address: Address(transaction.address),
         size: transaction.size,
         operation,
         value: transaction.value,
@@ -263,51 +329,47 @@ mod tests {
     use super::*;
 
     fn write(tick: u64, pc: u64, value: u64) -> Access {
-        Access { core: 0, pc, size: 4, operation: Operation::Write, value, accepted: true, tick: Tick(tick), instructions: None }
-    }
-
-    fn stop(accesses: Vec<Access>, state: HoldState) -> Stop {
-        Stop { label: "run".into(), instructions: Instructions(0), core_instructions: vec![], tick: Tick(0), state, failure: None, accesses, omitted: 0 }
+        Access { core: Core(0), pc: Pc(pc), address: HOLD, size: 4, operation: Operation::Write, value, accepted: true, tick: Tick(tick), instructions: None }
     }
 
     const RESET: HoldState = HoldState { held: false, power_off_due: None };
 
     #[test]
     fn a_release_after_a_hold_arms_and_a_later_hold_disarms() {
-        let accesses = vec![write(10, 0x800000ec, 1), write(20, 0x80000330, 0), write(30, 0x80000330, 0), write(40, 0x656a20, 1)];
-        let (events, consistent) = transitions(RESET, &stop(accesses, HoldState { held: true, power_off_due: None }));
-        assert!(consistent);
-        assert_eq!(events, [
-            DeadlineEvent::Armed { tick: Tick(20), core: 0, pc: 0x80000330, due: Tick(20 + POWER_HOLD_RELEASE_LIMIT_TICKS) },
-            DeadlineEvent::Disarmed { tick: Tick(40), core: 0, pc: 0x656a20 },
-        ]);
+        let accesses = [write(10, 0x800000ec, 1), write(20, 0x80000330, 0), write(30, 0x80000330, 0), write(40, 0x656a20, 1)];
+        assert_eq!(transitions(RESET, &accesses), Transitions {
+            events: vec![
+                DeadlineEvent::Armed { tick: Tick(20), core: Core(0), pc: Pc(0x80000330), due: Tick(20 + POWER_HOLD_RELEASE_LIMIT_TICKS) },
+                DeadlineEvent::Disarmed { tick: Tick(40), core: Core(0), pc: Pc(0x656a20) },
+            ],
+            end: HoldState { held: true, power_off_due: None },
+        });
     }
 
     #[test]
-    fn a_release_at_reset_state_arms_and_a_differing_model_state_is_inconsistent() {
-        let armed = HoldState { held: false, power_off_due: Some(Tick(5 + POWER_HOLD_RELEASE_LIMIT_TICKS)) };
-        let (events, consistent) = transitions(RESET, &stop(vec![write(5, 0x80000330, 0x300)], armed));
-        assert!(consistent);
-        assert_eq!(events.len(), 1);
-        let (_, consistent) = transitions(RESET, &stop(vec![write(5, 0x80000330, 0x300)], RESET));
-        assert!(!consistent);
+    fn a_release_from_the_reset_state_arms_once() {
+        let end = transitions(RESET, &[write(5, 0x80000330, 0x300), write(9, 0x80000330, 0)]);
+        assert_eq!(end.events.len(), 1);
+        assert_eq!(end.end, HoldState { held: false, power_off_due: Some(Tick(5 + POWER_HOLD_RELEASE_LIMIT_TICKS)) });
     }
 
     #[test]
-    fn reads_refused_and_narrow_writes_do_not_change_the_deadline() {
+    fn reads_refused_narrow_and_neighbouring_writes_do_not_change_the_deadline() {
         let mut read = write(5, 0x80000330, 0);
         read.operation = Operation::Read;
         let mut refused = write(6, 0x80000330, 0);
         refused.accepted = false;
         let mut byte = write(7, 0x80000330, 0);
         byte.size = 1;
-        let (events, consistent) = transitions(RESET, &stop(vec![read, refused, byte], RESET));
-        assert!(events.is_empty() && consistent);
+        let mut neighbour = write(8, 0x80000330, 0);
+        neighbour.address = Address(HOLD.0 - 4);
+        neighbour.size = 8;
+        assert_eq!(transitions(RESET, &[read, refused, byte, neighbour]), Transitions { events: vec![], end: RESET });
     }
 
     #[test]
     fn fetch_rows_of_the_same_core_pc_and_tick_attribute_an_access_only_when_they_agree() {
-        let row = |core, pc, tick, count| FetchRow { source: FetchSource::CpuFetch, core, pc, instructions: Instructions(count), tick: Tick(tick) };
+        let row = |core, pc, tick, count| FetchRow { source: FetchSource::CpuFetch, core: Core(core), pc: Pc(pc), instructions: Instructions(count), tick: Tick(tick) };
         let mut accesses = vec![write(20, 0x80000330, 0), write(30, 0x80000700, 1), write(40, 0x123456, 1), write(50, 0x800000ec, 1)];
         let rows = [
             row(0, 0x80000330, 20, 481), row(1, 0x80000330, 20, 482), row(0, 0x80000700, 30, 700), row(0, 0x80000700, 30, 701),

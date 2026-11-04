@@ -141,6 +141,10 @@ fn drive() -> Result<(), String> {
     let update = ValidatedUpdate(read(&arguments.update)?);
     let boot_rom = read(&arguments.boot_rom)?;
     std::fs::create_dir_all(&arguments.output).map_err(|e| format!("{}: {e}", arguments.output.display()))?;
+    let power_hold_log = std::env::var_os("XM1_POWER_HOLD_LOG").map(PathBuf::from);
+    if power_hold_log.is_some() && (arguments.witness.is_some() || arguments.peer_witness.is_some()) {
+        return Err("XM1_POWER_HOLD_LOG applies only to the route driver, not a witness".into());
+    }
     if let Some(path) = &arguments.peer_witness {
         let contract = peer_witness::PeerContract::parse(&read(path)?)?;
         let machine = contract.open_machine(&run_bytes, &update, &boot_rom)?;
@@ -156,15 +160,17 @@ fn drive() -> Result<(), String> {
         let contract = witness::WitnessContract::parse(&read(contract_path)?)?;
         return witness::run(machine, contract, &output);
     }
-    let mut power_hold = match std::env::var_os("XM1_POWER_HOLD_LOG") {
-        Some(path) => Some(PowerHold::begin(&machine, PathBuf::from(path))?),
+    let mut power_hold = match &power_hold_log {
+        Some(path) => Some(PowerHold::begin(&machine, path)?),
         None => None,
     };
     let mut driver = Driver { machine, output, frames: 0 };
     let result = interact(&mut driver, boot, &mut power_hold);
-    match power_hold {
-        Some(log) => result.and(log.finish(&driver.machine)),
-        None => result,
+    match (result, power_hold.map(|log| log.finish(&driver.machine))) {
+        (Err(route), Some(Err(log))) => Err(format!("{route}; power-hold log: {log}")),
+        (Err(route), _) => Err(route),
+        (Ok(()), Some(Err(log))) => Err(format!("power-hold log: {log}")),
+        (Ok(()), _) => Ok(()),
     }
 }
 
