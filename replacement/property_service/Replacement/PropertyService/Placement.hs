@@ -17,6 +17,7 @@ module Replacement.PropertyService.Placement
   , TableWord (..)
   , TablePatch (..)
   , PlacementError (..)
+  , PassedOver (..)
   , getterTableBase
   , setterTableBase
   , setterFallback
@@ -25,7 +26,7 @@ module Replacement.PropertyService.Placement
   , carrierBytes
   , inCarrier
   , scanDepth
-  , deriveCarrier
+  , carrierCandidates
   , checkPreceding
   , scanReferences
   , hitListing
@@ -111,6 +112,8 @@ newtype TablePatch = TablePatch [TableWord] deriving (Eq, Show)
 
 data PlacementError
   = NoOwnedRun
+  | CarrierNotCandidate GuestAddress
+  | LargerCarrierAdmissible Carrier
   | TableShape
   | TableWordDisagrees TableSide PropertyId
   | CarrierWordNotOwned PropertyId
@@ -118,6 +121,9 @@ data PlacementError
   | PrecedingMissing
   | CarrierReferenced [ScanHit]
   deriving (Eq, Show)
+
+-- | A candidate run larger than the carrier and the preceding-word or reference-scan refusal that excludes it.
+data PassedOver = PassedOver Carrier PlacementError deriving (Eq, Show)
 
 getterTableBase, setterTableBase, setterFallback, getterExit, setterExit :: GuestAddress
 getterTableBase = GuestAddress 0x61e12c
@@ -138,12 +144,11 @@ scanDepth label = case label of
   ScanImage3 -> WordsOnly
   _ -> InstructionsAndWords
 
--- | The largest maximal run of consecutive distinct setter arm targets whose properties are all owned
--- fields or slot fields, lowest address on a tie; a run ends at the next distinct target, else at the setter fallback.
-deriveCarrier :: [Property] -> Either PlacementError Carrier
-deriveCarrier properties = case sortOn (\(GuestAddress start, GuestAddress end) -> (Down (end - start), start)) runs of
-  (start, end) : _ -> Right (Carrier start end)
-  [] -> Left NoOwnedRun
+-- | Every maximal run of consecutive distinct setter arm targets whose properties are all owned
+-- fields or slot fields, largest first, lowest address on a tie; a run ends at the next distinct
+-- target, else at the setter fallback. The carrier is the first that staging admits.
+carrierCandidates :: [Property] -> [Carrier]
+carrierCandidates properties = [Carrier start end | (start, end) <- sortOn (\(GuestAddress start, GuestAddress end) -> (Down (end - start), start)) runs]
   where
     targets = M.toAscList (M.fromListWith (&&) [(propertySetterArm p, ownsArm (propertyClass p)) | p <- properties])
     bounded = zip targets (map (Just . fst) (drop 1 targets) ++ [Nothing])
