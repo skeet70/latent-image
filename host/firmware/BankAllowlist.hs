@@ -39,14 +39,14 @@ import Data.Char (isDigit, isHexDigit)
 import Data.Int (Int32)
 import Data.List (find, nub, sortOn)
 import qualified Data.Map.Strict as M
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Word (Word32)
 import FujiAF.JSON (decodeStrictIntegers)
 import Numeric (readHex, showHex)
-import RamPushLayout (standardBankVariant, modalScopedBankVariant, lifecycleBankVariant, modalLifecycleBankVariant, runtimeAllocationSizeFor, runtimeBankEnd, runtimeDataBase, runtimeExecutableBase, runtimeInstallerBase)
+import RamPushLayout (PublicationGroup (MenuEnginePublication), hasPublicationGroup, standardBankVariant, modalScopedBankVariant, modalEngineBankVariant, lifecycleBankVariant, modalLifecycleBankVariant, menuEngineRegionExtent, menuEngineRegionStart, runtimeAllocationSizeFor, runtimeBankEnd, runtimeDataBase, runtimeExecutableBase, runtimeInstallerBase)
 
 -- * Allowlist
 
@@ -270,6 +270,8 @@ data Layout = Layout
   , bankEnd :: Word32
   , installerStart :: Word32
   , runtimeEnd :: Word32
+  , -- | The menu engine region of a modal75,menu-engine package.
+    engineCode :: Maybe (Word32, Word32)
   }
 
 data Region
@@ -324,6 +326,7 @@ stockCode region = case region of
 regionOf :: Layout -> Word32 -> Region
 regionOf layout address
   | address < allocationBase layout || address >= allocationEnd layout = stockRegion address
+  | Just (start, end) <- engineCode layout, start <= address && address < end = BankCode
   | address < textStart layout = AllocationHeader
   | address < textEnd layout = BankCode
   | address >= dataStart layout && address < imageEnd layout = BankData
@@ -349,6 +352,7 @@ readLayout elf = do
   variant <- case count of
     223 -> Right standardBankVariant
     224 -> Right modalScopedBankVariant
+    225 -> Right modalEngineBankVariant
     226 -> Right lifecycleBankVariant
     227 -> Right modalLifecycleBankVariant
     _ -> Left "layout: unsupported bank publication count"
@@ -357,6 +361,9 @@ readLayout elf = do
     [s] -> Right s
     _ -> Left "layout: exactly one .data section required"
   unless (toInteger base + toInteger allocationSize <= 0xffffffff) (Left "layout: allocation leaves the address space")
+  engine <- if hasPublicationGroup MenuEnginePublication variant
+    then curry Just <$> symbol "__rb_menu_engine_start" <*> symbol "__rb_menu_engine_end"
+    else pure Nothing
   pure
     Layout
       { allocationBase = base
@@ -369,6 +376,7 @@ readLayout elf = do
       , bankEnd = end
       , installerStart = installer
       , runtimeEnd = runtime
+      , engineCode = engine
       }
  where
   absolute name = case [s | s <- elfSymbols elf, symbolName s == name, symbolSection s == Absolute] of
@@ -387,13 +395,23 @@ layoutFindings elf layout =
   concat
     [ [ violation (sectionAddress s) ("allocated section " ++ sectionName s ++ " is outside the bank and installer layout")
       | s <- allocated
-      , sectionName s `notElem` bankSections ++ installerSections
+      , sectionName s `notElem` bankSections ++ installerSections ++ [".menu_engine" | isJust (engineCode layout)]
       ]
     , [ violation (sectionAddress s) ("section " ++ sectionName s ++ " is not PROGBITS")
       | s <- allocated
       , sectionType s /= 1
       ]
     , check (textStart layout == runtimeExecutableBase (allocationBase layout)) (textStart layout) "bank code does not start at the allocation's executable offset"
+    , case engineCode layout of
+        Nothing -> []
+        Just (start, end) -> concat
+          [ check (start == menuEngineRegionStart (allocationBase layout) && start >= runtimeEnd layout
+              && end <= menuEngineRegionStart (allocationBase layout) + menuEngineRegionExtent && end <= allocationEnd layout)
+              start "menu engine region differs from the layout"
+          , sectionCheck ".menu_engine" $ \s ->
+              sectionAddress s == start && sectionAddress s + sectionSize s == end
+                && sectionExecutable s && not (sectionWritable s)
+          ]
     , sectionCheck ".text" $ \s ->
         sectionAddress s == textStart layout && sectionAddress s + sectionSize s == textEnd layout
           && sectionExecutable s && not (sectionWritable s)
@@ -1126,7 +1144,9 @@ checkBank :: Allowlist -> Elf -> Either String Report
 checkBank allowlist elf = do
   layout <- readLayout elf
   let symbols = elfSymbols elf
-      inText address = textStart layout <= address && address < textEnd layout
+      codeRanges = (textStart layout, textEnd layout) : maybe [] pure (engineCode layout)
+      inText address = any (\(start, end) -> start <= address && address < end) codeRanges
+      rangeEnd address = maybe (textEnd layout) snd (find (\(start, end) -> start <= address && address < end) codeRanges)
       named =
         sortOn functionStart
           [ Function (symbolName s) (symbolValue s) (symbolValue s + symbolSize s)
@@ -1137,8 +1157,8 @@ checkBank allowlist elf = do
           ]
       covered a = any (\f -> functionStart f <= a && a < functionEnd f) named
       mapping = sortOn fst [(symbolValue s, symbolName s) | s <- symbols, symbolName s `elem` ["$a", "$d", "$t"], inText (symbolValue s)]
-      boundaries = S.fromList (map fst mapping ++ map functionStart named ++ [textEnd layout])
-      armRanges = [(start, end) | ((start, kind), end) <- zip mapping (map fst (drop 1 mapping) ++ [textEnd layout]), kind == "$a"]
+      boundaries = S.fromList (map fst mapping ++ map functionStart named ++ map snd codeRanges)
+      armRanges = [(start, min end (rangeEnd start)) | ((start, kind), end) <- zip mapping (map fst (drop 1 mapping) ++ [maxBound]), kind == "$a"]
       armWord a = any (\(start, end) -> start <= a && a < end) armRanges
       -- Code an `$a` symbol starts that no function symbol covers (a weak
       -- definition the linker kept without its symbol).
@@ -1147,7 +1167,7 @@ checkBank allowlist elf = do
         | (start, kind) <- mapping
         , kind == "$a"
         , not (covered start)
-        , let end = fromMaybe (textEnd layout) (S.lookupGT start boundaries)
+        , let end = fromMaybe (rangeEnd start) (S.lookupGT start boundaries)
         ]
       functions = sortOn functionStart (named ++ anonymous)
       code = S.fromList [a | f <- functions, a <- [functionStart f, functionStart f + 4 .. functionEnd f - 4], armWord a]
@@ -1156,7 +1176,7 @@ checkBank allowlist elf = do
         | s <- symbols
         , symbolKind s `elem` [ObjectSymbol, FunctionSymbol]
         , symbolSize s > 0
-        , symbolValue s >= textStart layout && symbolValue s < imageEnd layout
+        , symbolValue s >= textStart layout && symbolValue s < imageEnd layout || inText (symbolValue s)
         ]
       context = Context elf layout allowlist (M.fromList [(functionStart f, f) | f <- named]) code objects []
       overlapping =

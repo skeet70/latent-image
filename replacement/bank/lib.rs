@@ -11,6 +11,16 @@ mod service;
 #[path = "../recipe_ui/src/lib.rs"]
 mod recipe_ui_route;
 
+#[path = "../menu_engine/src/lib.rs"]
+mod menu_engine;
+
+#[cfg(rb_menu_engine_owned)]
+#[path = "../menu_engine/adapter/mod.rs"]
+mod menu_engine_adapter;
+
+#[cfg(all(rb_menu_engine_owned, target_arch = "arm"))]
+core::arch::global_asm!(include_str!("../menu_engine/adapter/entry.S"), options(raw));
+
 #[path = "../owned_menu/src/lib.rs"]
 mod owned_menu;
 

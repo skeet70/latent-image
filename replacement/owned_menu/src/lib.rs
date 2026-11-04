@@ -84,17 +84,25 @@ pub unsafe extern "C" fn rb_ui_editor_cancel() -> u32 {
     result.word()
 }
 
-/// Every read is a volatile load in the stock bodies' order; the writer stores
-/// the detached defaults before the frame words.
+/// The guest snapshot service over `menu_engine::frame`: every read is a
+/// volatile load and every store a volatile store, in the stock bodies' order.
 pub mod frame {
     use core::mem::MaybeUninit;
     use core::ptr::{addr_of_mut, read_volatile, write_volatile};
 
+    pub use crate::menu_engine::frame::{
+        FrameDepth, MenuClass, MenuFrameSnapshot, NodeId, NodeType, PageNumber, RowToken, ScrollTop, VisibleCount,
+    };
+    use crate::menu_engine::frame::{
+        self as shared, FrameCells, FrameNode, RowIndex, RowValues, RowsPerPage, SnapshotSink, SnapshotWord,
+        VisibleOrdinal,
+    };
+
     const CURRENT_FRAME_CELL: usize = 0x0095_71d0;
     const CURSOR_CELL: usize = 0x0095_71d8;
     const VISIBLE_ORDINAL_CELL: usize = 0x0095_71dc;
-    const SCROLL_CELL: usize = 0x0095_71e0;
-    const NAVIGATION_CELL: usize = 0x0095_71e4;
+    const VISIBLE_COUNT_CELL: usize = 0x0095_71e0;
+    const SCROLL_TOP_CELL: usize = 0x0095_71e4;
     const CURRENT_ROW_CELL: usize = 0x0095_732c;
 
     const ROOT_SNAPSHOT: usize = 0x0094_4414;
@@ -103,80 +111,9 @@ pub mod frame {
 
     #[repr(u32)]
     #[derive(Clone, Copy, PartialEq, Eq)]
-    pub enum FrameDepth {
-        Root = 0,
-        First = 1,
-        Second = 2,
-    }
-
-    #[repr(transparent)]
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    pub struct NodeId(u32);
-
-    #[repr(transparent)]
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    pub struct NodeType(u32);
-
-    #[repr(transparent)]
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    pub struct MenuClass(u32);
-
-    #[repr(transparent)]
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    pub struct RowToken(u32);
-
-    #[repr(transparent)]
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    pub struct RowIndex(u32);
-
-    #[repr(transparent)]
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    pub struct ScrollState(u32);
-
-    /// `(rows_per_page + visible_ordinal) / rows_per_page`.
-    #[repr(transparent)]
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    pub struct PageNumber(u32);
-
-    #[repr(transparent)]
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    pub struct NavigationWord(u32);
-
-    #[repr(u32)]
-    #[derive(Clone, Copy, PartialEq, Eq)]
     pub enum SnapshotResult {
         NoDestination = 0,
         Written = 1,
-    }
-
-    #[repr(C)]
-    pub struct MenuFrameSnapshot {
-        depth: FrameDepth,
-        node: NodeId,
-        node_type: NodeType,
-        class: MenuClass,
-        cursor_token: RowToken,
-        current_token: RowToken,
-        cursor: RowIndex,
-        visible_ordinal: RowIndex,
-        scroll: ScrollState,
-        page: PageNumber,
-        navigation: NavigationWord,
-    }
-
-    const _: () = assert!(core::mem::size_of::<MenuFrameSnapshot>() == 0x2c);
-
-    impl NodeId {
-        const ROOT: Self = Self(0);
-        const DETACHED: Self = Self(0x86);
-    }
-
-    impl NodeType {
-        const DETACHED: Self = Self(0xc);
-    }
-
-    impl MenuClass {
-        const MENU_PAGE: Self = Self(5);
     }
 
     unsafe extern "C" {
@@ -188,12 +125,7 @@ pub mod frame {
         unsafe { read_volatile(address as *const u32) }
     }
 
-    fn row_cell(address: usize) -> RowIndex {
-        RowIndex(cell(address))
-    }
-
-    /// A stock menu node: id, type, class and rows per page at +0..+0xc,
-    /// parent at +0x1c, values at +0x20.
+    /// A stock node record.
     #[derive(Clone, Copy)]
     struct Frame(*const u32);
 
@@ -202,33 +134,49 @@ pub mod frame {
     struct Values(*const u32);
 
     impl Frame {
-        fn current() -> Option<Self> {
-            let frame = Self::reload();
-            (!frame.0.is_null()).then_some(frame)
-        }
-
-        fn reload() -> Self {
-            Self(cell(CURRENT_FRAME_CELL) as *const u32)
-        }
-
         fn word(self, index: usize) -> u32 {
             unsafe { read_volatile(self.0.wrapping_add(index)) }
         }
+    }
+
+    impl Values {
+        fn entry(self, row: RowIndex, word: usize) -> u32 {
+            let index = (row.get() as usize).wrapping_mul(2).wrapping_add(word);
+            unsafe { read_volatile(self.0.wrapping_add(index)) }
+        }
+    }
+
+    impl RowValues for Values {
+        fn is_present(self) -> bool {
+            !self.0.is_null()
+        }
+
+        fn token(self, row: RowIndex) -> RowToken {
+            RowToken::new(self.entry(row, 0))
+        }
+
+        fn has_child(self, row: RowIndex) -> bool {
+            self.entry(row, 1) != 0
+        }
+    }
+
+    impl FrameNode for Frame {
+        type Values = Values;
 
         fn id(self) -> NodeId {
-            NodeId(self.word(0))
+            NodeId::new(self.word(0))
         }
 
         fn node_type(self) -> NodeType {
-            NodeType(self.word(1))
+            NodeType::new(self.word(1))
         }
 
         fn class(self) -> MenuClass {
-            MenuClass(self.word(2))
+            MenuClass::new(self.word(2))
         }
 
-        fn rows_per_page(self) -> u32 {
-            self.word(3)
+        fn rows_per_page(self) -> RowsPerPage {
+            RowsPerPage::new(self.word(3))
         }
 
         fn parent(self) -> Option<Self> {
@@ -239,54 +187,48 @@ pub mod frame {
         fn values(self) -> Values {
             Values(self.word(8) as *const u32)
         }
-
-        fn cursor_token(self) -> RowToken {
-            let cursor = row_cell(CURSOR_CELL);
-            self.values().token(cursor)
-        }
-
-        fn cursor_has_child(self) -> bool {
-            let cursor = row_cell(CURSOR_CELL);
-            self.values().child(cursor) != 0
-        }
-
-        fn opens_child(self) -> bool {
-            match self.parent() {
-                None => self.cursor_has_child(),
-                Some(parent) if parent.id() == self.id() => false,
-                Some(parent) if parent.class() != MenuClass::MENU_PAGE => true,
-                Some(_) => self.cursor_has_child(),
-            }
-        }
     }
 
-    impl Values {
-        fn entry(self, row: RowIndex, word: usize) -> u32 {
-            let index = (row.0 as usize).wrapping_mul(2).wrapping_add(word);
-            unsafe { read_volatile(self.0.wrapping_add(index)) }
+    struct Live;
+
+    impl FrameCells for Live {
+        type Node = Frame;
+
+        fn current(&self) -> Option<Frame> {
+            let frame = self.reload();
+            (!frame.0.is_null()).then_some(frame)
         }
 
-        fn token(self, row: RowIndex) -> RowToken {
-            RowToken(self.entry(row, 0))
+        fn reload(&self) -> Frame {
+            Frame(cell(CURRENT_FRAME_CELL) as *const u32)
         }
 
-        fn child(self, row: RowIndex) -> u32 {
-            self.entry(row, 1)
+        fn cursor(&self) -> RowIndex {
+            RowIndex::new(cell(CURSOR_CELL))
         }
-    }
 
-    fn first_depth(frame: Frame) -> bool {
-        match frame.class().0 {
-            0x5 | 0x47 | 0xd0 | 0xdf | 0xe0 | 0x185 | 0x1b9 | 0x1bb | 0x220 | 0x240 | 0x245
-            | 0x246 | 0x247 => true,
-            0x2d | 0x43 | 0xad | 0xdc | 0xe6 | 0xfc | 0x100 | 0x101 | 0x102 => false,
-            0xed if frame.cursor_token() == RowToken(3) => false,
-            0xe5 if frame.cursor_token() == RowToken(0) => false,
-            0x141 if frame.cursor_token() == RowToken(0x1b) => false,
-            0x7 if frame.cursor_token() == RowToken(1) => true,
-            0x166 if frame.cursor_token() == RowToken(0) => true,
-            0x27 if frame.cursor_token() == RowToken(0) => false,
-            _ => frame.opens_child(),
+        fn visible_ordinal(&self) -> VisibleOrdinal {
+            VisibleOrdinal::new(cell(VISIBLE_ORDINAL_CELL))
+        }
+
+        fn visible_count(&self) -> VisibleCount {
+            VisibleCount::new(cell(VISIBLE_COUNT_CELL))
+        }
+
+        fn scroll_top(&self) -> ScrollTop {
+            ScrollTop::new(cell(SCROLL_TOP_CELL))
+        }
+
+        fn saved_cursor(&self) -> RowIndex {
+            RowIndex::new(cell(CURRENT_ROW_CELL))
+        }
+
+        fn page(&self, rows: RowsPerPage, visible: VisibleOrdinal) -> PageNumber {
+            PageNumber::new(unsafe { rb_call_loader_uidiv(rows.get().wrapping_add(visible.get()), rows.get()) })
+        }
+
+        fn classify(&self) -> FrameDepth {
+            rb_menu_frame_classify()
         }
     }
 
@@ -294,21 +236,30 @@ pub mod frame {
     #[no_mangle]
     #[inline(never)]
     pub extern "C" fn rb_menu_frame_classify() -> FrameDepth {
-        let Some(frame) = Frame::current() else {
-            return FrameDepth::First;
-        };
-        let first = first_depth(frame);
-        if frame.id() == NodeId::ROOT {
-            FrameDepth::Root
-        } else if first {
-            FrameDepth::First
-        } else {
-            FrameDepth::Second
-        }
+        shared::classify(&Live)
     }
 
-    fn store<T>(field: *mut T, value: T) {
-        unsafe { write_volatile(field, value) }
+    struct Destination(*mut MenuFrameSnapshot);
+
+    impl SnapshotSink for Destination {
+        fn store(&mut self, word: SnapshotWord) {
+            let dest = self.0;
+            unsafe {
+                match word {
+                    SnapshotWord::Depth(value) => write_volatile(addr_of_mut!((*dest).depth), value),
+                    SnapshotWord::Node(value) => write_volatile(addr_of_mut!((*dest).node), value),
+                    SnapshotWord::NodeType(value) => write_volatile(addr_of_mut!((*dest).node_type), value),
+                    SnapshotWord::Class(value) => write_volatile(addr_of_mut!((*dest).class), value),
+                    SnapshotWord::CursorToken(value) => write_volatile(addr_of_mut!((*dest).cursor_token), value),
+                    SnapshotWord::CurrentToken(value) => write_volatile(addr_of_mut!((*dest).current_token), value),
+                    SnapshotWord::Cursor(value) => write_volatile(addr_of_mut!((*dest).cursor), value),
+                    SnapshotWord::VisibleOrdinal(value) => write_volatile(addr_of_mut!((*dest).visible_ordinal), value),
+                    SnapshotWord::VisibleCount(value) => write_volatile(addr_of_mut!((*dest).visible_count), value),
+                    SnapshotWord::Page(value) => write_volatile(addr_of_mut!((*dest).page), value),
+                    SnapshotWord::ScrollTop(value) => write_volatile(addr_of_mut!((*dest).scroll_top), value),
+                }
+            }
+        }
     }
 
     /// # Safety
@@ -318,51 +269,7 @@ pub mod frame {
         if dest.is_null() {
             return SnapshotResult::NoDestination;
         }
-        let depth = unsafe { addr_of_mut!((*dest).depth) };
-        let node = unsafe { addr_of_mut!((*dest).node) };
-        let node_type = unsafe { addr_of_mut!((*dest).node_type) };
-        let class = unsafe { addr_of_mut!((*dest).class) };
-        let cursor_token = unsafe { addr_of_mut!((*dest).cursor_token) };
-        let current_token = unsafe { addr_of_mut!((*dest).current_token) };
-        let cursor = unsafe { addr_of_mut!((*dest).cursor) };
-        let visible_ordinal = unsafe { addr_of_mut!((*dest).visible_ordinal) };
-        let scroll = unsafe { addr_of_mut!((*dest).scroll) };
-        let page = unsafe { addr_of_mut!((*dest).page) };
-        let navigation = unsafe { addr_of_mut!((*dest).navigation) };
-
-        store(depth, FrameDepth::First);
-        store(node, NodeId::DETACHED);
-        store(node_type, NodeType::DETACHED);
-        store(class, MenuClass(0));
-        store(cursor_token, RowToken(0));
-        store(current_token, RowToken(0));
-        store(cursor, RowIndex(0));
-        store(visible_ordinal, RowIndex(0));
-        store(scroll, ScrollState(0));
-        store(page, PageNumber(0));
-        store(navigation, NavigationWord(0));
-        if Frame::current().is_none() {
-            return SnapshotResult::Written;
-        }
-
-        store(depth, rb_menu_frame_classify());
-        let frame = Frame::reload();
-        store(node, frame.id());
-        store(node_type, frame.node_type());
-        store(class, frame.class());
-        let values = frame.values();
-        if !values.0.is_null() {
-            store(cursor_token, values.token(row_cell(CURSOR_CELL)));
-            let current = row_cell(CURRENT_ROW_CELL);
-            store(current_token, frame.values().token(current));
-        }
-        store(cursor, row_cell(CURSOR_CELL));
-        let visible = row_cell(VISIBLE_ORDINAL_CELL);
-        store(visible_ordinal, visible);
-        store(scroll, ScrollState(cell(SCROLL_CELL)));
-        let rows = frame.rows_per_page();
-        store(page, PageNumber(unsafe { rb_call_loader_uidiv(rows.wrapping_add(visible.0), rows) }));
-        store(navigation, NavigationWord(cell(NAVIGATION_CELL)));
+        shared::fill(&Live, &mut Destination(dest));
         SnapshotResult::Written
     }
 
@@ -377,7 +284,7 @@ pub mod frame {
     }
 
     fn indexed_slot(table: usize, root: NodeId) -> *mut MenuFrameSnapshot {
-        table.wrapping_add((root.0 as usize).wrapping_mul(0x2c)) as *mut MenuFrameSnapshot
+        table.wrapping_add((root.get() as usize).wrapping_mul(0x2c)) as *mut MenuFrameSnapshot
     }
 
     #[no_mangle]
@@ -461,7 +368,7 @@ pub mod frame {
 
     /// FUN_0061d334.
     #[no_mangle]
-    pub extern "C" fn rb_menu_frame_navigation() -> NavigationWord {
-        fresh().navigation
+    pub extern "C" fn rb_menu_frame_navigation() -> ScrollTop {
+        fresh().scroll_top
     }
 }

@@ -3,12 +3,13 @@
 -- write watch, after a key path from the attach root.
 module Emulation.MenuObserve
   ( TraceSite (..)
+  , SiteRead (..)
   , MenuObserveConfig (..)
   , decodeMenuObserveConfig
   ) where
 
 import Control.Monad (unless)
-import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:))
+import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.!=), (.:), (.:?))
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import Data.Char (isAsciiLower, isDigit)
@@ -18,20 +19,40 @@ import Data.Word (Word32)
 import Emulation.MenuCrawl (CrawlKey, GuestRange (..))
 import Numeric (readHex)
 
--- | An instruction address whose entry the bridge records with r0-r3, and its label: 1..48
--- lowercase ASCII letters, digits or '-'.
-data TraceSite = TraceSite { traceSiteAddress :: Word32, traceSiteLabel :: String } deriving (Eq, Show)
+-- | An instruction address whose entry the bridge records with r0-r3 and lr, its label (1..48
+-- lowercase ASCII letters, digits or '-'), and the physical ranges each entry reads.
+data TraceSite = TraceSite { traceSiteAddress :: Word32, traceSiteLabel :: String, traceSiteReads :: [SiteRead] } deriving (Eq, Show)
+
+-- | A physical range a trace site reads at each entry: start and 1..4096 bytes.
+data SiteRead = SiteRead { siteReadStart :: Word32, siteReadCount :: Int } deriving (Eq, Show)
+
+hexWord :: T.Text -> Maybe Word32
+hexWord text = case T.unpack text of
+  '0' : 'x' : digits | not (null digits), length digits <= 8, [(value, "")] <- readHex digits -> Just (fromInteger value)
+  _ -> Nothing
+
+instance FromJSON SiteRead where
+  parseJSON = withObject "trace site read" $ \fields -> do
+    unless (sort (KM.keys fields) == ["address", "length"]) (fail "a trace site read takes exactly address and length")
+    start <- fields .: "address" >>= maybe (fail "expected a 0x-prefixed hex address") pure . hexWord
+    count <- fields .: "length"
+    unless (count >= 1 && count <= 4096 && toInteger start + toInteger count <= 0x100000000)
+      (fail "a trace site read is 1..4096 bytes inside the 32-bit space")
+    pure (SiteRead start count)
 
 instance FromJSON TraceSite where
   parseJSON = withObject "trace site" $ \fields -> do
-    unless (sort (KM.keys fields) == ["address", "label"]) (fail "a trace site takes exactly address and label")
+    unless (sort (KM.keys fields) `elem` [["address", "label"], ["address", "label", "reads"]])
+      (fail "a trace site takes address, label and optionally reads")
     address <- fields .: "address"
     label <- fields .: "label"
     unless (not (null label) && length label <= 48 && all (\c -> isAsciiLower c || isDigit c || c == '-') label)
       (fail "a trace site label is 1..48 lowercase ASCII letters, digits or '-'")
-    case T.unpack address of
-      '0' : 'x' : digits | not (null digits), length digits <= 8, [(value, "")] <- readHex digits -> pure (TraceSite (fromInteger value) label)
-      _ -> fail "expected a 0x-prefixed hex address"
+    entryReads <- fields .:? "reads" .!= []
+    unless (length entryReads <= 4) (fail "a trace site reads at most four ranges")
+    case hexWord address of
+      Just value -> pure (TraceSite value label entryReads)
+      Nothing -> fail "expected a 0x-prefixed hex address"
 
 -- | The key path from the root to the screen, the observed key, its trace sites, the guest ranges
 -- whose writes are recorded with their PC, and the watch record limit.

@@ -7,7 +7,7 @@ use fujimod_xm1::adjustment::AdjustmentNand;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, load_card, menu_value, read, restore, sha256, write};
 use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, encode_hex};
 use fujimod_xm1::guest::{DialTurn, ModeDialPosition, PhysicalShutterPosition, Press, RouteKey};
-use fujimod_xm1::machine::{KeyPulse, Machine, MENU_PULSE, ReleaseSegment, RunOutcome};
+use fujimod_xm1::machine::{DIRECTIONAL_PULSE, KeyPulse, Machine, MENU_PULSE, ReleaseSegment, RunOutcome};
 use fujimod_xm1::modal_trace::BeginRequest as ModalBeginRequest;
 use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::run::{self, NodeName};
@@ -17,7 +17,7 @@ use fujimod_emulator::board::preservation::{
     PhysicalRange, Preservation, PreservationState, ProtectedRanges,
 };
 use fujimod_xm1::sd_host::{Backing, MediaImage, SectorAddress, SectorCount};
-use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, InstructionCount};
+use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, InstructionCount, SiteRead};
 use serde::{Deserialize, Serialize};
 use fujimod_emulator_devices::Device;
 use fujimod_emulator_exr2_isp_input::ImageInput;
@@ -39,13 +39,13 @@ const INSTALL_RECORD: &str = "ram-push-install.json";
 const RESET_OBSERVATION_RECORD: &str = "reset-observation.json";
 const CHECKPOINT_SCHEMA: u32 = 1;
 const FIRST_START_SCREEN: u64 = 100_000_000;
-const FIRST_START_PULSE: KeyPulse = KeyPulse { hold: 8_000_000, release: 8_000_000 };
+const FIRST_START_PULSE: KeyPulse = KeyPulse::instructions(8_000_000, 8_000_000);
 const LIVE_VIEW_SETTLE: u64 = 40_000_000;
 const MODE_DIAL_SETTLE: u64 = 40_000_000;
-const DIRECTIONAL_PULSE: KeyPulse = KeyPulse { hold: 3_000_000, release: 12_000_000 };
-const GPIO_PULSE: KeyPulse = KeyPulse { hold: 8_000_000, release: 8_000_000 };
+const GPIO_HOLD: u64 = 8_000_000;
+const GPIO_PULSE: KeyPulse = KeyPulse::instructions(GPIO_HOLD, 8_000_000);
 /// `tools/probe_setup_menus.py` DIAL_PULSE.
-const DIAL_PULSE: KeyPulse = KeyPulse { hold: 4_000_000, release: 1_000_000 };
+const DIAL_PULSE: KeyPulse = KeyPulse::instructions(4_000_000, 1_000_000);
 const MAX_PHASE: u64 = 15_000_000;
 /// `tools/continue_rec_scanout.py` ATTACH_HOLD_PULSE: the held key's lead before the cable rises
 /// and its settle after release.
@@ -310,7 +310,7 @@ enum WatchViews {
 enum Request {
     List,
     Transfer(Transfer),
-    TraceSites { sites: BTreeMap<String, String> },
+    TraceSites { sites: BTreeMap<String, String>, #[serde(default)] reads: BTreeMap<String, Vec<[u64; 2]>> },
     TraceHits { from: usize, #[serde(default)] limit: Option<std::num::NonZeroUsize> },
     ModalObservationBegin(ModalBeginRequest),
     ModalObservationReport,
@@ -530,6 +530,25 @@ fn parse_address(text: &str) -> Result<u32, String> {
         .ok_or_else(|| format!("invalid trace site address {text}"))
 }
 
+/// The per-site reads of a `trace-sites` request: each named site is a requested one and each read
+/// is `[address, count]` with 1..=`MAX_READ` bytes inside the 32-bit physical space.
+fn parse_site_reads(sites: &BTreeMap<String, String>, reads: &BTreeMap<String, Vec<[u64; 2]>>)
+    -> Result<BTreeMap<u32, Vec<SiteRead>>, String> {
+    reads.iter().map(|(site, ranges)| {
+        if !sites.contains_key(site) {
+            return Err(format!("trace site read names an unrequested site {site}"));
+        }
+        let ranges = ranges.iter().map(|&[address, count]| {
+            let count = usize::try_from(count).map_err(|_| "trace site read count exceeds the host".to_owned())?;
+            if !(1..=MAX_READ).contains(&count) || address + count as u64 > 1 << 32 {
+                return Err("a trace site read requires an address and 1..4096 bytes".to_owned());
+            }
+            Ok(SiteRead { address, count })
+        }).collect::<Result<Vec<_>, String>>()?;
+        Ok((parse_address(site)?, ranges))
+    }).collect()
+}
+
 fn default_pulse(key: Press) -> KeyPulse {
     match key {
         Press::Key(RouteKey::Up | RouteKey::Down | RouteKey::Left | RouteKey::Right) => DIRECTIONAL_PULSE,
@@ -733,7 +752,7 @@ impl ShutterPhaseIndex {
 
     fn duration(self) -> GuestInstructions {
         GuestInstructions(match self {
-            Self::HalfLead | Self::Full => GPIO_PULSE.hold,
+            Self::HalfLead | Self::Full => GPIO_HOLD,
             Self::HalfRelease | Self::Released => GPIO_PULSE.release / 2,
         })
     }
@@ -984,7 +1003,12 @@ impl Server {
                 let (count, payload) = self.bridge.transfer(&transfer)?;
                 json!({"count": count, "bytes": encode_hex(&payload)})
             }
-            Request::TraceSites { sites } => json!({"sites": self.arm(&sites)?}),
+            Request::TraceSites { sites, reads } => {
+                let site_reads = parse_site_reads(&sites, &reads)?;
+                let count = self.arm(&sites)?;
+                self.bridge.machine.traces.site_reads = site_reads;
+                json!({"sites": count})
+            }
             Request::TraceHits { from, limit } => {
                 let hits = &self.bridge.machine.traces.hits;
                 if from > hits.len() {
@@ -1055,7 +1079,7 @@ impl Server {
                 let pulse = match (hold_instructions, release_instructions) {
                     (None, None) => default_pulse(route),
                     (Some(hold), Some(release)) if (1..=MAX_PHASE).contains(&hold) && (1..=MAX_PHASE).contains(&release) => {
-                        KeyPulse { hold, release }
+                        KeyPulse::instructions(hold, release)
                     }
                     _ => return Err(format!("hold and release must both be 1..{MAX_PHASE}")),
                 };
@@ -1066,7 +1090,14 @@ impl Server {
                 };
                 let started = Instant::now();
                 let before = self.bridge.machine.instructions();
-                let settle = self.bridge.settled_key(route, pulse, budget)?;
+                let settle = match self.bridge.settled_key(route, pulse, budget) {
+                    Ok(settle) => settle,
+                    Err(failure) => {
+                        self.key_log.push(json!({"key": key, "seconds": started.elapsed().as_secs_f64(),
+                            "instructions": self.bridge.machine.instructions() - before, "failure": failure}));
+                        return Err(failure);
+                    }
+                };
                 self.bridge.machine.require_running()?;
                 self.key_log.push(json!({"key": key, "seconds": started.elapsed().as_secs_f64(),
                     "instructions": self.bridge.machine.instructions() - before, "settle": settle}));
@@ -1077,8 +1108,8 @@ impl Server {
                     return Ok(Some(self.start_capture_operation(CaptureOperation::ShutterSequence)?));
                 }
                 let phases = [
-                    shutter_phase(&mut self.bridge, PhysicalShutterPosition::Half, GuestInstructions(GPIO_PULSE.hold))?,
-                    shutter_phase(&mut self.bridge, PhysicalShutterPosition::Full, GuestInstructions(GPIO_PULSE.hold))?,
+                    shutter_phase(&mut self.bridge, PhysicalShutterPosition::Half, GuestInstructions(GPIO_HOLD))?,
+                    shutter_phase(&mut self.bridge, PhysicalShutterPosition::Full, GuestInstructions(GPIO_HOLD))?,
                     shutter_phase(&mut self.bridge, PhysicalShutterPosition::Half, GuestInstructions(GPIO_PULSE.release / 2))?,
                     shutter_phase(&mut self.bridge, PhysicalShutterPosition::Released, GuestInstructions(GPIO_PULSE.release / 2))?,
                 ];
@@ -2232,6 +2263,21 @@ mod tests {
         assert!(server.handle(Request::WatchEnd).is_err());
         assert!(server.handle(Request::WatchState).is_err());
         assert!(server.handle(request(json!({"command": "snapshot-save", "name": "n0"}))).is_ok());
+    }
+
+    #[test]
+    fn trace_site_reads_record_memory_at_entry() {
+        let mut server = server(&[0xe2800001, 0xeafffffd]);
+        server.handle(request(json!({"command": "trace-sites", "sites": {"0x00000004": "loop"},
+            "reads": {"0x00000004": [[0, 4], [4, 4]]}}))).unwrap();
+        assert_eq!(server.bridge.machine.run(100), RunOutcome::Completed);
+        let hits = server.handle(request(json!({"command": "trace-hits", "from": 0}))).unwrap().unwrap();
+        let hits = hits["hits"].as_array().unwrap();
+        assert!(!hits.is_empty() && hits.iter().all(|hit| hit["memory"] == json!(["010080e2", "fdffffea"])));
+        assert!(server.handle(request(json!({"command": "trace-sites", "sites": {"0x00000004": "loop"},
+            "reads": {"0x00000008": [[0, 4]]}}))).is_err());
+        assert!(server.handle(request(json!({"command": "trace-sites", "sites": {"0x00000004": "loop"},
+            "reads": {"0x00000004": [[0, 0]]}}))).is_err());
     }
 
     #[test]

@@ -124,6 +124,32 @@ const MAX_RETIRED_EXTENTS: usize = 64;
 const MAX_SETTINGS_WRITERS: usize = 8;
 const MAX_SETTINGS_RELOADS: usize = 4;
 
+/// The bank variants the guard binds (RamPushLayout `BankVariant`).
+#[derive(Clone, Copy)]
+enum GuardedVariant { Stock, Modal75, Modal75MenuEngine }
+/// The groups a variant adds to the stock publication vector.
+#[derive(Clone, Copy)]
+enum PublicationGroup { Modal75, MenuEngine }
+const STOCK_PUBLICATIONS: usize = 223;
+impl PublicationGroup {
+    fn publications(self) -> usize {
+        match self { PublicationGroup::Modal75 | PublicationGroup::MenuEngine => 1 }
+    }
+}
+impl GuardedVariant {
+    const ALL: [GuardedVariant; 3] = [GuardedVariant::Stock, GuardedVariant::Modal75, GuardedVariant::Modal75MenuEngine];
+    fn groups(self) -> &'static [PublicationGroup] {
+        match self {
+            GuardedVariant::Stock => &[],
+            GuardedVariant::Modal75 => &[PublicationGroup::Modal75],
+            GuardedVariant::Modal75MenuEngine => &[PublicationGroup::Modal75, PublicationGroup::MenuEngine],
+        }
+    }
+    fn publications(self) -> usize {
+        STOCK_PUBLICATIONS + self.groups().iter().map(|group| group.publications()).sum::<usize>()
+    }
+}
+
 impl LifetimeRequest {
     pub fn into_config(self, immutable_sources: Vec<PhysicalExtent>) -> Result<LifetimeConfig> {
         let runtime = extent(self.runtime[0], self.runtime[1])?;
@@ -131,7 +157,7 @@ impl LifetimeRequest {
         let readonly_bytes = self.readonly.iter().try_fold(0usize,
             |total, image| total.checked_add(image.bytes.len())).ok_or(LifetimeFailure::InvalidRequest)?;
         if resident.bytes() != 1024 || !contains(runtime, resident)
-            || !matches!(self.publications.len(), 223 | 224) || immutable_sources.is_empty()
+            || !GuardedVariant::ALL.iter().any(|variant| variant.publications() == self.publications.len()) || immutable_sources.is_empty()
             || runtime.bytes() as usize > MAX_RUNTIME_BYTES || readonly_bytes > MAX_RUNTIME_BYTES
             || self.readonly.len() > 64 {
             return Err(LifetimeFailure::InvalidRequest);

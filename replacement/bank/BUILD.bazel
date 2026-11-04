@@ -6,6 +6,7 @@ xm1_rust_staticlib(
     crate_name = "bank",
     data = [
         "//replacement/capture:module",
+        "//replacement/menu_engine:module",
         "//replacement/owned_menu:module",
         "//replacement/recipe_ui:module",
         "//replacement/service:module",
@@ -25,6 +26,7 @@ xm1_rust_staticlib(
     data = [
         "//replacement/capture:module",
         "//replacement/modal_runtime:module",
+        "//replacement/menu_engine:module",
         "//replacement/owned_menu:module",
         "//replacement/recipe_ui:module",
         "//replacement/service:module",
@@ -45,6 +47,7 @@ xm1_rust_staticlib(
         "//replacement/capture:module",
         "//replacement/media_permit:adapter",
         "//replacement/media_permit:module",
+        "//replacement/menu_engine:module",
         "//replacement/owned_menu:module",
         "//replacement/recipe_ui:module",
         "//replacement/save:module",
@@ -67,6 +70,7 @@ xm1_rust_staticlib(
         "//replacement/media_permit:adapter",
         "//replacement/media_permit:module",
         "//replacement/modal_runtime:module",
+        "//replacement/menu_engine:module",
         "//replacement/owned_menu:module",
         "//replacement/recipe_ui:module",
         "//replacement/save:module",
@@ -95,6 +99,7 @@ filegroup(
     srcs = [
         "lib.rs",
         "//replacement/capture:relink-sources",
+        "//replacement/menu_engine:module",
         "//replacement/owned_menu:module",
         "//replacement/recipe_ui:module",
         "//replacement/service:relink-sources",
@@ -111,6 +116,18 @@ filegroup(
     srcs = [
         ":relink-sources",
         "//replacement/modal_runtime:relink-sources",
+    ],
+    visibility = [
+        "//host/firmware:__pkg__",
+        "//transport:__pkg__",
+    ],
+)
+
+filegroup(
+    name = "modal-engine-relink-sources",
+    srcs = [
+        ":modal-relink-sources",
+        "//replacement/menu_engine:adapter-sources",
     ],
     visibility = [
         "//host/firmware:__pkg__",

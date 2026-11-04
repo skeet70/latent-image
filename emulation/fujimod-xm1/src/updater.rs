@@ -42,7 +42,7 @@ const UPDATER_SCREEN_AT: u64 = 135_000_000;
 const COMPLETION_BOUND: u64 = 3_500_000_000;
 const FIRST_START_AT: u64 = 100_000_000;
 const SHOOTING_SETTLE: u64 = 45_000_000;
-const PULSE: KeyPulse = KeyPulse { hold: 8_000_000, release: 8_000_000 };
+const PULSE: KeyPulse = KeyPulse::instructions(8_000_000, 8_000_000);
 /// OK, OK, UP, OK, OK on the updater screen selects BODY.
 const UPDATER_PRESSES: &[RouteKey] = &[RouteKey::Ok, RouteKey::Ok, RouteKey::Up, RouteKey::Ok, RouteKey::Ok];
 const COMPLETION_LABEL: &str = "completion";

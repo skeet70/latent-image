@@ -164,7 +164,7 @@ fn route(machine: &mut Machine) -> Result<Outcome, String> {
     if !initial.is_some_and(|menu| (menu.menu_id, menu.setting_id, menu.cursor) == (69, 52, 12)) {
         return Ok(Outcome::Deadline);
     }
-    let pulse = KeyPulse { hold: 8_000_000, release: 8_000_000 };
+    let pulse = KeyPulse::instructions(8_000_000, 8_000_000);
     for key in std::iter::repeat_n("up", 12).chain(["ok", "ok"]) {
         machine.press_once(Press::parse(key)?, pulse)?;
     }
@@ -318,7 +318,7 @@ mod tests {
         let hit = Hit { site: "primary-code-word".into(), address: "0x40430".into(), core: 0,
             instructions: 1, registers: BTreeMap::new(), sp: "0x40063450".into(),
             lr: "0x409e0".into(), cpsr: 0xd3,
-            code_word: Some(CodeWord { guest: 0xe320f000, physical: 0xe320f000, expected: 0xe320f000, tcm: [[0; 2]; 2] }) };
+            code_word: Some(CodeWord { guest: 0xe320f000, physical: 0xe320f000, expected: 0xe320f000, tcm: [[0; 2]; 2] }), memory: Vec::new() };
         let canonical = json!({"records":[{"source":"cpu-fetch","core":0,"address":0x40430,"physical":0x40430,"size":4}]});
         let alias = json!({"records":[{"source":"cpu-fetch","core":0,"address":0x40040430,"physical":0x40430,"size":4}]});
         assert!(confinement(&canonical, std::slice::from_ref(&hit)).is_ok());
