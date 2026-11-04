@@ -1,7 +1,7 @@
 use crate::block::{decode, mirror, DecodeError, RecordAddress, RecordTable, BLOCK_LEN, LAST_MOVE_LEN};
 use crate::engine::{
-    apply, Effect, EngineResult, EngineServices, MenuEvent, NotOwned, Notify, SnapshotSlot, StageEvent, StageId,
-    StageKind, StageNode, Transition,
+    apply, Effect, EngineResult, EngineServices, KindSwitchCall, MenuEvent, NotOwned, Notify, SeekCall, SnapshotSlot,
+    StageEvent, StageExtra, StageId, StageKind, StageNode, Transition,
 };
 use crate::frame::{
     FrameDepth, MenuClass, MenuFrameSnapshot, NodeId, NodeType, PageNumber, RowIndex, RowToken, RowsPerPage,
@@ -14,6 +14,7 @@ const TOP: NodeRef = NodeRef::new(0);
 const PAGE: NodeRef = NodeRef::new(1);
 const PICKER: NodeRef = NodeRef::new(2);
 const STOPPING_PICKER: NodeRef = NodeRef::new(3);
+const LONG: NodeRef = NodeRef::new(4);
 
 const fn row(token: u32, child: Option<NodeRef>) -> Row {
     Row { token: RowToken::new(token), child }
@@ -22,6 +23,18 @@ const fn row(token: u32, child: Option<NodeRef>) -> Row {
 static TOP_ROWS: [Row; 1] = [row(0x10, Some(PAGE))];
 static PAGE_ROWS: [Row; 3] = [row(0x20, None), row(0x21, Some(PICKER)), row(0x22, None)];
 static PICKER_ROWS: [Row; 4] = [row(0, None), row(1, None), row(2, None), row(3, None)];
+static LONG_ROWS: [Row; 10] = [
+    row(0, None),
+    row(1, None),
+    row(2, None),
+    row(3, None),
+    row(4, None),
+    row(5, None),
+    row(6, None),
+    row(7, None),
+    row(8, None),
+    row(9, None),
+];
 
 const fn node(id: u32, class: u32, wrap: Wrap, parent: Option<NodeRef>, rows: &'static [Row]) -> Node {
     Node {
@@ -39,11 +52,12 @@ const fn node(id: u32, class: u32, wrap: Wrap, parent: Option<NodeRef>, rows: &'
     }
 }
 
-static NODES: [Node; 4] = [
+static NODES: [Node; 5] = [
     node(0, 5, Wrap::Wraps, None, &TOP_ROWS),
     node(1, 5, Wrap::Wraps, Some(TOP), &PAGE_ROWS),
     node(1, 0x104, Wrap::Wraps, Some(PAGE), &PICKER_ROWS),
     node(2, 0x104, Wrap::Stops, Some(PAGE), &PICKER_ROWS),
+    node(3, 0x105, Wrap::Wraps, Some(PAGE), &LONG_ROWS),
 ];
 
 const fn registry() -> [Option<NodeRef>; REGISTRY_SLOTS] {
@@ -56,8 +70,13 @@ const fn registry() -> [Option<NodeRef>; REGISTRY_SLOTS] {
 
 static TREE: Tree = Tree { nodes: &NODES, registry: registry(), identity: TreeIdentity([7; 32]) };
 
-static RECORD_ADDRESSES: [RecordAddress; 4] =
-    [RecordAddress::new(0x0078_0000), RecordAddress::new(0x0078_0040), RecordAddress::new(0x0078_0080), RecordAddress::new(0x0078_00c0)];
+static RECORD_ADDRESSES: [RecordAddress; 5] = [
+    RecordAddress::new(0x0078_0000),
+    RecordAddress::new(0x0078_0040),
+    RecordAddress::new(0x0078_0080),
+    RecordAddress::new(0x0078_00c0),
+    RecordAddress::new(0x0078_0100),
+];
 
 static RECORDS: RecordTable = RecordTable { tree: TreeIdentity([7; 32]), records: &RECORD_ADDRESSES };
 
@@ -102,24 +121,84 @@ fn at(node: NodeRef, live: CursorFrame, total: u32, depth: u32) -> EngineState {
     }
 }
 
-/// Answers from queues and records each question.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Call {
+    Perform(Effect),
+    Availability(MenuClass, RowToken),
+    InitialRow(StageKind, StageNode, MenuClass),
+    KindSwitch(KindSwitchCall),
+    PastRows(RowIndex),
+}
+
+/// Answers from queues and records every call in order.
 #[derive(Default)]
 struct Answers {
     availability: Vec<RowState>,
     initial_row: Vec<Option<RowToken>>,
-    availability_asked: Vec<(MenuClass, RowToken)>,
-    initial_row_asked: Vec<(StageKind, StageNode, MenuClass)>,
+    kind_switch: Option<(EngineState, EngineResult)>,
+    past_rows: Vec<RowToken>,
+    calls: Vec<Call>,
 }
 
 impl EngineServices for Answers {
+    fn perform(&mut self, _: &EngineState, effect: Effect) {
+        self.calls.push(Call::Perform(effect));
+    }
+
     fn availability(&mut self, _: &EngineState, class: MenuClass, token: RowToken) -> RowState {
-        self.availability_asked.push((class, token));
+        self.calls.push(Call::Availability(class, token));
         self.availability.remove(0)
     }
 
     fn initial_row(&mut self, _: &EngineState, kind: StageKind, node: StageNode, class: MenuClass) -> Option<RowToken> {
-        self.initial_row_asked.push((kind, node, class));
+        self.calls.push(Call::InitialRow(kind, node, class));
         self.initial_row.remove(0)
+    }
+
+    fn kind_switch(&mut self, _: &EngineState, call: KindSwitchCall) -> (EngineState, EngineResult) {
+        self.calls.push(Call::KindSwitch(call));
+        self.kind_switch.take().expect("kind switch answer")
+    }
+
+    fn seek(&mut self, _: &EngineState, _: SeekCall) -> (EngineState, EngineResult) {
+        panic!("seek asked")
+    }
+
+    fn token_past_rows(&mut self, _: &EngineState, row: RowIndex) -> RowToken {
+        self.calls.push(Call::PastRows(row));
+        self.past_rows.remove(0)
+    }
+}
+
+impl Answers {
+    fn stores(&self) -> Vec<(FrameDepth, SnapshotSlot)> {
+        self.calls
+            .iter()
+            .filter_map(|call| match *call {
+                Call::Perform(Effect::StoreSnapshot { depth, slot, .. }) => Some((depth, slot)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn notifies(&self) -> Vec<Notify> {
+        self.calls
+            .iter()
+            .filter_map(|call| match *call {
+                Call::Perform(Effect::Notify(notify)) => Some(notify),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn records(&self) -> Vec<MenuFrameSnapshot> {
+        self.calls
+            .iter()
+            .filter_map(|call| match *call {
+                Call::Perform(Effect::StoreSnapshot { record, .. }) => Some(record),
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -129,32 +208,6 @@ fn event(kind: u32, node: u32, id: u32, state: &EngineState) -> MenuEvent {
 
 fn run(state: &EngineState, kind: u32, node: u32, id: u32, answers: &mut Answers) -> Result<Transition, NotOwned> {
     apply(&TREE, state, event(kind, node, id, state), answers)
-}
-
-fn effects(transition: &Transition) -> Vec<Effect> {
-    transition.effects.iter().copied().collect()
-}
-
-fn stores(transition: &Transition) -> Vec<(FrameDepth, SnapshotSlot)> {
-    transition
-        .effects
-        .iter()
-        .filter_map(|effect| match *effect {
-            Effect::StoreSnapshot { depth, slot, .. } => Some((depth, slot)),
-            Effect::Notify(_) => None,
-        })
-        .collect()
-}
-
-fn notifies(transition: &Transition) -> Vec<Notify> {
-    transition
-        .effects
-        .iter()
-        .filter_map(|effect| match *effect {
-            Effect::Notify(notify) => Some(notify),
-            Effect::StoreSnapshot { .. } => None,
-        })
-        .collect()
 }
 
 #[test]
@@ -195,18 +248,16 @@ fn decode_refuses_values_outside_the_block_domains() {
 fn row_step_down_from_the_last_row_wraps_to_the_first_selectable() {
     let mut state = at(PICKER, frame(3, 3, 4, 0), 4, 2);
     state.row_states[0] = RowState::Disabled;
-    let transition = run(&state, 4, 1, 1, &mut Answers::default()).expect("owned");
+    let mut answers = Answers::default();
+    let transition = run(&state, 4, 1, 1, &mut answers).expect("owned");
     assert_eq!(transition.result, EngineResult::Accepted);
     assert_eq!(transition.state.live, frame(1, 1, 4, 0));
     assert_eq!(transition.state.last_move, LastMove { class: MenuClass::new(0x104), token: RowToken::new(1) });
+    let notify = Notify { kind: StageKind::MoveDown, node: StageNode::new(1), id: StageId::VALUE, class: MenuClass::new(0x104) };
+    assert!(matches!(answers.calls[0], Call::Perform(Effect::Notify(n)) if n == notify));
+    assert_eq!(answers.stores(), [(FrameDepth::Second, SnapshotSlot::new(1)), (FrameDepth::Second, SnapshotSlot::new(1))]);
     assert_eq!(
-        notifies(&transition),
-        [Notify { kind: StageKind::MoveDown, node: StageNode::new(1), id: StageId::VALUE, class: MenuClass::new(0x104) }]
-    );
-    assert_eq!(stores(&transition), [(FrameDepth::Second, SnapshotSlot::new(1)), (FrameDepth::Second, SnapshotSlot::new(1))]);
-    let Effect::StoreSnapshot { record, .. } = effects(&transition)[1] else { panic!("store") };
-    assert_eq!(
-        record,
+        answers.records()[1],
         MenuFrameSnapshot {
             depth: FrameDepth::Second,
             node: NodeId::new(1),
@@ -231,7 +282,28 @@ fn row_step_down_inside_the_rows_moves_one_row() {
 }
 
 #[test]
-fn push_saves_the_parent_cursor_and_opens_the_child_at_its_initial_row() {
+fn row_step_up_past_the_first_row_wraps_and_scrolls_to_the_last_page() {
+    let state = at(LONG, frame(0, 0, 10, 0), 10, 2);
+    let mut answers = Answers::default();
+    let transition = run(&state, 5, 3, 1, &mut answers).expect("owned");
+    assert_eq!(transition.result, EngineResult::Accepted);
+    assert_eq!(transition.state.live, frame(9, 9, 10, 3));
+    assert_eq!(answers.notifies()[0].kind, StageKind::MoveUp);
+    let back = run(&transition.state, 4, 3, 1, &mut Answers::default()).expect("owned");
+    assert_eq!(back.state.live, frame(0, 0, 10, 0));
+}
+
+#[test]
+fn row_step_up_skips_rows_that_are_not_selectable() {
+    let mut state = at(PICKER, frame(2, 2, 4, 0), 4, 2);
+    state.row_states[1] = RowState::Disabled;
+    state.row_states[0] = RowState::Hidden;
+    let transition = run(&state, 5, 1, 1, &mut Answers::default()).expect("owned");
+    assert_eq!(transition.state.live, frame(3, 2, 3, 0));
+}
+
+#[test]
+fn push_notifies_before_it_asks_availability_and_opens_the_child_at_its_initial_row() {
     let mut state = at(PAGE, frame(1, 1, 3, 0), 3, 1);
     state.stack[2] = frame(2, 2, 4, 0);
     let mut answers = Answers {
@@ -253,14 +325,12 @@ fn push_saves_the_parent_cursor_and_opens_the_child_at_its_initial_row() {
     assert_eq!(after.visible_at_open, VisibleCount::new(4));
     assert_eq!(&after.row_states[..5], &[RowState::Offered, RowState::Offered, RowState::Disabled, RowState::Disabled, RowState::Offered]);
     assert_eq!(after.last_move, state.last_move);
-    let asked: Vec<_> = (0..4).map(|token| (MenuClass::new(0x104), RowToken::new(token))).collect();
-    assert_eq!(answers.availability_asked, asked);
-    assert_eq!(answers.initial_row_asked, [(StageKind::Push, StageNode::new(1), MenuClass::new(0x104))]);
-    assert_eq!(
-        notifies(&transition),
-        [Notify { kind: StageKind::Push, node: StageNode::new(1), id: StageId::new(0x1d), class: MenuClass::new(5) }]
-    );
-    assert_eq!(stores(&transition), [(FrameDepth::Second, SnapshotSlot::new(1)), (FrameDepth::Second, SnapshotSlot::new(1))]);
+    let notify = Notify { kind: StageKind::Push, node: StageNode::new(1), id: StageId::new(0x1d), class: MenuClass::new(5) };
+    let mut expected = vec![Call::Perform(Effect::Notify(notify))];
+    expected.extend((0..4).map(|token| Call::Availability(MenuClass::new(0x104), RowToken::new(token))));
+    expected.push(Call::InitialRow(StageKind::Push, StageNode::new(1), MenuClass::new(0x104)));
+    assert_eq!(&answers.calls[..6], &expected[..]);
+    assert_eq!(answers.stores(), [(FrameDepth::Second, SnapshotSlot::new(1)), (FrameDepth::Second, SnapshotSlot::new(1))]);
 }
 
 #[test]
@@ -271,6 +341,57 @@ fn push_without_an_initial_row_keeps_the_restored_cursor() {
         Answers { availability: vec![RowState::Offered; 4], initial_row: vec![None], ..Answers::default() };
     let transition = run(&state, 0xe, 1, 0x1d, &mut answers).expect("owned");
     assert_eq!(transition.state.live.cursor, RowIndex::new(2));
+}
+
+#[test]
+fn push_keeping_a_restored_cursor_past_the_rows_reads_the_word_after_them() {
+    let mut state = at(PAGE, frame(1, 1, 3, 0), 3, 1);
+    state.stack[2] = frame(20, 19, 20, 13);
+    let mut answers = Answers {
+        availability: vec![RowState::Offered; 4],
+        initial_row: vec![None],
+        past_rows: vec![RowToken::new(2), RowToken::new(2)],
+        ..Answers::default()
+    };
+    let transition = run(&state, 0xe, 1, 0x1d, &mut answers).expect("owned");
+    assert_eq!(transition.result, EngineResult::Accepted);
+    assert_eq!(transition.state.live, frame(20, 2, 4, 0));
+    assert_eq!(&answers.calls[6..8], &[Call::PastRows(RowIndex::new(20)), Call::PastRows(RowIndex::new(20))]);
+    assert_eq!(answers.calls[8], Call::Perform(Effect::StoreFromBlock { slot: SnapshotSlot::new(1) }));
+}
+
+#[test]
+fn push_into_a_node_without_selectable_rows_runs_the_stock_nested_pop() {
+    let mut state = at(PAGE, frame(1, 1, 3, 0), 3, 1);
+    state.stack[2] = frame(2, 2, 4, 0);
+    let popped = at(PAGE, frame(1, 1, 3, 0), 3, 1);
+    let mut answers = Answers {
+        availability: vec![RowState::Disabled; 4],
+        kind_switch: Some((popped, EngineResult::Accepted)),
+        ..Answers::default()
+    };
+    let transition = run(&state, 0xe, 1, 0x1d, &mut answers).expect("owned");
+    assert_eq!(transition.result, EngineResult::Accepted);
+    assert_eq!(transition.state, popped);
+    let call = KindSwitchCall { kind: StageKind::Pop, node: StageNode::new(1), id: StageId::NESTED_POP, extra: StageExtra::new(0) };
+    assert_eq!(answers.calls[5], Call::KindSwitch(call));
+    assert_eq!(
+        &answers.calls[6..],
+        &[
+            Call::Perform(Effect::StoreFromBlock { slot: SnapshotSlot::new(1) }),
+            Call::Perform(Effect::StoreFromBlock { slot: SnapshotSlot::new(1) })
+        ]
+    );
+}
+
+#[test]
+fn open_of_a_node_without_selectable_rows_or_parent_is_rejected() {
+    let mut answers = Answers { availability: vec![RowState::Hidden], ..Answers::default() };
+    let transition = run(&closed(), 1, 0, 0, &mut answers).expect("owned");
+    assert_eq!(transition.result, EngineResult::Rejected);
+    assert_eq!(transition.state.menu_open, MenuOpen::Closed);
+    assert_eq!(transition.state.visible_at_open, VisibleCount::new(0));
+    assert!(answers.notifies().is_empty());
 }
 
 #[test]
@@ -288,12 +409,11 @@ fn pop_restores_the_parent_cursor() {
     assert_eq!(after.stack[2], frame(0, 0, 4, 0));
     assert_eq!(after.live, frame(1, 1, 3, 0));
     assert_eq!(after.remembered[1], RowToken::new(0x55));
-    assert_eq!(answers.initial_row_asked, [(StageKind::Pop, StageNode::new(1), MenuClass::new(5))]);
     assert_eq!(
-        notifies(&transition),
+        answers.notifies(),
         [Notify { kind: StageKind::Pop, node: StageNode::new(1), id: StageId::new(0x1a), class: MenuClass::new(0x104) }]
     );
-    assert_eq!(stores(&transition), [(FrameDepth::First, SnapshotSlot::new(1)), (FrameDepth::First, SnapshotSlot::new(1))]);
+    assert_eq!(answers.stores(), [(FrameDepth::First, SnapshotSlot::new(1)), (FrameDepth::First, SnapshotSlot::new(1))]);
 }
 
 #[test]
@@ -316,18 +436,21 @@ fn open_steps_past_a_hidden_initial_row() {
     assert_eq!(after.live, frame(1, 0, 2, 0));
     assert_eq!(after.saved, frame(1, 0, 2, 0));
     assert_eq!(after.visible_at_open, VisibleCount::new(2));
-    assert_eq!(answers.initial_row_asked, [(StageKind::Open, StageNode::new(1), MenuClass::new(5))]);
     assert_eq!(
-        notifies(&transition),
+        answers.notifies(),
         [Notify { kind: StageKind::Open, node: StageNode::new(1), id: StageId::VALUE, class: MenuClass::new(5) }]
     );
-    assert_eq!(stores(&transition), [(FrameDepth::First, SnapshotSlot::new(1))]);
+    assert_eq!(answers.stores(), [(FrameDepth::First, SnapshotSlot::new(1))]);
 }
 
-/// Panics on any question.
+/// Panics on any call.
 struct Unasked;
 
 impl EngineServices for Unasked {
+    fn perform(&mut self, _: &EngineState, effect: Effect) {
+        panic!("{effect:?} performed")
+    }
+
     fn availability(&mut self, _: &EngineState, _: MenuClass, _: RowToken) -> RowState {
         panic!("availability asked")
     }
@@ -335,31 +458,62 @@ impl EngineServices for Unasked {
     fn initial_row(&mut self, _: &EngineState, _: StageKind, _: StageNode, _: MenuClass) -> Option<RowToken> {
         panic!("initial row asked")
     }
+
+    fn kind_switch(&mut self, _: &EngineState, _: KindSwitchCall) -> (EngineState, EngineResult) {
+        panic!("kind switch asked")
+    }
+
+    fn seek(&mut self, _: &EngineState, _: SeekCall) -> (EngineState, EngineResult) {
+        panic!("seek asked")
+    }
+
+    fn token_past_rows(&mut self, _: &EngineState, _: RowIndex) -> RowToken {
+        panic!("token past rows asked")
+    }
 }
 
 #[test]
-fn every_other_class_is_refused() {
+fn every_other_class_is_refused_before_any_service_call() {
     let picker = at(PICKER, frame(1, 1, 4, 0), 4, 2);
     let stopping = at(STOPPING_PICKER, frame(3, 3, 4, 0), 4, 2);
     let page = at(PAGE, frame(1, 1, 3, 0), 3, 1);
+    let mut far_restored = page;
+    far_restored.stack[2] = frame(ROW_STATES as u32, 0, 4, 0);
     let refused = [
-        (picker, StageEvent { kind: 4, node: 1, id: 7, extra: 0 }, NotOwned::EventClass),
-        (picker, StageEvent { kind: 4, node: 1, id: 0, extra: 0 }, NotOwned::EventClass),
-        (picker, StageEvent { kind: 5, node: 1, id: 1, extra: 0 }, NotOwned::EventClass),
-        (picker, StageEvent { kind: 2, node: 1, id: 0x1a, extra: 0 }, NotOwned::EventClass),
-        (picker, StageEvent { kind: 3, node: 1, id: 0, extra: 0 }, NotOwned::EventClass),
-        (picker, StageEvent { kind: 0x13, node: 1, id: 0, extra: 0 }, NotOwned::EventClass),
-        (stopping, StageEvent { kind: 4, node: 1, id: 1, extra: 0 }, NotOwned::NodeFlags),
-        (page, StageEvent { kind: 0xe, node: 1, id: 0x17, extra: 0 }, NotOwned::EventClass),
-        (page, StageEvent { kind: 0xe, node: 0x7a, id: 0x1d, extra: 0 }, NotOwned::StageNode),
-        (picker, StageEvent { kind: 0xe, node: 1, id: 0x1d, extra: 0 }, NotOwned::RememberBranch),
-        (page, StageEvent { kind: 0xf, node: 1, id: 0x1a, extra: 0 }, NotOwned::RememberBranch),
-        (closed(), StageEvent { kind: 1, node: 0x38, id: 0, extra: 0 }, NotOwned::StageNode),
-        (closed(), StageEvent { kind: 1, node: 2, id: 0, extra: 0 }, NotOwned::StageNode),
-        (closed(), StageEvent { kind: 1, node: 1, id: 0xe, extra: 0 }, NotOwned::EventClass),
+        (picker, StageEvent { kind: 4, node: 1, id: 7, extra: 0 }),
+        (picker, StageEvent { kind: 4, node: 1, id: 0, extra: 0 }),
+        (picker, StageEvent { kind: 5, node: 1, id: 7, extra: 0 }),
+        (picker, StageEvent { kind: 2, node: 1, id: 0x1a, extra: 0 }),
+        (picker, StageEvent { kind: 3, node: 1, id: 0, extra: 0 }),
+        (picker, StageEvent { kind: 0x13, node: 1, id: 0, extra: 0 }),
+        (stopping, StageEvent { kind: 4, node: 1, id: 1, extra: 0 }),
+        (stopping, StageEvent { kind: 5, node: 1, id: 1, extra: 0 }),
+        (page, StageEvent { kind: 0xe, node: 1, id: 0x17, extra: 0 }),
+        (page, StageEvent { kind: 0xe, node: 0x7a, id: 0x1d, extra: 0 }),
+        (far_restored, StageEvent { kind: 0xe, node: 1, id: 0x1d, extra: 0 }),
+        (picker, StageEvent { kind: 0xe, node: 1, id: 0x1d, extra: 0 }),
+        (page, StageEvent { kind: 0xf, node: 1, id: 0x1a, extra: 0 }),
+        (closed(), StageEvent { kind: 1, node: 0x38, id: 0, extra: 0 }),
+        (closed(), StageEvent { kind: 1, node: 2, id: 0, extra: 0 }),
+        (closed(), StageEvent { kind: 1, node: 1, id: 0xe, extra: 0 }),
     ];
-    for (state, raw, reason) in refused {
+    for (state, raw) in refused {
         let decoded = MenuEvent::decode(raw, &TREE, &state);
-        assert_eq!(apply(&TREE, &state, decoded, &mut Unasked).map(|_| ()), Err(reason), "{raw:?}");
+        assert!(apply(&TREE, &state, decoded, &mut Unasked).is_err(), "{raw:?}");
     }
+}
+
+#[test]
+fn push_into_a_node_that_stops_at_its_ends_is_refused_before_any_service_call() {
+    static STOP_ROWS: [Row; 1] = [row(0x30, Some(STOPPING_PICKER))];
+    static STOP_NODES: [Node; 4] = [
+        node(0, 5, Wrap::Wraps, None, &TOP_ROWS),
+        node(1, 5, Wrap::Wraps, Some(TOP), &STOP_ROWS),
+        node(1, 0x104, Wrap::Wraps, Some(PAGE), &PICKER_ROWS),
+        node(2, 0x104, Wrap::Stops, Some(PAGE), &PICKER_ROWS),
+    ];
+    let tree = Tree { nodes: &STOP_NODES, registry: registry(), identity: TreeIdentity([7; 32]) };
+    let state = at(PAGE, frame(0, 0, 1, 0), 1, 1);
+    let decoded = MenuEvent::decode(StageEvent { kind: 0xe, node: 1, id: 0x1d, extra: 0 }, &tree, &state);
+    assert!(apply(&tree, &state, decoded, &mut Unasked).is_err());
 }

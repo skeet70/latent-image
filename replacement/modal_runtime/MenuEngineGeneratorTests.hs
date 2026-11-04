@@ -114,7 +114,7 @@ blockHex changes = concat [let byte = maybe 0 id (lookup offset changes) in pad 
  where
   pad digits = replicate (2 - length digits) '0' ++ digits
 
-data ReceiptSpec = ReceiptSpec {hits :: [J.Value], writes :: [J.Value], after :: [(Int, Int)], configSha :: String}
+data ReceiptSpec = ReceiptSpec {hits :: [J.Value], writes :: [J.Value], after :: [(Int, Int)], configSha :: String, datSha :: String}
 
 baseline :: ReceiptSpec
 baseline = ReceiptSpec
@@ -140,11 +140,12 @@ baseline = ReceiptSpec
       ]
   , after = [(0x20, 2)]
   , configSha = "config-sha"
+  , datSha = C.datSha256
   }
 
 receiptJson :: ReceiptSpec -> J.Value
 receiptJson spec = J.object
-  [ "inputs" .= J.object ["config_sha256" .= configSha spec]
+  [ "inputs" .= J.object ["config_sha256" .= configSha spec, "dat_sha256" .= datSha spec]
   , "menu_globals" .= J.object ["address" .= ("0x9571d0" :: String), "before" .= blockHex [], "after" .= blockHex (after spec)]
   , "trace_hits" .= hits spec
   , "watch" .= J.object ["enabled" .= True, "violation" .= J.Null, "ranges" .= [[start, end] | (start, end) <- ranges], "records" .= writes spec]
@@ -162,16 +163,20 @@ caseExtraction = do
       extractSpec = extractWith config
   extracted <- either fail pure (extractSpec baseline)
   check "event from the stage entry" (C.caseEvent extracted == (0xe, 1, 0x1d, 0))
-  check "availability pairs the engine call with its return" (C.caseAvailability extracted == [(0x104, 0, 2)])
-  check "no selection reads as none" (C.caseInitialRows extracted == [(0xe, 1, 0x104, Nothing)])
+  let zeros = B.replicate 0x430 0
+      written = B.take 0x20 zeros <> B.singleton 2 <> B.drop 0x21 zeros
+  check "service calls in instruction order with the block at each"
+    ( C.caseCalls extracted
+        == [ C.ServiceCall (C.CallNotify (0xe, 1, 0x1d, 5)) zeros
+           , C.ServiceCall (C.CallAvailability 0x104 0 2) written
+           , C.ServiceCall (C.CallInitialRow 0xe 1 0x104 Nothing) written
+           , C.ServiceCall (C.CallStore 1) written ] )
   check "after block replays the engine writes" (B.index (C.caseAfter extracted) 0x20 == 2)
   check "snapshot writes in the areas, in order" (C.caseSnapshotWrites extracted == [(0x93eba0, 1)])
-  check "notifies from the engine" (C.caseNotifies extracted == [(0xe, 1, 0x1d, 5)])
-  check "special post after the store accepts" (C.caseAccepted extracted)
   check "no last-move writes" (null (C.caseLastMoveWrites extracted) && C.caseLastMoveBefore extracted == (Nothing, Nothing))
   let withoutPost = baseline {hits = filter (/= hit "special-post" 200 0xca46fc [0xe, 1, 0x1d, 0]) (hits baseline), after = []}
-  rejected <- either fail pure (extractSpec withoutPost)
-  check "without a special post the case is rejected" (not (C.caseAccepted rejected))
+  check "a rejected receipt refuses" (isLeft (extractSpec withoutPost))
+  check "another firmware refuses" (isLeft (extractSpec baseline {datSha = "00"}))
   moved <- either fail pure (extractSpec baseline {writes = writes baseline ++ [write 165 0x1467584 [1, 0, 0, 0] 0 4]})
   check "last-move writes and the word's prior value"
     (C.caseLastMoveWrites moved == [(C.LastMoveToken, 0)] && C.caseLastMoveBefore moved == (Nothing, Just 1))

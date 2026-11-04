@@ -12,7 +12,10 @@ module Replacement.ModalRuntime.MenuEngineCases
   , Hit (..)
   , WriteRecord (..)
   , LastMoveWord (..)
+  , Call (..)
+  , ServiceCall (..)
   , Case (..)
+  , datSha256
   , extract
   , rustCases
   ) where
@@ -53,6 +56,7 @@ data WriteRecord = WriteRecord
 
 data Receipt = Receipt
   { receiptConfigSha :: String
+  , receiptDatSha :: String
   , receiptGlobalsAddress :: Word32
   , receiptBefore :: B.ByteString
   , receiptAfter :: B.ByteString
@@ -90,6 +94,7 @@ instance J.FromJSON Receipt where
     violation <- watch .: "violation"
     Receipt
       <$> inputs .: "config_sha256"
+      <*> inputs .: "dat_sha256"
       <*> (hexWord =<< globals .: "address")
       <*> (hexBytes =<< globals .: "before")
       <*> (hexBytes =<< globals .: "after")
@@ -119,19 +124,32 @@ instance J.FromJSON Receipt where
 
 data LastMoveWord = LastMoveClass | LastMoveToken deriving (Eq, Show)
 
+-- | One engine call to stock, as the hit at its entry shows it.
+data Call
+  = CallNotify (Word32, Word32, Word32, Word32)
+  | CallAvailability Word32 Word32 Word32
+  | CallInitialRow Word32 Word32 Word32 (Maybe Word32)
+  | CallStore Word32
+  deriving (Eq, Show)
+
+-- | A call and the block as it stood when stock made it.
+data ServiceCall = ServiceCall {serviceCall :: Call, serviceBlock :: B.ByteString} deriving (Eq, Show)
+
+-- | Only accepted receipts: a rejected event's window ends after the rollback restore `0x0061d3a8`.
 data Case = Case
   { caseEvent :: (Word32, Word32, Word32, Word32)
   , caseBefore :: B.ByteString
   , caseLastMoveBefore :: (Maybe Word32, Maybe Word32)
-  , caseAvailability :: [(Word32, Word32, Word32)]
-  , caseInitialRows :: [(Word32, Word32, Word32, Maybe Word32)]
+  , caseCalls :: [ServiceCall]
   , caseAfter :: B.ByteString
   , caseLastMoveWrites :: [(LastMoveWord, Word32)]
   , caseSnapshotWrites :: [(Word32, Word32)]
-  , caseNotifies :: [(Word32, Word32, Word32, Word32)]
-  , caseAccepted :: Bool
   }
   deriving (Eq, Show)
+
+-- | FWUP0002.DAT of X-M1 1.50.
+datSha256 :: String
+datSha256 = "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490"
 
 blockAddress, blockLen, lastMoveAddress :: Word32
 blockAddress = 0x009571d0
@@ -194,6 +212,7 @@ hex value = "0x" ++ showHex value ""
 extract :: String -> Config -> Receipt -> Either String Case
 extract configSha config receipt = do
   unless (receiptConfigSha receipt == configSha) (Left "receipt names another config")
+  unless (receiptDatSha receipt == datSha256) (Left "receipt names another firmware")
   forM_ requiredSites $ \site ->
     unless (site `elem` configSites config) (Left ("config lacks trace site " ++ siteLabel site ++ " at " ++ hex (siteAddress site)))
   forM_ requiredRanges $ \range -> do
@@ -228,22 +247,28 @@ extract configSha config receipt = do
       answers = site "availability-return"
   unless (length queries == length answers) (Left "availability queries and returns differ in number")
   unless (interleaved queries answers) (Left "availability returns out of order")
-  availability <- mapM (\(query, answer) -> if r0 answer <= 3 then Right (r0 query, r1 query, r0 answer) else Left ("row state " ++ hex (r0 answer))) (zip queries answers)
+  availability <- mapM (\(query, answer) -> if r0 answer <= 3 then Right (query, CallAvailability (r0 query) (r1 query) (r0 answer)) else Left ("row state " ++ hex (r0 answer))) (zip queries answers)
   let initials = filter ((== initialRowCall) . hitLr) (site "initial-row")
       returns = site "initial-row-return"
   unless (length initials == length returns) (Left "initial-row calls and returns differ in number")
   unless (interleaved initials returns) (Left "initial-row returns out of order")
-  let initialRows = [(r0 call, r1 call, r2 call, if r0 answer == noSelection then Nothing else Just (r0 answer)) | (call, answer) <- zip initials returns]
-      notifies = [hitRegisters hit | hit <- site "engine-notify", inside engineBody (hitLr hit)]
+  let initialRows = [(call, CallInitialRow (r0 call) (r1 call) (r2 call) (if r0 answer == noSelection then Nothing else Just (r0 answer))) | (call, answer) <- zip initials returns]
+      notifies = [(hit, CallNotify (hitRegisters hit)) | hit <- site "engine-notify", inside engineBody (hitLr hit)]
+      stores = [(hit, CallStore (r0 hit)) | hit <- site "frame-snapshot", inside engineBody (hitLr hit)]
+      calls = sortOn (hitInstructions . fst) (availability ++ initialRows ++ notifies ++ stores)
       accepted = any (\hit -> hitSite hit == "special-post" && inside consumerBody (hitLr hit)) [hit | (index, hit) <- indexed, index > storeIndex]
       writes = filter ((== core) . writeCore) (receiptWrites receipt)
       inBlock record = inside (blockAddress, blockAddress + blockLen) (writeAddress record)
       inLastMove record = inside (lastMoveAddress, lastMoveAddress + 8) (writeAddress record)
       engineWrites = [record | record <- writes, writeInstructions record >= start, writeInstructions record < end]
+      blockWrites = filter inBlock engineWrites
+      replayTo limit = foldl' (\acc record -> acc >>= replay record) (Right (receiptBefore receipt)) (filter ((< limit) . writeInstructions) blockWrites)
+  unless accepted (Left "rejected receipt: no special post follows the engine")
   when (any (\record -> writeInstructions record < start && (inBlock record || inLastMove record)) (receiptWrites receipt))
     (Left "block or last-move write before the stage entry")
-  replayed <- foldl' (\acc record -> acc >>= replay record) (Right (receiptBefore receipt)) (filter inBlock engineWrites)
-  when (accepted && replayed /= receiptAfter receipt) (Left "replayed engine writes differ from the recorded after block")
+  replayed <- replayTo end
+  when (replayed /= receiptAfter receipt) (Left "replayed engine writes differ from the recorded after block")
+  serviceCalls <- mapM (\(hit, call) -> ServiceCall call <$> replayTo (hitInstructions hit)) calls
   let lastMoveWrites = filter inLastMove engineWrites
   forM_ lastMoveWrites $ \record ->
     unless (writeSize record == 4 && (writeAddress record - lastMoveAddress) `mod` 4 == 0) (Left "unaligned last-move write")
@@ -257,13 +282,10 @@ extract configSha config receipt = do
     { caseEvent = hitRegisters entryHit
     , caseBefore = receiptBefore receipt
     , caseLastMoveBefore = (beforeOf LastMoveClass, beforeOf LastMoveToken)
-    , caseAvailability = availability
-    , caseInitialRows = initialRows
+    , caseCalls = serviceCalls
     , caseAfter = replayed
     , caseLastMoveWrites = [(wordOf record, writeValue record) | record <- lastMoveWrites]
     , caseSnapshotWrites = [(writeAddress record, writeValue record) | record <- snapshots]
-    , caseNotifies = notifies
-    , caseAccepted = accepted
     }
  where
   interleaved calls returns = and (zipWith (\call answer -> hitInstructions call < hitInstructions answer) calls returns)
@@ -308,12 +330,7 @@ rustCases cases =
         , "        before: " ++ bytesText (caseBefore c) ++ ","
         , "        last_move_before: LastMoveBefore { class: " ++ optional (\v -> "MenuClass::new(" ++ hex v ++ ")") classBefore
             ++ ", token: " ++ optional (\v -> "RowToken::new(" ++ hex v ++ ")") tokenBefore ++ " },"
-        , "        availability: &["
-            ++ concatMap (\(cls, token, state) -> "AvailabilityAnswer { class: MenuClass::new(" ++ hex cls ++ "), token: RowToken::new(" ++ hex token ++ "), state: " ++ rowState state ++ " }, ") (caseAvailability c)
-            ++ "],"
-        , "        initial_rows: &["
-            ++ concatMap (\(k, n, cls, answer) -> "InitialRow { kind: " ++ hex k ++ ", node: " ++ hex n ++ ", class: MenuClass::new(" ++ hex cls ++ "), answer: " ++ optional (\v -> "RowToken::new(" ++ hex v ++ ")") answer ++ " }, ") (caseInitialRows c)
-            ++ "],"
+        , "        calls: &[" ++ concatMap callText (caseCalls c) ++ "],"
         , "        after: " ++ bytesText (caseAfter c) ++ ","
         , "        last_move_writes: &["
             ++ concatMap (\(which, value) -> case which of
@@ -321,9 +338,12 @@ rustCases cases =
                  LastMoveToken -> "LastMoveWrite::Token(RowToken::new(" ++ hex value ++ ")), ") (caseLastMoveWrites c)
             ++ "],"
         , "        snapshot_writes: &[" ++ concatMap (\(at, value) -> "(" ++ hex at ++ ", " ++ hex value ++ "), ") (caseSnapshotWrites c) ++ "],"
-        , "        notifies: &["
-            ++ concatMap (\(a, b, d, e) -> "NotifyCall { kind: " ++ hex a ++ ", node: " ++ hex b ++ ", id: " ++ hex d ++ ", class: " ++ hex e ++ " }, ") (caseNotifies c)
-            ++ "],"
-        , "        result: " ++ (if caseAccepted c then "EngineResult::Accepted" else "EngineResult::Rejected") ++ ","
+        , "        result: EngineResult::Accepted,"
         , "    },"
         ]
+  callText (ServiceCall call block) = "\n            (" ++ callExpression call ++ ", " ++ bytesText block ++ "),"
+  callExpression call = case call of
+    CallNotify (a, b, d, e) -> "Expected::Notify { kind: " ++ hex a ++ ", node: " ++ hex b ++ ", id: " ++ hex d ++ ", class: " ++ hex e ++ " }"
+    CallAvailability cls token state -> "Expected::Availability { class: MenuClass::new(" ++ hex cls ++ "), token: RowToken::new(" ++ hex token ++ "), state: " ++ rowState state ++ " }"
+    CallInitialRow k n cls answer -> "Expected::InitialRow { kind: " ++ hex k ++ ", node: " ++ hex n ++ ", class: MenuClass::new(" ++ hex cls ++ "), answer: " ++ optional (\v -> "RowToken::new(" ++ hex v ++ ")") answer ++ " }"
+    CallStore slot -> "Expected::Store { slot: " ++ hex slot ++ " }"

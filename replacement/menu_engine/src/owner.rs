@@ -2,9 +2,14 @@
 //! `RB_MENU_ENGINE_{TREE,RECORDS,CASES}` naming the outputs of
 //! `//replacement/modal_runtime:menu-engine-tree` and `:menu-engine-cases`.
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
 use super::block::{decode, mirror, snapshot_address, RecordTable, BLOCK_LEN, LAST_MOVE_LEN};
-use super::engine::{apply_with, Effect, EngineResult, EngineServices, MenuEvent, Rules, StageEvent, StageKind, StageNode, Stock};
-use super::frame::{MenuClass, MenuFrameSnapshot, RowToken};
+use super::engine::{
+    apply_with, Effect, EngineResult, EngineServices, KindSwitchCall, MenuEvent, Rules, SeekCall, StageEvent, StageKind,
+    StageNode, Stock,
+};
+use super::frame::{MenuClass, MenuFrameSnapshot, RowIndex, RowToken};
 use super::state::{EngineState, LastMove, RowState};
 use super::tree::{Node, Tree};
 
@@ -25,29 +30,18 @@ struct LastMoveBefore {
     token: Option<RowToken>,
 }
 
-struct AvailabilityAnswer {
-    class: MenuClass,
-    token: RowToken,
-    state: RowState,
-}
-
-struct InitialRow {
-    kind: u32,
-    node: u32,
-    class: MenuClass,
-    answer: Option<RowToken>,
+/// A stock call the receipt shows, in instruction order.
+#[derive(Debug)]
+enum Expected {
+    Notify { kind: u32, node: u32, id: u32, class: u32 },
+    Availability { class: MenuClass, token: RowToken, state: RowState },
+    InitialRow { kind: u32, node: u32, class: MenuClass, answer: Option<RowToken> },
+    Store { slot: u32 },
 }
 
 enum LastMoveWrite {
     Class(MenuClass),
     Token(RowToken),
-}
-
-struct NotifyCall {
-    kind: u32,
-    node: u32,
-    id: u32,
-    class: u32,
 }
 
 #[allow(dead_code)]
@@ -58,12 +52,11 @@ struct Case {
     event: StageEvent,
     before: [u8; BLOCK_LEN],
     last_move_before: LastMoveBefore,
-    availability: &'static [AvailabilityAnswer],
-    initial_rows: &'static [InitialRow],
+    /// Each call with the block as it stood at the call.
+    calls: &'static [(Expected, [u8; BLOCK_LEN])],
     after: [u8; BLOCK_LEN],
     last_move_writes: &'static [LastMoveWrite],
     snapshot_writes: &'static [(u32, u32)],
-    notifies: &'static [NotifyCall],
     result: EngineResult,
 }
 
@@ -71,38 +64,96 @@ struct Case {
 const UNOBSERVED_CLASS: MenuClass = MenuClass::new(0xdead_0001);
 const UNOBSERVED_TOKEN: RowToken = RowToken::new(0xdead_0002);
 
-/// Answers in the receipt's order and records the first question that
-/// differs from the receipt's.
+/// Answers from the receipt's calls in order and records the first call that
+/// differs from the receipt's in kind, arguments or block.
 struct Answers<'c> {
     case: &'c Case,
-    availability: usize,
-    initial_rows: usize,
+    next: usize,
+    snapshot_writes: Vec<(u32, u32)>,
     mismatch: Option<String>,
 }
 
+impl<'c> Answers<'c> {
+    fn take(&mut self, state: &EngineState, asked: &str) -> Option<&'c Expected> {
+        let index = self.next;
+        self.next += 1;
+        let Some((expected, block)) = self.case.calls.get(index) else {
+            self.mismatch.get_or_insert(format!("call {index} {asked}: the receipt has {} calls", self.case.calls.len()));
+            return None;
+        };
+        let (owned, _) = mirror(state, &RECORDS);
+        if let Some(offset) = (0..BLOCK_LEN).find(|&offset| owned[offset] != block[offset]) {
+            self.mismatch.get_or_insert(format!(
+                "call {index} {asked}: block differs at +{offset:#x} ({:#x}, stock {:#x})",
+                owned[offset], block[offset]
+            ));
+        }
+        Some(expected)
+    }
+
+    fn differs(&mut self, index: usize, asked: String, expected: &Expected) {
+        self.mismatch.get_or_insert(format!("call {index} {asked}, stock {expected:x?}"));
+    }
+}
+
 impl EngineServices for Answers<'_> {
-    fn availability(&mut self, _: &EngineState, class: MenuClass, token: RowToken) -> RowState {
-        let answer = self.case.availability.get(self.availability);
-        self.availability += 1;
-        match answer {
-            Some(answer) if answer.class == class && answer.token == token => answer.state,
-            _ => {
-                self.mismatch.get_or_insert(format!("availability {} asked ({class:?}, {token:?})", self.availability - 1));
-                RowState::Offered
+    fn perform(&mut self, state: &EngineState, effect: Effect) {
+        let index = self.next;
+        let asked = format!("{effect:x?}");
+        let Some(expected) = self.take(state, &asked) else { return };
+        match (effect, expected) {
+            (Effect::Notify(notify), Expected::Notify { kind, node, id, class })
+                if (notify.kind.raw(), notify.node.get(), notify.id.get(), notify.class.get()) == (*kind, *node, *id, *class) => {}
+            (Effect::StoreSnapshot { depth, slot, record }, Expected::Store { slot: stock }) if slot.get() == *stock => {
+                self.snapshot_writes.extend(record_writes(snapshot_address(depth, slot), &record));
             }
+            _ => self.differs(index, asked, expected),
         }
     }
 
-    fn initial_row(&mut self, _: &EngineState, kind: StageKind, node: StageNode, class: MenuClass) -> Option<RowToken> {
-        let answer = self.case.initial_rows.get(self.initial_rows);
-        self.initial_rows += 1;
-        match answer {
-            Some(answer) if answer.kind == kind.raw() && answer.node == node.get() && answer.class == class => answer.answer,
-            _ => {
-                self.mismatch.get_or_insert(format!("initial row asked ({kind:?}, {node:?}, {class:?})"));
+    fn availability(&mut self, state: &EngineState, class: MenuClass, token: RowToken) -> RowState {
+        let index = self.next;
+        let asked = format!("availability({class:?}, {token:?})");
+        match self.take(state, &asked) {
+            Some(Expected::Availability { class: c, token: t, state: answer }) if *c == class && *t == token => *answer,
+            Some(expected) => {
+                self.differs(index, asked, expected);
+                RowState::Offered
+            }
+            None => RowState::Offered,
+        }
+    }
+
+    fn initial_row(&mut self, state: &EngineState, kind: StageKind, node: StageNode, class: MenuClass) -> Option<RowToken> {
+        let index = self.next;
+        let asked = format!("initial_row({kind:?}, {node:?}, {class:?})");
+        match self.take(state, &asked) {
+            Some(Expected::InitialRow { kind: k, node: n, class: c, answer })
+                if *k == kind.raw() && *n == node.get() && *c == class =>
+            {
+                *answer
+            }
+            Some(expected) => {
+                self.differs(index, asked, expected);
                 None
             }
+            None => None,
         }
+    }
+
+    fn kind_switch(&mut self, state: &EngineState, call: KindSwitchCall) -> (EngineState, EngineResult) {
+        self.mismatch.get_or_insert(format!("call {} {call:x?}: no receipt shows a nested kind switch", self.next));
+        (*state, EngineResult::Rejected)
+    }
+
+    fn seek(&mut self, state: &EngineState, call: SeekCall) -> (EngineState, EngineResult) {
+        self.mismatch.get_or_insert(format!("call {} {call:x?}: no receipt shows a seek", self.next));
+        (*state, EngineResult::Rejected)
+    }
+
+    fn token_past_rows(&mut self, _: &EngineState, row: RowIndex) -> RowToken {
+        self.mismatch.get_or_insert(format!("call {} values[{row:?}]: no receipt shows a read past the rows", self.next));
+        RowToken::TERMINATOR
     }
 }
 
@@ -131,19 +182,15 @@ fn run_case<R: Rules>(case: &Case) -> Result<(), String> {
     let before_pair = last_move_before(case);
     let state = decode(&case.before, &last_move_bytes(before_pair), &TREE, &RECORDS).map_err(|error| format!("decode {error:?}"))?;
     let event = MenuEvent::decode(case.event, &TREE, &state);
-    let mut answers = Answers { case, availability: 0, initial_rows: 0, mismatch: None };
-    let transition = apply_with::<R, _>(&TREE, &state, event, &mut answers).map_err(|reason| format!("not owned: {reason:?}"))?;
+    let mut answers = Answers { case, next: 0, snapshot_writes: Vec::new(), mismatch: None };
+    let applied = catch_unwind(AssertUnwindSafe(|| apply_with::<R, _>(&TREE, &state, event, &mut answers)))
+        .map_err(|_| "engine panicked".to_string())?;
+    let transition = applied.map_err(|reason| format!("not owned: {reason:?}"))?;
     if let Some(mismatch) = answers.mismatch {
         return Err(mismatch);
     }
-    if answers.availability != case.availability.len() || answers.initial_rows != case.initial_rows.len() {
-        return Err(format!(
-            "services asked {} availability and {} initial rows; receipt has {} and {}",
-            answers.availability,
-            answers.initial_rows,
-            case.availability.len(),
-            case.initial_rows.len()
-        ));
+    if answers.next != case.calls.len() {
+        return Err(format!("engine made {} calls; the receipt has {}", answers.next, case.calls.len()));
     }
     let (block, _) = mirror(&transition.state, &RECORDS);
     let differing: Vec<usize> = (0..BLOCK_LEN).filter(|&offset| block[offset] != case.after[offset]).collect();
@@ -176,37 +223,16 @@ fn run_case<R: Rules>(case: &Case) -> Result<(), String> {
     if transition.state.last_move != expected_pair {
         return Err(format!("last move {:?}, expected {:?}", transition.state.last_move, expected_pair));
     }
-    let snapshot_writes: Vec<(u32, u32)> = transition
-        .effects
-        .iter()
-        .filter_map(|effect| match effect {
-            Effect::StoreSnapshot { depth, slot, record } => Some(record_writes(snapshot_address(*depth, *slot), record)),
-            Effect::Notify(_) => None,
-        })
-        .flatten()
-        .collect();
-    if snapshot_writes != case.snapshot_writes {
-        let first = snapshot_writes.iter().zip(case.snapshot_writes).position(|(owned, stock)| owned != stock);
+    if answers.snapshot_writes != case.snapshot_writes {
+        let owned = &answers.snapshot_writes;
+        let first = owned.iter().zip(case.snapshot_writes).position(|(owned, stock)| owned != stock);
         return Err(format!(
             "snapshot writes differ: {} owned, {} stock, first difference at {first:?}: {:x?} vs {:x?}",
-            snapshot_writes.len(),
+            owned.len(),
             case.snapshot_writes.len(),
-            first.map(|index| snapshot_writes[index]),
+            first.map(|index| owned[index]),
             first.map(|index| case.snapshot_writes[index]),
         ));
-    }
-    let notifies: Vec<(u32, u32, u32, u32)> = transition
-        .effects
-        .iter()
-        .filter_map(|effect| match effect {
-            Effect::Notify(notify) => Some((notify.kind.raw(), notify.node.get(), notify.id.get(), notify.class.get())),
-            Effect::StoreSnapshot { .. } => None,
-        })
-        .collect();
-    let expected_notifies: Vec<(u32, u32, u32, u32)> =
-        case.notifies.iter().map(|call| (call.kind, call.node, call.id, call.class)).collect();
-    if notifies != expected_notifies {
-        return Err(format!("notifies {notifies:x?}, expected {expected_notifies:x?}"));
     }
     if transition.result != case.result {
         return Err(format!("result {:?}, expected {:?}", transition.result, case.result));
@@ -221,8 +247,9 @@ fn outcomes<R: Rules>() -> Vec<(&'static str, Result<(), String>)> {
 #[test]
 fn owner_receipt_blocks_round_trip() {
     for case in CASES {
-        for (label, block) in [("before", &case.before), ("after", &case.after)] {
-            let pair = last_move_bytes(last_move_before(case));
+        let pair = last_move_bytes(last_move_before(case));
+        let blocks = [("before", &case.before), ("after", &case.after)].into_iter();
+        for (label, block) in blocks.chain(case.calls.iter().map(|(_, block)| ("call", block))) {
             let state = decode(block, &pair, &TREE, &RECORDS).unwrap_or_else(|error| panic!("{} {label}: {error:?}", case.name));
             assert_eq!(mirror(&state, &RECORDS), (*block, pair), "{} {label}", case.name);
         }
@@ -231,7 +258,7 @@ fn owner_receipt_blocks_round_trip() {
 
 #[test]
 fn owner_cases_match_stock() {
-    assert_eq!(CASES.len(), 5);
+    assert_eq!(CASES.len(), 8);
     let results = outcomes::<Stock>();
     for (name, outcome) in &results {
         println!("case {name}: {}", outcome.as_ref().map_or_else(|reason| format!("FAIL {reason}"), |_| "pass".into()));
@@ -264,6 +291,16 @@ impl Rules for NoLastMove {
     const LAST_MOVE: bool = false;
 }
 
+struct ZeroScroll;
+impl Rules for ZeroScroll {
+    const SCROLL: bool = false;
+}
+
+struct NoPushClassifier;
+impl Rules for NoPushClassifier {
+    const PUSH_CLASSIFIER: bool = false;
+}
+
 fn control<R: Rules>(label: &str) -> usize {
     let results = outcomes::<R>();
     let failed: Vec<_> = results.iter().filter(|(_, outcome)| outcome.is_err()).collect();
@@ -280,6 +317,8 @@ fn owner_controls_fail() {
         ("inverted-skip", control::<InvertedSkip>("inverted-skip")),
         ("no-initial-row", control::<NoInitialRow>("no-initial-row")),
         ("no-last-move", control::<NoLastMove>("no-last-move")),
+        ("zero-scroll", control::<ZeroScroll>("zero-scroll")),
+        ("no-push-classifier", control::<NoPushClassifier>("no-push-classifier")),
     ];
     for (label, failed) in counts {
         assert!(failed > 0, "control {label} matches every case");
