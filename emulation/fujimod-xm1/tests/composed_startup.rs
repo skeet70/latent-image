@@ -1,7 +1,7 @@
 use fujimod_emulator::board::observation::{WatchKinds, WatchRange};
 use fujimod_xm1::attach_state::{
-    self, AllowanceLabel, AttachRuleRefusal, AttachState, AttachVerdict, BoardLeaf, CaptureRegion, ContextRegister, CoreContext,
-    Occupant, Space, SpaceSpan, Span, StackCheck, UnusedEntry,
+    self, AllowanceLabel, AttachRuleRefusal, AttachState, AttachVerdict, BoardLeaf, BusAddress, CaptureRegion, ContextRegister, CoreContext,
+    Occupant, ProcessorAddress, ReadPath, RegionRead, Space, SpaceSpan, Span, StackCheck, UnusedEntry,
 };
 use fujimod_xm1::composed_catalog::{
     Bank, CatalogRefusal, Contract, Core, GuardBound, Label, Pc, PiecePolicy, PieceKind, PlanSpan, RangePlan, Role, Sha256,
@@ -389,11 +389,14 @@ fn scratch() -> PathBuf {
     directory
 }
 
-/// Physical `[0, 0x80000)` and core 0's ATCM.
+/// Physical `[0, 0x80000)` read through two bus stretches, core 0's ATCM, and physical `[0x90000, 0x91000)` unreachable.
 fn write_capture(directory: &Path, spec: &Spec) -> AttachState {
+    let bus = |start: u64, end: u64, address: u64| RegionRead { start, end, path: ReadPath::Bus { address: BusAddress(address) } };
+    let atcm = ReadPath::Core { core: Core::Primary, address: ProcessorAddress(0) };
     let regions = [
-        CaptureRegion { space: Space::Physical, start: 0, end: 0x80000, view: None },
-        CaptureRegion { space: Space::Tcm { core: Core::Primary, bank: Bank::Instruction }, start: 0, end: 0x2000, view: None },
+        CaptureRegion { space: Space::Physical, start: 0, end: 0x80000, reads: vec![bus(0, 0x4000, 0x4000_0000), bus(0x4000, 0x80000, 0x4000)] },
+        CaptureRegion { space: Space::Tcm { core: Core::Primary, bank: Bank::Instruction }, start: 0, end: 0x2000,
+            reads: vec![RegionRead { start: 0, end: 0x2000, path: atcm }] },
     ];
     let (records, memory_sha256, memory_bytes) = attach_state::write_memory_snapshot(&directory.join(attach_state::MEMORY_FILE), &regions,
         |region, offset, buffer| {
@@ -410,6 +413,7 @@ fn write_capture(directory: &Path, spec: &Spec) -> AttachState {
         instructions: [5_000_000, 886_999],
         cores: spec.cores.clone(),
         regions: records,
+        unreachable: vec![Span::new(0x90000, 0x91000).unwrap()],
         memory_file: attach_state::FileRecord { path: attach_state::MEMORY_FILE.into(), sha256: memory_sha256, compressed_bytes: memory_bytes },
         board_file: attach_state::FileRecord { path: attach_state::BOARD_FILE.into(), sha256: board_sha256, compressed_bytes: board_bytes },
     }
@@ -951,6 +955,14 @@ fn a_capture_file_that_differs_from_its_binding_refuses() {
     assert!(matches!(difference, Some(Difference::AttachSnapshot { role: Role::Composed, .. })));
     let (difference, _) = compare_with(&contract, &digest, retained.clone(), owned.clone(), |_| {}, |_, owned| {
         owned.attach.as_mut().unwrap().regions[0].sha256 = zeros(4);
+    });
+    assert!(matches!(difference, Some(Difference::AttachSnapshot { role: Role::Composed, .. })));
+    let (difference, _) = compare_with(&contract, &digest, retained.clone(), owned.clone(), |_| {}, |_, owned| {
+        owned.attach.as_mut().unwrap().unreachable.clear();
+    });
+    assert!(matches!(difference, Some(Difference::AttachSnapshot { role: Role::Composed, .. })));
+    let (difference, _) = compare_with(&contract, &digest, retained.clone(), owned.clone(), |_| {}, |_, owned| {
+        owned.attach.as_mut().unwrap().regions[0].reads[0].path = ReadPath::Bus { address: BusAddress(0) };
     });
     assert!(matches!(difference, Some(Difference::AttachSnapshot { role: Role::Composed, .. })));
     let (difference, _) = compare_with(&contract, &digest, retained, owned, |_| {}, |_, owned| owned.attach = None);
