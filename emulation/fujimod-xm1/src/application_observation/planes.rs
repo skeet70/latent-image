@@ -325,10 +325,15 @@ pub(crate) fn graphics_digest(scanout: &[u8], planes: &[u8]) -> Result<Sha256, S
     Ok(Sha256::of(&bytes))
 }
 
-/// The selected planes' kinds, sources, offsets and lengths as JSON, for comparison across roles.
+/// The selected planes' kinds, offsets and lengths, and the graphics planes' source addresses, as JSON for comparison
+/// across roles; the main plane's source address moves between live-view buffers.
 pub(crate) fn layout(scanout: &[u8]) -> Result<String, String> {
     let scanout: Scanout = serde_json::from_slice(scanout).map_err(|error| format!("scanout: {error}"))?;
-    serde_json::to_string(&scanout.source_planes).map_err(|error| error.to_string())
+    let planes: Vec<_> = scanout.source_planes.iter().map(|plane| {
+        let address = matches!(plane.kind, PlaneKind::Graphics { .. }).then_some(plane.native_source_address);
+        (plane.kind, address, plane.offset, plane.bytes)
+    }).collect();
+    serde_json::to_string(&planes).map_err(|error| error.to_string())
 }
 
 /// The scanout record and planes with the last selected plane one byte short, consistently rebound.

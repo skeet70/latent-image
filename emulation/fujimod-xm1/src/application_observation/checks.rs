@@ -793,7 +793,6 @@ pub fn render_completion(evidence: &RoleEvidence) -> Result<(), ApplicationRefus
                 let advanced = visible.probe.graphics.started > before.probe.graphics.started
                     && visible.probe.graphics.completed > before.probe.graphics.completed
                     && visible.probe.graphics.bytes_completed > before.probe.graphics.bytes_completed;
-                // The main plane alternates with the generated live source, so only the graphics planes show the input.
                 require(previous_graphics.as_ref() != Some(&graphics_digest) && advanced, check, "an input has no newly acknowledged visible result")?;
             }
         }

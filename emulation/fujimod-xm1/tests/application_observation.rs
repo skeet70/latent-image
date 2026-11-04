@@ -494,6 +494,12 @@ fn replace_planes(directory: &std::path::Path, capture: &mut VisibleCapture, byt
     capture.scanout = SideFile::replace(directory, capture.scanout.path.as_str(), &record).unwrap();
 }
 
+fn replace_scanout(directory: &std::path::Path, capture: &mut VisibleCapture, edit: impl FnOnce(&mut Value)) {
+    let mut record = scanout(&capture.png, &capture.planes);
+    edit(&mut record);
+    capture.scanout = SideFile::replace(directory, capture.scanout.path.as_str(), &serde_json::to_vec(&record).unwrap()).unwrap();
+}
+
 struct Scenario {
     contract: Contract,
     receipt: Receipt,
@@ -793,10 +799,19 @@ fn the_pair_check_compares_inputs_menus_graphics_planes_mailbox_words_and_target
     let mut differing = owned.section().clone();
     differing.targets[0].word = CodeWord(0);
     assert_eq!(check_pair(retained.section(), &differing, directories), Err(PairField::Targets));
-    let mut differing = owned.section().clone();
-    replace_planes(&owned.directory, &mut differing.visible[2], &planes_bytes(0x77, 0xa2));
+    let moved = Scenario::new();
+    let directories = [retained.directory.as_path(), moved.directory.as_path()];
+    let mut differing = moved.section().clone();
+    replace_scanout(&moved.directory, &mut differing.visible[1], |record| record["source_planes"][0]["native_source_address"] = json!(0x180000));
     assert_eq!(check_pair(retained.section(), &differing, directories), Ok(()));
-    replace_planes(&owned.directory, &mut differing.visible[2], &planes_bytes(2, 0x5a));
+    replace_scanout(&moved.directory, &mut differing.visible[1], |record| record["source_planes"][1]["native_source_address"] = json!(0x280000));
+    assert_eq!(check_pair(retained.section(), &differing, directories), Err(PairField::Visible));
+    let repainted = Scenario::new();
+    let directories = [retained.directory.as_path(), repainted.directory.as_path()];
+    let mut differing = repainted.section().clone();
+    replace_planes(&repainted.directory, &mut differing.visible[2], &planes_bytes(0x77, 0xa2));
+    assert_eq!(check_pair(retained.section(), &differing, directories), Ok(()));
+    replace_planes(&repainted.directory, &mut differing.visible[2], &planes_bytes(2, 0x5a));
     assert_eq!(check_pair(retained.section(), &differing, directories), Err(PairField::Visible));
 }
 
