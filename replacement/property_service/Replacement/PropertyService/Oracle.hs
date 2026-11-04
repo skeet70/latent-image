@@ -455,6 +455,7 @@ caseSpec image functions fx (CaseLabel label) standing (OracleCase (PropertyId i
     , caseExpectedStatus = expectedStatus expected
     , caseExpectedRegisters = expectedRegisters expected
     , caseExpectedMemory = expectedMemory expected
+    , caseCp14Identity = Nothing
     }
   where
     hex value = "0x" ++ showHex value ""

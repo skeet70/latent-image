@@ -543,6 +543,7 @@ ownedBatchApi runner=withTemporary "fuji-owned-batch"$ \root->do
       , O.caseExpectedStatus=N.Returned
       , O.caseExpectedRegisters=expected
       , O.caseExpectedMemory=memory
+      , O.caseCp14Identity=Nothing
       }
      specs=
       [ spec "writer"[0xe5820000,0xe12fff1e][(N.R0,0xdeadbeef),(N.R2,0x9000)][(N.R0,0xdeadbeef)][(N.RegionId "data",O.word32le 0xdeadbeef)]
