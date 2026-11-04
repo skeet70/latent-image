@@ -1,6 +1,7 @@
 module Replacement.Image5Load.Admission
   ( AdmissionError (..), ProducerProof, deriveProducerProof
   , scratchLow, refusalPc, executionPcs, callSites, returnPcs
+  , Service (..), serviceAddress
   , carrierBytes, retainedTargets, fillCallback, feedCallback, fillFlag, finalLr
   ) where
 

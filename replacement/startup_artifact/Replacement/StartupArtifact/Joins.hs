@@ -27,6 +27,7 @@ import qualified Replacement.IdleTask.Admission as IA
 import qualified Replacement.IdleTask.Artifact as IT
 import qualified Replacement.RootTask.Admission as RA
 import qualified Replacement.RootTask.Artifact as RT
+import qualified Replacement.StartupArtifact.Footprint.Producers as Producers
 import qualified Replacement.StartupArtifact.Footprint.RootTask as RootFootprint
 import qualified Replacement.TaskSubmission.Admission as WA
 import qualified Replacement.TaskSubmission.Artifact as W
@@ -36,6 +37,7 @@ data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | 
   | LoaderStartupPublisher | PublisherInstallerRoots | CriticalPairInstallerRoots | DispatcherCriticalPair
   | TaskCompositionOwnedCalls | DispatcherTaskComposition | PublisherTaskServices
   | DispatcherRootEntry | DispatcherIdleEntry | WrapperIdleErrorCallback | RootTaskServices
+  | Image5ProducerServices | PlainProducerServices
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 instance JoinName JoinKind where
@@ -54,6 +56,8 @@ instance JoinName JoinKind where
   joinName DispatcherIdleEntry = "dispatcher-idle-entry"
   joinName WrapperIdleErrorCallback = "wrapper-idle-error-callback"
   joinName RootTaskServices = "root-task-services"
+  joinName Image5ProducerServices = "image5-producer-services"
+  joinName PlainProducerServices = "plain-producer-services"
 
 at :: Target -> Word32 -> Word32 -> Span
 at target start end = Span target (Guest start) (Guest end)
@@ -349,7 +353,8 @@ registeredJoins =
   , completionZero LoaderOrchestrationB, completionZero LoaderStartup
   , loaderStartupPublisher, publisherInstallerRoots, criticalPairInstallerRoots, dispatcherCriticalPair
   , taskCompositionOwnedCalls, dispatcherTaskComposition, publisherTaskServices
-  , dispatcherRootEntry, dispatcherIdleEntry, wrapperIdleErrorCallback, rootTaskServices ]
+  , dispatcherRootEntry, dispatcherIdleEntry, wrapperIdleErrorCallback, rootTaskServices
+  , image5ProducerServices, plainProducerServices ]
 
 -- | The task wrapper, the record-2 critical pair and the task-storage transition joined as in
 -- replacement/startup_composition/Replacement/StartupComposition/TaskSubmission.hs:63-97.
@@ -519,16 +524,34 @@ admittedEntries =
   , ((0x7235d8, 0x723790), [0x7235d8, 0x7236b0])
   , ((0x725cc4, 0x725da8), []) ]
 
+-- | Direct calls from a closure into an owned carrier of 'admittedEntries', from outside those carriers, each with
+-- the entries its piece admits.
+entering :: [(Word32, Word32)] -> [(Word32, [Word32])]
+entering calls = [ (target, entries) | (site, target) <- calls, not (any (within site . fst) admittedEntries)
+                 , (range, entries) <- admittedEntries, within target range ]
+  where within address (low, high) = address >= low && address < high
+
 closureEntersAtEntries :: JoinEvidence -> Bool
-closureEntersAtEntries evidence = any ((== 0x725dd8) . fst) entering && all (uncurry elem) entering
-  where
-    within address (low, high) = address >= low && address < high
-    calls = RootFootprint.closureCalls (targetOf (evidenceCanonical evidence) Image4)
-    entering = [ (target, entries) | (site, target) <- calls, not (any (within site . fst) admittedEntries)
-               , (range, entries) <- admittedEntries, within target range ]
+closureEntersAtEntries evidence = any ((== 0x725dd8) . fst) calls && all (uncurry elem) calls
+  where calls = entering (RootFootprint.closureCalls (targetOf (evidenceCanonical evidence) Image4))
 
 rootTaskServices :: Join JoinKind
 rootTaskServices = Join RootTaskServices (Set.fromList [RootTask, Record2Link, TaskSubmission, TaskStorage])
   [at Image4 0x7235d8 0x723790, at Image4 0x725cc4 0x725da8, at Image4 0x725dd8 0x72612c]
   (ObservationQualified "root's retained submitters (0x69ca24 through 0x6b0764, and the constructors under 0x69ca44) call the owned wrapper at 0x725dd8, its cleanup 0x72612c can call owned release 0x726098, and the stock wrapper body and callback 0x69cc18 reach the critical pair and, through the retained prelude 0x725c6c, the storage transition; root-closure-enters-carriers-at-entries checks that every direct call from root's closure into these carriers targets an entry the owning piece admits; the wrapper's owned calls are task-composition-owned-calls; qualified by root's call sequence and the committed submission records in the composed comparison")
   [HostCheck "root-closure-enters-carriers-at-entries" closureEntersAtEntries]
+
+-- | The producer's closure calls the critical pair, and every call into an owned carrier targets an admitted entry.
+producerEntersAtEntries :: Producers.Producer -> JoinEvidence -> Bool
+producerEntersAtEntries producer evidence = not (null calls) && all (uncurry elem) calls
+  where calls = entering (Producers.closureCalls producer (targetOf (evidenceCanonical evidence) Image4))
+
+producerServices :: JoinKind -> PieceKind -> Producers.Producer -> Join JoinKind
+producerServices kind piece producer = Join kind (Set.fromList [piece, Record2Link])
+  [at Image4 0x7235d8 0x723790]
+  (ObservationQualified ("the producer's retained services reach the critical-pair entry words 0x7235d8 and 0x7236b0 of the record-2 link; " <> joinName kind <> "-closure-enters-carriers-at-entries checks that every direct call from the producer's closure into the wrapper, critical-pair and storage carriers targets an entry the owning piece admits (critical-pair words: replacement/startup_artifact/Replacement/StartupArtifact/Adapters.hs:199); qualified by the producer's call sequence and reads in the composed comparison"))
+  [HostCheck (joinName kind <> "-closure-enters-carriers-at-entries") (producerEntersAtEntries producer)]
+
+image5ProducerServices, plainProducerServices :: Join JoinKind
+image5ProducerServices = producerServices Image5ProducerServices Image5Producer Producers.Image5Load
+plainProducerServices = producerServices PlainProducerServices PlainProducer Producers.PlainLoad
