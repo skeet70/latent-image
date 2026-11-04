@@ -1,0 +1,61 @@
+def reads: [["dispatcher-first-word", "00bfb028", 4], ["modal75-state", "0146761e", 2], ["modal75-event", "0146777a", 2], ["open-node", "009571d0", 4], ["picker-mode-9544f8", "009544f8", 4], ["picker-modes-950474", "00950474", 8], ["picker-mode-954500", "00954500", 4], ["cell-75-0-0", "00cd1ae4", 4], ["cell-75-0-2", "00cd1c54", 4], ["cell-75-0-4", "00cd1dc4", 4], ["cell-75-0-6", "00cd1f34", 4], ["cell-75-0-8", "00cd20a4", 4], ["cell-75-0-13", "00cd243c", 4], ["cell-75-0-49", "00cd3e1c", 4], ["resident", "runtime:rb_resident", 1024], ["live-settings", "0096cc64", 450]];
+def keep_resident: [{"read": "resident", "phase": "package-menu-prefix", "source_read": "resident"}];
+def steps($list): [$list[] | [.[0]] + .[1]];
+def trace_sites: [
+  ["00bfb028", "shared-modal-entry"],
+  ["00bfb02c", "stock-fallback-body"],
+  ["runtime:rb_call_transition", "owned-transition-call"],
+  ["runtime:rb_call_stage_open", "stage-open-call"],
+  ["00c6e378", "stock-picker-up"],
+  ["00c6eb44", "stock-picker-down"],
+  ["00c6f14c", "stock-picker-left"],
+  ["00c70528", "stock-picker-right"],
+  ["00c72e10", "stock-picker-ok"],
+  ["00c76650", "stock-picker-back"],
+  ["00c7a514", "stock-picker-router-tail"],
+  ["00c7985c", "retired-c7985c"],
+  ["00c79a40", "retired-c79a40"],
+  ["00c7a6ac", "retired-c7a6ac"],
+  ["00c7a7e4", "retired-c7a7e4"],
+  ["00c7a978", "retired-c7a978"],
+  ["00c7ac84", "retired-c7ac84"],
+  ["00c7aef4", "retired-c7aef4"],
+  ["00c7af6c", "retired-c7af6c"],
+  ["00c7afc8", "retired-c7afc8"]
+];
+# The pilot's pulse; the default 3M directional hold went unconsumed in stock-role routes.
+def segment($phase; $capture; $list): {"phase": $phase, "capture": $capture, "key_pulse": {"hold_instructions": 8000000, "release_instructions": 8000000}, "steps": steps($list), "reads": reads, "read_preservations": keep_resident};
+# The installed package appends two rows to the shooting root (menu/recipe_bank_ui.h), rows 33 and 34,
+# so UP from row 2 wraps to row 34, where crawl-5's uninstalled route wraps to row 32.
+def package_route($route): if $route[1] == ["up", [1, 5, 32]] then [$route[0], ["up", [1, 5, 34]], ["up", [1, 5, 33]]] + $route[1:] else $route end;
+[ .[] as $c
+  | ($c.keys | .[0:1]) as $enter
+  | package_route($c.route) as $route
+  | { name: "picker-\($c.setting)",
+      doc: {
+        "schema": 1,
+        "entry": "Stock-dispatcher control and owned-picker candidate for the setting-\($c.setting) picker (crawl-5 node \($c.picker)). The qualified package prefix uses MENU to reach the live view (67,56,0), crawl-5 root 0; the route follows crawl-5's recorded path to the picker's row. In the picker, DOWN and UP move one row and back, RIGHT leaves the picker open, LEFT and OK leave it with the selected value, and BACK leaves it; DOWN, UP and entering post the property's value event 0x1d when 0x00d586bc reports it and BACK may post property 0x27d (E-MENU-ENGINE-OBSERVE-150); live-setting stores are admitted only from the stock property setter, in both roles. After rollback OK and BACK run through the restored stock dispatcher and are observed, not asserted: in the first picker-239 stock run, OK after unload opened the picker of the row above the cursor. Every expected menu tuple is a crawl-5 edge's landing\(if $c.setting == 214 then ", except the DOWN and UP pair, which crawl-5 did not expand from the picker's second and third rows and which this file observes" else "" end).",
+        "source_bindings": [
+          {"source": "private-data/scratch/ControllerStrategy/crawl-5/crawl-graph.json (mechanism d49b2c80, E-MODAL-MENU-OKPATHS-150): node \($c.picker) path \($c.route | map(.[0]) + ["ok"] | join(","))", "expectation": "Each step's menu tuple is the landing of the crawl-5 edge for that key from the previous step's screen."},
+          {"source": "menu/recipe_bank_ui.h and private-data/scratch/ControllerStrategy/picker-runs/picker-15-stock (UP from (1,5,2) landed on (1,5,34))", "expectation": "With the package installed the shooting root has two more rows, 33 and 34, so a route whose first move is UP from row 2 passes rows 34 and 33 before crawl-5's row 32."},
+          {"source": "private-data/scratch/ControllerStrategy/picker-fold/picker-document.json", "expectation": "Controller-75 state-0 cells for events 0, 2, 4, 6, 8, 13 and 49 are picker cells, and node \($c.setting)'s record is a picker node."}
+        ],
+        "trace_sites": trace_sites,
+        "before_unload": (
+          [ {"phase": "package-menu-prefix", "capture": "picker-live-view", "steps": [["menu", 67, 56, 0]], "reads": reads},
+            segment("picker-route"; "picker-parent"; $route) ]
+          + (if $c.setting == 214
+             then [ segment("owned-picker-enter"; "owned-picker-entered"; $enter),
+                    (segment("owned-picker-move"; "owned-picker-moved"; [["down", [1, 214, 1]], ["up", [1, 214, 0]]]) + {"observe": true}),
+                    segment("owned-picker-keys"; "owned-picker-keys"; $c.from_picker) ]
+             elif $c.setting == 246
+             # With the 8M hold, UP after DOWN left cursor 1 in both roles of the first picker-246 run.
+             then [ segment("owned-picker-keys"; "owned-picker-keys"; $c.keys) | del(.key_pulse) ]
+             else [ segment("owned-picker-keys"; "owned-picker-keys"; $c.keys) ]
+             end)),
+        "after_unload": [
+          (segment("unloaded-picker"; "unloaded-picker"; (if $c.setting == 214 then $c.from_picker_after else $c.after end)) + {"observe": true, "read_expectations": [{"read": "dispatcher-first-word", "hex": "f04f2de9"}]})
+        ]
+      } } ]
+
+

@@ -477,7 +477,7 @@ completedReceipt count = object
   , "pending_stores" .= (0 :: Int), "install_core" .= (0 :: Int), "rollback_core" .= (1 :: Int)
   , "checked_resource_writes" .= (7 :: Int), "checked_identity_writes" .= (0 :: Int)
   , "checked_scheduler_writes" .= (10 :: Int), "checked_context_writes" .= (40 :: Int), "checked_vfp_owner_writes" .= (2 :: Int)
-  , "audited_writes" .= (12 :: Int), "admitted_settings_writes" .= (0 :: Int)
+  , "audited_writes" .= (12 :: Int), "admitted_settings_writes" .= (0 :: Int), "admitted_reload_writes" .= (0 :: Int)
   , "failure" .= Null ]
 
 healthyGuard :: Value
@@ -726,7 +726,21 @@ runtimeBindingTests = do
         , ("publication duplicate",changeLifetime "publications" (array (take 1 rows ++ take 1 rows ++ drop 2 rows)))
         , ("publication partial vector",changeLifetime "publications" (array (drop 1 rows)))
         , ("publication alias",changeLifetime "publications" (array (map (set "address" (Number 0x40020000)) (take 1 rows) ++ drop 1 rows)))
+        , ("missing settings reloads",set "lifetime" (case lifetime of Object fields -> Object (KM.delete "settings_reloads" fields); other -> other) declaration)
+        , ("unaligned reload call",changeReload "call" (Number 0x006309ee))
+        , ("reload return equal to its call",changeReload "return" (Number 0x006309ec))
+        , ("unaligned reload copy store",changeReload "copy_store" (Number 0x00722136))
+        , ("reload target before the settings block",changeReload "target" (array [Number 0x0096cc60, Number 0x0096cd8c]))
+        , ("reload target past the settings block",changeReload "target" (array [Number 0x0096cc74, Number 0x0096ce28]))
+        , ("empty reload target",changeReload "target" (array [Number 0x0096cc74, Number 0x0096cc74]))
+        , ("reload copy store inside the setter",changeReload "copy_store" (Number 0x0062ff54))
+        , ("reload call inside the runtime",changeReload "call" (Number 0x10000))
+        , ("repeated reload sites",changeLifetime "settings_reloads" (array (replicate 2 stockReload)))
+        , ("unknown reload key",changeLifetime "settings_reloads" (array [set "writer" (String "reload") stockReload]))
+        , ("five reloads",changeLifetime "settings_reloads" (array [set "call" (Number (fromIntegral (0x00500000 + index * 8 :: Int))) stockReload | index <- [0 .. 4]]))
         ]
+      stockReload = case get "settings_reloads" lifetime of Array entries | entry : _ <- foldr (:) [] entries -> entry; _ -> Null
+      changeReload key value = changeLifetime "settings_reloads" (array [set key value stockReload])
   request <- either (error . ("lifetime declaration fixture: " ++)) pure (parseModalBeginRequest declaration)
   check "typed lifetime request preserves source images and physical vector order" (modalBeginRequestJson request == declaration)
   mapM_ (\(label,value) -> check ("lifetime request refuses " ++ label) (isLeft (parseModalBeginRequest value))) malformedDeclarations
@@ -735,9 +749,11 @@ runtimeBindingTests = do
         [range pc (pc+4) | pc <- [0x10000,0x10010,0x10024,0x10044,0x40240,0x4031c,0x436b8,0x43690,0x436f0
           ,0x43720,0x43848,0x42440,0xd0240,0xd031c,0xd36b8,0xd3690,0xd36f0,0xd3720,0xd3848,0xd2440]])
       fetchJson spans = object ["sources" .= ([] :: [Value]), "ranges" .= map pair spans]
+      reloadSpans = [range 0x006309ec 0x006309f0, range 0x006309f0 0x006309f4, range 0x00637ee4 0x00637ee8, range 0x00637ee8 0x00637eec]
       watch spans records = digested (object
-        [ "enabled" .= True, "views" .= ("fixed" :: String), "ranges" .= map pair spans, "records" .= records, "violation" .= Null
-        , "classes" .= [object ["range" .= pair span_, "kinds" .= (["cpu-write","host-write","model-bus-write"] :: [String])] | span_ <- spans]
+        [ "enabled" .= True, "views" .= ("fixed" :: String), "ranges" .= map pair (unionWatchRanges (spans ++ reloadSpans)), "records" .= records, "violation" .= Null
+        , "classes" .= ([object ["range" .= pair span_, "kinds" .= (["cpu-write","host-write","model-bus-write"] :: [String])] | span_ <- spans]
+            ++ [object ["range" .= pair span_, "kinds" .= (["cpu-fetch"] :: [String])] | span_ <- reloadSpans])
         , "fetch_attribution" .= fetchJson fetches ])
       addresses = [0x20000,0x20004 .. 0x20378] :: [Word32]
       writes =
@@ -747,19 +763,23 @@ runtimeBindingTests = do
           (cpu 1 address address 4 clock))) | (address,clock) <- zip (reverse addresses) [224 ..]]
       fullWatch = watch expectedWrites writes
       exactReceipt = foldr (\key value -> set key (Number 0) value) (completedReceipt 223)
-        ["checked_resource_writes","checked_identity_writes","checked_scheduler_writes","checked_context_writes","checked_vfp_owner_writes","audited_writes","admitted_settings_writes"]
+        ["checked_resource_writes","checked_identity_writes","checked_scheduler_writes","checked_context_writes","checked_vfp_owner_writes","audited_writes","admitted_settings_writes","admitted_reload_writes"]
       clean = set "watch" (withoutRecords fullWatch) (set "lifetime" exactReceipt (set "task_identity_verified" (Bool False)
         (set "task_entries" (array []) (completedEnvelope 223))))
-  rangeBound <- either error pure (watchRangeLimit (length expectedWrites))
-  shortRangeBound <- either error pure (watchRangeLimit (length expectedWrites - 1))
+  let watchedCount = length (unionWatchRanges (expectedWrites ++ reloadSpans))
+  rangeBound <- either error pure (watchRangeLimit watchedCount)
+  shortRangeBound <- either error pure (watchRangeLimit (watchedCount - 1))
   fullAcknowledgement <- either error pure (lifetimeWatchAcknowledgement fullWatch >>= parseModalLifetimeWatchAck)
   fullObservation <- either error pure (parseModalLifetimeWatch modalLifetimeWriterLimit fullWatch)
   check "continuous source watch exceeds only the unchanged UI range cap" $
-    length expectedWrites > 8 && isLeft (checkExecutionWrites ForbidProtectedWrites modalLifetimeWriterLimit expectedWrites [] fullAcknowledgement fullObservation)
+    length expectedWrites > 8 && isLeft (checkExecutionWrites ForbidProtectedWrites modalLifetimeWriterLimit expectedWrites reloadSpans fullAcknowledgement fullObservation)
   check "source-bound checker refuses more ranges than its explicit bound" $
-    isLeft (checkExecutionWritesWithRangeLimit shortRangeBound ForbidProtectedWrites modalLifetimeWriterLimit expectedWrites [] fullAcknowledgement fullObservation)
+    isLeft (checkExecutionWritesWithRangeLimit shortRangeBound ForbidProtectedWrites modalLifetimeWriterLimit expectedWrites reloadSpans fullAcknowledgement fullObservation)
   check "source-bound checker accepts its complete finite range bound" $
-    not (isLeft (checkExecutionWritesWithRangeLimit rangeBound ForbidProtectedWrites modalLifetimeWriterLimit expectedWrites [] fullAcknowledgement fullObservation))
+    not (isLeft (checkExecutionWritesWithRangeLimit rangeBound ForbidProtectedWrites modalLifetimeWriterLimit expectedWrites reloadSpans fullAcknowledgement fullObservation))
+  check "array audit refuses a watch without the reload fetch classes" $
+    isLeft (checkLifetimeArrayAudit request (Right (set "classes" (array (take (length expectedWrites) (values (get "classes" fullWatch)))) fullWatch))
+      (parseFinalModalWatch fullWatch))
   audit <- either error pure (checkLifetimeArrayAudit request (Right fullWatch) (parseFinalModalWatch fullWatch))
   report <- either error pure (parseModalReport permitLimit clean)
   finalFull <- either error pure (parseFinalModalWatch fullWatch)
@@ -827,10 +847,10 @@ runtimeBindingTests = do
   let fetchRow physical clock = set "source" (String "cpu-fetch") (set "value" Null (set "before" Null
         (set "pc" (Number (fromIntegral physical)) (cpu 0 physical physical 4 clock))))
       retiredWatch records = set "fetch_attribution" (fetchJson helperFetches) (digested (object
-        [ "enabled" .= True, "views" .= ("fixed" :: String), "ranges" .= map pair (unionWatchRanges (scopedWrites ++ retiredSpans))
+        [ "enabled" .= True, "views" .= ("fixed" :: String), "ranges" .= map pair (unionWatchRanges (scopedWrites ++ retiredSpans ++ reloadSpans))
         , "records" .= records, "violation" .= Null
         , "classes" .= ([object ["range" .= pair span_, "kinds" .= (["cpu-write","host-write","model-bus-write"] :: [String])] | span_ <- scopedWrites]
-            ++ [object ["range" .= pair span_, "kinds" .= (["cpu-fetch"] :: [String])] | span_ <- retiredSpans])
+            ++ [object ["range" .= pair span_, "kinds" .= (["cpu-fetch"] :: [String])] | span_ <- retiredSpans ++ reloadSpans])
         , "fetch_attribution" .= fetchJson fetches ]))
       published = take 223 writes ++ [forwardEntry, reverseEntry] ++ reverseRows
       completes request_ rowsWatch = either (const False) (const True) $ do
@@ -852,30 +872,80 @@ runtimeBindingTests = do
       (retiredWatch (published ++ [fetchRow 0x00c7aef4 9000]))))))
   let settingsRow pc = set "pc" (Number pc) (set "value" (Number 0x21) (set "before" (array [Number 0x20]) (cpu 0 0x0096ccca 0x0096ccca 1 100)))
       settingsWatch pc = set "fetch_attribution" (fetchJson helperFetches) (watch scopedWrites (take 100 published ++ [settingsRow pc] ++ drop 100 published))
-      settingsCompletes admitted rowsWatch = either (const False) (const True) $ do
+      settingsCompletesWith resource setter reload rowsWatch = either (const False) (const True) $ do
         audit_ <- checkLifetimeArrayAudit scopedRequest (Right rowsWatch) (parseFinalModalWatch rowsWatch)
         final_ <- parseFinalModalWatch rowsWatch
         report_ <- parseModalReport permitLimit (set "watch" (withoutRecords rowsWatch) (set "lifetime"
-          (set "admitted_settings_writes" (Number admitted) (set "checked_resource_writes" (Number 1) scopedReceipt)) completedScoped))
+          (set "admitted_reload_writes" (Number reload) (set "admitted_settings_writes" (Number setter)
+            (set "checked_resource_writes" (Number resource) scopedReceipt))) completedScoped))
         checkCompletedModalLifetime scopedRequest audit_ final_ report_
+      settingsCompletes admitted = settingsCompletesWith 1 admitted 0
   check "a counted settings change from the stock property setter completes" (settingsCompletes 1 (settingsWatch 0x0062ff54))
   check "an uncounted settings change from the stock property setter refuses" (not (settingsCompletes 0 (settingsWatch 0x0062ff54)))
   check "a settings change from outside every settings writer refuses" (not (settingsCompletes 1 (settingsWatch 0x0072212c)))
   check "the completed settings writes name the setter row"
     (fmap (map (get "pc") . values . get "writes" . settingsWritesJson)
       (parseFinalModalWatch (settingsWatch 0x0062ff54) >>= completedSettingsWrites scopedRequest) == Right [Number 0x0062ff54])
-  let settingsWrite address value = object ["instructions" .= (1 :: Int), "pc" .= (0x0062ff54 :: Word32), "address" .= (address :: Word32)
-        , "size" .= (1 :: Int), "before" .= [0x20 :: Int], "value" .= (value :: Int)]
-      sequenceOf writes_ = either error id (parseSettingsWrites (object ["schema" .= (1 :: Int), "writes" .= writes_]))
-      stockSequence = sequenceOf [settingsWrite 0x0096ccca 0x21, settingsWrite 0x0096ccd2 0xc9]
+  let fetchOn core physical = set "core" (Number core) (fetchRow physical 100)
+      reloadStore core address = set "pc" (Number 0x00722134) (set "value" (Number 0xa9c9) (set "before" (array [Number 0x20, Number 0x20])
+        (cpu core address address 2 100)))
+      reloadWatch reloadRows = set "fetch_attribution" (fetchJson helperFetches) (watch scopedWrites (take 100 published ++ reloadRows ++ drop 100 published))
+      bracketed = [fetchOn 0 0x006309ec, reloadStore 0 0x0096cc74, fetchOn 0 0x006309f0]
+      setterThenReload = [settingsRow 0x0062ff54] ++ bracketed
+  check "a counted reload copy store inside its call bracket completes" (settingsCompletesWith 1 0 1 (reloadWatch bracketed))
+  check "an uncounted reload copy store refuses" (not (settingsCompletesWith 1 0 0 (reloadWatch bracketed)))
+  check "a reload copy store counted as a setter write refuses" (not (settingsCompletesWith 1 1 0 (reloadWatch bracketed)))
+  check "setter and reload stores complete with both counters" (settingsCompletesWith 2 1 1 (reloadWatch setterThenReload))
+  check "the completed settings writes order setter and reload rows with their writer kinds"
+    (fmap (map (\write -> (get "writer" write, get "pc" write)) . values . get "writes" . settingsWritesJson)
+      (parseFinalModalWatch (reloadWatch setterThenReload) >>= completedSettingsWrites scopedRequest)
+      == Right [(String "setter", Number 0x0062ff54), (String "reload", Number 0x00722134)])
+  mapM_ (\(label, rows_) -> check ("a reload copy store refuses " ++ label) (not (settingsCompletesWith 1 0 1 (reloadWatch rows_))))
+    [ ("without its call fetch", [reloadStore 0 0x0096ccd2, fetchOn 0 0x006309f0])
+    , ("after its return fetch", [fetchOn 0 0x006309ec, fetchOn 0 0x006309f0, reloadStore 0 0x0096cc74])
+    , ("after a return fetch alone", [fetchOn 0 0x006309f0, reloadStore 0 0x0096cc74])
+    , ("on the other core", [fetchOn 1 0x006309ec, reloadStore 0 0x0096cc74, fetchOn 1 0x006309f0])
+    , ("from another PC", [fetchOn 0 0x006309ec, set "pc" (Number 0x00722138) (reloadStore 0 0x0096cc74), fetchOn 0 0x006309f0])
+    , ("outside its target", [fetchOn 0 0x006309ec, reloadStore 0 0x0096cc70, fetchOn 0 0x006309f0]) ]
+  let identityStore core address = set "value" (Number 0x2020) (reloadStore core address)
+      wordStore = set "pc" (Number 0x00722134) (set "value" (Number 0x20202020) (set "before" (array (replicate 4 (Number 0x20)))
+        (cpu 0 0x0096cc74 0x0096cc74 4 100)))
+  check "an unchanged copy store advances the cursor to the next admitted halfword"
+    (settingsCompletesWith 2 0 1 (reloadWatch [fetchOn 0 0x006309ec, identityStore 0 0x0096cc74, reloadStore 0 0x0096cc76, fetchOn 0 0x006309f0]))
+  mapM_ (\(label, resource, rows_) -> check ("a later copy store refuses after " ++ label ++ " closes the bracket")
+      (not (settingsCompletesWith resource 0 1 (reloadWatch rows_))))
+    [ ("an out-of-order store", 2, [fetchOn 0 0x006309ec, identityStore 0 0x0096cc76, reloadStore 0 0x0096cc74, fetchOn 0 0x006309f0])
+    , ("a width-4 store", 2, [fetchOn 0 0x006309ec, wordStore, reloadStore 0 0x0096cc74, fetchOn 0 0x006309f0])
+    , ("a skipped halfword", 3, [fetchOn 0 0x006309ec, identityStore 0 0x0096cc74, identityStore 0 0x0096cc78, reloadStore 0 0x0096cc76, fetchOn 0 0x006309f0]) ]
+  let restoreCopy call changed = [fetchOn 1 call]
+        ++ [if address == changed then reloadStore 1 address else identityStore 1 address | address <- [0x0096cc64, 0x0096cc66 .. 0x0096ce24]]
+        ++ [fetchOn 1 0x00637ee8]
+  check "the BACK restore admits its changed halfword inside a whole-block copy"
+    (settingsCompletesWith 225 0 1 (reloadWatch (restoreCopy 0x00637ee4 0x0096ccd2)))
+  check "the BACK restore admits a changed halfword at the block start"
+    (settingsCompletesWith 225 0 1 (reloadWatch (restoreCopy 0x00637ee4 0x0096cc64)))
+  check "the property-write reload call does not admit a whole-block copy's change before its target"
+    (not (settingsCompletesWith 225 0 1 (reloadWatch (restoreCopy 0x006309ec 0x0096cc64))))
+  check "a fetch row beside a reload site refuses" (not (settingsCompletesWith 0 0 0 (reloadWatch [fetchOn 0 0x006309f4])))
+  check "a reload call and return fetch pair without stores completes" (settingsCompletesWith 0 0 0 (reloadWatch [fetchOn 1 0x006309ec, fetchOn 1 0x006309f0]))
+  let settingsWrite writer address value = object ["writer" .= (writer :: String), "instructions" .= (1 :: Int), "pc" .= (0x0062ff54 :: Word32)
+        , "address" .= (address :: Word32), "size" .= (1 :: Int), "before" .= [0x20 :: Int], "value" .= (value :: Int)]
+      sequenceOf writes_ = either error id (parseSettingsWrites (object ["schema" .= (2 :: Int), "writes" .= writes_]))
+      stockSequence = sequenceOf [settingsWrite "setter" 0x0096ccca 0x21, settingsWrite "reload" 0x0096ccd2 0xc9]
   check "equal stock and owned settings sequences compare equal"
-    (compareSettingsWrites stockSequence (sequenceOf [settingsWrite 0x0096ccca 0x21, settingsWrite 0x0096ccd2 0xc9]) == Right ())
+    (compareSettingsWrites stockSequence (sequenceOf [settingsWrite "setter" 0x0096ccca 0x21, settingsWrite "reload" 0x0096ccd2 0xc9]) == Right ())
   check "a reordered owned settings sequence fails comparison"
-    (isLeft (compareSettingsWrites stockSequence (sequenceOf [settingsWrite 0x0096ccd2 0xc9, settingsWrite 0x0096ccca 0x21])))
+    (isLeft (compareSettingsWrites stockSequence (sequenceOf [settingsWrite "reload" 0x0096ccd2 0xc9, settingsWrite "setter" 0x0096ccca 0x21])))
   check "an extra owned settings write fails comparison"
-    (isLeft (compareSettingsWrites stockSequence (sequenceOf [settingsWrite 0x0096ccca 0x21, settingsWrite 0x0096ccd2 0xc9, settingsWrite 0x0096ccca 0x20])))
+    (isLeft (compareSettingsWrites stockSequence (sequenceOf [settingsWrite "setter" 0x0096ccca 0x21, settingsWrite "reload" 0x0096ccd2 0xc9, settingsWrite "setter" 0x0096ccca 0x20])))
   check "a different owned settings value fails comparison"
-    (isLeft (compareSettingsWrites stockSequence (sequenceOf [settingsWrite 0x0096ccca 0x21, settingsWrite 0x0096ccd2 0xc8])))
+    (isLeft (compareSettingsWrites stockSequence (sequenceOf [settingsWrite "setter" 0x0096ccca 0x21, settingsWrite "reload" 0x0096ccd2 0xc8])))
+  check "a missing owned reload write fails comparison"
+    (isLeft (compareSettingsWrites stockSequence (sequenceOf [settingsWrite "setter" 0x0096ccca 0x21])))
+  check "the same store from another writer kind fails comparison"
+    (isLeft (compareSettingsWrites stockSequence (sequenceOf [settingsWrite "setter" 0x0096ccca 0x21, settingsWrite "setter" 0x0096ccd2 0xc9])))
+  check "a schema1 settings sequence refuses"
+    (isLeft (parseSettingsWrites (object ["schema" .= (1 :: Int), "writes" .= ([] :: [Value])])))
   let withoutSettings = filter (\span_ -> let (low,high) = watchRangeBounds span_ in not (low <= 0x96cc64 && 0x96ce26 <= high)) expectedWrites
       incompleteWatch = watch withoutSettings writes
   check "array audit requires settings and all other expected write classes" $

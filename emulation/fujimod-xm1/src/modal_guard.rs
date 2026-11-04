@@ -133,7 +133,8 @@ pub(crate) struct InstalledGuard {
     watch: Box<MemoryWatch>,
     write_ranges: Vec<WatchRange>,
     fetch_ranges: Vec<WatchRange>,
-    retired_ranges: Vec<WatchRange>,
+    /// Retired extents, then each reload's call and return words.
+    fetch_classes: Vec<WatchRange>,
     protected_sites: Vec<Guest>,
     row_cursor: usize,
     physical_failure: Option<String>,
@@ -228,16 +229,17 @@ impl InstalledGuard {
         let write_ranges: Vec<_> = lifetime.config().watched_extents().iter().map(|extent| WatchRange {
             start: u64::from(extent.start().0), end: u64::from(extent.end().0), kinds: WatchKinds::WRITES,
         }).collect();
-        let retired_ranges: Vec<_> = lifetime.config().retired_extents().iter().map(|extent| WatchRange {
+        let word_class = |site: Guest| WatchRange { start: u64::from(site.0), end: u64::from(site.0) + 4, kinds: WatchKinds::CPU_FETCH };
+        let fetch_classes: Vec<_> = lifetime.config().retired_extents().iter().map(|extent| WatchRange {
             start: u64::from(extent.start().0), end: u64::from(extent.end().0), kinds: WatchKinds::CPU_FETCH,
-        }).collect();
-        if retired_ranges.iter().any(|retired| fetch_ranges.iter().any(|site| site.start < retired.end && retired.start < site.end)) {
-            return Err("modal retired extent overlaps a guarded instruction site".into());
+        }).chain(lifetime.config().settings_reloads().iter().flat_map(|reload| [word_class(reload.call), word_class(reload.resume)])).collect();
+        if fetch_classes.iter().any(|class| fetch_ranges.iter().any(|site| site.start < class.end && class.start < site.end)) {
+            return Err("modal retired extent or settings reload site overlaps a guarded instruction site".into());
         }
         let watch = session.board.memory_watch_begin_with_fetch_attribution(
-            write_ranges.iter().chain(&retired_ranges).cloned().collect(),
+            write_ranges.iter().chain(&fetch_classes).cloned().collect(),
             attribution, WRITE_LIMIT, maps.to_vec(), fujimod_emulator::board::observation::ViewPolicy::Fixed)?;
-        Ok(Self { contexts: config.contexts, lifetime, watch, write_ranges, fetch_ranges, retired_ranges,
+        Ok(Self { contexts: config.contexts, lifetime, watch, write_ranges, fetch_ranges, fetch_classes,
             protected_sites, row_cursor: 0, physical_failure: None, row_digest: RefCell::default() })
     }
 
@@ -427,7 +429,7 @@ fn union_ranges(writes: &[WatchRange], fetches: &[WatchRange]) -> Vec<[u64; 2]> 
     }
     merged
 }
-/// Write classes for the lifetime extents, then one fetch class per retired extent.
+/// Write classes for the lifetime extents, then the fetch classes.
 struct ClassEvidence<'a> { writes: &'a [WatchRange], fetches: &'a [WatchRange] }
 impl Serialize for ClassEvidence<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -455,14 +457,14 @@ impl Serialize for WatchEvidence<'_> {
         digest.advance(pending).map_err(serde::ser::Error::custom)?;
         let mut state = serializer.serialize_map(Some(if matches!(self.records, WatchRecords::Rows) { 9 } else { 8 }))?;
         state.serialize_entry("enabled", &true)?;
-        state.serialize_entry("ranges", &union_ranges(&guard.write_ranges, &guard.retired_ranges))?;
+        state.serialize_entry("ranges", &union_ranges(&guard.write_ranges, &guard.fetch_classes))?;
         if matches!(self.records, WatchRecords::Rows) {
             state.serialize_entry("records", records.rows_since(0).map_err(serde::ser::Error::custom)?)?;
         }
         state.serialize_entry("record_count", &digest.rows)?;
         state.serialize_entry("records_sha256", &digest.hex())?;
         state.serialize_entry("violation", &records.violation())?;
-        state.serialize_entry("classes", &ClassEvidence { writes: &guard.write_ranges, fetches: &guard.retired_ranges })?;
+        state.serialize_entry("classes", &ClassEvidence { writes: &guard.write_ranges, fetches: &guard.fetch_classes })?;
         state.serialize_entry("views", "fixed")?;
         state.serialize_entry("fetch_attribution", &Attribution { sources: [], ranges: RangeEvidence(&guard.fetch_ranges) })?;
         state.end()

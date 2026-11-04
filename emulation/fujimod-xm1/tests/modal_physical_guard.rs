@@ -954,3 +954,94 @@ fn fetch_rows_outside_retired_extents_do_not_disappear() {
     let row = serde_json::json!({"source": "cpu-fetch", "address": 0x2000, "physical": 0x2000, "size": 4, "core": 0, "pc": 0x2000, "instructions": 1});
     assert_eq!(monitor.observe_row(&row), Err(LifetimeFailure::MalformedRow));
 }
+
+const RELOAD_CALL: u64 = 0x0063_09ec;
+const RELOAD_RETURN: u64 = 0x0063_09f0;
+const COPY_STORE: u64 = 0x0072_2134;
+const LIVE_SETTINGS: u64 = 0x0096_cc64;
+const RELOAD_TARGET: u64 = 0x0096_cc74;
+
+/// Both cores start at the reload call with r5 holding the halfword the copy store writes to the reload target in r12.
+fn reload_board() -> Board {
+    const BYTES: u64 = 0x0100_0000;
+    let graph = Graph {
+        processors: (0..2).map(|_| Processor {
+            model: Model::CortexR5F, mprofile: None, released: true,
+            rprofile: Some(rprofile::core::Options::default()),
+            registers: vec![(Register::Pc, RELOAD_CALL), (Register::Pstate, 0xd3), (arm::CORE[5], 0xa9c9), (arm::CORE[12], RELOAD_TARGET)],
+        }).collect(),
+        ram: vec![Ram { base: 0, size: BYTES as usize }],
+        mappings: (0..2).map(|core| MemoryMap { core, address: 0, physical: 0, size: BYTES as usize, permissions: 7 }).collect(),
+        dma_mappings: vec![BusMapping::ram(0, BYTES as usize)],
+        decoders: vec![],
+        peripherals: vec![],
+        instructions_per_tick: Ratio::new(1, 1).unwrap(),
+    };
+    let mut board = graph.build(factory::Options {
+        engine: factory::Engine::Unicorn, translation_cache_bytes: 1 << 20,
+    }, Bus::new(Mode::Strict), None).unwrap();
+    board.set_execution_policy(ExecutionPolicy::Exact).unwrap();
+    // bl COPY_STORE; b . at the return; strh r5,[r12],#2; bx lr at the copy store.
+    board.write_physical(RELOAD_CALL, &[0xeb03_c5d0u32, 0xeaff_fffe].map(u32::to_le_bytes).concat()).unwrap();
+    board.write_physical(COPY_STORE, &[0xe0cc_50b2u32, 0xe12f_ff1e].map(u32::to_le_bytes).concat()).unwrap();
+    board
+}
+
+fn reload_monitor() -> LifetimeMonitor {
+    const INSTALL: u32 = 0x0100_0000;
+    let words = [0xe92d_4010u32, 0xe581_3000, 0xe92d_4010, 0xe581_3000];
+    let bytes: Vec<_> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+    let publications: Vec<_> = (0..223u32).map(|index| serde_json::json!({
+        "address": 0x0120_0000 + index * 4, "old": 0, "new": index + 1,
+    })).collect();
+    let request: LifetimeRequest = serde_json::from_value(serde_json::json!({
+        "runtime": [INSTALL, INSTALL + 0x10000], "resident": [INSTALL + 0x8000, INSTALL + 0x8400],
+        "readonly": [{"start": INSTALL, "bytes": bytes}],
+        "install": {"entry": {"pc": INSTALL, "word": words[0]}, "writer": {"pc": INSTALL + 4, "word": words[1]}},
+        "rollback": {"entry": {"pc": INSTALL + 8, "word": words[2]}, "writer": {"pc": INSTALL + 12, "word": words[3]}},
+        "publications": publications,
+        "settings_writers": [[0x0062_4694, 0x0063_09c4]],
+        "settings_reloads": [{"call": RELOAD_CALL, "return": RELOAD_RETURN, "copy_store": COPY_STORE, "target": [RELOAD_TARGET, 0x0096_cd8c]}],
+    })).unwrap();
+    let config = request.into_config(vec![
+        PhysicalExtent::new(Guest(0x40000), 0xdae0).unwrap(),
+        PhysicalExtent::new(Guest(0xd0000), 0xdaa0).unwrap(),
+    ]).unwrap();
+    let mut memory = LifetimeBytes(Default::default());
+    for (extent, image) in config.readonly_images() {
+        memory.0.extend(image.iter().enumerate().map(|(index, byte)| (extent.start().0 + index as u32, *byte)));
+    }
+    LifetimeMonitor::new(config, &memory).unwrap()
+}
+
+#[test]
+fn executed_reload_call_brackets_its_copy_store_in_row_order_on_either_core() {
+    for (core, begin, admitted) in [(0, RELOAD_CALL, true), (1, RELOAD_CALL, true), (0, COPY_STORE, false), (1, COPY_STORE, false)] {
+        let board = reload_board();
+        board.write_register(core, arm::CORE[14], RELOAD_RETURN).unwrap();
+        let protected = range(0x2000, 0x2004);
+        let attribution = FetchAttribution::new(CpuDataAttribution::None, vec![protected]).unwrap()
+            .with_instruction_guards(vec![PhysicalInstructionGuard::arm32_little(
+                protected, GuestAddress(0x2000), InstructionCores::Both,
+            ).unwrap()]).unwrap();
+        let mut watch = board.memory_watch_begin_with_fetch_attribution(vec![
+            WatchRange { start: LIVE_SETTINGS, end: LIVE_SETTINGS + 450, kinds: WatchKinds::WRITES },
+            range(RELOAD_CALL, RELOAD_CALL + 4),
+            range(RELOAD_RETURN, RELOAD_RETURN + 4),
+        ], attribution, 16, board.mappings().to_vec(), ViewPolicy::Fixed).unwrap();
+        run(&board, core, begin, if begin == RELOAD_CALL { 4 } else { 3 });
+        let records = watch.records.borrow();
+        let rows = records.rows_since(0).unwrap();
+        let shape: Vec<_> = rows.iter().map(|row| (row["source"].as_str().unwrap().to_owned(), row["physical"].as_u64().unwrap(), row["core"].as_u64().unwrap())).collect();
+        let store = ("cpu-write".to_owned(), RELOAD_TARGET, core as u64);
+        let resume = ("cpu-fetch".to_owned(), RELOAD_RETURN, core as u64);
+        let expected = if begin == RELOAD_CALL { vec![("cpu-fetch".to_owned(), RELOAD_CALL, core as u64), store, resume] } else { vec![store, resume] };
+        assert_eq!(shape, expected, "core {core} from {begin:#x}");
+        let mut monitor = reload_monitor();
+        let result = rows.iter().try_for_each(|row| monitor.observe_row(row));
+        assert_eq!(result, if admitted { Ok(()) } else { Err(LifetimeFailure::ResourceChanged) }, "core {core} from {begin:#x}");
+        assert_eq!(monitor.receipt().admitted_reload_writes, u64::from(admitted));
+        drop(records);
+        board.memory_watch_end(&mut watch).unwrap();
+    }
+}
