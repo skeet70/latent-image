@@ -48,18 +48,18 @@ pcLiteral loader base site
 -- | Canonical loader B and the record-2 retained extents as guest ranges.
 footprint :: B.ByteString -> [(Word32, Word32)] -> [Footprint]
 footprint loaderB retained = mapMaybe (\(basis, target, start, end, citation) -> entry basis target start end citation) $
-  [ (AdmissionRead, LoaderA, 0x40000, 0x4dae0, "emulation/Emulation/CriticalPair.hs:59-75,126 (whole loader-A sha256)")
-  , (AdmissionRead, LoaderB, 0xd0000, 0xddaa0, "emulation/Emulation/CriticalPair.hs:59-75,127 (whole loader-B sha256)")
+  [ (AdmissionRead, LoaderB, 0xd0000, 0xddaa0, "emulation/Emulation/LoaderPrefixWitness.hs:456-458,524 (stock-wait branch scan and loader-B digest of the prefix facts)")
+  , (RuntimePremise, LoaderA, 0x409ac, 0x40b00, "emulation/Emulation/CriticalPair.hs:129-132 (loader-A orchestration calls the initializer at 0x40430, which fills the core-0 table the critical pair reads, before its first dispatch submits a task); replacement/startup_artifact/Replacement/StartupArtifact/Adapters.hs record2Premise (core-0 boot stack)")
   ]
   ++ services LoaderA 0x40000 ++ services LoaderB 0xd0000 ++
-  [ (AdmissionRead, Image4, 0x7235d8, 0x72360c, "emulation/Emulation/CriticalPair.hs:129-131 (critical entry prologue)")
-  , (AdmissionRead, Image4, 0x725a0c, 0x725a34, "emulation/Emulation/CriticalPair.hs:138-139 (root pair installation)")
-  , (AdmissionRead, Image4, 0x725dd8, 0x725de4, "emulation/Emulation/CriticalPair.hs:132 (task103 wrapper prologue)")
-  , (AdmissionRead, Image4, 0x725dfc, 0x725e04, "emulation/Emulation/CriticalPair.hs:133 (entry call)")
-  , (AdmissionRead, Image4, 0x725e80, 0x725e88, "emulation/Emulation/CriticalPair.hs:134 (exit call)")
-  , (AdmissionRead, Image4, 0x725fb0, 0x725fb8, "emulation/Emulation/CriticalPair.hs:135 (exit call)")
-  , (AdmissionRead, Image4, 0x726060, 0x726068, "emulation/Emulation/CriticalPair.hs:136 (exit call)")
-  , (AdmissionRead, Image4, 0x726090, 0x726098, "emulation/Emulation/CriticalPair.hs:137 (wrapper return)")
+  [ (AdmissionRead, Image4, 0x7235d8, 0x72360c, "emulation/Emulation/CriticalPair.hs:130-132 (critical entry prologue)")
+  , (AdmissionRead, Image4, 0x725a0c, 0x725a34, "emulation/Emulation/CriticalPair.hs:139-140 (root pair installation)")
+  , (AdmissionRead, Image4, 0x725dd8, 0x725de4, "emulation/Emulation/CriticalPair.hs:133 (task103 wrapper prologue)")
+  , (AdmissionRead, Image4, 0x725dfc, 0x725e04, "emulation/Emulation/CriticalPair.hs:134 (entry call)")
+  , (AdmissionRead, Image4, 0x725e80, 0x725e88, "emulation/Emulation/CriticalPair.hs:135 (exit call)")
+  , (AdmissionRead, Image4, 0x725fb0, 0x725fb8, "emulation/Emulation/CriticalPair.hs:136 (exit call)")
+  , (AdmissionRead, Image4, 0x726060, 0x726068, "emulation/Emulation/CriticalPair.hs:137 (exit call)")
+  , (AdmissionRead, Image4, 0x726090, 0x726098, "emulation/Emulation/CriticalPair.hs:138 (wrapper return)")
   , (RuntimePremise, Image4, 0x725dd8, 0x726098, "emulation/Emulation/CriticalPairWitness.hs:253 (task103 wrapper calling the pair)")
   , (AdmissionRead, LoaderB, 0xd0430, 0xd09ac, "emulation/Emulation/InterfaceInitializer.hs:469-470 (retained initializer body sha256)")
   , (AdmissionRead, LoaderB, 0xd00a8, 0xd00b0, "emulation/Emulation/InterfaceInitializer.hs:105,112 (caller stack literal load and install)")

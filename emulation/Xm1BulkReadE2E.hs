@@ -26,13 +26,11 @@ import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, resolve, stageViewerRuntime, stagedFirmwarePath, validateFirmware)
 import qualified Emulation.ViewerRuntime as ViewerRuntime
 import FujiModPaths (fujimodRamPushBridge, fujimodRun)
-import EmulatorUsb (EmulatorStart (..), emulatorReadMemory, emulatorUsbApi, startEmulator, stopEmulator)
+import EmulatorUsb (EmulatorStart (..), emulatedClock, emulatorReadMemory, emulatorUsbApi, startEmulator, stopEmulator)
 import FujiAF.ReadBulk (ReadBulkReport (..), bulkCaptureName, bulkChunkCount, bulkWindowAddress, bulkWindowBytes, mkBulkWindow, readBulkResultLine, runReadBulk)
 import FujiAF.ReadRam (mkRamWatch, ramCaptureName, readRamRequestLength, runReadRam, singlePass)
 import FujiAF.Routes (RouteWindow (..))
-import FujiAF.Transport (Clock (..), ensurePrivateDirectory, writePrivateBytes)
-import Data.IORef (atomicModifyIORef', modifyIORef', newIORef)
-import Data.Word (Word64)
+import FujiAF.Transport (ensurePrivateDirectory, writePrivateBytes)
 import GHC.Clock (getMonotonicTimeNSec)
 import Numeric (readHex, showHex)
 import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist)
@@ -123,14 +121,6 @@ freshReceipt root supplied = do
   require (not taken && takeFileName path `notElem` ["", ".", ".."]) "--receipt-output must name a new directory"
   ensurePrivateDirectory destination
   pure destination
-
--- | A session clock that advances 1 us per reading. An emulated 1 MiB bulk IN
--- takes tens of host seconds, past the operations' 5000 ms transfer budget.
-steppingClock :: IO Clock
-steppingClock = do
-  now <- newIORef (1000000000 :: Word64)
-  pure (TimedClock (atomicModifyIORef' now (\tick -> (tick + 1000, tick)))
-                   (\ms -> modifyIORef' now (+ fromIntegral ms * 1000000)))
 
 -- | The emulated bytes of [address, address + count) in 4 KiB reads.
 emulatedBytes :: (Word32 -> Int -> IO B.ByteString) -> Int -> Int -> IO B.ByteString
@@ -236,16 +226,16 @@ run options = do
       let api = emulatorUsbApi emulator
       ensurePrivateDirectory bulkDirectory
       bulkStarted <- getMonotonicTimeNSec
-      report <- steppingClock >>= \clock -> runReadBulk window clock api bulkDirectory
+      report <- emulatedClock >>= \clock -> runReadBulk window clock api bulkDirectory
       bulkFinished <- getMonotonicTimeNSec
       putStrLn (readBulkResultLine report)
       ensurePrivateDirectory d1Directory
       d1Started <- getMonotonicTimeNSec
-      requests <- steppingClock >>= \clock -> runReadRam watch clock api d1Directory
+      requests <- emulatedClock >>= \clock -> runReadRam watch clock api d1Directory
       d1Finished <- getMonotonicTimeNSec
       putStrLn ("read-ram: " ++ show requests ++ " read requests")
       ensurePrivateDirectory aliasDirectory
-      aliasReport <- steppingClock >>= \clock -> runReadBulk aliasWindow clock api aliasDirectory
+      aliasReport <- emulatedClock >>= \clock -> runReadBulk aliasWindow clock api aliasDirectory
       putStrLn ("alias " ++ readBulkResultLine aliasReport)
       captured <- B.readFile (bulkDirectory </> bulkCaptureName window)
       aliasCaptured <- B.readFile (aliasDirectory </> bulkCaptureName aliasWindow)

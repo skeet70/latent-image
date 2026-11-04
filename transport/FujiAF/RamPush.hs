@@ -14,7 +14,7 @@ module FujiAF.RamPush
   , consumedMarkerPath, writeAllocStateFile, writeStateFile
   , ramAllocArguments, ramPushArguments, ramFreeArguments, ramUnloadArguments, ramRelinkArguments
   , ramAllocJournalCapBytes, ramPushJournalCapBytes, ramFreeJournalCapBytes, ramUnloadJournalCapBytes
-  , validateReviewedContract, requireReviewedBytes, requireReviewedState, ReviewedContract(..), publicationContractDigest
+  , validateReviewedContract, reviewedScopeIdentity, sourceIdentityDifferences, requireReviewedBytes, requireReviewedState, ReviewedContract(..), publicationContractDigest
   , RamPushRelinker(..), RustBankInputs(..), runfilesRelinker, PinnedBuild(..)
   , AllowlistPolicy(..), OverrideReason(..), AllowlistOutcome(..), allowlistReceipt
   , pinnedReviewedManifest, withPinnedReviewedBuild, withPinnedReviewedBuildUsing, withRelinkedBuildUsing
@@ -33,6 +33,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.Char (digitToInt)
 import Data.List (isPrefixOf, sort)
+import Data.Maybe (isNothing)
 import Data.Scientific (toBoundedInteger)
 import qualified Data.Text as T
 import qualified Data.Vector as V
@@ -557,10 +558,30 @@ publicationContractDigest :: [Publication] -> String
 publicationContractDigest publications =
   sha256 (encodeCanonical (Array (V.fromList (map publicationContractValue publications))))
 
+-- | The identity 'checkRelinkedBank' derives from the selected allowlist sources.
+composedAllowlistIdentity :: String
+composedAllowlistIdentity = "bank_allowlist_composed_sha256"
+
+-- | The manifest's source identity without 'composedAllowlistIdentity'; a
+-- reviewed contract pins exactly these entries.
+reviewedScopeIdentity :: RamPushManifest -> [(String,String)]
+reviewedScopeIdentity = filter ((/= composedAllowlistIdentity) . fst) . sourceIdentity
+
+-- | One line per identity the manifest names unpinned, the contract pins
+-- unnamed, or both carry with different digests.
+sourceIdentityDifferences :: ReviewedContract -> RamPushManifest -> [String]
+sourceIdentityDifferences contract manifest =
+  [name ++ ": named by the manifest, not pinned" | (name,_) <- built, isNothing (lookup name pinned)]
+  ++ [name ++ ": pinned, not named by the manifest" | (name,_) <- pinned, isNothing (lookup name built)]
+  ++ [name ++ ": pinned " ++ expected ++ ", built " ++ actual | (name,actual) <- built, Just expected <- [lookup name pinned], expected /= actual]
+  where
+    built = reviewedScopeIdentity manifest
+    pinned = reviewedSourceIdentity contract
+
 validateReviewedContract :: ReviewedContract -> RamPushManifest -> IO ()
 validateReviewedContract contract manifest = do
   payload <- requireLivePayload (allocationSize manifest)
-  require (sort (sourceIdentity manifest) == sort (reviewedSourceIdentity contract)) "manifest source identity differs from the compiled reviewed contract"
+  require (null (sourceIdentityDifferences contract manifest)) "manifest source identity differs from the compiled reviewed contract"
   require (publicationContractDigest (manifestPublications manifest) == reviewedPublicationContractDigest contract) "manifest publication contract differs from the compiled reviewed contract"
   require (manifestEntries manifest == payloadEntries payload (allocationBase manifest)) "manifest entry offsets differ from the compiled reviewed layout"
 
@@ -1197,7 +1218,7 @@ checkRelinkedBank variant policy root output manifest = do
   expected <- either (P.reject . ("bank allowlist composition failed before USB: " ++)) pure (composeBankAllowlist variant sources)
   allowlist <- B.readFile (output </> "bank-allowlist-input.json")
   require (allowlist == expected) "bank allowlist output differs from the selected source composition"
-  require (lookup "bank_allowlist_composed_sha256" (sourceIdentity manifest) == Just (sha256 allowlist)) "composed bank allowlist differs from the manifest's source identity"
+  require (lookup composedAllowlistIdentity (sourceIdentity manifest) == Just (sha256 allowlist)) "composed bank allowlist differs from the manifest's source identity"
   elf <- B.readFile (output </> "kernel.elf")
   require (B.length allowlist <= 1024*1024 && B.length elf <= 4*1024*1024) "bank allowlist or kernel.elf exceeds its size bound"
   report <- either (P.reject . ("bank ELF allowlist check failed before USB: "++)) pure (checkBankFile allowlist elf)

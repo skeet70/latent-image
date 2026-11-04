@@ -7,8 +7,7 @@ import Data.Aeson (FromJSON (..), eitherDecodeStrict', encode, object, withObjec
 import Data.Bits (shiftR)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import Data.IORef (atomicModifyIORef', modifyIORef', newIORef)
-import Data.Word (Word8, Word32, Word64)
+import Data.Word (Word8, Word32)
 import Emulation.Sha256 (sha256, sha256File, sha256Hex)
 import Emulation.ViewerRuntime (require, stagedFirmwarePath, stagedRomPath)
 import EmulatorUsb
@@ -43,10 +42,8 @@ runFujiModRehearsal runtime nand checkpoints receipt = do
   sessionReceipt <- bracket
     (startEmulator fujimodRamPushBridge runtime arguments (\_ -> pure (Nothing, ())))
     (\(emulator, _, _) -> stopEmulator emulator) $ \(emulator, start, ()) -> do
-      tick <- newIORef (1000000000 :: Word64)
-      let clock = TimedClock (atomicModifyIORef' tick (\n -> (n + 1000, n)))
-            (\ms -> modifyIORef' tick (+ fromIntegral ms * 1000000))
-          api = emulatorUsbApi emulator
+      clock <- emulatedClock
+      let api = emulatorUsbApi emulator
       session <- newSession clock api receipt (1024 * 1024) 600000
       held <- newHeld
       flip finally (releaseHeld held api (\_ action -> action transferTimeoutMs)) $ do

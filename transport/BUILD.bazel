@@ -1046,6 +1046,32 @@ haskell_test(
     ],
 )
 
+# Relinks each reviewed payload from the checkout's private inputs and compares
+# its manifest with the compiled contract (README.md "RAM-push review record").
+haskell_test(
+    name = "ram-push-reviewed-identity",
+    srcs = ["RamPushReviewedIdentityTest.hs"],
+    args = ["$(location ram-push-review.json)"],
+    data = ["ram-push-review.json"],
+    ghcopts = _GHCOPTS,
+    main_file = "RamPushReviewedIdentityTest.hs",
+    # The private inputs are read from the checkout, which Bazel does not track.
+    tags = [
+        "external",
+        "local",
+    ],
+    deps = [
+        ":camera-core",
+        ":ram-push-cc-icon-pins",
+        ":ram-push-cc-pins",
+        ":ram-push-pins",
+        ":ram-push-toggle-pins",
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
+
 genquery(
     name = "camera-deps",
     expression = "deps(//transport:camera)",

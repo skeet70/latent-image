@@ -48,10 +48,14 @@ loadCanonical tools scratch path = do
   refused (canonical dat image4 image5)
 
 loadPieces :: Canonical -> Manifest -> IO [Piece]
-loadPieces source manifest = forM (manifestPieces manifest) $ \(ManifestPiece kind (LinkedPaths imagePath symbolsPath)) -> do
-  image <- H.readRegular 0x10000 imagePath
-  symbols <- H.readRegular 0x10000 symbolsPath
-  refused (derivePieceOf kind source (LinkedImage (ImageBytes image) (SymbolBytes symbols)))
+loadPieces source manifest = forM (manifestPieces manifest) $ \piece -> do
+  let linked (LinkedPaths imagePath symbolsPath) =
+        LinkedImage <$> (ImageBytes <$> H.readRegular 0x10000 imagePath) <*> (SymbolBytes <$> H.readRegular 0x10000 symbolsPath)
+  images <- case piece of
+    SingleImagePiece kind paths -> SingleImage kind <$> linked paths
+    LoaderStartupPiece (LoaderStartupPaths a b dispatcher installer) ->
+      LoaderStartupImages <$> linked a <*> linked b <*> linked dispatcher <*> linked installer
+  refused (derivePieceOf source images)
 
 -- | Rule 4 application, then the rule 5 postconditions on the result.
 stageComposition :: Tools.Tools -> Tools.ScratchDirectory -> Canonical -> Composition k -> IO (B.ByteString, TargetBytes)
@@ -105,7 +109,10 @@ runStager tools canonicalPath manifestPath scratchPath output = do
   pieces <- refused (attachGuard attach derived)
   composition <- refused (compose registeredJoins source pieces)
   (dat, observed) <- stageComposition tools scratch source composition
-  ownedSymbols <- forM (manifestPieces manifest) $ \(ManifestPiece kind (LinkedPaths _ symbolsPath)) -> (,) kind <$> H.readRegular 0x10000 symbolsPath
+  -- Log sites resolve symbols of single-image pieces only.
+  ownedSymbols <- concat <$> forM (manifestPieces manifest) (\piece -> case piece of
+    SingleImagePiece kind (LinkedPaths _ symbolsPath) -> (\symbols -> [(kind, symbols)]) <$> H.readRegular 0x10000 symbolsPath
+    LoaderStartupPiece _ -> pure [])
   let sources = AttachSources (canonicalDat source) dat (canonicalTargets source) observed ownedSymbols
   attachState <- refused (attachStateValue sources (manifestAttachRules manifest) (contractCarriers composition))
   writeOutputs output dat observed (contractValue source manifestBytes composition dat observed attach attachState)

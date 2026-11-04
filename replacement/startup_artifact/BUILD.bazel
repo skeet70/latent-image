@@ -11,6 +11,7 @@ haskell_library(
         "Replacement/StartupArtifact/Contract.hs",
         "Replacement/StartupArtifact/Footprint/FirstStage.hs",
         "Replacement/StartupArtifact/Footprint/LoaderOrchestration.hs",
+        "Replacement/StartupArtifact/Footprint/LoaderStartup.hs",
         "Replacement/StartupArtifact/Footprint/PrimaryPublisher.hs",
         "Replacement/StartupArtifact/Footprint/Record2Link.hs",
         "Replacement/StartupArtifact/Joins.hs",
@@ -45,8 +46,11 @@ haskell_library(
         "//host/firmware:bank-allowlist",
         "//host/firmware:startup-stage-contract",
         "//replacement/record5_staging:record5-staging",
+        "//replacement/kernel_install:kernel-install-artifact",
         "//replacement/loader_orchestration:loader-orchestration-artifact",
         "//replacement/startup_composition:loader-startup-composition-artifact",
+        "//replacement/startup_composition:startup-composition-artifact",
+        "//replacement/startup_dispatch:startup-dispatch-artifact",
     ],
 )
 
@@ -104,6 +108,12 @@ _IMAGES = [
     "//replacement/primary_initializer:primary-initializer-image.symbols",
     "//replacement/loader_orchestration:loader-b-orchestration-image.bin",
     "//replacement/loader_orchestration:loader-b-orchestration-image.symbols",
+    "//replacement/loader_orchestration:loader-a-orchestration-image.bin",
+    "//replacement/loader_orchestration:loader-a-orchestration-image.symbols",
+    "//replacement/startup_dispatch:startup-dispatch-image.bin",
+    "//replacement/startup_dispatch:startup-dispatch-image.symbols",
+    "//replacement/kernel_install:kernel-install-image.bin",
+    "//replacement/kernel_install:kernel-install-image.symbols",
 ]
 
 # Canonical inputs come from private-data:

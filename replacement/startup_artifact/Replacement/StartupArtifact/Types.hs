@@ -11,6 +11,7 @@ module Replacement.StartupArtifact.Types
   , WriteBasis (..), WritesPolicy (..), CatalogRead (..), Catalog (..)
   , TcmRegister (..), DecoderIndex (..), DecoderChoice (..), DeclaredMutation (..)
   , Piece (..), PieceFacts (..), ServiceBinding (..), Publication (..), LinkedBytes (..), ScratchBytes (..)
+  , PublisherFrame (..), SubmitCall (..), StackDepth (..)
   , Refusal (..), CatalogProblem (..), ManifestProblem (..)
   ) where
 
@@ -61,7 +62,7 @@ editSpan (Edit range _) = range
 editBytes :: Edit -> B.ByteString
 editBytes (Edit _ bytes) = bytes
 
-data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB
+data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 pieceKindName :: PieceKind -> Text
@@ -70,9 +71,10 @@ pieceKindName kind = case kind of
   Record2Link -> "record2-link"
   PrimaryPublisher -> "primary-publisher"
   LoaderOrchestrationB -> "loader-orchestration-b"
+  LoaderStartup -> "loader-startup"
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
-  | LoaderOrchestrationBArea
+  | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 areaName :: Area -> Text
@@ -83,7 +85,10 @@ areaName area = case area of
   InterfaceInitializerArea -> "interface-initializer"
   CriticalPairArea -> "critical-pair"
   PrimaryInitializerArea -> "primary-initializer"
+  LoaderOrchestrationAArea -> "loader-orchestration-a"
   LoaderOrchestrationBArea -> "loader-orchestration-b"
+  PhaseDispatcherArea -> "phase-dispatcher"
+  KernelInstallArea -> "kernel-install"
 
 data FootprintBasis = AdmissionRead | RuntimePremise deriving (Eq, Ord, Show)
 
@@ -237,16 +242,28 @@ data LinkedBytes = LinkedBytes B.ByteString B.ByteString deriving (Eq, Show)
 -- | Stack bytes a piece's owned callee uses below its caller's SP.
 newtype ScratchBytes = ScratchBytes Word32 deriving (Eq, Show)
 
+data PublisherFrame = PublisherFrame { publisherEntry :: Pc, publisherCallerSp :: Guest } deriving (Eq, Show)
+
+-- | Bytes below an incoming SP.
+newtype StackDepth = StackDepth Word32 deriving (Eq, Show)
+
+-- | One task-submission tail call of the owned dispatcher: its core and stack depth at the branch.
+data SubmitCall = SubmitCall { submitCore :: Core, submitStack :: StackDepth } deriving (Eq, Show)
+
 -- | Artifact values that registered joins check across pieces.
 data PieceFacts
   -- | First-stage entry and the linked record-1 image.
   = FirstStageFacts Pc LinkedBytes
   -- | Secondary entry, the core-0 bindings the critical pair consumes, the
-  -- linked record-2 image and the owned initializer's scratch.
-  | Record2LinkFacts Pc [ServiceBinding] LinkedBytes ScratchBytes
-  | PublisherFacts [Publication]
+  -- linked record-2 image, the owned initializer's scratch and the deeper of
+  -- the critical pair's entry and exit frames below its caller's SP.
+  | Record2LinkFacts Pc [ServiceBinding] LinkedBytes ScratchBytes StackDepth
+  -- | The publisher's entry and the SP its caller frame provides, and its emitted stores.
+  | PublisherFacts PublisherFrame [Publication]
   -- | The linked loader-B orchestration image.
   | LoaderOrchestrationFacts LinkedBytes
+  -- | The linked loader-A and loader-B orchestration images and the dispatcher's task submissions.
+  | LoaderStartupFacts LinkedBytes LinkedBytes [SubmitCall]
   | NoFacts
   deriving (Eq, Show)
 
