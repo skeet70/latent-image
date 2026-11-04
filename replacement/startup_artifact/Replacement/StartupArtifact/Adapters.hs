@@ -1024,7 +1024,7 @@ derivePlainProducer source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByte
     , read' "extent3" extent3Hook 0x011e0000 0x26a5e0 ]
   let writes = EnumeratedWrites [WriteRange (CorePhysicalTarget Core0) (sp - frame) sp]
         (Premised (Premise (producerWritesPremise
-          "the width is proved: the producer stores only inside its allocated stack below the entry SP (replacement/plain_load/Replacement/PlainLoad/Admission.hs:214-221,299-301)")))
+          "the width is proved: the producer stores only inside its allocated stack below the entry SP (replacement/plain_load/Replacement/PlainLoad/Admission.hs:214-222,299-301)")))
       catalog = Catalog boundaries code writes rows
       declaration = PieceDeclaration kind (Set.singleton PlainProducerArea) [carrier]
         (ProducersFootprint.footprint ProducersFootprint.PlainLoad (targetOf targets LoaderA) (targetOf targets LoaderB) image4)
