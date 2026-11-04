@@ -1,9 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | The stager's input manifest:
--- @{"schema":2,"guard":{"attach":LABEL,"attach_state":RULES},"pieces":[{"kind":KIND,"inputs":{"image":PATH,"symbols":PATH}}]}@,
--- with RULES as 'Replacement.StartupArtifact.AttachState.parseAttachRules' reads them. Unknown keys refuse.
+-- @{"schema":2,"guard":{"attach":LABEL,"attach_state":RULES},"pieces":[{"kind":KIND,"inputs":INPUTS}]}@,
+-- with RULES as 'Replacement.StartupArtifact.AttachState.parseAttachRules' reads them. INPUTS is
+-- @{"image":PATH,"symbols":PATH}@, or for @loader-startup@ one such object under each of
+-- @loader_a@, @loader_b@, @dispatcher@ and @installer@. Unknown keys refuse.
 module Replacement.StartupArtifact.Manifest
-  ( Manifest (..), ManifestPiece (..), LinkedPaths (..), parseManifest
+  ( Manifest (..), ManifestPiece (..), LinkedPaths (..), LoaderStartupPaths (..), manifestPieceKind, parseManifest
   ) where
 
 import Control.Monad (forM, forM_, unless, when)
@@ -22,7 +24,15 @@ import Replacement.StartupArtifact.Types
 
 data LinkedPaths = LinkedPaths { linkedImagePath :: FilePath, linkedSymbolsPath :: FilePath } deriving (Eq, Show)
 
-data ManifestPiece = ManifestPiece PieceKind LinkedPaths deriving (Eq, Show)
+data LoaderStartupPaths = LoaderStartupPaths
+  { loaderAPaths :: LinkedPaths, loaderBPaths :: LinkedPaths, dispatcherPaths :: LinkedPaths, installerPaths :: LinkedPaths }
+  deriving (Eq, Show)
+
+data ManifestPiece = SingleImagePiece PieceKind LinkedPaths | LoaderStartupPiece LoaderStartupPaths deriving (Eq, Show)
+
+manifestPieceKind :: ManifestPiece -> PieceKind
+manifestPieceKind (SingleImagePiece kind _) = kind
+manifestPieceKind (LoaderStartupPiece _) = LoaderStartup
 
 data Manifest = Manifest { manifestAttach :: Label, manifestAttachRules :: AttachRules, manifestPieces :: [ManifestPiece] } deriving (Eq, Show)
 
@@ -74,10 +84,18 @@ parseManifest bytes = do
   pieces <- forM rows $ \row -> do
     piece <- object "piece" ["kind", "inputs"] row
     kind <- text "piece.kind" (field piece "kind") >>= kindOf
-    inputs <- object "piece.inputs" ["image", "symbols"] (field piece "inputs")
-    image <- text "piece.inputs.image" (field inputs "image")
-    symbols <- text "piece.inputs.symbols" (field inputs "symbols")
-    pure (ManifestPiece kind (LinkedPaths (T.unpack image) (T.unpack symbols)))
-  let kinds = sort [kind | ManifestPiece kind _ <- pieces]
+    let linked context entry = do
+          inputs <- object context ["image", "symbols"] entry
+          image <- text (context <> ".image") (field inputs "image")
+          symbols <- text (context <> ".symbols") (field inputs "symbols")
+          pure (LinkedPaths (T.unpack image) (T.unpack symbols))
+    case kind of
+      LoaderStartup -> do
+        inputs <- object "piece.inputs" ["loader_a", "loader_b", "dispatcher", "installer"] (field piece "inputs")
+        let side name = linked ("piece.inputs." <> name) (field inputs name)
+        paths <- LoaderStartupPaths <$> side "loader_a" <*> side "loader_b" <*> side "dispatcher" <*> side "installer"
+        pure (LoaderStartupPiece paths)
+      _ -> SingleImagePiece kind <$> linked "piece.inputs" (field piece "inputs")
+  let kinds = sort (map manifestPieceKind pieces)
   forM_ (zip kinds (drop 1 kinds)) $ \(left, right) -> when (left == right) (Left (DuplicatePieceKind left))
   pure (Manifest attach rules pieces)

@@ -8,7 +8,7 @@ module Replacement.StartupComposition.LoaderStartup
   , loaderFrameLow, dispatcherLow, installerLow, joinedLow, loaderCompilerEntry, loaderBodyEntry
   , LoaderSites, deriveSites, loaderSites, completionStore, completionBeforeDsb, completionAfterDsb
   , peerPoll, peerPollDestination, peerPollPostload, peerPollBranch, initializerCall, initializerEntry, initializerReturn
-  , stageCandidate, candidateBytes, candidateImage4, candidateLoader, contractValue, candidateContractValue
+  , stagedTargets, stageCandidate, candidateBytes, candidateImage4, candidateLoader, contractValue, candidateContractValue
   ) where
 
 import qualified A32 as A
@@ -202,6 +202,12 @@ initializerEntry :: LoaderSites -> LI.CodeAddress
 initializerEntry (LoaderSites _ _ _ _ _ _ pc) = pc
 initializerReturn :: LoaderSites -> LI.CodeAddress
 initializerReturn sites = addAddress (initializerCall sites) 4
+
+-- | The loader-patched DAT, before image-4 staging, and the decoded staged image 4.
+stagedTargets :: LoaderSource -> LoaderJoinedArtifact -> Either LoaderJoinError (B.ByteString, B.ByteString)
+stagedTargets (LoaderSource _ composition loaders) artifact = do
+  patched <- either (Left . LoaderSourceRejected) Right (L.stageCandidate loaders (loaderArtifact artifact LoaderA) (loaderArtifact artifact LoaderB))
+  pure (L.candidateBytes patched, C.stagedBytes (C.stageImage4 composition (dispatcherInstallerArtifact artifact)))
 
 stageCandidate :: Image4.Tools -> Image4.ScratchDirectory -> LoaderSource -> LoaderJoinedArtifact -> IO LoaderStagedCandidate
 stageCandidate tools scratch source@(LoaderSource files composition loaders) artifact = do

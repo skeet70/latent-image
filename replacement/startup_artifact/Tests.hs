@@ -261,7 +261,7 @@ main = do
       onLoaderA = [Footprint (at LoaderA 0x40430 0x409ac) AdmissionRead (Citation "synthetic")]
       emitter rows extra = (piece PrimaryPublisher [PrimaryInitializerArea] ([at LoaderA 0x40430 0x409ac] ++ map editSpan extra)
           (flip' targets (at LoaderA 0x40430 0x40434) : extra) [])
-        {pieceFacts = PublisherFacts rows}
+        {pieceFacts = PublisherFacts (PublisherFrame (Pc 0x40430) (Guest 0x40063450)) rows}
       emitted = [Publication (Guest (root + offset)) target | ServiceBinding offset target <- bound]
       bindingsName = "critical-pair-publisher-bindings"
   ok "the binding join admits the record-2 link and publisher host-qualified"
@@ -360,7 +360,21 @@ main = do
   -- Manifest.
   let manifestText = manifestWith "first-stage/entry" emptyRules onePiece
   ok "a manifest parses"
-    (parseManifest manifestText == Right (Manifest entryLabel emptyAttachRules [ManifestPiece FirstStage (LinkedPaths "a.bin" "a.symbols")]))
+    (parseManifest manifestText == Right (Manifest entryLabel emptyAttachRules [SingleImagePiece FirstStage (LinkedPaths "a.bin" "a.symbols")]))
+  let linkedJson name = "{\"image\":\"" <> name <> ".bin\",\"symbols\":\"" <> name <> ".symbols\"}"
+      startupInputs = "{\"loader_a\":" <> linkedJson "a" <> ",\"loader_b\":" <> linkedJson "b" <> ",\"dispatcher\":"
+        <> linkedJson "d" <> ",\"installer\":" <> linkedJson "i" <> "}"
+      linkedPaths name = LinkedPaths (name <> ".bin") (name <> ".symbols")
+  ok "a loader-startup piece parses its four linked images"
+    (fmap manifestPieces (parseManifest (manifestWith "first-stage/entry" emptyRules ("[{\"kind\":\"loader-startup\",\"inputs\":" <> startupInputs <> "}]")))
+      == Right [LoaderStartupPiece (LoaderStartupPaths (linkedPaths "a") (linkedPaths "b") (linkedPaths "d") (linkedPaths "i"))])
+  let unknownKey parsed = case refusal parsed of
+        Just (ManifestRefused (ManifestUnknownKey _)) -> True
+        _ -> False
+  ok "a loader-startup piece with one linked image refuses"
+    (unknownKey (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"loader-startup\",\"inputs\":{\"image\":\"a.bin\",\"symbols\":\"a.symbols\"}}]")))
+  ok "a single-image piece with four linked images refuses"
+    (unknownKey (parseManifest (manifestWith "first-stage/entry" emptyRules ("[{\"kind\":\"loader-orchestration-b\",\"inputs\":" <> startupInputs <> "}]"))))
   ok "an unknown top-level key refuses"
     (refusal (parseManifest "{\"schema\":2,\"guard\":{\"attach\":\"first-stage/entry\",\"attach_state\":{}},\"pieces\":[],\"extra\":1}")
       == Just (ManifestRefused (ManifestUnknownKey "manifest.extra")))
@@ -368,8 +382,8 @@ main = do
     (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\",\"dat\":\"c\"}}]"))
       == Just (ManifestRefused (ManifestUnknownKey "piece.inputs.dat")))
   ok "an unknown kind refuses"
-    (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"loader-startup\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}}]"))
-      == Just (ManifestRefused (ManifestUnknownKind "loader-startup")))
+    (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"application-pump\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}}]"))
+      == Just (ManifestRefused (ManifestUnknownKind "application-pump")))
   ok "another schema refuses"
     (refusal (parseManifest "{\"schema\":1,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}") == Just (ManifestRefused ManifestSchemaUnsupported))
   ok "a manifest without attach_state refuses"

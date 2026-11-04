@@ -2,7 +2,7 @@
 module Replacement.LoaderOrchestration.Artifact
   ( CanonicalSource, LinkedArtifact, StagedSide, StagedCandidate, ArtifactError(..), CalleeExtent(..)
   , canonicalSource, deriveArtifact, stageSide, stagedSideBytes, stagedSideLoader, stageCandidate, candidateBytes, contractValue
-  , linkedBytes, linkedSide, linkedProof, linkedCompilerEntry, linkedEnd, sourceLoader, candidateLoader, calleeExtents
+  , linkedBytes, linkedSide, linkedProof, linkedCompilerEntry, linkedEnd, sourceLoader, candidateLoader, calleeExtents, closedCalleeExtents
   ) where
 
 import qualified A32 as A
@@ -147,28 +147,41 @@ stageCandidate source a@(LinkedArtifact sideA _ _ _ _) b@(LinkedArtifact sideB _
 -- entry to the next direct-BL target of the loader or the carrier bounds.
 -- 'PrivateInitialize' spans the stock initializer body and is not expanded.
 calleeExtents :: CanonicalSource -> LinkedArtifact -> [CalleeExtent]
-calleeExtents source (LinkedArtifact side _ _ _ proof) = merge (map extent (S.toAscList closed) ++ [initializer])
+calleeExtents source (LinkedArtifact side _ _ _ proof) =
+  mergeExtents (closedCalleeExtents base loader [(carrier,carrier+340)] (S.singleton initializerEntry) direct ++ [initializer])
   where
     base = loaderBase side
     loader = sourceLoader source side
     CodeAddress carrier = carrierStart side
-    carrierEnd = carrier+340
-    loaderEnd = base+fromIntegral (B.length loader)
-    callsIn low high = [target | pc <- [low,low+4..high-4], A.Branch _ True target <- [A.decode pc (U.word32At loader (fromIntegral (pc-base)))]
-      , target>=base, target<loaderEnd, target<carrier||target>=carrierEnd]
-    bounds = S.fromList (callsIn base loaderEnd++[carrier,carrierEnd,loaderEnd])
-    next entry = maybe loaderEnd id (S.lookupGT entry bounds)
-    extent entry = CalleeExtent (CodeAddress entry) (CodeAddress (next entry))
     CodeAddress initializerEntry = serviceAddress side PrivateInitialize
     initializer = CalleeExtent (CodeAddress initializerEntry) (CodeAddress carrier)
-    direct = S.fromList [target | (_,Retained service) <- callBoundaries proof, service/=PrivateInitialize
+    direct = [target | (_,Retained service) <- callBoundaries proof, service/=PrivateInitialize
       , let CodeAddress target = serviceAddress side service]
-    closed = grow direct (S.toList direct)
+
+-- | The roots of an image at a guest base closed over the direct BLs inside
+-- their extents, each extent running from its entry to the next direct-BL
+-- target, excluded-window bound or image end. BL targets inside an excluded
+-- window are not followed; opaque entries are neither expanded nor returned.
+closedCalleeExtents :: Word32 -> B.ByteString -> [(Word32,Word32)] -> S.Set Word32 -> [Word32] -> [CalleeExtent]
+closedCalleeExtents base image excluded opaque roots = mergeExtents (map extent (S.toAscList closed))
+  where
+    imageEnd = base+fromIntegral (B.length image)
+    outside target = all (\(low,high) -> target<low||target>=high) excluded
+    callsIn low high = [target | pc <- [low,low+4..high-4], A.Branch _ True target <- [A.decode pc (U.word32At image (fromIntegral (pc-base)))]
+      , target>=base, target<imageEnd, outside target]
+    bounds = S.fromList (callsIn base imageEnd++concat [[low,high] | (low,high) <- excluded]++[imageEnd])
+    next entry = maybe imageEnd id (S.lookupGT entry bounds)
+    extent entry = CalleeExtent (CodeAddress entry) (CodeAddress (next entry))
+    start = S.fromList [root | root <- roots, S.notMember root opaque]
+    closed = grow start (S.toList start)
     grow seen [] = seen
     grow seen (entry:pending) =
-      let found = [target | target <- callsIn entry (next entry), target/=initializerEntry, S.notMember target seen]
+      let found = [target | target <- callsIn entry (next entry), S.notMember target opaque, S.notMember target seen]
       in grow (foldr S.insert seen found) (found++pending)
-    merge extents = foldr absorb [] (sortOn (\(CalleeExtent (CodeAddress low) _) -> low) extents)
+
+mergeExtents :: [CalleeExtent] -> [CalleeExtent]
+mergeExtents extents = foldr absorb [] (sortOn (\(CalleeExtent (CodeAddress low) _) -> low) extents)
+  where
     absorb current [] = [current]
     absorb current@(CalleeExtent low (CodeAddress high)) rest@(CalleeExtent (CodeAddress low') high':others)
       | high>=low' = CalleeExtent low (max (CodeAddress high) high'):others

@@ -1,12 +1,13 @@
 module Replacement.KernelInstall.Admission
   ( AdmissionError (..), InstallationProof, scratchLow, refusalPc, executionPcs
-  , deriveInstallationProof
+  , deriveInstallationProof, dataWriteRanges
   ) where
 
 import qualified A32 as A
 import Control.Monad (foldM, unless)
 import Data.Bits ((.&.), (.|.), shiftL)
 import qualified Data.ByteString as B
+import Data.List (sort)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Word (Word32)
@@ -131,6 +132,13 @@ expected marker = [HeaderRead PrimaryRoot,RootWrite PrimaryRoot,HeaderRead Secon
     ++ [DataWrite (WordAddress (0x40a0fc44+4*i)) 0 | i <- [0..359]]
     ++ [DataWrite (WordAddress (0x409c3904+4*i)) 0 | i <- [0..719]]
     ++ [DataWrite (WordAddress (0x40a0fa50+4*i)) 0 | i <- [0..119]]
+
+-- | Guest word ranges an admitted installer writes with a valid marker, besides the root pair, merged and ascending.
+dataWriteRanges :: [(Word32,Word32)]
+dataWriteRanges = foldr absorb [] (sort [(address,address+4) | DataWrite (WordAddress address) _ <- expected ValidMarker])
+  where
+    absorb (low,high) ((low',high'):rest) | high == low' = (low,high'):rest
+    absorb range rest = range:rest
 
 deriveInstallationProof :: B.ByteString -> Either AdmissionError InstallationProof
 deriveInstallationProof bytes = do

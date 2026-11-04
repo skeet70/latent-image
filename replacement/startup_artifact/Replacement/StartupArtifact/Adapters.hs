@@ -3,8 +3,8 @@
 -- and staging on the canonical inputs and declares carriers and catalog from
 -- the admitted artifact.
 module Replacement.StartupArtifact.Adapters
-  ( LinkedImage (..), ImageBytes (..), SymbolBytes (..)
-  , deriveFirstStage, deriveRecord2Link, derivePrimaryPublisher, deriveLoaderOrchestrationB, derivePieceOf
+  ( LinkedImage (..), ImageBytes (..), SymbolBytes (..), PieceImages (..)
+  , deriveFirstStage, deriveRecord2Link, derivePrimaryPublisher, deriveLoaderOrchestrationB, deriveLoaderStartup, derivePieceOf
   ) where
 
 import Control.Monad (unless)
@@ -22,15 +22,21 @@ import qualified Emulation.PrimaryInitializerSource as PS
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
 import Numeric (showHex)
+import qualified Replacement.KernelInstall.Admission as KA
+import qualified Replacement.KernelInstall.Artifact as KI
 import qualified Replacement.LoaderOrchestration.Admission as LA
 import qualified Replacement.LoaderOrchestration.Artifact as L
 import qualified Replacement.LoaderOrchestration.Interface as LI
 import Replacement.StartupArtifact.Compose
+import qualified Replacement.StartupComposition.Artifact as SC
 import qualified Replacement.StartupComposition.LoaderStartup as LS
+import qualified Replacement.StartupDispatch.Admission as DA
+import qualified Replacement.StartupDispatch.Artifact as SD
 import qualified Replacement.StartupArtifact.Footprint.FirstStage as FirstStageFootprint
 import qualified Replacement.StartupArtifact.Footprint.PrimaryPublisher as PublisherFootprint
 import qualified Replacement.StartupArtifact.Footprint.Record2Link as Record2Footprint
 import qualified Replacement.StartupArtifact.Footprint.LoaderOrchestration as OrchestrationFootprint
+import qualified Replacement.StartupArtifact.Footprint.LoaderStartup as StartupFootprint
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
 import StageBuild (StageDeclarations (..))
@@ -42,12 +48,21 @@ newtype SymbolBytes = SymbolBytes B.ByteString
 -- | A linked flat image and its llvm-nm symbols.
 data LinkedImage = LinkedImage ImageBytes SymbolBytes
 
-derivePieceOf :: PieceKind -> Canonical -> LinkedImage -> Either Refusal Piece
-derivePieceOf kind = case kind of
-  FirstStage -> deriveFirstStage
-  Record2Link -> deriveRecord2Link
-  PrimaryPublisher -> derivePrimaryPublisher
-  LoaderOrchestrationB -> deriveLoaderOrchestrationB
+-- | A manifest piece's loaded inputs.
+data PieceImages
+  = SingleImage PieceKind LinkedImage
+  -- | Loader-A and loader-B orchestration, dispatcher and installer.
+  | LoaderStartupImages LinkedImage LinkedImage LinkedImage LinkedImage
+
+derivePieceOf :: Canonical -> PieceImages -> Either Refusal Piece
+derivePieceOf source images = case images of
+  LoaderStartupImages a b dispatcher installer -> deriveLoaderStartup source a b dispatcher installer
+  SingleImage kind image -> case kind of
+    FirstStage -> deriveFirstStage source image
+    Record2Link -> deriveRecord2Link source image
+    PrimaryPublisher -> derivePrimaryPublisher source image
+    LoaderOrchestrationB -> deriveLoaderOrchestrationB source image
+    LoaderStartup -> Left (AdapterRefused kind "loader-startup takes four linked images")
 
 admitted :: PieceKind -> Either String a -> Either Refusal a
 admitted kind = first (AdapterRefused kind . T.pack)
@@ -234,6 +249,7 @@ derivePrimaryPublisher source (LinkedImage (ImageBytes bin) (SymbolBytes symbolB
       PS.Guest scratchLow = PA.scratchLow scratch
       PS.Guest scratchHigh = PA.scratchHigh scratch
       PS.Guest root = PS.primaryRoot (PS.sourceRoots primary)
+      PS.Guest callerSp = PS.callerSp (PS.sourceCaller primary)
       PA.PublicationWords publicationWords = PA.metadataPublicationWords metadata
       tableBytes = publicationWords * 4
       returns = [site + 4 | PS.Guest site <- PA.metadataCallerSites metadata]
@@ -244,10 +260,11 @@ derivePrimaryPublisher source (LinkedImage (ImageBytes bin) (SymbolBytes symbolB
   -- The alternate caller 0x40aac is unobserved; the entry may recur.
   entryLimit <- limit kind 4
   primaryCore <- coreSet kind [Core0]
+  -- loader-startup's a-initializer-return and table read replace these when composed.
   returnRows <- mapM (\pc -> do
     returnLabel <- label kind ("return-" <> hexName pc)
     tableLabel <- label kind ("table-a-" <> hexName pc)
-    pure ( Boundary returnLabel ReturnBoundary primaryCore (Pc pc) (Just (Pc pc)) True CompareSequence once Nothing
+    pure ( Boundary returnLabel ReturnBoundary primaryCore (Pc pc) (Just (Pc pc)) True CompareSequence once (Just LoaderOrchestrationAArea)
          , CatalogRead tableLabel returnLabel root tableBytes Nothing )) returns
   let boundaries = Boundary entryLabel EntryBoundary primaryCore (Pc ownedStart) (Just (Pc ownedStart)) False CompareSequence entryLimit Nothing
         : map fst returnRows
@@ -259,8 +276,104 @@ derivePrimaryPublisher source (LinkedImage (ImageBytes bin) (SymbolBytes symbolB
       declaration = PieceDeclaration kind (Set.singleton PrimaryInitializerArea) [carrier]
         (PublisherFootprint.footprint (targetOf targets LoaderA))
         (map (Premise . T.pack) (map PA.obligationName (PA.metadataObligations metadata) ++ PC.runtimePremiseNames)) catalog
-        (PublisherFacts [Publication (Guest guest) value | PA.EmittedPublication (PS.Guest guest) value _ _ <- PA.artifactPublications artifact])
+        (PublisherFacts (PublisherFrame (Pc ownedStart) (Guest callerSp))
+          [Publication (Guest guest) value | PA.EmittedPublication (PS.Guest guest) value _ _ <- PA.artifactPublications artifact])
   derivePiece source declaration (StagedOutput (PA.stagedBytes staged) Nothing Nothing)
+
+-- | How a dispatcher continuation is observed: a site when the retained role
+-- runs the stock dispatcher, a return (r0 and SP compared) when both roles run
+-- an admitted one.
+data ContinuationKind = SiteContinuations | ReturnContinuations
+
+codeAddress :: LI.CodeAddress -> Word32
+codeAddress (LI.CodeAddress value) = value
+
+uniqueOf :: PieceKind -> T.Text -> [Word32] -> Either Refusal Word32
+uniqueOf kind what values = case nub values of
+  [value] -> Right value
+  _ -> Left (AdapterRefused kind ("loader orchestration lacks a unique " <> what))
+
+-- | One orchestration side's boundaries and reads, labelled with a prefix.
+-- Retained PCs are stock loader A 0x409ac-0x40af0 (private-data/analysis/x-m1-1.50/decode/loader-40000.dis:598-679)
+-- and the same offsets in loader B (loader-d0000.dis:598-679).
+orchestrationCatalog :: PieceKind -> T.Text -> ContinuationKind -> L.LinkedArtifact -> Either Refusal ([Boundary], [CatalogRead])
+orchestrationCatalog kind prefix continuations artifact = do
+  let side = L.linkedSide artifact
+      proof = L.linkedProof artifact
+      base = LI.loaderBase side
+      start = codeAddress (LI.carrierStart side)
+      continuation phase = uniqueOf kind ("continuation of the " <> T.pack (show phase) <> " dispatch")
+        [codeAddress (LA.boundaryContinuation edge) | edge <- LA.dispatcherBoundaries proof, LA.boundaryPhase edge == phase]
+      continuationKind = case continuations of
+        SiteContinuations -> SiteBoundary
+        ReturnContinuations -> ReturnBoundary
+  sites <- first (AdapterRefused kind . T.pack . show) (LS.deriveSites side artifact)
+  schedule <- uniqueOf kind "scheduler call" [codeAddress pc | (pc, LA.Retained LI.Schedule) <- LA.callBoundaries proof]
+  twice <- limit kind 2
+  polls <- limit kind 4
+  core <- coreSet kind [case side of LI.LoaderA -> Core0; LI.LoaderB -> Core1]
+  let boundary name kind' composed retainedOffset stop compare' limit' = do
+        named <- label kind (prefix <> name)
+        pure (Boundary named kind' core (Pc composed) (Just (Pc (base + retainedOffset))) stop compare' limit' Nothing)
+      read' name stopping guest bytes = do
+        named <- label kind (prefix <> name)
+        at <- label kind (prefix <> stopping)
+        pure (CatalogRead named at guest bytes Nothing)
+      initializerCall = codeAddress (LS.initializerCall sites)
+      initializerReturn = codeAddress (LS.initializerReturn sites)
+  case side of
+    LI.LoaderA -> do
+      setup <- continuation LI.Setup
+      root <- continuation LI.Root
+      idle <- continuation LI.Idle0
+      diagnostic <- continuation LI.Diagnostic
+      boundaries <- sequence
+        [ boundary "entry" SiteBoundary start 0x9ac False CompareSequence twice
+        , boundary "initializer-call" SiteBoundary initializerCall 0x9dc True CompareSequence twice
+        , boundary "initializer-return" ReturnBoundary initializerReturn 0x9e0 True CompareSequence twice
+        , boundary "completion-store" SiteBoundary (codeAddress (LS.completionStore sites)) 0xa08 False CompareSequence twice
+        , boundary "setup-return" continuationKind setup 0xa00 False CompareSequence twice
+        , boundary "root-return" continuationKind root 0xa38 False CompareSequence twice
+        , boundary "idle0-return" continuationKind idle 0xa40 False CompareSequence twice
+        , boundary "diagnostic-return" continuationKind diagnostic 0xa6c False CompareSequence twice
+        , boundary "schedule-call" SiteBoundary schedule 0xa94 True CompareSequence twice
+        ]
+      rows <- sequence
+        [ read' "frame" "initializer-call" 0x40063450 16
+        , read' "table" "initializer-return" tableA interfaceTableBytes
+        , read' "ready" "schedule-call" 0x4005927c 4
+        , read' "completion" "schedule-call" 0x400a00c4 4
+        ]
+      pure (boundaries, rows)
+    LI.LoaderB -> do
+      peerTasks <- continuation LI.PeerTasks
+      diagnostic <- continuation LI.Diagnostic
+      boundaries <- sequence
+        [ boundary "entry" SiteBoundary start 0x9ac True CompareSequence twice
+        , boundary "peer-poll" SiteBoundary (codeAddress (LS.peerPoll sites)) 0xa44 False ComparePresence polls
+        , boundary "initializer-call" SiteBoundary initializerCall 0xaac True CompareSequence twice
+        , boundary "initializer-return" ReturnBoundary initializerReturn 0xab0 True CompareSequence twice
+        , boundary "peer-tasks-return" continuationKind peerTasks 0xaf0 False CompareSequence twice
+        , boundary "diagnostic-return" continuationKind diagnostic 0xa6c False CompareSequence twice
+        , boundary "schedule-call" SiteBoundary schedule 0xa94 True CompareSequence twice
+        ]
+      rows <- sequence
+        [ read' "workspace" "entry" 0x400ddaa0 0x15174
+        , read' "vectors" "entry" 0xffff0024 28
+        , read' "frame" "initializer-call" 0x400f3410 16
+        , read' "completion" "initializer-call" 0x400a00c4 4
+        , read' "table-b" "initializer-return" tableB interfaceTableBytes
+        , read' "ready" "schedule-call" 0x400e923c 4
+        ]
+      pure (boundaries, rows)
+
+-- | Interface table A, which the core-0 publisher fills (emulation/Emulation/PrimaryInitializerSource.hs:122-123).
+tableA, interfaceTableBytes :: Word32
+tableA = 0x4004dae0
+interfaceTableBytes = 0x162c
+
+ownedCode :: PieceKind -> Word32 -> Word32 -> Either Refusal [CodeSpan]
+ownedCode kind start end = mapM (\(low, high) -> codeOf kind low high) [(start, end), (alias start, alias end)]
 
 -- | Replacement.LoaderOrchestration.Artifact over
 -- //replacement/loader_orchestration:loader-b-orchestration-image, staged alone.
@@ -270,57 +383,18 @@ deriveLoaderOrchestrationB source (LinkedImage (ImageBytes bin) (SymbolBytes sym
       shown :: Show e => Either e a -> Either Refusal a
       shown = first (AdapterRefused kind . T.pack . show)
       targets = canonicalTargets source
-      address (LI.CodeAddress value) = value
-      unique what values = case nub values of
-        [value] -> Right value
-        _ -> Left (AdapterRefused kind ("loader-B orchestration lacks a unique " <> what))
   orchestration <- shown (L.canonicalSource (canonicalDat source) (targetOf targets Image4))
   artifact <- shown (L.deriveArtifact LI.LoaderB bin symbolBytes)
   staged <- shown (L.stageSide orchestration artifact)
-  sites <- shown (LS.deriveSites LI.LoaderB artifact)
-  let proof = L.linkedProof artifact
-      start = address (LI.carrierStart LI.LoaderB)
-      emitted = address (L.linkedEnd artifact)
-      continuation phase = unique ("continuation of the " <> T.pack (show phase) <> " dispatch")
-        [address (LA.boundaryContinuation edge) | edge <- LA.dispatcherBoundaries proof, LA.boundaryPhase edge == phase]
-  peerTasks <- continuation LI.PeerTasks
-  diagnostic <- continuation LI.Diagnostic
-  schedule <- unique "scheduler call" [address pc | (pc, LA.Retained LI.Schedule) <- LA.callBoundaries proof]
+  let start = codeAddress (LI.carrierStart LI.LoaderB)
   carrier <- spanOf kind LoaderB start (start + 340)
-  code <- mapM (\(low, high) -> codeOf kind low high) [(start, emitted), (alias start, alias emitted)]
-  twice <- limit kind 2
-  polls <- limit kind 4
-  second <- coreSet kind [Core1]
-  let boundary name kind' composed retainedPc stop compare' limit' = do
-        named <- label kind name
-        pure (Boundary named kind' second (Pc composed) (Just (Pc retainedPc)) stop compare' limit' Nothing)
-      read' name stopping guest bytes = do
-        named <- label kind name
-        at <- label kind stopping
-        pure (CatalogRead named at guest bytes Nothing)
-  -- Retained PCs: stock loader-B 0xd09ac-0xd0af0 (private-data/analysis/x-m1-1.50/decode/loader-d0000.dis:598-679).
-  boundaries <- sequence
-    [ boundary "entry" SiteBoundary start 0xd09ac True CompareSequence twice
-    , boundary "peer-poll" SiteBoundary (address (LS.peerPoll sites)) 0xd0a44 False ComparePresence polls
-    , boundary "initializer-call" SiteBoundary (address (LS.initializerCall sites)) 0xd0aac True CompareSequence twice
-    , boundary "initializer-return" ReturnBoundary (address (LS.initializerReturn sites)) 0xd0ab0 True CompareSequence twice
-    , boundary "peer-tasks-return" SiteBoundary peerTasks 0xd0af0 False CompareSequence twice
-    , boundary "diagnostic-return" SiteBoundary diagnostic 0xd0a6c False CompareSequence twice
-    , boundary "schedule-call" SiteBoundary schedule 0xd0a94 True CompareSequence twice
-    ]
-  catalogRows <- sequence
-    [ read' "workspace" "entry" 0x400ddaa0 0x15174
-    , read' "vectors" "entry" 0xffff0024 28
-    , read' "frame" "initializer-call" 0x400f3410 16
-    , read' "completion" "initializer-call" 0x400a00c4 4
-    , read' "table-b" "initializer-return" tableB tableBBytes
-    , read' "ready" "schedule-call" 0x400e923c 4
-    ]
+  code <- ownedCode kind start (codeAddress (L.linkedEnd artifact))
+  (boundaries, rows) <- orchestrationCatalog kind "" SiteContinuations artifact
   let writes = EnumeratedWrites
         [ WriteRange (CorePhysicalTarget Core1) 0xe923c 0xe9240
         , WriteRange (CorePhysicalTarget Core1) 0xf3410 0xf3420 ]
         (Premised (Premise "the ready word is the only store the admission accepts on the peer path (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs:322-326); the frame lies below the entry SP 0x400f3420 the record-2 prefix exit installs (join prefix-orchestration-b)"))
-      catalog = Catalog boundaries code writes catalogRows
+      catalog = Catalog boundaries code writes rows
       declaration = PieceDeclaration kind (Set.singleton LoaderOrchestrationBArea) [carrier]
         (OrchestrationFootprint.footprint orchestration artifact)
         (map Premise
@@ -328,3 +402,104 @@ deriveLoaderOrchestrationB source (LinkedImage (ImageBytes bin) (SymbolBytes sym
           , "the canonical image-4 dispatcher keeps its frame within 48 bytes below the service SP (replacement/loader_orchestration/Replacement/LoaderOrchestration/Artifact.hs:51-52)" ])
         catalog (LoaderOrchestrationFacts (LinkedBytes bin symbolBytes))
   derivePiece source declaration (StagedOutput (L.stagedSideBytes staged) Nothing Nothing)
+
+-- | Replacement.StartupComposition.LoaderStartup over the loader-A and loader-B
+-- orchestration, //replacement/startup_dispatch:startup-dispatch-image and
+-- //replacement/kernel_install:kernel-install-image, joined and staged as one unit.
+deriveLoaderStartup :: Canonical -> LinkedImage -> LinkedImage -> LinkedImage -> LinkedImage -> Either Refusal Piece
+deriveLoaderStartup source a b dispatcher installer = do
+  let kind = LoaderStartup
+      shown :: Show e => Either e a -> Either Refusal a
+      shown = first (AdapterRefused kind . T.pack . show)
+      targets = canonicalTargets source
+      native (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) = SC.NativeFiles bin symbolBytes
+      linked (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) = LinkedBytes bin symbolBytes
+  loaderSource <- shown (LS.canonicalSource
+    (SC.SourceFiles (canonicalDat source) (targetOf targets Image4) (targetOf targets LoaderA) (targetOf targets LoaderB)))
+  joined <- shown (LS.deriveArtifact (native a) (native b) (native dispatcher) (native installer))
+  (dat, image4) <- shown (LS.stagedTargets loaderSource joined)
+  orchestration <- shown (L.canonicalSource (canonicalDat source) (targetOf targets Image4))
+  let sideA = LS.loaderArtifact joined LI.LoaderA
+      sideB = LS.loaderArtifact joined LI.LoaderB
+      composition = LS.dispatcherInstallerArtifact joined
+      dispatcherArtifact = SC.dispatcherArtifact composition
+      dispatcherEnd = 0x69cdf8 + fromIntegral (B.length (SD.linkedBytes dispatcherArtifact))
+      installerEnd = 0x725a04 + fromIntegral (B.length (KI.linkedBytes (SC.installerArtifact composition)))
+      calls = DA.callBoundaries (SD.frameProof dispatcherArtifact)
+      instruction = DA.instructionAddressValue . DA.callInstruction
+      proof = LS.joinedProof joined
+      ownedLow side = minimum (LS.stackOffsetValue (LS.loaderFrameLow proof)
+        : map (LS.stackOffsetValue . LS.boundaryOwnedLow) (LS.loaderBoundaries proof side))
+      window top side = WriteRange (CorePhysicalTarget (sideCore side)) (top - fromIntegral (negate (ownedLow side))) top
+      sideCore side = case side of LI.LoaderA -> Core0; LI.LoaderB -> Core1
+      (dispatcherLow, dispatcherHigh) = StartupFootprint.dispatcherCarrier
+      (installerLow, installerHigh) = StartupFootprint.installerCarrier
+  modeCall <- uniqueOf kind "mode getter call" [instruction call | call <- calls, DA.callEffect call == DA.ModeRead]
+  installReturn <- uniqueOf kind "installer continuation"
+    [DA.instructionAddressValue continuation | call <- calls, DA.callEffect call == DA.Install, Just continuation <- [DA.callContinuation call]]
+  submits <- mapM (\call -> do
+    core <- case DA.callPhase call of
+      DA.Root -> Right Core0
+      DA.Idle0 -> Right Core0
+      DA.Idle1AndStandby -> Right Core1
+      phase -> Left (AdapterRefused kind ("task submission in phase " <> T.pack (show phase)))
+    pure (SubmitCall core (StackDepth (fromIntegral (negate (DA.stackOffsetValue (DA.callStack call)))))))
+    [call | call <- calls, case DA.callEffect call of DA.Submit _ -> True; _ -> False]
+  carriers <- sequence
+    [ spanOf kind LoaderA 0x409ac 0x40b00, spanOf kind LoaderB 0xd09ac 0xd0b00
+    , spanOf kind Image4 dispatcherLow dispatcherHigh, spanOf kind Image4 installerLow installerHigh ]
+  code <- concat <$> sequence
+    [ ownedCode kind (codeAddress (LI.carrierStart LI.LoaderA)) (codeAddress (L.linkedEnd sideA))
+    , ownedCode kind (codeAddress (LI.carrierStart LI.LoaderB)) (codeAddress (L.linkedEnd sideB))
+    , ownedCode kind dispatcherLow dispatcherEnd, ownedCode kind installerLow installerEnd ]
+  (boundariesA, rowsA) <- orchestrationCatalog kind "a-" ReturnContinuations sideA
+  (boundariesB, rowsB) <- orchestrationCatalog kind "b-" ReturnContinuations sideB
+  twice <- limit kind 2
+  dispatches <- limit kind 8
+  primaryCore <- coreSet kind [Core0]
+  bothCores <- coreSet kind [Core0, Core1]
+  let boundary name kind' onCores composed retainedPc stop limit' = do
+        named <- label kind name
+        pure (Boundary named kind' onCores (Pc composed) (Just (Pc retainedPc)) stop CompareSequence limit' Nothing)
+      read' name stopping guest bytes = do
+        named <- label kind name
+        at <- label kind stopping
+        pure (CatalogRead named at guest bytes Nothing)
+  -- Retained dispatcher PCs: stock 0x69ce0c (ModeRead call) and 0x69ce38 (Install continuation),
+  -- private-data/analysis/x-m1-1.50/decode/id4.dis.
+  boundaries <- sequence
+    [ boundary "dispatcher-entry" SiteBoundary bothCores dispatcherLow dispatcherLow False dispatches
+    , boundary "mode-call" SiteBoundary primaryCore modeCall 0x69ce0c True twice
+    , boundary "installer-entry" SiteBoundary primaryCore installerLow installerLow False twice
+    -- A site: the Install call SP is S-48 in the stock dispatcher and lower in the owned one.
+    , boundary "installer-return" SiteBoundary primaryCore installReturn 0x69ce38 True twice
+    ]
+  rows <- sequence
+    ( read' "mode" "mode-call" 0x0061c008 4
+    : read' "roots" "installer-return" 0x0096bd20 8
+    : [ read' ("kernel-data-" <> T.pack (show index)) "installer-return" low (high - low)
+      | (index, (low, high)) <- zip [0 :: Int ..] KA.dataWriteRanges ] )
+  let writes = EnumeratedWrites
+        ( [ WriteRange (CorePhysicalTarget Core0) 0xa00c4 0xa00c8
+          , WriteRange (CorePhysicalTarget Core0) 0x5927c 0x59280
+          , window 0x63460 LI.LoaderA
+          , WriteRange (CorePhysicalTarget Core0) 0x96bd20 0x96bd28 ]
+          ++ [ WriteRange (CorePhysicalTarget Core0) (physical low) (physical high) | (low, high) <- KA.dataWriteRanges ]
+          ++ [ WriteRange (CorePhysicalTarget Core1) 0xe923c 0xe9240
+             , window 0xf3420 LI.LoaderB ] )
+        (Premised (Premise (T.intercalate "; "
+          [ "completion and ready words are the only stores the orchestration admission accepts (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs:322-326)"
+          , "each side's window runs from its entry SP (core 0 0x40063460, the stock 0x400a8 literal; core 1 0x400f3420, join prefix-orchestration-b) down to the lowest owned frame of the joined loader, dispatcher and installer proof (replacement/startup_composition/Replacement/StartupComposition/LoaderStartup.hs:132-139), which holds the dispatcher descriptors"
+          , "the installer stores the root pair and its data words (replacement/kernel_install/Replacement/KernelInstall/Admission.hs:126-141,172-176)" ])))
+      catalog = Catalog (boundariesA ++ boundariesB ++ boundaries) code writes (rowsA ++ rowsB ++ rows)
+      declaration = PieceDeclaration kind
+        (Set.fromList [LoaderOrchestrationAArea, LoaderOrchestrationBArea, PhaseDispatcherArea, KernelInstallArea])
+        carriers
+        (StartupFootprint.footprint (targetOf targets LoaderA) (targetOf targets Image4) orchestration sideA sideB)
+        (map Premise
+          [ "retained loader callees behave as stock from their entries (replacement/loader_orchestration/Replacement/LoaderOrchestration/Interface.hs:34-48)"
+          , "retained mode getter 0x657184, clear 0x7221a0 and task submission 0x725dd8 behave as stock (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs:226-236)"
+          , "retained cache service 0x42634 returns under its pinned contract (replacement/kernel_install/Replacement/KernelInstall/Admission.hs:184-189)"
+          , "owned-component stack lows exclude transitive retained-service depth and interrupt frames (replacement/startup_composition/Replacement/StartupComposition/LoaderStartup.hs contractValue open_premises)" ])
+        catalog (LoaderStartupFacts (linked a) (linked b) submits)
+  derivePiece source declaration (StagedOutput dat (Just image4) Nothing)

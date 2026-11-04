@@ -19,9 +19,11 @@ import qualified Replacement.LoaderOrchestration.Interface as LI
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
+import qualified Replacement.StartupComposition.LoaderStartup as LS
 import qualified StartupStageContract as Stage
 
 data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | PrefixOrchestrationB | FirstStageCompletionZero
+  | LoaderStartupPublisher | PublisherInstallerRoots | CriticalPairInstallerRoots | DispatcherCriticalPair
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 instance JoinName JoinKind where
@@ -29,6 +31,10 @@ instance JoinName JoinKind where
   joinName CriticalPairPublisherBindings = "critical-pair-publisher-bindings"
   joinName PrefixOrchestrationB = "prefix-orchestration-b"
   joinName FirstStageCompletionZero = "first-stage-completion-zero"
+  joinName LoaderStartupPublisher = "loader-startup-publisher"
+  joinName PublisherInstallerRoots = "publisher-installer-roots"
+  joinName CriticalPairInstallerRoots = "critical-pair-installer-roots"
+  joinName DispatcherCriticalPair = "dispatcher-critical-pair"
 
 at :: Target -> Word32 -> Word32 -> Span
 at target start end = Span target (Guest start) (Guest end)
@@ -56,13 +62,35 @@ secondaryFacts evidence = case [(entry, consumed, linked, scratch) | Record2Link
   _ -> Nothing
 
 publications :: JoinEvidence -> Maybe [Publication]
-publications evidence = case [rows | PublisherFacts rows <- map pieceFacts (evidencePieces evidence)] of
+publications evidence = case [rows | PublisherFacts _ rows <- map pieceFacts (evidencePieces evidence)] of
   [rows] -> Just rows
   _ -> Nothing
 
-orchestrationFacts :: JoinEvidence -> Maybe LinkedBytes
-orchestrationFacts evidence = case [linked | LoaderOrchestrationFacts linked <- map pieceFacts (evidencePieces evidence)] of
+publisherFrame :: JoinEvidence -> Maybe PublisherFrame
+publisherFrame evidence = case [frame | PublisherFacts frame _ <- map pieceFacts (evidencePieces evidence)] of
+  [frame] -> Just frame
+  _ -> Nothing
+
+-- | The one linked orchestration image of a loader side.
+orchestrationImage :: LI.LoaderSide -> JoinEvidence -> Maybe LinkedBytes
+orchestrationImage side evidence = case concatMap images (map pieceFacts (evidencePieces evidence)) of
   [linked] -> Just linked
+  _ -> Nothing
+  where
+    images facts = case (side, facts) of
+      (LI.LoaderB, LoaderOrchestrationFacts linked) -> [linked]
+      (LI.LoaderA, LoaderStartupFacts linked _ _) -> [linked]
+      (LI.LoaderB, LoaderStartupFacts _ linked _) -> [linked]
+      _ -> []
+
+orchestrationArtifact :: LI.LoaderSide -> JoinEvidence -> Maybe L.LinkedArtifact
+orchestrationArtifact side evidence = do
+  LinkedBytes image symbols <- orchestrationImage side evidence
+  either (const Nothing) Just (L.deriveArtifact side image symbols)
+
+submissions :: JoinEvidence -> Maybe [SubmitCall]
+submissions evidence = case [calls | LoaderStartupFacts _ _ calls <- map pieceFacts (evidencePieces evidence)] of
+  [calls] -> Just calls
   _ -> Nothing
 
 resetLiteral :: Target -> JoinEvidence -> Maybe Word32
@@ -170,8 +198,9 @@ peerWaitsBeforeInitializer artifact = all admissible (LA.proofPaths (L.linkedPro
     delayed (_ : rest) = delayed rest
     delayed [] = True
 
-prefixOrchestration :: Join JoinKind
-prefixOrchestration = Join PrefixOrchestrationB (Set.fromList [Record2Link, LoaderOrchestrationB])
+-- | Registered once per piece that owns loader-B orchestration.
+prefixOrchestration :: PieceKind -> Join JoinKind
+prefixOrchestration owner = Join PrefixOrchestrationB (Set.fromList [Record2Link, owner])
   [at LoaderB 0xd000c 0xd0010, at LoaderB initializerSite (initializerSite + 4), at LoaderB loaderStartup 0xd0b00]
   (ObservationQualified "the record-2 prefix enters loader-B orchestration with the stock 0xd00c4 state and the orchestration calls the record-2 initializer through 0xd0430 after the completion wait; qualified by a composed natural comparison")
   [ HostCheck "prefix-exit-enters-orchestration" $ \evidence ->
@@ -180,11 +209,7 @@ prefixOrchestration = Join PrefixOrchestrationB (Set.fromList [Record2Link, Load
           && either (const False) (const True) (P.deriveOwnedEntryFacts image symbols (composedImages evidence))
         Nothing -> False
   , HostCheck "orchestration-entry-pushes-the-caller-frame" $ \evidence ->
-      let word = targetWord (evidenceComposed evidence) LoaderB
-      in fmap (A.decode loaderStartup) (word loaderStartup)
-           == Just (A.StoreMultiple (A.Cond 14) A.sp A.DecrementBefore True [A.Reg 4, A.Reg 5, A.Reg 11, A.lr])
-         && fmap (A.decode (loaderStartup + 4)) (word (loaderStartup + 4))
-           == Just (A.DataProcessing (A.Cond 14) A.ADD False (A.Reg 11) A.sp (A.Immediate 12))
+      pushesCallerFrame (targetWord (evidenceComposed evidence) LoaderB) loaderStartup
   , HostCheck "published-initializer-entry" $ \evidence ->
       case (secondaryFacts evidence, targetWord (evidenceComposed evidence) LoaderB initializerSite) of
         (Just (_, _, LinkedBytes _ symbols, _), Just word) -> case (symbolAt symbols "xm1_interface_initializer_entry", A.decode initializerSite word) of
@@ -192,17 +217,24 @@ prefixOrchestration = Join PrefixOrchestrationB (Set.fromList [Record2Link, Load
           _ -> False
         _ -> False
   , HostCheck "peer-waits-before-initializer" $ \evidence ->
-      case orchestrationFacts evidence of
-        Just (LinkedBytes image symbols) -> either (const False) peerWaitsBeforeInitializer (L.deriveArtifact LI.LoaderB image symbols)
-        Nothing -> False
+      maybe False peerWaitsBeforeInitializer (orchestrationArtifact LI.LoaderB evidence)
   , HostCheck "initializer-scratch-in-window" $ \evidence ->
       case secondaryFacts evidence of
         Just (_, _, _, ScratchBytes scratch) -> toInteger entrySp - toInteger scratch >= toInteger stackWindowLow
         Nothing -> False
   ]
 
-completionZero :: Join JoinKind
-completionZero = Join FirstStageCompletionZero (Set.fromList [FirstStage, LoaderOrchestrationB])
+-- | The stock loader frame push at a carrier start: @push {r4,r5,r11,lr}; add r11,sp,#12@.
+pushesCallerFrame :: (Word32 -> Maybe Word32) -> Word32 -> Bool
+pushesCallerFrame word start =
+  fmap (A.decode start) (word start)
+    == Just (A.StoreMultiple (A.Cond 14) A.sp A.DecrementBefore True [A.Reg 4, A.Reg 5, A.Reg 11, A.lr])
+  && fmap (A.decode (start + 4)) (word (start + 4))
+    == Just (A.DataProcessing (A.Cond 14) A.ADD False (A.Reg 11) A.sp (A.Immediate 12))
+
+-- | Registered once per piece that owns loader-B orchestration.
+completionZero :: PieceKind -> Join JoinKind
+completionZero owner = Join FirstStageCompletionZero (Set.fromList [FirstStage, owner])
   [at Record1 0x0 0x10000]
   (ObservationQualified "the first stage zeroes 0x400a00c4 before the peer rendezvous that precedes the loader-B wait; the order is qualified by a composed natural comparison")
   [ HostCheck "first-stage-zeroes-the-completion-cell" $ \evidence ->
@@ -218,5 +250,111 @@ completionZero = Join FirstStageCompletionZero (Set.fromList [FirstStage, Loader
         Nothing -> False
   ]
 
+-- | Loader-A orchestration starts at the stock 0x409ac; stock entry code reaches it with the SP its 0x400a8 literal names.
+loaderAStart, loaderAStackLoad :: Word32
+loaderAStart = 0x409ac
+loaderAStackLoad = 0x400a8
+
+-- | The address and value of the word the @ldr r4,[pc,#imm]@ at 0x400a8 loads, in a target set.
+loaderAStackLiteral :: TargetBytes -> Maybe (Word32, Word32)
+loaderAStackLiteral targets = do
+  load <- targetWord targets LoaderA loaderAStackLoad
+  address <- case A.decode loaderAStackLoad load of
+    A.Load (A.Cond 14) A.Word False (A.Reg 4) base (A.OffsetImmediate offset) A.OffsetOnly
+      | base == A.pc -> Just (fromIntegral (toInteger loaderAStackLoad + 8 + toInteger offset))
+    _ -> Nothing
+  value <- targetWord targets LoaderA address
+  pure (address, value)
+
+-- | The composed word at loader-A orchestration's initializer call, decoded.
+initializerCallA :: JoinEvidence -> Maybe A.Instruction
+initializerCallA evidence = do
+  artifact <- orchestrationArtifact LI.LoaderA evidence
+  sites <- either (const Nothing) Just (LS.deriveSites LI.LoaderA artifact)
+  let LI.CodeAddress site = LS.initializerCall sites
+  A.decode site <$> targetWord (evidenceComposed evidence) LoaderA site
+
+loaderStartupPublisher :: Join JoinKind
+loaderStartupPublisher = Join LoaderStartupPublisher (Set.fromList [LoaderStartup, PrimaryPublisher])
+  [at LoaderA 0x40430 loaderAStart, at LoaderA loaderAStart 0x40b00]
+  (ObservationQualified "loader-A orchestration calls the owned publisher at 0x40430 from its admitted frame, after the identity and shared clear and before its first dispatch, and publishes completion after it returns (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs expected); the publisher's caller-return premises at 0x409e4 and 0x40ab4 are replaced by that admission, which discards the result and requires Log with r0 = 0 next; qualified by a composed natural comparison")
+  [ HostCheck "orchestration-a-calls-publisher-entry" $ \evidence ->
+      case (initializerCallA evidence, publisherFrame evidence) of
+        (Just (A.Branch (A.Cond 14) True target), Just (PublisherFrame (Pc entry) _)) -> target == entry
+        _ -> False
+  , HostCheck "orchestration-a-entry-frame" $ \evidence ->
+      pushesCallerFrame (targetWord (evidenceComposed evidence) LoaderA) loaderAStart
+        && loaderAStackLiteral (evidenceComposed evidence) == loaderAStackLiteral (evidenceCanonical evidence)
+        && loaderAStackLiteral (evidenceCanonical evidence) /= Nothing
+        && all (\address -> targetWord (evidenceComposed evidence) LoaderA address == targetWord (evidenceCanonical evidence) LoaderA address)
+             [loaderAStackLoad, loaderAStackLoad + 4]
+  -- Every loader-A service call runs at the entry SP minus the 16-byte frame
+  -- (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs requireFrame).
+  , HostCheck "publisher-caller-sp-is-orchestration-frame" $ \evidence ->
+      case (publisherFrame evidence, loaderAStackLiteral (evidenceComposed evidence)) of
+        (Just (PublisherFrame _ (Guest callerSp)), Just (_, top)) -> toInteger callerSp == toInteger top - 16
+        _ -> False
+  ]
+
+-- | Loader headers whose roots the installer stores at 0x96bd20 and 0x96bd24.
+loaderHeadersUnchanged :: HostCheck
+loaderHeadersUnchanged = HostCheck "loader-headers-unchanged" $ \evidence ->
+  all (\(target, address) -> targetWord (evidenceComposed evidence) target address == targetWord (evidenceCanonical evidence) target address
+        && targetWord (evidenceCanonical evidence) target address /= Nothing)
+    [(LoaderA, 0x40010), (LoaderB, 0xd0010)]
+
+installerRootsBasis :: JoinBasis
+installerRootsBasis = HostProof "the owned installer stores loader A's header root at 0x96bd20 and loader B's at 0x96bd24 (replacement/kernel_install/Replacement/KernelInstall/Admission.hs RootWrite), as the stock words at 0x725a0c..0x725a34 do; the dispatcher's Setup path ends in Install (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs:205) and Setup is loader-A orchestration's first dispatch (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs expected)"
+
+publisherInstallerRoots :: Join JoinKind
+publisherInstallerRoots = Join PublisherInstallerRoots (Set.fromList [PrimaryPublisher, LoaderStartup])
+  [at Image4 0x725a04 0x725a34] installerRootsBasis [loaderHeadersUnchanged]
+
+criticalPairInstallerRoots :: Join JoinKind
+criticalPairInstallerRoots = Join CriticalPairInstallerRoots (Set.fromList [Record2Link, LoaderStartup])
+  [at Image4 0x725a0c 0x725a34] installerRootsBasis [loaderHeadersUnchanged]
+
+-- | Core-0 and core-1 service SPs of the loader orchestration, and the low ends of their boot-stack windows
+-- (replacement/startup_artifact/Replacement/StartupArtifact/Adapters.hs record2Premise).
+serviceSp, stackFloor :: Core -> Word32
+serviceSp Core0 = 0x40063450
+serviceSp Core1 = 0x400f3410
+stackFloor Core0 = 0x40062c54
+stackFloor Core1 = 0x400f2c14
+
+-- | Stock task-submission wrapper frame (emulation/Emulation/CriticalPair.hs:137) and critical-pair entry frame
+-- (emulation/Emulation/CriticalPair.hs:643-644).
+wrapperFrame, criticalEntryFrame :: Integer
+wrapperFrame = 56
+criticalEntryFrame = 128
+
+dispatcherCriticalPair :: Join JoinKind
+dispatcherCriticalPair = Join DispatcherCriticalPair (Set.fromList [Record2Link, LoaderStartup])
+  [at Image4 0x7235d8 0x723790, at LoaderA loaderAStart 0x40b00]
+  (ObservationQualified "the owned dispatcher submits tasks through the stock wrapper 0x725dd8, which enters the owned critical pair; loader-A orchestration fills the core-0 table the pair reads before it dispatches; qualified by a composed natural comparison")
+  [ HostCheck "orchestration-a-initializes-before-dispatch" $ \evidence ->
+      initializerCallA evidence == Just (A.Branch (A.Cond 14) True 0x40430)
+        && maybe False initializesBeforeDispatch (orchestrationArtifact LI.LoaderA evidence)
+  , HostCheck "submission-depth-in-stack-window" $ \evidence ->
+      case submissions evidence of
+        Just calls@(_ : _) -> all (\(SubmitCall core (StackDepth depth)) ->
+          toInteger (serviceSp core) - toInteger depth - wrapperFrame - criticalEntryFrame >= toInteger (stackFloor core)) calls
+        _ -> False
+  ]
+  where
+    initializesBeforeDispatch artifact = all ordered (LA.proofPaths (L.linkedProof artifact))
+    initializes effect = case effect of LA.ServiceCall LI.PrivateInitialize _ -> True; _ -> False
+    dispatches effect = case effect of LA.DispatchCall _ -> True; _ -> False
+    ordered (LA.PathProof (LI.Scenario role _ _) effects _)
+      | role /= LI.Primary = True
+      | otherwise = case (findIndex initializes effects, findIndex dispatches effects) of
+          (Just called, Just dispatched) -> called < dispatched
+          (_, Nothing) -> True
+          _ -> False
+
 registeredJoins :: [Join JoinKind]
-registeredJoins = [rendezvous, bindings, prefixOrchestration, completionZero]
+registeredJoins =
+  [ rendezvous, bindings
+  , prefixOrchestration LoaderOrchestrationB, prefixOrchestration LoaderStartup
+  , completionZero LoaderOrchestrationB, completionZero LoaderStartup
+  , loaderStartupPublisher, publisherInstallerRoots, criticalPairInstallerRoots, dispatcherCriticalPair ]
