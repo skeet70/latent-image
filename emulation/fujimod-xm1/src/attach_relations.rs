@@ -46,6 +46,8 @@ const LZ_RESET: u32 = 0x00;
 const LZ_TRIGGER: u32 = 0x04;
 const LZ_SOURCE: u32 = 0x40;
 const LZ_COUNT: u32 = 0x44;
+const LZ_DESTINATION: u32 = 0x48;
+const LZ_OUTPUT: u32 = 0x4c;
 const LZ_START_JOB: u32 = 2;
 const LZ_DEFAULT_COUNT: u64 = 0x80000;
 /// Bytes of a DAT record header before its stream.
@@ -449,6 +451,9 @@ pub enum RelationFailure {
     /// Every stream byte was started but the word lacks the last job: the record-1 drain step (boot-40048 0x3dc0)
     /// submitted it without storing the word.
     LzSubmittedDrain { captured: Word, started: u64, last: u64 },
+    /// A descriptor register the scan derives differs from the captured one; `captured` is absent when the board
+    /// lacks a numeric word there.
+    LzRegister { leaf: BoardLeaf, derived: u64, captured: Option<u64> },
     RelationOverlap { pointer: BoardPointer },
 }
 
@@ -576,6 +581,40 @@ pub(crate) struct LzPlan {
     pub started: u64,
     /// Count of the last started job; 0 without one.
     pub last: u64,
+    pub registers: RegisterPlan,
+}
+
+/// What the scan fixes of the count, destination and output-count registers.
+#[derive(Clone, Debug)]
+pub(crate) struct RegisterPlan {
+    /// The board's `regs` array.
+    pub captured: Value,
+    /// The count register at the last start, unless a later write replaced it.
+    pub count: Option<Word>,
+    /// The destination at the first start since the last stream reset; absent if a destination write followed the
+    /// last start.
+    pub first_destination: Option<Word>,
+    pub output: OutputRule,
+    /// Span bytes fed before the last started job: the whole span when that job is pending.
+    pub before_last: u64,
+}
+
+/// The output-count register: 0 after a start that has not completed or after a stream reset, else the last fed
+/// job's output (lz.rs:280, 629, 686).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OutputRule {
+    Zero,
+    LastFed,
+    /// No job start and no stream reset was recorded.
+    Underived,
+}
+
+/// The derived descriptor registers, absent where the scan does not fix one.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LzRegisters {
+    pub count: Option<Word>,
+    pub destination: Option<Word>,
+    pub output: Option<Word>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -591,6 +630,7 @@ pub struct LzSummary {
     pub literals: u64,
     pub matches: u64,
     pub submitted: Option<Word>,
+    pub registers: LzRegisters,
 }
 
 /// One role's relation results before the memory stream.
@@ -658,10 +698,7 @@ pub(crate) fn evaluate(relations: &Relations, input: &RoleInput) -> RoleRelation
             pairings.push(SitePairing { site, stores, reads: 0, previous_store_tick: 0 });
         }
     }
-    let mut lz_source = 0u64;
-    let mut lz_count = 0u64;
-    let mut lz_jobs: Vec<(u64, u64)> = Vec::new();
-    let mut lz_reset = false;
+    let mut lz = LzScan::default();
     let mut main_writes = 0u64;
     let timer_range = timer::BASE..timer::BASE + TIMER_WINDOW;
     let scan = read_transactions(input.directory, &input.sources.transactions, |index, row| {
@@ -727,17 +764,7 @@ pub(crate) fn evaluate(relations: &Relations, input: &RoleInput) -> RoleRelation
             }
         }
         if in_lz && row.access == Access::Write {
-            let offset = row.address - lz_base.unwrap_or(0) as u32;
-            match (offset, row.value) {
-                (LZ_SOURCE, value) => lz_source = u64::from(value),
-                (LZ_COUNT, value) => lz_count = u64::from(value),
-                (LZ_TRIGGER, LZ_START_JOB) => lz_jobs.push((lz_source, if lz_count == 0 { LZ_DEFAULT_COUNT } else { lz_count })),
-                (LZ_RESET, 0) => {
-                    lz_jobs.clear();
-                    lz_reset = true;
-                }
-                _ => {}
-            }
+            lz.write(row.address - lz_base.unwrap_or(0) as u32, row.value);
         }
     });
     if let Err(reason) = scan {
@@ -788,10 +815,57 @@ pub(crate) fn evaluate(relations: &Relations, input: &RoleInput) -> RoleRelation
         }
         out.lz = Some(match found {
             Err(()) => Err(RelationFailure::Device { device: DeviceKind::Lz }),
-            Ok(index) => lz_plan(index, input, lz_jobs, lz_reset),
+            Ok(index) => lz_plan(index, input, lz),
         });
     }
     out
+}
+
+/// One role's LZ descriptor writes and stream events.
+#[derive(Default)]
+struct LzScan {
+    source: u64,
+    count: Option<Word>,
+    destination: Option<Word>,
+    /// Jobs started since the last stream reset: physical-bus source and count, 0 read as `LZ_DEFAULT_COUNT`.
+    jobs: Vec<(u64, u64)>,
+    /// The count and destination registers at each start in `jobs`.
+    starts: Vec<(Option<Word>, Option<Word>)>,
+    reset: bool,
+    /// The last stream event was a reset.
+    reset_last: bool,
+    /// A count or destination write followed the last start.
+    rewritten: (bool, bool),
+}
+
+impl LzScan {
+    fn write(&mut self, offset: u32, value: u32) {
+        match (offset, value) {
+            (LZ_SOURCE, value) => self.source = u64::from(value),
+            (LZ_COUNT, value) => {
+                self.count = Some(Word(value));
+                self.rewritten.0 = true;
+            }
+            (LZ_DESTINATION, value) => {
+                self.destination = Some(Word(value));
+                self.rewritten.1 = true;
+            }
+            (LZ_TRIGGER, LZ_START_JOB) => {
+                let count = match self.count { Some(Word(0)) | None => LZ_DEFAULT_COUNT, Some(Word(count)) => u64::from(count) };
+                self.jobs.push((self.source, count));
+                self.starts.push((self.count, self.destination));
+                self.reset_last = false;
+                self.rewritten = (false, false);
+            }
+            (LZ_RESET, 0) => {
+                self.jobs.clear();
+                self.starts.clear();
+                self.reset = true;
+                self.reset_last = true;
+            }
+            _ => {}
+        }
+    }
 }
 
 /// The LZ device's job kinds, as FujiMod's `lz.rs` saves them.
@@ -806,12 +880,14 @@ struct PendingJob {
     job: JobKind,
 }
 
-fn lz_plan(index: usize, input: &RoleInput, mut jobs: Vec<(u64, u64)>, reset: bool) -> Result<LzPlan, RelationFailure> {
+fn lz_plan(index: usize, input: &RoleInput, scan: LzScan) -> Result<LzPlan, RelationFailure> {
     let saved = &input.board["bus"]["devices"][index]["state"]["state"];
     let pending: Option<PendingJob> = serde_json::from_value(saved["pending"].clone()).map_err(|_| RelationFailure::LzPendingJob)?;
+    let LzScan { mut jobs, starts, reset, reset_last, rewritten, .. } = scan;
     let started = jobs.iter().map(|(_, count)| count).sum();
     let last = jobs.last().map_or(0, |(_, count)| *count);
-    if matches!(pending, Some(PendingJob { job: JobKind::Lz })) {
+    let pending_lz = matches!(pending, Some(PendingJob { job: JobKind::Lz }));
+    if pending_lz {
         jobs.pop();
     }
     let (start, end) = job_span(&jobs)?;
@@ -826,7 +902,21 @@ fn lz_plan(index: usize, input: &RoleInput, mut jobs: Vec<(u64, u64)>, reset: bo
             return Err(RelationFailure::LzSourceUnpinned { start, end });
         }
     }
-    Ok(LzPlan { device: index, start, end, reset, captured: saved["stream"].clone(), started, last })
+    let output = if pending_lz || reset_last {
+        OutputRule::Zero
+    } else if starts.is_empty() {
+        OutputRule::Underived
+    } else {
+        OutputRule::LastFed
+    };
+    let registers = RegisterPlan {
+        captured: saved["regs"].clone(),
+        count: if rewritten.0 { None } else { starts.last().and_then(|(count, _)| *count) },
+        first_destination: if rewritten.1 || starts.is_empty() { None } else { starts.first().and_then(|(_, destination)| *destination) },
+        output,
+        before_last: if pending_lz { end - start } else { (end - start).saturating_sub(last) },
+    };
+    Ok(LzPlan { device: index, start, end, reset, captured: saved["stream"].clone(), started, last, registers })
 }
 
 /// Checks one role's captured submitted word against its started jobs and its record-4 length.
@@ -861,15 +951,53 @@ fn job_span(jobs: &[(u64, u64)]) -> Result<(u64, u64), RelationFailure> {
 
 fn stream_leaf(device: usize, field: &str) -> BoardLeaf { BoardLeaf(format!("/bus/devices/{device}/state/state/stream/{field}")) }
 
-/// Feeds `bytes` to a fresh method-4 stream and checks it against the captured stream; returns the summary and
-/// the captured stream leaves the derivation fixes.
+fn register_leaf(device: usize, offset: u32) -> BoardLeaf { BoardLeaf(format!("/bus/devices/{device}/state/state/regs/{}", offset / 4)) }
+
+/// Checks the registers `plan` derives against the captured `regs`; returns the derived values and their leaves.
+fn derive_registers(plan: &LzPlan, before_last: u64, produced: u64) -> Result<(LzRegisters, Vec<String>), RelationFailure> {
+    let registers = &plan.registers;
+    let output = match registers.output {
+        OutputRule::Zero => Some(0),
+        OutputRule::LastFed => Some(produced - before_last),
+        OutputRule::Underived => None,
+    };
+    let derived = [
+        (LZ_COUNT, registers.count.map(|count| u64::from(count.0))),
+        (LZ_DESTINATION, registers.first_destination.map(|first| u64::from(first.0) + before_last)),
+        (LZ_OUTPUT, output),
+    ];
+    let mut words = [None; 3];
+    let mut leaves = Vec::new();
+    for (slot, (offset, value)) in derived.into_iter().enumerate() {
+        let Some(value) = value else { continue };
+        let leaf = register_leaf(plan.device, offset);
+        let captured = registers.captured[(offset / 4) as usize].as_u64();
+        match u32::try_from(value) {
+            Ok(word) if captured == Some(value) => words[slot] = Some(Word(word)),
+            _ => return Err(RelationFailure::LzRegister { leaf, derived: value, captured }),
+        }
+        leaves.push(leaf.0);
+    }
+    let [count, destination, output] = words;
+    Ok((LzRegisters { count, destination, output }, leaves))
+}
+
+/// Feeds `bytes` to a fresh method-4 stream and checks it and the derived descriptor registers against the capture;
+/// returns the summary and the captured leaves the derivation fixes.
 pub(crate) fn derive_lz(plan: &LzPlan, bytes: &[u8]) -> Result<(LzSummary, Vec<String>), RelationFailure> {
     let mut stream = Stream::default();
     let mut out = [0u8; PENDING];
     let mut pending_written = 0usize;
-    for byte in bytes {
+    let mut before_last = 0u64;
+    for (index, byte) in bytes.iter().enumerate() {
+        if index as u64 == plan.registers.before_last {
+            before_last = stream.produced();
+        }
         pending_written = pending_written.max(stream.pending_bytes() + 1);
         stream.feed(std::slice::from_ref(byte), &mut out).map_err(|reason| RelationFailure::LzDecode { reason })?;
+    }
+    if plan.registers.before_last == bytes.len() as u64 {
+        before_last = stream.produced();
     }
     let derived = serde_json::to_value(&stream).map_err(|error| RelationFailure::LzDecode { reason: error.to_string() })?;
     let captured = &plan.captured;
@@ -888,10 +1016,11 @@ pub(crate) fn derive_lz(plan: &LzPlan, bytes: &[u8]) -> Result<(LzSummary, Vec<S
             }
         }
     }
+    let (registers, register_leaves) = derive_registers(plan, before_last, stream.produced())?;
     let leaves = ["literals", "matches", "pending_len"].into_iter().map(|field| stream_leaf(plan.device, field).0)
-        .chain((0..pending).map(|position| stream_leaf(plan.device, &format!("pending/{position}")).0)).collect();
+        .chain((0..pending).map(|position| stream_leaf(plan.device, &format!("pending/{position}")).0)).chain(register_leaves).collect();
     let number = |field: &str| derived[field].as_u64().unwrap_or(0);
-    Ok((LzSummary { start: plan.start, end: plan.end, literals: number("literals"), matches: number("matches"), submitted: None }, leaves))
+    Ok((LzSummary { start: plan.start, end: plan.end, literals: number("literals"), matches: number("matches"), submitted: None, registers }, leaves))
 }
 
 /// Timer leaves the replay fixes.
@@ -903,7 +1032,8 @@ pub(crate) fn timer_leaves(device: usize) -> Vec<String> {
 
 /// LZ leaves any LZ relation could fix, for the board-entry overlap check.
 pub(crate) fn lz_leaf_prefixes(device: usize) -> Vec<String> {
-    ["literals", "matches", "pending_len", "pending"].into_iter().map(|field| stream_leaf(device, field).0).collect()
+    ["literals", "matches", "pending_len", "pending"].into_iter().map(|field| stream_leaf(device, field).0)
+        .chain([LZ_COUNT, LZ_DESTINATION, LZ_OUTPUT].into_iter().map(|offset| register_leaf(device, offset).0)).collect()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -937,7 +1067,8 @@ mod tests {
 
     fn plan(captured: Value, reset: bool) -> LzPlan {
         let count = COMPRESSED.len() as u64;
-        LzPlan { device: 29, start: 0x1000, end: 0x1000 + count, reset, captured, started: count, last: count }
+        let registers = RegisterPlan { captured: Value::Null, count: None, first_destination: None, output: OutputRule::Underived, before_last: 0 };
+        LzPlan { device: 29, start: 0x1000, end: 0x1000 + count, reset, captured, started: count, last: count, registers }
     }
 
     #[test]
