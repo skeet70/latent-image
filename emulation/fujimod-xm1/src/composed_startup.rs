@@ -277,7 +277,7 @@ fn menu_route(machine: &mut Machine, menu: &mut MenuObservation) -> Result<(), S
     machine.require_running()?;
     menu.erased_settings = machine.menu()?.is_some_and(|menu| (menu.menu_id, menu.setting_id, menu.cursor) == (69, 52, 12));
     require(menu.erased_settings, "startup did not reach erased-settings menu")?;
-    let pulse = KeyPulse { hold: 8_000_000, release: 8_000_000 };
+    let pulse = KeyPulse::instructions(8_000_000, 8_000_000);
     for key in std::iter::repeat_n("up", 12).chain(["ok", "ok"]) { machine.press_once(Press::parse(key)?, pulse)?; }
     machine.run(40_000_000);
     machine.require_running()?;

@@ -210,7 +210,7 @@ impl Probe {
 }
 
 /// Presses `key` once the preceding render has drained, then settles; `budget`
-/// caps the instructions run for both.
+/// caps the instructions run for both. An unlatched press fails before the settle.
 pub fn settled_key(machine: &mut Machine, key: Press, pulse: KeyPulse, budget: u64) -> Result<Settle, String> {
     let probe = |machine: &Machine| machine.document.firmware.render.probe(machine);
     let start = machine.instructions();
@@ -227,7 +227,7 @@ pub fn settled_key(machine: &mut Machine, key: Press, pulse: KeyPulse, budget: u
     let prior = machine.instructions() - start;
     let old_frame = machine.frame()?;
     let key_start = machine.instructions();
-    machine.press_once(key, pulse)?;
+    machine.press_latched(key, pulse)?;
     let settle_start = machine.instructions();
     let mut requested = None;
     let status = loop {
