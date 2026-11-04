@@ -20,6 +20,7 @@ module Replacement.PropertyService.Artifact
   , artifactCarrier
   , artifactStubs
   , artifactTable
+  , artifactSlotTable
   , artifactFunctions
   , artifactProof
   , linkedBytes
@@ -79,6 +80,7 @@ data LinkedArtifact = LinkedArtifact
   , artifactStubs :: StubAddresses
   , artifactFunctions :: [FunctionExtent]
   , artifactTable :: GuestAddress
+  , artifactSlotTable :: GuestAddress
   , artifactProof :: CodeProof
   }
 
@@ -88,6 +90,7 @@ data StagedPlacement = StagedPlacement
   , placementPatch :: TablePatch
   , placementExempted :: [ExemptedHit]
   , placementRefused :: [ScanHit]
+  , placementPassedOver :: [PassedOver]
   , placementBytes :: B.ByteString
   }
 
@@ -97,7 +100,9 @@ data StagedCandidate = StagedCandidate StagedImage4 Image4.StagedCandidate
 
 data Stub = GetterStub | SetterStub deriving (Eq, Show)
 
-data AccessorImage = BankImage | SaveImage deriving (Eq, Show, Enum, Bounded)
+-- | The bank images 0x96cc64, the previous-value image 0x89ec00, the slot-defaults records
+-- 0x7cb804 and the defaults table 0x81b074.
+data AccessorImage = BankImage | SaveImage | SlotDefaultsImage | TailDefaultsImage deriving (Eq, Show, Enum, Bounded)
 
 data AccessorOperation = Load8 | Load16 | Store8 | Store16 deriving (Eq, Show, Enum, Bounded)
 
@@ -116,6 +121,7 @@ data ArtifactError
   | SymbolRejected
   | EncodingRejected EncodingPart
   | TableRejected
+  | SlotTableRejected
   | CodeRejected AdmissionError
   | StagingRejected
   deriving (Eq, Show)
@@ -184,8 +190,11 @@ canonicalSource dat four loaderA loaderB five plain two = do
   properties <- either (Left . ClassificationRejected) Right (classify image4)
   pure (CanonicalSource dat image4 scanned identities properties)
 
+-- | Loads and stores of the bank and previous-value images, and loads of the two defaults images.
 accessors :: [Accessor]
-accessors = [Accessor image operation | image <- [minBound .. maxBound], operation <- [minBound .. maxBound]]
+accessors =
+  [Accessor image operation | image <- [BankImage, SaveImage], operation <- [minBound .. maxBound]]
+    ++ [Accessor SlotDefaultsImage Load8, Accessor SlotDefaultsImage Load16, Accessor TailDefaultsImage Load8]
 
 accessorName :: Accessor -> String
 accessorName (Accessor image operation) = "xm1_" ++ imagePart ++ "_" ++ operationPart
@@ -193,6 +202,8 @@ accessorName (Accessor image operation) = "xm1_" ++ imagePart ++ "_" ++ operatio
     imagePart = case image of
       BankImage -> "bank"
       SaveImage -> "save"
+      SlotDefaultsImage -> "slot_defaults"
+      TailDefaultsImage -> "tail_defaults"
     operationPart = case operation of
       Load8 -> "load8"
       Load16 -> "load16"
@@ -213,6 +224,8 @@ accessorCode (Accessor image operation) =
     base = case image of
       BankImage -> bankBase
       SaveImage -> saveBase
+      SlotDefaultsImage -> slotDefaultsBase
+      TailDefaultsImage -> tailDefaultsBase
     indexed = A.OffsetRegister True (A.Reg 0) A.LSL 0
     transfer = case operation of
       Load8 -> A.Load always A.Byte False (A.Reg 0) r12 indexed A.OffsetOnly
@@ -227,6 +240,8 @@ accessorWords (Accessor image operation) = base ++ [transfer, 0xe12fff1e]
     base = case image of
       BankImage -> [0xe30ccc64, 0xe340c096]
       SaveImage -> [0xe30ecc00, 0xe340c089]
+      SlotDefaultsImage -> [0xe30bc804, 0xe340c07c]
+      TailDefaultsImage -> [0xe30bc074, 0xe340c081]
     transfer = case operation of
       Load8 -> 0xe7dc0000
       Load16 -> 0xe19c00b0
@@ -242,8 +257,9 @@ r12 = A.Reg 12
 move :: Int -> Int -> A.Instruction
 move destination source = A.DataProcessing always A.MOV False (A.Reg destination) (A.Reg 0) (A.ShiftedImmediate (A.Reg source) A.LSL 0)
 
-propertiesSuffix :: String
+propertiesSuffix, slotsSuffix :: String
 propertiesSuffix = "14property_table10PROPERTIES"
+slotsSuffix = "14property_table5SLOTS"
 
 symbolKind :: C.ByteString -> SymbolKind
 symbolKind text = case C.unpack text of
@@ -254,7 +270,8 @@ symbolKind text = case C.unpack text of
 
 deriveArtifact :: [Property] -> B.ByteString -> B.ByteString -> Either ArtifactError LinkedArtifact
 deriveArtifact properties bytes symbolBytes = do
-  carrier@(Carrier carrierLow (GuestAddress carrierHigh)) <- either (Left . PlacementRejected) Right (deriveCarrier properties)
+  let candidates = carrierCandidates properties
+  require (not (null candidates)) (PlacementRejected NoOwnedRun)
   symbols <- either (const (Left SymbolRejected)) Right (F.parseSymbols symbolBytes)
   let rows = [(F.symbolName symbol, symbolKind kind) | (symbol, row) <- zip symbols (filter (not . C.null) (C.lines symbolBytes)), [_, _, kind, _] <- [C.words row]]
       kindOf = M.fromList rows
@@ -267,7 +284,10 @@ deriveArtifact properties bytes symbolBytes = do
         require (F.symbolAddress entry == address && F.symbolSize entry == size && kindIs [GlobalText] entry) SymbolRejected
   start <- at "__property_service_start"
   end <- at "__property_service_end"
-  require (GuestAddress start == carrierLow && end >= start && end <= carrierHigh && end .&. 3 == 0
+  carrier@(Carrier _ (GuestAddress carrierHigh)) <- case [c | c@(Carrier (GuestAddress low) _) <- candidates, low == start] of
+    [c] -> Right c
+    _ -> Left (PlacementRejected (CarrierNotCandidate (GuestAddress start)))
+  require (end >= start && end <= carrierHigh && end .&. 3 == 0
     && toInteger (B.length bytes) == toInteger (end - start)) ExtentRejected
   let absolutes = sortOn fst [(F.symbolName entry, F.symbolAddress entry) | entry <- symbols, kindIs [AbsoluteSymbol] entry]
       GuestAddress getterExitAddress = getterExit
@@ -284,13 +304,15 @@ deriveArtifact properties bytes symbolBytes = do
   forM_ accessorAddresses $ \(accessor, address) -> placed (accessorName accessor) address 0x10
   getAddress <- at "xm1_property_get"
   setAddress <- at "xm1_property_set"
-  tableSymbol <- case [entry | entry <- symbols, propertiesSuffix `isSuffixOf` F.symbolName entry] of
-    [entry] -> Right entry
-    _ -> Left SymbolRejected
+  let tableNamed suffix = case [entry | entry <- symbols, suffix `isSuffixOf` F.symbolName entry] of
+        [entry] -> Right entry
+        _ -> Left SymbolRejected
+  tableSymbol <- tableNamed propertiesSuffix
+  slotSymbol <- tableNamed slotsSuffix
   let functions =
         sortOn functionStart
           [ FunctionExtent (FunctionName (F.symbolName entry)) (GuestAddress (F.symbolAddress entry)) (GuestAddress (F.symbolAddress entry + F.symbolSize entry))
-          | entry <- symbols, F.symbolSize entry > 0, entry /= tableSymbol, kindIs [GlobalText, LocalText] entry
+          | entry <- symbols, F.symbolSize entry > 0, entry `notElem` [tableSymbol, slotSymbol], kindIs [GlobalText, LocalText] entry
           ]
       disjoint = and (zipWith (\(FunctionExtent _ _ a) (FunctionExtent _ b _) -> a <= b) functions (drop 1 functions))
   require (disjoint && all (\(FunctionExtent _ (GuestAddress low) (GuestAddress high)) -> low .&. 3 == 0 && high .&. 3 == 0) functions) ExtentRejected
@@ -300,31 +322,36 @@ deriveArtifact properties bytes symbolBytes = do
       code address count = [A.decode a (word a) | a <- take count [address, address + 4 ..]]
   require (code getterStubAddress 5 == [move 4 12, move 0 12, A.Branch always True getAddress, move 12 4, A.Branch always False getterExitAddress])
     (EncodingRejected (StubEncoding GetterStub))
-  require (code setterStubAddress 6 == [move 0 4, move 1 5, move 2 6, move 3 7, A.Branch always True setAddress, A.Branch always False setterExitAddress])
+  require (code setterStubAddress 6 == [move 0 4, move 1 5, move 2 6, move 3 8, A.Branch always True setAddress, A.Branch always False setterExitAddress])
     (EncodingRejected (StubEncoding SetterStub))
   forM_ accessorAddresses $ \(accessor, address) ->
     require (code address 4 == accessorCode accessor && wordsAt address 4 == accessorWords accessor) (EncodingRejected (AccessorEncoding accessor))
+  EncodedTables entries slots <- either (const (Left SlotTableRejected)) Right (encodeTables (map propertyClass properties))
   let tableAddress = F.symbolAddress tableSymbol
+      slotAddress = F.symbolAddress slotSymbol
+      slotBytes = 4 * fromIntegral (length slots)
   require (F.symbolSize tableSymbol == 2580 && tableAddress .&. 3 == 0 && length properties == 645) TableRejected
-  require ([EncodedEntry (word (tableAddress + 4 * index)) | index <- [0 .. 644]] == map (encodeClass . propertyClass) properties) TableRejected
+  require ([EncodedEntry (word (tableAddress + 4 * index)) | index <- [0 .. 644]] == entries) TableRejected
+  require (F.symbolSize slotSymbol == slotBytes && slotAddress .&. 3 == 0) SlotTableRejected
+  require ([EncodedSlot (word address) | address <- take (length slots) [slotAddress, slotAddress + 4 ..]] == slots) SlotTableRejected
   let layout = CodeLayout
         { layoutBase = GuestAddress start
         , layoutFunctions = functions
-        , layoutData = [(GuestAddress tableAddress, GuestAddress (tableAddress + 2580))]
+        , layoutData = [(GuestAddress tableAddress, GuestAddress (tableAddress + 2580)), (GuestAddress slotAddress, GuestAddress (slotAddress + slotBytes))]
         , layoutStoreAccessors = [GuestAddress address | (accessor, address) <- accessorAddresses, storing accessor]
         , layoutRoots = [GuestAddress getterStubAddress, GuestAddress setterStubAddress]
         , layoutTails = [(GuestAddress (getterStubAddress + 0x10), getterExit), (GuestAddress (setterStubAddress + 0x14), setterExit)]
         }
   proof <- either (Left . CodeRejected) Right (admitCode layout bytes)
-  pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) carrier (StubAddresses (GuestAddress getterStubAddress) (GuestAddress setterStubAddress)) functions (GuestAddress tableAddress) proof)
+  pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) carrier (StubAddresses (GuestAddress getterStubAddress) (GuestAddress setterStubAddress)) functions (GuestAddress tableAddress) (GuestAddress slotAddress) proof)
 
 -- | Undefined-instruction fill for the carrier past the linked bytes.
 fillWord :: Word32
 fillWord = 0xe7f000f0
 
 -- | The staged image4 for the classified properties: the preceding-word check, the table patch,
--- the reference scan over `scanned` with the reviewed data sites, the carrier write and the check
--- that every other byte of image4 is unchanged.
+-- the reference scan over `scanned` with the reviewed data sites, the refusal of every larger
+-- candidate run by those checks, the carrier write and the check that every other byte of image4 is unchanged.
 stagePlacement :: [Property] -> Image -> [(ScanImage, Image)] -> LinkedArtifact -> Either ArtifactError StagedPlacement
 stagePlacement properties image4@(Image _ _ base original) scanned artifact = do
   let carrier@(Carrier (GuestAddress low) _) = artifactCarrier artifact
@@ -332,8 +359,16 @@ stagePlacement properties image4@(Image _ _ base original) scanned artifact = do
   preceding <- placementStep (checkPreceding image4 carrier)
   patch@(TablePatch patched) <- placementStep (derivePatch image4 properties carrier (artifactStubs artifact))
   let exempt = S.fromList [wordAddress entry | entry <- patched, wordSide entry == SetterTable]
-      (refused, exempted) = partitionHits scanned dataSites (scanReferences carrier scanned exempt)
+      scan run = partitionHits scanned dataSites (scanReferences run scanned exempt)
+      (refused, exempted) = scan carrier
+      admits run = do
+        _ <- checkPreceding image4 run
+        case fst (scan run) of
+          [] -> Right ()
+          hits -> Left (CarrierReferenced hits)
   unless (null refused) (Left (PlacementRejected (CarrierReferenced refused)))
+  passedOver <- mapM (\run -> either (Right . PassedOver run) (const (Left (PlacementRejected (LargerCarrierAdmissible run)))) (admits run))
+    (takeWhile (/= carrier) (carrierCandidates properties))
   let offset address = fromIntegral (address - base)
       carrierOffset = offset low
       fillCount = (carrierBytes carrier - B.length linked) `div` 4
@@ -346,7 +381,7 @@ stagePlacement properties image4@(Image _ _ base original) scanned artifact = do
   require (B.length linked `mod` 4 == 0 && B.length carried == carrierBytes carrier && B.length staged == B.length original && restored == original
     && B.take (carrierBytes carrier) (B.drop carrierOffset staged) == carried
     && all (\(TableWord _ _ (GuestAddress address) _ (GuestAddress target)) -> U.word32At staged (offset address) == target) patched) StagingRejected
-  pure (StagedPlacement preceding patch exempted refused staged)
+  pure (StagedPlacement preceding patch exempted refused passedOver staged)
   where
     placementStep = either (Left . PlacementRejected) Right
 
@@ -369,15 +404,26 @@ candidateBytes :: StagedCandidate -> B.ByteString
 candidateBytes (StagedCandidate _ candidate) = Image4.candidateDat candidate
 
 candidateContractValue :: StagedCandidate -> Value
-candidateContractValue (StagedCandidate staged@(StagedImage4 source artifact (StagedPlacement preceding patch@(TablePatch patched) exempted refused image)) candidate) = object
+candidateContractValue (StagedCandidate staged@(StagedImage4 source artifact (StagedPlacement preceding patch@(TablePatch patched) exempted refused passedOver image)) candidate) = object
   [ "schema" .= (1 :: Int)
-  , "qualification" .= ("conditional-owned-property-service-stage-1" :: String)
+  , "qualification" .= ("conditional-owned-property-service-stage-2" :: String)
   , "source_sha256" .= M.fromList [(roleLabel role, identityText digest) | (role, digest) <- sourceIdentities source]
   , "linked_sha256" .= identityText (linkedIdentity artifact)
   , "symbols_sha256" .= identityText (symbolIdentity artifact)
   , "linked_bytes" .= B.length (linkedBytes artifact)
   , "carrier" .= object ["start" .= low, "end" .= high, "bytes" .= carrierBytes carrier, "fill_words" .= ((carrierBytes carrier - B.length (linkedBytes artifact)) `div` 4), "fill_word" .= fillWord]
   , "preceding" .= object ["address" .= (low - 4), "word" .= preceding, "instruction" .= show (A.decode (low - 4) preceding)]
+  , "passed_over_carriers" .=
+      [ object
+          [ "start" .= runLow, "end" .= runHigh, "bytes" .= carrierBytes run
+          , "refusal" .= case refusal of
+              PrecedingNotTransfer word -> object ["kind" .= ("preceding-not-transfer" :: String), "word" .= word, "instruction" .= show (A.decode (runLow - 4) word)]
+              PrecedingMissing -> object ["kind" .= ("preceding-missing" :: String)]
+              CarrierReferenced hits -> object ["kind" .= ("referenced" :: String), "hits" .= [object ["image" .= scanLabel label, "site" .= site, "word" .= word, "reference" .= show reference, "listing" .= hitListing hit] | hit@(ScanHit label (GuestAddress site) word reference) <- hits]]
+              other -> object ["kind" .= show other]
+          ]
+      | PassedOver run@(Carrier (GuestAddress runLow) (GuestAddress runHigh)) refusal <- passedOver
+      ]
   , "stubs" .= object ["getter" .= getterAddress, "setter" .= setterAddress, "getter_exit" .= getterExitAddress, "setter_exit" .= setterExitAddress]
   , "patch" .= object
       [ "getter_table" .= getterTableAddress, "setter_table" .= setterTableAddress
@@ -422,7 +468,7 @@ candidateContractValue (StagedCandidate staged@(StagedImage4 source artifact (St
   , "open_premises" .=
       ([ "loads are not confined: owned code may read any address; the native oracle confines reads"
        , "stack depths are bytes below the stock getter or setter frame's sp at the arm; the stock frames supply the depth above it"
-       , "the stock getter prologue saved r4 and r5, and the stock setter holds property, value, bank and default request in r4-r7 at the arm"
+       , "the stock getter prologue saved r4 and r5, and the stock setter holds property, value and bank in r4-r6 and the slot in r8 at the arm"
        , "the code policy checks sp, r11 and the return address at every exit; other callee-saved registers follow AAPCS unproved"
        , "the reference scan reads image4, image5, plain, loader A and loader B as instructions and words, and image2 and image3 (the FONT_ICON.FDL window extracted from the DAT) as words; it does not cover computed addresses"
        ] :: [String])

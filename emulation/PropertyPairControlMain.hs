@@ -8,7 +8,6 @@ import Data.Aeson (object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
-import Data.List (find)
 import qualified Data.Map.Strict as M
 import Emulation.Image4Staging
 import Emulation.PropertyPairPlan
@@ -33,14 +32,8 @@ main = getArgs >>= \arguments -> case arguments of
     images <- M.fromList <$> forM codeImages (\name -> (,) name <$> B.readFile (analysisPath analysis name))
     linked <- B.readFile linkedPath
     contract <- either (die . ("property-pair-control: contract: " ++)) pure . decodeContract =<< B.readFile contractPath
-    arms <- maybe (die "property-pair-control: PROPERTY is not classified") pure
-      (find ((== property) . armsProperty) (contractProperties contract))
-    unless (armsClass arms == OwnedField) (die "property-pair-control: PROPERTY is not an owned field")
-    unless (armsSetter arms < contractCarrierStart contract || armsSetter arms >= contractCarrierEnd contract)
-      (die "property-pair-control: PROPERTY's stock setter arm lies in the carrier")
-    patch <- maybe (die "property-pair-control: PROPERTY has no staged setter table word") pure
-      (find (\word -> patchSetterTable word && patchProperty word == property) (contractPatchWords contract))
-    let control = ControlWord property (patchAddress patch) (patchOriginal patch)
+    patch <- either (die . ("property-pair-control: " ++)) pure (controlPatch contract property)
+    let control = controlWord patch
     decoded <- either (die . ("property-pair-control: " ++)) pure
       (roleImage4 (PlanInputs ControlRole contract images linked (Just control)))
     scratchDirectory <- validateScratchDirectory scratch

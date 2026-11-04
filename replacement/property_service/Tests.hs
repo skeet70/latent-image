@@ -14,6 +14,7 @@ import PropertyFields (PropertyId (..))
 import Replacement.PropertyService.Admission
 import Replacement.PropertyService.Artifact
 import Replacement.PropertyService.Classify
+import Replacement.PropertyService.Encoding (EncodedTables (..), EncodingError (..), encodeTables)
 import Replacement.PropertyService.Placement
 import ServiceInventory (Image (..))
 import System.Environment (getArgs)
@@ -40,23 +41,30 @@ carrierEndAddress = 0x62d674
 testCarrier :: Carrier
 testCarrier = Carrier (GuestAddress carrierStartAddress) (GuestAddress carrierEndAddress)
 
--- | A classification whose encoded table is the linked one: owned fields' setter arms start the carrier,
--- delegated setter arms end it, and unassigned properties use both stock fallbacks.
+-- | A classification whose encoded tables are the linked ones: owned fields' and slot fields' setter
+-- arms start the carrier, delegated setter arms end it, and unassigned properties use both stock fallbacks.
 syntheticClassification :: B.ByteString -> [Symbol] -> [Property]
 syntheticClassification bytes symbols =
-  [ property (PropertyId (fromIntegral index + 1)) (U.word32At bytes (fromIntegral (table - carrierStartAddress) + 4 * index)) | index <- [0 .. 644] ]
+  [ property (PropertyId (fromIntegral index + 1)) (wordAt table index) | index <- [0 .. 644] ]
   where
     Symbol table _ _ = symbolNamed symbols ("10PROPERTIES" `isSuffixOf`)
+    Symbol slots _ _ = symbolNamed symbols ("5SLOTS" `isSuffixOf`)
+    wordAt base index = U.word32At bytes (fromIntegral (base - carrierStartAddress) + 4 * index)
+    owned identifier = Property identifier (GuestAddress 0x61e200) (GuestAddress carrierStartAddress) . Owned
     property identifier word = case word .&. 3 of
       1 -> Property identifier (GuestAddress 0x6243e4) (GuestAddress 0x6301fc) (Owned OwnedUnassigned)
-      2 -> Property identifier (GuestAddress 0x61e200) (GuestAddress carrierStartAddress) (Owned (OwnedField (field word)))
+      2 -> owned identifier (OwnedField (field word))
+      3 -> owned identifier (OwnedSlotField (slotArm word (wordAt slots (fromIntegral ((word `shiftR` 22) .&. 0x7f)))))
       _ -> Property identifier (GuestAddress 0x61e300) (GuestAddress carrierEndAddress) (Delegated ExitAdjusts)
-    field word = FieldArm
-      (BankOffset (fromIntegral ((word `shiftR` 13) .&. 0x1ff)))
-      (if testBit word 2 then Half else Byte)
-      (BitRange (fromIntegral ((word `shiftR` 4) .&. 0xf)) (fromIntegral ((word `shiftR` 8) .&. 0x1f)))
-      (FieldDefault (word `shiftR` 22))
-      (if testBit word 3 then SaveBank0Previous else NoSave)
+    widthAt word bit = if testBit word bit then Half else Byte
+    rangeAt word lsb = BitRange (fromIntegral ((word `shiftR` lsb) .&. 0xf)) (fromIntegral ((word `shiftR` (lsb + 4)) .&. 0x1f))
+    saveAt word bit = if testBit word bit then SaveBank0Previous else NoSave
+    field word = FieldArm (BankOffset (fromIntegral ((word `shiftR` 13) .&. 0x1ff))) (widthAt word 2) (rangeAt word 4) (FieldDefault (word `shiftR` 22)) (saveAt word 3)
+    slotArm word slot = SlotArm
+      (BankBranch (BankOffset (fromIntegral ((word `shiftR` 13) .&. 0x1ff))) (widthAt word 2) (rangeAt word 4)
+        (if testBit slot 17 then BankTailByte (TailOffset (fromIntegral ((slot `shiftR` 18) .&. 0x3ff))) else BankConstant (FieldDefault ((slot `shiftR` 18) .&. 0x3ff))))
+      (RecordBranch (RecordOffset (fromIntegral (slot .&. 0x3f))) (widthAt slot 6) (rangeAt slot 7))
+      (saveAt slot 16)
 
 putWordAt :: Word32 -> Word32 -> Word32 -> B.ByteString -> B.ByteString
 putWordAt base address value bytes =
@@ -113,15 +121,20 @@ dataSiteTests = do
 carrierTests :: IO ()
 carrierTests = do
   let fieldArm = Owned (OwnedField (FieldArm (BankOffset 0) Byte (BitRange 0 8) (FieldDefault 0) NoSave))
+      slotArm = Owned (OwnedSlotField (SlotArm (BankBranch (BankOffset 0x95) Byte (BitRange 4 4) (BankConstant (FieldDefault 3))) (RecordBranch (RecordOffset 0x24) Byte (BitRange 4 4)) SaveBank0Previous))
       delegated = Delegated ExitAdjusts
       classified arms = [Property (PropertyId n) (GuestAddress 0x61e200) (GuestAddress arm) verdict | (n, (arm, verdict)) <- zip [1 ..] arms]
-      carrierOf low high = Right (Carrier (GuestAddress low) (GuestAddress high))
-  expect "largest owned run" (carrierOf 0x2000 0x2400)
-    (deriveCarrier (classified [(0x1000, fieldArm), (0x1100, fieldArm), (0x1200, delegated), (0x2000, fieldArm), (0x2400, delegated)]))
-  expect "lowest run on a tie" (carrierOf 0x1000 0x1100)
-    (deriveCarrier (classified [(0x1000, fieldArm), (0x1100, delegated), (0x2000, fieldArm), (0x2100, delegated)]))
-  expect "run ending at the setter fallback" (carrierOf 0x630000 0x6301fc)
-    (deriveCarrier (classified [(0x1000, delegated), (0x630000, fieldArm)]))
+      carriers runs = [Carrier (GuestAddress low) (GuestAddress high) | (low, high) <- runs]
+  expect "runs largest first" (carriers [(0x2000, 0x2400), (0x1000, 0x1200)])
+    (carrierCandidates (classified [(0x1000, fieldArm), (0x1100, fieldArm), (0x1200, delegated), (0x2000, fieldArm), (0x2400, delegated)]))
+  expect "lowest run first on a tie" (carriers [(0x1000, 0x1100), (0x2000, 0x2100)])
+    (carrierCandidates (classified [(0x1000, fieldArm), (0x1100, delegated), (0x2000, fieldArm), (0x2100, delegated)]))
+  expect "run ending at the setter fallback" (carriers [(0x630000, 0x6301fc)])
+    (carrierCandidates (classified [(0x1000, delegated), (0x630000, fieldArm)]))
+  expect "slot fields extend an owned run" (carriers [(0x1000, 0x1200), (0x2000, 0x2100)])
+    (carrierCandidates (classified [(0x1000, fieldArm), (0x1100, slotArm), (0x1200, delegated), (0x2000, fieldArm), (0x2100, delegated)]))
+  expect "128 slot fields fill the slot table" (Right 128) (length . encodedSlots <$> encodeTables (replicate 128 slotArm))
+  expect "a 129th slot field is refused" (Left SlotTableFull) (encodeTables (replicate 129 slotArm))
 
 -- | A stock image4 holding the two tables of `properties`, `b 0x630200` before the carrier and zeros.
 syntheticImage4 :: [Property] -> B.ByteString
@@ -185,6 +198,20 @@ placementTests properties artifact = do
     (stage properties (with 0x62c494 0xe28f0020))
   expectRefusal "conditional preceding word" (PlacementRejected (PrecedingNotTransfer 0x0a000000))
     (stage properties (with (carrierStartAddress - 4) 0x0a000000))
+  let larger = Carrier (GuestAddress 0x624500) (GuestAddress 0x62b000)
+      moved = [ if propertyId p == propertyId owned then p {propertySetterArm = GuestAddress 0x624500}
+                else if propertyId p == propertyId delegatedProperty then p {propertySetterArm = GuestAddress 0x62b000}
+                else p
+              | p <- properties ]
+      precededImage = putWordAt 0x61c400 0x6244fc (branchWord False 0x6244fc 0x630200) (syntheticImage4 moved)
+      literalLoad = 0xe51f0020
+  expect "a larger run comes first" (take 2 (carrierCandidates moved)) [larger, testCarrier]
+  expectRefusal "larger run that staging admits" (PlacementRejected (LargerCarrierAdmissible larger)) (stage moved precededImage)
+  case stage moved (putWordAt 0x61c400 0x62b010 literalLoad precededImage) of
+    Right nextRun -> expect "larger run passed over for its literal reference"
+      [PassedOver larger (CarrierReferenced [ScanHit ScanImage4 (GuestAddress 0x62b010) literalLoad (PcRelativeInto (GuestAddress 0x62aff8))])]
+      (placementPassedOver nextRun)
+    Left failure -> fail ("next run refused: " ++ show failure)
 
 -- | One function at 0x1000 holding `code`, admitted alone.
 walk :: [Word32] -> Either AdmissionError CodeProof
@@ -229,9 +256,12 @@ main = do
       admit linked names = deriveArtifact properties linked names
       Symbol setStart setSize _ = symbolNamed symbols (== "xm1_property_set")
       Symbol tableAddress _ _ = symbolNamed symbols ("10PROPERTIES" `isSuffixOf`)
+      Symbol slotAddress _ _ = symbolNamed symbols ("5SLOTS" `isSuffixOf`)
       Symbol setterStubAddress _ _ = symbolNamed symbols (== "xm1_setter_stub")
       Symbol bankStore8 _ _ = symbolNamed symbols (== "xm1_bank_store8")
       Symbol bankLoad16 _ _ = symbolNamed symbols (== "xm1_bank_load16")
+      Symbol slotDefaultsLoad8 _ _ = symbolNamed symbols (== "xm1_slot_defaults_load8")
+      Symbol tailDefaultsLoad8 _ _ = symbolNamed symbols (== "xm1_tail_defaults_load8")
       calls = [site | site <- [setStart, setStart + 4 .. setStart + setSize - 4], U.word32At bytes (fromIntegral (site - carrierStartAddress)) .&. 0xff000000 == 0xeb000000]
   firstCall <- case calls of
     site : _ -> pure site
@@ -239,8 +269,17 @@ main = do
   artifact <- either (fail . ("real artifact refused: " ++) . show) pure (admit bytes symbolText)
   unless (artifactCarrier artifact == testCarrier) (fail "carrier differs")
   putStrLn "admitted the linked artifact against the synthetic classification"
-  let flipped = let at = fromIntegral (tableAddress - carrierStartAddress) + 1 in B.take at bytes <> B.singleton (B.index bytes at + 1) <> B.drop (at + 1) bytes
-  expectRefusal "mutated PROPERTIES byte" TableRejected (admit flipped symbolText)
+  let flippedAt address = let at = fromIntegral (address - carrierStartAddress) + 1 in B.take at bytes <> B.singleton (B.index bytes at + 1) <> B.drop (at + 1) bytes
+  expectRefusal "mutated PROPERTIES byte" TableRejected (admit (flippedAt tableAddress) symbolText)
+  expectRefusal "mutated SLOTS byte" SlotTableRejected (admit (flippedAt slotAddress) symbolText)
+  let unsaved = [case propertyClass p of Owned (OwnedSlotField arm) -> p {propertyClass = Owned (OwnedSlotField arm {slotSave = NoSave})}; _ -> p | p <- properties]
+  expectRefusal "slot fields the SLOTS table does not hold" SlotTableRejected (deriveArtifact unsaved bytes symbolText)
+  expectRefusal "setter stub passing r7 as the slot" (EncodingRejected (StubEncoding SetterStub))
+    (admit (replaceWord (setterStubAddress + 12) 0xe1a03007 bytes) symbolText)
+  expectRefusal "slot-defaults accessor base changed" (EncodingRejected (AccessorEncoding (Accessor SlotDefaultsImage Load8)))
+    (admit (replaceWord (slotDefaultsLoad8 + 4) 0xe340c07d bytes) symbolText)
+  expectRefusal "tail-defaults accessor storing" (EncodingRejected (AccessorEncoding (Accessor TailDefaultsImage Load8)))
+    (admit (replaceWord (tailDefaultsLoad8 + 8) 0xe7cc1000 bytes) symbolText)
   expectRefusal "moved stub" SymbolRejected (admit bytes (moveSymbol "xm1_setter_stub" (setterStubAddress + 4) symbolText))
   expectRefusal "store outside an accessor" (CodeRejected (AdmissionError (GuestAddress firstCall) NonStackStore))
     (admit (replaceWord firstCall 0xe5810000 bytes) symbolText)

@@ -16,6 +16,7 @@ module Emulation.PropertyPairRoutes
   , RetainedObservation (..)
   , ObservationStatus (..)
   , EffectsRefusal (..)
+  , RebasedEffects (..)
   , retainedEffects
   , CrawlEffect (..)
   , CrawlEdge (..)
@@ -231,9 +232,18 @@ data EffectsRefusal
   | ObservationShape String
   deriving (Eq, Show)
 
+-- | The routes a retained observation re-bases, and the crawl trials left out because their re-based
+-- effects are only the time-driven block.
+data RebasedEffects = RebasedEffects
+  { rebasedEffectsSource :: EffectsSource
+  , rebasedEffectsRoutes :: [Route]
+  , rebasedEffectsTimeDrivenTrials :: [Int]
+  } deriving (Eq, Show)
+
 -- | Replaces each crawl route's effects with the setter-entry r0 values and commit entries, in hit
--- order, of the step that pressed the route's keys.
-retainedEffects :: RetainedObservation -> [Route] -> Either EffectsRefusal (EffectsSource, [Route])
+-- order, of the step that pressed the route's keys, and drops the routes whose re-based effects are
+-- only the time-driven block.
+retainedEffects :: RetainedObservation -> [Route] -> Either EffectsRefusal RebasedEffects
 retainedEffects observation routes = do
   (roleText, status) <- shape (A.eitherDecodeStrict' (retainedReceipt observation) >>= parseEither receiptFields)
   role <- shape (parseRole roleText)
@@ -250,10 +260,18 @@ retainedEffects observation routes = do
         shape (A.eitherDecodeStrict' line >>= parseEither hitEffects)
       pure route { routeBody = KeyRoute keys (CrawlTrial trial effects) }
     _ -> pure route
-  pure (RetainedObservationSource (sha256 (retainedReceipt observation)) (sha256 (retainedSteps observation)) (sha256 (retainedHits observation)), replaced)
+  let (kept, dropped) = foldr keep ([], []) replaced
+  pure RebasedEffects
+    { rebasedEffectsSource = RetainedObservationSource (sha256 (retainedReceipt observation)) (sha256 (retainedSteps observation)) (sha256 (retainedHits observation))
+    , rebasedEffectsRoutes = kept
+    , rebasedEffectsTimeDrivenTrials = dropped }
  where
   shape :: Either String a -> Either EffectsRefusal a
   shape = either (Left . ObservationShape) Right
+  keep route (keptRoutes, droppedTrials) = case routeBody route of
+    KeyRoute _ (CrawlTrial trial effects)
+      | onlyTimeDrivenBlock effects -> (keptRoutes, trial : droppedTrials)
+    _ -> (route : keptRoutes, droppedTrials)
   receiptFields = withObject "receipt" $ \fields -> do
     outcome <- fields .: "outcome" :: Parser A.Object
     (,) <$> fields .: "role" <*> outcome .: "status"
@@ -326,6 +344,14 @@ decodeCrawlEdges bytes = do
       path <- maybe (fail "crawl edge leaves an unknown node") pure (M.lookup from paths)
       pure [CrawlEdge trial (path ++ [key]) decoded | reached /= Nothing]
 
+-- | Whether effects are non-empty and consist only of time-driven-block setter calls.
+onlyTimeDrivenBlock :: [CrawlEffect] -> Bool
+onlyTimeDrivenBlock effects = not (null effects) && all inBlock effects
+ where
+  inBlock effect = case effect of
+    SetterEffect property -> property `S.member` timeDrivenBlock
+    CommitEffect -> False
+
 -- | One route per distinct ordered effect sequence among edges with a property write or commit,
 -- other than edges leaving the no-card playback screen and edges whose effects are only the
 -- time-driven block: the fewest presses, then the lowest trial. Also the trials of the left-out
@@ -335,19 +361,15 @@ selectCrawlRoutes edges =
   ( [ Route (RouteName (printf "crawl-trial-%05d" (crawlTrial edge))) (KeyRoute (crawlKeys edge) (CrawlTrial (crawlTrial edge) (crawlEffects edge)))
     | edge <- sortOn crawlTrial (M.elems chosen) ]
   , sort [crawlTrial edge | edge <- effective, fromPlayback edge]
-  , sort [crawlTrial edge | edge <- effective, not (fromPlayback edge), timeDriven edge] )
+  , sort [crawlTrial edge | edge <- effective, not (fromPlayback edge), onlyTimeDrivenBlock (crawlEffects edge)] )
  where
   effective = filter (not . null . crawlEffects) edges
-  chosen = M.fromListWith shorter [(crawlEffects edge, edge) | edge <- effective, not (fromPlayback edge), not (timeDriven edge)]
+  chosen = M.fromListWith shorter [(crawlEffects edge, edge) | edge <- effective, not (fromPlayback edge), not (onlyTimeDrivenBlock (crawlEffects edge))]
   shorter a b = if rank a <= rank b then a else b
   rank edge = (length (crawlKeys edge), crawlTrial edge)
   fromPlayback edge = case reverse (crawlKeys edge) of
     _ : KeyPlay : _ -> True
     _ -> False
-  timeDriven edge = all inBlock (crawlEffects edge)
-  inBlock effect = case effect of
-    SetterEffect property -> property `S.member` timeDrivenBlock
-    CommitEffect -> False
 
 -- | Setter properties written through 0x6309c4 (lr 0x630a04), value 0, bank 0, slot 1, in repeating
 -- blocks of four in this order; the block recurs on 1,120 of crawl-4's 4,528 reached edges.
@@ -357,15 +379,20 @@ timeDrivenSequence = [0x1c9, 0x1c8, 0x27f, 0x280]
 timeDrivenBlock :: S.Set Word32
 timeDrivenBlock = S.fromList timeDrivenSequence
 
--- | Why `selectCrawlRoutes` leaves out edges whose only effects are the time-driven block.
+-- | Why `selectCrawlRoutes` leaves out edges, and `retainedEffects` routes, whose only effects are the
+-- time-driven block.
 timeDrivenExclusion :: T.Text
 timeDrivenExclusion = T.unwords
-  [ "These edges write only the 0x1c9/0x1c8/0x27f/0x280 block, which recurs in blocks of four on 1,120 of"
+  [ "Routes whose only effects are the 0x1c9/0x1c8/0x27f/0x280 block are left out, from crawl-4's edges"
+  , "or from a retained observation's re-based last steps. The block recurs in blocks of four on 1,120 of"
   , "crawl-4's 4,528 reached edges; all of them exhausted their 90M budget in crawl-4, so whether their key"
   , "is accepted depends on render-drain timing. In natural-1 run 3, crawl-trial-01462's OK was not consumed"
   , "within 90M retained (32 block calls, as in crawl-4), while owned consumed it after 32.5M and opened"
   , "SHOOTING MENU (1,5,2), setting 0x278 and 0x279 on both banks, as stock crawl-4 trial 1364 does from the"
-  , "same live view without the overlay; the getter (lr, r0-r3, result) sets agree with no conflicting result." ]
+  , "same live view without the overlay; the getter (lr, r0-r3, result) sets agree with no conflicting result."
+  , "On the current model, crawl-trial-01469 joins this class: in its last step the live view (16,472) never"
+  , "drains its render within 90M instructions after OK, so its dial-right is never pressed and the step shows"
+  , "only the block." ]
 
 -- | Why `selectCrawlRoutes` leaves out edges from the screen PLAY opens without a card.
 playbackExclusion :: T.Text
