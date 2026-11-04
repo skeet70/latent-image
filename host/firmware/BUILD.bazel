@@ -2184,7 +2184,6 @@ filegroup(
     name = "build-usb-toggle-ram-sources",
     srcs = [
         "ArmElf.hs",
-        "BUILD.bazel",
         "BuildUsbToggleRam.hs",
         "RamPushLayout.hs",
         "UsbToggleRam.hs",

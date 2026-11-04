@@ -49,7 +49,7 @@ main = do
   record <- either (die . ((recordPath ++ ": ") ++)) pure . parseReviewRecord =<< B.readFile recordPath
   relinker <- runfilesRelinker payload
   manifest <- withRelinkedBuildUsing relinker EnforceAllowlist (Address (fst (payloadReferenceBases payload))) (pure . pinnedManifest)
-  let built = sourceIdentity manifest
+  let built = reviewedScopeIdentity manifest
       recorded = [identity | pin <- recordPins record, let PinIdentity identity = pinIdentity pin]
   let unrecorded = [name | (name, _) <- built, name `notElem` recorded]
       unbuilt = [name | name <- recorded, name `notElem` map fst built]
