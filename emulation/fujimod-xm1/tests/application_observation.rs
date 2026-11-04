@@ -37,7 +37,6 @@ const COMMAND: u32 = 0x1234;
 const PAYLOAD: [u32; 2] = [0xaabbccdd, 0x11223344];
 const KERNEL_TARGET: u32 = 0x400000;
 const RELEASE_TARGET: u32 = 0x400100;
-const MEMCPY: u32 = 0x722054;
 const ROOT_A: u32 = 0x4004dae0;
 const ROOT_B: u32 = 0x400ddaa0;
 const RENDER: u32 = 0x500000;
@@ -228,7 +227,7 @@ impl<'a> Builder<'a> {
             (CREATION + 36, 1), (IDS, 0x10001), (TASK + 8, CREATION), (TASK + 32, 1), (CURRENT, TASK),
             (0x96bd20, ROOT_A), (0x96bd24, ROOT_B), (ROOT_A + 0xc8, KERNEL_TARGET), (ROOT_A + 0xf8, RELEASE_TARGET),
             (SELECTOR_BLOCK, 0x107), (PACKET + 4, COMMAND), (PACKET + 8, 8), (PACKET + 12, PAYLOAD[0]), (PACKET + 16, PAYLOAD[1]),
-            (COPIED, PAYLOAD[0]), (COPIED + 4, PAYLOAD[1]), (KERNEL_TARGET, 0xe92d4800), (RELEASE_TARGET, 0xe92d4810), (MEMCPY, 0xe92d4820),
+            (COPIED, PAYLOAD[0]), (COPIED + 4, PAYLOAD[1]), (KERNEL_TARGET, 0xe92d4800), (RELEASE_TARGET, 0xe92d4810),
             (RENDER, 1), (TABLE_RECORD, TABLE), (TABLE_RECORD + 4, ENTRIES.len() as u32),
         ] {
             memory.set(address, value);
@@ -393,8 +392,7 @@ impl<'a> Builder<'a> {
         self.queue(0x72537c, registers(with(queued, &[(0, 0)]), inner, 0), vec![slot.clone(), self.memory.view(destination, 3)]);
         self.queue(0x7253c0, registers(queued, inner, 0), header.clone());
         let copy = registers(with(queued, &[(0, COPIED), (1, PACKET + 12), (2, 8)]), inner, 0);
-        let copy_call = self.queue(0x7253f8, copy, header.clone());
-        self.target(MEMCPY, registers(copy.r.map(|word| word.0), inner, 0x7253fc), copy_call);
+        self.queue(0x7253f8, copy, header.clone());
         self.queue(0x7253fc, registers(queued, inner, 0), released.clone());
         let release = registers(with(queued, &[(0, 1), (1, PACKET), (3, RELEASE_TARGET)]), inner, 0);
         let release_call = self.queue(0x725414, release, released.clone());

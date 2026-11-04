@@ -1,7 +1,7 @@
 //! The live application recorder `composed-startup` drives: samples at every application, queue and target stop,
 //! the task1 stack scope, readiness samples and, after the boundary, the route with settled inputs.
 use super::checks::{
-    committed, Kind, ADAPTER_ENTRY, COPY_CALL, COPY_RETURN, KERNEL_RECEIVE, MEMCPY, PAYLOAD_LIMIT, PRESS, QUEUE_EXIT, QUEUE_ROOTS,
+    committed, Kind, ADAPTER_ENTRY, COPY_CALL, COPY_RETURN, KERNEL_RECEIVE, PAYLOAD_LIMIT, PRESS, QUEUE_EXIT, QUEUE_ROOTS,
     RECEIVED, RELEASE_CALL, RELEASE_RETURN, TASK1_RESET,
 };
 use super::readiness::{Due, Search, CHAIN, IMAGE5_PUBLICATION, PERIOD, QUEUE_ENTRY};
@@ -296,9 +296,6 @@ impl<'a> Recorder<'a> {
         }
         if scoped && receiving && matches!(stock, KERNEL_RECEIVE | RELEASE_CALL) {
             self.add_target(machine, r(3), index)?;
-        }
-        if scoped && receiving && stock == COPY_CALL {
-            self.add_target(machine, MEMCPY, index)?;
         }
         if scoped && receiving && stock == QUEUE_EXIT {
             self.receives.retain(|receive| receive.core != core || r(11).checked_add(4) != Some(receive.sp));
