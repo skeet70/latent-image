@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "path": ["ok", "down", "ok", "down"],
+  "key": "back",
+  "trace_sites": [
+    {"address": "0x0061c8ec", "label": "api-live-to-mirror"},
+    {"address": "0x0061c8fc", "label": "api-mirror-to-live"},
+    {"address": "0x0061c90c", "label": "api-bank-copy"},
+    {"address": "0x0061db3c", "label": "live-to-mirror"},
+    {"address": "0x0061db18", "label": "mirror-to-live"},
+    {"address": "0x0061daa8", "label": "bank-copy"},
+    {"address": "0x0061db04", "label": "block-copy"},
+    {"address": "0x0061d92c", "label": "after-restore"},
+    {"address": "0x006309ec", "label": "reload-call"},
+    {"address": "0x006309f0", "label": "reload-return"},
+    {"address": "0x00624694", "label": "setter"},
+    {"address": "0x00d42a64", "label": "special-post"},
+    {"address": "0x00c76650", "label": "stock-picker-back"}
+  ],
+  "write_ranges": [
+    {"start": "0x0096cc64", "end": "0x0096cfe8"}
+  ],
+  "limit": 65536
+}
