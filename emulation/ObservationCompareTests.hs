@@ -60,6 +60,8 @@ cases =
     , not (null (compared (segment (idlePass ++ sync ++ shortPass)) (segment (shortPass ++ sync ++ idlePass)))) )
   , ( "a non-converter entry beside a sync differs"
     , not (null (compared (segment (idlePass ++ sync)) (segment (idlePass ++ ["cc-entry-builder"] ++ sync)))) )
+  , ( "a non-converter entry before the first marker differs"
+    , not (null (compared (segment (sync ++ idlePass)) (segment (["cc-entry-builder"] ++ sync ++ idlePass)))) )
   , ( "timing fields are left out"
     , null (compared (object ["instructions" .= (1 :: Int), "r0" .= ("0x1" :: T.Text)])
                      (object ["instructions" .= (2 :: Int), "r0" .= ("0x1" :: T.Text)])) )
