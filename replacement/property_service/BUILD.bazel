@@ -1,0 +1,203 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "property-service-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_property_service",
+    data = [
+        "src/property_table.rs",
+        "src/table.rs",
+    ],
+)
+
+xm1_rust_elf(
+    name = "property-service-image",
+    rust_staticlib = ":property-service-rust",
+    asm_srcs = ["entry.S"],
+    entry = "xm1_getter_stub",
+    link_script = "property-service.ld",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
+
+haskell_library(
+    name = "classify",
+    srcs = [
+        "Replacement/PropertyService/ClassRecord.hs",
+        "Replacement/PropertyService/Classify.hs",
+        "Replacement/PropertyService/Encoding.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:containers",
+        "//replacement/media_permit:property-fields",
+        "//replacement/media_permit:service-inventory",
+    ],
+)
+
+haskell_binary(
+    name = "table-gen",
+    srcs = ["TableGenMain.hs"],
+    main_file = "TableGenMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":classify",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//replacement/media_permit:property-fields",
+        "//replacement/media_permit:service-inventory",
+    ],
+)
+
+haskell_library(
+    name = "property-service-artifact",
+    srcs = [
+        "Replacement/PropertyService/Admission.hs",
+        "Replacement/PropertyService/Artifact.hs",
+        "Replacement/PropertyService/Placement.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":classify",
+        "//emulation:case-sha256",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:font-window",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+        "//replacement/media_permit:property-fields",
+        "//replacement/media_permit:service-inventory",
+    ],
+)
+
+haskell_binary(
+    name = "stage-property-service",
+    srcs = ["StageMain.hs"],
+    main_file = "StageMain.hs",
+    args = [
+        "$(rootpath //lz:lz-encode)",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "$(rootpath //lz:fflzd)",
+    ],
+    data = ["//lz:lz-encode", "//host/firmware:rebuild-update", "//lz:fflzd"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":property-service-artifact",
+        "//emulation:image4-staging-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "property-service-artifact-tests",
+    srcs = ["Tests.hs"],
+    main_file = "Tests.hs",
+    args = [
+        "$(rootpath :property-service-image.bin)",
+        "$(rootpath :property-service-image.symbols)",
+    ],
+    data = [":property-service-image.bin", ":property-service-image.symbols"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":classify",
+        ":property-service-artifact",
+        "//emulation:case-sha256",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:update-container",
+        "//replacement/media_permit:property-fields",
+        "//replacement/media_permit:service-inventory",
+    ],
+)
+
+haskell_library(
+    name = "property-oracle-lib",
+    srcs = ["Replacement/PropertyService/Oracle.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":classify",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:host-support",
+        "//replacement/media_permit:property-fields",
+    ],
+)
+
+haskell_binary(
+    name = "property-oracle",
+    srcs = ["OracleMain.hs"],
+    main_file = "OracleMain.hs",
+    args = [
+        "--runner",
+        "$(rootpath //emulation:native-runner)",
+        "--linked",
+        "$(rootpath :property-service-image.bin)",
+        "--symbols",
+        "$(rootpath :property-service-image.symbols)",
+    ],
+    data = [
+        ":property-service-image.bin",
+        ":property-service-image.symbols",
+        "//emulation:native-runner",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":classify",
+        ":property-oracle-lib",
+        ":property-service-artifact",
+        "//emulation:case-sha256",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host/firmware:bank-allowlist",
+        "//replacement/media_permit:property-fields",
+        "//replacement/media_permit:service-inventory",
+    ],
+)
+
+haskell_test(
+    name = "property-oracle-tests",
+    srcs = ["OracleTests.hs"],
+    main_file = "OracleTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":classify",
+        ":property-oracle-lib",
+        "//emulation:native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host/firmware:bank-allowlist",
+        "//replacement/media_permit:property-fields",
+    ],
+)

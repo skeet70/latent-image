@@ -147,6 +147,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/ram_push.rs",
     "//emulation:fujimod-xm1/src/render.rs",
     "//emulation:fujimod-xm1/src/run.rs",
+    "//emulation:fujimod-xm1/src/reset_observation.rs",
     "//emulation:fujimod-xm1/src/root_compact.rs",
     "//emulation:fujimod-xm1/src/rtos_census.rs",
     "//emulation:fujimod-xm1/src/sd_host.rs",

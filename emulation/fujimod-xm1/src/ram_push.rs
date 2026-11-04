@@ -11,6 +11,7 @@ use fujimod_xm1::machine::{KeyPulse, Machine, MENU_PULSE, ReleaseSegment, RunOut
 use fujimod_xm1::modal_trace::BeginRequest as ModalBeginRequest;
 use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::run::{self, NodeName};
+use fujimod_xm1::reset_observation::{AttachPhase, ResetObserver, Spec as ResetObservationSpec};
 use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
 use fujimod_emulator::board::preservation::{
     PhysicalRange, Preservation, PreservationState, ProtectedRanges,
@@ -31,10 +32,11 @@ use std::{
 
 const USAGE: &str = "Usage: fujimod-xm1-ram-push --run RUN.json --boot-rom ROM --installed-dat DAT \
 --adjustment-nand NAND --output DIR --ram-push-checkpoints DIR [--sd-card-image CARD] [--attach-hold-key KEY] \
-[--fresh-boot]\n";
+[--fresh-boot [--reset-observation SPEC.json]]\n";
 
 const ATTACH_RECORD: &str = "ram-push-attach.json";
 const INSTALL_RECORD: &str = "ram-push-install.json";
+const RESET_OBSERVATION_RECORD: &str = "reset-observation.json";
 const CHECKPOINT_SCHEMA: u32 = 1;
 const FIRST_START_SCREEN: u64 = 100_000_000;
 const FIRST_START_PULSE: KeyPulse = KeyPulse { hold: 8_000_000, release: 8_000_000 };
@@ -71,6 +73,7 @@ struct Arguments {
     output: PathBuf,
     checkpoints: PathBuf,
     sd_card_image: Option<PathBuf>,
+    reset_observation: Option<PathBuf>,
     attach_hold: Option<RouteKey>,
     fresh_boot: bool,
 }
@@ -101,6 +104,7 @@ fn arguments() -> Result<Arguments, String> {
             "--output",
             "--ram-push-checkpoints",
             "--sd-card-image",
+            "--reset-observation",
         ]
         .contains(&flag.as_str())
         {
@@ -112,6 +116,10 @@ fn arguments() -> Result<Arguments, String> {
         }
     }
     let sd_card_image = values.remove("--sd-card-image");
+    let reset_observation = values.remove("--reset-observation");
+    if reset_observation.is_some() && !fresh_boot {
+        return Err(USAGE.into());
+    }
     let mut take = |name: &str| values.remove(name).ok_or_else(|| USAGE.to_owned());
     Ok(Arguments {
         run: take("--run")?,
@@ -121,6 +129,7 @@ fn arguments() -> Result<Arguments, String> {
         output: take("--output")?,
         checkpoints: take("--ram-push-checkpoints")?,
         sd_card_image,
+        reset_observation,
         attach_hold,
         fresh_boot,
     })
@@ -248,10 +257,14 @@ struct Attachment {
 }
 
 /// Boots to live view past the first-start screens and enumerates ff80. A held key is pressed
-/// `ATTACH_HOLD_PULSE` before the cable rises and released after enumeration.
-fn attach(machine: Machine, rendezvous: RendezvousInputs, hold: Option<RouteKey>) -> Result<(Ff80, Attachment), String> {
+/// `ATTACH_HOLD_PULSE` before the cable rises and released after enumeration. An observer ends a
+/// watch segment at each phase.
+fn attach(machine: Machine, rendezvous: RendezvousInputs, hold: Option<RouteKey>, mut observer: Option<&mut ResetObserver>)
+    -> Result<(Ff80, Attachment), String> {
     let mut bridge = Ff80::new(machine, rendezvous);
+    let mut boundary = |bridge: &Ff80, phase| observer.as_mut().map_or(Ok(()), |observer| observer.boundary(&bridge.machine, phase));
     bridge.advance(FIRST_START_SCREEN.saturating_sub(bridge.machine.instructions()))?;
+    boundary(&bridge, AttachPhase::FirstStart)?;
     if rendezvous == RendezvousInputs::MenuUpAndWriteProtect && !bridge.machine.card_present()? {
         return Err("the SD host does not read the inserted card as present".into());
     }
@@ -259,6 +272,7 @@ fn attach(machine: Machine, rendezvous: RendezvousInputs, hold: Option<RouteKey>
         bridge.key(key, FIRST_START_PULSE)?;
     }
     bridge.advance(LIVE_VIEW_SETTLE)?;
+    boundary(&bridge, AttachPhase::LiveView)?;
     let pressed = bridge.machine.instructions();
     let mut pre_attach = json!({"instructions": pressed});
     if let Some(key) = hold {
@@ -275,6 +289,7 @@ fn attach(machine: Machine, rendezvous: RendezvousInputs, hold: Option<RouteKey>
             "attach_instructions": attached, "released_instructions": released,
             "menu_after_release": menu_value(bridge.machine.menu()?)});
     }
+    boundary(&bridge, AttachPhase::Attached)?;
     Ok((bridge, Attachment { pre_attach, device, configuration }))
 }
 
@@ -296,7 +311,7 @@ enum Request {
     List,
     Transfer(Transfer),
     TraceSites { sites: BTreeMap<String, String> },
-    TraceHits { from: usize },
+    TraceHits { from: usize, #[serde(default)] limit: Option<std::num::NonZeroUsize> },
     ModalObservationBegin(ModalBeginRequest),
     ModalObservationReport,
     ModalObservationEnd,
@@ -320,6 +335,7 @@ enum Request {
         #[serde(default)] fetch_ranges: Vec<[u64; 2]>,
     },
     WatchState,
+    WatchEnd,
     PreservationBegin { ranges: Vec<[u64; 2]> },
     PreservationState,
     MediaState,
@@ -328,6 +344,8 @@ enum Request {
     SnapshotSave { name: SnapshotName },
     SnapshotRestore { name: SnapshotName },
     SnapshotKey { name: SnapshotName, key: PressName },
+    /// A `snapshot-key` press from the current guest.
+    DisplayKey { key: PressName },
     SnapshotDrop { name: SnapshotName },
     Finish,
 }
@@ -357,6 +375,7 @@ enum RequestKind {
     MediaRead,
     WatchBegin,
     WatchState,
+    WatchEnd,
     PreservationBegin,
     PreservationState,
     MediaState,
@@ -365,6 +384,7 @@ enum RequestKind {
     SnapshotSave,
     SnapshotRestore,
     SnapshotKey,
+    DisplayKey,
     SnapshotDrop,
     Finish,
 }
@@ -394,6 +414,7 @@ impl Request {
             Request::MediaRead { .. } => RequestKind::MediaRead,
             Request::WatchBegin { .. } => RequestKind::WatchBegin,
             Request::WatchState => RequestKind::WatchState,
+            Request::WatchEnd => RequestKind::WatchEnd,
             Request::PreservationBegin { .. } => RequestKind::PreservationBegin,
             Request::PreservationState => RequestKind::PreservationState,
             Request::MediaState => RequestKind::MediaState,
@@ -402,6 +423,7 @@ impl Request {
             Request::SnapshotSave { .. } => RequestKind::SnapshotSave,
             Request::SnapshotRestore { .. } => RequestKind::SnapshotRestore,
             Request::SnapshotKey { .. } => RequestKind::SnapshotKey,
+            Request::DisplayKey { .. } => RequestKind::DisplayKey,
             Request::SnapshotDrop { .. } => RequestKind::SnapshotDrop,
             Request::Finish => RequestKind::Finish,
         }
@@ -839,11 +861,16 @@ impl Server {
     }
 
     fn arm(&mut self, requested: &BTreeMap<String, String>) -> Result<usize, String> {
+        let parsed = requested.iter()
+            .map(|(address, label)| Ok((parse_address(address)?, label.clone())))
+            .collect::<Result<BTreeMap<u32, String>, String>>()?;
+        self.arm_sites(&parsed)
+    }
+
+    fn arm_sites(&mut self, requested: &BTreeMap<u32, String>) -> Result<usize, String> {
         let mut sites: BTreeMap<u32, String> =
             FIXED_SITES.iter().map(|(address, label)| (*address, (*label).to_owned())).collect();
-        for (address, label) in requested {
-            sites.insert(parse_address(address)?, label.clone());
-        }
+        sites.extend(requested.iter().map(|(address, label)| (*address, label.clone())));
         let count = sites.len();
         let machine = &mut self.bridge.machine;
         machine.traces.arm(&machine.session, sites)?;
@@ -883,6 +910,24 @@ impl Server {
             waited += DISPLAY_STEP;
         }
         Ok(waited)
+    }
+
+    /// Presses `key`, then waits for a presented plane; a failed press is returned as its `failure`.
+    fn display_press(&mut self, key: &PressName, snapshot: Option<&SnapshotName>) -> Result<Value, String> {
+        let started = Instant::now();
+        let before = self.bridge.machine.instructions();
+        let pressed = self.bridge.settled_key(key.press, default_pulse(key.press), MAX_SETTLE)
+            .and_then(|settle| self.bridge.machine.require_running().map(|()| settle))
+            .and_then(|settle| self.await_display_plane().map(|waited| (settle, waited)));
+        let instructions = self.bridge.machine.instructions() - before;
+        let (settle, display_wait, menu, failure) = match pressed {
+            Ok((settle, waited)) => (json!(settle), json!(waited), menu_value(self.bridge.machine.menu()?), Value::Null),
+            Err(failure) => (Value::Null, Value::Null, Value::Null, json!(failure)),
+        };
+        self.key_log.push(json!({"key": key.name, "snapshot": snapshot, "seconds": started.elapsed().as_secs_f64(),
+            "instructions": instructions, "settle": settle, "display_wait_instructions": display_wait, "failure": failure}));
+        Ok(json!({"snapshot": snapshot, "key": key.name, "menu": menu, "settle": settle, "instructions": instructions,
+            "display_wait_instructions": display_wait, "failure": failure}))
     }
 
     fn handle(&mut self, request: Request) -> Result<Option<Value>, String> {
@@ -936,12 +981,13 @@ impl Server {
                 json!({"count": count, "bytes": encode_hex(&payload)})
             }
             Request::TraceSites { sites } => json!({"sites": self.arm(&sites)?}),
-            Request::TraceHits { from } => {
+            Request::TraceHits { from, limit } => {
                 let hits = &self.bridge.machine.traces.hits;
                 if from > hits.len() {
                     return Err("trace-hits requires a hit index within the recorded hits".into());
                 }
-                json!({"count": hits.len(), "hits": &hits[from..]})
+                let end = limit.map_or(hits.len(), |limit| hits.len().min(from.saturating_add(limit.get())));
+                json!({"count": hits.len(), "hits": &hits[from..end]})
             }
             Request::ModalObservationBegin(request) => {
                 let machine = &mut self.bridge.machine;
@@ -1133,6 +1179,12 @@ impl Server {
                     None => return Err("watch-state requires an armed memory watch".into()),
                 },
             },
+            Request::WatchEnd => {
+                let mut watch = self.watch.take().ok_or("watch-end requires an armed memory watch")?;
+                let state = watch.records.borrow().state();
+                self.bridge.machine.session.board.memory_watch_end(&mut watch)?;
+                state
+            }
             Request::PreservationBegin { ranges } => {
                 if self.bridge.machine.traces.modal_observation_active() {
                     return Err("active modal observation refuses preservation replacement".into());
@@ -1230,21 +1282,11 @@ impl Server {
             }
             Request::SnapshotKey { name, key } => {
                 let cleared_failure = self.restore_snapshot(&name)?;
-                let started = Instant::now();
-                let before = self.bridge.machine.instructions();
-                let pressed = self.bridge.settled_key(key.press, default_pulse(key.press), MAX_SETTLE)
-                    .and_then(|settle| self.bridge.machine.require_running().map(|()| settle))
-                    .and_then(|settle| self.await_display_plane().map(|waited| (settle, waited)));
-                let instructions = self.bridge.machine.instructions() - before;
-                let (settle, display_wait, menu, failure) = match pressed {
-                    Ok((settle, waited)) => (json!(settle), json!(waited), menu_value(self.bridge.machine.menu()?), Value::Null),
-                    Err(failure) => (Value::Null, Value::Null, Value::Null, json!(failure)),
-                };
-                self.key_log.push(json!({"key": key.name, "snapshot": name, "seconds": started.elapsed().as_secs_f64(),
-                    "instructions": instructions, "settle": settle, "display_wait_instructions": display_wait, "failure": failure}));
-                json!({"snapshot": name, "key": key.name, "menu": menu, "settle": settle, "instructions": instructions,
-                    "display_wait_instructions": display_wait, "failure": failure, "cleared_failure": cleared_failure})
+                let mut response = self.display_press(&key, Some(&name))?;
+                response["cleared_failure"] = json!(cleared_failure);
+                response
             }
+            Request::DisplayKey { key } => self.display_press(&key, None)?,
             Request::SnapshotDrop { name } => {
                 self.snapshots.remove(&name).ok_or_else(|| format!("snapshot {} is not held", name.0))?;
                 json!({"name": name, "held": self.snapshots.len()})
@@ -1400,6 +1442,7 @@ fn drive() -> Result<(), String> {
         card,
     };
     std::fs::create_dir_all(&arguments.output).map_err(|e| format!("{}: {e}", arguments.output.display()))?;
+    let observation = arguments.reset_observation.as_deref().map(|path| ResetObservationSpec::parse(&read(path)?)).transpose()?;
     let key = boot_key(&arguments, &inputs, &adjustment_bytes)?;
     let key_seconds = started.elapsed().as_secs_f64();
     let root = arguments.checkpoints.clone();
@@ -1418,6 +1461,7 @@ fn drive() -> Result<(), String> {
     let attach_directory = root.join(&key.key.0);
     let restore_started = Instant::now();
     let (bridge, attachment, checkpoint) = match start.installed {
+        Some(_) if observation.is_some() => return Err("a reset observation starts from no install checkpoint".into()),
         Some(directory) => {
             let (directory, record) = installed
                 .into_iter()
@@ -1453,17 +1497,31 @@ fn drive() -> Result<(), String> {
         }
         None => {
             let boot_started = Instant::now();
-            let (mut bridge, attachment) = attach(inputs.machine()?, rendezvous, arguments.attach_hold)?;
+            let mut machine = inputs.machine()?;
+            let mut observer = observation.as_ref().map(|spec| ResetObserver::begin(&mut machine, spec)).transpose()?;
+            let (mut bridge, attachment) = attach(machine, rendezvous, arguments.attach_hold, observer.as_mut())?;
             let boot_seconds = boot_started.elapsed().as_secs_f64();
-            let save_started = Instant::now();
-            let record = json!({"schema": CHECKPOINT_SCHEMA, "key": key.key, "inputs": key.inputs,
-                "pre_attach": attachment.pre_attach, "device": encode_hex(&attachment.device),
-                "configuration": encode_hex(&attachment.configuration)});
-            save_checkpoint(&mut bridge, &root, &key.key.0, ATTACH_RECORD, &record)?;
             let start = if arguments.fresh_boot { StartKind::FreshBoot } else { StartKind::Cold };
-            let checkpoint = json!({"key": key.key, "inputs": key.inputs, "directory": attach_directory,
-                "key_seconds": key_seconds, "start": start,
-                "boot_seconds": boot_seconds, "saved": true, "save_seconds": save_started.elapsed().as_secs_f64()});
+            let checkpoint = match observer {
+                Some(observer) => {
+                    let path = arguments.output.join(RESET_OBSERVATION_RECORD);
+                    let bytes = serde_json::to_vec(&observer.finish()?).map_err(|error| format!("reset observation record: {error}"))?;
+                    write(&path, &bytes)?;
+                    json!({"key": key.key, "inputs": key.inputs, "directory": attach_directory,
+                        "key_seconds": key_seconds, "start": start, "boot_seconds": boot_seconds, "saved": false,
+                        "reset_observation": {"path": path, "sha256": sha256(&bytes)}})
+                }
+                None => {
+                    let save_started = Instant::now();
+                    let record = json!({"schema": CHECKPOINT_SCHEMA, "key": key.key, "inputs": key.inputs,
+                        "pre_attach": attachment.pre_attach, "device": encode_hex(&attachment.device),
+                        "configuration": encode_hex(&attachment.configuration)});
+                    save_checkpoint(&mut bridge, &root, &key.key.0, ATTACH_RECORD, &record)?;
+                    json!({"key": key.key, "inputs": key.inputs, "directory": attach_directory,
+                        "key_seconds": key_seconds, "start": start,
+                        "boot_seconds": boot_seconds, "saved": true, "save_seconds": save_started.elapsed().as_secs_f64()})
+                }
+            };
             (bridge, attachment, checkpoint)
         }
     };
@@ -1484,7 +1542,7 @@ fn drive() -> Result<(), String> {
         capture_evidence_error: None,
         snapshots: BTreeMap::new(),
     };
-    server.arm(&BTreeMap::new())?;
+    server.arm_sites(observation.as_ref().map_or(&BTreeMap::new(), ResetObservationSpec::sites))?;
     server.serve()
 }
 
@@ -2142,6 +2200,83 @@ mod tests {
         assert_eq!(finish.finished, Some(true));
         assert_eq!(finish.message, receipt.bridge_error);
         assert!(receipt.boundary.instructions < 8_000_000);
+    }
+
+    #[test]
+    fn watch_end_returns_the_final_state_and_releases_snapshots() {
+        let mut server = server(&[0xeafffffe]);
+        let begin = json!({
+            "command": "watch-begin", "ranges": [[0x01467588u64, 0x01467840u64]],
+            "limit": 16, "views": "fixed",
+            "write_ranges": [[0x01467588u64, 0x01467840u64]], "fetch_ranges": []
+        });
+        server.handle(request(begin)).unwrap();
+        assert!(server.handle(request(json!({"command": "snapshot-save", "name": "n0"}))).is_err());
+        let state = server.handle(Request::WatchEnd).unwrap().unwrap();
+        assert_eq!(state["enabled"], true);
+        assert_eq!(state["views"], "fixed");
+        assert!(server.handle(Request::WatchEnd).is_err());
+        assert!(server.handle(Request::WatchState).is_err());
+        assert!(server.handle(request(json!({"command": "snapshot-save", "name": "n0"}))).is_ok());
+    }
+
+    #[test]
+    fn trace_sites_beyond_one_engine_point_set_record_hits() {
+        let mut server = server(&[0xe2800001, 0xeafffffd]);
+        let sites: BTreeMap<String, String> = std::iter::once(("0x00000004".to_owned(), "loop".to_owned()))
+            .chain((0..4999u32).map(|index| (format!("{:#010x}", 0x0200_0000 + 4 * index), "absent".to_owned())))
+            .collect();
+        server.handle(request(json!({"command": "trace-sites", "sites": sites}))).unwrap();
+        assert_eq!(server.bridge.machine.run(100), RunOutcome::Completed);
+        let hits = server.handle(request(json!({"command": "trace-hits", "from": 0}))).unwrap().unwrap();
+        let hits = hits["hits"].as_array().unwrap();
+        assert!(!hits.is_empty() && hits.iter().all(|hit| hit["site"] == "loop"));
+    }
+
+    #[test]
+    fn trace_hits_pages_concatenate_to_the_whole_record() {
+        let mut server = server(&[0xe2800001, 0xeafffffd]);
+        server.handle(request(json!({"command": "trace-sites", "sites": {"0x00000004": "loop"}}))).unwrap();
+        assert_eq!(server.bridge.machine.run(100), RunOutcome::Completed);
+        let whole = server.handle(request(json!({"command": "trace-hits", "from": 0}))).unwrap().unwrap();
+        let count = whole["count"].as_u64().unwrap() as usize;
+        assert!(count > 3);
+        let mut paged = Vec::new();
+        while paged.len() < count {
+            let page = server.handle(request(json!({"command": "trace-hits", "from": paged.len(), "limit": 3}))).unwrap().unwrap();
+            assert_eq!(page["count"].as_u64(), Some(count as u64));
+            let hits = page["hits"].as_array().unwrap();
+            assert!(!hits.is_empty() && hits.len() <= 3);
+            paged.extend(hits.iter().cloned());
+        }
+        assert_eq!(&paged, whole["hits"].as_array().unwrap());
+        assert!(serde_json::from_value::<Request>(json!({"command": "trace-hits", "from": 0, "limit": 0})).is_err());
+    }
+
+    #[test]
+    fn reset_observation_ends_one_write_segment_and_hit_range_per_attach_phase() {
+        let mut server = server(&[0xe3a01609, 0xe2800001, 0xe5810000, 0xeafffffc]);
+        let spec = ResetObservationSpec::parse(concat!(r#"{"schema":1,"sites":{"0x00000008":"store"},"hit_limit":100000,"#,
+            r#""write_ranges":[[9437184,9437188]],"watch_limit":4096}"#).as_bytes()).unwrap();
+        let mut observer = ResetObserver::begin(&mut server.bridge.machine, &spec).unwrap();
+        for phase in [AttachPhase::FirstStart, AttachPhase::LiveView, AttachPhase::Attached] {
+            assert_eq!(server.bridge.machine.run(60), RunOutcome::Completed);
+            observer.boundary(&server.bridge.machine, phase).unwrap();
+        }
+        let record = serde_json::to_value(observer.finish().unwrap()).unwrap();
+        assert_eq!(record["reset"]["instructions"], 0);
+        let segments = record["segments"].as_array().unwrap();
+        assert_eq!(segments.iter().map(|segment| segment["phase"].as_str().unwrap()).collect::<Vec<_>>(),
+            ["first-start", "live-view", "attached"]);
+        let mut previous = 0;
+        for segment in segments {
+            let hits = segment["hits_end"].as_u64().unwrap();
+            assert!(hits > previous);
+            previous = hits;
+            let rows = segment["watch"]["records"].as_array().unwrap();
+            assert!(!rows.is_empty() && rows.iter().all(|row| row["source"] == "cpu-write" && row["physical"] == 0x0090_0000));
+        }
+        assert_eq!(server.bridge.machine.traces.hits.len() as u64, previous);
     }
 
 }

@@ -95,6 +95,46 @@
         "r0": {"$ref": "#/$defs/u32"}, "r1": {"$ref": "#/$defs/u32"}, "r2": {"$ref": "#/$defs/u32"}, "r3": {"$ref": "#/$defs/u32"}, "r4": {"$ref": "#/$defs/u32"}, "r5": {"$ref": "#/$defs/u32"}, "r6": {"$ref": "#/$defs/u32"}, "r7": {"$ref": "#/$defs/u32"}, "r8": {"$ref": "#/$defs/u32"}, "r9": {"$ref": "#/$defs/u32"}, "r10": {"$ref": "#/$defs/u32"}, "r11": {"$ref": "#/$defs/u32"}, "r12": {"$ref": "#/$defs/u32"}, "sp": {"$ref": "#/$defs/u32"}, "lr": {"$ref": "#/$defs/u32"}, "cpsr": {"$ref": "#/$defs/u32"}, "pc": {"$ref": "#/$defs/u32"}
       }
     },
-    "stubRegisters": {"allOf": [{"$ref": "#/$defs/registers"}], "not": {"anyOf": [{"required": ["sp"]}, {"required": ["lr"]}, {"required": ["cpsr"]}, {"required": ["pc"]}]}}
+    "stubRegisters": {"allOf": [{"$ref": "#/$defs/registers"}], "not": {"anyOf": [{"required": ["sp"]}, {"required": ["lr"]}, {"required": ["cpsr"]}, {"required": ["pc"]}]}},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "batch": {
+      "description": "A batch input: case files beside it, run in one runner process. maxJsonBytes bounds this file and its case files together; maxArtifactBytes bounds the distinct artifact bytes, by SHA256, that the adapter reads for the batch's cases.",
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "cases"],
+      "maxJsonBytes": 268435456,
+      "maxArtifactBytes": 268435456,
+      "properties": {
+        "schema_version": {"const": 1},
+        "cases": {
+          "type": "array", "minItems": 1, "maxItems": 4096,
+          "items": {"type": "object", "additionalProperties": false, "required": ["id", "path"], "properties": {"id": {"$ref": "#/$defs/id"}, "path": {"type": "string", "minLength": 1}}}
+        }
+      }
+    },
+    "batchSummary": {
+      "description": "The batch result: the batch file's SHA256 bound to every case id and status, in batch order. Each case also has its own report in the single-case format.",
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "status", "cases"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "batch_sha256": {"$ref": "#/$defs/sha256"},
+        "runner_sha256": {"$ref": "#/$defs/sha256"},
+        "status": {"enum": ["complete", "invalid_batch", "runner_failure", "host_timeout"]},
+        "reason": {"type": "string"},
+        "failed_case": {"$ref": "#/$defs/id"},
+        "runner_exit": {"type": "integer"},
+        "stderr": {"type": "string"},
+        "cases": {
+          "type": "array", "maxItems": 4096,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["id", "status"],
+            "properties": {"id": {"$ref": "#/$defs/id"}, "status": {"enum": ["passed", "failed", "invalid_case", "runner_failure", "host_timeout", "not_run"]}, "case_sha256": {"$ref": "#/$defs/sha256"}}
+          }
+        }
+      },
+      "if": {"properties": {"status": {"const": "invalid_batch"}}},
+      "then": {"required": ["reason"], "not": {"required": ["failed_case"]}},
+      "else": {"required": ["batch_sha256", "runner_sha256", "stderr"]}
+    }
   }
 }

@@ -951,6 +951,8 @@ pub struct TraceSites {
     pub stop_labels: BTreeSet<String>,
     pub hits: Vec<Hit>,
     hit_limit: Option<std::num::NonZeroUsize>,
+    /// Hits record r0-r12 rather than r0-r3.
+    full_registers: bool,
     code_binding: Option<CodeBinding>,
     /// Persistent sets are in core order; a set whose removal failed stays here.
     points: Vec<(usize, Box<InstructionPoints>)>,
@@ -964,6 +966,9 @@ pub struct TraceSites {
     modal_observation: Option<ModalTrace>,
     stack_scope: Option<StackScope>,
 }
+
+/// The engine's address bound for one instruction point set.
+const FIXED_POINT_SET_LIMIT: usize = 4096;
 
 fn register(session: &Session, core: usize, register: arm::Register) -> Result<u32, String> {
     let value = session.board.read_register(core, Register::Arm32(register))?;
@@ -1016,6 +1021,11 @@ impl TraceSites {
     }
 
     pub fn bound_full_registers(&mut self, limit: std::num::NonZeroUsize) {
+        self.hit_limit = Some(limit);
+        self.full_registers = true;
+    }
+
+    pub fn bound_hits(&mut self, limit: std::num::NonZeroUsize) {
         self.hit_limit = Some(limit);
     }
 
@@ -1507,9 +1517,11 @@ impl TraceSites {
             if !selected {
                 continue;
             }
-            let points = session.board.instruction_points_begin(core, addresses.clone())?;
-            self.points.push((core, points));
-            self.pending_points.push(None);
+            for chunk in addresses.chunks(FIXED_POINT_SET_LIMIT) {
+                let points = session.board.instruction_points_begin(core, chunk.to_vec())?;
+                self.points.push((core, points));
+                self.pending_points.push(None);
+            }
         }
         Ok(())
     }
@@ -1695,7 +1707,7 @@ impl TraceSites {
                 }
                 let instructions = counts.iter().sum();
                 let site = site.clone();
-                let registers = (0..if self.hit_limit.is_some() { 13u8 } else { 4u8 })
+                let registers = (0..if self.full_registers { 13u8 } else { 4u8 })
                     .map(|index| {
                         let name = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "r12"][usize::from(index)];
                         register(session, *core, arm::Register::R(index)).map(|value| (name, format!("{value:#x}")))
