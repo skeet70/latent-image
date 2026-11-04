@@ -71,7 +71,7 @@ main = getArgs >>= \arguments -> case arguments of
     retained <- observation (rest !! 8) >>= admitted "retained qualify" . qualify bound RetainedRole
     owned <- observation (rest !! 9) >>= admitted "owned qualify" . qualify bound OwnedRole
     pairs <- admitted "compare" (compareRoles retained owned)
-    write (rest !! 10) (object ["retained" .= qualifiedValue retained, "owned" .= qualifiedValue owned, "comparison" .= comparisonValue pairs])
+    write (rest !! 10) (object ["retained" .= qualifiedValue retained, "owned" .= qualifiedValue owned, "comparison" .= comparisonValue retained owned pairs])
     putStrLn ("property-pair-check: equal over " ++ show (length pairs) ++ " routes")
   "refusal-controls" : roleText : rest | length rest == 11 -> do
     selected <- role roleText
@@ -88,8 +88,9 @@ main = getArgs >>= \arguments -> case arguments of
         let passed = case controlObserved result of
               Left refusal -> any (`isPrefixOf` show refusal) (controlExpected result)
               Right () -> False
-        pure (object [ "control" .= show control, "expected" .= controlExpected result
-                     , "observed" .= either show (const "admitted") (controlObserved result), "passed" .= passed ], passed)
+        pure (object ([ "control" .= show control, "expected" .= controlExpected result
+                      , "observed" .= either show (const "admitted") (controlObserved result), "passed" .= passed ]
+                      ++ maybe [] (\stale -> ["mutation" .= staleValue stale]) (controlStale result)), passed)
     let passedAll = all snd outcomes
     write (rest !! 10) (object ["role" .= roleWire selected, "controls" .= map fst outcomes, "passed" .= passedAll])
     putStrLn ("property-pair-check: " ++ show (length (filter snd outcomes)) ++ "/" ++ show (length outcomes) ++ " controls refused as expected")
@@ -112,3 +113,8 @@ main = getArgs >>= \arguments -> case arguments of
     write (rest !! 11) result
     putStrLn "property-pair-check: guest control refused at its restored arm"
   _ -> die usage
+
+staleValue :: StaleGetter -> Value
+staleValue stale = object
+  [ "caller" .= getterCaller (staleKey stale), "arguments" .= getterArguments (staleKey stale), "call" .= staleCall stale
+  , "hit" .= staleHit stale, "from" .= staleFrom stale, "to" .= staleTo stale ]

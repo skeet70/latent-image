@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "path": ["ok", "down", "ok"],
+  "key": "down",
+  "trace_sites": [
+    {"address": "0x006309c4", "label": "property-write"},
+    {"address": "0x006309ec", "label": "reload-call"},
+    {"address": "0x0061d9ec", "label": "reload-entry"},
+    {"address": "0x006a6e68", "label": "image-read"},
+    {"address": "0x006309f0", "label": "reload-return"},
+    {"address": "0x00624694", "label": "setter"},
+    {"address": "0x00630a0c", "label": "store-back-call"},
+    {"address": "0x0061d8dc", "label": "store-back-entry"},
+    {"address": "0x00630a14", "label": "store-back-return"}
+  ],
+  "write_ranges": [
+    {"start": "0x0096cc64", "end": "0x0096ce28"}
+  ],
+  "limit": 65536
+}

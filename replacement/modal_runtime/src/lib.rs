@@ -252,20 +252,19 @@ unsafe extern "C" {
 #[path = "modal75.rs"]
 mod modal75;
 
-#[cfg(any(rb_modal75_owned, rb_menu_picker_owned))]
+#[cfg(rb_modal75_owned)]
+use modal75::picker;
+
+#[cfg(rb_modal75_owned)]
 unsafe extern "C" {
     fn rb_call_transition() -> u32;
 }
 
-#[cfg(rb_menu_picker_owned)]
-#[path = "picker.rs"]
-mod picker;
-
 /// The open menu node pointer, `firmware.current_menu`.
-#[cfg(rb_menu_picker_owned)]
+#[cfg(rb_modal75_owned)]
 const OPEN_NODE: u32 = 0x0095_71d0;
 
-#[cfg(rb_menu_picker_owned)]
+#[cfg(rb_modal75_owned)]
 #[allow(clashing_extern_declarations)]
 unsafe extern "C" {
     fn rb_call_modal_query(query: u32) -> u32;
@@ -276,10 +275,10 @@ unsafe extern "C" {
     fn rb_lifecycle_token() -> u32;
 }
 
-#[cfg(rb_menu_picker_owned)]
+#[cfg(rb_modal75_owned)]
 struct ArmPicker;
 
-#[cfg(rb_menu_picker_owned)]
+#[cfg(rb_modal75_owned)]
 impl picker::PickerServices for ArmPicker {
     fn busy(&mut self) -> bool {
         unsafe { rb_call_modal_query(0x53) != 0 }
@@ -310,31 +309,6 @@ impl picker::PickerServices for ArmPicker {
     }
 }
 
-/// Owned when the open node and the live cell word and target match the
-/// picker table and the cell selects no transition entry.
-#[cfg(rb_menu_picker_owned)]
-#[inline(always)]
-fn picker_plan(controller: ControllerId, captured: &Captured, cell: CellAddress, action: Option<ActionTarget>) -> Option<(&'static picker::PickerCell, &'static picker::PickerNode)> {
-    let word = unsafe { read_word(cell.0) };
-    if cell.high().positive_index().is_some_and(|index| captured.transition.entry(index).is_some()) {
-        return None;
-    }
-    let Ok(controller) = u16::try_from(controller.word()) else {
-        return None;
-    };
-    match picker::plan(
-        &picker::TABLE,
-        controller,
-        captured.state.0,
-        captured.event.0,
-        picker::LiveCell { word, target: action.map_or(0, ActionTarget::word) },
-        picker::NodeAddress(unsafe { read_word(OPEN_NODE) }),
-    ) {
-        picker::PickerPlan::Owned(cell, node) => Some((cell, node)),
-        picker::PickerPlan::Stock => None,
-    }
-}
-
 #[cfg(rb_modal75_owned)]
 struct ArmServices;
 
@@ -349,8 +323,8 @@ impl modal75::GenericServices for ArmServices {
     }
 }
 
-/// Reads the whole cell word, and for a positive high halfword the selected
-/// transition entry, before the action.
+/// Reads the whole cell word, for a positive high halfword the selected
+/// transition entry, and for a picker cell the open node, before the action.
 #[cfg(rb_modal75_owned)]
 #[inline(always)]
 fn owned_plan(controller: ControllerId, captured: &Captured, cell: CellAddress, action: Option<ActionTarget>) -> modal75::Plan {
@@ -363,6 +337,7 @@ fn owned_plan(controller: ControllerId, captured: &Captured, cell: CellAddress, 
         captured.event.0,
         captured.state.0,
         modal75::LiveCell { word: unsafe { read_word(cell.0) }, target: action.map_or(0, ActionTarget::word), transition },
+        || picker::NodeAddress(unsafe { read_word(OPEN_NODE) }),
     )
 }
 
@@ -393,32 +368,7 @@ pub unsafe extern "C" fn rb_modal_dispatch(controller: u32) -> u32 {
     let cell = CellAddress(CellAddress::offset(cell_base.0, index));
     let action = captured.action.entry(cell.action_index());
 
-    #[cfg(rb_menu_picker_owned)]
-    let picker_result = picker_plan(controller, &captured, cell, action).and_then(|(owned_cell, node)| {
-        match picker::run(owned_cell.action, node, &mut ArmPicker) {
-            picker::Outcome::Result(result) => Some(result.0),
-            picker::Outcome::Decline => None,
-        }
-    });
-
-    #[cfg(all(not(rb_modal75_owned), rb_menu_picker_owned))]
-    let (carried_first, carried_second, result) = match (picker_result, action) {
-        (Some(result), _) => (result, prehook.second, result),
-        (None, Some(target)) => {
-            let action_residue = residue(unsafe {
-                rb_modal_call(
-                    target.word(),
-                    prehook.first,
-                    prehook.second,
-                    u32::from(captured.event.0),
-                )
-            });
-            (action_residue.first, action_residue.second, action_residue.first)
-        }
-        (None, None) => (prehook.first, prehook.second, 0),
-    };
-
-    #[cfg(all(not(rb_modal75_owned), not(rb_menu_picker_owned)))]
+    #[cfg(not(rb_modal75_owned))]
     let (carried_first, carried_second, result) = match action {
         Some(target) => {
             // The retained prehook returns with r2 still holding the event.
@@ -438,17 +388,18 @@ pub unsafe extern "C" fn rb_modal_dispatch(controller: u32) -> u32 {
     #[cfg(rb_modal75_owned)]
     let owned = owned_plan(controller, &captured, cell, action);
     #[cfg(rb_modal75_owned)]
-    let (carried_first, carried_second, result) = match (owned, action) {
-        #[cfg(rb_menu_picker_owned)]
-        _ if picker_result.is_some() => {
-            let result = picker_result.unwrap_or(0);
-            (result, prehook.second, result)
-        }
-        (modal75::Plan::Owned { action: modal75::OwnedAction::Generic(generic), .. }, _) => {
-            let result = modal75::run_generic(generic, &mut ArmServices).0;
-            (result, prehook.second, result)
-        }
-        (_, Some(target)) => {
+    let owned_result = match owned {
+        modal75::Plan::Owned { action: modal75::OwnedAction::Generic(generic), .. } => Some(modal75::run_generic(generic, &mut ArmServices).0),
+        modal75::Plan::Owned { action: modal75::OwnedAction::Picker(picker_action, node), .. } => match picker::run(picker_action, node, &mut ArmPicker) {
+            picker::Outcome::Result(result) => Some(result.0),
+            picker::Outcome::Decline => None,
+        },
+        _ => None,
+    };
+    #[cfg(rb_modal75_owned)]
+    let (carried_first, carried_second, result) = match (owned_result, action) {
+        (Some(result), _) => (result, prehook.second, result),
+        (None, Some(target)) => {
             let action_residue = residue(unsafe {
                 rb_modal_call(
                     target.word(),
@@ -459,7 +410,7 @@ pub unsafe extern "C" fn rb_modal_dispatch(controller: u32) -> u32 {
             });
             (action_residue.first, action_residue.second, action_residue.first)
         }
-        (_, None) => (prehook.first, prehook.second, 0),
+        (None, None) => (prehook.first, prehook.second, 0),
     };
 
     let high = cell.high();

@@ -3282,7 +3282,7 @@ haskell_library(
     ],
 )
 
-# bazel run //emulation:property-pair-routes -- CRAWL_GRAPH OUTPUT
+# bazel run //emulation:property-pair-routes -- [--effects-from RETAINED_OBSERVATION_DIR] CRAWL_GRAPH OUTPUT
 haskell_binary(
     name = "property-pair-routes",
     srcs = ["PropertyPairRoutesMain.hs"],
@@ -3293,6 +3293,7 @@ haskell_binary(
         "//host:base",
         "//host:bytestring",
         "//host:directory",
+        "//host:filepath",
         "//host:text",
     ],
 )
@@ -3377,5 +3378,6 @@ haskell_test(
         "//host:bytestring",
         "//host:containers",
         "//host:text",
+        "//host:vector",
     ],
 )

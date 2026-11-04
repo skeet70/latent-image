@@ -12,7 +12,10 @@ module Emulation.PropertyPairCheck
   , Press (..)
   , RouteClass (..)
   , RouteResult (..)
+  , BlockRunAt (..)
   , Qualified (..)
+  , GetterKey (..)
+  , GetterResult (..)
   , qualify
   , compareRoles
   , qualifiedValue
@@ -21,6 +24,7 @@ module Emulation.PropertyPairCheck
   , controlNames
   , checkGuestControl
   , ControlOutcome (..)
+  , StaleGetter (..)
   , runControl
   ) where
 
@@ -34,7 +38,7 @@ import Data.Bits (complement, shiftL, shiftR, xor, (.&.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
-import Data.List (find, sort)
+import Data.List (find, sort, zip4)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing)
@@ -99,7 +103,8 @@ data Refusal
   | DeclaredRouteInert RouteName
   | CohortDiffers String
   | RouteSetDiffers
-  | GetterResultsDiffer RouteName
+  -- | The first key whose collapsed result sequences differ, and the index of their first differing value.
+  | GetterSequenceDiffers GetterKey Int
   | SetterSequenceDiffers RouteName
   | WriteSequenceDiffers RouteName
   | TransferSequenceDiffers RouteName
@@ -157,6 +162,8 @@ data RouteResult = RouteResult
   , resultTransfers :: [TransferEffect]
   , resultFinal :: [(Word32, B.ByteString)]
   , resultPresses :: [Press]
+  -- | The time-driven block runs of the last step's setter and commit effects.
+  , resultEffectBlocks :: [BlockRunAt]
   } deriving (Eq, Show)
 
 data Qualified = Qualified
@@ -165,7 +172,15 @@ data Qualified = Qualified
   , qualifiedHits :: Int
   , qualifiedSteps :: Int
   , qualifiedRoutes :: [RouteResult]
+  -- | Every returned getter call of the observation in session order.
+  , qualifiedGetters :: [GetterResult]
   }
+
+-- | A getter call's caller and r0-r3.
+data GetterKey = GetterKey { getterCaller :: Word32, getterArguments :: [Word32] } deriving (Eq, Ord, Show)
+
+-- | A returned getter call: its key, r0 at its return and the return's hit index.
+data GetterResult = GetterResult { getterKey :: GetterKey, getterValue :: Word32, getterReturnHit :: Int } deriving (Eq, Show)
 
 -- Raw sidecar decoding.
 
@@ -422,7 +437,10 @@ checkStores plan hits interval = do
 
 -- Call pairing.
 
-data PairState = PairState { pairOpen :: M.Map (Word32, Word32) (SiteLabel, Int, [Word32]), pairDone :: M.Map Int (Maybe Word32) }
+-- | A paired call's return hit and r0 there.
+data Returned = Returned { returnHit :: Int, returnValue :: Word32 }
+
+data PairState = PairState { pairOpen :: M.Map (Word32, Word32) (SiteLabel, Int, [Word32]), pairDone :: M.Map Int Returned }
 
 data HitClass = EntryHit SiteLabel | ReturnHit SiteLabel | GuardHit | OtherHit
 
@@ -454,7 +472,7 @@ pairHits plan hits (from, to) initial = foldM visit initial [from .. to - 1]
       ReturnHit label -> case M.lookup (hitSp hit, hitAddress hit) (pairOpen state) of
         Just (expected, entry, _) | expected == label ->
           pure state { pairOpen = M.delete (hitSp hit, hitAddress hit) (pairOpen state)
-                     , pairDone = M.insert entry (Just (sum (take 1 (hitArguments hit)))) (pairDone state) }
+                     , pairDone = M.insert entry (Returned index (sum (take 1 (hitArguments hit)))) (pairDone state) }
         _ -> pure state
       OtherHit -> pure state
 
@@ -538,24 +556,30 @@ qualify bindings role observation = do
       && (parent == 0) == (length keys == 1) && (parent == 0 || maybe False ((== StepInterval parent) . intervalName . snd) (M.lookup (init keys) stepMap)))
   replayed <- fmap M.fromList . forM ordered $ \interval -> (,) (intervalName interval) <$> replay plan interval
   forM_ ordered (checkStores plan hits)
-  phaseState <- foldM (\state (_, interval) -> pairHits plan hits (intervalHits interval) state) (PairState M.empty M.empty) phases
+  let pairInterval state interval = pairHits plan hits (intervalHits interval) state
+      window interval = let (from, to) = intervalHits interval in [from .. to - 1]
+  (phaseState, phaseStates) <- foldM (\(state, acc) (_, interval) -> do
+      next <- pairInterval state interval
+      pure (next, M.insert (intervalName interval) next acc)) (PairState M.empty M.empty, M.empty) phases
+  -- A step's pairing continues from its parent's, as its snapshot restore does.
+  pairStates <- foldM (\acc (_, parent, interval) -> do
+      next <- pairInterval (if parent == 0 then phaseState else acc M.! StepInterval parent) interval
+      pure (M.insert (intervalName interval) next acc)) phaseStates stepIntervals
+  let returnedIn interval = case intervalName interval of
+        PhaseInterval _ -> phaseState
+        name -> pairStates M.! name
+      getters = [ GetterResult (GetterKey (hitLr hit) (hitArguments hit)) (returnValue returned) (returnHit returned)
+                | interval <- ordered, index <- window interval, let hit = hits V.! index, hitSite hit == PlanSite GetterEntry
+                , Just returned <- [M.lookup index (pairDone (returnedIn interval))] ]
   results <- forM (routeList routes) $ \route -> do
     let name = routeName route
-    (prefix, own) <- case routeBody route of
-      PhaseRoute phase -> do
-        let index = fromEnum phase
-        pure (map snd (take index phases), [snd (phases !! index)])
-      KeyRoute keys _ -> do
-        path <- forM (drop 1 (scanl (\acc key -> acc ++ [key]) [] keys)) $ \prefixKeys ->
-          maybe (Left (RouteUnobserved name)) (Right . snd) (M.lookup prefixKeys stepMap)
-        pure (map snd phases, path)
-    before <- case routeBody route of
-      KeyRoute _ _ -> pure phaseState
-      PhaseRoute _ -> foldM (\state interval -> pairHits plan hits (intervalHits interval) state) (PairState M.empty M.empty) prefix
-    final <- foldM (\state interval -> pairHits plan hits (intervalHits interval) state) before own
-    let window interval = let (from, to) = intervalHits interval in [from .. to - 1]
+    own <- case routeBody route of
+      PhaseRoute phase -> pure [snd (phases !! fromEnum phase)]
+      KeyRoute keys _ -> forM (drop 1 (scanl (\acc key -> acc ++ [key]) [] keys)) $ \prefixKeys ->
+        maybe (Left (RouteUnobserved name)) (Right . snd) (M.lookup prefixKeys stepMap)
+    let final = pairStates M.! intervalName (last own)
         routeWindow = concatMap window own
-        entries label = [ Call (hitArguments hit) (hitLr hit) (M.findWithDefault Nothing index (pairDone final))
+        entries label = [ Call (hitArguments hit) (hitLr hit) (returnValue <$> M.lookup index (pairDone final))
                         | index <- routeWindow, let hit = hits V.! index, hitSite hit == PlanSite label ]
         appends = [hitArguments hit | index <- routeWindow, let hit = hits V.! index, hitSite hit == PlanSite Area3Append]
         lastSites = [hitSite (hits V.! index) | index <- window (last own)]
@@ -569,7 +593,7 @@ qualify bindings role observation = do
     routeClass <- case routeBody route of
       PhaseRoute _ -> pure PhaseClass
       KeyRoute _ (CrawlTrial _ expected) -> do
-        require (RouteEffectsDiffer name) (lastEffects == expected)
+        require (RouteEffectsDiffer name) (map effectItemShape (collapseEffects lastEffects) == map effectItemShape (collapseEffects expected))
         pure CrawlClass
       KeyRoute _ (Declared _) -> do
         require (DeclaredRouteInert name) (PlanSite SetterEntry `elem` lastSites && PlanSite Area3Append `elem` lastSites)
@@ -585,11 +609,12 @@ qualify bindings role observation = do
       , resultTransfers = concatMap snd effects
       , resultFinal = M.toList (intervalAfter (last own))
       , resultPresses = [press | Just press <- map intervalPress own]
+      , resultEffectBlocks = effectBlockRuns lastEffects
       }
   cohort <- forM [["inputs", "run", "sha256"], ["inputs", "boot_rom", "sha256"], ["inputs", "adjustment_nand", "sha256"], ["inputs", "bridge", "sha256"]
                  , ["inputs", "routes", "sha256"], ["inputs", "linked", "sha256"], ["inputs", "contract", "sha256"], ["inputs", "observer", "sha256"]] $ \path ->
     (,) (T.unpack (T.intercalate "." path)) <$> receiptDigest path
-  pure (Qualified role cohort (V.length hits) (length steps) results)
+  pure (Qualified role cohort (V.length hits) (length steps) results getters)
 
 phaseIntervals :: Value -> Parse [(AttachPhase, Interval)]
 phaseIntervals reset = do
@@ -642,25 +667,23 @@ parseStep expected value = do
 
 -- Comparison.
 
--- | Per route: the ordered setter calls, area-3 appends, byte-changing writes and transfers, the
--- final regions and each press's menu must be equal; for each (caller, arguments) of a returned
--- getter call, the results in call order with consecutive repeats collapsed must be equal; settle
--- statuses only where neither press exhausted its budget.
+-- | Per route: the ordered setter calls with each run of identical time-driven blocks collapsed to
+-- one block, area-3 appends, byte-changing writes and transfers, the final regions and each press's
+-- menu must be equal; settle statuses only where neither press exhausted its budget. Over the
+-- whole observation: the getter keys must be equal and so must each key's collapsed results.
 compareRoles :: Qualified -> Qualified -> Either Refusal [(RouteResult, RouteResult)]
 compareRoles retained owned = do
   unless (qualifiedRole retained == RetainedRole && qualifiedRole owned == OwnedRole) (Left (CohortDiffers "roles"))
   forM_ (zip (qualifiedCohort retained) (qualifiedCohort owned)) $ \((name, left), (_, right)) ->
     unless (left == right) (Left (CohortDiffers name))
   unless (map resultRoute (qualifiedRoutes retained) == map resultRoute (qualifiedRoutes owned)) (Left RouteSetDiffers)
-  forM (zip (qualifiedRoutes retained) (qualifiedRoutes owned)) $ \(left, right) -> do
+  pairs <- forM (zip (qualifiedRoutes retained) (qualifiedRoutes owned)) $ \(left, right) -> do
     let name = resultRoute left
         differs refusal select = when (select left /= select right) (Left (refusal name))
         writeKey write = (effectAddress write, effectWidth write, effectBytes write)
-        getterResults result = M.map (map NE.head . NE.group) (M.fromListWith (flip (++)) [((callReturn call, callArguments call), [value]) | call <- resultGetters result, Just value <- [callResult call]])
         pressAgrees (Press leftStatus leftMenu) (Press rightStatus rightMenu) = leftMenu == rightMenu
           && (leftStatus == rightStatus || BudgetExhausted `elem` [leftStatus, rightStatus])
-    differs SetterSequenceDiffers resultSetters
-    differs GetterResultsDiffer getterResults
+    differs SetterSequenceDiffers (map setterItemShape . collapseBlocks . resultSetters)
     differs WriteSequenceDiffers (map writeKey . filter effectChanges . resultWrites)
     differs TransferSequenceDiffers resultTransfers
     differs AppendSequenceDiffers resultAppends
@@ -668,6 +691,84 @@ compareRoles retained owned = do
     unless (length (resultPresses left) == length (resultPresses right) && and (zipWith pressAgrees (resultPresses left) (resultPresses right)))
       (Left (PressDiffers name))
     pure (left, right)
+  let left = M.map collapseRepeats (getterSequences retained)
+      right = M.map collapseRepeats (getterSequences owned)
+  forM_ (S.toList (M.keysSet left <> M.keysSet right)) $ \key -> do
+    let leftValues = M.findWithDefault [] key left
+        rightValues = M.findWithDefault [] key right
+    unless (leftValues == rightValues)
+      (Left (GetterSequenceDiffers key (length (takeWhile id (zipWith (==) leftValues rightValues)))))
+  pure pairs
+
+-- | Each getter key's results in session order.
+getterSequences :: Qualified -> M.Map GetterKey [Word32]
+getterSequences result = M.fromListWith (flip (++)) [(getterKey getter, [getterValue getter]) | getter <- qualifiedGetters result]
+
+collapseRepeats :: Eq a => [a] -> [a]
+collapseRepeats = map NE.head . NE.group
+
+-- | One setter call, or a run of one `timeDrivenSequence` block whose calls repeat it
+-- consecutively, with the run's block count.
+data SetterItem = SingleSetter Call | BlockRun [Call] Int
+
+setterItemShape :: SetterItem -> Either [Call] Call
+setterItemShape item = case item of
+  BlockRun block _ -> Left block
+  SingleSetter call -> Right call
+
+collapseBlocks :: [Call] -> [SetterItem]
+collapseBlocks calls = case splitAt 4 calls of
+  (block, rest) | map (take 1 . callArguments) block == map (: []) timeDrivenSequence ->
+    let (repeats, rest') = span' block rest in BlockRun block (1 + repeats) : collapseBlocks rest'
+  _ -> case calls of
+    call : rest -> SingleSetter call : collapseBlocks rest
+    [] -> []
+ where
+  span' block remaining = case splitAt 4 remaining of
+    (next, rest) | next == block -> let (count, rest') = span' block rest in (count + 1, rest')
+    _ -> (0 :: Int, remaining)
+
+-- | A block run's index among the collapsed items, the index of its first element in the
+-- uncollapsed sequence, and its block count.
+data BlockRunAt = BlockRunAt { runPosition :: Int, runFirst :: Int, runRepeats :: Int } deriving (Eq, Show)
+
+blockRuns :: [Call] -> [BlockRunAt]
+blockRuns calls = [ BlockRunAt position first count
+                  | (position, first, BlockRun _ count) <- zip3 [0 ..] (scanl (+) 0 (map width items)) items ]
+ where
+  items = collapseBlocks calls
+  width item = case item of
+    SingleSetter _ -> 1
+    BlockRun block count -> length block * count
+
+-- | One effect, or a run of consecutive `timeDrivenSequence` setter effects with its block count.
+data EffectItem = SingleEffect CrawlEffect | EffectBlockRun Int
+
+effectItemShape :: EffectItem -> Maybe CrawlEffect
+effectItemShape item = case item of
+  SingleEffect effect -> Just effect
+  EffectBlockRun _ -> Nothing
+
+collapseEffects :: [CrawlEffect] -> [EffectItem]
+collapseEffects effects
+  | isBlock effects = let (repeats, rest) = count (drop 4 effects) in EffectBlockRun (1 + repeats) : collapseEffects rest
+  | effect : rest <- effects = SingleEffect effect : collapseEffects rest
+  | otherwise = []
+ where
+  block = map SetterEffect timeDrivenSequence
+  isBlock remaining = take 4 remaining == block
+  count remaining
+    | isBlock remaining = let (repeats, rest) = count (drop 4 remaining) in (repeats + 1, rest)
+    | otherwise = (0 :: Int, remaining)
+
+effectBlockRuns :: [CrawlEffect] -> [BlockRunAt]
+effectBlockRuns effects = [ BlockRunAt position first count
+                          | (position, first, EffectBlockRun count) <- zip3 [0 ..] (scanl (+) 0 (map width items)) items ]
+ where
+  items = collapseEffects effects
+  width item = case item of
+    SingleEffect _ -> 1
+    EffectBlockRun count -> length timeDrivenSequence * count
 
 -- | Admits the guest control's refusal: its observation stopped at its first guarded hit, which is
 -- the restored setter word's retired arm entered for that word's property, and every earlier hit is
@@ -736,6 +837,7 @@ routeSummary result = object
   , "accessor_writes" .= length [() | write <- resultWrites result, effectWriter write == OwnedAccessor]
   , "transfers" .= length (resultTransfers result)
   , "area3_appends" .= length (resultAppends result)
+  , "effect_block_runs" .= [object ["position" .= runPosition run, "first_effect" .= runFirst run, "repeats" .= runRepeats run] | run <- resultEffectBlocks result]
   ]
 
 propertiesWritten :: RouteResult -> [Word32]
@@ -760,17 +862,33 @@ qualifiedValue result = object
   , "per_route" .= map routeSummary (qualifiedRoutes result)
   ]
 
-comparisonValue :: [(RouteResult, RouteResult)] -> Value
-comparisonValue pairs = object
+-- | The compared routes, and per getter key each role's call count and collapsed length.
+comparisonValue :: Qualified -> Qualified -> [(RouteResult, RouteResult)] -> Value
+comparisonValue retained owned pairs = object
   [ "verdict" .= ("equal" :: T.Text)
   , "routes" .= length pairs
-  , "per_route" .= [object ["retained" .= routeSummary left, "owned" .= routeSummary right] | (left, right) <- pairs]
+  , "per_route" .=
+      [ object
+          [ "retained" .= routeSummary left, "owned" .= routeSummary right
+          , "setter_block_runs" .= object ["retained" .= runsValue left, "owned" .= runsValue right] ]
+      | (left, right) <- pairs ]
+  , "getter_keys" .=
+      [ object
+          [ "caller" .= getterCaller key, "arguments" .= getterArguments key
+          , "retained" .= countsValue key retainedSequences, "owned" .= countsValue key ownedSequences ]
+      | key <- S.toList (M.keysSet retainedSequences <> M.keysSet ownedSequences) ]
   ]
+ where
+  runsValue result = [object ["position" .= runPosition run, "first_call" .= runFirst run, "repeats" .= runRepeats run] | run <- blockRuns (resultSetters result)]
+  retainedSequences = getterSequences retained
+  ownedSequences = getterSequences owned
+  countsValue key sequences = let values = M.findWithDefault [] key sequences in
+    object ["calls" .= length values, "collapsed" .= length (collapseRepeats values)]
 
 -- Serialized refusal controls.
 
 data ControlName
-  = ReorderedWrite | DroppedWrite | ExtraWrite | ChangedValue | MissingSetterCall | ChangedGetterResult
+  = ReorderedWrite | DroppedWrite | ExtraWrite | ChangedValue | MissingSetterCall | ChangedGetterResult | StaleGetterResult
   | WrongDatDigest | WrongLinkedBin | InjectedGuardedFetch
   deriving (Eq, Show, Enum, Bounded)
 
@@ -778,7 +896,35 @@ controlNames :: [ControlName]
 controlNames = [minBound .. maxBound]
 
 -- | A control passes when its observed refusal's rendering starts with one of the expected prefixes.
-data ControlOutcome = ControlOutcome { controlName :: ControlName, controlExpected :: [String], controlObserved :: Either Refusal () }
+data ControlOutcome = ControlOutcome
+  { controlName :: ControlName
+  , controlExpected :: [String]
+  , controlObserved :: Either Refusal ()
+  , controlStale :: Maybe StaleGetter
+  }
+
+-- | The stale getter control's mutation: the key, the call's index among the key's returned calls,
+-- its return hit, and r0 there before and after.
+data StaleGetter = StaleGetter { staleKey :: GetterKey, staleCall :: Int, staleHit :: Int, staleFrom :: Word32, staleTo :: Word32 } deriving (Eq, Show)
+
+-- | The first key, then the first call, whose call lies strictly inside a run of its value; the new
+-- value is the run's previous distinct value, or its next one for the first run.
+staleGetter :: [GetterResult] -> Either String StaleGetter
+staleGetter getters = case candidates of
+  chosen : _ -> Right chosen
+  [] -> Left "no getter key has two distinct values and a call inside a run"
+ where
+  byKey = M.fromListWith (flip (++)) [(getterKey getter, [getter]) | getter <- getters]
+  candidates =
+    [ StaleGetter key position (getterReturnHit call) (getterValue call) replacement
+    | (key, calls) <- M.toList byKey
+    , let values = map getterValue calls
+          runs = collapseRepeats values
+    , length runs >= 2
+    , (position, previous, call, next) <- zip4 [1 ..] values (drop 1 calls) (drop 2 values)
+    , previous == getterValue call && next == getterValue call
+    , let run = length (collapseRepeats (take (position + 1) values)) - 1
+          replacement = if run > 0 then runs !! (run - 1) else runs !! (run + 1) ]
 
 -- | Runs one control against ROLE's observation, which must be admitted with the other role's.
 runControl :: Bindings -> Role -> Observation -> Observation -> ControlName -> Either String ControlOutcome
@@ -789,7 +935,7 @@ runControl bindings role mutated other control = do
         theirs <- qualify bindings otherRole other
         _ <- if role == RetainedRole then compareRoles mine theirs else compareRoles theirs mine
         pure ()
-      outcome expected result = Right (ControlOutcome control expected result)
+      outcome expected result = Right (ControlOutcome control expected result Nothing)
       -- An owned leaf's writes come from the accessors, whose hits qualify matches row by row.
       writeRefusals = "WriteSequenceDiffers" : ["AccessorStoreUnmatched" | role == OwnedRole]
   steps <- decodeValue (obsSteps mutated) >>= asArray
@@ -827,7 +973,13 @@ runControl bindings role mutated other control = do
       (_, returned) <- matchedCall plan hits GetterEntry
       let flipped = setR0 (\value -> value `xor` 1) (hits !! returned)
       observation <- replaceHit mutated returned flipped
-      outcome ["GetterResultsDiffer"] (admitBoth observation)
+      outcome ["GetterSequenceDiffers"] (admitBoth observation)
+    StaleGetterResult -> do
+      mine <- either (Left . show) Right (qualify bindings role mutated)
+      stale <- staleGetter (qualifiedGetters mine)
+      hits <- decodeHitValues mutated
+      observation <- replaceHit mutated (staleHit stale) (setR0 (const (staleTo stale)) (hits !! staleHit stale))
+      Right (ControlOutcome control ["GetterSequenceDiffers"] (admitBoth observation) (Just stale))
     _ -> Left "unhandled control"
  where
   hexText :: Word32 -> T.Text
