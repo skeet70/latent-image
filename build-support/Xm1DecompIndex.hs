@@ -525,6 +525,20 @@ fileFacts = go [] mempty
     Undef name -> go stack (acc <> Facts M.empty S.empty (S.singleton name)) rest
     _ -> go stack acc rest
 
+-- A translation unit's facts: each file's definitions judged by the conditions around them
+-- under the unit's unconditional facts. Definition order is not modelled.
+unitFacts :: Facts -> [Parsed] -> Facts
+unitFacts base files = base <> mconcat (map judged files)
+ where
+  first = base <> mconcat (map pFacts files)
+  judged p =
+    let states = regions first (pDirectives p)
+     in mconcat [fact (maybe Live snd (M.lookupLT o states)) d | (o, d) <- pDirectives p]
+  fact Dead _ = mempty
+  fact c (Define name _ body) = Facts (if c == Live then M.singleton name body else M.empty) (S.singleton name) S.empty
+  fact _ (Undef name) = Facts M.empty S.empty (S.singleton name)
+  fact _ _ = mempty
+
 definedness :: Facts -> B.ByteString -> Maybe Bool
 definedness facts name
   | S.member name (fUndefined facts) = Nothing
@@ -633,8 +647,8 @@ regions facts = M.fromList . go []
 stateAt :: M.Map Int Cond -> Int -> Cond
 stateAt states offset = maybe Live snd (M.lookupLE offset states)
 
--- `#define M(..., p, ...) ... prefix##p(...) {` makes each line-start `M(..., arg, ...)` a
--- definition of `prefix` followed by that argument.
+-- `#define M(..., p, ...) ... p(...) {` or `... prefix##p(...) {` makes each line-start
+-- `M(..., arg, ...)` a definition of the argument, after the prefix when one is pasted.
 generatedDefs :: B.ByteString -> B.ByteString -> [(B.ByteString, [B.ByteString], B.ByteString)] -> (Int -> Bool) -> [Def]
 generatedDefs raw t macros inDefine =
   [ Def (prefix <> stripB arg) p close (markerBefore raw p)
@@ -646,14 +660,25 @@ generatedDefs raw t macros inDefine =
  where
   n = B.length t
   pattern params body = do
-    let (before, after) = B.breakSubstring "##" body
-        lead = C.dropWhileEnd isSpaceC before
-        prefix = C.takeWhileEnd isWord lead
-        (param, rest) = C.span isWord (C.dropWhile isSpaceC (B.drop 2 after))
-    unless (not (B.null after) && "(" `B.isPrefixOf` C.dropWhile isSpaceC rest && C.elem '{' rest) Nothing
-    unless (not (C.any (`elem` (";{}=(" :: String)) (B.take (B.length lead - B.length prefix) lead))) Nothing
+    (lead, prefix, param, rest) <- firstCall body 0
+    unless (not (C.any (`elem` (";{}=(" :: String)) lead) && C.elem '{' rest) Nothing
     k <- lookup param (zip params [0 ..])
     Just (prefix, k)
+  firstCall body i
+    | i >= B.length body = Nothing
+    | isIdentStart (at body i) && not (isWord (at body (i - 1))) =
+        let e = identEnd body i
+            o = skipSpace body e
+            before = C.dropWhileEnd isSpaceC (B.take i body)
+            pasted = C.dropWhileEnd isSpaceC (B.take (B.length before - 2) before)
+            prefix = C.takeWhileEnd isWord pasted
+         in if at body o /= '('
+              then firstCall body e
+              else
+                if "##" `B.isSuffixOf` before
+                  then Just (B.take (B.length pasted - B.length prefix) pasted, prefix, slice body i e, B.drop (o + 1) body)
+                  else Just (before, "", slice body i e, B.drop (o + 1) body)
+    | otherwise = firstCall body (i + 1)
   invocations name = go 0
    where
     go r = case nextLineStart t r of
@@ -826,18 +851,24 @@ buildIndex root ranges = do
       start <- realPath source
       included <- walk parseFile realPath search (S.singleton start) [(source, parsed {pIncludes = forced ++ pIncludes parsed})]
       let closure = (source, parsed) : included
-          facts = Facts defines (M.keysSet defines) S.empty <> mconcat (map (pFacts . snd) closure)
+          facts = unitFacts (Facts defines (M.keysSet defines) S.empty) (map snd closure)
           states = M.fromList [(f, regions facts (pDirectives p)) | (f, p) <- closure]
-          -- At the body's closing brace: a head can straddle `#if` branches (supplicant_events.c).
-          condition f d = maybe Live (`stateAt` (dEnd d - 1)) (M.lookup f states)
-          own = [(source, parsed, d, a, c, parsed) | d <- pDefs parsed, let a = resolve stem (dName d), let c = condition source d, c /= Dead || a /= Nothing]
+          -- Judged at the body's closing brace, since a head can straddle `#if` branches
+          -- (supplicant_events.c); such a definition is shown from the `#if` before its head.
+          judge f p d =
+            let at' o = maybe Live (`stateAt` o) (M.lookup f states)
+                c = at' (dEnd d - 1)
+                opening = [o | (o, Open _) <- pDirectives p, o < dHead d]
+                shown = if c /= Dead && at' (dHead d) == Dead && not (null opening) then Just (last opening) else Nothing
+             in (c, shown)
+          own = [(source, parsed, d, a, judge source parsed d, parsed) | d <- pDefs parsed, let a = resolve stem (dName d), fst (judge source parsed d) /= Dead || a /= Nothing]
           fromHeaders =
-            [ (header, hp, d, Just a, condition header d, parsed)
+            [ (header, hp, d, Just a, judge header hp d, parsed)
             | (header, hp) <- included, d <- pDefs hp, Just a <- [resolve stem (dName d)]
             ]
       pure [(f, p, d, a, c, source, tu) | (f, p, d, a, c, tu) <- own ++ fromHeaders]
     writeIORef cache M.empty
-    let entry (file, parsed, d, address, condition, unitFile, unitParsed) =
+    let entry (file, parsed, d, address, (condition, shown), unitFile, unitParsed) =
           let range = case fromMaybe [] (address >>= (`M.lookup` unitRanges)) of
                 r : _ -> Just r
                 [] -> Nothing
@@ -851,7 +882,7 @@ buildIndex root ranges = do
                 | Nothing <- range = Unranged
                 | otherwise = Exact
            in Entry unit address range (dName d) (makeRelative root file)
-                (lineOf parsed (maybe (dHead d) mOffset (dAdjacent d))) (lineOf parsed (dHead d))
+                (lineOf parsed (fromMaybe (maybe (dHead d) mOffset (dAdjacent d)) shown)) (lineOf parsed (dHead d))
                 (lineOf parsed (max (dHead d) (dEnd d - 1))) status
                 ((\m -> (makeRelative root unitFile, lineOf unitParsed (mOffset m), mReason m)) <$> marker)
         rank e = case eStatus e of
