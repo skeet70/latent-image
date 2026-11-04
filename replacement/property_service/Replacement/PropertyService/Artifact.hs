@@ -20,6 +20,7 @@ module Replacement.PropertyService.Artifact
   , artifactCarrier
   , artifactStubs
   , artifactTable
+  , artifactSlotTable
   , artifactFunctions
   , artifactProof
   , linkedBytes
@@ -79,6 +80,7 @@ data LinkedArtifact = LinkedArtifact
   , artifactStubs :: StubAddresses
   , artifactFunctions :: [FunctionExtent]
   , artifactTable :: GuestAddress
+  , artifactSlotTable :: GuestAddress
   , artifactProof :: CodeProof
   }
 
@@ -341,7 +343,7 @@ deriveArtifact properties bytes symbolBytes = do
         , layoutTails = [(GuestAddress (getterStubAddress + 0x10), getterExit), (GuestAddress (setterStubAddress + 0x14), setterExit)]
         }
   proof <- either (Left . CodeRejected) Right (admitCode layout bytes)
-  pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) carrier (StubAddresses (GuestAddress getterStubAddress) (GuestAddress setterStubAddress)) functions (GuestAddress tableAddress) proof)
+  pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) carrier (StubAddresses (GuestAddress getterStubAddress) (GuestAddress setterStubAddress)) functions (GuestAddress tableAddress) (GuestAddress slotAddress) proof)
 
 -- | Undefined-instruction fill for the carrier past the linked bytes.
 fillWord :: Word32
