@@ -14,6 +14,7 @@ module EmulatorUsb
   , TraceHit (..)
   , emulatorTraceHits
   , emulatorTraceHitsRaw
+  , emulatorTraceHitsPage
   , ReleaseSegment
   , releaseSegment
   , emulatorReleaseContext
@@ -32,6 +33,7 @@ module EmulatorUsb
   , emulatorExecutionWatchBegin
   , emulatorWatchStateRaw
   , emulatorWatchStateLine
+  , emulatorWatchEnd
   , decodeBridgeWatchLine
   , ModalResponse (..)
   , emulatorModalObservationBegin
@@ -52,12 +54,15 @@ module EmulatorUsb
   , emulatorSnapshotRestore
   , emulatorSnapshotDrop
   , emulatorSnapshotKey
+  , CrawlKey (..)
+  , crawlKeyWire
+  , emulatorDisplayKey
   ) where
 
 import Control.Concurrent.MVar
 import Control.Exception (IOException, bracketOnError, try)
 import Control.Monad (unless)
-import Data.Aeson (Result (..), Value (..), eitherDecodeStrict', encode, fromJSON, object, (.=))
+import Data.Aeson (FromJSON (..), Result (..), ToJSON (..), Value (..), eitherDecodeStrict', encode, fromJSON, object, withText, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as M
 import qualified Data.ByteString as B
@@ -377,6 +382,10 @@ emulatorTraceHitsRaw emulator start = do
   fields <- rpc emulator (object ["command" .= String "trace-hits", "from" .= start])
   objectField "hits" fields
 
+-- | The bridge's trace-hits reply for at most `limit` recorded hits from index `start` on, undecoded.
+emulatorTraceHitsPage :: Emulator -> Int -> Int -> IO Value
+emulatorTraceHitsPage emulator start limit = Object <$> rpc emulator (object ["command" .= String "trace-hits", "from" .= start, "limit" .= limit])
+
 -- | A key's hold and debounced-release cap in guest instructions, both positive.
 data KeyPulse = KeyPulse { keyPulseHold :: Word32, keyPulseRelease :: Word32 } deriving (Eq, Show)
 
@@ -459,6 +468,10 @@ emulatorWatchStateRaw emulator = watchRpc emulator (object ["command" .= String 
 -- | The undecoded watch-state response line, for callers that store it before decoding.
 emulatorWatchStateLine :: Emulator -> IO B.ByteString
 emulatorWatchStateLine emulator = exchangeLine emulator (encode (object ["command" .= String "watch-state"]))
+
+-- | Ends the armed memory watch and returns its final state.
+emulatorWatchEnd :: Emulator -> IO Value
+emulatorWatchEnd emulator = Object <$> rpc emulator (object ["command" .= String "watch-end"])
 
 
 data ModalResponse = ModalResponse
@@ -568,6 +581,37 @@ emulatorSnapshotKey emulator (SnapshotName name) key = do
     Null -> SnapshotPressed <$> menuReading fields <*> objectField "settle" fields <*> pure instructions
     String message -> pure (SnapshotStopped (T.unpack message) instructions)
     _ -> ioError (userError "snapshot-key failure must be null or text")
+
+-- | A physical press the bridge accepts; MENU is OK and DISP is BACK on this body.
+data CrawlKey = KeyUp | KeyDown | KeyLeft | KeyRight | KeyOk | KeyBack | KeyQ | KeyDialLeft | KeyDialRight | KeyPlay
+  deriving (Eq, Ord, Show, Enum, Bounded)
+
+crawlKeyWire :: CrawlKey -> String
+crawlKeyWire key = case key of
+  KeyUp -> "up"
+  KeyDown -> "down"
+  KeyLeft -> "left"
+  KeyRight -> "right"
+  KeyOk -> "ok"
+  KeyBack -> "back"
+  KeyQ -> "q"
+  KeyDialLeft -> "dial-left"
+  KeyDialRight -> "dial-right"
+  KeyPlay -> "play"
+
+instance FromJSON CrawlKey where
+  parseJSON = withText "crawl key" $ \text ->
+    case lookup (T.unpack text) [(crawlKeyWire key, key) | key <- [minBound .. maxBound]] of
+      Just key -> pure key
+      Nothing -> fail ("unsupported crawl key: " ++ T.unpack text)
+
+instance ToJSON CrawlKey where
+  toJSON = toJSON . crawlKeyWire
+
+-- | Presses one key from the current guest as `emulatorSnapshotKey` does after its restore; the
+-- reply is undecoded.
+emulatorDisplayKey :: Emulator -> CrawlKey -> IO Value
+emulatorDisplayKey emulator key = Object <$> rpc emulator (object ["command" .= String "display-key", "key" .= crawlKeyWire key])
 
 menuReading :: M.KeyMap Value -> IO MenuReading
 menuReading fields = objectField "menu" fields >>= \value -> case value of
