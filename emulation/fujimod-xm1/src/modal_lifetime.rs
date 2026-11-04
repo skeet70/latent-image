@@ -170,7 +170,7 @@ impl LifetimeRequest {
             let target = word_extent(address)?;
             if row.address % 4 != 0 || row.old == row.new || target.overlaps(resident)
                 || target.overlaps(settings_extent())
-                || layouts.iter().any(|layout| [layout.nodes, layout.creations, layout.current, layout.context, layout.vfp_owner].iter().any(|range| range.overlaps(target))) {
+                || layouts.iter().any(|layout| [layout.nodes, layout.creations, layout.current, layout.selected, layout.context, layout.vfp_owner].iter().any(|range| range.overlaps(target))) {
                 return Err(LifetimeFailure::InvalidRequest);
             }
             Ok(Publication { address, old: Word(row.old), new: Word(row.new) })
@@ -191,7 +191,7 @@ impl LifetimeRequest {
         watched.extend(immutable_sources.iter().copied());
         watched.extend(readonly.iter().map(|image| image.extent));
         watched.extend(publications.iter().map(|row| word_extent(row.address).expect("validated publication")));
-        for layout in layouts { watched.extend([layout.context, layout.current, layout.nodes, layout.creations, layout.vfp_owner]); }
+        for layout in layouts { watched.extend([layout.context, layout.current, layout.selected, layout.nodes, layout.creations, layout.vfp_owner]); }
         watched.sort_by_key(|range| range.start());
         let mut merged: Vec<PhysicalExtent> = Vec::with_capacity(watched.len());
         for range in watched {
@@ -406,11 +406,32 @@ pub struct VfpOwnerState { pub before: VfpOwner, pub current: TaskId }
 #[derive(Clone, Copy)]
 enum StoreState { Plain, Current(CurrentState), VfpOwner(VfpOwnerState) }
 
+/// Make-ready's store of a higher-priority node into a domain's selected cell, indexed by the writing core.
+const MAKE_READY_SELECTED_STORES: [Guest; 2] = [Guest(0x43d08), Guest(0xd3cc4)];
+/// Each replacement has strictly higher priority; a kernel has 16 ready-queue levels, plus null.
+const SUPERSEDED_LIMIT: usize = 17;
+/// Values a kernel's selected cell held before the other core's make-ready replaced them, since that
+/// kernel's core last wrote the cell or stored its current task.
+#[derive(Clone, Copy)]
+struct Superseded { values: [u32; SUPERSEDED_LIMIT], len: usize }
+impl Superseded {
+    const EMPTY: Self = Self { values: [0; SUPERSEDED_LIMIT], len: 0 };
+    fn push(&mut self, value: Word) -> Result<()> {
+        let slot = self.values.get_mut(self.len).ok_or(LifetimeFailure::InvalidContext)?;
+        *slot = value.0;
+        self.len += 1;
+        Ok(())
+    }
+    fn contains(&self, value: Word) -> bool { self.values[..self.len].contains(&value.0) }
+    fn clear(&mut self) { self.len = 0; }
+}
+
 pub struct LifetimeMonitor {
     config: LifetimeConfig,
     settings: [u8; SETTINGS_BYTES],
     receipt: LifetimeReceipt,
     pending: [Option<StorePermit>; 2],
+    superseded: [Superseded; 2],
 }
 impl LifetimeMonitor {
     pub fn new(config: LifetimeConfig, memory: &impl LifetimeMemory) -> Result<Self> {
@@ -432,7 +453,7 @@ impl LifetimeMonitor {
             if Word(u32::from_le_bytes(bytes)) != row.old { return Err(LifetimeFailure::WrongBefore); }
         }
         let publication_count = config.publications.len();
-        Ok(Self { config, settings, pending: [None; 2], receipt: LifetimeReceipt {
+        Ok(Self { config, settings, pending: [None; 2], superseded: [Superseded::EMPTY; 2], receipt: LifetimeReceipt {
             phase: LifetimePhase::Prepared, publication_count, forward_writes: 0, reverse_writes: 0,
             pending_stores: 0, install_core: None, rollback_core: None, checked_resource_writes: 0,
             checked_identity_writes: 0, checked_scheduler_writes: 0, checked_context_writes: 0, checked_vfp_owner_writes: 0,
@@ -535,7 +556,8 @@ impl LifetimeMonitor {
             let valid = match (spec.kind, state) {
                 (ContextKind::Increment, StoreState::Plain) => before.0.checked_add(1) == Some(value.0),
                 (ContextKind::Decrement, StoreState::Plain) => before.0.checked_sub(1) == Some(value.0),
-                (ContextKind::Current, StoreState::Current(current)) => current.context_depth == Word(0) && current.selected == value
+                (ContextKind::Current, StoreState::Current(current)) => current.context_depth == Word(0)
+                    && (current.selected == value || self.superseded[spec.core].contains(value))
                     && valid_node(value) && valid_node(before),
                 (ContextKind::Clear, StoreState::Plain) => value == Word(0) && before == Word(if spec.pc == 0x43690 || spec.pc == 0xd3690 { 0 } else { 1 }),
                 (ContextKind::Set, StoreState::Plain) => value == Word(1) && before == Word(0),
@@ -544,6 +566,7 @@ impl LifetimeMonitor {
                 _ => false,
             };
             if !valid { return Err(LifetimeFailure::InvalidContext); }
+            if matches!(spec.kind, ContextKind::Current) { self.superseded[spec.core].clear(); }
             let kind = if matches!(spec.kind, ContextKind::VfpOwner) { PermitKind::VfpOwner } else { PermitKind::Context };
             StorePermit { pc, address, physical: target.start(), before, value, kind }
         };
@@ -604,6 +627,14 @@ impl LifetimeMonitor {
                 PermitKind::Context => self.receipt.checked_context_writes += 1,
                 PermitKind::VfpOwner => self.receipt.checked_vfp_owner_writes += 1,
             }
+            return Ok(());
+        }
+        if let Some(kernel) = source_layouts().iter().position(|layout| layout.selected.overlaps(target)) {
+            if target != source_layouts()[kernel].selected { return Err(LifetimeFailure::WrongWidth); }
+            let before = attempt.before.word().ok_or(LifetimeFailure::InvalidWrite)?;
+            self.receipt.checked_scheduler_writes += 1;
+            if attempt.core.0 == kernel { self.superseded[kernel].clear(); }
+            else if attempt.pc == MAKE_READY_SELECTED_STORES[attempt.core.0] { self.superseded[kernel].push(before)?; }
             return Ok(());
         }
         let next_publication = self.config.publication_addresses.partition_point(|address| address.0 + 4 <= target.start().0);
