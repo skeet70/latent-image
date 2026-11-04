@@ -12,6 +12,7 @@ module Emulation.PropertyPairCheck
   , Press (..)
   , RouteClass (..)
   , RouteResult (..)
+  , BlockRunAt (..)
   , Qualified (..)
   , qualify
   , compareRoles
@@ -157,8 +158,8 @@ data RouteResult = RouteResult
   , resultTransfers :: [TransferEffect]
   , resultFinal :: [(Word32, B.ByteString)]
   , resultPresses :: [Press]
-  -- | The last step's setter/commit effects' time-driven block runs: index among the collapsed effects, block count.
-  , resultEffectBlocks :: [(Int, Int)]
+  -- | The time-driven block runs of the last step's setter and commit effects.
+  , resultEffectBlocks :: [BlockRunAt]
   } deriving (Eq, Show)
 
 data Qualified = Qualified
@@ -587,7 +588,7 @@ qualify bindings role observation = do
       , resultTransfers = concatMap snd effects
       , resultFinal = M.toList (intervalAfter (last own))
       , resultPresses = [press | Just press <- map intervalPress own]
-      , resultEffectBlocks = [(position, count) | (position, EffectBlockRun count) <- zip [0 ..] (collapseEffects lastEffects)]
+      , resultEffectBlocks = effectBlockRuns lastEffects
       }
   cohort <- forM [["inputs", "run", "sha256"], ["inputs", "boot_rom", "sha256"], ["inputs", "adjustment_nand", "sha256"], ["inputs", "bridge", "sha256"]
                  , ["inputs", "routes", "sha256"], ["inputs", "linked", "sha256"], ["inputs", "contract", "sha256"], ["inputs", "observer", "sha256"]] $ \path ->
@@ -673,17 +674,14 @@ compareRoles retained owned = do
       (Left (PressDiffers name))
     pure (left, right)
 
--- | One setter call, or a run of one `timeDrivenSequence` block whose calls' arguments and results
--- repeat it consecutively, with the run's block count.
+-- | One setter call, or a run of one `timeDrivenSequence` block whose calls repeat it
+-- consecutively, with the run's block count.
 data SetterItem = SingleSetter Call | BlockRun [Call] Int
 
-setterItemShape :: SetterItem -> Either [([Word32], Maybe Word32)] Call
+setterItemShape :: SetterItem -> Either [Call] Call
 setterItemShape item = case item of
-  BlockRun block _ -> Left (map callValues block)
+  BlockRun block _ -> Left block
   SingleSetter call -> Right call
-
-callValues :: Call -> ([Word32], Maybe Word32)
-callValues call = (callArguments call, callResult call)
 
 collapseBlocks :: [Call] -> [SetterItem]
 collapseBlocks calls = case splitAt 4 calls of
@@ -694,12 +692,15 @@ collapseBlocks calls = case splitAt 4 calls of
     [] -> []
  where
   span' block remaining = case splitAt 4 remaining of
-    (next, rest) | map callValues next == map callValues block -> let (count, rest') = span' block rest in (count + 1, rest')
+    (next, rest) | next == block -> let (count, rest') = span' block rest in (count + 1, rest')
     _ -> (0 :: Int, remaining)
 
--- | Each block run's index among the collapsed items, index of its first setter call, and block count.
-blockRuns :: [Call] -> [(Int, Int, Int)]
-blockRuns calls = [ (position, first, count)
+-- | A block run's index among the collapsed items, the index of its first element in the
+-- uncollapsed sequence, and its block count.
+data BlockRunAt = BlockRunAt { runPosition :: Int, runFirst :: Int, runRepeats :: Int } deriving (Eq, Show)
+
+blockRuns :: [Call] -> [BlockRunAt]
+blockRuns calls = [ BlockRunAt position first count
                   | (position, first, BlockRun _ count) <- zip3 [0 ..] (scanl (+) 0 (map width items)) items ]
  where
   items = collapseBlocks calls
@@ -726,6 +727,15 @@ collapseEffects effects
   count remaining
     | isBlock remaining = let (repeats, rest) = count (drop 4 remaining) in (repeats + 1, rest)
     | otherwise = (0 :: Int, remaining)
+
+effectBlockRuns :: [CrawlEffect] -> [BlockRunAt]
+effectBlockRuns effects = [ BlockRunAt position first count
+                          | (position, first, EffectBlockRun count) <- zip3 [0 ..] (scanl (+) 0 (map width items)) items ]
+ where
+  items = collapseEffects effects
+  width item = case item of
+    SingleEffect _ -> 1
+    EffectBlockRun count -> length timeDrivenSequence * count
 
 -- | Admits the guest control's refusal: its observation stopped at its first guarded hit, which is
 -- the restored setter word's retired arm entered for that word's property, and every earlier hit is
@@ -794,7 +804,7 @@ routeSummary result = object
   , "accessor_writes" .= length [() | write <- resultWrites result, effectWriter write == OwnedAccessor]
   , "transfers" .= length (resultTransfers result)
   , "area3_appends" .= length (resultAppends result)
-  , "effect_block_runs" .= [object ["position" .= position, "repeats" .= count] | (position, count) <- resultEffectBlocks result]
+  , "effect_block_runs" .= [object ["position" .= runPosition run, "first_effect" .= runFirst run, "repeats" .= runRepeats run] | run <- resultEffectBlocks result]
   ]
 
 propertiesWritten :: RouteResult -> [Word32]
@@ -830,7 +840,7 @@ comparisonValue pairs = object
       | (left, right) <- pairs ]
   ]
  where
-  runsValue result = [object ["position" .= position, "first_call" .= first, "repeats" .= count] | (position, first, count) <- blockRuns (resultSetters result)]
+  runsValue result = [object ["position" .= runPosition run, "first_call" .= runFirst run, "repeats" .= runRepeats run] | run <- blockRuns (resultSetters result)]
 
 -- Serialized refusal controls.
 

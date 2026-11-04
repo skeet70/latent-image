@@ -14,6 +14,7 @@ module Emulation.PropertyPairRoutes
   , decodeRouteFile
   , encodeRouteFile
   , RetainedObservation (..)
+  , ObservationStatus (..)
   , EffectsRefusal (..)
   , retainedEffects
   , CrawlEffect (..)
@@ -211,9 +212,21 @@ encodeRouteFile file = A.encode (object
 -- | The receipt, steps and hits sidecars of an observation directory.
 data RetainedObservation = RetainedObservation { retainedReceipt :: B.ByteString, retainedSteps :: B.ByteString, retainedHits :: B.ByteString }
 
+-- | An observation receipt's `outcome.status`.
+data ObservationStatus = StatusCompleted | StatusRefused deriving (Eq, Show, Enum, Bounded)
+
+instance FromJSON ObservationStatus where
+  parseJSON = withText "observation status" $ \text ->
+    maybe (fail ("unknown observation status: " ++ T.unpack text)) pure
+      (lookup text [(statusWire status, status) | status <- [minBound .. maxBound]])
+   where
+    statusWire status = case status of
+      StatusCompleted -> "completed"
+      StatusRefused -> "refused"
+
 data EffectsRefusal
   = ObservationNotRetained Role
-  | ObservationNotCompleted T.Text
+  | ObservationNotCompleted ObservationStatus
   | LastStepMissing RouteName
   | ObservationShape String
   deriving (Eq, Show)
@@ -225,7 +238,7 @@ retainedEffects observation routes = do
   (roleText, status) <- shape (A.eitherDecodeStrict' (retainedReceipt observation) >>= parseEither receiptFields)
   role <- shape (parseRole roleText)
   unless (role == RetainedRole) (Left (ObservationNotRetained role))
-  unless (status == "completed") (Left (ObservationNotCompleted status))
+  unless (status == StatusCompleted) (Left (ObservationNotCompleted status))
   steps <- shape (A.eitherDecodeStrict' (retainedSteps observation) >>= parseEither (mapM stepFields))
   let ranges = M.fromList steps
       hits = M.fromList (zip [0 :: Int ..] (filter (not . B.null) (C.lines (retainedHits observation))))

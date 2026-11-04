@@ -273,13 +273,19 @@ comparedSetters retained owned = compareRoles (qualifiedWith RetainedRole retain
  where
   qualifiedWith role setters = Qualified role [] 0 1 [RouteResult crawlRoute CrawlClass [] setters [] [] [] [] [] []]
 
--- | The retained crawl route's effect block runs when its route file records `recorded` and its
--- step's hits end with `extra` after the standard setter, commit and getter calls.
-effectBlocksWith :: [CrawlEffect] -> [Value] -> Either Refusal [(Int, Int)]
+-- | The retained crawl route's reported effect block runs, as (position, first effect, repeats), when
+-- its route file records `recorded` and its step's hits end with `extra` after the standard setter,
+-- commit and getter calls.
+effectBlocksWith :: [CrawlEffect] -> [Value] -> Either Refusal (Maybe [(Int, Int, Int)])
 effectBlocksWith recorded extra = do
   let routes = routesWith recorded
   result <- qualify bindings { bindRoutes = routes } RetainedRole (chainWith routes RetainedRole [retainedStep { stepHits = stepHits retainedStep ++ extra }])
-  pure (concat [resultEffectBlocks route | route <- qualifiedRoutes result, resultRoute route == crawlRoute])
+  pure $ case qualifiedValue result of
+    Object top | Just (Array summaries) <- KM.lookup "per_route" top ->
+      case [runs | Object summary <- V.toList summaries, KM.lookup "route" summary == Just (A.toJSON crawlRoute), Just runs <- [KM.lookup "effect_block_runs" summary]] of
+        [runs] -> parseMaybe (A.withArray "runs" (mapM (A.withObject "run" (\run -> (,,) <$> run A..: "position" <*> run A..: "first_effect" <*> run A..: "repeats")) . V.toList)) runs
+        _ -> Nothing
+    _ -> Nothing
 
 -- | A setter entry for the property and its return.
 setterPair :: Word32 -> [Value]
@@ -373,7 +379,7 @@ main = do
         (let routes = [Route crawlRoute (KeyRoute [KeyOk] (CrawlTrial 1 [CommitEffect]))]
              refused sidecars chosen = either Just (const Nothing) (retainedEffects sidecars chosen)
          in refused (retainedSidecars OwnedRole "completed") routes == Just (ObservationNotRetained OwnedRole)
-              && refused (retainedSidecars RetainedRole "refused") routes == Just (ObservationNotCompleted "refused")
+              && refused (retainedSidecars RetainedRole "refused") routes == Just (ObservationNotCompleted StatusRefused)
               && refused (retainedSidecars RetainedRole "completed") [Route crawlRoute (KeyRoute [KeyDown] (CrawlTrial 1 [CommitEffect]))]
                    == Just (LastStepMissing crawlRoute))
 
@@ -450,7 +456,7 @@ main = do
     , check "a crawl route whose last step lacks its recorded effects is refused"
         (refusal OwnedRole (ownedWith (filter (/= commit) (stepHits ownedStep))) == Just (RouteEffectsDiffer crawlRoute))
     , check "recorded and observed effects that differ only in a time-driven block's repeat count qualify, with the observed count"
-        (effectBlocksWith ([SetterEffect 5, CommitEffect] ++ map SetterEffect timeDrivenSequence) (blockHits ++ blockHits ++ blockHits) == Right [(2, 3)])
+        (effectBlocksWith ([SetterEffect 5, CommitEffect] ++ map SetterEffect timeDrivenSequence) (blockHits ++ blockHits ++ blockHits) == Right (Just [(2, 2, 3)]))
     , check "recorded and observed effects that differ outside the block are refused"
         (effectBlocksWith ([SetterEffect 5, CommitEffect] ++ map SetterEffect timeDrivenSequence) (blockHits ++ setterPair 6 ++ blockHits)
            == Left (RouteEffectsDiffer crawlRoute)
@@ -489,6 +495,9 @@ main = do
         (fmap blockRunsOf (comparedSetters (timeBlock ++ changedBlock) (timeBlock ++ changedBlock)) == Right (Just ([(0, 0, 1), (1, 4, 1)], [(0, 0, 1), (1, 4, 1)]))
           && comparedSetters (timeBlock ++ changedBlock) (timeBlock ++ timeBlock) `refusedAs` SetterSequenceDiffers crawlRoute
           && comparedSetters (timeBlock ++ changedBlock) timeBlock `refusedAs` SetterSequenceDiffers crawlRoute)
+    , check "a repeat with another result or another caller is not collapsed into the run before it"
+        (comparedSetters (timeBlock ++ map (\c -> c { callResult = Just 0 }) timeBlock) (timeBlock ++ timeBlock) `refusedAs` SetterSequenceDiffers crawlRoute
+          && comparedSetters (timeBlock ++ map (\c -> c { callReturn = 0x630a08 }) timeBlock) (timeBlock ++ timeBlock) `refusedAs` SetterSequenceDiffers crawlRoute)
     , check "a call between two blocks keeps them as separate runs"
         (fmap blockRunsOf (comparedSetters (timeBlock ++ [otherSetter] ++ timeBlock) (timeBlock ++ [otherSetter] ++ timeBlock))
           == Right (Just ([(0, 0, 1), (2, 5, 1)], [(0, 0, 1), (2, 5, 1)]))
