@@ -478,15 +478,62 @@ pub struct CarrierPart {
     pub residency: Residency,
 }
 
+/// An expected register value: a word, or the register as that role's earlier row of a boundary on the entry's core recorded it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum RegisterValue {
+    Word(Word),
+    Row(RowValue),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RowValue {
+    pub row: Label,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RegisterAllowance {
     pub core: Core,
     pub register: ContextRegister,
     pub mask: Word,
-    pub retained: Word,
-    pub composed: Word,
+    pub retained: RegisterValue,
+    pub composed: RegisterValue,
     pub reason: Reason,
+}
+
+fn row_register(row: &Row, register: ContextRegister) -> Option<Word> {
+    Some(match register {
+        ContextRegister::R0 => row.r0,
+        ContextRegister::R1 => row.r1,
+        ContextRegister::R2 => row.r2,
+        ContextRegister::R3 => row.r3,
+        ContextRegister::R4 => row.r4,
+        ContextRegister::R5 => row.r5,
+        ContextRegister::R6 => row.r6,
+        ContextRegister::R7 => row.r7,
+        ContextRegister::R8 => row.r8,
+        ContextRegister::R9 => row.r9,
+        ContextRegister::R10 => row.r10,
+        ContextRegister::R11 => row.r11,
+        ContextRegister::R12 => row.r12,
+        ContextRegister::Sp => row.sp,
+        ContextRegister::Lr => row.lr,
+        _ => return None,
+    })
+}
+
+/// The expected value in one role: a word, or the register in the last row of the label on `core` recorded before the
+/// attach; `attach` is the sum of the role's per-core attach instruction counts, the unit of `Row::total_instructions`.
+fn expected_value(value: &RegisterValue, register: ContextRegister, core: Core, attach: u64, rows: &[Row]) -> Option<Word> {
+    match value {
+        RegisterValue::Word(word) => Some(*word),
+        RegisterValue::Row(RowValue { row: label }) => rows.iter()
+            .filter(|row| &row.label == label && row.core == core && row.total_instructions < attach)
+            .last()
+            .and_then(|row| row_register(row, register)),
+    }
 }
 
 /// Top-level keys of `Board::state()`.
@@ -679,6 +726,8 @@ pub enum AttachRuleRefusal {
     CarrierPartShape { piece: PieceKind },
     RegisterMask { core: Core, register: ContextRegister },
     DuplicateRegister { core: Core, register: ContextRegister },
+    /// A row-valued expectation for a register that rows do not record.
+    RegisterRow { core: Core, register: ContextRegister },
     BoardShape(BoardPointer),
     BoardOverlap(BoardPointer),
     /// The log span is unaligned, longer than 4 KiB or outside DRAM.
@@ -753,8 +802,13 @@ impl AttachRules {
                 return Err(Refuse::DuplicateRegister { core: entry.core, register: entry.register });
             }
             let mask = entry.mask.0;
-            if mask == 0 || (!entry.register.masked() && mask != u32::MAX) || (entry.retained.0 | entry.composed.0) & !mask != 0 {
+            let outside = |value: &RegisterValue| matches!(value, RegisterValue::Word(word) if word.0 & !mask != 0);
+            if mask == 0 || (!entry.register.masked() && mask != u32::MAX) || outside(&entry.retained) || outside(&entry.composed) {
                 return Err(Refuse::RegisterMask { core: entry.core, register: entry.register });
+            }
+            let row_valued = [&entry.retained, &entry.composed].into_iter().any(|value| matches!(value, RegisterValue::Row(_)));
+            if row_valued && !ContextRegister::GENERAL.contains(&entry.register) && !matches!(entry.register, ContextRegister::Sp | ContextRegister::Lr) {
+                return Err(Refuse::RegisterRow { core: entry.core, register: entry.register });
             }
         }
         let mut board = Vec::with_capacity(raw.board.len());
@@ -1465,12 +1519,12 @@ fn snapshot_error(role: Role, reason: impl Into<String>) -> Difference {
     Difference::AttachSnapshot { role, reason: reason.into() }
 }
 
-fn compare_context(rules: &AttachRules, attach_core: Core, retained: &AttachState, owned: &AttachState, out: &mut Collector)
+fn compare_context(rules: &AttachRules, attach_core: Core, retained: &RoleCapture, owned: &RoleCapture, out: &mut Collector)
     -> Vec<AbsorbedRegister> {
     let mut used = BTreeSet::new();
     let mut absorbed = Vec::new();
     for core in Core::ALL {
-        let (a, b) = (&retained.cores[core.index()], &owned.cores[core.index()]);
+        let (a, b) = (&retained.state.cores[core.index()], &owned.state.cores[core.index()]);
         let compared: Vec<ContextRegister> = if core == attach_core {
             ContextRegister::GENERAL.iter().copied()
                 .chain([ContextRegister::Sp, ContextRegister::Lr, ContextRegister::Pc, ContextRegister::Cpsr, ContextRegister::Spsr, ContextRegister::Fpscr])
@@ -1487,10 +1541,27 @@ fn compare_context(rules: &AttachRules, attach_core: Core, retained: &AttachStat
             if entry.is_some() {
                 used.insert((core, register));
             }
-            let accepted = entry.is_some_and(|entry| {
-                let mask = entry.mask.0;
-                left.0 & !mask == right.0 & !mask && left.0 & mask == entry.retained.0 && right.0 & mask == entry.composed.0
-            });
+            let accepted = match entry {
+                None => false,
+                Some(entry) => {
+                    let mask = entry.mask.0;
+                    let mut expected = |capture: &RoleCapture, value: &RegisterValue| {
+                        let attach = capture.state.instructions.iter().sum();
+                        let found = expected_value(value, register, core, attach, capture.rows);
+                        if found.is_none() {
+                            if let RegisterValue::Row(RowValue { row }) = value {
+                                out.push(Difference::AttachRegisterRow { core, register, role: capture.role, label: row.clone() });
+                            }
+                        }
+                        found
+                    };
+                    match (expected(retained, &entry.retained), expected(owned, &entry.composed)) {
+                        (Some(want_left), Some(want_right)) =>
+                            left.0 & !mask == right.0 & !mask && left.0 & mask == want_left.0 & mask && right.0 & mask == want_right.0 & mask,
+                        _ => false,
+                    }
+                }
+            };
             if accepted {
                 absorbed.push(AbsorbedRegister { core, register, retained: left, composed: right });
             } else {
@@ -1755,7 +1826,7 @@ pub fn compare(rules: &AttachRules, attach_core: Core, retained: &RoleCapture, o
         out.push(snapshot_error(Role::Composed, "captured regions, their read paths or the unreachable extents differ between roles"));
     }
     let mut relations = evaluate_relations(rules, captures, &boards, &mut out);
-    let registers = compare_context(rules, attach_core, retained.state, owned.state, &mut out);
+    let registers = compare_context(rules, attach_core, retained, owned, &mut out);
     compare_peers(rules, retained.state, owned.state, &mut out);
     let mut extract: [Vec<Span>; 2] = [Vec::new(), Vec::new()];
     for (slot, role) in extract.iter_mut().zip(&relations.roles) {

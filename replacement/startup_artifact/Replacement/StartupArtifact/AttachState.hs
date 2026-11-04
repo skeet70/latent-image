@@ -23,8 +23,13 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Word (Word32, Word64)
+import qualified A32 as A
 import qualified Emulation.Sha256 as SHA
 import qualified FujiAF.FirstStage as F
+import Numeric (showHex)
+import qualified Replacement.LoaderOrchestration.Admission as LA
+import qualified Replacement.LoaderOrchestration.Artifact as L
+import qualified Replacement.LoaderOrchestration.Interface as LI
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
 
@@ -67,7 +72,13 @@ data ContextRegister
   | Sp | Lr | PcRegister | Cpsr | Spsr | Cpacr | Fpexc | Fpscr | Sctlr | TcmData | TcmInstruction
   deriving (Eq, Ord, Show, Enum, Bounded)
 
-data RegisterEntry = RegisterEntry Core ContextRegister Word32 Word32 Word32 Text deriving (Eq, Show)
+-- | One role's expected register value. 'CallReturn' is the role's PC of a boundary plus 4, that boundary being a BL
+-- to the attach PC; 'EntryState' is an owned loader orchestration's admitted register value as the named retained
+-- service is entered (composed role only); 'RowValue' is resolved by the consumer from that role's earlier row.
+data RegisterSource = SourceWord Word32 | CallReturn Label | EntryState LI.LoaderSide LI.Service | RowValue Label
+  deriving (Eq, Show)
+
+data RegisterEntry = RegisterEntry Core ContextRegister Word32 RegisterSource RegisterSource Text deriving (Eq, Show)
 
 data BoardKind = BoardExact J.Value J.Value | BoardDeclared Text deriving (Eq, Show)
 
@@ -259,12 +270,44 @@ carrierPart value = do
   range <- maybe (refuse "carrier part is empty") pure (span' target (fromIntegral start) (fromIntegral end))
   pure (CarrierPart range parsed)
 
+-- | A piece-qualified boundary label.
+labelOf :: Text -> Text -> Either Refusal Label
+labelOf context value = case T.splitOn "/" value of
+  [kindName, name] | [kind] <- [kind | kind <- [minBound .. maxBound], pieceKindName kind == kindName] ->
+    either (const (refuse (context <> " is not a boundary label"))) pure (label kind name)
+  _ -> refuse (context <> " is not a boundary label")
+
+-- | Kebab spelling of the constructor name.
+serviceName :: LI.Service -> Text
+serviceName = T.pack . dropLeading . concatMap (\c -> if c >= 'A' && c <= 'Z' then ['-', toEnum (fromEnum c + 32)] else [c]) . show
+  where
+    dropLeading ('-' : rest) = rest
+    dropLeading rest = rest
+
+registerSource :: Text -> J.Value -> Either Refusal RegisterSource
+registerSource context value = case value of
+  J.Number _ -> SourceWord <$> integral context value
+  J.Object fields | [key] <- KeyMap.keys fields -> case Key.toText key of
+    "call_return" -> text (context <> ".call_return") (field fields "call_return") >>= fmap CallReturn . labelOf (context <> ".call_return")
+    "row" -> text (context <> ".row") (field fields "row") >>= fmap RowValue . labelOf (context <> ".row")
+    "entry_state" -> do
+      inner <- object (context <> ".entry_state") ["side", "service"] [] (field fields "entry_state")
+      sideName <- text (context <> ".entry_state.side") (field inner "side")
+      side <- case sideName of
+        "loader-a" -> pure LI.LoaderA
+        "loader-b" -> pure LI.LoaderB
+        _ -> refuse (context <> ".entry_state.side is not loader-a or loader-b")
+      service <- named (context <> ".entry_state.service") serviceName (field inner "service")
+      pure (EntryState side service)
+    _ -> refuse (context <> " is not a register source")
+  _ -> refuse (context <> " is not a register source")
+
 registerEntry :: J.Value -> Either Refusal RegisterEntry
 registerEntry value = do
   fields <- object "register" ["core", "register", "mask", "retained", "composed", "reason"] [] value
   RegisterEntry <$> core "register.core" (field fields "core") <*> named "register.register" registerName (field fields "register")
-    <*> integral "register.mask" (field fields "mask") <*> integral "register.retained" (field fields "retained")
-    <*> integral "register.composed" (field fields "composed") <*> text "register.reason" (field fields "reason")
+    <*> integral "register.mask" (field fields "mask") <*> registerSource "register.retained" (field fields "retained")
+    <*> registerSource "register.composed" (field fields "composed") <*> text "register.reason" (field fields "reason")
 
 boardEntry :: J.Value -> Either Refusal BoardEntry
 boardEntry value = do
@@ -339,14 +382,97 @@ parseAttachRules value = do
   AttachRules <$> (rows "peers" >>= mapM peer) <*> (rows "carriers" >>= mapM carrierPart) <*> pure allowances
     <*> (rows "registers" >>= mapM registerEntry) <*> (rows "board" >>= mapM boardEntry) <*> pure related
 
--- | Both roles' DATs and targets, for the digests the contract carries, and each owned piece's symbol table.
+-- | Both roles' DATs and targets, for the digests the contract carries, each owned piece's symbol table, the composed
+-- pieces and the guard's attach boundary, for derived register values.
 data AttachSources = AttachSources
   { canonicalDatBytes :: B.ByteString
   , composedDatBytes :: B.ByteString
   , canonicalTargetBytes :: TargetBytes
   , composedTargetBytes :: TargetBytes
   , ownedSymbols :: [(PieceKind, B.ByteString)]
+  , composedPieces :: [Piece]
+  , attachBoundary :: Label
   }
+
+-- | A composed boundary's PC in one role.
+rolePc :: Role -> Boundary -> Maybe Word32
+rolePc role boundary = case role of
+  RetainedRole -> (\(Pc pc) -> pc) <$> boundaryRetainedPc boundary
+  ComposedRole -> let Pc pc = boundaryComposedPc boundary in Just pc
+
+boundaryNamed :: AttachSources -> Label -> Maybe Boundary
+boundaryNamed sources name = case [boundary | piece <- composedPieces sources, boundary <- catalogBoundaries (pieceCatalog piece), boundaryLabel boundary == name] of
+  [boundary] -> Just boundary
+  _ -> Nothing
+
+registerReg :: ContextRegister -> Maybe A.Reg
+registerReg register = lookup register ([(general, A.Reg index) | (general, index) <- zip [R0, R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12] [0 ..]]
+  ++ [(Sp, A.sp), (Lr, A.lr)])
+
+-- | One role's expected value of a register entry, as the contract writes it, and the derivation it rests on.
+resolveRegister :: AttachSources -> Core -> ContextRegister -> Role -> RegisterSource -> Either Refusal (J.Value, Maybe Text)
+resolveRegister sources owner register role source = do
+  attach <- maybe (refuse "the attach boundary is not in the composed catalog") pure (boundaryNamed sources (attachBoundary sources))
+  attachPc <- maybe (refuse "the attach boundary has no PC in a role") pure (rolePc role attach)
+  let image = case role of
+        RetainedRole -> canonicalTargetBytes sources
+        ComposedRole -> composedTargetBytes sources
+      roleText = roleName role
+  case source of
+    SourceWord word -> pure (J.toJSON word, Nothing)
+    RowValue name -> do
+      boundary <- maybe (refuse ("register row " <> labelText name <> " is not a composed boundary")) pure (boundaryNamed sources name)
+      unless (owner `elem` coreList (boundaryCores boundary) && rolePc role boundary /= Nothing)
+        (refuse ("register row " <> labelText name <> " has no " <> roleText <> " PC on the register's core"))
+      -- Only a sequence-compared boundary refuses when it fires past its record limit.
+      unless (boundaryCompare boundary == CompareSequence)
+        (refuse ("register row " <> labelText name <> " is not a sequence-compared boundary"))
+      pure (J.object ["row" .= labelText name], Nothing)
+    CallReturn name -> do
+      boundary <- maybe (refuse ("register call_return " <> labelText name <> " is not a composed boundary")) pure (boundaryNamed sources name)
+      unless (owner `elem` coreList (boundaryCores boundary))
+        (refuse ("register call_return " <> labelText name <> " is not on the register's core"))
+      pc <- maybe (refuse ("register call_return " <> labelText name <> " has no " <> roleText <> " PC")) pure (rolePc role boundary)
+      case A.decode pc <$> targetWord image pc of
+        Just (A.Branch (A.Cond 14) True target) | target == attachPc ->
+          pure (J.toJSON (pc + 4), Just (roleText <> " " <> labelText name <> " BL 0x" <> hex pc <> " to the attach PC 0x" <> hex attachPc <> ", plus 4"))
+        _ -> refuse ("register call_return " <> labelText name <> " is not a BL to the attach PC in the " <> roleText <> " image")
+    EntryState side service -> do
+      unless (role == ComposedRole) (refuse "register entry_state applies to the composed role only")
+      reg <- maybe (refuse ("register " <> registerName register <> " has no admitted entry state")) pure (registerReg register)
+      LinkedBytes bin symbols <- case [linked | piece <- composedPieces sources, linked <- orchestrationImages side (pieceFacts piece)] of
+        [linked] -> pure linked
+        _ -> refuse "register entry_state names a loader side no single composed piece owns"
+      artifact <- either (const (refuse "register entry_state: the loader orchestration image is not admitted")) pure (L.deriveArtifact side bin symbols)
+      let bootRole = case owner of Core0 -> LI.Primary; Core1 -> LI.Peer
+          entries = [ entry | entry <- LA.serviceEntryStates (L.linkedProof artifact), LA.entryService entry == service
+                    , let LI.Scenario scenarioRole _ _ = LA.entryScenario entry, scenarioRole == bootRole ]
+          callsAttach entry = let LI.CodeAddress site = LA.entrySite entry in
+            (A.decode site <$> targetWord image site) == Just (A.Branch (A.Cond 14) True attachPc)
+      unless (not (null entries) && all callsAttach entries)
+        (refuse ("register entry_state: the " <> serviceName service <> " entries are not BLs to the attach PC"))
+      case map (`LA.entryRegister` reg) entries of
+        LA.Word word : rest | all (== LA.Word word) rest ->
+          pure (J.toJSON word, Just ("composed loader " <> sideName side <> " orchestration admitted " <> registerName register
+            <> " at its " <> serviceName service <> " entry, a BL to the attach PC 0x" <> hex attachPc))
+        _ -> refuse ("register entry_state " <> registerName register <> " is not one admitted word at the " <> serviceName service <> " entry")
+  where
+    hex value = T.pack (showHex value "")
+    sideName side = case side of LI.LoaderA -> "A"; LI.LoaderB -> "B"
+    orchestrationImages side facts = case (side, facts) of
+      (LI.LoaderA, LoaderStartupFacts linked _ _) -> [linked]
+      (LI.LoaderB, LoaderStartupFacts _ linked _) -> [linked]
+      (LI.LoaderB, LoaderOrchestrationFacts linked) -> [linked]
+      _ -> []
+
+registerValue :: AttachSources -> RegisterEntry -> Either Refusal J.Value
+registerValue sources (RegisterEntry owner register mask retained composed reason) = do
+  (retainedValue, retainedDerivation) <- resolveRegister sources owner register RetainedRole retained
+  (composedValue, composedDerivation) <- resolveRegister sources owner register ComposedRole composed
+  let derivations = [text' | Just text' <- [retainedDerivation, composedDerivation]]
+      reason' = if null derivations then reason else reason <> " (derived: " <> T.intercalate "; " derivations <> ")"
+  pure (J.object ["core" .= coreIndex owner, "register" .= registerName register, "mask" .= mask
+                 , "retained" .= retainedValue, "composed" .= composedValue, "reason" .= reason'])
 
 -- | A32 @LDR Rt,...@ of a word, any addressing mode: not unconditional-space, not media-space (register form with bit 4 set).
 a32WordLoad :: Word32 -> Bool
@@ -453,14 +579,14 @@ attachStateValue sources (AttachRules peers parts allowances registers board rel
     let Span target (Guest start) (Guest end) = carrier
     pure (J.object ["piece" .= pieceKindName owner, "target" .= targetName target, "start" .= start, "end" .= end, "parts" .= partValues])
   allowanceValues <- mapM (allowanceValue sources) allowances
+  registerValues <- mapM (registerValue sources) registers
   relationValue <- relationsValue sources related
   pure $ J.object
     [ "peers" .= [ J.object ["core" .= coreIndex owner, "retained_pc" .= map intervalValue retained, "composed_pc" .= map intervalValue composed, "reason" .= reason]
                  | Peer owner retained composed reason <- peers ]
     , "carriers" .= carrierValues
     , "allowances" .= allowanceValues
-    , "registers" .= [ J.object ["core" .= coreIndex owner, "register" .= registerName register, "mask" .= mask, "retained" .= retained, "composed" .= composed, "reason" .= reason]
-                     | RegisterEntry owner register mask retained composed reason <- registers ]
+    , "registers" .= registerValues
     , "board" .= [ J.object (["pointer" .= pointer, "reason" .= reason] ++ case kind of
                      BoardExact retained composed -> ["kind" .= ("exact" :: Text), "retained" .= retained, "composed" .= composed]
                      BoardDeclared citation -> ["kind" .= ("declared" :: Text), "citation" .= citation])

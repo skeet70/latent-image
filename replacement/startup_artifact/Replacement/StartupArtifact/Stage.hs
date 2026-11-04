@@ -113,6 +113,6 @@ runStager tools canonicalPath manifestPath scratchPath output = do
   ownedSymbols <- concat <$> forM (manifestPieces manifest) (\piece -> case piece of
     SingleImagePiece kind (LinkedPaths _ symbolsPath) -> (\symbols -> [(kind, symbols)]) <$> H.readRegular 0x10000 symbolsPath
     LoaderStartupPiece _ -> pure [])
-  let sources = AttachSources (canonicalDat source) dat (canonicalTargets source) observed ownedSymbols
+  let sources = AttachSources (canonicalDat source) dat (canonicalTargets source) observed ownedSymbols (compositionPieces composition) attach
   attachState <- refused (attachStateValue sources (manifestAttachRules manifest) (contractCarriers composition))
   writeOutputs output dat observed (contractValue source manifestBytes composition dat observed attach attachState)

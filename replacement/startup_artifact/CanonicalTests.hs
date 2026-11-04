@@ -22,6 +22,7 @@ import qualified Emulation.Sha256 as SHA
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
 import Replacement.StartupArtifact.Adapters
+import Replacement.StartupArtifact.AttachState (AttachSources (..), attachStateValue, parseAttachRules)
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Contract (contractCarriers)
 import Replacement.StartupArtifact.Joins (JoinKind (..), registeredJoins)
@@ -279,6 +280,37 @@ main = do
     (not (holdsIn "submission-depth-in-stack-window" j3Targets (withFacts (\facts -> case facts of
       Record2LinkFacts entry bindings' image scratch' _ -> Record2LinkFacts entry bindings' image scratch' (StackDepth 0x800)
       other -> other))))
+  attachLabel <- either (H.failH . show) pure (label PrimaryPublisher "entry-core0")
+  let j3Sources targets' = AttachSources (canonicalDat source) (canonicalDat source) targets targets' [] j3Pieces attachLabel
+      registerJson :: Text -> J.Value -> J.Value -> J.Value
+      registerJson name retained composed = J.object ["core" J..= (0 :: Int), "register" J..= name, "mask" J..= (0xffffffff :: Word32)
+        , "retained" J..= retained, "composed" J..= composed, "reason" J..= ("r" :: Text)]
+      registersOf targets' entries = do
+        rules <- parseAttachRules (J.object [ "peers" J..= ([] :: [J.Value]), "carriers" J..= ([] :: [J.Value]), "allowances" J..= ([] :: [J.Value])
+                                            , "registers" J..= entries, "board" J..= ([] :: [J.Value]), "relations" J..= J.object [] ])
+        value <- attachStateValue (j3Sources targets') rules []
+        case value of
+          J.Object fields | Just (J.Array rows) <- KeyMap.lookup "registers" fields ->
+            pure [(KeyMap.lookup "retained" row, KeyMap.lookup "composed" row) | J.Object row <- V.toList rows]
+          _ -> pure []
+      word :: Word32 -> J.Value
+      word = J.toJSON
+      rowOf name = J.object ["row" J..= (name :: Text)]
+      callReturn = J.object ["call_return" J..= ("loader-startup/a-initializer-call" :: Text)]
+      entryState = J.object ["entry_state" J..= J.object ["side" J..= ("loader-a" :: Text), "service" J..= ("private-initialize" :: Text)]]
+      derived = [ registerJson "r5" (rowOf "loader-startup/a-entry") entryState, registerJson "r6" (rowOf "loader-startup/a-entry") entryState
+                , registerJson "lr" callReturn entryState ]
+  ok "the J3 attach r5, r6 and lr derive from the a-entry row, the stock initializer call and loader-A's PrivateInitialize entry state"
+    (registersOf j3Targets derived == Right
+      [ (Just (rowOf "loader-startup/a-entry"), Just (word 0)), (Just (rowOf "loader-startup/a-entry"), Just (word 0x400a00c4))
+      , (Just (word 0x409e0), Just (word 0x409ec)) ])
+  ok "the composed initializer call's return agrees with the admitted lr"
+    (registersOf j3Targets [registerJson "lr" callReturn callReturn] == Right [(Just (word 0x409e0), Just (word 0x409ec))])
+  ok "a retained call_return at a site that does not BL to the attach PC refuses"
+    (either (const True) (const False) (registersOf j3Targets [registerJson "lr" (J.object ["call_return" J..= ("loader-startup/a-entry" :: Text)]) entryState]))
+  ok "an entry state whose service call no longer BLs to the attach PC refuses"
+    (let moved = replacedIn j3Targets LoaderA initializerCallA (0xeb000000 + (((0x40434 - initializerCallA - 8) `div` 4) `mod` 0x1000000))
+     in either (const True) (const False) (registersOf moved [registerJson "r6" (rowOf "loader-startup/a-entry") entryState]))
   (_, j3Observed) <- stageComposition tools scratch source j3
   forM_ [Record1, Record2, LoaderA, LoaderB, Image4] $ \target ->
     ok ("J3 composed " ++ show target ++ " differs from canonical exactly at the edits")

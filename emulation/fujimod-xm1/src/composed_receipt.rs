@@ -417,6 +417,8 @@ pub enum Difference {
     /// A capture file or its receipt binding is missing, malformed or inconsistent.
     AttachSnapshot { role: Role, reason: String },
     AttachContext { core: Core, register: ContextRegister, retained: Word, owned: Word },
+    /// A row-valued register expectation with no earlier row of that label on the core in the role.
+    AttachRegisterRow { core: Core, register: ContextRegister, role: Role, label: Label },
     AttachPeer { core: Core, role: Role, pc: Word },
     /// Values are JSON truncated to `attach_state::BOARD_VALUE_LIMIT` bytes.
     AttachBoard { pointer: BoardLeaf, retained: String, owned: String },
