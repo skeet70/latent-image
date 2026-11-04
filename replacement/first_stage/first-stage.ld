@@ -8,6 +8,7 @@ SECTIONS
   .text : {
     KEEP(*(.text.entry))
     *(.text*)
+    KEEP(*(.xm1_log_text))
   }
   .rodata : { *(.rodata*) }
   .data : { *(.data*) }

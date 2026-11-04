@@ -127,7 +127,7 @@ unsafe fn log_event(event: LogEvent, core: Core) {
         return;
     }
     let base = pointer as *mut u32;
-    write(base.add(slot as usize), read(TIMER_COUNTER));
+    xm1_secondary_log_timestamp(base.add(slot as usize));
     write(base.add(slot as usize + 1), event as u32);
     write(base.add(slot as usize + 2), LOG_END);
     write(index, slot + 2);

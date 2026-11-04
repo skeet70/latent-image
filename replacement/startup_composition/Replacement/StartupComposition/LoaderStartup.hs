@@ -6,9 +6,9 @@ module Replacement.StartupComposition.LoaderStartup
   , loaderBoundaries, boundarySide, boundaryScenario, boundaryPhase, boundaryDispatcherPhase
   , boundaryInstruction, boundaryContinuation, boundaryStack, boundaryFramePointer, boundaryLiveWords, boundaryOwnedLow
   , loaderFrameLow, dispatcherLow, installerLow, joinedLow, loaderCompilerEntry, loaderBodyEntry
-  , LoaderSites, loaderSites, completionStore, completionBeforeDsb, completionAfterDsb
+  , LoaderSites, deriveSites, loaderSites, completionStore, completionBeforeDsb, completionAfterDsb
   , peerPoll, peerPollDestination, peerPollPostload, peerPollBranch, initializerCall, initializerEntry, initializerReturn
-  , stageCandidate, candidateBytes, candidateImage4, candidateLoader, contractValue, candidateContractValue
+  , stagedTargets, stageCandidate, candidateBytes, candidateImage4, candidateLoader, contractValue, candidateContractValue
   ) where
 
 import qualified A32 as A
@@ -60,7 +60,7 @@ canonicalSource :: C.SourceFiles -> Either LoaderJoinError LoaderSource
 canonicalSource files = do
   composition <- either (Left . CompositionRejected) Right (C.canonicalSource files)
   loaders <- either (Left . LoaderSourceRejected) Right
-    (L.canonicalSource (C.sourceDat files) (C.sourceImage4 files) (C.sourceLoaderA files) (C.sourceLoaderB files))
+    (L.canonicalSource (C.sourceDat files) (C.sourceImage4 files))
   pure (LoaderSource files composition loaders)
 
 deriveArtifact :: C.NativeFiles -> C.NativeFiles -> C.NativeFiles -> C.NativeFiles -> Either LoaderJoinError LoaderJoinedArtifact
@@ -203,10 +203,18 @@ initializerEntry (LoaderSites _ _ _ _ _ _ pc) = pc
 initializerReturn :: LoaderSites -> LI.CodeAddress
 initializerReturn sites = addAddress (initializerCall sites) 4
 
+stagedParts :: LoaderSource -> LoaderJoinedArtifact -> Either LoaderJoinError (L.StagedCandidate, B.ByteString)
+stagedParts (LoaderSource _ composition loaders) artifact = do
+  patched <- either (Left . LoaderSourceRejected) Right (L.stageCandidate loaders (loaderArtifact artifact LoaderA) (loaderArtifact artifact LoaderB))
+  pure (patched, C.stagedBytes (C.stageImage4 composition (dispatcherInstallerArtifact artifact)))
+
+-- | The loader-patched DAT, before image-4 staging, and the decoded staged image 4.
+stagedTargets :: LoaderSource -> LoaderJoinedArtifact -> Either LoaderJoinError (B.ByteString, B.ByteString)
+stagedTargets source artifact = (\(patched, image) -> (L.candidateBytes patched, image)) <$> stagedParts source artifact
+
 stageCandidate :: Image4.Tools -> Image4.ScratchDirectory -> LoaderSource -> LoaderJoinedArtifact -> IO LoaderStagedCandidate
-stageCandidate tools scratch source@(LoaderSource files composition loaders) artifact = do
-  patched <- either (fail . show) pure (L.stageCandidate loaders (loaderArtifact artifact LoaderA) (loaderArtifact artifact LoaderB))
-  let image = C.stagedBytes (C.stageImage4 composition (dispatcherInstallerArtifact artifact))
+stageCandidate tools scratch source@(LoaderSource files _ _) artifact = do
+  (patched, image) <- either (fail . show) pure (stagedParts source artifact)
   candidate <- Image4.runImage4Staging tools scratch (C.sourceDat files) (L.candidateBytes patched) image
   pure (LoaderStagedCandidate source artifact patched image candidate)
 candidateBytes :: LoaderStagedCandidate -> B.ByteString

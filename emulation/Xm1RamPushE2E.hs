@@ -45,7 +45,7 @@ import Emulation.WatchObservation
 import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
 import EmulatorUsb
 import FujiAF.RamPush
-import FujiAF.Transport (ensurePrivateDirectory, realClock, writePrivateBytes)
+import FujiAF.Transport (ensurePrivateDirectory, writePrivateBytes)
 import Xm1UnreviewedRelink (runUnreviewedRamPush, runUnreviewedRamUnload, withUnreviewedBuild, withUnreviewedBuildArchive)
 import RamPushReviewedPins (reviewedContract)
 import RamPushProcedure (procedureSourcesDigest)
@@ -854,9 +854,10 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           emulatorTraceSites emulator fetchSites
           Just . fst <$> emulatorTraceHits emulator 0
         breakBefore <- heapBreak
+        allocationClock <- emulatedClock
         allocationPath <- timed "ram-alloc" (stagedSession allocationDirectory
           ((if unreviewedBank then runRamAllocWith xm1PeerCacheAvailability else runRamAlloc)
-            allocationBytes realClock api)) >>= \outcome -> case outcome of
+            allocationBytes allocationClock api)) >>= \outcome -> case outcome of
           RamAllocated path -> pure (allocationDirectory </> takeFileName path)
           other -> ioError (userError ("ram-alloc failed: " ++ show other))
         retained <- readRetainedAllocation allocationPath
@@ -952,7 +953,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         pure (path, hostInstallMailbox host)
       Nothing -> do
         let observer = maybe NoRamPushObserver (\_ -> BeforeRamPublication (armModalLifetime emulator e2e lifetimeSession)) modalObservation
-        statePath <- timed "ram-push" (stagedSession pushDirectory (pushWith observer retained manifest realClock api)) >>= \outcome -> case outcome of
+        pushClock <- emulatedClock
+        statePath <- timed "ram-push" (stagedSession pushDirectory (pushWith observer retained manifest pushClock api)) >>= \outcome -> case outcome of
           RamPushInstalled path -> pure (pushDirectory </> takeFileName path)
           other -> stop "ram-push" (show other)
         installMailbox <- readMailbox
@@ -1087,7 +1089,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           unloadMailbox <- if planUnload plan
             then do
               privateDirectory unloadDirectory
-              unload <- timed "ram-unload" (stagedSession unloadDirectory (unloadWith state realClock api))
+              unloadClock <- emulatedClock
+              unload <- timed "ram-unload" (stagedSession unloadDirectory (unloadWith state unloadClock api))
               unless (unload == RamUnloaded) (stop "ram-unload" (show unload))
               recordModalLifetimeBoundary lifetimeSession RollbackReadback
               Just <$> readMailbox

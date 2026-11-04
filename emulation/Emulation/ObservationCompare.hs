@@ -19,8 +19,9 @@ import Data.Maybe (fromMaybe)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 
+-- | Fields left out at any depth. Only FujiMod menu receipts carry @scanout_evidence@.
 e2eIgnored :: [K.Key]
-e2eIgnored = ["seconds", "instructions", "virtual_ticks", "sp", "path", "frame_number", "sha256"]
+e2eIgnored = ["seconds", "instructions", "virtual_ticks", "sp", "path", "frame_number", "sha256", "scanout_evidence"]
 
 -- | Also the access probe's device-model transfers, which come from each engine's own models;
 -- the C0 session id, which differs between hardware sessions too; and an attach's cells at the

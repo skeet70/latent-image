@@ -273,7 +273,7 @@ impl History {
             } else if startup.kernel_vector_install.code.iter().any(|code| overlaps((u64::from(code.span.0 .0), u64::from(code.span.1 .0)))) {
                 let protected = [FIRST_VECTORS, ZERO, FIRST_REPLACED,
                     (u64::from(startup.image.0 .0), u64::from(startup.image.1 .0))]
-                    .into_iter().chain(SECOND_REPLACED).chain(SECOND_POOLS).chain(REPLACED).chain([ENTRY_POOL]);
+                    .into_iter().chain(SECOND_REPLACED).chain(SECOND_POOLS).chain([REPLACED, ENTRY_POOL]);
                 require(!protected.into_iter().any(overlaps)
                     && !(scenario == Scenario::Delayed && overlaps(VENEER))
                     && !(matches!(epoch, HistoryEpoch::Scoped)

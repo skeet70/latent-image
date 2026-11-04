@@ -18,7 +18,8 @@ let
     # the opt-in composite write and mapping guard. The timer patch makes the
     # kernel counter rise in mode 0x23 (E-XM1-TIMER-IRQ-LAWS-150). The Wi-Fi
     # patch ends CMD53 to an enumeration-only module with a command timeout
-    # (E-WIFI-CMD53-UNANSWERED-150, a declared assumption).
+    # (E-WIFI-CMD53-UNANSWERED-150, a declared assumption). The R-profile
+    # exclusive patch adds byte and halfword LDREX/STREX (#157).
     patches = [
       ./fujimod-unicorn-context-align.patch
       ./fujimod-classified-watch.patch
@@ -27,6 +28,7 @@ let
       ./fujimod-composite-watch.patch
       ./fujimod-timer-upcount.patch
       ./fujimod-wifi-unanswered-cmd53.patch
+      ./fujimod-rprofile-byte-exclusives.patch
     ] ++ extraPatches;
   };
   # Upstream's mise.toml pins Rust 1.99.1; cargo 1.98 rejects the workspace's

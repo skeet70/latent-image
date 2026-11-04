@@ -59,6 +59,7 @@ module EmulatorUsb
   , crawlKeyWire
   , emulatorDisplayKey
   , emulatorIdle
+  , emulatedClock
   ) where
 
 import Control.Concurrent.MVar
@@ -78,7 +79,8 @@ import qualified Emulation.CaptureStream as Capture
 import qualified Emulation.SaveLifecycle as Lifecycle
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (shiftL, (.|.))
-import Data.Word (Word32)
+import Data.IORef (atomicModifyIORef', modifyIORef', newIORef)
+import Data.Word (Word32, Word64)
 import Numeric (readHex, showHex)
 import System.Exit (ExitCode (..))
 import System.IO
@@ -86,6 +88,14 @@ import System.Process
 import FujiAF.Transport
 import Emulation.KeyReleaseObservation (ReleaseSegment, releaseSegment)
 import qualified FujiAF.Broker as P
+
+-- | Session time for transfers to the emulator: one microsecond per reading, and a pause
+-- advances it by the pause. The bridge bounds every wait inside a transfer in guest
+-- instructions instead of host time.
+emulatedClock :: IO Clock
+emulatedClock = do
+  tick <- newIORef (1000000000 :: Word64)
+  pure (TimedClock (atomicModifyIORef' tick (\n -> (n + 1000, n))) (\ms -> modifyIORef' tick (+ fromIntegral ms * 1000000)))
 
 data Emulator = Emulator
   { emulatorInput :: Handle

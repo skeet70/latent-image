@@ -10,7 +10,7 @@ import Emulation.CandidateBaseline (Baseline (..), Field (..), FieldName (..), S
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import System.Directory (createDirectory, createDirectoryIfMissing, doesDirectoryExist, doesFileExist, getTemporaryDirectory, makeAbsolute, removeDirectoryRecursive, removeFile)
-import System.Environment (getArgs, getEnvironment)
+import System.Environment (getArgs, getEnvironment, setEnv, unsetEnv)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath ((</>))
 import System.IO (hClose, openTempFile)
@@ -464,3 +464,17 @@ main = do
   expect UsbToggle MissingExit EarlierRun EqualReceipts qualified Passed
   expect UsbToggle (RecordedExit (ExitFailure 1)) EarlierRun EqualReceipts qualified Passed
   expect UsbToggle (RecordedExit (ExitFailure 1)) EarlierRun DifferentReceipts qualified Failed
+  slotChecks tool
+
+slotChecks :: FilePath -> IO ()
+slotChecks tool = bracket (setEnv "XM1_EMULATOR_SLOT" "1") (const (unsetEnv "XM1_EMULATOR_SLOT")) $ \() -> do
+  withWorkspace $ \root -> do
+    inherited <- getEnvironment
+    let output = root </> "private-data/in-slot"
+    (code, _, _) <- readCreateProcessWithExitCode ((proc tool ["--routes", "ram-push-volatile", "--output", output])
+      { cwd = Just root
+      , env = Just (("BUILD_WORKSPACE_DIRECTORY", root) : filter ((/= "BUILD_WORKSPACE_DIRECTORY") . fst) inherited) }) ""
+    created <- doesDirectoryExist output
+    check "a run that would execute a route inside a slot is refused" (code /= ExitSuccess && not created)
+  judged <- verify tool RamPushVolatile (RecordedExit ExitSuccess) EarlierRun EqualReceipts QualifiedOutcome
+  check "an earlier run's receipts are still judged inside a slot" (judged == Passed)

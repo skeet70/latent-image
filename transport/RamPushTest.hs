@@ -181,6 +181,13 @@ main = do
   refusesManifest "manifest refuses 69 source identities"
     (standard { sourceIdentity = ("synthetic-extra", replicate 64 'a') : fullIdentity })
   validateReviewedContract (matchingContract standard) standard
+  let withIdentityEntry entry = standard { sourceIdentity = entry : sourceIdentity standard }
+  composedAccepted <- try (validateReviewedContract (matchingContract standard) (withIdentityEntry ("bank_allowlist_composed_sha256", replicate 64 'c'))) :: IO (Either SomeException ())
+  check "the contract does not pin the composed bank allowlist digest"
+    (case composedAccepted of Right () -> True; Left _ -> False)
+  unpinnedRefused <- try (validateReviewedContract (matchingContract standard) (withIdentityEntry ("menu/unpinned_source.c", replicate 64 'c'))) :: IO (Either SomeException ())
+  check "the contract refuses a source identity it does not pin"
+    (case unpinnedRefused of Left _ -> True; Right () -> False)
   forM_ variants $ \(selected, variant, kind, size, count, script, archive) -> do
     let label = show kind
         checkVariant suffix = check (label ++ ": " ++ suffix)

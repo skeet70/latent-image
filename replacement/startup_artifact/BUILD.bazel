@@ -6,11 +6,16 @@ haskell_library(
     name = "startup-artifact",
     srcs = [
         "Replacement/StartupArtifact/Adapters.hs",
+        "Replacement/StartupArtifact/AttachState.hs",
         "Replacement/StartupArtifact/Compose.hs",
         "Replacement/StartupArtifact/Contract.hs",
         "Replacement/StartupArtifact/Footprint/FirstStage.hs",
+        "Replacement/StartupArtifact/Footprint/LoaderOrchestration.hs",
+        "Replacement/StartupArtifact/Footprint/LoaderStartup.hs",
         "Replacement/StartupArtifact/Footprint/PrimaryPublisher.hs",
         "Replacement/StartupArtifact/Footprint/Record2Link.hs",
+        "Replacement/StartupArtifact/Footprint/TaskStorage.hs",
+        "Replacement/StartupArtifact/Footprint/TaskSubmission.hs",
         "Replacement/StartupArtifact/Joins.hs",
         "Replacement/StartupArtifact/Manifest.hs",
         "Replacement/StartupArtifact/Stage.hs",
@@ -40,8 +45,17 @@ haskell_library(
         "//host:update-container",
         "//host:vector",
         "//host/firmware:stage-build",
+        "//host/firmware:bank-allowlist",
         "//host/firmware:startup-stage-contract",
         "//replacement/record5_staging:record5-staging",
+        "//replacement/kernel_install:kernel-install-artifact",
+        "//replacement/loader_orchestration:loader-orchestration-artifact",
+        "//replacement/startup_composition:loader-startup-composition-artifact",
+        "//replacement/startup_composition:startup-composition-artifact",
+        "//replacement/startup_dispatch:startup-dispatch-artifact",
+        "//replacement/startup_composition:task-composition-artifact",
+        "//replacement/task_storage:task-storage-artifact",
+        "//replacement/task_submission:task-submission-artifact",
     ],
 )
 
@@ -83,8 +97,8 @@ haskell_test(
     name = "startup-artifact-tests",
     size = "small",
     srcs = ["Fixtures.hs", "Tests.hs"],
-    args = ["$(rootpath //emulation:fujimod-xm1/tests/data/composed-contract-v1.json)"],
-    data = ["//emulation:fujimod-xm1/tests/data/composed-contract-v1.json"],
+    args = ["$(rootpath //emulation:fujimod-xm1/tests/data/composed-contract-v4.json)"],
+    data = ["//emulation:fujimod-xm1/tests/data/composed-contract-v4.json"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     main_file = "Tests.hs",
     deps = _TEST_DEPS,
@@ -97,6 +111,14 @@ _IMAGES = [
     "//replacement/critical_pair:critical-pair-image.symbols",
     "//replacement/primary_initializer:primary-initializer-image.bin",
     "//replacement/primary_initializer:primary-initializer-image.symbols",
+    "//replacement/loader_orchestration:loader-b-orchestration-image.bin",
+    "//replacement/loader_orchestration:loader-b-orchestration-image.symbols",
+    "//replacement/loader_orchestration:loader-a-orchestration-image.bin",
+    "//replacement/loader_orchestration:loader-a-orchestration-image.symbols",
+    "//replacement/startup_dispatch:startup-dispatch-image.bin",
+    "//replacement/startup_dispatch:startup-dispatch-image.symbols",
+    "//replacement/kernel_install:kernel-install-image.bin",
+    "//replacement/kernel_install:kernel-install-image.symbols",
 ]
 
 # Canonical inputs come from private-data:
@@ -104,9 +126,46 @@ _IMAGES = [
 haskell_test(
     name = "startup-artifact-canonical-tests",
     srcs = ["CanonicalTests.hs"],
-    args = _TOOL_ARGS + ["$(rootpath %s)" % image for image in _IMAGES] + ["$(rootpath //emulation:fujimod-xm1/tests/data/composed-contract-v1.json)"],
-    data = _TOOLS + _IMAGES + ["//emulation:fujimod-xm1/tests/data/composed-contract-v1.json"],
+    args = _TOOL_ARGS + ["$(rootpath %s)" % image for image in _IMAGES] + ["$(rootpath //emulation:fujimod-xm1/tests/data/composed-contract-v4.json)"],
+    data = _TOOLS + _IMAGES + ["//emulation:fujimod-xm1/tests/data/composed-contract-v4.json"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     tags = ["manual"],
     deps = _TEST_DEPS,
+)
+
+_J4_IMAGES = [
+    "//replacement/first_stage:first-stage-image.bin",
+    "//replacement/first_stage:first-stage-image.symbols",
+    "//replacement/critical_pair:critical-pair-image.bin",
+    "//replacement/critical_pair:critical-pair-image.symbols",
+    "//replacement/primary_initializer:primary-initializer-image.bin",
+    "//replacement/primary_initializer:primary-initializer-image.symbols",
+    "//replacement/loader_orchestration:loader-a-orchestration-image.bin",
+    "//replacement/loader_orchestration:loader-a-orchestration-image.symbols",
+    "//replacement/loader_orchestration:loader-b-orchestration-image.bin",
+    "//replacement/loader_orchestration:loader-b-orchestration-image.symbols",
+    "//replacement/startup_dispatch:startup-dispatch-image.bin",
+    "//replacement/startup_dispatch:startup-dispatch-image.symbols",
+    "//replacement/kernel_install:kernel-install-image.bin",
+    "//replacement/kernel_install:kernel-install-image.symbols",
+    "//replacement/task_submission:task-submission-image.bin",
+    "//replacement/task_submission:task-submission-image.symbols",
+    "//replacement/task_storage:task-storage-image.bin",
+    "//replacement/task_storage:task-storage-image.symbols",
+]
+
+# Canonical inputs come from private-data:
+# bazel run //replacement/startup_artifact:startup-artifact-j4-canonical-tests -- CANONICAL_DAT SCRATCH_DIR
+haskell_test(
+    name = "startup-artifact-j4-canonical-tests",
+    srcs = ["J4CanonicalTests.hs"],
+    args = _TOOL_ARGS + ["$(rootpath %s)" % image for image in _J4_IMAGES],
+    data = _TOOLS + _J4_IMAGES,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    tags = ["manual"],
+    deps = _TEST_DEPS + [
+        "//host:scientific",
+        "//replacement/startup_composition:task-composition-artifact",
+        "//replacement/task_submission:task-submission-artifact",
+    ],
 )

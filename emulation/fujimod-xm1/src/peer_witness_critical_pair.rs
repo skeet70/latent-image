@@ -222,9 +222,9 @@ fn begin(machine: &mut Machine, runner: &Runner<'_>, phase: Phase, frame: Option
     };
     if runner.contract.initializer.as_ref().is_some_and(super::Contract::owns_body) {
         confinement.push(ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Read,
-            rule: Confinement::Forbid(vec![span(BODY)?]) });
+            rule: Confinement::Forbid(vec![span(RETIRED_BODY)?]) });
         confinement.push(ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Fetch,
-            rule: Confinement::Forbid(vec![span(BODY)?]) });
+            rule: Confinement::Forbid(vec![span(RETIRED_BODY)?]) });
     }
     machine.session.board.memory_watch_begin_scoped(ScopedWatch {
         classes, limit: WATCH_LIMIT, confinement, counters: Vec::new(), coverage: Vec::new(),
@@ -326,8 +326,8 @@ fn source_bindings(machine: &Machine, runner: &Runner<'_>, contract: &Contract) 
     require(machine.read(PAIR.0, expected_pair.len())? == expected_pair, "critical original or branch-patched pair differs")?;
     let initializer = runner.contract.initializer.as_ref().ok_or("critical initializer absent")?;
     let loader_entry = runner.contract.entry.0.to_le_bytes();
-    let displacement = i64::from(initializer.entry.0) - (0xd0aac + 8);
-    let initializer_call = (0xeb00_0000_u32 | (((displacement >> 2) as u32) & 0x00ff_ffff)).to_le_bytes();
+    let displacement = i64::from(initializer.entry.0) - (0xd0430 + 8);
+    let initializer_entry = (0xea00_0000_u32 | (((displacement >> 2) as u32) & 0x00ff_ffff)).to_le_bytes();
     for (extent, canonical) in [(LOADER_A, &contract.loader_a), (LOADER_B, &contract.loader_b)] {
         for (start, end) in immutable_loader_spans(extent.0, extent.1) {
             let actual = machine.read(start, (end - start) as usize)?;
@@ -335,7 +335,7 @@ fn source_bindings(machine: &Machine, runner: &Runner<'_>, contract: &Contract) 
                 let address = start + offset as u64;
                 let expected = match address {
                     0xd000c..=0xd000f => loader_entry[(address - 0xd000c) as usize],
-                    0xd0aac..=0xd0aaf => initializer_call[(address - 0xd0aac) as usize],
+                    0xd0430..=0xd0433 => initializer_entry[(address - 0xd0430) as usize],
                     _ => canonical[(address - extent.0) as usize],
                 };
                 if byte != expected {

@@ -100,7 +100,7 @@ instructionLimitRegressions runner=withTemporary "fuji-instruction-limit-tests"$
  copyFile "emulation/fixtures/arithmetic.bin"(root </> "arithmetic.bin")
  let path=root </> "instruction-limit.json"
  forM_[(4000000,0,"passed"),(4000001,1,"invalid_case")]$ \(budget,expected,status)->do
-  B.writeFile path(encodeCanonical(set "limits" (obj[("instructions",n budget),("wall_ms",n 1000)])base))
+  B.writeFile path(encodeCanonical(set "limits" (obj[("instructions",n budget),("wall_ms",n finishingWallMs)])base))
   (code,report)<-runCase runner path
   ensure(code==expected && get report "status"==s status)("instruction limit "++show budget++": "++show report)
 -- Each public contract limit admits a case at the limit and refuses one past it.
@@ -206,7 +206,7 @@ readOnlyRegressions runner=withTemporary "fuji-read-only-tests"$ \root->do
        ,("regions",arr[codeRegion,roWriteRegion,exitRegion,stackRegion])
        ,("functions",arr[obj[("address",hex 0x8000),("size",n codeSize)]])
        ,("stubs",arr[])
-       ,("limits",obj[("instructions",n 1000),("wall_ms",n 1000)])
+       ,("limits",obj[("instructions",n 1000),("wall_ms",n finishingWallMs)])
        ,("expected",obj[("status",s "memory_guard"),("registers",obj[("r0",hex 1)]),("memory",arr[]),("events",arr[])])
        ,("exclusions",arr[s "read-only write guard"])]
  B.writeFile path(encodeCanonical fixture)
@@ -380,30 +380,34 @@ isolationCase root ident code initial(instructions,wallMs)expected=do
 expectation :: String -> [(String,Word32)] -> [String] -> Value
 expectation status registers memory=obj[("status",s status),("registers",obj[(k,hexWord v)|(k,v)<-registers]),("memory",arr[obj[("region",s "data"),("offset",n 0),("hex",s m)]|m<-memory]),("events",arr[])]
 
-writerCase, readerCase :: FilePath -> IO (String,FilePath)
+-- The largest wall_ms the runner admits, for cases that must finish on a loaded host.
+finishingWallMs :: Integer
+finishingWallMs=10000
+
+writerCase, readerCase :: Integer -> FilePath -> IO (String,FilePath)
 -- STR r0,[r2]: stores 0xdeadbeef over the seed.
-writerCase root=isolationCase root "writer"[0xe5820000,0xe12fff1e][("r0",0xdeadbeef),("r2",0x9000)](100,1000)(expectation "returned"[("r0",0xdeadbeef),("pc",0xa000)]["efbeadde"])
+writerCase wallMs root=isolationCase root "writer"[0xe5820000,0xe12fff1e][("r0",0xdeadbeef),("r2",0x9000)](100,wallMs)(expectation "returned"[("r0",0xdeadbeef),("pc",0xa000)]["efbeadde"])
 -- LDR r1,[r2]: reads its own seed.
-readerCase root=isolationCase root "reader"[0xe5921000,0xe12fff1e][("r2",0x9000)](100,1000)(expectation "returned"[("r1",0x11223344),("pc",0xa000)][])
+readerCase wallMs root=isolationCase root "reader"[0xe5921000,0xe12fff1e][("r2",0x9000)](100,wallMs)(expectation "returned"[("r1",0x11223344),("pc",0xa000)][])
 
 -- Each case would observe a different result if anything of an earlier case carried over.
 isolationBatch :: FilePath -> FilePath -> IO ()
 isolationBatch runner checker=withTemporary "fuji-batch-isolation"$ \root->do
  entries<-sequence
-  [ writerCase root
-  , readerCase root
+  [ writerCase finishingWallMs root
+  , readerCase finishingWallMs root
   -- MOVS r0,#0 sets Z; MVN r12,#0 and MOV r5,#0x55 change two more registers.
-  , isolationCase root "dirty"[0xe3b00000,0xe3e0c000,0xe3a05055,0xe12fff1e][("r0",7)](100,1000)(expectation "returned"[("r0",0),("r5",0x55),("r12",0xffffffff),("cpsr",0x40000010)][])
+  , isolationCase root "dirty"[0xe3b00000,0xe3e0c000,0xe3a05055,0xe12fff1e][("r0",7)](100,finishingWallMs)(expectation "returned"[("r0",0),("r5",0x55),("r12",0xffffffff),("cpsr",0x40000010)][])
   -- ADDEQ r0,r0,#1 and MOVNE r5,#7 under its own Z=0.
-  , isolationCase root "flags"[0x02800001,0x13a05007,0xe12fff1e][("r0",0x10)](100,1000)(expectation "returned"[("r0",0x10),("r5",7),("r12",0),("cpsr",0x10)][])
-  , isolationCase root "exhaust-instructions"[0xeafffffe][](1000,1000)(expectation "instruction_budget"[("pc",0x8000)][])
+  , isolationCase root "flags"[0x02800001,0x13a05007,0xe12fff1e][("r0",0x10)](100,finishingWallMs)(expectation "returned"[("r0",0x10),("r5",7),("r12",0),("cpsr",0x10)][])
+  , isolationCase root "exhaust-instructions"[0xeafffffe][](1000,finishingWallMs)(expectation "instruction_budget"[("pc",0x8000)][])
   -- Three instructions under a budget of exactly three.
-  , isolationCase root "exact-budget"[0xe3a00001,0xe2800002,0xe12fff1e][](3,1000)(expectation "returned"[("r0",3),("pc",0xa000)][])
+  , isolationCase root "exact-budget"[0xe3a00001,0xe2800002,0xe12fff1e][](3,finishingWallMs)(expectation "returned"[("r0",3),("pc",0xa000)][])
   -- Expects the writer's word; reading its own seed fails it.
-  , isolationCase root "expects-carried-value"[0xe5921000,0xe12fff1e][("r2",0x9000)](100,1000)(expectation "returned"[("r1",0xdeadbeef)][])
+  , isolationCase root "expects-carried-value"[0xe5921000,0xe12fff1e][("r2",0x9000)](100,finishingWallMs)(expectation "returned"[("r1",0xdeadbeef)][])
   , isolationCase root "exhaust-wall"[0xeafffffe][](4000000,1)(expectation "wall_budget"[("pc",0x8000)][])
   -- MOVW/MOVT r0,#250000, then SUBS/BNE to zero: 500,003 instructions under exactly that budget.
-  , isolationCase root "countdown"[0xe30d0090,0xe3400003,0xe2500001,0x1afffffd,0xe12fff1e][](500003,10000)(expectation "returned"[("r0",0),("cpsr",0x60000010),("pc",0xa000)][])
+  , isolationCase root "countdown"[0xe30d0090,0xe3400003,0xe2500001,0x1afffffd,0xe12fff1e][](500003,finishingWallMs)(expectation "returned"[("r0",0),("cpsr",0x60000010),("pc",0xa000)][])
   ]
  (summary,reports)<-sameAsAlone runner checker root entries
  ensure(not(batchPassed summary) && statusesOf reports==[(ident,if ident=="expects-carried-value" then "failed" else "passed")|(ident,_)<-entries])("isolation statuses: "++show(statusesOf reports))
@@ -412,22 +416,26 @@ isolationBatch runner checker=withTemporary "fuji-batch-isolation"$ \root->do
 -- the batch framing fails no case.
 batchFailures :: FilePath -> FilePath -> IO ()
 batchFailures runner checker=withTemporary "fuji-batch-failures"$ \root->do
- entries<-sequence[writerCase root,readerCase root]
+ entries<-sequence[writerCase finishingWallMs root,readerCase finishingWallMs root]
  path<-writeBatchFile root entries
- let substitute name script=do
+ -- The hanging runner reaches the writer's host deadline, so that batch keeps a short wall_ms.
+ let hangRoot=root</>"hang"
+ createDirectory hangRoot
+ hangPath<-sequence[writerCase 1000 hangRoot,readerCase 1000 hangRoot]>>=writeBatchFile hangRoot
+ let substitute name script batch=do
       let file=root</>name
       BC.writeFile file(BC.pack script)
       setFileMode file 0o700
-      collectBatch file path
+      collectBatch file batch
      statuses summary=map batchCaseStatus(summaryCases summary)
- (hang,hangReports)<-substitute "hanging-runner" "#!/bin/sh\ncat >/dev/null\nprintf 'FUJI_NATIVE_BATCH_CASE 0 1\\n'\ntrap '' TERM\nsleep 30\n"
+ (hang,hangReports)<-substitute "hanging-runner" "#!/bin/sh\ncat >/dev/null\nprintf 'FUJI_NATIVE_BATCH_CASE 0 1\\n'\ntrap '' TERM\nsleep 30\n" hangPath
  ensure(summaryStatus hang==BatchHostTimeout && summaryFailedCase hang==Just(CaseId "writer") && statuses hang==[CaseHostTimeout,CaseNotRun]
   && statusesOf hangReports==[("writer","host_timeout")] && "FUJI_NATIVE_BATCH_CASE 0 1"`isInfixOf`str(get(reportValue(head hangReports))"stdout"))("hanging runner: "++show hang)
  real<-canonicalizePath runner
- (crash,crashReports)<-substitute "crashing-runner"("#!/bin/sh\n'"++real++"' --batch | { IFS= read -r header; printf '%s\\n' \"$header\"; IFS= read -r observation; printf '%s\\n' \"$observation\"; }\nkill -SEGV $$\n")
+ (crash,crashReports)<-substitute "crashing-runner"("#!/bin/sh\n'"++real++"' --batch | { IFS= read -r header; printf '%s\\n' \"$header\"; IFS= read -r observation; printf '%s\\n' \"$observation\"; }\nkill -SEGV $$\n")path
  ensure(summaryStatus crash==BatchRunnerFailure && summaryFailedCase crash==Just(CaseId "reader") && summaryRunnerExit crash==Just(ExitFailure(-11))
   && statusesOf crashReports==[("writer","passed"),("reader","runner_failure")])("crashing runner: "++show crash)
- (refusal,refusalReports)<-substitute "refusing-runner" "#!/bin/sh\ncat >/dev/null\nprintf 'FUJI_NATIVE_BATCH_INVALID substitute refusal\\n'\nexit 1\n"
+ (refusal,refusalReports)<-substitute "refusing-runner" "#!/bin/sh\ncat >/dev/null\nprintf 'FUJI_NATIVE_BATCH_INVALID substitute refusal\\n'\nexit 1\n" path
  ensure(summaryStatus refusal==BatchInvalid && summaryFailedCase refusal==Nothing && statuses refusal==[CaseNotRun,CaseNotRun] && null refusalReports
   && fmap("substitute refusal"`isInfixOf`)(summaryReason refusal)==Just True)("refusing runner: "++show refusal)
  schemaDefinition checker "batchSummary"(map summaryJson[hang,crash,refusal])
@@ -493,7 +501,7 @@ batchLimits runner=withTemporary "fuji-batch-limits"$ \root->do
  -- Distinct artifact bytes read: the writer's 8 code bytes and 4 seed bytes, plus one declared,
  -- unsliced blob per case. The last case's blob copies the first one's bytes under another path,
  -- which adds nothing.
- (_,writerFile)<-writerCase root
+ (_,writerFile)<-writerCase finishingWallMs root
  writer<-B.readFile(root</>writerFile)>>=jsonRead
  let blobs=batchArtifactBytes`div`sizeBytes
      blobCase i size=do
