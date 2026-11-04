@@ -475,45 +475,87 @@ impl Ff80 {
     /// Standard enumeration of whatever device the guest presents, once the
     /// controller activates within `budget` instructions.
     pub fn enumerate_attached(&mut self, budget: u64) -> Result<(Vec<u8>, Vec<u8>), String> {
-        self.wait("USB controller activation", budget, |host| Ok(host.status()?.register(0x090) & 6 == 6))?;
-        self.machine.session.usb_reset(&self.usb())?;
-        self.advance(1_000_000)?;
-        let device = self.control_in([0x80, 6, 0, 1, 0, 0, 18, 0], 18)?;
-        if device.len() != 18 {
-            return Err(format!("unexpected device descriptor {}", encode_hex(&device)));
-        }
-        self.control_status([0, 5, 1, 0, 0, 0, 0, 0])?;
-        self.advance_ticks(SET_ADDRESS_RECOVERY_TICKS)?;
-        let head = self.control_in([0x80, 6, 0, 2, 0, 0, 9, 0], 9)?;
-        let total = head.get(2..4).map(|bytes| usize::from(u16::from_le_bytes([bytes[0], bytes[1]]))).unwrap_or(0);
-        if head.len() != 9 || !(9..=256).contains(&total) {
-            return Err(format!("unexpected configuration descriptor head {}", encode_hex(&head)));
-        }
-        let length = (total as u16).to_le_bytes();
-        let configuration = self.control_in([0x80, 6, 0, 2, 0, 0, length[0], length[1]], total)?;
-        if configuration.len() != total {
-            return Err("configuration descriptor is truncated".into());
-        }
-        self.control_status([0, 9, configuration[5], 0, 0, 0, 0, 0])?;
-        self.advance(1_000_000)?;
-        Ok((device, configuration))
+        enumerate_port(self, budget)
     }
+}
 
-    fn advance_ticks(&mut self, ticks: u64) -> Result<(), String> {
+trait EnumerationPort {
+    fn await_activation(&mut self, budget: u64) -> Result<(), String>;
+    fn reset(&mut self) -> Result<(), String>;
+    fn control_in(&mut self, setup: [u8; 8], count: usize) -> Result<Vec<u8>, String>;
+    fn control_status(&mut self, setup: [u8; 8]) -> Result<(), String>;
+    fn advance(&mut self, instructions: u64) -> Result<RunOutcome, String>;
+    /// The board clock in ticks.
+    fn now(&self) -> u64;
+    /// Instructions per board tick as (numerator, denominator).
+    fn rate(&self) -> (u64, u64);
+}
+
+impl EnumerationPort for Ff80 {
+    fn await_activation(&mut self, budget: u64) -> Result<(), String> {
+        self.wait("USB controller activation", budget, |host| Ok(host.status()?.register(0x090) & 6 == 6))
+    }
+    fn reset(&mut self) -> Result<(), String> {
+        self.machine.session.usb_reset(&self.usb())
+    }
+    fn control_in(&mut self, setup: [u8; 8], count: usize) -> Result<Vec<u8>, String> {
+        Ff80::control_in(self, setup, count)
+    }
+    fn control_status(&mut self, setup: [u8; 8]) -> Result<(), String> {
+        Ff80::control_status(self, setup)
+    }
+    fn advance(&mut self, instructions: u64) -> Result<RunOutcome, String> {
+        Ff80::advance(self, instructions)
+    }
+    fn now(&self) -> u64 {
+        self.machine.session.board.now()
+    }
+    fn rate(&self) -> (u64, u64) {
         let rate = &self.machine.document.execution.instructions_per_tick;
-        let (numerator, denominator) = (rate.numerator, rate.denominator);
-        let end = self.machine.session.board.now().saturating_add(ticks);
-        loop {
-            let now = self.machine.session.board.now();
-            if now >= end {
-                return Ok(());
-            }
-            if self.advance(((end - now) * numerator).div_ceil(denominator))? == RunOutcome::DrainRequired {
-                return Err("SetAddress recovery wait: a capture page is outstanding".into());
-            }
+        (rate.numerator, rate.denominator)
+    }
+}
+
+fn enumerate_port(port: &mut impl EnumerationPort, budget: u64) -> Result<(Vec<u8>, Vec<u8>), String> {
+    port.await_activation(budget)?;
+    port.reset()?;
+    port.advance(1_000_000)?;
+    let device = port.control_in([0x80, 6, 0, 1, 0, 0, 18, 0], 18)?;
+    if device.len() != 18 {
+        return Err(format!("unexpected device descriptor {}", encode_hex(&device)));
+    }
+    port.control_status([0, 5, 1, 0, 0, 0, 0, 0])?;
+    advance_ticks(port, SET_ADDRESS_RECOVERY_TICKS)?;
+    let head = port.control_in([0x80, 6, 0, 2, 0, 0, 9, 0], 9)?;
+    let total = head.get(2..4).map(|bytes| usize::from(u16::from_le_bytes([bytes[0], bytes[1]]))).unwrap_or(0);
+    if head.len() != 9 || !(9..=256).contains(&total) {
+        return Err(format!("unexpected configuration descriptor head {}", encode_hex(&head)));
+    }
+    let length = (total as u16).to_le_bytes();
+    let configuration = port.control_in([0x80, 6, 0, 2, 0, 0, length[0], length[1]], total)?;
+    if configuration.len() != total {
+        return Err("configuration descriptor is truncated".into());
+    }
+    port.control_status([0, 9, configuration[5], 0, 0, 0, 0, 0])?;
+    port.advance(1_000_000)?;
+    Ok((device, configuration))
+}
+
+fn advance_ticks(port: &mut impl EnumerationPort, ticks: u64) -> Result<(), String> {
+    let (numerator, denominator) = port.rate();
+    let end = port.now().saturating_add(ticks);
+    loop {
+        let now = port.now();
+        if now >= end {
+            return Ok(());
+        }
+        if port.advance(((end - now) * numerator).div_ceil(denominator))? == RunOutcome::DrainRequired {
+            return Err("SetAddress recovery wait: a capture page is outstanding".into());
         }
     }
+}
 
+impl Ff80 {
     pub fn transfer(&mut self, request: &Transfer) -> Result<(usize, Vec<u8>), String> {
         let started = self.machine.instructions();
         let clock = Instant::now();
@@ -567,5 +609,60 @@ impl Ff80 {
         let settle = crate::render::settled_key(&mut self.machine, key, pulse, budget)?;
         self.observe()?;
         Ok(settle)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SET_ADDRESS: [u8; 8] = [0, 5, 1, 0, 0, 0, 0, 0];
+    const CONFIGURATION: [u8; 18] = [9, 2, 18, 0, 1, 1, 0, 0xc0, 0, 9, 4, 0, 0, 0, 0xff, 0, 0, 0];
+
+    /// A device answering descriptors at once, on a board clock of 5 instructions per 2 ticks.
+    struct Bench {
+        instructions: u64,
+        drain: bool,
+        setups: Vec<([u8; 8], u64)>,
+    }
+    impl Bench {
+        fn new() -> Self { Self { instructions: 0, drain: false, setups: Vec::new() } }
+        fn tick_of(&self, setup: [u8; 8]) -> u64 {
+            self.setups.iter().find(|(seen, _)| seen[..4] == setup[..4]).map(|(_, tick)| *tick).expect("request sent")
+        }
+    }
+    impl EnumerationPort for Bench {
+        fn await_activation(&mut self, _: u64) -> Result<(), String> { Ok(()) }
+        fn reset(&mut self) -> Result<(), String> { Ok(()) }
+        fn control_in(&mut self, setup: [u8; 8], count: usize) -> Result<Vec<u8>, String> {
+            self.setups.push((setup, self.now()));
+            Ok(if setup[3] == 1 { vec![0x12; 18] } else { CONFIGURATION[..count].to_vec() })
+        }
+        fn control_status(&mut self, setup: [u8; 8]) -> Result<(), String> {
+            self.setups.push((setup, self.now()));
+            Ok(())
+        }
+        fn advance(&mut self, instructions: u64) -> Result<RunOutcome, String> {
+            self.instructions += instructions;
+            Ok(if self.drain { RunOutcome::DrainRequired } else { RunOutcome::Completed })
+        }
+        fn now(&self) -> u64 { self.instructions * 2 / 5 }
+        fn rate(&self) -> (u64, u64) { (5, 2) }
+    }
+
+    #[test]
+    fn configuration_request_follows_set_address_by_ten_milliseconds_of_board_time() {
+        let mut bench = Bench::new();
+        let (_, configuration) = enumerate_port(&mut bench, 1).unwrap();
+        assert_eq!(configuration, CONFIGURATION);
+        assert_eq!(bench.tick_of([0x80, 6, 0, 2, 0, 0, 0, 0]) - bench.tick_of(SET_ADDRESS), 120_000);
+    }
+
+    #[test]
+    fn an_outstanding_capture_page_ends_enumeration_before_the_configuration_request() {
+        let mut bench = Bench::new();
+        bench.drain = true;
+        assert!(enumerate_port(&mut bench, 1).is_err());
+        assert!(bench.setups.iter().all(|(setup, _)| setup[..4] != [0x80, 6, 0, 2]));
     }
 }
