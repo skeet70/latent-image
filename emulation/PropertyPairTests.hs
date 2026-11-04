@@ -262,16 +262,33 @@ crawlResult :: Role -> Step -> Maybe RouteResult
 crawlResult role step = either (const Nothing) (lookup crawlRoute . map (\result -> (resultRoute result, result)) . qualifiedRoutes) (qualified role step)
 
 compared :: Step -> Step -> Either Refusal ()
-compared retained owned = do
-  left <- qualified RetainedRole retained
-  right <- qualified OwnedRole owned
+compared retained owned = comparedChains [retained] [owned]
+
+comparedChains :: [Step] -> [Step] -> Either Refusal ()
+comparedChains retained owned = do
+  left <- qualify bindings RetainedRole (chain RetainedRole retained)
+  right <- qualify bindings OwnedRole (chain OwnedRole owned)
   () <$ compareRoles left right
 
--- | A crawl route's comparison from its ordered setter calls alone.
-comparedSetters :: [Call] -> [Call] -> Either Refusal [(RouteResult, RouteResult)]
-comparedSetters retained owned = compareRoles (qualifiedWith RetainedRole retained) (qualifiedWith OwnedRole owned)
+-- | A crawl route's comparison output from its ordered setter calls alone.
+comparedSetters :: [Call] -> [Call] -> Either Refusal Value
+comparedSetters retained owned = comparisonValue left right <$> compareRoles left right
  where
-  qualifiedWith role setters = Qualified role [] 0 1 [RouteResult crawlRoute CrawlClass [] setters [] [] [] [] [] []]
+  left = qualifiedWith RetainedRole retained
+  right = qualifiedWith OwnedRole owned
+  qualifiedWith role setters = Qualified role [] 0 1 [RouteResult crawlRoute CrawlClass [] setters [] [] [] [] [] []] []
+
+getterKey5, getterKey6 :: GetterKey
+getterKey5 = GetterKey (getterCall + 4) [5, 0, 0, 0]
+getterKey6 = GetterKey (getterCall + 4) [6, 0, 0, 0]
+
+-- | A getter call of the property returning the value.
+getterPair :: Word32 -> Word32 -> [Value]
+getterPair property value = [hit GetterEntry getterEntry [property] stackPointer (getterCall + 4), hit GetterReturn (getterCall + 4) [value] stackPointer 0]
+
+-- | An empty child step of a one-step chain, with the given hits.
+childWith :: [Value] -> Step
+childWith hits = retainedStep { stepHits = hits, stepRows = [] }
 
 -- | The retained crawl route's reported effect block runs, as (position, first effect, repeats), when
 -- its route file records `recorded` and its step's hits end with `extra` after the standard setter,
@@ -295,8 +312,8 @@ blockHits :: [Value]
 blockHits = concatMap setterPair timeDrivenSequence
 
 -- | The retained and owned setter block runs of the first compared route, as (position, first call, repeats).
-blockRunsOf :: [(RouteResult, RouteResult)] -> Maybe ([(Int, Int, Int)], [(Int, Int, Int)])
-blockRunsOf pairs = case comparisonValue pairs of
+blockRunsOf :: Value -> Maybe ([(Int, Int, Int)], [(Int, Int, Int)])
+blockRunsOf comparison = case comparison of
   Object top | Just (Array routes) <- KM.lookup "per_route" top, Just (Object route) <- routes V.!? 0
              , Just (Object runs) <- KM.lookup "setter_block_runs" route ->
     (,) <$> (KM.lookup "retained" runs >>= decodeRuns) <*> (KM.lookup "owned" runs >>= decodeRuns)
@@ -463,20 +480,32 @@ main = do
           && effectBlocksWith ([SetterEffect 5, CommitEffect] ++ map SetterEffect timeDrivenSequence) (setterPair 6 ++ blockHits)
                == Left (RouteEffectsDiffer crawlRoute))
 
-    , check "getter calls compare per (caller, arguments) as result sequences with repeats collapsed"
+    , check "a getter key's results compare over the whole observation as sequences with repeats collapsed"
         (compared retainedStep (ownedWith (stepHits ownedStep ++ [getterIn, getterOut])) == Right ()
-          && compared retainedStep (ownedWith (take 5 (stepHits ownedStep) ++ [hit GetterReturn (getterCall + 4) [0xac] stackPointer 0])) == Left (GetterResultsDiffer crawlRoute))
+          && compared retainedStep (ownedWith (take 5 (stepHits ownedStep) ++ [hit GetterReturn (getterCall + 4) [0xac] stackPointer 0])) == Left (GetterSequenceDiffers getterKey5 0))
     , check "a getter result returned out of order is a difference even when the result set is equal"
-        (let returning value = hit GetterReturn (getterCall + 4) [value] stackPointer 0
-         in compared (retainedStep { stepHits = stepHits retainedStep ++ [getterIn, returning 0xac] })
-                     (ownedWith (stepHits ownedStep ++ [getterIn, returning 0xac, getterIn, returning 0xab])) == Left (GetterResultsDiffer crawlRoute)
-            && compared (retainedStep { stepHits = stepHits retainedStep ++ [getterIn, returning 0xac] })
-                        (ownedWith (stepHits ownedStep ++ [getterIn, returning 0xac, getterIn, returning 0xac])) == Right ())
-    , check "getter calls under different arguments interleave freely"
-        (let other = hit GetterEntry getterEntry [6] stackPointer (getterCall + 4)
-             returning value = hit GetterReturn (getterCall + 4) [value] stackPointer 0
-         in compared (retainedStep { stepHits = stepHits retainedStep ++ [other, returning 0xcd] })
-                     (ownedWith (stepHits ownedStep ++ [other, returning 0xcd, getterIn, getterOut])) == Right ())
+        (compared (retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xac })
+                  (ownedWith (stepHits ownedStep ++ getterPair 5 0xac ++ getterPair 5 0xab)) == Left (GetterSequenceDiffers getterKey5 2)
+          && compared (retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xac })
+                      (ownedWith (stepHits ownedStep ++ getterPair 5 0xac ++ getterPair 5 0xac)) == Right ())
+    , check "a getter key's calls that slip across a step boundary compare equal"
+        (comparedChains [retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xac }, childWith []]
+                        [ownedStep, childWith (getterPair 5 0xac)] == Right ())
+    , check "a stale value inside a run of a getter key's results is refused"
+        (compared (retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xab ++ getterPair 5 0xab })
+                  (ownedWith (stepHits ownedStep ++ getterPair 5 0xac ++ getterPair 5 0xab)) == Left (GetterSequenceDiffers getterKey5 1))
+    , check "a getter key present in only one role is refused"
+        (compared retainedStep (ownedWith (stepHits ownedStep ++ getterPair 6 0xcd)) == Left (GetterSequenceDiffers getterKey6 0))
+    , check "getter calls under different keys interleave freely"
+        (compared (retainedStep { stepHits = stepHits retainedStep ++ getterPair 6 0xcd ++ getterPair 5 0xac })
+                  (ownedWith (stepHits ownedStep ++ getterPair 5 0xac ++ getterPair 6 0xcd)) == Right ())
+    , check "the stale getter control sets a call inside the first run to the next distinct value and is refused"
+        (let owned = observation OwnedRole (ownedWith (stepHits ownedStep ++ getterPair 5 0xab ++ getterPair 5 0xab ++ getterPair 5 0xac))
+             retained = observation RetainedRole retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xab ++ getterPair 5 0xab ++ getterPair 5 0xac }
+         in case runControl bindings OwnedRole owned retained StaleGetterResult of
+              Right result -> controlStale result == Just (StaleGetter getterKey5 1 7 0xab 0xac)
+                && controlObserved result == Left (GetterSequenceDiffers getterKey5 2)
+              Left _ -> False)
     , check "a write that leaves its preimage is not compared"
         (compared retainedStep ownedStep { stepRows = stepRows ownedStep ++ [cpuWrite 0x96cc80 1 (Just 0) [0] retiredSetter] } == Right ())
     , check "settle status differs only through an exhausted budget; the menu always counts"
