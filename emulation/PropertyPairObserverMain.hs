@@ -49,7 +49,7 @@ data Options = Options
 
 -- | A discriminating run: only this key path from the root, with the guest idle for the given
 -- instructions before its last key.
-data Probe = Probe { probePath :: [CrawlKey], probeIdle :: Maybe Integer }
+data Probe = Probe [CrawlKey] (Maybe Integer)
 
 usage :: String
 usage = "usage: property-pair-observe --role retained|owned|control --routes ROUTES --update DAT --analysis ROOT \
@@ -70,7 +70,7 @@ parseOptions arguments = do
     (Just path, idle) -> do
       keys <- mapM parseKey (splitOn path)
       when (null keys) (Left "--probe-path names at least one key")
-      instructions <- forM idle $ 	ext -> case reads text of
+      instructions <- forM idle $ \text -> case reads text of
         [(count, "")] | count >= 1 && count <= 90000000 -> Right count
         _ -> Left "--probe-idle must be 1..90000000"
       Right (Just (Probe keys instructions))
@@ -282,7 +282,7 @@ run options output record = do
                 armed <- emulatorExecutionWatchBegin emulator ranges [] limit
                 unless (field "armed" armed == Just (Bool True)) (refuse (BridgeFailed ("watch-begin refused: " ++ show armed)))
                 case optProbe options of
-                  Just (Probe path (Just instructions)) | keys == path -> do
+                  Just (Probe probed (Just instructions)) | keys == probed -> do
                     idled <- emulatorIdle emulator (fromIntegral instructions)
                     record "probe_idle" idled
                   _ -> pure ()
