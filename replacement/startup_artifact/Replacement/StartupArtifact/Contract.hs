@@ -1,8 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | composed-contract.json, schema 4, in the shape of
--- emulation/fujimod-xm1/tests/data/composed-contract-v4.json: every list is
--- sorted and non-overlapping, and every object carries all its keys; the
--- top-level pool_allocation is present only when the composition has one.
+-- | composed-contract.json, schema 4 in the shape of
+-- emulation/fujimod-xm1/tests/data/composed-contract-v4.json, or schema 5 with
+-- an @application@ section: every list is sorted and non-overlapping, and every
+-- object carries all its keys; the top-level pool_allocation is present only
+-- when the composition has one.
 module Replacement.StartupArtifact.Contract
   ( contractValue, normalizeFootprint, allowRanges, EmittedWrites (..), contractCarriers, declaredMutations, poolAllocationValue
   ) where
@@ -19,6 +20,7 @@ import qualified Data.Text as T
 import Data.Word (Word16, Word32, Word64)
 import qualified Replacement.StartupArtifact.Footprint.FirstStage as FirstStageFootprint
 import qualified Emulation.Sha256 as SHA
+import Replacement.StartupArtifact.Application (Application, applicationValue)
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
@@ -184,9 +186,9 @@ poolAllocationValue pieces = case ([pool | TaskSubmissionFacts _ pool <- facts],
   where
     facts = map pieceFacts pieces
 
-contractValue :: JoinName k => Canonical -> B.ByteString -> Composition k -> B.ByteString -> TargetBytes -> Label -> Value -> Value
-contractValue source manifest composition composedDat composedTargets attach attachState = object $
-  [ "schema" .= (4 :: Int)
+contractValue :: JoinName k => Canonical -> B.ByteString -> Composition k -> B.ByteString -> TargetBytes -> Label -> Value -> Maybe Application -> Value
+contractValue source manifest composition composedDat composedTargets attach attachState section = object $
+  [ "schema" .= maybe (4 :: Int) (const 5) section
   , "kind" .= ("composed-startup-contract" :: Text)
   , "qualification" .= (case qualification of HostComposed -> "host-composed" :: Text; Pending _ -> "pending")
   , "pending_joins" .= (case qualification of HostComposed -> [] :: [Text]; Pending names -> names)
@@ -199,6 +201,7 @@ contractValue source manifest composition composedDat composedTargets attach att
   , "joins" .= map joinValue (compositionJoins composition)
   , "pieces" .= map (pieceValue carriers) (sortOn pieceKind (compositionPieces composition))
   ] ++ maybe [] (\relation -> ["pool_allocation" .= relation]) (poolAllocationValue (compositionPieces composition))
+    ++ ["application" .= applicationValue present | Just present <- [section]]
   where
     qualification = compositionQualification composition
     carriers = concatMap pieceCarriers (compositionPieces composition)

@@ -25,6 +25,7 @@ import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.AttachState
 import Replacement.StartupArtifact.Contract
 import Replacement.StartupArtifact.Manifest
+import Replacement.StartupArtifact.Application (RoleImages (..), application, applicationValue, plainImage)
 import Replacement.StartupArtifact.Joins (JoinKind, registeredJoins)
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
@@ -365,7 +366,14 @@ main = do
   -- Manifest.
   let manifestText = manifestWith "first-stage/entry" emptyRules onePiece
   ok "a manifest parses"
-    (parseManifest manifestText == Right (Manifest entryLabel emptyAttachRules [SingleImagePiece FirstStage (LinkedPaths "a.bin" "a.symbols")]))
+    (parseManifest manifestText == Right (Manifest entryLabel emptyAttachRules [SingleImagePiece FirstStage (LinkedPaths "a.bin" "a.symbols")] WithoutApplication))
+  let withApplication section = B.init manifestText <> ",\"application\":" <> section <> "}"
+  ok "an empty application member asks for the application section"
+    (fmap manifestApplication (parseManifest (withApplication "{}")) == Right WithApplication)
+  ok "an application member with a key refuses"
+    (refusal (parseManifest (withApplication "{\"settle\":1}")) == Just (ManifestRefused (ManifestUnknownKey "application.settle")))
+  ok "an application member that is not an object refuses"
+    (refusal (parseManifest (withApplication "true")) == Just (ManifestRefused (ManifestMalformed "application is not an object")))
   let linkedJson name = "{\"image\":\"" <> name <> ".bin\",\"symbols\":\"" <> name <> ".symbols\"}"
       startupInputs = "{\"loader_a\":" <> linkedJson "a" <> ",\"loader_b\":" <> linkedJson "b" <> ",\"dispatcher\":"
         <> linkedJson "d" <> ",\"installer\":" <> linkedJson "i" <> "}"
@@ -463,7 +471,7 @@ main = do
       rulesJson residency allowances = J.object ["peers" .= [peer], "carriers" .= residency, "allowances" .= allowances, "registers" .= ([] :: [J.Value]), "board" .= ([] :: [J.Value]), "relations" .= J.object []]
   absentRules <- either (fail . show) pure (rulesFrom (rulesJson (map absentPart carriersOf) ([] :: [J.Value])))
   attachJson <- either (fail . show) pure (attachStateValue sources absentRules carriersOf)
-  let contractJson = contractValue source manifestText contracted contractDat contractTargets entryLabel attachJson
+  let contractJson = contractValue source manifestText contracted contractDat contractTargets entryLabel attachJson Nothing
   ok "the contract has exactly the fixture's keys" (keyPaths contractJson == keyPaths fixture)
   ok "a pending contract names its joins"
     (case contractJson of
@@ -682,6 +690,58 @@ main = do
     (fmap (member "composed") (registerOut sources {composedTargetBytes = blToEntry} (word 0) (callReturn "first-stage/handoff")) == Right (word 0x600c))
   ok "a retained entry_state refuses" (refusesWith sources entryState (word 0))
   ok "an entry_state without a loader-A orchestration piece refuses" (refusesWith sources (word 0) entryState)
+
+  -- Application section.
+  plain <- either (fail . show) pure (plainImage parts)
+  U.MediaImage plainBytes <- either fail pure (U.extractPlain parts)
+  let patched base changes = either (error . show) id (applyTargetEdits [wordEdit target address value | (target, address, value) <- changes] base)
+      stockImages = patched targets [(Image5, 0xbfbd20, 0xe92d4010), (Image4, 0x725214, 0xe59f0004)]
+      role targets' = RoleImages targets' plain
+      appOf carriers' composedTargets = application carriers' (role stockImages) (role composedTargets)
+      rowsOf key name value = [row | J.Array rows <- [member key value], row <- V.toList rows, member "label" row == J.String name]
+      sectionOf carriers' composedTargets = applicationValue <$> appOf carriers' composedTargets
+      image5Slice :: TargetBytes -> Word32 -> Word32 -> B.ByteString
+      image5Slice images start end = slice (fromIntegral (start - 0xbf1a00)) (fromIntegral (end - start)) (targetOf images Image5)
+      number :: Word32 -> J.Value
+      number = J.toJSON
+  case sectionOf [] stockImages of
+    Right value -> do
+      ok "a site word is the image5, image4 or plain-window word at its PC"
+        (map (\row -> (member "kind" row, member "retained_pc" row, member "composed_pc" row, member "word" row)) (rowsOf "sites" "app-bfbd20" value)
+            == [(J.String "pump", number 0xbfbd20, number 0xbfbd20, number 0xe92d4010)]
+          && map (member "word") (rowsOf "sites" "app-725214" value) == [number 0xe59f0004]
+          && map (member "word") (rowsOf "sites" "app-1109130" value) == [number (U.word32At plainBytes 0x9130)]
+          && map (member "word") (rowsOf "queue_sites" "queue-725318" value) == [number 0x5a5a5a5a])
+      ok "the section lists every pump site and the publication and initializer sites"
+        (case member "sites" value of
+          J.Array rows -> V.length rows == 57 && all (\name -> length (rowsOf "sites" name value) == 1) ["app-6a9934", "app-d985d8", "app-69d2e0", "app-110f9d8"]
+          _ -> False)
+    Left problem -> fail (show problem)
+  ok "a site inside a piece's carrier refuses"
+    (refusal (appOf [(LoaderStartup, at Image5 0xbfbd00 0xbfbd24)] stockImages) == Just (ApplicationRefused (SiteInCarrier LoaderStartup (Pc 0xbfbd20))))
+  ok "a carrier ending at a site does not refuse"
+    (either (const False) (const True) (appOf [(LoaderStartup, at Image5 0xbfbd00 0xbfbd20)] stockImages))
+  ok "a composed site word other than the canonical word refuses"
+    (refusal (appOf [] (patched stockImages [(Image4, 0x725214, 0)])) == Just (ApplicationRefused (SiteWordDiffers (Pc 0x725214))))
+  let changed = patched stockImages [(Image5, 0xc22f78, 0)]
+  case sectionOf [(LoaderStartup, at Image5 0xc22f78 0xc22f7c)] changed of
+    Right value -> ok "code digests are each role's image5 bytes over the region"
+      (map (\row -> (member "start" row, member "end" row, member "retained_sha256" row, member "composed_sha256" row)) (rowsOf "code" "task1-body" value)
+          == [(number 0xc22f60, number 0xc2327c, J.toJSON (digestText (image5Slice stockImages 0xc22f60 0xc2327c)), J.toJSON (digestText (image5Slice changed 0xc22f60 0xc2327c)))]
+        && image5Slice stockImages 0xc22f60 0xc2327c /= image5Slice changed 0xc22f60 0xc2327c
+        && map (\row -> (member "retained_sha256" row, member "composed_sha256" row)) (rowsOf "code" "pump" value)
+          == [(J.toJSON (digestText (image5Slice stockImages 0xbfbd20 0xbfbd40)), J.toJSON (digestText (image5Slice stockImages 0xbfbd20 0xbfbd40)))])
+    Left problem -> fail (show problem)
+  sectioned <- either (fail . show) pure (appOf [] stockImages)
+  let withSection = contractValue source manifestText contracted contractDat contractTargets entryLabel attachJson (Just sectioned)
+      without key value = case value of
+        J.Object fields -> J.Object (KeyMap.delete key fields)
+        other -> other
+  ok "a contract without the section is schema 4 and has no application member"
+    (member "schema" contractJson == J.toJSON (4 :: Int) && member "application" contractJson == J.Null)
+  ok "a contract with the section is schema 5 and otherwise unchanged"
+    (member "schema" withSection == J.toJSON (5 :: Int) && member "application" withSection == applicationValue sectioned
+      && without "schema" (without "application" withSection) == without "schema" contractJson)
 
   passed <- readIORef counter
   putStrLn ("startup-artifact-tests: " ++ show passed ++ " checks passed")
