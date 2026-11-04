@@ -1,0 +1,90 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+package(default_visibility = ["//visibility:public"])
+
+_LINKED = [
+    "//replacement/rtos_own_first:regions.json",
+    "//replacement/rtos_own_first:own-first-a.bin",
+    "//replacement/rtos_own_first:own-first-a.symbols",
+    "//replacement/rtos_own_first:own-first-b.bin",
+    "//replacement/rtos_own_first:own-first-b.symbols",
+]
+
+haskell_library(
+    name = "own-first-oracle-lib",
+    srcs = [
+        "Replacement/RtosOwnFirst/Assembly.hs",
+        "Replacement/RtosOwnFirst/Controls.hs",
+        "Replacement/RtosOwnFirst/Oracle.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//host:host-support",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+# The stock loaders come from private-data:
+# bazel run //replacement/rtos_own_first/oracle:own-first-oracle -- --loader-a LOADER_A --loader-b LOADER_B --work NEW_DIRECTORY --summary NEW_JSON
+haskell_binary(
+    name = "own-first-oracle",
+    srcs = ["OracleMain.hs"],
+    main_file = "OracleMain.hs",
+    args = [
+        "--runner",
+        "$(rootpath //emulation:native-runner)",
+        "--regions",
+        "$(rootpath //replacement/rtos_own_first:regions.json)",
+        "--owned-a-bin",
+        "$(rootpath //replacement/rtos_own_first:own-first-a.bin)",
+        "--owned-a-symbols",
+        "$(rootpath //replacement/rtos_own_first:own-first-a.symbols)",
+        "--owned-b-bin",
+        "$(rootpath //replacement/rtos_own_first:own-first-b.bin)",
+        "--owned-b-symbols",
+        "$(rootpath //replacement/rtos_own_first:own-first-b.symbols)",
+    ],
+    data = _LINKED + ["//emulation:native-runner"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":own-first-oracle-lib",
+        "//emulation:case-sha256",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+haskell_test(
+    name = "own-first-oracle-tests",
+    size = "large",
+    srcs = ["OracleTests.hs"],
+    main_file = "OracleTests.hs",
+    args = ["$(rootpath //emulation:native-runner)"] + ["$(rootpath %s)" % linked for linked in _LINKED],
+    data = _LINKED + ["//emulation:native-runner"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":own-first-oracle-lib",
+        "//emulation:native-observation",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)

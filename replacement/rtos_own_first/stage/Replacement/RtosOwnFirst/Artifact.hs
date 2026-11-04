@@ -13,6 +13,8 @@ module Replacement.RtosOwnFirst.Artifact
   , StageError (..)
   , EntryRow (..)
   , canonicalSource
+  , loaderSha256
+  , ownedExtents
   , requirePinned
   , admit
   , stage
@@ -149,6 +151,10 @@ pins =
   , (SourceLoader DomainB, "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec")
   ]
 
+-- | The pinned X-M1 1.50 loader file's sha256.
+loaderSha256 :: Domain -> String
+loaderSha256 domain = maybe (error "unpinned loader") id (lookup (SourceLoader domain) pins)
+
 segmentOf :: U.Parts -> Domain -> Either StageError U.SegmentEntry
 segmentOf parts domain = do
   segment <- case filter ((== domainLoaderId domain) . U.segId) (U.partSegments parts) of
@@ -252,6 +258,17 @@ installExtent fill binBase bin rows region stock =
     trailing = length (takeWhile (`elem` [0, fill]) (reverse words32))
     slackFrom = max firstFree (length words32 - trailing)
     installed = [if index >= slackFrom && word == 0 then fill else word | (index, word) <- indexed]
+
+-- | Each installed extent's owned bytes as staging writes them, in 'domainExtents' order; each row's symbol must sit at its entry.
+ownedExtents :: Word32 -> Domain -> DomainTable -> LinkedDomain -> Either StageError [(Region, B.ByteString)]
+ownedExtents fill domain table linked = do
+  symbols <- symbolRows domain (linkedSymbols linked)
+  let rows = domainExtents table
+      binBase = minimum (map (extentStart . regionExtent) rows)
+  forM_ rows $ \region -> do
+    address <- placedAt domain symbols (regionSymbol region)
+    require (GuestAddress address == regionEntry region) (EntryNotAtStart domain (regionSlot region))
+  pure [(region, installedOwned (installExtent fill binBase (linkedBin linked) symbols region B.empty)) | region <- rows]
 
 admitDomain :: CanonicalSource -> Word32 -> Domain -> DomainTable -> LinkedDomain -> Either StageError AdmittedDomain
 admitDomain source fill domain table linked = do

@@ -164,6 +164,8 @@ data CaseSpec = CaseSpec
   , caseExpectedStatus :: RunnerStatus
   , caseExpectedRegisters :: [(Register, Word32)]
   , caseExpectedMemory :: [(RegionId, B.ByteString)]
+  , -- | The value MRC p14, 0, Rt, c2, c0, 0 reads; only a privileged case may name one.
+    caseCp14Identity :: Maybe Word32
   }
 
 regionJson :: CaseRegion -> Value
@@ -196,7 +198,7 @@ artifactJson file (CaseRegion region _) =
 -- | The case JSON; @file@ names the artifact file holding a region's initial bytes.
 caseValue :: (Region -> FilePath) -> CaseSpec -> Value
 caseValue file spec =
-  object
+  object $
     [ "schema_version" .= (1 :: Int)
     , "id" .= caseId spec
     , "origin" .= ("synthetic" :: String)
@@ -225,6 +227,7 @@ caseValue file spec =
           ]
     , "exclusions" .= [caseExclusion spec]
     ]
+      ++ ["cp14_identity" .= hexWord32 identity | Just identity <- [caseCp14Identity spec]]
 
 writeCase :: FilePath -> CaseSpec -> IO FilePath
 writeCase directory spec = do
