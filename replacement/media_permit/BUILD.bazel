@@ -156,6 +156,7 @@ haskell_library(
     name = "service-inventory",
     srcs = ["ServiceInventory.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//replacement/property_service:__pkg__"],
     deps = [
         ":stock-inventory",
         "//host:aeson",
@@ -206,6 +207,7 @@ haskell_library(
     name = "property-fields",
     srcs = ["PropertyFields.hs"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    visibility = ["//replacement/property_service:__pkg__"],
     deps = [
         ":service-inventory",
         "//host:base",

@@ -1587,7 +1587,7 @@ runMenuCrawlE2E given python workspace configFile installedMedia adjustmentNand 
               { Crawl.driverSave = emulatorSnapshotSave emulator
               , Crawl.driverRestore = \name -> () <$ emulatorSnapshotRestore emulator name
               , Crawl.driverDrop = emulatorSnapshotDrop emulator
-              , Crawl.driverPress = \name key -> emulatorSnapshotKey emulator name (Crawl.crawlKeyWire key)
+              , Crawl.driverPress = \name key -> emulatorSnapshotKey emulator name (crawlKeyWire key)
               , Crawl.driverModeDial = \position -> () <$ emulatorModeDial emulator position
               , Crawl.driverObserve = observeScreen
               , Crawl.driverTraceMark = readIORef hitCursor
