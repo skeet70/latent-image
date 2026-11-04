@@ -37,3 +37,17 @@ sh_test(
         "@lab_jq//:bin/jq",
     ],
 )
+
+sh_test(
+    name = "xm1-decomp",
+    size = "small",
+    srcs = ["xm1-decomp.sh"],
+    args = [
+        "$(rootpath //build-support:xm1-decomp)",
+        "$(rootpath @lab_git//:bin/git)",
+    ],
+    data = [
+        "//build-support:xm1-decomp",
+        "@lab_git//:bin/git",
+    ],
+)
