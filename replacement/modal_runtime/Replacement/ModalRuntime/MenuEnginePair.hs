@@ -9,7 +9,9 @@ module Replacement.ModalRuntime.MenuEnginePair
   ( Role (..)
   , Hit (..)
   , Observation (..)
+  , Residency (..)
   , parseObservation
+  , unloadedPhases
   , RoleSummary (..)
   , checkRole
   , comparePair
@@ -60,8 +62,17 @@ data Hit = Hit
   }
   deriving (Eq, Show)
 
--- | One segment's observation: its phase, labelled reads and trace hits in recording order.
-data Observation = Observation {observationPhase :: T.Text, observationReads :: [(T.Text, B.ByteString)], observationHits :: [Hit]}
+-- | Whether the package, and with it the engine's branch at `0xbf95c8`, was published during a
+-- segment. After `ram-unload` restores the stock words, `0xbf95c8` runs stock in the owned role.
+data Residency = EngineResident | EngineUnloaded deriving (Eq, Show)
+
+-- | One segment's observation: its phase, residency, labelled reads and trace hits in recording order.
+data Observation = Observation
+  { observationPhase :: T.Text
+  , observationResidency :: Residency
+  , observationReads :: [(T.Text, B.ByteString)]
+  , observationHits :: [Hit]
+  }
   deriving (Eq, Show)
 
 -- | The return address of `0xbf95c8`'s call to `0xbfa234`: the owned adapter's fallback resumes
@@ -87,8 +98,12 @@ hexWord text = case text of
   '0' : 'x' : digits | [(value, "")] <- readHex digits -> pure value
   _ -> fail ("not a hex word: " ++ text)
 
-parseObservation :: J.Value -> J.Parser Observation
-parseObservation = J.withObject "e2e observation" $ \fields -> do
+-- | Segment phases the receipt's `e2e-result.json` lists after its `ram-unload` phase.
+unloadedPhases :: [T.Text] -> [T.Text]
+unloadedPhases names = [phase | name <- drop 1 (dropWhile (/= "ram-unload") names), Just phase <- [T.stripPrefix "segment " name]]
+
+parseObservation :: [T.Text] -> J.Value -> J.Parser Observation
+parseObservation unloaded = J.withObject "e2e observation" $ \fields -> do
   phase <- fields .: "phase"
   segmentReads <- fields .: "reads" >>= mapM (J.withObject "read" $ \read_ -> (,) <$> read_ .: "label" <*> (hexBytes =<< read_ .: "bytes"))
   hits <- fields .: "trace_hits" >>= mapM (J.withObject "trace hit" $ \hit -> do
@@ -98,7 +113,7 @@ parseObservation = J.withObject "e2e observation" $ \fields -> do
     sp <- traverse hexWord =<< hit .:? "sp"
     memory <- maybe (pure []) (mapM hexBytes) =<< hit .:? "memory"
     Hit <$> (parseSite <$> hit .: "site") <*> hit .: "core" <*> pure registers <*> pure lr <*> pure sp <*> pure memory)
-  pure (Observation phase segmentReads hits)
+  pure (Observation phase (if phase `elem` unloaded then EngineUnloaded else EngineResident) segmentReads hits)
 
 -- | Task 1's stack, `[0x00a4c200, 0x00a4ce00)` (E-RECOVERY-MAINUI-CREATE-150).
 taskStackStart, taskStackBytes :: Word32
@@ -152,17 +167,17 @@ data RoleSummary = RoleSummary
 data Walk = Walk {walkLatest :: M.Map Int EventClass, walkSummary :: RoleSummary, walkFailures :: [String]}
 
 -- | Classifies each stage entry from its registers and its block read; for the owned role, an
--- entry to `0xbfa234` returning to 'fallbackReturn' fails when the latest stage entry on its core
--- has an owned class, and any guard-trap entry fails.
+-- entry to `0xbfa234` returning to 'fallbackReturn' while the engine is published fails when the
+-- latest stage entry on its core has an owned class, and any guard-trap entry fails.
 checkRole :: MenuTree -> Role -> [Observation] -> Either String RoleSummary
 checkRole tree role observations = do
   walk <- foldM step (Walk M.empty (RoleSummary M.empty 0 0) [])
-    [(observationPhase observation, hit) | observation <- observations, hit <- observationHits observation]
+    [(observationPhase observation, observationResidency observation, hit) | observation <- observations, hit <- observationHits observation]
   case walkFailures walk of
     [] -> Right (walkSummary walk)
     failures -> Left (unlines (reverse failures))
  where
-  step walk (phase, hit)
+  step walk (phase, residency, hit)
     | hitSite hit == StageEntry = do
         block <- case hitMemory hit of
           bytes : _ -> menuBlock bytes
@@ -178,10 +193,10 @@ checkRole tree role observations = do
     | hitSite hit == KindSwitch && hitLr hit == Just fallbackReturn = do
         let summary = walkSummary walk
             counted = walk {walkSummary = summary {summaryFallbackEntries = summaryFallbackEntries summary + 1}}
-        pure $ case (role, M.lookup (hitCore hit) (walkLatest walk)) of
-          (OwnedRole, Just class_) | isOwned class_ ->
+        pure $ case (role, residency, M.lookup (hitCore hit) (walkLatest walk)) of
+          (OwnedRole, EngineResident, Just class_) | isOwned class_ ->
             counted {walkFailures = ("fallback entry for owned class " ++ show class_ ++ " in " ++ T.unpack phase) : walkFailures walk}
-          (OwnedRole, Nothing) ->
+          (OwnedRole, EngineResident, Nothing) ->
             counted {walkFailures = ("fallback entry with no stage entry on its core in " ++ T.unpack phase) : walkFailures walk}
           _ -> counted
     | hitSite hit == KindSwitch && hitLr hit == Nothing =

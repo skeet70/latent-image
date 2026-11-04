@@ -61,15 +61,18 @@ post :: Word32 -> Hit
 post token = Hit EventPost 0 (0x1d, 0xf6, token, 0xf000) (Just 0xca47f0) Nothing []
 
 segment :: [(B.ByteString)] -> [Hit] -> Observation
-segment blocks hits = Observation "picker-keys"
+segment blocks hits = Observation "picker-keys" EngineResident
   ([(label, B.replicate 8 1) | label <- drop 1 engineReads] ++ [("menu-block", block) | block <- blocks]) hits
+
+unloaded :: Observation -> Observation
+unloaded observation = observation {observationResidency = EngineUnloaded}
 
 entryAt :: Word32 -> Hit
 entryAt sp = (entry 0 0x1000 0 (stage 4 3 1)) {hitSp = Just sp}
 
 -- | A segment whose task-1 stack read has one word changed at `offset` (none for 0).
 stacked :: Int -> [Hit] -> Observation
-stacked offset hits = Observation "picker-keys" [("task1-stack", stack)] hits
+stacked offset hits = Observation "picker-keys" EngineResident [("task1-stack", stack)] hits
  where
   stack = if offset == 0 then B.replicate 0xc00 0 else B.replicate offset 0 <> B.pack [1, 0, 0, 0] <> B.replicate (0xc00 - offset - 4) 0
 
@@ -100,6 +103,14 @@ main = do
             isLeft (checkRole tree OwnedRole [segment [] [entry 0 0x1000 0 (stage 4 3 1), entry 1 0x1000 0 (stage 5 3 9), fallback 0]]))
         , ("the stock role reaches the fallback site for every class",
             fmap summaryFallbackEntries (checkRole tree StockRole [segment [] [entry 0 0x1000 0 (stage 0xe 3 0x1d), fallback 0]]) == Right 1)
+        , ("after unload the owned role's owned push and pop reach the fallback site like stock",
+            fmap summaryFallbackEntries (checkRole tree OwnedRole
+              [unloaded (segment [] [entry 0 0x1000 0 (stage 0xe 3 0x1d), fallback 0, entry 0 0x2000 0 (stage 0xf 3 0x1d), fallback 0])]) == Right 2)
+        , ("a guard-trap entry fails the owned role after unload too",
+            isLeft (checkRole tree OwnedRole [unloaded (segment [] [Hit GuardTrap 0 (0, 0, 0, 0) (Just 0) Nothing []])]))
+        , ("the segments after ram-unload are the unloaded ones",
+            unloadedPhases ["emulator-start", "ram-push", "segment picker-route", "segment owned-picker-keys", "ram-unload", "segment unloaded-picker"]
+              == ["unloaded-picker"])
         , ("an entry to the adapter's guard trap fails the role",
             isLeft (checkRole tree OwnedRole [segment [] [Hit GuardTrap 0 (0, 0, 0, 0) (Just 0) Nothing []]]))
         , ("a stage entry without its block read refuses",

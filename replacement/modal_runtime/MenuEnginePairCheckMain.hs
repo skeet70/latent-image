@@ -29,14 +29,19 @@ import System.Exit (exitFailure)
 import System.FilePath ((</>))
 import System.IO (hPutStrLn, stderr)
 
+-- | The receipt's observations; segments after its `ram-unload` phase are marked unloaded.
 observations :: FilePath -> IO [Observation]
 observations directory = do
+  resultBytes <- B.readFile (directory </> "e2e-result.json")
+  phases <- either (fail . ((directory </> "e2e-result.json: ") ++)) pure
+    (J.eitherDecodeStrict' resultBytes >>= J.parseEither (J.withObject "e2e result" $ \fields ->
+      fields J..: "phases" >>= mapM (J.withObject "phase" (J..: "name"))))
   names <- listDirectory directory
   let numbered = [(read digits :: Int, name) | name <- names, Just rest <- [stripPrefix "e2e-observation-" name]
         , let digits = takeWhile isDigit rest, not (null digits), drop (length digits) rest == ".json"]
   forM (sortOn fst numbered) $ \(_, name) -> do
     bytes <- B.readFile (directory </> name)
-    either (fail . ((directory </> name ++ ": ") ++)) pure (J.eitherDecodeStrict' bytes >>= J.parseEither parseObservation)
+    either (fail . ((directory </> name ++ ": ") ++)) pure (J.eitherDecodeStrict' bytes >>= J.parseEither (parseObservation (unloadedPhases phases)))
 
 main :: IO ()
 main = do
