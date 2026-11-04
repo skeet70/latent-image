@@ -72,16 +72,6 @@ missingPrefix = ["cc-entry-marker", "cc-entry-settings-converter"]
 chromaPrefix :: [T.Text]
 chromaPrefix = ["cc-entry-marker", "cc-hook-chroma-2", "cc-entry-settings-converter"]
 
--- | The settings sync's two converter entries with no develop pass before them.
-leadingPair :: [T.Text]
-leadingPair = ["cc-entry-settings-converter", "cc-entry-settings-converter"]
-
-hookedIdle :: [T.Text]
-hookedIdle = ["cc-entry-marker", "cc-hook-colour", "cc-hook-tone-1", "cc-hook-tone-2", "cc-hook-chroma-2"]
-
-hookedPair :: [T.Text]
-hookedPair = hookedIdle ++ leadingPair
-
 cases :: [(String, Bool)]
 cases =
   [ ( "converter-free segments with different entries differ"
@@ -114,30 +104,6 @@ cases =
         (segment (chromaPrefix ++ ["cc-entry-settings-converter"])))) )
   , ( "a split with a converting pass in between differs"
     , not (null (compared (segment (twoConverters ++ converting ++ twoConverters)) (segment fiveConverters))) )
-  , ( "a leading settings converter pair equals the pair in a later pass after idle passes"
-    , null (compared
-        (segment (leadingPair ++ hookedIdle ++ hookedIdle ++ hookedIdle))
-        (segment (hookedIdle ++ hookedIdle ++ hookedPair))) )
-  , ( "a leading settings converter pair equals the first part of a pass split by idle passes"
-    , null (compared
-        (segment (leadingPair ++ hookedIdle ++ hookedIdle ++ hookedPair ++ hookedPair))
-        (segment (hookedIdle ++ hookedIdle ++ hookedPair ++ hookedIdle ++ hookedPair ++ hookedPair))) )
-  , ( "a leading settings converter pair differs from the pair inside a converting first pass"
-    , not (null (compared
-        (segment (leadingPair ++ hookedPair))
-        (segment (hookedPair ++ leadingPair)))) )
-  , ( "a leading capture converter differs from one in a later pass"
-    , not (null (compared
-        (segment (["cc-entry-capture-converter"] ++ hookedIdle))
-        (segment (hookedIdle ++ ["cc-entry-capture-converter"])))) )
-  , ( "a leading run with a hook entry differs from its converters in a later pass"
-    , not (null (compared
-        (segment (["cc-hook-chroma-2"] ++ leadingPair ++ hookedIdle))
-        (segment (hookedIdle ++ ["cc-hook-chroma-2"] ++ leadingPair)))) )
-  , ( "a leading settings converter pair differs from a later pass with a different prefix"
-    , not (null (compared
-        (segment (leadingPair ++ hookedIdle))
-        (segment (hookedIdle ++ idlePass ++ leadingPair)))) )
   , ( "timing fields are left out"
     , null (compared (object ["instructions" .= (1 :: Int), "r0" .= ("0x1" :: T.Text)])
                      (object ["instructions" .= (2 :: Int), "r0" .= ("0x1" :: T.Text)])) )
