@@ -547,5 +547,11 @@ Source: x70view `decomp/xm1-coverage` at `55436fc85c0560dd252b0410af6f2427fe198c
 
 **Consequences for the plan.**
 - The phase-1 embassy hosts (§4.12) already use exactly these paths: B's pender wakeup from A is the cross-core make-ready, and each host's sleep inserts into its own heap.
-- The next ownership step is the 17 own-first slots, then the scheduler of both domains together, behind the keep-exact task-record and global-lock slots.
+- The 17 own-first slots are owned in both domains, as Rust bodies linked in place at the stock bodies (`replacement/rtos_own_first`) and staged as a standalone leaf (E-RTOS-OWN-FIRST-STAGE-150).
+  - In place is required. Five of the slots have direct `bl` callers that bypass the root word in each loader (+0x148 and +0x128 from +0x16c, +0x16c from 0x416a8/0xd16a8, nine writers each into +0x164 and +0x168), and image4 calls A's +0x16c on either core.
+  - The native-case oracle matches stock on all 6,584 cases per loader, with all 72 controls holding (E-RTOS-OWN-FIRST-ORACLE-150).
+  - The from-reset natural pair qualifies both roles over about 661,000 slot calls and gives equal route and menu states. The extent readback and the per-call semantics each refuse their guest control (E-RTOS-OWN-FIRST-NATURAL-150).
+  - Stock task resume never restores a task's A bit and takes F from the current CPSR (0x4034c-0x40364, 0x437c0-0x437d8), so a preempted slot call can return with A changed.
+  - The leaf does not compose with the startup_artifact pieces yet: their footprints cover the extents, and three witnesses bind the stock scratch registers.
+  - The next step is the scheduler of both domains together, behind the keep-exact task-record and global-lock slots.
 - Owned code may assume no failed lock acquisition, but it must preserve the global-lock tags and the one-ready-task rule while any stock vector remains.
