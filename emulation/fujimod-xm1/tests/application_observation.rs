@@ -837,7 +837,7 @@ fn a_changed_evidence_file_is_a_capture_bound_refusal() {
 }
 
 #[test]
-fn the_pair_check_compares_inputs_menus_graphics_planes_mailbox_words_and_targets() {
+fn the_pair_check_compares_inputs_menus_graphics_planes_controller_code_argument_flags_and_targets() {
     let (retained, owned) = (Scenario::new(), Scenario::new());
     let summary = retained.summary().unwrap();
     let check_pair = |retained: &ApplicationReceipt, owned: &ApplicationReceipt, directories: [&Path; 2]| {
@@ -857,7 +857,9 @@ fn the_pair_check_compares_inputs_menus_graphics_planes_mailbox_words_and_target
     differing.visible[3].controller.physical.0[0] ^= 1;
     assert_eq!(check_pair(retained.section(), &differing, directories), Err(PairField::Visible));
     let mut differing = owned.section().clone();
-    differing.visible[3].controller.physical.0[20] ^= 1;
+    differing.visible[3].controller.physical.0[79] ^= 1;
+    assert_eq!(check_pair(retained.section(), &differing, directories), Ok(()));
+    differing.visible[3].controller.physical.0[4] ^= 1;
     assert_eq!(check_pair(retained.section(), &differing, directories), Err(PairField::Visible));
     let mut differing = owned.section().clone();
     differing.targets[0].word = CodeWord(0);

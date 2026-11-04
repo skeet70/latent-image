@@ -849,7 +849,7 @@ pub fn capture_bound(evidence: &RoleEvidence) -> Result<(), ApplicationRefusal> 
 pub enum PairField {
     /// Input keys and purposes.
     Inputs,
-    /// Menus, plane layouts, graphics planes and the controller record outside its stack-residue words.
+    /// Menus, plane layouts, graphics planes and the controller record's code, argument and flags.
     Visible,
     /// Dynamic targets and their words.
     Targets,
@@ -857,9 +857,9 @@ pub enum PairField {
     ReadinessMenu,
 }
 
-/// Controller words `0x94458c` and `0x944590`: payload words of the last key event, posted from `0x6a1b40`'s
-/// uninitialized frame; the other 18 words are compared.
-const STACK_RESIDUE_WORDS: std::ops::Range<usize> = 12..20;
+/// Controller bytes `[0x94458c,0x9445d0)`, the last event's 0x44-byte payload: key events from `0x6a1b40` and event
+/// 0x816 from `0x6e97c0` carry their poster's uninitialized frame there. The code, argument and flags are compared.
+const EVENT_PAYLOAD: std::ops::Range<usize> = 12..80;
 
 /// `directories` are the roles' run directories holding their visible side files; `summaries` are their role checks'.
 pub fn check_pair(retained: &ApplicationReceipt, owned: &ApplicationReceipt, directories: [&Path; 2], summaries: [&RoleSummary; 2])
@@ -874,7 +874,7 @@ pub fn check_pair(retained: &ApplicationReceipt, owned: &ApplicationReceipt, dir
     };
     let controller = |capture: &super::VisibleCapture| {
         let bytes = &capture.controller.physical.0;
-        (bytes.len() >= STACK_RESIDUE_WORDS.end).then(|| [&bytes[..STACK_RESIDUE_WORDS.start], &bytes[STACK_RESIDUE_WORDS.end..]].concat())
+        (bytes.len() >= EVENT_PAYLOAD.end).then(|| [&bytes[..EVENT_PAYLOAD.start], &bytes[EVENT_PAYLOAD.end..]].concat())
     };
     let same = retained.visible.len() == owned.visible.len()
         && retained.visible.iter().zip(&owned.visible).all(|(a, b)| {
