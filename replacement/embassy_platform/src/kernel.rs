@@ -120,7 +120,7 @@ pub struct CreatePacket {
     pub stack_base: u32,
 }
 
-/// Root `+0x80`, the per-task eventflag create, with `{attribute 0, pattern 0}`; task create 0x725dd8
+/// Root `+0x80`, eventflag create for the task's own id, with `{attribute 0, pattern 0}`; task create 0x725dd8
 /// passes attribute 0 when descriptor word +0x18 is 0xa5f0a5f0 and 4 otherwise.
 pub fn register_auxiliary(domain: Domain, id: TaskId) -> SlotStatus {
     let packet = [0u32; 2];

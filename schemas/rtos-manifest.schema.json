@@ -9,6 +9,7 @@
     "schemaVersion": {"const": 1},
     "firmware": {"const": "X-M1 1.50"},
     "scope": {"type": "string"},
+    "decompCommit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "extentMethod": {"type": "string"},
     "inputs": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["inputPath", "inputBytes", "inputSha256"], "properties": {"inputPath": {"type": "string"}, "inputBytes": {"type": "integer", "minimum": 0}, "inputSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}},
     "savedStackArrays": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["domain", "start", "stride", "count", "field", "evidence"], "properties": {"domain": {"enum": ["A", "B"]}, "start": {"$ref": "#/$defs/address"}, "stride": {"type": "integer", "minimum": 1}, "count": {"type": "integer", "minimum": 1}, "field": {"$ref": "#/$defs/address"}, "evidence": {"$ref": "#/$defs/evidence"}}}},
@@ -37,13 +38,15 @@
         "preconditions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["name", "statement"], "properties": {"name": {"type": "string"}, "statement": {"type": "string"}}}},
         "objects": {"$ref": "#/$defs/strings"}, "directImage4Calls": {"type": "array", "items": {"$ref": "#/$defs/address"}}, "computedWrapperEntries": {"type": "array", "items": {"$ref": "#/$defs/address"}},
         "experiments": {"$ref": "#/$defs/strings"}, "gaps": {"$ref": "#/$defs/nullableContract"}, "domainNotes": {"$ref": "#/$defs/nullableContract"},
+        "decomp": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["domain", "name", "address", "path", "exact"], "properties": {"domain": {"enum": ["A", "B"]}, "name": {"type": "string"}, "address": {"$ref": "#/$defs/address"}, "path": {"type": "string"}, "exact": {"type": "boolean"}}}},
         "callerClosure": {"type": "string"}, "extent": {"$ref": "#/$defs/extent"}, "evidence": {"$ref": "#/$defs/evidence"}
       }
     },
     "extent": {
       "oneOf": [
         {"type": "object", "additionalProperties": false, "required": ["status", "start", "end", "codeEnvelopeBytes", "windowEnd", "returnPremises", "scope"], "properties": {"status": {"const": "derived"}, "start": {"$ref": "#/$defs/address"}, "end": {"$ref": "#/$defs/address"}, "codeEnvelopeBytes": {"type": "integer", "minimum": 4}, "windowEnd": {"$ref": "#/$defs/address"}, "returnPremises": {"$ref": "#/$defs/strings"}, "scope": {"type": "string"}}},
-        {"type": "object", "additionalProperties": false, "required": ["status", "start", "windowEnd", "refusal", "scope"], "properties": {"status": {"const": "unknown"}, "start": {"$ref": "#/$defs/address"}, "windowEnd": {"$ref": "#/$defs/address"}, "refusal": {"type": "string"}, "scope": {"type": "string"}}}
+        {"type": "object", "additionalProperties": false, "required": ["status", "start", "windowEnd", "refusal", "scope"], "properties": {"status": {"const": "unknown"}, "start": {"$ref": "#/$defs/address"}, "windowEnd": {"$ref": "#/$defs/address"}, "refusal": {"type": "string"}, "scope": {"type": "string"}}},
+        {"type": "object", "additionalProperties": false, "required": ["status", "start", "end", "windowEnd", "bytes", "sha256", "name", "path", "basis", "stockInventoryRefusal", "scope"], "properties": {"status": {"const": "decomp-exact"}, "start": {"$ref": "#/$defs/address"}, "end": {"$ref": "#/$defs/address"}, "windowEnd": {"$ref": "#/$defs/address"}, "bytes": {"type": "integer", "minimum": 4}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "name": {"type": "string"}, "path": {"type": "string"}, "basis": {"type": "string"}, "stockInventoryRefusal": {"type": "string"}, "scope": {"type": "string"}}}
       ]
     },
     "surface": {"type": "object", "additionalProperties": false, "required": ["surfaceName", "entries", "surfaceContract", "surfaceEvidence"], "properties": {"surfaceName": {"type": "string"}, "entries": {"$ref": "#/$defs/strings"}, "surfaceContract": {"type": "string"}, "surfaceEvidence": {"$ref": "#/$defs/evidence"}}},
