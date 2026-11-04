@@ -9,7 +9,7 @@ use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, 
 use fujimod_emulator_cpu::{Register, arm};
 use fujimod_xm1::bridge::{read, sha256, write};
 use fujimod_xm1::guest::RouteKey;
-use fujimod_xm1::machine::{Machine, RunOutcome};
+use fujimod_xm1::machine::{Hold, KeyPulse, Machine, RunOutcome, key_pulse};
 use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
@@ -475,10 +475,9 @@ struct MenuTriple { menu: u32, setting: u32, cursor: u32 }
 
 #[derive(Deserialize)]
 struct Trajectory { before_unload: Vec<TrajectoryPhase> }
+/// A `key_pulse` is refused; every key takes the bridge's default pulse.
 #[derive(Deserialize)]
-struct TrajectoryPhase { phase: String, key_pulse: Option<TrajectoryPulse>, steps: Vec<(Key, u32, u32, u32)> }
-#[derive(Clone, Copy, Deserialize)]
-struct TrajectoryPulse { hold_instructions: u64, release_instructions: u64 }
+struct TrajectoryPhase { phase: String, key_pulse: Option<serde::de::IgnoredAny>, steps: Vec<(Key, u32, u32, u32)> }
 
 #[derive(Serialize)]
 struct Pulse { key: Key, pressed: u64, released: u64, finished: u64, debounced: bool }
@@ -631,12 +630,18 @@ impl Census {
     }
 
     fn advance(&mut self, machine: &mut Machine, budget: u64) -> Result<(), String> {
+        self.advance_until(machine, budget, None)
+    }
+
+    /// Runs `budget` instructions, or until board tick `until` when given.
+    fn advance_until(&mut self, machine: &mut Machine, budget: u64, until: Option<u64>) -> Result<(), String> {
         let end = machine.instructions().checked_add(budget).filter(|end| *end <= INSTRUCTION_LIMIT)
             .ok_or("census instruction bound exceeded")?;
-        while machine.instructions() < end {
+        let reached = |machine: &Machine| machine.instructions() >= end || until.is_some_and(|tick| machine.session.board.now() >= tick);
+        while !reached(machine) {
             machine.traces.hits.clear();
             let before = machine.instructions();
-            let outcome = machine.run(end - before);
+            let outcome = machine.run_until(end - before, until);
             machine.require_running()?;
             require(matches!(outcome, RunOutcome::Stopped | RunOutcome::Completed), "unexpected census run outcome")?;
             let mut stops = Vec::with_capacity(2);
@@ -647,7 +652,7 @@ impl Census {
                 stops.push((core, Address(parse_hex(&hit.address)?)));
             }
             if stops.is_empty() {
-                require(machine.instructions() >= end, "run ended early without a census stop")?;
+                require(reached(machine), "run ended early without a census stop")?;
             } else {
                 self.stop(machine, &stops)?;
             }
@@ -659,17 +664,23 @@ impl Census {
         Ok(())
     }
 
-    fn pulse(&mut self, machine: &mut Machine, key: Key, hold: u64, release: u64) -> Result<Pulse, String> {
+    fn pulse(&mut self, machine: &mut Machine, key: Key, pulse: KeyPulse) -> Result<Pulse, String> {
         let pressed = machine.instructions();
         machine.press(key.guest())?;
-        self.advance(machine, hold)?;
+        match pulse.hold {
+            Hold::Instructions(hold) => self.advance(machine, hold)?,
+            Hold::BoardTicks(ticks) => {
+                let until = machine.session.board.now().saturating_add(ticks);
+                self.advance_until(machine, machine.hold_bound(ticks), Some(until))?;
+            }
+        }
         machine.release_key(key.guest())?;
         let released = machine.instructions();
         let debounced = loop {
             if machine.document.firmware.released(&machine.session, key.guest())? { break true; }
             let spent = machine.instructions() - released;
-            if spent >= release { break false; }
-            self.advance(machine, (release - spent).min(RELEASE_POLL))?;
+            if spent >= pulse.release { break false; }
+            self.advance(machine, (pulse.release - spent).min(RELEASE_POLL))?;
         };
         Ok(Pulse { key, pressed, released, finished: machine.instructions(), debounced })
     }
@@ -707,18 +718,17 @@ impl Census {
         self.endpoint(machine, None, MenuTriple { menu: 69, setting: 52, cursor: 12 })?;
         self.phase = "initial-setup".into();
         for key in std::iter::repeat_n(Key::Up, 12).chain([Key::Ok, Key::Ok]) {
-            self.pulse(machine, key, SETUP_HOLD, SETUP_RELEASE)?;
+            self.pulse(machine, key, KeyPulse::instructions(SETUP_HOLD, SETUP_RELEASE))?;
         }
         self.advance(machine, SETUP_SETTLE)?;
         self.phase = "shooting-menu".into();
-        let pulse = self.pulse(machine, Key::Menu, SETUP_HOLD, SETUP_RELEASE)?;
+        let pulse = self.pulse(machine, Key::Menu, KeyPulse::instructions(SETUP_HOLD, SETUP_RELEASE))?;
         self.advance(machine, SHOOTING_SETTLE)?;
         self.endpoint(machine, Some(pulse), MenuTriple { menu: 1, setting: 5, cursor: 2 })?;
         for phase in trajectory {
             self.phase = phase.phase.clone();
-            let timing = phase.key_pulse.ok_or("trajectory phase has no key pulse")?;
             for &(key, menu, setting, cursor) in &phase.steps {
-                let pulse = self.pulse(machine, key, timing.hold_instructions, timing.release_instructions)?;
+                let pulse = self.pulse(machine, key, key_pulse(key.guest()))?;
                 self.state(machine, pulse, MenuTriple { menu, setting, cursor })?;
             }
         }
@@ -796,7 +806,7 @@ fn drive() -> Result<(), String> {
         "modal75-returned-repeated", "modal75-handback"], "trajectory phases differ from the #128 FILM SIMULATION route")?;
     require(trajectory.before_unload[1].steps.iter().map(|&(_, menu, setting, cursor)| [menu, setting, cursor]).eq([[1, 5, 2]]),
         "trajectory shooting-menu entry differs")?;
-    require(trajectory.before_unload[2..].iter().all(|phase| phase.key_pulse.is_some()), "trajectory step phase has no key pulse")?;
+    require(trajectory.before_unload.iter().all(|phase| phase.key_pulse.is_none()), "trajectory pins a key pulse; census keys take the default pulse")?;
     std::fs::create_dir(&output).map_err(|error| format!("{}: {error}", output.display()))?;
     let events_file = File::create_new(output.join("calls.jsonl.gz")).map_err(|error| error.to_string())?;
     let events = GzBuilder::new().mtime(0).operating_system(255).write(BufWriter::new(events_file), Compression::default());

@@ -1354,6 +1354,7 @@ haskell_binary(
     srcs = ["Xm1AfRingE2E.hs"],
     data = [
         ":xm1-upstream",
+        "af-ring-e2e-trajectories.fujimod.json",
         "af-ring-e2e-trajectories.json",
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],

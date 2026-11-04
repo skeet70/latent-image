@@ -7,7 +7,7 @@ import qualified Data.ByteString.Char8 as C
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import Data.List (isInfixOf, isSuffixOf, sort)
+import Data.List (isInfixOf, isPrefixOf, isSuffixOf, sort)
 import Emulation.PreservationObservation
 import Emulation.Symbols
 import Emulation.UiTrajectory
@@ -87,6 +87,11 @@ main = do
       expect ("checked-in " ++ file ++ " asserts what " ++ retainedFile ++ " asserts")
         (either (const False) null (variantMismatches <$> retained <*> variant)))
     variants
+  -- The modal75 routes and the variants run only on FujiMod.
+  unpinned <- mapM (\file -> do
+      decoded <- decodeTrajectories <$> C.readFile ("emulation" </> file)
+      expect ("checked-in FujiMod " ++ file ++ " pins no instruction hold") (either (const False) (null . instructionPinnedPhases) decoded))
+    (variants ++ filter ("modal75-" `isPrefixOf`) files)
   results <- sequence
     [ expect "the checked-in trajectory files are present" (not (null files))
     , expect "a trace site decodes to its address and label" $
@@ -159,6 +164,14 @@ main = do
         fmap segmentKeyPulse (segmentOf (segmentDocument "")) == Just Nothing
     , expect "a zero key-pulse budget is refused" $
         refused (segmentDocument ",\"key_pulse\":{\"hold_instructions\":0,\"release_instructions\":8000000}")
+    , expect "a segment key pulse pins its phase to an instruction hold" $
+        fmap instructionPinnedPhases (either (const Nothing) Just (decodeTrajectories
+          (segmentDocument ",\"key_pulse\":{\"hold_instructions\":8000000,\"release_instructions\":8000000}"))) == Just ["a"]
+    , expect "a step hold pins its phase and a settle cap alone does not" $
+        map (fmap instructionPinnedPhases . either (const Nothing) Just . decodeTrajectories . C.pack)
+          [ "{\"schema\":1,\"before_unload\":[{\"phase\":\"a\",\"steps\":[[\"ok\",1,5,2,{\"hold_instructions\":3,\"release_instructions\":4}]]}],\"after_unload\":[]}"
+          , "{\"schema\":1,\"before_unload\":[{\"phase\":\"a\",\"steps\":[[\"ok\",1,5,2,{\"settle_instructions\":5000000}]]}],\"after_unload\":[]}" ]
+          == [Just ["a"], Just []]
     , expect "a step without timing leaves the bridge defaults" $
         fmap (map stepTiming) (stepsOf "[\"menu\",1,5,2]") == Just [defaultKeyTiming]
     , expect "a step's timing object decodes to its pulse and settle cap" $
@@ -555,7 +568,7 @@ main = do
               checkPreservation preservedRange accepted observation
          in isLeft result
     ]
-  unless (and (checkedIn ++ checkedInVariants ++ results)) exitFailure
+  unless (and (checkedIn ++ checkedInVariants ++ unpinned ++ results)) exitFailure
 
 rangesOf :: [(Int, Int)] -> PreservationRanges
 rangesOf bounds = either (error "preservation ranges") id
