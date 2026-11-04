@@ -144,6 +144,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/peer_witness_startup.rs",
     "//emulation:fujimod-xm1/src/peer_witness_vectors.rs",
     "//emulation:fujimod-xm1/src/peer_witness_wait.rs",
+    "//emulation:fujimod-xm1/src/pool_allocation.rs",
     "//emulation:fujimod-xm1/src/power_hold.rs",
     "//emulation:fujimod-xm1/src/provenance.rs",
     "//emulation:fujimod-xm1/src/provenance_main.rs",

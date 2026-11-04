@@ -672,6 +672,123 @@ struct RawContract {
     guard: RawGuard,
     joins: Vec<Join>,
     pieces: Vec<RawPiece>,
+    pool_allocation: Option<PoolAllocation>,
+}
+
+/// Where a normalized word points in an allocation: from its base (inclusive) or up to its end (inclusive).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AllocationPosition {
+    Base,
+    Top,
+}
+
+/// Words of a read that hold pool addresses: every `stride` bytes from `offset`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AllocationWords {
+    pub read: Label,
+    pub offset: u32,
+    pub stride: u32,
+    pub position: AllocationPosition,
+}
+
+/// Physical `[start, end)` of the task reservation pool.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PoolSpan {
+    pub start: u32,
+    pub end: u32,
+}
+
+/// A read whose base word, every `stride` bytes from `offset`, names an allocation reserved by `core`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AllocationOwner {
+    pub core: Core,
+    pub read: Label,
+    pub offset: u32,
+    pub stride: u32,
+}
+
+/// Each role's allocations come from its storage-record read and its cursor read; listed read words
+/// and the SP of each listed return boundary compare as (task, offset) within that role's own allocations,
+/// and each core's tasks, ordered by base, must match between the roles.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PoolAllocation {
+    pub pool: PoolSpan,
+    pub records: Label,
+    pub cursor: Label,
+    pub words: Vec<AllocationWords>,
+    pub stack_tops: Vec<Label>,
+    pub owners: Vec<AllocationOwner>,
+    pub citation: Citation,
+}
+
+/// Storage records are `{base, size, reserved}` words (replacement/task_storage/src.rs).
+pub const ALLOCATION_RECORD_BYTES: u32 = 12;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PoolAllocationProblem {
+    Pool,
+    UnknownRead(Label),
+    RecordLayout(Label),
+    CursorLength(Label),
+    WordLayout(Label),
+    StackTop(Label),
+    DuplicateWords(Label),
+    Differs(Label),
+    OwnerLayout(Label),
+}
+
+/// One word every `stride` bytes from `offset` fits each item of a `length`-byte read.
+fn word_layout(offset: u32, stride: u32, length: u32) -> bool {
+    stride != 0 && stride % 4 == 0 && offset % 4 == 0 && offset.checked_add(4).is_some_and(|end| end <= stride) && length % stride == 0
+}
+
+/// The relation's reads exist, are compared, and have whole records, a one-word cursor and words inside
+/// their stride; each read has at most one `words` entry, and each stack top names a return boundary.
+fn check_pool_allocation<'a>(relation: &PoolAllocation, boundaries: &BTreeMap<Label, Boundary>, reads: impl Iterator<Item = &'a Read>)
+    -> Result<(), CatalogRefusal> {
+    let refuse = |problem| Err(CatalogRefusal::PoolAllocation(problem));
+    let reads: BTreeMap<&Label, &Read> = reads.map(|read| (&read.label, read)).collect();
+    let read = |label: &Label| {
+        let read = reads.get(label).copied().ok_or_else(|| CatalogRefusal::PoolAllocation(PoolAllocationProblem::UnknownRead(label.clone())))?;
+        if read.differs.is_some() {
+            return Err(CatalogRefusal::PoolAllocation(PoolAllocationProblem::Differs(label.clone())));
+        }
+        Ok(read)
+    };
+    if relation.pool.start >= relation.pool.end || relation.pool.start % 4 != 0 || relation.pool.end % 4 != 0 {
+        return refuse(PoolAllocationProblem::Pool);
+    }
+    if read(&relation.records)?.length % ALLOCATION_RECORD_BYTES != 0 {
+        return refuse(PoolAllocationProblem::RecordLayout(relation.records.clone()));
+    }
+    if read(&relation.cursor)?.length != 4 {
+        return refuse(PoolAllocationProblem::CursorLength(relation.cursor.clone()));
+    }
+    let mut listed = BTreeSet::new();
+    for words in &relation.words {
+        if !word_layout(words.offset, words.stride, read(&words.read)?.length) {
+            return refuse(PoolAllocationProblem::WordLayout(words.read.clone()));
+        }
+        if !listed.insert(&words.read) {
+            return refuse(PoolAllocationProblem::DuplicateWords(words.read.clone()));
+        }
+    }
+    for owner in &relation.owners {
+        if !word_layout(owner.offset, owner.stride, read(&owner.read)?.length) {
+            return refuse(PoolAllocationProblem::OwnerLayout(owner.read.clone()));
+        }
+    }
+    for label in &relation.stack_tops {
+        if boundaries.get(label).is_none_or(|boundary| boundary.kind != BoundaryKind::Return) {
+            return refuse(PoolAllocationProblem::StackTop(label.clone()));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -727,6 +844,7 @@ pub enum CatalogRefusal {
     BoundaryBound { role: Role, core: Core, count: usize },
     ReadNotRetained(Label),
     IdenticalDats,
+    PoolAllocation(PoolAllocationProblem),
 }
 
 impl std::fmt::Display for CatalogRefusal {
@@ -752,6 +870,7 @@ pub struct Contract {
     declared: DeclaredLists,
     policies: Vec<PiecePolicy>,
     classes: Vec<WatchRange>,
+    pool_allocation: Option<PoolAllocation>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1094,6 +1213,9 @@ impl Contract {
         if read_bytes > READ_BYTE_LIMIT {
             return Err(CatalogRefusal::ReadBudget(read_bytes));
         }
+        if let Some(relation) = &raw.pool_allocation {
+            check_pool_allocation(relation, &boundaries, pieces.iter().flat_map(|piece| &piece.catalog.reads))?;
+        }
         let mut carriers = Vec::new();
         let mut carrier_spans = Vec::new();
         for piece in &pieces {
@@ -1133,6 +1255,7 @@ impl Contract {
             guards,
             policies,
             classes,
+            pool_allocation: raw.pool_allocation,
         })
     }
 
@@ -1148,6 +1271,8 @@ impl Contract {
     pub fn boundaries(&self) -> impl Iterator<Item = &Boundary> { self.boundaries.values() }
 
     pub fn reads(&self) -> impl Iterator<Item = &Read> { self.pieces.iter().flat_map(|piece| &piece.catalog.reads) }
+
+    pub fn pool_allocation(&self) -> Option<&PoolAllocation> { self.pool_allocation.as_ref() }
 
     pub fn sites(&self, role: Role) -> SitePlan {
         let armed = || self.boundaries.values().filter_map(|boundary| boundary.pc(role).map(|pc| (pc, boundary)));

@@ -476,13 +476,6 @@ checkArguments receipt entry sample kind target = case target of
         require (status == loggedStatus) CallArgumentsRejected
         arguments sample [status]
 
-maximumDemand :: N.CallTarget -> Integer
-maximumDemand target = case target of
-  N.FixedService fixed -> case fixed of
-    N.CriticalEnter -> 40; N.CriticalExit -> 32; N.Reservation -> 40; N.Fill -> 12; N.Cache -> 36
-    N.Log -> 160; N.ErrorCallback -> 12; N.TryLock -> 0; N.Unlock -> 0
-  N.AuxiliaryService -> 16; N.CreationService -> 16; N.ActivationService -> 40
-  N.CurrentCoreService -> 8; N.SaveMaskService -> 4; N.RestoreMaskService -> 4
 actualDemand :: Sample -> Sample -> N.CallTarget -> Either ProgramError Integer
 actualDemand entry sample target = case target of
   N.FixedService N.Cache -> do base <- reg sample 0; size <- reg sample 1; pure (if base /= 0 && size /= 0 then 0 else 36)
@@ -514,7 +507,7 @@ actualDemand entry sample target = case target of
       && taskCreated fresh == W.WordValue 1 && taskState fresh == 0 && taskPending fresh .&. 1 == 0
       && taskEffectivePriority fresh == 14) UnsupportedActivation
     pure 40
-  _ -> pure (maximumDemand target)
+  _ -> let N.CalleeDemand _ (N.StackOffset low) = N.stockCalleeDemand target in pure (negate low)
 byteAt :: Sample -> Word32 -> Either ProgramError Word32
 byteAt sample location = do
   let at = physical location
@@ -553,7 +546,9 @@ checkStack program receipt entry sample kind reached = do
   context <- stackContext entry sample
   case program of
     Owned{ownedProof=proof,ownedVariant=variant} -> do
-      let demand target = N.CalleeDemand target (N.StackOffset (negate (case reached of Just (actual,depth) | actual == target -> depth; _ -> maximumDemand target)))
+      let demand target = case reached of
+            Just (actual,depth) | actual == target -> N.CalleeDemand target (N.StackOffset (negate depth))
+            _ -> N.stockCalleeDemand target
           targets = nub (map N.callTarget (N.callBoundaries proof))
       case variant of
         Standalone -> do
