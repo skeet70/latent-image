@@ -7,6 +7,7 @@ import Control.Monad (unless)
 import qualified Data.ByteString as B
 import Data.Bits (shiftR)
 import Data.Either (isLeft)
+import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import Replacement.ModalRuntime.MenuEngineClass
 import Replacement.ModalRuntime.MenuEnginePair
@@ -112,6 +113,13 @@ main = do
         , ("a seek on a type-5 node falls back", classOf 0x3000 0 (StageEvent 0xa 3 1 0) == Right (FallbackEvent FramedSource))
         , ("a push, move and pop into a package node falls back", classOf 0x7000 0 (stage 8 3 1) == Right (FallbackEvent PackageChildRow))
         , ("an unowned kind falls back by kind", classOf 0x1000 0 (stage 3 3 1) == Right (FallbackEvent (KindNotOwned 3)))
+        , ("coverage counts each class by residency and ownership",
+            fmap (M.toList . summaryClasses)
+              (checkRole tree StockRole [segment [] [entry 0 0x1000 0 (stage 2 3 0x1d), entry 0 0x1000 0 (stage 3 3 1)], unloaded (segment [] [entry 0 0x1000 0 (stage 2 3 0x1d)])])
+              == Right
+                [ (Coverage EngineResident False "FallbackEvent (KindNotOwned 3)", 1)
+                , (Coverage EngineResident True "OwnedEvent Close", 1)
+                , (Coverage EngineUnloaded True "OwnedEvent Close", 1) ])
         , ("a short block refuses", isLeft (menuBlock (B.replicate 0x42f 0)))
         , ("an owned class reaching the fallback site fails the owned role",
             isLeft (checkRole tree OwnedRole [segment [] [entry 0 0x1000 0 (stage 0xe 3 0x1d), fallback 0]]))
