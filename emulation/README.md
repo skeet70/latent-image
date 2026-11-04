@@ -1645,6 +1645,31 @@ Fetch reconciliation runs at each watch segment end. A row at a noted entry stop
 
 Limits: 4,096 points per core, 4,096 open calls, 8,000,000 written events (later events are counted, not written), 1.5G instructions and 1,048,576 rows per watch segment. Exhausted site or open-call bounds mark the entry untracked instead of stopping. A point event whose core is no longer at the point is counted as misplaced. Entry counts are executions of the target instruction, including direct kernel-internal branches and calls before root publication; root-mediated calls are distinguished by caller LR and the published word, not by the stop.
 
+#### Own-first slot natural pair (#156)
+
+`//emulation:own-first-pair-plan` writes one role's observer plan from `regions.json`, the linked owned bins and the pinned 1.50 DAT and loaders, through the stager's admission and staging. The plan names the 34 entries, the stock data words each slot reads, the 17 guarded extents per loader with the sha256 of the bytes they must hold, the fill words inside them and, where the loader's +0x1618 entry is a `b` to its body, that tail body. `stock` expects the canonical loaders, `owned` the staged loaders, `control-restored` the staged loaders over a DAT whose A +0x164 extent is stock again, and `control-wrong-i` a DAT and loaders whose A +0x164 `and r0, r0, #0x80` at `0x41154` is `and r0, r1, #0x80`, returning the set I bit. Control DATs are patched from the candidate through the pre-table loader-word path and must change no byte outside the extents and the checksum.
+
+`//emulation:own-first-pair-observe` (`fujimod-xm1-own-first-pair`) runs the census route from a zero-instruction reset: START MENU, the first-start keys, MENU to `(1,5,2)` and the packaged FILM SIMULATION trajectory. Instruction points stop both cores at every entry, tail body, fill word and both loader entries (`0x40020`, `0xd0020`), in the low and `0x4xxxxxxx` spellings, and at each entered call's continuation. The first stop at a loader entry reads back that loader's extents physically and through both cores at the low address and the alias, refuses a hash differing from the plan, and restarts the classified watch for CPU, host and model-bus writes over every armed extent. Any watch row, a fill-word stop or an exhausted bound stops the run. Each call records core, CPSR, r0, LR, the core's CP14 identity, the slot's data words, the byte at current-task + 0xe for +0x60 and the word at entry r0 for +0xfc, +0x100, +0x128 and +0x12c; at the continuation it records r0, CPSR, +0xfc's time offset and the word at entry r0 for +0x100, +0x128 and +0x12c. A tail-body stop joins the open +0x1618 call with the same core, SP, mode and continuation. `observation.json` holds calls aggregated into classes of equal entry state, result and tail hits with counts, pending calls, armings, watch segments, the final readback, menu milestones and per-slot reach.
+
+`//emulation:own-first-pair-check` refuses, in order: binding (plan digest, role, DAT), readback (every arming and the final readback against the plan, both loaders armed), immutable (watch rows, violations, segments not contiguous from arming to the final readback or not covering every armed extent), fill fetch, observer error, untracked calls, entries before their loader armed, unmatched tails or inconsistent counts, then each call class against the slot semantics of the design table, then any menu milestone not reached. `compare` qualifies a stock and an owned observation and compares only route steps and menu states; `control readback|semantic` passes when a control plan's observation is refused with that kind first.
+
+```sh
+devenv shell -- bazel --batch build --jobs=2 //emulation:own-first-pair-observe //emulation:own-first-pair-check //emulation:emulator-slot
+devenv shell -- bazel --batch run --jobs=2 //emulation:own-first-pair-plan -- --role ROLE \
+  --source-dat "$PWD/private-data/firmware/x-m1-1.50/FWUP0002.DAT" \
+  --loader-a "$PWD/private-data/analysis/x-m1-1.50/decode/loader-40000.bin" \
+  --loader-b "$PWD/private-data/analysis/x-m1-1.50/decode/loader-d0000.bin" --output PLAN_DIR
+XM1_EMULATOR_SLOTS=1 devenv shell -- bazel --batch run --jobs=2 //emulation:emulator-slot -- \
+  "$PWD/bazel-bin/emulation/own-first-pair-observe" --plan PLAN_DIR/plan.json \
+  --run "$PWD/emulation/fujimod-xm1/data/xm1-150.json" --update DAT --boot-rom "$ROM" \
+  --trajectory "$PWD/emulation/modal75-packaged-route-trajectories.json" --output NEW_DIRECTORY
+bazel-bin/emulation/own-first-pair-check qualify PLAN OBSERVATION_DIR OUTPUT
+bazel-bin/emulation/own-first-pair-check compare STOCK_PLAN STOCK_DIR OWNED_PLAN OWNED_DIR OUTPUT
+bazel-bin/emulation/own-first-pair-check control readback|semantic CONTROL_PLAN CONTROL_DIR OUTPUT
+```
+
+Pending calls at the end of the route are reported, not checked. Results are read at the continuation stop, so an interrupt taken between a slot's return and its continuation is part of the observed result.
+
 #### Application entry and main UI loop boundary (#154)
 
 [The application contract](../reports/replacement-inventory-baseline.md#818-application-entry-main-ui-actor-and-first-owned-loop-boundary-154) separates finite image5 initializer `0xd985a4`, actual UI task1 `0xc22f60`/queue1, syscont2/queue2, REC3/queue3 and the distinct UILIB33/smaphk72/VGLIB73 actors. Existing admitted loader observations already cover image5 initialization, UI1 submission and later UILIB/plain construction, but not task1's committed first context or repeated queue1-to-controller-pump handback. Subsequent finite pump observations remain unadmitted after observer clock refusals.
