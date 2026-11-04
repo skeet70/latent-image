@@ -17,7 +17,7 @@ use fujimod_emulator::board::preservation::{
     PhysicalRange, Preservation, PreservationState, ProtectedRanges,
 };
 use fujimod_xm1::sd_host::{Backing, MediaImage, SectorAddress, SectorCount};
-use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, InstructionCount};
+use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, InstructionCount, SiteRead};
 use serde::{Deserialize, Serialize};
 use fujimod_emulator_devices::Device;
 use fujimod_emulator_exr2_isp_input::ImageInput;
@@ -310,7 +310,7 @@ enum WatchViews {
 enum Request {
     List,
     Transfer(Transfer),
-    TraceSites { sites: BTreeMap<String, String> },
+    TraceSites { sites: BTreeMap<String, String>, #[serde(default)] reads: BTreeMap<String, Vec<[u64; 2]>> },
     TraceHits { from: usize, #[serde(default)] limit: Option<std::num::NonZeroUsize> },
     ModalObservationBegin(ModalBeginRequest),
     ModalObservationReport,
@@ -528,6 +528,25 @@ fn parse_address(text: &str) -> Result<u32, String> {
     text.strip_prefix("0x")
         .and_then(|digits| u32::from_str_radix(digits, 16).ok())
         .ok_or_else(|| format!("invalid trace site address {text}"))
+}
+
+/// The per-site reads of a `trace-sites` request: each named site is a requested one and each read
+/// is `[address, count]` with 1..=`MAX_READ` bytes inside the 32-bit physical space.
+fn parse_site_reads(sites: &BTreeMap<String, String>, reads: &BTreeMap<String, Vec<[u64; 2]>>)
+    -> Result<BTreeMap<u32, Vec<SiteRead>>, String> {
+    reads.iter().map(|(site, ranges)| {
+        if !sites.contains_key(site) {
+            return Err(format!("trace site read names an unrequested site {site}"));
+        }
+        let ranges = ranges.iter().map(|&[address, count]| {
+            let count = usize::try_from(count).map_err(|_| "trace site read count exceeds the host".to_owned())?;
+            if !(1..=MAX_READ).contains(&count) || address + count as u64 > 1 << 32 {
+                return Err("a trace site read requires an address and 1..4096 bytes".to_owned());
+            }
+            Ok(SiteRead { address, count })
+        }).collect::<Result<Vec<_>, String>>()?;
+        Ok((parse_address(site)?, ranges))
+    }).collect()
 }
 
 fn default_pulse(key: Press) -> KeyPulse {
@@ -984,7 +1003,12 @@ impl Server {
                 let (count, payload) = self.bridge.transfer(&transfer)?;
                 json!({"count": count, "bytes": encode_hex(&payload)})
             }
-            Request::TraceSites { sites } => json!({"sites": self.arm(&sites)?}),
+            Request::TraceSites { sites, reads } => {
+                let site_reads = parse_site_reads(&sites, &reads)?;
+                let count = self.arm(&sites)?;
+                self.bridge.machine.traces.site_reads = site_reads;
+                json!({"sites": count})
+            }
             Request::TraceHits { from, limit } => {
                 let hits = &self.bridge.machine.traces.hits;
                 if from > hits.len() {
@@ -2232,6 +2256,21 @@ mod tests {
         assert!(server.handle(Request::WatchEnd).is_err());
         assert!(server.handle(Request::WatchState).is_err());
         assert!(server.handle(request(json!({"command": "snapshot-save", "name": "n0"}))).is_ok());
+    }
+
+    #[test]
+    fn trace_site_reads_record_memory_at_entry() {
+        let mut server = server(&[0xe2800001, 0xeafffffd]);
+        server.handle(request(json!({"command": "trace-sites", "sites": {"0x00000004": "loop"},
+            "reads": {"0x00000004": [[0, 4], [4, 4]]}}))).unwrap();
+        assert_eq!(server.bridge.machine.run(100), RunOutcome::Completed);
+        let hits = server.handle(request(json!({"command": "trace-hits", "from": 0}))).unwrap().unwrap();
+        let hits = hits["hits"].as_array().unwrap();
+        assert!(!hits.is_empty() && hits.iter().all(|hit| hit["memory"] == json!(["010080e2", "fdffffea"])));
+        assert!(server.handle(request(json!({"command": "trace-sites", "sites": {"0x00000004": "loop"},
+            "reads": {"0x00000008": [[0, 4]]}}))).is_err());
+        assert!(server.handle(request(json!({"command": "trace-sites", "sites": {"0x00000004": "loop"},
+            "reads": {"0x00000004": [[0, 0]]}}))).is_err());
     }
 
     #[test]

@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint) where
 
 import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, evaluate, finally, throwIO, try)
@@ -284,6 +284,7 @@ payloadText :: Payload -> T.Text
 payloadText p = case payloadKind p of
   RecipeBankD3 -> "recipe-bank-d3"
   RecipeBankModal75 -> "recipe-bank-modal75"
+  RecipeBankModal75MenuEngine -> "recipe-bank-modal75-menu-engine"
   RecipeBankLifecycle -> "recipe-bank-lifecycle"
   RecipeBankModalLifecycle -> "recipe-bank-modal-lifecycle"
   ClassicChrome -> "classic-chrome"
@@ -296,6 +297,7 @@ payloadContract :: Payload -> ReviewedContract
 payloadContract p = case payloadKind p of
   RecipeBankD3 -> reviewedContract
   RecipeBankModal75 -> error "scoped modal bank has no reviewed live contract"
+  RecipeBankModal75MenuEngine -> error "menu engine bank has no reviewed live contract"
   RecipeBankLifecycle -> error "lifecycle bank has no reviewed live contract"
   RecipeBankModalLifecycle -> error "modal lifecycle bank has no reviewed live contract"
   ClassicChrome -> reviewedCcContract
@@ -612,22 +614,22 @@ runRamPushE2EUsing given python workspace trajectoryFile installedMedia adjustme
   trajectories <- either (ioError . userError . ("invalid RAM-push e2e trajectories: " ++)) pure (decodeTrajectories bytes)
   let lifecycleRequested = any (isJust . segmentSaveLifecycle) (beforeUnload trajectories ++ afterUnload trajectories)
       lifetimeGuarded = modalLifetimeGuard given == ContinuousModalLifetimeGuard
-        || payloadKind (e2ePayload given) `elem` [RecipeBankModal75, RecipeBankModalLifecycle]
+        || payloadKind (e2ePayload given) `elem` [RecipeBankModal75, RecipeBankModalLifecycle, RecipeBankModal75MenuEngine]
   when lifetimeGuarded $ do
     require (pushMode given == RamPush && emulationCardMode given == Cardless
       && case emulationRuntime given of FujiModRuntime _ -> True; _ -> False)
       "modal lifetime guard requires full cardless FujiMod RAM push"
     require (relinkMode given == UnreviewedRelink EnforceAllowlist)
       "modal lifetime guard requires unreviewed relink with the enforced allowlist"
-    require (payloadKind (e2ePayload given) `elem` [RecipeBankD3, RecipeBankModal75])
-      "modal lifetime guard supports only stock223 or scoped224"
+    require (payloadKind (e2ePayload given) `elem` [RecipeBankD3, RecipeBankModal75, RecipeBankModal75MenuEngine])
+      "modal lifetime guard supports only the stock bank, the scoped modal bank or the scoped menu-engine bank"
     require (segmentSelection given == Nothing) "modal lifetime guard refuses segment splitting"
     require (modalDiagnostic given == NoModalDiagnostic && not lifecycleRequested)
       "modal lifetime guard refuses other modal or lifecycle observers"
     either (ioError . userError) pure (checkModalObserverConfiguration trajectories)
   when lifecycleRequested $ require (pushMode given == RamPush)
     "save lifecycle observation requires an installed RAM package"
-  when (payloadKind (e2ePayload given) `elem` [RecipeBankModal75, RecipeBankLifecycle, RecipeBankModalLifecycle]) $ do
+  when (payloadKind (e2ePayload given) `elem` [RecipeBankModal75, RecipeBankLifecycle, RecipeBankModalLifecycle, RecipeBankModal75MenuEngine]) $ do
     require (pushMode given == RamPush
       && (emulationCardMode given == Cardless
         || (payloadKind (e2ePayload given) == RecipeBankLifecycle && lifecycleRequested))
@@ -636,7 +638,7 @@ runRamPushE2EUsing given python workspace trajectoryFile installedMedia adjustme
     require (relinkMode given == UnreviewedRelink EnforceAllowlist)
       "unqualified bank variants require --unreviewed-relink without an allowlist override"
     require (modalDiagnostic given == NoModalDiagnostic) "--modal-observation is a stock no-install diagnostic"
-  when (payloadKind (e2ePayload given) `elem` [RecipeBankModal75, RecipeBankModalLifecycle]) $
+  when (payloadKind (e2ePayload given) `elem` [RecipeBankModal75, RecipeBankModalLifecycle, RecipeBankModal75MenuEngine]) $
     either (ioError . userError) pure (checkModalObserverConfiguration trajectories)
   when (modalDiagnostic given == RetainedFilmModalDiagnostic) $ do
     require (pushMode given == FlashCandidate && emulationCardMode given == Cardless
@@ -739,9 +741,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         pure result
       selected = e2ePayload settings
       experimental = payloadKind selected == Experiment
-      scoped = payloadKind selected `elem` [RecipeBankModal75, RecipeBankModalLifecycle]
+      scoped = payloadKind selected `elem` [RecipeBankModal75, RecipeBankModalLifecycle, RecipeBankModal75MenuEngine]
       lifetimeGuarded = scoped || modalLifetimeGuard settings == ContinuousModalLifetimeGuard
-      unreviewedBank = payloadKind selected `elem` [RecipeBankModal75, RecipeBankLifecycle, RecipeBankModalLifecycle]
+      unreviewedBank = payloadKind selected `elem` [RecipeBankModal75, RecipeBankLifecycle, RecipeBankModalLifecycle, RecipeBankModal75MenuEngine]
       relinkAt base action
         | experimental = do
             relinker <- runfilesRelinker selected
@@ -794,8 +796,10 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
             pure (case matches of
               (candidate, relinked) : _ -> (Just candidate, Just (candidate, relinked))
               [] -> (Nothing, Nothing))
-  require (maybe True (const (payloadKind selected == RecipeBankModal75 && relinkMode settings /= ReviewedRelink)) (modalOwnedPackage settings))
-    "the owned modal75 package requires the scoped modal75 payload and an unreviewed relink"
+  require (maybe True (const (payloadKind selected `elem` [RecipeBankModal75, RecipeBankModal75MenuEngine] && relinkMode settings /= ReviewedRelink)) (modalOwnedPackage settings))
+    "the owned modal75 package requires a scoped modal75 payload and an unreviewed relink"
+  require (payloadKind selected /= RecipeBankModal75MenuEngine || isJust (modalOwnedPackage settings))
+    "the menu engine payload links only an owned archive built with --cfg rb_menu_engine_owned"
   when scoped $
     require (any (not . null . segmentSteps) (planBefore plan))
       "scoped modal observation requires selected post-install physical-key segments"
@@ -930,15 +934,17 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
             , "heap_break_before" .= breakBefore, "heap_break_after" .= breakAfter ])) <> "\n")
           ioError (userError (show phase ++ " failed: " ++ message))
     let entries = manifestEntries manifest
-    emulatorTraceSites emulator $
-      [ (unAddress (installEntry entries), "uploaded-installer")
-      , (unAddress (rollbackEntry entries), "uploaded-rollback")
-      , (unAddress (statusEntry entries), "uploaded-status")
-      , (rendezvous, "rendezvous-locked")
-      , (cpu0Exit, "cpu0-window-exit")
-      , (cpu1Exit, "cpu1-window-exit")
-      , (menuMessageDrawer, menuMessageSite)
-      ] ++ [(payloadInstallerStart selected base - 0x244, d3HookSite) | payloadKind selected == RecipeBankD3] ++ fetchSites ++ declaredTraceSites
+    emulatorTraceSitesReading emulator $
+      [ (address, label, []) | (address, label) <-
+        [ (unAddress (installEntry entries), "uploaded-installer")
+        , (unAddress (rollbackEntry entries), "uploaded-rollback")
+        , (unAddress (statusEntry entries), "uploaded-status")
+        , (rendezvous, "rendezvous-locked")
+        , (cpu0Exit, "cpu0-window-exit")
+        , (cpu1Exit, "cpu1-window-exit")
+        , (menuMessageDrawer, menuMessageSite)
+        ] ++ [(payloadInstallerStart selected base - 0x244, d3HookSite) | payloadKind selected == RecipeBankD3] ++ fetchSites ]
+      ++ declaredTraceSites
     privateDirectory pushDirectory
     (statePath, installMailbox) <- case restoredHost of
       Just host -> do
@@ -1333,6 +1339,8 @@ data SegmentRunner = SegmentRunner
   , runnerReadAddress :: ReadAddress -> IO Word32
   , runnerStop :: T.Text -> String -> IO ()
   , runnerTraceLabels :: [String]
+  , runnerLrLabels :: [String]
+  , runnerSpLabels :: [String]
   , runnerHits :: IORef Int
   , runnerObservations :: IORef [Value]
   , runnerReads :: IORef [CapturedRead]
@@ -1344,34 +1352,45 @@ newSegmentRunner :: Emulator -> FilePath -> (T.Text -> IO (Maybe Value) -> IO (M
 newSegmentRunner emulator receipt timedAction readAddress stopAction plan = do
   (recorded, _) <- emulatorTraceHits emulator 0
   SegmentRunner emulator receipt timedAction readAddress stopAction (map traceSiteLabel (planTraceSites plan))
+    [traceSiteLabel site | site <- planTraceSites plan, traceSiteLr site == RecordsLr]
+    [traceSiteLabel site | site <- planTraceSites plan, traceSiteSp site == RecordsSp]
     <$> newIORef recorded <*> newIORef [] <*> newIORef [] <*> pure EnforceSnapshotPreservation
 
--- | The plan's trajectory-declared sites in the bridge's form.
-resolveTraceSites :: (String -> IO Word32) -> [TraceSite] -> IO [(Word32, String)]
+-- | The plan's trajectory-declared sites in the bridge's form, with each site's entry reads.
+resolveTraceSites :: (String -> IO Word32) -> [TraceSite] -> IO [(Word32, String, [(Word32, Int)])]
 resolveTraceSites resolve sites = do
-  resolved <- forM sites $ \site -> case traceSiteAddress site of
-    FixedAddress address -> pure (address, traceSiteLabel site)
-    RuntimeSymbol name offset -> do
-      symbolBase <- resolve name
-      let address = toInteger symbolBase + toInteger offset
-      require (address <= 0xffffffff) ("trace site overflows 32 bits: " ++ traceSiteLabel site)
-      pure (fromIntegral address, traceSiteLabel site)
-  mapM_ (\(address, label) -> require (address `mod` 4 == 0) ("trace site is not word aligned: " ++ label)) resolved
-  let addresses = map fst resolved
+  resolved <- forM sites $ \site -> do
+    address <- case traceSiteAddress site of
+      FixedAddress address -> pure address
+      RuntimeSymbol name offset -> do
+        symbolBase <- resolve name
+        let address = toInteger symbolBase + toInteger offset
+        require (address <= 0xffffffff) ("trace site overflows 32 bits: " ++ traceSiteLabel site)
+        pure (fromIntegral address)
+    pure (address, traceSiteLabel site, [(siteReadStart read_, siteReadCount read_) | read_ <- traceSiteReads site])
+  mapM_ (\(address, label, _) -> require (address `mod` 4 == 0) ("trace site is not word aligned: " ++ label)) resolved
+  let addresses = [address | (address, _, _) <- resolved]
   require (length addresses == length (nub addresses)) "trace site addresses are not distinct"
   pure resolved
 
 eightHex :: Word32 -> String
 eightHex = drop 2 . hexAddress
 
-traceSiteValues :: [(Word32, String)] -> [Value]
-traceSiteValues sites = [object ["label" .= label, "address" .= eightHex address] | (address, label) <- sites]
+traceSiteValues :: [(Word32, String, [(Word32, Int)])] -> [Value]
+traceSiteValues sites =
+  [ object (["label" .= label, "address" .= eightHex address]
+      ++ ["reads" .= [object ["address" .= eightHex start, "length" .= count] | (start, count) <- ranges] | not (null ranges)])
+  | (address, label, ranges) <- sites ]
 
-traceHitValue :: TraceHit -> Value
-traceHitValue hit = object
+-- | A declared hit; its lr only for a site in `lrLabels` and its sp only for one in `spLabels`.
+traceHitValue :: [String] -> [String] -> TraceHit -> Value
+traceHitValue lrLabels spLabels hit = object (
   [ "site" .= traceSite hit, "core" .= traceCore hit, "instructions" .= traceInstructions hit
   , "r0" .= hexAddress (traceR0 hit), "r1" .= hexAddress (traceR1 hit)
   , "r2" .= hexAddress (traceR2 hit), "r3" .= hexAddress (traceR3 hit) ]
+  ++ ["lr" .= hexAddress lr | traceSite hit `elem` lrLabels, Just lr <- [traceLr hit]]
+  ++ ["sp" .= hexAddress sp | traceSite hit `elem` spLabels, Just sp <- [traceSp hit]]
+  ++ ["memory" .= map hexBytes (traceMemory hit) | not (null (traceMemory hit))])
 
 -- | Runs each segment and returns its capture receipt.
 runSegments :: SegmentRunner -> [Segment] -> IO [Maybe Value]
@@ -1446,7 +1465,7 @@ runSegments runner = mapM $ \segment -> runnerTimed runner ("segment " <> segmen
                           , "d3_hook_r0" .= map hexAddress hookRows
                           , "classic_chrome_site_entries" .= ccHits
                           , "menu_messages" .= map hexAddress drawn
-                          , "trace_hits" .= map traceHitValue declaredHits ]
+                          , "trace_hits" .= map (traceHitValue (runnerLrLabels runner) (runnerSpLabels runner)) declaredHits ]
                           ++ [ "film_identity" .= object
                                ["expected_row" .= fromEnum expected, "expected_stored_code" .= filmStoredCode expected,
                                 "stored_code" .= actual]
@@ -1524,7 +1543,7 @@ runFlashSession settings python runtime installedMedia adjustmentNand plan e2e =
     symbolsDigest <- case symbols of
       Nothing -> pure Nothing
       Just _ -> Just <$> sha256File (takeDirectory (firmwareSource settings) </> "kernel" </> "kernel.syms")
-    emulatorTraceSites emulator ([(menuMessageDrawer, menuMessageSite), (d3HookEntry, d3HookSite)] ++ declaredTraceSites)
+    emulatorTraceSitesReading emulator ([(menuMessageDrawer, menuMessageSite, []), (d3HookEntry, d3HookSite, [])] ++ declaredTraceSites)
     let readAddress = resolveAddress
         stop phase message = do
           writePrivateBytes (e2e </> "e2e-failure.json") (BL.toStrict (encode (object
@@ -1743,7 +1762,10 @@ runMenuObserveE2E given python workspace configFile installedMedia adjustmentNan
       _ <- emulatorSnapshotRestore emulator target
       beforeFrame <- probeFrame emulator "before"
       globalsBefore <- uncurry (emulatorReadMemory emulator) menuGlobals
-      emulatorTraceSites emulator [(MenuObserve.traceSiteAddress site, MenuObserve.traceSiteLabel site) | site <- MenuObserve.observeSites config]
+      emulatorTraceSitesReading emulator
+        [ (MenuObserve.traceSiteAddress site, MenuObserve.traceSiteLabel site
+          , [(MenuObserve.siteReadStart read_, MenuObserve.siteReadCount read_) | read_ <- MenuObserve.traceSiteReads site])
+        | site <- MenuObserve.observeSites config ]
       (mark, _) <- emulatorTraceHits emulator 0
       ranges <- either (ioError . userError) pure (sequence
         [ watchRange (watchAddress (Crawl.rangeStart range)) (watchAddress (Crawl.rangeEnd range)) | range <- MenuObserve.observeWrites config ])

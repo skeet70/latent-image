@@ -94,6 +94,7 @@ import Emulation.WatchObservation
 import Emulation.Sha256 (Sha256, sha256, sha256Hex)
 import qualified FujiAF.RamPush as Ram
 import Emulation.LoaderCode (loaderSpans)
+import qualified RamPushLayout as Layout
 import Numeric (readHex)
 
 
@@ -295,6 +296,20 @@ modalBeginRequestJson (ModalRequest (ModalStock stock) scoped limit lifetime) = 
   bounds range = let (low, high) = watchRangeBounds range in [low, high]
 
 data ModalPolicy = StockBaseline | ScopedOwned75 deriving (Eq, Show)
+
+-- | Publication counts of the bank variants the lifetime guard binds.
+stockPublicationCount :: Int
+stockPublicationCount = Layout.publicationCountFor Layout.standardBankVariant
+
+scopedPublicationCounts :: [Int]
+scopedPublicationCounts = map Layout.publicationCountFor [Layout.modalScopedBankVariant, Layout.modalEngineBankVariant]
+
+guardPublicationCounts :: [Int]
+guardPublicationCounts = stockPublicationCount : scopedPublicationCounts
+
+routePublicationCounts :: Maybe scope -> [Int]
+routePublicationCounts = maybe [stockPublicationCount] (const scopedPublicationCounts)
+
 newtype ModalCount = ModalCount Word64 deriving (Eq, Show)
 newtype CapturedController = CapturedController Word32 deriving (Eq, Show)
 newtype CapturedState = CapturedState Word32 deriving (Eq, Show)
@@ -491,8 +506,8 @@ checkScopedModalRoute report = do
   unless (modalReportPolicy report == ScopedOwned75) (Left "modal route requires scoped-owned75 policy")
   unless (modalLifetimeCoverage report && modalTaskIdentityVerified report)
     (Left "scoped modal route requires completed physical and task lifetime coverage")
-  unless (maybe False ((== 224) . countValue . receiptPublicationCount) (modalLifetimeReceipt report))
-    (Left "scoped modal route requires the complete224 publication vector")
+  unless (maybe False ((`elem` scopedPublicationCounts) . fromIntegral . countValue . receiptPublicationCount) (modalLifetimeReceipt report))
+    (Left "scoped modal route requires a complete scoped publication vector")
   let counts = modalReportCounts report
       owned = toInteger (countValue (modalOwnedHandoffs counts))
       fallback = toInteger (countValue (modalFallbackHandoffs counts))
@@ -826,9 +841,9 @@ bindModalRuntimeSource manifest elfBytes = do
   unless (size > 0 && base `mod` 4 == 0 && size `mod` 4 == 0 && B.length runtime == size && end <= 0x20000000
     && sha256Hex runtimeDigest == Ram.runtimeDigest manifest)
     (Left "modal lifetime runtime must match the full manifest allocation and digest")
-  unless (length publications `elem` [223, 224] && length (nub addresses) == length addresses
+  unless (length publications `elem` guardPublicationCounts && length (nub addresses) == length addresses
     && all (\address -> address `mod` 4 == 0 && address < 0x20000000) addresses)
-    (Left "modal lifetime publication vector requires 223 or 224 unique canonical aligned addresses")
+    (Left "modal lifetime publication vector requires a guarded variant's count of unique canonical aligned addresses")
   runtimeExtent <- watchRange (watchAddress base) (watchAddress (fromInteger end))
   elf <- ELF.parseElf elfBytes
   let symbol kind name = case filter ((== name) . ELF.symbolName) (ELF.elfSymbols elf) of
@@ -894,7 +909,7 @@ littleWord word = B.pack [fromIntegral (word `div` (256 ^ index)) | index <- [0 
 lifetimeModalRequest :: ModalRequest -> ModalLifetimeSource -> Either String ModalRequest
 lifetimeModalRequest (ModalRequest stock scoped _ _) source = do
   unless (length (lifetimeContext source) == 16) (Left "modal lifetime requires complete loader context binding")
-  unless (length (lifetimePublications source) == maybe 223 (const 224) scoped)
+  unless (length (lifetimePublications source) `elem` routePublicationCounts scoped)
     (Left "modal lifetime publication count differs from stock or scoped route")
   forM_ scoped $ \(ModalLinked start bytes, _) ->
     unless (SourceImage start bytes `elem` lifetimeReadonly source)
@@ -1178,7 +1193,7 @@ modalLifetimeCoverage report = case modalLifetimeReceipt report of
   Nothing -> False
   Just receipt ->
     let count = countValue (receiptPublicationCount receipt)
-    in receiptPhase receipt == Ended && count `elem` [223,224]
+    in receiptPhase receipt == Ended && fromIntegral count `elem` guardPublicationCounts
       && countValue (receiptForwardWrites receipt) == count && countValue (receiptReverseWrites receipt) == count
       && countValue (receiptPendingStores receipt) == 0 && receiptInstallCore receipt /= Nothing
       && receiptRollbackCore receipt /= Nothing && receiptFailure receipt == Nothing
@@ -1419,14 +1434,14 @@ parseLifetimeBinding scoped contextValue value = do
         pure (PublicationRoutine begin writer)
   install <- modalField "install" value >>= routine
   rollback <- modalField "rollback" value >>= routine
-  publications <- modalField "publications" value >>= modalList (either error id (modalLimit 224)) >>= mapM (\entry -> do
+  publications <- modalField "publications" value >>= modalList (either error id (modalLimit (fromIntegral (maximum guardPublicationCounts)))) >>= mapM (\entry -> do
     modalKeys ["address", "old", "new"] entry
     address <- modalField "address" entry >>= modalWord32
     unless (address `mod` 4 == 0 && address < 0x20000000) (Left "modal lifetime publication is not aligned canonical RAM")
     PublicationBinding (watchAddress address) <$> (Ram.WordValue <$> (modalField "old" entry >>= modalWord32))
       <*> (Ram.WordValue <$> (modalField "new" entry >>= modalWord32)))
   let addresses = [address | PublicationBinding address _ _ <- publications]
-  unless (length publications == maybe 223 (const 224) scoped && length (nub addresses) == length addresses)
+  unless (length publications `elem` routePublicationCounts scoped && length (nub addresses) == length addresses)
     (Left "modal lifetime publication count or uniqueness differs from route")
   retired <- modalField "retired" value >>= modalList (either error id (modalLimit 64)) >>= mapM parseModalExtent
   checkRetiredExtents retired

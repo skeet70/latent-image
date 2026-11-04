@@ -28,7 +28,14 @@ pub struct Hit {
     pub cpsr: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code_word: Option<CodeWord>,
+    /// The site's physical reads at entry, in hex, in `TraceSites::site_reads` order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub memory: Vec<String>,
 }
+
+/// A physical range a site's hits read at entry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SiteRead { pub address: u64, pub count: usize }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct CodeWord {
@@ -950,6 +957,8 @@ pub struct TraceSites {
     /// Labels whose entry ends the current run.
     pub stop_labels: BTreeSet<String>,
     pub hits: Vec<Hit>,
+    /// Physical ranges each site's hits read at entry, by site address.
+    pub site_reads: BTreeMap<u32, Vec<SiteRead>>,
     hit_limit: Option<std::num::NonZeroUsize>,
     /// Hits record r0-r12 rather than r0-r3.
     full_registers: bool,
@@ -1723,6 +1732,11 @@ impl TraceSites {
                     lr: format!("{:#x}", register(session, *core, arm::Register::R(14))?),
                     cpsr: register(session, *core, arm::Register::Cpsr)?,
                     code_word: self.code_binding.as_ref().map(|binding| binding.sample(session, *core, address)).transpose()?.flatten(),
+                    memory: self.site_reads.get(&address).map(|reads| reads.iter().map(|read| {
+                        let mut bytes = vec![0; read.count];
+                        session.board.read_physical(read.address, &mut bytes)?;
+                        Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>())
+                    }).collect::<Result<Vec<_>, String>>()).transpose()?.unwrap_or_default(),
                 });
                 if let StackPoint::Inside { index, next } = scoped {
                     if let Some(scope) = &mut self.stack_scope {
