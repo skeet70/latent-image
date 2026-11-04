@@ -231,7 +231,7 @@ newtype ScratchBytes = ScratchBytes Word32 deriving (Eq, Show)
 
 data PublisherFrame = PublisherFrame { publisherEntry :: Pc, publisherCallerSp :: Guest } deriving (Eq, Show)
 
--- | Bytes below the dispatcher's incoming SP.
+-- | Bytes below an incoming SP.
 newtype StackDepth = StackDepth Word32 deriving (Eq, Show)
 
 -- | One task-submission tail call of the owned dispatcher: its core and stack depth at the branch.
@@ -242,8 +242,9 @@ data PieceFacts
   -- | First-stage entry and the linked record-1 image.
   = FirstStageFacts Pc LinkedBytes
   -- | Secondary entry, the core-0 bindings the critical pair consumes, the
-  -- linked record-2 image and the owned initializer's scratch.
-  | Record2LinkFacts Pc [ServiceBinding] LinkedBytes ScratchBytes
+  -- linked record-2 image, the owned initializer's scratch and the critical
+  -- pair's entry frame below its caller's SP.
+  | Record2LinkFacts Pc [ServiceBinding] LinkedBytes ScratchBytes StackDepth
   -- | The publisher's entry and the SP its caller frame provides, and its emitted stores.
   | PublisherFacts PublisherFrame [Publication]
   -- | The linked loader-B orchestration image.

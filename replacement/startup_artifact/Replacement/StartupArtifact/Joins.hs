@@ -57,8 +57,13 @@ firstStageEntry :: JoinEvidence -> Maybe Word32
 firstStageEntry = fmap fst . firstStageFacts
 
 secondaryFacts :: JoinEvidence -> Maybe (Word32, [ServiceBinding], LinkedBytes, ScratchBytes)
-secondaryFacts evidence = case [(entry, consumed, linked, scratch) | Record2LinkFacts (Pc entry) consumed linked scratch <- map pieceFacts (evidencePieces evidence)] of
+secondaryFacts evidence = case [(entry, consumed, linked, scratch) | Record2LinkFacts (Pc entry) consumed linked scratch _ <- map pieceFacts (evidencePieces evidence)] of
   [facts] -> Just facts
+  _ -> Nothing
+
+criticalEntryFrame :: JoinEvidence -> Maybe StackDepth
+criticalEntryFrame evidence = case [frame | Record2LinkFacts _ _ _ _ frame <- map pieceFacts (evidencePieces evidence)] of
+  [frame] -> Just frame
   _ -> Nothing
 
 publications :: JoinEvidence -> Maybe [Publication]
@@ -288,11 +293,11 @@ loaderStartupPublisher = Join LoaderStartupPublisher (Set.fromList [LoaderStartu
         && loaderAStackLiteral (evidenceCanonical evidence) /= Nothing
         && all (\address -> targetWord (evidenceComposed evidence) LoaderA address == targetWord (evidenceCanonical evidence) LoaderA address)
              [loaderAStackLoad, loaderAStackLoad + 4]
-  -- Every loader-A service call runs at the entry SP minus the 16-byte frame
-  -- (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs requireFrame).
   , HostCheck "publisher-caller-sp-is-orchestration-frame" $ \evidence ->
-      case (publisherFrame evidence, loaderAStackLiteral (evidenceComposed evidence)) of
-        (Just (PublisherFrame _ (Guest callerSp)), Just (_, top)) -> toInteger callerSp == toInteger top - 16
+      case (publisherFrame evidence, loaderAStackLiteral (evidenceComposed evidence), orchestrationArtifact LI.LoaderA evidence) of
+        (Just (PublisherFrame _ (Guest callerSp)), Just (_, top), Just artifact) ->
+          let LA.StackOffset low = LA.frameLow (L.linkedProof artifact)
+          in toInteger callerSp == toInteger top + toInteger low
         _ -> False
   ]
 
@@ -322,20 +327,18 @@ serviceSp Core1 = 0x400f3410
 stackFloor Core0 = 0x40062c54
 stackFloor Core1 = 0x400f2c14
 
--- | Stock task-submission wrapper frame (emulation/Emulation/CriticalPair.hs:137) and critical-pair entry frame
--- (emulation/Emulation/CriticalPair.hs:643-644).
-wrapperFrame, criticalEntryFrame :: Integer
+-- | Stock task-submission wrapper frame, which the record-2 admission pins (emulation/Emulation/CriticalPair.hs:133).
+wrapperFrame :: Integer
 wrapperFrame = 56
-criticalEntryFrame = 128
 
 dispatcherCriticalPair :: Join JoinKind
 dispatcherCriticalPair = Join DispatcherCriticalPair (Set.fromList [Record2Link, LoaderStartup])
   [at Image4 0x7235d8 0x723790, at LoaderA loaderAStart 0x40b00]
   (ObservationQualified "the owned dispatcher submits tasks through the stock wrapper 0x725dd8, which enters the owned critical pair; loader-A orchestration's admission orders its call of the initializer at 0x40430, which fills the core-0 table the pair reads, before its first dispatch (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs expected); qualified by a composed natural comparison")
   [ HostCheck "submission-depth-in-stack-window" $ \evidence ->
-      case submissions evidence of
-        Just calls@(_ : _) -> all (\(SubmitCall core (StackDepth depth)) ->
-          toInteger (serviceSp core) - toInteger depth - wrapperFrame - criticalEntryFrame >= toInteger (stackFloor core)) calls
+      case (submissions evidence, criticalEntryFrame evidence) of
+        (Just calls@(_ : _), Just (StackDepth entryFrame)) -> all (\(SubmitCall core (StackDepth depth)) ->
+          toInteger (serviceSp core) - toInteger depth - wrapperFrame - toInteger entryFrame >= toInteger (stackFloor core)) calls
         _ -> False
   ]
 

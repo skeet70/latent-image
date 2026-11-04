@@ -244,7 +244,7 @@ main = do
         {pieceFacts = FirstStageFacts (Pc entry) (LinkedBytes B.empty "")}
       link entry bindings' footprint = (piece Record2Link [CriticalPairArea] [at Record2 0x10020 0x10024, at Record2 0x10400 0x110e0]
           [wordEdit Record2 0x10020 secondaryEntry, flip' targets (at Record2 0x10400 0x10404)] footprint)
-        {pieceFacts = Record2LinkFacts (Pc entry) bindings' (LinkedBytes (B.replicate 0x40 0) "") (ScratchBytes 32)}
+        {pieceFacts = Record2LinkFacts (Pc entry) bindings' (LinkedBytes (B.replicate 0x40 0) "") (ScratchBytes 32) (StackDepth 128)}
       onRecord1 = [Footprint (at Record1 0 0x10000) RuntimePremise (Citation "synthetic")]
       rendezvousName = "first-stage-secondary-rendezvous"
   ok "the rendezvous join refuses a record-2 image whose prefix facts do not derive on the composed images"

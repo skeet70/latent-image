@@ -172,7 +172,7 @@ main = do
       replaced target address word = either (const j2Targets) id
         (maybe (Left CompositionUnchanged) (\change -> applyTargetEdits [change] j2Targets) (edit (at target address (address + 4)) (U.putWord32 word)))
       withScratch scratch' = [piece {pieceFacts = case pieceFacts piece of
-          Record2LinkFacts entry bindings' image _ -> Record2LinkFacts entry bindings' image (ScratchBytes scratch')
+          Record2LinkFacts entry bindings' image _ frame -> Record2LinkFacts entry bindings' image (ScratchBytes scratch') frame
           other -> other} | piece <- j2Pieces]
       j2Checks = [ "prefix-exit-enters-orchestration", "orchestration-entry-pushes-the-caller-frame", "published-initializer-entry"
                  , "peer-waits-before-initializer", "initializer-scratch-in-window", "first-stage-zeroes-the-completion-cell" ]
@@ -270,6 +270,10 @@ main = do
   ok "a task submission below the core-1 window fails the submission-depth check"
     (not (holdsIn "submission-depth-in-stack-window" j3Targets (withFacts (\facts -> case facts of
       LoaderStartupFacts a b calls -> LoaderStartupFacts a b (SubmitCall Core1 (StackDepth 0x800) : calls)
+      other -> other))))
+  ok "a critical-pair entry frame reaching below the boot-stack window fails the submission-depth check"
+    (not (holdsIn "submission-depth-in-stack-window" j3Targets (withFacts (\facts -> case facts of
+      Record2LinkFacts entry bindings' image scratch' _ -> Record2LinkFacts entry bindings' image scratch' (StackDepth 0x800)
       other -> other))))
   (_, j3Observed) <- stageComposition tools scratch source j3
   forM_ [Record1, Record2, LoaderA, LoaderB, Image4] $ \target ->
