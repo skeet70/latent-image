@@ -1355,8 +1355,8 @@ modalLifetimeWatchRanges (ModalRequest _ scoped _ source) = do
     , (0x00d00268,0x00d0026c), (0x00cd5f0e,0x00cd5f10), (0x00cd1ae4,0x00cd3f8c)
     , (0x00d04080,0x00d0452c), (0x00d01370,0x00d01378), (0x01467588,0x01467840)
     , (0x00bfb028,0x00bfb124)
-    , (0x54760,0x54764), (0x545a4,0x545a8), (0x5ff0c,0x6194c), (0x5beac,0x5d16c)
-    , (0xe4720,0xe4724), (0xe4564,0xe4568), (0xefecc,0xf190c), (0xebe6c,0xed12c) ]
+    , (0x54760,0x54764), (0x54768,0x5476c), (0x545a4,0x545a8), (0x5ff0c,0x6194c), (0x5beac,0x5d16c)
+    , (0xe4720,0xe4724), (0xe4728,0xe472c), (0xe4564,0xe4568), (0xefecc,0xf190c), (0xebe6c,0xed12c) ]
   publications <- mapM (\(PublicationBinding address _ _) -> range (watchAddressValue address) (watchAddressValue address + 4)) (lifetimePublications binding)
   let watched = unionWatchRanges (lifetimeResident binding : fixed ++ imageRanges ++ publications)
   unless (not (or [rangesOverlap retired span_ | retired <- lifetimeRetired binding, span_ <- watched]))
