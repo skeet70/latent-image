@@ -83,7 +83,8 @@
         }
       }
     },
-    "exclusions": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+    "exclusions": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "cp14_identity": {"$ref": "#/$defs/u32", "description": "The value MRC p14, 0, Rt, c2, c0, 0 reads. Only a privileged case, whose registers.cpsr is SVC 0x13 or SYS 0x1f with only NZCVQ, GE, I and F besides the mode, may name it; a user case's CPSR is 0x10 with NZCV only."}
   },
   "$defs": {
     "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"},
