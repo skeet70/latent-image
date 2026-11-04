@@ -6,6 +6,7 @@ import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
+import Data.Aeson.Types (parseMaybe)
 import Data.Bits (shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
@@ -15,6 +16,7 @@ import Data.List (zip5)
 import Data.Maybe (fromMaybe)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
+import qualified Data.Vector as V
 import Data.Word (Word32, Word8)
 import Emulation.PropertyPairCheck
 import Emulation.PropertyPairPlan
@@ -124,8 +126,12 @@ crawlRoute :: RouteName
 crawlRoute = RouteName "crawl-trial-00001"
 
 routesBytes :: B.ByteString
-routesBytes = BL.toStrict (encodeRouteFile (RouteFile (replicate 64 '0') "test" []
-  (phaseRoutes ++ [Route crawlRoute (KeyRoute [KeyOk] (CrawlTrial 1 [SetterEffect 5, CommitEffect]))])))
+routesBytes = routesWith [SetterEffect 5, CommitEffect]
+
+-- | A route file whose crawl route records the given effects.
+routesWith :: [CrawlEffect] -> B.ByteString
+routesWith effects = BL.toStrict (encodeRouteFile (RouteFile (replicate 64 '0') "test" CrawlEffectsSource []
+  (phaseRoutes ++ [Route crawlRoute (KeyRoute [KeyOk] (CrawlTrial 1 effects))])))
 
 bindings :: Bindings
 bindings = Bindings sourceDat ownedDat routesBytes contractBytes linked symbols images observer
@@ -181,7 +187,10 @@ observation :: Role -> Step -> Observation
 observation role step = chain role [step]
 
 chain :: Role -> [Step] -> Observation
-chain role chained = Observation receipt spec reset hits steps session
+chain = chainWith routesBytes
+
+chainWith :: B.ByteString -> Role -> [Step] -> Observation
+chainWith routes role chained = Observation receipt spec reset hits steps session
  where
   plan = either error id (derivePlan (PlanInputs role (either error id (decodeContract contractBytes)) images linked Nothing))
   spec = BL.toStrict (A.encode (specValue plan))
@@ -205,7 +214,7 @@ chain role chained = Observation receipt spec reset hits steps session
   receipt = BL.toStrict (A.encode (object
     [ "role" .= roleWire role
     , "inputs" .= object
-        [ "dat" .= same (if role == RetainedRole then sourceDat else ownedDat), "routes" .= digest routesBytes
+        [ "dat" .= same (if role == RetainedRole then sourceDat else ownedDat), "routes" .= digest routes
         , "contract" .= digest contractBytes, "linked" .= digest linked, "symbols" .= same symbols, "observer" .= same observer
         , "run" .= digest "run", "boot_rom" .= digest "rom", "adjustment_nand" .= digest "nand", "bridge" .= digest "bridge"
         , "analysis" .= object [K.fromText (imageNameWire name) .= digestOf bytes | (name, bytes) <- M.toList images]
@@ -253,10 +262,85 @@ crawlResult :: Role -> Step -> Maybe RouteResult
 crawlResult role step = either (const Nothing) (lookup crawlRoute . map (\result -> (resultRoute result, result)) . qualifiedRoutes) (qualified role step)
 
 compared :: Step -> Step -> Either Refusal ()
-compared retained owned = do
-  left <- qualified RetainedRole retained
-  right <- qualified OwnedRole owned
+compared retained owned = comparedChains [retained] [owned]
+
+comparedChains :: [Step] -> [Step] -> Either Refusal ()
+comparedChains retained owned = do
+  left <- qualify bindings RetainedRole (chain RetainedRole retained)
+  right <- qualify bindings OwnedRole (chain OwnedRole owned)
   () <$ compareRoles left right
+
+-- | A crawl route's comparison output from its ordered setter calls alone.
+comparedSetters :: [Call] -> [Call] -> Either Refusal Value
+comparedSetters retained owned = comparisonValue left right <$> compareRoles left right
+ where
+  left = qualifiedWith RetainedRole retained
+  right = qualifiedWith OwnedRole owned
+  qualifiedWith role setters = Qualified role [] 0 1 [RouteResult crawlRoute CrawlClass [] setters [] [] [] [] [] []] []
+
+getterKey5, getterKey6 :: GetterKey
+getterKey5 = GetterKey (getterCall + 4) [5, 0, 0, 0]
+getterKey6 = GetterKey (getterCall + 4) [6, 0, 0, 0]
+
+-- | A getter call of the property returning the value.
+getterPair :: Word32 -> Word32 -> [Value]
+getterPair property value = [hit GetterEntry getterEntry [property] stackPointer (getterCall + 4), hit GetterReturn (getterCall + 4) [value] stackPointer 0]
+
+-- | An empty child step of a one-step chain, with the given hits.
+childWith :: [Value] -> Step
+childWith hits = retainedStep { stepHits = hits, stepRows = [] }
+
+-- | The retained crawl route's reported effect block runs, as (position, first effect, repeats), when
+-- its route file records `recorded` and its step's hits end with `extra` after the standard setter,
+-- commit and getter calls.
+effectBlocksWith :: [CrawlEffect] -> [Value] -> Either Refusal (Maybe [(Int, Int, Int)])
+effectBlocksWith recorded extra = do
+  let routes = routesWith recorded
+  result <- qualify bindings { bindRoutes = routes } RetainedRole (chainWith routes RetainedRole [retainedStep { stepHits = stepHits retainedStep ++ extra }])
+  pure $ case qualifiedValue result of
+    Object top | Just (Array summaries) <- KM.lookup "per_route" top ->
+      case [runs | Object summary <- V.toList summaries, KM.lookup "route" summary == Just (A.toJSON crawlRoute), Just runs <- [KM.lookup "effect_block_runs" summary]] of
+        [runs] -> parseMaybe (A.withArray "runs" (mapM (A.withObject "run" (\run -> (,,) <$> run A..: "position" <*> run A..: "first_effect" <*> run A..: "repeats")) . V.toList)) runs
+        _ -> Nothing
+    _ -> Nothing
+
+-- | A setter entry for the property and its return.
+setterPair :: Word32 -> [Value]
+setterPair property = [hit SetterEntry setterEntry [property, 0] stackPointer (setterCall + 4), hit SetterReturn (setterCall + 4) [0] stackPointer 0]
+
+blockHits :: [Value]
+blockHits = concatMap setterPair timeDrivenSequence
+
+-- | The retained and owned setter block runs of the first compared route, as (position, first call, repeats).
+blockRunsOf :: Value -> Maybe ([(Int, Int, Int)], [(Int, Int, Int)])
+blockRunsOf comparison = case comparison of
+  Object top | Just (Array routes) <- KM.lookup "per_route" top, Just (Object route) <- routes V.!? 0
+             , Just (Object runs) <- KM.lookup "setter_block_runs" route ->
+    (,) <$> (KM.lookup "retained" runs >>= decodeRuns) <*> (KM.lookup "owned" runs >>= decodeRuns)
+  _ -> Nothing
+ where
+  decodeRuns = parseMaybe (A.withArray "runs" (mapM (A.withObject "run" (\run -> (,,) <$> run A..: "position" <*> run A..: "first_call" <*> run A..: "repeats")) . V.toList))
+
+blockCall :: Word32 -> Word32 -> Call
+blockCall value property = Call [property, value, 0, 1] 0x630a04 (Just 1)
+
+timeBlock, changedBlock :: [Call]
+timeBlock = map (blockCall 0) timeDrivenSequence
+changedBlock = map (blockCall 1) timeDrivenSequence
+
+otherSetter :: Call
+otherSetter = Call [5, 1, 0, 0] (setterCall + 4) (Just 0)
+
+retainedSidecars :: Role -> T.Text -> RetainedObservation
+retainedSidecars role status = RetainedObservation receipt (obsSteps base) (obsHits base)
+ where
+  base = observation role retainedStep
+  receipt = case A.eitherDecodeStrict' (obsReceipt base) of
+    Right (Object fields) -> BL.toStrict (A.encode (Object (KM.insert "outcome" (object ["status" .= status]) fields)))
+    _ -> error "test receipt is not an object"
+
+refusedAs :: Either Refusal a -> Refusal -> Bool
+refusedAs result expected = either (== expected) (const False) result
 
 main :: IO ()
 main = do
@@ -273,8 +357,9 @@ main = do
         , CrawlEdge 22 [KeyLeft] [SetterEffect 0x1c9, SetterEffect 0x278]
         ]
       (selected, playbackTrials, timeDrivenTrials) = selectCrawlRoutes edges
-      file routes = RouteFile (replicate 64 '0') "test" [Exclusion "reason" playbackTrials] routes
-      roundTrip routes = decodeRouteFile (BL.toStrict (encodeRouteFile (file routes)))
+      file source routes = RouteFile (replicate 64 '0') "test" source [Exclusion "reason" playbackTrials] routes
+      roundTrip source routes = decodeRouteFile (BL.toStrict (encodeRouteFile (file source routes)))
+      retainedSource = RetainedObservationSource (sha256 "receipt") (sha256 "steps") (sha256 "hits")
       valid = phaseRoutes ++ selected ++ declaredRoutes
       ownedWith hits = ownedStep { stepHits = hits }
       wide = 0x9c281c
@@ -290,13 +375,30 @@ main = do
     , check "an edge whose only effects are the time-driven block is left out and listed, one with another setter is kept" (timeDrivenTrials == [21])
     , check "an edge without a property effect is not a route" (all ((/= [KeyOk]) . routeKeys) selected)
     , check "a crawl route keeps its edge's effects" (map routeBody (take 1 selected) == [KeyRoute [KeyOk, KeyOk] (CrawlTrial 7 [SetterEffect 4, CommitEffect])])
-    , check "route files round-trip" (roundTrip valid == Right (file valid))
-    , check "a route file without the attach phases first is refused" (isLeft (roundTrip (selected ++ phaseRoutes)))
+    , check "route files round-trip with either effects source"
+        (and [roundTrip source valid == Right (file source valid) | source <- [CrawlEffectsSource, retainedSource]])
+    , check "a route file without the attach phases first is refused" (isLeft (roundTrip CrawlEffectsSource (selected ++ phaseRoutes)))
     , check "a key route needs a key" (isLeft (decodeRouteFile (C.pack (concat
-        [ "{\"schema\":1,\"crawl_graph_sha256\":\"0\",\"selection\":\"t\",\"exclusions\":[],\"routes\":["
+        [ "{\"schema\":1,\"crawl_graph_sha256\":\"0\",\"selection\":\"t\",\"effects_source\":{\"kind\":\"crawl\"},\"exclusions\":[],\"routes\":["
         , "{\"name\":\"boot\",\"phase\":\"first-start\"},{\"name\":\"start-menu\",\"phase\":\"live-view\"},"
         , "{\"name\":\"attach\",\"phase\":\"attached\"},{\"name\":\"x\",\"keys\":[],\"crawl_trial\":1,\"effects\":[{\"kind\":\"commit\"}]}]}" ]))))
-    , check "repeated route names are refused" (isLeft (roundTrip (phaseRoutes ++ selected ++ take 1 selected)))
+    , check "repeated route names are refused" (isLeft (roundTrip CrawlEffectsSource (phaseRoutes ++ selected ++ take 1 selected)))
+    , check "an effects source with a key its kind does not have is refused"
+        (isLeft (A.eitherDecodeStrict' @EffectsSource (C.pack "{\"kind\":\"crawl\",\"receipt_sha256\":\"00\"}")))
+    , check "a crawl route without effects is refused from the crawl and admitted from a retained observation"
+        (let silent = phaseRoutes ++ [Route crawlRoute (KeyRoute [KeyOk] (CrawlTrial 1 []))]
+         in isLeft (roundTrip CrawlEffectsSource silent) && roundTrip retainedSource silent == Right (file retainedSource silent))
+
+    , check "a retained observation's last step supplies each crawl route's effects"
+        (fmap (map routeBody . snd) (retainedEffects (retainedSidecars RetainedRole "completed") [Route crawlRoute (KeyRoute [KeyOk] (CrawlTrial 1 [CommitEffect]))])
+          == Right [KeyRoute [KeyOk] (CrawlTrial 1 [SetterEffect 5, CommitEffect])])
+    , check "effects are refused from an owned or uncompleted observation, or one without a route's last step"
+        (let routes = [Route crawlRoute (KeyRoute [KeyOk] (CrawlTrial 1 [CommitEffect]))]
+             refused sidecars chosen = either Just (const Nothing) (retainedEffects sidecars chosen)
+         in refused (retainedSidecars OwnedRole "completed") routes == Just (ObservationNotRetained OwnedRole)
+              && refused (retainedSidecars RetainedRole "refused") routes == Just (ObservationNotCompleted StatusRefused)
+              && refused (retainedSidecars RetainedRole "completed") [Route crawlRoute (KeyRoute [KeyDown] (CrawlTrial 1 [CommitEffect]))]
+                   == Just (LastStepMissing crawlRoute))
 
     , check "the owned observation qualifies with its store classed as an accessor write and its calls returned"
         (fmap (\result -> (map effectWriter (resultWrites result), map callResult (resultSetters result), map callResult (resultGetters result))) (crawlResult OwnedRole ownedStep)
@@ -370,21 +472,47 @@ main = do
               _ -> False)
     , check "a crawl route whose last step lacks its recorded effects is refused"
         (refusal OwnedRole (ownedWith (filter (/= commit) (stepHits ownedStep))) == Just (RouteEffectsDiffer crawlRoute))
+    , check "recorded and observed effects that differ only in a time-driven block's repeat count qualify, with the observed count"
+        (effectBlocksWith ([SetterEffect 5, CommitEffect] ++ map SetterEffect timeDrivenSequence) (blockHits ++ blockHits ++ blockHits) == Right (Just [(2, 2, 3)]))
+    , check "recorded and observed effects that differ outside the block are refused"
+        (effectBlocksWith ([SetterEffect 5, CommitEffect] ++ map SetterEffect timeDrivenSequence) (blockHits ++ setterPair 6 ++ blockHits)
+           == Left (RouteEffectsDiffer crawlRoute)
+          && effectBlocksWith ([SetterEffect 5, CommitEffect] ++ map SetterEffect timeDrivenSequence) (setterPair 6 ++ blockHits)
+               == Left (RouteEffectsDiffer crawlRoute))
 
-    , check "getter calls compare per (caller, arguments) as result sequences with repeats collapsed"
+    , check "a getter key's results compare over the whole observation as sequences with repeats collapsed"
         (compared retainedStep (ownedWith (stepHits ownedStep ++ [getterIn, getterOut])) == Right ()
-          && compared retainedStep (ownedWith (take 5 (stepHits ownedStep) ++ [hit GetterReturn (getterCall + 4) [0xac] stackPointer 0])) == Left (GetterResultsDiffer crawlRoute))
+          && compared retainedStep (ownedWith (take 5 (stepHits ownedStep) ++ [hit GetterReturn (getterCall + 4) [0xac] stackPointer 0])) == Left (GetterSequenceDiffers getterKey5 0))
     , check "a getter result returned out of order is a difference even when the result set is equal"
-        (let returning value = hit GetterReturn (getterCall + 4) [value] stackPointer 0
-         in compared (retainedStep { stepHits = stepHits retainedStep ++ [getterIn, returning 0xac] })
-                     (ownedWith (stepHits ownedStep ++ [getterIn, returning 0xac, getterIn, returning 0xab])) == Left (GetterResultsDiffer crawlRoute)
-            && compared (retainedStep { stepHits = stepHits retainedStep ++ [getterIn, returning 0xac] })
-                        (ownedWith (stepHits ownedStep ++ [getterIn, returning 0xac, getterIn, returning 0xac])) == Right ())
-    , check "getter calls under different arguments interleave freely"
-        (let other = hit GetterEntry getterEntry [6] stackPointer (getterCall + 4)
-             returning value = hit GetterReturn (getterCall + 4) [value] stackPointer 0
-         in compared (retainedStep { stepHits = stepHits retainedStep ++ [other, returning 0xcd] })
-                     (ownedWith (stepHits ownedStep ++ [other, returning 0xcd, getterIn, getterOut])) == Right ())
+        (compared (retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xac })
+                  (ownedWith (stepHits ownedStep ++ getterPair 5 0xac ++ getterPair 5 0xab)) == Left (GetterSequenceDiffers getterKey5 2)
+          && compared (retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xac })
+                      (ownedWith (stepHits ownedStep ++ getterPair 5 0xac ++ getterPair 5 0xac)) == Right ())
+    , check "a getter key's calls that slip across a step boundary compare equal"
+        (comparedChains [retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xac }, childWith []]
+                        [ownedStep, childWith (getterPair 5 0xac)] == Right ())
+    , check "a stale value inside a run of a getter key's results is refused"
+        (compared (retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xac ++ getterPair 5 0xac ++ getterPair 5 0xac })
+                  (ownedWith (stepHits ownedStep ++ getterPair 5 0xac ++ getterPair 5 0xab ++ getterPair 5 0xac)) == Left (GetterSequenceDiffers getterKey5 2))
+    , check "a getter key present in only one role is refused"
+        (compared retainedStep (ownedWith (stepHits ownedStep ++ getterPair 6 0xcd)) == Left (GetterSequenceDiffers getterKey6 0))
+    , check "getter calls under different keys interleave freely"
+        (compared (retainedStep { stepHits = stepHits retainedStep ++ getterPair 6 0xcd ++ getterPair 5 0xac })
+                  (ownedWith (stepHits ownedStep ++ getterPair 5 0xac ++ getterPair 6 0xcd)) == Right ())
+    , check "the stale getter control sets a call inside the first run to the next distinct value and is refused"
+        (let owned = observation OwnedRole (ownedWith (stepHits ownedStep ++ getterPair 5 0xab ++ getterPair 5 0xab ++ getterPair 5 0xac))
+             retained = observation RetainedRole retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xab ++ getterPair 5 0xab ++ getterPair 5 0xac }
+         in case runControl bindings OwnedRole owned retained StaleGetterResult of
+              Right result -> controlStale result == Just (StaleGetter getterKey5 1 7 0xab 0xac)
+                && controlObserved result == Left (GetterSequenceDiffers getterKey5 2)
+              Left _ -> False)
+    , check "the stale getter control sets a call inside a later run to the previous distinct value and is refused"
+        (let owned = observation OwnedRole (ownedWith (stepHits ownedStep ++ getterPair 5 0xac ++ getterPair 5 0xac ++ getterPair 5 0xac))
+             retained = observation RetainedRole retainedStep { stepHits = stepHits retainedStep ++ getterPair 5 0xac ++ getterPair 5 0xac ++ getterPair 5 0xac }
+         in case runControl bindings OwnedRole owned retained StaleGetterResult of
+              Right result -> controlStale result == Just (StaleGetter getterKey5 2 9 0xac 0xab)
+                && controlObserved result == Left (GetterSequenceDiffers getterKey5 2)
+              Left _ -> False)
     , check "a write that leaves its preimage is not compared"
         (compared retainedStep ownedStep { stepRows = stepRows ownedStep ++ [cpuWrite 0x96cc80 1 (Just 0) [0] retiredSetter] } == Right ())
     , check "settle status differs only through an exhausted budget; the menu always counts"
@@ -395,6 +523,21 @@ main = do
           either Just (const Nothing) (qualify bindings RetainedRole (chain RetainedRole [retainedStep, child])) == Nothing
             && either Just (const Nothing) (qualify bindings RetainedRole (chain RetainedRole [retainedStep, child { stepBefore = Just zeroRegions }]))
                  == Just (RegionContinuity (StepInterval 2)))
+
+    , check "setter sequences that differ only in a time-driven block's repeat count compare equal and report the counts"
+        (fmap blockRunsOf (comparedSetters (otherSetter : concat (replicate 3 timeBlock) ++ [otherSetter]) (otherSetter : timeBlock ++ [otherSetter]))
+          == Right (Just ([(1, 1, 3)], [(1, 1, 1)])))
+    , check "a block with a different value is not collapsed into the run before it"
+        (fmap blockRunsOf (comparedSetters (timeBlock ++ changedBlock) (timeBlock ++ changedBlock)) == Right (Just ([(0, 0, 1), (1, 4, 1)], [(0, 0, 1), (1, 4, 1)]))
+          && comparedSetters (timeBlock ++ changedBlock) (timeBlock ++ timeBlock) `refusedAs` SetterSequenceDiffers crawlRoute
+          && comparedSetters (timeBlock ++ changedBlock) timeBlock `refusedAs` SetterSequenceDiffers crawlRoute)
+    , check "a repeat with another result or another caller is not collapsed into the run before it"
+        (comparedSetters (timeBlock ++ map (\c -> c { callResult = Just 0 }) timeBlock) (timeBlock ++ timeBlock) `refusedAs` SetterSequenceDiffers crawlRoute
+          && comparedSetters (timeBlock ++ map (\c -> c { callReturn = 0x630a08 }) timeBlock) (timeBlock ++ timeBlock) `refusedAs` SetterSequenceDiffers crawlRoute)
+    , check "a call between two blocks keeps them as separate runs"
+        (fmap blockRunsOf (comparedSetters (timeBlock ++ [otherSetter] ++ timeBlock) (timeBlock ++ [otherSetter] ++ timeBlock))
+          == Right (Just ([(0, 0, 1), (2, 5, 1)], [(0, 0, 1), (2, 5, 1)]))
+          && comparedSetters (timeBlock ++ [otherSetter] ++ timeBlock) (timeBlock ++ timeBlock ++ [otherSetter]) `refusedAs` SetterSequenceDiffers crawlRoute)
     ]
   unless (and results) exitFailure
   putStrLn ("property-pair-tests: " ++ show (length results) ++ " passed")
