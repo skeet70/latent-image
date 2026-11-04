@@ -346,6 +346,8 @@ enum Request {
     SnapshotKey { name: SnapshotName, key: PressName },
     /// A `snapshot-key` press from the current guest.
     DisplayKey { key: PressName },
+    /// Runs the guest for `instructions` with no input.
+    Idle { instructions: u64 },
     SnapshotDrop { name: SnapshotName },
     Finish,
 }
@@ -385,6 +387,7 @@ enum RequestKind {
     SnapshotRestore,
     SnapshotKey,
     DisplayKey,
+    Idle,
     SnapshotDrop,
     Finish,
 }
@@ -424,6 +427,7 @@ impl Request {
             Request::SnapshotRestore { .. } => RequestKind::SnapshotRestore,
             Request::SnapshotKey { .. } => RequestKind::SnapshotKey,
             Request::DisplayKey { .. } => RequestKind::DisplayKey,
+            Request::Idle { .. } => RequestKind::Idle,
             Request::SnapshotDrop { .. } => RequestKind::SnapshotDrop,
             Request::Finish => RequestKind::Finish,
         }
@@ -1287,6 +1291,14 @@ impl Server {
                 response
             }
             Request::DisplayKey { key } => self.display_press(&key, None)?,
+            Request::Idle { instructions } => {
+                if !(1..=MAX_SETTLE).contains(&instructions) {
+                    return Err(format!("idle instructions must be 1..{MAX_SETTLE}"));
+                }
+                self.bridge.advance(instructions)?;
+                self.bridge.machine.require_running()?;
+                json!({"instructions": self.bridge.machine.instructions()})
+            }
             Request::SnapshotDrop { name } => {
                 self.snapshots.remove(&name).ok_or_else(|| format!("snapshot {} is not held", name.0))?;
                 json!({"name": name, "held": self.snapshots.len()})
