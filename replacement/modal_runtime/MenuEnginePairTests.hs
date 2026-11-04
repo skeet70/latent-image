@@ -108,9 +108,14 @@ main = do
               [unloaded (segment [] [entry 0 0x1000 0 (stage 0xe 3 0x1d), fallback 0, entry 0 0x2000 0 (stage 0xf 3 0x1d), fallback 0])]) == Right 2)
         , ("a guard-trap entry fails the owned role after unload too",
             isLeft (checkRole tree OwnedRole [unloaded (segment [] [Hit GuardTrap 0 (0, 0, 0, 0) (Just 0) Nothing []])]))
-        , ("the segments after ram-unload are the unloaded ones",
-            unloadedPhases ["emulator-start", "ram-push", "segment picker-route", "segment owned-picker-keys", "ram-unload", "segment unloaded-picker"]
-              == ["unloaded-picker"])
+        , ("a segment's residency is that of its position, so a phase repeated after ram-unload is unloaded there",
+            let segments = segmentResidencies ["ram-push", "segment keys", "segment check", "ram-unload", "segment keys"]
+             in map (\(index, phase) -> residencyAt segments index phase) [(0, "keys"), (1, "check"), (2, "keys")]
+                  == [Right EngineResident, Right EngineResident, Right EngineUnloaded])
+        , ("an observation whose phase is not the run's segment at its position refuses",
+            isLeft (residencyAt (segmentResidencies ["segment keys", "ram-unload", "segment check"]) 1 "keys"))
+        , ("an observation past the run's segments refuses",
+            isLeft (residencyAt (segmentResidencies ["segment keys"]) 1 "keys"))
         , ("an entry to the adapter's guard trap fails the role",
             isLeft (checkRole tree OwnedRole [segment [] [Hit GuardTrap 0 (0, 0, 0, 0) (Just 0) Nothing []]]))
         , ("a stage entry without its block read refuses",

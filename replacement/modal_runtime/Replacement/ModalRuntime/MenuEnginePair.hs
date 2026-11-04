@@ -11,7 +11,9 @@ module Replacement.ModalRuntime.MenuEnginePair
   , Observation (..)
   , Residency (..)
   , parseObservation
-  , unloadedPhases
+  , observationPhaseOf
+  , segmentResidencies
+  , residencyAt
   , RoleSummary (..)
   , checkRole
   , comparePair
@@ -98,12 +100,24 @@ hexWord text = case text of
   '0' : 'x' : digits | [(value, "")] <- readHex digits -> pure value
   _ -> fail ("not a hex word: " ++ text)
 
--- | Segment phases the receipt's `e2e-result.json` lists after its `ram-unload` phase.
-unloadedPhases :: [T.Text] -> [T.Text]
-unloadedPhases names = [phase | name <- drop 1 (dropWhile (/= "ram-unload") names), Just phase <- [T.stripPrefix "segment " name]]
+-- | The segments of the receipt's `e2e-result.json` phases in run order, each with its residency:
+-- resident before the `ram-unload` phase, unloaded after it.
+segmentResidencies :: [T.Text] -> [(T.Text, Residency)]
+segmentResidencies names =
+  [(phase, EngineResident) | phase <- segments before] ++ [(phase, EngineUnloaded) | phase <- segments (drop 1 after)]
+ where
+  (before, after) = break (== "ram-unload") names
+  segments list = [phase | name <- list, Just phase <- [T.stripPrefix "segment " name]]
 
-parseObservation :: [T.Text] -> J.Value -> J.Parser Observation
-parseObservation unloaded = J.withObject "e2e observation" $ \fields -> do
+-- | The `index`th observation file (0-based) is the `index`th segment; its phase must match.
+residencyAt :: [(T.Text, Residency)] -> Int -> T.Text -> Either String Residency
+residencyAt segments index phase = case drop index segments of
+  (listed, residency) : _ | listed == phase -> Right residency
+  (listed, _) : _ -> Left ("observation " ++ show index ++ " has phase " ++ T.unpack phase ++ ", the run's segment " ++ show index ++ " is " ++ T.unpack listed)
+  [] -> Left ("observation " ++ show index ++ " has no segment phase in the run")
+
+parseObservation :: Residency -> J.Value -> J.Parser Observation
+parseObservation residency = J.withObject "e2e observation" $ \fields -> do
   phase <- fields .: "phase"
   segmentReads <- fields .: "reads" >>= mapM (J.withObject "read" $ \read_ -> (,) <$> read_ .: "label" <*> (hexBytes =<< read_ .: "bytes"))
   hits <- fields .: "trace_hits" >>= mapM (J.withObject "trace hit" $ \hit -> do
@@ -113,7 +127,11 @@ parseObservation unloaded = J.withObject "e2e observation" $ \fields -> do
     sp <- traverse hexWord =<< hit .:? "sp"
     memory <- maybe (pure []) (mapM hexBytes) =<< hit .:? "memory"
     Hit <$> (parseSite <$> hit .: "site") <*> hit .: "core" <*> pure registers <*> pure lr <*> pure sp <*> pure memory)
-  pure (Observation phase (if phase `elem` unloaded then EngineUnloaded else EngineResident) segmentReads hits)
+  pure (Observation phase residency segmentReads hits)
+
+-- | An observation's phase, read before its residency is known.
+observationPhaseOf :: J.Value -> J.Parser T.Text
+observationPhaseOf = J.withObject "e2e observation" (.: "phase")
 
 -- | Task 1's stack, `[0x00a4c200, 0x00a4ce00)` (E-RECOVERY-MAINUI-CREATE-150).
 taskStackStart, taskStackBytes :: Word32
