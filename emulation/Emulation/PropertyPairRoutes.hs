@@ -9,14 +9,19 @@ module Emulation.PropertyPairRoutes
   , RouteBody (..)
   , Route (..)
   , RouteFile (..)
+  , EffectsSource (..)
   , Exclusion (..)
   , decodeRouteFile
   , encodeRouteFile
+  , RetainedObservation (..)
+  , EffectsRefusal (..)
+  , retainedEffects
   , CrawlEffect (..)
   , CrawlEdge (..)
   , decodeCrawlEdges
   , selectCrawlRoutes
   , playbackExclusion
+  , timeDrivenSequence
   , timeDrivenBlock
   , timeDrivenExclusion
   , declaredRoutes
@@ -31,12 +36,15 @@ import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.Aeson.Types (Parser, parseEither)
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import Data.List (sort, sortOn)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.Word (Word32)
+import Emulation.PropertyPairPlan (Role (..), SiteLabel (..), parseRole, parseSiteLabel)
+import Emulation.Sha256 (Sha256, parseSha256Hex, sha256, sha256Hex)
 import EmulatorUsb (CrawlKey (..))
 import Numeric (readHex, showHex)
 import Text.Printf (printf)
@@ -94,9 +102,40 @@ routeKeys route = case routeBody route of
 data RouteFile = RouteFile
   { routeCrawlGraph :: String
   , routeSelection :: T.Text
+  , routeEffectsSource :: EffectsSource
   , routeExclusions :: [Exclusion]
   , routeList :: [Route]
   } deriving (Eq, Show)
+
+-- | Where the crawl routes' effects come from: the crawl edges, or the last steps of a retained
+-- observation, bound by its receipt, steps and hits digests.
+data EffectsSource
+  = CrawlEffectsSource
+  | RetainedObservationSource { sourceReceipt :: Sha256, sourceSteps :: Sha256, sourceHits :: Sha256 }
+  deriving Eq
+
+instance Show EffectsSource where
+  show source = case source of
+    CrawlEffectsSource -> "CrawlEffectsSource"
+    RetainedObservationSource receipt steps hits -> unwords ["RetainedObservationSource", sha256Hex receipt, sha256Hex steps, sha256Hex hits]
+
+instance FromJSON EffectsSource where
+  parseJSON = withObject "effects source" $ \fields -> do
+    kind <- fields .: "kind"
+    case kind :: T.Text of
+      "crawl" -> exactKeys ["kind"] fields >> pure CrawlEffectsSource
+      "retained-observation" -> do
+        exactKeys ["kind", "receipt_sha256", "steps_sha256", "hits_sha256"] fields
+        let digest name = fields .: name >>= either fail pure . parseSha256Hex
+        RetainedObservationSource <$> digest "receipt_sha256" <*> digest "steps_sha256" <*> digest "hits_sha256"
+      _ -> fail "an effects source is crawl or retained-observation"
+
+instance ToJSON EffectsSource where
+  toJSON source = case source of
+    CrawlEffectsSource -> object ["kind" .= ("crawl" :: T.Text)]
+    RetainedObservationSource receipt steps hits -> object
+      [ "kind" .= ("retained-observation" :: T.Text), "receipt_sha256" .= sha256Hex receipt
+      , "steps_sha256" .= sha256Hex steps, "hits_sha256" .= sha256Hex hits ]
 
 -- | Crawl edges with a property effect the selection leaves out, and why.
 data Exclusion = Exclusion { exclusionReason :: T.Text, exclusionTrials :: [Int] } deriving (Eq, Show)
@@ -126,9 +165,7 @@ instance FromJSON Route where
         origin <- case (trial, action) of
           (Just number, Nothing) -> do
             exactKeys ["name", "keys", "crawl_trial", "effects"] fields
-            effects <- fields .: "effects"
-            when (null effects) (fail "a crawl route has at least one effect")
-            pure (CrawlTrial number effects)
+            CrawlTrial number <$> fields .: "effects"
           (Nothing, Just text) -> do
             exactKeys ["name", "keys", "declared"] fields
             maybe (fail "unknown declared action") (pure . Declared)
@@ -144,15 +181,18 @@ instance ToJSON Route where
 
 instance FromJSON RouteFile where
   parseJSON = withObject "route file" $ \fields -> do
-    exactKeys ["schema", "crawl_graph_sha256", "selection", "exclusions", "routes"] fields
+    exactKeys ["schema", "crawl_graph_sha256", "selection", "effects_source", "exclusions", "routes"] fields
     schema <- fields .: "schema"
     unless (schema == (1 :: Int)) (fail "unsupported route file schema")
-    file <- RouteFile <$> fields .: "crawl_graph_sha256" <*> fields .: "selection" <*> fields .: "exclusions" <*> fields .: "routes"
+    file <- RouteFile <$> fields .: "crawl_graph_sha256" <*> fields .: "selection" <*> fields .: "effects_source"
+      <*> fields .: "exclusions" <*> fields .: "routes"
     let names = map routeName (routeList file)
         phases = [phase | Route _ (PhaseRoute phase) <- routeList file]
     unless (S.size (S.fromList names) == length names) (fail "route names repeat")
     unless (phases == [minBound .. maxBound] && take 3 (routeList file) == [route | route@(Route _ (PhaseRoute _)) <- routeList file])
       (fail "the route file starts with exactly the three attach phases in order")
+    when (routeEffectsSource file == CrawlEffectsSource && or [null effects | Route _ (KeyRoute _ (CrawlTrial _ effects)) <- routeList file])
+      (fail "a crawl route with crawl effects has at least one effect")
     pure file
 
 decodeRouteFile :: B.ByteString -> Either String RouteFile
@@ -163,9 +203,61 @@ encodeRouteFile file = A.encode (object
   [ "schema" .= (1 :: Int)
   , "crawl_graph_sha256" .= routeCrawlGraph file
   , "selection" .= routeSelection file
+  , "effects_source" .= routeEffectsSource file
   , "exclusions" .= routeExclusions file
   , "routes" .= routeList file
   ]) <> "\n"
+
+-- | The receipt, steps and hits sidecars of an observation directory.
+data RetainedObservation = RetainedObservation { retainedReceipt :: B.ByteString, retainedSteps :: B.ByteString, retainedHits :: B.ByteString }
+
+data EffectsRefusal
+  = ObservationNotRetained Role
+  | ObservationNotCompleted T.Text
+  | LastStepMissing RouteName
+  | ObservationShape String
+  deriving (Eq, Show)
+
+-- | Replaces each crawl route's effects with the setter-entry r0 values and commit entries, in hit
+-- order, of the step that pressed the route's keys.
+retainedEffects :: RetainedObservation -> [Route] -> Either EffectsRefusal (EffectsSource, [Route])
+retainedEffects observation routes = do
+  (roleText, status) <- shape (A.eitherDecodeStrict' (retainedReceipt observation) >>= parseEither receiptFields)
+  role <- shape (parseRole roleText)
+  unless (role == RetainedRole) (Left (ObservationNotRetained role))
+  unless (status == "completed") (Left (ObservationNotCompleted status))
+  steps <- shape (A.eitherDecodeStrict' (retainedSteps observation) >>= parseEither (mapM stepFields))
+  let ranges = M.fromList steps
+      hits = M.fromList (zip [0 :: Int ..] (filter (not . B.null) (C.lines (retainedHits observation))))
+  replaced <- forM routes $ \route -> case routeBody route of
+    KeyRoute keys (CrawlTrial trial _) -> do
+      (from, to) <- maybe (Left (LastStepMissing (routeName route))) Right (M.lookup keys ranges)
+      effects <- fmap concat . forM [from .. to - 1] $ \index -> do
+        line <- maybe (Left (ObservationShape ("step hit range passes the hits: " ++ show index))) Right (M.lookup index hits)
+        shape (A.eitherDecodeStrict' line >>= parseEither hitEffects)
+      pure route { routeBody = KeyRoute keys (CrawlTrial trial effects) }
+    _ -> pure route
+  pure (RetainedObservationSource (sha256 (retainedReceipt observation)) (sha256 (retainedSteps observation)) (sha256 (retainedHits observation)), replaced)
+ where
+  shape :: Either String a -> Either EffectsRefusal a
+  shape = either (Left . ObservationShape) Right
+  receiptFields = withObject "receipt" $ \fields -> do
+    outcome <- fields .: "outcome" :: Parser A.Object
+    (,) <$> fields .: "role" <*> outcome .: "status"
+  stepFields = withObject "step" $ \fields -> do
+    keys <- fields .: "keys"
+    range <- fields .: "hits" :: Parser [Int]
+    case range of
+      [from, to] | from <= to -> pure (keys :: [CrawlKey], (from, to))
+      _ -> fail "step hit range is malformed"
+  hitEffects = withObject "hit" $ \fields -> do
+    site <- fields .: "site"
+    case parseSiteLabel site of
+      Just SetterEntry -> do
+        registers <- fields .: "registers" :: Parser A.Object
+        (: []) . SetterEffect <$> (registers .: "r0" >>= hexWord)
+      Just PropertyCommit -> pure [CommitEffect]
+      _ -> pure []
 
 -- | A crawl edge's property effect in order: a setter entry with its property, or a commit entry.
 data CrawlEffect = SetterEffect Word32 | CommitEffect deriving (Eq, Ord, Show)
@@ -245,9 +337,12 @@ selectCrawlRoutes edges =
     CommitEffect -> False
 
 -- | Setter properties written through 0x6309c4 (lr 0x630a04), value 0, bank 0, slot 1, in repeating
--- blocks of four; the block recurs on 1,120 of crawl-4's 4,528 reached edges.
+-- blocks of four in this order; the block recurs on 1,120 of crawl-4's 4,528 reached edges.
+timeDrivenSequence :: [Word32]
+timeDrivenSequence = [0x1c9, 0x1c8, 0x27f, 0x280]
+
 timeDrivenBlock :: S.Set Word32
-timeDrivenBlock = S.fromList [0x1c9, 0x1c8, 0x27f, 0x280]
+timeDrivenBlock = S.fromList timeDrivenSequence
 
 -- | Why `selectCrawlRoutes` leaves out edges whose only effects are the time-driven block.
 timeDrivenExclusion :: T.Text

@@ -642,10 +642,11 @@ parseStep expected value = do
 
 -- Comparison.
 
--- | Per route: the ordered setter calls, area-3 appends, byte-changing writes and transfers, the
--- final regions and each press's menu must be equal; for each (caller, arguments) of a returned
--- getter call, the results in call order with consecutive repeats collapsed must be equal; settle
--- statuses only where neither press exhausted its budget.
+-- | Per route: the ordered setter calls with each run of identical time-driven blocks collapsed to
+-- one block, area-3 appends, byte-changing writes and transfers, the final regions and each press's
+-- menu must be equal; for each (caller, arguments) of a returned getter call, the results in call
+-- order with consecutive repeats collapsed must be equal; settle statuses only where neither press
+-- exhausted its budget.
 compareRoles :: Qualified -> Qualified -> Either Refusal [(RouteResult, RouteResult)]
 compareRoles retained owned = do
   unless (qualifiedRole retained == RetainedRole && qualifiedRole owned == OwnedRole) (Left (CohortDiffers "roles"))
@@ -659,7 +660,7 @@ compareRoles retained owned = do
         getterResults result = M.map (map NE.head . NE.group) (M.fromListWith (flip (++)) [((callReturn call, callArguments call), [value]) | call <- resultGetters result, Just value <- [callResult call]])
         pressAgrees (Press leftStatus leftMenu) (Press rightStatus rightMenu) = leftMenu == rightMenu
           && (leftStatus == rightStatus || BudgetExhausted `elem` [leftStatus, rightStatus])
-    differs SetterSequenceDiffers resultSetters
+    differs SetterSequenceDiffers (map setterItemShape . collapseBlocks . resultSetters)
     differs GetterResultsDiffer getterResults
     differs WriteSequenceDiffers (map writeKey . filter effectChanges . resultWrites)
     differs TransferSequenceDiffers resultTransfers
@@ -668,6 +669,40 @@ compareRoles retained owned = do
     unless (length (resultPresses left) == length (resultPresses right) && and (zipWith pressAgrees (resultPresses left) (resultPresses right)))
       (Left (PressDiffers name))
     pure (left, right)
+
+-- | One setter call, or a run of one `timeDrivenSequence` block whose calls' arguments and results
+-- repeat it consecutively, with the run's block count.
+data SetterItem = SingleSetter Call | BlockRun [Call] Int
+
+setterItemShape :: SetterItem -> Either [([Word32], Maybe Word32)] Call
+setterItemShape item = case item of
+  BlockRun block _ -> Left (map callValues block)
+  SingleSetter call -> Right call
+
+callValues :: Call -> ([Word32], Maybe Word32)
+callValues call = (callArguments call, callResult call)
+
+collapseBlocks :: [Call] -> [SetterItem]
+collapseBlocks calls = case splitAt 4 calls of
+  (block, rest) | map (take 1 . callArguments) block == map (: []) timeDrivenSequence ->
+    let (repeats, rest') = span' block rest in BlockRun block (1 + repeats) : collapseBlocks rest'
+  _ -> case calls of
+    call : rest -> SingleSetter call : collapseBlocks rest
+    [] -> []
+ where
+  span' block remaining = case splitAt 4 remaining of
+    (next, rest) | map callValues next == map callValues block -> let (count, rest') = span' block rest in (count + 1, rest')
+    _ -> (0 :: Int, remaining)
+
+-- | Each block run's index among the collapsed items, index of its first setter call, and block count.
+blockRuns :: [Call] -> [(Int, Int, Int)]
+blockRuns calls = [ (position, first, count)
+                  | (position, first, BlockRun _ count) <- zip3 [0 ..] (scanl (+) 0 (map width items)) items ]
+ where
+  items = collapseBlocks calls
+  width item = case item of
+    SingleSetter _ -> 1
+    BlockRun block count -> length block * count
 
 -- | Admits the guest control's refusal: its observation stopped at its first guarded hit, which is
 -- the restored setter word's retired arm entered for that word's property, and every earlier hit is
@@ -764,8 +799,14 @@ comparisonValue :: [(RouteResult, RouteResult)] -> Value
 comparisonValue pairs = object
   [ "verdict" .= ("equal" :: T.Text)
   , "routes" .= length pairs
-  , "per_route" .= [object ["retained" .= routeSummary left, "owned" .= routeSummary right] | (left, right) <- pairs]
+  , "per_route" .=
+      [ object
+          [ "retained" .= routeSummary left, "owned" .= routeSummary right
+          , "setter_block_runs" .= object ["retained" .= runsValue left, "owned" .= runsValue right] ]
+      | (left, right) <- pairs ]
   ]
+ where
+  runsValue result = [object ["position" .= position, "first_call" .= first, "repeats" .= count] | (position, first, count) <- blockRuns (resultSetters result)]
 
 -- Serialized refusal controls.
 
