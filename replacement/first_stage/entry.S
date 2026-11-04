@@ -31,15 +31,22 @@ xm1_first_stage_entry:
     msr cpsr_fsxc, r2
     msr spsr_fsxc, r0
 
-    @ ATCM 0x70000000, 8 KiB, CP15 c9,c1,1.
+    @ ATCM 0x70000000, 8 KiB, CP15 c9,c1,1; cleared eight words per store as stock 0x18e0-0x1904.
     ldr r0, =0x70000011
     mcr p15, 0, r0, c9, c1, 1
     ldr r1, =0x70000000
-    mov r2, #0x2000
+    mov r2, #0x100
     mov r3, #0
+    mov r5, #0
+    mov r6, #0
+    mov r7, #0
+    mov r8, #0
+    mov r9, #0
+    mov r10, #0
+    mov r11, #0
 1:
-    str r3, [r1], #4
-    subs r2, r2, #4
+    stm r1!, {r3, r5, r6, r7, r8, r9, r10, r11}
+    subs r2, r2, #1
     bne 1b
 
     mov r2, #0x12

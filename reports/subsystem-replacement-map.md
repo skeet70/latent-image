@@ -120,7 +120,7 @@ The phase entry `0x69cdf8(r0=phase)` is supplied by image4 header. Primary phase
 
 | Recovered part | Known extent or responsibility |
 | --- | --- |
-| Early owned stages | Current composed placements: record1 `[0x6000,0x64ac)` and record2 `[0x10400,0x10a6c)`; retained record helpers, vectors, resources and later services remain. [Source: `replacement/README.md:7-12,21-27`; Inventory §8.6.] |
+| Early owned stages | Current composed placements: record1 `[0x6000,0x64c8)` and record2 `[0x10400,0x10a6c)`; retained record helpers, vectors, resources and later services remain. [Source: `replacement/README.md:7-12,21-27`; Inventory §8.6.] |
 | Interface publishers/loaders | A/B leaves each `[base+0x430,base+0x9ac)` /1,404-byte original carriers. Loader orchestration each340-byte original carrier,280-byte owned payload plus60-byte owned padding. [Inventory §8.3 retirement view,§8.16; #141/#144/#149.] |
 | Phase/install/task glue | Dispatcher 376 emitted /396 original; installer 336; submit/release 852; critical carrier 3,296 with startup code, not 3,296 extra independent critical bytes; reservation 228. [Inventory §§8.8-8.13.] |
 | Initial task bodies | Root104 `[0x69d160,0x69d2b4)`340; shared idle102/103 `[0x69cbf0,0x69cc00)`16; standby93 `[0x69cd58,0x69cdf8)`160. [Inventory §8.17 lines1550-1557.] |
