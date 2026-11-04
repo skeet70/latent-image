@@ -117,7 +117,7 @@ fn prepare(arguments: &Arguments) -> Result<(Inputs, Tape), Failure> {
     let (run, run_digest) = pinned(&arguments.run, Digest("efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef".into()), LIMIT)?;
     let (update, update_digest) = pinned(&arguments.update, Digest("43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490".into()), LIMIT)?;
     let (boot_rom, boot_rom_digest) = pinned(&arguments.boot_rom, Digest("4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be".into()), LIMIT)?;
-    let (seed, seed_digest) = pinned(&arguments.seed, Digest("48b229e2d61e2875fd1dd2c54fd39d5f19bcd4f68f5ad487a8acad8d1b243a7b".into()), LIMIT)?;
+    let (seed, seed_digest) = pinned(&arguments.seed, Digest("03529deb1a01a1f6f488ad7b48e63bf8271deca76268b2c10616588f9cc109f4".into()), LIMIT)?;
     let (event_bytes, event_digest) = pinned(&arguments.trace.join("events.json"), Digest("798b8dd160509598a2b01d4f37bb811794c3bd247028bcd7c48510fe528e6bab".into()), LIMIT)?;
     let events: Vec<Event> = serde_json::from_slice(&event_bytes)?;
     drop(event_bytes);

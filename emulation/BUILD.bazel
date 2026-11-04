@@ -3253,6 +3253,7 @@ haskell_library(
     deps = [
         ":case-sha256",
         ":emulator-usb",
+        ":watch-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

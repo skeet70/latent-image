@@ -1,8 +1,6 @@
 //! Shared external observation policy: route and dispatcher site ownership replayed from admitted source, raw trace contexts and committed words.
 use super::*;
 use owner::shared_dispatch::shared::{CLEAR,CLEAR_LIFETIME};
-use serde::de::Deserializer;
-use std::rc::Rc;
 
 const DISPATCHER:(u32,u32)=(0x69cdf8,0x69cf84);
 
@@ -17,21 +15,20 @@ impl Owner {
 #[derive(Clone,Debug,PartialEq,Eq,Deserialize,Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct OwnedSite {pub(super) address:u32,pub(super) owners:Vec<Owner>}
-/// Owned sites ascending by address, shared between equal consecutive snapshots.
-#[derive(Clone,Debug,PartialEq,Eq)]
-pub(super) struct Snapshot(Rc<[OwnedSite]>);
-impl Serialize for Snapshot {fn serialize<S:serde::Serializer>(&self,serializer:S)->Result<S::Ok,S::Error>{self.0.serialize(serializer)}}
-impl<'de> Deserialize<'de> for Snapshot {fn deserialize<D:Deserializer<'de>>(deserializer:D)->Result<Self,D::Error>{Ok(Self(Vec::<OwnedSite>::deserialize(deserializer)?.into()))}}
+/// Owned sites ascending by address.
+#[derive(Clone,Debug,PartialEq,Eq,Deserialize,Serialize)]
+#[serde(transparent)]
+pub(super) struct Snapshot(Vec<OwnedSite>);
 impl Snapshot {
     pub(super) fn sites(&self)->&[OwnedSite] {&self.0}
-    pub(super) fn new(sites:Vec<OwnedSite>)->Self {Self(sites.into())}
 }
 #[derive(Clone,Debug,PartialEq,Eq,Deserialize,Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct BoundaryPolicy {pub(super) trace_index:u64,pub(super) core:Core,pub(super) pc:u32,pub(super) instructions:u64,pub(super) acquire:Vec<OwnedSite>,pub(super) release:Vec<OwnedSite>}
+/// One consumer segment's slice [trace_begin,trace_end) of the boundaries; its owner sets are the replay of `initial` and the boundaries before each cut.
 #[derive(Clone,Debug,PartialEq,Eq,Deserialize,Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct SegmentPolicy {pub(super) id:u64,pub(super) trace_begin:u64,pub(super) trace_end:u64,pub(super) before:Snapshot,pub(super) after:Snapshot}
+pub(super) struct SegmentPolicy {pub(super) id:u64,pub(super) trace_begin:u64,pub(super) trace_end:u64}
 #[derive(Clone,Copy,Deserialize,Serialize)]
 #[serde(rename_all="kebab-case")]
 enum PolicyScope {SharedExternalObservationPolicy}
@@ -55,14 +52,13 @@ pub(super) fn grouped(pairs:&BTreeSet<(u32,Owner)>)->Vec<OwnedSite>{
 struct RouteCall {core:Core,target:u32,continuation:u32,sp:u32,entry:Option<usize>,returned:Option<usize>}
 #[derive(Default)]
 struct Replay {
-    owners:BTreeMap<u32,BTreeSet<Owner>>,added:BTreeSet<(u32,Owner)>,removed:BTreeSet<(u32,Owner)>,snapshot:Option<Snapshot>,
+    owners:BTreeMap<u32,BTreeSet<Owner>>,added:BTreeSet<(u32,Owner)>,removed:BTreeSet<(u32,Owner)>,
     calls:Vec<RouteCall>,active:[Option<u32>;2],entries:usize,publications:usize,clear_revoked:bool,
 }
 impl Replay {
     fn acquire(&mut self,address:u32,owner:Owner)->Result<(),String>{
         require(address%4==0,"external observation site is not A32 aligned")?;
         if self.owners.entry(address).or_default().insert(owner) {
-            self.snapshot=None;
             if !self.removed.remove(&(address,owner)) {self.added.insert((address,owner));}
         }
         Ok(())
@@ -71,14 +67,13 @@ impl Replay {
         let Some(held)=self.owners.get_mut(&address) else {return};
         let gone:Vec<Owner>=held.iter().copied().filter(|owner|select(*owner)).collect();
         for owner in gone {
-            held.remove(&owner);self.snapshot=None;
+            held.remove(&owner);
             if !self.added.remove(&(address,owner)) {self.removed.insert((address,owner));}
         }
         if held.is_empty() {self.owners.remove(&address);}
     }
-    fn snapshot(&mut self)->Snapshot {
-        self.snapshot.get_or_insert_with(||Snapshot::new(self.owners.iter().map(|(address,owners)|
-            OwnedSite {address:*address,owners:owners.iter().copied().collect()}).collect())).clone()
+    fn snapshot(&self)->Snapshot {
+        Snapshot(self.owners.iter().map(|(address,owners)|OwnedSite {address:*address,owners:owners.iter().copied().collect()}).collect())
     }
     fn route(&mut self,event:&Event,static_calls:&BTreeMap<u32,&owner::StaticCall>,catalog:&Catalog)->Result<(),String>{
         let (id,pc,core,registers)=(event.id.0,event.pc.0,event.core,&event.registers);let origin=id as u64;
@@ -139,13 +134,13 @@ pub(super) fn derive(capture:&Capture,receipt:&Digest,catalog:&Catalog,program:&
     let begin=capture.consumer.begin.as_ref().ok_or("shared consumer begin absent")?.trace_index;
     let end=capture.consumer.end.as_ref().ok_or("shared consumer end absent")?.trace_index;
     require(0<begin&&begin<=end&&end<=events.len(),"external policy trace interval differs")?;
-    let mut cuts=BTreeMap::new();let mut parts=Vec::with_capacity(window.segments.len());let mut cursor=begin;
+    let mut parts=Vec::with_capacity(window.segments.len());let mut cursor=begin;
     for segment in &window.segments {
         let first=cursor;cursor=cursor.checked_add(segment.stops.len()).filter(|next|*next<=end).ok_or("consumer stops exceed the consumer trace interval")?;
         for (stop,event) in segment.stops.iter().zip(&events[first..cursor]) {
             require(stop.core==event.core&&stop.pc==event.pc&&stop.instructions==event.instructions.0,"consumer stop differs from its global trace occurrence")?;
         }
-        cuts.insert(first,None);cuts.insert(cursor,None);parts.push((segment.id,first,cursor));
+        parts.push((segment.id,first,cursor));
     }
     require(cursor==end,"consumer stops do not partition the consumer trace interval")?;
     let static_calls:BTreeMap<u32,&owner::StaticCall>=calls.iter().map(|call|(call.site.0,call)).collect();
@@ -156,7 +151,6 @@ pub(super) fn derive(capture:&Capture,receipt:&Digest,catalog:&Catalog,program:&
     for (index,event) in events[..end].iter().enumerate() {
         require(event.id.0==index,"external policy event order differs")?;
         if index==begin {initial=Some(replay.snapshot());}
-        if let Some(cut)=cuts.get_mut(&index) {*cut=Some(replay.snapshot());}
         replay.added.clear();replay.removed.clear();
         replay.route(event,&static_calls,catalog)?;replay.dispatcher(event)?;
         if index>=begin {
@@ -164,16 +158,13 @@ pub(super) fn derive(capture:&Capture,receipt:&Digest,catalog:&Catalog,program:&
                 acquire:grouped(&replay.added),release:grouped(&replay.removed)});
         }
     }
-    if let Some(cut)=cuts.get_mut(&end) {*cut=Some(replay.snapshot());}
-    let snapshot=|index:usize|cuts.get(&index).cloned().flatten().ok_or_else(||"external policy segment cut absent".to_owned());
-    let segments=parts.into_iter().map(|(id,first,next)|Ok(SegmentPolicy {id,trace_begin:first as u64,trace_end:next as u64,before:snapshot(first)?,after:snapshot(next)?}))
-        .collect::<Result<Vec<_>,String>>()?;
+    let segments=parts.into_iter().map(|(id,first,next)|SegmentPolicy {id,trace_begin:first as u64,trace_end:next as u64}).collect();
     let contracts:Vec<&FileBinding>=capture.artifacts.files.iter().filter(|file|file.path.as_os_str()=="staged-contract.json").collect();
     let [contract]=contracts.as_slice() else {return Err("staged contract binding census differs".into())};
     let mut watch_inputs:Vec<FileBinding>=capture.epochs.iter().filter_map(|epoch|match &epoch.evidence {Evidence::Watch {file,..}=>Some(file.clone()),Evidence::ConsumerSegment {..}=>None}).collect();
     watch_inputs.sort_by(|left,right|left.path.as_os_str().cmp(right.path.as_os_str()));
     require(watch_inputs.windows(2).all(|pair|pair[0].path!=pair[1].path),"standalone watch sidecar is bound twice")?;
-    Ok(Policy {schema:1,scope:PolicyScope::SharedExternalObservationPolicy,capture_sha256:receipt.clone(),trace_sha256:capture.trace.sha256.clone(),
+    Ok(Policy {schema:2,scope:PolicyScope::SharedExternalObservationPolicy,capture_sha256:receipt.clone(),trace_sha256:capture.trace.sha256.clone(),
         contract_sha256:contract.sha256.clone(),watch_inputs,begin_trace_index:begin as u64,end_trace_index:end as u64,
         initial:initial.ok_or("external policy initial snapshot absent")?,boundaries,segments})
 }

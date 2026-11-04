@@ -362,4 +362,31 @@ mod tests{
         assert!(service_interval(Service::Mode,&mode,&boundary(LOW+8,2),Interval {after:Count(1),through:Count(10)}).is_err());
         assert!(service_interval(Service::Mode,&mode,&returned,Interval {after:Count(1),through:Count(4)}).is_err());
     }
+    fn hit(core:usize,pc:u32,count:u64)->SharedHit{
+        serde_json::from_str(&format!(r#"{{"address":"{pc:#010x}","core":{core},"instructions":{count},"cpsr":211,"registers":{{}},"sp":"0x0","lr":"0x0","code_word":null}}"#)).expect("synthetic dispatcher sample")
+    }
+    fn fetch(core:Core,pc:u32,count:u64,attempt:bool)->super::super::shared::FetchRecord{
+        super::super::shared::FetchRecord {row:Row {source:Source::CpuFetch,address:Guest(pc),physical:Guest(pc),size:4,core:Some(core),pc:Some(Guest(pc)),
+            instructions:Some(Count(count)),tick:Some(Count(1)),value:None,before:None},own:Some(count),order:Some(super::super::shared::ByteOrder::Little),attempt}
+    }
+    #[test]
+    fn shared_dispatcher_samples_need_their_executed_and_terminal_fetches(){
+        let samples=[hit(0,LOW,10),hit(0,LOW+4,11),hit(1,LOW,10)];
+        let complete=[fetch(Core::Primary,LOW,11,false),fetch(Core::Primary,LOW+4,11,true),fetch(Core::Secondary,LOW,11,false)];
+        assert!(shared_fetches(&complete,&samples,11).is_ok());
+        let attempt_only=[fetch(Core::Primary,LOW+4,11,true),fetch(Core::Secondary,LOW,11,false)];
+        assert_eq!(shared_fetches(&attempt_only,&samples,11).err().as_deref(),Some("completed dispatcher sample lacks executed N+1 fetch"));
+        let executed_only=[fetch(Core::Primary,LOW,11,false),fetch(Core::Secondary,LOW,11,false)];
+        assert_eq!(shared_fetches(&executed_only,&samples,11).err().as_deref(),Some("terminal dispatcher sample lacks preexecution attempt"));
+    }
+    fn framed(pc:u32,count:u64,r4:u32,r0:u32)->Boundary{
+        let sp=0x40063450;let mut value=boundary(pc,count);value.registers.sp=Guest(sp);value.registers.lr=Guest(0x40a6c);value.registers.r[4]=r4;value.registers.r[0]=r0;
+        value.frame=RamView {address:Guest(sp-256),physical:Guest((sp-256)&!0x40000000),words:vec![0;68],other_words:vec![0;68],physical_words:vec![0;68],tcm:[[0;2];2],decoder:1};value
+    }
+    #[test]
+    fn dispatcher_return_must_preserve_caller_live_registers(){
+        let invocation=|returned_r4:u32|Invocation {phase:Phase::Diagnostic,entry:framed(LOW,10,7,2),calls:Vec::new(),returned:Some(framed(0x40a6c,20,returned_r4,0x69cc6c))};
+        assert!(project_at(&invocation(7),&[],0x40a6c).is_ok());
+        assert_eq!(project_at(&invocation(6),&[],0x40a6c).err().as_deref(),Some("caller-live registers changed"));
+    }
 }
