@@ -355,7 +355,7 @@ impl InstalledGuard {
         let before = read_word(expected)?;
         match site.role {
             CodeSiteRole::CurrentStore(_) => {
-                let selected = read_word(Guest(layout.current.start().0 + 8))?;
+                let selected = read_word(layout.selected.start())?;
                 let context_depth = read_word(layout.context.start())?;
                 self.lifetime.prepare_current_store(core, pc, word, &registers, before, cpsr,
                     CurrentState { selected, context_depth }).map_err(|failure| failure.to_string())

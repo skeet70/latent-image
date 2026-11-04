@@ -56,6 +56,7 @@ _FUJIMOD_NIX_DEPS = [
     "//build-support:fujimod-fetch-attribution.patch",
     "//build-support:fujimod-timer-upcount.patch",
     "//build-support:fujimod-unicorn-context-align.patch",
+    "//build-support:fujimod-wifi-unanswered-cmd53.patch",
     "//build-support:fujimod.nix",
     "//build-support:nixpkgs.nix",
 ]
@@ -139,6 +140,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/peer_witness_startup.rs",
     "//emulation:fujimod-xm1/src/peer_witness_vectors.rs",
     "//emulation:fujimod-xm1/src/peer_witness_wait.rs",
+    "//emulation:fujimod-xm1/src/power_hold.rs",
     "//emulation:fujimod-xm1/src/provenance.rs",
     "//emulation:fujimod-xm1/src/provenance_main.rs",
     "//emulation:fujimod-xm1/src/queue_boundary.rs",

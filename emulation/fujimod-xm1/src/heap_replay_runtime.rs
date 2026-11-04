@@ -468,7 +468,7 @@ fn prepare<'a>(inputs: &'a Inputs, tape: &Tape, output: &'a Path, case: &mut Cas
     require(Digest(sha256(&inputs.run)) == inputs.bindings.run && Digest(sha256(&inputs.update)) == inputs.bindings.update
         && Digest(sha256(&inputs.boot_rom)) == inputs.bindings.boot_rom && Digest(sha256(&inputs.seed)) == inputs.bindings.seed
         && Digest(sha256(&inputs.payload)) == inputs.bindings.payload, Failure::InputIdentity)?;
-    require(inputs.bindings.seed.0 == "48b229e2d61e2875fd1dd2c54fd39d5f19bcd4f68f5ad487a8acad8d1b243a7b", Failure::InputIdentity)?;
+    require(inputs.bindings.seed.0 == "03529deb1a01a1f6f488ad7b48e63bf8271deca76268b2c10616588f9cc109f4", Failure::InputIdentity)?;
     fujimod_emulator_exr2_board::register_board_builder();
     fujimod_emulator_models::register();
     let document = RunDocument::parse(&inputs.run).map_err(execution)?;
@@ -480,13 +480,13 @@ fn prepare<'a>(inputs: &'a Inputs, tape: &Tape, output: &'a Path, case: &mut Cas
     let seed = frame(&session.board, &maps)?;
     save(&output.join("seed-frame.json"), &seed)?;
     require(seed.registers[15] == 0x89cde4 && seed.registers[0] == REENT && seed.registers[1] == 384
-        && seed.counts == [Instructions(26_185_192), Instructions(3_214_362)] && seed.cpsr.0 & 0xff == 0x53
+        && seed.counts == [Instructions(26_267_839), Instructions(3_215_110)] && seed.cpsr.0 & 0xff == 0x53
         && seed.root.0 == 0x4004dae0 && seed.task_record.0 == 0x40060ecc && seed.kernel_context.0 == 0
         && seed.identity.0 == 0x4003 && seed.owner.0 == 0 && seed.depth.0 == 0 && seed.heap_break.0 == POOL_BASE, Failure::Context)?;
     require(word(&session.board, &maps, 0x89c970)?.0 == REENT && word(&session.board, &maps, seed.root.0 + 0x16c)?.0 == 0x4118c
         && word(&session.board, &maps, seed.root.0 + 0x1618)?.0 == 0x412bc, Failure::Context)?;
     let peer_identity = session.board.cpu(1).map_err(execution)?.rprofile_identity(None).map_err(execution)?;
-    require(fujimod_xm1::run::CoreIdentities::recorded(1, peer_identity), Failure::Context)?;
+    require(peer_identity == fujimod_xm1::run::CoreIdentities::Xm1.words()[1], Failure::Context)?;
     let mut runtime = Runtime { inputs, output, session, maps, guard: Guard::default(), watch: None, ranges: Vec::new(), live: BTreeMap::new(),
         scratch: Vec::with_capacity(tape.maximum_request().0 as usize), physical_scratch: Vec::with_capacity(tape.maximum_request().0 as usize), peer_identity,
         quantum: ProcessorQuantum(std::num::NonZeroUsize::new(document.execution.quantum).ok_or(Failure::Context)?) };

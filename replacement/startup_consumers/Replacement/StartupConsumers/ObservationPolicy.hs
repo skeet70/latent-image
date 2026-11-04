@@ -32,7 +32,8 @@ data Owner = RoutePermanent | DispatcherPermanent | RouteCall J.TraceIndex
   | RouteScheduledTarget J.TraceIndex | DispatcherReturn J.TraceIndex deriving (Eq, Ord, Show)
 data OwnedSite = OwnedSite K.Address [Owner]
 data BoundaryPolicy = BoundaryPolicy J.TraceIndex K.Core K.Address K.Count [OwnedSite] [OwnedSite]
-data SegmentPolicy = SegmentPolicy W.SegmentId J.TraceIndex J.TraceIndex [OwnedSite] [OwnedSite]
+-- Segment id and its [trace_begin,trace_end) slice of the boundaries; owner sets are replayed from the initial set.
+data SegmentPolicy = SegmentPolicy W.SegmentId J.TraceIndex J.TraceIndex
 newtype WatchInput = WatchInput J.FileBinding
 data PolicyFile = PolicyFile Int K.Digest K.Digest K.Digest [WatchInput]
   J.TraceIndex J.TraceIndex [OwnedSite] [BoundaryPolicy] [SegmentPolicy]
@@ -61,8 +62,8 @@ instance FromJSON BoundaryPolicy where
       <*> o .: "acquire" <*> o .: "release"
 instance FromJSON SegmentPolicy where
   parseJSON = withObject "segment observation policy" $ \o -> do
-    closed ["id","trace_begin","trace_end","before","after"] o
-    SegmentPolicy <$> o .: "id" <*> o .: "trace_begin" <*> o .: "trace_end" <*> o .: "before" <*> o .: "after"
+    closed ["id","trace_begin","trace_end"] o
+    SegmentPolicy <$> o .: "id" <*> o .: "trace_begin" <*> o .: "trace_end"
 instance FromJSON WatchInput where
   parseJSON = withObject "watch input" $ \o -> do
     closed ["path","sha256"] o
@@ -162,7 +163,7 @@ sharedPolicy admitted artifact capture trace = do
       expectedWatches = sortOn J.bindingPath [binding | epoch <- J.captureEpochs capture,J.WatchFile binding _ <- [J.epochEvidence epoch]]
   begin <- maybe (Left PolicyBindingRejected) Right (J.consumerBegin consumer)
   end <- maybe (Left PolicyBindingRejected) Right (J.consumerEnd consumer)
-  require (schema == 1 && captureDigest == Host.policyCaptureDigest admitted
+  require (schema == 2 && captureDigest == Host.policyCaptureDigest admitted
     && Host.policyObserverDigest admitted == J.identityExecutable identity
     && W.identityObserver (W.receiptIdentity receipt) == J.identityExecutable identity
     && traceDigest == J.bindingDigest (J.captureTrace capture)
@@ -187,7 +188,7 @@ sharedPolicy admitted artifact capture trace = do
   let (globals,polls) = providerSites artifact (J.captureRole capture)
   pure (Shared globals polls (M.fromList observations))
   where
-    checkSegment (pending,hits,index,current,observations) (segment,SegmentPolicy ident first next beforeSnapshot afterSnapshot) = do
+    checkSegment (pending,hits,index,current,observations) (segment,SegmentPolicy ident first next) = do
       let stops = W.segmentStops segment
           size = length stops
           (actions,laterActions) = splitAt size pending
@@ -205,12 +206,8 @@ sharedPolicy admitted artifact capture trace = do
         require (W.stopCore stop == J.hitCore hit && W.stopPc stop == J.hitPc hit
           && W.stopInstructions stop == J.hitInstructions hit && W.stopInstructions stop == endClock
           && matchesContext hit context && K.contextCounts (W.contextMachine context) == W.segmentEnd segment) PolicyBoundaryRejected
-      before <- ownedSites beforeSnapshot
-      require (before == current) PolicyOwnersRejected
       successor <- foldM advance current actions
-      after <- ownedSites afterSnapshot
-      require (after == successor) PolicyOwnersRejected
-      let observation = SegmentObservation (W.segmentStart segment) (W.segmentEnd segment) stops (M.keys before)
+      let observation = SegmentObservation (W.segmentStart segment) (W.segmentEnd segment) stops (M.keys current)
       pure $! forceObservation observation `seq` (laterActions,laterHits,next,successor,(ident,observation):observations)
 
 -- Forces every field so the retained policy does not keep its source segment or decoded snapshot alive.

@@ -513,7 +513,7 @@ fn fixed_watch_extents_are_sorted_merged_and_cover_both_task_kernels() {
     let config = config(request()).unwrap();
     assert!(config.watched_extents().windows(2).all(|pair| pair[0].end() < pair[1].start()));
     for layout in source_layouts() {
-        for target in [layout.context, layout.current, layout.nodes, layout.creations] {
+        for target in [layout.context, layout.current, layout.selected, layout.nodes, layout.creations] {
             assert!(config.watched_extents().iter().any(|range| range.start() <= target.start() && target.end() <= range.end()));
         }
     }
@@ -668,6 +668,68 @@ fn current_task_store_requires_observed_selected_cell_zero_context_and_local_nod
             monitor.observe_write(WriteAttempt::cpu(CoreId(0), Guest(0x436b8), Guest(registers[2]), layout.current.start(), &node.to_le_bytes(), u64::from(selected))).unwrap();
             assert_eq!(monitor.receipt().checked_context_writes, 1);
         }
+    }
+}
+
+const MAKE_READY: [u32; 2] = [0x43d08, 0xd3cc4];
+fn selected_write(monitor: &mut LifetimeMonitor, kernel: usize, core: usize, pc: u32, before: u32, value: u32) -> Result<(), LifetimeFailure> {
+    let cell = source_layouts()[kernel].selected.start();
+    monitor.observe_write(WriteAttempt::cpu(CoreId(core), Guest(pc), Guest(cell.0 + 0x4000_0000), cell, &before.to_le_bytes(), u64::from(value)))
+}
+fn current_store(monitor: &mut LifetimeMonitor, kernel: usize, loaded: u32, selected: u32, before: u32) -> Result<(), LifetimeFailure> {
+    let layout = source_layouts()[kernel];
+    let pc = Guest([0x436b8, 0xd36b8][kernel]);
+    let mut registers = [0; 13];
+    registers[1] = loaded;
+    registers[2] = layout.current.start().0 + 0x4000_0000;
+    monitor.prepare_current_store(CoreId(kernel), pc, Word(0xe582_1000), &registers, Word(before), Cpsr(0x93),
+        CurrentState { selected: Word(selected), context_depth: Word(0) })?;
+    monitor.observe_write(WriteAttempt::cpu(CoreId(kernel), pc, Guest(registers[2]), layout.current.start(), &before.to_le_bytes(), u64::from(loaded)))
+}
+
+#[test]
+fn current_store_admits_a_selection_the_other_cores_make_ready_replaced_and_refuses_unexplained_ones() {
+    for kernel in [0, 1] {
+        let other = 1 - kernel;
+        let node = |index: u32| source_layouts()[kernel].nodes.start().0 + 0x4000_0000 + 56 * index;
+        let (loaded, woken, previous) = (node(1), node(2), node(3));
+        // The other core's make-ready replaced the selection this core had loaded.
+        let (mut monitor, _) = fixture();
+        selected_write(&mut monitor, kernel, other, MAKE_READY[other], loaded, woken).unwrap();
+        current_store(&mut monitor, kernel, loaded, woken, previous).unwrap();
+        assert_eq!(monitor.receipt().checked_context_writes, 1);
+        // The admission lasts until that store.
+        assert_eq!(current_store(&mut monitor, kernel, loaded, woken, loaded), Err(LifetimeFailure::InvalidContext));
+        // No rewrite, a rewrite from another PC, and one followed by this core's own write are refused.
+        let (mut monitor, _) = fixture();
+        assert_eq!(current_store(&mut monitor, kernel, loaded, woken, previous), Err(LifetimeFailure::InvalidContext));
+        let (mut monitor, _) = fixture();
+        selected_write(&mut monitor, kernel, other, MAKE_READY[other] + 4, loaded, woken).unwrap();
+        assert_eq!(current_store(&mut monitor, kernel, loaded, woken, previous), Err(LifetimeFailure::InvalidContext));
+        let (mut monitor, _) = fixture();
+        selected_write(&mut monitor, kernel, other, MAKE_READY[other], loaded, woken).unwrap();
+        selected_write(&mut monitor, kernel, kernel, MAKE_READY[kernel], woken, woken).unwrap();
+        assert_eq!(current_store(&mut monitor, kernel, loaded, woken, previous), Err(LifetimeFailure::InvalidContext));
+    }
+}
+
+#[test]
+fn selected_cell_rewrites_beyond_the_priority_levels_and_partial_writes_refuse() {
+    let (mut monitor, _) = fixture();
+    for _ in 0..17 { selected_write(&mut monitor, 0, 1, MAKE_READY[1], 0, 0).unwrap(); }
+    assert_eq!(selected_write(&mut monitor, 0, 1, MAKE_READY[1], 0, 0), Err(LifetimeFailure::InvalidContext));
+    let (mut monitor, _) = fixture();
+    let cell = source_layouts()[0].selected.start();
+    assert_eq!(monitor.observe_write(WriteAttempt::cpu(CoreId(1), Guest(MAKE_READY[1]), Guest(cell.0 + 0x4000_0000), cell, &[0], 1)),
+        Err(LifetimeFailure::WrongWidth));
+}
+
+#[test]
+fn publication_on_a_selected_cell_is_an_invalid_request() {
+    for layout in source_layouts() {
+        let mut value = request();
+        value["publications"][3]["address"] = json!(layout.selected.start().0);
+        assert_eq!(config(value).err(), Some(LifetimeFailure::InvalidRequest));
     }
 }
 
