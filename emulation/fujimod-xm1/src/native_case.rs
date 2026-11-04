@@ -18,6 +18,16 @@
 //! supervisor-call, unconditional-space, non-APSR status writes, hint and
 //! synchronization-primitive words, and ARMv7 UNPREDICTABLE transfer and
 //! multiply forms.
+//!
+//! A privileged case enters in SVC or SYS with its own I and F bits and must
+//! stay in that mode with T clear. Beyond the user profile it admits
+//! `cpsid i`, `cpsie i` and register-form `msr CPSR_c`/`msr CPSR_fc` whose
+//! source keeps the entry mode and T clear, and refuses SPSR and banked status
+//! access, user-bank LDM/STM and ERET. With a case CP14 identity it serves
+//! `mrc p14, 0, Rt, c2, c0, 0` (Rt not PC) in the instruction hook by the law of
+//! FujiMod's `rprofile::core::Core` (crates/emulator-cpu-unicorn/src/rprofile/core.rs:783-790):
+//! a passing condition writes the identity to Rt, and the PC advances either way.
+//! The wrapper itself is not used: it lacks `Cpu::refuse_access` and host watchdogs.
 
 use crate::r4f;
 use fujimod_emulator_cpu::{
@@ -58,8 +68,19 @@ const TRANSLATION_CACHE_BYTES: u32 = 4 * 1024 * 1024;
 /// The PMSAv7 default map is execute-never from 0x80000000.
 const EXECUTABLE_END: u64 = 0x7fff_fffc;
 const USER_MODE: u32 = 0x10;
+const SUPERVISOR_MODE: u32 = 0x13;
+const SYSTEM_MODE: u32 = 0x1f;
 const CPSR_MODE: u32 = 0x1f;
 const CPSR_THUMB: u32 = 1 << 5;
+/// NZCVQ, GE, I, F and the mode: the bits a privileged entry CPSR may set.
+const PRIVILEGED_ENTRY_BITS: u32 = 0xf80f_00df;
+const CPSIE_I: u32 = 0xf108_0080;
+const CPSID_I: u32 = 0xf10c_0080;
+/// `msr CPSR_c, Rn` and `msr CPSR_fc, Rn` without cond and Rn.
+const MSR_CPSR_C: u32 = 0x0121_f000;
+const MSR_CPSR_FC: u32 = 0x0129_f000;
+/// `mrc p14, 0, Rt, c2, c0, 0` without cond and Rt.
+const MRC_P14_IDENTITY: u32 = 0x0e12_0e10;
 
 /// Page permission bits as taken by `Cpu::map_zeroed`.
 const PAGE_READ: u32 = 1;
@@ -228,7 +249,8 @@ struct Stub {
     outputs: Box<[Binding]>,
 }
 
-/// User-mode ARM CPSR: mode 0x10 with explicit flags only.
+/// Entry CPSR: user mode with NZCV only, or a `PrivilegedMode` with
+/// `PRIVILEGED_ENTRY_BITS` only.
 #[derive(Clone, Copy, Debug)]
 struct Cpsr(u32);
 
@@ -237,6 +259,84 @@ struct Cpsr(u32);
 struct EntryRegisters {
     core: [u32; 15],
     cpsr: Cpsr,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PrivilegedMode {
+    Supervisor,
+    System,
+}
+
+impl PrivilegedMode {
+    fn of(cpsr: u32) -> Option<Self> {
+        if cpsr & !PRIVILEGED_ENTRY_BITS != 0 {
+            return None;
+        }
+        match cpsr & CPSR_MODE {
+            SUPERVISOR_MODE => Some(Self::Supervisor),
+            SYSTEM_MODE => Some(Self::System),
+            _ => None,
+        }
+    }
+
+    fn bits(self) -> u32 {
+        match self {
+            Self::Supervisor => SUPERVISOR_MODE,
+            Self::System => SYSTEM_MODE,
+        }
+    }
+}
+
+/// The value `mrc p14, 0, Rt, c2, c0, 0` reads.
+#[derive(Clone, Copy, Debug)]
+struct Cp14Identity(u32);
+
+#[derive(Clone, Copy, Debug)]
+enum Profile {
+    User,
+    Privileged { mode: PrivilegedMode, identity: Option<Cp14Identity> },
+}
+
+/// How a profile treats one A32 word.
+#[derive(Clone, Copy, Debug)]
+enum ProfileWord {
+    Excluded,
+    Ordinary,
+    /// Register-form `msr CPSR_c`/`msr CPSR_fc` from this core register.
+    ControlWrite(u32),
+    /// The CP14 identity read into this core register.
+    IdentityRead(usize, Cp14Identity),
+}
+
+impl Profile {
+    fn mode(self) -> u32 {
+        match self {
+            Self::User => USER_MODE,
+            Self::Privileged { mode, .. } => mode.bits(),
+        }
+    }
+
+    fn classify(self, word: u32) -> ProfileWord {
+        let Self::Privileged { identity, .. } = self else {
+            return if excluded(word) { ProfileWord::Excluded } else { ProfileWord::Ordinary };
+        };
+        if matches!(word, CPSIE_I | CPSID_I) {
+            return ProfileWord::Ordinary;
+        }
+        let conditional = word >> 28 != 15;
+        if conditional && matches!(word & 0x0fff_fff0, MSR_CPSR_C | MSR_CPSR_FC) && word & 15 != 15 {
+            return ProfileWord::ControlWrite(word & 15);
+        }
+        let target = (word >> 12 & 15) as usize;
+        if let Some(identity) = identity
+            && conditional
+            && word & 0x0fff_0fff == MRC_P14_IDENTITY
+            && target != 15
+        {
+            return ProfileWord::IdentityRead(target, identity);
+        }
+        if privileged_refused(word) || excluded(word) { ProfileWord::Excluded } else { ProfileWord::Ordinary }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -249,6 +349,7 @@ struct Case {
     entry: Address,
     exit: Address,
     registers: EntryRegisters,
+    profile: Profile,
     budget: InstructionBudget,
     wall: WallBudget,
     regions: Box<[Region]>,
@@ -410,9 +511,19 @@ fn parse_case(
         *value = tokens.word()?;
     }
     let cpsr = tokens.word()?;
-    if cpsr & 0x0fff_ffff != USER_MODE {
-        return Err(WireError("CPSR must be user-mode ARM with flags only"));
-    }
+    let profile = if cpsr & 0x0fff_ffff == USER_MODE {
+        Profile::User
+    } else {
+        let mode = PrivilegedMode::of(cpsr).ok_or(WireError(
+            "CPSR must be user-mode ARM with flags only, or SVC or SYS ARM with flags, Q, GE, I and F only",
+        ))?;
+        let identity = match tokens.next()? {
+            b"n" => None,
+            b"i" => Some(Cp14Identity(tokens.word()?)),
+            _ => return Err(WireError("a privileged case's CP14 identity must be n or i <word>")),
+        };
+        Profile::Privileged { mode, identity }
+    };
     if core[13] % 8 != 0 || core[14] != exit.0 {
         return Err(WireError("SP must be eight-byte aligned and LR must be the exit"));
     }
@@ -484,6 +595,7 @@ fn parse_case(
         entry,
         exit,
         registers: EntryRegisters { core, cpsr: Cpsr(cpsr) },
+        profile,
         budget: InstructionBudget(budget),
         wall: WallBudget(Duration::from_millis(u64::from(wall_ms))),
         regions: regions.into(),
@@ -1179,7 +1291,7 @@ impl State {
             return Err(Step::Stop(Status::WallBudget));
         }
         let cpsr = read(cpu, arm::CPSR)?;
-        if cpsr & CPSR_THUMB != 0 || cpsr & CPSR_MODE != USER_MODE {
+        if cpsr & CPSR_THUMB != 0 || cpsr & CPSR_MODE != case.profile.mode() {
             return Err(Step::Stop(Status::UnsupportedInstruction));
         }
         if size != 4 || !case.admits(address, 4, Need::Execute) {
@@ -1200,11 +1312,27 @@ impl State {
         self.trace[(self.entered % LOG_SIZE as u64) as usize] = TraceEntry { pc: Word(pc), instruction: Word(word) };
         self.entered += 1;
         self.instruction = Instruction { pc, word, transfer: None };
-        if excluded(word) {
-            return Err(Step::Stop(Status::UnsupportedInstruction));
+        let class = case.profile.classify(word);
+        let passes = arm::condition_passes(word >> 28, cpsr);
+        match class {
+            ProfileWord::Excluded => return Err(Step::Stop(Status::UnsupportedInstruction)),
+            ProfileWord::IdentityRead(target, identity) => {
+                if passes {
+                    write(cpu, arm::CORE[target], identity.0)?;
+                }
+                write(cpu, arm::PC, pc.wrapping_add(4))?;
+                return Ok(());
+            }
+            ProfileWord::ControlWrite(_) | ProfileWord::Ordinary => {}
         }
-        if !arm::condition_passes(word >> 28, cpsr) {
+        if !passes {
             return Ok(());
+        }
+        if let ProfileWord::ControlWrite(source) = class {
+            let value = read(cpu, arm::CORE[source as usize])?;
+            if value & CPSR_THUMB != 0 || value & CPSR_MODE != case.profile.mode() {
+                return Err(Step::Stop(Status::UnsupportedInstruction));
+            }
         }
         self.instruction.transfer = Transfer::of(word);
         self.track(cpu, case, pc, word)
@@ -1637,6 +1765,16 @@ fn excluded(word: u32) -> bool {
         || synchronization
         || unpredictable(word)
         || r4f::classify_a32(word).0.is_some()
+}
+
+/// Words a privileged profile refuses beyond `excluded`: MRS SPSR, banked
+/// MRS/MSR, LDM/STM with the user-bank bit and ERET.
+fn privileged_refused(word: u32) -> bool {
+    let spsr_read = word & 0x0fff_0fff == 0x014f_0000;
+    let banked = word & 0x0fb0_0eff == 0x0100_0200 || word & 0x0fb0_fef0 == 0x0120_f200;
+    let user_bank = word >> 25 & 7 == 4 && word & 1 << 22 != 0;
+    let exception_return = word & 0x0fff_ffff == 0x0160_006e;
+    spsr_read || banked || user_bank || exception_return
 }
 
 /// ARMv7 UNPREDICTABLE or UNKNOWN-result encodings of the transfer and multiply forms.
