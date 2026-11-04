@@ -242,8 +242,8 @@ data PieceFacts
   -- | First-stage entry and the linked record-1 image.
   = FirstStageFacts Pc LinkedBytes
   -- | Secondary entry, the core-0 bindings the critical pair consumes, the
-  -- linked record-2 image, the owned initializer's scratch and the critical
-  -- pair's entry frame below its caller's SP.
+  -- linked record-2 image, the owned initializer's scratch and the deeper of
+  -- the critical pair's entry and exit frames below its caller's SP.
   | Record2LinkFacts Pc [ServiceBinding] LinkedBytes ScratchBytes StackDepth
   -- | The publisher's entry and the SP its caller frame provides, and its emitted stores.
   | PublisherFacts PublisherFrame [Publication]

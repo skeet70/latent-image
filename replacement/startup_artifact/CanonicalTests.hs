@@ -271,7 +271,7 @@ main = do
     (not (holdsIn "submission-depth-in-stack-window" j3Targets (withFacts (\facts -> case facts of
       LoaderStartupFacts a b calls -> LoaderStartupFacts a b (SubmitCall Core1 (StackDepth 0x800) : calls)
       other -> other))))
-  ok "a critical-pair entry frame reaching below the boot-stack window fails the submission-depth check"
+  ok "a critical-pair frame reaching below the boot-stack window fails the submission-depth check"
     (not (holdsIn "submission-depth-in-stack-window" j3Targets (withFacts (\facts -> case facts of
       Record2LinkFacts entry bindings' image scratch' _ -> Record2LinkFacts entry bindings' image scratch' (StackDepth 0x800)
       other -> other))))

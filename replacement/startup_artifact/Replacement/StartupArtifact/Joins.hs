@@ -61,8 +61,8 @@ secondaryFacts evidence = case [(entry, consumed, linked, scratch) | Record2Link
   [facts] -> Just facts
   _ -> Nothing
 
-criticalEntryFrame :: JoinEvidence -> Maybe StackDepth
-criticalEntryFrame evidence = case [frame | Record2LinkFacts _ _ _ _ frame <- map pieceFacts (evidencePieces evidence)] of
+criticalFrame :: JoinEvidence -> Maybe StackDepth
+criticalFrame evidence = case [frame | Record2LinkFacts _ _ _ _ frame <- map pieceFacts (evidencePieces evidence)] of
   [frame] -> Just frame
   _ -> Nothing
 
@@ -336,9 +336,9 @@ dispatcherCriticalPair = Join DispatcherCriticalPair (Set.fromList [Record2Link,
   [at Image4 0x7235d8 0x723790, at LoaderA loaderAStart 0x40b00]
   (ObservationQualified "the owned dispatcher submits tasks through the stock wrapper 0x725dd8, which enters the owned critical pair; loader-A orchestration's admission orders its call of the initializer at 0x40430, which fills the core-0 table the pair reads, before its first dispatch (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs expected); qualified by a composed natural comparison")
   [ HostCheck "submission-depth-in-stack-window" $ \evidence ->
-      case (submissions evidence, criticalEntryFrame evidence) of
-        (Just calls@(_ : _), Just (StackDepth entryFrame)) -> all (\(SubmitCall core (StackDepth depth)) ->
-          toInteger (serviceSp core) - toInteger depth - wrapperFrame - toInteger entryFrame >= toInteger (stackFloor core)) calls
+      case (submissions evidence, criticalFrame evidence) of
+        (Just calls@(_ : _), Just (StackDepth pairFrame)) -> all (\(SubmitCall core (StackDepth depth)) ->
+          toInteger (serviceSp core) - toInteger depth - wrapperFrame - toInteger pairFrame >= toInteger (stackFloor core)) calls
         _ -> False
   ]
 

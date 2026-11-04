@@ -160,6 +160,7 @@ deriveRecord2Link source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)
       C.Guest enter = C.witnessEntry layout
       C.Guest leave = C.witnessExit layout
       C.FrameBytes entryFrame = C.witnessEntryFrame layout
+      C.FrameBytes exitFrame = C.witnessExitFrame layout
       retained = [(0x10000 + fromIntegral low, 0x10000 + fromIntegral high) | extent <- declaredRetained declared
         , let (low, high) = F.retainedExtentRange extent]
       stockSecondary = U.mediaWordAt stockRecord2 F.resetVectorWordOffset
@@ -199,7 +200,7 @@ deriveRecord2Link source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)
         ([resetVector, image] ++ loaderWords ++ pair)
         (Record2Footprint.footprint (targetOf targets LoaderB) retained) (map (Premise . T.pack) C.stagingPremises) catalog
         (Record2LinkFacts (Pc secondaryEntry) [ServiceBinding offset target | (offset, target) <- C.primaryBindings original]
-          (LinkedBytes bin symbolBytes) (ScratchBytes (I.contractScratchBytes contract)) (StackDepth (fromIntegral entryFrame)))
+          (LinkedBytes bin symbolBytes) (ScratchBytes (I.contractScratchBytes contract)) (StackDepth (fromIntegral (max entryFrame exitFrame))))
   derivePiece source declaration (StagedOutput (C.startupDat staging) (Just (C.patchedImage4 staging)) Nothing)
 
 -- | Interface table B, which the core-1 initializer fills (emulation/README.md:222).
