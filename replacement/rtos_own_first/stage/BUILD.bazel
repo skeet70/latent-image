@@ -1,0 +1,57 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_library(
+    name = "own-first-artifact",
+    srcs = [
+        "Replacement/RtosOwnFirst/Artifact.hs",
+        "Replacement/RtosOwnFirst/Frame.hs",
+        "Replacement/RtosOwnFirst/Regions.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:first-stage",
+        "//host:text",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+    ],
+)
+
+# bazel run //replacement/rtos_own_first/stage:stage-own-first -- REGIONS_JSON BIN_A SYMBOLS_A BIN_B SYMBOLS_B SOURCE_DAT LOADER_A LOADER_B NEW_OUTPUT_DIRECTORY
+haskell_binary(
+    name = "stage-own-first",
+    srcs = ["StageMain.hs"],
+    main_file = "StageMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":own-first-artifact",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "own-first-stage-tests",
+    size = "small",
+    srcs = ["Tests.hs", "//replacement/startup_artifact:Fixtures.hs"],
+    main_file = "Tests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":own-first-artifact",
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:update-container",
+    ],
+)
