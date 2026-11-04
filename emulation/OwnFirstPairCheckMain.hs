@@ -73,12 +73,12 @@ main = getArgs >>= \arguments -> case arguments of
   ["control", planPath, directory, output] -> do
     (planBytes, plan, observed) <- load planPath directory
     unless (planRole plan `elem` [ControlRestoredRole, ControlWrongIRole]) (die "own-first-pair-check: control takes a control plan")
-    let outcome = qualify planBytes plan observed
-        passed = controlSatisfied (planRole plan) outcome
+    let verdict = controlVerdict planBytes plan observed
+        passed = controlHolds verdict
     write output (object
       [ "role" .= roleWire (planRole plan), "passed" .= passed
-      , "observed" .= either refusalValue (const (A.String "qualified")) outcome ])
-    putStrLn ("own-first-pair-check: control " ++ (if passed then "refused as expected: " else "not refused as expected: ")
-      ++ either show (const "qualified") outcome)
+      , "refusal" .= fmap refusalValue (controlRefusal verdict), "observer_stopped" .= controlStopped verdict ])
+    putStrLn ("own-first-pair-check: control " ++ (if passed then "holds: " else "does not hold: ")
+      ++ maybe "qualified" show (controlRefusal verdict) ++ maybe "" ("; observer stopped: " ++) (fmap show (controlStopped verdict)))
     unless passed exitFailure
   _ -> die usage
