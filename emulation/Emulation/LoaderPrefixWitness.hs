@@ -3,10 +3,10 @@
 module Emulation.LoaderPrefixWitness
   ( Scenario (..), scenarioName, parseScenario, scenarioControl, isNegative, admitScenario
   , Guest (..), Span (..), RegisterIndex, registerIndex
-  , ProgramKind (..), programKindName, Polling (..), Program (..), ProgramFacts (..)
+  , ProgramKind (..), programKindName, Program (..), ProgramFacts (..)
   , Contract (..), StartupFacts, budget, contractValue, parseContract, isComposed
-  , retainedFacts, deriveOwnedFacts, deriveScenarioOwnedFacts, StagedImages (..), stagedImages, stagedImagesFromParts, verifyStagedOwned
-  , deriveComposedContract
+  , retainedFacts, deriveOwnedFacts, OwnedEntry (..), deriveOwnedEntryFacts, StagedImages (..), stagedImages, stagedImagesFromParts, verifyStagedOwned
+  , deriveComposedContract, CompletionZero (..), deriveCompletionZero
   , ReceiptScope (..), Receipt, ValidatedReceipt, receiptArgument, parseReceipt, validateReceipt, compareReceipts
   , PrefixExitContext (..), prefixExitContext
   , maxReceiptBytes
@@ -22,7 +22,6 @@ import qualified Data.Aeson.KeyMap as KM
 import Data.Bits (complement, (.&.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Builder as BB
-import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy.Char8 as BLC
 import Data.List (nub, sort, sortOn, stripPrefix)
 import qualified Data.Map.Strict as M
@@ -32,7 +31,7 @@ import Emulation.FirstStageWitness (Core (..), Cpsr (..), WitnessResult (..), en
 import Emulation.PeerStageWitness (Registers (..))
 import qualified Emulation.PeerStageWitness as P
 import qualified Emulation.PeerStartupWitness as S
-import Emulation.PollPeriod (CodeImage (..), PollModel (..), PollPeriod (..), imageWord, pollPeriod, pollEarlyExit)
+import Emulation.PollPeriod (CodeImage (..), PollModel (..), PollPeriod (..), imageWord, pollPeriod)
 import qualified FujiAF.CompletionControl as C
 import qualified FujiAF.FirstStage as F
 import FujiAF.JSON (decodeStrictIntegers)
@@ -42,7 +41,7 @@ import qualified StartupStageContract as Stage
 
 -- * Contract
 
-data Scenario = Natural | Held | Delayed | NonOne | NegativeInvalidCore | NegativePredicateZero | NegativeInterleavedTail
+data Scenario = Natural | Held | Delayed | NonOne | NegativeInterleavedTail
   deriving (Eq, Show, Enum, Bounded)
 
 scenarioName :: Scenario -> String
@@ -50,12 +49,10 @@ scenarioName Natural = "natural"
 scenarioName Held = "held"
 scenarioName Delayed = "delayed"
 scenarioName NonOne = "non-one"
-scenarioName NegativeInvalidCore = "negative-invalid-core"
-scenarioName NegativePredicateZero = "negative-predicate-zero"
 scenarioName NegativeInterleavedTail = "negative-interleaved-tail"
 
 isNegative :: Scenario -> Bool
-isNegative scenario = scenario `elem` [NegativeInvalidCore, NegativePredicateZero, NegativeInterleavedTail]
+isNegative scenario = scenario == NegativeInterleavedTail
 
 admitScenario :: Bool -> ProgramKind -> Scenario -> Either String ()
 admitScenario composed kind scenario = when (isNegative scenario) $
@@ -71,8 +68,6 @@ scenarioControl Natural = Nothing
 scenarioControl Held = Just C.HeldCompletion
 scenarioControl Delayed = Just C.DelayedCompletion
 scenarioControl NonOne = Just C.NonOneCompletion
-scenarioControl NegativeInvalidCore = Nothing
-scenarioControl NegativePredicateZero = Nothing
 scenarioControl NegativeInterleavedTail = Nothing
 
 newtype Guest = Guest Word32 deriving (Eq, Ord, Show)
@@ -94,8 +89,6 @@ programKindName :: ProgramKind -> String
 programKindName RetainedProgram = "retained"
 programKindName OwnedProgram = "owned"
 
-data Polling = WaitingPoll PollPeriod | ZeroAcceptingExit deriving (Eq, Show)
-
 data ProgramFacts = ProgramFacts
   { factRecord :: F.Sha256
   , factRecordImmutable :: F.Sha256
@@ -105,7 +98,7 @@ data ProgramFacts = ProgramFacts
   , factLoad :: Guest
   , factPostLoad :: Guest
   , factLoaded :: RegisterIndex
-  , factPeriod :: Polling
+  , factPeriod :: PollPeriod
   , factImage :: Maybe Span
   , factRefusal :: Maybe Guest
   , factForbidFetch :: [Span]
@@ -177,18 +170,29 @@ loaderACompletion = Span 0x40a00 0x40a10
 loaderALiteral = Span 0x40afc 0x40b00
 
 replacedCode :: [Span]
-replacedCode = [Span 0xd0020 0xd00c8, Span 0xd09ac 0xd09d0, Span 0xd0a44 0xd0a64]
+replacedCode = [Span 0xd0020 0xd00c8]
 
 coverageWords :: Word64
 coverageWords = 0x5660
 
-exitAddress, frameReturn, stackTop, exitSp, exitFrame, vectorBase :: Word32
+-- | `exitAddress` is the stock core-1 initializer call the stock wait exits
+-- to; `loaderStartup` is the stock function the owned entry exits to.
+exitAddress, loaderStartup, frameReturn, stackTop, exitSp, exitFrame, vectorBase :: Word32
 exitAddress = 0xd0aac
+loaderStartup = 0xd09ac
 frameReturn = 0xd00c0
 stackTop = 0x400f3420
 exitSp = 0x400f3410
 exitFrame = 0x400f341c
 vectorBase = 0xffff0000
+
+-- | The stock wait's completion load, its post-load site and the loaded register.
+stockLoad, stockPostLoad :: Word32
+stockLoad = 0xd0a44
+stockPostLoad = 0xd0a48
+
+stockLoaded :: RegisterIndex
+stockLoaded = RegisterIndex 3
 
 vectorHandlers :: [Word32]
 vectorHandlers = [0xd0100, 0xd01b4, 0xd0128, 0xd0148, 0xd0168, 0xd0204, 0xd0184]
@@ -234,7 +238,7 @@ contractValue contract = object $
       , "handoff" .= guestWord (factHandoff facts), "entry" .= guestWord (factEntry facts)
       , "load" .= guestWord (factLoad facts), "post_load" .= guestWord (factPostLoad facts)
       , "loaded_register" .= let RegisterIndex value = factLoaded facts in value
-      , "poll_period" .= case factPeriod facts of WaitingPoll (PollPeriod value) -> Just value; ZeroAcceptingExit -> Nothing
+      , "poll_period" .= let PollPeriod value = factPeriod facts in value
       , "image" .= fmap spanValue (factImage facts), "refusal" .= fmap guestWord (factRefusal facts)
       , "forbid_fetch" .= map spanValue (factForbidFetch facts), "forbid_read" .= map spanValue (factForbidRead facts)
       ]
@@ -359,8 +363,6 @@ parseContract bytes = do
   scenario <- field row "scenario" >>= parseScenarioObject
   program@(Program kind facts) <- field row "program" >>= parseProgram
   admitScenario (schema == 5) kind scenario
-  require ((factPeriod facts == ZeroAcceptingExit) == (scenario == NegativePredicateZero))
-    "nullable polling is reserved for negative-predicate-zero"
   case schema of
     4 -> pure (Contract scenario program)
     _ -> do
@@ -383,9 +385,7 @@ parseProgram value = do
     <*> (get row "loader_sha256" >>= F.parseSha256)
     <*> guestField row "handoff" <*> guestField row "entry" <*> guestField row "load" <*> guestField row "post_load"
     <*> (get row "loaded_register" >>= registerIndex)
-    <*> (field row "poll_period" >>= \period -> case period of
-      Null -> Right ZeroAcceptingExit
-      _ -> WaitingPoll . PollPeriod <$> json period)
+    <*> (PollPeriod <$> get row "poll_period")
     <*> (field row "image" >>= nullable parseSpan) <*> (field row "refusal" >>= nullable (fmap Guest . json))
     <*> (field row "forbid_fetch" >>= json >>= mapM parseSpan) <*> (field row "forbid_read" >>= json >>= mapM parseSpan)
   checkFacts kind facts
@@ -398,32 +398,29 @@ retainedProgramFacts period = do
   loader <- F.parseSha256 loaderBHex
   pure ProgramFacts
     { factRecord = record, factRecordImmutable = immutable, factLoader = loader, factHandoff = Guest 0x11850, factEntry = Guest 0xd0020
-    , factLoad = Guest 0xd0a44, factPostLoad = Guest 0xd0a48, factLoaded = RegisterIndex 3, factPeriod = WaitingPoll period
+    , factLoad = Guest stockLoad, factPostLoad = Guest stockPostLoad, factLoaded = stockLoaded, factPeriod = period
     , factImage = Nothing, factRefusal = Nothing, factForbidFetch = [], factForbidRead = []
     }
 
 checkFacts :: ProgramKind -> ProgramFacts -> Either String ()
 checkFacts kind facts = do
-  case factPeriod facts of
-    WaitingPoll (PollPeriod period) -> require (period > 0 && period <= 100000) "poll period lies outside 1..100000"
-    ZeroAcceptingExit -> require (kind == OwnedProgram) "retained program cannot accept zero completion"
+  let PollPeriod period = factPeriod facts
+  require (period > 0 && period <= 100000) "poll period lies outside 1..100000"
+  require (factLoad facts == Guest stockLoad && factPostLoad facts == Guest stockPostLoad && factLoaded facts == stockLoaded)
+    "program wait sites differ from the stock wait"
   case kind of
     RetainedProgram -> do
-      period <- case factPeriod facts of
-        WaitingPoll value -> Right value
-        ZeroAcceptingExit -> Left "retained program lacks a polling cycle"
-      expected <- retainedProgramFacts period
+      expected <- retainedProgramFacts (factPeriod facts)
       require (facts == expected) "retained program facts differ from the stock sites"
     OwnedProgram -> do
       Span low high <- maybe (Left "owned program lacks its record-2 image") Right (factImage facts)
       let inside (Guest site) = fromIntegral site >= low && fromIntegral site < high && site .&. 3 == 0
-          sites = [factHandoff facts, factEntry facts, factLoad facts, factPostLoad facts] ++ maybe [] pure (factRefusal facts)
+          sites = [factHandoff facts, factEntry facts] ++ maybe [] pure (factRefusal facts)
       require (low >= 0x103e8 && high <= 0x11800 && low < high && low .&. 3 == 0 && high .&. 3 == 0)
         "owned image lies outside record-2 padding [0x103e8,0x11800)"
       require (all inside sites && length (nub sites) == length sites) "owned sites lie outside the image or repeat"
       require (low <= 0x10400 && high > 0x10400) "owned image omits the secondary entry at 0x10400"
       require (all (/= Guest 0x10400) sites) "owned witness site collides with the secondary entry"
-      require (factLoaded facts == RegisterIndex 0) "owned completion value is not returned in r0"
       require (sort (factForbidFetch facts) == replacedCode && factForbidRead facts == [entryPool])
         "owned forbidden spans differ from the replaced loader-B code and pool"
 
@@ -447,40 +444,42 @@ retainedFacts (StagedImages record loader) = do
   immutable <- recordImmutableDigest record
   require (F.sha256Hex immutable == retainedRecordImmutableHex) "retained immutable record 2 differs from the original"
   require (sha256Hex loader == loaderBHex) "retained loader B differs from the original"
+  stockWait loader >>= retainedProgramFacts
+
+-- | The polling period of loader B's stock wait `[0xd0a44,0xd0a64)`, entered
+-- from the stock decision with `r1 = 0x400a0000` and `r2 = 100`.
+stockWait :: B.ByteString -> Either String PollPeriod
+stockWait loader = do
   forM_ [(0xd09c0, 0x13001000), (0xd09c4, 0x1344100a), (0xd09c8, 0x13a02064)] $ \(address, expected) ->
     require (leWordAt loader (address - 0xd0000) == Right expected) "stock wait register setup differs"
   let model = completionModel (0, 0) (M.fromList [(1, 0x400a0000), (2, 100)])
   let branchesTo target = [() | offset <- [0, 4 .. B.length loader - 4], Right word <- [leWordAt loader offset]
         , Branch _ _ destination <- [A32.decode (0xd0000 + fromIntegral offset) word], destination == target]
-  require (null (branchesTo 0xd0a48)) "a stock branch enters the retained post-load site"
-  pollPeriod model (CodeImage 0xd0000 loader) 0xd0a44 0xd0a48 >>= retainedProgramFacts
+  require (null (branchesTo 0xd0a48)) "a stock branch enters the stock post-load site"
+  pollPeriod model (CodeImage 0xd0000 loader) stockLoad stockPostLoad
 
--- | Owned facts from the linked image and symbols and the staged record 2
--- and loader B.
-deriveOwnedFacts :: B.ByteString -> B.ByteString -> StagedImages -> Either String ProgramFacts
-deriveOwnedFacts = deriveScenarioOwnedFacts Natural
+-- | The owned loader-B entry: record-2 handoff, loader-B header publication,
+-- exit to loader-B startup, image extent and forbidden stock ranges.
+data OwnedEntry = OwnedEntry
+  { ownedHandoff :: Guest
+  , ownedEntry :: Guest
+  , ownedExit :: Guest
+  , ownedImage :: Span
+  , ownedRefusal :: Maybe Guest
+  , ownedForbidFetch :: [Span]
+  , ownedForbidRead :: [Span]
+  } deriving (Eq, Show)
 
-deriveScenarioOwnedFacts :: Scenario -> B.ByteString -> B.ByteString -> StagedImages -> Either String ProgramFacts
-deriveScenarioOwnedFacts scenario bin symbolBytes images = do
-  admitScenario False OwnedProgram scenario
+-- | The owned entry facts from the linked image and symbols over a staged
+-- record 2 and any loader B carrying its header publication.
+deriveOwnedEntryFacts :: B.ByteString -> B.ByteString -> StagedImages -> Either String OwnedEntry
+deriveOwnedEntryFacts bin symbolBytes images = do
   rows <- F.parseSymbols symbolBytes
-  let exported name kinds = any (\line -> case BC.words line of
-        [_, _, kind, found] -> BC.unpack found == name && BC.unpack kind `elem` kinds
-        _ -> False) (BC.lines symbolBytes)
-  when (scenario == NegativeInvalidCore) $
-    require (exported "xm1_loader_prefix_invalid_core_fault" ["T"]) "invalid-core fault lacks its exported function"
-  when (scenario == NegativePredicateZero) $
-    require (exported "xm1_loader_prefix_predicate_zero_fault" ["R", "D"]) "predicate-zero fault lacks its exported data marker"
-  deriveOwnedFactsParsed scenario (U.MediaImage bin) rows images
+  ownedEntryFacts (U.MediaImage bin) rows images
 
-deriveOwnedFactsParsed :: Scenario -> U.MediaImage -> [F.Symbol] -> StagedImages -> Either String ProgramFacts
-deriveOwnedFactsParsed scenario (U.MediaImage bin) rows (StagedImages record loader) = do
+ownedEntryFacts :: U.MediaImage -> [F.Symbol] -> StagedImages -> Either String OwnedEntry
+ownedEntryFacts (U.MediaImage bin) rows (StagedImages record loader) = do
   let at name = F.symbolAddress <$> F.lookupSymbol rows name
-      extentOf name = do
-        found <- F.lookupSymbol rows name
-        let low = F.symbolAddress found
-        require (F.symbolSize found > 0 && low .&. 3 == 0) (name ++ " has no size or is not word aligned")
-        pure (low, low + F.symbolSize found)
   start <- at "__secondary_stage_start"
   entry <- at "xm1_secondary_entry"
   end <- at "__secondary_stage_end"
@@ -490,76 +489,45 @@ deriveOwnedFactsParsed scenario (U.MediaImage bin) rows (StagedImages record loa
   require (B.take (B.length bin) (B.drop (fromIntegral start - 0x10000) record) == bin) "staged record 2 does not hold the owned image"
   let code = CodeImage start bin
       wordAt location = maybe (Left ("owned word outside the image at " ++ hex location)) Right (imageWord code location)
-      decodeExtent (low, high) = mapM (\location -> (,) location . A32.decode location <$> wordAt location) [low, low + 4 .. high - 4]
   handoff <- at "xm1_secondary_handoff_vector"
   handoffWord <- wordAt handoff
   require (handoffWord == 0xe1a0f003) "record-2 handoff vector is not MOV PC, R3"
   prefixEntry <- at "xm1_loader_prefix_entry"
   require (leWordAt loader 0xc == Right prefixEntry) "staged loader-B header entry does not name xm1_loader_prefix_entry"
-  exitWord <- at "xm1_loader_prefix_exit" >>= wordAt
-  require (exitWord == 0xe12fff10) "prefix exit is not BX R0"
-  cell <- extentOf "xm1_loader_prefix_completion_cell"
-  cellWords <- decodeExtent cell
-  let literals = [(rt, location + 8 + fromIntegral displacement) | (location, Load (Cond 14) Word False rt rn (OffsetImmediate displacement) OffsetOnly) <- cellWords, rn == A32.pc]
-      cellLoads = [(location, base) | (location, Load (Cond 14) Word False (Reg 0) base (OffsetImmediate 0) OffsetOnly) <- cellWords, base /= A32.pc]
-  load <- case (cellLoads, literals) of
-    ([(location, base)], [(rt, literalAt)]) | rt == base -> do
-      literal <- wordAt literalAt
-      require (literal == 0x40000000 + fromIntegral completionCell) "completion-cell literal is not 0x400a00c4"
-      pure location
-    _ -> Left "completion cell is not one literal base and one word load into r0"
-  returnWord <- A32.decode (load + 4) <$> wordAt (load + 4)
-  require (case returnWord of
-    LoadMultiple (Cond 14) rn _ _ list -> rn == A32.sp && A32.pc `elem` list && Reg 0 `notElem` list
-    BranchExchange (Cond 14) False rm -> rm == A32.lr
-    _ -> False) "completion-cell load is not followed by its return"
-  dispatchWords <- extentOf "xm1_loader_prefix_dispatch" >>= decodeExtent
-  call <- case [location | (location, Branch (Cond 14) True callee) <- dispatchWords, callee == fst cell] of
-    [location] -> Right location
-    _ -> Left "dispatch does not call the completion cell exactly once"
-  require (null [() | (_, Branch _ _ destination) <- dispatchWords, destination == call + 4]) "a branch enters the owned post-load site"
-  let model = completionModel (0x400f3000, stackTop) (M.singleton 13 0x400f3400)
-      predicateMarker = "xm1_loader_prefix_predicate_zero_fault"
-      invalidCoreMarker = "xm1_loader_prefix_invalid_core_fault"
-      present name = any ((== name) . F.symbolName) rows
-  require (present predicateMarker == (scenario == NegativePredicateZero)
-    && present invalidCoreMarker == (scenario == NegativeInvalidCore)) "negative source marker and scenario differ"
-  when (scenario == NegativeInvalidCore) $ do
-    (low, high) <- extentOf invalidCoreMarker
-    require (low >= start && high <= end) "invalid-core fault function leaves the owned image"
-    _ <- decodeExtent (low, high)
-    pure ()
-  period <- if scenario == NegativePredicateZero
-    then do
-      marker <- F.lookupSymbol rows predicateMarker
-      require (F.symbolSize marker == 4) "predicate-zero marker is not one word"
-      wordAt (F.symbolAddress marker) >>= \word -> require (word == 0x50524544) "predicate-zero marker value differs"
-      continuationLoad <- maybe (Left "predicate-zero dispatch lacks its pre-call continuation load") Right (lookup (call - 4) dispatchWords)
-      case continuationLoad of
-        Load (Cond 14) Word False (Reg destination) base (OffsetImmediate offset) OffsetOnly
-          | destination >= 0 && destination <= 12 && base == A32.pc ->
-              wordAt (call + 4 + fromIntegral offset) >>= \value ->
-                require (value == exitAddress) "predicate-zero continuation literal differs"
-        _ -> Left "predicate-zero continuation is not an unconditional pre-call literal load"
-      let returns = [location | (location, instruction) <- dispatchWords, case instruction of
-            LoadMultiple (Cond 14) rn _ _ list -> rn == A32.sp && A32.pc `elem` list && Reg 0 `notElem` list
-            BranchExchange (Cond 14) False rm -> rm == A32.lr
-            _ -> False]
-      require (not (null returns)) "predicate-zero dispatch lacks an A32 return"
-      pollEarlyExit model code (call - 4) (call + 4) returns exitAddress
-      pure ZeroAcceptingExit
-    else WaitingPoll <$> pollPeriod model code call (call + 4)
+  exit <- at "xm1_loader_prefix_exit"
+  exitWord <- wordAt exit
+  require (case A32.decode exit exitWord of
+    Branch (Cond 14) False target -> target == loaderStartup
+    _ -> False) "prefix exit is not B 0xd09ac"
   let refusal = either (const Nothing) (Just . Guest . F.symbolAddress) (F.lookupSymbol rows "xm1_loader_prefix_refusal")
   fetchSpans <- forbidSpans rows "xm1_loader_b_forbid_fetch_"
   readSpans <- forbidSpans rows "xm1_loader_b_forbid_read_"
+  pure OwnedEntry
+    { ownedHandoff = Guest handoff, ownedEntry = Guest prefixEntry, ownedExit = Guest exit
+    , ownedImage = Span (fromIntegral start) (fromIntegral end), ownedRefusal = refusal
+    , ownedForbidFetch = sort fetchSpans, ownedForbidRead = sort readSpans
+    }
+
+-- | Owned facts from the linked image and symbols and the staged record 2
+-- and loader B, whose wait is stock.
+deriveOwnedFacts :: B.ByteString -> B.ByteString -> StagedImages -> Either String ProgramFacts
+deriveOwnedFacts bin symbolBytes images = do
+  rows <- F.parseSymbols symbolBytes
+  ownedFacts (U.MediaImage bin) rows images
+
+ownedFacts :: U.MediaImage -> [F.Symbol] -> StagedImages -> Either String ProgramFacts
+ownedFacts image rows images@(StagedImages record loader) = do
+  owned <- ownedEntryFacts image rows images
+  period <- stockWait loader
   recordDigest <- F.parseSha256 (sha256Hex record)
   recordImmutable <- recordImmutableDigest record
   loaderDigest <- F.parseSha256 (sha256Hex loader)
   let facts = ProgramFacts
-        { factRecord = recordDigest, factRecordImmutable = recordImmutable, factLoader = loaderDigest, factHandoff = Guest handoff, factEntry = Guest prefixEntry
-        , factLoad = Guest load, factPostLoad = Guest (call + 4), factLoaded = RegisterIndex 0, factPeriod = period
-        , factImage = Just (Span (fromIntegral start) (fromIntegral end)), factRefusal = refusal
-        , factForbidFetch = sort fetchSpans, factForbidRead = sort readSpans
+        { factRecord = recordDigest, factRecordImmutable = recordImmutable, factLoader = loaderDigest
+        , factHandoff = ownedHandoff owned, factEntry = ownedEntry owned
+        , factLoad = Guest stockLoad, factPostLoad = Guest stockPostLoad, factLoaded = stockLoaded, factPeriod = period
+        , factImage = Just (ownedImage owned), factRefusal = ownedRefusal owned
+        , factForbidFetch = ownedForbidFetch owned, factForbidRead = ownedForbidRead owned
         }
   checkFacts OwnedProgram facts
   pure facts
@@ -669,7 +637,7 @@ deriveComposedContract scenario input (Guest argument) = do
       pure Nothing
   canonical <- maybe (Right finalParsed) (`Stage.canonicalizeInterleavedTail` finalParsed) hook
   images <- stagedImagesFromParts (Guest firstEntry) (U.parsedParts finalParsed)
-  facts <- deriveOwnedFactsParsed Natural (F.planImage (Stage.secondaryPrefixArtifactPlan second)) secondRows images
+  facts <- ownedFacts (F.planImage (Stage.secondaryPrefixArtifactPlan second)) secondRows images
   handoff <- at firstRows "xm1_first_stage_handoff_vector"
   require (leWordAt firstBin (fromIntegral handoff - firstStart) == Right 0xe1a0f002)
     "firststage handoff vector is not MOV PC, R2"
@@ -968,10 +936,7 @@ data Receipt = Receipt
   , receiptInitialRecord :: Maybe F.Sha256, receiptHandoffRecordImmutable :: Maybe F.Sha256
   , receiptScope :: ReceiptScope
   , receiptFirststageZero :: Maybe HistoryRef, receiptKernelInstall :: Maybe KernelInstallProof
-  , receiptNegativeEvidence :: Maybe NegativeEvidence
   } deriving (Eq, Show)
-
-newtype NegativeEvidence = InvalidCoreIdentity Word32 deriving (Eq, Show)
 
 -- | A receipt accepted under its contract.
 data ValidatedReceipt = ValidatedReceipt Contract Receipt
@@ -1017,8 +982,7 @@ parseReceipt scope bytes = do
     , "boot_watch", "loaded_watch", "scoped_watch", "stops", "bindings", "completion", "endpoint", "final_primary"
     , "initial_record_sha256", "handoff_record_immutable_sha256"]
     ++ (if schema == 5 then ["startup", "firststage_zero", "kernel_vector_install"] else [])
-    ++ ["initializer" | scope == InitializerBoundary]
-    ++ ["negative_evidence" | KM.member "negative_evidence" initial]) value
+    ++ ["initializer" | scope == InitializerBoundary]) value
   scenario <- field row "scenario" >>= parseScenarioObject
   program <- get row "program" >>= closed programKindName "loader-prefix program"
   admitScenario (schema == 5) program scenario
@@ -1045,15 +1009,6 @@ parseReceipt scope bytes = do
     <*> pure scope
     <*> (if schema == 5 then field row "firststage_zero" >>= nullable parseHistoryRef else pure Nothing)
     <*> (if schema == 5 then Just <$> (field row "kernel_vector_install" >>= parseInstallProof) else pure Nothing)
-    <*> traverse (parseNegativeEvidence scenario) (KM.lookup "negative_evidence" row)
-
-parseNegativeEvidence :: Scenario -> Value -> Either String NegativeEvidence
-parseNegativeEvidence scenario value = do
-  require (scenario == NegativeInvalidCore) "negative identity evidence requires negative-invalid-core"
-  row <- fields ["invalid_core_identity"] value
-  identity <- get row "invalid_core_identity"
-  require (identity == 0x6003) "negative core identity differs from 0x6003"
-  pure (InvalidCoreIdentity identity)
 
 parseRowCursor :: Value -> Either String RowCursor
 parseRowCursor value = do
@@ -1398,7 +1353,7 @@ startupClasses (Just facts) =
     ++ [ClassState span' [CpuRead] | span' <- secondaryRead]
 
 initializerBody :: Span
-initializerBody = Span 0xd0430 0xd09ac
+initializerBody = Span 0xd0434 0xd09ac
 
 initializerClasses :: ReceiptScope -> ProgramKind -> [ClassState]
 initializerClasses InitializerBoundary OwnedProgram = [ClassState initializerBody [CpuRead, CpuFetch]]
@@ -1408,7 +1363,7 @@ retainedInitializerAccess :: ReceiptScope -> ProgramKind -> Row -> Bool
 retainedInitializerAccess InitializerBoundary OwnedProgram row =
   case (rowAccess row, rowLocation row, rowAttribution row) of
     (access, PhysicalSpan (Span start end), Just (Attribution Core0 _ _ _)) ->
-      access `elem` [CpuRead, CpuFetch] && start >= 0xd0430 && end <= 0xd09ac
+      access `elem` [CpuRead, CpuFetch] && start >= 0xd0434 && end <= 0xd09ac
     _ -> False
 retainedInitializerAccess _ _ _ = False
 
@@ -1497,7 +1452,6 @@ validateReceipt contract receipt = do
       retainedBodyAccess = retainedInitializerAccess scope kind
   require (not (isNegative scenario) && not (isNegative (receiptScenario receipt)))
     "negative startup evidence cannot establish a positive receipt"
-  require (isNothing (receiptNegativeEvidence receipt)) "positive receipt contains negative evidence"
   require (scope /= InitializerBoundary || (scenario == Natural && isNothing selected))
     "initializer prefix evidence requires standalone natural startup"
   require (receiptStartup receipt == selected) "receipt startup identity or schema differs from its contract"
@@ -1606,9 +1560,7 @@ validateReceipt contract receipt = do
     _ -> Left "scoped zero coverage rule differs"
   let totals = counterTotals counter
       expected = fromIntegral (C.completionValue (scenarioControl scenario)) :: Word64
-  period <- case factPeriod facts of
-    WaitingPoll (PollPeriod value) -> Right value
-    ZeroAcceptingExit -> Left "positive receipt lacks a polling cycle"
+  let PollPeriod period = factPeriod facts
   when (scope == InitializerBoundary || isJust selected) $ do
     terminal <- if scenario == Held then Right (last stops) else uniqueStop stops PrefixExit
     let core1 = snd (stopCounts terminal)

@@ -58,7 +58,7 @@ index b83cd63..e6b5b80 100644
  #[cfg(test)]
  mod tests;
 diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/board/observation.rs
-index 849ab84..f22633e 100644
+index 84020e6..93bda70 100644
 --- a/crates/emulator/src/board/observation.rs
 +++ b/crates/emulator/src/board/observation.rs
 @@ -1,8 +1,9 @@

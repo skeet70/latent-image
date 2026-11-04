@@ -23,6 +23,7 @@ import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
 import Replacement.StartupArtifact.Adapters
 import Replacement.StartupArtifact.Compose
+import Replacement.StartupArtifact.Contract (contractCarriers)
 import Replacement.StartupArtifact.Joins (JoinKind, registeredJoins)
 import Replacement.StartupArtifact.Stage
 import Replacement.StartupArtifact.Targets
@@ -62,16 +63,20 @@ keyPaths value = case value of
   J.Array items -> Set.unions (map keyPaths (V.toList items))
   _ -> Set.empty
 
+-- | Key paths outside @guard.attach_state.relations@, whose members the fixture leaves null.
+contractKeys :: J.Value -> Set.Set [Text]
+contractKeys = Set.filter (\path -> take 3 path /= ["guard", "attach_state", "relations"] || length path == 3) . keyPaths
+
 main :: IO ()
 main = do
   arguments <- getArgs
   (encoder, rebuild, decoder, imagePaths, fixturePath, datPath, scratchPath) <- case arguments of
-    [encoder, rebuild, decoder, firstBin, firstSymbols, pairBin, pairSymbols, publisherBin, publisherSymbols, fixture, dat, scratch] ->
-      pure (encoder, rebuild, decoder, [firstBin, firstSymbols, pairBin, pairSymbols, publisherBin, publisherSymbols], fixture, dat, scratch)
-    _ -> H.failH "usage: startup-artifact-canonical-tests ENCODER REBUILD DECODER FIRST_BIN FIRST_SYMBOLS PAIR_BIN PAIR_SYMBOLS PUBLISHER_BIN PUBLISHER_SYMBOLS CONTRACT_FIXTURE CANONICAL_DAT SCRATCH_DIR"
+    [encoder, rebuild, decoder, firstBin, firstSymbols, pairBin, pairSymbols, publisherBin, publisherSymbols, orchestrationBin, orchestrationSymbols, fixture, dat, scratch] ->
+      pure (encoder, rebuild, decoder, [firstBin, firstSymbols, pairBin, pairSymbols, publisherBin, publisherSymbols, orchestrationBin, orchestrationSymbols], fixture, dat, scratch)
+    _ -> H.failH "usage: startup-artifact-canonical-tests ENCODER REBUILD DECODER FIRST_BIN FIRST_SYMBOLS PAIR_BIN PAIR_SYMBOLS PUBLISHER_BIN PUBLISHER_SYMBOLS ORCHESTRATION_B_BIN ORCHESTRATION_B_SYMBOLS CONTRACT_FIXTURE CANONICAL_DAT SCRATCH_DIR"
   resolved <- mapM canonicalizePath imagePaths
   tools <- Tools.Tools <$> canonicalizePath encoder <*> canonicalizePath rebuild <*> canonicalizePath decoder
-  [firstBin, firstSymbols, pairBin, pairSymbols, publisherBin, publisherSymbols] <- pure resolved
+  [firstBin, firstSymbols, pairBin, pairSymbols, publisherBin, publisherSymbols, orchestrationBin, orchestrationSymbols] <- pure resolved
   counter <- newIORef 0
   let ok = check counter
   scratch <- Tools.validateScratchDirectory scratchPath
@@ -100,8 +105,9 @@ main = do
   ok "first stage edits only record 1" (editTargets first == Set.fromList [Record1])
   ok "first stage carries the reset literal" (at Record1 0x20 0x24 `elem` pieceCarriers first)
   ok "record-2 link edits record 2, loader B and image 4" (editTargets pair == Set.fromList [Record2, LoaderB, Image4])
-  ok "record-2 link carries both loader-B words and the image-4 pair"
-    (all (`coveredBy` pieceCarriers pair) [at LoaderB 0xd000c 0xd0010, at LoaderB 0xd0aac 0xd0ab0, at Image4 0x7235d8 0x723790])
+  ok "record-2 link carries both loader-B publications and the image-4 pair"
+    (all (`coveredBy` pieceCarriers pair) [at LoaderB 0xd000c 0xd0010, at LoaderB 0xd0430 0xd0434, at Image4 0x7235d8 0x723790]
+      && not (coveredBy (at LoaderB 0xd0aac 0xd0ab0) (pieceCarriers pair)))
   ok "publisher edits only its loader-A window" (editTargets publisher == Set.fromList [LoaderA] && pieceCarriers publisher == [at LoaderA 0x40430 0x409ac])
 
   let composeOf :: [Piece] -> Either Refusal (Composition JoinKind)
@@ -121,11 +127,103 @@ main = do
   ok "the rendezvous join admits first stage and record-2 link as pending"
     (fmap compositionQualification (composeOf [first, pair]) == Right (Pending ["first-stage-secondary-rendezvous"]))
 
+  -- J2: loader-B orchestration with the record-2 link, publisher and first stage.
+  orchestrationImage <- linked orchestrationBin orchestrationSymbols
+  orchestration <- either (H.failH . show) pure (deriveLoaderOrchestrationB source orchestrationImage)
+  ok "loader-B orchestration edits only its 340-byte carrier"
+    (editTargets orchestration == Set.fromList [LoaderB] && pieceCarriers orchestration == [at LoaderB 0xd09ac 0xd0b00]
+      && editsInsideCarriers orchestration && footprintOutsideCarriers orchestration)
+  ok "without joins, record-2 link and loader-B orchestration refuse on loader B"
+    (case composeUnjoined [pair, orchestration] of
+      Left (FootprintOverlap _ _ range) -> spanTarget range == LoaderB
+      _ -> False)
+  ok "without joins, loader-B orchestration and the first stage refuse on record 1"
+    (case composeUnjoined [first, orchestration] of
+      Left (FootprintOverlap LoaderOrchestrationB FirstStage range) -> spanTarget range == Record1
+      _ -> False)
+  ok "a record-2 link still carrying the 0xd0aac call word refuses on the orchestration carrier"
+    (case composeUnjoined [pair {pieceCarriers = pieceCarriers pair ++ [at LoaderB 0xd0aac 0xd0ab0]}, orchestration] of
+      Left (CarrierOverlap Record2Link LoaderOrchestrationB range) -> range == at LoaderB 0xd0aac 0xd0ab0
+      _ -> False)
+  j2 <- either (H.failH . show) pure (composeOf [first, pair, publisher, orchestration])
+  let appliedOf name = [spans | AppliedJoin join spans <- compositionJoins j2, joinName (joinKind join) == name]
+      catalogOf kind = [pieceCatalog piece | piece <- compositionPieces j2, pieceKind piece == kind]
+      labelsOf catalog = map (labelText . boundaryLabel) (catalogBoundaries catalog)
+  ok "J2 composes pending the rendezvous, prefix-orchestration and completion-zero joins"
+    (compositionQualification j2 == Pending ["first-stage-secondary-rendezvous", "prefix-orchestration-b", "first-stage-completion-zero"])
+  ok "prefix-orchestration-b covers exactly the three loader-B conflicts"
+    (appliedOf "prefix-orchestration-b" == [[at LoaderB 0xd000c 0xd0010, at LoaderB 0xd0430 0xd0434, at LoaderB 0xd09ac 0xd0b00]])
+  ok "first-stage-completion-zero covers the first-stage carriers"
+    (appliedOf "first-stage-completion-zero" == [normalizeSpans (pieceCarriers first)])
+  ok "the record-2 initializer return and its table read yield to loader-B orchestration"
+    (map labelsOf (catalogOf Record2Link) == [["record2-link/secondary-entry", "record2-link/prefix-entry", "record2-link/initializer-entry"
+        , "record2-link/critical-enter", "record2-link/critical-exit"]]
+      && map catalogReads (catalogOf Record2Link) == [[]]
+      && map (map (labelText . readLabel) . catalogReads) (catalogOf LoaderOrchestrationB)
+        == [["loader-orchestration-b/workspace", "loader-orchestration-b/vectors", "loader-orchestration-b/frame"
+            , "loader-orchestration-b/completion", "loader-orchestration-b/table-b", "loader-orchestration-b/ready"]])
+  ok "without loader-B orchestration the record-2 link keeps the stock initializer return"
+    (either (const False) (\composition -> any (elem "record2-link/initializer-return" . labelsOf . pieceCatalog) (compositionPieces composition))
+      (composeOf [first, pair, publisher]))
+  let j2Targets = compositionTargets j2
+      j2Pieces = compositionPieces j2
+      evidence targets' pieces' = JoinEvidence targets targets' (U.parsedParts (canonicalParsed source)) pieces'
+      named name = [predicate | join <- registeredJoins, HostCheck checkName predicate <- joinChecks join, checkName == name]
+      holds name targets' pieces' = not (null (named name)) && all ($ evidence targets' pieces') (named name)
+      replaced target address word = either (const j2Targets) id
+        (maybe (Left CompositionUnchanged) (\change -> applyTargetEdits [change] j2Targets) (edit (at target address (address + 4)) (U.putWord32 word)))
+      withScratch scratch' = [piece {pieceFacts = case pieceFacts piece of
+          Record2LinkFacts entry bindings' image _ -> Record2LinkFacts entry bindings' image (ScratchBytes scratch')
+          other -> other} | piece <- j2Pieces]
+      j2Checks = [ "prefix-exit-enters-orchestration", "orchestration-entry-pushes-the-caller-frame", "published-initializer-entry"
+                 , "initializer-scratch-in-window", "first-stage-zeroes-the-completion-cell" ]
+  ok "every J2 host check holds on the J2 composition" (all (\name -> holds name j2Targets j2Pieces) j2Checks)
+  ok "a loader-B header naming the stock entry fails the prefix exit check"
+    (not (holds "prefix-exit-enters-orchestration" (replaced LoaderB 0xd000c 0xd0020) j2Pieces))
+  ok "a loader-B startup without the stock frame push fails the frame-push check"
+    (not (holds "orchestration-entry-pushes-the-caller-frame" (replaced LoaderB 0xd09ac 0xe92d4810) j2Pieces))
+  ok "a stock initializer entry word fails the published-initializer check"
+    (not (holds "published-initializer-entry" (replaced LoaderB 0xd0430 0xe92d0830) j2Pieces))
+  ok "initializer scratch reaching below the B stack window fails"
+    (not (holds "initializer-scratch-in-window" j2Targets (withScratch 0x800)))
+  ok "a record 1 that no longer holds the first stage fails the completion-zero check"
+    (not (holds "first-stage-zeroes-the-completion-cell" (replaced Record1 0x6000 0) j2Pieces))
+  (_, j2Observed) <- stageComposition tools scratch source j2
+  forM_ [Record1, Record2, LoaderA, LoaderB, Image4] $ \target ->
+    ok ("J2 composed " ++ show target ++ " differs from canonical exactly at the edits")
+      (normalizeSpans (diffSpans target (targetOf targets target) (targetOf j2Observed target)) == editSpansOf target [first, pair, publisher, orchestration])
+
+  allThree <- either (H.failH . show) pure (composeOf [first, pair, publisher])
   H.withTemporaryAt (Tools.scratchDirectoryPath scratch) "startup-canonical-" $ \root -> do
     -- {FirstStage, Record2Link, PrimaryPublisher} end to end through the stager.
-    let manifest = J.object
-          [ "schema" J..= (1 :: Int)
-          , "guard" J..= J.object ["attach" J..= ("primary-publisher/entry-core0" :: Text)]
+    let publisherCarrier = at LoaderA 0x40430 0x409ac
+        part (_, range@(Span target (Guest start) (Guest end)))
+          | range == publisherCarrier = J.object ["target" J..= targetName target, "start" J..= start, "end" J..= end, "residency" J..= ("resident" :: Text)]
+          | otherwise = J.object ["target" J..= targetName target, "start" J..= start, "end" J..= end, "residency" J..= ("absent" :: Text), "reason" J..= ("not asserted by this test" :: Text)]
+        interval start end = J.object ["start" J..= (start :: Int), "end" J..= (end :: Int)]
+        attachState = J.object
+          [ "peers" J..= [J.object ["core" J..= (1 :: Int), "retained_pc" J..= [interval 0xd0000 0xddaa0], "composed_pc" J..= [interval 0x10400 0x110e0]
+                                   , "reason" J..= ("core 1 waits for the loader-A completion" :: Text)]]
+          , "carriers" J..= map part (contractCarriers allThree)
+          , "allowances" J..= ([] :: [J.Value]), "registers" J..= ([] :: [J.Value]), "board" J..= ([] :: [J.Value])
+          , "relations" J..= J.object
+              [ "timer" J..= J.object ["citation" J..= ("timer.rs" :: Text)]
+              , "log" J..= J.object ["span" J..= interval 0xa0040 0xa00c8, "sites" J..= logSites]
+              , "lz" J..= J.object ["citation" J..= ("lz.rs" :: Text)] ] ]
+        logSite name role coreNumber from = J.object
+          [ "label" J..= (name :: Text), "role" J..= (role :: Text), "core" J..= (coreNumber :: Int), "source" J..= from
+          , "citation" J..= ("boot-40048.dis; entry.S" :: Text) ]
+        stock pc = J.object ["stock" J..= (pc :: Int)]
+        owned kind = J.object ["owned" J..= (kind :: Text)]
+        logSites =
+          [ logSite "stock-record1-channel0" "retained" 0 (stock 0x40f4), logSite "stock-record1-channel1" "retained" 1 (stock 0x413c)
+          , logSite "stock-record2-channel0" "retained" 0 (stock 0x134f4), logSite "stock-record2-channel1" "retained" 1 (stock 0x1353c)
+          , logSite "composed-stock-record1" "composed" 0 (stock 0x40f4)
+          , logSite "first-stage-core0" "composed" 0 (owned "first-stage"), logSite "first-stage-core1" "composed" 1 (owned "first-stage")
+          , logSite "record2-core0" "composed" 0 (owned "record2-link"), logSite "record2-core1" "composed" 1 (owned "record2-link") ]
+        manifest = J.object
+          [ "schema" J..= (3 :: Int)
+          , "guard" J..= J.object ["attach" J..= ("primary-publisher/entry-core0" :: Text), "attach_state" J..= attachState]
           , "pieces" J..= [ J.object ["kind" J..= ("first-stage" :: Text), "inputs" J..= J.object ["image" J..= firstBin, "symbols" J..= firstSymbols]]
                           , J.object ["kind" J..= ("record2-link" :: Text), "inputs" J..= J.object ["image" J..= pairBin, "symbols" J..= pairSymbols]]
                           , J.object ["kind" J..= ("primary-publisher" :: Text), "inputs" J..= J.object ["image" J..= publisherBin, "symbols" J..= publisherSymbols]] ]
@@ -167,7 +265,7 @@ main = do
         && kinds == ["first-stage", "record2-link", "primary-publisher"])
     ok "the contract lists both joins with their bases"
       (joinRows == [("first-stage-secondary-rendezvous", "observation-qualified"), ("critical-pair-publisher-bindings", "host-proof")])
-    ok "the contract has exactly the fixture's keys" (keyPaths contract == keyPaths fixture)
+    ok "the contract has exactly the fixture's keys outside the relations" (contractKeys contract == contractKeys fixture)
     ok "the contract names the composed DAT" ((field "composed" contract >>= field "dat_sha256") == Just (J.String composedDigest))
     let boundaries = case field "pieces" contract of
           Just (J.Array rows) -> [boundary | row <- V.toList rows, Just (J.Array items) <- [field "catalog" row >>= field "boundaries"], boundary <- V.toList items]
@@ -175,6 +273,42 @@ main = do
     ok "the guard attach boundary stops"
       ((field "guard" contract >>= field "attach") == Just (J.String "primary-publisher/entry-core0")
         && [field "stop" boundary | boundary <- boundaries, field "label" boundary == Just (J.String "primary-publisher/entry-core0")] == [Just (J.Bool True)])
+    let pieceRow name = case field "pieces" contract of
+          Just (J.Array rows) -> [row | row <- V.toList rows, field "kind" row == Just (J.String name)]
+          _ -> []
+        writesOf name = [writes | row <- pieceRow name, Just writes <- [field "catalog" row >>= field "writes"]]
+        allowOf name = [(field "target" range, field "core" range, field "start" range, field "end" range)
+                       | writes <- writesOf name, Just (J.Array ranges) <- [field "allow" writes], range <- V.toList ranges]
+        number :: Int -> Maybe J.Value
+        number = Just . J.toJSON
+        physicalOn core start end = (Just (J.String "physical"), core, number start, number end)
+    ok "the record-2 link enumerates its post-attach destinations per core"
+      ([field "basis" writes | writes <- writesOf "record2-link"] == [Just (J.String "premised")]
+        && allowOf "record2-link" ==
+          [ physicalOn (Just J.Null) 0xa0f824 0xa0f828, physicalOn (Just J.Null) 0xa10200 0xa5b200
+          , physicalOn (number 0) 0x62c54 0x63460, physicalOn (number 1) 0xddaa0 0xf3420
+          , (Just (J.String "tcm"), number 0, number 0, number 0x2000), (Just (J.String "tcm"), number 1, number 0, number 0x2000) ])
+    ok "only the first stage stays unenumerated" ([field "basis" writes | writes <- writesOf "first-stage"] == [Just (J.String "unenumerated")])
+    composedLoaderA <- H.readRegular (16*1024*1024) (output </> "loader-a.bin")
+    canonicalDigest <- sha256Text (B.take 0x57c (B.drop 0x430 (targetOf targets LoaderA)))
+    composedCarrierDigest <- sha256Text (B.take 0x57c (B.drop 0x430 composedLoaderA))
+    let carrierRows = case field "guard" contract >>= field "attach_state" >>= field "carriers" of
+          Just (J.Array rows) -> V.toList rows
+          _ -> []
+        publisherParts = [part' | row <- carrierRows, field "piece" row == Just (J.String "primary-publisher")
+                                , Just (J.Array parts) <- [field "parts" row], part' <- V.toList parts]
+    ok "a resident carrier part carries the canonical and composed digests of its bytes"
+      (map (field "canonical_sha256") publisherParts == [Just (J.String canonicalDigest)]
+        && map (field "composed_sha256") publisherParts == [Just (J.String composedCarrierDigest)]
+        && canonicalDigest /= composedCarrierDigest)
+    let sites = case field "guard" contract >>= field "attach_state" >>= field "relations" >>= field "log" >>= field "sites" of
+          Just (J.Array rows) -> [(field "label" row, field "read_pc" row, field "store_pc" row) | row <- V.toList rows]
+          _ -> []
+        pcOf (_, Just (J.Number read'), Just (J.Number store)) = Just (read', store)
+        pcOf _ = Nothing
+    ok "every log site resolves to a word load and the store after it in its role's image"
+      (length sites == 9 && all (maybe False (\(read', store) -> store == read' + 4) . pcOf) sites
+        && [pc | site@(Just (J.String "composed-stock-record1"), _, _) <- sites, Just pc <- [pcOf site]] == [(0x40f4, 0x40f8)])
 
     -- Record2Link alone stages through the shared image-4 route.
     pairOnly <- either (H.failH . show) pure (composeOf [pair])

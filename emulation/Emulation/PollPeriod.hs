@@ -7,7 +7,6 @@ module Emulation.PollPeriod
   , CodeImage (..)
   , imageWord
   , pollPeriod
-  , pollEarlyExit
   , Flags (..)
   , holds
   , alu
@@ -83,21 +82,6 @@ pollPeriod model code start loaded = go 0 Nothing initial
                 Nothing | here == loaded -> Just 1
                 Nothing -> Nothing
           go (steps + 1 :: Int) counting next
-
--- | A zero-valued load reaches a return with the selected continuation.
-pollEarlyExit :: PollModel -> CodeImage -> Word32 -> Word32 -> [Word32] -> Word32 -> Either String ()
-pollEarlyExit model code start loaded returns continuation = go 0 False initial
-  where
-    initial = Machine start (pollRegisters model) (Flags Nothing Nothing Nothing Nothing) M.empty
-    go steps observed machine = do
-      let here = machinePc machine
-      require (steps < maxPollSteps) "early-exit interpretation exceeded 100000 steps"
-      if here `elem` returns
-        then require (observed && slot machine 0 == Just continuation) "zero completion does not return the selected continuation"
-        else do
-          require (not (observed && here == loaded)) "zero completion repeats the polling load"
-          next <- execute model code machine
-          go (steps + 1 :: Int) (observed || here == loaded) next
 
 slot :: Machine -> Int -> Maybe Word32
 slot machine number = M.lookup number (machineRegisters machine)

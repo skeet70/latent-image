@@ -1,7 +1,6 @@
-//! Owned X-M1 loader-B core-1 prefix: stock entry `0xd0020`-`0xd00c8`, the
-//! core decision `0xd09ac`-`0xd09d0` and the completion wait
-//! `0xd0a44`-`0xd0a64`, linked with the owned record-2 startup. `entry.S`
-//! holds the stack switch and the loader-B frame.
+//! Owned X-M1 loader-B core-1 entry: stock `0xd0020`-`0xd00c8`, linked with
+//! the owned record-2 startup. `entry.S` holds the stack switch, the exit to
+//! loader-B startup `0xd09ac` and the clear loop.
 
 #![no_std]
 
@@ -13,7 +12,7 @@ mod adapter;
 
 use adapter::*;
 use core::arch::asm;
-use core::ptr::{addr_of, read_volatile, write_volatile};
+use core::ptr::{addr_of, write_volatile};
 
 /// The CP14 `(0,c2,c0,0)` discriminator: `Zero` for `0x4003`, `One` otherwise.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -26,9 +25,6 @@ impl Core {
     unsafe fn current() -> Self {
         let value: u32;
         asm!("mrc p14, 0, {0}, c2, c0, 0", out(reg) value, options(nomem, nostack, preserves_flags));
-        #[cfg(loader_prefix_invalid_core_fault)]
-        return xm1_loader_prefix_invalid_core_fault(value);
-        #[cfg(not(loader_prefix_invalid_core_fault))]
         if value == DISCRIMINATOR_PRIMARY {
             Core::Zero
         } else {
@@ -42,41 +38,6 @@ impl Core {
             Core::One => VectorBase(VECTOR_BASE_SECONDARY),
         }
     }
-}
-
-// Original synthetic identity fault: an unqualified discriminator selects core 1.
-#[cfg(loader_prefix_invalid_core_fault)]
-#[no_mangle]
-#[inline(never)]
-fn xm1_loader_prefix_invalid_core_fault(value: u32) -> Core {
-    if value == DISCRIMINATOR_PRIMARY { Core::Zero } else { Core::One }
-}
-
-#[cfg(loader_prefix_predicate_fault)]
-#[no_mangle]
-#[used]
-static xm1_loader_prefix_predicate_zero_fault: u32 = 0x5052_4544;
-
-/// Loader A's completion word; any nonzero value ends the wait.
-#[repr(transparent)]
-#[derive(Clone, Copy)]
-pub(crate) struct CompletionWord(u32);
-
-impl CompletionWord {
-    #[cfg(not(loader_prefix_predicate_fault))]
-    fn is_complete(self) -> bool {
-        self.0 != 0
-    }
-
-    // Synthetic predicate fault: accept the initial zero completion load.
-    #[cfg(loader_prefix_predicate_fault)]
-    fn is_complete(self) -> bool {
-        self.0 == 0
-    }
-}
-
-unsafe fn clear_words(start: u32, end: u32) {
-    (0..(end - start) / 4).for_each(|word| write_volatile((start + 4 * word) as *mut u32, 0));
 }
 
 unsafe fn install_vectors(base: VectorBase) {
@@ -116,14 +77,14 @@ pub(crate) unsafe extern "C" fn xm1_loader_prefix_install() -> VectorBase {
     let base = Core::current().vector_base();
     install_vectors(base);
     vector_barrier();
-    clear_words(STACK_WINDOW_START, stack_top());
+    xm1_loader_prefix_clear(STACK_WINDOW_START, stack_top());
     base
 }
 
 /// Stock `0xd00b0`-`0xd00c0`, on the loader-B stack.
 #[no_mangle]
 pub(crate) unsafe extern "C" fn xm1_loader_prefix_clear_workspace() {
-    clear_words(WORKSPACE_START, STACK_WINDOW_START);
+    xm1_loader_prefix_clear(WORKSPACE_START, STACK_WINDOW_START);
     // Synthetic fill fault: leave the last workspace word nonzero.
     #[cfg(loader_prefix_fill_fault)]
     xm1_loader_prefix_fill_fault();
@@ -134,30 +95,4 @@ pub(crate) unsafe extern "C" fn xm1_loader_prefix_clear_workspace() {
 #[inline(never)]
 unsafe extern "C" fn xm1_loader_prefix_fill_fault() {
     write_volatile((STACK_WINDOW_START - 4) as *mut u32, 1);
-}
-
-#[no_mangle]
-#[inline(never)]
-pub(crate) unsafe extern "C" fn xm1_loader_prefix_completion_cell() -> CompletionWord {
-    CompletionWord(read_volatile(COMPLETION))
-}
-
-/// Stock `0xd0a44`-`0xd0a60`.
-unsafe fn completion_wait() {
-    while !xm1_loader_prefix_completion_cell().is_complete() {
-        (0..COMPLETION_DELAY_ITERATIONS).for_each(|_| asm!("nop", options(nomem, nostack)));
-    }
-}
-
-/// Stock `0xd09b8`-`0xd09cc` and the wait; called with the loader-B frame
-/// formed. The entry assembly branches to the result.
-#[no_mangle]
-pub(crate) unsafe extern "C" fn xm1_loader_prefix_dispatch() -> Continuation {
-    match Core::current() {
-        Core::Zero => Continuation::of(xm1_loader_b_core0_continuation),
-        Core::One => {
-            completion_wait();
-            Continuation::of(xm1_loader_b_core1_continuation)
-        }
-    }
 }

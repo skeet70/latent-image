@@ -6,7 +6,7 @@ module Replacement.StartupComposition.LoaderStartup
   , loaderBoundaries, boundarySide, boundaryScenario, boundaryPhase, boundaryDispatcherPhase
   , boundaryInstruction, boundaryContinuation, boundaryStack, boundaryFramePointer, boundaryLiveWords, boundaryOwnedLow
   , loaderFrameLow, dispatcherLow, installerLow, joinedLow, loaderCompilerEntry, loaderBodyEntry
-  , LoaderSites, loaderSites, completionStore, completionBeforeDsb, completionAfterDsb
+  , LoaderSites, deriveSites, loaderSites, completionStore, completionBeforeDsb, completionAfterDsb
   , peerPoll, peerPollDestination, peerPollPostload, peerPollBranch, initializerCall, initializerEntry, initializerReturn
   , stageCandidate, candidateBytes, candidateImage4, candidateLoader, contractValue, candidateContractValue
   ) where
@@ -60,7 +60,7 @@ canonicalSource :: C.SourceFiles -> Either LoaderJoinError LoaderSource
 canonicalSource files = do
   composition <- either (Left . CompositionRejected) Right (C.canonicalSource files)
   loaders <- either (Left . LoaderSourceRejected) Right
-    (L.canonicalSource (C.sourceDat files) (C.sourceImage4 files) (C.sourceLoaderA files) (C.sourceLoaderB files))
+    (L.canonicalSource (C.sourceDat files) (C.sourceImage4 files))
   pure (LoaderSource files composition loaders)
 
 deriveArtifact :: C.NativeFiles -> C.NativeFiles -> C.NativeFiles -> C.NativeFiles -> Either LoaderJoinError LoaderJoinedArtifact

@@ -1,7 +1,8 @@
-//! Strict parse of `composed-contract.json` (schema 1) and the observation plan derived from it.
+//! Strict parse of `composed-contract.json` (schema 3) and the observation plan derived from it.
+use crate::attach_state::{AttachRuleRefusal, AttachRules, RawAttachRules, RuleContext, Span};
 use fujimod_emulator::board::observation::{
-    CompositeGuardConfig, DestinationPolicy, GuardCore, GuardRange, GuardSpan, GuardTarget, MAX_GUARD_PC_SPANS,
-    MAX_GUARD_RANGES, OwnedPcPolicy, SourcePolicy, TcmBank, WatchKinds, WatchRange, WriteSource,
+    CompositeGuardConfig, DestinationPolicy, GuardCore, GuardRange, GuardSpan, GuardTarget, MAX_GUARD_PARTITIONS,
+    MAX_GUARD_PC_SPANS, MAX_GUARD_RANGES, PcPartition, SourcePolicy, TcmBank, WatchKinds, WatchRange, WriteSource,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -230,21 +231,38 @@ pub enum FootprintBasis {
 pub enum WritesBasis {
     Proved,
     Premised,
-    /// No enumerated destinations; the piece's owned code is left out of the owned-PC policy.
+    /// No enumerated destinations; the piece's partition allows everything except the owned carriers.
     Unenumerated,
 }
 
-/// The composite guard's write policy for code at owned PCs.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum Confinement {
-    /// No owned-PC policy; every CPU may write all physical memory and its own TCM.
-    Stock,
-    /// Owned code of every enumerated piece shares the union of those pieces' `writes.allow`.
-    UnionOfEnumeratedAllows,
+/// Piece kinds that may declare `unenumerated` writes.
+const UNENUMERATED_PIECES: [&str; 1] = ["first-stage"];
+
+/// The guard's `PartitionId` of one piece on one core: the partition's index in that core's `SourcePolicy`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct PartitionIndex(pub u16);
+
+impl PartitionIndex {
+    /// Position in `GuardStatusToken::partition_checks`.
+    pub fn position(self) -> usize { usize::from(self.0) }
 }
 
-/// Owned code of an unenumerated piece, which runs under the stock policy.
+/// One piece's guard partition on one core.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PiecePolicy {
+    pub piece: PieceKind,
+    pub core: Core,
+    pub partition: PartitionIndex,
+    pub basis: WritesBasis,
+    pub premise: Option<Premise>,
+    pub spans: Vec<PlanSpan>,
+    pub allow: Vec<RangePlan>,
+    pub forbid: Vec<RangePlan>,
+}
+
+/// Owned code of an unenumerated piece.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UnconfinedCode {
@@ -410,18 +428,25 @@ struct RawWriteRange {
     end: u64,
 }
 
-/// A TCM span is an offset range within that core's bank.
+/// A TCM span is an offset range within that core's bank. A physical range with a core binds only that core's
+/// partition.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum WriteSpace {
-    Physical,
+    Physical { core: Option<Core> },
     Tcm { core: Core, bank: Bank },
 }
 
 impl WriteSpace {
     fn guard(self) -> GuardTarget {
         match self {
-            Self::Physical => GuardTarget::Physical,
+            Self::Physical { .. } => GuardTarget::Physical,
             Self::Tcm { core, bank } => GuardTarget::Tcm { core: core.guard(), bank: bank.guard() },
+        }
+    }
+    fn binds(self, core: Core) -> bool {
+        match self {
+            Self::Physical { core: owner } => owner.is_none_or(|owner| owner == core),
+            Self::Tcm { core: owner, .. } => owner == core,
         }
     }
 }
@@ -553,20 +578,27 @@ pub struct Identities {
     pub targets: Targets,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GuardAttach {
     pub attach: Label,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawGuard {
+    attach: Label,
+    attach_state: RawAttachRules,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(try_from = "u32")]
-struct SchemaOne;
+struct SchemaThree;
 
-impl TryFrom<u32> for SchemaOne {
+impl TryFrom<u32> for SchemaThree {
     type Error = String;
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        if value == 1 { Ok(Self) } else { Err("contract schema must be 1".into()) }
+        if value == 3 { Ok(Self) } else { Err("contract schema must be 3".into()) }
     }
 }
 
@@ -580,7 +612,7 @@ enum ContractKind {
 #[serde(deny_unknown_fields)]
 struct RawContract {
     #[allow(dead_code)]
-    schema: SchemaOne,
+    schema: SchemaThree,
     #[allow(dead_code)]
     kind: ContractKind,
     qualification: Qualification,
@@ -588,7 +620,7 @@ struct RawContract {
     manifest_sha256: Sha256,
     canonical: Identities,
     composed: Identities,
-    guard: GuardAttach,
+    guard: RawGuard,
     joins: Vec<Join>,
     pieces: Vec<RawPiece>,
 }
@@ -608,11 +640,12 @@ pub enum GuardBound {
     Ranges(usize),
     PcSpans(usize),
     WatchClasses(usize),
+    Partitions(usize),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CatalogRefusal {
-    /// JSON that does not have the schema-1 shape, including unknown keys and invalid scalars.
+    /// JSON that does not have the schema-3 shape, including unknown keys and invalid scalars.
     Shape(String),
     Qualification,
     NoPieces,
@@ -629,6 +662,9 @@ pub enum CatalogRefusal {
     AttachNotRetained(Label),
     AttachCores(Label),
     UnenumeratedAllow(PieceKind),
+    /// `unenumerated` writes on a piece kind outside `UNENUMERATED_PIECES`.
+    UnenumeratedPiece(PieceKind),
+    AttachState(AttachRuleRefusal),
     WriteRangeShape(PieceKind),
     WritesPremise(PieceKind),
     AliasStraddle(PieceKind),
@@ -659,10 +695,13 @@ pub struct Contract {
     pub canonical: Identities,
     pub composed: Identities,
     pub guard: GuardAttach,
+    attach_core: Core,
+    attach_rules: AttachRules,
     pub joins: Vec<Join>,
     pub pieces: Vec<Piece>,
     boundaries: BTreeMap<Label, Boundary>,
     guards: [CompositeGuardConfig; 2],
+    policies: Vec<PiecePolicy>,
     classes: Vec<WatchRange>,
 }
 
@@ -716,11 +755,14 @@ fn writes(kind: &PieceKind, raw: RawWrites, cores: &BTreeSet<Core>) -> Result<Wr
     if raw.basis == WritesBasis::Unenumerated && !raw.allow.is_empty() {
         return Err(CatalogRefusal::UnenumeratedAllow(kind.clone()));
     }
+    if raw.basis == WritesBasis::Unenumerated && !UNENUMERATED_PIECES.contains(&kind.as_str()) {
+        return Err(CatalogRefusal::UnenumeratedPiece(kind.clone()));
+    }
     let mut allow = Vec::with_capacity(raw.allow.len());
     for range in raw.allow {
         let span = Interval::new(range.start, range.end).map_err(CatalogRefusal::Shape)?;
         let space = match (range.target, range.core, range.bank) {
-            (RawWriteTarget::Physical, None, None) => WriteSpace::Physical,
+            (RawWriteTarget::Physical, core, None) => WriteSpace::Physical { core },
             (RawWriteTarget::Tcm, Some(core), Some(bank)) => WriteSpace::Tcm { core, bank },
             _ => return Err(CatalogRefusal::WriteRangeShape(kind.clone())),
         };
@@ -730,7 +772,12 @@ fn writes(kind: &PieceKind, raw: RawWrites, cores: &BTreeSet<Core>) -> Result<Wr
     let mut translated = Vec::with_capacity(allow.len());
     for range in &allow {
         let span = match range.space {
-            WriteSpace::Physical => range.span.physical().ok_or_else(|| CatalogRefusal::AliasStraddle(kind.clone()))?,
+            WriteSpace::Physical { core } => {
+                if let Some(core) = core.filter(|core| !cores.contains(core)) {
+                    return Err(CatalogRefusal::ForeignTcm { piece: kind.clone(), core });
+                }
+                range.span.physical().ok_or_else(|| CatalogRefusal::AliasStraddle(kind.clone()))?
+            }
             WriteSpace::Tcm { core, .. } => {
                 if !cores.contains(&core) {
                     return Err(CatalogRefusal::ForeignTcm { piece: kind.clone(), core });
@@ -741,8 +788,13 @@ fn writes(kind: &PieceKind, raw: RawWrites, cores: &BTreeSet<Core>) -> Result<Wr
         translated.push(WriteRange { space: range.space, span });
     }
     translated.sort_by_key(|range| (range.space, range.span.start));
-    if translated.windows(2).any(|pair| pair[0].space == pair[1].space && pair[1].span.start < pair[0].span.end) {
-        return Err(CatalogRefusal::OverlappingSpans(SpanList::WriteAllow(kind.clone())));
+    for core in Core::ALL {
+        let mut bound: Vec<(GuardTarget, Interval)> = translated.iter().filter(|range| range.space.binds(core))
+            .map(|range| (range.space.guard(), range.span)).collect();
+        bound.sort_by_key(|(target, span)| (*target, span.start));
+        if bound.windows(2).any(|pair| pair[0].0 == pair[1].0 && pair[1].1.start < pair[0].1.end) {
+            return Err(CatalogRefusal::OverlappingSpans(SpanList::WriteAllow(kind.clone())));
+        }
     }
     Ok(Writes { allow: translated, basis: raw.basis, premise: raw.premise })
 }
@@ -798,7 +850,7 @@ fn piece(raw: RawPiece) -> Result<Piece, CatalogRefusal> {
 fn stock(core: Core) -> DestinationPolicy {
     let everything = Interval { start: 0, end: ADDRESS_END };
     DestinationPolicy {
-        allow: [WriteSpace::Physical, WriteSpace::Tcm { core, bank: Bank::Data }, WriteSpace::Tcm { core, bank: Bank::Instruction }]
+        allow: [WriteSpace::Physical { core: None }, WriteSpace::Tcm { core, bank: Bank::Data }, WriteSpace::Tcm { core, bank: Bank::Instruction }]
             .into_iter().map(|space| GuardRange { target: space.guard(), span: everything.guard() }).collect(),
         forbid: vec![],
     }
@@ -823,48 +875,79 @@ fn owned_spans<'a>(pieces: impl Iterator<Item = &'a Piece>) -> Vec<Interval> {
     merged
 }
 
-/// One policy per source in the order Cpu cores, CoreHost cores, PhysicalHost, ModelBus.
-fn guard_config(pieces: &[Piece], role: Role) -> CompositeGuardConfig {
-    let spans = match role {
-        Role::Retained => vec![],
-        Role::Composed => owned_spans(pieces.iter().filter(|piece| piece.enumerated())),
-    };
-    let allow = merge(pieces.iter().filter(|piece| piece.enumerated()).flat_map(|piece| piece.catalog.writes.allow.iter().copied()).collect());
+fn range_plan(range: &GuardRange) -> RangePlan {
+    let (start, end) = (range.span.start(), range.span.end());
+    match range.target {
+        GuardTarget::Physical => RangePlan::Physical { start, end },
+        GuardTarget::Tcm { core, bank } => RangePlan::Tcm {
+            core: core.get(), bank: match bank { TcmBank::Data => Bank::Data, TcmBank::Instruction => Bank::Instruction }, start, end,
+        },
+    }
+}
+
+/// One policy per source in the order Cpu cores, CoreHost cores, PhysicalHost, ModelBus; in the composed role each
+/// Cpu core gets one partition per piece. `carriers` are every piece's carriers in physical addresses.
+fn guard_config(pieces: &[Piece], carriers: &[Interval], role: Role) -> (CompositeGuardConfig, Vec<PiecePolicy>) {
     let physical_only = DestinationPolicy {
         allow: vec![GuardRange { target: GuardTarget::Physical, span: Interval { start: 0, end: ADDRESS_END }.guard() }],
         forbid: vec![],
     };
-    let cpu = Core::ALL.into_iter().map(|core| SourcePolicy {
-        source: WriteSource::Cpu(core.guard()),
-        destinations: stock(core),
-        owned_pc: (!spans.is_empty()).then(|| OwnedPcPolicy {
-            spans: spans.iter().map(|span| span.guard()).collect(),
-            destinations: DestinationPolicy {
-                allow: allow.iter()
-                    .filter(|range| match range.space { WriteSpace::Physical => true, WriteSpace::Tcm { core: owner, .. } => owner == core })
-                    .map(|range| GuardRange { target: range.space.guard(), span: range.span.guard() })
-                    .collect(),
-                forbid: vec![],
-            },
-        }),
-    });
-    let host = Core::ALL.into_iter().map(|core| SourcePolicy { source: WriteSource::CoreHost(core.guard()), destinations: stock(core), owned_pc: None });
+    let mut policies = Vec::new();
+    let cpu: Vec<SourcePolicy> = Core::ALL.into_iter().map(|core| {
+        let partitions: Vec<PcPartition> = match role {
+            Role::Retained => vec![],
+            Role::Composed => pieces.iter().map(|piece| {
+                let writes = &piece.catalog.writes;
+                let destinations = match writes.basis {
+                    WritesBasis::Unenumerated => DestinationPolicy {
+                        allow: stock(core).allow,
+                        forbid: carriers.iter().map(|span| GuardRange { target: GuardTarget::Physical, span: span.guard() }).collect(),
+                    },
+                    WritesBasis::Proved | WritesBasis::Premised => DestinationPolicy {
+                        allow: writes.allow.iter().filter(|range| range.space.binds(core))
+                            .map(|range| GuardRange { target: range.space.guard(), span: range.span.guard() }).collect(),
+                        forbid: vec![],
+                    },
+                };
+                PcPartition { spans: owned_spans(std::iter::once(piece)).iter().map(|span| span.guard()).collect(), destinations }
+            }).collect(),
+        };
+        for (index, (piece, partition)) in pieces.iter().zip(&partitions).enumerate() {
+            policies.push(PiecePolicy {
+                piece: piece.kind.clone(),
+                core,
+                partition: PartitionIndex(u16::try_from(index).expect("partitions per core are within MAX_GUARD_PARTITIONS")),
+                basis: piece.catalog.writes.basis,
+                premise: piece.catalog.writes.premise.clone(),
+                spans: partition.spans.iter().map(|span| PlanSpan { start: span.start(), end: span.end() }).collect(),
+                allow: partition.destinations.allow.iter().map(range_plan).collect(),
+                forbid: partition.destinations.forbid.iter().map(range_plan).collect(),
+            });
+        }
+        SourcePolicy { source: WriteSource::Cpu(core.guard()), destinations: stock(core), partitions }
+    }).collect();
+    let host = Core::ALL.into_iter().map(|core| SourcePolicy { source: WriteSource::CoreHost(core.guard()), destinations: stock(core), partitions: vec![] });
     let bus = [WriteSource::PhysicalHost, WriteSource::ModelBus].into_iter()
-        .map(|source| SourcePolicy { source, destinations: physical_only.clone(), owned_pc: None });
-    CompositeGuardConfig { sources: cpu.chain(host).chain(bus).collect() }
+        .map(|source| SourcePolicy { source, destinations: physical_only.clone(), partitions: vec![] });
+    (CompositeGuardConfig { sources: cpu.into_iter().chain(host).chain(bus).collect() }, policies)
 }
 
 fn check_guard(config: &CompositeGuardConfig) -> Result<(), CatalogRefusal> {
-    let ranges: usize = config.sources.iter().map(|policy| {
-        policy.destinations.allow.len() + policy.destinations.forbid.len()
-            + policy.owned_pc.as_ref().map_or(0, |owned| owned.destinations.allow.len() + owned.destinations.forbid.len())
-    }).sum();
-    let spans: usize = config.sources.iter().map(|policy| policy.owned_pc.as_ref().map_or(0, |owned| owned.spans.len())).sum();
+    let lists = |policy: &SourcePolicy| {
+        std::iter::once(&policy.destinations).chain(policy.partitions.iter().map(|partition| &partition.destinations))
+            .map(|destinations| destinations.allow.len() + destinations.forbid.len()).sum::<usize>()
+    };
+    let ranges: usize = config.sources.iter().map(lists).sum();
+    let spans: usize = config.sources.iter().flat_map(|policy| &policy.partitions).map(|partition| partition.spans.len()).sum();
+    let partitions = config.sources.iter().map(|policy| policy.partitions.len()).max().unwrap_or(0);
     if ranges > MAX_GUARD_RANGES {
         return Err(CatalogRefusal::GuardBound(GuardBound::Ranges(ranges)));
     }
     if spans > MAX_GUARD_PC_SPANS {
         return Err(CatalogRefusal::GuardBound(GuardBound::PcSpans(spans)));
+    }
+    if partitions > MAX_GUARD_PARTITIONS {
+        return Err(CatalogRefusal::GuardBound(GuardBound::Partitions(partitions)));
     }
     Ok(())
 }
@@ -933,9 +1016,7 @@ impl Contract {
         if attach.retained_pc.is_none() {
             return Err(CatalogRefusal::AttachNotRetained(attach.label.clone()));
         }
-        if attach.cores.single().is_none() {
-            return Err(CatalogRefusal::AttachCores(attach.label.clone()));
-        }
+        let attach_core = attach.cores.single().ok_or_else(|| CatalogRefusal::AttachCores(attach.label.clone()))?;
         let mut reads = BTreeSet::new();
         let mut read_bytes = 0u64;
         for read in pieces.iter().flat_map(|piece| &piece.catalog.reads) {
@@ -952,31 +1033,43 @@ impl Contract {
         if read_bytes > READ_BYTE_LIMIT {
             return Err(CatalogRefusal::ReadBudget(read_bytes));
         }
-        let guards = [guard_config(&pieces, Role::Retained), guard_config(&pieces, Role::Composed)];
-        guards.iter().try_for_each(check_guard)?;
         let mut carriers = Vec::new();
+        let mut carrier_spans = Vec::new();
         for piece in &pieces {
             for carrier in &piece.carriers {
                 let span = carrier.span.physical().ok_or_else(|| CatalogRefusal::AliasStraddle(piece.kind.clone()))?;
-                carriers.push(WriteRange { space: WriteSpace::Physical, span });
+                carriers.push(WriteRange { space: WriteSpace::Physical { core: None }, span });
+                carrier_spans.push((piece.kind.clone(), *carrier, Span { start: span.start, end: span.end }));
             }
         }
-        let classes: Vec<WatchRange> = merge(carriers).into_iter()
+        let merged = merge(carriers);
+        let carrier_physical: Vec<Interval> = merged.iter().map(|range| range.span).collect();
+        let (retained_guard, _) = guard_config(&pieces, &carrier_physical, Role::Retained);
+        let (composed_guard, policies) = guard_config(&pieces, &carrier_physical, Role::Composed);
+        let guards = [retained_guard, composed_guard];
+        guards.iter().try_for_each(check_guard)?;
+        let classes: Vec<WatchRange> = merged.into_iter()
             .map(|range| WatchRange { start: range.span.start, end: range.span.end, kinds: WatchKinds::WRITES }).collect();
         if classes.is_empty() || classes.len() > WATCH_CLASS_LIMIT {
             return Err(CatalogRefusal::GuardBound(GuardBound::WatchClasses(classes.len())));
         }
+        let cores = boundaries.values().flat_map(|boundary| boundary.cores.iter()).collect();
+        let context = RuleContext { attach_core, cores, boundaries: &boundaries, carriers: carrier_spans };
+        let attach_rules = AttachRules::parse(raw.guard.attach_state, &context).map_err(CatalogRefusal::AttachState)?;
         Ok(Self {
             qualification: raw.qualification,
             pending_joins: raw.pending_joins,
             manifest_sha256: raw.manifest_sha256,
             canonical: raw.canonical,
             composed: raw.composed,
-            guard: raw.guard,
+            guard: GuardAttach { attach: raw.guard.attach },
+            attach_core,
+            attach_rules,
             joins: raw.joins,
             pieces,
             boundaries,
             guards,
+            policies,
             classes,
         })
     }
@@ -1006,12 +1099,17 @@ impl Contract {
         self.guards[match role { Role::Retained => 0, Role::Composed => 1 }].clone()
     }
 
-    pub fn confinement(&self, role: Role) -> Confinement {
-        match self.guards[1].sources.iter().any(|policy| policy.owned_pc.is_some()) {
-            true if role == Role::Composed => Confinement::UnionOfEnumeratedAllows,
-            _ => Confinement::Stock,
+    /// Each piece's partition per core in the composed role.
+    pub fn policies(&self, role: Role) -> Vec<PiecePolicy> {
+        match role {
+            Role::Retained => vec![],
+            Role::Composed => self.policies.clone(),
         }
     }
+
+    pub fn attach_rules(&self) -> &AttachRules { &self.attach_rules }
+
+    pub fn attach_core(&self) -> Core { self.attach_core }
 
     pub fn unconfined(&self, role: Role) -> Vec<UnconfinedCode> {
         if role == Role::Retained {
@@ -1032,7 +1130,10 @@ impl Contract {
     }
 
     pub fn plan(&self) -> Plan {
-        Plan { roles: [Role::Retained, Role::Composed].into_iter().map(|role| self.role_plan(role)).collect() }
+        Plan {
+            roles: [Role::Retained, Role::Composed].into_iter().map(|role| self.role_plan(role)).collect(),
+            relations: self.attach_rules.relations.clone(),
+        }
     }
 
     fn role_plan(&self, role: Role) -> RolePlan {
@@ -1049,7 +1150,7 @@ impl Contract {
             stop_labels: sites.stops.into_iter().collect(),
             watch_classes: self.classes.iter().map(|class| PlanSpan { start: class.start, end: class.end }).collect(),
             guard: self.guard_config(role).sources.iter().map(PolicyPlan::of).collect(),
-            confinement: self.confinement(role),
+            policies: self.policies(role),
             unconfined: self.unconfined(role),
         }
     }
@@ -1059,6 +1160,7 @@ impl Contract {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Plan {
     pub roles: Vec<RolePlan>,
+    pub relations: crate::attach_relations::Relations,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1068,7 +1170,7 @@ pub struct RolePlan {
     pub stop_labels: Vec<Label>,
     pub watch_classes: Vec<PlanSpan>,
     pub guard: Vec<PolicyPlan>,
-    pub confinement: Confinement,
+    pub policies: Vec<PiecePolicy>,
     pub unconfined: Vec<UnconfinedCode>,
 }
 
@@ -1085,7 +1187,7 @@ pub struct ArmedSite {
     pub stop: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct PlanSpan {
     pub start: u64,
     pub end: u64,
@@ -1100,15 +1202,15 @@ pub enum SourcePlan {
     ModelBus,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(tag = "target", rename_all = "kebab-case")]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "target", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum RangePlan {
     Physical { start: u64, end: u64 },
     Tcm { core: usize, bank: Bank, start: u64, end: u64 },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct OwnedPcPlan {
+pub struct PartitionPlan {
     pub spans: Vec<PlanSpan>,
     pub allow: Vec<RangePlan>,
     pub forbid: Vec<RangePlan>,
@@ -1119,20 +1221,12 @@ pub struct PolicyPlan {
     pub source: SourcePlan,
     pub allow: Vec<RangePlan>,
     pub forbid: Vec<RangePlan>,
-    pub owned_pc: Option<OwnedPcPlan>,
+    pub partitions: Vec<PartitionPlan>,
 }
 
 impl PolicyPlan {
     fn of(policy: &SourcePolicy) -> Self {
-        let ranges = |ranges: &[GuardRange]| ranges.iter().map(|range| {
-            let (start, end) = (range.span.start(), range.span.end());
-            match range.target {
-                GuardTarget::Physical => RangePlan::Physical { start, end },
-                GuardTarget::Tcm { core, bank } => RangePlan::Tcm {
-                    core: core.get(), bank: match bank { TcmBank::Data => Bank::Data, TcmBank::Instruction => Bank::Instruction }, start, end,
-                },
-            }
-        }).collect::<Vec<_>>();
+        let ranges = |ranges: &[GuardRange]| ranges.iter().map(range_plan).collect::<Vec<_>>();
         Self {
             source: match policy.source {
                 WriteSource::Cpu(core) => SourcePlan::Cpu { core: core.get() },
@@ -1142,11 +1236,11 @@ impl PolicyPlan {
             },
             allow: ranges(&policy.destinations.allow),
             forbid: ranges(&policy.destinations.forbid),
-            owned_pc: policy.owned_pc.as_ref().map(|owned| OwnedPcPlan {
-                spans: owned.spans.iter().map(|span| PlanSpan { start: span.start(), end: span.end() }).collect(),
-                allow: ranges(&owned.destinations.allow),
-                forbid: ranges(&owned.destinations.forbid),
-            }),
+            partitions: policy.partitions.iter().map(|partition| PartitionPlan {
+                spans: partition.spans.iter().map(|span| PlanSpan { start: span.start(), end: span.end() }).collect(),
+                allow: ranges(&partition.destinations.allow),
+                forbid: ranges(&partition.destinations.forbid),
+            }).collect(),
         }
     }
 }

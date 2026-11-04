@@ -311,7 +311,7 @@ validateConsumer initializer validated (ConsumerReceipt InterruptMask start disp
   let rule cores kind mode spans = Rule cores kind mode spans [snapshot | snapshot@(TcmSnapshot core _ _) <- expectedTcm,core `elem` cores]
       writes = [CpuWrite,HostWrite,ModelBusWrite]
       immutable = map (uncurry physical) ([(0xddaa0,0xdf0cc),(0x96bd20,0x96bd28),(0x7caf34,0x7caf38)] ++ codeSpans ++ [(0xd0ab0,0xd0af0)])
-      bodyReads = [physical 0xd0430 0xd09ac | I.contractRole initializer == I.Owned]
+      bodyReads = [physical 0xd0434 0xd09ac | I.contractRole initializer == I.Owned]
       ownedFetch = [rule [1] CpuFetch Forbid bodyReads | I.contractRole initializer == I.Owned]
       protection = [WatchClass (Window span') writes | span' <- codeSpans ++ [(0xd0ab0,0xd0af0)]]
       preludeClasses =

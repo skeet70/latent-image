@@ -9,7 +9,7 @@ module Replacement.StartupArtifact.Types
   , Cores, cores, coreList, physicalAddress
   , Boundary (..), CodeSpan (..), codeSpan, TcmBank (..), tcmBankName, WriteTarget (..), WriteRange (..)
   , WriteBasis (..), WritesPolicy (..), CatalogRead (..), Catalog (..)
-  , Piece (..), PieceFacts (..), ServiceBinding (..), Publication (..), LinkedBytes (..)
+  , Piece (..), PieceFacts (..), ServiceBinding (..), Publication (..), LinkedBytes (..), ScratchBytes (..)
   , Refusal (..), CatalogProblem (..), ManifestProblem (..)
   ) where
 
@@ -60,7 +60,7 @@ editSpan (Edit range _) = range
 editBytes :: Edit -> B.ByteString
 editBytes (Edit _ bytes) = bytes
 
-data PieceKind = FirstStage | Record2Link | PrimaryPublisher
+data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 pieceKindName :: PieceKind -> Text
@@ -68,8 +68,10 @@ pieceKindName kind = case kind of
   FirstStage -> "first-stage"
   Record2Link -> "record2-link"
   PrimaryPublisher -> "primary-publisher"
+  LoaderOrchestrationB -> "loader-orchestration-b"
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
+  | LoaderOrchestrationBArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 areaName :: Area -> Text
@@ -80,6 +82,7 @@ areaName area = case area of
   InterfaceInitializerArea -> "interface-initializer"
   CriticalPairArea -> "critical-pair"
   PrimaryInitializerArea -> "primary-initializer"
+  LoaderOrchestrationBArea -> "loader-orchestration-b"
 
 data FootprintBasis = AdmissionRead | RuntimePremise deriving (Eq, Ord, Show)
 
@@ -156,6 +159,8 @@ data Boundary = Boundary
   , boundaryStop :: Bool
   , boundaryCompare :: Compare
   , boundaryRecordLimit :: RecordLimit
+  -- | Dropped, with the reads stopping at it, when a manifest piece claims this area.
+  , boundaryYieldsTo :: Maybe Area
   } deriving (Eq, Show)
 
 -- | Owned instructions as fetched, [start, end), in the low or the 0x40000000 alias spelling.
@@ -178,7 +183,8 @@ tcmBankName :: TcmBank -> Text
 tcmBankName DataBank = "data"
 tcmBankName InstructionBank = "instruction"
 
-data WriteTarget = PhysicalTarget | TcmTarget Core TcmBank deriving (Eq, Ord, Show)
+-- | 'PhysicalTarget' binds both cores' partitions; 'CorePhysicalTarget' one core's.
+data WriteTarget = PhysicalTarget | CorePhysicalTarget Core | TcmTarget Core TcmBank deriving (Eq, Ord, Show)
 
 -- | Physical addresses or TCM bank offsets, [start, end).
 data WriteRange = WriteRange WriteTarget Word64 Word64 deriving (Eq, Ord, Show)
@@ -215,12 +221,19 @@ data Publication = Publication { publicationGuest :: Guest, publicationValue :: 
 -- | A linked flat image and its llvm-nm symbol table.
 data LinkedBytes = LinkedBytes B.ByteString B.ByteString deriving (Eq, Show)
 
+-- | Stack bytes a piece's owned callee uses below its caller's SP.
+newtype ScratchBytes = ScratchBytes Word32 deriving (Eq, Show)
+
 -- | Artifact values that registered joins check across pieces.
 data PieceFacts
-  = FirstStageFacts Pc
-  -- | Secondary entry, the core-0 bindings the critical pair consumes and the linked record-2 image.
-  | Record2LinkFacts Pc [ServiceBinding] LinkedBytes
+  -- | First-stage entry and the linked record-1 image.
+  = FirstStageFacts Pc LinkedBytes
+  -- | Secondary entry, the core-0 bindings the critical pair consumes, the
+  -- linked record-2 image and the owned initializer's scratch.
+  | Record2LinkFacts Pc [ServiceBinding] LinkedBytes ScratchBytes
   | PublisherFacts [Publication]
+  -- | The linked loader-B orchestration image.
+  | LoaderOrchestrationFacts LinkedBytes
   | NoFacts
   deriving (Eq, Show)
 
@@ -259,6 +272,8 @@ data ManifestProblem
   | GuardAttachUnknown Text
   -- | The attach boundary lacks a retained PC or names more than one core.
   | GuardAttachUnsuitable Text
+  -- | The named @guard.attach_state@ entry is malformed or inconsistent with the composition.
+  | AttachStateRefused Text
   deriving (Eq, Show)
 
 -- | 'FootprintOverlap' names the footprint owner, then the carrier owner.

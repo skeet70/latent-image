@@ -95,9 +95,9 @@ fn rejects_retargeted_or_reduced_startup_guards() {
 
 fn loader_program() -> String {
     format!(r#""program":{{"kind":"owned","record_sha256":"{digest}","record_immutable_sha256":"{digest}","loader_sha256":"{digest}",
-        "handoff":66592,"entry":66604,"load":66700,"post_load":66704,"loaded_register":0,"poll_period":256,
+        "handoff":66592,"entry":66604,"load":854596,"post_load":854600,"loaded_register":3,"poll_period":256,
         "image":[66560,68096],"refusal":null,
-        "forbid_fetch":[[852000,852168],[854444,854480],[854596,854628]],"forbid_read":[[852168,852220]]}}"#,
+        "forbid_fetch":[[852000,852168]],"forbid_read":[[852168,852220]]}}"#,
         digest = "ab".repeat(32))
 }
 
@@ -167,9 +167,9 @@ fn composed_startup_rejects_role_identity_extent_and_guard_changes() {
         valid.replace("\"image\":[66560,68096]", "\"image\":[66560,71684]"),
         valid.replace("\"secondary_source_sha256\":\"abab", "\"secondary_source_sha256\":\"cdcd"),
         valid.replace("\"symbols_sha256\":\"abab", "\"symbols_sha256\":\"ABAB"),
-        valid.replace("[852000,852168],", ""),
+        valid.replace("[[852000,852168]]", "[]"),
         valid.replace("[852168,852220]", "[852172,852220]"),
-        valid.replace("\"loaded_register\":0", "\"loaded_register\":3"),
+        valid.replace("\"loaded_register\":3", "\"loaded_register\":0"),
         valid.replace("\"secondary_entry\":66560", "\"secondary_entry\":66560,\"core\":1"),
     ] {
         assert!(PeerContract::parse(invalid.as_bytes()).is_err(), "{invalid}");
@@ -270,23 +270,16 @@ fn schema_four_and_five_require_explicit_well_formed_immutable_identity() {
 
 #[cfg(feature = "scoped-watch")]
 #[test]
-fn explicit_negative_prefix_scenarios_require_owned_standalone_images_and_exact_period_shape() {
-    for scenario in ["negative-invalid-core", "negative-predicate-zero"] {
-        let period = if scenario == "negative-predicate-zero" { "null" } else { "256" };
-        let program = loader_program().replace("\"poll_period\":256", &format!("\"poll_period\":{period}"));
-        let valid = format!(r#"{{"schema":4,"budget":50000000,"scenario":{{"kind":"{scenario}"}},{program}}}"#);
-        assert!(PeerContract::parse(valid.as_bytes()).is_ok());
-        let wrong_period = if scenario == "negative-predicate-zero" { "256" } else { "null" };
-        for invalid in [
-            valid.replace(&format!("\"poll_period\":{period}"), &format!("\"poll_period\":{wrong_period}")),
-            valid.replace(&format!("\"poll_period\":{period},"), ""),
-            valid.replace("\"budget\":50000000", "\"budget\":49999999"),
-            valid.replace("[852168,852220]", "[852172,852220]"),
-            retained_loader().replace("\"kind\":\"natural\"", &format!("\"kind\":\"{scenario}\"")),
-            composed(scenario).replace("\"poll_period\":256", &format!("\"poll_period\":{period}")),
-        ] {
-            assert!(PeerContract::parse(invalid.as_bytes()).is_err(), "{invalid}");
-        }
+fn retired_prefix_scenarios_and_image_wait_sites_refuse() {
+    let standalone = |scenario: &str| format!(r#"{{"schema":4,"budget":50000000,"scenario":{{"kind":"{scenario}"}},{}}}"#, loader_program());
+    assert!(PeerContract::parse(standalone("natural").as_bytes()).is_ok());
+    for invalid in [
+        standalone("negative-invalid-core"),
+        standalone("negative-predicate-zero"),
+        standalone("natural").replace("\"load\":854596,\"post_load\":854600,\"loaded_register\":3", "\"load\":66700,\"post_load\":66704,\"loaded_register\":0"),
+        standalone("natural").replace("[[852000,852168]]", "[[852000,852168],[854444,854480],[854596,854628]]"),
+    ] {
+        assert!(PeerContract::parse(invalid.as_bytes()).is_err(), "{invalid}");
     }
 }
 
@@ -358,9 +351,6 @@ fn owned_initializer() -> String {
 fn initializer_rejects_every_negative_prefix_scenario() {
     for scenario in ["negative-invalid-core", "negative-predicate-zero", "negative-interleaved-tail"] {
         let invalid = owned_initializer().replace("\"kind\":\"natural\"", &format!("\"kind\":\"{scenario}\""));
-        let invalid = if scenario == "negative-predicate-zero" {
-            invalid.replace("\"poll_period\":256", "\"poll_period\":null")
-        } else { invalid };
         assert!(PeerContract::parse(invalid.as_bytes()).is_err());
     }
 }
