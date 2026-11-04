@@ -140,7 +140,7 @@ Paths. `frame-fixed-open`: kind 6 with id 2 from `0x0078ecd8` (cursor 2) into `0
 
 Controls. `QueryFixed` asks availability on a fixed node and fails `frame-fixed-open`; the existing `NoWrap` fails `fixed-wrap`.
 
-Engine. `move_rows` and `check_open` lose the availability condition; `open_rows` gets the fixed arm. Whether `FUN_007221a0` clears `0x4f` words or `0x4f` bytes is not established; `0x007221c8` clears `0xa0` bytes for the stack (331311), and a separate function suggests a word count **[INFERENCE]**. The case's write watch decides it before the arm is written.
+Engine. `move_rows` and `check_open` lose the availability condition; `open_rows` gets the fixed arm. `0x007221a0` is `fill_u32(destination, value, count)`, byte-verified, storing `count` words (x70view `decomp/xm1-coverage` 55436fc85c, `app/runtime/byte_strings.c:187`), so the fixed arm sets all `0x4f` row states to 0.
 
 Checker. `wrapsAndQueried` loses its availability half.
 
@@ -257,17 +257,37 @@ New or changed by this increment; the rest of the design's table stands.
 | Engine property write `0x285` (changed: now performed) | `Effect::PropertyWrite` for node `0x7a` through `0x0061c91c` | The settings service owns property `0x285` |
 | Stock rollback restore for rejected events (new use) | Rejected owned events rely on the consumer's `0x0061d3a8` restoring the block | Owned stage consumers decide the result without a byte restore |
 | Two stock stage consumers (changed) | Owned events arrive through `0x00ca4674` and `0x00ca4e98` | Owned stage consumers |
-| Fixed-availability row-state clear | The engine reproduces `FUN_007221a0(0x009571f0, 0, 0x4f)` in the block | The tree declares availability and nothing reads row states of a fixed node |
+| Fixed-availability row-state clear | The engine sets the `0x4f` row-state words to 0 as `fill_u32(0x009571f0, 0, 0x4f)` does | The tree declares availability and nothing reads row states of a fixed node |
 | Fallback classes through the stock kind switch (narrowed) | Classes 13 to 17 and the framed `0xbfad04` re-push | Every class is owned |
 
 No class adds an owned key cell; the seven frozen picker cells stay as they are.
+
+## Decomp cross-check
+
+Source: x70view branch `decomp/xm1-coverage` at 55436fc85c0560dd252b0410af6f2427fe198cd3 (`private-data/scratch/xm1-decomp/guide.md`), read from committed refs only. Names in it are inferences; the facts below come from the code.
+
+Byte-verified (no NONMATCHING marker), so source-inspected:
+
+- The engine wrapper `0xbf95c8` (`app/ui/core/ui_menu_tree_accessors.c:60`), `0xbf976c` and `0xbf9a2c` (`app/ui/core/tu_00bf8d20_exact.c:336, 352`).
+- `0x007221a0`, a word fill (`app/runtime/byte_strings.c:187`); this settles the class 5 question.
+- `0x0061d384` and `0x0061d3a8` copy the whole 0x430-byte block to and from a backup (`app/native_recovery/xm1_menu_state.c:138-144`), so a rejected event's restore rewrites the entire block. The extractor's rule for rejected receipts relies on this.
+- Both stage consumers, `0x00ca4674` and `0x00ca4e98` (`app/ui/machines/ui_machine_actions_00ca4674.c:34, 69`), with the bracket, special post and value post as read above.
+- `0x00c74b34` (`app/ui/machines/ui_m75_actions_c746fc.c:186`): kind 2 when the `0xff78` UI word is 1, the `0x2c` input word is 8 or 9, or a status call returns nonzero; otherwise `0x12` when the `0x2c` word is 10, else `0x11`. This is class 14's poster as read from Ghidra.
+
+Drafts (NONMATCHING, "instruction selection and ordering differ"): `0xbfa234`, `0xbfa800`, `0xbfab98`, `0xbfad04`, `0xbf9f44`, `0xbf9c1c`, `0xbf9b1c`, `0xbf9a5c`, `0xbf988c` and `0xbf9794` (`app/ui/core/tu_00bf8d20.c`). `0xd588b8`, `0xd4dd2c`, `0xd5b350` and `0xd48ab4` are untuned Ghidra drafts. The engine's branches therefore stay confirmed by the oracle receipts, not cited from the C. The decomp's `Xm1MenuState` (`app/native_recovery/xm1_menu_state.h`) leaves most of the block as reserved bytes and adds no field the block decode lacks.
+
+Effect on the plan:
+
+- Removed: the open question on `0x007221a0`'s width, and any trace run to settle the rollback restore's extent.
+- Shortened: the per-class runs stop being discovery. Each class still needs its oracle receipt, because every engine function it exercises is a draft. The case's purpose is byte qualification of the owned engine against stock, which a draft cannot give.
+- Newly possible: reading the key layer in C to find which input event reaches controller 75 events 30 to 34 in state 43 (class 12) and which actions enter state 27 (class 13). That can replace `frame-push-probe` with a known key, or show that class 13 has a route. The machine action files are byte-verified where unmarked. The event codes those files dispatch on are not mapped to keys in the decomp.
 
 ## Decisions
 
 - Class 11: the engine owns row steps with id above 1 without an oracle case. Either `step-rows` lands in this increment, or the engine and checker narrow row moves to id 1 until it does.
 - Framed `0xbfad04` targets (`NotOwned::FramedNode`) are outside the assignment's list but frequent: crawl-5 has 131 pops from a page of group `0x43` onto its type 5 parent, 22 opens of node `0x5f` by `down` on the root screen, and 4 pushes into type 5 or 7 nodes. Owning them replaces the `seek` service; it needs `0xbfad04`'s framed arm (all.c:331620-331625) and cases such as `ok up left down ok ok`, `back` (crawl-5 trial 3593). Include in this increment or the next.
 - The compound pre-check refuses kinds 6..`0xb` when any reachable target fails the open conditions, where stock would complete. The alternative, letting `apply` refuse after a call, breaks the design's rule that the event completes once committed.
-- `frame-push-probe` is a run whose outcome decides whether class 12 is owned.
+- `frame-push-probe` is a run whose outcome decides whether class 12 is owned, unless reading the key layer in the decomp (above) names the key first.
 - The fallback classes 13 to 17 stay stock-backed; #128's acceptance covers the observed presses and the picker pairs, which none of them reach.
 
 ## Appendix: configs
