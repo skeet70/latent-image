@@ -88,8 +88,10 @@ fn mutate(root: &Path, report: &mut PumpReport, control: Control) -> Result<(), 
         }
         Control::KernelIdentity => {
             let sample = report.samples.iter_mut().find(|sample| physical(sample.pc) == 0xc22f60).ok_or_else(|| refusal(Refusal::TaskContext, "no first-entry context control sample"))?;
-            let identity = &mut sample.identities[usize::from(sample.core)];
-            *identity = match *identity { 0x4003 => 0x5003, 0x5003 => 0x4003, _ => return Err(refusal(Refusal::TaskContext, "baseline kernel identity is invalid")) };
+            let core = usize::from(sample.core);
+            let model = fujimod_xm1::run::CoreIdentities::RECORDED.into_iter().find(|model| model.words() == sample.identities)
+                .ok_or_else(|| refusal(Refusal::TaskContext, "baseline kernel identity is invalid"))?;
+            sample.identities[core] = model.words()[1 - core];
         }
         Control::MissingInitialization => {
             let index = report.samples.iter().position(|sample| physical(sample.pc) == 0xc22f74).ok_or_else(|| refusal(Refusal::Initializer, "no reset handback control sample"))?;

@@ -297,7 +297,7 @@ fn sample(machine: &Machine, maps: &[MemoryMap], images: &[Image], recorder: &Re
     let mut identities = [0; 2];
     for (index, value) in identities.iter_mut().enumerate() {
         *value = machine.session.board.cpu(index)?.rprofile_identity(None)?;
-        require(matches!(*value, 0x4003 | 0x5003), "unadmitted current CP14 identity")?;
+        require(*value == fujimod_xm1::run::CoreIdentities::Xm1.words()[index], "unadmitted current CP14 identity")?;
     }
     let domain = usize::from(identities[core] != 0x4003);
     let root = word(machine, maps, &banks, core, 0x96bd20 + 4 * domain as u32)?;
@@ -498,7 +498,8 @@ fn admit_receipt(directory: &std::path::Path, images: &[Image], expected_mode: O
     let mut image5 = Image5Lifecycle::default();
     for (index, boundary) in boundaries.iter().enumerate() {
         let snapshot = &boundary.snapshot;
-        require(snapshot.core.0 < 2 && matches!(boundary.identities[snapshot.core.0], 0x4003 | 0x5003), "boundary core identity differs")?;
+        require(snapshot.core.0 < 2 && fujimod_xm1::run::CoreIdentities::of(boundary.identities).is_some()
+            && boundaries.first().is_some_and(|first| first.identities == boundary.identities), "boundary core identities differ")?;
         let domain = usize::from(boundary.identities[snapshot.core.0] != 0x4003);
         require(snapshot.context.domain.0 == domain && boundary.root.0 == [0x4004dae0, 0x400ddaa0][domain]
             && boundary.context_word == snapshot.context.exception_depth && boundary.task_record_word == snapshot.context.task_record, "boundary context binding differs")?;

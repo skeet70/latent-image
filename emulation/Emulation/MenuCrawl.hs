@@ -56,34 +56,8 @@ import Data.Maybe (fromMaybe, isJust, isNothing)
 import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.Word (Word16, Word32)
-import EmulatorUsb (MenuReading, ModeDial, SnapshotName (..), SnapshotPress (..), TraceHit (..), modeDialName)
+import EmulatorUsb (CrawlKey (..), MenuReading, crawlKeyWire, ModeDial, SnapshotName (..), SnapshotPress (..), TraceHit (..), modeDialName)
 import Numeric (readHex, showHex)
-
--- | A physical press the bridge accepts; MENU is OK and DISP is BACK on this body.
-data CrawlKey = KeyUp | KeyDown | KeyLeft | KeyRight | KeyOk | KeyBack | KeyQ | KeyDialLeft | KeyDialRight | KeyPlay
-  deriving (Eq, Ord, Show, Enum, Bounded)
-
-crawlKeyWire :: CrawlKey -> String
-crawlKeyWire key = case key of
-  KeyUp -> "up"
-  KeyDown -> "down"
-  KeyLeft -> "left"
-  KeyRight -> "right"
-  KeyOk -> "ok"
-  KeyBack -> "back"
-  KeyQ -> "q"
-  KeyDialLeft -> "dial-left"
-  KeyDialRight -> "dial-right"
-  KeyPlay -> "play"
-
-instance FromJSON CrawlKey where
-  parseJSON = withText "crawl key" $ \text ->
-    case lookup (T.unpack text) [(crawlKeyWire key, key) | key <- [minBound .. maxBound]] of
-      Just key -> pure key
-      Nothing -> fail ("unsupported crawl key: " ++ T.unpack text)
-
-instance ToJSON CrawlKey where
-  toJSON = toJSON . crawlKeyWire
 
 -- | 1..16 lowercase ASCII letters, digits or '-'.
 newtype RootName = RootName String deriving (Eq, Ord, Show)

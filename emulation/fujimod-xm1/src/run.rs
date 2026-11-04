@@ -5,6 +5,7 @@ use crate::provenance::{Guest, Provenance, RamFact, plan_windows};
 use fujimod_catalog::configuration::{
     GeneratedSceneAsset, ResolvedConfiguration, RunEngine, RunExecution, RunExecutionMode,
 };
+use fujimod_catalog::reference::{MemoryKind, RegionSize, Soc};
 use fujimod_emulator::{
     board::{
         bus::{Bus, Mode},
@@ -143,8 +144,58 @@ pub fn nand_base(document:&RunDocument,update:&ValidatedUpdate)->Result<NandBase
     Ok(NandBase(flash.iter().map(|byte|!byte).collect()))
 }
 
+/// Physical extent over which the X-M1 boot ROM decode returns its 16 KiB image repeated every
+/// `0x4000`: body reads of `0x80004000-0x80007fff` return the whole image, and 256-byte reads at
+/// `0x80008000`, `0x80010000` and `0x80100000` return its first 256 bytes
+/// (E-BOOTROM-DISCRIMINATOR-150, E-STRAP-READ-150). The end is the last observed read rounded up
+/// to the period; beyond it is unmeasured.
+pub const BOOT_ROM_DECODE_BYTES: u64 = 0x10_4000;
+
+/// CP14 identities of cores 0 and 1 in each model a receipt can come from: the catalog's, and the
+/// camera's (`E-RAM-PUSH-INSTALL-150`), which `open` configures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoreIdentities {
+    Catalog,
+    Xm1,
+}
+
+impl CoreIdentities {
+    pub const RECORDED: [Self; 2] = [Self::Catalog, Self::Xm1];
+
+    pub const fn words(self) -> [u32; 2] {
+        match self {
+            Self::Catalog => [0x4003, 0x5003],
+            Self::Xm1 => [0x4003, 0x8003],
+        }
+    }
+
+    /// The model whose cores read `pair`.
+    pub fn of(pair: [u32; 2]) -> Option<Self> {
+        Self::RECORDED.into_iter().find(|model| model.words() == pair)
+    }
+
+    /// Whether `identity` is core `core`'s identity in a recorded model.
+    pub fn recorded(core: usize, identity: u32) -> bool {
+        Self::RECORDED.iter().any(|model| model.words().get(core) == Some(&identity))
+    }
+
+    /// Kernel domain (0 for A, 1 for B) of a core reading `identity` in a recorded model; stock
+    /// code selects A only for `0x4003`.
+    pub fn domain(identity: u32) -> Option<usize> {
+        (0..2).find(|&core| Self::recorded(core, identity))
+    }
+}
+
+/// The catalog configuration with the X-M1 boot-ROM decode and core identities applied.
+pub fn resolved(document: &RunDocument) -> Result<ResolvedConfiguration, String> {
+    let mut resolved = ResolvedConfiguration::with_overlays(&document.catalog_configuration.0, &[])?;
+    extend_boot_rom_decode(&mut resolved.reference.soc, document.boot_rom.address.0)?;
+    set_core_identities(&mut resolved.reference.soc)?;
+    Ok(resolved)
+}
+
 pub(crate) fn graph(document: &RunDocument) -> Result<(ResolvedConfiguration, factory::Graph), String> {
-    let resolved = ResolvedConfiguration::with_overlays(&document.catalog_configuration.0, &[])?;
+    let resolved = resolved(document)?;
     let graph = fujimod_emulator::boot::graph::assemble_with_starts(
         &resolved.reference,
         document.execution.instructions_per_tick,
@@ -153,6 +204,44 @@ pub(crate) fn graph(document: &RunDocument) -> Result<(ResolvedConfiguration, fa
     )?;
     graph.validate()?;
     Ok((resolved, graph))
+}
+
+fn set_core_identities(soc: &mut Soc) -> Result<(), String> {
+    let catalog = CoreIdentities::Catalog.words();
+    let cores: Vec<_> = soc.processors.iter_mut().filter_map(|core| core.rprofile.as_mut()).collect();
+    if cores.len() != 2 || cores.iter().map(|core| core.cp14_identity).ne(catalog) {
+        return Err("catalog CP14 identities differ from the two-core catalog model".into());
+    }
+    for (core, identity) in cores.into_iter().zip(CoreIdentities::Xm1.words()) {
+        core.cp14_identity = identity;
+    }
+    Ok(())
+}
+
+/// Widens the catalog's 16 KiB boot-ROM region, its physical-bus map and each core's identity map
+/// of it to `BOOT_ROM_DECODE_BYTES`; `open` fills the widened region with the repeated image.
+fn extend_boot_rom_decode(soc: &mut Soc, base: u64) -> Result<(), String> {
+    let rom = RegionSize::Bytes { bytes: 0x4000 };
+    let widened = RegionSize::Bytes { bytes: BOOT_ROM_DECODE_BYTES };
+    let mut regions = soc.memory_regions.iter_mut().filter(|region| region.base == base);
+    match (regions.next(), regions.next()) {
+        (Some(region), None) if region.kind == MemoryKind::Rom && region.size == rom => region.size = widened,
+        _ => return Err("catalog boot-ROM region differs from the 16 KiB X-M1 decode base".into()),
+    }
+    let mut bus = soc.dma_mappings.iter_mut().filter(|mapping| mapping.address == base && mapping.physical == base);
+    match (bus.next(), bus.next()) {
+        (Some(mapping), None) if mapping.size == rom => mapping.size = widened,
+        _ => return Err("catalog lacks one 16 KiB physical-bus boot-ROM map".into()),
+    }
+    for processor in &soc.processors {
+        let mut maps = soc.mappings.iter_mut()
+            .filter(|mapping| mapping.core == processor.id && mapping.address == base && mapping.physical == base);
+        match (maps.next(), maps.next()) {
+            (Some(mapping), None) if mapping.size == rom => mapping.size = widened,
+            _ => return Err(format!("catalog lacks one 16 KiB boot-ROM identity map for {}", processor.id)),
+        }
+    }
+    Ok(())
 }
 
 /// The processors' memory maps of the session `open` builds.
@@ -204,7 +293,12 @@ pub fn open(document: &RunDocument, update: &ValidatedUpdate, boot_rom: &[u8]) -
     for controller in built.core_interrupts {
         board.configure_core_interrupts(controller.core, controller.device, Box::new(controller.inputs))?;
     }
-    board.write_physical(document.boot_rom.address.0, boot_rom)?;
+    if !BOOT_ROM_DECODE_BYTES.is_multiple_of(boot_rom.len() as u64) {
+        return Err("boot ROM image does not tile the X-M1 decode extent".into());
+    }
+    for offset in (0..BOOT_ROM_DECODE_BYTES).step_by(boot_rom.len()) {
+        board.write_physical(document.boot_rom.address.0 + offset, boot_rom)?;
+    }
     let cores: BTreeMap<&str, usize> =
         resolved.reference.soc.processors.iter().enumerate().map(|(index, p)| (p.id.as_str(), index)).collect();
     for write in &resolved.reference.soc.reset.coprocessor_writes {
@@ -234,4 +328,59 @@ pub fn open(document: &RunDocument, update: &ValidatedUpdate, boot_rom: &[u8]) -
         contacts: built.contacts,
         recording_frames: Default::default(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(rom: &[u8]) -> Session {
+        fujimod_emulator_exr2_board::register_board_builder();
+        fujimod_emulator_models::register();
+        let document = RunDocument::parse(include_bytes!("../data/xm1-150.json")).unwrap();
+        let update = ValidatedUpdate(vec![0xff; document.update_flash_offset + 2048]);
+        open(&document, &update, rom).unwrap()
+    }
+
+    #[test]
+    fn boot_rom_reads_repeat_every_16_kib_through_the_observed_extent() {
+        let rom: Vec<u8> = (0..0x4000u32).map(|index| (index * 7 + index / 251) as u8).collect();
+        let session = session(&rom);
+        let window = |address: u64| {
+            let mut bytes = vec![0; 0x100];
+            session.board.read_physical(address, &mut bytes).unwrap();
+            bytes
+        };
+        for base in [0x8000_4000, 0x8000_8000, 0x8001_0000, 0x8010_0000] {
+            assert_eq!(window(base), rom[..0x100], "{base:#x}");
+        }
+        assert_eq!(window(0x8000_7f00), rom[0x3f00..], "footer repeats");
+        let end = 0x8000_0000 + BOOT_ROM_DECODE_BYTES;
+        for core in 0..2 {
+            let mut straddle = [0; 32];
+            session.board.read_memory(core, 0x8000_3ff0, &mut straddle).unwrap();
+            assert_eq!(straddle[..16], rom[0x3ff0..], "core {core}");
+            assert_eq!(straddle[16..], rom[..16], "core {core}");
+            let mut last = [0; 4];
+            session.board.read_memory(core, end - 4, &mut last).unwrap();
+            assert_eq!(last, rom[0x3ffc..], "core {core}");
+            assert!(session.board.read_memory(core, end, &mut [0; 4]).is_err(), "core {core}");
+        }
+        assert!(session.board.read_physical(end, &mut [0; 4]).is_err());
+    }
+
+    #[test]
+    fn cores_read_the_camera_cp14_identities() {
+        let session = session(&[0; 0x4000]);
+        for (core, identity) in [(0, 0x4003), (1, 0x8003)] {
+            assert_eq!(session.board.cpu(core).unwrap().rprofile_identity(None).unwrap(), identity, "core {core}");
+        }
+    }
+
+    #[test]
+    fn recorded_identities_select_kernel_domains() {
+        assert_eq!([0x4003, 0x5003, 0x8003, 0x6003].map(CoreIdentities::domain), [Some(0), Some(1), Some(1), None]);
+        assert!(CoreIdentities::recorded(1, 0x5003) && CoreIdentities::recorded(1, 0x8003));
+        assert!(!CoreIdentities::recorded(0, 0x8003) && !CoreIdentities::recorded(1, 0x4003));
+    }
 }

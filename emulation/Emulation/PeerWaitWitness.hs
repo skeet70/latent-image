@@ -13,7 +13,7 @@ import Data.Bits ((.&.))
 import Data.List (sort)
 import qualified Data.List.NonEmpty as NE
 import Data.Word (Word32, Word64, Word8)
-import Emulation.FirstStageWitness (encodeLeWord)
+import Emulation.FirstStageWitness (encodeLeWord, recordedCp14Identities)
 import Emulation.PeerStageWitness (Argument (..), Core (..), Cpsr (..), GuestAddress (..), Instructions (..), PeerState (..), Registers (..), SavedFrame (..), WitnessResult (..))
 import qualified Emulation.PeerStageWitness as P
 import qualified Emulation.WatchObservation as W
@@ -279,7 +279,7 @@ validateControlReceipt selected expected receipt = do
   require (control receipt == selected) "control selection differs"
   require (expected == Argument 0x69cdf8) "control argument differs from pinned source"
   require (result receipt == Passed && problem receipt == Nothing && machineFailure receipt == Nothing) "control witness failed"
-  require (identities receipt == (Cp14Identity 0x4003,Cp14Identity 0x5003)) "control CP14 identities differ"
+  require ((\(Cp14Identity core0, Cp14Identity core1) -> (core0, core1)) (identities receipt) `elem` recordedCp14Identities) "control CP14 identities differ"
   require (instructions receipt > Instructions 0 && instructions receipt <= Instructions 10000000) "control aggregate budget exceeded"
   let snapshots = stops receipt
       waits = filter ((== WaitLoaded) . label) snapshots

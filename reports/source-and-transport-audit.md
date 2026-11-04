@@ -1,6 +1,6 @@
 # Transport source and effect audit
 
-Evidence here is source-inspected protocol/dependency paths plus synthetic host policy tests. Later X-M1 observations are scoped in the evidence ledger, including S02 identity (E-S02-IDENTITY-QUERY) and the stopped S03 page-zero reply (E-S03-READ-ECHO); they do not establish every upstream command or service effect. The upstream CLI is unsuitable as the operator command; use [`//transport:camera`](../transport/README.md).
+Evidence here is source-inspected protocol/dependency paths plus synthetic host policy tests. Later X-M1 observations are scoped in the evidence ledger, including S02 identity (E-S02-IDENTITY-QUERY) and the S03 adjustment-area reads (E-S03-FULL-CAPTURE); they do not establish every upstream command or service effect. The upstream CLI is unsuitable as the operator command; use [`//transport:camera`](../transport/README.md).
 
 | Source | Exact scope |
 | --- | --- |

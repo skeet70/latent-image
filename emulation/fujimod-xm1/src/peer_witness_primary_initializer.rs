@@ -208,7 +208,7 @@ fn aliases(machine: &Machine, maps: &[factory::MemoryMap], tcm: &TcmWords, code:
     result: &mut Vec<AliasBinding>) -> Result<(), String> {
     tcm_disjoint_views(maps, tcm, &[LOADER, WORKSPACE])?;
     for core in 0..2 {
-        require(machine.session.board.cpu(core)?.rprofile_identity(None)? == [0x4003, 0x5003][core], "primary active CP14 identity differs")?;
+        require(machine.session.board.cpu(core)?.rprofile_identity(None)? == crate::run::CoreIdentities::Xm1.words()[core], "primary active CP14 identity differs")?;
     }
     let mut buffer = vec![0; workspace.physical.len().max(code.physical.len())];
     for ((start, end), captured) in [(LOADER, code), (WORKSPACE, workspace)] {

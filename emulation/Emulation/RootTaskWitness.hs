@@ -298,7 +298,7 @@ checkSample inputs plan receipt hit index sample previous = do
   let state = stateOf sample; context = sampleContext sample; pc = pcOf sample
   total <- clock sample
   require (sampleHit sample == index && length (W.contextRegisters state) == 13 && length (W.contextTcm state) == 2
-    && W.contextIdentities state == map W.WordValue [0x4003,0x5003]
+    && W.contextIdentities state `elem` W.recordedCoreIdentities
     && Plan.labelAgrees (index == 0) pc (sampleBoundary sample) && Plan.labelAgrees (index == 0) pc (hitBoundary hit)) ContextRejected
   require (index == 0 || M.lookup (W.contextPc state) (receiptSites receipt) == Just (hitBoundary hit)) ContextRejected
   let recorded = hitState hit
@@ -385,6 +385,7 @@ replay inputs plan receipt watch = do
   first <- need SnapshotRejected (case samples of sample:_ -> Just sample; [] -> Nothing)
   hit <- need ContextRejected (case hits of item:_ -> Just item; [] -> Nothing)
   require (sampleBoundary first == Start && sampleCursor first == 0 && sampleHit first == 0) SnapshotRejected
+  require (W.oneRecordedModel [W.contextIdentities (stateOf sample) | sample <- samples]) ContextRejected
   initial <- checkSample inputs plan receipt hit 0 first (Memory M.empty)
   (_,cursor,remaining,_,memories,events) <- foldM next (first,0,rows,initial,[initial],Set.empty)
     (zip3 [1..] (drop 1 samples) (drop 1 hits))

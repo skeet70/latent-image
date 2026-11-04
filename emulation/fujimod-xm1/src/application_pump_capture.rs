@@ -79,7 +79,8 @@ fn sampled_word(views: &[Words], address: Guest) -> Result<u32, Failure> {
     }).ok_or_else(|| fail(Refusal::TaskContext, "frozen scope source word is absent"))
 }
 fn identity_layout(identity: u32) -> Result<TaskLayout, Failure> {
-    match identity { 0x4003 => Ok(TASK_LAYOUTS[0]), 0x5003 => Ok(TASK_LAYOUTS[1]), _ => Err(fail(Refusal::TaskContext, "unknown configured kernel identity")) }
+    fujimod_xm1::run::CoreIdentities::domain(identity).map(|domain| TASK_LAYOUTS[domain])
+        .ok_or_else(|| fail(Refusal::TaskContext, "unknown configured kernel identity"))
 }
 
 struct Receive { core: Core, sp: Guest }

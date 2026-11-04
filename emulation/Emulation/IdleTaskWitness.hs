@@ -213,7 +213,7 @@ checkSample inputs hit index sample previous = do
   let context = sampleContext sample; state = contextState context
   total <- counts state
   require (sampleHit sample == index && length (W.contextRegisters state) == 13 && length (W.contextTcm state) == 2
-    && W.contextIdentities state == map W.WordValue [0x4003,0x5003]
+    && W.contextIdentities state `elem` W.recordedCoreIdentities
     && M.lookup (W.contextPc state) sites == Just (sampleBoundary sample)) ContextRejected
   let recorded = hitState hit
   require (hitBoundary hit == sampleBoundary sample && hitCore hit == contextCore context && count (hitCount hit) == total
@@ -267,6 +267,7 @@ replay inputs receipt watch = do
   require (not (null samples) && length samples <= 16384 && length samples == length (receiptHits receipt)) SnapshotRejected
   first <- need SnapshotRejected (case samples of item:_ -> Just item; [] -> Nothing)
   require (sampleBoundary first == Start && sampleCursor first == 0 && sampleHit first == 0) SnapshotRejected
+  require (W.oneRecordedModel [W.contextIdentities (contextState (sampleContext sample)) | sample <- samples]) ContextRejected
   firstHit <- need ContextRejected (case receiptHits receipt of item:_ -> Just item; [] -> Nothing)
   initial <- checkSample inputs firstHit 0 first (Memory M.empty)
   (_,_,_,_,memories) <- foldM next (first,0,rows,initial,[initial]) (zip3 [1..] (drop 1 samples) (drop 1 (receiptHits receipt)))

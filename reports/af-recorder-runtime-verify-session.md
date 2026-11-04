@@ -1,6 +1,6 @@
 # AF recorder revision-2: installed bytes and unresolved residency (X-M1 1.50)
 
-The revision-2 install completed, but the first ordinary boot stayed black with no LEDs (E-RECORDER-INSTALL-150, E-RECORDER-BOOT-FAILURE-150). The session stopped before any capture act; no recorder validation input exists. The body is now recovered through the exact v5 rollback, with ordinary startup, photography, normal-card operation/playback and retained film simulations/settings reported working ([recovery result](sd-boot-card-entry.md#260-physical-rollback-readback-status-20), E-RECOVERY-V5-NORMAL-CARD-PLAYBACK-150, E-RECOVERY-V5-RETENTION-150).
+The revision-2 install completed, but the first ordinary boot stayed black with no LEDs (E-RECORDER-BOOT-FAILURE-150). The session stopped before any capture act; no recorder validation input exists. The body is now recovered through the exact v5 rollback, with ordinary startup, photography, normal-card operation/playback and retained film simulations/settings reported working ([recovery result](sd-boot-card-entry.md#260-physical-rollback-readback-status-20), E-RECOVERY-V5-RETENTION-150).
 
 This report retains the byte identity and failed safety criterion, not an installation procedure. Do not reinstall or repeat the retired session. Future camera work follows [the camera-run procedure](../spec/07-governance-and-handoff.md#3-camera-runs), with separately reviewed bytes and a named owner go for persistent operations. Superseded operator instructions remain in Git history.
 
@@ -10,7 +10,7 @@ These identify the failed candidate, not a supported release:
 
 | Field | Recorded value | Evidence |
 | --- | --- | --- |
-| Owner-supplied input | Official X-M1 1.50 DAT; emitted candidate retained privately | E-RECORDER-INSTALL-150; extraction and identity checks in [the firmware map](firmware-extraction.md) |
+| Owner-supplied input | Official X-M1 1.50 DAT; emitted candidate retained privately | E-RECORDER-BOOT-FAILURE-150; extraction and identity checks in [the firmware map](firmware-extraction.md) |
 | Card lookup | Root `FWUP0002.DAT` | Byte-read body lookup derived from the body's `0002` configuration bytes |
 | Length | 38,405,148 bytes | Byte-read emitted container |
 | SHA-256 | `72a78c5595f40f88af26c4ed429529a756f759aa9b8e5c5704a745613f9ed0a8` | Byte-read emitted container |
@@ -20,7 +20,7 @@ These identify the failed candidate, not a supported release:
 
 ## The originally proposed residency observation
 
-The patched receive call enters the hook before the original receive helper. A plain-image load completed before the first media message does not prove that the first hook invocation waited for that load. Stock media task creation at `0x0071fd40`, its initial wait on semaphore `0x3b` and the first patched call need independent ordering against id-6 loading (E-RECORDER-FIRST-RECEIVE-150).
+The patched receive call enters the hook before the original receive helper. A plain-image load completed before the first media message does not prove that the first hook invocation waited for that load. Stock media task creation at `0x0071fd40`, its initial wait on semaphore `0x3b` and the first patched call need independent ordering against id-6 loading (E-AF-RECORDER-RESIDENCY-EMU-150).
 
 The proposed whole-store carry at `0x400a0800`, length `0x1fff4`, with zero trailer wrap count would have supplied:
 

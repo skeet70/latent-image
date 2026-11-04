@@ -3,13 +3,12 @@ module Replacement.GeneralHeap.Artifact
   ( CanonicalSource, LinkedArtifact, StagedImages, StagedCandidate, ArtifactError (..)
   , canonicalSource, deriveArtifact, stageImages, image4Bytes, image5Bytes, stageCandidate
   , candidateBytes, contractValue
-  , Record5Window (..), validateRecord5Confinement
   ) where
 
 import qualified A32 as A
 import Control.Monad (forM_, unless)
 import Data.Aeson (Value, object, (.=))
-import Data.Bits (complement, (.&.))
+import Data.Bits ((.&.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.Map.Strict as M
@@ -18,31 +17,16 @@ import Data.Word (Word32)
 import qualified Emulation.Image4Staging as Image4
 import qualified Emulation.Sha256 as SHA
 import qualified FujiAF.FirstStage as F
-import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
 import Replacement.GeneralHeap.Admission
+import qualified Replacement.Record5Staging as Record5
 import qualified StockInventory as Stock
-import System.Directory (canonicalizePath)
-import System.Environment (getEnvironment)
-import System.Exit (ExitCode (..))
-import System.FilePath ((</>))
-import System.Process (CreateProcess (..), proc)
 
 data ArtifactError = SourceMismatch | StockDerivationRejected String | ExtentRejected | MetadataRejected AdmissionError | SymbolsRejected deriving (Eq, Show)
 data CanonicalSource = CanonicalSource B.ByteString B.ByteString B.ByteString [Stock.FunctionDeclaration]
 data LinkedArtifact = LinkedArtifact B.ByteString B.ByteString [F.Symbol] [FrameProof] BackendGeometry ArenaLayout
 data StagedImages = StagedImages CanonicalSource LinkedArtifact B.ByteString B.ByteString
 newtype StagedCandidate = StagedCandidate B.ByteString
-data Record5Window = Record5Window Int Int deriving (Eq, Show)
-
-validateRecord5Confinement :: Record5Window -> B.ByteString -> B.ByteString -> Either ArtifactError ()
-validateRecord5Confinement (Record5Window low high) original candidate = do
-  let checksumEnd = U.mainChecksumOffset + 4
-      slice offset count = B.take count . B.drop offset
-  require (B.length original == B.length candidate && low >= checksumEnd && low < high && high <= B.length original) ExtentRejected
-  require (B.take U.mainChecksumOffset original == B.take U.mainChecksumOffset candidate
-    && slice checksumEnd (low-checksumEnd) original == slice checksumEnd (low-checksumEnd) candidate
-    && B.drop high original == B.drop high candidate) ExtentRejected
 
 hash :: B.ByteString -> String
 hash = SHA.sha256Hex . SHA.sha256
@@ -136,52 +120,12 @@ image5Bytes (StagedImages _ _ _ bytes) = bytes
 candidateBytes :: StagedCandidate -> B.ByteString
 candidateBytes (StagedCandidate bytes) = bytes
 
-runTool :: FilePath -> FilePath -> [String] -> IO ()
-runTool root executable arguments = do
-  absolute <- canonicalizePath executable
-  inherited <- getEnvironment
-  let process = (proc absolute arguments) {cwd=Just root,env=Just (("TMPDIR",root):filter ((/= "TMPDIR") . fst) inherited)}
-  (stopped,status,_,errors) <- H.runBoundedProcess (H.ProcessTimeoutMicros 600000000) (H.OutputCapBytes (1024*1024)) process B.empty
-  H.ensure (not stopped && status == ExitSuccess) ("heap staging tool failed: " ++ C.unpack errors)
-
 stageCandidate :: Image4.Tools -> FilePath -> StagedImages -> IO StagedCandidate
 stageCandidate tools configured (StagedImages (CanonicalSource dat _ original5 _) _ four five) = do
   scratch <- Image4.validateScratchDirectory configured
   first <- Image4.runImage4Staging tools scratch dat dat four
-  rootPath <- canonicalizePath configured
-  H.withTemporaryAt rootPath "heap-image5-" $ \root -> do
-    before <- either H.failH pure (U.parseContainer (Image4.candidateDat first))
-    let beforeParts = U.parsedParts before
-        record = U.partRecord5 beforeParts
-        sourceSize = U.recDecodedSize (U.recHeader record)
-        basePath = root </> "image4.DAT"
-        imagePath = root </> "image5.bin"
-        recordPath = root </> "record5.bin"
-        outputPath = root </> "candidate.DAT"
-        readbackPath = root </> "carried5.bin"
-        sourceImage = root </> "source-image5.bin"
-        readbackImage = root </> "carried-image5.bin"
-    B.writeFile readbackPath (B.map complement (U.serializeRecord record))
-    runTool root (Image4.decoderPath tools) [readbackPath,"0",sourceImage,show sourceSize]
-    readbackOriginal <- H.readRegular (16*1024*1024) sourceImage
-    H.ensure (readbackOriginal == original5) "heap image5 canonical record differs from admitted source"
-    B.writeFile basePath (Image4.candidateDat first)
-    B.writeFile imagePath five
-    runTool root (Image4.encoderPath tools) ["0x2e0000",imagePath,recordPath]
-    decoder <- canonicalizePath (Image4.decoderPath tools)
-    runTool root (Image4.rebuildPath tools) ["replace-record5","--decoder",decoder,basePath,recordPath,imagePath,outputPath]
-    result <- H.readRegular (64*1024*1024) outputPath
-    final <- either H.failH pure (U.parseContainer result)
-    let finalParts = U.parsedParts final
-        (mediaLow,mediaHigh) = U.record5Window beforeParts
-        mainStart = U.stagingLength + fromIntegral (U.hMainOffset (U.parsedHeader before))
-    either (H.failH . show) pure (validateRecord5Confinement (Record5Window (mainStart+mediaLow) (mainStart+mediaHigh)) (Image4.candidateDat first) result)
-    H.ensure (U.hMainChecksum (U.parsedHeader final) == U.hMainChecksum (U.derivedHeader finalParts)) "heap staging carries an invalid main checksum"
-    B.writeFile readbackPath (B.map complement (U.serializeRecord (U.partRecord5 finalParts)))
-    runTool root decoder [readbackPath,"0",readbackImage,show sourceSize]
-    carried <- H.readRegular (16*1024*1024) readbackImage
-    H.ensure (carried == five) "heap carried image5 differs from confined staged image"
-    pure (StagedCandidate result)
+  staged <- Record5.stageRecord5 tools scratch (Image4.candidateDat first) original5 five
+  pure (StagedCandidate (Record5.stagedRecord5Dat staged))
 
 contractValue :: FilePath -> FilePath -> StagedImages -> StagedCandidate -> Value
 contractValue path4 path5 (StagedImages (CanonicalSource dat source4 source5 stockProofs) (LinkedArtifact linked symbolBytes symbols frames geometry arena) four five) (StagedCandidate candidate) = object

@@ -28,7 +28,7 @@ This report answers whether projects listed at [arewertosyet.com](https://arewer
 | --- | --- | --- | --- |
 | -18 | invalid signed class/id/domain selection | activate `+0xc` | Manifest A/B `0xc`; Draft:24 |
 | -25 | nonzero context or IRQ masked | activate `+0xc`, current-task `+0x16c` | Manifest; Draft:24,29 |
-| -41 | C+36 already nonzero / auxiliary+8 already nonzero | create `+0`, auxiliary register `+0x80` | Manifest; Draft:23 |
+| -41 | C+36 already nonzero / eventflag record +8 already nonzero | create `+0`, per-task eventflag create `+0x80` | Manifest; Draft:23 |
 | -42 | creation record absent | activate | Manifest |
 | -43 | already pending activation | activate | Manifest |
 | -50 | finite queue full/empty, flag-wait wrapper special case | `+0x9c`, `+0xac`, `+0xb0`, `+0xc8` | Manifest; Draft:28 |
@@ -37,7 +37,7 @@ This report answers whether projects listed at [arewertosyet.com](https://arewer
 | -60, -62 | message-wrapper returns; sibling `os_error.h` names them MBX_INVALID_LENGTH and MBX_FULL (non-X-M1) | image4 message wrappers | `E-ITRON-VOCAB-150` |
 | -1 | try-lock `0x427d4` / unlock `0x427fc` | loader helpers | Map A.1 |
 
-Objects are 120 C/T task records per kernel, auxiliary records (12 B) and nodes (16 B), scheduler domains (132 B), ready lists and bitmaps, resources/semaphores (97 constructed by root104), task-associated flags, mailbox/message objects with pools, and timer records of 24 bytes [Map A.2; Draft:23-29,43].
+Objects are 120 C/T task records per kernel, per-task eventflag records (12 B) and nodes (16 B), scheduler domains (132 B), ready lists and bitmaps, resources/semaphores (97 constructed by root104), mailbox/message objects with pools, and timer records of 24 bytes [Map A.2; Draft:23-29,43; E-RTOS-SLOT-MANIFEST-V5-150].
 
 ### 1.4 IRQ, timer and blocking behaviour
 
@@ -76,7 +76,7 @@ Leads (non-X-M1):
 | creation does not make tasks runnable; a separate auto-ready scan of 120 records builds ready sets [Draft:23,37] | consistent with TA_ACT handling for statically created tasks **[INFERENCE]** | |
 | activate id0 selects the current task [Manifest `0xc`] | TSK_SELF = 0 [spec act_tsk] | |
 | resource create `{0,1,1}` [Draft:26] | T_CSEM `{sematr=TA_TFIFO 0, isemcnt 1, maxsem 1}` [spec cre_sem] | |
-| auxiliary register `{flags 0 or 4, 0}`, duplicate -41; flag attribute 4 clears the whole word [Manifest `0x80`; Draft:27] | T_CFLG `{flgatr, iflgptn}`; TA_WSGL 0x00, TA_CLR 0x04; cre_flg E_OBJ [spec] | |
+| per-task eventflag create `+0x80` `{attribute 0 or 4, pattern 0}`, duplicate -41; attribute 4 clears the whole word [Manifest v5 `0x80`; Draft:27] | T_CFLG `{flgatr, iflgptn}`; TA_WSGL 0x00, TA_CLR 0x04; cre_flg E_OBJ [spec] | |
 | flag wait mode0 tests all requested bits and returns the whole flag word; timeout −1 [Draft:27; Manifest `0x9c`] | TWF_ANDW 0x00; p_flgptn receives the pattern; TMO_FEVR −1 [spec] | |
 | timer activation enables records whose flag bit1 is set [Draft:43] | TA_STA 0x02, cyclic handler operational after creation [spec] **[INFERENCE]** match | |
 | IRQ save returns the prior mask, restore takes it [Manifest `0x164/0x168`] | none: loc_cpu/unl_cpu take no mask | `vdis_psw()` returns the PSW, `vset_psw(psw)` restores it [no4guide.pdf] |
@@ -456,43 +456,42 @@ Order of work:
 
 `replacement/embassy_platform` is the phase-1 platform: embassy-executor 0.10.0 `raw::Executor` with no platform feature, embassy-time 0.5 at 3 MHz over an owned driver, and the stock kernel as the thread layer. It is installed as a RAM-push experiment (`experiments/embassy_phase1`), because RAM push is the only owned-code path that has run on the camera (E-RAM-PUSH-INSTALL-150) and it installs after the kernel is running. Experiments gained `prelinked.json`: a Bazel-built relocatable object, gc'd from the hook handler and the exported records, replaces `lib.rs` (`host/firmware/build-experiment-ram.sh`). The demo object takes 0x3ea0 of the 0x5000-byte code window.
 
-- **Host tasks:** the hook in front of the stock modal dispatcher `0x00bfb028` runs once from task context with IRQ unmasked. It fills both stacks with the id byte and cleans the payload's D-cache lines. Then, inside the stock critical pair `0x7235d8/0x7236b0`, it calls `+0x80` with `{0, 0}` and `+0x0` on each class's root for task id 119 in class 1 (A) and class 2 (B), the `+0x0` packet being `{flags 2, argument domain, entry, priority 14, 2 KiB stack}`. This is the sequence of the task-submission wrapper `0x725dd8`, which passes `{4, 0}` to `+0x80` unless descriptor word +0x18 is `0xa5f0a5f0`. The hook activates both tasks through the executing core's `+0xc` after leaving the pair. Priority 14 is one above the idle tasks 102/103 (15), whose WFI loop never blocks; at 15 the hosts never ran.
-- **Task id 119:**
+- **Host tasks:** the hook in front of the stock modal dispatcher `0x00bfb028` runs once from task context with IRQ unmasked. It fills B's stack with the id byte and cleans the payload's D-cache lines.
+  - **B (class 2, id 119):** inside the stock critical pair `0x7235d8/0x7236b0` the hook calls B's root `+0x80`, the per-task eventflag create, with `{attribute 0, pattern 0}`, then the task create `+0x0` with `{flags 2, argument 1, entry, priority 14, 2 KiB stack}`. That is the order of stock task create `0x725dd8`, which passes attribute 4 unless descriptor word +0x18 is `0xa5f0a5f0` (E-RTOS-SLOT-MANIFEST-V5-150). After leaving the pair it activates B through the executing core's `+0xc`.
+  - **A (class 1):** the hook calls the stock allocator `0x728804(0, 1, {entry, priority 14, 2 KiB stack size, stack base, argument 0})` as its four plain-image callers do. The allocator fills the stack with byte 0 and cleans it. It tries A `+0x0` with flags 2 on ids from cursor `0x40a0fc34` (initially 120) down to 105, moving on when one fails, stores the cursor below the id it took and activates the task through the executing core's `+0xc`. It returns the id, or -34 when the pool is empty, else the failing status. The hook records that return and publishes A's encoded id for the pender.
+  - Priority 14 is one above the idle tasks 102/103 (15), whose WFI loop never blocks; at 15 the hosts never ran.
+- **Task ids:**
   - **Census:** on the stock route, root `+0x0` and `+0x80` received ids up to 104 only (A: 74 calls, B: 10 calls; `private-data/scratch/EmbassyPhase1/census-creation-ids.json` from E-RTOS-SLOT-CENSUS-STOCK-150).
+  - **Eventflags:** the allocator calls no `+0x80`, so A has no eventflag record, like the stock tasks it creates. B's task-119 flag is created but never used by the host. In the census no eventflag slot (`+0x80..+0x9c`, `+0xd0`) on either domain received id 119; B saw only `+0x80` (ids up to 103) and one `+0x9c` (id 93) (`private-data/scratch/EmbassyAlloc/census-flag-ids.json`). The stock queue destructor `0x724f08(n)` overwrites task n-1's flag record through `+0xd0` (E-IMAGE4-QUEUE-DESTRUCTOR-POWEROFF-150), so a B call with n = 120 would reach task 119's flag; only A calls with 8 and 41 are observed, and no static search for B callers passing 120 was made.
   - **Wrapper call sites:** none of the 67 static call sites of `0x725dd8` passes an id above 104. Every id is a constant or comes from a static table; the only runtime case is a worker table bounded to 88..92, or 0..4 after its cleanup.
-  - **Class 1 collision:** the dynamic allocator `0x728804` (four plain-image callers, all requesting allocation) hands out class-1 ids from cursor 120 down to 105 through A `+0x0` directly. It moves to the next id whenever `+0x0` fails, so with the host's class-1 record at 119 it skips 119. If it had taken 119 before the hook ran, the host's `+0x0` returns -41, and that host does not start, which the checker reports as a failure.
+  - **Class 1:** ids 105..120 belong to the allocator `0x728804`, so A takes one from it instead of a fixed id. A then holds one of the allocator's 16 ids for the session.
   - **Class 2:** no traced path creates 119 in class 2.
   - **Not established:** whether the allocator runs on other routes, any indirect caller of the allocator or the wrapper, and the word at `0x96bd28` that a class-3 lookup would use.
   - **Other checks:** the class table `0x7cad9c` and the stack check `0x69cc18` cover ids 1..104.
 - **Waker:** the task wakeup queue. The host loop polls, takes the next deadline from the integrated timer queue and sleeps through `+0x28` with that deadline rounded up to whole ticks, or -1 when there is none. The pender sets a `pending` flag when the host task itself is the caller, and otherwise calls `+0x2c` from a task or `+0x30` from a handler. The one-deep queued wakeup closes the check-then-sleep race. Eventflags (`+0x88/+0x8c/+0x9c`) stay unused until their lower tuples are recovered.
-- **Time:** `now = 30000 × tick cell 0x400c0800 (extended to 64 bits) + sub-tick from [0xfff91000]`. The tick cell is read before and after the counter and the read retried while the two differ, and each domain clamps the result to be monotonic while counting how often and by how much the raw reading fell back. The counting direction is a build feature (`counter-down` for FujiMod, `counter-up` for the camera). At entry each host measures it, and a mismatch drops that domain to tick-only time. No timer register is written.
+- **Time:** `now = 30000 × tick cell 0x400c0800 (extended to 64 bits) + sub-tick from [0xfff91000]`. The tick cell is read before and after the counter and the read retried while the two differ, and each domain clamps the result to be monotonic while counting how often and by how much the raw reading fell back. The counting direction is a build feature (`counter-up` for the camera and the default FujiMod model; `counter-down` is the mismatch control). At entry each host measures it, and a mismatch drops that domain to tick-only time. No timer register is written.
 - **Critical sections:** `critical-section` over the stock CPU-lock slots `+0x130/+0x134` and `+0x138/+0x13c`, selected by `+0x148`, restoring the prior CPSR.I. The two cores' data caches are not coherent, so each domain's executor state, task storage and stack sit in 32-byte-aligned padded blocks written by one core only, and cross-core words (the demonstration record, the doorbell) go through the uncached alias.
 - **Interrupts:** `kernel::define_interrupt/enable_interrupt/disable_interrupt` over `+0x160/+0x158/+0x15c`; phase 1 does not use them.
 
-**Emulated result (E-EMBASSY-PHASE1-EMULATED-150).** One run of the demonstration and one of each control on the stock DAT, cardless FujiMod RAM-push route, with the modal75 FILM SIMULATION trajectory, all at `ea90d676`. The reviewed checker `replacement/embassy_platform/check-demo.jq` accepts all four runs:
+**Emulated result (E-EMBASSY-PHASE1-EMULATED-150).** One run of the demonstration and one of each control on the stock DAT, cardless FujiMod RAM-push route under the up-counting default model, with the modal75 FILM SIMULATION trajectory, all at main `82a8af1b`. The demonstration object is the `counter-up` build `8888b6d1…`. The reviewed checker `replacement/embassy_platform/check-demo.jq` accepts all four runs. They link their named objects with the same prelinked source digests, trajectory, hooks and builder identity, and they start from one checkpoint key (two cold, two restored).
 
 - **Demonstration:**
   - Install, route and unload pass with every step matched and no forbidden fetch.
-  - All six creation and activation statuses are 0, and both host tasks entered.
-  - Both domains measured the counter counting down and kept sub-tick time, with no clock regression.
-  - By handback each 100 ms ticker had run 33 iterations over a 321-tick span, and both kept running after unload.
-  - The latest wake was 68,757 counts (about 23 ms) on A and 32,347 on B, and A had two wakes later than two ticks. No kernel wake came early.
-  - A rang B's doorbell 3 times and B received all 3 through the kernel wakeup. The observer traced 4 `+0x2c` calls with B's id 0x00020077, and the worst delivery latency was 2,861 counts (about 1 ms).
+  - The allocator returned id 120 for A, B's three statuses are 0, and both host tasks entered.
+  - Both domains measured the counter counting up and kept sub-tick time, with no clock regression.
+  - By handback each 100 ms ticker had run 34 iterations over a 331-tick span, and both kept running after unload.
+  - The latest wake was 53,180 counts (about 18 ms) on A and 39,718 on B, none later than two ticks. No kernel wake came early.
+  - A rang B's doorbell 3 times and B received all 3 through the kernel wakeup. The observer traced 4 `+0x2c` calls with B's id 0x00020077, and the worst delivery latency was 42 counts.
   - The observer traced 39 `+0x28` calls on core 0 and 43 on core 1. The stock route makes none (E-RTOS-SLOT-CENSUS-STOCK-150).
-  - Stack high-water was 304 bytes on each domain.
+  - Stack high-water was 304 bytes on each domain; A's is a lower bound, since the allocator fills its stack with zeros.
 - **No executors:** the same hook and route with nothing created produce the same four captures as the demonstration (PNG and source-plane digests).
-- **No pender kernel:** the tickers keep running, and B receives none of its doorbells, with no traced `+0x2c` for B.
-- **Counter up:** both domains detect the down-counting model, fall back to tick-only time, and keep their timers on schedule.
-
-Two earlier inputs are preserved as failures:
-
-- The first stopped in FujiMod at the hook's byte exclusive (`ldrexb/strexb`; "R-profile nonword exclusive execution is not implemented"). The start flag is now a word atomic.
-- The second passed the route, but neither host task ran at priority 15.
+- **No pender kernel:** the tickers keep running, and B receives none of its 3 doorbells, with no traced `+0x2c` for B.
+- **Counter down:** both domains measure the up-counting model, fall back to tick-only time and keep their timers on schedule, and B still receives every doorbell.
 
 **Limits:**
 
-- This is an emulated coexistence demonstration on a model that counts the kernel timer down and models no caches, not kernel or silicon qualification.
+- These are emulated coexistence demonstrations on a model with no caches, not kernel or silicon qualification.
 - B's timeouts on hardware depend on line 32 reaching core 1 (laws U4).
 - Wake resolution is one tick.
-- The host tasks keep running after `ram-unload`.
+- The host tasks keep running after `ram-unload`, and A holds one of the allocator's 16 class-1 ids for the session.
 - Before any camera run, the payload must be the `counter-up` build, and the push and run need the owner's go. Core 1's instruction cache over the payload needs nothing beyond the install: the shared installer runs stock `0x006b0c3c` and `0x0061c490` on core 1 over the whole image, then `peer_cache_action` on core 1 ends in DSB/ICIALLU/DSB/ISB, and core 1 repeats ICIALLU after GO (`menu/ram_push_installer.c:199-206,239-289`; E-RAM-PUSH-INSTALL-150).

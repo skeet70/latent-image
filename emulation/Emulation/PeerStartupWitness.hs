@@ -27,7 +27,7 @@ import Data.List (nub, sort, stripPrefix)
 import qualified Data.Map.Strict as M
 import Data.Maybe (isJust, isNothing)
 import Data.Word (Word32, Word64, Word8)
-import Emulation.FirstStageWitness (Core (..), Cpsr (..), GuestAddress (..), WitnessResult (..), encodeLeWord, leWordAt, sha256Hex)
+import Emulation.FirstStageWitness (Core (..), Cpsr (..), GuestAddress (..), WitnessResult (..), encodeLeWord, leWordAt, recordedCp14Identities, sha256Hex)
 import Emulation.PeerStageWitness (Argument (..), PeerState (..), Registers (..))
 import qualified Emulation.PeerStageWitness as P
 import Emulation.PollPeriod (CodeImage (..), PollModel (..), PollPeriod (..), imageWord, pollPeriod)
@@ -1022,7 +1022,7 @@ checkStartupReceipt scenario program receipt = do
   require (receiptScenario receipt == scenario) "receipt scenario differs from the contract"
   require (receiptProgram receipt == programKind program) "receipt program differs from the contract"
   require (receiptResult receipt == Passed && isNothing (receiptError receipt) && isNothing (receiptMachineFailure receipt)) "startup witness failed"
-  require (receiptIdentities receipt == (0x4003, 0x5003)) "startup CP14 identities differ"
+  require (receiptIdentities receipt `elem` recordedCp14Identities) "startup CP14 identities differ"
   require (total > Instructions 0 && total <= scenarioBudget scenario) "startup instruction budget exceeded"
   forM_ stops $ \stop -> do
     require (stopLabel stop /= ForbiddenFetch) "forbidden-fetch stop in startup receipt"

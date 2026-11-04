@@ -20,7 +20,7 @@ import qualified Data.ByteString as B
 import Data.List (sort)
 import qualified Data.Map.Strict as M
 import Data.Word (Word8, Word32, Word64)
-import Emulation.FirstStageWitness (encodeLeWord, leWordAt, sha256Hex)
+import Emulation.FirstStageWitness (encodeLeWord, leWordAt, recordedCp14Identities, sha256Hex)
 import qualified Emulation.InterfaceInitializer as I
 import Emulation.InterfaceInitializer
   ( Context (..), Views (..), Source (..), ByteOrder (..), Event (..), Mode (..)
@@ -498,7 +498,7 @@ parseReceiptValue value = do
   primary <- field row "primary" >>= nullable parseObservation
   let Context _ _ _ _ _ finalCounts _ = final
       boundaryNames = [boundary | Stop boundary _ <- boundaries]
-  require (instructions == sum finalCounts && instructions <= budget && identities == [0x4003,0x5003])
+  require (instructions == sum finalCounts && instructions <= budget && identities `elem` [[core0, core1] | (core0, core1) <- recordedCp14Identities])
     "primary receipt whole-machine progress or identities differ"
   require (boundaryNames == take (length boundaryNames) [Caller,Before,Entered,After]) "primary boundary order differs"
   forM_ (zip boundaries (drop 1 boundaries)) $ \(Stop _ first,Stop _ second) -> progressing first second

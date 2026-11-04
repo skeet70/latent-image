@@ -8,7 +8,7 @@ import qualified Data.Map.Strict as M
 import Data.Ord (Down (..))
 import qualified Data.Set as Set
 import Data.Word (Word8, Word32, Word64)
-import Replacement.KernelInstall.Wire (Address (..), WordValue (..), Count (..), Bytes (..), Core (..), MemoryEvent (..), Watch (..), WatchClass (..), Source (..), ByteOrder (..))
+import Replacement.KernelInstall.Wire (Address (..), WordValue (..), Count (..), Bytes (..), Core (..), MemoryEvent (..), Watch (..), WatchClass (..), Source (..), ByteOrder (..), RomBacking (..))
 import qualified Replacement.KernelInstall.Wire as K
 import qualified Replacement.StartupConsumers.Source as S
 import qualified Replacement.StartupConsumers.ObservationPolicy as Policy
@@ -115,7 +115,7 @@ checkContext context = do
   let state = contextMachine context
   require (length (K.contextRegisters state) == 13 && length (K.contextCounts state) == 2
     && length (K.contextTcm state) == 2 && all ((==2) . length) (K.contextTcm state)
-    && K.contextIdentities state == map WordValue [0x4003,0x5003]
+    && K.contextIdentities state `elem` K.recordedCoreIdentities
     && all ((<= Count 0x20000000)) (K.contextCounts state) && sum (map count (K.contextCounts state)) <= 0x20000000
     && number (K.contextCpsr state) .&. 0x01000020 == 0) ContextRejected
 
@@ -165,8 +165,14 @@ codeFetchRange guest (S.ByteCount size) =
   let start = fromIntegral (physical (address guest))
   in FetchRange (PhysicalBoundary start) (PhysicalBoundary (start+fromIntegral size))
 
-backedFetchRanges :: [FetchRange]
-backedFetchRanges = [FetchRange (PhysicalBoundary low) (PhysicalBoundary high) | (low,high) <- backedRanges]
+backedFetchRanges :: RomBacking -> [FetchRange]
+backedFetchRanges rom = [FetchRange (PhysicalBoundary low) (PhysicalBoundary high) | [low,high] <- K.backedRanges rom]
+
+-- | The backing whose ranges the receipt's first segment attributes fetches over.
+receiptRomBacking :: Receipt -> Either WitnessError RomBacking
+receiptRomBacking receipt = case receiptSegments receipt of
+  segment:_ -> one WatchRejected [rom | rom <- [minBound..maxBound], attributionRanges (segmentFetchAttribution segment) == backedFetchRanges rom]
+  [] -> Left WatchRejected
 
 rangeContains :: [FetchRange] -> Address -> S.ByteCount -> Bool
 rangeContains ranges low (S.ByteCount size) = any covers ranges
@@ -417,9 +423,9 @@ scopedFetchRanges sites = mergeFetchRanges
   ++ [codeFetchRange site (S.ByteCount 4) | site <- map S.familyEntryAddress [minBound..maxBound]
       ++ S.atomicSourceSites ++ map S.messageAccessInstruction S.messageAccesses ++ sites])
 
-fetchRangesWithPolicy :: Policy.ObservationPolicy -> Segment -> FetchScope -> [Address] -> [FetchRange]
-fetchRangesWithPolicy policy segment scope sites = mergeFetchRanges
-  ((if scope == CompleteFetch then backedFetchRanges else scopedFetchRanges sites)
+fetchRangesWithPolicy :: Policy.ObservationPolicy -> RomBacking -> Segment -> FetchScope -> [Address] -> [FetchRange]
+fetchRangesWithPolicy policy rom segment scope sites = mergeFetchRanges
+  ((if scope == CompleteFetch then backedFetchRanges rom else scopedFetchRanges sites)
     ++ Policy.policyExtraFetchRanges policy (Count (sum (map count (segmentStart segment)))))
 
 checkDeclaredFetchPolicy :: Receipt -> Either WitnessError ()
@@ -428,19 +434,20 @@ checkDeclaredFetchPolicy = checkDeclaredFetchPolicyWithPolicy Policy.standaloneP
 checkDeclaredFetchPolicyWithPolicy :: Policy.ObservationPolicy -> Receipt -> Either WitnessError ()
 checkDeclaredFetchPolicyWithPolicy policy receipt = do
   returned <- probeAt receipt OuterReturn
+  rom <- receiptRomBacking receipt
   forM_ (receiptSegments receipt) $ \segment -> do
     either (const (Left SegmentRejected)) Right (Policy.verifyPolicySegment policy segment)
     let ProbeRange begin _ = segmentProbeRange segment
         expectedScope = if begin <= probeId returned then CompleteFetch else ScopedFetch
         sites = segmentArmedSites segment
-        expected = fetchRangesWithPolicy policy segment expectedScope sites
+        expected = fetchRangesWithPolicy policy rom segment expectedScope sites
         actual = [FetchRange (PhysicalBoundary low) (PhysicalBoundary high) | classification <- watchClasses (segmentWatch segment)
           ,CpuFetch `elem` classKinds classification,[low,high] <- [classRange classification]]
     require (segmentFetchScope segment == expectedScope && sites == Set.toAscList (Set.fromList sites)
       && all (\site -> address site .&. 3 == 0) sites
       && segmentFetchRanges segment == expected && mergeFetchRanges actual == expected
       && attributionSources (segmentFetchAttribution segment) == [CpuRead,CpuWrite]
-      && attributionRanges (segmentFetchAttribution segment) == backedFetchRanges) WatchRejected
+      && attributionRanges (segmentFetchAttribution segment) == backedFetchRanges rom) WatchRejected
 
 checkFetchPolicies :: Receipt -> Either WitnessError ()
 checkFetchPolicies = checkFetchPoliciesWithPolicy Policy.standalonePolicy
@@ -448,29 +455,30 @@ checkFetchPolicies = checkFetchPoliciesWithPolicy Policy.standalonePolicy
 checkFetchPoliciesWithPolicy :: Policy.ObservationPolicy -> Receipt -> Either WitnessError ()
 checkFetchPoliciesWithPolicy policy receipt = do
   outer <- probeAt receipt OuterEntry
+  rom <- receiptRomBacking receipt
   let probes = receiptProbes receipt
       initial = SiteState (Set.fromList (Policy.policyGlobalSites policy ++ map S.familyEntryAddress [minBound..maxBound]
         ++ [K.contextLr (machine outer) | Policy.policyInitialOuterReturn policy])) Set.empty [] [] Set.empty
   require (map probeId probes == map (ProbeId . fromIntegral) [0..length probes-1]) ProbeRejected
-  (consumed,final,remaining) <- foldM checkSegment (0,initial,probes) (receiptSegments receipt)
+  (consumed,final,remaining) <- foldM (checkSegment rom) (0,initial,probes) (receiptSegments receipt)
   require (consumed == fromIntegral (length probes) && null remaining) ProbeRejected
   require (Set.null (siteFrames final) && null (siteCalls final) && null (siteReturns final)) WatchRejected
   where
     invocation ident = one WatchRejected [item | item <- receiptInvocations receipt,invocationId item == ident]
-    checkSegment (consumed,state,remaining) segment = do
+    checkSegment rom (consumed,state,remaining) segment = do
       either (const (Left SegmentRejected)) Right (Policy.verifyPolicySegment policy segment)
       external <- either (const (Left WatchRejected)) Right (Policy.policyExternalBefore policy (segmentId segment))
       let ProbeRange (ProbeId begin) (ProbeId end) = segmentProbeRange segment
           expectedScope = if Set.member OuterReturn (siteCompleted state) then ScopedFetch else CompleteFetch
           sites = Set.toAscList (Set.union (siteAddresses state) (Set.fromList external))
-          expected = fetchRangesWithPolicy policy segment expectedScope sites
+          expected = fetchRangesWithPolicy policy rom segment expectedScope sites
           actual = [FetchRange (PhysicalBoundary low) (PhysicalBoundary high) | classification <- watchClasses (segmentWatch segment)
             ,CpuFetch `elem` classKinds classification,[low,high] <- [classRange classification]]
       require (begin == consumed && begin <= end && end <= fromIntegral (length (receiptProbes receipt))) ProbeRejected
       require (segmentFetchScope segment == expectedScope && segmentArmedSites segment == sites
         && segmentFetchRanges segment == expected && mergeFetchRanges actual == expected
         && attributionSources (segmentFetchAttribution segment) == [CpuRead,CpuWrite]
-        && attributionRanges (segmentFetchAttribution segment) == backedFetchRanges) WatchRejected
+        && attributionRanges (segmentFetchAttribution segment) == backedFetchRanges rom) WatchRejected
       let (captured,rest) = splitAt (fromIntegral (end-begin)) remaining
       forM_ captured $ \probe ->
         if probeKind probe == OuterEntry && probeId probe == ProbeId 0 then
@@ -579,6 +587,10 @@ checkSegmentsWithPolicy policy receipt = do
     && segmentStart initial == K.contextCounts (machine outer)
     && and (zipWith (\a b -> segmentEnd a == segmentStart b && segmentEndContexts a == segmentStartContexts b) segments (drop 1 segments))) SegmentRejected
   checkWatchFailures receipt
+  require (K.oneRecordedModel ([K.contextIdentities (machine probe) | probe <- receiptProbes receipt]
+    ++ [K.contextIdentities (contextMachine context) | segment <- segments, context <- segmentStartContexts segment ++ segmentEndContexts segment]
+    ++ [K.contextIdentities (contextMachine context) | resource <- receiptResources receipt, context <- resourceAdmitted resource : maybe [] pure (resourceClosed resource)]
+    ++ [K.contextIdentities (contextMachine (payloadContext payload)) | payload <- receiptPayloads receipt])) ContextRejected
   checkDeclaredFetchPolicyWithPolicy policy receipt
   mapM_ (check (K.contextTcm (machine outer))) segments
   mapM_ (checkFetches receipt) segments
@@ -619,9 +631,6 @@ checkSegmentsWithPolicy policy receipt = do
           at <- eventClock event
           require (at >= sum (map count start) && at <= sum (map count end) && eventSize event <= 8) EventOrderRejected
         else require (eventCore event == Nothing && eventPc event == Nothing && eventInstructions event == Nothing && eventTick event == Nothing) EventRejected) (watchRecords watch)
-
-backedRanges :: [(Word64,Word64)]
-backedRanges = [(0,0x20000000),(0x3fff0000,0x3fff1000),(0x80000000,0x80004000),(0x90000000,0x90020000),(0xfff00000,0xfff01000)]
 
 checkStops :: Receipt -> Probe -> Either WitnessError ()
 checkStops receipt outer = forM_ [probe | probe <- receiptProbes receipt,probeClock probe >= probeClock outer,probeKind probe /= OuterEntry] $ \probe -> do

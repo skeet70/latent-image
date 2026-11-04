@@ -986,7 +986,7 @@ impl<'a> Runner<'a> {
         let snapshot = self.snapshot(machine, label, hit, observation.as_ref())?;
         require(snapshot.core == label.core(), "loader-prefix stop has the wrong core")?;
         if self.contract.startup.is_some() {
-            for (core, expected) in [(0, 0x4003), (1, 0x5003)] {
+            for (core, expected) in crate::run::CoreIdentities::Xm1.words().into_iter().enumerate() {
                 require(machine.session.board.cpu(core)?.rprofile_identity(None)? == expected, "composed active CP14 identity changed")?;
             }
             if self.epoch != Epoch::Boot {
@@ -1080,7 +1080,7 @@ impl<'a> Runner<'a> {
                 require(stop.counter == Some(Totals { count: 0, zero_count: 0, nonzero_count: 0 })
                     && (contract.startup.is_some() || stop.watch_records == Some(0)),
                     "scoped watch was not active and empty at the prefix entry")?;
-                for (core, expected) in [(0, 0x4003), (1, 0x5003)] {
+                for (core, expected) in crate::run::CoreIdentities::Xm1.words().into_iter().enumerate() {
                     require(machine.session.board.cpu(core)?.rprofile_identity(None)? == expected,
                         "prefix-entry active CP14 identity changed")?;
                 }
