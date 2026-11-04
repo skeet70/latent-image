@@ -11,7 +11,7 @@ module Replacement.StartupArtifact.Types
   , WriteBasis (..), WritesPolicy (..), CatalogRead (..), Catalog (..)
   , TcmRegister (..), DecoderIndex (..), DecoderChoice (..), DeclaredMutation (..)
   , Piece (..), PieceFacts (..), ServiceBinding (..), Publication (..), LinkedBytes (..), ScratchBytes (..)
-  , PublisherFrame (..), SubmitCall (..), StackDepth (..)
+  , PublisherFrame (..), SubmitCall (..), StackDepth (..), TaskNumber (..), StackBytes (..), TaskStart (..)
   , AllocationPosition (..), allocationPositionName, AllocationWords (..), AllocationOwner (..), PoolSpan (..), PoolAllocation (..)
   , Refusal (..), CatalogProblem (..), ManifestProblem (..)
   ) where
@@ -64,6 +64,7 @@ editBytes :: Edit -> B.ByteString
 editBytes (Edit _ bytes) = bytes
 
 data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup | TaskSubmission | TaskStorage
+  | IdleTask | RootTask
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 pieceKindName :: PieceKind -> Text
@@ -75,9 +76,12 @@ pieceKindName kind = case kind of
   LoaderStartup -> "loader-startup"
   TaskSubmission -> "task-submission"
   TaskStorage -> "task-storage"
+  IdleTask -> "idle-task"
+  RootTask -> "root-task"
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
   | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea | TaskSubmissionArea | TaskStorageArea
+  | IdleTaskArea | RootTaskArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 areaName :: Area -> Text
@@ -94,6 +98,8 @@ areaName area = case area of
   KernelInstallArea -> "kernel-install"
   TaskSubmissionArea -> "task-submission"
   TaskStorageArea -> "task-storage"
+  IdleTaskArea -> "idle-task"
+  RootTaskArea -> "root-task"
 
 data FootprintBasis = AdmissionRead | RuntimePremise deriving (Eq, Ord, Show)
 
@@ -255,6 +261,13 @@ newtype StackDepth = StackDepth Word32 deriving (Eq, Show)
 -- | One task-submission tail call of the owned dispatcher: its core and stack depth at the branch.
 data SubmitCall = SubmitCall { submitCore :: Core, submitStack :: StackDepth } deriving (Eq, Show)
 
+newtype TaskNumber = TaskNumber Word32 deriving (Eq, Show)
+
+newtype StackBytes = StackBytes Word32 deriving (Eq, Show)
+
+-- | A task the owned dispatcher submits: its id, entry and requested stack.
+data TaskStart = TaskStart { startTask :: TaskNumber, startEntry :: Pc, startStack :: StackBytes } deriving (Eq, Show)
+
 -- | Where a normalized word points in an allocation: from its base (inclusive) or up to its end (inclusive).
 data AllocationPosition = AllocationBase | AllocationTop deriving (Eq, Show)
 
@@ -294,13 +307,17 @@ data PieceFacts
   | PublisherFacts PublisherFrame [Publication]
   -- | The linked loader-B orchestration image.
   | LoaderOrchestrationFacts LinkedBytes
-  -- | The linked loader-A and loader-B orchestration images and the dispatcher's task submissions.
-  | LoaderStartupFacts LinkedBytes LinkedBytes [SubmitCall]
+  -- | The linked loader-A and loader-B orchestration images, the dispatcher's task submissions and the tasks they start.
+  | LoaderStartupFacts LinkedBytes LinkedBytes [SubmitCall] [TaskStart]
   | NoFacts
   -- | The linked task wrapper/release image and the pool-allocation relation over its reads.
   | TaskSubmissionFacts LinkedBytes PoolAllocation
   -- | The linked task-storage transition image.
   | TaskStorageFacts LinkedBytes
+  -- | The linked idle image and the stack-top return boundaries it adds to the pool-allocation relation.
+  | IdleTaskFacts LinkedBytes [Label]
+  -- | The linked root image and the pool-address words of its reads.
+  | RootTaskFacts LinkedBytes [AllocationWords]
   deriving (Eq, Show)
 
 data Piece = Piece

@@ -41,6 +41,7 @@ footprint loaderA loaderB image4 = mapMaybe (\(basis, target, start, end, citati
   , (RuntimePremise, LoaderA, 0x40430, 0x409ac, "emulation/Emulation/PrimaryInitializerArtifact.hs:297-302,470 (table A service slots)")
   , (RuntimePremise, LoaderB, 0xd0430, 0xd0434, "emulation/Emulation/InterfaceInitializer.hs:515-525 (table B service slots behind the initializer entry)")
   , (RuntimePremise, Image4, 0x89ea8c, 0x89ea90, "reports/replacement-inventory-baseline.md:887 (error callback word, canonical 0x723330)")
+  , (RuntimePremise, Image4, 0x69cbf0, 0x69cc00, "replacement/task_submission/Replacement/TaskSubmission/Admission.hs:110-111,127-129 (error dispatch demand assumes the idle body's frame)")
   ]
   ++ closure Image4 0x61c400 image4 [carrier] [0x7221c8, 0x723398, 0x723330, 0x72835c, 0x6470fc]
        "replacement/task_submission/Replacement/TaskSubmission/Admission.hs:96 (fill, error dispatch); callbacks 0x723330, 0x72835c (reports/replacement-inventory-baseline.md:887,889) and log trace 0x6470fc (emulation/Emulation/TaskSubmissionProgram.hs:487-496), closed over direct calls"

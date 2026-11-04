@@ -35,6 +35,11 @@ checkArtifact bytes symbols = do
   assert (all (`elem` map callTarget sites) [0x7247ac,0x69ca24,0x69ca44,0x725424,0x72612c,0x6a59b8])
     "root proof lost a required retained effect"
   assert (scratchLow proof <= -8 && scratchLow proof >= -992) "root stack bound lost"
+  assert (map fst (callPositions proof) == sites && all (not . null . snd) (callPositions proof))
+    "call positions do not cover exactly the call sites"
+  assert (sum [ length [() | EffectPosition (Scenario 0 0 1 0) _ <- positions]
+              | (site,positions) <- callPositions proof, callTarget site == 0x7247ac ] == 97)
+    "the resource call sites do not serve 97 effects in the natural scenario"
   forM_ [B.empty,B.take 7 bytes,B.replicate 344 0] $ \invalid ->
     assert (refuses (deriveArtifact invalid symbols)) "invalid carrier admitted"
   assert (refuses (deriveArtifact bytes B.empty)) "missing symbols admitted"

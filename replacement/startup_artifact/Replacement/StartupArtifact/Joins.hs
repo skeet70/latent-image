@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | The registered joins.
 module Replacement.StartupArtifact.Joins
-  ( JoinKind (..), registeredJoins, joinedTasks, submissionStack
+  ( JoinKind (..), registeredJoins, joinedTasks, submissionStack, submissionStackWith
   ) where
 
 import qualified A32 as A
@@ -23,6 +23,11 @@ import Replacement.StartupArtifact.Types
 import qualified Replacement.StartupComposition.Artifact as SC
 import qualified Replacement.StartupComposition.LoaderStartup as LS
 import qualified Replacement.StartupComposition.TaskSubmission as TS
+import qualified Replacement.IdleTask.Admission as IA
+import qualified Replacement.IdleTask.Artifact as IT
+import qualified Replacement.RootTask.Admission as RA
+import qualified Replacement.RootTask.Artifact as RT
+import qualified Replacement.StartupArtifact.Footprint.RootTask as RootFootprint
 import qualified Replacement.TaskSubmission.Admission as WA
 import qualified Replacement.TaskSubmission.Artifact as W
 import qualified StartupStageContract as Stage
@@ -30,6 +35,7 @@ import qualified StartupStageContract as Stage
 data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | PrefixOrchestrationB | FirstStageCompletionZero
   | LoaderStartupPublisher | PublisherInstallerRoots | CriticalPairInstallerRoots | DispatcherCriticalPair
   | TaskCompositionOwnedCalls | DispatcherTaskComposition | PublisherTaskServices
+  | DispatcherRootEntry | DispatcherIdleEntry | WrapperIdleErrorCallback | RootTaskServices
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 instance JoinName JoinKind where
@@ -44,6 +50,10 @@ instance JoinName JoinKind where
   joinName TaskCompositionOwnedCalls = "task-composition-owned-calls"
   joinName DispatcherTaskComposition = "dispatcher-task-composition"
   joinName PublisherTaskServices = "publisher-task-services"
+  joinName DispatcherRootEntry = "dispatcher-root-entry"
+  joinName DispatcherIdleEntry = "dispatcher-idle-entry"
+  joinName WrapperIdleErrorCallback = "wrapper-idle-error-callback"
+  joinName RootTaskServices = "root-task-services"
 
 at :: Target -> Word32 -> Word32 -> Span
 at target start end = Span target (Guest start) (Guest end)
@@ -93,8 +103,8 @@ orchestrationImage side evidence = case concatMap images (map pieceFacts (eviden
   where
     images facts = case (side, facts) of
       (LI.LoaderB, LoaderOrchestrationFacts linked) -> [linked]
-      (LI.LoaderA, LoaderStartupFacts linked _ _) -> [linked]
-      (LI.LoaderB, LoaderStartupFacts _ linked _) -> [linked]
+      (LI.LoaderA, LoaderStartupFacts linked _ _ _) -> [linked]
+      (LI.LoaderB, LoaderStartupFacts _ linked _ _) -> [linked]
       _ -> []
 
 orchestrationArtifact :: LI.LoaderSide -> JoinEvidence -> Maybe L.LinkedArtifact
@@ -103,7 +113,7 @@ orchestrationArtifact side evidence = do
   either (const Nothing) Just (L.deriveArtifact side image symbols)
 
 submissions :: JoinEvidence -> Maybe [SubmitCall]
-submissions evidence = case [calls | LoaderStartupFacts _ _ calls <- map pieceFacts (evidencePieces evidence)] of
+submissions evidence = case [calls | LoaderStartupFacts _ _ calls _ <- map pieceFacts (evidencePieces evidence)] of
   [calls] -> Just calls
   _ -> Nothing
 resetLiteral :: Target -> JoinEvidence -> Maybe Word32
@@ -324,7 +334,7 @@ wrapperFrame = 56
 dispatcherCriticalPair :: Join JoinKind
 dispatcherCriticalPair = Join DispatcherCriticalPair (Set.fromList [Record2Link, LoaderStartup])
   [at Image4 0x7235d8 0x723790, at LoaderA loaderAStart 0x40b00]
-  (ObservationQualified "the owned dispatcher submits tasks through the stock wrapper 0x725dd8, which enters the owned critical pair; loader-A orchestration's admission orders its call of the initializer at 0x40430, which fills the core-0 table the pair reads, before its first dispatch (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs expected); qualified by a composed natural comparison")
+  (ObservationQualified "the owned dispatcher submits tasks through the task wrapper at 0x725dd8, stock or the owned task-submission piece, which enters the owned critical pair; submission-depth-in-stack-window bounds each submission with the stock wrapper's 56-byte frame (emulation/Emulation/CriticalPair.hs:133) and the deeper critical-pair frame, and with task-submission composed dispatcher-task-composition bounds the owned wrapper's joined stack; loader-A orchestration's admission orders its call of the initializer at 0x40430, which fills the core-0 table the pair reads, before its first dispatch (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs expected); qualified by a composed natural comparison")
   [ HostCheck "submission-depth-in-stack-window" $ \evidence ->
       case (submissions evidence, criticalFrame evidence) of
         (Just calls@(_ : _), Just (StackDepth pairFrame)) -> all (\(SubmitCall core (StackDepth depth)) ->
@@ -338,7 +348,8 @@ registeredJoins =
   , prefixOrchestration LoaderOrchestrationB, prefixOrchestration LoaderStartup
   , completionZero LoaderOrchestrationB, completionZero LoaderStartup
   , loaderStartupPublisher, publisherInstallerRoots, criticalPairInstallerRoots, dispatcherCriticalPair
-  , taskCompositionOwnedCalls, dispatcherTaskComposition, publisherTaskServices ]
+  , taskCompositionOwnedCalls, dispatcherTaskComposition, publisherTaskServices
+  , dispatcherRootEntry, dispatcherIdleEntry, wrapperIdleErrorCallback, rootTaskServices ]
 
 -- | The task wrapper, the record-2 critical pair and the task-storage transition joined as in
 -- replacement/startup_composition/Replacement/StartupComposition/TaskSubmission.hs:63-97.
@@ -379,7 +390,11 @@ descriptorBytes = WA.StackOffset 28
 -- | The owned wrapper's joined stack at a dispatcher submission: entered at the boot stack's service SP
 -- less the call depth, written only inside that core's boot-stack window, disjoint from the descriptor.
 submissionStack :: TS.JoinedArtifact -> SubmitCall -> Either TS.JoinError WA.JoinedStack
-submissionStack joined (SubmitCall core (StackDepth depth)) = TS.joinStack joined WA.Submission context retained
+submissionStack = submissionStackWith WA.stockCalleeDemand
+
+-- | 'submissionStack' with the retained callees' demands from the given table.
+submissionStackWith :: (WA.CallTarget -> WA.CalleeDemand) -> TS.JoinedArtifact -> SubmitCall -> Either TS.JoinError WA.JoinedStack
+submissionStackWith demand joined (SubmitCall core (StackDepth depth)) = TS.joinStack joined WA.Submission context retained
   where
     wrapperSp = toInteger (serviceSp core) - toInteger depth
     WA.StackOffset offset = descriptorOffset
@@ -389,7 +404,7 @@ submissionStack joined (SubmitCall core (StackDepth depth)) = TS.joinStack joine
       (WA.StackInterval (WA.StackOffset (toInteger (stackFloor core) - wrapperSp)) (WA.StackOffset 0))
       [WA.StackInterval (WA.StackOffset descriptor) (WA.StackOffset (descriptor + bytes))]
     owned = map WA.FixedService [WA.CriticalEnter, WA.CriticalExit, WA.Reservation]
-    retained = [ WA.stockCalleeDemand target
+    retained = [ demand target
                | target <- nub (map WA.callTarget (WA.callBoundaries (W.frameProof (TS.wrapperArtifact joined)))), target `notElem` owned ]
 
 dispatcherTaskComposition :: Join JoinKind
@@ -414,3 +429,106 @@ publisherTaskServices = Join PublisherTaskServices (Set.fromList [PrimaryPublish
         _ -> False ]
   where
     physicalOf (Guest address) = physicalAddress (fromIntegral address)
+
+taskStarts :: JoinEvidence -> Maybe [TaskStart]
+taskStarts evidence = case [starts | LoaderStartupFacts _ _ _ starts <- map pieceFacts (evidencePieces evidence)] of
+  [starts] -> Just starts
+  _ -> Nothing
+
+-- | The root image's entry symbol and admitted frame low.
+rootFrame :: JoinEvidence -> Maybe (Word32, Int)
+rootFrame evidence = case [linked | RootTaskFacts linked _ <- map pieceFacts (evidencePieces evidence)] of
+  [LinkedBytes image symbols] -> do
+    artifact <- either (const Nothing) Just (RT.deriveArtifact image symbols)
+    entry <- symbolAt symbols "xm1_root_task"
+    pure (entry, RA.scratchLow (RT.artifactProof artifact))
+  _ -> Nothing
+
+-- | The idle image's entry symbol and admitted frame low.
+idleFrame :: JoinEvidence -> Maybe (Word32, Int)
+idleFrame evidence = case [linked | IdleTaskFacts linked _ <- map pieceFacts (evidencePieces evidence)] of
+  [LinkedBytes image symbols] -> do
+    artifact <- either (const Nothing) Just (IT.deriveArtifact image symbols)
+    entry <- symbolAt symbols "xm1_idle_task"
+    pure (entry, IA.scratchLow (IT.artifactProof artifact))
+  _ -> Nothing
+
+-- | The dispatcher starts the task exactly once, at this entry.
+dispatchedAt :: Word32 -> Word32 -> [TaskStart] -> Bool
+dispatchedAt task entry starts = [address | TaskStart (TaskNumber number) (Pc address) _ <- starts, number == task] == [entry]
+
+-- | Bytes of the source IRQ frame a task stack must hold below the task's own frame
+-- (replacement/idle_task/Replacement/IdleTask/Artifact.hs:131).
+irqFrameBytes :: Integer
+irqFrameBytes = 32
+
+-- | The task's one requested stack holds its admitted frame and the IRQ frame.
+stackCovers :: Word32 -> Int -> [TaskStart] -> Bool
+stackCovers task low starts = case [bytes | TaskStart (TaskNumber number) _ (StackBytes bytes) <- starts, number == task] of
+  [bytes] -> toInteger bytes >= toInteger (negate low) + irqFrameBytes
+  _ -> False
+
+dispatcherRootEntry :: Join JoinKind
+dispatcherRootEntry = Join DispatcherRootEntry (Set.fromList [LoaderStartup, RootTask])
+  [at Image4 0x69d160 0x69d164]
+  (ObservationQualified "the owned dispatcher submits task 104 with entry 0x69d160 and 0x400 stack bytes (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs:206), the root image links its entry there (replacement/root_task/Replacement/RootTask/Artifact.hs:69-71), and the retained trampoline enters it with r0 the argument 0 and SP the stack top; qualified by the composed comparison at task-submission/a104-first-entry")
+  [ HostCheck "root-entry-dispatched" $ \evidence ->
+      case (taskStarts evidence, rootFrame evidence) of
+        (Just starts, Just (entry, _)) -> dispatchedAt 104 entry starts
+        _ -> False
+  , HostCheck "root-stack-request-covers-frame" $ \evidence ->
+      case (taskStarts evidence, rootFrame evidence) of
+        (Just starts, Just (_, low)) -> stackCovers 104 low starts
+        _ -> False ]
+
+dispatcherIdleEntry :: Join JoinKind
+dispatcherIdleEntry = Join DispatcherIdleEntry (Set.fromList [LoaderStartup, IdleTask])
+  [at Image4 0x69cbf0 0x69cbf4]
+  (ObservationQualified "the owned dispatcher submits tasks 102 and 103 with entry 0x69cbf0 and 0x400 stack bytes (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs:208,210), the idle image links its entry there (replacement/idle_task/Replacement/IdleTask/Artifact.hs:63-65), and the retained trampolines enter it with r0 the argument 0 and SP the stack top; qualified by the composed comparison at idle-task/first-entry")
+  [ HostCheck "idle-entry-dispatched" $ \evidence ->
+      case (taskStarts evidence, idleFrame evidence) of
+        (Just starts, Just (entry, _)) -> all (\task -> dispatchedAt task entry starts) [102, 103]
+        _ -> False
+  , HostCheck "idle-stack-request-covers-frame" $ \evidence ->
+      case (taskStarts evidence, idleFrame evidence) of
+        (Just starts, Just (_, low)) -> all (\task -> stackCovers task low starts) [102, 103]
+        _ -> False ]
+
+-- | The wrapper's retained demands with error dispatch into a callback of the given frame low.
+idleCallbackDemand :: Int -> WA.CallTarget -> WA.CalleeDemand
+idleCallbackDemand low target
+  | target == WA.FixedService WA.ErrorCallback = WA.errorCallbackDemand (WA.StackOffset (toInteger low))
+  | otherwise = WA.stockCalleeDemand target
+
+wrapperIdleErrorCallback :: Join JoinKind
+wrapperIdleErrorCallback = Join WrapperIdleErrorCallback (Set.fromList [TaskSubmission, IdleTask])
+  [at Image4 0x69cbf0 0x69cc00]
+  (HostProof "the wrapper's error dispatch 0x723398 pushes 8 bytes and calls the callback (replacement/task_submission/Replacement/TaskSubmission/Admission.hs errorCallbackDemand); with callback 0x69cbf0 the demand is 8 plus the idle admission's frame (replacement/idle_task/Replacement/IdleTask/Admission.hs:157-171), and every dispatcher submission's joined stack with that demand fits its boot-stack window; dispatcher-task-composition keeps the stock 12 bytes for callback 0x723330, so the checked bound is the larger of the two; the natural callback word holds 0x723330 or 0x72835c, so this bounds a non-natural callback")
+  [ HostCheck "error-callback-idle-demand" $ \evidence ->
+      case (submissions evidence, joinedTasks evidence, idleFrame evidence) of
+        (Just calls@(_ : _), Just joined, Just (_, low)) ->
+          all (either (const False) (const True) . submissionStackWith (idleCallbackDemand low) joined) calls
+        _ -> False ]
+
+-- | Owned carriers root's closure may enter, with the entries their pieces admit: the wrapper and release
+-- (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:87-91), the critical-pair branch words
+-- (record-2 staging) and the storage transition, which only the retained prelude enters.
+admittedEntries :: [((Word32, Word32), [Word32])]
+admittedEntries =
+  [ ((0x725dd8, 0x72612c), [0x725dd8, 0x726098])
+  , ((0x7235d8, 0x723790), [0x7235d8, 0x7236b0])
+  , ((0x725cc4, 0x725da8), []) ]
+
+closureEntersAtEntries :: JoinEvidence -> Bool
+closureEntersAtEntries evidence = any ((== 0x725dd8) . fst) entering && all (uncurry elem) entering
+  where
+    within address (low, high) = address >= low && address < high
+    calls = RootFootprint.closureCalls (targetOf (evidenceCanonical evidence) Image4)
+    entering = [ (target, entries) | (site, target) <- calls, not (any (within site . fst) admittedEntries)
+               , (range, entries) <- admittedEntries, within target range ]
+
+rootTaskServices :: Join JoinKind
+rootTaskServices = Join RootTaskServices (Set.fromList [RootTask, Record2Link, TaskSubmission, TaskStorage])
+  [at Image4 0x7235d8 0x723790, at Image4 0x725cc4 0x725da8, at Image4 0x725dd8 0x72612c]
+  (ObservationQualified "root's retained submitters (0x69ca24 through 0x6b0764, and the constructors under 0x69ca44) call the owned wrapper at 0x725dd8, its cleanup 0x72612c can call owned release 0x726098, and the stock wrapper body and callback 0x69cc18 reach the critical pair and, through the retained prelude 0x725c6c, the storage transition; root-closure-enters-carriers-at-entries checks that every direct call from root's closure into these carriers targets an entry the owning piece admits; the wrapper's owned calls are task-composition-owned-calls; qualified by root's call sequence and the committed submission records in the composed comparison")
+  [HostCheck "root-closure-enters-carriers-at-entries" closureEntersAtEntries]
