@@ -1,6 +1,6 @@
 # Owned menu engine: design (#128)
 
-Status: revision 2, cleared by MenuEngineDesignReview. Increments 1 and 2 are built and reviewed: the host oracle passes its ten cases (E-MENU-ENGINE-HOST-ORACLE-150), and all 29 guest pairs pass (E-MENU-ENGINE-GUEST-PAIRS-150, `replacement/README.md#owned-menu-engine-increment-2-128`). Increment 3 is next.
+Status: revision 2, cleared by MenuEngineDesignReview. Increments 1 and 2 are built and reviewed: the host oracle passes its ten cases (E-MENU-ENGINE-HOST-ORACLE-150), and all 29 guest pairs pass (E-MENU-ENGINE-GUEST-PAIRS-150, `replacement/README.md#owned-menu-engine-increment-2-128`). The acceptance below is not met yet: picker 246 and observe run 1 (DOWN at 246's last row) are excluded while 246's stall is open. Increment 3 is next.
 
 Facts cite the ledger or `private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c`; **[INFERENCE]** marks what the evidence does not show directly.
 
