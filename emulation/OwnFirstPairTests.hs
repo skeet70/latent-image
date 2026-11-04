@@ -10,7 +10,7 @@ import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map.Strict as M
 import qualified Data.Vector as V
-import Data.Word (Word32)
+import Data.Word (Word32, Word64)
 import Emulation.OwnFirstPairCheck
 import Emulation.OwnFirstPairPlan
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -83,6 +83,10 @@ inputsFor role replaced = toJSONList
   | (index, name, digest) <- zip3 [0 ..] ["plan", "run", "dat", "rom", "trajectory", "observer" :: String]
       [sha256Hex (sha256 (planBytesFor role)), runDocumentSha256, digestOf "dat", bootRomSha256, digestOf "trajectory", digestOf "observer"] ]
 
+-- | The fixture's last milestone finish, past the settle window.
+routeEnd :: Word64
+routeEnd = 900000000
+
 observationFor :: Role -> Value
 observationFor role = object
   [ "schema" .= (1 :: Int), "role" .= roleWire role
@@ -94,7 +98,7 @@ observationFor role = object
                  , object ["domain" .= ("b" :: String), "stop" .= object [], "readback" .= readback 200 [DomainB]] ]
   , "segments" .= [segment [DomainA] 100 200, segment [DomainA, DomainB] 200 900]
   , "final_readback" .= readback 900 [DomainA, DomainB]
-  , "milestones" .= [object ["phase" .= ("cold-start" :: String), "pulse" .= Null, "expected" .= menu, "reached" .= (5 :: Int), "observed" .= menu, "finished" .= (800 :: Int)]]
+  , "milestones" .= [object ["phase" .= ("cold-start" :: String), "pulse" .= Null, "expected" .= menu, "reached" .= (5 :: Int), "observed" .= menu, "finished" .= routeEnd]]
   , "reached" .= map reachedRow ["0x164", "0x168", "0x1618"]
   , "classes" .= [call 0 0x6000009f]
   , "pending" .= ([] :: [Value]), "error" .= Null, "machine_failure" .= Null ]
@@ -173,8 +177,9 @@ main = do
         , ("compare accepts runs with equal run, ROM, trajectory and observer", compared [] == Just True)
         , ("compare refuses runs with different trajectories", compared [(4, digestOf "other trajectory")] == Nothing)
         , ("compare refuses runs with different observers", compared [(5, digestOf "other observer")] == Nothing)
-        , ("a call pending since before the route ended refuses", refusedAs TrackingRefusal (pendingAt 700))
-        , ("a call entered at the route end may stay pending", either (const False) (either (const False) ((== 1) . qualifiedPending)) (outcome (pendingAt 800)))
+        , ("a call open since before the settle window refuses", refusedAs TrackingRefusal (pendingAt (routeEnd - pendingWindow - 1)))
+        , ("a call open within the settle window qualifies", either (const False) (either (const False) ((== 1) . qualifiedPending)) (outcome (pendingAt (routeEnd - pendingWindow))))
+        , ("a call entered at the route end qualifies", either (const False) (either (const False) ((== 1) . qualifiedPending)) (outcome (pendingAt routeEnd)))
         , ("+0xfc accepts the returned timer base", checkCall 0 (getTime 120 (1000 - 120)) == Right ())
         , ("+0xfc accepts the entry timer base", checkCall 0 (getTime 120 (1000 - 100)) == Right ())
         , ("+0xfc refuses an offset from neither base", checkCall 0 (getTime 120 (1000 - 130)) /= Right ())
@@ -195,7 +200,7 @@ main = do
     stock <- either (const Nothing) (either (const Nothing) Just) (outcomeFor StockRole (observationFor StockRole))
     owned <- either (const Nothing) (either (const Nothing) Just) (outcome (set "inputs" (inputsFor OwnedRole replaced) valid))
     either (const Nothing) (Just . null) (compareRoutes stock owned)
-  pendingAt :: Int -> Value
+  pendingAt :: Word64 -> Value
   pendingAt entered = set "entries" (Number 4) (set "pending" (toJSONList [object ["entered" .= entered]]) valid)
   timeClass slot entryWords pointee returnedWords returnedPointee = CallClass
     (EntryState DomainA slot 0 0x13 0x1000 0x41a60 0x4003 (M.fromList [(name, Committed value) | (name, value) <- entryWords]) Nothing (Just (Committed pointee)))

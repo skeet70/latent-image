@@ -26,6 +26,7 @@ module Emulation.OwnFirstPairCheck
   , runDocumentSha256
   , bootRomSha256
   , requiredSlots
+  , pendingWindow
   , qualify
   , controlSatisfied
   , qualifiedValue
@@ -436,6 +437,11 @@ bootRomSha256 = "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9b
 requiredSlots :: [(Domain, Slot)]
 requiredSlots = [(DomainA, Slot1618), (DomainA, Slot164), (DomainA, Slot168)]
 
+-- | The observer's STEP_SETTLE: a call may still be open at the run end only if it entered this
+-- close to it, about 64 times the longest stock census call (620,678 instructions).
+pendingWindow :: Word64
+pendingWindow = 40000000
+
 checkReadback :: Plan -> ReadbackPhase -> Readback -> Domain -> Either Refusal ()
 checkReadback plan phase readback domain = do
   let expected = [range | range <- planGuarded plan, guardedDomain range == domain]
@@ -502,7 +508,8 @@ qualify planBytes plan observation = do
       pending = obsPending observation
   refuseWhen (checked /= obsReturns observation || obsReturns observation + length pending /= obsEntries observation) CountsDiffer
   let routeEnd = maximum (0 : map milestoneFinished (obsMilestones observation))
-  forM_ pending $ \entered -> refuseWhen (entered < routeEnd) (PendingBeforeRouteEnd entered)
+      openSince = routeEnd - min routeEnd pendingWindow
+  forM_ pending $ \entered -> refuseWhen (entered < openSince) (PendingBeforeRouteEnd entered)
   let entries = [(planEntryDomain entry, planEntrySlot entry) | entry <- planEntries plan]
       tailsOf domain = length [() | tailEntry <- planTails plan, planTailDomain tailEntry == domain]
   forM_ (obsClasses observation) $ \call -> do
