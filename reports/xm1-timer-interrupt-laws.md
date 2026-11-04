@@ -198,6 +198,7 @@ Camera items are designs only and need the owner. "Read-only RAM" means the exis
 | U11 | WFI wake with CPSR.I set and a disabled-but-pending source | standby backend; idle | Camera, read-only RAM: B93's wait/restore counters after a standby cycle; the producer of B93's flag is still open (E-INITIAL-TASK-BODIES-SOURCE-150) |
 | U12 | Exclusive-monitor behaviour of the shared lock `0x400c0804` across cores | correctness of serialization | Covered by the exclusive-monitor gate (manifest draft); no timer/IRQ-specific experiment |
 | U13 | FujiMod `0x23` direction | emulated sub-tick and busy-wait timing | Emulator model change upstream of runs (proposed issue below); no camera needed |
+| U14 | Instructions executed per `0x23` counter step on each core with the other core runnable (FujiMod declares 24 per board tick shared by all runnable cores, 96 per step for one) | instruction cost of every µs busy-wait and device delay in emulated routes; not cross-core ordering, which `quantum` sets | Camera, RAM-push, with U1's sampler: fixed dependent and independent A32 sequences of K = 64 and 1024 and warmed cached loads between counter reads, IRQ masked with CPSR read back, spans inside one period, placement, cache and ACTLR state and core identity recorded, peer core parked or running; optionally the performance monitor around each span ([audit §4.1](emulator-device-fidelity-audit.md#41-proposed-combined-camera-session-fixes-3-4-and-6-with-u1-u6-and-u14) part D) |
 
 ## 9. Proposed issue text
 

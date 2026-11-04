@@ -16,7 +16,7 @@ import Data.Word (Word16)
 import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, listDirectory, pathIsSymbolicLink)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
-import System.FilePath ((</>), splitDirectories, takeDirectory, takeFileName)
+import System.FilePath ((</>), dropExtension, splitDirectories, takeDirectory, takeFileName)
 import System.IO (hFlush, hPutStrLn, stderr, stdout)
 import System.Posix.Files (getFileStatus, isRegularFile)
 import System.Posix.Process (executeFile)
@@ -518,8 +518,11 @@ launch options = do
         trajectory <- case trajectoriesOption options of
           Just (TrajectoryFile path) -> pure (Just (resolve root path))
           Nothing -> do
-            present <- doesFileExist (resolve root defaultTrajectories)
-            pure (if experiment && not present then Nothing else Just (resolve root defaultTrajectories))
+            let variant = dropExtension defaultTrajectories ++ ".fujimod.json"
+            fujimodVariant <- (runtimeOption options == FujiModChoice &&) <$> doesFileExist (resolve root variant)
+            let selected = if fujimodVariant then variant else defaultTrajectories
+            present <- doesFileExist (resolve root selected)
+            pure (if experiment && not present then Nothing else Just (resolve root selected))
         case (warmCheckpointOption options, screenProbeOption options) of
           (True, _) -> warmAttachCheckpoint settings executable stagedFirmwarePath nandPath (destination </> "warm-attach")
           (False, Just (MenuCrawlProbe path)) ->

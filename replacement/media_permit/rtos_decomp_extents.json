@@ -1,0 +1,305 @@
+{
+  "decompCommit": "55436fc85c0560dd252b0410af6f2427fe198cd3",
+  "extents": [
+    {
+      "domain": "A",
+      "loaderSha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "start": "0x454f0",
+      "bytes": 828,
+      "sha256": "45b839320a3e456c1f15099e12b9bf594b0debf620a25e60b6fd42ccd7cbd1a3",
+      "name": "kernel_terminate_task",
+      "path": "decomp/firmwares/xm1-150/kernel0/src/sched/task_services.c:171-281",
+      "basis": "The decomp definition kernel_terminate_task (decomp/firmwares/xm1-150/kernel0/src/sched/task_services.c:171-281) has no NONMATCHING marker at this commit, and the stock bytes of [0x454f0, +828) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "B",
+      "loaderSha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "start": "0xd54b0",
+      "bytes": 828,
+      "sha256": "034ed6b46cc394523d7f83ec940cd6c25d8be7f14a3126b8591937c92d2bf08d",
+      "name": "kernel_terminate_task",
+      "path": "decomp/firmwares/xm1-150/kernel1/src/sched/task_services.c:171-281",
+      "basis": "The decomp definition kernel_terminate_task (decomp/firmwares/xm1-150/kernel1/src/sched/task_services.c:171-281) has no NONMATCHING marker at this commit, and the stock bytes of [0xd54b0, +828) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "A",
+      "loaderSha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "start": "0x4582c",
+      "bytes": 788,
+      "sha256": "2098178172dd4fc2e61fba06829c96e1be9311eec33c5b94ff52aeb1fee70362",
+      "name": "kernel_change_task_priority",
+      "path": "decomp/firmwares/xm1-150/kernel0/src/sched/task_priority.c:8-159",
+      "basis": "The decomp definition kernel_change_task_priority (decomp/firmwares/xm1-150/kernel0/src/sched/task_priority.c:8-159) has no NONMATCHING marker at this commit, and the stock bytes of [0x4582c, +788) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "B",
+      "loaderSha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "start": "0xd57ec",
+      "bytes": 788,
+      "sha256": "dbfd5edc7265a65c394a0f7e81c646c8ac61c7f6b1f60874d693c26a6caa4ff3",
+      "name": "kernel_change_task_priority",
+      "path": "decomp/firmwares/xm1-150/kernel1/src/sched/task_priority.c:8-159",
+      "basis": "The decomp definition kernel_change_task_priority (decomp/firmwares/xm1-150/kernel1/src/sched/task_priority.c:8-159) has no NONMATCHING marker at this commit, and the stock bytes of [0xd57ec, +788) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "A",
+      "loaderSha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "start": "0x45b40",
+      "bytes": 404,
+      "sha256": "23e07c8f4891c1ae8980bd2194b9b1cba8ece0970aba501490c270674decf28c",
+      "name": "kernel_get_task_priority",
+      "path": "decomp/firmwares/xm1-150/kernel0/src/sched/task_services.c:288-331",
+      "basis": "The decomp definition kernel_get_task_priority (decomp/firmwares/xm1-150/kernel0/src/sched/task_services.c:288-331) has no NONMATCHING marker at this commit, and the stock bytes of [0x45b40, +404) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "B",
+      "loaderSha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "start": "0xd5b00",
+      "bytes": 404,
+      "sha256": "a2b6d76569736e94d57b439de545d7155eab860068cd207599518163815d3f47",
+      "name": "kernel_get_task_priority",
+      "path": "decomp/firmwares/xm1-150/kernel1/src/sched/task_services.c:288-331",
+      "basis": "The decomp definition kernel_get_task_priority (decomp/firmwares/xm1-150/kernel1/src/sched/task_services.c:288-331) has no NONMATCHING marker at this commit, and the stock bytes of [0xd5b00, +404) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "A",
+      "loaderSha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "start": "0x46fcc",
+      "bytes": 484,
+      "sha256": "88fc71df8052946e6e8424879c1aa0a3c1601da5c21b66656ce347bc0b661868",
+      "name": "kernel_raise_task_exception",
+      "path": "decomp/firmwares/xm1-150/kernel0/src/sched/task_control.c:100-154",
+      "basis": "The decomp definition kernel_raise_task_exception (decomp/firmwares/xm1-150/kernel0/src/sched/task_control.c:100-154) has no NONMATCHING marker at this commit, and the stock bytes of [0x46fcc, +484) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "B",
+      "loaderSha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "start": "0xd6f8c",
+      "bytes": 484,
+      "sha256": "e54b38f0cba4844e94bab79ce47afa9124746f59befdb82e7abecc66a88289b9",
+      "name": "kernel_raise_task_exception",
+      "path": "decomp/firmwares/xm1-150/kernel1/src/sched/task_control.c:100-154",
+      "basis": "The decomp definition kernel_raise_task_exception (decomp/firmwares/xm1-150/kernel1/src/sched/task_control.c:100-154) has no NONMATCHING marker at this commit, and the stock bytes of [0xd6f8c, +484) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "A",
+      "loaderSha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "start": "0x47844",
+      "bytes": 528,
+      "sha256": "81b776195ea54c8889d9cb4ffbcc8ac4036a34d94aaca5071c0a2150432db683",
+      "name": "semaphore_interrupt_signal",
+      "path": "decomp/firmwares/xm1-150/kernel0/src/sync/semaphore_interrupt_signal.c",
+      "basis": "The decomp definition semaphore_interrupt_signal (decomp/firmwares/xm1-150/kernel0/src/sync/semaphore_interrupt_signal.c) has no NONMATCHING marker at this commit, and the stock bytes of [0x47844, +528) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "B",
+      "loaderSha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "start": "0xd7804",
+      "bytes": 528,
+      "sha256": "e98239f3ad6198d99086a07c119516b253efac081d3bbdeb5914829f4b6caa62",
+      "name": "semaphore_interrupt_signal",
+      "path": "decomp/firmwares/xm1-150/kernel1/src/sync/semaphore_interrupt_signal.c",
+      "basis": "The decomp definition semaphore_interrupt_signal (decomp/firmwares/xm1-150/kernel1/src/sync/semaphore_interrupt_signal.c) has no NONMATCHING marker at this commit, and the stock bytes of [0xd7804, +528) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "A",
+      "loaderSha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "start": "0x486f8",
+      "bytes": 692,
+      "sha256": "92e73e31c090c5ecfe72f550445392b4c034752d018a9aee0fd6b81643c6f429",
+      "name": "event_flag_wait",
+      "path": "decomp/firmwares/xm1-150/kernel0/src/sync/event_flag.c",
+      "basis": "The decomp definition event_flag_wait (decomp/firmwares/xm1-150/kernel0/src/sync/event_flag.c) has no NONMATCHING marker at this commit, and the stock bytes of [0x486f8, +692) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "B",
+      "loaderSha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "start": "0xd86b8",
+      "bytes": 692,
+      "sha256": "8b8b1c101be673640a26b2f7e2883f05b19ab6839e1bf8e727259944c0d4a714",
+      "name": "event_flag_wait",
+      "path": "decomp/firmwares/xm1-150/kernel1/src/sync/event_flag.c",
+      "basis": "The decomp definition event_flag_wait (decomp/firmwares/xm1-150/kernel1/src/sync/event_flag.c) has no NONMATCHING marker at this commit, and the stock bytes of [0xd86b8, +692) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "A",
+      "loaderSha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "start": "0x48b30",
+      "bytes": 776,
+      "sha256": "1a0f6b136caead61684158e43642628440291a8948c6ebdc3e972e328040e8ea",
+      "name": "event_flag_timed_wait",
+      "path": "decomp/firmwares/xm1-150/kernel0/src/sync/event_flag.c",
+      "basis": "The decomp definition event_flag_timed_wait (decomp/firmwares/xm1-150/kernel0/src/sync/event_flag.c) has no NONMATCHING marker at this commit, and the stock bytes of [0x48b30, +776) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "B",
+      "loaderSha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "start": "0xd8af0",
+      "bytes": 776,
+      "sha256": "cec61d001f0914da14b3596ab99d3924bdda0306168eb4c0c723dc5ecb3caa87",
+      "name": "event_flag_timed_wait",
+      "path": "decomp/firmwares/xm1-150/kernel1/src/sync/event_flag.c",
+      "basis": "The decomp definition event_flag_timed_wait (decomp/firmwares/xm1-150/kernel1/src/sync/event_flag.c) has no NONMATCHING marker at this commit, and the stock bytes of [0xd8af0, +776) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "A",
+      "loaderSha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "start": "0x4a2f0",
+      "bytes": 636,
+      "sha256": "bfbf7ea1c5237447ff3169dcd0322abe98bffb54a37caa1610ea29de82a58717",
+      "name": "data_queue_poll_receive",
+      "path": "decomp/firmwares/xm1-150/kernel0/src/sync/data_queue_poll_receive.c",
+      "basis": "The decomp definition data_queue_poll_receive (decomp/firmwares/xm1-150/kernel0/src/sync/data_queue_poll_receive.c) has no NONMATCHING marker at this commit, and the stock bytes of [0x4a2f0, +636) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "B",
+      "loaderSha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "start": "0xda2b0",
+      "bytes": 636,
+      "sha256": "5ec5e100e42064c2f23f36a78694735a44298b60df3a57d2b1c1d9e388652ff9",
+      "name": "data_queue_poll_receive",
+      "path": "decomp/firmwares/xm1-150/kernel1/src/sync/data_queue_poll_receive.c",
+      "basis": "The decomp definition data_queue_poll_receive (decomp/firmwares/xm1-150/kernel1/src/sync/data_queue_poll_receive.c) has no NONMATCHING marker at this commit, and the stock bytes of [0xda2b0, +636) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "A",
+      "loaderSha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "start": "0x4a56c",
+      "bytes": 1104,
+      "sha256": "b12069a91852b5bbd3473e90c0180274e8bb0c1f96c6701ee225185ab54a4880",
+      "name": "data_queue_timed_receive",
+      "path": "decomp/firmwares/xm1-150/kernel0/src/sync/data_queue_timed_receive.c",
+      "basis": "The decomp definition data_queue_timed_receive (decomp/firmwares/xm1-150/kernel0/src/sync/data_queue_timed_receive.c) has no NONMATCHING marker at this commit, and the stock bytes of [0x4a56c, +1104) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "B",
+      "loaderSha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "start": "0xda52c",
+      "bytes": 1104,
+      "sha256": "7cab26fe52734426d4935e7106777ac0ac6630cb0d61c5cf34bad701f98c7a81",
+      "name": "data_queue_timed_receive",
+      "path": "decomp/firmwares/xm1-150/kernel1/src/sync/data_queue_timed_receive.c",
+      "basis": "The decomp definition data_queue_timed_receive (decomp/firmwares/xm1-150/kernel1/src/sync/data_queue_timed_receive.c) has no NONMATCHING marker at this commit, and the stock bytes of [0xda52c, +1104) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "A",
+      "loaderSha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "start": "0x4ad48",
+      "bytes": 596,
+      "sha256": "b0f07da3de3d7531b33fd0f4a8ac5c3b11d356644de903b4b7d2ccdc24312da6",
+      "name": "mailbox_receive",
+      "path": "decomp/firmwares/xm1-150/kernel0/src/sync/mailbox.c",
+      "basis": "The decomp definition mailbox_receive (decomp/firmwares/xm1-150/kernel0/src/sync/mailbox.c) has no NONMATCHING marker at this commit, and the stock bytes of [0x4ad48, +596) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "B",
+      "loaderSha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "start": "0xdad08",
+      "bytes": 596,
+      "sha256": "fdd042995896e8e0684d63f25cc628cdc46d0f74cc2587accc005cf9169a1852",
+      "name": "mailbox_receive",
+      "path": "decomp/firmwares/xm1-150/kernel1/src/sync/mailbox.c",
+      "basis": "The decomp definition mailbox_receive (decomp/firmwares/xm1-150/kernel1/src/sync/mailbox.c) has no NONMATCHING marker at this commit, and the stock bytes of [0xdad08, +596) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "A",
+      "loaderSha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "start": "0x4af9c",
+      "bytes": 328,
+      "sha256": "6155b51a3c153af8c482fb2ce2801063c11e173dfbe2d01f4bd979ebe3e817ab",
+      "name": "mailbox_poll_receive",
+      "path": "decomp/firmwares/xm1-150/kernel0/src/sync/mailbox.c",
+      "basis": "The decomp definition mailbox_poll_receive (decomp/firmwares/xm1-150/kernel0/src/sync/mailbox.c) has no NONMATCHING marker at this commit, and the stock bytes of [0x4af9c, +328) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "B",
+      "loaderSha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "start": "0xdaf5c",
+      "bytes": 328,
+      "sha256": "41291c0f43c7d62f2e5cca00e680100953ac1e988c1e5fdf12a025e8f3e0fbca",
+      "name": "mailbox_poll_receive",
+      "path": "decomp/firmwares/xm1-150/kernel1/src/sync/mailbox.c",
+      "basis": "The decomp definition mailbox_poll_receive (decomp/firmwares/xm1-150/kernel1/src/sync/mailbox.c) has no NONMATCHING marker at this commit, and the stock bytes of [0xdaf5c, +328) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "A",
+      "loaderSha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "start": "0x4b0e4",
+      "bytes": 680,
+      "sha256": "02826b8606c9d23e30ea913da0b10d53637f2886ab6c6b9ce1ec21ca0b7b1841",
+      "name": "mailbox_timed_receive",
+      "path": "decomp/firmwares/xm1-150/kernel0/src/sync/mailbox.c",
+      "basis": "The decomp definition mailbox_timed_receive (decomp/firmwares/xm1-150/kernel0/src/sync/mailbox.c) has no NONMATCHING marker at this commit, and the stock bytes of [0x4b0e4, +680) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "B",
+      "loaderSha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "start": "0xdb0a4",
+      "bytes": 680,
+      "sha256": "e8e0939d34c21c65518178661b7e2829bb0305b24c5e47759eee6354bfb47aaa",
+      "name": "mailbox_timed_receive",
+      "path": "decomp/firmwares/xm1-150/kernel1/src/sync/mailbox.c",
+      "basis": "The decomp definition mailbox_timed_receive (decomp/firmwares/xm1-150/kernel1/src/sync/mailbox.c) has no NONMATCHING marker at this commit, and the stock bytes of [0xdb0a4, +680) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "A",
+      "loaderSha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "start": "0x4b480",
+      "bytes": 592,
+      "sha256": "a08bb314ba734b8e6332b023c317ddf17eb13400f48a84ab09f7a20cb0dbbcca",
+      "name": "fixed_pool_get",
+      "path": "decomp/firmwares/xm1-150/kernel0/src/sync/fixed_pool.c",
+      "basis": "The decomp definition fixed_pool_get (decomp/firmwares/xm1-150/kernel0/src/sync/fixed_pool.c) has no NONMATCHING marker at this commit, and the stock bytes of [0x4b480, +592) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "B",
+      "loaderSha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "start": "0xdb440",
+      "bytes": 592,
+      "sha256": "1cbdd3a47e4c53528519f612f7b2bc0c848ae8a9e29432c76cbf3ac45da0b49a",
+      "name": "fixed_pool_get",
+      "path": "decomp/firmwares/xm1-150/kernel1/src/sync/fixed_pool.c",
+      "basis": "The decomp definition fixed_pool_get (decomp/firmwares/xm1-150/kernel1/src/sync/fixed_pool.c) has no NONMATCHING marker at this commit, and the stock bytes of [0xdb440, +592) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "A",
+      "loaderSha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "start": "0x4b814",
+      "bytes": 676,
+      "sha256": "6e491cd8d73e3b48718fb8c5632866af81bbf1c9713e85232cb3903bcc1d92da",
+      "name": "fixed_pool_timed_get",
+      "path": "decomp/firmwares/xm1-150/kernel0/src/sync/fixed_pool.c",
+      "basis": "The decomp definition fixed_pool_timed_get (decomp/firmwares/xm1-150/kernel0/src/sync/fixed_pool.c) has no NONMATCHING marker at this commit, and the stock bytes of [0x4b814, +676) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "B",
+      "loaderSha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "start": "0xdb7d4",
+      "bytes": 676,
+      "sha256": "fb8744744c158b6f6870907917e8db9ca18220d3bde95395a43904cbe879c418",
+      "name": "fixed_pool_timed_get",
+      "path": "decomp/firmwares/xm1-150/kernel1/src/sync/fixed_pool.c",
+      "basis": "The decomp definition fixed_pool_timed_get (decomp/firmwares/xm1-150/kernel1/src/sync/fixed_pool.c) has no NONMATCHING marker at this commit, and the stock bytes of [0xdb7d4, +676) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "A",
+      "loaderSha256": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "start": "0x4bab8",
+      "bytes": 660,
+      "sha256": "df4c25b7b8046962faa4171296ea705bd180648cf455978892c5d0a54299e7e9",
+      "name": "fixed_pool_release",
+      "path": "decomp/firmwares/xm1-150/kernel0/src/sync/fixed_pool_release.c",
+      "basis": "The decomp definition fixed_pool_release (decomp/firmwares/xm1-150/kernel0/src/sync/fixed_pool_release.c) has no NONMATCHING marker at this commit, and the stock bytes of [0x4bab8, +660) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    },
+    {
+      "domain": "B",
+      "loaderSha256": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "start": "0xdba78",
+      "bytes": 660,
+      "sha256": "25bb1db40768a442ed76a7ce6b6c94c5e779b1bedab9b6ba6f8179fb93858ea4",
+      "name": "fixed_pool_release",
+      "path": "decomp/firmwares/xm1-150/kernel1/src/sync/fixed_pool_release.c",
+      "basis": "The decomp definition fixed_pool_release (decomp/firmwares/xm1-150/kernel1/src/sync/fixed_pool_release.c) has no NONMATCHING marker at this commit, and the stock bytes of [0xdba78, +660) hash as recorded. This settles the function's byte range. It does not discharge the StockInventory premises named in stockInventoryRefusal, which stay unproved."
+    }
+  ]
+}

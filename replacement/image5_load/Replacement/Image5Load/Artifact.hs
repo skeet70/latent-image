@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.Image5Load.Artifact
   ( CanonicalSource, LinkedArtifact, StagedImage4, StagedCandidate, ArtifactError (..)
-  , canonicalSource, deriveArtifact, stageImage4, stagedBytes, contractValue
+  , canonicalSource, deriveArtifact, artifactProof, stageImage4, stagedBytes, contractValue
   , stageCandidate, candidateBytes, candidateContractValue
   ) where
 
@@ -74,6 +74,9 @@ deriveArtifact bytes symbolBytes = do
   require (entry == start && rust > start && rust < end) SymbolRejected
   proof <- either (Left . CodeRejected) Right (deriveProducerProof bytes)
   pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) rust proof)
+
+artifactProof :: LinkedArtifact -> ProducerProof
+artifactProof (LinkedArtifact _ _ _ _ proof) = proof
 
 stageImage4 :: CanonicalSource -> LinkedArtifact -> StagedImage4
 stageImage4 source@(CanonicalSource _ (DecodedImage4 original) _) artifact@(LinkedArtifact linked _ _ _ _) =

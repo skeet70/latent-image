@@ -13,7 +13,7 @@ module Replacement.StartupArtifact.Types
   , Piece (..), PieceFacts (..), ServiceBinding (..), Publication (..), LinkedBytes (..), ScratchBytes (..)
   , PublisherFrame (..), SubmitCall (..), StackDepth (..), TaskNumber (..), StackBytes (..), TaskStart (..)
   , AllocationPosition (..), allocationPositionName, AllocationWords (..), AllocationOwner (..), PoolSpan (..), PoolAllocation (..)
-  , Refusal (..), CatalogProblem (..), ManifestProblem (..)
+  , Refusal (..), CatalogProblem (..), ManifestProblem (..), ApplicationProblem (..)
   ) where
 
 import qualified Data.ByteString as B
@@ -64,7 +64,7 @@ editBytes :: Edit -> B.ByteString
 editBytes (Edit _ bytes) = bytes
 
 data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup | TaskSubmission | TaskStorage
-  | IdleTask | RootTask
+  | IdleTask | RootTask | Image5Producer | PlainProducer
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 pieceKindName :: PieceKind -> Text
@@ -78,10 +78,12 @@ pieceKindName kind = case kind of
   TaskStorage -> "task-storage"
   IdleTask -> "idle-task"
   RootTask -> "root-task"
+  Image5Producer -> "image5-producer"
+  PlainProducer -> "plain-producer"
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
   | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea | TaskSubmissionArea | TaskStorageArea
-  | IdleTaskArea | RootTaskArea
+  | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 areaName :: Area -> Text
@@ -100,6 +102,8 @@ areaName area = case area of
   TaskStorageArea -> "task-storage"
   IdleTaskArea -> "idle-task"
   RootTaskArea -> "root-task"
+  Image5ProducerArea -> "image5-producer"
+  PlainProducerArea -> "plain-producer"
 
 data FootprintBasis = AdmissionRead | RuntimePremise deriving (Eq, Ord, Show)
 
@@ -318,6 +322,10 @@ data PieceFacts
   | IdleTaskFacts LinkedBytes [Label]
   -- | The linked root image and the pool-address words of its reads.
   | RootTaskFacts LinkedBytes [AllocationWords]
+  -- | The linked image5 producer image.
+  | Image5ProducerFacts LinkedBytes
+  -- | The linked plain producer image.
+  | PlainProducerFacts LinkedBytes
   deriving (Eq, Show)
 
 data Piece = Piece
@@ -359,6 +367,16 @@ data ManifestProblem
   | AttachStateRefused Text
   deriving (Eq, Show)
 
+data ApplicationProblem
+  -- | A site word overlaps the named piece's carrier.
+  = SiteInCarrier PieceKind Pc
+  -- | Code at the PC lies in neither image4, image5 nor the plain window.
+  | OutsideImages Pc
+  -- | The composed word at a site differs from the canonical word.
+  | SiteWordDiffers Pc
+  | PlainWindowUnreadable
+  deriving (Eq, Show)
+
 -- | 'FootprintOverlap' names the footprint owner, then the carrier owner.
 data Refusal
   = ManifestRefused ManifestProblem
@@ -380,4 +398,5 @@ data Refusal
   | ComposedUnparsed
   | ComposedDiffMismatch Target
   | ComposedRestoreMismatch
+  | ApplicationRefused ApplicationProblem
   deriving (Eq, Show)

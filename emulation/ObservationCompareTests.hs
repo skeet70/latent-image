@@ -13,143 +13,55 @@ segment entries = object ["segment" .= ("cc-film-list" :: T.Text), "classic_chro
 compared :: Value -> Value -> [String]
 compared a b = differences "observation" (normalize e2eIgnored a) (normalize e2eIgnored b)
 
-pass' :: [T.Text]
-pass' = ["cc-entry-marker", "cc-entry-builder"]
-
-converting :: [T.Text]
-converting = ["cc-entry-marker", "cc-entry-settings-converter"]
-
--- | A develop pass holding two converter entries, and the idle pass that splits it.
-twoConverters :: [T.Text]
-twoConverters = ["cc-entry-marker", "cc-entry-settings-converter", "cc-entry-settings-converter"]
+-- Synthetic sequences use the X-M1 Classic Chrome trace-site labels.
+builderPass :: [T.Text]
+builderPass = ["cc-entry-marker", "cc-entry-builder"]
 
 idlePass :: [T.Text]
-idlePass = ["cc-entry-marker"]
+idlePass = ["cc-entry-marker", "cc-hook-colour", "cc-hook-tone-1", "cc-hook-tone-2", "cc-hook-chroma-2"]
 
-fourConverters :: [T.Text]
-fourConverters = twoConverters ++ ["cc-entry-settings-converter", "cc-entry-settings-converter"]
+-- | The same pass without its chroma hook.
+shortPass :: [T.Text]
+shortPass = ["cc-entry-marker", "cc-hook-colour", "cc-hook-tone-1", "cc-hook-tone-2"]
 
--- | The same four converter entries with the capture converter first.
-reordered :: [T.Text]
-reordered =
-  [ "cc-entry-marker", "cc-entry-capture-converter", "cc-entry-settings-converter"
-  , "cc-entry-settings-converter", "cc-entry-settings-converter" ]
+-- | One settings sync: two converter entries.
+sync :: [T.Text]
+sync = ["cc-entry-settings-converter", "cc-entry-settings-converter"]
 
-threeConverters :: [T.Text]
-threeConverters = ["cc-entry-marker", "cc-entry-settings-converter", "cc-entry-settings-converter", "cc-entry-settings-converter"]
-
-fiveConverters :: [T.Text]
-fiveConverters = fourConverters ++ ["cc-entry-settings-converter"]
-
--- Synthetic pass sequences use the X-M1 Classic Chrome trace-site labels.
-markedPass :: [T.Text]
-markedPass =
-  [ "cc-entry-marker", "cc-hook-chroma-2", "cc-entry-settings-converter", "cc-entry-settings-converter" ]
-
-markedUnsplit :: [T.Text]
-markedUnsplit = markedPass ++ ["cc-entry-settings-converter", "cc-entry-settings-converter"]
-
-prefixExtra :: [T.Text]
-prefixExtra =
-  [ "cc-entry-marker", "cc-hook-chroma-2", "cc-entry-filmmode"
-  , "cc-entry-settings-converter", "cc-entry-settings-converter" ]
-
-bodyExtra :: [T.Text]
-bodyExtra =
-  [ "cc-entry-marker", "cc-hook-chroma-2", "cc-entry-settings-converter"
-  , "cc-entry-filmmode", "cc-entry-settings-converter" ]
-
-reorderedPrefix :: [T.Text]
-reorderedPrefix =
-  [ "cc-entry-marker", "cc-hook-tone-2", "cc-hook-tone-1", "cc-entry-settings-converter" ]
-
-orderedPrefix :: [T.Text]
-orderedPrefix = ["cc-entry-marker", "cc-hook-tone-1", "cc-hook-tone-2", "cc-entry-settings-converter"]
-
-missingPrefix :: [T.Text]
-missingPrefix = ["cc-entry-marker", "cc-entry-settings-converter"]
-
-chromaPrefix :: [T.Text]
-chromaPrefix = ["cc-entry-marker", "cc-hook-chroma-2", "cc-entry-settings-converter"]
-
--- | The settings sync's two converter entries with no develop pass before them.
-leadingPair :: [T.Text]
-leadingPair = ["cc-entry-settings-converter", "cc-entry-settings-converter"]
-
-hookedIdle :: [T.Text]
-hookedIdle = ["cc-entry-marker", "cc-hook-colour", "cc-hook-tone-1", "cc-hook-tone-2", "cc-hook-chroma-2"]
-
-hookedPair :: [T.Text]
-hookedPair = hookedIdle ++ leadingPair
+capture :: [T.Text]
+capture = ["cc-entry-capture-converter"]
 
 cases :: [(String, Bool)]
 cases =
   [ ( "converter-free segments with different entries differ"
-    , not (null (compared (segment pass') (segment (pass' ++ ["cc-entry-builder"])))) )
+    , not (null (compared (segment builderPass) (segment (builderPass ++ ["cc-entry-builder"])))) )
   , ( "converter-free segments with equal entries are equal"
-    , null (compared (segment pass') (segment pass')) )
-  , ( "a converter-free segment differs from one whose only pass converts"
-    , not (null (compared (segment pass') (segment converting))) )
-  , ( "repeated develop passes around a converter pass are equal to one"
-    , null (compared (segment (pass' ++ converting ++ pass')) (segment (pass' ++ pass' ++ converting ++ pass' ++ pass'))) )
-  , ( "converting segments with different converter passes differ"
-    , not (null (compared (segment converting) (segment (converting ++ ["cc-entry-builder"])))) )
-  , ( "a converter pass split by idle passes equals the unsplit pass"
-    , null (compared (segment (twoConverters ++ idlePass ++ twoConverters)) (segment fourConverters)) )
-  , ( "a split whose converter entries run in a different order differs"
-    , not (null (compared (segment (twoConverters ++ idlePass ++ twoConverters)) (segment reordered))) )
-  , ( "a split with a different converter entry total differs"
-    , not (null (compared (segment (twoConverters ++ idlePass ++ twoConverters)) (segment threeConverters))) )
-  , ( "a continuation with an extra declared prefix entry differs"
-    , not (null (compared (segment (markedPass ++ idlePass ++ prefixExtra)) (segment markedUnsplit))) )
-  , ( "a continuation with an extra declared body entry differs"
-    , not (null (compared (segment (markedPass ++ idlePass ++ bodyExtra)) (segment markedUnsplit))) )
-  , ( "a continuation with a reordered prefix differs"
-    , not (null (compared
-        (segment (orderedPrefix ++ idlePass ++ reorderedPrefix))
-        (segment (orderedPrefix ++ ["cc-entry-settings-converter"])))) )
-  , ( "a continuation with a missing prefix entry differs"
-    , not (null (compared
-        (segment (chromaPrefix ++ idlePass ++ missingPrefix))
-        (segment (chromaPrefix ++ ["cc-entry-settings-converter"])))) )
-  , ( "a split with a converting pass in between differs"
-    , not (null (compared (segment (twoConverters ++ converting ++ twoConverters)) (segment fiveConverters))) )
-  , ( "a leading settings converter pair equals the pair in a later pass after idle passes"
-    , null (compared
-        (segment (leadingPair ++ hookedIdle ++ hookedIdle ++ hookedIdle))
-        (segment (hookedIdle ++ hookedIdle ++ hookedPair))) )
-  , ( "a leading settings converter pair equals the first part of a pass split by idle passes"
-    , null (compared
-        (segment (leadingPair ++ hookedIdle ++ hookedIdle ++ hookedPair ++ hookedPair))
-        (segment (hookedIdle ++ hookedIdle ++ hookedPair ++ hookedIdle ++ hookedPair ++ hookedPair))) )
-  , ( "a leading settings converter run followed only by idle passes equals the run alone"
-    , null (compared
-        (segment (leadingPair ++ hookedIdle ++ hookedIdle))
-        (segment leadingPair)) )
-  , ( "a leading pair, idle passes and a converting pass equal one pass split by an idle pass"
-    , null (compared
-        (segment (leadingPair ++ hookedIdle ++ hookedIdle ++ hookedPair))
-        (segment (hookedIdle ++ hookedIdle ++ hookedPair ++ hookedIdle ++ hookedPair))) )
-  , ( "a leading pair differs from a split pass whose parts hold a different converter total"
-    , not (null (compared
-        (segment (leadingPair ++ hookedIdle ++ hookedIdle ++ hookedPair))
-        (segment (hookedIdle ++ hookedPair ++ hookedIdle ++ hookedPair ++ hookedIdle ++ hookedPair)))) )
-  , ( "a leading settings converter pair differs from the pair inside a converting first pass"
-    , not (null (compared
-        (segment (leadingPair ++ hookedPair))
-        (segment (hookedPair ++ leadingPair)))) )
-  , ( "a leading capture converter differs from one in a later pass"
-    , not (null (compared
-        (segment (["cc-entry-capture-converter"] ++ hookedIdle))
-        (segment (hookedIdle ++ ["cc-entry-capture-converter"])))) )
-  , ( "a leading run with a hook entry differs from its converters in a later pass"
-    , not (null (compared
-        (segment (["cc-hook-chroma-2"] ++ leadingPair ++ hookedIdle))
-        (segment (hookedIdle ++ ["cc-hook-chroma-2"] ++ leadingPair)))) )
-  , ( "a leading settings converter pair differs from a later pass with a different prefix"
-    , not (null (compared
-        (segment (leadingPair ++ hookedIdle))
-        (segment (hookedIdle ++ idlePass ++ leadingPair)))) )
+    , null (compared (segment builderPass) (segment builderPass)) )
+  , ( "converter-free segments keep their pass count"
+    , not (null (compared (segment idlePass) (segment (idlePass ++ idlePass)))) )
+  , ( "a converter-free segment differs from one that converts"
+    , not (null (compared (segment idlePass) (segment (idlePass ++ sync)))) )
+  , ( "a sync before the passes equals the sync inside a pass"
+    , null (compared (segment (sync ++ idlePass ++ idlePass)) (segment (idlePass ++ idlePass ++ sync))) )
+  , ( "two syncs before any pass equal two syncs in separate passes"
+    , null (compared (segment (sync ++ sync ++ idlePass ++ shortPass ++ idlePass))
+                     (segment (idlePass ++ sync ++ idlePass ++ sync ++ shortPass ++ idlePass))) )
+  , ( "repeated identical passes count once"
+    , null (compared (segment (idlePass ++ sync ++ idlePass)) (segment (idlePass ++ idlePass ++ idlePass ++ sync))) )
+  , ( "a missing converter entry differs"
+    , not (null (compared (segment (idlePass ++ sync ++ sync)) (segment (idlePass ++ sync ++ ["cc-entry-settings-converter"])))) )
+  , ( "an extra sync differs"
+    , not (null (compared (segment (idlePass ++ sync)) (segment (idlePass ++ sync ++ idlePass ++ sync)))) )
+  , ( "converter entries in a different order differ"
+    , not (null (compared (segment (idlePass ++ capture ++ sync)) (segment (idlePass ++ sync ++ capture)))) )
+  , ( "a pass with a different hook set differs"
+    , not (null (compared (segment (idlePass ++ sync)) (segment (shortPass ++ sync)))) )
+  , ( "passes in a different order differ"
+    , not (null (compared (segment (idlePass ++ sync ++ shortPass)) (segment (shortPass ++ sync ++ idlePass)))) )
+  , ( "a non-converter entry beside a sync differs"
+    , not (null (compared (segment (idlePass ++ sync)) (segment (idlePass ++ ["cc-entry-builder"] ++ sync)))) )
+  , ( "a non-converter entry before the first marker differs"
+    , not (null (compared (segment (sync ++ idlePass)) (segment (["cc-entry-builder"] ++ sync ++ idlePass)))) )
   , ( "timing fields are left out"
     , null (compared (object ["instructions" .= (1 :: Int), "r0" .= ("0x1" :: T.Text)])
                      (object ["instructions" .= (2 :: Int), "r0" .= ("0x1" :: T.Text)])) )

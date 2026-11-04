@@ -1,3 +1,4 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
 exports_files([
@@ -23,5 +24,32 @@ sh_binary(
     name = "fujimod-emulator",
     srcs = ["@lab_fujimod//:bin/fujimod-emulator"],
     tags = ["manual"],
+    visibility = ["//visibility:public"],
+)
+
+haskell_binary(
+    name = "xm1-decomp-index",
+    srcs = ["Xm1DecompIndex.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:cryptohash-sha256",
+        "//host:directory",
+        "//host:filepath",
+        "//host:json",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+# Lookup, source view, coverage and boundary check over x70view's X-M1 1.50 decomp (reports/xm1-decomp.md).
+sh_binary(
+    name = "xm1-decomp",
+    srcs = ["xm1-decomp.sh"],
+    data = [":xm1-decomp-index"],
     visibility = ["//visibility:public"],
 )

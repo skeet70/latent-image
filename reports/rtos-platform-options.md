@@ -14,7 +14,7 @@ This report answers whether projects listed at [arewertosyet.com](https://arewer
 ### 1.2 Service ABI that retained callers keep using
 
 - Each root has **97 callable slots**: 93 at `0..0x170` plus four extensions at `+0x1618..+0x1624`. It also holds a tick pointer at `+0x174`, 120 eleven-word descriptors from `+0x178` and a stack-top word at `+0x1628`, for a total of 1,419 words [Draft:11; Map A.1].
-- Per domain, 27 slots are partially described and 70 are unknown. The extent tool derives 23 bodies and refuses 74; 68 of the refusals hit unadmitted status-register instructions [Draft:17].
+- Manifest v6 (E-RTOS-SLOT-MANIFEST-V5-150) recovers all 97 contracts per domain from the x70view decomp's kernel C (§4.13). Extents: 80 derived by StockInventory, 15 taken from byte-exact decomp functions, and 2 (`+0xc0`, `+0xd4`) still refused ([manifest draft](rtos-platform-manifest-draft.md#v6-contracts-from-the-decomp)).
 - Retained code depends on more than the slots [Draft:37-46]:
   - it calls the scheduler and CPU helpers directly;
   - auto-ready `0x43f9c`, initial scheduler `0x43688`, trampolines `0x43728` and resume through `SPSR/LDM^` are direct entries;
@@ -27,8 +27,8 @@ This report answers whether projects listed at [arewertosyet.com](https://arewer
 | Value | X-M1 meaning | Where | Source |
 | --- | --- | --- | --- |
 | -18 | invalid signed class/id/domain selection | activate `+0xc` | Manifest A/B `0xc`; Draft:24 |
-| -25 | nonzero context or IRQ masked | activate `+0xc`, current-task `+0x16c` | Manifest; Draft:24,29 |
-| -41 | C+36 already nonzero / eventflag record +8 already nonzero | create `+0`, per-task eventflag create `+0x80` | Manifest; Draft:23 |
+| -25 | nonzero context or IRQ masked | activate `+0xc` and the other task-context services (manifest v6) | Manifest; Draft:24,29 |
+| -41 | C+36 already nonzero / eventflag record +8 already nonzero | create `+0`, eventflag create `+0x80` | Manifest; Draft:23 |
 | -42 | creation record absent | activate | Manifest |
 | -43 | already pending activation | activate | Manifest |
 | -50 | finite queue full/empty, flag-wait wrapper special case | `+0x9c`, `+0xac`, `+0xb0`, `+0xc8` | Manifest; Draft:28 |
@@ -37,7 +37,7 @@ This report answers whether projects listed at [arewertosyet.com](https://arewer
 | -60, -62 | message-wrapper returns; sibling `os_error.h` names them MBX_INVALID_LENGTH and MBX_FULL (non-X-M1) | image4 message wrappers | `E-ITRON-VOCAB-150` |
 | -1 | try-lock `0x427d4` / unlock `0x427fc` | loader helpers | Map A.1 |
 
-Objects are 120 C/T task records per kernel, per-task eventflag records (12 B) and nodes (16 B), scheduler domains (132 B), ready lists and bitmaps, resources/semaphores (97 constructed by root104), mailbox/message objects with pools, and timer records of 24 bytes [Map A.2; Draft:23-29,43; E-RTOS-SLOT-MANIFEST-V5-150].
+Objects are 120 C/T task records per kernel, eventflag records (12 B) and control blocks (16 B), scheduler domains (132 B), ready lists and bitmaps, resources/semaphores (97 constructed by root104), mailbox/message objects with pools, and timer records of 24 bytes [Map A.2; Draft:23-29,43; E-RTOS-SLOT-MANIFEST-V5-150].
 
 ### 1.4 IRQ, timer and blocking behaviour
 
@@ -76,7 +76,7 @@ Leads (non-X-M1):
 | creation does not make tasks runnable; a separate auto-ready scan of 120 records builds ready sets [Draft:23,37] | consistent with TA_ACT handling for statically created tasks **[INFERENCE]** | |
 | activate id0 selects the current task [Manifest `0xc`] | TSK_SELF = 0 [spec act_tsk] | |
 | resource create `{0,1,1}` [Draft:26] | T_CSEM `{sematr=TA_TFIFO 0, isemcnt 1, maxsem 1}` [spec cre_sem] | |
-| per-task eventflag create `+0x80` `{attribute 0 or 4, pattern 0}`, duplicate -41; attribute 4 clears the whole word [Manifest v5 `0x80`; Draft:27] | T_CFLG `{flgatr, iflgptn}`; TA_WSGL 0x00, TA_CLR 0x04; cre_flg E_OBJ [spec] | |
+| eventflag create `+0x80` `{attribute 0 or 4, pattern 0}`, duplicate -41; attribute 4 clears the whole word [Manifest v6 `0x80`; Draft:27] | T_CFLG `{flgatr, iflgptn}`; TA_WSGL 0x00, TA_CLR 0x04; cre_flg E_OBJ [spec] | |
 | flag wait mode0 tests all requested bits and returns the whole flag word; timeout −1 [Draft:27; Manifest `0x9c`] | TWF_ANDW 0x00; p_flgptn receives the pattern; TMO_FEVR −1 [spec] | |
 | timer activation enables records whose flag bit1 is set [Draft:43] | TA_STA 0x02, cyclic handler operational after creation [spec] **[INFERENCE]** match | |
 | IRQ save returns the prior mask, restore takes it [Manifest `0x164/0x168`] | none: loc_cpu/unl_cpu take no mask | `vdis_psw()` returns the PSW, `vset_psw(psw)` restores it [no4guide.pdf] |
@@ -108,11 +108,11 @@ Tier counts for the 70 unknown slots per domain: **30 high** (one named candidat
 
 ### 2.3 Where X-M1 departs from µITRON 4.0 and NORTi
 
-1. **Encoded IDs and dual domains.** IDs are `(class<<16)|id`, the kernel rejects a bad class with -18, and there are two roots plus extensions `0x1618..0x1624` (identity and critical lock retry/release/observe) [Draft:23-24,29]. µITRON 4.0 is uniprocessor. Multiprocessor µITRON exists only as later extensions such as TOPPERS FDMP/FMP (https://www.toppers.jp/fdmp-kernel.html, https://www.toppers.jp/fmp-kernel.html).
-2. **Current-task query.** `+0x16c` refuses masked or non-task context with -25, and the image4 wrapper converts failure to 0 [Map A.1]. µITRON get_tid returns TSK_NONE (= 0) from non-task contexts [spec get_tid]. NORTi `vget_tid()` returns the ID directly [no4guide.pdf]. The wrapper restores the µITRON-visible result.
+1. **Encoded IDs and dual domains.** IDs are `(class<<16)|id`, the kernel rejects a bad class with -18, and there are two roots plus extensions `0x1618..0x1624` (identity, and the single-try acquire, release and observe of a lock word) [Draft:23-24,29; manifest v6]. µITRON 4.0 is uniprocessor. Multiprocessor µITRON exists only as later extensions such as TOPPERS FDMP/FMP (https://www.toppers.jp/fdmp-kernel.html, https://www.toppers.jp/fmp-kernel.html).
+2. **Current-task query.** `+0x16c` takes no argument and returns the running task's id, or 0 in handler context or with IRQ masked (manifest v6). µITRON get_tid returns TSK_NONE (= 0) from non-task contexts [spec get_tid]. NORTi `vget_tid()` returns the ID directly [no4guide.pdf].
 3. **IRQ save/restore with mask** (`0x164/0x168`) follows the NORTi `vdis_psw/vset_psw` shape, not µITRON 4.0.
 4. **Non-standard slots and layout.** `0x170` buffer acquire sits outside the family order [Manifest]. The tick pointer, 120 raw descriptors and stack-top word inside the root, and their external raw-layout readers, are not part of any µITRON API [Draft:46-48].
-5. **Critical pair.** The pair keeps a private prior mask in r10, and a release after failed acquisition clears a peer lock. That is stock behaviour, not a lock guarantee [Draft:59; Map A.1].
+5. **Critical pair.** The pair keeps a private prior mask in r10. Its lock is the global word 0x400c0804 that both cores' IRQ vectors also hold (§4.13); `+0x161c` tries once and returns -1 when the word is held [Draft:59; Map A.1].
 6. **Task-region order** differs from the spec order (§2.2). `ref_*` and `acre_*` are absent throughout, so retained callers cannot use them.
 7. **Codes -60, -62, -63, -64 and -1** are outside the µITRON 4.0 error list (−5..−58) [spec §7.8] and the NORTi list [no4guide.pdf §7.1]. They occur in image4 wrappers or loader helpers, not root services (§1.3).
 
@@ -457,7 +457,7 @@ Order of work:
 `replacement/embassy_platform` is the phase-1 platform: embassy-executor 0.10.0 `raw::Executor` with no platform feature, embassy-time 0.5 at 3 MHz over an owned driver, and the stock kernel as the thread layer. It is installed as a RAM-push experiment (`experiments/embassy_phase1`), because RAM push is the only owned-code path that has run on the camera (E-RAM-PUSH-INSTALL-150) and it installs after the kernel is running. Experiments gained `prelinked.json`: a Bazel-built relocatable object, gc'd from the hook handler and the exported records, replaces `lib.rs` (`host/firmware/build-experiment-ram.sh`). The demo object takes 0x3ea0 of the 0x5000-byte code window.
 
 - **Host tasks:** the hook in front of the stock modal dispatcher `0x00bfb028` runs once from task context with IRQ unmasked. It fills B's stack with the id byte and cleans the payload's D-cache lines.
-  - **B (class 2, id 119):** inside the stock critical pair `0x7235d8/0x7236b0` the hook calls B's root `+0x80`, the per-task eventflag create, with `{attribute 0, pattern 0}`, then the task create `+0x0` with `{flags 2, argument 1, entry, priority 14, 2 KiB stack}`. That is the order of stock task create `0x725dd8`, which passes attribute 4 unless descriptor word +0x18 is `0xa5f0a5f0` (E-RTOS-SLOT-MANIFEST-V5-150). After leaving the pair it activates B through the executing core's `+0xc`.
+  - **B (class 2, id 119):** inside the stock critical pair `0x7235d8/0x7236b0` the hook calls B's root `+0x80`, the eventflag create, for flag 119 with `{attribute 0, pattern 0}`, then the task create `+0x0` with `{flags 2, argument 1, entry, priority 14, 2 KiB stack}`. That is the order of stock task create `0x725dd8`, which creates the flag with the task's own id and passes attribute 4 unless descriptor word +0x18 is `0xa5f0a5f0` (E-RTOS-SLOT-MANIFEST-V5-150). After leaving the pair it activates B through the executing core's `+0xc`.
   - **A (class 1):** the hook calls the stock allocator `0x728804(0, 1, {entry, priority 14, 2 KiB stack size, stack base, argument 0})` as its four plain-image callers do. The allocator fills the stack with byte 0 and cleans it. It tries A `+0x0` with flags 2 on ids from cursor `0x40a0fc34` (initially 120) down to 105, moving on when one fails, stores the cursor below the id it took and activates the task through the executing core's `+0xc`. It returns the id, or -34 when the pool is empty, else the failing status. The hook records that return and publishes A's encoded id for the pender.
   - Priority 14 is one above the idle tasks 102/103 (15), whose WFI loop never blocks; at 15 the hosts never ran.
 - **Task ids:**
@@ -495,3 +495,57 @@ Order of work:
 - Wake resolution is one tick.
 - The host tasks keep running after `ram-unload`, and A holds one of the allocator's 16 class-1 ids for the session.
 - Before any camera run, the payload must be the `counter-up` build, and the push and run need the owner's go. Core 1's instruction cache over the payload needs nothing beyond the install: the shared installer runs stock `0x006b0c3c` and `0x0061c490` on core 1 over the whole image, then `peer_cache_action` on core 1 ends in DSB/ICIALLU/DSB/ISB, and core 1 repeats ICIALLU after GO (`menu/ram_push_installer.c:199-206,239-289`; E-RAM-PUSH-INSTALL-150).
+
+### 4.13 Owned thread layer and stock-ABI shim: design input from the decomp
+
+Source: x70view `decomp/xm1-coverage` at `55436fc85c0560dd252b0410af6f2427fe198cd3`, `decomp/firmwares/xm1-150/kernel0` (loader A) and `kernel1` (loader B). Kernel0 and kernel1 are the same C apart from the domain constant and the differences listed in private-data/scratch/RtosDecomp/crosscore/design.md §1.4. Facts below come from byte-exact functions unless marked "(stock disassembly)" (no C body) or "(NONMATCHING, confirmed)" (a draft checked against the stock disassembly of both loaders). Contracts per slot are in manifest v6 (E-RTOS-SLOT-MANIFEST-V5-150). Object layouts are in the [manifest draft](rtos-platform-manifest-draft.md#kernel-object-layouts-from-the-decomp).
+
+**One scheduler with two run queues.**
+- Each kernel keeps two context records (0x84 bytes; A 0x400545cc, B 0x400e458c), one per domain. `kernel_initialize_owner_contexts` (A 0x43ac0 / B 0xd3a7c) builds them after the startup barrier (order from NONMATCHING `kernel_start`, confirmed) from the shared configuration entries at 0x400c0818 (A) and 0x400c0888 (B).
+- The remote record points straight into the other kernel's private RAM: ready lists, bitmap, selected and running cells, dispatch-enabled word, timer heap, clock words, task records and lock words.
+- Any service given a class-2 id from A code therefore links tasks into B's ready queue, timer heap or object queues itself.
+- So one domain's scheduler can be owned alone only if those structures keep their stock addresses and semantics. The clean cut is to own both domains' schedulers together.
+
+**Locks.**
+- Each domain has a scheduler lock (A 0x400545c0 / B 0x400e4580) and an object lock (A 0x400545c4 / B 0x400e4584).
+- Both are taken through acquire A 0x439d8 / B 0xd398c (stock disassembly), which spins with IRQ masked until it holds the word and always returns 0. Every "acquire failed, retry" branch in the C is unreachable. Release (A 0x43a14 / B 0xd39c8, stock disassembly) is DMB, store 0, DSB.
+- Lock order is global lock, then object lock, then the waiter's scheduler lock (selected by T+0x20).
+- Paths that must take a lock out of order drop and retake, and use the T+0x24/+0x28/+0x2c handshake flags to detect that another path finished the job.
+
+**Global lock 0x400c0804.**
+- The IRQ vector of each core (asm, stock disassembly A 0x40258..0x4030c) takes it for the whole handler, with tag 0x11 (core 0) or 0x12 (core 1), and nests on its own tag. The image4 critical pair takes it with tags 0x21/0x22 through `+0x161c..+0x1624`, whose trylock and unlock (A 0x427d4 / 0x427fc) are NONMATCHING, confirmed. `+0x161c` operates on the lock word in r0; 0 selects 0x400c0804.
+- [INFERENCE, pending cross-core exclusive-monitor behaviour, laws U12] Every interrupt handler of both cores and every image4 critical section is therefore serialized. A holder in task context must keep IRQ masked on its own core until release, or an IRQ on that core spins forever with IRQ masked.
+- Owned handlers installed through `+0x160` run inside this lock.
+
+**Cross-core make-ready.**
+- The waker takes the target domain's scheduler lock and inserts the task itself.
+- When the target's selected cell changed and the target has dispatch enabled, it raises IRQ 120 on the target core (controller bank 0xfffb3000 or 0xfffb4000, offset 0xcc) before releasing the lock. A local target returns without a doorbell.
+- The receiver's handler (A 0x40b00 / B 0xd0b00, stock disassembly) clears the request and sets the delayed-dispatch word. The outermost IRQ exit then switches if the selected cell differs from the running cell.
+- All decisions are the sender's; a doorbell that finds nothing to do costs one IRQ.
+- Stock uses this path in both directions. In the census, most cross-domain calls are data-queue sends, plus wakeups from B to A and activations from A to B (E-RTOS-SLOT-CENSUS-STOCK-150).
+
+**Selected-cell race.**
+- Either core writes a domain's selected cell (A 0x40054768 / B 0x400e4728), always under that domain's scheduler lock. The owning core's dispatcher and IRQ-return path read it without the lock.
+- While the other core changes things, the running task keeps running until its doorbell arrives. Every service that blocks or acts on the running task re-checks the running task's ready bit under the lock, and on a clear bit unmasks IRQ so the pending doorbell preempts first.
+- [INFERENCE] No barrier separates the sender's scheduler stores from the doorbell store. Whether the receiver can observe the doorbell first depends on memory attributes that are not recovered. An owned layer should issue DMB after the scheduler stores and DSB before the doorbell.
+
+**Hazards an owned layer must not inherit.**
+- The stock dispatcher's empty-selection branch uses r4..r6 that only its C entries load. An outermost IRQ exit with a pending reschedule request, an empty selected cell and dispatch enabled reaches it with the interrupted task's registers, writes 1 to an arbitrary address and loads an arbitrary mode. While the stock vector and dispatcher run, each domain needs one ready, never-blocking task; stock uses idle tasks 102/103.
+- [INFERENCE from exact code] The tick pops a timer entry without clearing it, and the timeout callback drops the scheduler lock with IRQ unmasked. A waker in that window removes the popped entry again, deleting heap slot 1 or underflowing the count. An owned timer must clear the popped entry before the callback.
+- Deleting an active cyclic handler (`+0x10c`) makes the tick loop and call address 0; a zero period makes the tick loop on its handler.
+- The interrupt-context eventflag set `+0x8c` readies a satisfied waiter through the flag's domain rather than the waiter's own.
+
+**Tick.** Only core 0 programs the timer; both cores define and enable IRQ 32 (NONMATCHING `kernel_start_tick_timer`, confirmed against A 0x40b5c..0x40c54 / B 0xd0b5c..0xd0c4c). Whether line 32 reaches core 1 on hardware is open (laws U4). The stock ISR (A 0x40b24 / B 0xd0b24) reaches the tick body only through the published `+0x104` word, so republishing that word redirects the stock tick. Each domain processes only its own heap, 10 clock units per tick (about 10 ms at the observed 99.88 Hz, E-XM1-TIMER-IRQ-LAWS-150).
+
+**Slot classes for the shim** (per domain, the same for A and B; private-data/scratch/RtosDecomp/crosscore/classification.tsv; reviewed):
+
+| Class | Slots | Reason |
+| --- | --- | --- |
+| Keep stock-exact | `+0x0`, `+0x4`, `+0x161c`, `+0x1620`, `+0x1624` | Stock code reads the task records raw (stack check `0x725b74`, class table `0x7cad9c`, root descriptors); the global lock and its tags are shared with both IRQ vectors and the critical pair |
+| Own first | `+0x60`, `+0xfc/+0x100` as a pair, `+0x128`, `+0x12c`, `+0x130..+0x13c`, `+0x148..+0x154`, `+0x164`, `+0x168`, `+0x16c`, `+0x1618` (17) | CPU-local, or lock-free reads of stock words whose layout the owned body keeps. `+0x16c` also has direct callers (image4 0x72b00c/0x72b068, loader A 0x416a8) that bypass the slot |
+| Depends on owning something first (75) | All task, synchronization, queue, pool, time, cyclic and rotation services, plus dispatch control `+0x140/+0x144` and the IRQ slots `+0x158..+0x160` | Units: both schedulers together; timers with the tick; the IRQ vectors with the controller programming; each object family in both domains. Eventflags and mailboxes move together, because `+0xd0` on mailbox n writes flag n-1's record |
+
+**Consequences for the plan.**
+- The phase-1 embassy hosts (§4.12) already use exactly these paths: B's pender wakeup from A is the cross-core make-ready, and each host's sleep inserts into its own heap.
+- The next ownership step is the 17 own-first slots, then the scheduler of both domains together, behind the keep-exact task-record and global-lock slots.
+- Owned code may assume no failed lock acquisition, but it must preserve the global-lock tags and the one-ready-task rule while any stock vector remains.

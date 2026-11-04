@@ -7,7 +7,7 @@ use fujimod_xm1::adjustment::AdjustmentNand;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, menu_value, read, sha256, write};
 use fujimod_xm1::ff80::{Ff80, RendezvousInputs, Transfer, encode_hex};
 use fujimod_xm1::guest::{RouteKey, set_adc};
-use fujimod_xm1::machine::{DIRECTIONAL_PULSE, KeyPulse, MENU_PULSE, ReleaseSegment};
+use fujimod_xm1::machine::{KeyPulse, ReleaseSegment, key_pulse};
 use fujimod_xm1::run::{self, RunDocument};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -203,13 +203,6 @@ enum Request {
     Finish,
 }
 
-fn default_pulse(key: RouteKey) -> KeyPulse {
-    match key {
-        RouteKey::Up | RouteKey::Down | RouteKey::Left | RouteKey::Right => DIRECTIONAL_PULSE,
-        RouteKey::Ok | RouteKey::Back | RouteKey::Q => MENU_PULSE,
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AccessSource {
     CpuFetch,
@@ -357,7 +350,7 @@ impl Server {
             }
             Request::Key { key: route, hold_instructions, release_instructions } => {
                 let pulse = match (hold_instructions, release_instructions) {
-                    (None, None) => default_pulse(route),
+                    (None, None) => key_pulse(route),
                     (Some(hold), Some(release)) if (1..=MAX_PHASE).contains(&hold) && (1..=MAX_PHASE).contains(&release) => {
                         KeyPulse::instructions(hold, release)
                     }

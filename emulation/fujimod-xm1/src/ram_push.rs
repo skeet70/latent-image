@@ -7,7 +7,7 @@ use fujimod_xm1::adjustment::AdjustmentNand;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, load_card, menu_value, read, restore, sha256, write};
 use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, encode_hex};
 use fujimod_xm1::guest::{DialTurn, ModeDialPosition, PhysicalShutterPosition, Press, RouteKey};
-use fujimod_xm1::machine::{DIRECTIONAL_PULSE, KeyPulse, Machine, MENU_PULSE, ReleaseSegment, RunOutcome};
+use fujimod_xm1::machine::{KeyPulse, Machine, ReleaseSegment, RunOutcome, key_pulse};
 use fujimod_xm1::modal_trace::BeginRequest as ModalBeginRequest;
 use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::run::{self, NodeName};
@@ -551,8 +551,7 @@ fn parse_site_reads(sites: &BTreeMap<String, String>, reads: &BTreeMap<String, V
 
 fn default_pulse(key: Press) -> KeyPulse {
     match key {
-        Press::Key(RouteKey::Up | RouteKey::Down | RouteKey::Left | RouteKey::Right) => DIRECTIONAL_PULSE,
-        Press::Key(RouteKey::Ok | RouteKey::Back | RouteKey::Q) => MENU_PULSE,
+        Press::Key(key) => key_pulse(key),
         Press::Dial(DialTurn::Left | DialTurn::Right) => DIAL_PULSE,
         Press::Shutter(_) | Press::Play => GPIO_PULSE,
     }

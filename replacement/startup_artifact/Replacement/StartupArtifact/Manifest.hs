@@ -1,11 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | The stager's input manifest:
--- @{"schema":4,"guard":{"attach":LABEL,"attach_state":RULES},"pieces":[{"kind":KIND,"inputs":INPUTS}]}@,
+-- @{"schema":4,"guard":{"attach":LABEL,"attach_state":RULES},"pieces":[{"kind":KIND,"inputs":INPUTS}],"application":{}}@,
 -- with RULES as 'Replacement.StartupArtifact.AttachState.parseAttachRules' reads them. INPUTS is
 -- @{"image":PATH,"symbols":PATH}@, or for @loader-startup@ one such object under each of
--- @loader_a@, @loader_b@, @dispatcher@ and @installer@. Unknown keys refuse.
+-- @loader_a@, @loader_b@, @dispatcher@ and @installer@. @application@ is optional and
+-- asks for the contract's application section. Unknown keys refuse.
 module Replacement.StartupArtifact.Manifest
-  ( Manifest (..), ManifestPiece (..), LinkedPaths (..), LoaderStartupPaths (..), manifestPieceKind, parseManifest
+  ( Manifest (..), ManifestPiece (..), LinkedPaths (..), LoaderStartupPaths (..), ApplicationPhase (..), manifestPieceKind, parseManifest
   ) where
 
 import Control.Monad (forM, forM_, unless, when)
@@ -34,17 +35,23 @@ manifestPieceKind :: ManifestPiece -> PieceKind
 manifestPieceKind (SingleImagePiece kind _) = kind
 manifestPieceKind (LoaderStartupPiece _) = LoaderStartup
 
-data Manifest = Manifest { manifestAttach :: Label, manifestAttachRules :: AttachRules, manifestPieces :: [ManifestPiece] } deriving (Eq, Show)
+-- | Whether the contract carries the application section.
+data ApplicationPhase = WithoutApplication | WithApplication deriving (Eq, Show)
+
+data Manifest = Manifest
+  { manifestAttach :: Label, manifestAttachRules :: AttachRules, manifestPieces :: [ManifestPiece], manifestApplication :: ApplicationPhase }
+  deriving (Eq, Show)
 
 refuse :: ManifestProblem -> Either Refusal a
 refuse = Left . ManifestRefused
 
-object :: Text -> [Text] -> J.Value -> Either Refusal (KeyMap.KeyMap J.Value)
-object context keys value = case value of
+-- | An object with every required key and no key outside required and optional.
+object :: Text -> [Text] -> [Text] -> J.Value -> Either Refusal (KeyMap.KeyMap J.Value)
+object context required optional value = case value of
   J.Object fields -> do
     forM_ (KeyMap.keys fields) $ \key ->
-      unless (Key.toText key `elem` keys) (refuse (ManifestUnknownKey (context <> "." <> Key.toText key)))
-    forM_ keys $ \key ->
+      unless (Key.toText key `elem` required ++ optional) (refuse (ManifestUnknownKey (context <> "." <> Key.toText key)))
+    forM_ required $ \key ->
       unless (KeyMap.member (Key.fromText key) fields) (refuse (ManifestMalformed (context <> " lacks " <> key)))
     pure fields
   _ -> refuse (ManifestMalformed (context <> " is not an object"))
@@ -71,31 +78,34 @@ attachLabel value = case T.splitOn "/" value of
 parseManifest :: B.ByteString -> Either Refusal Manifest
 parseManifest bytes = do
   value <- maybe (refuse (ManifestMalformed "not JSON")) Right (J.decodeStrict bytes)
-  top <- object "manifest" ["schema", "guard", "pieces"] value
+  top <- object "manifest" ["schema", "guard", "pieces"] ["application"] value
   case field top "schema" of
     J.Number number | toBoundedInteger number == Just (4 :: Int) -> pure ()
     _ -> refuse ManifestSchemaUnsupported
-  guard <- object "guard" ["attach", "attach_state"] (field top "guard")
+  guard <- object "guard" ["attach", "attach_state"] [] (field top "guard")
   attach <- text "guard.attach" (field guard "attach") >>= attachLabel
   rules <- parseAttachRules (field guard "attach_state")
   rows <- case field top "pieces" of
     J.Array items | not (V.null items) -> pure (V.toList items)
     _ -> refuse (ManifestMalformed "pieces is not a nonempty array")
   pieces <- forM rows $ \row -> do
-    piece <- object "piece" ["kind", "inputs"] row
+    piece <- object "piece" ["kind", "inputs"] [] row
     kind <- text "piece.kind" (field piece "kind") >>= kindOf
     let linked context entry = do
-          inputs <- object context ["image", "symbols"] entry
+          inputs <- object context ["image", "symbols"] [] entry
           image <- text (context <> ".image") (field inputs "image")
           symbols <- text (context <> ".symbols") (field inputs "symbols")
           pure (LinkedPaths (T.unpack image) (T.unpack symbols))
     case kind of
       LoaderStartup -> do
-        inputs <- object "piece.inputs" ["loader_a", "loader_b", "dispatcher", "installer"] (field piece "inputs")
+        inputs <- object "piece.inputs" ["loader_a", "loader_b", "dispatcher", "installer"] [] (field piece "inputs")
         let side name = linked ("piece.inputs." <> name) (field inputs name)
         paths <- LoaderStartupPaths <$> side "loader_a" <*> side "loader_b" <*> side "dispatcher" <*> side "installer"
         pure (LoaderStartupPiece paths)
       _ -> SingleImagePiece kind <$> linked "piece.inputs" (field piece "inputs")
   let kinds = sort (map manifestPieceKind pieces)
   forM_ (zip kinds (drop 1 kinds)) $ \(left, right) -> when (left == right) (Left (DuplicatePieceKind left))
-  pure (Manifest attach rules pieces)
+  phase <- case KeyMap.lookup "application" top of
+    Nothing -> pure WithoutApplication
+    Just section -> WithApplication <$ object "application" [] [] section
+  pure (Manifest attach rules pieces phase)
