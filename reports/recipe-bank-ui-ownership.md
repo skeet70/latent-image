@@ -973,7 +973,7 @@ Both refusing writes fall in the key after the last completed segment, inside th
 
 ### Behavioural census
 
-The maintainer scoped #128 as functional replacement: the camera's menu behaviour, not every stock callback. This section measures that behaviour by crawling the emulated stock UI and maps what it reaches onto the callback measurements above. [Sources: E-MODAL-MENU-CRAWL-150; E-MODAL-CONTROLLER-SCALE-150.]
+The maintainer scoped #128 as functional replacement: the camera's menu behaviour, not every stock callback. This section measures that behaviour by crawling the emulated stock UI and maps what it reaches onto the callback measurements above. [Sources: E-MODAL-MENU-OKPATHS-150; E-MODAL-CONTROLLER-SCALE-150.]
 
 #### Crawl mechanism
 
@@ -1000,7 +1000,7 @@ The six diverged replays took a shorter path through state the frame does not sh
 
 #### Behaviour counts
 
-The census groups crawl-4's 495 menu screens into 87 keys and leaves 69 live-view and overlay screens outside menus. Presses dispatched 371 distinct actions of 38 controllers; those actions fall in 295 helper-bound shapes whose members are 753 of the 5,795 table callbacks. An action can serve keys of several classes, so the per-class action counts overlap. [Sources: E-MODAL-MENU-CRAWL-150; `private-data/scratch/ControllerStrategy/census-4-menus.json`.]
+The census groups crawl-4's 495 menu screens into 87 keys and leaves 69 live-view and overlay screens outside menus. Presses dispatched 371 distinct actions of 38 controllers; those actions fall in 295 helper-bound shapes whose members are 753 of the 5,795 table callbacks. An action can serve keys of several classes, so the per-class action counts overlap. [Sources: E-MODAL-MENU-OKPATHS-150; `private-data/scratch/ControllerStrategy/census-4-menus.json`.]
 
 | Class (census rule) | Keys | Examples | Actions | Shapes |
 | --- | --- | --- | --- | --- |
