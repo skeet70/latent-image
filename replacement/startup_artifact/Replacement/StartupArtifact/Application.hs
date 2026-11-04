@@ -9,7 +9,7 @@
 module Replacement.StartupArtifact.Application
   ( SiteKind (..), siteKindName, SiteLabel (..), CodeWord (..), Sha256Hex (..)
   , CodeRegion (..), codeRegionName, codeRegionBounds
-  , PlainImage, plainImage, RoleImages (..)
+  , PlainImage (..), plainImage, RoleImages (..)
   , ApplicationSite (..), QueueSite (..), CodeDigest (..), Application (..)
   , application, applicationValue
   ) where

@@ -570,7 +570,7 @@ wrapperRecords = WriteRange PhysicalTarget 0xa5b204 0xa5b5c4
 storageRecords = WriteRange PhysicalTarget 0xa0fc44 0xa101e4
 
 taskWindowPremise :: T.Text
-taskWindowPremise = "frames of the four dispatcher submissions lie in the boot-stack windows (join dispatcher-task-composition, submission-joined-stack-in-boot-window); later callers run on pool-reserved task stacks [INFERENCE]; no caller runs in IRQ context [INFERENCE]"
+taskWindowPremise = "frames of the four dispatcher submissions lie in the boot-stack windows (join dispatcher-task-composition, submission-joined-stack-in-boot-window); the stock callers are the 63 call sites join task-composition-owned-calls pins, plus the dispatcher's admitted calls (wrapper-callers-closed); no caller runs in IRQ context [INFERENCE]; later callers run on pool-reserved task stacks [INFERENCE]"
 
 -- | Kebab name of a fixed wrapper service.
 serviceName :: WA.FixedService -> T.Text
@@ -674,16 +674,16 @@ deriveTaskSubmission source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByt
         (taskStackWindows ++ [wrapperRecords, WriteRange PhysicalTarget 0xa0f82c 0xa0f830, storageRecords])
         (Premised (Premise (T.intercalate "; "
           [ taskWindowPremise
-          , "size word W+4 of wrapper record W = 0x40a5b204+8i, error word 0x40a0f82c and release's reservation clear 0x40a0fc44+12i+8 are the admission's guest roots (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:123); i < 120 for the dispatcher's ids 104, 102, 103, 93 (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs:206-211) and premised for other callers" ])))
+          , "size word W+4 of wrapper record W = 0x40a5b204+8i, error word 0x40a0f82c and release's reservation clear 0x40a0fc44+12i+8 are the admission's guest roots (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:123); i < 120 for the dispatcher's ids 104, 102, 103, 93 (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs:206-211) and for every stock call site with an immediate id (wrapper-caller-ids); premised for the data-driven sites 0x6b07f0 and 0xe9231c" ])))
       catalog = Catalog (calls ++ boundaries) code writes rows
       declaration = PieceDeclaration kind (Set.singleton TaskSubmissionArea) [carrier]
         (TaskSubmissionFootprint.footprint (targetOf targets LoaderA) (targetOf targets LoaderB) image4)
         (map Premise
           [ "retained callees behave as stock from their entries (replacement/task_submission/Replacement/TaskSubmission/Artifact.hs:73-77)"
-          , "the error callback word 0x4089ea8c holds 0x723330 or 0x72835c when the wrapper dispatches it (reports/replacement-inventory-baseline.md:887,889)"
-          , "the log trace callback is 0 or 0x6470fc (emulation/Emulation/TaskSubmissionProgram.hs:487-496)"
+          , "the error callback word 0x4089ea8c holds 0x723330 or 0x72835c (error-callback-writers); stores through computed pointers are premised"
+          , "the log trace callback is 0x6470fc when set (trace-callback-writers); its initial value 0 and stores through computed pointers are premised"
           , "exit receives enter's token is a source property (replacement/task_submission/src.rs:89-90,202,212,232,258), not an emitted-code proof"
-          , "stack bounds exclude interrupt and exception frames (reports/replacement-inventory-baseline.md:1189)" ])
+          , "stack bounds exclude exception frames; an IRQ that preempts the interrupted task leaves at most 88 bytes on its stack (irq-entry-frame); retained demands are StockStack depths, conditional on published root-slot words staying fixed, fixed context lock methods and on no task-exception routine being defined" ])
         catalog (TaskSubmissionFacts (LinkedBytes bin symbolBytes) pool)
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (W.stagedBytes (W.stageImage4 wrapperSource artifact))) Nothing)
 
@@ -706,13 +706,13 @@ deriveTaskStorage source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)
         (taskStackWindows ++ [storageRecords, wrapperRecords, WriteRange PhysicalTarget 0x89ea98 0x89ea9c])
         (Premised (Premise (T.intercalate "; "
           [ taskWindowPremise
-          , "record words +0/+4/+8 of 0x40a0fc44+12i and the cursor 0x4089ea98 are the proof's guest roots (replacement/task_storage/Replacement/TaskStorage/FrameProof.hs:120-122,236); index i < 120 and the output word W = 0x40a5b204+8i (incoming r2) are premised: the only caller is the wrapper [INFERENCE]" ])))
+          , "record words +0/+4/+8 of 0x40a0fc44+12i and the cursor 0x4089ea98 are the proof's guest roots (replacement/task_storage/Replacement/TaskStorage/FrameProof.hs:120-122,236); index i and the output word W = 0x40a5b204+8i (incoming r2) are the wrapper's: its reservation call is the prelude's only caller (storage-prelude-sole-caller)" ])))
       catalog = Catalog boundaries code writes []
       declaration = PieceDeclaration kind (Set.singleton TaskStorageArea) [carrier]
         (TaskStorageFootprint.footprint (targetOf targets LoaderA) (targetOf targets LoaderB))
         (map Premise
           [ "the retained prelude [0x725c6c,0x725cc4) and epilogue [0x725da8,0x725dd8) behave as stock (replacement/task_storage/Replacement/TaskStorage/Artifact.hs:202)"
-          , "callers pass index u32[D]-1 below 120 and the wrapper record W (reports/replacement-inventory-baseline.md:1088)" ])
+          , "the wrapper is the prelude's only caller (storage-prelude-sole-caller) and passes index u32[D]-1 and the wrapper record W; i < 120 is task-submission's premise" ])
         catalog (TaskStorageFacts (LinkedBytes bin symbolBytes))
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (TSt.stagedBytes (TSt.stageImage4 storageSource artifact))) Nothing)
 
@@ -763,7 +763,7 @@ deriveIdleTask source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) =
       catalog = Catalog boundaries code writes []
       declaration = PieceDeclaration kind (Set.singleton IdleTaskArea) [carrier] IdleFootprint.footprint
         (map Premise
-          [ "entry is A32 SVC on an aligned allocated live stack at least 32 bytes deeper than the admitted frame (replacement/idle_task/Replacement/IdleTask/Artifact.hs:130-131)"
+          [ "entry is A32 SVC on an aligned allocated live stack at least 88 bytes deeper than the admitted frame, the IRQ preemption peak (irq-entry-frame)"
           , "wakeups come from the retained IRQ entry and exit, which save and restore the interrupted context on the interrupted stack (reports/replacement-inventory-baseline.md:1688)" ])
         catalog (IdleTaskFacts (LinkedBytes bin symbolBytes) [firstEntry])
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (IT.stagedBytes (IT.stageImage4 idleSource artifact))) Nothing)
@@ -875,7 +875,7 @@ deriveRootTask source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) =
         (map Premise
           [ "retained callees behave as stock from their entries, including error dispatch from 0x725b74 in IRQ context (replacement/root_task/Replacement/RootTask/Artifact.hs:145; reports/replacement-inventory-baseline.md:1686-1688)"
           , "root is entered once on core 0 by the first-entry trampoline with r0 = 0 and SP = the A104 allocation top (reports/replacement-inventory-baseline.md:1130,1621,1628)"
-          , "the 32 bytes below the admitted frame bound hold the source IRQ frame; retained callee demand on root's stack is not proved" ])
+          , "an IRQ that preempts root leaves at most 88 bytes below the interrupted frame (irq-entry-frame); retained callee demand on root's stack is bounded by root-retained-depth, conditional on published root-slot words staying fixed, the error and trace callback sets, fixed context lock methods and no task-exception routine being defined, except the chains it names" ])
         catalog (RootTaskFacts (LinkedBytes bin symbolBytes) pool)
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (RT.stagedBytes (RT.stageImage4 rootSource artifact))) Nothing)
 
@@ -972,9 +972,9 @@ deriveImage5Producer source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByt
         (ProducersFootprint.footprint ProducersFootprint.Image5Load (targetOf targets LoaderA) (targetOf targets LoaderB) image4)
         (map Premise
           [ "the segment-5 record is tagged and nonaliasing (replacement/image5_load/Replacement/Image5Load/Admission.hs:64-65,345-352)"
-          , "0x89f8ac is written only by the producer and the retained fill-done callback 0x6a8bec during the producer's interval (replacement/image5_load/Replacement/Image5Load/Artifact.hs:137)"
+          , "0x89f8ac is stored only by the producer and by storage_request_refresh 0x6a8bec, whose address only the producer forms (fill-flag-writers); stores through computed pointers are premised"
           , "the producer runs in task60 on core 0 with an 8-byte aligned entry SP (reports/replacement-inventory-baseline.md:1477; replacement/image5_load/Replacement/Image5Load/Admission.hs:414)"
-          , "retained callees, the decoder engine, IRQ98 completion and resource 0x48 behave as stock (replacement/image5_load/Replacement/Image5Load/Artifact.hs:140); their stack demand below the owned frame is not proved" ])
+          , "retained callees, the decoder engine, IRQ98 completion and resource 0x48 behave as stock (replacement/image5_load/Replacement/Image5Load/Artifact.hs:140); their stack demand below the owned frame is bounded by producer-retained-depth under the same conditions as root-retained-depth, except the chains it names" ])
         catalog (Image5ProducerFacts (LinkedBytes bin symbolBytes))
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (I5.stagedBytes (I5.stageImage4 producerSource artifact))) Nothing)
 
@@ -1031,6 +1031,6 @@ derivePlainProducer source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByte
         (map Premise
           [ "the segment-6 record and the extent descriptor at 0x61c1a4 are tagged and nonaliasing (replacement/plain_load/Replacement/PlainLoad/Admission.hs:51-54; reports/replacement-inventory-baseline.md:1370)"
           , "the producer runs in task60 on core 0 with an 8-byte aligned entry SP (reports/replacement-inventory-baseline.md:1450)"
-          , "the raw reader, progress 0x73b924, worker 0x73bc54 and the extent hooks behave as stock (reports/replacement-inventory-baseline.md:1378-1384); retained callee stack demand below the owned frame is not proved" ])
+          , "the raw reader, progress 0x73b924, worker 0x73bc54 and the extent hooks behave as stock (reports/replacement-inventory-baseline.md:1378-1384); their stack demand below the owned frame is bounded by producer-retained-depth under the same conditions as root-retained-depth, except the chains it names" ])
         catalog (PlainProducerFacts (LinkedBytes bin symbolBytes))
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (PL.stagedBytes (PL.stageImage4 producerSource artifact))) Nothing)

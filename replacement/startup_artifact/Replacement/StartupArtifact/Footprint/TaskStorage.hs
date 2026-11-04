@@ -31,7 +31,7 @@ footprint loaderA loaderB = mapMaybe (\(basis, target, start, end, citation) -> 
   [ (AdmissionRead, LoaderA, 0x427d4, 0x42828, "replacement/task_storage/Replacement/TaskStorage/Artifact.hs:92-96 (lock services)")
   , (RuntimePremise, Image4, 0x725c6c, 0x725cc4, "replacement/task_storage/Replacement/TaskStorage/Artifact.hs:118 (adapter entry after the retained prelude)")
   , (RuntimePremise, Image4, 0x725da8, 0x725dd8, "replacement/task_storage/Replacement/TaskStorage/Artifact.hs:115,118 (resume into the retained epilogue; pool literal 0x725dd4)")
-  , (RuntimePremise, Image4, 0x725dd8, 0x726098, "replacement/task_storage/Replacement/TaskStorage/Artifact.hs:205 (the caller supplies index, size and output word)")
+  , (RuntimePremise, Image4, 0x725dd8, 0x726098, "replacement/task_storage/Replacement/TaskStorage/Artifact.hs:205 (the wrapper, the prelude's only caller, supplies index, size and output word; storage-prelude-sole-caller)")
   , (RuntimePremise, Image4, 0x725a04, 0x725b54, "replacement/task_storage/Replacement/TaskStorage/Artifact.hs:207 (selector root 0x96bd20, which the installer stores)")
   , (RuntimePremise, LoaderA, 0x40430, 0x409ac, "replacement/task_storage/Replacement/TaskStorage/Artifact.hs:207-208 (root-0 slots 0x1618, 0x164, 0x168)")
   , (RuntimePremise, LoaderB, 0xd0430, 0xd0434, "replacement/task_storage/Replacement/TaskStorage/Artifact.hs:207-208 (root-1 slots 0x1618, 0x164, 0x168 behind the initializer entry)")

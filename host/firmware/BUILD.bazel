@@ -1523,6 +1523,8 @@ haskell_library(
         "ArmElf.hs",
         "BankAllowlist.hs",
         "EngineStack.hs",
+        "StackWalk.hs",
+        "StockStack.hs",
     ],
     ghcopts = [
         "-Wall",
@@ -1555,6 +1557,23 @@ haskell_test(
         ":bank-allowlist",
         "//host:base",
         "//host:bytestring",
+    ],
+)
+
+haskell_test(
+    name = "stock-stack-tests",
+    size = "small",
+    srcs = ["StockStackTests.hs"],
+    ghcopts = [
+        "-Wall",
+        "-Werror",
+        "-XGHC2021",
+    ],
+    deps = [
+        ":bank-allowlist",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
     ],
 )
 
@@ -1670,6 +1689,8 @@ filegroup(
         "A32.hs",
         "BankAllowlist.hs",
         "EngineStack.hs",
+        "StackWalk.hs",
+        "StockStack.hs",
         "BankAllowlistComposition.hs",
         "ArmElf.hs",
         "RamPushLayout.hs",
