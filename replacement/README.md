@@ -431,16 +431,19 @@ Each batch directory holds the case files, every case's native result (about 170
 
 `//replacement/menu_engine:menu-engine-tests` runs the synthetic tests. `//replacement/modal_runtime:menu-engine-tree` writes the generated `Tree` and the `RecordTable` side table from the pinned menu tables JSON, both carrying the tree identity. `//replacement/modal_runtime:menu-engine-cases` writes one Rust case per accepted `--menu-observe` receipt directory: the stock calls in instruction order, each with the block replayed to that instruction. It refuses a receipt from another firmware, a rejected one, or one whose config, trace sites or watch ranges lack what the case needs. `//replacement/modal_runtime:menu-engine-generator-tests` covers both on synthetic JSON. The owner run checks each case's call sequence and the block at every call, the after block, last-move pair, ordered snapshot word writes and result, and eight mutant engines (no wrap, inverted skip rule, no initial-row selection, no last-move pair, zero scroll, no push classifier, kind 4 off-page scroll keeping the top, open off-page scroll left at 0):
 
+Both generators refuse an output path that already exists, so each generation goes to a fresh directory. The current host-oracle outputs and `owner-test.log` are in `$S/menu-engine/host-oracle-40730c6f`, generated at 40730c6f:
+
 ```sh
-S=private-data/scratch/ControllerStrategy; O=$S/menu-engine
+S=private-data/scratch/ControllerStrategy; O=$S/menu-engine/host-oracle-$(git rev-parse --short HEAD); mkdir $O
 bazel-bin/replacement/modal_runtime/menu-engine-tree --tables $S/menu-tables.json --tree-out $O/menu-tree.rs --records-out $O/menu-records.rs --labels-out $O/menu-labels.rs
 bazel-bin/replacement/modal_runtime/menu-engine-cases --out $O/menu-cases.rs wrap=$S/menu-oracle-wrap push=$S/menu-oracle-push \
   pop=$S/menu-oracle-pop open=$S/menu-oracle-open push-restored=$S/menu-oracle-push-restored \
   push-classifier=$S/menu-oracle-push-classifier scroll=$S/menu-oracle-scroll scroll-up=$S/menu-oracle-scroll-up \
   scroll-down=$S/menu-oracle-scroll-down pop-deep=$S/menu-oracle-pop-deep
-RB_MENU_ENGINE_TREE=$O/menu-tree.rs RB_MENU_ENGINE_RECORDS=$O/menu-records.rs RB_MENU_ENGINE_CASES=$O/menu-cases.rs \
-  <lab_rustc>/bin/rustc --edition=2021 --test --cfg rb_menu_engine_cases -C linker=<lab_clang>/bin/clang \
-  replacement/menu_engine/src/lib.rs -o FRESH_PATH && FRESH_PATH --nocapture
+RB_MENU_ENGINE_TREE=$PWD/$O/menu-tree.rs RB_MENU_ENGINE_RECORDS=$PWD/$O/menu-records.rs RB_MENU_ENGINE_CASES=$PWD/$O/menu-cases.rs \
+  <lab_rustc>/bin/rustc --edition=2021 --test --cfg rb_menu_engine_cases -C linker=<clang-wrapper>/bin/clang \
+  replacement/menu_engine/src/lib.rs -o FRESH_PATH
+FRESH_PATH owner --nocapture --test-threads=1 > $O/owner-test.log 2>&1
 ```
 
 ## Owned menu engine, increment 2 (#128)
