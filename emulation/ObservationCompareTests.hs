@@ -122,6 +122,18 @@ cases =
     , null (compared
         (segment (leadingPair ++ hookedIdle ++ hookedIdle ++ hookedPair ++ hookedPair))
         (segment (hookedIdle ++ hookedIdle ++ hookedPair ++ hookedIdle ++ hookedPair ++ hookedPair))) )
+  , ( "a leading settings converter run followed only by idle passes equals the run alone"
+    , null (compared
+        (segment (leadingPair ++ hookedIdle ++ hookedIdle))
+        (segment leadingPair)) )
+  , ( "a leading pair, idle passes and a converting pass equal one pass split by an idle pass"
+    , null (compared
+        (segment (leadingPair ++ hookedIdle ++ hookedIdle ++ hookedPair))
+        (segment (hookedIdle ++ hookedIdle ++ hookedPair ++ hookedIdle ++ hookedPair))) )
+  , ( "a leading pair differs from a split pass whose parts hold a different converter total"
+    , not (null (compared
+        (segment (leadingPair ++ hookedIdle ++ hookedIdle ++ hookedPair))
+        (segment (hookedIdle ++ hookedPair ++ hookedIdle ++ hookedPair ++ hookedIdle ++ hookedPair)))) )
   , ( "a leading settings converter pair differs from the pair inside a converting first pass"
     , not (null (compared
         (segment (leadingPair ++ hookedPair))
