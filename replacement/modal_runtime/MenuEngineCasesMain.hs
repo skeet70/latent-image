@@ -11,6 +11,7 @@ import qualified Data.Aeson as J
 import qualified Data.ByteString as B
 import Emulation.Sha256 (sha256, sha256Hex)
 import Replacement.ModalRuntime.MenuEngineCases
+import Replacement.ModalRuntime.NewFile (writeNewFile)
 import System.Directory (doesPathExist)
 import System.Environment (getArgs)
 
@@ -36,4 +37,4 @@ main = do
     putStrLn (name ++ ": service calls " ++ show (length (caseCalls extracted))
       ++ ", snapshot writes " ++ show (length (caseSnapshotWrites extracted)) ++ ", last-move writes " ++ show (length (caseLastMoveWrites extracted)))
     pure (name, receiptSha, configSha, extracted)
-  writeFile outPath (rustCases cases)
+  writeNewFile outPath (rustCases cases)

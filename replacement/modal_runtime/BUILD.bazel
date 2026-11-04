@@ -473,6 +473,7 @@ haskell_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":menu-engine-tree-lib",
+        ":new-file-lib",
         "//emulation:case-sha256",
         "//host:aeson",
         "//host:base",
@@ -500,6 +501,7 @@ haskell_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":menu-engine-cases-lib",
+        ":new-file-lib",
         "//emulation:case-sha256",
         "//host:aeson",
         "//host:base",
@@ -518,6 +520,29 @@ haskell_test(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+    ],
+)
+
+haskell_library(
+    name = "new-file-lib",
+    srcs = ["Replacement/ModalRuntime/NewFile.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:base",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "new-file-tests",
+    srcs = ["NewFileTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror"],
+    deps = [
+        ":new-file-lib",
+        "//host:base",
+        "//host:directory",
+        "//host:filepath",
     ],
 )
 

@@ -10,6 +10,7 @@ import qualified Data.Aeson as J
 import qualified Data.ByteString as B
 import Emulation.Sha256 (sha256, sha256Hex)
 import Replacement.ModalRuntime.MenuEngineTree
+import Replacement.ModalRuntime.NewFile (writeNewFile)
 import System.Directory (doesPathExist)
 import System.Environment (getArgs)
 
@@ -40,7 +41,7 @@ main = do
     _ -> pure stock
   let digest text = sha256Hex (sha256 (B.pack (map (fromIntegral . fromEnum) text)))
   generated <- either fail pure (generate digest tablesSha document)
-  writeFile treePath (generatedTree generated)
-  writeFile recordsPath (generatedRecords generated)
-  writeFile labelsPath (generatedLabels generated)
+  writeNewFile treePath (generatedTree generated)
+  writeNewFile recordsPath (generatedRecords generated)
+  writeNewFile labelsPath (generatedLabels generated)
   putStrLn ("menu-engine-tree: " ++ show (length (documentNodes document)) ++ " nodes; identity " ++ generatedIdentity generated)
