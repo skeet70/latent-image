@@ -344,7 +344,7 @@ registeredJoins =
 -- replacement/startup_composition/Replacement/StartupComposition/TaskSubmission.hs:63-97.
 joinedTasks :: JoinEvidence -> Maybe TS.JoinedArtifact
 joinedTasks evidence = do
-  LinkedBytes wrapper wrapperSymbols <- single [linked | TaskSubmissionFacts linked <- facts]
+  LinkedBytes wrapper wrapperSymbols <- single [linked | TaskSubmissionFacts linked _ <- facts]
   LinkedBytes storage storageSymbols <- single [linked | TaskStorageFacts linked <- facts]
   (_, _, LinkedBytes critical criticalSymbols, _) <- secondaryFacts evidence
   either (const Nothing) Just (TS.deriveArtifact (SC.NativeFiles wrapper wrapperSymbols)

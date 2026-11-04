@@ -630,6 +630,24 @@ deriveTaskSubmission source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByt
     , read' "b-domain" "b93-first-entry" 0x400e4610 132
     , read' "b-current" "b93-first-entry" 0x400e4720 12
     ]
+  let labelled = label kind
+  records <- labelled "storage-records"
+  cursorRead <- labelled "cursor"
+  wrappers <- labelled "wrapper-records"
+  creationA <- labelled "a-creation"
+  creationB <- labelled "b-creation"
+  nodesA <- labelled "a-nodes"
+  nodesB <- labelled "b-nodes"
+  entryA <- labelled "a104-first-entry"
+  entryB <- labelled "b93-first-entry"
+  -- Base words: storage record +0, wrapper record +0 and creation record +20 (C's base); top words: node +24 (T's
+  -- stack top) and the first-entry SP (reports/replacement-inventory-baseline.md:1088,1120-1124,1130).
+  let pool = PoolAllocation (PoolSpan 0xa10200 0xa5b200) records cursorRead
+        [ AllocationWords records 0 12 AllocationBase, AllocationWords wrappers 0 8 AllocationBase
+        , AllocationWords creationA 20 40 AllocationBase, AllocationWords creationB 20 40 AllocationBase
+        , AllocationWords nodesA 24 56 AllocationTop, AllocationWords nodesB 24 56 AllocationTop ]
+        [entryA, entryB]
+        (Citation "pool [0x40a10200,0x40a5b200) and record layout {base, size, reserved}: replacement/task_storage/src.rs; reservation order across cores is a race (reports/replacement-inventory-baseline.md:1134,1621-1624)")
   let writes = EnumeratedWrites
         (taskStackWindows ++ [wrapperRecords, WriteRange PhysicalTarget 0xa0f82c 0xa0f830, storageRecords])
         (Premised (Premise (T.intercalate "; "
@@ -644,7 +662,7 @@ deriveTaskSubmission source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByt
           , "the log trace callback is 0 or 0x6470fc (emulation/Emulation/TaskSubmissionProgram.hs:487-496)"
           , "exit receives enter's token is a source property (replacement/task_submission/src.rs:89-90,202,212,232,258), not an emitted-code proof"
           , "stack bounds exclude interrupt and exception frames (reports/replacement-inventory-baseline.md:1189)" ])
-        catalog (TaskSubmissionFacts (LinkedBytes bin symbolBytes))
+        catalog (TaskSubmissionFacts (LinkedBytes bin symbolBytes) pool)
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (W.stagedBytes (W.stageImage4 wrapperSource artifact))) Nothing)
 
 -- | Replacement.TaskStorage.Artifact over //replacement/task_storage:task-storage-image.

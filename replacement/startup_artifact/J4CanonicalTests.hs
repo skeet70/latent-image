@@ -154,7 +154,7 @@ main = do
       redirected = B.take offset submissionBytes <> U.putWord32 (branchLink reservationCall 0x7221c8) <> B.drop (offset + 4) submissionBytes
   ok "a wrapper whose reservation call is redirected to fill fails the owned-calls join"
     (not (holdsIn "owned-calls-join" (withFacts (\facts -> case facts of
-      TaskSubmissionFacts (LinkedBytes _ symbols) -> TaskSubmissionFacts (LinkedBytes redirected symbols)
+      TaskSubmissionFacts (LinkedBytes _ symbols) pool -> TaskSubmissionFacts (LinkedBytes redirected symbols) pool
       other -> other))))
   let headerMoved = either (const targets) id
         (maybe (Left CompositionUnchanged) (\change -> applyTargetEdits [change] targets) (edit (at LoaderB 0xd0010 0xd0014) (U.putWord32 0x400e0000)))

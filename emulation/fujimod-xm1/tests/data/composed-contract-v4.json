@@ -336,5 +336,6 @@
         ]
       }
     }
-  ]
+  ],
+  "pool_allocation": null
 }

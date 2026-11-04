@@ -10,13 +10,14 @@ use fujimod_xm1::attach_state::{
 };
 use fujimod_xm1::composed_catalog::{
     Bank, CatalogRefusal, Contract, Core, DeclarationProblem, GuardBound, Label, Pc, PiecePolicy, PieceKind, PlanSpan,
-    RangePlan, Role, Sha256, Target, WritesBasis,
+    PoolAllocationProblem, RangePlan, Role, Sha256, Target, WritesBasis,
 };
 use fujimod_xm1::composed_receipt::{
     Admission, ByteRange, CaptureDirectories, CarrierField, CarrierWrites, DeclaredUse, Difference, GuardObservation, GuardState,
     HexBytes, Identity, IdentityField, LabelCount, MenuObservation, Outcome, ReadCapture, Receipt, ReceiptKind, RecordedPolicy,
     Register, Row, SchemaFour, Verdict, VerdictKind, WatchRow, Word, WriteKind, Writer, WriterCount, carrier_writes, compare,
 };
+use fujimod_xm1::pool_allocation::{Allocation, AllocationProblem};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -1642,4 +1643,145 @@ fn rom_declarations_bind_the_boot_rom_words_and_the_run_graph_decoder() {
     assert!(check_rom_declarations(&document, &rom, parse(&value).unwrap().declared(Role::Composed)).is_err());
     let maps = choice_maps(&document).unwrap();
     assert!(maps.first().and_then(|choices| choices.get(1)).is_some_and(|choice| !choice.is_empty()));
+}
+
+const POOL: u32 = 0x00a1_0200;
+const STACK: u32 = 0x400;
+
+fn words(values: &[u32]) -> Vec<u8> { values.iter().flat_map(|value| value.to_le_bytes()).collect() }
+
+/// The fixture with three storage records, a cursor and two 56-byte nodes read at the publisher's return,
+/// under a pool-allocation relation whose stack top is that return's SP.
+fn pool_contract() -> Value {
+    let mut value = fixture();
+    let read = |name: &str, address: u32, length: u32| json!({
+        "label": name, "boundary": "primary-publisher/return-core0", "address": address, "length": length, "differs": null});
+    let reads = value["pieces"][1]["catalog"]["reads"].as_array_mut().unwrap();
+    reads.push(read("primary-publisher/records", 0x40a0_fc44, 36));
+    reads.push(read("primary-publisher/cursor", 0x4089_ea98, 4));
+    reads.push(read("primary-publisher/nodes", 0x4006_1524, 112));
+    value["pool_allocation"] = json!({
+        "pool": {"start": POOL, "end": 0x00a5_b200},
+        "records": "primary-publisher/records", "cursor": "primary-publisher/cursor",
+        "words": [
+            {"read": "primary-publisher/records", "offset": 0, "stride": 12, "position": "base"},
+            {"read": "primary-publisher/nodes", "offset": 24, "stride": 56, "position": "top"}],
+        "stack_tops": ["primary-publisher/return-core0"],
+        "citation": "c"});
+    value
+}
+
+/// Tasks 1 and 2 reserved at `bases`, `STACK` bytes each; node j holds task j+1's stack top and the return SP is task 1's.
+fn reserve(receipt: &mut Receipt, bases: [u32; 2]) {
+    let top = |task: usize| bases[task] + STACK;
+    let mut nodes = vec![0u32; 28];
+    nodes[6] = top(0);
+    nodes[14 + 6] = top(1);
+    let capture = |name: &str, address: u32, bytes: Vec<u8>| ReadCapture { label: label(name), address, bytes: HexBytes(bytes) };
+    let row = &mut receipt.rows[2];
+    row.sp = Word(top(0));
+    row.reads.extend([
+        capture("primary-publisher/records", 0x40a0_fc44, words(&[bases[0], STACK, 1, bases[1], STACK, 1, 0, 0, 0])),
+        capture("primary-publisher/cursor", 0x4089_ea98, words(&[0x4000_0000 + POOL + 2 * STACK])),
+        capture("primary-publisher/nodes", 0x4006_1524, words(&nodes)),
+    ]);
+}
+
+fn pool_verdict(value: &Value, retained: impl FnOnce(&mut Receipt), owned: impl FnOnce(&mut Receipt)) -> Option<Difference> {
+    let bytes = serde_json::to_vec(value).unwrap();
+    let contract = Contract::parse(&bytes).unwrap();
+    let digest = Sha256::of(&bytes);
+    let (mut left, mut right) = (receipt(&contract, &digest, Role::Retained), receipt(&contract, &digest, Role::Composed));
+    retained(&mut left);
+    owned(&mut right);
+    compare_with(&contract, &digest, left, right, |_| {}, |_, _| {}).0
+}
+
+const IN_ORDER: [u32; 2] = [POOL, POOL + STACK];
+const SWAPPED: [u32; 2] = [POOL + STACK, POOL];
+
+#[test]
+fn a_swapped_reservation_order_compares_equal_only_under_the_relation() {
+    assert_eq!(pool_verdict(&pool_contract(), |r| reserve(r, IN_ORDER), |o| reserve(o, SWAPPED)), None);
+    let mut plain = pool_contract();
+    plain["pool_allocation"] = Value::Null;
+    assert!(matches!(pool_verdict(&plain, |r| reserve(r, IN_ORDER), |o| reserve(o, SWAPPED)),
+        Some(Difference::Register { register: Register::Sp, .. })));
+}
+
+#[test]
+fn a_stack_top_in_another_tasks_allocation_differs() {
+    assert!(matches!(pool_verdict(&pool_contract(), |r| reserve(r, IN_ORDER), |o| { reserve(o, SWAPPED); o.rows[2].sp = Word(POOL + STACK); }),
+        Some(Difference::Register { register: Register::Sp, .. })));
+}
+
+#[test]
+fn a_node_whose_top_moved_to_another_task_differs() {
+    let moved = |o: &mut Receipt| {
+        reserve(o, SWAPPED);
+        let nodes = &mut o.rows[2].reads.last_mut().unwrap().bytes.0;
+        nodes[24..28].copy_from_slice(&(POOL + STACK).to_le_bytes());
+    };
+    assert_eq!(pool_verdict(&pool_contract(), |r| reserve(r, IN_ORDER), moved),
+        Some(Difference::Read { label: label("primary-publisher/nodes"), occurrence: 0 }));
+}
+
+#[test]
+fn sizes_and_address_spellings_stay_exact() {
+    let resized = |o: &mut Receipt| {
+        reserve(o, IN_ORDER);
+        let reads = &mut o.rows[2].reads;
+        reads[1].bytes = HexBytes(words(&[POOL, STACK, 1, POOL + STACK, 2 * STACK, 1, 0, 0, 0]));
+        reads[2].bytes = HexBytes(words(&[0x4000_0000 + POOL + 3 * STACK]));
+    };
+    assert_eq!(pool_verdict(&pool_contract(), |r| reserve(r, IN_ORDER), resized),
+        Some(Difference::Read { label: label("primary-publisher/records"), occurrence: 0 }));
+    let aliased = |o: &mut Receipt| {
+        reserve(o, SWAPPED);
+        o.rows[2].reads[1].bytes.0[0..4].copy_from_slice(&(0x4000_0000 + POOL + STACK).to_le_bytes());
+    };
+    assert_eq!(pool_verdict(&pool_contract(), |r| reserve(r, IN_ORDER), aliased),
+        Some(Difference::Read { label: label("primary-publisher/records"), occurrence: 0 }));
+}
+
+#[test]
+fn records_that_do_not_tile_the_pool_to_the_cursor_refuse() {
+    let gap = |o: &mut Receipt| reserve(o, [POOL, POOL + 2 * STACK]);
+    assert_eq!(pool_verdict(&pool_contract(), |r| reserve(r, IN_ORDER), gap), Some(Difference::PoolAllocation {
+        role: Role::Composed,
+        problem: AllocationProblem::Gap { expected: POOL + STACK, allocation: Allocation { task: 2, base: POOL + 2 * STACK, size: STACK } },
+    }));
+    let cursor = |o: &mut Receipt| { reserve(o, SWAPPED); o.rows[2].reads[2].bytes = HexBytes(words(&[0x4000_0000 + POOL + 3 * STACK])); };
+    assert_eq!(pool_verdict(&pool_contract(), |r| reserve(r, IN_ORDER), cursor), Some(Difference::PoolAllocation {
+        role: Role::Composed, problem: AllocationProblem::Cursor { expected: POOL + 2 * STACK, cursor: 0x4000_0000 + POOL + 3 * STACK },
+    }));
+    let outside = |r: &mut Receipt| reserve(r, [POOL - STACK, POOL]);
+    assert!(matches!(pool_verdict(&pool_contract(), outside, |o| reserve(o, IN_ORDER)),
+        Some(Difference::PoolAllocation { role: Role::Retained, problem: AllocationProblem::OutsidePool { .. } })));
+    let missing = |o: &mut Receipt| { reserve(o, IN_ORDER); o.rows[2].reads.retain(|read| read.label != label("primary-publisher/cursor")); };
+    assert_eq!(pool_verdict(&pool_contract(), |r| reserve(r, IN_ORDER), missing), Some(Difference::PoolAllocation {
+        role: Role::Composed, problem: AllocationProblem::Capture { label: label("primary-publisher/cursor"), captures: 0 },
+    }));
+}
+
+#[test]
+fn a_malformed_pool_allocation_refuses_at_parse() {
+    let refusal = |edit: fn(&mut Value)| {
+        let mut value = pool_contract();
+        edit(&mut value);
+        parse(&value).unwrap_err()
+    };
+    assert_eq!(refusal(|v| v["pool_allocation"]["cursor"] = json!("primary-publisher/missing")),
+        CatalogRefusal::PoolAllocation(PoolAllocationProblem::UnknownRead(label("primary-publisher/missing"))));
+    assert_eq!(refusal(|v| v["pool_allocation"]["cursor"] = json!("primary-publisher/records")),
+        CatalogRefusal::PoolAllocation(PoolAllocationProblem::CursorLength(label("primary-publisher/records"))));
+    assert_eq!(refusal(|v| v["pool_allocation"]["records"] = json!("primary-publisher/nodes")),
+        CatalogRefusal::PoolAllocation(PoolAllocationProblem::RecordLayout(label("primary-publisher/nodes"))));
+    assert_eq!(refusal(|v| v["pool_allocation"]["words"][1]["offset"] = json!(56)),
+        CatalogRefusal::PoolAllocation(PoolAllocationProblem::WordLayout(label("primary-publisher/nodes"))));
+    assert_eq!(refusal(|v| v["pool_allocation"]["stack_tops"] = json!(["primary-publisher/entry-core0"])),
+        CatalogRefusal::PoolAllocation(PoolAllocationProblem::StackTop(label("primary-publisher/entry-core0"))));
+    assert_eq!(refusal(|v| v["pool_allocation"]["pool"] = json!({"start": 0x00a5_b200, "end": POOL})),
+        CatalogRefusal::PoolAllocation(PoolAllocationProblem::Pool));
+    assert!(matches!(refusal(|v| v["pool_allocation"]["extra"] = json!(1)), CatalogRefusal::Shape(_)));
 }

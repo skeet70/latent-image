@@ -164,6 +164,21 @@ declarationValue declaration = case declaration of
     [ "kind" .= ("decoder-commit" :: Text), "decoder" .= (decoder :: Word16), "previous" .= previous, "next" .= next
     , "core" .= coreIndex core, "writer" .= writer, "citation" .= citation ]
 
+-- | The task-submission piece's pool-allocation relation, emitted only when task storage is composed too.
+poolAllocationValue :: Composition k -> Value
+poolAllocationValue composition = case ([pool | TaskSubmissionFacts _ pool <- map pieceFacts pieces], any ((== TaskStorage) . pieceKind) pieces) of
+  ([PoolAllocation (PoolSpan start end) records cursor positions tops (Citation citation)], True) -> object
+    [ "pool" .= object ["start" .= start, "end" .= end]
+    , "records" .= labelText records, "cursor" .= labelText cursor
+    , "words" .= [ object [ "read" .= labelText (allocationRead position), "offset" .= allocationOffset position
+                          , "stride" .= allocationStride position, "position" .= allocationPositionName (allocationPosition position) ]
+                 | position <- positions ]
+    , "stack_tops" .= map labelText tops
+    , "citation" .= citation ]
+  _ -> J.Null
+  where
+    pieces = compositionPieces composition
+
 contractValue :: JoinName k => Canonical -> B.ByteString -> Composition k -> B.ByteString -> TargetBytes -> Label -> Value -> Value
 contractValue source manifest composition composedDat composedTargets attach attachState = object
   [ "schema" .= (4 :: Int)
@@ -178,6 +193,7 @@ contractValue source manifest composition composedDat composedTargets attach att
       , "declared" .= object ["retained" .= map declarationValue retained, "composed" .= map declarationValue composed] ]
   , "joins" .= map joinValue (compositionJoins composition)
   , "pieces" .= map (pieceValue carriers) (sortOn pieceKind (compositionPieces composition))
+  , "pool_allocation" .= poolAllocationValue composition
   ]
   where
     qualification = compositionQualification composition
