@@ -405,8 +405,8 @@ presses emulator pulse = mapM_ (press emulator pulse)
 observe :: Emulator -> Maybe KeyPulse -> [Step] -> IO [Value]
 observe emulator pulse = mapM $ \step -> do
   let MenuState em es ec = stepExpected step
-  started <- getMonotonicTime
   forM_ (stepIdle step) (emulatorIdle emulator)
+  started <- getMonotonicTime
   (pressed, MenuState am as ac) <- pressStep emulator (stepKeyTiming pulse step) (stepKey step)
   ended <- getMonotonicTime
   pure (object [ "key" .= stepKey step, "pressed" .= length pressed
