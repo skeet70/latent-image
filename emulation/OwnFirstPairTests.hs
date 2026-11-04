@@ -172,6 +172,15 @@ main = do
             (set "classes" (toJSONList [callFrom 0x6000009f 0 0x6000009f]) (observationFor ControlWrongIRole))))
         , ("the wrong-I control is not satisfied by a readback difference", not (controlCheck ControlWrongIRole
             (set "armings" (toJSONList [arming "a" (swapDigest (readback 100 [DomainA])), arming "b" (readback 200 [DomainB])]) (observationFor ControlWrongIRole))))
+        , ("the wrong-I control holds when the observer stopped off the route", verdictOf ControlWrongIRole stoppedWrongI
+            == Just (True, Just "menu endpoint differs"))
+        , ("the wrong-I control does not hold under a machine failure", fmap fst (verdictOf ControlWrongIRole
+            (set "machine_failure" (String "core 0 halted") stoppedWrongI)) == Just False)
+        , ("+0x164 returning with A and F changed qualifies", either (const False) (either (const False) (const True))
+            (outcome (set "classes" (toJSONList [call 0 0x600001df]) valid)))
+        , ("+0x128 resuming with F and A from another context qualifies", checkCall 0
+            (callClass (entryState Slot128 0x80000153 0x1000 [(ContextWord, 0), (CurrentTask, current)] (Just 7)) 0 0x60000053 (Just index)) == Right ())
+        , ("+0x164 resuming in another mode refuses", refusedAs SemanticRefusal (set "classes" (toJSONList [call 0 0x60000093]) valid))
         , ("a run document other than the pinned one refuses", refusedAs BindingRefusal (set "inputs" (inputsFor OwnedRole [(1, digestOf "run")]) valid))
         , ("a boot ROM other than the pinned one refuses", refusedAs BindingRefusal (set "inputs" (inputsFor OwnedRole [(3, digestOf "rom")]) valid))
         , ("compare accepts runs with equal run, ROM, trajectory and observer", compared [] == Just True)
@@ -195,7 +204,14 @@ main = do
   unless (all snd checks) exitFailure
  where
   arming domain value = object ["domain" .= (domain :: String), "stop" .= object [], "readback" .= value]
-  controlCheck role value = either (const False) (controlSatisfied role) (outcomeFor role value)
+  controlCheck role value = maybe False fst (verdictOf role value)
+  verdictOf role value = either (const Nothing)
+    (\observed -> let verdict = controlVerdict (planBytesFor role) (planFor role) observed in Just (controlHolds verdict, controlStopped verdict))
+    (decodeObservation (BL.toStrict (A.encode value)))
+  stoppedWrongI = set "error" (String "menu endpoint differs")
+    (set "milestones" (toJSONList [object ["phase" .= ("cold-start" :: String), "pulse" .= Null, "expected" .= object ["menu" .= (69 :: Int), "setting" .= (52 :: Int), "cursor" .= (12 :: Int)]
+      , "reached" .= Null, "observed" .= object ["menu" .= (1 :: Int), "setting" .= (5 :: Int), "cursor" .= (2 :: Int)], "finished" .= routeEnd]])
+    (set "classes" (toJSONList [call 0x80 0x6000009f]) (observationFor ControlWrongIRole)))
   compared replaced = do
     stock <- either (const Nothing) (either (const Nothing) Just) (outcomeFor StockRole (observationFor StockRole))
     owned <- either (const Nothing) (either (const Nothing) Just) (outcome (set "inputs" (inputsFor OwnedRole replaced) valid))

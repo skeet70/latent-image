@@ -28,7 +28,8 @@ module Emulation.OwnFirstPairCheck
   , requiredSlots
   , pendingWindow
   , qualify
-  , controlSatisfied
+  , ControlVerdict (..)
+  , controlVerdict
   , qualifiedValue
   , RouteDifference (..)
   , compareRoutes
@@ -304,9 +305,9 @@ refusalKind refusal = case refusal of
 refuseWhen :: Bool -> Refusal -> Either Refusal ()
 refuseWhen condition refusal = when condition (Left refusal)
 
--- | Mode, T, F, I and A.
+-- | Mode, T and I. Stock task resume (loader A 0x4034c-0x40364, 0x437c0-0x437d8) rebuilds SPSR with F from the current CPSR and leaves A unwritten.
 control :: Word32 -> Word32
-control cpsr = cpsr .&. 0x1ff
+control cpsr = cpsr .&. 0xbf
 
 irqMasked :: Word32 -> Bool
 irqMasked cpsr = cpsr .&. 0x80 /= 0
@@ -334,7 +335,7 @@ checkCall tails (CallClass entry result tailHits _ _) = do
         _ -> Left (what ++ " is unreadable")
       expect what condition = unless condition (Left what)
       expectR0 value = expect ("r0 " ++ hex r0 ++ " differs from " ++ hex value) (r0 == value)
-      unchangedControl = expect "CPSR mode, T, F, I or A changed" (control (resultCpsr result) == control cpsr)
+      unchangedControl = expect "CPSR mode, T or I changed" (control (resultCpsr result) == control cpsr)
       withIrq masking = expect "CPSR differs from the entry with I set as the slot defines"
         (control (resultCpsr result) == (control cpsr .&. complement 0x80) .|. (if masking then 0x80 else 0))
       pointeeUnchanged = do
@@ -483,8 +484,8 @@ checkSegments plan armings final segments = do
   lastMaybe items = if null items then Nothing else Just (last items)
 
 -- | The observation's inputs must be the plan, the pinned run document, the plan's DAT and the pinned ROM.
-qualify :: B.ByteString -> Plan -> Observation -> Either Refusal Qualified
-qualify planBytes plan observation = do
+checkBindings :: B.ByteString -> Plan -> Observation -> Either Refusal ()
+checkBindings planBytes plan observation = do
   let inputs = obsInputs observation
   refuseWhen (take 1 inputs /= [sha256Hex (sha256 planBytes)]) PlanDigestDiffers
   refuseWhen (obsRole observation /= planRole plan) (RoleDiffers (planRole plan) (obsRole observation))
@@ -492,9 +493,31 @@ qualify planBytes plan observation = do
   refuseWhen (take 1 (drop 2 inputs) /= [planDatSha256 plan]) DatDiffers
   refuseWhen (take 1 (drop 3 inputs) /= [bootRomSha256]) (InputPinDiffers "boot ROM")
   refuseWhen (length inputs /= 6) (InputPinDiffers "input count")
+
+checkArmings :: Plan -> Observation -> Either Refusal ()
+checkArmings plan observation = do
   forM_ (obsArmings observation) $ \arming -> checkReadback plan ArmingReadback (armingReadback arming) (armingDomain arming)
   forM_ domains $ \domain -> refuseWhen (domain `notElem` map armingDomain (obsArmings observation)) (GuardNotArmed domain)
   refuseWhen (length (obsArmings observation) /= length domains) (WatchCoverage "a loader armed twice")
+
+-- | Every recorded class whose slot is outside the plan or whose result breaks the slot semantics.
+classRefusals :: Plan -> Observation -> [Refusal]
+classRefusals plan observation =
+  [ mismatch reason
+  | call <- obsClasses observation
+  , let entry = classEntry call
+        mismatch = CallMismatch (entryDomain entry) (entrySlot entry) (entryCpsr entry)
+  , Left reason <- [ if (entryDomain entry, entrySlot entry) `elem` entries then checkCall (tailsOf (entryDomain entry)) call
+                     else Left "the slot is not in the plan" ] ]
+ where
+  entries = [(planEntryDomain entry, planEntrySlot entry) | entry <- planEntries plan]
+  tailsOf domain = length [() | tailEntry <- planTails plan, planTailDomain tailEntry == domain]
+
+qualify :: B.ByteString -> Plan -> Observation -> Either Refusal Qualified
+qualify planBytes plan observation = do
+  let inputs = obsInputs observation
+  checkBindings planBytes plan observation
+  checkArmings plan observation
   final <- maybe (Left FinalReadbackMissing) Right (obsFinal observation)
   forM_ domains (checkReadback plan FinalReadback final)
   checkSegments plan (obsArmings observation) final (obsSegments observation)
@@ -510,14 +533,7 @@ qualify planBytes plan observation = do
   let routeEnd = maximum (0 : map milestoneFinished (obsMilestones observation))
       openSince = routeEnd - min routeEnd pendingWindow
   forM_ pending $ \entered -> refuseWhen (entered < openSince) (PendingBeforeRouteEnd entered)
-  let entries = [(planEntryDomain entry, planEntrySlot entry) | entry <- planEntries plan]
-      tailsOf domain = length [() | tailEntry <- planTails plan, planTailDomain tailEntry == domain]
-  forM_ (obsClasses observation) $ \call -> do
-    let entry = classEntry call
-        key = (entryDomain entry, entrySlot entry)
-        mismatch = CallMismatch (entryDomain entry) (entrySlot entry) (entryCpsr entry)
-    refuseWhen (key `notElem` entries) (mismatch "the slot is not in the plan")
-    either (Left . mismatch) pure (checkCall (tailsOf (entryDomain entry)) call)
+  forM_ (take 1 (classRefusals plan observation)) Left
   forM_ (obsMilestones observation) $ \milestone ->
     refuseWhen (not (milestoneReached milestone) || milestoneObserved milestone /= Just (milestoneExpected milestone))
       (RouteIncomplete (milestonePhase milestone))
@@ -536,13 +552,30 @@ qualify planBytes plan observation = do
     , qualifiedMilestones = obsMilestones observation
     }
 
--- | Whether a control role's observation was refused where its control acts: the restored A
--- +0x164 extent at A's arming readback, or a wrong-I A +0x164 class entered with I clear.
-controlSatisfied :: Role -> Either Refusal Qualified -> Bool
-controlSatisfied role outcome = case (role, outcome) of
-  (ControlRestoredRole, Left (ReadbackDiffers ArmingReadback DomainA 0x41140 _)) -> True
-  (ControlWrongIRole, Left (CallMismatch DomainA Slot164 cpsr _)) -> cpsr .&. 0x80 == 0
-  _ -> False
+-- | A control's outcome: whether it holds, the refusal that decides it, and the observer's stop reason.
+data ControlVerdict = ControlVerdict {controlHolds :: Bool, controlRefusal :: Maybe Refusal, controlStopped :: Maybe T.Text}
+  deriving (Eq, Show)
+
+-- | The restored control holds when qualification refuses at A's arming readback of the restored
+-- +0x164 extent. The wrong-I control holds, even when the observer stopped, when the bindings and
+-- arming readbacks pass, no machine failure is recorded, and an A +0x164 class entered with I
+-- clear breaks the slot semantics.
+controlVerdict :: B.ByteString -> Plan -> Observation -> ControlVerdict
+controlVerdict planBytes plan observation = case planRole plan of
+  ControlRestoredRole -> case qualify planBytes plan observation of
+    Left refusal@(ReadbackDiffers ArmingReadback DomainA 0x41140 _) -> ControlVerdict True (Just refusal) stopped
+    Left refusal -> ControlVerdict False (Just refusal) stopped
+    Right _ -> ControlVerdict False Nothing stopped
+  ControlWrongIRole -> case checkBindings planBytes plan observation >> checkArmings plan observation of
+    Left refusal -> ControlVerdict False (Just refusal) stopped
+    Right ()
+      | Just failure <- obsMachineFailure observation -> ControlVerdict False (Just (ObserverStopped failure)) stopped
+      | otherwise -> case [refusal | refusal@(CallMismatch DomainA Slot164 cpsr _) <- classRefusals plan observation, cpsr .&. 0x80 == 0] of
+          refusal : _ -> ControlVerdict True (Just refusal) stopped
+          [] -> ControlVerdict False (either Just (const Nothing) (qualify planBytes plan observation)) stopped
+  _ -> ControlVerdict False Nothing stopped
+ where
+  stopped = obsError observation
 
 reachedValue :: Reached -> Value
 reachedValue row = object
