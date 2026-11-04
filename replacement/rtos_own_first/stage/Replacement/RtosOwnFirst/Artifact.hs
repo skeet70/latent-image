@@ -8,6 +8,8 @@ module Replacement.RtosOwnFirst.Artifact
   , Staged
   , SourceRole (..)
   , TableFault (..)
+  , PinFault (..)
+  , Marker (..)
   , FrameSite (..)
   , StagingStep (..)
   , StageError (..)
@@ -18,6 +20,7 @@ module Replacement.RtosOwnFirst.Artifact
   , stage
   , restore
   , verifyRestore
+  , confineChanges
   , admittedTable
   , admittedLoader
   , admittedFrame
@@ -39,7 +42,9 @@ import Data.Word (Word32)
 import qualified Emulation.Sha256 as SHA
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
+import Numeric (showHex)
 import Replacement.RtosOwnFirst.Frame
+import Replacement.RtosOwnFirst.Pins
 import Replacement.RtosOwnFirst.Regions
 
 data CanonicalSource = CanonicalSource
@@ -95,6 +100,11 @@ data TableFault
   | BodyOutsideHost
   deriving (Eq, Show)
 
+data PinFault = SlotSetDiffers | ExtentDiffers SlotOffset | TailDiffers | BodyDiffers deriving (Eq, Show)
+
+-- | A linker-script marker symbol: `__slot_<k>_end` or `__slot_1618_body_start`.
+data Marker = SlotEnd SlotOffset | BodyStart deriving (Eq, Show)
+
 data FrameSite = SlotFrame SlotOffset | TailBodyFrame deriving (Eq, Show)
 
 data StagingStep = PatchStep | RebuildStep | ReparseStep | PreTableStep deriving (Eq, Show)
@@ -106,6 +116,9 @@ data StageError
   | SourceUnpinned SourceRole
   | RegionsUnparsed String
   | TableRejected Domain TableFault
+  | PinMismatch Domain PinFault
+  | MarkerMismatch Domain Marker
+  | SlackNotFill Domain GuestAddress
   | StockMismatch Domain SlotOffset
   | SymbolsUnparsed Domain
   | SymbolMissing Domain SymbolName
@@ -219,6 +232,18 @@ checkTable fill domain table = do
           && extentContains (regionExtent host) bodyStart && bodyEnd <= extentEnd (regionExtent host) -> Right ()
     _ -> fault BodyOutsideHost
 
+checkPins :: DomainPins -> Domain -> DomainTable -> Either StageError ()
+checkPins pinned domain table = do
+  let fault = Left . PinMismatch domain
+      actual = sortOn fst [(regionSlot region, regionExtent region) | region <- tableRegions table]
+      expected = sortOn fst (pinRows pinned)
+      tailRegion = tableTail table
+      body = tableBody table
+  unless (map fst actual == map fst expected) (fault SlotSetDiffers)
+  forM_ (zip actual expected) $ \((slot, extent), (_, pinnedExtent)) -> unless (extent == pinnedExtent) (fault (ExtentDiffers slot))
+  unless ((regionSlot tailRegion, regionExtent tailRegion) == pinTail pinned) (fault TailDiffers)
+  unless ((bodyHost body, bodyExtent body) == pinBody pinned) (fault BodyDiffers)
+
 -- | An llvm-nm row: address, size, type letter, name.
 data SymbolRow = SymbolRow {rowSymbol :: F.Symbol, rowAbsolute :: Bool}
 
@@ -234,28 +259,38 @@ placedAt domain rows name@(SymbolName text) = case [rowSymbol row | row <- rows,
   [symbol] -> Right (F.symbolAddress symbol)
   _ -> Left (SymbolMissing domain name)
 
+markerAt :: Domain -> [SymbolRow] -> Marker -> Either StageError GuestAddress
+markerAt domain rows marker = case [rowSymbol row | row <- rows, F.symbolName (rowSymbol row) == name] of
+  [symbol] -> Right (GuestAddress (F.symbolAddress symbol))
+  _ -> Left (SymbolMissing domain (SymbolName name))
+  where
+    name = case marker of
+      SlotEnd (SlotOffset slot) -> "__slot_" ++ showHex slot "_end"
+      BodyStart -> "__slot_1618_body_start"
+
 firstNonzero :: Word32 -> B.ByteString -> Maybe GuestAddress
 firstNonzero start bytes = (\index -> GuestAddress (start + fromIntegral index)) <$> B.findIndex (/= 0) bytes
 
--- | The owned bytes of one extent, with the trailing run of zero or fill words past the last symbol written as fill.
-installExtent :: Word32 -> GuestAddress -> B.ByteString -> [SymbolRow] -> Region -> B.ByteString -> InstalledExtent
-installExtent fill binBase bin rows region stock =
-  InstalledExtent region stock (B.concat (map U.putWord32 installed)) (length [() | (index, word) <- indexed, index >= slackFrom, word == 0])
+-- | The owned bytes of one extent. Every word no symbol covers must be the fill word, or zero, which is written as fill.
+installExtent :: Word32 -> Domain -> GuestAddress -> B.ByteString -> [SymbolRow] -> Region -> B.ByteString -> Either StageError InstalledExtent
+installExtent fill domain binBase bin rows region stock = do
+  installed <- forM words32 $ \(address, word) ->
+    if covered address || word == fill
+      then Right word
+      else if word == 0 then Right fill else Left (SlackNotFill domain (GuestAddress address))
+  pure (InstalledExtent region stock (B.concat (map U.putWord32 installed)) (length [() | (address, 0) <- words32, not (covered address)]))
   where
     extent@(Extent (GuestAddress start) _) = regionExtent region
     raw = slice binBase extent bin
     padded = raw <> B.replicate (extentBytes extent - B.length raw) 0
-    words32 = [U.word32At padded offset | offset <- [0, 4 .. extentBytes extent - 4]]
-    indexed = zip [0 :: Int ..] words32
-    symbolEnd = maximum (start : [F.symbolAddress symbol + F.symbolSize symbol | SymbolRow symbol False <- rows, extentContains extent (GuestAddress (F.symbolAddress symbol))])
-    firstFree = fromIntegral ((symbolEnd - start + 3) `div` 4)
-    trailing = length (takeWhile (`elem` [0, fill]) (reverse words32))
-    slackFrom = max firstFree (length words32 - trailing)
-    installed = [if index >= slackFrom && word == 0 then fill else word | (index, word) <- indexed]
+    words32 = [(start + fromIntegral offset, U.word32At padded offset) | offset <- [0, 4 .. extentBytes extent - 4]]
+    spans = [(F.symbolAddress symbol, F.symbolAddress symbol + F.symbolSize symbol) | SymbolRow symbol False <- rows]
+    covered address = any (\(low, high) -> low <= address && address < high) spans
 
-admitDomain :: CanonicalSource -> Word32 -> Domain -> DomainTable -> LinkedDomain -> Either StageError AdmittedDomain
-admitDomain source fill domain table linked = do
+admitDomain :: DomainPins -> CanonicalSource -> Word32 -> Domain -> DomainTable -> LinkedDomain -> Either StageError AdmittedDomain
+admitDomain pinned source fill domain table linked = do
   checkTable fill domain table
+  checkPins pinned domain table
   let base = domainLoaderBase domain
       given = sourceLoaders source M.! domain
       contained = sourceContained source M.! domain
@@ -271,6 +306,11 @@ admitDomain source fill domain table linked = do
   let body = tableBody table
   bodyAddress <- placedAt domain symbols (bodySymbol body)
   require (GuestAddress bodyAddress == extentStart (bodyExtent body)) (BodyNotAtAddress domain)
+  forM_ rows $ \region -> do
+    end <- markerAt domain symbols (SlotEnd (regionSlot region))
+    require (end == extentEnd (regionExtent region)) (MarkerMismatch domain (SlotEnd (regionSlot region)))
+  bodyMarker <- markerAt domain symbols BodyStart
+  require (bodyMarker == extentStart (bodyExtent body)) (MarkerMismatch domain BodyStart)
   forM_ [rowSymbol row | row <- symbols, not (rowAbsolute row)] $ \symbol -> do
     let low = F.symbolAddress symbol
         high = toInteger low + toInteger (F.symbolSize symbol)
@@ -287,8 +327,8 @@ admitDomain source fill domain table linked = do
   forM_ gaps $ \(gapStart@(GuestAddress low), gapEnd) ->
     forM_ (firstNonzero low (B.take (offset gapEnd - offset gapStart) (B.drop (offset gapStart) bin))) $
       Left . OwnedByteOutsideRegions domain
-  let installed = [installExtent fill binBase bin symbols region (slice base (regionExtent region) given) | region <- rows]
-      loader = replaceExtents base [(regionExtent (installedRegion entry), installedOwned entry) | entry <- installed] given
+  installed <- forM rows $ \region -> installExtent fill domain binBase bin symbols region (slice base (regionExtent region) given)
+  let loader = replaceExtents base [(regionExtent (installedRegion entry), installedOwned entry) | entry <- installed] given
       bodyStart = extentStart (bodyExtent body)
   walked <- either (Left . FrameRejected domain) Right
     (frames (OwnedCode base loader extents) (map regionEntry rows ++ [bodyStart]))
@@ -299,12 +339,12 @@ admitDomain source fill domain table linked = do
   require (composed bodyStart == bodyFrame body) (FrameMismatch domain TailBodyFrame (bodyFrame body) (composed bodyStart))
   pure (AdmittedDomain table installed loader walked linked)
 
--- | Admits the regions.json bytes and both domains' linked bodies over the canonical loaders.
-admit :: CanonicalSource -> B.ByteString -> LinkedDomain -> LinkedDomain -> Either StageError Admitted
-admit source regionsJson linkedA linkedB = do
+-- | Admits the regions.json bytes, which must match the pins, and both domains' linked bodies over the canonical loaders.
+admit :: RegionPins -> CanonicalSource -> B.ByteString -> LinkedDomain -> LinkedDomain -> Either StageError Admitted
+admit pinned source regionsJson linkedA linkedB = do
   table <- either (Left . RegionsUnparsed) Right (parseRegionTable regionsJson)
   admitted <- forM (zip domains [linkedA, linkedB]) $ \(domain, linked) ->
-    (,) domain <$> admitDomain source (tableFill table) domain (domainTable table domain) linked
+    (,) domain <$> admitDomain (pinned domain) source (tableFill table) domain (domainTable table domain) linked
   pure (Admitted regionsJson table (M.fromList admitted))
 
 admittedLoader :: Admitted -> Domain -> B.ByteString
@@ -365,6 +405,14 @@ firstChangeOutside allowed before after = find outside [index | (index, True) <-
   where
     outside index = not (any (\(start, size) -> index >= start && index < start + size) allowed)
 
+-- | Refuses a DAT that differs from the canonical one outside the installed extents and the main checksum.
+confineChanges :: CanonicalSource -> Admitted -> B.ByteString -> Either StageError ()
+confineChanges source admitted staged = do
+  let dat = sourceDat source
+  ranges <- extentRanges source admitted
+  require (B.length staged == B.length dat) (ChangeOutsideRegions (min (B.length dat) (B.length staged)))
+  forM_ (firstChangeOutside ((U.mainChecksumOffset, 4) : ranges) dat staged) (Left . ChangeOutsideRegions)
+
 stage :: CanonicalSource -> Admitted -> Either StageError Staged
 stage source admitted = do
   patched <- forM domains $ \domain -> do
@@ -375,11 +423,8 @@ stage source admitted = do
       (extentPatches domain admitted (\region -> slice base (regionExtent region) given) ((owned M.!) . regionSlot))
     pure (domain, patches)
   let patches = concatMap snd patched
-      dat = sourceDat source
   staged <- rebuildWith StagingRejected (sourceParsed source) patches
-  ranges <- extentRanges source admitted
-  require (B.length staged == B.length dat) (ChangeOutsideRegions (B.length dat))
-  forM_ (firstChangeOutside ((U.mainChecksumOffset, 4) : ranges) dat staged) (Left . ChangeOutsideRegions)
+  confineChanges source admitted staged
   consumed <- either (const (Left ContainerRejected)) Right (U.parseContainer staged)
   forM_ domains $ \domain -> do
     loader <- containedLoader (U.parsedParts consumed) domain

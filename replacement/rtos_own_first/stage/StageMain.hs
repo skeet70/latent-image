@@ -5,6 +5,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as L
 import qualified FujiAF.Host as H
 import Replacement.RtosOwnFirst.Artifact
+import Replacement.RtosOwnFirst.Pins (stockPins)
 import Replacement.RtosOwnFirst.Regions (Domain (..))
 import System.Directory (createDirectory, doesPathExist)
 import System.Environment (getArgs)
@@ -45,7 +46,7 @@ main = do
   symbolsB <- readInput 0x10000 (inputSymbolsB inputs)
   source <- refuse (canonicalSource dat loaderA loaderB)
   refuse (requirePinned source)
-  admitted <- refuse (admit source regions (LinkedDomain binA symbolsA) (LinkedDomain binB symbolsB))
+  admitted <- refuse (admit stockPins source regions (LinkedDomain binA symbolsA) (LinkedDomain binB symbolsB))
   staged <- refuse (stage source admitted)
   createDirectory output
   B.writeFile (output </> "candidate.DAT") (stagedDat staged)
