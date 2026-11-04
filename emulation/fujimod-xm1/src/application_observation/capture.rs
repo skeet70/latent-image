@@ -294,6 +294,7 @@ impl<'a> Recorder<'a> {
         if scoped && stock == QUEUE_ENTRY && r(0) == 1 {
             self.receives.push(Receive { core, sp: registers.sp.0 });
         }
+        // memcpy is not a target: interrupt handlers call it on their own stacks while task1 is current.
         if scoped && receiving && matches!(stock, KERNEL_RECEIVE | RELEASE_CALL) {
             self.add_target(machine, r(3), index)?;
         }

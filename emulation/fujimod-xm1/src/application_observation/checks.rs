@@ -605,7 +605,7 @@ pub fn queue_provenance(evidence: &RoleEvidence) -> Result<(), ApplicationRefusa
                 require(receive.call.is_none() && !receive.copied && registers.r[0].0 == scalar(&sample.packet, receive.destination.wrapping_add(8))?
                     && registers.r[1].0 == packet.wrapping_add(12) && registers.r[2].0 as usize == receive.payload.len(), check,
                     "the packet copy's arguments differ")?;
-                // memcpy is not a scope site: interrupt handlers call it on their own stacks while task1 is current.
+                // memcpy's entry is not sampled.
                 receive.call = Some(Call { before: sample, target: MEMCPY, continuation: COPY_RETURN, entered: true });
             }
             COPY_RETURN => {
