@@ -1,0 +1,283 @@
+{
+  "schema": 3,
+  "kind": "composed-startup-contract",
+  "qualification": "pending",
+  "pending_joins": [
+    "first-stage-secondary-rendezvous"
+  ],
+  "manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "canonical": {
+    "dat_sha256": "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490",
+    "targets": {
+      "record1": "2222222222222222222222222222222222222222222222222222222222222222",
+      "record2": "3333333333333333333333333333333333333333333333333333333333333333",
+      "loader_a": "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
+      "loader_b": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "image4": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+      "image5": "4444444444444444444444444444444444444444444444444444444444444444"
+    }
+  },
+  "composed": {
+    "dat_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "targets": {
+      "record1": "6666666666666666666666666666666666666666666666666666666666666666",
+      "record2": "3333333333333333333333333333333333333333333333333333333333333333",
+      "loader_a": "7777777777777777777777777777777777777777777777777777777777777777",
+      "loader_b": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
+      "image4": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
+      "image5": "4444444444444444444444444444444444444444444444444444444444444444"
+    }
+  },
+  "guard": {
+    "attach": "primary-publisher/entry-core0",
+    "attach_state": {
+      "peers": [
+        {
+          "core": 1,
+          "retained_pc": [
+            {
+              "start": 851968,
+              "end": 908288
+            }
+          ],
+          "composed_pc": [
+            {
+              "start": 66560,
+              "end": 69856
+            }
+          ],
+          "reason": "core 1 waits for the loader-A completion"
+        }
+      ],
+      "carriers": [
+        {
+          "piece": "first-stage",
+          "target": "record1",
+          "start": 24576,
+          "end": 25772,
+          "parts": [
+            {
+              "start": 24576,
+              "end": 25772,
+              "residency": "absent",
+              "reason": "illustrative carrier",
+              "canonical_sha256": null,
+              "composed_sha256": null
+            }
+          ]
+        },
+        {
+          "piece": "primary-publisher",
+          "target": "loader_a",
+          "start": 263216,
+          "end": 264620,
+          "parts": [
+            {
+              "start": 263216,
+              "end": 264620,
+              "residency": "absent",
+              "reason": "illustrative carrier",
+              "canonical_sha256": null,
+              "composed_sha256": null
+            }
+          ]
+        }
+      ],
+      "allowances": [],
+      "registers": [],
+      "board": [],
+      "relations": {
+        "timer": null,
+        "log": null,
+        "lz": null
+      }
+    }
+  },
+  "joins": [
+    {
+      "kind": "first-stage-secondary-rendezvous",
+      "members": [
+        "first-stage",
+        "record2-link"
+      ],
+      "spans": [
+        {
+          "target": "record2",
+          "start": 66560,
+          "end": 66564
+        }
+      ],
+      "basis": "observation-qualified",
+      "reason": "example only"
+    }
+  ],
+  "pieces": [
+    {
+      "kind": "first-stage",
+      "areas": [
+        "first-stage"
+      ],
+      "carriers": [
+        {
+          "target": "record1",
+          "start": 24576,
+          "end": 25772
+        }
+      ],
+      "edits": [
+        {
+          "target": "record1",
+          "start": 24576,
+          "end": 25772,
+          "sha256": "8888888888888888888888888888888888888888888888888888888888888888"
+        }
+      ],
+      "footprint": [
+        {
+          "target": "record2",
+          "start": 66560,
+          "end": 66564,
+          "basis": "runtime-premise",
+          "citation": "example only"
+        }
+      ],
+      "premises": [
+        "example premise"
+      ],
+      "catalog": {
+        "boundaries": [
+          {
+            "label": "first-stage/entry",
+            "kind": "entry",
+            "cores": [
+              0
+            ],
+            "composed_pc": 24576,
+            "retained_pc": null,
+            "stop": false,
+            "compare": "sequence",
+            "record_limit": 1
+          },
+          {
+            "label": "first-stage/handoff",
+            "kind": "site",
+            "cores": [
+              0
+            ],
+            "composed_pc": 24580,
+            "retained_pc": 6144,
+            "stop": true,
+            "compare": "sequence",
+            "record_limit": 1
+          }
+        ],
+        "owned_code": [
+          {
+            "start": 24576,
+            "end": 25772
+          }
+        ],
+        "writes": {
+          "allow": [],
+          "basis": "unenumerated",
+          "premise": "first-stage stores are not enumerated"
+        },
+        "reads": [
+          {
+            "label": "first-stage/peer-cells",
+            "boundary": "first-stage/handoff",
+            "address": 1073872896,
+            "length": 8,
+            "differs": null
+          }
+        ]
+      }
+    },
+    {
+      "kind": "primary-publisher",
+      "areas": [
+        "primary-initializer"
+      ],
+      "carriers": [
+        {
+          "target": "loader_a",
+          "start": 263216,
+          "end": 264620
+        }
+      ],
+      "edits": [
+        {
+          "target": "loader_a",
+          "start": 263216,
+          "end": 264620,
+          "sha256": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      ],
+      "footprint": [],
+      "premises": [],
+      "catalog": {
+        "boundaries": [
+          {
+            "label": "primary-publisher/entry-core0",
+            "kind": "entry",
+            "cores": [
+              0
+            ],
+            "composed_pc": 263216,
+            "retained_pc": 263216,
+            "stop": true,
+            "compare": "sequence",
+            "record_limit": 1
+          },
+          {
+            "label": "primary-publisher/return-core0",
+            "kind": "return",
+            "cores": [
+              0
+            ],
+            "composed_pc": 264000,
+            "retained_pc": 264000,
+            "stop": true,
+            "compare": "sequence",
+            "record_limit": 1
+          }
+        ],
+        "owned_code": [
+          {
+            "start": 263216,
+            "end": 263924
+          }
+        ],
+        "writes": {
+          "allow": [
+            {
+              "target": "physical",
+              "core": null,
+              "bank": null,
+              "start": 318176,
+              "end": 323852
+            },
+            {
+              "target": "physical",
+              "core": null,
+              "bank": null,
+              "start": 404564,
+              "end": 406624
+            }
+          ],
+          "basis": "premised",
+          "premise": "publisher scratch is the boot stack A window"
+        },
+        "reads": [
+          {
+            "label": "primary-publisher/table-a",
+            "boundary": "primary-publisher/return-core0",
+            "address": 1074059992,
+            "length": 5676,
+            "differs": null
+          }
+        ]
+      }
+    }
+  ]
+}

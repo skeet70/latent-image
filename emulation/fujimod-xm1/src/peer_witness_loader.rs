@@ -41,7 +41,11 @@ const ZERO: (u64, u64) = (0xddaa0, 0xf3420);
 const ZERO_GUEST: u64 = 0x4000_0000;
 const ZERO_CLAIM_END: u64 = 0xf33ec;
 const ENTRY_POOL: (u64, u64) = (0xd00c8, 0xd00fc);
-const REPLACED: [(u64, u64); 3] = [(0xd0020, 0xd00c8), (0xd09ac, 0xd09d0), (0xd0a44, 0xd0a64)];
+const REPLACED: (u64, u64) = (0xd0020, 0xd00c8);
+/// Stock loader-B completion load and post-load sites; the stock wait loads into r3.
+const STOCK_LOAD: Guest = Guest(0xd0a44);
+const STOCK_POST_LOAD: Guest = Guest(0xd0a48);
+const STOCK_LOADED: u8 = 3;
 const LOADER_A_COMPLETION: (u64, u64) = (0x40a00, 0x40a10);
 const LOADER_A_LITERAL: (u64, u64) = (0x40afc, 0x40b00);
 const VENEER: (u64, u64) = (0x180, 0x19c);
@@ -86,10 +90,10 @@ fn record_immutable_sha256(record: &[u8; RECORD_BYTES]) -> Sha256Digest {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-enum Scenario { Natural, Held, Delayed, NonOne, NegativeInvalidCore, NegativePredicateZero, NegativeInterleavedTail }
+enum Scenario { Natural, Held, Delayed, NonOne, NegativeInterleavedTail }
 impl Scenario {
     fn negative(self) -> bool {
-        matches!(self, Self::NegativeInvalidCore | Self::NegativePredicateZero | Self::NegativeInterleavedTail)
+        matches!(self, Self::NegativeInterleavedTail)
     }
 }
 
@@ -124,10 +128,6 @@ impl TryFrom<u64> for PollPeriod {
     }
 }
 
-fn poll_period<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<PollPeriod>, D::Error> {
-    Option::<PollPeriod>::deserialize(deserializer)
-}
-
 fn interleaved_tail<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<vectors::InterleavedTail>, D::Error> {
     vectors::InterleavedTail::deserialize(deserializer).map(Some)
 }
@@ -144,8 +144,8 @@ struct ProgramWire {
     load: Guest,
     post_load: Guest,
     loaded_register: RegisterIndex,
-    #[serde(deserialize_with = "poll_period")]
-    poll_period: Option<PollPeriod>,
+    #[serde(rename = "poll_period")]
+    _poll_period: PollPeriod,
     image: Option<(Guest, Guest)>,
     refusal: Option<Guest>,
     forbid_fetch: Vec<(Guest, Guest)>,
@@ -273,7 +273,7 @@ impl LoaderContract {
     fn composed_event_forbidden(&self, event: &GuardEvent) -> bool {
         if self.initializer.as_ref().is_some_and(initializer::Contract::owns_body)
             && event.core == Some(WitnessCore::Core1) && event.physical.is_some_and(|Address(address)|
-                address < initializer::BODY.1 && initializer::BODY.0 < address.saturating_add(event.size))
+                address < initializer::RETIRED_BODY.1 && initializer::RETIRED_BODY.0 < address.saturating_add(event.size))
             && matches!(event.source, GuardSource::CpuFetch | GuardSource::CpuRead) {
             return true;
         }
@@ -302,34 +302,29 @@ impl LoaderWire {
     fn validate_role(self, composed: bool) -> Result<LoaderContract, String> {
         require(self.schema == 4 && self.budget.0 == BUDGET, "loader-prefix witness requires schema 4 and budget 50000000")?;
         let program = self.program;
-        require(program.poll_period.is_none() == (self.scenario.kind == Scenario::NegativePredicateZero),
-            "only negative predicate-zero requires a null poll period")?;
-        require(match self.scenario.kind {
-            Scenario::NegativeInvalidCore | Scenario::NegativePredicateZero => !composed && program.kind == ProgramKind::Owned,
-            Scenario::NegativeInterleavedTail => composed && program.kind == ProgramKind::Owned,
-            _ => true,
-        }, "negative scenario requires its owned standalone or composed role")?;
+        require(self.scenario.kind != Scenario::NegativeInterleavedTail || (composed && program.kind == ProgramKind::Owned),
+            "negative interleaved-tail requires its owned composed role")?;
+        require(program.load == STOCK_LOAD && program.post_load == STOCK_POST_LOAD && program.loaded_register.0 == STOCK_LOADED,
+            "loader-prefix program wait sites differ from the stock wait")?;
         let record = Sha256Digest::parse(&program.record_sha256)?;
         let loader = Sha256Digest::parse(&program.loader_sha256)?;
         match program.kind {
             ProgramKind::Retained => require(record == RECORD2_SHA256 && program.record_immutable_sha256 == RECORD_IMMUTABLE_SHA256
                 && loader == LOADER_B_SHA256
-                && program.handoff == Guest(0x11850) && program.entry == Guest(0xd0020) && program.load == Guest(0xd0a44)
-                && program.post_load == Guest(0xd0a48) && program.loaded_register.0 == 3 && program.image.is_none()
+                && program.handoff == Guest(0x11850) && program.entry == Guest(0xd0020) && program.image.is_none()
                 && program.refusal.is_none() && program.forbid_fetch.is_empty() && program.forbid_read.is_empty(),
                 "retained loader-prefix program differs from the stock sites")?,
             ProgramKind::Owned => {
                 let (start, end) = program.image.map(|(start, end)| (start.0, end.0)).ok_or("owned loader prefix lacks its image")?;
                 require(start < end && start % 4 == 0 && end % 4 == 0 && start >= 0x103e8 && end <= 0x11800
                     && (start..end).contains(&SECOND_ENTRY), "owned loader-prefix image lacks the linked secondary entry or leaves record-2 padding")?;
-                let sites: Vec<u32> = [program.handoff, program.entry, program.load, program.post_load].into_iter()
+                let sites: Vec<u32> = [program.handoff, program.entry].into_iter()
                     .chain(program.refusal).map(|site| site.0).collect();
                 require(sites.iter().all(|site| *site != SECOND_ENTRY && site % 4 == 0 && (start..end).contains(site))
                     && sites.iter().collect::<BTreeSet<_>>().len() == sites.len(), "owned loader-prefix sites must be distinct aligned image addresses other than the secondary entry")?;
-                require(program.loaded_register.0 == 0 && program.forbid_fetch.len() == REPLACED.len()
-                    && spans(&program.forbid_fetch) == BTreeSet::from(REPLACED)
+                require(program.forbid_fetch.len() == 1 && spans(&program.forbid_fetch) == BTreeSet::from([REPLACED])
                     && program.forbid_read.len() == 1 && spans(&program.forbid_read) == BTreeSet::from([ENTRY_POOL]),
-                    "owned loader-prefix register or forbidden spans differ")?;
+                    "owned loader-prefix forbidden spans differ")?;
             }
         }
         Ok(LoaderContract {
@@ -522,11 +517,6 @@ struct ComposedReceipt<'a> {
 }
 
 #[derive(Serialize)]
-struct NegativeEvidence {
-    invalid_core_identity: Identity,
-}
-
-#[derive(Serialize)]
 struct Receipt<'a> {
     schema: u32,
     scenario: ScenarioWire,
@@ -548,8 +538,6 @@ struct Receipt<'a> {
     final_primary: &'a Option<wait::Primary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     initializer: &'a Option<initializer::Receipt>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    negative_evidence: &'a Option<NegativeEvidence>,
     #[serde(flatten)]
     composed: Option<ComposedReceipt<'a>>,
 }
@@ -597,7 +585,6 @@ struct Runner<'a> {
     initial_record_sha256: Option<Sha256Digest>,
     handoff_record_immutable_sha256: Option<Sha256Digest>,
     final_primary: Option<wait::Primary>,
-    negative_evidence: Option<NegativeEvidence>,
     phase: Phase,
     vectors: vectors::History,
 }
@@ -609,7 +596,6 @@ impl<'a> Runner<'a> {
             boot_watch: Value::Null, loaded_watch: Value::Null, scoped_watch: None, stops: Vec::new(), bindings: None,
             completion: None, endpoint: None, final_primary: None, phase: Phase::default(),
             initial_record_sha256: None, handoff_record_immutable_sha256: None,
-            negative_evidence: None,
             vectors: vectors::History::default(),
         }
     }
@@ -649,7 +635,7 @@ impl<'a> Runner<'a> {
             classes.push(range(ZERO, WatchKinds::HOST_WRITE.union(WatchKinds::MODEL_BUS_WRITE)));
         }
         if epoch != Epoch::Boot && self.contract.initializer.as_ref().is_some_and(initializer::Contract::owns_body) {
-            classes.push(range(initializer::BODY, WatchKinds::CPU_FETCH.union(WatchKinds::CPU_READ)));
+            classes.push(range(initializer::RETIRED_BODY, WatchKinds::CPU_FETCH.union(WatchKinds::CPU_READ)));
         }
         if epoch != Epoch::Boot {
             self.contract.append_composed_classes(&mut classes);
@@ -868,11 +854,11 @@ impl<'a> Runner<'a> {
             ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Write, rule: Confinement::Forbid(core0_writes) },
         ];
         if self.contract.kind == ProgramKind::Owned {
-            let mut fetch = REPLACED.to_vec();
+            let mut fetch = vec![REPLACED];
             let mut read = vec![ENTRY_POOL];
             if self.contract.initializer.as_ref().is_some_and(initializer::Contract::owns_body) {
-                fetch.push(initializer::BODY);
-                read.push(initializer::BODY);
+                fetch.push(initializer::RETIRED_BODY);
+                read.push(initializer::RETIRED_BODY);
             }
             if composed.is_some() {
                 fetch.extend(std::iter::once(FIRST_REPLACED).chain(SECOND_REPLACED));
@@ -1066,8 +1052,7 @@ impl<'a> Runner<'a> {
                 add.extend(match scenario {
                     Scenario::Held => vec![(HELD_GATE, Label::HeldGate)],
                     Scenario::Delayed => vec![(DELAY_ENTRY, Label::DelayEntry), (DELAY_RELEASE, Label::DelayRelease), (STORE, Label::CompletionStore)],
-                    Scenario::Natural | Scenario::NonOne | Scenario::NegativeInvalidCore
-                        | Scenario::NegativePredicateZero | Scenario::NegativeInterleavedTail => vec![(STORE, Label::CompletionStore)],
+                    Scenario::Natural | Scenario::NonOne | Scenario::NegativeInterleavedTail => vec![(STORE, Label::CompletionStore)],
                 });
                 self.add(machine, &add)?;
             }
@@ -1084,18 +1069,11 @@ impl<'a> Runner<'a> {
                     require(machine.session.board.cpu(core)?.rprofile_identity(None)? == expected,
                         "prefix-entry active CP14 identity changed")?;
                 }
-                if scenario == Scenario::NegativeInvalidCore {
-                    machine.session.board.cpu(1)?.rprofile_identity(Some(0x6003))?;
-                    let injected = machine.session.board.cpu(1)?.rprofile_identity(None)?;
-                    require(injected == 0x6003, "negative invalid-core injection differs")?;
-                    self.negative_evidence = Some(NegativeEvidence { invalid_core_identity: Identity(injected) });
-                }
                 self.phase.entry = true;
                 self.remove(machine, contract.entry.0)?;
             }
             Label::PostLoad => {
                 require(self.phase.entry && !self.phase.exit, "post-load stop out of phase")?;
-                require(scenario != Scenario::NegativeInvalidCore, "negative invalid-core reached post-load after injected identity")?;
                 let stop = &self.stops[index];
                 let loaded = stop.registers[usize::from(contract.loaded.0)].0;
                 let counter = stop.counter.ok_or("post-load stop lacks its counter")?;
@@ -1163,7 +1141,6 @@ impl<'a> Runner<'a> {
                 self.phase.stored = true;
             }
             Label::PrefixExit => {
-                require(scenario != Scenario::NegativeInvalidCore, "negative invalid-core reached prefix exit after injected identity")?;
                 require(self.phase.stored && !self.phase.exit, "prefix exit precedes the committed store")?;
                 self.endpoint = Some(self.endpoint(machine)?);
                 self.phase.exit = true;
@@ -1292,7 +1269,6 @@ pub(super) fn run(mut machine: Machine, contract: &LoaderContract, output: &Path
         final_primary: &runner.final_primary, composed,
         initial_record_sha256: &runner.initial_record_sha256, handoff_record_immutable_sha256: &runner.handoff_record_immutable_sha256,
         initializer: &initializer_receipt,
-        negative_evidence: &runner.negative_evidence,
     };
     let final_outcome = outcome.as_ref().map(|_| ()).map_err(Clone::clone).and(consumer_outcome).and(pair_outcome);
     let bytes = if contract.critical_pair.is_some() {

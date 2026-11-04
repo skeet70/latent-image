@@ -23,7 +23,6 @@ pub(crate) const LOG_LAST_SLOT_1: u32 = 31;
 pub(crate) const LOG_STORE: u32 = 0x400a_0040;
 pub(crate) const LOG_DISABLED: u32 = 0x3333_3333;
 pub(crate) const LOG_END: u32 = 0x5354_4544;
-pub(crate) const TIMER_COUNTER: *const u32 = 0xfff9_1000 as *const u32;
 
 pub(crate) const COMPANION_SAMPLE: *mut CompanionSample = 0x400a_00c0 as *mut CompanionSample;
 pub(crate) const CONFIG_VALID: *const u32 = 0x400a_00cc as *const u32;
@@ -225,4 +224,6 @@ extern "C" {
     pub(crate) fn xm1_retained_peripheral_final();
     /// `0x13574`; zero when the id is absent.
     pub(crate) fn xm1_retained_segment_lookup(id: SegmentId) -> GuestAddress;
+    /// Stores the kernel timer counter at `slot` through the labelled `xm1_secondary_log_read`/`_store` pair.
+    pub(crate) fn xm1_secondary_log_timestamp(slot: *mut u32);
 }

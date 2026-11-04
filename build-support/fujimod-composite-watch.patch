@@ -266,7 +266,7 @@ index 75630e7..b83cd63 100644
          let _ = self.release_store_watch();
          // The board exclusively owns processors; bindings hold only Weak
 diff --git a/crates/emulator/src/board/observation.rs b/crates/emulator/src/board/observation.rs
-index 2c429d7..849ab84 100644
+index 2c429d7..84020e6 100644
 --- a/crates/emulator/src/board/observation.rs
 +++ b/crates/emulator/src/board/observation.rs
 @@ -13,6 +13,15 @@ use std::{
@@ -278,8 +278,8 @@ index 2c429d7..849ab84 100644
 +pub use composite::{
 +    CompositeGuardConfig, DestinationPolicy, FailurePhase, GuardAttachError, GuardCore, GuardFault, GuardHook,
 +    GuardLocation, GuardMutation, GuardRange, GuardReport, GuardSpan, GuardStatus, GuardStatusToken, GuardTarget,
-+    MAX_GUARD_BYTES, MAX_GUARD_CORES, MAX_GUARD_PC_SPANS, MAX_GUARD_RANGES, MAX_GUARD_VIEWS, OwnedPcPolicy,
-+    SourcePolicy, TcmBank, WriteFaultReason, WriteOutcome, WriteSource,
++    MAX_GUARD_BYTES, MAX_GUARD_CORES, MAX_GUARD_PARTITIONS, MAX_GUARD_PC_SPANS, MAX_GUARD_RANGES, MAX_GUARD_VIEWS,
++    PartitionId, PcPartition, SourcePolicy, TcmBank, WriteFaultReason, WriteOutcome, WriteSource,
 +};
 +pub(in crate::board) use lifecycle::ObservationRegistry;
  type Span = (u64, u64);
@@ -545,10 +545,10 @@ index 2c429d7..849ab84 100644
  
 diff --git a/crates/emulator/src/board/observation/composite.rs b/crates/emulator/src/board/observation/composite.rs
 new file mode 100644
-index 0000000..f17b045
+index 0000000..9317386
 --- /dev/null
 +++ b/crates/emulator/src/board/observation/composite.rs
-@@ -0,0 +1,849 @@
+@@ -0,0 +1,930 @@
 +//! Opt-in write and mutation admission attached to the current classified
 +//! memory watch. The guard retains bounded policy, checked counters and the
 +//! first typed fault; it adds no rows to the watch.
@@ -566,8 +566,10 @@ index 0000000..f17b045
 +
 +pub const MAX_GUARD_CORES: usize = 16;
 +/// Allow and forbid ranges across every policy of one configuration.
-+pub const MAX_GUARD_RANGES: usize = 256;
-+pub const MAX_GUARD_PC_SPANS: usize = 128;
++pub const MAX_GUARD_RANGES: usize = 1024;
++pub const MAX_GUARD_PC_SPANS: usize = 512;
++/// Partitions of one `Cpu` source.
++pub const MAX_GUARD_PARTITIONS: usize = 64;
 +/// Pinned processor views per core.
 +pub const MAX_GUARD_VIEWS: usize = 256;
 +/// Heap bytes retained for one configuration's policy storage.
@@ -616,7 +618,7 @@ index 0000000..f17b045
 +    }
 +}
 +/// `Data` is CP15 c9,c1,0 (BTCM on Cortex-R5); `Instruction` is c9,c1,1 (ATCM).
-+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 +pub enum TcmBank {
 +    Data,
 +    Instruction,
@@ -639,7 +641,7 @@ index 0000000..f17b045
 +    }
 +}
 +/// A TCM span is an offset range within that core's bank.
-+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 +pub enum GuardTarget {
 +    Physical,
 +    Tcm { core: GuardCore, bank: TcmBank },
@@ -655,9 +657,17 @@ index 0000000..f17b045
 +    pub allow: Vec<GuardRange>,
 +    pub forbid: Vec<GuardRange>,
 +}
++/// Index into `SourcePolicy::partitions`.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
++pub struct PartitionId(u16);
++impl PartitionId {
++    pub fn get(self) -> usize {
++        usize::from(self.0)
++    }
++}
 +/// Writes by instructions whose PC lies in `spans` use `destinations`.
 +#[derive(Clone, Debug, PartialEq, Eq)]
-+pub struct OwnedPcPolicy {
++pub struct PcPartition {
 +    pub spans: Vec<GuardSpan>,
 +    pub destinations: DestinationPolicy,
 +}
@@ -675,9 +685,10 @@ index 0000000..f17b045
 +#[derive(Clone, Debug, PartialEq, Eq)]
 +pub struct SourcePolicy {
 +    pub source: WriteSource,
-+    /// For `Cpu` sources with `owned_pc`, the policy outside its spans.
++    /// For `Cpu` sources, the policy for PCs outside every partition.
 +    pub destinations: DestinationPolicy,
-+    pub owned_pc: Option<OwnedPcPolicy>,
++    /// `Cpu` sources only; span sets pairwise disjoint.
++    pub partitions: Vec<PcPartition>,
 +}
 +/// Exactly one policy for every `Cpu` and `CoreHost` core, `PhysicalHost`
 +/// and `ModelBus`.
@@ -708,6 +719,8 @@ index 0000000..f17b045
 +    DuplicateSource,
 +    InvalidTarget,
 +    InvalidPartition,
++    /// Two partition spans of one source intersect.
++    PartitionOverlap,
 +    AmbiguousRanges,
 +    BoundExceeded,
 +    InvalidMapping,
@@ -773,6 +786,8 @@ index 0000000..f17b045
 +        address: u64,
 +        bytes: usize,
 +        pc: Option<u64>,
++        /// The partition whose policy denied the write; `None` for the source default.
++        partition: Option<PartitionId>,
 +        /// The first offending chunk; absent when the access did not resolve.
 +        location: Option<GuardLocation>,
 +        reason: WriteFaultReason,
@@ -807,12 +822,20 @@ index 0000000..f17b045
 +    pub fn report(&self) -> GuardReport {
 +        self.0.report.get()
 +    }
++    /// Guest writes checked under each partition of `Cpu(core)`, indexed by `PartitionId`.
++    pub fn partition_checks(&self, core: GuardCore) -> Vec<u64> {
++        self.0.partition_checks.get(core.get()).map_or_else(Vec::new, |checks| checks.iter().map(Cell::get).collect())
++    }
 +}
 +
 +/// Policy and report shared by every guard callback, without Records or State.
 +pub(in crate::board) struct GuardLatch {
 +    /// Indexed by `slot`.
 +    policies: Vec<SourcePolicy>,
++    /// Per `Cpu` core: partition spans sorted by start.
++    partition_spans: Vec<Vec<(GuardSpan, PartitionId)>>,
++    /// Per `Cpu` core, indexed by `PartitionId`.
++    partition_checks: Vec<Vec<Cell<u64>>>,
 +    cores: usize,
 +    report: Cell<GuardReport>,
 +    /// Set by `Board::drop`; callbacks then admit without counting.
@@ -849,11 +872,26 @@ index 0000000..f17b045
 +            None => self.record(GuardFault::CounterOverflow),
 +        }
 +    }
-+    fn destinations(&self, source: WriteSource, pc: Option<u64>) -> &DestinationPolicy {
++    fn destinations(&self, source: WriteSource, pc: Option<u64>) -> (&DestinationPolicy, Option<PartitionId>) {
 +        let policy = &self.policies[slot(source, self.cores)];
-+        match (&policy.owned_pc, pc) {
-+            (Some(owned), Some(pc)) if owned.spans.iter().any(|span| span.holds(pc)) => &owned.destinations,
-+            _ => &policy.destinations,
++        let partition = match (source, pc) {
++            (WriteSource::Cpu(core), Some(pc)) => {
++                let spans = &self.partition_spans[core.get()];
++                let index = spans.partition_point(|(span, _)| span.start <= pc);
++                index.checked_sub(1).map(|index| spans[index]).filter(|(span, _)| pc < span.end).map(|(_, id)| id)
++            }
++            _ => None,
++        };
++        match partition {
++            Some(id) => (&policy.partitions[id.get()].destinations, Some(id)),
++            None => (&policy.destinations, None),
++        }
++    }
++    fn count_partition(&self, core: GuardCore, partition: PartitionId) {
++        let counter = &self.partition_checks[core.get()][partition.get()];
++        match counter.get().checked_add(1) {
++            Some(next) => counter.set(next),
++            None => self.record(GuardFault::CounterOverflow),
 +        }
 +    }
 +    fn end(&self) {
@@ -884,7 +922,7 @@ index 0000000..f17b045
 +        }
 +        let source = WriteSource::from(source);
 +        self.count(Counter::Write);
-+        let policy = self.destinations(source, None);
++        let (policy, _) = self.destinations(source, None);
 +        for (physical, len) in chunks {
 +            let location = GuardLocation { target: GuardTarget::Physical, address: physical };
 +            let reason = match physical.checked_add(len as u64) {
@@ -897,6 +935,7 @@ index 0000000..f17b045
 +                address,
 +                bytes,
 +                pc: None,
++                partition: None,
 +                location: Some(location),
 +                reason,
 +                outcome: WriteOutcome::Refused,
@@ -917,13 +956,22 @@ index 0000000..f17b045
 +        WriteSource::ModelBus => 2 * cores + 1,
 +    }
 +}
++/// `policy`'s lists are sorted by (target, start) and disjoint per target.
 +fn permits(policy: &DestinationPolicy, target: GuardTarget, start: u64, end: u64) -> bool {
-+    if policy.forbid.iter().any(|range| range.target == target && range.span.intersects(start, end)) {
++    // The last range of `list` on `target` starting at or before `address`.
++    let at_or_before = |list: &[GuardRange], address: u64| {
++        let index = list.partition_point(|range| (range.target, range.span.start) <= (target, address));
++        index.checked_sub(1).map(|index| list[index]).filter(|range| range.target == target)
++    };
++    if start >= end {
++        return true;
++    }
++    if at_or_before(&policy.forbid, end - 1).is_some_and(|range| range.span.intersects(start, end)) {
 +        return false;
 +    }
 +    let mut cursor = start;
 +    while cursor < end {
-+        match policy.allow.iter().find(|range| range.target == target && range.span.holds(cursor)) {
++        match at_or_before(&policy.allow, cursor).filter(|range| range.span.holds(cursor)) {
 +            Some(range) => cursor = range.span.end,
 +            None => return false,
 +        }
@@ -984,12 +1032,11 @@ index 0000000..f17b045
 +        let address = view.physical + (cursor - view.start);
 +        Some((GuardLocation { target: GuardTarget::Physical, address }, next))
 +    }
-+    fn admit(&self, source: WriteSource, address: u64, bytes: usize, pc: Option<u64>) -> Result<(), Denial> {
++    fn admit(&self, policy: &DestinationPolicy, address: u64, bytes: usize) -> Result<(), Denial> {
 +        let end = address
 +            .checked_add(bytes as u64)
 +            .filter(|&end| end <= ADDRESS_END)
 +            .ok_or((WriteFaultReason::Overflow, None))?;
-+        let policy = self.latch.destinations(source, pc);
 +        let mut cursor = address;
 +        while cursor < end {
 +            let (location, next) = self.resolve(cursor, end).ok_or((WriteFaultReason::Unresolved, None))?;
@@ -1009,12 +1056,16 @@ index 0000000..f17b045
 +        self.latch.count(Counter::Write);
 +        let bytes = usize::try_from(size).unwrap_or(0);
 +        let pc = scalar(&*cpu, Register::Pc).ok();
++        let (policy, partition) = self.latch.destinations(source, pc);
++        if let Some(partition) = partition {
++            self.latch.count_partition(self.core, partition);
++        }
 +        let decision = if !GUEST_WIDTHS.contains(&bytes) {
 +            Err((WriteFaultReason::InvalidWidth, None))
 +        } else if pc.is_none() {
 +            Err((WriteFaultReason::CpuInspection, None))
 +        } else {
-+            self.admit(source, address, bytes, pc)
++            self.admit(policy, address, bytes)
 +        };
 +        let Err((reason, location)) = decision else {
 +            return;
@@ -1026,7 +1077,7 @@ index 0000000..f17b045
 +            let _ = cpu.stop();
 +            WriteOutcome::Attempted
 +        };
-+        self.latch.record(GuardFault::Write { source, address, bytes, pc, location, reason, outcome });
++        self.latch.record(GuardFault::Write { source, address, bytes, pc, partition, location, reason, outcome });
 +    }
 +    fn mutation(&self, event: CpuMutation) -> bool {
 +        if self.latch.released.get() {
@@ -1038,7 +1089,8 @@ index 0000000..f17b045
 +        };
 +        let source = WriteSource::CoreHost(self.core);
 +        self.latch.count(Counter::Write);
-+        let Err((reason, location)) = self.admit(source, address, bytes, None) else {
++        let (policy, _) = self.latch.destinations(source, None);
++        let Err((reason, location)) = self.admit(policy, address, bytes) else {
 +            return true;
 +        };
 +        self.latch.record(GuardFault::Write {
@@ -1046,6 +1098,7 @@ index 0000000..f17b045
 +            address,
 +            bytes,
 +            pc: None,
++            partition: None,
 +            location,
 +            reason,
 +            outcome: WriteOutcome::Refused,
@@ -1109,39 +1162,44 @@ index 0000000..f17b045
 +    }
 +}
 +
++/// Sorts both lists by (target, start), as `permits` requires.
 +fn validate_destinations(
-+    policy: &DestinationPolicy,
++    policy: &mut DestinationPolicy,
 +    source: WriteSource,
 +    cores: usize,
 +) -> Result<(), GuardAttachError> {
-+    for list in [&policy.allow, &policy.forbid] {
-+        for (index, range) in list.iter().enumerate() {
++    for list in [&mut policy.allow, &mut policy.forbid] {
++        for range in list.iter() {
 +            match (range.target, source) {
 +                (GuardTarget::Physical, _) => (),
 +                (GuardTarget::Tcm { core, .. }, WriteSource::Cpu(owner) | WriteSource::CoreHost(owner))
 +                    if core == owner && core.get() < cores => {}
 +                (GuardTarget::Tcm { .. }, _) => return Err(GuardAttachError::InvalidTarget),
 +            }
-+            if list[..index]
-+                .iter()
-+                .any(|other| other.target == range.target && other.span.intersects(range.span.start, range.span.end))
-+            {
-+                return Err(GuardAttachError::AmbiguousRanges);
-+            }
 +        }
++        list.sort_unstable_by_key(|range| (range.target, range.span.start));
++        if list.windows(2).any(|pair| pair[0].target == pair[1].target && pair[1].span.start < pair[0].span.end) {
++            return Err(GuardAttachError::AmbiguousRanges);
++        }
++        list.shrink_to_fit();
 +    }
 +    Ok(())
 +}
 +fn retained_bytes<T>(list: &Vec<T>) -> Option<usize> {
 +    list.capacity().checked_mul(size_of::<T>())
 +}
-+fn shrink(policy: &mut DestinationPolicy) {
-+    policy.allow.shrink_to_fit();
-+    policy.forbid.shrink_to_fit();
++fn policy_lists(policy: &SourcePolicy) -> impl Iterator<Item = &DestinationPolicy> {
++    std::iter::once(&policy.destinations).chain(policy.partitions.iter().map(|partition| &partition.destinations))
++}
++struct ValidatedConfig {
++    /// Indexed by `slot`.
++    policies: Vec<SourcePolicy>,
++    /// Per `Cpu` core: partition spans sorted by start.
++    partition_spans: Vec<Vec<(GuardSpan, PartitionId)>>,
 +}
 +impl CompositeGuardConfig {
 +    /// Returns the policies indexed by `slot`.
-+    fn validate(self, cores: usize) -> Result<Vec<SourcePolicy>, GuardAttachError> {
++    fn validate(self, cores: usize) -> Result<ValidatedConfig, GuardAttachError> {
 +        use GuardAttachError::*;
 +        if cores == 0 || cores > MAX_GUARD_CORES {
 +            return Err(InvalidCore);
@@ -1149,63 +1207,80 @@ index 0000000..f17b045
 +        let expected = 2 * cores + 2;
 +        let (mut ranges, mut pc_spans) = (0usize, 0usize);
 +        for policy in &self.sources {
-+            let lists = [Some(&policy.destinations), policy.owned_pc.as_ref().map(|owned| &owned.destinations)];
-+            for destinations in lists.into_iter().flatten() {
++            for destinations in policy_lists(policy) {
 +                ranges = ranges
 +                    .checked_add(destinations.allow.len())
 +                    .and_then(|n| n.checked_add(destinations.forbid.len()))
 +                    .ok_or(BoundExceeded)?;
 +            }
-+            pc_spans = pc_spans
-+                .checked_add(policy.owned_pc.as_ref().map_or(0, |owned| owned.spans.len()))
-+                .ok_or(BoundExceeded)?;
++            for partition in &policy.partitions {
++                pc_spans = pc_spans.checked_add(partition.spans.len()).ok_or(BoundExceeded)?;
++            }
 +        }
-+        if self.sources.len() > expected || ranges > MAX_GUARD_RANGES || pc_spans > MAX_GUARD_PC_SPANS {
++        if self.sources.len() > expected
++            || ranges > MAX_GUARD_RANGES
++            || pc_spans > MAX_GUARD_PC_SPANS
++            || self.sources.iter().any(|policy| policy.partitions.len() > MAX_GUARD_PARTITIONS)
++        {
 +            return Err(BoundExceeded);
 +        }
 +        let mut slots: Vec<Option<SourcePolicy>> = (0..expected).map(|_| None).collect();
++        let mut partition_spans: Vec<Vec<(GuardSpan, PartitionId)>> = vec![Vec::new(); cores];
 +        for mut policy in self.sources {
 +            if let WriteSource::Cpu(core) | WriteSource::CoreHost(core) = policy.source
 +                && core.get() >= cores
 +            {
 +                return Err(InvalidCore);
 +            }
-+            validate_destinations(&policy.destinations, policy.source, cores)?;
-+            shrink(&mut policy.destinations);
-+            if let Some(owned) = &mut policy.owned_pc {
-+                if !matches!(policy.source, WriteSource::Cpu(_)) || owned.spans.is_empty() {
++            validate_destinations(&mut policy.destinations, policy.source, cores)?;
++            if !policy.partitions.is_empty() {
++                let WriteSource::Cpu(core) = policy.source else {
 +                    return Err(InvalidPartition);
-+                }
-+                for (index, span) in owned.spans.iter().enumerate() {
-+                    if owned.spans[..index].iter().any(|other| other.intersects(span.start, span.end)) {
++                };
++                let spans = &mut partition_spans[core.get()];
++                for (index, partition) in policy.partitions.iter_mut().enumerate() {
++                    if partition.spans.is_empty() {
 +                        return Err(InvalidPartition);
 +                    }
++                    let id = PartitionId(u16::try_from(index).map_err(|_| BoundExceeded)?);
++                    spans.extend(partition.spans.iter().map(|span| (*span, id)));
++                    partition.spans.shrink_to_fit();
++                    validate_destinations(&mut partition.destinations, policy.source, cores)?;
 +                }
-+                validate_destinations(&owned.destinations, policy.source, cores)?;
-+                owned.spans.shrink_to_fit();
-+                shrink(&mut owned.destinations);
++                spans.sort_unstable_by_key(|(span, _)| span.start);
++                if spans.windows(2).any(|pair| pair[1].0.start < pair[0].0.end) {
++                    return Err(PartitionOverlap);
++                }
++                spans.shrink_to_fit();
 +            }
++            policy.partitions.shrink_to_fit();
 +            if slots[slot(policy.source, cores)].replace(policy).is_some() {
 +                return Err(DuplicateSource);
 +            }
 +        }
 +        let policies = slots.into_iter().collect::<Option<Vec<_>>>().ok_or(MissingSource)?;
-+        let mut bytes = retained_bytes(&policies).ok_or(BoundExceeded)?;
++        let mut bytes = retained_bytes(&policies)
++            .zip(retained_bytes(&partition_spans))
++            .and_then(|(a, b)| a.checked_add(b))
++            .ok_or(BoundExceeded)?;
++        for spans in &partition_spans {
++            bytes = retained_bytes(spans).and_then(|n| bytes.checked_add(n)).ok_or(BoundExceeded)?;
++        }
 +        for policy in &policies {
-+            let lists = [Some(&policy.destinations), policy.owned_pc.as_ref().map(|owned| &owned.destinations)];
-+            for destinations in lists.into_iter().flatten() {
++            bytes = retained_bytes(&policy.partitions).and_then(|n| bytes.checked_add(n)).ok_or(BoundExceeded)?;
++            for partition in &policy.partitions {
++                bytes = retained_bytes(&partition.spans).and_then(|n| bytes.checked_add(n)).ok_or(BoundExceeded)?;
++            }
++            for destinations in policy_lists(policy) {
 +                for list in [&destinations.allow, &destinations.forbid] {
 +                    bytes = retained_bytes(list).and_then(|n| bytes.checked_add(n)).ok_or(BoundExceeded)?;
 +                }
-+            }
-+            if let Some(owned) = &policy.owned_pc {
-+                bytes = retained_bytes(&owned.spans).and_then(|n| bytes.checked_add(n)).ok_or(BoundExceeded)?;
 +            }
 +        }
 +        if bytes > MAX_GUARD_BYTES {
 +            return Err(BoundExceeded);
 +        }
-+        Ok(policies)
++        Ok(ValidatedConfig { policies, partition_spans })
 +    }
 +}
 +fn pin_tcm(cpu: &dyn Cpu) -> Result<[Option<TcmWindow>; 2], GuardAttachError> {
@@ -1321,8 +1396,14 @@ index 0000000..f17b045
 +            return Err(SiblingWatch);
 +        }
 +        let cores = self.cpus.len();
++        let validated = config.validate(cores)?;
++        let partition_checks = (0..cores)
++            .map(|core| validated.policies[core].partitions.iter().map(|_| Cell::new(0)).collect())
++            .collect();
 +        let latch = Rc::new(GuardLatch {
-+            policies: config.validate(cores)?,
++            policies: validated.policies,
++            partition_spans: validated.partition_spans,
++            partition_checks,
 +            cores,
 +            report: Cell::new(GuardReport {
 +                status: GuardStatus::Armed,
@@ -1400,10 +1481,10 @@ index 0000000..f17b045
 +mod tests;
 diff --git a/crates/emulator/src/board/observation/composite/tests.rs b/crates/emulator/src/board/observation/composite/tests.rs
 new file mode 100644
-index 0000000..dfe8769
+index 0000000..d0f3ed2
 --- /dev/null
 +++ b/crates/emulator/src/board/observation/composite/tests.rs
-@@ -0,0 +1,1119 @@
+@@ -0,0 +1,1275 @@
 +use super::*;
 +use crate::board::{
 +    bus::{self, Bus},
@@ -1814,7 +1895,7 @@ index 0000000..dfe8769
 +}
 +fn config(policy: impl Fn(WriteSource) -> DestinationPolicy) -> CompositeGuardConfig {
 +    let sources =
-+        every_source(2).into_iter().map(|source| SourcePolicy { source, destinations: policy(source), owned_pc: None });
++        every_source(2).into_iter().map(|source| SourcePolicy { source, destinations: policy(source), partitions: vec![] });
 +    CompositeGuardConfig { sources: sources.collect() }
 +}
 +fn forbidding(denied: WriteSource, forbidden: GuardRange) -> CompositeGuardConfig {
@@ -1859,7 +1940,33 @@ index 0000000..dfe8769
 +    if board.cpu(core).unwrap().features().access_refusal { WriteOutcome::Refused } else { WriteOutcome::Attempted }
 +}
 +fn denied(source: WriteSource, address: u64, bytes: usize, pc: Option<u64>, location: GuardLocation, outcome: WriteOutcome) -> Option<GuardFault> {
-+    Some(GuardFault::Write { source, address, bytes, pc, location: Some(location), reason: WriteFaultReason::Denied, outcome })
++    denied_in(None, source, address, bytes, pc, location, outcome)
++}
++fn denied_in(
++    partition: Option<PartitionId>,
++    source: WriteSource,
++    address: u64,
++    bytes: usize,
++    pc: Option<u64>,
++    location: GuardLocation,
++    outcome: WriteOutcome,
++) -> Option<GuardFault> {
++    Some(GuardFault::Write { source, address, bytes, pc, partition, location: Some(location), reason: WriteFaultReason::Denied, outcome })
++}
++fn span(start: u64, end: u64) -> GuardSpan {
++    GuardSpan::new(start, end).unwrap()
++}
++fn allowing(ranges: Vec<GuardRange>) -> DestinationPolicy {
++    DestinationPolicy { allow: ranges, forbid: vec![] }
++}
++fn partition(spans: Vec<GuardSpan>, allow: Vec<GuardRange>) -> PcPartition {
++    PcPartition { spans, destinations: allowing(allow) }
++}
++/// `open` on every source; core 0 gets `partitions`.
++fn partitioned(partitions: Vec<PcPartition>) -> CompositeGuardConfig {
++    let mut config = config(open);
++    config.sources[0].partitions = partitions;
++    config
 +}
 +fn at(target: GuardTarget, address: u64) -> GuardLocation {
 +    GuardLocation { target, address }
@@ -1989,11 +2096,34 @@ index 0000000..dfe8769
 +        policy
 +    });
 +    assert_eq!(board.memory_guard_attach(&mut second, ambiguous).err(), Some(AmbiguousRanges));
-+    let mut partitioned = config(open);
-+    let last = partitioned.sources.len() - 1;
-+    partitioned.sources[last].owned_pc =
-+        Some(OwnedPcPolicy { spans: vec![GuardSpan::new(0x30000, 0x30004).unwrap()], destinations: open(WriteSource::ModelBus) });
-+    assert_eq!(board.memory_guard_attach(&mut second, partitioned).err(), Some(InvalidPartition));
++    let mut host_partition = config(open);
++    let last = host_partition.sources.len() - 1;
++    host_partition.sources[last].partitions = vec![partition(vec![span(0x30000, 0x30004)], vec![physical(0, ADDRESS_END)])];
++    assert_eq!(board.memory_guard_attach(&mut second, host_partition).err(), Some(InvalidPartition));
++    let mut core_host_partition = config(open);
++    core_host_partition.sources[1].partitions = vec![partition(vec![span(0x30000, 0x30004)], vec![])];
++    assert_eq!(board.memory_guard_attach(&mut second, core_host_partition).err(), Some(InvalidPartition));
++    let empty = partitioned(vec![partition(vec![], vec![])]);
++    assert_eq!(board.memory_guard_attach(&mut second, empty).err(), Some(InvalidPartition));
++    let across = partitioned(vec![
++        partition(vec![span(0x30000, 0x30008)], vec![]),
++        partition(vec![span(0x30004, 0x3000c)], vec![]),
++    ]);
++    assert_eq!(board.memory_guard_attach(&mut second, across).err(), Some(PartitionOverlap));
++    let inside = partitioned(vec![partition(vec![span(0x30000, 0x30008), span(0x30004, 0x30010)], vec![])]);
++    assert_eq!(board.memory_guard_attach(&mut second, inside).err(), Some(PartitionOverlap));
++    let foreign_partition_tcm = partitioned(vec![partition(
++        vec![span(0x30000, 0x30008)],
++        vec![range(GuardTarget::Tcm { core: core(1), bank: TcmBank::Data }, 0, 4)],
++    )]);
++    assert_eq!(board.memory_guard_attach(&mut second, foreign_partition_tcm).err(), Some(InvalidTarget));
++    let too_many = partitioned(
++        (0..=MAX_GUARD_PARTITIONS as u64).map(|index| partition(vec![span(index * 8, index * 8 + 8)], vec![])).collect(),
++    );
++    assert_eq!(board.memory_guard_attach(&mut second, too_many).err(), Some(BoundExceeded));
++    let too_many_spans =
++        partitioned(vec![partition((0..=MAX_GUARD_PC_SPANS as u64).map(|index| span(index * 8, index * 8 + 4)).collect(), vec![])]);
++    assert_eq!(board.memory_guard_attach(&mut second, too_many_spans).err(), Some(BoundExceeded));
 +    let oversized = config(|source| {
 +        let mut policy = open(source);
 +        policy.forbid = (0..MAX_GUARD_RANGES as u64).map(|index| physical(index * 4, index * 4 + 4)).collect();
@@ -2080,28 +2210,134 @@ index 0000000..dfe8769
 +}
 +
 +#[test]
-+fn owned_pc_spans_select_their_destination_policy() {
++fn pc_partitions_select_their_own_destinations() {
++    let a = partition(vec![span(0x30000, 0x30008)], vec![physical(0x40000, 0x40004)]);
++    let b = partition(vec![span(0x30100, 0x30108)], vec![physical(0x40010, 0x40014)]);
 +    let mut board = board();
-+    program(&board, 0, 0x30100, 0x66, 0x40000);
-+    program(&board, 0, 0x30000, 0x77, 0x40000);
 +    let mut watch = watch(&board, 64);
-+    let mut guarded = forbidding(WriteSource::Cpu(core(0)), physical(0x40000, 0x40004));
-+    guarded.sources[0].owned_pc = Some(OwnedPcPolicy {
-+        spans: vec![GuardSpan::new(0x30000, 0x30008).unwrap()],
-+        destinations: DestinationPolicy { allow: vec![physical(0x40000, 0x40004)], forbid: vec![] },
-+    });
-+    let token = board.memory_guard_attach(&mut watch, guarded).unwrap();
++    let token = board.memory_guard_attach(&mut watch, partitioned(vec![a.clone(), b.clone()])).unwrap();
++    program(&board, 0, 0x30000, 0x77, 0x40000);
 +    board.run_until(4, 1).unwrap();
++    program(&board, 0, 0x30100, 0x66, 0x40010);
++    board.run_until(8, 1).unwrap();
++    program(&board, 0, 0x30200, 0x55, 0x40020);
++    board.run_until(12, 1).unwrap();
 +    assert_eq!(token.report().first_fault, None);
-+    assert_eq!(physical_word(&board, 0x40000), 0x77);
-+    board.write_register(0, Register::Pc, 0x30100).unwrap();
-+    board.write_register(0, arm::CORE[0], 0x66).unwrap();
-+    let result = board.run_until(8, 1);
++    assert_eq!([0x40000, 0x40010, 0x40020].map(|address| physical_word(&board, address)), [0x77, 0x66, 0x55]);
++    assert_eq!(token.partition_checks(core(0)), [1, 1]);
++    assert_eq!(token.partition_checks(core(1)), Vec::<u64>::new());
++
++    for (from, to, id) in [(0x30000, 0x40010, 0), (0x30100, 0x40000, 1)] {
++        let mut board = self::board();
++        let mut watch = self::watch(&board, 64);
++        let token = board.memory_guard_attach(&mut watch, partitioned(vec![a.clone(), b.clone()])).unwrap();
++        program(&board, 0, from, 0x44, to);
++        let result = board.run_until(4, 1);
++        let partition = Some(PartitionId(id));
++        let location = at(GuardTarget::Physical, to);
++        assert_eq!(token.report().first_fault, denied_in(partition, WriteSource::Cpu(core(0)), to, 4, Some(from), location, outcome(&board, 0)));
++        assert_guest_denial(&board, result, to, 0x44, 0);
++    }
++}
++
++#[test]
++fn a_broad_partition_does_not_cover_another() {
++    let broad = partition(vec![span(0x30000, 0x30008)], vec![physical(0, ADDRESS_END)]);
++    let narrow = partition(vec![span(0x30100, 0x30108)], vec![physical(0x40010, 0x40014)]);
++    let mut board = board();
++    let mut watch = watch(&board, 64);
++    let token = board.memory_guard_attach(&mut watch, partitioned(vec![broad, narrow])).unwrap();
++    program(&board, 0, 0x30100, 0x66, 0x40000);
++    let result = board.run_until(4, 1);
++    let location = at(GuardTarget::Physical, 0x40000);
 +    assert_eq!(
 +        token.report().first_fault,
-+        denied(WriteSource::Cpu(core(0)), 0x40000, 4, Some(0x30100), at(GuardTarget::Physical, 0x40000), outcome(&board, 0))
++        denied_in(Some(PartitionId(1)), WriteSource::Cpu(core(0)), 0x40000, 4, Some(0x30100), location, outcome(&board, 0))
 +    );
-+    assert_guest_denial(&board, result, 0x40000, 0x66, 0x77);
++    assert_guest_denial(&board, result, 0x40000, 0x66, 0);
++}
++
++#[test]
++fn span_edges_select_the_partition_that_holds_the_pc() {
++    // Abutting spans; the default allows only 0x40020.
++    let first = partition(vec![span(0x30000, 0x30008)], vec![physical(0x40000, 0x40004)]);
++    let second = partition(vec![span(0x30008, 0x30010)], vec![physical(0x40010, 0x40014)]);
++    let mut config = partitioned(vec![first, second]);
++    config.sources[0].destinations = allowing(vec![physical(0x40020, 0x40024)]);
++    let mut board = board();
++    let mut watch = watch(&board, 64);
++    let token = board.memory_guard_attach(&mut watch, config).unwrap();
++    // First instruction of `first`, first of `second`, first past `second`.
++    for (tick, (pc, target)) in [(0x30000, 0x40000), (0x30008, 0x40010), (0x30010, 0x40020)].into_iter().enumerate() {
++        program(&board, 0, pc, 0x11, target);
++        board.run_until(4 * (tick as u64 + 1), 1).unwrap();
++    }
++    // Last instruction of `first`.
++    program(&board, 0, 0x30004, 0x22, 0x40000);
++    board.run_until(16, 1).unwrap();
++    assert_eq!(token.report().first_fault, None);
++    assert_eq!(physical_word(&board, 0x40000), 0x22);
++    assert_eq!(token.partition_checks(core(0)), [2, 1]);
++}
++
++#[test]
++fn sorted_destination_lists_cover_straddles_and_forbid_edges() {
++    // Core-host writes on core 0 use `sources[1]`'s default.
++    let allowed = |forbid: Vec<GuardRange>| {
++        let mut config = config(open);
++        config.sources[1].destinations = DestinationPolicy {
++            allow: vec![physical(0x40008, 0x40010), physical(0x40000, 0x40008), physical(0x40020, 0x40030)],
++            forbid,
++        };
++        config
++    };
++    let board = board();
++    let mut watch = watch(&board, 64);
++    board.memory_guard_attach(&mut watch, allowed(vec![])).unwrap();
++    assert!(board.write_memory(0, 0x40004, &[1; 8]).is_ok(), "straddle of abutting allows");
++    board.memory_watch_end(&mut watch).unwrap();
++    for (address, bytes, forbid) in [
++        (0x4000c, 8, vec![]),
++        (0x40020, 4, vec![physical(0x40020, 0x40024), physical(0x40028, 0x4002c)]),
++        (0x40024, 8, vec![physical(0x40020, 0x40024), physical(0x4002b, 0x4002c)]),
++    ] {
++        let mut watch = self::watch(&board, 64);
++        board.memory_guard_attach(&mut watch, allowed(forbid)).unwrap();
++        assert!(board.write_memory(0, address, &vec![2; bytes]).is_err(), "{address:#x}");
++        board.memory_watch_end(&mut watch).unwrap();
++    }
++    let mut watch = self::watch(&board, 64);
++    board.memory_guard_attach(&mut watch, allowed(vec![physical(0x40020, 0x40024), physical(0x4002c, 0x40030)])).unwrap();
++    assert!(board.write_memory(0, 0x40024, &[3; 8]).is_ok(), "between two forbids");
++    board.memory_watch_end(&mut watch).unwrap();
++}
++
++#[test]
++fn the_most_partitions_resolve_from_every_edge_of_interleaved_spans() {
++    let count = MAX_GUARD_PARTITIONS as u64;
++    // Slot `j` belongs to partition `j % count`, so each partition's two spans have every other partition's between them.
++    let slots = 2 * count;
++    let start = |slot: u64| 0x30000 + 16 * slot;
++    let cell = |index: u64| 0x40000 + 4 * index;
++    let partitions = (0..count).map(|index| partition(
++        vec![span(start(index), start(index) + 8), span(start(index + count), start(index + count) + 8)],
++        vec![physical(cell(index), cell(index) + 4)],
++    ));
++    let mut board = board();
++    let mut watch = watch(&board, 64);
++    let token = board.memory_guard_attach(&mut watch, partitioned(partitions.collect())).unwrap();
++    let mut tick = 0;
++    for slot in 0..slots {
++        let index = slot % count;
++        for pc in [start(slot), start(slot) + 4] {
++            program(&board, 0, pc, slot, cell(index));
++            tick += 4;
++            board.run_until(tick, 1).unwrap();
++        }
++    }
++    assert_eq!(token.report().first_fault, None);
++    assert_eq!(token.partition_checks(core(0)), vec![4; MAX_GUARD_PARTITIONS]);
++    assert!((0..count).all(|index| u64::from(physical_word(&board, cell(index))) == index + count));
 +}
 +
 +#[test]
@@ -2161,6 +2397,7 @@ index 0000000..dfe8769
 +        address: ATCM + 0xffc,
 +        bytes: 8,
 +        pc: None,
++        partition: None,
 +        location: None,
 +        reason: WriteFaultReason::Unresolved,
 +        outcome: WriteOutcome::Refused,

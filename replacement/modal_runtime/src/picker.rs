@@ -1,12 +1,10 @@
 //! Owned generic value picker for the controller-75 keys of the menu-node-1
 //! shooting-menu pickers: Up, Down, Left, Right, Ok, Back and the router tail.
 //!
-//! A controller-75 cell named by the build-time table runs its owned action
-//! while the open menu node is a table node and the live cell word and action
-//! target equal the table's; every other cell runs the stock action. An owned
-//! action runs the stock generic path through `PickerServices`, or returns
-//! `Outcome::Decline` before its first side-effecting service call, and the
-//! dispatcher then runs the stock action.
+//! `modal75::plan` selects a picker cell of `Table75`. Its action runs the
+//! stock generic path through `PickerServices`, or returns `Outcome::Decline`
+//! before its first side-effecting service call, and the dispatcher then runs
+//! the stock action.
 
 #![cfg_attr(not(test), allow(dead_code))]
 
@@ -17,84 +15,22 @@ pub struct NodeAddress(pub u32);
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PropertyId(pub u16);
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PickerNode {
     pub node: NodeAddress,
     pub property: PropertyId,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
 pub enum PickerAction {
-    Up,
-    Down,
-    Left,
-    Right,
-    Ok,
-    Back,
-    RouterTail,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct PickerCell {
-    pub controller: u16,
-    pub state: u16,
-    pub event: u16,
-    /// Full stock cell word.
-    pub word: u32,
-    /// Stock action address.
-    pub target: u32,
-    pub action: PickerAction,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct PickerTable {
-    pub nodes: &'static [PickerNode],
-    pub cells: &'static [PickerCell],
-}
-
-/// The owned table, generated from owner-supplied image5 bytes and the
-/// decoded menu tables by `//replacement/modal_runtime:picker-table`.
-#[cfg(any(rb_menu_picker_owned, rb_menu_picker_vectors))]
-pub static TABLE: PickerTable = include!(env!("RB_PICKER_TABLE"));
-
-/// Live cell word and action target read before the action.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct LiveCell {
-    pub word: u32,
-    pub target: u32,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum PickerPlan<'a> {
-    Owned(&'a PickerCell, &'a PickerNode),
-    Stock,
-}
-
-const PICKER_CONTROLLER: u16 = 75;
-
-pub fn plan<'a>(
-    table: &'a PickerTable,
-    controller: u16,
-    state: u16,
-    event: u16,
-    live: LiveCell,
-    open_node: NodeAddress,
-) -> PickerPlan<'a> {
-    if controller != PICKER_CONTROLLER {
-        return PickerPlan::Stock;
-    }
-    let Some(node) = table.nodes.iter().find(|node| node.node == open_node) else {
-        return PickerPlan::Stock;
-    };
-    let Some(cell) =
-        table.cells.iter().find(|cell| cell.controller == controller && cell.state == state && cell.event == event)
-    else {
-        return PickerPlan::Stock;
-    };
-    if cell.word != live.word || cell.target != live.target {
-        return PickerPlan::Stock;
-    }
-    PickerPlan::Owned(cell, node)
+    Up = 0,
+    Down = 1,
+    Left = 2,
+    Right = 3,
+    Ok = 4,
+    Back = 5,
+    RouterTail = 6,
 }
 
 /// Menu node id returned by `0x61d154`.
@@ -212,20 +148,31 @@ const RIGHT_CLASSES: &[u32] = &[5, 0x184, 0x141, 0x167, 0x26, 0x19, 0xed, 0xee, 
 /// 0xf5 (85), 0xed (88, 102), 0xee (95), 0xfe (106).
 const BACK_CLASSES: &[u32] = &[5, 0x167, 0xf5, 0xed, 0xee, 0xfe];
 
+/// `check-bank-allowlist` bounds a jump-table index only after a range
+/// compare; `black_box` hides the discriminant range, so the compare and the
+/// `Decline` arm stay in the code.
 pub fn run(action: PickerAction, node: &PickerNode, services: &mut impl PickerServices) -> Outcome {
-    match action {
-        PickerAction::Up => step(node, STAGE_UP, services),
-        PickerAction::Down => step(node, STAGE_DOWN, services),
-        PickerAction::Left => select(node, LEFT_CLASSES, &[WordCell::Mode9544f8, WordCell::Mode950474, WordCell::Mode950478], services),
-        PickerAction::Ok => select(
+    const UP: u8 = PickerAction::Up as u8;
+    const DOWN: u8 = PickerAction::Down as u8;
+    const LEFT: u8 = PickerAction::Left as u8;
+    const RIGHT: u8 = PickerAction::Right as u8;
+    const OK: u8 = PickerAction::Ok as u8;
+    const BACK: u8 = PickerAction::Back as u8;
+    const ROUTER_TAIL: u8 = PickerAction::RouterTail as u8;
+    match core::hint::black_box(action as u8) {
+        UP => step(node, STAGE_UP, services),
+        DOWN => step(node, STAGE_DOWN, services),
+        LEFT => select(node, LEFT_CLASSES, &[WordCell::Mode9544f8, WordCell::Mode950474, WordCell::Mode950478], services),
+        OK => select(
             node,
             OK_CLASSES,
             &[WordCell::Mode9544f8, WordCell::Mode950474, WordCell::Mode950478, WordCell::Mode954500],
             services,
         ),
-        PickerAction::Right => right(node, services),
-        PickerAction::Back => back(node, services),
-        PickerAction::RouterTail => router_tail(services),
+        RIGHT => right(node, services),
+        BACK => back(node, services),
+        ROUTER_TAIL => router_tail(services),
+        _ => Outcome::Decline,
     }
 }
 
@@ -340,19 +287,7 @@ mod tests {
 
     const PROPERTY: u16 = 0xf6;
 
-    static NODES: [PickerNode; 2] = [
-        PickerNode { node: NodeAddress(0x0078_2000), property: PropertyId(PROPERTY) },
-        PickerNode { node: NodeAddress(0x0078_2100), property: PropertyId(0x1a) },
-    ];
-
-    static CELLS: [PickerCell; 2] = [
-        PickerCell { controller: 75, state: 0, event: 8, word: 0x0000_0108, target: 0x00c7_2e10, action: PickerAction::Ok },
-        PickerCell { controller: 74, state: 0, event: 8, word: 0x0000_0108, target: 0x00c7_2e10, action: PickerAction::Ok },
-    ];
-
-    static TABLE: PickerTable = PickerTable { nodes: &NODES, cells: &CELLS };
-
-    static NODE: &PickerNode = &NODES[0];
+    static NODE: &PickerNode = &PickerNode { node: NodeAddress(0x0078_2000), property: PropertyId(PROPERTY) };
 
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     enum Call {
@@ -435,39 +370,6 @@ mod tests {
         [PickerAction::Up, PickerAction::Down, PickerAction::Left, PickerAction::Right, PickerAction::Ok, PickerAction::Back];
 
     const ACCEPTED: [u32; 2] = [u32::MAX, 2];
-
-    #[test]
-    fn plan_owns_a_table_cell_on_a_table_node() {
-        let live = LiveCell { word: 0x0000_0108, target: 0x00c7_2e10 };
-        let PickerPlan::Owned(cell, node) = plan(&TABLE, 75, 0, 8, live, NodeAddress(0x0078_2100)) else {
-            panic!("expected owned");
-        };
-        assert_eq!(cell.action, PickerAction::Ok);
-        assert_eq!(node.property, PropertyId(0x1a));
-    }
-
-    #[test]
-    fn plan_refuses_unknown_node_cell_word_and_target() {
-        let live = LiveCell { word: 0x0000_0108, target: 0x00c7_2e10 };
-        let node = NodeAddress(0x0078_2000);
-        let refusals = [
-            plan(&TABLE, 75, 0, 8, live, NodeAddress(0x0078_2004)),
-            plan(&TABLE, 75, 0, 6, live, node),
-            plan(&TABLE, 75, 1, 8, live, node),
-            plan(&TABLE, 75, 0, 8, LiveCell { word: 0x0000_0109, ..live }, node),
-            plan(&TABLE, 75, 0, 8, LiveCell { target: 0x00c6_f14c, ..live }, node),
-        ];
-        for refused in refusals {
-            assert!(matches!(refused, PickerPlan::Stock), "{refused:?}");
-        }
-    }
-
-    #[test]
-    fn plan_refuses_a_table_cell_of_another_controller() {
-        let live = LiveCell { word: 0x0000_0108, target: 0x00c7_2e10 };
-        let refused = plan(&TABLE, 74, 0, 8, live, NodeAddress(0x0078_2000));
-        assert!(matches!(refused, PickerPlan::Stock), "{refused:?}");
-    }
 
     #[test]
     fn busy_returns_zero_without_calls() {

@@ -32,4 +32,21 @@ xm1_secondary_handoff_vector:
     .size xm1_secondary_handoff, . - xm1_secondary_handoff
     .ltorg
 
+    @ Boot-log timestamp: r0 = slot word address. The read and store are the relation's log site;
+    @ the linker script places .xm1_log_text after every .text input.
+    .section .xm1_log_text, "ax", %progbits
+    .global xm1_secondary_log_timestamp
+    .type xm1_secondary_log_timestamp, %function
+xm1_secondary_log_timestamp:
+    ldr r1, =0xfff91000
+    .global xm1_secondary_log_read
+xm1_secondary_log_read:
+    ldr r2, [r1]
+    .global xm1_secondary_log_store
+xm1_secondary_log_store:
+    str r2, [r0]
+    bx lr
+    .ltorg
+    .size xm1_secondary_log_timestamp, . - xm1_secondary_log_timestamp
+
     .section .note.GNU-stack, "", %progbits

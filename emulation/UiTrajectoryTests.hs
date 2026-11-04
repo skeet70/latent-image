@@ -158,6 +158,12 @@ main = do
         stepsOf "[\"menu\",1,5,2,{\"settle_instructions\":0}]" == Nothing
     , expect "an unknown step timing field is refused" $
         stepsOf "[\"menu\",1,5,2,{\"wait_instructions\":5}]" == Nothing
+    , expect "a step's idle decodes to the instructions run before its press" $
+        fmap (map stepIdle) (stepsOf "[\"up\",1,246,0,{\"idle_instructions\":20000000}],[\"up\",1,246,0]")
+          == Just [Just (Instructions 20000000), Nothing]
+    , expect "a zero or over-cap idle is refused" $
+        stepsOf "[\"up\",1,246,0,{\"idle_instructions\":0}]" == Nothing
+          && stepsOf "[\"up\",1,246,0,{\"idle_instructions\":90000001}]" == Nothing
     , expect "a read address decodes to a fixed guest window" $
         fmap segmentReads (segmentOf (segmentDocument ",\"reads\":[[\"mode\",\"00956838\",4]]"))
           == Just [("mode", FixedAddress 0x00956838, 4 :: Int)]

@@ -1,16 +1,23 @@
 //! A cell named by the build-time table runs its owned action while the live
 //! cell word, action target and, for a positive high halfword, transition
-//! entry still equal the table's; every other cell runs the stock action.
+//! entry still equal the table's, and a picker cell only while the open menu
+//! node is one of the table's picker nodes; every other cell runs the stock
+//! action.
 //!
 //! The owned path reads the full cell word and the selected transition entry
-//! before the action; stock reads neither then. The modal guard watches
-//! writes and fetches only.
+//! before the action, and the open node pointer for a picker cell; stock reads
+//! none of them then. The modal guard watches writes and fetches only.
 //!
 //! Premise `transition-router-register-inputs` (E-MODAL75-TRANSITION-PREMISE-150):
 //! `0xc12aac` and its callees read no incoming r0-r3 or r11 beyond their
 //! declared arguments.
 
 #![cfg_attr(not(test), allow(dead_code))]
+
+#[path = "picker.rs"]
+pub mod picker;
+
+use picker::{NodeAddress, PickerAction, PickerNode};
 
 pub const WIDTH: u16 = 46;
 pub const EVENTS: u16 = 51;
@@ -80,6 +87,7 @@ pub enum GenericAction {
 pub enum CellAction {
     Retained,
     Generic(u8),
+    Picker(PickerAction),
 }
 
 /// `SetState` is the store of the negated non-positive high halfword.
@@ -102,6 +110,7 @@ pub struct OwnedCell {
 pub struct Table75 {
     pub actions: &'static [GenericAction],
     pub cells: &'static [OwnedCell],
+    pub picker_nodes: &'static [PickerNode],
     /// SHA-256 of the generated table text without its identity line.
     pub identity: [u8; 32],
 }
@@ -131,9 +140,11 @@ pub enum Plan {
 pub enum OwnedAction {
     Retained,
     Generic(&'static GenericAction),
+    Picker(PickerAction, &'static PickerNode),
 }
 
-pub fn plan(table: &Table75, event: u16, state: u16, live: LiveCell) -> Plan {
+/// `open_node` is called only for a picker cell.
+pub fn plan(table: &Table75, event: u16, state: u16, live: LiveCell, open_node: impl FnOnce() -> NodeAddress) -> Plan {
     let (Ok(event), Ok(state)) = (Event75::parse(event), State75::parse(state)) else {
         return Plan::Stock;
     };
@@ -153,6 +164,14 @@ pub fn plan(table: &Table75, event: u16, state: u16, live: LiveCell) -> Plan {
             Some(action) => OwnedAction::Generic(action),
             None => return Plan::Stock,
         },
+        CellAction::Picker(action) => {
+            let nodes: &'static [PickerNode] = table.picker_nodes;
+            let open = open_node();
+            match nodes.iter().find(|node| node.node == open) {
+                Some(node) => OwnedAction::Picker(action, node),
+                None => return Plan::Stock,
+            }
+        }
     };
     Plan::Owned { action, after: cell.after, cell_word: cell.cell_word }
 }
@@ -235,11 +254,12 @@ impl VectorServices<'_> {
 }
 
 /// Runs `plan`, `run_generic` and `post_action_state` on every vector and
-/// returns the first difference from stock.
+/// returns the first difference from stock. Vectors carry no open node, so a
+/// picker cell plans as stock.
 pub fn check_vectors(table: &Table75, vectors: &[StockVector]) -> Result<(), VectorMismatch> {
     for vector in vectors {
         let (event, state, router) = (vector.event, vector.state, vector.router);
-        let planned = plan(table, event, state, vector.live);
+        let planned = plan(table, event, state, vector.live, || NodeAddress(0));
         let mut states = [0u16; 4];
         let mut services = VectorServices { router, states: &mut states, count: 0 };
         match (vector.result, planned) {
@@ -276,13 +296,24 @@ mod tests {
     static ACTIONS: [GenericAction; 2] =
         [GenericAction::RouteToTransition(ROUTE), GenericAction::ConstantResult(ActionResult(0xffff_ffff))];
 
-    static CELLS: [OwnedCell; 3] = [
+    static CELLS: [OwnedCell; 4] = [
         OwnedCell { event: Event75(50), state: State75(5), cell_word: 0x0001_0110, stock_target: 0x00c7_a978, action: CellAction::Generic(0), after: AfterAction::KeepActionState },
         OwnedCell { event: Event75(41), state: State75(0), cell_word: 0xffe3_00f7, stock_target: 0x00c7_9a40, action: CellAction::Generic(1), after: AfterAction::SetState(State75(29)) },
         OwnedCell { event: Event75(4), state: State75(13), cell_word: 0x0000_0030, stock_target: 0x00c6_f994, action: CellAction::Retained, after: AfterAction::SetState(State75(0)) },
+        OwnedCell { event: Event75(2), state: State75(0), cell_word: 0x0001_0016, stock_target: 0x00c6_eb44, action: CellAction::Picker(PickerAction::Down), after: AfterAction::KeepActionState },
     ];
 
-    static TABLE: Table75 = Table75 { actions: &ACTIONS, cells: &CELLS, identity: [0; 32] };
+    static PICKER_NODES: [PickerNode; 2] = [
+        PickerNode { node: NodeAddress(0x0078_4014), property: picker::PropertyId(246) },
+        PickerNode { node: NodeAddress(0x0077_eae4), property: picker::PropertyId(163) },
+    ];
+
+    static TABLE: Table75 = Table75 { actions: &ACTIONS, cells: &CELLS, picker_nodes: &PICKER_NODES, identity: [0; 32] };
+
+    /// Plans a cell whose open node must not be read.
+    fn plan_fixed(table: &Table75, event: u16, state: u16, live: LiveCell) -> Plan {
+        plan(table, event, state, live, || panic!("open node read for ({state}, {event})"))
+    }
 
     const ROUTED: LiveCell = LiveCell { word: 0x0001_0110, target: 0x00c7_a978, transition: Some(0) };
     const CONSTANT: LiveCell = LiveCell { word: 0xffe3_00f7, target: 0x00c7_9a40, transition: None };
@@ -307,8 +338,8 @@ mod tests {
         assert_eq!(Event75::parse(51), Err(UnhandledInput(51)));
         assert_eq!(State75::parse(45).map(State75::raw), Ok(45));
         assert_eq!(State75::parse(46), Err(UnknownState(46)));
-        assert_eq!(plan(&TABLE, 51, 5, ROUTED), Plan::Stock);
-        assert_eq!(plan(&TABLE, 50, 46, ROUTED), Plan::Stock);
+        assert_eq!(plan_fixed(&TABLE, 51, 5, ROUTED), Plan::Stock);
+        assert_eq!(plan_fixed(&TABLE, 50, 46, ROUTED), Plan::Stock);
     }
 
     #[test]
@@ -318,15 +349,36 @@ mod tests {
 
     #[test]
     fn changed_live_words_fall_back_to_stock() {
-        assert_eq!(plan(&TABLE, 50, 5, LiveCell { word: 0x0001_0111, ..ROUTED }), Plan::Stock);
-        assert_eq!(plan(&TABLE, 50, 5, LiveCell { target: 0x00a8_6144, ..ROUTED }), Plan::Stock);
-        assert_eq!(plan(&TABLE, 50, 5, LiveCell { transition: Some(0x00c0_0000), ..ROUTED }), Plan::Stock);
-        assert_eq!(plan(&TABLE, 49, 5, ROUTED), Plan::Stock);
+        assert_eq!(plan_fixed(&TABLE, 50, 5, LiveCell { word: 0x0001_0111, ..ROUTED }), Plan::Stock);
+        assert_eq!(plan_fixed(&TABLE, 50, 5, LiveCell { target: 0x00a8_6144, ..ROUTED }), Plan::Stock);
+        assert_eq!(plan_fixed(&TABLE, 50, 5, LiveCell { transition: Some(0x00c0_0000), ..ROUTED }), Plan::Stock);
+        assert_eq!(plan_fixed(&TABLE, 49, 5, ROUTED), Plan::Stock);
+    }
+
+    const PICKER_DOWN: LiveCell = LiveCell { word: 0x0001_0016, target: 0x00c6_eb44, transition: Some(0) };
+
+    #[test]
+    fn a_picker_cell_is_owned_on_a_picker_node() {
+        assert_eq!(
+            plan(&TABLE, 2, 0, PICKER_DOWN, || NodeAddress(0x0077_eae4)),
+            Plan::Owned { action: OwnedAction::Picker(PickerAction::Down, &PICKER_NODES[1]), after: AfterAction::KeepActionState, cell_word: 0x0001_0016 }
+        );
+    }
+
+    #[test]
+    fn a_picker_cell_falls_back_off_its_nodes_and_on_changed_words() {
+        let node = || NodeAddress(0x0078_4014);
+        assert_eq!(plan(&TABLE, 2, 0, PICKER_DOWN, || NodeAddress(0x0078_ea98)), Plan::Stock);
+        assert_eq!(plan(&TABLE, 2, 0, PICKER_DOWN, || NodeAddress(0)), Plan::Stock);
+        assert_eq!(plan(&TABLE, 2, 0, LiveCell { word: 0x0001_0017, ..PICKER_DOWN }, node), Plan::Stock);
+        assert_eq!(plan(&TABLE, 2, 0, LiveCell { target: 0x00c6_e378, ..PICKER_DOWN }, node), Plan::Stock);
+        assert_eq!(plan(&TABLE, 2, 0, LiveCell { transition: Some(0x00c0_0000), ..PICKER_DOWN }, node), Plan::Stock);
+        assert_eq!(plan(&TABLE, 2, 1, PICKER_DOWN, node), Plan::Stock);
     }
 
     #[test]
     fn post_action_state_follows_the_live_high_halfword() {
-        let planned = plan(&TABLE, 41, 0, CONSTANT);
+        let planned = plan_fixed(&TABLE, 41, 0, CONSTANT);
         assert_eq!(post_action_state(planned, -29), Some(29));
         assert_eq!(post_action_state(planned, -3), Some(3));
         assert_eq!(post_action_state(planned, 1), None);
@@ -337,7 +389,7 @@ mod tests {
     fn control_wrong_next_state_refuses() {
         let mut actions = ACTIONS.to_vec();
         actions[0] = GenericAction::RouteToTransition(Route::new([(64, state(0)), (49, state(23)), (0, state(0)), (0, state(0))], 2));
-        let wrong = Table75 { actions: leak(actions), cells: &CELLS, identity: [0; 32] };
+        let wrong = Table75 { actions: leak(actions), cells: &CELLS, picker_nodes: &PICKER_NODES, identity: [0; 32] };
         assert_eq!(check_vectors(&wrong, &VECTORS), Err(VectorMismatch::States { event: 50, state: 5, router: 49 }));
     }
 
@@ -345,7 +397,7 @@ mod tests {
     fn control_wrong_direct_state_refuses() {
         let mut cells = CELLS.to_vec();
         cells[2].after = AfterAction::SetState(state(1));
-        let wrong = Table75 { actions: &ACTIONS, cells: leak(cells), identity: [0; 32] };
+        let wrong = Table75 { actions: &ACTIONS, cells: leak(cells), picker_nodes: &PICKER_NODES, identity: [0; 32] };
         assert_eq!(check_vectors(&wrong, &VECTORS), Err(VectorMismatch::States { event: 4, state: 13, router: 0 }));
     }
 
@@ -353,7 +405,7 @@ mod tests {
     fn control_wrong_action_result_refuses() {
         let mut actions = ACTIONS.to_vec();
         actions[1] = GenericAction::ConstantResult(ActionResult(0));
-        let wrong = Table75 { actions: leak(actions), cells: &CELLS, identity: [0; 32] };
+        let wrong = Table75 { actions: leak(actions), cells: &CELLS, picker_nodes: &PICKER_NODES, identity: [0; 32] };
         assert_eq!(check_vectors(&wrong, &VECTORS), Err(VectorMismatch::Result { event: 41, state: 0, router: 0 }));
     }
 
@@ -361,7 +413,7 @@ mod tests {
     fn control_wrong_route_event_refuses() {
         let mut cells = CELLS.to_vec();
         cells[0].event = Event75(49);
-        let wrong = Table75 { actions: &ACTIONS, cells: leak(cells), identity: [0; 32] };
+        let wrong = Table75 { actions: &ACTIONS, cells: leak(cells), picker_nodes: &PICKER_NODES, identity: [0; 32] };
         assert_eq!(check_vectors(&wrong, &VECTORS), Err(VectorMismatch::StockBodyFetch { event: 50, state: 5 }));
     }
 
@@ -369,7 +421,7 @@ mod tests {
     fn control_retained_body_fetch_guard_refuses_stale_table() {
         let mut cells = CELLS.to_vec();
         cells[1].cell_word ^= 1;
-        let wrong = Table75 { actions: &ACTIONS, cells: leak(cells), identity: [0; 32] };
+        let wrong = Table75 { actions: &ACTIONS, cells: leak(cells), picker_nodes: &PICKER_NODES, identity: [0; 32] };
         assert_eq!(check_vectors(&wrong, &VECTORS), Err(VectorMismatch::StockBodyFetch { event: 41, state: 0 }));
     }
 
@@ -399,7 +451,7 @@ mod tests {
                 route.pairs[0].1 = State75((route.pairs[0].1 .0 + 1) % 46);
                 actions[index] = GenericAction::RouteToTransition(route);
             }
-            let wrong_state = Table75 { actions: leak(actions), cells: TABLE.cells, identity: TABLE.identity };
+            let wrong_state = Table75 { actions: leak(actions), cells: TABLE.cells, picker_nodes: TABLE.picker_nodes, identity: TABLE.identity };
             assert!(matches!(check_vectors(&wrong_state, OWNER_VECTORS), Err(VectorMismatch::States { .. })));
 
             let mut actions = TABLE.actions.to_vec();
@@ -407,13 +459,13 @@ mod tests {
             if let GenericAction::ConstantResult(ActionResult(value)) = actions[index] {
                 actions[index] = GenericAction::ConstantResult(ActionResult(value.wrapping_add(1)));
             }
-            let wrong_result = Table75 { actions: leak(actions), cells: TABLE.cells, identity: TABLE.identity };
+            let wrong_result = Table75 { actions: leak(actions), cells: TABLE.cells, picker_nodes: TABLE.picker_nodes, identity: TABLE.identity };
             assert!(matches!(check_vectors(&wrong_result, OWNER_VECTORS), Err(VectorMismatch::Result { .. })));
 
             let mut cells = TABLE.cells.to_vec();
             let index = cells.iter().position(|c| matches!(c.action, CellAction::Generic(_)) && c.event.raw() + 1 < EVENTS).expect("generic cell");
             cells[index].event = Event75(cells[index].event.0 + 1);
-            let wrong_event = Table75 { actions: TABLE.actions, cells: leak(cells), identity: TABLE.identity };
+            let wrong_event = Table75 { actions: TABLE.actions, cells: leak(cells), picker_nodes: TABLE.picker_nodes, identity: TABLE.identity };
             assert!(check_vectors(&wrong_event, OWNER_VECTORS).is_err());
 
             let mut cells = TABLE.cells.to_vec();
@@ -421,14 +473,26 @@ mod tests {
             if let AfterAction::SetState(next) = cells[index].after {
                 cells[index].after = AfterAction::SetState(State75((next.0 + 1) % 46));
             }
-            let wrong_after = Table75 { actions: TABLE.actions, cells: leak(cells), identity: TABLE.identity };
+            let wrong_after = Table75 { actions: TABLE.actions, cells: leak(cells), picker_nodes: TABLE.picker_nodes, identity: TABLE.identity };
             assert!(matches!(check_vectors(&wrong_after, OWNER_VECTORS), Err(VectorMismatch::States { .. })));
 
             let mut cells = TABLE.cells.to_vec();
             let index = cells.iter().position(|c| matches!(c.action, CellAction::Generic(_))).expect("generic cell");
             cells[index].cell_word ^= 1;
-            let stale = Table75 { actions: TABLE.actions, cells: leak(cells), identity: TABLE.identity };
+            let stale = Table75 { actions: TABLE.actions, cells: leak(cells), picker_nodes: TABLE.picker_nodes, identity: TABLE.identity };
             assert!(matches!(check_vectors(&stale, OWNER_VECTORS), Err(VectorMismatch::StockBodyFetch { .. })));
+        }
+
+        #[test]
+        fn owner_picker_cells_plan_on_every_picker_node() {
+            for cell in TABLE.cells.iter().filter(|cell| matches!(cell.action, CellAction::Picker(_))) {
+                let live = LiveCell { word: cell.cell_word, target: cell.stock_target, transition: Some(0) };
+                for node in TABLE.picker_nodes {
+                    let planned = plan(&TABLE, cell.event.raw(), cell.state.raw(), live, || node.node);
+                    assert!(matches!(planned, Plan::Owned { action: OwnedAction::Picker(_, owned), .. } if owned == node), "{cell:?} {node:?}");
+                }
+                assert_eq!(plan(&TABLE, cell.event.raw(), cell.state.raw(), live, || NodeAddress(0)), Plan::Stock);
+            }
         }
     }
 }

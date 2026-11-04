@@ -11,6 +11,10 @@ pub(in crate::peer_witness) mod primary;
 pub(in crate::peer_witness::loader) mod critical_pair;
 
 pub(super) const BODY: (u64, u64) = (0xd0430, 0xd09ac);
+/// The stock initializer body after the word that publishes the owned entry.
+pub(super) const RETIRED_BODY: (u64, u64) = (0xd0434, 0xd09ac);
+/// Stock first word at 0xd0430, `push {r4,r5,r11}`.
+const BODY_PREIMAGE: u32 = 0xe92d_0830;
 const TABLE: (u64, u64) = (0xddaa0, 0xdf0cc);
 const TABLE_GUEST: u64 = 0x400d_daa0;
 const END: u32 = 0xd0ab0;
@@ -338,8 +342,11 @@ fn append_aliases(machine: &Machine, runner: &Runner<'_>, tcm: &TcmWords, result
     Ok(())
 }
 
-fn expected(machine: &Machine) -> Result<Vec<(u64, u32)>, String> {
-    let body = machine.read(BODY.0, (BODY.1 - BODY.0) as usize)?;
+fn expected(machine: &Machine, role: Role) -> Result<Vec<(u64, u32)>, String> {
+    let mut body = machine.read(BODY.0, (BODY.1 - BODY.0) as usize)?;
+    if role == Role::Owned {
+        body[..4].copy_from_slice(&BODY_PREIMAGE.to_le_bytes());
+    }
     require(Sha256Digest::of(&body) == Sha256Digest::parse(BODY_SHA)?, "initializer original leaf identity differs")?;
     let word = |offset| u32::from_le_bytes([body[offset], body[offset + 1], body[offset + 2], body[offset + 3]]);
     let immediate = |word: u32| ((word >> 4) & 0xf000) | (word & 0xfff);
@@ -383,11 +390,14 @@ pub(super) fn observe(machine: &mut Machine, runner: &Runner<'_>, contract: &Con
     let decoder_before = decoder(machine)?;
     let mut bindings = Vec::with_capacity(24);
     append_aliases(machine, runner, &before.tcm, &mut bindings)?;
-    let expected = expected(machine)?;
+    let expected = expected(machine, contract.role)?;
     let loader = machine.read(LOADER_B.0, (LOADER_B.1 - LOADER_B.0) as usize)?;
-    let call = u32::from_le_bytes([loader[0xaac], loader[0xaad], loader[0xaae], loader[0xaaf]]);
-    let displacement = (contract.entry.0 as i64) - (EXIT as i64 + 8);
-    require(call == (0xeb00_0000 | (((displacement >> 2) as u32) & 0x00ff_ffff)), "initializer BL does not reach the selected entry")?;
+    let word = |offset: usize| u32::from_le_bytes([loader[offset], loader[offset + 1], loader[offset + 2], loader[offset + 3]]);
+    let branch = |opcode: u32, site: u32, target: u32| opcode | ((((i64::from(target) - (i64::from(site) + 8)) >> 2) as u32) & 0x00ff_ffff);
+    require(word(0xaac) == branch(0xeb00_0000, EXIT, BODY.0 as u32), "initializer call does not reach 0xd0430")?;
+    if contract.role == Role::Owned {
+        require(word(0x430) == branch(0xea00_0000, BODY.0 as u32, contract.entry.0), "0xd0430 does not branch to the selected entry")?;
+    }
     let (rust_start, rust_end) = (contract.rust.0 .0, contract.rust.1 .0);
     if contract.role == Role::Owned {
         let (start, end) = runner.contract.image.ok_or("initializer image absent")?;
@@ -409,8 +419,8 @@ pub(super) fn observe(machine: &mut Machine, runner: &Runner<'_>, contract: &Con
     let mut forbidden_reads = vec![physical(TABLE)?];
     if contract.role == Role::Owned {
         confinement.push(ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Fetch,
-            rule: Confinement::Forbid(std::iter::once(BODY).chain(REPLACED).map(physical).collect::<Result<_, _>>()?) });
-        forbidden_reads.extend([physical(BODY)?, physical(ENTRY_POOL)?]);
+            rule: Confinement::Forbid([RETIRED_BODY, REPLACED].into_iter().map(physical).collect::<Result<_, _>>()?) });
+        forbidden_reads.extend([physical(RETIRED_BODY)?, physical(ENTRY_POOL)?]);
     }
     confinement.push(ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Read, rule: Confinement::Forbid(forbidden_reads) });
     let mut watch = machine.session.board.memory_watch_begin_scoped(ScopedWatch {

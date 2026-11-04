@@ -30,20 +30,20 @@ filegroup(
 )
 
 filegroup(
-    name = "picker-owned-sources",
-    srcs = ["src/picker.rs"],
-    visibility = ["//replacement/bank:__pkg__"],
-)
-
-filegroup(
     name = "modal75-owned-sources",
-    srcs = ["src/modal75.rs"],
+    srcs = [
+        "src/modal75.rs",
+        "src/picker.rs",
+    ],
     visibility = ["//replacement/bank:__pkg__"],
 )
 
 genrule(
     name = "modal75-tests-build",
-    srcs = ["src/modal75.rs"],
+    srcs = [
+        "src/modal75.rs",
+        "src/picker.rs",
+    ],
     outs = ["modal75-tests-bin"],
     cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/modal75.rs) -o $@",
     executable = True,
@@ -56,23 +56,6 @@ sh_test(
     srcs = ["//emulation:recovery-task-state-tests.sh"],
     args = ["$(location :modal75-tests-build)"],
     data = [":modal75-tests-build"],
-)
-
-genrule(
-    name = "picker-tests-build",
-    srcs = ["src/picker.rs"],
-    outs = ["picker-tests-bin"],
-    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/picker.rs) -o $@",
-    executable = True,
-    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
-)
-
-sh_test(
-    name = "picker-tests",
-    size = "small",
-    srcs = ["//emulation:recovery-task-state-tests.sh"],
-    args = ["$(location :picker-tests-build)"],
-    data = [":picker-tests-build"],
 )
 
 haskell_binary(

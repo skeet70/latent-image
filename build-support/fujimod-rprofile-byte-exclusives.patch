@@ -1,0 +1,359 @@
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core/exclusive.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/exclusive.rs
+@@ -1,4 +1,4 @@
+-//! ARMv7-R word exclusive transfers. Other widths explicitly refuse.
++//! ARMv7-R byte, halfword and word exclusive transfers. Doubleword exclusives refuse.
+ use super::*;
+ enum Instruction {
+     Clear,
+@@ -6,21 +6,34 @@
+         base: usize,
+         data: usize,
+         offset: u32,
++        bytes: usize,
+     },
+     Store {
+         base: usize,
+         data: usize,
+         status: usize,
+         offset: u32,
++        bytes: usize,
+     },
+ }
++/// Transfer width of an A32 exclusive from bits 22:21; doubleword has none.
++fn arm_width(word: u32) -> Option<usize> {
++    match (word >> 21) & 3 {
++        0 => Some(4),
++        2 => Some(1),
++        3 => Some(2),
++        _ => None,
++    }
++}
+ fn arm(word: u32) -> Result<Option<Instruction>, String> {
+     if word == 0xf57ff01f {
+         return Ok(Some(Instruction::Clear));
+     }
+     let base = ((word >> 16) & 15) as usize;
+     let target = ((word >> 12) & 15) as usize;
+-    if word & 0x0ff00fff == 0x01900f9f {
++    if word & 0x0f900fff == 0x01900f9f
++        && let Some(bytes) = arm_width(word)
++    {
+         if base == 15 || target == 15 {
+             return Err("unpredictable R-profile LDREX register".into());
+         }
+@@ -28,9 +41,12 @@
+             base,
+             data: target,
+             offset: 0,
++            bytes,
+         }));
+     }
+-    if word & 0x0ff00ff0 == 0x01800f90 {
++    if word & 0x0f900ff0 == 0x01800f90
++        && let Some(bytes) = arm_width(word)
++    {
+         let data = (word & 15) as usize;
+         if base == 15 || data == 15 || target == 15 || target == base || target == data {
+             return Err("unpredictable R-profile STREX register".into());
+@@ -40,45 +56,55 @@
+             data,
+             status: target,
+             offset: 0,
++            bytes,
+         }));
+     }
+     if super::atomic(word) {
+-        return Err("R-profile nonword exclusive execution is not implemented".into());
++        return Err("R-profile doubleword exclusive execution is not implemented".into());
+     }
+     Ok(None)
+ }
+ fn thumb(word: u32) -> Result<Option<Instruction>, String> {
++    use fujimod_emulator_cpu::arm::thumb::exclusive::{Instruction as Thumb, decode};
+     if !super::thumb_atomic(word) {
+         return Ok(None);
+     }
+     let first = word as u16;
+     let second = (word >> 16) as u16;
+-    if (first, second) == (0xf3bf, 0x8f2f) {
+-        return Ok(Some(Instruction::Clear));
+-    }
+-    let base = (first & 15) as usize;
+-    let data = (second >> 12) as usize;
+-    let status = ((second >> 8) & 15) as usize;
+-    let offset = (second as u32 & 255) * 4;
+-    let load = first & 0xfff0 == 0xe850;
+-    if !load && first & 0xfff0 != 0xe840 {
+-        return Err("R-profile nonword exclusive execution is not implemented".into());
++    if matches!(first & 0xfff0, 0xe8c0 | 0xe8d0) && second & 0x00f0 == 0x0070 {
++        return Err("R-profile doubleword exclusive execution is not implemented".into());
+     }
+-    if base == 15
+-        || matches!(data, 13 | 15)
+-        || (!load && (matches!(status, 13 | 15) || status == base || status == data))
+-    {
+-        return Err("unpredictable R-profile Thumb exclusive register".into());
+-    }
+-    Ok(Some(if load {
+-        Instruction::Load { base, data, offset }
+-    } else {
+-        Instruction::Store {
++    let decoded =
++        decode(first, second).map_err(|_| "unpredictable R-profile Thumb exclusive register")?;
++    Ok(decoded.map(|instruction| match instruction {
++        Thumb::Clear => Instruction::Clear,
++        Thumb::Transfer {
++            load: true,
+             base,
+             data,
++            bytes,
++            offset,
++            ..
++        } => Instruction::Load {
++            base: base.into(),
++            data: data.into(),
++            offset: offset.into(),
++            bytes: bytes.into(),
++        },
++        Thumb::Transfer {
++            load: false,
++            base,
++            data,
+             status,
++            bytes,
+             offset,
+-        }
++        } => Instruction::Store {
++            base: base.into(),
++            data: data.into(),
++            status: status.into(),
++            offset: offset.into(),
++            bytes: bytes.into(),
++        },
+     }))
+ }
+ impl Drop for Execution {
+@@ -117,21 +143,32 @@
+         };
+         match instruction {
+             Instruction::Clear => self.clear_exclusive()?,
+-            Instruction::Load { base, data, offset }
++            Instruction::Load {
++                base,
++                data,
++                offset,
++                bytes: width,
++            }
+             | Instruction::Store {
+-                base, data, offset, ..
++                base,
++                data,
++                offset,
++                bytes: width,
++                ..
+             } => {
+                 let target = self.scalar(arm::CORE[base])?.wrapping_add(offset) as u64;
+-                if target & 3 != 0 {
++                if target & (width as u64 - 1) != 0 {
+                     return Err("unaligned R-profile exclusive".into());
+                 }
+-                let physical = self.memory.canonical(self.id.get(), target, 4)?;
++                let physical = self.memory.canonical(self.id.get(), target, width)?;
+                 let load = matches!(instruction, Instruction::Load { .. });
+-                let mut bytes = [0; 4];
++                let big_endian = cpsr & 0x200 != 0;
++                let mut buffer = [0; 4];
++                let bytes = &mut buffer[..width];
+                 self.cpu.read_virtual(
+                     target,
+                     if load { Access::Read } else { Access::Write },
+-                    &mut bytes,
++                    bytes,
+                 )?;
+                 if load {
+                     // Software LDREX is a guest read, just like a backend
+@@ -145,38 +182,43 @@
+                         } = *hook
+                         {
+                             unsafe {
+-                                callback(Access::Read, target, 4, 0, data);
++                                callback(Access::Read, target, width as i32, 0, data);
+                             }
+                         }
+                     }
+-                    self.memory.watch_exclusive(self.id.get(), target, 4)?;
++                    self.memory.watch_exclusive(self.id.get(), target, width)?;
+                     self.memory
+                         .monitors
+                         .lock()
+                         .map_err(|_| "exclusive monitors poisoned")?
+-                        .load(self.monitor, physical, 4);
+-                    self.set(
+-                        arm::CORE[data],
+-                        if cpsr & 0x200 == 0 {
+-                            u32::from_le_bytes(bytes)
+-                        } else {
+-                            u32::from_be_bytes(bytes)
+-                        },
+-                    )?;
++                        .load(self.monitor, physical, width);
++                    let value = if big_endian {
++                        bytes.iter().fold(0u32, |value, byte| value << 8 | u32::from(*byte))
++                    } else {
++                        bytes
++                            .iter()
++                            .rev()
++                            .fold(0u32, |value, byte| value << 8 | u32::from(*byte))
++                    };
++                    self.set(arm::CORE[data], value)?;
+                 } else if let Instruction::Store { status, .. } = instruction {
+                     let success = self
+                         .memory
+                         .monitors
+                         .lock()
+                         .map_err(|_| "exclusive monitors poisoned")?
+-                        .store(self.monitor, physical, 4);
++                        .store(self.monitor, physical, width);
+                     if success {
+                         let value = self.scalar(arm::CORE[data])?;
+-                        let bytes = if cpsr & 0x200 == 0 {
+-                            value.to_le_bytes()
++                        let value = if width == 4 {
++                            value
+                         } else {
+-                            value.to_be_bytes()
++                            value & ((1 << (8 * width)) - 1)
+                         };
++                        for (index, byte) in bytes.iter_mut().enumerate() {
++                            let shift = if big_endian { width - 1 - index } else { index };
++                            *byte = (value >> (8 * shift)) as u8;
++                        }
+                         // Successful software exclusives pass through the same explicit
+                         // memory observers as native guest stores. No failed STREX store
+                         // is reported. Observers may stop before a declared store bound.
+@@ -189,7 +231,7 @@
+                             } = *hook
+                             {
+                                 unsafe {
+-                                    callback(Access::Write, target, 4, value as i64, data);
++                                    callback(Access::Write, target, width as i32, value as i64, data);
+                                 }
+                             }
+                         }
+@@ -198,9 +240,9 @@
+                         }
+                         // Already completed here: never replay this instruction
+                         // when another translated alias needs invalidation.
+-                        self.mark_direct_write(target, bytes.len())?;
+-                        self.cpu.write_memory(target, &bytes)?;
+-                        if self.memory.written(self.id.get(), target, 4)? {
++                        self.mark_direct_write(target, width)?;
++                        self.cpu.write_memory(target, bytes)?;
++                        if self.memory.written(self.id.get(), target, width)? {
+                             self.memory.prepare_external_write()?;
+                         }
+                     }
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core/tests.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/tests.rs
+@@ -728,6 +728,82 @@
+     resume(&cpu, 1).unwrap();
+     assert_eq!((get(&cpu, arm::CORE[10]), get(&cpu, arm::CORE[3])), (1, 1));
+ }
++
++#[test]
++fn byte_and_halfword_exclusives_store_once_and_fail_without_a_matching_reservation() {
++    let backing = Backing::aligned_zeros(0x2000, 4096).unwrap();
++    let cpu = processor(&Memory::default());
++    unsafe {
++        cpu.map_physical(0, 0, 0x2000, 7, NonNull::new(backing.as_ptr()).unwrap())
++            .unwrap();
++    }
++    let memory = |cpu: &Core| {
++        let mut bytes = [0; 4];
++        cpu.read_memory(0x1800, &mut bytes).unwrap();
++        bytes
++    };
++    // ldrexb r0,[r1]; strexb r3,r2,[r1]
++    words(&cpu, 0x1000, &[0xe1d10f9f, 0xe1c13f92]);
++    words(&cpu, 0x1800, &[0x8877_6655]);
++    set(&cpu, arm::CORE[1], 0x1801);
++    set(&cpu, arm::CORE[2], 0x1aa);
++    run(&cpu, 0x1000, 2).unwrap();
++    assert_eq!((get(&cpu, arm::CORE[0]), get(&cpu, arm::CORE[3])), (0x66, 0));
++    assert_eq!(memory(&cpu), [0x55, 0xaa, 0x77, 0x88]);
++    // ldrexh r0,[r1]; strexh r3,r2,[r1]
++    words(&cpu, 0x1000, &[0xe1f10f9f, 0xe1e13f92]);
++    set(&cpu, arm::CORE[1], 0x1802);
++    set(&cpu, arm::CORE[2], 0x1_2345);
++    run(&cpu, 0x1000, 2).unwrap();
++    assert_eq!((get(&cpu, arm::CORE[0]), get(&cpu, arm::CORE[3])), (0x8877, 0));
++    assert_eq!(memory(&cpu), [0x55, 0xaa, 0x45, 0x23]);
++    // A cleared reservation, a store of another width and a second store all fail
++    // without writing.
++    for program in [
++        [0xe1f10f9f, 0xf57ff01f, 0xe1e13f92], // ldrexh; clrex; strexh
++        [0xe1f10f9f, 0xe320f000, 0xe1c13f92], // ldrexh; nop; strexb
++        [0xe1e13f92, 0xe320f000, 0xe1e13f92], // strexh with no reservation, twice
++    ] {
++        words(&cpu, 0x1000, &program);
++        set(&cpu, arm::CORE[2], 0xbeef);
++        run(&cpu, 0x1000, 3).unwrap();
++        assert_eq!(get(&cpu, arm::CORE[3]), 1);
++        assert_eq!(memory(&cpu), [0x55, 0xaa, 0x45, 0x23]);
++    }
++    // ldrexb r0,[r1]; strexb r3,r2,[r1] in Thumb, then the halfword pair.
++    cpu.write_memory(0x1000, &[0xd1, 0xe8, 0x4f, 0x0f, 0xc1, 0xe8, 0x43, 0x2f])
++        .unwrap();
++    set(&cpu, arm::CORE[1], 0x1800);
++    set(&cpu, arm::CORE[2], 0x11);
++    run(&cpu, 0x1001, 2).unwrap();
++    assert_eq!((get(&cpu, arm::CORE[0]), get(&cpu, arm::CORE[3])), (0x55, 0));
++    cpu.write_memory(0x1000, &[0xd1, 0xe8, 0x5f, 0x0f, 0xc1, 0xe8, 0x53, 0x2f])
++        .unwrap();
++    set(&cpu, arm::CORE[1], 0x1802);
++    set(&cpu, arm::CORE[2], 0x6789);
++    run(&cpu, 0x1001, 2).unwrap();
++    assert_eq!((get(&cpu, arm::CORE[0]), get(&cpu, arm::CORE[3])), (0x2345, 0));
++    assert_eq!(memory(&cpu), [0x11, 0xaa, 0x89, 0x67]);
++    // ldrexh; clrex; strexh in Thumb fails without writing.
++    cpu.write_memory(
++        0x1000,
++        &[0xd1, 0xe8, 0x5f, 0x0f, 0xbf, 0xf3, 0x2f, 0x8f, 0xc1, 0xe8, 0x53, 0x2f],
++    )
++    .unwrap();
++    set(&cpu, arm::CORE[2], 0x1111);
++    run(&cpu, 0x1001, 3).unwrap();
++    assert_eq!((get(&cpu, arm::CORE[0]), get(&cpu, arm::CORE[3])), (0x6789, 1));
++    assert_eq!(memory(&cpu), [0x11, 0xaa, 0x89, 0x67]);
++    // Unaligned halfwords and doubleword exclusives refuse.
++    for (program, address, message) in [
++        (0xe1f10f9f, 0x1801, "unaligned"),
++        (0xe1b10f9f, 0x1800, "not implemented"), // ldrexd r0,r1,[r1]
++    ] {
++        words(&cpu, 0x1000, &[program]);
++        set(&cpu, arm::CORE[1], address);
++        assert!(run(&cpu, 0x1000, 1).unwrap_err().to_string().contains(message));
++    }
++}
+ pub(super) fn get(cpu: &Core, register: Register) -> u32 {
+     cpu.execution.scalar(register).unwrap()
+ }
+@@ -1405,7 +1481,7 @@
+         })
+     ));
+     assert_eq!(cpu.instruction_progress(), Some(2));
+-    words(&cpu, 0x1000, &[0xe1d00f9f]); // LDREXB
++    words(&cpu, 0x1000, &[0xe1b00f9f]); // LDREXD
+     assert!(
+         run(&cpu, 0x1000, 1)
+             .unwrap_err()
+@@ -1457,7 +1533,7 @@
+     set(&cpu, arm::CORE[1], 0x1800);
+     run(&cpu, 0x1001, 1).unwrap();
+     assert_eq!(get(&cpu, arm::PC), 0x100c);
+-    for halfwords in [[0xe8d0, 0x127f], [0xe8d0, 0x1f4f], [0xe8c0, 0x1f42]] {
++    for halfwords in [[0xe8d0, 0x127f], [0xe8c0, 0x1273]] {
+         cpu.write_memory(
+             0x1000,
+             &halfwords

@@ -192,9 +192,12 @@ main = do
           first : rest -> (if first == '0' then '1' else '0') : rest
           [] -> "0"
         caseName = "source-" ++ show index
+        wanted = if name `elem` map fst (reviewedScopeIdentity reviewed)
+          then "manifest source identity differs from the compiled reviewed contract"
+          else "supplied manifest differs byte-for-byte from the pinned builder output"
     changedIdentity <- requireJust ("the changed source identity for " ++ name)
       (replaceAfter (C.pack ("\"" ++ name ++ "\"")) (C.pack digest) (C.pack changedDigest) document)
-    pushCase caseName ("ram-push with substituted source " ++ name) "manifest source identity differs from the compiled reviewed contract"
+    pushCase caseName ("ram-push with substituted source " ++ name) wanted
       changedIdentity runtime allocation contract
 
   changedNew <- requireJust "the changed-new-word manifest" $ do

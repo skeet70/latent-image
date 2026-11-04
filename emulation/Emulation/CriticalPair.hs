@@ -61,8 +61,9 @@ wordsAt bytes offset expected = do
   observed <- mapM (leWordAt bytes . (offset +)) [0,4 .. length expected * 4 - 4]
   require (observed == expected) "critical-pair instruction contract differs"
 
-loader :: U.Parts -> Core -> F.Sha256 -> Either String B.ByteString
-loader parts core digest = do
+-- | One uncomplemented loader of the canonical DAT, whose identity the DAT pin in 'deriveOriginal' fixes.
+loader :: U.Parts -> Core -> Either String B.ByteString
+loader parts core = do
   let (ident,base,extent) = case core of
         Core0 -> (0,0x40000,0xdae0)
         Core1 -> (1,0xd0000,0xdaa0)
@@ -74,10 +75,7 @@ loader parts core digest = do
       carrier = U.partPreTable parts
   require (U.segLoad segment == base && count == extent && offset + count <= B.length carrier)
     "critical-pair loader geometry differs"
-  let bytes = B.map complement (B.take count (B.drop offset carrier))
-  observed <- F.parseSha256 (sha256Hex bytes)
-  require (observed == digest) "critical-pair loader identity differs"
-  pure bytes
+  pure (B.map complement (B.take count (B.drop offset carrier)))
 
 services :: Core -> Guest -> B.ByteString -> Either String Services
 services core (Guest base) bytes = do
@@ -126,10 +124,8 @@ deriveOriginal dat image4 = do
   require (sha256Hex image4 == "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16")
     "critical-pair requires canonical decoded image4"
   let parts = U.parsedParts (S.originalStartupParsed original)
-  primaryDigest <- F.parseSha256 "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
-  secondaryDigest <- F.parseSha256 "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec"
-  primary <- loader parts Core0 primaryDigest
-  secondary <- loader parts Core1 secondaryDigest
+  primary <- loader parts Core0
+  secondary <- loader parts Core1
   bindings <- sequence [services Core0 (Guest 0x40000) primary,services Core1 (Guest 0xd0000) secondary]
   wordsAt image4 (0x7235d8 - 0x61c400)
     [0xe92d4df0,0xe28db01c,0xe30b5d20,0xe3405096,0xe5952000,0xe3013618,0xe7923003

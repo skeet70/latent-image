@@ -172,6 +172,176 @@ fn settings_changes_outside_a_settings_writer_or_the_block_refuse() {
     assert_eq!(write_from(&mut monitor, SETTER, SETTINGS + 0x66, &[0x5a], 0x5b), Err(LifetimeFailure::ResourceChanged));
 }
 
+const RELOAD_CALL: u32 = 0x0063_09ec;
+const RELOAD_RETURN: u32 = 0x0063_09f0;
+const COPY_STORE: u32 = 0x0072_2134;
+const RELOAD_START: u32 = 0x0096_cc74;
+const RELOAD_END: u32 = 0x0096_cd8c;
+const RESTORE_CALL: u32 = 0x0063_7ee4;
+const RESTORE_RETURN: u32 = 0x0063_7ee8;
+
+fn stock_reload() -> Value {
+    json!({"call": RELOAD_CALL, "return": RELOAD_RETURN, "copy_store": COPY_STORE, "target": [RELOAD_START, RELOAD_END]})
+}
+fn stock_restore() -> Value {
+    json!({"call": RESTORE_CALL, "return": RESTORE_RETURN, "copy_store": COPY_STORE, "target": [SETTINGS, SETTINGS + 450]})
+}
+fn reload_request(reloads: Value) -> Value {
+    let mut value = request();
+    value["settings_writers"] = json!([[0x0062_4694, 0x0063_09c4]]);
+    value["settings_reloads"] = reloads;
+    value
+}
+fn reload_fixture() -> LifetimeMonitor {
+    let config = config(reload_request(json!([stock_reload(), stock_restore()]))).unwrap();
+    let mut memory = Memory::default();
+    for (extent, bytes) in config.readonly_images() { memory.store(extent.start().0, bytes); }
+    memory.store(SETTINGS, &[0x5a; 450]);
+    LifetimeMonitor::new(config, &memory).unwrap()
+}
+fn fetch(monitor: &mut LifetimeMonitor, core: usize, physical: u32) -> Result<(), LifetimeFailure> {
+    monitor.observe_row(&json!({"source": "cpu-fetch", "address": physical, "physical": physical, "size": 4,
+        "value": null, "before": null, "byte_order": "little", "core": core, "pc": physical, "instructions": 1, "tick": 1}))
+}
+fn store_on(monitor: &mut LifetimeMonitor, core: usize, pc: u32, address: u32, before: &[u8], value: u64) -> Result<(), LifetimeFailure> {
+    monitor.observe_write(WriteAttempt::cpu(CoreId(core), Guest(pc), Guest(address), Guest(address), before, value))
+}
+
+#[test]
+fn reload_copy_stores_inside_the_bracket_are_admitted_counted_and_become_the_expected_bytes() {
+    for core in 0..2 {
+        let mut monitor = reload_fixture();
+        fetch(&mut monitor, core, RELOAD_CALL).unwrap();
+        store_on(&mut monitor, core, COPY_STORE, RELOAD_START, &[0x5a, 0x5a], 0xa9c9).unwrap();
+        store_on(&mut monitor, core, COPY_STORE, RELOAD_START + 2, &[0x5a, 0x5a], 0x5a5a).unwrap();
+        store_on(&mut monitor, core, COPY_STORE, RELOAD_START + 4, &[0x5a, 0x5a], 0x1234).unwrap();
+        fetch(&mut monitor, core, RELOAD_RETURN).unwrap();
+        let receipt = monitor.receipt();
+        assert_eq!((receipt.admitted_reload_writes, receipt.admitted_settings_writes, receipt.failure), (2, 0, None));
+        store_on(&mut monitor, core, 0x1000, RELOAD_START, &[0xc9, 0xa9], 0xa9c9).unwrap();
+        assert_eq!(store_on(&mut monitor, core, 0x1000, RELOAD_START, &[0x5a, 0x5a], 0x5a5a), Err(LifetimeFailure::ResourceChanged));
+    }
+}
+
+#[test]
+fn reload_copy_stores_outside_their_open_bracket_refuse() {
+    #[derive(Debug)]
+    enum Case { NoBracket, OtherCore, WrongPc, BeforeTarget, AfterTarget, AfterReturn, ReturnOnly }
+    for case in [Case::NoBracket, Case::OtherCore, Case::WrongPc, Case::BeforeTarget, Case::AfterTarget, Case::AfterReturn, Case::ReturnOnly] {
+        let mut monitor = reload_fixture();
+        let (mut pc, mut address) = (COPY_STORE, RELOAD_START);
+        match case {
+            Case::NoBracket => {}
+            Case::OtherCore => fetch(&mut monitor, 1, RELOAD_CALL).unwrap(),
+            Case::WrongPc => { fetch(&mut monitor, 0, RELOAD_CALL).unwrap(); pc = COPY_STORE + 4; }
+            Case::BeforeTarget => { fetch(&mut monitor, 0, RELOAD_CALL).unwrap(); address = RELOAD_START - 2; }
+            Case::AfterTarget => { fetch(&mut monitor, 0, RELOAD_CALL).unwrap(); address = RELOAD_END - 1; }
+            Case::AfterReturn => { fetch(&mut monitor, 0, RELOAD_CALL).unwrap(); fetch(&mut monitor, 0, RELOAD_RETURN).unwrap(); }
+            Case::ReturnOnly => fetch(&mut monitor, 0, RELOAD_RETURN).unwrap(),
+        }
+        assert_eq!(store_on(&mut monitor, 0, pc, address, &[0x5a, 0x5a], 0xa9c9), Err(LifetimeFailure::ResourceChanged), "{case:?}");
+        assert_eq!((monitor.receipt().admitted_reload_writes, monitor.receipt().admitted_settings_writes), (0, 0), "{case:?}");
+    }
+}
+
+#[test]
+fn a_copy_store_off_the_halfword_cursor_closes_the_bracket_and_later_copy_stores_refuse() {
+    #[derive(Debug)]
+    enum Case { OutOfOrder, Word, SkippedHalfword }
+    for case in [Case::OutOfOrder, Case::Word, Case::SkippedHalfword] {
+        let mut monitor = reload_fixture();
+        fetch(&mut monitor, 0, RELOAD_CALL).unwrap();
+        let next = match case {
+            Case::OutOfOrder => { store_on(&mut monitor, 0, COPY_STORE, RELOAD_START + 2, &[0x5a, 0x5a], 0x5a5a).unwrap(); RELOAD_START }
+            Case::Word => { store_on(&mut monitor, 0, COPY_STORE, RELOAD_START, &[0x5a; 4], 0x5a5a_5a5a).unwrap(); RELOAD_START }
+            Case::SkippedHalfword => {
+                store_on(&mut monitor, 0, COPY_STORE, RELOAD_START, &[0x5a, 0x5a], 0x5a5a).unwrap();
+                store_on(&mut monitor, 0, COPY_STORE, RELOAD_START + 4, &[0x5a, 0x5a], 0x5a5a).unwrap();
+                RELOAD_START + 2
+            }
+        };
+        assert_eq!(store_on(&mut monitor, 0, COPY_STORE, next, &[0x5a, 0x5a], 0xa9c9), Err(LifetimeFailure::ResourceChanged), "{case:?}");
+        assert_eq!(monitor.receipt().admitted_reload_writes, 0, "{case:?}");
+    }
+}
+
+#[test]
+fn the_back_restore_copies_the_whole_block_in_halfword_order_from_its_own_call() {
+    let mut monitor = reload_fixture();
+    fetch(&mut monitor, 1, RESTORE_CALL).unwrap();
+    for address in (SETTINGS..SETTINGS + 450).step_by(2) {
+        let value = if address == 0x0096_ccd2 { 0xa9c9 } else { 0x5a5a };
+        store_on(&mut monitor, 1, COPY_STORE, address, &[0x5a, 0x5a], value).unwrap();
+    }
+    fetch(&mut monitor, 1, RESTORE_RETURN).unwrap();
+    assert_eq!((monitor.receipt().admitted_reload_writes, monitor.receipt().failure), (1, None));
+    let mut monitor = reload_fixture();
+    fetch(&mut monitor, 1, RELOAD_CALL).unwrap();
+    assert_eq!(store_on(&mut monitor, 1, COPY_STORE, SETTINGS, &[0x5a, 0x5a], 0xa9c9), Err(LifetimeFailure::ResourceChanged));
+}
+
+#[test]
+fn interleaved_reload_and_restore_brackets_only_refuse() {
+    let mut monitor = reload_fixture();
+    fetch(&mut monitor, 0, RESTORE_CALL).unwrap();
+    store_on(&mut monitor, 0, COPY_STORE, SETTINGS, &[0x5a, 0x5a], 0x5a5a).unwrap();
+    fetch(&mut monitor, 0, RELOAD_RETURN).unwrap();
+    assert_eq!(store_on(&mut monitor, 0, COPY_STORE, SETTINGS + 2, &[0x5a, 0x5a], 0xa9c9), Err(LifetimeFailure::ResourceChanged));
+    let mut monitor = reload_fixture();
+    fetch(&mut monitor, 0, RESTORE_CALL).unwrap();
+    for address in (SETTINGS..RELOAD_START).step_by(2) {
+        store_on(&mut monitor, 0, COPY_STORE, address, &[0x5a, 0x5a], 0x5a5a).unwrap();
+    }
+    fetch(&mut monitor, 0, RELOAD_CALL).unwrap();
+    fetch(&mut monitor, 0, RELOAD_RETURN).unwrap();
+    assert_eq!(store_on(&mut monitor, 0, COPY_STORE, RELOAD_START, &[0x5a, 0x5a], 0xa9c9), Err(LifetimeFailure::ResourceChanged));
+    assert_eq!(monitor.receipt().admitted_reload_writes, 0);
+}
+
+#[test]
+fn reload_site_fetches_are_accepted_in_every_phase_and_require_a_valid_core_and_word() {
+    let mut monitor = reload_fixture();
+    entry(&mut monitor, 0, false).unwrap();
+    fetch(&mut monitor, 1, RELOAD_CALL).unwrap();
+    store_on(&mut monitor, 1, COPY_STORE, RELOAD_START, &[0x5a, 0x5a], 0xa9c9).unwrap();
+    assert_eq!(monitor.receipt().admitted_reload_writes, 1);
+    let mut monitor = reload_fixture();
+    assert_eq!(fetch(&mut monitor, 2, RELOAD_CALL), Err(LifetimeFailure::InvalidCore));
+    let mut monitor = reload_fixture();
+    let row = json!({"source": "cpu-fetch", "address": RELOAD_CALL, "physical": RELOAD_CALL, "size": 2, "core": 0, "pc": RELOAD_CALL, "instructions": 1});
+    assert_eq!(monitor.observe_row(&row), Err(LifetimeFailure::MalformedRow));
+    let mut monitor = reload_fixture();
+    assert_eq!(fetch(&mut monitor, 0, RELOAD_CALL + 4 * 2), Err(LifetimeFailure::MalformedRow));
+}
+
+#[test]
+fn settings_reloads_are_aligned_bounded_inside_the_block_and_outside_watched_code() {
+    let accepted = config(reload_request(json!([stock_reload(), stock_restore()]))).unwrap();
+    assert_eq!(accepted.settings_reloads().len(), 2);
+    assert!(config(request()).unwrap().settings_reloads().is_empty());
+    let with = |key: &str, value: Value| { let mut reload = stock_reload(); reload[key] = value; reload };
+    for reloads in [
+        json!([with("call", json!(RELOAD_CALL + 2))]),
+        json!([with("return", json!(RELOAD_RETURN + 1))]),
+        json!([with("copy_store", json!(COPY_STORE + 2))]),
+        json!([with("return", json!(RELOAD_CALL))]),
+        json!([with("target", json!([SETTINGS - 2, RELOAD_END]))]),
+        json!([with("target", json!([RELOAD_START, SETTINGS + 452]))]),
+        json!([with("target", json!([RELOAD_START, RELOAD_START]))]),
+        json!([with("call", json!(0x00cf_59e4))]),
+        json!([with("return", json!(INSTALL + 0x100))]),
+        json!([with("copy_store", json!(0x0062_ff54))]),
+        json!([stock_reload(), stock_reload()]),
+        Value::Array(vec![stock_reload(), { let mut restore = stock_restore(); restore["return"] = json!(RELOAD_CALL); restore }]),
+        json!((0..5u32).map(|index| with("call", json!(0x0050_0000 + index * 8))).collect::<Vec<_>>()),
+    ] {
+        assert!(config(reload_request(reloads.clone())).is_err(), "{reloads}");
+    }
+    let mut retired = reload_request(json!([stock_reload()]));
+    retired["retired"] = json!([[RELOAD_CALL, RELOAD_CALL + 4]]);
+    assert!(matches!(config(retired), Err(LifetimeFailure::InvalidSource)));
+}
+
 #[test]
 fn immutable_roots_width_tables_and_code_refuse_even_identity_stores() {
     for address in [0x00cf_e3d4, 0x00d0_0268, 0x00cd_5f0e, 0x00cd_1ae4,

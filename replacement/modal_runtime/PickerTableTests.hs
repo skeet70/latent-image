@@ -8,7 +8,8 @@ import qualified Data.Aeson as J
 import Data.Bits (shiftL, shiftR, (.&.))
 import qualified Data.ByteString as B
 import Data.Either (isLeft)
-import Data.List (isInfixOf)
+import qualified Data.Aeson.KeyMap as KM
+import Data.Foldable (toList)
 import qualified Data.Map.Strict as M
 import Data.Word (Word32)
 import Numeric (showHex)
@@ -134,8 +135,16 @@ generation = do
   check "stock target differing from the contract refuses" (isLeft (run baseline {cellTargetInImage = 0xc72e14, cellTargetInManifest = 0xc72e14}))
   check "image5 target differing from the manifest refuses" (isLeft (run baseline {cellTargetInManifest = 0xc72e14}))
   check "node record differing from image4 refuses" (isLeft (run baseline {node4Word10 = 0x2c}))
-  let table = rustTable ["header"] generated
+  let document = pickerDocument [] generated
+      entries key = case document of
+        J.Object fields | Just (J.Array items) <- KM.lookup key fields -> toList items
+        _ -> []
   reversed <- either fail pure (run baseline {reverseCensus = True})
-  check "output independent of census order" (rustTable ["header"] reversed == table)
-  check "node expression" ("PickerNode { node: NodeAddress(0x00784014), property: PropertyId(214) }," `isInfixOf` table)
-  check "cell expression" ("PickerCell { controller: 75, state: 0, event: 8, word: 0x0001005a, target: 0x00c72e10, action: PickerAction::Ok }," `isInfixOf` table)
+  check "output independent of census order" (pickerDocument [] reversed == document)
+  check "node entry"
+    (J.object ["node" .= ("0x00784014" :: String), "property" .= (214 :: Int), "image4_record" .= ("equal" :: String)] `elem` entries "nodes")
+  check "cell entry"
+    (J.object
+       [ "controller" .= (75 :: Int), "state" .= (0 :: Int), "event" .= (8 :: Int), "word" .= ("0x0001005a" :: String)
+       , "target" .= ("0x00c72e10" :: String), "action" .= ("Ok" :: String), "manifest" .= ("equal" :: String) ]
+       `elem` entries "cells")

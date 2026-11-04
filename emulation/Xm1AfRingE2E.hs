@@ -8,10 +8,9 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (shiftR)
-import Data.IORef (atomicModifyIORef', modifyIORef', newIORef)
 import Data.List (isPrefixOf)
 import qualified Data.Text as T
-import Data.Word (Word8, Word32, Word64)
+import Data.Word (Word8, Word32)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, routeKey, routeKeyHex)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
 import Emulation.Sha256 (sha256File, sha256Hex)
@@ -114,12 +113,6 @@ freshReceipt root supplied = do
   require (not exists) "--receipt-output already exists"
   ensurePrivateDirectory destination
   pure destination
-
--- Emulated transfers can exceed the live transport's host-time budget.
-steppingClock :: IO Clock
-steppingClock = do
-  tick <- newIORef (1000000000 :: Word64)
-  pure (TimedClock (atomicModifyIORef' tick (\n -> (n + 1000, n))) (\ms -> modifyIORef' tick (+ fromIntegral ms * 1000000)))
 
 writeJson :: FilePath -> Value -> IO ()
 writeJson path value = writePrivateBytes path (BL.toStrict (encode value) <> "\n")
@@ -246,7 +239,7 @@ run options = do
     let api = emulatorUsbApi emulator
         allocDirectory = receipt </> "alloc"
     ensurePrivateDirectory allocDirectory
-    allocationOutcome <- steppingClock >>= \clock -> runRamAlloc (payloadAllocationSize afRingPayload) clock api allocDirectory
+    allocationOutcome <- emulatedClock >>= \clock -> runRamAlloc (payloadAllocationSize afRingPayload) clock api allocDirectory
     statePath <- case allocationOutcome of
       RamAllocated path -> pure path
       other -> ioError (userError ("AF ring ram-alloc failed: " ++ show other))
@@ -278,7 +271,7 @@ run options = do
           pure (fromIntegral value, traceSiteLabel site)
       emulatorTraceSites emulator (installerSites ++ [(synthetic, "af-ring-synthetic")] ++ trajectorySites)
       ensurePrivateDirectory pushDirectory
-      pushed <- steppingClock >>= \clock -> runUnreviewedRamPush NoRamPushObserver retained manifest clock api pushDirectory
+      pushed <- emulatedClock >>= \clock -> runUnreviewedRamPush NoRamPushObserver retained manifest clock api pushDirectory
       pushStatePath <- case pushed of
         RamPushInstalled path -> pure path
         other -> ioError (userError ("AF ring ram-push failed: " ++ show other))
@@ -286,10 +279,10 @@ run options = do
       let capture name = do
             let directory = receipt </> name
             ensurePrivateDirectory directory
-            steppingClock >>= \clock -> readAfRing (AfRingManifest manifest) clock api directory
+            emulatedClock >>= \clock -> readAfRing (AfRingManifest manifest) clock api directory
           unload = do
             ensurePrivateDirectory unloadDirectory
-            outcome <- steppingClock >>= \clock -> runUnreviewedRamUnload pushState clock api unloadDirectory
+            outcome <- emulatedClock >>= \clock -> runUnreviewedRamUnload pushState clock api unloadDirectory
             require (outcome == RamUnloaded) ("AF ring ram-unload failed: " ++ show outcome)
       flip finally unload $ do
         baseline <- capture "baseline"
@@ -298,7 +291,7 @@ run options = do
         let genuine = halfPressAccepted && any (\event -> eventKind event /= Synthetic && unEventSequence (eventSequence event) > unEventCount (ringCommittedTotal baseline)) (ringEvents ordinary)
         require (not (any ((== Synthetic) . eventKind) (ringEvents ordinary))) "synthetic event preceded the synthetic trigger"
         result <- if genuine then pure ordinary else do
-          clock <- steppingClock
+          clock <- emulatedClock
           triggerSynthetic entry address clock api (receipt </> "synthetic-trigger")
           captured <- capture "synthetic-fallback"
           require (unEventCount (ringCommittedTotal captured) == unEventCount (ringCommittedTotal ordinary) + 300 && unEventCount (ringOverwritten captured) >= 44 && length (filter ((== Synthetic) . eventKind) (ringEvents captured)) == 256) "synthetic recorder did not commit the requested overwrite exercise"

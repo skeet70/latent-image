@@ -1,19 +1,30 @@
-use fujimod_emulator::board::observation::{
-    CompositeGuardConfig, DestinationPolicy, GuardCore, GuardRange, GuardSpan, GuardTarget, OwnedPcPolicy, SourcePolicy,
-    TcmBank, WatchKinds, WatchRange, WriteSource,
+use fujimod_emulator::board::observation::{WatchKinds, WatchRange};
+use fujimod_emulator_devices::{Cx, Device, Host, Record};
+use fujimod_emulator_exr2_system::timer::{self, Options, SystemTimer, Timers, Wiring};
+use fujimod_xm1::attach_relations::{
+    Access, AttachSources, LogWrite, RelationFailure, TimerState, Token, TransactionRow, TransactionWriter,
+};
+use fujimod_xm1::attach_state::{
+    self, AllowanceLabel, AttachRuleRefusal, AttachState, AttachVerdict, BoardLeaf, BusAddress, CaptureRegion, ContextRegister, CoreContext,
+    Occupant, ProcessorAddress, ReadPath, RegionRead, Space, SpaceSpan, Span, StackCheck, UnusedEntry,
 };
 use fujimod_xm1::composed_catalog::{
-    CatalogRefusal, Confinement, Contract, Core, GuardBound, Label, Pc, PieceKind, Role, Sha256, UnconfinedCode,
+    Bank, CatalogRefusal, Contract, Core, GuardBound, Label, Pc, PiecePolicy, PieceKind, PlanSpan, RangePlan, Role, Sha256,
+    Target, UnconfinedCode, WritesBasis,
 };
 use fujimod_xm1::composed_receipt::{
-    ByteRange, CarrierField, CarrierWrites, Difference, GuardObservation, GuardState, HexBytes, Identity, IdentityField, LabelCount,
-    MenuObservation, Outcome, ReadCapture, Receipt, ReceiptKind, Register, Row, SchemaOne, VerdictKind, WatchRow, Word, WriteKind,
-    Writer, WriterCount, carrier_writes, compare,
+    ByteRange, CaptureDirectories, CarrierField, CarrierWrites, Difference, GuardObservation, GuardState, HexBytes, Identity,
+    IdentityField, LabelCount, MenuObservation, Outcome, ReadCapture, Receipt, ReceiptKind, RecordedPolicy, Register, Row, SchemaThree,
+    Verdict, VerdictKind, WatchRow, Word, WriteKind, Writer, WriterCount, carrier_writes, compare,
 };
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
-const FIXTURE: &str = include_str!("data/composed-contract-v1.json");
+const FIXTURE: &str = include_str!("data/composed-contract-v3.json");
 const END: u64 = 1 << 32;
 
 fn fixture() -> Value { serde_json::from_str(FIXTURE).unwrap() }
@@ -125,13 +136,15 @@ fn write_allow_overlap_caps_aliases_and_foreign_tcm_refuse() {
         CatalogRefusal::AliasStraddle(_)));
     assert!(matches!(refused(|v| allow(v, json!([{"target": "tcm", "core": 1, "bank": "data", "start": 0, "end": 16}]))),
         CatalogRefusal::ForeignTcm { core: Core::Secondary, .. }));
-    assert!(matches!(refused(|v| allow(v, json!([{"target": "physical", "core": 0, "start": 0, "end": 16}]))),
+    assert!(matches!(refused(|v| allow(v, json!([{"target": "physical", "bank": "data", "start": 0, "end": 16}]))),
         CatalogRefusal::WriteRangeShape(_)));
-    let many: Vec<Value> = (0..250u64).map(|index| json!({"target": "physical", "start": 0x100000 + 16 * index, "end": 0x100000 + 16 * index + 8})).collect();
+    assert!(matches!(refused(|v| allow(v, json!([{"target": "physical", "core": 1, "start": 0, "end": 16}]))),
+        CatalogRefusal::ForeignTcm { core: Core::Secondary, .. }));
+    let many: Vec<Value> = (0..520u64).map(|index| json!({"target": "physical", "start": 0x100000 + 16 * index, "end": 0x100000 + 16 * index + 8})).collect();
     assert!(matches!(refused(|v| allow(v, Value::Array(many))), CatalogRefusal::GuardBound(GuardBound::Ranges(_))));
-    let spans: Vec<Value> = (0..65u64).map(|index| json!({"start": 263216 + 8 * index, "end": 263216 + 8 * index + 4})).collect();
+    let spans: Vec<Value> = (0..130u64).map(|index| json!({"start": 263216 + 8 * index, "end": 263216 + 8 * index + 4})).collect();
     assert_eq!(refused(|v| v["pieces"][1]["catalog"]["owned_code"] = Value::Array(spans)),
-        CatalogRefusal::GuardBound(GuardBound::PcSpans(260)));
+        CatalogRefusal::GuardBound(GuardBound::PcSpans(524)));
     let mut value = fixture();
     value["pieces"][1]["catalog"]["boundaries"][1]["cores"] = json!([0, 1]);
     allow(&mut value, json!([{"target": "tcm", "core": 1, "bank": "data", "start": 0, "end": 16}]));
@@ -148,6 +161,9 @@ fn core_sets_and_unenumerated_writes_refuse_when_malformed() {
     assert!(matches!(refused(|v| v["pieces"][0]["catalog"]["writes"]["allow"] = json!([{"target": "physical", "start": 0, "end": 16}])),
         CatalogRefusal::UnenumeratedAllow(_)));
     assert!(matches!(refused(|v| v["pieces"][0]["catalog"]["writes"]["premise"] = Value::Null), CatalogRefusal::WritesPremise(_)));
+    let publisher: PieceKind = "primary-publisher".to_owned().try_into().unwrap();
+    assert_eq!(refused(|v| v["pieces"][1]["catalog"]["writes"] = json!({"allow": [], "basis": "unenumerated", "premise": "p"})),
+        CatalogRefusal::UnenumeratedPiece(publisher));
 }
 
 #[test]
@@ -186,108 +202,82 @@ fn reads_dats_and_boundary_counts_refuse() {
     }), CatalogRefusal::BoundaryBound { role: Role::Composed, core: Core::Primary, count: 4101 });
 }
 
-fn span(start: u64, end: u64) -> GuardSpan { GuardSpan::new(start, end).unwrap() }
-
-fn core(index: usize) -> GuardCore { GuardCore::new(index).unwrap() }
-
-fn physical(start: u64, end: u64) -> GuardRange { GuardRange { target: GuardTarget::Physical, span: span(start, end) } }
-
-fn tcm(owner: usize, bank: TcmBank, start: u64, end: u64) -> GuardRange {
-    GuardRange { target: GuardTarget::Tcm { core: core(owner), bank }, span: span(start, end) }
-}
-
-fn allow(ranges: Vec<GuardRange>) -> DestinationPolicy { DestinationPolicy { allow: ranges, forbid: vec![] } }
-
-fn stock(owner: usize) -> DestinationPolicy {
-    allow(vec![physical(0, END), tcm(owner, TcmBank::Data, 0, END), tcm(owner, TcmBank::Instruction, 0, END)])
-}
-
-fn expected(owned: [Option<OwnedPcPolicy>; 2]) -> CompositeGuardConfig {
-    let [first, second] = owned;
-    CompositeGuardConfig { sources: vec![
-        SourcePolicy { source: WriteSource::Cpu(core(0)), destinations: stock(0), owned_pc: first },
-        SourcePolicy { source: WriteSource::Cpu(core(1)), destinations: stock(1), owned_pc: second },
-        SourcePolicy { source: WriteSource::CoreHost(core(0)), destinations: stock(0), owned_pc: None },
-        SourcePolicy { source: WriteSource::CoreHost(core(1)), destinations: stock(1), owned_pc: None },
-        SourcePolicy { source: WriteSource::PhysicalHost, destinations: allow(vec![physical(0, END)]), owned_pc: None },
-        SourcePolicy { source: WriteSource::ModelBus, destinations: allow(vec![physical(0, END)]), owned_pc: None },
-    ] }
-}
-
-type Ranges = Vec<String>;
-
-/// Each source's policy with every range and span list sorted.
-fn normal(config: &CompositeGuardConfig) -> BTreeMap<String, (Ranges, Ranges, Option<(Vec<(u64, u64)>, Ranges, Ranges)>)> {
-    let sorted = |ranges: &[GuardRange]| { let mut out: Ranges = ranges.iter().map(|range| format!("{range:?}")).collect(); out.sort(); out };
-    let normalized: BTreeMap<_, _> = config.sources.iter().map(|policy| (format!("{:?}", policy.source), (
-        sorted(&policy.destinations.allow), sorted(&policy.destinations.forbid),
-        policy.owned_pc.as_ref().map(|owned| {
-            let mut spans: Vec<_> = owned.spans.iter().map(|span| (span.start(), span.end())).collect();
-            spans.sort();
-            (spans, sorted(&owned.destinations.allow), sorted(&owned.destinations.forbid))
-        }),
-    ))).collect();
-    assert_eq!(normalized.len(), config.sources.len());
-    normalized
-}
-
 const ALIAS: u64 = 0x4000_0000;
 
-fn spellings(start: u64, end: u64) -> [GuardSpan; 2] { [span(start, end), span(ALIAS + start, ALIAS + end)] }
+fn plan_span(start: u64, end: u64) -> PlanSpan { PlanSpan { start, end } }
 
-fn publisher_spans() -> Vec<GuardSpan> { spellings(263216, 263924).to_vec() }
+fn spellings(start: u64, end: u64) -> Vec<PlanSpan> { vec![plan_span(start, end), plan_span(ALIAS + start, ALIAS + end)] }
 
 fn first_stage() -> PieceKind { "first-stage".to_owned().try_into().unwrap() }
 
+fn publisher() -> PieceKind { "primary-publisher".to_owned().try_into().unwrap() }
+
+fn policy_on(policies: &[PiecePolicy], piece: &PieceKind, core: Core) -> PiecePolicy {
+    policies.iter().find(|policy| &policy.piece == piece && policy.core == core).unwrap().clone()
+}
+
+fn physical_plan(start: u64, end: u64) -> RangePlan { RangePlan::Physical { start, end } }
+
 #[test]
-fn unenumerated_code_is_unconfined_and_enumerated_code_is_held_to_its_allows() {
+fn each_piece_gets_its_own_partition_on_every_core() {
     let contract = parse(&fixture()).unwrap();
-    let owned = || Some(OwnedPcPolicy { spans: publisher_spans(), destinations: allow(vec![physical(318176, 323852), physical(404564, 406624)]) });
-    assert_eq!(normal(&contract.guard_config(Role::Composed)), normal(&expected([owned(), owned()])));
-    assert_eq!(contract.confinement(Role::Composed), Confinement::UnionOfEnumeratedAllows);
+    let policies = contract.policies(Role::Composed);
+    assert_eq!(policies.len(), 4);
+    let config = contract.guard_config(Role::Composed);
+    for core in Core::ALL {
+        let unenumerated = policy_on(&policies, &first_stage(), core);
+        assert_eq!((unenumerated.basis, unenumerated.spans.clone()), (WritesBasis::Unenumerated, spellings(24576, 25772)));
+        assert_eq!(unenumerated.allow, [
+            physical_plan(0, END),
+            RangePlan::Tcm { core: core.index(), bank: Bank::Data, start: 0, end: END },
+            RangePlan::Tcm { core: core.index(), bank: Bank::Instruction, start: 0, end: END },
+        ]);
+        assert_eq!(unenumerated.forbid, [physical_plan(24576, 25772), physical_plan(263216, 264620)]);
+        let enumerated = policy_on(&policies, &publisher(), core);
+        assert_eq!(enumerated.spans, spellings(263216, 263924));
+        assert_eq!(enumerated.allow, [physical_plan(318176, 323852), physical_plan(404564, 406624)]);
+        assert!(enumerated.forbid.is_empty());
+        assert_eq!(config.sources[core.index()].partitions.len(), 2);
+    }
     assert_eq!(contract.unconfined(Role::Composed), [UnconfinedCode { piece: first_stage(), start: 24576, end: 25772 }]);
-    assert_eq!(normal(&contract.guard_config(Role::Retained)), normal(&expected([None, None])));
-    assert_eq!(contract.confinement(Role::Retained), Confinement::Stock);
+    assert!(contract.policies(Role::Retained).is_empty());
+    assert!(contract.guard_config(Role::Retained).sources.iter().all(|source| source.partitions.is_empty()));
     assert!(contract.unconfined(Role::Retained).is_empty());
 }
 
 #[test]
-fn enumerated_pieces_share_the_union_of_their_allows_with_each_core_keeping_its_own_tcm() {
+fn a_piece_allow_never_reaches_another_piece_partition() {
     let mut value = fixture();
     value["pieces"][0]["catalog"]["writes"] = json!({
         "allow": [{"target": "physical", "start": 0, "end": 24576}, {"target": "tcm", "core": 0, "bank": "instruction", "start": 0, "end": 65536}],
         "basis": "premised", "premise": "first-stage scratch",
     });
-    let contract = parse(&value).unwrap();
-    let mut spans = spellings(24576, 25772).to_vec();
-    spans.extend(publisher_spans());
-    let owned = |ranges| Some(OwnedPcPolicy { spans: spans.clone(), destinations: allow(ranges) });
-    let physical_union = || vec![physical(0, 24576), physical(318176, 323852), physical(404564, 406624)];
-    assert_eq!(normal(&contract.guard_config(Role::Composed)), normal(&expected([
-        owned([physical_union(), vec![tcm(0, TcmBank::Instruction, 0, 65536)]].concat()),
-        owned(physical_union()),
-    ])));
-    assert!(contract.unconfined(Role::Composed).is_empty());
+    let policies = parse(&value).unwrap().policies(Role::Composed);
+    assert_eq!(policy_on(&policies, &first_stage(), Core::Primary).allow,
+        [physical_plan(0, 24576), RangePlan::Tcm { core: 0, bank: Bank::Instruction, start: 0, end: 65536 }]);
+    assert_eq!(policy_on(&policies, &first_stage(), Core::Secondary).allow, [physical_plan(0, 24576)]);
+    for core in Core::ALL {
+        assert_eq!(policy_on(&policies, &publisher(), core).allow, [physical_plan(318176, 323852), physical_plan(404564, 406624)]);
+    }
 }
 
 #[test]
-fn only_unenumerated_pieces_leave_every_cpu_on_the_stock_policy() {
+fn a_physical_range_with_a_core_binds_only_that_core() {
     let mut value = fixture();
-    value["pieces"][1]["catalog"]["writes"] = json!({"allow": [], "basis": "unenumerated", "premise": "not enumerated"});
-    let contract = parse(&value).unwrap();
-    assert_eq!(normal(&contract.guard_config(Role::Composed)), normal(&expected([None, None])));
-    assert_eq!(contract.confinement(Role::Composed), Confinement::Stock);
-    assert_eq!(contract.unconfined(Role::Composed).len(), 2);
-}
-
-#[test]
-fn an_owned_span_already_listed_in_both_spellings_yields_the_same_policy() {
-    let mut value = fixture();
-    value["pieces"][1]["catalog"]["owned_code"] = json!([
-        {"start": 263216, "end": 263924}, {"start": ALIAS + 263216, "end": ALIAS + 263924}]);
-    let both = parse(&value).unwrap();
-    let single = parse(&fixture()).unwrap();
-    assert_eq!(normal(&both.guard_config(Role::Composed)), normal(&single.guard_config(Role::Composed)));
+    value["pieces"][1]["catalog"]["boundaries"][1]["cores"] = json!([0, 1]);
+    value["pieces"][1]["catalog"]["writes"]["allow"] = json!([
+        {"target": "physical", "start": 318176, "end": 323852},
+        {"target": "physical", "core": 0, "start": 404564, "end": 406624},
+        {"target": "physical", "core": 1, "start": 404564, "end": 406600},
+    ]);
+    let policies = parse(&value).unwrap().policies(Role::Composed);
+    assert_eq!(policy_on(&policies, &publisher(), Core::Primary).allow, [physical_plan(318176, 323852), physical_plan(404564, 406624)]);
+    assert_eq!(policy_on(&policies, &publisher(), Core::Secondary).allow, [physical_plan(318176, 323852), physical_plan(404564, 406600)]);
+    value["pieces"][1]["catalog"]["writes"]["allow"] = json!([
+        {"target": "physical", "start": 318176, "end": 323852},
+        {"target": "physical", "core": 1, "start": 320000, "end": 320004},
+    ]);
+    assert!(matches!(parse(&value), Err(CatalogRefusal::OverlappingSpans(_))));
 }
 
 #[test]
@@ -297,9 +287,16 @@ fn guard_config_translates_alias_destinations_to_physical() {
         {"target": "physical", "start": 318176, "end": 323852},
         {"target": "physical", "start": ALIAS + 404564, "end": ALIAS + 406624},
     ]);
-    let contract = parse(&value).unwrap();
-    let owned = || Some(OwnedPcPolicy { spans: publisher_spans(), destinations: allow(vec![physical(318176, 323852), physical(404564, 406624)]) });
-    assert_eq!(normal(&contract.guard_config(Role::Composed)), normal(&expected([owned(), owned()])));
+    let policies = parse(&value).unwrap().policies(Role::Composed);
+    assert_eq!(policy_on(&policies, &publisher(), Core::Primary).allow, [physical_plan(318176, 323852), physical_plan(404564, 406624)]);
+}
+
+#[test]
+fn an_owned_span_already_listed_in_both_spellings_yields_the_same_policy() {
+    let mut value = fixture();
+    value["pieces"][1]["catalog"]["owned_code"] = json!([
+        {"start": 263216, "end": 263924}, {"start": ALIAS + 263216, "end": ALIAS + 263924}]);
+    assert_eq!(parse(&value).unwrap().policies(Role::Composed), parse(&fixture()).unwrap().policies(Role::Composed));
 }
 
 fn row(text: &str, registers: [u32; 4], sp: u32, reads: Vec<ReadCapture>) -> Row {
@@ -323,14 +320,14 @@ fn receipt(contract: &Contract, contract_digest: &Sha256, role: Role) -> Receipt
     ];
     let counts = rows.iter().map(|row| LabelCount { label: row.label.clone(), core: Core::Primary, total: 1 }).collect();
     Receipt {
-        schema: SchemaOne,
+        schema: SchemaThree,
         kind: ReceiptKind::ComposedStartupReceipt,
         role,
         identity: Identity {
             run: digest('a'), update: contract.identities(role).dat_sha256.clone(), boot_rom: digest('b'),
             observer: digest('c'), contract: contract_digest.clone(),
         },
-        confinement: contract.confinement(role),
+        policies: contract.policies(role).into_iter().map(|policy| RecordedPolicy { policy, checks: 3 }).collect(),
         unconfined: contract.unconfined(role),
         outcome: Outcome::Observed,
         error: None,
@@ -340,6 +337,8 @@ fn receipt(contract: &Contract, contract_digest: &Sha256, role: Role) -> Receipt
         counts,
         off_core: vec![],
         unguarded: vec![],
+        attach: None,
+        attach_sources: None,
         guard: Some(GuardObservation {
             attach_instructions: 900, end_instructions: 250_000_000, status: GuardState::Ended, first_fault: None,
             write_checks: 12, mutation_attempts: 0, carrier_writes: carriers(contract, &stock_writes()), watch_violation: None,
@@ -349,17 +348,150 @@ fn receipt(contract: &Contract, contract_digest: &Sha256, role: Role) -> Receipt
     }
 }
 
+/// One role's synthetic capture: nonzero bytes by (space, address), the board state, both cores and relation sources.
+#[derive(Clone)]
+struct Spec {
+    bytes: BTreeMap<(Space, u64), u8>,
+    board: Value,
+    cores: [CoreContext; 2],
+    sources: Option<SourceSpec>,
+}
+
+#[derive(Clone)]
+struct SourceSpec {
+    reset: SystemTimer,
+    rows: Vec<TransactionRow>,
+    log_writes: Vec<LogWrite>,
+}
+
+fn write_sources(directory: &Path, sources: &SourceSpec) -> AttachSources {
+    let mut writer = TransactionWriter::create(directory).unwrap();
+    for row in &sources.rows {
+        writer.push(row).unwrap();
+    }
+    AttachSources { timer_reset: TimerState(sources.reset.clone()), transactions: writer.finish().unwrap(), log_writes: sources.log_writes.clone() }
+}
+
+/// Enabled, 8 KiB at 0x70000000.
+const ATCM: u32 = 0x7000_0011;
+
+fn context(core: Core, pc: u32, sp: u32, cpsr: u32) -> CoreContext {
+    CoreContext {
+        core, r: [Word(0); 13], sp: Word(sp), lr: Word(0x409e0), pc: Word(pc), cpsr: Word(cpsr), spsr: Word(0), cpacr: Word(0),
+        fpexc: Word(0), fpscr: Word(0), sctlr: Word(0xc5187d), tcm: [Word(0), Word(ATCM)],
+    }
+}
+
+fn board_state() -> Value {
+    json!({
+        "execution_mode": "strict", "execution_policy": "exact", "counts_as_boot": true, "timeline": {"now": 1}, "instructions": [1, 2],
+        "released": [true, true], "waiting": [false, true], "waiting_event": [false, false], "events": [false, false],
+        "next_core": 0, "slice_left": 3, "quantum": 1000, "failure": null, "memory_decoders": {"choices": [1], "pending": [null], "failure": null},
+        "dma_mappings": [], "gic": {"pending": [0]}, "core_interrupt_devices": [null, null], "outputs": [], "implementation_cluster": 0,
+        "unmodeled_system": [], "aprofile": [null, null], "mprofile": [null, null],
+        "bus": {"mode": "strict", "unmodeled": [], "discovery_shadow": null, "continue_refusals": [], "frontier": [{"tick": 4, "pcs": [16]}],
+            "devices": [{"kind": "timer", "windows": [], "native_dependencies": [], "state": {"count": 1, "mode": 0}}]},
+        "discovery_callee_stubs": [],
+    })
+}
+
+fn spec(role: Role) -> Spec {
+    let peer_pc = match role { Role::Retained => 0xd0a44, Role::Composed => 0x10500 };
+    Spec {
+        bytes: BTreeMap::from([((Space::Physical, 0x100), 0x5a)]),
+        board: board_state(),
+        cores: [context(Core::Primary, 0x40430, 0x4006_3450, 0x6000_00d3), context(Core::Secondary, peer_pc, 0x4007_0000, 0x6000_00d3)],
+        sources: None,
+    }
+}
+
+fn scratch() -> PathBuf {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let directory = std::env::temp_dir().join(format!("composed-startup-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir_all(&directory).unwrap();
+    directory
+}
+
+/// Physical `[0, 0x80000)` read through two bus stretches, core 0's ATCM, and physical `[0x90000, 0x91000)` unreachable.
+fn write_capture(directory: &Path, spec: &Spec) -> AttachState {
+    let bus = |start: u64, end: u64, address: u64| RegionRead { start, end, path: ReadPath::Bus { address: BusAddress(address) } };
+    let atcm = ReadPath::Core { core: Core::Primary, address: ProcessorAddress(0) };
+    let regions = [
+        CaptureRegion { space: Space::Physical, start: 0, end: 0x80000, reads: vec![bus(0, 0x4000, 0x4000_0000), bus(0x4000, 0x80000, 0x4000)] },
+        CaptureRegion { space: Space::Tcm { core: Core::Primary, bank: Bank::Instruction }, start: 0, end: 0x2000,
+            reads: vec![RegionRead { start: 0, end: 0x2000, path: atcm }] },
+    ];
+    let (records, memory_sha256, memory_bytes) = attach_state::write_memory_snapshot(&directory.join(attach_state::MEMORY_FILE), &regions,
+        |region, offset, buffer| {
+            buffer.fill(0);
+            for (index, byte) in buffer.iter_mut().enumerate() {
+                if let Some(value) = spec.bytes.get(&(region.space, region.start + offset + index as u64)) {
+                    *byte = *value;
+                }
+            }
+            Ok(())
+        }).unwrap();
+    let (board_sha256, board_bytes) = attach_state::write_board_state(&directory.join(attach_state::BOARD_FILE), &spec.board).unwrap();
+    AttachState {
+        instructions: [5_000_000, 886_999],
+        cores: spec.cores.clone(),
+        regions: records,
+        unreachable: vec![Span::new(0x90000, 0x91000).unwrap()],
+        memory_file: attach_state::FileRecord { path: attach_state::MEMORY_FILE.into(), sha256: memory_sha256, compressed_bytes: memory_bytes },
+        board_file: attach_state::FileRecord { path: attach_state::BOARD_FILE.into(), sha256: board_sha256, compressed_bytes: board_bytes },
+    }
+}
+
+/// Writes each role's capture from `spec(role)`, the composed one after `edit_owned`.
+fn full_compare_with(contract: &Contract, digest: &Sha256, retained: Receipt, owned: Receipt, edit_owned: impl FnOnce(&mut Spec),
+    after: impl FnOnce(&Path, &mut Receipt)) -> Verdict {
+    let mut owned_spec = spec(Role::Composed);
+    edit_owned(&mut owned_spec);
+    compare_specs(contract, digest, retained, owned, &spec(Role::Retained), &owned_spec, after)
+}
+
+fn compare_specs(contract: &Contract, digest: &Sha256, mut retained: Receipt, mut owned: Receipt, retained_spec: &Spec, owned_spec: &Spec,
+    after: impl FnOnce(&Path, &mut Receipt)) -> Verdict {
+    let (retained_directory, owned_directory) = (scratch(), scratch());
+    for (receipt, directory, spec) in [(&mut retained, &retained_directory, retained_spec), (&mut owned, &owned_directory, owned_spec)] {
+        receipt.attach = Some(write_capture(directory, spec));
+        receipt.attach_sources = spec.sources.as_ref().map(|sources| write_sources(directory, sources));
+    }
+    after(&owned_directory, &mut owned);
+    let roundtrip: Receipt = serde_json::from_slice(&serde_json::to_vec(&owned).unwrap()).unwrap();
+    let result = compare(contract, digest, &retained, &roundtrip, &CaptureDirectories { retained: &retained_directory, owned: &owned_directory });
+    for directory in [retained_directory, owned_directory] {
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    assert_eq!(result.verdict == VerdictKind::Equal, result.first_difference.is_none());
+    result
+}
+
+fn compare_with(contract: &Contract, digest: &Sha256, retained: Receipt, owned: Receipt, edit_owned: impl FnOnce(&mut Spec),
+    after: impl FnOnce(&Path, &mut Receipt)) -> (Option<Difference>, Option<AttachVerdict>) {
+    let result = full_compare_with(contract, digest, retained, owned, edit_owned, after);
+    (result.first_difference, result.attach)
+}
+
+fn attach_report(value: &Value, edit_owned: impl FnOnce(&mut Spec)) -> Verdict {
+    let bytes = serde_json::to_vec(value).unwrap();
+    let contract = Contract::parse(&bytes).unwrap();
+    let digest = Sha256::of(&bytes);
+    let (retained, owned) = (receipt(&contract, &digest, Role::Retained), receipt(&contract, &digest, Role::Composed));
+    full_compare_with(&contract, &digest, retained, owned, edit_owned, |_, _| {})
+}
+
+fn attach_verdict(value: &Value, edit_owned: impl FnOnce(&mut Spec)) -> (Option<Difference>, Option<AttachVerdict>) {
+    let result = attach_report(value, edit_owned);
+    (result.first_difference, result.attach)
+}
+
 fn verdict(value: &Value, edit: impl FnOnce(&mut Receipt)) -> Option<Difference> {
     let bytes = serde_json::to_vec(value).unwrap();
     let contract = Contract::parse(&bytes).unwrap();
     let digest = Sha256::of(&bytes);
-    let retained = receipt(&contract, &digest, Role::Retained);
-    let mut owned = receipt(&contract, &digest, Role::Composed);
-    edit(&mut owned);
-    let roundtrip: Receipt = serde_json::from_slice(&serde_json::to_vec(&owned).unwrap()).unwrap();
-    let result = compare(&contract, &digest, &retained, &roundtrip);
-    assert_eq!(result.verdict == VerdictKind::Equal, result.first_difference.is_none());
-    result.first_difference
+    let (retained, owned) = (receipt(&contract, &digest, Role::Retained), receipt(&contract, &digest, Role::Composed));
+    compare_with(&contract, &digest, retained, owned, |_| {}, |_, owned| edit(owned)).0
 }
 
 #[test]
@@ -408,7 +540,7 @@ fn order_past_record_limit_is_not_comparable() {
         let mut owned = receipt(&contract, &digest, Role::Composed);
         interleave(&mut retained, [0, 1, 0, 1], recorded);
         interleave(&mut owned, [0, 1, 1, 0], recorded);
-        compare(&contract, &digest, &retained, &owned).first_difference
+        compare_with(&contract, &digest, retained, owned, |_| {}, |_, _| {}).0
     };
     assert_eq!(run(&publisher_limit(1), 2), Some(Difference::Unrecorded {
         label: label("primary-publisher/entry-core0"), role: Role::Retained, recorded: 1, total: 2,
@@ -560,7 +692,7 @@ fn identities_and_reads_differ_unless_declared() {
 
 #[test]
 fn host_plan_lists_each_roles_armed_sites_guard_and_unconfined_code() {
-    use fujimod_xm1::composed_catalog::{ArmedSite, PlanSpan, RangePlan, SourcePlan};
+    use fujimod_xm1::composed_catalog::{ArmedSite, SourcePlan};
     let mut value = fixture();
     value["pieces"][1]["catalog"]["boundaries"][1]["cores"] = json!([0, 1]);
     let plan = parse(&value).unwrap().plan();
@@ -577,17 +709,670 @@ fn host_plan_lists_each_roles_armed_sites_guard_and_unconfined_code() {
     assert_eq!(sites(retained, Core::Primary).len(), 3);
     assert_eq!(composed.stop_labels.len(), 3);
     assert_eq!(composed.watch_classes, [PlanSpan { start: 24576, end: 25772 }, PlanSpan { start: 263216, end: 264620 }]);
-    assert_eq!(composed.confinement, Confinement::UnionOfEnumeratedAllows);
+    assert_eq!(composed.policies.len(), 4);
+    assert!(retained.policies.is_empty());
     assert_eq!(composed.unconfined, [UnconfinedCode { piece: first_stage(), start: 24576, end: 25772 }]);
     assert!(retained.unconfined.is_empty());
     let cpu1 = composed.guard.iter().find(|policy| policy.source == SourcePlan::Cpu { core: 1 }).unwrap();
-    assert!(cpu1.allow.contains(&RangePlan::Tcm { core: 1, bank: fujimod_xm1::composed_catalog::Bank::Instruction, start: 0, end: END }));
-    let owned = cpu1.owned_pc.as_ref().unwrap();
-    let mut spans = owned.spans.clone();
-    spans.sort();
-    assert_eq!(spans, [PlanSpan { start: 263216, end: 263924 }, PlanSpan { start: ALIAS + 263216, end: ALIAS + 263924 }]);
-    assert_eq!(owned.allow, [RangePlan::Physical { start: 318176, end: 323852 }, RangePlan::Physical { start: 404564, end: 406624 }]);
+    assert!(cpu1.allow.contains(&RangePlan::Tcm { core: 1, bank: Bank::Instruction, start: 0, end: END }));
+    let partition = &cpu1.partitions[1];
+    assert_eq!(partition.spans, spellings(263216, 263924));
+    assert_eq!(partition.allow, [physical_plan(318176, 323852), physical_plan(404564, 406624)]);
     assert_eq!(composed.guard.len(), 6);
-    assert!(retained.guard.iter().all(|policy| policy.owned_pc.is_none()));
+    assert!(retained.guard.iter().all(|policy| policy.partitions.is_empty()));
     assert!(serde_json::to_value(&plan).is_ok());
+}
+
+fn attach_rules(value: &mut Value) -> &mut Value { &mut value["guard"]["attach_state"] }
+
+fn allowance_label(text: &str) -> AllowanceLabel { AllowanceLabel::try_from(text.to_owned()).unwrap() }
+
+fn declared(label: &str, start: u64, end: u64) -> Value {
+    json!({"label": label, "kind": "declared", "space": {"target": "physical"}, "start": start, "end": end, "reason": "r", "citation": "c"})
+}
+
+fn physical_window(start: u64, end: u64) -> Value { json!({"space": {"target": "physical"}, "start": start, "end": end, "citation": "c"}) }
+
+fn with_allowances(allowances: Value) -> Value {
+    let mut value = fixture();
+    attach_rules(&mut value)["allowances"] = allowances;
+    value
+}
+
+fn attach_refused(edit: impl FnOnce(&mut Value)) -> AttachRuleRefusal {
+    match refused(|value| edit(attach_rules(value))) {
+        CatalogRefusal::AttachState(refusal) => refusal,
+        other => panic!("expected an attach-state refusal, got {other:?}"),
+    }
+}
+
+fn zeros(length: usize) -> Sha256 { Sha256::of(&vec![0; length]) }
+
+#[test]
+fn attach_rules_refuse_overlaps_sizes_masks_and_shapes() {
+    assert_eq!(attach_refused(|rules| rules["allowances"] = json!([declared("a", 0x100, 0x200), declared("b", 0x1f0, 0x300)])),
+        AttachRuleRefusal::Overlap { first: Occupant::Allowance(allowance_label("a")), second: Occupant::Allowance(allowance_label("b")) });
+    assert_eq!(attach_refused(|rules| rules["allowances"] = json!([declared("a", 0, 0x10001)])),
+        AttachRuleRefusal::DeclaredSize(allowance_label("a")));
+    assert_eq!(attach_refused(|rules| rules["registers"] = json!([{"core": 0, "register": "r7", "mask": 0xff, "retained": 0, "composed": 1, "reason": "r"}])),
+        AttachRuleRefusal::RegisterMask { core: Core::Primary, register: ContextRegister::R7 });
+    assert_eq!(attach_refused(|rules| rules["registers"] = json!([{"core": 0, "register": "cpsr", "mask": 0x100, "retained": 0, "composed": 0x200, "reason": "r"}])),
+        AttachRuleRefusal::RegisterMask { core: Core::Primary, register: ContextRegister::Cpsr });
+    assert_eq!(attach_refused(|rules| rules["peers"] = json!([])), AttachRuleRefusal::Peers);
+    assert_eq!(attach_refused(|rules| rules["carriers"][0]["parts"][0]["end"] = json!(25000)),
+        AttachRuleRefusal::CarrierTiling { piece: first_stage() });
+    assert_eq!(attach_refused(|rules| rules["carriers"][0]["parts"][0]["reason"] = Value::Null),
+        AttachRuleRefusal::CarrierPartShape { piece: first_stage() });
+    assert_eq!(attach_refused(|rules| {
+        rules["carriers"][0]["parts"][0] = json!({"start": 24576, "end": 25772, "residency": "resident", "reason": null,
+            "canonical_sha256": zeros(1196), "composed_sha256": zeros(1196)});
+        rules["allowances"] = json!([declared("over-carrier", 25000, 25004)]);
+    }), AttachRuleRefusal::Overlap { first: Occupant::Carrier(first_stage()), second: Occupant::Allowance(allowance_label("over-carrier")) });
+    assert_eq!(attach_refused(|rules| rules["allowances"] = json!([{
+        "label": "live", "kind": "peer-live-stack", "space": {"target": "physical"}, "start": 0x70000, "end": 0x70100, "reason": "r",
+        "core": 0, "window": physical_window(0x6f000, 0x71000)}])), AttachRuleRefusal::PeerAttachCore(allowance_label("live")));
+    assert_eq!(attach_refused(|rules| rules["allowances"] = json!([{
+        "label": "stack", "kind": "dead-stack", "space": {"target": "physical"}, "start": 0x63000, "end": 0x63400, "reason": "r",
+        "core": 0, "mode": "svc", "window": physical_window(0x63100, 0x64000)}])), AttachRuleRefusal::OutsideWindow(allowance_label("stack")));
+    assert_eq!(attach_refused(|rules| rules["allowances"] = json!([{
+        "label": "stack", "kind": "declared", "space": {"target": "physical"}, "start": 0x63000, "end": 0x63400, "reason": "r",
+        "citation": "c", "core": 0}])), AttachRuleRefusal::AllowanceShape(allowance_label("stack")));
+    for pointer in ["/bus", "/bus/devices", "/bus/devices/0", "/bus/devices/0/state", "/bus/frontier/0", "/bus/unmodeled/0",
+        "/gic", "/timeline/now", "/quantum/x", "/unknown/x"] {
+        assert!(matches!(refused(|value| attach_rules(value)["board"] = json!([{"pointer": pointer, "kind": "declared", "reason": "r", "citation": "c"}])),
+            CatalogRefusal::Shape(_)), "{pointer}");
+    }
+    for pointer in ["/bus/devices/0/state/count", "/bus/devices/0/kind", "/bus/frontier/0/tick", "/bus/mode"] {
+        let mut value = fixture();
+        attach_rules(&mut value)["board"] = json!([{"pointer": pointer, "kind": "declared", "reason": "r", "citation": "c"}]);
+        assert!(parse(&value).is_ok(), "{pointer}");
+    }
+    assert_eq!(attach_refused(|rules| rules["peers"][0]["retained_pc"] = json!([{"start": 0xd1000, "end": 0xd2000}, {"start": 0xd0000, "end": 0xd1800}])),
+        AttachRuleRefusal::PeerSpans(Core::Secondary));
+    assert!(matches!(attach_refused(|rules| rules["board"] = json!([
+        {"pointer": "/gic/pending", "kind": "declared", "reason": "r", "citation": "c"},
+        {"pointer": "/gic/pending/0", "kind": "declared", "reason": "r", "citation": "c"}])), AttachRuleRefusal::BoardOverlap(_)));
+}
+
+#[test]
+fn an_undeclared_memory_difference_refuses_with_its_runs() {
+    let (difference, _) = attach_verdict(&fixture(), |owned| { owned.bytes.insert((Space::Physical, 0x300), 1); owned.bytes.insert((Space::Physical, 0x301), 2); });
+    assert_eq!(difference, Some(Difference::AttachMemory {
+        space: Space::Physical, start: 0x300, end: 0x302, differing_bytes: 2,
+        runs: vec![SpaceSpan { space: Space::Physical, start: 0x300, end: 0x302 }],
+    }));
+    let (difference, _) = attach_verdict(&fixture(), |owned| { owned.bytes.insert((Space::Tcm { core: Core::Primary, bank: Bank::Instruction }, 0x1ff8), 7); });
+    assert!(matches!(difference, Some(Difference::AttachMemory { space: Space::Tcm { core: Core::Primary, bank: Bank::Instruction }, start: 0x1ff8, .. })));
+}
+
+#[test]
+fn a_declared_allowance_absorbs_and_records_its_bytes_and_an_unused_one_refuses() {
+    let value = with_allowances(json!([declared("timer-word", 0x300, 0x304)]));
+    let (difference, attach) = attach_verdict(&value, |owned| { owned.bytes.insert((Space::Physical, 0x301), 9); });
+    assert_eq!(difference, None);
+    let absorbed = &attach.unwrap().allowances[0];
+    assert_eq!((absorbed.differing_bytes, absorbed.ranges.clone(), absorbed.retained.clone(), absorbed.composed.clone()),
+        (1, vec![Span::new(0x301, 0x302).unwrap()], vec!["00".to_owned()], vec!["09".to_owned()]));
+    assert_eq!(attach_verdict(&value, |_| {}).0, Some(Difference::UnusedAllowance { entry: UnusedEntry::Memory(allowance_label("timer-word")) }));
+}
+
+#[test]
+fn resident_carriers_and_copies_must_hash_to_each_roles_image() {
+    let mut value = fixture();
+    attach_rules(&mut value)["carriers"][1]["parts"][0] = json!({"start": 263216, "end": 264620, "residency": "resident", "reason": null,
+        "canonical_sha256": zeros(1404), "composed_sha256": Sha256::of(&[vec![0; 4], vec![0xaa], vec![0; 1399]].concat())});
+    assert_eq!(attach_verdict(&value, |owned| { owned.bytes.insert((Space::Physical, 263220), 0xaa); }).0, None);
+    assert_eq!(attach_verdict(&value, |_| {}).0, Some(Difference::AttachCarrier {
+        piece: publisher(), target: Target::LoaderA, start: 263216, end: 264620, role: Role::Composed,
+    }));
+    let copy = |composed: Sha256| with_allowances(json!([{
+        "label": "staged-record", "kind": "copy", "space": {"target": "physical"}, "start": 0x50000, "end": 0x50010, "reason": "r",
+        "source": {"dat": {"offset": 64, "transform": "complement"}}, "canonical_sha256": zeros(16), "composed_sha256": composed}]));
+    assert_eq!(attach_verdict(&copy(zeros(16)), |_| {}).0, None);
+    assert_eq!(attach_verdict(&copy(digest('e')), |_| {}).0,
+        Some(Difference::AttachCopy { label: allowance_label("staged-record"), role: Role::Composed }));
+}
+
+#[test]
+fn stack_allowances_are_checked_against_the_captured_stack_pointers() {
+    let dead = |start: u64, end: u64, window: Value| with_allowances(json!([{
+        "label": "dead", "kind": "dead-stack", "space": {"target": "physical"}, "start": start, "end": end, "reason": "r",
+        "core": 0, "mode": "svc", "window": window}]));
+    let below_sp = |owned: &mut Spec| { owned.bytes.insert((Space::Physical, 0x63010), 1); };
+    assert_eq!(attach_verdict(&dead(0x63000, 0x63400, physical_window(0x63000, 0x64000)), below_sp).0, None);
+    let failed = |check| Some(Difference::AttachAllowance { label: allowance_label("dead"), role: Role::Retained, check });
+    assert_eq!(attach_verdict(&dead(0x63400, 0x63460, physical_window(0x63000, 0x64000)), below_sp).0, failed(StackCheck::AboveSp));
+    assert_eq!(attach_verdict(&dead(0x60000, 0x60100, physical_window(0x60000, 0x61000)), below_sp).0, failed(StackCheck::SpOutsideWindow));
+    let mut irq = dead(0x63000, 0x63400, physical_window(0x63000, 0x64000));
+    attach_rules(&mut irq)["allowances"][0]["mode"] = json!("irq");
+    assert_eq!(attach_verdict(&irq, below_sp).0, failed(StackCheck::Mode));
+
+    let abandoned = |window: Value| with_allowances(json!([{
+        "label": "dead", "kind": "dead-stack-at-boundary", "space": {"target": "physical"}, "start": 0x63000, "end": 0x63100,
+        "reason": "r", "core": 0, "boundary": "first-stage/handoff", "window": window}]));
+    assert_eq!(attach_verdict(&abandoned(physical_window(0x63000, 0x63410)), below_sp).0, None);
+    assert_eq!(attach_verdict(&abandoned(physical_window(0x62000, 0x64000)), below_sp).0, failed(StackCheck::StillCurrent));
+
+    let live = |start: u64| with_allowances(json!([{
+        "label": "dead", "kind": "peer-live-stack", "space": {"target": "physical"}, "start": start, "end": 0x70100, "reason": "r",
+        "core": 1, "window": physical_window(0x6f000, 0x71000)}]));
+    let above_peer_sp = |owned: &mut Spec| { owned.bytes.insert((Space::Physical, 0x70020), 1); };
+    assert_eq!(attach_verdict(&live(0x70000), above_peer_sp).0, None);
+    assert_eq!(attach_verdict(&live(0x6ff00), above_peer_sp).0, failed(StackCheck::BelowPeerSp));
+}
+
+#[test]
+fn context_differences_need_an_exact_masked_register_entry() {
+    let set_a = |owned: &mut Spec| owned.cores[0].cpsr = Word(0x6000_01d3);
+    assert_eq!(attach_verdict(&fixture(), set_a).0, Some(Difference::AttachContext {
+        core: Core::Primary, register: ContextRegister::Cpsr, retained: Word(0x6000_00d3), owned: Word(0x6000_01d3),
+    }));
+    let mut value = fixture();
+    attach_rules(&mut value)["registers"] = json!([{"core": 0, "register": "cpsr", "mask": 0x100, "retained": 0, "composed": 0x100, "reason": "r"}]);
+    let (difference, attach) = attach_verdict(&value, set_a);
+    assert_eq!(difference, None);
+    assert_eq!(attach.unwrap().registers.len(), 1);
+    assert!(matches!(attach_verdict(&value, |owned| owned.cores[0].cpsr = Word(0x6000_01d2)).0, Some(Difference::AttachContext { .. })));
+    assert_eq!(attach_verdict(&value, |_| {}).0,
+        Some(Difference::UnusedAllowance { entry: UnusedEntry::Register { core: Core::Primary, register: ContextRegister::Cpsr } }));
+    assert!(matches!(attach_verdict(&fixture(), |owned| owned.cores[0].r[7] = Word(0x7000_0000)).0,
+        Some(Difference::AttachContext { register: ContextRegister::R7, .. })));
+    assert_eq!(attach_verdict(&fixture(), |owned| owned.cores[1].pc = Word(0x20000)).0,
+        Some(Difference::AttachPeer { core: Core::Secondary, role: Role::Composed, pc: Word(0x20000) }));
+    assert_eq!(attach_verdict(&fixture(), |owned| owned.cores[1].r[3] = Word(9)).0, None);
+}
+
+#[test]
+fn board_differences_need_an_exact_or_declared_entry() {
+    let set_count = |owned: &mut Spec| owned.board["bus"]["devices"][0]["state"]["count"] = json!(2);
+    assert_eq!(attach_verdict(&fixture(), set_count).0, Some(Difference::AttachBoard {
+        pointer: BoardLeaf("/bus/devices/0/state/count".into()), retained: "1".into(), owned: "2".into(),
+    }));
+    assert_eq!(attach_verdict(&fixture(), |owned| owned.board["timeline"]["now"] = json!(9)).0, None);
+    let entry = |kind: Value| {
+        let mut value = fixture();
+        attach_rules(&mut value)["board"] = json!([kind]);
+        value
+    };
+    let exact = entry(json!({"pointer": "/bus/devices/0/state/count", "kind": "exact", "retained": 1, "composed": 2, "reason": "r"}));
+    let (difference, attach) = attach_verdict(&exact, set_count);
+    assert_eq!(difference, None);
+    assert_eq!(attach.unwrap().board[0].leaves, [BoardLeaf("/bus/devices/0/state/count".into())]);
+    assert!(matches!(attach_verdict(&exact, |owned| owned.board["bus"]["devices"][0]["state"]["count"] = json!(3)).0, Some(Difference::AttachBoard { .. })));
+    let declared_entry = entry(json!({"pointer": "/bus/devices/0/state/count", "kind": "declared", "reason": "r", "citation": "c"}));
+    assert_eq!(attach_verdict(&declared_entry, |owned| owned.board["bus"]["devices"][0]["state"]["count"] = json!(3)).0, None);
+    assert!(matches!(attach_verdict(&declared_entry, |owned| owned.board["bus"]["devices"][0]["state"]["mode"] = json!(1)).0,
+        Some(Difference::AttachBoard { .. })));
+    let exact_null = entry(json!({"pointer": "/memory_decoders/pending/0", "kind": "exact", "retained": null, "composed": 3, "reason": "r"}));
+    assert_eq!(attach_verdict(&exact_null, |owned| owned.board["memory_decoders"]["pending"][0] = json!(3)).0, None);
+    assert!(matches!(attach_verdict(&fixture(), |owned| { owned.board.as_object_mut().unwrap().insert("added".into(), json!(1)); }).0,
+        Some(Difference::AttachSnapshot { role: Role::Composed, .. })));
+}
+
+#[test]
+fn a_board_refusal_does_not_hide_memory_differences() {
+    let tcm = Space::Tcm { core: Core::Primary, bank: Bank::Instruction };
+    let result = attach_report(&fixture(), |owned| {
+        owned.board["bus"]["devices"][0]["state"]["count"] = json!(2);
+        owned.bytes.insert((Space::Physical, 0x300), 1);
+        owned.bytes.insert((tcm, 0x1ff8), 7);
+    });
+    let board = Difference::AttachBoard { pointer: BoardLeaf("/bus/devices/0/state/count".into()), retained: "1".into(), owned: "2".into() };
+    assert_eq!(result.verdict, VerdictKind::Different);
+    assert_eq!(result.first_difference, Some(board.clone()));
+    assert_eq!(result.attach_differences.entries, [
+        board,
+        Difference::AttachMemory {
+            space: Space::Physical, start: 0x300, end: 0x301, differing_bytes: 1,
+            runs: vec![SpaceSpan { space: Space::Physical, start: 0x300, end: 0x301 }],
+        },
+        Difference::AttachMemory { space: tcm, start: 0x1ff8, end: 0x1ff9, differing_bytes: 1, runs: vec![SpaceSpan { space: tcm, start: 0x1ff8, end: 0x1ff9 }] },
+    ]);
+    assert_eq!((result.attach_differences.total, result.attach_differences.truncated), (3, false));
+}
+
+#[test]
+fn attach_differences_stop_at_the_limit_and_keep_the_total() {
+    let result = attach_report(&fixture(), |owned| {
+        let state = owned.board["bus"]["devices"][0]["state"].as_object_mut().unwrap();
+        for index in 0..300 {
+            state.insert(format!("added-{index:03}"), json!(index));
+        }
+    });
+    let differences = &result.attach_differences;
+    assert_eq!((differences.entries.len(), differences.total, differences.truncated), (attach_state::ATTACH_DIFFERENCE_LIMIT, 300, true));
+    assert_eq!(result.first_difference, Some(Difference::AttachBoard {
+        pointer: BoardLeaf("/bus/devices/0/state/added-000".into()), retained: "absent".into(), owned: "0".into(),
+    }));
+    assert_eq!(differences.entries.last(), Some(&Difference::AttachBoard {
+        pointer: BoardLeaf("/bus/devices/0/state/added-255".into()), retained: "absent".into(), owned: "255".into(),
+    }));
+}
+
+#[test]
+fn a_difference_outside_the_attach_state_lists_no_attach_differences() {
+    let bytes = serde_json::to_vec(&fixture()).unwrap();
+    let contract = Contract::parse(&bytes).unwrap();
+    let digest = Sha256::of(&bytes);
+    let (retained, owned) = (receipt(&contract, &digest, Role::Retained), receipt(&contract, &digest, Role::Composed));
+    let result = full_compare_with(&contract, &digest, retained, owned, |_| {}, |_, owned| { owned.rows.pop(); owned.counts.pop(); });
+    assert!(matches!(result.first_difference, Some(Difference::Sequence { .. })));
+    assert_eq!(result.attach_differences.total, 0);
+}
+
+#[test]
+fn an_absent_carrier_part_compares_as_memory_and_admits_allowances() {
+    let in_carrier = |owned: &mut Spec| { owned.bytes.insert((Space::Physical, 24600), 3); };
+    assert!(matches!(attach_verdict(&fixture(), in_carrier).0, Some(Difference::AttachMemory { start: 24600, .. })));
+    let (difference, attach) = attach_verdict(&with_allowances(json!([declared("carrier-word", 24600, 24604)])), in_carrier);
+    assert_eq!(difference, None);
+    assert_eq!(attach.unwrap().allowances[0].differing_bytes, 1);
+}
+
+#[test]
+fn a_capture_file_that_differs_from_its_binding_refuses() {
+    let bytes = serde_json::to_vec(&fixture()).unwrap();
+    let contract = Contract::parse(&bytes).unwrap();
+    let digest = Sha256::of(&bytes);
+    let (retained, owned) = (receipt(&contract, &digest, Role::Retained), receipt(&contract, &digest, Role::Composed));
+    let (difference, _) = compare_with(&contract, &digest, retained.clone(), owned.clone(), |_| {}, |directory, _| {
+        let path = directory.join(attach_state::MEMORY_FILE);
+        let mut file = std::fs::read(&path).unwrap();
+        let last = file.len() - 1;
+        file[last] ^= 1;
+        std::fs::write(&path, file).unwrap();
+    });
+    assert!(matches!(difference, Some(Difference::AttachSnapshot { role: Role::Composed, .. })));
+    let (difference, _) = compare_with(&contract, &digest, retained.clone(), owned.clone(), |_| {}, |_, owned| {
+        owned.attach.as_mut().unwrap().regions[0].sha256 = zeros(4);
+    });
+    assert!(matches!(difference, Some(Difference::AttachSnapshot { role: Role::Composed, .. })));
+    let (difference, _) = compare_with(&contract, &digest, retained.clone(), owned.clone(), |_| {}, |_, owned| {
+        owned.attach.as_mut().unwrap().unreachable.clear();
+    });
+    assert!(matches!(difference, Some(Difference::AttachSnapshot { role: Role::Composed, .. })));
+    let (difference, _) = compare_with(&contract, &digest, retained.clone(), owned.clone(), |_| {}, |_, owned| {
+        owned.attach.as_mut().unwrap().regions[0].reads[0].path = ReadPath::Bus { address: BusAddress(0) };
+    });
+    assert!(matches!(difference, Some(Difference::AttachSnapshot { role: Role::Composed, .. })));
+    let (difference, _) = compare_with(&contract, &digest, retained, owned, |_| {}, |_, owned| owned.attach = None);
+    assert!(matches!(difference, Some(Difference::AttachSnapshot { role: Role::Composed, .. })));
+}
+
+#[test]
+fn a_diagnostic_receipt_is_not_evidence() {
+    assert_eq!(verdict(&fixture(), |owned| owned.kind = ReceiptKind::ComposedStartupDiagnostic),
+        Some(Difference::Identity { role: Role::Composed, field: IdentityField::Kind }));
+}
+
+#[derive(Default)]
+struct Clock {
+    now: u64,
+}
+
+impl Host for Clock {
+    fn now(&self) -> u64 { self.now }
+    fn schedule(&mut self, _: usize, _: u64, _: u64) {}
+    fn set_irq(&mut self, _: u32, _: bool) {}
+    fn raise_irq(&mut self, _: usize, _: u32) -> Result<(), String> { Ok(()) }
+    fn ram_read(&self, _: u64, _: &mut [u8]) -> Result<(), String> { Err("ram".into()) }
+    fn ram_write(&mut self, _: u64, _: &[u8]) -> Result<(), String> { Err("ram".into()) }
+    fn record(&mut self, _: Record) {}
+}
+
+#[derive(Clone, Copy)]
+struct Step {
+    tick: u64,
+    core: Core,
+    pc: u32,
+    offset: u32,
+    write: Option<u32>,
+}
+
+const RETAINED_SITE: u32 = 0x40f4;
+const COMPOSED_SITE: u32 = 0x64a8;
+const POLL_PC: u32 = 0x3000;
+const LOG: u64 = 0x400;
+
+fn put(tick: u64, offset: u32, value: u32) -> Step { Step { tick, core: Core::Primary, pc: 0x2000, offset, write: Some(value) } }
+
+fn get(tick: u64, pc: u32, offset: u32) -> Step { Step { tick, core: Core::Primary, pc, offset, write: None } }
+
+fn on_secondary(step: Step) -> Step { Step { core: Core::Secondary, ..step } }
+
+/// Counter start, then two log entries `gap` and `2 * gap` ticks after `base` with a polling read between.
+fn timer_steps(base: u64, gap: u64, site: u32) -> Vec<Step> {
+    vec![put(base, 0x00, 0), put(base + 1, 0x04, 0xffff_ffff), put(base + 2, 0x08, 0x63),
+        get(base + gap, site, 0x00), get(base + gap + 10, POLL_PC, 0x00), get(base + 2 * gap, site, 0x00)]
+}
+
+/// Runs `steps` through FujiMod's timer from reset, then lets a due deadline settle at `settle`.
+fn run_timer(steps: &[Step], settle: Option<u64>) -> (Vec<TransactionRow>, Value) {
+    let inputs = || fujimod_emulator_devices::exr2::irq::Inputs::default();
+    let mut model = Timers::new(Options { main_targets: vec![0, 1] }, Wiring { controllers: vec![(0, inputs()), (1, inputs())], start_tick: 0 }).unwrap();
+    let mut clock = Clock::default();
+    let rows = steps.iter().map(|step| {
+        clock.now = step.tick;
+        let mut cx = Cx::new(&mut clock, step.core.index(), u64::from(step.pc), 0);
+        let address = timer::BASE + u64::from(step.offset);
+        let value = match step.write {
+            Some(value) => {
+                model.write(&mut cx, address, 4, u64::from(value));
+                value
+            }
+            None => model.read(&mut cx, address, 4) as u32,
+        };
+        assert_eq!(cx.refusal(), None);
+        TransactionRow {
+            tick: step.tick, core: Some(step.core), pc: Pc(step.pc), address: address as u32, size: 4,
+            access: if step.write.is_some() { Access::Write } else { Access::Read }, accepted: true, value,
+        }
+    }).collect();
+    if let Some(tick) = settle {
+        clock.now = tick;
+        model.advance(&mut Cx::new(&mut clock, usize::MAX, 0, 0));
+    }
+    (rows, model.save())
+}
+
+/// A role whose timer runs `steps`; each site read, on either core, is logged at the next slot with its value word.
+fn relation_spec(role: Role, steps: &[Step], site: u32) -> Spec { relation_spec_settled(role, steps, site, None) }
+
+fn relation_spec_settled(role: Role, steps: &[Step], site: u32, settle: Option<u64>) -> Spec {
+    let (rows, timer_state) = run_timer(steps, settle);
+    let mut spec = spec(role);
+    let mut log_writes = Vec::new();
+    for (k, row) in rows.iter().filter(|row| row.pc.0 == site).enumerate() {
+        let slot = LOG + 8 * k as u64;
+        let event = 0x0100_0300 + k as u32;
+        let core = row.core.unwrap();
+        log_writes.push(LogWrite { core, pc: Pc(site + 4), physical: slot, size: 4, value: Word(row.value), tick: row.tick });
+        log_writes.push(LogWrite { core, pc: Pc(0x5000), physical: slot + 4, size: 4, value: Word(event), tick: row.tick + 1 });
+        set_word(&mut spec, slot, row.value);
+        set_word(&mut spec, slot + 4, event);
+    }
+    let last = settle.into_iter().chain(rows.iter().map(|row| row.tick)).max().unwrap_or(0);
+    spec.board["timeline"]["now"] = json!(last + 10);
+    spec.board["bus"]["devices"] = json!([{
+        "kind": "exr2-system-timers", "windows": [{"base": timer::BASE, "size": 64}], "native_dependencies": [0, 1], "state": timer_state,
+    }]);
+    spec.sources = Some(SourceSpec { reset: SystemTimer::new(vec![0, 1]).unwrap(), rows, log_writes });
+    spec
+}
+
+fn set_word(spec: &mut Spec, address: u64, word: u32) {
+    for (index, byte) in word.to_le_bytes().into_iter().enumerate() {
+        spec.bytes.insert((Space::Physical, address + index as u64), byte);
+    }
+}
+
+fn with_relations(mut value: Value) -> Value {
+    value["guard"]["attach_state"]["relations"] = json!({
+        "timer": {"citation": "timer.rs"},
+        "log": {"span": {"start": LOG, "end": LOG + 0x80}, "sites": [
+            {"label": "stock-record1", "role": "retained", "core": 0, "read_pc": RETAINED_SITE, "store_pc": RETAINED_SITE + 4, "citation": "c"},
+            {"label": "stock-record1-core1", "role": "retained", "core": 1, "read_pc": RETAINED_SITE, "store_pc": RETAINED_SITE + 4, "citation": "c"},
+            {"label": "owned-first-stage", "role": "composed", "core": 0, "read_pc": COMPOSED_SITE, "store_pc": COMPOSED_SITE + 4, "citation": "c"},
+            {"label": "owned-first-stage-core1", "role": "composed", "core": 1, "read_pc": COMPOSED_SITE, "store_pc": COMPOSED_SITE + 4, "citation": "c"},
+        ]},
+        "lz": null,
+    });
+    value
+}
+
+fn relation_verdict(value: &Value, retained: &Spec, owned: &Spec) -> Verdict {
+    let bytes = serde_json::to_vec(value).unwrap();
+    let contract = Contract::parse(&bytes).unwrap();
+    let digest = Sha256::of(&bytes);
+    let receipts = (receipt(&contract, &digest, Role::Retained), receipt(&contract, &digest, Role::Composed));
+    compare_specs(&contract, &digest, receipts.0, receipts.1, retained, owned, |_, _| {})
+}
+
+fn relation_difference(retained_steps: &[Step], owned_steps: &[Step], edit: impl FnOnce(&mut Spec)) -> Option<Difference> {
+    let retained = relation_spec(Role::Retained, retained_steps, RETAINED_SITE);
+    let mut owned = relation_spec(Role::Composed, owned_steps, COMPOSED_SITE);
+    edit(&mut owned);
+    relation_verdict(&with_relations(fixture()), &retained, &owned).first_difference
+}
+
+fn composed_failure(difference: Option<Difference>) -> Option<RelationFailure> {
+    match difference {
+        Some(Difference::AttachRelation { failure, .. }) => Some(failure),
+        _ => None,
+    }
+}
+
+#[test]
+fn relations_explain_the_pace_dependent_timer_leaves_and_timestamps() {
+    let retained = relation_spec(Role::Retained, &timer_steps(100, 200, RETAINED_SITE), RETAINED_SITE);
+    let owned = relation_spec(Role::Composed, &timer_steps(160, 300, COMPOSED_SITE), COMPOSED_SITE);
+    assert_ne!(retained.board["bus"]["devices"][0]["state"]["count"], owned.board["bus"]["devices"][0]["state"]["count"]);
+    assert_ne!(retained.bytes.get(&(Space::Physical, LOG)), owned.bytes.get(&(Space::Physical, LOG)));
+    let verdict = relation_verdict(&with_relations(fixture()), &retained, &owned);
+    assert_eq!(verdict.first_difference, None);
+    let relations = verdict.attach.unwrap().relations;
+    assert_eq!(relations[1].timestamps.iter().map(|word| word.address).collect::<Vec<_>>(), [LOG, LOG + 8]);
+    let without = relation_verdict(&fixture(), &retained, &owned).first_difference;
+    assert!(matches!(without, Some(Difference::AttachBoard { .. })), "{without:?}");
+}
+
+#[test]
+fn the_roles_must_program_the_timer_alike() {
+    let retained = timer_steps(100, 200, RETAINED_SITE);
+    let mut restarted = timer_steps(160, 300, COMPOSED_SITE);
+    restarted.insert(4, put(160 + 301, 0x00, 0));
+    assert!(matches!(composed_failure(relation_difference(&retained, &restarted, |_| {})), Some(RelationFailure::TimerSequence { .. })));
+    let delay = |base: u64, control: u32| [put(base + 3, 0x14, 0xffff_ffff), put(base + 4, 0x18, control), get(base + 5, POLL_PC, 0x10), put(base + 6, 0x18, 0)];
+    let with_delay = |base, gap, site, control| {
+        let mut steps = timer_steps(base, gap, site);
+        steps.splice(3..3, delay(base, control));
+        steps
+    };
+    assert_eq!(relation_difference(&with_delay(100, 200, RETAINED_SITE, 0x23), &with_delay(160, 300, COMPOSED_SITE, 0x23), |_| {}), None);
+    let failure = composed_failure(relation_difference(&with_delay(100, 200, RETAINED_SITE, 0x23), &with_delay(160, 300, COMPOSED_SITE, 0x53), |_| {}));
+    assert!(matches!(failure, Some(RelationFailure::TimerSequence { retained: Some(Token::Write { offset: 0x18, .. }), .. })), "{failure:?}");
+}
+
+#[test]
+fn log_words_must_hold_their_own_role_reads() {
+    let (retained, owned) = (timer_steps(100, 200, RETAINED_SITE), timer_steps(160, 300, COMPOSED_SITE));
+    let stored = |owned: &mut Spec| {
+        let sources = owned.sources.as_mut().unwrap();
+        sources.log_writes[0].value = Word(sources.log_writes[0].value.0 + 1);
+        owned.bytes.insert((Space::Physical, LOG), sources.log_writes[0].value.0 as u8);
+    };
+    assert!(matches!(composed_failure(relation_difference(&retained, &owned, stored)), Some(RelationFailure::LogValue { .. })));
+    let captured = |owned: &mut Spec| { owned.bytes.insert((Space::Physical, LOG + 1), 0x77); };
+    assert!(matches!(composed_failure(relation_difference(&retained, &owned, captured)), Some(RelationFailure::LogCaptured { address: LOG })));
+    let dropped = |owned: &mut Spec| { owned.sources.as_mut().unwrap().log_writes.remove(2); };
+    assert!(matches!(composed_failure(relation_difference(&retained, &owned, dropped)), Some(RelationFailure::LogUnpaired { .. })));
+}
+
+#[test]
+fn recorded_accesses_must_explain_the_captured_timer() {
+    let (retained, owned) = (timer_steps(100, 200, RETAINED_SITE), timer_steps(160, 300, COMPOSED_SITE));
+    let poll = |owned: &mut Spec| owned.sources.as_mut().unwrap().rows[4].value += 1;
+    assert!(matches!(composed_failure(relation_difference(&retained, &owned, poll)), Some(RelationFailure::TimerReplayRead { row: 4, .. })));
+    let host = |owned: &mut Spec| {
+        let sources = owned.sources.as_mut().unwrap();
+        let last = *sources.rows.last().unwrap();
+        sources.rows.push(TransactionRow { core: None, ..last });
+    };
+    assert!(matches!(composed_failure(relation_difference(&retained, &owned, host)), Some(RelationFailure::HostAccess { row: 6 })));
+    let moved = |owned: &mut Spec| owned.board["bus"]["devices"][0]["state"]["last_tick"] = json!(5);
+    assert!(matches!(composed_failure(relation_difference(&retained, &owned, moved)), Some(RelationFailure::TimerSettle { .. })));
+}
+
+#[test]
+fn a_log_read_is_ordered_against_the_main_timer_start_on_any_core() {
+    let mut retained = timer_steps(100, 200, RETAINED_SITE);
+    retained.insert(3, on_secondary(get(150, RETAINED_SITE, 0x00)));
+    let mut before_start = timer_steps(160, 300, COMPOSED_SITE);
+    before_start.insert(0, on_secondary(get(120, COMPOSED_SITE, 0x00)));
+    let failure = composed_failure(relation_difference(&retained, &before_start, |_| {}));
+    assert!(matches!(failure, Some(RelationFailure::TimerSequence { core: Core::Secondary, index: 0, .. })), "{failure:?}");
+    let mut after_start = timer_steps(160, 300, COMPOSED_SITE);
+    after_start.insert(3, on_secondary(get(200, COMPOSED_SITE, 0x00)));
+    assert_eq!(relation_difference(&retained, &after_start, |_| {}), None);
+}
+
+#[test]
+fn a_deadline_settle_after_the_last_access_is_explained_by_the_model() {
+    let with_application = |base: u64, gap: u64, site: u32| {
+        let mut steps = timer_steps(base, gap, site);
+        steps.splice(3..3, [put(base + 3, 0x30, 0), put(base + 4, 0x34, 700), put(base + 5, 0x38, 0x03)]);
+        steps
+    };
+    let retained = relation_spec_settled(Role::Retained, &with_application(100, 200, RETAINED_SITE), RETAINED_SITE, Some(820));
+    let owned = relation_spec_settled(Role::Composed, &with_application(160, 300, COMPOSED_SITE), COMPOSED_SITE, Some(900));
+    assert_eq!(owned.board["bus"]["devices"][0]["state"]["last_tick"], json!(900));
+    assert_eq!(relation_verdict(&with_relations(fixture()), &retained, &owned).first_difference, None);
+    let later = |owned: &mut Spec| {
+        let last = owned.sources.as_ref().unwrap().rows.last().unwrap().tick;
+        owned.board["bus"]["devices"][0]["state"]["last_tick"] = json!(last + 5);
+    };
+    let (retained_steps, owned_steps) = (timer_steps(100, 200, RETAINED_SITE), timer_steps(160, 300, COMPOSED_SITE));
+    assert!(matches!(composed_failure(relation_difference(&retained_steps, &owned_steps, later)), Some(RelationFailure::TimerSettle { .. })));
+}
+
+#[test]
+fn resets_refusals_and_log_entries_must_agree() {
+    let (retained, owned) = (timer_steps(100, 200, RETAINED_SITE), timer_steps(160, 300, COMPOSED_SITE));
+    let all = |edit: fn(&mut Spec)| {
+        let retained_spec = relation_spec(Role::Retained, &retained, RETAINED_SITE);
+        let mut owned_spec = relation_spec(Role::Composed, &owned, COMPOSED_SITE);
+        edit(&mut owned_spec);
+        relation_verdict(&with_relations(fixture()), &retained_spec, &owned_spec).attach_differences.entries
+    };
+    let failed = |entries: &[Difference], matches: fn(&RelationFailure) -> bool| entries.iter()
+        .any(|entry| matches!(entry, Difference::AttachRelation { failure, .. } if matches(failure)));
+    assert!(failed(&all(|owned| owned.sources.as_mut().unwrap().reset = SystemTimer::new(vec![0]).unwrap()),
+        |failure| matches!(failure, RelationFailure::TimerResetDiffers)));
+    assert!(failed(&all(|owned| owned.sources.as_mut().unwrap().rows[4].accepted = false),
+        |failure| matches!(failure, RelationFailure::RefusedAccess { row: 4 })));
+    assert!(failed(&all(|owned| {
+        let writes = &mut owned.sources.as_mut().unwrap().log_writes;
+        let (first, second) = (writes[1].value, writes[3].value);
+        writes[1].value = second;
+        writes[3].value = first;
+        set_word(owned, LOG + 4, second.0);
+        set_word(owned, LOG + 12, first.0);
+    }), |failure| matches!(failure, RelationFailure::TimerSequence { .. })));
+    assert!(failed(&all(|owned| owned.sources.as_mut().unwrap().rows[3].pc = Pc(RETAINED_SITE)),
+        |failure| matches!(failure, RelationFailure::LogForeignSite { .. })));
+    assert!(failed(&all(|owned| { owned.sources.as_mut().unwrap().log_writes.remove(1); }),
+        |failure| matches!(failure, RelationFailure::LogEntryValue { .. })));
+    assert!(failed(&all(|owned| {
+        let words: Vec<(u64, u32)> = owned.sources.as_ref().unwrap().log_writes.iter().map(|write| (write.physical, write.value.0)).collect();
+        for (address, _) in &words {
+            set_word(owned, *address, 0);
+        }
+        for write in &mut owned.sources.as_mut().unwrap().log_writes {
+            write.physical += 0x20;
+        }
+        for (address, value) in words {
+            set_word(owned, address + 0x20, value);
+        }
+    }), |failure| matches!(failure, RelationFailure::LogTimestampWords)));
+}
+
+#[test]
+fn a_later_non_logger_write_makes_a_timestamp_word_compared_again() {
+    let overwrite = |spec: &mut Spec, value: u32| {
+        let sources = spec.sources.as_mut().unwrap();
+        let tick = sources.rows.last().unwrap().tick + 1;
+        sources.log_writes.push(LogWrite { core: Core::Primary, pc: Pc(0x5000), physical: LOG, size: 4, value: Word(value), tick });
+        set_word(spec, LOG, value);
+    };
+    let mut retained = relation_spec(Role::Retained, &timer_steps(100, 200, RETAINED_SITE), RETAINED_SITE);
+    let mut owned = relation_spec(Role::Composed, &timer_steps(160, 300, COMPOSED_SITE), COMPOSED_SITE);
+    overwrite(&mut retained, 0xabcd);
+    overwrite(&mut owned, 0xabcd);
+    let verdict = relation_verdict(&with_relations(fixture()), &retained, &owned);
+    assert_eq!(verdict.first_difference, None);
+    assert_eq!(verdict.attach.unwrap().relations[1].timestamps.iter().map(|word| word.address).collect::<Vec<_>>(), [LOG + 8]);
+    overwrite(&mut owned, 0xabce);
+    let difference = relation_verdict(&with_relations(fixture()), &retained, &owned).first_difference;
+    assert!(matches!(difference, Some(Difference::AttachMemory { start: LOG, .. })), "{difference:?}");
+}
+
+const LZ_BASE: u64 = 0xfff4_3000;
+const LZ_INPUT: u64 = 0x1000;
+
+/// Adds one LZ job over `compressed` at `LZ_INPUT`, the device's stream after it, and the job's register writes.
+fn with_lz(spec: &mut Spec, compressed: &[u8]) {
+    for (index, byte) in compressed.iter().enumerate() {
+        spec.bytes.insert((Space::Physical, LZ_INPUT + index as u64), *byte);
+    }
+    let mut stream = fujimod_emulator_devices::compression::method4::Stream::default();
+    stream.feed(compressed, &mut [0u8; 256]).unwrap();
+    spec.board["bus"]["devices"].as_array_mut().unwrap().push(json!({
+        "kind": "exr2-lz", "windows": [{"base": LZ_BASE, "size": 256}], "native_dependencies": [],
+        "state": {"state": {"stream": serde_json::to_value(&stream).unwrap(), "pending": null}},
+    }));
+    let sources = spec.sources.as_mut().unwrap();
+    let tick = sources.rows.last().unwrap().tick;
+    for (step, (offset, value)) in [(0x40, LZ_INPUT as u32), (0x44, compressed.len() as u32), (0x04, 2)].into_iter().enumerate() {
+        sources.rows.push(TransactionRow {
+            tick: tick + 1 + step as u64, core: Some(Core::Primary), pc: Pc(0x7000), address: (LZ_BASE + offset) as u32, size: 4,
+            access: Access::Write, accepted: true, value,
+        });
+    }
+}
+
+#[test]
+fn the_lz_tallies_follow_each_role_s_pinned_input() {
+    let retained_input = [3, b'a', b'b', b'c', 0x80, 0x36];
+    let owned_input = [9, b'a', b'b', b'c', b'a', b'b', b'c', b'a', b'b', b'c'];
+    let mut retained = relation_spec(Role::Retained, &timer_steps(100, 200, RETAINED_SITE), RETAINED_SITE);
+    let mut owned = relation_spec(Role::Composed, &timer_steps(160, 300, COMPOSED_SITE), COMPOSED_SITE);
+    with_lz(&mut retained, &retained_input);
+    with_lz(&mut owned, &owned_input);
+    let padded = |input: &[u8]| { let mut bytes = input.to_vec(); bytes.resize(16, 0); Sha256::of(&bytes) };
+    let with_copy = |lz: Value| {
+        let mut value = with_relations(fixture());
+        value["guard"]["attach_state"]["relations"]["lz"] = lz;
+        attach_rules(&mut value)["allowances"] = json!([{
+            "label": "lz-input", "kind": "copy", "space": {"target": "physical"}, "start": LZ_INPUT, "end": LZ_INPUT + 16, "reason": "r",
+            "source": {"dat": {"offset": 0, "transform": "identity"}}, "canonical_sha256": padded(&retained_input), "composed_sha256": padded(&owned_input),
+        }]);
+        value
+    };
+    let verdict = relation_verdict(&with_copy(json!({"citation": "lz.rs"})), &retained, &owned);
+    assert_eq!(verdict.first_difference, None, "{:?}", verdict.attach_differences);
+    let tallies = verdict.attach.unwrap().relations.iter().map(|role| role.lz.as_ref().map(|lz| (lz.literals, lz.matches))).collect::<Vec<_>>();
+    assert_eq!(tallies, [Some((1, 1)), Some((1, 0))]);
+    let without = relation_verdict(&with_copy(Value::Null), &retained, &owned).first_difference;
+    assert!(matches!(without, Some(Difference::AttachBoard { .. })), "{without:?}");
+    let mut overlap = with_copy(json!({"citation": "lz.rs"}));
+    attach_rules(&mut overlap)["board"] = json!([{"pointer": "/bus/devices/1/state/state/stream/literals", "kind": "declared", "reason": "r", "citation": "c"}]);
+    let entries = relation_verdict(&overlap, &retained, &owned).attach_differences.entries;
+    assert!(entries.iter().any(|entry| matches!(entry, Difference::AttachRelation { failure: RelationFailure::RelationOverlap { .. }, .. })));
+}
+
+#[test]
+fn a_board_entry_over_a_relation_leaf_refuses() {
+    let retained = relation_spec(Role::Retained, &timer_steps(100, 200, RETAINED_SITE), RETAINED_SITE);
+    let owned = relation_spec(Role::Composed, &timer_steps(160, 300, COMPOSED_SITE), COMPOSED_SITE);
+    let mut value = with_relations(fixture());
+    attach_rules(&mut value)["board"] = json!([{"pointer": "/bus/devices/0/state/count", "kind": "declared", "reason": "r", "citation": "c"}]);
+    let difference = relation_verdict(&value, &retained, &owned).first_difference;
+    let differences = relation_verdict(&value, &retained, &owned).attach_differences.entries;
+    assert!(difference.is_some());
+    assert!(differences.iter().any(|entry| matches!(entry, Difference::AttachRelation { failure: RelationFailure::RelationOverlap { .. }, .. })));
+}
+
+#[test]
+fn log_sites_and_spans_are_checked_at_parse() {
+    let mut value = with_relations(fixture());
+    value["guard"]["attach_state"]["relations"]["log"]["sites"][0]["store_pc"] = json!(RETAINED_SITE + 8);
+    assert!(matches!(parse(&value), Err(CatalogRefusal::AttachState(AttachRuleRefusal::LogSite(_)))));
+    let mut value = with_relations(fixture());
+    value["guard"]["attach_state"]["relations"]["log"]["span"] = json!({"start": LOG + 2, "end": LOG + 0x80});
+    assert!(matches!(parse(&value), Err(CatalogRefusal::AttachState(AttachRuleRefusal::LogSpan))));
+    let mut value = with_relations(fixture());
+    value["guard"]["attach_state"]["relations"]["log"]["sites"][2]["role"] = json!("retained");
+    value["guard"]["attach_state"]["relations"]["log"]["sites"][2]["read_pc"] = json!(RETAINED_SITE);
+    value["guard"]["attach_state"]["relations"]["log"]["sites"][2]["store_pc"] = json!(RETAINED_SITE + 4);
+    assert!(matches!(parse(&value), Err(CatalogRefusal::AttachState(AttachRuleRefusal::LogSite(_)))));
 }

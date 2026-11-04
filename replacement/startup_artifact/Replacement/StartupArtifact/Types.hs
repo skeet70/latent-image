@@ -9,7 +9,8 @@ module Replacement.StartupArtifact.Types
   , Cores, cores, coreList, physicalAddress
   , Boundary (..), CodeSpan (..), codeSpan, TcmBank (..), tcmBankName, WriteTarget (..), WriteRange (..)
   , WriteBasis (..), WritesPolicy (..), CatalogRead (..), Catalog (..)
-  , Piece (..), PieceFacts (..), ServiceBinding (..), Publication (..), LinkedBytes (..)
+  , Piece (..), PieceFacts (..), ServiceBinding (..), Publication (..), LinkedBytes (..), ScratchBytes (..)
+  , PublisherFrame (..), SubmitCall (..), StackDepth (..)
   , Refusal (..), CatalogProblem (..), ManifestProblem (..)
   ) where
 
@@ -60,7 +61,7 @@ editSpan (Edit range _) = range
 editBytes :: Edit -> B.ByteString
 editBytes (Edit _ bytes) = bytes
 
-data PieceKind = FirstStage | Record2Link | PrimaryPublisher
+data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 pieceKindName :: PieceKind -> Text
@@ -68,8 +69,11 @@ pieceKindName kind = case kind of
   FirstStage -> "first-stage"
   Record2Link -> "record2-link"
   PrimaryPublisher -> "primary-publisher"
+  LoaderOrchestrationB -> "loader-orchestration-b"
+  LoaderStartup -> "loader-startup"
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
+  | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 areaName :: Area -> Text
@@ -80,6 +84,10 @@ areaName area = case area of
   InterfaceInitializerArea -> "interface-initializer"
   CriticalPairArea -> "critical-pair"
   PrimaryInitializerArea -> "primary-initializer"
+  LoaderOrchestrationAArea -> "loader-orchestration-a"
+  LoaderOrchestrationBArea -> "loader-orchestration-b"
+  PhaseDispatcherArea -> "phase-dispatcher"
+  KernelInstallArea -> "kernel-install"
 
 data FootprintBasis = AdmissionRead | RuntimePremise deriving (Eq, Ord, Show)
 
@@ -156,6 +164,8 @@ data Boundary = Boundary
   , boundaryStop :: Bool
   , boundaryCompare :: Compare
   , boundaryRecordLimit :: RecordLimit
+  -- | Dropped, with the reads stopping at it, when a manifest piece claims this area.
+  , boundaryYieldsTo :: Maybe Area
   } deriving (Eq, Show)
 
 -- | Owned instructions as fetched, [start, end), in the low or the 0x40000000 alias spelling.
@@ -178,7 +188,8 @@ tcmBankName :: TcmBank -> Text
 tcmBankName DataBank = "data"
 tcmBankName InstructionBank = "instruction"
 
-data WriteTarget = PhysicalTarget | TcmTarget Core TcmBank deriving (Eq, Ord, Show)
+-- | 'PhysicalTarget' binds both cores' partitions; 'CorePhysicalTarget' one core's.
+data WriteTarget = PhysicalTarget | CorePhysicalTarget Core | TcmTarget Core TcmBank deriving (Eq, Ord, Show)
 
 -- | Physical addresses or TCM bank offsets, [start, end).
 data WriteRange = WriteRange WriteTarget Word64 Word64 deriving (Eq, Ord, Show)
@@ -215,12 +226,31 @@ data Publication = Publication { publicationGuest :: Guest, publicationValue :: 
 -- | A linked flat image and its llvm-nm symbol table.
 data LinkedBytes = LinkedBytes B.ByteString B.ByteString deriving (Eq, Show)
 
+-- | Stack bytes a piece's owned callee uses below its caller's SP.
+newtype ScratchBytes = ScratchBytes Word32 deriving (Eq, Show)
+
+data PublisherFrame = PublisherFrame { publisherEntry :: Pc, publisherCallerSp :: Guest } deriving (Eq, Show)
+
+-- | Bytes below an incoming SP.
+newtype StackDepth = StackDepth Word32 deriving (Eq, Show)
+
+-- | One task-submission tail call of the owned dispatcher: its core and stack depth at the branch.
+data SubmitCall = SubmitCall { submitCore :: Core, submitStack :: StackDepth } deriving (Eq, Show)
+
 -- | Artifact values that registered joins check across pieces.
 data PieceFacts
-  = FirstStageFacts Pc
-  -- | Secondary entry, the core-0 bindings the critical pair consumes and the linked record-2 image.
-  | Record2LinkFacts Pc [ServiceBinding] LinkedBytes
-  | PublisherFacts [Publication]
+  -- | First-stage entry and the linked record-1 image.
+  = FirstStageFacts Pc LinkedBytes
+  -- | Secondary entry, the core-0 bindings the critical pair consumes, the
+  -- linked record-2 image, the owned initializer's scratch and the deeper of
+  -- the critical pair's entry and exit frames below its caller's SP.
+  | Record2LinkFacts Pc [ServiceBinding] LinkedBytes ScratchBytes StackDepth
+  -- | The publisher's entry and the SP its caller frame provides, and its emitted stores.
+  | PublisherFacts PublisherFrame [Publication]
+  -- | The linked loader-B orchestration image.
+  | LoaderOrchestrationFacts LinkedBytes
+  -- | The linked loader-A and loader-B orchestration images and the dispatcher's task submissions.
+  | LoaderStartupFacts LinkedBytes LinkedBytes [SubmitCall]
   | NoFacts
   deriving (Eq, Show)
 
@@ -259,6 +289,8 @@ data ManifestProblem
   | GuardAttachUnknown Text
   -- | The attach boundary lacks a retained PC or names more than one core.
   | GuardAttachUnsuitable Text
+  -- | The named @guard.attach_state@ entry is malformed or inconsistent with the composition.
+  | AttachStateRefused Text
   deriving (Eq, Show)
 
 -- | 'FootprintOverlap' names the footprint owner, then the carrier owner.

@@ -45,7 +45,7 @@ import Emulation.WatchObservation
 import Emulation.ViewerRuntime (FixedSceneFrame (..), fixedSceneFrameArguments)
 import EmulatorUsb
 import FujiAF.RamPush
-import FujiAF.Transport (ensurePrivateDirectory, realClock, writePrivateBytes)
+import FujiAF.Transport (ensurePrivateDirectory, writePrivateBytes)
 import Xm1UnreviewedRelink (runUnreviewedRamPush, runUnreviewedRamUnload, withUnreviewedBuild, withUnreviewedBuildArchive)
 import RamPushReviewedPins (reviewedContract)
 import RamPushProcedure (procedureSourcesDigest)
@@ -392,6 +392,7 @@ stepKeyTiming segmentPulse step = KeyTiming (keyTimingPulse timing <|> segmentPu
 
 press :: Emulator -> Maybe KeyPulse -> Step -> IO ()
 press emulator pulse step = do
+  forM_ (stepIdle step) (emulatorIdle emulator)
   (_, actual) <- pressStep emulator (stepKeyTiming pulse step) (stepKey step)
   require (actual == stepExpected step)
     ("menu trajectory after " ++ stepKey step ++ ": expected " ++ show (stepExpected step) ++ ", got " ++ show actual)
@@ -404,6 +405,7 @@ presses emulator pulse = mapM_ (press emulator pulse)
 observe :: Emulator -> Maybe KeyPulse -> [Step] -> IO [Value]
 observe emulator pulse = mapM $ \step -> do
   let MenuState em es ec = stepExpected step
+  forM_ (stepIdle step) (emulatorIdle emulator)
   started <- getMonotonicTime
   (pressed, MenuState am as ac) <- pressStep emulator (stepKeyTiming pulse step) (stepKey step)
   ended <- getMonotonicTime
@@ -645,10 +647,10 @@ runRamPushE2EUsing given python workspace trajectoryFile installedMedia adjustme
       && all ((== "retained-film-route") . segmentPhase) (beforeUnload trajectories))
       "modal observation requires the retained-film-route physical-key trajectory"
   let settleCaps = [ () | segment <- beforeUnload trajectories ++ afterUnload trajectories
-                        , step <- segmentSteps segment, isJust (keyTimingSettle (stepTiming step)) ]
+                        , step <- segmentSteps segment, isJust (keyTimingSettle (stepTiming step)) || isJust (stepIdle step) ]
   case emulationRuntime given of
     RetainedRuntime | not (null settleCaps) ->
-      ioError (userError "settle_instructions is FujiMod press timing; the retained bridge takes no settle cap")
+      ioError (userError "settle_instructions and idle_instructions are FujiMod press timing; the retained bridge takes neither")
     _ -> pure ()
   exists <- doesDirectoryExist receipt
   when exists $ do
@@ -848,9 +850,10 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           emulatorTraceSites emulator fetchSites
           Just . fst <$> emulatorTraceHits emulator 0
         breakBefore <- heapBreak
+        allocationClock <- emulatedClock
         allocationPath <- timed "ram-alloc" (stagedSession allocationDirectory
           ((if unreviewedBank then runRamAllocWith xm1PeerCacheAvailability else runRamAlloc)
-            allocationBytes realClock api)) >>= \outcome -> case outcome of
+            allocationBytes allocationClock api)) >>= \outcome -> case outcome of
           RamAllocated path -> pure (allocationDirectory </> takeFileName path)
           other -> ioError (userError ("ram-alloc failed: " ++ show other))
         retained <- readRetainedAllocation allocationPath
@@ -944,7 +947,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
         pure (path, hostInstallMailbox host)
       Nothing -> do
         let observer = maybe NoRamPushObserver (\_ -> BeforeRamPublication (armModalLifetime emulator e2e lifetimeSession)) modalObservation
-        statePath <- timed "ram-push" (stagedSession pushDirectory (pushWith observer retained manifest realClock api)) >>= \outcome -> case outcome of
+        pushClock <- emulatedClock
+        statePath <- timed "ram-push" (stagedSession pushDirectory (pushWith observer retained manifest pushClock api)) >>= \outcome -> case outcome of
           RamPushInstalled path -> pure (pushDirectory </> takeFileName path)
           other -> stop "ram-push" (show other)
         installMailbox <- readMailbox
@@ -1079,7 +1083,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
           unloadMailbox <- if planUnload plan
             then do
               privateDirectory unloadDirectory
-              unload <- timed "ram-unload" (stagedSession unloadDirectory (unloadWith state realClock api))
+              unloadClock <- emulatedClock
+              unload <- timed "ram-unload" (stagedSession unloadDirectory (unloadWith state unloadClock api))
               unless (unload == RamUnloaded) (stop "ram-unload" (show unload))
               recordModalLifetimeBoundary lifetimeSession RollbackReadback
               Just <$> readMailbox
