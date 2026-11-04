@@ -14,7 +14,7 @@ This report answers whether projects listed at [arewertosyet.com](https://arewer
 ### 1.2 Service ABI that retained callers keep using
 
 - Each root has **97 callable slots**: 93 at `0..0x170` plus four extensions at `+0x1618..+0x1624`. It also holds a tick pointer at `+0x174`, 120 eleven-word descriptors from `+0x178` and a stack-top word at `+0x1628`, for a total of 1,419 words [Draft:11; Map A.1].
-- Manifest v6 (E-RTOS-SLOT-MANIFEST-V5-150) recovers all 97 contracts per domain from the x70view decomp's kernel C (§4.13). Extents: 80 derived by StockInventory, 15 taken from byte-exact decomp functions, and 2 (`+0xc0`, `+0xd4`) still refused [Draft:17].
+- Manifest v6 (E-RTOS-SLOT-MANIFEST-V5-150) recovers all 97 contracts per domain from the x70view decomp's kernel C (§4.13). Extents: 80 derived by StockInventory, 15 taken from byte-exact decomp functions, and 2 (`+0xc0`, `+0xd4`) still refused ([manifest draft](rtos-platform-manifest-draft.md#v6-contracts-from-the-decomp)).
 - Retained code depends on more than the slots [Draft:37-46]:
   - it calls the scheduler and CPU helpers directly;
   - auto-ready `0x43f9c`, initial scheduler `0x43688`, trampolines `0x43728` and resume through `SPSR/LDM^` are direct entries;
@@ -37,7 +37,7 @@ This report answers whether projects listed at [arewertosyet.com](https://arewer
 | -60, -62 | message-wrapper returns; sibling `os_error.h` names them MBX_INVALID_LENGTH and MBX_FULL (non-X-M1) | image4 message wrappers | `E-ITRON-VOCAB-150` |
 | -1 | try-lock `0x427d4` / unlock `0x427fc` | loader helpers | Map A.1 |
 
-Objects are 120 C/T task records per kernel, per-task eventflag records (12 B) and nodes (16 B), scheduler domains (132 B), ready lists and bitmaps, resources/semaphores (97 constructed by root104), mailbox/message objects with pools, and timer records of 24 bytes [Map A.2; Draft:23-29,43; E-RTOS-SLOT-MANIFEST-V5-150].
+Objects are 120 C/T task records per kernel, eventflag records (12 B) and control blocks (16 B), scheduler domains (132 B), ready lists and bitmaps, resources/semaphores (97 constructed by root104), mailbox/message objects with pools, and timer records of 24 bytes [Map A.2; Draft:23-29,43; E-RTOS-SLOT-MANIFEST-V5-150].
 
 ### 1.4 IRQ, timer and blocking behaviour
 
@@ -108,7 +108,7 @@ Tier counts for the 70 unknown slots per domain: **30 high** (one named candidat
 
 ### 2.3 Where X-M1 departs from µITRON 4.0 and NORTi
 
-1. **Encoded IDs and dual domains.** IDs are `(class<<16)|id`, the kernel rejects a bad class with -18, and there are two roots plus extensions `0x1618..0x1624` (identity and critical lock retry/release/observe) [Draft:23-24,29]. µITRON 4.0 is uniprocessor. Multiprocessor µITRON exists only as later extensions such as TOPPERS FDMP/FMP (https://www.toppers.jp/fdmp-kernel.html, https://www.toppers.jp/fmp-kernel.html).
+1. **Encoded IDs and dual domains.** IDs are `(class<<16)|id`, the kernel rejects a bad class with -18, and there are two roots plus extensions `0x1618..0x1624` (identity, and the single-try acquire, release and observe of a lock word) [Draft:23-24,29; manifest v6]. µITRON 4.0 is uniprocessor. Multiprocessor µITRON exists only as later extensions such as TOPPERS FDMP/FMP (https://www.toppers.jp/fdmp-kernel.html, https://www.toppers.jp/fmp-kernel.html).
 2. **Current-task query.** `+0x16c` takes no argument and returns the running task's id, or 0 in handler context or with IRQ masked (manifest v6). µITRON get_tid returns TSK_NONE (= 0) from non-task contexts [spec get_tid]. NORTi `vget_tid()` returns the ID directly [no4guide.pdf].
 3. **IRQ save/restore with mask** (`0x164/0x168`) follows the NORTi `vdis_psw/vset_psw` shape, not µITRON 4.0.
 4. **Non-standard slots and layout.** `0x170` buffer acquire sits outside the family order [Manifest]. The tick pointer, 120 raw descriptors and stack-top word inside the root, and their external raw-layout readers, are not part of any µITRON API [Draft:46-48].
@@ -498,23 +498,23 @@ Order of work:
 
 ### 4.13 Owned thread layer and stock-ABI shim: design input from the decomp
 
-Source: x70view `decomp/xm1-coverage` at `55436fc85c0560dd252b0410af6f2427fe198cd3`, `decomp/firmwares/xm1-150/kernel0` (loader A) and `kernel1` (loader B). Kernel0 and kernel1 are the same C apart from the domain constant. Facts below come from byte-exact functions unless marked. A fact from a NONMATCHING draft is cited only where the stock disassembly confirms it. Contracts per slot are in manifest v6 (E-RTOS-SLOT-MANIFEST-V5-150). Object layouts are in the [manifest draft](rtos-platform-manifest-draft.md#kernel-object-layouts-from-the-decomp).
+Source: x70view `decomp/xm1-coverage` at `55436fc85c0560dd252b0410af6f2427fe198cd3`, `decomp/firmwares/xm1-150/kernel0` (loader A) and `kernel1` (loader B). Kernel0 and kernel1 are the same C apart from the domain constant and the differences listed in private-data/scratch/RtosDecomp/crosscore/design.md §1.4. Facts below come from byte-exact functions unless marked "(stock disassembly)" (no C body) or "(NONMATCHING, confirmed)" (a draft checked against the stock disassembly of both loaders). Contracts per slot are in manifest v6 (E-RTOS-SLOT-MANIFEST-V5-150). Object layouts are in the [manifest draft](rtos-platform-manifest-draft.md#kernel-object-layouts-from-the-decomp).
 
 **One scheduler with two run queues.**
-- Each kernel keeps two context records (0x84 bytes; A 0x400545cc, B 0x400e458c), one per domain. `kernel_initialize_owner_contexts` builds them after the startup barrier from the shared configuration entries at 0x400c0818 (A) and 0x400c0888 (B).
+- Each kernel keeps two context records (0x84 bytes; A 0x400545cc, B 0x400e458c), one per domain. `kernel_initialize_owner_contexts` (A 0x43ac0 / B 0xd3a7c) builds them after the startup barrier from the shared configuration entries at 0x400c0818 (A) and 0x400c0888 (B).
 - The remote record points straight into the other kernel's private RAM: ready lists, bitmap, selected and running cells, dispatch-enabled word, timer heap, clock words, task records and lock words.
 - Any service given a class-2 id from A code therefore links tasks into B's ready queue, timer heap or object queues itself.
 - So one domain's scheduler can be owned alone only if those structures keep their stock addresses and semantics. The clean cut is to own both domains' schedulers together.
 
 **Locks.**
 - Each domain has a scheduler lock (A 0x400545c0 / B 0x400e4580) and an object lock (A 0x400545c4 / B 0x400e4584).
-- Both are taken through acquire A 0x439d8 / B 0xd398c, which spins with IRQ masked until it holds the word and always returns 0. Every "acquire failed, retry" branch in the C is unreachable. Release is DMB, store 0, DSB.
+- Both are taken through acquire A 0x439d8 / B 0xd398c (stock disassembly), which spins with IRQ masked until it holds the word and always returns 0. Every "acquire failed, retry" branch in the C is unreachable. Release (A 0x43a14 / B 0xd39c8, stock disassembly) is DMB, store 0, DSB.
 - Lock order is global lock, then object lock, then the waiter's scheduler lock (selected by T+0x20).
 - Paths that must take a lock out of order drop and retake, and use the T+0x24/+0x28/+0x2c handshake flags to detect that another path finished the job.
 
 **Global lock 0x400c0804.**
-- The IRQ vector of each core takes it for the whole handler, with tag 0x11 (core 0) or 0x12 (core 1), and nests on its own tag. The image4 critical pair takes it with tags 0x21/0x22 through `+0x161c..+0x1624`.
-- Every interrupt handler of both cores and every image4 critical section is therefore serialized. A holder in task context must keep IRQ masked on its own core until release, or an IRQ on that core spins forever with IRQ masked.
+- The IRQ vector of each core (asm, stock disassembly A 0x40258..0x4030c) takes it for the whole handler, with tag 0x11 (core 0) or 0x12 (core 1), and nests on its own tag. The image4 critical pair takes it with tags 0x21/0x22 through `+0x161c..+0x1624`, whose trylock and unlock (A 0x427d4 / 0x427fc) are NONMATCHING, confirmed. `+0x161c` operates on the lock word in r0; 0 selects 0x400c0804.
+- [INFERENCE, pending cross-core exclusive-monitor behaviour, laws U12] Every interrupt handler of both cores and every image4 critical section is therefore serialized. A holder in task context must keep IRQ masked on its own core until release, or an IRQ on that core spins forever with IRQ masked.
 - Owned handlers installed through `+0x160` run inside this lock.
 
 **Cross-core make-ready.**
@@ -522,7 +522,7 @@ Source: x70view `decomp/xm1-coverage` at `55436fc85c0560dd252b0410af6f2427fe198c
 - When the target's selected cell changed and the target has dispatch enabled, it raises IRQ 120 on the target core (controller bank 0xfffb3000 or 0xfffb4000, offset 0xcc) before releasing the lock. A local target returns without a doorbell.
 - The receiver's handler (A 0x40b00 / B 0xd0b00, stock disassembly) clears the request and sets the delayed-dispatch word. The outermost IRQ exit then switches if the selected cell differs from the running cell.
 - All decisions are the sender's; a doorbell that finds nothing to do costs one IRQ.
-- Stock uses this path in both directions: data-queue sends carry most of the traffic, plus wakeups from B to A and activations from A to B (E-RTOS-SLOT-CENSUS-STOCK-150).
+- Stock uses this path in both directions. In the census, most cross-domain calls are data-queue sends, plus wakeups from B to A and activations from A to B (E-RTOS-SLOT-CENSUS-STOCK-150).
 
 **Selected-cell race.**
 - Either core writes a domain's selected cell (A 0x40054768 / B 0x400e4728), always under that domain's scheduler lock. The owning core's dispatcher and IRQ-return path read it without the lock.
@@ -530,12 +530,12 @@ Source: x70view `decomp/xm1-coverage` at `55436fc85c0560dd252b0410af6f2427fe198c
 - [INFERENCE] No barrier separates the sender's scheduler stores from the doorbell store. Whether the receiver can observe the doorbell first depends on memory attributes that are not recovered. An owned layer should issue DMB after the scheduler stores and DSB before the doorbell.
 
 **Hazards an owned layer must not inherit.**
-- The stock dispatcher's empty-selection branch uses r4..r6 that only its C entries load. An outermost IRQ exit with an empty selected cell and dispatch enabled reaches it with the interrupted task's registers, writes 1 to an arbitrary address and loads an arbitrary mode. While the stock vector and dispatcher run, each domain needs one ready, never-blocking task; stock uses idle tasks 102/103.
+- The stock dispatcher's empty-selection branch uses r4..r6 that only its C entries load. An outermost IRQ exit with a pending reschedule request, an empty selected cell and dispatch enabled reaches it with the interrupted task's registers, writes 1 to an arbitrary address and loads an arbitrary mode. While the stock vector and dispatcher run, each domain needs one ready, never-blocking task; stock uses idle tasks 102/103.
 - [INFERENCE from exact code] The tick pops a timer entry without clearing it, and the timeout callback drops the scheduler lock with IRQ unmasked. A waker in that window removes the popped entry again, deleting heap slot 1 or underflowing the count. An owned timer must clear the popped entry before the callback.
-- Cyclic delete `+0x10c` on an active handler, and a zero period, both make the tick loop without returning.
+- Deleting an active cyclic handler (`+0x10c`) makes the tick loop and call address 0; a zero period makes the tick loop on its handler.
 - The interrupt-context eventflag set `+0x8c` readies a satisfied waiter through the flag's domain rather than the waiter's own.
 
-**Tick.** Only core 0 programs the timer; both cores take IRQ 32. The stock ISR (A 0x40b24 / B 0xd0b24) reaches the tick body only through the published `+0x104` word, so republishing that word redirects the stock tick. Each domain processes only its own heap, in 10 ms ticks.
+**Tick.** Only core 0 programs the timer; both cores define and enable IRQ 32 (NONMATCHING `kernel_start_tick_timer`, confirmed against A 0x40b5c..0x40c54 / B 0xd0b5c..0xd0c4c). Whether line 32 reaches core 1 on hardware is open (laws U4). The stock ISR (A 0x40b24 / B 0xd0b24) reaches the tick body only through the published `+0x104` word, so republishing that word redirects the stock tick. Each domain processes only its own heap, 10 clock units per tick (about 10 ms at the observed 99.88 Hz, E-XM1-TIMER-IRQ-LAWS-150).
 
 **Slot classes for the shim** (per domain, the same for A and B; private-data/scratch/RtosDecomp/crosscore/classification.tsv; reviewed):
 
