@@ -58,7 +58,7 @@ The recovered bodies match µITRON 4.0 numbering and constants where they overla
 
 ### v6 contracts from the decomp
 
-**Exactness.** Kernel0 and kernel1 are the same C compiled with a domain constant, apart from the differences listed in private-data/scratch/RtosDecomp/crosscore/design.md §1.4. At `55436fc85c` each carries 19 NONMATCHING markers, and several kernel functions have no C body: the lock pair, the IRQ-120 handler, the vector body and ten slot bodies. A fact from a NONMATCHING function or from a body the decomp lacks is in the manifest only after it was checked against the stock disassembly of both loaders.
+**Exactness.** Kernel0 and kernel1 are the same C compiled with a domain constant, apart from the differences listed in private-data/scratch/RtosDecomp/crosscore/design.md §1.4. At `55436fc85c` each carries 19 NONMATCHING markers, and several kernel functions have no C body: the lock pair, the IRQ-120 handler, the vector body and twelve slot bodies. A fact from a NONMATCHING function or from a body the decomp lacks is in the manifest only after it was checked against the stock disassembly of both loaders.
 
 **Contracts.** All 97 contracts per domain are `recovered`, and 48 offsets carry caller preconditions.
 - Against v5: 19 confirm, 33 complete and 45 correct (`private-data/scratch/RtosDecomp/{task,semflag,queue,pooltime,system}/contracts.json`, field `comparison`).
@@ -203,7 +203,7 @@ This report is a project-boundary draft. Two extent refusals per domain, the Sto
 
 Move #127's RTOS retirement work into one platform project behind the two domain roots plus direct scheduler/vector/device interfaces. The inventory has 97 callable slots per root, and it identifies retained C/T descriptor and tick-pointer consumers, so replacing root targets alone cannot retire the platform.
 
-The x70view decomp of the two loader kernels carries 19 NONMATCHING functions per kernel, and several kernel functions (the lock pair, the IRQ vector and IRQ-120 handler, and ten slot bodies) have no C body; facts from both rest on the stock disassembly. Reading it closed every slot contract: per domain 97 are recovered, and 95 of 97 extents are derived or hashed against byte-exact functions. It also gave typed layouts for the task, context, wait, timer and object records.
+The x70view decomp of the two loader kernels carries 19 NONMATCHING functions per kernel, and several kernel functions (the lock pair, the IRQ vector and IRQ-120 handler, and twelve slot bodies) have no C body; facts from both rest on the stock disassembly. Reading it closed every slot contract: per domain 97 are recovered, and 95 of 97 extents are derived or hashed against byte-exact functions. It also gave typed layouts for the task, context, wait, timer and object records.
 
 The code settles most of the cross-core design:
 - the two kernels form one scheduler with two run queues and edit each other's ready queues, timer heaps and object queues directly;
