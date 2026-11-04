@@ -119,14 +119,14 @@ stockCalleeDemand target = CalleeDemand target (StackOffset (negate bytes))
       AuxiliaryService -> 16; CreationService -> 16; ActivationService -> 40
       CurrentCoreService -> 8; SaveMaskService -> 4; RestoreMaskService -> 4
 
--- | Error dispatch 0x723398 pushes {r11,lr} (8 bytes) and calls the callback, whose frame low is given.
-errorCallbackDemand :: StackOffset -> CalleeDemand
-errorCallbackDemand (StackOffset callback) = CalleeDemand (FixedService ErrorCallback) (StackOffset (callback - 8))
-
 constant :: Word32 -> Scalar
 constant location = case lookup location [(0x7cad9c,ClassTable),(0x40a5b204,Wrapper),(0x40a0fc44,State),(0x96bd20,Roots),(0x40a0f82c,ErrorWord),(0x409c280c,Lock)] of
   Just root -> Guest root (Just 0)
   Nothing -> Constant location
+
+-- | Error dispatch 0x723398 pushes {r11,lr} (8 bytes) and calls the callback, whose frame low is given.
+errorCallbackDemand :: StackOffset -> CalleeDemand
+errorCallbackDemand (StackOffset callback) = CalleeDemand (FixedService ErrorCallback) (StackOffset (callback - 8))
 
 get :: Word32 -> Machine -> A.Reg -> Scalar
 get pc machine register

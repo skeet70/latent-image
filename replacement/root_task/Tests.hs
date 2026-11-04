@@ -37,7 +37,7 @@ checkArtifact bytes symbols = do
   assert (scratchLow proof <= -8 && scratchLow proof >= -992) "root stack bound lost"
   assert (map fst (callPositions proof) == sites && all (not . null . snd) (callPositions proof))
     "call positions do not cover exactly the call sites"
-  assert (sum [ length [() | EffectPosition 0 0 1 0 _ <- positions]
+  assert (sum [ length [() | EffectPosition (Scenario 0 0 1 0) _ <- positions]
               | (site,positions) <- callPositions proof, callTarget site == 0x7247ac ] == 97)
     "the resource call sites do not serve 97 effects in the natural scenario"
   forM_ [B.empty,B.take 7 bytes,B.replicate 344 0] $ \invalid ->

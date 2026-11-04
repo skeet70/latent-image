@@ -137,6 +137,9 @@ main = do
     (any (\(low, high) -> low <= 0x69ca44 && high == 0x69cbf0) extents)
   ok "the root closure reaches the wrapper, storage and critical-pair carriers"
     (all (\carrier -> any (overlaps carrier) extents) [(0x725dd8, 0x72612c), (0x725cc4, 0x725da8), (0x7235d8, 0x723790)])
+  ok "no root closure call targets the excluded idle or dispatcher window"
+    (not (any (\(_, target) -> any (\(low, high) -> target >= low && target < high) [(0x69cbf0, 0x69cc00), (0x69cdf8, 0x69cf84)])
+      (RootFootprint.closureCalls image4)))
 
   -- Trampolines (review R3).
   let wordIn :: Word32 -> B.ByteString -> Word32 -> Word32
@@ -231,6 +234,20 @@ main = do
         | otherwise = WA.stockCalleeDemand target
   ok "an error callback with a 0x800-byte frame exceeds every dispatcher submission's boot-stack window"
     (not (null calls) && all (either (const True) (const False) . submissionStackWith (demandWith (-0x800)) joined) calls)
+  idleBytes <- H.readRegular 0x10000 idleBin
+  idleSymbolBytes <- H.readRegular 0x10000 idleSymbols
+  -- push {r11,lr}; sub sp,sp,#0x3d8; wfi; b 0x69cbf8: an admissible idle body with a 992-byte frame.
+  let deepIdle = B.concat (map U.putWord32 [0xe92d4800, 0xe24ddff6, 0xe320f003, 0xeafffffd])
+      deeperBy extra = map (\(SubmitCall core (StackDepth depth)) -> SubmitCall core (StackDepth (depth + extra)))
+      withIdle bytes submitted' = [piece {pieceFacts = case pieceFacts piece of
+                                     IdleTaskFacts _ tops -> IdleTaskFacts (LinkedBytes bytes idleSymbolBytes) tops
+                                     LoaderStartupFacts a b submitted starts -> LoaderStartupFacts a b (submitted' submitted) starts
+                                     other -> other} | piece <- j5Pieces]
+  ok "with every submission 0x400 deeper, error-callback-idle-demand holds for the owned idle frame"
+    (holdsIn "error-callback-idle-demand" (withIdle idleBytes (deeperBy 0x400)))
+  ok "with every submission 0x400 deeper, error-callback-idle-demand fails for an admitted idle body with a 992-byte frame"
+    (holdsIn "idle-entry-dispatched" (withIdle deepIdle id)
+      && not (holdsIn "error-callback-idle-demand" (withIdle deepIdle (deeperBy 0x400))))
   let entering = [ site | (site, 0x725dd8) <- RootFootprint.closureCalls image4
                  , not (any (\(low, high) -> site >= low && site < high) [(0x725dd8, 0x72612c), (0x7235d8, 0x723790), (0x725cc4, 0x725da8)]) ]
   site <- case entering of

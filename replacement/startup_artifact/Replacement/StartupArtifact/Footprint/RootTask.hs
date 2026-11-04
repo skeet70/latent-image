@@ -17,6 +17,7 @@ import qualified Replacement.LoaderOrchestration.Artifact as L
 import qualified Replacement.LoaderOrchestration.Interface as LI
 import Replacement.RootTask.Services (serviceSymbols)
 import qualified Replacement.StartupArtifact.Footprint.IdleTask as Idle
+import Replacement.StartupArtifact.Footprint.LoaderStartup (dispatcherCarrier)
 import Replacement.StartupArtifact.Footprint.TaskSubmission (closure)
 import Replacement.StartupArtifact.Types
 
@@ -26,7 +27,7 @@ image4Base = 0x61c400
 -- | Root's own carrier, and the idle and dispatcher carriers that would otherwise end the extents of
 -- 0x69ca44 and 0x69cc18 only at the next direct-call target 0x69cfa4.
 excluded :: [L.CodeWindow]
-excluded = [window 0x69d160 0x69d2b4, window 0x69cbf0 0x69cc00, window 0x69cdf8 0x69cf84]
+excluded = [window 0x69d160 0x69d2b4, window 0x69cbf0 0x69cc00, dispatcherCarrier]
   where
     window low high = L.CodeWindow (LI.CodeAddress low) (LI.CodeAddress high)
 
@@ -58,8 +59,8 @@ footprint loaderA loaderB image4 =
        ( closure LoaderA 0x40000 loaderA [] (into 0x40000 loaderA) loaderCitation
       ++ closure LoaderB 0xd0000 loaderB [] (into 0xd0000 loaderB) loaderCitation )
   ++ Idle.trampolineA RuntimePremise (Citation "private-data/analysis/x-m1-1.50/decode/loader-40000.dis:3504-3516,3557-3560 (first-entry trampoline: r0 the creation argument 0, LR the task-return service; reports/replacement-inventory-baseline.md:1128-1130)")
-  ++ mapMaybe id [entry RuntimePremise LoaderA 0x453f0 0x453f4 (Citation "replacement/root_task/Replacement/RootTask/Admission.hs:238-240 (a returning root hands back through the trampoline-supplied LR 0x453f0; reports/replacement-inventory-baseline.md:1130,1700)")]
+  ++ mapMaybe id [entry RuntimePremise LoaderA 0x453f0 0x453f4 (Citation "replacement/root_task/Replacement/RootTask/Admission.hs:239-241 (a returning root hands back through the trampoline-supplied LR 0x453f0; reports/replacement-inventory-baseline.md:1130,1684)")]
   where
-    services = Citation "replacement/root_task/Replacement/RootTask/Services.hs:7-35 and Artifact.hs:132-145 (retained AAPCS services, the published callbacks 0x72835c, 0x726478 and periodic callback 0x69cc18; reports/replacement-inventory-baseline.md:1690-1704), closed over direct calls with the root, idle and dispatcher carriers excluded"
+    services = Citation "replacement/root_task/Replacement/RootTask/Services.hs:7-35 and Artifact.hs:132-145 (retained AAPCS services, the published callbacks 0x72835c, 0x726478 and periodic callback 0x69cc18; reports/replacement-inventory-baseline.md:1664-1690), closed over direct calls with the root, idle and dispatcher carriers excluded"
     loaderCitation = "direct calls from root's image-4 closure into the loader (for example 0x41a34 log), closed over direct calls"
     into base loader = nub [target | (_, target) <- closureCalls image4, target >= base, target < base + fromIntegral (B.length loader)]

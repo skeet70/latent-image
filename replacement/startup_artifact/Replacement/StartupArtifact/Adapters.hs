@@ -756,7 +756,7 @@ deriveIdleTask source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) =
       declaration = PieceDeclaration kind (Set.singleton IdleTaskArea) [carrier] IdleFootprint.footprint
         (map Premise
           [ "entry is A32 SVC on an aligned allocated live stack at least 32 bytes deeper than the admitted frame (replacement/idle_task/Replacement/IdleTask/Artifact.hs:130-131)"
-          , "wakeups come from the retained IRQ entry and exit, which save and restore the interrupted context on the interrupted stack (reports/replacement-inventory-baseline.md:1640-1646)" ])
+          , "wakeups come from the retained IRQ entry and exit, which save and restore the interrupted context on the interrupted stack (reports/replacement-inventory-baseline.md:1688)" ])
         catalog (IdleTaskFacts (LinkedBytes bin symbolBytes) [firstEntry])
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (IT.stagedBytes (IT.stageImage4 idleSource artifact))) Nothing)
 
@@ -807,7 +807,7 @@ deriveRootTask source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) =
           | (index, (owned, stock, positions)) <- zip [1 :: Int ..] (sortOn (\(_, _, served) -> take 1 served) group) ]
         | group <- M.elems byTarget ]
       -- Executions of a site in its busiest scenario.
-      busiest positions = maximum (M.elems (M.fromListWith (+) [((a, b, mode, query), 1 :: Int) | RA.EffectPosition a b mode query _ <- positions]))
+      busiest positions = maximum (M.elems (M.fromListWith (+) [(scenario, 1 :: Int) | RA.EffectPosition scenario _ <- positions]))
       reading = ["create-workers-call", "init-6a5634-call", "register-periodic-call", "mark-2-call"]
   calls <- mapM (\(owned, stock, positions, index) -> do
       service <- maybe (Left (AdapterRefused kind ("root call target outside its service list: " <> hexName (RA.callTarget owned)))) Right
@@ -859,14 +859,14 @@ deriveRootTask source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) =
         , AllocationWords creationA 20 40 AllocationBase, AllocationWords creationB 20 40 AllocationBase ]
       writes = EnumeratedWrites [WriteRange (CorePhysicalTarget Core0) (rootTop - frame) rootTop]
         (Premised (Premise (T.intercalate "; "
-          [ "the width is proved: root code stores only to its own stack, at offsets from the admitted frame low to the entry SP (replacement/root_task/Replacement/RootTask/Admission.hs:70,92-103,241-244)"
+          [ "the width is proved: root code stores only to its own stack, at offsets from the admitted frame low to the entry SP (replacement/root_task/Replacement/RootTask/Admission.hs:71,93-104,242-245)"
           , "root enters at its allocation top 0xa10e00; " <> orderPremise ])))
       catalog = Catalog (calls ++ presence) code writes rows
       declaration = PieceDeclaration kind (Set.singleton RootTaskArea) [carrier]
         (RootFootprint.footprint (targetOf targets LoaderA) (targetOf targets LoaderB) image4)
         (map Premise
-          [ "retained callees behave as stock from their entries, including error dispatch from 0x725b74 in IRQ context (replacement/root_task/Replacement/RootTask/Artifact.hs:145; reports/replacement-inventory-baseline.md:1702-1704)"
-          , "root is entered once on core 0 by the first-entry trampoline with r0 = 0 and SP = the A104 allocation top (reports/replacement-inventory-baseline.md:1130,1622)"
+          [ "retained callees behave as stock from their entries, including error dispatch from 0x725b74 in IRQ context (replacement/root_task/Replacement/RootTask/Artifact.hs:145; reports/replacement-inventory-baseline.md:1686-1688)"
+          , "root is entered once on core 0 by the first-entry trampoline with r0 = 0 and SP = the A104 allocation top (reports/replacement-inventory-baseline.md:1130,1621,1628)"
           , "the 32 bytes below the admitted frame bound hold the source IRQ frame; retained callee demand on root's stack is not proved" ])
         catalog (RootTaskFacts (LinkedBytes bin symbolBytes) pool)
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (RT.stagedBytes (RT.stageImage4 rootSource artifact))) Nothing)

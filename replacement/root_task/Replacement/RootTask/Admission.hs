@@ -1,5 +1,5 @@
 module Replacement.RootTask.Admission
-  ( AdmissionError (..), RootProof, CallKind (..), CallSite (..), EffectPosition (..), deriveRootProof
+  ( AdmissionError (..), RootProof, CallKind (..), CallSite (..), Scenario (..), EffectPosition (..), deriveRootProof
   , scratchLow, executionPcs, callSites, haltPcs, returnPcs, scenarioCount, callPositions
   ) where
 
@@ -24,8 +24,8 @@ data AdmissionError = InvalidCarrier | UnsupportedInstruction | UnprovedConditio
 data CallKind = Call | TailCall deriving (Eq, Ord, Show)
 data CallSite = CallSite {callPc :: Word32, callTarget :: Word32, callKind :: CallKind}
   deriving (Eq, Ord, Show)
--- | A corpus scenario's checked results (A, B, mode, query) and the index of one effect in its ordered list.
-data EffectPosition = EffectPosition Word32 Word32 Word32 Word32 Int deriving (Eq, Ord, Show)
+-- | A corpus scenario and the index of one effect in its ordered list.
+data EffectPosition = EffectPosition Scenario Int deriving (Eq, Ord, Show)
 data RootProof = RootProof Int [Word32] [CallSite] [Word32] [Word32] Int [(CallSite,[EffectPosition])] deriving (Eq, Show)
 scratchLow :: RootProof -> Int
 scratchLow (RootProof n _ _ _ _ _ _) = n
@@ -48,7 +48,8 @@ data Value = Number Word32 | Result ResultSource Word32 | CleanupResult | Incomi
   | Stack Int | IncomingLr | Unknown deriving (Eq, Show)
 data Effect = Effect Word32 [Word32] deriving (Eq, Show)
 data Outcome = Halt | Return deriving (Eq, Show)
-data Scenario = Scenario Word32 Word32 Word32 Word32 deriving (Eq, Show)
+-- | Checked results of 0x6a9354, 0x6ac2b4, the mode 0x69cfa4 and the query 0x6a5920.
+data Scenario = Scenario Word32 Word32 Word32 Word32 deriving (Eq, Ord, Show)
 data Machine = Machine
   { registers :: M.Map A.Reg Value, stack :: M.Map Int Value, zero :: Maybe Bool
   , remaining :: [Effect], low :: Int, steps :: Int, fetched :: S.Set Word32
@@ -215,7 +216,7 @@ deriveRootProof bytes = do
             0x6a5920 -> Result Query query
             0x72612c -> CleanupResult
             _ -> Unknown
-          position = EffectPosition a b mode query (length (fst (sourceEffects scenario)) - length (remaining machine))
+          position = EffectPosition scenario (length (fst (sourceEffects scenario)) - length (remaining machine))
           site = CallSite pc target kind
       changed <- put (A.Reg 0) result clobbered
       pure changed {remaining = rest, zero = Nothing, sites = S.insert site (sites machine)
