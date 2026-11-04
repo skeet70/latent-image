@@ -989,9 +989,21 @@ fn privileged_status_writes_that_change_the_mode_or_set_t_are_refused_without_ef
 }
 
 #[test]
+fn conditional_privileged_status_writes_check_the_value_only_when_the_condition_passes() {
+    // msreq CPSR_c, r12 with Z set and r12 naming SYS
+    let taken = Case::new(&[0x0121_f00c, BX_LR]).privileged(SVC_ENTRY, None).register(12, 0x6000_00df);
+    assert_status_write_has_no_effect(&taken, &taken.run());
+    // msrne CPSR_c, r12 with Z set
+    let skipped = Case::new(&[0x1121_f00c, BX_LR]).privileged(SVC_ENTRY, None).register(12, 0x6000_00df).run();
+    skipped.assert_returned();
+    assert_eq!(skipped.register("cpsr"), SVC_ENTRY);
+}
+
+#[test]
 fn privileged_cases_refuse_spsr_mode_changes_exception_returns_and_other_coprocessor_words() {
     for word in [
         0xe14f_0000, // mrs r0, spsr
+        0x114f_0000, // mrsne r0, spsr
         0xe169_f00c, // msr SPSR_fc, r12
         0xe361_f0d3, // msr SPSR_c, #0xd3
         0xe321_f0d3, // msr CPSR_c, #0xd3
@@ -1018,6 +1030,11 @@ fn privileged_cases_refuse_spsr_mode_changes_exception_returns_and_other_coproce
         0xee02_0e10, // mcr p14, 0, r0, c2, c0, 0
         0xfe12_0e10, // mrc2 p14, 0, r0, c2, c0, 0
         0xee10_0fb0, // mrc p15, 0, r0, c0, c0, 5
+        0xec50_0e00, // mrrc p14, 0, r0, r0, c0
+        0xec40_0e00, // mcrr p14, 0, r0, r0, c0
+        0xed92_0e00, // ldc p14, c0, [r2]
+        0xed82_0e00, // stc p14, c0, [r2]
+        0xee12_0e00, // cdp p14, 1, c0, c2, c0, 0
         0xe320_f003, // wfi
     ] {
         for entry in [SVC_ENTRY, SYS_ENTRY] {
