@@ -2,9 +2,10 @@
 -- | composed-contract.json, schema 4 in the shape of
 -- emulation/fujimod-xm1/tests/data/composed-contract-v4.json, or schema 5 with
 -- an @application@ section: every list is sorted and non-overlapping, and every
--- object carries all its keys.
+-- object carries all its keys; the top-level pool_allocation is present only
+-- when the composition has one.
 module Replacement.StartupArtifact.Contract
-  ( contractValue, normalizeFootprint, allowRanges, EmittedWrites (..), contractCarriers, declaredMutations
+  ( contractValue, normalizeFootprint, allowRanges, EmittedWrites (..), contractCarriers, declaredMutations, poolAllocationValue
   ) where
 
 import qualified Data.Aeson as J
@@ -166,6 +167,23 @@ declarationValue declaration = case declaration of
     [ "kind" .= ("decoder-commit" :: Text), "decoder" .= (decoder :: Word16), "previous" .= previous, "next" .= next
     , "core" .= coreIndex core, "writer" .= writer, "citation" .= citation ]
 
+-- | The task-submission piece's pool-allocation relation when task storage is composed too; the contract
+-- omits the key otherwise.
+poolAllocationValue :: [Piece] -> Maybe Value
+poolAllocationValue pieces = case ([pool | TaskSubmissionFacts _ pool <- map pieceFacts pieces], any ((== TaskStorage) . pieceKind) pieces) of
+  ([PoolAllocation (PoolSpan start end) records cursor positions tops owners (Citation citation)], True) -> Just $ object
+    [ "pool" .= object ["start" .= start, "end" .= end]
+    , "records" .= labelText records, "cursor" .= labelText cursor
+    , "words" .= [ object [ "read" .= labelText (allocationRead position), "offset" .= allocationOffset position
+                          , "stride" .= allocationStride position, "position" .= allocationPositionName (allocationPosition position) ]
+                 | position <- positions ]
+    , "stack_tops" .= map labelText tops
+    , "owners" .= [ object [ "core" .= coreIndex (ownerCore owner), "read" .= labelText (ownerRead owner)
+                           , "offset" .= ownerOffset owner, "stride" .= ownerStride owner ]
+                  | owner <- owners ]
+    , "citation" .= citation ]
+  _ -> Nothing
+
 contractValue :: JoinName k => Canonical -> B.ByteString -> Composition k -> B.ByteString -> TargetBytes -> Label -> Value -> Maybe Application -> Value
 contractValue source manifest composition composedDat composedTargets attach attachState section = object $
   [ "schema" .= maybe (4 :: Int) (const 5) section
@@ -180,7 +198,8 @@ contractValue source manifest composition composedDat composedTargets attach att
       , "declared" .= object ["retained" .= map declarationValue retained, "composed" .= map declarationValue composed] ]
   , "joins" .= map joinValue (compositionJoins composition)
   , "pieces" .= map (pieceValue carriers) (sortOn pieceKind (compositionPieces composition))
-  ] ++ ["application" .= applicationValue present | Just present <- [section]]
+  ] ++ maybe [] (\relation -> ["pool_allocation" .= relation]) (poolAllocationValue (compositionPieces composition))
+    ++ ["application" .= applicationValue present | Just present <- [section]]
   where
     qualification = compositionQualification composition
     carriers = concatMap pieceCarriers (compositionPieces composition)

@@ -5,8 +5,10 @@
 module Replacement.StartupArtifact.Adapters
   ( LinkedImage (..), ImageBytes (..), SymbolBytes (..), PieceImages (..)
   , deriveFirstStage, deriveRecord2Link, derivePrimaryPublisher, deriveLoaderOrchestrationB, deriveLoaderStartup, derivePieceOf
+  , deriveTaskSubmission, deriveTaskStorage
   ) where
 
+import qualified A32 as A
 import Control.Monad (unless)
 import Data.Bifunctor (first)
 import qualified Data.ByteString as B
@@ -37,10 +39,15 @@ import qualified Replacement.StartupArtifact.Footprint.PrimaryPublisher as Publi
 import qualified Replacement.StartupArtifact.Footprint.Record2Link as Record2Footprint
 import qualified Replacement.StartupArtifact.Footprint.LoaderOrchestration as OrchestrationFootprint
 import qualified Replacement.StartupArtifact.Footprint.LoaderStartup as StartupFootprint
+import qualified Replacement.StartupArtifact.Footprint.TaskStorage as TaskStorageFootprint
+import qualified Replacement.StartupArtifact.Footprint.TaskSubmission as TaskSubmissionFootprint
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
 import StageBuild (StageDeclarations (..))
 import qualified StartupStageContract as Stage
+import qualified Replacement.TaskStorage.Artifact as TSt
+import qualified Replacement.TaskSubmission.Admission as WA
+import qualified Replacement.TaskSubmission.Artifact as W
 
 newtype ImageBytes = ImageBytes B.ByteString
 newtype SymbolBytes = SymbolBytes B.ByteString
@@ -63,6 +70,8 @@ derivePieceOf source images = case images of
     PrimaryPublisher -> derivePrimaryPublisher source image
     LoaderOrchestrationB -> deriveLoaderOrchestrationB source image
     LoaderStartup -> Left (AdapterRefused kind "loader-startup takes four linked images")
+    TaskSubmission -> deriveTaskSubmission source image
+    TaskStorage -> deriveTaskStorage source image
 
 admitted :: PieceKind -> Either String a -> Either Refusal a
 admitted kind = first (AdapterRefused kind . T.pack)
@@ -525,3 +534,164 @@ deriveLoaderStartup source a b dispatcher installer = do
           , "owned-component stack lows exclude transitive retained-service depth and interrupt frames (replacement/startup_composition/Replacement/StartupComposition/LoaderStartup.hs contractValue open_premises)" ])
         catalog (LoaderStartupFacts (linked a) (linked b) submits)
   derivePiece source declaration (StagedOutput dat (Just image4) Nothing)
+
+-- | Task-stack windows: the A and B boot stacks (reports/replacement-inventory-baseline.md:1206) and the
+-- task reservation pool the wrapper's later callers' stacks come from (:963).
+taskStackWindows :: [WriteRange]
+taskStackWindows =
+  [ WriteRange (CorePhysicalTarget Core0) 0x62c54 0x63460
+  , WriteRange (CorePhysicalTarget Core1) 0xf2c14 0xf3420
+  , WriteRange PhysicalTarget 0xa10200 0xa5b200 ]
+
+-- | Wrapper records 0x40a5b204+8i and storage records 0x40a0fc44+12i for indices 0..119
+-- (reports/replacement-inventory-baseline.md:963,1088).
+wrapperRecords, storageRecords :: WriteRange
+wrapperRecords = WriteRange PhysicalTarget 0xa5b204 0xa5b5c4
+storageRecords = WriteRange PhysicalTarget 0xa0fc44 0xa101e4
+
+taskWindowPremise :: T.Text
+taskWindowPremise = "frames of the four dispatcher submissions lie in the boot-stack windows (join dispatcher-task-composition, submission-joined-stack-in-boot-window); later callers run on pool-reserved task stacks [INFERENCE]; no caller runs in IRQ context [INFERENCE]"
+
+-- | Kebab name of a fixed wrapper service.
+serviceName :: WA.FixedService -> T.Text
+serviceName service = case service of
+  WA.CriticalEnter -> "critical-enter"
+  WA.CriticalExit -> "critical-exit"
+  WA.Reservation -> "reservation"
+  WA.Fill -> "fill"
+  WA.Cache -> "cache"
+  WA.Log -> "log"
+  WA.ErrorCallback -> "error-callback"
+  WA.TryLock -> "try-lock"
+  WA.Unlock -> "unlock"
+
+-- | Replacement.TaskSubmission.Artifact over //replacement/task_submission:task-submission-image.
+deriveTaskSubmission :: Canonical -> LinkedImage -> Either Refusal Piece
+deriveTaskSubmission source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) = do
+  let kind = TaskSubmission
+      shown :: Show e => Either e a -> Either Refusal a
+      shown = first (AdapterRefused kind . T.pack . show)
+      targets = canonicalTargets source
+      image4 = targetOf targets Image4
+  wrapperSource <- shown (W.canonicalSource (canonicalDat source) image4 (targetOf targets LoaderA) (targetOf targets LoaderB))
+  artifact <- shown (W.deriveArtifact bin symbolBytes)
+  carrier <- spanOf kind Image4 0x725dd8 0x72612c
+  code <- ownedCode kind 0x725dd8 0x72612c
+  both <- coreSet kind [Core0, Core1]
+  primaryCore <- coreSet kind [Core0]
+  secondCore <- coreSet kind [Core1]
+  few <- limit kind 4
+  once <- limit kind 1
+  let wordAt site = U.word32At image4 (fromIntegral (site - targetBase Image4))
+      -- Stock submission BLs to fixed services, decoded from canonical image 4 [0x725dd8,0x726098).
+      stockSites = [ (site, target) | site <- [0x725dd8, 0x725ddc .. 0x726094]
+                   , A.Branch _ True destination <- [A.decode site (wordAt site)], Just target <- [WA.fixed destination] ]
+      ownedSites = [ (address, WA.callTarget call) | call <- WA.callBoundaries (W.frameProof artifact)
+                   , WA.callEntry call == WA.Submission, let WA.CodeAddress address = WA.callInstruction call ]
+      unique target sites = case [site | (site, found) <- sites, found == target] of
+        [site] -> Just site
+        _ -> Nothing
+      paired = [ (service, owned, stock) | service <- [minBound .. maxBound]
+               , Just owned <- [unique (WA.FixedService service) ownedSites], Just stock <- [unique (WA.FixedService service) stockSites] ]
+      boundary name kind' onCores composed retainedPc stop compare' limit' = do
+        named <- label kind name
+        pure (Boundary named kind' onCores (Pc composed) (Just (Pc retainedPc)) stop compare' limit' Nothing)
+      read' name stopping guest bytes = do
+        named <- label kind name
+        at <- label kind stopping
+        pure (CatalogRead named at guest bytes Nothing)
+  -- Presence only: wrapper hits after the first task entry interleave by preemption timing.
+  calls <- mapM (\(service, owned, stock) -> boundary ("submit-" <> serviceName service <> "-call") SiteBoundary both owned stock False ComparePresence few) paired
+  boundaries <- sequence
+    [ boundary "submit-entry" SiteBoundary both 0x725dd8 0x725dd8 False ComparePresence few
+    -- First selected tasks after auto-ready: root104 on core 0 and standby93 on core 1, entered by the
+    -- trampoline with r0 = argument 0 and SP = stack top T+24 (reports/replacement-inventory-baseline.md:1124,1130,1146-1153).
+    , boundary "a104-first-entry" ReturnBoundary primaryCore 0x69d160 0x69d160 True CompareSequence once
+    , boundary "b93-first-entry" ReturnBoundary secondCore 0x69cd58 0x69cd58 True CompareSequence once
+    ]
+  -- Object bases and strides: reports/replacement-inventory-baseline.md:1108-1116; A objects for j 101..103, B for j 92..102.
+  rows <- sequence
+    [ read' "wrapper-records" "a104-first-entry" 0x40a5b204 832
+    , read' "storage-records" "a104-first-entry" 0x40a0fc44 1248
+    , read' "cursor" "a104-first-entry" 0x4089ea98 4
+    , read' "error-word" "a104-first-entry" 0x40a0f82c 4
+    , read' "a-creation" "a104-first-entry" 0x4005ce74 120
+    , read' "a-nodes" "a104-first-entry" 0x40061524 168
+    , read' "a-auxiliary" "a104-first-entry" 0x4005d634 36
+    , read' "a-auxiliary-nodes" "a104-first-entry" 0x40062b04 48
+    , read' "a-id-map" "a104-first-entry" 0x40062468 12
+    , read' "a-domain" "a104-first-entry" 0x400545cc 132
+    , read' "a-current" "a104-first-entry" 0x40054760 12
+    , read' "b-creation" "b93-first-entry" 0x400ecccc 440
+    , read' "b-nodes" "b93-first-entry" 0x400f12ec 616
+    , read' "b-auxiliary" "b93-first-entry" 0x400ed588 132
+    , read' "b-auxiliary-nodes" "b93-first-entry" 0x400f2a34 176
+    , read' "b-id-map" "b93-first-entry" 0x400f2404 44
+    , read' "b-domain" "b93-first-entry" 0x400e4610 132
+    , read' "b-current" "b93-first-entry" 0x400e4720 12
+    ]
+  let labelled = label kind
+  records <- labelled "storage-records"
+  cursorRead <- labelled "cursor"
+  wrappers <- labelled "wrapper-records"
+  creationA <- labelled "a-creation"
+  creationB <- labelled "b-creation"
+  nodesA <- labelled "a-nodes"
+  nodesB <- labelled "b-nodes"
+  entryA <- labelled "a104-first-entry"
+  entryB <- labelled "b93-first-entry"
+  -- Base words: storage record +0, wrapper record +0 and creation record +20 (C's base); top words: node +24 (T's
+  -- stack top) and the first-entry SP (reports/replacement-inventory-baseline.md:1088,1120-1124,1130).
+  let pool = PoolAllocation (PoolSpan 0xa10200 0xa5b200) records cursorRead
+        [ AllocationWords records 0 12 AllocationBase, AllocationWords wrappers 0 8 AllocationBase
+        , AllocationWords creationA 20 40 AllocationBase, AllocationWords creationB 20 40 AllocationBase
+        , AllocationWords nodesA 24 56 AllocationTop, AllocationWords nodesB 24 56 AllocationTop ]
+        [entryA, entryB]
+        -- Core 0 creates tasks 102 and 104 in kernel A, core 1 tasks 93 and 103 in kernel B (reports/replacement-inventory-baseline.md:1063-1068,1108-1116).
+        [AllocationOwner Core0 creationA 20 40, AllocationOwner Core1 creationB 20 40]
+        (Citation "pool [0x40a10200,0x40a5b200) and record layout {base, size, reserved}: replacement/task_storage/src.rs; reservation order across cores is a race, within a core program order (reports/replacement-inventory-baseline.md:1134,1621-1624)")
+  let writes = EnumeratedWrites
+        (taskStackWindows ++ [wrapperRecords, WriteRange PhysicalTarget 0xa0f82c 0xa0f830, storageRecords])
+        (Premised (Premise (T.intercalate "; "
+          [ taskWindowPremise
+          , "size word W+4 of wrapper record W = 0x40a5b204+8i, error word 0x40a0f82c and release's reservation clear 0x40a0fc44+12i+8 are the admission's guest roots (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:123); i < 120 for the dispatcher's ids 104, 102, 103, 93 (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs:206-211) and premised for other callers" ])))
+      catalog = Catalog (calls ++ boundaries) code writes rows
+      declaration = PieceDeclaration kind (Set.singleton TaskSubmissionArea) [carrier]
+        (TaskSubmissionFootprint.footprint (targetOf targets LoaderA) (targetOf targets LoaderB) image4)
+        (map Premise
+          [ "retained callees behave as stock from their entries (replacement/task_submission/Replacement/TaskSubmission/Artifact.hs:73-77)"
+          , "the error callback word 0x4089ea8c holds 0x723330 or 0x72835c when the wrapper dispatches it (reports/replacement-inventory-baseline.md:887,889)"
+          , "the log trace callback is 0 or 0x6470fc (emulation/Emulation/TaskSubmissionProgram.hs:487-496)"
+          , "exit receives enter's token is a source property (replacement/task_submission/src.rs:89-90,202,212,232,258), not an emitted-code proof"
+          , "stack bounds exclude interrupt and exception frames (reports/replacement-inventory-baseline.md:1189)" ])
+        catalog (TaskSubmissionFacts (LinkedBytes bin symbolBytes) pool)
+  derivePiece source declaration (StagedOutput (canonicalDat source) (Just (W.stagedBytes (W.stageImage4 wrapperSource artifact))) Nothing)
+
+-- | Replacement.TaskStorage.Artifact over //replacement/task_storage:task-storage-image.
+deriveTaskStorage :: Canonical -> LinkedImage -> Either Refusal Piece
+deriveTaskStorage source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) = do
+  let kind = TaskStorage
+      admit = admitted kind
+      targets = canonicalTargets source
+  storageSource <- admit (TSt.canonicalSource (canonicalDat source) (targetOf targets Image4) (targetOf targets LoaderA) (targetOf targets LoaderB))
+  artifact <- admit (TSt.deriveArtifact bin symbolBytes)
+  carrier <- spanOf kind Image4 0x725cc4 0x725da8
+  -- The NOP padding after the linked bytes is never executed.
+  code <- ownedCode kind 0x725cc4 (0x725cc4 + fromIntegral (B.length (TSt.linkedBytes artifact)))
+  both <- coreSet kind [Core0, Core1]
+  few <- limit kind 4
+  entryLabel <- label kind "transition-entry"
+  let boundaries = [Boundary entryLabel SiteBoundary both (Pc 0x725cc4) (Just (Pc 0x725cc4)) False ComparePresence few Nothing]
+      writes = EnumeratedWrites
+        (taskStackWindows ++ [storageRecords, wrapperRecords, WriteRange PhysicalTarget 0x89ea98 0x89ea9c])
+        (Premised (Premise (T.intercalate "; "
+          [ taskWindowPremise
+          , "record words +0/+4/+8 of 0x40a0fc44+12i and the cursor 0x4089ea98 are the proof's guest roots (replacement/task_storage/Replacement/TaskStorage/FrameProof.hs:120-122,236); index i < 120 and the output word W = 0x40a5b204+8i (incoming r2) are premised: the only caller is the wrapper [INFERENCE]" ])))
+      catalog = Catalog boundaries code writes []
+      declaration = PieceDeclaration kind (Set.singleton TaskStorageArea) [carrier]
+        (TaskStorageFootprint.footprint (targetOf targets LoaderA) (targetOf targets LoaderB))
+        (map Premise
+          [ "the retained prelude [0x725c6c,0x725cc4) and epilogue [0x725da8,0x725dd8) behave as stock (replacement/task_storage/Replacement/TaskStorage/Artifact.hs:202)"
+          , "callers pass index u32[D]-1 below 120 and the wrapper record W (reports/replacement-inventory-baseline.md:1088)" ])
+        catalog (TaskStorageFacts (LinkedBytes bin symbolBytes))
+  derivePiece source declaration (StagedOutput (canonicalDat source) (Just (TSt.stagedBytes (TSt.stageImage4 storageSource artifact))) Nothing)

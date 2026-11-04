@@ -17,7 +17,7 @@ Retained after J11, behind named shims (section 5): RTOS services (#156), dispat
 
 ## 2. Where J8 leaves the artifact
 
-- J1-J3 qualified (`E-STARTUP-J1-COMPOSED-NATURAL-150`, `E-STARTUP-J2-COMPOSED-NATURAL-150`, `E-STARTUP-J3-COMPOSED-NATURAL-150`); J4-J8 planned (RIB:1864-1871): J4 wrapper/critical pair/storage (DeviceLaws), J5 idle102/103 and root104, J6 image5 producer `0x6a96c0` and plain producer `[0x6a9844,0x6a9938)` (SRM:127), J7 heap cutover, J8 pump.
+- J1-J4 qualified (`E-STARTUP-J1-COMPOSED-NATURAL-150`, `E-STARTUP-J2-COMPOSED-NATURAL-150`, `E-STARTUP-J3-COMPOSED-NATURAL-150`, `E-STARTUP-J4-COMPOSED-NATURAL-150`); J5-J8 planned (RIB:1864-1871): J5 idle102/103 and root104, J6 image5 producer `0x6a96c0` and plain producer `[0x6a9844,0x6a9938)` (SRM:127), J7 heap cutover, J8 pump.
 - J8 needs the pump's owned leaf run (RIB:1877, 1894). No owned pump run was attempted; the retained cohort of the scoped leaf observer refused on fetch multiplicity (`E-APPLICATION-PUMP-FETCH-MULTISET-REFUSAL-150`). Composed observations already arm points through `arm_mutable` (RIB:1875); the shared hook-stable mutable-point work that RIB:1815 names is for scoped observers.
 - Existing observer evidence of task1's first entry: RIB:1477.
 

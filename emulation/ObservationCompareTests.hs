@@ -109,6 +109,14 @@ cases =
                      (object ["instructions" .= (2 :: Int), "r0" .= ("0x1" :: T.Text)])) )
   , ( "a register value is compared"
     , not (null (compared (object ["r0" .= ("0x1" :: T.Text)]) (object ["r0" .= ("0x2" :: T.Text)]))) )
+  , ( "a menu receipt with scanout evidence equals one without it"
+    , null (compared
+        (object ["menu" .= [1, 254, 0 :: Int], "scanout_evidence" .= object ["source_bytes" .= object ["bytes" .= (2073600 :: Int)]]])
+        (object ["menu" .= [1, 254, 0 :: Int]])) )
+  , ( "menu receipts with different menu states still differ beside scanout evidence"
+    , not (null (compared
+        (object ["menu" .= [1, 254, 0 :: Int], "scanout_evidence" .= object ["source_bytes" .= object ["bytes" .= (2073600 :: Int)]]])
+        (object ["menu" .= [1, 5, 6 :: Int]]))) )
   , ( "toggle receipts leave out the engine and checkpoint identity"
     , null (differences "receipt"
         (normalize toggleIgnored (object ["engine" .= ("retained" :: T.Text), "emulator" .= ("a" :: T.Text), "result" .= ("pass" :: T.Text)]))
