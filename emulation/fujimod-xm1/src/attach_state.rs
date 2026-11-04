@@ -1,6 +1,7 @@
 //! Attach-boundary state: the contract's comparison rules, the observer's capture and the retained/composed
 //! comparison of two captures.
 use crate::composed_catalog::{Bank, Boundary, Citation, Core, Label, PieceKind, Reason, Sha256, Target, TargetSpan};
+use crate::attach_relations::{self, AttachSources, RelationFailure, RoleInput, RoleRelationSummary, RoleRelations, Relations};
 use crate::run::{self, RunDocument};
 use crate::composed_receipt::{Difference, Row, Word};
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
@@ -72,10 +73,10 @@ impl Span {
     pub fn new(start: u64, end: u64) -> Result<Self, String> {
         if start < end && end <= ADDRESS_END { Ok(Self { start, end }) } else { Err("span is empty or exceeds 32 bits".into()) }
     }
-    fn holds(self, address: u64) -> bool { self.start <= address && address < self.end }
-    fn contains(self, other: Span) -> bool { self.start <= other.start && other.end <= self.end }
-    fn intersects(self, other: Span) -> bool { other.start < self.end && self.start < other.end }
-    fn len(self) -> u64 { self.end - self.start }
+    pub fn holds(self, address: u64) -> bool { self.start <= address && address < self.end }
+    pub fn contains(self, other: Span) -> bool { self.start <= other.start && other.end <= self.end }
+    pub fn intersects(self, other: Span) -> bool { other.start < self.end && self.start < other.end }
+    pub fn len(self) -> u64 { self.end - self.start }
 }
 
 /// A physical address range, or a range of offsets within one core's TCM bank.
@@ -259,7 +260,7 @@ macro_rules! kebab_label {
             fn try_from(value: String) -> Result<Self, Self::Error> {
                 let kebab = !value.is_empty() && !value.starts_with('-') && !value.ends_with('-')
                     && value.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
-                if kebab { Ok(Self(value)) } else { Err("allowance label is not a kebab-case name".into()) }
+                if kebab { Ok(Self(value)) } else { Err("label is not a kebab-case name".into()) }
             }
         }
         impl From<$name> for String {
@@ -272,6 +273,7 @@ macro_rules! kebab_label {
 }
 
 kebab_label!(AllowanceLabel);
+kebab_label!(SiteLabel);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -643,6 +645,7 @@ pub(crate) struct RawAttachRules {
     allowances: Vec<RawAllowance>,
     registers: Vec<RegisterAllowance>,
     board: Vec<RawBoardAllowance>,
+    relations: Relations,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -652,6 +655,7 @@ pub struct AttachRules {
     pub allowances: Vec<Allowance>,
     pub registers: Vec<RegisterAllowance>,
     pub board: Vec<BoardAllowance>,
+    pub relations: Relations,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -677,6 +681,11 @@ pub enum AttachRuleRefusal {
     DuplicateRegister { core: Core, register: ContextRegister },
     BoardShape(BoardPointer),
     BoardOverlap(BoardPointer),
+    /// The log span is unaligned, longer than 4 KiB or outside DRAM.
+    LogSpan,
+    /// A log site's store is not the instruction after its read, or its key or label repeats.
+    LogSite(SiteLabel),
+    LogSpanOverlap(AllowanceLabel),
 }
 
 /// Contract facts the attach rules are checked against.
@@ -764,7 +773,8 @@ impl AttachRules {
                 return Err(Refuse::BoardOverlap(other.1.pointer.clone()));
             }
         }
-        Ok(Self { peers: raw.peers, carriers, allowances, registers: raw.registers, board })
+        raw.relations.validate(&allowances)?;
+        Ok(Self { peers: raw.peers, carriers, allowances, registers: raw.registers, board, relations: raw.relations })
     }
 }
 
@@ -875,10 +885,10 @@ fn allowance(raw: RawAllowance, context: &RuleContext) -> Result<Allowance, Atta
 }
 
 /// Updates a SHA-256 and a byte count with everything written through it.
-struct Hashing<W> {
-    inner: W,
-    hasher: sha2::Sha256,
-    bytes: u64,
+pub(crate) struct Hashing<W> {
+    pub(crate) inner: W,
+    pub(crate) hasher: sha2::Sha256,
+    pub(crate) bytes: u64,
 }
 
 impl<W: Write> Write for Hashing<W> {
@@ -891,9 +901,9 @@ impl<W: Write> Write for Hashing<W> {
     fn flush(&mut self) -> std::io::Result<()> { self.inner.flush() }
 }
 
-fn hex(hasher: sha2::Sha256) -> Result<Sha256, String> { Sha256::try_from(format!("{:x}", hasher.finalize())) }
+pub(crate) fn hex(hasher: sha2::Sha256) -> Result<Sha256, String> { Sha256::try_from(format!("{:x}", hasher.finalize())) }
 
-fn io(error: std::io::Error) -> String { error.to_string() }
+pub(crate) fn io(error: std::io::Error) -> String { error.to_string() }
 
 /// A physical-bus address, translated to a backing by the bus mappings.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1196,7 +1206,7 @@ fn file_digest(path: &Path, limit: u64) -> Result<(Sha256, u64), String> {
     Ok((hex(hasher)?, total))
 }
 
-fn bound_file(directory: &Path, record: &FileRecord, limit: u64) -> Result<std::path::PathBuf, String> {
+pub(crate) fn bound_file(directory: &Path, record: &FileRecord, limit: u64) -> Result<std::path::PathBuf, String> {
     let relative = Path::new(&record.path);
     if relative.components().count() != 1 || relative.is_absolute() {
         return Err("file path leaves its observation directory".into());
@@ -1340,6 +1350,7 @@ pub struct RoleCapture<'a> {
     pub state: &'a AttachState,
     pub rows: &'a [Row],
     pub directory: &'a Path,
+    pub sources: Option<&'a AttachSources>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1372,6 +1383,7 @@ pub struct AttachVerdict {
     pub allowances: Vec<AbsorbedMemory>,
     pub registers: Vec<AbsorbedRegister>,
     pub board: Vec<AbsorbedBoard>,
+    pub relations: Vec<RoleRelationSummary>,
 }
 
 /// Every attach-state difference in comparison order.
@@ -1421,6 +1433,19 @@ impl Collector {
         for entry in entries {
             self.differences.push(entry);
         }
+    }
+
+    /// Appends `later` after everything recorded so far.
+    fn append(&mut self, later: Collector) {
+        if self.first.is_none() {
+            self.first = later.first;
+        }
+        let unlisted = later.differences.total - later.differences.entries.len() as u64;
+        for entry in later.differences.entries {
+            self.differences.push(entry);
+        }
+        self.differences.total += unlisted;
+        self.differences.truncated |= unlisted > 0;
     }
 }
 
@@ -1491,7 +1516,7 @@ fn compare_peers(rules: &AttachRules, retained: &AttachState, owned: &AttachStat
 }
 
 /// Every differing leaf of `left` and `right` as an RFC 6901 pointer.
-fn differing_leaves(prefix: &str, left: Option<&Value>, right: Option<&Value>, out: &mut Vec<String>) {
+pub(crate) fn differing_leaves(prefix: &str, left: Option<&Value>, right: Option<&Value>, out: &mut Vec<String>) {
     match (left, right) {
         (Some(Value::Object(a)), Some(Value::Object(b))) => {
             let keys: BTreeSet<&String> = a.keys().chain(b.keys()).collect();
@@ -1522,7 +1547,8 @@ fn truncated(value: Option<&Value>) -> String {
     text
 }
 
-fn compare_board(rules: &AttachRules, retained: &Value, owned: &Value, out: &mut Collector) -> Vec<AbsorbedBoard> {
+/// Leaves in `fixed` are fixed per role by a relation that held in both roles and are not compared.
+fn compare_board(rules: &AttachRules, retained: &Value, owned: &Value, fixed: &BTreeSet<String>, out: &mut Collector) -> Vec<AbsorbedBoard> {
     let mut leaves = Vec::new();
     for (field, name) in BoardField::ALL {
         if field.excluded() {
@@ -1530,6 +1556,7 @@ fn compare_board(rules: &AttachRules, retained: &Value, owned: &Value, out: &mut
         }
         differing_leaves(&format!("/{name}"), retained.get(name), owned.get(name), &mut leaves);
     }
+    leaves.retain(|leaf| !fixed.contains(leaf));
     let mut absorbed: BTreeMap<&BoardPointer, Vec<BoardLeaf>> = BTreeMap::new();
     let mut refused: BTreeSet<&BoardPointer> = BTreeSet::new();
     for leaf in leaves {
@@ -1641,6 +1668,68 @@ fn verify_stack(allowance: &Allowance, capture: &RoleCapture) -> Result<(), Diff
 
 fn hexbytes(bytes: &[u8]) -> String { bytes.iter().map(|byte| format!("{byte:02x}")).collect() }
 
+/// The relations' per-role results, cross-role agreement and the leaves and words they fix.
+struct RelationOutcome {
+    roles: Vec<RoleRelations>,
+    failures: Vec<(Role, RelationFailure)>,
+    timer_fixed: bool,
+    log_words: Vec<Span>,
+}
+
+fn evaluate_relations(rules: &AttachRules, captures: [&RoleCapture; 2], boards: &[Value], out: &mut Collector) -> RelationOutcome {
+    let relations = &rules.relations;
+    let mut outcome = RelationOutcome { roles: Vec::new(), failures: Vec::new(), timer_fixed: false, log_words: Vec::new() };
+    if !relations.any() || boards.len() != 2 {
+        return outcome;
+    }
+    for (capture, board) in captures.into_iter().zip(boards) {
+        match capture.sources {
+            Some(sources) => outcome.roles.push(attach_relations::evaluate(relations, &RoleInput {
+                role: capture.role, sources, directory: capture.directory, board, allowances: &rules.allowances,
+            })),
+            None => out.push(snapshot_error(capture.role, "receipt has no attach sources")),
+        }
+    }
+    let [retained, owned] = outcome.roles.as_slice() else { return outcome };
+    for role in [retained, owned] {
+        let failures = [
+            role.timer.as_ref().and_then(|result| result.as_ref().err()),
+            role.lz.as_ref().and_then(|result| result.as_ref().err()),
+            role.log.as_ref().and_then(|result| result.as_ref().err()),
+        ];
+        for failure in failures.into_iter().flatten() {
+            outcome.failures.push((role.role, failure.clone()));
+        }
+    }
+    if relations.timer.is_some() {
+        let reset = captures[0].sources.map(|sources| &sources.timer_reset) == captures[1].sources.map(|sources| &sources.timer_reset);
+        if !reset {
+            outcome.failures.push((Role::Composed, RelationFailure::TimerResetDiffers));
+        }
+        let mut sequences = true;
+        for core in Core::ALL {
+            let (left, right) = (&retained.sequence[core.index()], &owned.sequence[core.index()]);
+            if let Some(index) = (0..left.len().max(right.len())).find(|&index| left.get(index) != right.get(index)) {
+                sequences = false;
+                outcome.failures.push((Role::Composed, RelationFailure::TimerSequence {
+                    core, index, retained: left.get(index).copied(), composed: right.get(index).copied(),
+                }));
+            }
+        }
+        outcome.timer_fixed = reset && sequences && retained.timer_device == owned.timer_device
+            && matches!(retained.timer, Some(Ok(()))) && matches!(owned.timer, Some(Ok(())));
+    }
+    if let (Some(Ok(left)), Some(Ok(right))) = (&retained.log, &owned.log) {
+        let addresses = |words: &[attach_relations::TimestampWord]| words.iter().map(|word| word.address).collect::<Vec<_>>();
+        if addresses(left) == addresses(right) {
+            outcome.log_words = left.iter().map(|word| Span { start: word.address, end: word.address + 4 }).collect();
+        } else {
+            outcome.failures.push((Role::Composed, RelationFailure::LogTimestampWords));
+        }
+    }
+    outcome
+}
+
 /// `attach_core` is the core of the attach boundary.
 pub fn compare(rules: &AttachRules, attach_core: Core, retained: &RoleCapture, owned: &RoleCapture) -> Result<AttachVerdict, AttachRefusal> {
     let captures = [retained, owned];
@@ -1665,36 +1754,129 @@ pub fn compare(rules: &AttachRules, attach_core: Core, retained: &RoleCapture, o
     if !shapes_agree {
         out.push(snapshot_error(Role::Composed, "captured regions, their read paths or the unreachable extents differ between roles"));
     }
+    let mut relations = evaluate_relations(rules, captures, &boards, &mut out);
     let registers = compare_context(rules, attach_core, retained.state, owned.state, &mut out);
     compare_peers(rules, retained.state, owned.state, &mut out);
-    let board = match boards.as_slice() {
-        [retained_board, owned_board] => compare_board(rules, retained_board, owned_board, &mut out),
-        _ => Vec::new(),
-    };
-    verify_stacks(rules, captures, &mut out);
-    let allowances = if shapes_agree && memory_paths.len() == 2 {
-        match compare_memory(rules, retained, owned, &memory_paths, &mut out) {
-            Ok(allowances) => allowances,
+    let mut extract: [Vec<Span>; 2] = [Vec::new(), Vec::new()];
+    for (slot, role) in extract.iter_mut().zip(&relations.roles) {
+        if let (Some(log), Some(Ok(_))) = (&rules.relations.log, &role.log) {
+            slot.push(log.span);
+        }
+        if let Some(Ok(plan)) = &role.lz {
+            if plan.end > plan.start {
+                slot.push(Span { start: plan.start, end: plan.end });
+            }
+        }
+    }
+    let mut memory_out = Collector::default();
+    let extras = MemoryExtras { held: relations.log_words.clone(), extract };
+    let (allowances, extracted) = if shapes_agree && memory_paths.len() == 2 {
+        match compare_memory(rules, retained, owned, &memory_paths, &extras, &mut memory_out) {
+            Ok(result) => result,
             Err(difference) => {
-                out.push(difference);
-                Vec::new()
+                memory_out.push(difference);
+                (Vec::new(), MemoryExtracted::default())
             }
         }
     } else {
-        Vec::new()
+        (Vec::new(), MemoryExtracted::default())
     };
+    let mut fixed: BTreeSet<String> = BTreeSet::new();
+    let mut summaries = Vec::new();
+    let mut log_held = !relations.log_words.is_empty();
+    let mut lz_leaves: Vec<Vec<String>> = Vec::new();
+    for (index, role) in relations.roles.iter_mut().enumerate() {
+        let mut summary = RoleRelationSummary { role: role.role, transactions: role.rows, timestamps: Vec::new(), lz: None };
+        if let (Some(log), Some(Ok(words))) = (&rules.relations.log, &role.log) {
+            let bytes = extracted.bytes[index].first();
+            let word_at = |address: u64| bytes.and_then(|bytes| {
+                let at = (address - log.span.start) as usize;
+                bytes.get(at..at + 4).map(|word| u32::from_le_bytes(word.try_into().expect("four bytes")))
+            });
+            match words.iter().find(|word| word_at(word.address) != Some(word.value.0)) {
+                Some(word) => {
+                    relations.failures.push((role.role, RelationFailure::LogCaptured { address: word.address }));
+                    log_held = false;
+                }
+                None => summary.timestamps = words.clone(),
+            }
+        }
+        if let Some(Ok(plan)) = &role.lz {
+            let bytes = if plan.end > plan.start { extracted.bytes[index].last().map(Vec::as_slice) } else { Some(&[][..]) };
+            match bytes.map(|bytes| attach_relations::derive_lz(plan, bytes)) {
+                Some(Ok((lz, leaves))) => {
+                    summary.lz = Some(lz);
+                    lz_leaves.push(leaves);
+                }
+                Some(Err(failure)) => relations.failures.push((role.role, failure)),
+                None => relations.failures.push((role.role, RelationFailure::LzSourceUnpinned { start: plan.start, end: plan.end })),
+            }
+        }
+        summaries.push(summary);
+    }
+    if relations.timer_fixed {
+        if let Some(device) = relations.roles.first().and_then(|role| role.timer_device) {
+            fixed.extend(attach_relations::timer_leaves(device));
+        }
+    }
+    if let [left, right] = lz_leaves.as_slice() {
+        fixed.extend(left.iter().filter(|leaf| right.contains(leaf)).cloned());
+    }
+    let mut covered: Vec<String> = Vec::new();
+    if rules.relations.timer.is_some() {
+        covered.extend(relations.roles.first().and_then(|role| role.timer_device).map(attach_relations::timer_leaves).unwrap_or_default());
+    }
+    if rules.relations.lz.is_some() {
+        if let Some(Ok(plan)) = relations.roles.first().and_then(|role| role.lz.as_ref()) {
+            covered.extend(attach_relations::lz_leaf_prefixes(plan.device));
+        }
+    }
+    for entry in &rules.board {
+        let pointer = entry.pointer.as_str();
+        if covered.iter().any(|leaf| entry.pointer.covers(leaf) || pointer.starts_with(&format!("{leaf}/"))) {
+            relations.failures.push((Role::Composed, RelationFailure::RelationOverlap { pointer: entry.pointer.clone() }));
+        }
+    }
+    for (role, failure) in relations.failures {
+        out.push(Difference::AttachRelation { role, failure });
+    }
+    let board = match boards.as_slice() {
+        [retained_board, owned_board] => compare_board(rules, retained_board, owned_board, &fixed, &mut out),
+        _ => Vec::new(),
+    };
+    verify_stacks(rules, captures, &mut out);
+    out.append(memory_out);
+    if !log_held && !extracted.held.is_empty() {
+        let start = extracted.held[0];
+        let runs = extracted.held.iter().take(DIFFERING_RUN_LIMIT).map(|&address| SpaceSpan { space: Space::Physical, start: address, end: address + 1 }).collect();
+        out.push(Difference::AttachMemory { space: Space::Physical, start, end: start + 1, differing_bytes: extracted.held.len() as u64, runs });
+    }
     if let Some(first) = out.first {
         return Err(AttachRefusal { first, differences: out.differences });
     }
     let mut instructions = BTreeMap::new();
     instructions.insert(Role::Retained, retained.state.instructions);
     instructions.insert(Role::Composed, owned.state.instructions);
-    Ok(AttachVerdict { instructions, allowances, registers, board })
+    Ok(AttachVerdict { instructions, allowances, registers, board, relations: summaries })
+}
+
+/// Physical spans the memory comparison holds aside (`held`) or copies out per role (`extract`).
+struct MemoryExtras {
+    held: Vec<Span>,
+    extract: [Vec<Span>; 2],
+}
+
+#[derive(Default)]
+struct MemoryExtracted {
+    /// Per role, one buffer per `extract` span.
+    bytes: [Vec<Vec<u8>>; 2],
+    /// Differing bytes inside `held` spans.
+    held: Vec<u64>,
 }
 
 /// Differences in the captured bytes go to `out`; an inconsistent capture is the `Err`.
-fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCapture, paths: &[std::path::PathBuf], out: &mut Collector)
-    -> Result<Vec<AbsorbedMemory>, Difference> {
+fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCapture, paths: &[std::path::PathBuf], extras: &MemoryExtras,
+    out: &mut Collector) -> Result<(Vec<AbsorbedMemory>, MemoryExtracted), Difference> {
     let regions: Vec<(Space, Span)> = retained.state.regions.iter()
         .map(|region| (region.space, Span { start: region.start, end: region.end })).collect();
     let mut hashed: Vec<Hashed> = Vec::new();
@@ -1741,6 +1923,12 @@ fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCaptu
         streams.push(stream);
     }
     let roles = [Role::Retained, Role::Composed];
+    let mut extracted = MemoryExtracted::default();
+    let mut filled: [Vec<u64>; 2] = [Vec::new(), Vec::new()];
+    for role in 0..2 {
+        extracted.bytes[role] = extras.extract[role].iter().map(|span| vec![0u8; span.len() as usize]).collect();
+        filled[role] = vec![0; extras.extract[role].len()];
+    }
     let mut pages = [vec![0u8; PAGE], vec![0u8; PAGE]];
     let mut first_difference: Option<(Space, u64, u64)> = None;
     let mut differing_unabsorbed = 0u64;
@@ -1767,6 +1955,17 @@ fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCaptu
                     item.hashers[role].update(&pages[role][from as usize..to as usize]);
                 }
             }
+            if *space == Space::Physical {
+                for role in 0..2 {
+                    for (slot, span) in extras.extract[role].iter().enumerate().filter(|(_, span)| span.intersects(page_span)) {
+                        let from = span.start.max(page_span.start);
+                        let to = span.end.min(page_span.end);
+                        extracted.bytes[role][slot][(from - span.start) as usize..(to - span.start) as usize]
+                            .copy_from_slice(&pages[role][(from - base) as usize..(to - base) as usize]);
+                        filled[role][slot] += to - from;
+                    }
+                }
+            }
             if pages[0] != pages[1] {
                 for byte in 0..PAGE {
                     if pages[0][byte] == pages[1][byte] {
@@ -1774,6 +1973,10 @@ fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCaptu
                     }
                     let address = base + byte as u64;
                     if hashed.iter().any(|item| item.space == *space && item.span.holds(address)) {
+                        continue;
+                    }
+                    if *space == Space::Physical && extras.held.iter().any(|span| span.holds(address)) {
+                        extracted.held.push(address);
                         continue;
                     }
                     if let Some(absorber) = absorbers.iter_mut().find(|item| item.space == *space && item.span.holds(address)) {
@@ -1845,7 +2048,12 @@ fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCaptu
     for unused in absorbed.iter().filter(|memory| memory.differing_bytes == 0) {
         out.push(Difference::UnusedAllowance { entry: UnusedEntry::Memory(unused.label.clone()) });
     }
-    Ok(absorbed)
+    for role in 0..2 {
+        if extras.extract[role].iter().zip(&filled[role]).any(|(span, filled)| *filled != span.len()) {
+            return Err(snapshot_error(roles[role], "a relation span lies outside the captured physical regions"));
+        }
+    }
+    Ok((absorbed, extracted))
 }
 
 #[cfg(test)]

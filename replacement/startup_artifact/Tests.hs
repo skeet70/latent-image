@@ -92,13 +92,13 @@ boundaryOn name kind listed pc stop = Boundary name kind set (Pc pc) (Just (Pc (
 labelled :: PieceKind -> Text -> IO Label
 labelled kind name = either (fail . show) pure (label kind name)
 
--- | A schema-2 manifest with the given guard and pieces JSON.
+-- | A schema-3 manifest with the given guard and pieces JSON.
 manifestWith :: B.ByteString -> B.ByteString -> B.ByteString -> B.ByteString
 manifestWith attach rules pieces =
-  "{\"schema\":2,\"guard\":{\"attach\":\"" <> attach <> "\",\"attach_state\":" <> rules <> "},\"pieces\":" <> pieces <> "}"
+  "{\"schema\":3,\"guard\":{\"attach\":\"" <> attach <> "\",\"attach_state\":" <> rules <> "},\"pieces\":" <> pieces <> "}"
 
 emptyRules :: B.ByteString
-emptyRules = "{\"peers\":[],\"carriers\":[],\"allowances\":[],\"registers\":[],\"board\":[]}"
+emptyRules = "{\"peers\":[],\"carriers\":[],\"allowances\":[],\"registers\":[],\"board\":[],\"relations\":{}}"
 
 onePiece :: B.ByteString
 onePiece = "[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a.bin\",\"symbols\":\"a.symbols\"}}]"
@@ -362,7 +362,7 @@ main = do
   ok "a manifest parses"
     (parseManifest manifestText == Right (Manifest entryLabel emptyAttachRules [ManifestPiece FirstStage (LinkedPaths "a.bin" "a.symbols")]))
   ok "an unknown top-level key refuses"
-    (refusal (parseManifest "{\"schema\":2,\"guard\":{\"attach\":\"first-stage/entry\",\"attach_state\":{}},\"pieces\":[],\"extra\":1}")
+    (refusal (parseManifest "{\"schema\":3,\"guard\":{\"attach\":\"first-stage/entry\",\"attach_state\":{}},\"pieces\":[],\"extra\":1}")
       == Just (ManifestRefused (ManifestUnknownKey "manifest.extra")))
   ok "an unknown input key refuses"
     (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\",\"dat\":\"c\"}}]"))
@@ -371,9 +371,9 @@ main = do
     (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"loader-startup\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}}]"))
       == Just (ManifestRefused (ManifestUnknownKind "loader-startup")))
   ok "another schema refuses"
-    (refusal (parseManifest "{\"schema\":1,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}") == Just (ManifestRefused ManifestSchemaUnsupported))
+    (refusal (parseManifest "{\"schema\":2,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}") == Just (ManifestRefused ManifestSchemaUnsupported))
   ok "a manifest without attach_state refuses"
-    (refusal (parseManifest "{\"schema\":2,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}")
+    (refusal (parseManifest "{\"schema\":3,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}")
       == Just (ManifestRefused (ManifestMalformed "guard lacks attach_state")))
   ok "duplicate manifest kinds refuse"
     (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}},{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"c\",\"symbols\":\"d\"}}]"))
@@ -428,14 +428,14 @@ main = do
   contracted <- either (fail . show) pure (composeWith [observed] [contractFirst, contractPublisher])
   contractDat <- either (fail . show) pure (preTableDat source contracted)
   contractTargets <- either (fail . show) pure (verifyComposed source contracted contractDat fixtureImage4 fixtureImage5)
-  let sources = AttachSources (canonicalDat source) contractDat (canonicalTargets source) contractTargets
+  let sources = AttachSources (canonicalDat source) contractDat (canonicalTargets source) contractTargets []
       carriersOf = contractCarriers contracted
       absentPart (_, Span target (Guest start) (Guest end)) =
         J.object ["target" .= targetName target, "start" .= start, "end" .= end, "residency" .= ("absent" :: Text), "reason" .= ("illustrative" :: Text)]
       peer = J.object ["core" .= (1 :: Int), "retained_pc" .= [J.object ["start" .= (0xd0000 :: Int), "end" .= (0xdc000 :: Int)]]
         , "composed_pc" .= [J.object ["start" .= (0x10400 :: Int), "end" .= (0x11000 :: Int)]], "reason" .= ("waiting" :: Text)]
       rulesJson :: [J.Value] -> [J.Value] -> J.Value
-      rulesJson residency allowances = J.object ["peers" .= [peer], "carriers" .= residency, "allowances" .= allowances, "registers" .= ([] :: [J.Value]), "board" .= ([] :: [J.Value])]
+      rulesJson residency allowances = J.object ["peers" .= [peer], "carriers" .= residency, "allowances" .= allowances, "registers" .= ([] :: [J.Value]), "board" .= ([] :: [J.Value]), "relations" .= J.object []]
   absentRules <- either (fail . show) pure (rulesFrom (rulesJson (map absentPart carriersOf) ([] :: [J.Value])))
   attachJson <- either (fail . show) pure (attachStateValue sources absentRules carriersOf)
   let contractJson = contractValue source manifestText contracted contractDat contractTargets entryLabel attachJson
@@ -514,6 +514,59 @@ main = do
       (member "retained" (element 0 (member "board" value)) == J.Null
         && case element 0 (member "board" value) of J.Object fields -> KeyMap.member "retained" fields; _ -> False)
     Left problem -> fail (show problem)
+
+  -- Log sites: an owned site resolves from its piece's symbols, and both sites are word-checked in their role's image.
+  let wordBytes :: Word32 -> B.ByteString
+      wordBytes word = B.pack [fromIntegral (word `div` (256 ^ index)) | index <- [0 .. 3 :: Int]]
+      withWords target offset patch images = maybe (error "six targets") id (targetBytes (M.fromList
+        [ (name, if name == target then B.take offset bytes <> B.concat (map wordBytes patch) <> B.drop (offset + 4 * length patch) bytes else bytes)
+        | (name, bytes) <- targetList images ]))
+      loadStore = [0xe5912000, 0xe5802000]
+      siteSources = sources
+        { canonicalTargetBytes = withWords Record1 0x40f4 loadStore (canonicalTargetBytes sources)
+        , composedTargetBytes = withWords Record1 0x64a8 loadStore (composedTargetBytes sources)
+        , ownedSymbols = [(FirstStage, "000064a8 00000000 T xm1_first_stage_log_read\n000064ac 00000000 T xm1_first_stage_log_store\n")]
+        }
+      site name role coreNumber from = J.object
+        ["label" .= (name :: Text), "role" .= (role :: Text), "core" .= (coreNumber :: Int), "source" .= from, "citation" .= ("c" :: Text)]
+      stock pc = J.object ["stock" .= (pc :: Int)]
+      owned = J.object ["owned" .= ("first-stage" :: Text)]
+      withSites :: [J.Value] -> J.Value
+      withSites sites = case rulesJson [] [] of
+        J.Object fields -> J.Object (KeyMap.insert "relations" (J.object
+          [ "timer" .= J.object ["citation" .= ("t" :: Text)]
+          , "log" .= J.object ["span" .= J.object ["start" .= (0xa0040 :: Int), "end" .= (0xa00c8 :: Int)], "sites" .= sites] ]) fields)
+        other -> other
+      sitesOf rules = rulesFrom rules >>= \parsed -> attachStateValue siteSources parsed []
+      resolved value = [ (member "read_pc" row, member "store_pc" row)
+                       | J.Array rows <- [member "sites" (member "log" (member "relations" value))], row <- V.toList rows ]
+  case sitesOf (withSites [site "stock-record1" "retained" 0 (stock 0x40f4), site "owned-first-stage" "composed" 1 owned]) of
+    Right value -> do
+      ok "log sites resolve to their read and store PCs"
+        (resolved value == [(J.toJSON (0x40f4 :: Int), J.toJSON (0x40f8 :: Int)), (J.toJSON (0x64a8 :: Int), J.toJSON (0x64ac :: Int))])
+      ok "an absent relation member is null" (member "lz" (member "relations" value) == J.Null)
+    Left problem -> fail (show problem)
+  ok "a stock site whose words are not a load and store refuses"
+    (either (const True) (const False) (sitesOf (withSites [site "stock-record1" "composed" 0 (stock 0x40f4)])))
+  ok "an owned site of a piece without log symbols refuses"
+    (either (const True) (const False) (sitesOf (withSites [site "owned" "composed" 0 (J.object ["owned" .= ("primary-publisher" :: Text)])])))
+  ok "two sites with one role, core and read PC refuse"
+    (either (const True) (const False) (sitesOf (withSites [site "a" "retained" 0 (stock 0x40f4), site "b" "retained" 0 (stock 0x40f4)])))
+  ok "the same read PC on two cores parses"
+    (either (const False) (const True) (sitesOf (withSites [site "a" "retained" 0 (stock 0x40f4), site "b" "retained" 1 (stock 0x40f4)])))
+  ok "the A32 word checks tell word loads from word stores"
+    (not (a32WordLoad 0xe5802000) && not (a32WordStore 0xe5912000) && a32WordLoad 0xe5111fff && a32WordStore 0xe7831102)
+  ok "a log span overlapping a physical allowance refuses"
+    (refusedRules (case withSites [] of
+      J.Object fields -> J.Object (KeyMap.insert "allowances" (J.toJSON [J.object ["label" .= ("word" :: Text), "kind" .= ("declared" :: Text)
+        , "space" .= J.object ["target" .= ("physical" :: Text)], "start" .= (0xa0048 :: Int), "end" .= (0xa004c :: Int)
+        , "reason" .= ("r" :: Text), "citation" .= ("c" :: Text)]]) fields)
+      other -> other))
+  ok "an unaligned log span refuses"
+    (refusedRules (case withSites [] of
+      J.Object fields -> J.Object (KeyMap.insert "relations" (J.object ["log" .= J.object
+        ["span" .= J.object ["start" .= (0xa0042 :: Int), "end" .= (0xa00c8 :: Int)], "sites" .= ([] :: [J.Value])]]) fields)
+      other -> other))
 
   passed <- readIORef counter
   putStrLn ("startup-artifact-tests: " ++ show passed ++ " checks passed")

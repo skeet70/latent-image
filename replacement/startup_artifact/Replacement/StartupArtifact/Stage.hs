@@ -105,6 +105,7 @@ runStager tools canonicalPath manifestPath scratchPath output = do
   pieces <- refused (attachGuard attach derived)
   composition <- refused (compose registeredJoins source pieces)
   (dat, observed) <- stageComposition tools scratch source composition
-  let sources = AttachSources (canonicalDat source) dat (canonicalTargets source) observed
+  ownedSymbols <- forM (manifestPieces manifest) $ \(ManifestPiece kind (LinkedPaths _ symbolsPath)) -> (,) kind <$> H.readRegular 0x10000 symbolsPath
+  let sources = AttachSources (canonicalDat source) dat (canonicalTargets source) observed ownedSymbols
   attachState <- refused (attachStateValue sources (manifestAttachRules manifest) (contractCarriers composition))
   writeOutputs output dat observed (contractValue source manifestBytes composition dat observed attach attachState)

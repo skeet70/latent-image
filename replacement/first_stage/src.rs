@@ -16,8 +16,6 @@ const LOG_INDEX_0: *mut u32 = 0x4000_42e8 as *mut u32;
 const LOG_INDEX_1: *mut u32 = 0x4000_42ec as *mut u32;
 const LOG_END: u32 = 0x5354_4544;
 
-const TIMER_COUNTER: *const u32 = 0xfff9_1000 as *const u32;
-
 const DATA_SKIP_POINTER: *const u32 = 0x0000_4804 as *const u32;
 const SEGMENT_TABLE_PUBLICATION: *const u32 = 0x0061_c00c as *const u32;
 
@@ -74,6 +72,8 @@ extern "C" {
     fn xm1_retained_storage_fini() -> i32;
     /// Labelled assembly handoff at the final `mov pc`.
     fn xm1_first_stage_handoff() -> !;
+    /// Stores the kernel timer counter at `slot` through the labelled `xm1_first_stage_log_read`/`_store` pair.
+    fn xm1_first_stage_log_timestamp(slot: *mut u32);
 }
 
 #[panic_handler]
@@ -111,7 +111,7 @@ unsafe fn log_event(value: u32, channel: LogChannel) {
         return;
     }
     let base = pointer as *mut u32;
-    write(base.add(slot as usize), read(TIMER_COUNTER));
+    xm1_first_stage_log_timestamp(base.add(slot as usize));
     write(base.add(slot as usize + 1), value);
     write(index, slot + 2);
     write(base.add(slot as usize + 2), LOG_END);

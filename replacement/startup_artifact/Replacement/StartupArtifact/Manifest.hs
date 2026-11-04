@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | The stager's input manifest:
--- @{"schema":2,"guard":{"attach":LABEL,"attach_state":RULES},"pieces":[{"kind":KIND,"inputs":{"image":PATH,"symbols":PATH}}]}@,
+-- @{"schema":3,"guard":{"attach":LABEL,"attach_state":RULES},"pieces":[{"kind":KIND,"inputs":{"image":PATH,"symbols":PATH}}]}@,
 -- with RULES as 'Replacement.StartupArtifact.AttachState.parseAttachRules' reads them. Unknown keys refuse.
 module Replacement.StartupArtifact.Manifest
   ( Manifest (..), ManifestPiece (..), LinkedPaths (..), parseManifest
@@ -63,7 +63,7 @@ parseManifest bytes = do
   value <- maybe (refuse (ManifestMalformed "not JSON")) Right (J.decodeStrict bytes)
   top <- object "manifest" ["schema", "guard", "pieces"] value
   case field top "schema" of
-    J.Number number | toBoundedInteger number == Just (2 :: Int) -> pure ()
+    J.Number number | toBoundedInteger number == Just (3 :: Int) -> pure ()
     _ -> refuse ManifestSchemaUnsupported
   guard <- object "guard" ["attach", "attach_state"] (field top "guard")
   attach <- text "guard.attach" (field guard "attach") >>= attachLabel

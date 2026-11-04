@@ -4,14 +4,15 @@
 -- digest; emulation/fujimod-xm1/src/attach_state.rs checks the rest of the rules.
 module Replacement.StartupArtifact.AttachState
   ( AttachRules, emptyAttachRules, parseAttachRules, AttachSources (..), attachStateValue
+  , a32WordLoad, a32WordStore
   ) where
 
 import Control.Monad (forM, forM_, unless, when)
+import Data.Bits (complement, shiftR, (.&.), (.|.), shiftL)
 import qualified Data.Aeson as J
 import Data.Aeson ((.=))
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
-import Data.Bits (complement)
 import qualified Data.ByteString as B
 import Data.Char (isAsciiLower, isDigit)
 import Data.List (sort, sortOn)
@@ -23,6 +24,7 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import Data.Word (Word32, Word64)
 import qualified Emulation.Sha256 as SHA
+import qualified FujiAF.FirstStage as F
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
 
@@ -71,11 +73,34 @@ data BoardKind = BoardExact J.Value J.Value | BoardDeclared Text deriving (Eq, S
 
 data BoardEntry = BoardEntry Text BoardKind Text deriving (Eq, Show)
 
-data AttachRules = AttachRules [Peer] [CarrierPart] [Allowance] [RegisterEntry] [BoardEntry] deriving (Eq, Show)
+data Role = RetainedRole | ComposedRole deriving (Eq, Ord, Show, Enum, Bounded)
 
--- | No peers, residency parts or allowances; only valid for compositions without peers or carriers.
+-- | A stock site names its read PC; an owned site names the piece whose symbols carry its labelled read and store.
+data SiteSource = StockSite Word32 | OwnedSite PieceKind deriving (Eq, Show)
+
+data LogSite = LogSite
+  { siteLabel :: Text
+  , siteRole :: Role
+  , siteCore :: Core
+  , siteSource :: SiteSource
+  , siteCitation :: Text
+  } deriving (Eq, Show)
+
+-- | The physical log span and its sites.
+data LogRelation = LogRelation Word64 Word64 [LogSite] deriving (Eq, Show)
+
+-- | Each present member carries its citation.
+data Relations = Relations
+  { timerRelation :: Maybe Text
+  , logRelation :: Maybe LogRelation
+  , lzRelation :: Maybe Text
+  } deriving (Eq, Show)
+
+data AttachRules = AttachRules [Peer] [CarrierPart] [Allowance] [RegisterEntry] [BoardEntry] Relations deriving (Eq, Show)
+
+-- | No peers, residency parts, allowances or relations; only valid for compositions without peers or carriers.
 emptyAttachRules :: AttachRules
-emptyAttachRules = AttachRules [] [] [] [] []
+emptyAttachRules = AttachRules [] [] [] [] [] (Relations Nothing Nothing Nothing)
 
 refuse :: Text -> Either Refusal a
 refuse = Left . ManifestRefused . AttachStateRefused
@@ -253,24 +278,134 @@ boardEntry value = do
     _ -> refuse ("board entry " <> pointer <> " has fields of another kind")
   BoardEntry pointer parsed <$> text "board.reason" (field fields "reason")
 
--- | @{"peers":[...],"carriers":[...],"allowances":[...],"registers":[...],"board":[...]}@.
+roleName :: Role -> Text
+roleName RetainedRole = "retained"
+roleName ComposedRole = "composed"
+
+citationMember :: Text -> KeyMap.KeyMap J.Value -> Text -> Either Refusal (Maybe Text)
+citationMember context fields key
+  | present fields key = do
+      inner <- object (context <> "." <> key) ["citation"] [] (field fields key)
+      Just <$> text (context <> "." <> key <> ".citation") (field inner "citation")
+  | otherwise = pure Nothing
+
+sourceOf :: Text -> J.Value -> Either Refusal SiteSource
+sourceOf context value = case value of
+  J.Object fields | [key] <- KeyMap.keys fields -> case Key.toText key of
+    "stock" -> StockSite <$> integral (context <> ".stock") (field fields "stock")
+    "owned" -> OwnedSite <$> named (context <> ".owned") pieceKindName (field fields "owned")
+    _ -> refuse (context <> " is neither stock nor owned")
+  _ -> refuse (context <> " is not one source")
+
+logSite :: J.Value -> Either Refusal LogSite
+logSite value = do
+  fields <- object "log site" ["label", "role", "core", "source", "citation"] [] value
+  name <- text "log site.label" (field fields "label")
+  unless (kebab name) (refuse ("log site label " <> name <> " is not kebab-case"))
+  let context key = "log site " <> name <> "." <> key
+  LogSite name <$> named (context "role") roleName (field fields "role") <*> core (context "core") (field fields "core")
+    <*> sourceOf (context "source") (field fields "source") <*> text (context "citation") (field fields "citation")
+
+-- | @{"timer"?:{"citation"},"log"?:{"span":{start,end},"sites":[...]},"lz"?:{"citation"}}@.
+relations :: J.Value -> Either Refusal Relations
+relations value = do
+  fields <- object "relations" [] ["timer", "log", "lz"] value
+  timer <- citationMember "relations" fields "timer"
+  lz <- citationMember "relations" fields "lz"
+  logged <- if not (present fields "log") then pure Nothing else do
+    inner <- object "relations.log" ["span", "sites"] [] (field fields "log")
+    (start, end) <- object "relations.log.span" ["start", "end"] [] (field inner "span") >>= interval "relations.log.span"
+    unless (start `mod` 4 == 0 && end `mod` 4 == 0 && end - start <= 0x1000 && end <= 0x20000000)
+      (refuse "relations.log.span is unaligned, above 4 KiB or outside DRAM")
+    sites <- array "relations.log.sites" (field inner "sites") >>= mapM logSite
+    when (length sites > 32) (refuse "relations.log has more than 32 sites")
+    let labels = sort (map siteLabel sites)
+    forM_ (zip labels (drop 1 labels)) $ \(left, right) -> when (left == right) (refuse ("log site label " <> left <> " repeats"))
+    pure (Just (LogRelation start end sites))
+  pure (Relations timer logged lz)
+
+-- | @{"peers":[...],"carriers":[...],"allowances":[...],"registers":[...],"board":[...],"relations":{...}}@.
 parseAttachRules :: J.Value -> Either Refusal AttachRules
 parseAttachRules value = do
-  fields <- object "attach_state" ["peers", "carriers", "allowances", "registers", "board"] [] value
+  fields <- object "attach_state" ["peers", "carriers", "allowances", "registers", "board", "relations"] [] value
   let rows key = array ("attach_state." <> key) (field fields key)
   allowances <- rows "allowances" >>= mapM allowance
   let labels = sort (map allowanceLabel allowances)
   forM_ (zip labels (drop 1 labels)) $ \(left, right) -> when (left == right) (refuse ("allowance label " <> left <> " repeats"))
+  related <- relations (field fields "relations")
+  forM_ (logRelation related) $ \(LogRelation start end _) ->
+    forM_ allowances $ \entry -> when (allowanceSpace entry == PhysicalSpace && allowanceStart entry < end && start < allowanceEnd entry)
+      (refuse ("allowance " <> allowanceLabel entry <> " overlaps the log span"))
   AttachRules <$> (rows "peers" >>= mapM peer) <*> (rows "carriers" >>= mapM carrierPart) <*> pure allowances
-    <*> (rows "registers" >>= mapM registerEntry) <*> (rows "board" >>= mapM boardEntry)
+    <*> (rows "registers" >>= mapM registerEntry) <*> (rows "board" >>= mapM boardEntry) <*> pure related
 
--- | Both roles' DATs and targets, for the digests the contract carries.
+-- | Both roles' DATs and targets, for the digests the contract carries, and each owned piece's symbol table.
 data AttachSources = AttachSources
   { canonicalDatBytes :: B.ByteString
   , composedDatBytes :: B.ByteString
   , canonicalTargetBytes :: TargetBytes
   , composedTargetBytes :: TargetBytes
+  , ownedSymbols :: [(PieceKind, B.ByteString)]
   }
+
+-- | A32 @LDR Rt,...@ of a word, any addressing mode, not unconditional-space.
+a32WordLoad :: Word32 -> Bool
+a32WordLoad word = word .&. 0x0c500000 == 0x04100000 && word `shiftR` 28 /= 0xf
+
+-- | A32 @STR Rt,...@ of a word, any addressing mode, not unconditional-space.
+a32WordStore :: Word32 -> Bool
+a32WordStore word = word .&. 0x0c500000 == 0x04000000 && word `shiftR` 28 /= 0xf
+
+-- | Labelled read and store of an owned piece's timestamp routine.
+logSymbols :: PieceKind -> Maybe (String, String)
+logSymbols kind = case kind of
+  FirstStage -> Just ("xm1_first_stage_log_read", "xm1_first_stage_log_store")
+  Record2Link -> Just ("xm1_secondary_log_read", "xm1_secondary_log_store")
+  _ -> Nothing
+
+targetWord :: TargetBytes -> Word32 -> Maybe Word32
+targetWord targets address = case [ (target, bytes) | (target, bytes) <- targetList targets
+                                  , targetBase target <= address
+                                  , fromIntegral (address - targetBase target) + 4 <= B.length bytes ] of
+  [(target, bytes)] -> let at = fromIntegral (address - targetBase target)
+                       in Just (foldr (\index acc -> acc `shiftL` 8 .|. fromIntegral (B.index bytes (at + index))) 0 [0 .. 3])
+  _ -> Nothing
+
+-- | The site's read and store PCs, checked as an adjacent word load and store of one register in its role's image.
+resolveSite :: AttachSources -> LogSite -> Either Refusal (Word32, Word32)
+resolveSite sources site = do
+  let name = siteLabel site
+  (readPc, storePc) <- case siteSource site of
+    StockSite pc -> pure (pc, pc + 4)
+    OwnedSite kind -> do
+      (readName, storeName) <- maybe (refuse ("log site " <> name <> " names a piece without log symbols")) pure (logSymbols kind)
+      symbols <- maybe (refuse ("log site " <> name <> " names a piece the manifest lacks")) pure (lookup kind (ownedSymbols sources))
+      rows <- either (const (refuse ("log site " <> name <> ": symbols do not parse"))) pure (F.parseSymbols symbols)
+      let at symbol = either (const (refuse ("log site " <> name <> " lacks " <> T.pack symbol))) (pure . F.symbolAddress) (F.lookupSymbol rows symbol)
+      (,) <$> at readName <*> at storeName
+  unless (storePc == readPc + 4) (refuse ("log site " <> name <> " store is not the instruction after its read"))
+  let image = case siteRole site of
+        RetainedRole -> canonicalTargetBytes sources
+        ComposedRole -> composedTargetBytes sources
+  case (targetWord image readPc, targetWord image storePc) of
+    (Just load, Just store) | a32WordLoad load && a32WordStore store && (load `shiftR` 12) .&. 0xf == (store `shiftR` 12) .&. 0xf ->
+      pure (readPc, storePc)
+    _ -> refuse ("log site " <> name <> " is not a word load and store of one register in its role's image")
+
+relationsValue :: AttachSources -> Relations -> Either Refusal J.Value
+relationsValue sources (Relations timer logged lz) = do
+  logValue <- forM logged $ \(LogRelation start end sites) -> do
+    resolved <- forM sites $ \site -> (,) site <$> resolveSite sources site
+    let keys = sort [(siteRole site, siteCore site, readPc) | (site, (readPc, _)) <- resolved]
+    forM_ (zip keys (drop 1 keys)) $ \(left, right) -> when (left == right) (refuse "two log sites share role, core and read PC")
+    pure $ J.object
+      [ "span" .= intervalValue (start, end)
+      , "sites" .= [ J.object [ "label" .= siteLabel site, "role" .= roleName (siteRole site), "core" .= coreIndex (siteCore site)
+                              , "read_pc" .= readPc, "store_pc" .= storePc, "citation" .= siteCitation site ]
+                   | (site, (readPc, storePc)) <- resolved ]
+      ]
+  let citationValue = fmap (\citation -> J.object ["citation" .= citation])
+  pure (J.object ["timer" .= citationValue timer, "log" .= logValue, "lz" .= citationValue lz])
 
 sha256 :: B.ByteString -> Text
 sha256 = T.pack . SHA.sha256Hex . SHA.sha256
@@ -296,7 +431,7 @@ windowValue (Window where' start end citation) = J.object ["space" .= spaceValue
 
 -- | Contract @guard.attach_state@ for the composition's carriers, in contract order.
 attachStateValue :: AttachSources -> AttachRules -> [(PieceKind, Span)] -> Either Refusal J.Value
-attachStateValue sources (AttachRules peers parts allowances registers board) carriers = do
+attachStateValue sources (AttachRules peers parts allowances registers board related) carriers = do
   let inside (CarrierPart part _) (_, carrier) = spanTarget part == spanTarget carrier
         && spanStart carrier <= spanStart part && spanEnd part <= spanEnd carrier
   forM_ parts $ \part@(CarrierPart range _) ->
@@ -315,6 +450,7 @@ attachStateValue sources (AttachRules peers parts allowances registers board) ca
     let Span target (Guest start) (Guest end) = carrier
     pure (J.object ["piece" .= pieceKindName owner, "target" .= targetName target, "start" .= start, "end" .= end, "parts" .= partValues])
   allowanceValues <- mapM (allowanceValue sources) allowances
+  relationValue <- relationsValue sources related
   pure $ J.object
     [ "peers" .= [ J.object ["core" .= coreIndex owner, "retained_pc" .= map intervalValue retained, "composed_pc" .= map intervalValue composed, "reason" .= reason]
                  | Peer owner retained composed reason <- peers ]
@@ -326,6 +462,7 @@ attachStateValue sources (AttachRules peers parts allowances registers board) ca
                      BoardExact retained composed -> ["kind" .= ("exact" :: Text), "retained" .= retained, "composed" .= composed]
                      BoardDeclared citation -> ["kind" .= ("declared" :: Text), "citation" .= citation])
                  | BoardEntry pointer kind reason <- board ]
+    , "relations" .= relationValue
     ]
   where
     partValue (Span _ (Guest start) (Guest end)) residency reason canonicalDigest composedDigest = J.object
