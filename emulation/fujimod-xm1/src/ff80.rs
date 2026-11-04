@@ -15,8 +15,10 @@ const FIRST_POLL: u64 = 1_000;
 const WAIT_STEP: u64 = 200_000;
 const WAIT_BUDGET: u64 = 30_000_000;
 const ACTIVATION_BUDGET: u64 = 140_000_000;
-/// Instructions standing for USB 2.0's 2 ms SetAddress recovery interval.
-pub const SET_ADDRESS_RECOVERY: u64 = 1_000_000;
+/// The host waits at least 10 ms after SetAddress's status stage, as Linux's `hub_port_init` does
+/// (`msleep(10)` after `hub_set_address`); USB 2.0 §9.2.6.3 gives the device 2 ms. Board ticks
+/// run at the run document's 12 MHz device clock policy.
+const SET_ADDRESS_RECOVERY_TICKS: u64 = 120_000;
 const PACKET_BYTES: usize = 64;
 const BULK_OUT: u8 = 2;
 const BULK_IN: u8 = 0x81;
@@ -460,11 +462,10 @@ impl Ff80 {
     }
 
     /// Raises the cable level first; returns the ff80 device and configuration descriptors.
-    /// The RAM-push routes' accepted trajectories were recorded with no SetAddress recovery wait.
     pub fn enumerate(&mut self) -> Result<(Vec<u8>, Vec<u8>), String> {
         let cable = self.machine.document.usb_cable.0.clone();
         self.machine.session.logic_input(&cable, true)?;
-        let (device, configuration) = self.enumerate_attached(ACTIVATION_BUDGET, 0)?;
+        let (device, configuration) = self.enumerate_attached(ACTIVATION_BUDGET)?;
         if device[8..12] != VENDOR_PRODUCT {
             return Err(format!("unexpected device descriptor {}", encode_hex(&device)));
         }
@@ -472,9 +473,8 @@ impl Ff80 {
     }
 
     /// Standard enumeration of whatever device the guest presents, once the
-    /// controller activates within `budget` instructions, waiting `set_address_recovery`
-    /// instructions after SetAddress's status stage.
-    pub fn enumerate_attached(&mut self, budget: u64, set_address_recovery: u64) -> Result<(Vec<u8>, Vec<u8>), String> {
+    /// controller activates within `budget` instructions.
+    pub fn enumerate_attached(&mut self, budget: u64) -> Result<(Vec<u8>, Vec<u8>), String> {
         self.wait("USB controller activation", budget, |host| Ok(host.status()?.register(0x090) & 6 == 6))?;
         self.machine.session.usb_reset(&self.usb())?;
         self.advance(1_000_000)?;
@@ -483,7 +483,7 @@ impl Ff80 {
             return Err(format!("unexpected device descriptor {}", encode_hex(&device)));
         }
         self.control_status([0, 5, 1, 0, 0, 0, 0, 0])?;
-        self.advance(set_address_recovery)?;
+        self.advance_ticks(SET_ADDRESS_RECOVERY_TICKS)?;
         let head = self.control_in([0x80, 6, 0, 2, 0, 0, 9, 0], 9)?;
         let total = head.get(2..4).map(|bytes| usize::from(u16::from_le_bytes([bytes[0], bytes[1]]))).unwrap_or(0);
         if head.len() != 9 || !(9..=256).contains(&total) {
@@ -497,6 +497,21 @@ impl Ff80 {
         self.control_status([0, 9, configuration[5], 0, 0, 0, 0, 0])?;
         self.advance(1_000_000)?;
         Ok((device, configuration))
+    }
+
+    fn advance_ticks(&mut self, ticks: u64) -> Result<(), String> {
+        let rate = &self.machine.document.execution.instructions_per_tick;
+        let (numerator, denominator) = (rate.numerator, rate.denominator);
+        let end = self.machine.session.board.now().saturating_add(ticks);
+        loop {
+            let now = self.machine.session.board.now();
+            if now >= end {
+                return Ok(());
+            }
+            if self.advance(((end - now) * numerator).div_ceil(denominator))? == RunOutcome::DrainRequired {
+                return Err("SetAddress recovery wait: a capture page is outstanding".into());
+            }
+        }
     }
 
     pub fn transfer(&mut self, request: &Transfer) -> Result<(usize, Vec<u8>), String> {
