@@ -981,7 +981,12 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
     case lifecycle of
       Nothing -> do
         state <- readRamPushState statePath
-        runner <- newSegmentRunner emulator e2e (\label action -> timed label action) readAddress (\phase message -> stop phase message) plan
+        -- A caught trajectory failure is recorded once, in the result written below.
+        let caught = experimental || not (null (planForbiddenExecution plan)) || lifetimeGuarded
+            segmentStop phase message
+              | caught = ioError (userError (show phase ++ " failed: " ++ message))
+              | otherwise = stop phase message
+        runner <- newSegmentRunner emulator e2e (\label action -> timed label action) readAddress segmentStop plan
         let segments = runSegments (if lifetimeGuarded then runner { runnerSnapshotPolicy = DifferentialSnapshotPreservation } else runner)
             protection = planProtection plan
             expect = planExpect plan

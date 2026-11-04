@@ -3,8 +3,13 @@
 #   jq -n -L emulation/menu-engine-pair-trajectories --arg role stock|owned --arg name NAME \
 #     --slurpfile config emulation/menu-oracle-NAME.json \
 #     --slurpfile graph private-data/scratch/ControllerStrategy/crawl-5/crawl-graph.json \
-#     [--argjson landing '[MENU, SETTING, CURSOR]'] -f oracle.jq
-# `landing` is the key's screen where crawl-5 has no edge for the key, from the oracle receipt.
+#     [--argjson landing '[MENU, SETTING, CURSOR]'] [--argjson sample '[[KEY, MENU, SETTING, CURSOR], ...]'] \
+#     [--argjson leave '[KEY, ...]'] -f oracle.jq
+# `landing` is the key's screen from the oracle receipt's key reply, used where crawl-5's landing is
+# not the one the receipt shows. `sample` is a segment before the path that opens and closes the
+# shooting menu, for a path that dispatches no owned modal75 action, which the scoped lifetime guard
+# needs for its task identity. `leave` are keys after the key, walked over crawl-5, for a path whose
+# key's screen cannot stay open through the unload.
 include "engine";
 $graph[0].graph as $g
 | $config[0] as $c
@@ -25,8 +30,8 @@ $graph[0].graph as $g
   def segment($phase; $capture; $steps): {"phase": $phase, "capture": $capture, "steps": $steps, "reads": reads, "read_preservations": keep_resident};
   walk(0; $c.path) as $walked
 | ($edge["\($walked.at):\($c.key)"]) as $keyed
-| (if $keyed != null then [[$c.key] + menu($keyed)]
-   elif $ARGS.named.landing != null then [[$c.key] + $ARGS.named.landing]
+| (if $ARGS.named.landing != null then [[$c.key] + $ARGS.named.landing]
+   elif $keyed != null then [[$c.key] + menu($keyed)]
    else error("crawl-5 has no \($c.key) edge from node \($walked.at) and no landing was given") end) as $last
 | ($walked.steps + $last | package_route) as $steps
 | {
@@ -36,11 +41,15 @@ $graph[0].graph as $g
       {"source": "emulation/menu-oracle-\($name).json", "expectation": "The path and key are the oracle case's."},
       {"source": "private-data/scratch/ControllerStrategy/crawl-5/crawl-graph.json (E-MODAL-MENU-OKPATHS-150)", "expectation": "Each step's menu tuple is the landing of the crawl-5 edge for that key from the previous step's screen."},
       {"source": "menu/recipe_bank_ui.h", "expectation": "With the package installed UP from (1,5,2) lands on row 34, not crawl-5's row 32, and two more UPs reach row 32."}
-    ] + (if $ARGS.named.landing != null and $keyed == null then [{"source": "the menu-oracle-\($name) receipt's key reply", "expectation": "The key lands on \($ARGS.named.landing), where crawl-5 has no edge for it."}] else [] end),
+    ] + (if $ARGS.named.landing != null then [{"source": "the menu-oracle-\($name) receipt's key reply", "expectation": "The key lands on \($ARGS.named.landing)."}] else [] end)
+      + (if $ARGS.named.sample != null then [{"source": "emulation/menu-oracle-open.json and emulation/menu-oracle-close.json receipts", "expectation": "OK from the live view opens the shooting menu on \($ARGS.named.sample[0][1:]) and BACK closes it on \($ARGS.named.sample[1][1:])."}] else [] end)
+      + (if $ARGS.named.leave != null then [{"source": "private-data/scratch/ControllerStrategy/crawl-5/crawl-graph.json", "expectation": "After the key, \($ARGS.named.leave) leave its screen on crawl-5's landings before unload."}] else [] end),
     "trace_sites": engine_sites($role),
     "before_unload": (
       [ {"phase": "package-menu-prefix", "capture": "oracle-live-view", "steps": [["menu", 67, 56, 0]], "reads": reads} ]
+      + (if $ARGS.named.sample != null then [segment("modal-sample"; "modal-sample"; $ARGS.named.sample)] else [] end)
       + (if ($c.path | length) > 0 then [segment("oracle-path"; "oracle-path"; $steps[0:-1])] else [] end)
-      + [segment("oracle-key"; "oracle-key"; $steps[-1:])]),
+      + [segment("oracle-key"; "oracle-key"; $steps[-1:])]
+      + (if $ARGS.named.leave != null then [segment("oracle-leave"; "oracle-leave"; walk($keyed; $ARGS.named.leave).steps)] else [] end)),
     "after_unload": []
   }
