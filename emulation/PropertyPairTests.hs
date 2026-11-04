@@ -5,6 +5,7 @@ import Control.Monad (unless)
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
+import qualified Data.Aeson.KeyMap as KM
 import Data.Bits (shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
@@ -193,6 +194,7 @@ chain role chained = Observation receipt spec reset hits steps session
   befores = zipWith fromMaybe (zeroRegions : map stepAfter chained) (map stepBefore chained)
   steps = BL.toStrict (A.encode [ object
     [ "step" .= number, "parent" .= (number - 1), "keys" .= replicate number KeyOk, "hits" .= [from, to]
+    , "idle" .= object ["instructions" .= (0 :: Int), "ran" .= instructionsValue preKeyIdle]
     , "press" .= object ["failure" .= Null, "settle" .= object ["status" .= stepStatus step], "menu" .= stepMenu step]
     , "watch" .= watch "fixed" (stepRows step), "regions_before" .= regionsValue before, "regions_after" .= regionsValue (stepAfter step) ]
     | (number, step, before, from, to) <- zip5 [1 :: Int ..] chained befores ends (drop 1 ends) ])
@@ -212,7 +214,9 @@ chain role chained = Observation receipt spec reset hits steps session
         [ "spec.json" .= digestOf spec, "reset-observation.json" .= digestOf reset, "hits.jsonl" .= digestOf hits
         , "steps.json" .= digestOf steps, "emulator-session.json" .= session ]
     , "outcome" .= object ["status" .= ("completed" :: T.Text)]
-    , "bounds" .= object ["hit_limit" .= hitLimit, "watch_limit" .= watchLimit] ]))
+    , "bounds" .= object ["hit_limit" .= hitLimit, "watch_limit" .= watchLimit]
+    , "probe" .= Null
+    , "pre_key_idle_instructions" .= instructionsValue preKeyIdle ]))
 
 stackPointer, written :: Word32
 stackPointer = 0x1000
@@ -339,12 +343,48 @@ main = do
         (refusal OwnedRole (ownedWith [setterIn, commit, storeHit BankStore8 0x10 0xac, setterOut]) == Just (AccessorStoreUnmatched (StepInterval 1))
           && refusal OwnedRole (ownedWith [setterIn, commit, setterOut]) == Just (AccessorStoreUnmatched (StepInterval 1)))
 
+    , check "a probe receipt, or one with another pre-key idle, is refused"
+        (let base = observation OwnedRole ownedStep
+             edited key value = base { obsReceipt = case A.eitherDecodeStrict' (obsReceipt base) of
+               Right (Object fields) -> BL.toStrict (A.encode (Object (KM.insert key value fields)))
+               _ -> error "test receipt is not an object" }
+             refusedWith key value = either Just (const Nothing) (qualify bindings OwnedRole (edited key value))
+         in refusedWith "probe" (object ["path" .= ["right" :: T.Text]]) == Just (ReceiptShape "probe")
+              && refusedWith "pre_key_idle_instructions" (A.toJSON (0 :: Int)) == Just (ReceiptShape "pre-key idle"))
+    , check "a step without the pre-key idle is refused"
+        (let base = observation OwnedRole ownedStep
+             withoutIdle = case A.eitherDecodeStrict' (obsSteps base) of
+               Right (Array steps) -> BL.toStrict (A.encode (Array (fmap (\step -> case step of
+                 Object fields -> Object (KM.insert "idle" Null fields)
+                 other -> other) steps)))
+               _ -> error "test steps are not an array"
+             edited = base { obsSteps = withoutIdle }
+             rebound = edited { obsReceipt = case A.eitherDecodeStrict' (obsReceipt edited) of
+               Right (Object fields) -> BL.toStrict (A.encode (Object (KM.insert "files" (object
+                 [ "spec.json" .= digestOf (obsSpec edited), "reset-observation.json" .= digestOf (obsReset edited)
+                 , "hits.jsonl" .= digestOf (obsHits edited), "steps.json" .= digestOf withoutIdle
+                 , "emulator-session.json" .= obsSessionDigest edited ]) fields)))
+               _ -> error "test receipt is not an object" }
+         in case qualify bindings OwnedRole rebound of
+              Left (StepShape 1 _) -> True
+              _ -> False)
     , check "a crawl route whose last step lacks its recorded effects is refused"
         (refusal OwnedRole (ownedWith (filter (/= commit) (stepHits ownedStep))) == Just (RouteEffectsDiffer crawlRoute))
 
-    , check "getter calls compare as a set of returned (caller, arguments, result)"
+    , check "getter calls compare per (caller, arguments) as result sequences with repeats collapsed"
         (compared retainedStep (ownedWith (stepHits ownedStep ++ [getterIn, getterOut])) == Right ()
           && compared retainedStep (ownedWith (take 5 (stepHits ownedStep) ++ [hit GetterReturn (getterCall + 4) [0xac] stackPointer 0])) == Left (GetterResultsDiffer crawlRoute))
+    , check "a getter result returned out of order is a difference even when the result set is equal"
+        (let returning value = hit GetterReturn (getterCall + 4) [value] stackPointer 0
+         in compared (retainedStep { stepHits = stepHits retainedStep ++ [getterIn, returning 0xac] })
+                     (ownedWith (stepHits ownedStep ++ [getterIn, returning 0xac, getterIn, returning 0xab])) == Left (GetterResultsDiffer crawlRoute)
+            && compared (retainedStep { stepHits = stepHits retainedStep ++ [getterIn, returning 0xac] })
+                        (ownedWith (stepHits ownedStep ++ [getterIn, returning 0xac, getterIn, returning 0xac])) == Right ())
+    , check "getter calls under different arguments interleave freely"
+        (let other = hit GetterEntry getterEntry [6] stackPointer (getterCall + 4)
+             returning value = hit GetterReturn (getterCall + 4) [value] stackPointer 0
+         in compared (retainedStep { stepHits = stepHits retainedStep ++ [other, returning 0xcd] })
+                     (ownedWith (stepHits ownedStep ++ [other, returning 0xcd, getterIn, getterOut])) == Right ())
     , check "a write that leaves its preimage is not compared"
         (compared retainedStep ownedStep { stepRows = stepRows ownedStep ++ [cpuWrite 0x96cc80 1 (Just 0) [0] retiredSetter] } == Right ())
     , check "settle status differs only through an exhausted budget; the menu always counts"

@@ -6,7 +6,6 @@ module Replacement.StartupArtifact.Joins
 
 import qualified A32 as A
 import qualified Data.ByteString as B
-import Data.List (findIndex)
 import Data.Maybe (mapMaybe)
 import qualified Data.Set as Set
 import Data.Word (Word32)
@@ -97,7 +96,6 @@ submissions :: JoinEvidence -> Maybe [SubmitCall]
 submissions evidence = case [calls | LoaderStartupFacts _ _ calls <- map pieceFacts (evidencePieces evidence)] of
   [calls] -> Just calls
   _ -> Nothing
-
 resetLiteral :: Target -> JoinEvidence -> Maybe Word32
 resetLiteral target evidence = targetWord (evidenceComposed evidence) target (targetBase target + fromIntegral F.resetVectorWordOffset)
 
@@ -186,28 +184,11 @@ prefixExitContract (LinkedBytes image symbols) = case (symbolAt symbols "__secon
     in isBranch && movesArgument && literalOf (exit - 4) == Just (A.lr, frameReturn) && not (null stackInstalls)
   _ -> False
 
--- | Every peer path reads a published completion before calling the
--- initializer, delays 100 NOPs after every pending read, and a path whose
--- completion is never published waits without calling it.
-peerWaitsBeforeInitializer :: L.LinkedArtifact -> Bool
-peerWaitsBeforeInitializer artifact = all admissible (LA.proofPaths (L.linkedProof artifact))
-  where
-    initializes effect = case effect of LA.ServiceCall LI.PrivateInitialize _ -> True; _ -> False
-    admissible (LA.PathProof (LI.Scenario role completion _) effects terminal)
-      | role /= LI.Peer = True
-      | completion == LI.NeverPublished = terminal == LA.WaitingForCompletion && not (any initializes effects)
-      | otherwise = case (findIndex (== LA.CompletionRead LA.Published) effects, findIndex initializes effects) of
-          (Just published, Just called) -> published < called && delayed effects
-          _ -> False
-    delayed (LA.CompletionRead LA.Pending : rest) = take 1 rest == [LA.DelayNops (LA.NopCount 100)] && delayed rest
-    delayed (_ : rest) = delayed rest
-    delayed [] = True
-
 -- | Registered once per piece that owns loader-B orchestration.
 prefixOrchestration :: PieceKind -> Join JoinKind
 prefixOrchestration owner = Join PrefixOrchestrationB (Set.fromList [Record2Link, owner])
   [at LoaderB 0xd000c 0xd0010, at LoaderB initializerSite (initializerSite + 4), at LoaderB loaderStartup 0xd0b00]
-  (ObservationQualified "the record-2 prefix enters loader-B orchestration with the stock 0xd00c4 state and the orchestration calls the record-2 initializer through 0xd0430 after the completion wait; qualified by a composed natural comparison")
+  (ObservationQualified "the record-2 prefix enters loader-B orchestration with the stock 0xd00c4 state and the orchestration calls the record-2 initializer through 0xd0430 after the completion wait; the wait-before-initializer order is loader-B orchestration's own admission (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs:219-240,261); qualified by a composed natural comparison")
   [ HostCheck "prefix-exit-enters-orchestration" $ \evidence ->
       case secondaryFacts evidence of
         Just (_, _, linked@(LinkedBytes image symbols), _) -> prefixExitContract linked
@@ -221,8 +202,7 @@ prefixOrchestration owner = Join PrefixOrchestrationB (Set.fromList [Record2Link
           (Just entry, A.Branch (A.Cond 14) False target) -> target == entry
           _ -> False
         _ -> False
-  , HostCheck "peer-waits-before-initializer" $ \evidence ->
-      maybe False peerWaitsBeforeInitializer (orchestrationArtifact LI.LoaderB evidence)
+
   , HostCheck "initializer-scratch-in-window" $ \evidence ->
       case secondaryFacts evidence of
         Just (_, _, _, ScratchBytes scratch) -> toInteger entrySp - toInteger scratch >= toInteger stackWindowLow

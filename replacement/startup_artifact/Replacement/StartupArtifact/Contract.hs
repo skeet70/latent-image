@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
--- | composed-contract.json, schema 2, in the shape of
--- emulation/fujimod-xm1/tests/data/composed-contract-v2.json: every list is
+-- | composed-contract.json, schema 3, in the shape of
+-- emulation/fujimod-xm1/tests/data/composed-contract-v3.json: every list is
 -- sorted and non-overlapping, and every object carries all its keys.
 module Replacement.StartupArtifact.Contract
   ( contractValue, normalizeFootprint, allowRanges, EmittedWrites (..), contractCarriers
@@ -132,7 +132,7 @@ contractCarriers composition =
 
 contractValue :: JoinName k => Canonical -> B.ByteString -> Composition k -> B.ByteString -> TargetBytes -> Label -> Value -> Value
 contractValue source manifest composition composedDat composedTargets attach attachState = object
-  [ "schema" .= (2 :: Int)
+  [ "schema" .= (3 :: Int)
   , "kind" .= ("composed-startup-contract" :: Text)
   , "qualification" .= (case qualification of HostComposed -> "host-composed" :: Text; Pending _ -> "pending")
   , "pending_joins" .= (case qualification of HostComposed -> [] :: [Text]; Pending names -> names)

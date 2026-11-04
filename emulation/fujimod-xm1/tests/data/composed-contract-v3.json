@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "kind": "composed-startup-contract",
   "qualification": "pending",
   "pending_joins": [
@@ -85,7 +85,12 @@
       ],
       "allowances": [],
       "registers": [],
-      "board": []
+      "board": [],
+      "relations": {
+        "timer": null,
+        "log": null,
+        "lz": null
+      }
     }
   },
   "joins": [

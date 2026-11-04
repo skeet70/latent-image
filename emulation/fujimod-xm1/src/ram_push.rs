@@ -346,6 +346,8 @@ enum Request {
     SnapshotKey { name: SnapshotName, key: PressName },
     /// A `snapshot-key` press from the current guest.
     DisplayKey { key: PressName },
+    /// Runs the guest for `instructions` with no input.
+    Idle { instructions: GuestInstructions },
     SnapshotDrop { name: SnapshotName },
     Finish,
 }
@@ -385,6 +387,7 @@ enum RequestKind {
     SnapshotRestore,
     SnapshotKey,
     DisplayKey,
+    Idle,
     SnapshotDrop,
     Finish,
 }
@@ -424,6 +427,7 @@ impl Request {
             Request::SnapshotRestore { .. } => RequestKind::SnapshotRestore,
             Request::SnapshotKey { .. } => RequestKind::SnapshotKey,
             Request::DisplayKey { .. } => RequestKind::DisplayKey,
+            Request::Idle { .. } => RequestKind::Idle,
             Request::SnapshotDrop { .. } => RequestKind::SnapshotDrop,
             Request::Finish => RequestKind::Finish,
         }
@@ -535,7 +539,7 @@ fn default_pulse(key: Press) -> KeyPulse {
     }
 }
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(transparent)]
 struct GuestInstructions(u64);
 
@@ -1287,6 +1291,16 @@ impl Server {
                 response
             }
             Request::DisplayKey { key } => self.display_press(&key, None)?,
+            Request::Idle { instructions: GuestInstructions(instructions) } => {
+                if !(1..=MAX_SETTLE).contains(&instructions) {
+                    return Err(format!("idle instructions must be 1..{MAX_SETTLE}"));
+                }
+                let before = self.bridge.machine.instructions();
+                self.bridge.advance(instructions)?;
+                self.bridge.machine.require_running()?;
+                let after = self.bridge.machine.instructions();
+                json!({"instructions": GuestInstructions(after), "ran": GuestInstructions(after - before)})
+            }
             Request::SnapshotDrop { name } => {
                 self.snapshots.remove(&name).ok_or_else(|| format!("snapshot {} is not held", name.0))?;
                 json!({"name": name, "held": self.snapshots.len()})

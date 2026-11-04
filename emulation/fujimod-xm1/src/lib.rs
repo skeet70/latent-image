@@ -1,6 +1,7 @@
 //! X-M1 1.50 on jitl (justjake)'s FujiMod EXR II runtime.
 pub mod adapters;
 pub mod adjustment;
+pub mod attach_relations;
 pub mod attach_state;
 pub mod bridge;
 pub mod composed_catalog;
@@ -22,6 +23,7 @@ pub mod nand_image;
 pub mod native_case;
 pub mod peer_witness;
 pub mod provenance;
+pub mod power_hold;
 pub mod r4f;
 pub mod render;
 pub mod run;

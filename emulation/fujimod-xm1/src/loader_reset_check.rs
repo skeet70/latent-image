@@ -1,6 +1,6 @@
 use fujimod_emulator_devices::{checkpoint::Checkpoint,parts::nand::{Nand,Options}};
 use fujimod_xm1::run::{NandBase,RunDocument};
-use serde::{Deserialize,de::IgnoredAny};
+use serde::{Deserialize,Serialize,de::IgnoredAny};
 use std::{borrow::Borrow,collections::BTreeMap};
 
 pub(super) struct Reset {point:Checkpoint}
@@ -106,6 +106,28 @@ fn equal_tree(retained:&Checkpoint,owned:&Checkpoint)->Result<(),String>{
 }
 pub(super) fn compare(retained:&Reset,owned:&Reset)->Result<(),String>{equal_tree(&retained.point,&owned.point)}
 
+/// Re-exports a reset checkpoint whose NAND medium records one written page, leaving every other node and blob unchanged.
+pub(super) fn dirty_medium(bytes:&[u8],document:&RunDocument)->Result<Vec<u8>,String>{
+    #[derive(Serialize)]
+    struct WrittenMedium {options:Options,overlays:Vec<u64>,spare:BTreeMap<u32,Vec<u8>>,pages:BTreeMap<u32,Vec<u8>>,written_spare:BTreeMap<u32,Vec<u8>>}
+    let point=Checkpoint::from_bytes(bytes)?;
+    let session:SessionWire=point.decode("emulator-session-v2").map_err(|_|"reset checkpoint session differs")?;
+    let index=session.nodes.get(document.nand.0.as_str()).ok_or("reset checkpoint NAND controller absent")?.0;
+    let mut children=point.children().to_vec();
+    let mut board_children=children.first().ok_or("reset checkpoint board absent")?.children().to_vec();
+    let mut bus_children=board_children.get(1).ok_or("reset checkpoint bus absent")?.children().to_vec();
+    let controller=bus_children.get(index).ok_or("reset checkpoint NAND controller absent")?.clone();
+    let medium=controller.children().first().ok_or("reset checkpoint NAND medium absent")?;
+    let state:MediumWire=medium.decode("nand-medium").map_err(|_|"reset NAND state differs")?;
+    let page_bytes=usize::try_from(state.options.page_bytes).map_err(|_|"reset NAND page size overflows")?;
+    let written=Checkpoint::encode("nand-medium",&WrittenMedium {options:state.options,overlays:Vec::new(),spare:BTreeMap::new(),
+        pages:BTreeMap::from([(0,vec![0;page_bytes])]),written_spare:BTreeMap::new()})?.with_blobs(medium.blobs().to_vec());
+    bus_children[index]=controller.with_children(vec![written]);
+    board_children[1]=board_children[1].clone().with_children(bus_children);
+    children[0]=children[0].clone().with_children(board_children);
+    point.with_children(children).to_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Reset,admit,compare};
@@ -192,6 +214,12 @@ mod tests {
         let document=document();let source=media(&document,&[0x11]);
         let refused=admit(&point(&source,Change::DuplicateResourceNand).to_bytes().expect("checkpoint"),&document,&source).err();
         assert_eq!(refused.as_deref(),Some("reset checkpoint NAND resources differ"));
+    }
+    #[test]
+    fn a_written_nand_page_in_a_decodable_reset_is_refused_as_state(){
+        let document=document();let source=media(&document,&[0x11]);
+        let written=super::dirty_medium(&point(&source,Change::None).to_bytes().expect("checkpoint"),&document).expect("re-export written reset");
+        assert_eq!(admit(&written,&document,&source).err().as_deref(),Some("reset NAND is not pristine"));
     }
     #[test]
     #[ignore="requires LOADER_RESET_CHECKPOINT and LOADER_RESET_UPDATE from the qualified retained observation"]

@@ -1,4 +1,4 @@
-//! Strict parse of `composed-contract.json` (schema 2) and the observation plan derived from it.
+//! Strict parse of `composed-contract.json` (schema 3) and the observation plan derived from it.
 use crate::attach_state::{AttachRuleRefusal, AttachRules, RawAttachRules, RuleContext, Span};
 use fujimod_emulator::board::observation::{
     CompositeGuardConfig, DestinationPolicy, GuardCore, GuardRange, GuardSpan, GuardTarget, MAX_GUARD_PARTITIONS,
@@ -593,12 +593,12 @@ struct RawGuard {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(try_from = "u32")]
-struct SchemaTwo;
+struct SchemaThree;
 
-impl TryFrom<u32> for SchemaTwo {
+impl TryFrom<u32> for SchemaThree {
     type Error = String;
     fn try_from(value: u32) -> Result<Self, Self::Error> {
-        if value == 2 { Ok(Self) } else { Err("contract schema must be 2".into()) }
+        if value == 3 { Ok(Self) } else { Err("contract schema must be 3".into()) }
     }
 }
 
@@ -612,7 +612,7 @@ enum ContractKind {
 #[serde(deny_unknown_fields)]
 struct RawContract {
     #[allow(dead_code)]
-    schema: SchemaTwo,
+    schema: SchemaThree,
     #[allow(dead_code)]
     kind: ContractKind,
     qualification: Qualification,
@@ -645,7 +645,7 @@ pub enum GuardBound {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CatalogRefusal {
-    /// JSON that does not have the schema-2 shape, including unknown keys and invalid scalars.
+    /// JSON that does not have the schema-3 shape, including unknown keys and invalid scalars.
     Shape(String),
     Qualification,
     NoPieces,
@@ -1130,7 +1130,10 @@ impl Contract {
     }
 
     pub fn plan(&self) -> Plan {
-        Plan { roles: [Role::Retained, Role::Composed].into_iter().map(|role| self.role_plan(role)).collect() }
+        Plan {
+            roles: [Role::Retained, Role::Composed].into_iter().map(|role| self.role_plan(role)).collect(),
+            relations: self.attach_rules.relations.clone(),
+        }
     }
 
     fn role_plan(&self, role: Role) -> RolePlan {
@@ -1157,6 +1160,7 @@ impl Contract {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Plan {
     pub roles: Vec<RolePlan>,
+    pub relations: crate::attach_relations::Relations,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

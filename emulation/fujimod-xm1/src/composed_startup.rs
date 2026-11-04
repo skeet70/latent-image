@@ -1,11 +1,12 @@
 use fujimod_emulator::board::observation::{GuardCore, GuardStatus, GuardStatusToken, MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
 use fujimod_xm1::{
+    attach_relations::{self, AttachSources, LogWrite, TimerState, TransactionWriter},
     attach_state::{self, AttachState, Span},
     bridge::{read, sha256, write},
     composed_catalog::{Contract, Core, Label, Pc, Role, ROW_LIMIT, Sha256},
     composed_receipt::{
         self, CaptureDirectories, GuardObservation, GuardState, HexBytes, Identity, LabelCount, MenuObservation, Outcome,
-        ReadCapture, Receipt, ReceiptKind, RecordedPolicy, Row, SchemaTwo, VerdictKind, Word,
+        ReadCapture, Receipt, ReceiptKind, RecordedPolicy, Row, SchemaThree, VerdictKind, Word,
     },
     guest::Press,
     machine::{KeyPulse, Machine, RunOutcome},
@@ -78,10 +79,18 @@ fn hit_register(hit: &Hit, name: &str) -> Result<Word, String> {
     number(hit.registers.get(name).ok_or("hit lacks full registers")?).map(Word)
 }
 
-/// A pre-attach watch over `classes`, ended at the attach stop.
-struct Diagnostic {
-    classes: Vec<(u64, u64)>,
+/// The watch from reset to the attach stop over the log span and any diagnostic classes.
+struct PreAttach {
+    diagnostic: Option<Vec<(u64, u64)>>,
+    log: Option<Span>,
     watch: Option<Box<MemoryWatch>>,
+}
+
+/// Timer and LZ bus accesses from reset, drained at every hit drain until the attach stop.
+struct Transactions {
+    windows: Vec<(u64, u64)>,
+    writer: TransactionWriter,
+    reset: TimerState,
 }
 
 struct Observation {
@@ -91,22 +100,35 @@ struct Observation {
     unguarded: BTreeMap<(Label, Core), u64>,
     off_core: BTreeMap<(Label, Core), u64>,
     attach: Option<AttachState>,
-    diagnostic: Option<Diagnostic>,
+    sources: Option<AttachSources>,
+    pre_attach: PreAttach,
+    transactions: Option<Transactions>,
     watch: Option<Box<MemoryWatch>>,
     token: Option<GuardStatusToken>,
     attach_instructions: u64,
 }
 
-/// Writes the diagnostic watch's per-class writer summary.
-fn end_diagnostic(machine: &Machine, diagnostic: &mut Diagnostic, output: &Path) -> Result<(), String> {
-    let mut watch = diagnostic.watch.take().ok_or("diagnostic watch already ended")?;
+fn drain_transactions(machine: &Machine, transactions: &mut Transactions) -> Result<(), String> {
+    let batch = machine.session.board.transaction_watch_end()?;
+    require(batch.omitted == 0, "relation transaction drain bound exhausted")?;
+    transactions.writer.append(&batch.transactions)
+}
+
+/// Also writes the diagnostic summary.
+fn end_pre_attach(machine: &Machine, pre: &mut PreAttach, output: &Path) -> Result<Vec<LogWrite>, String> {
+    let Some(mut watch) = pre.watch.take() else { return Ok(Vec::new()) };
     let state = watch.records.borrow().state();
     machine.session.board.memory_watch_end(&mut watch)?;
-    require(state["violation"].is_null(), "diagnostic watch reported a violation")?;
-    let rows: Vec<composed_receipt::WatchRow> = serde_json::from_value(state["records"].clone())
-        .map_err(|error| format!("diagnostic watch rows: {error}"))?;
-    let summaries = composed_receipt::carrier_writes(&diagnostic.classes, &[], &rows)?;
-    write(&output.join(WRITERS), &serde_json::to_vec_pretty(&summaries).map_err(|error| error.to_string())?)
+    require(state["violation"].is_null(), "pre-attach watch reported a violation")?;
+    if let Some(classes) = &pre.diagnostic {
+        let rows: Vec<composed_receipt::WatchRow> = serde_json::from_value(state["records"].clone())
+            .map_err(|error| format!("diagnostic watch rows: {error}"))?;
+        let rows: Vec<_> = rows.into_iter()
+            .filter(|row| classes.iter().any(|&(start, end)| row.physical < end && start < row.physical + row.size)).collect();
+        let summaries = composed_receipt::carrier_writes(classes, &[], &rows)?;
+        write(&output.join(WRITERS), &serde_json::to_vec_pretty(&summaries).map_err(|error| error.to_string())?)?;
+    }
+    pre.log.map_or(Ok(Vec::new()), |span| attach_relations::log_writes(&state["records"], span))
 }
 
 fn observe_hit(machine: &Machine, contract: &Contract, role: Role, sites: &BTreeMap<Pc, Label>, state: &mut Observation, hit: &Hit,
@@ -146,9 +168,12 @@ fn observe_hit(machine: &Machine, contract: &Contract, role: Role, sites: &BTree
         });
     }
     if label == &contract.guard.attach && state.watch.is_none() {
-        if let Some(diagnostic) = state.diagnostic.as_mut() {
-            end_diagnostic(machine, diagnostic, output)?;
-        }
+        let mut transactions = state.transactions.take().ok_or("relation transaction watch is not active")?;
+        drain_transactions(machine, &mut transactions)?;
+        let log_writes = end_pre_attach(machine, &mut state.pre_attach, output)?;
+        state.sources = Some(AttachSources {
+            timer_reset: transactions.reset, transactions: transactions.writer.finish()?, log_writes,
+        });
         let plan = attach_state::capture_plan(&machine.document)?;
         state.attach = Some(attach_state::capture(&machine.session.board, &plan, output)?);
         let maps = run::memory_maps(&machine.document)?;
@@ -166,15 +191,25 @@ fn trace(machine: &mut Machine, contract: &Contract, role: Role, state: &mut Obs
     machine.traces.bound_full_registers(NonZeroUsize::new(HIT_BOUND).ok_or("invalid hit bound")?);
     machine.traces.stop_labels.extend(plan.stop_labels());
     machine.traces.arm_mutable(&machine.session, plan.trace_sites())?;
-    if let Some(diagnostic) = state.diagnostic.as_mut() {
-        let classes = diagnostic.classes.iter().map(|&(start, end)| WatchRange { start, end, kinds: WatchKinds::WRITES }).collect();
+    let board_state = machine.session.board.state();
+    let (reset, windows) = attach_relations::reset_sources(&board_state)?;
+    machine.session.board.transaction_watch_begin(windows.clone(), attach_relations::DRAIN_LIMIT)?;
+    state.transactions = Some(Transactions { windows, writer: TransactionWriter::create(output)?, reset });
+    let classes: Vec<WatchRange> = state.pre_attach.log.iter().map(|span| (span.start, span.end))
+        .chain(state.pre_attach.diagnostic.iter().flatten().copied())
+        .map(|(start, end)| WatchRange { start, end, kinds: WatchKinds::WRITES }).collect();
+    if !classes.is_empty() {
         let maps = run::memory_maps(&machine.document)?;
-        diagnostic.watch = Some(machine.session.board.memory_watch_begin_classified(classes, WATCH_LIMIT, maps, ViewPolicy::Observe)?);
+        state.pre_attach.watch = Some(machine.session.board.memory_watch_begin_classified(classes, WATCH_LIMIT, maps, ViewPolicy::Observe)?);
     }
     while machine.instructions() < DEADLINE {
         let outcome = machine.run(SLICE.min(DEADLINE - machine.instructions()));
         machine.require_running()?;
         require(matches!(outcome, RunOutcome::Completed | RunOutcome::Stopped), "composed observation run did not settle")?;
+        if let Some(transactions) = state.transactions.as_mut() {
+            drain_transactions(machine, transactions)?;
+            machine.session.board.transaction_watch_begin(transactions.windows.clone(), attach_relations::DRAIN_LIMIT)?;
+        }
         let hits: Vec<Hit> = machine.traces.hits.drain(..).collect();
         for hit in &hits {
             observe_hit(machine, contract, role, &plan.sites, state, hit, output)?;
@@ -228,7 +263,12 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
     require(identity.run.as_str() == RUN_SHA256 && identity.boot_rom.as_str() == ROM_SHA256, "observer run/ROM identity differs")?;
     require(identity.update == contract.identities(role).dat_sha256, "update DAT differs from the contract identity for this role")?;
     require(role == Role::Composed || identity.update.as_str() == CANONICAL_DAT_SHA256, "retained update is not the canonical X-M1 1.50 DAT")?;
-    let diagnostic = diagnostic.as_deref().map(diagnostic_classes).transpose()?.map(|classes| Diagnostic { classes, watch: None });
+    let diagnostic = diagnostic.as_deref().map(diagnostic_classes).transpose()?;
+    let log = contract.attach_rules().relations.log.as_ref().map(|log| log.span);
+    if let (Some(span), Some(classes)) = (log, &diagnostic) {
+        require(classes.len() < DIAGNOSTIC_CLASS_LIMIT, "the log span leaves room for 255 diagnostic classes")?;
+        require(!classes.iter().any(|&(start, end)| start < span.end && span.start < end), "a diagnostic class overlaps the log span")?;
+    }
     let kind = if diagnostic.is_some() { ReceiptKind::ComposedStartupDiagnostic } else { ReceiptKind::ComposedStartupReceipt };
     std::fs::create_dir(&output).map_err(|error| format!("{}: {error}", output.display()))?;
     fujimod_emulator_exr2_board::register_board_builder();
@@ -239,7 +279,8 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
     let mut machine = Machine::new(document, session)?;
     let mut state = Observation {
         rows: vec![], counts: BTreeMap::new(), recorded: BTreeMap::new(), unguarded: BTreeMap::new(), off_core: BTreeMap::new(),
-        attach: None, diagnostic, watch: None, token: None, attach_instructions: 0,
+        attach: None, sources: None, pre_attach: PreAttach { diagnostic, log, watch: None }, transactions: None, watch: None, token: None,
+        attach_instructions: 0,
     };
     let traced = trace(&mut machine, &contract, role, &mut state, &output);
     let disarmed = machine.traces.disarm(&machine.session);
@@ -287,7 +328,7 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
         require(guard.as_ref().is_some_and(GuardObservation::clean), "composite guard report is not clean")
     });
     let receipt = Receipt {
-        schema: SchemaTwo,
+        schema: SchemaThree,
         kind,
         role,
         identity,
@@ -302,6 +343,7 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
         off_core: counts(state.off_core),
         unguarded: counts(state.unguarded),
         attach: state.attach,
+        attach_sources: state.sources,
         guard,
         menu,
     };

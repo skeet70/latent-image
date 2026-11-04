@@ -103,6 +103,23 @@ xm1_first_stage_handoff_vector:
     mov pc, r2
     .size xm1_first_stage_handoff, . - xm1_first_stage_handoff
 
+    @ Boot-log timestamp: r0 = slot word address. The read and store are the relation's log site;
+    @ the linker script places .xm1_log_text after every .text input.
+    .section .xm1_log_text, "ax", %progbits
+    .global xm1_first_stage_log_timestamp
+    .type xm1_first_stage_log_timestamp, %function
+xm1_first_stage_log_timestamp:
+    ldr r1, =0xfff91000
+    .global xm1_first_stage_log_read
+xm1_first_stage_log_read:
+    ldr r2, [r1]
+    .global xm1_first_stage_log_store
+xm1_first_stage_log_store:
+    str r2, [r0]
+    bx lr
+    .ltorg
+    .size xm1_first_stage_log_timestamp, . - xm1_first_stage_log_timestamp
+
 #ifdef XM1_FIRST_STAGE_INTERLEAVED_TAIL_FAULT
     @ Original synthetic store between KernelA's first and second handler stores.
     .global xm1_first_stage_interleaved_tail_fault

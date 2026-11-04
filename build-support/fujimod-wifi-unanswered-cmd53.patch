@@ -1,0 +1,99 @@
+--- a/crates/emulator-exr2-storage/src/sdio.rs
++++ b/crates/emulator-exr2-storage/src/sdio.rs
+@@ -37,6 +37,8 @@
+     pio: bool,
+     pio_reads: usize,
+     gates: [u16; 4],
++    #[serde(default)]
++    unanswered: bool,
+ }
+ pub struct SdioHost {
+     options: Options,
+@@ -93,6 +95,7 @@
+                 self.regs.get(0x38),
+                 self.regs.get(0x3a),
+             ],
++            unanswered: false,
+         };
+         match command {
+             5 if word == 0x05020000
+@@ -130,6 +133,18 @@
+                 r.operation = Some(op);
+             }
+             53 if self.state == State::Transfer
++                && self.module.protocol() == Protocol::Enumeration
++                && [0x353a0001, 0x353a0011].contains(&word)
++                && arg >> 28 & 7 == 1
++                && arg & 0x0c0001ff == 4
++                && self.regs.get(4) == 4
++                && self.regs.get(6) == 0 =>
++            {
++                // Declared assumption: an enumeration-only module answers no function-1
++                // byte transfer, so the host reports a command timeout and moves no data.
++                r.unanswered = true;
++            }
++            53 if self.state == State::Transfer
+                 && self.module.protocol() == Protocol::RomDownload =>
+             {
+                 let write = arg & 0x80000000 != 0;
+@@ -258,6 +273,11 @@
+         }
+         self.state = r.state;
+         self.response = [0; 16];
++        if r.unanswered {
++            self.regs.set(0x32, self.regs.get(0x32) | 1);
++            self.regs.set(0x30, self.regs.get(0x30) | 0x8000);
++            return self.signal(cx);
++        }
+         self.response[..4].copy_from_slice(&r.response.to_le_bytes());
+         if r.pio {
+             self.request = Some(r);
+@@ -553,11 +573,47 @@
+         assert_eq!(m.response, [0; 16]);
+         write(&mut m, &mut h, 8, 0);
+         let mut cx = h.cx();
+-        m.write(&mut cx, BASE + 12, 4, 0x353a0011);
++        m.write(&mut cx, BASE + 12, 4, 0x353a0010);
+         assert!(cx.refusal().is_some());
+         assert!(m.request.is_none());
+     }
+     #[test]
++    fn enumeration_module_leaves_cmd53_unanswered() {
++        let mut m = model(Protocol::Enumeration);
++        let mut h = Ram::new(0x10000);
++        setup(&mut m, &mut h);
++        write(&mut m, &mut h, 0x36, 0xffff);
++        write(&mut m, &mut h, 0x3a, 0xffff);
++        for (word, arg) in [(0x05020000, 0x200000), (0x031a0000, 0), (0x071b0000, 0x12340000)] {
++            command(&mut m, &mut h, word, arg);
++            due(&mut m, &mut h);
++        }
++        write(&mut m, &mut h, 0, 0x1000);
++        write(&mut m, &mut h, 4, 4);
++        h.bytes[0x1000..0x1004].copy_from_slice(&0x8000u32.to_le_bytes());
++        let read = |m: &mut SdioHost, h: &mut Ram, offset: u64, size: u8| m.read(&mut h.cx(), BASE + offset, size);
++        for (word, arg) in [(0x353a0001, 0x90000000 | (0x8c << 9) | 4), (0x353a0011, 0x10000000 | (0x8c << 9) | 4)] {
++            command(&mut m, &mut h, word, arg);
++            let writes = h.effects.iter().filter(|e| matches!(e, Effect::Write(..))).count();
++            due(&mut m, &mut h);
++            assert_eq!(h.effects.iter().filter(|e| matches!(e, Effect::Write(..))).count(), writes, "{word:#x}");
++            assert_eq!(read(&mut m, &mut h, 0x32, 2), 1, "{word:#x}");
++            assert_eq!(read(&mut m, &mut h, 0x30, 2), 0x8000, "{word:#x}");
++            assert_eq!(read(&mut m, &mut h, 0x10, 2), 0, "{word:#x}");
++            assert_eq!(h.effects.last(), Some(&Effect::Irq(79, true)));
++            write(&mut m, &mut h, 0x32, 0xffff);
++        }
++        for (word, arg) in [(0x353a0023u32, 0x98000000u32 | (0x8c << 9) | 1), (0x353a0001, 0xa0000000 | (0x8c << 9) | 4)] {
++            write(&mut m, &mut h, 0x30, 0xffff);
++            write(&mut m, &mut h, 8, (arg & 65535) as u64);
++            write(&mut m, &mut h, 10, (arg >> 16) as u64);
++            let mut cx = h.cx();
++            m.write(&mut cx, BASE + 12, 4, word as u64);
++            assert!(cx.refusal().is_some(), "{word:#x}");
++        }
++        assert_eq!(&h.bytes[0x1000..0x1004], &0x8000u32.to_le_bytes());
++    }
++    #[test]
+     fn bootstrap_dma_is_delayed_and_precedes_irq() {
+         let mut m = model(Protocol::RomDownload);
+         let mut h = Ram::new(0x10000);

@@ -18,7 +18,7 @@ use fujimod_xm1::run::{self, RunDocument, ValidatedUpdate};
 use serde::{Deserialize, Serialize};
 use std::{collections::{BTreeMap, BTreeSet}, fs::{File, OpenOptions}, io::{BufWriter, Read, Seek, SeekFrom, Write}, path::{Path, PathBuf}, process::ExitCode};
 
-const USAGE: &str = "heap-observe --run RUN --update DAT --boot-rom ROM --analysis ROOT --observer enabled|disabled --output DIR";
+const USAGE: &str = "heap-observe --run RUN --update DAT --boot-rom ROM --analysis ROOT --observer enabled|disabled [--endpoint first-heap-call] --output DIR";
 const ENTRIES: [u32; 8] = [0x89cde4, 0x89e560, 0x89da64, 0xbf1c44, 0x89e464, 0x72b110, 0x72b164, 0x72b1cc];
 const CODE: [(u32, u32); 21] = [(0x89cda4, 0x89d4f8), (0x89da3c, 0x89dfc0), (0x89e464, 0x89e7c4),
     IMAGE5_HEAP_CODE, (0x72b110, 0x72b210), (0x723cb8, 0x723ce8), (0x890ed8, 0x890f08),
@@ -52,6 +52,9 @@ fn append_accesses(writer: &mut AccessWriter<BufWriter<File>>, output: &Path, te
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum ObserverMode { Enabled, Disabled }
+/// `FirstHeapCall` halts at the first heap-entry boundary; the incomplete-run path saves `failure.fujimod` there.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Endpoint { MenuRoundTrip, FirstHeapCall }
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 struct Identity { run: Digest, update: Digest, boot_rom: Digest, observer: Digest, images: Vec<Digest> }
 struct Image { base: u32, bytes: Vec<u8> }
@@ -730,7 +733,7 @@ fn drive() -> Result<(), String> {
     let mut args = std::env::args_os().skip(1);
     while let Some(flag) = args.next() {
         let flag = flag.into_string().map_err(|_| USAGE)?;
-        require(["--run", "--update", "--boot-rom", "--analysis", "--observer", "--output"].contains(&flag.as_str()), USAGE)?;
+        require(["--run", "--update", "--boot-rom", "--analysis", "--observer", "--endpoint", "--output"].contains(&flag.as_str()), USAGE)?;
         require(arguments.insert(flag, PathBuf::from(args.next().ok_or(USAGE)?)).is_none(), USAGE)?;
     }
     let mut take = |flag| arguments.remove(flag).ok_or_else(|| USAGE.to_owned());
@@ -740,6 +743,11 @@ fn drive() -> Result<(), String> {
     let analysis = take("--analysis")?;
     let mode = match take("--observer")?.to_str() { Some("enabled") => ObserverMode::Enabled, Some("disabled") => ObserverMode::Disabled, _ => return Err(USAGE.into()) };
     let output = take("--output")?;
+    let endpoint = match arguments.remove("--endpoint").as_deref().map(|value| value.to_str()) {
+        None => Endpoint::MenuRoundTrip,
+        Some(Some("first-heap-call")) if mode == ObserverMode::Enabled => Endpoint::FirstHeapCall,
+        _ => return Err(USAGE.into()),
+    };
     let (images, image_digests) = source_images(&analysis)?;
     let identity = Identity { run: Digest(sha256(&run_bytes)), update: Digest(sha256(&update)), boot_rom: Digest(sha256(&rom)),
         observer: Digest(sha256(&read(&std::env::current_exe().map_err(|error| error.to_string())?)?)), images: image_digests };
@@ -785,6 +793,7 @@ fn drive() -> Result<(), String> {
     let mut watch_end_error = None;
     let mut terminal_access_sha256 = None;
     let mut menus = Vec::new();
+    let mut first_heap_call = false;
     let result = (|| -> Result<(), String> {
         let mut processed = 0;
         let mut advance = |machine: &mut Machine, budget: u64| -> Result<(), String> {
@@ -818,6 +827,13 @@ fn drive() -> Result<(), String> {
                     external_header_reads += reads;
                     guest_code_writes += writes;
                     require(writes == 0, "allocator code changed during observation")?;
+                }
+                if endpoint == Endpoint::FirstHeapCall && ENTRIES.contains(&(boundary.snapshot.pc.0 & !0x4000_0000)) {
+                    require(boundary.snapshot.core == Core(0) && boundary.snapshot.pc.0 == 0x89cde4 && machine.instructions() < 80_000_000,
+                        "first heap entry is not core-0 malloc before the first menu")?;
+                    boundaries.push(boundary);
+                    first_heap_call = true;
+                    return Err("first heap call reached".into());
                 }
                 let before = image5.phase();
                 image5.observe(&boundary.snapshot, code).map_err(|error| format!("image5 heap code admission: {error:?}"))?;
@@ -897,7 +913,11 @@ fn drive() -> Result<(), String> {
         })();
         match saved { Ok(digest) => (Some(digest), None), Err(error) => (None, Some(error)) }
     };
-    let receipt = Receipt { schema: 3, scope: "canonical-natural-reset-no-card-menu-roundtrip-general-heap".into(), mode, identity,
+    let scope = match endpoint {
+        Endpoint::MenuRoundTrip => "canonical-natural-reset-no-card-menu-roundtrip-general-heap",
+        Endpoint::FirstHeapCall => "canonical-natural-reset-no-card-first-heap-call",
+    };
+    let receipt = Receipt { schema: 3, scope: scope.into(), mode, identity,
         checkpoint: Digest(sha256(&checkpoint)), complete, error: result.err().or_else(|| frame.as_ref().err().cloned()).or_else(|| final_counters.err().map(|error| error.to_string())).or_else(|| watch_finish_error.clone()), machine_failure: machine.failure.clone(),
         instructions: counts, menus,
         frame: frame.ok().flatten(), events: recorder.records().len(), pending: recorder.pending_count(), watch_batches,
@@ -913,7 +933,7 @@ fn drive() -> Result<(), String> {
             "Pending incomplete invocations or any observer refusal prohibit full-trace and peak-live claims.".into(),
             "Task identity is derived from current scheduler records and kernel context; CPSR mode and context depth retain exception attribution.".into()] };
     write(&output.join("heap-observation.json"), &serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?)?;
-    require(complete, "heap observation incomplete; preserved receipt records refusal")
+    require(complete || first_heap_call && receipt.failure_checkpoint.is_some(), "heap observation incomplete; preserved receipt records refusal")
 }
 fn main() -> ExitCode {
     match drive() { Ok(()) => ExitCode::SUCCESS, Err(error) => { eprintln!("{error}"); ExitCode::FAILURE } }

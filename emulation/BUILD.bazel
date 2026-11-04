@@ -17,7 +17,7 @@ exports_files(
 )
 
 exports_files(
-    ["fujimod-xm1/tests/data/composed-contract-v2.json"],
+    ["fujimod-xm1/tests/data/composed-contract-v3.json"],
     visibility = ["//replacement/startup_artifact:__pkg__"],
 )
 
@@ -3253,6 +3253,7 @@ haskell_library(
     deps = [
         ":case-sha256",
         ":emulator-usb",
+        ":watch-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

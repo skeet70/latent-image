@@ -40,6 +40,9 @@ module Emulation.PropertyPairPlan
   , specValue
   , hitLimit
   , watchLimit
+  , preKeyIdle
+  , maxIdle
+  , Instructions (..)
   , word32At
   ) where
 
@@ -57,6 +60,7 @@ import qualified Data.Set as S
 import qualified Data.Text as T
 import Data.Word (Word32)
 import Emulation.Sha256 (sha256, sha256Hex)
+import Emulation.WatchObservation (Instructions (..))
 import Numeric (readHex, showHex)
 import System.FilePath ((</>))
 
@@ -238,6 +242,14 @@ settingsRanges = [PhysicalRange 0x89ec00 0x89edc2, PhysicalRange 0x96cc64 0x96cf
 hitLimit, watchLimit :: Int
 hitLimit = 1500000
 watchLimit = 262144
+
+-- | Guest instructions run with no input before every press, ahead of the bridge's render-drain gate.
+preKeyIdle :: Instructions
+preKeyIdle = Instructions 20000000
+
+-- | The bridge's largest `idle` request, its MAX_SETTLE.
+maxIdle :: Instructions
+maxIdle = Instructions 90000000
 
 data Plan = Plan
   { planRole :: Role
