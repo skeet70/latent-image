@@ -6,8 +6,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use super::block::{decode, mirror, snapshot_address, RecordTable, BLOCK_LEN, LAST_MOVE_LEN};
 use super::engine::{
-    apply_with, Effect, EngineResult, EngineServices, KindSwitchCall, MenuEvent, Rules, SeekCall, StageEvent, StageKind,
-    StageNode, Stock,
+    apply_with, Effect, EngineResult, EngineServices, KindSwitchCall, MenuEvent, PropertyId, Rules, SeekCall, StageEvent,
+    StageKind, StageNode, Stock,
 };
 use super::frame::{MenuClass, MenuFrameSnapshot, RowIndex, RowToken};
 use super::state::{EngineState, LastMove, RowState};
@@ -37,7 +37,7 @@ enum Expected {
     Availability { class: MenuClass, token: RowToken, state: RowState },
     InitialRow { kind: u32, node: u32, class: MenuClass, answer: Option<RowToken> },
     Store { slot: u32 },
-    PropertyWrite { property: u32, value: u32, flags: u32 },
+    PropertyWrite { property: PropertyId, value: RowIndex, flags: u32 },
 }
 
 enum LastMoveWrite {
@@ -115,7 +115,7 @@ impl EngineServices for Answers<'_> {
                 self.snapshot_writes.extend(record_writes(snapshot_address(depth, slot), &record));
             }
             (Effect::PropertyWrite { property, value }, Expected::PropertyWrite { property: p, value: v, flags: 0 })
-                if (property.get(), value.get()) == (*p, *v) => {}
+                if (property, value) == (*p, *v) => {}
             _ => self.differs(index, asked, expected),
         }
     }

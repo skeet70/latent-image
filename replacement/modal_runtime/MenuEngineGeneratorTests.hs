@@ -257,7 +257,7 @@ caseExtraction = do
       check "a property write in the engine is a call"
         (map C.serviceCall (C.caseCalls second) == [C.CallNotify (4, 1, 0x1d, 0x104), C.CallPropertyWrite 0x285 9 0, C.CallStore 1])
       check "Rust text of a rejected case with a property write"
-        (all (`isInfixOf` C.rustCases [("second", "r", "c", second)]) ["result: EngineResult::Rejected", "Expected::PropertyWrite { property: 0x285, value: 0x9, flags: 0x0 }"])
+        (all (`isInfixOf` C.rustCases [("second", "r", "c", second)]) ["result: EngineResult::Rejected", "Expected::PropertyWrite { property: PropertyId::new(0x285), value: RowIndex::new(0x9), flags: 0x0 }"])
     _ -> fail "two presses give two cases"
   marked <- either fail pure (extractEvents tracedRestore [C.ExpectedEvent True (0xe, 1, 0x1d), C.ExpectedEvent False (4, 1, 1)] twoPresses)
   check "a window marked as a fallback class is no case" (case marked of [Just _, Nothing] -> True; _ -> False)

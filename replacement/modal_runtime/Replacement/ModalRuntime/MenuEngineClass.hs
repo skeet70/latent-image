@@ -12,6 +12,8 @@ module Replacement.ModalRuntime.MenuEngineClass
   , MenuTree
   , menuTree
   , Direction (..)
+  , GroupKind (..)
+  , FrameKind (..)
   , OwnedClass (..)
   , Fallback (..)
   , EventClass (..)
@@ -74,15 +76,30 @@ menuTree document = MenuTree
 
 data Direction = Down | Up deriving (Eq, Show)
 
+-- | Kinds `0x45`..`0x48`: `0xbf9c1c`'s arms.
+data GroupKind
+  = -- | `0x45`: back within a group of four.
+    GroupBack
+  | -- | `0x46`: forward within a group of four.
+    GroupForward
+  | -- | `0x47`: up to the fourth row not hidden.
+    GroupStepUp
+  | -- | `0x48`: down to the fourth row not hidden.
+    GroupStepDown
+  deriving (Eq, Show)
+
+-- | The owned kinds of 6..`0xb`; kind 9 has no oracle case.
+data FrameKind = PopMoveDownPush | PopMoveUpPush | PushMoveDownPop | SeekPushMoveDownPop | SeekPushMoveUpPop
+  deriving (Eq, Show)
+
 data OwnedClass
   = RowMove Direction
-  | GroupMove Word32
+  | GroupMove GroupKind
   | Push
   | Pop
   | Open
   | Close
-  | -- | Kinds 6..`0xb`.
-    FrameMove Word32
+  | FrameMove FrameKind
   | Reopen
   deriving (Eq, Show)
 
@@ -128,14 +145,19 @@ deriveClass :: MenuTree -> MenuBlock -> StageEvent -> EventClass
 deriveClass tree block event = either FallbackEvent OwnedEvent $ rowTotal *> case stageKind event of
   4 -> rowMove Down
   5 -> rowMove Up
-  kind | kind >= 0x45 && kind <= 0x48 -> GroupMove kind <$ source
+  0x45 -> groupMove GroupBack
+  0x46 -> groupMove GroupForward
+  0x47 -> groupMove GroupStepUp
+  0x48 -> groupMove GroupStepDown
   0xe -> push
   0xf -> pop
   1 -> open
   2 -> close
-  kind | kind == 6 || kind == 7 -> popMovePush kind
-  kind | kind == 8 || kind == 9 -> FrameMove kind <$ (stageSlot *> cursorInRows *> source >>= \current -> checkPushMovePop current (cursorChild current))
-  kind | kind == 0xa || kind == 0xb -> seekPushMovePop kind
+  6 -> popMovePush PopMoveDownPush
+  7 -> popMovePush PopMoveUpPush
+  8 -> FrameMove PushMoveDownPop <$ (stageSlot *> cursorInRows *> source >>= \current -> checkPushMovePop current (cursorChild current))
+  0xa -> seekPushMovePop SeekPushMoveDownPop
+  0xb -> seekPushMovePop SeekPushMoveUpPop
   0x13 -> reopen
   other -> Left (KindNotOwned other)
  where
@@ -208,6 +230,11 @@ deriveClass tree block event = either FallbackEvent OwnedEvent $ rowTotal *> cas
     _ <- source
     when (stageId event >= 0x1a && stageId event <= 0x1d) cursorInRows
     pure Close
+  -- `0xbf9c1c`'s arms for kinds `0x45` and `0x46` read the cursor row's token.
+  groupMove kind = do
+    _ <- source
+    when (kind `elem` [GroupBack, GroupForward]) cursorInRows
+    pure (GroupMove kind)
   reopen = do
     current <- source
     openable FramedAllowed current (blockCursor block)
@@ -236,6 +263,7 @@ deriveClass tree block event = either FallbackEvent OwnedEvent $ rowTotal *> cas
     restored <- stackCursor (depth + 1)
     found <- innerTarget child restored
     forM_ found $ \target -> do
+      when (restored > rowCount target) (Left CursorPastRows)
       innerMove target (stageId event)
       forM_ (nodeParent target) $ \at -> do
         parent <- node at

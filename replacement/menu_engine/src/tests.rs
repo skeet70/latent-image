@@ -622,3 +622,48 @@ fn push_from_a_row_whose_child_is_a_package_node_is_refused_before_any_service_c
     let decoded = MenuEvent::decode(StageEvent { kind: 0xe, node: 1, id: 0x1d, extra: 0 }, &tree, &state);
     assert_eq!(apply(&tree, &mut state, decoded, &mut Unasked), Err(NotOwned::PackageChild));
 }
+
+/// A page whose row 0 leads to the picker and whose row 1 to a package node.
+static PACKAGE_ROWS: [Row; 2] = [row(0x20, Some(PICKER)), Row { token: RowToken::new(0x7d), child: RowChild::Package }];
+static PACKAGE_NODES: [Node; 3] = [
+    node(0, 5, Wrap::Wraps, None, &TOP_ROWS),
+    node(1, 5, Wrap::Wraps, Some(TOP), &PACKAGE_ROWS),
+    node(1, 0x104, Wrap::Wraps, Some(PAGE), &PICKER_ROWS),
+];
+static PACKAGE_TREE: Tree = Tree { nodes: &PACKAGE_NODES, registry: registry(), identity: TreeIdentity([9; 32]) };
+
+fn refused(tree: &Tree, mut state: EngineState, raw: StageEvent) -> Result<EngineResult, NotOwned> {
+    let decoded = MenuEvent::decode(raw, tree, &state);
+    apply(tree, &mut state, decoded, &mut Unasked)
+}
+
+#[test]
+fn a_pop_move_push_whose_parent_has_a_package_row_is_refused_before_any_service_call() {
+    let state = at(PICKER, frame(1, 1, 4, 0), 4, 2);
+    assert_eq!(refused(&PACKAGE_TREE, state, StageEvent { kind: 6, node: 1, id: 1, extra: 0 }), Err(NotOwned::PackageChild));
+}
+
+#[test]
+fn a_push_move_pop_at_the_deepest_stack_frame_is_refused_before_any_service_call() {
+    let state = at(PAGE, frame(1, 1, 3, 0), 3, (STACK_FRAMES - 1) as u32);
+    assert_eq!(refused(&TREE, state, StageEvent { kind: 8, node: 1, id: 1, extra: 0 }), Err(NotOwned::StackBounds));
+}
+
+#[test]
+fn a_push_move_pop_restoring_a_cursor_past_the_childs_rows_is_refused_before_any_service_call() {
+    let mut state = at(PAGE, frame(1, 1, 3, 0), 3, 1);
+    state.stack[2] = frame(5, 5, 4, 0);
+    assert_eq!(refused(&TREE, state, StageEvent { kind: 8, node: 1, id: 1, extra: 0 }), Err(NotOwned::RowBounds));
+}
+
+#[test]
+fn a_stepping_seek_checks_every_rows_child_before_any_service_call() {
+    let state = at(PAGE, frame(0, 0, 2, 0), 2, 1);
+    assert_eq!(refused(&PACKAGE_TREE, state, StageEvent { kind: 0xa, node: 1, id: 1, extra: 0 }), Err(NotOwned::PackageChild));
+}
+
+#[test]
+fn kind_9_is_refused_before_any_service_call() {
+    let state = at(PAGE, frame(1, 1, 3, 0), 3, 1);
+    assert_eq!(refused(&TREE, state, StageEvent { kind: 9, node: 1, id: 1, extra: 0 }), Err(NotOwned::EventClass));
+}

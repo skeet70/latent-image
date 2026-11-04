@@ -6,9 +6,9 @@
 //! - kinds `0x45`..`0x48`, the group moves of `0xbf9c1c`;
 //! - kind 2 with an open node;
 //! - kinds `0xe` and `0xf`, no seek id, into a node of type other than 5 or 7;
-//! - kinds 6..`0xb`, whose inner pushes, pops and moves are those of kinds
-//!   `0xe`, `0xf`, 4 and 5, the seek of `0xa` and `0xb` on a node of type
-//!   other than 5 or 7;
+//! - kinds 6, 7, 8, `0xa` and `0xb`, whose inner pushes, pops and moves are
+//!   those of kinds `0xe`, `0xf`, 4 and 5, the seek of `0xa` and `0xb` on a
+//!   node of type other than 5 or 7;
 //! - kind 1 on a registered node other than `0x38` of type other than 5 or 7,
 //!   with an id the `0xbfad04` switch passes to its default arm;
 //! - kind `0x13` on the open node.
@@ -244,8 +244,6 @@ pub enum NotOwned {
     /// An inner move of kinds 6..`0xb` that `0xbf9f44` takes as a page step
     /// or refuses for a zero id.
     InnerMove,
-    /// A seek of kinds `0xa` and `0xb` that steps.
-    SeekSteps,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -507,9 +505,6 @@ enum FramedTarget {
     /// An inner step of kinds 6..`0xb`, which no `0xbfad04` follows.
     Allowed,
 }
-
-/// Kinds `0xa` and `0xb` whose seek makes steps.
-const SEEK_STEPS_OWNED: bool = true;
 
 impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine<'a, R, S, P> {
     fn run(&mut self, event: MenuEvent) -> Result<EngineResult, NotOwned> {
@@ -1224,6 +1219,9 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         let Some(target) = self.check_target(child, restored.cursor)? else {
             return Ok(());
         };
+        if restored.cursor.get() as usize > Self::rows(target)?.len() {
+            return Err(NotOwned::RowBounds);
+        }
         Self::check_inner_move(target, node_word, id)?;
         if let Some(parent) = target.parent {
             let last = RowIndex::new(Self::rows(source)?.len().saturating_sub(1) as u32);
@@ -1232,10 +1230,14 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         Ok(())
     }
 
-    /// Kinds 6..`0xb`: pops, pushes and moves through `0xbfab98` and
-    /// `0xbf9f44` with notification id 0, after the seek for `0xa` and `0xb`.
-    /// Every node the steps can open is checked before the first call.
+    /// Kinds 6, 7, 8, `0xa` and `0xb`: pops, pushes and moves through `0xbfab98`
+    /// and `0xbf9f44` with notification id 0, after the seek for `0xa` and
+    /// `0xb`. Every node the steps can open is checked before the first call.
+    /// Kind 9 has no oracle case.
     fn frame_move(&mut self, kind: StageKind, node_word: StageNode, id: StageId, extra: StageExtra) -> Result<EngineResult, NotOwned> {
+        if kind == StageKind::PushMoveUpPop {
+            return Err(NotOwned::EventClass);
+        }
         Self::stage_index(node_word)?;
         self.check_cursor()?;
         let source = self.current()?;
@@ -1243,7 +1245,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         let entry = self.state.live;
         let notify_id = if R::FRAME_NOTIFY_ID_ZERO { StageId::new(0) } else { id };
         let count = StepCount::new(id.get());
-        let up = matches!(kind, StageKind::PopMoveUpPush | StageKind::PushMoveUpPop | StageKind::SeekPushMoveUpPop);
+        let up = matches!(kind, StageKind::PopMoveUpPush | StageKind::SeekPushMoveUpPop);
         let direction = if up { Direction::Up } else { Direction::Down };
         match kind {
             StageKind::PopMoveDownPush | StageKind::PopMoveUpPush => {
@@ -1265,7 +1267,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
                 }
                 self.switched(Switch::Push, node_word, Direction::Down, notify_id)
             }
-            StageKind::PushMoveDownPop | StageKind::PushMoveUpPop => {
+            StageKind::PushMoveDownPop => {
                 self.check_push_move_pop(None, node_word, id)?;
                 if !self.switch_node(Switch::Push, node_word, Direction::Down, notify_id)? {
                     return Ok(EngineResult::Rejected);
@@ -1285,9 +1287,6 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
                 if zero_step {
                     self.check_push_move_pop(None, node_word, id)?;
                 } else {
-                    if !SEEK_STEPS_OWNED {
-                        return Err(NotOwned::SeekSteps);
-                    }
                     Self::check_inner_move(source, node_word, StageId::new(1))?;
                     for row in rows {
                         self.check_push_move_pop(Some(row.child), node_word, id)?;

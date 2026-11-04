@@ -407,4 +407,4 @@ rustCases cases =
     CallAvailability cls token state -> "Expected::Availability { class: MenuClass::new(" ++ hex cls ++ "), token: RowToken::new(" ++ hex token ++ "), state: " ++ rowState state ++ " }"
     CallInitialRow k n cls answer -> "Expected::InitialRow { kind: " ++ hex k ++ ", node: " ++ hex n ++ ", class: MenuClass::new(" ++ hex cls ++ "), answer: " ++ optional (\v -> "RowToken::new(" ++ hex v ++ ")") answer ++ " }"
     CallStore slot -> "Expected::Store { slot: " ++ hex slot ++ " }"
-    CallPropertyWrite property value flags -> "Expected::PropertyWrite { property: " ++ hex property ++ ", value: " ++ hex value ++ ", flags: " ++ hex flags ++ " }"
+    CallPropertyWrite property value flags -> "Expected::PropertyWrite { property: PropertyId::new(" ++ hex property ++ "), value: RowIndex::new(" ++ hex value ++ "), flags: " ++ hex flags ++ " }"
