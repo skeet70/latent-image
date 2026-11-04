@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.PlainLoad.Artifact
   ( CanonicalSource, LinkedArtifact, StagedImage4, StagedCandidate, ArtifactError (..)
-  , canonicalSource, deriveArtifact, stageImage4, stagedBytes, contractValue
+  , canonicalSource, deriveArtifact, artifactProof, stageImage4, stagedBytes, contractValue
   , stageCandidate, candidateBytes, candidateContractValue
   ) where
 
@@ -72,6 +72,9 @@ deriveArtifact bytes symbolBytes = do
   proof <- either (Left . CodeRejected) Right (deriveProducerProof bytes)
   pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) rust proof)
 
+artifactProof :: LinkedArtifact -> ProducerProof
+artifactProof (LinkedArtifact _ _ _ _ proof) = proof
+
 stageImage4 :: CanonicalSource -> LinkedArtifact -> StagedImage4
 stageImage4 source@(CanonicalSource _ (DecodedImage4 original) _) artifact@(LinkedArtifact linked _ _ _ _) =
   let CodeAddress start = origin
@@ -115,7 +118,7 @@ contractValue (StagedImage4 (CanonicalSource _ _ (SourceIdentities datIdentity i
   , "scratch_low_from_entry_sp" .= scratchLow proof, "null_refusal_pc" .= refusalPc proof
   , "execution_pcs" .= executionPcs proof, "return_pcs" .= returnPcs proof
   , "call_sites" .= [object ["pc" .= pc,"target" .= target] | (pc,target) <- callSites proof]
-  , "retained_calls" .= ([0x657114,0x6571a0,0x657184,0x6a8f1c,0x73b924,0x724b68,0x724c00,0x69b9c4] :: [Word32])
+  , "retained_calls" .= retainedTargets
   , "caller_abi" .=
       ([ "AAPCS r4-r11 and incoming SP preserved; r0 is the saved read status in read mode and zero in nonzero mode"
        , "successful return restores LR0x6a992c; r1-r3,r12 and NZCV are volatile"

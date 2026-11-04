@@ -5,7 +5,8 @@
 module Replacement.StartupArtifact.Adapters
   ( LinkedImage (..), ImageBytes (..), SymbolBytes (..), PieceImages (..)
   , deriveFirstStage, deriveRecord2Link, derivePrimaryPublisher, deriveLoaderOrchestrationB, deriveLoaderStartup, derivePieceOf
-  , deriveTaskSubmission, deriveTaskStorage, deriveIdleTask, deriveRootTask
+  , deriveTaskSubmission, deriveTaskStorage, deriveIdleTask, deriveRootTask, deriveImage5Producer, derivePlainProducer
+  , ProducerCall (..), producerCallBoundaries, callerReturn
   ) where
 
 import qualified A32 as A
@@ -53,6 +54,11 @@ import qualified Replacement.IdleTask.Artifact as IT
 import qualified Replacement.RootTask.Admission as RA
 import qualified Replacement.RootTask.Artifact as RT
 import Replacement.RootTask.Services (serviceSymbols)
+import qualified Replacement.Image5Load.Admission as I5A
+import qualified Replacement.Image5Load.Artifact as I5
+import qualified Replacement.PlainLoad.Admission as PLA
+import qualified Replacement.PlainLoad.Artifact as PL
+import qualified Replacement.StartupArtifact.Footprint.Producers as ProducersFootprint
 import qualified Replacement.TaskStorage.Artifact as TSt
 import qualified Replacement.TaskSubmission.Admission as WA
 import qualified Replacement.TaskSubmission.Artifact as W
@@ -82,6 +88,8 @@ derivePieceOf source images = case images of
     TaskStorage -> deriveTaskStorage source image
     IdleTask -> deriveIdleTask source image
     RootTask -> deriveRootTask source image
+    Image5Producer -> deriveImage5Producer source image
+    PlainProducer -> derivePlainProducer source image
 
 admitted :: PieceKind -> Either String a -> Either Refusal a
 admitted kind = first (AdapterRefused kind . T.pack)
@@ -870,3 +878,159 @@ deriveRootTask source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) =
           , "the 32 bytes below the admitted frame bound hold the source IRQ frame; retained callee demand on root's stack is not proved" ])
         catalog (RootTaskFacts (LinkedBytes bin symbolBytes) pool)
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (RT.stagedBytes (RT.stageImage4 rootSource artifact))) Nothing)
+
+-- | Entry SP of both producers in task60 on the qualified leaf routes (reports/replacement-inventory-baseline.md:1450,1477).
+newtype ProducerEntrySp = ProducerEntrySp Word64
+
+producerEntrySp :: ProducerEntrySp
+producerEntrySp = ProducerEntrySp 0xa1c1e0
+
+-- | A retained target the producer must call from exactly one owned and one stock site, the boundary name
+-- and kind at that site, and whether it stops.
+data ProducerCall = ProducerCall Word32 T.Text BoundaryKind Bool
+
+-- | One sequence boundary per listed call, at the unique owned site and the unique stock BL in the canonical carrier.
+producerCallBoundaries :: PieceKind -> B.ByteString -> (Word32, Word32) -> [(Word32, Word32)] -> [ProducerCall] -> Either Refusal [Boundary]
+producerCallBoundaries kind image4 (start, end) owned calls = do
+  primary <- coreSet kind [Core0]
+  once <- limit kind 1
+  let wordAt site = U.word32At image4 (fromIntegral (site - targetBase Image4))
+      stock = [(site, target) | site <- [start, start + 4 .. end - 4], A.Branch _ True target <- [A.decode site (wordAt site)]]
+      sitesOf target sites = [site | (site, found) <- sites, found == target]
+  mapM (\(ProducerCall target name kind' stops) -> case (sitesOf target owned, sitesOf target stock) of
+      ([ownedSite], [stockSite]) -> do
+        named <- label kind (name <> "-call")
+        pure (Boundary named kind' primary (Pc ownedSite) (Just (Pc stockSite)) stops CompareSequence once Nothing)
+      _ -> Left (AdapterRefused kind ("owned and stock calls of " <> hexName target <> " do not pair uniquely"))) calls
+
+-- | The canonical flashloader site that calls the producer entry, and its continuation.
+callerReturn :: PieceKind -> B.ByteString -> Word32 -> Word32 -> Either Refusal Word32
+callerReturn kind image4 site entryPc = case A.decode site (U.word32At image4 (fromIntegral (site - targetBase Image4))) of
+  A.Branch _ True target | target == entryPc -> Right (site + 4)
+  _ -> Left (AdapterRefused kind ("canonical image 4 does not call " <> hexName entryPc <> " at " <> hexName site))
+
+producerWritesPremise :: T.Text -> T.Text
+producerWritesPremise proof = T.intercalate "; "
+  [ proof
+  , "the base is the producer entry SP 0xa1c1e0 in task60 on core 0 that the leaf routes recorded (reports/replacement-inventory-baseline.md:1450,1477); task60's allocation [0xa1b600,0xa1c200) comes from root's submission, compared by root-task/a-creation-all and submission-storage-records; another entry SP faults an entry push" ]
+
+-- | Replacement.Image5Load.Artifact over //replacement/image5_load:image5-load-image.
+deriveImage5Producer :: Canonical -> LinkedImage -> Either Refusal Piece
+deriveImage5Producer source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) = do
+  let kind = Image5Producer
+      shown :: Show e => Either e a -> Either Refusal a
+      shown = first (AdapterRefused kind . T.pack . show)
+      targets = canonicalTargets source
+      image4 = targetOf targets Image4
+      (start, end) = ProducersFootprint.producerCarrier ProducersFootprint.Image5Load
+      ProducerEntrySp sp = producerEntrySp
+  producerSource <- shown (I5.canonicalSource (canonicalDat source) image4)
+  artifact <- shown (I5.deriveArtifact bin symbolBytes)
+  let proof = I5.artifactProof artifact
+      frame = fromIntegral (negate (I5A.scratchLow proof)) :: Word64
+  refuseUnless kind (frame > 0) "image5 producer frame is empty"
+  returned <- callerReturn kind image4 (ProducersFootprint.callerSite ProducersFootprint.Image5Load) start
+  carrier <- spanOf kind Image4 start end
+  code <- ownedCode kind start (start + fromIntegral (B.length bin))
+  primary <- coreSet kind [Core0]
+  once <- limit kind 1
+  -- Stock BLs: private-data/analysis/x-m1-1.50/lz/id4.dis:144569-144658. The six markers and the two storage reads
+  -- have several stock sites and get no boundary. Fill request has arity 4, so r0-r3 are all arguments.
+  calls <- producerCallBoundaries kind image4 (start, end) (I5A.callSites proof)
+    [ ProducerCall (I5A.serviceAddress I5A.SegmentLookup) "segment-lookup" SiteBoundary False
+    , ProducerCall (I5A.serviceAddress I5A.FillRequest) "fill-request" EntryBoundary True
+    , ProducerCall (I5A.serviceAddress I5A.ModeGetter) "mode" SiteBoundary False
+    , ProducerCall (I5A.serviceAddress I5A.DecoderInit) "decoder-init" SiteBoundary False
+    , ProducerCall (I5A.serviceAddress I5A.DecoderFinish) "decoder-finish" SiteBoundary False
+    , ProducerCall (I5A.serviceAddress I5A.CpuFill) "cpu-fill" SiteBoundary False
+    , ProducerCall (I5A.serviceAddress I5A.Cache) "cache" SiteBoundary False ]
+  entryLabel <- label kind "entry"
+  returnLabel <- label kind "caller-return"
+  image5Entry <- label kind "image5-entry"
+  fillLabel <- label kind "fill-request-call"
+  let read' name at guest bytes = (\named -> CatalogRead named at guest bytes Nothing) <$> label kind name
+      boundaries =
+        [ Boundary entryLabel SiteBoundary primary (Pc start) (Just (Pc start)) False CompareSequence once Nothing ]
+        ++ calls ++
+        [ Boundary returnLabel ReturnBoundary primary (Pc returned) (Just (Pc returned)) True CompareSequence once Nothing
+        -- Image5 entry runs in another task after the done store and callback (reports/replacement-inventory-baseline.md:1352).
+        , Boundary image5Entry ReturnBoundary primary (Pc 0xd985a4) (Just (Pc 0xd985a4)) False ComparePresence once Nothing ]
+  -- Destination, BSS and staging: reports/replacement-inventory-baseline.md:1321; the flag: Admission.hs:81-87.
+  rows <- sequence
+    [ read' "fill-flag-cleared" fillLabel I5A.fillFlag 4
+    , read' "fill-flag-set" returnLabel I5A.fillFlag 4
+    , read' "destination" returnLabel 0x00bf1a00 0x4f1e60
+    , read' "bss" returnLabel 0x01460000 0x2bbe40
+    , read' "staging" returnLabel 0x43e40000 0x2e0000 ]
+  let flag = fromIntegral I5A.fillFlag :: Word64
+      writes = EnumeratedWrites
+        [ WriteRange (CorePhysicalTarget Core0) (sp - frame) sp, WriteRange (CorePhysicalTarget Core0) flag (flag + 4) ]
+        (Premised (Premise (producerWritesPremise
+          "the width is proved: the producer stores only inside its allocated stack below the entry SP or to the fill flag 0x89f8ac (replacement/image5_load/Replacement/Image5Load/Admission.hs:320-328,401-404)")))
+      catalog = Catalog boundaries code writes rows
+      declaration = PieceDeclaration kind (Set.singleton Image5ProducerArea) [carrier]
+        (ProducersFootprint.footprint ProducersFootprint.Image5Load (targetOf targets LoaderA) (targetOf targets LoaderB) image4)
+        (map Premise
+          [ "the segment-5 record is tagged and nonaliasing (replacement/image5_load/Replacement/Image5Load/Admission.hs:64-65,345-352)"
+          , "0x89f8ac is written only by the producer and the retained fill-done callback 0x6a8bec during the producer's interval (replacement/image5_load/Replacement/Image5Load/Artifact.hs:137)"
+          , "the producer runs in task60 on core 0 with an 8-byte aligned entry SP (reports/replacement-inventory-baseline.md:1477; replacement/image5_load/Replacement/Image5Load/Admission.hs:414)"
+          , "retained callees, the decoder engine, IRQ98 completion and resource 0x48 behave as stock (replacement/image5_load/Replacement/Image5Load/Artifact.hs:140); their stack demand below the owned frame is not proved" ])
+        catalog (Image5ProducerFacts (LinkedBytes bin symbolBytes))
+  derivePiece source declaration (StagedOutput (canonicalDat source) (Just (I5.stagedBytes (I5.stageImage4 producerSource artifact))) Nothing)
+
+-- | Replacement.PlainLoad.Artifact over //replacement/plain_load:plain-load-image.
+derivePlainProducer :: Canonical -> LinkedImage -> Either Refusal Piece
+derivePlainProducer source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) = do
+  let kind = PlainProducer
+      shown :: Show e => Either e a -> Either Refusal a
+      shown = first (AdapterRefused kind . T.pack . show)
+      targets = canonicalTargets source
+      image4 = targetOf targets Image4
+      (start, end) = ProducersFootprint.producerCarrier ProducersFootprint.PlainLoad
+      ProducerEntrySp sp = producerEntrySp
+  producerSource <- shown (PL.canonicalSource (canonicalDat source) image4)
+  artifact <- shown (PL.deriveArtifact bin symbolBytes)
+  let proof = PL.artifactProof artifact
+      frame = fromIntegral (negate (PLA.scratchLow proof)) :: Word64
+  refuseUnless kind (frame > 0) "plain producer frame is empty"
+  returned <- callerReturn kind image4 (ProducersFootprint.callerSite ProducersFootprint.PlainLoad) start
+  carrier <- spanOf kind Image4 start end
+  code <- ownedCode kind start (start + fromIntegral (B.length bin))
+  primary <- coreSet kind [Core0]
+  once <- limit kind 1
+  -- Stock BLs: private-data/analysis/x-m1-1.50/lz/id4.dis:144666-144719. Takes, gives and progress have two stock
+  -- sites each. The storage read has arity 4 plus a stacked fifth argument.
+  calls <- producerCallBoundaries kind image4 (start, end) (PLA.callSites proof)
+    [ ProducerCall (PLA.serviceAddress PLA.SegmentLookup) "segment-lookup" SiteBoundary False
+    , ProducerCall (PLA.serviceAddress PLA.ExtentGetter) "extent" SiteBoundary False
+    , ProducerCall (PLA.serviceAddress PLA.ModeGetter) "mode" SiteBoundary False
+    , ProducerCall (PLA.serviceAddress PLA.StorageRead) "storage-read" EntryBoundary False
+    , ProducerCall (PLA.serviceAddress PLA.Delay) "delay" SiteBoundary False ]
+  entryLabel <- label kind "entry"
+  returnLabel <- label kind "caller-return"
+  extent0Hook <- label kind "extent0-first-hook"
+  extent3Hook <- label kind "extent3-first-hook"
+  let read' name at guest bytes = (\named -> CatalogRead named at guest bytes Nothing) <$> label kind name
+      boundaries =
+        [ Boundary entryLabel SiteBoundary primary (Pc start) (Just (Pc start)) False CompareSequence once Nothing ]
+        ++ calls ++
+        [ Boundary returnLabel ReturnBoundary primary (Pc returned) (Just (Pc returned)) False CompareSequence once Nothing
+        -- First hooks of extents 0 and 3, run by the worker before any code of their extent
+        -- (reports/replacement-inventory-baseline.md:1374-1384).
+        , Boundary extent0Hook ReturnBoundary primary (Pc 0x110f9d8) (Just (Pc 0x110f9d8)) True ComparePresence once Nothing
+        , Boundary extent3Hook ReturnBoundary primary (Pc 0x11e00f8) (Just (Pc 0x11e00f8)) True ComparePresence once Nothing ]
+  rows <- sequence
+    [ read' "extent0" extent0Hook 0x01100000 0xac5a0
+    , read' "extent3" extent3Hook 0x011e0000 0x26a5e0 ]
+  let writes = EnumeratedWrites [WriteRange (CorePhysicalTarget Core0) (sp - frame) sp]
+        (Premised (Premise (producerWritesPremise
+          "the width is proved: the producer stores only inside its allocated stack below the entry SP (replacement/plain_load/Replacement/PlainLoad/Admission.hs:214-222,299-301)")))
+      catalog = Catalog boundaries code writes rows
+      declaration = PieceDeclaration kind (Set.singleton PlainProducerArea) [carrier]
+        (ProducersFootprint.footprint ProducersFootprint.PlainLoad (targetOf targets LoaderA) (targetOf targets LoaderB) image4)
+        (map Premise
+          [ "the segment-6 record and the extent descriptor at 0x61c1a4 are tagged and nonaliasing (replacement/plain_load/Replacement/PlainLoad/Admission.hs:51-54; reports/replacement-inventory-baseline.md:1370)"
+          , "the producer runs in task60 on core 0 with an 8-byte aligned entry SP (reports/replacement-inventory-baseline.md:1450)"
+          , "the raw reader, progress 0x73b924, worker 0x73bc54 and the extent hooks behave as stock (reports/replacement-inventory-baseline.md:1378-1384); retained callee stack demand below the owned frame is not proved" ])
+        catalog (PlainProducerFacts (LinkedBytes bin symbolBytes))
+  derivePiece source declaration (StagedOutput (canonicalDat source) (Just (PL.stagedBytes (PL.stageImage4 producerSource artifact))) Nothing)
