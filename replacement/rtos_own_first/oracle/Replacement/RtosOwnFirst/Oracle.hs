@@ -46,6 +46,8 @@ module Replacement.RtosOwnFirst.Oracle
   , runSlot
   , Outcome (..)
   , outcomeOf
+  , statusCounts
+  , allReturned
   ) where
 
 import Control.Exception (evaluate)
@@ -619,17 +621,39 @@ data Outcome = Outcome
   { outcomeCases :: Int
   , outcomeMatches :: Int
   , outcomeFirst :: Maybe (CaseKey, [Difference])
+  , -- | Differing cases whose subject run returned.
+    outcomeDifferingReturned :: Int
+  , -- | Differing cases whose subject run stopped, or is missing.
+    outcomeDifferingStopped :: Int
+  , outcomeStatuses :: M.Map String Int
   }
   deriving (Eq, Show)
 
 -- | Every subject run against the reference run of the same case; a case missing on either side differs.
 outcomeOf :: M.Map CaseKey Run -> M.Map CaseKey Run -> Outcome
-outcomeOf reference subject = Outcome (length rows) (length (filter (null . snd) rows)) (find (not . null . snd) rows)
+outcomeOf reference subject =
+  Outcome
+    { outcomeCases = length rows
+    , outcomeMatches = length (filter (null . snd) rows)
+    , outcomeFirst = find (not . null . snd) rows
+    , outcomeDifferingReturned = length (filter returned differing)
+    , outcomeDifferingStopped = length (filter (not . returned) differing)
+    , outcomeStatuses = statusCounts subject
+    }
   where
     keys = M.keys (M.union reference subject)
     rows = mapMaybe row keys
+    differing = [key | (key, differences) <- rows, not (null differences)]
+    returned key = fmap runStatus (M.lookup key subject) == Just Returned
     row key = case (M.lookup key reference, M.lookup key subject) of
       (Just expected, Just actual) -> Just (key, compareRuns expected actual)
       (Just expected, Nothing) -> Just (key, [StatusDiffers (runStatus expected) (OtherStatus "missing")])
       (Nothing, Just actual) -> Just (key, [StatusDiffers (OtherStatus "missing") (runStatus actual)])
       (Nothing, Nothing) -> Nothing
+
+-- | Runs per runner status label.
+statusCounts :: M.Map CaseKey Run -> M.Map String Int
+statusCounts runs = M.fromListWith (+) [(N.runnerStatusLabel (runStatus run), 1) | run <- M.elems runs]
+
+allReturned :: M.Map CaseKey Run -> Bool
+allReturned runs = not (M.null runs) && all ((== Returned) . runStatus) (M.elems runs)

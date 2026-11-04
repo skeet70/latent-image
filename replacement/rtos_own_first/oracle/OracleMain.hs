@@ -1,13 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Runs every own-first slot's case grid against the stock body from the pinned loaders and against
--- the owned body, compares them case by case and runs the controls. Exits 1 when a control
--- misbehaves and 2 when an owned body differs from stock.
+-- the owned body, compares them case by case and runs the controls. Exits 1 when a stock run stops
+-- or a control misbehaves, and 2 when an owned body differs from stock.
 module Main (main) where
 
-import Control.Monad (forM, forM_, unless, when)
+import Control.Monad (forM, forM_, when)
 import Data.Aeson (Value, object, (.=))
 import qualified Data.ByteString as B
+import qualified Data.Map.Strict as M
 import Data.String (fromString)
 import Emulation.OwnedCase (required)
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -17,6 +18,7 @@ import Replacement.RtosOwnFirst.Artifact (LinkedDomain (..), loaderSha256)
 import Replacement.RtosOwnFirst.Controls
 import Replacement.RtosOwnFirst.Oracle
 import Replacement.RtosOwnFirst.Regions
+import Replacement.RtosOwnFirst.Verdict
 import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesPathExist, makeAbsolute, removeDirectoryRecursive, setCurrentDirectory)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (ExitCode (..), exitWith)
@@ -37,40 +39,47 @@ slotText slot = case slotOffset slot of SlotOffset offset -> hexText offset
 differenceValue :: (CaseKey, [Difference]) -> Value
 differenceValue (CaseKey index, differences) = object ["row" .= index, "differences" .= map differenceText differences]
 
-data ControlResult = ControlResult
-  { resultControl :: String
-  , resultExpectation :: Expectation
-  , resultNote :: String
-  , resultDomain :: Domain
-  , resultSlot :: Slot
-  , resultOutcome :: Outcome
-  }
-
-holds :: ControlResult -> Bool
-holds result = case resultExpectation result of
-  MustPass -> outcomeCases outcome > 0 && outcomeMatches outcome == outcomeCases outcome
-  MustFail -> outcomeMatches outcome < outcomeCases outcome
-  where
-    outcome = resultOutcome result
+statusesValue :: M.Map String Int -> Value
+statusesValue counts = object [fromString status .= count | (status, count) <- M.toList counts]
 
 expectationText :: Expectation -> String
 expectationText expectation = case expectation of
   MustPass -> "must-pass"
   MustFail -> "must-fail"
 
-controlValue :: ControlResult -> Value
-controlValue result =
+controlValue :: SlotReport -> ControlResult -> Value
+controlValue report result =
   object
     [ "name" .= resultControl result
     , "expectation" .= expectationText (resultExpectation result)
     , "note" .= resultNote result
-    , "domain" .= domainLabel (resultDomain result)
-    , "slot" .= slotText (resultSlot result)
-    , "cases" .= outcomeCases (resultOutcome result)
-    , "matches" .= outcomeMatches (resultOutcome result)
-    , "first_difference" .= fmap differenceValue (outcomeFirst (resultOutcome result))
+    , "domain" .= domainLabel (reportDomain report)
+    , "slot" .= slotText (reportSlot report)
+    , "cases" .= outcomeCases outcome
+    , "matches" .= outcomeMatches outcome
+    , "differing_returned" .= outcomeDifferingReturned outcome
+    , "differing_stopped" .= outcomeDifferingStopped outcome
+    , "statuses" .= statusesValue (outcomeStatuses outcome)
+    , "first_difference" .= fmap differenceValue (outcomeFirst outcome)
     , "holds" .= holds result
     ]
+  where
+    outcome = resultOutcome result
+
+slotValue :: SlotReport -> Value
+slotValue report =
+  object
+    [ "slot" .= slotText (reportSlot report)
+    , "entry" .= hexText (reportEntry report)
+    , "stock_statuses" .= statusesValue (statusCounts (reportStock report))
+    , "stock_returned" .= stockHolds report
+    , "owned_statuses" .= statusesValue (outcomeStatuses owned)
+    , "cases" .= outcomeCases owned
+    , "matches" .= outcomeMatches owned
+    , "first_mismatch" .= fmap differenceValue (outcomeFirst owned)
+    ]
+  where
+    owned = reportOwned report
 
 main :: IO ()
 main = do
@@ -100,7 +109,7 @@ main = do
     _ -> failH "unreachable owned inputs"
   createDirectoryIfMissing True (takeDirectory work)
   createDirectory work
-  rows <- fmap concat . forM (zip3 domains loaders owned) $ \(domain, loader, ownedRows) -> do
+  reports <- fmap concat . forM (zip3 domains loaders owned) $ \(domain, loader, ownedRows) -> do
     let rowsTable = domainTable table domain
     forM slots $ \slot -> do
       stock <- orFailText (slotTag slot ++ " stock") (stockBody domain rowsTable loader slot)
@@ -114,17 +123,15 @@ main = do
       controlResults <- forM [control | control <- equivalents ++ mutants, controlSlot control == slot] $ \control -> do
         code <- orFailText (controlName control) (controlCode domain rowsTable control)
         body <- orFailText (controlName control) (replaceEntry (tableFill table) code ownedSlot)
-        ControlResult (controlName control) (controlExpectation control) (controlNote control) domain slot . outcomeOf stockRuns
+        ControlResult (controlName control) (controlExpectation control) (controlNote control) . outcomeOf stockRuns
           <$> run (controlName control) body
-      let results = ControlResult "stock-repeat" MustPass "the stock body against itself" domain slot repeatOutcome : controlResults
-      when (outcomeMatches ownedOutcome == outcomeCases ownedOutcome && all holds results) $
-        forM_ ("stock" : "owned" : map resultControl results) $ \role -> do
+      let report = SlotReport domain slot entry stockRuns ownedOutcome (ControlResult "stock-repeat" MustPass "the stock body against itself" repeatOutcome : controlResults)
+      when (verdictExit [report] == ExitSuccess) $
+        forM_ ("stock" : "owned" : map resultControl (reportControls report)) $ \role -> do
           present <- doesPathExist (directory role)
           when present (removeDirectoryRecursive (directory role))
-      pure (domain, slot, entry, ownedOutcome, results)
-  let controlResults = concat [results | (_, _, _, _, results) <- rows]
-      controlsHold = all holds controlResults
-      ownedMatches = and [outcomeMatches outcome == outcomeCases outcome | (_, _, _, outcome, _) <- rows]
+      pure report
+  let exit = verdictExit reports
       inputs =
         object
           ( [ "regions_sha256" .= digest regionsBytes
@@ -133,21 +140,7 @@ main = do
               ++ [fromString ("loader_" ++ domainLabel domain ++ "_sha256") .= digest loader | (domain, loader) <- zip domains loaders]
               ++ [fromString name .= digest bytes | (name, bytes) <- zip ["owned_a_bin_sha256", "owned_a_symbols_sha256", "owned_b_bin_sha256", "owned_b_symbols_sha256"] ownedBytes]
           )
-      domainValue domain =
-        object
-          [ "domain" .= domainLabel domain
-          , "slots" .=
-              [ object
-                  [ "slot" .= slotText slot
-                  , "entry" .= hexText entry
-                  , "cases" .= outcomeCases outcome
-                  , "matches" .= outcomeMatches outcome
-                  , "first_mismatch" .= fmap differenceValue (outcomeFirst outcome)
-                  ]
-              | (rowDomain, slot, entry, outcome, _) <- rows
-              , rowDomain == domain
-              ]
-          ]
+      domainValue domain = object ["domain" .= domainLabel domain, "slots" .= [slotValue report | report <- reports, reportDomain report == domain]]
   createDirectoryIfMissing True (takeDirectory summaryPath)
   B.writeFile summaryPath $
     encodeCanonical $
@@ -155,9 +148,9 @@ main = do
         [ "schema" .= (1 :: Int)
         , "inputs" .= inputs
         , "domains" .= map domainValue domains
-        , "controls" .= map controlValue controlResults
-        , "controls_hold" .= controlsHold
-        , "owned_matches_stock" .= ownedMatches
+        , "controls" .= [controlValue report result | report <- reports, result <- reportControls report]
+        , "stock_returned" .= all stockHolds reports
+        , "controls_hold" .= all (all holds . reportControls) reports
+        , "owned_matches_stock" .= all ownedMatches reports
         ]
-  unless controlsHold (exitWith (ExitFailure 1))
-  unless ownedMatches (exitWith (ExitFailure 2))
+  exitWith exit

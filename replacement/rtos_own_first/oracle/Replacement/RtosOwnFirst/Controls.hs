@@ -64,8 +64,9 @@ setCpuLock guard locked = guard ++ [mrs r3, (if locked then orrI else bicI) r12 
 
 mutants :: [Control]
 mutants =
-  [ Control "mutant-s60" S60 MustFail "drops the null-task check" $ withWords $ \w ->
-      loadWord r3 (wordCurrentTask w) ++ [ldrb r0 r3 0xe, andI r0 r0 4, eorI r0 r0 4, movShift r0 r0 Lsr 2, bxLr]
+  [ Control "mutant-s60" S60 MustFail "tests T+0xe bit 3 instead of bit 2" $ withWords $ \w ->
+      loadWord r3 (wordCurrentTask w)
+        ++ [cmpI r3 0, on CondEq (movI r0 1), on CondEq bxLr, ldrb r0 r3 0xe, andI r0 r0 8, eorI r0 r0 8, movShift r0 r0 Lsr 3, bxLr]
   , Control "mutant-sfc" Sfc MustFail "skips the time-offset write" $ withWords $ \w ->
       taskGuard w ++ irqGuard ++ maskIrq ++ [msrControl r3, movI r0 0, bxLr]
   , Control "mutant-s100" S100 MustFail "flips I handling: returns with I still set" $ withWords $ \w ->

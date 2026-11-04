@@ -31,9 +31,10 @@ import Replacement.RtosOwnFirst.Assembly
 import Replacement.RtosOwnFirst.Controls
 import Replacement.RtosOwnFirst.Oracle
 import Replacement.RtosOwnFirst.Regions hiding (GuestAddress (..))
+import Replacement.RtosOwnFirst.Verdict
 import System.Directory (removeDirectoryRecursive)
 import System.Environment (getArgs, getEnv)
-import System.Exit (exitFailure)
+import System.Exit (ExitCode (..), exitFailure)
 import System.FilePath ((</>))
 import System.IO (BufferMode (..), hSetBuffering, stdout)
 
@@ -137,31 +138,52 @@ pureChecks tableA =
       , check "one mutant per slot and two equivalents" (sort (map controlSlot mutants) == slots && length equivalents == 2 && all ((== MustFail) . controlExpectation) mutants && all ((== MustPass) . controlExpectation) equivalents)
       ]
 
--- | Runs a slot's grid against the owned body and each of its controls; returns the failures.
-nativeChecks :: FilePath -> FilePath -> Word32 -> Domain -> DomainTable -> OwnedDomain -> Slot -> IO [String]
+-- | Runs a slot's grid against the owned body and each of its controls, with the owned runs as the
+-- reference; returns the failures and the slot's report.
+nativeChecks :: FilePath -> FilePath -> Word32 -> Domain -> DomainTable -> OwnedDomain -> Slot -> IO ([String], Maybe SlotReport)
 nativeChecks runner temporary fill domain table owned slot = do
   let name = domainLabel domain ++ " " ++ slotTag slot
-      directory role = temporary </> role ++ "-" ++ domainLabel domain ++ "-" ++ slotTag slot
-      run role body = do
-        runs <- runSlot runner (directory role) role domain slot body
-        removeDirectoryRecursive (directory role)
-        pure runs
-  case ownedBody owned slot of
-    Left problem -> pure [name ++ ": " ++ problem]
-    Right body -> do
-      reference <- run "owned" body
-      let baseline = [name ++ ": an owned run did not return" | not (all ((== Returned) . runStatus) (M.elems reference))]
+  case (,) <$> ownedBody owned slot <*> slotEntry table slot of
+    Left problem -> pure ([name ++ ": " ++ problem], Nothing)
+    Right (body, entry) -> do
+      reference <- runOnce runner temporary domain slot "owned" body
+      let baseline = [name ++ ": an owned run did not return" | not (allReturned reference)]
       controls <- forM [control | control <- mutants ++ equivalents, controlSlot control == slot] $ \control ->
         case controlCode domain table control >>= \code -> replaceEntry fill code body of
-          Left problem -> pure [name ++ " " ++ controlName control ++ ": " ++ problem]
+          Left problem -> pure (Left (name ++ " " ++ controlName control ++ ": " ++ problem))
           Right subject -> do
-            outcome <- outcomeOf reference <$> run (controlName control) subject
-            let differing = outcomeCases outcome - outcomeMatches outcome
-            putStrLn ("     " ++ name ++ " " ++ controlName control ++ ": " ++ show differing ++ " of " ++ show (outcomeCases outcome) ++ " cases differ")
-            pure $ case controlExpectation control of
-              MustFail -> [name ++ " " ++ controlName control ++ ": no case differs" | differing == 0]
-              MustPass -> [name ++ " " ++ controlName control ++ ": " ++ show differing ++ " cases differ, first " ++ show (outcomeFirst outcome) | differing /= 0]
-      pure (baseline ++ concat controls)
+            outcome <- outcomeOf reference <$> runOnce runner temporary domain slot (controlName control) subject
+            putStrLn
+              ( "     " ++ name ++ " " ++ controlName control ++ ": " ++ show (outcomeCases outcome - outcomeMatches outcome) ++ " of " ++ show (outcomeCases outcome)
+                  ++ " cases differ, " ++ show (outcomeDifferingReturned outcome) ++ " of them returned"
+              )
+            pure (Right (ControlResult (controlName control) (controlExpectation control) (controlNote control) outcome))
+      let results = [result | Right result <- controls]
+          failures = baseline ++ [problem | Left problem <- controls] ++ [name ++ " " ++ resultControl result ++ " does not hold" | result <- results, not (holds result)]
+      pure (failures, Just (SlotReport domain slot entry reference (outcomeOf reference reference) results))
+
+runOnce :: FilePath -> FilePath -> Domain -> Slot -> String -> Body -> IO (M.Map CaseKey Run)
+runOnce runner temporary domain slot role body = do
+  let directory = temporary </> role ++ "-" ++ domainLabel domain ++ "-" ++ slotTag slot
+  runs <- runSlot runner directory role domain slot body
+  removeDirectoryRecursive directory
+  pure runs
+
+-- | A +0x14c body of fill words stops on every case: as the stock body it fails the run, and as a mutant it does not hold.
+stoppingChecks :: FilePath -> FilePath -> Word32 -> DomainTable -> OwnedDomain -> IO [Bool]
+stoppingChecks runner temporary fill table owned =
+  case (,,) <$> ownedBody owned S14c <*> (ownedBody owned S14c >>= replaceEntry fill []) <*> slotEntry table S14c of
+    Left problem -> (: []) <$> check ("stopping body: " ++ problem) False
+    Right (body, stopping, entry) -> do
+      ownedRuns <- runOnce runner temporary DomainA S14c "owned-reference" body
+      stoppingRuns <- runOnce runner temporary DomainA S14c "stopping" stopping
+      let asMutant = ControlResult "stopping" MustFail "fill words only" (outcomeOf ownedRuns stoppingRuns)
+          asStock = SlotReport DomainA S14c entry stoppingRuns (outcomeOf stoppingRuns ownedRuns) []
+      sequence
+        [ check "a fill-word body stops on every case" (not (M.null stoppingRuns) && all ((/= Returned) . runStatus) (M.elems stoppingRuns))
+        , check "a stock body that stops exits 1" (verdictExit [asStock] == ExitFailure 1)
+        , check "a mutant that never returns does not hold" (not (holds asMutant) && outcomeDifferingStopped (resultOutcome asMutant) == outcomeCases (resultOutcome asMutant))
+        ]
 
 main :: IO ()
 main = do
@@ -173,11 +195,17 @@ main = do
       table <- either fail pure . parseRegionTable =<< B.readFile regionsPath
       linked <- mapM (\(bin, symbols) -> LinkedDomain <$> B.readFile bin <*> B.readFile symbols) [(binA, symbolsA), (binB, symbolsB)]
       pureResults <- sequence (pureChecks (domainTable table DomainA))
-      failures <- fmap concat . forM (zip domains linked) $ \(domain, linkedDomain) ->
-        case ownedDomain (tableFill table) domain (domainTable table domain) linkedDomain of
-          Left problem -> pure [domainLabel domain ++ ": " ++ show problem]
-          Right owned -> concat <$> mapM (nativeChecks runner temporary (tableFill table) domain (domainTable table domain) owned) slots
-      nativeResult <- check "owned bodies return and the controls hold in both loaders" (null failures)
+      owned <- forM (zip domains linked) $ \(domain, linkedDomain) ->
+        either (fail . ((domainLabel domain ++ ": ") ++) . show) pure (ownedDomain (tableFill table) domain (domainTable table domain) linkedDomain)
+      stopping <- case owned of
+        ownedA : _ -> stoppingChecks runner temporary (tableFill table) (domainTable table DomainA) ownedA
+        [] -> pure [False]
+      checked <- fmap concat . forM (zip domains owned) $ \(domain, ownedRows) ->
+        mapM (nativeChecks runner temporary (tableFill table) domain (domainTable table domain) ownedRows) slots
+      let failures = concatMap fst checked
+          reports = [report | (_, Just report) <- checked]
+      nativeResult <- check "owned bodies return and the controls hold in both loaders" (null failures && length reports == 2 * length slots)
       mapM_ (putStrLn . ("     " ++)) failures
-      unless (and (nativeResult : pureResults)) exitFailure
+      verdictResult <- check "the verdict over every slot report exits 0" (verdictExit reports == ExitSuccess)
+      unless (and (nativeResult : verdictResult : pureResults ++ stopping)) exitFailure
     _ -> fail "usage: own-first-oracle-tests RUNNER REGIONS BIN_A SYMBOLS_A BIN_B SYMBOLS_B"
