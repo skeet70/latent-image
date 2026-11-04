@@ -554,8 +554,16 @@ main = do
     (either (const True) (const False) (sitesOf (withSites [site "a" "retained" 0 (stock 0x40f4), site "b" "retained" 0 (stock 0x40f4)])))
   ok "the same read PC on two cores parses"
     (either (const False) (const True) (sitesOf (withSites [site "a" "retained" 0 (stock 0x40f4), site "b" "retained" 1 (stock 0x40f4)])))
-  ok "the A32 word checks tell word loads from word stores"
-    (not (a32WordLoad 0xe5802000) && not (a32WordStore 0xe5912000) && a32WordLoad 0xe5111fff && a32WordStore 0xe7831102)
+  ok "the A32 word checks tell word loads from word stores, media and unconditional space"
+    (not (a32WordLoad 0xe5802000) && not (a32WordStore 0xe5912000) && a32WordLoad 0xe5111fff && a32WordStore 0xe7831102
+      && not (a32WordLoad 0xe6111f10) && not (a32WordStore 0xe6011f10) && not (a32WordLoad 0xf5912000))
+  ok "an owned site of a piece the manifest lacks refuses"
+    (either (const True) (const False) (sitesOf (withSites [site "owned" "composed" 0 (J.object ["owned" .= ("record2-link" :: Text)])])))
+  ok "an owned site whose store does not follow its read refuses"
+    (either (const True) (const False) (rulesFrom (withSites [site "owned" "composed" 0 owned]) >>= \parsed -> attachStateValue siteSources
+      { ownedSymbols = [(FirstStage, "000064a8 00000000 T xm1_first_stage_log_read\n000064b0 00000000 T xm1_first_stage_log_store\n")] } parsed []))
+  ok "an owned site declared for the retained role is checked in the canonical image and refuses"
+    (either (const True) (const False) (sitesOf (withSites [site "owned" "retained" 0 owned])))
   ok "a log span overlapping a physical allowance refuses"
     (refusedRules (case withSites [] of
       J.Object fields -> J.Object (KeyMap.insert "allowances" (J.toJSON [J.object ["label" .= ("word" :: Text), "kind" .= ("declared" :: Text)

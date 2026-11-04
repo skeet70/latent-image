@@ -104,7 +104,7 @@ xm1_first_stage_handoff_vector:
     .size xm1_first_stage_handoff, . - xm1_first_stage_handoff
 
     @ Boot-log timestamp: r0 = slot word address. The read and store are the relation's log site;
-    @ .xm1_log_text follows every .text input so no other symbol moves.
+    @ the linker script places .xm1_log_text after every .text input.
     .section .xm1_log_text, "ax", %progbits
     .global xm1_first_stage_log_timestamp
     .type xm1_first_stage_log_timestamp, %function

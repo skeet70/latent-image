@@ -352,8 +352,9 @@ pub fn log_writes(records: &Value, span: Span) -> Result<Vec<LogWrite>, String> 
 pub enum Token {
     Write { offset: u32, value: Word },
     Read { offset: u32, value: Word },
-    /// A log-site read, as the slot its store wrote and the value word stored after it.
-    LogEntry { slot: u64, value: Word },
+    /// A log-site read, as the slot its store wrote, the value word stored after it and the number of main-timer
+    /// register writes (`+0x00`-`+0x0c`) from any core before it.
+    LogEntry { slot: u64, value: Word, main_writes: u64 },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -379,6 +380,8 @@ pub enum RelationFailure {
     LogCaptured { address: u64 },
     LogTimestampWords,
     LzSource { job: usize },
+    /// The captured pending job does not parse as an LZ or MOVRSZ job.
+    LzPendingJob,
     LzContiguity { job: usize },
     LzSourceUnpinned { start: u64, end: u64 },
     LzDecode { reason: String },
@@ -591,18 +594,19 @@ pub(crate) fn evaluate(relations: &Relations, input: &RoleInput) -> RoleRelation
     let mut lz_count = 0u64;
     let mut lz_jobs: Vec<(u64, u64)> = Vec::new();
     let mut lz_reset = false;
+    let mut main_writes = 0u64;
     let timer_range = timer::BASE..timer::BASE + TIMER_WINDOW;
     let scan = read_transactions(input.directory, &input.sources.transactions, |index, row| {
         let address = u64::from(row.address);
         let in_timer = timer_range.contains(&address);
         let in_lz = lz_base.is_some_and(|base| (base..base + 0x100).contains(&address));
         let Some(core) = row.core else {
-            if in_timer { first(&mut out.timer, RelationFailure::HostAccess { row: index }); }
+            if in_timer && relations.timer.is_some() { first(&mut out.timer, RelationFailure::HostAccess { row: index }); }
             if in_lz { first(&mut out.lz, RelationFailure::HostAccess { row: index }); }
             return;
         };
         if !row.accepted {
-            if in_timer { first(&mut out.timer, RelationFailure::RefusedAccess { row: index }); }
+            if in_timer && relations.timer.is_some() { first(&mut out.timer, RelationFailure::RefusedAccess { row: index }); }
             if in_lz { first(&mut out.lz, RelationFailure::RefusedAccess { row: index }); }
             return;
         }
@@ -634,7 +638,7 @@ pub(crate) fn evaluate(relations: &Relations, input: &RoleInput) -> RoleRelation
                             first(&mut out.log, RelationFailure::LogValue { site: label.clone(), k, read: Word(row.value), stored: write.value });
                         }
                         match writes[store + 1..].iter().find(|next| next.core == core && next.physical == write.physical + 4) {
-                            Some(next) => entry = Some(Token::LogEntry { slot: write.physical, value: next.value }),
+                            Some(next) => entry = Some(Token::LogEntry { slot: write.physical, value: next.value, main_writes }),
                             None => first(&mut out.log, RelationFailure::LogEntryValue { site: label, k }),
                         }
                     }
@@ -649,6 +653,9 @@ pub(crate) fn evaluate(relations: &Relations, input: &RoleInput) -> RoleRelation
                     Access::Read => Some(Token::Read { offset, value: Word(row.value) }),
                 };
                 out.sequence[core.index()].extend(token);
+            }
+            if row.access == Access::Write && offset < 0x10 {
+                main_writes += 1;
             }
         }
         if in_lz && row.access == Access::Write {
@@ -719,9 +726,22 @@ pub(crate) fn evaluate(relations: &Relations, input: &RoleInput) -> RoleRelation
     out
 }
 
+/// The LZ device's job kinds, as FujiMod's `lz.rs` saves them.
+#[derive(Deserialize)]
+enum JobKind {
+    Lz,
+    Resize,
+}
+
+#[derive(Deserialize)]
+struct PendingJob {
+    job: JobKind,
+}
+
 fn lz_plan(index: usize, input: &RoleInput, mut jobs: Vec<(u64, u64)>, reset: bool) -> Result<LzPlan, RelationFailure> {
     let saved = &input.board["bus"]["devices"][index]["state"]["state"];
-    if !saved["pending"].is_null() {
+    let pending: Option<PendingJob> = serde_json::from_value(saved["pending"].clone()).map_err(|_| RelationFailure::LzPendingJob)?;
+    if matches!(pending, Some(PendingJob { job: JobKind::Lz })) {
         jobs.pop();
     }
     let (start, end) = job_span(&jobs)?;

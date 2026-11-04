@@ -1023,6 +1023,7 @@ impl Host for Clock {
 #[derive(Clone, Copy)]
 struct Step {
     tick: u64,
+    core: Core,
     pc: u32,
     offset: u32,
     write: Option<u32>,
@@ -1033,9 +1034,11 @@ const COMPOSED_SITE: u32 = 0x64a8;
 const POLL_PC: u32 = 0x3000;
 const LOG: u64 = 0x400;
 
-fn put(tick: u64, offset: u32, value: u32) -> Step { Step { tick, pc: 0x2000, offset, write: Some(value) } }
+fn put(tick: u64, offset: u32, value: u32) -> Step { Step { tick, core: Core::Primary, pc: 0x2000, offset, write: Some(value) } }
 
-fn get(tick: u64, pc: u32, offset: u32) -> Step { Step { tick, pc, offset, write: None } }
+fn get(tick: u64, pc: u32, offset: u32) -> Step { Step { tick, core: Core::Primary, pc, offset, write: None } }
+
+fn on_secondary(step: Step) -> Step { Step { core: Core::Secondary, ..step } }
 
 /// Counter start, then two log entries `gap` and `2 * gap` ticks after `base` with a polling read between.
 fn timer_steps(base: u64, gap: u64, site: u32) -> Vec<Step> {
@@ -1043,14 +1046,14 @@ fn timer_steps(base: u64, gap: u64, site: u32) -> Vec<Step> {
         get(base + gap, site, 0x00), get(base + gap + 10, POLL_PC, 0x00), get(base + 2 * gap, site, 0x00)]
 }
 
-/// Runs `steps` on core 0 through FujiMod's timer from reset.
-fn run_timer(steps: &[Step]) -> (Vec<TransactionRow>, Value) {
+/// Runs `steps` through FujiMod's timer from reset, then lets a due deadline settle at `settle`.
+fn run_timer(steps: &[Step], settle: Option<u64>) -> (Vec<TransactionRow>, Value) {
     let inputs = || fujimod_emulator_devices::exr2::irq::Inputs::default();
     let mut model = Timers::new(Options { main_targets: vec![0, 1] }, Wiring { controllers: vec![(0, inputs()), (1, inputs())], start_tick: 0 }).unwrap();
     let mut clock = Clock::default();
     let rows = steps.iter().map(|step| {
         clock.now = step.tick;
-        let mut cx = Cx::new(&mut clock, 0, u64::from(step.pc), 0);
+        let mut cx = Cx::new(&mut clock, step.core.index(), u64::from(step.pc), 0);
         let address = timer::BASE + u64::from(step.offset);
         let value = match step.write {
             Some(value) => {
@@ -1061,30 +1064,34 @@ fn run_timer(steps: &[Step]) -> (Vec<TransactionRow>, Value) {
         };
         assert_eq!(cx.refusal(), None);
         TransactionRow {
-            tick: step.tick, core: Some(Core::Primary), pc: Pc(step.pc), address: address as u32, size: 4,
+            tick: step.tick, core: Some(step.core), pc: Pc(step.pc), address: address as u32, size: 4,
             access: if step.write.is_some() { Access::Write } else { Access::Read }, accepted: true, value,
         }
     }).collect();
+    if let Some(tick) = settle {
+        clock.now = tick;
+        model.advance(&mut Cx::new(&mut clock, usize::MAX, 0, 0));
+    }
     (rows, model.save())
 }
 
-/// A role whose timer runs `steps`; each site read is logged at the next slot with its value word.
-fn relation_spec(role: Role, steps: &[Step], site: u32) -> Spec {
-    let (rows, timer_state) = run_timer(steps);
+/// A role whose timer runs `steps`; each site read, on either core, is logged at the next slot with its value word.
+fn relation_spec(role: Role, steps: &[Step], site: u32) -> Spec { relation_spec_settled(role, steps, site, None) }
+
+fn relation_spec_settled(role: Role, steps: &[Step], site: u32, settle: Option<u64>) -> Spec {
+    let (rows, timer_state) = run_timer(steps, settle);
     let mut spec = spec(role);
     let mut log_writes = Vec::new();
     for (k, row) in rows.iter().filter(|row| row.pc.0 == site).enumerate() {
         let slot = LOG + 8 * k as u64;
         let event = 0x0100_0300 + k as u32;
-        log_writes.push(LogWrite { core: Core::Primary, pc: Pc(site + 4), physical: slot, size: 4, value: Word(row.value), tick: row.tick });
-        log_writes.push(LogWrite { core: Core::Primary, pc: Pc(0x5000), physical: slot + 4, size: 4, value: Word(event), tick: row.tick + 1 });
-        for (offset, word) in [(0, row.value), (4, event)] {
-            for (index, byte) in word.to_le_bytes().into_iter().enumerate() {
-                spec.bytes.insert((Space::Physical, slot + offset + index as u64), byte);
-            }
-        }
+        let core = row.core.unwrap();
+        log_writes.push(LogWrite { core, pc: Pc(site + 4), physical: slot, size: 4, value: Word(row.value), tick: row.tick });
+        log_writes.push(LogWrite { core, pc: Pc(0x5000), physical: slot + 4, size: 4, value: Word(event), tick: row.tick + 1 });
+        set_word(&mut spec, slot, row.value);
+        set_word(&mut spec, slot + 4, event);
     }
-    let last = rows.last().map_or(0, |row| row.tick);
+    let last = settle.into_iter().chain(rows.iter().map(|row| row.tick)).max().unwrap_or(0);
     spec.board["timeline"]["now"] = json!(last + 10);
     spec.board["bus"]["devices"] = json!([{
         "kind": "exr2-system-timers", "windows": [{"base": timer::BASE, "size": 64}], "native_dependencies": [0, 1], "state": timer_state,
@@ -1093,12 +1100,20 @@ fn relation_spec(role: Role, steps: &[Step], site: u32) -> Spec {
     spec
 }
 
+fn set_word(spec: &mut Spec, address: u64, word: u32) {
+    for (index, byte) in word.to_le_bytes().into_iter().enumerate() {
+        spec.bytes.insert((Space::Physical, address + index as u64), byte);
+    }
+}
+
 fn with_relations(mut value: Value) -> Value {
     value["guard"]["attach_state"]["relations"] = json!({
         "timer": {"citation": "timer.rs"},
         "log": {"span": {"start": LOG, "end": LOG + 0x80}, "sites": [
             {"label": "stock-record1", "role": "retained", "core": 0, "read_pc": RETAINED_SITE, "store_pc": RETAINED_SITE + 4, "citation": "c"},
+            {"label": "stock-record1-core1", "role": "retained", "core": 1, "read_pc": RETAINED_SITE, "store_pc": RETAINED_SITE + 4, "citation": "c"},
             {"label": "owned-first-stage", "role": "composed", "core": 0, "read_pc": COMPOSED_SITE, "store_pc": COMPOSED_SITE + 4, "citation": "c"},
+            {"label": "owned-first-stage-core1", "role": "composed", "core": 1, "read_pc": COMPOSED_SITE, "store_pc": COMPOSED_SITE + 4, "citation": "c"},
         ]},
         "lz": null,
     });
@@ -1189,6 +1204,153 @@ fn recorded_accesses_must_explain_the_captured_timer() {
 }
 
 #[test]
+fn a_log_read_is_ordered_against_the_main_timer_start_on_any_core() {
+    let mut retained = timer_steps(100, 200, RETAINED_SITE);
+    retained.insert(3, on_secondary(get(150, RETAINED_SITE, 0x00)));
+    let mut before_start = timer_steps(160, 300, COMPOSED_SITE);
+    before_start.insert(0, on_secondary(get(120, COMPOSED_SITE, 0x00)));
+    let failure = composed_failure(relation_difference(&retained, &before_start, |_| {}));
+    assert!(matches!(failure, Some(RelationFailure::TimerSequence { core: Core::Secondary, index: 0, .. })), "{failure:?}");
+    let mut after_start = timer_steps(160, 300, COMPOSED_SITE);
+    after_start.insert(3, on_secondary(get(200, COMPOSED_SITE, 0x00)));
+    assert_eq!(relation_difference(&retained, &after_start, |_| {}), None);
+}
+
+#[test]
+fn a_deadline_settle_after_the_last_access_is_explained_by_the_model() {
+    let with_application = |base: u64, gap: u64, site: u32| {
+        let mut steps = timer_steps(base, gap, site);
+        steps.splice(3..3, [put(base + 3, 0x30, 0), put(base + 4, 0x34, 700), put(base + 5, 0x38, 0x03)]);
+        steps
+    };
+    let retained = relation_spec_settled(Role::Retained, &with_application(100, 200, RETAINED_SITE), RETAINED_SITE, Some(820));
+    let owned = relation_spec_settled(Role::Composed, &with_application(160, 300, COMPOSED_SITE), COMPOSED_SITE, Some(900));
+    assert_eq!(owned.board["bus"]["devices"][0]["state"]["last_tick"], json!(900));
+    assert_eq!(relation_verdict(&with_relations(fixture()), &retained, &owned).first_difference, None);
+    let later = |owned: &mut Spec| {
+        let last = owned.sources.as_ref().unwrap().rows.last().unwrap().tick;
+        owned.board["bus"]["devices"][0]["state"]["last_tick"] = json!(last + 5);
+    };
+    let (retained_steps, owned_steps) = (timer_steps(100, 200, RETAINED_SITE), timer_steps(160, 300, COMPOSED_SITE));
+    assert!(matches!(composed_failure(relation_difference(&retained_steps, &owned_steps, later)), Some(RelationFailure::TimerSettle { .. })));
+}
+
+#[test]
+fn resets_refusals_and_log_entries_must_agree() {
+    let (retained, owned) = (timer_steps(100, 200, RETAINED_SITE), timer_steps(160, 300, COMPOSED_SITE));
+    let all = |edit: fn(&mut Spec)| {
+        let retained_spec = relation_spec(Role::Retained, &retained, RETAINED_SITE);
+        let mut owned_spec = relation_spec(Role::Composed, &owned, COMPOSED_SITE);
+        edit(&mut owned_spec);
+        relation_verdict(&with_relations(fixture()), &retained_spec, &owned_spec).attach_differences.entries
+    };
+    let failed = |entries: &[Difference], matches: fn(&RelationFailure) -> bool| entries.iter()
+        .any(|entry| matches!(entry, Difference::AttachRelation { failure, .. } if matches(failure)));
+    assert!(failed(&all(|owned| owned.sources.as_mut().unwrap().reset = SystemTimer::new(vec![0]).unwrap()),
+        |failure| matches!(failure, RelationFailure::TimerResetDiffers)));
+    assert!(failed(&all(|owned| owned.sources.as_mut().unwrap().rows[4].accepted = false),
+        |failure| matches!(failure, RelationFailure::RefusedAccess { row: 4 })));
+    assert!(failed(&all(|owned| {
+        let writes = &mut owned.sources.as_mut().unwrap().log_writes;
+        let (first, second) = (writes[1].value, writes[3].value);
+        writes[1].value = second;
+        writes[3].value = first;
+        set_word(owned, LOG + 4, second.0);
+        set_word(owned, LOG + 12, first.0);
+    }), |failure| matches!(failure, RelationFailure::TimerSequence { .. })));
+    assert!(failed(&all(|owned| owned.sources.as_mut().unwrap().rows[3].pc = Pc(RETAINED_SITE)),
+        |failure| matches!(failure, RelationFailure::LogForeignSite { .. })));
+    assert!(failed(&all(|owned| { owned.sources.as_mut().unwrap().log_writes.remove(1); }),
+        |failure| matches!(failure, RelationFailure::LogEntryValue { .. })));
+    assert!(failed(&all(|owned| {
+        let words: Vec<(u64, u32)> = owned.sources.as_ref().unwrap().log_writes.iter().map(|write| (write.physical, write.value.0)).collect();
+        for (address, _) in &words {
+            set_word(owned, *address, 0);
+        }
+        for write in &mut owned.sources.as_mut().unwrap().log_writes {
+            write.physical += 0x20;
+        }
+        for (address, value) in words {
+            set_word(owned, address + 0x20, value);
+        }
+    }), |failure| matches!(failure, RelationFailure::LogTimestampWords)));
+}
+
+#[test]
+fn a_later_non_logger_write_makes_a_timestamp_word_compared_again() {
+    let overwrite = |spec: &mut Spec, value: u32| {
+        let sources = spec.sources.as_mut().unwrap();
+        let tick = sources.rows.last().unwrap().tick + 1;
+        sources.log_writes.push(LogWrite { core: Core::Primary, pc: Pc(0x5000), physical: LOG, size: 4, value: Word(value), tick });
+        set_word(spec, LOG, value);
+    };
+    let mut retained = relation_spec(Role::Retained, &timer_steps(100, 200, RETAINED_SITE), RETAINED_SITE);
+    let mut owned = relation_spec(Role::Composed, &timer_steps(160, 300, COMPOSED_SITE), COMPOSED_SITE);
+    overwrite(&mut retained, 0xabcd);
+    overwrite(&mut owned, 0xabcd);
+    let verdict = relation_verdict(&with_relations(fixture()), &retained, &owned);
+    assert_eq!(verdict.first_difference, None);
+    assert_eq!(verdict.attach.unwrap().relations[1].timestamps.iter().map(|word| word.address).collect::<Vec<_>>(), [LOG + 8]);
+    overwrite(&mut owned, 0xabce);
+    let difference = relation_verdict(&with_relations(fixture()), &retained, &owned).first_difference;
+    assert!(matches!(difference, Some(Difference::AttachMemory { start: LOG, .. })), "{difference:?}");
+}
+
+const LZ_BASE: u64 = 0xfff4_3000;
+const LZ_INPUT: u64 = 0x1000;
+
+/// Adds one LZ job over `compressed` at `LZ_INPUT`, the device's stream after it, and the job's register writes.
+fn with_lz(spec: &mut Spec, compressed: &[u8]) {
+    for (index, byte) in compressed.iter().enumerate() {
+        spec.bytes.insert((Space::Physical, LZ_INPUT + index as u64), *byte);
+    }
+    let mut stream = fujimod_emulator_devices::compression::method4::Stream::default();
+    stream.feed(compressed, &mut [0u8; 256]).unwrap();
+    spec.board["bus"]["devices"].as_array_mut().unwrap().push(json!({
+        "kind": "exr2-lz", "windows": [{"base": LZ_BASE, "size": 256}], "native_dependencies": [],
+        "state": {"state": {"stream": serde_json::to_value(&stream).unwrap(), "pending": null}},
+    }));
+    let sources = spec.sources.as_mut().unwrap();
+    let tick = sources.rows.last().unwrap().tick;
+    for (step, (offset, value)) in [(0x40, LZ_INPUT as u32), (0x44, compressed.len() as u32), (0x04, 2)].into_iter().enumerate() {
+        sources.rows.push(TransactionRow {
+            tick: tick + 1 + step as u64, core: Some(Core::Primary), pc: Pc(0x7000), address: (LZ_BASE + offset) as u32, size: 4,
+            access: Access::Write, accepted: true, value,
+        });
+    }
+}
+
+#[test]
+fn the_lz_tallies_follow_each_role_s_pinned_input() {
+    let retained_input = [3, b'a', b'b', b'c', 0x80, 0x36];
+    let owned_input = [9, b'a', b'b', b'c', b'a', b'b', b'c', b'a', b'b', b'c'];
+    let mut retained = relation_spec(Role::Retained, &timer_steps(100, 200, RETAINED_SITE), RETAINED_SITE);
+    let mut owned = relation_spec(Role::Composed, &timer_steps(160, 300, COMPOSED_SITE), COMPOSED_SITE);
+    with_lz(&mut retained, &retained_input);
+    with_lz(&mut owned, &owned_input);
+    let padded = |input: &[u8]| { let mut bytes = input.to_vec(); bytes.resize(16, 0); Sha256::of(&bytes) };
+    let with_copy = |lz: Value| {
+        let mut value = with_relations(fixture());
+        value["guard"]["attach_state"]["relations"]["lz"] = lz;
+        attach_rules(&mut value)["allowances"] = json!([{
+            "label": "lz-input", "kind": "copy", "space": {"target": "physical"}, "start": LZ_INPUT, "end": LZ_INPUT + 16, "reason": "r",
+            "source": {"dat": {"offset": 0, "transform": "identity"}}, "canonical_sha256": padded(&retained_input), "composed_sha256": padded(&owned_input),
+        }]);
+        value
+    };
+    let verdict = relation_verdict(&with_copy(json!({"citation": "lz.rs"})), &retained, &owned);
+    assert_eq!(verdict.first_difference, None, "{:?}", verdict.attach_differences);
+    let tallies = verdict.attach.unwrap().relations.iter().map(|role| role.lz.as_ref().map(|lz| (lz.literals, lz.matches))).collect::<Vec<_>>();
+    assert_eq!(tallies, [Some((1, 1)), Some((1, 0))]);
+    let without = relation_verdict(&with_copy(Value::Null), &retained, &owned).first_difference;
+    assert!(matches!(without, Some(Difference::AttachBoard { .. })), "{without:?}");
+    let mut overlap = with_copy(json!({"citation": "lz.rs"}));
+    attach_rules(&mut overlap)["board"] = json!([{"pointer": "/bus/devices/1/state/state/stream/literals", "kind": "declared", "reason": "r", "citation": "c"}]);
+    let entries = relation_verdict(&overlap, &retained, &owned).attach_differences.entries;
+    assert!(entries.iter().any(|entry| matches!(entry, Difference::AttachRelation { failure: RelationFailure::RelationOverlap { .. }, .. })));
+}
+
+#[test]
 fn a_board_entry_over_a_relation_leaf_refuses() {
     let retained = relation_spec(Role::Retained, &timer_steps(100, 200, RETAINED_SITE), RETAINED_SITE);
     let owned = relation_spec(Role::Composed, &timer_steps(160, 300, COMPOSED_SITE), COMPOSED_SITE);
@@ -1209,8 +1371,8 @@ fn log_sites_and_spans_are_checked_at_parse() {
     value["guard"]["attach_state"]["relations"]["log"]["span"] = json!({"start": LOG + 2, "end": LOG + 0x80});
     assert!(matches!(parse(&value), Err(CatalogRefusal::AttachState(AttachRuleRefusal::LogSpan))));
     let mut value = with_relations(fixture());
-    value["guard"]["attach_state"]["relations"]["log"]["sites"][1]["role"] = json!("retained");
-    value["guard"]["attach_state"]["relations"]["log"]["sites"][1]["read_pc"] = json!(RETAINED_SITE);
-    value["guard"]["attach_state"]["relations"]["log"]["sites"][1]["store_pc"] = json!(RETAINED_SITE + 4);
+    value["guard"]["attach_state"]["relations"]["log"]["sites"][2]["role"] = json!("retained");
+    value["guard"]["attach_state"]["relations"]["log"]["sites"][2]["read_pc"] = json!(RETAINED_SITE);
+    value["guard"]["attach_state"]["relations"]["log"]["sites"][2]["store_pc"] = json!(RETAINED_SITE + 4);
     assert!(matches!(parse(&value), Err(CatalogRefusal::AttachState(AttachRuleRefusal::LogSite(_)))));
 }

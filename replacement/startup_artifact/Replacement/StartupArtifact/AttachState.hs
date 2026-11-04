@@ -348,13 +348,16 @@ data AttachSources = AttachSources
   , ownedSymbols :: [(PieceKind, B.ByteString)]
   }
 
--- | A32 @LDR Rt,...@ of a word, any addressing mode, not unconditional-space.
+-- | A32 @LDR Rt,...@ of a word, any addressing mode: not unconditional-space, not media-space (register form with bit 4 set).
 a32WordLoad :: Word32 -> Bool
-a32WordLoad word = word .&. 0x0c500000 == 0x04100000 && word `shiftR` 28 /= 0xf
+a32WordLoad word = word .&. 0x0c500000 == 0x04100000 && a32SingleTransfer word
 
--- | A32 @STR Rt,...@ of a word, any addressing mode, not unconditional-space.
+-- | A32 @STR Rt,...@ of a word, any addressing mode: not unconditional-space, not media-space (register form with bit 4 set).
 a32WordStore :: Word32 -> Bool
-a32WordStore word = word .&. 0x0c500000 == 0x04000000 && word `shiftR` 28 /= 0xf
+a32WordStore word = word .&. 0x0c500000 == 0x04000000 && a32SingleTransfer word
+
+a32SingleTransfer :: Word32 -> Bool
+a32SingleTransfer word = word `shiftR` 28 /= 0xf && word .&. 0x02000010 /= 0x02000010
 
 -- | Labelled read and store of an owned piece's timestamp routine.
 logSymbols :: PieceKind -> Maybe (String, String)

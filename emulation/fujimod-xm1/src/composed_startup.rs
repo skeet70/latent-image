@@ -266,6 +266,7 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
     let diagnostic = diagnostic.as_deref().map(diagnostic_classes).transpose()?;
     let log = contract.attach_rules().relations.log.as_ref().map(|log| log.span);
     if let (Some(span), Some(classes)) = (log, &diagnostic) {
+        require(classes.len() < DIAGNOSTIC_CLASS_LIMIT, "the log span leaves room for 255 diagnostic classes")?;
         require(!classes.iter().any(|&(start, end)| start < span.end && span.start < end), "a diagnostic class overlaps the log span")?;
     }
     let kind = if diagnostic.is_some() { ReceiptKind::ComposedStartupDiagnostic } else { ReceiptKind::ComposedStartupReceipt };
