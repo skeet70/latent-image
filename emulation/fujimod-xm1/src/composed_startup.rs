@@ -149,9 +149,8 @@ fn observe_hit(machine: &Machine, contract: &Contract, role: Role, sites: &BTree
         if let Some(diagnostic) = state.diagnostic.as_mut() {
             end_diagnostic(machine, diagnostic, output)?;
         }
-        let backings: Vec<(u64, u64)> = run::memory_backings(&machine.document)?.into_iter()
-            .map(|backing| (backing.base, backing.size as u64)).collect();
-        state.attach = Some(attach_state::capture(&machine.session.board, &backings, output)?);
+        let plan = attach_state::capture_plan(&machine.document)?;
+        state.attach = Some(attach_state::capture(&machine.session.board, &plan, output)?);
         let maps = run::memory_maps(&machine.document)?;
         let mut watch = machine.session.board.memory_watch_begin_classified(contract.watch_classes(), WATCH_LIMIT, maps, ViewPolicy::Observe)?;
         let attached = machine.session.board.memory_guard_attach(&mut watch, contract.guard_config(role));

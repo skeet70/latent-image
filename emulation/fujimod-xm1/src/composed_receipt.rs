@@ -1,7 +1,7 @@
 //! Composed-startup receipts and the retained/composed comparison.
 use crate::attach_state::{
-    self, AllowanceLabel, AttachState, AttachVerdict, BoardLeaf, ContextRegister, RoleCapture, Space, SpaceSpan, StackCheck,
-    UnusedEntry,
+    self, AllowanceLabel, AttachDifferences, AttachRefusal, AttachState, AttachVerdict, BoardLeaf, ContextRegister, RoleCapture, Space,
+    SpaceSpan, StackCheck, UnusedEntry,
 };
 use crate::composed_catalog::{
     BoundaryKind, Compare, Contract, Core, Label, PiecePolicy, PieceKind, Role, Sha256, Target, UnconfinedCode,
@@ -413,6 +413,8 @@ pub struct Verdict {
     pub unconfined: Vec<UnconfinedCode>,
     pub unguarded: Vec<LabelCount>,
     pub attach: Option<AttachVerdict>,
+    /// Empty unless the attach-state comparison ran and refused.
+    pub attach_differences: AttachDifferences,
 }
 
 fn identity(contract: &Contract, digest: &Sha256, receipt: &Receipt, role: Role) -> Result<(), Difference> {
@@ -537,8 +539,21 @@ pub struct CaptureDirectories<'a> {
     pub owned: &'a Path,
 }
 
+struct Refusal {
+    first: Difference,
+    attach: AttachDifferences,
+}
+
+impl From<Difference> for Refusal {
+    fn from(first: Difference) -> Self { Self { first, attach: AttachDifferences::default() } }
+}
+
+impl From<AttachRefusal> for Refusal {
+    fn from(refusal: AttachRefusal) -> Self { Self { first: refusal.first, attach: refusal.differences } }
+}
+
 fn differences(contract: &Contract, digest: &Sha256, retained: &Receipt, owned: &Receipt, directories: &CaptureDirectories)
-    -> Result<AttachVerdict, Difference> {
+    -> Result<AttachVerdict, Refusal> {
     identity(contract, digest, retained, Role::Retained)?;
     identity(contract, digest, owned, Role::Composed)?;
     for (field, same) in [
@@ -547,19 +562,19 @@ fn differences(contract: &Contract, digest: &Sha256, retained: &Receipt, owned: 
         (IdentityField::Observer, retained.identity.observer == owned.identity.observer),
     ] {
         if !same {
-            return Err(Difference::Identity { role: Role::Composed, field });
+            return Err(Difference::Identity { role: Role::Composed, field }.into());
         }
     }
     for (role, receipt) in [(Role::Retained, retained), (Role::Composed, owned)] {
         if !reached(receipt) {
-            return Err(Difference::Menu { role });
+            return Err(Difference::Menu { role }.into());
         }
     }
     let clean = |role, receipt: &Receipt| receipt.guard.clone().filter(GuardObservation::clean).ok_or(Difference::Guard { role });
     let (retained_guard, owned_guard) = (clean(Role::Retained, retained)?, clean(Role::Composed, owned)?);
     for (role, receipt) in [(Role::Retained, retained), (Role::Composed, owned)] {
         if let Some(hit) = receipt.off_core.first() {
-            return Err(Difference::OffCore { label: hit.label.clone(), core: hit.core, role });
+            return Err(Difference::OffCore { label: hit.label.clone(), core: hit.core, role }.into());
         }
     }
     fn captured(role: Role, receipt: &Receipt) -> Result<&AttachState, Difference> {
@@ -582,9 +597,9 @@ fn differences(contract: &Contract, digest: &Sha256, retained: &Receipt, owned: 
 /// `digest` is the SHA256 of the contract file both receipts must name.
 pub fn compare(contract: &Contract, digest: &Sha256, retained: &Receipt, owned: &Receipt, directories: &CaptureDirectories) -> Verdict {
     let result = differences(contract, digest, retained, owned, directories);
-    let (attach, first_difference) = match result {
-        Ok(attach) => (Some(attach), None),
-        Err(difference) => (None, Some(difference)),
+    let (attach, first_difference, attach_differences) = match result {
+        Ok(attach) => (Some(attach), None, AttachDifferences::default()),
+        Err(refusal) => (None, Some(refusal.first), refusal.attach),
     };
     Verdict {
         schema: SchemaTwo,
@@ -594,5 +609,6 @@ pub fn compare(contract: &Contract, digest: &Sha256, retained: &Receipt, owned: 
         unconfined: owned.unconfined.clone(),
         unguarded: owned.unguarded.clone(),
         attach,
+        attach_differences,
     }
 }

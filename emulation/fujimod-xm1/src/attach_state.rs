@@ -1,9 +1,10 @@
 //! Attach-boundary state: the contract's comparison rules, the observer's capture and the retained/composed
 //! comparison of two captures.
 use crate::composed_catalog::{Bank, Boundary, Citation, Core, Label, PieceKind, Reason, Sha256, Target, TargetSpan};
+use crate::run::{self, RunDocument};
 use crate::composed_receipt::{Difference, Row, Word};
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
-use fujimod_emulator::board::Board;
+use fujimod_emulator::board::{Board, factory::Graph};
 use fujimod_emulator_cpu::{Register, arm};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -33,6 +34,7 @@ pub const ABSORBED_BYTE_LIMIT: usize = 4096;
 pub const BOARD_VALUE_LIMIT: usize = 4096;
 /// Per `AttachMemory` difference.
 pub const DIFFERING_RUN_LIMIT: usize = 64;
+pub const ATTACH_DIFFERENCE_LIMIT: usize = 256;
 pub const MEMORY_FILE: &str = "attach-state.bin.gz";
 pub const BOARD_FILE: &str = "attach-board.json.gz";
 const MAGIC: &[u8] = b"xm1-attach-state\x01";
@@ -219,6 +221,8 @@ pub struct RegionRecord {
     /// Physical address, or 0 for a TCM bank.
     pub start: u64,
     pub end: u64,
+    /// Tile the region in order.
+    pub reads: Vec<RegionRead>,
     /// Over every byte of the region, zero pages included.
     pub sha256: Sha256,
     pub nonzero_pages: u64,
@@ -239,6 +243,8 @@ pub struct AttachState {
     pub instructions: [u64; 2],
     pub cores: [CoreContext; 2],
     pub regions: Vec<RegionRecord>,
+    /// RAM backing extents that no stable physical-bus mapping and no stable processor mapping reaches; not captured.
+    pub unreachable: Vec<Span>,
     pub memory_file: FileRecord,
     pub board_file: FileRecord,
 }
@@ -889,22 +895,122 @@ fn hex(hasher: sha2::Sha256) -> Result<Sha256, String> { Sha256::try_from(format
 
 fn io(error: std::io::Error) -> String { error.to_string() }
 
-/// A processor view of a captured region: the core it is read through and the processor address of its first byte.
-#[derive(Clone, Copy, Debug)]
-pub struct CoreView {
-    pub core: Core,
-    pub base: ProcessorAddress,
-}
+/// A physical-bus address, translated to a backing by the bus mappings.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct BusAddress(pub u64);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// A processor address on one core, translated by that core's mappings.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
 pub struct ProcessorAddress(pub u64);
 
+/// The address a stretch's first byte is read at.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "via", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum ReadPath {
+    Bus { address: BusAddress },
+    Core { core: Core, address: ProcessorAddress },
+}
+
+/// Region offsets `[start, end)` read through `path`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegionRead {
+    pub start: u64,
+    pub end: u64,
+    pub path: ReadPath,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CaptureRegion {
     pub space: Space,
     pub start: u64,
     pub end: u64,
-    /// For TCM regions; physical regions are read from the bus.
-    pub view: Option<CoreView>,
+    pub reads: Vec<RegionRead>,
+}
+
+/// The physical part of a capture, derived from the run's memory graph.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CapturePlan {
+    pub regions: Vec<CaptureRegion>,
+    pub unreachable: Vec<Span>,
+}
+
+/// Plans the capture of every RAM backing of the session `run::open` builds.
+pub fn capture_plan(document: &RunDocument) -> Result<CapturePlan, String> {
+    plan_backings(&run::graph(document)?.1)
+}
+
+/// Each backing byte is read through a stable physical-bus mapping if one reaches it, else through a stable
+/// processor mapping, else recorded as unreachable. Mappings a memory decoder can select are not stable.
+fn plan_backings(graph: &Graph) -> Result<CapturePlan, String> {
+    let switched_bus: Vec<_> = graph.decoders.iter().flat_map(|decoder| &decoder.choices).flat_map(|choice| &choice.dma).collect();
+    let switched_cpu: Vec<_> = graph.decoders.iter().flat_map(|decoder| &decoder.choices).flat_map(|choice| &choice.processors).collect();
+    // (physical start, physical end, path to the first byte)
+    let bus: Vec<(u64, u64, ReadPath)> = graph.dma_mappings.iter().filter(|map| !switched_bus.contains(map))
+        .map(|map| (map.physical, map.physical + map.size as u64, ReadPath::Bus { address: BusAddress(map.address) })).collect();
+    let mut cpu: Vec<(u64, u64, ReadPath)> = Vec::new();
+    for map in graph.mappings.iter().filter(|map| !switched_cpu.contains(map)) {
+        let core = *Core::ALL.get(map.core).ok_or("processor mapping names an absent core")?;
+        cpu.push((map.physical, map.physical + map.size as u64, ReadPath::Core { core, address: ProcessorAddress(map.address) }));
+    }
+    let offset = |path: ReadPath, by: u64| match path {
+        ReadPath::Bus { address } => ReadPath::Bus { address: BusAddress(address.0 + by) },
+        ReadPath::Core { core, address } => ReadPath::Core { core, address: ProcessorAddress(address.0 + by) },
+    };
+    let covering = |maps: &[(u64, u64, ReadPath)], at: u64| maps.iter().find(|(start, end, _)| *start <= at && at < *end).copied();
+    let next_start = |maps: &[(u64, u64, ReadPath)], at: u64| maps.iter().map(|(start, ..)| *start).filter(|start| *start > at).min();
+    let mut backings: Vec<(u64, u64)> = graph.ram.iter().map(|ram| (ram.base, ram.base + ram.size as u64)).collect();
+    backings.sort_unstable();
+    let mut plan = CapturePlan { regions: Vec::new(), unreachable: Vec::new() };
+    for (base, end) in backings {
+        let mut region: Option<CaptureRegion> = None;
+        let mut cursor = base;
+        while cursor < end {
+            let bus_next = next_start(&bus, cursor).unwrap_or(end).min(end);
+            let reached = covering(&bus, cursor).map(|(start, stop, path)| (stop.min(end), offset(path, cursor - start)))
+                .or_else(|| covering(&cpu, cursor).map(|(start, stop, path)| (stop.min(bus_next), offset(path, cursor - start))));
+            let stop = match reached {
+                Some((stop, path)) => {
+                    let region = region.get_or_insert_with(|| CaptureRegion { space: Space::Physical, start: cursor, end: cursor, reads: Vec::new() });
+                    region.reads.push(RegionRead { start: cursor - region.start, end: stop - region.start, path });
+                    region.end = stop;
+                    stop
+                }
+                None => {
+                    plan.regions.extend(region.take());
+                    let stop = bus_next.min(next_start(&cpu, cursor).unwrap_or(end)).min(end);
+                    match plan.unreachable.last_mut() {
+                        Some(span) if span.end == cursor => span.end = stop,
+                        _ => plan.unreachable.push(Span::new(cursor, stop)?),
+                    }
+                    stop
+                }
+            };
+            if stop % PAGE as u64 != 0 {
+                return Err(format!("capture plan boundary {stop:#x} is not page aligned"));
+            }
+            cursor = stop;
+        }
+        plan.regions.extend(region);
+    }
+    Ok(plan)
+}
+
+pub(crate) fn read_region(board: &Board, region: &CaptureRegion, offset: u64, buffer: &mut [u8]) -> Result<(), String> {
+    let end = offset + buffer.len() as u64;
+    for read in region.reads.iter().filter(|read| read.start < end && offset < read.end) {
+        let from = read.start.max(offset);
+        let to = read.end.min(end);
+        let bytes = &mut buffer[(from - offset) as usize..(to - offset) as usize];
+        let into = from - read.start;
+        match read.path {
+            ReadPath::Bus { address } => board.read_physical(address.0 + into, bytes)?,
+            ReadPath::Core { core, address } => board.read_memory(core.index(), address.0 + into, bytes)?,
+        }
+    }
+    Ok(())
 }
 
 /// A range in one space.
@@ -929,6 +1035,13 @@ pub fn write_memory_snapshot(
     for region in regions {
         let length = region.end.checked_sub(region.start).filter(|length| *length > 0 && length % PAGE as u64 == 0)
             .ok_or("capture region is empty or not a page multiple")?;
+        let tiled = region.reads.first().is_some_and(|read| read.start == 0)
+            && region.reads.windows(2).all(|pair| pair[0].end == pair[1].start)
+            && region.reads.iter().all(|read| read.start < read.end)
+            && region.reads.last().is_some_and(|read| read.end == length);
+        if !tiled {
+            return Err("capture region reads do not tile the region".into());
+        }
         let (space, core, bank) = match region.space {
             Space::Physical => (0u8, 0u8, 0u8),
             Space::Tcm { core, bank } => (1, core.index() as u8, bank_index(bank) as u8),
@@ -964,7 +1077,9 @@ pub fn write_memory_snapshot(
             }
             offset += chunk as u64;
         }
-        records.push(RegionRecord { space: region.space, start: region.start, end: region.end, sha256: hex(hasher)?, nonzero_pages: nonzero });
+        records.push(RegionRecord {
+            space: region.space, start: region.start, end: region.end, reads: region.reads.clone(), sha256: hex(hasher)?, nonzero_pages: nonzero,
+        });
     }
     encoder.write_all(&END_MARK.to_le_bytes()).map_err(io)?;
     encoder.write_all(&nonzero_total.to_le_bytes()).map_err(io)?;
@@ -1021,38 +1136,41 @@ pub fn core_context(board: &Board, core: Core) -> Result<CoreContext, String> {
     })
 }
 
-/// Captures the paused board into `output` (a fresh observation directory). `backings` are the physical RAM
-/// backings `(base, bytes)`.
-pub fn capture(board: &Board, backings: &[(u64, u64)], output: &Path) -> Result<AttachState, String> {
+/// Captures the paused board into `output` (a fresh observation directory): the physical regions of `plan` and
+/// each core's enabled TCM windows.
+pub fn capture(board: &Board, plan: &CapturePlan, output: &Path) -> Result<AttachState, String> {
     let counts = board.instruction_counts();
     let instructions: [u64; 2] = counts.try_into().map_err(|_| "expected two cores")?;
     let cores = [core_context(board, Core::Primary)?, core_context(board, Core::Secondary)?];
-    let mut regions: Vec<CaptureRegion> = backings.iter()
-        .map(|&(base, bytes)| CaptureRegion { space: Space::Physical, start: base, end: base + bytes, view: None })
-        .collect();
+    let mut regions = plan.regions.clone();
     for context in &cores {
         for bank in [Bank::Data, Bank::Instruction] {
             if let Some((base, end)) = context.tcm_window(bank) {
                 if end - base > TCM_WINDOW_LIMIT {
                     return Err("TCM window exceeds its bound".into());
                 }
+                let shadowed = plan.regions.iter().flat_map(|region| &region.reads).any(|read| match read.path {
+                    ReadPath::Core { core, address } => core == context.core && address.0 < end && base < address.0 + (read.end - read.start),
+                    ReadPath::Bus { .. } => false,
+                });
+                if shadowed {
+                    return Err(format!("{:?} TCM window {base:#x}..{end:#x} covers a processor read of physical memory", context.core));
+                }
                 let space = Space::Tcm { core: context.core, bank };
-                regions.push(CaptureRegion { space, start: 0, end: end - base, view: Some(CoreView { core: context.core, base: ProcessorAddress(base) }) });
+                let path = ReadPath::Core { core: context.core, address: ProcessorAddress(base) };
+                regions.push(CaptureRegion { space, start: 0, end: end - base, reads: vec![RegionRead { start: 0, end: end - base, path }] });
             }
         }
     }
     regions.sort_by_key(|region| (region.space, region.start));
-    let (records, memory_sha256, memory_bytes) = write_memory_snapshot(&output.join(MEMORY_FILE), &regions, |region, offset, buffer| {
-        match region.view {
-            Some(view) => board.read_memory(view.core.index(), view.base.0 + offset, buffer),
-            None => board.read_physical(region.start + offset, buffer),
-        }
-    })?;
+    let (records, memory_sha256, memory_bytes) =
+        write_memory_snapshot(&output.join(MEMORY_FILE), &regions, |region, offset, buffer| read_region(board, region, offset, buffer))?;
     let (board_sha256, board_bytes) = write_board_state(&output.join(BOARD_FILE), &board.state())?;
     Ok(AttachState {
         instructions,
         cores,
         regions: records,
+        unreachable: plan.unreachable.clone(),
         memory_file: FileRecord { path: MEMORY_FILE.into(), sha256: memory_sha256, compressed_bytes: memory_bytes },
         board_file: FileRecord { path: BOARD_FILE.into(), sha256: board_sha256, compressed_bytes: board_bytes },
     })
@@ -1256,6 +1374,56 @@ pub struct AttachVerdict {
     pub board: Vec<AbsorbedBoard>,
 }
 
+/// Every attach-state difference in comparison order.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct AttachDifferences {
+    /// The first `ATTACH_DIFFERENCE_LIMIT`.
+    pub entries: Vec<Difference>,
+    pub total: u64,
+    pub truncated: bool,
+}
+
+impl AttachDifferences {
+    fn push(&mut self, difference: Difference) {
+        self.total += 1;
+        if self.entries.len() < ATTACH_DIFFERENCE_LIMIT {
+            self.entries.push(difference);
+        } else {
+            self.truncated = true;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AttachRefusal {
+    /// The difference the stage order reaches first; memory differences in every space form one `AttachMemory`.
+    pub first: Difference,
+    pub differences: AttachDifferences,
+}
+
+#[derive(Default)]
+struct Collector {
+    first: Option<Difference>,
+    differences: AttachDifferences,
+}
+
+impl Collector {
+    fn push(&mut self, difference: Difference) {
+        if self.first.is_none() {
+            self.first = Some(difference.clone());
+        }
+        self.differences.push(difference);
+    }
+
+    /// Records `entries`, with `first` standing for them if nothing preceded.
+    fn push_summarised(&mut self, first: Difference, entries: impl IntoIterator<Item = Difference>) {
+        self.first.get_or_insert(first);
+        for entry in entries {
+            self.differences.push(entry);
+        }
+    }
+}
+
 /// Physical with the `0x40000000` alias removed, or a TCM offset from the core's captured window.
 fn resolve(sp: Word, space: Space, cores: &[CoreContext; 2]) -> Option<u64> {
     let sp = u64::from(sp.0);
@@ -1272,8 +1440,8 @@ fn snapshot_error(role: Role, reason: impl Into<String>) -> Difference {
     Difference::AttachSnapshot { role, reason: reason.into() }
 }
 
-fn compare_context(rules: &AttachRules, attach_core: Core, retained: &AttachState, owned: &AttachState)
-    -> Result<(Vec<AbsorbedRegister>, BTreeSet<(Core, ContextRegister)>), Difference> {
+fn compare_context(rules: &AttachRules, attach_core: Core, retained: &AttachState, owned: &AttachState, out: &mut Collector)
+    -> Vec<AbsorbedRegister> {
     let mut used = BTreeSet::new();
     let mut absorbed = Vec::new();
     for core in Core::ALL {
@@ -1291,30 +1459,35 @@ fn compare_context(rules: &AttachRules, attach_core: Core, retained: &AttachStat
                 continue;
             }
             let entry = rules.registers.iter().find(|entry| entry.core == core && entry.register == register);
+            if entry.is_some() {
+                used.insert((core, register));
+            }
             let accepted = entry.is_some_and(|entry| {
                 let mask = entry.mask.0;
                 left.0 & !mask == right.0 & !mask && left.0 & mask == entry.retained.0 && right.0 & mask == entry.composed.0
             });
-            if !accepted {
-                return Err(Difference::AttachContext { core, register, retained: left, owned: right });
+            if accepted {
+                absorbed.push(AbsorbedRegister { core, register, retained: left, composed: right });
+            } else {
+                out.push(Difference::AttachContext { core, register, retained: left, owned: right });
             }
-            used.insert((core, register));
-            absorbed.push(AbsorbedRegister { core, register, retained: left, composed: right });
         }
     }
-    Ok((absorbed, used))
+    for unused in rules.registers.iter().filter(|entry| !used.contains(&(entry.core, entry.register))) {
+        out.push(Difference::UnusedAllowance { entry: UnusedEntry::Register { core: unused.core, register: unused.register } });
+    }
+    absorbed
 }
 
-fn compare_peers(rules: &AttachRules, retained: &AttachState, owned: &AttachState) -> Result<(), Difference> {
+fn compare_peers(rules: &AttachRules, retained: &AttachState, owned: &AttachState, out: &mut Collector) {
     for peer in &rules.peers {
         for (role, state, spans) in [(Role::Retained, retained, &peer.retained_pc), (Role::Composed, owned, &peer.composed_pc)] {
             let pc = state.cores[peer.core.index()].pc;
             if !spans.iter().any(|span| span.holds(u64::from(pc.0))) {
-                return Err(Difference::AttachPeer { core: peer.core, role, pc });
+                out.push(Difference::AttachPeer { core: peer.core, role, pc });
             }
         }
     }
-    Ok(())
 }
 
 /// Every differing leaf of `left` and `right` as an RFC 6901 pointer.
@@ -1349,7 +1522,7 @@ fn truncated(value: Option<&Value>) -> String {
     text
 }
 
-fn compare_board(rules: &AttachRules, retained: &Value, owned: &Value) -> Result<Vec<AbsorbedBoard>, Difference> {
+fn compare_board(rules: &AttachRules, retained: &Value, owned: &Value, out: &mut Collector) -> Vec<AbsorbedBoard> {
     let mut leaves = Vec::new();
     for (field, name) in BoardField::ALL {
         if field.excluded() {
@@ -1358,31 +1531,38 @@ fn compare_board(rules: &AttachRules, retained: &Value, owned: &Value) -> Result
         differing_leaves(&format!("/{name}"), retained.get(name), owned.get(name), &mut leaves);
     }
     let mut absorbed: BTreeMap<&BoardPointer, Vec<BoardLeaf>> = BTreeMap::new();
+    let mut refused: BTreeSet<&BoardPointer> = BTreeSet::new();
     for leaf in leaves {
         let entry = rules.board.iter().find(|entry| entry.pointer.covers(&leaf));
         let Some(entry) = entry else {
-            return Err(Difference::AttachBoard {
-                pointer: BoardLeaf(leaf.clone()),
+            out.push(Difference::AttachBoard {
                 retained: truncated(retained.pointer(&leaf)),
                 owned: truncated(owned.pointer(&leaf)),
+                pointer: BoardLeaf(leaf),
             });
+            continue;
         };
+        if refused.contains(&entry.pointer) {
+            continue;
+        }
         if let BoardAllowanceKind::Exact { retained: expected_retained, composed: expected_owned } = &entry.kind {
             let pointer = entry.pointer.as_str();
             if retained.pointer(pointer) != Some(expected_retained) || owned.pointer(pointer) != Some(expected_owned) {
-                return Err(Difference::AttachBoard {
+                out.push(Difference::AttachBoard {
                     pointer: BoardLeaf(pointer.to_owned()),
                     retained: truncated(retained.pointer(pointer)),
                     owned: truncated(owned.pointer(pointer)),
                 });
+                refused.insert(&entry.pointer);
+                continue;
             }
         }
         absorbed.entry(&entry.pointer).or_default().push(BoardLeaf(leaf));
     }
-    if let Some(unused) = rules.board.iter().find(|entry| !absorbed.contains_key(&entry.pointer)) {
-        return Err(Difference::UnusedAllowance { entry: UnusedEntry::Board(unused.pointer.clone()) });
+    for unused in rules.board.iter().filter(|entry| !absorbed.contains_key(&entry.pointer) && !refused.contains(&entry.pointer)) {
+        out.push(Difference::UnusedAllowance { entry: UnusedEntry::Board(unused.pointer.clone()) });
     }
-    Ok(absorbed.into_iter().map(|(pointer, leaves)| AbsorbedBoard { pointer: pointer.clone(), leaves }).collect())
+    absorbed.into_iter().map(|(pointer, leaves)| AbsorbedBoard { pointer: pointer.clone(), leaves }).collect()
 }
 
 /// A span whose bytes are hashed in each role and checked against a digest.
@@ -1400,55 +1580,61 @@ struct Absorber {
     memory: AbsorbedMemory,
 }
 
-fn verify_stacks(rules: &AttachRules, captures: [&RoleCapture; 2]) -> Result<(), Difference> {
+fn verify_stacks(rules: &AttachRules, captures: [&RoleCapture; 2], out: &mut Collector) {
     for allowance in &rules.allowances {
-        let failure = |role: Role, check: StackCheck| Difference::AttachAllowance {
-            label: allowance.label.clone(), role, check,
-        };
         for capture in captures {
-            let cores = &capture.state.cores;
-            match &allowance.kind {
-                AllowanceKind::DeadStack { core, mode, window } => {
-                    let context = &cores[core.index()];
-                    if ArmMode::of(context.cpsr) != Some(*mode) {
-                        return Err(failure(capture.role, StackCheck::Mode));
-                    }
-                    let sp = resolve(context.sp, window.space, cores).ok_or_else(|| failure(capture.role, StackCheck::SpSpace))?;
-                    if !(window.span.start < sp && sp <= window.span.end) {
-                        return Err(failure(capture.role, StackCheck::SpOutsideWindow));
-                    }
-                    if allowance.span.end > sp {
-                        return Err(failure(capture.role, StackCheck::AboveSp));
-                    }
-                }
-                AllowanceKind::DeadStackAtBoundary { core, boundary, window } => {
-                    let row = capture.rows.iter().find(|row| &row.label == boundary && row.core == *core)
-                        .ok_or_else(|| failure(capture.role, StackCheck::BoundaryRow))?;
-                    let sp = resolve(row.sp, window.space, cores).ok_or_else(|| failure(capture.role, StackCheck::SpSpace))?;
-                    if !(window.span.start < sp && sp <= window.span.end) {
-                        return Err(failure(capture.role, StackCheck::SpOutsideWindow));
-                    }
-                    if allowance.span.end > sp {
-                        return Err(failure(capture.role, StackCheck::AboveSp));
-                    }
-                    let current = resolve(cores[core.index()].sp, window.space, cores);
-                    if current.is_some_and(|current| window.span.start <= current && current <= window.span.end) {
-                        return Err(failure(capture.role, StackCheck::StillCurrent));
-                    }
-                }
-                AllowanceKind::PeerLiveStack { core, window } => {
-                    let sp = resolve(cores[core.index()].sp, window.space, cores)
-                        .ok_or_else(|| failure(capture.role, StackCheck::SpSpace))?;
-                    if !window.span.holds(sp) {
-                        return Err(failure(capture.role, StackCheck::SpOutsideWindow));
-                    }
-                    if allowance.span.start < sp {
-                        return Err(failure(capture.role, StackCheck::BelowPeerSp));
-                    }
-                }
-                AllowanceKind::Copy { .. } | AllowanceKind::Declared { .. } => {}
+            if let Err(difference) = verify_stack(allowance, capture) {
+                out.push(difference);
             }
         }
+    }
+}
+
+fn verify_stack(allowance: &Allowance, capture: &RoleCapture) -> Result<(), Difference> {
+    let failure = |role: Role, check: StackCheck| Difference::AttachAllowance {
+        label: allowance.label.clone(), role, check,
+    };
+    let cores = &capture.state.cores;
+    match &allowance.kind {
+        AllowanceKind::DeadStack { core, mode, window } => {
+            let context = &cores[core.index()];
+            if ArmMode::of(context.cpsr) != Some(*mode) {
+                return Err(failure(capture.role, StackCheck::Mode));
+            }
+            let sp = resolve(context.sp, window.space, cores).ok_or_else(|| failure(capture.role, StackCheck::SpSpace))?;
+            if !(window.span.start < sp && sp <= window.span.end) {
+                return Err(failure(capture.role, StackCheck::SpOutsideWindow));
+            }
+            if allowance.span.end > sp {
+                return Err(failure(capture.role, StackCheck::AboveSp));
+            }
+        }
+        AllowanceKind::DeadStackAtBoundary { core, boundary, window } => {
+            let row = capture.rows.iter().find(|row| &row.label == boundary && row.core == *core)
+                .ok_or_else(|| failure(capture.role, StackCheck::BoundaryRow))?;
+            let sp = resolve(row.sp, window.space, cores).ok_or_else(|| failure(capture.role, StackCheck::SpSpace))?;
+            if !(window.span.start < sp && sp <= window.span.end) {
+                return Err(failure(capture.role, StackCheck::SpOutsideWindow));
+            }
+            if allowance.span.end > sp {
+                return Err(failure(capture.role, StackCheck::AboveSp));
+            }
+            let current = resolve(cores[core.index()].sp, window.space, cores);
+            if current.is_some_and(|current| window.span.start <= current && current <= window.span.end) {
+                return Err(failure(capture.role, StackCheck::StillCurrent));
+            }
+        }
+        AllowanceKind::PeerLiveStack { core, window } => {
+            let sp = resolve(cores[core.index()].sp, window.space, cores)
+                .ok_or_else(|| failure(capture.role, StackCheck::SpSpace))?;
+            if !window.span.holds(sp) {
+                return Err(failure(capture.role, StackCheck::SpOutsideWindow));
+            }
+            if allowance.span.start < sp {
+                return Err(failure(capture.role, StackCheck::BelowPeerSp));
+            }
+        }
+        AllowanceKind::Copy { .. } | AllowanceKind::Declared { .. } => {}
     }
     Ok(())
 }
@@ -1456,36 +1642,58 @@ fn verify_stacks(rules: &AttachRules, captures: [&RoleCapture; 2]) -> Result<(),
 fn hexbytes(bytes: &[u8]) -> String { bytes.iter().map(|byte| format!("{byte:02x}")).collect() }
 
 /// `attach_core` is the core of the attach boundary.
-pub fn compare(rules: &AttachRules, attach_core: Core, retained: &RoleCapture, owned: &RoleCapture) -> Result<AttachVerdict, Difference> {
+pub fn compare(rules: &AttachRules, attach_core: Core, retained: &RoleCapture, owned: &RoleCapture) -> Result<AttachVerdict, AttachRefusal> {
     let captures = [retained, owned];
+    let mut out = Collector::default();
     let mut memory_paths = Vec::with_capacity(2);
     let mut boards = Vec::with_capacity(2);
     for capture in captures {
         let state = capture.state;
-        let memory = bound_file(capture.directory, &state.memory_file, COMPRESSED_LIMIT).map_err(|reason| snapshot_error(capture.role, reason))?;
-        let board = bound_file(capture.directory, &state.board_file, COMPRESSED_LIMIT).map_err(|reason| snapshot_error(capture.role, reason))?;
-        memory_paths.push(memory);
-        boards.push(read_board(&board).map_err(|reason| snapshot_error(capture.role, reason))?);
+        match bound_file(capture.directory, &state.memory_file, COMPRESSED_LIMIT) {
+            Ok(path) => memory_paths.push(path),
+            Err(reason) => out.push(snapshot_error(capture.role, reason)),
+        }
+        match bound_file(capture.directory, &state.board_file, COMPRESSED_LIMIT).and_then(|path| read_board(&path)) {
+            Ok(board) => boards.push(board),
+            Err(reason) => out.push(snapshot_error(capture.role, reason)),
+        }
     }
-    let region_shape = |state: &AttachState| state.regions.iter().map(|region| (region.space, region.start, region.end)).collect::<Vec<_>>();
-    if region_shape(retained.state) != region_shape(owned.state) {
-        return Err(snapshot_error(Role::Composed, "captured regions differ between roles"));
+    let region_shape = |state: &AttachState| {
+        (state.regions.iter().map(|region| (region.space, region.start, region.end, region.reads.clone())).collect::<Vec<_>>(), state.unreachable.clone())
+    };
+    let shapes_agree = region_shape(retained.state) == region_shape(owned.state);
+    if !shapes_agree {
+        out.push(snapshot_error(Role::Composed, "captured regions, their read paths or the unreachable extents differ between roles"));
     }
-    let (registers, used_registers) = compare_context(rules, attach_core, retained.state, owned.state)?;
-    if let Some(unused) = rules.registers.iter().find(|entry| !used_registers.contains(&(entry.core, entry.register))) {
-        return Err(Difference::UnusedAllowance { entry: UnusedEntry::Register { core: unused.core, register: unused.register } });
+    let registers = compare_context(rules, attach_core, retained.state, owned.state, &mut out);
+    compare_peers(rules, retained.state, owned.state, &mut out);
+    let board = match boards.as_slice() {
+        [retained_board, owned_board] => compare_board(rules, retained_board, owned_board, &mut out),
+        _ => Vec::new(),
+    };
+    verify_stacks(rules, captures, &mut out);
+    let allowances = if shapes_agree && memory_paths.len() == 2 {
+        match compare_memory(rules, retained, owned, &memory_paths, &mut out) {
+            Ok(allowances) => allowances,
+            Err(difference) => {
+                out.push(difference);
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    if let Some(first) = out.first {
+        return Err(AttachRefusal { first, differences: out.differences });
     }
-    compare_peers(rules, retained.state, owned.state)?;
-    let board = compare_board(rules, &boards[0], &boards[1])?;
-    verify_stacks(rules, captures)?;
-    let allowances = compare_memory(rules, retained, owned, &memory_paths)?;
     let mut instructions = BTreeMap::new();
     instructions.insert(Role::Retained, retained.state.instructions);
     instructions.insert(Role::Composed, owned.state.instructions);
     Ok(AttachVerdict { instructions, allowances, registers, board })
 }
 
-fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCapture, paths: &[std::path::PathBuf])
+/// Differences in the captured bytes go to `out`; an inconsistent capture is the `Err`.
+fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCapture, paths: &[std::path::PathBuf], out: &mut Collector)
     -> Result<Vec<AbsorbedMemory>, Difference> {
     let regions: Vec<(Space, Span)> = retained.state.regions.iter()
         .map(|region| (region.space, Span { start: region.start, end: region.end })).collect();
@@ -1537,7 +1745,12 @@ fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCaptu
     let mut first_difference: Option<(Space, u64, u64)> = None;
     let mut differing_unabsorbed = 0u64;
     let mut runs: Vec<SpaceSpan> = Vec::new();
+    let mut by_space: Vec<(Space, u64, Vec<SpaceSpan>)> = Vec::new();
     for (index, (space, region)) in regions.iter().enumerate() {
+        let slot = by_space.iter().position(|(seen, ..)| seen == space).unwrap_or_else(|| {
+            by_space.push((*space, 0, Vec::new()));
+            by_space.len() - 1
+        });
         let mut region_hashers = [sha2::Sha256::new(), sha2::Sha256::new()];
         let mut offset = 0u64;
         while offset < region.len() {
@@ -1587,6 +1800,13 @@ fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCaptu
                     } else if runs.len() < DIFFERING_RUN_LIMIT {
                         runs.push(SpaceSpan { space: *space, start: address, end: address + 1 });
                     }
+                    let (_, space_bytes, space_runs) = &mut by_space[slot];
+                    *space_bytes += 1;
+                    if let Some(run) = space_runs.last_mut().filter(|run| run.end == address) {
+                        run.end = address + 1;
+                    } else if space_runs.len() < DIFFERING_RUN_LIMIT {
+                        space_runs.push(SpaceSpan { space: *space, start: address, end: address + 1 });
+                    }
                 }
             }
             offset += PAGE as u64;
@@ -1604,21 +1824,118 @@ fn compare_memory(rules: &AttachRules, retained: &RoleCapture, owned: &RoleCaptu
     for item in hashed {
         for (role, hasher) in item.hashers.into_iter().enumerate() {
             if hex(hasher).ok().as_ref() != Some(&item.expected[role]) {
-                return Err(match item.failure {
-                    Difference::AttachCarrier { piece, target, start, end, .. } => Difference::AttachCarrier { piece, target, start, end, role: roles[role] },
-                    Difference::AttachCopy { label, .. } => Difference::AttachCopy { label, role: roles[role] },
-                    other => other,
+                out.push(match &item.failure {
+                    Difference::AttachCarrier { piece, target, start, end, .. } =>
+                        Difference::AttachCarrier { piece: piece.clone(), target: *target, start: *start, end: *end, role: roles[role] },
+                    Difference::AttachCopy { label, .. } => Difference::AttachCopy { label: label.clone(), role: roles[role] },
+                    other => other.clone(),
                 });
             }
         }
     }
     if let Some((space, start, _)) = first_difference {
         let end = runs.first().map_or(start + 1, |run| run.end);
-        return Err(Difference::AttachMemory { space, start, end, differing_bytes: differing_unabsorbed, runs });
+        let per_space = by_space.into_iter().filter(|(_, bytes, _)| *bytes > 0).map(|(space, differing_bytes, runs)| {
+            let (start, end) = (runs[0].start, runs[0].end);
+            Difference::AttachMemory { space, start, end, differing_bytes, runs }
+        });
+        out.push_summarised(Difference::AttachMemory { space, start, end, differing_bytes: differing_unabsorbed, runs }, per_space);
     }
     let absorbed: Vec<AbsorbedMemory> = absorbers.into_iter().map(|absorber| absorber.memory).collect();
-    if let Some(unused) = absorbed.iter().find(|memory| memory.differing_bytes == 0) {
-        return Err(Difference::UnusedAllowance { entry: UnusedEntry::Memory(unused.label.clone()) });
+    for unused in absorbed.iter().filter(|memory| memory.differing_bytes == 0) {
+        out.push(Difference::UnusedAllowance { entry: UnusedEntry::Memory(unused.label.clone()) });
     }
     Ok(absorbed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::run::ValidatedUpdate;
+
+    fn document() -> RunDocument {
+        RunDocument::parse(include_bytes!("../data/xm1-150.json")).unwrap()
+    }
+
+    fn merged(mut spans: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
+        spans.sort_unstable();
+        let mut out: Vec<(u64, u64)> = Vec::new();
+        for (start, end) in spans {
+            match out.last_mut() {
+                Some(last) if last.1 == start => last.1 = end,
+                _ => out.push((start, end)),
+            }
+        }
+        out
+    }
+
+    /// The path that reads physical byte `address`, if the plan captures it.
+    fn path_of(plan: &CapturePlan, address: u64) -> Option<ReadPath> {
+        let region = plan.regions.iter().find(|region| region.start <= address && address < region.end)?;
+        let at = address - region.start;
+        let read = region.reads.iter().find(|read| read.start <= at && at < read.end)?;
+        Some(match read.path {
+            ReadPath::Bus { address } => ReadPath::Bus { address: BusAddress(address.0 + at - read.start) },
+            ReadPath::Core { core, address } => ReadPath::Core { core, address: ProcessorAddress(address.0 + at - read.start) },
+        })
+    }
+
+    #[test]
+    fn the_plan_covers_every_backing_byte_exactly_once() {
+        let document = document();
+        let plan = capture_plan(&document).unwrap();
+        let mut covered: Vec<(u64, u64)> = plan.regions.iter().map(|region| (region.start, region.end))
+            .chain(plan.unreachable.iter().map(|span| (span.start, span.end))).collect();
+        covered.sort_unstable();
+        assert!(covered.windows(2).all(|pair| pair[0].1 <= pair[1].0), "{covered:#x?}");
+        let backings = run::memory_backings(&document).unwrap().iter().map(|ram| (ram.base, ram.base + ram.size as u64)).collect();
+        assert_eq!(merged(covered), merged(backings));
+        let core = |core, address| Some(ReadPath::Core { core, address: ProcessorAddress(address) });
+        assert_eq!(path_of(&plan, 0x9000_0000), core(Core::Primary, 0xffff_0000));
+        assert_eq!(path_of(&plan, 0x9000_0fff), core(Core::Primary, 0xffff_0fff));
+        assert_eq!(path_of(&plan, 0x9000_1000), core(Core::Primary, 0xffff_1000));
+        assert_eq!(path_of(&plan, 0x9000_ffff), core(Core::Primary, 0xffff_ffff));
+        assert_eq!(path_of(&plan, 0x9001_1000), core(Core::Secondary, 0xffff_1000));
+        assert_eq!(path_of(&plan, 0x9001_ffff), core(Core::Secondary, 0xffff_ffff));
+        assert_eq!(plan.unreachable, [Span::new(0x9001_0000, 0x9001_1000).unwrap()]);
+        assert!(matches!(path_of(&plan, 0), Some(ReadPath::Bus { .. })));
+        assert!(matches!(path_of(&plan, 0x8000_0000), Some(ReadPath::Bus { .. })));
+    }
+
+    #[test]
+    fn every_planned_region_reads_its_backing_on_an_unexecuted_board() {
+        fujimod_emulator_exr2_board::register_board_builder();
+        fujimod_emulator_models::register();
+        let document = document();
+        let update = ValidatedUpdate(vec![0xff; document.update_flash_offset + 2048]);
+        let rom: Vec<u8> = (0..0x4000u32).map(|index| (index * 7 + index / 251) as u8 | 1).collect();
+        let session = run::open(&document, &update, &rom).unwrap();
+        let board = &session.board;
+        board.write_memory(0, 0x4000_0000, b"dram").unwrap();
+        board.write_memory(0, 0xffff_0000, b"sram-0").unwrap();
+        board.write_memory(0, 0xffff_1000, b"sram-0b").unwrap();
+        board.write_memory(1, 0xffff_1000, b"sram-1").unwrap();
+        let plan = capture_plan(&document).unwrap();
+        let mut buffer = vec![0; READ_CHUNK];
+        for region in &plan.regions {
+            let mut offset = 0;
+            while offset < region.end - region.start {
+                let chunk = (region.end - region.start - offset).min(READ_CHUNK as u64) as usize;
+                read_region(board, region, offset, &mut buffer[..chunk]).unwrap();
+                offset += chunk as u64;
+            }
+        }
+        let at = |address: u64, length: usize| {
+            let region = plan.regions.iter().find(|region| region.start <= address && address < region.end).unwrap();
+            let mut bytes = vec![0; length];
+            read_region(board, region, address - region.start, &mut bytes).unwrap();
+            bytes
+        };
+        assert_eq!(at(0, 4), b"dram");
+        assert_eq!(at(0x8000_0000, 0x4000), rom);
+        assert_eq!(at(0x8010_0000, 0x100), rom[..0x100]);
+        assert_eq!(at(0x9000_0000, 6), b"sram-0");
+        assert_eq!(at(0x9000_1000, 7), b"sram-0b");
+        assert_eq!(at(0x9001_1000, 6), b"sram-1");
+    }
 }

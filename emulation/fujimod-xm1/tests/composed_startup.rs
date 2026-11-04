@@ -1,7 +1,7 @@
 use fujimod_emulator::board::observation::{WatchKinds, WatchRange};
 use fujimod_xm1::attach_state::{
-    self, AllowanceLabel, AttachRuleRefusal, AttachState, AttachVerdict, BoardLeaf, CaptureRegion, ContextRegister, CoreContext,
-    Occupant, Space, SpaceSpan, Span, StackCheck, UnusedEntry,
+    self, AllowanceLabel, AttachRuleRefusal, AttachState, AttachVerdict, BoardLeaf, BusAddress, CaptureRegion, ContextRegister, CoreContext,
+    Occupant, ProcessorAddress, ReadPath, RegionRead, Space, SpaceSpan, Span, StackCheck, UnusedEntry,
 };
 use fujimod_xm1::composed_catalog::{
     Bank, CatalogRefusal, Contract, Core, GuardBound, Label, Pc, PiecePolicy, PieceKind, PlanSpan, RangePlan, Role, Sha256,
@@ -10,7 +10,7 @@ use fujimod_xm1::composed_catalog::{
 use fujimod_xm1::composed_receipt::{
     ByteRange, CaptureDirectories, CarrierField, CarrierWrites, Difference, GuardObservation, GuardState, HexBytes, Identity,
     IdentityField, LabelCount, MenuObservation, Outcome, ReadCapture, Receipt, ReceiptKind, RecordedPolicy, Register, Row, SchemaTwo,
-    VerdictKind, WatchRow, Word, WriteKind, Writer, WriterCount, carrier_writes, compare,
+    Verdict, VerdictKind, WatchRow, Word, WriteKind, Writer, WriterCount, carrier_writes, compare,
 };
 use serde_json::{Value, json};
 use std::{
@@ -389,11 +389,14 @@ fn scratch() -> PathBuf {
     directory
 }
 
-/// Physical `[0, 0x80000)` and core 0's ATCM.
+/// Physical `[0, 0x80000)` read through two bus stretches, core 0's ATCM, and physical `[0x90000, 0x91000)` unreachable.
 fn write_capture(directory: &Path, spec: &Spec) -> AttachState {
+    let bus = |start: u64, end: u64, address: u64| RegionRead { start, end, path: ReadPath::Bus { address: BusAddress(address) } };
+    let atcm = ReadPath::Core { core: Core::Primary, address: ProcessorAddress(0) };
     let regions = [
-        CaptureRegion { space: Space::Physical, start: 0, end: 0x80000, view: None },
-        CaptureRegion { space: Space::Tcm { core: Core::Primary, bank: Bank::Instruction }, start: 0, end: 0x2000, view: None },
+        CaptureRegion { space: Space::Physical, start: 0, end: 0x80000, reads: vec![bus(0, 0x4000, 0x4000_0000), bus(0x4000, 0x80000, 0x4000)] },
+        CaptureRegion { space: Space::Tcm { core: Core::Primary, bank: Bank::Instruction }, start: 0, end: 0x2000,
+            reads: vec![RegionRead { start: 0, end: 0x2000, path: atcm }] },
     ];
     let (records, memory_sha256, memory_bytes) = attach_state::write_memory_snapshot(&directory.join(attach_state::MEMORY_FILE), &regions,
         |region, offset, buffer| {
@@ -410,14 +413,15 @@ fn write_capture(directory: &Path, spec: &Spec) -> AttachState {
         instructions: [5_000_000, 886_999],
         cores: spec.cores.clone(),
         regions: records,
+        unreachable: vec![Span::new(0x90000, 0x91000).unwrap()],
         memory_file: attach_state::FileRecord { path: attach_state::MEMORY_FILE.into(), sha256: memory_sha256, compressed_bytes: memory_bytes },
         board_file: attach_state::FileRecord { path: attach_state::BOARD_FILE.into(), sha256: board_sha256, compressed_bytes: board_bytes },
     }
 }
 
 /// Writes each role's capture from `spec(role)`, the composed one after `edit_owned`.
-fn compare_with(contract: &Contract, digest: &Sha256, mut retained: Receipt, mut owned: Receipt, edit_owned: impl FnOnce(&mut Spec),
-    after: impl FnOnce(&Path, &mut Receipt)) -> (Option<Difference>, Option<AttachVerdict>) {
+fn full_compare_with(contract: &Contract, digest: &Sha256, mut retained: Receipt, mut owned: Receipt, edit_owned: impl FnOnce(&mut Spec),
+    after: impl FnOnce(&Path, &mut Receipt)) -> Verdict {
     let (retained_directory, owned_directory) = (scratch(), scratch());
     retained.attach = Some(write_capture(&retained_directory, &spec(Role::Retained)));
     let mut owned_spec = spec(Role::Composed);
@@ -430,15 +434,26 @@ fn compare_with(contract: &Contract, digest: &Sha256, mut retained: Receipt, mut
         std::fs::remove_dir_all(directory).unwrap();
     }
     assert_eq!(result.verdict == VerdictKind::Equal, result.first_difference.is_none());
+    result
+}
+
+fn compare_with(contract: &Contract, digest: &Sha256, retained: Receipt, owned: Receipt, edit_owned: impl FnOnce(&mut Spec),
+    after: impl FnOnce(&Path, &mut Receipt)) -> (Option<Difference>, Option<AttachVerdict>) {
+    let result = full_compare_with(contract, digest, retained, owned, edit_owned, after);
     (result.first_difference, result.attach)
 }
 
-fn attach_verdict(value: &Value, edit_owned: impl FnOnce(&mut Spec)) -> (Option<Difference>, Option<AttachVerdict>) {
+fn attach_report(value: &Value, edit_owned: impl FnOnce(&mut Spec)) -> Verdict {
     let bytes = serde_json::to_vec(value).unwrap();
     let contract = Contract::parse(&bytes).unwrap();
     let digest = Sha256::of(&bytes);
     let (retained, owned) = (receipt(&contract, &digest, Role::Retained), receipt(&contract, &digest, Role::Composed));
-    compare_with(&contract, &digest, retained, owned, edit_owned, |_, _| {})
+    full_compare_with(&contract, &digest, retained, owned, edit_owned, |_, _| {})
+}
+
+fn attach_verdict(value: &Value, edit_owned: impl FnOnce(&mut Spec)) -> (Option<Difference>, Option<AttachVerdict>) {
+    let result = attach_report(value, edit_owned);
+    (result.first_difference, result.attach)
 }
 
 fn verdict(value: &Value, edit: impl FnOnce(&mut Receipt)) -> Option<Difference> {
@@ -865,6 +880,57 @@ fn board_differences_need_an_exact_or_declared_entry() {
 }
 
 #[test]
+fn a_board_refusal_does_not_hide_memory_differences() {
+    let tcm = Space::Tcm { core: Core::Primary, bank: Bank::Instruction };
+    let result = attach_report(&fixture(), |owned| {
+        owned.board["bus"]["devices"][0]["state"]["count"] = json!(2);
+        owned.bytes.insert((Space::Physical, 0x300), 1);
+        owned.bytes.insert((tcm, 0x1ff8), 7);
+    });
+    let board = Difference::AttachBoard { pointer: BoardLeaf("/bus/devices/0/state/count".into()), retained: "1".into(), owned: "2".into() };
+    assert_eq!(result.verdict, VerdictKind::Different);
+    assert_eq!(result.first_difference, Some(board.clone()));
+    assert_eq!(result.attach_differences.entries, [
+        board,
+        Difference::AttachMemory {
+            space: Space::Physical, start: 0x300, end: 0x301, differing_bytes: 1,
+            runs: vec![SpaceSpan { space: Space::Physical, start: 0x300, end: 0x301 }],
+        },
+        Difference::AttachMemory { space: tcm, start: 0x1ff8, end: 0x1ff9, differing_bytes: 1, runs: vec![SpaceSpan { space: tcm, start: 0x1ff8, end: 0x1ff9 }] },
+    ]);
+    assert_eq!((result.attach_differences.total, result.attach_differences.truncated), (3, false));
+}
+
+#[test]
+fn attach_differences_stop_at_the_limit_and_keep_the_total() {
+    let result = attach_report(&fixture(), |owned| {
+        let state = owned.board["bus"]["devices"][0]["state"].as_object_mut().unwrap();
+        for index in 0..300 {
+            state.insert(format!("added-{index:03}"), json!(index));
+        }
+    });
+    let differences = &result.attach_differences;
+    assert_eq!((differences.entries.len(), differences.total, differences.truncated), (attach_state::ATTACH_DIFFERENCE_LIMIT, 300, true));
+    assert_eq!(result.first_difference, Some(Difference::AttachBoard {
+        pointer: BoardLeaf("/bus/devices/0/state/added-000".into()), retained: "absent".into(), owned: "0".into(),
+    }));
+    assert_eq!(differences.entries.last(), Some(&Difference::AttachBoard {
+        pointer: BoardLeaf("/bus/devices/0/state/added-255".into()), retained: "absent".into(), owned: "255".into(),
+    }));
+}
+
+#[test]
+fn a_difference_outside_the_attach_state_lists_no_attach_differences() {
+    let bytes = serde_json::to_vec(&fixture()).unwrap();
+    let contract = Contract::parse(&bytes).unwrap();
+    let digest = Sha256::of(&bytes);
+    let (retained, owned) = (receipt(&contract, &digest, Role::Retained), receipt(&contract, &digest, Role::Composed));
+    let result = full_compare_with(&contract, &digest, retained, owned, |_| {}, |_, owned| { owned.rows.pop(); owned.counts.pop(); });
+    assert!(matches!(result.first_difference, Some(Difference::Sequence { .. })));
+    assert_eq!(result.attach_differences.total, 0);
+}
+
+#[test]
 fn an_absent_carrier_part_compares_as_memory_and_admits_allowances() {
     let in_carrier = |owned: &mut Spec| { owned.bytes.insert((Space::Physical, 24600), 3); };
     assert!(matches!(attach_verdict(&fixture(), in_carrier).0, Some(Difference::AttachMemory { start: 24600, .. })));
@@ -889,6 +955,14 @@ fn a_capture_file_that_differs_from_its_binding_refuses() {
     assert!(matches!(difference, Some(Difference::AttachSnapshot { role: Role::Composed, .. })));
     let (difference, _) = compare_with(&contract, &digest, retained.clone(), owned.clone(), |_| {}, |_, owned| {
         owned.attach.as_mut().unwrap().regions[0].sha256 = zeros(4);
+    });
+    assert!(matches!(difference, Some(Difference::AttachSnapshot { role: Role::Composed, .. })));
+    let (difference, _) = compare_with(&contract, &digest, retained.clone(), owned.clone(), |_| {}, |_, owned| {
+        owned.attach.as_mut().unwrap().unreachable.clear();
+    });
+    assert!(matches!(difference, Some(Difference::AttachSnapshot { role: Role::Composed, .. })));
+    let (difference, _) = compare_with(&contract, &digest, retained.clone(), owned.clone(), |_| {}, |_, owned| {
+        owned.attach.as_mut().unwrap().regions[0].reads[0].path = ReadPath::Bus { address: BusAddress(0) };
     });
     assert!(matches!(difference, Some(Difference::AttachSnapshot { role: Role::Composed, .. })));
     let (difference, _) = compare_with(&contract, &digest, retained, owned, |_| {}, |_, owned| owned.attach = None);
