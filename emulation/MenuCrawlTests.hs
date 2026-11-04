@@ -69,8 +69,8 @@ fake start step = do
         , driverPress = \name key -> do
             guest <- held name
             modifyIORef' clock (+ 1)
-            modifyIORef' hits (++ [TraceHit "crawl-dispatch-context" 0 0 (fromIntegral (syntheticMenu (guestScreen guest))) 0 (fromIntegral (fromEnum key)) 0 Nothing []
-                                  , TraceHit "crawl-dispatch-action" 0 0 0 0 0 (0x00c00000 + fromIntegral (fromEnum key)) Nothing []])
+            modifyIORef' hits (++ [TraceHit "crawl-dispatch-context" 0 0 (fromIntegral (syntheticMenu (guestScreen guest))) 0 (fromIntegral (fromEnum key)) 0 Nothing Nothing []
+                                  , TraceHit "crawl-dispatch-action" 0 0 0 0 0 (0x00c00000 + fromIntegral (fromEnum key)) Nothing Nothing []])
             case step (guestDial guest) (guestScreen guest) key of
               Just next -> do
                 writeIORef current guest { guestScreen = next }
@@ -232,13 +232,13 @@ main = do
   check "each root starts from the boot snapshot" (sort [menu | node <- graphNodes dialGraph, nodeDepth node == 0, Just menu <- [menuOf node]] == [0, 50])
 
   let activity = stepActivity
-        [ TraceHit "crawl-dispatch-context" 0 1 75 0 2 0 Nothing []
-        , TraceHit "crawl-dispatch-context" 1 2 30 0 4 0 Nothing []
-        , TraceHit "crawl-dispatch-action" 0 3 0 0 0 0xc72e10 Nothing []
-        , TraceHit "crawl-dispatch-context" 0 4 100 0 0 0 Nothing []
-        , TraceHit "crawl-dispatch-action" 0 5 0 0 0 0xc12aac Nothing []
-        , TraceHit "crawl-dispatch-action" 0 6 0 0 0 0xdead00 Nothing []
-        , TraceHit "crawl-property-write" 0 7 0xfe 3 0 0 Nothing []
+        [ TraceHit "crawl-dispatch-context" 0 1 75 0 2 0 Nothing Nothing []
+        , TraceHit "crawl-dispatch-context" 1 2 30 0 4 0 Nothing Nothing []
+        , TraceHit "crawl-dispatch-action" 0 3 0 0 0 0xc72e10 Nothing Nothing []
+        , TraceHit "crawl-dispatch-context" 0 4 100 0 0 0 Nothing Nothing []
+        , TraceHit "crawl-dispatch-action" 0 5 0 0 0 0xc12aac Nothing Nothing []
+        , TraceHit "crawl-dispatch-action" 0 6 0 0 0 0xdead00 Nothing Nothing []
+        , TraceHit "crawl-property-write" 0 7 0xfe 3 0 0 Nothing Nothing []
         ]
   check "actions pair with their own core's latest context" (map (\d -> (dispatchController d, dispatchAction d)) (activityDispatches activity)
     == [(75, Just 0xc72e10), (30, Nothing), (100, Just 0xc12aac)])

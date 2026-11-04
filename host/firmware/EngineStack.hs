@@ -126,6 +126,8 @@ walk elf inRuntime isData function = go S.empty [functionStart function] 0 []
               A32.Branch _ True _ -> [A32.Reg n | n <- [0 .. 3] ++ [12, 14]]
               A32.BranchExchange _ True _ -> [A32.Reg n | n <- [0 .. 3] ++ [12, 14]]
               _ -> []
+            unaccounted = Left (name ++ ": stack pointer write at " ++ hex address ++ " is neither an immediate adjustment nor a restore from r11")
+            framePointer = A32.Reg 11
         case A32.decode address word of
           A32.StoreMultiple _ base A32.DecrementBefore True regs | base == A32.sp -> continue (4 * fromIntegral (length regs)) []
           A32.Store _ _ _ base (A32.OffsetImmediate offset) A32.PreIndexed | base == A32.sp && offset < 0 ->
@@ -133,7 +135,12 @@ walk elf inRuntime isData function = go S.empty [functionStart function] 0 []
           A32.DataProcessing _ A32.SUB _ rd rn (A32.Immediate amount) | rd == A32.sp && rn == A32.sp -> continue amount []
           A32.DataProcessing _ A32.SUB _ rd rn _ | rd == A32.sp && rn == A32.sp ->
             Left (name ++ ": variable stack reservation at " ++ hex address)
-          A32.DataProcessing _ _ _ rd _ _ | rd == A32.sp -> continue 0 []
+          A32.DataProcessing _ A32.ADD _ rd rn (A32.Immediate _) | rd == A32.sp && rn == A32.sp -> continue 0 []
+          A32.DataProcessing _ op _ rd rn (A32.Immediate _)
+            | rd == A32.sp && rn == framePointer && op `elem` [A32.ADD, A32.SUB] -> continue 0 []
+          A32.DataProcessing _ A32.MOV _ rd _ (A32.ShiftedImmediate source A32.LSL 0)
+            | rd == A32.sp && source == framePointer -> continue 0 []
+          A32.DataProcessing _ _ _ rd _ _ | rd == A32.sp -> unaccounted
           A32.DataProcessing cond A32.MOV _ rd _ (A32.ShiftedImmediate source A32.LSL 0) | rd == A32.pc && source == A32.lr ->
             stopIf cond 0 [] []
           A32.DataProcessing _ _ _ rd _ _ | rd == A32.pc -> Left (name ++ ": computed branch at " ++ hex address)
@@ -149,12 +156,18 @@ walk elf inRuntime isData function = go S.empty [functionStart function] 0 []
             | otherwise -> do
                 targets <- exitsThrough register
                 stopIf cond 0 [] targets
+          A32.LoadMultiple _ base mode True _ | base == A32.sp && mode /= A32.IncrementAfter -> unaccounted
+          A32.LoadMultiple _ _ _ _ regs | A32.sp `elem` regs -> unaccounted
           A32.LoadMultiple cond _ _ _ regs | A32.pc `elem` regs -> stopIf cond 0 [] []
           A32.Load cond _ _ rt base _ A32.PostIndexed | rt == A32.pc && base == A32.sp -> stopIf cond 0 [] []
+          A32.Load _ _ _ _ base _ A32.PreIndexed | base == A32.sp -> unaccounted
+          A32.Store _ _ _ base _ indexing | base == A32.sp && indexing /= A32.OffsetOnly -> unaccounted
+          A32.StoreMultiple _ base _ True _ | base == A32.sp -> unaccounted
           A32.Load _ _ _ rt _ _ _ | rt == A32.pc -> Left (name ++ ": loaded branch at " ++ hex address)
           A32.Rejected (A32.Coprocessor coprocessor) | coprocessor `elem` [10, 11] ->
             Left (name ++ ": floating-point instruction at " ++ hex address ++ " is not accounted")
           A32.Rejected A32.UndefinedEncoding -> go seen' rest frame exits
+          instruction | A32.sp `elem` written instruction -> unaccounted
           _ -> continue 0 []
 
 -- | The depth of `root`: its frame plus the deepest of its callees, recursively.

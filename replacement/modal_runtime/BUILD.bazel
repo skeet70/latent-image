@@ -547,6 +547,8 @@ haskell_binary(
     deps = [
         ":menu-engine-pair-lib",
         ":menu-engine-tree-lib",
+        "//host/firmware:bank-allowlist",
+        "//host/firmware:ram-push-layout",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",

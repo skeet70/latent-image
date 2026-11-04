@@ -52,17 +52,26 @@ stage kind slot ident = StageEvent kind slot ident 0
 
 entry :: Int -> Word32 -> Word32 -> StageEvent -> Hit
 entry core record cursor (StageEvent kind slot ident extra) =
-  Hit StageEntry core (kind, slot, ident, extra) (Just 0xca4680) [blockBytesFor record cursor (rowsIn record), B.replicate 8 0]
+  Hit StageEntry core (kind, slot, ident, extra) (Just 0xca4680) Nothing [blockBytesFor record cursor (rowsIn record), B.replicate 8 0]
 
 fallback :: Int -> Hit
-fallback core = Hit KindSwitch core (0, 0, 0, 0) (Just fallbackReturn) []
+fallback core = Hit KindSwitch core (0, 0, 0, 0) (Just fallbackReturn) Nothing []
 
 post :: Word32 -> Hit
-post token = Hit EventPost 0 (0x1d, 0xf6, token, 0xf000) (Just 0xca47f0) []
+post token = Hit EventPost 0 (0x1d, 0xf6, token, 0xf000) (Just 0xca47f0) Nothing []
 
 segment :: [(B.ByteString)] -> [Hit] -> Observation
 segment blocks hits = Observation "picker-keys"
   ([(label, B.replicate 8 1) | label <- drop 1 engineReads] ++ [("menu-block", block) | block <- blocks]) hits
+
+entryAt :: Word32 -> Hit
+entryAt sp = (entry 0 0x1000 0 (stage 4 3 1)) {hitSp = Just sp}
+
+-- | A segment whose task-1 stack read has one word changed at `offset` (none for 0).
+stacked :: Int -> [Hit] -> Observation
+stacked offset hits = Observation "picker-keys" [("task1-stack", stack)] hits
+ where
+  stack = if offset == 0 then B.replicate 0xc00 0 else B.replicate offset 0 <> B.pack [1, 0, 0, 0] <> B.replicate (0xc00 - offset - 4) 0
 
 main :: IO ()
 main = do
@@ -92,9 +101,19 @@ main = do
         , ("the stock role reaches the fallback site for every class",
             fmap summaryFallbackEntries (checkRole tree StockRole [segment [] [entry 0 0x1000 0 (stage 0xe 3 0x1d), fallback 0]]) == Right 1)
         , ("an entry to the adapter's guard trap fails the role",
-            isLeft (checkRole tree OwnedRole [segment [] [Hit GuardTrap 0 (0, 0, 0, 0) (Just 0) []]]))
+            isLeft (checkRole tree OwnedRole [segment [] [Hit GuardTrap 0 (0, 0, 0, 0) (Just 0) Nothing []]]))
         , ("a stage entry without its block read refuses",
-            isLeft (checkRole tree OwnedRole [segment [] [Hit StageEntry 0 (4, 3, 1, 0) Nothing []]]))
+            isLeft (checkRole tree OwnedRole [segment [] [Hit StageEntry 0 (4, 3, 1, 0) Nothing Nothing []]]))
+        , ("entries within the bound and an unchanged stack pass the stack check",
+            checkStack 2000 [stacked 0 [entryAt 0x00a4cc78], stacked 0 []] == Right (StackReport (Just (0x00a4cc78 - 2000)) Nothing))
+        , ("an entry whose sp less the bound falls below task 1's stack fails",
+            isLeft (checkStack 2000 [stacked 0 [entryAt 0x00a4c900]]))
+        , ("the lowest changed stack word is the high-water mark",
+            fmap stackHighWater (checkStack 2000 [stacked 0 [entryAt 0x00a4cc78], stacked 0x800 []]) == Right (Just (0x00a4c200 + 0x800)))
+        , ("a high-water mark below the bound's floor fails",
+            isLeft (checkStack 2000 [stacked 0 [entryAt 0x00a4cc78], stacked 0x100 []]))
+        , ("a stage entry without sp refuses the stack check",
+            isLeft (checkStack 2000 [stacked 0 [entry 0 0x1000 0 (stage 4 3 1)]]))
         , ("a block total other than the open node's rows falls back for every kind",
             all (\kind -> fmap (\block -> deriveClass tree block (stage kind 3 1)) (menuBlock (blockBytesFor 0x1000 0 3)) == Right (FallbackEvent RowTotal)) [4, 5, 0xe, 0xf, 1])
         , ("a push to a package node falls back", classOf 0x7000 0 (stage 0xe 3 0x1d) == Right (FallbackEvent PackageChildRow))

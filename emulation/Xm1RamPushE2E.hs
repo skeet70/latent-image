@@ -1337,6 +1337,7 @@ data SegmentRunner = SegmentRunner
   , runnerStop :: T.Text -> String -> IO ()
   , runnerTraceLabels :: [String]
   , runnerLrLabels :: [String]
+  , runnerSpLabels :: [String]
   , runnerHits :: IORef Int
   , runnerObservations :: IORef [Value]
   , runnerReads :: IORef [CapturedRead]
@@ -1349,6 +1350,7 @@ newSegmentRunner emulator receipt timedAction readAddress stopAction plan = do
   (recorded, _) <- emulatorTraceHits emulator 0
   SegmentRunner emulator receipt timedAction readAddress stopAction (map traceSiteLabel (planTraceSites plan))
     [traceSiteLabel site | site <- planTraceSites plan, traceSiteLr site == RecordsLr]
+    [traceSiteLabel site | site <- planTraceSites plan, traceSiteSp site == RecordsSp]
     <$> newIORef recorded <*> newIORef [] <*> newIORef [] <*> pure EnforceSnapshotPreservation
 
 -- | The plan's trajectory-declared sites in the bridge's form, with each site's entry reads.
@@ -1377,13 +1379,14 @@ traceSiteValues sites =
       ++ ["reads" .= [object ["address" .= eightHex start, "length" .= count] | (start, count) <- ranges] | not (null ranges)])
   | (address, label, ranges) <- sites ]
 
--- | A declared hit; its lr only for a site in `lrLabels` (`traceSiteLr`).
-traceHitValue :: [String] -> TraceHit -> Value
-traceHitValue lrLabels hit = object (
+-- | A declared hit; its lr only for a site in `lrLabels` and its sp only for one in `spLabels`.
+traceHitValue :: [String] -> [String] -> TraceHit -> Value
+traceHitValue lrLabels spLabels hit = object (
   [ "site" .= traceSite hit, "core" .= traceCore hit, "instructions" .= traceInstructions hit
   , "r0" .= hexAddress (traceR0 hit), "r1" .= hexAddress (traceR1 hit)
   , "r2" .= hexAddress (traceR2 hit), "r3" .= hexAddress (traceR3 hit) ]
-  ++ ["lr" .= hexAddress lr | Just lr <- [traceLr hit]]
+  ++ ["lr" .= hexAddress lr | traceSite hit `elem` lrLabels, Just lr <- [traceLr hit]]
+  ++ ["sp" .= hexAddress sp | traceSite hit `elem` spLabels, Just sp <- [traceSp hit]]
   ++ ["memory" .= map hexBytes (traceMemory hit) | not (null (traceMemory hit))])
 
 -- | Runs each segment and returns its capture receipt.
@@ -1459,7 +1462,7 @@ runSegments runner = mapM $ \segment -> runnerTimed runner ("segment " <> segmen
                           , "d3_hook_r0" .= map hexAddress hookRows
                           , "classic_chrome_site_entries" .= ccHits
                           , "menu_messages" .= map hexAddress drawn
-                          , "trace_hits" .= map (traceHitValue (runnerLrLabels runner)) declaredHits ]
+                          , "trace_hits" .= map (traceHitValue (runnerLrLabels runner) (runnerSpLabels runner)) declaredHits ]
                           ++ [ "film_identity" .= object
                                ["expected_row" .= fromEnum expected, "expected_stored_code" .= filmStoredCode expected,
                                 "stored_code" .= actual]

@@ -8,13 +8,15 @@ def engine_reads: [
   ["snapshot-depth1-0", "0093eb74", 2948],
   ["snapshot-depth1-1", "0093f6f8", 2948],
   ["snapshot-depth2-0", "009412d4", 2948],
-  ["snapshot-depth2-1", "00941e58", 2948]
+  ["snapshot-depth2-1", "00941e58", 2948],
+  # Task 1's whole stack, for the checker's measured high-water mark; not compared between roles.
+  ["task1-stack", "00a4c200", 3072]
 ];
-# The stage entry reads the block and the last-move pair at each event; the kind switch's and the
-# seek's lr tell 0xbf95c8's call (and the owned fallback, which resumes there) from the adapter's
-# service calls.
+# The stage entry reads the block and the last-move pair and keeps sp at each event; the kind
+# switch's and the seek's lr tell 0xbf95c8's call (and the owned fallback, which resumes there)
+# from the adapter's service calls.
 def engine_sites($role): [
-  ["00d4dd2c", "menu-stage-entry", {"reads": [["009571d0", 1072], ["01467580", 8]]}],
+  ["00d4dd2c", "menu-stage-entry", {"reads": [["009571d0", 1072], ["01467580", 8]], "sp": true}],
   ["00bfa234", "menu-kind-switch", {"lr": true}],
   ["00bfad04", "menu-seek", {"lr": true}],
   ["0063270c", "menu-event-post"]

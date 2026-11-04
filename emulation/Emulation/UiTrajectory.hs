@@ -18,6 +18,7 @@ module Emulation.UiTrajectory
   , TraceSite (..)
   , SiteRead (..)
   , SiteLr (..)
+  , SiteSp (..)
   , Trajectories (..)
   , TrajectoryProtection (..)
   , TrajectoryExpect (..)
@@ -238,15 +239,19 @@ keyPulse budget = do
   pure pulse
 
 -- | An A32 instruction address whose every entry the bridge records with r0-r3, under a label,
--- with the site's physical reads at entry; the e2e keeps lr for a site with reads or `"lr": true`.
+-- with the site's physical reads at entry; the e2e keeps lr for a site with reads or `"lr": true`,
+-- and sp for `"sp": true`.
 data TraceSite = TraceSite
   { traceSiteAddress :: ReadAddress
   , traceSiteLabel :: String
   , traceSiteReads :: [SiteRead]
   , traceSiteLr :: SiteLr
+  , traceSiteSp :: SiteSp
   } deriving (Eq, Show)
 
 data SiteLr = RecordsLr | OmitsLr deriving (Eq, Show)
+
+data SiteSp = RecordsSp | OmitsSp deriving (Eq, Show)
 
 -- | A physical range a trace site reads at each entry: start and byte count, 1..4096.
 data SiteRead = SiteRead { siteReadStart :: Word32, siteReadCount :: Int } deriving (Eq, Show)
@@ -266,16 +271,17 @@ instance FromJSON TraceSite where
         when (word `mod` 4 /= 0) (fail ("trace site address must be word aligned: " ++ T.unpack address))
       RuntimeSymbol _ offset -> when (offset `mod` 4 /= 0) (fail ("trace site offset must be word aligned: " ++ T.unpack address))
     when (null label || label `elem` reservedLabels) (fail ("trace site label is empty or reserved: " ++ label))
-    (entryReads, wantsLr) <- case options of
-      Nothing -> pure ([], False)
+    (entryReads, wantsLr, wantsSp) <- case options of
+      Nothing -> pure ([], False, False)
       Just fields -> do
-        unless (all (`elem` ["reads", "lr"]) (KM.keys fields)) (fail "trace site options take reads and lr")
-        (,) <$> fields .:? "reads" .!= [] <*> fields .:? "lr" .!= False
+        unless (all (`elem` ["reads", "lr", "sp"]) (KM.keys fields)) (fail "trace site options take reads, lr and sp")
+        (,,) <$> fields .:? "reads" .!= [] <*> fields .:? "lr" .!= False <*> fields .:? "sp" .!= False
     siteReads <- forM (entryReads :: [(T.Text, Int)]) $ \(start, count) -> case readAddress start of
       Right (FixedAddress word) | T.length start == 8, count >= 1, count <= 4096, toInteger word + toInteger count <= 0x100000000 ->
         pure (SiteRead word count)
       _ -> fail ("trace site read must be eight hex digits and 1..4096 bytes: " ++ T.unpack start)
-    pure (TraceSite site label siteReads (if wantsLr || not (null siteReads) then RecordsLr else OmitsLr))
+    pure (TraceSite site label siteReads (if wantsLr || not (null siteReads) then RecordsLr else OmitsLr)
+      (if wantsSp then RecordsSp else OmitsSp))
 
 -- | The declared protected state. A route declares at most one protection form.
 data TrajectoryProtection

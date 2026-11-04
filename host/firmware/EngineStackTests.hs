@@ -70,6 +70,9 @@ main = do
         , ("a stock callee adds nothing", depthOf (root ++ callee) functions "callee" == Right 20)
         , ("recursion refuses", isLeft (depthOf [push4lr, bl base base, pop4pc] [("loop", base, 12)] "loop"))
         , ("a variable reservation refuses", isLeft (depthOf [push4lr, 0xe04dd000, pop4pc] [("alloca", base, 12)] "alloca"))
+        , ("a restore of sp from r11 is accepted", depthOf [push4lr, sub16, 0xe1a0d00b, pop4pc] [("restore", base, 16)] "restore" == Right 24)
+        , ("a register move into sp refuses", isLeft (depthOf [push4lr, 0xe1a0d000, pop4pc] [("moved", base, 12)] "moved"))
+        , ("a load into sp refuses", isLeft (depthOf [push4lr, 0xe590d000, pop4pc] [("loaded", base, 12)] "loaded"))
         , ("a call into the middle of a function refuses",
             isLeft (depthOf ([push4lr, sub16, bl (base + 8) (base + 24), add16, pop4pc] ++ callee) functions "root"))
         , ("a missing root refuses", isLeft (depthOf (root ++ callee) functions "absent"))

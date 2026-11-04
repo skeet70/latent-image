@@ -17,6 +17,9 @@ module Replacement.ModalRuntime.MenuEnginePair
   , parseSite
   , fallbackReturn
   , engineReads
+  , StackReport (..)
+  , checkStack
+  , taskStackStart
   ) where
 
 import Control.Monad (foldM, forM, unless, when)
@@ -46,12 +49,13 @@ parseSite label = case label of
   "menu-engine-guard-failure" -> GuardTrap
   other -> OtherSite other
 
--- | One recorded trace hit: site, core, r0-r3, lr and the site's reads at entry.
+-- | One recorded trace hit: site, core, r0-r3, lr, sp and the site's reads at entry.
 data Hit = Hit
   { hitSite :: Site
   , hitCore :: Int
   , hitRegisters :: (Word32, Word32, Word32, Word32)
   , hitLr :: Maybe Word32
+  , hitSp :: Maybe Word32
   , hitMemory :: [B.ByteString]
   }
   deriving (Eq, Show)
@@ -91,9 +95,51 @@ parseObservation = J.withObject "e2e observation" $ \fields -> do
     let register name = hexWord =<< hit .: name
     registers <- (,,,) <$> register "r0" <*> register "r1" <*> register "r2" <*> register "r3"
     lr <- traverse hexWord =<< hit .:? "lr"
+    sp <- traverse hexWord =<< hit .:? "sp"
     memory <- maybe (pure []) (mapM hexBytes) =<< hit .:? "memory"
-    Hit <$> (parseSite <$> hit .: "site") <*> hit .: "core" <*> pure registers <*> pure lr <*> pure memory)
+    Hit <$> (parseSite <$> hit .: "site") <*> hit .: "core" <*> pure registers <*> pure lr <*> pure sp <*> pure memory)
   pure (Observation phase segmentReads hits)
+
+-- | Task 1's stack, `[0x00a4c200, 0x00a4ce00)` (E-RECOVERY-MAINUI-CREATE-150).
+taskStackStart, taskStackBytes :: Word32
+taskStackStart = 0x00a4c200
+taskStackBytes = 0xc00
+
+-- | The read of task 1's whole stack in each segment.
+taskStackRead :: T.Text
+taskStackRead = "task1-stack"
+
+-- | The lowest address the static bound lets any stage event reach, and the lowest stack word the
+-- run changed.
+data StackReport = StackReport {stackFloor :: Maybe Integer, stackHighWater :: Maybe Word32}
+  deriving (Eq, Show)
+
+-- | Each stage entry's sp less `required` (the engine's and modal dispatcher's static depth plus
+-- the stock margin) must stay at or above the stack's start; the lowest stack word that changed
+-- between any two segments' reads must not lie below the lowest such floor.
+checkStack :: Word32 -> [Observation] -> Either String StackReport
+checkStack required observations = do
+  floors <- forM [(observationPhase observation, hit) | observation <- observations, hit <- observationHits observation, hitSite hit == StageEntry] $
+    \(phase, hit) -> case hitSp hit of
+      Nothing -> Left ("stage entry without sp in " ++ T.unpack phase)
+      Just sp -> Right (toInteger sp - toInteger required)
+  case [floor_ | floor_ <- floors, floor_ < toInteger taskStackStart] of
+    floor_ : _ -> Left ("a stage entry leaves the bound " ++ show (toInteger taskStackStart - floor_) ++ " bytes below task 1's stack")
+    [] -> Right ()
+  stacks <- forM observations $ \observation -> case [bytes | (name, bytes) <- observationReads observation, name == taskStackRead] of
+    [bytes] | B.length bytes == fromIntegral taskStackBytes -> Right bytes
+    _ -> Left ("task 1's stack read is missing or short in " ++ T.unpack (observationPhase observation))
+  let changed = case stacks of
+        first : rest -> [offset | offset <- [0, 4 .. fromIntegral taskStackBytes - 4], any (\later -> B.take 4 (B.drop offset later) /= B.take 4 (B.drop offset first)) rest]
+        [] -> []
+      highWater = case changed of
+        offset : _ -> Just (taskStackStart + fromIntegral offset)
+        [] -> Nothing
+      lowest = if null floors then Nothing else Just (minimum floors)
+  case (highWater, lowest) of
+    (Just mark, Just floor_) | toInteger mark < floor_ ->
+      Left ("task 1's stack changed at " ++ show mark ++ ", below the bound's floor " ++ show floor_)
+    _ -> Right (StackReport lowest highWater)
 
 -- | A role's events by class and its fallback-site entries.
 data RoleSummary = RoleSummary

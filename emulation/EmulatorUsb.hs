@@ -349,7 +349,7 @@ emulatorTraceSitesReading emulator sites = do
   pure ()
 
 -- | One recorded entry into a traced site: its label, the core, the guest instruction count,
--- r0-r3 and lr at entry, and the site's reads at entry.
+-- r0-r3, lr and sp at entry, and the site's reads at entry.
 data TraceHit = TraceHit
   { traceSite :: String
   , traceCore :: Int
@@ -359,6 +359,7 @@ data TraceHit = TraceHit
   , traceR2 :: Word32
   , traceR3 :: Word32
   , traceLr :: Maybe Word32
+  , traceSp :: Maybe Word32
   , traceMemory :: [B.ByteString]
   } deriving (Eq, Show)
 
@@ -389,10 +390,12 @@ emulatorTraceHits emulator start = do
         Object registers -> pure registers
         _ -> ioError (userError "emulator trace hit registers must be an object")
       let register name = textField name registers >>= hexWord name
-      lr <- case M.lookup "lr" item of
-        Nothing -> pure Nothing
-        Just (String text) -> Just <$> hexWord "lr" (T.unpack text)
-        Just _ -> ioError (userError "emulator trace hit lr must be a hex string")
+      let optionalWord name = case M.lookup (K.fromString name) item of
+            Nothing -> pure Nothing
+            Just (String text) -> Just <$> hexWord name (T.unpack text)
+            Just _ -> ioError (userError ("emulator trace hit " ++ name ++ " must be a hex string"))
+      lr <- optionalWord "lr"
+      sp <- optionalWord "sp"
       memory <- case M.lookup "memory" item of
         Nothing -> pure []
         Just (Array entries) -> mapM (\entry -> case entry of
@@ -400,7 +403,7 @@ emulatorTraceHits emulator start = do
           _ -> ioError (userError "emulator trace hit memory must be hex strings")) (foldr (:) [] entries)
         Just _ -> ioError (userError "emulator trace hit memory must be an array")
       TraceHit site core instructions <$> register "r0" <*> register "r1" <*> register "r2" <*> register "r3"
-        <*> pure lr <*> pure memory
+        <*> pure lr <*> pure sp <*> pure memory
     hit _ = ioError (userError "emulator trace hit must be an object")
 
 -- | The bridge's hit records from index `start` on, unchanged, with their `lr`, `sp` and `cpsr`.
