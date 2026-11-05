@@ -46,7 +46,7 @@ putWord address value bytes = let offset = fromIntegral (address - image4Base) i
 
 -- A synthetic image4, carrier and contract.
 
-image4Base, carrierStart, carrierEnd, fillWord, rustBody, retiredGetter, retiredSetter, getterCall, setterCall :: Word32
+image4Base, carrierStart, carrierEnd, fillWord, rustBody, retiredGetter, retiredSetter, slotGetter, slotSetter, getterCall, setterCall :: Word32
 image4Base = 0x61c400
 carrierStart = 0x62c4b0
 carrierEnd = 0x62c530
@@ -54,6 +54,8 @@ fillWord = 0xe7f000f0
 rustBody = 0x62c4f0
 retiredGetter = 0x621100
 retiredSetter = 0x622100
+slotGetter = 0x621180
+slotSetter = 0x622280
 getterCall = 0x620000
 setterCall = 0x620010
 
@@ -75,10 +77,11 @@ storeSite accessor = carrierStart + 16 * fromIntegral (fromEnum accessor) + 8
 canonical4 :: B.ByteString
 canonical4 = foldr (uncurry putWord) (B.replicate 0x20000 0)
   [ (getterCall, branchLink getterCall getterEntry), (setterCall, branchLink setterCall setterEntry)
-  , (0x623000, retiredGetter), (0x623004, retiredSetter) ]
+  , (0x623000, retiredGetter), (0x623004, retiredSetter), (0x623008, slotGetter), (0x62300c, slotSetter) ]
 
 staged4 :: B.ByteString
-staged4 = foldr (uncurry putWord) spliced [(0x623000, carrierStart), (0x623004, carrierStart + 0x10)]
+staged4 = foldr (uncurry putWord) spliced
+  [(0x623000, carrierStart), (0x623004, carrierStart + 0x10), (0x623008, carrierStart), (0x62300c, carrierStart + 0x10)]
  where
   offset address = fromIntegral (address - image4Base)
   fill = littleWords (replicate ((fromIntegral (carrierEnd - carrierStart) - B.length linked) `div` 4) fillWord)
@@ -102,7 +105,9 @@ contractBytes = BL.toStrict (A.encode (object
   , "carrier" .= object ["start" .= carrierStart, "end" .= carrierEnd, "fill_word" .= fillWord]
   , "patch" .= object ["words" .=
       [ object ["address" .= (0x623000 :: Word32), "original" .= retiredGetter, "patched" .= carrierStart, "property" .= (5 :: Int), "table" .= ("getter" :: T.Text)]
-      , object ["address" .= (0x623004 :: Word32), "original" .= retiredSetter, "patched" .= (carrierStart + 0x10), "property" .= (5 :: Int), "table" .= ("setter" :: T.Text)] ]]
+      , object ["address" .= (0x623004 :: Word32), "original" .= retiredSetter, "patched" .= (carrierStart + 0x10), "property" .= (5 :: Int), "table" .= ("setter" :: T.Text)]
+      , object ["address" .= (0x623008 :: Word32), "original" .= slotGetter, "patched" .= carrierStart, "property" .= (7 :: Int), "table" .= ("getter" :: T.Text)]
+      , object ["address" .= (0x62300c :: Word32), "original" .= slotSetter, "patched" .= (carrierStart + 0x10), "property" .= (7 :: Int), "table" .= ("setter" :: T.Text)] ]]
   , "classification" .= object ["properties" .= [property index | index <- [0 .. 644 :: Word32]]]
   , "source_sha256" .= object ["dat" .= sourceDat]
   , "scan" .= object ["images" .= (scanImage "image4" image4Base canonical4 : [scanImage (imageNameWire name) base (images M.! name) | (name, base) <- otherImages])]
@@ -120,6 +125,8 @@ contractBytes = BL.toStrict (A.encode (object
   arms index
     | index == 5 = ("owned-field", retiredGetter, retiredSetter)
     | index == 6 = ("delegated", 0x621140, 0x622200)
+    | index == 7 = ("owned-slot-field", slotGetter, slotSetter)
+    | index == 8 = ("delegated", 0x6211c0, 0x6222c0)
     | otherwise = ("delegated", 0x621000, 0x622000)
 
 crawlRoute :: RouteName
@@ -332,9 +339,13 @@ otherSetter :: Call
 otherSetter = Call [5, 1, 0, 0] (setterCall + 4) (Just 0)
 
 retainedSidecars :: Role -> T.Text -> RetainedObservation
-retainedSidecars role status = RetainedObservation receipt (obsSteps base) (obsHits base)
+retainedSidecars role status = retainedSidecarsWith role status [retainedStep]
+
+-- | Sidecars for a chain whose steps carry the given hits.
+retainedSidecarsWith :: Role -> T.Text -> [Step] -> RetainedObservation
+retainedSidecarsWith role status steps' = RetainedObservation receipt (obsSteps base) (obsHits base)
  where
-  base = observation role retainedStep
+  base = chain role steps'
   receipt = case A.eitherDecodeStrict' (obsReceipt base) of
     Right (Object fields) -> BL.toStrict (A.encode (Object (KM.insert "outcome" (object ["status" .= status]) fields)))
     _ -> error "test receipt is not an object"
@@ -390,8 +401,22 @@ main = do
          in isLeft (roundTrip CrawlEffectsSource silent) && roundTrip retainedSource silent == Right (file retainedSource silent))
 
     , check "a retained observation's last step supplies each crawl route's effects"
-        (fmap (map routeBody . snd) (retainedEffects (retainedSidecars RetainedRole "completed") [Route crawlRoute (KeyRoute [KeyOk] (CrawlTrial 1 [CommitEffect]))])
+        (fmap (map routeBody . rebasedEffectsRoutes) (retainedEffects (retainedSidecars RetainedRole "completed") [Route crawlRoute (KeyRoute [KeyOk] (CrawlTrial 1 [CommitEffect]))])
           == Right [KeyRoute [KeyOk] (CrawlTrial 1 [SetterEffect 5, CommitEffect])])
+    , check "a re-based route with only the time-driven block is dropped and listed, one with empty effects and one with another setter are kept"
+        (let routes =
+               [ Route (RouteName "crawl-trial-00031") (KeyRoute [KeyOk] (CrawlTrial 31 [CommitEffect]))
+               , Route (RouteName "crawl-trial-00032") (KeyRoute [KeyOk, KeyOk] (CrawlTrial 32 [CommitEffect]))
+               , Route (RouteName "crawl-trial-00033") (KeyRoute [KeyOk, KeyOk, KeyOk] (CrawlTrial 33 [CommitEffect]))
+               ]
+             steps' =
+               [ retainedStep { stepHits = blockHits }
+               , retainedStep { stepHits = [getterIn, getterOut] }
+               , retainedStep { stepHits = setterIn : blockHits }
+               ]
+             result = retainedEffects (retainedSidecarsWith RetainedRole "completed" steps') routes
+         in fmap (\rebased -> (map routeName (rebasedEffectsRoutes rebased), rebasedEffectsTimeDrivenTrials rebased)) result
+              == Right ([RouteName "crawl-trial-00032", RouteName "crawl-trial-00033"], [31]))
     , check "effects are refused from an owned or uncompleted observation, or one without a route's last step"
         (let routes = [Route crawlRoute (KeyRoute [KeyOk] (CrawlTrial 1 [CommitEffect]))]
              refused sidecars chosen = either Just (const Nothing) (retainedEffects sidecars chosen)
@@ -427,6 +452,20 @@ main = do
         (refusal OwnedRole (guardHit (retiredGetter + 0x3c)) == Just (GuardedFetch 6) && refusal OwnedRole (guardHit (retiredGetter + 0x4000003c)) == Just (GuardedFetch 6))
     , check "a carrier fill word after the linked code is guarded"
         (refusal OwnedRole (ownedWith (stepHits ownedStep ++ [hit (Guard CarrierFill) (carrierEnd - 4) [] stackPointer 0])) == Just (GuardedFetch 6))
+    , check "a slot-field arm word is guarded at both spellings, up to the next live arm"
+        (let slotHit address = refusal OwnedRole (ownedWith (stepHits ownedStep ++ [hit (Guard RetiredSetterArm) address [] stackPointer 0]))
+         in all (\address -> slotHit address == Just (GuardedFetch 6)) [slotSetter + 0x3c, slotSetter + 0x4000003c]
+              && refusal OwnedRole (guardHit (slotGetter + 0x4000003c)) == Just (GuardedFetch 6)
+              && slotHit (slotSetter + 0x40) == Just (UnarmedSite 6))
+    , check "a control on a slot-field property restores only its setter table word to the stock arm"
+        (let contract = either error id (decodeContract contractBytes)
+             controlled = do
+               patch <- controlPatch contract 7
+               roleImage4 (PlanInputs ControlRole contract images linked (Just (controlWord patch)))
+             wordAt address bytes = word32At bytes (fromIntegral (address - image4Base))
+         in fmap (\bytes -> map (`wordAt` bytes) [0x623000, 0x623004, 0x623008, 0x62300c]) controlled
+              == Right [carrierStart, carrierStart + 0x10, carrierStart, slotSetter]
+              && isLeft (controlPatch contract 8))
     , check "the next live arm and the retained image carry no guard"
         (refusal OwnedRole (guardHit (retiredGetter + 0x40)) == Just (UnarmedSite 6)
           && refusal RetainedRole retainedStep { stepHits = stepHits retainedStep ++ [hit (Guard RetiredGetterArm) retiredGetter [] stackPointer 0] } == Just (UnarmedSite 5))

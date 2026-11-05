@@ -69,6 +69,12 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/data/xm1-150.json",
     "//emulation:fujimod-xm1/src/adapters.rs",
     "//emulation:fujimod-xm1/src/adjustment.rs",
+    "//emulation:fujimod-xm1/src/application_observation.rs",
+    "//emulation:fujimod-xm1/src/application_observation/capture.rs",
+    "//emulation:fujimod-xm1/src/application_observation/checks.rs",
+    "//emulation:fujimod-xm1/src/application_observation/controls.rs",
+    "//emulation:fujimod-xm1/src/application_observation/planes.rs",
+    "//emulation:fujimod-xm1/src/application_observation/readiness.rs",
     "//emulation:fujimod-xm1/src/application_pump.rs",
     "//emulation:fujimod-xm1/src/application_pump_capture.rs",
     "//emulation:fujimod-xm1/src/application_pump_check.rs",
@@ -133,6 +139,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/nand_image.rs",
     "//emulation:fujimod-xm1/src/native_case.rs",
     "//emulation:fujimod-xm1/src/native_case_main.rs",
+    "//emulation:fujimod-xm1/src/own_first_pair.rs",
     "//emulation:fujimod-xm1/src/peer_witness.rs",
     "//emulation:fujimod-xm1/src/peer_witness_critical_pair.rs",
     "//emulation:fujimod-xm1/src/peer_witness_initializer.rs",
@@ -178,6 +185,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/ui_conversion.rs",
     "//emulation:fujimod-xm1/src/updater.rs",
     "//emulation:fujimod-xm1/src/witness.rs",
+    "//emulation:fujimod-xm1/tests/application_observation.rs",
     "//emulation:fujimod-xm1/tests/composed_startup.rs",
     "//emulation:fujimod-xm1/tests/data/composed-contract-v4.json",
     "//emulation:fujimod-xm1/tests/modal_lifetime.rs",
@@ -292,7 +300,7 @@ def _lab_dependencies_impl(_ctx):
         nix_file_deps = _FUJIMOD_NIX_DEPS + _FUJIMOD_XM1_CRATE,
         nixopts = _RUST_NIX_BUILD_CAP,
         repository = "@lab_nixpkgs",
-        build_file_content = 'exports_files(["bin/fujimod-xm1", "bin/fujimod-xm1-composed-startup", "bin/fujimod-xm1-heap-observe", "bin/fujimod-xm1-heap-replay", "bin/fujimod-xm1-idle-tasks", "bin/fujimod-xm1-kernel-install", "bin/fujimod-xm1-loader-continuations", "bin/fujimod-xm1-native-case", "bin/fujimod-xm1-provenance", "bin/fujimod-xm1-queue-boundary", "bin/fujimod-xm1-ram-push", "bin/fujimod-xm1-root-compact", "bin/fujimod-xm1-rtos-census", "bin/fujimod-xm1-startup-callers", "bin/fujimod-xm1-startup-consumers", "bin/fujimod-xm1-startup-dispatch", "bin/fujimod-xm1-startup-tasks", "bin/fujimod-xm1-task-storage", "bin/fujimod-xm1-toggle", "bin/fujimod-xm1-updater", "share/fujimod-xm1/store-path", "share/fujimod-xm1/xm1-150.json"], visibility = ["//visibility:public"])\nfilegroup(name = "test-harnesses", srcs = glob(["libexec/fujimod-xm1-tests/*"]), visibility = ["//visibility:public"])\nfilegroup(name = "test-manifest", srcs = ["libexec/fujimod-xm1-tests/manifest"], visibility = ["//visibility:public"])',
+        build_file_content = 'exports_files(["bin/fujimod-xm1", "bin/fujimod-xm1-composed-startup", "bin/fujimod-xm1-heap-observe", "bin/fujimod-xm1-heap-replay", "bin/fujimod-xm1-idle-tasks", "bin/fujimod-xm1-kernel-install", "bin/fujimod-xm1-loader-continuations", "bin/fujimod-xm1-native-case", "bin/fujimod-xm1-own-first-pair", "bin/fujimod-xm1-provenance", "bin/fujimod-xm1-queue-boundary", "bin/fujimod-xm1-ram-push", "bin/fujimod-xm1-root-compact", "bin/fujimod-xm1-rtos-census", "bin/fujimod-xm1-startup-callers", "bin/fujimod-xm1-startup-consumers", "bin/fujimod-xm1-startup-dispatch", "bin/fujimod-xm1-startup-tasks", "bin/fujimod-xm1-task-storage", "bin/fujimod-xm1-toggle", "bin/fujimod-xm1-updater", "share/fujimod-xm1/store-path", "share/fujimod-xm1/xm1-150.json"], visibility = ["//visibility:public"])\nfilegroup(name = "test-harnesses", srcs = glob(["libexec/fujimod-xm1-tests/*"]), visibility = ["//visibility:public"])\nfilegroup(name = "test-manifest", srcs = ["libexec/fujimod-xm1-tests/manifest"], visibility = ["//visibility:public"])',
     )
 
     # The RAM-push relinker's tools; ram-push-toolchain-paths records their

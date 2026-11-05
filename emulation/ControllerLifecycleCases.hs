@@ -420,6 +420,7 @@ caseSpec symbols kernel stock stockBase s owned = CaseSpec
   , caseExpectedStatus = Returned
   , caseExpectedRegisters = (R0,expectedReturn s) : [(r,v) | (r,v) <- registers, r `elem` [R4,R5,R6,R7,R8,R9,R10,R11,Sp]] ++ [(Pc,exitAddress)]
   , caseExpectedMemory = [(RegionId "ram",cellImage s True),(RegionId "state",stateBytes), (RegionId "effects",effectBytes)]
+  , caseCp14Identity = Nothing
   }
   where
     (address,size,symbol) = entry (action s)

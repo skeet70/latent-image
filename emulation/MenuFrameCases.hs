@@ -563,6 +563,7 @@ caseSpec context implementation sc operation =
     , caseExpectedStatus = expectStatus expected
     , caseExpectedRegisters = maybe [(R4, sentinel 4)] (\value -> [(R0, value)]) (expectReturn expected)
     , caseExpectedMemory = []
+    , caseCp14Identity = Nothing
     }
   where
     expected = expectation sc operation

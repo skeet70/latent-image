@@ -10,12 +10,12 @@ use fujimod_xm1::attach_state::{
 };
 use fujimod_xm1::composed_catalog::{
     Bank, CatalogRefusal, Contract, Core, DeclarationProblem, GuardBound, Label, Pc, PiecePolicy, PieceKind, PlanSpan,
-    PoolAllocationProblem, RangePlan, Role, Sha256, Target, WritesBasis,
+    PoolAllocationProblem, RangePlan, Role, Schema, Sha256, Target, WritesBasis,
 };
 use fujimod_xm1::composed_receipt::{
     Admission, ByteRange, CaptureDirectories, CarrierField, CarrierWrites, DeclaredUse, Difference, GuardObservation, GuardState,
     HexBytes, Identity, IdentityField, LabelCount, MenuObservation, Outcome, ReadCapture, Receipt, ReceiptKind, RecordedPolicy,
-    Register, Row, SchemaFour, Verdict, VerdictKind, WatchRow, Word, WriteKind, Writer, WriterCount, carrier_writes, compare,
+    Register, Row, Verdict, VerdictKind, WatchRow, Word, WriteKind, Writer, WriterCount, carrier_writes, compare,
 };
 use fujimod_xm1::pool_allocation::{Allocation, AllocationProblem, Task};
 use serde_json::{Value, json};
@@ -337,7 +337,7 @@ fn receipt(contract: &Contract, contract_digest: &Sha256, role: Role) -> Receipt
     ];
     let counts = rows.iter().map(|row| LabelCount { label: row.label.clone(), core: Core::Primary, total: 1 }).collect();
     Receipt {
-        schema: SchemaFour,
+        schema: Schema::Four,
         kind: ReceiptKind::ComposedStartupReceipt,
         role,
         identity: Identity {
@@ -364,6 +364,7 @@ fn receipt(contract: &Contract, contract_digest: &Sha256, role: Role) -> Receipt
             watch_violation: None, watch_end_error: None,
         }),
         menu: MenuObservation { erased_settings: true, shooting: true },
+        application: None,
     }
 }
 

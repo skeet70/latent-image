@@ -10,6 +10,7 @@ import qualified Data.ByteString as B
 import Data.Char (isAsciiLower, isDigit)
 import Data.Either (isLeft)
 import Data.List (nub)
+import Data.Word (Word32)
 import qualified Data.Map.Strict as M
 import Emulation.NativeObservation
 import PropertyFields (PropertyId (..))
@@ -23,12 +24,32 @@ check label holds = do
   putStrLn ((if holds then "ok   " else "FAIL ") ++ label)
   pure holds
 
--- | Bank 1 offset 5 holds 0xb4 and bank 0 offsets 0x10-0x11 hold 0x34 0x12; previous offset 5 holds 0xff.
+-- | Bytes at the given offsets of a zero image of the given size.
+placed :: Int -> [(Int, Int)] -> B.ByteString
+placed size bytes = B.pack [maybe 0 fromIntegral (lookup at bytes) | at <- [0 .. size - 1]]
+
+-- | Banks: bank 0 0x10-0x11 hold 0x34 0x12, bank 1 offset 5 holds 0xb4, and slot-record byte 4 holds
+-- 0x5a (bank 0 slot 0), 0x7e (bank 0 slot 0xffffffff), 0xc3 (bank 1 slot 2) and 0x91 (bank 1 slot 3).
+-- Previous offsets 5 and 0x144 hold 0xff. Slot-defaults byte 4 holds 0x30 (slot 0), 0x90 (slot 2) and
+-- 0xe0 (slot 0xffffffff); defaults-table byte 0xc holds 0x7f.
 handFixture :: Fixture
-handFixture = Fixture banks previous (B.replicate 0x200 0)
-  where
-    banks = B.concat [B.replicate 0x10 0, B.pack [0x34, 0x12], B.replicate (0x1c2 - 0x12) 0, B.replicate 5 0, B.singleton 0xb4, B.replicate (0x1c2 - 6) 0]
-    previous = B.replicate 5 0 <> B.singleton 0xff <> B.replicate (0x1c2 - 6) 0
+handFixture =
+  Fixture
+    (placed 0x546 [(0x10, 0x34), (0x11, 0x12), (0x1c2 + 5, 0xb4), (0x144, 0x5a), (0x11c, 0x7e), (0x1c2 + 0x194, 0xc3), (0x1c2 + 0x1bc, 0x91)])
+    (placed 0x1e0 [(5, 0xff), (0x144, 0xff)])
+    (B.replicate 0x200 0)
+    (placed 0xc8 [(0x2c, 0x30), (0x7c, 0x90), (0x04, 0xe0)])
+    (placed 0x1c2 [(0xc, 0x7f)])
+
+-- | Slot 1 selects bits 2-4 of bank offset 5 (default 6); other slots bits 4-7 of record byte 4.
+slotArm :: BankDefault -> SlotArm
+slotArm fallback = SlotArm (BankBranch (BankOffset 5) Byte (BitRange 2 3) fallback) (RecordBranch (RecordOffset 4) Byte (BitRange 4 4)) SaveBank0Previous
+
+slotOwned :: Owned
+slotOwned = OwnedSlotField (slotArm (BankConstant (FieldDefault 6)))
+
+slot :: Word32 -> SlotArgument
+slot = SlotArgument
 
 byteField :: SavePolicy -> FieldArm
 byteField = FieldArm (BankOffset 5) Byte (BitRange 2 3) (FieldDefault 6)
@@ -41,6 +62,17 @@ byteAt bytes at = fromIntegral (B.index bytes at)
 
 handProperty :: FieldArm -> Property
 handProperty arm = Property (PropertyId 1) (C.GuestAddress 0) (C.GuestAddress 0) (Owned (OwnedField arm))
+
+slotProperty :: Owned -> Property
+slotProperty = Property (PropertyId 0x214) (C.GuestAddress 0) (C.GuestAddress 0) . Owned
+
+third :: (a, b, c) -> c
+third (_, _, c) = c
+
+layoutOf :: SlotMutation -> Layout
+layoutOf mutation = case mutation of
+  MutatedLayout layout -> layout
+  MutatedArm _ -> stockLayout
 
 -- | @mov rD, rS@ as the decoder returns it.
 mov :: Int -> Int -> A.Instruction
@@ -71,16 +103,23 @@ event kind address size value = object ["kind" .= kind, "address" .= address, "s
 
 main :: IO ()
 main = do
-  let live bank = modelEffect handFixture (OwnedField (byteField SaveBank0Previous)) (Get bank LiveRead Slot0)
-      setting bank choice = modelEffect handFixture (OwnedField (byteField SaveBank0Previous)) (Set bank Slot1 choice)
+  let model owned operation = modelEffect handFixture owned operation
+      r0Of owned operation = effectR0 <$> model owned operation
+      live bank = model (OwnedField (byteField SaveBank0Previous)) (Get bank LiveRead (slot 0))
+      setting bank choice = model (OwnedField (byteField SaveBank0Previous)) (Set bank (slot 1) choice)
+      slotSet bank s choice = model slotOwned (Set bank (slot s) choice)
+      r0Of' layout operation = effectR0 <$> modelEffectIn layout handFixture slotOwned operation
+      byteIn select at effect = (\e -> byteAt (select e) at) <$> effect
+      stockFixture = fixture B.empty
       banks = fixtureBanks handFixture
       previous = fixturePrevious handFixture
       labels = map (caseLabelText . caseLabel) caseGrid
       validId text = case text of
         first : rest -> isAsciiLower first && length rest <= 63 && all (\c -> isAsciiLower c || isDigit c || c == '-') rest
         [] -> False
-      bank0 = B.take 0x1c2 (fixtureBanks fixture)
-      bank1 = B.drop 0x1c2 (fixtureBanks fixture)
+      bank0 = B.take 0x1c2 (fixtureBanks stockFixture)
+      bank1 = B.take 0x1c2 (B.drop 0x1c2 (fixtureBanks stockFixture))
+      bank2 = B.drop 0x384 (fixtureBanks stockFixture)
       windows bytes = [B.take 4 (B.drop at bytes) | at <- [0 .. B.length bytes - 4]]
       stackWrite = WriteEvent 0x9597ec 4 0x12345678
       bankWrite = WriteEvent 0x96cc69 1 0x0c
@@ -92,22 +131,36 @@ main = do
       patchAt = image4Base + 0x100
       delegated = Classified (Delegated ExitAdjusts)
       owned3 = Classified (Owned (OwnedField (byteField NoSave)))
+      slotStanding = Classified (Owned slotOwned)
   results <- sequence
-    [ check "the grid is 32 cases per id over ids 0..646" (length operations == 32 && length caseGrid == 20704 && map oracleProperty caseGrid == concatMap (replicate 32) propertyIds && propertyIds == map PropertyId [0 .. 646])
+    [ check "the grid is 80 cases per id over ids 0..646" (length operations == 80 && length caseGrid == 51760 && map oracleProperty caseGrid == concatMap (replicate 80) propertyIds && propertyIds == map PropertyId [0 .. 646])
+    , check "slot arguments are 0, 1, 2, 3 and 0xffffffff" (slotArguments == map slot [0, 1, 2, 3, 0xffffffff])
     , check "case labels are distinct runner ids" (length (nub labels) == length labels && all validId labels)
-    , check "bank 1 is bank 0's complement and the images differ" (bank1 == B.map complement bank0 && bank0 /= B.take 0x1c2 (fixturePrevious fixture))
+    , check "three banks: bank 1 is bank 0's complement, bank 2 a third stream" (bank1 == B.map complement bank0 && bank2 /= bank0 && bank2 /= bank1 && B.length bank2 == 0x1c2 && bank0 /= B.take 0x1c2 (fixturePrevious stockFixture))
+    , check "the previous-value image covers slot 3's record" (B.length (fixturePrevious stockFixture) == 0x1e0)
     , check "no 4-byte window of bank 0 repeats" (length (nub (windows bank0)) == length (windows bank0))
-    , check "getter live read extracts bank 1's bits 2-4" (effectR0 (live Bank1) == 5 && effectBanks (live Bank1) == banks)
-    , check "getter live read of bank 0 is 0" (effectR0 (live Bank0) == 0)
-    , check "getter default read returns the default" (effectR0 (modelEffect handFixture (OwnedField (byteField NoSave)) (Get Bank1 DefaultRead Slot1)) == 6)
-    , check "halfword field reads the little-endian container" (effectR0 (modelEffect handFixture (OwnedField halfField) (Get Bank0 LiveRead Slot0)) == 0x23)
-    , check "bank-0 set with save copies the old bits, then inserts the value" (let e = setting Bank0 SetFieldMax in effectR0 e == 1 && byteAt (effectBanks e) 5 == 0x1c && byteAt (effectPrevious e) 5 == 0xe3)
-    , check "bank-1 set does not save" (effectPrevious (setting Bank1 SetOne) == previous && byteAt (effectBanks (setting Bank1 SetOne)) (0x1c2 + 5) == 0xa4)
-    , check "0x1affffff stores the default" (byteAt (effectBanks (setting Bank1 SetDefaultRequest)) (0x1c2 + 5) == 0xb8)
-    , check "value above the field keeps only its low bits" (byteAt (effectBanks (setting Bank1 SetAboveMax)) (0x1c2 + 5) == 0xa0 && byteAt (effectBanks (setting Bank1 SetAllOnes)) (0x1c2 + 5) == 0xbc)
-    , check "unassigned get and set return 0 and store nothing" (modelEffect handFixture OwnedUnassigned (Set Bank0 Slot0 SetOne) == Effect 0 banks previous)
+    , check "getter live read extracts bank 1's bits 2-4" (fmap effectR0 (live Bank1) == Just 5 && fmap effectBanks (live Bank1) == Just banks)
+    , check "getter live read of bank 0 is 0" (fmap effectR0 (live Bank0) == Just 0)
+    , check "getter default read returns the default" (r0Of (OwnedField (byteField NoSave)) (Get Bank1 DefaultRead (slot 1)) == Just 6)
+    , check "halfword field reads the little-endian container" (r0Of (OwnedField halfField) (Get Bank0 LiveRead (slot 0)) == Just 0x23)
+    , check "bank-0 set with save copies the old bits, then inserts the value" (fmap effectR0 (setting Bank0 SetFieldMax) == Just 1 && byteIn effectBanks 5 (setting Bank0 SetFieldMax) == Just 0x1c && byteIn effectPrevious 5 (setting Bank0 SetFieldMax) == Just 0xe3)
+    , check "bank-1 set does not save" (fmap effectPrevious (setting Bank1 SetOne) == Just previous && byteIn effectBanks (0x1c2 + 5) (setting Bank1 SetOne) == Just 0xa4)
+    , check "0x1affffff stores the default" (byteIn effectBanks (0x1c2 + 5) (setting Bank1 SetDefaultRequest) == Just 0xb8)
+    , check "value above the field keeps only its low bits" (byteIn effectBanks (0x1c2 + 5) (setting Bank1 SetAboveMax) == Just 0xa0 && byteIn effectBanks (0x1c2 + 5) (setting Bank1 SetAllOnes) == Just 0xbc)
+    , check "unassigned get and set return 0 and store nothing" (model OwnedUnassigned (Set Bank0 (slot 0) SetOne) == Just (Effect 0 banks previous))
+    , check "slot 1 reads the bank branch" (r0Of slotOwned (Get Bank1 LiveRead (slot 1)) == Just 5)
+    , check "slots 0, 2, 3 and 0xffffffff read their record" (map (\(bank, s) -> r0Of slotOwned (Get bank LiveRead (slot s))) [(Bank0, 0), (Bank1, 2), (Bank1, 3), (Bank0, 0xffffffff)] == map Just [5, 0xc, 9, 7])
+    , check "slot 1 default is the constant" (r0Of slotOwned (Get Bank0 DefaultRead (slot 1)) == Just 6)
+    , check "record defaults come from the slot's defaults record" (map (\s -> r0Of slotOwned (Get Bank0 DefaultRead (slot s))) [0, 2, 0xffffffff] == map Just [3, 9, 0xe])
+    , check "a tail-byte default reads 0x81b074 + 0xc" (r0Of (OwnedSlotField (slotArm (BankTailByte (TailOffset 0xc)))) (Get Bank1 DefaultRead (slot 1)) == Just 0x7f)
+    , check "bank-0 record set saves the record bits at the record's previous offset" (byteIn effectBanks 0x144 (slotSet Bank0 0 SetFieldMax) == Just 0xfa && byteIn effectPrevious 0x144 (slotSet Bank0 0 SetFieldMax) == Just 0x5f && byteIn effectPrevious 5 (slotSet Bank0 0 SetFieldMax) == Just 0xff)
+    , check "a record default request stores the slot's default" (byteIn effectBanks (0x1c2 + 0x194) (slotSet Bank1 2 SetDefaultRequest) == Just 0x93 && fmap effectPrevious (slotSet Bank1 2 SetDefaultRequest) == Just previous)
+    , check "slot 1 set inserts into the bank branch" (byteIn effectBanks (0x1c2 + 5) (slotSet Bank1 1 SetFieldMax) == Just 0xbc)
+    , check "set values use the bits the slot selects" (map (setValue slotStanding (slot 1)) [SetFieldMax, SetAboveMax] == [7, 8] && map (setValue slotStanding (slot 0)) [SetFieldMax, SetAboveMax] == [0xf, 0x10])
+    , check "a read outside the fixture is not modelled" (model slotOwned (Get Bank0 DefaultRead (slot 0x10)) == Nothing)
     , check "ids outside the tables are modelled as unassigned" (modelled OutOfRange == Just OwnedUnassigned && modelled delegated == Nothing)
-    , check "set values use the field mask, else 0x7f" (map (setValue owned3) [SetFieldMax, SetAboveMax] == [7, 8] && map (setValue delegated) [SetFieldMax, SetAboveMax, SetDefaultRequest] == [0x7f, 0x80, 0x1affffff])
+    , check "set values use the field mask, else 0x7f" (map (setValue owned3 (slot 0)) [SetFieldMax, SetAboveMax] == [7, 8] && map (setValue delegated (slot 0)) [SetFieldMax, SetAboveMax, SetDefaultRequest] == [0x7f, 0x80, 0x1affffff])
+    , check "a model outside the fixture is a model difference" (modelDifferences handFixture slotOwned (Get Bank0 DefaultRead (slot 0x10)) baseRun == [ModelOutsideFixture])
     , check "an identical run has no difference" (null (compareRuns baseRun baseRun))
     , check "a different write value differs" (compareRuns baseRun baseRun {runWrites = Just [WriteEvent 0x96cc64 1 0xac]} == [WritesDiffer])
     , check "a truncated log fails" (compareRuns baseRun baseRun {runWrites = Nothing} == [SubjectTruncated])
@@ -124,9 +177,16 @@ main = do
     , check "branch words decode to their targets" (all (\target -> A.decode 0x62c4d8 (branchWord 0x62c4d8 target) == A.Branch (A.Cond 14) False target) [0x630200, 0x62ff60, 0x61e110])
     , check "the getter-r6 control words decode as mov r4, r12, mov r6, r12 and mov r12, r6" (map (A.decode 0x62c4b0) [movR4FromR12, movR6FromR12, movR12FromR6] == [mov 4 12, mov 6 12, mov 12 6])
     , check "a moved offset steps one container" (fmap snd (exposingField handFixture OffsetMoved [handProperty (byteField SaveBank0Previous)]) == Just (FieldArm (BankOffset 6) Byte (BitRange 2 3) (FieldDefault 6) SaveBank0Previous))
-    , check "a flipped default returns 7" (fmap (\(_, arm) -> effectR0 (modelEffect handFixture (OwnedField arm) (Get Bank0 DefaultRead Slot0))) (exposingField handFixture DefaultFlipped [handProperty (byteField NoSave)]) == Just 7)
-    , check "a cleared save bit stops the bank-0 copy" (fmap (\(_, arm) -> byteAt (effectPrevious (modelEffect handFixture (OwnedField arm) (Set Bank0 Slot0 SetOne))) 5) (exposingField handFixture SaveCleared [handProperty (byteField SaveBank0Previous)]) == Just 0xff)
+    , check "a flipped default returns 7" ((exposingField handFixture DefaultFlipped [handProperty (byteField NoSave)] >>= \(_, arm) -> r0Of (OwnedField arm) (Get Bank0 DefaultRead (slot 0))) == Just 7)
+    , check "a cleared save bit stops the bank-0 copy" ((exposingField handFixture SaveCleared [handProperty (byteField SaveBank0Previous)] >>= \(_, arm) -> byteIn effectPrevious 5 (model (OwnedField arm) (Set Bank0 (slot 0) SetOne))) == Just 0xff)
     , check "clearing an absent save bit is not a control" (exposingField handFixture SaveCleared [handProperty (byteField NoSave)] == Nothing)
+    , check "a moved record offset steps one byte" (fmap third (exposingSlot handFixture RecordOffsetMoved [slotProperty slotOwned]) == Just (MutatedArm (SlotArm (BankBranch (BankOffset 5) Byte (BitRange 2 3) (BankConstant (FieldDefault 6))) (RecordBranch (RecordOffset 5) Byte (BitRange 4 4)) SaveBank0Previous)))
+    , check "swapped branches exchange their bits" (fmap third (exposingSlot handFixture BranchesSwapped [slotProperty slotOwned]) == Just (MutatedArm (SlotArm (BankBranch (BankOffset 5) Byte (BitRange 4 4) (BankConstant (FieldDefault 6))) (RecordBranch (RecordOffset 4) Byte (BitRange 2 3)) SaveBank0Previous)))
+    , check "the slot-1 default from record 0 is 3" (fmap third (exposingSlot handFixture Slot1DefaultFromRecord0 [slotProperty slotOwned]) == Just (MutatedArm (slotArm (BankConstant (FieldDefault 3)))))
+    , check "a record save at the bank offset lands at previous offset 5" (byteIn effectPrevious 5 (modelEffectIn stockLayout {layoutRecordSave = RecordSaveAtBankOffset} handFixture slotOwned (Set Bank0 (slot 0) SetOne)) == Just 0x5f && fmap (layoutRecordSave . layoutOf . third) (exposingSlot handFixture RecordSavedAtBankOffset [slotProperty slotOwned]) == Just RecordSaveAtBankOffset)
+    , check "a moved slot-defaults base reads the next record" (r0Of' (stockLayout {layoutSlotDefaults = 0x7cb82c}) (Get Bank0 DefaultRead (slot 0)) == Just 0 && fmap (layoutSlotDefaults . layoutOf . third) (exposingSlot handFixture SlotDefaultsMoved [slotProperty slotOwned]) == Just 0x7cb82c)
+    , check "a moved tail base needs a tail-byte default" (exposingSlot handFixture TailDefaultsMoved [slotProperty slotOwned] == Nothing && fmap (layoutTailDefaults . layoutOf . third) (exposingSlot handFixture TailDefaultsMoved [slotProperty (OwnedSlotField (slotArm (BankTailByte (TailOffset 0xc))))]) == Just 0x81b075)
+    , check "movw and movt r12 decode to the address halves" (A.decode 0x62c4b0 (movwWord 0x7cb82c) == A.MoveWide (A.Cond 14) (A.Reg 12) 0xb82c && A.decode 0x62c4b4 (movtWord 0x7cb82c) == A.MoveTop (A.Cond 14) (A.Reg 12) 0x7c)
     , check "the split leaves the carrier to its own functions" (splitFunctions (0x62c4b0, 0x62d674) [FunctionSpan 0x62c4b0 0x62c4c4] == [FunctionSpan 0x61e110 0x624620, FunctionSpan 0x624694 0x62c4b0, FunctionSpan 0x62c4b0 0x62c4c4, FunctionSpan 0x62d674 0x6309c4])
     ]
   unless (and results) exitFailure

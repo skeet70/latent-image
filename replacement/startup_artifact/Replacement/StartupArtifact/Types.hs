@@ -13,7 +13,7 @@ module Replacement.StartupArtifact.Types
   , Piece (..), PieceFacts (..), ServiceBinding (..), Publication (..), LinkedBytes (..), ScratchBytes (..)
   , PublisherFrame (..), SubmitCall (..), StackDepth (..), TaskNumber (..), StackBytes (..), TaskStart (..)
   , AllocationPosition (..), allocationPositionName, AllocationWords (..), AllocationOwner (..), PoolSpan (..), PoolAllocation (..)
-  , Refusal (..), CatalogProblem (..), ManifestProblem (..)
+  , Refusal (..), CatalogProblem (..), ManifestProblem (..), ApplicationProblem (..)
   ) where
 
 import qualified Data.ByteString as B
@@ -367,6 +367,16 @@ data ManifestProblem
   | AttachStateRefused Text
   deriving (Eq, Show)
 
+data ApplicationProblem
+  -- | A site word overlaps the named piece's carrier.
+  = SiteInCarrier PieceKind Pc
+  -- | Code at the PC lies in neither image4, image5 nor the plain window.
+  | OutsideImages Pc
+  -- | The composed word at a site differs from the canonical word.
+  | SiteWordDiffers Pc
+  | PlainWindowUnreadable
+  deriving (Eq, Show)
+
 -- | 'FootprintOverlap' names the footprint owner, then the carrier owner.
 data Refusal
   = ManifestRefused ManifestProblem
@@ -388,4 +398,5 @@ data Refusal
   | ComposedUnparsed
   | ComposedDiffMismatch Target
   | ComposedRestoreMismatch
+  | ApplicationRefused ApplicationProblem
   deriving (Eq, Show)
