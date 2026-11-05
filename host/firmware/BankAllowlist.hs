@@ -861,6 +861,7 @@ execute context function address instruction state = case instruction of
           then branching cond (\s -> indirectBranch False Nothing (fromMaybe Unknown (lookup pc (values s))) (load s))
           else conditional cond (\s -> continue (load s)) id
   Branch cond link target
+    | link, traps target -> conditional cond (\s -> branchCount (targetFindings s True target) (Outcome [] [] 0 0)) id
     | link -> conditional cond (\s -> branchCount (targetFindings s True target) (continue (afterCall (calleeAt target) s))) id
     | inside target -> branching cond (\s -> Outcome [(target, s)] [] 0 0)
     | otherwise -> branching cond (\s -> branchCount (targetFindings s False target) (Outcome [] [] 0 0))
@@ -885,6 +886,11 @@ execute context function address instruction state = case instruction of
   branchCount found outcome = (withFindings found outcome) {outcomeBranches = if null found then 1 else 0}
   inside target = functionStart function <= target && target < functionEnd function
   flags setsFlags s = if setsFlags then s {comparison = Nothing, holds = Nothing} else s
+  -- A callee that runs only hints up to an unconditional branch to itself does not return.
+  traps at = case decode at <$> wordAt (contextElf context) at of
+    Just (Hint _) -> traps (at + 4)
+    Just (Branch condition False to) -> condition == always && to == at
+    _ -> False
   nextReg (Reg n) = Reg (n + 1)
   widthBytes :: Width -> Word32
   widthBytes width = case width of

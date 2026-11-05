@@ -174,6 +174,20 @@ main = do
   -- reaches its store.
   expect "untested 0 argument" (fixture zeroTest 0xe1a00000)
     [(zeroCall, UnprovenArgument)]
+  -- rb_assert_one calls rb_status_record, then the undeclared stock address,
+  -- with rb_status_record's first two words replaced by a hint and `second`.
+  let callee = fst (function "rb_status_record")
+      afterCallee = statusFunction + 4
+      callerWords = [branchLink statusFunction callee, branchLink afterCallee forbiddenTarget, 0xe12fff1e]
+      trapProgram second = patch cleanElf (patch cleanElf (functionProgram callerWords) callee 0xe320f000) (callee + 4) second
+      fallsThrough report = any (\finding -> findingAddress finding == afterCallee
+        && findingReason finding == UndeclaredStockTarget forbiddenTarget) (violations report)
+  trapped <- run allowlist (trapProgram 0xeafffffe)
+  check "a call to hints then `b .` has no fall-through" (not (fallsThrough trapped))
+  conditionalSpin <- run allowlist (trapProgram 0x1afffffe)
+  check "a call to hints then a conditional `bne .` falls through" (fallsThrough conditionalSpin)
+  forwardBranch <- run allowlist (trapProgram 0xea000000)
+  check "a call to hints then a branch to another word falls through" (fallsThrough forwardBranch)
 
   -- The command-line checker's exit status: 0 clean, 1 with a violation.
   temporary <- getTemporaryDirectory
