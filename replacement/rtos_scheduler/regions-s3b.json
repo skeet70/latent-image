@@ -1,0 +1,193 @@
+{
+  "fill_word": "0xe7f000f0",
+  "domains": {
+    "a": {
+      "regions": [
+        {
+          "start": "0x44f2c",
+          "end": "0x450f0",
+          "entries": [
+            {
+              "entry": "0x44f2c",
+              "semantic": {
+                "kind": "service",
+                "name": "activate-task"
+              }
+            }
+          ],
+          "symbol": "xm1_s3b_activate",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0x450f0",
+          "end": "0x45270",
+          "entries": [
+            {
+              "entry": "0x450f0",
+              "semantic": {
+                "kind": "service",
+                "name": "interrupt-activate-task"
+              }
+            }
+          ],
+          "symbol": "xm1_s3b_interrupt_activate",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0x45270",
+          "end": "0x453f0",
+          "entries": [
+            {
+              "entry": "0x45270",
+              "semantic": {
+                "kind": "service",
+                "name": "cancel-activation"
+              }
+            }
+          ],
+          "symbol": "xm1_s3b_cancel_activation",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0x46004",
+          "end": "0x46200",
+          "entries": [
+            {
+              "entry": "0x46004",
+              "semantic": {
+                "kind": "service",
+                "name": "wake-task"
+              }
+            }
+          ],
+          "symbol": "xm1_s3b_wake",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0x46200",
+          "end": "0x46398",
+          "entries": [
+            {
+              "entry": "0x46200",
+              "semantic": {
+                "kind": "service",
+                "name": "interrupt-wake-task"
+              }
+            }
+          ],
+          "symbol": "xm1_s3b_interrupt_wake",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0x46398",
+          "end": "0x46534",
+          "entries": [
+            {
+              "entry": "0x46398",
+              "semantic": {
+                "kind": "service",
+                "name": "cancel-wakeup"
+              }
+            }
+          ],
+          "symbol": "xm1_s3b_cancel_wake",
+          "frame_bytes": 32
+        }
+      ]
+    },
+    "b": {
+      "regions": [
+        {
+          "start": "0xd4eec",
+          "end": "0xd50b0",
+          "entries": [
+            {
+              "entry": "0xd4eec",
+              "semantic": {
+                "kind": "service",
+                "name": "activate-task"
+              }
+            }
+          ],
+          "symbol": "xm1_s3b_activate",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0xd50b0",
+          "end": "0xd5230",
+          "entries": [
+            {
+              "entry": "0xd50b0",
+              "semantic": {
+                "kind": "service",
+                "name": "interrupt-activate-task"
+              }
+            }
+          ],
+          "symbol": "xm1_s3b_interrupt_activate",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0xd5230",
+          "end": "0xd53b0",
+          "entries": [
+            {
+              "entry": "0xd5230",
+              "semantic": {
+                "kind": "service",
+                "name": "cancel-activation"
+              }
+            }
+          ],
+          "symbol": "xm1_s3b_cancel_activation",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0xd5fc4",
+          "end": "0xd61c0",
+          "entries": [
+            {
+              "entry": "0xd5fc4",
+              "semantic": {
+                "kind": "service",
+                "name": "wake-task"
+              }
+            }
+          ],
+          "symbol": "xm1_s3b_wake",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0xd61c0",
+          "end": "0xd6358",
+          "entries": [
+            {
+              "entry": "0xd61c0",
+              "semantic": {
+                "kind": "service",
+                "name": "interrupt-wake-task"
+              }
+            }
+          ],
+          "symbol": "xm1_s3b_interrupt_wake",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0xd6358",
+          "end": "0xd64f4",
+          "entries": [
+            {
+              "entry": "0xd6358",
+              "semantic": {
+                "kind": "service",
+                "name": "cancel-wakeup"
+              }
+            }
+          ],
+          "symbol": "xm1_s3b_cancel_wake",
+          "frame_bytes": 32
+        }
+      ]
+    }
+  }
+}

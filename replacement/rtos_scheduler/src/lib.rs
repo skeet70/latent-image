@@ -4,6 +4,8 @@
 
 #[cfg(all(target_arch = "arm", not(test)))]
 mod entries;
+#[cfg(all(target_arch = "arm", not(test)))]
+mod s3b;
 #[cfg(test)]
 mod tests;
 

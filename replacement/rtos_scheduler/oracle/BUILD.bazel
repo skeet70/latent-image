@@ -130,3 +130,22 @@ haskell_binary(
         ("scheduler-oracle-full-tests", "large", "full", ["manual"]),
     ]
 ]
+
+haskell_binary(
+    name = "s3b-oracle",
+    srcs = ["Replacement/RtosScheduler/S3b.hs"],
+    main_file = "Replacement/RtosScheduler/S3b.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":scheduler-oracle-lib",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:json",
+    ],
+)
