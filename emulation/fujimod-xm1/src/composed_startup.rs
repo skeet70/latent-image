@@ -3,7 +3,7 @@ use fujimod_emulator::board::observation::{
     WatchRange,
 };
 use fujimod_xm1::{
-    application_observation::{self, hit_observers, Observers, Recorder as ApplicationRecorder},
+    application_observation::{self, hit_observers, Observers, Recorder as ApplicationRecorder, Scenario},
     attach_relations::{self, AttachSources, TimerState, TransactionWriter},
     attach_state::{self, AttachState},
     bridge::{read, sha256, write},
@@ -21,7 +21,7 @@ use fujimod_xm1::{
 };
 use std::{collections::BTreeMap, num::NonZeroUsize, path::{Path, PathBuf}, process::ExitCode};
 
-const USAGE: &str = "composed-startup --role retained|composed --contract CONTRACT --run RUN --update DAT --boot-rom ROM --output NEW_DIR [--attach-diagnostic RANGES | --mutation-census]\n       composed-startup --compare RETAINED_RECEIPT OWNED_RECEIPT --contract CONTRACT\n       composed-startup --check-contract CONTRACT [--qualifications QUALIFICATIONS] --output NEW_FILE\n       composed-startup --application-controls RUN_DIR --contract CONTRACT --output NEW_DIR";
+const USAGE: &str = "composed-startup --role retained|composed --contract CONTRACT --run RUN --update DAT --boot-rom ROM --output NEW_DIR [--scenario NAME] [--attach-diagnostic RANGES | --mutation-census]\n       composed-startup --compare RETAINED_RECEIPT OWNED_RECEIPT --contract CONTRACT\n       composed-startup --check-contract CONTRACT [--qualifications QUALIFICATIONS] --output NEW_FILE\n       composed-startup --application-controls RUN_DIR --contract CONTRACT --output NEW_DIR";
 const CONTROLS: &str = "application-controls.json";
 const CENSUS: &str = "mutation-census.json";
 const WRITERS: &str = "attach-writers.json";
@@ -46,7 +46,7 @@ enum Mode {
 }
 
 enum Command {
-    Observe { role: Role, contract: PathBuf, run: PathBuf, update: PathBuf, rom: PathBuf, output: PathBuf, mode: Mode },
+    Observe { role: Role, contract: PathBuf, run: PathBuf, update: PathBuf, rom: PathBuf, output: PathBuf, mode: Mode, scenario: Scenario },
     Compare { retained: PathBuf, owned: PathBuf, contract: PathBuf },
     CheckContract { contract: PathBuf, qualifications: Option<PathBuf>, output: PathBuf },
     Controls { run: PathBuf, contract: PathBuf, output: PathBuf },
@@ -63,12 +63,14 @@ fn put<T>(slot: &mut Option<T>, value: T) -> Result<(), String> {
 fn arguments() -> Result<Command, String> {
     let (mut role, mut contract, mut run, mut update, mut rom, mut output, mut compare) = (None, None, None, None, None, None, None);
     let (mut check, mut mode, mut controls, mut qualifications) = (None, None, None, None);
+    let mut scenario = None;
     let mut arguments = std::env::args_os().skip(1);
     while let Some(flag) = arguments.next() {
         let flag = flag.into_string().map_err(|_| USAGE)?;
         let mut value = || arguments.next().map(PathBuf::from).ok_or(USAGE);
         match flag.as_str() {
             "--role" => put(&mut role, value()?.to_str().ok_or(USAGE)?.parse::<Role>()?)?,
+            "--scenario" => put(&mut scenario, value()?.to_str().ok_or(USAGE)?.parse::<Scenario>()?)?,
             "--contract" => put(&mut contract, value()?)?,
             "--run" => put(&mut run, value()?)?,
             "--update" => put(&mut update, value()?)?,
@@ -83,14 +85,14 @@ fn arguments() -> Result<Command, String> {
             _ => return Err(USAGE.into()),
         }
     }
-    if qualifications.is_some() && check.is_none() {
+    if scenario.is_some() && role.is_none() || qualifications.is_some() && check.is_none() {
         return Err(USAGE.into());
     }
     match (check, contract, compare, role, run, update, rom, output, mode, controls) {
         (Some(contract), None, None, None, None, None, None, Some(output), None, None) => Ok(Command::CheckContract { contract, qualifications, output }),
         (None, Some(contract), Some((retained, owned)), None, None, None, None, None, None, None) => Ok(Command::Compare { retained, owned, contract }),
         (None, Some(contract), None, Some(role), Some(run), Some(update), Some(rom), Some(output), mode, None) =>
-            Ok(Command::Observe { role, contract, run, update, rom, output, mode: mode.unwrap_or(Mode::Evidence) }),
+            Ok(Command::Observe { role, contract, run, update, rom, output, mode: mode.unwrap_or(Mode::Evidence), scenario: scenario.unwrap_or_default() }),
         (None, Some(contract), None, None, None, None, None, Some(output), None, Some(run)) => Ok(Command::Controls { run, contract, output }),
         _ => Err(USAGE.into()),
     }
@@ -357,7 +359,7 @@ struct Census<'a> {
 }
 
 fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: PathBuf, rom_path: PathBuf, output: PathBuf,
-    mode: Mode) -> Result<(), String> {
+    mode: Mode, scenario: Scenario) -> Result<(), String> {
     let contract_bytes = read(&contract_path)?;
     let contract = Contract::parse(&contract_bytes).map_err(|refusal| refusal.to_string())?;
     let (run_bytes, update, rom) = (read(&run_path)?, read(&update_path)?, read(&rom_path)?);
@@ -378,6 +380,7 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
         require(!classes.iter().any(|&(start, end)| start < span.end && span.start < end), "a diagnostic class overlaps the log span")?;
     }
     let application = contract.application().filter(|_| mode != Mode::Census);
+    require(scenario == Scenario::MenuInputs || application.is_some(), "scenario requires the application phase")?;
     if let Some(application) = application {
         require(application.readiness.end.0 == DEADLINE, "the readiness search end is not the first press")?;
     }
@@ -418,7 +421,7 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
         rows: vec![], counts: BTreeMap::new(), recorded: BTreeMap::new(), off_core: BTreeMap::new(),
         attach: None, sources: None, transactions: None, recorder, boundary: None, census: None,
     };
-    let mut recorder = application.map(|application| ApplicationRecorder::new(application, role, &output)).transpose()?;
+    let mut recorder = application.map(|application| ApplicationRecorder::new(application, role, &output, scenario)).transpose()?;
     let traced = trace(&mut machine, &contract, role, &mut state, &output, recorder.as_mut());
     let disarm = |machine: &mut Machine| {
         let disarmed = machine.traces.disarm(&machine.session);
@@ -573,8 +576,8 @@ fn application_controls(run: PathBuf, contract_path: PathBuf, output: PathBuf) -
 
 fn main() -> ExitCode {
     let result = arguments().and_then(|command| match command {
-        Command::Observe { role, contract, run, update, rom, output, mode } =>
-            observe(role, contract, run, update, rom, output, mode).map(|()| true),
+        Command::Observe { role, contract, run, update, rom, output, mode, scenario } =>
+            observe(role, contract, run, update, rom, output, mode, scenario).map(|()| true),
         Command::Compare { retained, owned, contract } => compare(retained, owned, contract).map(|verdict| verdict == VerdictKind::Equal),
         Command::CheckContract { contract, qualifications, output } => check_contract(contract, qualifications, output).map(|()| true),
         Command::Controls { run, contract, output } => application_controls(run, contract, output),
