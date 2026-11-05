@@ -264,7 +264,7 @@ routeInvocation context route receipt = case route of
   -- Unpinned: against a pinned run the icon e2e's develop passes differed from FujiMod's.
   RamPushCcCardless -> viewer ["--cardless", "--classic-chrome", "--firmware", prefixDat, "--installed-nand", storedF7One]
   RamPushCcIconCardless -> viewer ["--cardless", "--classic-chrome-icon", "--firmware", prefixDat, "--installed-nand", storedF7One]
-  UsbToggleEmu -> launcher "//emulation:usb-toggle-emu" ["--fresh-boot", "--runs", "all", "--receipt-output", receipt]
+  UsbToggleEmu -> launcher "//emulation:usb-toggle-emu" ["--runs", "all", "--receipt-output", receipt]
   FujiModRamPushVolatile -> fujimod volatileScenario ["--cardless", "--firmware", prefixDat, "--installed-nand", storedF7One]
   FujiModRamPushCcCardless -> fujimod classicChromeTrajectories
     ["--cardless", "--classic-chrome", "--firmware", prefixDat, "--installed-nand", storedF7One]
@@ -273,7 +273,7 @@ routeInvocation context route receipt = case route of
   FujiModRamPushCc -> fujimod classicChromeTrajectories (["--classic-chrome", "--firmware", prefixDat, "--installed-nand", storedF7One] ++ card)
   FujiModUsbToggleE8 -> fujimod classicChromeTrajectories
     (["--classic-chrome", "--attach-hold-q", "--firmware", rc0ToggleDat, "--installed-nand", storedF7Zero] ++ card)
-  FujiModUsbToggleEmu -> launcher "//emulation:usb-toggle-emu" ["--fujimod", "--fresh-boot", "--runs", "all", "--receipt-output", receipt]
+  FujiModUsbToggleEmu -> launcher "//emulation:usb-toggle-emu" ["--fujimod", "--runs", "all", "--receipt-output", receipt]
   where
     Workspace root = contextWorkspace context
     RunDirectory run = contextRun context

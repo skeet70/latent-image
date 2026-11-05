@@ -5,6 +5,7 @@
 use fujimod_emulator::board::observation::MemoryWatch;
 use fujimod_xm1::adjustment::AdjustmentNand;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, menu_value, read, sha256, write};
+use fujimod_xm1::checkpoint::{BootIdentity, CheckpointKey};
 use fujimod_xm1::ff80::{Ff80, RendezvousInputs, Transfer, encode_hex};
 use fujimod_xm1::guest::{RouteKey, set_adc};
 use fujimod_xm1::machine::{KeyPulse, ReleaseSegment, key_pulse};
@@ -111,33 +112,17 @@ fn arguments() -> Result<Arguments, String> {
     })
 }
 
-/// A route checkpoint's key: the SHA-256 of its identity document.
 fn route_key(arguments: &Arguments, inputs: &Inputs, adjustment: &[u8]) -> Result<(CheckpointKey, Value), String> {
-    let bridge = read(&std::env::current_exe().map_err(|e| e.to_string())?)?;
-    let document = json!({
-        "schema": CHECKPOINT_SCHEMA,
-        "mode": "fujimod-usb-toggle-route-boot",
+    let procedure = serde_json::to_vec(&json!({
+        "bridge_source": sha256(include_bytes!("toggle.rs")),
         "route": arguments.route,
-        "inputs": {
-            "installed_dat": sha256(&inputs.update),
-            "adjustment_nand": sha256(adjustment),
-            "run_document": sha256(&inputs.document_bytes),
-            "boot_rom": sha256(&inputs.boot_rom),
-        },
-        "bridge": {"sha256": sha256(&bridge)},
-    });
-    Ok((CheckpointKey(sha256(document.to_string().as_bytes())), document))
-}
-
-/// The SHA-256 naming a route checkpoint directory.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(transparent)]
-struct CheckpointKey(String);
-
-impl std::fmt::Display for CheckpointKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
+        "cable_at_reset": arguments.cable_at_reset,
+        "adc_at_reset": arguments.adc_at_reset,
+    })).map_err(|error| error.to_string())?;
+    let identity = BootIdentity::new(
+        &inputs.document_bytes, &inputs.update, &inputs.boot_rom, adjustment, None, &procedure,
+    );
+    Ok((identity.key(), identity.document()))
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -455,13 +440,13 @@ impl Server {
                 if self.probe.is_some() {
                     return Err("an access-probe session saves no checkpoint".into());
                 }
-                let target = self.root.join(&self.key.0);
+                let target = self.root.join(self.key.as_str());
                 if target.exists() && !replace {
                     return Err(format!("{} exists", target.display()));
                 }
                 let record = json!({"schema": CHECKPOINT_SCHEMA, "key": self.key, "inputs": self.inputs,
                     "instructions": self.bridge.machine.instructions()});
-                let target = bridge::save_checkpoint(&mut self.bridge.machine, &self.root, &self.key.0, RECORD, &record)?;
+                let target = bridge::save_checkpoint(&mut self.bridge.machine, &self.root, self.key.as_str(), RECORD, &record)?;
                 json!({"directory": std::fs::canonicalize(&target).map_err(|e| e.to_string())?,
                     "instructions": self.bridge.machine.instructions()})
             }
@@ -532,7 +517,7 @@ fn drive() -> Result<(), String> {
     std::fs::create_dir_all(&arguments.output).map_err(|e| format!("{}: {e}", arguments.output.display()))?;
     let (key, key_inputs) = route_key(&arguments, &inputs, &adjustment_bytes)?;
     let root = arguments.checkpoints.clone();
-    let directory = root.join(&key.0);
+    let directory = root.join(key.as_str());
     let saved = arguments.probe_range.is_none() && directory.join(SNAPSHOT).is_file() && directory.join(RECORD).is_file();
     emit(&json!({"ok": true, "event": "start-options", "key": key, "inputs": key_inputs,
         "checkpoint": saved.then(|| directory.clone())}))?;
