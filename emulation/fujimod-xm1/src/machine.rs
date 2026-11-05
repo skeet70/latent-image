@@ -593,6 +593,14 @@ impl Machine {
         let node = self.session.node(&self.document.sd.0)?;
         self.session.board.inspect_device::<SdHost, _>(node, |host| host.read_sectors(first, count))
     }
+
+    pub fn read_nand(&self, first: crate::nand_read::RowAddress, count: crate::nand_read::RowCount) -> Result<crate::nand_read::NandRead, String> {
+        use fujimod_emulator_devices::capability::NandStore;
+        self.session.board.inspect_capability::<dyn NandStore, _>(
+            self.session.node(&self.document.nand.0)?,
+            |controller| crate::nand_read::read(controller.medium(), first, count),
+        )
+    }
 }
 
 #[cfg(test)]

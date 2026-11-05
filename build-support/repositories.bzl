@@ -129,6 +129,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/modal_task.rs",
     "//emulation:fujimod-xm1/src/modal_trace.rs",
     "//emulation:fujimod-xm1/src/nand_image.rs",
+    "//emulation:fujimod-xm1/src/nand_read.rs",
     "//emulation:fujimod-xm1/src/native_case.rs",
     "//emulation:fujimod-xm1/src/native_case_main.rs",
     "//emulation:fujimod-xm1/src/own_first_pair.rs",

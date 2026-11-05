@@ -468,6 +468,29 @@ Default ARM code and read-only data for `849a0387` occupy 5,364 bytes, split bel
 The control-1 through control-9 code/read-only-data totals are respectively 5,356, 5,324, 5,364, 5,264, 5,248, 5,360, 5,300, 5,364 and 5,340 bytes. The archived default ELF and run summary are under `private-data/scratch/RecordStoreCore/`; the section measurement is `nix shell nixpkgs#llvmPackages.llvm --command llvm-size -A private-data/scratch/RecordStoreCore/record-store-849a0387.elf`.
 
 The host cases cover the five stock geometries and defined registration/refusal paths. RSC's undefined zero-size division, malformed kinds entering helpers and invalid caller pointers are not promoted into a safe total guest contract. Host source tests and must-fail controls do not establish stock-byte equivalence, physical NAND laws or a full-system cutover.
+### Placement
+
+The nine stock entries occupy `[0x6ac2b4,0x6ae114)`. Minimal ARM branch veneers consume four bytes each; the remaining runs are 112, 332, 76, 776, 428, 304, 740, 4,952 and 20 bytes, totaling 7,740. Eight-byte veneers leave 7,704 bytes. The design's final 24-byte run includes the last entry and is not wholly free.
+
+The builtin-free core at `849a0387` occupies 5,364 bytes of text and read-only data, without writable sections. The split carrier uses 4-byte entry branches and places 16, 244, 484, 392, 256, 596 and 3,376 bytes in runs 0, 1, 3, 4, 5, 6 and 7 respectively. Run 2 stays unused. Linker assertions bound every used run and every veneer address; the flat image includes gaps and ends at `0x6ae114`. No RAM-push or image5-tail fallback is required.
+
+The default/control-1..9 core byte counts are 5,364 / 5,356 / 5,324 / 5,364 / 5,264 / 5,248 / 5,360 / 5,300 / 5,364 / 5,340; all produce the same 7,776-byte flat extent. The largest used run has at least 1,576 bytes free. Control 6 changes inner append's full threshold from N-1 to N; it does not change the recovery-probe equality.
+
+`//replacement/record_store_carrier:record-store-artifact` admits the linked span and scans canonical images 4, 5 and plain for references to retired code, wrappers/slots, cache buffers, cache ages/tags and saved program destinations. It rejects resolved A32 branches, MOVW/MOVT pairs, ADR and PC-relative literal/address references from the pinned decomp function ranges. The nine retained entry addresses remain callable. Its contract records the separate raw aligned-word census by image and retired range, classified as inside a function range or data/unmapped. Those numeric coincidences and unresolved computed references remain obligations for the cutover pair's fetch/access traps; a function range is not a complete code/data proof.
+
+`//replacement/record_store_carrier:stage-record-store` pins the DAT, decoded images and the `55436fc85c` decomp index, refuses resolved references, confines replacement bytes to the span and uses the shared image4 stager to recompress and read back one candidate DAT. Its contract binds source, linked code, symbols, candidate DAT, decoded image4 and the function index by SHA-256.
+
+The current host staging run (`028cd08f-4c6e-473f-abad-033849f3b4db`, core `849a0387`) emitted candidate DAT SHA-256 `9c359524f12a05a8e0570434e126d06617789a1ea7a66101b232f8e6967637e1` with zero refused resolved references. Its raw census retains 172 candidates: image4 43 (6 inside function ranges), image5 99 (11 inside function ranges), plain 30 (3 inside function ranges). All are cache-buffer/tag numeric candidates; none names the retired code or wrapper/slot regions. No full-system cutover run is implied.
+
+```sh
+devenv shell -- bazel build --jobs=2 //replacement/record_store_carrier:all
+devenv shell -- bazel test --jobs=2 //replacement/record_store_carrier:record-store-artifact-tests
+devenv shell -- bazel run --jobs=2 //replacement/record_store_carrier:stage-record-store -- DAT IMAGE4 IMAGE5 PLAIN FUNCTION_INDEX LINKED_BIN SYMBOLS PRIVATE_SCRATCH OUT_DAT OUT_CONTRACT
+```
+
+The default candidate is `:record-store-image`; each `:record-store-image-control-N` enables exactly one of the nine control features. Every target emits `.elf`, `.bin`, `.symbols` and `.disasm`. The `.bin` is 7,776 bytes at `0x6ac2b4`, suitable for the native-case code region; the symbols name each 4-byte veneer as `record_store_entry_NAME`.
+
+The linker collects reachable `compiler_builtins` archive-member sections in a forbidden output section and asserts it is empty. This rejects transitive compiler-builtins code before emitting any candidate artifact.
 
 ## Owned menu engine, increment 1 (#128)
 
