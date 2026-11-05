@@ -20,7 +20,7 @@ import Control.Exception (IOException, try)
 import qualified Data.ByteString as B
 import qualified Data.Vector as V
 import Emulation.SegmentReceipt (SegmentName, decodeDeclaredSegments, segmentNameText)
-import Emulation.ObservationCompare (differences, e2eIgnored, normalize, toggleIgnored, withoutOverlayExit)
+import Emulation.ObservationCompare (differences, e2eIgnored, normalize, rendezvousEntryFiles, toggleIgnored, withoutOverlayExit)
 import System.Directory (doesFileExist, listDirectory)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitFailure)
@@ -64,10 +64,7 @@ compareFlat old new = do
   before <- result old
   after <- result new
   let entriesOf = member "rendezvous_entry_observations"
-      entries = case entriesOf before of
-        Array indices -> [ "e2e-observation-" ++ show (round index :: Int) ++ ".json" | Number index <- V.toList indices ]
-        _ -> []
-  observed <- observationFiles entries old new
+  observed <- observationFiles (rendezvousEntryFiles before) old new
   let listed = differences "e2e-result.rendezvous_entry_observations" (entriesOf before) (entriesOf after)
       captured = differences "e2e-result.menu_receipts" (member "menu_receipts" before) (member "menu_receipts" after)
   pure (length names, observed ++ listed ++ captured)

@@ -4,7 +4,7 @@ module Main (main) where
 import Control.Monad (unless)
 import Data.Aeson (Value, object, (.=))
 import qualified Data.Text as T
-import Emulation.ObservationCompare (differences, e2eIgnored, normalize, toggleIgnored, withoutOverlayExit)
+import Emulation.ObservationCompare (differences, e2eIgnored, normalize, rendezvousEntryFiles, toggleIgnored, withoutOverlayExit)
 import System.Exit (exitFailure)
 
 segment :: [T.Text] -> Value
@@ -110,6 +110,11 @@ cases =
     , not (null (entryCompared (observation (step "menu" [67, 56, 0] : opened) ["0x12"]) (observation opened []))) )
   , ( "equal entry observations stay equal"
     , null (entryCompared (observation opened []) (observation opened [])) )
+  , ( "a result's rendezvous entries name their observation files"
+    , rendezvousEntryFiles (object ["rendezvous_entry_observations" .= [0, 6 :: Int], "observations" .= ([] :: [Value])])
+        == ["e2e-observation-0.json", "e2e-observation-6.json"] )
+  , ( "a result without rendezvous entries names no observation file"
+    , null (rendezvousEntryFiles (object ["observations" .= ([] :: [Value])])) )
   ]
 
 main :: IO ()

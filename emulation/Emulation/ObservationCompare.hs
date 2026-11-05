@@ -7,6 +7,7 @@ module Emulation.ObservationCompare
   , normalize
   , differences
   , withoutOverlayExit
+  , rendezvousEntryFiles
   ) where
 
 import Data.Aeson (Value (..), encode, object, (.=))
@@ -16,6 +17,7 @@ import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.List (sort)
 import qualified Data.List.NonEmpty as NE
 import Data.Maybe (fromMaybe)
+import Data.Scientific (toBoundedInteger)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 
@@ -113,3 +115,10 @@ withoutOverlayExit (Object retained) (Object candidate)
   , not (V.null rest)
   , rest == new = Object (KM.insert "steps" (Array rest) retained)
 withoutOverlayExit retained _ = retained
+
+-- | The observation files an @e2e-result.json@ names under @rendezvous_entry_observations@.
+rendezvousEntryFiles :: Value -> [String]
+rendezvousEntryFiles (Object result)
+  | Just (Array indices) <- KM.lookup "rendezvous_entry_observations" result =
+      [ "e2e-observation-" ++ show index ++ ".json" | Number value <- V.toList indices, Just index <- [toBoundedInteger value :: Maybe Int] ]
+rendezvousEntryFiles _ = []
