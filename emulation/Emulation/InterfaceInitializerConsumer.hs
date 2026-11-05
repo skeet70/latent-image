@@ -31,16 +31,13 @@ instance FromJSON ConsumerKind where
 
 data Contract = Contract I.Contract F.Sha256 F.Sha256 F.Sha256
 
-data CodeSite = Stage4 | Wrapper | Dispatch | IdentityWrapper | IdentityHelper | Service deriving (Eq)
+data CodeSite = Stage4 | Wrapper | Dispatch deriving (Eq)
 
 codeStart :: CodeSite -> Word32
 codeStart site = case site of
   Stage4 -> 0x69cdf8
   Wrapper -> 0x725dd8
   Dispatch -> 0x7235d8
-  IdentityWrapper -> 0x412bc
-  IdentityHelper -> 0x427b8
-  Service -> 0xd1140
 
 instance FromJSON CodeSite where
   parseJSON value = do
@@ -49,9 +46,6 @@ instance FromJSON CodeSite where
       0x69cdf8 -> pure Stage4
       0x725dd8 -> pure Wrapper
       0x7235d8 -> pure Dispatch
-      0x412bc -> pure IdentityWrapper
-      0x427b8 -> pure IdentityHelper
-      0xd1140 -> pure Service
       _ -> fail "unsupported consumer code region"
 
 data CodeRegion = CodeRegion CodeSite [Word32]
@@ -74,10 +68,6 @@ codeRegions =
       [0xe92d48f0,0xe28db014,0xe24dd020,0xe1a04000,0xe30a3d9c,0xe340307c,0xe1d020b0,0xe2422001,0xe7936102,0xebfff5f5,0xe1a07000]
   , CodeRegion Dispatch
       [0xe92d4df0,0xe28db01c,0xe30b5d20,0xe3405096,0xe5952000,0xe3013618,0xe7923003,0xe12fff33,0xe1a04000,0xe7953100,0xe5933164,0xe12fff33,0xe1a0a000]
-  , CodeRegion IdentityWrapper [0xe92d4800,0xe28db004,0xeb00053b,0xe8bd8800]
-  , CodeRegion IdentityHelper [0xee121e10,0xe3a02901,0xe2822003,0xe1510002,0x03a00000,0x13a00001,0xe12fff1e]
-  , CodeRegion Service
-      [0xe52db004,0xe28db000,0xe10f0000,0xe3801080,0xe121f001,0xe2000080,0xe28bd000,0xe8bd0800,0xe12fff1e]
   ]
 
 require :: Bool -> String -> Either String ()
@@ -104,25 +94,13 @@ contractValue (Contract initializer source loader image) = object
 validateImage4 :: Contract -> B.ByteString -> Either String ()
 validateImage4 (Contract _ _ _ digest) image = do
   require (sha256Hex image == F.sha256Hex digest) "consumer image4 source digest differs"
-  forM_ (take 3 codeRegions) $ \(CodeRegion site words') -> do
+  forM_ codeRegions $ \(CodeRegion site words') -> do
     observed <- mapM (leWordAt image . (fromIntegral (codeStart site) - 0x61c400 +)) [0,4 .. 4 * length words' - 4]
     require (observed == words') "consumer image4 source instructions differ"
 
 data CodeViews = CodeViews CodeSite Views deriving (Eq)
 instance FromJSON CodeViews where
   parseJSON = withObject "consumer code views" $ \row -> CodeViews <$> row .: "start" <*> row .: "views"
-
-newtype ServiceWords = ServiceWords [Word32] deriving (Eq)
-instance FromJSON ServiceWords where
-  parseJSON value = do
-    words' <- parseJSON value
-    let expected = [word | CodeRegion Service words'' <- codeRegions,word <- words'']
-    if words' == expected then pure (ServiceWords words') else fail "consumer service alias words differ"
-
-data ServiceAlias = ServiceAlias Int Word64 Word64 ServiceWords deriving (Eq)
-instance FromJSON ServiceAlias where
-  parseJSON = withObject "consumer service alias" $ \row ->
-    ServiceAlias <$> row .: "core" <*> row .: "guest" <*> row .: "physical" <*> row .: "words"
 
 data EmptyEvidence = EmptyEvidence deriving (Eq)
 instance FromJSON EmptyEvidence where
@@ -167,13 +145,13 @@ instance FromJSON ConsumerWatch where
   parseJSON value = withObject "complete consumer watch" (\row ->
     ConsumerWatch <$> parseJSON value <*> row .: "ranges" <*> row .: "counters" <*> row .: "coverage") value
 
-data ConsumerReceipt = ConsumerReceipt ConsumerKind Context Context Context Context Context Views Views Views Views Views Views Views [CodeViews] Decoder [Alias] [ServiceAlias] ConsumerWatch ConsumerWatch deriving (Eq)
+data ConsumerReceipt = ConsumerReceipt ConsumerKind Context Context Context Context Context Views Views Views Views Views Views Views [CodeViews] Decoder [Alias] ConsumerWatch ConsumerWatch deriving (Eq)
 instance FromJSON ConsumerReceipt where
   parseJSON = withObject "initializer consumer evidence" $ \row ->
     ConsumerReceipt <$> row .: "kind" <*> row .: "start" <*> row .: "dispatch" <*> row .: "entered" <*> row .: "returned" <*> row .: "after"
       <*> row .: "roots" <*> row .: "slot_before" <*> row .: "slot_after" <*> row .: "frame_before" <*> row .: "frame_after"
       <*> row .: "table_before" <*> row .: "table_after" <*> row .: "code" <*> row .: "decoder" <*> row .: "aliases"
-      <*> row .: "service_aliases" <*> row .: "prelude_watch" <*> row .: "watch"
+      <*> row .: "prelude_watch" <*> row .: "watch"
 
 data Result = Passed | Failed deriving (Eq)
 instance FromJSON Result where
@@ -259,31 +237,31 @@ validateEvidence (Contract initializer _ _ _) bytes = do
   pure consumer
 
 validateConsumer :: I.Contract -> I.ValidatedInitializer -> ConsumerReceipt -> Either String ()
-validateConsumer initializer validated (ConsumerReceipt InterruptMask start dispatch entered returned after roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code decoder aliases serviceAliases prelude watch) = do
+validateConsumer initializer validated (ConsumerReceipt InterruptMask start dispatch entered returned after roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code decoder aliases prelude watch) = do
   require (start == I.initializerExit validated) "consumer does not continue the independently validated initializer exit"
-  let Context dispatchPc incoming sp lr cpsr dispatchCounts tcm = dispatch
+  let Context dispatchPc incoming sp _ cpsr dispatchCounts tcm = dispatch
       Context enteringPc entering enteringSp enteringLr enteringCpsr enteringCounts enteringTcm = entered
       Context returnedPc outgoing outgoingSp outgoingLr outgoingCpsr returnedCounts returnedTcm = returned
       Context afterPc final finalSp finalLr finalCpsr afterCounts finalTcm = after
   require (length incoming == 13 && length entering == 13 && length outgoing == 13 && length final == 13) "consumer register width differs"
-  require (dispatchPc == 0x723600 && sp == 0x400f3388 && lr == 0x412c8 && incoming !! 11 == 0x400f33a4
-    && incoming !! 0 == 1 && incoming !! 3 == 0x400ddaa0 && incoming !! 4 == 1 && incoming !! 5 == 0x96bd20
+  require (dispatchPc == 0x723600 && sp == 0x400f3388 && incoming !! 11 == 0x400f33a4
+    && incoming !! 0 == 1 && incoming !! 3 == 0x400ddaa0 && incoming !! 4 == 1 && incoming !! 5 == 0x96bd20 && incoming !! 6 == 2
     && cpsr .&. 0x07f0fe20 == 0 && cpsr .&. 0xdf == 0xd3) "consumer source dispatch inputs or supported A32 little-endian SVC CPSR differ"
   let targetRegisters = take 3 incoming ++ [0xd1140] ++ drop 4 incoming
       mask = cpsr .&. 0x80
-      masked = cpsr .|. 0x80
-      returnedRegisters = [mask,masked] ++ drop 2 targetRegisters
-      finalRegisters = take 10 returnedRegisters ++ [mask] ++ drop 11 returnedRegisters
+      calleeSaved registers = take 8 (drop 4 registers)
+      finalRegisters = take 10 outgoing ++ [mask] ++ drop 11 outgoing
   require (enteringPc == 0xd1140 && entering == targetRegisters && enteringSp == sp && enteringLr == 0x723608 && enteringCpsr == cpsr && enteringTcm == tcm) "consumer target load or BLX state differs"
-  require (returnedPc == 0x723608 && outgoing == returnedRegisters && outgoingSp == sp && outgoingLr == 0x723608 && outgoingCpsr == masked && returnedTcm == tcm) "consumer leaf return ABI differs"
-  require (afterPc == 0x72360c && final == finalRegisters && finalSp == sp && finalLr == 0x723608 && finalCpsr == masked && finalTcm == tcm) "consumer caller copy or final stop differs"
+  require (returnedPc == 0x723608 && take 1 outgoing == [mask] && calleeSaved outgoing == calleeSaved targetRegisters && outgoingSp == sp
+    && controlBits outgoingCpsr == controlBits (cpsr .|. 0x80) && returnedTcm == tcm) "consumer leaf return ABI differs"
+  require (afterPc == 0x72360c && final == finalRegisters && finalSp == sp && finalLr == outgoingLr && finalCpsr == outgoingCpsr && finalTcm == tcm) "consumer caller copy or final stop differs"
   require (contextTcm start == tcm) "consumer prelude changed TCM bank registers"
   forM_ [start,dispatch,entered,returned,after] $ \context -> do
     let counts = contextCounts context
     require (length counts == 2 && all (<= 50000000) counts && sum counts <= 50000000) "consumer global instruction budget or counter bounds differ"
   case (contextCounts start,dispatchCounts,enteringCounts,returnedCounts,afterCounts) of
     ([s0,s1],[d0,d1],[e0,e1],[r0,r1],[a0,a1]) ->
-      require (d0 >= s0 && d1 > s1 && e0 >= d0 && e1 == d1 + 2 && r0 >= e0 && r1 == e1 + 9 && a0 >= r0 && a1 == r1 + 1) "consumer actual per-core instruction counts differ"
+      require (d0 >= s0 && d1 > s1 && e0 >= d0 && e1 == d1 + 2 && r0 >= e0 && r1 > e1 && a0 >= r0 && a1 == r1 + 1) "consumer actual per-core instruction counts differ"
     _ -> Left "consumer per-core count width differs"
   rootBytes <- viewsBytes roots
   require (B.length rootBytes == 8 && leWordAt rootBytes 0 == Right 0x4004dae0 && leWordAt rootBytes 4 == Right 0x400ddaa0) "consumer root pair differs"
@@ -292,9 +270,8 @@ validateConsumer initializer validated (ConsumerReceipt InterruptMask start disp
   require (slotBefore == slotAfter && B.length slotBytes == 4 && leWordAt slotBytes 0 == Right 0xd1140) "consumer published InterruptMask slot differs"
   beforeFrame <- viewsBytes frameBefore
   afterFrame <- viewsBytes frameAfter
-  require (B.length beforeFrame == 36 && B.length afterFrame == 36 && B.drop 4 beforeFrame == B.drop 4 afterFrame
-    && leWordAt afterFrame 0 == Right (incoming !! 11)) "consumer saved-r11 or complete caller frame differs"
-  forM_ (zip [4,8 .. 32] [0x400f33e4,0x400,2,incoming !! 7,incoming !! 8,incoming !! 10,0x400f33dc,0x725e00]) $ \(offset,value) ->
+  require (B.length beforeFrame == 32 && beforeFrame == afterFrame) "consumer complete caller frame differs"
+  forM_ (zip [0,4 .. 28] [0x400f33e4,0x400,2,incoming !! 7,incoming !! 8,incoming !! 10,0x400f33dc,0x725e00]) $ \(offset,value) ->
     require (leWordAt beforeFrame offset == Right value) "consumer caller frame does not match the authentic task103 source path"
   beforeTable <- viewsBytes tableBefore
   _ <- viewsBytes tableAfter
@@ -307,7 +284,7 @@ validateConsumer initializer validated (ConsumerReceipt InterruptMask start disp
     require (observed == source && B.length body == 4 * length words' && actual == words') "consumer code source readback differs"
   require (decoder == Decoder [1] [Nothing]) "consumer decoder identity or pending conversion differs"
   expectedTcm <- snapshotsFor start
-  validateAliases expectedTcm roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code aliases serviceAliases
+  validateAliases expectedTcm roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code aliases
   let rule cores kind mode spans = Rule cores kind mode spans [snapshot | snapshot@(TcmSnapshot core _ _) <- expectedTcm,core `elem` cores]
       writes = [CpuWrite,HostWrite,ModelBusWrite]
       immutable = map (uncurry physical) ([(0xddaa0,0xdf0cc),(0x96bd20,0x96bd28),(0x7caf34,0x7caf38)] ++ codeSpans ++ [(0xd0ab0,0xd0af0)])
@@ -316,21 +293,20 @@ validateConsumer initializer validated (ConsumerReceipt InterruptMask start disp
       protection = [WatchClass (Window span') writes | span' <- codeSpans ++ [(0xd0ab0,0xd0af0)]]
       preludeClasses =
         [WatchClass (Window (0xddaa0,0xdf0cc)) (CpuRead:writes),WatchClass (Window (0x96bd20,0x96bd28)) (CpuRead:writes)]
-        ++ [WatchClass (Window span') (CpuFetch:writes) | span' <- init codeSpans]
-        ++ [WatchClass (Window (0xd1140,0xd1164)) writes,WatchClass (Window (0xd0ab0,0xd0af0)) (CpuFetch:writes)
-           ,WatchClass (Window (0x7caf34,0x7caf38)) (CpuRead:writes),WatchClass (Window (0xc080c,0xc0810)) [CpuRead]]
+        ++ [WatchClass (Window span') (CpuFetch:writes) | span' <- codeSpans ++ [(0xd0ab0,0xd0af0)]]
+        ++ [WatchClass (Window (0x7caf34,0x7caf38)) (CpuRead:writes),WatchClass (Window (0xc080c,0xc0810)) [CpuRead]]
       preludeRules =
         [rule [0,1] CpuWrite Forbid immutable,rule [1] CpuRead Forbid (physical 0xddaa0 0xdf0cc : bodyReads)] ++ ownedFetch
       consumerRules =
-        [rule [1] CpuWrite Allow [physical 0xf3384 0xf3388],rule [0] CpuWrite Forbid (immutable ++ [physical 0xf3384 0xf33a8])]
+        [rule [1] CpuWrite Allow [physical 0xf3380 0xf3388],rule [0] CpuWrite Forbid (immutable ++ [physical 0xf3380 0xf3388,physical 0xf3388 0xf33a8])]
         ++ [rule [1] CpuRead Forbid bodyReads | I.contractRole initializer == I.Owned] ++ ownedFetch
       consumerClasses =
         [WatchClass (Window (0xddaa0,0xdf0cc)) (CpuRead:writes),WatchClass (Window (0x96bd20,0x96bd28)) writes
-        ,WatchClass (Window (0xf3384,0xf33a8)) (CpuRead:writes)] ++ protection
+        ,WatchClass (Window (0xf3388,0xf33a8)) (CpuRead:writes)] ++ protection
   preludeEvents <- validateWatch expectedTcm preludeClasses preludeRules prelude
   validatePrelude start dispatch beforeTable preludeEvents
   events <- validateWatch expectedTcm consumerClasses consumerRules watch
-  validateEvents dispatch entered returned after incoming beforeFrame events
+  validateEvents dispatch entered events
   case (reverse preludeEvents,events) of
     (lastPrelude:_,firstConsumer:_) ->
       require (eventTick lastPrelude <= eventTick firstConsumer) "consumer event ticks decreased across watch windows"
@@ -347,10 +323,7 @@ validatePrelude start dispatch table events = do
         ++ [0x69ce44,0x69ce48,0x69ce90,0x69ce94,0x69ce98,0x69ce9c,0x69cea0,0x69cea4]
         ++ [0x69ceec,0x69cef0 .. 0x69cf34]
         ++ [0x725dd8,0x725ddc .. 0x725dfc]
-        ++ [0x7235d8,0x7235dc .. 0x7235f4]
-        ++ [0x412bc,0x412c0,0x412c4]
-        ++ [0x427b8,0x427bc .. 0x427d0]
-        ++ [0x412c8,0x7235f8,0x7235fc,0x723600]
+        ++ [0x7235d8,0x7235dc .. 0x723600]
       core1Reads = [(translated,value,pc) | ConsumerEvent (Event CpuRead (Just 1) _ (Just translated) _ (Just value) (Just pc) _ _) _ _ _ <- events]
       roots = [(address,value,pc) | (address,value,pc) <- core1Reads,address >= 0x96bd20 && address < 0x96bd28]
       selector = [(address,value,pc) | (address,value,pc) <- core1Reads,address == 0x7caf34]
@@ -370,7 +343,7 @@ validatePrelude start dispatch table events = do
     require (if targetFetch && core == Just 1 then clock == Just (upper + 1) else maybe False (<= upperBound) clock) "consumer preexecution fetch or completed instruction clock differs"
     case source of
       CpuFetch -> do
-        let declared = any (\(low,high) -> address >= low && address < high && address .&. 3 == 0) ((0xd0ab0,0xd0af0):init codeSpans)
+        let declared = any (\(low,high) -> address >= low && address < high && address .&. 3 == 0) ((0xd0ab0,0xd0af0):codeSpans)
         require (physicalAddress == Just address && pc == Just (fromIntegral address) && declared) "consumer prelude fetched outside its source declarations"
       CpuRead -> do
         require (pc /= Nothing && value /= Nothing) "consumer prelude read attribution is incomplete"
@@ -386,34 +359,22 @@ validatePrelude start dispatch table events = do
         require (not isTable || fmap fromIntegral (leWordAt table (fromIntegral (translated - 0xddaa0))) == maybe (Left "consumer table read value is absent") Right value) "consumer prelude peer table read differs"
       _ -> Left "consumer prelude changed a protected resource"
 
-validateEvents :: Context -> Context -> Context -> Context -> [Word32] -> B.ByteString -> [ConsumerEvent] -> Either String ()
-validateEvents dispatch entered returned after incoming frame events = case events of
-  [slot,saved,restored] -> do
-    check slot CpuRead 0x400ddc04 0xddc04 0xd1140 0x723600 (sum (contextCounts dispatch)) (sum (contextCounts entered))
-    check saved CpuWrite 0x400f3384 0xf3384 (incoming !! 11) 0xd1140 (sum (contextCounts entered)) (sum (contextCounts returned))
-    check restored CpuRead 0x400f3384 0xf3384 (incoming !! 11) 0xd115c (sum (contextCounts entered)) (sum (contextCounts returned))
-    let ConsumerEvent _ savedBefore _ _ = saved
-    require (savedBefore == Just (AccessBytes (B.take 4 frame))) "consumer saved-r11 write preimage differs from the actual caller-frame snapshot"
-    let clocks = [clock | ConsumerEvent (Event _ _ _ _ _ _ _ (Just clock) _) _ _ _ <- events]
-    require (length clocks == 3 && and (zipWith (<) clocks (drop 1 clocks)) && sum (contextCounts returned) < sum (contextCounts after)) "consumer event instruction clocks differ"
-  _ -> Left "consumer CPU data events are not exactly slot-read, saved-r11 write and saved-r11 read"
-  where
-    check :: ConsumerEvent -> Source -> Word64 -> Word64 -> Word32 -> Word32 -> Word64 -> Word64 -> Either String ()
-    check (ConsumerEvent (Event source core address physicalAddress width value pc clock order) _ _ _) expectedSource guest physicalAddress' expectedValue expectedPc lower upper =
-      require (source == expectedSource && core == Just 1 && address == guest && physicalAddress == Just physicalAddress' && width == 4
-        && value == Just (fromIntegral expectedValue) && pc == Just expectedPc && order == Just LittleEndian && maybe False (\n -> n >= lower && n < upper) clock) "consumer CPU data event attribution or value differs"
+validateEvents :: Context -> Context -> [ConsumerEvent] -> Either String ()
+validateEvents dispatch entered events = case events of
+  [ConsumerEvent (Event source core address physicalAddress width value pc clock order) _ _ _] ->
+    require (source == CpuRead && core == Just 1 && address == 0x400ddc04 && physicalAddress == Just 0xddc04 && width == 4
+      && value == Just 0xd1140 && pc == Just 0x723600 && order == Just LittleEndian
+      && maybe False (\n -> n >= sum (contextCounts dispatch) && n < sum (contextCounts entered)) clock)
+      "consumer slot read attribution or value differs"
+  _ -> Left "consumer CPU data events are not exactly the slot read"
 
-validateAliases :: [TcmSnapshot] -> Views -> Views -> Views -> Views -> Views -> Views -> Views -> [CodeViews] -> [Alias] -> [ServiceAlias] -> Either String ()
-validateAliases snapshots roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code aliases serviceAliases = do
-  let resources slot frame table = [(0x96bd20,roots),(0xddc04,slot),(0xf3384,frame),(0xddaa0,table)] ++ [(fromIntegral (codeStart site),views) | CodeViews site views <- code,site /= Service]
+validateAliases :: [TcmSnapshot] -> Views -> Views -> Views -> Views -> Views -> Views -> Views -> [CodeViews] -> [Alias] -> Either String ()
+validateAliases snapshots roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code aliases = do
+  let resources slot frame table = [(0x96bd20,roots),(0xddc04,slot),(0xf3388,frame),(0xddaa0,table)] ++ [(fromIntegral (codeStart site),views) | CodeViews site views <- code]
   before <- bindings (resources slotBefore frameBefore tableBefore)
   after <- bindings (resources slotAfter frameAfter tableAfter)
   require (aliases == before ++ after) "consumer dispatch/final low/high alias bindings differ from actual physical readbacks"
-  let words' = ServiceWords [word | CodeRegion Service instructions <- codeRegions,word <- instructions]
-      expectedService = concat (replicate 2 [ServiceAlias core (0xd1140 + alias) 0xd1140 words' | core <- [0,1],alias <- [0,0x40000000]])
-      extents = [(core,guest,size) | Alias core guest _ size _ <- aliases] ++ [(core,guest,36) | ServiceAlias core guest _ _ <- serviceAliases]
-  require (serviceAliases == expectedService) "consumer dispatch/final direct-word service alias bindings differ"
-  forM_ extents $ \(core,guest,size) ->
+  forM_ [(core,guest,size) | Alias core guest _ size _ <- aliases] $ \(core,guest,size) ->
     forM_ [bank | TcmSnapshot selected atcm btcm <- snapshots,selected == core,bank <- [atcm,btcm]] $ \bank -> case bank of
       BankSnapshot _ Nothing -> pure ()
       BankSnapshot _ (Just (Window (low,high))) ->
@@ -426,7 +387,17 @@ validateAliases snapshots roots slotBefore slotAfter frameBefore frameAfter tabl
         pure (base,fromIntegral (B.length bytes),digest)) resources
       pure [Alias core (base + alias) base size digest | core <- [0,1],(base,size,digest) <- digests,alias <- [0,0x40000000]]
 
-data ConsumerSemantics = ConsumerSemantics Context Context Context Context Views Views Views Views Views Views Views [CodeViews] Decoder [Alias] [ServiceAlias] [ConsumerEvent] deriving (Eq)
+-- | CPSR without the NZCVQ and GE flags.
+controlBits :: Word32 -> Word32
+controlBits status = status .&. 0x07f0ffff
+
+-- | PC, the listed registers, SP, CPSR control bits and TCM registers.
+data PinnedContext = PinnedContext Word32 [Word32] Word32 Word32 [[Word32]] deriving (Eq)
+
+pinnedContext :: [Int] -> Context -> PinnedContext
+pinnedContext indices (Context pc registers sp _ cpsr _ tcm) = PinnedContext pc (map (registers !!) indices) sp (controlBits cpsr) tcm
+
+data ConsumerSemantics = ConsumerSemantics PinnedContext PinnedContext PinnedContext PinnedContext Views Views Views Views Views Views Views [CodeViews] Decoder [Alias] [ConsumerEvent] deriving (Eq)
 
 compareReceipts :: (Contract,B.ByteString) -> (Contract,B.ByteString) -> Either String ()
 compareReceipts (retained@(Contract first _ _ _),retainedBytes) (owned@(Contract second _ _ _),ownedBytes) = do
@@ -435,11 +406,10 @@ compareReceipts (retained@(Contract first _ _ _),retainedBytes) (owned@(Contract
   secondEvidence <- validateEvidence owned ownedBytes
   require (semantic firstEvidence == semantic secondEvidence) "retained and owned actual consumer inputs, outputs or effects differ"
   where
-    semantic (ConsumerReceipt InterruptMask _ dispatch entered returned after roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code decoder aliases serviceAliases _ (ConsumerWatch (Watch _ _ events _ _ _ _ _) _ _ _)) =
-      let origin = contextCounts dispatch
-          relative = relativeContext origin
-       in ConsumerSemantics (relative dispatch) (relative entered) (relative returned) (relative after) roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code decoder aliases serviceAliases (relativeEvents (sum origin) events)
-    relativeContext origin (Context pc registers sp lr cpsr counts tcm) = Context pc registers sp lr cpsr (zipWith (-) counts origin) tcm
+    semantic (ConsumerReceipt InterruptMask _ dispatch entered returned after roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code decoder aliases _ (ConsumerWatch (Watch _ _ events _ _ _ _ _) _ _ _)) =
+      let caller = pinnedContext (0 : [3 .. 11])
+          callee = pinnedContext (0 : [4 .. 11])
+       in ConsumerSemantics (caller dispatch) (caller entered) (callee returned) (callee after) roots slotBefore slotAfter frameBefore frameAfter tableBefore tableAfter code decoder aliases (relativeEvents (sum (contextCounts dispatch)) events)
     relativeEvents _ [] = []
     relativeEvents origin events@(ConsumerEvent _ _ tickOrigin _ : _) = map (relativeEvent origin tickOrigin) events
     relativeEvent origin (WatchTick tickOrigin) (ConsumerEvent (Event source core address physicalAddress size value pc clock order) before (WatchTick tick) tcm) =

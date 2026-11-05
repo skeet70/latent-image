@@ -77,13 +77,17 @@ data Continuation = Continuation
   }
 
 data ConsumerStack = ConsumerStack PS.Guest PS.Guest
-data StackOperation = CallerSave | SelectorSave | SelectorRestore deriving (Eq)
+data StackOperation = CallerSave deriving (Eq)
 data StackStep = StackStep StackOperation Context Context AccessBytes AccessBytes
 data StackEvidence = StackEvidence Core TcmBank BankOffset BankOffset AccessBytes AccessBytes [StackStep]
 
+-- | CPSR without the NZCVQ and GE flags.
+controlBits :: Word32 -> Word32
+controlBits status = status .&. 0x07f0ffff
+
 admitConsumerStack :: Context -> Either String ConsumerStack
 admitConsumerStack (Context _ _ sp _ cpsr _ banks) = do
-  require (sp >= 0x70000020 && sp <= 0x70002000 && sp .&. 3 == 0 && cpsr .&. 0x07f0ffff == 0x153)
+  require (sp >= 0x70000020 && sp <= 0x70002000 && sp .&. 3 == 0 && controlBits cpsr == 0x153)
     "primary root0 private stack or SVC interrupt context differs"
   case banks of
     [0x70000011,0]:_ -> pure (ConsumerStack (PS.Guest (sp - 32)) (PS.Guest sp))
@@ -124,16 +128,7 @@ deriveContract initializer source = do
   require (PS.sourceDigest (PI.contractSource initializer) == PS.sourceDigest (PSC.consumerSource source)
     && PS.sourceLoaderDigest (PI.contractSource initializer) == PS.sourceLoaderDigest (PSC.consumerSource source))
     "primary consumer source differs from initializer source"
-  forM_ (PSC.consumerCode source) $ \(PSC.CodeRegion site (PS.Guest start) words') ->
-    case site of
-      PSC.Selector -> sameLoader start words'
-      PSC.Identity -> sameLoader start words'
-      _ -> pure ()
   pure (Contract initializer source)
-  where
-    sameLoader start words' = do
-      actual <- mapM (leWordAt (PI.contractLoaderBytes initializer) . (fromIntegral (start - 0x40000) +)) [0,4 .. 4 * length words' - 4]
-      require (actual == words') "primary consumer selector code differs from actual producer loader"
 
 contractValue :: Contract -> Value
 contractValue (Contract initializer source) = object
@@ -290,8 +285,6 @@ parseCodeView value = do
   site <- case start of
     0x725a04 -> Right PSC.Installation
     0x725b74 -> Right PSC.Descriptor
-    0x412bc -> Right PSC.Selector
-    0x427b8 -> Right PSC.Identity
     _ -> Left "unsupported primary root0 code site"
   CodeView site <$> (field row "views" >>= parseViews)
 
@@ -319,8 +312,6 @@ parseStack value = do
         name <- get item "operation" :: Either String String
         operation <- case name of
           "caller-save" -> pure CallerSave
-          "selector-save" -> pure SelectorSave
-          "selector-restore" -> pure SelectorRestore
           _ -> Left "unsupported primary root0 stack operation"
         StackStep operation <$> (field item "before" >>= parseContext) <*> (field item "after" >>= parseContext)
           <*> bytes item "before_bytes" <*> bytes item "after_bytes"
@@ -512,40 +503,22 @@ validateStack entry@(Context _ incoming sp lr cpsr entryCounts tcm) selected
     (StackEvidence core bank low high (AccessBytes initial) (AccessBytes final) steps) = do
   ConsumerStack (PS.Guest lowGuest) (PS.Guest highGuest) <- admitConsumerStack entry
   require (core == Core0 && bank == Atcm && low == BankOffset (fromIntegral lowGuest - 0x70000000)
-    && high == BankOffset (fromIntegral highGuest - 0x70000000) && B.length initial == 32 && B.length final == 32
-    && length steps == 3) "primary root0 private stack binding or coverage differs"
-  case (entryCounts,counts selected) of
-    ([entry0,entry1],[_,selected1]) -> do
-      (expected,_) <- foldM (step entry0 selected1) (initial,entry1)
-        (zip [CallerSave,SelectorSave,SelectorRestore] steps)
-      require (final == expected) "primary root0 private stack final readback differs"
-    _ -> Left "primary root0 private stack count width differs"
-  where
-    saved = [incoming !! 4,incoming !! 5,incoming !! 6,incoming !! 7,incoming !! 11,lr]
-    selectorRegisters = [incoming !! 0,incoming !! 1,0x4004dae0,0x412bc,0x96bd20,incoming !! 0,incoming !! 6]
-      ++ take 4 (drop 7 incoming) ++ [sp - 4,incoming !! 12]
-    restoreRegisters = [0,0x4003,0x4003,0x412bc,0x96bd20,incoming !! 0,incoming !! 6]
-      ++ take 4 (drop 7 incoming) ++ [sp - 28,incoming !! 12]
-    returnRegisters = take 11 restoreRegisters ++ [sp - 4,incoming !! 12]
-    returnedCpsr = (cpsr .&. 0x0fffffff) .|. 0x60000000
-    context pc registers stack link status = SemanticContext pc registers stack link status tcm
-    step entry0 selected1 (memory,lastPeer) (operation,StackStep observed before after (AccessBytes beforeBytes) (AccessBytes afterBytes)) = do
-      let (ordinal,beforeState,afterState,next) = case operation of
-            CallerSave -> (0,context 0x725b74 incoming sp lr cpsr,context 0x725b78 incoming (sp - 24) lr cpsr
-              ,B.take 8 memory <> B.concat (map encodeLeWord saved))
-            SelectorSave -> (9,context 0x412bc selectorRegisters (sp - 24) 0x725b98 cpsr
-              ,context 0x412c0 selectorRegisters (sp - 32) 0x725b98 cpsr
-              ,encodeLeWord (sp - 4) <> encodeLeWord 0x725b98 <> B.drop 8 memory)
-            SelectorRestore -> (19,context 0x412c8 restoreRegisters (sp - 32) 0x412c8 returnedCpsr
-              ,context 0x725b98 returnRegisters (sp - 24) 0x412c8 returnedCpsr,memory)
-      require (observed == operation && semanticContext before == beforeState && semanticContext after == afterState
-        && beforeBytes == memory && afterBytes == next) "primary root0 private stack instruction context or effect differs"
+    && high == BankOffset (fromIntegral highGuest - 0x70000000) && B.length initial == 32 && B.length final == 32)
+    "primary root0 private stack binding or coverage differs"
+  let saved = B.concat (map encodeLeWord [incoming !! 4,incoming !! 5,incoming !! 6,incoming !! 7,incoming !! 11,lr])
+      context pc stack = SemanticContext pc incoming stack lr cpsr tcm
+  case (entryCounts,counts selected,steps) of
+    ([entry0,entry1],[_,selected1],[StackStep CallerSave before after (AccessBytes beforeBytes) (AccessBytes afterBytes)]) -> do
+      require (semanticContext before == context 0x725b74 sp && semanticContext after == context 0x725b78 (sp - 24)
+        && beforeBytes == initial && afterBytes == B.take 8 initial <> saved)
+        "primary root0 private stack instruction context or effect differs"
       case (counts before,counts after) of
-        ([before0,before1],[after0,after1]) -> do
-          require (before0 == entry0 + ordinal && after0 == before0 + 1 && before1 >= lastPeer
-            && after1 >= before1 && after1 <= selected1) "primary root0 private stack instruction progress differs"
-          pure (next,after1)
+        ([before0,before1],[after0,after1]) ->
+          require (before0 == entry0 && after0 == before0 + 1 && before1 >= entry1 && after1 >= before1 && after1 <= selected1)
+            "primary root0 private stack instruction progress differs"
         _ -> Left "primary root0 private stack instruction count width differs"
+      require (B.drop 8 final == saved) "primary root0 private stack final readback differs"
+    _ -> Left "primary root0 private stack count width or step coverage differs"
 
 validateReceipt :: Contract -> Receipt -> Either String ()
 validateReceipt (Contract initializer source) receipt = do
@@ -593,11 +566,9 @@ validateReceipt (Contract initializer source) receipt = do
       afterResources = beforeResources
   validateAliases expectedTcm beforeResources afterResources (aliases body)
   let preludeClasses = [WatchClass (Window span') (CpuRead:writes) | span' <- [(0x4dae0,0x4f10c),(0x96bd20,0x96bd28)] ++ headers]
-        ++ [WatchClass (Window span') (if index < (2 :: Int) then [CpuWrite,CpuFetch,HostWrite,ModelBusWrite] else writes)
-           | (index,span') <- zip [0..] (codeSpans source)]
-      preludeProtected = headers ++ drop 2 (codeSpans source)
-      preludeRules = [watchRules expectedTcm [0] CpuWrite Forbid (physicalScopes preludeProtected)
-        ,watchRules expectedTcm [1] CpuWrite Forbid (physicalScopes ((0x4dae0,0x4f10c) : preludeProtected))]
+        ++ [WatchClass (Window span') [CpuWrite,CpuFetch,HostWrite,ModelBusWrite] | span' <- codeSpans source]
+      preludeRules = [watchRules expectedTcm [0] CpuWrite Forbid (physicalScopes headers)
+        ,watchRules expectedTcm [1] CpuWrite Forbid (physicalScopes ((0x4dae0,0x4f10c) : headers))]
       resources = [(0x4dae0,0x4f10c),(0x96bd20,0x96bd28),(poolPhysical,poolPhysical + 4)] ++ codeSpans source ++ headers
       bodyClasses = [WatchClass (Window span') (CpuRead:writes) | span' <- take 3 resources]
         ++ [WatchClass (Window span') writes | span' <- drop 3 resources]
@@ -621,17 +592,16 @@ validateContexts ident poolValue entry@(Context entryPc incoming sp _ cpsr entry
     selected@(Context selectedPc selectedRegisters selectedSp selectedLr selectedCpsr selectedCounts selectedTcm)
     after@(Context afterPc afterRegisters afterSp afterLr afterCpsr afterCounts afterTcm) = do
   let identifier = PSC.descriptorIdentifier ident
-      preserved = drop 7 (take 11 incoming) ++ [sp - 4,incoming !! 12]
-      expectedSelected = [0,0x4003,0x4003,0x412bc,0x96bd20,identifier,0] ++ preserved
-      expectedAfter = [0,poolValue,0x4004dae0,identifier - 1,0x96bd20,identifier,0] ++ preserved
-      expectedCpsr = (cpsr .&. 0x0fffffff) .|. 0x60000000
+      calleeSaved registers = take 8 (drop 4 registers)
+      expectedCalleeSaved = [0x96bd20,identifier,0] ++ take 4 (drop 7 incoming) ++ [sp - 4]
+      expectedAfter = take 1 selectedRegisters ++ [poolValue,0x4004dae0,identifier - 1] ++ drop 4 selectedRegisters
   require (entryPc == 0x725b74 && selectedPc == 0x725b9c && afterPc == 0x725bb4
-    && selectedRegisters == expectedSelected && afterRegisters == expectedAfter
-    && selectedSp == sp - 24 && afterSp == selectedSp && selectedLr == 0x412c8 && afterLr == selectedLr
-    && selectedCpsr == expectedCpsr && afterCpsr == expectedCpsr && selectedTcm == tcm && afterTcm == tcm)
+    && take 1 selectedRegisters == [0] && calleeSaved selectedRegisters == expectedCalleeSaved && afterRegisters == expectedAfter
+    && selectedSp == sp - 24 && afterSp == selectedSp && afterLr == selectedLr
+    && controlBits selectedCpsr == controlBits cpsr && afterCpsr == selectedCpsr && selectedTcm == tcm && afterTcm == tcm)
     "primary root0 actual selection or descriptor read ABI differs"
   case (entryCounts,selectedCounts,afterCounts) of
-    ([e0,e1],[s0,s1],[a0,a1]) -> require (s0 == e0 + 21 && a0 == s0 + 6 && e1 <= s1 && s1 <= a1)
+    ([e0,e1],[s0,s1],[a0,a1]) -> require (s0 > e0 + 10 && a0 == s0 + 6 && e1 <= s1 && s1 <= a1)
       "primary root0 source instruction progress differs"
     _ -> Left "primary root0 count width differs"
   progressing entry selected
@@ -751,43 +721,47 @@ validatePrelude source start installation entry selectedPhysical producerTable n
           "primary root0 header changed or read a different root"
         pure memory
       else do
-        let imageCode = take 2 (codeSpans source)
-        require (kind == CpuWrite && any (not . disjoint (address,address + size)) imageCode
+        require (kind == CpuWrite && any (not . disjoint (address,address + size)) (codeSpans source)
           && maybe False (<= total installation) clock) "primary root0 code changed after installation or outside image loading"
         pure memory
     step _ _ = Left "primary root0 prelude event attribution is incomplete"
 
 newtype Ordinal = Ordinal Word64
 
-data ExpectedAccess = ExpectedAccess Source Word64 Word64 Word32 Word32 Ordinal
+-- | The boundary an access's instruction ordinal counts from.
+data Anchor = AtEntry | AtSelected deriving (Eq)
+
+data ExpectedAccess = ExpectedAccess Source Word64 Word64 Word32 Word32 Anchor Ordinal
 
 validateBody :: Context -> Context -> Context -> Word32 -> Word64 -> B.ByteString -> B.ByteString -> B.ByteString -> [RawEvent] -> Either String ()
 validateBody entry selected after poolGuest descriptorPhysical roots table pool events = do
-  (entryCore0,selectedCore1,afterCore1) <- case (counts entry,counts selected,counts after) of
-    ([core0,_],[_,selectedPeer],[_,afterPeer]) -> pure (core0,selectedPeer,afterPeer)
+  (entryCounts,selectedCounts,afterCore1) <- case (counts entry,counts selected,counts after) of
+    ([entry0,entry1],[selected0,selected1],[_,afterPeer]) -> pure ((entry0,entry1),(selected0,selected1),afterPeer)
     _ -> Left "primary root0 body core count width differs"
-  let expected =
-        [ExpectedAccess CpuRead 0x96bd20 0x96bd20 0x4004dae0 0x725b88 (Ordinal 5)
-        ,ExpectedAccess CpuRead 0x4004f0f8 0x4f0f8 0x412bc 0x725b90 (Ordinal 7)
-        ,ExpectedAccess CpuRead 0x96bd20 0x96bd20 0x4004dae0 0x725b9c (Ordinal 21)
-        ,ExpectedAccess CpuRead (descriptorPhysical + 0x40000000) descriptorPhysical poolGuest 0x725bac (Ordinal 25)]
+  let window AtEntry = (entryCounts,snd selectedCounts)
+      window AtSelected = (selectedCounts,afterCore1)
+      expected =
+        [ExpectedAccess CpuRead 0x96bd20 0x96bd20 0x4004dae0 0x725b88 AtEntry (Ordinal 5)
+        ,ExpectedAccess CpuRead 0x4004f0f8 0x4f0f8 0x412bc 0x725b90 AtEntry (Ordinal 7)
+        ,ExpectedAccess CpuRead 0x96bd20 0x96bd20 0x4004dae0 0x725b9c AtSelected (Ordinal 0)
+        ,ExpectedAccess CpuRead (descriptorPhysical + 0x40000000) descriptorPhysical poolGuest 0x725bac AtSelected (Ordinal 4)]
   poolValue <- leWordAt pool 0
-  let allExpected = expected ++ [ExpectedAccess CpuRead (fromIntegral poolGuest) (fromIntegral poolGuest - 0x40000000) poolValue 0x725bb0 (Ordinal 26)]
+  let allExpected = expected ++ [ExpectedAccess CpuRead (fromIntegral poolGuest) (fromIntegral poolGuest - 0x40000000) poolValue 0x725bb0 AtSelected (Ordinal 5)]
   require (length events == length allExpected) "primary root0 ordered data access coverage differs"
-  forM_ (zip allExpected events) $ \(ExpectedAccess kind guest physical value pc (Ordinal ordinal),event@(RawEvent (Event actualKind core address actualPhysical size actualValue actualPc actualClock _) _ _ _)) -> do
+  observed <- forM (zip allExpected events) $ \(ExpectedAccess kind guest physical value pc anchor (Ordinal ordinal),event@(RawEvent (Event actualKind core address actualPhysical size actualValue actualPc actualClock _) _ _ _)) -> do
+    let ((base0,base1),upper) = window anchor
+        core0Clock = base0 + ordinal + 1
     require (actualKind == kind && core == Just 0 && address == guest && actualPhysical == Just physical && size == 4
       && actualValue == Just (fromIntegral value) && actualPc == Just pc
-      && maybe False (\clock -> clock >= total entry + ordinal + 1
-        && clock <= entryCore0 + ordinal + 1 + afterCore1
-        && (if ordinal < 21 then clock <= entryCore0 + ordinal + 1 + selectedCore1
-            else clock >= entryCore0 + ordinal + 1 + selectedCore1)) actualClock)
+      && maybe False (\clock -> clock >= core0Clock + base1 && clock <= core0Clock + upper) actualClock)
       "primary root0 data access order, source instruction or live value differs"
     checkWindow entry after event
-  let clocks = [(ordinal,clock) | (ExpectedAccess _ _ _ _ _ (Ordinal ordinal),RawEvent (Event _ _ _ _ _ _ _ (Just clock) _) _ _ _) <- zip allExpected events]
-  forM_ (zip clocks (drop 1 clocks)) $ \((firstOrdinal,firstClock),(secondOrdinal,secondClock)) ->
-    require (if firstOrdinal == secondOrdinal then firstClock == secondClock else firstClock < secondClock)
+    clock <- maybe (Left "primary root0 data access lacks its instruction clock") Right actualClock
+    pure ((anchor,ordinal),clock,clock - core0Clock)
+  forM_ (zip observed (drop 1 observed)) $ \((firstGroup,firstClock,_),(secondGroup,secondClock,_)) ->
+    require (if firstGroup == secondGroup then firstClock == secondClock else firstClock < secondClock)
       "primary root0 data instruction groups have inconsistent clocks"
-  let peerCounts = [clock - entryCore0 - ordinal - 1 | (ordinal,clock) <- clocks]
+  let peerCounts = [peer | (_,_,peer) <- observed]
   require (and (zipWith (<=) peerCounts (drop 1 peerCounts))) "primary root0 reconstructed peer progress decreased"
   regions <- sequence [memoryRegion 0x96bd20 roots,memoryRegion 0x4dae0 table
     ,memoryRegion (fromIntegral poolGuest - 0x40000000) pool]
@@ -799,18 +773,27 @@ data SemanticContext = SemanticContext Word32 [Word32] Word32 Word32 Word32 [[Wo
 semanticContext :: Context -> SemanticContext
 semanticContext (Context pc registers sp lr cpsr _ banks) = SemanticContext pc registers sp lr cpsr banks
 
-data StackSemantics = StackSemantics Core TcmBank BankOffset BankOffset AccessBytes AccessBytes
+-- | PC, the listed registers, SP, CPSR control bits and TCM registers.
+data PinnedContext = PinnedContext Word32 [Word32] Word32 Word32 [[Word32]] deriving (Eq)
+
+pinnedContext :: [Int] -> Context -> PinnedContext
+pinnedContext indices (Context pc registers sp _ cpsr _ banks) =
+  PinnedContext pc [registers !! index | index <- indices] sp (controlBits cpsr) banks
+
+data StackSemantics = StackSemantics Core TcmBank BankOffset BankOffset AccessBytes B.ByteString
   [(StackOperation,SemanticContext,SemanticContext,AccessBytes,AccessBytes)] deriving (Eq)
 
+-- | The final readback is compared above the eight-byte slot frame.
 stackSemantics :: StackEvidence -> StackSemantics
-stackSemantics (StackEvidence core bank low high before after steps) = StackSemantics core bank low high before after
+stackSemantics (StackEvidence core bank low high before (AccessBytes after) steps) = StackSemantics core bank low high before (B.drop 8 after)
   [(operation,semanticContext incoming,semanticContext outgoing,preimage,readback)
     | StackStep operation incoming outgoing preimage readback <- steps]
 
-data Semantics = Semantics SemanticContext SemanticContext SemanticContext [Views] StackSemantics [CodeView] Decoder [Alias] deriving (Eq)
+data Semantics = Semantics SemanticContext PinnedContext PinnedContext [Views] StackSemantics [CodeView] Decoder [Alias] deriving (Eq)
 
 semantics :: Consumer -> Semantics
-semantics body = Semantics (semanticContext (entryContext body)) (semanticContext (selectedContext body)) (semanticContext (afterContext body))
+semantics body = Semantics (semanticContext (entryContext body))
+  (pinnedContext (0 : [4 .. 11]) (selectedContext body)) (pinnedContext [0 .. 11] (afterContext body))
   [rootsBefore body,rootsAfter body,tableBefore body,tableAfter body,poolBefore body,poolAfter body]
   (stackSemantics (stackEvidence body)) (codeViews body) (decoder body) (aliases body)
 

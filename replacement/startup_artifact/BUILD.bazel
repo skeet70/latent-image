@@ -26,6 +26,7 @@ haskell_library(
         "Replacement/StartupArtifact/Footprint/TaskStorage.hs",
         "Replacement/StartupArtifact/Footprint/TaskSubmission.hs",
         "Replacement/StartupArtifact/Joins.hs",
+        "Replacement/StartupArtifact/KernelSlots.hs",
         "Replacement/StartupArtifact/Manifest.hs",
         "Replacement/StartupArtifact/Stage.hs",
         "Replacement/StartupArtifact/StackBounds.hs",
@@ -75,6 +76,7 @@ haskell_library(
         "//replacement/task_storage:task-storage-artifact",
         "//replacement/task_submission:task-submission-artifact",
         "//replacement/task_constructors:task-constructors-artifact",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
     ],
 )
 
@@ -120,6 +122,14 @@ haskell_test(
     data = ["//emulation:fujimod-xm1/tests/data/composed-contract-v4.json"],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     main_file = "Tests.hs",
+    deps = _TEST_DEPS,
+)
+
+haskell_test(
+    name = "startup-artifact-kernel-slot-tests",
+    size = "small",
+    srcs = ["KernelSlotTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = _TEST_DEPS,
 )
 
@@ -249,6 +259,34 @@ haskell_test(
         "//host/firmware:stock-stack",
         "//replacement/image5_load:image5-load-artifact",
         "//replacement/plain_load:plain-load-artifact",
+        "//replacement/task_submission:task-submission-artifact",
+    ],
+)
+
+_KERNEL_SLOT_IMAGES = _J6_IMAGES + [
+    "//replacement/rtos_own_first:own-first-a.bin",
+    "//replacement/rtos_own_first:own-first-a.symbols",
+    "//replacement/rtos_own_first:own-first-b.bin",
+    "//replacement/rtos_own_first:own-first-b.symbols",
+    "//replacement/rtos_own_first:regions.json",
+]
+
+# Canonical inputs come from private-data. `bazel run` of a test target crashes with "Multiple entries with
+# same key: PATH" under the devenv shell, so pass them as test arguments:
+# bazel test //replacement/startup_artifact:startup-artifact-kernel-slot-canonical-tests --test_arg=CANONICAL_DAT --test_arg=SCRATCH_DIR --sandbox_writable_path=SCRATCH_DIR
+haskell_test(
+    name = "startup-artifact-kernel-slot-canonical-tests",
+    srcs = ["KernelSlotCanonicalTests.hs"],
+    args = _TOOL_ARGS + ["$(rootpath %s)" % image for image in _KERNEL_SLOT_IMAGES],
+    data = _TOOLS + _KERNEL_SLOT_IMAGES,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    tags = ["manual"],
+    deps = _TEST_DEPS + [
+        "//host/firmware:bank-allowlist",
+        "//host/firmware:stock-stack",
+        "//replacement/image5_load:image5-load-artifact",
+        "//replacement/plain_load:plain-load-artifact",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
         "//replacement/task_submission:task-submission-artifact",
     ],
 )
