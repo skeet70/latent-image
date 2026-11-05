@@ -1,4 +1,5 @@
 #![no_std]
+#![cfg_attr(feature = "guest", no_builtins)]
 
 #[cfg(test)]
 extern crate std;
@@ -45,9 +46,11 @@ impl Geometry {
     pub fn new(bytes: RecordBytes, count: RecordCount, sequence_offset: SequenceOffset) -> Result<Self, GeometryError> {
         let s = bytes.0 as usize;
         if s == 0 { return Err(GeometryError::Size); }
-        if count.0 as usize > BLOCK_BYTES / s { return Err(GeometryError::Count); }
+        let divisor = core::num::NonZeroU32::new(s as u32).ok_or(GeometryError::Size)?;
+        let capacity = divide(BLOCK_BYTES as u32, divisor).quotient;
+        if count.0 as u32 > capacity { return Err(GeometryError::Count); }
         if sequence_offset.0 & 1 != 0 || sequence_offset.0 as usize + 2 > s { return Err(GeometryError::SequenceOffset); }
-        let page_capacity = core::num::NonZeroU32::new((BLOCK_BYTES / s) as u32).ok_or(GeometryError::Size)?;
+        let page_capacity = core::num::NonZeroU32::new(capacity).ok_or(GeometryError::Size)?;
         Ok(Self { bytes, count, sequence_offset, page_capacity: PageRecordCount(page_capacity) })
     }
     pub const fn record_bytes(self) -> RecordBytes { self.bytes }
@@ -77,7 +80,7 @@ pub struct Area { pub kind: RecordKind, pub geometry: Geometry, pub current: Ban
 impl Area { pub fn register(kind: RecordKind, geometry: Geometry) -> Self { Self { kind, geometry, current: Bank::Zero } } }
 
 pub fn open(staging: &mut impl Staging) {
-    for kind in [RecordKind::Kind0, RecordKind::Kind1, RecordKind::Kind2, RecordKind::Kind3, RecordKind::Kind4] { staging.bytes(kind).fill(0xff); }
+    for kind in [RecordKind::Kind0, RecordKind::Kind1, RecordKind::Kind2, RecordKind::Kind3, RecordKind::Kind4] { fill(staging.bytes(kind), 0xff); }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Candidate { pub bank: Bank, pub position: Position, pub sequence: Sequence, pub skipped: u16 }
@@ -117,7 +120,7 @@ impl<'a, M: RecordMedium, S: Staging> Entry<'a, M, S> {
     fn seek(&mut self, area: &Area, position: Position) -> Sequence {
         self.load(area.kind, area.current);
         let s = area.geometry.bytes.0 as usize;
-        let offset = (position.0 as u32 % area.geometry.page_capacity.0) as usize * s;
+        let offset = divide(position.0 as u32, area.geometry.page_capacity.0).remainder as usize * s;
         let bytes = self.staging.bytes(area.kind);
         copy(part_mut(bytes, 0, s), part(self.block, offset, s));
         sequence(bytes, area.geometry.sequence_offset)
@@ -247,7 +250,7 @@ impl<'a, M: RecordMedium, S: Staging> Entry<'a, M, S> {
             for p in 0..n {
                 unused |= seq.0 == 0xffff;
                 let dest = part_mut(output, bank * chunk + p * s, s);
-                if unused { part_mut(dest, q.0 as usize, 2).fill(0xff); }
+                if unused { fill(part_mut(dest, q.0 as usize, 2), 0xff); }
                 else {
                     copy(dest, part(self.staging.bytes(area.kind), 0, s));
                     seq = self.seek(area, Position((p + 1) as u16));
@@ -275,7 +278,7 @@ impl<'a, M: RecordMedium, S: Staging> Entry<'a, M, S> {
     pub fn read_at(&mut self, kind: RecordKind, position: BytePosition, output: &mut [u8]) -> Result<(), ReadError> {
         if position.0 >= BLOCK_BYTES as u32 * 2 { if let Some(first) = output.first_mut() { *first = 0; } return Err(ReadError::OutsideBank); }
         let offset = position.0 as usize % BLOCK_BYTES;
-        if output.len() > BLOCK_BYTES - offset { output.fill(0); return Err(ReadError::CrossesBank); }
+        if output.len() > BLOCK_BYTES - offset { fill(output, 0); return Err(ReadError::CrossesBank); }
         let bank = if position.0 < BLOCK_BYTES as u32 { Bank::Zero } else { Bank::One };
         self.load(kind, bank);
         let stage = self.staging.read_bytes(kind, output.len());
@@ -305,4 +308,32 @@ fn contract_violation() -> ! {
     loop { core::hint::spin_loop(); }
     #[cfg(not(feature = "guest"))]
     panic!("record-store buffer contract violated");
+}
+
+struct Division { quotient: u32, remainder: u32 }
+
+#[inline(never)]
+fn divide(dividend: u32, divisor: core::num::NonZeroU32) -> Division {
+    let mut shifted = divisor.get();
+    let mut bit = 1u32;
+    let mut quotient = 0;
+    let mut remainder = dividend;
+    while shifted <= remainder >> 1 {
+        shifted <<= 1;
+        bit <<= 1;
+    }
+    while bit != 0 {
+        if remainder >= shifted {
+            remainder -= shifted;
+            quotient |= bit;
+        }
+        shifted >>= 1;
+        bit >>= 1;
+    }
+    Division { quotient, remainder }
+}
+
+#[inline(never)]
+fn fill(bytes: &mut [u8], value: u8) {
+    for byte in bytes { *byte = value; }
 }

@@ -143,3 +143,28 @@ fn rsc_6ac328_total_one_truncates_to_zero_and_collection_is_empty() {
     let mut output = [];
     assert_eq!(Entry::new(&mut medium, &mut staging, &mut block).collect(&mut registration.area, &mut output), 0);
 }
+
+#[test]
+fn rsc_6ad0b4_geometry_capacity_truncates_non_power_of_two_sizes() {
+    for (bytes, capacity) in [(3, 43690), (7, 18724), (0x34, 2520), (0x60, 1365), (0x200, 256), (0x600, 85), (0x1000, 32), (65534, 2)] {
+        assert!(Geometry::new(RecordBytes(bytes), RecordCount(capacity), SequenceOffset(0)).is_ok());
+        assert_eq!(Geometry::new(RecordBytes(bytes), RecordCount(capacity + 1), SequenceOffset(0)), Err(GeometryError::Count));
+    }
+}
+
+#[test]
+fn rsc_6acef8_non_power_of_two_page_capacity_wraps_position_n_to_page_offset_zero() {
+    let mut f = Fixture::new();
+    f.area = Area::register(RecordKind::Kind0, Geometry::new(RecordBytes(7), RecordCount(18724), SequenceOffset(0)).unwrap());
+    for bank in 0..2 {
+        for p in 0..18724 {
+            let seq = (p as u16).to_le_bytes();
+            f.medium.banks[bank][p * 7..p * 7 + 7].copy_from_slice(&[seq[0], seq[1], 0x50 + bank as u8, 0x22, 0x33, 0x44, 0x55]);
+        }
+    }
+    let mut output = vec![0x71; 262136];
+    assert_eq!(Entry::new(&mut f.medium, &mut f.staging, &mut f.block).collect(&mut f.area, &mut output), 262136);
+    assert_eq!(&output[..7], &[0, 0, 0x50, 0x22, 0x33, 0x44, 0x55]);
+    assert_eq!(&output[131068..131075], &[0, 0, 0x51, 0x22, 0x33, 0x44, 0x55]);
+    assert_eq!(&f.staging.bytes(RecordKind::Kind0)[..7], &[0, 0, 0x51, 0x22, 0x33, 0x44, 0x55]);
+}
