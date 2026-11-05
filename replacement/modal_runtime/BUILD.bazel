@@ -43,9 +43,10 @@ genrule(
     srcs = [
         "src/modal75.rs",
         "src/picker.rs",
+        "//replacement/menu_engine:host-library",
     ],
     outs = ["modal75-tests-bin"],
-    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/modal75.rs) -o $@",
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test --extern menu_engine=$(location //replacement/menu_engine:host-library) -C linker=$(location @lab_clang//:bin/clang) $(location src/modal75.rs) -o $@",
     executable = True,
     tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
 )

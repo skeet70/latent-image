@@ -11,9 +11,9 @@ filegroup(
 
 genrule(
     name = "route-tests-build",
-    srcs = ["src/lib.rs"],
+    srcs = ["src/lib.rs", "//replacement/menu_engine:host-library"],
     outs = ["route-tests-bin"],
-    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test --extern menu_engine=$(location //replacement/menu_engine:host-library) -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
     executable = True,
     tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
 )
