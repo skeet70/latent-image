@@ -1,6 +1,6 @@
 # Owned menu engine: design (#128)
 
-Status: revision 2, cleared by MenuEngineDesignReview. Increments 1 and 2 are built and reviewed: the host oracle passes its ten cases (E-MENU-ENGINE-HOST-ORACLE-150), and all 29 guest pairs pass (E-MENU-ENGINE-GUEST-PAIRS-150, `replacement/README.md#owned-menu-engine-increment-2-128`). Increment 3 ([its design](owned-menu-engine-increment-3.md)) is built on the host and its guest pairs are not run. The acceptance below is not met yet: picker 246 and observe run 1 (DOWN at 246's last row) are excluded while 246's stall is open.
+Status: revision 2, cleared by MenuEngineDesignReview. Increments 1 and 2 are built and reviewed: the host oracle passes its ten cases (E-MENU-ENGINE-HOST-ORACLE-150), and all 29 guest pairs pass (E-MENU-ENGINE-GUEST-PAIRS-150, `replacement/README.md#owned-menu-engine-increment-2-128`). Increment 3 ([its design](owned-menu-engine-increment-3.md)) passes its 38 host cases (E-MENU-ENGINE-INC3-HOST-ORACLE-150) and 56 of its 57 guest pairs (E-MENU-ENGINE-INC3-GUEST-PAIRS-150). The acceptance below is not met yet: picker 246 and observe run 1 (DOWN at 246's last row) stay excluded; their stall is a timing-dependent firmware path on the up-counting timer (E-PICKER246-CHAIN-STALL-150, open).
 
 Facts cite the ledger or `private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c`; **[INFERENCE]** marks what the evidence does not show directly.
 
