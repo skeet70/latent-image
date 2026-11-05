@@ -41,7 +41,6 @@
     {"function":"_RNvNtCsg14nhH9qOYj_4bank19menu_engine_adapter11write_state","access":"store","through":{"index":"0x009571d0"},"reason":"writes the changed words of the 0x430-byte menu block at offsets below 0x430"},
     {"function":"_RNvXs_NtNtNtCsjw6Ar5Xz5I4_4core4iter8adapters3revINtB4_3RevINtNtNtBa_3ops5range14RangeInclusivemEENtNtNtB8_6traits8iterator8Iterator4nextCsg14nhH9qOYj_4bank","access":"store","through":{"argument":"r0"},"reason":"stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"},
     {"function":"__aeabi_memclr4","access":"store","through":{"argument":"r0"},"reason":"copies to or clears the buffer its caller passes"},
-    {"function":"__aeabi_memcpy","access":"store","through":{"argument":"r0"},"reason":"copies to or clears the buffer its caller passes"},
-    {"function":"rb_menu_engine_apply","access":"store","through":{"index":"0x00000000"},"reason":"stores to the in-progress engine state in rb_menu_engine_apply's static ENGINE_STATE, or to a frame or result its caller passes"}
+    {"function":"__aeabi_memcpy","access":"store","through":{"argument":"r0"},"reason":"copies to or clears the buffer its caller passes"}
   ]
 }
