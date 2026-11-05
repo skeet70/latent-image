@@ -1099,9 +1099,9 @@ deriveTask1Actor source (LinkedImage (ImageBytes bin) (SymbolBytes symbols)) = d
   ranges <- mapM (\(T1.Carrier (T1.CodeAddress low) (T1.CodeAddress high)) -> spanOf kind Image5 low high) T1.carriers
   code <- concat <$> mapM (\(T1.Carrier (T1.CodeAddress low) _,bytes) -> ownedCode kind low (low + fromIntegral (B.length bytes))) (T1.emittedCarriers artifact)
   let writes = EnumeratedWrites
-        ([WriteRange PhysicalTarget low high | (low,high) <- [(0x944580,0x944590),(0x94f5e0,0x94f5e4),(0x950148,0x95014c),(0x95200c,0x952010),(0x954d68,0x954d6c),(0x972e84,0x972e88)]]
-          ++ [WriteRange PhysicalTarget 0xa4cd80 0xa4ce00])
-        (Premised (Premise "task1 globals and its live stack backing require application observer qualification; retained service effects are not proved by staging"))
+        ([WriteRange PhysicalTarget low high | (low,high) <- [(0x944580,0x94458a),(0x94f5e0,0x94f5e4),(0x950148,0x95014c),(0x95200c,0x952010),(0x954d68,0x954d6c),(0x972e84,0x972e88)]]
+          ++ [WriteRange PhysicalTarget 0xa4cdc0 0xa4ce00])
+        (Premised (Premise "task1 entry SP 0xa4ce00, 32-byte actor and once-duty frames; retained service effects are not proved by staging"))
       declaration = PieceDeclaration kind (Set.singleton Task1ActorArea) ranges
         (Task1Footprint.footprint artifact)
         [Premise "host composition authenticates carriers and direct service boundaries; application observer qualification is separate"]

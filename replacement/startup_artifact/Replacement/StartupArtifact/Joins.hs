@@ -368,7 +368,7 @@ registeredJoins =
   , taskCompositionOwnedCalls, dispatcherTaskComposition, publisherTaskServices
   , dispatcherRootEntry, dispatcherIdleEntry, wrapperIdleErrorCallback, rootTaskServices
   , image5ProducerServices, plainProducerServices, applicationPumpServices, task1ActorProducer, task1ActorPump, image5InitializerServices
-  , constructorTaskSubmission, constructorImage5Producer ]
+  , constructorTaskSubmission, constructorImage5Producer, constructorInitializer Image5Initializer ]
 
 -- | The task wrapper, the record-2 critical pair and the task-storage transition joined as in
 -- replacement/startup_composition/Replacement/StartupComposition/TaskSubmission.hs:63-97.
