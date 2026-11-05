@@ -43,12 +43,15 @@ reasonLabel reason = case reason of
       DefaultsDiffer -> "defaults-differ"
       DefaultOutOfRange -> "default-out-of-range"
       FieldOutOfRange -> "field-out-of-range"
+      RecordOutOfRange -> "record-out-of-range"
+      RecordDefaultDisagrees -> "record-default-disagrees"
 
 classValue :: Property -> Value
 classValue (Property (PropertyId identifier) (GuestAddress getter) (GuestAddress setter) verdict) = object
   [ "property" .= hex identifier, "getterArm" .= hex getter, "setterArm" .= hex setter
   , "class" .= case verdict of
       Owned (OwnedField _) -> "owned-field" :: String
+      Owned (OwnedSlotField _) -> "owned-slot-field"
       Owned OwnedUnassigned -> "owned-unassigned"
       Delegated _ -> "delegated"
   , "reason" .= case verdict of
@@ -56,19 +59,34 @@ classValue (Property (PropertyId identifier) (GuestAddress getter) (GuestAddress
       _ -> Nothing
   , "field" .= case verdict of
       Owned (OwnedField arm) -> Just (fieldValue arm)
+      Owned (OwnedSlotField arm) -> Just (slotValue arm)
       _ -> Nothing
   ]
   where
     fieldValue (FieldArm (BankOffset offset) width (BitRange lsb bits) (FieldDefault value) save) = object
-      [ "offset" .= offset, "width" .= (case width of Byte -> "byte"; Half -> "halfword" :: String)
+      [ "offset" .= offset, "width" .= widthLabel width
       , "lsb" .= lsb, "bits" .= bits, "default" .= hex value
       , "save" .= (save == SaveBank0Previous)
       ]
+    slotValue (SlotArm (BankBranch (BankOffset offset) width (BitRange lsb bits) fallback) (RecordBranch (RecordOffset recordOffset') recordWidth' (BitRange recordLsb recordBits')) save) = object
+      [ "bank" .= object
+          [ "offset" .= offset, "width" .= widthLabel width, "lsb" .= lsb, "bits" .= bits
+          , "default" .= case fallback of
+              BankConstant (FieldDefault value) -> object ["constant" .= hex value]
+              BankTailByte (TailOffset tail') -> object ["tailByte" .= hex tail']
+          ]
+      , "record" .= object ["offset" .= recordOffset', "width" .= widthLabel recordWidth', "lsb" .= recordLsb, "bits" .= recordBits']
+      , "save" .= (save == SaveBank0Previous)
+      ]
+    widthLabel width = case width of
+      Byte -> "byte" :: String
+      Half -> "halfword"
 
 summaryValue :: [Property] -> Value
 summaryValue properties = object
   [ "properties" .= length properties
   , "ownedField" .= count (\c -> case c of Owned (OwnedField _) -> True; _ -> False)
+  , "ownedSlotField" .= count (\c -> case c of Owned (OwnedSlotField _) -> True; _ -> False)
   , "ownedUnassigned" .= count (== Owned OwnedUnassigned)
   , "delegated" .= count (\c -> case c of Delegated _ -> True; _ -> False)
   ]

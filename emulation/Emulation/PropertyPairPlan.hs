@@ -10,11 +10,14 @@ module Emulation.PropertyPairPlan
   , codeImages
   , analysisPath
   , PropertyClass (..)
+  , ownedClass
   , PropertyArms (..)
   , PatchWord (..)
   , ScanImage (..)
   , Contract (..)
   , decodeContract
+  , controlPatch
+  , controlWord
   , ControlWord (..)
   , SiteLabel (..)
   , siteLabels
@@ -97,7 +100,11 @@ analysisPath root name = root </> case name of
   LoaderA -> "decode/loader-40000.bin"
   LoaderB -> "decode/loader-d0000.bin"
 
-data PropertyClass = Delegated | OwnedField | OwnedUnassigned deriving (Eq, Show)
+data PropertyClass = Delegated | OwnedField | OwnedSlotField | OwnedUnassigned deriving (Eq, Show)
+
+-- | The classes whose arms the owned roles retire: a value in a bank record field or a slot table field.
+ownedClass :: PropertyClass -> Bool
+ownedClass kind = kind == OwnedField || kind == OwnedSlotField
 
 data PropertyArms = PropertyArms
   { armsProperty :: Word32
@@ -116,7 +123,7 @@ data PatchWord = PatchWord
 
 data ScanImage = ScanImage { scanName :: T.Text, scanBase :: Word32, scanBytes :: Int, scanSha256 :: String } deriving (Eq, Show)
 
--- | The fields of the stage-1 property-service contract the pair reads.
+-- | The fields of the property-service staging contract the pair reads.
 data Contract = Contract
   { contractCandidateDat :: String
   , contractSourceDat :: String
@@ -162,6 +169,7 @@ instance FromJSON Contract where
       decided <- case kind :: T.Text of
         "delegated" -> pure Delegated
         "owned-field" -> pure OwnedField
+        "owned-slot-field" -> pure OwnedSlotField
         "owned-unassigned" -> pure OwnedUnassigned
         _ -> fail "unknown property class"
       PropertyArms <$> (property .: "property" >>= hexAddress) <*> pure decided
@@ -177,6 +185,19 @@ decodeContract = A.eitherDecodeStrict'
 
 -- | The guest control's one setter table word left at its retired stock arm.
 data ControlWord = ControlWord { controlProperty :: Word32, controlAddress :: Word32, controlTarget :: Word32 } deriving (Eq, Show)
+
+-- | The staged setter table word of the owned property the guest control restores.
+controlPatch :: Contract -> Word32 -> Either String PatchWord
+controlPatch contract property = do
+  arms <- maybe (Left "PROPERTY is not classified") Right (find ((== property) . armsProperty) (contractProperties contract))
+  unless (ownedClass (armsClass arms)) (Left "PROPERTY is neither an owned field nor an owned slot field")
+  unless (armsSetter arms < contractCarrierStart contract || armsSetter arms >= contractCarrierEnd contract)
+    (Left "PROPERTY's stock setter arm lies in the carrier")
+  maybe (Left "PROPERTY has no staged setter table word") Right
+    (find (\word -> patchSetterTable word && patchProperty word == property) (contractPatchWords contract))
+
+controlWord :: PatchWord -> ControlWord
+controlWord patch = ControlWord (patchProperty patch) (patchAddress patch) (patchOriginal patch)
 
 data GuardKind = RetiredGetterArm | RetiredSetterArm | CarrierFill deriving (Eq, Ord, Show, Enum, Bounded)
 data SiteLabel = GetterEntry | SetterEntry | Area3Append | PropertyCommit | GetterReturn | SetterReturn | AccessorStore StoreAccessor | Guard GuardKind
@@ -382,13 +403,14 @@ storeSites contract linked = forM [minBound .. maxBound] $ \accessor -> do
   unless (word32At linked (offset + 8) == storeInstruction accessor) (Left (name ++ " does not store with its width"))
   pure (entry + 8, accessor)
 
--- | The words of the owned-field arms no delegated property still reaches, each arm running to the
--- next arm target of either table, outside the carrier; and the carrier words after the linked code.
+-- | The words of the owned-field and owned-slot-field arms no delegated or unassigned property still
+-- reaches, each arm running to the next arm target of either table, outside the carrier; and the
+-- carrier words after the linked code.
 guardSites :: Contract -> PhysicalRange -> PhysicalRange -> Either String [(Word32, SiteLabel)]
 guardSites contract carrier carrierCode = do
   let properties = contractProperties contract
-      live select = S.fromList [select arms | arms <- properties, armsClass arms /= OwnedField]
-      retired select = S.fromList [select arms | arms <- properties, armsClass arms == OwnedField] `S.difference` live select
+      live select = S.fromList [select arms | arms <- properties, not (ownedClass (armsClass arms))]
+      retired select = S.fromList [select arms | arms <- properties, ownedClass (armsClass arms)] `S.difference` live select
       bounds = S.fromList (concat [[armsGetter arms, armsSetter arms] | arms <- properties])
                  `S.union` S.fromList [rangeStart carrier, rangeEnd carrier]
       inside range address = rangeStart range <= address && address < rangeEnd range

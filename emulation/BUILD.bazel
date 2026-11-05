@@ -9,6 +9,7 @@ exports_files(
         "//replacement/menu_engine:__pkg__",
         "//replacement/modal_runtime:__pkg__",
         "//replacement/recipe_ui:__pkg__",
+        "//replacement/rtos_own_first:__pkg__",
     ],
 )
 
@@ -1485,6 +1486,12 @@ sh_binary(
 sh_binary(
     name = "rtos-census",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-rtos-census"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
+    name = "own-first-pair-observe",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-own-first-pair"],
     visibility = ["//visibility:public"],
 )
 
@@ -3383,5 +3390,85 @@ haskell_test(
         "//host:containers",
         "//host:text",
         "//host:vector",
+    ],
+)
+
+haskell_library(
+    name = "own-first-pair-lib",
+    srcs = [
+        "Emulation/OwnFirstPairCheck.hs",
+        "Emulation/OwnFirstPairPlan.hs",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+_OWN_FIRST_LINKED = [
+    "//replacement/rtos_own_first:regions.json",
+    "//replacement/rtos_own_first:own-first-a.bin",
+    "//replacement/rtos_own_first:own-first-a.symbols",
+    "//replacement/rtos_own_first:own-first-b.bin",
+    "//replacement/rtos_own_first:own-first-b.symbols",
+]
+
+# bazel run //emulation:own-first-pair-plan -- --role ROLE --source-dat DAT --loader-a LOADER_A --loader-b LOADER_B --output NEW_DIRECTORY
+haskell_binary(
+    name = "own-first-pair-plan",
+    srcs = ["OwnFirstPairPlanMain.hs"],
+    args = ["$(rootpath %s)" % linked for linked in _OWN_FIRST_LINKED],
+    data = _OWN_FIRST_LINKED,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":own-first-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:first-stage",
+        "//host:update-container",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "own-first-pair-check",
+    srcs = ["OwnFirstPairCheckMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":own-first-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+    ],
+)
+
+haskell_test(
+    name = "own-first-pair-tests",
+    size = "small",
+    srcs = ["OwnFirstPairTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":own-first-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:vector",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
     ],
 )
