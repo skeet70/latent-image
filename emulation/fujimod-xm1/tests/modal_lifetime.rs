@@ -342,6 +342,120 @@ fn settings_reloads_are_aligned_bounded_inside_the_block_and_outside_watched_cod
     assert!(matches!(config(retired), Err(LifetimeFailure::InvalidSource)));
 }
 
+const TEXT_CALL: u32 = 0x0061_c974;
+const TEXT_RETURN: u32 = 0x0061_c978;
+const FILL_STORE: u32 = 0x0072_21b0;
+const TEXT_FIELD: u32 = 0x0096_cd7c;
+
+fn stock_text_setter() -> Value {
+    json!({"call": TEXT_CALL, "return": TEXT_RETURN,
+        "writers": [[0x0061_dbb4, 0x0061_ddbc], [0x0072_1b40, 0x0072_1bac], [0x0072_2054, 0x0072_2178], [0x0072_21a0, 0x0072_2218]],
+        "target": [RELOAD_START, RELOAD_END]})
+}
+fn call_request(calls: Value) -> Value {
+    let mut value = reload_request(json!([stock_reload(), stock_restore()]));
+    value["settings_calls"] = calls;
+    value
+}
+fn call_fixture() -> LifetimeMonitor {
+    let config = config(call_request(json!([stock_text_setter()]))).unwrap();
+    let mut memory = Memory::default();
+    for (extent, bytes) in config.readonly_images() { memory.store(extent.start().0, bytes); }
+    memory.store(SETTINGS, &[0x5a; 450]);
+    LifetimeMonitor::new(config, &memory).unwrap()
+}
+
+#[test]
+fn a_text_setter_call_admits_its_body_reload_clear_and_copy_and_counts_the_changes() {
+    for core in 0..2 {
+        let mut monitor = call_fixture();
+        fetch(&mut monitor, core, TEXT_CALL).unwrap();
+        for address in (RELOAD_START..RELOAD_END).step_by(2) {
+            store_on(&mut monitor, core, COPY_STORE, address, &[0x5a, 0x5a], 0x5a5a).unwrap();
+        }
+        store_on(&mut monitor, core, FILL_STORE, TEXT_FIELD, &[0x5a; 4], 0).unwrap();
+        store_on(&mut monitor, core, FILL_STORE, TEXT_FIELD + 4, &[0x5a; 4], 0).unwrap();
+        for (offset, value) in [(0, 0x3130), (2, 0x3030), (4, 0x3030), (6, 0x3030)] {
+            store_on(&mut monitor, core, COPY_STORE, TEXT_FIELD + offset, &[0, 0], value).unwrap();
+        }
+        fetch(&mut monitor, core, TEXT_RETURN).unwrap();
+        let receipt = monitor.receipt();
+        assert_eq!((receipt.admitted_call_writes, receipt.admitted_reload_writes, receipt.admitted_settings_writes, receipt.failure), (6, 0, 0, None));
+        store_on(&mut monitor, core, 0x1000, TEXT_FIELD, &[0x30, 0x31], 0x3130).unwrap();
+        assert_eq!(store_on(&mut monitor, core, FILL_STORE, TEXT_FIELD, &[0x30, 0x31, 0x30, 0x30], 0), Err(LifetimeFailure::ResourceChanged));
+    }
+}
+
+#[test]
+fn text_setter_stores_outside_their_open_call_refuse() {
+    #[derive(Debug)]
+    enum Case { NoBracket, OtherCore, WriterEnd, BeforeTarget, AtTargetEnd, StraddlesTarget, AfterReturn, ReturnOnly, ReloadBracket }
+    for case in [Case::NoBracket, Case::OtherCore, Case::WriterEnd, Case::BeforeTarget, Case::AtTargetEnd, Case::StraddlesTarget,
+        Case::AfterReturn, Case::ReturnOnly, Case::ReloadBracket] {
+        let mut monitor = call_fixture();
+        let (mut pc, mut address) = (FILL_STORE, TEXT_FIELD);
+        match case {
+            Case::NoBracket => {}
+            Case::OtherCore => fetch(&mut monitor, 1, TEXT_CALL).unwrap(),
+            Case::WriterEnd => { fetch(&mut monitor, 0, TEXT_CALL).unwrap(); pc = 0x0072_2218; }
+            Case::BeforeTarget => { fetch(&mut monitor, 0, TEXT_CALL).unwrap(); address = RELOAD_START - 4; }
+            Case::AtTargetEnd => { fetch(&mut monitor, 0, TEXT_CALL).unwrap(); address = RELOAD_END; }
+            Case::StraddlesTarget => { fetch(&mut monitor, 0, TEXT_CALL).unwrap(); address = RELOAD_END - 2; }
+            Case::AfterReturn => { fetch(&mut monitor, 0, TEXT_CALL).unwrap(); fetch(&mut monitor, 0, TEXT_RETURN).unwrap(); }
+            Case::ReturnOnly => fetch(&mut monitor, 0, TEXT_RETURN).unwrap(),
+            Case::ReloadBracket => fetch(&mut monitor, 0, RELOAD_CALL).unwrap(),
+        }
+        assert_eq!(store_on(&mut monitor, 0, pc, address, &[0x5a; 4], 0x3030_3130), Err(LifetimeFailure::ResourceChanged), "{case:?}");
+        let receipt = monitor.receipt();
+        assert_eq!((receipt.admitted_call_writes, receipt.admitted_reload_writes, receipt.admitted_settings_writes), (0, 0, 0), "{case:?}");
+    }
+}
+
+#[test]
+fn a_text_setter_call_does_not_open_or_close_a_reload_bracket() {
+    let mut monitor = call_fixture();
+    fetch(&mut monitor, 0, RELOAD_CALL).unwrap();
+    fetch(&mut monitor, 0, TEXT_CALL).unwrap();
+    fetch(&mut monitor, 0, TEXT_RETURN).unwrap();
+    store_on(&mut monitor, 0, COPY_STORE, RELOAD_START, &[0x5a, 0x5a], 0xa9c9).unwrap();
+    assert_eq!((monitor.receipt().admitted_reload_writes, monitor.receipt().admitted_call_writes), (1, 0));
+}
+
+#[test]
+fn settings_calls_are_aligned_bounded_and_their_sites_and_writers_stay_outside_watched_and_setter_code() {
+    let accepted = config(call_request(json!([stock_text_setter()]))).unwrap();
+    assert_eq!(accepted.settings_calls().len(), 1);
+    assert_eq!(accepted.settings_calls()[0].writers.len(), 4);
+    assert!(config(request()).unwrap().settings_calls().is_empty());
+    let with = |key: &str, value: Value| { let mut call = stock_text_setter(); call[key] = value; call };
+    for calls in [
+        json!([with("call", json!(TEXT_CALL + 2))]),
+        json!([with("return", json!(TEXT_CALL))]),
+        json!([with("writers", json!([]))]),
+        json!([with("writers", json!([[0x0072_2054, 0x0072_2176]]))]),
+        json!([with("writers", json!([[0x0072_2054, 0x0072_2178], [0x0072_2174, 0x0072_2218]]))]),
+        json!([with("writers", json!([[0x0062_ff00, 0x0063_0000]]))]),
+        json!([with("writers", json!([[INSTALL, INSTALL + 4]]))]),
+        json!([with("writers", json!((0..9u32).map(|index| [0x0070_0000 + index * 8, 0x0070_0004 + index * 8]).collect::<Vec<_>>()))]),
+        json!([with("target", json!([RELOAD_START, SETTINGS + 452]))]),
+        json!([with("call", json!(RELOAD_CALL))]),
+        json!([with("return", json!(0x00cf_59e4))]),
+        json!([with("call", json!(INSTALL + 0x100))]),
+        json!([stock_text_setter(), stock_text_setter()]),
+        Value::Array(vec![{ let mut call = stock_text_setter(); call["copy_store"] = json!(COPY_STORE); call }]),
+        json!((0..5u32).map(|index| with("call", json!(0x0050_0000 + index * 8))).collect::<Vec<_>>()),
+    ] {
+        let refused = serde_json::from_value::<LifetimeRequest>(call_request(calls.clone())).map_or(true, |request| request.into_config(vec![
+            PhysicalExtent::new(Guest(0x40000), 0xdae0).unwrap(),
+            PhysicalExtent::new(Guest(0xd0000), 0xdaa0).unwrap(),
+        ]).is_err());
+        assert!(refused, "{calls}");
+    }
+    let mut retired = call_request(json!([stock_text_setter()]));
+    retired["retired"] = json!([[TEXT_RETURN, TEXT_RETURN + 4]]);
+    assert!(matches!(config(retired), Err(LifetimeFailure::InvalidSource)));
+}
+
 #[test]
 fn immutable_roots_width_tables_and_code_refuse_even_identity_stores() {
     for address in [0x00cf_e3d4, 0x00d0_0268, 0x00cd_5f0e, 0x00cd_1ae4,

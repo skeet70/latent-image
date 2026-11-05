@@ -39,10 +39,15 @@ pub struct LifetimeRequest {
     settings_writers: Vec<[u32; 2]>,
     #[serde(default)]
     settings_reloads: Vec<ReloadRequest>,
+    #[serde(default)]
+    settings_calls: Vec<CallRequest>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReloadRequest { call: u32, #[serde(rename = "return")] resume: u32, copy_store: u32, target: [u32; 2] }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CallRequest { call: u32, #[serde(rename = "return")] resume: u32, writers: Vec<[u32; 2]>, target: [u32; 2] }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReadonlyRequest { start: u32, bytes: Vec<u8> }
@@ -73,9 +78,13 @@ struct Service { entry: CodeSite, writer: CodeSite }
 /// to, the copy routine's store instruction, and the live-settings bytes it may change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SettingsReload { pub call: Guest, pub resume: Guest, pub copy_store: Guest, pub target: PhysicalExtent }
+/// A settings service call: the call instruction, the instruction the call returns to,
+/// the code whose stores it makes, and the live-settings bytes those stores may change.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettingsCall { pub call: Guest, pub resume: Guest, pub writers: Vec<PhysicalExtent>, pub target: PhysicalExtent }
 /// The admitted writer of a value-changing live-settings store.
 #[derive(Clone, Copy)]
-enum SettingsWriter { Setter, Reload }
+enum SettingsWriter { Setter, Reload, Call }
 
 pub struct LifetimeConfig {
     runtime: PhysicalExtent,
@@ -94,6 +103,8 @@ pub struct LifetimeConfig {
     settings_writers: Vec<PhysicalExtent>,
     /// Reloads whose sequential halfword copy stores are admitted between a core's call and return fetches.
     settings_reloads: Vec<SettingsReload>,
+    /// Calls whose writers' stores into the target are admitted between a core's call and return fetches.
+    settings_calls: Vec<SettingsCall>,
     sites: Vec<CodeSite>,
 }
 
@@ -123,6 +134,7 @@ const MAX_RUNTIME_BYTES: usize = 1 << 20;
 const MAX_RETIRED_EXTENTS: usize = 64;
 const MAX_SETTINGS_WRITERS: usize = 8;
 const MAX_SETTINGS_RELOADS: usize = 4;
+const MAX_SETTINGS_CALLS: usize = 4;
 
 /// The bank variants the guard binds (RamPushLayout `BankVariant`).
 #[derive(Clone, Copy)]
@@ -264,30 +276,57 @@ impl LifetimeRequest {
         if settings_writers.len() > MAX_SETTINGS_WRITERS || settings_writers.windows(2).any(|pair| pair[0].overlaps(pair[1])) {
             return Err(LifetimeFailure::InvalidRequest);
         }
+        let bracket_site = |site: u32| -> Result<Guest> {
+            let word = word_extent(Guest(site))?;
+            if merged.iter().chain(&retired).any(|range| range.overlaps(word)) || word.overlaps(runtime) {
+                return Err(LifetimeFailure::InvalidSource);
+            }
+            Ok(Guest(site))
+        };
+        let bracket_target = |[start, end]: [u32; 2]| -> Result<PhysicalExtent> {
+            let target = extent(start, end)?;
+            if !contains(settings_extent(), target) { return Err(LifetimeFailure::InvalidRequest); }
+            Ok(target)
+        };
         if self.settings_reloads.len() > MAX_SETTINGS_RELOADS { return Err(LifetimeFailure::InvalidRequest); }
         let settings_reloads = self.settings_reloads.into_iter().map(|request| {
             if [request.call, request.resume, request.copy_store].iter().any(|pc| pc % 4 != 0) || request.call == request.resume {
                 return Err(LifetimeFailure::InvalidExtent);
             }
-            let target = extent(request.target[0], request.target[1])?;
-            if !contains(settings_extent(), target) { return Err(LifetimeFailure::InvalidRequest); }
-            for site in [request.call, request.resume] {
-                let word = word_extent(Guest(site))?;
-                if merged.iter().chain(&retired).any(|range| range.overlaps(word)) || word.overlaps(runtime) {
-                    return Err(LifetimeFailure::InvalidSource);
-                }
-            }
+            let target = bracket_target(request.target)?;
+            let (call, resume) = (bracket_site(request.call)?, bracket_site(request.resume)?);
             let copy_store = Guest(request.copy_store);
             word_extent(copy_store)?;
             if settings_writers.iter().any(|writer| writer.start() <= copy_store && copy_store < writer.end()) {
                 return Err(LifetimeFailure::InvalidSource);
             }
-            Ok(SettingsReload { call: Guest(request.call), resume: Guest(request.resume), copy_store, target })
+            Ok(SettingsReload { call, resume, copy_store, target })
         }).collect::<Result<Vec<_>>>()?;
-        let mut reload_sites: Vec<_> = settings_reloads.iter().flat_map(|reload| [reload.call, reload.resume]).collect();
-        reload_sites.sort();
-        if reload_sites.windows(2).any(|pair| pair[0] == pair[1]) { return Err(LifetimeFailure::InvalidRequest); }
-        Ok(LifetimeConfig { runtime, resident, readonly, sources: immutable_sources, install, rollback, publications, publication_addresses: addresses, watched: merged, retired, settings_writers, settings_reloads, sites })
+        if self.settings_calls.len() > MAX_SETTINGS_CALLS { return Err(LifetimeFailure::InvalidRequest); }
+        let settings_calls = self.settings_calls.into_iter().map(|request| {
+            if [request.call, request.resume].iter().any(|pc| pc % 4 != 0) || request.call == request.resume {
+                return Err(LifetimeFailure::InvalidExtent);
+            }
+            let target = bracket_target(request.target)?;
+            let (call, resume) = (bracket_site(request.call)?, bracket_site(request.resume)?);
+            let mut writers = request.writers.into_iter().map(|[start, end]| {
+                if start % 4 != 0 || end % 4 != 0 { return Err(LifetimeFailure::InvalidExtent); }
+                extent(start, end)
+            }).collect::<Result<Vec<_>>>()?;
+            writers.sort_by_key(|range| range.start());
+            if writers.is_empty() || writers.len() > MAX_SETTINGS_WRITERS || writers.windows(2).any(|pair| pair[0].overlaps(pair[1])) {
+                return Err(LifetimeFailure::InvalidRequest);
+            }
+            if writers.iter().any(|writer| writer.overlaps(runtime) || settings_writers.iter().any(|setter| setter.overlaps(*writer))) {
+                return Err(LifetimeFailure::InvalidSource);
+            }
+            Ok(SettingsCall { call, resume, writers, target })
+        }).collect::<Result<Vec<_>>>()?;
+        let mut bracket_sites: Vec<_> = settings_reloads.iter().flat_map(|reload| [reload.call, reload.resume])
+            .chain(settings_calls.iter().flat_map(|call| [call.call, call.resume])).collect();
+        bracket_sites.sort();
+        if bracket_sites.windows(2).any(|pair| pair[0] == pair[1]) { return Err(LifetimeFailure::InvalidRequest); }
+        Ok(LifetimeConfig { runtime, resident, readonly, sources: immutable_sources, install, rollback, publications, publication_addresses: addresses, watched: merged, retired, settings_writers, settings_reloads, settings_calls, sites })
     }
 }
 
@@ -319,6 +358,7 @@ impl LifetimeConfig {
     pub fn retired_extents(&self) -> &[PhysicalExtent] { &self.retired }
     pub fn settings_writers(&self) -> &[PhysicalExtent] { &self.settings_writers }
     pub fn settings_reloads(&self) -> &[SettingsReload] { &self.settings_reloads }
+    pub fn settings_calls(&self) -> &[SettingsCall] { &self.settings_calls }
 }
 
 pub trait LifetimeMemory {
@@ -347,6 +387,8 @@ pub struct LifetimeReceipt {
     pub admitted_settings_writes: u64,
     /// Value-changing live-settings stores from a settings reload's copy store.
     pub admitted_reload_writes: u64,
+    /// Value-changing live-settings stores from a settings call's writers.
+    pub admitted_call_writes: u64,
     pub failure: Option<LifetimeFailure>,
 }
 
@@ -500,11 +542,16 @@ pub struct LifetimeMonitor {
     pending: [Option<StorePermit>; 2],
     /// Each core's reload whose call fetch was observed after that core's last return fetch.
     reloads: [Option<OpenReload>; 2],
+    /// Each core's settings call, by index, whose call fetch was observed after that core's last return fetch.
+    calls: [Option<usize>; 2],
     superseded: [Superseded; 2],
 }
 /// An open reload bracket and the address its next copy store must write.
 #[derive(Clone, Copy)]
 struct OpenReload { reload: SettingsReload, cursor: Guest }
+/// A bracket fetch: a call site opens with `Some`, a return site closes with `None`.
+#[derive(Clone, Copy)]
+enum Bracket { Reload(Option<SettingsReload>), Call(Option<usize>) }
 impl LifetimeMonitor {
     pub fn new(config: LifetimeConfig, memory: &impl LifetimeMemory) -> Result<Self> {
         let mut resident = [0; 1024];
@@ -525,11 +572,11 @@ impl LifetimeMonitor {
             if Word(u32::from_le_bytes(bytes)) != row.old { return Err(LifetimeFailure::WrongBefore); }
         }
         let publication_count = config.publications.len();
-        Ok(Self { config, settings, pending: [None; 2], reloads: [None; 2], superseded: [Superseded::EMPTY; 2], receipt: LifetimeReceipt {
+        Ok(Self { config, settings, pending: [None; 2], reloads: [None; 2], calls: [None; 2], superseded: [Superseded::EMPTY; 2], receipt: LifetimeReceipt {
             phase: LifetimePhase::Prepared, publication_count, forward_writes: 0, reverse_writes: 0,
             pending_stores: 0, install_core: None, rollback_core: None, checked_resource_writes: 0,
             checked_identity_writes: 0, checked_scheduler_writes: 0, checked_context_writes: 0, checked_vfp_owner_writes: 0,
-            audited_writes: 0, admitted_settings_writes: 0, admitted_reload_writes: 0, failure: None,
+            audited_writes: 0, admitted_settings_writes: 0, admitted_reload_writes: 0, admitted_call_writes: 0, failure: None,
         } })
     }
     pub fn config(&self) -> &LifetimeConfig { &self.config }
@@ -646,21 +693,26 @@ impl LifetimeMonitor {
         Ok(())
     }
     /// A retired fetch refuses from the install entry until the last reverse
-    /// publication write. A reload call fetch opens its core's reload bracket and a
-    /// reload return fetch closes it, in any phase.
+    /// publication write. A reload or settings call fetch opens its core's bracket of
+    /// that kind and its return fetch closes it, in any phase.
     pub fn observe_row(&mut self, row: &Value) -> Result<()> {
         self.healthy()?;
         if row.get("source").and_then(Value::as_str) == Some("cpu-fetch") {
             let physical = row.get("physical").and_then(Value::as_u64).and_then(|physical| u32::try_from(physical).ok());
             if let Some(site) = physical.map(Guest) {
-                let call = self.config.settings_reloads.iter().find(|reload| reload.call == site).copied();
-                if call.is_some() || self.config.settings_reloads.iter().any(|reload| reload.resume == site) {
+                let reload = self.config.settings_reloads.iter().find(|reload| reload.call == site).copied();
+                let call = self.config.settings_calls.iter().position(|call| call.call == site);
+                let bracket = if reload.is_some() || self.config.settings_reloads.iter().any(|reload| reload.resume == site) { Some(Bracket::Reload(reload)) }
+                    else if call.is_some() || self.config.settings_calls.iter().any(|call| call.resume == site) { Some(Bracket::Call(call)) }
+                    else { None };
+                if let Some(bracket) = bracket {
                     let core = row.get("core").and_then(Value::as_u64).ok_or(LifetimeFailure::MalformedRow)
                         .and_then(|core| usize::try_from(core).ok().filter(|core| *core < 2).ok_or(LifetimeFailure::InvalidCore))
                         .and_then(|core| if row.get("size").and_then(Value::as_u64) == Some(4) { Ok(core) } else { Err(LifetimeFailure::MalformedRow) });
-                    return match core {
-                        Ok(core) => { self.reloads[core] = call.map(|reload| OpenReload { reload, cursor: reload.target.start() }); Ok(()) }
-                        Err(failure) => Err(self.refuse(failure)),
+                    return match (core, bracket) {
+                        (Ok(core), Bracket::Reload(reload)) => { self.reloads[core] = reload.map(|reload| OpenReload { reload, cursor: reload.target.start() }); Ok(()) }
+                        (Ok(core), Bracket::Call(call)) => { self.calls[core] = call; Ok(()) }
+                        (Err(failure), _) => Err(self.refuse(failure)),
                     };
                 }
             }
@@ -743,9 +795,13 @@ impl LifetimeMonitor {
                 }
                 _ => false,
             };
+            let in_extent = |extent: &PhysicalExtent| extent.start() <= attempt.pc && attempt.pc < extent.end();
+            let call_store = self.calls[attempt.core.0].map(|index| &self.config.settings_calls[index])
+                .is_some_and(|call| contains(call.target, target) && call.writers.iter().any(in_extent));
             let writer = if !contains(settings_extent(), target) { None }
-                else if self.config.settings_writers.iter().any(|writer| writer.start() <= attempt.pc && attempt.pc < writer.end()) { Some(SettingsWriter::Setter) }
+                else if self.config.settings_writers.iter().any(in_extent) { Some(SettingsWriter::Setter) }
                 else if reload_store { Some(SettingsWriter::Reload) }
+                else if call_store { Some(SettingsWriter::Call) }
                 else { None };
             let mut changed = false;
             for index in 0..width {
@@ -769,6 +825,7 @@ impl LifetimeMonitor {
                 match writer {
                     SettingsWriter::Setter => self.receipt.admitted_settings_writes += 1,
                     SettingsWriter::Reload => self.receipt.admitted_reload_writes += 1,
+                    SettingsWriter::Call => self.receipt.admitted_call_writes += 1,
                 }
             }
         }
