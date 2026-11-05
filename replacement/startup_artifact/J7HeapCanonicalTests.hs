@@ -29,7 +29,7 @@ import Replacement.StartupArtifact.Application (PlainImage (..), plainImage)
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Contract (contractCarriers, contractValue, record5Media)
 import qualified Replacement.StartupArtifact.Footprint.GeneralHeap as Heap
-import Replacement.StartupArtifact.Joins (JoinKind (..), registeredJoins, suppliedOf)
+import Replacement.StartupArtifact.Joins (JoinKind (..), depthsIn, registeredJoins, suppliedOf)
 import Replacement.StartupArtifact.Stage
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
@@ -292,6 +292,16 @@ main = do
       putStrLn ("heap supplied depths: " ++ show [(entry, depthOf entry) | (entry, _) <- owned])
       ok "every heap entry is supplied, at least its owned cumulative depth"
         (all (\(entry, bytes) -> maybe False (>= bytes) (depthOf entry)) owned)
+  -- The retained role's demands: stock malloc, free, _malloc_r and _free_r walked on canonical image 4, the
+  -- J6 pieces' owned entries (critical pair, wrapper, idle, root) taking their proved depths (design 6.2).
+  j6 <- either (H.failH . show) pure (compose registeredJoins source j6Pieces)
+  let stockEvidence = JoinEvidence targets targets parts (compositionPieces j6)
+  case suppliedOf stockEvidence >>= \supplied -> depthsIn stockEvidence supplied [0x89cda4, 0x89cdc4, 0x89cde4, 0x89e560] of
+    Nothing -> H.failH "no supplied depths or indirect targets for the stock heap walk"
+    Just results -> do
+      putStrLn ("stock heap depths: " ++ show [(entry, fmap (\report -> let SS.StackDepth bytes = SS.reportDepth report in bytes) result) | (entry, result) <- results])
+      ok "stock malloc, free, _malloc_r and _free_r have bounded depths on canonical code"
+        (length results == 4 && all (either (const False) (const True) . snd) results)
 
   -- Staging and the contract.
   (dat, observed) <- stageComposition tools scratch source j7
