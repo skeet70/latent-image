@@ -623,20 +623,31 @@ callsEnterAtEntries kind = HostCheck (pieceKindName kind <> "-calls-enter-slot-e
 canonicalWord :: JoinEvidence -> Word32 -> Maybe Word32
 canonicalWord evidence address = listToMaybe [word | target <- [minBound .. maxBound], Just word <- [targetWord (evidenceCanonical evidence) target address]]
 
+-- | Each root slot's words as the canonical publisher and initializer and the owned publisher store them.
+slotTargets :: JoinEvidence -> Maybe KS.RootTargets
+slotTargets evidence = do
+  let targets = evidenceCanonical evidence
+  stock <- either (const Nothing) Just (KS.publishedRows (targetOf targets LoaderA) (targetOf targets LoaderB))
+  root <- targetWord targets LoaderA rootHeader
+  let owned = KS.rootRows (fromIntegral (physicalAddress (fromIntegral root)))
+        [(guest, value) | Publication (Guest guest) value <- maybe [] id (publications evidence)]
+  pure (KS.rootTargets (stock ++ owned))
+
 -- | Each direct call and root-slot call in the piece's footprint, from its return site, reads none of the
--- caller-saved state the entered bodies may change before overwriting it. A root-slot call may enter either
--- loader's body of its slot.
+-- caller-saved state the entered bodies may leave different from stock before overwriting it. A root-slot
+-- call may enter either loader's body of its slot.
 callersScratchDead :: PieceKind -> HostCheck
 callersScratchDead kind = HostCheck (pieceKindName kind <> "-slot-callers-leave-clobbers-dead") $ \evidence ->
-  case (pieceOf kind evidence, enteringCalls kind evidence, kernelSlotFacts evidence) of
-    (Just piece, Just (stock, _), Just (slots, _)) ->
+  case (pieceOf kind evidence, enteringCalls kind evidence, kernelSlotFacts evidence, slotTargets evidence) of
+    (Just piece, Just (stock, _), Just (slots, _), Just published) ->
       let word = canonicalWord evidence
-          clobbersAt entry = concat [kernelSlotClobbers slot | slot <- slots, kernelSlotEntry slot == Pc entry]
-          clobbersOf offset = nub (concat [kernelSlotClobbers slot | slot <- slots, kernelSlotOffset slot == offset])
+          clobbersAt entry = concat [kernelSlotDiffers slot | slot <- slots, kernelSlotEntry slot == Pc entry]
+          clobbersOf offset = nub (concat [kernelSlotDiffers slot | slot <- slots, kernelSlotOffset slot == offset])
           offsets = map kernelSlotOffset slots
           spans = [range | Footprint range _ _ <- pieceFootprint piece]
-          direct = [KS.deadAfter word (slotEntries slots) offsets (clobbersAt (KS.directTarget call)) (KS.directSite call + 4) | call <- stock, KS.directLinked call]
-          indirect = [ KS.deadAfter word (slotEntries slots) offsets (clobbersOf offset) (site + 4)
+          dead = KS.deadAfter word (slotEntries slots) offsets published
+          direct = [dead KS.EnteredDirectly (clobbersAt (KS.directTarget call)) (KS.directSite call + 4) | call <- stock, KS.directLinked call]
+          indirect = [ dead KS.EnteredThroughRoot (clobbersOf offset) (site + 4)
                      | KS.SlotCall site offset <- KS.slotCalls (targetOf (evidenceCanonical evidence)) spans, offset `elem` offsets ]
       in and (direct ++ indirect)
     _ -> False
@@ -672,7 +683,7 @@ slotFrames :: [KernelSlot] -> Word32 -> [Word32]
 slotFrames slots offset = [depth | KernelSlot {kernelSlotOffset = RootSlot slot, kernelSlotFrame = StackDepth depth} <- slots, slot == offset]
 
 -- | Bytes the record-2 critical pair leaves a retained slot: its bridge charges 24 below its call SP and pushes
--- 16 of them (emulation/Emulation/CriticalPair.hs:532; replacement/critical_pair/entry.S:60).
+-- 16 of them (emulation/Emulation/CriticalPair.hs:534; replacement/critical_pair/entry.S:60).
 criticalSlotBytes :: Word32
 criticalSlotBytes = 8
 
@@ -725,7 +736,7 @@ kernelSlotSupplied evidence = case kernelSlotFacts evidence of
   Nothing -> M.empty
 
 slotsText :: T.Text
-slotsText = "the owned slot bodies are linked at the stock entries inside the stock extents (replacement/rtos_own_first/stage/Replacement/RtosOwnFirst/Artifact.hs:321-322) and equal stock per slot on the native-case grid and the natural route (E-RTOS-OWN-FIRST-ORACLE-150, E-RTOS-OWN-FIRST-NATURAL-150); each body restores r4-r11 and SP and returns to its entry LR, and its facts list the caller-saved state it may change (replacement/startup_artifact/Replacement/StartupArtifact/KernelSlots.hs walkAbi); published-slot-words-name-entries checks that the canonical and owned tables name entries"
+slotsText = "the owned slot bodies are linked at the stock entries inside the stock extents (replacement/rtos_own_first/stage/Replacement/RtosOwnFirst/Artifact.hs:321-322) and equal stock per slot on the native-case grid and the natural route (E-RTOS-OWN-FIRST-ORACLE-150, E-RTOS-OWN-FIRST-NATURAL-150); each body restores r4-r11 and SP and returns to its entry LR, and its facts list the caller-saved state it may change and the state whose value at return may differ from the stock body's, both computed by walking the owned and stock bodies (replacement/startup_artifact/Replacement/StartupArtifact/KernelSlots.hs walkAbi, differingState); the slot-callers-leave-clobbers-dead checks run KernelSlots.hs deadAfter over the differing state; published-slot-words-name-entries checks that the canonical and owned tables name entries"
 
 rebaseText :: T.Text
 rebaseText = "a whole-loader hash taken at admission is over the canonical loader and re-bases onto the composed loader as its canonical bytes outside the composition's carriers, which loader_a-differs-only-in-carriers and loader_b-differs-only-in-carriers check, plus each carrier's edit, whose digest the contract carries"
@@ -758,14 +769,14 @@ kernelSlotRecord2Link :: Join JoinKind
 kernelSlotRecord2Link = Join KernelSlotRecord2Link (Set.fromList [KernelSlotBodies, Record2Link])
   (slotCarriers LoaderB ++ serviceSlots LoaderA ++ [at LoaderB 0xd000c 0xd0010, at LoaderB initializerSite (initializerSite + 4)])
   (reason ("the record-2 admission pins the stock +0x164, +0x168 and +0x1618 words of both canonical loaders (emulation/Emulation/CriticalPair.hs:106-110) and hashes loader B into the prefix facts, retained against the original (emulation/Emulation/LoaderPrefixWitness.hs:446) and owned over the loader it is given (:524); the kernel-slot admission hashes loader B over the header and initializer words; " <> rebaseText
-    <> "; the critical-pair entry adapter calls +0x1618 and +0x164 32 bytes into its 64-byte frame and holds the +0x164 target in r3 across the call (replacement/critical_pair/entry.S:7-18; emulation/Emulation/CriticalPair.hs:484,640), its bridge leaves a retained slot 8 bytes (criticalSlotBytes) and its model keeps only the published r0 of a slot call (CriticalPair.hs bridgeSummary), which critical-pair-slot-frames-and-r3 checks against the owned frames and clobbers"))
+    <> "; the critical-pair entry adapter calls +0x1618 and +0x164 32 bytes into its 64-byte frame and holds the +0x164 target in r3 across the call (replacement/critical_pair/entry.S:7-21; emulation/Emulation/CriticalPair.hs:485-486,640-642), its bridge leaves a retained slot 8 bytes (criticalSlotBytes) and its model keeps only the published r0 of a slot call (CriticalPair.hs bridgeSummary), which critical-pair-slot-frames-and-r3 checks against the owned frames and clobbers"))
   [publishedSlotEntries, callsEnterAtEntries Record2Link, callersScratchDead Record2Link, criticalSlotsFit, differsOnlyInCarriers LoaderB]
 
 kernelSlotTaskSubmission :: Join JoinKind
 kernelSlotTaskSubmission = Join KernelSlotTaskSubmission (Set.fromList [KernelSlotBodies, TaskSubmission])
   (serviceSlots LoaderA ++ serviceSlots LoaderB)
-  (reason "the wrapper calls +0x1618, +0x164 and +0x168 through the root slots (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:103-106) and its admission forgets r0-r3, r12 and lr at every external call (:382), so the owned clobbers meet its model; its stock demand table charges 8, 4 and 4 bytes (:120) where the owned +0x164 and +0x168 frames are 8, and submission-stack-with-owned-slot-frames joins every dispatcher submission with the larger of the two inside its boot-stack window; the retained fixed services' closures reach the +0x164 and +0x168 bodies by direct call, and task-submission-slot-callers-leave-clobbers-dead checks those callers; later callers run on pool-reserved task stacks [INFERENCE]")
-  [publishedSlotEntries, callsEnterAtEntries TaskSubmission, callersScratchDead TaskSubmission, slotDemandSubmissionStack]
+  (reason "the wrapper loads +0x1618, +0x164 and +0x168 from the root slots (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:103-106) and its admission forgets r0-r3, r12 and lr at every external call (:382), so the owned clobbers meet its model; its stock demand table charges 8, 4 and 4 bytes (:120) where the owned +0x164 and +0x168 frames are 8, and submission-stack-with-owned-slot-frames joins every dispatcher submission's Submission-entry boundaries (:478) with the larger of the two inside its boot-stack window; the critical pair and the storage prelude reach the bodies under their own charged lows (replacement/startup_composition/Replacement/StartupComposition/TaskSubmission.hs:112-114), which critical-pair-slot-frames-and-r3 and storage-prelude-slot-frames-within-reservation-demand check; the Release entry and the retained fixed services' closures run on task stacks [INFERENCE], and task-submission-slot-callers-leave-clobbers-dead checks their direct and root-slot callers")
+  [publishedSlotEntries, callsEnterAtEntries TaskSubmission, callersScratchDead TaskSubmission, slotDemandSubmissionStack, criticalSlotsFit, storageSlotsFit]
 
 kernelSlotTaskStorage :: Join JoinKind
 kernelSlotTaskStorage = Join KernelSlotTaskStorage (Set.fromList [KernelSlotBodies, TaskStorage])

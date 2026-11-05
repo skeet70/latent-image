@@ -114,6 +114,14 @@ haskell_test(
     deps = _TEST_DEPS,
 )
 
+haskell_test(
+    name = "startup-artifact-kernel-slot-tests",
+    size = "small",
+    srcs = ["KernelSlotTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = _TEST_DEPS,
+)
+
 _IMAGES = [
     "//replacement/first_stage:first-stage-image.bin",
     "//replacement/first_stage:first-stage-image.symbols",
@@ -234,8 +242,9 @@ _KERNEL_SLOT_IMAGES = _J6_IMAGES + [
     "//replacement/rtos_own_first:regions.json",
 ]
 
-# Canonical inputs come from private-data:
-# bazel run //replacement/startup_artifact:startup-artifact-kernel-slot-canonical-tests -- CANONICAL_DAT SCRATCH_DIR
+# Canonical inputs come from private-data. `bazel run` of a test target crashes with "Multiple entries with
+# same key: PATH" under the devenv shell, so pass them as test arguments:
+# bazel test //replacement/startup_artifact:startup-artifact-kernel-slot-canonical-tests --test_arg=CANONICAL_DAT --test_arg=SCRATCH_DIR --sandbox_writable_path=SCRATCH_DIR
 haskell_test(
     name = "startup-artifact-kernel-slot-canonical-tests",
     srcs = ["KernelSlotCanonicalTests.hs"],

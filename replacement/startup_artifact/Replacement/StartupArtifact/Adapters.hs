@@ -63,8 +63,8 @@ import qualified Replacement.StartupArtifact.Footprint.Producers as ProducersFoo
 import qualified Replacement.TaskStorage.Artifact as TSt
 import qualified Replacement.TaskSubmission.Admission as WA
 import qualified Replacement.TaskSubmission.Artifact as W
-import Control.Monad (forM, forM_, when)
-import Data.List (find)
+import Control.Monad (forM, forM_)
+import Data.List (find, intercalate)
 import Data.Maybe (listToMaybe)
 import qualified Emulation.Sha256 as SHA
 import qualified Replacement.RtosOwnFirst.Artifact as OF
@@ -1080,7 +1080,9 @@ deriveKernelSlotBodies source a b (RegionsBytes regions) = do
         OR.GuestAddress base = OR.domainLoaderBase domain
         rows = OR.domainExtents table
         code = KS.CodeImage base (OF.admittedLoader slotsAdmitted domain)
+        stockCode = KS.CodeImage base (targetOf targets target)
         entries = [entry | row <- rows, let OR.GuestAddress entry = OR.regionEntry row]
+        canonicalLoader = (base, base + fromIntegral (B.length (targetOf targets target)))
         stockBytes (low, high) = B.take (fromIntegral (high - low)) (B.drop (fromIntegral (low - base)) (targetOf targets target))
         frameAt address = case OF.admittedFrame slotsAdmitted domain address of
           Just frame -> let OR.FrameBytes bytes = OFrame.frameComposed frame in Right (StackDepth (fromIntegral bytes))
@@ -1095,8 +1097,10 @@ deriveKernelSlotBodies source a b (RegionsBytes regions) = do
           (low, high) = bounds region
       extent <- spanOf kind target low high
       frame <- frameAt stock
-      clobbers <- first (AdapterRefused kind) (KS.walkAbi code (map bounds rows) entries entry)
-      pure (KernelSlot (RootSlot offset) (Pc entry) (OwnedSymbol (T.pack name)) extent frame clobbers (digest (stockBytes (low, high))) (digest bytes))
+      ownedExits <- first (AdapterRefused kind . ("owned " <>)) (KS.walkAbi code (map bounds rows) (`elem` entries) entry)
+      stockExits <- first (AdapterRefused kind . ("stock " <>)) (KS.walkAbi stockCode [canonicalLoader] (const True) entry)
+      pure (KernelSlot (RootSlot offset) (Pc entry) (OwnedSymbol (T.pack name)) extent frame (KS.changedState ownedExits)
+        (KS.differingState stockExits ownedExits) (digest (stockBytes (low, high))) (digest bytes))
     let body = OR.tableBody table
         OR.Extent bodyStart@(OR.GuestAddress bodyLow) (OR.GuestAddress bodyHigh) = OR.bodyExtent body
         OR.SlotOffset host = OR.bodyHost body
@@ -1104,21 +1108,31 @@ deriveKernelSlotBodies source a b (RegionsBytes regions) = do
     bodyFrame <- frameAt bodyStart
     carriers <- mapM (\region -> uncurry (spanOf kind target) (bounds region)) rows
     pure (carriers, slots, KernelSlotBody (RootSlot host) bodySpan bodyFrame)
+  published <- first (AdapterRefused kind) (KS.rootTargets <$> KS.publishedRows (targetOf targets LoaderA) (targetOf targets LoaderB))
   let carriers = concat [spans | (spans, _, _) <- domains]
       slots = concat [rows | (_, rows, _) <- domains]
       bodies = [body | (_, _, body) <- domains]
       entries = [pc | KernelSlot {kernelSlotEntry = Pc pc} <- slots]
       whole = [Span target (Guest (targetBase target)) (Guest (targetBase target + fromIntegral (B.length (targetOf targets target)))) | target <- [LoaderA, LoaderB, Image4]]
       word address = listToMaybe [found | target <- [LoaderA, LoaderB, Image4], Just found <- [KS.codeWord (KS.CodeImage (targetBase target) (targetOf targets target)) address]]
-      clobbersAt entry = concat [kernelSlotClobbers slot | slot <- slots, kernelSlotEntry slot == Pc entry]
+      differsAt entry = concat [kernelSlotDiffers slot | slot <- slots, kernelSlotEntry slot == Pc entry]
+      differsOf offset = nub (concat [kernelSlotDiffers slot | slot <- slots, kernelSlotOffset slot == offset])
+      offsets = map kernelSlotOffset slots
+      direct = KS.directCalls (targetOf targets) whole (map kernelSlotExtent slots)
+      liveDirect = [ (site, reason) | KS.DirectCall site target True <- direct
+                   , Just reason <- [KS.liveAfter word entries offsets published KS.EnteredDirectly (differsAt target) (site + 4)] ]
+      liveSlot = [ (site, reason) | KS.SlotCall site offset <- KS.slotCalls (targetOf targets) whole, offset `elem` offsets
+                 , Just reason <- [KS.liveAfter word entries offsets published KS.EnteredThroughRoot (differsOf offset) (site + 4)] ]
   -- Every canonical direct branch into a slot extent, in either loader or image 4.
-  forM_ (KS.directCalls (targetOf targets) whole (map kernelSlotExtent slots)) $ \(KS.DirectCall site target call) -> do
+  forM_ direct $ \(KS.DirectCall site target _) ->
     refuseUnless kind (target `elem` entries) ("the canonical branch at 0x" ++ showHex site " enters a slot extent off its entry")
-    when call $ refuseUnless kind (KS.deadAfter word entries (map kernelSlotOffset slots) (clobbersAt target) (site + 4))
-      ("the canonical caller at 0x" ++ showHex site " reads caller-saved state the owned body may change")
+  -- Every canonical direct or root-slot call into an owned slot, in either loader or image 4.
+  refuseUnless kind (null (liveDirect ++ liveSlot))
+    ("the canonical callers read caller-saved state the owned body may leave different from stock: "
+      ++ intercalate "; " ["0x" ++ showHex site (" (" ++ T.unpack reason ++ ")") | (site, reason) <- liveDirect ++ liveSlot])
   code <- concat <$> mapM (\(Span _ (Guest low) (Guest high)) -> ownedCode kind low high) (normalizeSpans carriers)
   few <- limit kind 4
-  let entryOf target offset = case [pc | KernelSlot (RootSlot slot) (Pc pc) _ (Span owner _ _) _ _ _ _ <- slots, slot == offset, owner == target] of
+  let entryOf target offset = case [pc | KernelSlot {kernelSlotOffset = RootSlot slot, kernelSlotEntry = Pc pc, kernelSlotExtent = Span owner _ _} <- slots, slot == offset, owner == target] of
         [pc] -> Right pc
         _ -> Left (AdapterRefused kind "kernel slot table lacks a unique entry")
       boundary name target offset onCores = do
@@ -1145,6 +1159,7 @@ deriveKernelSlotBodies source a b (RegionsBytes regions) = do
         (map Premise
           [ "callers enter each slot in A32 in a privileged mode, SVC or SYS, the modes the native-case oracle qualified (E-RTOS-OWN-FIRST-ORACLE-150)"
           , "each body preserves r4-r11 and SP, returns to its entry LR and changes only the caller-saved state its facts list (replacement/startup_artifact/Replacement/StartupArtifact/KernelSlots.hs walkAbi)"
+          , "every canonical direct and root-slot caller in loader A, loader B and image 4 leaves dead the caller-saved state the owned body may leave different from stock (KernelSlots.hs deadAfter); the rule takes callers as AAPCS-conforming with results of at most 32 bits, the root array index as a core number, and each other root slot as holding a word the canonical publisher or initializer stores"
           , "the slot semantics equal stock per slot on the oracle grid (E-RTOS-OWN-FIRST-ORACLE-150) and on the natural route (E-RTOS-OWN-FIRST-NATURAL-150)"
           , "publishers and root words are unchanged, so every published slot word names the stock entry where its owned body is linked (replacement/rtos_own_first/stage/Replacement/RtosOwnFirst/Artifact.hs:321-322)" ])
         catalog (KernelSlotFacts slots bodies)

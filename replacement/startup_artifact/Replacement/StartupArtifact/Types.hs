@@ -421,10 +421,12 @@ newtype ExtentDigest = ExtentDigest Text deriving (Eq, Show)
 data Clobber = ClobberR1 | ClobberR2 | ClobberR3 | ClobberR12 | ClobberFlags deriving (Eq, Ord, Show, Enum, Bounded)
 
 -- | One owned slot body linked at its stock entry: the extent it replaces, its deepest stack below the
--- entry SP with its owned callees, the caller-saved state it may change and both extents' digests.
+-- entry SP with its owned callees, the caller-saved state it may change from its entry values, the
+-- caller-saved state whose value at return may differ from the stock body's, and both extents' digests.
 data KernelSlot = KernelSlot
   { kernelSlotOffset :: RootSlot, kernelSlotEntry :: Pc, kernelSlotSymbol :: OwnedSymbol, kernelSlotExtent :: Span
-  , kernelSlotFrame :: StackDepth, kernelSlotClobbers :: [Clobber], kernelSlotStock :: ExtentDigest, kernelSlotOwned :: ExtentDigest }
+  , kernelSlotFrame :: StackDepth, kernelSlotClobbers :: [Clobber], kernelSlotDiffers :: [Clobber]
+  , kernelSlotStock :: ExtentDigest, kernelSlotOwned :: ExtentDigest }
   deriving (Eq, Show)
 
 -- | The +0x1618 body in the slack of its host slot's extent, entered only by the +0x1618 entry's branch.
