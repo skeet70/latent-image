@@ -18,6 +18,7 @@ import qualified FujiAF.UpdateContainer as U
 import Replacement.StartupArtifact.Adapters
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Joins (JoinKind (..), registeredJoins)
+import qualified Replacement.StartupArtifact.KernelSlots as KS
 import Replacement.StartupArtifact.Stage
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
@@ -38,6 +39,11 @@ at target start end = Span target (Guest start) (Guest end)
 -- | An A32 BL from a site to a target.
 branchLink :: Word32 -> Word32 -> Word32
 branchLink site target = 0xeb000000 .|. (((target - site - 8) `div` 4) .&. 0xffffff)
+
+-- | @movw r4,#0xbd20; movt r4,#0x96; ldr r2,[r4]; ldr r3,[r2,#0x168]; blx r3; mov r0,r1@: a root-slot call to
+-- +0x168 whose caller reads r1.
+rootCaller :: [Word32]
+rootCaller = [0xe30b4d20, 0xe3404096, 0xe5942000, 0xe5923168, 0xe12fff33, 0xe1a00001]
 
 -- | The targets with the words written from a guest address.
 patched :: TargetBytes -> Target -> Word32 -> [Word32] -> TargetBytes
@@ -119,7 +125,7 @@ main = do
   j7 <- either (H.failH . show) pure (compose registeredJoins source (j6Pieces ++ [slots]))
   j2 <- either (H.failH . show) pure (compose registeredJoins source (j2Pieces ++ [slots]))
   let appliedIn composition = [joinKind join | AppliedJoin join _ <- compositionJoins composition]
-      kernelJoins = [KernelSlotPrimaryPublisher ..]
+      kernelJoins = [KernelSlotPrimaryPublisher .. KernelSlotPlainProducer]
       j7Joins = filter (`elem` appliedIn j7) kernelJoins
       j2Joins = filter (`elem` appliedIn j2) kernelJoins
   putStrLn ("kernel-slot joins in the J6 composition: " ++ show j7Joins)
@@ -152,7 +158,7 @@ main = do
         Just KernelSlot {kernelSlotEntry = Pc pc, kernelSlotDiffers = differs} | ClobberR1 `elem` differs -> pc
         _ -> 0
       firstCode piece = take 1 [ start | Footprint (Span target (Guest start) (Guest end)) _ _ <- pieceFootprint piece
-                               , target `elem` [LoaderA, LoaderB, Image4], end - start >= 8
+                               , target `elem` [LoaderA, LoaderB, Image4], end - start >= 24
                                , not (any (\carrier -> intersectSpan carrier (at target start end) /= Nothing) (pieceCarriers slots)) ]
       targetOfAddress address = case [target | target <- [LoaderA, LoaderB, Image4], targetBase target <= address
                                        , address - targetBase target < fromIntegral (B.length (targetOf targets target))] of
@@ -177,6 +183,8 @@ main = do
                 reading = patched targets target site [branchLink site r1Entry, 0xe1a00001]
             ok (T.unpack (name "-slot-callers-leave-clobbers-dead") ++ " refuses a footprint caller that reads r1 after +0x168")
               (refuses (name "-slot-callers-leave-clobbers-dead") (evidenceOf reading (compositionTargets composition) pieces))
+            ok (T.unpack (name "-slot-callers-leave-clobbers-dead") ++ " refuses a footprint root-slot caller that reads r1 after +0x168")
+              (refuses (name "-slot-callers-leave-clobbers-dead") (evidenceOf (patched targets target site rootCaller) (compositionTargets composition) pieces))
             let offEntry = patched targets target site [branchLink site (r1Entry + 4)]
             ok (T.unpack (name "-calls-enter-slot-entries") ++ " refuses a footprint call into an extent off its entry")
               (refuses (name "-calls-enter-slot-entries") (evidenceOf offEntry (compositionTargets composition) pieces))
@@ -208,6 +216,16 @@ main = do
          ++ [ "published-slot-words-name-entries", "critical-pair-slot-frames-and-r3", "storage-prelude-slot-frames-within-reservation-demand"
             , "submission-stack-with-owned-slot-frames", "loader_a-differs-only-in-carriers", "loader_b-differs-only-in-carriers" ])
   ok "every kernel-slot host check has a violating fixture" (Set.fromList checkNames == fixtured)
+
+  -- The adapter's caller scan over canonical bytes.
+  published <- either (H.failH . show) (pure . KS.rootTargets) (KS.publishedRows (targetOf targets LoaderA) (targetOf targets LoaderB))
+  let scan targets' = slotCallerProblems targets' slotRows published
+      site = 0x725b74
+  ok "the adapter scan finds no problem in the canonical targets" (null (scan targets))
+  forM_ [ ("a direct caller that reads r1 after +0x168", [branchLink site r1Entry, 0xe1a00001])
+        , ("a root-slot caller that reads r1 after +0x168", rootCaller)
+        , ("a branch into +0x168 off its entry", [branchLink site (r1Entry + 4)]) ] $ \(fixture, words') ->
+    ok ("the adapter scan refuses " ++ fixture) (not (null (scan (patched targets Image4 site words'))))
 
   -- Staging and restore.
   (stagedJ7, observed) <- stageComposition tools scratch source j7

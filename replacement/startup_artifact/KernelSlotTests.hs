@@ -81,6 +81,29 @@ main = do
     (not (deadR1 [0xe3530001, 0x979ff103, bxLr, at 5, at 6, movR1, readR1, bxLr]))
   ok "a jump table whose targets write r1 kills it"
     (deadR1 [0xe3530001, 0x979ff103, bxLr, at 5, at 5, movR1, readR1, bxLr])
+  let deadFlags words' = KS.deadAfter (program words') [] [] (KS.rootTargets []) KS.EnteredDirectly [ClobberFlags] base
+      ands = 0xe2100001 -- ands r0, r0, #1
+      nop = 0xe1a00000
+  ok "a logical flag write leaves C live for bcs" (not (deadFlags [ands, branch 2 1 3, bxLr, bxLr]))
+  ok "a logical flag write kills Z for beq" (deadFlags [ands, branch 0 1 3, bxLr, bxLr])
+  ok "a path of 100 instructions is followed" (deadR1 (replicate 100 nop ++ [movR1, bxLr]))
+  ok "a path past 128 instructions is live" (not (deadR1 (replicate 129 nop ++ [movR1, bxLr])))
+  ok "a 3-deep call chain is followed"
+    (deadR1 [call 0 2, bxLr, call 2 4, bxLr, call 4 6, bxLr, movR1, bxLr])
+  ok "a 4-deep call chain is live"
+    (not (deadR1 [call 0 2, bxLr, call 2 4, bxLr, call 4 6, bxLr, call 6 8, bxLr, movR1, bxLr]))
+  ok "a call to a slot entry ends the path"
+    (KS.deadAfter (program [call 0 2, bxLr, readR1, bxLr]) [at 2] [] (KS.rootTargets []) KS.EnteredDirectly [ClobberR1] base)
+  let rootCall = [0xe30b4d20, 0xe3404096, 0xe5942000, 0xe5923124, 0xe12fff33, bxLr, bxLr, readR1, bxLr]
+      throughRoot owned published = KS.deadAfter (program rootCall) [] owned (KS.rootTargets published) KS.EnteredDirectly [ClobberR1] base
+  ok "a call through a published root slot whose word reads r1 is live" (not (throughRoot [] [(RootSlot 0x124, at 7)]))
+  ok "a call through a published root slot whose word returns is followed" (throughRoot [] [(RootSlot 0x124, at 6)])
+  ok "a call through an unpublished root slot is live" (not (throughRoot [] []))
+  ok "a call through an owned root slot ends the path" (throughRoot [RootSlot 0x124] [])
+  ok "a LO jump table follows n targets"
+    (deadR1 [0xe3530002, 0x379ff103, bxLr, at 6, at 6, at 7, movR1, readR1, bxLr])
+  ok "a LS jump table follows n+1 targets"
+    (not (deadR1 [0xe3530002, 0x979ff103, bxLr, at 6, at 6, at 7, movR1, readR1, bxLr]))
 
   let walk words' = KS.walkAbi (image words') [(base, base + 4 * fromIntegral (length words'))] (const False) base
       exits = either (const Nothing) Just . walk
@@ -94,5 +117,9 @@ main = do
     ((KS.differingState <$> stockPreserves <*> ownedSetsR1) == Just [ClobberR1])
   ok "r1 does not differ between two bodies that set it to the same constant"
     ((KS.differingState <$> ownedSetsR1 <*> ownedSetsR1Same) == Just [])
+  let calling = [0xe92d4000, call 1 3, 0xe8bd8000, cmpR0, bxLr] -- push {lr}; bl callee; pop {pc}; callee: cmp r0, #0; bx lr
+      walked = KS.walkAbi (image calling) [(base, base + 4 * fromIntegral (length calling))] (const True) base
+  ok "a body's call forgets r1-r3 and r12 and carries the callee's flag write"
+    (fmap KS.changedState walked == Right [ClobberR1, ClobberR2, ClobberR3, ClobberR12, ClobberFlags])
   passed <- readIORef counter
   putStrLn ("startup-artifact-kernel-slot-tests: " ++ show passed ++ " checks passed")

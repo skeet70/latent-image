@@ -755,7 +755,7 @@ kernelSlotLoaderStartup :: Join JoinKind
 kernelSlotLoaderStartup = Join KernelSlotLoaderStartup (Set.fromList [KernelSlotBodies, LoaderStartup])
   (slotCarriers LoaderA ++ slotCarriers LoaderB ++ [at LoaderA loaderAStart 0x40b00, at LoaderB loaderStartup 0xd0b00])
   (reason ("loader-startup hashes both canonical loaders (replacement/startup_dispatch/Replacement/StartupDispatch/Artifact.hs:40-46) and the kernel-slot admission hashes both over the orchestration carriers; " <> rebaseText
-    <> "; the orchestration admissions treat retained callees as stock from their entries (replacement/loader_orchestration/Replacement/LoaderOrchestration/Interface.hs:34-48), and loader-startup-calls-enter-slot-entries and loader-startup-slot-callers-leave-clobbers-dead check every direct and root-slot caller in both loaders and the owned orchestration code"))
+    <> "; the orchestration admissions treat retained callees as stock from their entries (replacement/loader_orchestration/Replacement/LoaderOrchestration/Interface.hs:34-48); loader-startup-slot-callers-leave-clobbers-dead checks every direct and root-slot caller in the piece's canonical footprint, and loader-startup-calls-enter-slot-entries checks the direct calls in that footprint and in the owned orchestration code"))
   [publishedSlotEntries, callsEnterAtEntries LoaderStartup, callersScratchDead LoaderStartup, differsOnlyInCarriers LoaderA, differsOnlyInCarriers LoaderB]
 
 kernelSlotOrchestrationB :: Join JoinKind
