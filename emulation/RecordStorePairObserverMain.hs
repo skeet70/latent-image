@@ -115,8 +115,11 @@ captureSpec = object [K.fromString (hexWord site) .= capture site | site <- entr
     | site == 0x6fb57c = object ["entry" .= [readSpec 0 8 False]]
     | otherwise = object ["entry" .= entryReads site, "returns" .= returnReads site]
   entryReads site
-    | site == 0x6ac328 = [readSpec 13 20 False]
+    | site == 0x6ac328 = [readSpec 13 20 False,object ["base" .= object ["stack-word" .= (16::Int)],"count" .= (4::Int)]]
     | site == 0x6ac7d4 = [readSpec 2 4096 False]
+    | site == 0x6ac4c8 = [readSpec 2 4 False,readSpec 1 2 False]
+    | site == 0x6acab8 = [readSpec 2 4 False,readSpec 1 131072 False]
+    | site == 0x6acda0 = [object ["base" .= object ["register" .= (3::Int)],"count" .= (0::Int),"count_register" .= (2::Int)]]
     | otherwise = []
   returnReads site
     | site == 0x6ac328 = [object ["base" .= object ["stack-word" .= (16::Int)],"count" .= (4::Int)]]
@@ -213,6 +216,7 @@ observe options directory record = do
   BL.writeFile specPath (A.encode spec <> "\n")
   record "raw_residual_count" (A.toJSON (length rawCandidates))
   record "ram_rule" ownedValue
+  record "output_rule" (String "Compare outputs written by the stock contract across roles; require each contract-untouched output to equal its own entry preimage, without comparing residue across roles.")
   steps <- newIORef []
   cursor <- newIORef 0
   counter <- newIORef (0::Int)
