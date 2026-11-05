@@ -670,7 +670,9 @@ mod tests {
         machine.require_running().unwrap();
         machine.session.board.read_physical(0x00a0_0000, &mut word).unwrap();
         assert_ne!(u32::from_le_bytes(word) & (1 << 11), 0);
-        let latch = machine.press_once(Press::Fn, KeyPulse::instructions(100, 0)).unwrap();
+        let start = machine.session.board.now();
+        let latch = machine.press_once(Press::Fn, KeyPulse { hold: Hold::BoardTicks(10_000), release: 0 }).unwrap();
+        assert!((10_000..10_100).contains(&(machine.session.board.now() - start)));
         machine.session.board.read_physical(0x00a0_0000, &mut word).unwrap();
         assert_eq!(u32::from_le_bytes(word) & (1 << 11), 0);
         machine.run(100);
