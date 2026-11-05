@@ -90,7 +90,7 @@ rootDepthConditions = [minBound .. maxBound]
 image5DepthConditions = [minBound .. maxBound]
 plainDepthConditions = [minBound .. maxBound]
 cleanupConditions = [SlotWordsFixed, ContextLocksFixed]
-heapConditions = [SlotWordsFixed, NoTaskException, ContextLocksFixed]
+heapConditions = [SlotWordsFixed, ErrorCallbackClosed, TraceCallbackClosed, NoTaskException, ContextLocksFixed]
 
 conditionsPhrase :: [Condition] -> String
 conditionsPhrase conditions = case map phrase conditions of
