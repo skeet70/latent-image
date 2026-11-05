@@ -1372,11 +1372,10 @@ deriveKernelSlotBodies source a b (RegionsBytes regions) = do
         named <- label kind name
         reached <- coreSet kind onCores
         pure (Boundary named EntryBoundary reached (Pc pc) (Just (Pc pc)) False ComparePresence few Nothing)
-  -- Reached on the natural route in both roles: E-RTOS-OWN-FIRST-NATURAL-150; A +0x1618 serves core 1 too.
   boundaries <- sequence
     [ boundary "a-1618-entry" LoaderA 0x1618 [Core0, Core1]
-    , boundary "a-164-entry" LoaderA 0x164 [Core0]
-    , boundary "a-168-entry" LoaderA 0x168 [Core0]
+    , boundary "a-164-entry" LoaderA 0x164 [Core0, Core1]
+    , boundary "a-168-entry" LoaderA 0x168 [Core0, Core1]
     , boundary "b-164-entry" LoaderB 0x164 [Core1]
     , boundary "b-168-entry" LoaderB 0x168 [Core1] ]
   let writes = EnumeratedWrites
@@ -1390,6 +1389,7 @@ deriveKernelSlotBodies source a b (RegionsBytes regions) = do
       declaration = PieceDeclaration kind (Set.singleton KernelSlotBodiesArea) carriers KS.footprint
         (map Premise
           [ "callers enter each slot in A32 in a privileged mode, SVC or SYS, the modes the native-case oracle qualified (E-RTOS-OWN-FIRST-ORACLE-150)"
+          , "loader-A service boundaries admit both cores: image4 wrappers 0x72afd8 and 0x72b034 call root[0]+0x1618 at 0x72aff4 and 0x72b050 before selecting root[core], and their error paths call A +0x16c at 0x72b00c and 0x72b068 and log 0x41a34 at 0x72b01c and 0x72b078; that log calls A +0x164 at 0x41a5c and A +0x168 at 0x41b84 (canonical X-M1 1.50 image4 and loader A)"
           , "each body preserves r4-r11 and SP, returns to its entry LR and changes only the caller-saved state its facts list (replacement/startup_artifact/Replacement/StartupArtifact/KernelSlots.hs walkAbi)"
           , "every canonical direct and root-slot caller in loader A, loader B and image 4 leaves dead the caller-saved state the owned body may leave different from stock (KernelSlots.hs deadAfter); the rule takes it that callers rely on no callee's preservation of r1-r3, r12 or the flags except a slot body's, and return results of at most 32 bits, that the root array index is a core number, and that each other root slot holds a word the canonical publisher or initializer stores"
           , "the slot semantics equal stock per slot on the oracle grid (E-RTOS-OWN-FIRST-ORACLE-150) and on the natural route (E-RTOS-OWN-FIRST-NATURAL-150)"
