@@ -3482,6 +3482,11 @@ haskell_library(
         "Emulation/SchedulerPairCheck.hs",
         "Emulation/SchedulerPairModel.hs",
         "Emulation/SchedulerPairPlan.hs",
+        "Emulation/SchedulerPairS2.hs",
+        "Emulation/SchedulerPairService.hs",
+        "Emulation/SchedulerPairS3a.hs",
+        "Emulation/SchedulerPairS3b.hs",
+        "Emulation/SchedulerPairS3c.hs",
     ],
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
@@ -3553,3 +3558,20 @@ sh_binary(
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-scheduler-pair"],
     visibility = ["//visibility:public"],
 )
+
+[
+    haskell_test(
+        name = "scheduler-pair-%s-tests" % model,
+        size = "small",
+        srcs = ["SchedulerPair%sTests.hs" % module],
+        main_file = "SchedulerPair%sTests.hs" % module,
+        ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+        deps = [
+            ":scheduler-pair-lib",
+            "//host:base",
+            "//host:containers",
+            "//replacement/rtos_own_first/stage:own-first-artifact",
+        ],
+    )
+    for model, module in [("s2", "S2"), ("s3a", "S3a"), ("s3bc", "S3bc")]
+]

@@ -30,10 +30,10 @@ main = do
       bytes <- B.readFile planPath
       plan <- either H.failH pure (J.eitherDecodeStrict bytes)
       observation <- B.readFile observationPath >>= either H.failH pure . J.eitherDecodeStrict
-      let expected = case planRole plan of Restored -> Just Readback; SilentNotify -> Just BankWrites; WrongPredicate -> Just ReturnValue; _ -> Nothing
-      unless (expected /= Nothing) (H.failH "not a control role")
+      let expected = case planRole plan of Restored -> [Readback]; SilentNotify -> [BankWrites]; WrongPredicate -> [ReturnValue]; WakeNoInsert -> [MemoryResult,WrittenWords,ReturnValue]; _ -> []
+      unless (not (null expected)) (H.failH "not a control role")
       case qualify bytes plan observation of
-        Left refusal | Just refusal == expected -> do
+        Left refusal | refusal `elem` expected -> do
           either (H.failH . show) pure (controlFailure (planRole plan) observation)
           pure (J.object ["control" J..= roleName (planRole plan),"refused" J..= show refusal,"first_semantic_failure" J..= failureValue observation])
         Left refusal -> H.failH ("control refused for wrong reason: " ++ show refusal)

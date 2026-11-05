@@ -126,7 +126,7 @@ exports_files(["regions-s2.json", "regions-s3a.json"])
         name = "s3a-%s-rust" % domain,
         src = "src/lib.rs",
         crate_name = "xm1_rtos_scheduler_s3a",
-        data = ["src/entries.rs", "src/s3a.rs", "//replacement/rtos_layout:src/lib.rs"],
+        data = ["src/entries.rs", "src/s3a.rs", "src/s3b.rs", "//replacement/rtos_layout:src/lib.rs"],
         rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"s3a\"'"],
     )
     for domain in ["a", "b"]

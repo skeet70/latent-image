@@ -196,6 +196,11 @@ haskell_binary(
     srcs = ["Replacement/RtosScheduler/S3b.hs"],
     main_file = "Replacement/RtosScheduler/S3b.hs",
     ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    data = [
+        "//emulation:native-runner",
+        "//replacement/rtos_scheduler:s3b-a.bin",
+        "//replacement/rtos_scheduler:s3b-b.bin",
+    ],
     deps = [
         ":scheduler-oracle-lib",
         "//emulation:native-observation",

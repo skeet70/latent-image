@@ -1,6 +1,8 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module Emulation.SchedulerPairModel
-  ( Memory, Arguments (..), Expected (..), ModelFailure (..), stockCall ) where
+  ( Memory, Arguments (..), Expected (..), ModelFailure (..), stockCall
+  , VM (..), load, store, byte, storeByte, field, setField, modifyField, priority
+  , insertReady, removeReady, rotateReady, helperAction ) where
 
 import Control.Monad (ap, when)
 import Data.Bits ((.&.), (.|.), complement, shiftL, shiftR, countTrailingZeros)
@@ -158,3 +160,8 @@ stockCall domain helper (Arguments [r0,r1,r2,_]) memory = do
   (value,after,writes) <- runVM action memory
   pure (Expected value after writes bank)
 stockCall _ _ _ _ = Left InvalidArguments
+
+helperAction :: Domain -> Helper -> Arguments -> VM (Word32,[(Address,Word32)])
+helperAction domain helper arguments = VM $ \memory -> do
+  expected <- stockCall domain helper arguments memory
+  pure ((expectedR0 expected,expectedBank expected),expectedMemory expected,expectedWrites expected)
