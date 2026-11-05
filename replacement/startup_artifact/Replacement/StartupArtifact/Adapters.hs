@@ -1419,4 +1419,3 @@ slotCallerProblems targets slots published =
     liveSlot = [ (site, reason) | KS.SlotCall site offset <- KS.slotCalls (targetOf targets) whole, offset `elem` offsets
                , Just reason <- [KS.liveAfter word entries offsets published KS.EnteredThroughRoot (differsOf offset) (site + 4)] ]
 
-[Showing lines 1334-1452 of 1453. Use :1453 to continue]
