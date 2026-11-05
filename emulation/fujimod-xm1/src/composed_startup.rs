@@ -6,7 +6,8 @@ use fujimod_xm1::{
     application_observation::{self, hit_observers, Observers, Recorder as ApplicationRecorder},
     attach_relations::{self, AttachSources, TimerState, TransactionWriter},
     attach_state::{self, AttachState},
-    bridge::{read, sha256, write},
+    bridge::{read, save_checkpoint, sha256, write, SNAPSHOT},
+    checkpoint::BootIdentity,
     composed_catalog::{Contract, Core, Label, Pc, Role, ROW_LIMIT, Sha256},
     composed_mutations::{self, CensusRow},
     composed_receipt::{
@@ -21,7 +22,7 @@ use fujimod_xm1::{
 };
 use std::{collections::BTreeMap, num::NonZeroUsize, path::{Path, PathBuf}, process::ExitCode};
 
-const USAGE: &str = "composed-startup --role retained|composed --contract CONTRACT --run RUN --update DAT --boot-rom ROM --output NEW_DIR [--attach-diagnostic RANGES | --mutation-census]\n       composed-startup --compare RETAINED_RECEIPT OWNED_RECEIPT --contract CONTRACT\n       composed-startup --check-contract CONTRACT --output NEW_FILE\n       composed-startup --application-controls RUN_DIR --contract CONTRACT --output NEW_DIR";
+const USAGE: &str = "composed-startup --role retained|composed --contract CONTRACT --run RUN --update DAT --boot-rom ROM --output NEW_DIR [--attach-diagnostic RANGES | --mutation-census] [--checkpoints ROOT | --fresh-boot]\n       composed-startup --compare RETAINED_RECEIPT OWNED_RECEIPT --contract CONTRACT\n       composed-startup --check-contract CONTRACT --output NEW_FILE\n       composed-startup --application-controls RUN_DIR --contract CONTRACT --output NEW_DIR";
 const CONTROLS: &str = "application-controls.json";
 const CENSUS: &str = "mutation-census.json";
 const WRITERS: &str = "attach-writers.json";
@@ -35,6 +36,13 @@ const WATCH_CLASS_LIMIT: usize = 256;
 const RUN_SHA256: &str = "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1c38342deef";
 const ROM_SHA256: &str = "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be";
 const CANONICAL_DAT_SHA256: &str = "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490";
+const RESET_PROCEDURE: &[u8] = b"initialized-reset-v1:run::open;document-execution-policy;no-adjustment;empty-card;zero-entered-instructions";
+const RESET_RECORD: &str = "initialized-reset.json";
+
+enum BootCheckpoint {
+    Reuse(PathBuf),
+    Fresh,
+}
 
 #[derive(Clone, PartialEq, Eq)]
 enum Mode {
@@ -46,7 +54,7 @@ enum Mode {
 }
 
 enum Command {
-    Observe { role: Role, contract: PathBuf, run: PathBuf, update: PathBuf, rom: PathBuf, output: PathBuf, mode: Mode },
+    Observe { role: Role, contract: PathBuf, run: PathBuf, update: PathBuf, rom: PathBuf, output: PathBuf, mode: Mode, checkpoint: BootCheckpoint },
     Compare { retained: PathBuf, owned: PathBuf, contract: PathBuf },
     CheckContract { contract: PathBuf, output: PathBuf },
     Controls { run: PathBuf, contract: PathBuf, output: PathBuf },
@@ -63,6 +71,7 @@ fn put<T>(slot: &mut Option<T>, value: T) -> Result<(), String> {
 fn arguments() -> Result<Command, String> {
     let (mut role, mut contract, mut run, mut update, mut rom, mut output, mut compare) = (None, None, None, None, None, None, None);
     let (mut check, mut mode, mut controls) = (None, None, None);
+    let (mut checkpoints, mut fresh) = (None, false);
     let mut arguments = std::env::args_os().skip(1);
     while let Some(flag) = arguments.next() {
         let flag = flag.into_string().map_err(|_| USAGE)?;
@@ -79,15 +88,23 @@ fn arguments() -> Result<Command, String> {
             "--attach-diagnostic" => put(&mut mode, Mode::Diagnostic(value()?))?,
             "--mutation-census" => put(&mut mode, Mode::Census)?,
             "--application-controls" => put(&mut controls, value()?)?,
+            "--checkpoints" => put(&mut checkpoints, value()?)?,
+            "--fresh-boot" => { require(!fresh, "duplicate argument")?; fresh = true; }
             _ => return Err(USAGE.into()),
         }
     }
-    match (check, contract, compare, role, run, update, rom, output, mode, controls) {
-        (Some(contract), None, None, None, None, None, None, Some(output), None, None) => Ok(Command::CheckContract { contract, output }),
-        (None, Some(contract), Some((retained, owned)), None, None, None, None, None, None, None) => Ok(Command::Compare { retained, owned, contract }),
-        (None, Some(contract), None, Some(role), Some(run), Some(update), Some(rom), Some(output), mode, None) =>
-            Ok(Command::Observe { role, contract, run, update, rom, output, mode: mode.unwrap_or(Mode::Evidence) }),
-        (None, Some(contract), None, None, None, None, None, Some(output), None, Some(run)) => Ok(Command::Controls { run, contract, output }),
+    require(!fresh || checkpoints.is_none(), "--fresh-boot and --checkpoints are mutually exclusive")?;
+    match (check, contract, compare, role, run, update, rom, output, mode, controls, checkpoints, fresh) {
+        (Some(contract), None, None, None, None, None, None, Some(output), None, None, None, false) => Ok(Command::CheckContract { contract, output }),
+        (None, Some(contract), Some((retained, owned)), None, None, None, None, None, None, None, None, false) => Ok(Command::Compare { retained, owned, contract }),
+        (None, Some(contract), None, Some(role), Some(run), Some(update), Some(rom), Some(output), mode, None, root, fresh) =>
+            Ok(Command::Observe {
+                role, contract, run, update, rom, output, mode: mode.unwrap_or(Mode::Evidence),
+                checkpoint: if fresh { BootCheckpoint::Fresh } else {
+                    BootCheckpoint::Reuse(root.unwrap_or_else(|| PathBuf::from("private-data/emulator-checkpoints")))
+                },
+            }),
+        (None, Some(contract), None, None, None, None, None, Some(output), None, Some(run), None, false) => Ok(Command::Controls { run, contract, output }),
         _ => Err(USAGE.into()),
     }
 }
@@ -349,8 +366,32 @@ struct Census<'a> {
     first_difference: Option<String>,
 }
 
+fn reset_machine(document: RunDocument, update: Vec<u8>, rom: &[u8], identity: &BootIdentity,
+    checkpoint: BootCheckpoint) -> Result<Machine, String> {
+    let mut session = run::open(&document, &ValidatedUpdate(update), rom)?;
+    session.board.set_execution_policy(document.execution_policy.into())?;
+    let mut machine = Machine::new(document, session)?;
+    let BootCheckpoint::Reuse(root) = checkpoint else { return Ok(machine) };
+    let name = format!("reset-{}", identity.key());
+    let directory = root.join(&name);
+    if directory.exists() {
+        let recorded: serde_json::Value = serde_json::from_slice(&read(&directory.join(RESET_RECORD))?)
+            .map_err(|error| format!("initialized-reset identity: {error}"))?;
+        require(recorded == identity.document(), "initialized-reset checkpoint identity differs")?;
+        let snapshot = machine.session.import_snapshot(&read(&directory.join(SNAPSHOT))?)?;
+        machine.disarm()?;
+        machine.session.restore(&snapshot)?;
+        machine.rearm()?;
+        require(machine.session.board.instruction_counts().iter().all(|count| *count == 0),
+            "initialized-reset checkpoint omits startup evidence")?;
+    } else {
+        save_checkpoint(&mut machine, &root, &name, RESET_RECORD, &identity.document())?;
+    }
+    Ok(machine)
+}
+
 fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: PathBuf, rom_path: PathBuf, output: PathBuf,
-    mode: Mode) -> Result<(), String> {
+    mode: Mode, checkpoint: BootCheckpoint) -> Result<(), String> {
     let contract_bytes = read(&contract_path)?;
     let contract = Contract::parse(&contract_bytes).map_err(|refusal| refusal.to_string())?;
     let (run_bytes, update, rom) = (read(&run_path)?, read(&update_path)?, read(&rom_path)?);
@@ -386,9 +427,8 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
     fujimod_emulator_exr2_board::register_board_builder();
     fujimod_emulator_models::register();
     let choice_maps = composed_mutations::choice_maps(&document)?;
-    let mut session = run::open(&document, &ValidatedUpdate(update), &rom)?;
-    session.board.set_execution_policy(document.execution_policy.into())?;
-    let mut machine = Machine::new(document, session)?;
+    let boot_identity = BootIdentity::new(&run_bytes, &update, &rom, &[], None, RESET_PROCEDURE);
+    let mut machine = reset_machine(document, update, &rom, &boot_identity, checkpoint)?;
     let recorder = if mode == Mode::Census {
         Recorder::Census(machine.session.board.mutation_journal_begin(MAX_JOURNAL_ROWS)?)
     } else {
@@ -567,8 +607,8 @@ fn application_controls(run: PathBuf, contract_path: PathBuf, output: PathBuf) -
 
 fn main() -> ExitCode {
     let result = arguments().and_then(|command| match command {
-        Command::Observe { role, contract, run, update, rom, output, mode } =>
-            observe(role, contract, run, update, rom, output, mode).map(|()| true),
+        Command::Observe { role, contract, run, update, rom, output, mode, checkpoint } =>
+            observe(role, contract, run, update, rom, output, mode, checkpoint).map(|()| true),
         Command::Compare { retained, owned, contract } => compare(retained, owned, contract).map(|verdict| verdict == VerdictKind::Equal),
         Command::CheckContract { contract, output } => check_contract(contract, output).map(|()| true),
         Command::Controls { run, contract, output } => application_controls(run, contract, output),
@@ -580,5 +620,58 @@ fn main() -> ExitCode {
             eprintln!("{error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RUN: &[u8] = include_bytes!("../data/xm1-150.json");
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    fn inputs() -> (RunDocument, Vec<u8>, Vec<u8>, BootIdentity) {
+        fujimod_emulator_exr2_board::register_board_builder();
+        fujimod_emulator_models::register();
+        let document = RunDocument::parse(RUN).unwrap();
+        let update = vec![0xff; document.update_flash_offset + 2048];
+        let mut rom = vec![0; document.boot_rom.bytes];
+        rom[..4].copy_from_slice(&0xeaff_fffeu32.to_le_bytes());
+        let identity = BootIdentity::new(RUN, &update, &rom, &[], None, RESET_PROCEDURE);
+        (document, update, rom, identity)
+    }
+
+    fn root() -> PathBuf {
+        std::env::temp_dir().join(format!("composed-reset-{}-{}", std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)))
+    }
+
+    #[test]
+    fn reused_reset_still_executes_the_first_guest_instruction() {
+        let root = root();
+        let (document, update, rom, identity) = inputs();
+        let mut cold = reset_machine(document, update, &rom, &identity, BootCheckpoint::Reuse(root.clone())).unwrap();
+        assert_eq!(cold.instructions(), 0);
+        assert!(matches!(cold.run(1), RunOutcome::Completed));
+        assert_eq!(cold.instructions(), 1);
+        let (document, update, rom, identity) = inputs();
+        let mut restored = reset_machine(document, update, &rom, &identity, BootCheckpoint::Reuse(root.clone())).unwrap();
+        assert_eq!(restored.instructions(), 0);
+        assert!(matches!(restored.run(1), RunOutcome::Completed));
+        assert_eq!(restored.instructions(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn startup_checkpoint_cannot_replace_reset_evidence() {
+        let root = root();
+        let (document, update, rom, identity) = inputs();
+        let mut machine = reset_machine(document, update, &rom, &identity, BootCheckpoint::Fresh).unwrap();
+        assert!(!root.exists());
+        assert!(matches!(machine.run(1), RunOutcome::Completed));
+        save_checkpoint(&mut machine, &root, &format!("reset-{}", identity.key()), RESET_RECORD, &identity.document()).unwrap();
+        let (document, update, rom, identity) = inputs();
+        assert!(reset_machine(document, update, &rom, &identity, BootCheckpoint::Reuse(root.clone())).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
