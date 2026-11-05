@@ -2,9 +2,10 @@
 
 -- | The event class of a stage event at `0xd4dd2c`, derived from the menu tables, the event's
 -- registers and the block at entry, by the rules of `reports/owned-menu-engine-design.md`
--- ("Coverage is by event class") and `reports/owned-menu-engine-increment-3.md`. A class is owned
--- when the owned engine runs it: the classes with oracle cases (E-MENU-ENGINE-HOST-ORACLE-150 and
--- increment 3), each refused when a node the event can open fails the engine's pre-checks.
+-- ("Coverage is by event class"), `reports/owned-menu-engine-increment-3.md` and
+-- `reports/owned-menu-engine-increment-4.md`. A class is owned when the owned engine runs it: the
+-- classes with oracle cases, each refused when a node the event can open fails the engine's
+-- pre-checks.
 module Replacement.ModalRuntime.MenuEngineClass
   ( StageEvent (..)
   , MenuBlock (..)
@@ -88,8 +89,8 @@ data GroupKind
     GroupStepDown
   deriving (Eq, Show)
 
--- | The owned kinds of 6..`0xb`; kind 9 has no oracle case.
-data FrameKind = PopMoveDownPush | PopMoveUpPush | PushMoveDownPop | SeekPushMoveDownPop | SeekPushMoveUpPop
+-- | The owned kinds of 6..`0xb`.
+data FrameKind = PopMoveDownPush | PopMoveUpPush | PushMoveDownPop | PushMoveUpPop | SeekPushMoveDownPop | SeekPushMoveUpPop
   deriving (Eq, Show)
 
 data OwnedClass
@@ -138,8 +139,8 @@ registrySlots = 0x86
 seekClassNode = 0x38
 rowStates = 0x4f
 
--- | Whether an open may land on a node `0xbfad04` pushes or pops again.
-data Framed = FramedRefused | FramedAllowed deriving (Eq)
+framed :: TableNode -> Bool
+framed candidate = nodeType candidate `elem` [5, 7]
 
 deriveClass :: MenuTree -> MenuBlock -> StageEvent -> EventClass
 deriveClass tree block event = either FallbackEvent OwnedEvent $ rowTotal *> case stageKind event of
@@ -155,7 +156,8 @@ deriveClass tree block event = either FallbackEvent OwnedEvent $ rowTotal *> cas
   2 -> close
   6 -> popMovePush PopMoveDownPush
   7 -> popMovePush PopMoveUpPush
-  8 -> FrameMove PushMoveDownPop <$ (stageSlot *> cursorInRows *> source >>= \current -> checkPushMovePop current (cursorChild current))
+  8 -> pushMovePop PushMoveDownPop
+  9 -> pushMovePop PushMoveUpPop
   0xa -> seekPushMovePop SeekPushMoveDownPop
   0xb -> seekPushMovePop SeekPushMoveUpPop
   0x13 -> reopen
@@ -173,7 +175,8 @@ deriveClass tree block event = either FallbackEvent OwnedEvent $ rowTotal *> cas
   rowCount candidate = fromIntegral (length (rows candidate)) :: Word32
   depth = blockDepth block
   stackCursor frame = if frame < fromIntegral stackFrames then Right (blockStackCursors block !! fromIntegral frame) else Left StackBounds
-  stageSlot = if stageNode event >= registrySlots then Left OutsideRegistry else Right ()
+  stageSlot = slot (stageNode event)
+  slot word = if word >= registrySlots then Left OutsideRegistry else Right ()
   cursorInRows = do
     current <- source
     when (blockCursor block > rowCount current) (Left CursorPastRows)
@@ -181,14 +184,17 @@ deriveClass tree block event = either FallbackEvent OwnedEvent $ rowTotal *> cas
     row : _ -> rowChild row
     [] -> LeafChild
   -- `0xbfa800`'s needs of the node it opens and the cursor it restores.
-  openable framed candidate restored = do
-    when (framed == FramedRefused && nodeType candidate `elem` [5, 7]) (Left FramedTarget)
+  openable candidate restored = do
     case nodeRows candidate of
       Nothing -> Left TargetWithoutRows
       Just [] -> Left TargetWithoutRows
       Just found | fromIntegral (length found) > rowStates -> Left TargetRows
       Just _ -> Right ()
     when (restored >= rowStates) (Left TargetRows)
+  -- The `0xbfad04` step after a landing on a node of type 5 or 7.
+  framedTarget = either (const (Left FramedTarget)) Right
+  -- `0xbfad04`'s push from `candidate`: every row child opens with the cursor `restored`.
+  followPush candidate restored = forM_ (rows candidate) $ \row -> innerTarget (rowChild row) restored
   innerMove candidate ident =
     when (ident == 0 || (nodeRowsPerPage candidate == ident && stageNode event /= 0)) (Left InnerMove)
   rowMove direction = do
@@ -206,7 +212,11 @@ deriveClass tree block event = either FallbackEvent OwnedEvent $ rowTotal *> cas
       PackageChild _ -> Left PackageChildRow
       LeafChild -> Left NoChild
     restored <- stackCursor (depth + 1)
-    openable FramedRefused child restored
+    openable child restored
+    when (framed child) . framedTarget $ do
+      when (restored > rowCount child) (Left CursorPastRows)
+      slot (nodeId child)
+      stackCursor (depth + 2) >>= followPush child
     pure Push
   pop = do
     when (stageId event `elem` [0x17, 0x18]) (Left SeekingId)
@@ -216,14 +226,23 @@ deriveClass tree block event = either FallbackEvent OwnedEvent $ rowTotal *> cas
     parent <- maybe (Left NoParent) node (nodeParent current)
     when (depth == 0 || depth >= fromIntegral stackFrames) (Left StackBounds)
     restored <- stackCursor (depth - 1)
-    openable FramedRefused parent restored
+    openable parent restored
+    when (framed parent) . framedTarget $ do
+      slot (nodeId parent)
+      when (nodeRemember parent /= 0 && restored > rowCount parent) (Left CursorPastRows)
+      forM_ (nodeParent parent) $ \at -> do
+        grandparent <- node at
+        when (depth < 2) (Left StackBounds)
+        stackCursor (depth - 2) >>= openable grandparent
     pure Pop
   open = do
     when (stageId event `elem` ([0xe .. 0x12] ++ [0x17, 0x18])) (Left SeekingId)
-    slot <- if stageNode event == seekClassNode then Left SeekClassNode
+    index <- if stageNode event == seekClassNode then Left SeekClassNode
       else if stageNode event >= registrySlots then Left OutsideRegistry else Right (stageNode event)
-    registered <- maybe (Left Unregistered) node (M.lookup slot (treeRegistry tree))
-    openable FramedRefused registered 0
+    registered <- maybe (Left Unregistered) node (M.lookup index (treeRegistry tree))
+    openable registered 0
+    -- The open zeroes the stack, so the framed push restores cursor 0.
+    when (framed registered) (framedTarget (followPush registered 0))
     pure Open
   close = do
     stageSlot
@@ -237,13 +256,13 @@ deriveClass tree block event = either FallbackEvent OwnedEvent $ rowTotal *> cas
     pure (GroupMove kind)
   reopen = do
     current <- source
-    openable FramedAllowed current (blockCursor block)
+    openable current (blockCursor block)
     pure Reopen
   -- A push target or pop target of an inner step: a node `0xbfa800` can open, or a row without a child.
   innerTarget child restored = case child of
     NodeChild at -> do
       target <- node at
-      openable FramedAllowed target restored
+      openable target restored
       pure (Just target)
     PackageChild _ -> Left PackageChildRow
     LeafChild -> pure Nothing
@@ -254,10 +273,11 @@ deriveClass tree block event = either FallbackEvent OwnedEvent $ rowTotal *> cas
     parent <- maybe (Left NoParent) node (nodeParent current)
     when (depth == 0 || depth >= fromIntegral stackFrames) (Left StackBounds)
     restored <- stackCursor (depth - 1)
-    openable FramedAllowed parent restored
+    openable parent restored
     innerMove parent (stageId event)
     forM_ (rows parent) $ \row -> innerTarget (rowChild row) (blockCursor block)
     pure (FrameMove kind)
+  pushMovePop kind = FrameMove kind <$ (stageSlot *> cursorInRows *> source >>= \current -> checkPushMovePop current (cursorChild current))
   checkPushMovePop current child = do
     when (depth + 1 >= fromIntegral stackFrames) (Left StackBounds)
     restored <- stackCursor (depth + 1)
@@ -267,12 +287,12 @@ deriveClass tree block event = either FallbackEvent OwnedEvent $ rowTotal *> cas
       innerMove target (stageId event)
       forM_ (nodeParent target) $ \at -> do
         parent <- node at
-        openable FramedAllowed parent (max (rowCount current - 1) (blockCursor block))
+        openable parent (max (rowCount current - 1) (blockCursor block))
   seekPushMovePop kind = do
     stageSlot
     cursorInRows
     current <- source
-    when (nodeType current `elem` [5, 7]) (Left FramedSource)
+    when (framed current) (Left FramedSource)
     found <- maybe (Left TargetWithoutRows) Right (nodeRows current)
     let zeroStep = blockTotal block == 0 || fmap rowToken (lookupRow found) == Just (stageExtra event)
         lookupRow list = case drop (fromIntegral (blockCursor block)) list of
