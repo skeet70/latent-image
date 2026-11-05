@@ -11,7 +11,7 @@ import qualified A32 as A
 import Control.Exception (evaluate)
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (Value, eitherDecodeStrict', object, (.=))
-import Data.Bits (shiftR, (.&.))
+import Data.Bits (shiftR, (.&.), (.|.))
 import qualified Data.ByteString as B
 import Data.List (isPrefixOf, nub)
 import qualified Data.Map.Strict as M
@@ -20,7 +20,7 @@ import qualified Data.Set as S
 import Data.String (fromString)
 import Data.Word (Word32)
 import Emulation.NativeObservation (runnerStatusLabel)
-import Emulation.OwnedCase (CaseId (..), CaseSpec, loadObservedBatch, required, writeBatch)
+import Emulation.OwnedCase (CaseId (..), CaseSpec, loadObservedBatch, readWordAt, required, writeBatch)
 import Emulation.Sha256 (sha256, sha256File, sha256Hex)
 import FujiAF.Host (ensure, failH, get, readRegular, str)
 import FujiAF.JSON (encodeCanonical)
@@ -49,6 +49,51 @@ batchLimit = 4096
 getterPopWord, setterPopWord :: Word32
 getterPopWord = 0xe8bd8830
 setterPopWord = 0xe8bd89f8
+
+-- | One word of a setter-stub layout: an instruction, a BL to an address, or a BEQ to a word index.
+data StubWord = Fixed Word32 | CallTo Word32 | IfZeroTo Int
+
+-- | The Rust entry points the setter stub calls: `xm1_set_bracketed`, `xm1_property_set` and
+-- `xm1_property_set_after`.
+data StubCallees = StubCallees Word32 Word32 Word32
+
+stubWordAt :: Word32 -> Int -> StubWord -> Word32
+stubWordAt stub index stubWord = case stubWord of
+  Fixed fixed -> fixed
+  CallTo target -> branchLinkWord site target
+  IfZeroTo target -> 0x0a000000 .|. (((stub + 4 * fromIntegral target - site - 8) `shiftR` 2) .&. 0xffffff)
+  where
+    site = stub + 4 * fromIntegral index
+
+openWord, closeWord :: Word32
+openWord = 0x61da3c
+closeWord = 0x61d944
+
+-- | The setter stub of entry.S, and two control layouts of the same length: the open call after
+-- `xm1_property_set`, so that the set reads bank 0 before the open; and the close before it.
+setterStubLayout, openAfterSetLayout, closeBeforeSetLayout :: StubCallees -> [StubWord]
+setterStubLayout (StubCallees bracketed set after) =
+  [ Fixed 0xe1a00004, Fixed 0xe1a01006, CallTo bracketed, Fixed 0xe1a07000, Fixed 0xe3570000, IfZeroTo 9, Fixed 0xe30c0c64, Fixed 0xe3400096, CallTo openWord
+  , Fixed 0xe1a00004, Fixed 0xe1a01005, Fixed 0xe1a02006, Fixed 0xe1a03008, CallTo set, Fixed 0xe3570000, IfZeroTo 23
+  , Fixed 0xe30c0c64, Fixed 0xe3400096, CallTo closeWord, Fixed 0xe1a00004, Fixed 0xe1a01005, Fixed 0xe1a02006, CallTo after, Fixed setterPopWord
+  ]
+openAfterSetLayout (StubCallees bracketed set after) =
+  [ Fixed 0xe1a00004, Fixed 0xe1a01006, CallTo bracketed, Fixed 0xe1a07000
+  , Fixed 0xe1a00004, Fixed 0xe1a01005, Fixed 0xe1a02006, Fixed 0xe1a03008, CallTo set, Fixed 0xe3570000, IfZeroTo 23
+  , Fixed 0xe30c0c64, Fixed 0xe3400096, CallTo openWord, Fixed 0xe30c0c64, Fixed 0xe3400096, CallTo closeWord
+  , Fixed 0xe1a00004, Fixed 0xe1a01005, Fixed 0xe1a02006, CallTo after, Fixed nopWord, Fixed nopWord, Fixed setterPopWord
+  ]
+closeBeforeSetLayout (StubCallees bracketed set after) =
+  [ Fixed 0xe1a00004, Fixed 0xe1a01006, CallTo bracketed, Fixed 0xe1a07000, Fixed 0xe3570000, IfZeroTo 12
+  , Fixed 0xe30c0c64, Fixed 0xe3400096, CallTo openWord, Fixed 0xe30c0c64, Fixed 0xe3400096, CallTo closeWord
+  , Fixed 0xe1a00004, Fixed 0xe1a01005, Fixed 0xe1a02006, Fixed 0xe1a03008, CallTo set, Fixed 0xe3570000, IfZeroTo 23
+  , Fixed 0xe1a00004, Fixed 0xe1a01005, Fixed 0xe1a02006, CallTo after, Fixed setterPopWord
+  ]
+
+-- | `nop` and `mov r1, #0`.
+nopWord, movR1ZeroWord :: Word32
+nopWord = 0xe320f000
+movR1ZeroWord = 0xe3a01000
 
 -- | `ldrh r0, [r12, r0]` and `ldrb r0, [r12, r0]`.
 loadHalfWord, loadByteWord :: Word32
@@ -287,6 +332,7 @@ oracle arguments runner linkedPath symbolsPath = do
         OwnedField (FieldArm _ _ _ (FieldDefaultOnly _) _ NoHook) -> Nothing
         OwnedField arm -> Just (HookedField arm)
         OwnedReadOnlyField arm -> Just (ReadOnlyField arm)
+        OwnedWriteOnlyPair arm -> Just (WriteOnlyPair arm)
         _ -> Nothing
       specialAddressOf identifier = listToMaybe [specialTableAddress + 8 * index | (index, (other, _)) <- zip [0 ..] specialArms, other == identifier]
       specialPatches name identifier before after = do
@@ -348,11 +394,51 @@ oracle arguments runner linkedPath symbolsPath = do
       bumpedDefault arm = case fieldSource arm of
         FieldDefaultOnly (DefaultConstant value) -> ReadOnlyField arm {fieldSource = FieldDefaultOnly (DefaultConstant (value + 1))}
         _ -> ReadOnlyField arm
-      setterPop = setterStub + 20
-      setterExitControl = case armsWhere stockDefaulted of
-        (identifier, OwnedField _) : _ -> Right (Control "c-setter-stub-exit" MustFail (PatchedCandidate [Patch setterPop setterPopWord (branchWord setterPop 0x630200)])
-          [canonical (OracleCase identifier o) | o <- defaultRequests (Just Bank0)] ("setter stub ends b 0x630200, for " ++ propertyHex identifier ++ "'s bank-0 default requests"))
-        _ -> Left "c-setter-stub-exit: no field with a stock default"
+      candidateWord address = readWordAt candidate (fromIntegral (address - image4Base))
+      stubCallees = StubCallees <$> accessorAt "xm1_set_bracketed" <*> accessorAt "xm1_property_set" <*> accessorAt "xm1_property_set_after"
+      layoutWords layout = zipWith (stubWordAt setterStub) [0 ..] layout
+      setterPop = setterStub + 4 * (fromIntegral (length (setterStubLayout (StubCallees 0 0 0))) - 1)
+      openSite = setterStub + 32
+      stubPatches layout = [Patch address (candidateWord address) after | (address, after) <- zip [setterStub, setterStub + 4 ..] (layoutWords layout), candidateWord address /= after]
+      bracketedIds chosen = [identifier | (identifier, _) <- armsWhere (\owned -> bracketedOwned owned && chosen owned)]
+      pairArm owned = case owned of
+        OwnedWriteOnlyPair _ -> True
+        _ -> False
+      setsOn bank identifiers = [canonical (OracleCase identifier o) | identifier <- identifiers, o@(Set b _ _) <- operations, b == bank]
+      bracketControl name patches cases note = case cases of
+        [] -> Left (name ++ ": no bracketed property")
+        _ -> Right (Control name MustFail (PatchedCandidate patches) cases note)
+      stubLayoutControl name layout cases note = case stubCallees of
+        Nothing -> Left (name ++ ": the setter stub's callees are not linked")
+        Just callees -> bracketControl name (stubPatches (layout callees)) cases note
+      readBeforeOpen name chosen = case exposingOpenAfterSet fx chosen classified of
+        Just (Property identifier _ _ _) -> stubLayoutControl name openAfterSetLayout (setsOn Bank0 [identifier])
+          ("setter stub with the open call after xm1_property_set, which then reads bank 0 before the open, for " ++ propertyHex identifier)
+        Nothing -> Left (name ++ ": no bracketed property exposes the open order")
+      pairSecondControl = case [(identifier, arm) | (identifier, OwnedWriteOnlyPair arm) <- armsWhere (const True)] of
+        (identifier, arm@(PairArm _ (BankOffset second) _ _)) : _ -> do
+          patches <- specialPatches "c-pair-second-byte" identifier (WriteOnlyPair arm) (WriteOnlyPair arm {pairSecond = BankOffset (second + 1)})
+          Right (Control "c-pair-second-byte" MustFail (PatchedCandidate patches) [canonical (OracleCase identifier o) | o@(Set {}) <- operations]
+            ("SPECIALS second byte " ++ hex (fromIntegral second) ++ " -> " ++ hex (fromIntegral second + 1) ++ " for " ++ propertyHex identifier))
+        [] -> Left "c-pair-second-byte: no write-only pair"
+      bracketControls =
+        [ bracketControl "c-open-removed" [Patch openSite (branchLinkWord openSite openWord) nopWord] (setsOn Bank0 (bracketedIds (const True)))
+            "setter stub's open call replaced by nop, for every bracketed property's bank-0 sets"
+        , stubLayoutControl "c-close-before-set" closeBeforeSetLayout (setsOn Bank0 (bracketedIds (const True)))
+            "setter stub with the close call before xm1_property_set, for every bracketed property's bank-0 sets"
+        , bracketControl "c-bracket-bank1" [Patch (setterStub + 4) 0xe1a01006 movR1ZeroWord] (setsOn Bank1 (bracketedIds (const True)))
+            "setter stub passing bank 0 to xm1_set_bracketed, which brackets bank-1 sets too, for every bracketed property's bank-1 sets"
+        , pairSecondControl
+        , readBeforeOpen "c-read-before-open-field" (not . pairArm)
+        , readBeforeOpen "c-read-before-open-pair" pairArm
+        ]
+      -- The shared exit adjusts 0x34 only when r7 is 1, which the stub replaces with
+      -- `xm1_set_bracketed`'s 0; 0xe9's record-0 write at 0x6308b4 runs for every set.
+      setterExitControl = case (armsWhere stockDefaulted, [identifier | (identifier, OwnedSlotField (SlotArm _ _ _ _ MirrorRecord0)) <- armsWhere (const True)]) of
+        ((identifier, OwnedField _) : _, mirrored : _) -> Right (Control "c-setter-stub-exit" MustFail (PatchedCandidate [Patch setterPop setterPopWord (branchWord setterPop 0x630200)])
+          ([canonical (OracleCase identifier o) | o <- defaultRequests (Just Bank0)] ++ setsOn Bank0 [mirrored])
+          ("setter stub ends b 0x630200, for " ++ propertyHex identifier ++ "'s bank-0 default requests and " ++ propertyHex mirrored ++ "'s bank-0 sets"))
+        _ -> Left "c-setter-stub-exit: no field with a stock default or no record-0 mirrored slot field"
       stage3Controls =
         [ stockSwapControl
         , selectorControl
@@ -373,6 +459,7 @@ oracle arguments runner linkedPath symbolsPath = do
         , readOnlyControl "c-read-only-default" bumpedDefault [o | o@(Get _ DefaultRead _) <- operations] "SPECIALS default + 1"
         , setterExitControl
         ]
+          ++ bracketControls
       loadOf width = case width of
         Byte -> Load8
         Half -> Load16
@@ -470,7 +557,11 @@ oracle arguments runner linkedPath symbolsPath = do
       fxOf rc = variantFixture fx (runVariant rc)
   tailHalfSite <- maybe (failH "no xm1_tail_defaults_load16") pure (accessorAt (accessorName (Accessor TailDefaultsImage Load16)))
   checkEncodings ((tailHalfSite, tailDefaultsBase + 1) : concat [bases | Right (_, bases) <- slotControls])
-  ensure (A.decode (setterStub + 20) (branchWord (setterStub + 20) 0x630200) == A.Branch (A.Cond 14) False 0x630200) "b 0x630200 encoding"
+  ensure (A.decode setterPop (branchWord setterPop 0x630200) == A.Branch (A.Cond 14) False 0x630200) "b 0x630200 encoding"
+  callees <- maybe (failH "the setter stub's callees are not linked") pure stubCallees
+  ensure (map candidateWord (take 24 [setterStub, setterStub + 4 ..]) == layoutWords (setterStubLayout callees)) "the candidate's setter stub differs from its layout"
+  ensure (A.decode openSite (branchLinkWord openSite openWord) == A.Branch (A.Cond 14) True openWord && A.decode 0 nopWord == A.Hint (A.Cond 14)
+    && A.decode 0 movR1ZeroWord == A.DataProcessing (A.Cond 14) A.MOV False (A.Reg 1) (A.Reg 0) (A.Immediate 0)) "bl, nop and mov r1, #0 encodings"
 
   -- Pass 1: stock.
   (stockBatches, stockRuns) <- runBatches runner out "stock" [stockSpec (fxOf rc) image4 properties (runLabel rc) stockFunctions (runCase rc) | rc <- runCases]

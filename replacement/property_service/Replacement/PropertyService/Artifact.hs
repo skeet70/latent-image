@@ -282,6 +282,11 @@ stockLeaves =
 stockLeafStack :: StackOffset
 stockLeafStack = StackOffset (-4)
 
+-- | The bank-0 open and close, each bound by an absolute linker symbol and called only from the
+-- setter stub.
+bracketCallees :: [(String, Word32)]
+bracketCallees = [("xm1_stock_61da3c", 0x61da3c), ("xm1_stock_61d944", 0x61d944)]
+
 symbolKind :: C.ByteString -> SymbolKind
 symbolKind text = case C.unpack text of
   "T" -> GlobalText
@@ -289,12 +294,22 @@ symbolKind text = case C.unpack text of
   "A" -> AbsoluteSymbol
   _ -> OtherSection
 
--- | The stubs' words apart from their BL: the getter's `mov r0, r12; bl; pop {r4, r5, r11, pc}`
--- and the setter's `mov r0, r4; mov r1, r5; mov r2, r6; mov r3, r8; bl; pop {r3-r8, r11, pc}`, each
--- ending with the pop of its stock prologue's push.
-getterStubWords, setterStubWords :: [Maybe Word32]
-getterStubWords = [Just 0xe1a0000c, Nothing, Just 0xe8bd8830]
-setterStubWords = [Just 0xe1a00004, Just 0xe1a01005, Just 0xe1a02006, Just 0xe1a03008, Nothing, Just 0xe8bd89f8]
+-- | A stub word: a fixed instruction or a BL to a symbol.
+data StubWord = Fixed Word32 | CallTo String
+
+-- | The getter's `mov r0, r12; bl; pop {r4, r5, r11, pc}` and the setter's bracketing sequence of
+-- entry.S, each ending with the pop of its stock prologue's push. The setter's words also fix which
+-- registers are live across its two bracket calls.
+getterStubWords, setterStubWords :: [StubWord]
+getterStubWords = [Fixed 0xe1a0000c, CallTo "xm1_property_get", Fixed 0xe8bd8830]
+setterStubWords =
+  [ Fixed 0xe1a00004, Fixed 0xe1a01006, CallTo "xm1_set_bracketed", Fixed 0xe1a07000, Fixed 0xe3570000, Fixed 0x0a000002
+  , Fixed 0xe30c0c64, Fixed 0xe3400096, CallTo "xm1_stock_61da3c"
+  , Fixed 0xe1a00004, Fixed 0xe1a01005, Fixed 0xe1a02006, Fixed 0xe1a03008, CallTo "xm1_property_set", Fixed 0xe3570000, Fixed 0x0a000006
+  , Fixed 0xe30c0c64, Fixed 0xe3400096, CallTo "xm1_stock_61d944"
+  , Fixed 0xe1a00004, Fixed 0xe1a01005, Fixed 0xe1a02006, CallTo "xm1_property_set_after"
+  , Fixed 0xe8bd89f8
+  ]
 
 -- | The linked artifact admitted at `carrier`, which staging derives from the hull scan.
 deriveArtifact :: [Property] -> Carrier -> B.ByteString -> B.ByteString -> Either ArtifactError LinkedArtifact
@@ -314,7 +329,7 @@ deriveArtifact properties carrier@(Carrier (GuestAddress carrierLow) (GuestAddre
   require (start == carrierLow) (PlacementRejected (CarrierNotCandidate (GuestAddress start)))
   require (end >= start && end <= carrierHigh && end .&. 3 == 0
     && toInteger (B.length bytes) == toInteger (end - start)) ExtentRejected
-  require (sortOn fst [(F.symbolName entry, F.symbolAddress entry) | entry <- symbols, kindIs [AbsoluteSymbol] entry] == sortOn fst stockLeaves) SymbolRejected
+  require (sortOn fst [(F.symbolName entry, F.symbolAddress entry) | entry <- symbols, kindIs [AbsoluteSymbol] entry] == sortOn fst (stockLeaves ++ bracketCallees)) SymbolRejected
   forM_ symbols $ \entry -> unless (kindIs [AbsoluteSymbol] entry) $
     require (kindIs [GlobalText, LocalText] entry && F.symbolAddress entry >= start
       && toInteger (F.symbolAddress entry) + toInteger (F.symbolSize entry) <= toInteger end) ExtentRejected
@@ -326,8 +341,7 @@ deriveArtifact properties carrier@(Carrier (GuestAddress carrierLow) (GuestAddre
   placed "xm1_getter_stub" getterStubAddress getterStubBytes
   placed "xm1_setter_stub" setterStubAddress setterStubBytes
   forM_ accessorAddresses $ \(accessor, address) -> placed (accessorName accessor) address 0x10
-  getAddress <- at "xm1_property_get"
-  setAddress <- at "xm1_property_set"
+  rustEntries <- mapM at ["xm1_property_get", "xm1_property_set", "xm1_set_bracketed", "xm1_property_set_after"]
   let tableNamed suffix = case [entry | entry <- symbols, suffix `isSuffixOf` F.symbolName entry] of
         [entry] -> Right entry
         _ -> Left SymbolRejected
@@ -341,17 +355,23 @@ deriveArtifact properties carrier@(Carrier (GuestAddress carrierLow) (GuestAddre
           ]
       disjoint = and (zipWith (\(FunctionExtent _ _ a) (FunctionExtent _ b _) -> a <= b) functions (drop 1 functions))
   require (disjoint && all (\(FunctionExtent _ (GuestAddress low) (GuestAddress high)) -> low .&. 3 == 0 && high .&. 3 == 0) functions) ExtentRejected
-  require (all (`elem` map functionStart functions) [GuestAddress getAddress, GuestAddress setAddress]) SymbolRejected
+  require (all (`elem` map functionStart functions) (map GuestAddress rustEntries)) SymbolRejected
   let word address = U.word32At bytes (fromIntegral (address - start))
       wordsAt address count = map word (take count [address, address + 4 ..])
       code address count = [A.decode a (word a) | a <- take count [address, address + 4 ..]]
-      stubMatches address expected callee = and (zipWith3 (\a want instruction -> maybe (instruction == A.Branch always True callee) (== word a) want)
+      resolved stubWord = case stubWord of
+        Fixed fixed -> Right (Left fixed)
+        CallTo name -> Right <$> at name
+      stubMatches address expected = and (zipWith3 (\a want instruction -> either (== word a) (\callee -> instruction == A.Branch always True callee) want)
         [address, address + 4 ..] expected (code address (length expected)))
-  require (stubMatches getterStubAddress getterStubWords getAddress) (EncodingRejected (StubEncoding GetterStub))
-  require (stubMatches setterStubAddress setterStubWords setAddress) (EncodingRejected (StubEncoding SetterStub))
+      stubSites address expected = [(GuestAddress a, GuestAddress callee) | (a, Right callee) <- zip [address, address + 4 ..] expected, callee `elem` map snd bracketCallees]
+  getterExpected <- mapM resolved getterStubWords
+  setterExpected <- mapM resolved setterStubWords
+  require (stubMatches getterStubAddress getterExpected) (EncodingRejected (StubEncoding GetterStub))
+  require (stubMatches setterStubAddress setterExpected) (EncodingRejected (StubEncoding SetterStub))
   forM_ accessorAddresses $ \(accessor, address) ->
     require (code address 4 == accessorCode accessor && wordsAt address 4 == accessorWords accessor) (EncodingRejected (AccessorEncoding accessor))
-  EncodedTables entries slots specials <- either (const (Left SlotTableRejected)) Right (encodeTables (map propertyClass properties))
+  EncodedTables entries slots specials <- either (Left . encodingRejected) Right (encodeTables (map propertyClass properties))
   let tableAddress = F.symbolAddress tableSymbol
       slotAddress = F.symbolAddress slotSymbol
       slotBytes = 4 * fromIntegral (length slots)
@@ -371,10 +391,16 @@ deriveArtifact properties carrier@(Carrier (GuestAddress carrierLow) (GuestAddre
         , layoutRoots = [GuestAddress getterStubAddress, GuestAddress setterStubAddress]
         , layoutFramePops = [GuestAddress (getterStubAddress + getterStubBytes - 4), GuestAddress (setterStubAddress + setterStubBytes - 4)]
         , layoutStockLeaves = [(GuestAddress address, stockLeafStack) | (_, address) <- stockLeaves]
-        , layoutStockSites = []
+        , layoutStockSites = stubSites setterStubAddress setterExpected
         }
   proof <- either (Left . CodeRejected) Right (admitCode layout bytes)
   pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) carrier (StubAddresses (GuestAddress getterStubAddress) (GuestAddress setterStubAddress)) functions (GuestAddress tableAddress) (GuestAddress slotAddress) (GuestAddress specialAddress) proof)
+  where
+    encodingRejected failure = case failure of
+      DelegatedProperty -> TableRejected
+      SlotTableFull -> SlotTableRejected
+      SpecialTableFull -> SpecialTableRejected
+      SpecialDefaultUnencodable -> SpecialTableRejected
 
 -- | Undefined-instruction fill for the carrier past the linked bytes.
 fillWord :: Word32
@@ -490,6 +516,7 @@ candidateContractValue (StagedCandidate staged@(StagedImage4 source artifact (St
       ([ "loads are not confined: owned code may read any address; the native oracle confines reads"
        , "stack depths are bytes below the stock getter or setter frame's sp at the arm; the stock frames supply the depth above it"
        , "the stock getter prologue pushed {r4, r5, r11, lr} and the stock setter prologue {r3-r8, r11, lr}; the stubs pop those frames, and the setter holds property, value and bank in r4-r6 and the slot in r8 at the arm"
+       , "the setter stub calls the stock open 0x61da3c and close 0x61d944 at the stock setter frame's sp, keeping live only r4-r7 across the open and r4-r6 across the close, as the stock arms do; the bracket chain's stack depth and register use are not proved"
        , "the code policy checks sp, r11 and the return address at every exit; other callee-saved registers follow AAPCS unproved"
        , "the reference scan reads image4, image5, plain, loader A and loader B as instructions and words, and image2 and image3 (the FONT_ICON.FDL window extracted from the DAT) as words; it does not cover computed addresses"
        ] :: [String])

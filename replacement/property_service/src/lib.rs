@@ -10,7 +10,7 @@ mod table;
 use property_table::{PROPERTIES, SLOTS, SPECIALS};
 use table::{
     BankDefault, BankOffset, Bits, ConfigOffset, FieldDefault, Hook, HookedField, Kind, ProfileSelector, RecordOffset, Save, SlotDefault, SlotIndex,
-    SlotRecord, Source, SpecialField, SpecialIndex, StockDefault, Width,
+    SlotRecord, Source, SpecialField, SpecialIndex, StockDefault, Width, WriteOnlyPair,
 };
 
 /// Bytes per bank image at 0x96cc64.
@@ -79,10 +79,10 @@ extern "C" {
 }
 
 #[inline(always)]
-fn entry(id: PropertyId) -> Kind {
+fn entry(id: PropertyId) -> Option<Kind> {
     match PROPERTIES.get(id.0.wrapping_sub(1) as usize) {
         Some(entry) => entry.kind(),
-        None => Kind::Delegated,
+        None => None,
     }
 }
 
@@ -249,14 +249,14 @@ unsafe fn write_config_default(target: Target, provisional: u32, offset: ConfigO
 }
 
 unsafe fn get_special(field: SpecialField, bank: BankIndex, mode: ReadMode) -> u32 {
-    let (bits, offset) = match field {
-        SpecialField::Hooked(hooked) => (hooked.bits, hooked.offset),
-        SpecialField::ReadOnly(read_only) => (read_only.bits, read_only.offset),
+    let (bits, offset, default) = match field {
+        SpecialField::Hooked(hooked) => (hooked.bits, hooked.offset, hooked.source),
+        SpecialField::ReadOnly(read_only) => (read_only.bits, read_only.offset, Source::Constant(read_only.default)),
+        SpecialField::WriteOnlyPair(_) => return 0,
     };
-    match (mode, field) {
-        (ReadMode::Live, _) => extract(bits, bank_load(bank_offset(bank, offset), bits.width())),
-        (ReadMode::Default, SpecialField::ReadOnly(read_only)) => read_only.default,
-        (ReadMode::Default, SpecialField::Hooked(hooked)) => match hooked.source {
+    match mode {
+        ReadMode::Live => extract(bits, bank_load(bank_offset(bank, offset), bits.width())),
+        ReadMode::Default => match default {
             Source::Constant(value) => value,
             Source::Stock(stock, _) => stock_default(stock),
             Source::Config(config, _) => config_default(bits, config),
@@ -280,13 +280,50 @@ unsafe fn set_hooked(field: HookedField, value: SetValue, bank: BankIndex) {
     }
 }
 
+/// One byte of a write-only pair.
+#[inline(always)]
+unsafe fn write_pair_byte(pair: WriteOnlyPair, offset: BankOffset, value: SetValue, bank: BankIndex) {
+    let stored = match value {
+        SetValue::Default => pair.default,
+        SetValue::Value(value) => value,
+    };
+    write(pair.bits, pair.save, bank, bank_offset(bank, offset), bank_offset(BankIndex(0), offset), stored);
+}
+
+/// Whether the setter stub calls 0x61da3c before and 0x61d944 after a set of `field` on `bank`.
+#[inline(always)]
+fn bracketed(field: SpecialField, bank: BankIndex) -> bool {
+    bank == BankIndex(0)
+        && match field {
+            SpecialField::Hooked(hooked) => matches!(hooked.hook, Hook::Bank0Bracket),
+            SpecialField::WriteOnlyPair(_) => true,
+            SpecialField::ReadOnly(_) => false,
+        }
+}
+
+#[inline(always)]
+fn special_of(id: PropertyId) -> Option<SpecialField> {
+    match entry(id) {
+        Some(Kind::Special(index)) => special(index),
+        _ => None,
+    }
+}
+
+fn set_value(value: u32) -> SetValue {
+    if value == DEFAULT_REQUEST {
+        SetValue::Default
+    } else {
+        SetValue::Value(value)
+    }
+}
+
 unsafe fn get(id: PropertyId, bank: BankIndex, mode: ReadMode, slot: SlotNumber) -> u32 {
     match entry(id) {
-        Kind::Field(field) => match mode {
+        Some(Kind::Field(field)) => match mode {
             ReadMode::Default => field_default(field.default),
             ReadMode::Live => extract(field.bits, bank_load(bank_offset(bank, field.offset), field.bits.width())),
         },
-        Kind::SlotField(slot_field) => {
+        Some(Kind::SlotField(slot_field)) => {
             let Some(record) = slot_record(slot_field.index) else { return 0 };
             let slot = if slot_field.mirror { RECORD_ZERO } else { slot };
             match (slot == BANK_BRANCH, mode, record.default) {
@@ -297,17 +334,17 @@ unsafe fn get(id: PropertyId, bank: BankIndex, mode: ReadMode, slot: SlotNumber)
                 (false, ReadMode::Live, _) => extract(record.bits, bank_load(bank_record_offset(bank, slot, record.offset), record.bits.width())),
             }
         }
-        Kind::Special(index) => match special(index) {
+        Some(Kind::Special(index)) => match special(index) {
             Some(field) => get_special(field, bank, mode),
             None => 0,
         },
-        Kind::Unassigned | Kind::Delegated => 0,
+        Some(Kind::Unassigned) | None => 0,
     }
 }
 
 unsafe fn set(id: PropertyId, value: SetValue, bank: BankIndex, slot: SlotNumber) -> u32 {
     match entry(id) {
-        Kind::Field(field) => {
+        Some(Kind::Field(field)) => {
             let stored = match value {
                 SetValue::Default => field_default(field.default),
                 SetValue::Value(value) => value,
@@ -315,7 +352,7 @@ unsafe fn set(id: PropertyId, value: SetValue, bank: BankIndex, slot: SlotNumber
             write(field.bits, field.save, bank, bank_offset(bank, field.offset), bank_offset(BankIndex(0), field.offset), stored);
             1
         }
-        Kind::SlotField(slot_field) => {
+        Some(Kind::SlotField(slot_field)) => {
             let Some(record) = slot_record(slot_field.index) else { return 0 };
             let record_target = |slot: SlotNumber| Target {
                 bits: record.bits,
@@ -349,14 +386,21 @@ unsafe fn set(id: PropertyId, value: SetValue, bank: BankIndex, slot: SlotNumber
             }
             1
         }
-        Kind::Special(index) => match special(index) {
+        Some(Kind::Special(index)) => match special(index) {
             Some(SpecialField::Hooked(field)) => {
                 set_hooked(field, value, bank);
                 1
             }
+            Some(field @ SpecialField::WriteOnlyPair(pair)) => {
+                write_pair_byte(pair, pair.first, value, bank);
+                if !bracketed(field, bank) {
+                    write_pair_byte(pair, pair.second, value, bank);
+                }
+                1
+            }
             Some(SpecialField::ReadOnly(_)) | None => 0,
         },
-        Kind::Unassigned | Kind::Delegated => 0,
+        Some(Kind::Unassigned) | None => 0,
     }
 }
 
@@ -373,13 +417,38 @@ pub unsafe extern "C" fn xm1_property_get(id: u32, bank: u32, defaults: u32, slo
     get(PropertyId(id), BankIndex(bank), if defaults == 1 { ReadMode::Default } else { ReadMode::Live }, SlotNumber(slot))
 }
 
-/// Setter arm body: `id`, `value`, `bank` and `slot` are the stock r4, r5, r6 and r8 at the arm.
+/// Setter arm body up to the setter stub's close call: `id`, `value`, `bank` and `slot` are the
+/// stock r4, r5, r6 and r8 at the arm. When `xm1_set_bracketed` returned 1 it runs after the open
+/// call, and `slot` is not the stock r8.
 ///
 /// # Safety
 /// As `xm1_property_get`, and for bank 0 the previous-value image must be mapped at 0x89ec00.
 #[no_mangle]
 pub unsafe extern "C" fn xm1_property_set(id: u32, value: u32, bank: u32, slot: u32) -> u32 {
-    set(PropertyId(id), if value == DEFAULT_REQUEST { SetValue::Default } else { SetValue::Value(value) }, BankIndex(bank), SlotNumber(slot))
+    set(PropertyId(id), set_value(value), BankIndex(bank), SlotNumber(slot))
+}
+
+/// 1 when the setter stub brackets the set with 0x61da3c and 0x61d944 (a bank-0 set of a
+/// bracketed field or a write-only pair), else 0.
+#[no_mangle]
+pub extern "C" fn xm1_set_bracketed(id: u32, bank: u32) -> u32 {
+    match special_of(PropertyId(id)) {
+        Some(field) => bracketed(field, BankIndex(bank)) as u32,
+        None => 0,
+    }
+}
+
+/// Setter arm body after the setter stub's close call: a write-only pair's second byte. Returns
+/// the stock r0, 1.
+///
+/// # Safety
+/// As `xm1_property_set`.
+#[no_mangle]
+pub unsafe extern "C" fn xm1_property_set_after(id: u32, value: u32, bank: u32) -> u32 {
+    if let Some(SpecialField::WriteOnlyPair(pair)) = special_of(PropertyId(id)) {
+        write_pair_byte(pair, pair.second, set_value(value), BankIndex(bank));
+    }
+    1
 }
 
 #[panic_handler]

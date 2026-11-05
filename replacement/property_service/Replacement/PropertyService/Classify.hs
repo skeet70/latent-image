@@ -23,6 +23,7 @@ module Replacement.PropertyService.Classify
   , SlotDefault (..)
   , MirrorPolicy (..)
   , SlotArm (..)
+  , PairArm (..)
   , Owned (..)
   , Side (..)
   , Explored (..)
@@ -44,6 +45,7 @@ module Replacement.PropertyService.Classify
   , classify
   ) where
 
+import Control.Applicative ((<|>))
 import Control.Monad (unless)
 import Data.List (nub)
 import qualified Data.Map.Strict as M
@@ -82,9 +84,10 @@ data StockDefault = Stock61df44 | Stock61d8a4 | Stock61d59c | Stock61d618 | Stoc
 -- | Offset of a byte from 0x96b400, below 0x200.
 newtype ConfigOffset = ConfigOffset Word16 deriving (Eq, Ord, Show)
 
--- | What a set does after the field's own save and store: nothing, or, when the byte at 0x96b400 +
--- offset is 0, the same save and store again.
-data FieldHook = NoHook | ConfigGatedResave ConfigOffset deriving (Eq, Ord, Show)
+-- | What surrounds or follows a set's save and store: nothing; on bank 0, the stock open 0x61da3c
+-- before and close 0x61d944 after, both with r0 = 0x96cc64; or, when the byte at 0x96b400 + offset
+-- is 0, the same save and store again.
+data FieldHook = NoHook | Bank0Bracket | ConfigGatedResave ConfigOffset deriving (Eq, Ord, Show)
 
 -- | Where the default comes from. For a stock or configuration default, a default request first
 -- stores the provisional constant (the Word32) with the field's save; then a stock default saves
@@ -147,9 +150,20 @@ data SlotArm = SlotArm
   }
   deriving (Eq, Show)
 
+-- | Two whole bytes a set stores with one value: on bank 0 the first between the open and close
+-- calls and the second after the close. Get returns 0.
+data PairArm = PairArm
+  { pairFirst :: BankOffset
+  , pairSecond :: BankOffset
+  , pairDefault :: Word32
+  , pairSave :: SavePolicy
+  }
+  deriving (Eq, Show)
+
 -- | Owned behaviour: a field, a slot-selected field, a field whose set is the shared fallback (it
--- returns 0 and stores nothing), or the shared fallback of both tables (get returns 0 too).
-data Owned = OwnedField FieldArm | OwnedSlotField SlotArm | OwnedReadOnlyField FieldArm | OwnedUnassigned deriving (Eq, Show)
+-- returns 0 and stores nothing), a write-only byte pair, or the shared fallback of both tables (get
+-- returns 0 too).
+data Owned = OwnedField FieldArm | OwnedSlotField SlotArm | OwnedReadOnlyField FieldArm | OwnedWriteOnlyPair PairArm | OwnedUnassigned deriving (Eq, Show)
 
 data Side = Getter | Setter deriving (Eq, Ord, Show)
 
@@ -262,6 +276,10 @@ decide getterShared setterShared getter setter getterExit setterExit
       if slotSelected getter
         then either (Delegated . uncurry Shape) (Owned . OwnedSlotField) (adjustedSlot getter setter)
         else either (Delegated . uncurry Shape) (Owned . OwnedField) (adjustedField getter setter)
+  | any (any (callsTo bracketOpen) . pathEvents) (outcomePaths setter) =
+      if getterShared
+        then either (Delegated . uncurry Shape) (Owned . OwnedWriteOnlyPair) (writeOnlyPair getter setter)
+        else either (Delegated . uncurry Shape) (Owned . OwnedField) (bracketedField getter setter)
   | getterShared && setterShared = either (Delegated . uncurry Shape) (const (Owned OwnedUnassigned)) (unassigned getter setter)
   | getterShared = Delegated (OneSidedFallback Getter)
   | setterShared = either (Delegated . uncurry Shape) (Owned . OwnedReadOnlyField) (readOnly getter setter)
@@ -442,6 +460,91 @@ adjustedField getter setter = do
 tag :: Side -> Either ShapeFault a -> Either (Side, ShapeFault) a
 tag side = either (Left . (,) side) Right
 
+-- | The stock functions that refresh bank-0 bytes [0x96cc64, 0x96cc74) from backup memory and write
+-- them back.
+bracketOpen, bracketClose :: Word32
+bracketOpen = 0x61da3c
+bracketClose = 0x61d944
+
+callsTo :: Word32 -> PathEvent -> Bool
+callsTo target event = case event of
+  EventCall called -> callTarget called == target
+  EventStore _ -> False
+
+-- | A call of `target` with r0 = 0x96cc64.
+bracketCall :: Word32 -> PathEvent -> Bool
+bracketCall target event = callsTo target event && case event of
+  EventCall called -> lookup 0 (callArguments called) == Just (Const bankBase)
+  EventStore _ -> False
+
+-- | The joined setter paths' event sequence for each value of (argument 1 is not the default
+-- request, argument 2 == 0), every path returning 1.
+bracketSequences :: [PathRecord] -> Either ShapeFault ([Bool] -> [PathEvent])
+bracketSequences arms = do
+  let paths = concatMap joined arms
+      subjects = [(GuardDefaultRequested, 0), (GuardArgument (ArgumentIndex 2), 0)]
+  mapM_ (\path -> if pathEnd path /= EndReturn (ReturnsConstant 1) then Left UnexpectedEnd else Right ()) paths
+  unless (all (onlyGuards subjects) paths) (Left UnmodelledGuard)
+  sequences <- covering subjects paths >>= eventSequences
+  pure (\combination -> M.findWithDefault [] combination sequences)
+
+-- | On bank 0, the open call, the events `inner` consumes and the close call, giving what follows the
+-- close; on other banks what follows `inner`'s events.
+bracketed :: Bool -> ([PathEvent] -> Maybe [PathEvent]) -> [PathEvent] -> Maybe [PathEvent]
+bracketed bank0 inner events
+  | bank0 = case events of
+      open : rest | bracketCall bracketOpen open -> inner rest >>= \after -> case after of
+        close : remaining | bracketCall bracketClose close -> Just remaining
+        _ -> Nothing
+      _ -> Nothing
+  | otherwise = inner events
+
+-- | Class 6: a field with a constant default whose bank-0 save and store run between the open and
+-- close calls.
+bracketedField :: Outcome -> Outcome -> Either (Side, ShapeFault) FieldArm
+bracketedField getter setter = do
+  (offset, width, bits, gets) <- tag Getter (getterField (outcomePaths getter))
+  _ <- tag Getter (inContainer width bits)
+  value <- case gets of
+    GetsDefault (DefaultConstant c)
+      | c <= maxDefault -> Right c
+      | otherwise -> Left (Getter, DefaultOutOfRange)
+    _ -> Left (Getter, DefaultFormUnrecognized)
+  at <- tag Setter (bracketSequences (outcomePaths setter))
+  let target bank0 = if bank0 then bank0Target offset width bits else fieldTarget offset width bits
+      source notDefault = if notDefault then fromValue else (== FromConstant value)
+      matches policy = and
+        [ bracketed bank0 (writeEvents (target bank0) policy bank0 (source notDefault)) (at [notDefault, bank0]) == Just []
+        | notDefault <- [False, True], bank0 <- [False, True]
+        ]
+  policy <- tag Setter (firstPolicy matches)
+  pure (FieldArm offset width bits (FieldDefaultOnly (DefaultConstant value)) policy Bank0Bracket)
+
+-- | Class 7: the getter's shared fallback, and a setter storing one value to two whole bytes, the
+-- first inside the bank-0 bracket and the second after it.
+writeOnlyPair :: Outcome -> Outcome -> Either (Side, ShapeFault) PairArm
+writeOnlyPair getter setter = do
+  mapM_ (bare Getter (EndReturn (ReturnsConstant 0))) (outcomePaths getter)
+  at <- tag Setter (bracketSequences (outcomePaths setter))
+  (first, second) <- case at [True, False] of
+    [EventStore (Modelled (StoreRecord a _ _)), EventStore (Modelled (StoreRecord b _ _))]
+      | Just (f, Byte) <- bankField (ArgumentIndex 2) a, Just (s, Byte) <- bankField (ArgumentIndex 2) b -> Right (f, s)
+    _ -> Left (Setter, UnexpectedStore)
+  value <- case at [False, False] of
+    EventStore (Modelled (StoreRecord _ _ (FromConstant c))) : _
+      | c <= maxDefault -> Right c
+      | otherwise -> Left (Setter, DefaultOutOfRange)
+    _ -> Left (Setter, DefaultFormUnrecognized)
+  let whole = BitRange 0 8
+      target bank0 offset = if bank0 then bank0Target offset Byte whole else fieldTarget offset Byte whole
+      matches policy = and
+        [ (bracketed bank0 (writeEvents (target bank0 first) policy bank0 source) (at [notDefault, bank0]) >>= writeEvents (target bank0 second) policy bank0 source) == Just []
+        | notDefault <- [False, True], bank0 <- [False, True]
+        , let source = if notDefault then fromValue else (== FromConstant value)
+        ]
+  policy <- tag Setter (firstPolicy matches)
+  pure (PairArm first second value policy)
+
 -- | A whole container read from the defaults table 0x81b074.
 tailDefault :: Loc -> Extract -> Maybe FieldDefault
 tailDefault loc (Extract lsb bits signed) = case offsetIn tailDefaultsBase [] loc of
@@ -621,6 +724,11 @@ data StoreTarget = StoreTarget
 -- | The bank field at `offset` stored for the bank argument 2, saved to 0x89ec00 from bank 0.
 fieldTarget :: BankOffset -> Width -> BitRange -> StoreTarget
 fieldTarget (BankOffset offset) = StoreTarget (offsetIn bankBase (bankTerm (ArgumentIndex 2))) (offsetIn saveBase []) (offsetIn bankBase []) (fromIntegral offset)
+
+-- | The bank field at `offset` of bank 0, stored at a bank-0 address or through the bank argument 2.
+bank0Target :: BankOffset -> Width -> BitRange -> StoreTarget
+bank0Target (BankOffset offset) =
+  StoreTarget (\loc -> offsetIn bankBase [] loc <|> offsetIn bankBase (bankTerm (ArgumentIndex 2)) loc) (offsetIn saveBase []) (offsetIn bankBase []) (fromIntegral offset)
 
 -- | A combination's stores under a save policy: on bank 0 with a save, the save and then the store,
 -- otherwise the store alone, which inserts the source `value` accepts.

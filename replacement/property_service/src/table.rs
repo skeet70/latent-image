@@ -90,10 +90,12 @@ pub enum Source {
     Config(ConfigOffset, u32),
 }
 
-/// What a set does after the field's own save and store.
+/// What surrounds or follows a set's save and store.
 #[derive(Clone, Copy)]
 pub enum Hook {
     None,
+    /// On bank 0 the setter stub calls 0x61da3c before and 0x61d944 after them.
+    Bank0Bracket,
     /// Repeats them when the byte at 0x96b400 + offset is 0.
     GatedResave(ConfigOffset),
 }
@@ -164,16 +166,26 @@ pub struct ReadOnlyField {
     pub default: u32,
 }
 
+/// Two whole bytes a set stores with one value; on bank 0 the setter stub's bracket calls surround
+/// the first. Get returns 0.
+#[derive(Clone, Copy)]
+pub struct WriteOnlyPair {
+    pub bits: Bits,
+    pub save: Save,
+    pub first: BankOffset,
+    pub second: BankOffset,
+    pub default: u32,
+}
+
 #[derive(Clone, Copy)]
 pub enum SpecialField {
     Hooked(HookedField),
     ReadOnly(ReadOnlyField),
+    WriteOnlyPair(WriteOnlyPair),
 }
 
 #[derive(Clone, Copy)]
 pub enum Kind {
-    /// Not reachable: the stock table still dispatches the property to its stock arm.
-    Delegated,
     /// The stock fallback: get returns 0, set returns 0 and stores nothing.
     Unassigned,
     Field(Field),
@@ -209,13 +221,14 @@ fn stock(code: u32) -> Option<StockDefault> {
 }
 
 impl Entry {
+    /// The property's kind, or None for a kind-0 word with index 0.
     #[inline(always)]
-    pub fn kind(self) -> Kind {
+    pub fn kind(self) -> Option<Kind> {
         let word = self.0;
         let offset = BankOffset((word >> 13) & 0x1ff);
-        match word & 3 {
+        Some(match word & 3 {
             0 => match (word >> 2) & 0x3f {
-                0 => Kind::Delegated,
+                0 => return None,
                 index => Kind::Special(SpecialIndex(index - 1)),
             },
             1 => Kind::Unassigned,
@@ -235,7 +248,7 @@ impl Entry {
                 index: SlotIndex((word >> 22) & 0x7f),
                 mirror: (word >> 29) & 1 != 0,
             }),
-        }
+        })
     }
 }
 
@@ -280,11 +293,22 @@ impl Special {
                 },
                 hook: match (behaviour >> 15) & 3 {
                     0 => Hook::None,
+                    1 => Hook::Bank0Bracket,
                     2 => Hook::GatedResave(ConfigOffset((behaviour >> 17) & 0x1ff)),
                     _ => return None,
                 },
             })),
             1 => Some(SpecialField::ReadOnly(ReadOnlyField { bits, offset, default: value })),
+            2 => match (behaviour & 3, (behaviour >> 15) & 3) {
+                (0, 1) => Some(SpecialField::WriteOnlyPair(WriteOnlyPair {
+                    bits,
+                    save: save(layout, 3),
+                    first: offset,
+                    second: BankOffset((behaviour >> 17) & 0x1ff),
+                    default: value,
+                })),
+                _ => None,
+            },
             _ => None,
         }
     }

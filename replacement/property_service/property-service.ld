@@ -8,6 +8,10 @@ xm1_stock_61d618 = 0x61d618;
 xm1_stock_61d5f0 = 0x61d5f0;
 xm1_stock_61d65c = 0x61d65c;
 
+/* The bank-0 open and close, called only from xm1_setter_stub. */
+xm1_stock_61da3c = 0x61da3c;
+xm1_stock_61d944 = 0x61d944;
+
 /* The interval of owned setter arms the hull scan chooses; staging derives and checks it. */
 MEMORY {
   CARRIER (rx) : ORIGIN = 0x62c120, LENGTH = 0x62fbfc - 0x62c120

@@ -12,7 +12,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
 import Data.Either (isLeft)
-import Data.List (zip5)
+import Data.List (find, zip5)
 import Data.Maybe (fromMaybe)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
@@ -127,6 +127,8 @@ contractBytes = BL.toStrict (A.encode (object
     | index == 6 = ("delegated", 0x621140, 0x622200)
     | index == 7 = ("owned-slot-field", slotGetter, slotSetter)
     | index == 8 = ("delegated", 0x6211c0, 0x6222c0)
+    | index == 9 = ("owned-read-only-field", 0x621000, 0x622000)
+    | index == 10 = ("owned-write-only-pair", 0x621000, 0x622000)
     | otherwise = ("delegated", 0x621000, 0x622000)
 
 crawlRoute :: RouteName
@@ -466,6 +468,12 @@ main = do
          in fmap (\bytes -> map (`wordAt` bytes) [0x623000, 0x623004, 0x623008, 0x62300c]) controlled
               == Right [carrierStart, carrierStart + 0x10, carrierStart, slotSetter]
               && isLeft (controlPatch contract 8))
+    , check "the stage-3 class labels decode as owned classes"
+        (let contract = either error id (decodeContract contractBytes)
+             classOf property = armsClass <$> find ((== property) . armsProperty) (contractProperties contract)
+         in map classOf [9, 10] == [Just OwnedReadOnlyField, Just OwnedWriteOnlyPair]
+              && all (ownedClass . armsClass) (filter ((`elem` [9, 10]) . armsProperty) (contractProperties contract))
+              && controlPatch contract 9 == Left "PROPERTY has no staged setter table word")
     , check "the next live arm and the retained image carry no guard"
         (refusal OwnedRole (guardHit (retiredGetter + 0x40)) == Just (UnarmedSite 6)
           && refusal RetainedRole retainedStep { stepHits = stepHits retainedStep ++ [hit (Guard RetiredGetterArm) retiredGetter [] stackPointer 0] } == Just (UnarmedSite 5))

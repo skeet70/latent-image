@@ -37,27 +37,28 @@ newtype SlotIndex = SlotIndex Word32 deriving (Eq, Ord, Show)
 -- | Position of a special field's words in the special table, below `specialTableCapacity`.
 newtype SpecialIndex = SpecialIndex Word32 deriving (Eq, Ord, Show)
 
--- | A field the property word cannot hold: one with a stock or configuration default or a hook, or
--- a read-only field.
-data SpecialArm = HookedField FieldArm | ReadOnlyField FieldArm deriving (Eq, Show)
+-- | A property the property word cannot hold: a field with a stock or configuration default or a
+-- hook, a read-only field, or a write-only pair.
+data SpecialArm = HookedField FieldArm | ReadOnlyField FieldArm | WriteOnlyPair PairArm deriving (Eq, Show)
 
-data TableEntry = DelegatedEntry | UnassignedEntry | FieldEntry FieldArm | SlotEntry BankBranch MirrorPolicy SlotIndex | SpecialEntry SpecialIndex deriving (Eq, Show)
+data TableEntry = UnassignedEntry | FieldEntry FieldArm | SlotEntry BankBranch MirrorPolicy SlotIndex | SpecialEntry SpecialIndex deriving (Eq, Show)
 
 data EncodedTables = EncodedTables { encodedEntries :: [EncodedEntry], encodedSlots :: [EncodedSlot], encodedSpecials :: [EncodedSpecial] } deriving (Eq, Show)
 
-data EncodingError = SlotTableFull | SpecialTableFull | SpecialDefaultUnencodable deriving (Eq, Show)
+-- | `DelegatedProperty`: the classification delegates a property, which no word encodes.
+data EncodingError = DelegatedProperty | SlotTableFull | SpecialTableFull | SpecialDefaultUnencodable deriving (Eq, Show)
 
 -- | The slot index has 7 bits.
 slotTableCapacity :: Int
 slotTableCapacity = 128
 
--- | The special index has 6 bits, and 0 is a delegated word.
+-- | The special index has 6 bits, and 0 is no entry.
 specialTableCapacity :: Int
 specialTableCapacity = 63
 
 encodingDescription :: String
 encodingDescription =
-  "property word: bits 0-1 kind (0 delegated or special, 1 unassigned, 2 field, 3 slot field); kind 0 has bits 2-7 the special-table index + 1, 0 for a delegated word, and is otherwise zero; for kinds 2 and 3 bit 2 halfword, bits 4-7 lsb, bits 8-12 width in bits, bits 13-21 bank offset; kind 2 has bit 3 bank-0 save to 0x89ec00 and bits 22-31 the default: bit 31 clear, the constant in bits 22-30; bit 31 set, the container at 0x81b074 + bits 22-29, a halfword when bit 2 is set; kind 3 has bits 22-28 the slot-table index and bit 29 the record-0 mirror; unassigned words are zero apart from kind. Slot word, in property order of the slot fields: bits 0-5 record offset, bit 6 halfword, bits 7-10 lsb, bits 11-15 width in bits, bit 16 bank-0 save, bit 17 slot-1 default is the byte at 0x81b074 + bits 18-27, else bits 18-27 are the slot-1 default, bits 28-31 the stock default code (0 for the stage-2 defaults). Special entry, two words in property order of the special fields: word 0 has the kind-2 field layout and save bit, bits 0-1 the subkind (0 hooked field, 1 read-only field) and bits 22-30 the constant default or the provisional value; word 1 has bits 0-1 the default source (0 constant, 1 stock, 2 configuration), bits 2-5 the stock code, bits 6-14 the configuration offset from 0x96b400, bits 15-16 the hook (0 none, 2 gated resave) and bits 17-25 the gate offset from 0x96b400. Stock codes 1-8: 0x61df44, 0x61d8a4, 0x61d59c, 0x61d618, 0x61d5f0, 0x61d65c with r0 = 2, 3, 4"
+  "property word: bits 0-1 kind (0 special, 1 unassigned, 2 field, 3 slot field); kind 0 has bits 2-7 the special-table index + 1, never 0, and is otherwise zero; for kinds 2 and 3 bit 2 halfword, bits 4-7 lsb, bits 8-12 width in bits, bits 13-21 bank offset; kind 2 has bit 3 bank-0 save to 0x89ec00 and bits 22-31 the default: bit 31 clear, the constant in bits 22-30; bit 31 set, the container at 0x81b074 + bits 22-29, a halfword when bit 2 is set; kind 3 has bits 22-28 the slot-table index and bit 29 the record-0 mirror; unassigned words are zero apart from kind. Slot word, in property order of the slot fields: bits 0-5 record offset, bit 6 halfword, bits 7-10 lsb, bits 11-15 width in bits, bit 16 bank-0 save, bit 17 slot-1 default is the byte at 0x81b074 + bits 18-27, else bits 18-27 are the slot-1 default, bits 28-31 the stock default code (0 for the stage-2 defaults). Special entry, two words in property order of the special properties: word 0 has the kind-2 field layout and save bit, bits 0-1 the subkind (0 hooked field, 1 read-only field, 2 write-only pair, whose layout is the first whole byte) and bits 22-30 the constant default or the provisional value; word 1 has bits 0-1 the default source (0 constant, 1 stock, 2 configuration), bits 2-5 the stock code, bits 6-14 the configuration offset from 0x96b400, bits 15-16 the hook (0 none, 1 bank-0 bracket by 0x61da3c and 0x61d944, 2 gated resave) and bits 17-25 the gate offset from 0x96b400 or the pair's second byte offset. Stock codes 1-8: 0x61df44, 0x61d8a4, 0x61d59c, 0x61d618, 0x61d5f0, 0x61d65c with r0 = 2, 3, 4"
 
 field :: Bool -> BitRange -> BankOffset -> Word32
 field half (BitRange lsb bits) (BankOffset offset) =
@@ -88,7 +89,6 @@ plainField arm = case (fieldSource arm, fieldHook arm) of
 
 encodeEntry :: TableEntry -> EncodedEntry
 encodeEntry entry = EncodedEntry $ case entry of
-  DelegatedEntry -> 0
   UnassignedEntry -> 1
   FieldEntry (FieldArm offset width bits source save _) ->
     2
@@ -122,39 +122,46 @@ encodeSlot (SlotArm (BankBranch _ _ _ fallback) (RecordBranch (RecordOffset offs
       SlotStock stock -> stockCode stock
 
 encodeSpecial :: SpecialArm -> Either EncodingError EncodedSpecial
-encodeSpecial special = do
-  let (subkind, FieldArm offset width bits source save hook) = case special of
-        HookedField arm -> (0, arm)
-        ReadOnlyField arm -> (1 :: Word32, arm)
-  (value, sourceBits) <- case source of
-    FieldDefaultOnly (DefaultConstant c) -> Right (c, 0)
-    FieldDefaultOnly (DefaultTail _ _) -> Left SpecialDefaultUnencodable
-    FieldStock stock p -> Right (p, 1 .|. (stockCode stock `shiftL` 2))
-    FieldConfig (ConfigOffset config) p -> Right (p, 2 .|. (fromIntegral config `shiftL` 6))
-  let hookBits = case hook of
-        NoHook -> 0
-        ConfigGatedResave (ConfigOffset gate) -> (2 `shiftL` 15) .|. (fromIntegral gate `shiftL` 17)
-  pure (EncodedSpecial (subkind .|. field (width == Half) bits offset .|. saveBit save .|. (value `shiftL` 22)) (sourceBits .|. hookBits))
+encodeSpecial special = case special of
+  HookedField arm -> fieldSpecial 0 arm
+  ReadOnlyField arm -> fieldSpecial 1 arm
+  WriteOnlyPair (PairArm first (BankOffset second) value save) ->
+    Right (EncodedSpecial (2 .|. field False (BitRange 0 8) first .|. saveBit save .|. (value `shiftL` 22)) (bracketHook .|. (fromIntegral second `shiftL` 17)))
+  where
+    bracketHook = 1 `shiftL` 15
+    fieldSpecial subkind (FieldArm offset width bits source save hook) = do
+      (value, sourceBits) <- case source of
+        FieldDefaultOnly (DefaultConstant c) -> Right (c, 0)
+        FieldDefaultOnly (DefaultTail _ _) -> Left SpecialDefaultUnencodable
+        FieldStock stock p -> Right (p, 1 .|. (stockCode stock `shiftL` 2))
+        FieldConfig (ConfigOffset config) p -> Right (p, 2 .|. (fromIntegral config `shiftL` 6))
+      let hookBits = case hook of
+            NoHook -> 0
+            Bank0Bracket -> bracketHook
+            ConfigGatedResave (ConfigOffset gate) -> (2 `shiftL` 15) .|. (fromIntegral gate `shiftL` 17)
+      pure (EncodedSpecial ((subkind :: Word32) .|. field (width == Half) bits offset .|. saveBit save .|. (value `shiftL` 22)) (sourceBits .|. hookBits))
 
--- | The three tables for the classes in property order.
+-- | The three tables for the classes in property order, refused when any property is delegated.
 encodeTables :: [Class] -> Either EncodingError EncodedTables
 encodeTables classes
+  | not (null [() | Delegated _ <- classes]) = Left DelegatedProperty
   | length slots > slotTableCapacity = Left SlotTableFull
   | length specials > specialTableCapacity = Left SpecialTableFull
-  | otherwise = EncodedTables (go 0 0 classes) (map encodeSlot slots) <$> mapM encodeSpecial specials
+  | otherwise = EncodedTables (go 0 0 [owned | Owned owned <- classes]) (map encodeSlot slots) <$> mapM encodeSpecial specials
   where
     slots = [arm | Owned (OwnedSlotField arm) <- classes]
     specials = concatMap specialOf classes
     specialOf verdict = case verdict of
       Owned (OwnedField arm) | not (plainField arm) -> [HookedField arm]
       Owned (OwnedReadOnlyField arm) -> [ReadOnlyField arm]
+      Owned (OwnedWriteOnlyPair arm) -> [WriteOnlyPair arm]
       _ -> []
     go _ _ [] = []
-    go slot special (verdict : rest) = case verdict of
-      Delegated _ -> encodeEntry DelegatedEntry : go slot special rest
-      Owned OwnedUnassigned -> encodeEntry UnassignedEntry : go slot special rest
-      Owned (OwnedField arm)
+    go slot special (owned : rest) = case owned of
+      OwnedUnassigned -> encodeEntry UnassignedEntry : go slot special rest
+      OwnedField arm
         | plainField arm -> encodeEntry (FieldEntry arm) : go slot special rest
         | otherwise -> encodeEntry (SpecialEntry (SpecialIndex special)) : go slot (special + 1) rest
-      Owned (OwnedReadOnlyField _) -> encodeEntry (SpecialEntry (SpecialIndex special)) : go slot (special + 1) rest
-      Owned (OwnedSlotField arm) -> encodeEntry (SlotEntry (bankArm arm) (slotMirror arm) (SlotIndex slot)) : go (slot + 1) special rest
+      OwnedReadOnlyField _ -> encodeEntry (SpecialEntry (SpecialIndex special)) : go slot (special + 1) rest
+      OwnedWriteOnlyPair _ -> encodeEntry (SpecialEntry (SpecialIndex special)) : go slot (special + 1) rest
+      OwnedSlotField arm -> encodeEntry (SlotEntry (bankArm arm) (slotMirror arm) (SlotIndex slot)) : go (slot + 1) special rest

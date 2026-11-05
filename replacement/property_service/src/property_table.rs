@@ -2,9 +2,9 @@
 use crate::table::{Entry, Slot, Special};
 
 pub static PROPERTIES: [Entry; 645] = [
-    Entry(0x0), // 0x1 delegated shape:setter:call
-    Entry(0x0), // 0x2 delegated shape:setter:call
-    Entry(0x0), // 0x3 delegated shape:setter:call
+    Entry(0x4), // 0x1 field
+    Entry(0x8), // 0x2 field
+    Entry(0xc), // 0x3 field
     Entry(0x53e14a), // 0x4 field
     Entry(0x1), // 0x5 unassigned
     Entry(0x107c35a), // 0x6 field
@@ -53,11 +53,11 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x150444a), // 0x31 field
     Entry(0x1), // 0x32 unassigned
     Entry(0x1), // 0x33 unassigned
-    Entry(0x4), // 0x34 field
+    Entry(0x10), // 0x34 field
     Entry(0x1), // 0x35 unassigned
     Entry(0xe625a), // 0x36 field
     Entry(0x1), // 0x37 unassigned
-    Entry(0x8), // 0x38 field
+    Entry(0x14), // 0x38 field
     Entry(0x1), // 0x39 unassigned
     Entry(0x1), // 0x3a unassigned
     Entry(0x1), // 0x3b unassigned
@@ -74,7 +74,7 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0xbc17a), // 0x46 field
     Entry(0x1), // 0x47 unassigned
     Entry(0x84226a), // 0x48 field
-    Entry(0xc), // 0x49 field
+    Entry(0x18), // 0x49 field
     Entry(0x83c26a), // 0x4a field
     Entry(0x13a15a), // 0x4b field
     Entry(0x3826a), // 0x4c field
@@ -170,13 +170,13 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x1), // 0xa6 unassigned
     Entry(0xc417a), // 0xa7 field
     Entry(0x1), // 0xa8 unassigned
-    Entry(0x10), // 0xa9 field
+    Entry(0x1c), // 0xa9 field
     Entry(0x1), // 0xaa unassigned
     Entry(0xc217a), // 0xab field
     Entry(0x1), // 0xac unassigned
     Entry(0x8e825a), // 0xad field
     Entry(0x13211a), // 0xae field
-    Entry(0x0), // 0xaf delegated shape:setter:call
+    Entry(0x20), // 0xaf field
     Entry(0x13c15a), // 0xb0 field
     Entry(0x1), // 0xb1 unassigned
     Entry(0x1), // 0xb2 unassigned
@@ -636,15 +636,15 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x81b4080a), // 0x278 field
     Entry(0x84f5a80a), // 0x279 field
     Entry(0x53e11a), // 0x27a field
-    Entry(0x14), // 0x27b read-only field
-    Entry(0x18), // 0x27c read-only field
+    Entry(0x24), // 0x27b read-only field
+    Entry(0x28), // 0x27c read-only field
     Entry(0x1), // 0x27d unassigned
     Entry(0x1), // 0x27e unassigned
     Entry(0x3c60a), // 0x27f field
     Entry(0x3e60a), // 0x280 field
     Entry(0x53810a), // 0x281 field
-    Entry(0x0), // 0x282 delegated shape:setter:call
-    Entry(0x0), // 0x283 delegated one-sided-fallback:getter
+    Entry(0x2c), // 0x282 field
+    Entry(0x30), // 0x283 write-only pair
     Entry(0x13a13a), // 0x284 field
     Entry(0xcc50a), // 0x285 field
 ];
@@ -736,11 +736,17 @@ pub static SLOTS: [Slot; 84] = [
     Slot(0x151a96), // 0x217
 ];
 
-pub static SPECIALS: [Special; 6] = [
+pub static SPECIALS: [Special; 12] = [
+    Special(0x16118, 0x8000), // 0x1
+    Special(0x16108, 0x8000), // 0x2
+    Special(0x416128, 0x8000), // 0x3
     Special(0x42608, 0x5), // 0x34
     Special(0xf0258, 0x9), // 0x38
     Special(0xb8258, 0x1d10000), // 0x49
     Special(0x52508, 0x4e02), // 0xa9
+    Special(0x16138, 0x8000), // 0xaf
     Special(0x19005005, 0x0), // 0x27b
     Special(0x1005, 0x0), // 0x27c
+    Special(0xc108, 0x8000), // 0x282
+    Special(0x2a81c80a, 0x24c8000), // 0x283
 ];

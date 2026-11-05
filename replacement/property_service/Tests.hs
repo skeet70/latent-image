@@ -42,9 +42,9 @@ carrierEndAddress = 0x62fbfc
 testCarrier :: Carrier
 testCarrier = Carrier (GuestAddress carrierStartAddress) (GuestAddress carrierEndAddress)
 
--- | A classification whose encoded tables are the linked ones: owned fields' and slot fields' setter
--- arms start the carrier, delegated setter arms end it, unassigned properties use both stock
--- fallbacks and read-only fields the setter's.
+-- | A classification whose encoded tables are the linked ones: owned setter arms start the carrier,
+-- unassigned properties use both stock fallbacks, read-only fields the setter's and write-only
+-- pairs the getter's.
 syntheticClassification :: B.ByteString -> [Symbol] -> [Property]
 syntheticClassification bytes symbols =
   [ property (PropertyId (fromIntegral index + 1)) (wordAt table index) | index <- [0 .. 644] ]
@@ -58,11 +58,13 @@ syntheticClassification bytes symbols =
       (1, _) -> Property identifier (GuestAddress 0x6243e4) (GuestAddress 0x6301fc) (Owned OwnedUnassigned)
       (2, _) -> owned identifier (OwnedField (field word (FieldDefaultOnly (fieldDefault word)) NoHook))
       (3, _) -> owned identifier (OwnedSlotField (slotArm word (wordAt slots (fromIntegral ((word `shiftR` 22) .&. 0x7f)))))
-      (_, 0) -> Property identifier (GuestAddress 0x61e300) (GuestAddress carrierEndAddress) (Delegated ExitAdjusts)
+      (_, 0) -> error ("kind-0 word with index 0 for property " ++ show identifier)
       (_, index) -> special identifier (wordAt specials (2 * fromIntegral (index - 1))) (wordAt specials (2 * fromIntegral (index - 1) + 1))
-    special identifier layout behaviour
-      | layout .&. 3 == 1 = Property identifier (GuestAddress 0x61e200) (GuestAddress 0x6301fc) (Owned (OwnedReadOnlyField (field layout (FieldDefaultOnly (DefaultConstant value)) NoHook)))
-      | otherwise = owned identifier (OwnedField (field layout source hook))
+    special identifier layout behaviour = case layout .&. 3 of
+      1 -> Property identifier (GuestAddress 0x61e200) (GuestAddress 0x6301fc) (Owned (OwnedReadOnlyField (field layout (FieldDefaultOnly (DefaultConstant value)) NoHook)))
+      2 -> Property identifier (GuestAddress 0x6243e4) (GuestAddress carrierStartAddress)
+        (Owned (OwnedWriteOnlyPair (PairArm (BankOffset (fromIntegral ((layout `shiftR` 13) .&. 0x1ff))) (BankOffset (fromIntegral ((behaviour `shiftR` 17) .&. 0x1ff))) value (saveAt layout 3))))
+      _ -> owned identifier (OwnedField (field layout source hook))
       where
         value = (layout `shiftR` 22) .&. 0x1ff
         config at = ConfigOffset (fromIntegral ((behaviour `shiftR` at) .&. 0x1ff))
@@ -70,7 +72,10 @@ syntheticClassification bytes symbols =
           1 -> FieldStock (stockOf ((behaviour `shiftR` 2) .&. 0xf)) value
           2 -> FieldConfig (config 6) value
           _ -> FieldDefaultOnly (DefaultConstant value)
-        hook = if (behaviour `shiftR` 15) .&. 3 == 2 then ConfigGatedResave (config 17) else NoHook
+        hook = case (behaviour `shiftR` 15) .&. 3 of
+          1 -> Bank0Bracket
+          2 -> ConfigGatedResave (config 17)
+          _ -> NoHook
     stockOf code = case code of
       1 -> Stock61df44
       2 -> Stock61d8a4
@@ -187,9 +192,13 @@ syntheticImage4 properties = foldl (\bytes (address, value) -> putWordAt base ad
           | Property (PropertyId n) (GuestAddress getter) (GuestAddress setter) _ <- properties
           ]
 
+-- | Placement of the artifact for `classified` with its last two owned fields delegated, their setter
+-- arms ending the carrier.
 placementTests :: [Property] -> LinkedArtifact -> IO ()
-placementTests properties artifact = do
-  let stock = syntheticImage4 properties
+placementTests classified artifact = do
+  let lastFields = take 2 (reverse [propertyId p | p@(Property _ _ _ (Owned (OwnedField _))) <- classified])
+      properties = [if propertyId p `elem` lastFields then Property (propertyId p) (GuestAddress 0x61e300) (GuestAddress carrierEndAddress) (Delegated ExitAdjusts) else p | p <- classified]
+      stock = syntheticImage4 properties
       image4 bytes = Image "image4" "" 0x61c400 bytes
       scanOf props bytes = either (Left . PlacementRejected) Right (scanHull (image4 bytes) [(ScanImage4, image4 bytes)] props)
       stage props bytes = scanOf props bytes >>= \scan -> stagePlacement props (image4 bytes) scan artifact
@@ -359,6 +368,12 @@ main = do
   artifact <- either (fail . ("real artifact refused: " ++) . show) pure (admit bytes symbolText)
   unless (artifactCarrier artifact == testCarrier) (fail "carrier differs")
   putStrLn "admitted the linked artifact against the synthetic classification"
+  expect "the setter stub's stock-site calls are the open and close at the stock frame's sp"
+    [(setterStubAddress + 32, 0x61da3c, StackOffset 0), (setterStubAddress + 72, 0x61d944, StackOffset 0)]
+    [ (site, target, depth)
+    | EntryFrame (GuestAddress entry) _ edges <- proofFrames (artifactProof artifact), entry == setterStubAddress
+    , CallEdge (GuestAddress site) (GuestAddress target) depth StockSiteCall <- edges
+    ]
   let flippedAt address = let at = fromIntegral (address - carrierStartAddress) + 1 in B.take at bytes <> B.singleton (B.index bytes at + 1) <> B.drop (at + 1) bytes
   expectRefusal "mutated PROPERTIES byte" TableRejected (admit (flippedAt tableAddress) symbolText)
   expectRefusal "mutated SLOTS byte" SlotTableRejected (admit (flippedAt slotAddress) symbolText)
@@ -375,9 +390,20 @@ main = do
   expectRefusal "artifact linked away from the hull scan's carrier" (PlacementRejected (CarrierNotCandidate (GuestAddress carrierStartAddress)))
     (deriveArtifact properties (Carrier (GuestAddress 0x62c4b0) (GuestAddress carrierEndAddress)) bytes symbolText)
   expectRefusal "setter stub passing r7 as the slot" (EncodingRejected (StubEncoding SetterStub))
-    (admit (replaceWord (setterStubAddress + 12) 0xe1a03007 bytes) symbolText)
+    (admit (replaceWord (setterStubAddress + 48) 0xe1a03007 bytes) symbolText)
   expectRefusal "setter stub ending b 0x630200" (EncodingRejected (StubEncoding SetterStub))
     (admit (replaceWord setterPop (branchWord False setterPop 0x630200) bytes) symbolText)
+  expectRefusal "setter stub without the open call" (EncodingRejected (StubEncoding SetterStub))
+    (admit (replaceWord (setterStubAddress + 32) 0xe320f000 bytes) symbolText)
+  expectRefusal "setter stub closing at the open's site" (EncodingRejected (StubEncoding SetterStub))
+    (admit (replaceWord (setterStubAddress + 32) (branchWord True (setterStubAddress + 32) 0x61d944) bytes) symbolText)
+  expectRefusal "bracket callee symbol moved" SymbolRejected (admit bytes (moveSymbol "xm1_stock_61da3c" 0x61da40 symbolText))
+  let delegating = case break (\p -> case propertyClass p of Owned (OwnedField _) -> True; _ -> False) properties of
+        (before, p : after) -> before ++ p {propertyClass = Delegated ExitAdjusts} : after
+        (before, []) -> before
+      unbracketed = [case propertyClass p of Owned (OwnedField arm@(FieldArm _ _ _ _ _ Bank0Bracket)) -> p {propertyClass = Owned (OwnedField arm {fieldHook = NoHook})}; _ -> p | p <- properties]
+  expectRefusal "a classification delegating a property" TableRejected (deriveArtifact delegating testCarrier bytes symbolText)
+  expectRefusal "bracket hooks the tables do not hold" TableRejected (deriveArtifact unbracketed testCarrier bytes symbolText)
   expectRefusal "getter stub popping the setter list" (EncodingRejected (StubEncoding GetterStub))
     (admit (replaceWord getterPop 0xe8bd89f8 bytes) symbolText)
   expectRefusal "slot-defaults accessor base changed" (EncodingRejected (AccessorEncoding (Accessor SlotDefaultsImage Load8)))

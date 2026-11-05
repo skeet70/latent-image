@@ -62,6 +62,7 @@ classValue (Property (PropertyId identifier) (GuestAddress getter) (GuestAddress
       Owned (OwnedField arm) -> Just (fieldValue arm)
       Owned (OwnedReadOnlyField arm) -> Just (fieldValue arm)
       Owned (OwnedSlotField arm) -> Just (slotValue arm)
+      Owned (OwnedWriteOnlyPair arm) -> Just (pairValue arm)
       _ -> Nothing
   ]
   where
@@ -75,7 +76,10 @@ classValue (Property (PropertyId identifier) (GuestAddress getter) (GuestAddress
        , "save" .= (save == SaveBank0Previous)
        ]
         ++ [ "provisional" .= hex provisional | Just provisional <- [provisionalOf source] ]
-        ++ [ "hook" .= object ["gate" .= hex (configBase + fromIntegral gate)] | ConfigGatedResave (ConfigOffset gate) <- [hook] ])
+        ++ [ "hook" .= object ["gate" .= hex (configBase + fromIntegral gate)] | ConfigGatedResave (ConfigOffset gate) <- [hook] ]
+        ++ [ "hook" .= ("bank0-bracket" :: String) | hook == Bank0Bracket ])
+    pairValue (PairArm (BankOffset first) (BankOffset second) value save) = object
+      ["first" .= first, "second" .= second, "width" .= widthLabel Byte, "default" .= hex value, "save" .= (save == SaveBank0Previous), "hook" .= ("bank0-bracket" :: String)]
     provisionalOf source = case source of
       FieldStock _ p -> Just p
       FieldConfig _ p -> Just p
@@ -104,6 +108,7 @@ ownedLabel owned = case owned of
   OwnedField _ -> "owned-field"
   OwnedSlotField _ -> "owned-slot-field"
   OwnedReadOnlyField _ -> "owned-read-only-field"
+  OwnedWriteOnlyPair _ -> "owned-write-only-pair"
   OwnedUnassigned -> "owned-unassigned"
 
 -- | The leaf's address, with 0x61d65c's selector.
@@ -122,6 +127,7 @@ summaryValue properties = object
   , "ownedField" .= count (\c -> case c of Owned (OwnedField _) -> True; _ -> False)
   , "ownedSlotField" .= count (\c -> case c of Owned (OwnedSlotField _) -> True; _ -> False)
   , "ownedReadOnlyField" .= count (\c -> case c of Owned (OwnedReadOnlyField _) -> True; _ -> False)
+  , "ownedWriteOnlyPair" .= count (\c -> case c of Owned (OwnedWriteOnlyPair _) -> True; _ -> False)
   , "ownedUnassigned" .= count (== Owned OwnedUnassigned)
   , "delegated" .= count (\c -> case c of Delegated _ -> True; _ -> False)
   ]

@@ -100,11 +100,12 @@ analysisPath root name = root </> case name of
   LoaderA -> "decode/loader-40000.bin"
   LoaderB -> "decode/loader-d0000.bin"
 
-data PropertyClass = Delegated | OwnedField | OwnedSlotField | OwnedUnassigned deriving (Eq, Show)
+data PropertyClass = Delegated | OwnedField | OwnedSlotField | OwnedReadOnlyField | OwnedWriteOnlyPair | OwnedUnassigned deriving (Eq, Show)
 
--- | The classes whose arms the owned roles retire: a value in a bank record field or a slot table field.
+-- | The classes whose arms the owned roles retire: every owned class but the unassigned, whose arms
+-- are the stock fallbacks.
 ownedClass :: PropertyClass -> Bool
-ownedClass kind = kind == OwnedField || kind == OwnedSlotField
+ownedClass kind = kind `notElem` [Delegated, OwnedUnassigned]
 
 data PropertyArms = PropertyArms
   { armsProperty :: Word32
@@ -170,6 +171,8 @@ instance FromJSON Contract where
         "delegated" -> pure Delegated
         "owned-field" -> pure OwnedField
         "owned-slot-field" -> pure OwnedSlotField
+        "owned-read-only-field" -> pure OwnedReadOnlyField
+        "owned-write-only-pair" -> pure OwnedWriteOnlyPair
         "owned-unassigned" -> pure OwnedUnassigned
         _ -> fail "unknown property class"
       PropertyArms <$> (property .: "property" >>= hexAddress) <*> pure decided
@@ -190,7 +193,7 @@ data ControlWord = ControlWord { controlProperty :: Word32, controlAddress :: Wo
 controlPatch :: Contract -> Word32 -> Either String PatchWord
 controlPatch contract property = do
   arms <- maybe (Left "PROPERTY is not classified") Right (find ((== property) . armsProperty) (contractProperties contract))
-  unless (ownedClass (armsClass arms)) (Left "PROPERTY is neither an owned field nor an owned slot field")
+  unless (ownedClass (armsClass arms)) (Left "PROPERTY is not of an owned class with its own arms")
   unless (armsSetter arms < contractCarrierStart contract || armsSetter arms >= contractCarrierEnd contract)
     (Left "PROPERTY's stock setter arm lies in the carrier")
   maybe (Left "PROPERTY has no staged setter table word") Right
@@ -403,7 +406,7 @@ storeSites contract linked = forM [minBound .. maxBound] $ \accessor -> do
   unless (word32At linked (offset + 8) == storeInstruction accessor) (Left (name ++ " does not store with its width"))
   pure (entry + 8, accessor)
 
--- | The words of the owned-field and owned-slot-field arms no delegated or unassigned property still
+-- | The words of the arms `ownedClass` retires that no delegated or unassigned property still
 -- reaches, each arm running to the next arm target of either table, outside the carrier; and the
 -- carrier words after the linked code.
 guardSites :: Contract -> PhysicalRange -> PhysicalRange -> Either String [(Word32, SiteLabel)]
