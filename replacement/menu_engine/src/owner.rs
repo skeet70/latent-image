@@ -291,7 +291,7 @@ impl Rules for RefusalAccepted {
 const fn refusal_snapshot_writes(cursor: u32) -> [(u32, u32); 22] {
     let defaults = [1, 0x86, 0xc, 0, 0, 0, 0, 0, 0, 0, 0];
     let token = if cursor == 4 { 0x7fff_fffe } else { 8 };
-    let words = [2, 0x10, 4, 0x1d8, token, 8, cursor, 0, 0, 0, 0];
+    let words = [2, 0x10, 4, 0x1d8, token, 8, cursor, 0, 0, 1, 0];
     let mut writes = [(0, 0); 22];
     let mut index = 0;
     while index < 11 {
