@@ -35,7 +35,7 @@ haskell_library(
 haskell_binary(
     name = "host-cases",
     srcs = ["HostCases.hs"],
-    ghcopts = ["-XGHC2021", "-O2"],
+    ghcopts = ["-XGHC2021", "-O2", "-threaded"],
     deps = [
         "//emulation:native-adapter",
         "//emulation:owned-case",
