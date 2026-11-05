@@ -129,3 +129,17 @@ fn rsc_6ad698_full_physical_page_collection_reaches_position_n() {
     assert_eq!(&output[31 * 0x1000..31 * 0x1000 + 2], &[31, 0]);
     assert_eq!(output[BLOCK_BYTES + 2], 0x71);
 }
+
+#[test]
+fn rsc_6ac328_total_one_truncates_to_zero_and_collection_is_empty() {
+    let mut staging = Buffers::new();
+    let mut service = Service::<Checks>::new();
+    service.open(&mut staging).unwrap();
+    let handle = service.register(RecordKind::Kind0, RecordBytes(96), RecordCount(1), SequenceOffset(0), Checks::default()).unwrap();
+    let registration = service.get_mut(handle).unwrap();
+    assert_eq!(registration.area.geometry.records_per_bank(), RecordCount(0));
+    let mut medium = Medium::new();
+    let mut block: Box<[u8; BLOCK_BYTES]> = vec![0; BLOCK_BYTES].into_boxed_slice().try_into().ok().unwrap();
+    let mut output = [];
+    assert_eq!(Entry::new(&mut medium, &mut staging, &mut block).collect(&mut registration.area, &mut output), 0);
+}
