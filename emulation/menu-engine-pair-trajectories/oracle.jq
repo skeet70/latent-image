@@ -59,6 +59,6 @@ $graph[0].graph as $g
       # Without a crawl-5 node for the key's screen (a `landing` case) the closing BACKs come from `leave`.
       + ((if $ARGS.named.leave != null then walk($keyed; $ARGS.named.leave).at else $keyed end) as $end
          | if $end == null then [] else close($end).steps as $closing
-           | if ($closing | length) > 0 then [{"phase": "oracle-unload-close", "observe": true, "steps": $closing}] else [] end end)),
+           | if ($closing | length) > 0 then [{"phase": "oracle-unload-close", "observe": true, "steps": $closing, "reads": reads, "read_preservations": keep_resident}] else [] end end)),
     "after_unload": []
   }
