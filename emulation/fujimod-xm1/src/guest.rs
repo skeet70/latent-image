@@ -145,7 +145,6 @@ pub struct FirmwareFacts {
     pub mode_dial: ModeDial,
     pub dial_push: GpioKey,
     pub play: GpioBinding,
-    pub fn_key: GpioBinding,
     pub shutter: Shutter,
     pub subcommand: Subcommand,
     pub render: crate::render::RenderFacts,
@@ -222,6 +221,17 @@ pub struct GpioBinding {
     pub pad: Pin,
     pub pressed_high: bool,
 }
+
+// X-M1 1.50 image 4, 0x0082828c (file +0x20be8c):
+// 28 00 00 00 00 00 00 00 00 02 00 00 0b 00 00 00 01 00 00 00 02 00 00 00 00 00 00 00.
+// Exact key_sample_inputs 0x006a0888, id4.dis:0x006a0894..0x006a08f4,
+// decomp f659f02b850fcba58de0f9b09ee24ad09a24c2f4, app/drivers/input/key_sample_inputs.c:21.
+const FN_INPUT: GpioBinding = GpioBinding {
+    code: GpioCode::Fn,
+    row: TableRow(13),
+    pad: Pin { port: 0, pin: 11 },
+    pressed_high: false,
+};
 
 impl GpioBinding {
     fn gpio(&self) -> Result<GpioKey, String> {
@@ -513,7 +523,7 @@ impl FirmwareFacts {
     }
 
     pub fn fn_key(&self, session: &Session) -> Result<GpioKey, String> {
-        self.fn_key.gpio()?.checked(session, &self.key_table)
+        FN_INPUT.gpio()?.checked(session, &self.key_table)
     }
 
     pub fn shutter(&self, session: &Session, stage: ShutterStage) -> Result<GpioKey, String> {
