@@ -1,9 +1,16 @@
 {-# LANGUAGE GHC2021 #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
 import Control.Monad (unless)
+import Data.Aeson (Value(..), object, toJSON, (.=))
+import Data.String (fromString)
+import qualified Data.Text as T
 import qualified Data.ByteString as B
 import qualified Data.Map.Strict as M
+import Emulation.NativeObservation
+import Emulation.Sha256 (sha256, sha256Hex)
+import Replacement.RecordStore.CachedObservation
 import Replacement.RecordStore.Cases
 import Replacement.RecordStore.Hardware
 import Replacement.RecordStore.Model
@@ -12,6 +19,7 @@ assert :: String -> Bool -> IO ()
 assert message condition = unless condition (error message)
 main :: IO ()
 main = do
+  cachedObservationTests
   let g = geometry Kind3
       empty = initialStore Kind3 (mediumOf g [] []) NoFault MarkerCallback
       (status,written) = append hardware (Seed 0x9234) (CallerRecord (sourceBytes g)) empty
@@ -45,3 +53,31 @@ main = do
   assert "one-bit data error corrects to sealed record" (hardware Check Hardware3 corrupted == (Accept,sealed))
   assert "erased medium defaults to ff" (bankBytes g Bank0 (Medium M.empty) == B.replicate blockBytes 0xff)
   putStrLn "record-store oracle model tests passed"
+
+cachedObservationTests :: IO ()
+cachedObservationTests = do
+  let runnerDigest = sha256 (B.pack [1,2,3])
+      runner = object
+        [ "status" .= ("returned" :: String)
+        , "unicorn_error" .= (0 :: Int)
+        , "instructions" .= ("1" :: String)
+        , "memory_provenance_total" .= ("0" :: String)
+        , "registers" .= object [fromString (registerLabel register) .= hexWord32 (if register == R0 then 42 else 0) | register <- registerLabels]
+        , "memory" .= ([] :: [Value])
+        , "memory_provenance" .= ([] :: [Value])
+        ]
+      report identity = object (identity ++ ["runner_exit" .= (0 :: Int), "runner" .= runner])
+      admit = observeCachedStock runnerDigest []
+      matching = report ["runner_sha256" .= sha256Hex runnerDigest]
+      expectRefusal label expected value = case admit value of
+        Left actual -> assert label (actual == expected)
+        Right _ -> error label
+  case admit matching of
+    Left problem -> error ("matching cached runner refused: " ++ show problem)
+    Right observed -> assert "matching runner reuses returned observation" (nativeStatus observed == Returned && lookupRegister R0 observed == Just 42)
+  expectRefusal "different runner cannot reuse cached observations" RunnerIdentityMismatch
+    (report ["runner_sha256" .= sha256Hex (sha256 (B.pack [4,5,6]))])
+  expectRefusal "missing runner identity cannot reuse cached observations" MissingRunnerIdentity (report [])
+  mapM_ (\identity -> expectRefusal "malformed runner identity cannot reuse cached observations" MalformedRunnerIdentity
+    (report ["runner_sha256" .= identity]))
+    [toJSON (7 :: Int), String "", String (T.replicate 64 "g"), String (T.replicate 64 "A"), String (T.replicate 63 "0")]

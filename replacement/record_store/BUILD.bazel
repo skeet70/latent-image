@@ -73,6 +73,7 @@ haskell_library(
     name = "oracle-lib",
     srcs = [
         "Replacement/RecordStore/Arm.hs",
+        "Replacement/RecordStore/CachedObservation.hs",
         "Replacement/RecordStore/Cases.hs",
         "Replacement/RecordStore/Hardware.hs",
         "Replacement/RecordStore/Harness.hs",
@@ -81,11 +82,16 @@ haskell_library(
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-O2"],
     deps = [
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
         "//emulation:native-observation",
         "//emulation:owned-case",
+        "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:containers",
+        "//host:host-support",
+        "//host:text",
     ],
 )
 
@@ -119,6 +125,10 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-O2"],
     deps = [
         ":oracle-lib",
+        "//emulation:case-sha256",
+        "//emulation:native-observation",
+        "//host:aeson",
+        "//host:text",
         "//host:base",
         "//host:bytestring",
         "//host:containers",

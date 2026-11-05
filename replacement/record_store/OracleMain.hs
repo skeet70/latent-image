@@ -15,8 +15,8 @@ import Emulation.NativeObservation
 import Emulation.OwnedCase hiding (caseId)
 import qualified Emulation.OwnedCase as O
 import Emulation.Sha256
-import FujiAF.Host (get)
 import FujiAF.JSON (encodeCanonical)
+import Replacement.RecordStore.CachedObservation
 import Replacement.RecordStore.Cases
 import Replacement.RecordStore.Hardware
 import Replacement.RecordStore.Harness
@@ -118,6 +118,7 @@ main = do
   candidateSymbols <- traverse makeAbsolute (optional args "--symbols")
   cachedStock <- traverse makeAbsolute (optional args "--stock-output")
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
+  runnerDigest <- traverse sha256File runner
   createDirectoryIfMissing True outputPath
   image <- pinned "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin" "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
   loader <- pinned "private-data/analysis/x-m1-1.50/decode/loader-40000.bin" "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
@@ -172,8 +173,8 @@ main = do
             unless (original == generated) (error ("cached stock input differs: " ++ stem))
             (_,regions,_,_) <- loadCase generatedCase
             report <- B.readFile (originalDirectory </> stem ++ ".native-result.json") >>= either error pure . eitherDecodeStrict'
-            exit <- either (error . renderObservationError) pure (reportRunnerExit report)
-            observation <- either (error . renderObservationError) pure (observeNative exit regions (get report "runner"))
+            digest <- maybe (error "cached stock requires --runner") pure runnerDigest
+            observation <- either (error . ((stem ++ ": ") ++) . show) pure (observeCachedStock digest regions report)
             pure (CaseId stem,observation)
         candidateObserved <- case candidateBatch of
           Nothing -> pure M.empty
@@ -189,7 +190,8 @@ main = do
       candidateFailures = length [() | (_,_,failed) <- rows, failed]
       controlMode = "--control" `elem` args
       failures = modelFailures + if controlMode then (if candidateFailures == 0 then 1 else 0) else candidateFailures
-      summary = object ["schema_version" .= (1::Int),"profile" .= ("native-cortex-r5f"::String),"image4_sha256" .= sha256Hex (sha256 image),"loader_sha256" .= sha256Hex (sha256 loader),"candidate_sha256" .= fmap (sha256Hex . sha256 . fst) candidateInputs,"cases" .= length selected,"executed" .= length rows,"failed" .= failures,"model_failed" .= modelFailures,"candidate_failed" .= candidateFailures,"control" .= controlMode,"control_detected" .= (controlMode && candidateFailures > 0),"candidate" .= maybe False (const True) candidateInputs,"results" .= [row | (row,_,_) <- rows]]
+      summary = object $ ["schema_version" .= (1::Int),"profile" .= ("native-cortex-r5f"::String),"image4_sha256" .= sha256Hex (sha256 image),"loader_sha256" .= sha256Hex (sha256 loader),"candidate_sha256" .= fmap (sha256Hex . sha256 . fst) candidateInputs,"cases" .= length selected,"executed" .= length rows,"failed" .= failures,"model_failed" .= modelFailures,"candidate_failed" .= candidateFailures,"control" .= controlMode,"control_detected" .= (controlMode && candidateFailures > 0),"candidate" .= maybe False (const True) candidateInputs,"results" .= [row | (row,_,_) <- rows]]
+        <> ["runner_sha256" .= fmap sha256Hex runnerDigest]
   B.writeFile (outputPath </> "summary.json") (encodeCanonical summary)
   putStrLn ("cases=" ++ show (length selected) ++ " executed=" ++ show (length rows) ++ " failed=" ++ show failures)
   when (failures > 0) exitFailure
