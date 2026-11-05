@@ -1509,6 +1509,53 @@ fn the_lz_tallies_follow_each_role_s_pinned_input() {
     assert!(entries.iter().any(|entry| matches!(entry, Difference::AttachRelation { failure: RelationFailure::RelationOverlap { .. }, .. })));
 }
 
+fn history_roles() -> (Value, Spec, Spec) {
+    let (retained, mut owned) = lz_roles(ONE_JOB);
+    owned.board["bus"]["devices"].as_array_mut().unwrap().pop();
+    let mut input = OWNED_LZ_INPUT;
+    input[1] = b'z';
+    with_lz(&mut owned, &input, ONE_JOB);
+    let mut contract = lz_contract(json!({"citation": "lz.rs"}));
+    let mut padded = input.to_vec();
+    padded.resize(16, 0);
+    attach_rules(&mut contract)["allowances"][0]["composed_sha256"] = json!(Sha256::of(&padded));
+    (contract, retained, owned)
+}
+
+#[test]
+fn different_history_bytes_follow_each_roles_pinned_decode() {
+    let (contract, retained, owned) = history_roles();
+    let history = "/bus/devices/1/state/state/stream/history";
+    assert_ne!(retained.board.pointer(history), owned.board.pointer(history));
+    let verdict = relation_verdict(&contract, &retained, &owned);
+    assert_eq!(verdict.first_difference, None, "{:?}", verdict.attach_differences);
+}
+
+#[test]
+fn a_history_byte_off_its_roles_decode_refuses_and_remains_compared() {
+    let (contract, retained, mut owned) = history_roles();
+    owned.board["bus"]["devices"][1]["state"]["state"]["stream"]["history"][0] = json!(0);
+    let verdict = relation_verdict(&contract, &retained, &owned);
+    let entries = &verdict.attach_differences.entries;
+    assert!(entries.iter().any(|entry| matches!(entry,
+        Difference::AttachRelation { role: Role::Composed, failure: RelationFailure::LzStream { leaf } }
+        if leaf.0.ends_with("/history/0"))));
+    assert!(entries.iter().any(|entry| matches!(entry,
+        Difference::AttachBoard { pointer, .. } if pointer.0.ends_with("/history/0"))));
+}
+
+#[test]
+fn history_without_a_pinned_source_refuses_and_remains_compared() {
+    let (mut contract, retained, owned) = history_roles();
+    attach_rules(&mut contract)["allowances"] = json!([]);
+    let verdict = relation_verdict(&contract, &retained, &owned);
+    let entries = &verdict.attach_differences.entries;
+    assert!(entries.iter().any(|entry| matches!(entry,
+        Difference::AttachRelation { failure: RelationFailure::LzSourceUnpinned { .. }, .. })));
+    assert!(entries.iter().any(|entry| matches!(entry,
+        Difference::AttachBoard { pointer, .. } if pointer.0.ends_with("/history/0"))));
+}
+
 /// `role`'s relation failures, the board differences and `role`'s derived LZ registers, with `edit` applied to that
 /// role's captured LZ registers.
 fn lz_role_outcome(role: Role, jobs: [Jobs; 2], edit: impl FnOnce(&mut Vec<Value>)) -> (Vec<RelationFailure>, Vec<String>, Option<LzRegisters>) {
