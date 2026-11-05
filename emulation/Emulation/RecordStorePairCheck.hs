@@ -62,7 +62,8 @@ registerWords :: Registers -> [Word32]
 registerWords registers = [register0 registers,register1 registers,register2 registers,register3 registers]
 data Hit = Hit Int Address Address Address Registers (Maybe (Event, Address, [Readback])) deriving (Eq, Show)
 data Pending = Pending Int Entry Hit (Maybe Layout) deriving (Eq, Show)
-data State = State (M.Map Handle Layout) (M.Map (Int, Address, Address) Pending) deriving (Eq, Show)
+data Retirement = BeforeOpen | AfterOpen deriving (Eq, Show)
+data State = State Retirement (M.Map Handle Layout) (M.Map (Int, Address, Address) Pending) deriving (Eq, Show)
 data Interval = Interval T.Text [CrawlKey] [Call] [Nand] Regions Regions (Maybe (Settled, Menu)) (Maybe Medium) deriving (Eq, Show)
 data Qualified = Qualified Role [(InputName,Digest)] [Interval] Medium deriving (Eq, Show)
 data Difference = Difference T.Text Value Value deriving (Eq, Show)
@@ -121,8 +122,12 @@ addressValue :: Address -> Word32
 addressValue (Address address) = address
 physical :: Word32 -> Address
 physical address = Address (address .&. 0xbfffffff)
-retired :: [(Word32,Word32)]
-retired = [(0x89f8f0,0x89fa68),(0x8a0080,0x8e008c),(0x917fa8,0x917fe4)]
+retired :: Role -> [(Word32,Word32)]
+retired role = [(0x89f8f0,0x89f8f8),(0x89fa60,0x89fa68),(0x8e0080,0x8e008c),(0x917fa8,0x917fe4)]
+  ++ [(0x8c0080,0x8e0080) | role == Owned]
+guardFetches :: Role -> [(Word32,Word32)] -> [(Word32,Word32)]
+guardFetches Stock _ = [(0x6ac2b4,0x6ae114)]
+guardFetches Owned code = merge ((0x6ac2b4,0x6ac2b8) : complement code)
 within :: [(Word32,Word32)] -> Word32 -> Int -> Bool
 within ranges address count = any (\(low,high) -> low <= address && toInteger address + toInteger count <= toInteger high) ranges
 overlaps :: [(Word32,Word32)] -> Word32 -> Int -> Bool
@@ -184,7 +189,7 @@ ownedRanges bindings = do
   need (state == 0x89f8f8 && block == 0x8a0080 && B.length (linkedBytes bindings) == 7776) "carrier placement differs"
   pure (code,[(state,0x89fa60),(block,block+0x20000)])
 
-data RegionSnapshot = SettingsSnapshot | ResetSnapshot deriving (Eq, Show)
+data RegionSnapshot = SettingsSnapshot | ResetSnapshot Role deriving (Eq, Show)
 parseRegions :: RegionSnapshot -> Value -> Parse Regions
 parseRegions snapshot value = do
   rows <- array value >>= mapM (\row -> do
@@ -194,7 +199,7 @@ parseRegions snapshot value = do
       settings = [(rangeStart range,rangeEnd range) | range <- settingsRanges]
       expected = case snapshot of
         SettingsSnapshot -> settings
-        ResetSnapshot -> settings ++ retired
+        ResetSnapshot role -> settings ++ retired role
   need ([(addressValue start,B.length bytes) | (start,bytes) <- ordered] == sort [(start,fromIntegral (end-start)) | (start,end) <- expected]) ("snapshot regions differ: " ++ show snapshot)
   pure (Regions [(start,bytes) | (start,bytes) <- ordered, addressValue start `elem` map fst settings])
 parseMedium :: Value -> Parse Medium
@@ -257,7 +262,7 @@ wordsOf bytes | B.null bytes = []
 handle :: Word32 -> Handle
 handle = Handle . Address
 handleLayout :: State -> Word32 -> Parse Layout
-handleLayout (State layouts _) value = maybe (Left "call uses unregistered handle") Right (M.lookup (handle value) layouts)
+handleLayout (State _ layouts _) value = maybe (Left "call uses unregistered handle") Right (M.lookup (handle value) layouts)
 
 complete :: Pending -> Hit -> Parse Call
 complete (Pending _ entry (Hit _ _ sp _ args observed) layout) (Hit _ _ _ _ results returned) = do
@@ -305,7 +310,7 @@ consume state hits = do
   (final,calls,nand,_) <- foldM step (state,[],[],0::Int) hits
   pure (final,map snd (sortOn fst calls),reverse nand)
  where
-  step (current@(State layouts pending),calls,nand,index) hit@(Hit core address sp lr args observation) = case observation of
+  step (current@(State activation layouts pending),calls,nand,index) hit@(Hit core address sp lr args observation) = case observation of
     Nothing -> Right (current,calls,nand,index+1)
     Just (event,site,captures)
       | site == Address 0x6fb7c8 -> do
@@ -334,7 +339,7 @@ consume state hits = do
                 let key = (core,sp,lr)
                 need (M.notMember key pending) "duplicate active call identity"
                 let marker = Pending index entry hit geometry
-                Right (State layouts (M.insert key marker pending),calls,nand,index+1)
+                Right (State activation layouts (M.insert key marker pending),calls,nand,index+1)
             Return -> do
               let key = (core,sp,address)
               case M.lookup key pending of
@@ -349,18 +354,19 @@ consume state hits = do
                       pure (M.insert (handle returnedHandle) (Layout (RecordSize (fromIntegral (register1 original))) (TotalRecords (2 * (fromIntegral (register2 original) `div` 2)))) layouts)
                     (Close,_,_) -> pure (M.delete (handle (register0 original)) layouts)
                     _ -> pure layouts
-                  Right (State updated (M.delete key pending),(entered,call):calls,nand,index+1)
+                  Right (State activation updated (M.delete key pending),(entered,call):calls,nand,index+1)
                 _ -> Left "return has no matching external call"
 
-checkWatch :: Role -> [(Word32,Word32)] -> [(Word32,Word32)] -> T.Text -> Value -> Parse ()
-checkWatch role code ram views value = do
+checkWatch :: Role -> [(Word32,Word32)] -> Retirement -> T.Text -> Value -> Parse Retirement
+checkWatch role code activation views value = do
   actualViews <- field "views" value >>= text
   need (views == actualViews) "watch decoder policy differs"
   classes <- field "classes" value >>= array
-  let writes = [(rangeStart range,rangeEnd range) | range <- settingsRanges] ++ retired
-      fetches = if role == Owned then complement code else [(0x6ac2b4,0x6ae114)]
+  let dataRanges = retired role
+      writes = [(rangeStart range,rangeEnd range) | range <- settingsRanges] ++ dataRanges
+      fetches = guardFetches role code
       expected kind | kind `elem` ["cpu-write","host-write","model-bus-write"] = merge writes
-                    | kind == "cpu-read" = merge retired
+                    | kind == "cpu-read" = merge dataRanges
                     | otherwise = merge fetches
       kinds = ["cpu-write","host-write","model-bus-write","cpu-read","cpu-fetch"]
   parsedClasses <- forM classes $ \row -> do
@@ -374,15 +380,24 @@ checkWatch role code ram views value = do
   let stripped = case value of Object fields -> Object (KM.delete "classes" (KM.delete "views" fields)); _ -> value
   observed <- parseWatchObservation limit stripped
   need (watchEnabled observed && watchViolation observed == Nothing) "watch disabled or overflowed"
-  need (map watchRangeBounds (watchRanges observed) == [(fromIntegral low,fromIntegral high) | (low,high) <- merge (writes ++ retired ++ fetches)]) "watch coverage differs"
-  when (role == Owned) $ forM_ (watchRecords observed) $ \row -> case row of
-    CpuRecord access _ at count _ _ _ _ pc _ _ -> do
+  need (map watchRangeBounds (watchRanges observed) == [(fromIntegral low,fromIntegral high) | (low,high) <- merge (writes ++ dataRanges ++ fetches)]) "watch coverage differs"
+  if role == Stock then pure activation else foldM checkRow activation (watchRecords observed)
+ where
+  checkRow current row = case row of
+    CpuRecord access _ at count _ _ _ _ _ _ _ -> do
       let address = watchAddressValue at
           size = watchBytesValue count
-      when (access == CpuFetch) $ need (not (overlaps [(0x6ac2b4,0x6ae114)] address size) || within code address size) ("stray retired-code fetch: " ++ show row)
-      when (access /= CpuFetch && overlaps retired address size) $ need (within ram address size && within code (watchAddressValue pc) 1) ("retired-data CPU access: " ++ show row)
-    TransferRecord access _ at count -> when (access `elem` [HostWrite,ModelBusWrite] && overlaps retired (watchAddressValue at) (watchBytesValue count)) $
-      need (access == ModelBusWrite && within [(0x8a0080,0x8c0080)] (watchAddressValue at) (watchBytesValue count)) ("retired-data transfer: " ++ show row)
+      if access == CpuFetch then do
+        need (not (overlaps [(0x6ac2b4,0x6ae114)] address size) || within code address size) ("stray retired-code fetch: " ++ show row)
+        pure (if address == 0x6ac2b4 && size == 4 then AfterOpen else current)
+      else do
+        when (overlaps (retired role) address size) $
+          need (current == BeforeOpen && access == CpuWrite) ("retired-data CPU access: " ++ show row)
+        pure current
+    TransferRecord access _ at count -> do
+      when (overlaps (retired role) (watchAddressValue at) (watchBytesValue count)) $
+        need (current == BeforeOpen && access `elem` [HostWrite,ModelBusWrite]) ("retired-data transfer: " ++ show row)
+      pure current
 
 captureSpec :: Value
 captureSpec = object [K.fromString ("0x" ++ showHex site "") .= capture site | site <- map (addressValue . entryAddress) [minBound..maxBound] ++ [0x6fb7c8,0x6fb57c]]
@@ -421,6 +436,10 @@ qualify role bindings observation = do
   (code,ram) <- ownedRanges bindings
   extent <- load Extents
   need (field "code" extent == Right (rangesValue code) && field "ram" extent == Right (rangesValue ram)) "owned extents differ from linked symbols"
+  exact ["code","ram","unwatched_owned_ram","activation_fetch","rule"] extent
+  need (field "unwatched_owned_ram" extent == Right (rangesValue ram)
+    && field "activation_fetch" extent == Right (A.toJSON ([0x6ac2b4,0x6ac2b8]::[Word32]))) "ownership-watch exclusions or activation marker differ"
+  _ <- field "rule" extent >>= text
   need (field "ram_rule" receipt == Right extent) "receipt RAM rule differs"
   spec <- load Spec
   _ <- load Session
@@ -433,9 +452,9 @@ qualify role bindings observation = do
         ++ [(0x6fb7c8,"nand-write"),(0x6fb57c,"nand-erase")])
       sitesValue = object [K.fromString ("0x" ++ showHex site "") .= label | (site,label) <- M.toList declaredSites]
   need (field "sites" spec == Right sitesValue && field "raw_residual_count" receipt == Right (A.toJSON (length residuals))) "record observation sites differ from carrier reference scan"
-  let writes = [(rangeStart range,rangeEnd range) | range <- settingsRanges] ++ retired
-      fetches = if role == Owned then complement code else [(0x6ac2b4,0x6ae114)]
-  need (field "write_ranges" spec == Right (rangesValue writes) && field "read_ranges" spec == Right (rangesValue retired) && field "fetch_ranges" spec == Right (rangesValue fetches)) "observation guard specification differs"
+  let writes = [(rangeStart range,rangeEnd range) | range <- settingsRanges] ++ retired role
+      fetches = guardFetches role code
+  need (field "write_ranges" spec == Right (rangesValue writes) && field "read_ranges" spec == Right (rangesValue (retired role)) && field "fetch_ranges" spec == Right (rangesValue fetches)) "observation guard specification differs"
   need (field "hit_limit" spec == Right (Number 1500000) && field "watch_limit" spec == Right (Number 1048576)) "observation limits differ"
   routes <- decodeRouteFile (routeBytes bindings)
   hitsBytes <- maybe (Left "missing hits") Right (M.lookup Hits (sidecars observation))
@@ -449,28 +468,34 @@ qualify role bindings observation = do
   reset <- load Reset
   resetPoint <- field "reset" reset
   need (field "instructions" resetPoint == Right (Number 0)) "observation did not begin at reset instruction zero"
-  initial <- field "regions_at_reset" reset >>= parseRegions ResetSnapshot
+  initial <- field "regions_at_reset" reset >>= parseRegions (ResetSnapshot role)
   segments <- field "segments" reset >>= array
   need (length segments == 3) "reset phases missing"
-  let empty = State M.empty M.empty
+  let empty = State BeforeOpen M.empty M.empty
       slice start end = do
         need (start <= end && end <= length hits) "hit interval outside trace"
         pure (take (end-start) (drop start hits))
-      interval state name keys before after start end press medium watch views = do
-        checkWatch role code ram views watch
+      interval (State activation layouts pending) name keys before after start end press medium watch views = do
+        nextActivation <- checkWatch role code activation views watch
         window <- slice start end
-        (next,calls,nand) <- consume state window
-        let State _ pending = next
-        need (M.null pending) "interval ends inside an external record call"
+        let opens (Hit _ address _ lr _ captured) = address == entryAddress Open && not (within [(0x6ac2b4,0x6ae114)] (addressValue lr) 1)
+              && maybe False (\(event,_,_) -> event == Enter) captured
+        when (role == Owned && activation == BeforeOpen && any opens window) $
+          need (nextActivation == AfterOpen) "open entry lacks its activation fetch"
+        (next,calls,nand) <- consume (State nextActivation layouts pending) window
+        let State _ _ remaining = next
+        need (M.null remaining) "interval ends inside an external record call"
         pure (next,Interval name keys calls nand before after press medium)
   (rootState,rootRegions,rootEnd,phases) <- foldM (\(state,before,start,acc) (phase,segment) -> do
     name <- field "phase" segment >>= text
     need (name == attachPhaseWire phase) "reset phases out of order"
     end <- field "hits_end" segment >>= int
-    after <- field "regions" segment >>= parseRegions ResetSnapshot
+    after <- field "regions" segment >>= parseRegions (ResetSnapshot role)
     watch <- field "watch" segment
     (next,result) <- interval state name [] before after start end Nothing Nothing watch "observe"
     pure (next,after,end,acc ++ [result])) (empty,initial,0,[]) (zip [minBound..maxBound] segments)
+  let State rootActivation _ _ = rootState
+  when (role == Owned) $ need (rootActivation == AfterOpen) "missing first open-veneer fetch"
   attachedSettings <- field "settings_at_attach" receipt >>= parseRegions SettingsSnapshot
   need (attachedSettings == rootRegions) "attach settings differ from reset endpoint"
   attachedMedium <- field "medium_at_attach" receipt >>= parseMedium

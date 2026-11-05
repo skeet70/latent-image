@@ -23,7 +23,7 @@ import Emulation.Sha256 (sha256, sha256Hex)
 import Numeric (showHex)
 import System.Exit (exitFailure)
 
-data Mutation = Original | PayloadByte | ReorderCalls | StrayFetch | ForeignRead | CacheAgeWrite | BadSettings | BadMedium | MissingCapture | BadBinding | CollectionTail | ReturnedRecord | CloseScratch | OutputStorage | MissingResetRegion | RetiredSnapshotDifference deriving (Eq)
+data Mutation = Original | PayloadByte | ReorderCalls | StrayFetch | ForeignRead | CacheAgeWrite | BadSettings | BadMedium | MissingCapture | BadBinding | CollectionTail | ReturnedRecord | CloseScratch | OutputStorage | MissingResetRegion | RetiredSnapshotDifference | PreEntryPublication | PostEntryPublication | PreEntryBssWrite | PreEntryRead | MissingMarker | LaterPhaseWrite deriving (Eq)
 encode :: Value -> B.ByteString
 encode = BL.toStrict . A.encode
 hash :: B.ByteString -> String
@@ -40,13 +40,15 @@ code :: [[Word32]]
 code = [[entry,entry+4] | entry <- entries]
 fetches :: Role -> [[Word32]]
 fetches Stock = [[0x6ac2b4,0x6ae114]]
-fetches Owned = zipWith (\low high -> [low,high]) (map (+4) entries) (drop 1 entries ++ [0x6ae114])
-retired :: [[Word32]]
-retired = [[0x89f8f0,0x89fa68],[0x8a0080,0x8e008c],[0x917fa8,0x917fe4]]
-writes :: [[Word32]]
-writes = [[rangeStart range,rangeEnd range] | range <- settingsRanges] ++ retired
+fetches Owned = [0x6ac2b4,0x6ac328] : zipWith (\low high -> [low,high]) (map (+4) (drop 1 entries)) (drop 2 entries ++ [0x6ae114])
+retired :: Role -> [[Word32]]
+retired role = [[0x89f8f0,0x89f8f8],[0x89fa60,0x89fa68],[0x8e0080,0x8e008c],[0x917fa8,0x917fe4]]
+  ++ [[0x8c0080,0x8e0080] | role == Owned]
+writes :: Role -> [[Word32]]
+writes role = [[rangeStart range,rangeEnd range] | range <- settingsRanges] ++ retired role
 extents :: Value
-extents = object ["code" .= code,"ram" .= ([[0x89f8f8,0x89fa60],[0x8a0080,0x8c0080]]::[[Word32]]),"rule" .= ("fixture"::T.Text)]
+extents = object ["code" .= code,"ram" .= ram,"unwatched_owned_ram" .= ram,"activation_fetch" .= ([0x6ac2b4,0x6ac2b8]::[Word32]),"rule" .= ("fixture"::T.Text)] where
+  ram = [[0x89f8f8,0x89fa60],[0x8a0080,0x8c0080]]::[[Word32]]
 bindings :: Bindings
 bindings = Bindings contract (B.replicate 7776 0) symbols routes where
   symbols = C.pack (unlines ([showHex entry "" ++ " 4 T entry" ++ show n | (n,entry) <- zip [0::Int ..] entries] ++ ["0089f8f8 168 B record_store_state","008a0080 20000 B record_store_block"]))
@@ -56,10 +58,10 @@ regions :: Mutation -> Value
 regions = A.toJSON . settingRows
 settingRows :: Mutation -> [Value]
 settingRows mutation = [object ["start" .= rangeStart range,"bytes" .= hex (B.replicate (fromIntegral (rangeEnd range-rangeStart range)) (if mutation == BadSettings then 1 else 0))] | range <- settingsRanges]
-resetRegions :: Mutation -> Value
-resetRegions mutation = A.toJSON (settingRows mutation ++
+resetRegions :: Role -> Mutation -> Value
+resetRegions role mutation = A.toJSON (settingRows mutation ++
   [object ["start" .= low,"bytes" .= hex (B.replicate (fromIntegral (high-low)) (if mutation == RetiredSnapshotDifference then 1 else 0))]
-  | [low,high] <- if mutation == MissingResetRegion then drop 1 retired else retired])
+  | [low,high] <- if mutation == MissingResetRegion then drop 1 (retired role) else retired role])
 medium :: Mutation -> Value
 medium mutation = if mutation == BadMedium then mediumValue True else erasedMedium
 erasedMedium :: Value
@@ -115,27 +117,44 @@ captureDeclarations = object [K.fromString (hexWord entry) .= declared entry | e
     | entry == 0x6acda0 = [object ["base" .= object ["register" .= (3::Int)],"count" .= (0::Int),"count_register" .= (2::Int)]]
     | otherwise = []
 
-watch :: Role -> Mutation -> Value
-watch role mutation = object ["enabled" .= True,"ranges" .= ordered,"records" .= records,"violation" .= Null,"views" .= ("observe"::T.Text),"classes" .= classes] where
-  ordered = (if role == Stock then [[0x6ac2b4,0x6ae114]] else fetches role) ++ take 1 writes ++ retired ++ drop 1 (take 3 writes)
-  classes = [object ["range" .= range,"kinds" .= (["cpu-write","host-write","model-bus-write"]::[T.Text])] | range <- writes]
-    ++ [object ["range" .= range,"kinds" .= (["cpu-read"]::[T.Text])] | range <- retired]
+watch :: Role -> AttachPhase -> Mutation -> Value
+watch role phase mutation = object ["enabled" .= True,"ranges" .= ordered,"records" .= records,"violation" .= Null,"views" .= ("observe"::T.Text),"classes" .= classes] where
+  ordered = fetches role ++ take 1 (writes role) ++ [[0x89f8f0,0x89f8f8],[0x89fa60,0x89fa68]]
+    ++ (if role == Owned then [[0x8c0080,0x8e008c]] else [[0x8e0080,0x8e008c]])
+    ++ [[0x917fa8,0x917fe4]] ++ drop 1 (take 3 (writes role))
+  classes = [object ["range" .= range,"kinds" .= (["cpu-write","host-write","model-bus-write"]::[T.Text])] | range <- writes role]
+    ++ [object ["range" .= range,"kinds" .= (["cpu-read"]::[T.Text])] | range <- retired role]
     ++ [object ["range" .= range,"kinds" .= (["cpu-fetch"]::[T.Text])] | range <- fetches role]
-  records = case mutation of
-    StrayFetch -> [cpu "cpu-fetch" 0x6ac2c0 0x6ac2c0 Null Null]
-    ForeignRead -> [cpu "cpu-read" 0x89f8f8 0x700000 (A.toJSON (0::Int)) (A.toJSON ([0,0,0,0]::[Int]))]
-    CacheAgeWrite -> [cpu "cpu-write" 0x89fa60 0x6ac2b4 (A.toJSON (0::Int)) (A.toJSON ([0,0,0,0]::[Int]))]
-    _ -> []
-  cpu source address pc value before = object ["source" .= (source::T.Text),"address" .= (address::Word32),"physical" .= address,"size" .= (4::Int),"value" .= value,"before" .= before,"byte_order" .= ("little"::T.Text),"core" .= (0::Int),"pc" .= (pc::Word32),"instructions" .= (1::Int),"tick" .= (1::Int)]
+  records = before ++ marker ++ after
+  marker = [cpu "cpu-fetch" 0x6ac2b4 0x6ac2b4 Null Null | phase == FirstStartPhase && mutation /= MissingMarker]
+  before
+    | phase /= FirstStartPhase = []
+    | mutation == PreEntryPublication = [publication]
+    | mutation == PreEntryBssWrite = [store]
+    | mutation == PreEntryRead = [load]
+    | otherwise = []
+  after
+    | phase == LiveViewPhase && mutation == LaterPhaseWrite = [store]
+    | phase /= FirstStartPhase = []
+    | otherwise = case mutation of
+        StrayFetch -> [cpu "cpu-fetch" 0x6ac2c0 0x6ac2c0 Null Null]
+        ForeignRead -> [load]
+        CacheAgeWrite -> [store]
+        PostEntryPublication -> [publication]
+        _ -> []
+  load = cpu "cpu-read" 0x89f8f0 0x700000 (A.toJSON (0::Int)) (A.toJSON ([0,0,0,0]::[Int]))
+  store = cpu "cpu-write" 0x89fa60 0x69ce00 (A.toJSON (0::Int)) (A.toJSON ([0,0,0,0]::[Int]))
+  publication = object ["source" .= ("model-bus-write"::T.Text),"address" .= (0x89ec00::Word32),"physical" .= (0x89ec00::Word32),"size" .= (32768::Int),"core" .= Null,"pc" .= Null,"instructions" .= Null,"tick" .= Null]
+  cpu source address pc value beforeBytes = object ["source" .= (source::T.Text),"address" .= (address::Word32),"physical" .= address,"size" .= (4::Int),"value" .= value,"before" .= beforeBytes,"byte_order" .= ("little"::T.Text),"core" .= (0::Int),"pc" .= (pc::Word32),"instructions" .= (1::Int),"tick" .= (1::Int)]
 
 fixture :: Role -> Mutation -> Observation
 fixture role mutation = Observation receipt files where
   binding bytes = object ["path" .= ("fixture"::T.Text),"sha256" .= hash bytes]
   spec = object ["schema" .= (1::Int),"sites" .= object ([K.fromString (hexWord entry) .= ("record-entry"::T.Text) | entry <- entries] ++ ["0x6fb7c8" .= ("nand-write"::T.Text),"0x6fb57c" .= ("nand-erase"::T.Text)])
-    ,"captures" .= (if mutation == MissingCapture then object [] else captureDeclarations),"hit_limit" .= (1500000::Int),"watch_limit" .= (1048576::Int),"write_ranges" .= writes,"read_ranges" .= retired,"fetch_ranges" .= fetches role]
+    ,"captures" .= (if mutation == MissingCapture then object [] else captureDeclarations),"hit_limit" .= (1500000::Int),"watch_limit" .= (1048576::Int),"write_ranges" .= writes role,"read_ranges" .= retired role,"fetch_ranges" .= fetches role]
   events = trace mutation
-  reset = object ["schema" .= (1::Int),"reset" .= object ["instructions" .= (0::Int)],"regions_at_reset" .= resetRegions Original
-    ,"segments" .= [object ["phase" .= phase,"instructions" .= (1::Int),"hits_end" .= (if phase == FirstStartPhase then 0 else length events),"watch" .= watch role mutation,"regions" .= resetRegions mutation] | phase <- [minBound..maxBound]::[AttachPhase]]]
+  reset = object ["schema" .= (1::Int),"reset" .= object ["instructions" .= (0::Int)],"regions_at_reset" .= resetRegions role Original
+    ,"segments" .= [object ["phase" .= phase,"instructions" .= (1::Int),"hits_end" .= length events,"watch" .= watch role phase mutation,"regions" .= resetRegions role mutation] | phase <- [minBound..maxBound]::[AttachPhase]]]
   files = M.fromList [(Spec,encode spec),(Extents,encode extents),(Reset,encode reset),(Hits,B.intercalate "\n" (map encode events) <> "\n"),(Steps,"[]"),(MediumFile,encode (medium mutation)),(Session,"{}")]
   receipt = encode (object ["schema" .= (1::Int),"role" .= (if role == Stock then "stock" else "owned"::T.Text),"outcome" .= object ["status" .= ("completed"::T.Text)]
     ,"inputs" .= object (["update" .= binding (if role == Stock then "stock-DAT" else "owned-DAT"),"routes" .= binding (routeBytes bindings),"contract" .= binding (contractBytes bindings),"linked" .= binding (linkedBytes bindings),"symbols" .= binding (symbolBytes bindings)]
@@ -180,8 +199,14 @@ main = do
         ,("missing retired reset snapshot refuses qualification",refused MissingResetRegion)
         ,("private reset bytes are excluded from settings comparison",matched RetiredSnapshotDifference)
         ,("stray retired fetch refuses qualification",refused StrayFetch)
-        ,("foreign access to owned state refuses qualification",refused ForeignRead)
+        ,("post-entry stock-only read refuses qualification",refused ForeignRead)
         ,("stock cache-age access refuses qualification",refused CacheAgeWrite)
+        ,("pre-entry image publication is admitted",matched PreEntryPublication)
+        ,("post-entry image publication refuses qualification",refused PostEntryPublication)
+        ,("pre-entry BSS write is admitted",matched PreEntryBssWrite)
+        ,("pre-entry retired-data read refuses qualification",refused PreEntryRead)
+        ,("missing activation marker refuses qualification",refused MissingMarker)
+        ,("retirement remains active across phases",refused LaterPhaseWrite)
         ,("changed settings fail comparison",differs BadSettings)
         ,("unmapped non-erased medium refuses qualification",refused BadMedium)
         ,("missing capture declaration refuses qualification",refused MissingCapture)
