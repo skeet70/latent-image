@@ -86,6 +86,9 @@ fn rsc_nine_guest_entries_status_outputs_and_read_only_semaphore() {
         let mut bytes = [0x71; 4];
         assert_eq!(record_store_read_at(0, 0x40000, 4, bytes.as_mut_ptr()), -30);
         assert_eq!(bytes, [0, 0x71, 0x71, 0x71]);
+        bytes.fill(0x71);
+        assert_eq!(record_store_read_at(0, 0x40000, 0, bytes.as_mut_ptr()), -30);
+        assert_eq!(bytes, [0, 0x71, 0x71, 0x71]);
         assert_eq!(record_store_erase_all(client), 0);
         record_store_close(client);
         assert!(!client.is_null());

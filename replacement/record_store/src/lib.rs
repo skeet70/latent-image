@@ -40,19 +40,23 @@ impl Sequence {
 pub enum GeometryError { Size, Count, SequenceOffset }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(C)]
-pub struct Geometry { bytes: RecordBytes, count: RecordCount, sequence_offset: SequenceOffset }
+pub struct Geometry { bytes: RecordBytes, count: RecordCount, sequence_offset: SequenceOffset, page_capacity: PageRecordCount }
 impl Geometry {
     pub fn new(bytes: RecordBytes, count: RecordCount, sequence_offset: SequenceOffset) -> Result<Self, GeometryError> {
         let s = bytes.0 as usize;
         if s == 0 { return Err(GeometryError::Size); }
         if count.0 as usize > BLOCK_BYTES / s { return Err(GeometryError::Count); }
         if sequence_offset.0 & 1 != 0 || sequence_offset.0 as usize + 2 > s { return Err(GeometryError::SequenceOffset); }
-        Ok(Self { bytes, count, sequence_offset })
+        let page_capacity = core::num::NonZeroU32::new((BLOCK_BYTES / s) as u32).ok_or(GeometryError::Size)?;
+        Ok(Self { bytes, count, sequence_offset, page_capacity: PageRecordCount(page_capacity) })
     }
     pub const fn record_bytes(self) -> RecordBytes { self.bytes }
     pub const fn records_per_bank(self) -> RecordCount { self.count }
     pub const fn sequence_offset(self) -> SequenceOffset { self.sequence_offset }
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(transparent)]
+struct PageRecordCount(core::num::NonZeroU32);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MediumError(pub i32);
 pub trait RecordMedium {
@@ -113,7 +117,7 @@ impl<'a, M: RecordMedium, S: Staging> Entry<'a, M, S> {
     fn seek(&mut self, area: &Area, position: Position) -> Sequence {
         self.load(area.kind, area.current);
         let s = area.geometry.bytes.0 as usize;
-        let offset = position.0 as usize * s;
+        let offset = (position.0 as u32 % area.geometry.page_capacity.0) as usize * s;
         let bytes = self.staging.bytes(area.kind);
         copy(part_mut(bytes, 0, s), part(self.block, offset, s));
         sequence(bytes, area.geometry.sequence_offset)
