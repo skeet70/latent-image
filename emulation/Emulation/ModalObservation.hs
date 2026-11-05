@@ -682,8 +682,6 @@ data ModalLifetimeSource = ModalLifetimeSource
   , lifetimeSettingsWriters :: [WatchRange]
   -- | Reloads whose copy stores the guard admits between a core's call and return fetches.
   , lifetimeSettingsReloads :: [SettingsReload]
-  -- | Calls whose writers' stores into the target the guard admits between a core's call and return fetches.
-  , lifetimeSettingsCalls :: [SettingsCall]
   } deriving (Eq)
 
 -- | The stock property setter `0x624694` with its jump-table arms, fenced by the
@@ -723,39 +721,9 @@ stockSettingsRestore = SettingsReload (watchAddress 0x00637ee4) (watchAddress 0x
 reloadSiteRanges :: SettingsReload -> [WatchRange]
 reloadSiteRanges reload = [either error id (watchRange pc (watchAddress (watchAddressValue pc + 4))) | pc <- [reloadCall reload, reloadReturn reload]]
 
--- | A settings service call: the call instruction, the instruction the call returns
--- to, the code whose stores it makes, and the live-settings bytes those stores may
--- change. Between the call and return fetches, a store on the calling core from a
--- writer extent wholly inside the target is attributed to the call.
-data SettingsCall = SettingsCall
-  { callEntry :: WatchAddress
-  , callReturn :: WatchAddress
-  , callWriters :: [WatchRange]
-  , callTarget :: WatchRange
-  } deriving (Eq, Show)
-
--- | The stock text-setting store `0x61dbb4`, reached through the service wrapper
--- `0x61c96c`: `bl 0x61dbb4` at `0x61c974` (`0xeb00048e` in id4) returns to `0x61c978`
--- (`0xe8bd8800`). With r2=0 it reloads `[0x96cc74, 0x96cd8c)` from the backup body
--- (`0x61d9ec`), clears and copies one text field through `0x7221c8`/`0x7221a0` and
--- `0x722054` or `0x721b40`, and writes the body back (`0x61d8dc`). Menu node 0x7d's
--- digit items store setting 0xc0 at `0x96cd7c` through it (oracle-nowrap pair).
-stockTextSetter :: SettingsCall
-stockTextSetter = SettingsCall (watchAddress 0x0061c974) (watchAddress 0x0061c978)
-  [extent 0x0061dbb4 0x0061ddbc, extent 0x00721b40 0x00721bac, extent 0x00722054 0x00722178, extent 0x007221a0 0x00722218]
-  (extent 0x0096cc74 0x0096cd8c)
- where
-  extent low high = either error id (watchRange (watchAddress low) (watchAddress high))
-
--- | The call and return instruction words, in that order.
-callSiteRanges :: SettingsCall -> [WatchRange]
-callSiteRanges call = [either error id (watchRange pc (watchAddress (watchAddressValue pc + 4))) | pc <- [callEntry call, callReturn call]]
-
--- | The fetch watch classes of a lifetime binding: retired extents, then each reload's
--- sites, then each settings call's sites.
+-- | The fetch watch classes of a lifetime binding: retired extents, then each reload's sites.
 lifetimeFetchClasses :: ModalLifetimeSource -> [WatchRange]
 lifetimeFetchClasses binding = lifetimeRetired binding ++ concatMap reloadSiteRanges (lifetimeSettingsReloads binding)
-  ++ concatMap callSiteRanges (lifetimeSettingsCalls binding)
 
 settingsReloadJson :: SettingsReload -> Value
 settingsReloadJson reload = object
@@ -775,30 +743,6 @@ parseSettingsReload entry = do
     && blockLow <= low && low < high && high <= blockHigh)
     (Left "modal settings reload requires aligned canonical sites and a nonempty target inside the live-settings block")
   pure (SettingsReload (watchAddress call) (watchAddress resume) (watchAddress store) target)
-
-settingsCallJson :: SettingsCall -> Value
-settingsCallJson call = object
-  [ "call" .= watchAddressValue (callEntry call), "return" .= watchAddressValue (callReturn call)
-  , "writers" .= map extentJson (callWriters call), "target" .= extentJson (callTarget call) ]
-
--- | Up to 8 sorted, word-aligned, disjoint writer extents and a nonempty target inside
--- the live-settings block.
-parseSettingsCall :: Value -> Either String SettingsCall
-parseSettingsCall entry = do
-  modalKeys ["call", "return", "writers", "target"] entry
-  call <- modalField "call" entry >>= modalWord32
-  resume <- modalField "return" entry >>= modalWord32
-  writers <- modalField "writers" entry >>= modalList (either error id (modalLimit 8)) >>= mapM parseModalExtent
-  target <- modalField "target" entry >>= parseModalExtent
-  let (low, high) = watchRangeBounds target
-      (blockLow, blockHigh) = watchRangeBounds liveSettingsBlock
-      writerBounds = map watchRangeBounds writers
-  unless (all (\pc -> pc `mod` 4 == 0 && pc < 0x20000000) [call, resume] && call /= resume
-    && not (null writers) && all (\(from, to) -> from `mod` 4 == 0 && to `mod` 4 == 0) writerBounds
-    && and (zipWith (\(_, to) (from, _) -> to <= from) writerBounds (drop 1 writerBounds))
-    && blockLow <= low && low < high && high <= blockHigh)
-    (Left "modal settings call requires aligned canonical sites, sorted aligned disjoint writers and a nonempty target inside the live-settings block")
-  pure (SettingsCall (watchAddress call) (watchAddress resume) writers target)
 
 -- | Up to 64 sorted, word-aligned, nonempty, pairwise disjoint canonical extents.
 checkRetiredExtents :: [WatchRange] -> Either String ()
@@ -842,7 +786,6 @@ lifetimeRequestJson source = object
   , "retired" .= map extentJson (lifetimeRetired source)
   , "settings_writers" .= map extentJson (lifetimeSettingsWriters source)
   , "settings_reloads" .= map settingsReloadJson (lifetimeSettingsReloads source)
-  , "settings_calls" .= map settingsCallJson (lifetimeSettingsCalls source)
   ]
  where
   instruction (SourceInstruction pc (InstructionWord word)) = object ["pc" .= watchAddressValue pc, "word" .= word]
@@ -958,7 +901,7 @@ bindModalRuntimeSource manifest elfBytes = do
   rollback <- routine "ram_push_rollback" (Ram.unAddress (Ram.rollbackEntry (Ram.manifestEntries manifest))) "restore_old_words"
   let bindings = [PublicationBinding (watchAddress (Ram.unAddress (Ram.publicationAddress publication)))
         (Ram.publicationOld publication) (Ram.publicationNew publication) | publication <- publications]
-  pure (ModalRuntimeSource (ModalLifetimeSource runtimeExtent residentExtent readonly install rollback bindings [] (Just (sha256 elfBytes)) (Just runtimeDigest) [] [stockPropertySetter] [stockSettingsReload, stockSettingsRestore] [stockTextSetter]))
+  pure (ModalRuntimeSource (ModalLifetimeSource runtimeExtent residentExtent readonly install rollback bindings [] (Just (sha256 elfBytes)) (Just runtimeDigest) [] [stockPropertySetter] [stockSettingsReload, stockSettingsRestore]))
 
 littleWord :: Word32 -> B.ByteString
 littleWord word = B.pack [fromIntegral (word `div` (256 ^ index)) | index <- [0 .. 3 :: Int]]
@@ -1073,7 +1016,6 @@ data LifetimeReceipt = LifetimeReceipt
   , receiptAuditedWrites :: ModalCount
   , receiptSettingsWrites :: ModalCount
   , receiptReloadWrites :: ModalCount
-  , receiptCallWrites :: ModalCount
   , receiptFailure :: Maybe LifetimeFailure
   } deriving (Eq, Show)
 
@@ -1118,7 +1060,7 @@ parseLifetimeReceipt value = do
   modalKeys ["phase", "publication_count", "forward_writes", "reverse_writes", "pending_stores",
     "install_core", "rollback_core", "checked_resource_writes", "checked_identity_writes",
     "checked_scheduler_writes", "checked_context_writes", "checked_vfp_owner_writes", "audited_writes", "admitted_settings_writes",
-    "admitted_reload_writes", "admitted_call_writes", "failure"] value
+    "admitted_reload_writes", "failure"] value
   let count key = ModalCount <$> (modalField key value >>= modalWord)
   phase <- modalField "phase" value >>= parseClosed lifetimePhaseText
   failure <- modalField "failure" value >>= parseNullable (\entry -> do
@@ -1129,7 +1071,7 @@ parseLifetimeReceipt value = do
     <*> (modalField "rollback_core" value >>= parseNullable parseCore)
     <*> count "checked_resource_writes" <*> count "checked_identity_writes"
     <*> count "checked_scheduler_writes" <*> count "checked_context_writes" <*> count "checked_vfp_owner_writes"
-    <*> count "audited_writes" <*> count "admitted_settings_writes" <*> count "admitted_reload_writes" <*> count "admitted_call_writes" <*> pure failure
+    <*> count "audited_writes" <*> count "admitted_settings_writes" <*> count "admitted_reload_writes" <*> pure failure
 
 lifetimeReceiptJson :: LifetimeReceipt -> Value
 lifetimeReceiptJson receipt = object
@@ -1148,7 +1090,6 @@ lifetimeReceiptJson receipt = object
   , "audited_writes" .= countValue (receiptAuditedWrites receipt)
   , "admitted_settings_writes" .= countValue (receiptSettingsWrites receipt)
   , "admitted_reload_writes" .= countValue (receiptReloadWrites receipt)
-  , "admitted_call_writes" .= countValue (receiptCallWrites receipt)
   , "failure" .= fmap (\failure -> object ["kind" .= lifetimeFailureText failure]) (receiptFailure receipt)
   ]
 
@@ -1294,9 +1235,8 @@ checkCompletedModalLifetime (ModalRequest (ModalStock stock) scoped _ source) au
     (Left "modal lifetime accepted write counters differ from raw CPU rows or array audit")
   settingsWrites <- lifetimeSettingsWrites binding rows
   let admitted kind = fromIntegral (length (filter ((== kind) . settingsWriter) settingsWrites))
-  unless (admitted SetterWrite == countValue (receiptSettingsWrites receipt) && admitted ReloadWrite == countValue (receiptReloadWrites receipt)
-    && admitted CallWrite == countValue (receiptCallWrites receipt))
-    (Left "modal lifetime admitted setter, reload or call writes differ from the value-changing settings rows")
+  unless (admitted SetterWrite == countValue (receiptSettingsWrites receipt) && admitted ReloadWrite == countValue (receiptReloadWrites receipt))
+    (Left "modal lifetime admitted setter or reload writes differ from the value-changing settings rows")
   case scoped of
     Nothing -> do
       let counts = modalReportCounts report
@@ -1308,7 +1248,7 @@ checkCompletedModalLifetime (ModalRequest (ModalStock stock) scoped _ source) au
       unless (modalTaskIdentityVerified report && not (null (modalTaskEntries report)))
         (Left "scoped modal lifetime lacks verified owned task execution")
 
--- | Counts fetch rows. Each must be a settings reload or call's call or return word, or start
+-- | Counts fetch rows. Each must be a settings-reload call or return word, or start
 -- inside a retired extent before the first or after the last publication-writer row.
 lifetimeFetchRows :: ModalLifetimeSource -> [WatchRecord] -> Either String Int
 lifetimeFetchRows binding rows = do
@@ -1321,20 +1261,18 @@ lifetimeFetchRows binding rows = do
       retired physical = any (\range -> let (low, high) = watchRangeBounds range
                                             address = toInteger (watchAddressValue physical)
                                         in toInteger low <= address && address < toInteger high) (lifetimeRetired binding)
-      bracketSite physical = physical `elem` concat ([[reloadCall reload, reloadReturn reload] | reload <- lifetimeSettingsReloads binding]
-        ++ [[callEntry call, callReturn call] | call <- lifetimeSettingsCalls binding])
+      reloadSite physical = physical `elem` concat [[reloadCall reload, reloadReturn reload] | reload <- lifetimeSettingsReloads binding]
       fetches = [(index, physical) | (index, CpuRecord { cpuAccess = CpuFetch, cpuPhysical = physical }) <- zip [0 :: Int ..] rows]
-  unless (all (\(index, physical) -> bracketSite physical || (retired physical && outside index)) fetches)
-    (Left "modal lifetime fetched a retired body while the owned entry was published, or recorded a fetch outside every retired extent and reload or call site")
+  unless (all (\(index, physical) -> reloadSite physical || (retired physical && outside index)) fetches)
+    (Left "modal lifetime fetched a retired body while the owned entry was published, or recorded a fetch outside every retired extent and reload site")
   pure (length fetches)
 
 -- | The declared code admitted to change a live setting.
-data SettingsWriterKind = SetterWrite | ReloadWrite | CallWrite deriving (Eq, Show, Enum, Bounded)
+data SettingsWriterKind = SetterWrite | ReloadWrite deriving (Eq, Show, Enum, Bounded)
 
 settingsWriterKindText :: SettingsWriterKind -> T.Text
 settingsWriterKindText SetterWrite = "setter"
 settingsWriterKindText ReloadWrite = "reload"
-settingsWriterKindText CallWrite = "call"
 
 -- | A value-changing store into the live-settings block.
 data SettingsWrite = SettingsWrite
@@ -1352,49 +1290,42 @@ liveSettingsBlock = either error id (watchRange (watchAddress 0x0096cc64) (watch
 -- | The value-changing live-settings stores in row order. Each lies wholly in the
 -- block and comes from a declared settings writer, or from a reload's copy store at
 -- the core's halfword cursor while that reload's call fetch is the core's latest
--- reload-site fetch, or from a settings call's writer wholly inside its target while
--- that call's call fetch is the core's latest call-site fetch. A reload call fetch
--- sets the cursor to the target's start; a copy store into the target anywhere else,
--- or of another width, closes the bracket.
+-- reload-site fetch. A call fetch sets the cursor to the target's start; a copy store
+-- into the target anywhere else, or of another width, closes the bracket.
 lifetimeSettingsWrites :: ModalLifetimeSource -> [WatchRecord] -> Either String [SettingsWrite]
-lifetimeSettingsWrites binding rows = (\(_, _, writes) -> reverse writes) <$> foldM step ([], [], []) rows
+lifetimeSettingsWrites binding rows = reverse . snd <$> foldM step ([], []) rows
  where
   reloads = lifetimeSettingsReloads binding
-  calls = lifetimeSettingsCalls binding
   closed core = filter ((/= core) . fst)
-  step (open, openCalls, writes) row = case row of
+  step (open, writes) row = case row of
     CpuRecord { cpuAccess = CpuFetch, cpuPhysical = physical, cpuCore = core }
       | Just reload <- find ((== physical) . reloadCall) reloads ->
-          pure ((core, (reload, toInteger (fst (watchRangeBounds (reloadTarget reload))))) : closed core open, openCalls, writes)
-      | any ((== physical) . reloadReturn) reloads -> pure (closed core open, openCalls, writes)
-      | Just call <- find ((== physical) . callEntry) calls -> pure (open, (core, call) : closed core openCalls, writes)
-      | any ((== physical) . callReturn) calls -> pure (open, closed core openCalls, writes)
+          pure ((core, (reload, toInteger (fst (watchRangeBounds (reloadTarget reload))))) : closed core open, writes)
+      | any ((== physical) . reloadReturn) reloads -> pure (closed core open, writes)
     CpuRecord { cpuAccess = CpuWrite, cpuPhysical = physical, cpuBytes = bytes, cpuPc = pc, cpuCore = core } -> do
       let start = toInteger (watchAddressValue physical)
           size = toInteger (watchBytesValue bytes)
           inside range = let (low, high) = watchRangeBounds range in toInteger low <= start && start + size <= toInteger high
-          at = toInteger (watchAddressValue pc)
-          within range = let (from, to) = watchRangeBounds range in toInteger from <= at && at < toInteger to
           (open', reloadStore) = case lookup core open of
             Just (reload, cursor) | pc == reloadCopyStore reload && overlapsWatchRange (reloadTarget reload) physical bytes ->
               if start == cursor && size == 2 && inside (reloadTarget reload)
                 then ((core, (reload, cursor + 2)) : closed core open, True)
                 else (closed core open, False)
             _ -> (open, False)
-          callStore = maybe False (\call -> inside (callTarget call) && any within (callWriters call)) (lookup core openCalls)
       case row of
         CpuRecord { cpuValue = Just value, cpuBefore = Just before, cpuByteOrder = order, cpuInstructions = instructions }
           | overlapsWatchRange liveSettingsBlock physical bytes && changes order before value -> do
-              let writer
+              let at = toInteger (watchAddressValue pc)
+                  within range = let (from, to) = watchRangeBounds range in toInteger from <= at && at < toInteger to
+                  writer
                     | not (inside liveSettingsBlock) = Nothing
                     | any within (lifetimeSettingsWriters binding) = Just SetterWrite
                     | reloadStore = Just ReloadWrite
-                    | callStore = Just CallWrite
                     | otherwise = Nothing
-              kind <- maybe (Left "modal lifetime changed a live setting outside a declared settings writer, open settings reload or open settings call") Right writer
-              pure (open', openCalls, SettingsWrite kind instructions pc physical before value : writes)
-        _ -> pure (open', openCalls, writes)
-    _ -> pure (open, openCalls, writes)
+              kind <- maybe (Left "modal lifetime changed a live setting outside a declared settings writer or open settings reload") Right writer
+              pure (open', SettingsWrite kind instructions pc physical before value : writes)
+        _ -> pure (open', writes)
+    _ -> pure (open, writes)
   changes order before value = or
     [ B.index before index /= fromIntegral (value `div` (256 ^ shift))
     | index <- [0 .. B.length before - 1]
@@ -1459,7 +1390,7 @@ parseSourceImage value = do
 
 parseLifetimeBinding :: Maybe (ModalLinked, ModalScope) -> Value -> Value -> Either String ModalLifetimeSource
 parseLifetimeBinding scoped contextValue value = do
-  modalKeys ["runtime", "resident", "readonly", "install", "rollback", "publications", "retired", "settings_writers", "settings_reloads", "settings_calls"] value
+  modalKeys ["runtime", "resident", "readonly", "install", "rollback", "publications", "retired", "settings_writers", "settings_reloads"] value
   runtime <- modalField "runtime" value >>= parseModalExtent
   resident <- modalField "resident" value >>= parseModalExtent
   let (runtimeLow, runtimeHigh) = watchRangeBounds runtime
@@ -1521,16 +1452,12 @@ parseLifetimeBinding scoped contextValue value = do
     && and (zipWith (\(_, high) (low, _) -> high <= low) writerBounds (drop 1 writerBounds)))
     (Left "modal settings writers must be sorted aligned disjoint extents")
   settingsReloads <- modalField "settings_reloads" value >>= modalList (either error id (modalLimit 4)) >>= mapM parseSettingsReload
-  settingsCalls <- modalField "settings_calls" value >>= modalList (either error id (modalLimit 4)) >>= mapM parseSettingsCall
-  let bracketSites = concatMap reloadSiteRanges settingsReloads ++ concatMap callSiteRanges settingsCalls
+  let reloadSites = concatMap reloadSiteRanges settingsReloads
       inWriter pc = any (\(low, high) -> low <= fromIntegral pc && fromIntegral pc < high) writerBounds
-      callWriterRanges = concatMap callWriters settingsCalls
-  unless (length (nub bracketSites) == length bracketSites && not (any (rangesOverlap runtime) bracketSites)
+  unless (length (nub reloadSites) == length reloadSites && not (any (rangesOverlap runtime) reloadSites)
     && not (any (inWriter . watchAddressValue . reloadCopyStore) settingsReloads))
-    (Left "modal settings reload or call sites repeat or enter the runtime, or a copy store lies in a settings writer")
-  unless (not (or [rangesOverlap writer span_ | writer <- callWriterRanges, span_ <- runtime : settingsWriters]))
-    (Left "modal settings call writers overlap the runtime or a settings writer")
-  pure (ModalLifetimeSource runtime resident allImages install rollback publications context Nothing Nothing retired settingsWriters settingsReloads settingsCalls)
+    (Left "modal settings reload sites repeat or enter the runtime, or a copy store lies in a settings writer")
+  pure (ModalLifetimeSource runtime resident allImages install rollback publications context Nothing Nothing retired settingsWriters settingsReloads)
 
 modalLifetimeWatchRanges :: ModalRequest -> Either String [WatchRange]
 modalLifetimeWatchRanges (ModalRequest _ scoped _ source) = do
@@ -1549,9 +1476,9 @@ modalLifetimeWatchRanges (ModalRequest _ scoped _ source) = do
   let watched = unionWatchRanges (lifetimeResident binding : fixed ++ imageRanges ++ publications)
   unless (not (or [rangesOverlap retired span_ | retired <- lifetimeRetired binding, span_ <- watched]))
     (Left "modal retired extents overlap a write-watched extent")
-  let bracketSites = concatMap reloadSiteRanges (lifetimeSettingsReloads binding) ++ concatMap callSiteRanges (lifetimeSettingsCalls binding)
-  unless (not (or [rangesOverlap site span_ | site <- bracketSites, span_ <- lifetimeRuntime binding : lifetimeRetired binding ++ watched]))
-    (Left "modal settings reload or call sites overlap the runtime, a retired extent or a write-watched extent")
+  let reloadSites = concatMap reloadSiteRanges (lifetimeSettingsReloads binding)
+  unless (not (or [rangesOverlap site span_ | site <- reloadSites, span_ <- lifetimeRuntime binding : lifetimeRetired binding ++ watched]))
+    (Left "modal settings reload sites overlap the runtime, a retired extent or a write-watched extent")
   pure watched
 
 checkModalLifetimeWatchSources :: ModalRequest -> Value -> Either String ()

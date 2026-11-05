@@ -232,10 +232,9 @@ impl InstalledGuard {
         let word_class = |site: Guest| WatchRange { start: u64::from(site.0), end: u64::from(site.0) + 4, kinds: WatchKinds::CPU_FETCH };
         let fetch_classes: Vec<_> = lifetime.config().retired_extents().iter().map(|extent| WatchRange {
             start: u64::from(extent.start().0), end: u64::from(extent.end().0), kinds: WatchKinds::CPU_FETCH,
-        }).chain(lifetime.config().settings_reloads().iter().flat_map(|reload| [word_class(reload.call), word_class(reload.resume)]))
-            .chain(lifetime.config().settings_calls().iter().flat_map(|call| [word_class(call.call), word_class(call.resume)])).collect();
+        }).chain(lifetime.config().settings_reloads().iter().flat_map(|reload| [word_class(reload.call), word_class(reload.resume)])).collect();
         if fetch_classes.iter().any(|class| fetch_ranges.iter().any(|site| site.start < class.end && class.start < site.end)) {
-            return Err("modal retired extent or settings reload or call site overlaps a guarded instruction site".into());
+            return Err("modal retired extent or settings reload site overlaps a guarded instruction site".into());
         }
         let watch = session.board.memory_watch_begin_with_fetch_attribution(
             write_ranges.iter().chain(&fetch_classes).cloned().collect(),

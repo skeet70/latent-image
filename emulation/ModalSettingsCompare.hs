@@ -22,7 +22,6 @@ data Role = Role
   , roleWrites :: [SettingsWrite]
   , roleSettingsWriters :: Value
   , roleSettingsReloads :: Value
-  , roleSettingsCalls :: Value
   , roleSegments :: Value
   , roleFinalDigest :: String
   , rolePackage :: Value
@@ -43,13 +42,11 @@ main = do
   let outcome = do
         unless (roleSettingsWriters stock == roleSettingsWriters owned) (Left "the roles declare different settings writers")
         unless (roleSettingsReloads stock == roleSettingsReloads owned) (Left "the roles declare different settings reloads")
-        unless (roleSettingsCalls stock == roleSettingsCalls owned) (Left "the roles declare different settings calls")
         unless (roleSegments stock == roleSegments owned) (Left "the roles pressed different keys or observed different menu states")
         compareSettingsWrites (roleWrites stock) (roleWrites owned)
       side role = object
         [ "receipt" .= roleDirectory role, "watch_final_sha256" .= roleFinalDigest role
         , "settings_writers" .= roleSettingsWriters role, "settings_reloads" .= roleSettingsReloads role
-        , "settings_calls" .= roleSettingsCalls role
         , "segments" .= roleSegments role, "owned_package" .= rolePackage role
         , "writes" .= settingsWritesJson (roleWrites role) ]
   B.writeFile (resolve outputPath) (BL.toStrict (encode (object
@@ -92,7 +89,6 @@ loadRole scoped directory = do
         lifetime <- field "lifetime" requestValue
         writers <- field "settings_writers" lifetime
         reloads <- field "settings_reloads" lifetime
-        calls <- field "settings_calls" lifetime
         finalFile <- field "watch_final_file" observation
         finalName <- text "path" finalFile
         finalDigest <- text "sha256" finalFile
@@ -110,14 +106,14 @@ loadRole scoped directory = do
           pure (object ["label" .= label, "menu" .= menu]))
         keys <- list "key_log" session >>= traverse (field "key")
         let steps = object ["captures" .= captures, "keys" .= keys]
-        pure (request, writers, reloads, calls, finalName, finalDigest, steps, package)
+        pure (request, writers, reloads, finalName, finalDigest, steps, package)
   case binding of
     Left problem -> pure (Left problem)
-    Right (request, writers, reloads, calls, finalName, finalDigest, steps, package) -> do
+    Right (request, writers, reloads, finalName, finalDigest, steps, package) -> do
       line <- B.readFile (directory </> takeFileName (T.unpack finalName))
       let digest = sha256Hex (sha256 line)
       pure $ do
         unless (T.unpack finalDigest == digest) (Left "the final watch file differs from its observation binding")
         final <- parseFinalModalWatch (decodeBridgeWatchLine line)
         writes <- completedSettingsWrites request final
-        pure (Role directory writes writers reloads calls steps digest package)
+        pure (Role directory writes writers reloads steps digest package)

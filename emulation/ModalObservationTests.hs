@@ -478,7 +478,6 @@ completedReceipt count = object
   , "checked_resource_writes" .= (7 :: Int), "checked_identity_writes" .= (0 :: Int)
   , "checked_scheduler_writes" .= (10 :: Int), "checked_context_writes" .= (40 :: Int), "checked_vfp_owner_writes" .= (2 :: Int)
   , "audited_writes" .= (12 :: Int), "admitted_settings_writes" .= (0 :: Int), "admitted_reload_writes" .= (0 :: Int)
-  , "admitted_call_writes" .= (0 :: Int)
   , "failure" .= Null ]
 
 healthyGuard :: Value
@@ -739,26 +738,9 @@ runtimeBindingTests = do
         , ("repeated reload sites",changeLifetime "settings_reloads" (array (replicate 2 stockReload)))
         , ("unknown reload key",changeLifetime "settings_reloads" (array [set "writer" (String "reload") stockReload]))
         , ("five reloads",changeLifetime "settings_reloads" (array [set "call" (Number (fromIntegral (0x00500000 + index * 8 :: Int))) stockReload | index <- [0 .. 4]]))
-        , ("missing settings calls",set "lifetime" (case lifetime of Object fields -> Object (KM.delete "settings_calls" fields); other -> other) declaration)
-        , ("unaligned settings call",changeCall "call" (Number 0x0061c976))
-        , ("settings call return equal to its call",changeCall "return" (Number 0x0061c974))
-        , ("settings call without writers",changeCall "writers" (array []))
-        , ("unaligned settings call writer",callWriters [[0x00722054, 0x00722176]])
-        , ("overlapping settings call writers",callWriters [[0x00722054, 0x00722178], [0x00722174, 0x00722218]])
-        , ("nine settings call writers",callWriters [[0x00700000 + index * 8, 0x00700004 + index * 8] | index <- [0 .. 8]])
-        , ("settings call writer inside the setter",callWriters [[0x0062ff00, 0x00630000]])
-        , ("settings call writer inside the runtime",callWriters [[0x10000, 0x10010]])
-        , ("settings call target past the settings block",changeCall "target" (array [Number 0x0096cc74, Number 0x0096ce28]))
-        , ("settings call site repeating a reload site",changeCall "call" (Number 0x006309ec))
-        , ("settings call inside the runtime",changeCall "return" (Number 0x10000))
-        , ("unknown settings call key",changeLifetime "settings_calls" (array [set "copy_store" (Number 0x00722134) stockCall]))
-        , ("five settings calls",changeLifetime "settings_calls" (array [set "call" (Number (fromIntegral (0x00500000 + index * 8 :: Int))) stockCall | index <- [0 .. 4]]))
         ]
       stockReload = case get "settings_reloads" lifetime of Array entries | entry : _ <- foldr (:) [] entries -> entry; _ -> Null
       changeReload key value = changeLifetime "settings_reloads" (array [set key value stockReload])
-      stockCall = case get "settings_calls" lifetime of Array entries | entry : _ <- foldr (:) [] entries -> entry; _ -> Null
-      changeCall key value = changeLifetime "settings_calls" (array [set key value stockCall])
-      callWriters pairs = changeCall "writers" (get "w" (object ["w" .= (pairs :: [[Word32]])]))
   request <- either (error . ("lifetime declaration fixture: " ++)) pure (parseModalBeginRequest declaration)
   check "typed lifetime request preserves source images and physical vector order" (modalBeginRequestJson request == declaration)
   mapM_ (\(label,value) -> check ("lifetime request refuses " ++ label) (isLeft (parseModalBeginRequest value))) malformedDeclarations
@@ -767,8 +749,7 @@ runtimeBindingTests = do
         [range pc (pc+4) | pc <- [0x10000,0x10010,0x10024,0x10044,0x40240,0x4031c,0x436b8,0x43690,0x436f0
           ,0x43720,0x43848,0x42440,0xd0240,0xd031c,0xd36b8,0xd3690,0xd36f0,0xd3720,0xd3848,0xd2440]])
       fetchJson spans = object ["sources" .= ([] :: [Value]), "ranges" .= map pair spans]
-      reloadSpans = [range 0x006309ec 0x006309f0, range 0x006309f0 0x006309f4, range 0x00637ee4 0x00637ee8, range 0x00637ee8 0x00637eec
-        , range 0x0061c974 0x0061c978, range 0x0061c978 0x0061c97c]
+      reloadSpans = [range 0x006309ec 0x006309f0, range 0x006309f0 0x006309f4, range 0x00637ee4 0x00637ee8, range 0x00637ee8 0x00637eec]
       watch spans records = digested (object
         [ "enabled" .= True, "views" .= ("fixed" :: String), "ranges" .= map pair (unionWatchRanges (spans ++ reloadSpans)), "records" .= records, "violation" .= Null
         , "classes" .= ([object ["range" .= pair span_, "kinds" .= (["cpu-write","host-write","model-bus-write"] :: [String])] | span_ <- spans]
@@ -782,7 +763,7 @@ runtimeBindingTests = do
           (cpu 1 address address 4 clock))) | (address,clock) <- zip (reverse addresses) [224 ..]]
       fullWatch = watch expectedWrites writes
       exactReceipt = foldr (\key value -> set key (Number 0) value) (completedReceipt 223)
-        ["checked_resource_writes","checked_identity_writes","checked_scheduler_writes","checked_context_writes","checked_vfp_owner_writes","audited_writes","admitted_settings_writes","admitted_reload_writes","admitted_call_writes"]
+        ["checked_resource_writes","checked_identity_writes","checked_scheduler_writes","checked_context_writes","checked_vfp_owner_writes","audited_writes","admitted_settings_writes","admitted_reload_writes"]
       clean = set "watch" (withoutRecords fullWatch) (set "lifetime" exactReceipt (set "task_identity_verified" (Bool False)
         (set "task_entries" (array []) (completedEnvelope 223))))
   let watchedCount = length (unionWatchRanges (expectedWrites ++ reloadSpans))
@@ -891,14 +872,13 @@ runtimeBindingTests = do
       (retiredWatch (published ++ [fetchRow 0x00c7aef4 9000]))))))
   let settingsRow pc = set "pc" (Number pc) (set "value" (Number 0x21) (set "before" (array [Number 0x20]) (cpu 0 0x0096ccca 0x0096ccca 1 100)))
       settingsWatch pc = set "fetch_attribution" (fetchJson helperFetches) (watch scopedWrites (take 100 published ++ [settingsRow pc] ++ drop 100 published))
-      settingsCompletesWithCall resource setter reload call rowsWatch = either (const False) (const True) $ do
+      settingsCompletesWith resource setter reload rowsWatch = either (const False) (const True) $ do
         audit_ <- checkLifetimeArrayAudit scopedRequest (Right rowsWatch) (parseFinalModalWatch rowsWatch)
         final_ <- parseFinalModalWatch rowsWatch
         report_ <- parseModalReport permitLimit (set "watch" (withoutRecords rowsWatch) (set "lifetime"
-          (set "admitted_call_writes" (Number call) (set "admitted_reload_writes" (Number reload) (set "admitted_settings_writes" (Number setter)
-            (set "checked_resource_writes" (Number resource) scopedReceipt)))) completedScoped))
+          (set "admitted_reload_writes" (Number reload) (set "admitted_settings_writes" (Number setter)
+            (set "checked_resource_writes" (Number resource) scopedReceipt))) completedScoped))
         checkCompletedModalLifetime scopedRequest audit_ final_ report_
-      settingsCompletesWith resource setter reload = settingsCompletesWithCall resource setter reload 0
       settingsCompletes admitted = settingsCompletesWith 1 admitted 0
   check "a counted settings change from the stock property setter completes" (settingsCompletes 1 (settingsWatch 0x0062ff54))
   check "an uncounted settings change from the stock property setter refuses" (not (settingsCompletes 0 (settingsWatch 0x0062ff54)))
@@ -948,29 +928,6 @@ runtimeBindingTests = do
     (not (settingsCompletesWith 225 0 1 (reloadWatch (restoreCopy 0x006309ec 0x0096cc64))))
   check "a fetch row beside a reload site refuses" (not (settingsCompletesWith 0 0 0 (reloadWatch [fetchOn 0 0x006309f4])))
   check "a reload call and return fetch pair without stores completes" (settingsCompletesWith 0 0 0 (reloadWatch [fetchOn 1 0x006309ec, fetchOn 1 0x006309f0]))
-  let callStore core pc address value = set "pc" (Number pc) (set "value" (Number value) (set "before" (array [Number 0x20, Number 0x20])
-        (cpu core address address 2 100)))
-      textEdit core = [fetchOn (fromIntegral core) 0x0061c974, callStore core 0x007221b0 0x0096cd7c 0x2020, callStore core 0x00722134 0x0096cd7c 0x3130
-        , callStore core 0x00722134 0x0096cd7e 0x3030, fetchOn (fromIntegral core) 0x0061c978]
-      callCompletes resource setter call rows_ = settingsCompletesWithCall resource setter 0 call (reloadWatch rows_)
-  check "a text setter call's writer stores inside its bracket complete with the call counter"
-    (callCompletes 3 0 2 (textEdit 0) && callCompletes 3 0 2 (textEdit 1))
-  check "an uncounted text setter call store refuses" (not (callCompletes 3 0 0 (textEdit 0)))
-  check "a text setter call store counted as a setter write refuses" (not (callCompletes 3 2 0 (textEdit 0)))
-  check "the completed settings writes name text setter call rows"
-    (fmap (map (\write -> (get "writer" write, get "pc" write)) . values . get "writes" . settingsWritesJson)
-      (parseFinalModalWatch (reloadWatch (textEdit 0)) >>= completedSettingsWrites scopedRequest)
-      == Right [(String "call", Number 0x00722134), (String "call", Number 0x00722134)])
-  mapM_ (\(label, rows_) -> check ("a text setter store refuses " ++ label) (not (callCompletes 1 0 1 rows_)))
-    [ ("without its call fetch", [callStore 0 0x00722134 0x0096cd7c 0x3130, fetchOn 0 0x0061c978])
-    , ("after its return fetch", [fetchOn 0 0x0061c974, fetchOn 0 0x0061c978, callStore 0 0x00722134 0x0096cd7c 0x3130])
-    , ("after a return fetch alone", [fetchOn 0 0x0061c978, callStore 0 0x00722134 0x0096cd7c 0x3130])
-    , ("on the other core", [fetchOn 1 0x0061c974, callStore 0 0x00722134 0x0096cd7c 0x3130, fetchOn 1 0x0061c978])
-    , ("from outside every call writer", [fetchOn 0 0x0061c974, callStore 0 0x00722178 0x0096cd7c 0x3130, fetchOn 0 0x0061c978])
-    , ("outside its target", [fetchOn 0 0x0061c974, callStore 0 0x00722134 0x0096cd8c 0x3130, fetchOn 0 0x0061c978])
-    , ("inside a reload bracket", [fetchOn 0 0x006309ec, callStore 0 0x007221b0 0x0096cd7c 0x3130, fetchOn 0 0x006309f0]) ]
-  check "a text setter call and return fetch pair without stores completes"
-    (settingsCompletesWith 0 0 0 (reloadWatch [fetchOn 1 0x0061c974, fetchOn 1 0x0061c978]))
   let settingsWrite writer address value = object ["writer" .= (writer :: String), "instructions" .= (1 :: Int), "pc" .= (0x0062ff54 :: Word32)
         , "address" .= (address :: Word32), "size" .= (1 :: Int), "before" .= [0x20 :: Int], "value" .= (value :: Int)]
       sequenceOf writes_ = either error id (parseSettingsWrites (object ["schema" .= (2 :: Int), "writes" .= writes_]))
