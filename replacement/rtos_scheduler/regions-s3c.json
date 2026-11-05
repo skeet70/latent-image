@@ -1,0 +1,343 @@
+{
+  "fill_word": "0xe7f000f0",
+  "domains": {
+    "a": {
+      "regions": [
+        {
+          "start": "0x441b4",
+          "end": "0x44288",
+          "entries": [
+            {
+              "entry": "0x441b4",
+              "semantic": {
+                "kind": "service",
+                "name": "deliver-task-exception"
+              }
+            }
+          ],
+          "symbol": "s3c_exception_loop",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0x44288",
+          "end": "0x44318",
+          "entries": [
+            {
+              "entry": "0x44288",
+              "semantic": {
+                "kind": "service",
+                "name": "deliver-task-exception-entry"
+              }
+            }
+          ],
+          "symbol": "s3c_exception_delivery",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0x45b40",
+          "end": "0x45cd4",
+          "entries": [
+            {
+              "entry": "0x45b40",
+              "semantic": {
+                "kind": "service",
+                "name": "get-task-priority"
+              }
+            }
+          ],
+          "symbol": "s3c_get_priority",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0x45cd4",
+          "end": "0x45e54",
+          "entries": [
+            {
+              "entry": "0x45cd4",
+              "semantic": {
+                "kind": "service",
+                "name": "sleep-task"
+              }
+            }
+          ],
+          "symbol": "s3c_sleep",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0x46a00",
+          "end": "0x46c80",
+          "entries": [
+            {
+              "entry": "0x46a00",
+              "semantic": {
+                "kind": "service",
+                "name": "suspend-task"
+              }
+            }
+          ],
+          "symbol": "s3c_suspend",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0x46c80",
+          "end": "0x46e38",
+          "entries": [
+            {
+              "entry": "0x46c80",
+              "semantic": {
+                "kind": "service",
+                "name": "resume-task"
+              }
+            }
+          ],
+          "symbol": "s3c_resume",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0x46e38",
+          "end": "0x46e48",
+          "entries": [
+            {
+              "entry": "0x46e38",
+              "semantic": {
+                "kind": "service",
+                "name": "force-resume-task"
+              }
+            }
+          ],
+          "symbol": "s3c_force_resume",
+          "frame_bytes": 8
+        },
+        {
+          "start": "0x46fcc",
+          "end": "0x471b0",
+          "entries": [
+            {
+              "entry": "0x46fcc",
+              "semantic": {
+                "kind": "service",
+                "name": "raise-task-exception"
+              }
+            }
+          ],
+          "symbol": "s3c_raise",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0x471b0",
+          "end": "0x47354",
+          "entries": [
+            {
+              "entry": "0x471b0",
+              "semantic": {
+                "kind": "service",
+                "name": "interrupt-raise-task-exception"
+              }
+            }
+          ],
+          "symbol": "s3c_interrupt_raise",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0x47354",
+          "end": "0x47428",
+          "entries": [
+            {
+              "entry": "0x47354",
+              "semantic": {
+                "kind": "service",
+                "name": "disable-task-exception"
+              }
+            }
+          ],
+          "symbol": "s3c_disable_exception",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0x47428",
+          "end": "0x47540",
+          "entries": [
+            {
+              "entry": "0x47428",
+              "semantic": {
+                "kind": "service",
+                "name": "enable-task-exception"
+              }
+            }
+          ],
+          "symbol": "s3c_enable_exception",
+          "frame_bytes": 24
+        }
+      ]
+    },
+    "b": {
+      "regions": [
+        {
+          "start": "0xd4174",
+          "end": "0xd4248",
+          "entries": [
+            {
+              "entry": "0xd4174",
+              "semantic": {
+                "kind": "service",
+                "name": "deliver-task-exception"
+              }
+            }
+          ],
+          "symbol": "s3c_exception_loop",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0xd4248",
+          "end": "0xd42d8",
+          "entries": [
+            {
+              "entry": "0xd4248",
+              "semantic": {
+                "kind": "service",
+                "name": "deliver-task-exception-entry"
+              }
+            }
+          ],
+          "symbol": "s3c_exception_delivery",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0xd5b00",
+          "end": "0xd5c94",
+          "entries": [
+            {
+              "entry": "0xd5b00",
+              "semantic": {
+                "kind": "service",
+                "name": "get-task-priority"
+              }
+            }
+          ],
+          "symbol": "s3c_get_priority",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0xd5c94",
+          "end": "0xd5e14",
+          "entries": [
+            {
+              "entry": "0xd5c94",
+              "semantic": {
+                "kind": "service",
+                "name": "sleep-task"
+              }
+            }
+          ],
+          "symbol": "s3c_sleep",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0xd69c0",
+          "end": "0xd6c40",
+          "entries": [
+            {
+              "entry": "0xd69c0",
+              "semantic": {
+                "kind": "service",
+                "name": "suspend-task"
+              }
+            }
+          ],
+          "symbol": "s3c_suspend",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0xd6c40",
+          "end": "0xd6df8",
+          "entries": [
+            {
+              "entry": "0xd6c40",
+              "semantic": {
+                "kind": "service",
+                "name": "resume-task"
+              }
+            }
+          ],
+          "symbol": "s3c_resume",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0xd6df8",
+          "end": "0xd6e08",
+          "entries": [
+            {
+              "entry": "0xd6df8",
+              "semantic": {
+                "kind": "service",
+                "name": "force-resume-task"
+              }
+            }
+          ],
+          "symbol": "s3c_force_resume",
+          "frame_bytes": 8
+        },
+        {
+          "start": "0xd6f8c",
+          "end": "0xd7170",
+          "entries": [
+            {
+              "entry": "0xd6f8c",
+              "semantic": {
+                "kind": "service",
+                "name": "raise-task-exception"
+              }
+            }
+          ],
+          "symbol": "s3c_raise",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0xd7170",
+          "end": "0xd7314",
+          "entries": [
+            {
+              "entry": "0xd7170",
+              "semantic": {
+                "kind": "service",
+                "name": "interrupt-raise-task-exception"
+              }
+            }
+          ],
+          "symbol": "s3c_interrupt_raise",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0xd7314",
+          "end": "0xd73e8",
+          "entries": [
+            {
+              "entry": "0xd7314",
+              "semantic": {
+                "kind": "service",
+                "name": "disable-task-exception"
+              }
+            }
+          ],
+          "symbol": "s3c_disable_exception",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0xd73e8",
+          "end": "0xd7500",
+          "entries": [
+            {
+              "entry": "0xd73e8",
+              "semantic": {
+                "kind": "service",
+                "name": "enable-task-exception"
+              }
+            }
+          ],
+          "symbol": "s3c_enable_exception",
+          "frame_bytes": 24
+        }
+      ]
+    }
+  }
+}
