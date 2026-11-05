@@ -1881,9 +1881,9 @@ Blockers 1-6 of the original plan (the loader-B carrier conflict and loader pins
 
 #### Qualification sequence
 
-Each step stages one DAT through `stage-startup-artifact`, whose composition rules keep every included piece's admission valid in the composed images (below), runs one retained and one composed natural observation under one emulator slot, consumes and compares them, runs file-only controls, and merges before the next step. Leaf cohorts stay as regressions.
+J1 to J6 and J8 each staged one DAT and ran their own retained and composed natural observations. The remaining pieces (J7, J9-J11) follow [the replacement loop](../spec/11-incremental-firmware-replacement.md#repeatable-replacement-loop): each is derived from the decomp and admitted by its host checks in parallel, and `stage-startup-artifact`, whose composition rules keep every included piece's admission valid in the composed images (below), composes it as soon as its joins hold on the host. The full-system pair runs once, at step 9, on the DAT with every piece; a difference there is localized by staging subsets of pieces. Leaf cohorts stay as regressions.
 
-0. Infrastructure, host-only: (a) a composed stager taking a manifest of admitted pieces and emitting one DAT, per-record images (record1, record2, loaders A/B, image4, record5) and one contract; (b) observer catalogs derived from that contract, with stock interior PCs replaced by contract boundaries, armed through `arm_mutable`; (c) confinement by the composite guard on classified watches on the default SDK (`E-COMPOSITE-GUARD-MAIN-MERGE-150`); the scoped observers are not ported, so schemas 4-10 do not run in composed observations. Review each mechanism before use.
+0. Infrastructure, host-only: (a) a composed stager taking a manifest of admitted pieces and emitting one DAT, per-record images (record1, record2, loaders A/B, image4, record5) and one contract; (b) observer catalogs derived from that contract, with stock interior PCs replaced by contract boundaries, armed through `arm_mutable`; (c) confinement by the composite guard on classified watches on the default SDK (`E-COMPOSITE-GUARD-MAIN-MERGE-150`); the scoped observers are not ported, so schemas 4-10 do not run in composed observations.
 1. J1: first stage, the current record2 image and the loader-A publisher (qualified).
 2. J2: owned loader-B orchestration owns the prefix decision, wait and initializer call (qualified).
 3. J3: wrap the qualified LoaderStartup unit as one `stage-startup-artifact` piece and compose it with J1's pieces; its call of `PrivateInitialize` at loader+0x430 needs a join with the owned publisher, and the critical pair's admission reads of installer bytes `0x725a0c..0x725a34` need a join with the installer carrier.
@@ -1896,7 +1896,7 @@ Each step stages one DAT through `stage-startup-artifact`, whose composition rul
 
 Reaching #154's ready application takes three more owned units after J8 (J9 image5 initialization, J10 task constructors, J11 the task1 actor body with the pump inside it) and a composed-run endpoint that is a semantic first-ready check instead of menu equality; scope, retained seams and prerequisites are in [startup-application-readiness.md](startup-application-readiness.md).
 
-Run order follows the steps; each step's runs wait on its host admission and reviews. Step 2's host work can proceed beside step 0; step 1 needs 0(a) and 0(b).
+Step numbers give composition order, not a schedule: host work on every remaining step runs in parallel.
 
 #### Step 0 mechanisms
 
