@@ -1314,6 +1314,39 @@ The staged cutover passes one natural no-card stock/owned pair: both reach the s
 
 `E-LATER-EXECUTABLE-SOURCE-150` binds the canonical image4, image5, plain image and payload separately. The following is source inference from the X-M1 1.50 listings and table bytes, not a new guest observation or an owned loading qualification. The table-dispatched later executable producers are image5 and the plain image; images0/1/4 belong to earlier loading. Other flashloader cases have the data or zero-transfer consumers listed below. This inventory is not a whole-program computed-reference closure.
 
+#### Stock plain-read failure control flow and proposed redesign
+
+`E-LATER-PLAIN-READ-FAILURES-150` establishes three conditional software-control-flow failures on the canonical X-M1 1.50 image4. The reading aid is x70view commit `c44204c8c1c87e00ed15a7d33572968afadd1b29`: aggregate `0x006fc1bc`, reader `0x006f1440` and stop `0x006ee9ec` are NONMATCHING. Expectations come from the stock instructions, not those inferred names or candidate code. The adapter `0x006fc138` calls the reader despite the decomp's write-oriented name.
+
+The native-case producer [`//replacement/plain_load:stock-read-failures`](../replacement/plain_load/StockFailures.hs) executes the complete stock function extents from entry with synthetic geometry, handles, service results and memory-backed register fixtures. Pointer-output acquisition and handle validation execute explicit synthetic service bodies that write their output arguments; other fixture services return declared scalar results. The register fixtures are synthetic, not a qualified NAND or DMA peripheral model.
+
+| Stock case | Observed oracle |
+| --- | --- |
+| Aggregate, one non-bad block, lower status `0x15` | Returns outer zero; companions `4→6`, `3→7`, `7→3`, `10→4` return their mapped errors |
+| Reader, aligned destination, pending timeout `4`, stop returns zero, final `0x006ee81c` release fails | Returns `0x15`; release-success control returns original `4` |
+| Joined aggregate → `0x006fc138` → reader | Release failure yields outer zero; release-success control yields outer `6` |
+| Channel-1 stop, state 2, `0xfff52890` bit 0 held | Exhausts budgets 6,000/6,001/6,002 at the three PCs `0x006eea34..0x006eea3c`, still state 2; bit-clear control returns zero |
+| Reader → actual stop, pending timeout `4`, busy bit held | Exhausts 6,000 instructions inside the stop loop with pending `r6 = 4`; the reader does not return |
+
+All fourteen projected native cases pass. The projection checks status and returned `r0`/SP, and for a held-busy stop checks the loop PC, polled address and unchanged channel state; the joined timeout additionally checks pending `r6`. It does not compare scratch memory. Instruction counts are execution bounds, not physical time. Natural failure reachability, hardware occurrence and image5 failure/publication consequences remain unestablished. The admitted producer read-success comparisons remain unchanged.
+
+Reproduction after building the producer and `//emulation:native-runner`:
+
+```sh
+systemd-run --user --scope -p MemoryMax=2G \
+  bazel-bin/replacement/plain_load/stock-read-failures \
+  bazel-bin/emulation/native-runner \"$IMAGE4\" \"$PRIVATE_REPORT\" --native-jobs 1
+```
+
+The following are **proposed**, pending the maintainer's decision under [compatibility and redesign](../spec/11-incremental-firmware-replacement.md#compatibility-and-redesign). They are not approved differences, implemented fixes or new producer acceptance. Each stock oracle is executable above; each fixed oracle is a proposed acceptance requirement for an owned lower read/cleanup path.
+
+| Id / status | Trigger | Stock oracle | Proposed fixed oracle | How a retained dependence would show |
+| --- | --- | --- | --- | --- |
+| `propagate-unrecognized-read-failure` / proposed | A lower read returns nonzero outside the aggregate's recognized statuses, including `0x15`, with an initially zero aggregate | One-block aggregate returns zero for `0x15` | Return a non-success result carrying the lower failure; preserve the established recognized-status mappings | A caller proceeds to progress, publication or consumer entry only because stock masked the lower failure |
+| `preserve-primary-read-error` / proposed | A primary read error is pending and final release also fails | Pending `4` becomes `0x15`; joined aggregate returns zero | Keep primary timeout `4` and expose the release failure separately; do not report a clean release | A consumer relies on `0x15` taking precedence over the primary error, or relies on that status being masked by the aggregate |
+| `bound-stop-without-success` / proposed | Channel busy bit stays set while stopping a failed read | Stop loops without a software deadline; pending timeout cannot return | At a specified owned deadline, report stop/quiescence failure with the primary error retained; do not release still-owned resources or publish successful completion while DMA quiescence is unproved | A caller or callback relies on an indefinitely pending operation, or assumes resources/data are reusable before quiescence is proved |
+
+
 #### Inputs, producers and transformations
 
 | Executable input | Producer and actual destination | Transformations and publication |

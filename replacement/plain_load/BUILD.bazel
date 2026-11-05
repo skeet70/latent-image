@@ -94,3 +94,19 @@ haskell_test(
         "//host:bytestring",
     ],
 )
+
+haskell_binary(
+    name = "stock-read-failures",
+    srcs = ["StockFailures.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:owned-case",
+        "//emulation:native-observation",
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:json",
+    ],
+)
