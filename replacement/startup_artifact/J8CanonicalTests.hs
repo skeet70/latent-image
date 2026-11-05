@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Canonical-input tests of the J8 composition: the application-pump piece
--- with the J6 pieces, its join with the image5 producer, the split image5
--- reads, composed record-5 staging and the application section's pump words.
+-- with the J6 pieces, its join with the image5 producer, full-span per-role
+-- image5 digests, composed record-5 staging and application pump words.
 module Main where
 
 import Control.Monad (unless)
@@ -137,12 +137,12 @@ main = do
   ok "without an image5 edit the producer's destination read is whole and staging is compared"
     (named "image5-producer/destination" j6 == [(0xbf1a00, 0x4f1e60, Nothing)]
       && map (\(_, _, differs) -> differs) (named "image5-producer/staging" j6) == [Nothing])
-  ok "with the pump the destination read is split around the carrier and staging differs"
-    (named "image5-producer/destination" j8 == []
-      && named "image5-producer/destination-bf1a00" j8 == [(0xbf1a00, 0xbfbd20 - 0xbf1a00, Nothing)]
-      && named "image5-producer/destination-bfbd40" j8 == [(0xbfbd40, 0x10e3860 - 0xbfbd40, Nothing)]
-      && map (\(_, len, _) -> len) (named "image5-producer/staging" j8) == [0x2e0000]
-      && all (\(_, _, differs) -> differs /= Nothing) (named "image5-producer/staging" j8))
+  let expectations = [(labelText (readLabel row), readExpect row) | piece <- compositionPieces j8
+                    , pieceKind piece == Image5Producer, row <- catalogReads (pieceCatalog piece), readExpect row /= Nothing]
+  ok "with the pump the full destination and staging reads have per-role expectations"
+    (named "image5-producer/destination" j8 == [(0xbf1a00, 0x4f1e60, Nothing)]
+      && named "image5-producer/staging" j8 == [(0x43e40000, 0x2e0000, Nothing)]
+      && expectations == [("image5-producer/destination", Just (ExpectTarget Image5)), ("image5-producer/staging", Just ExpectRecord5Media)])
 
   -- The pump's footprint guards task1's call word.
   callEdit <- maybe (H.failH "call edit length") pure (edit (at Image5 0xc23274 0xc23278) (U.putWord32 (branchLink 0xc23274 0xbfbd24)))
@@ -165,13 +165,14 @@ main = do
   section <- either (H.failH . show) pure $ do
     retainedImages <- RoleImages targets <$> plainImage (U.parsedParts (canonicalParsed source))
     composedImages <- RoleImages observed <$> plainImage composedParts
-    application (contractCarriers j8) retainedImages composedImages
-  let pumpWords' = [ (pc, before, after) | ApplicationSite _ PumpSite (Pc pc) (CodeWord before) (CodeWord after) <- applicationSites section ]
+    mapping <- applicationSiteMap (compositionPieces j8)
+    application mapping (contractCarriers j8) retainedImages composedImages
+  let pumpWords' = [ (pc, before, after) | ApplicationSite _ PumpSite (Pc pc) _ (CodeWord before) (CodeWord after) <- applicationSites section ]
   ok "the section's pump sites carry the stock word retained and the owned word composed"
     (pumpWords' == [ (pc, wordAt targets Image5 pc, wordAt observed Image5 pc) | pc <- [0xbfbd20, 0xbfbd24 .. 0xbfbd3c] ]
       && length [() | (_, before, after) <- pumpWords', before /= after] == 3)
   ok "every other site keeps one word in both roles"
-    (and [ before == after | ApplicationSite _ kind _ before after <- applicationSites section, kind /= PumpSite ])
+    (and [ before == after | ApplicationSite _ kind _ _ before after <- applicationSites section, kind /= PumpSite ])
   ok "the pump code digests differ between roles and the task1 digests do not"
     (and [ (digestRetained code == digestComposed code) == (digestRegion code /= PumpCode) | code <- applicationCode section ])
 

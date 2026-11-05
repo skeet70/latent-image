@@ -320,7 +320,7 @@ main = do
   j3Section <- either (H.failH . show) pure $ do
     retainedImages <- RoleImages targets <$> plainImage (U.parsedParts (canonicalParsed source))
     composedImages <- RoleImages j3Observed <$> plainImage j3Parts
-    application (contractCarriers j3) retainedImages composedImages
+    application (SiteMap M.empty) (contractCarriers j3) retainedImages composedImages
   U.MediaImage canonicalPlain <- either H.failH pure (U.extractPlain (U.parsedParts (canonicalParsed source)))
   let canonicalWord (Pc pc)
         | pc >= 0x1100000 = U.word32At canonicalPlain (fromIntegral (pc - 0x1100000))

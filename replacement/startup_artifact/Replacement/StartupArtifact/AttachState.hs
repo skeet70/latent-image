@@ -611,7 +611,11 @@ attachStateValue sources (AttachRules peers parts allowances registers board rel
         pure (partValue range "resident" J.Null (J.toJSON (sha256 before)) (J.toJSON (sha256 after)))
       Absent reason -> pure (partValue range "absent" (J.toJSON reason) J.Null J.Null)
     let Span target (Guest start) (Guest end) = carrier
-    pure (J.object ["piece" .= pieceKindName owner, "target" .= targetName target, "start" .= start, "end" .= end, "parts" .= partValues])
+        (composedWrites, excluded) = carrierWrites (composedPieces sources) carrier
+    pure (J.object
+      [ "piece" .= pieceKindName owner, "target" .= targetName target, "start" .= start, "end" .= end, "parts" .= partValues
+      , "composed_writes" .= composedWritesName composedWrites
+      , "retained_excluded_pcs" .= [J.object ["start" .= low, "end" .= high] | Span _ (Guest low) (Guest high) <- excluded] ])
   allowanceValues <- mapM (allowanceValue sources) allowances
   registerValues <- mapM (registerValue sources) registers
   relationValue <- relationsValue sources related
@@ -631,6 +635,14 @@ attachStateValue sources (AttachRules peers parts allowances registers board rel
     partValue (Span _ (Guest start) (Guest end)) residency reason canonicalDigest composedDigest = J.object
       ["start" .= start, "end" .= end, "residency" .= (residency :: Text), "reason" .= reason
       , "canonical_sha256" .= canonicalDigest, "composed_sha256" .= composedDigest]
+
+-- | The write rule a piece declares for one of its carriers; carriers without one compare both roles' writes.
+carrierWrites :: [Piece] -> Span -> (ComposedWrites, [Span])
+carrierWrites pieces carrier =
+  case [ (policyComposed policy, policyRetainedExcluded policy)
+       | GeneralHeapFacts facts <- map pieceFacts pieces, policy <- heapCarrierWrites facts, policySpan policy == carrier ] of
+    [rule] -> rule
+    _ -> (WritesCompared, [])
 
 allowanceValue :: AttachSources -> Allowance -> Either Refusal J.Value
 allowanceValue sources (Allowance name where' start end reason kind) = do
