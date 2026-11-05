@@ -46,7 +46,7 @@ enum LastMoveWrite {
 }
 
 #[allow(dead_code)]
-struct Case {
+struct Case<'a> {
     name: &'static str,
     receipt_sha256: &'static str,
     config_sha256: &'static str,
@@ -54,7 +54,7 @@ struct Case {
     before: [u8; BLOCK_LEN],
     last_move_before: LastMoveBefore,
     /// Each call with the block as it stood at the call.
-    calls: &'static [(Expected, [u8; BLOCK_LEN])],
+    calls: &'a [(Expected, [u8; BLOCK_LEN])],
     after: [u8; BLOCK_LEN],
     last_move_writes: &'static [LastMoveWrite],
     snapshot_writes: &'static [(u32, u32)],
@@ -68,7 +68,7 @@ const UNOBSERVED_TOKEN: RowToken = RowToken::new(0xdead_0002);
 /// Answers from the receipt's calls in order and records the first call that
 /// differs from the receipt's in kind, arguments or block.
 struct Answers<'c> {
-    case: &'c Case,
+    case: &'c Case<'c>,
     next: usize,
     snapshot_writes: Vec<(u32, u32)>,
     mismatch: Option<String>,
@@ -281,6 +281,55 @@ fn owner_cases_match_stock() {
         println!("case {name}: {}", outcome.as_ref().map_or_else(|reason| format!("FAIL {reason}"), |_| "pass".into()));
     }
     assert!(results.iter().all(|(_, outcome)| outcome.is_ok()));
+}
+
+struct RefusalAccepted;
+impl Rules for RefusalAccepted {
+    const REFUSAL_REJECTS: bool = false;
+}
+
+const fn refusal_snapshot_writes(cursor: u32) -> [(u32, u32); 22] {
+    let defaults = [1, 0x86, 0xc, 0, 0, 0, 0, 0, 0, 0, 0];
+    let token = if cursor == 4 { 0x7fff_fffe } else { 8 };
+    let words = [2, 0x10, 4, 0x1d8, token, 8, cursor, 0, 0, 0, 0];
+    let mut writes = [(0, 0); 22];
+    let mut index = 0;
+    while index < 11 {
+        let address = 0x941594 + index as u32 * 4;
+        writes[index] = (address, defaults[index]);
+        writes[index + 11] = (address, words[index]);
+        index += 1;
+    }
+    writes
+}
+
+const REFUSAL_SNAPSHOT: [(u32, u32); 22] = refusal_snapshot_writes(0);
+const REFUSAL_TERMINATOR_SNAPSHOT: [(u32, u32); 22] = refusal_snapshot_writes(4);
+
+#[test]
+fn owner_injected_refusals_match_stock() {
+    for (name, kind, cursor) in [("no-child", 0xe, 0), ("no-child-terminator", 0xe, 4), ("no-parent", 0xf, 0)] {
+        let mut before = [0; BLOCK_LEN];
+        for (offset, value) in [(0, 0x77c0f0u32), (4, 0x15b), (8, cursor), (0x18, 4), (0x424, 1), (0x42c, 1)] {
+            before[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let case = Case {
+            name,
+            receipt_sha256: "",
+            config_sha256: "",
+            event: StageEvent { kind, node: 0x10, id: 0x1d, extra: 0 },
+            before,
+            last_move_before: LastMoveBefore { class: None, token: None },
+            calls: &[(Expected::Store { slot: 0x10 }, before)],
+            after: before,
+            last_move_writes: &[],
+            snapshot_writes: if cursor == 4 { &REFUSAL_TERMINATOR_SNAPSHOT } else { &REFUSAL_SNAPSHOT },
+            result: EngineResult::Rejected,
+        };
+        assert_eq!(run_case::<Stock>(&case), Ok(()), "{name}");
+        assert!(run_case::<RefusalAccepted>(&case).is_err(), "{name}: refusal-accepted control passed");
+        println!("injected case {name}: pass; refusal-accepted control fails");
+    }
 }
 
 struct NoWrap;
