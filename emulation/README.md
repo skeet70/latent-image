@@ -2646,3 +2646,5 @@ Matched and differing reports include `coverage.stock` and `coverage.owned`: all
 
 `//emulation:record-store-pair-tests` uses synthetic nine-entry observations and must-fail mutations for a changed program payload, reordered external calls, stray retired-code fetch, foreign access to owned RAM, stock cache-age access, changed settings, invalid medium, missing captures and changed cohort bindings. These host tests do not establish a full-system cutover result.
 
+Reset snapshots contain the six declared write ranges: three settings images and three retired-RAM ranges. Admission requires all six complete ranges, while settings comparison selects only the settings images. Retired-RAM access and fetch guards remain independent of snapshot byte equality.
+

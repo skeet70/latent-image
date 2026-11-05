@@ -23,7 +23,7 @@ import Emulation.Sha256 (sha256, sha256Hex)
 import Numeric (showHex)
 import System.Exit (exitFailure)
 
-data Mutation = Original | PayloadByte | ReorderCalls | StrayFetch | ForeignRead | CacheAgeWrite | BadSettings | BadMedium | MissingCapture | BadBinding | CollectionTail | ReturnedRecord | CloseScratch | OutputStorage deriving (Eq)
+data Mutation = Original | PayloadByte | ReorderCalls | StrayFetch | ForeignRead | CacheAgeWrite | BadSettings | BadMedium | MissingCapture | BadBinding | CollectionTail | ReturnedRecord | CloseScratch | OutputStorage | MissingResetRegion | RetiredSnapshotDifference deriving (Eq)
 encode :: Value -> B.ByteString
 encode = BL.toStrict . A.encode
 hash :: B.ByteString -> String
@@ -53,7 +53,13 @@ bindings = Bindings contract (B.replicate 7776 0) symbols routes where
   routes = BL.toStrict (encodeRouteFile (RouteFile (replicate 64 '0') "fixture" CrawlEffectsSource [] phaseRoutes))
   contract = encode (object ["source_sha256" .= hash "stock-DAT","candidate_sha256" .= hash "owned-DAT","linked_sha256" .= hash (B.replicate 7776 0),"symbols_sha256" .= hash symbols,"reference_scan" .= object ["raw_candidates" .= ([]::[Value])]])
 regions :: Mutation -> Value
-regions mutation = A.toJSON [object ["start" .= rangeStart range,"bytes" .= hex (B.replicate (fromIntegral (rangeEnd range-rangeStart range)) (if mutation == BadSettings then 1 else 0))] | range <- settingsRanges]
+regions = A.toJSON . settingRows
+settingRows :: Mutation -> [Value]
+settingRows mutation = [object ["start" .= rangeStart range,"bytes" .= hex (B.replicate (fromIntegral (rangeEnd range-rangeStart range)) (if mutation == BadSettings then 1 else 0))] | range <- settingsRanges]
+resetRegions :: Mutation -> Value
+resetRegions mutation = A.toJSON (settingRows mutation ++
+  [object ["start" .= low,"bytes" .= hex (B.replicate (fromIntegral (high-low)) (if mutation == RetiredSnapshotDifference then 1 else 0))]
+  | [low,high] <- if mutation == MissingResetRegion then drop 1 retired else retired])
 medium :: Mutation -> Value
 medium mutation = if mutation == BadMedium then mediumValue True else erasedMedium
 erasedMedium :: Value
@@ -128,8 +134,8 @@ fixture role mutation = Observation receipt files where
   spec = object ["schema" .= (1::Int),"sites" .= object ([K.fromString (hexWord entry) .= ("record-entry"::T.Text) | entry <- entries] ++ ["0x6fb7c8" .= ("nand-write"::T.Text),"0x6fb57c" .= ("nand-erase"::T.Text)])
     ,"captures" .= (if mutation == MissingCapture then object [] else captureDeclarations),"hit_limit" .= (1500000::Int),"watch_limit" .= (1048576::Int),"write_ranges" .= writes,"read_ranges" .= retired,"fetch_ranges" .= fetches role]
   events = trace mutation
-  reset = object ["schema" .= (1::Int),"reset" .= object ["instructions" .= (0::Int)],"regions_at_reset" .= regions Original
-    ,"segments" .= [object ["phase" .= phase,"instructions" .= (1::Int),"hits_end" .= (if phase == FirstStartPhase then 0 else length events),"watch" .= watch role mutation,"regions" .= regions mutation] | phase <- [minBound..maxBound]::[AttachPhase]]]
+  reset = object ["schema" .= (1::Int),"reset" .= object ["instructions" .= (0::Int)],"regions_at_reset" .= resetRegions Original
+    ,"segments" .= [object ["phase" .= phase,"instructions" .= (1::Int),"hits_end" .= (if phase == FirstStartPhase then 0 else length events),"watch" .= watch role mutation,"regions" .= resetRegions mutation] | phase <- [minBound..maxBound]::[AttachPhase]]]
   files = M.fromList [(Spec,encode spec),(Extents,encode extents),(Reset,encode reset),(Hits,B.intercalate "\n" (map encode events) <> "\n"),(Steps,"[]"),(MediumFile,encode (medium mutation)),(Session,"{}")]
   receipt = encode (object ["schema" .= (1::Int),"role" .= (if role == Stock then "stock" else "owned"::T.Text),"outcome" .= object ["status" .= ("completed"::T.Text)]
     ,"inputs" .= object (["update" .= binding (if role == Stock then "stock-DAT" else "owned-DAT"),"routes" .= binding (routeBytes bindings),"contract" .= binding (contractBytes bindings),"linked" .= binding (linkedBytes bindings),"symbols" .= binding (symbolBytes bindings)]
@@ -171,6 +177,8 @@ main = do
         ,("changed collection tail fails comparison",differs CollectionTail)
         ,("void-close scratch return is excluded",matched CloseScratch)
         ,("output storage stack address is excluded",matched OutputStorage)
+        ,("missing retired reset snapshot refuses qualification",refused MissingResetRegion)
+        ,("private reset bytes are excluded from settings comparison",matched RetiredSnapshotDifference)
         ,("stray retired fetch refuses qualification",refused StrayFetch)
         ,("foreign access to owned state refuses qualification",refused ForeignRead)
         ,("stock cache-age access refuses qualification",refused CacheAgeWrite)

@@ -184,14 +184,19 @@ ownedRanges bindings = do
   need (state == 0x89f8f8 && block == 0x8a0080 && B.length (linkedBytes bindings) == 7776) "carrier placement differs"
   pure (code,[(state,0x89fa60),(block,block+0x20000)])
 
-parseRegions :: Value -> Parse Regions
-parseRegions value = do
+data RegionSnapshot = SettingsSnapshot | ResetSnapshot deriving (Eq, Show)
+parseRegions :: RegionSnapshot -> Value -> Parse Regions
+parseRegions snapshot value = do
   rows <- array value >>= mapM (\row -> do
     exact ["start","bytes"] row
     (,) <$> (Address <$> (field "start" row >>= word)) <*> (field "bytes" row >>= hex))
   let ordered = sortOn fst rows
-  need ([(addressValue start,B.length bytes) | (start,bytes) <- ordered] == [(rangeStart range,fromIntegral (rangeEnd range-rangeStart range)) | range <- settingsRanges]) "settings ranges differ"
-  pure (Regions ordered)
+      settings = [(rangeStart range,rangeEnd range) | range <- settingsRanges]
+      expected = case snapshot of
+        SettingsSnapshot -> settings
+        ResetSnapshot -> settings ++ retired
+  need ([(addressValue start,B.length bytes) | (start,bytes) <- ordered] == sort [(start,fromIntegral (end-start)) | (start,end) <- expected]) ("snapshot regions differ: " ++ show snapshot)
+  pure (Regions [(start,bytes) | (start,bytes) <- ordered, addressValue start `elem` map fst settings])
 parseMedium :: Value -> Parse Medium
 parseMedium value = do
   rows <- array value >>= mapM (\row -> do
@@ -444,7 +449,7 @@ qualify role bindings observation = do
   reset <- load Reset
   resetPoint <- field "reset" reset
   need (field "instructions" resetPoint == Right (Number 0)) "observation did not begin at reset instruction zero"
-  initial <- field "regions_at_reset" reset >>= parseRegions
+  initial <- field "regions_at_reset" reset >>= parseRegions ResetSnapshot
   segments <- field "segments" reset >>= array
   need (length segments == 3) "reset phases missing"
   let empty = State M.empty M.empty
@@ -462,11 +467,11 @@ qualify role bindings observation = do
     name <- field "phase" segment >>= text
     need (name == attachPhaseWire phase) "reset phases out of order"
     end <- field "hits_end" segment >>= int
-    after <- field "regions" segment >>= parseRegions
+    after <- field "regions" segment >>= parseRegions ResetSnapshot
     watch <- field "watch" segment
     (next,result) <- interval state name [] before after start end Nothing Nothing watch "observe"
     pure (next,after,end,acc ++ [result])) (empty,initial,0,[]) (zip [minBound..maxBound] segments)
-  attachedSettings <- field "settings_at_attach" receipt >>= parseRegions
+  attachedSettings <- field "settings_at_attach" receipt >>= parseRegions SettingsSnapshot
   need (attachedSettings == rootRegions) "attach settings differ from reset endpoint"
   attachedMedium <- field "medium_at_attach" receipt >>= parseMedium
   steps <- load Steps >>= array
@@ -480,9 +485,9 @@ qualify role bindings observation = do
     keysValue <- field "keys" step
     keys <- case A.fromJSON keysValue of A.Success parsed -> Right parsed; A.Error failure -> Left failure
     need (length keys == length parentKeys + 1 && take (length parentKeys) keys == parentKeys && S.member keys expectedPaths && S.notMember keys seen) "step path differs from routes"
-    before <- field "regions_before" step >>= parseRegions
+    before <- field "regions_before" step >>= parseRegions SettingsSnapshot
     need (before == parentRegions) "step settings do not start from parent"
-    after <- field "regions_after" step >>= parseRegions
+    after <- field "regions_after" step >>= parseRegions SettingsSnapshot
     window <- field "hits" step >>= array >>= mapM int
     (first,last') <- case window of [first,last'] | first == start -> Right (first,last'); _ -> Left "step hit intervals do not partition trace"
     ran <- field "idle" step >>= field "ran" >>= word
