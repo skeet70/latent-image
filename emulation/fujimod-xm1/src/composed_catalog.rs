@@ -1,6 +1,6 @@
 //! Strict parse of `composed-contract.json` (schema 4, or 5 with the `application` section) and the observation plan
 //! derived from it.
-use crate::attach_state::{AttachRuleRefusal, AttachRules, RawAttachRules, RuleContext, Span};
+use crate::attach_state::{AttachRuleRefusal, AttachRules, CarrierRule, ComposedWrites, RawAttachRules, RuleContext, Span};
 use fujimod_emulator::board::observation::{
     CompositeGuardConfig, DeclaredMutation, DecoderChoice, DecoderIndex, DestinationPolicy, GuardCore, GuardRange,
     GuardSpan, GuardTarget, MAX_GUARD_DECLARED_MUTATIONS, MAX_GUARD_PARTITIONS, MAX_GUARD_PC_SPANS, MAX_GUARD_RANGES,
@@ -563,6 +563,36 @@ pub struct Read {
     pub address: u32,
     pub length: u32,
     pub differs: Option<Reason>,
+    /// The digest each role's capture must have; such a read is stored as its digest and not compared across roles.
+    #[serde(default)]
+    pub expect: Option<Expectation>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExpectationKind {
+    /// A decoded target of the role's DAT.
+    Target,
+    /// The NAND bytes of the role's record-5 media window.
+    Record5Media,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Expectation {
+    pub kind: ExpectationKind,
+    pub target: Option<String>,
+    pub retained_sha256: Sha256,
+    pub composed_sha256: Sha256,
+}
+
+impl Expectation {
+    pub fn of(&self, role: Role) -> &Sha256 {
+        match role {
+            Role::Retained => &self.retained_sha256,
+            Role::Composed => &self.composed_sha256,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -631,6 +661,8 @@ pub struct Targets {
 pub struct Identities {
     pub dat_sha256: Sha256,
     pub targets: Targets,
+    #[serde(default)]
+    pub record5_media_sha256: Option<Sha256>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -868,6 +900,10 @@ pub enum CatalogRefusal {
     OwnedCodeOverlap { first: PieceKind, second: PieceKind },
     BoundaryBound { role: Role, core: Core, count: usize },
     ReadNotRetained(Label),
+    /// A read both states a difference and an expectation.
+    ReadExpectation(Label),
+    /// A carrier with a write rule was merged with another carrier into one watch class.
+    CarrierRuleClass { start: u64, end: u64 },
     IdenticalDats,
     Application(ApplicationProblem),
     PoolAllocation(PoolAllocationProblem),
@@ -1364,6 +1400,9 @@ impl Contract {
             if boundary.retained_pc.is_none() && read.differs.is_none() {
                 return Err(CatalogRefusal::ReadNotRetained(read.label.clone()));
             }
+            if read.expect.is_some() && read.differs.is_some() {
+                return Err(CatalogRefusal::ReadExpectation(read.label.clone()));
+            }
         }
         if read_bytes > READ_BYTE_LIMIT {
             return Err(CatalogRefusal::ReadBudget(read_bytes));
@@ -1400,6 +1439,12 @@ impl Contract {
         let cores = boundaries.values().flat_map(|boundary| boundary.cores.iter()).collect();
         let context = RuleContext { attach_core, cores, boundaries: &boundaries, carriers: carrier_spans };
         let attach_rules = AttachRules::parse(raw.guard.attach_state, &context).map_err(CatalogRefusal::AttachState)?;
+        for rule in &attach_rules.carrier_rules {
+            let ruled = rule.composed != ComposedWrites::Compared || !rule.retained_excluded.is_empty();
+            if ruled && !classes.iter().any(|class| (class.start, class.end) == (rule.physical.start, rule.physical.end)) {
+                return Err(CatalogRefusal::CarrierRuleClass { start: rule.physical.start, end: rule.physical.end });
+            }
+        }
         Ok(Self {
             qualification: raw.qualification,
             pending_joins: raw.pending_joins,
@@ -1470,6 +1515,11 @@ impl Contract {
 
     /// Write classes over every owned code carrier, in physical addresses.
     pub fn watch_classes(&self) -> Vec<WatchRange> { self.classes.clone() }
+
+    /// The carrier rule of the watch class at exactly the span.
+    pub fn carrier_rule(&self, start: u64, end: u64) -> Option<&CarrierRule> {
+        self.attach_rules.carrier_rules.iter().find(|rule| (rule.physical.start, rule.physical.end) == (start, end))
+    }
 
     /// Every piece's owned code PC spans in both spellings.
     pub fn owned_code_spellings(&self) -> Vec<(u64, u64)> {

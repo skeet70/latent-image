@@ -15,7 +15,8 @@
       "loader_b": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
       "image4": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
       "image5": "4444444444444444444444444444444444444444444444444444444444444444"
-    }
+    },
+    "record5_media_sha256": null
   },
   "composed": {
     "dat_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
@@ -26,7 +27,8 @@
       "loader_b": "8fb0c322a22443a3783cdab9071db17212a5629f6375646218ac1e043dc672ec",
       "image4": "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
       "image5": "4444444444444444444444444444444444444444444444444444444444444444"
-    }
+    },
+    "record5_media_sha256": null
   },
   "guard": {
     "attach": "primary-publisher/entry-core0",
@@ -64,7 +66,9 @@
               "canonical_sha256": null,
               "composed_sha256": null
             }
-          ]
+          ],
+          "composed_writes": "compared",
+          "retained_excluded_pcs": []
         },
         {
           "piece": "primary-publisher",
@@ -80,7 +84,9 @@
               "canonical_sha256": null,
               "composed_sha256": null
             }
-          ]
+          ],
+          "composed_writes": "compared",
+          "retained_excluded_pcs": []
         }
       ],
       "allowances": [],
@@ -245,7 +251,8 @@
             "boundary": "first-stage/handoff",
             "address": 1073872896,
             "length": 8,
-            "differs": null
+            "differs": null,
+            "expect": null
           }
         ]
       }
@@ -331,7 +338,8 @@
             "boundary": "primary-publisher/return-core0",
             "address": 1074059992,
             "length": 5676,
-            "differs": null
+            "differs": null,
+            "expect": null
           }
         ]
       }

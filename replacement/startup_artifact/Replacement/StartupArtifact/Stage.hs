@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Canonical decode, composition staging and the output directory.
 module Replacement.StartupArtifact.Stage
-  ( loadCanonical, loadPieces, stageComposition, writeOutputs, runStager, applicationSiteMap
+  ( loadCanonical, imageLimit, loadPieces, stageComposition, writeOutputs, runStager, applicationSiteMap
   ) where
 
 import Control.Monad (forM, forM_, unless)
@@ -52,14 +52,21 @@ loadCanonical tools scratch path = do
   (image4, image5) <- decodeImages tools scratch (U.parsedParts parsed)
   refused (canonical dat image4 image5)
 
+-- | The general heap links one flat image from 0x89cda4 to its image-5 thunk (3,493,540 bytes;
+-- replacement/general_heap/Replacement/GeneralHeap/Artifact.hs:75); every other piece fits 64 KiB.
+imageLimit :: PieceKind -> Int
+imageLimit kind = case kind of
+  GeneralHeap -> 4 * 1024 * 1024
+  _ -> 0x10000
+
 loadPieces :: Canonical -> Manifest -> IO [Piece]
 loadPieces source manifest = forM (manifestPieces manifest) $ \piece -> do
-  let linked (LinkedPaths imagePath symbolsPath) =
-        LinkedImage <$> (ImageBytes <$> H.readRegular 0x10000 imagePath) <*> (SymbolBytes <$> H.readRegular 0x10000 symbolsPath)
+  let linked kind (LinkedPaths imagePath symbolsPath) =
+        LinkedImage <$> (ImageBytes <$> H.readRegular (imageLimit kind) imagePath) <*> (SymbolBytes <$> H.readRegular 0x10000 symbolsPath)
   images <- case piece of
-    SingleImagePiece kind paths -> SingleImage kind <$> linked paths
+    SingleImagePiece kind paths -> SingleImage kind <$> linked kind paths
     LoaderStartupPiece (LoaderStartupPaths a b dispatcher installer) ->
-      LoaderStartupImages <$> linked a <*> linked b <*> linked dispatcher <*> linked installer
+      LoaderStartupImages <$> linked LoaderStartup a <*> linked LoaderStartup b <*> linked LoaderStartup dispatcher <*> linked LoaderStartup installer
   refused (derivePieceOf source images)
 
 -- | Rule 4 application, then the rule 5 postconditions on the result.
