@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "0NDYMGOdpDWqNlPUPyerW1bIbkZHjhlUmXU8dkPM4/c=",
+        "bzlTransitiveDigest": "1j8eBkUGetLxzws49ob2oxWapY/nuWSTsBzr/ELCPXM=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -636,6 +636,7 @@
                 "@@//emulation:fujimod-xm1/tests/application_observation.rs": "//emulation:fujimod-xm1/tests/application_observation.rs",
                 "@@//emulation:fujimod-xm1/tests/composed_startup.rs": "//emulation:fujimod-xm1/tests/composed_startup.rs",
                 "@@//emulation:fujimod-xm1/tests/data/composed-contract-v4.json": "//emulation:fujimod-xm1/tests/data/composed-contract-v4.json",
+                "@@//emulation:fujimod-xm1/tests/exclusive_monitor.rs": "//emulation:fujimod-xm1/tests/exclusive_monitor.rs",
                 "@@//emulation:fujimod-xm1/tests/modal_lifetime.rs": "//emulation:fujimod-xm1/tests/modal_lifetime.rs",
                 "@@//emulation:fujimod-xm1/tests/modal_lifetime_config.rs": "//emulation:fujimod-xm1/tests/modal_lifetime_config.rs",
                 "@@//emulation:fujimod-xm1/tests/modal_permit.rs": "//emulation:fujimod-xm1/tests/modal_permit.rs",

@@ -1,0 +1,581 @@
+//! Stock data addresses and record views of the X-M1 1.50 RTOS kernels in loaders A and B (#156).
+//! A view wraps a record's guest address and yields the guest addresses of its fields.
+#![cfg_attr(not(test), no_std)]
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[repr(transparent)]
+pub struct GuestAddress(pub u32);
+
+impl GuestAddress {
+    #[inline(always)]
+    pub const fn offset(self, bytes: u32) -> Self {
+        Self(self.0.wrapping_add(bytes))
+    }
+}
+
+/// The loader whose kernel owns the data.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Domain {
+    A,
+    B,
+}
+
+/// Context record +0x00: `Own` in the executing kernel's record of its own domain.
+/// Context record +0x04 and T+0x20 hold `A` or `B`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u32)]
+pub enum DomainId {
+    Own = 0,
+    A = 1,
+    B = 2,
+}
+
+impl DomainId {
+    #[inline(always)]
+    pub const fn from_word(word: u32) -> Option<Self> {
+        match word {
+            0 => Some(Self::Own),
+            1 => Some(Self::A),
+            2 => Some(Self::B),
+            _ => None,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn word(self) -> u32 {
+        self as u32
+    }
+}
+
+/// 1..=120.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[repr(transparent)]
+pub struct TaskSlot(u8);
+
+impl TaskSlot {
+    pub const COUNT: u32 = 120;
+
+    #[inline(always)]
+    pub const fn new(slot: u32) -> Option<Self> {
+        if slot >= 1 && slot <= Self::COUNT {
+            Some(Self(slot as u8))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub const fn get(self) -> u32 {
+        self.0 as u32
+    }
+}
+
+/// 0..=15; 0 is the most urgent.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[repr(transparent)]
+pub struct Priority(u8);
+
+impl Priority {
+    pub const COUNT: u32 = 16;
+
+    #[inline(always)]
+    pub const fn new(priority: u32) -> Option<Self> {
+        if priority < Self::COUNT {
+            Some(Self(priority as u8))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub const fn get(self) -> u32 {
+        self.0 as u32
+    }
+
+    /// The priority's bit in the ready bitmap.
+    #[inline(always)]
+    pub const fn bit(self) -> u32 {
+        1 << self.0
+    }
+}
+
+/// T+0x0c. `READY`, `WAIT` and `SUSPENDED` combine with each other and with the wait kinds.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[repr(transparent)]
+pub struct TaskState(u8);
+
+impl TaskState {
+    pub const DORMANT: Self = Self(0);
+    pub const READY: Self = Self(0x01);
+    pub const WAIT: Self = Self(0x02);
+    pub const SUSPENDED: Self = Self(0x04);
+    /// Wait kind: sleep or delay.
+    pub const SLEEPING: Self = Self(0x08);
+    /// Wait kind: linked into an object's queue.
+    pub const OBJECT_QUEUED: Self = Self(0x10);
+    /// Wait kind: linked into a wait queue guarded by the object domain's object lock.
+    pub const OWNER_LOCK_QUEUED: Self = Self(0x20);
+    const DEFINED: u8 = 0x3f;
+
+    #[inline(always)]
+    pub const fn from_byte(byte: u8) -> Option<Self> {
+        if byte & !Self::DEFINED == 0 {
+            Some(Self(byte))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    #[inline(always)]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    #[inline(always)]
+    pub const fn difference(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
+}
+
+/// T+0x0e. Bits 3-7 have no known reader or writer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[repr(transparent)]
+pub struct TaskFlags(pub u8);
+
+impl TaskFlags {
+    /// One queued activation request.
+    pub const QUEUED_ACTIVATION: Self = Self(0x01);
+    /// One queued wakeup request.
+    pub const QUEUED_WAKEUP: Self = Self(0x02);
+    pub const EXCEPTION_ENABLED: Self = Self(0x04);
+
+    #[inline(always)]
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+}
+
+/// The T record.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct Task(pub GuestAddress);
+
+impl Task {
+    pub const SIZE: u32 = 0x38;
+
+    /// Ready list or wait queue link.
+    #[inline(always)]
+    pub const fn next(self) -> GuestAddress {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn prev(self) -> GuestAddress {
+        self.0.offset(0x04)
+    }
+
+    /// Pointer to the task definition.
+    #[inline(always)]
+    pub const fn definition(self) -> GuestAddress {
+        self.0.offset(0x08)
+    }
+
+    /// [`TaskState`] byte.
+    #[inline(always)]
+    pub const fn state(self) -> GuestAddress {
+        self.0.offset(0x0c)
+    }
+
+    /// Current [`Priority`] byte.
+    #[inline(always)]
+    pub const fn priority(self) -> GuestAddress {
+        self.0.offset(0x0d)
+    }
+
+    /// [`TaskFlags`] byte.
+    #[inline(always)]
+    pub const fn flags(self) -> GuestAddress {
+        self.0.offset(0x0e)
+    }
+
+    /// Pending task exception bits.
+    #[inline(always)]
+    pub const fn exception_pattern(self) -> GuestAddress {
+        self.0.offset(0x10)
+    }
+
+    /// Pointer to the wait record.
+    #[inline(always)]
+    pub const fn wait(self) -> GuestAddress {
+        self.0.offset(0x14)
+    }
+
+    #[inline(always)]
+    pub const fn saved_sp(self) -> GuestAddress {
+        self.0.offset(0x18)
+    }
+
+    #[inline(always)]
+    pub const fn resume_pc(self) -> GuestAddress {
+        self.0.offset(0x1c)
+    }
+
+    /// [`DomainId`] `A` or `B`.
+    #[inline(always)]
+    pub const fn domain(self) -> GuestAddress {
+        self.0.offset(0x20)
+    }
+
+    #[inline(always)]
+    pub const fn terminate_pending(self) -> GuestAddress {
+        self.0.offset(0x24)
+    }
+
+    /// Set while a priority change waits; the value is at [`Task::pending_priority`].
+    #[inline(always)]
+    pub const fn priority_change_pending(self) -> GuestAddress {
+        self.0.offset(0x28)
+    }
+
+    #[inline(always)]
+    pub const fn cancel_pending(self) -> GuestAddress {
+        self.0.offset(0x2c)
+    }
+
+    /// Nonzero: the next switch away from the task does not save its registers.
+    #[inline(always)]
+    pub const fn context_discarded(self) -> GuestAddress {
+        self.0.offset(0x30)
+    }
+
+    #[inline(always)]
+    pub const fn pending_priority(self) -> GuestAddress {
+        self.0.offset(0x34)
+    }
+}
+
+/// Head of one circular ready list, linked through T+0x00/+0x04; an empty head points at itself.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct ReadyHead(pub GuestAddress);
+
+impl ReadyHead {
+    pub const SIZE: u32 = 8;
+
+    #[inline(always)]
+    pub const fn next(self) -> GuestAddress {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn prev(self) -> GuestAddress {
+        self.0.offset(0x04)
+    }
+}
+
+/// `{word, acquire, release}` in a context record.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct LockRecord(pub GuestAddress);
+
+impl LockRecord {
+    pub const SIZE: u32 = 0x0c;
+
+    /// Pointer to the lock word.
+    #[inline(always)]
+    pub const fn word(self) -> GuestAddress {
+        self.0
+    }
+
+    /// Pointer to the acquire function.
+    #[inline(always)]
+    pub const fn acquire(self) -> GuestAddress {
+        self.0.offset(0x04)
+    }
+
+    /// Pointer to the release function.
+    #[inline(always)]
+    pub const fn release(self) -> GuestAddress {
+        self.0.offset(0x08)
+    }
+}
+
+/// The context record describing one domain. Pointer fields hold addresses in the described
+/// domain's kernel.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct KernelContext(pub GuestAddress);
+
+impl KernelContext {
+    pub const SIZE: u32 = 0x84;
+
+    /// [`DomainId`].
+    #[inline(always)]
+    pub const fn id(self) -> GuestAddress {
+        self.0
+    }
+
+    /// [`DomainId`] `A` or `B` of the described domain.
+    #[inline(always)]
+    pub const fn owner(self) -> GuestAddress {
+        self.0.offset(0x04)
+    }
+
+    #[inline(always)]
+    pub const fn scheduler_lock(self) -> LockRecord {
+        LockRecord(self.0.offset(0x08))
+    }
+
+    #[inline(always)]
+    pub const fn object_lock(self) -> LockRecord {
+        LockRecord(self.0.offset(0x14))
+    }
+
+    #[inline(always)]
+    pub const fn ready_heads(self) -> GuestAddress {
+        self.0.offset(0x20)
+    }
+
+    #[inline(always)]
+    pub const fn ready_bitmap(self) -> GuestAddress {
+        self.0.offset(0x24)
+    }
+
+    #[inline(always)]
+    pub const fn running(self) -> GuestAddress {
+        self.0.offset(0x28)
+    }
+
+    #[inline(always)]
+    pub const fn selected(self) -> GuestAddress {
+        self.0.offset(0x2c)
+    }
+
+    #[inline(always)]
+    pub const fn dispatch_enabled(self) -> GuestAddress {
+        self.0.offset(0x30)
+    }
+
+    #[inline(always)]
+    pub const fn timer_heap(self) -> GuestAddress {
+        self.0.offset(0x34)
+    }
+
+    #[inline(always)]
+    pub const fn timer_count(self) -> GuestAddress {
+        self.0.offset(0x38)
+    }
+
+    #[inline(always)]
+    pub const fn timer_base(self) -> GuestAddress {
+        self.0.offset(0x3c)
+    }
+
+    #[inline(always)]
+    pub const fn tick_now(self) -> GuestAddress {
+        self.0.offset(0x40)
+    }
+
+    #[inline(always)]
+    pub const fn tasks(self) -> GuestAddress {
+        self.0.offset(0x44)
+    }
+
+    #[inline(always)]
+    pub const fn task_count(self) -> GuestAddress {
+        self.0.offset(0x48)
+    }
+
+    #[inline(always)]
+    pub const fn semaphores(self) -> GuestAddress {
+        self.0.offset(0x4c)
+    }
+
+    #[inline(always)]
+    pub const fn semaphore_count(self) -> GuestAddress {
+        self.0.offset(0x50)
+    }
+
+    #[inline(always)]
+    pub const fn event_flags(self) -> GuestAddress {
+        self.0.offset(0x54)
+    }
+
+    #[inline(always)]
+    pub const fn event_flag_count(self) -> GuestAddress {
+        self.0.offset(0x58)
+    }
+
+    #[inline(always)]
+    pub const fn data_queues(self) -> GuestAddress {
+        self.0.offset(0x5c)
+    }
+
+    #[inline(always)]
+    pub const fn data_queue_count(self) -> GuestAddress {
+        self.0.offset(0x60)
+    }
+
+    #[inline(always)]
+    pub const fn mailboxes(self) -> GuestAddress {
+        self.0.offset(0x64)
+    }
+
+    #[inline(always)]
+    pub const fn mailbox_count(self) -> GuestAddress {
+        self.0.offset(0x68)
+    }
+
+    #[inline(always)]
+    pub const fn fixed_pools(self) -> GuestAddress {
+        self.0.offset(0x6c)
+    }
+
+    #[inline(always)]
+    pub const fn fixed_pool_count(self) -> GuestAddress {
+        self.0.offset(0x70)
+    }
+
+    #[inline(always)]
+    pub const fn cyclics(self) -> GuestAddress {
+        self.0.offset(0x74)
+    }
+
+    #[inline(always)]
+    pub const fn cyclic_count(self) -> GuestAddress {
+        self.0.offset(0x78)
+    }
+
+    /// Pointer to the task first-entry trampoline.
+    #[inline(always)]
+    pub const fn first_entry(self) -> GuestAddress {
+        self.0.offset(0x7c)
+    }
+
+    #[inline(always)]
+    pub const fn cyclic_callback(self) -> GuestAddress {
+        self.0.offset(0x80)
+    }
+}
+
+/// Stock data words of one loader's kernel.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct DomainWords {
+    /// Nonzero while a handler runs.
+    pub handler_context: GuestAddress,
+    pub scheduler_lock: GuestAddress,
+    pub object_lock: GuestAddress,
+    /// Pointer to the executing kernel's [`KernelContext`] of its own domain.
+    pub current_context: GuestAddress,
+    /// Two [`KernelContext`] records, A's then B's.
+    pub contexts: GuestAddress,
+    /// Set by the IRQ 120 handler, consumed at the outermost IRQ exit.
+    pub reschedule: GuestAddress,
+    /// [`Priority::COUNT`] [`ReadyHead`]s.
+    pub ready_heads: GuestAddress,
+    pub ready_bitmap: GuestAddress,
+    pub running: GuestAddress,
+    pub dispatch_enabled: GuestAddress,
+    pub selected: GuestAddress,
+    pub timer_base: GuestAddress,
+    pub tick_now: GuestAddress,
+    pub time_offset: GuestAddress,
+    pub timer_count: GuestAddress,
+    pub timer_heap: GuestAddress,
+    /// [`TaskSlot::COUNT`] [`Task`] records.
+    pub task_table: GuestAddress,
+}
+
+impl DomainWords {
+    #[inline(always)]
+    pub const fn context(&self, of: Domain) -> KernelContext {
+        let index = match of {
+            Domain::A => 0,
+            Domain::B => 1,
+        };
+        KernelContext(self.contexts.offset(index * KernelContext::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn task(&self, slot: TaskSlot) -> Task {
+        Task(self.task_table.offset((slot.get() - 1) * Task::SIZE))
+    }
+
+    /// `None` unless `task` is a record start in this table.
+    #[inline(always)]
+    pub const fn task_slot(&self, task: Task) -> Option<TaskSlot> {
+        let bytes = task.0 .0.wrapping_sub(self.task_table.0);
+        if bytes % Task::SIZE != 0 {
+            return None;
+        }
+        TaskSlot::new(bytes / Task::SIZE + 1)
+    }
+
+    #[inline(always)]
+    pub const fn ready_head(&self, priority: Priority) -> ReadyHead {
+        ReadyHead(self.ready_heads.offset(priority.get() * ReadyHead::SIZE))
+    }
+}
+
+impl Domain {
+    #[inline(always)]
+    pub const fn id(self) -> DomainId {
+        match self {
+            Domain::A => DomainId::A,
+            Domain::B => DomainId::B,
+        }
+    }
+
+    pub const fn words(self) -> DomainWords {
+        match self {
+            Domain::A => DomainWords {
+                handler_context: GuestAddress(0x4005_45a4),
+                scheduler_lock: GuestAddress(0x4005_45c0),
+                object_lock: GuestAddress(0x4005_45c4),
+                current_context: GuestAddress(0x4005_45c8),
+                contexts: GuestAddress(0x4005_45cc),
+                reschedule: GuestAddress(0x4005_46d8),
+                ready_heads: GuestAddress(0x4005_46dc),
+                ready_bitmap: GuestAddress(0x4005_475c),
+                running: GuestAddress(0x4005_4760),
+                dispatch_enabled: GuestAddress(0x4005_4764),
+                selected: GuestAddress(0x4005_4768),
+                timer_base: GuestAddress(0x4005_476c),
+                tick_now: GuestAddress(0x4005_4770),
+                time_offset: GuestAddress(0x4005_4774),
+                timer_count: GuestAddress(0x4005_4778),
+                timer_heap: GuestAddress(0x4005_d718),
+                task_table: GuestAddress(0x4005_ff0c),
+            },
+            Domain::B => DomainWords {
+                handler_context: GuestAddress(0x400e_4564),
+                scheduler_lock: GuestAddress(0x400e_4580),
+                object_lock: GuestAddress(0x400e_4584),
+                current_context: GuestAddress(0x400e_4588),
+                contexts: GuestAddress(0x400e_458c),
+                reschedule: GuestAddress(0x400e_4698),
+                ready_heads: GuestAddress(0x400e_469c),
+                ready_bitmap: GuestAddress(0x400e_471c),
+                running: GuestAddress(0x400e_4720),
+                dispatch_enabled: GuestAddress(0x400e_4724),
+                selected: GuestAddress(0x400e_4728),
+                timer_base: GuestAddress(0x400e_472c),
+                tick_now: GuestAddress(0x400e_4730),
+                time_offset: GuestAddress(0x400e_4734),
+                timer_count: GuestAddress(0x400e_4738),
+                timer_heap: GuestAddress(0x400e_d6d8),
+                task_table: GuestAddress(0x400e_fecc),
+            },
+        }
+    }
+}

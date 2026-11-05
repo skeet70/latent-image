@@ -1,0 +1,28 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["src/lib.rs"])
+
+genrule(
+    name = "rtos-layout-host-tests-build",
+    srcs = [
+        "src/lib.rs",
+        "src/tests.rs",
+    ],
+    outs = ["rtos-layout-host-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test --crate-name=xm1_rtos_layout -C linker=$(location @lab_clang//:bin/clang) $(location src/tests.rs) -o $@",
+    executable = True,
+    tools = [
+        "@lab_clang//:bin/clang",
+        "@lab_rustc//:bin/rustc",
+    ],
+)
+
+sh_test(
+    name = "rtos-layout-host-tests",
+    size = "small",
+    srcs = ["//emulation:recovery-task-state-tests.sh"],
+    args = ["$(location :rtos-layout-host-tests-build)"],
+    data = [":rtos-layout-host-tests-build"],
+)

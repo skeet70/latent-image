@@ -10,7 +10,10 @@ exports_files(["regions.json"])
         name = "own-first-%s-rust" % domain,
         src = "src/lib.rs",
         crate_name = "xm1_rtos_own_first",
-        data = ["src/entries.rs"],
+        data = [
+            "src/entries.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+        ],
         rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain],
     )
     for domain in ["a", "b"]
@@ -35,6 +38,7 @@ genrule(
     srcs = [
         "src/lib.rs",
         "src/tests.rs",
+        "//replacement/rtos_layout:src/lib.rs",
     ],
     outs = ["own-first-host-tests-bin"],
     cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
@@ -68,5 +72,23 @@ sh_test(
         ":own-first-a.symbols",
         ":own-first-b.symbols",
         "@lab_jq//:bin/jq",
+    ],
+)
+
+sh_test(
+    name = "own-first-bin-digests-tests",
+    size = "small",
+    srcs = ["check-bin-digests.sh"],
+    args = [
+        "$(location @lab_coreutils//:bin/sha256sum)",
+        "7bef1d63ecb5fe177d313114fd63cbfbced9dca77311f5461520d42a3a643da0",
+        "$(location :own-first-a.bin)",
+        "91802f2998b8247e42cc22591fb1ac5222caccc68dd57d4be00ecef69e979149",
+        "$(location :own-first-b.bin)",
+    ],
+    data = [
+        ":own-first-a.bin",
+        ":own-first-b.bin",
+        "@lab_coreutils//:bin/sha256sum",
     ],
 )
