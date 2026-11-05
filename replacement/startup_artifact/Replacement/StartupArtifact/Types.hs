@@ -64,7 +64,7 @@ editBytes :: Edit -> B.ByteString
 editBytes (Edit _ bytes) = bytes
 
 data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup | TaskSubmission | TaskStorage
-  | IdleTask | RootTask | Image5Producer | PlainProducer | ApplicationPump | Task1Actor
+  | IdleTask | RootTask | Image5Producer | PlainProducer | ApplicationPump | Task1Actor | Image5Initializer
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 pieceKindName :: PieceKind -> Text
@@ -82,10 +82,11 @@ pieceKindName kind = case kind of
   PlainProducer -> "plain-producer"
   ApplicationPump -> "application-pump"
   Task1Actor -> "task1-actor"
+  Image5Initializer -> "image5-initializer"
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
   | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea | TaskSubmissionArea | TaskStorageArea
-  | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | ApplicationPumpArea | Task1ActorArea
+  | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | ApplicationPumpArea | Task1ActorArea | Image5InitializerArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 areaName :: Area -> Text
@@ -108,6 +109,7 @@ areaName area = case area of
   PlainProducerArea -> "plain-producer"
   ApplicationPumpArea -> "application-pump"
   Task1ActorArea -> "task1-actor"
+  Image5InitializerArea -> "image5-initializer"
 
 data FootprintBasis = AdmissionRead | RuntimePremise deriving (Eq, Ord, Show)
 
@@ -333,6 +335,7 @@ data PieceFacts
   -- | The linked application pump image.
   | ApplicationPumpFacts LinkedBytes
   | Task1ActorFacts LinkedBytes
+  | Image5InitializerFacts LinkedBytes
   deriving (Eq, Show)
 
 data Piece = Piece
@@ -375,7 +378,7 @@ data ManifestProblem
   deriving (Eq, Show)
 
 data ApplicationProblem
-  -- | A site word overlaps the named piece's carrier; only pump sites may lie in an application-pump carrier.
+  -- | The site's map and carrier ownership disagree.
   = SiteInCarrier PieceKind Pc
   -- | Code at the PC lies in neither image4, image5 nor the plain window.
   | OutsideImages Pc

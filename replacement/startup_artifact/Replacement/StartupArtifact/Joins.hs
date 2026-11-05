@@ -39,7 +39,7 @@ data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | 
   | LoaderStartupPublisher | PublisherInstallerRoots | CriticalPairInstallerRoots | DispatcherCriticalPair
   | TaskCompositionOwnedCalls | DispatcherTaskComposition | PublisherTaskServices
   | DispatcherRootEntry | DispatcherIdleEntry | WrapperIdleErrorCallback | RootTaskServices
-  | Image5ProducerServices | PlainProducerServices | ApplicationPumpServices | Task1ActorProducer | Task1ActorPump
+  | Image5ProducerServices | PlainProducerServices | ApplicationPumpServices | Task1ActorProducer | Task1ActorPump | Image5InitializerServices
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 instance JoinName JoinKind where
@@ -63,6 +63,7 @@ instance JoinName JoinKind where
   joinName ApplicationPumpServices = "application-pump-services"
   joinName Task1ActorProducer = "task1-actor-producer"
   joinName Task1ActorPump = "task1-actor-pump"
+  joinName Image5InitializerServices = "image5-initializer-services"
 
 at :: Target -> Word32 -> Word32 -> Span
 at target start end = Span target (Guest start) (Guest end)
@@ -359,7 +360,7 @@ registeredJoins =
   , loaderStartupPublisher, publisherInstallerRoots, criticalPairInstallerRoots, dispatcherCriticalPair
   , taskCompositionOwnedCalls, dispatcherTaskComposition, publisherTaskServices
   , dispatcherRootEntry, dispatcherIdleEntry, wrapperIdleErrorCallback, rootTaskServices
-  , image5ProducerServices, plainProducerServices, applicationPumpServices, task1ActorProducer, task1ActorPump ]
+  , image5ProducerServices, plainProducerServices, applicationPumpServices, task1ActorProducer, task1ActorPump, image5InitializerServices ]
 
 -- | The task wrapper, the record-2 critical pair and the task-storage transition joined as in
 -- replacement/startup_composition/Replacement/StartupComposition/TaskSubmission.hs:63-97.
@@ -600,3 +601,8 @@ task1ActorPump = Join Task1ActorPump (Set.fromList [Task1Actor,ApplicationPump])
             && lookup 0xc23278 (T1.semanticSites artifact) == Just handback
         _ -> False
       Nothing -> False ]
+image5InitializerServices :: Join JoinKind
+image5InitializerServices = Join Image5InitializerServices (Set.fromList [Image5Initializer, Image5Producer])
+  [at Image5 0xd9856c 0xd986b0]
+  (ObservationQualified "record 5 publishes the owned initializer before its entry; private-data/scratch/j9/design.md section 3")
+  []
