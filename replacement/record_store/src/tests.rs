@@ -114,3 +114,18 @@ fn rsc_6ac57c_failed_scan_leaves_recovery_and_pointer_output_unchanged() {
     assert_eq!(result, Latest::NoneValid { output: FailureOutput::Unchanged });
     assert_eq!(recovery, 0x9876);
 }
+
+#[test]
+fn rsc_6ad698_full_physical_page_collection_reaches_position_n() {
+    let mut f = Fixture::new();
+    f.area = Area::register(RecordKind::Kind1, Geometry::new(RecordBytes(0x1000), RecordCount(32), SequenceOffset(0)).unwrap());
+    for p in 0..32 {
+        f.medium.banks[0][p * 0x1000..p * 0x1000 + 2].copy_from_slice(&(p as u16).to_le_bytes());
+    }
+    let mut output = vec![0x71; 2 * BLOCK_BYTES];
+    let count = Entry::new(&mut f.medium, &mut f.staging, &mut f.block).collect(&mut f.area, &mut output);
+    assert_eq!(count, BLOCK_BYTES);
+    assert_eq!(&output[..2], &[0, 0]);
+    assert_eq!(&output[31 * 0x1000..31 * 0x1000 + 2], &[31, 0]);
+    assert_eq!(output[BLOCK_BYTES + 2], 0x71);
+}

@@ -159,6 +159,7 @@ pub unsafe extern "C" fn record_store_read_at(kind: u32, position: u32, length: 
     let output = slice::from_raw_parts_mut(output, length as usize);
     if record_store_initialized == 0 { output.fill(0); return -14; }
     let Some(kind) = RecordKind::parse(kind) else { output.fill(0); return -30; };
+    if position >= 0x40000 { *output.as_mut_ptr() = 0; return -30; }
     let mut medium = RawMedium;
     let mut staging = GuestStaging;
     match entry(&mut medium, &mut staging).read_at(kind, BytePosition(position), output) { Ok(()) => 0, Err(_) => -30 }
