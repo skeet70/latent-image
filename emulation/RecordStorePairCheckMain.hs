@@ -54,7 +54,7 @@ run [stockDirectory,ownedDirectory,contractPath,linkedPath,symbolPath,routesPath
       (_,Left failure) -> pure (False,object ["schema" .= (1::Int),"outcome" .= ("refused"::T.Text),"role" .= ("owned"::T.Text),"error" .= failure])
       (Right retained,Right candidate) -> do
         let compared = comparePair retained candidate
-        pure (either (const False) (const True) compared,comparisonValue compared)
+        pure (either (const False) (const True) compared,comparisonValue retained candidate compared)
   let (matched,report) = case result of
         Right successful -> successful
         Left failure -> (False,object ["schema" .= (1::Int),"outcome" .= ("refused"::T.Text),"error" .= displayException (failure::SomeException)])

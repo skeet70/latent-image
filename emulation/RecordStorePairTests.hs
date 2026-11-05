@@ -5,6 +5,7 @@ import Control.Monad (unless)
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
 import qualified Data.Aeson.Key as K
+import qualified Data.Aeson.KeyMap as KM
 import Data.Bits (shiftR)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Builder as BB
@@ -146,7 +147,24 @@ main = do
         (Right a,Right b) -> isLeft (comparePair a b)
         _ -> False
       refused mutation = isLeft (owned mutation)
+      reportedCoverage = case (stock,owned Original) of
+        (Right a,Right b) ->
+          let expected role = object
+                [ "role" .= (role::T.Text), "record_nand_sha256" .= Null, "external_entry_total" .= (9::Int)
+                , "external_entries" .= object
+                    [ "record_store_open" .= (1::Int), "record_store_register" .= (1::Int)
+                    , "record_store_close" .= (1::Int), "record_store_read_latest" .= (1::Int)
+                    , "record_store_append" .= (1::Int), "record_store_erase_all" .= (1::Int)
+                    , "record_store_collect" .= (1::Int), "record_store_read_at" .= (1::Int)
+                    , "record_store_zero" .= (1::Int)]
+                , "nand" .= object ["program" .= (1::Int),"erase" .= (1::Int)]]
+              report = comparisonValue a b (comparePair a b)
+           in case report of
+                Object fields -> KM.lookup "coverage" fields == Just (object ["stock" .= expected "stock","owned" .= expected "owned"])
+                _ -> False
+        _ -> False
       tests = [("nine-entry observation matches",matched Original)
+        ,("report names exercised entries and NAND requests per role/media",reportedCoverage)
         ,("changed program payload fails comparison",differs PayloadByte)
         ,("reordered external calls fail comparison",differs ReorderCalls)
         ,("changed returned record fails comparison",differs ReturnedRecord)

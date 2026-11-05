@@ -507,10 +507,33 @@ qualify role bindings observation = do
  where
   (>=>) first second value = first value >>= second
 
-comparisonValue :: Either Difference () -> Value
-comparisonValue result = case result of
-  Right () -> object ["schema" .= (1::Int),"outcome" .= ("matched"::T.Text)]
-  Left (Difference path stock owned) -> object ["schema" .= (1::Int),"outcome" .= ("different"::T.Text),"path" .= path,"stock" .= stock,"owned" .= owned]
+coverageValue :: Qualified -> Value
+coverageValue (Qualified role cohort intervals _) = object
+  [ "role" .= (if role == Stock then "stock" else "owned" :: T.Text)
+  , "record_nand_sha256" .= fmap (\(Digest value) -> value) (lookup (InputName "record-nand") cohort)
+  , "external_entries" .= object [K.fromText (entryName entry) .= length [() | Call called _ _ _ <- calls, called == entry] | entry <- [minBound..maxBound]]
+  , "external_entry_total" .= length calls
+  , "nand" .= object ["program" .= length [() | Program _ _ <- requests],"erase" .= length [() | Erase _ _ <- requests]]
+  ]
+ where
+  calls = concat [observed | Interval _ _ observed _ _ _ _ _ <- intervals]
+  requests = concat [observed | Interval _ _ _ observed _ _ _ _ <- intervals]
+  entryName entry = case entry of
+    Open -> "record_store_open"
+    Register -> "record_store_register"
+    Close -> "record_store_close"
+    Latest -> "record_store_read_latest"
+    Append -> "record_store_append"
+    EraseAll -> "record_store_erase_all"
+    Collect -> "record_store_collect"
+    ReadAt -> "record_store_read_at"
+    Zero -> "record_store_zero"
+
+comparisonValue :: Qualified -> Qualified -> Either Difference () -> Value
+comparisonValue stock owned result = object
+  (["schema" .= (1::Int),"coverage" .= object ["stock" .= coverageValue stock,"owned" .= coverageValue owned]] ++ case result of
+    Right () -> ["outcome" .= ("matched"::T.Text)]
+    Left (Difference path expected actual) -> ["outcome" .= ("different"::T.Text),"path" .= path,"stock" .= expected,"owned" .= actual])
 showValue :: Show a => a -> Value
 showValue = String . T.pack . show
 comparePair :: Qualified -> Qualified -> Either Difference ()
