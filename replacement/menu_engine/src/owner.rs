@@ -489,7 +489,7 @@ fn owner_controls_fail() {
         ("zero-scroll", control::<ZeroScroll>("zero-scroll"), &[]),
         ("no-push-classifier", control::<NoPushClassifier>("no-push-classifier"), &[]),
         ("down-scroll-keeps-top", control::<DownScrollKeepsTop>("down-scroll-keeps-top"), &[]),
-        ("open-scroll-at-zero", control::<OpenScrollAtZero>("open-scroll-at-zero"), &[]),
+        ("open-scroll-at-zero", control::<OpenScrollAtZero>("open-scroll-at-zero"), &["fn"]),
         ("pop-no-remember", control::<PopNoRemember>("pop-no-remember"), &["pop-remember"]),
         ("remember-ignores-flag", control::<RememberIgnoresFlag>("remember-ignores-flag"), &["pop-remember-off", "push-remember-off"]),
         ("remember-ignores-parent-id", control::<RememberIgnoresParentId>("remember-ignores-parent-id"), &["push-same-parent"]),
