@@ -9,6 +9,9 @@ module PropertyFields
   , Loc (..)
   , Extract (..)
   , Source (..)
+  , Val (..)
+  , Step (..)
+  , CallRecord (..)
   , ArmResult (..)
   , StoreRecord (..)
   , Outcome (..)
@@ -18,8 +21,11 @@ module PropertyFields
   , PathEnd (..)
   , CutReason (..)
   , PathStore (..)
+  , PathEvent (..)
   , ExitRecord (..)
   , PathRecord (..)
+  , pathStores
+  , pathCalls
   , Arm (..)
   , tableArms
   , getterTable
@@ -83,7 +89,7 @@ data Loc = Loc { locBase :: Word32, locTerms :: [(ArgumentIndex, Word32)], locOf
 -- | Bit range of a loaded or inserted value.
 data Extract = Extract { extractLsb :: Int, extractBits :: Int, extractSigned :: Bool } deriving (Eq, Ord, Show)
 
-data Source = FromArgument ArgumentIndex | FromField Loc Extract | FromConstant Word32 | FromOther deriving (Eq, Ord, Show)
+data Source = FromArgument ArgumentIndex | FromField Loc Extract | FromConstant Word32 | FromCall CallRecord | FromOther deriving (Eq, Ord, Show)
 
 -- | Linear holds at least one term and is never a single unit term over base 0, which is Arg.
 data Val
@@ -92,10 +98,14 @@ data Val
   | Linear Word32 [(ArgumentIndex, Word32)]
   | Field Loc [Step]
   | Inserted Loc [Step] Source Int Int
+  | CallResult CallRecord
   | DefaultRequested
   | Incoming
   | Other
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
+
+-- | A BL on a path: its target and the values of r0-r3 at the BL.
+data CallRecord = CallRecord { callTarget :: Word32, callArguments :: [(Int, Val)] } deriving (Eq, Ord, Show)
 
 -- | A value's base and terms when it is a constant plus strides times arguments.
 linearOf :: Val -> Maybe (Word32, [(ArgumentIndex, Word32)])
@@ -129,7 +139,7 @@ times left right = case (left, right) of
   (_, Const factor) -> scaled factor left
   _ -> Other
 
-data Step = Ubfx Int Int | Sbfx Int Int | Lsr Int | Mask Word32 deriving (Eq, Show)
+data Step = Ubfx Int Int | Sbfx Int Int | Lsr Int | Mask Word32 deriving (Eq, Ord, Show)
 
 -- | The bit range a sequence of steps selects from a field, or Nothing for an unrecognized sequence.
 extractOf :: Loc -> [Step] -> Maybe Extract
@@ -145,13 +155,13 @@ extractOf loc = go (Extract 0 (8 * locBytes loc) False)
       _ -> Nothing
 
 -- | ReturnsIncoming is r0 unchanged from the value a shared exit was entered with.
-data ArmResult = ReturnsField Loc Extract | ReturnsConstant Word32 | ReturnsArgument ArgumentIndex | ReturnsIncoming | ReturnsOther deriving (Eq, Ord, Show)
+data ArmResult = ReturnsField Loc Extract | ReturnsConstant Word32 | ReturnsArgument ArgumentIndex | ReturnsCall CallRecord | ReturnsIncoming | ReturnsOther deriving (Eq, Ord, Show)
 
 data StoreRecord = StoreRecord { storeLoc :: Loc, storeExtract :: Extract, storeSource :: Source } deriving (Eq, Ord, Show)
 
 -- | What a forked conditional compared: an incoming argument, the setter's default-request flag
--- (r7 = 1 exactly when argument 1 is 0x1affffff), or a value the interpreter does not model.
-data GuardSubject = GuardArgument ArgumentIndex | GuardDefaultRequested | GuardUnmodelled deriving (Eq, Ord, Show)
+-- (r7 = 1 exactly when argument 1 is 0x1affffff), a loaded field, or a value the interpreter does not model.
+data GuardSubject = GuardArgument ArgumentIndex | GuardDefaultRequested | GuardField Loc Extract | GuardUnmodelled deriving (Eq, Ord, Show)
 
 -- | Condition code of the forking instruction; the A32 codes the interpreter does not decide are kept raw.
 data GuardCondition = CondEqual | CondNotEqual | CondHigherSame | CondLower | CondHigher | CondLowerSame | CondRaw Int deriving (Eq, Ord, Show)
@@ -169,12 +179,20 @@ data PathEnd = EndReturn ArmResult | EndExit ArmResult | EndCut CutReason derivi
 -- location the interpreter does not model.
 data PathStore = Modelled StoreRecord | Unmodelled Word32 deriving (Eq, Ord, Show)
 
+data PathEvent = EventStore PathStore | EventCall CallRecord deriving (Eq, Ord, Show)
+
 -- | The setter's shared exit run from one arm path's registers; its paths start with that arm path's guards.
 data ExitRecord = ExitRecord { exitPaths :: [PathRecord], exitComplete :: Bool } deriving (Eq, Ord, Show)
 
--- | One feasible explored path: its forks, stores and calls in execution order, its end, and for a
+-- | One feasible explored path: its forks, its stores and calls in execution order, its end, and for a
 -- setter path that reached the shared exit, the exit's continuation.
-data PathRecord = PathRecord { pathGuards :: [Guard], pathStores :: [PathStore], pathCalls :: [Word32], pathEnd :: PathEnd, pathExit :: Maybe ExitRecord } deriving (Eq, Ord, Show)
+data PathRecord = PathRecord { pathGuards :: [Guard], pathEvents :: [PathEvent], pathEnd :: PathEnd, pathExit :: Maybe ExitRecord } deriving (Eq, Ord, Show)
+
+pathStores :: PathRecord -> [PathStore]
+pathStores path = [stored | EventStore stored <- pathEvents path]
+
+pathCalls :: PathRecord -> [CallRecord]
+pathCalls path = [called | EventCall called <- pathEvents path]
 
 -- | Results over every explored path, stores, called targets, and whether exploration was cut short.
 -- outcomeReturns, outcomeStores and outcomeCalls include paths whose guards contradict; outcomePaths
@@ -218,7 +236,7 @@ setterContinuation image (PropertyId property) address =
   fst (explore image Nothing DefaultLinked [] (seed [(4, Const property), (0, Incoming), (3, Const (property - 1)), (5, Arg (ArgumentIndex 1)), (6, Arg (ArgumentIndex 2)), (8, Arg (ArgumentIndex 3)), (1, Arg (ArgumentIndex 1)), (2, Arg (ArgumentIndex 2)), (7, DefaultRequested)]) address)
 
 maxSteps, maxPaths :: Int
-maxSteps = 48
+maxSteps = 128
 maxPaths = 64
 
 data Condition = Always | Decides GuardCondition deriving (Eq)
@@ -284,12 +302,12 @@ flagsAfter regs instruction = case instruction of
   A.DataProcessing _ _ True _ _ _ -> Just NoFlags
   _ -> Nothing
 
--- | A path's forks, stores and calls, most recent first.
-data Trace = Trace [Guard] [PathStore] [Word32]
+-- | A path's forks and events, most recent first.
+data Trace = Trace [Guard] [PathEvent]
 
 data Path = Path Word32 Regs Flags Int Trace
 
-data Effect = Continue Word32 Regs | Return ArmResult | StoreThen StoreRecord Word32 Regs | UnmodelledStoreThen Word32 Regs | CallThen Word32 Word32 Regs | Abandon
+data Effect = Continue Word32 Regs | Return ArmResult | StoreThen StoreRecord Word32 Regs | UnmodelledStoreThen Word32 Regs | CallThen CallRecord Word32 Regs | Abandon
 
 guardOf :: Flags -> GuardCondition -> Bool -> Guard
 guardOf flags k = case flags of
@@ -299,6 +317,7 @@ guardOf flags k = case flags of
     subject value = case value of
       Arg n -> GuardArgument n
       DefaultRequested -> GuardDefaultRequested
+      Field loc steps | Just e <- extractOf loc steps -> GuardField loc e
       _ -> GuardUnmodelled
 
 -- | Whether the default-request flag is the setter's r7, so that argument 1 equal to 0x1affffff is
@@ -329,10 +348,10 @@ feasibleGuards link guards = all possible subjects
 
 -- | The outcome, with each feasible ended path and, for paths that reached the exit, their registers there.
 explore :: Image -> Maybe Word32 -> DefaultLink -> [Guard] -> Regs -> Word32 -> (Outcome, [(PathRecord, Maybe Regs)])
-explore image exit link prior initial start = go [Path start initial NoFlags 0 (Trace (reverse prior) [] [])] 1 [] [] True [] []
+explore image exit link prior initial start = go [Path start initial NoFlags 0 (Trace (reverse prior) [])] 1 [] [] True [] []
   where
-    record (Trace guards stores calls) end atExit
-      | feasibleGuards link guards = [(PathRecord (reverse guards) (reverse stores) (reverse calls) end Nothing, atExit)]
+    record (Trace guards events) end atExit
+      | feasibleGuards link guards = [(PathRecord (reverse guards) (reverse events) end Nothing, atExit)]
       | otherwise = []
     go [] _ returns stores complete calls paths =
       let ended = reverse paths
@@ -350,7 +369,7 @@ explore image exit link prior initial start = go [Path start initial NoFlags 0 (
                   Nothing -> if wanted == Always then flags else assume flags wanted True
                 taken = (step image raw instruction address regs, executed, trace)
                 skipped = (Continue (address + 4) regs, assume flags wanted False, trace)
-                forked k holds (effect, flags', Trace guards s c) = (effect, flags', Trace (guardOf flags k holds : guards) s c)
+                forked k holds (effect, flags', Trace guards events) = (effect, flags', Trace (guardOf flags k holds : guards) events)
                 forks = case wanted of
                   Always -> [taken]
                   Decides k -> case decided flags wanted of
@@ -358,12 +377,12 @@ explore image exit link prior initial start = go [Path start initial NoFlags 0 (
                     Just False -> [skipped]
                     Nothing -> [forked k True taken, forked k False skipped]
                 started' = started + length forks - 1
-                collect (newPending, newReturns, newStores, newCalls, whole, newPaths) (effect, flags', t@(Trace guards s c)) = case effect of
+                collect (newPending, newReturns, newStores, newCalls, whole, newPaths) (effect, flags', t@(Trace guards events)) = case effect of
                   Continue next regs' -> (Path next regs' flags' (steps + 1) t : newPending, newReturns, newStores, newCalls, whole, newPaths)
                   Return result -> (newPending, result : newReturns, newStores, newCalls, whole, record t (EndReturn result) Nothing ++ newPaths)
-                  StoreThen stored next regs' -> (Path next regs' flags' (steps + 1) (Trace guards (Modelled stored : s) c) : newPending, newReturns, stored : newStores, newCalls, whole, newPaths)
-                  UnmodelledStoreThen next regs' -> (Path next regs' flags' (steps + 1) (Trace guards (Unmodelled address : s) c) : newPending, newReturns, newStores, newCalls, whole, newPaths)
-                  CallThen target next regs' -> (Path next regs' NoFlags (steps + 1) (Trace guards s (target : c)) : newPending, newReturns, newStores, target : newCalls, whole, newPaths)
+                  StoreThen stored next regs' -> (Path next regs' flags' (steps + 1) (Trace guards (EventStore (Modelled stored) : events)) : newPending, newReturns, stored : newStores, newCalls, whole, newPaths)
+                  UnmodelledStoreThen next regs' -> (Path next regs' flags' (steps + 1) (Trace guards (EventStore (Unmodelled address) : events)) : newPending, newReturns, newStores, newCalls, whole, newPaths)
+                  CallThen called next regs' -> (Path next regs' NoFlags (steps + 1) (Trace guards (EventCall called : events)) : newPending, newReturns, newStores, callTarget called : newCalls, whole, newPaths)
                   Abandon -> (newPending, ReturnsOther : newReturns, newStores, newCalls, False, record t (EndCut Unrecognized) Nothing ++ newPaths)
                 (morePending, moreReturns, moreStores, moreCalls, stillComplete, morePaths) = foldl collect ([], [], [], [], True, []) forks
             in if started' > maxPaths
@@ -376,6 +395,7 @@ resultOf value = case value of
   Arg n -> ReturnsArgument n
   Incoming -> ReturnsIncoming
   Field loc steps | Just e <- extractOf loc steps -> ReturnsField loc e
+  CallResult called -> ReturnsCall called
   _ -> ReturnsOther
 
 sourceOf :: Val -> Source
@@ -383,6 +403,7 @@ sourceOf value = case value of
   Arg n -> FromArgument n
   Const c -> FromConstant c
   Field loc steps | Just e <- extractOf loc steps -> FromField loc e
+  CallResult called -> FromCall called
   _ -> FromOther
 
 -- | Signed form, destination, source, lsb and width.
@@ -432,6 +453,8 @@ step image raw instruction address regs
       A.DataProcessing _ A.MOV _ destination _ (A.Immediate value) -> Continue next (M.insert destination (Const value) regs)
       A.DataProcessing _ A.MVN _ destination _ (A.Immediate value) -> Continue next (M.insert destination (Const (0xffffffff - value)) regs)
       A.DataProcessing _ A.MOV _ destination _ (A.ShiftedImmediate source A.LSL 0) -> Continue next (M.insert destination (valueOf regs source) regs)
+      A.DataProcessing _ A.MOV _ destination _ (A.ShiftedImmediate source A.LSL k) | k >= 1, k <= 31 ->
+        Continue next (M.insert destination (scaled (1 `shiftL` k) (valueOf regs source)) regs)
       A.DataProcessing _ A.MOV _ destination _ (A.ShiftedImmediate source A.LSR n) ->
         Continue next (M.insert destination (shifted (valueOf regs source) n) regs)
       A.DataProcessing _ A.AND _ destination source (A.Immediate mask) ->
@@ -466,7 +489,9 @@ step image raw instruction address regs
         | otherwise -> Continue next (foldr (\r -> M.insert r Other) regs registers)
       A.StoreMultiple {} -> UnmodelledStoreThen next regs
       A.BranchExchange _ False register | register == A.lr -> Return (resultOf (valueOf regs (A.Reg 0)))
-      A.Branch _ True target -> CallThen target next (foldr (\r -> M.insert (A.Reg r) Other) regs [0, 1, 2, 3, 12])
+      A.Branch _ True target ->
+        let called = CallRecord target [(n, valueOf regs (A.Reg n)) | n <- [0 .. 3]]
+        in CallThen called next (M.insert (A.Reg 0) (CallResult called) (foldr (\r -> M.insert (A.Reg r) Other) regs [1, 2, 3, 12]))
       A.Branch _ False target -> Continue target regs
       A.Hint _ -> Continue next regs
       _ -> Abandon

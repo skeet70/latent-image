@@ -663,6 +663,9 @@
           }
         },
         {
+          "$ref": "#/$defs/callValue"
+        },
+        {
           "type": "object",
           "additionalProperties": false,
           "required": [
@@ -671,6 +674,154 @@
           "properties": {
             "kind": {
               "const": "other"
+            }
+          }
+        }
+      ]
+    },
+    "callValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "call"
+      ],
+      "properties": {
+        "kind": {
+          "const": "call"
+        },
+        "call": {
+          "$ref": "#/$defs/callRecord"
+        }
+      }
+    },
+    "callRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "arguments"
+      ],
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/address"
+        },
+        "arguments": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "register",
+              "value"
+            ],
+            "properties": {
+              "register": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3
+              },
+              "value": {
+                "$ref": "#/$defs/registerValue"
+              }
+            }
+          }
+        }
+      }
+    },
+    "registerValue": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "constant",
+            "argument",
+            "linear",
+            "field",
+            "inserted",
+            "call-result",
+            "default-requested",
+            "incoming",
+            "other"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/address"
+        },
+        "argument": {
+          "type": "integer"
+        },
+        "base": {
+          "$ref": "#/$defs/address"
+        },
+        "terms": {
+          "type": "array"
+        },
+        "location": {
+          "$ref": "#/$defs/location"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "step"
+            ],
+            "properties": {
+              "step": {
+                "enum": [
+                  "ubfx",
+                  "sbfx",
+                  "lsr",
+                  "mask"
+                ]
+              }
+            }
+          }
+        },
+        "source": {
+          "$ref": "#/$defs/value"
+        },
+        "lsb": {
+          "type": "integer"
+        },
+        "bits": {
+          "type": "integer"
+        },
+        "call": {
+          "$ref": "#/$defs/callRecord"
+        }
+      },
+      "additionalProperties": false
+    },
+    "event": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "store"
+          ],
+          "properties": {
+            "store": {
+              "$ref": "#/$defs/pathStore"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "call"
+          ],
+          "properties": {
+            "call": {
+              "$ref": "#/$defs/callRecord"
             }
           }
         }
@@ -935,6 +1086,47 @@
               "type": "object",
               "additionalProperties": false,
               "required": [
+                "kind",
+                "location",
+                "extract"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "field"
+                },
+                "location": {
+                  "$ref": "#/$defs/location"
+                },
+                "extract": {
+                  "$ref": "#/$defs/bitRange"
+                }
+              }
+            },
+            "constant": {
+              "$ref": "#/$defs/nullableAddress"
+            },
+            "condition": {
+              "$ref": "#/$defs/condition"
+            },
+            "holds": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "subject",
+            "constant",
+            "condition",
+            "holds"
+          ],
+          "properties": {
+            "subject": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
                 "kind"
               ],
               "properties": {
@@ -961,8 +1153,7 @@
       "additionalProperties": false,
       "required": [
         "guards",
-        "stores",
-        "calls",
+        "events",
         "end",
         "exit"
       ],
@@ -973,16 +1164,10 @@
             "$ref": "#/$defs/guard"
           }
         },
-        "stores": {
+        "events": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/pathStore"
-          }
-        },
-        "calls": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/address"
+            "$ref": "#/$defs/event"
           }
         },
         "end": {
@@ -1106,6 +1291,9 @@
           }
         },
         {
+          "$ref": "#/$defs/callValue"
+        },
+        {
           "type": "object",
           "additionalProperties": false,
           "required": [
@@ -1184,8 +1372,7 @@
       "additionalProperties": false,
       "required": [
         "guards",
-        "stores",
-        "calls",
+        "events",
         "end",
         "exit"
       ],
@@ -1196,16 +1383,10 @@
             "$ref": "#/$defs/guard"
           }
         },
-        "stores": {
+        "events": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/pathStore"
-          }
-        },
-        "calls": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/address"
+            "$ref": "#/$defs/event"
           }
         },
         "end": {

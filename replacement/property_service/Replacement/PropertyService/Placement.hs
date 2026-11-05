@@ -13,22 +13,25 @@ module Replacement.PropertyService.Placement
   , DataReason (..)
   , DataSite (..)
   , ExemptedHit (..)
+  , HullScan (..)
   , TableSide (..)
   , TableWord (..)
   , TablePatch (..)
   , PlacementError (..)
-  , PassedOver (..)
   , getterTableBase
   , setterTableBase
   , setterFallback
-  , getterExit
-  , setterExit
   , carrierBytes
   , inCarrier
   , scanDepth
-  , carrierCandidates
+  , setterHull
+  , carrierIntervals
   , checkPreceding
   , scanReferences
+  , hitTarget
+  , referencesInto
+  , chooseCarrier
+  , scanHull
   , hitListing
   , dataSites
   , siteWindow
@@ -42,6 +45,7 @@ import Data.Bits (shiftL, shiftR, testBit, (.&.), (.|.))
 import qualified Data.ByteString as B
 import Data.List (sortOn)
 import qualified Data.Map.Strict as M
+import Data.Maybe (listToMaybe)
 import Data.Ord (Down (..))
 import qualified Data.Set as S
 import Data.Word (Word32)
@@ -52,7 +56,7 @@ import PropertyFields (PropertyId (..))
 import Replacement.PropertyService.Classify
 import ServiceInventory (Image (..), imageWord)
 
--- | The half-open run [start, end) of stock setter arms the owned code replaces.
+-- | A half-open run [start, end) of stock setter arms.
 data Carrier = Carrier { carrierStart :: GuestAddress, carrierEnd :: GuestAddress } deriving (Eq, Show)
 
 data StubAddresses = StubAddresses { getterStub :: GuestAddress, setterStub :: GuestAddress } deriving (Eq, Show)
@@ -97,6 +101,15 @@ data ExemptedHit = ExemptedHit
   , exemptedRejectedWords :: Int
   }
 
+-- | The scan of the setter arms' hull: the hits no data site accounts for, the accepted ones, and
+-- the carrier those hits leave.
+data HullScan = HullScan
+  { hullRegion :: Carrier
+  , hullHits :: [ScanHit]
+  , hullExempted :: [ExemptedHit]
+  , hullCarrier :: Maybe Carrier
+  }
+
 data TableSide = GetterTable | SetterTable deriving (Eq, Ord, Show)
 
 data TableWord = TableWord
@@ -122,15 +135,10 @@ data PlacementError
   | CarrierReferenced [ScanHit]
   deriving (Eq, Show)
 
--- | A candidate run larger than the carrier and the preceding-word or reference-scan refusal that excludes it.
-data PassedOver = PassedOver Carrier PlacementError deriving (Eq, Show)
-
-getterTableBase, setterTableBase, setterFallback, getterExit, setterExit :: GuestAddress
+getterTableBase, setterTableBase, setterFallback :: GuestAddress
 getterTableBase = GuestAddress 0x61e12c
 setterTableBase = GuestAddress 0x6246cc
 setterFallback = GuestAddress 0x6301fc
-getterExit = GuestAddress 0x624400
-setterExit = GuestAddress 0x630200
 
 carrierBytes :: Carrier -> Int
 carrierBytes (Carrier (GuestAddress start) (GuestAddress end)) = fromIntegral (end - start)
@@ -144,28 +152,41 @@ scanDepth label = case label of
   ScanImage3 -> WordsOnly
   _ -> InstructionsAndWords
 
--- | Every maximal run of consecutive distinct setter arm targets whose properties are all owned
--- fields or slot fields, largest first, lowest address on a tie; a run ends at the next distinct
--- target, else at the setter fallback. The carrier is the first that staging admits.
-carrierCandidates :: [Property] -> [Carrier]
-carrierCandidates properties = [Carrier start end | (start, end) <- sortOn (\(GuestAddress start, GuestAddress end) -> (Down (end - start), start)) runs]
+-- | Distinct setter arm targets below the setter fallback, ascending, each with whether every
+-- property using it is owned.
+armTargets :: [Property] -> [(GuestAddress, Bool)]
+armTargets properties = M.toAscList (M.fromListWith (&&) [(propertySetterArm p, owns (propertyClass p)) | p <- properties, propertySetterArm p < setterFallback])
   where
-    targets = M.toAscList (M.fromListWith (&&) [(propertySetterArm p, ownsArm (propertyClass p)) | p <- properties])
-    bounded = zip targets (map (Just . fst) (drop 1 targets) ++ [Nothing])
-    runs = collect bounded
+    owns verdict = case verdict of
+      Owned OwnedUnassigned -> False
+      Owned _ -> True
+      Delegated _ -> False
+
+-- | [lowest setter arm, setter fallback).
+setterHull :: [Property] -> Maybe Carrier
+setterHull properties = case armTargets properties of
+  (low, _) : _ -> Just (Carrier low setterFallback)
+  [] -> Nothing
+
+-- | Each maximal run of consecutive owned arm targets as its arm starts followed by its end: the next
+-- distinct target, else the setter fallback.
+ownedRuns :: [Property] -> [[GuestAddress]]
+ownedRuns properties = collect (zip targets (map (Just . fst) (drop 1 targets) ++ [Nothing]))
+  where
+    targets = armTargets properties
     collect entries = case dropWhile (not . snd . fst) entries of
       [] -> []
-      started@(((start, _), _) : _) ->
+      started ->
         let (run, rest) = span (snd . fst) started
-            end = case snd (last run) of
-              Just next -> Just next
-              Nothing | setterFallback > fst (fst (last run)) -> Just setterFallback
-              Nothing -> Nothing
-        in maybe id (\e -> ((start, e) :)) end (collect rest)
-    ownsArm verdict = case verdict of
-      Owned (OwnedField _) -> True
-      Owned (OwnedSlotField _) -> True
-      _ -> False
+            end = maybe setterFallback id (snd (last run))
+        in (map (fst . fst) run ++ [end]) : collect rest
+
+-- | Every interval of an owned run that starts and ends at arm boundaries, largest first, lowest
+-- address on a tie.
+carrierIntervals :: [Property] -> [Carrier]
+carrierIntervals properties =
+  sortOn (\(Carrier (GuestAddress start) (GuestAddress end)) -> (Down (end - start), start))
+    [Carrier start end | boundaries <- ownedRuns properties, (index, start) <- zip [1 :: Int ..] boundaries, end <- drop index boundaries]
 
 -- | The stock word before the carrier when it transfers unconditionally: B with condition AL or
 -- `pop {..., pc}`.
@@ -180,12 +201,12 @@ checkPreceding image (Carrier (GuestAddress start) _) = case imageWord image (st
       A.LoadMultiple (A.Cond 14) base A.IncrementAfter True registers -> base == A.sp && A.pc `elem` registers
       _ -> False
 
--- | Every aligned word of the images that equals a carrier address. For images scanned as
--- instructions, also every word outside the carrier that branches, loads PC-relative or forms an ADR
--- into it, and every MOVW whose MOVT of the same register within the next 8 words builds a carrier
--- address. `exempt` lists image4 word addresses whose carrier value is accounted for.
+-- | Every aligned word of the images that equals an address in `region`. For images scanned as
+-- instructions, also every word that branches, loads PC-relative or forms an ADR into it, and every
+-- MOVW whose MOVT of the same register within the next 8 words builds an address in it. Sites inside
+-- the region are kept. `exempt` lists image4 word addresses whose value is accounted for.
 scanReferences :: Carrier -> [(ScanImage, Image)] -> S.Set GuestAddress -> [ScanHit]
-scanReferences carrier images exempt = concatMap scan images
+scanReferences region images exempt = concatMap scan images
   where
     scan (label, Image _ _ base bytes) =
       let count = B.length bytes `div` 4
@@ -193,15 +214,47 @@ scanReferences carrier images exempt = concatMap scan images
           site index = base + 4 * fromIntegral index
           instructions = scanDepth label == InstructionsAndWords
       in concat [hits label instructions (site index) (raw index) [raw later | later <- [index + 1 .. min (count - 1) (index + 8)]] | index <- [0 .. count - 1]]
-    into = inCarrier carrier . GuestAddress
+    into = inCarrier region . GuestAddress
     hits label instructions site word following =
       [ScanHit label (GuestAddress site) word WordInto | into word, not (label == ScanImage4 && S.member (GuestAddress site) exempt)]
         ++ if not instructions
           then []
           else
-            [ScanHit label (GuestAddress site) word (BranchInto (GuestAddress target)) | not (into site), Just target <- [branchTarget site word], into target]
-              ++ [ScanHit label (GuestAddress site) word (PcRelativeInto (GuestAddress target)) | not (into site), target <- pcRelativeTargets site word, into target]
+            [ScanHit label (GuestAddress site) word (BranchInto (GuestAddress target)) | Just target <- [branchTarget site word], into target]
+              ++ [ScanHit label (GuestAddress site) word (PcRelativeInto (GuestAddress target)) | target <- pcRelativeTargets site word, into target]
               ++ [ScanHit label (GuestAddress site) word (MovPairInto (GuestAddress built)) | Just built <- [movPair word following], into built]
+
+-- | The address a hit refers to.
+hitTarget :: ScanHit -> GuestAddress
+hitTarget (ScanHit _ _ word reference) = case reference of
+  BranchInto target -> target
+  WordInto -> GuestAddress word
+  MovPairInto target -> target
+  PcRelativeInto target -> target
+
+-- | The hits that refer into `interval` from a site outside it; only image4 sites can lie inside.
+referencesInto :: Carrier -> [ScanHit] -> [ScanHit]
+referencesInto interval = filter (\hit -> inCarrier interval (hitTarget hit) && not (hitImage hit == ScanImage4 && inCarrier interval (hitSite hit)))
+
+-- | The first of `carrierIntervals` whose preceding word transfers unconditionally and that no hit
+-- from outside it reaches.
+chooseCarrier :: Image -> [Property] -> [ScanHit] -> Maybe Carrier
+chooseCarrier image properties hits = listToMaybe [interval | interval <- carrierIntervals properties, admissible interval]
+  where
+    byTarget = M.fromListWith (++) [(target, [hit]) | hit <- hits, let GuestAddress target = hitTarget hit]
+    admissible interval@(Carrier (GuestAddress low) (GuestAddress high)) =
+      either (const False) (const True) (checkPreceding image interval)
+        && null (referencesInto interval (concat (M.elems (M.takeWhileAntitone (< high) (M.dropWhileAntitone (< low) byTarget)))))
+
+-- | The hull scan of `scanned` for the classified properties. The repointed setter table words of
+-- owned properties are exempt.
+scanHull :: Image -> [(ScanImage, Image)] -> [Property] -> Either PlacementError HullScan
+scanHull image4 scanned properties = do
+  hull <- maybe (Left NoOwnedRun) Right (setterHull properties)
+  let GuestAddress setterTable = setterTableBase
+      exempt = S.fromList [GuestAddress (setterTable + 4 * (n - 1)) | Property (PropertyId n) _ _ (Owned _) <- properties]
+      (refused, exempted) = partitionHits scanned dataSites (scanReferences hull scanned exempt)
+  pure (HullScan hull refused exempted (chooseCarrier image4 properties refused))
 
 -- | The target of B, BL or BLX (immediate).
 branchTarget :: Word32 -> Word32 -> Maybe Word32

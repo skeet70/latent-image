@@ -1,36 +1,54 @@
 @ Owned arm stubs, entered from the stock getter and setter jump tables inside the stock frame,
 @ and the accessors: the only stores the owned service makes outside the stack, and its reads of
-@ the stock settings images and defaults.
+@ the stock settings images, defaults and configuration bytes.
     .syntax unified
     .arm
 
-@ The getter prologue saved r4 and r5, so r4 carries the property id across the call; r1, r2 and
-@ r3 hold the bank, defaults flag and slot. The shared exit 0x624400 compares r12 with the
-@ properties it adjusts.
+@ The getter prologue pushed {r4, r5, r11, lr}; r12 holds the property id and r1, r2 and r3 the
+@ bank, defaults flag and slot.
     .section .text.xm1_getter_stub,"ax",%progbits
     .global xm1_getter_stub
     .type xm1_getter_stub,%function
     .p2align 2
 xm1_getter_stub:
-    mov r4, r12
     mov r0, r12
     bl xm1_property_get
-    mov r12, r4
-    b xm1_getter_exit
+    pop {r4, r5, r11, pc}
     .size xm1_getter_stub, . - xm1_getter_stub
 
-@ The setter prologue holds the property, value, bank and slot in r4, r5, r6 and r8.
+@ The setter prologue pushed {r3-r8, r11, lr} and holds the property, value, bank and slot in r4,
+@ r5, r6 and r8, and r7 is free. For a bracketed set the stub calls the stock open 0x61da3c and
+@ close 0x61d944 with r0 = 0x96cc64 at the stock frame's sp, as the stock arms do; across them it
+@ keeps live only r4-r7 (open) and r4-r6 (close), which the stock arms keep live across the same calls.
     .section .text.xm1_setter_stub,"ax",%progbits
     .global xm1_setter_stub
     .type xm1_setter_stub,%function
     .p2align 2
 xm1_setter_stub:
     mov r0, r4
+    mov r1, r6
+    bl xm1_set_bracketed
+    mov r7, r0
+    cmp r7, #0
+    beq 1f
+    movw r0, #0xcc64
+    movt r0, #0x96
+    bl xm1_stock_61da3c
+1:  mov r0, r4
     mov r1, r5
     mov r2, r6
     mov r3, r8
     bl xm1_property_set
-    b xm1_setter_exit
+    cmp r7, #0
+    beq 2f
+    movw r0, #0xcc64
+    movt r0, #0x96
+    bl xm1_stock_61d944
+    mov r0, r4
+    mov r1, r5
+    mov r2, r6
+    bl xm1_property_set_after
+2:  pop {r3, r4, r5, r6, r7, r8, r11, pc}
     .size xm1_setter_stub, . - xm1_setter_stub
 
     .macro accessor name, base_low, base_high, op
@@ -57,3 +75,5 @@ xm1_setter_stub:
     accessor xm1_slot_defaults_load8, 0xb804, 0x7c, "ldrb r0, [r12, r0]"
     accessor xm1_slot_defaults_load16, 0xb804, 0x7c, "ldrh r0, [r12, r0]"
     accessor xm1_tail_defaults_load8, 0xb074, 0x81, "ldrb r0, [r12, r0]"
+    accessor xm1_tail_defaults_load16, 0xb074, 0x81, "ldrh r0, [r12, r0]"
+    accessor xm1_config_load8, 0xb400, 0x96, "ldrb r0, [r12, r0]"

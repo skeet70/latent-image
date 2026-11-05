@@ -22,10 +22,24 @@ module Replacement.PropertyService.Oracle
   , defaultRequest
   , Fixture (..)
   , fixture
+  , FixtureVariant (..)
+  , variantFixture
+  , variantTag
+  , variantNote
+  , configVariantsOf
+  , ConfigRead (..)
+  , configReads
+  , configVariants
+  , withConfigVariants
+  , stockRead
+  , stockResult
   , Effect (..)
   , Layout (..)
   , RecordSave (..)
+  , OpenOrder (..)
   , stockLayout
+  , backupWindow
+  , callsBytes
   , modelEffect
   , modelEffectIn
   , Expectation (..)
@@ -47,6 +61,9 @@ module Replacement.PropertyService.Oracle
   , comparedRegions
   , FunctionSpan (..)
   , stockFunctions
+  , leafSpans
+  , probeSpans
+  , probes
   , splitFunctions
   , caseSpec
   , Patch (..)
@@ -59,14 +76,18 @@ module Replacement.PropertyService.Oracle
   , SlotMutation (..)
   , slotControlOperations
   , exposingSlot
+  , defaultOperations
+  , variantOperations
+  , allStockDefaults
+  , withStock
+  , stockOf
+  , exposingStockSwap
+  , exposingOpenAfterSet
+  , bracketedOwned
+  , branchLinkWord
   , branchWord
   , movwWord
   , movtWord
-  , movR12FromR4
-  , movR12Zero
-  , movR4FromR12
-  , movR6FromR12
-  , movR12FromR6
   , image4Base
   ) where
 
@@ -74,7 +95,7 @@ import Control.Monad (foldM, unless)
 import Data.Aeson (Value)
 import Data.Bits (complement, shiftL, shiftR, xor, (.&.), (.|.))
 import qualified Data.ByteString as B
-import Data.List (sortOn)
+import Data.List (nub, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isNothing, listToMaybe)
 import Data.Word (Word16, Word32, Word64, Word8)
@@ -176,19 +197,22 @@ setValue standing slot choice = case choice of
   where
     maximal = case standing of
       Classified (Owned (OwnedField arm)) -> rangeMask (fieldBits arm)
+      Classified (Owned (OwnedReadOnlyField arm)) -> rangeMask (fieldBits arm)
+      Classified (Owned (OwnedWriteOnlyPair _)) -> 0xff
       Classified (Owned (OwnedSlotField arm))
         | bankBranchSelected slot -> rangeMask (bankBits (bankArm arm))
         | otherwise -> rangeMask (recordBits (recordArm arm))
       _ -> 0x7f
 
--- | Initial bytes of the rw images every case shares, and the image4 windows of the slot-defaults
--- records and the defaults table.
+-- | Initial bytes of the rw images every case shares, the image4 windows of the slot-defaults
+-- records and the defaults table, and the variant configuration images V1-V3.
 data Fixture = Fixture
   { fixtureBanks :: B.ByteString
   , fixturePrevious :: B.ByteString
   , fixtureConfig :: B.ByteString
   , fixtureSlotDefaults :: B.ByteString
   , fixtureTailDefaults :: B.ByteString
+  , fixtureConfigVariants :: [B.ByteString]
   }
   deriving (Eq, Show)
 
@@ -209,17 +233,105 @@ slotDefaultsWindow :: Word32
 slotDefaultsWindow = slotDefaultsBase - recordStride
 
 -- | Bank 0 is an xorshift stream, bank 1 its complement and bank 2 another stream; the
--- previous-value and configuration images are streams of other seeds. The defaults windows are image4's.
+-- previous-value and configuration images are streams of other seeds. The defaults windows are
+-- image4's. The configuration variants are the stream until `withConfigVariants` chooses them.
 fixture :: B.ByteString -> Fixture
 fixture image4 =
   Fixture
     (bank0 <> B.map complement bank0 <> stream bankStrideBytes 0x85ebca6b)
     (stream previousBytes 0x2545f491)
-    (stream 0x200 0x6c8e9cf5)
+    config
     (slice image4 slotDefaultsWindow slotDefaultsBytes)
     (slice image4 tailDefaultsBase tailDefaultsBytes)
+    (replicate 3 config)
   where
     bank0 = stream bankStrideBytes 0x9e3779b9
+    config = stream 0x200 0x6c8e9cf5
+
+-- | A configuration byte an owned arm reads, as an offset from 0x96b400, what its value decides,
+-- and the values a variant tries for it, in order.
+data ConfigRead = ConfigRead
+  { readOffset :: Int
+  , readOutcome :: Word8 -> Word32
+  , readPreference :: [Word8]
+  , readLeaf :: Bool
+  }
+
+-- | The stock leaves' bytes, each gate byte (zero or not), and each configuration default's byte,
+-- tried with bits 5-7 set first.
+configReads :: [Owned] -> [ConfigRead]
+configReads owned =
+  [ConfigRead offset leaf [minBound .. maxBound] True | stock <- nub (concatMap stocks owned), let (offset, leaf) = stockRead stock]
+    ++ [ConfigRead (fromIntegral gate) (\b -> if b == 0 then 0 else 1) [minBound .. maxBound] False | gate <- nub (concatMap gates owned)]
+    ++ [ConfigRead (fromIntegral config) fromIntegral ([0xe0 .. 0xff] ++ [0 .. 0xdf]) False | config <- nub (concatMap configs owned)]
+  where
+    stocks arm = case arm of
+      OwnedField (FieldArm _ _ _ (FieldStock stock _) _ _) -> [stock]
+      OwnedSlotField (SlotArm _ _ _ (SlotStock stock) _) -> [stock]
+      _ -> []
+    gates arm = case arm of
+      OwnedField (FieldArm _ _ _ _ _ (ConfigGatedResave (ConfigOffset gate))) -> [gate]
+      _ -> []
+    configs arm = case arm of
+      OwnedField (FieldArm _ _ _ (FieldConfig (ConfigOffset config) _) _ _) -> [config]
+      _ -> []
+
+-- | Three variants of `base`, each setting every read byte to the first value in its preference
+-- whose outcome no earlier image (the base or an earlier variant) gave that byte and, for a leaf's
+-- byte, that no other leaf's byte gives in the same variant; failing both, the first new outcome,
+-- then the first outcome distinct within the variant, then the first value.
+configVariants :: [ConfigRead] -> B.ByteString -> [B.ByteString]
+configVariants wanted base = take 3 (go (M.fromList [(readOffset r, maybe [] (\b -> [readOutcome r b]) (configByteAt base (readOffset r))) | r <- wanted]))
+  where
+    go seen =
+      let (chosen, seen') = foldl choose ([], seen) wanted
+       in foldl (\bytes (offset, value) -> B.take offset bytes <> B.singleton value <> B.drop (offset + 1) bytes) base chosen : go seen'
+    choose (chosen, seen) r =
+      let earlier = M.findWithDefault [] (readOffset r) seen
+          sameVariant = [outcome | readLeaf r, (offset, value) <- chosen, Just other <- [lookup offset leaves], let outcome = other value]
+          new b = readOutcome r b `notElem` earlier
+          distinct b = readOutcome r b `notElem` sameVariant
+          pick = case [b | b <- readPreference r, new b, distinct b] ++ [b | b <- readPreference r, new b] ++ [b | b <- readPreference r, distinct b] ++ readPreference r of
+            b : _ -> b
+            [] -> 0
+       in (chosen ++ [(readOffset r, pick)], M.insertWith (++) (readOffset r) [readOutcome r pick] seen)
+    leaves = [(readOffset r, readOutcome r) | r <- wanted, readLeaf r]
+
+-- | The fixture with configuration variants chosen for the owned arms' configuration reads.
+withConfigVariants :: [Owned] -> Fixture -> Fixture
+withConfigVariants owned fx = fx {fixtureConfigVariants = configVariants (configReads owned) (fixtureConfig fx)}
+
+-- | The shared fixture, or one with a changed window: `TailWindow` sets the defaults-table byte at
+-- 0x81b075, the high byte of 0x1e6's halfword default, to 0x5a; `ConfigV1`-`ConfigV3` replace the
+-- configuration image.
+data FixtureVariant = CanonicalFixture | TailWindow | ConfigV1 | ConfigV2 | ConfigV3 deriving (Eq, Ord, Show, Enum, Bounded)
+
+configVariantsOf :: [FixtureVariant]
+configVariantsOf = [ConfigV1, ConfigV2, ConfigV3]
+
+variantFixture :: Fixture -> FixtureVariant -> Fixture
+variantFixture fx variant = case variant of
+  CanonicalFixture -> fx
+  TailWindow -> fx {fixtureTailDefaults = replaceByte 1 0x5a (fixtureTailDefaults fx)}
+  _ -> case drop (fromEnum variant - fromEnum ConfigV1) (fixtureConfigVariants fx) of
+    config : _ -> fx {fixtureConfig = config}
+    [] -> fx
+  where
+    replaceByte at value bytes = B.take at bytes <> B.singleton value <> B.drop (at + 1) bytes
+
+variantTag :: FixtureVariant -> String
+variantTag variant = case variant of
+  CanonicalFixture -> "canonical"
+  TailWindow -> "tail-window"
+  ConfigV1 -> "config-v1"
+  ConfigV2 -> "config-v2"
+  ConfigV3 -> "config-v3"
+
+variantNote :: FixtureVariant -> String
+variantNote variant = case variant of
+  CanonicalFixture -> "the shared fixture with image4's defaults windows"
+  TailWindow -> "defaults-table byte 0x81b075 set to 0x5a, so 0x1e6's halfword default differs from its low byte"
+  _ -> "configuration image " ++ show (fromEnum variant - fromEnum ConfigV1 + 1) ++ " of 3, chosen so the stock leaves, gate bytes and configuration defaults take outcomes the stream and the earlier variants do not"
 
 stream :: Int -> Word32 -> B.ByteString
 stream count seed = B.pack (take count (map (\x -> fromIntegral (x `shiftR` 24) :: Word8) (drop 1 (iterate step seed))))
@@ -260,10 +372,12 @@ insertRange bits@(BitRange lsb _) container value =
   let mask = rangeMask bits `shiftL` lsb
    in (container .&. complement mask) .|. ((value `shiftL` lsb) .&. mask)
 
+-- | r0 and the final bank, previous-value and calls images.
 data Effect = Effect
   { effectR0 :: Word32
   , effectBanks :: B.ByteString
   , effectPrevious :: B.ByteString
+  , effectCalls :: B.ByteString
   }
   deriving (Eq, Show)
 
@@ -271,53 +385,199 @@ data Effect = Effect
 -- branch's offset there (a control).
 data RecordSave = RecordSaveAtRecord | RecordSaveAtBankOffset deriving (Eq, Show)
 
--- | The defaults bases and record save the owned code uses; controls change one of them.
+-- | Whether a bracketed bank-0 set's open call comes before its first save and store, or after them
+-- (a control).
+data OpenOrder = OpenBeforeSet | OpenAfterSet deriving (Eq, Show)
+
+-- | The defaults bases, record save and open order the owned code uses; controls change one of them.
 data Layout = Layout
   { layoutSlotDefaults :: Word32
   , layoutTailDefaults :: Word32
   , layoutRecordSave :: RecordSave
+  , layoutOpen :: OpenOrder
   }
   deriving (Eq, Show)
 
 stockLayout :: Layout
-stockLayout = Layout slotDefaultsBase tailDefaultsBase RecordSaveAtRecord
+stockLayout = Layout slotDefaultsBase tailDefaultsBase RecordSaveAtRecord OpenBeforeSet
+
+-- | The calls region's bytes: the open's and close's r0 at offsets 0 and 4, the close's copy of
+-- bank-0 bytes [0, 16) at 0x10.
+callsBytes :: Int
+callsBytes = 0x20
+
+-- | The read-only window the open copies over bank-0 bytes [0, 16): their complement.
+backupWindow :: Fixture -> B.ByteString
+backupWindow fx = B.map complement (B.take 16 (fixtureBanks fx))
+
+-- | The probes' writes: the open logs 0x96cc64 at calls + 0 and copies `backup` over bank-0 bytes
+-- [0, 16); the close logs 0x96cc64 at calls + 4 and copies bank-0 bytes [0, 16) to calls + 0x10.
+openCall :: B.ByteString -> (B.ByteString, B.ByteString) -> (B.ByteString, B.ByteString)
+openCall backup (banks, calls) = (backup <> B.drop 16 banks, placeAt 0 (word32le bankBase) calls)
+
+closeCall :: (B.ByteString, B.ByteString) -> B.ByteString
+closeCall (banks, calls) = placeAt 0x10 (B.take 16 banks) (placeAt 4 (word32le bankBase) calls)
+
+placeAt :: Int -> B.ByteString -> B.ByteString -> B.ByteString
+placeAt at replacement bytes = B.take at bytes <> replacement <> B.drop (at + B.length replacement) bytes
 
 modelEffect :: Fixture -> Owned -> Operation -> Maybe Effect
 modelEffect = modelEffectIn stockLayout
 
--- | The owned semantics: the return value and the final bank and previous-value images, or Nothing
--- when an access falls outside the fixture.
-modelEffectIn :: Layout -> Fixture -> Owned -> Operation -> Maybe Effect
-modelEffectIn layout (Fixture banks previous _ slotDefaults tailDefaults) owned operation = case (owned, operation) of
-  (OwnedUnassigned, _) -> Just (unchanged 0)
-  (OwnedField (FieldArm offset width bits (FieldDefault fallback) _), Get bank mode _) -> unchanged <$> case mode of
-    DefaultRead -> Just fallback
-    LiveRead -> extractRange bits <$> load bankBase banks (bankAddress bank offset) width
-  (OwnedField (FieldArm offset width bits (FieldDefault fallback) save), Set bank slot choice) ->
-    let stored = resolved slot choice (Just fallback)
-     in write width bits save bank (bankAddress bank offset) (saveAddress offset) (saveAddress offset) =<< stored
-  (OwnedSlotField (SlotArm (BankBranch offset width bits fallback) (RecordBranch record recordWidth' recordBits') _), Get bank mode slot)
-    | bankBranchSelected slot -> unchanged <$> case mode of
-        DefaultRead -> bankDefault fallback
-        LiveRead -> extractRange bits <$> load bankBase banks (bankAddress bank offset) width
-    | otherwise -> unchanged . extractRange recordBits' <$> case mode of
-        DefaultRead -> load slotDefaultsWindow slotDefaults (slotDefaultsAddress slot record) recordWidth'
-        LiveRead -> load bankBase banks (recordAddress bank slot record) recordWidth'
-  (OwnedSlotField (SlotArm (BankBranch offset width bits fallback) (RecordBranch record recordWidth' recordBits') save), Set bank slot choice)
-    | bankBranchSelected slot ->
-        write width bits save bank (bankAddress bank offset) (saveAddress offset) (saveAddress offset) =<< resolved slot choice (bankDefault fallback)
-    | otherwise ->
-        let recordSaved = saveBase + recordBase + slotStride slot + recordOffsetWord record
-            savedTo = case layoutRecordSave layout of
-              RecordSaveAtRecord -> recordSaved
-              RecordSaveAtBankOffset -> saveAddress offset
-            recordDefault = extractRange recordBits' <$> load slotDefaultsWindow slotDefaults (slotDefaultsAddress slot record) recordWidth'
-         in write recordWidth' recordBits' save bank (recordAddress bank slot record) recordSaved savedTo =<< resolved slot choice recordDefault
+-- | The configuration byte a stock leaf reads, as an offset from 0x96b400, and its result for that
+-- byte, transcribed from image4 (0x61df44: `0x61df58`-`0x61e100`; 0x61d8a4: `0x61d8b4`-`0x61d8cc`;
+-- 0x61d59c: `0x61d5ac`-`0x61d5e0`; 0x61d618: `0x61d628`-`0x61d64c`; 0x61d5f0: `0x61d600`-`0x61d608`;
+-- 0x61d65c: `0x61d688`-`0x61d894` and its two twins for selectors 3 and 4).
+stockRead :: StockDefault -> (Int, Word8 -> Word32)
+stockRead stock = case stock of
+  Stock61df44 -> (0x35, \b -> if b <= 34 then fromIntegral b else 1)
+  Stock61d8a4 -> (0xeb, \b -> if b == 1 || b == 2 then fromIntegral b else 0)
+  Stock61d59c -> (0x27, \b -> if b <= 3 then 2 else if b <= 8 then 1 else if b == 0x81 then 1 else if b == 0x82 then 2 else 0)
+  Stock61d618 -> (0x84, \b -> if b >= 1 && b <= 3 then fromIntegral b else 0)
+  Stock61d5f0 -> (0x28, \b -> if b == 1 then 0 else 1)
+  Stock61d65c selector -> (0x81 + fromEnum selector, profile)
   where
-    unchanged r0 = Effect r0 banks previous
-    resolved slot choice fallback =
+    profile b
+      | b .&. 0x80 /= 0 = case b of
+          0x86 -> 2
+          0x87 -> 3
+          0x88 -> 4
+          _ -> 1
+      | b <= 10 = [7, 7, 7, 7, 8, 11, 14, 17, 20, 23, 25] !! fromIntegral b
+      | otherwise = 8
+
+configByteAt :: B.ByteString -> Int -> Maybe Word8
+configByteAt config offset
+  | offset >= 0 && offset < B.length config = Just (B.index config offset)
+  | otherwise = Nothing
+
+stockResult :: StockDefault -> B.ByteString -> Maybe Word32
+stockResult stock config = let (offset, leaf) = stockRead stock in leaf <$> configByteAt config offset
+
+-- | One field a set writes: its container width and bits, the save policy and bank, its address in
+-- the bank images, and the addresses a bank-0 save reads and writes the previous-value container at.
+data WriteTarget = WriteTarget Width BitRange SavePolicy Bank Word32 Word32 Word32
+
+withoutSave :: WriteTarget -> WriteTarget
+withoutSave (WriteTarget width bits _ bank live savedFrom savedTo) = WriteTarget width bits NoSave bank live savedFrom savedTo
+
+-- | The bank images and the previous-value image.
+type Images = (B.ByteString, B.ByteString)
+
+-- | On bank 0 with a save, the old bits go from the live container into the previous-value
+-- container read at `savedFrom` and written at `savedTo`; then the value is inserted.
+writeField :: WriteTarget -> Word32 -> Images -> Maybe Images
+writeField (WriteTarget width bits save bank live savedFrom savedTo) stored (banks, previous) = do
+  saved <-
+    if bank == Bank0 && save == SaveBank0Previous
+      then do
+        old <- load bankBase banks live width
+        container <- load saveBase previous savedFrom width
+        store saveBase previous savedTo width (insertRange bits container (extractRange bits old))
+      else Just previous
+  container <- load bankBase banks live width
+  updated <- store bankBase banks live width (insertRange bits container stored)
+  pure (updated, saved)
+
+-- | The owned semantics: the return value and the final bank, previous-value and calls images, or
+-- Nothing when an access falls outside the fixture.
+modelEffectIn :: Layout -> Fixture -> Owned -> Operation -> Maybe Effect
+modelEffectIn layout fx@(Fixture banks previous config slotDefaults tailDefaults _) owned operation = case (owned, operation) of
+  (OwnedUnassigned, _) -> Just (unchanged 0)
+  (OwnedReadOnlyField arm, Get bank mode _) -> getField arm bank mode
+  (OwnedReadOnlyField _, Set {}) -> Just (unchanged 0)
+  (OwnedWriteOnlyPair _, Get {}) -> Just (unchanged 0)
+  (OwnedWriteOnlyPair (PairArm first second value save), Set bank slot choice) -> do
+    let stored = fromMaybe value (requested slot choice)
+        byteAt offset = writeField (WriteTarget Byte (BitRange 0 8) save bank (bankAddress bank offset) (saveAddress offset) (saveAddress offset)) stored
+    case bank of
+      Bank0 -> bracketed (byteAt first) (byteAt second)
+      Bank1 -> done <$> (byteAt first initial >>= byteAt second)
+  (OwnedField arm, Get bank mode _) -> getField arm bank mode
+  (OwnedField (FieldArm offset width bits source save hook), Set bank slot choice) -> do
+    let target = WriteTarget width bits save bank (bankAddress bank offset) (saveAddress offset) (saveAddress offset)
+        writes from = do
+          (images, stored) <- case (requested slot choice, source) of
+            (Just value, _) -> (,) <$> writeField target value from <*> pure value
+            (Nothing, FieldDefaultOnly fallback) -> do
+              value <- fieldDefault fallback
+              (,) <$> writeField target value from <*> pure value
+            (Nothing, FieldStock stock provisional) -> do
+              result <- stockResult stock config
+              (,) <$> (writeField target provisional from >>= writeField target result) <*> pure result
+            (Nothing, FieldConfig offset' provisional) -> do
+              byte <- configValue offset'
+              (,) <$> (writeField target provisional from >>= writeField (withoutSave target) byte) <*> pure byte
+          case hook of
+            ConfigGatedResave gate -> configValue gate >>= \byte -> if byte == 0 then writeField target stored images else Just images
+            _ -> Just images
+    case (hook, bank) of
+      (Bank0Bracket, Bank0) -> bracketed writes Just
+      _ -> done <$> writes initial
+  (OwnedSlotField (SlotArm (BankBranch offset width bits fallback) (RecordBranch record recordWidth' recordBits') _ slotDefault' mirror), Get bank mode requestedSlot) ->
+    let slot = if mirror == MirrorRecord0 then SlotArgument 0 else requestedSlot
+     in unchanged <$> case (mode, slotDefault') of
+          (DefaultRead, SlotStock stock) -> stockResult stock config
+          _
+            | bankBranchSelected slot -> case mode of
+                DefaultRead -> bankDefault fallback
+                LiveRead -> extractRange bits <$> load bankBase banks (bankAddress bank offset) width
+            | otherwise -> extractRange recordBits' <$> case mode of
+                DefaultRead -> load slotDefaultsWindow slotDefaults (slotDefaultsAddress slot record) recordWidth'
+                LiveRead -> load bankBase banks (recordAddress bank slot record) recordWidth'
+  (OwnedSlotField (SlotArm (BankBranch offset width bits fallback) (RecordBranch record recordWidth' recordBits') save slotDefault' mirror), Set bank slot choice) -> do
+    let recordTarget recordSlot =
+          let recordSaved = saveBase + recordBase + slotStride recordSlot + recordOffsetWord record
+              savedTo = case layoutRecordSave layout of
+                RecordSaveAtRecord -> recordSaved
+                RecordSaveAtBankOffset -> saveAddress offset
+           in WriteTarget recordWidth' recordBits' save bank (recordAddress bank recordSlot record) recordSaved savedTo
+        recordDefault recordSlot = extractRange recordBits' <$> load slotDefaultsWindow slotDefaults (slotDefaultsAddress recordSlot record) recordWidth'
+        (target, stage2Default)
+          | bankBranchSelected slot = (WriteTarget width bits save bank (bankAddress bank offset) (saveAddress offset) (saveAddress offset), bankDefault fallback)
+          | otherwise = (recordTarget slot, recordDefault slot)
+    images <- case requested slot choice of
+      Just value -> writeField target value initial
+      Nothing -> do
+        provisional <- stage2Default
+        case slotDefault' of
+          SlotDefaultsRecord -> writeField target provisional initial
+          SlotStock stock -> stockResult stock config >>= \result -> writeField target provisional initial >>= writeField target result
+    final <- case mirror of
+      NoMirror -> Just images
+      MirrorRecord0 -> do
+        value <- maybe (recordDefault (SlotArgument 0)) Just (requested slot choice)
+        writeField (recordTarget (SlotArgument 0)) value images
+    pure (done final)
+  where
+    initial = (banks, previous)
+    initialCalls = B.replicate callsBytes 0
+    unchanged r0 = Effect r0 banks previous initialCalls
+    finished (banks', previous') = Effect 1 banks' previous'
+    done images = finished images initialCalls
+    -- A bank-0 set between the open and close calls, then `after`.
+    bracketed inside after = do
+      (written, logged) <- case layoutOpen layout of
+        OpenBeforeSet -> do
+          let (opened, logged) = openCall (backupWindow fx) (banks, initialCalls)
+          written <- inside (opened, previous)
+          pure (written, logged)
+        OpenAfterSet -> do
+          (written, saved) <- inside initial
+          let (opened, logged) = openCall (backupWindow fx) (written, initialCalls)
+          pure ((opened, saved), logged)
+      final <- after written
+      pure (finished final (closeCall (fst written, logged)))
+    requested slot choice =
       let value = setValue (Classified (Owned owned)) slot choice
-       in if value == defaultRequest then fallback else Just value
+       in if value == defaultRequest then Nothing else Just value
+    getField (FieldArm offset width bits source _ _) bank mode = unchanged <$> case (mode, source) of
+      (LiveRead, _) -> extractRange bits <$> load bankBase banks (bankAddress bank offset) width
+      (DefaultRead, FieldDefaultOnly fallback) -> fieldDefault fallback
+      (DefaultRead, FieldStock stock _) -> stockResult stock config
+      (DefaultRead, FieldConfig offset' _) -> configValue offset'
+    configValue :: ConfigOffset -> Maybe Word32
+    configValue (ConfigOffset offset) = fromIntegral <$> configByteAt config (fromIntegral offset)
     bankAddress bank (BankOffset offset) = bankBase + fromIntegral (bankStrideBytes * fromEnum bank) + fromIntegral offset
     saveAddress (BankOffset offset) = saveBase + fromIntegral offset
     slotStride (SlotArgument slot) = slot * recordStride
@@ -325,21 +585,11 @@ modelEffectIn layout (Fixture banks previous _ slotDefaults tailDefaults) owned 
     recordAddress bank slot record = bankAddress bank (BankOffset 0) + recordBase + slotStride slot + recordOffsetWord record
     slotDefaultsAddress slot record = layoutSlotDefaults layout + slotStride slot + recordOffsetWord record
     bankDefault fallback = case fallback of
-      BankConstant (FieldDefault value) -> Just value
+      BankConstant value -> Just value
       BankTailByte (TailOffset tail') -> load tailDefaultsBase tailDefaults (layoutTailDefaults layout + fromIntegral tail') Byte
-    -- On bank 0 with a save, the old bits go from the live container into the previous-value
-    -- container read at `savedFrom` and written at `savedTo`; then the value is inserted.
-    write width bits save bank live savedFrom savedTo stored = do
-      saved <-
-        if bank == Bank0 && save == SaveBank0Previous
-          then do
-            old <- load bankBase banks live width
-            container <- load saveBase previous savedFrom width
-            store saveBase previous savedTo width (insertRange bits container (extractRange bits old))
-          else Just previous
-      container <- load bankBase banks live width
-      updated <- store bankBase banks live width (insertRange bits container stored)
-      pure (Effect 1 updated saved)
+    fieldDefault fallback = case fallback of
+      DefaultConstant value -> Just value
+      DefaultTail (TailOffset tail') width -> load tailDefaultsBase tailDefaults (layoutTailDefaults layout + fromIntegral tail') width
 
 -- | What a case's JSON claims; the runner reports a mismatch but still returns the observation.
 data Expectation = Expectation
@@ -359,7 +609,7 @@ sentinel register = 0xa5a50000 + fromIntegral (fromEnum register)
 comparedRegisters :: [Register]
 comparedRegisters = R0 : calleeSaved ++ [Sp]
 
-banksId, previousId, configId, codeId, slotDefaultsId, tailDefaultsId, stackId, callerFrameId, exitId :: RegionId
+banksId, previousId, configId, codeId, slotDefaultsId, tailDefaultsId, stackId, callerFrameId, exitId, backupId, callsId :: RegionId
 banksId = RegionId "banks"
 previousId = RegionId "previous"
 configId = RegionId "config"
@@ -369,6 +619,8 @@ tailDefaultsId = RegionId "tail-defaults"
 stackId = RegionId "stack"
 callerFrameId = RegionId "caller-frame"
 exitId = RegionId "exit"
+backupId = RegionId "backup"
+callsId = RegionId "calls"
 
 -- | The rw regions whose final bytes and writes the verdict compares; the stack below entry sp is scratch.
 comparedRegions :: [(RegionId, Word32, Int)]
@@ -376,14 +628,16 @@ comparedRegions =
   [ (banksId, bankBase, bankCount * bankStrideBytes)
   , (previousId, saveBase, previousBytes)
   , (configId, configBase, 0x200)
+  , (callsId, callsBase, callsBytes)
   , (callerFrameId, stackPointer, fromIntegral (stackTop - stackPointer))
   ]
 
-configBase, stackBase, stackTop, exitAddress, image4Base :: Word32
-configBase = 0x96b400
+stackBase, stackTop, exitAddress, backupBase, callsBase, image4Base :: Word32
 stackBase = 0x959000
 stackTop = 0x959800
 exitAddress = 0x958f00
+backupBase = 0x958d00
+callsBase = 0x958e00
 image4Base = 0x61c400
 
 stackPointer :: Word32
@@ -395,7 +649,7 @@ modelExpectation fx owned operation = expected <$> modelEffect fx owned operatio
   where
     expected effect =
       Expectation Returned ((R0, effectR0 effect) : preserved)
-        [(banksId, effectBanks effect), (previousId, effectPrevious effect), (configId, fixtureConfig fx), (callerFrameId, B.replicate (fromIntegral (stackTop - stackPointer)) 0)]
+        [(banksId, effectBanks effect), (previousId, effectPrevious effect), (configId, fixtureConfig fx), (callsId, effectCalls effect), (callerFrameId, B.replicate (fromIntegral (stackTop - stackPointer)) 0)]
     preserved = [(register, sentinel register) | register <- calleeSaved] ++ [(Sp, stackPointer)]
 
 -- | A delegated case before any observation: the runner needs a claim, which is not judged.
@@ -521,13 +775,48 @@ getterSpan, setterSpan :: FunctionSpan
 getterSpan = FunctionSpan 0x61e110 0x624620
 setterSpan = FunctionSpan 0x624694 0x6309c4
 
+-- | The six stock leaves owned code calls, in the callee region [0x61d59c, 0x61e110).
+leafSpans :: [FunctionSpan]
+leafSpans =
+  [ FunctionSpan 0x61d59c 0x61d5f0
+  , FunctionSpan 0x61d5f0 0x61d618
+  , FunctionSpan 0x61d618 0x61d65c
+  , FunctionSpan 0x61d65c 0x61d8a4
+  , FunctionSpan 0x61d8a4 0x61d8dc
+  , FunctionSpan 0x61df44 0x61e110
+  ]
+
+-- | The bank-0 open 0x61da3c and close 0x61d944, which both roles run as `probes`.
+probeSpans :: [FunctionSpan]
+probeSpans = [FunctionSpan 0x61d944 0x61d994, FunctionSpan 0x61da3c 0x61da8c]
+
+-- | The words both roles carry at the start of each probe span. The open is `movw/movt r12,
+-- 0x958e00; str r0, [r12]; movw/movt r1, 0x958d00; ldm r1, {r1-r3, r12}; stm r0, {r1-r3, r12};
+-- bx lr`; the close is `movw/movt r12, 0x958e00; str r0, [r12, #4]; ldm r0, {r1-r3, r12};
+-- movw/movt r0, 0x958e10; stm r0, {r1-r3, r12}; bx lr`.
+probes :: [(Word32, [Word32])]
+probes =
+  [ (0x61da3c, [0xe308ce00, 0xe340c095, 0xe58c0000, 0xe3081d00, 0xe3401095, 0xe891100e, 0xe880100e, 0xe12fff1e])
+  , (0x61d944, [0xe308ce00, 0xe340c095, 0xe58c0004, 0xe890100e, 0xe3080e10, 0xe3400095, 0xe880100e, 0xe12fff1e])
+  ]
+
+-- | The mapped stock code: the callee region and the getter and setter.
+codeStart :: Word32
+codeStart = 0x61d59c
+
 stockFunctions :: [FunctionSpan]
-stockFunctions = [getterSpan, setterSpan]
+stockFunctions = leafSpans ++ probeSpans ++ [getterSpan, setterSpan]
 
 -- | The stock spans with the setter cut around [start, end), plus the functions declared inside it.
 splitFunctions :: (Word32, Word32) -> [FunctionSpan] -> [FunctionSpan]
 splitFunctions (start, end) inner =
-  sortOn spanStart ([getterSpan, FunctionSpan (spanStart setterSpan) start, FunctionSpan end (spanEnd setterSpan)] ++ inner)
+  sortOn spanStart (leafSpans ++ probeSpans ++ [getterSpan, FunctionSpan (spanStart setterSpan) start, FunctionSpan end (spanEnd setterSpan)] ++ inner)
+
+-- | The mapped code bytes of a role's image4, with the probes in place.
+codeBytes :: B.ByteString -> B.ByteString
+codeBytes image = foldl place (slice image codeStart (fromIntegral (spanEnd setterSpan - codeStart))) probes
+  where
+    place bytes (address, words') = placeAt (fromIntegral (address - codeStart)) (B.concat (map word32le words')) bytes
 
 slice :: B.ByteString -> Word32 -> Int -> B.ByteString
 slice image address size = B.take size (B.drop (fromIntegral (address - image4Base)) image)
@@ -545,12 +834,14 @@ caseSpec image functions fx (CaseLabel label) standing (OracleCase (PropertyId i
     , caseEntry = N.GuestAddress (fromIntegral entry)
     , caseExit = N.GuestAddress (fromIntegral exitAddress)
     , caseRegions =
-        [ region codeId (spanStart getterSpan) (fromIntegral (spanEnd setterSpan - spanStart getterSpan)) ReadExecute (slice image (spanStart getterSpan) (fromIntegral (spanEnd setterSpan - spanStart getterSpan)))
+        [ region codeId codeStart (fromIntegral (spanEnd setterSpan - codeStart)) ReadExecute (codeBytes image)
         , region slotDefaultsId slotDefaultsWindow (B.length (fixtureSlotDefaults fx)) ReadOnly (fixtureSlotDefaults fx)
         , region tailDefaultsId tailDefaultsBase (B.length (fixtureTailDefaults fx)) ReadOnly (fixtureTailDefaults fx)
         , region banksId bankBase (B.length (fixtureBanks fx)) ReadWrite (fixtureBanks fx)
         , region previousId saveBase (B.length (fixturePrevious fx)) ReadWrite (fixturePrevious fx)
         , region configId configBase (B.length (fixtureConfig fx)) ReadWrite (fixtureConfig fx)
+        , region backupId backupBase 16 ReadOnly (backupWindow fx)
+        , region callsId callsBase callsBytes ReadWrite (B.replicate callsBytes 0)
         , region stackId stackBase (fromIntegral (stackPointer - stackBase)) ReadWrite (B.replicate (fromIntegral (stackPointer - stackBase)) 0)
         , region callerFrameId stackPointer (fromIntegral (stackTop - stackPointer)) ReadWrite (B.replicate (fromIntegral (stackTop - stackPointer)) 0)
         , region exitId exitAddress 4 ReadExecute (word32le 0xe12fff1e)
@@ -587,7 +878,7 @@ applyPatches patches image = foldM one image patches
       Right (B.take at bytes <> word32le after <> B.drop (at + 4) bytes)
 
 -- | A change to one owned field's PROPERTIES entry.
-data EntryControl = OffsetMoved | SaveCleared | DefaultFlipped deriving (Eq, Show, Enum, Bounded)
+data EntryControl = OffsetMoved | SaveCleared | DefaultFlipped | TailOffsetMoved deriving (Eq, Show, Enum, Bounded)
 
 mutateArm :: EntryControl -> FieldArm -> Maybe FieldArm
 mutateArm control arm = case control of
@@ -598,7 +889,12 @@ mutateArm control arm = case control of
         moved = if offset + 2 * step <= bankStrideBytes then offset + step else offset - step
      in Just arm {fieldOffset = BankOffset (fromIntegral moved :: Word16)}
   SaveCleared -> if fieldSave arm == SaveBank0Previous then Just arm {fieldSave = NoSave} else Nothing
-  DefaultFlipped -> case fieldDefault arm of FieldDefault value -> Just arm {fieldDefault = FieldDefault (value `xor` 1)}
+  DefaultFlipped -> case fieldSource arm of
+    FieldDefaultOnly (DefaultConstant value) -> Just arm {fieldSource = FieldDefaultOnly (DefaultConstant (value `xor` 1))}
+    _ -> Nothing
+  TailOffsetMoved -> case fieldSource arm of
+    FieldDefaultOnly (DefaultTail (TailOffset tail') width) -> Just arm {fieldSource = FieldDefaultOnly (DefaultTail (TailOffset (tail' + 1)) width)}
+    _ -> Nothing
 
 entryControlOperations :: EntryControl -> [Operation]
 entryControlOperations control = filter relevant operations
@@ -610,12 +906,15 @@ entryControlOperations control = filter relevant operations
       (SaveCleared, Get _ _ _) -> False
       (DefaultFlipped, Get _ mode _) -> mode == DefaultRead
       (DefaultFlipped, Set _ _ choice) -> choice == SetDefaultRequest
+      (TailOffsetMoved, Get _ mode _) -> mode == DefaultRead
+      (TailOffsetMoved, Set _ _ choice) -> choice == SetDefaultRequest
 
--- | The first owned field whose mutated entry changes the model on one of the control's operations.
+-- | The first field the property word holds whose mutated entry changes the model on one of the
+-- control's operations.
 exposingField :: Fixture -> EntryControl -> [Property] -> Maybe (Property, FieldArm)
 exposingField fx control properties = listToMaybe
   [ (property, mutated)
-  | property@(Property _ _ _ (Owned (OwnedField arm))) <- properties
+  | property@(Property _ _ _ (Owned (OwnedField arm@(FieldArm _ _ _ (FieldDefaultOnly _) _ NoHook)))) <- properties
   , Just mutated <- [mutateArm control arm]
   , any (\operation -> modelEffect fx (OwnedField arm) operation /= modelEffect fx (OwnedField mutated) operation) (entryControlOperations control)
   ]
@@ -636,7 +935,7 @@ data SlotMutation = MutatedArm SlotArm | MutatedLayout Layout deriving (Eq, Show
 
 -- | The slot field's mutation, when the control applies to it.
 mutateSlot :: Fixture -> SlotControl -> SlotArm -> Maybe SlotMutation
-mutateSlot fx control arm@(SlotArm bank@(BankBranch _ bankWidth' bankBits' fallback) record@(RecordBranch (RecordOffset offset) width bits) save) = case control of
+mutateSlot fx control arm@(SlotArm bank@(BankBranch _ bankWidth' bankBits' fallback) record@(RecordBranch (RecordOffset offset) width bits) save _ _) = case control of
   RecordOffsetMoved ->
     let step = fromIntegral (widthBytes width)
         moved = if fromIntegral offset + 2 * step <= recordStride then fromIntegral offset + step else fromIntegral offset - step
@@ -646,9 +945,9 @@ mutateSlot fx control arm@(SlotArm bank@(BankBranch _ bankWidth' bankBits' fallb
         Just (MutatedArm arm {bankArm = bank {bankWidth = width, bankBits = bits}, recordArm = record {recordWidth = bankWidth', recordBits = bankBits'}})
     | otherwise -> Nothing
   Slot1DefaultFromRecord0 -> case (fallback, load slotDefaultsWindow (fixtureSlotDefaults fx) (slotDefaultsBase + fromIntegral offset) width) of
-    (BankConstant (FieldDefault value), Just container)
+    (BankConstant value, Just container)
       | let recordZero = extractRange bits container, recordZero /= value, recordZero <= maxDefault ->
-          Just (MutatedArm arm {bankArm = bank {bankDefault = BankConstant (FieldDefault recordZero)}})
+          Just (MutatedArm arm {bankArm = bank {bankDefault = BankConstant recordZero}})
     _ -> Nothing
   RecordSavedAtBankOffset
     | save == SaveBank0Previous -> Just (MutatedLayout stockLayout {layoutRecordSave = RecordSaveAtBankOffset})
@@ -680,11 +979,12 @@ slotControlOperations control = filter relevant operations
       SlotDefaultsMoved -> defaultRead operation && slotOf operation `elem` map SlotArgument [0, 2, 0xffffffff]
       TailDefaultsMoved -> defaultRead operation && bankBranchSelected (slotOf operation)
 
--- | The first slot field whose mutation changes the model, both inside the fixture, on one of the control's operations.
+-- | The first stage-2 slot field whose mutation changes the model, both inside the fixture, on one
+-- of the control's operations.
 exposingSlot :: Fixture -> SlotControl -> [Property] -> Maybe (Property, SlotArm, SlotMutation)
 exposingSlot fx control properties = listToMaybe
   [ (property, arm, mutation)
-  | property@(Property _ _ _ (Owned (OwnedSlotField arm))) <- properties
+  | property@(Property _ _ _ (Owned (OwnedSlotField arm@(SlotArm _ _ _ SlotDefaultsRecord NoMirror)))) <- properties
   , Just mutation <- [mutateSlot fx control arm]
   , or [before /= after | operation <- slotControlOperations control, Just before <- [modelEffect fx (OwnedSlotField arm) operation], Just after <- [mutated mutation arm operation]]
   ]
@@ -692,6 +992,69 @@ exposingSlot fx control properties = listToMaybe
     mutated mutation arm operation = case mutation of
       MutatedArm changed -> modelEffect fx (OwnedSlotField changed) operation
       MutatedLayout layout -> modelEffectIn layout fx (OwnedSlotField arm) operation
+
+-- | The getter's default reads and the setter's default requests: 10 each.
+defaultOperations :: [Operation]
+defaultOperations = [o | o@(Get _ DefaultRead _) <- operations] ++ [o | o@(Set _ _ SetDefaultRequest) <- operations]
+
+-- | The operations a property runs under each configuration variant: the default operations of a
+-- stock or configuration default, every set of a gated field.
+variantOperations :: Owned -> [Operation]
+variantOperations owned = case owned of
+  OwnedField (FieldArm _ _ _ _ _ (ConfigGatedResave _)) -> [o | o@(Set {}) <- operations]
+  OwnedField (FieldArm _ _ _ (FieldStock _ _) _ _) -> defaultOperations
+  OwnedField (FieldArm _ _ _ (FieldConfig _ _) _ _) -> defaultOperations
+  OwnedSlotField (SlotArm _ _ _ (SlotStock _) _) -> defaultOperations
+  _ -> []
+
+allStockDefaults :: [StockDefault]
+allStockDefaults = [Stock61df44, Stock61d8a4, Stock61d59c, Stock61d618, Stock61d5f0] ++ map Stock61d65c [minBound .. maxBound]
+
+-- | The arm with its stock default replaced, when it has one.
+withStock :: StockDefault -> Owned -> Maybe Owned
+withStock stock owned = case owned of
+  OwnedField arm@(FieldArm _ _ _ (FieldStock _ provisional) _ _) -> Just (OwnedField arm {fieldSource = FieldStock stock provisional})
+  OwnedSlotField arm@(SlotArm _ _ _ (SlotStock _) _) -> Just (OwnedSlotField arm {slotDefault = SlotStock stock})
+  _ -> Nothing
+
+stockOf :: Owned -> Maybe StockDefault
+stockOf owned = case owned of
+  OwnedField (FieldArm _ _ _ (FieldStock stock _) _ _) -> Just stock
+  OwnedSlotField (SlotArm _ _ _ (SlotStock stock) _) -> Just stock
+  _ -> Nothing
+
+-- | The first property with a stock default and the first other leaf whose result changes the
+-- model on one of its default operations under the stream or a configuration variant.
+exposingStockSwap :: Fixture -> [Property] -> Maybe (Property, Owned, Owned)
+exposingStockSwap fx properties = listToMaybe
+  [ (property, owned, swapped)
+  | property@(Property _ _ _ (Owned owned)) <- properties
+  , Just current <- [stockOf owned]
+  , other <- allStockDefaults, other /= current
+  , Just swapped <- [withStock other owned]
+  , or [modelEffect variantFx owned operation /= modelEffect variantFx swapped operation | variant <- CanonicalFixture : configVariantsOf, let variantFx = variantFixture fx variant, operation <- defaultOperations]
+  ]
+
+-- | Whether the setter stub brackets the property's bank-0 sets: a bracketed field or a write-only pair.
+bracketedOwned :: Owned -> Bool
+bracketedOwned owned = case owned of
+  OwnedField arm -> fieldHook arm == Bank0Bracket
+  OwnedWriteOnlyPair _ -> True
+  _ -> False
+
+-- | The first bracketed property of the class `chosen` accepts whose model on a bank-0 set changes
+-- when the open call follows its first save and store.
+exposingOpenAfterSet :: Fixture -> (Owned -> Bool) -> [Property] -> Maybe Property
+exposingOpenAfterSet fx chosen properties = listToMaybe
+  [ property
+  | property@(Property _ _ _ (Owned owned)) <- properties
+  , bracketedOwned owned, chosen owned
+  , or [modelEffect fx owned operation /= modelEffectIn stockLayout {layoutOpen = OpenAfterSet} fx owned operation | operation@(Set Bank0 _ _) <- operations]
+  ]
+
+-- | A32 @bl target@ at @site@.
+branchLinkWord :: Word32 -> Word32 -> Word32
+branchLinkWord site target = 0xeb000000 .|. (((target - site - 8) `shiftR` 2) .&. 0xffffff)
 
 -- | A32 @b target@ at @site@.
 branchWord :: Word32 -> Word32 -> Word32
@@ -702,10 +1065,3 @@ movwWord, movtWord :: Word32 -> Word32
 movwWord address = 0xe300c000 .|. ((address `shiftR` 12 .&. 0xf) `shiftL` 16) .|. (address .&. 0xfff)
 movtWord address = 0xe340c000 .|. ((address `shiftR` 28) `shiftL` 16) .|. ((address `shiftR` 16) .&. 0xfff)
 
--- | @mov r12, r4@, @mov r12, #0@, @mov r4, r12@, @mov r6, r12@ and @mov r12, r6@.
-movR12FromR4, movR12Zero, movR4FromR12, movR6FromR12, movR12FromR6 :: Word32
-movR12FromR4 = 0xe1a0c004
-movR12Zero = 0xe3a0c000
-movR4FromR12 = 0xe1a0400c
-movR6FromR12 = 0xe1a0600c
-movR12FromR6 = 0xe1a0c006

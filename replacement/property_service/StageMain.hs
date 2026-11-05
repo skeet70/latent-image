@@ -8,8 +8,9 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as L
 import qualified Emulation.Image4Staging as Image4
 import qualified FujiAF.Host as H
+import Numeric (showHex)
 import Replacement.PropertyService.Artifact
-import Replacement.PropertyService.Placement (PlacementError (..), hitListing)
+import Replacement.PropertyService.Placement (Carrier (..), GuestAddress (..), HullScan (..), PlacementError (..), hitListing)
 import System.Directory (doesPathExist)
 import System.Environment (getArgs)
 
@@ -36,7 +37,9 @@ main = do
       linked <- H.readRegular 0x2000 linkedPath
       symbols <- H.readRegular 0x10000 symbolsPath
       source <- either refuse pure (canonicalSource dat image4 loaderA loaderB image5 plain image2)
-      artifact <- either refuse pure (deriveArtifact (sourceProperties source) linked symbols)
+      carrier@(Carrier (GuestAddress low) (GuestAddress high)) <- maybe (refuse (PlacementRejected NoOwnedRun)) pure (hullCarrier (sourceHull source))
+      putStrLn ("carrier [0x" ++ showHex low "" ++ ", 0x" ++ showHex high "" ++ ")")
+      artifact <- either refuse pure (deriveArtifact (sourceProperties source) carrier linked symbols)
       staged <- either refuse pure (stageImage4 source artifact)
       scratch <- Image4.validateScratchDirectory scratchPath
       candidate <- stageCandidate (Image4.Tools encoder rebuild decoder) scratch staged

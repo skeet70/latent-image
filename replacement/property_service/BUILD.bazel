@@ -3,14 +3,30 @@ load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
 
+# The native runner refuses unaligned accesses, and admission refuses computed branches.
+_RUSTC_FLAGS = ["-C", "target-feature=+strict-align", "-C", "jump-tables=no"]
+
+_RUST_DATA = [
+    "src/property_table.rs",
+    "src/table.rs",
+]
+
+# The oracle's must-fail controls that change Rust code: each links the crate with one
+# `property_defect_*` cfg into a defect image the oracle stages like the candidate.
+_DEFECTS = [
+    "drop_provisional",
+    "drop_second_save",
+    "mask_config_default",
+    "config_save",
+    "invert_gate",
+]
+
 xm1_rust_staticlib(
     name = "property-service-rust",
     src = "src/lib.rs",
     crate_name = "xm1_property_service",
-    data = [
-        "src/property_table.rs",
-        "src/table.rs",
-    ],
+    rustc_flags = _RUSTC_FLAGS,
+    data = _RUST_DATA,
 )
 
 xm1_rust_elf(
@@ -21,6 +37,29 @@ xm1_rust_elf(
     link_script = "property-service.ld",
     extra_ldflags = ["-Wl,--gc-sections"],
 )
+
+[
+    xm1_rust_staticlib(
+        name = "property-service-rust-defect-" + defect.replace("_", "-"),
+        src = "src/lib.rs",
+        crate_name = "xm1_property_service",
+        rustc_flags = _RUSTC_FLAGS + ["--cfg", "property_defect_" + defect],
+        data = _RUST_DATA,
+    )
+    for defect in _DEFECTS
+]
+
+[
+    xm1_rust_elf(
+        name = "property-service-defect-" + defect.replace("_", "-"),
+        rust_staticlib = ":property-service-rust-defect-" + defect.replace("_", "-"),
+        asm_srcs = ["entry.S"],
+        entry = "xm1_getter_stub",
+        link_script = "property-service.ld",
+        extra_ldflags = ["-Wl,--gc-sections"],
+    )
+    for defect in _DEFECTS
+]
 
 haskell_library(
     name = "classify",
@@ -156,11 +195,24 @@ haskell_binary(
         "$(rootpath :property-service-image.bin)",
         "--symbols",
         "$(rootpath :property-service-image.symbols)",
+    ] + [
+        argument
+        for defect in _DEFECTS
+        for argument in [
+            "--defect",
+            defect,
+            "$(rootpath :property-service-defect-%s.bin)" % defect.replace("_", "-"),
+            "$(rootpath :property-service-defect-%s.symbols)" % defect.replace("_", "-"),
+        ]
     ],
     data = [
         ":property-service-image.bin",
         ":property-service-image.symbols",
         "//emulation:native-runner",
+    ] + [
+        ":property-service-defect-%s.%s" % (defect.replace("_", "-"), suffix)
+        for defect in _DEFECTS
+        for suffix in ["bin", "symbols"]
     ],
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
