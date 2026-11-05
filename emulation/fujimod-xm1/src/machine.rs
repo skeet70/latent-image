@@ -666,12 +666,16 @@ mod tests {
         ]);
         write_row(&machine, 13, &fn_record(0));
         let mut word = [0u8; 4];
-        machine.session.board.read_physical(0xfff8_9014, &mut word).unwrap();
+        machine.run(100);
+        machine.require_running().unwrap();
+        machine.session.board.read_physical(0x00a0_0000, &mut word).unwrap();
         assert_ne!(u32::from_le_bytes(word) & (1 << 11), 0);
         let latch = machine.press_once(Press::Fn, KeyPulse::instructions(100, 0)).unwrap();
         machine.session.board.read_physical(0x00a0_0000, &mut word).unwrap();
         assert_eq!(u32::from_le_bytes(word) & (1 << 11), 0);
-        machine.session.board.read_physical(0xfff8_9014, &mut word).unwrap();
+        machine.run(100);
+        machine.require_running().unwrap();
+        machine.session.board.read_physical(0x00a0_0000, &mut word).unwrap();
         assert_ne!(u32::from_le_bytes(word) & (1 << 11), 0);
         assert!(matches!(latch, Latch::Unlatched { .. }));
     }
