@@ -1510,8 +1510,9 @@ fn the_lz_tallies_follow_each_role_s_pinned_input() {
 }
 
 fn history_roles() -> (Value, Spec, Spec) {
-    let (retained, mut owned) = lz_roles(ONE_JOB);
-    owned.board["bus"]["devices"].as_array_mut().unwrap().pop();
+    let mut retained = relation_spec(Role::Retained, &timer_steps(100, 200, RETAINED_SITE), RETAINED_SITE);
+    let mut owned = relation_spec(Role::Composed, &timer_steps(160, 300, COMPOSED_SITE), COMPOSED_SITE);
+    with_lz(&mut retained, &RETAINED_LZ_INPUT, ONE_JOB);
     let mut input = OWNED_LZ_INPUT;
     input[1] = b'z';
     with_lz(&mut owned, &input, ONE_JOB);
