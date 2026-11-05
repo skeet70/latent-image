@@ -15,6 +15,7 @@ import qualified Emulation.Image4Staging as Tools
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
 import Replacement.StartupArtifact.Adapters
+import Replacement.StartupArtifact.Application (PlainImage (..), plainImage)
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Joins (JoinKind (..), depthsIn, registeredJoins, suppliedOf)
 import qualified Replacement.StartupArtifact.KernelSlots as KS
@@ -251,13 +252,25 @@ main = do
 
   -- The adapter's caller scan over canonical bytes.
   published <- either (H.failH . show) (pure . KS.rootTargets) (KS.publishedRows (targetOf targets LoaderA) (targetOf targets LoaderB))
-  let scan targets' = slotCallerProblems targets' slotRows published
-      site = 0x725b74
-  ok "the adapter scan finds no problem in the canonical targets" (null (scan targets))
-  forM_ [ ("a direct caller that reads r1 after +0x168", [branchLink site r1Entry, 0xe1a00001])
-        , ("a root-slot caller that reads r1 after +0x168", rootCaller)
-        , ("a branch into +0x168 off its entry", [branchLink site (r1Entry + 4)]) ] $ \(fixture, words') ->
-    ok ("the adapter scan refuses " ++ fixture) (not (null (scan (patched targets Image4 site words'))))
+  plainCanonical@(PlainImage (Guest plainBase) plainBytes) <- derived (plainImage (U.parsedParts (canonicalParsed source)))
+  let scan targets' plain' = slotCallerProblems targets' plain' slotRows published
+      scanImages = [(show target, KS.CodeImage (targetBase target) (targetOf targets target)) | target <- [LoaderA, LoaderB, Image4, Image5]]
+        ++ [("Plain", KS.CodeImage plainBase plainBytes)]
+      offsets = map kernelSlotOffset slotRows
+  ok "the adapter scan finds no problem in the canonical targets" (null (scan targets plainCanonical))
+  forM_ scanImages $ \(name, image) -> do
+    let direct = KS.directImageCalls [image] (map kernelSlotExtent slotRows)
+        rooted = [call' | call' <- KS.slotImageCalls [image], KS.slotOffset call' `elem` offsets]
+    putStrLn ("kernel-slot callers " ++ name ++ ": direct=" ++ show (length direct) ++ ", root-slot=" ++ show (length rooted))
+  forM_ ([Just target | target <- [LoaderA, LoaderB, Image4, Image5]] ++ [Nothing]) $ \owner -> do
+    let site = maybe plainBase targetBase owner
+        inject words' = case owner of
+          Just target -> scan (patched targets target site words') plainCanonical
+          Nothing -> scan targets (PlainImage (Guest plainBase) (B.concat (map U.putWord32 words') <> B.drop (4 * length words') plainBytes))
+    forM_ [ ("a direct caller that reads r1 after +0x168", [branchLink site r1Entry, 0xe1a00001])
+          , ("a root-slot caller that reads r1 after +0x168", rootCaller)
+          , ("a branch into +0x168 off its entry", [branchLink site (r1Entry + 4)]) ] $ \(fixture, words') ->
+      ok ("the adapter scan refuses " ++ fixture ++ " in " ++ maybe "Plain" show owner) (not (null (inject words')))
 
   -- Staging and restore.
   (stagedJ7, observed) <- stageComposition tools scratch source j7
