@@ -10,6 +10,7 @@ module Replacement.PropertyService.ClassRecord
   ) where
 
 import Data.Aeson (Value, object, (.=))
+import qualified Data.Aeson as J
 import Numeric (showHex)
 import PropertyFields (PropertyId (..))
 import Replacement.PropertyService.Classify
@@ -63,16 +64,19 @@ classValue (Property (PropertyId identifier) (GuestAddress getter) (GuestAddress
       _ -> Nothing
   ]
   where
-    fieldValue (FieldArm (BankOffset offset) width (BitRange lsb bits) (FieldDefault value) save) = object
+    fieldValue (FieldArm (BankOffset offset) width (BitRange lsb bits) fallback save) = object
       [ "offset" .= offset, "width" .= widthLabel width
-      , "lsb" .= lsb, "bits" .= bits, "default" .= hex value
+      , "lsb" .= lsb, "bits" .= bits
+      , "default" .= case fallback of
+          DefaultConstant value -> J.toJSON (hex value)
+          DefaultTail (TailOffset tail') tailWidth -> object ["tail" .= hex tail', "width" .= widthLabel tailWidth]
       , "save" .= (save == SaveBank0Previous)
       ]
     slotValue (SlotArm (BankBranch (BankOffset offset) width (BitRange lsb bits) fallback) (RecordBranch (RecordOffset recordOffset') recordWidth' (BitRange recordLsb recordBits')) save) = object
       [ "bank" .= object
           [ "offset" .= offset, "width" .= widthLabel width, "lsb" .= lsb, "bits" .= bits
           , "default" .= case fallback of
-              BankConstant (FieldDefault value) -> object ["constant" .= hex value]
+              BankConstant value -> object ["constant" .= hex value]
               BankTailByte (TailOffset tail') -> object ["tailByte" .= hex tail']
           ]
       , "record" .= object ["offset" .= recordOffset', "width" .= widthLabel recordWidth', "lsb" .= recordLsb, "bits" .= recordBits']

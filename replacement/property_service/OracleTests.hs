@@ -46,16 +46,21 @@ slotArm :: BankDefault -> SlotArm
 slotArm fallback = SlotArm (BankBranch (BankOffset 5) Byte (BitRange 2 3) fallback) (RecordBranch (RecordOffset 4) Byte (BitRange 4 4)) SaveBank0Previous
 
 slotOwned :: Owned
-slotOwned = OwnedSlotField (slotArm (BankConstant (FieldDefault 6)))
+slotOwned = OwnedSlotField (slotArm (BankConstant 6))
 
 slot :: Word32 -> SlotArgument
 slot = SlotArgument
 
 byteField :: SavePolicy -> FieldArm
-byteField = FieldArm (BankOffset 5) Byte (BitRange 2 3) (FieldDefault 6)
+byteField = FieldArm (BankOffset 5) Byte (BitRange 2 3) (DefaultConstant 6)
 
 halfField :: FieldArm
-halfField = FieldArm (BankOffset 0x10) Half (BitRange 4 8) (FieldDefault 0) NoSave
+halfField = FieldArm (BankOffset 0x10) Half (BitRange 4 8) (DefaultConstant 0) NoSave
+
+-- | Whole containers at bank offset 0x10 whose default is the defaults-table container at 0xc or 0xb.
+tailByteField, tailHalfField :: FieldArm
+tailByteField = FieldArm (BankOffset 0x10) Byte (BitRange 0 8) (DefaultTail (TailOffset 0xc) Byte) SaveBank0Previous
+tailHalfField = FieldArm (BankOffset 0x10) Half (BitRange 0 16) (DefaultTail (TailOffset 0xb) Half) SaveBank0Previous
 
 byteAt :: B.ByteString -> Int -> Int
 byteAt bytes at = fromIntegral (B.index bytes at)
@@ -73,10 +78,6 @@ layoutOf :: SlotMutation -> Layout
 layoutOf mutation = case mutation of
   MutatedLayout layout -> layout
   MutatedArm _ -> stockLayout
-
--- | @mov rD, rS@ as the decoder returns it.
-mov :: Int -> Int -> A.Instruction
-mov destination source = A.DataProcessing (A.Cond 14) A.MOV False (A.Reg destination) (A.Reg 0) (A.ShiftedImmediate (A.Reg source) A.LSL 0)
 
 -- | A word store into the caller's frame [0x9597f0, 0x959800).
 callerWrite :: WriteEvent
@@ -171,18 +172,22 @@ main = do
     , check "a truncated observation has no writes" (fmap runWrites (runOf (observation 1 Returned [] (Truncated (ProvenanceTotal 5000))) []) == Right Nothing)
     , check "report writes must match the provenance" (isLeft (runOf (observation 1 Returned [] (complete [bankWrite])) [stackWrite]))
     , check "report writes are the write events in order" (reportWrites (report [event "read" "0x0096cc64" 1 "0x00000000000000ab", event "write" "0x0096cc69" 1 "0x000000000000000c", event "write" "0x009597ec" 4 "0x0000000012345678"]) == Right [bankWrite, stackWrite])
-    , check "a patch replaces exactly its word" (applyPatches [Patch patchAt movR12FromR4 movR12Zero] image == Right (B.take 0x100 image <> B.pack [0, 0xc0, 0xa0, 0xe3] <> B.drop 0x104 image))
-    , check "a patch refuses an unexpected word" (isLeft (applyPatches [Patch patchAt movR12Zero movR12FromR4] image))
-    , check "mov r12, r4 and mov r12, #0 decode as such" (A.decode 0x62c4bc movR12FromR4 == A.DataProcessing (A.Cond 14) A.MOV False (A.Reg 12) (A.Reg 0) (A.ShiftedImmediate (A.Reg 4) A.LSL 0) && A.decode 0x62c4bc movR12Zero == A.DataProcessing (A.Cond 14) A.MOV False (A.Reg 12) (A.Reg 0) (A.Immediate 0))
+    , check "a patch replaces exactly its word" (applyPatches [Patch patchAt 0xe1a0c004 0xe3a0c000] image == Right (B.take 0x100 image <> B.pack [0, 0xc0, 0xa0, 0xe3] <> B.drop 0x104 image))
+    , check "a patch refuses an unexpected word" (isLeft (applyPatches [Patch patchAt 0xe3a0c000 0xe1a0c004] image))
     , check "branch words decode to their targets" (all (\target -> A.decode 0x62c4d8 (branchWord 0x62c4d8 target) == A.Branch (A.Cond 14) False target) [0x630200, 0x62ff60, 0x61e110])
-    , check "the getter-r6 control words decode as mov r4, r12, mov r6, r12 and mov r12, r6" (map (A.decode 0x62c4b0) [movR4FromR12, movR6FromR12, movR12FromR6] == [mov 4 12, mov 6 12, mov 12 6])
-    , check "a moved offset steps one container" (fmap snd (exposingField handFixture OffsetMoved [handProperty (byteField SaveBank0Previous)]) == Just (FieldArm (BankOffset 6) Byte (BitRange 2 3) (FieldDefault 6) SaveBank0Previous))
+    , check "a tail-byte default reads the defaults-table byte" (r0Of (OwnedField tailByteField) (Get Bank1 DefaultRead (slot 1)) == Just 0x7f)
+    , check "a tail-halfword default reads the little-endian container" (r0Of (OwnedField tailHalfField) (Get Bank0 DefaultRead (slot 0)) == Just 0x7f00)
+    , check "the tail-window variant gives offset 0's halfword the high byte 0x5a" (fmap effectR0 (modelEffect (variantFixture handFixture TailWindow) (OwnedField tailHalfField {fieldDefault = DefaultTail (TailOffset 0) Half}) (Get Bank0 DefaultRead (slot 0))) == Just 0x5a00)
+    , check "a tail default request stores the defaults-table container" (byteIn effectBanks (0x1c2 + 0x10) (model (OwnedField tailByteField) (Set Bank1 (slot 0) SetDefaultRequest)) == Just 0x7f)
+    , check "a moved tail offset reads the next defaults-table byte" (fmap snd (exposingField handFixture TailOffsetMoved [handProperty tailByteField]) == Just tailByteField {fieldDefault = DefaultTail (TailOffset 0xd) Byte})
+    , check "a constant default has no tail offset to move" (exposingField handFixture TailOffsetMoved [handProperty (byteField NoSave)] == Nothing)
+    , check "a moved offset steps one container" (fmap snd (exposingField handFixture OffsetMoved [handProperty (byteField SaveBank0Previous)]) == Just (FieldArm (BankOffset 6) Byte (BitRange 2 3) (DefaultConstant 6) SaveBank0Previous))
     , check "a flipped default returns 7" ((exposingField handFixture DefaultFlipped [handProperty (byteField NoSave)] >>= \(_, arm) -> r0Of (OwnedField arm) (Get Bank0 DefaultRead (slot 0))) == Just 7)
     , check "a cleared save bit stops the bank-0 copy" ((exposingField handFixture SaveCleared [handProperty (byteField SaveBank0Previous)] >>= \(_, arm) -> byteIn effectPrevious 5 (model (OwnedField arm) (Set Bank0 (slot 0) SetOne))) == Just 0xff)
     , check "clearing an absent save bit is not a control" (exposingField handFixture SaveCleared [handProperty (byteField NoSave)] == Nothing)
-    , check "a moved record offset steps one byte" (fmap third (exposingSlot handFixture RecordOffsetMoved [slotProperty slotOwned]) == Just (MutatedArm (SlotArm (BankBranch (BankOffset 5) Byte (BitRange 2 3) (BankConstant (FieldDefault 6))) (RecordBranch (RecordOffset 5) Byte (BitRange 4 4)) SaveBank0Previous)))
-    , check "swapped branches exchange their bits" (fmap third (exposingSlot handFixture BranchesSwapped [slotProperty slotOwned]) == Just (MutatedArm (SlotArm (BankBranch (BankOffset 5) Byte (BitRange 4 4) (BankConstant (FieldDefault 6))) (RecordBranch (RecordOffset 4) Byte (BitRange 2 3)) SaveBank0Previous)))
-    , check "the slot-1 default from record 0 is 3" (fmap third (exposingSlot handFixture Slot1DefaultFromRecord0 [slotProperty slotOwned]) == Just (MutatedArm (slotArm (BankConstant (FieldDefault 3)))))
+    , check "a moved record offset steps one byte" (fmap third (exposingSlot handFixture RecordOffsetMoved [slotProperty slotOwned]) == Just (MutatedArm (SlotArm (BankBranch (BankOffset 5) Byte (BitRange 2 3) (BankConstant 6)) (RecordBranch (RecordOffset 5) Byte (BitRange 4 4)) SaveBank0Previous)))
+    , check "swapped branches exchange their bits" (fmap third (exposingSlot handFixture BranchesSwapped [slotProperty slotOwned]) == Just (MutatedArm (SlotArm (BankBranch (BankOffset 5) Byte (BitRange 4 4) (BankConstant 6)) (RecordBranch (RecordOffset 4) Byte (BitRange 2 3)) SaveBank0Previous)))
+    , check "the slot-1 default from record 0 is 3" (fmap third (exposingSlot handFixture Slot1DefaultFromRecord0 [slotProperty slotOwned]) == Just (MutatedArm (slotArm (BankConstant 3))))
     , check "a record save at the bank offset lands at previous offset 5" (byteIn effectPrevious 5 (modelEffectIn stockLayout {layoutRecordSave = RecordSaveAtBankOffset} handFixture slotOwned (Set Bank0 (slot 0) SetOne)) == Just 0x5f && fmap (layoutRecordSave . layoutOf . third) (exposingSlot handFixture RecordSavedAtBankOffset [slotProperty slotOwned]) == Just RecordSaveAtBankOffset)
     , check "a moved slot-defaults base reads the next record" (r0Of' (stockLayout {layoutSlotDefaults = 0x7cb82c}) (Get Bank0 DefaultRead (slot 0)) == Just 0 && fmap (layoutSlotDefaults . layoutOf . third) (exposingSlot handFixture SlotDefaultsMoved [slotProperty slotOwned]) == Just 0x7cb82c)
     , check "a moved tail base needs a tail-byte default" (exposingSlot handFixture TailDefaultsMoved [slotProperty slotOwned] == Nothing && fmap (layoutTailDefaults . layoutOf . third) (exposingSlot handFixture TailDefaultsMoved [slotProperty (OwnedSlotField (slotArm (BankTailByte (TailOffset 0xc))))]) == Just 0x81b075)

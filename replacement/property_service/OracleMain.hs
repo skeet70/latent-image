@@ -2,8 +2,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Runs the stock getter 0x61e110 and setter 0x624694 from the canonical image4 and from the staged
--- candidate image4 for every property id, checks the stock runs of owned ids against the owned
--- model, compares the candidate with stock case by case and runs the guest controls.
+-- candidate image4 for every property id, or for the ids `--ids` lists, checks the stock runs of
+-- owned ids against the owned model, compares the candidate with stock case by case and runs the
+-- guest controls.
 module Main (main) where
 
 import qualified A32 as A
@@ -12,17 +13,18 @@ import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (Value, eitherDecodeStrict', object, (.=))
 import Data.Bits (shiftR, (.&.))
 import qualified Data.ByteString as B
-import Data.List (isPrefixOf)
+import Data.List (isPrefixOf, nub)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe)
+import qualified Data.Set as S
 import Data.String (fromString)
 import Data.Word (Word32)
-import Emulation.NativeObservation (Register (..), RunnerStatus (..), runnerStatusLabel)
+import Emulation.NativeObservation (runnerStatusLabel)
 import Emulation.OwnedCase (CaseId (..), CaseSpec, loadObservedBatch, required, writeBatch)
 import Emulation.Sha256 (sha256, sha256File, sha256Hex)
 import FujiAF.Host (ensure, failH, get, readRegular, str)
 import FujiAF.JSON (encodeCanonical)
-import Numeric (showHex)
+import Numeric (readHex, showHex)
 import PropertyFields (PropertyId (..))
 import Replacement.PropertyService.Admission (FunctionExtent (..), FunctionName (..))
 import Replacement.PropertyService.Artifact
@@ -43,9 +45,15 @@ canonicalImage4Sha256 = "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d
 batchLimit :: Int
 batchLimit = 4096
 
--- | The property whose getter-exit adjustment at 0x6245a0 reads only mapped bytes and selects on r12.
-exitAdjustedProbe :: PropertyId
-exitAdjustedProbe = PropertyId 0xe9
+-- | The stock pops of the getter's and setter's prologue frames.
+getterPopWord, setterPopWord :: Word32
+getterPopWord = 0xe8bd8830
+setterPopWord = 0xe8bd89f8
+
+-- | `ldrh r0, [r12, r0]` and `ldrb r0, [r12, r0]`.
+loadHalfWord, loadByteWord :: Word32
+loadHalfWord = 0xe19c00b0
+loadByteWord = 0xe7dc0000
 
 data BatchRecord = BatchRecord
   { recordName :: String
@@ -104,6 +112,23 @@ lookupRun runs label = maybe (failH ("no run for " ++ caseLabelText label)) pure
 prefixed :: String -> OracleCase -> CaseLabel
 prefixed prefix oracleCase = CaseLabel (prefix ++ "-" ++ caseLabelText (caseLabel oracleCase))
 
+-- | A case under one fixture variant.
+data RunCase = RunCase { runVariant :: FixtureVariant, runCase :: OracleCase } deriving (Eq, Ord)
+
+canonical :: OracleCase -> RunCase
+canonical = RunCase CanonicalFixture
+
+runLabel :: RunCase -> CaseLabel
+runLabel (RunCase variant c) = case variant of
+  CanonicalFixture -> caseLabel c
+  _ -> CaseLabel (variantTag variant ++ "-" ++ caseLabelText (caseLabel c))
+
+runPrefixed :: String -> RunCase -> CaseLabel
+runPrefixed prefix rc = CaseLabel (prefix ++ "-" ++ caseLabelText (runLabel rc))
+
+runProperty :: RunCase -> PropertyId
+runProperty = oracleProperty . runCase
+
 classLabel :: Standing -> String
 classLabel standing = case standing of
   Classified (Owned (OwnedField _)) -> "owned-field"
@@ -129,17 +154,14 @@ stockSpec fx image properties label functions oracleCase =
     standing = standingOf properties (oracleProperty oracleCase)
 
 -- | Decodes each control word with the independent A32 decoder before it is used.
-checkEncodings :: Word32 -> Word32 -> Word32 -> Word32 -> [(Word32, Word32)] -> IO ()
-checkEncodings getterStub setterStub setterExitAddress armTarget bases = do
+checkEncodings :: [(Word32, Word32)] -> IO ()
+checkEncodings bases = do
   let always = A.Cond 14
-      branchSite = setterStub + 0x14
-  ensure (A.decode (getterStub + 0xc) movR12FromR4 == A.DataProcessing always A.MOV False (A.Reg 12) (A.Reg 0) (A.ShiftedImmediate (A.Reg 4) A.LSL 0)) "mov r12, r4 encoding"
-  ensure (A.decode (getterStub + 0xc) movR12Zero == A.DataProcessing always A.MOV False (A.Reg 12) (A.Reg 0) (A.Immediate 0)) "mov r12, #0 encoding"
-  ensure (A.decode branchSite (branchWord branchSite setterExitAddress) == A.Branch always False setterExitAddress) "setter exit branch encoding"
-  ensure (A.decode branchSite (branchWord branchSite armTarget) == A.Branch always False armTarget) "arm-1 branch encoding"
-  ensure (A.decode getterStub movR4FromR12 == A.DataProcessing always A.MOV False (A.Reg 4) (A.Reg 0) (A.ShiftedImmediate (A.Reg 12) A.LSL 0)) "mov r4, r12 encoding"
-  ensure (A.decode getterStub movR6FromR12 == A.DataProcessing always A.MOV False (A.Reg 6) (A.Reg 0) (A.ShiftedImmediate (A.Reg 12) A.LSL 0)) "mov r6, r12 encoding"
-  ensure (A.decode (getterStub + 0xc) movR12FromR6 == A.DataProcessing always A.MOV False (A.Reg 12) (A.Reg 0) (A.ShiftedImmediate (A.Reg 6) A.LSL 0)) "mov r12, r6 encoding"
+      stack registers = A.LoadMultiple always A.sp A.IncrementAfter True (map A.Reg registers)
+  ensure (A.decode 0 getterPopWord == stack [4, 5, 11, 15]) "pop {r4, r5, r11, pc} encoding"
+  ensure (A.decode 0 setterPopWord == stack [3, 4, 5, 6, 7, 8, 11, 15]) "pop {r3-r8, r11, pc} encoding"
+  ensure (A.decode 0 loadHalfWord == A.Load always A.Half False (A.Reg 0) (A.Reg 12) (A.OffsetRegister True (A.Reg 0) A.LSL 0) A.OffsetOnly) "ldrh r0, [r12, r0] encoding"
+  ensure (A.decode 0 loadByteWord == A.Load always A.Byte False (A.Reg 0) (A.Reg 12) (A.OffsetRegister True (A.Reg 0) A.LSL 0) A.OffsetOnly) "ldrb r0, [r12, r0] encoding"
   forM_ bases $ \(site, base) ->
     ensure (A.decode site (movwWord base) == A.MoveWide always (A.Reg 12) (base .&. 0xffff) && A.decode (site + 4) (movtWord base) == A.MoveTop always (A.Reg 12) (base `shiftR` 16))
       ("movw/movt r12, " ++ hex base ++ " encoding")
@@ -151,7 +173,7 @@ data Control = Control
   { controlName :: String
   , controlKind :: ControlKind
   , controlPatches :: [Patch]
-  , controlCases :: [OracleCase]
+  , controlCases :: [RunCase]
   , controlNote :: String
   }
 
@@ -180,6 +202,20 @@ freshOutput path = do
   createDirectory absolute
   pure absolute
 
+-- | The ids `--ids` lists as comma-separated hex, or Nothing for every id.
+subsetIds :: [String] -> IO (Maybe (S.Set PropertyId))
+subsetIds arguments = case dropWhile (/= "--ids") arguments of
+  _ : text : _ -> Just . S.fromList <$> mapM parse (splitOn text)
+  [_] -> failH "--ids needs a value"
+  [] -> pure Nothing
+  where
+    splitOn text = case break (== ',') text of
+      (item, []) -> [item]
+      (item, _ : rest) -> item : splitOn rest
+    parse item = case item of
+      '0' : 'x' : digits | [(n, "")] <- readHex digits, n <= 646 -> pure (PropertyId n)
+      _ -> failH ("--ids: " ++ item ++ " is not a hex id from 0x0 to 0x286")
+
 oracle :: [String] -> FilePath -> FilePath -> FilePath -> IO ()
 oracle arguments runner linkedPath symbolsPath = do
   let input name = required arguments name
@@ -188,6 +224,7 @@ oracle arguments runner linkedPath symbolsPath = do
   contractPath <- input "--contract"
   sourcePaths <- mapM input ["--dat", "--loader-a", "--loader-b", "--image5", "--plain", "--image2"]
   outPath <- input "--out"
+  subset <- subsetIds arguments
   scratch <- makeAbsolute "private-data/scratch/PropertyService2" >>= canonicalizePath
   absoluteOut <- makeAbsolute outPath >>= canonicalizePath
   ensure ((scratch ++ "/") `isPrefixOf` absoluteOut) "--out must be a fresh directory under private-data/scratch/PropertyService2"
@@ -203,9 +240,10 @@ oracle arguments runner linkedPath symbolsPath = do
       contractSha = str (get contract "staged_image4_sha256")
   ensure (candidateSha == contractSha) ("candidate image4 sha256 " ++ candidateSha ++ " differs from the contract's staged_image4_sha256 " ++ contractSha)
   source <- orFail "canonical sources" (canonicalSource dat image4 loaderA loaderB image5 plain image2)
+  chosenCarrier <- maybe (failH "the hull scan leaves no carrier") pure (P.hullCarrier (sourceHull source))
   let classified = sourceProperties source
       properties = M.fromList [(propertyId property, property) | property <- classified]
-  artifact <- orFail "linked artifact" (deriveArtifact classified linked symbols)
+  artifact <- orFail "linked artifact" (deriveArtifact classified chosenCarrier linked symbols)
   rederived <- orFail "staging" (stagedImage4Bytes source artifact)
   ensure (rederived == candidate) "candidate image4 differs from the image4 re-derived from the canonical sources and the linked artifact"
   out <- freshOutput outPath
@@ -214,14 +252,12 @@ oracle arguments runner linkedPath symbolsPath = do
       P.GuestAddress tableAddress = artifactTable artifact
       P.GuestAddress slotTableAddress = artifactSlotTable artifact
       fx = fixture image4
-      P.GuestAddress setterExitAddress = P.setterExit
       P.GuestAddress getterTable = P.getterTableBase
       P.GuestAddress setterTable = P.setterTableBase
       ownedSpans = [FunctionSpan start end | FunctionExtent _ (P.GuestAddress start) (P.GuestAddress end) <- artifactFunctions artifact]
       candidateFunctions = splitFunctions (carrierStart, carrierEnd) ownedSpans
       standing identifier = standingOf properties identifier
-  armOne <- maybe (failH "property 1 missing") (\(Property _ _ (GuestAddress arm) _) -> pure arm) (M.lookup (PropertyId 1) properties)
-  let tableWord (PropertyId n) = tableAddress + 4 * (n - 1)
+      tableWord (PropertyId n) = tableAddress + 4 * (n - 1)
       accessorAt name = listToMaybe [start | FunctionExtent (FunctionName functionName) (P.GuestAddress start) _ <- artifactFunctions artifact, functionName == name]
       slotIndexOf identifier = listToMaybe [SlotIndex index | (index, Property other _ _ _) <- zip [0 ..] [p | p@(Property _ _ _ (Owned (OwnedSlotField _))) <- classified], other == identifier]
       loadOf width = case width of
@@ -231,17 +267,18 @@ oracle arguments runner linkedPath symbolsPath = do
         Byte -> Store8
         Half -> Store16
       basePatches site before after = [Patch site (movwWord before) (movwWord after), Patch (site + 4) (movtWord before) (movtWord after)]
+      accessorSite name accessor = maybe (Left (name ++ ": no " ++ accessorName accessor)) Right (accessorAt (accessorName accessor))
       slotControl name control = case exposingSlot fx control classified of
         Nothing -> Left (name ++ ": no slot field exposes the mutation")
         Just (Property identifier _ _ _, arm, mutation) -> do
           index@(SlotIndex slotIndex) <- maybe (Left (name ++ ": " ++ propertyHex identifier ++ " has no slot index")) Right (slotIndexOf identifier)
           let RecordBranch (RecordOffset recordAt) recordWidth' _ = recordArm arm
               BankBranch (BankOffset bankAt) _ _ _ = bankArm arm
-              cases = [OracleCase identifier o | o <- slotControlOperations control]
+              cases = [canonical (OracleCase identifier o) | o <- slotControlOperations control]
               changed before after address = [Patch address before after | before /= after]
-              accessorPatches accessor before after = case accessorAt (accessorName accessor) of
-                Nothing -> Left (name ++ ": no " ++ accessorName accessor)
-                Just site -> Right (basePatches site before after, [(site, after)], accessorName accessor ++ " base " ++ hex before ++ " -> " ++ hex after ++ " for " ++ propertyHex identifier)
+              accessorPatches accessor before after = do
+                site <- accessorSite name accessor
+                Right (basePatches site before after, [(site, after)], accessorName accessor ++ " base " ++ hex before ++ " -> " ++ hex after ++ " for " ++ propertyHex identifier)
           (patches, bases, note) <- case (mutation, control) of
             (MutatedArm mutated, _) -> do
               let EncodedEntry entryBefore = encodeEntry (SlotEntry (bankArm arm) index)
@@ -265,87 +302,92 @@ oracle arguments runner linkedPath symbolsPath = do
         , slotControl "c-slot-defaults-base" SlotDefaultsMoved
         , slotControl "c-tail-base" TailDefaultsMoved
         ]
-  checkEncodings getterStub setterStub setterExitAddress armOne (concat [bases | Right (_, bases) <- slotControls])
-
-  -- Pass 1: stock.
-  (stockBatches, stockRuns) <- runBatches runner out "stock" [stockSpec fx image4 properties (caseLabel c) stockFunctions c | c <- caseGrid]
-  let stockRun c = lookupRun stockRuns (caseLabel c)
-  modelRows <- fmap concat . forM caseGrid $ \c -> case modelled (standing (oracleProperty c)) of
-    Nothing -> pure []
-    Just owned -> do
-      run <- stockRun c
-      pure [(c, modelDifferences fx owned (oracleOperation c) run)]
-
-  -- Pass 2: candidate against stock.
-  candidateSpecs <- forM caseGrid $ \c -> do
-    run <- stockRun c
-    pure (caseSpec candidate candidateFunctions fx (caseLabel c) (standing (oracleProperty c)) c (observedExpectation run))
-  (candidateBatches, candidateRuns) <- runBatches runner out "candidate" candidateSpecs
-  verdicts <- forM caseGrid $ \c -> do
-    reference <- stockRun c
-    subject <- lookupRun candidateRuns (caseLabel c)
-    pure (c, compareRuns reference subject)
-
-  -- Guest controls.
-  let fieldOf ec = exposingField fx ec classified
-      entryControl name ec = case fieldOf ec of
+      entryControl name ec = case exposingField fx ec classified of
         Nothing -> Left (name ++ ": no owned field exposes the mutation")
         Just (Property identifier _ _ (Owned (OwnedField arm)), mutated) ->
           let EncodedEntry before = encodeEntry (FieldEntry arm)
               EncodedEntry after = encodeEntry (FieldEntry mutated)
-           in Right (Control name MustFail [Patch (tableWord identifier) before after] [OracleCase identifier o | o <- entryControlOperations ec] ("PROPERTIES entry of " ++ propertyHex identifier))
+           in Right (Control name MustFail [Patch (tableWord identifier) before after] [canonical (OracleCase identifier o) | o <- entryControlOperations ec] ("PROPERTIES entry of " ++ propertyHex identifier))
         Just (Property identifier _ _ _, _) -> Left (name ++ ": " ++ propertyHex identifier ++ " is not an owned field")
       firstField = listToMaybe [p | p@(Property _ _ _ (Owned (OwnedField _))) <- classified]
-  delegatedChoice <- fmap listToMaybe . fmap concat . forM classified $ \property -> case propertyClass property of
-    Delegated _ | propertyId property /= exitAdjustedProbe -> do
-      runs <- mapM (\o -> stockRun (OracleCase (propertyId property) o)) operations
-      pure [property | any (\run -> runStatus run == Returned && lookup R0 (runRegisters run) /= Just 0) runs]
-    _ -> pure []
-  let delegatedControl = case delegatedChoice of
-        Nothing -> Left "c-delegated: no delegated id returns a nonzero r0"
-        Just (Property identifier@(PropertyId n) (GuestAddress getterArm) (GuestAddress setterArm) _) -> Right $ Control "c-delegated" MustFail
-          [Patch (getterTable + 4 * (n - 1)) getterArm getterStub, Patch (setterTable + 4 * (n - 1)) setterArm setterStub]
-          [OracleCase identifier o | o <- operations] ("getter and setter words of delegated " ++ propertyHex identifier ++ " repointed at the stubs")
-      probeRepoint = case M.lookup exitAdjustedProbe properties of
-        Just (Property (PropertyId n) (GuestAddress getterArm) _ (Delegated _)) -> Right (Patch (getterTable + 4 * (n - 1)) getterArm getterStub)
-        _ -> Left ("c-getter-r12: property " ++ propertyHex exitAdjustedProbe ++ " is not delegated")
-      probeCases = [OracleCase exitAdjustedProbe o | o@(Get {}) <- operations]
-      getterR12 = (\repoint -> Control "c-getter-r12" MustFail [Patch (getterStub + 0xc) movR12FromR4 movR12Zero, repoint] probeCases ("getter stub mov r12, r4 -> mov r12, #0, with " ++ propertyHex exitAdjustedProbe ++ "'s getter word at the stub")) <$> probeRepoint
-      getterR12Reference = (\repoint -> Control "r-getter-r12" MustPass [repoint] probeCases ("reference: " ++ propertyHex exitAdjustedProbe ++ "'s getter word at the stub, stub unchanged")) <$> probeRepoint
-      getterR6 = case firstField of
-        Nothing -> Left "c-getter-r6: no owned field"
-        Just (Property identifier _ _ _) -> Right $ Control "c-getter-r6" MustFail
-          [Patch getterStub movR4FromR12 movR6FromR12, Patch (getterStub + 0xc) movR12FromR4 movR12FromR6]
-          [OracleCase identifier o | o@(Get {}) <- operations] "getter stub holds the id in r6, which the stock getter epilogue does not restore"
-      setterBranch = case firstField of
-        Nothing -> Left "c-setter-branch: no owned field"
-        Just (Property identifier _ _ _) -> Right $ Control "c-setter-branch" MustFail
-          [Patch (setterStub + 0x14) (branchWord (setterStub + 0x14) setterExitAddress) (branchWord (setterStub + 0x14) armOne)]
-          [OracleCase identifier o | o@(Set {}) <- operations] ("setter stub b " ++ hex setterExitAddress ++ " -> b " ++ hex armOne ++ " (property 1's setter arm)")
+      halfTail = listToMaybe [p | p@(Property _ _ _ (Owned (OwnedField (FieldArm _ _ _ (DefaultTail _ Half) _)))) <- classified]
+      defaultOperations = [o | o@(Get _ DefaultRead _) <- operations] ++ [o | o@(Set _ _ SetDefaultRequest) <- operations]
+      getterPop = getterStub + 8
+      getterPopControl = case firstField of
+        Nothing -> Left "c-getter-pop-setter-list: no owned field"
+        Just (Property identifier _ _ _) -> Right $ Control "c-getter-pop-setter-list" MustFail
+          [Patch getterPop getterPopWord setterPopWord]
+          [canonical (OracleCase identifier o) | o@(Get {}) <- operations] ("getter stub pops the setter frame's list {r3-r8, r11, pc}, for " ++ propertyHex identifier)
+      tailHalfControl name patches note = case halfTail of
+        Nothing -> Left (name ++ ": no field has a halfword tail default")
+        Just (Property identifier _ _ _) -> do
+          site <- accessorSite name (Accessor TailDefaultsImage Load16)
+          Right (Control name MustFail (patches site) [RunCase variant (OracleCase identifier o) | variant <- [CanonicalFixture, TailWindow], o <- defaultOperations] (note ++ " for " ++ propertyHex identifier))
+      tailHalfBase = tailHalfControl "c-tail16-base" (\site -> basePatches site tailDefaultsBase (tailDefaultsBase + 1)) ("xm1_tail_defaults_load16 base " ++ hex tailDefaultsBase ++ " -> " ++ hex (tailDefaultsBase + 1))
+      tailHalfByte = tailHalfControl "c-tail16-byte" (\site -> [Patch (site + 8) loadHalfWord loadByteWord]) "xm1_tail_defaults_load16 reads a byte"
+      referenceId = if isJust (M.lookup (PropertyId 0x34) properties >>= ownedProperty) then PropertyId 0x34 else PropertyId 0xd
+      ownedProperty p = case propertyClass p of
+        Owned _ -> Just p
+        Delegated _ -> Nothing
+      stockArmsReference = case M.lookup referenceId properties >>= ownedProperty of
+        Just (Property identifier@(PropertyId n) (GuestAddress getterArm) (GuestAddress setterArm) _)
+          | not (carrierStart <= setterArm && setterArm < carrierEnd) -> Right $ Control "r-stock-arms" MustPass
+              [Patch (getterTable + 4 * (n - 1)) getterStub getterArm, Patch (setterTable + 4 * (n - 1)) setterStub setterArm]
+              [canonical (OracleCase identifier o) | o <- operations] ("reference: " ++ propertyHex identifier ++ "'s getter and setter table words restored to " ++ hex getterArm ++ " and " ++ hex setterArm ++ ", both outside the carrier")
+        _ -> Left ("r-stock-arms: " ++ propertyHex referenceId ++ " is not owned with its setter arm outside the carrier")
       controls =
         [ entryControl "c-offset" OffsetMoved
         , entryControl "c-save" SaveCleared
         , entryControl "c-default" DefaultFlipped
-        , delegatedControl
-        , getterR12
-        , getterR6
-        , setterBranch
+        , entryControl "c-tail-offset" TailOffsetMoved
+        , getterPopControl
+        , tailHalfBase
+        , tailHalfByte
+        , stockArmsReference
         ]
           ++ map (fmap fst) slotControls
-      planned = [control | Right control <- controls] ++ [reference | Right reference <- [getterR12Reference]]
-      unavailable = [problem | Left problem <- controls ++ [getterR12Reference]]
+      planned = [control | Right control <- controls]
+      unavailable = [problem | Left problem <- controls]
+      inSubset identifier = maybe True (S.member identifier) subset
+      variantCases = [RunCase TailWindow (OracleCase identifier o) | Just (Property identifier _ _ _) <- [halfTail], inSubset identifier, o <- defaultOperations]
+      gridCases = [canonical c | c <- caseGrid, inSubset (oracleProperty c)] ++ variantCases
+      runCases = nub (gridCases ++ concatMap controlCases planned)
+      fxOf rc = variantFixture fx (runVariant rc)
+  tailHalfSite <- maybe (failH "no xm1_tail_defaults_load16") pure (accessorAt (accessorName (Accessor TailDefaultsImage Load16)))
+  checkEncodings ((tailHalfSite, tailDefaultsBase + 1) : concat [bases | Right (_, bases) <- slotControls])
+
+  -- Pass 1: stock.
+  (stockBatches, stockRuns) <- runBatches runner out "stock" [stockSpec (fxOf rc) image4 properties (runLabel rc) stockFunctions (runCase rc) | rc <- runCases]
+  let stockRun rc = lookupRun stockRuns (runLabel rc)
+  modelRows <- fmap concat . forM runCases $ \rc -> case modelled (standing (runProperty rc)) of
+    Nothing -> pure []
+    Just owned -> do
+      run <- stockRun rc
+      pure [(rc, modelDifferences (fxOf rc) owned (oracleOperation (runCase rc)) run)]
+
+  -- Pass 2: candidate against stock.
+  candidateSpecs <- forM runCases $ \c -> do
+    run <- stockRun c
+    pure (caseSpec candidate candidateFunctions (fxOf c) (runLabel c) (standing (runProperty c)) (runCase c) (observedExpectation run))
+  (candidateBatches, candidateRuns) <- runBatches runner out "candidate" candidateSpecs
+  verdicts <- forM runCases $ \c -> do
+    reference <- stockRun c
+    subject <- lookupRun candidateRuns (runLabel c)
+    pure (c, compareRuns reference subject)
+
+  -- Guest controls.
   controlImages <- forM planned $ \control -> do
     image <- either (failH . ((controlName control ++ ": ") ++)) pure (applyPatches (controlPatches control) candidate)
     pure (control, image)
   controlSpecs <- forM (concat [[(control, image, c) | c <- controlCases control] | (control, image) <- controlImages]) $ \(control, image, c) -> do
     run <- stockRun c
-    pure (caseSpec image candidateFunctions fx (prefixed (controlName control) c) (standing (oracleProperty c)) c (observedExpectation run))
+    pure (caseSpec image candidateFunctions (fxOf c) (runPrefixed (controlName control) c) (standing (runProperty c)) (runCase c) (observedExpectation run))
   (controlBatches, controlRuns) <- runBatches runner out "controls" controlSpecs
   controlOutcomes <- forM controlImages $ \(control, _) -> do
     failures <- fmap concat . forM (controlCases control) $ \c -> do
       reference <- stockRun c
-      subject <- lookupRun controlRuns (prefixed (controlName control) c)
-      pure [(prefixed (controlName control) c, d) | d <- compareRuns reference subject]
+      subject <- lookupRun controlRuns (runPrefixed (controlName control) c)
+      pure [(runPrefixed (controlName control) c, d) | d <- compareRuns reference subject]
     let failedCases = M.size (M.fromListWith (++) [(label, [d]) | (label, d) <- failures])
     pure (control, failedCases, failures)
   let controlsHold = null unavailable && and [controlHolds control failed | (control, failed, _) <- controlOutcomes]
@@ -360,13 +402,14 @@ oracle arguments runner linkedPath symbolsPath = do
     pure (fromString name .= object ["path" .= path, "sha256" .= digest])
   let modelFailures = [(c, ds) | (c, ds) <- modelRows, not (null ds)]
       verdictFailures = [(c, ds) | (c, ds) <- verdicts, not (null ds)]
-      modelledIds = M.keys (M.fromList [(oracleProperty c, ()) | (c, _) <- modelRows])
-      disagreeingIds = M.keys (M.fromList [(oracleProperty c, ()) | (c, _) <- modelFailures])
-      perId = M.fromListWith (+) [(oracleProperty c, 1 :: Int) | (c, _) <- verdictFailures]
-      modelPerId = M.fromListWith (+) [(oracleProperty c, 1 :: Int) | (c, _) <- modelFailures]
+      modelledIds = M.keys (M.fromList [(runProperty c, ()) | (c, _) <- modelRows])
+      disagreeingIds = M.keys (M.fromList [(runProperty c, ()) | (c, _) <- modelFailures])
+      perId = M.fromListWith (+) [(runProperty c, 1 :: Int) | (c, _) <- verdictFailures]
+      modelPerId = M.fromListWith (+) [(runProperty c, 1 :: Int) | (c, _) <- modelFailures]
       classOf identifier = classLabel (standing identifier)
       byClass = M.fromListWith (\(a, b, c) (d, e, f) -> (a + d, b + e, c + f))
-        [(classOf (oracleProperty c), (1 :: Int, if null ds then 1 else 0 :: Int, if null ds then 0 else 1 :: Int)) | (c, ds) <- verdicts]
+        [(classOf (runProperty c), (1 :: Int, if null ds then 1 else 0 :: Int, if null ds then 0 else 1 :: Int)) | (c, ds) <- verdicts]
+      runIds = M.keys (M.fromList [(runProperty c, ()) | c <- runCases])
       stockAll = M.elems stockRuns
       candidateAll = M.elems candidateRuns
       passed = null modelFailures && null verdictFailures && controlsHold
@@ -378,7 +421,17 @@ oracle arguments runner linkedPath symbolsPath = do
         , "runner" .= object ["path" .= runner, "sha256" .= runnerSha]
         , "batches" .= map batchValue (stockBatches ++ candidateBatches ++ controlBatches)
         , "case_shape" .= object
-            [ "ids" .= ("0..646" :: String), "cases_per_id" .= length operations, "cases_per_role" .= length caseGrid
+            [ "ids" .= maybe ("0..646" :: String) (\chosen -> unwords (map propertyHex (S.toList chosen))) subset
+            , "subset" .= isJust subset
+            , "fixture_variants" .=
+                [ object
+                    [ "variant" .= variantTag variant
+                    , "note" .= variantNote variant
+                    , "cases" .= length [() | rc <- runCases, runVariant rc == variant]
+                    ]
+                | variant <- [minBound .. maxBound]
+                ]
+            , "cases_per_id" .= length operations, "grid_cases" .= length gridCases, "cases_per_role" .= length runCases
             , "carrier" .= object ["start" .= hex carrierStart, "end" .= hex carrierEnd]
             , "stubs" .= object ["getter" .= hex getterStub, "setter" .= hex setterStub, "properties" .= hex tableAddress]
             , "candidate_functions" .= [object ["start" .= hex s, "end" .= hex e] | FunctionSpan s e <- candidateFunctions]
@@ -395,7 +448,7 @@ oracle arguments runner linkedPath symbolsPath = do
                     , "model_disagreeing_cases" .= (if isJust (modelled (standing identifier)) then Just (M.findWithDefault 0 identifier modelPerId) else Nothing)
                     , "pass2_failed_cases" .= M.findWithDefault 0 identifier perId
                     ]
-                | identifier <- propertyIds
+                | identifier <- runIds
                 ]
             ]
         , "model_agreement" .= object
@@ -420,8 +473,8 @@ oracle arguments runner linkedPath symbolsPath = do
                 ++ [object ["name" .= problem, "holds" .= False] | problem <- unavailable]
             )
         , "differences" .= differenceSamples
-            ( [("model", caseLabel c, d) | (c, ds) <- modelFailures, d <- ds]
-                ++ [("pass2", caseLabel c, d) | (c, ds) <- verdictFailures, d <- ds]
+            ( [("model", runLabel c, d) | (c, ds) <- modelFailures, d <- ds]
+                ++ [("pass2", runLabel c, d) | (c, ds) <- verdictFailures, d <- ds]
             )
         , "passed" .= passed
         ]
@@ -435,7 +488,7 @@ oracle arguments runner linkedPath symbolsPath = do
 
 -- | One batch of 64 cases of the canonical image4: 16 operations over every slot argument of the first
 -- slot field whose branches' bits differ and of the first owned field, once with the stock functions
--- and once with the setter split around the largest candidate carrier.
+-- and once with the setter split around the largest arm-aligned owned interval.
 smoke :: [String] -> FilePath -> IO ()
 smoke arguments runner = do
   image4Path <- required arguments "--image4"
@@ -443,7 +496,7 @@ smoke arguments runner = do
   image4 <- readRegular 0x300000 image4Path
   ensure (sha256Hex (sha256 image4) == canonicalImage4Sha256) "--image4 is not the canonical X-M1 1.50 image4"
   classified <- either (\problem -> failH ("classification: " ++ problem)) pure (classify (Image "image4" "" 0x61c400 image4))
-  P.Carrier (P.GuestAddress carrierStart) (P.GuestAddress carrierEnd) <- maybe (failH "no candidate carrier") pure (listToMaybe (P.carrierCandidates classified))
+  P.Carrier (P.GuestAddress carrierStart) (P.GuestAddress carrierEnd) <- maybe (failH "no owned interval") pure (listToMaybe (P.carrierIntervals classified))
   let properties = M.fromList [(propertyId property, property) | property <- classified]
       fx = fixture image4
       differing (SlotArm (BankBranch _ bankWidth' bankBits' _) (RecordBranch _ recordWidth' recordBits') _) = (bankWidth', bankBits') /= (recordWidth', recordBits')

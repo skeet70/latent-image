@@ -1,12 +1,12 @@
 #![no_std]
 //! Owned arms of the X-M1 1.50 property getter 0x61e110 and setter 0x624694. The stubs in
-//! `entry.S` run inside the stock frame and return through the stock shared exits.
+//! `entry.S` run inside the stock frame and pop it themselves.
 
 mod property_table;
 mod table;
 
 use property_table::{PROPERTIES, SLOTS};
-use table::{BankDefault, BankOffset, Bits, Kind, RecordOffset, Save, SlotIndex, SlotRecord, Width};
+use table::{BankDefault, BankOffset, Bits, FieldDefault, Kind, RecordOffset, Save, SlotIndex, SlotRecord, Width};
 
 /// Bytes per bank image at 0x96cc64.
 const BANK_STRIDE: u32 = 0x1c2;
@@ -59,6 +59,7 @@ extern "C" {
     fn xm1_slot_defaults_load8(offset: ImageOffset) -> u32;
     fn xm1_slot_defaults_load16(offset: ImageOffset) -> u32;
     fn xm1_tail_defaults_load8(offset: ImageOffset) -> u32;
+    fn xm1_tail_defaults_load16(offset: ImageOffset) -> u32;
 }
 
 #[inline(always)]
@@ -131,8 +132,16 @@ unsafe fn slot_defaults_load(offset: ImageOffset, width: Width) -> u32 {
 
 unsafe fn bank_default(default: BankDefault) -> u32 {
     match default {
-        BankDefault::Constant(value) => value.0,
+        BankDefault::Constant(value) => value,
         BankDefault::TailByte(offset) => xm1_tail_defaults_load8(ImageOffset(offset.0)),
+    }
+}
+
+unsafe fn field_default(default: FieldDefault) -> u32 {
+    match default {
+        FieldDefault::Constant(value) => value,
+        FieldDefault::TailByte(offset) => xm1_tail_defaults_load8(ImageOffset(offset.0)),
+        FieldDefault::TailHalf(offset) => xm1_tail_defaults_load16(ImageOffset(offset.0)),
     }
 }
 
@@ -161,7 +170,7 @@ unsafe fn write(bits: Bits, save: Save, bank: BankIndex, live: ImageOffset, save
 unsafe fn get(id: PropertyId, bank: BankIndex, mode: ReadMode, slot: SlotNumber) -> u32 {
     match entry(id) {
         Kind::Field(field) => match mode {
-            ReadMode::Default => field.default.0,
+            ReadMode::Default => field_default(field.default),
             ReadMode::Live => extract(field.bits, bank_load(bank_offset(bank, field.offset), field.bits.width)),
         },
         Kind::SlotField(slot_field) => {
@@ -181,7 +190,7 @@ unsafe fn set(id: PropertyId, value: SetValue, bank: BankIndex, slot: SlotNumber
     match entry(id) {
         Kind::Field(field) => {
             let stored = match value {
-                SetValue::Default => field.default.0,
+                SetValue::Default => field_default(field.default),
                 SetValue::Value(value) => value,
             };
             write(field.bits, field.save, bank, bank_offset(bank, field.offset), bank_offset(BankIndex(0), field.offset), stored);

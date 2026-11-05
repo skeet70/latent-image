@@ -38,9 +38,14 @@ pub struct TailOffset(pub u32);
 #[derive(Clone, Copy)]
 pub struct SlotIndex(pub u32);
 
-/// The value the getter returns in default mode and the setter stores on a default request.
+/// The value the getter returns in default mode and the setter stores on a default request: a
+/// constant, or the field's container at 0x81b074 + offset.
 #[derive(Clone, Copy)]
-pub struct FieldDefault(pub u32);
+pub enum FieldDefault {
+    Constant(u32),
+    TailByte(TailOffset),
+    TailHalf(TailOffset),
+}
 
 /// An unsigned bit range within a byte or halfword.
 #[derive(Clone, Copy)]
@@ -68,7 +73,7 @@ pub struct SlotField {
 
 #[derive(Clone, Copy)]
 pub enum BankDefault {
-    Constant(FieldDefault),
+    Constant(u32),
     TailByte(TailOffset),
 }
 
@@ -111,7 +116,11 @@ impl Entry {
                 bits: bits(word, 2, 4, 8),
                 save: if word & (1 << 3) != 0 { Save::Bank0Previous } else { Save::None },
                 offset,
-                default: FieldDefault(word >> 22),
+                default: match (word >> 31, (word >> 2) & 1) {
+                    (0, _) => FieldDefault::Constant((word >> 22) & 0x1ff),
+                    (_, 0) => FieldDefault::TailByte(TailOffset((word >> 22) & 0xff)),
+                    _ => FieldDefault::TailHalf(TailOffset((word >> 22) & 0xff)),
+                },
             }),
             _ => Kind::SlotField(SlotField { bits: bits(word, 2, 4, 8), offset, index: SlotIndex((word >> 22) & 0x7f) }),
         }
@@ -127,7 +136,7 @@ impl Slot {
             bits: bits(word, 6, 7, 11),
             offset: RecordOffset(word & 0x3f),
             save: if word & (1 << 16) != 0 { Save::Bank0Previous } else { Save::None },
-            bank_default: if word & (1 << 17) != 0 { BankDefault::TailByte(TailOffset(value)) } else { BankDefault::Constant(FieldDefault(value)) },
+            bank_default: if word & (1 << 17) != 0 { BankDefault::TailByte(TailOffset(value)) } else { BankDefault::Constant(value) },
         }
     }
 }

@@ -22,6 +22,10 @@ module Replacement.PropertyService.Oracle
   , defaultRequest
   , Fixture (..)
   , fixture
+  , FixtureVariant (..)
+  , variantFixture
+  , variantTag
+  , variantNote
   , Effect (..)
   , Layout (..)
   , RecordSave (..)
@@ -62,11 +66,6 @@ module Replacement.PropertyService.Oracle
   , branchWord
   , movwWord
   , movtWord
-  , movR12FromR4
-  , movR12Zero
-  , movR4FromR12
-  , movR6FromR12
-  , movR12FromR6
   , image4Base
   ) where
 
@@ -221,6 +220,27 @@ fixture image4 =
   where
     bank0 = stream bankStrideBytes 0x9e3779b9
 
+-- | The shared fixture, or one with a changed window: `TailWindow` sets the defaults-table byte at
+-- 0x81b075, the high byte of 0x1e6's halfword default, to 0x5a.
+data FixtureVariant = CanonicalFixture | TailWindow deriving (Eq, Ord, Show, Enum, Bounded)
+
+variantFixture :: Fixture -> FixtureVariant -> Fixture
+variantFixture fx variant = case variant of
+  CanonicalFixture -> fx
+  TailWindow -> fx {fixtureTailDefaults = replaceByte 1 0x5a (fixtureTailDefaults fx)}
+  where
+    replaceByte at value bytes = B.take at bytes <> B.singleton value <> B.drop (at + 1) bytes
+
+variantTag :: FixtureVariant -> String
+variantTag variant = case variant of
+  CanonicalFixture -> "canonical"
+  TailWindow -> "tail-window"
+
+variantNote :: FixtureVariant -> String
+variantNote variant = case variant of
+  CanonicalFixture -> "the shared fixture with image4's defaults windows"
+  TailWindow -> "defaults-table byte 0x81b075 set to 0x5a, so 0x1e6's halfword default differs from its low byte"
+
 stream :: Int -> Word32 -> B.ByteString
 stream count seed = B.pack (take count (map (\x -> fromIntegral (x `shiftR` 24) :: Word8) (drop 1 (iterate step seed))))
   where
@@ -290,11 +310,11 @@ modelEffect = modelEffectIn stockLayout
 modelEffectIn :: Layout -> Fixture -> Owned -> Operation -> Maybe Effect
 modelEffectIn layout (Fixture banks previous _ slotDefaults tailDefaults) owned operation = case (owned, operation) of
   (OwnedUnassigned, _) -> Just (unchanged 0)
-  (OwnedField (FieldArm offset width bits (FieldDefault fallback) _), Get bank mode _) -> unchanged <$> case mode of
-    DefaultRead -> Just fallback
+  (OwnedField (FieldArm offset width bits fallback _), Get bank mode _) -> unchanged <$> case mode of
+    DefaultRead -> fieldDefault fallback
     LiveRead -> extractRange bits <$> load bankBase banks (bankAddress bank offset) width
-  (OwnedField (FieldArm offset width bits (FieldDefault fallback) save), Set bank slot choice) ->
-    let stored = resolved slot choice (Just fallback)
+  (OwnedField (FieldArm offset width bits fallback save), Set bank slot choice) ->
+    let stored = resolved slot choice (fieldDefault fallback)
      in write width bits save bank (bankAddress bank offset) (saveAddress offset) (saveAddress offset) =<< stored
   (OwnedSlotField (SlotArm (BankBranch offset width bits fallback) (RecordBranch record recordWidth' recordBits') _), Get bank mode slot)
     | bankBranchSelected slot -> unchanged <$> case mode of
@@ -325,8 +345,11 @@ modelEffectIn layout (Fixture banks previous _ slotDefaults tailDefaults) owned 
     recordAddress bank slot record = bankAddress bank (BankOffset 0) + recordBase + slotStride slot + recordOffsetWord record
     slotDefaultsAddress slot record = layoutSlotDefaults layout + slotStride slot + recordOffsetWord record
     bankDefault fallback = case fallback of
-      BankConstant (FieldDefault value) -> Just value
+      BankConstant value -> Just value
       BankTailByte (TailOffset tail') -> load tailDefaultsBase tailDefaults (layoutTailDefaults layout + fromIntegral tail') Byte
+    fieldDefault fallback = case fallback of
+      DefaultConstant value -> Just value
+      DefaultTail (TailOffset tail') width -> load tailDefaultsBase tailDefaults (layoutTailDefaults layout + fromIntegral tail') width
     -- On bank 0 with a save, the old bits go from the live container into the previous-value
     -- container read at `savedFrom` and written at `savedTo`; then the value is inserted.
     write width bits save bank live savedFrom savedTo stored = do
@@ -585,7 +608,7 @@ applyPatches patches image = foldM one image patches
       Right (B.take at bytes <> word32le after <> B.drop (at + 4) bytes)
 
 -- | A change to one owned field's PROPERTIES entry.
-data EntryControl = OffsetMoved | SaveCleared | DefaultFlipped deriving (Eq, Show, Enum, Bounded)
+data EntryControl = OffsetMoved | SaveCleared | DefaultFlipped | TailOffsetMoved deriving (Eq, Show, Enum, Bounded)
 
 mutateArm :: EntryControl -> FieldArm -> Maybe FieldArm
 mutateArm control arm = case control of
@@ -596,7 +619,12 @@ mutateArm control arm = case control of
         moved = if offset + 2 * step <= bankStrideBytes then offset + step else offset - step
      in Just arm {fieldOffset = BankOffset (fromIntegral moved :: Word16)}
   SaveCleared -> if fieldSave arm == SaveBank0Previous then Just arm {fieldSave = NoSave} else Nothing
-  DefaultFlipped -> case fieldDefault arm of FieldDefault value -> Just arm {fieldDefault = FieldDefault (value `xor` 1)}
+  DefaultFlipped -> case fieldDefault arm of
+    DefaultConstant value -> Just arm {fieldDefault = DefaultConstant (value `xor` 1)}
+    DefaultTail _ _ -> Nothing
+  TailOffsetMoved -> case fieldDefault arm of
+    DefaultTail (TailOffset tail') width -> Just arm {fieldDefault = DefaultTail (TailOffset (tail' + 1)) width}
+    DefaultConstant _ -> Nothing
 
 entryControlOperations :: EntryControl -> [Operation]
 entryControlOperations control = filter relevant operations
@@ -608,6 +636,8 @@ entryControlOperations control = filter relevant operations
       (SaveCleared, Get _ _ _) -> False
       (DefaultFlipped, Get _ mode _) -> mode == DefaultRead
       (DefaultFlipped, Set _ _ choice) -> choice == SetDefaultRequest
+      (TailOffsetMoved, Get _ mode _) -> mode == DefaultRead
+      (TailOffsetMoved, Set _ _ choice) -> choice == SetDefaultRequest
 
 -- | The first owned field whose mutated entry changes the model on one of the control's operations.
 exposingField :: Fixture -> EntryControl -> [Property] -> Maybe (Property, FieldArm)
@@ -644,9 +674,9 @@ mutateSlot fx control arm@(SlotArm bank@(BankBranch _ bankWidth' bankBits' fallb
         Just (MutatedArm arm {bankArm = bank {bankWidth = width, bankBits = bits}, recordArm = record {recordWidth = bankWidth', recordBits = bankBits'}})
     | otherwise -> Nothing
   Slot1DefaultFromRecord0 -> case (fallback, load slotDefaultsWindow (fixtureSlotDefaults fx) (slotDefaultsBase + fromIntegral offset) width) of
-    (BankConstant (FieldDefault value), Just container)
+    (BankConstant value, Just container)
       | let recordZero = extractRange bits container, recordZero /= value, recordZero <= maxDefault ->
-          Just (MutatedArm arm {bankArm = bank {bankDefault = BankConstant (FieldDefault recordZero)}})
+          Just (MutatedArm arm {bankArm = bank {bankDefault = BankConstant recordZero}})
     _ -> Nothing
   RecordSavedAtBankOffset
     | save == SaveBank0Previous -> Just (MutatedLayout stockLayout {layoutRecordSave = RecordSaveAtBankOffset})
@@ -700,10 +730,3 @@ movwWord, movtWord :: Word32 -> Word32
 movwWord address = 0xe300c000 .|. ((address `shiftR` 12 .&. 0xf) `shiftL` 16) .|. (address .&. 0xfff)
 movtWord address = 0xe340c000 .|. ((address `shiftR` 28) `shiftL` 16) .|. ((address `shiftR` 16) .&. 0xfff)
 
--- | @mov r12, r4@, @mov r12, #0@, @mov r4, r12@, @mov r6, r12@ and @mov r12, r6@.
-movR12FromR4, movR12Zero, movR4FromR12, movR6FromR12, movR12FromR6 :: Word32
-movR12FromR4 = 0xe1a0c004
-movR12Zero = 0xe3a0c000
-movR4FromR12 = 0xe1a0400c
-movR6FromR12 = 0xe1a0600c
-movR12FromR6 = 0xe1a0c006

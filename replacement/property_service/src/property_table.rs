@@ -14,7 +14,7 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x1), // 0xa unassigned
     Entry(0xba25a), // 0xb field
     Entry(0x13017a), // 0xc field
-    Entry(0x0), // 0xd delegated shape:getter:default-form
+    Entry(0x88f7a80a), // 0xd field
     Entry(0x1), // 0xe unassigned
     Entry(0xd017a), // 0xf field
     Entry(0x13e15a), // 0x10 field
@@ -23,18 +23,18 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x43417a), // 0x13 field
     Entry(0x1), // 0x14 unassigned
     Entry(0x1), // 0x15 unassigned
-    Entry(0x0), // 0x16 delegated shape:getter:default-form
+    Entry(0x80b3880a), // 0x16 field
     Entry(0x4b417a), // 0x17 field
     Entry(0x4dc17a), // 0x18 field
-    Entry(0x0), // 0x19 delegated shape:getter:default-form
+    Entry(0x85b6080a), // 0x19 field
     Entry(0xba173), // 0x1a slot field
-    Entry(0x0), // 0x1b delegated shape:getter:default-form
-    Entry(0x0), // 0x1c delegated shape:getter:default-form
+    Entry(0x83f5280a), // 0x1b field
+    Entry(0x88b7880a), // 0x1c field
     Entry(0x500253), // 0x1d slot field
     Entry(0x13217a), // 0x1e field
     Entry(0x4c017a), // 0x1f field
     Entry(0x13215a), // 0x20 field
-    Entry(0x0), // 0x21 delegated shape:getter:default-form
+    Entry(0x8535c80a), // 0x21 field
     Entry(0xda17a), // 0x22 field
     Entry(0x13c12a), // 0x23 field
     Entry(0xce17a), // 0x24 field
@@ -48,7 +48,7 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0xc025a), // 0x2c field
     Entry(0x1d1040a), // 0x2d field
     Entry(0xd817a), // 0x2e field
-    Entry(0x0), // 0x2f delegated shape:getter:default-form
+    Entry(0x8977e80a), // 0x2f field
     Entry(0x152040a), // 0x30 field
     Entry(0x150444a), // 0x31 field
     Entry(0x1), // 0x32 unassigned
@@ -69,7 +69,7 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x5050a), // 0x41 field
     Entry(0x4026a), // 0x42 field
     Entry(0x251e40a), // 0x43 field
-    Entry(0x0), // 0x44 delegated shape:getter:default-form
+    Entry(0x8837480a), // 0x44 field
     Entry(0x1), // 0x45 unassigned
     Entry(0xbc17a), // 0x46 field
     Entry(0x1), // 0x47 unassigned
@@ -105,7 +105,7 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x9c35a), // 0x65 field
     Entry(0x9a35a), // 0x66 field
     Entry(0x9835a), // 0x67 field
-    Entry(0x0), // 0x68 delegated shape:getter:default-form
+    Entry(0x84b5880a), // 0x68 field
     Entry(0x1), // 0x69 unassigned
     Entry(0x1), // 0x6a unassigned
     Entry(0x1), // 0x6b unassigned
@@ -165,7 +165,7 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x151644a), // 0xa1 field
     Entry(0x151640a), // 0xa2 field
     Entry(0x4be17a), // 0xa3 field
-    Entry(0x0), // 0xa4 delegated shape:getter:default-form
+    Entry(0x80f3a80a), // 0xa4 field
     Entry(0x13a11a), // 0xa5 field
     Entry(0x1), // 0xa6 unassigned
     Entry(0xc417a), // 0xa7 field
@@ -219,10 +219,10 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x13c10a), // 0xd7 field
     Entry(0xcc17a), // 0xd8 field
     Entry(0x10017a), // 0xd9 field
-    Entry(0x0), // 0xda delegated shape:getter:default-form
+    Entry(0x8274680a), // 0xda field
     Entry(0x1), // 0xdb unassigned
     Entry(0xcec25a), // 0xdc field
-    Entry(0x0), // 0xdd delegated shape:getter:default-form
+    Entry(0x8435480a), // 0xdd field
     Entry(0x1), // 0xde unassigned
     Entry(0x1), // 0xdf unassigned
     Entry(0x1), // 0xe0 unassigned
@@ -233,8 +233,8 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x148635a), // 0xe5 field
     Entry(0x92644a), // 0xe6 field
     Entry(0xd825a), // 0xe7 field
-    Entry(0x0), // 0xe8 delegated shape:getter:default-form
-    Entry(0x0), // 0xe9 delegated exploration-incomplete:setter
+    Entry(0x81f4280a), // 0xe8 field
+    Entry(0x0), // 0xe9 delegated exit-adjusts
     Entry(0x1), // 0xea unassigned
     Entry(0x1), // 0xeb unassigned
     Entry(0x1), // 0xec unassigned
@@ -247,12 +247,12 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x192e123), // 0xf3 slot field
     Entry(0x12e13a), // 0xf4 field
     Entry(0x8f625a), // 0xf5 field
-    Entry(0x0), // 0xf6 delegated exploration-incomplete:setter
-    Entry(0x0), // 0xf7 delegated shape:getter:default-form
-    Entry(0x0), // 0xf8 delegated shape:getter:default-form
-    Entry(0x0), // 0xf9 delegated exploration-incomplete:setter
-    Entry(0x0), // 0xfa delegated exploration-incomplete:setter
-    Entry(0x0), // 0xfb delegated shape:getter:default-form
+    Entry(0x0), // 0xf6 delegated exit-adjusts
+    Entry(0x82f4a80a), // 0xf7 field
+    Entry(0x83b5080a), // 0xf8 field
+    Entry(0x0), // 0xf9 delegated exit-adjusts
+    Entry(0x0), // 0xfa delegated exit-adjusts
+    Entry(0x82b4880a), // 0xfb field
     Entry(0xac50a), // 0xfc field
     Entry(0xa650a), // 0xfd field
     Entry(0x1d14443), // 0xfe slot field
@@ -270,7 +270,7 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x52c26a), // 0x10a field
     Entry(0x3626a), // 0x10b field
     Entry(0x3072353), // 0x10c slot field
-    Entry(0x0), // 0x10d delegated shape:getter:default-form
+    Entry(0x8173e80a), // 0x10d field
     Entry(0x3456353), // 0x10e slot field
     Entry(0x3866353), // 0x10f slot field
     Entry(0x3c4c353), // 0x110 slot field
@@ -301,8 +301,8 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x8476353), // 0x129 slot field
     Entry(0x1), // 0x12a unassigned
     Entry(0x1), // 0x12b unassigned
-    Entry(0x0), // 0x12c delegated shape:getter:default-form
-    Entry(0x0), // 0x12d delegated shape:getter:default-form
+    Entry(0x85f6280a), // 0x12c field
+    Entry(0x8636480a), // 0x12d field
     Entry(0x1), // 0x12e unassigned
     Entry(0x1), // 0x12f unassigned
     Entry(0x1), // 0x130 unassigned
@@ -318,9 +318,9 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x6e35a), // 0x13a field
     Entry(0xc825a), // 0x13b field
     Entry(0x4c625a), // 0x13c field
-    Entry(0x0), // 0x13d delegated shape:getter:default-form
+    Entry(0x8475680a), // 0x13d field
     Entry(0xf425a), // 0x13e field
-    Entry(0x0), // 0x13f delegated shape:getter:default-form
+    Entry(0x89b8080a), // 0x13f field
     Entry(0x4d217a), // 0x140 field
     Entry(0x94a4503), // 0x141 slot field
     Entry(0x993a103), // 0x142 slot field
@@ -348,9 +348,9 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0xc4c4503), // 0x158 slot field
     Entry(0xc8a0503), // 0x159 slot field
     Entry(0xccc2503), // 0x15a slot field
-    Entry(0x0), // 0x15b delegated exploration-incomplete:setter
-    Entry(0x0), // 0x15c delegated exploration-incomplete:setter
-    Entry(0x0), // 0x15d delegated exploration-incomplete:setter
+    Entry(0x0), // 0x15b delegated exit-adjusts
+    Entry(0x0), // 0x15c delegated exit-adjusts
+    Entry(0x0), // 0x15d delegated exit-adjusts
     Entry(0x89c50a), // 0x15e field
     Entry(0x9e50a), // 0x15f field
     Entry(0x8a250a), // 0x160 field
@@ -360,7 +360,7 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0xdcd4253), // 0x164 slot field
     Entry(0xd225a), // 0x165 field
     Entry(0x1), // 0x166 unassigned
-    Entry(0x0), // 0x167 delegated shape:getter:default-form
+    Entry(0x8374e80a), // 0x167 field
     Entry(0x1), // 0x168 unassigned
     Entry(0x1), // 0x169 unassigned
     Entry(0x1), // 0x16a unassigned
@@ -452,7 +452,7 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x12844a), // 0x1c0 field
     Entry(0x192244a), // 0x1c1 field
     Entry(0xecea253), // 0x1c2 slot field
-    Entry(0x0), // 0x1c3 delegated shape:getter:default-form
+    Entry(0x8575e80a), // 0x1c3 field
     Entry(0x1), // 0x1c4 unassigned
     Entry(0xf120443), // 0x1c5 slot field
     Entry(0xf74c803), // 0x1c6 slot field
@@ -470,7 +470,7 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x7caa50a), // 0x1d2 field
     Entry(0xa850a), // 0x1d3 field
     Entry(0x3470a), // 0x1d4 field
-    Entry(0x0), // 0x1d5 delegated shape:getter:default-form
+    Entry(0x8133c80a), // 0x1d5 field
     Entry(0x109650a), // 0x1d6 field
     Entry(0x43a26a), // 0x1d7 field
     Entry(0x1092a443), // 0x1d8 slot field
@@ -486,26 +486,26 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x110d6173), // 0x1e2 slot field
     Entry(0x114d4173), // 0x1e3 slot field
     Entry(0x13a12a), // 0x1e4 field
-    Entry(0x0), // 0x1e5 delegated shape:getter:default-form
-    Entry(0x0), // 0x1e6 delegated shape:getter:default-form
+    Entry(0x8877680a), // 0x1e5 field
+    Entry(0x8033500e), // 0x1e6 field
     Entry(0x1), // 0x1e7 unassigned
     Entry(0x1193c143), // 0x1e8 slot field
     Entry(0x13c13a), // 0x1e9 field
-    Entry(0x0), // 0x1ea delegated shape:getter:default-form
-    Entry(0x0), // 0x1eb delegated shape:getter:default-form
+    Entry(0x87f7280a), // 0x1ea field
+    Entry(0x8937c80a), // 0x1eb field
     Entry(0x8be25a), // 0x1ec field
     Entry(0xca25a), // 0x1ed field
     Entry(0x1), // 0x1ee unassigned
     Entry(0x5c35a), // 0x1ef field
     Entry(0xa635a), // 0x1f0 field
-    Entry(0x0), // 0x1f1 delegated shape:getter:default-form
-    Entry(0x0), // 0x1f2 delegated shape:getter:default-form
+    Entry(0x8676680a), // 0x1f1 field
+    Entry(0x86b6880a), // 0x1f2 field
     Entry(0xb035a), // 0x1f3 field
     Entry(0x8a35a), // 0x1f4 field
     Entry(0xca835a), // 0x1f5 field
     Entry(0xcaa35a), // 0x1f6 field
-    Entry(0x0), // 0x1f7 delegated shape:getter:default-form
-    Entry(0x0), // 0x1f8 delegated shape:getter:default-form
+    Entry(0x8776e80a), // 0x1f7 field
+    Entry(0x87b7080a), // 0x1f8 field
     Entry(0x4435a), // 0x1f9 field
     Entry(0x5235a), // 0x1fa field
     Entry(0x11c4a353), // 0x1fb slot field
@@ -520,8 +520,8 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x47e35a), // 0x204 field
     Entry(0xac35a), // 0x205 field
     Entry(0xae35a), // 0x206 field
-    Entry(0x0), // 0x207 delegated shape:getter:default-form
-    Entry(0x0), // 0x208 delegated shape:getter:default-form
+    Entry(0x8736c80a), // 0x207 field
+    Entry(0x86f6a80a), // 0x208 field
     Entry(0x7835a), // 0x209 field
     Entry(0x5835a), // 0x20a field
     Entry(0x5435a), // 0x20b field
@@ -633,8 +633,8 @@ pub static PROPERTIES: [Entry; 645] = [
     Entry(0x1), // 0x275 unassigned
     Entry(0x1), // 0x276 unassigned
     Entry(0x1), // 0x277 unassigned
-    Entry(0x0), // 0x278 delegated shape:getter:default-form
-    Entry(0x0), // 0x279 delegated shape:getter:default-form
+    Entry(0x81b4080a), // 0x278 field
+    Entry(0x84f5a80a), // 0x279 field
     Entry(0x53e11a), // 0x27a field
     Entry(0x0), // 0x27b delegated one-sided-fallback:setter
     Entry(0x0), // 0x27c delegated one-sided-fallback:setter

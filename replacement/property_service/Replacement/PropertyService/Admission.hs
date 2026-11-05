@@ -1,8 +1,9 @@
 {-# LANGUAGE GHC2021 #-}
 
 -- | Code policy over the linked owned text: every word is a walked A32 instruction or a literal it
--- loads, control stays in owned functions apart from the stub tails, the only non-stack stores are
--- the store accessors', and each entry's stack is bounded and composes over an acyclic call graph.
+-- loads, control stays in owned functions apart from the stubs' stock-frame pops and the listed stock
+-- calls, the only non-stack stores are the store accessors', and each entry's stack is bounded and
+-- composes over an acyclic call graph.
 module Replacement.PropertyService.Admission
   ( FunctionName (..)
   , FunctionExtent (..)
@@ -48,11 +49,15 @@ data CodeLayout = CodeLayout
     layoutStoreAccessors :: [GuestAddress]
   , -- | Entries no owned code calls.
     layoutRoots :: [GuestAddress]
-  , -- | B sites and their permitted targets outside owned text.
-    layoutTails :: [(GuestAddress, GuestAddress)]
+  , -- | Sites where a root pops the stock frame it entered in.
+    layoutFramePops :: [GuestAddress]
+  , -- | Stock leaf functions any owned function may call, with the lowest stack offset each reaches.
+    layoutStockLeaves :: [(GuestAddress, StackOffset)]
+  , -- | BL sites in roots and the stock function each calls at the root's entry sp; no stack depth is claimed for them.
+    layoutStockSites :: [(GuestAddress, GuestAddress)]
   }
 
-data CallKind = Call | TailCall deriving (Eq, Ord, Show)
+data CallKind = Call | TailCall | StockLeafCall | StockSiteCall deriving (Eq, Ord, Show)
 
 data CallEdge = CallEdge
   { edgeSite :: GuestAddress
@@ -95,6 +100,7 @@ data Violation
   | UnwalkedWord
   | ReturnAddressLost
   | FramePointerLost
+  | StockCallBelowEntry
   deriving (Eq, Show)
 
 data AdmissionError = AdmissionError GuestAddress Violation deriving (Eq, Show)
@@ -132,24 +138,29 @@ admitCode layout bytes = do
     address : _ -> Left (AdmissionError (GuestAddress address) UnwalkedWord)
     [] -> pure ()
   let frames = [frame | (frame, _, _) <- walked]
-  composed <- foldM (compose (M.fromList [(frameEntry frame, frame) | frame <- frames]) S.empty) M.empty (map frameEntry frames)
+  composed <- foldM (compose (M.fromList [(frameEntry frame, frame) | frame <- frames]) (M.fromList (layoutStockLeaves layout)) S.empty) M.empty (map frameEntry frames)
   pure (CodeProof frames composed (S.map GuestAddress instructions) (S.map GuestAddress literals))
 
-compose :: M.Map GuestAddress EntryFrame -> S.Set GuestAddress -> M.Map GuestAddress StackOffset -> GuestAddress -> Either AdmissionError (M.Map GuestAddress StackOffset)
-compose frames visiting done entry
+-- | Owned edges compose through their callee's depth and stock leaf edges through the leaf's;
+-- stock site edges add nothing.
+compose :: M.Map GuestAddress EntryFrame -> M.Map GuestAddress StackOffset -> S.Set GuestAddress -> M.Map GuestAddress StackOffset -> GuestAddress -> Either AdmissionError (M.Map GuestAddress StackOffset)
+compose frames leaves visiting done entry
   | M.member entry done = Right done
   | S.member entry visiting = Left (AdmissionError entry Recursion)
   | otherwise = case M.lookup entry frames of
       Nothing -> Left (AdmissionError entry FlowLeavesFunction)
       Just (EntryFrame _ (StackOffset own) calls) -> do
-        done' <- foldM (compose frames (S.insert entry visiting)) done (map edgeTarget calls)
-        let through (CallEdge _ target (StackOffset at) _) = let StackOffset calleeLow = done' M.! target in at + calleeLow
-            low = minimum (own : map through calls)
+        done' <- foldM (compose frames leaves (S.insert entry visiting)) done [edgeTarget edge | edge <- calls, edgeKind edge `elem` [Call, TailCall]]
+        let through (CallEdge _ target (StackOffset at) kind) = case kind of
+              StockLeafCall -> let StackOffset leafLow = leaves M.! target in Just (at + leafLow)
+              StockSiteCall -> Nothing
+              _ -> let StackOffset calleeLow = done' M.! target in Just (at + calleeLow)
+            low = minimum (own : [depth | Just depth <- map through calls])
         when (low < negate stackLimit) (Left (AdmissionError entry StackUnbounded))
         pure (M.insert entry (StackOffset low) done')
 
 -- | Every function returns with sp, r11 and the return address it entered with; stubs (roots) enter
--- with no return address in lr and leave only through their tails.
+-- with no return address in lr and leave only by popping the stock frame at their frame-pop sites.
 walkFunction :: CodeLayout -> B.ByteString -> FunctionExtent -> Either AdmissionError (EntryFrame, S.Set Word32, S.Set Word32)
 walkFunction layout bytes (FunctionExtent _ (GuestAddress start) (GuestAddress end)) =
   go M.empty [PathState start 0 Nothing entryLink R11Entry] 0 [] S.empty
@@ -158,7 +169,9 @@ walkFunction layout bytes (FunctionExtent _ (GuestAddress start) (GuestAddress e
     entryLink = if GuestAddress start `elem` layoutRoots layout then LinkLost else LinkLive
     callable = S.fromList [entry | FunctionExtent _ (GuestAddress entry) _ <- layoutFunctions layout, GuestAddress entry `notElem` layoutRoots layout]
     accessor = GuestAddress start `elem` layoutStoreAccessors layout
-    tails = S.fromList [(site, target) | (GuestAddress site, GuestAddress target) <- layoutTails layout]
+    framePops = S.fromList [site | GuestAddress site <- layoutFramePops layout]
+    leaves = S.fromList [target | (GuestAddress target, _) <- layoutStockLeaves layout]
+    stockSites = S.fromList [(site, target) | (GuestAddress site, GuestAddress target) <- layoutStockSites layout]
     go seen [] low calls literals =
       Right (EntryFrame (GuestAddress start) (StackOffset low) (S.toList (S.fromList calls)), M.keysSet seen, literals)
     go seen (state : pending) low calls literals =
@@ -197,7 +210,7 @@ walkFunction layout bytes (FunctionExtent _ (GuestAddress start) (GuestAddress e
           adjust offset = bound offset >> advance (moveSp offset state)
           written registers current = current
             { stateFp = if r11 `elem` registers then Nothing else stateFp current
-            , stateLink = if A.lr `elem` registers then LinkLost else stateLink current
+            , stateLink = if A.lr `elem` registers && stateLink current == LinkLive then LinkLost else stateLink current
             , stateR11 = if r11 `elem` registers && stateR11 current == R11Entry then R11Changed else stateR11 current
             }
           restored (register, address) current
@@ -215,13 +228,18 @@ walkFunction layout bytes (FunctionExtent _ (GuestAddress start) (GuestAddress e
         A.ReadStatus {} -> Left StatusAccess
         A.WriteApplicationFlags {} -> Left StatusAccess
         A.Branch _ True target
-          | S.member target callable -> do
+          | S.member target callable -> call Call
+          | S.member target leaves -> call StockLeafCall
+          | S.member (pc, target) stockSites -> do
+              unless (sp == 0) (Left StockCallBelowEntry)
+              call StockSiteCall
+          | otherwise -> Left (CallOutsideOwned (GuestAddress target))
+          where
+            call kind = do
               unless (sp `mod` 8 == 0) (Left StackMisaligned)
               let next = state {statePc = pc + 4, stateLink = if link == LinkLive then LinkLost else link}
-              Right (Outcome (skip [next]) sp [CallEdge (GuestAddress pc) (GuestAddress target) (StackOffset sp) Call] [])
-          | otherwise -> Left (CallOutsideOwned (GuestAddress target))
+              Right (Outcome (skip [next]) sp [CallEdge (GuestAddress pc) (GuestAddress target) (StackOffset sp) kind] [])
         A.Branch _ False target
-          | S.member (pc, target) tails -> leaving state >> terminal
           | target >= start && target < end -> Right (Outcome (skip [state {statePc = target}]) sp [] [])
           | S.member target callable -> do
               returning state
@@ -258,6 +276,11 @@ walkFunction layout bytes (FunctionExtent _ (GuestAddress start) (GuestAddress e
           | otherwise -> Left NonStackStore
         A.LoadMultiple _ register mode writeback registers
           | A.sp `elem` registers -> Left StackUnbounded
+          | register == A.sp && S.member pc framePops -> do
+              unless (mode == A.IncrementAfter && writeback && A.pc `elem` registers) (Left PcWrite)
+              unless (sp == 0) (Left StackUnbalanced)
+              unless (frame == R11Entry) (Left FramePointerLost)
+              terminal
           | register == A.sp && mode == A.IncrementAfter && writeback -> do
               let after = sp + 4 * length registers
                   addressed = zip registers [sp, sp + 4 ..]

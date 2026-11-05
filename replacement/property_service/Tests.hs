@@ -5,6 +5,7 @@ import Data.Bits (shiftR, testBit, (.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.List (isSuffixOf)
+import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Data.Word (Word32)
 import qualified Emulation.Sha256 as SHA
@@ -35,8 +36,8 @@ symbolNamed symbols chosen = case [symbol | symbol@(Symbol _ _ name) <- symbols,
   _ -> error "test symbol missing or repeated"
 
 carrierStartAddress, carrierEndAddress :: Word32
-carrierStartAddress = 0x62c4b0
-carrierEndAddress = 0x62d674
+carrierStartAddress = 0x62c120
+carrierEndAddress = 0x62fbfc
 
 testCarrier :: Carrier
 testCarrier = Carrier (GuestAddress carrierStartAddress) (GuestAddress carrierEndAddress)
@@ -59,10 +60,13 @@ syntheticClassification bytes symbols =
     widthAt word bit = if testBit word bit then Half else Byte
     rangeAt word lsb = BitRange (fromIntegral ((word `shiftR` lsb) .&. 0xf)) (fromIntegral ((word `shiftR` (lsb + 4)) .&. 0x1f))
     saveAt word bit = if testBit word bit then SaveBank0Previous else NoSave
-    field word = FieldArm (BankOffset (fromIntegral ((word `shiftR` 13) .&. 0x1ff))) (widthAt word 2) (rangeAt word 4) (FieldDefault (word `shiftR` 22)) (saveAt word 3)
+    fieldDefault word
+      | testBit word 31 = DefaultTail (TailOffset (fromIntegral ((word `shiftR` 22) .&. 0xff))) (widthAt word 2)
+      | otherwise = DefaultConstant ((word `shiftR` 22) .&. 0x1ff)
+    field word = FieldArm (BankOffset (fromIntegral ((word `shiftR` 13) .&. 0x1ff))) (widthAt word 2) (rangeAt word 4) (fieldDefault word) (saveAt word 3)
     slotArm word slot = SlotArm
       (BankBranch (BankOffset (fromIntegral ((word `shiftR` 13) .&. 0x1ff))) (widthAt word 2) (rangeAt word 4)
-        (if testBit slot 17 then BankTailByte (TailOffset (fromIntegral ((slot `shiftR` 18) .&. 0x3ff))) else BankConstant (FieldDefault ((slot `shiftR` 18) .&. 0x3ff))))
+        (if testBit slot 17 then BankTailByte (TailOffset (fromIntegral ((slot `shiftR` 18) .&. 0x3ff))) else BankConstant ((slot `shiftR` 18) .&. 0x3ff)))
       (RecordBranch (RecordOffset (fromIntegral (slot .&. 0x3f))) (widthAt slot 6) (rangeAt slot 7))
       (saveAt slot 16)
 
@@ -120,19 +124,27 @@ dataSiteTests = do
 
 carrierTests :: IO ()
 carrierTests = do
-  let fieldArm = Owned (OwnedField (FieldArm (BankOffset 0) Byte (BitRange 0 8) (FieldDefault 0) NoSave))
-      slotArm = Owned (OwnedSlotField (SlotArm (BankBranch (BankOffset 0x95) Byte (BitRange 4 4) (BankConstant (FieldDefault 3))) (RecordBranch (RecordOffset 0x24) Byte (BitRange 4 4)) SaveBank0Previous))
+  let fieldArm = Owned (OwnedField (FieldArm (BankOffset 0) Byte (BitRange 0 8) (DefaultConstant 0) NoSave))
+      slotArm = Owned (OwnedSlotField (SlotArm (BankBranch (BankOffset 0x95) Byte (BitRange 4 4) (BankConstant 3)) (RecordBranch (RecordOffset 0x24) Byte (BitRange 4 4)) SaveBank0Previous))
       delegated = Delegated ExitAdjusts
       classified arms = [Property (PropertyId n) (GuestAddress 0x61e200) (GuestAddress arm) verdict | (n, (arm, verdict)) <- zip [1 ..] arms]
       carriers runs = [Carrier (GuestAddress low) (GuestAddress high) | (low, high) <- runs]
-  expect "runs largest first" (carriers [(0x2000, 0x2400), (0x1000, 0x1200)])
-    (carrierCandidates (classified [(0x1000, fieldArm), (0x1100, fieldArm), (0x1200, delegated), (0x2000, fieldArm), (0x2400, delegated)]))
-  expect "lowest run first on a tie" (carriers [(0x1000, 0x1100), (0x2000, 0x2100)])
-    (carrierCandidates (classified [(0x1000, fieldArm), (0x1100, delegated), (0x2000, fieldArm), (0x2100, delegated)]))
-  expect "run ending at the setter fallback" (carriers [(0x630000, 0x6301fc)])
-    (carrierCandidates (classified [(0x1000, delegated), (0x630000, fieldArm)]))
-  expect "slot fields extend an owned run" (carriers [(0x1000, 0x1200), (0x2000, 0x2100)])
-    (carrierCandidates (classified [(0x1000, fieldArm), (0x1100, slotArm), (0x1200, delegated), (0x2000, fieldArm), (0x2100, delegated)]))
+      twoRuns = classified [(0x1000, fieldArm), (0x1100, slotArm), (0x1200, delegated), (0x2000, fieldArm), (0x2400, delegated)]
+      -- `b` before every arm of both runs, zeros elsewhere.
+      runImage extra = Image "image4" "" 0x800 (foldl (\bytes (address, value) -> putWordAt 0x800 address value bytes) (B.replicate 0x2000 0)
+        ([(arm - 4, branchWord False (arm - 4) 0x630200) | arm <- [0x1000, 0x1100, 0x2000]] ++ extra))
+      hitsIn image = scanReferences (Carrier (GuestAddress 0x1000) (GuestAddress 0x2400)) [(ScanImage4, image)] S.empty
+      chosen extra = chooseCarrier (runImage extra) twoRuns (hitsIn (runImage extra))
+  expect "intervals largest first, lowest address on a tie" (carriers [(0x2000, 0x2400), (0x1000, 0x1200), (0x1000, 0x1100), (0x1100, 0x1200)])
+    (carrierIntervals twoRuns)
+  expect "a run ending at the setter fallback" (carriers [(0x630000, 0x6301fc)])
+    (carrierIntervals (classified [(0x1000, delegated), (0x630000, fieldArm)]))
+  expect "the largest interval nothing refers into" (Just (Carrier (GuestAddress 0x2000) (GuestAddress 0x2400))) (chosen [])
+  expect "a word into the larger run passes it over" (Just (Carrier (GuestAddress 0x1000) (GuestAddress 0x1200))) (chosen [(0x2400, 0x2010)])
+  expect "a reference from inside an interval keeps it" (Just (Carrier (GuestAddress 0x1000) (GuestAddress 0x1200))) (chosen [(0x2400, 0x2010), (0x1150, 0x1050)])
+  expect "a dead site between intervals refuses the one it reaches" (Just (Carrier (GuestAddress 0x1100) (GuestAddress 0x1200)))
+    (chosen [(0x2400, 0x2010), (0x1700, 0x1050)])
+  expect "a conditional preceding word refuses an interval" (Just (Carrier (GuestAddress 0x1000) (GuestAddress 0x1200))) (chosen [(0x1ffc, 0x0a000000)])
   expect "128 slot fields fill the slot table" (Right 128) (length . encodedSlots <$> encodeTables (replicate 128 slotArm))
   expect "a 129th slot field is refused" (Left SlotTableFull) (encodeTables (replicate 129 slotArm))
 
@@ -154,7 +166,8 @@ placementTests :: [Property] -> LinkedArtifact -> IO ()
 placementTests properties artifact = do
   let stock = syntheticImage4 properties
       image4 bytes = Image "image4" "" 0x61c400 bytes
-      stage props bytes = stagePlacement props (image4 bytes) [(ScanImage4, image4 bytes)] artifact
+      scanOf props bytes = either (Left . PlacementRejected) Right (scanHull (image4 bytes) [(ScanImage4, image4 bytes)] props)
+      stage props bytes = scanOf props bytes >>= \scan -> stagePlacement props (image4 bytes) scan artifact
       with address value = putWordAt 0x61c400 address value stock
       GuestAddress getterTable = getterTableBase
       GuestAddress setterTable = setterTableBase
@@ -188,14 +201,20 @@ placementTests properties artifact = do
     (stage intoCarrier (syntheticImage4 intoCarrier))
   let hit site word reference = PlacementRejected (CarrierReferenced [ScanHit ScanImage4 (GuestAddress site) word reference])
       callWord = branchWord True 0x620000 0x62c600
+      deadLoad = 0xe51f0020
   expectRefusal "word equal to a carrier address" (hit 0x620000 0x62c500 WordInto) (stage properties (with 0x620000 0x62c500))
   expectRefusal "stock BL into the carrier" (hit 0x620000 callWord (BranchInto (GuestAddress 0x62c600))) (stage properties (with 0x620000 callWord))
   expectRefusal "MOVW/MOVT building a carrier address" (hit 0x620000 0xe30c3500 (MovPairInto (GuestAddress 0x62c500)))
     (stage properties (putWordAt 0x61c400 0x620004 0xe3403062 (with 0x620000 0xe30c3500)))
-  expectRefusal "PC-relative load into the carrier" (hit 0x62c490 0xe59f0020 (PcRelativeInto (GuestAddress 0x62c4b8)))
-    (stage properties (with 0x62c490 0xe59f0020))
-  expectRefusal "ADR into the carrier" (hit 0x62c494 0xe28f0020 (PcRelativeInto (GuestAddress 0x62c4bc)))
-    (stage properties (with 0x62c494 0xe28f0020))
+  expectRefusal "PC-relative load into the carrier" (hit 0x62c100 0xe59f0020 (PcRelativeInto (GuestAddress 0x62c128)))
+    (stage properties (with 0x62c100 0xe59f0020))
+  expectRefusal "ADR into the carrier" (hit 0x62c104 0xe28f0020 (PcRelativeInto (GuestAddress 0x62c12c)))
+    (stage properties (with 0x62c104 0xe28f0020))
+  expectRefusal "dead arm in the hull loading from the carrier" (hit 0x62fc00 deadLoad (PcRelativeInto (GuestAddress 0x62fbe8)))
+    (stage properties (with 0x62fc00 deadLoad))
+  case stage properties (with 0x62c200 0xe59f0020) of
+    Right _ -> putStrLn "admitted a PC-relative load from inside the carrier into it"
+    Left failure -> fail ("load inside the carrier refused: " ++ show failure)
   expectRefusal "conditional preceding word" (PlacementRejected (PrecedingNotTransfer 0x0a000000))
     (stage properties (with (carrierStartAddress - 4) 0x0a000000))
   let larger = Carrier (GuestAddress 0x624500) (GuestAddress 0x62b000)
@@ -205,33 +224,45 @@ placementTests properties artifact = do
               | p <- properties ]
       precededImage = putWordAt 0x61c400 0x6244fc (branchWord False 0x6244fc 0x630200) (syntheticImage4 moved)
       literalLoad = 0xe51f0020
-  expect "a larger run comes first" (take 2 (carrierCandidates moved)) [larger, testCarrier]
-  expectRefusal "larger run that staging admits" (PlacementRejected (LargerCarrierAdmissible larger)) (stage moved precededImage)
-  case stage moved (putWordAt 0x61c400 0x62b010 literalLoad precededImage) of
-    Right nextRun -> expect "larger run passed over for its literal reference"
-      [PassedOver larger (CarrierReferenced [ScanHit ScanImage4 (GuestAddress 0x62b010) literalLoad (PcRelativeInto (GuestAddress 0x62aff8))])]
-      (placementPassedOver nextRun)
-    Left failure -> fail ("next run refused: " ++ show failure)
+  expect "a larger interval comes first" (take 2 (carrierIntervals moved)) [larger, testCarrier]
+  expectRefusal "larger interval that staging admits" (PlacementRejected (LargerCarrierAdmissible larger)) (stage moved precededImage)
+  let referenced = putWordAt 0x61c400 0x62b010 literalLoad precededImage
+  case (stage moved referenced, scanOf moved referenced) of
+    (Right _, Right scan) -> do
+      expect "the larger interval's reference is a hull hit"
+        [ScanHit ScanImage4 (GuestAddress 0x62b010) literalLoad (PcRelativeInto (GuestAddress 0x62aff8))]
+        (referencesInto larger (hullHits scan))
+      expect "the hull scan chooses the carrier" (Just testCarrier) (hullCarrier scan)
+    (Left failure, _) -> fail ("next interval refused: " ++ show failure)
+    (_, Left failure) -> fail ("hull scan refused: " ++ show failure)
 
--- | One function at 0x1000 holding `code`, admitted alone.
-walk :: [Word32] -> Either AdmissionError CodeProof
-walk code = admitCode layout (B.concat (map U.putWord32 code))
+-- | Functions at 0x1000 holding `code`, admitted alone or with the listed roots, frame pops, stock leaves and stock sites.
+walkWith :: [GuestAddress] -> [GuestAddress] -> [(GuestAddress, StackOffset)] -> [(GuestAddress, GuestAddress)] -> [Word32] -> Either AdmissionError CodeProof
+walkWith roots pops leaves sites code = admitCode layout (B.concat (map U.putWord32 code))
   where
     layout = CodeLayout
       { layoutBase = GuestAddress 0x1000
       , layoutFunctions = [FunctionExtent (FunctionName "f") (GuestAddress 0x1000) (GuestAddress (0x1000 + 4 * fromIntegral (length code)))]
       , layoutData = []
       , layoutStoreAccessors = []
-      , layoutRoots = []
-      , layoutTails = []
+      , layoutRoots = roots
+      , layoutFramePops = pops
+      , layoutStockLeaves = leaves
+      , layoutStockSites = sites
       }
+
+walk :: [Word32] -> Either AdmissionError CodeProof
+walk = walkWith [] [] [] []
 
 walkerTests :: IO ()
 walkerTests = do
-  let refused label site violation code = case walk code of
+  let refusedBy label site violation outcome = case outcome of
         Left (AdmissionError (GuestAddress actual) found) | actual == site && found == violation -> putStrLn ("refused " ++ label ++ ": " ++ show violation)
         Left other -> fail (label ++ ": expected " ++ show violation ++ " at 0x" ++ showHex site "" ++ ", got " ++ show other)
         Right _ -> fail (label ++ ": admitted")
+      refused label site violation code = refusedBy label site violation (walk code)
+      root = [GuestAddress 0x1000]
+      leaf = GuestAddress 0x61d59c
   case walk [0xe92d4800, 0xe1a0b00d, 0xe8bd8800] of
     Right _ -> putStrLn "admitted push {r11, lr}; mov r11, sp; pop {r11, pc}"
     Left failure -> fail ("framed return refused: " ++ show failure)
@@ -244,6 +275,24 @@ walkerTests = do
   refused "store over the saved lr" 0x1004 NonStackStore [0xe92d4800, 0xe58d0004, 0xe8bd8800]
   refused "r11 changed at return" 0x1004 FramePointerLost [0xe1a0b000, 0xe12fff1e]
   refused "moved return address" 0x1004 ReturnAddressLost [0xe1a0e000, 0xe12fff1e]
+  case walk [0xe92d4800, 0xe3a0e000, 0xe8bd8800] of
+    Right _ -> putStrLn "admitted lr as scratch while the return address is saved"
+    Left failure -> fail ("lr scratch refused: " ++ show failure)
+  case walkWith root [GuestAddress 0x1004] [] [] [0xe1a0000c, 0xe8bd8830] of
+    Right _ -> putStrLn "admitted a root popping the stock frame at its frame-pop site"
+    Left failure -> fail ("stock-frame pop refused: " ++ show failure)
+  refusedBy "a stock-frame pop at another site" 0x1004 StackUnbalanced (walkWith root [GuestAddress 0x1000] [] [] [0xe1a0000c, 0xe8bd8830])
+  refusedBy "a stock-frame pop below the entry sp" 0x1004 StackUnbalanced (walkWith root [GuestAddress 0x1004] [] [] [0xe24dd008, 0xe8bd8830])
+  case walkWith [] [] [(leaf, StackOffset (-4))] [] [0xe92d4800, branchWord True 0x1004 0x61d59c, 0xe8bd8800] of
+    Right proof -> expect "a stock leaf call adds the leaf's stack" (Just (StackOffset (-12))) (M.lookup (GuestAddress 0x1000) (proofComposed proof))
+    Left failure -> fail ("stock leaf call refused: " ++ show failure)
+  refusedBy "a stock site call below the entry sp" 0x1004 StockCallBelowEntry
+    (walkWith root [GuestAddress 0x100c] [] [(GuestAddress 0x1004, GuestAddress 0x61da3c)] [0xe24dd008, branchWord True 0x1004 0x61da3c, 0xe28dd008, 0xe8bd89f8])
+  case walkWith root [GuestAddress 0x1004] [] [(GuestAddress 0x1000, GuestAddress 0x61da3c)] [branchWord True 0x1000 0x61da3c, 0xe8bd89f8] of
+    Right _ -> putStrLn "admitted a stock site call at the entry sp"
+    Left failure -> fail ("stock site call refused: " ++ show failure)
+  refusedBy "a stock site call from an unlisted site" 0x1000 (CallOutsideOwned (GuestAddress 0x61da3c))
+    (walkWith root [GuestAddress 0x1004] [] [(GuestAddress 0x1004, GuestAddress 0x61da3c)] [branchWord True 0x1000 0x61da3c, 0xe8bd89f8])
 
 main :: IO ()
 main = do
@@ -253,16 +302,20 @@ main = do
     _ -> fail "usage: property-service-artifact-tests LINKED_BIN SYMBOLS"
   let symbols = symbolRows symbolText
       properties = syntheticClassification bytes symbols
-      admit linked names = deriveArtifact properties linked names
+      admit linked names = deriveArtifact properties testCarrier linked names
       Symbol setStart setSize _ = symbolNamed symbols (== "xm1_property_set")
       Symbol tableAddress _ _ = symbolNamed symbols ("10PROPERTIES" `isSuffixOf`)
       Symbol slotAddress _ _ = symbolNamed symbols ("5SLOTS" `isSuffixOf`)
-      Symbol setterStubAddress _ _ = symbolNamed symbols (== "xm1_setter_stub")
+      Symbol getterStubAddress getterStubSize _ = symbolNamed symbols (== "xm1_getter_stub")
+      Symbol setterStubAddress setterStubSize _ = symbolNamed symbols (== "xm1_setter_stub")
       Symbol bankStore8 _ _ = symbolNamed symbols (== "xm1_bank_store8")
       Symbol bankLoad16 _ _ = symbolNamed symbols (== "xm1_bank_load16")
       Symbol slotDefaultsLoad8 _ _ = symbolNamed symbols (== "xm1_slot_defaults_load8")
       Symbol tailDefaultsLoad8 _ _ = symbolNamed symbols (== "xm1_tail_defaults_load8")
+      Symbol tailDefaultsLoad16 _ _ = symbolNamed symbols (== "xm1_tail_defaults_load16")
       calls = [site | site <- [setStart, setStart + 4 .. setStart + setSize - 4], U.word32At bytes (fromIntegral (site - carrierStartAddress)) .&. 0xff000000 == 0xeb000000]
+      getterPop = getterStubAddress + getterStubSize - 4
+      setterPop = setterStubAddress + setterStubSize - 4
   firstCall <- case calls of
     site : _ -> pure site
     [] -> fail "xm1_property_set has no BL"
@@ -273,13 +326,21 @@ main = do
   expectRefusal "mutated PROPERTIES byte" TableRejected (admit (flippedAt tableAddress) symbolText)
   expectRefusal "mutated SLOTS byte" SlotTableRejected (admit (flippedAt slotAddress) symbolText)
   let unsaved = [case propertyClass p of Owned (OwnedSlotField arm) -> p {propertyClass = Owned (OwnedSlotField arm {slotSave = NoSave})}; _ -> p | p <- properties]
-  expectRefusal "slot fields the SLOTS table does not hold" SlotTableRejected (deriveArtifact unsaved bytes symbolText)
+  expectRefusal "slot fields the SLOTS table does not hold" SlotTableRejected (deriveArtifact unsaved testCarrier bytes symbolText)
+  expectRefusal "artifact linked away from the hull scan's carrier" (PlacementRejected (CarrierNotCandidate (GuestAddress carrierStartAddress)))
+    (deriveArtifact properties (Carrier (GuestAddress 0x62c4b0) (GuestAddress carrierEndAddress)) bytes symbolText)
   expectRefusal "setter stub passing r7 as the slot" (EncodingRejected (StubEncoding SetterStub))
     (admit (replaceWord (setterStubAddress + 12) 0xe1a03007 bytes) symbolText)
+  expectRefusal "setter stub ending b 0x630200" (EncodingRejected (StubEncoding SetterStub))
+    (admit (replaceWord setterPop (branchWord False setterPop 0x630200) bytes) symbolText)
+  expectRefusal "getter stub popping the setter list" (EncodingRejected (StubEncoding GetterStub))
+    (admit (replaceWord getterPop 0xe8bd89f8 bytes) symbolText)
   expectRefusal "slot-defaults accessor base changed" (EncodingRejected (AccessorEncoding (Accessor SlotDefaultsImage Load8)))
     (admit (replaceWord (slotDefaultsLoad8 + 4) 0xe340c07d bytes) symbolText)
   expectRefusal "tail-defaults accessor storing" (EncodingRejected (AccessorEncoding (Accessor TailDefaultsImage Load8)))
     (admit (replaceWord (tailDefaultsLoad8 + 8) 0xe7cc1000 bytes) symbolText)
+  expectRefusal "tail-defaults halfword accessor reading a byte" (EncodingRejected (AccessorEncoding (Accessor TailDefaultsImage Load16)))
+    (admit (replaceWord (tailDefaultsLoad16 + 8) 0xe7dc0000 bytes) symbolText)
   expectRefusal "moved stub" SymbolRejected (admit bytes (moveSymbol "xm1_setter_stub" (setterStubAddress + 4) symbolText))
   expectRefusal "store outside an accessor" (CodeRejected (AdmissionError (GuestAddress firstCall) NonStackStore))
     (admit (replaceWord firstCall 0xe5810000 bytes) symbolText)
@@ -291,6 +352,8 @@ main = do
     (admit (replaceWord (bankLoad16 + 8) 0xe19c0fb0 bytes) symbolText)
   expectRefusal "B into stock" (CodeRejected (AdmissionError (GuestAddress firstCall) (BranchOutsideOwned (GuestAddress 0x61e110))))
     (admit (replaceWord firstCall (branchWord False firstCall 0x61e110) bytes) symbolText)
+  expectRefusal "a stock-frame pop inside Rust" (CodeRejected (AdmissionError (GuestAddress firstCall) PcWrite))
+    (admit (replaceWord firstCall 0xe8bd89f8 bytes) symbolText)
   expectRefusal "overlong artifact" ExtentRejected (admit (bytes <> B.replicate 4 0) symbolText)
   let pastCarrier = carrierEndAddress + 4
   expectRefusal "artifact past the carrier" ExtentRejected

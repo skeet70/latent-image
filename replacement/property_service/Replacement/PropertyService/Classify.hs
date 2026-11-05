@@ -30,6 +30,7 @@ module Replacement.PropertyService.Classify
   , recordBase
   , recordStride
   , maxDefault
+  , maxTailOffset
   , classify
   ) where
 
@@ -56,9 +57,10 @@ data Width = Byte | Half deriving (Eq, Ord, Show)
 -- | Unsigned bit range of a field within its byte or halfword.
 data BitRange = BitRange { rangeLsb :: Int, rangeBits :: Int } deriving (Eq, Ord, Show)
 
--- | The constant the getter returns when its defaults flag (argument 2) is 1, which is also the value
--- the setter stores when argument 1 is 0x1affffff.
-newtype FieldDefault = FieldDefault Word32 deriving (Eq, Ord, Show)
+-- | What the getter returns when its defaults flag (argument 2) is 1, which is also the value the
+-- setter stores when argument 1 is 0x1affffff: a constant, or the field's container read at
+-- 0x81b074 + offset at run time.
+data FieldDefault = DefaultConstant Word32 | DefaultTail TailOffset Width deriving (Eq, Ord, Show)
 
 -- | Whether a bank-0 store first copies the field's current bank-0 bits into 0x89ec00 at the same offset.
 data SavePolicy = SaveBank0Previous | NoSave deriving (Eq, Ord, Show)
@@ -73,7 +75,7 @@ data FieldArm = FieldArm
   deriving (Eq, Show)
 
 -- | The slot == 1 default: a constant, or the byte at 0x81b074 + offset read at run time.
-data BankDefault = BankConstant FieldDefault | BankTailByte TailOffset deriving (Eq, Show)
+data BankDefault = BankConstant Word32 | BankTailByte TailOffset deriving (Eq, Show)
 
 -- | Slot == 1: the field at 0x96cc64 + 0x1c2 * bank + offset.
 data BankBranch = BankBranch
@@ -155,10 +157,14 @@ tailDefaultsBase = 0x81b074
 -- | Offset of slot record 0 within a bank image.
 recordBase = 0x140
 recordStride = 0x28
--- | The largest default or tail offset the table encoding holds.
-maxDefault = 0x3ff
+-- | The largest constant default the table encoding holds.
+maxDefault = 0x1ff
 
--- | The getter post-dispatch the owned getter stub branches to, and the setter shared exit.
+-- | The largest tail offset a property word holds.
+maxTailOffset :: Word32
+maxTailOffset = 0xff
+
+-- | The getter post-dispatch and the setter shared exit.
 getterContinuationAddress, setterContinuationAddress :: Word32
 getterContinuationAddress = 0x624400
 setterContinuationAddress = 0x630200
@@ -199,12 +205,12 @@ decide getterShared setterShared getter setter getterExit setterExit
     returns end = case end of
       EndReturn _ -> True
       _ -> False
-    bareExit outcome = outcomeComplete outcome && outcomePaths outcome == [PathRecord [] [] [] (EndReturn ReturnsIncoming) Nothing]
+    bareExit outcome = outcomeComplete outcome && outcomePaths outcome == [PathRecord [] [] (EndReturn ReturnsIncoming) Nothing]
 
 -- | The exit pops at once with r0 as the arm left it, deciding nothing beyond the arm path's guards.
 plainExit :: (PathRecord, ExitRecord) -> Bool
 plainExit (path, exit) = case exitPaths exit of
-  [PathRecord guards [] [] (EndReturn ReturnsIncoming) Nothing] -> guards == pathGuards path
+  [PathRecord guards [] (EndReturn ReturnsIncoming) Nothing] -> guards == pathGuards path
   _ -> False
 
 -- | A path's stores when every one is modelled.
@@ -220,9 +226,9 @@ unassigned getter setter = do
   mapM_ (bare Getter (EndReturn (ReturnsConstant 0))) (outcomePaths getter)
   mapM_ (bare Setter (EndExit (ReturnsConstant 0))) (outcomePaths setter)
   where
-    bare side end (PathRecord _ stores calls actual _)
-      | not (null calls) = Left (side, UnexpectedCall)
-      | not (null stores) = Left (side, UnexpectedStore)
+    bare side end path@(PathRecord _ _ actual _)
+      | not (null (pathCalls path)) = Left (side, UnexpectedCall)
+      | not (null (pathStores path)) = Left (side, UnexpectedStore)
       | actual /= end = Left (side, UnexpectedEnd)
       | otherwise = Right ()
 
@@ -324,15 +330,32 @@ field getter setter = do
   (offset, width, bits, getDefault) <- tag Getter (getterField (outcomePaths getter))
   _ <- tag Getter (inContainer width bits)
   (setDefault, save) <- tag Setter (setterField offset width bits (outcomePaths setter))
-  if getDefault /= setDefault then Left (Setter, DefaultsDiffer)
-    else if getDefault > maxDefault then Left (Getter, DefaultOutOfRange)
-    else pure (FieldArm offset width bits (FieldDefault getDefault) save)
+  if getDefault /= setDefault then Left (Setter, DefaultsDiffer) else Right ()
+  case getDefault of
+    DefaultConstant c | c > maxDefault -> Left (Getter, DefaultOutOfRange)
+    DefaultTail (TailOffset t) w
+      | w /= width -> Left (Getter, DefaultFormUnrecognized)
+      | fromIntegral t > maxTailOffset -> Left (Getter, DefaultOutOfRange)
+    _ -> pure (FieldArm offset width bits getDefault save)
 
 tag :: Side -> Either ShapeFault a -> Either (Side, ShapeFault) a
 tag side = either (Left . (,) side) Right
 
+-- | A whole container read from the defaults table 0x81b074.
+tailDefault :: Loc -> Extract -> Maybe FieldDefault
+tailDefault loc (Extract lsb bits signed) = case offsetIn tailDefaultsBase [] loc of
+  Just (t, w) | lsb == 0, not signed, bits == 8 * fromIntegral (widthBytes w), t <= 0xffff -> Just (DefaultTail (TailOffset (fromIntegral t)) w)
+  _ -> Nothing
+
+-- | The default a setter store's source supplies.
+storedDefault :: Source -> Maybe FieldDefault
+storedDefault source = case source of
+  FromConstant c -> Just (DefaultConstant c)
+  FromField loc extract -> tailDefault loc extract
+  _ -> Nothing
+
 -- | The live field read with argument 2 /= 1 and the default read with argument 2 == 1.
-getterField :: [PathRecord] -> Either ShapeFault (BankOffset, Width, BitRange, Word32)
+getterField :: [PathRecord] -> Either ShapeFault (BankOffset, Width, BitRange, FieldDefault)
 getterField paths = do
   mapM_ (\path -> if not (null (pathCalls path)) then Left UnexpectedCall else if not (null (pathStores path)) then Left UnexpectedStore else Right ()) paths
   if all (onlyGuards [(GuardArgument (ArgumentIndex 2), 1)]) paths then Right () else Left UnmodelledGuard
@@ -345,12 +368,13 @@ getterField paths = do
     EndReturn (ReturnsField loc extract) | Just (o, w) <- bankField (ArgumentIndex 1) loc -> (,,) o w <$> rangeOf extract
     _ -> Left UnexpectedEnd
   getDefault <- case defaulted of
-    EndReturn (ReturnsConstant c) -> Right c
+    EndReturn (ReturnsConstant c) -> Right (DefaultConstant c)
+    EndReturn (ReturnsField loc extract) | Just fallback <- tailDefault loc extract -> Right fallback
     _ -> Left DefaultFormUnrecognized
   pure (offset, width, bits, getDefault)
 
 -- | The setter's store sequence for each value of (argument 1 is the default request, argument 2 == 0).
-setterField :: BankOffset -> Width -> BitRange -> [PathRecord] -> Either ShapeFault (Word32, SavePolicy)
+setterField :: BankOffset -> Width -> BitRange -> [PathRecord] -> Either ShapeFault (FieldDefault, SavePolicy)
 setterField (BankOffset offsetWord) width bits paths = do
   mapM_ (\path -> if not (null (pathCalls path)) then Left UnexpectedCall else if pathEnd path /= EndExit (ReturnsConstant 1) then Left UnexpectedEnd else Right ()) paths
   if all (onlyGuards [(GuardDefaultRequested, 0), (GuardArgument (ArgumentIndex 2), 0)]) paths then Right () else Left UnmodelledGuard
@@ -359,11 +383,11 @@ setterField (BankOffset offsetWord) width bits paths = do
   -- The default-request flag == 0 holds when no default was requested.
   let at notDefault bank0 = M.findWithDefault [] [notDefault, bank0] combinationsOf
   setDefault <- case reverse (at False True) of
-    StoreRecord _ _ (FromConstant c) : _ -> Right c
+    StoreRecord _ _ source : _ | Just fallback <- storedDefault source -> Right fallback
     _ -> Left DefaultFormUnrecognized
   let target = StoreTarget (offsetIn bankBase (bankTerm (ArgumentIndex 2))) (offsetIn saveBase []) (offsetIn bankBase []) (fromIntegral offsetWord) width bits
       fromValue actual = actual == FromArgument (ArgumentIndex 1)
-      fromDefault actual = actual == FromConstant setDefault
+      fromDefault actual = storedDefault actual == Just setDefault
       matches policy = and [sequenceMatches target policy (if notDefault then fromValue else fromDefault) bank0 (at notDefault bank0) | notDefault <- [False, True], bank0 <- [False, True]]
   if matches SaveBank0Previous then Right (setDefault, SaveBank0Previous)
     else if matches NoSave then Right (setDefault, NoSave)
@@ -427,7 +451,7 @@ slotGetter paths = do
     _ -> Left UnexpectedEnd
   fallback <- case bankDefaulted of
     EndReturn (ReturnsConstant c)
-      | c <= maxDefault -> Right (BankConstant (FieldDefault c))
+      | c <= maxDefault -> Right (BankConstant c)
       | otherwise -> Left DefaultOutOfRange
     EndReturn (ReturnsField loc extract)
       | Just (t, Byte) <- offsetIn tailDefaultsBase [] loc, extract == Extract 0 8 False ->
@@ -459,7 +483,7 @@ slotSetter (BankBranch (BankOffset bankAt) bankWidth' bankBits' fallback) (Recor
       record = StoreTarget (offsetIn bankBase (recordTerms (ArgumentIndex 2))) (offsetIn saveBase slotTerm) (offsetIn bankBase slotTerm) recordOffsetValue recordWidth' recordBits'
       fromValue actual = actual == FromArgument (ArgumentIndex 1)
       bankDefaultSource actual = case (fallback, actual) of
-        (BankConstant (FieldDefault c), FromConstant stored) -> stored == c
+        (BankConstant c, FromConstant stored) -> stored == c
         (BankTailByte (TailOffset t), FromField loc extract) -> offsetIn tailDefaultsBase [] loc == Just (fromIntegral t, Byte) && extract == Extract 0 8 False
         _ -> False
       recordDefaultSource actual = case actual of

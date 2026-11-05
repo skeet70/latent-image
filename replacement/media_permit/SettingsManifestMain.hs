@@ -85,6 +85,7 @@ sourceValue source = case source of
   FromArgument (ArgumentIndex n) -> object ["kind" .= ("argument" :: String), "argument" .= n]
   FromField loc e -> object ["kind" .= ("field" :: String), "location" .= locValue loc, "extract" .= extractValue e]
   FromConstant c -> object ["kind" .= ("constant" :: String), "value" .= hex c]
+  FromCall called -> object ["kind" .= ("call" :: String), "call" .= callValue called]
   FromOther -> object ["kind" .= ("other" :: String)]
 
 resultValue :: ArmResult -> Value
@@ -92,8 +93,33 @@ resultValue result = case result of
   ReturnsField loc e -> object ["kind" .= ("field" :: String), "location" .= locValue loc, "extract" .= extractValue e]
   ReturnsConstant c -> object ["kind" .= ("constant" :: String), "value" .= hex c]
   ReturnsArgument (ArgumentIndex n) -> object ["kind" .= ("argument" :: String), "argument" .= n]
+  ReturnsCall called -> object ["kind" .= ("call" :: String), "call" .= callValue called]
   ReturnsOther -> object ["kind" .= ("other" :: String)]
   ReturnsIncoming -> object ["kind" .= ("incoming" :: String)]
+
+callValue :: CallRecord -> Value
+callValue (CallRecord target arguments) = object
+  [ "target" .= hex target
+  , "arguments" .= [object ["register" .= register, "value" .= valValue value] | (register, value) <- arguments]
+  ]
+
+valValue :: Val -> Value
+valValue value = case value of
+  Const c -> object ["kind" .= ("constant" :: String), "value" .= hex c]
+  Arg (ArgumentIndex n) -> object ["kind" .= ("argument" :: String), "argument" .= n]
+  Linear base terms -> object ["kind" .= ("linear" :: String), "base" .= hex base, "terms" .= [object ["argument" .= n, "stride" .= hex stride] | (ArgumentIndex n, stride) <- terms]]
+  Field loc steps -> object ["kind" .= ("field" :: String), "location" .= locValue loc, "steps" .= map stepValue steps]
+  Inserted loc steps source lsb width -> object ["kind" .= ("inserted" :: String), "location" .= locValue loc, "steps" .= map stepValue steps, "source" .= sourceValue source, "lsb" .= lsb, "bits" .= width]
+  CallResult called -> object ["kind" .= ("call-result" :: String), "call" .= callValue called]
+  DefaultRequested -> object ["kind" .= ("default-requested" :: String)]
+  Incoming -> object ["kind" .= ("incoming" :: String)]
+  Other -> object ["kind" .= ("other" :: String)]
+  where
+    stepValue step = case step of
+      Ubfx lsb width -> object ["step" .= ("ubfx" :: String), "lsb" .= lsb, "bits" .= width]
+      Sbfx lsb width -> object ["step" .= ("sbfx" :: String), "lsb" .= lsb, "bits" .= width]
+      Lsr n -> object ["step" .= ("lsr" :: String), "amount" .= n]
+      Mask m -> object ["step" .= ("mask" :: String), "mask" .= hex m]
 
 storeValue :: StoreRecord -> Value
 storeValue (StoreRecord loc extract source) = object ["location" .= locValue loc, "extract" .= extractValue extract, "source" .= sourceValue source]
@@ -103,6 +129,7 @@ guardValue (Guard subject constant cond holds) = object
   [ "subject" .= case subject of
       GuardArgument (ArgumentIndex n) -> object ["kind" .= ("argument" :: String), "argument" .= n]
       GuardDefaultRequested -> object ["kind" .= ("default-requested" :: String)]
+      GuardField loc e -> object ["kind" .= ("field" :: String), "location" .= locValue loc, "extract" .= extractValue e]
       GuardUnmodelled -> object ["kind" .= ("unmodelled" :: String)]
   , "constant" .= fmap hex constant
   , "condition" .= case cond of
@@ -117,10 +144,9 @@ guardValue (Guard subject constant cond holds) = object
   ]
 
 pathValue :: PathRecord -> Value
-pathValue (PathRecord guards stores calls end exit) = object
+pathValue (PathRecord guards events end exit) = object
   [ "guards" .= map guardValue guards
-  , "stores" .= map pathStoreValue stores
-  , "calls" .= map hex calls
+  , "events" .= map eventValue events
   , "end" .= case end of
       EndReturn result -> object ["kind" .= ("return" :: String), "result" .= resultValue result]
       EndExit result -> object ["kind" .= ("exit" :: String), "result" .= resultValue result]
@@ -128,6 +154,9 @@ pathValue (PathRecord guards stores calls end exit) = object
   , "exit" .= fmap (\(ExitRecord paths complete) -> object ["paths" .= map pathValue (sort paths), "complete" .= complete]) exit
   ]
   where
+    eventValue event = case event of
+      EventStore stored -> object ["store" .= pathStoreValue stored]
+      EventCall called -> object ["call" .= callValue called]
     pathStoreValue stored = case stored of
       Modelled record -> object ["kind" .= ("modelled" :: String), "store" .= storeValue record]
       Unmodelled instruction -> object ["kind" .= ("unmodelled" :: String), "instruction" .= hex instruction]
@@ -191,8 +220,8 @@ main = do
         , "savedStackTaintResiduals" .= residualsValue
         , "censusMethod" .= ("Linear decode of every aligned word of the three images. directCalls are BL sites in any image; branchSites are non-link B sites outside the derived extent, or outside the candidate window when the derivation refused; literalWords are aligned words equal to the entry address; constructedSites are MOVW/MOVT pairs building the entry address; object sites are MOVW/MOVT pairs of one register within eight words, with no intervening MOVW of that register or unconditional transfer, or PC-relative LDR values inside the object. Embedded data decodes as instructions, so every site is a candidate; candidateFunction is the nearest preceding fence, not a derived containment." :: String)
         , "callerClosure" .= ("open: Thumb, computed, register-relative and copied-pointer uses, addresses built by other instruction sequences and callers outside the three images are not censused" :: String)
-        , "pathMethod" .= ("Each property's getter.paths and setter.paths list every feasible interpreted path that ended, sorted. A path is feasible when its equality assumptions can all hold: no subject both equal and unequal to one constant, no argument equal to two constants, and the setter's default-request flag (r7, which is 1 exactly when argument 1 is 0x1affffff and 0 otherwise; on setter paths a comparison of argument 1 with 0x1affffff counts as a comparison of the flag with 1, and argument 1 equal to any other constant sets the flag to 0) left a value; returns, stores and calls above still cover every path. Each path gives the forks it took (subject: an incoming argument, the default-request flag, or unmodelled; the compared constant when the flags came from CMP with a constant; the condition code and whether it held), its stores in execution order (modelled with location, bit range and source, or unmodelled with the store instruction's address when its location is not modelled), its BL targets in execution order, and its end (return or shared exit with r0's value, or cut by the step limit, an address outside the image or an unrecognized instruction). A setter path ending at the shared exit 0x630200 carries exit: the exit interpreted from that path's own registers with r0 marked incoming, whose paths start with the arm path's guards, and whether that exploration completed. Paths dropped at the path limit are absent and complete is false. Forks the last comparison decides record no guard." :: String)
-        , "fieldMethod" .= ("Each getter and setter jump-table arm, including the shared fallback arm, is interpreted from its target with the property id and its index as constants: getter r12 = id, r0 = id - 1, r1..r3 = arguments 1..3; setter r4 = id, r3 = id - 1, r5/r1 = argument 1, r6/r2 = argument 2, r8 = argument 3. A conditional instruction forks into executed and skipped paths unless the last comparison decides it: EQ, NE, HS, LO, HI and LS against two constants, and EQ/NE against an assumed equality of a value with a constant compared by CMP immediate or by CMP of a register holding a constant. BL clobbers r0-r3 and r12, B is followed, and a path ends at pop {..., pc}, bx lr, the setter's shared continuation 0x630200, an unrecognized instruction (recorded as an other result and an incomplete exploration), " ++ show maxSteps ++ " instructions, or when more than " ++ show maxPaths ++ " paths have started. Values track constants, including the image4 literal word a PC-relative LDR loads, arguments, linear values base + sum of stride * argument (one term per argument, strides summed mod 2^32, zero strides dropped, no terms being a constant) from MLA, MUL by a constant, ADD or SUB of an immediate, ADD of two linear values and ADD of a register shifted by LSL, loads from [rN, #imm] and [rN, rM, lsl #k] over linear values, whose location is a base, terms and offset, and UBFX, SBFX, LSR, AND-mask and UXT steps; a store records BFI-inserted bits when the stored value is the loaded location with an insertion, otherwise the full stored width. storage is set when the getter's returns contain exactly one distinct field, the setter stores that base, strides, offset, width and bit range from argument 1 (the bank index is argument 1 in the getter and argument 2 in the setter, so only the strides are compared, and storage.location carries the getter's terms), and both explorations are complete." :: String)
+        , "pathMethod" .= ("Each property's getter.paths and setter.paths list every feasible interpreted path that ended, sorted. A path is feasible when its equality assumptions can all hold: no subject both equal and unequal to one constant, no argument equal to two constants, and the setter's default-request flag (r7, which is 1 exactly when argument 1 is 0x1affffff and 0 otherwise; on setter paths a comparison of argument 1 with 0x1affffff counts as a comparison of the flag with 1, and argument 1 equal to any other constant sets the flag to 0) left a value; returns, stores and calls above still cover every path. Each path gives the forks it took (subject: an incoming argument, the default-request flag, a loaded field with its location and bit range, or unmodelled; the compared constant when the flags came from CMP with a constant; the condition code and whether it held), its events in execution order, each a store (modelled with location, bit range and source, or unmodelled with the store instruction's address when its location is not modelled) or a BL call (its target and the values of r0-r3 at the BL), and its end (return or shared exit with r0's value, or cut by the step limit, an address outside the image or an unrecognized instruction). A setter path ending at the shared exit 0x630200 carries exit: the exit interpreted from that path's own registers with r0 marked incoming, whose paths start with the arm path's guards, and whether that exploration completed. Paths dropped at the path limit are absent and complete is false. Forks the last comparison decides record no guard." :: String)
+        , "fieldMethod" .= ("Each getter and setter jump-table arm, including the shared fallback arm, is interpreted from its target with the property id and its index as constants: getter r12 = id, r0 = id - 1, r1..r3 = arguments 1..3; setter r4 = id, r3 = id - 1, r5/r1 = argument 1, r6/r2 = argument 2, r8 = argument 3. A conditional instruction forks into executed and skipped paths unless the last comparison decides it: EQ, NE, HS, LO, HI and LS against two constants, and EQ/NE against an assumed equality of a value with a constant compared by CMP immediate or by CMP of a register holding a constant. BL records its call, leaves r0 holding that call's result and clobbers r1-r3 and r12; a call result returned or stored is a call source. B is followed, and a path ends at pop {..., pc}, bx lr, the setter's shared continuation 0x630200, an unrecognized instruction (recorded as an other result and an incomplete exploration), " ++ show maxSteps ++ " instructions, or when more than " ++ show maxPaths ++ " paths have started. Values track constants, including the image4 literal word a PC-relative LDR loads, arguments, linear values base + sum of stride * argument (one term per argument, strides summed mod 2^32, zero strides dropped, no terms being a constant) from MLA, MUL by a constant, ADD or SUB of an immediate, ADD of two linear values, ADD of a register shifted by LSL and MOV of a register shifted by LSL, loads from [rN, #imm] and [rN, rM, lsl #k] over linear values, whose location is a base, terms and offset, and UBFX, SBFX, LSR, AND-mask and UXT steps; a store records BFI-inserted bits when the stored value is the loaded location with an insertion, otherwise the full stored width. storage is set when the getter's returns contain exactly one distinct field, the setter stores that base, strides, offset, width and bit range from argument 1 (the bank index is argument 1 in the getter and argument 2 in the setter, so only the strides are compared, and storage.location carries the getter's terms), and both explorations are complete." :: String)
         , "propertyTables" .= object
             [ "getter" .= object ["function" .= hex (tableFunction getterTable), "dispatch" .= hex (tableDispatch getterTable), "default" .= hex getterDefault, "entries" .= tableEntries getterTable]
             , "setter" .= object ["function" .= hex (tableFunction setterTable), "dispatch" .= hex (tableDispatch setterTable), "default" .= hex setterDefault, "entries" .= tableEntries setterTable]

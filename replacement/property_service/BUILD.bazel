@@ -7,6 +7,8 @@ xm1_rust_staticlib(
     name = "property-service-rust",
     src = "src/lib.rs",
     crate_name = "xm1_property_service",
+    # The native runner refuses unaligned accesses.
+    rustc_flags = ["-C", "target-feature=+strict-align"],
     data = [
         "src/property_table.rs",
         "src/table.rs",

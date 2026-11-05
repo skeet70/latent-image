@@ -1,11 +1,8 @@
 ENTRY(xm1_getter_stub)
 
-xm1_getter_exit = 0x624400;
-xm1_setter_exit = 0x630200;
-
-/* An owned run of setter arms that staging admits; admission derives the candidates. */
+/* The interval of owned setter arms the hull scan chooses; staging derives and checks it. */
 MEMORY {
-  CARRIER (rx) : ORIGIN = 0x62c4b0, LENGTH = 0x62d674 - 0x62c4b0
+  CARRIER (rx) : ORIGIN = 0x62c120, LENGTH = 0x62fbfc - 0x62c120
 }
 
 SECTIONS
@@ -33,6 +30,6 @@ SECTIONS
   }
 }
 
-ASSERT(__property_service_start == 0x62c4b0, "property service left its carrier start")
-ASSERT(xm1_getter_stub == 0x62c4b0, "getter stub moved")
+ASSERT(__property_service_start == 0x62c120, "property service left its carrier start")
+ASSERT(xm1_getter_stub == 0x62c120, "getter stub moved")
 ASSERT(SIZEOF(.data) == 0 && SIZEOF(.bss) == 0, "property service has writable statics")
