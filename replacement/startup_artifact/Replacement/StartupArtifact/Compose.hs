@@ -14,7 +14,6 @@ import Data.List (nub, sort)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
 import Data.Text (Text)
-import qualified Data.Text as T
 import qualified FujiAF.UpdateContainer as U
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
