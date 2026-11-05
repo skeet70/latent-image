@@ -6,8 +6,8 @@ use fujimod_xm1::{
     application_observation::{self, hit_observers, Observers, Recorder as ApplicationRecorder},
     attach_relations::{self, AttachSources, TimerState, TransactionWriter},
     attach_state::{self, AttachState},
-    bridge::{read, save_checkpoint, sha256, write, SNAPSHOT},
-    checkpoint::BootIdentity,
+    bridge::{read, sha256, write},
+    checkpoint::{BootIdentity, initialized_reset},
     composed_catalog::{Contract, Core, Label, Pc, Role, ROW_LIMIT, Sha256},
     composed_mutations::{self, CensusRow},
     composed_receipt::{
@@ -37,7 +37,6 @@ const RUN_SHA256: &str = "efa32ff8d2a378ba9e098ac28015faf82856765c866d5db5b97cb1
 const ROM_SHA256: &str = "4ecedfbfc1910bde488d36abe4380621f8845e6afcfc6cf54a49a33ec0abf9be";
 const CANONICAL_DAT_SHA256: &str = "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490";
 const RESET_PROCEDURE: &[u8] = b"initialized-reset-v1:run::open;document-execution-policy;no-adjustment;empty-card;zero-entered-instructions";
-const RESET_RECORD: &str = "initialized-reset.json";
 
 enum BootCheckpoint {
     Reuse(PathBuf),
@@ -370,24 +369,11 @@ fn reset_machine(document: RunDocument, update: Vec<u8>, rom: &[u8], identity: &
     checkpoint: BootCheckpoint) -> Result<Machine, String> {
     let mut session = run::open(&document, &ValidatedUpdate(update), rom)?;
     session.board.set_execution_policy(document.execution_policy.into())?;
-    let mut machine = Machine::new(document, session)?;
-    let BootCheckpoint::Reuse(root) = checkpoint else { return Ok(machine) };
-    let name = format!("reset-{}", identity.key());
-    let directory = root.join(&name);
-    if directory.exists() {
-        let recorded: serde_json::Value = serde_json::from_slice(&read(&directory.join(RESET_RECORD))?)
-            .map_err(|error| format!("initialized-reset identity: {error}"))?;
-        require(recorded == identity.document(), "initialized-reset checkpoint identity differs")?;
-        let snapshot = machine.session.import_snapshot(&read(&directory.join(SNAPSHOT))?)?;
-        machine.disarm()?;
-        machine.session.restore(&snapshot)?;
-        machine.rearm()?;
-        require(machine.session.board.instruction_counts().iter().all(|count| *count == 0),
-            "initialized-reset checkpoint omits startup evidence")?;
-    } else {
-        save_checkpoint(&mut machine, &root, &name, RESET_RECORD, &identity.document())?;
+    let machine = Machine::new(document, session)?;
+    match checkpoint {
+        BootCheckpoint::Fresh => Ok(machine),
+        BootCheckpoint::Reuse(root) => initialized_reset(machine, identity, &root),
     }
-    Ok(machine)
 }
 
 fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: PathBuf, rom_path: PathBuf, output: PathBuf,
@@ -669,7 +655,7 @@ mod tests {
         let mut machine = reset_machine(document, update, &rom, &identity, BootCheckpoint::Fresh).unwrap();
         assert!(!root.exists());
         assert!(matches!(machine.run(1), RunOutcome::Completed));
-        save_checkpoint(&mut machine, &root, &format!("reset-{}", identity.key()), RESET_RECORD, &identity.document()).unwrap();
+        fujimod_xm1::bridge::save_checkpoint(&mut machine, &root, &format!("reset-{}", identity.key()), "initialized-reset.json", &identity.document()).unwrap();
         let (document, update, rom, identity) = inputs();
         assert!(reset_machine(document, update, &rom, &identity, BootCheckpoint::Reuse(root.clone())).is_err());
         std::fs::remove_dir_all(root).unwrap();

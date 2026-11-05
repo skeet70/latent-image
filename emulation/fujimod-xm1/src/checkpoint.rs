@@ -48,3 +48,25 @@ impl BootIdentity {
         serde_json::to_value(self).expect("boot identity serialization")
     }
 }
+
+pub fn initialized_reset(mut machine: crate::machine::Machine, identity: &BootIdentity, root: &std::path::Path) -> Result<crate::machine::Machine, String> {
+    const RECORD: &str = "initialized-reset.json";
+    let name = format!("reset-{}", identity.key());
+    let directory = root.join(&name);
+    if directory.exists() {
+        let recorded: serde_json::Value = serde_json::from_slice(&crate::bridge::read(&directory.join(RECORD))?)
+            .map_err(|error| format!("initialized-reset identity: {error}"))?;
+        if recorded != identity.document() { return Err("initialized-reset checkpoint identity differs".into()); }
+        let snapshot = machine.session.import_snapshot(&crate::bridge::read(&directory.join(crate::bridge::SNAPSHOT))?)?;
+        machine.disarm()?;
+        machine.session.restore(&snapshot)?;
+        machine.rearm()?;
+    }
+    if machine.session.board.instruction_counts().iter().any(|count| *count != 0) {
+        return Err("initialized-reset checkpoint omits startup evidence".into());
+    }
+    if !directory.exists() {
+        crate::bridge::save_checkpoint(&mut machine, root, &name, RECORD, &identity.document())?;
+    }
+    Ok(machine)
+}

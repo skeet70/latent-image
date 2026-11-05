@@ -5,7 +5,7 @@
 //! saved as FujiMod session snapshots.
 use fujimod_xm1::adjustment::AdjustmentNand;
 use fujimod_xm1::attach_boot::{Attachment, attach};
-use fujimod_xm1::checkpoint::{BootIdentity, CheckpointKey};
+use fujimod_xm1::checkpoint::{BootIdentity, CheckpointKey, initialized_reset};
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, load_card, menu_value, read, restore, sha256, write};
 use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, encode_hex};
 use fujimod_xm1::guest::{DialTurn, ModeDialPosition, PhysicalShutterPosition, Press, RouteKey};
@@ -1475,6 +1475,14 @@ fn drive() -> Result<(), String> {
         None => {
             let boot_started = Instant::now();
             let mut machine = inputs.machine()?;
+            if observation.is_some() {
+                let identity = BootIdentity::new(
+                    &inputs.document_bytes, &inputs.update, &inputs.boot_rom, &adjustment_bytes,
+                    inputs.card.as_ref().map(|card| card.image.sha256.as_str()),
+                    b"initialized-adjusted-card-state-v1:before-reset-observation",
+                );
+                machine = initialized_reset(machine, &identity, &root.join("initialized-reset"))?;
+            }
             let mut observer = observation.as_ref().map(|spec| ResetObserver::begin(&mut machine, spec)).transpose()?;
             let (mut bridge, attachment) = attach(machine, rendezvous, arguments.attach_hold, observer.as_mut())?;
             let boot_seconds = boot_started.elapsed().as_secs_f64();
