@@ -173,8 +173,7 @@ impl<'a, M: RecordMedium, S: Staging> Entry<'a, M, S> {
         }
         if let Some(best) = best {
             if let Some(output) = recovery.as_deref_mut() { *output = best.skipped; }
-            let full = if cfg!(feature = "control-6") { area.geometry.count.0 } else { area.geometry.count.0.wrapping_sub(1) };
-            if recovery.is_some() && best.position.0 == full {
+            if recovery.is_some() && best.position.0 == area.geometry.count.0.wrapping_sub(1) {
                 area.current = best.bank.next();
                 let (probe, skipped, _) = self.valid(area, callbacks);
                 if probe.is_none() && skipped != 0 { if let Some(output) = recovery { *output = best.skipped; } }
@@ -193,7 +192,8 @@ impl<'a, M: RecordMedium, S: Staging> Entry<'a, M, S> {
     fn inner_append(&mut self, area: &Area, callbacks: &mut impl Callbacks, seed: Seed, source: RecordSource<'_>, placement: Placement) -> Option<Appended> {
         let (position, seq) = match self.find_last(area) {
             Some(p) => {
-                if p.0 as i32 >= area.geometry.count.0 as i32 - 1 { return None; }
+                let full = area.geometry.count.0 as i32 - if cfg!(feature = "control-6") { 0 } else { 1 };
+                if p.0 as i32 >= full { return None; }
                 let seq = sequence(self.staging.bytes(area.kind), area.geometry.sequence_offset).successor();
                 (Position(p.0 + 1), seq)
             }

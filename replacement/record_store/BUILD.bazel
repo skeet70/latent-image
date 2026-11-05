@@ -58,3 +58,11 @@ genrule(
     outs = ["host-adapter-tests.passed"],
     cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --cfg 'feature=\"guest\"' $(location src/lib.rs) -o $(@D)/host-adapter-tests && $(@D)/host-adapter-tests && touch $@",
 )
+
+genrule(
+    name = "host-adapter-control-6",
+    srcs = ["src/lib.rs", "src/tests.rs", "src/lifecycle.rs", "src/guest.rs", "src/guest_tests.rs"],
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    outs = ["host-adapter-control-6.detected"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --cfg 'feature=\"guest\"' --cfg 'feature=\"control-6\"' $(location src/lib.rs) -o $(@D)/host-adapter-control-6 && if $(@D)/host-adapter-control-6 --exact guest::tests::rsc_nine_guest_entries_status_outputs_and_read_only_semaphore; then exit 1; else touch $@; fi",
+)

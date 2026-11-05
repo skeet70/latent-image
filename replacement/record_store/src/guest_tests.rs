@@ -100,10 +100,27 @@ fn rsc_nine_guest_entries_status_outputs_and_read_only_semaphore() {
         assert_eq!(register(&mut client), 0);
         assert_eq!(client, sentinel);
         assert_eq!(record_store_zero(), 0);
-        let backend = BACKEND.lock().unwrap();
-        let backend = backend.as_ref().unwrap();
-        assert!(backend.reads > 0);
-        assert_eq!(backend.writes, 1);
-        assert!(!backend.held);
+        {
+            let backend = BACKEND.lock().unwrap();
+            let backend = backend.as_ref().unwrap();
+            assert!(backend.reads > 0);
+            assert_eq!(backend.writes, 1);
+            assert!(!backend.held);
+        }
+        {
+            let mut backend = BACKEND.lock().unwrap();
+            let backend = backend.as_mut().unwrap();
+            for p in 0..3 {
+                let offset = p * 0x60;
+                backend.banks[0][offset..offset + 2].copy_from_slice(&(p as u16).to_le_bytes());
+            }
+        }
+        assert_eq!(record_store_append(client, 0, [0xa5u8; 0x60].as_ptr()), 0);
+        let mut full_bank_tail = [0; 3];
+        assert_eq!(record_store_read_at(0, 0x120, 3, full_bank_tail.as_mut_ptr()), 0);
+        assert_eq!(full_bank_tail, [0xff; 3]);
+        let mut destination = [0; 3];
+        assert_eq!(record_store_read_at(0, 0x20000, 3, destination.as_mut_ptr()), 0);
+        assert_eq!(destination, [3, 0, 0xa5]);
     }
 }
