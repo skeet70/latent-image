@@ -299,8 +299,6 @@ main = do
       let depthOf entry = (\(SS.StackDepth bytes) -> toInteger bytes) <$> M.lookup entry supplied
           owned = [(0x89cda4, 536), (0x89cde4, 536), (0x89cdc4, 472), (0x89e560, 472), (0x89da3c, 544), (0x89da64, 544), (0x89e464, 456), (0xbf1c1c, 536), (0xbf1c44, 536)]
       putStrLn ("heap supplied depths: " ++ show [(entry, depthOf entry) | (entry, _) <- owned])
-      ok "every heap entry has its pinned composed demand"
-        (all (\(entry, bytes) -> depthOf entry == Just bytes) owned)
       let report name entries' = do
             results <- maybe (H.failH ("no depths for " ++ name)) pure (depthsIn evidence supplied entries')
             putStrLn (name ++ ": " ++ show results)
@@ -311,6 +309,8 @@ main = do
       ok "heap retained callee conditions equal the published list"
         (length retained == 3 && all (either (const False) (const True) . snd) retained && used == Set.fromList SB.heapConditions)
       putStrLn ("heap conditions: " ++ show (Set.toList used) ++ "; " ++ SB.conditionsPhrase SB.heapConditions)
+      ok "every heap entry has its pinned composed demand"
+        (all (\(entry, bytes) -> depthOf entry == Just bytes) owned)
       rootEntries <- maybe (H.failH "no root targets") pure (rootTargets evidence)
       rootResults <- report "heap-composed root" rootEntries
       image5Results <- report "heap-composed image5" I5A.retainedTargets
