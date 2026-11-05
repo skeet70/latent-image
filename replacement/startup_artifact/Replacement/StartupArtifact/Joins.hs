@@ -40,6 +40,8 @@ import qualified Replacement.Image5Load.Admission as I5A
 import qualified Replacement.Image5Load.Artifact as I5
 import qualified Replacement.PlainLoad.Admission as PLA
 import qualified Replacement.PlainLoad.Artifact as PL
+import qualified Replacement.StartupArtifact.Footprint.GeneralHeap as Heap
+import qualified Replacement.StartupDispatch.Admission as DA
 import qualified StackWalk as W
 import qualified StartupStageContract as Stage
 import qualified StockStack as SS
@@ -48,7 +50,7 @@ data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | 
   | LoaderStartupPublisher | PublisherInstallerRoots | CriticalPairInstallerRoots | DispatcherCriticalPair
   | TaskCompositionOwnedCalls | DispatcherTaskComposition | PublisherTaskServices
   | DispatcherRootEntry | DispatcherIdleEntry | WrapperIdleErrorCallback | RootTaskServices
-  | Image5ProducerServices | PlainProducerServices
+  | Image5ProducerServices | PlainProducerServices | GeneralHeapImage5Publication | GeneralHeapArenaClear
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 instance JoinName JoinKind where
@@ -69,6 +71,8 @@ instance JoinName JoinKind where
   joinName RootTaskServices = "root-task-services"
   joinName Image5ProducerServices = "image5-producer-services"
   joinName PlainProducerServices = "plain-producer-services"
+  joinName GeneralHeapImage5Publication = "general-heap-image5-publication"
+  joinName GeneralHeapArenaClear = "general-heap-arena-clear"
 
 at :: Target -> Word32 -> Word32 -> Span
 at target start end = Span target (Guest start) (Guest end)
@@ -365,7 +369,7 @@ registeredJoins =
   , loaderStartupPublisher, publisherInstallerRoots, criticalPairInstallerRoots, dispatcherCriticalPair
   , taskCompositionOwnedCalls, dispatcherTaskComposition, publisherTaskServices
   , dispatcherRootEntry, dispatcherIdleEntry, wrapperIdleErrorCallback, rootTaskServices
-  , image5ProducerServices, plainProducerServices ]
+  , image5ProducerServices, plainProducerServices, generalHeapImage5Publication, generalHeapArenaClear ]
 
 -- | The task wrapper, the record-2 critical pair and the task-storage transition joined as in
 -- replacement/startup_composition/Replacement/StartupComposition/TaskSubmission.hs:63-97.
@@ -606,9 +610,92 @@ indirectOf evidence = do
 
 -- | Owned entries with proved depths, before the wrapper: the record-2 critical pair, idle and root.
 baseSupplied :: JoinEvidence -> M.Map Word32 SS.StackDepth
-baseSupplied evidence = M.fromList
-  ([ (entry, SS.StackDepth (fromIntegral depth)) | Just (StackDepth depth) <- [criticalFrame evidence], entry <- [0x7235d8, 0x7236b0] ]
-   ++ [ (entry, SS.StackDepth (fromIntegral (negate low))) | Just (entry, low) <- [idleFrame evidence, rootFrame evidence] ])
+baseSupplied evidence = M.union core (heapSupplied evidence core)
+  where
+    core = M.fromList
+      ([ (entry, SS.StackDepth (fromIntegral depth)) | Just (StackDepth depth) <- [criticalFrame evidence], entry <- [0x7235d8, 0x7236b0] ]
+       ++ [ (entry, SS.StackDepth (fromIntegral (negate low))) | Just (entry, low) <- [idleFrame evidence, rootFrame evidence] ])
+
+heapFacts :: JoinEvidence -> Maybe HeapFacts
+heapFacts evidence = case [facts | GeneralHeapFacts facts <- map pieceFacts (evidencePieces evidence)] of
+  [facts] -> Just facts
+  _ -> Nothing
+
+-- | The heap's entries with their owned cumulative depth plus the StockStack depths of lock, unlock and
+-- memmove at their owned call offsets, present only when the composition holds the heap; an entry whose
+-- retained callee refuses is left unsupplied, so a walk reaching it refuses too.
+heapSupplied :: JoinEvidence -> M.Map Word32 SS.StackDepth -> M.Map Word32 SS.StackDepth
+heapSupplied evidence core = case (heapFacts evidence, indirectOf evidence) of
+  (Just facts, Just indirect) ->
+    let results = SS.stockDepths (stockCodeOfEvidence evidence) (SS.Supplied core) indirect SB.switchModel Heap.retainedCallees
+        retained target = case lookup target results of
+          Just (Right report) -> let SS.StackDepth bytes = SS.reportDepth report in Just (toInteger bytes)
+          _ -> Nothing
+     in M.fromList [ (entry, SS.StackDepth (fromInteger depth)) | entry <- heapEntries facts, Just depth <- [ownedDepth (heapFrames facts) retained entry] ]
+  _ -> M.empty
+
+-- | Bytes below an owned entry's SP over its own call graph, other callees taking the supplied demand.
+ownedDepth :: [OwnedFrame] -> (Word32 -> Maybe Integer) -> Word32 -> Maybe Integer
+ownedDepth frames supplied = go Set.empty
+  where
+    byEntry = M.fromList [(ownedEntry frame, frame) | frame <- frames]
+    go seen entry = case M.lookup entry byEntry of
+      Nothing -> supplied entry
+      Just frame
+        | Set.member entry seen -> Nothing
+        | otherwise -> do
+            callees <- mapM (\(target, offset) -> (toInteger (negate offset) +) <$> go (Set.insert entry seen) target) (ownedCalls frame)
+            pure (maximum (toInteger (negate (ownedLow frame)) : callees))
+
+-- J7: the general heap.
+
+-- | Composed records 1 and 2, loaders A and B and image 4: everything that runs before the image-5
+-- producer publishes record 5.
+beforePublication :: JoinEvidence -> [(Word32, B.ByteString)]
+beforePublication evidence = [(targetBase target, targetOf (evidenceComposed evidence) target) | target <- [Record1, Record2, LoaderA, LoaderB, Image4]]
+
+-- | Every composed target and the plain window.
+everyComposedImage :: JoinEvidence -> [(Word32, B.ByteString)]
+everyComposedImage evidence = [(targetBase target, bytes) | (target, bytes) <- targetList (evidenceComposed evidence)]
+  ++ [(load, bytes) | Right (PlainImage (Guest load) bytes) <- [plainImage (evidenceParts evidence)]]
+
+generalHeapImage5Publication :: Join JoinKind
+generalHeapImage5Publication = Join GeneralHeapImage5Publication (Set.fromList [Image5Producer, GeneralHeap])
+  [at Image5 0xbf1c1c 0xbf1cd4]
+  (ObservationQualified "the heap's calloc entry and thunk lie in the decoded record 5 that the image-5 producer publishes through the retained decoder at the segment-5 destination; segment5-publishes-heap-carrier checks that destination and extent in the composed parts, image5-carrier-unnamed-before-publication that nothing running before the producer, the heap's own image-4 code included, names the carrier, and composed-entry-surface and composed-retired-state-unreferenced repeat the heap adapter's reference checks over every piece's composed code; qualified by the image5-producer destination and staging reads, each equal to its role's contract digest")
+  [ HostCheck "segment5-publishes-heap-carrier" segment5PublishesCarrier
+  , HostCheck "image5-carrier-unnamed-before-publication" (Heap.image5CarrierUnnamed . beforePublication)
+  , HostCheck "composed-entry-surface" (\evidence -> maybe False (\facts -> null (Heap.entrySurface (heapEntries facts) (everyComposedImage evidence))) (heapFacts evidence))
+  , HostCheck "composed-retired-state-unreferenced" (Heap.retiredStateUnreferenced . everyComposedImage) ]
+
+segment5PublishesCarrier :: JoinEvidence -> Bool
+segment5PublishesCarrier evidence = case filter ((== 5) . U.segId) (U.partSegments (evidenceParts evidence)) of
+  [segment] -> U.segLoad segment == 0xbf1a00
+    && toInteger (B.length (targetOf (evidenceComposed evidence) Image5)) >= toInteger (0xbf1cd4 - 0xbf1a00 :: Word32)
+  _ -> False
+
+generalHeapArenaClear :: Join JoinKind
+generalHeapArenaClear = Join GeneralHeapArenaClear (Set.fromList [GeneralHeap, LoaderStartup])
+  [at Image4 0x69cdf8 0x69cf84]
+  (HostProof "the owned dispatcher's mode-1 word fill clears [0x89ec00,0xbf1a00) in phase 0, before its first task submission (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs clearInterval and the ClearWords effect order); arena-inside-mode1-clear places the heap's decoded arena inside it, sentinel-outside-clear-and-zero keeps the sentinel 0x89d4f8 in image 4's loaded data at 0 in the composed image, so each cold boot starts with sentinel 0 and an arena the first heap call initializes whole (replacement/general_heap/backend.rs Heap::initialize), and no-heap-call-in-phase-0 finds no direct call of a heap entry from the dispatcher, installer, fill or mode getter closure or from either loader")
+  [ HostCheck "arena-inside-mode1-clear" $ \evidence -> case heapFacts evidence of
+      Just facts -> let (base, end) = heapArena facts; (clearStart, clearEnd) = DA.clearInterval in clearStart <= base && base < end && end <= clearEnd
+      Nothing -> False
+  , HostCheck "sentinel-outside-clear-and-zero" $ \evidence ->
+      Heap.sentinel >= targetBase Image4 && Heap.sentinel < fst DA.clearInterval
+        && targetWord (evidenceComposed evidence) Image4 Heap.sentinel == Just 0
+  , HostCheck "no-heap-call-in-phase-0" noHeapCallInPhase0 ]
+
+noHeapCallInPhase0 :: JoinEvidence -> Bool
+noHeapCallInPhase0 evidence = case heapFacts evidence of
+  Nothing -> False
+  Just facts ->
+    let image4 = targetOf (evidenceComposed evidence) Image4
+        extents = [ (low, high) | L.CalleeExtent (LI.CodeAddress low) (LI.CodeAddress high) <-
+                      L.closedCalleeExtents (LI.CodeAddress (targetBase Image4)) image4 [] Set.empty (map LI.CodeAddress [0x69cdf8, 0x725a04, 0x7221a0, 0x657184]) ]
+        image4Calls = [ target | (low, high) <- extents, Heap.BranchReference _ target <- Heap.references low (B.take (fromIntegral (high - low)) (B.drop (fromIntegral (low - targetBase Image4)) image4)) ]
+        loaderCalls = [ target | loader <- [LoaderA, LoaderB], Heap.BranchReference _ target <- Heap.references (targetBase loader) (targetOf (evidenceComposed evidence) loader) ]
+     in not (null extents) && all (`notElem` heapEntries facts) (image4Calls ++ loaderCalls)
 
 -- | The StockStack depths of retained entries, sharing callee results, conditions included.
 depthsIn :: JoinEvidence -> M.Map Word32 SS.StackDepth -> [Word32] -> Maybe [(Word32, Either SS.StackRefusal SS.StackReport)]

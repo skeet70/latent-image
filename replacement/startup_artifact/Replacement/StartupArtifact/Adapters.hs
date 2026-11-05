@@ -5,7 +5,7 @@
 module Replacement.StartupArtifact.Adapters
   ( LinkedImage (..), ImageBytes (..), SymbolBytes (..), PieceImages (..)
   , deriveFirstStage, deriveRecord2Link, derivePrimaryPublisher, deriveLoaderOrchestrationB, deriveLoaderStartup, derivePieceOf
-  , deriveTaskSubmission, deriveTaskStorage, deriveIdleTask, deriveRootTask, deriveImage5Producer, derivePlainProducer
+  , deriveTaskSubmission, deriveTaskStorage, deriveIdleTask, deriveRootTask, deriveImage5Producer, derivePlainProducer, deriveGeneralHeap
   , ProducerCall (..), producerCallBoundaries, callerReturn
   ) where
 
@@ -59,6 +59,10 @@ import qualified Replacement.Image5Load.Artifact as I5
 import qualified Replacement.PlainLoad.Admission as PLA
 import qualified Replacement.PlainLoad.Artifact as PL
 import qualified Replacement.StartupArtifact.Footprint.Producers as ProducersFootprint
+import qualified Replacement.StartupArtifact.Footprint.GeneralHeap as HeapFootprint
+import Replacement.StartupArtifact.Application (PlainImage (..), plainImage)
+import qualified Replacement.GeneralHeap.Admission as HA
+import qualified Replacement.GeneralHeap.Artifact as HT
 import qualified Replacement.TaskStorage.Artifact as TSt
 import qualified Replacement.TaskSubmission.Admission as WA
 import qualified Replacement.TaskSubmission.Artifact as W
@@ -90,6 +94,7 @@ derivePieceOf source images = case images of
     RootTask -> deriveRootTask source image
     Image5Producer -> deriveImage5Producer source image
     PlainProducer -> derivePlainProducer source image
+    GeneralHeap -> deriveGeneralHeap source image
 
 admitted :: PieceKind -> Either String a -> Either Refusal a
 admitted kind = first (AdapterRefused kind . T.pack)
@@ -222,7 +227,7 @@ deriveRecord2Link source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)
   returnLabel <- label kind "initializer-return"
   tableLabel <- label kind "table-b"
   let catalog = Catalog boundaries code (EnumeratedWrites record2Destinations (Premised (Premise record2Premise)))
-        [CatalogRead tableLabel returnLabel tableB tableBBytes Nothing]
+        [CatalogRead tableLabel returnLabel tableB tableBBytes Nothing Nothing]
       declaration = PieceDeclaration kind
         (Set.fromList [SecondaryStageArea, LoaderPrefixArea, InterfaceInitializerArea, CriticalPairArea])
         ([resetVector, image] ++ loaderWords ++ pair)
@@ -309,7 +314,7 @@ derivePrimaryPublisher source (LinkedImage (ImageBytes bin) (SymbolBytes symbolB
     returnLabel <- label kind ("return-" <> hexName pc)
     tableLabel <- label kind ("table-a-" <> hexName pc)
     pure ( Boundary returnLabel ReturnBoundary primaryCore (Pc pc) (Just (Pc pc)) True CompareSequence once (Just LoaderOrchestrationAArea)
-         , CatalogRead tableLabel returnLabel root tableBytes Nothing )) returns
+         , CatalogRead tableLabel returnLabel root tableBytes Nothing Nothing )) returns
   let boundaries = Boundary entryLabel EntryBoundary primaryCore (Pc ownedStart) (Just (Pc ownedStart)) False CompareSequence entryLimit Nothing
         : map fst returnRows
       writes = EnumeratedWrites
@@ -362,7 +367,7 @@ orchestrationCatalog kind prefix continuations artifact = do
       read' name stopping guest bytes = do
         named <- label kind (prefix <> name)
         at <- label kind (prefix <> stopping)
-        pure (CatalogRead named at guest bytes Nothing)
+        pure (CatalogRead named at guest bytes Nothing Nothing)
       initializerCall = codeAddress (LS.initializerCall sites)
       initializerReturn = codeAddress (LS.initializerReturn sites)
   case side of
@@ -515,7 +520,7 @@ deriveLoaderStartup source a b dispatcher installer = do
       read' name stopping guest bytes = do
         named <- label kind name
         at <- label kind stopping
-        pure (CatalogRead named at guest bytes Nothing)
+        pure (CatalogRead named at guest bytes Nothing Nothing)
   -- Retained dispatcher PCs: stock 0x69ce0c (ModeRead call) and 0x69ce38 (Install continuation),
   -- private-data/analysis/x-m1-1.50/lz/id4.dis.
   boundaries <- sequence
@@ -619,7 +624,7 @@ deriveTaskSubmission source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByt
       read' name stopping guest bytes = do
         named <- label kind name
         at <- label kind stopping
-        pure (CatalogRead named at guest bytes Nothing)
+        pure (CatalogRead named at guest bytes Nothing Nothing)
   -- Presence only: wrapper hits after the first task entry interleave by preemption timing.
   calls <- mapM (\(service, owned, stock) -> boundary ("submit-" <> serviceName service <> "-call") SiteBoundary both owned stock False ComparePresence few) paired
   boundaries <- sequence
@@ -838,7 +843,7 @@ deriveRootTask source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) =
       read' name stopping guest bytes = do
         named <- label kind name
         at <- label kind stopping
-        pure (CatalogRead named at guest bytes Nothing)
+        pure (CatalogRead named at guest bytes Nothing Nothing)
   -- Resources: 0x7247ac stores the kernel index at 0x93e6f4+4*(id-1) (private-data/analysis/x-m1-1.50/lz/id4.dis:270633-270675)
   -- and creates each through root-0 slot +0x64, whose creation records are 16 bytes from 0x4005dfd8
   -- (replacement/media_permit/RtosManifestMain.hs:66,252,271). Task creation records are 40 bytes from 0x4005beac (A) and
@@ -948,7 +953,8 @@ deriveImage5Producer source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByt
   returnLabel <- label kind "caller-return"
   image5Entry <- label kind "image5-entry"
   fillLabel <- label kind "fill-request-call"
-  let read' name at guest bytes = (\named -> CatalogRead named at guest bytes Nothing) <$> label kind name
+  let read' name at guest bytes = (\named -> CatalogRead named at guest bytes Nothing Nothing) <$> label kind name
+      expected name at guest bytes expectation = (\named -> CatalogRead named at guest bytes Nothing (Just expectation)) <$> label kind name
       boundaries =
         [ Boundary entryLabel SiteBoundary primary (Pc start) (Just (Pc start)) False CompareSequence once Nothing ]
         ++ calls ++
@@ -959,9 +965,9 @@ deriveImage5Producer source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByt
   rows <- sequence
     [ read' "fill-flag-cleared" fillLabel I5A.fillFlag 4
     , read' "fill-flag-set" returnLabel I5A.fillFlag 4
-    , read' "destination" returnLabel 0x00bf1a00 0x4f1e60
+    , expected "destination" returnLabel 0x00bf1a00 0x4f1e60 (ExpectTarget Image5)
     , read' "bss" returnLabel 0x01460000 0x2bbe40
-    , read' "staging" returnLabel 0x43e40000 0x2e0000 ]
+    , expected "staging" returnLabel 0x43e40000 0x2e0000 ExpectRecord5Media ]
   let flag = fromIntegral I5A.fillFlag :: Word64
       writes = EnumeratedWrites
         [ WriteRange (CorePhysicalTarget Core0) (sp - frame) sp, WriteRange (CorePhysicalTarget Core0) flag (flag + 4) ]
@@ -1010,7 +1016,7 @@ derivePlainProducer source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByte
   returnLabel <- label kind "caller-return"
   extent0Hook <- label kind "extent0-first-hook"
   extent3Hook <- label kind "extent3-first-hook"
-  let read' name at guest bytes = (\named -> CatalogRead named at guest bytes Nothing) <$> label kind name
+  let read' name at guest bytes = (\named -> CatalogRead named at guest bytes Nothing Nothing) <$> label kind name
       boundaries =
         [ Boundary entryLabel SiteBoundary primary (Pc start) (Just (Pc start)) False CompareSequence once Nothing ]
         ++ calls ++
@@ -1034,3 +1040,109 @@ derivePlainProducer source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByte
           , "the raw reader, progress 0x73b924, worker 0x73bc54 and the extent hooks behave as stock (reports/replacement-inventory-baseline.md:1378-1384); their stack demand below the owned frame is bounded by producer-retained-depth under the same conditions as root-retained-depth, except the chains it names" ])
         catalog (PlainProducerFacts (LinkedBytes bin symbolBytes))
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (PL.stagedBytes (PL.stageImage4 producerSource artifact))) Nothing)
+
+-- | The canonical images and the plain window, as (base, bytes).
+canonicalSegments :: Canonical -> [(Word32, B.ByteString)]
+canonicalSegments source =
+  [(targetBase target, bytes) | (target, bytes) <- targetList (canonicalTargets source)]
+  ++ [(load, bytes) | Right (PlainImage (Guest load) bytes) <- [plainImage (U.parsedParts (canonicalParsed source))]]
+
+-- | The task reservation pool that every heap caller's stack comes from (reports/replacement-inventory-baseline.md:963).
+taskPool :: (Word64, Word64)
+taskPool = (0xa10200, 0xa5b200)
+
+heapWritesPremise :: T.Text
+heapWritesPremise = T.intercalate "; "
+  [ "SP-relative stores are proved per entry by the heap frame fixpoint (replacement/general_heap/Replacement/GeneralHeap/Admission.hs deriveFrames); rlsf's stores through pointers are premised to the arena [base, end - 32) its decoded geometry fixes (Admission.hs:28-34)"
+  , "the sentinel 0x89d4f8 is the only absolute store (replacement/general_heap/src.rs acquire); errno is stored at the context word, which every public entry loads from 0x89c970 (canonical value 0x89c978)"
+  , "every heap caller on the route runs on a task stack in the reservation pool [0xa10200,0xa5b200), as record2-link's pool range; an owned non-SP store into another live frame of the pool is not excluded"
+  , "core 1 has no admitted heap write" ]
+
+-- | Replacement.GeneralHeap.Artifact over //replacement/general_heap:general-heap-image.
+deriveGeneralHeap :: Canonical -> LinkedImage -> Either Refusal Piece
+deriveGeneralHeap source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) = do
+  let kind = GeneralHeap
+      shown :: Show e => Either e a -> Either Refusal a
+      shown = first (AdapterRefused kind . T.pack . show)
+      targets = canonicalTargets source
+      image4 = targetOf targets Image4
+  heapSource <- shown (HT.canonicalSource (canonicalDat source) image4 (targetOf targets Image5))
+  artifact <- shown (HT.deriveArtifact bin symbolBytes)
+  staged <- shown (HT.stageImages heapSource artifact)
+  let frames = HT.artifactFrames artifact
+      (arenaBase, arenaEnd, guard) = HA.arenaBounds (HT.artifactArena artifact)
+      entries = map snd HA.entrySymbols
+      staged4 = HT.image4Bytes staged
+      carrierSpans = HeapFootprint.carriers
+  symbols <- shown (F.parseSymbols symbolBytes)
+  -- The metadata words XM1_HEAP_METADATA (56 bytes; replacement/general_heap/src.rs:214-224).
+  metadataStart <- shown (F.symbolAddress <$> F.lookupSymbol symbols "XM1_HEAP_METADATA")
+  let metadata = (metadataStart, metadataStart + 56)
+  refuseUnless kind (HeapFootprint.graphicsTableForwards image4) "graphics-table-forwards: the canonical table or adapters differ"
+  let surface = HeapFootprint.entrySurface entries (canonicalSegments source)
+  refuseUnless kind (null surface) ("entry-surface: canonical references name heap carrier interiors: " ++ show (take 4 surface))
+  refuseUnless kind (HeapFootprint.ownedSurface (HA.instructionPCs frames) entries metadata staged4) "entry-surface: an owned reference names an unadmitted carrier address"
+  refuseUnless kind (HeapFootprint.retiredStateUnreferenced (canonicalSegments source)) "retired-state-unreferenced: a canonical reference names retired heap state"
+  refuseUnless kind (HeapFootprint.ownedNamesNoRetired staged4) "retired-state-unreferenced: the heap code names retired stock state"
+  code <- concat <$> mapM (\(Span _ (Guest low) (Guest high)) -> ownedCode kind low high) carrierSpans
+  primary <- coreSet kind [Core0]
+  calls <- limit kind 1024
+  once <- limit kind 1
+  let boundaryAt name boundaryKind pc compare' records stop = do
+        named <- label kind name
+        pure (Boundary named boundaryKind primary (Pc pc) (Just (Pc pc)) stop compare' records Nothing)
+  -- Heap calls come from tasks 72, 73 and 33, whose order across tasks is timing-dependent; entries the
+  -- route does not reach are sequence boundaries that must stay empty.
+  boundaries <- sequence
+    [ boundaryAt "malloc-entry" SiteBoundary 0x89cda4 ComparePresence calls False
+    , boundaryAt "free-entry" SiteBoundary 0x89cdc4 ComparePresence calls False
+    , boundaryAt "malloc-core-entry" SiteBoundary 0x89cde4 ComparePresence calls False
+    , boundaryAt "free-core-entry" SiteBoundary 0x89e560 ComparePresence calls False
+    , boundaryAt "realloc-entry" SiteBoundary 0x89da3c CompareSequence once False
+    , boundaryAt "realloc-core-entry" SiteBoundary 0x89da64 CompareSequence once False
+    , boundaryAt "trim-entry" SiteBoundary 0x89e464 CompareSequence once False
+    , boundaryAt "calloc-entry" SiteBoundary 0xbf1c1c CompareSequence once False
+    , boundaryAt "calloc-core-entry" SiteBoundary 0xbf1c44 CompareSequence once False
+    -- Task 33's entry (reports/replacement-inventory-baseline.md:1762): once, after the first heap call.
+    , boundaryAt "uilib-first-entry" ReturnBoundary 0x1109130 ComparePresence once True ]
+  uilib <- label kind "uilib-first-entry"
+  sentinelRead <- label kind "sentinel"
+  tableRead <- label kind "graphics-table"
+  storageRead <- label kind "storage-records"
+  let heapReads =
+        [ CatalogRead sentinelRead uilib HeapFootprint.sentinel 4
+            (Just "retained holds stock malloc_av_[0]; composed holds the owned sentinel 0x48454150 after first use") Nothing
+        , CatalogRead tableRead uilib 0x890f08 16 Nothing Nothing
+        , CatalogRead storageRead uilib 0x40a0fc44 1248 Nothing Nothing ]
+      core0 low high = WriteRange (CorePhysicalTarget Core0) low high
+      errno = fromIntegral HeapFootprint.errnoWord
+      sentinelWord = fromIntegral HeapFootprint.sentinel
+      writes = EnumeratedWrites
+        [ core0 (fromIntegral arenaBase) (fromIntegral (arenaEnd - guard)), core0 sentinelWord (sentinelWord + 4)
+        , core0 errno (errno + 4), uncurry core0 taskPool ]
+        (Premised (Premise heapWritesPremise))
+      catalog = Catalog boundaries code writes heapReads
+      policies =
+        [ CarrierWritePolicy carrier WritesNone (if carrier == HeapFootprint.retiredBins then HeapFootprint.image4Carriers else [])
+        | carrier <- HeapFootprint.image4Carriers ]
+        ++ [CarrierWritePolicy HeapFootprint.image5Carrier WritesModelBusOnly []]
+      facts = HeapFacts
+        { heapLinked = LinkedBytes bin symbolBytes, heapEntries = entries
+        , heapFrames = [ OwnedFrame (HA.frameEntry frame) (HA.frameLow frame) (HA.frameCalls frame) | frame <- frames ]
+        , heapArena = (arenaBase, arenaEnd), heapCarrierWrites = policies
+        , heapPoolWords = [AllocationWords storageRead 0 12 AllocationBase] }
+      declaration = PieceDeclaration kind (Set.singleton GeneralHeapArea) carrierSpans
+        (HeapFootprint.footprint (targetOf targets LoaderA) (targetOf targets LoaderB) image4)
+        (map Premise
+          [ "unknown computed entries into the carriers are excluded: entry-surface covers direct branches, literal words and movw/movt pairs only (replacement/general_heap/Replacement/GeneralHeap/Artifact.hs:162)"
+          , "no metadata reader consumes beyond payload-4; the stock boundary tag decodes to an extent within the allocation (Artifact.hs:163)"
+          , "retired bin state has no reader or writer outside the heap: retired-state-unreferenced covers direct references, and the composed-role carrier watch admits no write after attach"
+          , "the sentinel is 0 in the decoded image 4 and the phase-0 clear, which runs only in mode 1 and before any task, cannot reach it (general-heap-arena-clear)"
+          , "the arena and pool have no external writer or backing consumer: the backing helper 0x72b110 is called only from retired code; writers through computed pointers are premised"
+          , "the retained recursive lock 0x72b164/0x72b1cc serializes every mutation and first-use setup; heap calls on the route are core 0 only, and cross-core contention is premised"
+          , "retained lock, unlock and memmove behave as stock; their stack demand is a StockStack depth under the switch model, conditional on published root-slot words staying fixed and no task-exception routine (StackBounds.switchModel)"
+          , "the image-5 calloc entry and thunk are published by the image-5 producer's decode of record 5 before any code that names them runs (general-heap-image5-publication)"
+          , "cold boot only; no warm-checkpoint allocator ownership migration is admitted"
+          , "finite host checks do not qualify silicon contention, deadlines or capture, development and storage workloads" ])
+        catalog (GeneralHeapFacts facts)
+  derivePiece source declaration (StagedOutput (canonicalDat source) (Just staged4) (Just (HT.image5Bytes staged)))

@@ -300,7 +300,7 @@ main = do
       == Just (CatalogRefused FirstStage (OwnedBoundaryOutsideOwnedCode entryLabel)))
   ok "a read at a boundary that does not stop refuses"
     (refusal (composeWith [] [withCatalog first (catalogOf [boundary entryLabel EntryBoundary Core0 0x6000 False] [CodeSpan 0x6000 0x6010]
-      [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing])])
+      [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing Nothing])])
       == Just (CatalogRefused FirstStage (ReadBoundaryDoesNotStop entryLabel)))
   ok "TCM writes on a core without boundaries refuse"
     (refusal (composeWith [] [withCatalog first (Catalog [boundary entryLabel EntryBoundary Core0 0x6000 False] [CodeSpan 0x6000 0x6010]
@@ -317,13 +317,13 @@ main = do
       == Just (CatalogRefused PrimaryPublisher (OwnedCodeOverlap FirstStage)))
   let unretained = (boundary entryLabel EntryBoundary Core0 0x6000 True) {boundaryRetainedPc = Nothing}
   ok "a read at a boundary without a retained PC needs a difference"
-    (refusal (composeWith [] [withCatalog first (catalogOf [unretained] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing])])
+    (refusal (composeWith [] [withCatalog first (catalogOf [unretained] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing Nothing])])
       == Just (CatalogRefused FirstStage (ReadNeedsDiffers readLabel')))
   ok "a read at a boundary without a retained PC with a stated difference composes"
     (either (const False) (const True)
-      (composeWith [] [withCatalog first (catalogOf [unretained] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 (Just "owned only")])]))
+      (composeWith [] [withCatalog first (catalogOf [unretained] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 (Just "owned only") Nothing])]))
   let yielding = (boundary entryLabel EntryBoundary Core0 0x6000 True) {boundaryYieldsTo = Just PrimaryInitializerArea}
-      yieldingFirst = withCatalog first (catalogOf [yielding] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing])
+      yieldingFirst = withCatalog first (catalogOf [yielding] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing Nothing])
       kept composition = [ (map boundaryLabel (catalogBoundaries (pieceCatalog p)), map readLabel (catalogReads (pieceCatalog p)))
                          | p <- compositionPieces composition, pieceKind p == FirstStage ]
   ok "a boundary yielding to an area another piece claims is dropped with its reads"
@@ -452,12 +452,12 @@ main = do
   let contractFirst = withCatalog first (Catalog
         [boundary entryLabel EntryBoundary Core0 0x6000 False, boundary handoffLabel SiteBoundary Core0 0x6008 True]
         [CodeSpan 0x6000 0x6010] (EnumeratedWrites [WriteRange (CorePhysicalTarget Core0) 0x4300 0x5280] (Premised (Premise "first-stage stores")))
-        [CatalogRead readLabel' handoffLabel 0x40020000 8 Nothing])
+        [CatalogRead readLabel' handoffLabel 0x40020000 8 Nothing Nothing])
       contractPublisher = withCatalog publisher (Catalog
         [boundary publisherEntry EntryBoundary Core0 0x40430 False, boundary returnLabel ReturnBoundary Core0 0x409e0 True]
         [CodeSpan 0x40430 0x40580]
         (EnumeratedWrites [WriteRange PhysicalTarget 0x4dae0 0x4f10c] (Premised (Premise "scratch")))
-        [CatalogRead tableLabel returnLabel 0x4004dae0 0x162c Nothing])
+        [CatalogRead tableLabel returnLabel 0x4004dae0 0x162c Nothing Nothing])
   contracted <- either (fail . show) pure (composeWith [observed] [contractFirst, contractPublisher])
   contractDat <- either (fail . show) pure (preTableDat source contracted)
   contractTargets <- either (fail . show) pure (verifyComposed source contracted contractDat fixtureImage4 fixtureImage5)
