@@ -4,6 +4,7 @@
 use crate::adjustment::AdjustmentNand;
 use crate::guest::MenuState;
 use crate::machine::Machine;
+use crate::record_medium::RecordMedium;
 use crate::run::{self, RunDocument, ValidatedUpdate};
 use crate::sd_host::{self, Backing, RetainedCard};
 use serde_json::{Value, json};
@@ -43,6 +44,8 @@ pub struct Inputs {
     pub update: Vec<u8>,
     pub boot_rom: Vec<u8>,
     pub adjustment: AdjustmentNand,
+    /// Record-area blocks programmed after the adjustment blocks; absent leaves the record areas erased.
+    pub records: Option<RecordMedium>,
     /// The card inserted before the first instruction; absent leaves the slot empty.
     pub card: Option<RetainedCard>,
 }
@@ -53,6 +56,9 @@ impl Inputs {
         let mut session = run::open(&document, &ValidatedUpdate(self.update.clone()), &self.boot_rom)?;
         session.board.set_execution_policy(document.execution_policy.into())?;
         self.adjustment.apply(&mut session, &document.nand)?;
+        if let Some(records) = &self.records {
+            records.apply(&mut session, &document.nand)?;
+        }
         let mut machine = Machine::new(document, session)?;
         if let Some(card) = &self.card {
             machine.insert_card(card.clone())?;
