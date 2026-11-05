@@ -821,8 +821,12 @@ pub fn route(evidence: &RoleEvidence) -> Result<(), ApplicationRefusal> {
     for (input, capture) in receipt.scenario.settled().iter().zip(receipt.visible.iter().skip(1)) {
         require(input.menu.is_none_or(|menu| capture.menu == Some(menu)), check, "a scenario menu checkpoint differs")?;
         require(capture.controller74.agrees(), check, "a controller state view disagrees")?;
-        require(!input.live_view || capture.controller74.word(0x1467588 + 74 * 4) == Some(4), check,
-            "the route did not enter live view")?;
+        if input.live_view {
+            let state = evidence.evidence.samples.iter().rev()
+                .filter(|sample| sample.input == capture.input && sample.stop <= capture.instructions)
+                .find_map(|sample| view_word(&sample.state, STATE + 74 * 2));
+            require(state.is_some_and(|word| word & 0xffff == 4), check, "the route did not enter live view")?;
+        }
     }
     Ok(())
 }

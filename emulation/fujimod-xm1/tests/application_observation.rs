@@ -610,11 +610,9 @@ fn visible(directory: &std::path::Path, inputs: &[RouteInput], memory: &Memory) 
             "bytes_completed": counter * 10, "acknowledgments": counter}});
         let graphics = SideFile::replace(directory, &format!("{name}.graphics.json"), &serde_json::to_vec(&save).unwrap()).unwrap();
         let instructions = input.map_or(Instructions(press(15) - 1_000_000), |id| inputs[id.0 as usize].settled.unwrap());
-        let mut state = memory.clone();
-        state.set(0x1467588 + 74 * 4, if index == 3 { 4 } else { 24 });
         VisibleCapture {
             input, instructions, probe, menu: Some(Menu { menu: 1, setting: 5, cursor: if index == 1 { 3 } else { 2 } }),
-            controller: memory.view(0x944580, 20), controller74: state.view(0x1467588 + 74 * 4, 1), png, planes, scanout, graphics,
+            controller: memory.view(0x944580, 20), controller74: memory.view(0x1467588 + 74 * 4, 1), png, planes, scanout, graphics,
         }
     }).collect()
 }
@@ -670,6 +668,7 @@ impl Scenario {
         for index in 15..20 {
             builder.clock = press(index) + 1_000_000;
             builder.input = Some(InputIndex(index as u64));
+            builder.memory.set(0x1467588 + 74 * 2, if index == 17 { 4 } else { 24 });
             builder.cycle(Plan::Quiet);
         }
         builder.input = None;
@@ -1066,4 +1065,26 @@ fn scenarios_select_their_recorded_keys_and_purposes() {
     }
     assert_eq!(RouteScenario::default(), RouteScenario::MenuInputs);
     assert!("unknown".parse::<RouteScenario>().is_err());
+}
+
+#[test]
+fn live_view_uses_the_last_input_sample_state_halfword_with_a_stale_menu_pointer() {
+    let mut scenario = Scenario::new();
+    let capture = &scenario.section().visible[3];
+    assert_eq!(capture.menu, Some(Menu { menu: 1, setting: 5, cursor: 2 }));
+    assert_eq!(capture.controller74.word(0x1467588 + 74 * 4), Some(0));
+    assert_eq!(scenario.check(), Ok(()));
+    let sample = scenario.evidence.samples.iter_mut().rev().find(|sample| sample.input == Some(InputIndex(17))).unwrap();
+    let view = sample.state.iter_mut().find(|view| view.word(0x1467588 + 74 * 2).is_some()).unwrap();
+    let offset = (0x1467588 + 74 * 2 - view.address.0) as usize;
+    for bytes in std::iter::once(&mut view.physical).chain(view.spellings.iter_mut().flatten()) {
+        bytes.0[offset..offset + 4].copy_from_slice(&0x0018_0004u32.to_le_bytes());
+    }
+    assert_eq!(scenario.check(), Ok(()));
+    let sample = scenario.evidence.samples.iter_mut().rev().find(|sample| sample.input == Some(InputIndex(17))).unwrap();
+    let view = sample.state.iter_mut().find(|view| view.word(0x1467588 + 74 * 2).is_some()).unwrap();
+    for bytes in std::iter::once(&mut view.physical).chain(view.spellings.iter_mut().flatten()) {
+        bytes.0[offset..offset + 4].copy_from_slice(&24u32.to_le_bytes());
+    }
+    assert_eq!(scenario.refusal(), Some(ApplicationCheck::Route));
 }
