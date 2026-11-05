@@ -327,9 +327,18 @@ checkServiceCall service call = do
         boundary:rest -> Right (boundary,rest)
       loop predicted previous boundaries = do
         let (prefix,rest)=break (significant . boundaryKind) boundaries
-            atAcquisition=case [boundaryMemory boundary | boundary <- prefix,boundaryKind boundary==AcquiredBoundary] of
-              [] -> previous
-              acquired:_ -> M.union acquired previous
+        atAcquisition <- case reverse [boundary | boundary <- prefix,boundaryKind boundary==AcquiredBoundary] of
+          [] -> Right previous
+          acquired:_ -> do
+            let memory=M.union (boundaryMemory acquired) previous
+                words'=V.domainWords domain
+                records=V.contextTable words':[V.contextTable words'+0x84] ++
+                  [record | Just record <- [M.lookup (Address (V.currentContext words')) memory]]
+                locks=S.fromList [Address lock | record <- records,Just lock <- [M.lookup (Address (record+8)) memory]]
+                taken=[address | Written address 4 1 <- boundaryWrites acquired,S.member address locks]
+            case taken of
+              [address] -> Right (M.insert address 0 memory)
+              _ -> Left CompletionMismatch
         expected <- either (Left . Model) Right (predicted atAcquisition)
         (boundary,remaining) <- case rest of [] -> Left CompletionMismatch; boundary:remaining -> Right (boundary,remaining)
         let state=boundaryRegisters boundary
@@ -343,7 +352,14 @@ checkServiceCall service call = do
         expect ProcessorState (D.processorState state .&. 0x1ff==V.serviceCpsr expected .&. 0x1ff)
         forM_ (V.serviceR0 expected) $ \result -> getReg 0 >>= expect ReturnValue . (==result)
         let normalize (Address address)=Address (address .&. complement 0x40000000 .&. complement 3)
-            known=M.fromList [(normalize address,address) | address <- M.keys atAcquisition]
+            scratch=[(normalize (Address start),normalize (Address (min (start+size) sp)))
+              | Just task <- [M.lookup (Address (V.runningCell (V.domainWords domain))) (callBefore call)]
+              , Just config <- [M.lookup (Address (task+8)) (callBefore call)]
+              , Just size <- [M.lookup (Address (config+0x10)) (callBefore call)]
+              , Just start <- [M.lookup (Address (config+0x14)) (callBefore call)]
+              , sp <- take 1 (drop 13 (D.registers (traceBefore trace)))]
+            known=M.fromList [(normalize address,address) | address <- M.keys atAcquisition,
+              S.member address (expectedWrites wanted) || not (any (\(lo,hi) -> lo<=normalize address && normalize address<hi) scratch)]
             actual=S.fromList [normalize address | Written address _ _ <- writes,M.member (normalize address) known]
             apply memory (Written address@(Address raw) size value') = case M.lookup (normalize address) known of
               Nothing -> Right memory

@@ -61,7 +61,7 @@ checkDispatch event = do
           when owned $ do
             reg final 13 >>= require ContextWord . (==if dispatchDomain event==DomainA then 0xa0000 else 0x130000)
             word after context >>= require ContextWord . (==0)
-            require ContextWord (processorState final .&. 0x1ff==0x93 .|. (processorState initial .&. 0x40))
+            require ContextWord (processorState final .&. 0x1ff==0x93 .|. (processorState initial .&. 0x140))
         else do
           want SelectedTask
           config <- word after (task+8)
@@ -88,7 +88,7 @@ checkDispatch event = do
       want SelectStage
     NoSave -> do
       word after context >>= require ContextWord . (==0)
-      require ContextWord (processorState final .&. 0x1ff == 0x93 .|. (processorState initial .&. 0x40))
+      require ContextWord (processorState final .&. 0x1ff == 0x93 .|. (processorState initial .&. 0x140))
       want SelectStage
     Select -> select
     Resume -> do
@@ -104,7 +104,7 @@ checkDispatch event = do
       reg final 14 >>= require TrampolineState . (==base+if dispatchDomain event==DomainA then 0x53f0 else 0x53b0)
       reg final 15 >>= require TrampolineState . (==entry)
       word after (task+0x30) >>= require TrampolineState . (==0)
-      require TrampolineState (processorState final .&. 0x1ff==0x53)
+      require TrampolineState (processorState final .&. 0xff==0x53)
       want TaskEntry
     IrqReturn -> do
       task <- word before running
@@ -126,7 +126,7 @@ checkDispatch event = do
       sp <- reg initial 13
       saved <- word before sp
       let status = (saved .&. complement 0x40) .|. (processorState initial .&. 0x40)
-      require RestoredFrame (processorState final .&. 0x1ff==status .&. 0x1ff)
+      require RestoredFrame (processorState final .&. 0xff==status .&. 0xff)
       mapM_ (\(index,offset) -> word before (sp+offset) >>= \value -> reg final index >>= require RestoredFrame . (==value)) (zip [0,1,2,3,12,14,15] [4,8..])
       reg final 13 >>= require RestoredFrame . (==sp+32)
       want CallerReturn

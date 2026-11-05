@@ -95,6 +95,26 @@ main = do
         callR0=0x1000,callWrites=[Written (Address 0x2000) 4 0],callBank=[]}
   assert "release permits a peer acquire before continuation" (checkCall release == Right ())
   assert "release still requires its zero write" (checkCall release {callWrites=[]} == Left WrittenWords)
+  let serviceMemory = M.fromList [(Address address,value) | (address,value) <-
+        [(0x400545a4,0),(0x400545c8,0x1000),(0x1008,0x2000),(0x2000,1),
+         (0x40054760,0x3000),(0x300c,1),(0x40054764,1)]]
+      serviceFinal=M.insert (Address 0x40054764) 0 (M.insert (Address 0x2000) 0 serviceMemory)
+      serviceRegisters=D.Registers (replicate 16 0) 0x13 0 0 0
+      acquired=Boundary AcquiredBoundary (Address 0x4000) 31 0 serviceRegisters serviceMemory [Written (Address 0x2000) 4 1] [] (Just 0)
+      returned=Boundary ReturnBoundary (Address 0x5000) 40 0 serviceRegisters serviceFinal
+        [Written (Address 0x40054764) 4 0,Written (Address 0x2000) 4 0] [] Nothing
+      disabled=call {callSemantic=ServiceSemantic DisableDispatch,callCpsr=0x13,callArguments=Arguments [0,0,0,0],
+        callBefore=serviceMemory,callAfter=serviceFinal,callTrace=Just (CallTrace serviceRegisters serviceRegisters Returned [acquired,returned] Nothing)}
+  assert "service judges state after contended acquisition" (checkCall disabled==Right ())
+  assert "service still requires dispatch disable write" (checkCall disabled {callTrace=Just (CallTrace serviceRegisters serviceRegisters Returned
+    [acquired,returned {boundaryWrites=[Written (Address 0x2000) 4 0]}] Nothing)}==Left WrittenWords)
+  let scratchMemory=M.union (M.fromList [(Address 0x3008,0x6000),(Address 0x6010,0x1000),(Address 0x6014,0x7000),(Address 0x77f0,9)]) serviceMemory
+      scratchRegisters=serviceRegisters {D.registers=replicate 13 0 ++ [0x7800,0,0]}
+      scratchAcquired=acquired {boundaryMemory=scratchMemory,boundaryWrites=Written (Address 0x77f0) 4 7:boundaryWrites acquired}
+      scratchCall=disabled {callBefore=scratchMemory,callTrace=Just (CallTrace scratchRegisters scratchRegisters Returned [scratchAcquired,returned] Nothing)}
+  assert "service ignores its own downward stack scratch" (checkCall scratchCall==Right ())
+  assert "service refuses unrelated non-stack writes" (checkCall scratchCall {callTrace=Just (CallTrace scratchRegisters scratchRegisters Returned
+    [scratchAcquired,returned {boundaryWrites=Written (Address 0x300c) 4 9:boundaryWrites returned}] Nothing)}==Left WrittenWords)
   let outcome label helper args memory result cells = assert label (case stockCall DomainA helper (Arguments args) memory of
         Right expected -> expectedR0 expected==result && all (\(address,value) -> M.lookup (Address address) (expectedMemory expected)==Just value) cells
         Left _ -> False)

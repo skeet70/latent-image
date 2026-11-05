@@ -410,6 +410,24 @@ impl OpenCall {
         self.history.push(boundary);
         Ok(())
     }
+
+    fn dispatch_complete(&self, key: &ReturnKey, context: &Context, semantic: Option<Semantic>) -> bool {
+        if key.core != context.core { return false; }
+        let Semantic::Dispatch { name } = self.entry.slot.semantic else { return false; };
+        let delivery = semantic == Some(Semantic::Service { name: Service::DeliverTaskExceptionEntry });
+        let frame = match name {
+            DispatchPoint::FirstEntry => Some(0),
+            DispatchPoint::Resume => Some(36),
+            DispatchPoint::IrqTail => Some(32),
+            _ => None,
+        };
+        if let Some(bytes) = frame {
+            self.entry.task == context.current && self.entry.sp.0.checked_add(bytes) == Some(context.sp)
+                && (key.pc == context.pc || (delivery && name == DispatchPoint::Resume))
+        } else {
+            matches!(semantic, Some(Semantic::Dispatch { .. })) || key.pc == context.pc
+        }
+    }
 }
 
 #[derive(Default)]
@@ -627,8 +645,8 @@ fn service_snapshot(board: &Board, core: Core, tcm: [u32; 2], domain: Domain, se
         if service == Service::SleepTask {
             let config = committed(board.word(core,tcm,task+8)?)?;
             let slot = committed(board.word(core,tcm,config+0x20)?)?;
-            require(slot <= 120, "sleep result slot bound exceeded")?;
-            let address = match domain { Domain::A => 0x4005477c, Domain::B => 0x400e473c } + 4*slot;
+            require((1..=120).contains(&slot), "sleep result slot bound exceeded")?;
+            let address = match domain { Domain::A => 0x4005477c, Domain::B => 0x400e473c } + 4*(slot-1);
             words.push(WordValue { address: Hex(address), value: board.word(core,tcm,address)? });
         }
     }
@@ -991,12 +1009,7 @@ impl Observer<'_> {
     }
 
     fn dispatch_boundary(&mut self, machine: &Machine, context: &Context, tcm: [u32; 2], semantic: Option<Semantic>) -> Result<Option<(DispatchPoint,Vec<Boundary>)>, String> {
-        let stage_entry = matches!(semantic, Some(Semantic::Dispatch { .. }));
-        let delivery = matches!(semantic, Some(Semantic::Service { name: Service::DeliverTaskExceptionEntry }));
-        let closed = self.open.take_where(|key, call| key.core == context.core && match call.entry.slot.semantic {
-            Semantic::Dispatch { name } => stage_entry || key.pc == context.pc || (delivery && name == DispatchPoint::Resume),
-            _ => false,
-        });
+        let closed = self.open.take_where(|key, call| call.dispatch_complete(key, context, semantic));
         let origin = if semantic == Some(Semantic::Dispatch { name: DispatchPoint::Select }) {
             closed.last().and_then(|call| match call.entry.slot.semantic {
                 Semantic::Dispatch { name } => Some((call.entry.origin.unwrap_or(name), call.history.iter()
@@ -1028,7 +1041,7 @@ impl Observer<'_> {
                 self.misplaced_stops += 1;
                 continue;
             }
-            if PC_WATCHES.contains(&(context.pc & !ALIAS)) && retained_dispatch_point(&self.validated.plan, context.pc & !ALIAS) {
+            if PC_WATCHES.contains(&(context.pc & !ALIAS)) {
                 let address = context.pc & !ALIAS;
                 self.pc_watches.entry((core, address)).and_modify(|watch| watch.count += 1)
                     .or_insert(PcWatch { core, address: Hex(address), count: 1, first: context.instructions });
@@ -1329,10 +1342,10 @@ fn drive() -> Result<(), String> {
         .into_iter().map(str::to_owned).collect();
     let observed = (|| -> Result<(), String> {
         let mut labels = validated.sites.labels();
-        for address in PC_WATCHES.into_iter().chain(DISPATCH_LOADS).filter(|&address| retained_dispatch_point(&validated.plan,address)).flat_map(spellings) {
+        for address in PC_WATCHES.into_iter().chain(DISPATCH_LOADS.into_iter().filter(|&address| retained_dispatch_point(&validated.plan,address))).flat_map(spellings) {
             labels.insert(address, "scheduler-pc-watch".into());
         }
-        machine.traces.arm(&machine.session, labels)?;
+        machine.traces.arm_mutable(&machine.session, labels)?;
         observer.begin_data(&machine)?;
         observer.scenario(&mut machine, &trajectory.before_unload[2..])
     })();
@@ -1413,6 +1426,23 @@ mod tests {
             task: Read::Committed { value: 0x9000 }, sp: Hex(0x9fd0), cpsr: 0xd3, registers,
             memory: vec![WordValue { address: Hex(0x9018), value: Read::Committed { value: 0x9fd0 } }],
             writes: vec![], bank: vec![], value: Some(0xffff_ffef), cpacr: 0xf00000, fpexc: 0, tpidrurw: 7 }
+    }
+
+    #[test]
+    fn terminal_dispatch_stages_survive_preemption_until_their_own_continuation() {
+        for (point, bytes) in [(DispatchPoint::FirstEntry,0),(DispatchPoint::Resume,36),(DispatchPoint::IrqTail,32)] {
+            let mut call = call();
+            call.entry.slot.semantic = Semantic::Dispatch { name: point };
+            let key = ReturnKey { core: Core::Primary, pc: 0x8000, sp: 0, task: None, mode: 0 };
+            let context = Context { core: Core::Primary, pc: 0x43640, lr: 0, sp: 0xa000+bytes,
+                cpsr: 0x53, r0: 0, arguments: [0;4], registers: [0;16], instructions: 10,
+                current: Read::Committed { value: 0x9000 } };
+            assert!(!call.dispatch_complete(&key, &context, Some(Semantic::Dispatch { name: DispatchPoint::Save })));
+            let target = Context { pc: 0x8000, ..context };
+            assert!(!call.dispatch_complete(&key, &Context { current: Read::Committed { value: 0x9100 }, ..target }, None));
+            assert!(!call.dispatch_complete(&key, &Context { sp: target.sp-4, ..target }, None));
+            assert!(call.dispatch_complete(&key, &target, None));
+        }
     }
 
     #[test]

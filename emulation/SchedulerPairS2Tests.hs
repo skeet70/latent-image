@@ -1,6 +1,7 @@
 module Main (main) where
 
 import Control.Monad (forM_, unless)
+import Data.Bits ((.|.))
 import qualified Data.Map.Strict as M
 import Emulation.SchedulerPairCatalog (Address (..), DispatchPoint (..))
 import Emulation.SchedulerPairS2
@@ -8,7 +9,7 @@ import Replacement.RtosOwnFirst.Regions (Domain (..))
 
 main :: IO ()
 main = do
-  forM_ [DomainA,DomainB] $ \domain -> do
+  forM_ [(domain,asyncMask) | domain <- [DomainA,DomainB], asyncMask <- [0,0x100]] $ \(domain,asyncMask) -> do
     let (running,context,reschedule,base,_) = stateAddresses domain
         task = 0x900000
         config = 0x901000
@@ -17,7 +18,7 @@ main = do
         memory = M.fromList [(Address address,value) | (address,value) <-
           [(running,task),(context,0),(reschedule,1),(task+8,config),(task+12,1),(task+0x10,0),(task+0x18,stack),(task+0x1c,target),(task+0x30,0),
            (config+4,123),(config+8,target),(config+0x20,2),(0x400c0804,0)] ++ zip [stack,stack+4..stack+32] [0..8]]
-        regs = Registers (replicate 13 0 ++ [stack,99,target]) 0x93 2 0xf00000 0
+        regs = Registers (replicate 13 0 ++ [stack,99,target]) (0x93 .|. asyncMask) 2 0xf00000 0
         values point = Loaded (Just task) (Just 0) (Just 1) Nothing point
         event point = DispatchEvent domain point OwnedDispatch regs regs memory memory (values point) SelectedTask
         updateReg index value state = state {registers=take index (registers state) ++ [value] ++ drop (index+1) (registers state)}
@@ -32,10 +33,10 @@ main = do
           , (event NoSave) {destination=SelectStage}
           , event Select
           , (event Resume) {beforeRegisters=updateReg 1 task regs,afterRegisters=restored 9,destination=CallerReturn}
-          , (event FirstEntry) {afterRegisters=updateReg 0 123 (updateReg 14 (base+if domain==DomainA then 0x53f0 else 0x53b0) regs) {processorState=0x53},destination=TaskEntry}
+          , (event FirstEntry) {afterRegisters=updateReg 0 123 (updateReg 14 (base+if domain==DomainA then 0x53f0 else 0x53b0) regs) {processorState=0x53 .|. asyncMask},destination=TaskEntry}
           , (event IrqReturn) {destination=ExceptionTail}
           , (event IrqResume) {afterRegisters=restored 8,destination=ExceptionTail}
-          , (event IrqTail) {beforeMemory=M.insert (Address stack) 0x93 memory,afterRegisters=foldr (uncurry updateReg) (updateReg 13 (stack+32) regs) (zip [0,1,2,3,12,14,15] [1..7]),destination=CallerReturn}
+          , (event IrqTail) {beforeMemory=M.insert (Address stack) 0x93 memory,afterRegisters=foldr (uncurry updateReg) (updateReg 13 (stack+32) regs {processorState=0x93}) (zip [0,1,2,3,12,14,15] [1..7]),destination=CallerReturn}
           ]
     forM_ examples $ \example -> do
       let point=dispatchPoint example
@@ -51,6 +52,12 @@ main = do
             IrqResume -> example {afterRegisters=updateReg 4 99 (afterRegisters example)}
             IrqTail -> example {afterRegisters=updateReg 13 stack (afterRegisters example)}
       unless (either (const True) (const False) (checkDispatch corrupt)) (fail ("corrupt dispatch accepted: " ++ show (domain,point)))
+    let tailEvent=last examples
+    unless (checkDispatch tailEvent {afterRegisters=(afterRegisters tailEvent) {processorState=0x193}}==Right [])
+      (fail "IRQ return incorrectly restored the saved A bit")
+    let trampoline=examples !! 4
+    unless (checkDispatch trampoline {afterRegisters=(afterRegisters trampoline) {processorState=0x53}}==Right [])
+      (fail "trampoline incorrectly restored A across its IRQ-enabled return")
     let discarded = (event Save) {loaded=(values Save) {loadedDiscarded=Just 1},destination=SelectStage}
     unless (checkDispatch discarded==Right [RemoteTerminateRestarts]) (fail "discarded save did not retain restart")
     let nullEvent = (event Select)
