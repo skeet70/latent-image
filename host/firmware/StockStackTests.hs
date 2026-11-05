@@ -109,6 +109,10 @@ main = do
         , ("bx lr after lr is popped from the stack returns",
             -- push {lr}; bl callee; pop {lr}; bx lr; callee: bx lr
             bytesOf (depth [0xe52de004, bl 1 4, 0xe49de004, bxLr, bxLr] none noTargets noSwitches) == Just 4)
+        , ("bx lr after an offset-only load from SP is an unresolved jump",
+            depth [0xe59de008, bxLr] none noTargets noSwitches == Left (UnresolvedBranch (at 1)))
+        , ("bx lr after a non-writeback load-multiple from SP is an unresolved jump",
+            depth [0xe89d4000, bxLr] none noTargets noSwitches == Left (UnresolvedBranch (at 1)))
         , ("a conditional push refuses", depth [cmp0, 0x092d4010, popR4Pc] none noTargets noSwitches == Left (Refusal (at 1) W.UnaccountedSpWrite))
         , ("stmia sp! refuses", depth [0xe8ad0010, bxLr] none noTargets noSwitches == Left (Refusal (at 0) W.UnaccountedSpWrite))
         , ("sub sp by a register refuses", depth [0xe04dd000, bxLr] none noTargets noSwitches == Left (Refusal (at 0) W.VariableReservation))
