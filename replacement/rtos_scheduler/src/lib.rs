@@ -246,7 +246,7 @@ pub fn reset<M: Machine>(m: &M, task: Task) {
 #[inline(always)]
 pub fn prepare<M: Machine>(m: &M, record: KernelContext, task: Task, insert: impl FnOnce() -> Reschedule) -> Reschedule {
     let [low, high] = TaskDefinition(pointer(m, task.definition())).initial_sp_terms();
-    m.store_word(task.saved_sp(), m.load_word(low).wrapping_add(m.load_word(high)));
+    m.store_word(task.saved_sp(), m.load_word(high).wrapping_add(m.load_word(low)));
     m.store_word(task.resume_pc(), m.load_word(record.first_entry()));
     m.dmb();
     insert()

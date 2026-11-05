@@ -73,7 +73,7 @@
           "start": "0x43f70",
           "end": "0x43f9c",
           "symbol": "xm1_rtos_scheduler_prepare",
-          "frame_bytes": 24,
+          "frame_bytes": 16,
           "stock_frame_bytes": 16,
           "calls": [
             "insert"
@@ -126,7 +126,7 @@
             "end": "0x43ca4",
             "symbol": "xm1_rtos_scheduler_prepare_body",
             "host_helper": "find",
-            "frame_bytes": 8
+            "frame_bytes": 16
           },
           "removal": "when the stock layout no longer constrains the prepare extent"
         }
@@ -204,7 +204,7 @@
           "start": "0xd3f2c",
           "end": "0xd3f58",
           "symbol": "xm1_rtos_scheduler_prepare",
-          "frame_bytes": 24,
+          "frame_bytes": 16,
           "stock_frame_bytes": 16,
           "calls": [
             "insert"
@@ -257,7 +257,7 @@
             "end": "0xd3c60",
             "symbol": "xm1_rtos_scheduler_prepare_body",
             "host_helper": "find",
-            "frame_bytes": 8
+            "frame_bytes": 16
           },
           "removal": "when the stock layout no longer constrains the prepare extent"
         }
