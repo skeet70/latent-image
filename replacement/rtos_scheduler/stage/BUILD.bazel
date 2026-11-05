@@ -4,7 +4,12 @@ package(default_visibility = ["//visibility:public"])
 
 haskell_library(
     name = "scheduler-artifact",
-    srcs = ["Replacement/RtosScheduler/Artifact.hs"],
+    srcs = [
+        "Replacement/RtosScheduler/Artifact.hs",
+        "Replacement/RtosScheduler/Cutover.hs",
+        "Replacement/RtosScheduler/CutoverPins.hs",
+        "Replacement/RtosScheduler/Semantic.hs",
+    ],
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
@@ -59,6 +64,58 @@ haskell_test(
     deps = [
         ":scheduler-artifact",
         "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:update-container",
+    ],
+)
+
+_CUTOVER = _LINKED + [
+    "//replacement/rtos_scheduler:" + name
+    for metadata, binary in [
+        ("regions-s2.json", "scheduler-s2"),
+        ("regions-s3a.json", "s3a"),
+        ("regions-s3b.json", "s3b"),
+        ("regions-s3c.json", "s3c"),
+    ]
+    for name in [metadata, binary + "-a.bin", binary + "-a.symbols", binary + "-b.bin", binary + "-b.symbols"]
+] + [
+    "//replacement/rtos_own_first:" + name
+    for name in ["regions.json", "own-first-a.bin", "own-first-a.symbols", "own-first-b.bin", "own-first-b.symbols"]
+]
+
+haskell_binary(
+    name = "stage-cutover",
+    srcs = ["CutoverMain.hs"],
+    main_file = "CutoverMain.hs",
+    args = ["$(rootpath %s)" % linked for linked in _CUTOVER],
+    data = _CUTOVER,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":scheduler-artifact",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "cutover-stage-tests",
+    size = "small",
+    srcs = ["CutoverTests.hs", "//replacement/startup_artifact:Fixtures.hs"],
+    main_file = "CutoverTests.hs",
+    args = ["$(rootpath %s)" % linked for linked in _CUTOVER],
+    data = _CUTOVER,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":scheduler-artifact",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//host:aeson",
         "//host:base",
         "//host:bytestring",
         "//host:first-stage",

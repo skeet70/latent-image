@@ -3,6 +3,7 @@ module Replacement.RtosScheduler.Artifact
   ( Helper (..), Variant (..), Row (..), Table (..), Linked (..), Source, Admitted, Staged
   , StageError (..), pinnedRows, canonicalSource, requirePinned, parseTable, admit, stage
   , stagedDat, stagedLoader, contractValue, confineChanges, restore, controlLinked
+  , sourceDat, sourceParsed, sourceLoaders, admittedLoader
   ) where
 
 import Control.Monad (forM, forM_, unless)
@@ -207,6 +208,8 @@ admit source table variant a b = do
       else Right walked
     pure (d, Installed rs restoredLoader linked actualFrames)
   pure (Admitted source (M.fromList installed) variant)
+admittedLoader :: Admitted -> Domain -> B.ByteString
+admittedLoader admitted domain = installedLoader (admittedDomains admitted M.! domain)
 
 stagedLoader :: Staged -> Domain -> B.ByteString
 stagedLoader s d = installedLoader (admittedDomains (stagedAdmission s) M.! d)
