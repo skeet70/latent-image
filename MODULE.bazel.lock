@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "HrnY9tJrsmS3nBtRiI1Sbci1VJCsdzMpYFRy7TgS2GU=",
+        "bzlTransitiveDigest": "utxsLrB65hf387LOvJQ161+IsUrTMxUuqJMkzVZM7cs=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -525,6 +525,7 @@
                 "@@//emulation:fujimod-xm1/src/application_observation/controls.rs": "//emulation:fujimod-xm1/src/application_observation/controls.rs",
                 "@@//emulation:fujimod-xm1/src/application_observation/planes.rs": "//emulation:fujimod-xm1/src/application_observation/planes.rs",
                 "@@//emulation:fujimod-xm1/src/application_observation/readiness.rs": "//emulation:fujimod-xm1/src/application_observation/readiness.rs",
+                "@@//emulation:fujimod-xm1/src/application_observation/scenarios.rs": "//emulation:fujimod-xm1/src/application_observation/scenarios.rs",
                 "@@//emulation:fujimod-xm1/src/attach_relations.rs": "//emulation:fujimod-xm1/src/attach_relations.rs",
                 "@@//emulation:fujimod-xm1/src/attach_state.rs": "//emulation:fujimod-xm1/src/attach_state.rs",
                 "@@//emulation:fujimod-xm1/src/bridge.rs": "//emulation:fujimod-xm1/src/bridge.rs",

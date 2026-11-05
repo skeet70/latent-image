@@ -5,10 +5,9 @@ use super::readiness::{
 };
 use super::{
     read_evidence, view_byte, view_word, ApplicationReceipt, Evidence, GraphicsState, InputIndex, InputPurpose, RawView, Sample,
-    SampleIndex, SiteRef, ALIAS, MenuIdentity,
+    SampleIndex, SiteRef, ALIAS, MenuIdentity, Scenario, Menu, ControllerState, CONTROLLER74,
 };
 use crate::composed_catalog::{physical_address as physical, Application, Core, Domain, Instructions, Pc, Role, SiteKind};
-use crate::guest::RouteKey;
 use crate::provenance::Guest;
 use crate::render::Probe;
 use crate::run::CoreIdentities;
@@ -54,19 +53,7 @@ const RELEASE_SLOT: u32 = 0xf8;
 const QUEUE_DOMAIN: u32 = 0x7cad9c;
 pub(crate) const PAYLOAD_LIMIT: u32 = 76;
 pub(crate) const PRESS: u64 = 8_000_000;
-/// Inputs before the settled inputs: twelve Up, OK, OK and MENU.
-pub(crate) const FIRST_SETTLED: usize = 15;
-const ROUTE: [(RouteKey, InputPurpose); 20] = {
-    use InputPurpose::{AfterBack, BackHandback, FirstStart, Ordinary, UnhandledProbe};
-    use RouteKey::{Back, Down, Left, Ok, Up};
-    [
-        (Up, FirstStart), (Up, FirstStart), (Up, FirstStart), (Up, FirstStart), (Up, FirstStart), (Up, FirstStart),
-        (Up, FirstStart), (Up, FirstStart), (Up, FirstStart), (Up, FirstStart), (Up, FirstStart), (Up, FirstStart),
-        (Ok, FirstStart), (Ok, FirstStart), (Ok, FirstStart),
-        (Down, Ordinary), (Up, Ordinary), (Back, BackHandback), (Ok, AfterBack), (Left, UnhandledProbe),
-    ]
-};
-const VISIBLE: usize = 6;
+pub(crate) const FIRST_SETTLED: usize = Scenario::FIRST_SETTLED;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -820,15 +807,32 @@ pub fn render_completion(evidence: &RoleEvidence) -> Result<(), ApplicationRefus
 pub fn route(evidence: &RoleEvidence) -> Result<(), ApplicationRefusal> {
     let check = ApplicationCheck::Route;
     let receipt = evidence.receipt;
-    require(receipt.inputs.len() == ROUTE.len() && receipt.visible.len() == VISIBLE, check, "the route's inputs or captures are incomplete")?;
+    require(receipt.inputs.len() == FIRST_SETTLED + receipt.scenario.settled().len()
+        && receipt.visible.len() == 1 + receipt.scenario.settled().len(), check, "the route's inputs or captures are incomplete")?;
     let start = evidence.application.readiness.end;
     let mut previous = start;
-    for (index, (input, (key, purpose))) in receipt.inputs.iter().zip(ROUTE).enumerate() {
+    for (index, (input, (key, purpose))) in receipt.inputs.iter().zip(receipt.scenario.inputs()).enumerate() {
         require(input.key == key && input.purpose == purpose, check, "an input's key or purpose differs from the route")?;
         require(index != 0 || input.pressed == start, check, "the first press is not at the search end")?;
         require(input.pressed >= previous && input.released.0 == input.pressed.0 + PRESS && input.debounced >= input.released
             && input.debounced.0 - input.released.0 <= PRESS, check, "an input's press, release or debounce differs")?;
         previous = input.settled.unwrap_or(input.debounced);
+    }
+    require(receipt.visible.first().is_some_and(|capture| capture.menu == Some(Menu { menu: 1, setting: 5, cursor: 2 })), check,
+        "the route does not start at the shooting menu")?;
+    for (input, capture) in receipt.scenario.settled().iter().zip(receipt.visible.iter().skip(1)) {
+        require(input.menu.is_none_or(|menu| capture.menu == Some(menu)), check, "a scenario menu checkpoint differs")?;
+        require(capture.controller74.address == Guest(CONTROLLER74) && capture.controller74.view.agrees(), check,
+            "a controller state view disagrees")?;
+        let state = evidence.evidence.samples.iter().rev()
+            .filter(|sample| sample.input == capture.input && sample.stop <= capture.instructions)
+            .find_map(|sample| view_word(&sample.state, CONTROLLER74))
+            .map(|word| ControllerState(word as u16));
+        require(state.is_some() && capture.controller74.value() == state, check,
+            "the captured controller state differs from the last input sample")?;
+        if input.live_view {
+            require(state == Some(ControllerState(4)), check, "the route did not enter live view")?;
+        }
     }
     Ok(())
 }
@@ -849,6 +853,7 @@ pub fn capture_bound(evidence: &RoleEvidence) -> Result<(), ApplicationRefusal> 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PairField {
+    Scenario,
     /// Input keys and purposes.
     Inputs,
     /// Menus, plane layouts, graphics planes and the controller record's code, argument and flags.
@@ -866,6 +871,9 @@ const EVENT_PAYLOAD: std::ops::Range<usize> = 12..80;
 /// `directories` are the roles' run directories holding their visible side files; `summaries` are their role checks'.
 pub fn check_pair(retained: &ApplicationReceipt, owned: &ApplicationReceipt, directories: [&Path; 2], summaries: [&RoleSummary; 2])
     -> Result<(), PairField> {
+    if retained.scenario != owned.scenario {
+        return Err(PairField::Scenario);
+    }
     let keys = |receipt: &ApplicationReceipt| receipt.inputs.iter().map(|input| (input.key, input.purpose)).collect::<Vec<_>>();
     if keys(retained) != keys(owned) {
         return Err(PairField::Inputs);
@@ -881,7 +889,8 @@ pub fn check_pair(retained: &ApplicationReceipt, owned: &ApplicationReceipt, dir
     let same = retained.visible.len() == owned.visible.len()
         && retained.visible.iter().zip(&owned.visible).all(|(a, b)| {
             let (left, right) = (planes(a, directories[0]), planes(b, directories[1]));
-            a.menu == b.menu && left.is_some() && left == right && controller(a).is_some() && controller(a) == controller(b)
+            a.menu == b.menu && a.controller74.value() == b.controller74.value()
+                && left.is_some() && left == right && controller(a).is_some() && controller(a) == controller(b)
         });
     if !same {
         return Err(PairField::Visible);

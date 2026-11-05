@@ -14,6 +14,7 @@ module Replacement.StartupArtifact.Types
   , PublisherFrame (..), SubmitCall (..), StackDepth (..), TaskNumber (..), StackBytes (..), TaskStart (..)
   , AllocationPosition (..), allocationPositionName, AllocationWords (..), AllocationOwner (..), PoolSpan (..), PoolAllocation (..)
   , ComposedWrites (..), composedWritesName, CarrierWritePolicy (..), OwnedFrame (..), HeapFacts (..)
+  , RootSlot (..), OwnedSymbol (..), ExtentDigest (..), Clobber (..), KernelSlot (..), KernelSlotBody (..)
   , Refusal (..), CatalogProblem (..), ManifestProblem (..), ApplicationProblem (..)
   ) where
 
@@ -66,6 +67,7 @@ editBytes (Edit _ bytes) = bytes
 
 data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup | TaskSubmission | TaskStorage
   | IdleTask | RootTask | Image5Producer | PlainProducer | GeneralHeap | ApplicationPump | Task1Actor | Image5Initializer | TaskConstructors
+  | KernelSlotBodies
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 pieceKindName :: PieceKind -> Text
@@ -86,10 +88,12 @@ pieceKindName kind = case kind of
   Task1Actor -> "task1-actor"
   Image5Initializer -> "image5-initializer"
   TaskConstructors -> "task-constructors"
+  KernelSlotBodies -> "kernel-slot-bodies"
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
   | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea | TaskSubmissionArea | TaskStorageArea
   | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | GeneralHeapArea | ApplicationPumpArea | Task1ActorArea | Image5InitializerArea | TaskConstructorsArea
+  | KernelSlotBodiesArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 areaName :: Area -> Text
@@ -115,6 +119,7 @@ areaName area = case area of
   Task1ActorArea -> "task1-actor"
   Image5InitializerArea -> "image5-initializer"
   TaskConstructorsArea -> "task-constructors"
+  KernelSlotBodiesArea -> "kernel-slot-bodies"
 
 data FootprintBasis = AdmissionRead | RuntimePremise deriving (Eq, Ord, Show)
 
@@ -372,6 +377,8 @@ data PieceFacts
   | ApplicationPumpFacts LinkedBytes
   | Task1ActorFacts LinkedBytes
   | Image5InitializerFacts LinkedBytes
+  -- | Each loader's owned kernel slots and +0x1618 body.
+  | KernelSlotFacts [KernelSlot] [KernelSlotBody]
   deriving (Eq, Show)
 
 data Piece = Piece
@@ -445,4 +452,29 @@ data Refusal
   | ComposedDiffMismatch Target
   | ComposedRestoreMismatch
   | ApplicationRefused ApplicationProblem
+  deriving (Eq, Show)
+
+-- | An offset in a published interface root, as +0x1618.
+newtype RootSlot = RootSlot Word32 deriving (Eq, Ord, Show)
+
+-- | A linked symbol name.
+newtype OwnedSymbol = OwnedSymbol Text deriving (Eq, Ord, Show)
+
+-- | Lowercase hex SHA-256 of an extent's bytes.
+newtype ExtentDigest = ExtentDigest Text deriving (Eq, Show)
+
+-- | Caller-saved state a callee may leave changed.
+data Clobber = ClobberR1 | ClobberR2 | ClobberR3 | ClobberR12 | ClobberFlags deriving (Eq, Ord, Show, Enum, Bounded)
+
+-- | One owned slot body linked at its stock entry: the extent it replaces, its deepest stack below the
+-- entry SP with its owned callees, the caller-saved state it may change from its entry values, the
+-- caller-saved state whose value at return may differ from the stock body's, and both extents' digests.
+data KernelSlot = KernelSlot
+  { kernelSlotOffset :: RootSlot, kernelSlotEntry :: Pc, kernelSlotSymbol :: OwnedSymbol, kernelSlotExtent :: Span
+  , kernelSlotFrame :: StackDepth, kernelSlotClobbers :: [Clobber], kernelSlotDiffers :: [Clobber]
+  , kernelSlotStock :: ExtentDigest, kernelSlotOwned :: ExtentDigest }
+  deriving (Eq, Show)
+
+-- | The +0x1618 body in the slack of its host slot's extent, entered only by the +0x1618 entry's branch.
+data KernelSlotBody = KernelSlotBody { kernelBodyHost :: RootSlot, kernelBodyExtent :: Span, kernelBodyFrame :: StackDepth }
   deriving (Eq, Show)

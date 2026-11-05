@@ -4,6 +4,7 @@ module Replacement.StartupArtifact.Joins
   ( JoinKind (..), registeredJoins, joinedTasks, submissionStack, submissionStackWith, constructorInitializer
   , stockDemand, stockDemandConditions, suppliedOf, depthsIn, indirectOf, stockCodeOfEvidence, composedSegments, ownedOf
   , rootTargets, wrapperCallSites, rootUnbounded, image5Unbounded, plainUnbounded
+  , kernelSlotSupplied
   ) where
 
 import qualified A32 as A
@@ -51,6 +52,12 @@ import qualified StartupStageContract as Stage
 import qualified StockStack as SS
 import qualified Replacement.TaskConstructors.Artifact as TC
 import qualified Replacement.TaskConstructors.Admission as TCA
+import Data.List (find)
+import Data.Maybe (listToMaybe)
+import qualified Emulation.PrimaryInitializerSource as PS
+import qualified Replacement.RtosOwnFirst.Pins as OP
+import qualified Replacement.RtosOwnFirst.Regions as OR
+import qualified Replacement.StartupArtifact.KernelSlots as KS
 
 data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | PrefixOrchestrationB | FirstStageCompletionZero
   | LoaderStartupPublisher | PublisherInstallerRoots | CriticalPairInstallerRoots | DispatcherCriticalPair
@@ -59,6 +66,9 @@ data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | 
   | Image5ProducerServices | PlainProducerServices | GeneralHeapImage5Publication | GeneralHeapArenaClear
   | ApplicationPumpServices | Task1ActorProducer | Task1ActorPump | Image5InitializerServices | ConstructorInitializer
   | ConstructorTaskSubmission | ConstructorImage5Producer
+  | KernelSlotPrimaryPublisher | KernelSlotLoaderStartup | KernelSlotLoaderOrchestrationB | KernelSlotRecord2Link
+  | KernelSlotTaskSubmission | KernelSlotTaskStorage | KernelSlotRootTask | KernelSlotImage5Producer | KernelSlotPlainProducer
+  | KernelSlotGeneralHeap
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 instance JoinName JoinKind where
@@ -88,6 +98,16 @@ instance JoinName JoinKind where
   joinName ConstructorTaskSubmission = "constructor-task-submission"
   joinName ConstructorImage5Producer = "constructor-image5-producer"
   joinName ConstructorInitializer = "constructor-initializer"
+  joinName KernelSlotPrimaryPublisher = "kernel-slot-primary-publisher"
+  joinName KernelSlotLoaderStartup = "kernel-slot-loader-startup"
+  joinName KernelSlotLoaderOrchestrationB = "kernel-slot-loader-orchestration-b"
+  joinName KernelSlotRecord2Link = "kernel-slot-record2-link"
+  joinName KernelSlotTaskSubmission = "kernel-slot-task-submission"
+  joinName KernelSlotTaskStorage = "kernel-slot-task-storage"
+  joinName KernelSlotRootTask = "kernel-slot-root-task"
+  joinName KernelSlotImage5Producer = "kernel-slot-image5-producer"
+  joinName KernelSlotPlainProducer = "kernel-slot-plain-producer"
+  joinName KernelSlotGeneralHeap = "kernel-slot-general-heap"
 
 at :: Target -> Word32 -> Word32 -> Span
 at target start end = Span target (Guest start) (Guest end)
@@ -386,7 +406,7 @@ registeredJoins =
   , dispatcherRootEntry, dispatcherIdleEntry, wrapperIdleErrorCallback, rootTaskServices
   , image5ProducerServices, plainProducerServices, generalHeapImage5Publication, generalHeapArenaClear
   , applicationPumpServices, task1ActorProducer, task1ActorPump, image5InitializerServices
-  , constructorTaskSubmission, constructorImage5Producer, constructorInitializer Image5Initializer ]
+  , constructorTaskSubmission, constructorImage5Producer, constructorInitializer Image5Initializer ] ++ kernelSlotJoins
 
 -- | The task wrapper, the record-2 critical pair and the task-storage transition joined as in
 -- replacement/startup_composition/Replacement/StartupComposition/TaskSubmission.hs:63-97.
@@ -588,7 +608,7 @@ producerEntersAtEntries producer evidence = any (\(target, _) -> target >= 0x723
 producerServices :: JoinKind -> PieceKind -> Producers.Producer -> Join JoinKind
 producerServices kind piece producer = Join kind (Set.fromList [piece, Record2Link])
   [at Image4 0x7235d8 0x723790]
-  (ObservationQualified ("the producer's retained services reach the critical-pair entry words 0x7235d8 and 0x7236b0 of the record-2 link; " <> joinName kind <> "-closure-enters-carriers-at-entries checks that every direct call from the producer's closure into the wrapper, critical-pair and storage carriers targets an entry the owning piece admits (critical-pair words: replacement/startup_artifact/Replacement/StartupArtifact/Adapters.hs:199-200); producer-retained-depth bounds retained callee demand below the owned frame with StockStack (host/firmware/StockStack.hs), with the 88-byte IRQ preemption peak, " <> T.pack (SB.conditionsPhrase conditions) <> ", except the chains it pins" <> fillText <> "; qualified by the producer's call sequence and reads in the composed comparison"))
+  (ObservationQualified ("the producer's retained services reach the critical-pair entry words 0x7235d8 and 0x7236b0 of the record-2 link; " <> joinName kind <> "-closure-enters-carriers-at-entries checks that every direct call from the producer's closure into the wrapper, critical-pair and storage carriers targets an entry the owning piece admits (critical-pair words: replacement/startup_artifact/Replacement/StartupArtifact/Adapters.hs:237-238); producer-retained-depth bounds retained callee demand below the owned frame with StockStack (host/firmware/StockStack.hs), with the 88-byte IRQ preemption peak, " <> T.pack (SB.conditionsPhrase conditions) <> ", except the chains it pins" <> fillText <> "; qualified by the producer's call sequence and reads in the composed comparison"))
   ([ HostCheck (joinName kind <> "-closure-enters-carriers-at-entries") (producerEntersAtEntries producer)
    , HostCheck "producer-retained-depth" (producerRetainedDepth producer) ]
    ++ [HostCheck "fill-flag-writers" fillFlagWriters | producer == Producers.Image5Load])
@@ -617,22 +637,26 @@ ownedOf evidence = SB.ownedRanges (concatMap pieceCarriers (evidencePieces evide
 stockCodeOfEvidence :: JoinEvidence -> SS.StockCode
 stockCodeOfEvidence evidence = SB.stockCodeOf (composedSegments evidence) (concatMap pieceCarriers (evidencePieces evidence))
 
--- | Table A as the owned publisher emits it, table B as the canonical loader-B initializer stores it,
--- each at its loader header's root.
+-- | Table A from its owned publisher if present, otherwise the canonical publisher, and table B from the
+-- canonical loader-B initializer, each at its loader header's root.
 indirectOf :: JoinEvidence -> Maybe SS.IndirectTargets
 indirectOf evidence = do
   rootA <- targetWord (evidenceCanonical evidence) LoaderA rootHeader
   rootB <- targetWord (evidenceCanonical evidence) LoaderB 0xd0010
-  emitted <- publications evidence
+  tableA <- case publications evidence of
+    Just emitted -> pure [(guest, publicationValue row) | row <- emitted, let Guest guest = publicationGuest row]
+    Nothing -> do
+      (emitted, _) <- either (const Nothing) Just (PS.publications (targetOf (evidenceCanonical evidence) LoaderA))
+      pure [(guest, value) | PS.Publication (PS.Guest guest) value _ <- emitted]
   stores <- either (const Nothing) Just (I.originalStores (targetOf (evidenceCanonical evidence) LoaderB))
-  let tableA = [(guest, publicationValue row) | row <- emitted, let Guest guest = publicationGuest row]
-      tableB = [(guest, value) | I.ExpectedStore (P.Guest guest) value <- stores]
+  let tableB = [(guest, value) | I.ExpectedStore (P.Guest guest) value <- stores]
   either (const Nothing) Just (SB.indirectTargetsOf (stockCodeOfEvidence evidence) (SB.rootSlotTargets rootA tableA rootB tableB))
 
 -- | Owned entries with proved depths, before the wrapper: the record-2 critical pair, idle and root.
 baseSupplied :: JoinEvidence -> M.Map Word32 SS.StackDepth
-baseSupplied evidence = M.union core (heapSupplied evidence core)
+baseSupplied evidence = M.unions [core, slots, heapSupplied evidence (M.union core slots)]
   where
+    slots = M.map (\(StackDepth depth) -> SS.StackDepth (fromIntegral depth)) (kernelSlotSupplied evidence)
     core = M.fromList
       ([ (entry, SS.StackDepth (fromIntegral depth)) | Just (StackDepth depth) <- [criticalFrame evidence], entry <- [0x7235d8, 0x7236b0] ]
        ++ [ (entry, SS.StackDepth (fromIntegral (negate low))) | Just (entry, low) <- [idleFrame evidence, rootFrame evidence] ])
@@ -1009,4 +1033,235 @@ constructorInitializer initializer = Join ConstructorInitializer (Set.fromList [
     | low <- [0xd80d44,0xec5350,0xdca604,0xdb63e0,0xed10b4,0xef8c90,0xed2b00,0x1055d10,0x69f000]]
   (ObservationQualified "the initializer calls the constructors at their stock entries; constructor ABI and status behavior require native qualification, and descriptor D+24 retains the initializer's caller-stack classification word")
   [HostCheck "initializer-constructor-entries-retained" $ \evidence -> all (constructorEntryPreserved evidence) TC.constructors]
+-- * kernel-slot-bodies
 
+kernelSlotFacts :: JoinEvidence -> Maybe ([KernelSlot], [KernelSlotBody])
+kernelSlotFacts evidence = case [(slots, bodies) | KernelSlotFacts slots bodies <- map pieceFacts (evidencePieces evidence)] of
+  [facts] -> Just facts
+  _ -> Nothing
+
+pieceOf :: PieceKind -> JoinEvidence -> Maybe Piece
+pieceOf kind evidence = find ((== kind) . pieceKind) (evidencePieces evidence)
+
+-- | A loader's slot extents as the own-first pins name them, merged.
+slotCarriers :: Target -> [Span]
+slotCarriers target = normalizeSpans
+  [ at target start end | domain <- OR.domains, loaderTarget domain == target, let pinned = OP.stockPins domain
+  , (_, OR.Extent (OR.GuestAddress start) (OR.GuestAddress end)) <- OP.pinRows pinned ++ [OP.pinTail pinned] ]
+  where
+    loaderTarget OR.DomainA = LoaderA
+    loaderTarget OR.DomainB = LoaderB
+
+-- | A loader's +0x164 and +0x168 extents and its +0x1618 entry extent.
+serviceSlots :: Target -> [Span]
+serviceSlots target = [at target (base + 0x1140) (base + 0x118c), at target (base + 0x12bc) (base + 0x12cc)]
+  where base = targetBase target
+
+slotEntries :: [KernelSlot] -> [Word32]
+slotEntries slots = [entry | KernelSlot {kernelSlotEntry = Pc entry} <- slots]
+
+-- | Direct branches into the slot extents: from the piece's footprint in the canonical targets, and from its
+-- carriers in the composed targets.
+enteringCalls :: PieceKind -> JoinEvidence -> Maybe ([KS.DirectCall], [KS.DirectCall])
+enteringCalls kind evidence = do
+  piece <- pieceOf kind evidence
+  (slots, _) <- kernelSlotFacts evidence
+  let extents = map kernelSlotExtent slots
+  pure ( KS.directCalls (targetOf (evidenceCanonical evidence)) [range | Footprint range _ _ <- pieceFootprint piece] extents
+       , KS.directCalls (targetOf (evidenceComposed evidence)) (pieceCarriers piece) extents )
+
+callsEnterAtEntries :: PieceKind -> HostCheck
+callsEnterAtEntries kind = HostCheck (pieceKindName kind <> "-calls-enter-slot-entries") $ \evidence ->
+  case (enteringCalls kind evidence, kernelSlotFacts evidence) of
+    (Just (stock, owned), Just (slots, _)) -> all ((`elem` slotEntries slots) . KS.directTarget) (stock ++ owned)
+    _ -> False
+
+-- | The word at a guest address of whichever canonical target holds it.
+canonicalWord :: JoinEvidence -> Word32 -> Maybe Word32
+canonicalWord evidence address = listToMaybe [word | target <- [minBound .. maxBound], Just word <- [targetWord (evidenceCanonical evidence) target address]]
+
+-- | Each root slot's words as the canonical publisher and initializer and the owned publisher store them.
+slotTargets :: JoinEvidence -> Maybe KS.RootTargets
+slotTargets evidence = do
+  let targets = evidenceCanonical evidence
+  stock <- either (const Nothing) Just (KS.publishedRows (targetOf targets LoaderA) (targetOf targets LoaderB))
+  root <- targetWord targets LoaderA rootHeader
+  let owned = KS.rootRows (fromIntegral (physicalAddress (fromIntegral root)))
+        [(guest, value) | Publication (Guest guest) value <- maybe [] id (publications evidence)]
+  pure (KS.rootTargets (stock ++ owned))
+
+-- | Each direct call and root-slot call in the piece's footprint, from its return site, reads none of the
+-- caller-saved state the entered bodies may leave different from stock before overwriting it. A root-slot
+-- call may enter either loader's body of its slot.
+callersScratchDead :: PieceKind -> HostCheck
+callersScratchDead kind = HostCheck (pieceKindName kind <> "-slot-callers-leave-clobbers-dead") $ \evidence ->
+  case (pieceOf kind evidence, enteringCalls kind evidence, kernelSlotFacts evidence, slotTargets evidence) of
+    (Just piece, Just (stock, _), Just (slots, _), Just published) ->
+      let word = canonicalWord evidence
+          clobbersAt entry = concat [kernelSlotDiffers slot | slot <- slots, kernelSlotEntry slot == Pc entry]
+          clobbersOf offset = nub (concat [kernelSlotDiffers slot | slot <- slots, kernelSlotOffset slot == offset])
+          offsets = map kernelSlotOffset slots
+          spans = [range | Footprint range _ _ <- pieceFootprint piece]
+          dead = KS.deadAfter word (slotEntries slots) offsets published
+          direct = [dead KS.EnteredDirectly (clobbersAt (KS.directTarget call)) (KS.directSite call + 4) | call <- stock, KS.directLinked call]
+          indirect = [ dead KS.EnteredThroughRoot (clobbersOf offset) (site + 4)
+                     | KS.SlotCall site offset <- KS.slotCalls (targetOf (evidenceCanonical evidence)) spans, offset `elem` offsets ]
+      in and (direct ++ indirect)
+    _ -> False
+
+-- | Every table-A word the canonical or owned publisher stores and every table-B word the canonical initializer
+-- stores that lies in a slot extent names an entry, and the +0x1618, +0x164 and +0x168 words of both roots do.
+publishedSlotEntries :: HostCheck
+publishedSlotEntries = HostCheck "published-slot-words-name-entries" $ \evidence ->
+  case ( kernelSlotFacts evidence, PS.publications (targetOf (evidenceCanonical evidence) LoaderA)
+       , I.originalStores (targetOf (evidenceCanonical evidence) LoaderB)
+       , targetWord (evidenceCanonical evidence) LoaderA rootHeader, targetWord (evidenceCanonical evidence) LoaderB 0xd0010 ) of
+    (Just (slots, _), Right (stock, _), Right stores, Just rootA, Just rootB) ->
+      let physicalOf address = physicalAddress (fromIntegral address)
+          tableA = [(physicalOf guest, value) | PS.Publication (PS.Guest guest) value _ <- stock]
+            ++ [(physicalOf guest, value) | Publication (Guest guest) value <- maybe [] id (publications evidence)]
+          tableB = [(physicalOf guest, value) | I.ExpectedStore (P.Guest guest) value <- stores]
+          entries = slotEntries slots
+          inSlot value = any (\(Span _ (Guest low) (Guest high)) -> value >= low && value < high) (map kernelSlotExtent slots)
+          named root table offset = case [value | (guest, value) <- table, guest == physicalOf (root + offset)] of
+            values@(_ : _) -> all (`elem` entries) values
+            [] -> False
+      in all (\(_, value) -> not (inSlot value) || value `elem` entries) (tableA ++ tableB)
+           && and [named root table offset | (root, table) <- [(rootA, tableA), (rootB, tableB)], offset <- [0x1618, 0x164, 0x168]]
+    _ -> False
+
+-- | The composed target differs from canonical only inside the composition's carriers.
+differsOnlyInCarriers :: Target -> HostCheck
+differsOnlyInCarriers target = HostCheck (targetName target <> "-differs-only-in-carriers") $ \evidence ->
+  all (`coveredBy` concatMap pieceCarriers (evidencePieces evidence))
+    (diffSpans target (targetOf (evidenceCanonical evidence) target) (targetOf (evidenceComposed evidence) target))
+
+slotFrames :: [KernelSlot] -> Word32 -> [Word32]
+slotFrames slots offset = [depth | KernelSlot {kernelSlotOffset = RootSlot slot, kernelSlotFrame = StackDepth depth} <- slots, slot == offset]
+
+-- | Bytes the record-2 critical pair leaves a retained slot: its bridge charges 24 below its call SP and pushes
+-- 16 of them (emulation/Emulation/CriticalPair.hs:534; replacement/critical_pair/entry.S:60).
+criticalSlotBytes :: Word32
+criticalSlotBytes = 8
+
+-- | Both loaders' +0x1618, +0x164 and +0x168 bodies fit the critical pair's slot budget, and no +0x164 body
+-- changes r3, which the entry adapter holds the +0x164 target in across the call.
+criticalSlotsFit :: HostCheck
+criticalSlotsFit = HostCheck "critical-pair-slot-frames-and-r3" $ \evidence ->
+  case kernelSlotFacts evidence of
+    Just (slots, _) ->
+      all (\offset -> let frames = slotFrames slots offset in length frames == 2 && all (<= criticalSlotBytes) frames) [0x1618, 0x164, 0x168]
+        && not (any (\slot -> kernelSlotOffset slot == RootSlot 0x164 && ClobberR3 `elem` kernelSlotClobbers slot) slots)
+    Nothing -> False
+
+-- | The retained storage prelude's push at 0x725c6c, whose depth its +0x1618, +0x164 and epilogue +0x168 calls run at.
+storagePreludeBytes :: JoinEvidence -> Maybe Word32
+storagePreludeBytes evidence = case A.decode 0x725c6c <$> targetWord (evidenceCanonical evidence) Image4 0x725c6c of
+  Just (A.StoreMultiple (A.Cond 14) base A.DecrementBefore True registers) | base == A.sp -> Just (4 * fromIntegral (length registers))
+  _ -> Nothing
+
+-- | The prelude depth plus each owned slot frame fits the reservation demand the wrapper charges for the storage call.
+storageSlotsFit :: HostCheck
+storageSlotsFit = HostCheck "storage-prelude-slot-frames-within-reservation-demand" $ \evidence ->
+  case (kernelSlotFacts evidence, storagePreludeBytes evidence, WA.stockCalleeDemand (WA.FixedService WA.Reservation)) of
+    (Just (slots, _), Just prelude, WA.CalleeDemand _ (WA.StackOffset low)) ->
+      all (\offset -> let frames = slotFrames slots offset in length frames == 2 && all (\frame -> toInteger (prelude + frame) <= negate low) frames)
+        [0x1618, 0x164, 0x168]
+    _ -> False
+
+-- | Retained wrapper demands with each root-slot service charged the larger of its stock demand and its owned bodies' frames.
+ownedSlotDemand :: (WA.CallTarget -> WA.CalleeDemand) -> [KernelSlot] -> WA.CallTarget -> WA.CalleeDemand
+ownedSlotDemand demand slots target = case lookup target [(WA.CurrentCoreService, 0x1618), (WA.SaveMaskService, 0x164), (WA.RestoreMaskService, 0x168)] of
+  Just offset ->
+    let WA.CalleeDemand _ (WA.StackOffset stock) = demand target
+    in WA.CalleeDemand target (WA.StackOffset (negate (maximum (negate stock : map toInteger (slotFrames slots offset)))))
+  Nothing -> demand target
+
+slotDemandSubmissionStack :: HostCheck
+slotDemandSubmissionStack = HostCheck "submission-stack-with-owned-slot-frames" $ \evidence ->
+  case (submissions evidence, joinedTasks evidence, kernelSlotFacts evidence, stockDemandReport evidence) of
+    (Just calls@(_ : _), Just joined, Just (slots, _), Just (demand, _)) ->
+      all (either (const False) (const True) . submissionStackWith (ownedSlotDemand demand slots) joined) calls
+    _ -> False
+
+-- | Each owned slot entry and +0x1618 body with its admitted frame, for a stack walk that does not enter owned code.
+kernelSlotSupplied :: JoinEvidence -> M.Map Word32 StackDepth
+kernelSlotSupplied evidence = case kernelSlotFacts evidence of
+  Just (slots, bodies) -> M.fromList
+    ([(entry, frame) | KernelSlot {kernelSlotEntry = Pc entry, kernelSlotFrame = frame} <- slots]
+     ++ [(start, frame) | KernelSlotBody _ (Span _ (Guest start) _) frame <- bodies])
+  Nothing -> M.empty
+
+slotsText :: T.Text
+slotsText = "the owned slot bodies are linked at the stock entries inside the stock extents (replacement/rtos_own_first/stage/Replacement/RtosOwnFirst/Artifact.hs:321-322) and equal stock per slot on the native-case grid and the natural route (E-RTOS-OWN-FIRST-ORACLE-150, E-RTOS-OWN-FIRST-NATURAL-150); each body restores r4-r11 and SP and returns to its entry LR, and its facts list the caller-saved state it may change and the state whose value at return may differ from the stock body's, both computed by walking the owned and stock bodies (replacement/startup_artifact/Replacement/StartupArtifact/KernelSlots.hs walkAbi, differingState); the slot-callers-leave-clobbers-dead checks run KernelSlots.hs deadAfter over the differing state; published-slot-words-name-entries checks that the canonical and owned tables name entries"
+
+rebaseText :: T.Text
+rebaseText = "a whole-loader hash taken at admission is over the canonical loader and re-bases onto the composed loader as its canonical bytes outside the composition's carriers, which loader_a-differs-only-in-carriers and loader_b-differs-only-in-carriers check, plus each carrier's edit, whose digest the contract carries"
+
+reason :: T.Text -> JoinBasis
+reason text = ObservationQualified (slotsText <> "; " <> text <> "; qualified by a composed natural comparison")
+
+kernelSlotPublisher :: Join JoinKind
+kernelSlotPublisher = Join KernelSlotPrimaryPublisher (Set.fromList [KernelSlotBodies, PrimaryPublisher])
+  (slotCarriers LoaderA ++ [at LoaderA 0x40430 0x409ac])
+  (reason ("the publisher hashes the canonical loader A (emulation/Emulation/PrimaryInitializerSource.hs:110-113) and its consumer source requires root slot +0x1618 to publish the entry 0x412bc (emulation/Emulation/PrimaryInitializerConsumerSource.hs:91-92); the kernel-slot admission hashes loader A over the publisher carrier; " <> rebaseText
+    <> "; the descriptor consumer 0x725b74 calls +0x1618 through root slot 0x1618, and primary-publisher-slot-callers-leave-clobbers-dead checks that it and every direct caller in the publisher's footprint read no state the entered bodies may change"))
+  [publishedSlotEntries, callsEnterAtEntries PrimaryPublisher, callersScratchDead PrimaryPublisher, differsOnlyInCarriers LoaderA]
+
+kernelSlotLoaderStartup :: Join JoinKind
+kernelSlotLoaderStartup = Join KernelSlotLoaderStartup (Set.fromList [KernelSlotBodies, LoaderStartup])
+  (slotCarriers LoaderA ++ slotCarriers LoaderB ++ [at LoaderA loaderAStart 0x40b00, at LoaderB loaderStartup 0xd0b00])
+  (reason ("loader-startup hashes both canonical loaders (replacement/startup_dispatch/Replacement/StartupDispatch/Artifact.hs:40-46) and the kernel-slot admission hashes both over the orchestration carriers; " <> rebaseText
+    <> "; the orchestration admissions name retained service entries (replacement/loader_orchestration/Replacement/LoaderOrchestration/Interface.hs:34-49) and require their actual providers to remain admitted (replacement/loader_orchestration/Replacement/LoaderOrchestration/Artifact.hs:212-216); loader-startup-slot-callers-leave-clobbers-dead checks every direct and root-slot caller in the piece's canonical footprint, and loader-startup-calls-enter-slot-entries checks the direct calls in that footprint and in the owned orchestration code"))
+  [publishedSlotEntries, callsEnterAtEntries LoaderStartup, callersScratchDead LoaderStartup, differsOnlyInCarriers LoaderA, differsOnlyInCarriers LoaderB]
+
+kernelSlotOrchestrationB :: Join JoinKind
+kernelSlotOrchestrationB = Join KernelSlotLoaderOrchestrationB (Set.fromList [KernelSlotBodies, LoaderOrchestrationB])
+  [at LoaderB loaderStartup 0xd0b00]
+  (HostProof ("the kernel-slot admission hashes the canonical loader B over the loader-B orchestration carrier (replacement/rtos_own_first/stage/Replacement/RtosOwnFirst/Artifact.hs:198-203,318); " <> rebaseText
+    <> "; loader-orchestration-b-calls-enter-slot-entries checks that the owned orchestration and its retained callee closures enter no slot extent except at an entry"))
+  [callsEnterAtEntries LoaderOrchestrationB, callersScratchDead LoaderOrchestrationB, differsOnlyInCarriers LoaderB]
+
+kernelSlotRecord2Link :: Join JoinKind
+kernelSlotRecord2Link = Join KernelSlotRecord2Link (Set.fromList [KernelSlotBodies, Record2Link])
+  (slotCarriers LoaderB ++ serviceSlots LoaderA ++ [at LoaderB 0xd000c 0xd0010, at LoaderB initializerSite (initializerSite + 4)])
+  (reason ("the record-2 admission pins the stock +0x164, +0x168 and +0x1618 words of both canonical loaders (emulation/Emulation/CriticalPair.hs:89-110) and hashes loader B into the prefix facts, retained against the original (emulation/Emulation/LoaderPrefixWitness.hs:446) and owned over the loader it is given (:524); the kernel-slot admission hashes loader B over the header and initializer words; " <> rebaseText
+    <> "; the critical-pair entry adapter calls +0x1618 and +0x164 32 bytes into its 64-byte frame and holds the +0x164 target in r3 across the call (replacement/critical_pair/entry.S:7-21; emulation/Emulation/CriticalPair.hs:485-486,640-642), its bridge leaves a retained slot 8 bytes (criticalSlotBytes) and its model keeps only the published r0 of a slot call (CriticalPair.hs bridgeSummary), which critical-pair-slot-frames-and-r3 checks against the owned frames and clobbers"))
+  [publishedSlotEntries, callsEnterAtEntries Record2Link, callersScratchDead Record2Link, criticalSlotsFit, differsOnlyInCarriers LoaderB]
+
+kernelSlotTaskSubmission :: Join JoinKind
+kernelSlotTaskSubmission = Join KernelSlotTaskSubmission (Set.fromList [KernelSlotBodies, TaskSubmission])
+  (serviceSlots LoaderA ++ serviceSlots LoaderB)
+  (reason "the wrapper loads +0x1618, +0x164 and +0x168 from the root slots (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:103-106) and its admission forgets r0-r3, r12 and lr at every external call (:382), so the owned clobbers meet its model; its stock demand table charges 8, 4 and 4 bytes (:120) where the owned +0x164 and +0x168 frames are 8, and submission-stack-with-owned-slot-frames joins every dispatcher submission's Submission-entry boundaries (:478) with the larger of the two inside its boot-stack window; the critical pair and the storage prelude reach the bodies under their own charged lows (replacement/startup_composition/Replacement/StartupComposition/TaskSubmission.hs:112-114), which critical-pair-slot-frames-and-r3 and storage-prelude-slot-frames-within-reservation-demand check; the Release entry and the retained fixed services' closures run on task stacks [INFERENCE], and task-submission-slot-callers-leave-clobbers-dead checks their direct and root-slot callers")
+  [publishedSlotEntries, callsEnterAtEntries TaskSubmission, callersScratchDead TaskSubmission, slotDemandSubmissionStack, criticalSlotsFit, storageSlotsFit]
+
+kernelSlotTaskStorage :: Join JoinKind
+kernelSlotTaskStorage = Join KernelSlotTaskStorage (Set.fromList [KernelSlotBodies, TaskStorage])
+  (serviceSlots LoaderA ++ serviceSlots LoaderB)
+  (reason "the retained storage prelude 0x725c6c calls +0x1618 and +0x164 and its epilogue +0x168 through the root slots (replacement/task_storage/Replacement/TaskStorage/Artifact.hs:207-208) at the prelude's push depth, which storage-prelude-slot-frames-within-reservation-demand adds to each owned frame against the 40-byte reservation demand the wrapper charges (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:117); task-storage-slot-callers-leave-clobbers-dead checks the three call sites")
+  [publishedSlotEntries, callsEnterAtEntries TaskStorage, callersScratchDead TaskStorage, storageSlotsFit]
+
+kernelSlotGeneralHeap :: Join JoinKind
+kernelSlotGeneralHeap = Join KernelSlotGeneralHeap (Set.fromList [KernelSlotBodies, GeneralHeap])
+  [at LoaderA 0x41140 0x4118c]
+  (reason ("the heap's retained lock, unlock and memmove closure follows direct calls into loader A (replacement/startup_artifact/Replacement/StartupArtifact/Footprint/GeneralHeap.hs:71-98); general-heap-calls-enter-slot-entries and general-heap-slot-callers-leave-clobbers-dead check its slot calls against the admitted entries and slot ABI; heap-slot-retained-depth recomputes every heap entry's demand with the owned slot frames supplied under " <> T.pack (SB.conditionsPhrase SB.heapConditions) <> "; every observed heap call must leave that demand plus the 88-byte IRQ peak above its task allocation base; " <> rebaseText))
+  [ publishedSlotEntries, callsEnterAtEntries GeneralHeap, callersScratchDead GeneralHeap
+  , differsOnlyInCarriers LoaderA
+  , HostCheck "heap-slot-retained-depth" $ \evidence -> case heapFacts evidence of
+      Just facts -> let supplied = baseSupplied evidence in all (`M.member` supplied) (heapEntries facts)
+      Nothing -> False ]
+
+-- | A piece whose retained closure reaches the slot bodies only through loader-A callers.
+closureJoin :: JoinKind -> PieceKind -> Join JoinKind
+closureJoin kind piece = Join kind (Set.fromList [KernelSlotBodies, piece])
+  [at LoaderA 0x41140 0x4118c]
+  (reason ("the piece's retained closure reaches the +0x164 and +0x168 bodies by direct calls from loader A, which " <> pieceKindName piece <> "-calls-enter-slot-entries and " <> pieceKindName piece <> "-slot-callers-leave-clobbers-dead check; the owned frames are 8 bytes where stock takes 4, and retained callee depth on the piece's stack is that piece's premise"))
+  [publishedSlotEntries, callsEnterAtEntries piece, callersScratchDead piece]
+
+kernelSlotJoins :: [Join JoinKind]
+kernelSlotJoins =
+  [ kernelSlotPublisher, kernelSlotLoaderStartup, kernelSlotOrchestrationB, kernelSlotRecord2Link, kernelSlotTaskSubmission, kernelSlotTaskStorage
+  , closureJoin KernelSlotRootTask RootTask, closureJoin KernelSlotImage5Producer Image5Producer, closureJoin KernelSlotPlainProducer PlainProducer
+  , kernelSlotGeneralHeap ]
+
+[Showing lines 1053-1282 of 1283. Use :1283 to continue]
