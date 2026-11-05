@@ -101,14 +101,7 @@
     {
       "phase": "package-menu-prefix",
       "capture": "picker-live-view",
-      "steps": [
-        [
-          "menu",
-          67,
-          56,
-          0
-        ]
-      ],
+      "steps": [],
       "reads": [
         [
           "dispatcher-first-word",
@@ -474,6 +467,17 @@
           450
         ]
       ]
+    },
+    {
+      "phase": "picker-unload-close",
+      "steps": [
+        [
+          "back",
+          1,
+          5,
+          3
+        ]
+      ]
     }
   ],
   "after_unload": [
@@ -487,6 +491,12 @@
         }
       ],
       "steps": [
+        [
+          "ok",
+          1,
+          5,
+          3
+        ],
         [
           "ok",
           1,

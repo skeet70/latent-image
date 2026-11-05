@@ -55,15 +55,16 @@ mismatchesOf (oldSteps, oldFields) (newSteps, newFields) = do
   new <- either (const Nothing) Just (decodeTrajectories (file newSteps newFields))
   pure (variantMismatches old new)
 
--- | variantMismatches over two files whose segments carry the given steps, before and after unload.
+-- | A file whose segments carry the given steps, before and after unload.
+sidesTrajectory :: ([String], [String]) -> Maybe Trajectories
+sidesTrajectory (before, after) = either (const Nothing) Just (decodeTrajectories (C.pack (concat
+  [ "{\"schema\":1,\"before_unload\":[", segments "b" before, "],\"after_unload\":[", segments "a" after, "]}" ])))
+  where
+    segments side entries = intercalate "," [ "{\"phase\":\"" ++ side ++ show index ++ "\",\"steps\":[" ++ steps ++ "]}" | (index, steps) <- zip [0 :: Int ..] entries ]
+
+-- | variantMismatches over two 'sidesTrajectory' files.
 sidesMismatches :: ([String], [String]) -> ([String], [String]) -> Maybe [String]
-sidesMismatches old new = do
-  let segments side entries = intercalate "," [ "{\"phase\":\"" ++ side ++ show index ++ "\",\"steps\":[" ++ steps ++ "]}" | (index, steps) <- zip [0 :: Int ..] entries ]
-      file (before, after) = C.pack (concat
-        [ "{\"schema\":1,\"before_unload\":[", segments "b" before, "],\"after_unload\":[", segments "a" after, "]}" ])
-  retained <- either (const Nothing) Just (decodeTrajectories (file old))
-  variant <- either (const Nothing) Just (decodeTrajectories (file new))
-  pure (variantMismatches retained variant)
+sidesMismatches old new = variantMismatches <$> sidesTrajectory old <*> sidesTrajectory new
 
 -- | A linked build's @llvm-nm --print-size@ rows, one symbol each.
 symbolTable :: SymbolTable
@@ -245,6 +246,14 @@ main = do
         fmap null (sidesMismatches (["[\"menu\",67,56,0]", "[\"menu\",1,5,2]"], []) (["", "[\"menu\",1,5,2]"], [])) == Just False
     , expect "a variant leaves out at most one MENU on each side of unload" $
         fmap null (sidesMismatches (["[\"menu\",67,56,0],[\"menu\",67,56,0],[\"menu\",1,5,2]"], []) (["[\"menu\",1,5,2]"], [])) == Just False
+    , expect "the overlay exit is the first pressed MENU, in the first segment with steps" $
+        fmap (fmap (\(index, step) -> (index, stepKey step, stepExpected step)) . overlayExit . beforeUnload)
+          (sidesTrajectory (["", "[\"menu\",67,56,0],[\"menu\",1,5,2]", "[\"menu\",1,5,3]"], []))
+          == Just (Just (1, "menu", MenuState 67 56 0))
+    , expect "a first key other than MENU is no overlay exit" $
+        fmap (overlayExit . beforeUnload) (sidesTrajectory (["[\"q\",122,5,1],[\"menu\",1,5,2]"], [])) == Just Nothing
+    , expect "a MENU that is its segment's only step is no overlay exit" $
+        fmap (overlayExit . afterUnload) (sidesTrajectory ([], ["[\"menu\",1,5,6]", "[\"ok\",1,254,0]"])) == Just Nothing
     , expect "a variant that changes a capture is a mismatch" $
         fmap null (mismatchesOf ("[\"menu\",1,5,2]", "") ("[\"menu\",1,5,2]", ",\"capture\":\"x\"")) == Just False
     , expect "a trajectory without protection declares none" $

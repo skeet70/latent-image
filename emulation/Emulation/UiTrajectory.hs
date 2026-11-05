@@ -27,6 +27,7 @@ module Emulation.UiTrajectory
   , instructionPinnedPhases
   , decodeTrajectories
   , variantMismatches
+  , overlayExit
   , checkModalObserverConfiguration
   ) where
 
@@ -451,18 +452,24 @@ variantMismatches retained variant
       , ("save_lifecycle", segmentSaveLifecycle a == segmentSaveLifecycle b) ]
     assertion step = (stepKey step, stepExpected step)
 
--- | The trajectory without the MENU that leaves the retained bridge's rendezvous overlay: the first
--- pressed step of before_unload and of after_unload when it is a MENU its segment does not end on.
--- The retained bridge holds UP across each rendezvous, which opens focus-area selection at live view;
--- the FujiMod bridge pushes the command dial, which does not.
+-- | The first pressed step of SEGMENTS, with its segment's index, when it is a MENU its segment
+-- does not end on: the press that leaves the retained bridge's rendezvous overlay. The retained
+-- bridge holds UP across each rendezvous, which opens focus-area selection at live view; the
+-- FujiMod bridge pushes the command dial, which does not.
+overlayExit :: [Segment] -> Maybe (Int, Step)
+overlayExit segments = case dropWhile (null . segmentSteps . snd) (zip [0 ..] segments) of
+  (index, segment) : _ | step : _ : _ <- segmentSteps segment, stepKey step == "menu" -> Just (index, step)
+  _ -> Nothing
+
+-- | The trajectory without its 'overlayExit' on either side of unload.
 withoutOverlayExits :: Trajectories -> Trajectories
 withoutOverlayExits trajectories =
   trajectories { beforeUnload = dropExit (beforeUnload trajectories), afterUnload = dropExit (afterUnload trajectories) }
   where
-    dropExit entries = case break (not . null . segmentSteps) entries of
-      (idle, segment : rest) | step : steps@(_ : _) <- segmentSteps segment, stepKey step == "menu" ->
-        idle ++ segment { segmentSteps = steps } : rest
-      _ -> entries
+    dropExit entries = case overlayExit entries of
+      Just (index, _) -> [ if position == index then segment { segmentSteps = drop 1 (segmentSteps segment) } else segment
+                         | (position, segment) <- zip [0 ..] entries ]
+      Nothing -> entries
 
 checkModalObserverConfiguration :: Trajectories -> Either String ()
 checkModalObserverConfiguration trajectories =

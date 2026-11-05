@@ -1028,7 +1028,6 @@ haskell_library(
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
-        "//host:scientific",
         "//host:text",
         "//host:vector",
     ],

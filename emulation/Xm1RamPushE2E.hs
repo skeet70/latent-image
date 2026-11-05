@@ -7,7 +7,7 @@ import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', encode, object, toJSON, withObject, (.:), (.=))
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
-import Data.List (findIndex, nub, sort)
+import Data.List (nub, sort)
 import Data.Maybe (catMaybes, isJust)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -991,8 +991,9 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
             segmentStop phase message
               | caught = ioError (userError (show phase ++ " failed: " ++ message))
               | otherwise = stop phase message
-        runner <- newSegmentRunner emulator e2e (\label action -> timed label action) readAddress segmentStop plan
-        let segments = runSegments (if lifetimeGuarded then runner { runnerSnapshotPolicy = DifferentialSnapshotPreservation } else runner)
+        newRunner <- newSegmentRunner emulator e2e (\label action -> timed label action) readAddress segmentStop plan
+        let runner = newRunner { runnerOverlayExits = emulationRuntime settings == RetainedRuntime && pushMode settings == RamPush }
+            segments = runSegments (if lifetimeGuarded then runner { runnerSnapshotPolicy = DifferentialSnapshotPreservation } else runner)
             protection = planProtection plan
             expect = planExpect plan
             limit = either error id (watchLimit 4096)
@@ -1211,7 +1212,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
               mediaAfterValue)
         lifetimeReport <- finishModalLifetime emulator e2e lifetimeSession
         observed <- readIORef (runnerObservations runner)
-        rendezvousEntries <- readIORef (runnerRendezvousEntries runner)
+        rendezvousExits <- readIORef (runnerRendezvousExits runner)
         phaseTimes <- readIORef phases
         executionReceipt <- readIORef executionEvidence
         let result = object $
@@ -1239,7 +1240,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
               , "trajectories" .= map (\name -> object ["name" .= name, "result" .= String "matched"])
                   (nub (map segmentPhase (filter (not . segmentObserve) (planBefore plan ++ planAfter plan))))
               , "observations" .= (observed :: [Value])
-              , "rendezvous_entry_observations" .= (if pushMode settings == RamPush then rendezvousEntries else [])
+              , "rendezvous_exits" .= (rendezvousExits :: [Value])
               , "reads" .= symbolReads
               , "checks" .= object ["install" .= String "PASS", "trajectory" .= maybe (String "PASS") (const (String "FAIL")) trajectoryFailure, "unload" .= (if planUnload plan then String "PASS" else String "NOT_RUN")]
               , "trajectory_failure" .= trajectoryFailure
@@ -1360,8 +1361,10 @@ data SegmentRunner = SegmentRunner
   , runnerSpLabels :: [String]
   , runnerHits :: IORef Int
   , runnerObservations :: IORef [Value]
-  -- | Indices into 'runnerObservations' of the segments holding the first press after a rendezvous.
-  , runnerRendezvousEntries :: IORef [Int]
+  -- | Whether the bridge's rendezvous leaves the focus-area overlay open (the retained engine), so
+  -- each segment list's 'overlayExit' runs on its own and is recorded in 'runnerRendezvousExits'.
+  , runnerOverlayExits :: Bool
+  , runnerRendezvousExits :: IORef [Value]
   , runnerReads :: IORef [CapturedRead]
   , runnerSnapshotPolicy :: SnapshotPolicy
   }
@@ -1373,7 +1376,7 @@ newSegmentRunner emulator receipt timedAction readAddress stopAction plan = do
   SegmentRunner emulator receipt timedAction readAddress stopAction (map traceSiteLabel (planTraceSites plan))
     [traceSiteLabel site | site <- planTraceSites plan, traceSiteLr site == RecordsLr]
     [traceSiteLabel site | site <- planTraceSites plan, traceSiteSp site == RecordsSp]
-    <$> newIORef recorded <*> newIORef [] <*> newIORef [] <*> newIORef [] <*> pure EnforceSnapshotPreservation
+    <$> newIORef recorded <*> newIORef [] <*> pure False <*> newIORef [] <*> newIORef [] <*> pure EnforceSnapshotPreservation
 
 -- | The plan's trajectory-declared sites in the bridge's form, with each site's entry reads.
 resolveTraceSites :: (String -> IO Word32) -> [TraceSite] -> IO [(Word32, String, [(Word32, Int)])]
@@ -1411,17 +1414,34 @@ traceHitValue lrLabels spLabels hit = object (
   ++ ["sp" .= hexAddress sp | traceSite hit `elem` spLabels, Just sp <- [traceSp hit]]
   ++ ["memory" .= map hexBytes (traceMemory hit) | not (null (traceMemory hit))])
 
--- | Runs each segment and returns its capture receipt. The first segment with steps holds the first
--- press after the rendezvous that precedes the list.
+-- | Runs each segment and returns its capture receipt. With 'runnerOverlayExits', the list's
+-- 'overlayExit' is pressed at the start of its segment, after that segment's mode dial; its step,
+-- menu messages, D3 hook rows, Classic Chrome site entries and declared trace hits go to
+-- 'runnerRendezvousExits' instead of the segment's observation.
 runSegments :: SegmentRunner -> [Segment] -> IO [Maybe Value]
-runSegments runner segments = forM (zip [0 :: Int ..] segments) $ \(index, segment) -> runnerTimed runner ("segment " <> segmentPhase segment) $ do
-  let entry = Just index == findIndex (not . null . segmentSteps) segments
-  let emulator = runnerEmulator runner
+runSegments runner segments = forM (zip [0 :: Int ..] segments) $ \(index, listed) -> runnerTimed runner ("segment " <> segmentPhase listed) $ do
+  let exit = case overlayExit segments of
+        Just (exitIndex, step) | runnerOverlayExits runner, exitIndex == index -> Just step
+        _ -> Nothing
+      segment = maybe listed (const listed { segmentSteps = drop 1 (segmentSteps listed) }) exit
+      emulator = runnerEmulator runner
       stop = runnerStop runner
   context <- either (ioError . userError) pure (releaseSegment (segmentPhase segment))
   emulatorReleaseContext emulator (Just context)
   (before, _) <- readIORef (runnerHits runner) >>= emulatorTraceHits emulator
   forM_ (segmentModeDial segment) $ \position -> emulatorModeDial emulator position
+  (resume, leadingHits) <- case exit of
+    Nothing -> pure (before, [])
+    Just step -> do
+      (atExit, leading) <- emulatorTraceHits emulator before
+      pressed <- if segmentObserve segment
+        then observe emulator (segmentKeyPulse segment) [step]
+        else [] <$ (presses emulator (segmentKeyPulse segment) [step] `catch` \(failure :: IOException) ->
+          stop (segmentPhase segment) ("rendezvous overlay exit: " ++ displayException failure))
+      (afterExit, exitHits) <- emulatorTraceHits emulator atExit
+      modifyIORef' (runnerRendezvousExits runner) (++ [object
+        (["phase" .= segmentPhase segment, "key" .= stepKey step, "steps" .= pressed] ++ hitFields runner exitHits)])
+      pure (afterExit, leading)
   observed <- if segmentObserve segment
     then observe emulator (segmentKeyPulse segment) (segmentSteps segment)
     else [] <$ (presses emulator (segmentKeyPulse segment) (segmentSteps segment) `catch` \(failure :: IOException) ->
@@ -1472,9 +1492,10 @@ runSegments runner segments = forM (zip [0 :: Int ..] segments) $ \(index, segme
       require (B.length bytes == 1) "film identity read must contain one byte"
       pure (expected, fromIntegral (B.head bytes `shiftR` 4) :: Word32))
     (segmentFilmRow segment)
-  (after, hits) <- emulatorTraceHits emulator before
+  (after, trailingHits) <- emulatorTraceHits emulator resume
   writeIORef (runnerHits runner) after
-  let drawn = sort (nub [traceR0 hit | hit <- hits, traceSite hit == menuMessageSite])
+  let hits = leadingHits ++ trailingHits
+      drawn = sort (nub [traceR0 hit | hit <- hits, traceSite hit == menuMessageSite])
       hookRows = [traceR0 hit | hit <- hits, traceSite hit == d3HookSite]
       ccHits = [traceSite hit | hit <- hits, traceSite hit `elem` map snd classicChromeFetchSites]
       declaredHits = [hit | hit <- hits, traceSite hit `elem` runnerTraceLabels runner]
@@ -1492,7 +1513,6 @@ runSegments runner segments = forM (zip [0 :: Int ..] segments) $ \(index, segme
                                 "stored_code" .= actual]
                              | (expected, actual) <- maybe [] pure film ])
     writeIORef (runnerObservations runner) (previous ++ [current])
-    when entry $ modifyIORef' (runnerRendezvousEntries runner) (++ [length previous])
     writePrivateBytes (runnerReceipt runner </> ("e2e-observation-" ++ show (length previous) ++ ".json"))
       (BL.toStrict (encode current) <> "\n")
   forM_ film $ \(expected, actual) ->
@@ -1504,6 +1524,15 @@ runSegments runner segments = forM (zip [0 :: Int ..] segments) $ \(index, segme
       ++ ", expected " ++ show (map hexAddress (segmentMessages segment)))
   emulatorReleaseContext emulator Nothing
   pure captured
+
+-- | The menu messages, D3 hook rows, Classic Chrome site entries and declared trace hits among HITS.
+hitFields :: SegmentRunner -> [TraceHit] -> [(K.Key, Value)]
+hitFields runner hits =
+  [ "menu_messages" .= map hexAddress (sort (nub [traceR0 hit | hit <- hits, traceSite hit == menuMessageSite]))
+  , "d3_hook_r0" .= map hexAddress [traceR0 hit | hit <- hits, traceSite hit == d3HookSite]
+  , "classic_chrome_site_entries" .= [traceSite hit | hit <- hits, traceSite hit `elem` map snd classicChromeFetchSites]
+  , "trace_hits" .= map (traceHitValue (runnerLrLabels runner) (runnerSpLabels runner))
+      [hit | hit <- hits, traceSite hit `elem` runnerTraceLabels runner] ]
 
 -- | The cardless bridge from this binary's runfiles; //emulation:xm1-viewer lists it as data.
 runfilesCardlessBridge :: IO FilePath

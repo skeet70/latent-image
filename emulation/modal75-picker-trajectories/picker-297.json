@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "entry": "Stock-dispatcher control and owned-picker candidate for the setting-297 picker (crawl-5 node 197). The qualified package prefix uses MENU to reach the live view (67,56,0), crawl-5 root 0; the route follows crawl-5's recorded path to the picker's row. In the picker, DOWN and UP move one row and back, RIGHT leaves the picker open, LEFT and OK leave it with the selected value, and BACK leaves it; DOWN, UP and entering post the property's value event 0x1d when 0x00d586bc reports it and BACK may post property 0x27d (E-MENU-ENGINE-OBSERVE-150); live-setting stores are admitted only from the stock property setter, in both roles. After rollback OK and BACK run through the restored stock dispatcher and are observed, not asserted: in the first picker-239 stock run, OK after unload opened the picker of the row above the cursor. Every expected menu tuple is a crawl-5 edge's landing.",
+  "entry": "Stock-dispatcher control and owned-picker candidate for the setting-297 picker (crawl-5 node 197). The package prefix starts at the live view (67,56,0), crawl-5 root 0, where the FujiMod rendezvous leaves it; the route follows crawl-5's recorded path to the picker's row. In the picker, DOWN and UP move one row and back, RIGHT leaves the picker open, LEFT and OK leave it with the selected value, and BACK leaves it; DOWN, UP and entering post the property's value event 0x1d when 0x00d586bc reports it and BACK may post property 0x27d (E-MENU-ENGINE-OBSERVE-150); live-setting stores are admitted only from the stock property setter, in both roles. A BACK closes SHOOTING MENU before unload, so the unload rendezvous runs at the live-view root, and after rollback OK reopens it on the same row; OK and BACK then run through the restored stock dispatcher and are observed, not asserted. Every expected menu tuple is a crawl-5 edge's landing, except the closing BACK and the reopening OK, which keep the row.",
   "source_bindings": [
     {
       "source": "private-data/scratch/ControllerStrategy/crawl-5/crawl-graph.json (mechanism d49b2c80, E-MODAL-MENU-OKPATHS-150): node 197 path ok,up,up,up,up,up,up,up,up,ok",
@@ -13,6 +13,10 @@
     {
       "source": "private-data/scratch/ControllerStrategy/picker-fold/picker-document.json",
       "expectation": "Controller-75 state-0 cells for events 0, 2, 4, 6, 8, 13 and 49 are picker cells, and node 297's record is a picker node."
+    },
+    {
+      "source": "private-data/scratch/ControllerStrategy/crawl-4/crawl-graph.json node 142 and emulation/ram-push-e2e-trajectories.json after_unload",
+      "expectation": "BACK from a SHOOTING MENU page closes it to the live-view root (controller 74 state 0x04) with the row retained, and OK from the live view reopens it on that row."
     }
   ],
   "trace_sites": [
@@ -101,14 +105,7 @@
     {
       "phase": "package-menu-prefix",
       "capture": "picker-live-view",
-      "steps": [
-        [
-          "menu",
-          67,
-          56,
-          0
-        ]
-      ],
+      "steps": [],
       "reads": [
         [
           "dispatcher-first-word",
@@ -501,6 +498,17 @@
           450
         ]
       ]
+    },
+    {
+      "phase": "picker-unload-close",
+      "steps": [
+        [
+          "back",
+          1,
+          5,
+          24
+        ]
+      ]
     }
   ],
   "after_unload": [
@@ -514,6 +522,12 @@
         }
       ],
       "steps": [
+        [
+          "ok",
+          1,
+          5,
+          24
+        ],
         [
           "ok",
           1,
