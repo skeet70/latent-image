@@ -11,6 +11,7 @@ exports_files(
         "//replacement/recipe_ui:__pkg__",
         "//replacement/rtos_layout:__pkg__",
         "//replacement/rtos_own_first:__pkg__",
+        "//replacement/rtos_scheduler:__pkg__",
     ],
 )
 

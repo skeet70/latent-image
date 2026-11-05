@@ -1,0 +1,94 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["regions.json"])
+
+[
+    xm1_rust_staticlib(
+        name = "scheduler-%s-rust" % domain,
+        src = "src/lib.rs",
+        crate_name = "xm1_rtos_scheduler",
+        data = [
+            "src/entries.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+        ],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "scheduler-%s" % domain,
+        rust_staticlib = ":scheduler-%s-rust" % domain,
+        entry = "xm1_rtos_scheduler_acquire",
+        extra_ldflags = [
+            "-Wl,--gc-sections",
+            "-Wl,--orphan-handling=error",
+        ],
+        link_script = "scheduler-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
+
+genrule(
+    name = "scheduler-host-tests-build",
+    srcs = [
+        "src/lib.rs",
+        "src/tests.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+    ],
+    outs = ["scheduler-host-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = [
+        "@lab_clang//:bin/clang",
+        "@lab_rustc//:bin/rustc",
+    ],
+)
+
+sh_test(
+    name = "scheduler-host-tests",
+    size = "small",
+    srcs = ["//emulation:recovery-task-state-tests.sh"],
+    args = ["$(location :scheduler-host-tests-build)"],
+    data = [":scheduler-host-tests-build"],
+)
+
+sh_test(
+    name = "scheduler-regions-tests",
+    size = "small",
+    srcs = ["check-regions.sh"],
+    args = [
+        "$(location @lab_jq//:bin/jq)",
+        "$(location regions.json)",
+        "$(location :scheduler-a.symbols)",
+        "$(location :scheduler-b.symbols)",
+    ],
+    data = [
+        "regions.json",
+        ":scheduler-a.symbols",
+        ":scheduler-b.symbols",
+        "@lab_jq//:bin/jq",
+    ],
+)
+
+sh_test(
+    name = "scheduler-bin-digests-tests",
+    size = "small",
+    srcs = ["//replacement/rtos_own_first:check-bin-digests.sh"],
+    args = [
+        "$(location @lab_coreutils//:bin/sha256sum)",
+        "a5859127e7e0b556bf251e31d968f7b05ad35602e559e0e83606476cde1986ea",
+        "$(location :scheduler-a.bin)",
+        "6396057b85889d3c839f380e9dcc0dd4dec4de2ae421103100d5b198d9a3be34",
+        "$(location :scheduler-b.bin)",
+    ],
+    data = [
+        ":scheduler-a.bin",
+        ":scheduler-b.bin",
+        "@lab_coreutils//:bin/sha256sum",
+    ],
+)

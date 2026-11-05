@@ -1,0 +1,267 @@
+{
+  "fill_word": "0xe7f000f0",
+  "domains": {
+    "a": {
+      "loader_base": "0x40000",
+      "stock_raise_irq": "0x433e4",
+      "regions": [
+        {
+          "helper": "acquire",
+          "entry": "0x439d8",
+          "start": "0x439d8",
+          "end": "0x43a14",
+          "symbol": "xm1_rtos_scheduler_acquire",
+          "frame_bytes": 8,
+          "stock_frame_bytes": 4,
+          "calls": []
+        },
+        {
+          "helper": "release",
+          "entry": "0x43a14",
+          "start": "0x43a14",
+          "end": "0x43a3c",
+          "symbol": "xm1_rtos_scheduler_release",
+          "frame_bytes": 8,
+          "stock_frame_bytes": 4,
+          "calls": []
+        },
+        {
+          "helper": "find",
+          "entry": "0x43c48",
+          "start": "0x43c48",
+          "end": "0x43ca4",
+          "symbol": "xm1_rtos_scheduler_find",
+          "frame_bytes": 8,
+          "stock_frame_bytes": 4,
+          "calls": []
+        },
+        {
+          "helper": "insert",
+          "entry": "0x43ca4",
+          "start": "0x43ca4",
+          "end": "0x43d20",
+          "symbol": "xm1_rtos_scheduler_insert",
+          "frame_bytes": 16,
+          "stock_frame_bytes": 8,
+          "calls": []
+        },
+        {
+          "helper": "remove",
+          "entry": "0x43d20",
+          "start": "0x43d20",
+          "end": "0x43dd0",
+          "symbol": "xm1_rtos_scheduler_remove",
+          "frame_bytes": 24,
+          "stock_frame_bytes": 20,
+          "calls": [
+            "find"
+          ]
+        },
+        {
+          "helper": "reset",
+          "entry": "0x43dd0",
+          "start": "0x43dd0",
+          "end": "0x43e18",
+          "symbol": "xm1_rtos_scheduler_reset",
+          "frame_bytes": 8,
+          "stock_frame_bytes": 4,
+          "calls": []
+        },
+        {
+          "helper": "prepare",
+          "entry": "0x43f70",
+          "start": "0x43f70",
+          "end": "0x43f9c",
+          "symbol": "xm1_rtos_scheduler_prepare",
+          "frame_bytes": 24,
+          "stock_frame_bytes": 16,
+          "calls": [
+            "insert"
+          ]
+        },
+        {
+          "helper": "notify",
+          "entry": "0x44018",
+          "start": "0x44018",
+          "end": "0x44044",
+          "symbol": "xm1_rtos_scheduler_notify",
+          "frame_bytes": 12,
+          "stock_frame_bytes": 12,
+          "calls": [
+            "stock_raise_irq"
+          ]
+        },
+        {
+          "helper": "requeue",
+          "entry": "0x44044",
+          "start": "0x44044",
+          "end": "0x44134",
+          "symbol": "xm1_rtos_scheduler_requeue",
+          "frame_bytes": 32,
+          "stock_frame_bytes": 28,
+          "calls": [
+            "find"
+          ]
+        },
+        {
+          "helper": "rotate",
+          "entry": "0x44134",
+          "start": "0x44134",
+          "end": "0x441b4",
+          "symbol": "xm1_rtos_scheduler_rotate",
+          "frame_bytes": 8,
+          "stock_frame_bytes": 8,
+          "calls": []
+        }
+      ],
+      "shims": [
+        {
+          "helper": "prepare",
+          "branch": {
+            "address": "0x43f70",
+            "symbol": "xm1_rtos_scheduler_prepare"
+          },
+          "body": {
+            "address": "0x43c74",
+            "end": "0x43ca4",
+            "symbol": "xm1_rtos_scheduler_prepare_body",
+            "host_helper": "find",
+            "frame_bytes": 8
+          },
+          "removal": "when the stock layout no longer constrains the prepare extent"
+        }
+      ]
+    },
+    "b": {
+      "loader_base": "0xd0000",
+      "stock_raise_irq": "0xd33e4",
+      "regions": [
+        {
+          "helper": "acquire",
+          "entry": "0xd398c",
+          "start": "0xd398c",
+          "end": "0xd39c8",
+          "symbol": "xm1_rtos_scheduler_acquire",
+          "frame_bytes": 8,
+          "stock_frame_bytes": 4,
+          "calls": []
+        },
+        {
+          "helper": "release",
+          "entry": "0xd39c8",
+          "start": "0xd39c8",
+          "end": "0xd39f0",
+          "symbol": "xm1_rtos_scheduler_release",
+          "frame_bytes": 8,
+          "stock_frame_bytes": 4,
+          "calls": []
+        },
+        {
+          "helper": "find",
+          "entry": "0xd3c04",
+          "start": "0xd3c04",
+          "end": "0xd3c60",
+          "symbol": "xm1_rtos_scheduler_find",
+          "frame_bytes": 8,
+          "stock_frame_bytes": 4,
+          "calls": []
+        },
+        {
+          "helper": "insert",
+          "entry": "0xd3c60",
+          "start": "0xd3c60",
+          "end": "0xd3cdc",
+          "symbol": "xm1_rtos_scheduler_insert",
+          "frame_bytes": 16,
+          "stock_frame_bytes": 8,
+          "calls": []
+        },
+        {
+          "helper": "remove",
+          "entry": "0xd3cdc",
+          "start": "0xd3cdc",
+          "end": "0xd3d8c",
+          "symbol": "xm1_rtos_scheduler_remove",
+          "frame_bytes": 24,
+          "stock_frame_bytes": 20,
+          "calls": [
+            "find"
+          ]
+        },
+        {
+          "helper": "reset",
+          "entry": "0xd3d8c",
+          "start": "0xd3d8c",
+          "end": "0xd3dd4",
+          "symbol": "xm1_rtos_scheduler_reset",
+          "frame_bytes": 8,
+          "stock_frame_bytes": 4,
+          "calls": []
+        },
+        {
+          "helper": "prepare",
+          "entry": "0xd3f2c",
+          "start": "0xd3f2c",
+          "end": "0xd3f58",
+          "symbol": "xm1_rtos_scheduler_prepare",
+          "frame_bytes": 24,
+          "stock_frame_bytes": 16,
+          "calls": [
+            "insert"
+          ]
+        },
+        {
+          "helper": "notify",
+          "entry": "0xd3fd4",
+          "start": "0xd3fd4",
+          "end": "0xd4004",
+          "symbol": "xm1_rtos_scheduler_notify",
+          "frame_bytes": 12,
+          "stock_frame_bytes": 12,
+          "calls": [
+            "stock_raise_irq"
+          ]
+        },
+        {
+          "helper": "requeue",
+          "entry": "0xd4004",
+          "start": "0xd4004",
+          "end": "0xd40f4",
+          "symbol": "xm1_rtos_scheduler_requeue",
+          "frame_bytes": 32,
+          "stock_frame_bytes": 28,
+          "calls": [
+            "find"
+          ]
+        },
+        {
+          "helper": "rotate",
+          "entry": "0xd40f4",
+          "start": "0xd40f4",
+          "end": "0xd4174",
+          "symbol": "xm1_rtos_scheduler_rotate",
+          "frame_bytes": 8,
+          "stock_frame_bytes": 8,
+          "calls": []
+        }
+      ],
+      "shims": [
+        {
+          "helper": "prepare",
+          "branch": {
+            "address": "0xd3f2c",
+            "symbol": "xm1_rtos_scheduler_prepare"
+          },
+          "body": {
+            "address": "0xd3c30",
+            "end": "0xd3c60",
+            "symbol": "xm1_rtos_scheduler_prepare_body",
+            "host_helper": "find",
+            "frame_bytes": 8
+          },
+          "removal": "when the stock layout no longer constrains the prepare extent"
+        }
+      ]
+    }
+  }
+}

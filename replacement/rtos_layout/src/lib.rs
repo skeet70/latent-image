@@ -264,6 +264,25 @@ impl Task {
     }
 }
 
+/// The record [`Task::definition`] points at.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct TaskDefinition(pub GuestAddress);
+
+impl TaskDefinition {
+    /// Word whose low byte is the initial [`Priority`].
+    #[inline(always)]
+    pub const fn priority(self) -> GuestAddress {
+        self.0.offset(0x0c)
+    }
+
+    /// Two words whose wrapping sum is the initial saved SP.
+    #[inline(always)]
+    pub const fn initial_sp_terms(self) -> [GuestAddress; 2] {
+        [self.0.offset(0x10), self.0.offset(0x14)]
+    }
+}
+
 /// Head of one circular ready list, linked through T+0x00/+0x04; an empty head points at itself.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(transparent)]

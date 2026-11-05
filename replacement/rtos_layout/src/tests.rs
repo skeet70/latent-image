@@ -145,6 +145,13 @@ fn task_fields_are_the_stock_offsets() {
 }
 
 #[test]
+fn task_definition_fields_are_the_stock_offsets() {
+    let d = TaskDefinition(GuestAddress(0x0070_0000));
+    assert_eq!(d.priority().0, 0x0070_000c);
+    assert_eq!(d.initial_sp_terms().map(|a| a.0), [0x0070_0010, 0x0070_0014]);
+}
+
+#[test]
 fn ready_heads_fill_the_space_before_the_bitmap() {
     for w in DOMAINS.map(Domain::words) {
         let last = w.ready_head(Priority::new(15).unwrap());
