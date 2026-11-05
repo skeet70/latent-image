@@ -17,8 +17,8 @@ Retained after J11, behind named shims (section 5): RTOS services (#156), dispat
 
 ## 2. Where J8 leaves the artifact
 
-- J1-J4 qualified (`E-STARTUP-J1-COMPOSED-NATURAL-150`, `E-STARTUP-J2-COMPOSED-NATURAL-150`, `E-STARTUP-J3-COMPOSED-NATURAL-150`, `E-STARTUP-J4-COMPOSED-NATURAL-150`); J5-J8 planned (RIB:1864-1871): J5 idle102/103 and root104, J6 image5 producer `0x6a96c0` and plain producer `[0x6a9844,0x6a9938)` (SRM:127), J7 heap cutover, J8 pump.
-- J8 needs the pump's owned leaf run (RIB:1877, 1894). No owned pump run was attempted; the retained cohort of the scoped leaf observer refused on fetch multiplicity (`E-APPLICATION-PUMP-FETCH-MULTISET-REFUSAL-150`). Composed observations already arm points through `arm_mutable` (RIB:1875); the shared hook-stable mutable-point work that RIB:1815 names is for scoped observers.
+- J1-J6 qualified (`E-STARTUP-J1-COMPOSED-NATURAL-150` through `E-STARTUP-J6-COMPOSED-NATURAL-150`); J7, the heap cutover, is not yet composed.
+- J8, the owned pump leaf, ran on J6 through the application phase: equal pair, every pump call through the owned code in the composed role, 19 controls (`E-STARTUP-J8-COMPOSED-NATURAL-150`). The scoped loader-continuations observer that refused earlier is removed (`E-APPLICATION-PUMP-FETCH-MULTISET-REFUSAL-150`).
 - Existing observer evidence of task1's first entry: RIB:1477.
 
 ## 3. Readiness the composed run must establish
@@ -75,10 +75,10 @@ Implementation: a schema-5 contract (`"application": {}` in the manifest) gives 
 
 ## 6. Prerequisites and order
 
-1. J4-J7 qualified in order; J8's pump leaf is observed through the application phase, with the pump's sites at owned PCs, instead of the scoped loader-continuations observer that refused (`E-APPLICATION-PUMP-FETCH-MULTISET-REFUSAL-150`).
+1. J8 is done on J6 (`E-STARTUP-J8-COMPOSED-NATURAL-150`), with the pump's sites at owned PCs in the application phase. J7 lands independently; whichever lands second rebases.
 2. Done for the stock actor (`E-STARTUP-APPLICATION-PHASE-150`, on J3 and J6): task1 attribution, queue1 provenance, pump sequences, the readiness check and 17 controls in `//emulation:composed-startup`. J8-J11 reuse it with owned PCs in the contract's application sites.
 3. A per-composed-DAT reset checkpoint and timer re-recording past about 6.14M (RIB:1879-1880).
-4. Source recovery for J9's computed-entry closure, J10's constructor extents and transitive services (unmeasured, SRM:130), and callers of `0x892334` and `0x6d7f88`.
+4. Source recovery for J9's computed-entry closure, J10's constructor extents and transitive services (unmeasured, SRM:130), and callers of `0x892334` and `0x6d7f88`, read from the X-M1 decomp (`E-XM1-DECOMP-SOURCE-150`), with each function's exactness from `xm1-decomp lookup` and NONMATCHING facts confirmed in the listings; runs then confirm.
 
 ## 7. Mapping to #154 acceptance (RIB:1811-1816)
 

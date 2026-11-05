@@ -43,7 +43,6 @@ impl TryFrom<String> for RegisterNumber {
 impl From<RegisterNumber> for String {fn from(value:RegisterNumber)->Self{format!("r{}",value.0)}}
 #[derive(Deserialize,Serialize)]
 pub(super) struct Hit {address:HexWord,core:Core,instructions:super::Count,cpsr:u32,registers:BTreeMap<RegisterNumber,HexWord>,sp:HexWord,lr:HexWord}
-pub(super) fn hit_location(hit:&Hit)->(Guest,Core,super::Count){(Guest(hit.address.0),hit.core,hit.instructions)}
 pub(super) fn hit_matches(hit:&Hit,pc:Guest,core:Core,count:super::Count,registers:&super::Registers)->bool{
     hit.address.0==pc.0&&hit.core==core&&hit.instructions==count&&hit.cpsr==registers.cpsr
         &&hit.sp.0==registers.sp.0&&hit.lr.0==registers.lr.0&&hit.registers.len()==13
