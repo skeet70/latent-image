@@ -427,6 +427,38 @@ devenv shell -- bazel run //replacement/property_service:property-oracle -- \
 
 Each batch directory holds the case files, every case's native result (about 170 KB each, so about 18 GB for both roles) and a `summary.json`. `results.json` records the input and runner digests, batch digests, totals per class and id, model agreement, verdicts, status distributions, control outcomes and the first 20 differences of each kind. The command exits nonzero unless the model agrees, every candidate case passes and every control holds.
 
+## Owned record store
+
+### Core crate
+
+`replacement/record_store` implements the allocation-free `no_std` core and nine stock-ABI guest entries from [the owned record-store design](../reports/owned-record-store-design.md) over the retained raw NAND service. [The stock contract](../reports/record-service-stock-contract.md) supplies the search, callback, rotation, staging, collection and output-write expectations. `RecordMedium`, `Staging` and `Callbacks` separate the core from guest addresses. `Service` owns five registrations; `Entry` holds one caller-provided 128 KiB block buffer for one operation, invalidated after every program or erase. Program failure is an `Appended.persisted` value; an erase failure leaving a full destination produces `NotAppended::DestinationFull`. The adapter preserves stock's swallowed program/erase statuses.
+
+Build `//replacement/record_store:record-store-rust` for the ARMv7-R guest static archive (`cortex-r4f`, opt-level `z`, panic abort, one codegen unit). `record-store-rust-control-1` through `-9` each build the same guest adapter and core with one design §5 fault. Carrier linking and DAT staging are separate targets owned by the placement increment.
+
+`//replacement/record_store:host-tests` compiles and executes the core's behavioural host suite. `:host-adapter-tests` also exercises all nine exported entries, client-word nulling and preservation, fixed staging pointers, statuses and the semaphore held only around raw reads. The host medium erases to `0xff` and programs by bitwise AND. `:host-control-1` through `-9` each compile the core suite with one control feature and succeed only when that executable fails. Test names cite RSC entry/helper addresses. Build the package targets with `devenv shell -- bazel --output_base=YOUR_OUTPUT_BASE build --jobs=2 //replacement/record_store:all`.
+
+The standalone `Cargo.toml` has no dependencies. Cargo host tests support `--features guest`; the release guest build uses `--features guest --target armv7r-none-eabi` with the `replacement/toolchain` rustc sysroot and `RUSTFLAGS='-C target-cpu=cortex-r4f -C relocation-model=static'`. The core has no fixed addresses. The guest imports `record_raw_region_read`, `record_raw_write_0` through `_4`, `record_raw_erase_0` through `_4`, `record_semaphore_take` and `record_semaphore_give`; its linker-defined RAM symbols are `record_store_initialized`, `record_store_wrappers`, `record_store_state`, `record_store_block` and `record_store_staging_0` through `_4`. Compile-time sizing bounds the owned registration state to the retired slots' `0x168` bytes.
+
+Host qualification at `c396a578` (`E-RECORD-STORE-CORE-HOST-150`) passed all 21 package targets: 21 core cases, 22 cases with the adapter, ten guest archives and nine must-fail gates. Cargo host tests with `guest` passed 22 cases and the release guest build passed. The carrier at `42c277a8` links the core without LTO or a toolchain change; checked buffer-contract failures use a cold non-formatting trap.
+
+Final default ARM code and read-only data occupy 6,368 bytes, split below. Nine 4-byte entry veneers and one terminal extent byte bring allocated sections to 6,405 bytes. The flat carrier remains the stock 7,776-byte extent, including holes. No `.data` or `.bss` section is emitted; runtime storage uses the linker-defined RAM symbols above.
+
+| Linked section | Start | Bytes |
+| --- | --- | ---: |
+| `.run0` | `0x6ac2b8` | 16 |
+| `.run1` | `0x6ac32c` | 272 |
+| `.run3` | `0x6ac4cc` | 472 |
+| `.run4` | `0x6ac7d8` | 376 |
+| `.run5` | `0x6ac988` | 256 |
+| `.run6` | `0x6acabc` | 596 |
+| `.run7` | `0x6acda4` | 4,380 |
+| Nine `.entry_*` sections | Stock entry addresses | 36 |
+| `.end` | `0x6ae113` | 1 |
+
+The control-1 through control-9 code/read-only-data totals are respectively 6,360, 6,328, 6,368, 6,268, 6,252, 6,352, 6,300, 6,368 and 6,344 bytes. The archived default ELF and run summary are under `private-data/scratch/RecordStoreCore/`; the section measurement is `nix shell nixpkgs#llvmPackages.llvm --command llvm-size -A private-data/scratch/RecordStoreCore/record-store-c396a578.elf`.
+
+The host cases cover the five stock geometries and defined registration/refusal paths. RSC's undefined zero-size division, malformed kinds entering helpers and invalid caller pointers are not promoted into a safe total guest contract. Host source tests and must-fail controls do not establish stock-byte equivalence, physical NAND laws or a full-system cutover.
+
 ## Owned menu engine, increment 1 (#128)
 
 `menu_engine/` is the host part of increment 1 of [the engine design](../reports/owned-menu-engine-design.md): a `no_std` library with `MenuEvent`, `EngineState`, `Effect`, `EngineServices`, `Tree` and `apply`, plus `block::decode`/`block::mirror` over the 0x430-byte block at `0x009571d0` and the last-move pair `0x01467580`. It owns five event classes, each with an oracle case: kind 4 and kind 5 row steps on a wrapping node with queried availability, kind `0xe` push from a node whose remember write runs, kind `0xf` pop to a parent with the same id, and kind 1 open; `engine.rs` lists the exact conditions. `apply` makes every call to stock (notifications, snapshot stores, availability, initial row, and the stock kind switch for an empty node's nested pop) through `EngineServices` in stock's order, and returns `NotOwned` only before its first call. The pure classifier and snapshot of `FUN_0061ca2c`/`FUN_0061cd14` live in `menu_engine/src/frame.rs`; `owned_menu::frame` runs them over the live cells. The crate is an unconditional module of the bank crate; `llvm-nm -u` of the four bank archives is unchanged by it.
