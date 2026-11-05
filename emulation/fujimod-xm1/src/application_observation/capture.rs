@@ -2,14 +2,14 @@
 //! the task1 stack scope, readiness samples and, after the boundary, the route with settled inputs.
 use super::checks::{
     committed, Kind, ADAPTER_ENTRY, COPY_CALL, COPY_RETURN, KERNEL_RECEIVE, PAYLOAD_LIMIT, PRESS, QUEUE_EXIT, QUEUE_ROOTS,
-    RECEIVED, RELEASE_CALL, RELEASE_LIMIT, RELEASE_RETURN, TASK1_RESET,
+    RECEIVED, RELEASE_CALL, RELEASE_WINDOW, RELEASE_RETURN, TASK1_RESET,
 };
 use super::readiness::{Due, Search, CHAIN, IMAGE5_PUBLICATION, PERIOD, QUEUE_ENTRY};
 use super::{
     hex_word, ApplicationReceipt, ApplicationWrite, ByteView, CodeObservation, CoreIdentity, DynamicTarget, EvidenceWriter, GraphicsState,
     InputIndex, InputPurpose, Menu, Publication, RawView, ReadinessIndex, ReadinessKind, ReadinessSample, Registers, RenderViews, RouteInput,
     Sample, SampleIndex, ScopeObservation, SideFile, SiteRef, Task1, TaskTableViews, VisibleCapture, ALIAS, EVIDENCE, TASK_ROW_BYTES,
-    TASK_ROW_LIMIT, UiWorkViews, VIEW_WORDS, view_word, Scenario, ControllerStateView, CONTROLLER74,
+    TASK_ROW_LIMIT, UiWorkViews, VIEW_WORDS, view_word, Scenario, ControllerStateView, CONTROLLER74, BoardTicks, ReleaseClock,
 };
 use crate::composed_catalog::{
     physical_address as physical, Application, CodeLabel, CodeWord, Core, Domain, Instructions, Pc, Role, Sha256, SitePlan, QUEUE_SITES,
@@ -411,10 +411,14 @@ impl<'a> Recorder<'a> {
 
     /// Sliced at `PERIOD`, sampling every stop.
     fn advance(&mut self, machine: &mut Machine, count: u64, rows: WatchRows) -> Result<(), String> {
+        self.advance_until(machine, count, None, rows)
+    }
+
+    fn advance_until(&mut self, machine: &mut Machine, count: u64, until: Option<BoardTicks>, rows: WatchRows) -> Result<(), String> {
         let end = machine.instructions().checked_add(count).ok_or("the instruction endpoint overflows")?;
-        while machine.instructions() < end {
+        while machine.instructions() < end && until.is_none_or(|tick| machine.session.board.now() < tick.0) {
             let before = machine.instructions();
-            let outcome = machine.run((end - before).min(PERIOD));
+            let outcome = machine.run_until((end - before).min(PERIOD), until.map(|tick| tick.0));
             machine.require_running()?;
             if !matches!(outcome, RunOutcome::Completed | RunOutcome::Stopped) {
                 return Err("an application run did not settle".into());
@@ -427,6 +431,9 @@ impl<'a> Recorder<'a> {
                 self.hit(machine, hit, rows)?;
             }
             self.after_run(machine)?;
+            if until.is_some_and(|tick| machine.session.board.now() >= tick.0) {
+                break;
+            }
             if machine.instructions() == before && hits.is_empty() {
                 return Err("the observer made no progress".into());
             }
@@ -442,15 +449,19 @@ impl<'a> Recorder<'a> {
         self.advance(machine, PRESS, rows)?;
         machine.release_key(key)?;
         let released = machine.instructions();
-        let release_limit = if purpose == InputPurpose::FirstStart { PRESS } else { RELEASE_LIMIT };
+        let released_tick = BoardTicks(machine.session.board.now());
+        let deadline = if purpose == InputPurpose::FirstStart { None } else {
+            Some(BoardTicks(released_tick.0.checked_add(RELEASE_WINDOW.0).ok_or("the release tick deadline overflows")?))
+        };
         while !machine.document.firmware.released(&machine.session, key)? {
-            if machine.instructions() - released >= release_limit {
+            if deadline.map_or(machine.instructions() - released >= PRESS, |tick| machine.session.board.now() >= tick.0) {
                 return Err("an input release did not debounce".into());
             }
-            self.advance(machine, PERIOD, rows)?;
+            self.advance_until(machine, PERIOD, deadline, rows)?;
         }
         self.inputs.push(RouteInput {
             key, purpose, pressed: Instructions(pressed), released: Instructions(released), debounced: Instructions(machine.instructions()),
+            release_clock: ReleaseClock { released: released_tick, debounced: BoardTicks(machine.session.board.now()) },
             settled: None, before, after: None,
         });
         Ok(index)

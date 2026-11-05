@@ -5,7 +5,7 @@ use super::readiness::{
 };
 use super::{
     read_evidence, view_byte, view_word, ApplicationReceipt, Evidence, GraphicsState, InputIndex, InputPurpose, RawView, Sample,
-    SampleIndex, SiteRef, ALIAS, MenuIdentity, Scenario, Menu, ControllerState, CONTROLLER74,
+    SampleIndex, SiteRef, ALIAS, MenuIdentity, Scenario, Menu, ControllerState, CONTROLLER74, BoardTicks,
 };
 use crate::composed_catalog::{physical_address as physical, Application, Core, Domain, Instructions, Pc, Role, SiteKind};
 use crate::provenance::Guest;
@@ -53,8 +53,8 @@ const RELEASE_SLOT: u32 = 0xf8;
 const QUEUE_DOMAIN: u32 = 0x7cad9c;
 pub(crate) const PAYLOAD_LIMIT: u32 = 76;
 pub(crate) const PRESS: u64 = 8_000_000;
-/// The settled-input release cap matches the directional input contract.
-pub(crate) const RELEASE_LIMIT: u64 = 12_000_000;
+/// Two scanner periods plus the existing scanned-input margin.
+pub(crate) const RELEASE_WINDOW: BoardTicks = BoardTicks(2 * crate::machine::SCAN_INTERVAL_TICKS + 120_000);
 pub(crate) const FIRST_SETTLED: usize = Scenario::FIRST_SETTLED;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -815,9 +815,14 @@ pub fn route(evidence: &RoleEvidence) -> Result<(), ApplicationRefusal> {
     for (index, (input, (key, purpose))) in receipt.inputs.iter().zip(receipt.scenario.inputs()).enumerate() {
         require(input.key == key && input.purpose == purpose, check, "an input's key or purpose differs from the route")?;
         require(index != 0 || input.pressed == start, check, "the first press is not at the search end")?;
-        let release_limit = if purpose == InputPurpose::FirstStart { PRESS } else { RELEASE_LIMIT };
+        let clock = input.release_clock;
         require(input.pressed >= previous && input.released.0 == input.pressed.0 + PRESS && input.debounced >= input.released
-            && input.debounced.0 - input.released.0 <= release_limit, check, "an input's press, release or debounce differs")?;
+            && clock.debounced >= clock.released
+            && if purpose == InputPurpose::FirstStart {
+                input.debounced.0 - input.released.0 <= PRESS
+            } else {
+                clock.debounced.0 - clock.released.0 <= RELEASE_WINDOW.0
+            }, check, "an input's press, release or debounce differs")?;
         previous = input.settled.unwrap_or(input.debounced);
     }
     require(receipt.visible.first().is_some_and(|capture| capture.menu == Some(Menu { menu: 1, setting: 5, cursor: 2 })), check,

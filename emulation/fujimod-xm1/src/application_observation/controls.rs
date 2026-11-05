@@ -239,10 +239,7 @@ impl Control {
             Self::ReleaseDeadline => {
                 let section = receipt.application.as_mut().ok_or("the receipt has no application section")?;
                 let input = section.inputs.last_mut().ok_or("no settled input")?;
-                input.debounced = Instructions(input.released.0 + super::checks::RELEASE_LIMIT + 1);
-                let settled = input.settled.unwrap_or(input.debounced).max(input.debounced);
-                input.settled = Some(settled);
-                section.visible.last_mut().ok_or("no settled capture")?.instructions = settled;
+                input.release_clock.debounced.0 = input.release_clock.released.0 + super::checks::RELEASE_WINDOW.0 + 1;
                 return Ok(());
             }
             _ => {}
