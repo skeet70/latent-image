@@ -861,7 +861,7 @@ execute context function address instruction state = case instruction of
           then branching cond (\s -> indirectBranch False Nothing (fromMaybe Unknown (lookup pc (values s))) (load s))
           else conditional cond (\s -> continue (load s)) id
   Branch cond link target
-    | link, traps target -> conditional cond (\s -> branchCount (targetFindings s True target) (Outcome [] [] 0 0)) id
+    | link, traps target, target == 1 -> conditional cond (\s -> branchCount (targetFindings s True target) (Outcome [] [] 0 0)) id
     | link -> conditional cond (\s -> branchCount (targetFindings s True target) (continue (afterCall (calleeAt target) s))) id
     | inside target -> branching cond (\s -> Outcome [(target, s)] [] 0 0)
     | otherwise -> branching cond (\s -> branchCount (targetFindings s False target) (Outcome [] [] 0 0))
