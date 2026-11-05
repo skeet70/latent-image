@@ -23,7 +23,7 @@ import Emulation.Sha256 (sha256, sha256Hex)
 import Numeric (showHex)
 import System.Exit (exitFailure)
 
-data Mutation = Original | PayloadByte | ReorderCalls | StrayFetch | ForeignRead | CacheAgeWrite | BadSettings | BadMedium | MissingCapture | BadBinding | CollectionTail | ReturnedRecord | CloseScratch | OutputStorage | MissingResetRegion | RetiredSnapshotDifference | PreEntryPublication | PostEntryPublication | PreEntryBssWrite | PreEntryRead | MissingMarker | LaterPhaseWrite | MappedMedium | TruncatedSpare | ChangedSpareByte deriving (Eq)
+data Mutation = Original | PayloadByte | ReorderCalls | StrayFetch | ForeignRead | CacheAgeWrite | BadSettings | BadMedium | MissingCapture | BadBinding | CollectionTail | ReturnedRecord | CloseScratch | OutputStorage | MissingResetRegion | RetiredSnapshotDifference | PreEntryPublication | PostEntryPublication | PreEntryBssWrite | PreEntryRead | MissingMarker | LaterPhaseWrite | MappedMedium | TruncatedSpare | ChangedSpareByte | PreservedLatest | ChangedPreservedPointer | ClearedPreservedPointer | ChangedPreservedSkipped | WrittenNullLatest | MissingWrittenNullLatest | ZeroSkippedLatest | ChangedZeroSkippedPreimage | PreservedRegister | ChangedPreservedRegister | InnerFailedRegister | UnopenedRegister | UnopenedRegisterNonNull | OutOfBankRead | ChangedOutOfBankTail | InvalidKindRead | FailedCollect | ChangedFailedCollectCount | ChangedFailedCollectBuffer deriving (Eq)
 encode :: Value -> B.ByteString
 encode = BL.toStrict . A.encode
 hash :: B.ByteString -> String
@@ -87,12 +87,42 @@ hit entry address lr args event captures = object
   ,"observation" .= object ["event" .= event,"site" .= entry,"reads" .= captures]]
 call :: Word32 -> [Word32] -> [Value] -> Word32 -> [Value] -> [Value]
 call entry args input result output = [hit entry entry 0x700100 args "entry" input,hit entry 0x700100 0x700100 [result,0,0,0] "return" output]
-trace :: Mutation -> [Value]
-trace mutation = open ++ register ++ latest ++ order ++ erase ++ collect ++ positional ++ close where
-  open = call 0x6ac2b4 [123,0,0,0] [] 0 []
-  register = call 0x6ac328 [0,96,16,0] [readback 0x930000 (B.concat (map wordBytes [0x710000,0x910000,0x710004,0x910004,0x910008]))] 0 [readback 0x910008 (wordBytes 0x89f8b4)]
+trace :: Role -> Mutation -> [Value]
+trace role mutation
+  | registerFailure = open ++ register
+  | otherwise = open ++ register ++ latest ++ order ++ erase ++ collect ++ positional ++ close
+ where
+  residue = if role == Stock then 0x11112222 else 0x33334444
+  registerFailure = mutation `elem` [PreservedRegister,ChangedPreservedRegister,InnerFailedRegister,UnopenedRegister,UnopenedRegisterNonNull]
+  unopened = mutation `elem` [UnopenedRegister,UnopenedRegisterNonNull]
+  open = call 0x6ac2b4 [123,0,0,0] [] (if unopened then 0xfffffff2 else 0) []
+  registerStatus | mutation == InnerFailedRegister = 0xffffffe2
+                 | registerFailure = 0xfffffff2
+                 | otherwise = 0
+  clientAfter | mutation `elem` [UnopenedRegister,ChangedPreservedRegister] = 0
+              | registerFailure = residue
+              | otherwise = 0x89f8b4
+  register = call 0x6ac328 [0,96,16,0]
+    [readback 0x930000 (B.concat (map wordBytes [0x710000,0x910000,0x710004,0x910004,0x910008])),readback 0x910008 (wordBytes residue)]
+    registerStatus [readback 0x910008 (wordBytes clientAfter)]
   pointerStorage = if mutation == OutputStorage then 0x910030 else 0x910010
-  latest = call 0x6ac4c8 [0x89f8b4,0,pointerStorage,0] [] 0 [readback pointerStorage (wordBytes 0x8e16a0),readback 0x8e16a0 (B.cons (if mutation == ReturnedRecord then 18 else 17) (B.replicate 4095 17)),readback 0 B.empty]
+  failedLatest = mutation `elem` [PreservedLatest,ChangedPreservedPointer,ClearedPreservedPointer,ChangedPreservedSkipped,WrittenNullLatest,MissingWrittenNullLatest,ZeroSkippedLatest,ChangedZeroSkippedPreimage]
+  skippedPointer = if failedLatest then 0x910028 else 0
+  pointerBefore = if role == Stock then 0x817978 else 0x400572cc
+  pointerAfter | mutation `elem` [ClearedPreservedPointer,WrittenNullLatest] = 0
+               | mutation == ChangedPreservedPointer = pointerBefore+4
+               | failedLatest = pointerBefore
+               | otherwise = 0x8e16a0
+  zeroSkipped = mutation `elem` [ZeroSkippedLatest,ChangedZeroSkippedPreimage]
+  skippedBefore | mutation == ChangedZeroSkippedPreimage = 1
+                | zeroSkipped = 0
+                | otherwise = 129
+  skippedAfter = if mutation `elem` [ChangedPreservedSkipped,WrittenNullLatest,MissingWrittenNullLatest] || zeroSkipped then 0 else skippedBefore
+  skippedBytes value = if skippedPointer == 0 then B.empty else B.take 2 (wordBytes value)
+  latest = call 0x6ac4c8 [0x89f8b4,skippedPointer,pointerStorage,0]
+    [readback pointerStorage (wordBytes pointerBefore),readback skippedPointer (skippedBytes skippedBefore)]
+    (if failedLatest then 0xffffff01 else 0)
+    [readback pointerStorage (wordBytes pointerAfter),readback pointerAfter (if failedLatest then B.empty else B.cons (if mutation == ReturnedRecord then 18 else 17) (B.replicate 4095 17)),readback skippedPointer (skippedBytes skippedAfter)]
   append = [hit 0x6ac7d4 0x6ac7d4 0x700100 [0x89f8b4,1,0x910100,0] "entry" [readback 0x910100 (B.replicate 4096 34)]]
     ++ [hit 0x6fb7c8 0x6fb7c8 0x6a8d00 [0x910200,0,0,0] "entry" [readback 0x910200 (B.concat (map wordBytes [0x3d4,0,96,0x408e16a0])),readback 0x8e16a0 (B.cons (if mutation == PayloadByte then 50 else 51) (B.replicate 95 51))]]
     ++ [hit 0x6ac7d4 0x700100 0x700100 [0,0,0,0] "return" []]
@@ -102,8 +132,21 @@ trace mutation = open ++ register ++ latest ++ order ++ erase ++ collect ++ posi
     ,hit 0x6fb57c 0x6fb57c 0x6a8c40 [0x910200,0,0,0] "entry" [readback 0x910200 (wordBytes 0x3d4 <> wordBytes 1)]
     ,hit 0x6ac984 0x700100 0x700100 [0,0,0,0] "return" []]
   collected = B.replicate 1535 68 <> B.singleton (if mutation == CollectionTail then 69 else 68) <> B.replicate (131072-1536) 68
-  collect = call 0x6acab8 [0x89f8b4,0x920000,0x910014,0] [] 0 [readback 0x920000 collected,readback 0x910014 (wordBytes 96)]
-  positional = call 0x6acda0 [0,32,4,0x910020] [] 0 [readback 0x910020 (B.pack [1,2,3,4])]
+  collectFailure = mutation `elem` [FailedCollect,ChangedFailedCollectCount,ChangedFailedCollectBuffer]
+  collectAfter = if mutation == ChangedFailedCollectBuffer then B.cons 69 (B.drop 1 collected) else collected
+  countBefore = if collectFailure then residue else 0
+  countAfter = if mutation == ChangedFailedCollectCount then 0 else if collectFailure then countBefore else 96
+  collect = call 0x6acab8 [0x89f8b4,0x920000,0x910014,0]
+    [readback 0x910014 (wordBytes countBefore),readback 0x920000 (B.replicate 131072 68)]
+    (if collectFailure then 0xffffff01 else 0) [readback 0x920000 collectAfter,readback 0x910014 (wordBytes countAfter)]
+  outside = mutation `elem` [OutOfBankRead,ChangedOutOfBankTail]
+  readBefore = B.pack (if role == Stock then [7,8,9,10] else [17,18,19,20])
+  readAfter | mutation == InvalidKindRead = B.replicate 4 0
+            | mutation == ChangedOutOfBankTail = B.pack [0,0,19,20]
+            | outside = B.cons 0 (B.drop 1 readBefore)
+            | otherwise = B.pack [1,2,3,4]
+  positional = call 0x6acda0 [if mutation == InvalidKindRead then 5 else 0,if outside then 0x40000 else 32,4,0x910020]
+    [readback 0x910020 readBefore] (if outside || mutation == InvalidKindRead then 0xffffffe2 else 0) [readback 0x910020 readAfter]
   close = call 0x6ac478 [0x89f8b4,0,0,0] [] (if mutation == CloseScratch then 999 else 123) []
 
 captureDeclarations :: Value
@@ -113,8 +156,11 @@ captureDeclarations = object [K.fromString (hexWord entry) .= declared entry | e
     | entry == 0x6fb7c8 = object ["entry" .= [direct 0 16,object ["base" .= object ["register-word" .= object ["register" .= (0::Int),"offset" .= (12::Int)]],"count" .= (0::Int),"count_base" .= object ["register-word" .= object ["register" .= (0::Int),"offset" .= (8::Int)]]]]]
     | entry == 0x6fb57c = object ["entry" .= [direct 0 8]]
     | otherwise = object ["entry" .= inputs entry,"returns" .= outputs entry]
-  inputs entry | entry == 0x6ac328 = [direct 13 20]
+  inputs entry | entry == 0x6ac328 = [direct 13 20,object ["base" .= object ["stack-word" .= (16::Int)],"count" .= (4::Int)]]
                | entry == 0x6ac7d4 = [direct 2 4096]
+               | entry == 0x6ac4c8 = [direct 2 4,direct 1 2]
+               | entry == 0x6acab8 = [direct 2 4,direct 1 131072]
+               | entry == 0x6acda0 = [object ["base" .= object ["register" .= (3::Int)],"count" .= (0::Int),"count_register" .= (2::Int)]]
                | otherwise = []
   outputs entry
     | entry == 0x6ac328 = [object ["base" .= object ["stack-word" .= (16::Int)],"count" .= (4::Int)]]
@@ -158,11 +204,12 @@ fixture role mutation = Observation receipt files where
   binding bytes = object ["path" .= ("fixture"::T.Text),"sha256" .= hash bytes]
   spec = object ["schema" .= (1::Int),"sites" .= object ([K.fromString (hexWord entry) .= ("record-entry"::T.Text) | entry <- entries] ++ ["0x6fb7c8" .= ("nand-write"::T.Text),"0x6fb57c" .= ("nand-erase"::T.Text)])
     ,"captures" .= (if mutation == MissingCapture then object [] else captureDeclarations),"hit_limit" .= (1500000::Int),"watch_limit" .= (1048576::Int),"write_ranges" .= writes role,"read_ranges" .= retired role,"fetch_ranges" .= fetches role]
-  events = trace mutation
+  events = trace role mutation
   reset = object ["schema" .= (1::Int),"reset" .= object ["instructions" .= (0::Int)],"regions_at_reset" .= resetRegions role Original
     ,"segments" .= [object ["phase" .= phase,"instructions" .= (1::Int),"hits_end" .= length events,"watch" .= watch role phase mutation,"regions" .= resetRegions role mutation] | phase <- [minBound..maxBound]::[AttachPhase]]]
   files = M.fromList [(Spec,encode spec),(Extents,encode extents),(Reset,encode reset),(Hits,B.intercalate "\n" (map encode events) <> "\n"),(Steps,"[]"),(MediumFile,encode (medium mutation)),(Session,"{}")]
   receipt = encode (object ["schema" .= (1::Int),"role" .= (if role == Stock then "stock" else "owned"::T.Text),"outcome" .= object ["status" .= ("completed"::T.Text)]
+    ,"output_rule" .= ("Compare outputs written by the stock contract across roles; require each contract-untouched output to equal its own entry preimage, without comparing residue across roles."::T.Text)
     ,"inputs" .= object (["update" .= binding (if role == Stock then "stock-DAT" else "owned-DAT"),"routes" .= binding (routeBytes bindings),"contract" .= binding (contractBytes bindings),"linked" .= binding (linkedBytes bindings),"symbols" .= binding (symbolBytes bindings)]
       ++ [K.fromString name .= binding (if mutation == BadBinding && name == "run" then "different-run" else "cohort") | name <- ["run","boot-rom","adjustment-nand","observer","bridge"]])
     ,"files" .= object [K.fromString (sidecarName name) .= hash bytes | (name,bytes) <- M.toList files],"ram_rule" .= extents,"raw_residual_count" .= (0::Int),"settings_at_attach" .= regions mutation,"medium_at_attach" .= medium mutation])
@@ -171,6 +218,13 @@ main :: IO ()
 main = do
   let stock = qualify Stock bindings (fixture Stock Original)
       owned mutation = qualify Owned bindings (fixture Owned mutation)
+      matchedAgainst baseline mutation = case (qualify Stock bindings (fixture Stock baseline),owned mutation) of
+        (Right a,Right b) -> not (isLeft (comparePair a b))
+        _ -> False
+      failedAgainst baseline mutation = case (qualify Stock bindings (fixture Stock baseline),owned mutation) of
+        (Right _,Left _) -> True
+        (Right a,Right b) -> isLeft (comparePair a b)
+        _ -> False
       matched mutation = case (stock,owned mutation) of
         (Right a,Right b) -> not (isLeft (comparePair a b))
         _ -> False
@@ -212,6 +266,25 @@ main = do
         ,("changed collection tail fails comparison",differs CollectionTail)
         ,("void-close scratch return is excluded",matched CloseScratch)
         ,("output storage stack address is excluded",matched OutputStorage)
+        ,("failed latest preserves different per-role pointer residues",matchedAgainst PreservedLatest PreservedLatest)
+        ,("changed untouched pointer nonnull refuses",failedAgainst PreservedLatest ChangedPreservedPointer)
+        ,("changed untouched pointer null refuses",failedAgainst PreservedLatest ClearedPreservedPointer)
+        ,("changed untouched skipped count refuses",failedAgainst PreservedLatest ChangedPreservedSkipped)
+        ,("late failure null writes remain compared",matchedAgainst WrittenNullLatest WrittenNullLatest)
+        ,("missing late failure null write fails",failedAgainst WrittenNullLatest MissingWrittenNullLatest)
+        ,("ambiguous unchanged zero skipped values satisfy both constraints",matchedAgainst ZeroSkippedLatest ZeroSkippedLatest)
+        ,("ambiguous changed zero skipped preimage refuses",failedAgainst ZeroSkippedLatest ChangedZeroSkippedPreimage)
+        ,("opened register failure preserves per-role client word",matchedAgainst PreservedRegister PreservedRegister)
+        ,("changed preserved register client word refuses",failedAgainst PreservedRegister ChangedPreservedRegister)
+        ,("inner registration failure preserves client word",matchedAgainst InnerFailedRegister InnerFailedRegister)
+        ,("unopened registration null writes remain compared",matchedAgainst UnopenedRegister UnopenedRegister)
+        ,("missing unopened registration null write fails",failedAgainst UnopenedRegister UnopenedRegisterNonNull)
+        ,("out-of-bank read preserves different per-role tail residues",matchedAgainst OutOfBankRead OutOfBankRead)
+        ,("changed out-of-bank read tail refuses",failedAgainst OutOfBankRead ChangedOutOfBankTail)
+        ,("invalid-kind read zero-fills remain compared",matchedAgainst InvalidKindRead InvalidKindRead)
+        ,("failed collect preserves byte-count residue",matchedAgainst FailedCollect FailedCollect)
+        ,("changed failed collect byte count refuses",failedAgainst FailedCollect ChangedFailedCollectCount)
+        ,("partial failed collect buffer effects remain checked",failedAgainst FailedCollect ChangedFailedCollectBuffer)
         ,("missing retired reset snapshot refuses qualification",refused MissingResetRegion)
         ,("private reset bytes are excluded from settings comparison",matched RetiredSnapshotDifference)
         ,("stray retired fetch refuses qualification",refused StrayFetch)

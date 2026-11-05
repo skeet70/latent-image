@@ -44,7 +44,9 @@ newtype Address = Address Word32 deriving (Eq, Ord, Show)
 newtype Handle = Handle Address deriving (Eq, Ord, Show)
 newtype RecordSize = RecordSize Int deriving (Eq, Show)
 newtype TotalRecords = TotalRecords Int deriving (Eq, Show)
-data Layout = Layout RecordSize TotalRecords deriving (Eq, Show)
+newtype SequenceOffset = SequenceOffset Int deriving (Eq, Show)
+newtype ByteCount = ByteCount Int deriving (Eq, Show)
+data Layout = Layout RecordSize TotalRecords SequenceOffset deriving (Eq, Show)
 data Entry = Open | Register | Close | Latest | Append | EraseAll | Collect | ReadAt | Zero deriving (Eq, Ord, Show, Enum, Bounded)
 newtype InputName = InputName T.Text deriving (Eq, Ord, Show)
 newtype Digest = Digest T.Text deriving (Eq, Ord, Show)
@@ -53,7 +55,9 @@ data Block = Block Word32 (Maybe Word32) B.ByteString (Maybe B.ByteString) deriv
 newtype Medium = Medium [Block] deriving (Eq, Show)
 data Menu = NoMenu | Menu Word32 Word32 Word32 deriving (Eq, Show)
 data Settled = PacketConsumed | BudgetExhausted deriving (Eq, Show)
-data Call = Call Entry [Word32] (Maybe Word32) [B.ByteString] deriving (Eq, Show)
+data OutputRule = CompareBytes | PreserveBytes | UnresolvedBytes | CollectionBytes RecordSize SequenceOffset ByteCount deriving (Eq, Show)
+data Output = AbsentOutput | Output OutputRule B.ByteString B.ByteString deriving (Eq, Show)
+data Call = Call Entry [Word32] (Maybe Word32) [Output] deriving (Eq, Show)
 data Nand = Program [Word32] B.ByteString | Erase Word32 Word32 deriving (Eq, Show)
 data Readback = Readback Address B.ByteString deriving (Eq, Show)
 data Event = Enter | Return deriving (Eq, Show)
@@ -61,12 +65,14 @@ data Registers = Registers { register0, register1, register2, register3 :: Word3
 registerWords :: Registers -> [Word32]
 registerWords registers = [register0 registers,register1 registers,register2 registers,register3 registers]
 data Hit = Hit Int Address Address Address Registers (Maybe (Event, Address, [Readback])) deriving (Eq, Show)
-data Pending = Pending Int Entry Hit (Maybe Layout) deriving (Eq, Show)
+data Service = Unopened | Initialized deriving (Eq, Show)
+data CallContext = CallContext Service (Maybe Layout) deriving (Eq, Show)
+data Pending = Pending Int Entry Hit CallContext deriving (Eq, Show)
 data Retirement = BeforeOpen | AfterOpen deriving (Eq, Show)
-data State = State Retirement (M.Map Handle Layout) (M.Map (Int, Address, Address) Pending) deriving (Eq, Show)
+data State = State Retirement Service (M.Map Handle Layout) (M.Map (Int, Address, Address) Pending) deriving (Eq, Show)
 data Interval = Interval T.Text [CrawlKey] [Call] [Nand] Regions Regions (Maybe (Settled, Menu)) (Maybe Medium) deriving (Eq, Show)
 data Qualified = Qualified Role [(InputName,Digest)] [Interval] Medium deriving (Eq, Show)
-data Difference = Difference T.Text Value Value deriving (Eq, Show)
+data Difference = Difference T.Text Value Value | AmbiguousOutput T.Text Value Value | PreservationViolation T.Text Value Value deriving (Eq, Show)
 
 type Parse = Either String
 need :: Bool -> String -> Parse ()
@@ -261,48 +267,104 @@ wordsOf bytes | B.null bytes = []
               | otherwise = leWord bytes : wordsOf (B.drop 4 bytes)
 handle :: Word32 -> Handle
 handle = Handle . Address
-handleLayout :: State -> Word32 -> Parse Layout
-handleLayout (State _ layouts _) value = maybe (Left "call uses unregistered handle") Right (M.lookup (handle value) layouts)
+handleLayout :: State -> Word32 -> Maybe Layout
+handleLayout (State _ _ layouts _) value = M.lookup (handle value) layouts
 
 complete :: Pending -> Hit -> Parse Call
-complete (Pending _ entry (Hit _ _ sp _ args observed) layout) (Hit _ _ _ _ results returned) = do
+complete (Pending _ entry (Hit _ _ sp _ args observed) (CallContext service layout)) (Hit _ _ _ _ results returned) = do
   input <- maybe (Left "entry has no observation") (Right . (\(_,_,captures) -> captures)) observed
   output <- maybe (Left "return has no observation") (Right . (\(_,_,captures) -> captures)) returned
   let Registers r0 r1 r2 r3 = args
       status = register0 results
-      at pointer count = readAtAddress (Address pointer) count output
-      extent = case layout of
-        Just (Layout (RecordSize size) (TotalRecords count)) -> Right (size,count*size)
-        Nothing -> Left "missing registered geometry"
+      at captures pointer count = readAtAddress (Address pointer) count captures
+      extent = maybe (Left "missing registered geometry") Right layout
       bool value = if value == 0 then 0 else 1
-      result semantic bytes = Right (Call entry semantic (if entry == Close then Nothing else Just status) bytes)
+      result semantic outputs = Right (Call entry semantic (if entry == Close then Nothing else Just status) outputs)
+      captured rule before after = do
+        when (rule == PreserveBytes) $ need (before == after) ("contract-untouched " ++ show entry ++ " output changed")
+        pure (Output rule before after)
+      optional pointer count rule = if pointer == 0 then pure AbsentOutput else do
+        before <- at input pointer count
+        after <- at output pointer count
+        captured rule before after
+      possible predicate before after
+        | not (predicate after) = captured PreserveBytes before after
+        | before == after = captured UnresolvedBytes before after
+        | otherwise = captured CompareBytes before after
+      optionalPossible pointer count predicate = if pointer == 0 then pure AbsentOutput else do
+        before <- at input pointer count
+        after <- at output pointer count
+        possible predicate before after
   case entry of
     Open -> result [] []
     Register -> do
-      stack <- readAtAddress sp 20 input
-      client <- at (leWord (B.drop 16 stack)) 4
-      result (registerWords args ++ wordsOf (B.take 16 stack)) [client]
+      stack <- at input (addressValue sp) 20
+      let client = leWord (B.drop 16 stack)
+          rule | status == 0 || service == Unopened && status == 0xfffffff2 = CompareBytes
+               | otherwise = PreserveBytes
+      clientOutput <- optional client 4 rule
+      result (registerWords args ++ wordsOf (B.take 16 stack)) [clientOutput]
     Close -> result [r0] []
     Latest -> do
-      (size,_) <- extent
-      pointer <- at r2 4
-      skipped <- if r1 == 0 then Right B.empty else at r1 2
-      bytes <- if status /= 0 then Right B.empty else B.take size <$> at (leWord pointer) 4096
-      result [r0,bool r1,bool r2,leWord pointer] [bytes,skipped]
+      pointerBefore <- at input r2 4
+      pointerAfter <- at output r2 4
+      let invalid = service == Unopened || layout == Nothing
+      (pointerOutput,skippedOutput,record) <- if status == 0 then do
+        Layout (RecordSize size) _ _ <- extent
+        pointer <- captured CompareBytes pointerBefore pointerAfter
+        skipped <- optional r1 2 CompareBytes
+        bytes <- B.take size <$> at output (leWord pointerAfter) 4096
+        pure (pointer,skipped,Output CompareBytes B.empty bytes)
+      else if invalid || status == 0xffffffe2 then do
+        need (status `elem` [0xfffffff2,0xffffffe2] && leWord pointerAfter == 0) "early latest failure did not write a null pointer"
+        pointer <- captured CompareBytes pointerBefore pointerAfter
+        skipped <- optional r1 2 PreserveBytes
+        pure (pointer,skipped,AbsentOutput)
+      else do
+        Layout _ (TotalRecords count) _ <- extent
+        need (status `elem` [0xfffffff2,0xffffff01]) "unclassified latest failure status"
+        pointer <- if status == 0xfffffff2 then captured PreserveBytes pointerBefore pointerAfter
+          else possible ((==0) . leWord) pointerBefore pointerAfter
+        skipped <- optionalPossible r1 2 (\bytes -> fromIntegral (leWord bytes) <= max 0 (count `div` 2 - 1))
+        pure (pointer,skipped,AbsentOutput)
+      result [r0,bool r1,bool r2] [pointerOutput,record,skippedOutput]
     Append -> do
-      (size,_) <- extent
-      bytes <- B.take size <$> readAtAddress (Address r2) 4096 input
-      result [r0,r1,r2] [bytes]
+      Layout (RecordSize size) _ _ <- extent
+      bytes <- B.take size <$> at input r2 4096
+      result [r0,r1,r2] [Output CompareBytes B.empty bytes]
     EraseAll -> result [r0] []
     Collect -> do
-      (_,capacity) <- extent
-      need (capacity <= 131072) "collect capture does not cover caller extent"
-      bytes <- B.take capacity <$> at r1 131072
-      count <- if r2 == 0 then Right B.empty else at r2 4
-      result [r0,bool r1,bool r2] [bytes,count]
+      before <- at input r1 131072
+      after <- at output r1 131072
+      if status == 0xfffffff2 then do
+        buffer <- captured PreserveBytes before after
+        count <- optional r2 4 PreserveBytes
+        result [r0,bool r1,bool r2] [buffer,count]
+      else do
+        Layout size@(RecordSize stride) (TotalRecords total) offset <- extent
+        let capacity = total*stride
+        need (capacity <= 131072 && stride > 0) "collect capture does not cover caller extent"
+        countBefore <- if r2 == 0 then pure B.empty else at input r2 4
+        countAfter <- if r2 == 0 then pure B.empty else at output r2 4
+        let compacted = fromIntegral (leWord countAfter)
+            finished = status == 0 || r2 /= 0 && compacted == 0 && countBefore /= countAfter
+        need (status `elem` [0,0xffffff01]) "unclassified collect status"
+        when (status == 0 && r2 /= 0) $ need (compacted > 0 && compacted <= capacity && compacted `mod` stride == 0) "invalid collected byte count"
+        count <- if r2 == 0 then pure AbsentOutput else if status == 0
+          then captured CompareBytes countBefore countAfter else possible ((==0) . leWord) countBefore countAfter
+        let prefix = if status == 0 && r2 /= 0 then compacted else 0
+            rule = if finished then CollectionBytes size offset (ByteCount prefix) else UnresolvedBytes
+        buffer <- captured rule (B.take capacity before) (B.take capacity after)
+        result [r0,bool r1,bool r2] [buffer,count]
     ReadAt -> do
-      bytes <- at r3 (fromIntegral r2)
-      result [r0,r1,r2,bool r3] [bytes]
+      before <- at input r3 (fromIntegral r2)
+      after <- at output r3 (fromIntegral r2)
+      if status == 0xffffffe2 && service == Initialized && r0 <= 4 && r1 >= 0x40000 then do
+        need (r2 > 0 && B.index after 0 == 0) "out-of-bank read lacks its written first byte"
+        first <- captured CompareBytes (B.take 1 before) (B.take 1 after)
+        rest <- captured PreserveBytes (B.drop 1 before) (B.drop 1 after)
+        result [r0,r1,r2,bool r3] [first,rest]
+      else result [r0,r1,r2,bool r3] [Output CompareBytes before after]
     Zero -> result [] []
 
 consume :: State -> [Hit] -> Parse (State,[Call],[Nand])
@@ -310,7 +372,7 @@ consume state hits = do
   (final,calls,nand,_) <- foldM step (state,[],[],0::Int) hits
   pure (final,map snd (sortOn fst calls),reverse nand)
  where
-  step (current@(State activation layouts pending),calls,nand,index) hit@(Hit core address sp lr args observation) = case observation of
+  step (current@(State activation service layouts pending),calls,nand,index) hit@(Hit core address sp lr args observation) = case observation of
     Nothing -> Right (current,calls,nand,index+1)
     Just (event,site,captures)
       | site == Address 0x6fb7c8 -> do
@@ -335,11 +397,11 @@ consume state hits = do
               need (address == site) "entry address differs from capture site"
               let internal = within [(0x6ac2b4,0x6ae114)] (addressValue lr) 1
               if internal then Right (current,calls,nand,index+1) else do
-                geometry <- if entry `elem` [Latest,Append,Collect] then Just <$> handleLayout current (register0 args) else Right Nothing
+                let geometry = if entry `elem` [Latest,Append,Collect] then handleLayout current (register0 args) else Nothing
                 let key = (core,sp,lr)
                 need (M.notMember key pending) "duplicate active call identity"
-                let marker = Pending index entry hit geometry
-                Right (State activation layouts (M.insert key marker pending),calls,nand,index+1)
+                let marker = Pending index entry hit (CallContext service geometry)
+                Right (State activation service layouts (M.insert key marker pending),calls,nand,index+1)
             Return -> do
               let key = (core,sp,address)
               case M.lookup key pending of
@@ -348,13 +410,17 @@ consume state hits = do
                   need (entry == expected) "return site differs from pending entry"
                   call@(Call _ _ _ buffers) <- complete started hit
                   updated <- case (entry,register0 args,buffers) of
-                    (Register,0,[client]) -> do
+                    (Register,0,[Output CompareBytes _ client]) -> do
                       let returnedHandle = leWord client
+                          size = fromIntegral (register1 original)
+                          offset = fromIntegral (register3 original)
+                      need (service == Initialized && size >= 2 && offset+2 <= size && even offset && register2 original <= 0x7ffe) "successful registration contradicts its entry context"
                       need (returnedHandle `elem` [0x89f8b4 + 12*i | i <- [0..4]]) "returned handle is not a stock wrapper"
-                      pure (M.insert (handle returnedHandle) (Layout (RecordSize (fromIntegral (register1 original))) (TotalRecords (2 * (fromIntegral (register2 original) `div` 2)))) layouts)
+                      pure (M.insert (handle returnedHandle) (Layout (RecordSize size) (TotalRecords (2 * (fromIntegral (register2 original) `div` 2))) (SequenceOffset offset)) layouts)
                     (Close,_,_) -> pure (M.delete (handle (register0 original)) layouts)
                     _ -> pure layouts
-                  Right (State activation updated (M.delete key pending),(entered,call):calls,nand,index+1)
+                  let initialized = if entry == Open && register0 args == 0 then Initialized else service
+                  Right (State activation initialized updated (M.delete key pending),(entered,call):calls,nand,index+1)
                 _ -> Left "return has no matching external call"
 
 checkWatch :: Role -> [(Word32,Word32)] -> Retirement -> T.Text -> Value -> Parse Retirement
@@ -408,8 +474,11 @@ captureSpec = object [K.fromString ("0x" ++ showHex site "") .= capture site | s
     | site == 0x6fb57c = object ["entry" .= [readSpec 0 8 False]]
     | otherwise = object ["entry" .= inputs site,"returns" .= outputs site]
   inputs site
-    | site == 0x6ac328 = [readSpec 13 20 False]
+    | site == 0x6ac328 = [readSpec 13 20 False,object ["base" .= object ["stack-word" .= (16::Int)],"count" .= (4::Int)]]
     | site == 0x6ac7d4 = [readSpec 2 4096 False]
+    | site == 0x6ac4c8 = [readSpec 2 4 False,readSpec 1 2 False]
+    | site == 0x6acab8 = [readSpec 2 4 False,readSpec 1 131072 False]
+    | site == 0x6acda0 = [object ["base" .= object ["register" .= (3::Int)],"count" .= (0::Int),"count_register" .= (2::Int)]]
     | otherwise = []
   outputs site
     | site == 0x6ac328 = [object ["base" .= object ["stack-word" .= (16::Int)],"count" .= (4::Int)]]
@@ -425,6 +494,7 @@ qualify role bindings observation = do
   need (field "role" receipt == Right (String (if role == Stock then "stock" else "owned"))) "receipt role differs"
   outcome <- field "outcome" receipt >>= field "status" >>= text
   need (outcome == "completed") "observer did not complete"
+  need (field "output_rule" receipt == Right (String "Compare outputs written by the stock contract across roles; require each contract-untouched output to equal its own entry preimage, without comparing residue across roles.")) "caller-output preservation rule differs"
   cohort <- validateInputs bindings role receipt
   fileDigests <- field "files" receipt
   exact (map (T.pack . sidecarName) [minBound..maxBound]) fileDigests
@@ -471,19 +541,19 @@ qualify role bindings observation = do
   initial <- field "regions_at_reset" reset >>= parseRegions (ResetSnapshot role)
   segments <- field "segments" reset >>= array
   need (length segments == 3) "reset phases missing"
-  let empty = State BeforeOpen M.empty M.empty
+  let empty = State BeforeOpen Unopened M.empty M.empty
       slice start end = do
         need (start <= end && end <= length hits) "hit interval outside trace"
         pure (take (end-start) (drop start hits))
-      interval (State activation layouts pending) name keys before after start end press medium watch views = do
+      interval (State activation service layouts pending) name keys before after start end press medium watch views = do
         nextActivation <- checkWatch role code activation views watch
         window <- slice start end
         let opens (Hit _ address _ lr _ captured) = address == entryAddress Open && not (within [(0x6ac2b4,0x6ae114)] (addressValue lr) 1)
               && maybe False (\(event,_,_) -> event == Enter) captured
         when (role == Owned && activation == BeforeOpen && any opens window) $
           need (nextActivation == AfterOpen) "open entry lacks its activation fetch"
-        (next,calls,nand) <- consume (State nextActivation layouts pending) window
-        let State _ _ remaining = next
+        (next,calls,nand) <- consume (State nextActivation service layouts pending) window
+        let State _ _ _ remaining = next
         need (M.null remaining) "interval ends inside an external record call"
         pure (next,Interval name keys calls nand before after press medium)
   (rootState,rootRegions,rootEnd,phases) <- foldM (\(state,before,start,acc) (phase,segment) -> do
@@ -494,7 +564,7 @@ qualify role bindings observation = do
     watch <- field "watch" segment
     (next,result) <- interval state name [] before after start end Nothing Nothing watch "observe"
     pure (next,after,end,acc ++ [result])) (empty,initial,0,[]) (zip [minBound..maxBound] segments)
-  let State rootActivation _ _ = rootState
+  let State rootActivation _ _ _ = rootState
   when (role == Owned) $ need (rootActivation == AfterOpen) "missing first open-veneer fetch"
   attachedSettings <- field "settings_at_attach" receipt >>= parseRegions SettingsSnapshot
   need (attachedSettings == rootRegions) "attach settings differ from reset endpoint"
@@ -563,7 +633,9 @@ comparisonValue :: Qualified -> Qualified -> Either Difference () -> Value
 comparisonValue stock owned result = object
   (["schema" .= (1::Int),"coverage" .= object ["stock" .= coverageValue stock,"owned" .= coverageValue owned]] ++ case result of
     Right () -> ["outcome" .= ("matched"::T.Text)]
-    Left (Difference path expected actual) -> ["outcome" .= ("different"::T.Text),"path" .= path,"stock" .= expected,"owned" .= actual])
+    Left (Difference path expected actual) -> ["outcome" .= ("different"::T.Text),"path" .= path,"stock" .= expected,"owned" .= actual]
+    Left (AmbiguousOutput path expected actual) -> ["outcome" .= ("refused"::T.Text),"error" .= ("ambiguous stock output-write effect"::T.Text),"path" .= path,"stock" .= expected,"owned" .= actual]
+    Left (PreservationViolation path before after) -> ["outcome" .= ("refused"::T.Text),"error" .= ("contract-untouched owned output changed"::T.Text),"path" .= path,"before" .= before,"after" .= after])
 showValue :: Show a => a -> Value
 showValue = String . T.pack . show
 comparePair :: Qualified -> Qualified -> Either Difference ()
@@ -599,11 +671,44 @@ comparePair (Qualified Stock stockInputs stock stockMedium) (Qualified Owned own
     case first 0 of
       Nothing -> pure ()
       Just index -> equal (path <> "." <> T.pack (show index)) (B.index a index) (B.index b index)
+  compareOutput _ AbsentOutput AbsentOutput = pure ()
+  compareOutput path (Output rule before after) (Output _ otherBefore otherAfter) = case rule of
+    CompareBytes -> bytes path after otherAfter
+    PreserveBytes -> preserveOwned path otherBefore otherAfter
+    _ -> do
+      equal (path <> ".length") (B.length after) (B.length otherAfter)
+      equal (path <> ".stock-preimage-length") (B.length before) (B.length after)
+      equal (path <> ".owned-preimage-length") (B.length otherBefore) (B.length otherAfter)
+      forM_ [0..B.length after-1] $ \index -> do
+        let at = path <> "." <> T.pack (show index)
+            old = B.index before index
+            value = B.index after index
+            otherOld = B.index otherBefore index
+            otherValue = B.index otherAfter index
+            written = case rule of
+              CollectionBytes (RecordSize stride) (SequenceOffset offset) (ByteCount prefix) ->
+                index < prefix || index `mod` stride >= offset && index `mod` stride < offset+2
+              _ -> False
+        if written || old /= value then equal at value otherValue
+        else if value == otherValue && otherOld == otherValue then pure ()
+        else if value /= otherValue && otherOld /= otherValue then equal at value otherValue
+        else Left (AmbiguousOutput at (object ["before" .= old,"after" .= value]) (object ["before" .= otherOld,"after" .= otherValue]))
+  compareOutput path a b = equal (path <> ".present") (present a) (present b)
+  present AbsentOutput = False
+  present (Output _ _ _) = True
+  preserveOwned path before after
+    | B.length before /= B.length after = Left (PreservationViolation (path <> ".length") (A.toJSON (B.length before)) (A.toJSON (B.length after)))
+    | otherwise = loop 0
+   where
+    loop index
+      | index == B.length before = pure ()
+      | B.index before index == B.index after index = loop (index+1)
+      | otherwise = Left (PreservationViolation (path <> "." <> T.pack (show index)) (A.toJSON (B.index before index)) (A.toJSON (B.index after index)))
   compareCall path (Call entry args result buffers) (Call other otherArgs otherResult otherBuffers) = do
     equal (path <> ".entry") entry other
     equal (path <> ".arguments") args otherArgs
     equal (path <> ".result") result otherResult
-    orderedWith bytes (path <> ".buffers") buffers otherBuffers
+    orderedWith compareOutput (path <> ".buffers") buffers otherBuffers
   compareNand path (Program descriptor payload) (Program other otherPayload) = do
     equal (path <> ".descriptor") descriptor other
     bytes (path <> ".payload") payload otherPayload
