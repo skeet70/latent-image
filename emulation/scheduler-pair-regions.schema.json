@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Scheduler natural observation regions",
+  "type": "object",
+  "required": ["fill_word", "domains"],
+  "properties": {
+    "fill_word": {"const": "0xe7f000f0"},
+    "domains": {
+      "type": "object",
+      "required": ["a", "b"],
+      "properties": {"a": {"$ref": "#/$defs/domain"}, "b": {"$ref": "#/$defs/domain"}}
+    }
+  },
+  "$defs": {
+    "address": {"type": "string", "pattern": "^0x[0-9a-f]+$"},
+    "semantic": {
+      "type": "object",
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": {"enum": ["helper", "dispatch", "service", "irq"]},
+        "name": {"type": "string", "pattern": "^[a-z]+(-[a-z]+)*$"}
+      },
+      "additionalProperties": false
+    },
+    "entry": {
+      "type": "object",
+      "required": ["entry", "semantic"],
+      "properties": {"entry": {"$ref": "#/$defs/address"}, "semantic": {"$ref": "#/$defs/semantic"}},
+      "additionalProperties": false
+    },
+    "region": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"$ref": "#/$defs/address"},
+        "end": {"$ref": "#/$defs/address"},
+        "entries": {"type": "array", "items": {"$ref": "#/$defs/entry"}},
+        "entry": {"$ref": "#/$defs/address"},
+        "semantic": {"$ref": "#/$defs/semantic"},
+        "helper": {"enum": ["acquire", "release", "find", "insert", "remove", "reset", "prepare", "notify", "requeue", "rotate"]}
+      },
+      "anyOf": [{"required": ["entries"]}, {"required": ["entry", "semantic"]}, {"required": ["entry", "helper"]}]
+    },
+    "probe": {
+      "type": "object",
+      "required": ["address", "kind", "register"],
+      "properties": {
+        "address": {"$ref": "#/$defs/address"},
+        "kind": {"enum": ["selected-read", "discarded-read"]},
+        "register": {"type": "string", "pattern": "^r([0-9]|1[0-5])$"}
+      },
+      "additionalProperties": false
+    },
+    "domain": {
+      "type": "object",
+      "required": ["regions"],
+      "properties": {
+        "regions": {"type": "array", "items": {"$ref": "#/$defs/region"}},
+        "probes": {"type": "array", "items": {"$ref": "#/$defs/probe"}}
+      }
+    }
+  }
+}

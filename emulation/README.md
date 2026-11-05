@@ -1684,6 +1684,32 @@ bazel-bin/emulation/own-first-pair-check control CONTROL_PLAN CONTROL_DIR OUTPUT
 
 Pending calls that entered within the final settle are reported, not checked. Results are read at the continuation stop, so an interrupt taken between a slot's return and its continuation is part of the observed result.
 
+#### Scheduler S1 helper natural pair (#156)
+
+`//emulation:scheduler-pair-plan` consumes a list of owned regions catalogs, a role's DAT and the loaders whose guarded bytes that role must hold. Each leaf stager pins its own extents and shim windows. The catalog schema is [`scheduler-pair-regions.schema.json`](scheduler-pair-regions.schema.json): each extent has zero or more entries keyed by address and a typed helper, dispatch, service or IRQ semantic tag. Optional loaded-value probes name a PC, a register and a typed predicate. S1's existing `helper` rows are read directly; additional catalogs follow the output filename on the command line. Unmodeled semantic tags refuse qualification. The standalone S1 candidate is stock plus S1 helpers, without own-first slot bodies. Generate `stock` from canonical loaders, `owned` from the staged candidate, and the notify controls from their own staged loaders. For `control-restored`, pass the restored-insert control DAT but the candidate's loaders.
+
+`//emulation:scheduler-pair-observe` follows the own-first cold-reset shooting-menu and packaged FILM SIMULATION route. Both aliases of every helper entry, continuation, loader arming point and UDF fill word are instruction stops. The byte guard hashes every extent and the prepare shim window physically and through both cores' low and high views at arming and at the end. Classified CPU, host and model-bus write watches cover armed code continuously. The observer records r0-r3, CPSR, the record, reached T records and definition fields, ready heads, bitmap, selected, running, dispatch-enabled and lock words. CPU write hooks record per-call addresses, widths and values, return snapshots contain final word values, and controller transaction watches capture exact bank writes. The checker replays each core's writes independently; a peer can acquire a released lock before the releasing core reaches its continuation. Calls match continuations by core, SP, mode and executing-core current task.
+
+The observer counts null-branch visits (`0x436ec`, `0xd36ec`) including startup, image5's direct ring site (`0xec8014`), and IRQ 120 handler entries (`0x40b00`, `0xd0b00`) by core. It refuses a helper entered on the other loader's core and a null-selection branch after the first successful dispatch. The checker judges each completed call against the stock-listing Haskell model, including raw versus boolean requeue results and the distinct A/B notify predicates. It checks queue/bitmap/selected consistency at queue-helper returns, guard coverage, input bindings, accounting and route completion. Cross-run comparison uses route keys and menu states, not call order or instruction interleavings. Its JSON summary reports cross-domain inserts, ringing notifies, bank writes, handler runs and PC-watch counts per core.
+
+The checker controls require `control-restored` to fail readback, `control-silent-notify` to fail the missing bank-write check, and `control-wrong-predicate` to fail B's return-value check. Barrier ordering remains the native oracle's obligation. Host tests use synthetic memory and guard receipts; they do not qualify a guest run.
+
+```sh
+devenv shell -- bazel --batch build --jobs=2 //emulation:scheduler-pair-plan //emulation:scheduler-pair-observe //emulation:scheduler-pair-check //emulation:emulator-slot
+devenv shell -- bazel --batch test --jobs=2 //emulation:scheduler-pair-tests
+devenv shell -- bazel --batch run --jobs=2 //emulation:scheduler-pair-plan -- ROLE DAT EXPECTED_LOADER_A EXPECTED_LOADER_B NEW_PLAN_JSON [ADDITIONAL_REGIONS ...]
+XM1_EMULATOR_SLOTS=1 devenv shell -- bazel --batch run --jobs=2 //emulation:emulator-slot -- \
+  "$PWD/bazel-bin/emulation/scheduler-pair-observe" --plan PLAN_JSON \
+  --run "$PWD/emulation/fujimod-xm1/data/xm1-150.json" --update DAT --boot-rom "$ROM" \
+  --trajectory "$PWD/emulation/modal75-packaged-route-trajectories.json" --output NEW_DIRECTORY
+bazel-bin/emulation/scheduler-pair-check qualify PLAN_JSON OBSERVATION_DIR/observation.json
+bazel-bin/emulation/scheduler-pair-check compare STOCK_PLAN STOCK_DIR/observation.json OWNED_PLAN OWNED_DIR/observation.json
+bazel-bin/emulation/scheduler-pair-check control CONTROL_PLAN CONTROL_DIR/observation.json
+```
+
+Pending calls are accepted only within the final settle window and remain unqualified, as in the own-first pair. A semantic refusal identifies the earliest failing completed call class by its entry instruction count. A return observation includes any interrupt between the helper's return and its continuation.
+
+
 #### Application entry and main UI loop boundary (#154)
 
 [The application contract](../reports/replacement-inventory-baseline.md#818-application-entry-main-ui-actor-and-first-owned-loop-boundary-154) separates finite image5 initializer `0xd985a4`, actual UI task1 `0xc22f60`/queue1, syscont2/queue2, REC3/queue3 and the distinct UILIB33/smaphk72/VGLIB73 actors. Existing admitted loader observations already cover image5 initialization, UI1 submission and later UILIB/plain construction, but not task1's committed first context or repeated queue1-to-controller-pump handback. Subsequent finite pump observations remain unadmitted after observer clock refusals.

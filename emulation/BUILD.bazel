@@ -3474,3 +3474,82 @@ haskell_test(
         "//replacement/rtos_own_first/stage:own-first-artifact",
     ],
 )
+
+haskell_library(
+    name = "scheduler-pair-lib",
+    srcs = [
+        "Emulation/SchedulerPairCatalog.hs",
+        "Emulation/SchedulerPairCheck.hs",
+        "Emulation/SchedulerPairModel.hs",
+        "Emulation/SchedulerPairPlan.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":own-first-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_scheduler/oracle:scheduler-oracle-lib",
+    ],
+)
+
+haskell_binary(
+    name = "scheduler-pair-plan",
+    srcs = ["SchedulerPairPlanMain.hs"],
+    args = ["$(rootpath //replacement/rtos_scheduler:regions.json)"],
+    data = ["//replacement/rtos_scheduler:regions.json"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":scheduler-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:host-support",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_scheduler/oracle:scheduler-oracle-lib",
+    ],
+)
+
+haskell_binary(
+    name = "scheduler-pair-check",
+    srcs = ["SchedulerPairCheckMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":scheduler-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "scheduler-pair-tests",
+    size = "small",
+    srcs = ["SchedulerPairTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":own-first-pair-lib",
+        ":scheduler-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_scheduler/oracle:scheduler-oracle-lib",
+    ],
+)
+
+sh_binary(
+    name = "scheduler-pair-observe",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-scheduler-pair"],
+    visibility = ["//visibility:public"],
+)
