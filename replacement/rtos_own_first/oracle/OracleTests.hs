@@ -10,7 +10,6 @@ import qualified Data.ByteString as B
 import Data.Char (isAsciiLower, isDigit)
 import Data.List (nub, sort)
 import qualified Data.Map.Strict as M
-import Data.Maybe (isJust)
 import Data.Word (Word32)
 import Emulation.NativeObservation
   ( GuestAddress (..)
@@ -44,7 +43,7 @@ check label result = do
   pure result
 
 expectedCases :: Slot -> Int
-expectedCases slot = 64 + 24 * case slot of
+expectedCases slot = 64 + (if slot == S164 then 9 else 3) * 24 * case slot of
   S60 -> 32
   S128 -> 40
   S12c -> 40
@@ -52,6 +51,7 @@ expectedCases slot = 64 + 24 * case slot of
   S154 -> 25
   S14c -> 1
   S164 -> 1
+  S1618 -> 6
   _ -> 5
 
 privileged :: Word32 -> Bool
@@ -71,6 +71,7 @@ observation overrides callerFrame writes =
         , (RegionId "tasks-119", B.replicate 56 0)
         , (RegionId "buffer", B.replicate 16 0)
         , (RegionId "caller-frame", callerFrame)
+        , (RegionId "call-trace", B.replicate 64 0)
         ]
     , nativeProvenance = Complete (ProvenanceTotal (fromIntegral (length writes))) [Write (GuestAddress (fromIntegral address)) (WriteBytes (fromIntegral width)) | (address, width) <- writes]
     , nativeInstructions = InstructionCount 1
@@ -117,7 +118,9 @@ pureChecks tableA =
           let rows = caseGrid S16c
            in any ((/= 0) . rowContext) rows && any (\row -> rowContext row == 0 && entryIrqMasked (rowEntry row)) rows && any ((== NullTask) . rowTask) rows
       , check "+0x168 rows hold each r0 value" (all (`elem` map rowR0 (caseGrid S168)) argumentValues)
-      , check "+0x1618 rows hold each CP14 value and others hold none" (all (\v -> Just v `elem` map rowIdentity (caseGrid S1618)) identityValues && all (not . isJust . rowIdentity) (caseGrid S60))
+      , check "every slot crosses core-one identity and comparison identity on the IRQ stack" (all (\slot -> and [any (\row -> rowStack row == CoreOneIrqStack && rowIdentity row == Just identity && rowEntry row == entry) (caseGrid slot) | identity <- [0x8003, 0x4003], entry <- entryStates]) slots)
+      , check "save/restore callers cover both sequences on both stacks" (and [any (\row -> rowCalls row == calls && rowStack row == stack && rowEntry row == entry) (caseGrid S164) | calls <- [SaveRestoreSave, NestedSaveRestore], stack <- [OrdinaryStack, CoreOneIrqStack], entry <- entryStates])
+      , check "+0x1618 rows hold every CP14 value" (all (\v -> Just v `elem` map rowIdentity (caseGrid S1618)) identityValues)
       , check "+0x60 rows sweep every task and T+0xe byte" (all (`elem` [(rowTask row, rowFlagByte row) | row <- caseGrid S60]) [(t, b) | t <- taskChoices, b <- flagBytes])
       , check "case ids are runner ids" (all validId ["mutant-s1618-b-s1618-" ++ show n | n <- [1000 :: Int .. 1100]])
       , check "an identical run has no difference" (same reference reference)
@@ -216,7 +219,7 @@ main = do
       table <- either fail pure . parseRegionTable =<< B.readFile regionsPath
       linked <- mapM (\(bin, symbols) -> LinkedDomain <$> B.readFile bin <*> B.readFile symbols) [(binA, symbolsA), (binB, symbolsB)]
       pureResults <- sequence (pureChecks (domainTable table DomainA))
-      sampleResult <- check "each slot's sample is at most 40 structured rows" (and [not (null keys) && length keys <= 40 && all (\(CaseKey index) -> index < length (caseGrid slot) - 64) keys | slot <- slots, let keys = sampleKeys slot])
+      sampleResult <- check "each slot's sample is at most 60 structured rows" (and [not (null keys) && length keys <= 60 && all (\(CaseKey index) -> index < length (caseGrid slot) - 64) keys | slot <- slots, let keys = sampleKeys slot])
       owned <- forM (zip domains linked) $ \(domain, linkedDomain) ->
         either (fail . ((domainLabel domain ++ ": ") ++) . show) pure (ownedDomain (tableFill table) domain (domainTable table domain) linkedDomain)
       stopping <- case owned of
