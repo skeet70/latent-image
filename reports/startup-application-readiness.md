@@ -70,6 +70,8 @@ The Rust piece is `replacement/task1_actor`. Its entry remains `0xc22f60` and it
 - Direct owned writes are the task's stack, `0x972e84`, `0x954d68`, `0x94f5e0`, `0x950148`, `0x944580`, `0x944584`, the low halfword at `0x944588`, and `0x95200c`. Retained callees own their effects separately. The loop never returns; receive may block indefinitely. The observer's sites are semantic labels mapped from the emitted artifact, not a requirement to retain stock instruction layout.
 - Retained `avout_send_initialization` (`0xdb4b34`, exact at the cited decomp commit, `app/drivers/display/avout_service.c:61-71`) reads the five descriptor words without modifying them and forwards a six-word payload with word 1 unwritten. Equality of that retained service's uninitialized stack word is outside this increment's contract.
 
+Host status (`E-STARTUP-J11-TASK1-HOST-150`, open): the Rust actor is 724 bytes and the once-duty 136 bytes, within their stock carriers. Canonical stager/refusal tests and the observer build's check suite pass; a J9+J10+J11 package stages with all 27 task1 sites mapped and passes schema-5 contract admission, whose qualification state remains pending. J8's moved caller and handback are `0xc231e4` and `0xc231e8`; its owned frame is `[0xa4cdd0,0xa4cde0)`. Stock-versus-candidate native dispatch, once-duty and backedge cases are implemented over recorded application-phase queue1 packets, but the run is queued indefinitely for an emulator slot and has not executed. Behavioral equivalence is not yet established.
+
 
 ## 5. Retained seams after J11 (spec/11:37 shims)
 
