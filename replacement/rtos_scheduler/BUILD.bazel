@@ -155,3 +155,27 @@ exports_files(["regions-s3b.json"])
     )
     for domain in ["a", "b"]
 ]
+
+exports_files(["regions-s3c.json"])
+
+[
+    xm1_rust_staticlib(
+        name = "s3c-%s-rust" % domain,
+        src = "src/s3c.rs",
+        crate_name = "xm1_rtos_scheduler_s3c",
+        data = ["//replacement/rtos_layout:src/lib.rs"],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "s3c-%s" % domain,
+        rust_staticlib = ":s3c-%s-rust" % domain,
+        entry = "s3c_get_priority",
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+        link_script = "s3c-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
