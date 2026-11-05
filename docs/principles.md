@@ -32,7 +32,7 @@ Camera code exposes only closed operations whose bytes are built internally. It 
 
 ## Collaboration and records
 
-Contribute host tooling, firmware analysis, emulation, AF experiments or documentation through [GitHub Issues](https://github.com/skeet70/latent-image/issues). Independent review follows [the operation classes](../spec/07-governance-and-handoff.md#32-operation-classes): new H2/H3 mechanism bytes get one, while content-only payload revisions and host-only, read-only or research work do not. The author fixes findings and the reviewer confirms. Assistant-specific instructions are in [AGENTS.md](../AGENTS.md).
+Contribute host tooling, firmware analysis, emulation, AF experiments or documentation through [GitHub Issues](https://github.com/skeet70/latent-image/issues). Independent review follows [the operation classes](../spec/07-governance-and-handoff.md#32-operation-classes): new H2/H3 mechanism bytes get one, while content-only payload revisions and host-only, read-only or research work do not. Firmware replacement work gets one technical review per subsystem cutover at merge under [its review and rerun rules](../spec/11-incremental-firmware-replacement.md#review-and-reruns), not one before each run or citation. The author fixes findings and the reviewer confirms. Assistant-specific instructions are in [AGENTS.md](../AGENTS.md).
 
 Technical review and readiness sign-off belong to `openai-codex/gpt-6.1-sol:high` or `anthropic/claude-opus-5-5:high`. `deepseek/deepseek-flash:max` may implement and gather supporting evidence; its approval alone does not close a gate. A required independent review stays separate from that sign-off, and an author never reviews their own change.
 
