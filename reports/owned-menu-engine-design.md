@@ -97,7 +97,7 @@ The adapter hooks the engine wrapper `0xbf95c8`, reached by all four stage consu
 
 1. Host: the tree generator with the record side table, the engine library, decode and mirror, and the oracle with negative controls, for the classes with receipts: kind 4 and kind 5 row steps, push, pop and open. Before that, one `--menu-observe` run per existing case with the added return sites and the last-move watch, so that each case records initial row, availability and the last-move pair, plus one picker case whose current value is not at the restored row, which the initial-row control needs. Reviewed before any guest code.
 2. Guest: the `0xbf95c8` seam, the adapter with class coverage and fallback, the fallback-entry guard check, and the guest pairs. Reviewed before runs.
-3. Observations and classes: `--menu-observe` runs for page moves (kind 4 and 5 page steps and kinds 6..`0xb`), no-wrap and no-availability nodes, seeks (ids `0x17`/`0x18`), multi-level moves, re-open, an empty node, and an open, push or pop where `0xd588b8` returns `0x7ffffffe` while the restored cursor lies past the node's rows (which exercises `token_past_rows`), each followed by its oracle case and the class's ownership.
+3. Observations and classes: `--menu-observe` runs for page moves (kind 4 and 5 page steps and kinds 6..`0xb`), no-wrap and no-availability nodes, seeks (ids `0x17`/`0x18`), multi-level moves, re-open, an empty node, and an open, push or pop where `0xd588b8` returns `0x7ffffffe` while the restored cursor lies past the node's rows (which exercises `token_past_rows`), each followed by its oracle case and the class's ownership. Designed per class in [the increment-3 report](owned-menu-engine-increment-3.md).
 
 ## Open questions
 
