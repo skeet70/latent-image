@@ -1,0 +1,349 @@
+{
+  "fill_word": "0xe7f000f0",
+  "step": "s2",
+  "redesign_items": [
+    "null-selection-own-registers",
+    "null-loop-releases-leaked-global-lock",
+    "remote-terminate-restarts"
+  ],
+  "domains": {
+    "a": {
+      "regions": [
+        {
+          "start": "0x40b00",
+          "end": "0x40b24",
+          "entries": [
+            {
+              "entry": "0x40b00",
+              "semantic": {
+                "kind": "irq",
+                "name": "doorbell"
+              }
+            }
+          ],
+          "symbol": "xm1_rtos_scheduler_doorbell",
+          "frame_bytes": 8
+        },
+        {
+          "start": "0x43640",
+          "end": "0x43668",
+          "entries": [
+            {
+              "entry": "0x43640",
+              "semantic": {
+                "kind": "dispatch",
+                "name": "save"
+              }
+            }
+          ],
+          "symbol": "xm1_rtos_scheduler_save",
+          "frame_bytes": 36
+        },
+        {
+          "start": "0x43668",
+          "end": "0x43688",
+          "entries": [
+            {
+              "entry": "0x43668",
+              "semantic": {
+                "kind": "dispatch",
+                "name": "resume"
+              }
+            }
+          ],
+          "symbol": "xm1_rtos_scheduler_resume",
+          "frame_bytes": 0
+        },
+        {
+          "start": "0x43688",
+          "end": "0x43728",
+          "entries": [
+            {
+              "entry": "0x43688",
+              "semantic": {
+                "kind": "dispatch",
+                "name": "no-save"
+              }
+            },
+            {
+              "entry": "0x436a4",
+              "semantic": {
+                "kind": "dispatch",
+                "name": "select"
+              }
+            }
+          ],
+          "symbol": "xm1_rtos_scheduler_no_save",
+          "frame_bytes": 0
+        },
+        {
+          "start": "0x43728",
+          "end": "0x4375c",
+          "entries": [
+            {
+              "entry": "0x43728",
+              "semantic": {
+                "kind": "dispatch",
+                "name": "first-entry"
+              }
+            }
+          ],
+          "symbol": "xm1_rtos_scheduler_first_entry",
+          "frame_bytes": 0
+        },
+        {
+          "start": "0x4375c",
+          "end": "0x437a4",
+          "entries": [
+            {
+              "entry": "0x4375c",
+              "semantic": {
+                "kind": "dispatch",
+                "name": "irq-return"
+              }
+            }
+          ],
+          "symbol": "xm1_rtos_scheduler_irq_return",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0x437a4",
+          "end": "0x437dc",
+          "entries": [
+            {
+              "entry": "0x437a4",
+              "semantic": {
+                "kind": "dispatch",
+                "name": "irq-resume"
+              }
+            },
+            {
+              "entry": "0x437a8",
+              "semantic": {
+                "kind": "dispatch",
+                "name": "irq-tail"
+              }
+            }
+          ],
+          "symbol": "xm1_rtos_scheduler_irq_resume",
+          "frame_bytes": 0
+        },
+        {
+          "start": "0x437fc",
+          "end": "0x43810",
+          "entries": [],
+          "symbol": "xm1_rtos_scheduler_pool",
+          "frame_bytes": 0
+        }
+      ],
+      "probes": [
+        {
+          "address": "0x43650",
+          "kind": "discarded-read",
+          "register": "r3"
+        },
+        {
+          "address": "0x436ac",
+          "kind": "selected-read",
+          "register": "r1"
+        },
+        {
+          "address": "0x43778",
+          "kind": "discarded-read",
+          "register": "r0"
+        },
+        {
+          "address": "0x43788",
+          "kind": "selected-read",
+          "register": "r0"
+        }
+      ],
+      "stock_probes": [
+        {
+          "address": "0x436b4",
+          "kind": "selected-read",
+          "register": "r1"
+        },
+        {
+          "address": "0x4377c",
+          "kind": "selected-read",
+          "register": "r0"
+        },
+        {
+          "address": "0x43788",
+          "kind": "discarded-read",
+          "register": "r0"
+        }
+      ]
+    },
+    "b": {
+      "regions": [
+        {
+          "start": "0xd0b00",
+          "end": "0xd0b24",
+          "entries": [
+            {
+              "entry": "0xd0b00",
+              "semantic": {
+                "kind": "irq",
+                "name": "doorbell"
+              }
+            }
+          ],
+          "symbol": "xm1_rtos_scheduler_doorbell",
+          "frame_bytes": 8
+        },
+        {
+          "start": "0xd3640",
+          "end": "0xd3668",
+          "entries": [
+            {
+              "entry": "0xd3640",
+              "semantic": {
+                "kind": "dispatch",
+                "name": "save"
+              }
+            }
+          ],
+          "symbol": "xm1_rtos_scheduler_save",
+          "frame_bytes": 36
+        },
+        {
+          "start": "0xd3668",
+          "end": "0xd3688",
+          "entries": [
+            {
+              "entry": "0xd3668",
+              "semantic": {
+                "kind": "dispatch",
+                "name": "resume"
+              }
+            }
+          ],
+          "symbol": "xm1_rtos_scheduler_resume",
+          "frame_bytes": 0
+        },
+        {
+          "start": "0xd3688",
+          "end": "0xd3728",
+          "entries": [
+            {
+              "entry": "0xd3688",
+              "semantic": {
+                "kind": "dispatch",
+                "name": "no-save"
+              }
+            },
+            {
+              "entry": "0xd36a4",
+              "semantic": {
+                "kind": "dispatch",
+                "name": "select"
+              }
+            }
+          ],
+          "symbol": "xm1_rtos_scheduler_no_save",
+          "frame_bytes": 0
+        },
+        {
+          "start": "0xd3728",
+          "end": "0xd375c",
+          "entries": [
+            {
+              "entry": "0xd3728",
+              "semantic": {
+                "kind": "dispatch",
+                "name": "first-entry"
+              }
+            }
+          ],
+          "symbol": "xm1_rtos_scheduler_first_entry",
+          "frame_bytes": 0
+        },
+        {
+          "start": "0xd375c",
+          "end": "0xd37a4",
+          "entries": [
+            {
+              "entry": "0xd375c",
+              "semantic": {
+                "kind": "dispatch",
+                "name": "irq-return"
+              }
+            }
+          ],
+          "symbol": "xm1_rtos_scheduler_irq_return",
+          "frame_bytes": 32
+        },
+        {
+          "start": "0xd37a4",
+          "end": "0xd37dc",
+          "entries": [
+            {
+              "entry": "0xd37a4",
+              "semantic": {
+                "kind": "dispatch",
+                "name": "irq-resume"
+              }
+            },
+            {
+              "entry": "0xd37a8",
+              "semantic": {
+                "kind": "dispatch",
+                "name": "irq-tail"
+              }
+            }
+          ],
+          "symbol": "xm1_rtos_scheduler_irq_resume",
+          "frame_bytes": 0
+        },
+        {
+          "start": "0xd37fc",
+          "end": "0xd3810",
+          "entries": [],
+          "symbol": "xm1_rtos_scheduler_pool",
+          "frame_bytes": 0
+        }
+      ],
+      "probes": [
+        {
+          "address": "0xd3650",
+          "kind": "discarded-read",
+          "register": "r3"
+        },
+        {
+          "address": "0xd36ac",
+          "kind": "selected-read",
+          "register": "r1"
+        },
+        {
+          "address": "0xd3778",
+          "kind": "discarded-read",
+          "register": "r0"
+        },
+        {
+          "address": "0xd3788",
+          "kind": "selected-read",
+          "register": "r0"
+        }
+      ],
+      "stock_probes": [
+        {
+          "address": "0xd36b4",
+          "kind": "selected-read",
+          "register": "r1"
+        },
+        {
+          "address": "0xd377c",
+          "kind": "selected-read",
+          "register": "r0"
+        },
+        {
+          "address": "0xd3788",
+          "kind": "discarded-read",
+          "register": "r0"
+        }
+      ]
+    }
+  }
+}

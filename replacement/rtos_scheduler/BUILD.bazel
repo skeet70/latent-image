@@ -96,3 +96,29 @@ sh_test(
         "@lab_coreutils//:bin/sha256sum",
     ],
 )
+
+exports_files(["regions-s2.json"])
+
+[
+    xm1_rust_staticlib(
+        name = "scheduler-s2-%s-rust" % domain,
+        src = "src/s2.rs",
+        crate_name = "xm1_rtos_scheduler_s2",
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "scheduler-s2-%s" % domain,
+        rust_staticlib = ":scheduler-s2-%s-rust" % domain,
+        entry = "xm1_rtos_scheduler_save",
+        extra_ldflags = [
+            "-Wl,--gc-sections",
+            "-Wl,--orphan-handling=error",
+        ],
+        link_script = "scheduler-s2-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
