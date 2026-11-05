@@ -13,5 +13,5 @@ xm1_rust_elf(
     rust_staticlib = ":task1-actor-rust",
     entry = "xm1_task1_actor",
     link_script = "task1-actor.ld",
-    extra_ldflags = ["-Wl,--gc-sections"],
+    extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
 )
