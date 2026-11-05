@@ -57,7 +57,7 @@ data CodeLayout = CodeLayout
     layoutStockSites :: [(GuestAddress, GuestAddress)]
   }
 
-data CallKind = Call | TailCall | StockLeafCall | StockSiteCall deriving (Eq, Ord, Show)
+data CallKind = Call | TailCall | StockLeafCall | StockLeafTailCall | StockSiteCall deriving (Eq, Ord, Show)
 
 data CallEdge = CallEdge
   { edgeSite :: GuestAddress
@@ -153,6 +153,7 @@ compose frames leaves visiting done entry
         done' <- foldM (compose frames leaves (S.insert entry visiting)) done [edgeTarget edge | edge <- calls, edgeKind edge `elem` [Call, TailCall]]
         let through (CallEdge _ target (StackOffset at) kind) = case kind of
               StockLeafCall -> let StackOffset leafLow = leaves M.! target in Just (at + leafLow)
+              StockLeafTailCall -> let StackOffset leafLow = leaves M.! target in Just (at + leafLow)
               StockSiteCall -> Nothing
               _ -> let StackOffset calleeLow = done' M.! target in Just (at + calleeLow)
             low = minimum (own : [depth | Just depth <- map through calls])
@@ -241,10 +242,13 @@ walkFunction layout bytes (FunctionExtent _ (GuestAddress start) (GuestAddress e
               Right (Outcome (skip [next]) sp [CallEdge (GuestAddress pc) (GuestAddress target) (StackOffset sp) kind] [])
         A.Branch _ False target
           | target >= start && target < end -> Right (Outcome (skip [state {statePc = target}]) sp [] [])
-          | S.member target callable -> do
-              returning state
-              Right (Outcome (skip []) sp [CallEdge (GuestAddress pc) (GuestAddress target) (StackOffset sp) TailCall] [])
+          | S.member target callable -> tailTo TailCall
+          | S.member target leaves -> tailTo StockLeafTailCall
           | otherwise -> Left (BranchOutsideOwned (GuestAddress target))
+          where
+            tailTo kind = do
+              returning state
+              Right (Outcome (skip []) sp [CallEdge (GuestAddress pc) (GuestAddress target) (StackOffset sp) kind] [])
         A.BranchExchange _ False register | register == A.lr -> returning state >> terminal
         A.BranchExchange {} -> Left PcWrite
         A.StoreMultiple _ register mode writeback registers
@@ -319,6 +323,11 @@ walkFunction layout bytes (FunctionExtent _ (GuestAddress start) (GuestAddress e
                 bound after
                 advance (moveSp after state)
               A.OffsetRegister {} -> Left NonStackStore
+          | register == r11, indexing == A.OffsetOnly, Just saved <- fp, A.OffsetImmediate amount <- offset -> do
+              let address = saved + fromIntegral amount
+              unless (address >= sp && address + widthBytes width <= 0) (Left NonStackStore)
+              clear address (address + widthBytes width)
+              advance state
           | accessor && indexing == A.OffsetOnly -> advance state
           | otherwise -> Left NonStackStore
         A.Load _ width _ destination@(A.Reg number) register offset indexing

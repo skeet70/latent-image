@@ -1,6 +1,6 @@
 @ Owned arm stubs, entered from the stock getter and setter jump tables inside the stock frame,
 @ and the accessors: the only stores the owned service makes outside the stack, and its reads of
-@ the stock settings images and defaults.
+@ the stock settings images, defaults and configuration bytes.
     .syntax unified
     .arm
 
@@ -56,3 +56,4 @@ xm1_setter_stub:
     accessor xm1_slot_defaults_load16, 0xb804, 0x7c, "ldrh r0, [r12, r0]"
     accessor xm1_tail_defaults_load8, 0xb074, 0x81, "ldrb r0, [r12, r0]"
     accessor xm1_tail_defaults_load16, 0xb074, 0x81, "ldrh r0, [r12, r0]"
+    accessor xm1_config_load8, 0xb400, 0x96, "ldrb r0, [r12, r0]"

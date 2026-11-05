@@ -28,9 +28,9 @@ import Numeric (readHex, showHex)
 import PropertyFields (PropertyId (..))
 import Replacement.PropertyService.Admission (FunctionExtent (..), FunctionName (..))
 import Replacement.PropertyService.Artifact
-import Replacement.PropertyService.ClassRecord (reasonLabel)
+import Replacement.PropertyService.ClassRecord (ownedLabel, reasonLabel, stockLabel)
 import Replacement.PropertyService.Classify
-import Replacement.PropertyService.Encoding (EncodedEntry (..), EncodedSlot (..), SlotIndex (..), TableEntry (..), encodeEntry, encodeSlot)
+import Replacement.PropertyService.Encoding (EncodedEntry (..), EncodedSlot (..), EncodedSpecial (..), SlotIndex (..), SpecialArm (..), TableEntry (..), encodeEntry, encodeSlot, encodeSpecial)
 import Replacement.PropertyService.Oracle
 import qualified Replacement.PropertyService.Placement as P
 import ServiceInventory (Image (..))
@@ -131,9 +131,7 @@ runProperty = oracleProperty . runCase
 
 classLabel :: Standing -> String
 classLabel standing = case standing of
-  Classified (Owned (OwnedField _)) -> "owned-field"
-  Classified (Owned (OwnedSlotField _)) -> "owned-slot-field"
-  Classified (Owned OwnedUnassigned) -> "owned-unassigned"
+  Classified (Owned owned) -> ownedLabel owned
   Classified (Delegated _) -> "delegated"
   OutOfRange -> "out-of-range"
 
@@ -169,10 +167,16 @@ checkEncodings bases = do
 -- | Whether a control's patched image must fail a case or pass every case.
 data ControlKind = MustFail | MustPass deriving (Eq)
 
+-- | A control's image: the candidate with words replaced, or a defect build staged like the candidate.
+data ControlImage = PatchedCandidate [Patch] | DefectBuild DefectName
+
+-- | One `property_defect_*` cfg of the Rust crate, as `--defect` names it.
+newtype DefectName = DefectName String deriving (Eq, Ord)
+
 data Control = Control
   { controlName :: String
   , controlKind :: ControlKind
-  , controlPatches :: [Patch]
+  , controlImage :: ControlImage
   , controlCases :: [RunCase]
   , controlNote :: String
   }
@@ -201,6 +205,13 @@ freshOutput path = do
   createDirectoryIfMissing True (takeDirectory absolute)
   createDirectory absolute
   pure absolute
+
+-- | Each `--defect NAME BIN SYMBOLS`: a defect build's name and its linked image and symbol list.
+defectArguments :: [String] -> [(String, FilePath, FilePath)]
+defectArguments arguments = case arguments of
+  "--defect" : name : binPath : symbolsPath : rest -> (name, binPath, symbolsPath) : defectArguments rest
+  _ : rest -> defectArguments rest
+  [] -> []
 
 -- | The ids `--ids` lists as comma-separated hex, or Nothing for every id.
 subsetIds :: [String] -> IO (Maybe (S.Set PropertyId))
@@ -246,12 +257,23 @@ oracle arguments runner linkedPath symbolsPath = do
   artifact <- orFail "linked artifact" (deriveArtifact classified chosenCarrier linked symbols)
   rederived <- orFail "staging" (stagedImage4Bytes source artifact)
   ensure (rederived == candidate) "candidate image4 differs from the image4 re-derived from the canonical sources and the linked artifact"
+  defects <- fmap M.fromList . forM (defectArguments arguments) $ \(name, binPath, defectSymbolsPath) -> do
+    defectLinked <- readRegular 0x2000 binPath
+    defectSymbols <- readRegular 0x10000 defectSymbolsPath
+    defectArtifact <- orFail ("defect " ++ name) (deriveArtifact classified chosenCarrier defectLinked defectSymbols)
+    defectImage <- orFail ("defect " ++ name ++ " staging") (stagedImage4Bytes source defectArtifact)
+    ensure (defectImage /= candidate) ("defect " ++ name ++ " stages the candidate image4")
+    let P.Carrier (P.GuestAddress low) (P.GuestAddress high) = artifactCarrier defectArtifact
+        spans = splitFunctions (low, high) [FunctionSpan start end | FunctionExtent _ (P.GuestAddress start) (P.GuestAddress end) <- artifactFunctions defectArtifact]
+    pure (DefectName name, (defectImage, spans, sha256Hex (sha256 defectLinked)))
   out <- freshOutput outPath
   let P.Carrier (P.GuestAddress carrierStart) (P.GuestAddress carrierEnd) = artifactCarrier artifact
       P.StubAddresses (P.GuestAddress getterStub) (P.GuestAddress setterStub) = artifactStubs artifact
       P.GuestAddress tableAddress = artifactTable artifact
       P.GuestAddress slotTableAddress = artifactSlotTable artifact
-      fx = fixture image4
+      P.GuestAddress specialTableAddress = artifactSpecialTable artifact
+      ownedArms = [owned | Property _ _ _ (Owned owned) <- classified]
+      fx = withConfigVariants ownedArms (fixture image4)
       P.GuestAddress getterTable = P.getterTableBase
       P.GuestAddress setterTable = P.setterTableBase
       ownedSpans = [FunctionSpan start end | FunctionExtent _ (P.GuestAddress start) (P.GuestAddress end) <- artifactFunctions artifact]
@@ -260,6 +282,97 @@ oracle arguments runner linkedPath symbolsPath = do
       tableWord (PropertyId n) = tableAddress + 4 * (n - 1)
       accessorAt name = listToMaybe [start | FunctionExtent (FunctionName functionName) (P.GuestAddress start) _ <- artifactFunctions artifact, functionName == name]
       slotIndexOf identifier = listToMaybe [SlotIndex index | (index, Property other _ _ _) <- zip [0 ..] [p | p@(Property _ _ _ (Owned (OwnedSlotField _))) <- classified], other == identifier]
+      specialArms = [(identifier, special) | Property identifier _ _ (Owned owned) <- classified, Just special <- [specialOf owned]]
+      specialOf owned = case owned of
+        OwnedField (FieldArm _ _ _ (FieldDefaultOnly _) _ NoHook) -> Nothing
+        OwnedField arm -> Just (HookedField arm)
+        OwnedReadOnlyField arm -> Just (ReadOnlyField arm)
+        _ -> Nothing
+      specialAddressOf identifier = listToMaybe [specialTableAddress + 8 * index | (index, (other, _)) <- zip [0 ..] specialArms, other == identifier]
+      specialPatches name identifier before after = do
+        address <- maybe (Left (name ++ ": " ++ propertyHex identifier ++ " has no SPECIALS entry")) Right (specialAddressOf identifier)
+        EncodedSpecial before0 before1 <- either (Left . ((name ++ ": ") ++) . show) Right (encodeSpecial before)
+        EncodedSpecial after0 after1 <- either (Left . ((name ++ ": ") ++) . show) Right (encodeSpecial after)
+        Right ([Patch address before0 after0 | before0 /= after0] ++ [Patch (address + 4) before1 after1 | before1 /= after1])
+      slotPatch name identifier before after = do
+        SlotIndex slotIndex <- maybe (Left (name ++ ": " ++ propertyHex identifier ++ " has no slot index")) Right (slotIndexOf identifier)
+        let EncodedSlot wordBefore = encodeSlot before
+            EncodedSlot wordAfter = encodeSlot after
+        Right [Patch (slotTableAddress + 4 * slotIndex) wordBefore wordAfter | wordBefore /= wordAfter]
+      allVariants = CanonicalFixture : configVariantsOf
+      acrossVariants identifier chosen = [RunCase variant (OracleCase identifier o) | variant <- allVariants, o <- chosen]
+      armsWhere predicate = [(identifier, owned) | Property identifier _ _ (Owned owned) <- classified, predicate owned]
+      stockDefaulted owned = isJust (stockOf owned)
+      configDefaulted owned = case owned of
+        OwnedField (FieldArm _ _ _ (FieldConfig _ _) _ _) -> True
+        _ -> False
+      gated owned = case owned of
+        OwnedField (FieldArm _ _ _ _ _ (ConfigGatedResave _)) -> True
+        _ -> False
+      defaultRequests bank = [o | o@(Set b _ SetDefaultRequest) <- operations, maybe True (== b) bank]
+      defectControl name defect cases note = case cases of
+        [] -> Left (name ++ ": no property has the class the defect changes")
+        _ -> Right (Control name MustFail (DefectBuild (DefectName defect)) cases note)
+      stockSwapControl = case exposingStockSwap fx classified of
+        Nothing -> Left "c-stock-swapped: no stock default exposes a swap"
+        Just (Property identifier _ _ _, owned, swapped) -> do
+          patches <- case (owned, swapped) of
+            (OwnedField before, OwnedField after) -> specialPatches "c-stock-swapped" identifier (HookedField before) (HookedField after)
+            (OwnedSlotField before, OwnedSlotField after) -> slotPatch "c-stock-swapped" identifier before after
+            _ -> Left "c-stock-swapped: the swap changes the class"
+          Right (Control "c-stock-swapped" MustFail (PatchedCandidate patches) (acrossVariants identifier defaultOperations)
+            ("stock default of " ++ propertyHex identifier ++ " " ++ maybe "" stockLabel (stockOf owned) ++ " -> " ++ maybe "" stockLabel (stockOf swapped)))
+      selectorControl = case [(identifier, arm) | (identifier, OwnedSlotField arm@(SlotArm _ _ _ (SlotStock (Stock61d65c Profile2)) _)) <- armsWhere (const True)] of
+        (identifier, arm) : _ -> do
+          patches <- slotPatch "c-selector-3" identifier arm arm {slotDefault = SlotStock (Stock61d65c Profile3)}
+          Right (Control "c-selector-3" MustFail (PatchedCandidate patches) (acrossVariants identifier defaultOperations) ("0x61d65c selector 2 -> 3 for " ++ propertyHex identifier))
+        [] -> Left "c-selector-3: no slot field calls 0x61d65c with selector 2"
+      gateByteControl = case [(identifier, arm, gate) | (identifier, OwnedField arm@(FieldArm _ _ _ _ _ (ConfigGatedResave (ConfigOffset gate)))) <- armsWhere gated] of
+        (identifier, arm, gate) : _ -> do
+          patches <- specialPatches "c-gate-byte" identifier (HookedField arm) (HookedField arm {fieldHook = ConfigGatedResave (ConfigOffset (gate + 1))})
+          Right (Control "c-gate-byte" MustFail (PatchedCandidate patches) (acrossVariants identifier [o | o@(Set {}) <- operations])
+            ("gate byte " ++ hex (configBase + fromIntegral gate) ++ " -> " ++ hex (configBase + fromIntegral gate + 1) ++ " for " ++ propertyHex identifier))
+        [] -> Left "c-gate-byte: no gated field"
+      mirrorControl name chosen note = case [(identifier, arm) | (identifier, OwnedSlotField arm@(SlotArm _ _ _ _ MirrorRecord0)) <- armsWhere (const True)] of
+        (identifier, arm) : _ -> do
+          index <- maybe (Left (name ++ ": " ++ propertyHex identifier ++ " has no slot index")) Right (slotIndexOf identifier)
+          let EncodedEntry before = encodeEntry (SlotEntry (bankArm arm) MirrorRecord0 index)
+              EncodedEntry after = encodeEntry (SlotEntry (bankArm arm) NoMirror index)
+          Right (Control name MustFail (PatchedCandidate [Patch (tableWord identifier) before after]) [canonical (OracleCase identifier o) | o <- chosen] (note ++ " for " ++ propertyHex identifier))
+        [] -> Left (name ++ ": no record-0 mirrored slot field")
+      readOnlyControl name change chosen note = case [(identifier, arm) | (identifier, OwnedReadOnlyField arm) <- armsWhere (const True)] of
+        (identifier, arm) : _ -> do
+          patches <- specialPatches name identifier (ReadOnlyField arm) (change arm)
+          Right (Control name MustFail (PatchedCandidate patches) [canonical (OracleCase identifier o) | o <- chosen] (note ++ " for " ++ propertyHex identifier))
+        [] -> Left (name ++ ": no read-only field")
+      bumpedDefault arm = case fieldSource arm of
+        FieldDefaultOnly (DefaultConstant value) -> ReadOnlyField arm {fieldSource = FieldDefaultOnly (DefaultConstant (value + 1))}
+        _ -> ReadOnlyField arm
+      setterPop = setterStub + 20
+      setterExitControl = case armsWhere stockDefaulted of
+        (identifier, OwnedField _) : _ -> Right (Control "c-setter-stub-exit" MustFail (PatchedCandidate [Patch setterPop setterPopWord (branchWord setterPop 0x630200)])
+          [canonical (OracleCase identifier o) | o <- defaultRequests (Just Bank0)] ("setter stub ends b 0x630200, for " ++ propertyHex identifier ++ "'s bank-0 default requests"))
+        _ -> Left "c-setter-stub-exit: no field with a stock default"
+      stage3Controls =
+        [ stockSwapControl
+        , selectorControl
+        , defectControl "c-drop-provisional" "drop_provisional" [canonical (OracleCase identifier o) | (identifier, _) <- armsWhere stockDefaulted, o <- defaultRequests Nothing]
+            "defect build: a stock default request skips the provisional save and store"
+        , defectControl "c-drop-second-save" "drop_second_save" [canonical (OracleCase identifier o) | (identifier, _) <- armsWhere stockDefaulted, o <- defaultRequests (Just Bank0)]
+            "defect build: a stock default request stores the leaf's result without the second save"
+        , defectControl "c-config-masked" "mask_config_default" [RunCase variant (OracleCase identifier o) | (identifier, _) <- armsWhere configDefaulted, variant <- allVariants, o@(Get _ DefaultRead _) <- operations]
+            "defect build: the getter's configuration default keeps only the field's bits"
+        , defectControl "c-config-save" "config_save" [RunCase variant (OracleCase identifier o) | (identifier, _) <- armsWhere configDefaulted, variant <- allVariants, o <- defaultRequests (Just Bank0)]
+            "defect build: the configuration default's store saves first"
+        , defectControl "c-gate-inverted" "invert_gate" [RunCase variant (OracleCase identifier o) | (identifier, _) <- armsWhere gated, variant <- allVariants, o@(Set {}) <- operations]
+            "defect build: the gated resave runs when the gate byte is not 0"
+        , gateByteControl
+        , mirrorControl "c-mirror-getter" [o | o@(Get {}) <- operations] "PROPERTIES record-0 mirror bit cleared; the getter reads the requested slot"
+        , mirrorControl "c-mirror-write" [o | o@(Set {}) <- operations] "PROPERTIES record-0 mirror bit cleared; the set omits the record-0 write"
+        , readOnlyControl "c-read-only-stores" (\arm -> HookedField arm) [o | o@(Set {}) <- operations] "SPECIALS subkind read-only -> hooked field; the set stores the field"
+        , readOnlyControl "c-read-only-default" bumpedDefault [o | o@(Get _ DefaultRead _) <- operations] "SPECIALS default + 1"
+        , setterExitControl
+        ]
       loadOf width = case width of
         Byte -> Load8
         Half -> Load16
@@ -281,8 +394,8 @@ oracle arguments runner linkedPath symbolsPath = do
                 Right (basePatches site before after, [(site, after)], accessorName accessor ++ " base " ++ hex before ++ " -> " ++ hex after ++ " for " ++ propertyHex identifier)
           (patches, bases, note) <- case (mutation, control) of
             (MutatedArm mutated, _) -> do
-              let EncodedEntry entryBefore = encodeEntry (SlotEntry (bankArm arm) index)
-                  EncodedEntry entryAfter = encodeEntry (SlotEntry (bankArm mutated) index)
+              let EncodedEntry entryBefore = encodeEntry (SlotEntry (bankArm arm) (slotMirror arm) index)
+                  EncodedEntry entryAfter = encodeEntry (SlotEntry (bankArm mutated) (slotMirror mutated) index)
                   EncodedSlot slotBefore = encodeSlot arm
                   EncodedSlot slotAfter = encodeSlot mutated
               Right (changed entryBefore entryAfter (tableWord identifier) ++ changed slotBefore slotAfter (slotTableAddress + 4 * slotIndex), [], "PROPERTIES and SLOTS words of " ++ propertyHex identifier)
@@ -293,7 +406,7 @@ oracle arguments runner linkedPath symbolsPath = do
             (MutatedLayout layout, TailDefaultsMoved) ->
               accessorPatches (Accessor TailDefaultsImage Load8) tailDefaultsBase (layoutTailDefaults layout)
             (MutatedLayout _, _) -> Left (name ++ ": the control changes no accessor")
-          Right (Control name MustFail patches cases note, bases)
+          Right (Control name MustFail (PatchedCandidate patches) cases note, bases)
       slotControls =
         [ slotControl "c-record-offset" RecordOffsetMoved
         , slotControl "c-branches-swapped" BranchesSwapped
@@ -307,22 +420,21 @@ oracle arguments runner linkedPath symbolsPath = do
         Just (Property identifier _ _ (Owned (OwnedField arm)), mutated) ->
           let EncodedEntry before = encodeEntry (FieldEntry arm)
               EncodedEntry after = encodeEntry (FieldEntry mutated)
-           in Right (Control name MustFail [Patch (tableWord identifier) before after] [canonical (OracleCase identifier o) | o <- entryControlOperations ec] ("PROPERTIES entry of " ++ propertyHex identifier))
+           in Right (Control name MustFail (PatchedCandidate [Patch (tableWord identifier) before after]) [canonical (OracleCase identifier o) | o <- entryControlOperations ec] ("PROPERTIES entry of " ++ propertyHex identifier))
         Just (Property identifier _ _ _, _) -> Left (name ++ ": " ++ propertyHex identifier ++ " is not an owned field")
       firstField = listToMaybe [p | p@(Property _ _ _ (Owned (OwnedField _))) <- classified]
-      halfTail = listToMaybe [p | p@(Property _ _ _ (Owned (OwnedField (FieldArm _ _ _ (DefaultTail _ Half) _)))) <- classified]
-      defaultOperations = [o | o@(Get _ DefaultRead _) <- operations] ++ [o | o@(Set _ _ SetDefaultRequest) <- operations]
+      halfTail = listToMaybe [p | p@(Property _ _ _ (Owned (OwnedField (FieldArm _ _ _ (FieldDefaultOnly (DefaultTail _ Half)) _ _)))) <- classified]
       getterPop = getterStub + 8
       getterPopControl = case firstField of
         Nothing -> Left "c-getter-pop-setter-list: no owned field"
         Just (Property identifier _ _ _) -> Right $ Control "c-getter-pop-setter-list" MustFail
-          [Patch getterPop getterPopWord setterPopWord]
+          (PatchedCandidate [Patch getterPop getterPopWord setterPopWord])
           [canonical (OracleCase identifier o) | o@(Get {}) <- operations] ("getter stub pops the setter frame's list {r3-r8, r11, pc}, for " ++ propertyHex identifier)
       tailHalfControl name patches note = case halfTail of
         Nothing -> Left (name ++ ": no field has a halfword tail default")
         Just (Property identifier _ _ _) -> do
           site <- accessorSite name (Accessor TailDefaultsImage Load16)
-          Right (Control name MustFail (patches site) [RunCase variant (OracleCase identifier o) | variant <- [CanonicalFixture, TailWindow], o <- defaultOperations] (note ++ " for " ++ propertyHex identifier))
+          Right (Control name MustFail (PatchedCandidate (patches site)) [RunCase variant (OracleCase identifier o) | variant <- [CanonicalFixture, TailWindow], o <- defaultOperations] (note ++ " for " ++ propertyHex identifier))
       tailHalfBase = tailHalfControl "c-tail16-base" (\site -> basePatches site tailDefaultsBase (tailDefaultsBase + 1)) ("xm1_tail_defaults_load16 base " ++ hex tailDefaultsBase ++ " -> " ++ hex (tailDefaultsBase + 1))
       tailHalfByte = tailHalfControl "c-tail16-byte" (\site -> [Patch (site + 8) loadHalfWord loadByteWord]) "xm1_tail_defaults_load16 reads a byte"
       referenceId = if isJust (M.lookup (PropertyId 0x34) properties >>= ownedProperty) then PropertyId 0x34 else PropertyId 0xd
@@ -332,7 +444,7 @@ oracle arguments runner linkedPath symbolsPath = do
       stockArmsReference = case M.lookup referenceId properties >>= ownedProperty of
         Just (Property identifier@(PropertyId n) (GuestAddress getterArm) (GuestAddress setterArm) _)
           | not (carrierStart <= setterArm && setterArm < carrierEnd) -> Right $ Control "r-stock-arms" MustPass
-              [Patch (getterTable + 4 * (n - 1)) getterStub getterArm, Patch (setterTable + 4 * (n - 1)) setterStub setterArm]
+              (PatchedCandidate [Patch (getterTable + 4 * (n - 1)) getterStub getterArm, Patch (setterTable + 4 * (n - 1)) setterStub setterArm])
               [canonical (OracleCase identifier o) | o <- operations] ("reference: " ++ propertyHex identifier ++ "'s getter and setter table words restored to " ++ hex getterArm ++ " and " ++ hex setterArm ++ ", both outside the carrier")
         _ -> Left ("r-stock-arms: " ++ propertyHex referenceId ++ " is not owned with its setter arm outside the carrier")
       controls =
@@ -346,15 +458,19 @@ oracle arguments runner linkedPath symbolsPath = do
         , stockArmsReference
         ]
           ++ map (fmap fst) slotControls
+          ++ stage3Controls
       planned = [control | Right control <- controls]
       unavailable = [problem | Left problem <- controls]
       inSubset identifier = maybe True (S.member identifier) subset
-      variantCases = [RunCase TailWindow (OracleCase identifier o) | Just (Property identifier _ _ _) <- [halfTail], inSubset identifier, o <- defaultOperations]
+      variantCases =
+        [RunCase TailWindow (OracleCase identifier o) | Just (Property identifier _ _ _) <- [halfTail], inSubset identifier, o <- defaultOperations]
+          ++ [RunCase variant (OracleCase identifier o) | Property identifier _ _ (Owned owned) <- classified, inSubset identifier, variant <- configVariantsOf, o <- variantOperations owned]
       gridCases = [canonical c | c <- caseGrid, inSubset (oracleProperty c)] ++ variantCases
       runCases = nub (gridCases ++ concatMap controlCases planned)
       fxOf rc = variantFixture fx (runVariant rc)
   tailHalfSite <- maybe (failH "no xm1_tail_defaults_load16") pure (accessorAt (accessorName (Accessor TailDefaultsImage Load16)))
   checkEncodings ((tailHalfSite, tailDefaultsBase + 1) : concat [bases | Right (_, bases) <- slotControls])
+  ensure (A.decode (setterStub + 20) (branchWord (setterStub + 20) 0x630200) == A.Branch (A.Cond 14) False 0x630200) "b 0x630200 encoding"
 
   -- Pass 1: stock.
   (stockBatches, stockRuns) <- runBatches runner out "stock" [stockSpec (fxOf rc) image4 properties (runLabel rc) stockFunctions (runCase rc) | rc <- runCases]
@@ -376,14 +492,18 @@ oracle arguments runner linkedPath symbolsPath = do
     pure (c, compareRuns reference subject)
 
   -- Guest controls.
-  controlImages <- forM planned $ \control -> do
-    image <- either (failH . ((controlName control ++ ": ") ++)) pure (applyPatches (controlPatches control) candidate)
-    pure (control, image)
-  controlSpecs <- forM (concat [[(control, image, c) | c <- controlCases control] | (control, image) <- controlImages]) $ \(control, image, c) -> do
+  controlImages <- forM planned $ \control -> case controlImage control of
+    PatchedCandidate patches -> do
+      image <- either (failH . ((controlName control ++ ": ") ++)) pure (applyPatches patches candidate)
+      pure (control, image, candidateFunctions)
+    DefectBuild defect@(DefectName name) -> case M.lookup defect defects of
+      Just (image, spans, _) -> pure (control, image, spans)
+      Nothing -> failH (controlName control ++ ": no --defect " ++ name)
+  controlSpecs <- forM (concat [[(control, image, spans, c) | c <- controlCases control] | (control, image, spans) <- controlImages]) $ \(control, image, spans, c) -> do
     run <- stockRun c
-    pure (caseSpec image candidateFunctions (fxOf c) (runPrefixed (controlName control) c) (standing (runProperty c)) (runCase c) (observedExpectation run))
+    pure (caseSpec image spans (fxOf c) (runPrefixed (controlName control) c) (standing (runProperty c)) (runCase c) (observedExpectation run))
   (controlBatches, controlRuns) <- runBatches runner out "controls" controlSpecs
-  controlOutcomes <- forM controlImages $ \(control, _) -> do
+  controlOutcomes <- forM controlImages $ \(control, _, _) -> do
     failures <- fmap concat . forM (controlCases control) $ \c -> do
       reference <- stockRun c
       subject <- lookupRun controlRuns (runPrefixed (controlName control) c)
@@ -397,6 +517,7 @@ oracle arguments runner linkedPath symbolsPath = do
   inputs <- forM
     ( [("image4", image4Path), ("candidate_image4", candidatePath), ("contract", contractPath), ("linked", linkedPath), ("symbols", symbolsPath)]
         ++ zip ["dat", "loader_a", "loader_b", "image5", "plain", "image2"] sourcePaths
+        ++ concat [[("defect_" ++ name, binPath), ("defect_" ++ name ++ "_symbols", defectSymbolsPath)] | (name, binPath, defectSymbolsPath) <- defectArguments arguments]
     ) $ \(name, path) -> do
     digest <- sha256Hex <$> sha256File path
     pure (fromString name .= object ["path" .= path, "sha256" .= digest])
@@ -462,7 +583,9 @@ oracle arguments runner linkedPath symbolsPath = do
                   [ "name" .= controlName control
                   , "kind" .= (case controlKind control of MustFail -> "must-fail"; MustPass -> "must-pass" :: String)
                   , "note" .= controlNote control
-                  , "patches" .= [object ["address" .= hex a, "before" .= hex b, "after" .= hex c] | Patch a b c <- controlPatches control]
+                  , "image" .= case controlImage control of
+                      PatchedCandidate patches -> object ["patches" .= [object ["address" .= hex a, "before" .= hex b, "after" .= hex c] | Patch a b c <- patches]]
+                      DefectBuild defect@(DefectName name) -> object ["defect" .= name, "linked_sha256" .= fmap (\(_, _, digest) -> digest) (M.lookup defect defects)]
                   , "cases" .= length (controlCases control)
                   , "failed_cases" .= failed
                   , "holds" .= controlHolds control failed
@@ -499,7 +622,7 @@ smoke arguments runner = do
   P.Carrier (P.GuestAddress carrierStart) (P.GuestAddress carrierEnd) <- maybe (failH "no owned interval") pure (listToMaybe (P.carrierIntervals classified))
   let properties = M.fromList [(propertyId property, property) | property <- classified]
       fx = fixture image4
-      differing (SlotArm (BankBranch _ bankWidth' bankBits' _) (RecordBranch _ recordWidth' recordBits') _) = (bankWidth', bankBits') /= (recordWidth', recordBits')
+      differing (SlotArm (BankBranch _ bankWidth' bankBits' _) (RecordBranch _ recordWidth' recordBits') _ _ _) = (bankWidth', bankBits') /= (recordWidth', recordBits')
       chosen = take 1 [propertyId p | p@(Property _ _ _ (Owned (OwnedSlotField arm))) <- classified, differing arm] ++ take 1 [propertyId p | p@(Property _ _ _ (Owned (OwnedField _))) <- classified]
       slot = SlotArgument
       smokeOperations =

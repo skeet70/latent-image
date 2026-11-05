@@ -43,32 +43,57 @@ testCarrier :: Carrier
 testCarrier = Carrier (GuestAddress carrierStartAddress) (GuestAddress carrierEndAddress)
 
 -- | A classification whose encoded tables are the linked ones: owned fields' and slot fields' setter
--- arms start the carrier, delegated setter arms end it, and unassigned properties use both stock fallbacks.
+-- arms start the carrier, delegated setter arms end it, unassigned properties use both stock
+-- fallbacks and read-only fields the setter's.
 syntheticClassification :: B.ByteString -> [Symbol] -> [Property]
 syntheticClassification bytes symbols =
   [ property (PropertyId (fromIntegral index + 1)) (wordAt table index) | index <- [0 .. 644] ]
   where
     Symbol table _ _ = symbolNamed symbols ("10PROPERTIES" `isSuffixOf`)
     Symbol slots _ _ = symbolNamed symbols ("5SLOTS" `isSuffixOf`)
+    Symbol specials _ _ = symbolNamed symbols ("8SPECIALS" `isSuffixOf`)
     wordAt base index = U.word32At bytes (fromIntegral (base - carrierStartAddress) + 4 * index)
     owned identifier = Property identifier (GuestAddress 0x61e200) (GuestAddress carrierStartAddress) . Owned
-    property identifier word = case word .&. 3 of
-      1 -> Property identifier (GuestAddress 0x6243e4) (GuestAddress 0x6301fc) (Owned OwnedUnassigned)
-      2 -> owned identifier (OwnedField (field word))
-      3 -> owned identifier (OwnedSlotField (slotArm word (wordAt slots (fromIntegral ((word `shiftR` 22) .&. 0x7f)))))
-      _ -> Property identifier (GuestAddress 0x61e300) (GuestAddress carrierEndAddress) (Delegated ExitAdjusts)
+    property identifier word = case (word .&. 3, (word `shiftR` 2) .&. 0x3f) of
+      (1, _) -> Property identifier (GuestAddress 0x6243e4) (GuestAddress 0x6301fc) (Owned OwnedUnassigned)
+      (2, _) -> owned identifier (OwnedField (field word (FieldDefaultOnly (fieldDefault word)) NoHook))
+      (3, _) -> owned identifier (OwnedSlotField (slotArm word (wordAt slots (fromIntegral ((word `shiftR` 22) .&. 0x7f)))))
+      (_, 0) -> Property identifier (GuestAddress 0x61e300) (GuestAddress carrierEndAddress) (Delegated ExitAdjusts)
+      (_, index) -> special identifier (wordAt specials (2 * fromIntegral (index - 1))) (wordAt specials (2 * fromIntegral (index - 1) + 1))
+    special identifier layout behaviour
+      | layout .&. 3 == 1 = Property identifier (GuestAddress 0x61e200) (GuestAddress 0x6301fc) (Owned (OwnedReadOnlyField (field layout (FieldDefaultOnly (DefaultConstant value)) NoHook)))
+      | otherwise = owned identifier (OwnedField (field layout source hook))
+      where
+        value = (layout `shiftR` 22) .&. 0x1ff
+        config at = ConfigOffset (fromIntegral ((behaviour `shiftR` at) .&. 0x1ff))
+        source = case behaviour .&. 3 of
+          1 -> FieldStock (stockOf ((behaviour `shiftR` 2) .&. 0xf)) value
+          2 -> FieldConfig (config 6) value
+          _ -> FieldDefaultOnly (DefaultConstant value)
+        hook = if (behaviour `shiftR` 15) .&. 3 == 2 then ConfigGatedResave (config 17) else NoHook
+    stockOf code = case code of
+      1 -> Stock61df44
+      2 -> Stock61d8a4
+      3 -> Stock61d59c
+      4 -> Stock61d618
+      5 -> Stock61d5f0
+      6 -> Stock61d65c Profile2
+      7 -> Stock61d65c Profile3
+      _ -> Stock61d65c Profile4
     widthAt word bit = if testBit word bit then Half else Byte
     rangeAt word lsb = BitRange (fromIntegral ((word `shiftR` lsb) .&. 0xf)) (fromIntegral ((word `shiftR` (lsb + 4)) .&. 0x1f))
     saveAt word bit = if testBit word bit then SaveBank0Previous else NoSave
     fieldDefault word
       | testBit word 31 = DefaultTail (TailOffset (fromIntegral ((word `shiftR` 22) .&. 0xff))) (widthAt word 2)
       | otherwise = DefaultConstant ((word `shiftR` 22) .&. 0x1ff)
-    field word = FieldArm (BankOffset (fromIntegral ((word `shiftR` 13) .&. 0x1ff))) (widthAt word 2) (rangeAt word 4) (fieldDefault word) (saveAt word 3)
+    field word source hook = FieldArm (BankOffset (fromIntegral ((word `shiftR` 13) .&. 0x1ff))) (widthAt word 2) (rangeAt word 4) source (saveAt word 3) hook
     slotArm word slot = SlotArm
       (BankBranch (BankOffset (fromIntegral ((word `shiftR` 13) .&. 0x1ff))) (widthAt word 2) (rangeAt word 4)
         (if testBit slot 17 then BankTailByte (TailOffset (fromIntegral ((slot `shiftR` 18) .&. 0x3ff))) else BankConstant ((slot `shiftR` 18) .&. 0x3ff)))
       (RecordBranch (RecordOffset (fromIntegral (slot .&. 0x3f))) (widthAt slot 6) (rangeAt slot 7))
       (saveAt slot 16)
+      (if slot `shiftR` 28 == 0 then SlotDefaultsRecord else SlotStock (stockOf (slot `shiftR` 28)))
+      (if testBit word 29 then MirrorRecord0 else NoMirror)
 
 putWordAt :: Word32 -> Word32 -> Word32 -> B.ByteString -> B.ByteString
 putWordAt base address value bytes =
@@ -124,8 +149,8 @@ dataSiteTests = do
 
 carrierTests :: IO ()
 carrierTests = do
-  let fieldArm = Owned (OwnedField (FieldArm (BankOffset 0) Byte (BitRange 0 8) (DefaultConstant 0) NoSave))
-      slotArm = Owned (OwnedSlotField (SlotArm (BankBranch (BankOffset 0x95) Byte (BitRange 4 4) (BankConstant 3)) (RecordBranch (RecordOffset 0x24) Byte (BitRange 4 4)) SaveBank0Previous))
+  let fieldArm = Owned (OwnedField (FieldArm (BankOffset 0) Byte (BitRange 0 8) (FieldDefaultOnly (DefaultConstant 0)) NoSave NoHook))
+      slotArm = Owned (OwnedSlotField (SlotArm (BankBranch (BankOffset 0x95) Byte (BitRange 4 4) (BankConstant 3)) (RecordBranch (RecordOffset 0x24) Byte (BitRange 4 4)) SaveBank0Previous SlotDefaultsRecord NoMirror))
       delegated = Delegated ExitAdjusts
       classified arms = [Property (PropertyId n) (GuestAddress 0x61e200) (GuestAddress arm) verdict | (n, (arm, verdict)) <- zip [1 ..] arms]
       carriers runs = [Carrier (GuestAddress low) (GuestAddress high) | (low, high) <- runs]
@@ -286,6 +311,16 @@ walkerTests = do
   case walkWith [] [] [(leaf, StackOffset (-4))] [] [0xe92d4800, branchWord True 0x1004 0x61d59c, 0xe8bd8800] of
     Right proof -> expect "a stock leaf call adds the leaf's stack" (Just (StackOffset (-12))) (M.lookup (GuestAddress 0x1000) (proofComposed proof))
     Left failure -> fail ("stock leaf call refused: " ++ show failure)
+  case walkWith [] [] [(leaf, StackOffset (-4))] [] [0xe92d4800, 0xe8bd4800, branchWord False 0x1008 0x61d59c] of
+    Right proof -> expect "a tail branch to a stock leaf after the frame pop" (Just (StackOffset (-8))) (M.lookup (GuestAddress 0x1000) (proofComposed proof))
+    Left failure -> fail ("stock leaf tail branch refused: " ++ show failure)
+  refusedBy "a tail branch to a stock leaf inside the frame" 0x1004 StackUnbalanced
+    (walkWith [] [] [(leaf, StackOffset (-4))] [] [0xe92d4800, branchWord False 0x1004 0x61d59c])
+  case walk [0xe92d4800, 0xe1a0b00d, 0xe24dd008, 0xe50b0004, 0xe28dd008, 0xe8bd8800] of
+    Right _ -> putStrLn "admitted a store through r11 into the frame"
+    Left failure -> fail ("frame store through r11 refused: " ++ show failure)
+  refused "a store through r11 over the saved lr" 0x100c NonStackStore [0xe92d4800, 0xe1a0b00d, 0xe24dd008, 0xe58b0004, 0xe28dd008, 0xe8bd8800]
+  refused "a store through r11 below sp" 0x100c NonStackStore [0xe92d4800, 0xe1a0b00d, 0xe24dd008, 0xe50b000c, 0xe28dd008, 0xe8bd8800]
   refusedBy "a stock site call below the entry sp" 0x1004 StockCallBelowEntry
     (walkWith root [GuestAddress 0x100c] [] [(GuestAddress 0x1004, GuestAddress 0x61da3c)] [0xe24dd008, branchWord True 0x1004 0x61da3c, 0xe28dd008, 0xe8bd89f8])
   case walkWith root [GuestAddress 0x1004] [] [(GuestAddress 0x1000, GuestAddress 0x61da3c)] [branchWord True 0x1000 0x61da3c, 0xe8bd89f8] of
@@ -306,6 +341,8 @@ main = do
       Symbol setStart setSize _ = symbolNamed symbols (== "xm1_property_set")
       Symbol tableAddress _ _ = symbolNamed symbols ("10PROPERTIES" `isSuffixOf`)
       Symbol slotAddress _ _ = symbolNamed symbols ("5SLOTS" `isSuffixOf`)
+      Symbol specialAddress _ _ = symbolNamed symbols ("8SPECIALS" `isSuffixOf`)
+      Symbol configLoad8 _ _ = symbolNamed symbols (== "xm1_config_load8")
       Symbol getterStubAddress getterStubSize _ = symbolNamed symbols (== "xm1_getter_stub")
       Symbol setterStubAddress setterStubSize _ = symbolNamed symbols (== "xm1_setter_stub")
       Symbol bankStore8 _ _ = symbolNamed symbols (== "xm1_bank_store8")
@@ -327,6 +364,14 @@ main = do
   expectRefusal "mutated SLOTS byte" SlotTableRejected (admit (flippedAt slotAddress) symbolText)
   let unsaved = [case propertyClass p of Owned (OwnedSlotField arm) -> p {propertyClass = Owned (OwnedSlotField arm {slotSave = NoSave})}; _ -> p | p <- properties]
   expectRefusal "slot fields the SLOTS table does not hold" SlotTableRejected (deriveArtifact unsaved testCarrier bytes symbolText)
+  expectRefusal "mutated SPECIALS byte" SpecialTableRejected (admit (flippedAt specialAddress) symbolText)
+  let swapped = [case propertyClass p of Owned (OwnedField arm@(FieldArm _ _ _ (FieldStock _ provisional) _ _)) -> p {propertyClass = Owned (OwnedField arm {fieldSource = FieldStock Stock61d5f0 provisional})}; _ -> p | p <- properties]
+  expectRefusal "stock defaults the SPECIALS table does not hold" SpecialTableRejected (deriveArtifact swapped testCarrier bytes symbolText)
+  expectRefusal "configuration accessor base changed" (EncodingRejected (AccessorEncoding (Accessor ConfigImage Load8)))
+    (admit (replaceWord (configLoad8 + 4) 0xe340c097 bytes) symbolText)
+  expectRefusal "stock leaf symbol moved" SymbolRejected (admit bytes (moveSymbol "xm1_stock_61d59c" 0x61d5a0 symbolText))
+  expectRefusal "BL from Rust to a bracket callee" (CodeRejected (AdmissionError (GuestAddress firstCall) (CallOutsideOwned (GuestAddress 0x61da3c))))
+    (admit (replaceWord firstCall (branchWord True firstCall 0x61da3c) bytes) symbolText)
   expectRefusal "artifact linked away from the hull scan's carrier" (PlacementRejected (CarrierNotCandidate (GuestAddress carrierStartAddress)))
     (deriveArtifact properties (Carrier (GuestAddress 0x62c4b0) (GuestAddress carrierEndAddress)) bytes symbolText)
   expectRefusal "setter stub passing r7 as the slot" (EncodingRejected (StubEncoding SetterStub))

@@ -22,6 +22,7 @@ module Replacement.PropertyService.Artifact
   , artifactStubs
   , artifactTable
   , artifactSlotTable
+  , artifactSpecialTable
   , artifactFunctions
   , artifactProof
   , linkedBytes
@@ -83,6 +84,7 @@ data LinkedArtifact = LinkedArtifact
   , artifactFunctions :: [FunctionExtent]
   , artifactTable :: GuestAddress
   , artifactSlotTable :: GuestAddress
+  , artifactSpecialTable :: GuestAddress
   , artifactProof :: CodeProof
   }
 
@@ -101,8 +103,8 @@ data StagedCandidate = StagedCandidate StagedImage4 Image4.StagedCandidate
 data Stub = GetterStub | SetterStub deriving (Eq, Show)
 
 -- | The bank images 0x96cc64, the previous-value image 0x89ec00, the slot-defaults records
--- 0x7cb804 and the defaults table 0x81b074.
-data AccessorImage = BankImage | SaveImage | SlotDefaultsImage | TailDefaultsImage deriving (Eq, Show, Enum, Bounded)
+-- 0x7cb804, the defaults table 0x81b074 and the configuration bytes 0x96b400.
+data AccessorImage = BankImage | SaveImage | SlotDefaultsImage | TailDefaultsImage | ConfigImage deriving (Eq, Show, Enum, Bounded)
 
 data AccessorOperation = Load8 | Load16 | Store8 | Store16 deriving (Eq, Show, Enum, Bounded)
 
@@ -122,6 +124,7 @@ data ArtifactError
   | EncodingRejected EncodingPart
   | TableRejected
   | SlotTableRejected
+  | SpecialTableRejected
   | CodeRejected AdmissionError
   | StagingRejected
   deriving (Eq, Show)
@@ -191,11 +194,12 @@ canonicalSource dat four loaderA loaderB five plain two = do
   hull <- either (Left . PlacementRejected) Right (scanHull image4 scanned properties)
   pure (CanonicalSource dat image4 scanned identities properties hull)
 
--- | Loads and stores of the bank and previous-value images, and loads of the two defaults images.
+-- | Loads and stores of the bank and previous-value images, and loads of the two defaults images
+-- and of configuration bytes.
 accessors :: [Accessor]
 accessors =
   [Accessor image operation | image <- [BankImage, SaveImage], operation <- [minBound .. maxBound]]
-    ++ [Accessor SlotDefaultsImage Load8, Accessor SlotDefaultsImage Load16, Accessor TailDefaultsImage Load8, Accessor TailDefaultsImage Load16]
+    ++ [Accessor SlotDefaultsImage Load8, Accessor SlotDefaultsImage Load16, Accessor TailDefaultsImage Load8, Accessor TailDefaultsImage Load16, Accessor ConfigImage Load8]
 
 accessorName :: Accessor -> String
 accessorName (Accessor image operation) = "xm1_" ++ imagePart ++ "_" ++ operationPart
@@ -205,6 +209,7 @@ accessorName (Accessor image operation) = "xm1_" ++ imagePart ++ "_" ++ operatio
       SaveImage -> "save"
       SlotDefaultsImage -> "slot_defaults"
       TailDefaultsImage -> "tail_defaults"
+      ConfigImage -> "config"
     operationPart = case operation of
       Load8 -> "load8"
       Load16 -> "load16"
@@ -227,6 +232,7 @@ accessorCode (Accessor image operation) =
       SaveImage -> saveBase
       SlotDefaultsImage -> slotDefaultsBase
       TailDefaultsImage -> tailDefaultsBase
+      ConfigImage -> configBase
     indexed = A.OffsetRegister True (A.Reg 0) A.LSL 0
     transfer = case operation of
       Load8 -> A.Load always A.Byte False (A.Reg 0) r12 indexed A.OffsetOnly
@@ -243,6 +249,7 @@ accessorWords (Accessor image operation) = base ++ [transfer, 0xe12fff1e]
       SaveImage -> [0xe30ecc00, 0xe340c089]
       SlotDefaultsImage -> [0xe30bc804, 0xe340c07c]
       TailDefaultsImage -> [0xe30bc074, 0xe340c081]
+      ConfigImage -> [0xe30bc400, 0xe340c096]
     transfer = case operation of
       Load8 -> 0xe7dc0000
       Load16 -> 0xe19c00b0
@@ -255,9 +262,25 @@ always = A.Cond 14
 r12 :: A.Reg
 r12 = A.Reg 12
 
-propertiesSuffix, slotsSuffix :: String
+propertiesSuffix, slotsSuffix, specialsSuffix :: String
 propertiesSuffix = "14property_table10PROPERTIES"
 slotsSuffix = "14property_table5SLOTS"
+specialsSuffix = "14property_table8SPECIALS"
+
+-- | The stock leaves owned code may call, each bound by an absolute linker symbol.
+stockLeaves :: [(String, Word32)]
+stockLeaves =
+  [ ("xm1_stock_61df44", 0x61df44)
+  , ("xm1_stock_61d8a4", 0x61d8a4)
+  , ("xm1_stock_61d59c", 0x61d59c)
+  , ("xm1_stock_61d618", 0x61d618)
+  , ("xm1_stock_61d5f0", 0x61d5f0)
+  , ("xm1_stock_61d65c", 0x61d65c)
+  ]
+
+-- | The lowest stack offset each stock leaf reaches: `str r11, [sp, #-4]!` at entry.
+stockLeafStack :: StackOffset
+stockLeafStack = StackOffset (-4)
 
 symbolKind :: C.ByteString -> SymbolKind
 symbolKind text = case C.unpack text of
@@ -291,7 +314,7 @@ deriveArtifact properties carrier@(Carrier (GuestAddress carrierLow) (GuestAddre
   require (start == carrierLow) (PlacementRejected (CarrierNotCandidate (GuestAddress start)))
   require (end >= start && end <= carrierHigh && end .&. 3 == 0
     && toInteger (B.length bytes) == toInteger (end - start)) ExtentRejected
-  require (null [entry | entry <- symbols, kindIs [AbsoluteSymbol] entry]) SymbolRejected
+  require (sortOn fst [(F.symbolName entry, F.symbolAddress entry) | entry <- symbols, kindIs [AbsoluteSymbol] entry] == sortOn fst stockLeaves) SymbolRejected
   forM_ symbols $ \entry -> unless (kindIs [AbsoluteSymbol] entry) $
     require (kindIs [GlobalText, LocalText] entry && F.symbolAddress entry >= start
       && toInteger (F.symbolAddress entry) + toInteger (F.symbolSize entry) <= toInteger end) ExtentRejected
@@ -310,10 +333,11 @@ deriveArtifact properties carrier@(Carrier (GuestAddress carrierLow) (GuestAddre
         _ -> Left SymbolRejected
   tableSymbol <- tableNamed propertiesSuffix
   slotSymbol <- tableNamed slotsSuffix
+  specialSymbol <- tableNamed specialsSuffix
   let functions =
         sortOn functionStart
           [ FunctionExtent (FunctionName (F.symbolName entry)) (GuestAddress (F.symbolAddress entry)) (GuestAddress (F.symbolAddress entry + F.symbolSize entry))
-          | entry <- symbols, F.symbolSize entry > 0, entry `notElem` [tableSymbol, slotSymbol], kindIs [GlobalText, LocalText] entry
+          | entry <- symbols, F.symbolSize entry > 0, entry `notElem` [tableSymbol, slotSymbol, specialSymbol], kindIs [GlobalText, LocalText] entry
           ]
       disjoint = and (zipWith (\(FunctionExtent _ _ a) (FunctionExtent _ b _) -> a <= b) functions (drop 1 functions))
   require (disjoint && all (\(FunctionExtent _ (GuestAddress low) (GuestAddress high)) -> low .&. 3 == 0 && high .&. 3 == 0) functions) ExtentRejected
@@ -327,26 +351,30 @@ deriveArtifact properties carrier@(Carrier (GuestAddress carrierLow) (GuestAddre
   require (stubMatches setterStubAddress setterStubWords setAddress) (EncodingRejected (StubEncoding SetterStub))
   forM_ accessorAddresses $ \(accessor, address) ->
     require (code address 4 == accessorCode accessor && wordsAt address 4 == accessorWords accessor) (EncodingRejected (AccessorEncoding accessor))
-  EncodedTables entries slots <- either (const (Left SlotTableRejected)) Right (encodeTables (map propertyClass properties))
+  EncodedTables entries slots specials <- either (const (Left SlotTableRejected)) Right (encodeTables (map propertyClass properties))
   let tableAddress = F.symbolAddress tableSymbol
       slotAddress = F.symbolAddress slotSymbol
       slotBytes = 4 * fromIntegral (length slots)
+      specialAddress = F.symbolAddress specialSymbol
+      specialBytes = 8 * fromIntegral (length specials)
   require (F.symbolSize tableSymbol == 2580 && tableAddress .&. 3 == 0 && length properties == 645) TableRejected
   require ([EncodedEntry (word (tableAddress + 4 * index)) | index <- [0 .. 644]] == entries) TableRejected
   require (F.symbolSize slotSymbol == slotBytes && slotAddress .&. 3 == 0) SlotTableRejected
   require ([EncodedSlot (word address) | address <- take (length slots) [slotAddress, slotAddress + 4 ..]] == slots) SlotTableRejected
+  require (F.symbolSize specialSymbol == specialBytes && specialAddress .&. 3 == 0) SpecialTableRejected
+  require ([EncodedSpecial (word address) (word (address + 4)) | address <- take (length specials) [specialAddress, specialAddress + 8 ..]] == specials) SpecialTableRejected
   let layout = CodeLayout
         { layoutBase = GuestAddress start
         , layoutFunctions = functions
-        , layoutData = [(GuestAddress tableAddress, GuestAddress (tableAddress + 2580)), (GuestAddress slotAddress, GuestAddress (slotAddress + slotBytes))]
+        , layoutData = [(GuestAddress tableAddress, GuestAddress (tableAddress + 2580)), (GuestAddress slotAddress, GuestAddress (slotAddress + slotBytes)), (GuestAddress specialAddress, GuestAddress (specialAddress + specialBytes))]
         , layoutStoreAccessors = [GuestAddress address | (accessor, address) <- accessorAddresses, storing accessor]
         , layoutRoots = [GuestAddress getterStubAddress, GuestAddress setterStubAddress]
         , layoutFramePops = [GuestAddress (getterStubAddress + getterStubBytes - 4), GuestAddress (setterStubAddress + setterStubBytes - 4)]
-        , layoutStockLeaves = []
+        , layoutStockLeaves = [(GuestAddress address, stockLeafStack) | (_, address) <- stockLeaves]
         , layoutStockSites = []
         }
   proof <- either (Left . CodeRejected) Right (admitCode layout bytes)
-  pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) carrier (StubAddresses (GuestAddress getterStubAddress) (GuestAddress setterStubAddress)) functions (GuestAddress tableAddress) (GuestAddress slotAddress) proof)
+  pure (LinkedArtifact bytes (identity bytes) (identity symbolBytes) carrier (StubAddresses (GuestAddress getterStubAddress) (GuestAddress setterStubAddress)) functions (GuestAddress tableAddress) (GuestAddress slotAddress) (GuestAddress specialAddress) proof)
 
 -- | Undefined-instruction fill for the carrier past the linked bytes.
 fillWord :: Word32
@@ -483,7 +511,10 @@ candidateContractValue (StagedCandidate staged@(StagedImage4 source artifact (St
       , "name" .= M.lookup entry names
       , "own_depth_bytes" .= negate own
       , "max_depth_bytes" .= depth address
-      , "calls" .= [object ["site" .= site, "target" .= target, "sp_offset" .= at, "tail" .= (kind == TailCall)] | CallEdge (GuestAddress site) (GuestAddress target) (StackOffset at) kind <- calls]
+      , "calls" .=
+          [ object ["site" .= site, "target" .= target, "sp_offset" .= at, "tail" .= (kind `elem` [TailCall, StockLeafTailCall]), "stock" .= (kind `elem` [StockLeafCall, StockLeafTailCall, StockSiteCall])]
+          | CallEdge (GuestAddress site) (GuestAddress target) (StackOffset at) kind <- calls
+          ]
       ]
     sideLabel side = case side of
       GetterTable -> "getter" :: String
