@@ -19,6 +19,7 @@ import qualified FujiAF.UpdateContainer as U
 import Replacement.Record5Staging (decodeRecord, stageRecord5, stagedRecord5Dat)
 import qualified Replacement.Image5Init.Admission as Init
 import qualified Replacement.Image5Init.Artifact as InitArtifact
+import qualified Replacement.Task1Actor.Artifact as Task1
 import Replacement.StartupArtifact.Adapters
 import Replacement.StartupArtifact.Application (RoleImages (..), SiteMap (..), application, plainImage)
 import Replacement.StartupArtifact.AttachState (AttachSources (..), attachStateValue)
@@ -135,6 +136,10 @@ applicationSiteMap pieces = SiteMap . Map.fromList . concat <$> mapM mapped piec
   where
     mapped piece = case pieceFacts piece of
       ApplicationPumpFacts _ -> pure [(Pc pc,(ApplicationPump,Pc pc)) | pc <- [0xbfbd20,0xbfbd24..0xbfbd3c]]
+      Task1ActorFacts (LinkedBytes bytes symbols) -> do
+        artifact <- either (Left . AdapterRefused Task1Actor . T.pack . show) pure (Task1.deriveArtifact bytes symbols)
+        let held pc = any (\(Task1.Carrier (Task1.CodeAddress low) (Task1.CodeAddress high)) -> low <= pc && pc < high) Task1.carriers
+        pure [(Pc before,(Task1Actor,Pc after)) | (before,after) <- Task1.semanticSites artifact, held before]
       Image5InitializerFacts (LinkedBytes bytes symbols) -> do
         artifact <- either (Left . AdapterRefused Image5Initializer . T.pack . show) pure (InitArtifact.deriveArtifact bytes symbols)
         let proof = InitArtifact.artifactProof artifact

@@ -6,13 +6,16 @@ import qualified Data.Aeson as J
 import Data.Bits ((.&.), (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
+import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Word (Word32)
 import qualified Emulation.Image4Staging as Tools
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
 import Replacement.StartupArtifact.Adapters
+import Replacement.StartupArtifact.Application
 import Replacement.StartupArtifact.Compose
+import Replacement.StartupArtifact.Contract (contractCarriers)
 import Replacement.StartupArtifact.Joins
 import Replacement.StartupArtifact.Stage
 import Replacement.StartupArtifact.Targets
@@ -81,5 +84,17 @@ main = do
   (dat,observed) <- stageComposition tools scratch source composed
   check "packaged record5 decodes to composed image5" (targetOf observed Image5 == targetOf (compositionTargets composed) Image5)
   check "image4 contains only composed producer edits" (targetOf observed Image4 == targetOf (compositionTargets composed) Image4)
+  parsed <- either H.failH pure (U.parseContainer dat)
+  retainedImages <- RoleImages (canonicalTargets source) <$> right (plainImage (U.parsedParts (canonicalParsed source)))
+  composedImages <- RoleImages observed <$> right (plainImage (U.parsedParts parsed))
+  mapping@(SiteMap mapped) <- right (applicationSiteMap (compositionPieces composed))
+  section <- right (application mapping (contractCarriers composed) retainedImages composedImages)
+  let actorSites = [(before,after) | ApplicationSite _ Task1Site (Pc before) (Pc after) _ _ <- applicationSites section]
+  check "application sites follow admitted actor semantics" (all (\(before,after) -> lookup before (T1.semanticSites artifact) == Just after) actorSites)
+  check "retained controller target stays outside actor mappings" (Map.notMember (Pc 0xc22bd0) mapped)
+  check "missing actor mappings refuse"
+    (refused (application (SiteMap (Map.filter ((/= Task1Actor) . fst) mapped)) (contractCarriers composed) retainedImages composedImages))
+  check "mapped site outside actor carrier refuses"
+    (refused (application (SiteMap (Map.insert (Pc 0xc22fd4) (Task1Actor,Pc 0xbfbd20) mapped)) (contractCarriers composed) retainedImages composedImages))
   writeOutputs output dat observed (J.object ["qualification" J..= ("host-composition-only" :: String), "application_observer_qualified" J..= False, "semantic_sites" J..= T1.semanticSites artifact])
   putStrLn "J11 stager host checks passed; application observer qualification not claimed"

@@ -805,7 +805,7 @@ fn an_owned_actor_uses_its_relocated_pump_handback() {
     let mut value = owned_pump();
     value["pieces"].as_array_mut().unwrap().push(json!({
         "kind": "task1-actor", "areas": [], "carriers": [], "edits": [], "footprint": [], "premises": [],
-        "catalog": {"boundaries": [], "owned_code": [{"start": 0xc22f60u32, "end": 0xc2327cu32}, {"start": 0xbfb124u32, "end": 0xbfb1b8u32}],
+        "catalog": {"boundaries": [], "owned_code": [{"start": 0xbfb124u32, "end": 0xbfb1b8u32}, {"start": 0xc22f60u32, "end": 0xc2327cu32}],
             "writes": {"allow": [], "basis": "proved", "premise": null}, "reads": []},
     }));
     let relocations = [(0xc23274u32, 0xc23200u32), (0xc23278, 0xc23204)];
