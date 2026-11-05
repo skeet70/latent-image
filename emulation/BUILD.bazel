@@ -820,6 +820,30 @@ sh_binary(
     ],
 )
 
+# Record-area reads after a fresh RAM-push boot; see README "Populated record areas".
+sh_binary(
+    name = "record-medium-boot-check",
+    srcs = ["record-medium-boot-check.sh"],
+    args = [
+        "$(rootpath :emulator-slot)",
+        "$(rootpath @lab_jq//:bin/jq)",
+        "$(rootpath @lab_fujimod_xm1//:bin/fujimod-xm1-ram-push)",
+        "$(rootpath @lab_fujimod_xm1//:share/fujimod-xm1/xm1-150.json)",
+    ],
+    data = [
+        ":emulator-slot",
+        "@lab_fujimod_xm1//:bin/fujimod-xm1-ram-push",
+        "@lab_fujimod_xm1//:share/fujimod-xm1/xm1-150.json",
+        "@lab_jq//:bin/jq",
+    ],
+)
+
+sh_binary(
+    name = "fujimod-xm1-record-medium",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-record-medium"],
+    visibility = ["//visibility:public"],
+)
+
 # Re-derives the run document's address provenance from the decoded images:
 # bazel run //emulation:fujimod-xm1-provenance -- --analysis private-data/analysis/x-m1-1.50
 sh_binary(
@@ -1475,6 +1499,12 @@ cc_binary(
 sh_binary(
     name = "native-runner",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-native-case"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
+    name = "task-constructors",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-task-constructors"],
     visibility = ["//visibility:public"],
 )
 

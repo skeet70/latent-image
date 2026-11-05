@@ -7,7 +7,7 @@ use fujimod_xm1::{
     attach_relations::{self, AttachSources, TimerState, TransactionWriter},
     attach_state::{self, AttachState},
     bridge::{read, sha256, write},
-    composed_catalog::{Contract, Core, Label, Pc, Role, ROW_LIMIT, Sha256},
+    composed_catalog::{CheckedContract, Contract, Core, Label, Pc, Role, ROW_LIMIT, Sha256},
     composed_mutations::{self, CensusRow},
     composed_receipt::{
         self, Admission, CaptureDirectories, CarrierWrites, DeclaredUse, GuardObservation, GuardState, HexBytes, Identity,
@@ -21,7 +21,7 @@ use fujimod_xm1::{
 };
 use std::{collections::BTreeMap, num::NonZeroUsize, path::{Path, PathBuf}, process::ExitCode};
 
-const USAGE: &str = "composed-startup --role retained|composed --contract CONTRACT --run RUN --update DAT --boot-rom ROM --output NEW_DIR [--attach-diagnostic RANGES | --mutation-census]\n       composed-startup --compare RETAINED_RECEIPT OWNED_RECEIPT --contract CONTRACT\n       composed-startup --check-contract CONTRACT --output NEW_FILE\n       composed-startup --application-controls RUN_DIR --contract CONTRACT --output NEW_DIR";
+const USAGE: &str = "composed-startup --role retained|composed --contract CONTRACT --run RUN --update DAT --boot-rom ROM --output NEW_DIR [--attach-diagnostic RANGES | --mutation-census]\n       composed-startup --compare RETAINED_RECEIPT OWNED_RECEIPT --contract CONTRACT\n       composed-startup --check-contract CONTRACT [--qualifications QUALIFICATIONS] --output NEW_FILE\n       composed-startup --application-controls RUN_DIR --contract CONTRACT --output NEW_DIR";
 const CONTROLS: &str = "application-controls.json";
 const CENSUS: &str = "mutation-census.json";
 const WRITERS: &str = "attach-writers.json";
@@ -48,7 +48,7 @@ enum Mode {
 enum Command {
     Observe { role: Role, contract: PathBuf, run: PathBuf, update: PathBuf, rom: PathBuf, output: PathBuf, mode: Mode },
     Compare { retained: PathBuf, owned: PathBuf, contract: PathBuf },
-    CheckContract { contract: PathBuf, output: PathBuf },
+    CheckContract { contract: PathBuf, qualifications: Option<PathBuf>, output: PathBuf },
     Controls { run: PathBuf, contract: PathBuf, output: PathBuf },
 }
 
@@ -62,7 +62,7 @@ fn put<T>(slot: &mut Option<T>, value: T) -> Result<(), String> {
 
 fn arguments() -> Result<Command, String> {
     let (mut role, mut contract, mut run, mut update, mut rom, mut output, mut compare) = (None, None, None, None, None, None, None);
-    let (mut check, mut mode, mut controls) = (None, None, None);
+    let (mut check, mut mode, mut controls, mut qualifications) = (None, None, None, None);
     let mut arguments = std::env::args_os().skip(1);
     while let Some(flag) = arguments.next() {
         let flag = flag.into_string().map_err(|_| USAGE)?;
@@ -76,14 +76,18 @@ fn arguments() -> Result<Command, String> {
             "--output" => put(&mut output, value()?)?,
             "--compare" => { let retained = value()?; put(&mut compare, (retained, value()?))? }
             "--check-contract" => put(&mut check, value()?)?,
+            "--qualifications" => put(&mut qualifications, value()?)?,
             "--attach-diagnostic" => put(&mut mode, Mode::Diagnostic(value()?))?,
             "--mutation-census" => put(&mut mode, Mode::Census)?,
             "--application-controls" => put(&mut controls, value()?)?,
             _ => return Err(USAGE.into()),
         }
     }
+    if qualifications.is_some() && check.is_none() {
+        return Err(USAGE.into());
+    }
     match (check, contract, compare, role, run, update, rom, output, mode, controls) {
-        (Some(contract), None, None, None, None, None, None, Some(output), None, None) => Ok(Command::CheckContract { contract, output }),
+        (Some(contract), None, None, None, None, None, None, Some(output), None, None) => Ok(Command::CheckContract { contract, qualifications, output }),
         (None, Some(contract), Some((retained, owned)), None, None, None, None, None, None, None) => Ok(Command::Compare { retained, owned, contract }),
         (None, Some(contract), None, Some(role), Some(run), Some(update), Some(rom), Some(output), mode, None) =>
             Ok(Command::Observe { role, contract, run, update, rom, output, mode: mode.unwrap_or(Mode::Evidence) }),
@@ -547,17 +551,11 @@ fn compare(retained: PathBuf, owned: PathBuf, contract_path: PathBuf) -> Result<
     Ok(verdict.verdict)
 }
 
-#[derive(serde::Serialize)]
-struct CheckedContract {
-    contract_sha256: Sha256,
-    plan: fujimod_xm1::composed_catalog::Plan,
-}
-
-fn check_contract(contract_path: PathBuf, output: PathBuf) -> Result<(), String> {
+fn check_contract(contract_path: PathBuf, qualifications: Option<PathBuf>, output: PathBuf) -> Result<(), String> {
     use std::io::Write;
     let contract_bytes = read(&contract_path)?;
-    let contract = Contract::parse(&contract_bytes).map_err(|refusal| refusal.to_string())?;
-    let checked = CheckedContract { contract_sha256: digest(&contract_bytes)?, plan: contract.plan() };
+    let qualifications = qualifications.as_deref().map(read).transpose()?;
+    let checked = CheckedContract::check(&contract_bytes, qualifications.as_deref()).map_err(|refusal| refusal.to_string())?;
     let bytes = serde_json::to_vec_pretty(&checked).map_err(|error| error.to_string())?;
     std::fs::OpenOptions::new().write(true).create_new(true).open(&output)
         .and_then(|mut file| file.write_all(&bytes))
@@ -578,7 +576,7 @@ fn main() -> ExitCode {
         Command::Observe { role, contract, run, update, rom, output, mode } =>
             observe(role, contract, run, update, rom, output, mode).map(|()| true),
         Command::Compare { retained, owned, contract } => compare(retained, owned, contract).map(|verdict| verdict == VerdictKind::Equal),
-        Command::CheckContract { contract, output } => check_contract(contract, output).map(|()| true),
+        Command::CheckContract { contract, qualifications, output } => check_contract(contract, qualifications, output).map(|()| true),
         Command::Controls { run, contract, output } => application_controls(run, contract, output),
     });
     match result {

@@ -165,13 +165,14 @@ main = do
   section <- either (H.failH . show) pure $ do
     retainedImages <- RoleImages targets <$> plainImage (U.parsedParts (canonicalParsed source))
     composedImages <- RoleImages observed <$> plainImage composedParts
-    application (contractCarriers j8) retainedImages composedImages
-  let pumpWords' = [ (pc, before, after) | ApplicationSite _ PumpSite (Pc pc) (CodeWord before) (CodeWord after) <- applicationSites section ]
+    mapping <- applicationSiteMap (compositionPieces j8)
+    application mapping (contractCarriers j8) retainedImages composedImages
+  let pumpWords' = [ (pc, before, after) | ApplicationSite _ PumpSite (Pc pc) _ (CodeWord before) (CodeWord after) <- applicationSites section ]
   ok "the section's pump sites carry the stock word retained and the owned word composed"
     (pumpWords' == [ (pc, wordAt targets Image5 pc, wordAt observed Image5 pc) | pc <- [0xbfbd20, 0xbfbd24 .. 0xbfbd3c] ]
       && length [() | (_, before, after) <- pumpWords', before /= after] == 3)
   ok "every other site keeps one word in both roles"
-    (and [ before == after | ApplicationSite _ kind _ before after <- applicationSites section, kind /= PumpSite ])
+    (and [ before == after | ApplicationSite _ kind _ _ before after <- applicationSites section, kind /= PumpSite ])
   ok "the pump code digests differ between roles and the task1 digests do not"
     (and [ (digestRetained code == digestComposed code) == (digestRegion code /= PumpCode) | code <- applicationCode section ])
 
