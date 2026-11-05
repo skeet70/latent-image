@@ -1,4 +1,4 @@
-load("@rules_haskell//haskell:defs.bzl", "haskell_library")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
@@ -29,5 +29,24 @@ haskell_library(
         "//host:first-stage",
         "//host:update-container",
         "//host/firmware:bank-allowlist",
+    ],
+)
+
+haskell_binary(
+    name = "host-cases",
+    srcs = ["HostCases.hs"],
+    ghcopts = ["-XGHC2021", "-O2"],
+    deps = [
+        "//emulation:native-adapter",
+        "//emulation:owned-case",
+        "//emulation:case-sha256",
+        "//host:base",
+        "//host:aeson",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:process",
     ],
 )
