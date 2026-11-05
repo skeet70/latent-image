@@ -439,11 +439,13 @@ Every public guest archive is gated by `:archive-check`: its owned crate's undef
 
 `//replacement/record_store:host-tests` compiles and executes the core's behavioural host suite. `:host-adapter-tests` also exercises all nine exported entries, client-word nulling and preservation, fixed staging pointers, statuses and the semaphore held only around raw reads. The host medium erases to `0xff` and programs by bitwise AND. `:host-control-1` through `-9` each compile the core suite with one control feature and succeed only when that executable fails. Test names cite RSC entry/helper addresses. Build the package targets with `devenv shell -- bazel --output_base=YOUR_OUTPUT_BASE build --jobs=2 //replacement/record_store:all`.
 
+`:host-adapter-control-6` runs only the guest ABI test under `guest` plus `control-6` and requires a failure. The fixture fills bank zero to N records, appends, and reads back the medium through `record_store_read_at`: stock leaves the bytes at bank-zero offset N*S erased and rotates to bank one; control 6 programs at N*S without rotation. Control 6 changes inner append's refusal threshold from N-1 to N, not read latest's recovery-probe equality.
+
 The standalone `Cargo.toml` has no dependencies. Cargo host tests support `--features guest`; the release guest build uses `--features guest --target armv7r-none-eabi` with the `replacement/toolchain` rustc sysroot and `RUSTFLAGS='-C target-cpu=cortex-r4f -C relocation-model=static'`. The core has no fixed addresses. The guest imports `record_raw_region_read`, `record_raw_write_0` through `_4`, `record_raw_erase_0` through `_4`, `record_semaphore_take` and `record_semaphore_give`; its linker-defined RAM symbols are `record_store_initialized`, `record_store_wrappers`, `record_store_state`, `record_store_block` and `record_store_staging_0` through `_4`. Compile-time sizing bounds the owned registration state to the retired slots' `0x168` bytes.
 
-Host qualification through `61a3c627` (`E-RECORD-STORE-CORE-RUNTIME-150`) passed all 32 package targets: 24 core cases, 25 cases with the adapter, ten checked guest archives and nine must-fail gates. Cargo host tests with `guest` passed 25 cases and the release guest build passed. The archive guard rejects the earlier `c396a578` archive's signed/unsigned divide and memory-helper references. The explicit append/null-recovery regression proves its check trace excludes the following-bank probe. No LTO or toolchain change is required; checked buffer-contract failures use a cold non-formatting trap.
+Host qualification through `849a0387` (`E-RECORD-STORE-CONTROL6-150`) passed all 33 package targets: 24 core cases, 25 cases with the adapter, ten checked guest archives, nine core must-fail gates and the isolated guest-adapter control-6 gate. Cargo host tests with `guest` passed 25 cases and the release guest build passed. The archive guard rejects the earlier `c396a578` archive's signed/unsigned divide and memory-helper references. The explicit append/null-recovery regression proves its check trace excludes the following-bank probe. No LTO or toolchain change is required; checked buffer-contract failures use a cold non-formatting trap.
 
-Default ARM code and read-only data for `9b0c7c90` occupy 5,372 bytes, split below. Nine 4-byte entry veneers and one terminal extent byte bring allocated sections to 5,409 bytes. The flat carrier remains the stock 7,776-byte extent, including holes. No `.data` or `.bss` section is emitted; runtime storage uses the linker-defined RAM symbols above.
+Default ARM code and read-only data for `849a0387` occupy 5,364 bytes, split below. Nine 4-byte entry veneers and one terminal extent byte bring allocated sections to 5,401 bytes. The flat carrier remains the stock 7,776-byte extent, including holes. No `.data` or `.bss` section is emitted; runtime storage uses the linker-defined RAM symbols above.
 
 | Linked section | Start | Bytes |
 | --- | --- | ---: |
@@ -453,11 +455,11 @@ Default ARM code and read-only data for `9b0c7c90` occupy 5,372 bytes, split bel
 | `.run4` | `0x6ac7d8` | 392 |
 | `.run5` | `0x6ac988` | 256 |
 | `.run6` | `0x6acabc` | 596 |
-| `.run7` | `0x6acda4` | 3,384 |
+| `.run7` | `0x6acda4` | 3,376 |
 | Nine `.entry_*` sections | Stock entry addresses | 36 |
 | `.end` | `0x6ae113` | 1 |
 
-The control-1 through control-9 code/read-only-data totals are respectively 5,364, 5,332, 5,372, 5,272, 5,256, 5,356, 5,304, 5,372 and 5,348 bytes. The archived default ELF and run summary are under `private-data/scratch/RecordStoreCore/`; the section measurement is `nix shell nixpkgs#llvmPackages.llvm --command llvm-size -A private-data/scratch/RecordStoreCore/record-store-9b0c7c90.elf`.
+The control-1 through control-9 code/read-only-data totals are respectively 5,356, 5,324, 5,364, 5,264, 5,248, 5,360, 5,300, 5,364 and 5,340 bytes. The archived default ELF and run summary are under `private-data/scratch/RecordStoreCore/`; the section measurement is `nix shell nixpkgs#llvmPackages.llvm --command llvm-size -A private-data/scratch/RecordStoreCore/record-store-849a0387.elf`.
 
 The host cases cover the five stock geometries and defined registration/refusal paths. RSC's undefined zero-size division, malformed kinds entering helpers and invalid caller pointers are not promoted into a safe total guest contract. Host source tests and must-fail controls do not establish stock-byte equivalence, physical NAND laws or a full-system cutover.
 
