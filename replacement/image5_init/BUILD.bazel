@@ -1,0 +1,48 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+package(default_visibility = ["//visibility:public"])
+xm1_rust_staticlib(name = "image5-init-rust", src = "src.rs", crate_name = "xm1_image5_init", opt_level = "s", rustc_flags = ["-C", "llvm-args=-disable-constant-hoisting", "-C", "llvm-args=-rotation-max-header-size=0"])
+xm1_rust_elf(name = "image5-init-image", rust_staticlib = ":image5-init-rust", asm_srcs = ["entry.S"], entry = "xm1_image5_init", link_script = "image5-init.ld", extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"])
+
+haskell_library(
+    name = "image5-init-artifact",
+    srcs = ["Replacement/Image5Init/Admission.hs", "Replacement/Image5Init/Artifact.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = ["//host:base", "//host:bytestring", "//host:containers", "//host:first-stage", "//host:update-container"],
+)
+haskell_test(
+    name = "image5-init-tests",
+    srcs = ["Tests.hs"],
+    args = ["$(rootpath :image5-init-image.bin)", "$(rootpath :image5-init-image.symbols)"],
+    data = [":image5-init-image.bin", ":image5-init-image.symbols"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [":image5-init-artifact", "//host:base", "//host:bytestring", "//host:update-container"],
+)
+
+haskell_library(
+    name = "image5-init-oracle-lib",
+    srcs = ["Replacement/Image5Init/Oracle.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = ["//emulation:owned-case", "//emulation:native-observation", "//emulation:case-sha256", "//host:aeson", "//host:base", "//host:bytestring", "//host:containers", "//host:directory", "//host:filepath", "//host:json"],
+)
+_ORACLE_DATA = ["//emulation:native-runner", ":image5-init-image.bin", ":image5-init-image.symbols"]
+_ORACLE_ARGS = ["$(rootpath %s)" % item for item in _ORACLE_DATA]
+haskell_binary(
+    name = "image5-init-oracle",
+    srcs = ["OracleMain.hs"],
+    args = _ORACLE_ARGS,
+    data = _ORACLE_DATA,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    tags = ["manual"],
+    deps = [":image5-init-oracle-lib", "//host:base", "//host:directory"],
+)
+haskell_test(
+    name = "image5-init-oracle-tests",
+    srcs = ["OracleTests.hs"],
+    args = _ORACLE_ARGS,
+    data = _ORACLE_DATA,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [":image5-init-oracle-lib", "//host:base", "//host:directory"],
+)

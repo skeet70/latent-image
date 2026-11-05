@@ -96,6 +96,7 @@ kebab_name!(JoinKind, "join kind");
 impl PieceKind {
     /// The piece whose owned code may hold the pump sites.
     pub fn application_pump() -> Self { Self("application-pump".into()) }
+    pub fn image5_initializer() -> Self { Self("image5-initializer".into()) }
 }
 
 macro_rules! text {
@@ -877,6 +878,133 @@ impl std::fmt::Display for CatalogRefusal {
 }
 
 impl std::error::Error for CatalogRefusal {}
+
+/// A ledger record id such as `E-STARTUP-J1-COMPOSED-NATURAL-150`.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct EvidenceId(String);
+
+impl TryFrom<String> for EvidenceId {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let tail = value.strip_prefix("E-").unwrap_or_default();
+        if !tail.is_empty() && !tail.ends_with('-') && tail.bytes().all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'-') {
+            Ok(Self(value))
+        } else {
+            Err("evidence id is not E- followed by upper-case letters, digits and hyphens".into())
+        }
+    }
+}
+
+impl From<EvidenceId> for String {
+    fn from(value: EvidenceId) -> Self { value.0 }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawQualifications {
+    schema: u32,
+    contracts: Vec<QualifiedContract>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QualifiedContract {
+    contract: Sha256,
+    evidence: EvidenceId,
+}
+
+/// Composed contracts whose natural pair is recorded as equal, each with that record.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Qualifications(BTreeMap<Sha256, EvidenceId>);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum QualificationsRefusal {
+    /// JSON that does not have the schema-1 shape, including unknown keys and invalid scalars.
+    Shape(String),
+    Schema(u32),
+    DuplicateContract(Sha256),
+    HostComposedListed(Sha256),
+}
+
+impl std::fmt::Display for QualificationsRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "qualifications refused: {self:?}") }
+}
+
+impl std::error::Error for QualificationsRefusal {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum ContractState {
+    HostComposed,
+    Compared { evidence: EvidenceId },
+    Pending { awaiting: Vec<JoinKind> },
+}
+
+impl Qualifications {
+    pub fn parse(bytes: &[u8]) -> Result<Self, QualificationsRefusal> {
+        let raw: RawQualifications = serde_json::from_slice(bytes).map_err(|error| QualificationsRefusal::Shape(error.to_string()))?;
+        if raw.schema != 1 {
+            return Err(QualificationsRefusal::Schema(raw.schema));
+        }
+        let mut rows = BTreeMap::new();
+        for row in raw.contracts {
+            match rows.entry(row.contract) {
+                std::collections::btree_map::Entry::Occupied(entry) => return Err(QualificationsRefusal::DuplicateContract(entry.key().clone())),
+                std::collections::btree_map::Entry::Vacant(entry) => { entry.insert(row.evidence); }
+            }
+        }
+        Ok(Self(rows))
+    }
+
+    pub fn state(&self, contract_sha256: &Sha256, contract: &Contract) -> Result<ContractState, QualificationsRefusal> {
+        match (contract.qualification, self.0.get(contract_sha256)) {
+            (Qualification::HostComposed, Some(_)) => Err(QualificationsRefusal::HostComposedListed(contract_sha256.clone())),
+            (Qualification::HostComposed, None) => Ok(ContractState::HostComposed),
+            (Qualification::Pending, Some(evidence)) => Ok(ContractState::Compared { evidence: evidence.clone() }),
+            (Qualification::Pending, None) => Ok(ContractState::Pending { awaiting: contract.pending_joins.clone() }),
+        }
+    }
+}
+
+/// The output of `composed-startup --check-contract`.
+#[derive(Clone, Debug, Serialize)]
+pub struct CheckedContract {
+    pub contract_sha256: Sha256,
+    pub plan: Plan,
+    /// Present only when qualifications were supplied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<ContractState>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CheckRefusal {
+    Contract(CatalogRefusal),
+    Qualifications(QualificationsRefusal),
+}
+
+impl std::fmt::Display for CheckRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Contract(refusal) => write!(f, "{refusal}"),
+            Self::Qualifications(refusal) => write!(f, "{refusal}"),
+        }
+    }
+}
+
+impl std::error::Error for CheckRefusal {}
+
+impl CheckedContract {
+    pub fn check(contract_bytes: &[u8], qualifications: Option<&[u8]>) -> Result<Self, CheckRefusal> {
+        let contract = Contract::parse(contract_bytes).map_err(CheckRefusal::Contract)?;
+        let contract_sha256 = Sha256::of(contract_bytes);
+        let state = qualifications
+            .map(|bytes| Qualifications::parse(bytes)?.state(&contract_sha256, &contract))
+            .transpose()
+            .map_err(CheckRefusal::Qualifications)?;
+        Ok(Self { plan: contract.plan(), contract_sha256, state })
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Contract {
@@ -1733,7 +1861,7 @@ pub enum ApplicationProblem {
     Sites,
     QueueLabel(Pc),
     QueueSites,
-    /// A composed-role site inside a piece's owned code, other than a pump site in the `application-pump` piece.
+    /// A composed-role site inside owned code without its kind's piece exemption.
     SiteInPiece(Pc),
     TaskLayouts,
     CodeRanges,
@@ -1793,7 +1921,12 @@ fn application(raw: RawApplication, pieces: &[Piece]) -> Result<Application, App
         .collect();
     let owner = |pc: Pc| owned.iter().find(|(span, _)| span.holds(u64::from(physical_address(pc.0)))).map(|&(_, kind)| kind);
     let pump_piece = PieceKind::application_pump();
-    let exempt = |site: &ApplicationSite| site.kind == SiteKind::Pump && owner(site.composed_pc) == Some(&pump_piece);
+    let initializer_piece = PieceKind::image5_initializer();
+    let exempt = |site: &ApplicationSite| match site.kind {
+        SiteKind::Pump => owner(site.composed_pc) == Some(&pump_piece),
+        SiteKind::Initializer => owner(site.composed_pc) == Some(&initializer_piece),
+        _ => false,
+    };
     let sites = raw.sites.iter().filter(|site| !exempt(site)).map(|site| site.composed_pc);
     if let Some(pc) = sites.chain(raw.queue_sites.iter().map(|site| site.pc)).find(|&pc| owner(pc).is_some()) {
         return Err(ApplicationProblem::SiteInPiece(pc));
