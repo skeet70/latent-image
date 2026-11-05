@@ -168,3 +168,13 @@ fn rsc_6acef8_non_power_of_two_page_capacity_wraps_position_n_to_page_offset_zer
     assert_eq!(&output[131068..131075], &[0, 0, 0x51, 0x22, 0x33, 0x44, 0x55]);
     assert_eq!(&f.staging.bytes(RecordKind::Kind0)[..7], &[0, 0, 0x51, 0x22, 0x33, 0x44, 0x55]);
 }
+
+#[test]
+fn rsc_6ac694_append_null_recovery_output_skips_following_bank_probe() {
+    let mut f = Fixture::new();
+    for p in 0..3 { f.medium.put(Bank::Zero, p, 10 + p as u16, 1); }
+    f.medium.put(Bank::One, 0, 9, 1);
+    let appended = f.append(0).unwrap();
+    assert_eq!((appended.bank, appended.position, appended.sequence), (Bank::One, Position(1), Sequence(10)));
+    assert_eq!(f.checks.seen, vec![12, 9, 12]);
+}
