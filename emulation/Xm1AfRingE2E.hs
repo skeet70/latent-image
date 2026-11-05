@@ -318,7 +318,7 @@ run options = do
           , "event_origin" .= (if genuine then String "ordinary-af" else String "synthetic-fallback")
           , "ordinary_af_observed" .= genuine, "half_press_accepted" .= halfPressAccepted, "synthetic_trigger_count" .= (if genuine then 0 else 300 :: Int)
           , "exclusive_model" .= object
-              [ "uncontended_cpu0_local_monitor_exercised" .= (not genuine && not (ringContentionLoss result))
+              [ "cpu0_local_monitor_exercised" .= not genuine
               , "contention_or_preemption_established" .= False
               , "global_monitor_established" .= False
               , "global_monitor_relied_on" .= False
