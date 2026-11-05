@@ -1,19 +1,13 @@
 //! Refusal of behaviour a Cortex-R4F lacks or reports differently from the
 //! Cortex-R5F that FujiMod opens (docs/principles.md, scope and evidence).
 //!
-//! A block hook on every core records each newly entered block; after each
-//! run window the guard decodes those blocks and refuses A32 SDIV/UDIV,
-//! PLDW, reads of the CP15 c0 ID registers, CP15 c15 other than the stock
-//! data-cache invalidate `c15,c5,0`, and c9 TCM selectors other than the
-//! `c9,c1,{0,1}` region registers. After any block that writes CP15 c6, it
-//! refuses an enabled MPU region 12-15. A block rewritten in place with the
-//! same address and length is decoded once.
+//! Translation admission runs before generated code executes, and repeats
+//! after code invalidation. MPU region state is checked after each run window.
 
 use fujimod_emulator::board::Board;
 use fujimod_emulator_cpu::arm::Coprocessor;
-use fujimod_emulator_cpu::{Block, Hook, HookId, HookRange};
+use fujimod_emulator_cpu::{Hook, HookId, HookRange};
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::ffi::c_void;
 use std::fmt;
 
@@ -80,45 +74,46 @@ pub fn classify_t32(word: u32) -> (Option<Refusal>, bool) {
 }
 
 #[derive(Default)]
-struct Entered {
-    seen: HashSet<(u64, u32, Option<bool>)>,
-    pending: Vec<Block>,
+struct Admission {
+    refusal: Option<(Refusal, u64, u32)>,
 }
 
 struct CoreHook {
     core: usize,
-    entered: Box<RefCell<Entered>>,
+    admission: Box<RefCell<Admission>>,
     hook: Option<HookId>,
 }
 
-unsafe fn entered(block: Block, data: *mut c_void) {
-    let entered = unsafe { &*data.cast::<RefCell<Entered>>() };
-    let mut entered = entered.borrow_mut();
-    if entered.seen.insert((block.address, block.bytes, block.thumb)) {
-        entered.pending.push(block);
+unsafe fn admit(address: u64, word: u32, thumb: bool, data: *mut c_void) -> bool {
+    let admission = unsafe { &*data.cast::<RefCell<Admission>>() };
+    let refusal = if thumb { classify_t32(word).0 } else { classify_a32(word).0 };
+    if let Some(refusal) = refusal {
+        admission.borrow_mut().refusal = Some((refusal, address, word));
+        false
+    } else {
+        true
     }
 }
 
 #[derive(Default)]
 pub struct Guard {
     cores: Vec<CoreHook>,
-    mpu_written: bool,
 }
 
 impl Guard {
-    /// Installs the block hooks; `seen` blocks survive a disarm.
+    /// Admission installation invalidates previously translated code.
     pub fn arm(&mut self, board: &Board) -> Result<(), String> {
         if self.cores.is_empty() {
             self.cores = (0..board.instruction_counts().len())
-                .map(|core| CoreHook { core, entered: Box::default(), hook: None })
+                .map(|core| CoreHook { core, admission: Box::default(), hook: None })
                 .collect();
         }
         for core in &mut self.cores {
             if core.hook.is_some() {
                 continue;
             }
-            let data = (&*core.entered as *const RefCell<Entered>).cast_mut().cast();
-            let hook = unsafe { board.cpu(core.core)?.install_hook(Hook::Block { callback: entered, data, range: HookRange::All }) }?;
+            let data = (&*core.admission as *const RefCell<Admission>).cast_mut().cast();
+            let hook = unsafe { board.cpu(core.core)?.install_hook(Hook::TranslationAdmission { callback: admit, data, range: HookRange::All }) }?;
             core.hook = Some(hook);
         }
         Ok(())
@@ -133,49 +128,13 @@ impl Guard {
         Ok(())
     }
 
-    /// Decodes the blocks entered since the last scan.
     pub fn scan(&mut self, board: &Board) -> Result<(), String> {
         for core in &self.cores {
-            let pending = std::mem::take(&mut core.entered.borrow_mut().pending);
-            for block in pending {
-                let mut bytes = vec![0; block.bytes as usize];
-                board.read_memory(core.core, block.address, &mut bytes)?;
-                let refuse = |refusal: Refusal, at: u64, word: u32| {
-                    Err(format!("R4F guard: {refusal} at {at:#010x} (word {word:#010x}, core {})", core.core))
-                };
-                if block.thumb == Some(true) {
-                    let halves: Vec<u16> = bytes.chunks_exact(2).map(|h| u16::from_le_bytes([h[0], h[1]])).collect();
-                    let mut index = 0;
-                    while index < halves.len() {
-                        let first = halves[index];
-                        if first >> 11 >= 0b11101 && index + 1 < halves.len() {
-                            let word = u32::from(first) << 16 | u32::from(halves[index + 1]);
-                            let (refusal, mpu) = classify_t32(word);
-                            if let Some(refusal) = refusal {
-                                return refuse(refusal, block.address + 2 * index as u64, word);
-                            }
-                            self.mpu_written |= mpu;
-                            index += 2;
-                        } else {
-                            index += 1;
-                        }
-                    }
-                } else {
-                    for (index, chunk) in bytes.chunks_exact(4).enumerate() {
-                        let word = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-                        let (refusal, mpu) = classify_a32(word);
-                        if let Some(refusal) = refusal {
-                            return refuse(refusal, block.address + 4 * index as u64, word);
-                        }
-                        self.mpu_written |= mpu;
-                    }
-                }
+            if let Some((refusal, at, word)) = core.admission.borrow().refusal {
+                return Err(format!("R4F guard: {refusal} at {at:#010x} (word {word:#010x}, core {})", core.core));
             }
         }
-        if std::mem::take(&mut self.mpu_written) {
-            self.check_regions(board)?;
-        }
-        Ok(())
+        self.check_regions(board)
     }
 
     /// Refuses an enabled region above the Cortex-R4 maximum on any core.

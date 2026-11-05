@@ -75,3 +75,111 @@ fn a_stopped_machine_refuses_a_physical_shutter_transition() {
     assert!(machine.set_shutter_position(Full).is_err());
     assert_eq!(pad_levels(&machine), before);
 }
+
+fn ram_program(machine: &Machine, core: usize, words: &[u32]) {
+    use fujimod_emulator_cpu::{Register, arm};
+    let bytes: Vec<_> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+    machine.session.board.write_physical(0x2000, &bytes).unwrap();
+    machine.session.board.write_register(core, Register::Pc, 0x4000_2000).unwrap();
+    machine.session.board.write_register(core, Register::Pstate, 0xd3).unwrap();
+    machine.session.board.write_register(core, arm::CORE[0], 9).unwrap();
+    machine.session.board.write_register(core, arm::CORE[1], 3).unwrap();
+}
+
+fn assert_guard_refusal(machine: &Machine) {
+    let failure = machine.require_running().unwrap_err();
+    assert!(failure.contains("R4F guard:"), "{failure}");
+}
+
+fn run_core(machine: &mut Machine, core: usize) {
+    use fujimod_emulator_cpu::{Register, Run};
+    let board = &machine.session.board;
+    let cpu = board.cpu(core).unwrap();
+    let pc = board.read_register(core, Register::Pc).unwrap();
+    let thumb = board.read_register(core, Register::Pstate).unwrap() & 0x20 != 0;
+    cpu.set_loop_window(true).unwrap();
+    let result = cpu.run(Run { begin: pc | u64::from(thumb), until: None, watchdog_us: 0, instructions: Some(100_000) })
+        .map(|_| ()).map_err(|error| error.to_string());
+    machine.failure = machine.guard.scan(board).and(result).err();
+}
+
+#[test]
+fn translation_admission_refuses_r5_only_instructions_on_each_core() {
+    for core in 0..2 {
+        for word in [0xe710_f110, 0xe730_f110, 0x0710_f110, 0xf590_f000, 0xee10_0fb0, 0xee1f_0f10, 0xee09_0f12] {
+            let mut machine = machine(&[]);
+            ram_program(&machine, core, &[word, SPIN]);
+            run_core(&mut machine, core);
+            assert_guard_refusal(&machine);
+            assert_eq!(machine.session.board.read_register(core, fujimod_emulator_cpu::arm::CORE[0]).unwrap(), 9);
+        }
+    }
+}
+
+#[test]
+fn host_rewrite_of_previously_admitted_ram_is_refused() {
+    for core in 0..2 {
+        let mut machine = machine(&[]);
+        ram_program(&machine, core, &[0xe1a0_0000, SPIN]);
+        run_core(&mut machine, core);
+        machine.require_running().unwrap();
+        ram_program(&machine, core, &[0xe710_f110, SPIN]);
+        run_core(&mut machine, core);
+        assert_guard_refusal(&machine);
+        assert_eq!(machine.session.board.read_register(core, fujimod_emulator_cpu::arm::CORE[0]).unwrap(), 9);
+    }
+}
+
+#[test]
+fn guest_rewrite_of_previously_admitted_ram_is_refused() {
+    for core in 0..2 {
+        let mut machine = machine(&[]);
+        ram_program(&machine, core, &[0xe1a0_0000, SPIN]);
+        run_core(&mut machine, core);
+        machine.require_running().unwrap();
+        let writer = [0xe582_3000u32, 0xe12f_ff12];
+        machine.session.board.write_physical(0x3000, &writer.into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>()).unwrap();
+        for (register, value) in [(fujimod_emulator_cpu::Register::Pc, 0x4000_3000), (fujimod_emulator_cpu::arm::CORE[2], 0x4000_2000), (fujimod_emulator_cpu::arm::CORE[3], 0xe710_f110)] {
+            machine.session.board.write_register(core, register, value).unwrap();
+        }
+        run_core(&mut machine, core);
+        assert_guard_refusal(&machine);
+        assert_eq!(machine.session.board.read_register(core, fujimod_emulator_cpu::arm::CORE[0]).unwrap(), 9);
+    }
+}
+
+#[test]
+fn admission_does_not_veto_exact_loop_acceleration() {
+    use fujimod_emulator_cpu::{arm, loops::LoopMode};
+    let mut machine = machine(&[]);
+    ram_program(&machine, 0, &[0xe592_1000, 0xe311_0001, 0x0aff_fffc, SPIN]);
+    machine.session.board.write_register(0, arm::CORE[2], 0x4000_4000).unwrap();
+    machine.session.board.write_physical(0x4000, &0u32.to_le_bytes()).unwrap();
+    machine.session.board.set_loop_mode(LoopMode::Accelerate).unwrap();
+    run_core(&mut machine, 0);
+    machine.require_running().unwrap();
+    assert!(machine.session.board.loop_statistics().unwrap()[0]["loop_accelerated_instructions"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn thumb_coprocessor_admission_precedes_register_effects() {
+    for core in 0..2 {
+        let mut machine = machine(&[]);
+        ram_program(&machine, core, &[SPIN]);
+        machine.session.board.write_physical(0x2000, &[0x10, 0xee, 0xb0, 0x0f, 0xfe, 0xe7]).unwrap();
+        machine.session.board.write_register(core, fujimod_emulator_cpu::Register::Pstate, 0xf3).unwrap();
+        run_core(&mut machine, core);
+        assert_guard_refusal(&machine);
+        assert_eq!(machine.session.board.read_register(core, fujimod_emulator_cpu::arm::CORE[0]).unwrap(), 9);
+    }
+}
+
+#[test]
+fn an_enabled_r5_only_mpu_region_is_still_refused() {
+    for core in 0..2 {
+        let mut machine = machine(&[]);
+        ram_program(&machine, core, &[0xe3a0_000c, 0xee06_0f12, 0xe3a0_0001, 0xee06_0f51, SPIN]);
+        run_core(&mut machine, core);
+        assert_guard_refusal(&machine);
+    }
+}
