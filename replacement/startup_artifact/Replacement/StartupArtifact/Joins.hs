@@ -747,7 +747,7 @@ reason text = ObservationQualified (slotsText <> "; " <> text <> "; qualified by
 kernelSlotPublisher :: Join JoinKind
 kernelSlotPublisher = Join KernelSlotPrimaryPublisher (Set.fromList [KernelSlotBodies, PrimaryPublisher])
   (slotCarriers LoaderA ++ [at LoaderA 0x40430 0x409ac])
-  (reason ("the publisher hashes the canonical loader A (emulation/Emulation/PrimaryInitializerSource.hs:110-113) and its consumer source pins the stock +0x1618 words at 0x412bc (emulation/Emulation/PrimaryInitializerConsumerSource.hs:41); the kernel-slot admission hashes loader A over the publisher carrier; " <> rebaseText
+  (reason ("the publisher hashes the canonical loader A (emulation/Emulation/PrimaryInitializerSource.hs:110-113) and its consumer source requires root slot +0x1618 to publish the entry 0x412bc (emulation/Emulation/PrimaryInitializerConsumerSource.hs:91-92); the kernel-slot admission hashes loader A over the publisher carrier; " <> rebaseText
     <> "; the descriptor consumer 0x725b74 calls +0x1618 through root slot 0x1618, and primary-publisher-slot-callers-leave-clobbers-dead checks that it and every direct caller in the publisher's footprint read no state the entered bodies may change"))
   [publishedSlotEntries, callsEnterAtEntries PrimaryPublisher, callersScratchDead PrimaryPublisher, differsOnlyInCarriers LoaderA]
 

@@ -496,9 +496,8 @@ step contract core1Identity (Machine before bytes pendingEvents) after = do
   word <- readMemory bytes (fromIntegral pc)
   let inPair = pc >= 0x7235d8 && pc < 0x723790
       inCarrier = pc >= 0x10400 && pc < 0x11800
-      inHelper = any (\(low,high) -> pc >= low && pc < high) [(0x41140,0x4118c),(0x412bc,0x41320),(0x427b8,0x42830),(0xd1140,0xd118c),(0xd12bc,0xd1320),(0xd27b8,0xd2830)]
       admittedPair = case pairRole contract of I.Retained -> inPair; I.Owned -> pc `elem` [0x7235d8,0x7236b0] || inCarrier
-  require (admittedPair || inHelper) "critical boundary executed an undeclared instruction"
+  require (admittedPair || retainedLoaderInstruction (pairRole contract) pc) "critical boundary executed an undeclared instruction"
   if not (condition cpsr (word `shiftR` 28)) then unchanged else
     case A.decode pc word of
       A.Branch _ link target -> finish (set [(A.lr,pc+4) | link]) target cpsr bytes events
@@ -565,7 +564,8 @@ step contract core1Identity (Machine before bytes pendingEvents) after = do
         | word .&. 0x0ffffff0 `elem` [0x0121f000,0x0128f000,0x012cf000] -> do
             let reg = A.Reg (fromIntegral (word .&. 15)); mask = case (word `shiftR` 16) .&. 15 of 1 -> 0xff; 8 -> 0xff000000; 12 -> 0xffff0000; _ -> 0
             finish oldRegisters (pc+4) ((cpsr .&. complement mask) .|. (readReg reg .&. mask)) bytes events
-        | word == 0xee121e10 && pc `elem` [0x427b8,0xd27b8] -> finish (set [(A.Reg 1,core1Identity)]) (pc+4) cpsr bytes events
+        | word .&. 0x0fff0fff == 0x0e120e10 && (word `shiftR` 12) .&. 15 /= 15 ->
+            finish (set [(A.Reg (fromIntegral ((word `shiftR` 12) .&. 15)),core1Identity)]) (pc+4) cpsr bytes events
         | word .&. 0x0fffffff == 0x0e072fba && pc `elem` [0x427ec,0x42818,0xd27ec,0xd2818] -> unchanged
         | word .&. 0x0ff00fff == 0x01900f9f -> do
             let base = A.Reg (fromIntegral ((word `shiftR` 16) .&. 15)); destination = A.Reg (fromIntegral ((word `shiftR` 12) .&. 15))

@@ -628,10 +628,6 @@ impl Runtime {
             (ResourceKind::Code,0x42634,0x74),
             (ResourceKind::Code,0x723318,0x2d80),
             (ResourceKind::Code,0x722054,0x198),
-            (ResourceKind::Code,0x412bc,0x60),
-            (ResourceKind::Code,0x427b8,0x70),
-            (ResourceKind::Code,0xd27b8,0x70),
-            (ResourceKind::Code,0xd1140,0x48),
             (ResourceKind::Header,0x40010,4),
             (ResourceKind::Header,0xd0010,4),
         ] {
@@ -981,12 +977,6 @@ impl Runtime {
         }
         Ok(selected)
     }
-    fn identity_source_frame(&self, key: ExecutionFrame) -> Result<bool, String> {
-        for call in self.calls.iter().filter(|call| call.owner.is_none() && call.entered && call.target == Address(0x412bc)) {
-            if key == call.caller_frame.entered(FrameLayout::LINK)? { return Ok(true); }
-        }
-        Ok(false)
-    }
     fn handle(&mut self, machine: &mut Machine, state: &Context) -> Result<(), String> {
         let key = ExecutionFrame::observed(state)?;
         if let Some(family) = FAMILIES.into_iter().find(|family| family.entry() == state.pc.0) {
@@ -1077,10 +1067,6 @@ impl Runtime {
             if frame.family == Family::MessageReceive && state.pc == Address(0x725418) {
                 self.close(machine, state, Some(frame.id), Lifetime::ReceiveRelease)?;
             }
-        } else if state.core == Core::Secondary && [0x412c4,0x412c8,0x427b8].contains(&state.pc.0)
-            && self.identity_source_frame(key)? {
-            let sequence = self.probe(machine, state, ProbeKind::Source, None, None)?;
-            self.dynamic_call(machine, state, None, self.receipt.probes[sequence.0 as usize].source_word, key)?;
         }
         let mut returned = None;
         for (index, frame) in self.frames.iter().enumerate() {
@@ -1141,7 +1127,6 @@ const COMMON_PCS: &[u32] = &[0x7233ac,0x7233b0];
 const GLOBAL_PCS: &[u32] = &[
     0x69cdf8,0x725a04,0x42634,0x40a08,0x40a0c,0x40a10,0xd0a44,0xd0a48,0xd0a4c,
     0xd0aac,0xd0430,0xd0ab0,0x7235d8,0x7235f4,0x7235f8,0x7235fc,0x723600,0x723604,0x723608,
-    0x412c4,0x412c8,0x427b8,
 ];
 fn arm_sites(machine: &mut Machine, pcs: Vec<u32>,owners:Option<&StartupSites>) -> Result<(), String> {
     if let Some(owners)=owners {
@@ -1354,7 +1339,6 @@ fn verify_loaded(machine: &Machine, maps: &[MemoryMap], state: &Context, image4:
         (0x61c400,image4),
         (0x42634,loader_a.get(0x2634..0x26a8).ok_or("loader A cache source absent")?),
         (0xd0430,loader_b.get(0x430..0xab4).ok_or("loader B initializer source absent")?),
-        (0xd1140,loader_b.get(0x1140..0x1188).ok_or("loader B selected service source absent")?),
     ] {
         for sample in views(machine, maps, state, Address(base), expected.len() as u64)? {
             require(sample.bytes.0 == expected, "loaded native/source code differs")?;

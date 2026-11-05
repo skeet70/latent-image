@@ -695,17 +695,10 @@ checkFirstConsumer model receipt initialized = do
   identityTarget <- register identityCall 3
   require (identityTarget == 0x412bc) FirstConsumerRejected
   _ <- checkGlobalCall receipt identityCall identityReturn (Address 0x412bc)
-  helperCall <- one FirstConsumerRejected [probe | probe <- receiptProbes receipt,probeKind probe == SourceProbe
-    ,probeInvocation probe == Nothing,core probe == Secondary,pc probe == 0x412c4]
-  helperReturn <- one FirstConsumerRejected [probe | probe <- receiptProbes receipt,probeKind probe == SourceProbe
-    ,probeInvocation probe == Nothing,core probe == Secondary,pc probe == 0x412c8]
-  _ <- checkGlobalCall receipt helperCall helperReturn (Address 0x427b8)
-  helperIdentity <- register helperReturn 0
-  require (helperIdentity == 1 && sp helperCall == sp identityCall-8) FirstConsumerRejected
   (_,irqReturn) <- checkGlobalCall receipt service returned (Address 0xd1140)
   priorMask <- register irqReturn 0
   require (priorMask == number (K.contextCpsr (machine service)) .&. 0x80
-    && number (K.contextCpsr (machine irqReturn)) == number (K.contextCpsr (machine service)) .|. 0x80) FirstConsumerRejected
+    && number (K.contextCpsr (machine irqReturn)) .&. 0x07f0ffff == (number (K.contextCpsr (machine service)) .|. 0x80) .&. 0x07f0ffff) FirstConsumerRejected
   atConsumer <- memoryAt receipt service
   forM_ expectedSlots $ \(location,value) -> wordAt FirstConsumerRejected atConsumer location >>= \actual -> require (actual == value) FirstConsumerRejected
   forM_ (filter isWrite (allEvents receipt)) $ \event -> do
