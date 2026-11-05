@@ -1,5 +1,7 @@
 # Owned menu engine, increment 5: Fn and fallback key gates (#128)
 
+Status: host-qualified at `a2853b2d` ([E-MENU-ENGINE-INC5-HOST-ORACLE-150](../docs/evidence.jsonl)), with eight menu observations and 48 passing host oracle cases. Configs and required controls landed in `05c77716`, `59860071`, `f43185c4`, and `a2853b2d`. No new fallback class was reached. Page-step and multi-level ownership do not expand.
+
 ## Scope and sources
 
 The Fn landing is an already owned ordinary open, not a page step or multi-level event. A live-view Fn release opens registry slot `0x63`, with stage arguments `(1, 0x63, 0, 0)`, and lands on ISO `(99, 321, 17)`. Setting `UI_W(0xff78)` to 1 is only one condition of the controller-75 state-21 gate. It does not make that gate unconditional.
@@ -72,9 +74,9 @@ The `fn` oracle passes the full owned-engine block comparison against stock. It 
 
 `0xd4dd2c` calls the engine before the kind-1 arm of `0xd4d7a4`. The latter's Fn flag write is outside the engine block `[0x009571d0, 0x00957600)`. It remains the named record-mode/application shim around the engine, not an effect the engine should reproduce. Its removal requires owning those record-mode and settings duties, not a special case for ISO in the generic engine. The pinned stage-source receipt is `private-data/scratch/ControllerStrategy/inc5/decomp-stage.txt`.
 
-The first fresh host qualification, `private-data/scratch/ControllerStrategy/inc5/host-oracle-05c77716/owner-test.log`, reports four passing tests, no failures, and `owner exit=0`: all 46 receipt cases, the 25 controls, the existing three injected refusals, and receipt-block round trips. It confirms the two Fn control failures before both are made mandatory. `MenuEngineClass.hs` and the production engine remain intentionally unchanged for an already owned ordinary open.
+The final fresh host qualification, `private-data/scratch/ControllerStrategy/inc5/host-oracle-a2853b2d/owner-test.log`, reports four passing tests, no failures, and `owner exit=0`: all 48 receipt cases, all 25 controls with their required failures, the existing three injected refusals, and receipt-block round trips. The three Fn cases are already owned `Open`, `RowMove Down`, and `Push`. `MenuEngineClass.hs` and the production engine remain intentionally unchanged: no new fallback class was reached by these paths.
 
-The 47-case host qualification at `private-data/scratch/ControllerStrategy/inc5/host-oracle-59860071/owner-test.log` adds `fn-auto-open`; all four tests pass with `owner exit=0`. That push has seven service calls, 44 snapshot writes, and no last-move write. `NoPushClassifier` fails it at block offset `+0x428`, returning classifier 1 instead of stock's 2. The control is now required to fail this case. This remains the existing owned `Push` class, not new ownership.
+The AUTO ISO push has seven service calls, 44 snapshot writes, and no last-move write. `NoPushClassifier` fails it at block offset `+0x428`, returning classifier 1 instead of stock's 2. ISO DOWN has three service calls, 44 snapshot writes, and two last-move writes; `NoLastMove` fails it against stock's `(class 321, token 7)`. Both failures are required alongside the two Fn-open controls.
 
 ## Reproduction
 
@@ -90,4 +92,4 @@ XM1_EMULATOR_SLOTS=1 devenv shell -- bazel-bin/emulation/xm1-viewer \
   --receipt-output "$PWD/private-data/scratch/ControllerStrategy/inc5/NAME"
 ```
 
-The host generator accepts `fn=private-data/scratch/ControllerStrategy/inc5/fn:1,63,0`. `private-data/scratch/ControllerStrategy/inc5/host-cases.sh` adds it to all 45 existing receipt cases, regenerates the private tree and cases, compiles the owned engine's receipt test, and runs its owner tests. It writes only into a fresh `host-oracle-<sha>` directory.
+`private-data/scratch/ControllerStrategy/inc5/host-cases.sh` adds `fn=private-data/scratch/ControllerStrategy/inc5/fn:1,63,0`, `fn-down=private-data/scratch/ControllerStrategy/inc5/fn-down:4,63,1`, and `fn-auto-open=private-data/scratch/ControllerStrategy/inc5/fn-auto-open:e,63,1d` to all 45 existing receipt cases, regenerates the private tree and cases, compiles the owned engine's receipt test, and runs its owner tests. It writes only into a fresh `host-oracle-<sha>` directory.
