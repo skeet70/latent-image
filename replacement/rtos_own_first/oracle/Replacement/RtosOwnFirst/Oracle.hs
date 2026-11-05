@@ -44,6 +44,8 @@ module Replacement.RtosOwnFirst.Oracle
   , reportWrites
   , CaseKey (..)
   , runSlot
+  , runRows
+  , sampleKeys
   , Outcome (..)
   , outcomeOf
   , statusCounts
@@ -55,7 +57,7 @@ import Control.Monad (forM, unless)
 import Data.Aeson (Value, eitherDecodeStrict')
 import Data.Bits (shiftL, shiftR, testBit, xor, (.&.), (.|.))
 import qualified Data.ByteString as B
-import Data.List (find)
+import Data.List (find, nub)
 import qualified Data.Map.Strict as M
 import Data.Maybe (isNothing, mapMaybe)
 import Data.Word (Word32, Word64, Word8)
@@ -273,6 +275,28 @@ caseGrid slot = zipWith timed (pairs (stream (0x2545f491 + index))) (structured 
     timed (timerBase, timeOffset) row = row {rowTimerBase = timerBase, rowTimeOffset = timeOffset}
     pairs (a : b : rest) = (a, b) : pairs rest
     pairs _ = []
+
+-- | A fixed sample of the slot's structured rows: the first row of three entry states, then the
+-- first row holding each grid value with I clear, dispatch-enabled values also with I set, and
+-- every current-task and T+0xe byte pair.
+sampleKeys :: Slot -> [CaseKey]
+sampleKeys slot = nub [key | predicate <- predicates, Just key <- [firstWhere predicate]]
+  where
+    grid = caseGrid slot
+    structured = take (length grid - randomRowsPerSlot) (zip (map CaseKey [0 ..]) grid)
+    firstWhere predicate = fst <$> find (predicate . snd) structured
+    masked = entryIrqMasked . rowEntry
+    onEntry predicate = predicate . rowEntry
+    predicates =
+      [ onEntry (\e -> entryMode e == Supervisor && not (entryIrqMasked e) && not (entryFiqMasked e) && entryFlags e == 0)
+      , masked
+      , onEntry (\e -> entryMode e == System && entryFiqMasked e && entryFlags e /= 0)
+      ]
+        ++ [\row -> not (masked row) && rowContext row == value | value <- contextValues]
+        ++ [\row -> masked row == irq && rowDispatch row == value | value <- dispatchValues, irq <- [False, True]]
+        ++ [\row -> not (masked row) && rowTask row == task && rowFlagByte row == byte | task <- taskChoices, byte <- flagBytes]
+        ++ [\row -> not (masked row) && rowR0 row == value | value <- argumentValues]
+        ++ [\row -> not (masked row) && rowIdentity row == Just value | value <- identityValues]
 
 chunks :: Int -> [a] -> [[a]]
 chunks size items = case splitAt size items of
@@ -589,8 +613,13 @@ batchLimit = 4096
 
 -- | Runs the slot's grid against @body@ in @directory@, one runner session per 4096 cases.
 runSlot :: FilePath -> FilePath -> String -> Domain -> Slot -> Body -> IO (M.Map CaseKey Run)
-runSlot runner directory role domain slot body = do
-  let keyed = zip (map CaseKey [0 ..]) (caseGrid slot)
+runSlot runner directory role domain slot = runRows runner directory role domain slot (map CaseKey [0 .. length (caseGrid slot) - 1])
+
+-- | 'runSlot' over the given rows of the slot's grid.
+runRows :: FilePath -> FilePath -> String -> Domain -> Slot -> [CaseKey] -> Body -> IO (M.Map CaseKey Run)
+runRows runner directory role domain slot selected body = do
+  let grid = M.fromList (zip (map CaseKey [0 ..]) (caseGrid slot))
+      keyed = [(key, row) | key <- selected, Just row <- [M.lookup key grid]]
   results <- forM (zip [0 :: Int ..] (chunks' batchLimit keyed)) $ \(batch, rows) -> do
     let batchDirectory = directory </> ("batch-" ++ show batch)
         labelled = [(caseLabel role domain slot key, key) | (key, _) <- rows]

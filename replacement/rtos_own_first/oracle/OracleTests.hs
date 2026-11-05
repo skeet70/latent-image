@@ -138,45 +138,61 @@ pureChecks tableA =
       , check "one mutant per slot and two equivalents" (sort (map controlSlot mutants) == slots && length equivalents == 2 && all ((== MustFail) . controlExpectation) mutants && all ((== MustPass) . controlExpectation) equivalents)
       ]
 
--- | Runs a slot's grid against the owned body and each of its controls, with the owned runs as the
+-- | Every grid row with the controls alone, or 'sampleKeys' with the reference repeated as a control too.
+data Scope = FullGrid | Sample deriving (Eq)
+
+scopeRows :: Scope -> Slot -> [CaseKey]
+scopeRows scope slot = case scope of
+  FullGrid -> map CaseKey [0 .. length (caseGrid slot) - 1]
+  Sample -> sampleKeys slot
+
+-- | Runs a slot's rows against the owned body and each of its controls, with the owned runs as the
 -- reference; returns the failures and the slot's report.
-nativeChecks :: FilePath -> FilePath -> Word32 -> Domain -> DomainTable -> OwnedDomain -> Slot -> IO ([String], Maybe SlotReport)
-nativeChecks runner temporary fill domain table owned slot = do
+nativeChecks :: Scope -> FilePath -> FilePath -> Word32 -> Domain -> DomainTable -> OwnedDomain -> Slot -> IO ([String], Maybe SlotReport)
+nativeChecks scope runner temporary fill domain table owned slot = do
   let name = domainLabel domain ++ " " ++ slotTag slot
+      run = runOnce scope runner temporary domain slot
+      report label control outcome = do
+        putStrLn
+          ( "     " ++ name ++ " " ++ label ++ ": " ++ show (outcomeCases outcome - outcomeMatches outcome) ++ " of " ++ show (outcomeCases outcome)
+              ++ " cases differ, " ++ show (outcomeDifferingReturned outcome) ++ " of them returned"
+          )
+        pure (Right control)
   case (,) <$> ownedBody owned slot <*> slotEntry table slot of
     Left problem -> pure ([name ++ ": " ++ problem], Nothing)
     Right (body, entry) -> do
-      reference <- runOnce runner temporary domain slot "owned" body
+      reference <- run "owned" body
       let baseline = [name ++ ": an owned run did not return" | not (allReturned reference)]
+      repeated <- if scope == Sample
+        then do
+          outcome <- outcomeOf reference <$> run "owned-repeat" body
+          (: []) <$> report "owned-repeat" (ControlResult "owned-repeat" MustPass "the reference body against itself" outcome) outcome
+        else pure []
       controls <- forM [control | control <- mutants ++ equivalents, controlSlot control == slot] $ \control ->
         case controlCode domain table control >>= \code -> replaceEntry fill code body of
           Left problem -> pure (Left (name ++ " " ++ controlName control ++ ": " ++ problem))
           Right subject -> do
-            outcome <- outcomeOf reference <$> runOnce runner temporary domain slot (controlName control) subject
-            putStrLn
-              ( "     " ++ name ++ " " ++ controlName control ++ ": " ++ show (outcomeCases outcome - outcomeMatches outcome) ++ " of " ++ show (outcomeCases outcome)
-                  ++ " cases differ, " ++ show (outcomeDifferingReturned outcome) ++ " of them returned"
-              )
-            pure (Right (ControlResult (controlName control) (controlExpectation control) (controlNote control) outcome))
-      let results = [result | Right result <- controls]
+            outcome <- outcomeOf reference <$> run (controlName control) subject
+            report (controlName control) (ControlResult (controlName control) (controlExpectation control) (controlNote control) outcome) outcome
+      let results = [result | Right result <- repeated ++ controls]
           failures = baseline ++ [problem | Left problem <- controls] ++ [name ++ " " ++ resultControl result ++ " does not hold" | result <- results, not (holds result)]
       pure (failures, Just (SlotReport domain slot entry reference (outcomeOf reference reference) results))
 
-runOnce :: FilePath -> FilePath -> Domain -> Slot -> String -> Body -> IO (M.Map CaseKey Run)
-runOnce runner temporary domain slot role body = do
+runOnce :: Scope -> FilePath -> FilePath -> Domain -> Slot -> String -> Body -> IO (M.Map CaseKey Run)
+runOnce scope runner temporary domain slot role body = do
   let directory = temporary </> role ++ "-" ++ domainLabel domain ++ "-" ++ slotTag slot
-  runs <- runSlot runner directory role domain slot body
+  runs <- runRows runner directory role domain slot (scopeRows scope slot) body
   removeDirectoryRecursive directory
   pure runs
 
 -- | A +0x14c body of fill words stops on every case: as the stock body it fails the run, and as a mutant it does not hold.
-stoppingChecks :: FilePath -> FilePath -> Word32 -> DomainTable -> OwnedDomain -> IO [Bool]
-stoppingChecks runner temporary fill table owned =
+stoppingChecks :: Scope -> FilePath -> FilePath -> Word32 -> DomainTable -> OwnedDomain -> IO [Bool]
+stoppingChecks scope runner temporary fill table owned =
   case (,,) <$> ownedBody owned S14c <*> (ownedBody owned S14c >>= replaceEntry fill []) <*> slotEntry table S14c of
     Left problem -> (: []) <$> check ("stopping body: " ++ problem) False
     Right (body, stopping, entry) -> do
-      ownedRuns <- runOnce runner temporary DomainA S14c "owned-reference" body
-      stoppingRuns <- runOnce runner temporary DomainA S14c "stopping" stopping
+      ownedRuns <- runOnce scope runner temporary DomainA S14c "owned-reference" body
+      stoppingRuns <- runOnce scope runner temporary DomainA S14c "stopping" stopping
       let asMutant = ControlResult "stopping" MustFail "fill words only" (outcomeOf ownedRuns stoppingRuns)
           asStock = SlotReport DomainA S14c entry stoppingRuns (outcomeOf stoppingRuns ownedRuns) []
       sequence
@@ -191,21 +207,26 @@ main = do
   arguments <- getArgs
   temporary <- getEnv "TEST_TMPDIR"
   case arguments of
-    [runner, regionsPath, binA, symbolsA, binB, symbolsB] -> do
+    [scopeName, runner, regionsPath, binA, symbolsA, binB, symbolsB] -> do
+      scope <- case scopeName of
+        "full" -> pure FullGrid
+        "sample" -> pure Sample
+        _ -> fail ("unknown scope " ++ scopeName)
       table <- either fail pure . parseRegionTable =<< B.readFile regionsPath
       linked <- mapM (\(bin, symbols) -> LinkedDomain <$> B.readFile bin <*> B.readFile symbols) [(binA, symbolsA), (binB, symbolsB)]
       pureResults <- sequence (pureChecks (domainTable table DomainA))
+      sampleResult <- check "each slot's sample is at most 40 structured rows" (and [not (null keys) && length keys <= 40 && all (\(CaseKey index) -> index < length (caseGrid slot) - 64) keys | slot <- slots, let keys = sampleKeys slot])
       owned <- forM (zip domains linked) $ \(domain, linkedDomain) ->
         either (fail . ((domainLabel domain ++ ": ") ++) . show) pure (ownedDomain (tableFill table) domain (domainTable table domain) linkedDomain)
       stopping <- case owned of
-        ownedA : _ -> stoppingChecks runner temporary (tableFill table) (domainTable table DomainA) ownedA
+        ownedA : _ -> stoppingChecks scope runner temporary (tableFill table) (domainTable table DomainA) ownedA
         [] -> pure [False]
       checked <- fmap concat . forM (zip domains owned) $ \(domain, ownedRows) ->
-        mapM (nativeChecks runner temporary (tableFill table) domain (domainTable table domain) ownedRows) slots
+        mapM (nativeChecks scope runner temporary (tableFill table) domain (domainTable table domain) ownedRows) slots
       let failures = concatMap fst checked
           reports = [report | (_, Just report) <- checked]
       nativeResult <- check "owned bodies return and the controls hold in both loaders" (null failures && length reports == 2 * length slots)
       mapM_ (putStrLn . ("     " ++)) failures
       verdictResult <- check "the verdict over every slot report exits 0" (verdictExit reports == ExitSuccess)
-      unless (and (nativeResult : verdictResult : pureResults ++ stopping)) exitFailure
-    _ -> fail "usage: own-first-oracle-tests RUNNER REGIONS BIN_A SYMBOLS_A BIN_B SYMBOLS_B"
+      unless (and (nativeResult : verdictResult : sampleResult : pureResults ++ stopping)) exitFailure
+    _ -> fail "usage: own-first-oracle-tests full|sample RUNNER REGIONS BIN_A SYMBOLS_A BIN_B SYMBOLS_B"

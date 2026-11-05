@@ -71,22 +71,32 @@ haskell_binary(
     ],
 )
 
-haskell_test(
-    name = "own-first-oracle-tests",
-    size = "large",
-    srcs = ["OracleTests.hs"],
-    main_file = "OracleTests.hs",
-    args = ["$(rootpath //emulation:native-runner)"] + ["$(rootpath %s)" % linked for linked in _LINKED],
-    data = _LINKED + ["//emulation:native-runner"],
-    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    deps = [
-        ":own-first-oracle-lib",
-        "//emulation:native-observation",
-        "//host:base",
-        "//host:bytestring",
-        "//host:containers",
-        "//host:directory",
-        "//host:filepath",
-        "//replacement/rtos_own_first/stage:own-first-artifact",
-    ],
-)
+_TEST_DEPS = [
+    ":own-first-oracle-lib",
+    "//emulation:native-observation",
+    "//host:base",
+    "//host:bytestring",
+    "//host:containers",
+    "//host:directory",
+    "//host:filepath",
+    "//replacement/rtos_own_first/stage:own-first-artifact",
+]
+
+[
+    haskell_test(
+        name = name,
+        size = size,
+        srcs = ["OracleTests.hs"],
+        main_file = "OracleTests.hs",
+        args = [scope, "$(rootpath //emulation:native-runner)"] + ["$(rootpath %s)" % linked for linked in _LINKED],
+        data = _LINKED + ["//emulation:native-runner"],
+        ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+        tags = tags,
+        deps = _TEST_DEPS,
+    )
+    for name, size, scope, tags in [
+        ("own-first-oracle-tests", "medium", "sample", []),
+        # Every grid row of every slot; about ten minutes.
+        ("own-first-oracle-full-tests", "large", "full", ["manual"]),
+    ]
+]
