@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "QP4BrbljzFBC2ra2AuDB1upqMtkL43Gfz8y5RmUwLKU=",
+        "bzlTransitiveDigest": "I1PnX1UjRRh0EtX4qvLRftqhe4+10MnvPGQpph0F9Lc=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -598,6 +598,8 @@
                 "@@//emulation:fujimod-xm1/src/queue_boundary.rs": "//emulation:fujimod-xm1/src/queue_boundary.rs",
                 "@@//emulation:fujimod-xm1/src/r4f.rs": "//emulation:fujimod-xm1/src/r4f.rs",
                 "@@//emulation:fujimod-xm1/src/ram_push.rs": "//emulation:fujimod-xm1/src/ram_push.rs",
+                "@@//emulation:fujimod-xm1/src/record_medium.rs": "//emulation:fujimod-xm1/src/record_medium.rs",
+                "@@//emulation:fujimod-xm1/src/record_medium_main.rs": "//emulation:fujimod-xm1/src/record_medium_main.rs",
                 "@@//emulation:fujimod-xm1/src/render.rs": "//emulation:fujimod-xm1/src/render.rs",
                 "@@//emulation:fujimod-xm1/src/run.rs": "//emulation:fujimod-xm1/src/run.rs",
                 "@@//emulation:fujimod-xm1/src/reset_observation.rs": "//emulation:fujimod-xm1/src/reset_observation.rs",
@@ -646,7 +648,7 @@
               "nix_license_path": "",
               "repository": "@@_main~lab_dependencies~lab_nixpkgs//:lab_nixpkgs",
               "repositories": {},
-              "build_file_content": "exports_files([\"bin/fujimod-xm1\", \"bin/fujimod-xm1-composed-startup\", \"bin/fujimod-xm1-heap-observe\", \"bin/fujimod-xm1-heap-replay\", \"bin/fujimod-xm1-idle-tasks\", \"bin/fujimod-xm1-kernel-install\", \"bin/fujimod-xm1-loader-continuations\", \"bin/fujimod-xm1-native-case\", \"bin/fujimod-xm1-own-first-pair\", \"bin/fujimod-xm1-provenance\", \"bin/fujimod-xm1-queue-boundary\", \"bin/fujimod-xm1-ram-push\", \"bin/fujimod-xm1-root-compact\", \"bin/fujimod-xm1-rtos-census\", \"bin/fujimod-xm1-startup-callers\", \"bin/fujimod-xm1-startup-consumers\", \"bin/fujimod-xm1-startup-dispatch\", \"bin/fujimod-xm1-startup-tasks\", \"bin/fujimod-xm1-task-storage\", \"bin/fujimod-xm1-toggle\", \"bin/fujimod-xm1-updater\", \"share/fujimod-xm1/store-path\", \"share/fujimod-xm1/xm1-150.json\"], visibility = [\"//visibility:public\"])\nfilegroup(name = \"test-harnesses\", srcs = glob([\"libexec/fujimod-xm1-tests/*\"]), visibility = [\"//visibility:public\"])\nfilegroup(name = \"test-manifest\", srcs = [\"libexec/fujimod-xm1-tests/manifest\"], visibility = [\"//visibility:public\"])",
+              "build_file_content": "exports_files([\"bin/fujimod-xm1\", \"bin/fujimod-xm1-composed-startup\", \"bin/fujimod-xm1-heap-observe\", \"bin/fujimod-xm1-heap-replay\", \"bin/fujimod-xm1-idle-tasks\", \"bin/fujimod-xm1-kernel-install\", \"bin/fujimod-xm1-loader-continuations\", \"bin/fujimod-xm1-native-case\", \"bin/fujimod-xm1-own-first-pair\", \"bin/fujimod-xm1-provenance\", \"bin/fujimod-xm1-queue-boundary\", \"bin/fujimod-xm1-ram-push\", \"bin/fujimod-xm1-record-medium\", \"bin/fujimod-xm1-root-compact\", \"bin/fujimod-xm1-rtos-census\", \"bin/fujimod-xm1-startup-callers\", \"bin/fujimod-xm1-startup-consumers\", \"bin/fujimod-xm1-startup-dispatch\", \"bin/fujimod-xm1-startup-tasks\", \"bin/fujimod-xm1-task-storage\", \"bin/fujimod-xm1-toggle\", \"bin/fujimod-xm1-updater\", \"share/fujimod-xm1/store-path\", \"share/fujimod-xm1/xm1-150.json\"], visibility = [\"//visibility:public\"])\nfilegroup(name = \"test-harnesses\", srcs = glob([\"libexec/fujimod-xm1-tests/*\"]), visibility = [\"//visibility:public\"])\nfilegroup(name = \"test-manifest\", srcs = [\"libexec/fujimod-xm1-tests/manifest\"], visibility = [\"//visibility:public\"])",
               "nixopts": [
                 "--max-jobs",
                 "1",
