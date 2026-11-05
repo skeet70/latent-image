@@ -24,13 +24,15 @@ Exact `ui_m75_action_11`, `0xc6e658`, posts `(5, 4)` at controller 75 state 27 e
 
 Controller-75 state 27 has predecessors only in states 21, 28, and 29 in the increment-4 gate analysis. `ui_m75_action_274`, `0xc7a528`, is NONMATCHING. The state-21 branch is confirmed by instructions `0xc7a588..0xc7a5d4`: load `0x009544f8`, require 1, call `0x0061d154`, compare the open node id with 8 and `0x6a`, compare the candidate with -1 and `0x12`, then store halfword 21 to controller 75's state. Fn opens id `0x63`, so its flag store alone cannot take that branch.
 
-The ordinary ISO DOWN request uses id 1, not id 4 or the ISO page size 7. The concrete ISO-child prefix is `fn down down down right`: the three DOWN presses move cursor 17 to 20, and RIGHT selects the row-token-`0x1b` child. The child has id `0x24`, not either state-21 id. Closing and reopening an unrelated menu is not evidence for preserving the flag or entering state 21.
+The ordinary ISO DOWN request uses id 1, not id 4 or the ISO page size 7. The availability-aware ISO-child prefix is `fn down down right`: cursor 19 is hidden, so the two DOWN presses move 17 to 18 to 20. A third DOWN wraps to 0. RIGHT on row token `0x1b` selects the child with id `0x24`, not either state-21 id. The initial three-DOWN probes are retained as negative observations, not classified as child push/pop receipts. Closing and reopening an unrelated menu is not evidence for preserving the flag or entering state 21.
 
 Registry slots 8 and `0x6a` are null in the captured static registry, and none of its 332 decoded nodes has either id. [INFERENCE] A key path composed only of this ISO subtree's row moves, pushes, and pops cannot satisfy the node-id condition. This is not a proof that every possible application context or runtime-created node is unreachable. The controller-64 playback entry gate, `0x009503a0 == 6` at 57/0 event 49 or controller-57 state-38 events 81/82, is unchanged by opening ISO. No physical-key sequence into controller 64 state 8 is established here.
 
+Reassigning Fn does not supply the missing `0x6a` node through the decoded assignment menu. `0xd41844` maps stored property `0xfc == 0xc` to node `0x6a`, but the property's conversion table puts stored value `0xc` at row token 14, which the X-M1 Fn selector does not expose. The selector's row token 12 is labelled INSTANT AF and maps to stored value 8, not `0xc`. `ui_m74_action_46` handles stored 8 through `0xd0d3ac` and execution request `0x62`, not an open of `0x6a`. This distinction is between a menu row token and a stored setting value.
+
 ### Class 6: multi-level
 
-The controller-75 state-21 prerequisite is the same one above. State 25 is entered from state 22. NONMATCHING `ui_m75_action_286`, `0xc7abd8`, handles 75/25 event 50: candidate `0x33`, with `UI_W(0x10788) == 0`, posts `(0x10, 0x1d)`; a successful candidate advances to state 29. Exact `ui_m75_action_290`, `0xc7ade8`, handles 75/29 event 50: candidate `0x32`, zero `UI_W(0xcea8)` and zero `UI_W(0x10788)` post `(0x11, 0x1d)` and can return to state 21. These are candidate-result gates, not new key codes.
+The controller-75 state-21 prerequisite is the same one above. State 25 is entered from state 22. NONMATCHING `ui_m75_action_286`, `0xc7abd8`, handles 75/25 event 50: candidate `0x33`, with `UI_W(0x10788) == 0`, posts `(0x10, 0x1d)`; a successful candidate advances to state 29. Instructions `0xc7ac1c..0xc7ac64` confirm these tests and the post. Exact `ui_m75_action_290`, `0xc7ade8`, handles 75/29 event 50: candidate `0x32`, zero `UI_W(0xcea8)` and zero `UI_W(0x10788)` post `(0x11, 0x1d)` and can return to state 21. These are candidate-result gates, not new key codes.
 
 The other increment-4 routes remain distinct: state 4 requires a pushed node of class `0x26`, absent from the decoded nodes; the two settings-gated multi-level arms are dead behind exact constant-1 `0x006394d0`. Fn's ISO child is class `0x14a`, so it does not supply the class-`0x26` route. No concrete ISO-subtree sequence into states 21/22/25/29 is established, and no multi-level oracle is invented from a synthetic state write.
 
@@ -45,6 +47,24 @@ The other increment-4 routes remain distinct: state 4 requires a pushed node of 
 | 8, kind `0xa`/`0xb` on type 5/7 | A framed open node and one of those posts | ISO and its AUTO ISO children have type 9 |
 | 9, `NoChild`/`NoParent` posts | An actual kind-`0xe` leaf push or kind-`0xf` root pop | A key with no stage post is not such a case; the increment-6 injected refusal qualification is separate |
 
+## Observation receipts
+
+Each name below denotes `emulation/menu-oracle-<name>.json` and `private-data/scratch/ControllerStrategy/inc5/<name>/menu-observe.json`. Each observation ran once after acquiring a shared emulator slot; pre-observation `devenv` GC-root activation failures were retried without a guest run.
+
+| Name | Path, then observed key | Prediction and observed result | Oracle case and control |
+| --- | --- | --- | --- |
+| `fn` | Live view, then `fn` | `(1, 0x63, 0, 0)`, landing `(99, 321, 17)`; matches | `fn:1,63,0`; `NoInitialRow`, `OpenScrollAtZero` |
+| `fn-leaf-right` | `fn`, then `right` | No leaf push; no stage entry, still `(99, 321, 17)` | None: no engine event |
+| `fn-auto-pop` | `fn down down down right`, then `left` | Initial push/pop prediction failed: hidden cursor 19 makes the third DOWN wrap to 0; no stage entry and still `(99, 321, 0)` | None: no engine event |
+| `fn-auto-push` | `fn down down down`, then `right` | Initial push prediction failed at wrapped cursor 0; no stage entry, still `(99, 321, 0)` | None: no engine event |
+| `fn-auto-open` | `fn down down`, then `right` | Ordinary push `(0xe, 0x63, 0x1d, 0)`, landing `(36, 330, 0)`; matches corrected path | `fn-auto-open:e,63,1d`; `NoPushClassifier` |
+| `fn-auto-return` | `fn down down right`, then `left` | Initial pop prediction failed: the Fn flag and class `0x14a` suppress LEFT; no stage entry, still `(36, 330, 0)` | None: no engine event |
+| `fn-instant-af` | `fn back`, existing crawl-5 path to Fn assignment, eight DOWN presses, `ok back`, then `fn` | The assignment's row token 12 is stored value 8, not the mapper's stored `0xc`; no stage entry, unchanged engine block, live-view frame | None: no engine event |
+
+The assignment path in `fn-instant-af` is `fn back ok`, fourteen `down`, `ok`, eight `down`, `ok back`, then the observed `fn`. Its before PNG is the live view. Its menu tuple `(1, 5, 16)` is the retained engine cursor after menu close, not evidence that the menu remains visible. The original ISO receipt marks cursor 19 Hidden (`RowState` 3); that observed availability corrects the initial AUTO ISO path prediction.
+
+The LEFT guard at `ui_m75_action_38`, `0xc6f410`, rejects class `0x14a` when the Fn flag is 1. `ui_m75_action_130`, `0xc76a64`, handles BACK differently: class `0x14a` with the flag set posts a close `(2, 0x1d)`, whereas its non-Fn branch posts a pop. Neither key supplies a multi-level post. These source gates explain the observed `fn-auto-return` no-op without treating it as `NoParent`.
+
 ## Owned boundary and controls
 
 The `fn` oracle passes the full owned-engine block comparison against stock. It records 24 retained service calls, 22 snapshot writes, and no last-move write. There is no engine-block divergence for this kind-1 open. `NoInitialRow` fails `fn` with cursor 0 instead of stock's 17; `OpenScrollAtZero` fails it with scroll top 0 instead of stock's 11. `owner_controls_fail` requires both failures.
@@ -52,6 +72,8 @@ The `fn` oracle passes the full owned-engine block comparison against stock. It 
 `0xd4dd2c` calls the engine before the kind-1 arm of `0xd4d7a4`. The latter's Fn flag write is outside the engine block `[0x009571d0, 0x00957600)`. It remains the named record-mode/application shim around the engine, not an effect the engine should reproduce. Its removal requires owning those record-mode and settings duties, not a special case for ISO in the generic engine. The pinned stage-source receipt is `private-data/scratch/ControllerStrategy/inc5/decomp-stage.txt`.
 
 The first fresh host qualification, `private-data/scratch/ControllerStrategy/inc5/host-oracle-05c77716/owner-test.log`, reports four passing tests, no failures, and `owner exit=0`: all 46 receipt cases, the 25 controls, the existing three injected refusals, and receipt-block round trips. It confirms the two Fn control failures before both are made mandatory. `MenuEngineClass.hs` and the production engine remain intentionally unchanged for an already owned ordinary open.
+
+The 47-case host qualification at `private-data/scratch/ControllerStrategy/inc5/host-oracle-59860071/owner-test.log` adds `fn-auto-open`; all four tests pass with `owner exit=0`. That push has seven service calls, 44 snapshot writes, and no last-move write. `NoPushClassifier` fails it at block offset `+0x428`, returning classifier 1 instead of stock's 2. The control is now required to fail this case. This remains the existing owned `Push` class, not new ownership.
 
 ## Reproduction
 
