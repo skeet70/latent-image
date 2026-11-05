@@ -1,6 +1,6 @@
 # Owned record store: design (storage first cutover)
 
-Status: design, revision 2. Revision 1 had one review (RecordStoreDesignReview); its findings are folded in here. Under spec/11's review and rerun rules the next review is the cutover review at merge. Nothing here is built or qualified.
+Status: design, revision 2. Revision 1 had one review (RecordStoreDesignReview); its findings are folded in here. Under spec/11's review and rerun rules the next review is the cutover review at merge. Increments 1-3 are built and qualified on the host: the core and controls (`E-RECORD-STORE-CORE-HOST-150`, `E-RECORD-STORE-CONTROL6-150`), placement in the span with the builtin-free candidate DAT (`E-RECORD-STORE-CARRIER-BUILTIN-FREE-150`, `E-RECORD-STORE-CARRIER-CONTROL6-150`), the bridge NAND read (`E-RECORD-STORE-NAND-READ-150`), and the native oracle, where the model and the candidate equal stock on all 370 cases and all nine controls are detected (`E-RECORD-STORE-ORACLE-NATIVE-150`). The cutover pair of §6 has not run.
 
 Sources: [the stock record-service contract](record-service-stock-contract.md) (here **RSC**, byte-read from `lz/id4.dis` with exact x70view C at `55436fc85c`), [the target design](storage-file-target-design.md) §§1.6, 4 and 6 (`E-STORAGE-FILE-TARGET-DESIGN-150`), the [populated record-area input](../emulation/README.md#populated-record-areas---record-nand) (`E-RECORD-AREA-MEDIUM-150`), the property-service pattern (`E-PROPERTY-SERVICE-ORACLE-150`, `E-PROPERTY-SERVICE-NATURAL-150`), and the recovery-emul native cases (`emulation/README.md`, "the 1.50 writer block loop"). **[INFERENCE]** marks design judgments.
 
@@ -48,7 +48,7 @@ RSC holds the contract with citations. What the owned code must reproduce:
 - Results: `read_latest -> Latest { bank, position, sequence, skipped, record: &[u8] } | Empty | NoneValid`; `append -> Appended { bank, position, sequence, placement, persisted }` with `Placement` = `InBank`, `Rotated`, `ErasedThenWritten` and `Persisted` = `Confirmed` or `ProgramFailed(MediumError)`, or `Err(NotAppended::DestinationFull { erase: Option<MediumError> })`; `erase_all -> Erased { errors }`; `collect`; `read_at`. Stock statuses exist only in the adapter.
 - The search and append sequences of §2 are the core's behaviour, not an adapter shim **[INFERENCE]**: the check-call sequence, the queried-bank rotation and the rejected-predecessor sequence are observable through callbacks and flash, and the clients are stock. When every client's check is owned and idempotent, a simpler search can replace them (shim row in §7).
 - State per area: kind, geometry, callbacks, current bank. Everything else is read from the medium.
-- Per-entry block buffer: within one entry the core keeps the last bank block read and drops it after any program or erase. Read budget: at most four block reads per read latest (three scan banks and the re-search) and five per append; stock reads at most two per entry from cold **[INFERENCE]**.
+- Per-entry block buffer: within one entry the core keeps the last bank block read and drops it after any program or erase. Read budget: at most five block reads per read latest (three scan banks, the extra probe of the following bank and the re-search) and five per append; stock reads at most two per entry from cold **[INFERENCE]**.
 
 ### 3.2 Retained boundary
 
@@ -113,7 +113,7 @@ Accepted differences **[INFERENCE]**: no cross-entry cache, so read requests dif
 Agreed with Cleanup118 (property service):
 
 - The store supplies `append(area, record) -> Result<Appended, NotAppended>`, whose `persisted` field separates a confirmed write from one whose program failed, `read_latest(area) -> Latest { record, .. } | Empty | NoneValid`, and `erase_all`.
-- Settings storage owns record layout, field access, the previous-value snapshot (`0x89ec00`) and defaults, and the bank-0 backup mirror: open `0x61da3c` reads `[0x96cc64,0x96cc74)` from backup memory `0x409c281c` through `0x6a6e68`, its first 16 bytes from the shadow `0x409c29b8`; close `0x61d944` copies back through `0x6a6f3c`, `0x6a6ddc` writes the checksum and resyncs the shadow, and when offset + length passes `0x140` it calls the area-3 commit `0x6a86c4`, which takes its 40 payload bytes from `0x409c295c`. The mirror's copy-back therefore drives the store's kind-3 append.
+- Settings storage owns record layout, field access, the previous-value snapshot (`0x89ec00`) and defaults, and the bank-0 backup mirror: open `0x61da3c` reads `[0x96cc64,0x96cc74)` from backup memory `0x409c281c` through `0x6a6e68`, its first 16 bytes from the shadow `0x409c29b8`; close `0x61d944` copies back through `0x6a6f3c`, and `0x6a6ddc` writes the backup checksum and resyncs the shadow. `0x6a6f3c` calls the area-3 commit `0x6a86c4` when its end offset passes `0x140` (`0x6a6fa8..0x6a6fb4`), which the header close's 16-byte copy never does; `0x6a86c4` takes its 40 payload bytes from `0x409c295c` and appends only a changed record. A copy-back over the custom record therefore drives the store's kind-3 append.
 
 ## 9. Increments
 
