@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "entry": "Stock-dispatcher control and owned-picker candidate for the setting-26 picker (crawl-5 node 189). The qualified package prefix uses MENU to reach the live view (67,56,0), crawl-5 root 0; the route follows crawl-5's recorded path to the picker's row. In the picker, DOWN and UP move one row and back, RIGHT leaves the picker open, LEFT and OK leave it with the selected value, and BACK leaves it; DOWN, UP and entering post the property's value event 0x1d when 0x00d586bc reports it and BACK may post property 0x27d (E-MENU-ENGINE-OBSERVE-150); live-setting stores are admitted only from the stock property setter, in both roles. After rollback OK and BACK run through the restored stock dispatcher and are observed, not asserted: in the first picker-239 stock run, OK after unload opened the picker of the row above the cursor. Every expected menu tuple is a crawl-5 edge's landing.",
+  "entry": "Stock-dispatcher control and owned-picker candidate for the setting-26 picker (crawl-5 node 189). The package prefix starts at the live view (67,56,0), crawl-5 root 0, where the FujiMod rendezvous leaves it; the route follows crawl-5's recorded path to the picker's row. In the picker, DOWN and UP move one row and back, RIGHT leaves the picker open, LEFT and OK leave it with the selected value, and BACK leaves it; DOWN, UP and entering post the property's value event 0x1d when 0x00d586bc reports it and BACK may post property 0x27d (E-MENU-ENGINE-OBSERVE-150); live-setting stores are admitted only from the stock property setter, in both roles. A BACK closes SHOOTING MENU before unload, so the unload rendezvous runs at the live-view root, and after rollback OK reopens it on the same row; OK and BACK then run through the restored stock dispatcher and are observed, not asserted. Every expected menu tuple is a crawl-5 edge's landing, except the closing BACK and the reopening OK, which keep the row.",
   "source_bindings": [
     {
       "source": "private-data/scratch/ControllerStrategy/crawl-5/crawl-graph.json (mechanism d49b2c80, E-MODAL-MENU-OKPATHS-150): node 189 path ok,up,up,up,up,up,up,ok",
@@ -13,6 +13,10 @@
     {
       "source": "private-data/scratch/ControllerStrategy/picker-fold/picker-document.json",
       "expectation": "Controller-75 state-0 cells for events 0, 2, 4, 6, 8, 13 and 49 are picker cells, and node 26's record is a picker node."
+    },
+    {
+      "source": "private-data/scratch/ControllerStrategy/crawl-4/crawl-graph.json node 142 and emulation/ram-push-e2e-trajectories.json after_unload",
+      "expectation": "BACK from a SHOOTING MENU page closes it to the live-view root (controller 74 state 0x04) with the row retained, and OK from the live view reopens it on that row."
     }
   ],
   "trace_sites": [
@@ -101,14 +105,7 @@
     {
       "phase": "package-menu-prefix",
       "capture": "picker-live-view",
-      "steps": [
-        [
-          "menu",
-          67,
-          56,
-          0
-        ]
-      ],
+      "steps": [],
       "reads": [
         [
           "dispatcher-first-word",
@@ -489,9 +486,211 @@
           450
         ]
       ]
+    },
+    {
+      "phase": "close-menu",
+      "capture": "close-menu",
+      "read_preservations": [
+        {
+          "read": "resident",
+          "phase": "package-menu-prefix",
+          "source_read": "resident"
+        }
+      ],
+      "steps": [
+        [
+          "back",
+          1,
+          5,
+          26
+        ]
+      ],
+      "reads": [
+        [
+          "dispatcher-first-word",
+          "00bfb028",
+          4
+        ],
+        [
+          "modal75-state",
+          "0146761e",
+          2
+        ],
+        [
+          "modal75-event",
+          "0146777a",
+          2
+        ],
+        [
+          "open-node",
+          "009571d0",
+          4
+        ],
+        [
+          "picker-mode-9544f8",
+          "009544f8",
+          4
+        ],
+        [
+          "picker-modes-950474",
+          "00950474",
+          8
+        ],
+        [
+          "picker-mode-954500",
+          "00954500",
+          4
+        ],
+        [
+          "cell-75-0-0",
+          "00cd1ae4",
+          4
+        ],
+        [
+          "cell-75-0-2",
+          "00cd1c54",
+          4
+        ],
+        [
+          "cell-75-0-4",
+          "00cd1dc4",
+          4
+        ],
+        [
+          "cell-75-0-6",
+          "00cd1f34",
+          4
+        ],
+        [
+          "cell-75-0-8",
+          "00cd20a4",
+          4
+        ],
+        [
+          "cell-75-0-13",
+          "00cd243c",
+          4
+        ],
+        [
+          "cell-75-0-49",
+          "00cd3e1c",
+          4
+        ],
+        [
+          "resident",
+          "runtime:rb_resident",
+          1024
+        ],
+        [
+          "live-settings",
+          "0096cc64",
+          450
+        ]
+      ]
     }
   ],
   "after_unload": [
+    {
+      "phase": "reopen-menu",
+      "capture": "reopen-menu",
+      "read_preservations": [
+        {
+          "read": "resident",
+          "phase": "package-menu-prefix",
+          "source_read": "resident"
+        }
+      ],
+      "steps": [
+        [
+          "ok",
+          1,
+          5,
+          26
+        ]
+      ],
+      "reads": [
+        [
+          "dispatcher-first-word",
+          "00bfb028",
+          4
+        ],
+        [
+          "modal75-state",
+          "0146761e",
+          2
+        ],
+        [
+          "modal75-event",
+          "0146777a",
+          2
+        ],
+        [
+          "open-node",
+          "009571d0",
+          4
+        ],
+        [
+          "picker-mode-9544f8",
+          "009544f8",
+          4
+        ],
+        [
+          "picker-modes-950474",
+          "00950474",
+          8
+        ],
+        [
+          "picker-mode-954500",
+          "00954500",
+          4
+        ],
+        [
+          "cell-75-0-0",
+          "00cd1ae4",
+          4
+        ],
+        [
+          "cell-75-0-2",
+          "00cd1c54",
+          4
+        ],
+        [
+          "cell-75-0-4",
+          "00cd1dc4",
+          4
+        ],
+        [
+          "cell-75-0-6",
+          "00cd1f34",
+          4
+        ],
+        [
+          "cell-75-0-8",
+          "00cd20a4",
+          4
+        ],
+        [
+          "cell-75-0-13",
+          "00cd243c",
+          4
+        ],
+        [
+          "cell-75-0-49",
+          "00cd3e1c",
+          4
+        ],
+        [
+          "resident",
+          "runtime:rb_resident",
+          1024
+        ],
+        [
+          "live-settings",
+          "0096cc64",
+          450
+        ]
+      ]
+    },
     {
       "phase": "unloaded-picker",
       "capture": "unloaded-picker",

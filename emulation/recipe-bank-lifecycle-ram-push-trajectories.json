@@ -6,7 +6,7 @@
   "expect": "clean",
   "entry": "Cardless RB_VOLATILE_BANK RAM push with an empty resident bank. Physical keys alone Save Current into slot 0, stage A and cancel, reopen the unchanged empty stored name, stage B and confirm, reopen B, cancel and hand back to the shooting menu. No host write seeds any menu frame, session, modal state, name, slot or resident-bank cell. No selection, live-setting change, card I/O or persistence is requested.",
   "source_bindings": [
-    {"source": "emulation/recipe-bank-route-ram-push-trajectories.json:7", "expectation": "The first twelve physical keys are the unchanged qualified cardless menu prefix, ending at menu 0x61, class 0x281, slot-row index 0."},
+    {"source": "emulation/recipe-bank-route-ram-push-trajectories.json:7", "expectation": "The first eleven physical keys are that file's cardless menu prefix, ending at menu 0x61, class 0x281, slot-row index 0."},
     {"source": "host/firmware/BuildRecipeBank.hs:489-511; menu/recipe_bank_ui.h:39-59,86-95", "expectation": "Slot 0 opens root 0x61/class 0x270 with Save Current row 0 and Rename row 1. Rename opens root 0x6a/class 0x131. All step cursors are selected row indices, not the text insertion cursor."},
     {"source": "menu/recipe_bank_actions.c:449-504; menu/recipe_bank_hook.c:153-188", "expectation": "Each successful editor child entry selects keyboard row 0. Opening Rename clears all fourteen buffer-A bytes, copies only the stored name, writes insertion cursor 0 at 0x00954384 and modal state 0x1e at 0x0146761e."},
     {"source": "extensions/ram-inputs/recipe-bank-spec.json:434-440; X-M1 1.50 image4 0x0078bac8 row array and conversion table 0x00779a18, selected by pointer 0x0081b560", "expectation": "The installed editor uses the original 43-row array with tokens 0 through 42. Conversion row 0 is ASCII A and row 1 is ASCII B. These expected characters are synthetic test input, not copied firmware bytes."},
@@ -21,7 +21,7 @@
   "before_unload": [
     {
       "phase": "empty-slot-list", "capture": "lifecycle-empty-slot-list",
-      "steps": [["menu",67,56,0],["menu",1,5,2],["left",0,5,0],["down",0,5,1],["down",0,5,2],["down",0,5,3],["down",0,5,4],["right",1,5,30],["down",1,5,31],["down",1,5,32],["down",1,5,33],["ok",97,641,0]],
+      "steps": [["menu",1,5,2],["left",0,5,0],["down",0,5,1],["down",0,5,2],["down",0,5,3],["down",0,5,4],["right",1,5,30],["down",1,5,31],["down",1,5,32],["down",1,5,33],["ok",97,641,0]],
       "reads": [["resident","runtime:rb_resident",1024],["activation","runtime:rb_activation",8],["generation","runtime:rb_current_gen",4],["mask","runtime:rb_resident+0x1c",2],["stored-name","runtime:rb_resident+0x68",26],["state","0146761e",2],["query-latch","009544f0",4],["query-event-banks","0094f888",16],["query-override","009514c4",4],["set-activation-gate","009544f8",4],["set-mode-gates-ab","00950474",8],["set-mode-gate-c","00954500",4],["editor-session","00954d08",4]],
       "read_expectations": [{"read":"generation","hex":"00000000"},{"read":"mask","hex":"0000"},{"read":"stored-name","hex":"0000000000000000000000000000000000000000000000000000"},{"read":"state","hex":"0000"}]
     },
@@ -114,7 +114,8 @@
       "reads": [["resident","runtime:rb_resident",1024],["generation","runtime:rb_current_gen",4],["state","0146761e",2],["stored-name","runtime:rb_resident+0x68",26]],
       "read_preservations": [{"read":"resident","phase":"rename-committed","source_read":"resident"}],
       "read_expectations": [{"read":"generation","hex":"02000000"},{"read":"state","hex":"0000"},{"read":"stored-name","hex":"4200000000000000000000000000000000000000000000000000"}]
-    }
+    },
+    {"phase":"owned-stock-root-unload-close","steps":[["back",1,5,34]]}
   ],
   "after_unload": []
 }

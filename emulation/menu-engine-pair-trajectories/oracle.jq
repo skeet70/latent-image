@@ -50,7 +50,7 @@ $graph[0].graph as $g
 | close_menu($landed; $steps[-1][1:]) as $closing
 | {
     "schema": 1,
-    "entry": "Owned menu engine guest pair, \($role) role, for the menu-oracle-\($name) path: the package prefix uses MENU to reach the live view (67,56,0), crawl-5 root 0, then the --menu-observe path and key from emulation/menu-oracle-\($name).json with crawl-5's landings. Each segment reads the engine block, the last-move pair and the snapshot areas; the stage entry, kind switch, seek and event post are traced.",
+    "entry": "Owned menu engine guest pair, \($role) role, for the menu-oracle-\($name) path: the package prefix starts at the live view (67,56,0), crawl-5 root 0, where the FujiMod rendezvous leaves it, then the --menu-observe path and key from emulation/menu-oracle-\($name).json with crawl-5's landings, then BACK to the live-view root. Each segment reads the engine block, the last-move pair and the snapshot areas; the stage entry, kind switch, seek and event post are traced.",
     "source_bindings": [
       {"source": "emulation/menu-oracle-\($name).json", "expectation": "The path and key are the oracle case's."},
       {"source": "private-data/scratch/ControllerStrategy/crawl-5/crawl-graph.json (E-MODAL-MENU-OKPATHS-150)", "expectation": "Each step's menu tuple is the landing of the crawl-5 edge for that key from the previous step's screen."},
@@ -60,7 +60,7 @@ $graph[0].graph as $g
       + (if $ARGS.named.sample != null then [{"source": "emulation/menu-oracle-open.json and emulation/menu-oracle-close.json receipts", "expectation": "OK from the live view opens the shooting menu on \($ARGS.named.sample[0][1:]) and BACK closes it on \($ARGS.named.sample[1][1:])."}] else [] end),
     "trace_sites": engine_sites($role),
     "before_unload": (
-      [ {"phase": "package-menu-prefix", "capture": "oracle-live-view", "steps": [["menu", 67, 56, 0]], "reads": reads} ]
+      [ {"phase": "package-menu-prefix", "capture": "oracle-live-view", "steps": [], "reads": reads} ]
       + (if $ARGS.named.sample != null then [segment("modal-sample"; "modal-sample"; $ARGS.named.sample)] else [] end)
       + (if ($c.path | length) > 0 then [segment("oracle-path"; "oracle-path"; $steps[0:-1])] else [] end)
       + [segment("oracle-key"; "oracle-key"; $steps[-1:])]

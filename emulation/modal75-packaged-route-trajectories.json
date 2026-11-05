@@ -1,10 +1,10 @@
 {
   "schema": 1,
-  "entry": "Matched default223 stock-dispatcher and selected modal224 package routes. The qualified package prefix uses MENU to reach (67,56,0), then MENU opens the shooting menu. Four DOWN keys and OK open FILM SIMULATION; BACK returns without selecting a film. A second entry/exit and BACK hand back to the live view. After rollback, MENU/MENU/OK/BACK/BACK exercise unmodified-stock handback. All menu, state, event, resident and live-setting bytes are observed without host seeding. Generic state30 cancellation is not requested.",
+  "entry": "Matched default223 stock-dispatcher and selected modal224 package routes. From the live-view root MENU opens the shooting menu. Four DOWN keys and OK open FILM SIMULATION; BACK returns without selecting a film. A second entry/exit and BACK hand back to the live view. After rollback, MENU/OK/BACK/BACK exercise unmodified-stock handback. All menu, state, event, resident and live-setting bytes are observed without host seeding. Generic state30 cancellation is not requested.",
   "source_bindings": [
     {
       "source": "emulation/ram-push-e2e-trajectories.json:5-8",
-      "expectation": "The installed package uses the qualified two-MENU prefix before shooting-menu navigation."
+      "expectation": "After install the second of the retained file's two MENUs opens the shooting menu from the live view; the first leaves the retained bridge's rendezvous overlay, which the FujiMod bridge does not open."
     },
     {
       "source": "emulation/modal75-stock-route-trajectories.json:14-35",
@@ -12,7 +12,7 @@
     },
     {
       "source": "emulation/ram-push-e2e-trajectories.json: stock-film-before-unload and stock-menu-after-unload",
-      "expectation": "BACK closes the shooting menu while retained menu fields remain (1,5,6). The post-unload service handback uses the qualified two-MENU prefix before OK opens the film list."
+      "expectation": "BACK closes the shooting menu while retained menu fields remain (1,5,6). After unload one MENU reopens the shooting menu at its retained row before OK opens the film list; the retained file's other MENU leaves the rendezvous overlay."
     }
   ],
   "trace_sites": [
@@ -32,14 +32,7 @@
   "before_unload": [
     {
       "phase": "package-menu-prefix",
-      "steps": [
-        [
-          "menu",
-          67,
-          56,
-          0
-        ]
-      ]
+      "steps": []
     },
     {
       "phase": "modal75-shooting",
@@ -491,12 +484,6 @@
         }
       ],
       "steps": [
-        [
-          "menu",
-          1,
-          5,
-          6
-        ],
         [
           "menu",
           1,
