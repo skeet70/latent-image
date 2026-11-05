@@ -2355,3 +2355,31 @@ haskell_test(
         "//host:process",
     ],
 )
+
+haskell_library(
+    name = "reference-scan-model",
+    srcs = ["ReferenceScan.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021"],
+    deps = ["//host:base", "//host:bytestring", "//host:containers"],
+)
+
+haskell_binary(
+    name = "reference-scan",
+    srcs = ["ScanReferences.hs"],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021"],
+    deps = [
+        ":reference-scan-model",
+        "//host:base",
+        "//host:bytestring",
+        "//host:cryptohash-sha256",
+        "//host:filepath",
+    ],
+)
+
+haskell_test(
+    name = "reference-scan-tests",
+    srcs = ["ReferenceScanTests.hs"],
+    ghcopts = ["-Wall", "-Werror", "-O2", "-XGHC2021"],
+    deps = [":reference-scan-model", "//host:base", "//host:bytestring"],
+)

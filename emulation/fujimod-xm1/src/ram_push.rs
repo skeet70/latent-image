@@ -8,7 +8,7 @@ use fujimod_xm1::record_medium::RecordMedium;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, load_card, menu_value, read, restore, sha256, write};
 use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, encode_hex};
 use fujimod_xm1::guest::{DialTurn, ModeDialPosition, PhysicalShutterPosition, Press, RouteKey};
-use fujimod_xm1::machine::{KeyPulse, Machine, ReleaseSegment, RunOutcome, key_pulse};
+use fujimod_xm1::machine::{KeyPulse, Machine, ReleaseSegment, RunOutcome, SCANNED_HOLD, key_pulse};
 use fujimod_xm1::modal_trace::BeginRequest as ModalBeginRequest;
 use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::run::{self, NodeName};
@@ -562,6 +562,7 @@ fn default_pulse(key: Press) -> KeyPulse {
         Press::Key(key) => key_pulse(key),
         Press::Dial(DialTurn::Left | DialTurn::Right) => DIAL_PULSE,
         Press::Shutter(_) | Press::Play => GPIO_PULSE,
+        Press::Fn => KeyPulse { hold: SCANNED_HOLD, release: GPIO_PULSE.release },
     }
 }
 

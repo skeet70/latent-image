@@ -1,6 +1,11 @@
 //! Read-only classification of the recipe bank's menu pages and row tokens; no
 //! service calls and no non-stack stores.
 
+#[cfg(test)]
+extern crate menu_engine;
+
+use crate::menu_engine::frame::RowToken;
+
 pub const VERBS_PER_SLOT: u32 = 4;
 pub const BANK_SLOTS: u32 = 7;
 pub const SELECT_ROWS: u32 = 8;
@@ -8,13 +13,8 @@ pub const SELECT_ROWS: u32 = 8;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct MenuClass(u32);
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct RowToken(u32);
-
-impl RowToken {
-    const VERB_BASE: Self = Self(0x40);
-    const SELECT_BASE: Self = Self(0x60);
-}
+const VERB_BASE: RowToken = RowToken(0x40);
+const SELECT_BASE: RowToken = RowToken(0x60);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Slot(u8);
@@ -104,10 +104,10 @@ pub fn route_page(cls: MenuClass) -> PageRoute {
 }
 
 pub fn decode_token(token: RowToken) -> Option<BankItem> {
-    if token.0 >= RowToken::VERB_BASE.0
-        && token.0 < RowToken::VERB_BASE.0 + BANK_SLOTS * VERBS_PER_SLOT
+    if token.0 >= VERB_BASE.0
+        && token.0 < VERB_BASE.0 + BANK_SLOTS * VERBS_PER_SLOT
     {
-        let offset = token.0 - RowToken::VERB_BASE.0;
+        let offset = token.0 - VERB_BASE.0;
         return Some(BankItem::Verb {
             slot: Slot((offset / VERBS_PER_SLOT) as u8),
             verb: match offset % VERBS_PER_SLOT {
@@ -118,9 +118,9 @@ pub fn decode_token(token: RowToken) -> Option<BankItem> {
             },
         });
     }
-    if token.0 >= RowToken::SELECT_BASE.0 && token.0 < RowToken::SELECT_BASE.0 + SELECT_ROWS {
+    if token.0 >= SELECT_BASE.0 && token.0 < SELECT_BASE.0 + SELECT_ROWS {
         return Some(BankItem::Select {
-            selection: Selection((token.0 - RowToken::SELECT_BASE.0) as u8),
+            selection: Selection((token.0 - SELECT_BASE.0) as u8),
         });
     }
     None

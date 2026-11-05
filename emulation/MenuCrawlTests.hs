@@ -5,7 +5,7 @@ module Main (main) where
 import Control.Monad (unless, when)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
-import Data.Aeson (Value (..))
+import Data.Aeson (Value (..), eitherDecode, encode)
 import Data.IORef
 import Data.List (sort)
 import qualified Data.Map.Strict as M
@@ -110,6 +110,8 @@ main :: IO ()
 main = do
   failures <- newIORef (0 :: Int)
   let check label ok = unless ok (putStrLn ("FAIL " ++ label) >> modifyIORef' failures (+ 1))
+  check "Fn crawl key uses the fn wire name" (encode KeyFn == "\"fn\"")
+  check "Fn crawl key round-trips" (eitherDecode (encode KeyFn) == Right KeyFn)
 
   (ringFake, ringDriver) <- fake (Synthetic 0 0 0) ring
   let keys = [KeyUp, KeyDown, KeyOk, KeyBack]
