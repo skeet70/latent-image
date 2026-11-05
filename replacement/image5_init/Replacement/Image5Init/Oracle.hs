@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Replacement.Image5Init.Oracle (runOracle, caseCount) where
+module Replacement.Image5Init.Oracle (runOracle, runSyntheticOracle, caseCount) where
 
 import Prelude hiding (logBase)
 import Control.Monad (forM, unless)
@@ -11,7 +11,7 @@ import Data.Word (Word32)
 import qualified Emulation.NativeObservation as N
 import Emulation.OwnedCase
 import FujiAF.JSON (encodeCanonical)
-import Numeric (readHex)
+import Emulation.Sha256 (sha256, sha256Hex)
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>), takeDirectory)
 
@@ -124,7 +124,7 @@ caseSpec role (Body bytes walk) row@(Row name _ table) stop = CaseSpec
       ++ [(address target,4) | Target target <- external]
   , caseInitial = [(r,sentinel r) | r <- [N.R0 .. N.R12]] ++ [(N.Sp,stack),(N.Lr,exitAddress),(N.Cpsr,0x13)]
   , caseExpectedStatus = maybe (expectedStatus row) (const N.StopAddress) stop
-  , caseExpectedRegisters = []
+  , caseExpectedRegisters = [(N.R5,sentinel N.R5)]
   , caseExpectedMemory = []
   , caseCp14Identity = Nothing
   , caseKernel = Just (KernelCase (InstructionLimit 12000) (address <$> stop) Nothing Nothing Nothing [])
@@ -200,40 +200,61 @@ runValue (Run status events registers) = object
   , "registers" .= [object ["register" .= N.registerLabel r,"value" .= value] | (r,value) <- registers]
   , "calls" .= [object ["target" .= t,"sp_relative" .= (toInteger (values !! 12)-toInteger stack),"r0_r11" .= take 12 values] | Event (Target t) values <- events] ]
 
--- The fixture is the exact 324-byte slice at file offset 0x1a6b6c of id5-00bf1a00.bin.
 runOracle :: FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO Bool
 runOracle runner stockPath ownedPath symbolsPath work reportPath = do
-  stockWords <- words <$> readFile stockPath
-  stockBytes <- assemble <$> mapM (\text -> case readHex text of [(value,"")] -> pure value; _ -> fail "invalid stock hex fixture") stockWords
-  unless (B.length stockBytes == 324) (fail "stock fixture extent differs")
-  ownedBytes <- B.readFile ownedPath
+  image <- B.readFile stockPath
+  let stockBytes = B.take 324 (B.drop 0x1a6b6c image)
+  unless (sha256Hex (sha256 stockBytes) == "0da4746a98afff28788fba2effaeb5a01be2b2ae33229c1fa135440cba8c39e1")
+    (fail "stock image5 initializer slice SHA-256 differs from X-M1 1.50")
+  owned <- loadOwned ownedPath symbolsPath
+  runSuite runner (Just (Body stockBytes base)) owned work reportPath
+
+runSyntheticOracle :: FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO Bool
+runSyntheticOracle runner ownedPath symbolsPath work reportPath = do
+  owned <- loadOwned ownedPath symbolsPath
+  runSuite runner Nothing owned work reportPath
+
+loadOwned :: FilePath -> FilePath -> IO Body
+loadOwned ownedPath symbolsPath = do
+  bytes <- B.readFile ownedPath
   symbols <- parseSymbols ["xm1_image5_hooks"] symbolsPath
-  let walk = guestWord (symbolAddress symbols "xm1_image5_hooks")
-      stock = Body stockBytes base
-      owned = Body ownedBytes walk
+  pure (Body bytes (guestWord (symbolAddress symbols "xm1_image5_hooks")))
+
+runSuite :: FilePath -> Maybe Body -> Body -> FilePath -> FilePath -> IO Bool
+runSuite runner stock owned@(Body _ walk) work reportPath = do
   wrong <- either fail pure (mutate owned)
-  stockRuns <- runCases runner (work </> "stock") "stock" stock rows Nothing
+  stockRuns <- case stock of
+    Nothing -> pure []
+    Just body -> runCases runner (work </> "stock") "stock" body rows Nothing
   ownedRuns <- runCases runner (work </> "owned") "owned" owned rows Nothing
   wrongRuns <- runCases runner (work </> "control") "control" wrong [baseline] Nothing
   let reachable = [row | row@(Row _ injection _) <- rows, injection /= DirectNonzero (CallNumber 4)]
-  stockStops <- runCases runner (work </> "stock-walk-entry") "stock-entry" stock reachable (Just base)
+  stockStops <- case stock of
+    Nothing -> pure []
+    Just body -> runCases runner (work </> "stock-walk-entry") "stock-entry" body reachable (Just base)
   ownedStops <- runCases runner (work </> "owned-walk-entry") "owned-entry" owned reachable (Just walk)
   let stopErrors :: [Run] -> [String]
       stopErrors bodyStops = ["internal call7 entry SP/status/registers" | Run status _ regs <- bodyStops, status /= N.StopAddress || lookup N.Sp regs /= Just (stack-8) || any (\r -> lookup r regs /= Just (sentinel r)) [N.R4 .. N.R10]]
-      cases = zip3 rows stockRuns ownedRuns
-      errors = [(name,specErrors row s ++ specErrors row o ++ compareErrors s o) | (row@(Row name _ _),s,o) <- cases]
-      controlErrors = case (stockRuns,wrongRuns) of
-        (stockBaseline:_,[wrongRun]) -> specErrors baseline wrongRun ++ compareErrors stockBaseline wrongRun
+      ownedErrors = [(name,specErrors row result) | (row@(Row name _ _),result) <- zip rows ownedRuns]
+      stockErrors = [(name,specErrors row result) | (row@(Row name _ _),result) <- zip rows stockRuns]
+      comparisonErrors = [(name,compareErrors s o) | (Row name _ _,s,o) <- zip3 rows stockRuns ownedRuns]
+      errorsFor name = concat [problems | (label,problems) <- ownedErrors ++ stockErrors ++ comparisonErrors, label == name]
+      controlErrors = case wrongRuns of
+        [wrongRun] -> specErrors baseline wrongRun
         _ -> ["control result count"]
-      allErrors = concatMap snd errors ++ stopErrors stockStops ++ stopErrors ownedStops
+      allErrors = concatMap snd (ownedErrors ++ stockErrors ++ comparisonErrors) ++ stopErrors stockStops ++ stopErrors ownedStops
       passed = null allErrors && not (null controlErrors)
       report = object
         [ "schema" .= (1 :: Int), "case_count" .= caseCount, "verdict" .= (if passed then "pass" else "fail" :: String)
+        , "qualification" .= (case stock of Nothing -> "spec-only"; Just _ -> "stock-and-owned" :: String)
         , "hook_r4_policy" .= ("reported, not compared: stock uses r4 as cursor" :: String)
         , "internal_call7_entry_errors" .= (stopErrors stockStops ++ stopErrors ownedStops)
-        , "internal_call7_entries" .= [object ["case" .= name,"stock" .= runValue s,"owned" .= runValue o] | (Row name _ _,s,o) <- zip3 reachable stockStops ownedStops]
+        , "internal_call7_entries" .= object
+            [ "stock" .= [object ["case" .= name,"observation" .= runValue result] | (Row name _ _,result) <- zip reachable stockStops]
+            , "owned" .= [object ["case" .= name,"observation" .= runValue result] | (Row name _ _,result) <- zip reachable ownedStops] ]
         , "control" .= object ["mutation" .= ("swap first two linked direct call targets" :: String),"refused" .= not (null controlErrors),"errors" .= controlErrors]
-        , "cases" .= [object ["name" .= name,"errors" .= problems,"stock" .= runValue s,"owned" .= runValue o] | ((name,problems),(_,s,o)) <- zip errors cases] ]
+        , "cases" .= [object ["name" .= name,"errors" .= errorsFor name,"owned" .= runValue result,"stock" .= fmap runValue (lookup name stockByName)] | (Row name _ _,result) <- zip rows ownedRuns] ]
+      stockByName = [(name,result) | (Row name _ _,result) <- zip rows stockRuns]
   createDirectoryIfMissing True (takeDirectory reportPath)
   B.writeFile reportPath (encodeCanonical report)
   pure passed

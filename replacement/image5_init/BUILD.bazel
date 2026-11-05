@@ -25,9 +25,9 @@ haskell_library(
     srcs = ["Replacement/Image5Init/Oracle.hs"],
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
-    deps = ["//emulation:owned-case", "//emulation:native-observation", "//host:aeson", "//host:base", "//host:bytestring", "//host:containers", "//host:directory", "//host:filepath", "//host:json"],
+    deps = ["//emulation:owned-case", "//emulation:native-observation", "//emulation:case-sha256", "//host:aeson", "//host:base", "//host:bytestring", "//host:containers", "//host:directory", "//host:filepath", "//host:json"],
 )
-_ORACLE_DATA = ["//emulation:native-runner", ":stock-image5-init.hex", ":image5-init-image.bin", ":image5-init-image.symbols"]
+_ORACLE_DATA = ["//emulation:native-runner", ":image5-init-image.bin", ":image5-init-image.symbols"]
 _ORACLE_ARGS = ["$(rootpath %s)" % item for item in _ORACLE_DATA]
 haskell_binary(
     name = "image5-init-oracle",
