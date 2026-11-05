@@ -483,7 +483,7 @@ dataPokes env executing row =
     recordPokes block of' =
       let record = recordAddress layout block of'
           w = domainWords layout of'
-          (acquire, release) = entries of'
+          (acquire, release) = entries block
           lockRecord offset word = [pokeWord (record + offset + lockWord l) word, pokeWord (record + offset + lockAcquire l) acquire, pokeWord (record + offset + lockRelease l) release]
        in [ pokeWord (record + contextId c) (if block == of' then layoutOwnId layout else wordsId w)
           , pokeWord (record + contextOwner c) (wordsId w)

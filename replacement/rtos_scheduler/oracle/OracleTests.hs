@@ -123,7 +123,7 @@ pureChecks env regions =
       , check "the order assertion runs only when asked" (BarrierOrder `notElem` compareCase env DomainA Prepare insertRow prepareSpec False reference unfenced && BarrierOrder `elem` compareCase env DomainA Prepare insertRow prepareSpec True reference unfenced)
       , check "a spinning acquire leaves r11, sp and pc uncompared too" (case rowWhere layout Acquire (rowSpins Acquire) of Just (_, row) -> all (`elem` uncomparedRegisters Acquire row) [R11, Sp, Pc]; Nothing -> False)
       , check "the stand-in raise-IRQ assembles" (isJust (either (const Nothing) Just (raiseIrqStandIn 0x433e4)))
-      , check "one mutant per helper and two equivalents" (map controlHelper mutants == helpers && length equivalents == 2 && all ((== MustFail) . controlExpectation) mutants && all ((== MustPass) . controlExpectation) equivalents)
+      , check "every helper has at least one mutant, and two equivalents" (all (`elem` map controlHelper mutants) helpers && length equivalents == 2 && all ((== MustFail) . controlExpectation) mutants && all ((== MustPass) . controlExpectation) equivalents)
       , check "kernel cases name their uncompared registers" (fmap kernelUncompared (caseKernel prepareSpec) == Just [R1, R2, R3, R12, Lr, Cpsr])
       ]
 

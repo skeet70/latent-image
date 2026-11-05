@@ -63,6 +63,7 @@ mutants =
   , Control "mutant-reset" Reset MustFail "keeps T+0xe bits 1 and 2" $ Patch (\w -> w .&. 0x0fe00000 == 0x02000000) (always nop)
   , Control "mutant-prepare" Prepare MustFail "drops the dmb; equal state, refused by the order assertion" $ Patch (== dmbSy) (always nop)
   , Control "mutant-notify" Notify MustFail "returns 0 for a remote id without ringing" $ Patch (\w -> w .&. 0x0f000000 == 0x0b000000) (always nop)
+  , Control "mutant-notify-dsb" Notify MustFail "drops the dsb; equal state, refused by the order assertion" $ Patch (== 0xf57ff04f) (always nop)
   , Control "mutant-requeue" Requeue MustFail "returns the raw dispatch-enabled word in the selected-task branch" $ Patch (\w -> w .&. 0x0ff00000 == 0x03000000) (always nop)
   , Control "mutant-rotate" Rotate MustFail "keeps the old selected cell" $ Patch (transfer 0x0 False False) (always nop)
   ]
