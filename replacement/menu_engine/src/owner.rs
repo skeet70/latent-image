@@ -6,8 +6,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use super::block::{decode, mirror, snapshot_address, RecordTable, BLOCK_LEN, LAST_MOVE_LEN};
 use super::engine::{
-    apply_with, Effect, EngineResult, EngineServices, KindSwitchCall, MenuEvent, Rules, SeekCall, StageEvent, StageKind,
-    StageNode, Stock,
+    apply_with, Effect, EngineResult, EngineServices, KindSwitchCall, MenuEvent, PropertyId, Rules, SeekCall, StageEvent,
+    StageKind, StageNode, Stock,
 };
 use super::frame::{MenuClass, MenuFrameSnapshot, RowIndex, RowToken};
 use super::state::{EngineState, LastMove, RowState};
@@ -37,6 +37,7 @@ enum Expected {
     Availability { class: MenuClass, token: RowToken, state: RowState },
     InitialRow { kind: u32, node: u32, class: MenuClass, answer: Option<RowToken> },
     Store { slot: u32 },
+    PropertyWrite { property: PropertyId, value: RowIndex, flags: u32 },
 }
 
 enum LastMoveWrite {
@@ -113,6 +114,8 @@ impl EngineServices for Answers<'_> {
             (Effect::StoreSnapshot { depth, slot, record }, Expected::Store { slot: stock }) if slot.get() == *stock => {
                 self.snapshot_writes.extend(record_writes(snapshot_address(depth, slot), &record));
             }
+            (Effect::PropertyWrite { property, value }, Expected::PropertyWrite { property: p, value: v, flags: 0 })
+                if (property, value) == (*p, *v) => {}
             _ => self.differs(index, asked, expected),
         }
     }
@@ -272,7 +275,7 @@ fn owner_receipt_blocks_round_trip() {
 
 #[test]
 fn owner_cases_match_stock() {
-    assert_eq!(CASES.len(), 10);
+    assert!(!CASES.is_empty());
     let results = outcomes::<Stock>();
     for (name, outcome) in &results {
         println!("case {name}: {}", outcome.as_ref().map_or_else(|reason| format!("FAIL {reason}"), |_| "pass".into()));
@@ -327,28 +330,125 @@ impl Rules for OpenScrollAtZero {
     const OPEN_BOTTOM_ARM: bool = false;
 }
 
-fn control<R: Rules>(label: &str) -> usize {
+/// The cases `R` fails.
+fn control<R: Rules>(label: &str) -> Vec<&'static str> {
     let results = outcomes::<R>();
-    let failed: Vec<_> = results.iter().filter(|(_, outcome)| outcome.is_err()).collect();
     for (name, outcome) in &results {
         println!("control {label} case {name}: {}", outcome.as_ref().map_or_else(|reason| format!("fails ({reason})"), |_| "passes".into()));
     }
-    failed.len()
+    results.into_iter().filter(|(_, outcome)| outcome.is_err()).map(|(name, _)| name).collect()
 }
 
+struct PopNoRemember;
+impl Rules for PopNoRemember {
+    const POP_REMEMBERS: bool = false;
+}
+
+struct RememberIgnoresFlag;
+impl Rules for RememberIgnoresFlag {
+    const REMEMBER_FLAG: bool = false;
+}
+
+struct RememberIgnoresParentId;
+impl Rules for RememberIgnoresParentId {
+    const REMEMBER_PARENT_ID: bool = false;
+}
+
+struct CloseKeepsMenuOpen;
+impl Rules for CloseKeepsMenuOpen {
+    const CLOSE_CLEARS_MENU_OPEN: bool = false;
+}
+
+/// The inner steps of kinds 6..`0xb` notify with the event's id.
+struct FrameNotifyId;
+impl Rules for FrameNotifyId {
+    const FRAME_NOTIFY_ID_ZERO: bool = false;
+}
+
+struct NoSeekStep;
+impl Rules for NoSeekStep {
+    const SEEK_STEPS: bool = false;
+}
+
+struct QueryFixed;
+impl Rules for QueryFixed {
+    const FIXED_UNQUERIED: bool = false;
+}
+
+struct NoPropertyWrite;
+impl Rules for NoPropertyWrite {
+    const PROPERTY_WRITE: bool = false;
+}
+
+struct GroupAsRowStep;
+impl Rules for GroupAsRowStep {
+    const GROUP_ARMS: bool = false;
+}
+
+struct AlwaysWrap;
+impl Rules for AlwaysWrap {
+    fn wraps(_: &Node) -> bool {
+        true
+    }
+}
+
+struct ReopenNotifies;
+impl Rules for ReopenNotifies {
+    const REOPEN_SILENT: bool = false;
+}
+
+struct SingleStep;
+impl Rules for SingleStep {
+    const STEP_COUNT: bool = false;
+}
+
+struct NoPassStop;
+impl Rules for NoPassStop {
+    const PASS_STOP: bool = false;
+}
+
+/// Each control and the cases it must fail; an empty list asks for any case.
 #[test]
 fn owner_controls_fail() {
-    let counts = [
-        ("no-wrap", control::<NoWrap>("no-wrap")),
-        ("inverted-skip", control::<InvertedSkip>("inverted-skip")),
-        ("no-initial-row", control::<NoInitialRow>("no-initial-row")),
-        ("no-last-move", control::<NoLastMove>("no-last-move")),
-        ("zero-scroll", control::<ZeroScroll>("zero-scroll")),
-        ("no-push-classifier", control::<NoPushClassifier>("no-push-classifier")),
-        ("down-scroll-keeps-top", control::<DownScrollKeepsTop>("down-scroll-keeps-top")),
-        ("open-scroll-at-zero", control::<OpenScrollAtZero>("open-scroll-at-zero")),
+    let controls: [(&str, Vec<&str>, &[&str]); 21] = [
+        ("no-wrap", control::<NoWrap>("no-wrap"), &["fixed-wrap"]),
+        ("inverted-skip", control::<InvertedSkip>("inverted-skip"), &[]),
+        ("no-initial-row", control::<NoInitialRow>("no-initial-row"), &[]),
+        ("no-last-move", control::<NoLastMove>("no-last-move"), &[]),
+        ("zero-scroll", control::<ZeroScroll>("zero-scroll"), &[]),
+        ("no-push-classifier", control::<NoPushClassifier>("no-push-classifier"), &[]),
+        ("down-scroll-keeps-top", control::<DownScrollKeepsTop>("down-scroll-keeps-top"), &[]),
+        ("open-scroll-at-zero", control::<OpenScrollAtZero>("open-scroll-at-zero"), &[]),
+        ("pop-no-remember", control::<PopNoRemember>("pop-no-remember"), &["pop-remember"]),
+        ("remember-ignores-flag", control::<RememberIgnoresFlag>("remember-ignores-flag"), &["pop-remember-off", "push-remember-off"]),
+        ("remember-ignores-parent-id", control::<RememberIgnoresParentId>("remember-ignores-parent-id"), &["push-same-parent"]),
+        ("close-keeps-menu-open", control::<CloseKeepsMenuOpen>("close-keeps-menu-open"), &["close", "open-seek-1"]),
+        (
+            "frame-notify-id",
+            control::<FrameNotifyId>("frame-notify-id"),
+            &["frame-seek-down", "frame-seek-up", "frame-pop-down", "frame-pop-up", "frame-push-probe"],
+        ),
+        ("no-seek-step", control::<NoSeekStep>("no-seek-step"), &["frame-seek-step"]),
+        ("query-fixed", control::<QueryFixed>("query-fixed"), &["frame-fixed-open"]),
+        ("no-property-write", control::<NoPropertyWrite>("no-property-write"), &["close-property"]),
+        (
+            "group-as-row-step",
+            control::<GroupAsRowStep>("group-as-row-step"),
+            &["group-up", "group-down", "group-right-wrap", "group-left-wrap", "group-down-wrap", "group-up-wrap"],
+        ),
+        ("always-wrap", control::<AlwaysWrap>("always-wrap"), &["nowrap-edge"]),
+        ("reopen-notifies", control::<ReopenNotifies>("reopen-notifies"), &["reopen"]),
+        ("single-step", control::<SingleStep>("single-step"), &["step-rows"]),
+        ("no-pass-stop", control::<NoPassStop>("no-pass-stop"), &["step-rows-wrap"]),
     ];
-    for (label, failed) in counts {
-        assert!(failed > 0, "control {label} matches every case");
+    let mut missed = Vec::new();
+    for (label, failed, required) in &controls {
+        if failed.is_empty() {
+            missed.push(format!("{label} matches every case"));
+        }
+        for case in required.iter().filter(|case| !failed.contains(case)) {
+            missed.push(format!("{label} matches {case}"));
+        }
     }
+    assert!(missed.is_empty(), "{missed:?}");
 }

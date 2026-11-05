@@ -14,6 +14,7 @@ module Replacement.ModalRuntime.MenuEnginePair
   , observationPhaseOf
   , segmentResidencies
   , residencyAt
+  , Coverage (..)
   , RoleSummary (..)
   , checkRole
   , comparePair
@@ -66,7 +67,7 @@ data Hit = Hit
 
 -- | Whether the package, and with it the engine's branch at `0xbf95c8`, was published during a
 -- segment. After `ram-unload` restores the stock words, `0xbf95c8` runs stock in the owned role.
-data Residency = EngineResident | EngineUnloaded deriving (Eq, Show)
+data Residency = EngineResident | EngineUnloaded deriving (Eq, Ord, Show)
 
 -- | One segment's observation: its phase, residency, labelled reads and trace hits in recording order.
 data Observation = Observation
@@ -174,9 +175,13 @@ checkStack required observations = do
       Left ("task 1's stack changed at " ++ show mark ++ ", below the bound's floor " ++ show floor_)
     _ -> Right (StackReport lowest highWater)
 
+-- | A class as one role ran it: the segment's residency and whether the engine owns the class.
+data Coverage = Coverage {coverageResidency :: Residency, coverageOwned :: Bool, coverageClass :: String}
+  deriving (Eq, Ord, Show)
+
 -- | A role's events by class and its fallback-site entries.
 data RoleSummary = RoleSummary
-  { summaryClasses :: M.Map String Int
+  { summaryClasses :: M.Map Coverage Int
   , summaryFallbackEntries :: Int
   , summaryEvents :: Int
   }
@@ -206,7 +211,7 @@ checkRole tree role observations = do
         pure walk
           { walkLatest = M.insert (hitCore hit) class_ (walkLatest walk)
           , walkSummary = summary
-              { summaryClasses = M.insertWith (+) (show class_) 1 (summaryClasses summary)
+              { summaryClasses = M.insertWith (+) (Coverage residency (isOwned class_) (show class_)) 1 (summaryClasses summary)
               , summaryEvents = summaryEvents summary + 1 } }
     | hitSite hit == KindSwitch && hitLr hit == Just fallbackReturn = do
         let summary = walkSummary walk

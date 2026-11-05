@@ -540,24 +540,21 @@ impl EngineServices for Unasked {
 #[test]
 fn every_other_class_is_refused_before_any_service_call() {
     let picker = at(PICKER, frame(1, 1, 4, 0), 4, 2);
-    let stopping = at(STOPPING_PICKER, frame(3, 3, 4, 0), 4, 2);
     let page = at(PAGE, frame(1, 1, 3, 0), 3, 1);
+    let framed = at(FRAMED, frame(0, 0, 4, 0), 4, 1);
     let mut far_restored = page;
     far_restored.stack[2] = frame(ROW_STATES as u32, 0, 4, 0);
     let refused = [
         (picker, StageEvent { kind: 4, node: 1, id: 7, extra: 0 }),
         (picker, StageEvent { kind: 4, node: 1, id: 0, extra: 0 }),
         (picker, StageEvent { kind: 5, node: 1, id: 7, extra: 0 }),
-        (picker, StageEvent { kind: 2, node: 1, id: 0x1a, extra: 0 }),
         (picker, StageEvent { kind: 3, node: 1, id: 0, extra: 0 }),
-        (picker, StageEvent { kind: 0x13, node: 1, id: 0, extra: 0 }),
-        (stopping, StageEvent { kind: 4, node: 1, id: 1, extra: 0 }),
-        (stopping, StageEvent { kind: 5, node: 1, id: 1, extra: 0 }),
+        (picker, StageEvent { kind: 0x10, node: 1, id: 0x1d, extra: 0 }),
         (page, StageEvent { kind: 0xe, node: 1, id: 0x17, extra: 0 }),
-        (page, StageEvent { kind: 0xe, node: 0x7a, id: 0x1d, extra: 0 }),
         (far_restored, StageEvent { kind: 0xe, node: 1, id: 0x1d, extra: 0 }),
         (picker, StageEvent { kind: 0xe, node: 1, id: 0x1d, extra: 0 }),
-        (page, StageEvent { kind: 0xf, node: 1, id: 0x1a, extra: 0 }),
+        (framed, StageEvent { kind: 0xa, node: 1, id: 1, extra: 0 }),
+        (closed(), StageEvent { kind: 2, node: 1, id: 0x1d, extra: 0 }),
         (closed(), StageEvent { kind: 1, node: 0x38, id: 0, extra: 0 }),
         (closed(), StageEvent { kind: 1, node: 2, id: 0, extra: 0 }),
         (closed(), StageEvent { kind: 1, node: 1, id: 0xe, extra: 0 }),
@@ -569,18 +566,36 @@ fn every_other_class_is_refused_before_any_service_call() {
 }
 
 #[test]
-fn push_into_a_node_that_stops_at_its_ends_is_refused_before_any_service_call() {
-    static STOP_ROWS: [Row; 1] = [row(0x30, Some(STOPPING_PICKER))];
-    static STOP_NODES: [Node; 4] = [
-        node(0, 5, Wrap::Wraps, None, &TOP_ROWS),
-        node(1, 5, Wrap::Wraps, Some(TOP), &STOP_ROWS),
-        node(1, 0x104, Wrap::Wraps, Some(PAGE), &PICKER_ROWS),
-        node(2, 0x104, Wrap::Stops, Some(PAGE), &PICKER_ROWS),
-    ];
-    let tree = Tree { nodes: &STOP_NODES, registry: registry(), identity: TreeIdentity([7; 32]) };
-    let mut state = at(PAGE, frame(0, 0, 1, 0), 1, 1);
-    let decoded = MenuEvent::decode(StageEvent { kind: 0xe, node: 1, id: 0x1d, extra: 0 }, &tree, &state);
-    assert!(apply(&tree, &mut state, decoded, &mut Unasked).is_err());
+fn a_row_step_past_the_end_of_a_node_that_stops_is_rejected_without_a_notification() {
+    let state = at(STOPPING_PICKER, frame(3, 3, 4, 0), 4, 2);
+    let mut answers = Answers::default();
+    let transition = run(&state, 4, 1, 1, &mut answers).expect("owned");
+    assert_eq!(transition.result, EngineResult::Rejected);
+    assert_eq!(transition.state.live.cursor, RowIndex::new(3));
+    assert!(!answers.calls.iter().any(|call| matches!(call, Call::Perform(Effect::Notify(_)))));
+}
+
+#[test]
+fn close_notifies_and_clears_the_menu_open_flag() {
+    let mut state = at(PICKER, frame(1, 1, 4, 0), 4, 2);
+    state.menu_open = MenuOpen::Open;
+    let mut answers = Answers::default();
+    let transition = run(&state, 2, 1, 0x1a, &mut answers).expect("owned");
+    assert_eq!(transition.result, EngineResult::Accepted);
+    assert_eq!(transition.state.menu_open, MenuOpen::Closed);
+    let notify = Notify { kind: StageKind::Close, node: StageNode::new(1), id: StageId::new(0x1a), class: MenuClass::new(0x104) };
+    assert_eq!(answers.calls.first(), Some(&Call::Perform(Effect::Notify(notify))));
+}
+
+#[test]
+fn close_with_an_id_outside_its_range_is_rejected_without_a_notification() {
+    let mut state = at(PICKER, frame(1, 1, 4, 0), 4, 2);
+    state.menu_open = MenuOpen::Open;
+    let mut answers = Answers::default();
+    let transition = run(&state, 2, 1, 0x1e, &mut answers).expect("owned");
+    assert_eq!(transition.result, EngineResult::Rejected);
+    assert_eq!(transition.state.menu_open, MenuOpen::Open);
+    assert!(!answers.calls.iter().any(|call| matches!(call, Call::Perform(Effect::Notify(_)))));
 }
 
 #[test]
@@ -606,4 +621,49 @@ fn push_from_a_row_whose_child_is_a_package_node_is_refused_before_any_service_c
     let mut state = at(PAGE, frame(1, 1, 2, 0), 2, 1);
     let decoded = MenuEvent::decode(StageEvent { kind: 0xe, node: 1, id: 0x1d, extra: 0 }, &tree, &state);
     assert_eq!(apply(&tree, &mut state, decoded, &mut Unasked), Err(NotOwned::PackageChild));
+}
+
+/// A page whose row 0 leads to the picker and whose row 1 to a package node.
+static PACKAGE_ROWS: [Row; 2] = [row(0x20, Some(PICKER)), Row { token: RowToken::new(0x7d), child: RowChild::Package }];
+static PACKAGE_NODES: [Node; 3] = [
+    node(0, 5, Wrap::Wraps, None, &TOP_ROWS),
+    node(1, 5, Wrap::Wraps, Some(TOP), &PACKAGE_ROWS),
+    node(1, 0x104, Wrap::Wraps, Some(PAGE), &PICKER_ROWS),
+];
+static PACKAGE_TREE: Tree = Tree { nodes: &PACKAGE_NODES, registry: registry(), identity: TreeIdentity([9; 32]) };
+
+fn refused(tree: &Tree, mut state: EngineState, raw: StageEvent) -> Result<EngineResult, NotOwned> {
+    let decoded = MenuEvent::decode(raw, tree, &state);
+    apply(tree, &mut state, decoded, &mut Unasked)
+}
+
+#[test]
+fn a_pop_move_push_whose_parent_has_a_package_row_is_refused_before_any_service_call() {
+    let state = at(PICKER, frame(1, 1, 4, 0), 4, 2);
+    assert_eq!(refused(&PACKAGE_TREE, state, StageEvent { kind: 6, node: 1, id: 1, extra: 0 }), Err(NotOwned::PackageChild));
+}
+
+#[test]
+fn a_push_move_pop_at_the_deepest_stack_frame_is_refused_before_any_service_call() {
+    let state = at(PAGE, frame(1, 1, 3, 0), 3, (STACK_FRAMES - 1) as u32);
+    assert_eq!(refused(&TREE, state, StageEvent { kind: 8, node: 1, id: 1, extra: 0 }), Err(NotOwned::StackBounds));
+}
+
+#[test]
+fn a_push_move_pop_restoring_a_cursor_past_the_childs_rows_is_refused_before_any_service_call() {
+    let mut state = at(PAGE, frame(1, 1, 3, 0), 3, 1);
+    state.stack[2] = frame(5, 5, 4, 0);
+    assert_eq!(refused(&TREE, state, StageEvent { kind: 8, node: 1, id: 1, extra: 0 }), Err(NotOwned::RowBounds));
+}
+
+#[test]
+fn a_stepping_seek_checks_every_rows_child_before_any_service_call() {
+    let state = at(PAGE, frame(0, 0, 2, 0), 2, 1);
+    assert_eq!(refused(&PACKAGE_TREE, state, StageEvent { kind: 0xa, node: 1, id: 1, extra: 0 }), Err(NotOwned::PackageChild));
+}
+
+#[test]
+fn kind_9_is_refused_before_any_service_call() {
+    let state = at(PAGE, frame(1, 1, 3, 0), 3, 1);
+    assert_eq!(refused(&TREE, state, StageEvent { kind: 9, node: 1, id: 1, extra: 0 }), Err(NotOwned::EventClass));
 }

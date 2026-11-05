@@ -70,7 +70,13 @@ main = do
     Right summary -> do
       putStrLn (show role ++ ": " ++ show (summaryEvents summary) ++ " stage events, "
         ++ show (summaryFallbackEntries summary) ++ " fallback-site entries")
-      mapM_ (\(class_, count) -> putStrLn ("  " ++ class_ ++ ": " ++ show count)) (M.toList (summaryClasses summary))
+      let classes = M.toList (summaryClasses summary)
+          label coverage = (if coverageResidency coverage == EngineResident then "resident" else "unloaded")
+            ++ (if coverageOwned coverage then " owned " else " fallback ") ++ coverageClass coverage
+          resident isEngine = [count | (coverage, count) <- classes, coverageResidency coverage == EngineResident, coverageOwned coverage == isEngine]
+      mapM_ (\(coverage, count) -> putStrLn ("  " ++ label coverage ++ ": " ++ show count)) classes
+      putStrLn ("  while resident: " ++ show (sum (resident True)) ++ " owned events in " ++ show (length (resident True))
+        ++ " classes, " ++ show (sum (resident False)) ++ " fallback events in " ++ show (length (resident False)) ++ " classes")
       pure True
   -- The bound is the owned build's: its relinked ELF and manifest sit in the owned receipt.
   manifestBytes <- B.readFile (ownedPath </> "relinked" </> "ram-push-manifest.json")

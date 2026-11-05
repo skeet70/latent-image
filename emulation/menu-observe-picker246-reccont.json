@@ -1,0 +1,138 @@
+{
+  "schema": 1,
+  "path": [
+    "ok",
+    "down",
+    "ok"
+  ],
+  "key": "down",
+  "trace_sites": [
+    {
+      "address": "0x0063270c",
+      "label": "event-post"
+    },
+    {
+      "address": "0x00c24994",
+      "label": "queue-dispatch-0-48"
+    },
+    {
+      "address": "0x00c6dd40",
+      "label": "c74-event-151"
+    },
+    {
+      "address": "0x00c7a528",
+      "label": "c75-event-50"
+    },
+    {
+      "address": "0x00c12aac",
+      "label": "router"
+    },
+    {
+      "address": "0x00c6eb44",
+      "label": "down-action"
+    },
+    {
+      "address": "0x00ca4674",
+      "label": "stage-consumer"
+    },
+    {
+      "address": "0x00d4dd2c",
+      "label": "stage-entry"
+    },
+    {
+      "address": "0x00c2d8ec",
+      "label": "value-change"
+    },
+    {
+      "address": "0x00d4fc74",
+      "label": "commit"
+    },
+    {
+      "address": "0x00d586bc",
+      "label": "value-mode"
+    },
+    {
+      "address": "0x00d3d620",
+      "label": "value-post"
+    },
+    {
+      "address": "0x00ca4a28",
+      "label": "c100-event-72"
+    },
+    {
+      "address": "0x00c2e0d0",
+      "label": "c30-event-73"
+    },
+    {
+      "address": "0x00ca445c",
+      "label": "c100-event-2"
+    },
+    {
+      "address": "0x00d25a68",
+      "label": "c100-event-2-body"
+    },
+    {
+      "address": "0x00ca449c",
+      "label": "c100-event-4"
+    },
+    {
+      "address": "0x00d3b418",
+      "label": "exposure-compare"
+    },
+    {
+      "address": "0x00d0b8b4",
+      "label": "write-278-279"
+    },
+    {
+      "address": "0x00c2eafc",
+      "label": "c30-event-76"
+    },
+    {
+      "address": "0x00d4c8d4",
+      "label": "request-copy"
+    },
+    {
+      "address": "0x00d3d894",
+      "label": "request-send"
+    },
+    {
+      "address": "0x00d38d98",
+      "label": "redraw-notify"
+    },
+    {
+      "address": "0x00d38e1c",
+      "label": "redraw-dispatch"
+    },
+    {
+      "address": "0x0061c91c",
+      "label": "property-write"
+    },
+    {
+      "address": "0x00dcb6c0",
+      "label": "record-post"
+    }
+  ],
+  "write_ranges": [
+    {
+      "start": "0x0094f64c",
+      "end": "0x0094f660"
+    },
+    {
+      "start": "0x00944580",
+      "end": "0x009445a0"
+    },
+    {
+      "start": "0x009503a0",
+      "end": "0x009503a8"
+    },
+    {
+      "start": "0x009571d0",
+      "end": "0x00957600"
+    },
+    {
+      "start": "0x0096cc64",
+      "end": "0x0096ce28"
+    }
+  ],
+  "limit": 65536
+}

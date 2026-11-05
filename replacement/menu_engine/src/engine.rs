@@ -2,21 +2,23 @@
 //! snapshot store at the open node's record id. Owned classes, each with an
 //! oracle case:
 //!
-//! - kinds 4 and 5, a row step on a node with `Wrap::Wraps` and
-//!   `Availability::Queried`;
-//! - kind `0xe`, no seek id, from a node whose remember write runs (parent with
-//!   another id) into a node of type other than 5 or 7;
-//! - kind `0xf`, no seek id, from a node whose parent has its id, into a node of
-//!   type other than 5 or 7;
+//! - kinds 4 and 5, a row step of any nonzero count other than a page;
+//! - kinds `0x45`..`0x48`, the group moves of `0xbf9c1c`;
+//! - kind 2 with an open node;
+//! - kinds `0xe` and `0xf`, no seek id, into a node of type other than 5 or 7;
+//! - kinds 6, 7, 8, `0xa` and `0xb`, whose inner pushes, pops and moves are
+//!   those of kinds `0xe`, `0xf`, 4 and 5, the seek of `0xa` and `0xb` on a
+//!   node of type other than 5 or 7;
 //! - kind 1 on a registered node other than `0x38` of type other than 5 or 7,
-//!   with an id the `0xbfad04` switch passes to its default arm.
+//!   with an id the `0xbfad04` switch passes to its default arm;
+//! - kind `0x13` on the open node.
 //!
-//! The node a push, pop or open opens (`0xbfa800`) also needs `Wrap::Wraps`,
-//! `Availability::Queried`, 1..=`ROW_STATES` rows and a restored cursor below
-//! `ROW_STATES`. `apply` decides all of this before its first service call.
-//! When no row is selectable after the availability answers, the engine takes
-//! `0xbfa800`'s empty arm: it returns 0 at a node without a parent, and
-//! otherwise calls the stock kind switch for the nested pop as stock does.
+//! Every node a push, pop, open or re-open opens (`0xbfa800`) needs 1..=`ROW_STATES`
+//! rows and a restored cursor below `ROW_STATES`, and `apply` decides this for
+//! each node an event can reach before its first service call. When no row is
+//! selectable after the availability answers, the engine takes `0xbfa800`'s
+//! empty arm: it returns 0 at a node without a parent, and otherwise calls the
+//! stock kind switch for the nested pop as stock does.
 
 use core::ops::DerefMut;
 
@@ -220,7 +222,6 @@ pub enum EngineResult {
 pub enum NotOwned {
     EventClass,
     NoOpenNode,
-    NodeFlags,
     NoValues,
     /// A row index past the rows array, a row-state index past `ROW_STATES`
     /// or a node with more rows than `ROW_STATES`.
@@ -228,7 +229,6 @@ pub enum NotOwned {
     StackBounds,
     /// A stage node outside the registry or one with a node-specific branch.
     StageNode,
-    RememberBranch,
     /// `0xbfad04` pushes or pops again for a node of type 5 or 7.
     FramedNode,
     NoChild,
@@ -241,6 +241,9 @@ pub enum NotOwned {
     EmptyNode,
     /// A `NodeRef` past the tree's nodes.
     TreeBounds,
+    /// An inner move of kinds 6..`0xb` that `0xbf9f44` takes as a page step
+    /// or refuses for a zero id.
+    InnerMove,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -249,6 +252,16 @@ pub struct Notify {
     pub node: StageNode,
     pub id: StageId,
     pub class: MenuClass,
+}
+
+word!(
+    /// A settings property `FUN_0061c91c` writes.
+    PropertyId
+);
+
+impl PropertyId {
+    /// The property `0xbf9a5c(0x7a)` writes with the remembered row's index.
+    pub const REMEMBERED_7A: Self = Self::new(0x285);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -264,6 +277,8 @@ pub enum Effect {
     /// The installed bank's `rb_bank_page_entry` work at each call of
     /// `0xbfa800` (`menu/recipe_bank_arm.S`), before `0xbfa800` runs.
     PageEntry,
+    /// `FUN_0061c91c(property, value, 0)`.
+    PropertyWrite { property: PropertyId, value: RowIndex },
 }
 
 /// `0xbfa234(kind, node, id, extra)`.
@@ -324,16 +339,43 @@ pub(crate) trait Rules {
     const PUSH_CLASSIFIER: bool = true;
     const DOWN_BOTTOM_ARM: bool = true;
     const OPEN_BOTTOM_ARM: bool = true;
+    /// `0xbf9a5c` returns for a node whose `Remember` is off.
+    const REMEMBER_FLAG: bool = true;
+    /// `0xbf9a5c` skips the write when the parent has the node's id.
+    const REMEMBER_PARENT_ID: bool = true;
+    /// A pop runs `0xbf9a5c`'s write.
+    const POP_REMEMBERS: bool = true;
+    /// Kind 2 clears `0x009575fc`.
+    const CLOSE_CLEARS_MENU_OPEN: bool = true;
+    /// The inner steps of kinds 6..`0xb` notify with id 0.
+    const FRAME_NOTIFY_ID_ZERO: bool = true;
+    /// Kinds `0xa` and `0xb` run `0xbfad04`'s seek loop.
+    const SEEK_STEPS: bool = true;
+    /// `0xbfa800` asks no availability on a node with fixed availability.
+    const FIXED_UNQUERIED: bool = true;
+    /// `0xbf9a5c(0x7a)` writes property `0x285`.
+    const PROPERTY_WRITE: bool = true;
+    /// Kinds `0x45`..`0x48` move by `0xbf9c1c`.
+    const GROUP_ARMS: bool = true;
+    /// Kind `0x13` makes no notification.
+    const REOPEN_SILENT: bool = true;
+    /// Kinds 4 and 5 repeat the step `id` times.
+    const STEP_COUNT: bool = true;
+    /// The repeated step stops once the cursor passes its start.
+    const PASS_STOP: bool = true;
 }
 
 pub(crate) struct Stock;
 
 impl Rules for Stock {}
 
-/// `0xbf9a5c` also writes property `0x285` for this node index.
-const PROPERTY_NODE: StageNode = StageNode::new(0x7a);
 /// `0xbfad04` writes `0x009573e4` for this node index and class `0x228`.
 const SEEK_CLASS_NODE: StageNode = StageNode::new(0x38);
+/// `0xbf9a5c` writes property `0x285` for this node index.
+const PROPERTY_NODE: NodeIndex = match NodeIndex::parse(0x7a) {
+    Some(index) => index,
+    None => panic!(),
+};
 
 /// Runs `event` on `state` in place. Returns `NotOwned` only before its
 /// first service call, leaving `state` partly changed; the block is then
@@ -392,6 +434,8 @@ enum ScrollRule {
     Up,
     /// Kind 1, used by every node open.
     Open,
+    /// Kinds `0x45`..`0x48`: the top stays.
+    Keep,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -400,6 +444,41 @@ enum RememberBranch {
     NoParent,
     OtherParentId,
     SameParentId,
+}
+
+/// The step `0xbfab98` makes: a push into the cursor row's child or a pop to
+/// the parent.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Switch {
+    Push,
+    Pop,
+}
+
+impl Switch {
+    const fn kind(self) -> StageKind {
+        match self {
+            Self::Push => StageKind::Push,
+            Self::Pop => StageKind::Pop,
+        }
+    }
+}
+
+/// `0xbfa800`'s kind argument and what it skips.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OpenMode {
+    /// Kinds 1, `0xe` and `0xf`.
+    Open(StageKind),
+    /// Kind `0x13`: no scroll and no saved frame.
+    Reopen,
+}
+
+impl OpenMode {
+    const fn kind(self) -> StageKind {
+        match self {
+            Self::Open(kind) => kind,
+            Self::Reopen => StageKind::Reopen,
+        }
+    }
 }
 
 /// `P` is the in-progress state: a borrow on the host, and in the guest a
@@ -418,6 +497,15 @@ fn framed(node: &Node) -> bool {
     FRAMED_TYPES.contains(&node.node_type)
 }
 
+/// Whether a node `0xbfad04` would push or pop again may be opened.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FramedTarget {
+    /// `0xbfad04` follows the open.
+    Refused,
+    /// An inner step of kinds 6..`0xb`, which no `0xbfad04` follows.
+    Allowed,
+}
+
 impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine<'a, R, S, P> {
     fn run(&mut self, event: MenuEvent) -> Result<EngineResult, NotOwned> {
         if let Some(open) = self.state.node {
@@ -427,9 +515,13 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         }
         let result = match event {
             MenuEvent::Move { direction, step: Step::Rows(count), node } => self.move_rows(direction, node, count)?,
-            MenuEvent::Push { node, id, .. } => self.push_pop(StageKind::Push, node, id)?,
-            MenuEvent::Pop { node, id, .. } => self.push_pop(StageKind::Pop, node, id)?,
+            MenuEvent::GroupMove { kind, node, .. } => self.group_move(kind, node)?,
+            MenuEvent::Push { node, id, .. } => self.push_pop(Switch::Push, node, id)?,
+            MenuEvent::Pop { node, id, .. } => self.push_pop(Switch::Pop, node, id)?,
             MenuEvent::Open { node, id, extra } => self.open(node, id, extra)?,
+            MenuEvent::Close { node, id } => self.close(node, id)?,
+            MenuEvent::FrameMove { kind, node, id, extra } => self.frame_move(kind, node, id, extra)?,
+            MenuEvent::Reopen { node } => self.reopen(node)?,
             _ => return Err(NotOwned::EventClass),
         };
         let id = self.current()?.id;
@@ -584,6 +676,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
             ScrollRule::Up => self.count(CountMode::Visible)?.wrapping_sub(page),
             ScrollRule::Open if page <= new && R::OPEN_BOTTOM_ARM => from_bottom,
             ScrollRule::Open => 0,
+            ScrollRule::Keep => top,
         };
         Ok(ScrollTop::new(scrolled))
     }
@@ -691,36 +784,38 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
 
     fn remember_branch(&self, node: &Node) -> Result<RememberBranch, NotOwned> {
         Ok(match (node.remember, node.parent) {
-            (Remember::Off, _) => RememberBranch::Off,
-            (Remember::On, None) => RememberBranch::NoParent,
-            (Remember::On, Some(parent)) if self.node(parent)?.id != node.id => RememberBranch::OtherParentId,
-            (Remember::On, Some(_)) => RememberBranch::SameParentId,
+            (Remember::Off, _) if R::REMEMBER_FLAG => RememberBranch::Off,
+            (_, None) => RememberBranch::NoParent,
+            (_, Some(parent)) if self.node(parent)?.id != node.id => RememberBranch::OtherParentId,
+            (_, Some(_)) => RememberBranch::SameParentId,
         })
     }
 
-    /// `0xbf9a5c` for a node index other than `0x7a`.
-    fn remember(&mut self, index: NodeIndex) -> Result<(), NotOwned> {
+    /// `0xbf9a5c(index)` on the open node, run by kind 2 and each push and pop.
+    fn remember(&mut self, index: NodeIndex, switch: Option<Switch>) -> Result<(), NotOwned> {
         let node = self.current()?;
-        match self.remember_branch(node)? {
-            RememberBranch::Off | RememberBranch::SameParentId => {}
-            RememberBranch::NoParent | RememberBranch::OtherParentId => {
-                if node.rows.is_some() {
-                    let token = Self::token_at(node, self.state.live.cursor)?;
-                    *self.state.remembered.get_mut(index.index()).ok_or(NotOwned::StageNode)? = token;
-                }
-            }
+        let writes = match self.remember_branch(node)? {
+            RememberBranch::Off => return Ok(()),
+            RememberBranch::SameParentId => !R::REMEMBER_PARENT_ID,
+            RememberBranch::NoParent | RememberBranch::OtherParentId => true,
+        };
+        if writes && node.rows.is_some() && (R::POP_REMEMBERS || switch != Some(Switch::Pop)) {
+            let token = Self::token_at(node, self.state.live.cursor)?;
+            *self.state.remembered.get_mut(index.index()).ok_or(NotOwned::StageNode)? = token;
+        }
+        if index == PROPERTY_NODE && R::PROPERTY_WRITE {
+            let remembered = *self.state.remembered.get(index.index()).ok_or(NotOwned::StageNode)?;
+            let value = RowIndex::new(self.ordinal(remembered, OrdinalMode::Index)?);
+            self.perform(Effect::PropertyWrite { property: PropertyId::REMEMBERED_7A, value });
         }
         Ok(())
     }
 
     /// What `open_rows` needs of the node it opens and of the cursor it keeps
     /// when the initial row gives no selection.
-    fn check_open(target: &Node, restored: RowIndex) -> Result<(), NotOwned> {
-        if framed(target) {
+    fn check_open(target: &Node, restored: RowIndex, framed_target: FramedTarget) -> Result<(), NotOwned> {
+        if framed_target == FramedTarget::Refused && framed(target) {
             return Err(NotOwned::FramedNode);
-        }
-        if target.wrap != Wrap::Wraps || target.availability != Availability::Queried {
-            return Err(NotOwned::NodeFlags);
         }
         let rows = Self::rows(target)?.len();
         if rows == 0 {
@@ -732,66 +827,87 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         Ok(())
     }
 
-    /// `0xbfa800` for kinds other than `0x13`, on a node `check_open` passed.
-    fn open_rows(&mut self, kind: StageKind, node_word: StageNode) -> Result<bool, NotOwned> {
+    /// `0xbfa800(kind, node, direction)` on a node `check_open` passed.
+    fn open_rows(&mut self, mode: OpenMode, node_word: StageNode, direction: Direction) -> Result<bool, NotOwned> {
         self.perform(Effect::PageEntry);
         let node = self.current()?;
         let rows = Self::rows(node)?;
         let total = self.count(CountMode::All)?;
         self.state.total = RowCount::new(total);
+        let fixed = node.availability == Availability::Fixed;
         self.state.row_states = [RowState::Offered; ROW_STATES];
-        for row in rows.iter().take(total as usize) {
-            let answer = self.availability(node.class, row.token);
-            let first = rows.iter().position(|other| other.token == row.token);
-            if let Some(slot) = first.and_then(|first| self.state.row_states.get_mut(first)) {
-                *slot = answer;
+        if !fixed || !R::FIXED_UNQUERIED {
+            for row in rows.iter().take(total as usize) {
+                let answer = self.availability(node.class, row.token);
+                let first = rows.iter().position(|other| other.token == row.token);
+                if let Some(slot) = first.and_then(|first| self.state.row_states.get_mut(first)) {
+                    *slot = answer;
+                }
             }
-        }
-        self.state.visible_at_open = VisibleCount::new(self.count(CountMode::Visible)?);
-        if !self.state.row_states.iter().take(total as usize).any(|&state| R::selectable(state)) {
-            if node.parent.is_none() {
-                return Ok(false);
+            self.state.visible_at_open = VisibleCount::new(self.count(CountMode::Visible)?);
+            if !self.state.row_states.iter().take(total as usize).any(|&state| R::selectable(state)) {
+                if node.parent.is_none() {
+                    return Ok(false);
+                }
+                let call =
+                    KindSwitchCall { kind: StageKind::Pop, node: node_word, id: StageId::NESTED_POP, extra: StageExtra::new(0) };
+                return Ok(self.kind_switch(call) == EngineResult::Accepted);
             }
-            let call =
-                KindSwitchCall { kind: StageKind::Pop, node: node_word, id: StageId::NESTED_POP, extra: StageExtra::new(0) };
-            return Ok(self.kind_switch(call) == EngineResult::Accepted);
         }
 
-        let answer = self.initial_row(kind, node_word, node.class);
+        let answer = self.initial_row(mode.kind(), node_word, node.class);
         if let (Some(token), true) = (answer, R::INITIAL_ROW) {
             self.state.live.cursor = RowIndex::new(self.ordinal(token, OrdinalMode::Index)?);
             self.state.live.ordinal = VisibleOrdinal::new(self.ordinal(token, OrdinalMode::Visible)?);
         }
-        let result = if R::selectable(self.row_state(self.state.live.cursor)?) {
+        let result = if fixed || R::selectable(self.row_state(self.state.live.cursor)?) {
             true
         } else {
-            if kind == StageKind::Open {
+            if mode == OpenMode::Open(StageKind::Open) {
                 self.state.live.cursor = RowIndex::new(self.state.total.get().wrapping_sub(1));
             }
-            let stepped = self.step(Direction::Down)?;
+            let stepped = self.step(direction)?;
             R::selectable(self.row_state(self.state.live.cursor)?) || stepped
         };
-        let ordinal = self.open_cursor_ordinal()?;
-        self.state.live.scroll = self.scroll(ScrollTop::new(0), ordinal, ScrollRule::Open)?;
-        self.state.saved = self.state.live;
+        if mode != OpenMode::Reopen {
+            let ordinal = self.open_cursor_ordinal()?;
+            self.state.live.scroll = self.scroll(ScrollTop::new(0), ordinal, ScrollRule::Open)?;
+            self.state.saved = self.state.live;
+        }
         self.state.live.ordinal = self.open_cursor_ordinal()?;
         self.state.live.count = VisibleCount::new(self.count(CountMode::Visible)?);
         Ok(result)
     }
 
     fn stage_index(node: StageNode) -> Result<NodeIndex, NotOwned> {
-        if node == PROPERTY_NODE {
-            return Err(NotOwned::StageNode);
-        }
         NodeIndex::parse(node.get()).ok_or(NotOwned::StageNode)
+    }
+
+    /// `0xbf9f44`'s arm for an inner move of kinds 6..`0xb` is a row step.
+    fn check_inner_move(node: &Node, node_word: StageNode, id: StageId) -> Result<(), NotOwned> {
+        if id.get() == 0 || (node.rows_per_page.get() == id.get() && node_word.get() != 0) {
+            return Err(NotOwned::InnerMove);
+        }
+        Ok(())
+    }
+
+    /// `0xbf9f44`'s tail: scroll, notify, the last-move pair and the snapshot
+    /// store at the event's node.
+    fn move_tail(&mut self, kind: StageKind, node_word: StageNode, old_scroll: ScrollTop, rule: ScrollRule) -> Result<EngineResult, NotOwned> {
+        let node = self.current()?;
+        let ordinal = self.visible_ordinal_at(self.state.live.cursor)?;
+        self.state.live.scroll = self.scroll(old_scroll, ordinal, rule)?;
+        let record = self.snapshot()?;
+        self.notify(kind, node_word, StageId::VALUE, node.class);
+        if R::LAST_MOVE {
+            self.state.last_move = LastMove { class: record.class, token: record.cursor_token };
+        }
+        self.store(SnapshotSlot::new(node_word.get()));
+        Ok(EngineResult::Accepted)
     }
 
     /// Kinds 4 and 5 with a row step: `0xbf9f44`.
     fn move_rows(&mut self, direction: Direction, node_word: StageNode, count: StepCount) -> Result<EngineResult, NotOwned> {
-        let node = self.current()?;
-        if node.wrap != Wrap::Wraps || node.availability != Availability::Queried {
-            return Err(NotOwned::NodeFlags);
-        }
         if count.get() == 0 {
             return Err(NotOwned::EventClass);
         }
@@ -799,6 +915,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
             Direction::Down => (StageKind::MoveDown, ScrollRule::Down),
             Direction::Up => (StageKind::MoveUp, ScrollRule::Up),
         };
+        let count = if R::STEP_COUNT { count.get() } else { 1 };
         let old_cursor = self.state.live.cursor;
         let old_scroll = self.state.live.scroll;
         let mut steps = 1u32;
@@ -811,45 +928,194 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
                 Direction::Down => cursor <= old_cursor,
                 Direction::Up => old_cursor <= cursor,
             };
-            if passed_start || count.get() <= steps {
+            if (passed_start && R::PASS_STOP) || count <= steps {
                 break;
             }
             steps += 1;
         }
-        let ordinal = self.visible_ordinal_at(self.state.live.cursor)?;
-        self.state.live.scroll = self.scroll(old_scroll, ordinal, rule)?;
-        let record = self.snapshot()?;
-        self.notify(kind, node_word, StageId::VALUE, node.class);
-        if R::LAST_MOVE {
-            self.state.last_move = LastMove { class: record.class, token: record.cursor_token };
-        }
-        self.store(SnapshotSlot::new(node_word.get()));
-        Ok(EngineResult::Accepted)
+        self.move_tail(kind, node_word, old_scroll, rule)
     }
 
-    /// Kinds `0xe` and `0xf` with an id other than `0x17` and `0x18`:
-    /// `0xbfab98`, then `0xbfad04`.
-    fn push_pop(&mut self, kind: StageKind, node_word: StageNode, id: StageId) -> Result<EngineResult, NotOwned> {
-        if id == StageId::SEEK || id == StageId::SEEK_PUSH {
-            return Err(NotOwned::EventClass);
+    fn accept_row(&mut self, row: u32) -> Result<bool, NotOwned> {
+        let cursor = RowIndex::new(row);
+        self.state.live.cursor = cursor;
+        self.state.live.ordinal = self.visible_ordinal_at(cursor)?;
+        self.state.live.count = VisibleCount::new(self.count(CountMode::Visible)?);
+        Ok(true)
+    }
+
+    fn hidden(&self, row: u32) -> Result<bool, NotOwned> {
+        Ok(self.row_state(RowIndex::new(row))? == RowState::Hidden)
+    }
+
+    fn row_selectable(&self, row: u32) -> Result<bool, NotOwned> {
+        Ok(R::selectable(self.row_state(RowIndex::new(row))?))
+    }
+
+    /// `0xbf9c1c`: kinds `0x47` and `0x48` step to the fourth row not hidden,
+    /// with wrap; kinds `0x45` and `0x46` move within a group of four visible
+    /// ordinals.
+    fn group_step(&mut self, kind: StageKind) -> Result<bool, NotOwned> {
+        let node = self.current()?;
+        let total = self.state.total.get();
+        let mut cursor = self.state.live.cursor.get();
+        match kind {
+            StageKind::Move47 | StageKind::Move48 => {
+                let last = total.wrapping_sub(1);
+                if last == 0 {
+                    return Ok(false);
+                }
+                let mut counted = 0u32;
+                let mut tries = 0u32;
+                loop {
+                    let next = match kind {
+                        StageKind::Move47 if cursor != 0 => cursor - 1,
+                        StageKind::Move47 => last,
+                        _ if cursor < last => cursor + 1,
+                        _ => 0,
+                    };
+                    if !self.hidden(next)? {
+                        counted += 1;
+                    }
+                    if counted == 4 {
+                        if self.row_selectable(next)? {
+                            return self.accept_row(next);
+                        }
+                        counted = 0;
+                    }
+                    tries += 1;
+                    cursor = next;
+                    if last <= tries {
+                        return Ok(false);
+                    }
+                }
+            }
+            StageKind::Move46 => {
+                for _ in 0..4 {
+                    let ordinal = self.ordinal(Self::token_at(node, RowIndex::new(cursor))?, OrdinalMode::Visible)?;
+                    let mut next = cursor;
+                    if ordinal.wrapping_add(1) & 3 == 0 {
+                        for back in (1..=3u32).rev() {
+                            let mut row = cursor;
+                            for _ in 0..back {
+                                row = row.wrapping_sub(1);
+                                while self.hidden(row)? {
+                                    row = row.wrapping_sub(1);
+                                }
+                            }
+                            if self.row_selectable(row)? {
+                                return self.accept_row(row);
+                            }
+                        }
+                    } else if total.wrapping_sub(1) != 0 {
+                        next = cursor.wrapping_add(1);
+                        if next <= total {
+                            let mut gave_up = false;
+                            if self.hidden(next)? {
+                                loop {
+                                    if next == cursor.wrapping_add(total - 1) {
+                                        gave_up = true;
+                                        break;
+                                    }
+                                    next += 1;
+                                    if total < next {
+                                        gave_up = true;
+                                        break;
+                                    }
+                                    if !self.hidden(next)? {
+                                        break;
+                                    }
+                                }
+                            }
+                            if !gave_up && self.row_selectable(next)? {
+                                return self.accept_row(next);
+                            }
+                        }
+                    }
+                    cursor = next;
+                }
+                Ok(false)
+            }
+            _ => {
+                for _ in 0..4 {
+                    let ordinal = self.ordinal(Self::token_at(node, RowIndex::new(cursor))?, OrdinalMode::Visible)?;
+                    let mut next = cursor;
+                    if ordinal & 3 == 0 {
+                        for forward in (1..=3u32).rev() {
+                            if cursor.wrapping_add(1) < total {
+                                let mut seen = 0u32;
+                                let mut row = cursor + 1;
+                                while row < total {
+                                    if !self.hidden(row)? {
+                                        seen += 1;
+                                        if seen == forward {
+                                            if self.row_selectable(row)? {
+                                                return self.accept_row(row);
+                                            }
+                                            break;
+                                        }
+                                    }
+                                    row += 1;
+                                }
+                            }
+                        }
+                    } else if total != 1 {
+                        next = cursor.wrapping_sub(1);
+                        let mut gave_up = false;
+                        if self.hidden(next)? {
+                            loop {
+                                if next == 1u32.wrapping_sub(total).wrapping_add(cursor) {
+                                    gave_up = true;
+                                    break;
+                                }
+                                next = next.wrapping_sub(1);
+                                if !self.hidden(next)? {
+                                    break;
+                                }
+                            }
+                        }
+                        if !gave_up && self.row_selectable(next)? {
+                            return self.accept_row(next);
+                        }
+                    }
+                    cursor = next;
+                }
+                Ok(false)
+            }
         }
+    }
+
+    /// Kinds `0x45`..`0x48`: `0xbf9f44` with `0xbf9c1c`.
+    fn group_move(&mut self, kind: StageKind, node_word: StageNode) -> Result<EngineResult, NotOwned> {
+        let old_scroll = self.state.live.scroll;
+        let moved = if R::GROUP_ARMS {
+            self.group_step(kind)?
+        } else {
+            let direction = if matches!(kind, StageKind::Move45 | StageKind::Move47) { Direction::Up } else { Direction::Down };
+            self.step(direction)?
+        };
+        if !moved {
+            return Ok(EngineResult::Rejected);
+        }
+        self.move_tail(kind, node_word, old_scroll, ScrollRule::Keep)
+    }
+
+    /// `0xbfab98(kind, node, direction, notify_id)`: 0 with no call for a
+    /// push from a row without a child or a pop from a node without a parent.
+    fn switch_node(&mut self, switch: Switch, node_word: StageNode, direction: Direction, notify_id: StageId) -> Result<bool, NotOwned> {
         let index = Self::stage_index(node_word)?;
         let source = self.current()?;
         let old_class = source.class;
         let depth = self.state.depth.get() as usize;
-        match kind {
-            StageKind::Push => {
-                if self.remember_branch(source)? != RememberBranch::OtherParentId {
-                    return Err(NotOwned::RememberBranch);
-                }
+        match switch {
+            Switch::Push => {
                 let child = match Self::row(source, self.state.live.cursor)?.map(|row| row.child) {
                     Some(RowChild::Node(child)) => child,
                     Some(RowChild::Package) => return Err(NotOwned::PackageChild),
-                    Some(RowChild::Leaf) | None => return Err(NotOwned::NoChild),
+                    Some(RowChild::Leaf) | None => return Ok(false),
                 };
                 let restored = *self.state.stack.get(depth + 1).ok_or(NotOwned::StackBounds)?;
-                Self::check_open(self.node(child)?, restored.cursor)?;
-                self.remember(index)?;
+                self.remember(index, Some(switch))?;
                 self.check_cursor()?;
                 if R::PUSH_CLASSIFIER {
                     self.state.push_classifier = frame::classify(&self.view());
@@ -859,17 +1125,15 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
                 self.state.live = restored;
                 self.state.depth = StackDepth::new(depth as u32 + 1);
             }
-            _ => {
-                if self.remember_branch(source)? != RememberBranch::SameParentId {
-                    return Err(NotOwned::RememberBranch);
-                }
-                let parent = source.parent.ok_or(NotOwned::NoParent)?;
+            Switch::Pop => {
+                let Some(parent) = source.parent else {
+                    return Ok(false);
+                };
                 let restored = *depth.checked_sub(1).and_then(|below| self.state.stack.get(below)).ok_or(NotOwned::StackBounds)?;
                 if depth >= STACK_FRAMES {
                     return Err(NotOwned::StackBounds);
                 }
-                Self::check_open(self.node(parent)?, restored.cursor)?;
-                self.remember(index)?;
+                self.remember(index, Some(switch))?;
                 self.set_node(parent)?;
                 *self.state.stack.get_mut(depth).ok_or(NotOwned::StackBounds)? = self.state.live;
                 self.state.live = restored;
@@ -877,14 +1141,210 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
             }
         }
         let new_id = StageNode::from(self.current()?.id);
-        self.notify(kind, new_id, id, old_class);
-        let opened = self.open_rows(kind, new_id)?;
+        self.notify(switch.kind(), new_id, notify_id, old_class);
+        let opened = self.open_rows(OpenMode::Open(switch.kind()), new_id, direction)?;
         self.store(SnapshotSlot::new(new_id.get()));
-        if !opened {
+        Ok(opened)
+    }
+
+    /// The checks `switch_node` needs before the first call: a push into the
+    /// cursor row's child or a pop to the parent, with the frame each restores.
+    fn check_switch(&self, switch: Switch, framed_target: FramedTarget) -> Result<(), NotOwned> {
+        let source = self.current()?;
+        let depth = self.state.depth.get() as usize;
+        self.check_cursor()?;
+        match switch {
+            Switch::Push => {
+                let child = match Self::row(source, self.state.live.cursor)?.map(|row| row.child) {
+                    Some(RowChild::Node(child)) => child,
+                    Some(RowChild::Package) => return Err(NotOwned::PackageChild),
+                    Some(RowChild::Leaf) | None => return Err(NotOwned::NoChild),
+                };
+                let restored = *self.state.stack.get(depth + 1).ok_or(NotOwned::StackBounds)?;
+                Self::check_open(self.node(child)?, restored.cursor, framed_target)
+            }
+            Switch::Pop => {
+                let parent = source.parent.ok_or(NotOwned::NoParent)?;
+                let restored = *depth.checked_sub(1).and_then(|below| self.state.stack.get(below)).ok_or(NotOwned::StackBounds)?;
+                if depth >= STACK_FRAMES {
+                    return Err(NotOwned::StackBounds);
+                }
+                Self::check_open(self.node(parent)?, restored.cursor, framed_target)
+            }
+        }
+    }
+
+    /// Kinds `0xe` and `0xf` with an id other than `0x17` and `0x18`:
+    /// `0xbfab98`, then `0xbfad04`.
+    fn push_pop(&mut self, switch: Switch, node_word: StageNode, id: StageId) -> Result<EngineResult, NotOwned> {
+        if id == StageId::SEEK || id == StageId::SEEK_PUSH {
+            return Err(NotOwned::EventClass);
+        }
+        Self::stage_index(node_word)?;
+        self.check_switch(switch, FramedTarget::Refused)?;
+        if !self.switch_node(switch, node_word, Direction::Down, id)? {
             return Ok(EngineResult::Rejected);
         }
         let current = StageNode::from(self.current()?.id);
-        self.seek_framed(kind, current, id, StageId::NO_SEEK, StageExtra::new(0))
+        self.seek_framed(switch.kind(), current, id, StageId::NO_SEEK, StageExtra::new(0))
+    }
+
+    /// A push or pop target of an inner step of kinds 6..`0xb`: a node
+    /// `check_open` passes with `restored`, or a row without a child.
+    fn check_target(&self, child: RowChild, restored: RowIndex) -> Result<Option<&'a Node>, NotOwned> {
+        match child {
+            RowChild::Node(child) => {
+                let node = self.node(child)?;
+                Self::check_open(node, restored, FramedTarget::Allowed)?;
+                Ok(Some(node))
+            }
+            RowChild::Package => Err(NotOwned::PackageChild),
+            RowChild::Leaf => Ok(None),
+        }
+    }
+
+    /// A push into `child` (the cursor row's child when `None`), a move there
+    /// and the pop back.
+    fn check_push_move_pop(&self, child: Option<RowChild>, node_word: StageNode, id: StageId) -> Result<(), NotOwned> {
+        let source = self.current()?;
+        let depth = self.state.depth.get() as usize;
+        let child = match child {
+            Some(child) => child,
+            None => Self::row(source, self.state.live.cursor)?.map_or(RowChild::Leaf, |row| row.child),
+        };
+        if depth + 1 >= STACK_FRAMES {
+            return Err(NotOwned::StackBounds);
+        }
+        let restored = *self.state.stack.get(depth + 1).ok_or(NotOwned::StackBounds)?;
+        let Some(target) = self.check_target(child, restored.cursor)? else {
+            return Ok(());
+        };
+        if restored.cursor.get() as usize > Self::rows(target)?.len() {
+            return Err(NotOwned::RowBounds);
+        }
+        Self::check_inner_move(target, node_word, id)?;
+        if let Some(parent) = target.parent {
+            let last = RowIndex::new(Self::rows(source)?.len().saturating_sub(1) as u32);
+            Self::check_open(self.node(parent)?, last.max(self.state.live.cursor), FramedTarget::Allowed)?;
+        }
+        Ok(())
+    }
+
+    /// Kinds 6, 7, 8, `0xa` and `0xb`: pops, pushes and moves through `0xbfab98`
+    /// and `0xbf9f44` with notification id 0, after the seek for `0xa` and
+    /// `0xb`. Every node the steps can open is checked before the first call.
+    /// Kind 9 has no oracle case.
+    fn frame_move(&mut self, kind: StageKind, node_word: StageNode, id: StageId, extra: StageExtra) -> Result<EngineResult, NotOwned> {
+        if kind == StageKind::PushMoveUpPop {
+            return Err(NotOwned::EventClass);
+        }
+        Self::stage_index(node_word)?;
+        self.check_cursor()?;
+        let source = self.current()?;
+        let depth = self.state.depth.get() as usize;
+        let entry = self.state.live;
+        let notify_id = if R::FRAME_NOTIFY_ID_ZERO { StageId::new(0) } else { id };
+        let count = StepCount::new(id.get());
+        let up = matches!(kind, StageKind::PopMoveUpPush | StageKind::SeekPushMoveUpPop);
+        let direction = if up { Direction::Up } else { Direction::Down };
+        match kind {
+            StageKind::PopMoveDownPush | StageKind::PopMoveUpPush => {
+                let parent = self.node(source.parent.ok_or(NotOwned::NoParent)?)?;
+                if depth == 0 || depth >= STACK_FRAMES {
+                    return Err(NotOwned::StackBounds);
+                }
+                let restored = *self.state.stack.get(depth - 1).ok_or(NotOwned::StackBounds)?;
+                Self::check_open(parent, restored.cursor, FramedTarget::Allowed)?;
+                Self::check_inner_move(parent, node_word, id)?;
+                for row in Self::rows(parent)? {
+                    self.check_target(row.child, entry.cursor)?;
+                }
+                if !self.switch_node(Switch::Pop, node_word, direction, notify_id)? {
+                    return Ok(EngineResult::Rejected);
+                }
+                if self.move_rows(direction, node_word, count)? != EngineResult::Accepted {
+                    return Ok(EngineResult::Rejected);
+                }
+                self.switched(Switch::Push, node_word, Direction::Down, notify_id)
+            }
+            StageKind::PushMoveDownPop => {
+                self.check_push_move_pop(None, node_word, id)?;
+                if !self.switch_node(Switch::Push, node_word, Direction::Down, notify_id)? {
+                    return Ok(EngineResult::Rejected);
+                }
+                if self.move_rows(direction, node_word, count)? != EngineResult::Accepted {
+                    return Ok(EngineResult::Rejected);
+                }
+                self.switched(Switch::Pop, node_word, direction, notify_id)
+            }
+            _ => {
+                if framed(source) {
+                    return Err(NotOwned::FramedNode);
+                }
+                let rows = Self::rows(source)?;
+                let total = self.state.total.get();
+                let zero_step = total == 0 || Self::token_at(source, entry.cursor)?.get() == extra.get();
+                if zero_step {
+                    self.check_push_move_pop(None, node_word, id)?;
+                } else {
+                    Self::check_inner_move(source, node_word, StageId::new(1))?;
+                    for row in rows {
+                        self.check_push_move_pop(Some(row.child), node_word, id)?;
+                    }
+                }
+                if R::SEEK_STEPS && total != 0 {
+                    let mut result = EngineResult::Accepted;
+                    for _ in 0..total {
+                        if Self::token_at(self.current()?, self.state.live.cursor)?.get() == extra.get() {
+                            break;
+                        }
+                        result = self.move_rows(Direction::Down, node_word, StepCount::new(1))?;
+                    }
+                    if result != EngineResult::Accepted {
+                        return Ok(EngineResult::Rejected);
+                    }
+                }
+                if !self.switch_node(Switch::Push, node_word, Direction::Down, notify_id)? {
+                    return Ok(EngineResult::Rejected);
+                }
+                if self.move_rows(direction, node_word, count)? != EngineResult::Accepted {
+                    return Ok(EngineResult::Rejected);
+                }
+                self.switched(Switch::Pop, node_word, Direction::Down, notify_id)
+            }
+        }
+    }
+
+    fn switched(&mut self, switch: Switch, node_word: StageNode, direction: Direction, notify_id: StageId) -> Result<EngineResult, NotOwned> {
+        Ok(if self.switch_node(switch, node_word, direction, notify_id)? { EngineResult::Accepted } else { EngineResult::Rejected })
+    }
+
+    /// Kind 2: `0xd5b350`, `0xbf9a5c` and `0x009575fc` = 0 for ids
+    /// `0x1a`..=`0x1d`, otherwise 0 with no call.
+    fn close(&mut self, node_word: StageNode, id: StageId) -> Result<EngineResult, NotOwned> {
+        let index = Self::stage_index(node_word)?;
+        let node = self.current()?;
+        if !(0x1a..=0x1d).contains(&id.get()) {
+            return Ok(EngineResult::Rejected);
+        }
+        self.check_cursor()?;
+        self.notify(StageKind::Close, node_word, id, node.class);
+        self.remember(index, None)?;
+        if R::CLOSE_CLEARS_MENU_OPEN {
+            self.state.menu_open = MenuOpen::Closed;
+        }
+        Ok(EngineResult::Accepted)
+    }
+
+    /// Kind `0x13`: `0xbfa800(0x13, node, 0x15)` on the open node.
+    fn reopen(&mut self, node_word: StageNode) -> Result<EngineResult, NotOwned> {
+        let node = self.current()?;
+        Self::check_open(node, self.state.live.cursor, FramedTarget::Allowed)?;
+        let opened = self.open_rows(OpenMode::Reopen, node_word, Direction::Down)?;
+        if opened && !R::REOPEN_SILENT {
+            self.notify(StageKind::Open, node_word, StageId::VALUE, node.class);
+        }
+        Ok(if opened { EngineResult::Accepted } else { EngineResult::Rejected })
     }
 
     /// Kind 1.
@@ -905,8 +1365,8 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         self.state.total = RowCount::new(self.count(CountMode::All)?);
         let remembered = *self.state.remembered.get(index.index()).ok_or(NotOwned::StageNode)?;
         self.state.live.cursor = RowIndex::new(self.ordinal(remembered, OrdinalMode::Index)?);
-        Self::check_open(self.node(target)?, self.state.live.cursor)?;
-        if self.open_rows(StageKind::Open, node_word)? {
+        Self::check_open(self.node(target)?, self.state.live.cursor, FramedTarget::Refused)?;
+        if self.open_rows(OpenMode::Open(StageKind::Open), node_word, Direction::Down)? {
             let class = self.current()?.class;
             self.notify(StageKind::Open, node_word, StageId::VALUE, class);
             if self.seek_framed(StageKind::Open, node_word, StageId::VALUE, id, extra)? == EngineResult::Accepted {
