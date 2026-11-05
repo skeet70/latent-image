@@ -33,7 +33,7 @@ Controller states change only by an action's store to `record_transition_state[c
 
 Events 113, 136, 139, 142, 145, 148, 151 (controller 74) and 47, 49, 50 (controller 75) are dispatched after many keys and are not key events. The controller 74 event source `0x00c09d24` (all.c:340173) gives event 88 for UI code `0x2d` and 89 for `0x2c` (all.c:341119-341130), so `dial-right` is code `0x2d` and `dial-left` code `0x2c` on this body. The controller 75 event source `0xc0bae8` (`ui_m75_event_dispatch`, NONMATCHING, `app/ui/machines/ui_machine_actions_00c077d0.c:2429`; all.c:341168) gives event 33 for code `0x2d` and 34 for code `0x2c` with a zero press word (all.c:341510-341522).
 
-The live-view root is controller 74 in state 4 (the predicate of `emulation/menu-engine-pair-trajectories/oracle.jq`'s `close_menu` in this worktree's uncommitted change, not part of this report). Each config below names the BACKs that crawl-5's back edges give from its landing to that root; the pair trajectory appends them as its `close-menu` segment before the unload. A `--menu-observe` config itself has no closing field (`emulation/Emulation/MenuObserve.hs:69`): the observation runs on the no-install route and does not unload.
+The live-view root is controller 74 in state 4, the predicate of `close_menu` in `emulation/menu-engine-pair-trajectories/oracle.jq` (3e59f908). Each config below names the BACKs that crawl-5's back edges give from its landing to that root; the pair trajectory appends them as its `close-menu` segment before the unload. A `--menu-observe` config itself has no closing field (`emulation/Emulation/MenuObserve.hs:69`): the observation runs on the no-install route and does not unload.
 
 ## Class table
 
@@ -219,7 +219,6 @@ No class adds an owned key cell; the seven frozen picker cells stay. No per-cell
 - Retirement needs the generic refusals gone, not only the classes: while `RowTotal`, `RowBounds`, `StackBounds`, `PackageChild`, `NoChild` and `NoParent` fall back, every function under `0xbfa234` stays reachable. `NoChild` and `NoParent` are events stock rejects with no call (all.c:331563-331565, 331585-331587); owning them as `Rejected` is the cheapest next step.
 - Class 4 is decided by its probe, as class 12 of increment 3 was.
 - The `seek` service stays for a framed landing after a delegated pop. Owning it without a pre-check would let `apply` refuse after a call.
-- The pair trajectories need the `close_menu` change to `oracle.jq` and `picker.jq` now uncommitted in this worktree; this report assumes it lands as written there.
 
 ## Appendix: configs
 
