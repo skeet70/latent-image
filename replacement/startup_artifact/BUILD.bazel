@@ -2,6 +2,8 @@ load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "h
 
 package(default_visibility = ["//visibility:public"])
 
+exports_files(["qualifications.json"], visibility = ["//tests:__pkg__"])
+
 haskell_library(
     name = "startup-artifact",
     srcs = [
