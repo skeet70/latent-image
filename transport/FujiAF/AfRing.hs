@@ -2,7 +2,7 @@
 module FujiAF.AfRing
   ( AfEventKind(..), EventSequence, unEventSequence, EventCount, unEventCount
   , ObservedWord(..), AfEventCore(..), AfEvent(..), AfRingCapture, ringCommittedTotal, ringOverwritten, ringEvents
-  , ContentionStatus(..), ringContentionStatus, ringContentionLoss
+  , ContentionStatus(..), ringContentionStatus, ringContentionLoss, ringPreempted
   , HeaderField(..), RingSlot, unRingSlot, AfRingError(..), AfRingReadError(..)
   , AfRingSource(..), afRingOffset, afRingBytes, afRingCapacity
   , decodeAfRing, afRingValue, afRingWindow, readAfRing
@@ -41,6 +41,7 @@ data AfRingCapture = AfRingCapture
   { ringCommittedTotal :: EventCount
   , ringOverwritten :: EventCount
   , ringContentionStatus :: ContentionStatus
+  , ringPreempted :: EventCount
   , ringEvents :: [AfEvent]
   } deriving (Eq, Show)
 data HeaderField = Magic | Version | HeaderBytes | EventBytes | Capacity | WriterActive | CoreScope | ContentionLoss | Reserved deriving (Eq, Show)
@@ -80,7 +81,7 @@ decodeAfRing :: B.ByteString -> Either AfRingError AfRingCapture
 decodeAfRing bytes = do
   unless (B.length bytes == afRingBytes) (Left (RingExtentMismatch (B.length bytes)))
   mapM_ (\(field,at,wanted) -> unless (word at == wanted) (Left (HeaderMismatch field (ObservedWord (word at)))))
-    [(Magic,0,0x31524641), (Version,4,1), (HeaderBytes,8,64), (EventBytes,12,36), (Capacity,16,256), (CoreScope,32,0x4003)]
+    [(Magic,0,0x31524641), (Version,4,2), (HeaderBytes,8,64), (EventBytes,12,36), (Capacity,16,256), (CoreScope,32,0x4003)]
   case word 28 of
     0 -> pure ()
     1 -> Left ActiveWriter
@@ -89,7 +90,7 @@ decodeAfRing bytes = do
     0 -> Right NoContentionLoss
     1 -> Right ContentionLossDetected
     other -> Left (HeaderMismatch ContentionLoss (ObservedWord other))
-  mapM_ (\at -> unless (word at == 0) (Left (HeaderMismatch Reserved (ObservedWord (word at))))) [40,44..60]
+  mapM_ (\at -> unless (word at == 0) (Left (HeaderMismatch Reserved (ObservedWord (word at))))) [44,48..60]
   let total = word 20
       overwritten = word 24
       retained = min total (fromIntegral afRingCapacity)
@@ -115,7 +116,7 @@ decodeAfRing bytes = do
       (observed (at+20)) (observed (at+24)) (observed (at+28)) AfCpu0)
   mapM_ (\slot -> unless (B.all (== 0) (B.take 36 (B.drop (64+36*slot) bytes)))
     (Left (NonzeroUnusedSlot (RingSlot slot)))) [fromIntegral retained .. afRingCapacity-1]
-  pure (AfRingCapture (EventCount total) (EventCount overwritten) contention events)
+  pure (AfRingCapture (EventCount total) (EventCount overwritten) contention (EventCount (word 40)) events)
   where
     word :: Int -> Word32
     word at = foldr (\index acc -> acc + (fromIntegral (B.index bytes (at+index)) `shiftL` (8*index))) 0 [0..3]
@@ -154,16 +155,17 @@ readAfRing source clock api directory = do
 
 afRingValue :: AfRingCapture -> Value
 afRingValue capture = object
-  [ "schema" .= ("xm1-af-ring-1" :: String)
+  [ "schema" .= ("xm1-af-ring-2" :: String)
   , "capture_semantics" .= ("best-effort capture; not a coherent snapshot" :: String)
   , "timestamp_available" .= False
-  , "version" .= (1 :: Int), "header_bytes" .= (64 :: Int), "event_bytes" .= (36 :: Int)
+  , "version" .= (2 :: Int), "header_bytes" .= (64 :: Int), "event_bytes" .= (36 :: Int)
   , "capacity" .= afRingCapacity, "core_scope" .= (0x4003 :: Word32)
   , "search_state_address" .= (0x016c0fc0 :: Word32)
   , "focus_statistic_address" .= (0x016c1160 :: Word32)
   , "committed_total" .= unEventCount (ringCommittedTotal capture)
   , "overwritten" .= unEventCount (ringOverwritten capture)
   , "contention_loss" .= ringContentionLoss capture
+  , "preempted" .= unEventCount (ringPreempted capture)
   , "overflowed" .= (unEventCount (ringOverwritten capture) /= 0)
   , "saturated" .= (unEventCount (ringCommittedTotal capture) == maxBound)
   , "events" .= map eventValue (ringEvents capture)

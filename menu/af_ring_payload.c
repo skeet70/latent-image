@@ -24,7 +24,8 @@ struct af_ring_storage {
     uint32_t active;
     uint32_t core;
     uint32_t contention_loss;
-    uint32_t reserved[6];
+    uint32_t preempted;
+    uint32_t reserved[5];
     struct af_ring_event events[AF_RING_CAPACITY];
 };
 
@@ -35,7 +36,7 @@ _Static_assert(sizeof(struct af_ring_storage) == 0x2440, "bulk window size");
 __attribute__((section(".af_ring.storage"), aligned(8), used))
 volatile struct af_ring_storage af_ring_storage = {
     .magic = 0x31524641u,
-    .version = 1,
+    .version = 2,
     .header_bytes = 64,
     .event_bytes = 36,
     .capacity = AF_RING_CAPACITY,
@@ -55,19 +56,29 @@ void af_ring_record(uint32_t kind, const uint32_t *arguments) {
         return;
 
     volatile struct af_ring_storage *storage = ring();
-    uint32_t observed;
-    uint32_t failed;
-    __asm__ volatile(
-        "ldrex %0, [%2]\n\t"
-        "cmp %0, #0\n\t"
-        "strexeq %1, %3, [%2]\n\t"
-        "movne %1, #1\n\t"
-        "clrex"
-        : "=&r"(observed), "=&r"(failed)
-        : "r"(&storage->active), "r"(1u)
-        : "cc", "memory");
+    uint32_t failed = 1;
+    for (uint32_t attempt = 0; attempt != 4; ++attempt) {
+        uint32_t observed;
+        __asm__ volatile(
+            "ldrex %0, [%2]\n\t"
+            "cmp %0, #0\n\t"
+            "strexeq %1, %3, [%2]\n\t"
+            "movne %1, #1\n\t"
+            "clrex"
+            : "=&r"(observed), "=&r"(failed)
+            : "r"(&storage->active), "r"(1u)
+            : "cc", "memory");
+        if (observed != 0) {
+            storage->contention_loss = 1;
+            __asm__ volatile("dmb sy" : : : "memory");
+            return;
+        }
+        if (failed == 0)
+            break;
+    }
     if (failed != 0) {
-        storage->contention_loss = 1;
+        if (storage->preempted != UINT32_MAX)
+            storage->preempted++;
         __asm__ volatile("dmb sy" : : : "memory");
         return;
     }

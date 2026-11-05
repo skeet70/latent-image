@@ -307,6 +307,7 @@ run options = do
           clock <- emulatedClock
           triggerSynthetic entry address clock api (receipt </> "synthetic-trigger")
           captured <- capture "synthetic-fallback"
+          require (unEventCount (ringPreempted captured) == 0) "synthetic recorder exhausted its preemption retries"
           require (unEventCount (ringCommittedTotal captured) == unEventCount (ringCommittedTotal ordinary) + 300 && unEventCount (ringOverwritten captured) >= 44 && length (filter ((== Synthetic) . eventKind) (ringEvents captured)) == 256) "synthetic recorder did not commit the requested overwrite exercise"
           pure captured
         writeJson (receipt </> "e2e-result.json") (object
