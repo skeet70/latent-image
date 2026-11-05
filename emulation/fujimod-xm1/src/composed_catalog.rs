@@ -96,6 +96,7 @@ kebab_name!(JoinKind, "join kind");
 impl PieceKind {
     /// The piece whose owned code may hold the pump sites.
     pub fn application_pump() -> Self { Self("application-pump".into()) }
+    pub fn image5_initializer() -> Self { Self("image5-initializer".into()) }
 }
 
 macro_rules! text {
@@ -1860,7 +1861,7 @@ pub enum ApplicationProblem {
     Sites,
     QueueLabel(Pc),
     QueueSites,
-    /// A composed-role site inside a piece's owned code, other than a pump site in the `application-pump` piece.
+    /// A composed-role site inside owned code without its kind's piece exemption.
     SiteInPiece(Pc),
     TaskLayouts,
     CodeRanges,
@@ -1920,7 +1921,12 @@ fn application(raw: RawApplication, pieces: &[Piece]) -> Result<Application, App
         .collect();
     let owner = |pc: Pc| owned.iter().find(|(span, _)| span.holds(u64::from(physical_address(pc.0)))).map(|&(_, kind)| kind);
     let pump_piece = PieceKind::application_pump();
-    let exempt = |site: &ApplicationSite| site.kind == SiteKind::Pump && owner(site.composed_pc) == Some(&pump_piece);
+    let initializer_piece = PieceKind::image5_initializer();
+    let exempt = |site: &ApplicationSite| match site.kind {
+        SiteKind::Pump => owner(site.composed_pc) == Some(&pump_piece),
+        SiteKind::Initializer => owner(site.composed_pc) == Some(&initializer_piece),
+        _ => false,
+    };
     let sites = raw.sites.iter().filter(|site| !exempt(site)).map(|site| site.composed_pc);
     if let Some(pc) = sites.chain(raw.queue_sites.iter().map(|site| site.pc)).find(|&pc| owner(pc).is_some()) {
         return Err(ApplicationProblem::SiteInPiece(pc));

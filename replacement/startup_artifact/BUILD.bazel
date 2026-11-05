@@ -13,6 +13,7 @@ haskell_library(
         "Replacement/StartupArtifact/Compose.hs",
         "Replacement/StartupArtifact/Contract.hs",
         "Replacement/StartupArtifact/Footprint/ApplicationPump.hs",
+        "Replacement/StartupArtifact/Footprint/Image5Init.hs",
         "Replacement/StartupArtifact/Footprint/FirstStage.hs",
         "Replacement/StartupArtifact/Footprint/IdleTask.hs",
         "Replacement/StartupArtifact/Footprint/LoaderOrchestration.hs",
@@ -55,6 +56,7 @@ haskell_library(
         "//host/firmware:bank-allowlist",
         "//host/firmware:startup-stage-contract",
         "//replacement/application_pump:application-pump-artifact",
+        "//replacement/image5_init:image5-init-artifact",
         "//replacement/idle_task:idle-task-artifact",
         "//replacement/image5_load:image5-load-artifact",
         "//replacement/plain_load:plain-load-artifact",
@@ -240,6 +242,20 @@ haskell_test(
     srcs = ["J8CanonicalTests.hs"],
     args = _TOOL_ARGS + ["$(rootpath %s)" % image for image in _J8_IMAGES],
     data = _TOOLS + _J8_IMAGES,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    tags = ["manual"],
+    deps = _TEST_DEPS,
+)
+
+_J9_IMAGES = _J8_IMAGES + [
+    "//replacement/image5_init:image5-init-image.bin",
+    "//replacement/image5_init:image5-init-image.symbols",
+]
+haskell_test(
+    name = "startup-artifact-j9-canonical-tests",
+    srcs = ["J9CanonicalTests.hs"],
+    args = _TOOL_ARGS + ["$(rootpath %s)" % image for image in _J9_IMAGES],
+    data = _TOOLS + _J9_IMAGES,
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     tags = ["manual"],
     deps = _TEST_DEPS,
