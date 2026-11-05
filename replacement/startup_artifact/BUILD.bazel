@@ -269,6 +269,8 @@ _KERNEL_SLOT_IMAGES = _J6_IMAGES + [
     "//replacement/rtos_own_first:own-first-b.bin",
     "//replacement/rtos_own_first:own-first-b.symbols",
     "//replacement/rtos_own_first:regions.json",
+    "//replacement/general_heap:general-heap-image.bin",
+    "//replacement/general_heap:general-heap-image.symbols",
 ]
 
 # Canonical inputs come from private-data. `bazel run` of a test target crashes with "Multiple entries with

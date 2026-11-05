@@ -67,6 +67,7 @@ data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | 
   | ConstructorTaskSubmission | ConstructorImage5Producer
   | KernelSlotPrimaryPublisher | KernelSlotLoaderStartup | KernelSlotLoaderOrchestrationB | KernelSlotRecord2Link
   | KernelSlotTaskSubmission | KernelSlotTaskStorage | KernelSlotRootTask | KernelSlotImage5Producer | KernelSlotPlainProducer
+  | KernelSlotGeneralHeap
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 instance JoinName JoinKind where
@@ -103,6 +104,7 @@ instance JoinName JoinKind where
   joinName KernelSlotRootTask = "kernel-slot-root-task"
   joinName KernelSlotImage5Producer = "kernel-slot-image5-producer"
   joinName KernelSlotPlainProducer = "kernel-slot-plain-producer"
+  joinName KernelSlotGeneralHeap = "kernel-slot-general-heap"
 
 at :: Target -> Word32 -> Word32 -> Span
 at target start end = Span target (Guest start) (Guest end)
@@ -603,7 +605,7 @@ producerEntersAtEntries producer evidence = any (\(target, _) -> target >= 0x723
 producerServices :: JoinKind -> PieceKind -> Producers.Producer -> Join JoinKind
 producerServices kind piece producer = Join kind (Set.fromList [piece, Record2Link])
   [at Image4 0x7235d8 0x723790]
-  (ObservationQualified ("the producer's retained services reach the critical-pair entry words 0x7235d8 and 0x7236b0 of the record-2 link; " <> joinName kind <> "-closure-enters-carriers-at-entries checks that every direct call from the producer's closure into the wrapper, critical-pair and storage carriers targets an entry the owning piece admits (critical-pair words: replacement/startup_artifact/Replacement/StartupArtifact/Adapters.hs:234-235); producer-retained-depth bounds retained callee demand below the owned frame with StockStack (host/firmware/StockStack.hs), with the 88-byte IRQ preemption peak, " <> T.pack (SB.conditionsPhrase conditions) <> ", except the chains it pins" <> fillText <> "; qualified by the producer's call sequence and reads in the composed comparison"))
+  (ObservationQualified ("the producer's retained services reach the critical-pair entry words 0x7235d8 and 0x7236b0 of the record-2 link; " <> joinName kind <> "-closure-enters-carriers-at-entries checks that every direct call from the producer's closure into the wrapper, critical-pair and storage carriers targets an entry the owning piece admits (critical-pair words: replacement/startup_artifact/Replacement/StartupArtifact/Adapters.hs:237-238); producer-retained-depth bounds retained callee demand below the owned frame with StockStack (host/firmware/StockStack.hs), with the 88-byte IRQ preemption peak, " <> T.pack (SB.conditionsPhrase conditions) <> ", except the chains it pins" <> fillText <> "; qualified by the producer's call sequence and reads in the composed comparison"))
   ([ HostCheck (joinName kind <> "-closure-enters-carriers-at-entries") (producerEntersAtEntries producer)
    , HostCheck "producer-retained-depth" (producerRetainedDepth producer) ]
    ++ [HostCheck "fill-flag-writers" fillFlagWriters | producer == Producers.Image5Load])
@@ -632,16 +634,19 @@ ownedOf evidence = SB.ownedRanges (concatMap pieceCarriers (evidencePieces evide
 stockCodeOfEvidence :: JoinEvidence -> SS.StockCode
 stockCodeOfEvidence evidence = SB.stockCodeOf (composedSegments evidence) (concatMap pieceCarriers (evidencePieces evidence))
 
--- | Table A as the owned publisher emits it, table B as the canonical loader-B initializer stores it,
--- each at its loader header's root.
+-- | Table A from its owned publisher if present, otherwise the canonical publisher, and table B from the
+-- canonical loader-B initializer, each at its loader header's root.
 indirectOf :: JoinEvidence -> Maybe SS.IndirectTargets
 indirectOf evidence = do
   rootA <- targetWord (evidenceCanonical evidence) LoaderA rootHeader
   rootB <- targetWord (evidenceCanonical evidence) LoaderB 0xd0010
-  emitted <- publications evidence
+  tableA <- case publications evidence of
+    Just emitted -> pure [(guest, publicationValue row) | row <- emitted, let Guest guest = publicationGuest row]
+    Nothing -> do
+      (emitted, _) <- either (const Nothing) Just (PS.publications (targetOf (evidenceCanonical evidence) LoaderA))
+      pure [(guest, value) | PS.Publication (PS.Guest guest) value _ <- emitted]
   stores <- either (const Nothing) Just (I.originalStores (targetOf (evidenceCanonical evidence) LoaderB))
-  let tableA = [(guest, publicationValue row) | row <- emitted, let Guest guest = publicationGuest row]
-      tableB = [(guest, value) | I.ExpectedStore (P.Guest guest) value <- stores]
+  let tableB = [(guest, value) | I.ExpectedStore (P.Guest guest) value <- stores]
   either (const Nothing) Just (SB.indirectTargetsOf (stockCodeOfEvidence evidence) (SB.rootSlotTargets rootA tableA rootB tableB))
 
 -- | Owned entries with proved depths, before the wrapper: the record-2 critical pair, idle and root.
@@ -1203,6 +1208,16 @@ kernelSlotTaskStorage = Join KernelSlotTaskStorage (Set.fromList [KernelSlotBodi
   (reason "the retained storage prelude 0x725c6c calls +0x1618 and +0x164 and its epilogue +0x168 through the root slots (replacement/task_storage/Replacement/TaskStorage/Artifact.hs:207-208) at the prelude's push depth, which storage-prelude-slot-frames-within-reservation-demand adds to each owned frame against the 40-byte reservation demand the wrapper charges (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:117); task-storage-slot-callers-leave-clobbers-dead checks the three call sites")
   [publishedSlotEntries, callsEnterAtEntries TaskStorage, callersScratchDead TaskStorage, storageSlotsFit]
 
+kernelSlotGeneralHeap :: Join JoinKind
+kernelSlotGeneralHeap = Join KernelSlotGeneralHeap (Set.fromList [KernelSlotBodies, GeneralHeap])
+  [at LoaderA 0x41140 0x4118c]
+  (reason ("the heap's retained lock, unlock and memmove closure follows direct calls into loader A (replacement/startup_artifact/Replacement/StartupArtifact/Footprint/GeneralHeap.hs:71-98); general-heap-calls-enter-slot-entries and general-heap-slot-callers-leave-clobbers-dead check its slot calls against the admitted entries and slot ABI; heap-slot-retained-depth recomputes every heap entry's demand with the owned slot frames supplied under " <> T.pack (SB.conditionsPhrase SB.heapConditions) <> "; every observed heap call must leave that demand plus the 88-byte IRQ peak above its task allocation base; " <> rebaseText))
+  [ publishedSlotEntries, callsEnterAtEntries GeneralHeap, callersScratchDead GeneralHeap
+  , differsOnlyInCarriers LoaderA
+  , HostCheck "heap-slot-retained-depth" $ \evidence -> case heapFacts evidence of
+      Just facts -> let supplied = baseSupplied evidence in all (`M.member` supplied) (heapEntries facts)
+      Nothing -> False ]
+
 -- | A piece whose retained closure reaches the slot bodies only through loader-A callers.
 closureJoin :: JoinKind -> PieceKind -> Join JoinKind
 closureJoin kind piece = Join kind (Set.fromList [KernelSlotBodies, piece])
@@ -1213,4 +1228,5 @@ closureJoin kind piece = Join kind (Set.fromList [KernelSlotBodies, piece])
 kernelSlotJoins :: [Join JoinKind]
 kernelSlotJoins =
   [ kernelSlotPublisher, kernelSlotLoaderStartup, kernelSlotOrchestrationB, kernelSlotRecord2Link, kernelSlotTaskSubmission, kernelSlotTaskStorage
-  , closureJoin KernelSlotRootTask RootTask, closureJoin KernelSlotImage5Producer Image5Producer, closureJoin KernelSlotPlainProducer PlainProducer ]
+  , closureJoin KernelSlotRootTask RootTask, closureJoin KernelSlotImage5Producer Image5Producer, closureJoin KernelSlotPlainProducer PlainProducer
+  , kernelSlotGeneralHeap ]
