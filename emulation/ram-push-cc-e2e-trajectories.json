@@ -318,6 +318,17 @@
         ]
       ],
       "capture": "cc-stock-highlight-before-unload"
+    },
+    {
+      "phase": "cc-menu-close-before-unload",
+      "steps": [
+        [
+          "back",
+          1,
+          5,
+          11
+        ]
+      ]
     }
   ],
   "after_unload": [
@@ -332,6 +343,24 @@
         "cc-stock-menu"
       ],
       "steps": [
+        [
+          "menu",
+          1,
+          5,
+          11
+        ],
+        [
+          "menu",
+          1,
+          5,
+          11
+        ],
+        [
+          "up",
+          1,
+          5,
+          10
+        ],
         [
           "up",
           1,

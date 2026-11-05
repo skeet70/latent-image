@@ -114,7 +114,8 @@
       "reads": [["resident","runtime:rb_resident",1024],["generation","runtime:rb_current_gen",4],["state","0146761e",2],["stored-name","runtime:rb_resident+0x68",26]],
       "read_preservations": [{"read":"resident","phase":"rename-committed","source_read":"resident"}],
       "read_expectations": [{"read":"generation","hex":"02000000"},{"read":"state","hex":"0000"},{"read":"stored-name","hex":"4200000000000000000000000000000000000000000000000000"}]
-    }
+    },
+    {"phase":"owned-stock-root-unload-close","steps":[["back",1,5,34]]}
   ],
   "after_unload": []
 }

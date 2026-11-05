@@ -2264,6 +2264,67 @@ mod tests {
         assert!(server.handle(request(json!({"command": "snapshot-save", "name": "n0"}))).is_ok());
     }
 
+    /// A program that passes the four rendezvous trace sites once, at the given controller-74 state,
+    /// with the input scanner registered over disjoint calibrated key intervals.
+    fn rendezvous_server(top_state: u16) -> Server {
+        const CALIBRATION: u64 = 0x00a0_0000;
+        let mut server = server(&[0xe1a0_0000, 0xe1a0_0000, 0xe1a0_0000, 0xe1a0_0000, 0xeaff_fffe]);
+        server.handle(request(json!({"command": "trace-sites", "sites": {
+            "0x00000000": "rendezvous-locked", "0x00000004": "cpu0-window-exit",
+            "0x00000008": "cpu1-window-exit", "0x0000000c": "query-callback-result"}}))).unwrap();
+        let machine = &server.bridge.machine;
+        let (firmware, board) = (&machine.document.firmware, &machine.session.board);
+        board.write_physical(0x0146_761c, &top_state.to_le_bytes()).unwrap();
+        board.write_physical(firmware.scanner_registered.0, &1u32.to_le_bytes()).unwrap();
+        board.write_physical(firmware.calibration_pointer.0, &(CALIBRATION as u32).to_le_bytes()).unwrap();
+        for (index, binding) in firmware.keys.iter().enumerate() {
+            let low = 100 * index as u16 + 10;
+            board.write_physical(CALIBRATION + u64::from(binding.low_tag), &low.to_le_bytes()).unwrap();
+            board.write_physical(CALIBRATION + u64::from(binding.high_tag), &(low + 50).to_le_bytes()).unwrap();
+            let mut record = [0u8; 28];
+            record[0..4].copy_from_slice(&binding.code.to_le_bytes());
+            record[9] = 1;
+            record[12..16].copy_from_slice(&(binding.channel as u32).to_le_bytes());
+            record[16..18].copy_from_slice(&binding.low_tag.to_le_bytes());
+            record[18..20].copy_from_slice(&binding.high_tag.to_le_bytes());
+            board.write_physical(firmware.key_table.base.0 + binding.row * firmware.key_table.row_bytes, &record).unwrap();
+        }
+        server
+    }
+
+    #[test]
+    fn a_rendezvous_outside_the_live_view_root_is_refused_before_any_input() {
+        for state in [0x00u16, 0x18, 0x11, 0x01] {
+            let mut server = rendezvous_server(state);
+            let error = server.bridge.advance(100).unwrap_err();
+            assert!(error.contains("rendezvous refused") && error.contains("no menu open"), "{state:#x}: {error}");
+            assert!(!server.bridge.rendezvous_active(), "{state:#x}");
+        }
+    }
+
+    #[test]
+    fn a_rendezvous_at_the_live_view_root_latches_and_releases_with_unchanged_settings() {
+        let mut server = rendezvous_server(0x04);
+        server.bridge.advance(100).unwrap();
+        assert!(server.bridge.rendezvous_active());
+        server.bridge.release_rendezvous().unwrap();
+        assert!(!server.bridge.rendezvous_active());
+        let activity = &server.receipt(None).unwrap()["rendezvous_activity"];
+        assert_eq!(activity.as_array().map(Vec::len), Some(1), "{activity}");
+        assert!(activity[0]["released_instructions"].is_u64(), "{activity}");
+    }
+
+    #[test]
+    fn a_live_setting_changed_during_the_rendezvous_hold_fails_the_release() {
+        let mut server = rendezvous_server(0x04);
+        server.bridge.advance(100).unwrap();
+        let mut byte = [0];
+        server.bridge.machine.session.board.read_physical(0x0096_cd7c, &mut byte).unwrap();
+        server.bridge.machine.session.board.write_physical(0x0096_cd7c, &[byte[0] ^ 1]).unwrap();
+        let error = server.bridge.release_rendezvous().unwrap_err();
+        assert!(error.contains("0x0096cd7c"), "{error}");
+    }
+
     #[test]
     fn trace_site_reads_record_memory_at_entry() {
         let mut server = server(&[0xe2800001, 0xeafffffd]);

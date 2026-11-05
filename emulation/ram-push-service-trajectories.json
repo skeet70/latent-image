@@ -321,6 +321,35 @@
           6
         ]
       ]
+    },
+    {
+      "phase": "service-unload-close",
+      "steps": [
+        [
+          "back",
+          97,
+          624,
+          2
+        ],
+        [
+          "back",
+          97,
+          641,
+          0
+        ],
+        [
+          "back",
+          1,
+          5,
+          33
+        ],
+        [
+          "back",
+          1,
+          5,
+          33
+        ]
+      ]
     }
   ],
   "after_unload": [

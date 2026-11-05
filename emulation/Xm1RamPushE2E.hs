@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, LiveSettings, liveSettings, LiveSettingChange (..), liveSettingChange, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint) where
 
 import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, evaluate, finally, throwIO, try)
@@ -19,7 +19,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (shiftL, shiftR, (.|.))
 import Data.Int (Int32)
-import Data.Word (Word32)
+import Data.Word (Word32, Word8)
 import Numeric (readHex, showFFloat, showHex)
 import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectory, removeDirectoryRecursive, removeFile, setCurrentDirectory)
 import System.Environment (getExecutablePath, lookupEnv)
@@ -343,6 +343,42 @@ stagedSession directory session = do
     let work = staging </> "session"
     privateDirectory work
     session work `finally` (listDirectory work >>= mapM_ (\name -> B.readFile (work </> name) >>= writePrivateBytes (directory </> name)))
+
+-- | `[0x0096cc64, 0x0096ce26)`, the extent the stock BACK settings restore copies.
+newtype LiveSettings = LiveSettings B.ByteString
+
+liveSettingsStart :: Word32
+liveSettingsStart = 0x0096cc64
+
+liveSettingsLength :: Int
+liveSettingsLength = 450
+
+liveSettings :: B.ByteString -> Either String LiveSettings
+liveSettings bytes
+  | B.length bytes == liveSettingsLength = Right (LiveSettings bytes)
+  | otherwise = Left ("live-settings read returned " ++ show (B.length bytes) ++ " bytes, not " ++ show liveSettingsLength)
+
+data LiveSettingChange = LiveSettingChange
+  { changedSettingAddress :: Word32
+  , changedSettingFrom :: Word8
+  , changedSettingTo :: Word8
+  } deriving (Eq, Show)
+
+-- | The lowest byte that differs.
+liveSettingChange :: LiveSettings -> LiveSettings -> Maybe LiveSettingChange
+liveSettingChange (LiveSettings before) (LiveSettings after) =
+  case [(offset, old, new) | (offset, old, new) <- zip3 [0 ..] (B.unpack before) (B.unpack after), old /= new] of
+    (offset, old, new) : _ -> Just (LiveSettingChange (liveSettingsStart + offset) old new)
+    [] -> Nothing
+
+describeLiveSettingChange :: LiveSettingChange -> String
+describeLiveSettingChange change = "live setting byte " ++ hexAddress (changedSettingAddress change)
+  ++ " changed from " ++ show (changedSettingFrom change) ++ " to " ++ show (changedSettingTo change)
+  ++ "; ram-push and ram-unload run only at the idle shooting screen (transport/README.md)"
+
+readLiveSettings :: Emulator -> IO LiveSettings
+readLiveSettings emulator = emulatorReadMemory emulator liveSettingsStart liveSettingsLength
+  >>= either (ioError . userError) pure . liveSettings
 
 -- | Entry of the plain-image drawer that renders a menu message banner; r0 is the message id.
 menuMessageDrawer :: Word32
@@ -936,6 +972,8 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
             , "relink" .= relinkModeText (relinkMode settings)
             , "heap_break_before" .= breakBefore, "heap_break_after" .= breakAfter ])) <> "\n")
           ioError (userError (show phase ++ " failed: " ++ message))
+        requireLiveSettings phase before = readLiveSettings emulator >>= \after ->
+          forM_ (liveSettingChange before after) (stop phase . describeLiveSettingChange)
     let entries = manifestEntries manifest
     emulatorTraceSitesReading emulator $
       [ (address, label, []) | (address, label) <-
@@ -957,9 +995,11 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
       Nothing -> do
         let observer = maybe NoRamPushObserver (\_ -> BeforeRamPublication (armModalLifetime emulator e2e lifetimeSession)) modalObservation
         pushClock <- emulatedClock
+        settingsBeforePush <- readLiveSettings emulator
         statePath <- timed "ram-push" (stagedSession pushDirectory (pushWith observer retained manifest pushClock api)) >>= \outcome -> case outcome of
           RamPushInstalled path -> pure (pushDirectory </> takeFileName path)
           other -> stop "ram-push" (show other)
+        requireLiveSettings "ram-push" settingsBeforePush
         installMailbox <- readMailbox
         forM_ fetchStart $ \from -> do
           (_, hits) <- emulatorTraceHits emulator from
@@ -1098,8 +1138,10 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
             then do
               privateDirectory unloadDirectory
               unloadClock <- emulatedClock
+              settingsBeforeUnload <- readLiveSettings emulator
               unload <- timed "ram-unload" (stagedSession unloadDirectory (unloadWith state unloadClock api))
               unless (unload == RamUnloaded) (stop "ram-unload" (show unload))
+              requireLiveSettings "ram-unload" settingsBeforeUnload
               recordModalLifetimeBoundary lifetimeSession RollbackReadback
               Just <$> readMailbox
             else pure Nothing

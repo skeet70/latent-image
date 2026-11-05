@@ -22,12 +22,13 @@
       "steps": [["back",1,5,33],["up",1,5,32]],
       "reads": [["state","0146761e",2],["query-latch","009544f0",4],["query-event-banks","0094f888",16],["query-override","009514c4",4],["editor-session","00954d08",4]],
       "read_expectations": [{"read":"state","hex":"0000"}]
-    }
+    },
+    {"phase":"control-unload-close","steps":[["back",1,5,32]]}
   ],
   "after_unload": [
     {
       "phase": "control-restored-original-set", "requires": ["control-stock-set-ready"], "observe": true,
-      "steps": [["ok",1,5,32]]
+      "steps": [["menu",1,5,32],["menu",1,5,32],["ok",1,5,32]]
     }
   ]
 }

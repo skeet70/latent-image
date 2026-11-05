@@ -8,7 +8,8 @@
     {"phase": "cc-raw-film-list", "observe": true, "requires": ["cc-raw-film-item"], "steps": [["right", 0, 0, 0]], "reads": [["raw-colour-field", "00954d78", 16]], "capture": "cc-raw-film-list"},
     {"phase": "cc-raw-film-rows", "observe": true, "requires": ["cc-raw-film-list"], "steps": [["down", 0, 0, 0], ["down", 0, 0, 0], ["down", 0, 0, 0], ["down", 0, 0, 0], ["down", 0, 0, 0]], "capture": "cc-raw-film-last-row"},
     {"phase": "cc-raw-film-commit", "observe": true, "requires": ["cc-raw-film-rows"], "steps": [["ok", 0, 0, 0]], "reads": [["raw-colour-field", "00954d78", 16], ["request-words", "01514218", 16]], "capture": "cc-raw-film-committed"},
-    {"phase": "cc-raw-start", "observe": true, "requires": ["cc-raw-film-commit"], "steps": [["q", 0, 0, 0]], "reads": [["raw-colour-field", "00954d78", 16], ["request-words", "01514218", 16]], "capture": "cc-raw-started"}
+    {"phase": "cc-raw-start", "observe": true, "requires": ["cc-raw-film-commit"], "steps": [["q", 0, 0, 0]], "reads": [["raw-colour-field", "00954d78", 16], ["request-words", "01514218", 16]], "capture": "cc-raw-started"},
+    {"phase": "cc-raw-unload-close", "observe": true, "steps": [["back", 0, 0, 0]]}
   ],
   "after_unload": []
 }
