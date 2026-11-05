@@ -74,8 +74,10 @@ entries = [0x6ac2b4,0x6ac328,0x6ac478,0x6ac4c8,0x6ac7d4,0x6ac984,0x6acab8,0x6acd
 rangesValue :: [(Word32, Word32)] -> Value
 rangesValue ranges = A.toJSON [[start,end] | (start,end) <- ranges]
 
-retiredData :: [(Word32, Word32)]
-retiredData = [(0x89f8f0,0x89fa68),(0x8a0080,0x8e008c),(0x917fa8,0x917fe4)]
+retiredData :: Role -> Word32 -> Word32 -> [(Word32, Word32)]
+retiredData selected state block =
+  [(0x89f8f0,state),(0x89fa60,0x89fa68),(0x8e0080,0x8e008c),(0x917fa8,0x917fe4)]
+  ++ [(block+0x20000,0x8e0080) | selected == Owned]
 
 mergeRanges :: [(Word32, Word32)] -> [(Word32, Word32)]
 mergeRanges = foldr merge [] . sortOn fst
@@ -182,7 +184,8 @@ observe options directory record = do
   block <- symbol "record_store_block"
   let ownedRam = [(state,0x89fa60),(block,block+0x20000)]
       ownedValue = object ["code" .= rangesValue owned,"ram" .= rangesValue ownedRam
-        ,"rule" .= ("Owned RAM CPU accesses require owned carrier PC; retired stock-only RAM and unoccupied code fetches fail. Device writes into the owned block buffer are retained raw-NAND effects."::T.Text)]
+        ,"unwatched_owned_ram" .= rangesValue ownedRam,"activation_fetch" .= ([0x6ac2b4,0x6ac2b8]::[Word32])
+        ,"rule" .= ("Owned-role stock-only RAM accesses fail after the first open-veneer fetch; initial image publication is admitted. Unoccupied code fetches fail. Owned state and block buffer are not watched; the oracle, returned records and NAND effects cover them."::T.Text)]
   BL.writeFile (directory </> "owned-extents.json") (A.encode ownedValue <> "\n")
   contract <- B.readFile (paths M.! "contract") >>= either (ioError . userError) pure . A.eitherDecodeStrict'
   datDigest <- sha256Hex <$> sha256File (paths M.! "update")
@@ -196,16 +199,17 @@ observe options directory record = do
       residualSites = [(address,"residual") | candidate <- rawCandidates, Number n <- [field "site" candidate], let address = truncate n]
       siteMap = M.fromList (residualSites ++ [(address,"record-entry") | address <- entries] ++ [(0x6fb7c8,"nand-write"),(0x6fb57c,"nand-erase")])
       sites = object [K.fromString (hexWord address) .= (label::T.Text) | (address,label) <- M.toList siteMap]
-      writes = [(rangeStart range,rangeEnd range) | range <- settingsRanges] ++ retiredData
-      fetches = if role options == Owned then complementSpan owned else [(0x6ac2b4,0x6ae114)]
+      dataRanges = retiredData (role options) state block
+      writes = [(rangeStart range,rangeEnd range) | range <- settingsRanges] ++ dataRanges
+      fetches = if role options == Owned then mergeRanges ((0x6ac2b4,0x6ac2b8) : complementSpan owned) else [(0x6ac2b4,0x6ae114)]
       spec = object ["schema" .= (1::Int),"sites" .= sites,"hit_limit" .= (1500000::Int),"captures" .= captureSpec
-        ,"write_ranges" .= rangesValue writes,"read_ranges" .= rangesValue retiredData,"fetch_ranges" .= rangesValue fetches,"watch_limit" .= (1048576::Int)]
+        ,"write_ranges" .= rangesValue writes,"read_ranges" .= rangesValue dataRanges,"fetch_ranges" .= rangesValue fetches,"watch_limit" .= (1048576::Int)]
       specPath = directory </> "spec.json"
       arguments = ["--run",paths M.! "run","--boot-rom",paths M.! "boot-rom","--installed-dat",paths M.! "update","--adjustment-nand",paths M.! "adjustment-nand"
         ,"--output",directory,"--ram-push-checkpoints",directory </> "unused-checkpoints","--fresh-boot","--reset-observation",specPath]
         ++ maybe [] (\path -> ["--record-nand",path]) (M.lookup "record-nand" paths)
       watch = object ["command" .= ("watch-begin"::T.Text),"views" .= ("fixed"::T.Text),"limit" .= (1048576::Int)
-        ,"ranges" .= rangesValue (mergeRanges (writes ++ retiredData ++ fetches)),"write_ranges" .= rangesValue writes,"read_ranges" .= rangesValue retiredData,"fetch_ranges" .= rangesValue fetches]
+        ,"ranges" .= rangesValue (mergeRanges (writes ++ dataRanges ++ fetches)),"write_ranges" .= rangesValue writes,"read_ranges" .= rangesValue dataRanges,"fetch_ranges" .= rangesValue fetches]
   BL.writeFile specPath (A.encode spec <> "\n")
   record "raw_residual_count" (A.toJSON (length rawCandidates))
   record "ram_rule" ownedValue
