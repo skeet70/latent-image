@@ -54,6 +54,7 @@ Each name below denotes `emulation/menu-oracle-<name>.json` and `private-data/sc
 | Name | Path, then observed key | Prediction and observed result | Oracle case and control |
 | --- | --- | --- | --- |
 | `fn` | Live view, then `fn` | `(1, 0x63, 0, 0)`, landing `(99, 321, 17)`; matches | `fn:1,63,0`; `NoInitialRow`, `OpenScrollAtZero` |
+| `fn-down` | `fn`, then `down` | Ordinary row move `(4, 0x63, 1, 0)`, landing `(99, 321, 18)`; matches. Repeated 75/0 event-50 gate entries still see the Fn flag 1 and state 0 | `fn-down:4,63,1`; `NoLastMove` |
 | `fn-leaf-right` | `fn`, then `right` | No leaf push; no stage entry, still `(99, 321, 17)` | None: no engine event |
 | `fn-auto-pop` | `fn down down down right`, then `left` | Initial push/pop prediction failed: hidden cursor 19 makes the third DOWN wrap to 0; no stage entry and still `(99, 321, 0)` | None: no engine event |
 | `fn-auto-push` | `fn down down down`, then `right` | Initial push prediction failed at wrapped cursor 0; no stage entry, still `(99, 321, 0)` | None: no engine event |

@@ -485,7 +485,7 @@ fn owner_controls_fail() {
         ("no-wrap", control::<NoWrap>("no-wrap"), &["fixed-wrap"]),
         ("inverted-skip", control::<InvertedSkip>("inverted-skip"), &[]),
         ("no-initial-row", control::<NoInitialRow>("no-initial-row"), &["fn"]),
-        ("no-last-move", control::<NoLastMove>("no-last-move"), &[]),
+        ("no-last-move", control::<NoLastMove>("no-last-move"), &["fn-down"]),
         ("zero-scroll", control::<ZeroScroll>("zero-scroll"), &[]),
         ("no-push-classifier", control::<NoPushClassifier>("no-push-classifier"), &["fn-auto-open"]),
         ("down-scroll-keeps-top", control::<DownScrollKeepsTop>("down-scroll-keeps-top"), &[]),
