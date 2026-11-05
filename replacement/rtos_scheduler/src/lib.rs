@@ -323,3 +323,6 @@ pub fn rotate<M: Machine>(m: &M, record: KernelContext, p: Priority) -> Reschedu
     m.store_word(selected, m.load_word(head.next()));
     dispatch_enabled(m, record)
 }
+
+#[cfg(all(target_arch = "arm", feature = "s3a", not(test)))]
+mod s3a;

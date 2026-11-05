@@ -1,0 +1,223 @@
+{
+  "fill_word": "0xe7f000f0",
+  "domains": {
+    "a": {
+      "regions": [
+        {
+          "start": "0x453f0",
+          "end": "0x454f0",
+          "entries": [
+            {
+              "entry": "0x453f0",
+              "semantic": {
+                "kind": "service",
+                "name": "exit-task"
+              }
+            }
+          ],
+          "symbol": "xm1_s3a_exit_task",
+          "frame_bytes": 8
+        },
+        {
+          "start": "0x4c28c",
+          "end": "0x4c36c",
+          "entries": [
+            {
+              "entry": "0x4c28c",
+              "semantic": {
+                "kind": "service",
+                "name": "rotate-ready"
+              }
+            }
+          ],
+          "symbol": "xm1_s3a_rotate_ready",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0x4c36c",
+          "end": "0x4c434",
+          "entries": [
+            {
+              "entry": "0x4c36c",
+              "semantic": {
+                "kind": "service",
+                "name": "interrupt-rotate-ready"
+              }
+            }
+          ],
+          "symbol": "xm1_s3a_interrupt_rotate_ready",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0x4c434",
+          "end": "0x4c530",
+          "entries": [
+            {
+              "entry": "0x4c434",
+              "semantic": {
+                "kind": "service",
+                "name": "core-rotate-ready"
+              }
+            }
+          ],
+          "symbol": "xm1_s3a_core_rotate_ready",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0x4c530",
+          "end": "0x4c620",
+          "entries": [
+            {
+              "entry": "0x4c530",
+              "semantic": {
+                "kind": "service",
+                "name": "interrupt-core-rotate-ready"
+              }
+            }
+          ],
+          "symbol": "xm1_s3a_interrupt_core_rotate_ready",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0x4c9dc",
+          "end": "0x4cac0",
+          "entries": [
+            {
+              "entry": "0x4c9dc",
+              "semantic": {
+                "kind": "service",
+                "name": "disable-dispatch"
+              }
+            }
+          ],
+          "symbol": "xm1_s3a_disable_dispatch",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0x4cac0",
+          "end": "0x4cbd8",
+          "entries": [
+            {
+              "entry": "0x4cac0",
+              "semantic": {
+                "kind": "service",
+                "name": "enable-dispatch"
+              }
+            }
+          ],
+          "symbol": "xm1_s3a_enable_dispatch",
+          "frame_bytes": 24
+        }
+      ]
+    },
+    "b": {
+      "regions": [
+        {
+          "start": "0xd53b0",
+          "end": "0xd54b0",
+          "entries": [
+            {
+              "entry": "0xd53b0",
+              "semantic": {
+                "kind": "service",
+                "name": "exit-task"
+              }
+            }
+          ],
+          "symbol": "xm1_s3a_exit_task",
+          "frame_bytes": 8
+        },
+        {
+          "start": "0xdc24c",
+          "end": "0xdc32c",
+          "entries": [
+            {
+              "entry": "0xdc24c",
+              "semantic": {
+                "kind": "service",
+                "name": "rotate-ready"
+              }
+            }
+          ],
+          "symbol": "xm1_s3a_rotate_ready",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0xdc32c",
+          "end": "0xdc3f4",
+          "entries": [
+            {
+              "entry": "0xdc32c",
+              "semantic": {
+                "kind": "service",
+                "name": "interrupt-rotate-ready"
+              }
+            }
+          ],
+          "symbol": "xm1_s3a_interrupt_rotate_ready",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0xdc3f4",
+          "end": "0xdc4f0",
+          "entries": [
+            {
+              "entry": "0xdc3f4",
+              "semantic": {
+                "kind": "service",
+                "name": "core-rotate-ready"
+              }
+            }
+          ],
+          "symbol": "xm1_s3a_core_rotate_ready",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0xdc4f0",
+          "end": "0xdc5e0",
+          "entries": [
+            {
+              "entry": "0xdc4f0",
+              "semantic": {
+                "kind": "service",
+                "name": "interrupt-core-rotate-ready"
+              }
+            }
+          ],
+          "symbol": "xm1_s3a_interrupt_core_rotate_ready",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0xdc99c",
+          "end": "0xdca80",
+          "entries": [
+            {
+              "entry": "0xdc99c",
+              "semantic": {
+                "kind": "service",
+                "name": "disable-dispatch"
+              }
+            }
+          ],
+          "symbol": "xm1_s3a_disable_dispatch",
+          "frame_bytes": 24
+        },
+        {
+          "start": "0xdca80",
+          "end": "0xdcb98",
+          "entries": [
+            {
+              "entry": "0xdca80",
+              "semantic": {
+                "kind": "service",
+                "name": "enable-dispatch"
+              }
+            }
+          ],
+          "symbol": "xm1_s3a_enable_dispatch",
+          "frame_bytes": 24
+        }
+      ]
+    }
+  }
+}

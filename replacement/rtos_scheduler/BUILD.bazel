@@ -97,7 +97,7 @@ sh_test(
     ],
 )
 
-exports_files(["regions-s2.json"])
+exports_files(["regions-s2.json", "regions-s3a.json"])
 
 [
     xm1_rust_staticlib(
@@ -114,11 +114,30 @@ exports_files(["regions-s2.json"])
         name = "scheduler-s2-%s" % domain,
         rust_staticlib = ":scheduler-s2-%s-rust" % domain,
         entry = "xm1_rtos_scheduler_save",
-        extra_ldflags = [
-            "-Wl,--gc-sections",
-            "-Wl,--orphan-handling=error",
-        ],
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
         link_script = "scheduler-s2-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_staticlib(
+        name = "s3a-%s-rust" % domain,
+        src = "src/lib.rs",
+        crate_name = "xm1_rtos_scheduler_s3a",
+        data = ["src/entries.rs", "src/s3a.rs", "//replacement/rtos_layout:src/lib.rs"],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"s3a\"'"],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "s3a-%s" % domain,
+        rust_staticlib = ":s3a-%s-rust" % domain,
+        entry = "xm1_s3a_exit_task",
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+        link_script = "s3a-%s.ld" % domain,
     )
     for domain in ["a", "b"]
 ]

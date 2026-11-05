@@ -133,24 +133,14 @@ haskell_binary(
 
 haskell_binary(
     name = "scheduler-s2-oracle",
-    srcs = [
-        "S2Main.hs",
-        "Replacement/RtosScheduler/S2.hs",
-    ],
+    srcs = ["S2Main.hs", "Replacement/RtosScheduler/S2.hs"],
     main_file = "S2Main.hs",
     args = [
-        "--runner",
-        "$(rootpath //emulation:native-runner)",
-        "--owned-a",
-        "$(rootpath //replacement/rtos_scheduler:scheduler-s2-a.bin)",
-        "--owned-b",
-        "$(rootpath //replacement/rtos_scheduler:scheduler-s2-b.bin)",
+        "--runner", "$(rootpath //emulation:native-runner)",
+        "--owned-a", "$(rootpath //replacement/rtos_scheduler:scheduler-s2-a.bin)",
+        "--owned-b", "$(rootpath //replacement/rtos_scheduler:scheduler-s2-b.bin)",
     ],
-    data = [
-        "//emulation:native-runner",
-        "//replacement/rtos_scheduler:scheduler-s2-a.bin",
-        "//replacement/rtos_scheduler:scheduler-s2-b.bin",
-    ],
+    data = ["//emulation:native-runner", "//replacement/rtos_scheduler:scheduler-s2-a.bin", "//replacement/rtos_scheduler:scheduler-s2-b.bin"],
     ghcopts = _GHCOPTS,
     deps = [
         ":scheduler-oracle-lib",
@@ -165,6 +155,38 @@ haskell_binary(
         "//host:filepath",
         "//host:host-support",
         "//host:json",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+haskell_binary(
+    name = "s3a-oracle",
+    srcs = ["S3aMain.hs", "Replacement/RtosScheduler/S3a.hs"],
+    main_file = "S3aMain.hs",
+    src_strip_prefix = ".",
+    ghcopts = _GHCOPTS,
+    args = [
+        "--runner", "$(rootpath //emulation:native-runner)",
+        "--regions", "$(rootpath //replacement/rtos_scheduler:regions.json)",
+        "--layout", "$(rootpath :layout.json)",
+        "--owned-a", "$(rootpath //replacement/rtos_scheduler:s3a-a.bin)",
+        "--owned-b", "$(rootpath //replacement/rtos_scheduler:s3a-b.bin)",
+    ],
+    data = ["//emulation:native-runner", "//replacement/rtos_scheduler:regions.json", ":layout.json", "//replacement/rtos_scheduler:s3a-a.bin", "//replacement/rtos_scheduler:s3a-b.bin"],
+    deps = [
+        ":scheduler-oracle-lib",
+        "//emulation:case-sha256",
+        "//emulation:native-adapter",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:json",
+        "//replacement/rtos_own_first/oracle:own-first-oracle-lib",
         "//replacement/rtos_own_first/stage:own-first-artifact",
     ],
 )
