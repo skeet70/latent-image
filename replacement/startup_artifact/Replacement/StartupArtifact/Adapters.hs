@@ -1113,7 +1113,8 @@ deriveGeneralHeap source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)
         [ CatalogRead sentinelRead uilib HeapFootprint.sentinel 4
             (Just "retained holds stock malloc_av_[0]; composed holds the owned sentinel 0x48454150 after first use") Nothing
         , CatalogRead tableRead uilib 0x890f08 16 Nothing Nothing
-        , CatalogRead storageRead uilib 0x40a0fc44 1248 Nothing Nothing ]
+        , CatalogRead storageRead uilib 0x40a0fc44 1248
+            (Just "holds task 33's allocation, reserved after root's storage-record read that the pool relation normalizes against; the consume step normalizes it per role") Nothing ]
       core0 low high = WriteRange (CorePhysicalTarget Core0) low high
       errno = fromIntegral HeapFootprint.errnoWord
       sentinelWord = fromIntegral HeapFootprint.sentinel
@@ -1129,8 +1130,7 @@ deriveGeneralHeap source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)
       facts = HeapFacts
         { heapLinked = LinkedBytes bin symbolBytes, heapEntries = entries
         , heapFrames = [ OwnedFrame (HA.frameEntry frame) (HA.frameLow frame) (HA.frameCalls frame) | frame <- frames ]
-        , heapArena = (arenaBase, arenaEnd), heapCarrierWrites = policies
-        , heapPoolWords = [AllocationWords storageRead 0 12 AllocationBase] }
+        , heapArena = (arenaBase, arenaEnd), heapCarrierWrites = policies }
       declaration = PieceDeclaration kind (Set.singleton GeneralHeapArea) carrierSpans
         (HeapFootprint.footprint (targetOf targets LoaderA) (targetOf targets LoaderB) image4)
         (map Premise

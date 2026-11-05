@@ -209,7 +209,7 @@ poolAllocationValue pieces = case ([pool | TaskSubmissionFacts _ pool <- facts],
     , "records" .= labelText records, "cursor" .= labelText cursor
     , "words" .= [ object [ "read" .= labelText (allocationRead position), "offset" .= allocationOffset position
                           , "stride" .= allocationStride position, "position" .= allocationPositionName (allocationPosition position) ]
-                 | position <- positions ++ concat [added | RootTaskFacts _ added <- facts] ++ concat [heapPoolWords heap | GeneralHeapFacts heap <- facts] ]
+                 | position <- positions ++ concat [added | RootTaskFacts _ added <- facts] ]
     , "stack_tops" .= map labelText (tops ++ concat [added | IdleTaskFacts _ added <- facts])
     , "owners" .= [ object [ "core" .= coreIndex (ownerCore owner), "read" .= labelText (ownerRead owner)
                            , "offset" .= ownerOffset owner, "stride" .= ownerStride owner ]

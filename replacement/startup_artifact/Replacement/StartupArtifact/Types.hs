@@ -324,11 +324,10 @@ data CarrierWritePolicy = CarrierWritePolicy { policySpan :: Span, policyCompose
 -- | One owned function's frame: entry, low SP offset and its calls as (target, SP offset at the call).
 data OwnedFrame = OwnedFrame { ownedEntry :: Word32, ownedLow :: Int, ownedCalls :: [(Word32, Int)] } deriving (Eq, Show)
 
--- | The heap's linked image, public and core entries, frames, arena [base, end), carrier write
--- rules and the pool-address words of its reads.
+-- | The heap's linked image, public and core entries, frames, arena [base, end) and carrier write rules.
 data HeapFacts = HeapFacts
   { heapLinked :: LinkedBytes, heapEntries :: [Word32], heapFrames :: [OwnedFrame], heapArena :: (Word32, Word32)
-  , heapCarrierWrites :: [CarrierWritePolicy], heapPoolWords :: [AllocationWords] }
+  , heapCarrierWrites :: [CarrierWritePolicy] }
   deriving (Eq, Show)
 
 -- | Artifact values that registered joins check across pieces.
