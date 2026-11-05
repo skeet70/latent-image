@@ -6,8 +6,8 @@
 # (the menu-oracle-close receipt's key reply). The rendezvous's UP hold opens the focus-area overlay
 # (crawl-5's edge from live node 143 to node 147, controller 74 in state 0x11). After the unload the
 # first OK leaves the overlay with the reading kept (crawl-5's edge 147 to 238, state 4) and the second
-# reopens the shooting root (edge 238 to node 1) on the row the reading names (crawl-5's edge from node
-# 143, read as (1,5,15), to node 136 on (1,5,15)).
+# reopens the shooting root on the row the reading names (crawl-5's edge from node 143, read as
+# (1,5,15), to node 136 on (1,5,15)).
 include "engine";
 (.before_unload[-1].steps[-1][1:4]) as $root
 | if $root[0:2] != [1, 5] then error("the picker trajectory does not end on the shooting root: \($root)") else . end
@@ -16,6 +16,6 @@ include "engine";
 | .after_unload = [.after_unload[0] | del(.observe, .read_expectations) | .phase = "reopen-menu" | .capture = "reopen-menu" | .steps = [["ok"] + $root, ["ok"] + $root]] + .after_unload
 | .source_bindings += [
     {"source": "private-data/scratch/ControllerStrategy/inc3/close receipt (emulation/menu-oracle-close.json)", "expectation": "BACK from the shooting root returns to the live view and keeps the menu reading \($root)."},
-    {"source": "private-data/scratch/ControllerStrategy/crawl-5/crawl-graph.json (E-MODAL-MENU-OKPATHS-150)", "expectation": "UP at the live-view root opens the focus-area overlay (edge 143 to 147, controller 74 in state 0x11); the first OK leaves it for the live view with the menu reading kept (edge 147 to 238); the second OK reopens the shooting root (edge 238 to 1) on the row the menu reading names (edge 143 to 136)."}]
+    {"source": "private-data/scratch/ControllerStrategy/crawl-5/crawl-graph.json (E-MODAL-MENU-OKPATHS-150)", "expectation": "UP at the live-view root opens the focus-area overlay (edge 143 to 147, controller 74 in state 0x11); the first OK leaves it for the live view with the menu reading kept (edge 147 to 238); the second OK reopens the shooting root on the row the menu reading names (edge 143 to 136)."}]
 | .before_unload |= map(.reads += engine_reads)
 | .after_unload |= map(.reads += engine_reads)
