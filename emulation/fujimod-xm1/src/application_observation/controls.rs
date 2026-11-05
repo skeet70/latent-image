@@ -40,6 +40,7 @@ pub enum Control {
     StockPumpWord,
     InitializerSkipsEd4afc,
     StockInitializerPc,
+    ReleaseDeadline,
 }
 
 /// The stock pump's first word, `push {r3,r4,r11,lr}`.
@@ -134,11 +135,12 @@ fn insert_sample(receipt: &mut Receipt, evidence: &mut Evidence, at: usize, samp
 }
 
 impl Control {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::CanonicalInput, Self::StopClock, Self::RawAlias, Self::KernelIdentity, Self::MissingInitialization, Self::NormalizerResult,
         Self::LostCalleeSave, Self::RelabelledOlderSample, Self::RenderReadiness, Self::TruncatedPlane, Self::WatchCoverage, Self::PublishedWrite,
         Self::PacketCopy, Self::FrozenStackBound, Self::ReadinessUnstable, Self::UiWorkPending, Self::FirstReadyMenu,
         Self::OwnedPumpSkipsPosthook, Self::StockPumpWord, Self::InitializerSkipsEd4afc, Self::StockInitializerPc,
+        Self::ReleaseDeadline,
     ];
 
     pub fn name(self) -> &'static str {
@@ -164,6 +166,7 @@ impl Control {
             Self::StockPumpWord => "stock-pump-word",
             Self::InitializerSkipsEd4afc => "initializer-skips-ed4afc",
             Self::StockInitializerPc => "stock-initializer-pc",
+            Self::ReleaseDeadline => "release-deadline",
         }
     }
 
@@ -184,6 +187,7 @@ impl Control {
             Self::PacketCopy => Check::QueueProvenance,
             Self::FrozenStackBound => Check::StackContext,
             Self::ReadinessUnstable | Self::UiWorkPending | Self::InitializerSkipsEd4afc => Check::Readiness,
+            Self::ReleaseDeadline => Check::Route,
         })
     }
 
@@ -232,13 +236,19 @@ impl Control {
                 sample.code.address = Guest(0xd985d8);
                 return Ok(());
             }
+            Self::ReleaseDeadline => {
+                let section = receipt.application.as_mut().ok_or("the receipt has no application section")?;
+                let input = section.inputs.last_mut().ok_or("no settled input")?;
+                input.release_clock.debounced.0 = input.release_clock.released.0 + super::checks::RELEASE_WINDOW.0 + 1;
+                return Ok(());
+            }
             _ => {}
         }
         let section = receipt.application.as_mut().ok_or("the receipt has no application section")?;
         let samples = &mut evidence.samples;
         match self {
             Self::CanonicalInput | Self::UiWorkPending | Self::FirstReadyMenu | Self::OwnedPumpSkipsPosthook | Self::StockPumpWord
-                | Self::InitializerSkipsEd4afc | Self::StockInitializerPc => {}
+                | Self::InitializerSkipsEd4afc | Self::StockInitializerPc | Self::ReleaseDeadline => {}
             Self::StopClock => samples.first_mut().ok_or("no sample")?.resume.0 += 1,
             Self::RawAlias => *samples.first_mut().ok_or("no sample")?.code.spellings[1][1].0.first_mut().ok_or("an empty view")? ^= 1,
             Self::KernelIdentity => {

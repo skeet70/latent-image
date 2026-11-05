@@ -3,7 +3,7 @@ use fujimod_xm1::application_observation::{
     ByteView, CodeObservation, Control, CoreIdentity, DynamicTarget, Evidence, Expected, FirstReady, GraphicsState, hit_observers, InputIndex,
     InputPurpose, Menu, PairField, Publication, RawView, ReadinessIndex, ReadinessKind, ReadinessSample, Recorder, Registers, RenderViews,
     RoleEvidence, RoleSummary, RouteInput, Sample, SampleIndex, ScopeObservation, SideFile, SiteRef, Task1, TaskTableViews, UiWorkViews,
-    VisibleCapture, Observers, EVIDENCE, Scenario as RouteScenario, ControllerState, ControllerStateView,
+    VisibleCapture, Observers, EVIDENCE, Scenario as RouteScenario, ControllerState, ControllerStateView, BoardTicks, ReleaseClock,
 };
 use fujimod_xm1::composed_catalog::{
     Application, ApplicationProblem, CatalogRefusal, CodeLabel, CodeWord, Contract, Core, Domain, Instructions, Pc, QueueLabel, Role, Schema,
@@ -575,6 +575,7 @@ fn route() -> Vec<RouteInput> {
         let settled = (index >= 15).then(|| Instructions(pressed + 30_000_000));
         RouteInput {
             key, purpose, pressed: Instructions(pressed), released: Instructions(pressed + 8_000_000), debounced: Instructions(pressed + 8_000_000),
+            release_clock: ReleaseClock { released: BoardTicks((pressed + 8_000_000) / 24), debounced: BoardTicks((pressed + 8_000_000) / 24) },
             settled, before: settled.map(|_| probe(index as u64 - 13)), after: settled.map(|_| probe(index as u64 - 12)),
         }
     }).collect()
@@ -793,9 +794,60 @@ fn the_canonical_input_control_changes_the_update_identity() {
 }
 
 #[test]
-fn the_twenty_one_controls_have_distinct_names() {
+fn controls_have_distinct_names() {
     let names: BTreeSet<&str> = Control::ALL.iter().map(|control| control.name()).collect();
-    assert_eq!(names.len(), 21);
+    assert_eq!(names.len(), Control::ALL.len());
+}
+
+#[test]
+fn a_settled_release_can_take_more_than_the_press_hold() {
+    let mut scenario = Scenario::new();
+    let input = scenario.receipt.application.as_mut().unwrap().inputs.last_mut().unwrap();
+    input.debounced = Instructions(input.released.0 + 9_750_000);
+    input.release_clock.debounced = BoardTicks(input.release_clock.released.0 + 600_000);
+    assert_eq!(scenario.check(), Ok(()));
+}
+
+#[test]
+fn a_settled_release_at_the_board_tick_deadline_is_accepted() {
+    let mut scenario = Scenario::new();
+    let input = scenario.receipt.application.as_mut().unwrap().inputs.last_mut().unwrap();
+    input.release_clock.debounced = BoardTicks(input.release_clock.released.0 + 720_000);
+    assert_eq!(scenario.check(), Ok(()));
+}
+
+#[test]
+fn a_release_clock_running_backwards_is_refused() {
+    let mut scenario = Scenario::new();
+    let input = scenario.receipt.application.as_mut().unwrap().inputs.last_mut().unwrap();
+    input.release_clock.debounced = BoardTicks(input.release_clock.released.0 - 1);
+    assert_eq!(scenario.refusal(), Some(ApplicationCheck::Route));
+}
+
+#[test]
+fn a_settled_release_beyond_two_scanner_periods_and_margin_is_refused() {
+    let mut scenario = Scenario::new();
+    let input = scenario.receipt.application.as_mut().unwrap().inputs.last_mut().unwrap();
+    input.release_clock.debounced = BoardTicks(input.release_clock.released.0 + 720_001);
+    assert_eq!(scenario.refusal(), Some(ApplicationCheck::Route));
+}
+
+#[test]
+fn first_start_retains_the_eight_million_instruction_release_cap() {
+    let mut scenario = Scenario::new();
+    let input = scenario.receipt.application.as_mut().unwrap().inputs.first_mut().unwrap();
+    input.debounced = Instructions(input.released.0 + 8_000_001);
+    assert_eq!(scenario.refusal(), Some(ApplicationCheck::Route));
+}
+
+#[test]
+fn the_release_deadline_control_reaches_route_when_capture_settled_before_the_cap() {
+    let mut scenario = Scenario::new();
+    let section = scenario.receipt.application.as_mut().unwrap();
+    let input = section.inputs.last_mut().unwrap();
+    input.settled = Some(input.debounced);
+    section.visible.last_mut().unwrap().instructions = input.debounced;
+    assert_eq!(scenario.control(Control::ReleaseDeadline).refusal(), Some(ApplicationCheck::Route));
 }
 
 #[test]

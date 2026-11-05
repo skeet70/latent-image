@@ -658,6 +658,17 @@ pub enum InputPurpose {
     UnhandledProbe,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct BoardTicks(pub u64);
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseClock {
+    pub released: BoardTicks,
+    pub debounced: BoardTicks,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouteInput {
@@ -666,6 +677,7 @@ pub struct RouteInput {
     pub pressed: Instructions,
     pub released: Instructions,
     pub debounced: Instructions,
+    pub release_clock: ReleaseClock,
     pub settled: Option<Instructions>,
     pub before: Option<Probe>,
     pub after: Option<Probe>,
