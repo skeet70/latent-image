@@ -793,9 +793,33 @@ fn the_canonical_input_control_changes_the_update_identity() {
 }
 
 #[test]
-fn the_twenty_one_controls_have_distinct_names() {
+fn controls_have_distinct_names() {
     let names: BTreeSet<&str> = Control::ALL.iter().map(|control| control.name()).collect();
-    assert_eq!(names.len(), 21);
+    assert_eq!(names.len(), Control::ALL.len());
+}
+
+#[test]
+fn a_settled_release_can_take_more_than_the_press_hold() {
+    let mut scenario = Scenario::new();
+    let input = scenario.receipt.application.as_mut().unwrap().inputs.last_mut().unwrap();
+    input.debounced = Instructions(input.released.0 + 9_750_000);
+    assert_eq!(scenario.check(), Ok(()));
+}
+
+#[test]
+fn a_settled_release_beyond_twelve_million_instructions_is_refused() {
+    let mut scenario = Scenario::new();
+    let input = scenario.receipt.application.as_mut().unwrap().inputs.last_mut().unwrap();
+    input.debounced = Instructions(input.released.0 + 12_000_001);
+    assert_eq!(scenario.refusal(), Some(ApplicationCheck::Route));
+}
+
+#[test]
+fn first_start_retains_the_eight_million_instruction_release_cap() {
+    let mut scenario = Scenario::new();
+    let input = scenario.receipt.application.as_mut().unwrap().inputs.first_mut().unwrap();
+    input.debounced = Instructions(input.released.0 + 8_000_001);
+    assert_eq!(scenario.refusal(), Some(ApplicationCheck::Route));
 }
 
 #[test]
