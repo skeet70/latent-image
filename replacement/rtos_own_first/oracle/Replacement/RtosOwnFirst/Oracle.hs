@@ -16,6 +16,8 @@ module Replacement.RtosOwnFirst.Oracle
   , TaskChoice (..)
   , taskChoices
   , Row (..)
+  , CallerStack (..)
+  , CallSequence (..)
   , caseGrid
   , xorshift
   , contextValues
@@ -67,6 +69,7 @@ import Emulation.OwnedCase (CaseId (..), CaseRegion, CaseSpec (..), Permission (
 import FujiAF.Host (get, list, num, str)
 import Numeric (readHex, showHex)
 import Replacement.RtosOwnFirst.Artifact (LinkedDomain, StageError, ownedExtents)
+import qualified Replacement.RtosOwnFirst.Assembly as A
 import Replacement.RtosOwnFirst.Regions
 import System.FilePath ((</>))
 
@@ -177,7 +180,11 @@ argumentValues = [0, 0x80, 0x7f, 0xffffffff, xorshift 0x1f123bb5]
 
 -- | +0x1618's CP14 c2 value, the last drawn from the xorshift stream.
 identityValues :: [Word32]
-identityValues = [0x4003, 0x4002, 0x14003, 0, xorshift 0x2b8f6e01]
+identityValues = [0x4003, 0x8003, 0x4002, 0x14003, 0, xorshift 0x2b8f6e01]
+
+data CallerStack = OrdinaryStack | CoreOneIrqStack deriving (Eq, Show)
+
+data CallSequence = SingleCall | SaveRestoreSave | NestedSaveRestore deriving (Eq, Show)
 
 data Row = Row
   { rowEntry :: EntryState
@@ -189,6 +196,8 @@ data Row = Row
   , rowTimeOffset :: Word32
   , rowR0 :: Word32
   , rowIdentity :: Maybe Word32
+  , rowStack :: CallerStack
+  , rowCalls :: CallSequence
   }
   deriving (Eq, Show)
 
@@ -244,12 +253,12 @@ pick values word = values !! fromIntegral (word `mod` fromIntegral (length value
 -- | Every entry state crossed with the slot's sweep, then 64 xorshift rows; timer base and time
 -- offset come from a per-slot xorshift stream.
 caseGrid :: Slot -> [Row]
-caseGrid slot = zipWith timed (pairs (stream (0x2545f491 + index))) (structured ++ drawn)
+caseGrid slot = zipWith timed (pairs (stream (0x2545f491 + index))) (structured ++ coreOne ++ sequences ++ drawn)
   where
     index = fromIntegral (fromEnum slot)
     Sweep contexts dispatches tasks bytes arguments identities = sweep slot
     structured =
-      [ Row entry context dispatch task byte 0 0 argument identity
+      [ Row entry context dispatch task byte 0 0 argument identity OrdinaryStack SingleCall
       | entry <- entryStates
       , context <- contexts
       , dispatch <- dispatches
@@ -257,6 +266,17 @@ caseGrid slot = zipWith timed (pairs (stream (0x2545f491 + index))) (structured 
       , byte <- bytes
       , argument <- arguments
       , identity <- identities
+      ]
+    coreOne =
+      [ row {rowIdentity = Just identity, rowStack = CoreOneIrqStack}
+      | row <- structured
+      , identity <- [0x8003, 0x4003]
+      ]
+    sequences =
+      [ row {rowCalls = calls}
+      | slot == S164
+      , row <- structured ++ coreOne
+      , calls <- [SaveRestoreSave, NestedSaveRestore]
       ]
     drawn = take randomRowsPerSlot (map draw (chunks 10 (stream (0x6c8e9cf5 `xor` (index `shiftL` 8)))))
     draw ws = case ws of
@@ -271,6 +291,8 @@ caseGrid slot = zipWith timed (pairs (stream (0x2545f491 + index))) (structured 
           0
           (if slot == S168 then w9 else bufferPointer)
           (if slot == S1618 then Just (pick (identityValues ++ [w9]) w8) else Nothing)
+          OrdinaryStack
+          SingleCall
       _ -> error "unreachable chunk"
     timed (timerBase, timeOffset) row = row {rowTimerBase = timerBase, rowTimeOffset = timeOffset}
     pairs (a : b : rest) = (a, b) : pairs rest
@@ -297,6 +319,8 @@ sampleKeys slot = nub [key | predicate <- predicates, Just key <- [firstWhere pr
         ++ [\row -> not (masked row) && rowTask row == task && rowFlagByte row == byte | task <- taskChoices, byte <- flagBytes]
         ++ [\row -> not (masked row) && rowR0 row == value | value <- argumentValues]
         ++ [\row -> not (masked row) && rowIdentity row == Just value | value <- identityValues]
+        ++ [\row -> rowStack row == CoreOneIrqStack && rowIdentity row == Just identity && entryMode (rowEntry row) == mode && entryIrqMasked (rowEntry row) == irq | identity <- [0x8003, 0x4003], mode <- [Supervisor, System], irq <- [False, True]]
+        ++ [\row -> rowCalls row == calls && rowStack row == stack | calls <- [SaveRestoreSave, NestedSaveRestore], stack <- [OrdinaryStack, CoreOneIrqStack]]
 
 chunks :: Int -> [a] -> [[a]]
 chunks size items = case splitAt size items of
@@ -309,11 +333,21 @@ bufferBytes = 16
 bufferPointer = bufferBase + 4
 bufferSentinel = 0xc0dec0de
 
-stackBase, stackPointer, stackTop, exitAddress :: Word32
-stackBase = 0x009596f0
+stackPointer, stackTop, exitAddress :: Word32
 stackPointer = 0x009597f0
 stackTop = 0x00959800
 exitAddress = 0x00958f00
+
+callerSp :: CallerStack -> Word32
+callerSp OrdinaryStack = stackPointer
+callerSp CoreOneIrqStack = 0x70001ff0
+
+traceId :: RegionId
+traceId = RegionId "call-trace"
+
+traceAddress, callerAddress :: Word32
+traceAddress = 0x0096b500
+callerAddress = 0x00959000
 
 -- | Words between the current-task word and the time-offset word that no slot names.
 unnamedWord :: Word32
@@ -347,13 +381,17 @@ exitId = RegionId "exit"
 
 -- | The data regions and the caller frame; the stack below entry sp is scratch.
 comparedRegions :: Domain -> [(RegionId, Word32, Int)]
-comparedRegions domain =
+comparedRegions domain = comparedRegionsAt domain stackPointer
+
+comparedRegionsAt :: Domain -> Word32 -> [(RegionId, Word32, Int)]
+comparedRegionsAt domain incomingSp =
   [ (contextId, wordContext words', 4)
   , (wordsId, wordCurrentTask words', wordsBytes)
   ]
     ++ [(ident, windowBase words' offset, size) | (ident, offset, size) <- taskWindows]
     ++ [ (bufferId, bufferBase, fromIntegral bufferBytes)
-       , (callerFrameId, stackPointer, fromIntegral (stackTop - stackPointer))
+       , (callerFrameId, incomingSp, fromIntegral (stackTop - stackPointer))
+       , (traceId, traceAddress, 64)
        ]
   where
     words' = dataWords domain
@@ -416,6 +454,7 @@ slotEntry table slot = (\region -> case regionEntry region of GuestAddress addre
 ownedReach :: DomainTable -> Slot -> [SlotOffset]
 ownedReach table slot = case slot of
   S16c -> [slotOffset S16c, slotOffset S148, slotOffset S128]
+  S164 -> [slotOffset S164, slotOffset S168]
   S1618 -> [slotOffset S1618, bodyHost (tableBody table)]
   _ -> [slotOffset slot]
 
@@ -427,6 +466,7 @@ stockBody domain table loader slot = do
   own <- regionOf table slot
   extras <- case slot of
     S16c -> mapM (fmap regionExtent . regionOf table) [S148, S128]
+    S164 -> mapM (fmap regionExtent . regionOf table) [S168]
     S1618 -> Right [helperExtent domain]
     _ -> Right []
   let extents = regionExtent own : extras
@@ -470,13 +510,31 @@ sentinel register = 0xa5a50000 + fromIntegral (fromEnum register)
 placeRegion :: RegionId -> Word32 -> Int -> Permission -> B.ByteString -> CaseRegion
 placeRegion ident address = mkRegion ident (N.GuestAddress (fromIntegral address))
 
+callerStub :: Domain -> Body -> CallSequence -> B.ByteString
+callerStub domain body calls = B.concat . map word32le . either error id $ A.assembleAt callerAddress items
+  where
+    save = bodyEntry body
+    restore = case domain of DomainA -> 0x41164; DomainB -> 0xd1164
+    capture index =
+      A.loadAddress A.r2 traceAddress
+        ++ [A.str A.r0 A.r2 (index * 8), A.mrs A.r3, A.str A.r3 A.r2 (index * 8 + 4)]
+    call address index = [A.branchLink address] ++ capture index
+    chain = call save 0 ++ call restore 1 ++ call save 2
+    nested =
+      call save 0 ++ [A.str A.r0 A.sp 0]
+        ++ call save 1 ++ call restore 2
+        ++ [A.ldr A.r0 A.sp 0] ++ call restore 3
+    items = [A.push [A.lr], A.subI A.sp A.sp 4]
+      ++ (case calls of SaveRestoreSave -> chain; NestedSaveRestore -> nested; SingleCall -> [])
+      ++ [A.addI A.sp A.sp 4, A.pop [A.pc]]
+
 caseSpec :: Domain -> Body -> String -> Slot -> Row -> CaseSpec
 caseSpec domain body label slot row =
   CaseSpec
     { caseId = label
     , caseProvenance = "X-M1 1.50 loader " ++ domainLabel domain ++ " RTOS slot +0x" ++ drop 1 (slotTag slot) ++ " over the own-first oracle data layout"
-    , caseExclusion = "one privileged call of the slot body; reads or calls outside the mapped regions refuse"
-    , caseEntry = N.GuestAddress (fromIntegral (bodyEntry body))
+    , caseExclusion = "SVC/SYS calls only; IRQ-mode entry is not admitted by the native runner; flat stack backing does not model private TCM"
+    , caseEntry = N.GuestAddress (fromIntegral (if rowCalls row == SingleCall then bodyEntry body else callerAddress))
     , caseExit = N.GuestAddress (fromIntegral exitAddress)
     , caseRegions =
         [placeRegion (RegionId ("code-" ++ show n)) base (B.length bytes) ReadExecute bytes | (n, (base, bytes)) <- zip [0 :: Int ..] (bodyCode body)]
@@ -485,15 +543,18 @@ caseSpec domain body label slot row =
              ]
           ++ [placeRegion ident (windowBase words' offset) size ReadWrite (taskWindowImage row offset size) | (ident, offset, size) <- taskWindows]
           ++ [ placeRegion bufferId bufferBase (fromIntegral bufferBytes) ReadWrite (B.concat (replicate (fromIntegral bufferBytes `div` 4) (word32le bufferSentinel)))
-             , placeRegion stackId stackBase (fromIntegral (stackPointer - stackBase)) ReadWrite (B.replicate (fromIntegral (stackPointer - stackBase)) 0)
-             , placeRegion callerFrameId stackPointer (B.length callerFrameImage) ReadWrite callerFrameImage
+             , placeRegion stackId (incomingSp - 0x100) 0x100 ReadWrite (B.replicate 0x100 0)
+             , placeRegion callerFrameId incomingSp (B.length callerFrameImage) ReadWrite callerFrameImage
+             , placeRegion traceId traceAddress 64 ReadWrite (B.replicate 64 0)
              , placeRegion exitId exitAddress 4 ReadExecute (word32le 0xe12fff1e)
              ]
+          ++ [placeRegion (RegionId "caller") callerAddress (B.length stub) ReadExecute stub | rowCalls row /= SingleCall]
     , caseFunctions = [(N.GuestAddress (fromIntegral start), size) | (start, size) <- bodyFunctions body]
+        ++ [(N.GuestAddress (fromIntegral callerAddress), fromIntegral (B.length stub)) | rowCalls row /= SingleCall]
     , caseInitial =
         (R0, rowR0 row)
           : [(register, sentinel register) | register <- [R1 .. R12]]
-          ++ [(Sp, stackPointer), (Lr, exitAddress), (Cpsr, entryCpsr (rowEntry row))]
+          ++ [(Sp, incomingSp), (Lr, exitAddress), (Cpsr, entryCpsr (rowEntry row))]
     , caseExpectedStatus = Returned
     , caseExpectedRegisters = [(R4, sentinel R4)]
     , caseExpectedMemory = []
@@ -502,6 +563,8 @@ caseSpec domain body label slot row =
     }
   where
     words' = dataWords domain
+    incomingSp = callerSp (rowStack row)
+    stub = callerStub domain body (rowCalls row)
 
 data WriteEvent = WriteEvent
   { eventAddress :: !Word32
@@ -586,7 +649,10 @@ reportWrites report = do
       text -> Left ("provenance " ++ key ++ " " ++ text)
 
 runOf :: Domain -> N.NativeObservation -> [WriteEvent] -> Either String Run
-runOf domain observation writes = do
+runOf domain = runOfAt domain stackPointer
+
+runOfAt :: Domain -> Word32 -> N.NativeObservation -> [WriteEvent] -> Either String Run
+runOfAt domain incomingSp observation writes = do
   registers <- mapM (\register -> maybe (Left ("register " ++ N.registerLabel register)) (Right . (,) register) (N.lookupRegister register observation)) comparedRegisters
   cpsr <- maybe (Left "register cpsr") Right (N.lookupRegister Cpsr observation)
   memory <- mapM (\(ident, _, _) -> maybe (Left ("region " ++ regionName ident)) (Right . (,) ident . B.copy) (lookup ident (N.nativeMemory observation))) regions
@@ -598,7 +664,7 @@ runOf domain observation writes = do
       Right (Just [event | event <- writes, compared (eventAddress event)])
   pure (Run (N.nativeStatus observation) registers (cpsr .&. controlMask) memory retained)
   where
-    regions = comparedRegions domain
+    regions = comparedRegionsAt domain incomingSp
     compared address = or [base <= address && address < base + fromIntegral size | (_, base, size) <- regions]
 
 -- | A case: its row's index in the slot's grid.
@@ -634,7 +700,8 @@ runRows runner directory role domain slot selected body = do
       reportBytes <- B.readFile reportPath
       report <- either failWith pure (eitherDecodeStrict' reportBytes :: Either String Value)
       writes <- either failWith pure (reportWrites report)
-      run <- either failWith pure (runOf domain observation writes)
+      row <- maybe (failWith "unknown row") pure (lookup key rows)
+      run <- either failWith pure (runOfAt domain (callerSp (rowStack row)) observation writes)
       forced <- evaluate (forceRun run)
       pure (key, forced)
   pure (M.fromList (concat results))

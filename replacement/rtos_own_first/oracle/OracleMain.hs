@@ -81,6 +81,9 @@ slotValue report =
   where
     owned = reportOwned report
 
+unlessNull :: [a] -> IO () -> IO ()
+unlessNull values action = when (not (null values)) action
+
 main :: IO ()
 main = do
   arguments <- getArgs
@@ -118,7 +121,31 @@ main = do
       let directory role = work </> role ++ "-" ++ domainLabel domain ++ "-" ++ slotTag slot
           run role = runSlot runner (directory role) role domain slot
       stockRuns <- run "stock" stock
-      ownedOutcome <- outcomeOf stockRuns <$> run "owned" ownedSlot
+      ownedRuns <- run "owned" ownedSlot
+      let ownedOutcome = outcomeOf stockRuns ownedRuns
+          evidence observed = object
+            [ "status" .= show (runStatus observed)
+            , "registers" .= [(show register, hexText value) | (register, value) <- runRegisters observed]
+            , "cpsr_control" .= hexText (runControl observed)
+            , "memory" .= [(show ident, B.unpack bytes) | (ident, bytes) <- runMemory observed]
+            , "writes" .= show (runWrites observed)
+            ]
+          differences =
+            [ object
+                [ "row" .= index
+                , "case" .= show row
+                , "differences" .= map differenceText delta
+                , "stock" .= evidence reference
+                , "owned" .= evidence subject
+                ]
+            | (CaseKey index, row) <- zip (map CaseKey [0 ..]) (caseGrid slot)
+            , Just reference <- [M.lookup (CaseKey index) stockRuns]
+            , Just subject <- [M.lookup (CaseKey index) ownedRuns]
+            , let delta = compareRuns reference subject
+            , not (null delta)
+            ]
+      unlessNull differences $
+        B.writeFile (work </> "differences-" ++ domainLabel domain ++ "-" ++ slotTag slot ++ ".json") (encodeCanonical (object ["cases" .= differences]))
       repeatOutcome <- outcomeOf stockRuns <$> run "stock-repeat" stock
       controlResults <- forM [control | control <- equivalents ++ mutants, controlSlot control == slot] $ \control -> do
         code <- orFailText (controlName control) (controlCode domain rowsTable control)
