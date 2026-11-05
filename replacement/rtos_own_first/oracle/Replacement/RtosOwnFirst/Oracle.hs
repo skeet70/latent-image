@@ -580,6 +580,7 @@ data Run = Run
   , runControl :: !Word32
   , runMemory :: ![(RegionId, B.ByteString)]
   , runWrites :: !(Maybe [WriteEvent])
+  , runInstructions :: !Word64
   }
   deriving (Eq, Show)
 
@@ -662,7 +663,8 @@ runOfAt domain incomingSp observation writes = do
       unless (map (\(N.Write (N.GuestAddress a) (N.WriteBytes w)) -> (fromIntegral a, fromIntegral w)) logged == [(eventAddress e, eventWidth e) | e <- writes])
         (Left "report writes differ from the parsed provenance")
       Right (Just [event | event <- writes, compared (eventAddress event)])
-  pure (Run (N.nativeStatus observation) registers (cpsr .&. controlMask) memory retained)
+  let N.InstructionCount instructions = N.nativeInstructions observation
+  pure (Run (N.nativeStatus observation) registers (cpsr .&. controlMask) memory retained (fromIntegral instructions))
   where
     regions = comparedRegionsAt domain incomingSp
     compared address = or [base <= address && address < base + fromIntegral size | (_, base, size) <- regions]

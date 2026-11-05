@@ -89,6 +89,8 @@ main = do
   arguments <- getArgs
   let input name = required arguments name >>= canonicalizePath
       output name = required arguments name >>= makeAbsolute
+      timingOnly = "--timing-only" `elem` arguments
+      selectedSlots = if timingOnly then [S128, S148, S164, S168, S16c, S1618] else slots
   runner <- input "--runner"
   regionsPath <- input "--regions"
   ownedPaths <- mapM input ["--owned-a-bin", "--owned-a-symbols", "--owned-b-bin", "--owned-b-symbols"]
@@ -114,12 +116,15 @@ main = do
   createDirectory work
   reports <- fmap concat . forM (zip3 domains loaders owned) $ \(domain, loader, ownedRows) -> do
     let rowsTable = domainTable table domain
-    forM slots $ \slot -> do
+    forM selectedSlots $ \slot -> do
       stock <- orFailText (slotTag slot ++ " stock") (stockBody domain rowsTable loader slot)
       ownedSlot <- orFailText (slotTag slot ++ " owned") (ownedBody ownedRows slot)
       entry <- orFailText (slotTag slot ++ " entry") (slotEntry rowsTable slot)
       let directory role = work </> role ++ "-" ++ domainLabel domain ++ "-" ++ slotTag slot
-          run role = runSlot runner (directory role) role domain slot
+          timingKeys = [CaseKey index | (index, row) <- zip [0 ..] (take (length (caseGrid slot) - 64) (caseGrid slot)), rowCalls row == SingleCall]
+          run role = if timingOnly
+            then runRows runner (directory role) role domain slot timingKeys
+            else runSlot runner (directory role) role domain slot
       stockRuns <- run "stock" stock
       ownedRuns <- run "owned" ownedSlot
       let ownedOutcome = outcomeOf stockRuns ownedRuns
@@ -146,14 +151,26 @@ main = do
             ]
       unlessNull differences $
         B.writeFile (work </> "differences-" ++ domainLabel domain ++ "-" ++ slotTag slot ++ ".json") (encodeCanonical (object ["cases" .= differences]))
-      repeatOutcome <- outcomeOf stockRuns <$> run "stock-repeat" stock
-      controlResults <- forM [control | control <- equivalents ++ mutants, controlSlot control == slot] $ \control -> do
+      when timingOnly $
+        B.writeFile (work </> "timing-" ++ domainLabel domain ++ "-" ++ slotTag slot ++ ".json") $
+          encodeCanonical $ object
+            [ "domain" .= domainLabel domain, "slot" .= slotText slot
+            , "cases" .=
+                [ object ["row" .= index, "case" .= show row, "stock_instructions" .= runInstructions reference, "owned_instructions" .= runInstructions subject]
+                | (CaseKey index, row) <- zip (map CaseKey [0 ..]) (caseGrid slot)
+                , Just reference <- [M.lookup (CaseKey index) stockRuns]
+                , Just subject <- [M.lookup (CaseKey index) ownedRuns]
+                ]
+            ]
+      repeatOutcome <- if timingOnly then pure (outcomeOf stockRuns stockRuns) else outcomeOf stockRuns <$> run "stock-repeat" stock
+      controlResults <- forM [control | not timingOnly, control <- equivalents ++ mutants, controlSlot control == slot] $ \control -> do
         code <- orFailText (controlName control) (controlCode domain rowsTable control)
         body <- orFailText (controlName control) (replaceEntry (tableFill table) code ownedSlot)
         ControlResult (controlName control) (controlExpectation control) (controlNote control) . outcomeOf stockRuns
           <$> run (controlName control) body
-      let report = SlotReport domain slot entry stockRuns ownedOutcome (ControlResult "stock-repeat" MustPass "the stock body against itself" repeatOutcome : controlResults)
-      when (verdictExit [report] == ExitSuccess) $
+      let controls = if timingOnly then [] else ControlResult "stock-repeat" MustPass "the stock body against itself" repeatOutcome : controlResults
+          report = SlotReport domain slot entry stockRuns ownedOutcome controls
+      when (not timingOnly && verdictExit [report] == ExitSuccess) $
         forM_ ("stock" : "owned" : map resultControl (reportControls report)) $ \role -> do
           present <- doesPathExist (directory role)
           when present (removeDirectoryRecursive (directory role))
@@ -174,6 +191,7 @@ main = do
       object
         [ "schema" .= (1 :: Int)
         , "inputs" .= inputs
+        , "timing_only" .= timingOnly
         , "domains" .= map domainValue domains
         , "controls" .= [controlValue report result | report <- reports, result <- reportControls report]
         , "stock_returned" .= all stockHolds reports
