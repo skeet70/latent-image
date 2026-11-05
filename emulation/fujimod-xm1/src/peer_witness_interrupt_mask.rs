@@ -2,7 +2,9 @@ use super::*;
 
 const ROOTS: (u64, u64) = (0x96bd20, 0x96bd28);
 const SLOT: (u64, u64) = (0xddc04, 0xddc08);
-const CALL_FRAME: (u64, u64) = (0xf3384, 0xf33a8);
+/// The words the entered slot body may write below the dispatch SP.
+const SLOT_FRAME: (u64, u64) = (0xf3380, 0xf3388);
+const CALL_FRAME: (u64, u64) = (0xf3388, 0xf33a8);
 const SELECTOR: (u64, u64) = (0x7caf34, 0x7caf38);
 const MAGIC: (u64, u64) = (0xc080c, 0xc0810);
 const DISPATCH: u32 = 0x723600;
@@ -26,12 +28,9 @@ const WRAPPER: &[u32] = &[0xe92d48f0,0xe28db014,0xe24dd020,0xe1a04000,0xe30a3d9c
     0xe1d020b0,0xe2422001,0xe7936102,0xebfff5f5,0xe1a07000];
 const DISPATCH_CODE: &[u32] = &[0xe92d4df0,0xe28db01c,0xe30b5d20,0xe3405096,0xe5952000,0xe3013618,
     0xe7923003,0xe12fff33,0xe1a04000,0xe7953100,0xe5933164,0xe12fff33,0xe1a0a000];
-const SERVICE: &[u32] = &[0xe52db004,0xe28db000,0xe10f0000,0xe3801080,0xe121f001,0xe2000080,
-    0xe28bd000,0xe8bd0800,0xe12fff1e];
-const IDENTITY_WRAPPER: &[u32] = &[0xe92d4800,0xe28db004,0xeb00053b,0xe8bd8800];
-const IDENTITY_HELPER: &[u32] = &[0xee121e10,0xe3a02901,0xe2822003,0xe1510002,0x03a00000,0x13a00001,0xe12fff1e];
-const CODE: [(u32, &[u32]); 6] = [(0x69cdf8, STAGE4),(0x725dd8, WRAPPER),(0x7235d8, DISPATCH_CODE),
-    (0x412bc, IDENTITY_WRAPPER),(0x427b8, IDENTITY_HELPER),(ENTERED, SERVICE)];
+const CODE: [(u32, &[u32]); 3] = [(0x69cdf8, STAGE4),(0x725dd8, WRAPPER),(0x7235d8, DISPATCH_CODE)];
+/// CPSR without the NZCVQ and GE flags.
+const CONTROL_BITS: u32 = 0x07f0_ffff;
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -78,14 +77,12 @@ impl ConsumerWire {
 #[derive(Serialize)]
 struct CodeViews { start: Guest, views: Views }
 #[derive(Serialize)]
-struct ServiceAlias { core: WitnessCore, guest: Address, physical: Address, words: [Word; 9] }
-#[derive(Serialize)]
 pub(in crate::peer_witness::loader) struct Receipt {
     kind: ConsumerKind,
     start: Context, dispatch: Context, entered: Context, returned: Context, after: Context,
     roots: Views, slot_before: Views, slot_after: Views, frame_before: Views, frame_after: Views,
     table_before: Views, table_after: Views, code: Vec<CodeViews>, decoder: Decoder,
-    aliases: Vec<AliasBinding>, service_aliases: Vec<ServiceAlias>, prelude_watch: WatchState, watch: WatchState,
+    aliases: Vec<AliasBinding>, prelude_watch: WatchState, watch: WatchState,
 }
 #[derive(Serialize)]
 pub(in crate::peer_witness::loader) struct OuterReceipt<'a, 'initializer> {
@@ -109,7 +106,7 @@ fn protected(phase: Phase) -> Vec<(u64, u64)> {
     let mut spans = vec![TABLE, ROOTS, SELECTOR];
     spans.extend(code_spans());
     spans.push((0xd0ab0, 0xd0af0));
-    if matches!(phase, Phase::Consumer) { spans.push(CALL_FRAME); }
+    if matches!(phase, Phase::Consumer) { spans.extend([SLOT_FRAME, CALL_FRAME]); }
     spans
 }
 fn begin(machine: &mut Machine, runner: &Runner<'_>, phase: Phase) -> Result<Box<ScopedMemoryWatch>, String> {
@@ -119,7 +116,7 @@ fn begin(machine: &mut Machine, runner: &Runner<'_>, phase: Phase) -> Result<Box
         class(ROOTS, if prelude { WatchKinds::CPU_READ.union(WatchKinds::WRITES) } else { WatchKinds::WRITES })];
     if !prelude { classes.push(class(CALL_FRAME, WatchKinds::CPU_READ.union(WatchKinds::WRITES))); }
     classes.extend(code_spans().map(|extent| class(extent,
-        if prelude && extent.0 != u64::from(ENTERED) { WatchKinds::CPU_FETCH.union(WatchKinds::WRITES) } else { WatchKinds::WRITES })));
+        if prelude { WatchKinds::CPU_FETCH.union(WatchKinds::WRITES) } else { WatchKinds::WRITES })));
     classes.push(class((0xd0ab0, 0xd0af0), if prelude {
         WatchKinds::CPU_FETCH.union(WatchKinds::WRITES)
     } else { WatchKinds::WRITES }));
@@ -136,7 +133,7 @@ fn begin(machine: &mut Machine, runner: &Runner<'_>, phase: Phase) -> Result<Box
             rule: Confinement::Forbid(guarded.into_iter().map(span).collect::<Result<_, _>>()?) }]
     } else {
         vec![ConfinementRule { cores: CoreSet::new(&[1])?, access: Access::Write,
-            rule: Confinement::Allow(vec![span((CALL_FRAME.0, CALL_FRAME.0 + 4))?]) },
+            rule: Confinement::Allow(vec![span(SLOT_FRAME)?]) },
             ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Write,
                 rule: Confinement::Forbid(guarded.into_iter().map(span).collect::<Result<_, _>>()?) }]
     };
@@ -177,8 +174,9 @@ fn snapshot(machine: &Machine, runner: &Runner<'_>, extent: (u64, u64)) -> Resul
     equal_views(&views)?;
     Ok(views)
 }
+const RESOURCES: usize = 4 + CODE.len();
 fn digest_resources<'a>(roots: &'a Views, slot: &'a Views, frame: &'a Views, table: &'a Views,
-    code: &'a [CodeViews]) -> [((u64, u64), &'a Views); 9] {
+    code: &'a [CodeViews]) -> [((u64, u64), &'a Views); RESOURCES] {
     std::array::from_fn(|index| match index {
         0 => (ROOTS, roots), 1 => (SLOT, slot), 2 => (CALL_FRAME, frame), 3 => (TABLE, table),
         _ => {
@@ -189,8 +187,8 @@ fn digest_resources<'a>(roots: &'a Views, slot: &'a Views, frame: &'a Views, tab
     })
 }
 fn aliases(machine: &Machine, runner: &Runner<'_>, tcm: &TcmWords,
-    resources: &[((u64, u64), &Views); 9], hashes: &[Sha256Digest; 9], result: &mut Vec<AliasBinding>) -> Result<(), String> {
-    let guarded: [(u64, u64); 9] = std::array::from_fn(|index| resources[index].0);
+    resources: &[((u64, u64), &Views); RESOURCES], hashes: &[Sha256Digest; RESOURCES], result: &mut Vec<AliasBinding>) -> Result<(), String> {
+    let guarded: [(u64, u64); RESOURCES] = std::array::from_fn(|index| resources[index].0);
     tcm_disjoint_views(&runner.committed, tcm, &guarded)?;
     let mut buffer = [0; (TABLE.1 - TABLE.0) as usize];
     for core in 0..2 {
@@ -203,27 +201,6 @@ fn aliases(machine: &Machine, runner: &Runner<'_>, tcm: &TcmWords,
                 require(buffer == views.physical.as_slice(), "consumer alias bytes differ")?;
                 result.push(AliasBinding { core, guest: Address(guest), physical: Address(start), size: end - start, sha256: *hash });
             }
-        }
-    }
-    Ok(())
-}
-fn service_aliases(machine: &Machine, runner: &Runner<'_>, tcm: &TcmWords,
-    result: &mut Vec<ServiceAlias>) -> Result<(), String> {
-    let start = u64::from(ENTERED);
-    tcm_disjoint_views(&runner.committed, tcm, &[(start, start + 36)])?;
-    let mut bytes = [0; 36];
-    for core in 0..2 {
-        let observed_core = WitnessCore::from_index(core)?;
-        for guest in [start, ZERO_GUEST + start] {
-            require(runner.physical_of(core, guest, 36)? == start, "consumer service alias mapping differs")?;
-            machine.session.board.read_memory(core, guest, &mut bytes)?;
-            let words: [Word; 9] = std::array::from_fn(|index| {
-                let offset = index * 4;
-                Word(u32::from_le_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]]))
-            });
-            require(words.iter().zip(SERVICE).all(|(actual, expected)| actual.0 == *expected),
-                "consumer service alias words differ")?;
-            result.push(ServiceAlias { core: observed_core, guest: Address(guest), physical: Address(start), words });
         }
     }
     Ok(())
@@ -243,10 +220,7 @@ fn validate_prelude(state: &WatchState, start: &Context, dispatch: &Context) -> 
         .chain([0x69ce44,0x69ce48,0x69ce90,0x69ce94,0x69ce98,0x69ce9c,0x69cea0,0x69cea4])
         .chain((0x69ceec..0x69cf38).step_by(4))
         .chain((0x725dd8..0x725e00).step_by(4))
-        .chain((0x7235d8..0x7235f8).step_by(4))
-        .chain([0x412bc,0x412c0,0x412c4])
-        .chain((0x427b8..0x427d4).step_by(4))
-        .chain([0x412c8,0x7235f8,0x7235fc,0x723600]);
+        .chain((0x7235d8..=0x723600).step_by(4));
     let mut selector = false;
     let mut magic = false;
     let mut primary = false;
@@ -319,9 +293,8 @@ pub(in crate::peer_witness::loader) fn observe(machine: &mut Machine, runner: &R
     let prelude_outcome = (|| {
         let dispatch = stop(machine, DISPATCH)?;
         require(dispatch.registers[0].0 == 1 && dispatch.registers[3].0 == TABLE_GUEST as u32
-            && dispatch.registers[4].0 == 1 && dispatch.registers[5].0 == ROOTS.0 as u32
-            // The identity wrapper returns with pop-PC after its nested BL.
-            && dispatch.sp.0 == 0x400f3388 && dispatch.registers[11].0 == 0x400f33a4 && dispatch.lr.0 == 0x412c8
+            && dispatch.registers[4].0 == 1 && dispatch.registers[5].0 == ROOTS.0 as u32 && dispatch.registers[6].0 == 2
+            && dispatch.sp.0 == 0x400f3388 && dispatch.registers[11].0 == 0x400f33a4
             && dispatch.cpsr.0 & 0x07f0_fe20 == 0 && dispatch.cpsr.0 & 0xdf == 0xd3 && dispatch.tcm == start.tcm,
             "consumer source dispatch context differs")?;
         let state = observed(&prelude)?;
@@ -340,7 +313,7 @@ pub(in crate::peer_witness::loader) fn observe(machine: &mut Machine, runner: &R
     let frame_before = snapshot(machine, runner, CALL_FRAME)?;
     let caller_words = [0x400f33e4,0x400,2,dispatch.registers[7].0,dispatch.registers[8].0,
         dispatch.registers[10].0,0x400f33dc,0x725e00];
-    require(frame_before.physical[4..].chunks_exact(4).zip(caller_words)
+    require(frame_before.physical.chunks_exact(4).zip(caller_words)
         .all(|(bytes, word)| bytes == word.to_le_bytes()), "consumer authentic caller frame differs")?;
     let table_before = snapshot(machine, runner, TABLE)?;
     require(table_before.physical == initializer.table_after.physical, "consumer table differs from complete initializer output")?;
@@ -352,31 +325,28 @@ pub(in crate::peer_witness::loader) fn observe(machine: &mut Machine, runner: &R
             "consumer source instruction readback differs")?;
         code.push(CodeViews { start: source.start, views });
     }
-    let mut bindings = Vec::with_capacity(72);
-    let mut service_bindings = Vec::with_capacity(8);
+    let mut bindings = Vec::with_capacity(4 * 2 * RESOURCES);
     let resources = digest_resources(&roots, &slot_before, &frame_before, &table_before, &code);
-    let mut hashes: [Sha256Digest; 9] = std::array::from_fn(|index| Sha256Digest::of(&resources[index].1.physical));
+    let hashes: [Sha256Digest; RESOURCES] = std::array::from_fn(|index| Sha256Digest::of(&resources[index].1.physical));
     aliases(machine, runner, &dispatch.tcm, &resources, &hashes, &mut bindings)?;
-    service_aliases(machine, runner, &dispatch.tcm, &mut service_bindings)?;
     let mut watch = begin(machine, runner, Phase::Consumer)?;
     let outcome = (|| {
         let entered = stop(machine, ENTERED)?;
         let returned = stop(machine, RETURNED)?;
         let after = stop(machine, AFTER)?;
         let incoming = dispatch.cpsr.0;
-        require(entered.counts.0[1] == dispatch.counts.0[1] + 2 && returned.counts.0[1] == dispatch.counts.0[1] + 11
-            && after.counts.0[1] == dispatch.counts.0[1] + 12, "consumer core1 instruction extent differs")?;
+        require(entered.counts.0[1] == dispatch.counts.0[1] + 2 && returned.counts.0[1] > entered.counts.0[1]
+            && after.counts.0[1] == returned.counts.0[1] + 1, "consumer core1 instruction extent differs")?;
         let mut entry_registers = dispatch.registers;
         entry_registers[3] = Word(ENTERED);
         require(entered.registers == entry_registers && entered.sp == dispatch.sp && entered.lr.0 == RETURNED
             && entered.cpsr == dispatch.cpsr, "consumer actual BLX entry differs")?;
-        let mut return_registers = entered.registers;
-        return_registers[0] = Word(incoming & 0x80);
-        return_registers[1] = Word(incoming | 0x80);
-        require(returned.registers == return_registers && returned.sp == entered.sp && returned.lr == entered.lr
-            && returned.cpsr.0 == incoming | 0x80, "consumer service return effects differ")?;
-        return_registers[10] = return_registers[0];
-        require(after.registers == return_registers && after.sp == returned.sp && after.lr == returned.lr && after.cpsr == returned.cpsr,
+        require(returned.registers[0].0 == incoming & 0x80 && returned.registers[4..12] == entered.registers[4..12]
+            && returned.sp == entered.sp && returned.cpsr.0 & CONTROL_BITS == (incoming | 0x80) & CONTROL_BITS,
+            "consumer service return effects differ")?;
+        let mut caller_registers = returned.registers;
+        caller_registers[10] = returned.registers[0];
+        require(after.registers == caller_registers && after.sp == returned.sp && after.lr == returned.lr && after.cpsr == returned.cpsr,
             "consumer caller copy effects differ")?;
         require([&entered,&returned,&after].iter().all(|context| context.tcm == dispatch.tcm)
             && start.counts.0[0] <= dispatch.counts.0[0] && dispatch.counts.0[0] <= entered.counts.0[0]
@@ -387,40 +357,28 @@ pub(in crate::peer_witness::loader) fn observe(machine: &mut Machine, runner: &R
         let frame_after = snapshot(machine, runner, CALL_FRAME)?;
         let table_after = snapshot(machine, runner, TABLE)?;
         require(slot_after.physical == slot_before.physical && table_after.physical == table_before.physical
-            && frame_after.physical[4..] == frame_before.physical[4..]
-            && frame_after.physical[..4] == entered.registers[11].0.to_le_bytes(), "consumer committed frame or table effects differ")?;
+            && frame_after.physical == frame_before.physical, "consumer committed frame or table effects differ")?;
         for ((extent, before), actual) in code_spans().zip(&code).zip(&contract.code) {
             require(snapshot(machine, runner, extent)?.physical == before.views.physical && before.start == actual.start,
                 "consumer code changed during execution")?;
         }
         require(snapshot(machine, runner, ROOTS)?.physical == roots.physical, "consumer roots changed")?;
         let resources = digest_resources(&roots, &slot_after, &frame_after, &table_after, &code);
-        hashes[2] = Sha256Digest::of(&frame_after.physical);
         aliases(machine, runner, &after.tcm, &resources, &hashes, &mut bindings)?;
-        service_aliases(machine, runner, &after.tcm, &mut service_bindings)?;
         let state = observed(&watch)?;
-        require(state.records.len() == 3, "consumer data effect count differs")?;
-        let mut last_instruction: u64 = dispatch.counts.0.iter().sum();
-        let mut last_tick = prelude_watch.records.last().and_then(|event| event.tick.as_ref())
+        let [event] = state.records.as_slice() else { return Err("consumer data events are not exactly the slot read".into()) };
+        let last_tick = prelude_watch.records.last().and_then(|record| record.tick.as_ref())
             .ok_or("consumer prelude final tick absent")?.0;
-        let saved_before: [u8; 4] = frame_before.physical[..4].try_into().map_err(|_| "consumer saved-r11 preimage extent differs")?;
-        for (event, (source, physical, pc, value, before)) in state.records.iter().zip([
-            (Source::CpuRead,SLOT.0,u64::from(DISPATCH),ENTERED,ENTERED.to_le_bytes()),
-            (Source::CpuWrite,CALL_FRAME.0,u64::from(ENTERED),entered.registers[11].0,saved_before),
-            (Source::CpuRead,CALL_FRAME.0,0xd115c,entered.registers[11].0,entered.registers[11].0.to_le_bytes())]) {
-            let tick = event.tick.as_ref().ok_or("consumer data tick attribution absent")?.0;
-            require(event.source == source && event.core == Some(1)
-                && event.address == ZERO_GUEST + physical && event.physical == Some(physical) && event.size == 4
-                && event.pc == Some(pc) && event.value == Some(u64::from(value)) && event.byte_order == Some(ByteOrder::Little)
-                && event.tcm.is_none() && preimage_is(event, &before) && tick >= last_tick && event.instructions.is_some_and(|count|
-                    count >= last_instruction && count < after.counts.0.iter().sum()),
-                "consumer data effect origin, value or attribution differs")?;
-            last_instruction = event.instructions.ok_or("consumer instruction attribution absent")?;
-            last_tick = tick;
-        }
+        let tick = event.tick.as_ref().ok_or("consumer data tick attribution absent")?.0;
+        require(event.source == Source::CpuRead && event.core == Some(1)
+            && event.address == ZERO_GUEST + SLOT.0 && event.physical == Some(SLOT.0) && event.size == 4
+            && event.pc == Some(u64::from(DISPATCH)) && event.value == Some(u64::from(ENTERED)) && event.byte_order == Some(ByteOrder::Little)
+            && event.tcm.is_none() && preimage_is(event, &ENTERED.to_le_bytes()) && tick >= last_tick
+            && event.instructions.is_some_and(|count| count >= dispatch.counts.0.iter().sum::<u64>() && count < entered.counts.0.iter().sum::<u64>()),
+            "consumer slot read origin, value or attribution differs")?;
         Ok(Receipt { kind: ConsumerKind::InterruptMask, start, dispatch, entered, returned, after,
             roots, slot_before, slot_after, frame_before, frame_after, table_before, table_after, code, decoder: decoder_before,
-            aliases: bindings, service_aliases: service_bindings, prelude_watch, watch: state })
+            aliases: bindings, prelude_watch, watch: state })
     })();
     let end = machine.session.board.memory_watch_end_scoped(&mut watch);
     match outcome { Ok(receipt) => end.map(|()| receipt), Err(error) => { let _ = end; Err(error) } }

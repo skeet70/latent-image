@@ -67,6 +67,8 @@ loadPieces source manifest = forM (manifestPieces manifest) $ \piece -> do
     SingleImagePiece kind paths -> SingleImage kind <$> linked kind paths
     LoaderStartupPiece (LoaderStartupPaths a b dispatcher installer) ->
       LoaderStartupImages <$> linked LoaderStartup a <*> linked LoaderStartup b <*> linked LoaderStartup dispatcher <*> linked LoaderStartup installer
+    KernelSlotPiece (KernelSlotPaths a b regions) ->
+      KernelSlotImages <$> linked KernelSlotBodies a <*> linked KernelSlotBodies b <*> (RegionsBytes <$> H.readRegular 0x10000 regions)
   refused (derivePieceOf source images)
 
 -- | Rule 4 application, then the rule 5 postconditions on the result.
@@ -124,7 +126,8 @@ runStager tools canonicalPath manifestPath scratchPath output = do
   -- Log sites resolve symbols of single-image pieces only.
   ownedSymbols <- concat <$> forM (manifestPieces manifest) (\piece -> case piece of
     SingleImagePiece kind (LinkedPaths _ symbolsPath) -> (\symbols -> [(kind, symbols)]) <$> H.readRegular 0x10000 symbolsPath
-    LoaderStartupPiece _ -> pure [])
+    LoaderStartupPiece _ -> pure []
+    KernelSlotPiece _ -> pure [])
   let sources = AttachSources (canonicalDat source) dat (canonicalTargets source) observed ownedSymbols (compositionPieces composition) attach
   attachState <- refused (attachStateValue sources (manifestAttachRules manifest) (contractCarriers composition))
   section <- case manifestApplication manifest of

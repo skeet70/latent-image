@@ -2,12 +2,12 @@ use super::*;
 
 const ROOTS: (u64, u64) = (0x96bd20, 0x96bd28);
 const HEADERS: [(u64, u64); 2] = [(0x40010, 0x40014), (0xd0010, 0xd0014)];
-const CODE: [(u32, &[u32]); 4] = [
+const CODE: [(u32, &[u32]); 2] = [
     (0x725a04, &[0xe92d4800,0xe28db004,0xe30b0d20,0xe3400096,0xe3003000,0xe3403004,0xe5933010,0xe5803000,0xe3003000,0xe340300d,0xe5933010,0xe5803004]),
     (0x725b74, &[0xe92d48f0,0xe28db014,0xe1a05000,0xe30b4d20,0xe3404096,0xe5942000,0xe3013618,0xe7923003,0xe12fff33,0xe1a06000,0xe7942100,0xe2453001,0xe3a0102c,0xe0212391,0xe5911184,0xe5911000]),
-    (0x412bc, &[0xe92d4800,0xe28db004,0xeb00053b,0xe8bd8800]),
-    (0x427b8, &[0xee121e10,0xe3a02901,0xe2822003,0xe1510002,0x03a00000,0x13a00001,0xe12fff1e]),
 ];
+/// CPSR without the NZCVQ and GE flags.
+const CONTROL_BITS: u32 = 0x07f0_ffff;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -43,7 +43,7 @@ enum Premise {
 struct Installation { code: [u32; 2], header_words: [u32; 2], root_words: [u32; 2], root_values: [u32; 2] }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Selection { extension_offset: u32, service: Guest, identity_helper: Guest, cp14_identity: Identity, root_index: usize }
+struct Selection { extension_offset: u32, service: Guest, cp14_identity: Identity, root_index: usize }
 #[derive(Clone, Copy, Deserialize)]
 #[serde(try_from = "u32")]
 struct DescriptorId(u32);
@@ -67,7 +67,7 @@ struct Descriptor {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StackSource {
-    saved_bytes: u32, selector_saved_bytes: u32, entry_sp_premise: StackPremise,
+    saved_bytes: u32, entry_sp_premise: StackPremise,
     backing: StackBacking, atcm_register: Word, guest_window: [Guest; 2],
     cpsr_mask: Word, cpsr_value: Word, observation: StackObservation,
 }
@@ -101,17 +101,16 @@ impl Contract {
         require(self.installation.code == [0x725a04,0x725a34] && self.installation.header_words == [0x40010,0xd0010]
             && self.installation.root_words == [0x96bd20,0x96bd24] && self.installation.root_values == [0x4004dae0,0x400ddaa0]
             && self.selection.extension_offset == 0x1618 && self.selection.service.0 == 0x412bc
-            && self.selection.identity_helper.0 == 0x427b8 && self.selection.cp14_identity.0 == 0x4003 && self.selection.root_index == 0,
+            && self.selection.cp14_identity.0 == 0x4003 && self.selection.root_index == 0,
             "root0 installation or selection source differs")?;
         let descriptor = &self.descriptor;
         require(descriptor.entry.0 == 0x725b74 && descriptor.pointer_read.0 == 0x725bac && descriptor.pool_read.0 == 0x725bb0
             && descriptor.after_pool_read.0 == 0x725bb4 && descriptor.identifiers == [1,120]
             && descriptor.record_bytes == 44 && descriptor.root_relative_field == 0x184
             && descriptor.published_accesses.len() == 120 && self.consumer_stack_source.saved_bytes == 24
-            && self.consumer_stack_source.selector_saved_bytes == 8
             && self.consumer_stack_source.atcm_register.0 == 0x70000011
             && self.consumer_stack_source.guest_window.map(|guest| guest.0) == [0x70000000,0x70002000]
-            && self.consumer_stack_source.cpsr_mask.0 == 0x07f0ffff
+            && self.consumer_stack_source.cpsr_mask.0 == CONTROL_BITS
             && self.consumer_stack_source.cpsr_value.0 == 0x153, "root0 descriptor or dynamic stack source differs")?;
         for (index, access) in descriptor.published_accesses.iter().enumerate() {
             require(access.identifier.0 == index as u32 + 1 && access.table_word.0 == 0x4004dae0 + index as u32 * 44 + 0x184
@@ -147,7 +146,7 @@ impl ConsumerStack {
     fn admit(entry: &Context) -> Result<Self, String> {
         require(entry.sp.0 % 4 == 0 && (0x70000020..=0x70002000).contains(&entry.sp.0)
             && entry.tcm[0] == [Word(0x70000011),Word(0)]
-            && entry.cpsr.0 & 0x07f0ffff == 0x153, "root0 core0 ATCM stack or SVC interrupt context differs")?;
+            && entry.cpsr.0 & CONTROL_BITS == 0x153, "root0 core0 ATCM stack or SVC interrupt context differs")?;
         Ok(Self { low: Guest(entry.sp.0 - 32), top: Guest(entry.sp.0) })
     }
     fn offsets(self) -> [u32; 2] { [self.low.0 - 0x70000000,self.top.0 - 0x70000000] }
@@ -164,17 +163,7 @@ impl ConsumerStack {
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum StackOperation { CallerSave, SelectorSave, SelectorRestore }
-
-impl StackOperation {
-    fn sites(self) -> (u32, u32, u64) {
-        match self {
-            Self::CallerSave => (0x725b74,0x725b78,0),
-            Self::SelectorSave => (0x412bc,0x412c0,9),
-            Self::SelectorRestore => (0x412c8,0x725b98,19),
-        }
-    }
-}
+enum StackOperation { CallerSave }
 
 #[derive(Serialize)]
 struct StackStep {
@@ -219,9 +208,8 @@ fn begin(machine: &mut Machine, maps: &[factory::MemoryMap], body: Option<(Consu
             ConfinementRule { cores: CoreSet::new(&[0])?, access: Access::Read, rule: Confinement::Allow(reads) }]
     } else {
         classes.extend(HEADERS.map(|extent| class(extent, data)));
-        classes.extend(code_spans().enumerate().map(|(index, extent)| class(extent,
-            if index < 2 { WatchKinds::CPU_FETCH.union(WatchKinds::WRITES) } else { WatchKinds::WRITES })));
-        let protected = HEADERS.into_iter().chain(code_spans().skip(2)).map(span).collect::<Result<Vec<_>, _>>()?;
+        classes.extend(code_spans().map(|extent| class(extent, WatchKinds::CPU_FETCH.union(WatchKinds::WRITES))));
+        let protected = HEADERS.into_iter().map(span).collect::<Result<Vec<_>, _>>()?;
         let mut core1_protected = Vec::with_capacity(protected.len() + 1);
         core1_protected.push(span(PRIMARY_TABLE)?);
         core1_protected.extend_from_slice(&protected);
@@ -236,13 +224,12 @@ fn observed(watch: &ScopedMemoryWatch) -> Result<WatchState, String> {
     require(state.enabled && state.violation.is_none() && state.fault.is_none(), "root0 watch faulted")?;
     Ok(state)
 }
-enum StopPoint { Boundary(Boundary), StackBefore(StackOperation), StackAfter(StackOperation) }
+enum StopPoint { Boundary(Boundary), CallerSaved }
 
 fn stop_at(machine: &mut Machine, point: StopPoint, start: &Context) -> Result<Option<Context>, String> {
     let (address,label) = match point {
         StopPoint::Boundary(boundary) => (boundary.address(),boundary.label()),
-        StopPoint::StackBefore(operation) => (operation.sites().0,"root0-stack-before"),
-        StopPoint::StackAfter(operation) => (operation.sites().1,"root0-stack-after"),
+        StopPoint::CallerSaved => (0x725b78,"root0-stack-after"),
     };
     machine.traces.arm_primary(&machine.session, BTreeMap::from([(address, label.into())]))?;
     machine.traces.stop_labels = [label.into()].into_iter().collect();
@@ -266,71 +253,33 @@ fn stop(machine: &mut Machine, boundary: Boundary, start: &Context, boundaries: 
     Ok(context)
 }
 
-fn stack_step(machine: &mut Machine, stack: ConsumerStack, operation: StackOperation, entry: &Context) -> Result<Option<StackStep>, String> {
-    let before = if matches!(operation, StackOperation::CallerSave) { entry.clone() } else {
-        let Some(before) = stop_at(machine, StopPoint::StackBefore(operation), entry)? else { return Ok(None) };
-        before
-    };
+fn stack_step(machine: &mut Machine, stack: ConsumerStack, entry: &Context) -> Result<Option<StackStep>, String> {
     let before_bytes = stack.read(machine)?;
-    let Some(after) = stop_at(machine, StopPoint::StackAfter(operation), &before)? else { return Ok(None) };
+    let Some(after) = stop_at(machine, StopPoint::CallerSaved, entry)? else { return Ok(None) };
     let after_bytes = stack.read(machine)?;
-    Ok(Some(StackStep { operation,before,after,before_bytes,after_bytes }))
+    Ok(Some(StackStep { operation: StackOperation::CallerSave, before: entry.clone(), after, before_bytes, after_bytes }))
 }
 fn validate_stack(stack: &StackEvidence, entry: &Context, selected: &Context) -> Result<(), String> {
     let binding = ConsumerStack::admit(entry)?;
-    require(stack.core == 0 && stack.bank == TcmBank::Atcm && stack.offsets == binding.offsets()
-        && stack.steps.len() == 3, "root0 private stack binding or observation coverage differs")?;
+    let [step] = stack.steps.as_slice() else { return Err("root0 private stack observation coverage differs".into()) };
+    require(stack.core == 0 && stack.bank == TcmBank::Atcm && stack.offsets == binding.offsets(),
+        "root0 private stack binding differs")?;
     let mut bytes: [u8; 32] = stack.before.as_slice().try_into().map_err(|_| "root0 private stack extent differs")?;
-    let mut previous_core1 = entry.counts.0[1];
-    for (step, operation) in stack.steps.iter().zip([StackOperation::CallerSave,StackOperation::SelectorSave,StackOperation::SelectorRestore]) {
-        let (before_pc,after_pc,ordinal) = operation.sites();
-        require(step.operation.sites() == operation.sites() && step.before_bytes == bytes
-            && step.before.counts.0[0] == entry.counts.0[0] + ordinal
-            && step.after.counts.0[0] == step.before.counts.0[0] + 1
-            && step.before.counts.0[1] >= previous_core1 && step.after.counts.0[1] >= step.before.counts.0[1]
-            && step.after.counts.0[1] <= selected.counts.0[1], "root0 private stack instruction or progress differs")?;
-        let mut expected = entry.clone();
-        expected.pc = Word(before_pc);
-        match operation {
-            StackOperation::CallerSave => {}
-            StackOperation::SelectorSave | StackOperation::SelectorRestore => {
-                expected.registers[2] = Word(0x4004dae0); expected.registers[3] = Word(0x412bc);
-                expected.registers[4] = Word(ROOTS.0 as u32); expected.registers[5] = entry.registers[0];
-                expected.registers[11] = Word(entry.sp.0 - 4); expected.sp = Word(entry.sp.0 - 24); expected.lr = Word(0x725b98);
-                if matches!(operation, StackOperation::SelectorRestore) {
-                    expected.registers[0] = Word(0); expected.registers[1] = Word(0x4003); expected.registers[2] = Word(0x4003);
-                    expected.registers[11] = Word(entry.sp.0 - 28); expected.sp = Word(entry.sp.0 - 32);
-                    expected.lr = Word(0x412c8); expected.cpsr = Word((entry.cpsr.0 & 0x0fff_ffff) | 0x6000_0000);
-                }
-            }
-        }
-        let same = |actual: &Context, expected: &Context| actual.pc == expected.pc && actual.registers == expected.registers
-            && actual.sp == expected.sp && actual.lr == expected.lr && actual.cpsr == expected.cpsr && actual.tcm == expected.tcm;
-        require(same(&step.before, &expected), "root0 private stack incoming instruction context differs")?;
-        expected.pc = Word(after_pc);
-        match operation {
-            StackOperation::CallerSave => {
-                expected.sp = Word(entry.sp.0 - 24);
-                for (offset,value) in (8..32).step_by(4).zip([entry.registers[4],entry.registers[5],entry.registers[6],
-                    entry.registers[7],entry.registers[11],entry.lr]) {
-                    bytes[offset..offset + 4].copy_from_slice(&value.0.to_le_bytes());
-                }
-            }
-            StackOperation::SelectorSave => {
-                expected.sp = Word(entry.sp.0 - 32);
-                bytes[..4].copy_from_slice(&(entry.sp.0 - 4).to_le_bytes());
-                bytes[4..8].copy_from_slice(&0x725b98_u32.to_le_bytes());
-            }
-            StackOperation::SelectorRestore => {
-                require(word(&bytes[..4])? == entry.sp.0 - 4 && word(&bytes[4..8])? == 0x725b98,
-                    "root0 private selector saved words differ")?;
-                expected.sp = Word(entry.sp.0 - 24); expected.registers[11] = Word(entry.sp.0 - 4);
-            }
-        }
-        require(same(&step.after, &expected) && step.after_bytes == bytes, "root0 private stack instruction effect differs")?;
-        previous_core1 = step.after.counts.0[1];
+    require(step.before_bytes == bytes && step.before.counts.0 == entry.counts.0
+        && step.after.counts.0[0] == entry.counts.0[0] + 1 && step.after.counts.0[1] >= entry.counts.0[1]
+        && step.after.counts.0[1] <= selected.counts.0[1], "root0 private stack instruction or progress differs")?;
+    let mut expected = entry.clone();
+    let same = |actual: &Context, expected: &Context| actual.pc == expected.pc && actual.registers == expected.registers
+        && actual.sp == expected.sp && actual.lr == expected.lr && actual.cpsr == expected.cpsr && actual.tcm == expected.tcm;
+    require(same(&step.before, &expected), "root0 private stack incoming instruction context differs")?;
+    expected.pc = Word(0x725b78);
+    expected.sp = Word(entry.sp.0 - 24);
+    for (offset,value) in (8..32).step_by(4).zip([entry.registers[4],entry.registers[5],entry.registers[6],
+        entry.registers[7],entry.registers[11],entry.lr]) {
+        bytes[offset..offset + 4].copy_from_slice(&value.0.to_le_bytes());
     }
-    require(stack.after == bytes, "root0 private stack final readback differs")
+    require(same(&step.after, &expected) && step.after_bytes == bytes, "root0 private stack instruction effect differs")?;
+    require(stack.after.get(8..) == Some(&bytes[8..]), "root0 private stack final readback differs")
 }
 
 fn snapshot(machine: &Machine, maps: &[factory::MemoryMap], extent: (u64, u64)) -> Result<Views, String> {
@@ -475,37 +424,45 @@ fn aliases(machine: &Machine, maps: &[factory::MemoryMap], tcm: &TcmWords,
     Ok(())
 }
 
-struct ExpectedData { source: Source, guest: u64, pc: u64, ordinal: u64, value: u32 }
+/// The boundary an access's instruction ordinal counts from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Anchor { Entry, Selected }
+struct ExpectedData { source: Source, guest: u64, pc: u64, anchor: Anchor, ordinal: u64, value: u32 }
 
 fn body(state: &WatchState, entry: &Context, selected: &Context, after: &Context,
     descriptor: u64, pool: u64, pool_value: u32, prelude: &WatchState) -> Result<(), String> {
     let expected = [
-        ExpectedData { source: Source::CpuRead, guest: ROOTS.0, pc: 0x725b88, ordinal: 5, value: 0x4004dae0 },
-        ExpectedData { source: Source::CpuRead, guest: 0x4004f0f8, pc: 0x725b90, ordinal: 7, value: 0x412bc },
-        ExpectedData { source: Source::CpuRead, guest: ROOTS.0, pc: 0x725b9c, ordinal: 21, value: 0x4004dae0 },
-        ExpectedData { source: Source::CpuRead, guest: ZERO_GUEST + descriptor, pc: 0x725bac, ordinal: 25, value: (ZERO_GUEST + pool) as u32 },
-        ExpectedData { source: Source::CpuRead, guest: ZERO_GUEST + pool, pc: 0x725bb0, ordinal: 26, value: pool_value },
+        ExpectedData { source: Source::CpuRead, guest: ROOTS.0, pc: 0x725b88, anchor: Anchor::Entry, ordinal: 5, value: 0x4004dae0 },
+        ExpectedData { source: Source::CpuRead, guest: 0x4004f0f8, pc: 0x725b90, anchor: Anchor::Entry, ordinal: 7, value: 0x412bc },
+        ExpectedData { source: Source::CpuRead, guest: ROOTS.0, pc: 0x725b9c, anchor: Anchor::Selected, ordinal: 0, value: 0x4004dae0 },
+        ExpectedData { source: Source::CpuRead, guest: ZERO_GUEST + descriptor, pc: 0x725bac, anchor: Anchor::Selected, ordinal: 4, value: (ZERO_GUEST + pool) as u32 },
+        ExpectedData { source: Source::CpuRead, guest: ZERO_GUEST + pool, pc: 0x725bb0, anchor: Anchor::Selected, ordinal: 5, value: pool_value },
     ];
     require(state.records.len() == expected.len(), "root0 bounded data event count differs")?;
     let mut instructions = prelude.records.last().and_then(|event| event.instructions).unwrap_or_else(|| entry.counts.0.iter().sum());
     let mut tick = prelude.records.last().and_then(|event| event.tick.as_ref()).map_or(0, |tick| tick.0);
-    let mut previous_ordinal = None;
+    let selected_total: u64 = selected.counts.0.iter().sum();
+    let mut previous_group = None;
     let mut previous_core1 = entry.counts.0[1];
     for (event, expected) in state.records.iter().zip(expected) {
         let previous_clock = instructions;
         let value = raw(event, &mut instructions, &mut tick, after.counts.0.iter().sum())?;
-        let core0_clock = entry.counts.0[0].checked_add(expected.ordinal + 1).ok_or("root0 instruction clock overflow")?;
+        let (base, upper) = match expected.anchor {
+            Anchor::Entry => (entry, selected.counts.0[1]),
+            Anchor::Selected => (selected, after.counts.0[1]),
+        };
+        let core0_clock = base.counts.0[0].checked_add(expected.ordinal + 1).ok_or("root0 instruction clock overflow")?;
         let core1_clock = instructions.checked_sub(core0_clock).ok_or("root0 data clock precedes core0 ordinal")?;
+        let group = Some((expected.anchor, expected.ordinal));
         require(event.source == expected.source && event.core == Some(0) && event.address == expected.guest
             && event.pc == Some(expected.pc) && value == expected.value
-            && core1_clock >= previous_core1 && core1_clock <= after.counts.0[1]
-            && (if expected.ordinal < 21 { core1_clock <= selected.counts.0[1] } else { core1_clock >= selected.counts.0[1] })
-            && (previous_ordinal != Some(expected.ordinal) || instructions == previous_clock)
-            && (previous_ordinal == Some(expected.ordinal) || previous_ordinal.is_none() || instructions > previous_clock)
-            && (if expected.ordinal < 21 { instructions <= selected.counts.0.iter().sum() } else { instructions > selected.counts.0.iter().sum() }),
+            && core1_clock >= previous_core1.max(base.counts.0[1]) && core1_clock <= upper
+            && (previous_group != group || instructions == previous_clock)
+            && (previous_group == group || previous_group.is_none() || instructions > previous_clock)
+            && (if expected.anchor == Anchor::Entry { instructions <= selected_total } else { instructions > selected_total }),
             "root0 actual selected read, write or ordinal differs")?;
         require(preimage(event, &value.to_le_bytes()), "root0 data read preimage differs")?;
-        previous_ordinal = Some(expected.ordinal); previous_core1 = core1_clock;
+        previous_group = group; previous_core1 = core1_clock;
     }
     Ok(())
 }
@@ -574,25 +531,21 @@ fn observe(machine: &mut Machine, initializer: &ObservationPrimary, continuation
     aliases(machine, &committed, &entry.tcm, &resources, &hashes, &mut aliases_observed)?;
     let mut watch = begin(machine, &maps, Some((stack,pool_span)))?;
     let outcome = (|| {
-        let mut steps = Vec::with_capacity(3);
-        for operation in [StackOperation::CallerSave,StackOperation::SelectorSave,StackOperation::SelectorRestore] {
-            let Some(step) = stack_step(machine, stack, operation, &entry)? else { return Ok(None) };
-            steps.push(step);
-        }
+        let Some(step) = stack_step(machine, stack, &entry)? else { return Ok(None) };
         let Some(selected) = stop(machine, Boundary::Selected, &entry, boundaries)? else { return Ok(None) };
-        let mut selected_registers = entry.registers;
-        selected_registers[..7].copy_from_slice(&[Word(0),Word(0x4003),Word(0x4003),Word(0x412bc),Word(ROOTS.0 as u32),Word(identifier),Word(0)]);
-        selected_registers[11] = Word(entry.sp.0 - 4);
-        let cpsr = Word((entry.cpsr.0 & 0x0fff_ffff) | 0x6000_0000);
-        require(selected.registers == selected_registers && selected.sp.0 == entry.sp.0 - 24 && selected.lr.0 == 0x412c8
-            && selected.cpsr == cpsr && selected.counts.0[0] == entry.counts.0[0] + 21,
+        let mut callee_saved = entry.registers;
+        callee_saved[4..7].copy_from_slice(&[Word(ROOTS.0 as u32),Word(identifier),Word(0)]);
+        callee_saved[11] = Word(entry.sp.0 - 4);
+        require(selected.registers[0] == Word(0) && selected.registers[4..12] == callee_saved[4..12]
+            && selected.sp.0 == entry.sp.0 - 24 && selected.cpsr.0 & CONTROL_BITS == entry.cpsr.0 & CONTROL_BITS
+            && selected.counts.0[0] > entry.counts.0[0] + 10,
             "root0 primary CP14 selection or dynamic frame differs")?;
         let Some(after) = stop(machine, Boundary::After, &selected, boundaries)? else { return Ok(None) };
         let pool_value = word(&pool_before.physical)?;
-        let mut after_registers = selected_registers;
+        let mut after_registers = selected.registers;
         after_registers[1] = Word(pool_value); after_registers[2] = Word(0x4004dae0); after_registers[3] = Word(identifier - 1);
-        require(after.registers == after_registers && after.sp == selected.sp && after.lr == selected.lr && after.cpsr == cpsr
-            && after.counts.0[0] == entry.counts.0[0] + 27, "root0 actual descriptor/pool read or frame differs")?;
+        require(after.registers == after_registers && after.sp == selected.sp && after.lr == selected.lr && after.cpsr == selected.cpsr
+            && after.counts.0[0] == selected.counts.0[0] + 6, "root0 actual descriptor/pool read or frame differs")?;
         decoder_fn(machine)?;
         let roots_after = snapshot(machine, &committed, ROOTS)?;
         let table_after = snapshot(machine, &committed, PRIMARY_TABLE)?;
@@ -603,7 +556,7 @@ fn observe(machine: &mut Machine, initializer: &ObservationPrimary, continuation
         let resources_after: Vec<_> = [(ROOTS,&roots_after),(PRIMARY_TABLE,&table_after),(pool_span,&pool_after)]
             .into_iter().chain(code_spans().zip(code.iter().map(|code| &code.views))).collect();
         aliases(machine, &committed, &after.tcm, &resources_after, &hashes, &mut aliases_observed)?;
-        let stack = StackEvidence { core: 0, bank: TcmBank::Atcm, offsets: stack.offsets(), before: stack_before, after: stack_after, steps };
+        let stack = StackEvidence { core: 0, bank: TcmBank::Atcm, offsets: stack.offsets(), before: stack_before, after: stack_after, steps: vec![step] };
         validate_stack(&stack, &entry, &selected)?;
         Ok(Some(Observation { entry,selected,after,roots_before,roots_after,table_before,table_after,stack,
             pool_before,pool_after,code,decoder,aliases: aliases_observed }))
