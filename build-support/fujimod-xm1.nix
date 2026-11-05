@@ -10,6 +10,13 @@ let
     name = "fujimod-xm1-source";
     filter = path: type: builtins.baseNameOf path != "target";
   };
+  checkpointModel = builtins.path {
+    path = ../emulation/fujimod-xm1;
+    name = "fujimod-xm1-checkpoint-model";
+    filter = path: type: !(builtins.elem (builtins.baseNameOf path) [
+      "target" "tests" "ram_push.rs" "composed_startup.rs" "toggle.rs"
+    ]);
+  };
   src = pkgs.runCommand "fujimod-xm1-workspace" { } ''
     mkdir -p $out
     ln -s ${fujimod.src} $out/fujimod
@@ -26,6 +33,12 @@ fujimod.passthru.rustPlatform.buildRustPackage ({
   CARGO_BUILD_JOBS = 2;
   RUST_TEST_THREADS = 1;
   dontUseCargoParallelTests = true;
+  XM1_CHECKPOINT_MODEL_ID = builtins.hashString "sha256" (builtins.toJSON {
+    engine = "${fujimod}";
+    owned = "${checkpointModel}";
+    inherit features;
+    target = pkgs.stdenv.targetPlatform.rust.rustcTargetSpec;
+  });
   nativeBuildInputs = [ pkgs.cmake pkgs.pkg-config pkgs.jq ];
   nativeCheckInputs = [ fujimod ];
   # nand_image.rs links zlib for retained-identical committed NAND exports.
