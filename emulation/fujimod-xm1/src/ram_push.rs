@@ -18,6 +18,7 @@ use fujimod_emulator::board::preservation::{
     PhysicalRange, Preservation, PreservationState, ProtectedRanges,
 };
 use fujimod_xm1::sd_host::{Backing, MediaImage, SectorAddress, SectorCount};
+use fujimod_xm1::nand_read::{RowAddress, RowCount};
 use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, InstructionCount, SiteRead};
 use serde::{Deserialize, Serialize};
 use fujimod_emulator_devices::Device;
@@ -336,6 +337,7 @@ enum Request {
     ModeDial { position: ModeDialPosition },
     ReadMemory { address: u64, count: usize },
     MediaRead { first: SectorAddress, count: SectorCount },
+    NandRead { first: RowAddress, count: RowCount },
     WatchBegin {
         ranges: Vec<[u64; 2]>, limit: usize,
         #[serde(default)] views: WatchViews,
@@ -383,6 +385,7 @@ enum RequestKind {
     ModeDial,
     ReadMemory,
     MediaRead,
+    NandRead,
     WatchBegin,
     WatchState,
     WatchEnd,
@@ -423,6 +426,7 @@ impl Request {
             Request::ModeDial { .. } => RequestKind::ModeDial,
             Request::ReadMemory { .. } => RequestKind::ReadMemory,
             Request::MediaRead { .. } => RequestKind::MediaRead,
+            Request::NandRead { .. } => RequestKind::NandRead,
             Request::WatchBegin { .. } => RequestKind::WatchBegin,
             Request::WatchState => RequestKind::WatchState,
             Request::WatchEnd => RequestKind::WatchEnd,
@@ -970,7 +974,7 @@ impl Server {
             return Err(self.bridge.machine.failure.as_ref().ok_or("terminal failure disappeared")?.clone());
         }
         let read_only = tail_request || matches!(&request, Request::List | Request::TraceHits { .. }
-            | Request::ImageInputFingerprint { .. } | Request::ReadMemory { .. } | Request::MediaRead { .. }
+            | Request::ImageInputFingerprint { .. } | Request::ReadMemory { .. } | Request::MediaRead { .. } | Request::NandRead { .. }
             | Request::WatchState | Request::PreservationState | Request::MediaState);
         if !read_only {
             if let Some(failure) = self.bridge.machine.traces.modal_observation_report().failure {
@@ -1155,6 +1159,10 @@ impl Server {
             Request::MediaRead { first, count } => {
                 let read = self.bridge.machine.read_media(first, count)?;
                 json!({"first": read.first.0, "count": read.count.get(), "bytes": encode_hex(&read.bytes)})
+            }
+            Request::NandRead { first, count } => {
+                let read = self.bridge.machine.read_nand(first, count)?;
+                json!({"first": read.first.0, "count": read.count.get(), "data": encode_hex(&read.data), "spare": encode_hex(&read.spare)})
             }
             Request::WatchBegin { ranges, limit, views, write_ranges, fetch_ranges } => {
                 if self.bridge.machine.traces.modal_observation_active() {
@@ -1619,6 +1627,15 @@ mod tests {
     use super::*;
     use fujimod_xm1::run::{RunDocument, ValidatedUpdate};
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn nand_read_request_validates_row_count() {
+        let request: Request = serde_json::from_str(r#"{"command":"nand-read","first":60160,"count":64}"#).unwrap();
+        assert!(matches!(request, Request::NandRead { first: RowAddress(60160), count } if count.get() == 64));
+        for count in [0, 65] {
+            assert!(serde_json::from_str::<Request>(&format!(r#"{{"command":"nand-read","first":0,"count":{count}}}"#)).is_err());
+        }
+    }
 
     #[derive(Debug, Deserialize, Eq, PartialEq)]
     #[serde(rename_all = "kebab-case")]

@@ -427,6 +427,30 @@ devenv shell -- bazel run //replacement/property_service:property-oracle -- \
 
 Each batch directory holds the case files, every case's native result (about 170 KB each, so about 18 GB for both roles) and a `summary.json`. `results.json` records the input and runner digests, batch digests, totals per class and id, model agreement, verdicts, status distributions, control outcomes and the first 20 differences of each kind. The command exits nonzero unless the model agrees, every candidate case passes and every control holds.
 
+## Owned record store
+
+### Placement
+
+The nine stock entries occupy `[0x6ac2b4,0x6ae114)`. Minimal ARM branch veneers consume four bytes each; the remaining runs are 112, 332, 76, 776, 428, 304, 740, 4,952 and 20 bytes, totaling 7,740. Eight-byte veneers leave 7,704 bytes. The design's final 24-byte run includes the last entry and is not wholly free.
+
+The compact core at `c396a578` occupies 6,368 bytes of text and read-only data, without writable sections. The split carrier uses 4-byte entry branches and places 16, 272, 472, 376, 256, 596 and 4,380 bytes in runs 0, 1, 3, 4, 5, 6 and 7 respectively. Run 2 stays unused. Linker assertions bound every used run and every veneer address; the flat image includes gaps and ends at `0x6ae114`. No RAM-push or image5-tail fallback is required.
+
+The default/control-1..9 core byte counts are 6,368 / 6,360 / 6,328 / 6,368 / 6,268 / 6,252 / 6,352 / 6,300 / 6,368 / 6,344; all produce the same 7,776-byte flat extent. The largest used run has at least 572 bytes free.
+
+`//replacement/record_store_carrier:record-store-artifact` admits the linked span and scans canonical images 4, 5 and plain for references to retired code, wrappers/slots, cache buffers, cache ages/tags and saved program destinations. It rejects resolved A32 branches, MOVW/MOVT pairs, ADR and PC-relative literal/address references from the pinned decomp function ranges. The nine retained entry addresses remain callable. Its contract records the separate raw aligned-word census by image and retired range, classified as inside a function range or data/unmapped. Those numeric coincidences and unresolved computed references remain obligations for the cutover pair's fetch/access traps; a function range is not a complete code/data proof.
+
+`//replacement/record_store_carrier:stage-record-store` pins the DAT, decoded images and the `55436fc85c` decomp index, refuses resolved references, confines replacement bytes to the span and uses the shared image4 stager to recompress and read back one candidate DAT. Its contract binds source, linked code, symbols, candidate DAT, decoded image4 and the function index by SHA-256.
+
+The final host staging run (`94ecaac0-18f8-4231-97eb-a77bf4833635`, core `c396a578`) emitted candidate DAT SHA-256 `224aa110efa7e1ab74b98b81245a741cc6b0ed65353dc37dcd82b21316daf565` with zero refused resolved references. Its raw census retains 172 candidates: image4 43 (6 inside function ranges), image5 99 (11 inside function ranges), plain 30 (3 inside function ranges). All are cache-buffer/tag numeric candidates; none names the retired code or wrapper/slot regions. No full-system cutover run is implied.
+
+```sh
+devenv shell -- bazel build --jobs=2 //replacement/record_store_carrier:all
+devenv shell -- bazel test --jobs=2 //replacement/record_store_carrier:record-store-artifact-tests
+devenv shell -- bazel run --jobs=2 //replacement/record_store_carrier:stage-record-store -- DAT IMAGE4 IMAGE5 PLAIN FUNCTION_INDEX LINKED_BIN SYMBOLS PRIVATE_SCRATCH OUT_DAT OUT_CONTRACT
+```
+
+The default candidate is `:record-store-image`; each `:record-store-image-control-N` enables exactly one of the nine control features. Every target emits `.elf`, `.bin`, `.symbols` and `.disasm`. The `.bin` is 7,776 bytes at `0x6ac2b4`, suitable for the native-case code region; the symbols name each 4-byte veneer as `record_store_entry_NAME`.
+
 ## Owned menu engine, increment 1 (#128)
 
 `menu_engine/` is the host part of increment 1 of [the engine design](../reports/owned-menu-engine-design.md): a `no_std` library with `MenuEvent`, `EngineState`, `Effect`, `EngineServices`, `Tree` and `apply`, plus `block::decode`/`block::mirror` over the 0x430-byte block at `0x009571d0` and the last-move pair `0x01467580`. It owns five event classes, each with an oracle case: kind 4 and kind 5 row steps on a wrapping node with queried availability, kind `0xe` push from a node whose remember write runs, kind `0xf` pop to a parent with the same id, and kind 1 open; `engine.rs` lists the exact conditions. `apply` makes every call to stock (notifications, snapshot stores, availability, initial row, and the stock kind switch for an empty node's nested pop) through `EngineServices` in stock's order, and returns `NotOwned` only before its first call. The pure classifier and snapshot of `FUN_0061ca2c`/`FUN_0061cd14` live in `menu_engine/src/frame.rs`; `owned_menu::frame` runs them over the live cells. The crate is an unconditional module of the bank crate; `llvm-nm -u` of the four bank archives is unchanged by it.

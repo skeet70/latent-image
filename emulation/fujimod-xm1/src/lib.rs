@@ -23,6 +23,7 @@ pub mod modal_permit;
 pub mod modal_task;
 pub mod modal_trace;
 pub mod nand_image;
+pub mod nand_read;
 pub mod native_case;
 pub mod peer_witness;
 pub mod provenance;
