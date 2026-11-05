@@ -93,6 +93,11 @@ kebab_name!(PieceKind, "piece kind");
 kebab_name!(AreaName, "area");
 kebab_name!(JoinKind, "join kind");
 
+impl PieceKind {
+    /// The piece whose owned code may hold the pump sites.
+    pub fn application_pump() -> Self { Self("application-pump".into()) }
+}
+
 macro_rules! text {
     ($name:ident, $what:literal) => {
         #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1257,7 +1262,7 @@ impl Contract {
             .map(|range| WatchRange { start: range.span.start, end: range.span.end, kinds: WatchKinds::WRITES }).collect();
         let application = match (raw.schema, raw.application) {
             (Schema::Four, None) => None,
-            (Schema::Five, Some(raw)) => Some(application(raw, &pieces, &boundaries).map_err(CatalogRefusal::Application)?),
+            (Schema::Five, Some(raw)) => Some(application(raw, &pieces).map_err(CatalogRefusal::Application)?),
             _ => return Err(CatalogRefusal::Application(ApplicationProblem::Section)),
         };
         let application_classes = application.as_ref().map_or(0, |application| application.code.len());
@@ -1526,7 +1531,7 @@ impl SiteKind {
 }
 
 /// Every site a schema-5 contract lists, by stock PC.
-pub const APPLICATION_SITES: [(u32, SiteKind); 57] = {
+pub const APPLICATION_SITES: [(u32, SiteKind); 56] = {
     use SiteKind::{Adapter, HookTarget, Initializer, Publication, Pump, Shared, Task1, Uilib};
     [
         (0xc22f60, Task1), (0xc22f64, Task1), (0xc22f6c, Task1), (0xc22f70, Task1), (0xc22f74, Task1), (0xc22f84, Task1),
@@ -1541,7 +1546,7 @@ pub const APPLICATION_SITES: [(u32, SiteKind); 57] = {
         (0xdb51d0, Adapter),
         (0x725214, Shared),
         (0x11090a4, Uilib), (0x1109130, Uilib), (0x1108a2c, Uilib), (0x110f9d8, Uilib),
-        (0x6a9840, Publication), (0x6a9844, Publication), (0x6a9934, Publication),
+        (0x73b4b0, Publication), (0x73b558, Publication),
         (0x69d2e0, Initializer), (0x69d2e4, Initializer), (0xd985a4, Initializer), (0xd985c8, Initializer),
         (0xd985d8, Initializer),
     ]
@@ -1557,7 +1562,8 @@ pub struct ApplicationSite {
     pub kind: SiteKind,
     pub retained_pc: Pc,
     pub composed_pc: Pc,
-    pub word: CodeWord,
+    pub retained_word: CodeWord,
+    pub composed_word: CodeWord,
 }
 
 impl ApplicationSite {
@@ -1565,6 +1571,12 @@ impl ApplicationSite {
         match role {
             Role::Retained => self.retained_pc,
             Role::Composed => self.composed_pc,
+        }
+    }
+    pub fn word(&self, role: Role) -> CodeWord {
+        match role {
+            Role::Retained => self.retained_word,
+            Role::Composed => self.composed_word,
         }
     }
 }
@@ -1721,14 +1733,13 @@ pub enum ApplicationProblem {
     Sites,
     QueueLabel(Pc),
     QueueSites,
-    /// A composed-role site inside a piece's owned code.
+    /// A composed-role site inside a piece's owned code, other than a pump site in the `application-pump` piece.
     SiteInPiece(Pc),
-    /// A site at a contract boundary's PC in the same role.
-    SiteCollision(Pc),
     TaskLayouts,
     CodeRanges,
     Readiness,
-    /// The pump's words do not decode to three calls of the hook targets and a return.
+    /// A role's pump words do not decode to three calls of the hook targets and a return, or the roles' decodings
+    /// differ.
     Pump,
 }
 
@@ -1739,29 +1750,29 @@ fn branch_target(pc: u32, word: u32) -> Option<u32> {
 /// `bx lr` or `pop {..., pc}`.
 fn returns(word: u32) -> bool { word == 0xe12f_ff1e || (word & 0xffff_0000 == 0xe8bd_0000 && word & (1 << 15) != 0) }
 
-fn pump_profile(sites: &[ApplicationSite]) -> Option<PumpProfile> {
+fn pump_profile(sites: &[ApplicationSite], role: Role) -> Option<PumpProfile> {
     let mut pump: Vec<&ApplicationSite> = sites.iter().filter(|site| site.kind == SiteKind::Pump).collect();
-    pump.sort_by_key(|site| site.retained_pc);
+    pump.sort_by_key(|site| site.pc(role));
     let mut calls = Vec::with_capacity(3);
     let mut returned = None;
     for site in &pump {
-        let pc = site.retained_pc.0;
-        if let Some(target) = branch_target(pc, site.word.0) {
-            calls.push(HookCall { site: site.retained_pc, target: Pc(target), continuation: Pc(pc + 4) });
-        } else if returns(site.word.0) {
-            returned = Some(site.retained_pc);
+        let pc = site.pc(role);
+        if let Some(target) = branch_target(pc.0, site.word(role).0) {
+            calls.push(HookCall { site: pc, target: Pc(target), continuation: Pc(pc.0 + 4) });
+        } else if returns(site.word(role).0) {
+            returned = Some(pc);
             break;
         }
     }
-    let hooks: BTreeSet<Pc> = sites.iter().filter(|site| site.kind == SiteKind::HookTarget).map(|site| site.retained_pc).collect();
+    let hooks: BTreeSet<Pc> = sites.iter().filter(|site| site.kind == SiteKind::HookTarget).map(|site| site.pc(role)).collect();
     let calls: [HookCall; 3] = calls.try_into().ok()?;
     let targets: BTreeSet<Pc> = calls.iter().map(|call| call.target).collect();
-    let continued = calls.iter().all(|call| pump.iter().any(|site| site.retained_pc == call.continuation));
-    let entry = pump.first()?.retained_pc;
+    let continued = calls.iter().all(|call| pump.iter().any(|site| site.pc(role) == call.continuation));
+    let entry = pump.first()?.pc(role);
     (targets == hooks && continued).then_some(PumpProfile { entry, calls, returned: returned? })
 }
 
-fn application(raw: RawApplication, pieces: &[Piece], boundaries: &BTreeMap<Label, Boundary>) -> Result<Application, ApplicationProblem> {
+fn application(raw: RawApplication, pieces: &[Piece]) -> Result<Application, ApplicationProblem> {
     if let Some(site) = raw.sites.iter().find(|site| site.label != SiteLabel::of(site.retained_pc)) {
         return Err(ApplicationProblem::SiteLabel(site.retained_pc));
     }
@@ -1777,17 +1788,15 @@ fn application(raw: RawApplication, pieces: &[Piece], boundaries: &BTreeMap<Labe
     if queued.len() != raw.queue_sites.len() || queued != QUEUE_SITES.into_iter().collect() {
         return Err(ApplicationProblem::QueueSites);
     }
-    let owned: Vec<Interval> = pieces.iter().flat_map(|piece| &piece.catalog.owned_code).map(|span| span.physical().unwrap_or(*span)).collect();
-    let composed = raw.sites.iter().map(|site| site.composed_pc).chain(raw.queue_sites.iter().map(|site| site.pc));
-    if let Some(pc) = composed.into_iter().find(|pc| owned.iter().any(|span| span.holds(u64::from(physical_address(pc.0))))) {
+    let owned: Vec<(Interval, &PieceKind)> = pieces.iter()
+        .flat_map(|piece| piece.catalog.owned_code.iter().map(move |span| (span.physical().unwrap_or(*span), &piece.kind)))
+        .collect();
+    let owner = |pc: Pc| owned.iter().find(|(span, _)| span.holds(u64::from(physical_address(pc.0)))).map(|&(_, kind)| kind);
+    let pump_piece = PieceKind::application_pump();
+    let exempt = |site: &ApplicationSite| site.kind == SiteKind::Pump && owner(site.composed_pc) == Some(&pump_piece);
+    let sites = raw.sites.iter().filter(|site| !exempt(site)).map(|site| site.composed_pc);
+    if let Some(pc) = sites.chain(raw.queue_sites.iter().map(|site| site.pc)).find(|&pc| owner(pc).is_some()) {
         return Err(ApplicationProblem::SiteInPiece(pc));
-    }
-    for role in [Role::Retained, Role::Composed] {
-        let armed: BTreeSet<u32> = boundaries.values().filter_map(|boundary| boundary.pc(role)).map(|pc| physical_address(pc.0)).collect();
-        let mut sites = raw.sites.iter().map(|site| site.pc(role)).chain(raw.queue_sites.iter().map(|site| site.pc));
-        if let Some(pc) = sites.find(|pc| armed.contains(&physical_address(pc.0))) {
-            return Err(ApplicationProblem::SiteCollision(pc));
-        }
     }
     let task_layouts = match raw.task_layouts[..] {
         [a, b] if a.domain == Domain::A && b.domain == Domain::B => [a, b],
@@ -1806,6 +1815,9 @@ fn application(raw: RawApplication, pieces: &[Piece], boundaries: &BTreeMap<Labe
     if raw.readiness.settle.0 == 0 || raw.readiness.settle >= raw.readiness.end {
         return Err(ApplicationProblem::Readiness);
     }
-    let pump = pump_profile(&raw.sites).ok_or(ApplicationProblem::Pump)?;
+    let pump = match (pump_profile(&raw.sites, Role::Retained), pump_profile(&raw.sites, Role::Composed)) {
+        (Some(retained), Some(composed)) if retained == composed => retained,
+        _ => return Err(ApplicationProblem::Pump),
+    };
     Ok(Application { sites: raw.sites, queue_sites: raw.queue_sites, task_layouts, code: raw.code, readiness: raw.readiness, pump })
 }

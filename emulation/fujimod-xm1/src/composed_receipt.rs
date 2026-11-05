@@ -692,12 +692,12 @@ fn differences(contract: &Contract, digest: &Sha256, retained: &Receipt, owned: 
             let section = receipt.application.as_ref().ok_or_else(|| Difference::Application {
                 role, refusal: ApplicationRefusal::new(application_observation::ApplicationCheck::CaptureBound, "the receipt has no application section"),
             })?;
-            application_observation::check_role(application, role, section, directory)
+            let summary = application_observation::check_role(application, role, section, directory)
                 .map_err(|refusal| Difference::Application { role, refusal })?;
-            *slot = Some(section);
+            *slot = Some((section, summary));
         }
-        if let [Some(retained), Some(owned)] = sections {
-            application_observation::check_pair(retained, owned, [directories.retained, directories.owned])
+        if let [Some((retained, retained_summary)), Some((owned, owned_summary))] = sections {
+            application_observation::check_pair(retained, owned, [directories.retained, directories.owned], [&retained_summary, &owned_summary])
                 .map_err(|field| Difference::ApplicationPair { field })?;
         }
     }

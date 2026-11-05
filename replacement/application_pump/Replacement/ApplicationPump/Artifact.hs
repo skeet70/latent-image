@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Replacement.ApplicationPump.Artifact
   ( CanonicalSource, LinkedArtifact, StagedImage5, StagedCandidate, ArtifactError (..)
-  , canonicalSource, deriveArtifact, stageImage5, stagedBytes, contractValue
+  , canonicalSource, deriveArtifact, artifactProof, stageImage5, stagedBytes, contractValue
   , stageCandidate, candidateBytes, candidateContractValue
   ) where
 
@@ -73,6 +73,9 @@ deriveArtifact bytes symbolBytes = do
     && all validKind (filter (not . C.null) (C.lines symbolBytes))) SymbolRejected
   proof <- either (Left . CodeRejected) Right (deriveFrameProof bytes)
   pure (LinkedArtifact (CodeBytes bytes) (identity bytes) (identity symbolBytes) proof)
+
+artifactProof :: LinkedArtifact -> FrameProof
+artifactProof (LinkedArtifact _ _ _ proof) = proof
 
 stageImage5 :: CanonicalSource -> LinkedArtifact -> Either ArtifactError StagedImage5
 stageImage5 source@(CanonicalSource _ original _ _) artifact@(LinkedArtifact (CodeBytes linked) _ _ _) = do

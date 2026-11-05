@@ -6,6 +6,7 @@ module Replacement.StartupArtifact.Adapters
   ( LinkedImage (..), ImageBytes (..), SymbolBytes (..), PieceImages (..)
   , deriveFirstStage, deriveRecord2Link, derivePrimaryPublisher, deriveLoaderOrchestrationB, deriveLoaderStartup, derivePieceOf
   , deriveTaskSubmission, deriveTaskStorage, deriveIdleTask, deriveRootTask, deriveImage5Producer, derivePlainProducer
+  , deriveApplicationPump
   , ProducerCall (..), producerCallBoundaries, callerReturn
   ) where
 
@@ -26,6 +27,8 @@ import qualified Emulation.PrimaryInitializerSource as PS
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
 import Numeric (showHex)
+import qualified Replacement.ApplicationPump.Admission as APA
+import qualified Replacement.ApplicationPump.Artifact as AP
 import qualified Replacement.KernelInstall.Admission as KA
 import qualified Replacement.KernelInstall.Artifact as KI
 import qualified Replacement.LoaderOrchestration.Admission as LA
@@ -58,6 +61,7 @@ import qualified Replacement.Image5Load.Admission as I5A
 import qualified Replacement.Image5Load.Artifact as I5
 import qualified Replacement.PlainLoad.Admission as PLA
 import qualified Replacement.PlainLoad.Artifact as PL
+import qualified Replacement.StartupArtifact.Footprint.ApplicationPump as PumpFootprint
 import qualified Replacement.StartupArtifact.Footprint.Producers as ProducersFootprint
 import qualified Replacement.TaskStorage.Artifact as TSt
 import qualified Replacement.TaskSubmission.Admission as WA
@@ -90,6 +94,7 @@ derivePieceOf source images = case images of
     RootTask -> deriveRootTask source image
     Image5Producer -> deriveImage5Producer source image
     PlainProducer -> derivePlainProducer source image
+    ApplicationPump -> deriveApplicationPump source image
 
 admitted :: PieceKind -> Either String a -> Either Refusal a
 admitted kind = first (AdapterRefused kind . T.pack)
@@ -1034,3 +1039,41 @@ derivePlainProducer source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByte
           , "the raw reader, progress 0x73b924, worker 0x73bc54 and the extent hooks behave as stock (reports/replacement-inventory-baseline.md:1378-1384); retained callee stack demand below the owned frame is not proved" ])
         catalog (PlainProducerFacts (LinkedBytes bin symbolBytes))
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (PL.stagedBytes (PL.stageImage4 producerSource artifact))) Nothing)
+
+-- | Task1's SP at its pump call 0xc23274 on core 0, recorded in both roles of J3 v12 and in J6 v1 retained.
+task1CallSp :: Word32
+task1CallSp = 0xa4cdd0
+
+-- | Replacement.ApplicationPump.Artifact over //replacement/application_pump:application-pump-image.
+deriveApplicationPump :: Canonical -> LinkedImage -> Either Refusal Piece
+deriveApplicationPump source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) = do
+  let kind = ApplicationPump
+      shown :: Show e => Either e a -> Either Refusal a
+      shown = first (AdapterRefused kind . T.pack . show)
+      targets = canonicalTargets source
+      (start, end) = PumpFootprint.pumpCarrier
+      address (APA.CodeAddress value) = value
+  artifact <- shown (AP.deriveArtifact bin symbolBytes)
+  pumpSource <- shown (AP.canonicalSource (canonicalDat source) (targetOf targets Image5))
+  staged <- shown (AP.stageImage5 pumpSource artifact)
+  let proof = AP.artifactProof artifact
+      frame = fromIntegral (negate (APA.scratchLow proof)) :: Word64
+      sp = fromIntegral task1CallSp :: Word64
+  refuseUnless kind ([(address (APA.callInstruction site), address (APA.callTarget site)) | site <- APA.proofCallSites proof]
+      == zip [0xbfbd28, 0xbfbd2c, 0xbfbd34] PumpFootprint.hookEntries)
+    "the pump's hook calls are not at the stock sites 0xbfbd28, 0xbfbd2c and 0xbfbd34"
+  refuseUnless kind (address (APA.returnInstruction proof) == 0xbfbd3c) "the pump's return is not at the stock 0xbfbd3c"
+  refuseUnless kind (frame > 0) "the pump frame is empty"
+  carrier <- spanOf kind Image5 start end
+  code <- ownedCode kind start end
+  let writes = EnumeratedWrites [WriteRange PhysicalTarget (sp - frame) sp]
+        (Premised (Premise (T.intercalate "; "
+          [ "the width is proved: the pump stores only its frame below the entry SP (replacement/application_pump/Replacement/ApplicationPump/Admission.hs:179-198)"
+          , "the base is task1's SP 0xa4cdd0 at the call 0xc23274 on core 0 (J3 v12 both roles, J6 v1 retained); task1's allocation comes from root's submission, compared by the pool relation; another SP faults the entry push" ])))
+      declaration = PieceDeclaration kind (Set.singleton ApplicationPumpArea) [carrier] PumpFootprint.footprint
+        (map Premise
+          [ "the retained hooks 0xbfb1b8, 0xbfb20c and 0xbfb1e0 return in A32 preserving r4-r11 and SP (replacement/application_pump/Replacement/ApplicationPump/Artifact.hs:126)"
+          , "task1 calls the pump only from 0xc23274 with LR 0xc23278 (private-data/analysis/x-m1-1.50/lz/id5.dis:50679-50680)"
+          , "retained callee stack demand below the owned frame is not proved" ])
+        (Catalog [] code writes []) (ApplicationPumpFacts (LinkedBytes bin symbolBytes))
+  derivePiece source declaration (StagedOutput (canonicalDat source) Nothing (Just (AP.stagedBytes staged)))

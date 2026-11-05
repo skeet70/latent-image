@@ -17,8 +17,8 @@ Retained after J11, behind named shims (section 5): RTOS services (#156), dispat
 
 ## 2. Where J8 leaves the artifact
 
-- J1-J4 qualified (`E-STARTUP-J1-COMPOSED-NATURAL-150`, `E-STARTUP-J2-COMPOSED-NATURAL-150`, `E-STARTUP-J3-COMPOSED-NATURAL-150`, `E-STARTUP-J4-COMPOSED-NATURAL-150`); J5-J8 planned (RIB:1864-1871): J5 idle102/103 and root104, J6 image5 producer `0x6a96c0` and plain producer `[0x6a9844,0x6a9938)` (SRM:127), J7 heap cutover, J8 pump.
-- J8 needs the pump's owned leaf run (RIB:1877, 1894). No owned pump run was attempted; the retained cohort of the scoped leaf observer refused on fetch multiplicity (`E-APPLICATION-PUMP-FETCH-MULTISET-REFUSAL-150`). Composed observations already arm points through `arm_mutable` (RIB:1875); the shared hook-stable mutable-point work that RIB:1815 names is for scoped observers.
+- J1-J6 qualified (`E-STARTUP-J1-COMPOSED-NATURAL-150` through `E-STARTUP-J6-COMPOSED-NATURAL-150`); J7, the heap cutover, is not yet composed.
+- J8, the owned pump leaf, ran on J6 through the application phase: equal pair, every pump call through the owned code in the composed role, 19 controls (`E-STARTUP-J8-COMPOSED-NATURAL-150`). The scoped loader-continuations observer that refused earlier is removed (`E-APPLICATION-PUMP-FETCH-MULTISET-REFUSAL-150`).
 - Existing observer evidence of task1's first entry: RIB:1477.
 
 ## 3. Readiness the composed run must establish
@@ -32,7 +32,7 @@ From RIB:1788 and 1800-1807:
 
 Invariant [INFERENCE]: a **sample** is taken whenever task1 is blocked on queue1, that is, its status is waiting and it is inside `0x725318(1,buf,-1)` reached from task1's `BL 0xdb5124` at `0xc2314c` (return address `0xc23150`), where the pending-work checks ran with byte `0x949dd4` zero. task1 sets op `0x107` (at `0xc23130` and `0xc22fb8`) before both of its calls, so it always blocks (`lz/id5.dis:50482-50680`); the call at `0xc22fd4` (return address `0xc22fd8`), taken when `0x949dd4` is nonzero, skips the pending checks and discards every command except `0x837`/`0x838`, so it is not a sample. **First-ready** is the first sample at which 1-4 all hold, task1 included among the waiting actors. It is **stable** if, over a declared settle interval after it with no queue1 send, `RenderFacts::probe` stays drained and conjuncts 1-3 hold at every probe sample and at the interval's end; a queue1 send or a failed conjunct inside the interval makes the sample not stable, and the next sample becomes the candidate. task1 first blocks long before readiness (task1 enters at 36,115,325, RIB:1477; UILIB33 is submitted at 40,587,849, RIB:1782), so earlier samples are recorded as not-ready rather than refused. Menu id, PC, zero task status and token equality are not conjuncts (RIB:1788).
 
-Implementation: a schema-5 contract (`"application": {}` in the manifest) gives `//emulation:composed-startup` an application phase that records task1's committed context, its initialization chain, every queue1 receive under a stack scope over task1's stack, every pump call and handback, readiness samples with the first-ready search above, and the settled inputs with visible captures, and checks them per role and across roles (emulation/README.md, composed-startup application phase). The first-ready search ends at the first press at 80,000,000, so the existing menu route and its `(69,52,12)` and `(1,5,2)` checks stay as they are. On the J3 composition, with task1 and the pump stock in both roles, first-ready is stable at 56,117,998 retained and 56,760,877 composed instructions, the pair compares equal and all 15 application controls refuse (`E-STARTUP-APPLICATION-PHASE-J3-150`).
+Implementation: a schema-5 contract (`"application": {}` in the manifest) gives `//emulation:composed-startup` an application phase that records task1's committed context, its initialization chain, every queue1 receive under a stack scope over task1's stack, every pump call and handback, readiness samples with the first-ready search above, and the settled inputs with visible captures, and checks them per role and across roles (emulation/README.md, composed-startup application phase). The first-ready search ends at the first press at 80,000,000, so the existing menu route and its `(69,52,12)` and `(1,5,2)` checks stay as they are. Publication is read at the producers' caller returns `0x73b4b0` and `0x73b558`, outside the J6 producer carriers. A fifth conjunct binds readiness to the UI policy block at `0x944580`: the gate task1 passes before its receive at `0xc2314c` (no deferred or priority UI work) holds through the settle interval; first-ready also records the Xm1MenuState node, cursor and level word. On the J6 composition, with task1 and the pump stock in both roles, first-ready is stable at 55,867,999 retained and 56,504,168 composed instructions, the pair compares equal and all 17 application controls refuse (`E-STARTUP-APPLICATION-PHASE-150`).
 
 ## 4. Owned units after J8
 
@@ -75,10 +75,10 @@ Implementation: a schema-5 contract (`"application": {}` in the manifest) gives 
 
 ## 6. Prerequisites and order
 
-1. J4-J8 qualified in order; J8's pump leaf run needs the scoped observer's hook-stable mutable points (RIB:1815, 1894; `E-APPLICATION-PUMP-FETCH-MULTISET-REFUSAL-150`).
-2. Done for the stock actor (`E-STARTUP-APPLICATION-PHASE-J3-150`): task1 attribution, queue1 provenance, pump sequences, the readiness check and 15 controls in `//emulation:composed-startup`. J8-J11 reuse it with owned PCs in the contract's application sites.
+1. J8 is done on J6 (`E-STARTUP-J8-COMPOSED-NATURAL-150`), with the pump's sites at owned PCs in the application phase. J7 lands independently; whichever lands second rebases.
+2. Done for the stock actor (`E-STARTUP-APPLICATION-PHASE-150`, on J3 and J6): task1 attribution, queue1 provenance, pump sequences, the readiness check and 17 controls in `//emulation:composed-startup`. J8-J11 reuse it with owned PCs in the contract's application sites.
 3. A per-composed-DAT reset checkpoint and timer re-recording past about 6.14M (RIB:1879-1880).
-4. Source recovery for J9's computed-entry closure, J10's constructor extents and transitive services (unmeasured, SRM:130), and callers of `0x892334` and `0x6d7f88`.
+4. Source recovery for J9's computed-entry closure, J10's constructor extents and transitive services (unmeasured, SRM:130), and callers of `0x892334` and `0x6d7f88`, read from the X-M1 decomp (`E-XM1-DECOMP-SOURCE-150`), with each function's exactness from `xm1-decomp lookup` and NONMATCHING facts confirmed in the listings; runs then confirm.
 
 ## 7. Mapping to #154 acceptance (RIB:1811-1816)
 

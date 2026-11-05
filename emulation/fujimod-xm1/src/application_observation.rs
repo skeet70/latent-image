@@ -18,10 +18,11 @@ mod controls;
 mod planes;
 mod readiness;
 
-pub use capture::Recorder;
+pub use capture::{hit_observers, Observers, Recorder};
 pub use checks::{
     capture_bound, check_evidence, check_pair, check_role, code_identity, initializer, mapping, pump_sequences, queue_provenance,
     readiness, render_completion, route, stack_context, task_context, ApplicationCheck, ApplicationRefusal, PairField, RoleEvidence,
+    RoleSummary,
 };
 pub use controls::{run_controls, Control, ControlReport, ControlRow, Expected};
 
@@ -263,6 +264,81 @@ impl TaskTableViews {
     pub fn views(&self) -> impl Iterator<Item = &RawView> { self.records.iter().chain(&self.rows).chain(&self.descriptors) }
 }
 
+const SECOND_QUEUE: u32 = 0x949dd0;
+const SECOND_HOLD: u32 = 0x949dd4;
+const MAIN_QUEUE: u32 = 0x94f5d8;
+const MAIN_HOLD: u32 = 0x94f5dc;
+pub(crate) const PRIORITY_COUNT: u32 = 0x950098;
+const SELECTION_CHANGED: u32 = 0x950148;
+const PENDING_WORDS: [u32; 2] = [0x951424, 0x951528];
+/// Xm1MenuState: node pointer at +0, cursor at +8.
+const MENU_STATE: u32 = 0x9571d0;
+/// Xm1MenuState +0x424.
+pub(crate) const MENU_LEVEL: u32 = 0x9575f4;
+
+/// The Xm1UiPolicy cells task1's loop tests before its receive at `0xc2314c` (`0xc22fa0`-`0xc23148`), and Xm1MenuState.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiWorkViews {
+    /// Head and tail u16s of the second (`0x949dd0`) and main (`0x94f5d8`) deferred queues, each with its hold byte.
+    pub queues: [RawView; 2],
+    /// Priority-queue count `0x950098`, selection-changed `0x950148` and pending words `0x951424`, `0x951528`.
+    pub words: Vec<RawView>,
+    pub menu: RawView,
+    pub depth: RawView,
+    /// Three words at the node pointer, when it is nonzero and readable.
+    pub node: Option<RawView>,
+}
+
+/// The menu at a readiness sample.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct MenuIdentity {
+    pub node: u32,
+    pub id: Option<u32>,
+    pub setting: Option<u32>,
+    pub cursor: u32,
+    pub level: u32,
+}
+
+impl UiWorkViews {
+    pub fn read(session: &Session) -> Result<Self, String> {
+        let menu = RawView::read(session, Guest(MENU_STATE), 3)?;
+        let pointer = menu.word(MENU_STATE).unwrap_or(0);
+        Ok(Self {
+            queues: [RawView::read(session, Guest(SECOND_QUEUE), 2)?, RawView::read(session, Guest(MAIN_QUEUE), 2)?],
+            words: [PRIORITY_COUNT, SELECTION_CHANGED, PENDING_WORDS[0], PENDING_WORDS[1]].into_iter()
+                .map(|address| RawView::read(session, Guest(address), 1)).collect::<Result<_, _>>()?,
+            menu,
+            depth: RawView::read(session, Guest(MENU_LEVEL), 1)?,
+            node: (pointer != 0).then(|| RawView::read(session, Guest(pointer & !3), 3).ok()).flatten(),
+        })
+    }
+
+    pub fn views(&self) -> impl Iterator<Item = &RawView> {
+        self.queues.iter().chain([&self.menu, &self.depth]).chain(&self.words).chain(&self.node)
+    }
+
+    /// Conjunct 5: the second queue's hold clear, the priority queue empty, the selection-changed and pending words
+    /// not 1, and each deferred queue held or with head equal to tail.
+    pub fn drained(&self) -> bool {
+        let word = |address| view_word(&self.words, address);
+        let half = |address: u32| view_word(&self.queues, address & !3).map(|value| (value >> (8 * (address & 3))) as u16);
+        let idle = |queue: u32, hold: Option<u8>| hold == Some(1) || half(queue).is_some() && half(queue) == half(queue + 2);
+        let second_hold = view_byte(&self.queues, SECOND_HOLD);
+        second_hold == Some(0)
+            && word(PRIORITY_COUNT) == Some(0)
+            && [SELECTION_CHANGED, PENDING_WORDS[0], PENDING_WORDS[1]].into_iter().all(|address| word(address).is_some_and(|value| value != 1))
+            && idle(MAIN_QUEUE, view_byte(&self.queues, MAIN_HOLD))
+            && idle(SECOND_QUEUE, second_hold)
+    }
+
+    pub fn menu(&self) -> Option<MenuIdentity> {
+        let node = self.menu.word(MENU_STATE)?;
+        let at = |offset: u32| self.node.as_ref().filter(|view| physical_address(view.address.0) == physical_address(node & !3)).and_then(|view| view.word(node + offset));
+        Some(MenuIdentity { node, id: at(0), setting: at(8), cursor: self.menu.word(MENU_STATE + 8)?, level: self.depth.word(MENU_LEVEL)? })
+    }
+}
+
 /// The vector GPU engine's state from its device save.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -330,6 +406,7 @@ pub struct ReadinessSample {
     pub kind: ReadinessKind,
     pub probe: Probe,
     pub tasks: TaskTableViews,
+    pub ui: UiWorkViews,
     pub render: RenderViews,
     pub graphics: GraphicsState,
 }

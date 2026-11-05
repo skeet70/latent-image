@@ -27,6 +27,7 @@ import qualified Replacement.IdleTask.Admission as IA
 import qualified Replacement.IdleTask.Artifact as IT
 import qualified Replacement.RootTask.Admission as RA
 import qualified Replacement.RootTask.Artifact as RT
+import qualified Replacement.StartupArtifact.Footprint.ApplicationPump as Pump
 import qualified Replacement.StartupArtifact.Footprint.Producers as Producers
 import qualified Replacement.StartupArtifact.Footprint.RootTask as RootFootprint
 import qualified Replacement.TaskSubmission.Admission as WA
@@ -37,7 +38,7 @@ data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | 
   | LoaderStartupPublisher | PublisherInstallerRoots | CriticalPairInstallerRoots | DispatcherCriticalPair
   | TaskCompositionOwnedCalls | DispatcherTaskComposition | PublisherTaskServices
   | DispatcherRootEntry | DispatcherIdleEntry | WrapperIdleErrorCallback | RootTaskServices
-  | Image5ProducerServices | PlainProducerServices
+  | Image5ProducerServices | PlainProducerServices | ApplicationPumpServices
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 instance JoinName JoinKind where
@@ -58,6 +59,7 @@ instance JoinName JoinKind where
   joinName RootTaskServices = "root-task-services"
   joinName Image5ProducerServices = "image5-producer-services"
   joinName PlainProducerServices = "plain-producer-services"
+  joinName ApplicationPumpServices = "application-pump-services"
 
 at :: Target -> Word32 -> Word32 -> Span
 at target start end = Span target (Guest start) (Guest end)
@@ -354,7 +356,7 @@ registeredJoins =
   , loaderStartupPublisher, publisherInstallerRoots, criticalPairInstallerRoots, dispatcherCriticalPair
   , taskCompositionOwnedCalls, dispatcherTaskComposition, publisherTaskServices
   , dispatcherRootEntry, dispatcherIdleEntry, wrapperIdleErrorCallback, rootTaskServices
-  , image5ProducerServices, plainProducerServices ]
+  , image5ProducerServices, plainProducerServices, applicationPumpServices ]
 
 -- | The task wrapper, the record-2 critical pair and the task-storage transition joined as in
 -- replacement/startup_composition/Replacement/StartupComposition/TaskSubmission.hs:63-97.
@@ -555,3 +557,12 @@ producerServices kind piece producer = Join kind (Set.fromList [piece, Record2Li
 image5ProducerServices, plainProducerServices :: Join JoinKind
 image5ProducerServices = producerServices Image5ProducerServices Image5Producer Producers.Image5Load
 plainProducerServices = producerServices PlainProducerServices PlainProducer Producers.PlainLoad
+
+-- | The image5 producer decodes the record carrying the owned pump; task1 calls the pump, which calls the stock hooks.
+applicationPumpServices :: Join JoinKind
+applicationPumpServices = Join ApplicationPumpServices (Set.fromList [ApplicationPump, Image5Producer])
+  [at Image5 start end]
+  (ObservationQualified "the image5 producer decodes record 5, re-encoded with the owned pump in [0xbfbd20,0xbfbd40), and publishes it before task1 first runs; task1 calls the pump only at 0xc23274 and the pump calls the retained hooks at their stock entries; the call word at 0xc23274 and the hook entries are the pump's footprint, so FootprintOverlap refuses any piece that edits them, and the pump adapter's canonical source hash fixes their stock words; after staging, verifyComposed requires the decoded composed image5 to equal the composition's image5 target, whose carrier is the linked image with NOP padding (ComposedDiffMismatch); qualified by the application phase's pump sequences in the composed comparison")
+  []
+  where
+    (start, end) = Pump.pumpCarrier

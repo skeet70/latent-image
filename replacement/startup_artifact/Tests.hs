@@ -395,8 +395,8 @@ main = do
     (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\",\"dat\":\"c\"}}]"))
       == Just (ManifestRefused (ManifestUnknownKey "piece.inputs.dat")))
   ok "an unknown kind refuses"
-    (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"application-pump\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}}]"))
-      == Just (ManifestRefused (ManifestUnknownKind "application-pump")))
+    (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"unregistered-piece\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}}]"))
+      == Just (ManifestRefused (ManifestUnknownKind "unregistered-piece")))
   ok "another schema refuses"
     (refusal (parseManifest "{\"schema\":2,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}") == Just (ManifestRefused ManifestSchemaUnsupported))
   ok "a manifest without attach_state refuses"
@@ -706,21 +706,35 @@ main = do
       number = J.toJSON
   case sectionOf [] stockImages of
     Right value -> do
-      ok "a site word is the image5, image4 or plain-window word at its PC"
-        (map (\row -> (member "kind" row, member "retained_pc" row, member "composed_pc" row, member "word" row)) (rowsOf "sites" "app-bfbd20" value)
-            == [(J.String "pump", number 0xbfbd20, number 0xbfbd20, number 0xe92d4010)]
-          && map (member "word") (rowsOf "sites" "app-725214" value) == [number 0xe59f0004]
-          && map (member "word") (rowsOf "sites" "app-1109130" value) == [number (U.word32At plainBytes 0x9130)]
+      ok "a site's words are the image5, image4 or plain-window word at its PC in each role"
+        (map (\row -> (member "kind" row, member "retained_pc" row, member "composed_pc" row, member "retained_word" row, member "composed_word" row))
+            (rowsOf "sites" "app-bfbd20" value)
+            == [(J.String "pump", number 0xbfbd20, number 0xbfbd20, number 0xe92d4010, number 0xe92d4010)]
+          && map (member "composed_word") (rowsOf "sites" "app-725214" value) == [number 0xe59f0004]
+          && map (member "retained_word") (rowsOf "sites" "app-1109130" value) == [number (U.word32At plainBytes 0x9130)]
           && map (member "word") (rowsOf "queue_sites" "queue-725318" value) == [number 0x5a5a5a5a])
       ok "the section lists every pump site and the publication and initializer sites"
         (case member "sites" value of
-          J.Array rows -> V.length rows == 57 && all (\name -> length (rowsOf "sites" name value) == 1) ["app-6a9934", "app-d985d8", "app-69d2e0", "app-110f9d8"]
+          J.Array rows -> V.length rows == 56 && all (\name -> length (rowsOf "sites" name value) == 1) ["app-73b4b0", "app-73b558", "app-d985d8", "app-69d2e0", "app-110f9d8"]
           _ -> False)
     Left problem -> fail (show problem)
   ok "a site inside a piece's carrier refuses"
     (refusal (appOf [(LoaderStartup, at Image5 0xbfbd00 0xbfbd24)] stockImages) == Just (ApplicationRefused (SiteInCarrier LoaderStartup (Pc 0xbfbd20))))
   ok "a carrier ending at a site does not refuse"
     (either (const False) (const True) (appOf [(LoaderStartup, at Image5 0xbfbd00 0xbfbd20)] stockImages))
+  let ownedPump = patched stockImages [(Image5, 0xbfbd20, 0xe92d4c10)]
+      pumpCarrier = at Image5 0xbfbd20 0xbfbd40
+  case sectionOf [(ApplicationPump, pumpCarrier)] ownedPump of
+    Right value -> ok "a pump site inside an application-pump carrier carries each role's word"
+      (map (\row -> (member "retained_word" row, member "composed_word" row)) (rowsOf "sites" "app-bfbd20" value)
+        == [(number 0xe92d4010, number 0xe92d4c10)])
+    Left problem -> fail (show problem)
+  ok "a pump site inside another piece's carrier refuses"
+    (refusal (appOf [(Image5Producer, pumpCarrier)] ownedPump) == Just (ApplicationRefused (SiteInCarrier Image5Producer (Pc 0xbfbd20))))
+  ok "a non-pump site inside an application-pump carrier refuses"
+    (refusal (appOf [(ApplicationPump, at Image5 0xbfb1b8 0xbfb1bc)] stockImages) == Just (ApplicationRefused (SiteInCarrier ApplicationPump (Pc 0xbfb1b8))))
+  ok "a changed pump word outside every carrier refuses"
+    (refusal (appOf [] ownedPump) == Just (ApplicationRefused (SiteWordDiffers (Pc 0xbfbd20))))
   ok "a composed site word other than the canonical word refuses"
     (refusal (appOf [] (patched stockImages [(Image4, 0x725214, 0)])) == Just (ApplicationRefused (SiteWordDiffers (Pc 0x725214))))
   let changed = patched stockImages [(Image5, 0xc22f78, 0)]
@@ -742,6 +756,26 @@ main = do
   ok "a contract with the section is schema 5 and otherwise unchanged"
     (member "schema" withSection == J.toJSON (5 :: Int) && member "application" withSection == applicationValue sectioned
       && without "schema" (without "application" withSection) == without "schema" contractJson)
+
+  -- Image5 producer reads under an image5 edit.
+  producerReturn <- labelled Image5Producer "caller-return"
+  destinationLabel <- labelled Image5Producer "destination"
+  stagingLabel <- labelled Image5Producer "staging"
+  let producerPiece = (piece Image5Producer [Image5ProducerArea] [] [] [])
+        { pieceCatalog = Catalog [boundary producerReturn ReturnBoundary Core0 0x73b4b0 True] [] (EnumeratedWrites [] Proved)
+            [ CatalogRead destinationLabel producerReturn 0xbf1a00 0x4f1e60 Nothing
+            , CatalogRead stagingLabel producerReturn 0x43e40000 0x2e0000 Nothing ] }
+      pumpPiece = piece ApplicationPump [ApplicationPumpArea] [at Image5 0xbfbd20 0xbfbd40] [flip' targets (at Image5 0xbfbd20 0xbfbd22)] []
+      producerReads composition = [ (labelText (readLabel row), readAddress row, readLength row, readDiffers row /= Nothing)
+                                  | owner <- compositionPieces composition, pieceKind owner == Image5Producer, row <- catalogReads (pieceCatalog owner) ]
+  ok "an image5 edit splits the producer's destination read around the editing piece's carrier and marks staging as differing"
+    (fmap producerReads (composeWith [] [producerPiece, pumpPiece]) == Right
+      [ ("image5-producer/destination-bf1a00", 0xbf1a00, 0xbfbd20 - 0xbf1a00, False)
+      , ("image5-producer/destination-bfbd40", 0xbfbd40, 0x10e3860 - 0xbfbd40, False)
+      , ("image5-producer/staging", 0x43e40000, 0x2e0000, True) ])
+  ok "without an image5 edit the producer's reads are unchanged"
+    (fmap producerReads (composeWith [] [producerPiece, first {pieceFootprint = []}]) == Right
+      [ ("image5-producer/destination", 0xbf1a00, 0x4f1e60, False), ("image5-producer/staging", 0x43e40000, 0x2e0000, False) ])
 
   passed <- readIORef counter
   putStrLn ("startup-artifact-tests: " ++ show passed ++ " checks passed")

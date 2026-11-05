@@ -14,6 +14,8 @@ import Data.List (nub, sort)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
 import Data.Text (Text)
+import qualified Data.Text as T
+import Numeric (showHex)
 import qualified FujiAF.UpdateContainer as U
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
@@ -159,7 +161,7 @@ compose registry source declared = do
   forM_ (pairs declared) $ \(left, right) ->
     forM_ (Set.toList (Set.intersection (pieceAreas left) (pieceAreas right))) $ \area ->
       Left (SharedArea (pieceKind left) (pieceKind right) area)
-  let pieces = yieldBoundaries declared
+  pieces <- image5Reads (yieldBoundaries declared)
   forM_ pieces $ \piece -> forM_ (pieceEdits piece) $ \change ->
     unless (coveredBy (editSpan change) (pieceCarriers piece)) (Left (EditOutsideCarriers (pieceKind piece) (editSpan change)))
   forM_ (pairs pieces) $ \(left, right) ->
@@ -205,6 +207,32 @@ yieldBoundaries pieces = map trim pieces
       in piece {pieceCatalog = catalog
           { catalogBoundaries = filter (not . yielded) (catalogBoundaries catalog)
           , catalogReads = filter ((`notElem` dropped) . readBoundary) (catalogReads catalog) }}
+
+-- | With image5 edited, the image5 producer's decoded-destination read is split
+-- into @destination-<hex start>@ reads around the editing pieces' image5
+-- carriers, and its staging read, record 5's re-encoded stream, states that it
+-- differs.
+image5Reads :: [Piece] -> Either Refusal [Piece]
+image5Reads pieces
+  | null edited = pure pieces
+  | otherwise = mapM split pieces
+  where
+    edited = normalizeSpans [ carrier | piece <- pieces, any ((== Image5) . spanTarget . editSpan) (pieceEdits piece)
+                            , carrier <- pieceCarriers piece, spanTarget carrier == Image5 ]
+    split piece
+      | pieceKind piece /= Image5Producer = pure piece
+      | otherwise = do
+          destination <- label Image5Producer "destination"
+          staging <- label Image5Producer "staging"
+          rows <- concat <$> mapM (reread destination staging) (catalogReads (pieceCatalog piece))
+          pure piece {pieceCatalog = (pieceCatalog piece) {catalogReads = rows}}
+    reread destination staging row
+      | readLabel row == staging = pure [row {readDiffers = Just "record 5's stream is re-encoded with the composition's image5 edits"}]
+      | readLabel row == destination =
+          forM (subtractSpans (Span Image5 (Guest (readAddress row)) (Guest (readAddress row + readLength row))) edited) $ \(Span _ (Guest low) (Guest high)) -> do
+            named <- label Image5Producer ("destination-" <> T.pack (showHex low ""))
+            pure row {readLabel = named, readAddress = low, readLength = high - low}
+      | otherwise = pure [row]
 
 validateCatalogs :: [Piece] -> Either Refusal ()
 validateCatalogs pieces = do
