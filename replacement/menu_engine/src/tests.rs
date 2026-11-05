@@ -722,6 +722,20 @@ fn a_pop_onto_a_type_5_parent_restoring_a_cursor_past_its_rows_is_refused_before
 }
 
 #[test]
+fn a_pop_onto_a_type_5_parent_at_stack_depth_1_is_refused_before_any_service_call() {
+    let mut state = at(SECTION_PAGE, frame(0, 0, 4, 0), 4, 1);
+    state.stack[0] = frame(1, 1, 2, 0);
+    assert_eq!(refused(&SECTION_TREE, state, StageEvent { kind: 0xf, node: 0x41, id: 0x1a, extra: 0 }), Err(NotOwned::StackBounds));
+}
+
+#[test]
+fn a_push_into_a_type_5_node_restoring_a_cursor_past_its_rows_is_refused_before_any_service_call() {
+    let mut state = at(TOP, frame(0, 0, 1, 0), 1, 1);
+    state.stack[2] = frame(3, 3, 2, 0);
+    assert_eq!(refused(&SECTION_TREE, state, StageEvent { kind: 0xe, node: 0, id: 0x1d, extra: 0 }), Err(NotOwned::RowBounds));
+}
+
+#[test]
 fn a_push_into_a_type_5_node_with_a_package_row_is_refused_before_any_service_call() {
     let state = at(TOP, frame(0, 0, 1, 0), 1, 1);
     assert_eq!(refused(&SECTION_TREE, state, StageEvent { kind: 0xe, node: 0, id: 0x1d, extra: 0 }), Err(NotOwned::PackageChild));
