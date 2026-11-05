@@ -190,7 +190,8 @@ struct AttachRecord {
 }
 
 fn install_name(key: &CheckpointKey, manifest: &str, runtime: &str) -> String {
-    format!("{key}-installed-{}", sha256(format!("{manifest}:{runtime}:{}", include_str!("ram_push.rs")).as_bytes()))
+    static PROCEDURE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| sha256(include_bytes!("ram_push.rs")));
+    format!("{key}-installed-{}", sha256(format!("{manifest}:{runtime}:{}", &*PROCEDURE).as_bytes()))
 }
 
 fn install_checkpoints(root: &Path, key: &CheckpointKey) -> Result<Vec<(PathBuf, InstallRecord)>, String> {

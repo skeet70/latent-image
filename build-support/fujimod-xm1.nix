@@ -36,6 +36,7 @@ fujimod.passthru.rustPlatform.buildRustPackage ({
   XM1_CHECKPOINT_MODEL_ID = builtins.hashString "sha256" (builtins.toJSON {
     engine = "${fujimod}";
     owned = "${checkpointModel}";
+    build = builtins.readFile ./fujimod-xm1.nix;
     inherit features;
     target = pkgs.stdenv.targetPlatform.rust.rustcTargetSpec;
   });
