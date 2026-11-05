@@ -4,6 +4,7 @@
 //! `cardless-ram-push-bridge` (without), with attach and install checkpoints
 //! saved as FujiMod session snapshots.
 use fujimod_xm1::adjustment::AdjustmentNand;
+use fujimod_xm1::record_medium::RecordMedium;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, load_card, menu_value, read, restore, sha256, write};
 use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, encode_hex};
 use fujimod_xm1::guest::{DialTurn, ModeDialPosition, PhysicalShutterPosition, Press, RouteKey};
@@ -31,8 +32,8 @@ use std::{
 };
 
 const USAGE: &str = "Usage: fujimod-xm1-ram-push --run RUN.json --boot-rom ROM --installed-dat DAT \
---adjustment-nand NAND --output DIR --ram-push-checkpoints DIR [--sd-card-image CARD] [--attach-hold-key KEY] \
-[--fresh-boot [--reset-observation SPEC.json]]\n";
+--adjustment-nand NAND [--record-nand NAND] --output DIR --ram-push-checkpoints DIR [--sd-card-image CARD] \
+[--attach-hold-key KEY] [--fresh-boot [--reset-observation SPEC.json]]\n";
 
 const ATTACH_RECORD: &str = "ram-push-attach.json";
 const INSTALL_RECORD: &str = "ram-push-install.json";
@@ -70,6 +71,7 @@ struct Arguments {
     boot_rom: PathBuf,
     installed_dat: PathBuf,
     adjustment_nand: PathBuf,
+    record_nand: Option<PathBuf>,
     output: PathBuf,
     checkpoints: PathBuf,
     sd_card_image: Option<PathBuf>,
@@ -101,6 +103,7 @@ fn arguments() -> Result<Arguments, String> {
             "--boot-rom",
             "--installed-dat",
             "--adjustment-nand",
+            "--record-nand",
             "--output",
             "--ram-push-checkpoints",
             "--sd-card-image",
@@ -116,6 +119,7 @@ fn arguments() -> Result<Arguments, String> {
         }
     }
     let sd_card_image = values.remove("--sd-card-image");
+    let record_nand = values.remove("--record-nand");
     let reset_observation = values.remove("--reset-observation");
     if reset_observation.is_some() && !fresh_boot {
         return Err(USAGE.into());
@@ -126,6 +130,7 @@ fn arguments() -> Result<Arguments, String> {
         boot_rom: take("--boot-rom")?,
         installed_dat: take("--installed-dat")?,
         adjustment_nand: take("--adjustment-nand")?,
+        record_nand,
         output: take("--output")?,
         checkpoints: take("--ram-push-checkpoints")?,
         sd_card_image,
@@ -162,7 +167,7 @@ enum StartKind {
     Installed,
 }
 
-fn boot_key(arguments: &Arguments, inputs: &Inputs, adjustment: &[u8]) -> Result<BootKey, String> {
+fn boot_key(arguments: &Arguments, inputs: &Inputs, adjustment: &[u8], records: Option<&[u8]>) -> Result<BootKey, String> {
     let bridge = read(&std::env::current_exe().map_err(|e| e.to_string())?)?;
     let card: Option<&MediaImage> = inputs.card.as_ref().map(|card| &card.image);
     let mut keyed = json!({
@@ -175,6 +180,9 @@ fn boot_key(arguments: &Arguments, inputs: &Inputs, adjustment: &[u8]) -> Result
     if let Some(card) = card {
         keyed["menu_sd_image"] = json!(card.sha256);
     }
+    if let Some(records) = records {
+        keyed["record_nand"] = json!(sha256(records));
+    }
     if let Some(key) = arguments.attach_hold {
         keyed["attach_hold_key"] = json!(key);
     }
@@ -184,7 +192,7 @@ fn boot_key(arguments: &Arguments, inputs: &Inputs, adjustment: &[u8]) -> Result
         "inputs": keyed,
         "bridge": {"sha256": sha256(&bridge)},
         "paths": {"installed_dat": arguments.installed_dat, "adjustment_nand": arguments.adjustment_nand,
-            "menu_sd_image": arguments.sd_card_image},
+            "record_nand": arguments.record_nand, "menu_sd_image": arguments.sd_card_image},
     });
     let mut identity = inputs.clone();
     identity.as_object_mut().ok_or("key document")?.remove("paths");
@@ -1471,6 +1479,7 @@ fn drive() -> Result<(), String> {
     let started = Instant::now();
     let arguments = arguments()?;
     let adjustment_bytes = read(&arguments.adjustment_nand)?;
+    let record_bytes = arguments.record_nand.as_deref().map(read).transpose()?;
     let document_bytes = read(&arguments.run)?;
     let card = arguments
         .sd_card_image
@@ -1483,11 +1492,12 @@ fn drive() -> Result<(), String> {
         update: read(&arguments.installed_dat)?,
         boot_rom: read(&arguments.boot_rom)?,
         adjustment: AdjustmentNand::parse(&adjustment_bytes)?,
+        records: record_bytes.as_deref().map(RecordMedium::parse).transpose()?,
         card,
     };
     std::fs::create_dir_all(&arguments.output).map_err(|e| format!("{}: {e}", arguments.output.display()))?;
     let observation = arguments.reset_observation.as_deref().map(|path| ResetObservationSpec::parse(&read(path)?)).transpose()?;
-    let key = boot_key(&arguments, &inputs, &adjustment_bytes)?;
+    let key = boot_key(&arguments, &inputs, &adjustment_bytes, record_bytes.as_deref())?;
     let key_seconds = started.elapsed().as_secs_f64();
     let root = arguments.checkpoints.clone();
     let installed = if arguments.fresh_boot { Vec::new() } else { install_checkpoints(&root, &key.key)? };
@@ -1498,7 +1508,11 @@ fn drive() -> Result<(), String> {
                 "runtime_sha256": record.runtime_sha256, "host": record.host})
         })
         .collect();
-    emit(&json!({"ok": true, "event": "start-options", "boot_key": key.key, "installed": listed}))?;
+    let mut options = json!({"ok": true, "event": "start-options", "boot_key": key.key, "installed": listed});
+    if let Some(records) = &inputs.records {
+        options["record_nand"] = records.summary();
+    }
+    emit(&options)?;
     let mut line = String::new();
     std::io::stdin().lock().read_line(&mut line).map_err(|e| e.to_string())?;
     let start: Start = serde_json::from_str(&line).map_err(|e| format!("RAM-push start: {e}"))?;
@@ -2338,5 +2352,44 @@ mod tests {
         assert_eq!(server.bridge.machine.traces.hits.len() as u64, previous);
     }
 
+    #[test]
+    fn a_record_nand_keys_the_attach_checkpoint_only_when_given() {
+        use fujimod_xm1::nand_image::{CommittedImage, PAGES_PER_BLOCK, PAGE_BYTES, SPARE_BYTES};
+        let pages = fujimod_xm1::adjustment::BLOCKS
+            .flat_map(|block| block * PAGES_PER_BLOCK..(block + 1) * PAGES_PER_BLOCK)
+            .map(|row| (row, (vec![0u8; PAGE_BYTES], vec![0xffu8; SPARE_BYTES])))
+            .collect();
+        let adjustment = CommittedImage::compose(&[0u8; 16], &pages).unwrap();
+        let inputs = Inputs {
+            document_bytes: b"run".to_vec(),
+            update: b"dat".to_vec(),
+            boot_rom: b"rom".to_vec(),
+            adjustment: AdjustmentNand::parse(&adjustment).unwrap(),
+            records: None,
+            card: None,
+        };
+        let arguments = |record_nand: Option<&str>| Arguments {
+            run: "run.json".into(),
+            boot_rom: "rom".into(),
+            installed_dat: "dat".into(),
+            adjustment_nand: "adjustment.nand".into(),
+            record_nand: record_nand.map(PathBuf::from),
+            output: "out".into(),
+            checkpoints: "checkpoints".into(),
+            sd_card_image: None,
+            reset_observation: None,
+            attach_hold: None,
+            fresh_boot: false,
+        };
+        let without = boot_key(&arguments(None), &inputs, &adjustment, None).unwrap();
+        let first = boot_key(&arguments(Some("a.nand")), &inputs, &adjustment, Some(b"first")).unwrap();
+        let moved = boot_key(&arguments(Some("b.nand")), &inputs, &adjustment, Some(b"first")).unwrap();
+        let second = boot_key(&arguments(Some("a.nand")), &inputs, &adjustment, Some(b"second")).unwrap();
+        assert!(without.inputs["inputs"].get("record_nand").is_none());
+        assert_eq!(first.inputs["inputs"]["record_nand"], sha256(b"first"));
+        assert_eq!(first.key, moved.key);
+        assert_ne!(first.key, second.key);
+        assert_ne!(first.key, without.key);
+    }
 }
 
