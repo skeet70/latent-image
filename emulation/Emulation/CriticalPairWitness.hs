@@ -772,9 +772,10 @@ compareReceipts (retained,retainedBytes) (owned,ownedBytes) = do
   Accepted a' b' c' d' e' before' after' <- validateEvidence owned ownedBytes
   let visible context = (pcOf context,regsOf context,cpsrOf context,tcmOf context)
       slotReturn context = (pcOf context,map (register context . A.Reg) (0:[4..11]++[13]),cpsrOf context .&. 0x07f0ffff,tcmOf context)
+      exitReturn context = (pcOf context,map (register context . A.Reg) ([4..11]++[13]),cpsrOf context .&. 0x07f0ffff,tcmOf context)
       caller context = (pcOf context,map (register context . A.Reg) (0:[4..11]++[13]),cpsrOf context,tcmOf context)
       effects resources = [(address,views) | Resource address@(Physical start) views <- resources,start `elem` [0x96bd20,0x4dae0,0xddaa0,0xa0f824,0xc0804]]
-  checked ComparisonMismatch (require (map visible [a,c] == map visible [a',c'] && map slotReturn [b,d] == map slotReturn [b',d'] && caller e == caller e' && effects before == effects before' && effects after == effects after') "critical retained/owned caller ABI, counter, lock or publication effects differ")
+  checked ComparisonMismatch (require (map visible [a,c] == map visible [a',c'] && slotReturn b == slotReturn b' && exitReturn d == exitReturn d' && caller e == caller e' && effects before == effects before' && effects after == effects after') "critical retained/owned caller ABI, counter, lock or publication effects differ")
 
 replayWrapper :: Context -> Context -> [Resource] -> Resource -> [PairEvent] -> Either String Resource
 replayWrapper origin returned resources frame events = do
@@ -894,15 +895,14 @@ validateSourceExit (Boundary incoming _ steps before after _) returned events = 
           decrement = not direct && old /= 0
           expectedCounter = if decrement then old-1 else old
           release = decrement && expectedCounter == 0
-          comparison = if decrement && not release then (if testBit expectedCounter 31 then 0xa0000000 else 0x20000000) else 0x60000000
-          status = (cpsrOf incoming .&. 0x0fffff7f) .|. comparison .|. (register incoming (A.Reg 0) .&. 0x80)
+          status = (cpsrOf incoming .&. 0x0fffff7f) .|. (register incoming (A.Reg 0) .&. 0x80)
       require (map callKind remaining == (if release then [Release,Restore] else [Restore])) "critical exit release/restore sequence differs from source counter branch"
       mapM_ (\call -> checkService (callKind call) call) remaining
       let ServiceCall _ restoreIncoming _ = last remaining
       require (register restoreIncoming (A.Reg 0) == register incoming (A.Reg 0)) "critical restore service did not receive the caller's saved prior mask"
       require (new == expectedCounter) "critical exit counter decrement or zero/direct skip differs"
       counterEffects old new decrement events
-      sourceScratch returned status status
+      require (cpsrOf returned .&. 0x07f0ffff == status .&. 0x07f0ffff) "critical exit CPSR control bits differ from original source"
     _ -> Left "critical exit omitted source identity or observation"
 
 validateBoundaryFetches :: Context -> Context -> [Context] -> [PairEvent] -> [PairEvent] -> Either String ()
