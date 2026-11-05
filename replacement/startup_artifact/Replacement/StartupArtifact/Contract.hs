@@ -6,6 +6,7 @@
 -- when the composition has one.
 module Replacement.StartupArtifact.Contract
   ( contractValue, normalizeFootprint, allowRanges, EmittedWrites (..), contractCarriers, declaredMutations, poolAllocationValue
+  , record5Media
   ) where
 
 import qualified Data.Aeson as J
@@ -13,6 +14,7 @@ import Data.Aeson (Value, object, (.=))
 import qualified Data.Aeson.Key as Key
 import Data.Aeson.Types (Pair)
 import qualified Data.ByteString as B
+import Data.Bits (complement)
 import Data.List (nub, sort, sortOn)
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -20,6 +22,7 @@ import qualified Data.Text as T
 import Data.Word (Word16, Word32, Word64)
 import qualified Replacement.StartupArtifact.Footprint.FirstStage as FirstStageFootprint
 import qualified Emulation.Sha256 as SHA
+import qualified FujiAF.UpdateContainer as U
 import Replacement.StartupArtifact.Application (Application, applicationValue)
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Targets
@@ -31,10 +34,23 @@ sha256 = T.pack . SHA.sha256Hex . SHA.sha256
 spanFields :: Span -> [Pair]
 spanFields (Span target (Guest start) (Guest end)) = ["target" .= targetName target, "start" .= start, "end" .= end]
 
+-- | The NAND bytes of the record-5 media window: the complement of the DAT slice the container
+-- places record 5 in (the media is the complement of the DAT after its staging header,
+-- reports/replacement-inventory-baseline.md:1321; replacement/record5_staging/Replacement/Record5Staging.hs:79-82).
+record5Media :: B.ByteString -> Maybe B.ByteString
+record5Media dat = case U.parseContainer dat of
+  Right parsed ->
+    let parts = U.parsedParts parsed
+        (low, high) = U.record5Window parts
+        start = U.stagingLength + fromIntegral (U.hMainOffset (U.parsedHeader parsed)) + low
+     in Just (B.map complement (B.take (high - low) (B.drop start dat)))
+  Left _ -> Nothing
+
 identityValue :: B.ByteString -> TargetBytes -> Value
 identityValue dat targets = object
   [ "dat_sha256" .= sha256 dat
   , "targets" .= object [Key.fromText (targetName target) .= sha256 bytes | (target, bytes) <- targetList targets]
+  , "record5_media_sha256" .= fmap sha256 (record5Media dat)
   ]
 
 -- | Disjoint sorted spans; each carries every citation that covers it and is an
@@ -89,13 +105,30 @@ writeRangeValue (WriteRange target start end) = object $ case target of
 pcValue :: Pc -> Word32
 pcValue (Pc value) = value
 
-catalogValue :: [Span] -> Catalog -> Value
-catalogValue carriers catalog = object
+-- | Per role, the digest an expected read must have.
+data RoleDigests = RoleDigests (ReadExpectation -> Maybe Text) (ReadExpectation -> Maybe Text)
+
+roleDigests :: B.ByteString -> TargetBytes -> B.ByteString -> TargetBytes -> RoleDigests
+roleDigests canonicalDat' canonicalTargets' composedDat composedTargets = RoleDigests (of' canonicalDat' canonicalTargets') (of' composedDat composedTargets)
+  where
+    of' dat targets expectation = case expectation of
+      ExpectTarget target -> Just (sha256 (targetOf targets target))
+      ExpectRecord5Media -> sha256 <$> record5Media dat
+
+expectationValue :: RoleDigests -> ReadExpectation -> Value
+expectationValue (RoleDigests retained composed) expectation = object
+  [ "kind" .= (case expectation of ExpectTarget _ -> "target" :: Text; ExpectRecord5Media -> "record5-media")
+  , "target" .= (case expectation of ExpectTarget target -> Just (targetName target); ExpectRecord5Media -> Nothing)
+  , "retained_sha256" .= retained expectation, "composed_sha256" .= composed expectation ]
+
+catalogValue :: RoleDigests -> [Span] -> Catalog -> Value
+catalogValue digests carriers catalog = object
   [ "boundaries" .= map boundaryValue (catalogBoundaries catalog)
   , "owned_code" .= [object ["start" .= start, "end" .= end] | CodeSpan start end <- sort (catalogOwnedCode catalog)]
   , "writes" .= object ["allow" .= map writeRangeValue allow, "basis" .= basis, "premise" .= premise]
   , "reads" .= [ object [ "label" .= labelText (readLabel row), "boundary" .= labelText (readBoundary row)
-                        , "address" .= readAddress row, "length" .= readLength row, "differs" .= readDiffers row ]
+                        , "address" .= readAddress row, "length" .= readLength row, "differs" .= readDiffers row
+                        , "expect" .= fmap (expectationValue digests) (readExpect row) ]
                | row <- catalogReads catalog ]
   ]
   where
@@ -107,8 +140,8 @@ catalogValue carriers catalog = object
       , "compare" .= compareName (boundaryCompare boundary), "record_limit" .= recordLimitCount (boundaryRecordLimit boundary)
       ]
 
-pieceValue :: [Span] -> Piece -> Value
-pieceValue carriers piece = object
+pieceValue :: RoleDigests -> [Span] -> Piece -> Value
+pieceValue digests carriers piece = object
   [ "kind" .= pieceKindName (pieceKind piece)
   , "areas" .= map areaName (Set.toAscList (pieceAreas piece))
   , "carriers" .= [object (spanFields range) | range <- normalizeSpans (pieceCarriers piece)]
@@ -116,7 +149,7 @@ pieceValue carriers piece = object
   , "footprint" .= [ object (spanFields range ++ ["basis" .= footprintBasisName basis, "citation" .= T.intercalate "; " [text | Citation text <- citations]])
                    | (range, basis, citations) <- normalizeFootprint (pieceFootprint piece) ]
   , "premises" .= [text | Premise text <- piecePremises piece]
-  , "catalog" .= catalogValue carriers (pieceCatalog piece)
+  , "catalog" .= catalogValue digests carriers (pieceCatalog piece)
   ]
 
 joinValue :: JoinName k => AppliedJoin k -> Value
@@ -199,10 +232,11 @@ contractValue source manifest composition composedDat composedTargets attach att
       [ "attach" .= labelText attach, "attach_state" .= attachState
       , "declared" .= object ["retained" .= map declarationValue retained, "composed" .= map declarationValue composed] ]
   , "joins" .= map joinValue (compositionJoins composition)
-  , "pieces" .= map (pieceValue carriers) (sortOn pieceKind (compositionPieces composition))
+  , "pieces" .= map (pieceValue digests carriers) (sortOn pieceKind (compositionPieces composition))
   ] ++ maybe [] (\relation -> ["pool_allocation" .= relation]) (poolAllocationValue (compositionPieces composition))
     ++ ["application" .= applicationValue present | Just present <- [section]]
   where
     qualification = compositionQualification composition
     carriers = concatMap pieceCarriers (compositionPieces composition)
+    digests = roleDigests (canonicalDat source) (canonicalTargets source) composedDat composedTargets
     (retained, composed) = declaredMutations composition

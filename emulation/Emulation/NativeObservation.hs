@@ -25,6 +25,11 @@ module Emulation.NativeObservation
   , provenanceWrites
   , provenanceCount
   , provenanceRetained
+  , Barrier (..)
+  , SystemRegister (..)
+  , WriteValue (..)
+  , Ordered (..)
+  , KernelObservation (..)
   , NativeObservation (..)
   , lookupRegister
   , ObservationError (..)
@@ -100,6 +105,7 @@ data RunnerStatus
   | UnknownCall
   | UnsupportedInstruction
   | StubContract
+  | StopAddress
   | RunnerEngineError
   | InvalidCase
   | HostTimeout
@@ -117,6 +123,7 @@ runnerStatusFromLabel "fetch_guard" = FetchGuard
 runnerStatusFromLabel "unknown_call" = UnknownCall
 runnerStatusFromLabel "unsupported_instruction" = UnsupportedInstruction
 runnerStatusFromLabel "stub_contract" = StubContract
+runnerStatusFromLabel "stop_address" = StopAddress
 runnerStatusFromLabel "engine_error" = RunnerEngineError
 runnerStatusFromLabel "invalid_case" = InvalidCase
 runnerStatusFromLabel "host_timeout" = HostTimeout
@@ -133,6 +140,7 @@ runnerStatusLabel FetchGuard = "fetch_guard"
 runnerStatusLabel UnknownCall = "unknown_call"
 runnerStatusLabel UnsupportedInstruction = "unsupported_instruction"
 runnerStatusLabel StubContract = "stub_contract"
+runnerStatusLabel StopAddress = "stop_address"
 runnerStatusLabel RunnerEngineError = "engine_error"
 runnerStatusLabel InvalidCase = "invalid_case"
 runnerStatusLabel HostTimeout = "host_timeout"
@@ -176,6 +184,32 @@ provenanceRetained :: Provenance -> Int
 provenanceRetained (Complete _ writes) = length writes
 provenanceRetained (Truncated _) = 4096
 
+data Barrier = Dmb | Dsb | Isb
+  deriving (Eq, Show)
+
+-- | A system register a kernel case writes.
+data SystemRegister = Tpidrurw | Fpexc
+  deriving (Eq, Ord, Show)
+
+-- | The value a write stored, zero-extended.
+newtype WriteValue = WriteValue Word64
+  deriving (Eq, Ord, Show)
+
+data Ordered = OrderedWrite Write WriteValue | OrderedBarrier Barrier | OrderedSystemWrite SystemRegister Word32
+  deriving (Eq, Show)
+
+-- | What a kernel case reports beyond a privileged case.
+data KernelObservation = KernelObservation
+  { -- | The provenance log's writes, barriers and system register writes in execution order; Nothing when truncated.
+    observedOrder :: Maybe [Ordered]
+  , -- | Final TPIDRURW and FPEXC, each when the case declares it.
+    observedTpidrurw :: Maybe Word32
+  , observedFpexc :: Maybe Word32
+  , -- | The word the case's last LDREX reserved; STREX and CLREX leave it.
+    observedReserved :: Maybe GuestAddress
+  }
+  deriving (Eq, Show)
+
 data NativeObservation = NativeObservation
   { nativeStatus :: RunnerStatus
   , nativeRegisters :: M.Map Register Word32
@@ -183,6 +217,8 @@ data NativeObservation = NativeObservation
   , nativeProvenance :: Provenance
   , nativeInstructions :: InstructionCount
   , nativeEngineError :: EngineError
+  , -- | Present exactly for a kernel case.
+    nativeKernel :: Maybe KernelObservation
   }
   deriving (Eq, Show)
 
@@ -215,8 +251,13 @@ data ObservationError
   | MalformedProvenanceKind
   | MalformedProvenanceAddress
   | MalformedProvenanceSize
+  | MalformedProvenanceValue
   | ProvenanceRetentionMismatch Int
   | ProvenanceCountMismatch ProvenanceTotal Int
+  | MalformedBarrier
+  | MalformedSystemWrite
+  | KernelRowOutsideKernel
+  | MalformedKernelRegisters
   deriving (Eq, Show)
 
 lookupRegister :: Register -> NativeObservation -> Maybe Word32
@@ -245,7 +286,17 @@ observeNative exit regions value = do
   total <- requireCount "memory_provenance_total" MissingProvenanceTotal MalformedProvenanceTotal value
   registers <- parseRegisters (get value "registers")
   memory <- parseMemory regions (get value "memory")
-  provenance <- parseProvenance total (get value "memory_provenance")
+  (provenance, ordered) <- parseProvenance total (get value "memory_provenance")
+  kernel <- case get value "kernel" of
+    Null -> do
+      when (any kernelRow ordered) (Left KernelRowOutsideKernel)
+      pure Nothing
+    registersValue -> do
+      (tpidrurw, fpexc, monitor) <- parseKernelRegisters registersValue
+      let order = case provenance of
+            Complete _ _ -> Just ordered
+            Truncated _ -> Nothing
+      pure (Just (KernelObservation order tpidrurw fpexc monitor))
   pure
     NativeObservation
       { nativeStatus = status
@@ -254,7 +305,11 @@ observeNative exit regions value = do
       , nativeProvenance = provenance
       , nativeInstructions = InstructionCount instructions
       , nativeEngineError = engineValue
+      , nativeKernel = kernel
       }
+  where
+    kernelRow (OrderedWrite _ _) = False
+    kernelRow _ = True
 
 renderObservationError :: ObservationError -> String
 renderObservationError errorValue = case errorValue of
@@ -287,10 +342,15 @@ renderObservationError errorValue = case errorValue of
   MalformedProvenanceKind -> "malformed provenance kind"
   MalformedProvenanceAddress -> "malformed provenance address"
   MalformedProvenanceSize -> "provenance size out of range"
+  MalformedProvenanceValue -> "malformed provenance write value"
   ProvenanceRetentionMismatch retained ->
     "provenance retention count " ++ show retained ++ " differs from 4096"
   ProvenanceCountMismatch total retained ->
     "provenance count " ++ show retained ++ " differs from " ++ show (provenanceTotal total)
+  MalformedBarrier -> "malformed provenance barrier"
+  MalformedSystemWrite -> "malformed provenance system register write"
+  KernelRowOutsideKernel -> "provenance barrier or system register write outside a kernel case"
+  MalformedKernelRegisters -> "malformed kernel registers"
 
 parseStatus :: Value -> Either ObservationError RunnerStatus
 parseStatus value =
@@ -352,15 +412,35 @@ parseMemory regions value = case value of
     pure pairs
   _ -> Left MissingMemory
 
-parseProvenance :: Word64 -> Value -> Either ObservationError Provenance
+parseProvenance :: Word64 -> Value -> Either ObservationError (Provenance, [Ordered])
 parseProvenance total value = case value of
   Array _ -> do
     let entries = list value
-    parsed <- forM entries $ \entry -> do
-      kind <- case str (get entry "kind") of
-        "write" -> Right True
-        "read" -> Right False
-        _ -> Left MalformedProvenanceKind
+    parsed <- forM entries $ \entry -> case str (get entry "kind") of
+      "write" -> (\row stored -> Just (OrderedWrite row stored)) <$> access entry <*> writeValue entry
+      "read" -> Nothing <$ access entry
+      "barrier" -> Just . OrderedBarrier <$> barrier (str (get entry "barrier"))
+      "system" -> Just <$> systemWrite entry
+      _ -> Left MalformedProvenanceKind
+    let ordered = [row | Just row <- parsed]
+        writes = [write | OrderedWrite write _ <- ordered]
+    provenance <-
+      if total > 4096
+        then do
+          when (length entries /= 4096) (Left (ProvenanceRetentionMismatch (length entries)))
+          pure (Truncated (ProvenanceTotal total))
+        else do
+          when (fromIntegral (length entries) /= total) (Left (ProvenanceCountMismatch (ProvenanceTotal total) (length entries)))
+          pure (Complete (ProvenanceTotal total) writes)
+    pure (provenance, ordered)
+  _ -> Left MissingProvenance
+  where
+    writeValue entry = case str (get entry "value") of
+      '0' : 'x' : digits
+        | length digits == 16 && all isHexDigit digits
+        , [(stored, "")] <- readHex digits -> Right (WriteValue stored)
+      _ -> Left MalformedProvenanceValue
+    access entry = do
       address <- maybe (Left MalformedProvenanceAddress) (Right . GuestAddress . fromIntegral) (parseWord32 (str (get entry "address")))
       size <- case get entry "size" of
         Number number -> case floatingOrInteger number :: Either Double Integer of
@@ -368,16 +448,29 @@ parseProvenance total value = case value of
             | exact >= 1 && exact <= 8 -> Right (WriteBytes (fromIntegral exact))
           _ -> Left MalformedProvenanceSize
         _ -> Left MalformedProvenanceSize
-      pure (kind, Write address size)
-    let writes = [write | (True, write) <- parsed]
-    if total > 4096
-      then do
-        when (length entries /= 4096) (Left (ProvenanceRetentionMismatch (length entries)))
-        pure (Truncated (ProvenanceTotal total))
-      else do
-        when (fromIntegral (length entries) /= total) (Left (ProvenanceCountMismatch (ProvenanceTotal total) (length entries)))
-        pure (Complete (ProvenanceTotal total) writes)
-  _ -> Left MissingProvenance
+      pure (Write address size)
+    barrier "dmb" = Right Dmb
+    barrier "dsb" = Right Dsb
+    barrier "isb" = Right Isb
+    barrier _ = Left MalformedBarrier
+    systemWrite entry = do
+      register <- case str (get entry "register") of
+        "tpidrurw" -> Right Tpidrurw
+        "fpexc" -> Right Fpexc
+        _ -> Left MalformedSystemWrite
+      written <- maybe (Left MalformedSystemWrite) Right (parseWord32 (str (get entry "value")))
+      pure (OrderedSystemWrite register written)
+
+parseKernelRegisters :: Value -> Either ObservationError (Maybe Word32, Maybe Word32, Maybe GuestAddress)
+parseKernelRegisters value = case value of
+  Object _
+    | all (`elem` ["tpidrurw", "fpexc", "reserved"]) (keys value) ->
+        (,,) <$> register "tpidrurw" <*> register "fpexc" <*> (fmap (GuestAddress . fromIntegral) <$> register "reserved")
+  _ -> Left MalformedKernelRegisters
+  where
+    register key
+      | key `elem` keys value = maybe (Left MalformedKernelRegisters) (Right . Just) (parseWord32 (str (get value key)))
+      | otherwise = Right Nothing
 
 regionIdOf :: Region -> RegionId
 regionIdOf region = RegionId (str (get (description region) "id"))

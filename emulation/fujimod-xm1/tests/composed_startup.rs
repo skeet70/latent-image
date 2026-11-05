@@ -9,8 +9,8 @@ use fujimod_xm1::attach_state::{
     Occupant, ProcessorAddress, ReadPath, RegionRead, Space, SpaceSpan, Span, StackCheck, UnusedEntry,
 };
 use fujimod_xm1::composed_catalog::{
-    Bank, CatalogRefusal, Contract, Core, DeclarationProblem, GuardBound, Label, Pc, PiecePolicy, PieceKind, PlanSpan,
-    PoolAllocationProblem, RangePlan, Role, Schema, Sha256, Target, WritesBasis,
+    Bank, CatalogRefusal, CheckRefusal, CheckedContract, Contract, Core, DeclarationProblem, GuardBound, Label, Pc, PiecePolicy, PieceKind,
+    PlanSpan, PoolAllocationProblem, Qualifications, QualificationsRefusal, RangePlan, Role, Schema, Sha256, Target, WritesBasis,
 };
 use fujimod_xm1::composed_receipt::{
     Admission, ByteRange, CaptureDirectories, CarrierField, CarrierWrites, DeclaredUse, Difference, GuardObservation, GuardState,
@@ -329,7 +329,7 @@ fn row(text: &str, registers: [u32; 4], sp: u32, reads: Vec<ReadCapture>) -> Row
 fn digest(byte: char) -> Sha256 { Sha256::try_from(byte.to_string().repeat(64)).unwrap() }
 
 fn receipt(contract: &Contract, contract_digest: &Sha256, role: Role) -> Receipt {
-    let read = |name: &str, address: u32, bytes: Vec<u8>| ReadCapture { label: label(name), address, bytes: HexBytes(bytes) };
+    let read = |name: &str, address: u32, bytes: Vec<u8>| ReadCapture { label: label(name), address, bytes: HexBytes(bytes), sha256: None };
     let rows = vec![
         row("first-stage/handoff", [1, 2, 3, 4], 0x63400, vec![read("first-stage/peer-cells", 1073872896, vec![1; 8])]),
         row("primary-publisher/entry-core0", [0x10, 0x11, 0x12, 0x13], 0x63420, vec![]),
@@ -643,7 +643,7 @@ fn rows(rows: &[Value]) -> Vec<WatchRow> { serde_json::from_value(Value::Array(r
 
 fn carriers(contract: &Contract, writes: &[Value]) -> Vec<CarrierWrites> {
     let classes: Vec<(u64, u64)> = contract.watch_classes().iter().map(|class| (class.start, class.end)).collect();
-    carrier_writes(&classes, &contract.owned_code_spellings(), &rows(writes)).unwrap()
+    carrier_writes(&classes, &contract.owned_code_spellings(), &[], &rows(writes)).unwrap()
 }
 
 fn range(start: u64, end: u64) -> ByteRange { ByteRange { start, end } }
@@ -674,14 +674,14 @@ fn carrier_writes_record_counts_writers_coverage_and_owned_code_writers() {
 fn carrier_write_rows_count_in_every_class_they_overlap() {
     let mut before = write_row("host-write", 24570, None, None);
     before["size"] = json!(16);
-    let summaries = carrier_writes(&[(24576, 25772)], &[], &rows(&[before])).unwrap();
+    let summaries = carrier_writes(&[(24576, 25772)], &[], &[], &rows(&[before])).unwrap();
     assert_eq!((summaries[0].total, summaries[0].coverage.clone()), (1, vec![range(24576, 24586)]));
     let mut spanning = write_row("model-bus-write", 0x10c, None, None);
     spanning["size"] = json!(16);
-    let summaries = carrier_writes(&[(0x100, 0x110), (0x118, 0x120)], &[], &rows(&[spanning])).unwrap();
+    let summaries = carrier_writes(&[(0x100, 0x110), (0x118, 0x120)], &[], &[], &rows(&[spanning])).unwrap();
     assert_eq!(summaries.iter().map(|summary| (summary.total, summary.coverage.clone())).collect::<Vec<_>>(),
         [(1, vec![range(0x10c, 0x110)]), (1, vec![range(0x118, 0x11c)])]);
-    assert!(carrier_writes(&[(24576, 25772)], &[], &rows(&[write_row("cpu-write", 0x100000, Some(0), Some(1))])).is_err());
+    assert!(carrier_writes(&[(24576, 25772)], &[], &[], &rows(&[write_row("cpu-write", 0x100000, Some(0), Some(1))])).is_err());
 }
 
 #[test]
@@ -1509,6 +1509,54 @@ fn the_lz_tallies_follow_each_role_s_pinned_input() {
     assert!(entries.iter().any(|entry| matches!(entry, Difference::AttachRelation { failure: RelationFailure::RelationOverlap { .. }, .. })));
 }
 
+fn history_roles() -> (Value, Spec, Spec) {
+    let mut retained = relation_spec(Role::Retained, &timer_steps(100, 200, RETAINED_SITE), RETAINED_SITE);
+    let mut owned = relation_spec(Role::Composed, &timer_steps(160, 300, COMPOSED_SITE), COMPOSED_SITE);
+    with_lz(&mut retained, &RETAINED_LZ_INPUT, ONE_JOB);
+    let mut input = OWNED_LZ_INPUT;
+    input[1] = b'z';
+    with_lz(&mut owned, &input, ONE_JOB);
+    let mut contract = lz_contract(json!({"citation": "lz.rs"}));
+    let mut padded = input.to_vec();
+    padded.resize(16, 0);
+    attach_rules(&mut contract)["allowances"][0]["composed_sha256"] = json!(Sha256::of(&padded));
+    (contract, retained, owned)
+}
+
+#[test]
+fn different_history_bytes_follow_each_roles_pinned_decode() {
+    let (contract, retained, owned) = history_roles();
+    let history = "/bus/devices/1/state/state/stream/history";
+    assert_ne!(retained.board.pointer(history), owned.board.pointer(history));
+    let verdict = relation_verdict(&contract, &retained, &owned);
+    assert_eq!(verdict.first_difference, None, "{:?}", verdict.attach_differences);
+}
+
+#[test]
+fn a_history_byte_off_its_roles_decode_refuses_and_remains_compared() {
+    let (contract, retained, mut owned) = history_roles();
+    owned.board["bus"]["devices"][1]["state"]["state"]["stream"]["history"][0] = json!(0);
+    let verdict = relation_verdict(&contract, &retained, &owned);
+    let entries = &verdict.attach_differences.entries;
+    assert!(entries.iter().any(|entry| matches!(entry,
+        Difference::AttachRelation { role: Role::Composed, failure: RelationFailure::LzStream { leaf } }
+        if leaf.0.ends_with("/history/0"))));
+    assert!(entries.iter().any(|entry| matches!(entry,
+        Difference::AttachBoard { pointer, .. } if pointer.0.ends_with("/history/0"))));
+}
+
+#[test]
+fn history_without_a_pinned_source_refuses_and_remains_compared() {
+    let (mut contract, retained, owned) = history_roles();
+    attach_rules(&mut contract)["allowances"] = json!([]);
+    let verdict = relation_verdict(&contract, &retained, &owned);
+    let entries = &verdict.attach_differences.entries;
+    assert!(entries.iter().any(|entry| matches!(entry,
+        Difference::AttachRelation { failure: RelationFailure::LzSourceUnpinned { .. }, .. })));
+    assert!(entries.iter().any(|entry| matches!(entry,
+        Difference::AttachBoard { pointer, .. } if pointer.0.ends_with("/history/0"))));
+}
+
 /// `role`'s relation failures, the board differences and `role`'s derived LZ registers, with `edit` applied to that
 /// role's captured LZ registers.
 fn lz_role_outcome(role: Role, jobs: [Jobs; 2], edit: impl FnOnce(&mut Vec<Value>)) -> (Vec<RelationFailure>, Vec<String>, Option<LzRegisters>) {
@@ -1808,7 +1856,7 @@ fn reserve_on(receipt: &mut Receipt, bases: [u32; 2], cores: [usize; 2]) {
     for task in 0..2 {
         creation[cores[task]][task * 10 + 5] = bases[task];
     }
-    let capture = |name: &str, address: u32, bytes: Vec<u8>| ReadCapture { label: label(name), address, bytes: HexBytes(bytes) };
+    let capture = |name: &str, address: u32, bytes: Vec<u8>| ReadCapture { label: label(name), address, bytes: HexBytes(bytes), sha256: None };
     let row = &mut receipt.rows[2];
     row.sp = Word(top(0));
     row.reads.extend([
@@ -1971,4 +2019,160 @@ fn a_malformed_pool_allocation_refuses_at_parse() {
         CatalogRefusal::PoolAllocation(PoolAllocationProblem::Differs(label("primary-publisher/records"))));
     assert_eq!(refusal(|v| v["pool_allocation"]["owners"][0]["offset"] = json!(40)),
         CatalogRefusal::PoolAllocation(PoolAllocationProblem::OwnerLayout(label("primary-publisher/creation-a"))));
+}
+
+/// The fixture with a write rule on the loader-A publisher carrier [263216, 264620): no composed writes, and
+/// retained CPU writes from [0x6c0000, 0x6c0100) count as retired.
+fn ruled_contract(composed: &str, excluded: Value) -> Value {
+    let mut value = fixture();
+    let carriers = value["guard"]["attach_state"]["carriers"].as_array_mut().unwrap();
+    let carrier = carriers.iter_mut().find(|carrier| carrier["start"] == json!(263216)).unwrap();
+    carrier["composed_writes"] = json!(composed);
+    carrier["retained_excluded_pcs"] = excluded;
+    value
+}
+
+fn role_carriers(contract: &Contract, role: Role, writes: &[Value]) -> Vec<CarrierWrites> {
+    let classes: Vec<(u64, u64)> = contract.watch_classes().iter().map(|class| (class.start, class.end)).collect();
+    let excluded: Vec<Vec<(u64, u64)>> = classes.iter().map(|&(start, end)| match role {
+        Role::Composed => Vec::new(),
+        Role::Retained => contract.carrier_rule(start, end).map_or_else(Vec::new, |rule| rule.retained_excluded.iter()
+            .flat_map(|span| [(span.start, span.end), (span.start + ALIAS, span.end + ALIAS)]).collect()),
+    }).collect();
+    carrier_writes(&classes, &contract.owned_code_spellings(), &excluded, &rows(writes)).unwrap()
+}
+
+fn ruled_verdict(value: &Value, retained: Vec<Value>, composed: Vec<Value>) -> Option<Difference> {
+    let contract = parse(value).unwrap();
+    let (left, right) = (role_carriers(&contract, Role::Retained, &retained), role_carriers(&contract, Role::Composed, &composed));
+    pool_verdict(value, move |r| r.guard.as_mut().unwrap().carrier_writes = left, move |o| o.guard.as_mut().unwrap().carrier_writes = right)
+}
+
+#[test]
+fn retired_stock_writes_are_excluded_only_in_the_retained_role() {
+    let value = ruled_contract("none", json!([{"start": 0x6c0000, "end": 0x6c0100}]));
+    let host = write_row("host-write", 24600, None, None);
+    let summaries = role_carriers(&parse(&value).unwrap(), Role::Retained, &stock_writes());
+    assert_eq!((summaries[1].total, summaries[1].retired_writes, summaries[1].coverage.clone()), (0, 2, vec![]));
+    assert_eq!(ruled_verdict(&value, stock_writes(), vec![host.clone()]), None);
+    let foreign = write_row("cpu-write", 263400, Some(0), Some(0x700000));
+    let mut retained = stock_writes();
+    retained.push(foreign.clone());
+    assert!(matches!(ruled_verdict(&value, retained.clone(), vec![host.clone(), foreign.clone()]),
+        Some(Difference::RetiredCarrierWrite { role: Role::Retained, start: 263216, end: 264620, .. })));
+    assert!(matches!(ruled_verdict(&value, stock_writes(), vec![host.clone(), foreign]),
+        Some(Difference::RetiredCarrierWrite { role: Role::Composed, start: 263216, end: 264620, .. })));
+    let unruled = ruled_contract("compared", json!([]));
+    assert_eq!(ruled_verdict(&unruled, stock_writes(), vec![host]),
+        Some(Difference::CarrierWrites { start: 263216, end: 264620, field: CarrierField::Coverage }));
+}
+
+#[test]
+fn a_model_bus_carrier_admits_model_bus_writes_only_counted_past_the_writer_limit() {
+    let value = ruled_contract("model-bus", json!([]));
+    let bus = write_row("model-bus-write", 263300, None, None);
+    let host = write_row("host-write", 24600, None, None);
+    assert_eq!(ruled_verdict(&value, vec![host.clone(), bus.clone()], vec![host.clone(), bus.clone()]), None);
+    assert!(matches!(ruled_verdict(&value, vec![host.clone(), bus.clone()], vec![host.clone(), bus.clone(), write_row("host-write", 263300, None, None)]),
+        Some(Difference::RetiredCarrierWrite { role: Role::Composed, .. })));
+    let many: Vec<Value> = std::iter::once(host.clone()).chain((0..1025u32).map(|index| write_row("cpu-write", 263300, Some(1), Some(0x700000 + 4 * index)))).collect();
+    let summaries = role_carriers(&parse(&value).unwrap(), Role::Composed, &many);
+    assert_eq!((summaries[1].writers_truncated, summaries[1].totals_by_kind.iter().map(|total| (total.kind, total.count)).collect::<Vec<_>>()),
+        (true, vec![(WriteKind::CpuWrite, 1025)]));
+    assert!(matches!(ruled_verdict(&value, vec![host, bus.clone()], many), Some(Difference::RetiredCarrierWrite { role: Role::Composed, .. })));
+    let summaries = role_carriers(&parse(&value).unwrap(), Role::Composed, &[bus, write_row("host-write", 263304, None, None)]);
+    assert_eq!(summaries[1].totals_by_kind.iter().map(|total| (total.kind, total.count)).collect::<Vec<_>>(),
+        [(WriteKind::HostWrite, 1), (WriteKind::ModelBusWrite, 1)]);
+}
+
+#[test]
+fn an_expected_read_compares_each_roles_digest_with_its_own_expectation() {
+    let mut value = fixture();
+    value["pieces"][1]["catalog"]["reads"][0]["expect"] = json!({"kind": "target", "target": "loader_a",
+        "retained_sha256": "a".repeat(64), "composed_sha256": "b".repeat(64)});
+    let keep = |byte: char| move |receipt: &mut Receipt| {
+        let capture = &mut receipt.rows[2].reads[0];
+        capture.bytes = HexBytes(Vec::new());
+        capture.sha256 = Some(digest(byte));
+    };
+    assert_eq!(pool_verdict(&value, keep('a'), keep('b')), None);
+    assert_eq!(pool_verdict(&value, keep('a'), keep('a')),
+        Some(Difference::ReadExpectation { label: label("primary-publisher/table-a"), role: Role::Composed, occurrence: 0 }));
+    assert_eq!(pool_verdict(&value, keep('b'), keep('b')),
+        Some(Difference::ReadExpectation { label: label("primary-publisher/table-a"), role: Role::Retained, occurrence: 0 }));
+    assert_eq!(pool_verdict(&value, keep('a'), |o| { keep('b')(o); o.rows[2].reads[0].bytes = HexBytes(vec![1]); }),
+        Some(Difference::ReadExpectation { label: label("primary-publisher/table-a"), role: Role::Composed, occurrence: 0 }));
+    assert_eq!(pool_verdict(&value, keep('a'), |o| o.rows[2].reads.clear()),
+        Some(Difference::ReadExpectation { label: label("primary-publisher/table-a"), role: Role::Composed, occurrence: 0 }));
+    value["pieces"][1]["catalog"]["reads"][0]["differs"] = json!("owned");
+    assert_eq!(parse(&value).err(), Some(CatalogRefusal::ReadExpectation(label("primary-publisher/table-a"))));
+}
+
+const RECORD: &str = "E-STARTUP-J1-COMPOSED-NATURAL-150";
+
+fn qualifications(rows: Value) -> Vec<u8> { serde_json::to_vec(&json!({"schema": 1, "contracts": rows})).unwrap() }
+
+fn host_composed() -> Value {
+    let mut value = fixture();
+    value["qualification"] = json!("host-composed");
+    value["pending_joins"] = json!([]);
+    value
+}
+
+/// The check output for `contract` with `listed` as the only qualified digest.
+fn checked(contract: &Value, listed: &str) -> Result<Value, CheckRefusal> {
+    let bytes = serde_json::to_vec(contract).unwrap();
+    let rows = qualifications(json!([{"contract": listed, "evidence": RECORD}]));
+    CheckedContract::check(&bytes, Some(&rows)).map(|checked| serde_json::to_value(checked).unwrap())
+}
+
+fn digest_of(contract: &Value) -> String { Sha256::of(&serde_json::to_vec(contract).unwrap()).as_str().to_owned() }
+
+#[test]
+fn malformed_qualifications_refuse() {
+    let digest = "a".repeat(64);
+    let row = json!({"contract": digest, "evidence": RECORD});
+    assert!(Qualifications::parse(&qualifications(json!([row.clone()]))).is_ok());
+    let shape = |bytes: Vec<u8>| matches!(Qualifications::parse(&bytes), Err(QualificationsRefusal::Shape(_)));
+    assert!(shape(serde_json::to_vec(&json!({"schema": 1, "contracts": [], "extra": 1})).unwrap()));
+    assert!(shape(qualifications(json!([{"contract": digest, "evidence": RECORD, "extra": 1}]))));
+    assert!(shape(qualifications(json!([{"contract": "A".repeat(64), "evidence": RECORD}]))));
+    assert!(shape(qualifications(json!([{"contract": digest, "evidence": "e-startup-j1"}]))));
+    assert!(shape(qualifications(json!([{"contract": digest}]))));
+    assert_eq!(Qualifications::parse(&serde_json::to_vec(&json!({"schema": 2, "contracts": []})).unwrap()),
+        Err(QualificationsRefusal::Schema(2)));
+    assert_eq!(Qualifications::parse(&qualifications(json!([row.clone(), {"contract": digest, "evidence": "E-STARTUP-J2-COMPOSED-NATURAL-150"}]))),
+        Err(QualificationsRefusal::DuplicateContract(Sha256::try_from(digest).unwrap())));
+}
+
+#[test]
+fn a_listed_pending_contract_is_compared_and_an_unlisted_one_awaits_its_joins() {
+    let contract = fixture();
+    assert_eq!(checked(&contract, &digest_of(&contract)).unwrap()["state"], json!({"kind": "compared", "evidence": RECORD}));
+    assert_eq!(checked(&contract, &"a".repeat(64)).unwrap()["state"],
+        json!({"kind": "pending", "awaiting": ["first-stage-secondary-rendezvous"]}));
+}
+
+#[test]
+fn a_host_composed_contract_is_host_composed_and_refuses_when_listed() {
+    let contract = host_composed();
+    assert_eq!(checked(&contract, &"a".repeat(64)).unwrap()["state"], json!({"kind": "host-composed"}));
+    let digest = digest_of(&contract);
+    assert_eq!(checked(&contract, &digest).unwrap_err(),
+        CheckRefusal::Qualifications(QualificationsRefusal::HostComposedListed(Sha256::try_from(digest).unwrap())));
+}
+
+#[test]
+fn the_check_output_gains_state_only_with_qualifications() {
+    let contract = fixture();
+    let bytes = serde_json::to_vec(&contract).unwrap();
+    let without = serde_json::to_value(CheckedContract::check(&bytes, None).unwrap()).unwrap();
+    let mut with = checked(&contract, &digest_of(&contract)).unwrap();
+    assert!(without.get("state").is_none());
+    assert_eq!(with.as_object_mut().unwrap().remove("state"), Some(json!({"kind": "compared", "evidence": RECORD})));
+    assert_eq!(with, without);
+    assert_eq!(without["contract_sha256"], json!(digest_of(&contract)));
+    let malformed = serde_json::to_vec(&json!({"schema": 1})).unwrap();
+    assert!(matches!(CheckedContract::check(&bytes, Some(&malformed)),
+        Err(CheckRefusal::Qualifications(QualificationsRefusal::Shape(_)))));
 }

@@ -3,22 +3,24 @@
 -- library, publication and initializer sites with the code word each holds,
 -- the shared-queue scope sites, both domains' task cells, digests of the
 -- task1 and pump code, and the readiness bounds. Sites and cells are
--- emulation/fujimod-xm1/src/application_pump_capture.rs:12-35 plus the image5
+-- APPLICATION_SITES, QUEUE_SITES and the task layouts of
+-- emulation/fujimod-xm1/src/composed_catalog.rs plus the image5
 -- producer's entry and return (lz/id4.dis:144722) and the initializer chain
 -- (lz/id4.dis:132029-132030, lz/id5.dis:431838-431843).
 module Replacement.StartupArtifact.Application
   ( SiteKind (..), siteKindName, SiteLabel (..), CodeWord (..), Sha256Hex (..)
   , CodeRegion (..), codeRegionName, codeRegionBounds
-  , PlainImage, plainImage, RoleImages (..)
+  , PlainImage (..), plainImage, RoleImages (..)
   , ApplicationSite (..), QueueSite (..), CodeDigest (..), Application (..)
-  , application, applicationValue
+  , SiteMap (..), application, applicationValue
   ) where
 
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (Value, object, (.=))
 import qualified Data.ByteString as B
 import Data.List (sortOn)
-import Data.Maybe (isJust, listToMaybe)
+import qualified Data.Map.Strict as Map
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Word (Word32, Word64)
@@ -83,7 +85,7 @@ sites = [(Pc pc, kind) | (kind, pcs) <- table, pc <- pcs]
       , (AdapterSite, [0xdb5124, 0xdb515c, 0xdb5170, 0xdb5174, 0xdb5178, 0xdb51d0])
       , (UilibSite, [0x11090a4, 0x1109130, 0x1108a2c, 0x110f9d8])
       , (SharedSite, [0x725214])
-      , (PublicationSite, [0x6a9840, 0x6a9844, 0x6a9934])
+      , (PublicationSite, [0x73b4b0, 0x73b558])
       , (InitializerSite, [0x69d2e0, 0x69d2e4, 0xd985a4, 0xd985c8, 0xd985d8])
       ]
 
@@ -127,7 +129,9 @@ codeAt (RoleImages targets (PlainImage (Guest load) plain)) start end = listToMa
   | (owner, base, bytes) <- [(Just Image4, targetBase Image4, targetOf targets Image4), (Just Image5, targetBase Image5, targetOf targets Image5), (Nothing, load, plain)]
   , base <= start, start < end, toInteger end - toInteger base <= toInteger (B.length bytes) ]
 
-data ApplicationSite = ApplicationSite { siteLabel :: SiteLabel, siteKind :: SiteKind, sitePc :: Pc, siteWord :: CodeWord } deriving (Eq, Show)
+data ApplicationSite = ApplicationSite
+  { siteLabel :: SiteLabel, siteKind :: SiteKind, sitePc :: Pc, siteComposedPc :: Pc, siteRetainedWord :: CodeWord, siteComposedWord :: CodeWord }
+  deriving (Eq, Show)
 
 data QueueSite = QueueSite { queueLabel :: SiteLabel, queuePc :: Pc, queueWord :: CodeWord } deriving (Eq, Show)
 
@@ -140,31 +144,51 @@ data Application = Application { applicationSites :: [ApplicationSite], applicat
 refuse :: ApplicationProblem -> Either Refusal a
 refuse = Left . ApplicationRefused
 
--- | Carriers are the composition's, by owning piece; a site is stock in both roles.
-application :: [(PieceKind, Span)] -> RoleImages -> RoleImages -> Either Refusal Application
-application carriers retained composed = do
-  appSites <- forM (sortOn fst sites) $ \(pc, kind) -> ApplicationSite (prefixed "app-" pc) kind pc <$> word pc
-  queues <- forM queueSites $ \pc -> QueueSite (prefixed "queue-" pc) pc <$> word pc
+newtype SiteMap = SiteMap (Map.Map Pc (PieceKind, Pc)) deriving (Eq, Show)
+
+application :: SiteMap -> [(PieceKind, Span)] -> RoleImages -> RoleImages -> Either Refusal Application
+application (SiteMap mapping) carriers retained composed = do
+  forM_ (Map.toList mapping) $ \(before,(holder,after)) -> do
+    beforeCarriers <- mappedInside retained holder before
+    afterCarriers <- mappedInside composed holder after
+    unless (any (`elem` afterCarriers) beforeCarriers) (refuse (SiteInCarrier holder after))
+  appSites <- forM (sortOn fst sites) $ \(pc, kind) -> do
+    (owned, before, after) <- words' pc
+    pure (ApplicationSite (prefixed "app-" pc) kind pc owned before after)
+  queues <- forM queueSites $ \pc -> do
+    (_, before, _) <- words' pc
+    pure (QueueSite (prefixed "queue-" pc) pc before)
   digests <- forM [minBound .. maxBound] $ \region -> do
     let (start, end) = codeRegionBounds region
         bytesIn images = maybe (refuse (OutsideImages (Pc start))) (pure . snd) (codeAt images start end)
     CodeDigest region <$> (sha256 <$> bytesIn retained) <*> (sha256 <$> bytesIn composed)
   pure (Application appSites queues digests)
   where
-    word pc@(Pc address) = do
+    mappedInside images holder pc@(Pc address) = do
+      (target,_) <- maybe (refuse (OutsideImages pc)) pure (codeAt images address (address+4))
+      let matched = [carrier | Just owner <- [target], (kind,carrier) <- carriers, kind == holder
+            , coveredBy (Span owner (Guest address) (Guest (address+4))) [carrier]]
+      unless (not (null matched)) (refuse (SiteInCarrier holder pc))
+      pure matched
+    words' pc@(Pc address) = do
       let end = address + 4
-          inImages images = maybe (refuse (OutsideImages pc)) pure (codeAt images address end)
-      (owner, canonicalBytes) <- inImages retained
-      forM_ owner $ \target -> forM_ carriers $ \(kind, carrier) ->
-        when (isJust (intersectSpan (Span target (Guest address) (Guest end)) carrier)) (refuse (SiteInCarrier kind pc))
-      (_, composedBytes) <- inImages composed
-      unless (composedBytes == canonicalBytes) (refuse (SiteWordDiffers pc))
-      pure (CodeWord (U.word32At composedBytes 0))
+          inImages images start = maybe (refuse (OutsideImages pc)) pure (codeAt images start (start+4))
+          ownedPc = maybe pc snd (Map.lookup pc mapping)
+          Pc owned = ownedPc
+          allowed (holder,_) = maybe False ((== holder) . fst) (Map.lookup pc mapping)
+      (owner, retainedBytes) <- inImages retained address
+      (_, composedBytes) <- inImages composed owned
+      let holders = [held | Just target <- [owner], held@(_, carrier) <- carriers, Just _ <- [intersectSpan (Span target (Guest address) (Guest end)) carrier]]
+      case filter (not . allowed) holders of
+        (holder, _) : _ -> refuse (SiteInCarrier holder pc)
+        [] -> when (null holders && composedBytes /= retainedBytes) (refuse (SiteWordDiffers pc))
+      pure (ownedPc, CodeWord (U.word32At retainedBytes 0), CodeWord (U.word32At composedBytes 0))
 
 applicationValue :: Application -> Value
 applicationValue (Application appSites queues digests) = object
-  [ "sites" .= [ object [ "label" .= labelOf name, "kind" .= siteKindName kind, "retained_pc" .= pc, "composed_pc" .= pc, "word" .= value ]
-               | ApplicationSite name kind (Pc pc) (CodeWord value) <- appSites ]
+  [ "sites" .= [ object [ "label" .= labelOf name, "kind" .= siteKindName kind, "retained_pc" .= pc, "composed_pc" .= owned
+                        , "retained_word" .= before, "composed_word" .= after ]
+               | ApplicationSite name kind (Pc pc) (Pc owned) (CodeWord before) (CodeWord after) <- appSites ]
   , "queue_sites" .= [object ["label" .= labelOf name, "pc" .= pc, "word" .= value] | QueueSite name (Pc pc) (CodeWord value) <- queues]
   , "task_layouts" .= map layoutValue taskLayouts
   , "code" .= [ object [ "label" .= codeRegionName region, "start" .= fst (codeRegionBounds region), "end" .= snd (codeRegionBounds region)

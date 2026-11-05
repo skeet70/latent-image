@@ -159,7 +159,7 @@ compose registry source declared = do
   forM_ (pairs declared) $ \(left, right) ->
     forM_ (Set.toList (Set.intersection (pieceAreas left) (pieceAreas right))) $ \area ->
       Left (SharedArea (pieceKind left) (pieceKind right) area)
-  let pieces = yieldBoundaries declared
+  pieces <- image5Reads (yieldBoundaries declared)
   forM_ pieces $ \piece -> forM_ (pieceEdits piece) $ \change ->
     unless (coveredBy (editSpan change) (pieceCarriers piece)) (Left (EditOutsideCarriers (pieceKind piece) (editSpan change)))
   forM_ (pairs pieces) $ \(left, right) ->
@@ -205,6 +205,24 @@ yieldBoundaries pieces = map trim pieces
       in piece {pieceCatalog = catalog
           { catalogBoundaries = filter (not . yielded) (catalogBoundaries catalog)
           , catalogReads = filter ((`notElem` dropped) . readBoundary) (catalogReads catalog) }}
+
+-- | Image5 edits require full-span per-role digest expectations.
+image5Reads :: [Piece] -> Either Refusal [Piece]
+image5Reads pieces
+  | not edited = pure pieces
+  | otherwise = mapM rereadPiece pieces
+  where
+    edited = any (any ((== Image5) . spanTarget . editSpan) . pieceEdits) pieces
+    rereadPiece piece
+      | pieceKind piece /= Image5Producer = pure piece
+      | otherwise = do
+          destination <- label Image5Producer "destination"
+          staging <- label Image5Producer "staging"
+          let reread row
+                | readLabel row == destination = row {readDiffers = Nothing, readExpect = Just (ExpectTarget Image5)}
+                | readLabel row == staging = row {readDiffers = Nothing, readExpect = Just ExpectRecord5Media}
+                | otherwise = row
+          pure piece {pieceCatalog = (pieceCatalog piece) {catalogReads = map reread (catalogReads (pieceCatalog piece))}}
 
 validateCatalogs :: [Piece] -> Either Refusal ()
 validateCatalogs pieces = do

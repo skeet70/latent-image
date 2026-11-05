@@ -2,7 +2,7 @@
 module Replacement.GeneralHeap.Artifact
   ( CanonicalSource, LinkedArtifact, StagedImages, StagedCandidate, ArtifactError (..)
   , canonicalSource, deriveArtifact, stageImages, image4Bytes, image5Bytes, stageCandidate
-  , candidateBytes, contractValue
+  , candidateBytes, contractValue, artifactFrames, artifactArena
   ) where
 
 import qualified A32 as A
@@ -92,6 +92,12 @@ deriveArtifact bytes symbolBytes = do
   require (S.null (S.intersection code literals) && not (S.member sentinel code)
     && all (`S.notMember` code) [metadata,metadata+4..metadata+52]) (MetadataRejected CarrierRejected)
   pure (LinkedArtifact bytes symbolBytes symbols frames geometry arena)
+
+artifactFrames :: LinkedArtifact -> [FrameProof]
+artifactFrames (LinkedArtifact _ _ _ frames _ _) = frames
+
+artifactArena :: LinkedArtifact -> ArenaLayout
+artifactArena (LinkedArtifact _ _ _ _ _ arena) = arena
 
 stageImages :: CanonicalSource -> LinkedArtifact -> Either ArtifactError StagedImages
 stageImages source@(CanonicalSource _ four five _) artifact@(LinkedArtifact linked _ _ _ _ _) = do

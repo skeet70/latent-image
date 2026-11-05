@@ -9,8 +9,10 @@ pub const PERIOD: u64 = 250_000;
 /// Task1's initialization chain.
 pub(crate) const CHAIN: [u32; 5] = [0xc22f60, 0xbfb124, 0xc22f70, 0xc22bd0, 0xc22f74];
 const QUEUE_WAIT: u8 = 0x12;
-pub(crate) const IMAGE5_PUBLICATION: u32 = 0x6a9840;
-const PLAIN_RETURN: u32 = 0x6a9934;
+/// task60's return from `bl 0x6a96c0`, the image5 producer; r0 is the producer's result.
+pub(crate) const IMAGE5_PUBLICATION: u32 = 0x73b4b0;
+/// task60's return from `bl 0x6a9844`, the plain producer.
+const PLAIN_RETURN: u32 = 0x73b558;
 const INITIALIZER_CALL: u32 = 0x69d2e0;
 const INITIALIZER_RETURN: u32 = 0x69d2e4;
 const INITIALIZER_ENTRY: u32 = 0xd985a4;
@@ -65,6 +67,9 @@ impl Facts {
         self.image5 && self.plain && self.chain == CHAIN.len() && self.initializer_returned && self.ed4acc && self.ed4afc
     }
 }
+
+/// Conjunct 5: no deferred UI work task1 would run on its next wake.
+pub fn ui_drained(sample: &ReadinessSample) -> bool { sample.ui.drained() }
 
 /// `RenderFacts::probe`'s `drained`, recomputed from the sample's views and graphics state, with task1 among the
 /// waiting render actors.
@@ -206,7 +211,7 @@ impl Search {
             return Err(SearchFault::Gap);
         }
         self.previous = Some((receive, now));
-        let ready = self.facts.complete() && render_ready(sample);
+        let ready = self.facts.complete() && render_ready(sample) && ui_drained(sample);
         match (self.candidate, sample.kind) {
             (Some(candidate), ReadinessKind::SettleEnd) => {
                 if now != candidate.start + self.readiness.settle.0 {

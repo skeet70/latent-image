@@ -25,7 +25,7 @@ import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.AttachState
 import Replacement.StartupArtifact.Contract
 import Replacement.StartupArtifact.Manifest
-import Replacement.StartupArtifact.Application (RoleImages (..), application, applicationValue, plainImage)
+import Replacement.StartupArtifact.Application (RoleImages (..), SiteMap (..), application, applicationValue, plainImage)
 import Replacement.StartupArtifact.Joins (JoinKind, registeredJoins)
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
@@ -300,7 +300,7 @@ main = do
       == Just (CatalogRefused FirstStage (OwnedBoundaryOutsideOwnedCode entryLabel)))
   ok "a read at a boundary that does not stop refuses"
     (refusal (composeWith [] [withCatalog first (catalogOf [boundary entryLabel EntryBoundary Core0 0x6000 False] [CodeSpan 0x6000 0x6010]
-      [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing])])
+      [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing Nothing])])
       == Just (CatalogRefused FirstStage (ReadBoundaryDoesNotStop entryLabel)))
   ok "TCM writes on a core without boundaries refuse"
     (refusal (composeWith [] [withCatalog first (Catalog [boundary entryLabel EntryBoundary Core0 0x6000 False] [CodeSpan 0x6000 0x6010]
@@ -317,13 +317,13 @@ main = do
       == Just (CatalogRefused PrimaryPublisher (OwnedCodeOverlap FirstStage)))
   let unretained = (boundary entryLabel EntryBoundary Core0 0x6000 True) {boundaryRetainedPc = Nothing}
   ok "a read at a boundary without a retained PC needs a difference"
-    (refusal (composeWith [] [withCatalog first (catalogOf [unretained] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing])])
+    (refusal (composeWith [] [withCatalog first (catalogOf [unretained] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing Nothing])])
       == Just (CatalogRefused FirstStage (ReadNeedsDiffers readLabel')))
   ok "a read at a boundary without a retained PC with a stated difference composes"
     (either (const False) (const True)
-      (composeWith [] [withCatalog first (catalogOf [unretained] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 (Just "owned only")])]))
+      (composeWith [] [withCatalog first (catalogOf [unretained] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 (Just "owned only") Nothing])]))
   let yielding = (boundary entryLabel EntryBoundary Core0 0x6000 True) {boundaryYieldsTo = Just PrimaryInitializerArea}
-      yieldingFirst = withCatalog first (catalogOf [yielding] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing])
+      yieldingFirst = withCatalog first (catalogOf [yielding] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing Nothing])
       kept composition = [ (map boundaryLabel (catalogBoundaries (pieceCatalog p)), map readLabel (catalogReads (pieceCatalog p)))
                          | p <- compositionPieces composition, pieceKind p == FirstStage ]
   ok "a boundary yielding to an area another piece claims is dropped with its reads"
@@ -381,6 +381,10 @@ main = do
   ok "a loader-startup piece parses its four linked images"
     (fmap manifestPieces (parseManifest (manifestWith "first-stage/entry" emptyRules ("[{\"kind\":\"loader-startup\",\"inputs\":" <> startupInputs <> "}]")))
       == Right [LoaderStartupPiece (LoaderStartupPaths (linkedPaths "a") (linkedPaths "b") (linkedPaths "d") (linkedPaths "i"))])
+  ok "a task-constructors piece parses its packed image and symbols"
+    (fmap manifestPieces (parseManifest (manifestWith "first-stage/entry" emptyRules
+      "[{\"kind\":\"task-constructors\",\"inputs\":{\"image\":\"ctors.bin\",\"symbols\":\"ctors.symbols\"}}]"))
+      == Right [SingleImagePiece TaskConstructors (LinkedPaths "ctors.bin" "ctors.symbols")])
   let unknownKey parsed = case refusal parsed of
         Just (ManifestRefused (ManifestUnknownKey _)) -> True
         _ -> False
@@ -395,8 +399,8 @@ main = do
     (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"first-stage\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\",\"dat\":\"c\"}}]"))
       == Just (ManifestRefused (ManifestUnknownKey "piece.inputs.dat")))
   ok "an unknown kind refuses"
-    (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"application-pump\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}}]"))
-      == Just (ManifestRefused (ManifestUnknownKind "application-pump")))
+    (refusal (parseManifest (manifestWith "first-stage/entry" emptyRules "[{\"kind\":\"unregistered-piece\",\"inputs\":{\"image\":\"a\",\"symbols\":\"b\"}}]"))
+      == Just (ManifestRefused (ManifestUnknownKind "unregistered-piece")))
   ok "another schema refuses"
     (refusal (parseManifest "{\"schema\":2,\"guard\":{\"attach\":\"first-stage/entry\"},\"pieces\":[]}") == Just (ManifestRefused ManifestSchemaUnsupported))
   ok "a manifest without attach_state refuses"
@@ -452,12 +456,12 @@ main = do
   let contractFirst = withCatalog first (Catalog
         [boundary entryLabel EntryBoundary Core0 0x6000 False, boundary handoffLabel SiteBoundary Core0 0x6008 True]
         [CodeSpan 0x6000 0x6010] (EnumeratedWrites [WriteRange (CorePhysicalTarget Core0) 0x4300 0x5280] (Premised (Premise "first-stage stores")))
-        [CatalogRead readLabel' handoffLabel 0x40020000 8 Nothing])
+        [CatalogRead readLabel' handoffLabel 0x40020000 8 Nothing Nothing])
       contractPublisher = withCatalog publisher (Catalog
         [boundary publisherEntry EntryBoundary Core0 0x40430 False, boundary returnLabel ReturnBoundary Core0 0x409e0 True]
         [CodeSpan 0x40430 0x40580]
         (EnumeratedWrites [WriteRange PhysicalTarget 0x4dae0 0x4f10c] (Premised (Premise "scratch")))
-        [CatalogRead tableLabel returnLabel 0x4004dae0 0x162c Nothing])
+        [CatalogRead tableLabel returnLabel 0x4004dae0 0x162c Nothing Nothing])
   contracted <- either (fail . show) pure (composeWith [observed] [contractFirst, contractPublisher])
   contractDat <- either (fail . show) pure (preTableDat source contracted)
   contractTargets <- either (fail . show) pure (verifyComposed source contracted contractDat fixtureImage4 fixtureImage5)
@@ -697,7 +701,7 @@ main = do
   let patched base changes = either (error . show) id (applyTargetEdits [wordEdit target address value | (target, address, value) <- changes] base)
       stockImages = patched targets [(Image5, 0xbfbd20, 0xe92d4010), (Image4, 0x725214, 0xe59f0004)]
       role targets' = RoleImages targets' plain
-      appOf carriers' composedTargets = application carriers' (role stockImages) (role composedTargets)
+      appOf carriers' composedTargets = application (SiteMap M.empty) carriers' (role stockImages) (role composedTargets)
       rowsOf key name value = [row | J.Array rows <- [member key value], row <- V.toList rows, member "label" row == J.String name]
       sectionOf carriers' composedTargets = applicationValue <$> appOf carriers' composedTargets
       image5Slice :: TargetBytes -> Word32 -> Word32 -> B.ByteString
@@ -706,21 +710,51 @@ main = do
       number = J.toJSON
   case sectionOf [] stockImages of
     Right value -> do
-      ok "a site word is the image5, image4 or plain-window word at its PC"
-        (map (\row -> (member "kind" row, member "retained_pc" row, member "composed_pc" row, member "word" row)) (rowsOf "sites" "app-bfbd20" value)
-            == [(J.String "pump", number 0xbfbd20, number 0xbfbd20, number 0xe92d4010)]
-          && map (member "word") (rowsOf "sites" "app-725214" value) == [number 0xe59f0004]
-          && map (member "word") (rowsOf "sites" "app-1109130" value) == [number (U.word32At plainBytes 0x9130)]
+      ok "a site's words are the image5, image4 or plain-window word at its PC in each role"
+        (map (\row -> (member "kind" row, member "retained_pc" row, member "composed_pc" row, member "retained_word" row, member "composed_word" row))
+            (rowsOf "sites" "app-bfbd20" value)
+            == [(J.String "pump", number 0xbfbd20, number 0xbfbd20, number 0xe92d4010, number 0xe92d4010)]
+          && map (member "composed_word") (rowsOf "sites" "app-725214" value) == [number 0xe59f0004]
+          && map (member "retained_word") (rowsOf "sites" "app-1109130" value) == [number (U.word32At plainBytes 0x9130)]
           && map (member "word") (rowsOf "queue_sites" "queue-725318" value) == [number 0x5a5a5a5a])
       ok "the section lists every pump site and the publication and initializer sites"
         (case member "sites" value of
-          J.Array rows -> V.length rows == 57 && all (\name -> length (rowsOf "sites" name value) == 1) ["app-6a9934", "app-d985d8", "app-69d2e0", "app-110f9d8"]
+          J.Array rows -> V.length rows == 56 && all (\name -> length (rowsOf "sites" name value) == 1) ["app-73b4b0", "app-73b558", "app-d985d8", "app-69d2e0", "app-110f9d8"]
           _ -> False)
     Left problem -> fail (show problem)
   ok "a site inside a piece's carrier refuses"
     (refusal (appOf [(LoaderStartup, at Image5 0xbfbd00 0xbfbd24)] stockImages) == Just (ApplicationRefused (SiteInCarrier LoaderStartup (Pc 0xbfbd20))))
   ok "a carrier ending at a site does not refuse"
     (either (const False) (const True) (appOf [(LoaderStartup, at Image5 0xbfbd00 0xbfbd20)] stockImages))
+  let ownedPump = patched stockImages [(Image5, 0xbfbd20, 0xe92d4c10)]
+      pumpCarrier = at Image5 0xbfbd20 0xbfbd40
+  case applicationValue <$> application (SiteMap (M.fromList [(Pc pc,(ApplicationPump,Pc pc)) | pc <- [0xbfbd20,0xbfbd24..0xbfbd3c]])) [(ApplicationPump,pumpCarrier)] (role stockImages) (role ownedPump) of
+    Right value -> ok "a pump site inside an application-pump carrier carries each role's word"
+      (map (\row -> (member "retained_word" row, member "composed_word" row)) (rowsOf "sites" "app-bfbd20" value)
+        == [(number 0xe92d4010, number 0xe92d4c10)])
+    Left problem -> fail (show problem)
+  let mapped before owner after = application (SiteMap (M.singleton (Pc before) (owner,Pc after)))
+        [(ApplicationPump,pumpCarrier)] (role stockImages) (role ownedPump)
+  ok "a mapped retained PC outside its owner's carrier refuses"
+    (refusal (mapped 0xbfb1b8 ApplicationPump 0xbfbd20) == Just (ApplicationRefused (SiteInCarrier ApplicationPump (Pc 0xbfb1b8))))
+  ok "a mapped composed PC outside its owner's carrier refuses"
+    (refusal (mapped 0xbfbd20 ApplicationPump 0xbfb1b8) == Just (ApplicationRefused (SiteInCarrier ApplicationPump (Pc 0xbfb1b8))))
+  ok "a map naming a different carrier owner refuses"
+    (refusal (mapped 0xbfbd20 Image5Initializer 0xbfbd20) == Just (ApplicationRefused (SiteInCarrier Image5Initializer (Pc 0xbfbd20))))
+  let initializerSites = SiteMap (M.fromList
+        [(Pc 0xd985a4,(Image5Initializer,Pc 0xd985a4)),(Pc 0xd985c8,(Image5Initializer,Pc 0xd98600)),(Pc 0xd985d8,(Image5Initializer,Pc 0xd98604))])
+      initializerImages = patched stockImages [(Image5,0xd98600,0xe3a00001),(Image5,0xd98604,0xe3a00002)]
+  case applicationValue <$> application initializerSites [(Image5Initializer,at Image5 0xd9856c 0xd986b0)] (role stockImages) (role initializerImages) of
+    Right value -> ok "initializer maps select composed PCs and words independently of retained PCs"
+      (map (\row -> (member "retained_pc" row,member "composed_pc" row,member "composed_word" row)) (rowsOf "sites" "app-d985d8" value)
+        == [(number 0xd985d8,number 0xd98604,number 0xe3a00002)])
+    Left problem -> fail (show problem)
+  ok "a pump site inside another piece's carrier refuses"
+    (refusal (appOf [(Image5Producer, pumpCarrier)] ownedPump) == Just (ApplicationRefused (SiteInCarrier Image5Producer (Pc 0xbfbd20))))
+  ok "a non-pump site inside an application-pump carrier refuses"
+    (refusal (appOf [(ApplicationPump, at Image5 0xbfb1b8 0xbfb1bc)] stockImages) == Just (ApplicationRefused (SiteInCarrier ApplicationPump (Pc 0xbfb1b8))))
+  ok "a changed pump word outside every carrier refuses"
+    (refusal (appOf [] ownedPump) == Just (ApplicationRefused (SiteWordDiffers (Pc 0xbfbd20))))
   ok "a composed site word other than the canonical word refuses"
     (refusal (appOf [] (patched stockImages [(Image4, 0x725214, 0)])) == Just (ApplicationRefused (SiteWordDiffers (Pc 0x725214))))
   let changed = patched stockImages [(Image5, 0xc22f78, 0)]
@@ -742,6 +776,32 @@ main = do
   ok "a contract with the section is schema 5 and otherwise unchanged"
     (member "schema" withSection == J.toJSON (5 :: Int) && member "application" withSection == applicationValue sectioned
       && without "schema" (without "application" withSection) == without "schema" contractJson)
+
+  -- Image5 producer reads under an image5 edit.
+  producerReturn <- labelled Image5Producer "caller-return"
+  destinationLabel <- labelled Image5Producer "destination"
+  stagingLabel <- labelled Image5Producer "staging"
+  let producerPiece = (piece Image5Producer [Image5ProducerArea] [] [] [])
+        { pieceCatalog = Catalog [boundary producerReturn ReturnBoundary Core0 0x73b4b0 True] [] (EnumeratedWrites [] Proved)
+            [ CatalogRead destinationLabel producerReturn 0xbf1a00 0x4f1e60 Nothing Nothing
+            , CatalogRead stagingLabel producerReturn 0x43e40000 0x2e0000 Nothing Nothing ] }
+      pumpPiece = piece ApplicationPump [ApplicationPumpArea] [at Image5 0xbfbd20 0xbfbd40] [flip' targets (at Image5 0xbfbd20 0xbfbd22)] []
+      producerReads composition = [ (labelText (readLabel row), readAddress row, readLength row, readExpect row)
+                                  | owner <- compositionPieces composition, pieceKind owner == Image5Producer, row <- catalogReads (pieceCatalog owner) ]
+  ok "an image5 edit keeps full producer reads with per-role expectations"
+    (fmap producerReads (composeWith [] [producerPiece, pumpPiece]) == Right
+      [ ("image5-producer/destination", 0xbf1a00, 0x4f1e60, Just (ExpectTarget Image5))
+      , ("image5-producer/staging", 0x43e40000, 0x2e0000, Just ExpectRecord5Media) ])
+  ok "without an image5 edit the producer's reads are unchanged"
+    (fmap producerReads (composeWith [] [producerPiece, first {pieceFootprint = []}]) == Right
+      [ ("image5-producer/destination", 0xbf1a00, 0x4f1e60, Nothing), ("image5-producer/staging", 0x43e40000, 0x2e0000, Nothing) ])
+  let initializerCarrier = at Image5 0xd9856c 0xd986b0
+      initializerPiece = piece Image5Initializer [Image5InitializerArea] [initializerCarrier]
+        [flip' targets (at Image5 0xd9856c 0xd98570)] []
+  ok "two image5 carriers keep full producer reads with per-role expectations"
+    (fmap producerReads (composeWith [] [producerPiece, pumpPiece, initializerPiece]) == Right
+      [ ("image5-producer/destination", 0xbf1a00, 0x4f1e60, Just (ExpectTarget Image5))
+      , ("image5-producer/staging", 0x43e40000, 0x2e0000, Just ExpectRecord5Media) ])
 
   passed <- readIORef counter
   putStrLn ("startup-artifact-tests: " ++ show passed ++ " checks passed")

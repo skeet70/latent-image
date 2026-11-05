@@ -1,6 +1,6 @@
 //! Strict parse of `composed-contract.json` (schema 4, or 5 with the `application` section) and the observation plan
 //! derived from it.
-use crate::attach_state::{AttachRuleRefusal, AttachRules, RawAttachRules, RuleContext, Span};
+use crate::attach_state::{AttachRuleRefusal, AttachRules, CarrierRule, ComposedWrites, RawAttachRules, RuleContext, Span};
 use fujimod_emulator::board::observation::{
     CompositeGuardConfig, DeclaredMutation, DecoderChoice, DecoderIndex, DestinationPolicy, GuardCore, GuardRange,
     GuardSpan, GuardTarget, MAX_GUARD_DECLARED_MUTATIONS, MAX_GUARD_PARTITIONS, MAX_GUARD_PC_SPANS, MAX_GUARD_RANGES,
@@ -92,6 +92,12 @@ macro_rules! kebab_name {
 kebab_name!(PieceKind, "piece kind");
 kebab_name!(AreaName, "area");
 kebab_name!(JoinKind, "join kind");
+
+impl PieceKind {
+    /// The piece whose owned code may hold the pump sites.
+    pub fn application_pump() -> Self { Self("application-pump".into()) }
+    pub fn image5_initializer() -> Self { Self("image5-initializer".into()) }
+}
 
 macro_rules! text {
     ($name:ident, $what:literal) => {
@@ -557,6 +563,36 @@ pub struct Read {
     pub address: u32,
     pub length: u32,
     pub differs: Option<Reason>,
+    /// The digest each role's capture must have; such a read is stored as its digest and not compared across roles.
+    #[serde(default)]
+    pub expect: Option<Expectation>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExpectationKind {
+    /// A decoded target of the role's DAT.
+    Target,
+    /// The NAND bytes of the role's record-5 media window.
+    Record5Media,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Expectation {
+    pub kind: ExpectationKind,
+    pub target: Option<String>,
+    pub retained_sha256: Sha256,
+    pub composed_sha256: Sha256,
+}
+
+impl Expectation {
+    pub fn of(&self, role: Role) -> &Sha256 {
+        match role {
+            Role::Retained => &self.retained_sha256,
+            Role::Composed => &self.composed_sha256,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -625,6 +661,8 @@ pub struct Targets {
 pub struct Identities {
     pub dat_sha256: Sha256,
     pub targets: Targets,
+    #[serde(default)]
+    pub record5_media_sha256: Option<Sha256>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -862,6 +900,10 @@ pub enum CatalogRefusal {
     OwnedCodeOverlap { first: PieceKind, second: PieceKind },
     BoundaryBound { role: Role, core: Core, count: usize },
     ReadNotRetained(Label),
+    /// A read both states a difference and an expectation.
+    ReadExpectation(Label),
+    /// A carrier with a write rule was merged with another carrier into one watch class.
+    CarrierRuleClass { start: u64, end: u64 },
     IdenticalDats,
     Application(ApplicationProblem),
     PoolAllocation(PoolAllocationProblem),
@@ -872,6 +914,133 @@ impl std::fmt::Display for CatalogRefusal {
 }
 
 impl std::error::Error for CatalogRefusal {}
+
+/// A ledger record id such as `E-STARTUP-J1-COMPOSED-NATURAL-150`.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct EvidenceId(String);
+
+impl TryFrom<String> for EvidenceId {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let tail = value.strip_prefix("E-").unwrap_or_default();
+        if !tail.is_empty() && !tail.ends_with('-') && tail.bytes().all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'-') {
+            Ok(Self(value))
+        } else {
+            Err("evidence id is not E- followed by upper-case letters, digits and hyphens".into())
+        }
+    }
+}
+
+impl From<EvidenceId> for String {
+    fn from(value: EvidenceId) -> Self { value.0 }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawQualifications {
+    schema: u32,
+    contracts: Vec<QualifiedContract>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QualifiedContract {
+    contract: Sha256,
+    evidence: EvidenceId,
+}
+
+/// Composed contracts whose natural pair is recorded as equal, each with that record.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Qualifications(BTreeMap<Sha256, EvidenceId>);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum QualificationsRefusal {
+    /// JSON that does not have the schema-1 shape, including unknown keys and invalid scalars.
+    Shape(String),
+    Schema(u32),
+    DuplicateContract(Sha256),
+    HostComposedListed(Sha256),
+}
+
+impl std::fmt::Display for QualificationsRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "qualifications refused: {self:?}") }
+}
+
+impl std::error::Error for QualificationsRefusal {}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum ContractState {
+    HostComposed,
+    Compared { evidence: EvidenceId },
+    Pending { awaiting: Vec<JoinKind> },
+}
+
+impl Qualifications {
+    pub fn parse(bytes: &[u8]) -> Result<Self, QualificationsRefusal> {
+        let raw: RawQualifications = serde_json::from_slice(bytes).map_err(|error| QualificationsRefusal::Shape(error.to_string()))?;
+        if raw.schema != 1 {
+            return Err(QualificationsRefusal::Schema(raw.schema));
+        }
+        let mut rows = BTreeMap::new();
+        for row in raw.contracts {
+            match rows.entry(row.contract) {
+                std::collections::btree_map::Entry::Occupied(entry) => return Err(QualificationsRefusal::DuplicateContract(entry.key().clone())),
+                std::collections::btree_map::Entry::Vacant(entry) => { entry.insert(row.evidence); }
+            }
+        }
+        Ok(Self(rows))
+    }
+
+    pub fn state(&self, contract_sha256: &Sha256, contract: &Contract) -> Result<ContractState, QualificationsRefusal> {
+        match (contract.qualification, self.0.get(contract_sha256)) {
+            (Qualification::HostComposed, Some(_)) => Err(QualificationsRefusal::HostComposedListed(contract_sha256.clone())),
+            (Qualification::HostComposed, None) => Ok(ContractState::HostComposed),
+            (Qualification::Pending, Some(evidence)) => Ok(ContractState::Compared { evidence: evidence.clone() }),
+            (Qualification::Pending, None) => Ok(ContractState::Pending { awaiting: contract.pending_joins.clone() }),
+        }
+    }
+}
+
+/// The output of `composed-startup --check-contract`.
+#[derive(Clone, Debug, Serialize)]
+pub struct CheckedContract {
+    pub contract_sha256: Sha256,
+    pub plan: Plan,
+    /// Present only when qualifications were supplied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<ContractState>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CheckRefusal {
+    Contract(CatalogRefusal),
+    Qualifications(QualificationsRefusal),
+}
+
+impl std::fmt::Display for CheckRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Contract(refusal) => write!(f, "{refusal}"),
+            Self::Qualifications(refusal) => write!(f, "{refusal}"),
+        }
+    }
+}
+
+impl std::error::Error for CheckRefusal {}
+
+impl CheckedContract {
+    pub fn check(contract_bytes: &[u8], qualifications: Option<&[u8]>) -> Result<Self, CheckRefusal> {
+        let contract = Contract::parse(contract_bytes).map_err(CheckRefusal::Contract)?;
+        let contract_sha256 = Sha256::of(contract_bytes);
+        let state = qualifications
+            .map(|bytes| Qualifications::parse(bytes)?.state(&contract_sha256, &contract))
+            .transpose()
+            .map_err(CheckRefusal::Qualifications)?;
+        Ok(Self { plan: contract.plan(), contract_sha256, state })
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Contract {
@@ -1231,6 +1400,9 @@ impl Contract {
             if boundary.retained_pc.is_none() && read.differs.is_none() {
                 return Err(CatalogRefusal::ReadNotRetained(read.label.clone()));
             }
+            if read.expect.is_some() && read.differs.is_some() {
+                return Err(CatalogRefusal::ReadExpectation(read.label.clone()));
+            }
         }
         if read_bytes > READ_BYTE_LIMIT {
             return Err(CatalogRefusal::ReadBudget(read_bytes));
@@ -1257,7 +1429,7 @@ impl Contract {
             .map(|range| WatchRange { start: range.span.start, end: range.span.end, kinds: WatchKinds::WRITES }).collect();
         let application = match (raw.schema, raw.application) {
             (Schema::Four, None) => None,
-            (Schema::Five, Some(raw)) => Some(application(raw, &pieces, &boundaries).map_err(CatalogRefusal::Application)?),
+            (Schema::Five, Some(raw)) => Some(application(raw, &pieces).map_err(CatalogRefusal::Application)?),
             _ => return Err(CatalogRefusal::Application(ApplicationProblem::Section)),
         };
         let application_classes = application.as_ref().map_or(0, |application| application.code.len());
@@ -1267,6 +1439,12 @@ impl Contract {
         let cores = boundaries.values().flat_map(|boundary| boundary.cores.iter()).collect();
         let context = RuleContext { attach_core, cores, boundaries: &boundaries, carriers: carrier_spans };
         let attach_rules = AttachRules::parse(raw.guard.attach_state, &context).map_err(CatalogRefusal::AttachState)?;
+        for rule in &attach_rules.carrier_rules {
+            let ruled = rule.composed != ComposedWrites::Compared || !rule.retained_excluded.is_empty();
+            if ruled && !classes.iter().any(|class| (class.start, class.end) == (rule.physical.start, rule.physical.end)) {
+                return Err(CatalogRefusal::CarrierRuleClass { start: rule.physical.start, end: rule.physical.end });
+            }
+        }
         Ok(Self {
             qualification: raw.qualification,
             pending_joins: raw.pending_joins,
@@ -1337,6 +1515,11 @@ impl Contract {
 
     /// Write classes over every owned code carrier, in physical addresses.
     pub fn watch_classes(&self) -> Vec<WatchRange> { self.classes.clone() }
+
+    /// The carrier rule of the watch class at exactly the span.
+    pub fn carrier_rule(&self, start: u64, end: u64) -> Option<&CarrierRule> {
+        self.attach_rules.carrier_rules.iter().find(|rule| (rule.physical.start, rule.physical.end) == (start, end))
+    }
 
     /// Every piece's owned code PC spans in both spellings.
     pub fn owned_code_spellings(&self) -> Vec<(u64, u64)> {
@@ -1526,7 +1709,7 @@ impl SiteKind {
 }
 
 /// Every site a schema-5 contract lists, by stock PC.
-pub const APPLICATION_SITES: [(u32, SiteKind); 57] = {
+pub const APPLICATION_SITES: [(u32, SiteKind); 56] = {
     use SiteKind::{Adapter, HookTarget, Initializer, Publication, Pump, Shared, Task1, Uilib};
     [
         (0xc22f60, Task1), (0xc22f64, Task1), (0xc22f6c, Task1), (0xc22f70, Task1), (0xc22f74, Task1), (0xc22f84, Task1),
@@ -1541,7 +1724,7 @@ pub const APPLICATION_SITES: [(u32, SiteKind); 57] = {
         (0xdb51d0, Adapter),
         (0x725214, Shared),
         (0x11090a4, Uilib), (0x1109130, Uilib), (0x1108a2c, Uilib), (0x110f9d8, Uilib),
-        (0x6a9840, Publication), (0x6a9844, Publication), (0x6a9934, Publication),
+        (0x73b4b0, Publication), (0x73b558, Publication),
         (0x69d2e0, Initializer), (0x69d2e4, Initializer), (0xd985a4, Initializer), (0xd985c8, Initializer),
         (0xd985d8, Initializer),
     ]
@@ -1557,7 +1740,8 @@ pub struct ApplicationSite {
     pub kind: SiteKind,
     pub retained_pc: Pc,
     pub composed_pc: Pc,
-    pub word: CodeWord,
+    pub retained_word: CodeWord,
+    pub composed_word: CodeWord,
 }
 
 impl ApplicationSite {
@@ -1565,6 +1749,12 @@ impl ApplicationSite {
         match role {
             Role::Retained => self.retained_pc,
             Role::Composed => self.composed_pc,
+        }
+    }
+    pub fn word(&self, role: Role) -> CodeWord {
+        match role {
+            Role::Retained => self.retained_word,
+            Role::Composed => self.composed_word,
         }
     }
 }
@@ -1721,14 +1911,13 @@ pub enum ApplicationProblem {
     Sites,
     QueueLabel(Pc),
     QueueSites,
-    /// A composed-role site inside a piece's owned code.
+    /// A composed-role site inside owned code without its kind's piece exemption.
     SiteInPiece(Pc),
-    /// A site at a contract boundary's PC in the same role.
-    SiteCollision(Pc),
     TaskLayouts,
     CodeRanges,
     Readiness,
-    /// The pump's words do not decode to three calls of the hook targets and a return.
+    /// A role's pump words do not decode to three calls of the hook targets and a return, or the roles' decodings
+    /// differ.
     Pump,
 }
 
@@ -1739,29 +1928,29 @@ fn branch_target(pc: u32, word: u32) -> Option<u32> {
 /// `bx lr` or `pop {..., pc}`.
 fn returns(word: u32) -> bool { word == 0xe12f_ff1e || (word & 0xffff_0000 == 0xe8bd_0000 && word & (1 << 15) != 0) }
 
-fn pump_profile(sites: &[ApplicationSite]) -> Option<PumpProfile> {
+fn pump_profile(sites: &[ApplicationSite], role: Role) -> Option<PumpProfile> {
     let mut pump: Vec<&ApplicationSite> = sites.iter().filter(|site| site.kind == SiteKind::Pump).collect();
-    pump.sort_by_key(|site| site.retained_pc);
+    pump.sort_by_key(|site| site.pc(role));
     let mut calls = Vec::with_capacity(3);
     let mut returned = None;
     for site in &pump {
-        let pc = site.retained_pc.0;
-        if let Some(target) = branch_target(pc, site.word.0) {
-            calls.push(HookCall { site: site.retained_pc, target: Pc(target), continuation: Pc(pc + 4) });
-        } else if returns(site.word.0) {
-            returned = Some(site.retained_pc);
+        let pc = site.pc(role);
+        if let Some(target) = branch_target(pc.0, site.word(role).0) {
+            calls.push(HookCall { site: pc, target: Pc(target), continuation: Pc(pc.0 + 4) });
+        } else if returns(site.word(role).0) {
+            returned = Some(pc);
             break;
         }
     }
-    let hooks: BTreeSet<Pc> = sites.iter().filter(|site| site.kind == SiteKind::HookTarget).map(|site| site.retained_pc).collect();
+    let hooks: BTreeSet<Pc> = sites.iter().filter(|site| site.kind == SiteKind::HookTarget).map(|site| site.pc(role)).collect();
     let calls: [HookCall; 3] = calls.try_into().ok()?;
     let targets: BTreeSet<Pc> = calls.iter().map(|call| call.target).collect();
-    let continued = calls.iter().all(|call| pump.iter().any(|site| site.retained_pc == call.continuation));
-    let entry = pump.first()?.retained_pc;
+    let continued = calls.iter().all(|call| pump.iter().any(|site| site.pc(role) == call.continuation));
+    let entry = pump.first()?.pc(role);
     (targets == hooks && continued).then_some(PumpProfile { entry, calls, returned: returned? })
 }
 
-fn application(raw: RawApplication, pieces: &[Piece], boundaries: &BTreeMap<Label, Boundary>) -> Result<Application, ApplicationProblem> {
+fn application(raw: RawApplication, pieces: &[Piece]) -> Result<Application, ApplicationProblem> {
     if let Some(site) = raw.sites.iter().find(|site| site.label != SiteLabel::of(site.retained_pc)) {
         return Err(ApplicationProblem::SiteLabel(site.retained_pc));
     }
@@ -1777,17 +1966,20 @@ fn application(raw: RawApplication, pieces: &[Piece], boundaries: &BTreeMap<Labe
     if queued.len() != raw.queue_sites.len() || queued != QUEUE_SITES.into_iter().collect() {
         return Err(ApplicationProblem::QueueSites);
     }
-    let owned: Vec<Interval> = pieces.iter().flat_map(|piece| &piece.catalog.owned_code).map(|span| span.physical().unwrap_or(*span)).collect();
-    let composed = raw.sites.iter().map(|site| site.composed_pc).chain(raw.queue_sites.iter().map(|site| site.pc));
-    if let Some(pc) = composed.into_iter().find(|pc| owned.iter().any(|span| span.holds(u64::from(physical_address(pc.0))))) {
+    let owned: Vec<(Interval, &PieceKind)> = pieces.iter()
+        .flat_map(|piece| piece.catalog.owned_code.iter().map(move |span| (span.physical().unwrap_or(*span), &piece.kind)))
+        .collect();
+    let owner = |pc: Pc| owned.iter().find(|(span, _)| span.holds(u64::from(physical_address(pc.0)))).map(|&(_, kind)| kind);
+    let pump_piece = PieceKind::application_pump();
+    let initializer_piece = PieceKind::image5_initializer();
+    let exempt = |site: &ApplicationSite| match site.kind {
+        SiteKind::Pump => owner(site.composed_pc) == Some(&pump_piece),
+        SiteKind::Initializer => owner(site.composed_pc) == Some(&initializer_piece),
+        _ => false,
+    };
+    let sites = raw.sites.iter().filter(|site| !exempt(site)).map(|site| site.composed_pc);
+    if let Some(pc) = sites.chain(raw.queue_sites.iter().map(|site| site.pc)).find(|&pc| owner(pc).is_some()) {
         return Err(ApplicationProblem::SiteInPiece(pc));
-    }
-    for role in [Role::Retained, Role::Composed] {
-        let armed: BTreeSet<u32> = boundaries.values().filter_map(|boundary| boundary.pc(role)).map(|pc| physical_address(pc.0)).collect();
-        let mut sites = raw.sites.iter().map(|site| site.pc(role)).chain(raw.queue_sites.iter().map(|site| site.pc));
-        if let Some(pc) = sites.find(|pc| armed.contains(&physical_address(pc.0))) {
-            return Err(ApplicationProblem::SiteCollision(pc));
-        }
     }
     let task_layouts = match raw.task_layouts[..] {
         [a, b] if a.domain == Domain::A && b.domain == Domain::B => [a, b],
@@ -1806,6 +1998,9 @@ fn application(raw: RawApplication, pieces: &[Piece], boundaries: &BTreeMap<Labe
     if raw.readiness.settle.0 == 0 || raw.readiness.settle >= raw.readiness.end {
         return Err(ApplicationProblem::Readiness);
     }
-    let pump = pump_profile(&raw.sites).ok_or(ApplicationProblem::Pump)?;
+    let pump = match (pump_profile(&raw.sites, Role::Retained), pump_profile(&raw.sites, Role::Composed)) {
+        (Some(retained), Some(composed)) if retained == composed => retained,
+        _ => return Err(ApplicationProblem::Pump),
+    };
     Ok(Application { sites: raw.sites, queue_sites: raw.queue_sites, task_layouts, code: raw.code, readiness: raw.readiness, pump })
 }

@@ -3,8 +3,9 @@
 
 -- | The owned menu engine's guest pair checks over RAM-push e2e observations
 -- (`e2e-observation-N.json`): each role's events are classified at `0xd4dd2c`, the owned role
--- fails on an entry to `0xbfa234` from the fallback call for an owned class or on the adapter's
--- guard trap, and the two roles must read the same engine state and post the same `0x1d` events.
+-- fails on an entry to `0xbfa234` from the fallback call or to `0xbfad04` for an owned class, or
+-- on the adapter's guard trap, and the two roles must read the same engine state and post the
+-- same `0x1d` events.
 module Replacement.ModalRuntime.MenuEnginePair
   ( Role (..)
   , Hit (..)
@@ -187,11 +188,16 @@ data RoleSummary = RoleSummary
   }
   deriving (Eq, Show)
 
-data Walk = Walk {walkLatest :: M.Map Int EventClass, walkSummary :: RoleSummary, walkFailures :: [String]}
+-- | The latest stage entry's class on a core, and whether `0xbfa234` has since been entered as the
+-- `kind_switch` service.
+data Latest = Latest {latestClass :: EventClass, latestServiceSwitch :: Bool}
 
--- | Classifies each stage entry from its registers and its block read; for the owned role, an
--- entry to `0xbfa234` returning to 'fallbackReturn' while the engine is published fails when the
--- latest stage entry on its core has an owned class, and any guard-trap entry fails.
+data Walk = Walk {walkLatest :: M.Map Int Latest, walkSummary :: RoleSummary, walkFailures :: [String]}
+
+-- | Classifies each stage entry from its registers and its block read; for the owned role while the
+-- engine is published, an entry to `0xbfa234` returning to 'fallbackReturn' fails when the latest
+-- stage entry on its core has an owned class, and so does an entry to `0xbfad04` unless a
+-- `kind_switch` service entry follows that stage entry on the core; any guard-trap entry fails.
 checkRole :: MenuTree -> Role -> [Observation] -> Either String RoleSummary
 checkRole tree role observations = do
   walk <- foldM step (Walk M.empty (RoleSummary M.empty 0 0) [])
@@ -209,14 +215,14 @@ checkRole tree role observations = do
             class_ = deriveClass tree block (StageEvent kind node ident extra)
             summary = walkSummary walk
         pure walk
-          { walkLatest = M.insert (hitCore hit) class_ (walkLatest walk)
+          { walkLatest = M.insert (hitCore hit) (Latest class_ False) (walkLatest walk)
           , walkSummary = summary
               { summaryClasses = M.insertWith (+) (Coverage residency (isOwned class_) (show class_)) 1 (summaryClasses summary)
               , summaryEvents = summaryEvents summary + 1 } }
     | hitSite hit == KindSwitch && hitLr hit == Just fallbackReturn = do
         let summary = walkSummary walk
             counted = walk {walkSummary = summary {summaryFallbackEntries = summaryFallbackEntries summary + 1}}
-        pure $ case (role, residency, M.lookup (hitCore hit) (walkLatest walk)) of
+        pure $ case (role, residency, latestClass <$> M.lookup (hitCore hit) (walkLatest walk)) of
           (OwnedRole, EngineResident, Just class_) | isOwned class_ ->
             counted {walkFailures = ("fallback entry for owned class " ++ show class_ ++ " in " ++ T.unpack phase) : walkFailures walk}
           (OwnedRole, EngineResident, Nothing) ->
@@ -224,6 +230,12 @@ checkRole tree role observations = do
           _ -> counted
     | hitSite hit == KindSwitch && hitLr hit == Nothing =
         Left ("kind-switch entry without lr in " ++ T.unpack phase)
+    | hitSite hit == KindSwitch =
+        pure walk {walkLatest = M.adjust (\latest -> latest {latestServiceSwitch = True}) (hitCore hit) (walkLatest walk)}
+    | hitSite hit == Seek = pure $ case (role, residency, M.lookup (hitCore hit) (walkLatest walk)) of
+        (OwnedRole, EngineResident, Just (Latest class_ False)) | isOwned class_ ->
+          walk {walkFailures = ("seek entry for owned class " ++ show class_ ++ " in " ++ T.unpack phase) : walkFailures walk}
+        _ -> walk
     | hitSite hit == GuardTrap =
         pure walk {walkFailures = ("adapter guard trap entered in " ++ T.unpack phase) : walkFailures walk}
     | otherwise = pure walk

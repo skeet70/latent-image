@@ -52,9 +52,10 @@ def package_route($route): if $route[1] == ["up", [1, 5, 32]] then [$route[0], [
                     segment("owned-picker-keys"; "owned-picker-keys"; $c.from_picker) ]
              else [ segment("owned-picker-keys"; "owned-picker-keys"; $c.keys) ]
              end)
-          + [ {"phase": "picker-unload-close", "steps": steps([["back", $page]])} ]),
+          + [ segment("close-menu"; "close-menu"; [["back", $page]]) ]),
         "after_unload": [
-          (segment("unloaded-picker"; "unloaded-picker"; [["ok", $page]] + (if $c.setting == 214 then $c.from_picker_after else $c.after end)) + {"observe": true, "read_expectations": [{"read": "dispatcher-first-word", "hex": "f04f2de9"}]})
+          segment("reopen-menu"; "reopen-menu"; [["ok", $page]]),
+          (segment("unloaded-picker"; "unloaded-picker"; (if $c.setting == 214 then $c.from_picker_after else $c.after end)) + {"observe": true, "read_expectations": [{"read": "dispatcher-first-word", "hex": "f04f2de9"}]})
         ]
       } } ]
 

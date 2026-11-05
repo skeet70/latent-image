@@ -5,6 +5,8 @@
 -- @{"image":PATH,"symbols":PATH}@, or for @loader-startup@ one such object under each of
 -- @loader_a@, @loader_b@, @dispatcher@ and @installer@. @application@ is optional and
 -- asks for the contract's application section. Unknown keys refuse.
+-- @task-constructors@ uses one packed image; its symbols map the thirteen
+-- contiguous load extents to their stock execution addresses.
 module Replacement.StartupArtifact.Manifest
   ( Manifest (..), ManifestPiece (..), LinkedPaths (..), LoaderStartupPaths (..), ApplicationPhase (..), manifestPieceKind, parseManifest
   ) where
