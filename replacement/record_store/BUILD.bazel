@@ -1,0 +1,59 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+package(default_visibility = ["//visibility:public"])
+
+haskell_library(
+    name = "oracle-lib",
+    srcs = [
+        "Replacement/RecordStore/Arm.hs",
+        "Replacement/RecordStore/Cases.hs",
+        "Replacement/RecordStore/Hardware.hs",
+        "Replacement/RecordStore/Harness.hs",
+        "Replacement/RecordStore/Model.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
+)
+
+haskell_binary(
+    name = "oracle-cases",
+    srcs = ["OracleMain.hs"],
+    main_file = "OracleMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":oracle-lib",
+        "//emulation:case-sha256",
+        "//emulation:native-observation",
+        "//emulation:native-adapter",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:deepseq",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+haskell_test(
+    name = "oracle-tests",
+    srcs = ["OracleTests.hs"],
+    main_file = "OracleTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":oracle-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
+)
