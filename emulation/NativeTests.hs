@@ -560,9 +560,10 @@ ownedBatchApi runner=withTemporary "fuji-owned-batch"$ \root->do
   Left(e::SomeException)->ensure("broken: invalid_case"`isInfixOf`show e)("loadObservedBatch failure names: "++show e)
   Right _->failH "loadObservedBatch returned for a batch with an invalid case"
 
--- Two lock-acquisition shapes spinning on one held word share one outcome and compare equal
--- with PC and CPSR excluded; spinning on another held word, returning and stopping differ; a
--- plain case's budget overrun stays a refusal; a bank store's barrier precedes it in the order.
+-- Two lock-acquisition shapes and a spin that clears the monitor, all on one held word, share one
+-- outcome and compare equal with PC and the CPSR flags excluded; spinning on another held word,
+-- returning and stopping differ; a plain case's budget overrun stays a refusal; bank stores that
+-- differ only in value differ; a bank store's barrier precedes it in the order.
 kernelOutcomes :: FilePath -> IO ()
 kernelOutcomes runner=withTemporary "fuji-kernel-outcomes"$ \root->do
  let acquire=[0xe1921f9f,0xe3510000,0x1afffffc,0xe3a01001,0xe1823f91,0xe3530000,0x1afffff8,0xe12fff1e]
@@ -596,19 +597,31 @@ kernelOutcomes runner=withTemporary "fuji-kernel-outcomes"$ \root->do
       , spec "free"acquire[0,1]0x9000 N.Returned
       , spec "stopped"[0xeb00083e][0,0]0x9000 N.StopAddress
       , spec "notify"[0xf57ff04f,0xe5831000,0xe12fff1e][0,0]0x9000 N.Returned
+      , spec "spin-clrex"[0xe1921f9f,0xf57ff01f,0xe3510000,0x1afffffb,0xe12fff1e][1,1]0x9000 N.InstructionBudget
+      , spec "bank-twice-same"[0xe3a01401,0xe5831000,0xe5831000,0xe3a04502,0xe12fff1e][0,0]0x9000 N.Returned
+      , spec "bank-twice-different"[0xe3a04502,0xe5834000,0xe3a01401,0xe5831000,0xe12fff1e][0,0]0x9000 N.Returned
       ]
  observed<-map snd<$>(O.writeBatch root specs>>=O.loadObservedBatch runner)
  let outcomes=zipWith O.caseOutcome specs observed
      held address=O.OutcomeNoReturnWithin(O.InstructionLimit 50)(Just(N.GuestAddress address))
- ensure(outcomes==[held 0x9000,held 0x9000,held 0x9004,O.OutcomeReturned,O.OutcomeStopped(N.GuestAddress 0xa100),O.OutcomeReturned])("kernel outcomes: "++show outcomes)
+ ensure(outcomes==[held 0x9000,held 0x9000,held 0x9004,O.OutcomeReturned,O.OutcomeStopped(N.GuestAddress 0xa100),O.OutcomeReturned,held 0x9000,O.OutcomeReturned,O.OutcomeReturned])("kernel outcomes: "++show outcomes)
  let spinSpec=specs!!0; spin=observed!!0
      compared=O.compareKernelCase spinSpec spin
  ensure(compared(observed!!1)==[])("equal spins differ: "++show(compared(observed!!1)))
  ensure(O.OutcomeDiffers(held 0x9000)(held 0x9004)`elem`compared(observed!!2) && O.KernelRegisterDiffers N.R2`elem`compared(observed!!2))("spins on different words: "++show(compared(observed!!2)))
+ -- A spin that clears the monitor keeps the reserved word in its outcome.
+ ensure(compared(observed!!6)==[])("a spin with clrex differs: "++show(compared(observed!!6)))
  ensure(O.caseOutcome spinSpec{O.caseKernel=Nothing}spin==O.OutcomeRefused N.InstructionBudget)"a plain case's budget overrun is a refusal"
  ensure(O.compareKernelCase spinSpec{O.caseKernel=Nothing}spin spin==[O.NotKernelCase])"comparing a plain case"
- let order=N.nativeKernel(last observed)>>=N.observedOrder
- ensure(order==Just[N.OrderedBarrier N.Dsb,N.OrderedWrite(N.Write(N.GuestAddress 0xfffb30cc)(N.WriteBytes 4))])("kernel order: "++show order)
+ -- Equal final bank bytes, equal write addresses, different stored values.
+ let twice=O.compareKernelCase(specs!!7)(observed!!7)(observed!!8)
+ ensure(twice==[O.WritesDiffer])("bank writes with different values: "++show twice)
+ -- With CPSR uncompared only its flags drop: an I change differs, a C change does not.
+ let withCpsr change observation=observation{N.nativeRegisters=M.adjust change N.Cpsr(N.nativeRegisters observation)}
+ ensure(compared(withCpsr(`xor`0x80)spin)==[O.KernelRegisterDiffers N.Cpsr])("CPSR I change: "++show(compared(withCpsr(`xor`0x80)spin)))
+ ensure(compared(withCpsr(`xor`0x20000000)spin)==[])("CPSR C change: "++show(compared(withCpsr(`xor`0x20000000)spin)))
+ let order=N.nativeKernel(observed!!5)>>=N.observedOrder
+ ensure(order==Just[N.OrderedBarrier N.Dsb,N.OrderedWrite(N.Write(N.GuestAddress 0xfffb30cc)(N.WriteBytes 4))(N.WriteValue 0)])("kernel order: "++show order)
 
 main :: IO ()
 main=do

@@ -291,7 +291,7 @@ enum Status {
 struct KernelRegisters {
     tpidrurw: Option<String>,
     fpexc: Option<String>,
-    monitor: Option<String>,
+    reserved: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1349,7 +1349,27 @@ fn a_spin_on_a_held_word_ends_on_the_budget_in_every_shape() {
         assert!(!observed.returned);
         assert_eq!(observed.instructions(), 100, "{code:x?}");
         assert_eq!(observed.bytes(DATA), "01000000");
-        assert_eq!(observed.kernel().monitor, Some(format!("0x{DATA:08x}")), "{code:x?}");
+        assert_eq!(observed.kernel().reserved, Some(format!("0x{DATA:08x}")), "{code:x?}");
+    }
+}
+
+#[test]
+fn the_last_ldrex_word_stays_reported_after_strex_and_clrex() {
+    // ldrex then clrex; ldrex, add, strex; ldrex r1, [r2] then ldrex r1, [r4]
+    for (code, reserved) in [
+        (vec![LDREX_R1_R2, CLREX, BX_LR], Some(DATA)),
+        (vec![LDREX_R1_R2, ADD_R1_1, STREX_R3_R1_R2, BX_LR], Some(DATA)),
+        (vec![LDREX_R1_R2, 0xe194_1f9f, BX_LR], Some(DATA + 4)),
+        (vec![CLREX, BX_LR], None),
+    ] {
+        let observed = Case::new(&code)
+            .kernel(Kernel::default())
+            .region(DATA, READ_WRITE, &words(&[0, 0]))
+            .register(2, DATA)
+            .register(4, DATA + 4)
+            .run();
+        observed.assert_returned();
+        assert_eq!(observed.kernel().reserved, reserved.map(|address| format!("0x{address:08x}")), "{code:x?}");
     }
 }
 
@@ -1517,7 +1537,7 @@ fn tpidrurw_serves_the_case_value_and_keeps_the_last_write() {
     observed.assert_returned();
     assert_eq!(observed.register("r4"), 0xabc);
     assert_eq!(observed.register("r7"), 0x1234);
-    assert_eq!(observed.kernel(), &KernelRegisters { tpidrurw: Some("0x00001234".into()), fpexc: None, monitor: None });
+    assert_eq!(observed.kernel(), &KernelRegisters { tpidrurw: Some("0x00001234".into()), fpexc: None, reserved: None });
     assert_eq!(observed.observation.memory_provenance, [system(CODE + 4, SystemRegister::Tpidrurw, 0x1234)]);
 }
 
@@ -1526,7 +1546,7 @@ fn cpacr_reads_serve_the_case_value() {
     let observed = Case::new(&[CPACR_TO_R5, BX_LR]).kernel(Kernel { cpacr: Some(0x00f0_0000), ..Kernel::default() }).run();
     observed.assert_returned();
     assert_eq!(observed.register("r5"), 0x00f0_0000);
-    assert_eq!(observed.kernel(), &KernelRegisters { tpidrurw: None, fpexc: None, monitor: None });
+    assert_eq!(observed.kernel(), &KernelRegisters { tpidrurw: None, fpexc: None, reserved: None });
 }
 
 #[test]

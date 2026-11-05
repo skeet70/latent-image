@@ -27,6 +27,7 @@ module Emulation.NativeObservation
   , provenanceRetained
   , Barrier (..)
   , SystemRegister (..)
+  , WriteValue (..)
   , Ordered (..)
   , KernelObservation (..)
   , NativeObservation (..)
@@ -190,7 +191,11 @@ data Barrier = Dmb | Dsb | Isb
 data SystemRegister = Tpidrurw | Fpexc
   deriving (Eq, Ord, Show)
 
-data Ordered = OrderedWrite Write | OrderedBarrier Barrier | OrderedSystemWrite SystemRegister Word32
+-- | The value a write stored, zero-extended.
+newtype WriteValue = WriteValue Word64
+  deriving (Eq, Ord, Show)
+
+data Ordered = OrderedWrite Write WriteValue | OrderedBarrier Barrier | OrderedSystemWrite SystemRegister Word32
   deriving (Eq, Show)
 
 -- | What a kernel case reports beyond a privileged case.
@@ -200,8 +205,8 @@ data KernelObservation = KernelObservation
   , -- | Final TPIDRURW and FPEXC, each when the case declares it.
     observedTpidrurw :: Maybe Word32
   , observedFpexc :: Maybe Word32
-  , -- | The word the local monitor holds tagged at the end.
-    observedMonitor :: Maybe GuestAddress
+  , -- | The word the case's last LDREX reserved; STREX and CLREX leave it.
+    observedReserved :: Maybe GuestAddress
   }
   deriving (Eq, Show)
 
@@ -246,6 +251,7 @@ data ObservationError
   | MalformedProvenanceKind
   | MalformedProvenanceAddress
   | MalformedProvenanceSize
+  | MalformedProvenanceValue
   | ProvenanceRetentionMismatch Int
   | ProvenanceCountMismatch ProvenanceTotal Int
   | MalformedBarrier
@@ -302,7 +308,7 @@ observeNative exit regions value = do
       , nativeKernel = kernel
       }
   where
-    kernelRow (OrderedWrite _) = False
+    kernelRow (OrderedWrite _ _) = False
     kernelRow _ = True
 
 renderObservationError :: ObservationError -> String
@@ -336,6 +342,7 @@ renderObservationError errorValue = case errorValue of
   MalformedProvenanceKind -> "malformed provenance kind"
   MalformedProvenanceAddress -> "malformed provenance address"
   MalformedProvenanceSize -> "provenance size out of range"
+  MalformedProvenanceValue -> "malformed provenance write value"
   ProvenanceRetentionMismatch retained ->
     "provenance retention count " ++ show retained ++ " differs from 4096"
   ProvenanceCountMismatch total retained ->
@@ -410,13 +417,13 @@ parseProvenance total value = case value of
   Array _ -> do
     let entries = list value
     parsed <- forM entries $ \entry -> case str (get entry "kind") of
-      "write" -> Just . OrderedWrite <$> access entry
+      "write" -> (\row stored -> Just (OrderedWrite row stored)) <$> access entry <*> writeValue entry
       "read" -> Nothing <$ access entry
       "barrier" -> Just . OrderedBarrier <$> barrier (str (get entry "barrier"))
       "system" -> Just <$> systemWrite entry
       _ -> Left MalformedProvenanceKind
     let ordered = [row | Just row <- parsed]
-        writes = [write | OrderedWrite write <- ordered]
+        writes = [write | OrderedWrite write _ <- ordered]
     provenance <-
       if total > 4096
         then do
@@ -428,6 +435,11 @@ parseProvenance total value = case value of
     pure (provenance, ordered)
   _ -> Left MissingProvenance
   where
+    writeValue entry = case str (get entry "value") of
+      '0' : 'x' : digits
+        | length digits == 16 && all isHexDigit digits
+        , [(stored, "")] <- readHex digits -> Right (WriteValue stored)
+      _ -> Left MalformedProvenanceValue
     access entry = do
       address <- maybe (Left MalformedProvenanceAddress) (Right . GuestAddress . fromIntegral) (parseWord32 (str (get entry "address")))
       size <- case get entry "size" of
@@ -452,8 +464,8 @@ parseProvenance total value = case value of
 parseKernelRegisters :: Value -> Either ObservationError (Maybe Word32, Maybe Word32, Maybe GuestAddress)
 parseKernelRegisters value = case value of
   Object _
-    | all (`elem` ["tpidrurw", "fpexc", "monitor"]) (keys value) ->
-        (,,) <$> register "tpidrurw" <*> register "fpexc" <*> (fmap (GuestAddress . fromIntegral) <$> register "monitor")
+    | all (`elem` ["tpidrurw", "fpexc", "reserved"]) (keys value) ->
+        (,,) <$> register "tpidrurw" <*> register "fpexc" <*> (fmap (GuestAddress . fromIntegral) <$> register "reserved")
   _ -> Left MalformedKernelRegisters
   where
     register key

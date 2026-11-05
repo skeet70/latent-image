@@ -56,6 +56,7 @@ import Emulation.NativeObservation
   , RunnerStatus (..)
   , Write (..)
   , WriteBytes (..)
+  , WriteValue (..)
   , hexWord32
   , registerLabels
   , lookupRegister
@@ -202,7 +203,8 @@ data KernelCase = KernelCase
     kernelCpacr :: Maybe Word32
   , -- | EN (bit 30) is the only bit it may set.
     kernelFpexc :: Maybe Word32
-  , -- | Registers 'compareKernelCase' leaves out, such as a spinning loop's scratch and PC.
+  , -- | Registers 'compareKernelCase' leaves out, such as a spinning loop's scratch and PC. 'Cpsr'
+    -- here drops only its flags: mode, T, F, I and A (bits 8:0) are always compared.
     kernelUncompared :: [Register]
   }
 
@@ -213,8 +215,8 @@ caseLimit = maybe plainLimit kernelLimit . caseKernel
 data CaseOutcome
   = OutcomeReturned
   | OutcomeStopped GuestAddress
-  | -- | A kernel case that has not returned within its N instructions, with the word the
-    -- local monitor holds tagged then.
+  | -- | A kernel case that has not returned within its N instructions, with the word its last
+    -- LDREX reserved.
     OutcomeNoReturnWithin InstructionLimit (Maybe GuestAddress)
   | OutcomeRefused RunnerStatus
   deriving (Eq, Show)
@@ -223,7 +225,7 @@ caseOutcome :: CaseSpec -> NativeObservation -> CaseOutcome
 caseOutcome spec observation = case (nativeStatus observation, caseKernel spec) of
   (Returned, _) -> OutcomeReturned
   (StopAddress, _) -> OutcomeStopped (GuestAddress (fromIntegral (registerValue observation Pc)))
-  (InstructionBudget, Just kernel) -> OutcomeNoReturnWithin (kernelLimit kernel) (nativeKernel observation >>= observedMonitor)
+  (InstructionBudget, Just kernel) -> OutcomeNoReturnWithin (kernelLimit kernel) (nativeKernel observation >>= observedReserved)
   (status, _) -> OutcomeRefused status
 
 data KernelDifference
@@ -236,17 +238,18 @@ data KernelDifference
   | WriteLogTruncated
   deriving (Eq, Show)
 
--- | Two roles of one kernel case: outcome, every register but the declared exclusions, the final
--- bytes of the spec's writable and device regions, the final TPIDRURW and FPEXC, and the multiset
--- of memory and system register writes. Barrier order is left to per-case assertions on 'observedOrder'.
+-- | Two roles of one kernel case: outcome, every register but the declared exclusions with CPSR
+-- bits 8:0 always, the final bytes of the spec's writable and device regions, the final TPIDRURW and
+-- FPEXC, and the multiset of memory writes with their values and of system register writes. Barrier
+-- order is left to per-case assertions on 'observedOrder'.
 compareKernelCase :: CaseSpec -> NativeObservation -> NativeObservation -> [KernelDifference]
 compareKernelCase spec reference subject = case (caseKernel spec, nativeKernel reference, nativeKernel subject) of
   (Just kernel, Just referenceKernel, Just subjectKernel) ->
     [OutcomeDiffers (outcome reference) (outcome subject) | outcome reference /= outcome subject]
       ++ [ KernelRegisterDiffers register
          | register <- registerLabels
-         , register `notElem` kernelUncompared kernel
-         , M.lookup register (nativeRegisters reference) /= M.lookup register (nativeRegisters subject)
+         , Just compared <- [comparedPart kernel register]
+         , (compared <$> M.lookup register (nativeRegisters reference)) /= (compared <$> M.lookup register (nativeRegisters subject))
          ]
       ++ [ KernelMemoryDiffers ident
          | CaseRegion region permission <- caseRegions spec
@@ -261,6 +264,10 @@ compareKernelCase spec reference subject = case (caseKernel spec, nativeKernel r
   _ -> [NotKernelCase]
   where
     outcome = caseOutcome spec
+    comparedPart kernel register
+      | register `notElem` kernelUncompared kernel = Just id
+      | register == Cpsr = Just (.&. 0x1ff)
+      | otherwise = Nothing
     writable permission = case permission of
       ReadWrite -> True
       Device -> True
@@ -268,7 +275,7 @@ compareKernelCase spec reference subject = case (caseKernel spec, nativeKernel r
       ReadExecute -> False
     system observed = (observedTpidrurw observed, observedFpexc observed)
     writes observed = sort . concatMap written <$> observedOrder observed
-    written (OrderedWrite (Write (GuestAddress address) (WriteBytes bytes))) = [Left (address, bytes)]
+    written (OrderedWrite (Write (GuestAddress address) (WriteBytes bytes)) (WriteValue stored)) = [Left (address, bytes, stored)]
     written (OrderedSystemWrite register value) = [Right (register, value)]
     written (OrderedBarrier _) = []
 

@@ -195,7 +195,7 @@ loadCaseWith reader input = do
  ensure(str(get expected "status") `elem` words "returned instruction_budget wall_budget memory_guard fetch_guard unknown_call unsupported_instruction stub_contract stop_address") "unsupported expected exit"
  when("kernel" `elem` keys expected)$do
   ensure(isKernel profile) "expected kernel registers need a kernel case"
-  void(bindings(get expected "kernel")["tpidrurw","fpexc","monitor"])
+  void(bindings(get expected "kernel")["tpidrurw","fpexc","reserved"])
  expectedRegs<-bindings(get expected "registers")(regs++["pc"])
  ensure(not(null expectedRegs)) "at least one independently expected register required"
  differences<-arrayCheck(get expected "memory")0 memoryCount "expected memory limit"

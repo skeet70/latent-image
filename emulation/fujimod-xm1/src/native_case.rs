@@ -1193,7 +1193,7 @@ enum LogEntry {
 }
 
 /// A kernel case's final TPIDRURW and FPEXC, each when the case declares it, and
-/// the word the local monitor holds tagged, when it does.
+/// the word its last LDREX reserved, which STREX and CLREX leave reported.
 #[derive(Serialize)]
 struct KernelRegisters {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1201,7 +1201,7 @@ struct KernelRegisters {
     #[serde(skip_serializing_if = "Option::is_none")]
     fpexc: Option<Word>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    monitor: Option<Word>,
+    reserved: Option<Word>,
 }
 
 #[derive(Serialize)]
@@ -1550,6 +1550,7 @@ struct State {
     provenance_total: u64,
     instruction: Instruction,
     monitor: Monitor,
+    reserved: Option<u32>,
     system: SystemState,
 }
 
@@ -1574,6 +1575,7 @@ impl State {
             provenance_total: 0,
             instruction: Instruction { pc: 0, word: 0, transfer: None },
             monitor: Monitor::Open,
+            reserved: None,
             system: SystemState {
                 tpidrurw: kernel.and_then(|kernel| kernel.tpidrurw),
                 cpacr: kernel.and_then(|kernel| kernel.cpacr),
@@ -1711,6 +1713,7 @@ impl State {
                 self.record_access(ProvenanceKind::Read, address, 4, u64::from(value));
                 write(cpu, arm::CORE[target], value)?;
                 self.monitor = Monitor::Exclusive(address);
+                self.reserved = Some(address);
             }
             KernelWord::StoreExclusive { status, source, base } => {
                 let address = read(cpu, arm::CORE[base])?;
@@ -2102,10 +2105,7 @@ impl State {
             kernel: case.profile.kernel().map(|_| KernelRegisters {
                 tpidrurw: self.system.tpidrurw.map(|value| Word(value.0)),
                 fpexc: self.system.fpexc.map(|value| Word(value.0)),
-                monitor: match self.monitor {
-                    Monitor::Exclusive(tag) => Some(Word(tag)),
-                    Monitor::Open => None,
-                },
+                reserved: self.reserved.map(Word),
             }),
         }
     }

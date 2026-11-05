@@ -284,6 +284,7 @@ provenanceEntry address =
     [ ("kind", s "write")
     , ("address", s (hexWord64 address))
     , ("size", n 4)
+    , ("value", s "0x00000000ddccbbaa")
     ]
 
 hexWord64 :: Word64 -> String

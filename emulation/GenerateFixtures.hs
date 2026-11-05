@@ -274,9 +274,9 @@ main=do
  finish$nest "expected"(set "memory"(arr[memory "data" 0 "01000000"]))$expectedRegs[("r1",h 1),("r3",h 0),("pc",h 0x1080)]$nest "registers"(set "r3"(h 9))$kernel[]pair
  spin<-make "kernel-exclusive-spin" [0xe1921f9f,0xe3510000,0x1afffffc,0xe12fff1e] "instruction_budget"
  spinData<-artifact root "kernel-exclusive-spin-data" [1]
- finish$nest "expected"(set "kernel"(obj[("monitor",h 0x2004)]))$expectedRegs[("r1",h 1),("cpsr",h 0x200000d3),("pc",h 0x100c)]$set "artifacts"(arr(list(get spin "artifacts")++[spinData]))$at "regions" 2(set "initial"(obj[("artifact",get spinData "id"),("offset",n 0),("length",n 4)]))$nest "limits"(set "instructions"(n 20))$kernel[]spin
+ finish$nest "expected"(set "kernel"(obj[("reserved",h 0x2004)]))$expectedRegs[("r1",h 1),("cpsr",h 0x200000d3),("pc",h 0x100c)]$set "artifacts"(arr(list(get spin "artifacts")++[spinData]))$at "regions" 2(set "initial"(obj[("artifact",get spinData "id"),("offset",n 0),("length",n 4)]))$nest "limits"(set "instructions"(n 20))$kernel[]spin
  clobber<-make "kernel-store-over-reservation-refused" [0xe1923f9f,0xe5821000,0xe12fff1e] "unsupported_instruction"
- finish$nest "expected"(set "kernel"(obj[("monitor",h 0x2004)]))$expectedRegs[("r3",h 0),("pc",h 0x1008)]$nest "registers"(set "r3"(h 9))$kernel[]clobber
+ finish$nest "expected"(set "kernel"(obj[("reserved",h 0x2004)]))$expectedRegs[("r3",h 0),("pc",h 0x1008)]$nest "registers"(set "r3"(h 9))$kernel[]clobber
  barriers<-make "kernel-barriers" [0xe5821000,0xf57ff05f,0xf57ff04f,0xf57ff06f,0xe12fff1e] "returned"
  finish$nest "expected"(set "memory"(arr[memory "data" 0 "05000000"]))$expectedRegs[("pc",h 0x1080)]$kernel[]barriers
  nop<-make "kernel-nop" [0xe320f000,0xe12fff1e] "returned"
