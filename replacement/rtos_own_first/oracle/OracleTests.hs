@@ -75,6 +75,7 @@ observation overrides callerFrame writes =
     , nativeProvenance = Complete (ProvenanceTotal (fromIntegral (length writes))) [Write (GuestAddress (fromIntegral address)) (WriteBytes (fromIntegral width)) | (address, width) <- writes]
     , nativeInstructions = InstructionCount 1
     , nativeEngineError = EngineError 0
+    , nativeKernel = Nothing
     }
 
 runFrom :: [(Register, Word32)] -> B.ByteString -> [WriteEvent] -> Either String Run
