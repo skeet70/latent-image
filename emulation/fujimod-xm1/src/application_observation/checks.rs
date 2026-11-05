@@ -7,7 +7,7 @@ use super::{
     read_evidence, view_byte, view_word, ApplicationReceipt, Evidence, GraphicsState, InputIndex, InputPurpose, RawView, Sample,
     SampleIndex, SiteRef, ALIAS, MenuIdentity,
 };
-use crate::composed_catalog::{physical_address as physical, Application, Core, Domain, Instructions, Role, SiteKind};
+use crate::composed_catalog::{physical_address as physical, Application, Core, Domain, Instructions, Pc, Role, SiteKind};
 use crate::guest::RouteKey;
 use crate::provenance::Guest;
 use crate::render::Probe;
@@ -684,6 +684,8 @@ struct Invocation<'a> {
 pub fn pump_sequences(evidence: &RoleEvidence) -> Result<(), ApplicationRefusal> {
     use ApplicationCheck::{Handback, HookSequence, Initializer, NormalizerResult, QueueProvenance};
     let pump = &evidence.application.pump;
+    let handback = evidence.application.role_pc(Pc(HANDBACK), evidence.role)
+        .ok_or_else(|| ApplicationRefusal::new(Handback, "task1's handback has no role PC"))?;
     let stream = task1_stream(evidence, Handback,
         |located| matches!(located.kind, Kind::Site(SiteKind::Task1 | SiteKind::Pump | SiteKind::HookTarget)))?;
     let mut invocation: Option<Invocation> = None;
@@ -715,7 +717,7 @@ pub fn pump_sequences(evidence: &RoleEvidence) -> Result<(), ApplicationRefusal>
             require(invocation.is_none(), HookSequence, "the pump reentered before its handback")?;
             let before = caller.take().ok_or_else(|| ApplicationRefusal::new(Handback, "the pump has no task1 caller"))?;
             require(before.core == sample.core && before.registers.sp == registers.sp && before.registers.r == registers.r
-                && physical(registers.lr.0) == HANDBACK, Handback, "the pump caller's transfer differs")?;
+                && physical(registers.lr.0) == handback.0, Handback, "the pump caller's transfer differs")?;
             if received {
                 receive_backed += 1;
             } else {

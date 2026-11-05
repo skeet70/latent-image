@@ -5,9 +5,21 @@ use core::ptr::{read_volatile, write_volatile};
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! { loop { core::hint::spin_loop(); } }
 
+#[repr(u32)]
+enum ReceiveOperation { Block = 0x107 }
+
+#[repr(C)]
+struct SetupDescriptor {
+    record_display: *mut u8,
+    system_snapshot: *mut u8,
+    delay_state: *mut u8,
+    availability: *mut u8,
+    buffer: *mut u8,
+}
+
 #[repr(C)]
 struct Receive {
-    operation: u32,
+    operation: ReceiveOperation,
     command: *mut u32,
     argument: *mut u32,
     payload: *mut u32,
@@ -39,8 +51,8 @@ extern "C" {
     fn after_third();
     fn diagnostic();
     fn pump();
-    fn allocate(size: u32) -> u32;
-    fn register(descriptor: *const [u32; 5]) -> u32;
+    fn allocate(size: u32) -> *mut u8;
+    fn register(descriptor: *const SetupDescriptor) -> u32;
     fn registration_error();
     fn setup_service();
     fn setup_zero(value: u32);
@@ -67,7 +79,13 @@ macro_rules! observed {
 #[link_section = ".text.once"]
 pub unsafe extern "C" fn xm1_task1_once() {
     store(0x972e84, 1);
-    let descriptor = [0x918ab8, 0x93bea0, 0x96b400, 0x95b098, allocate(0x1000)];
+    let descriptor = SetupDescriptor {
+        record_display: 0x918ab8 as *mut u8,
+        system_snapshot: 0x93bea0 as *mut u8,
+        delay_state: 0x96b400 as *mut u8,
+        availability: 0x95b098 as *mut u8,
+        buffer: allocate(0x1000),
+    };
     let result = register(&descriptor);
     store(0x954d68, result);
     if result != 0 { registration_error(); }
@@ -145,7 +163,7 @@ pub unsafe extern "C" fn xm1_task1_actor() -> ! {
             true
         } else {
             let request = Receive {
-                operation: 0x107,
+                operation: ReceiveOperation::Block,
                 command: 0x944580 as *mut u32,
                 argument: 0x944584 as *mut u32,
                 payload: 0x94458c as *mut u32,
