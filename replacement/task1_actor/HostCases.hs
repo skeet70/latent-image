@@ -159,15 +159,15 @@ execute runner out ident body input mode allocation=do
      backedge=mode==Backedge
      entry=if once then 0xbfb124 else 0xc22f60
      stop=0x100000
-     expectedStatus=if mode==Actor then "stop_address" else "returned"
-     expectedPc=if mode==Actor then 0xbfbd20 else stop
+     expectedStatus=if once then "returned" else "stop_address"
+     expectedPc=case mode of Actor->0xbfbd20;Backedge->0x104000;Once->stop
      bit n=if testBit(pendingBits input)n then 1 else 0
      response a=case a of 0x102000->receiveStatus input;0x103000->receiveStatus input;0xd0c954->predicateA input;0xd35f3c->predicateB input;0xd5cf50->suppress input;0xd1734c->bit 2;0xd3ab00->bit 4;0xd3ad5c->bit 5;0xd36310->allocation;_->0
      stub a=obj[("address",addr a),("inputs",reg(case a of 0x101000->[("r0",0),("r1",0),("r2",0),("r3",0)];0xd36310->[("r0",0x1000)];0xd38130->[("r0",0)];0xd3ad10->[("r0",0)];0x636004->[("r0",0)];_->[])),("outputs",reg[("r0",response a)]),("side_effects",s "registers-only")]
      -- The wrappers copy service argument records into a fixed observation region.
      copyWrapper base marker count dest=assemble ([0xe92d4010,0xe1a03000,0xe59f2000 .|. fromIntegral(8*count+4)]++concat[[0xe5931000 .|. fromIntegral(4*k),0xe5821000 .|. fromIntegral(4*k)]|k<-[0..count-1]]++[0xeb000000 .|. fromIntegral (((marker::Integer)-(base+fromIntegral(4*(3+2*count))+8)) `div` 4 .&. 0xffffff),0xe8bd8010,dest])
      executionCapture=assemble [0xe92d4010,0xe59d4008,0xe92d0003,0xe59f000c,0xe5804000,0xe8bd0003,0xeb000000 .|. fromIntegral (((0x101000::Integer)-(0x63270c+24+8)) `div` 4 .&. 0xffffff),0xe8bd8010,0x980044]
-     wrappers=(if once then [(0xdb4b34,copyWrapper 0xdb4b34 0x103000 5 0x980000)] else [(0xdb5124,copyWrapper 0xdb5124 0x102000 4 0x980000),(0x63270c,executionCapture)])++[(0xd3cbd4,assemble [0xe59f2018,0xe5921000,0xe2811001,0xe5821000,0xe3510002,0x059ff008,0xe12fff1e,0xe320f000,0x980040,stop])|backedge]++[(0xbfbd20,assemble [0xe12fff1e])|mode==Actor]
+     wrappers=(if once then [(0xdb4b34,copyWrapper 0xdb4b34 0x103000 5 0x980000)] else [(0xdb5124,copyWrapper 0xdb5124 0x102000 4 0x980000),(0x63270c,executionCapture)])++[(0xd3cbd4,assemble [0xe59f2018,0xe5921000,0xe2811001,0xe5821000,0xe3510002,0x0b000000 .|. fromIntegral (((0x104000::Integer)-(0xd3cbd4+20+8)) `div` 4 .&. 0xffffff),0xe12fff1e,0xe320f000,0x980040,stop])|backedge]++[(expectedPc,assemble [0xe12fff1e])|not once]
      stubs=filter (\a->a/=0x63270c && (not once || a `elem` [0xd36310,0x633594,0xd48240,0xd38130]) && (not backedge || a/=0xd3cbd4)) services++[0xbfbd20|backedge]++(if once then [0x103000] else [0x101000,0x102000])
      (expectedState,sequence')=oracle input
      expectedCalls=if once then [0xd36310,0xdb4b34]++[0x633594|receiveStatus input/=0]++[0xd48240,0xd38130] else if backedge then filter (/=0xd3cbd4) sequence'++[0xbfbd20] else sequence'
@@ -182,7 +182,7 @@ execute runner out ident body input mode allocation=do
      spec=obj[("schema_version",n 1),("id",s ident),("origin",s "stock"),("provenance",s "X-M1 1.50 stock instruction contract, id5.dis 50482-50680 and 9635-9671; x70view f659f02b850fcba58de0f9b09ee24ad09a24c2f4"),("cpu",obj[("architecture",s "arm"),("model",s "cortex-r5f"),("mode",s "arm"),("endian",s "little")]),("entry",addr entry),("exit",addr stop),("registers",reg[(r,case r of "sp"->0x201000;"lr"->stop;"cpsr"->0x10;_->0)|r<-map (("r"++).show) [0::Int ..12]++["sp","lr","cpsr"]]),("regions",arr regions),("artifacts",arr(map artifact artifacts)),("functions",arr(function entry (fromIntegral(B.length body)):[function a (fromIntegral(B.length bytes))|(a,bytes)<-wrappers])),("stubs",arr(map stub stubs)),("limits",obj[("instructions",n 10000),("wall_ms",n 1000)]),("expected",obj[("status",s "returned"),("registers",reg[("pc",stop)]),("memory",arr []),("events",arr [])]),("exclusions",arr[s "Stack and scratch registers excluded; retained service implementations are not executed."])]
  let calleeSaved=[("r"++show ix,0x44440000+fromIntegral ix*0x111111)|ix<-[4::Int ..11]]
      initialRegisters=foldl (\rs (name,value)->set name (addr value) rs) (set "cpsr" (addr 0x53) (get spec "registers")) calleeSaved
-     admitted=set "limits" (obj[("instructions",n 10000),("wall_ms",n 10000)]) (set "kernel" (if mode==Actor then obj[("stop",addr 0xbfbd20)] else zero) (set "registers" initialRegisters spec))
+     admitted=set "limits" (obj[("instructions",n 10000),("wall_ms",n 10000)]) (set "kernel" (if once then zero else obj[("stop",addr expectedPc)]) (set "registers" initialRegisters spec))
  B.writeFile(dir</>"case.json")(encodeCanonical admitted)
  (_,report)<-runCase runner (dir</>"case.json")
  let observed=get report "runner"
