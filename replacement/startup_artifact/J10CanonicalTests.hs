@@ -24,7 +24,7 @@ main = do
   tools <- Tools.Tools <$> canonicalizePath encoder <*> canonicalizePath rebuild <*> canonicalizePath decoder
   scratch <- Tools.validateScratchDirectory scratchPath
   source <- loadCanonical tools scratch datPath
-  let linked bin symbols = LinkedImage <$> (ImageBytes <$> H.readRegular 0x10000 bin) <*> (SymbolBytes <$> H.readRegular 0x10000 symbols)
+  let linked bin symbols = LinkedImage <$> (ImageBytes <$> (canonicalizePath bin >>= H.readRegular 0x10000)) <*> (SymbolBytes <$> (canonicalizePath symbols >>= H.readRegular 0x10000))
       derived = either (H.failH . show) pure
       check name condition = unless condition (H.failH ("failed: " ++ name))
   ctorInput <- linked ctorBin ctorSymbols
