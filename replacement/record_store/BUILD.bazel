@@ -1,0 +1,43 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "record-store-rust",
+    src = "src/lib.rs",
+    data = ["src/guest.rs", "src/lifecycle.rs"],
+    crate_name = "xm1_record_store",
+    rustc_flags = ["'--cfg=feature=\"guest\"'"],
+)
+
+[xm1_rust_staticlib(
+    name = "record-store-rust-control-" + str(control),
+    src = "src/lib.rs",
+    data = ["src/guest.rs", "src/lifecycle.rs"],
+    crate_name = "xm1_record_store",
+    rustc_flags = ["'--cfg=feature=\"guest\"'", "'--cfg=feature=\"control-" + str(control) + "\"'"],
+) for control in range(1, 10)]
+
+genrule(
+    name = "host-tests",
+    srcs = ["src/lib.rs", "src/tests.rs", "src/lifecycle.rs"],
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    outs = ["host-tests.passed"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test $(location src/lib.rs) -o $(@D)/host-tests && $(@D)/host-tests && touch $@",
+)
+
+[genrule(
+    name = "host-control-" + str(control),
+    srcs = ["src/lib.rs", "src/tests.rs", "src/lifecycle.rs"],
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    outs = ["host-control-" + str(control) + ".detected"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --cfg 'feature=\"control-" + str(control) + "\"' $(location src/lib.rs) -o $(@D)/host-control-" + str(control) + " && if $(@D)/host-control-" + str(control) + "; then exit 1; else touch $@; fi",
+) for control in range(1, 10)]
+
+genrule(
+    name = "host-adapter-tests",
+    srcs = ["src/lib.rs", "src/tests.rs", "src/lifecycle.rs", "src/guest.rs", "src/guest_tests.rs"],
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    outs = ["host-adapter-tests.passed"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --cfg 'feature=\"guest\"' $(location src/lib.rs) -o $(@D)/host-adapter-tests && $(@D)/host-adapter-tests && touch $@",
+)
