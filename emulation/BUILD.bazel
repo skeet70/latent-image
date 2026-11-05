@@ -3608,3 +3608,21 @@ haskell_binary(
         "//host:vector",
     ],
 )
+
+haskell_binary(
+    name = "record-store-timing-control",
+    srcs = ["RecordStoreTimingControlMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        ":property-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:vector",
+    ],
+)

@@ -2650,3 +2650,9 @@ Reset snapshots contain the role's declared write ranges: three settings images 
 
 Mapped medium blocks require 131,072 data bytes and 32,768 bridge-exposed spare bytes, comprising 64 rows with 512 spare bytes per row. Every admitted data and spare byte remains part of the exact comparison.
 
+### Stock-only picker timing control
+
+`//emulation:record-store-timing-control` accepts `COMPLETED_ERASED_STOCK_DIR DELTA NEW_OUTPUT_DIR`. It reuses the source receipt's exact reset spec and verified original DAT, run document, ROM, adjustment NAND and immutable bridge executable. Each invocation fresh-boots stock and presses `ok,down,ok,down,up`, with the same 20-million-instruction pre-key idle as the pair observer. `DELTA` is an additional no-input idle before only the final UP, bounded to `[0,90000000]` instructions. Baseline uses zero; the declared perturbation is chosen before either run.
+
+Run each process serially under `//emulation:emulator-slot` with `XM1_EMULATOR_SLOTS=1`. The separate binary does not rebuild or modify the pair observer or SDK. It saves input bindings, copied source receipt/spec, reset observations, complete hits, each step's ordinary settings, idle/press replies and fixed-range watch, then terminal pool blocks and all declared write-range readouts. A timing-control result does not change a pair verdict or authorize an exclusion by itself.
+
