@@ -30,6 +30,10 @@ name = "fujimod-xm1-updater"
 path = "src/updater.rs"
 
 [[bin]]
+name = "fujimod-xm1-record-medium"
+path = "src/record_medium_main.rs"
+
+[[bin]]
 name = "fujimod-xm1-queue-boundary"
 path = "src/queue_boundary.rs"
 

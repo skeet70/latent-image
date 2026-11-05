@@ -6,11 +6,10 @@ use fujimod_emulator::session::Session;
 use serde::Deserialize;
 use std::{collections::BTreeMap, io::Read};
 
-const PAGE_BYTES: usize = 2048;
-const SPARE_BYTES: usize = 512;
-const PAGES_PER_BLOCK: u32 = 64;
-const FIRST_BLOCK: u32 = 0x381;
-const END_BLOCK: u32 = 0x3a2;
+use crate::nand_image::{PAGE_BYTES, PAGES_PER_BLOCK, SPARE_BYTES};
+
+/// The physical blocks this overlay erases and programs.
+pub const BLOCKS: std::ops::Range<u32> = 0x381..0x3a2;
 
 #[derive(Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -62,7 +61,7 @@ impl AdjustmentNand {
         if image.schema != 1 || image.geometry != geometry {
             return Err("adjustment NAND is not a schema-1 type1 committed image".into());
         }
-        let rows = FIRST_BLOCK * PAGES_PER_BLOCK..END_BLOCK * PAGES_PER_BLOCK;
+        let rows = BLOCKS.start * PAGES_PER_BLOCK..BLOCKS.end * PAGES_PER_BLOCK;
         let data: BTreeMap<u32, &String> =
             image.committed_data_pages.iter().filter(|(row, _)| rows.contains(row)).map(|(row, text)| (*row, text)).collect();
         let spare: BTreeMap<u32, &String> =
@@ -79,7 +78,7 @@ impl AdjustmentNand {
     /// Erases the adjustment blocks of the unexecuted session's NAND `medium` and programs the pages.
     pub fn apply(&self, session: &mut Session, medium: &NodeName) -> Result<(), String> {
         let mut nand = session.nand_medium(&medium.0)?;
-        for block in FIRST_BLOCK..END_BLOCK {
+        for block in BLOCKS {
             nand.erase(block * PAGES_PER_BLOCK)?;
         }
         for (row, (data, spare)) in &self.0 {
