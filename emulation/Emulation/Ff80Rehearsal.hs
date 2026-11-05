@@ -36,7 +36,7 @@ runFujiModRehearsal runtime nand checkpoints receipt = do
       arguments =
         [ "--run", fujimodRun, "--boot-rom", runtime </> stagedRomPath
         , "--installed-dat", runtime </> stagedFirmwarePath, "--adjustment-nand", nand
-        , "--output", bridgeOutput, "--ram-push-checkpoints", checkpoints, "--fresh-boot" ]
+        , "--output", bridgeOutput, "--ram-push-checkpoints", checkpoints ]
   nandDigest <- sha256File nand
   firmwareDigest <- sha256File (runtime </> stagedFirmwarePath)
   sessionReceipt <- bracket

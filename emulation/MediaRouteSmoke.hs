@@ -92,8 +92,8 @@ usage = unlines
   , "  [--installed-nand NAND] [--boot-rom ROM] [--run-document JSON [--run-document-sha256 HEX]]"
   , "  [--expect-ramp12-width N]"
   , "  [--capture-continuation-observation | --capture-second-filter-observation] (requires --route s1-s2 --windows 1)"
-  , "Without --checkpoints the bridge cold-boots with --fresh-boot into OUTPUT/checkpoints."
-  , "With it, the bridge restores its keyed attach checkpoint there or cold-boots and saves one."
+  , "Without --checkpoints the bridge uses private-data/emulator-checkpoints/xm1-ram-push-fujimod."
+  , "It restores a matching keyed attach checkpoint or cold-boots and saves one."
   , "Without --run-document the bridge runs the SDK's share/fujimod-xm1/xm1-150.json." ]
 
 parseOptions :: [String] -> IO Options
@@ -1734,13 +1734,11 @@ main = do
   callProcess "cp" ["--reflink=auto", "--", card, copy]
   copyStat <- cardStat copy
   require (copyStat /= originalBefore && (let CardStat s _ _ = copyStat in s) == cardBytes) "card copy is not a distinct 4 GiB file"
-  checkpoints <- maybe (pure (directory </> "checkpoints")) makeAbsolute (optCheckpoints options)
+  checkpoints <- makeAbsolute (maybe "private-data/emulator-checkpoints/xm1-ram-push-fujimod" id (optCheckpoints options))
   createDirectoryIfMissing True checkpoints
-  let fresh = optCheckpoints options == Nothing
-      arguments =
+  let arguments =
         [ "--run", runDocument, "--boot-rom", rom, "--installed-dat", firmware, "--adjustment-nand", nand
         , "--output", directory </> "bridge", "--ram-push-checkpoints", checkpoints, "--sd-card-image", copy ]
-        ++ ["--fresh-boot" | fresh]
   environment <- getEnvironment
   errors <- openBinaryFile (directory </> "bridge.stderr") WriteMode
   requests <- openBinaryFile (directory </> "bridge.stdin.jsonl") WriteMode
