@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Canonical decode, composition staging and the output directory.
 module Replacement.StartupArtifact.Stage
-  ( loadCanonical, loadPieces, stageComposition, writeOutputs, runStager
+  ( loadCanonical, imageLimit, loadPieces, stageComposition, writeOutputs, runStager
   ) where
 
 import Control.Monad (forM, forM_, unless)

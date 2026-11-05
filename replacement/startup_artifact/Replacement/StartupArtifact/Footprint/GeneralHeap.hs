@@ -104,9 +104,7 @@ data Reference = BranchReference Word32 Word32 | LiteralReference Word32 Word32 
 
 -- | Every reference in a flat image at the base, every aligned word: @blx@ and unconditional @b@/@bl@
 -- targets, conditional @b@/@bl@ targets inside the same image, the word itself, and a @movt rd@ with the
--- last @movw rd@ in the 16 words before it. Code reaches another image only by unconditional calls; a
--- conditional encoding aimed at another image is a data word (image 5 0x109dedc and plain 0x12c23bc
--- would otherwise name heap interiors).
+-- last @movw rd@ in the 16 words before it. Code reaches another image only by unconditional calls.
 references :: Word32 -> B.ByteString -> [Reference]
 references base bytes = go M.empty 0
   where
@@ -170,11 +168,22 @@ graphicsTableForwards image4 =
     && and [ fmap (A.decode site) (wordAt image4 image4Base site) == Just (A.Branch (A.Cond 14) True target)
            | (site, target) <- [(0x890ee0, 0x89da3c), (0x890ef0, 0x89cdc4), (0x890f00, 0x89cda4)] ]
 
--- | Outside the heap carriers, the references naming an address inside one that is not an entry.
+-- | Data words that encode a branch into a heap carrier, with the word: image 5 0x109ba48 holds
+-- @blx 0x89d26c@ between undecodable words, inside no decomp function
+-- (private-data/analysis/x-m1-1.50/lz/id5.dis:1183641-1183643; xm1-decomp lookup 0x109ba48).
+dataWords :: [(Word32, Word32)]
+dataWords = [(0x109ba48, 0xfae00607)]
+
+-- | Outside the heap carriers, the references naming an address inside one that is not an entry,
+-- except a 'dataWords' branch still holding its word.
 entrySurface :: [Word32] -> [(Word32, B.ByteString)] -> [Reference]
 entrySurface entries segments =
   [ reference | (base, bytes) <- segments, reference <- referencesNaming inCarriers (references base bytes)
-  , not (inCarriers (referenceSite reference)), named reference `notElem` entries ]
+  , not (inCarriers (referenceSite reference)), named reference `notElem` entries, not (dataWord base bytes reference) ]
+  where
+    dataWord base bytes reference = case reference of
+      BranchReference site _ -> any (\(address, word) -> address == site && wordAt bytes base site == Just word) dataWords
+      _ -> False
 
 -- | Inside the staged heap carriers, every reference naming an address inside a carrier names an
 -- admitted owned instruction, an entry, the metadata words or the sentinel.

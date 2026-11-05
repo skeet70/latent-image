@@ -245,3 +245,24 @@ haskell_test(
         "//replacement/task_submission:task-submission-artifact",
     ],
 )
+
+_J7_HEAP_IMAGES = _J6_IMAGES + [
+    "//replacement/general_heap:general-heap-image.bin",
+    "//replacement/general_heap:general-heap-image.symbols",
+]
+
+# Canonical inputs come from private-data:
+# bazel run //replacement/startup_artifact:startup-artifact-j7-heap-canonical-tests -- CANONICAL_DAT SCRATCH_DIR
+haskell_test(
+    name = "startup-artifact-j7-heap-canonical-tests",
+    srcs = ["J7HeapCanonicalTests.hs"],
+    args = _TOOL_ARGS + ["$(rootpath %s)" % image for image in _J7_HEAP_IMAGES],
+    data = _TOOLS + _J7_HEAP_IMAGES,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    tags = ["manual"],
+    deps = _TEST_DEPS + [
+        "//host:first-stage",
+        "//host/firmware:stock-stack",
+        "//replacement/general_heap:general-heap-artifact",
+    ],
+)
