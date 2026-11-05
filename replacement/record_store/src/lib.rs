@@ -255,6 +255,7 @@ impl<'a, M: RecordMedium, S: Staging> Entry<'a, M, S> {
             }
             area.current = area.current.next();
         }
+        if n == 0 { return 0; }
         if sequence(part(output, chunk, chunk), q).0 < sequence(output, q).0 {
             let Some((first, second)) = output.split_at_mut_checked(chunk) else { contract_violation() };
             for (left, right) in first.iter_mut().zip(second) { core::mem::swap(left, right); }
