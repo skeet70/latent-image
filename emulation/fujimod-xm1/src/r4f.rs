@@ -39,38 +39,37 @@ impl fmt::Display for Refusal {
 }
 
 /// What one coprocessor transfer touches, from its A32 bits [27:0] layout.
-fn coprocessor(word: u32) -> (Option<Refusal>, bool) {
+fn coprocessor(word: u32) -> Option<Refusal> {
     if word & 0x0f00_0010 != 0x0e00_0010 || (word >> 8) & 15 != 15 {
-        return (None, false);
+        return None;
     }
     let (opc1, read, crn, crm, opc2) = ((word >> 21) & 7, word & (1 << 20) != 0, (word >> 16) & 15, word & 15, (word >> 5) & 7);
-    let refusal = match crn {
+    match crn {
         0 if opc1 == 0 && read => Some(Refusal::IdRegisterRead { crm, opc2 }),
         15 if !(opc1 == 0 && crm == 5 && opc2 == 0 && !read) => Some(Refusal::ImplementationRegister { opc1, crm, opc2 }),
         9 if opc1 == 0 && (crm == 2 || crm == 1 && opc2 > 1) => Some(Refusal::TcmSelector { crm, opc2 }),
         _ => None,
-    };
-    (refusal, crn == 6 && !read)
+    }
 }
 
-/// Decodes one A32 word: a refusal, and whether it writes an MPU register.
-pub fn classify_a32(word: u32) -> (Option<Refusal>, bool) {
+/// Decodes one A32 word.
+pub fn classify_a32(word: u32) -> Option<Refusal> {
     if word >> 28 != 15 && word & 0x0fd0_f0f0 == 0x0710_f010 {
-        return (Some(Refusal::A32Divide), false);
+        return Some(Refusal::A32Divide);
     }
     if word & 0xff70_f000 == 0xf510_f000 || word & 0xff70_f010 == 0xf710_f000 {
-        return (Some(Refusal::PreloadForWrite), false);
+        return Some(Refusal::PreloadForWrite);
     }
     coprocessor(word)
 }
 
 /// Decodes one 32-bit T32 instruction, first halfword in the high bits.
 /// T32 SDIV/UDIV exist on Cortex-R4 and are admitted.
-pub fn classify_t32(word: u32) -> (Option<Refusal>, bool) {
+pub fn classify_t32(word: u32) -> Option<Refusal> {
     if word & 0xef00_0010 == 0xee00_0010 {
         return coprocessor(word);
     }
-    (None, false)
+    None
 }
 
 #[derive(Default)]
@@ -86,7 +85,7 @@ struct CoreHook {
 
 unsafe fn admit(address: u64, word: u32, thumb: bool, data: *mut c_void) -> bool {
     let admission = unsafe { &*data.cast::<RefCell<Admission>>() };
-    let refusal = if thumb { classify_t32(word).0 } else { classify_a32(word).0 };
+    let refusal = if thumb { classify_t32(word) } else { classify_a32(word) };
     if let Some(refusal) = refusal {
         admission.borrow_mut().refusal = Some((refusal, address, word));
         false
@@ -166,7 +165,7 @@ mod tests {
     use super::*;
 
     fn refused(word: u32) -> Option<Refusal> {
-        classify_a32(word).0
+        classify_a32(word)
     }
 
     #[test]
@@ -192,12 +191,12 @@ mod tests {
         assert_eq!(refused(0xee1f_0f10), Some(Refusal::ImplementationRegister { opc1: 0, crm: 0, opc2: 0 }));
         assert_eq!(refused(0xee09_0f31), None); // mcr p15,0,r0,c9,c1,1 (BTCM region)
         assert_eq!(refused(0xee09_0f12), Some(Refusal::TcmSelector { crm: 2, opc2: 0 }));
-        assert_eq!(classify_a32(0xee06_0f12), (None, true)); // mcr p15,0,r0,c6,c2,0 (RGNR)
+        assert_eq!(classify_a32(0xee06_0f12), None); // mcr p15,0,r0,c6,c2,0 (RGNR)
     }
 
     #[test]
     fn t32_coprocessor_reads_are_classified_and_t32_divide_is_admitted() {
-        assert_eq!(classify_t32(0xee10_0fb0).0, Some(Refusal::IdRegisterRead { crm: 0, opc2: 5 }));
-        assert_eq!(classify_t32(0xfb90_f0f1).0, None); // sdiv r0, r0, r1
+        assert_eq!(classify_t32(0xee10_0fb0), Some(Refusal::IdRegisterRead { crm: 0, opc2: 5 }));
+        assert_eq!(classify_t32(0xfb90_f0f1), None); // sdiv r0, r0, r1
     }
 }

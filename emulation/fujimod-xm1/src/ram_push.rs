@@ -903,8 +903,7 @@ impl Server {
         Ok(count)
     }
 
-    /// Returns the terminal stop the restored guest state replaced. After a stop the R4F guard
-    /// restarts empty: its entered-block set holds blocks the refusal left undecoded.
+    /// Returns the replaced terminal stop. The guard's recorded refusal survives until reset.
     fn restore_snapshot(&mut self, name: &SnapshotName) -> Result<Option<String>, String> {
         let bytes = self.snapshots.get(name).ok_or_else(|| format!("snapshot {} is not held", name.0))?;
         let machine = &mut self.bridge.machine;

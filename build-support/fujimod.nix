@@ -20,6 +20,7 @@ let
     # patch ends CMD53 to an enumeration-only module with a command timeout
     # (E-WIFI-CMD53-UNANSWERED-150, a declared assumption). The R-profile
     # exclusive patch adds byte and halfword LDREX/STREX (#157).
+    # Translation admission checks A32 and Thumb instructions before execution.
     patches = [
       ./fujimod-unicorn-context-align.patch
       ./fujimod-classified-watch.patch
