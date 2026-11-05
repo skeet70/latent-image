@@ -1,5 +1,5 @@
 load("//replacement/toolchain:rust.bzl", "xm1_rust_staticlib")
-load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -67,4 +67,60 @@ genrule(
     tools = ["@lab_xm1_rust//:bin/rustc"],
     outs = ["host-adapter-control-6.detected"],
     cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --cfg 'feature=\"guest\"' --cfg 'feature=\"control-6\"' $(location src/lib.rs) -o $(@D)/host-adapter-control-6 && if $(@D)/host-adapter-control-6 --exact guest::tests::rsc_nine_guest_entries_status_outputs_and_read_only_semaphore; then exit 1; else touch $@; fi",
+)
+
+haskell_library(
+    name = "oracle-lib",
+    srcs = [
+        "Replacement/RecordStore/Arm.hs",
+        "Replacement/RecordStore/Cases.hs",
+        "Replacement/RecordStore/Hardware.hs",
+        "Replacement/RecordStore/Harness.hs",
+        "Replacement/RecordStore/Model.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
+)
+
+haskell_binary(
+    name = "oracle-cases",
+    srcs = ["OracleMain.hs"],
+    main_file = "OracleMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":oracle-lib",
+        "//emulation:case-sha256",
+        "//emulation:native-observation",
+        "//emulation:native-adapter",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:deepseq",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+    ],
+)
+
+haskell_test(
+    name = "oracle-tests",
+    srcs = ["OracleTests.hs"],
+    main_file = "OracleTests.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-O2"],
+    deps = [
+        ":oracle-lib",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+    ],
 )

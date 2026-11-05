@@ -492,6 +492,49 @@ The default candidate is `:record-store-image`; each `:record-store-image-contro
 
 The linker collects reachable `compiler_builtins` archive-member sections in a forbidden output section and asserts it is empty. This rejects transitive compiler-builtins code before emitting any candidate artifact.
 
+### Native oracle
+
+`//replacement/record_store:oracle-cases` generates native-case batches from the independent Haskell model in `Replacement.RecordStore.Model`, the byte-read [stock contract](../reports/record-service-stock-contract.md) and design §5. Without `--runner` it writes and validates the case files. With `--runner` it executes the stock role, compares the model with stock and writes `summary.json`. `--candidate BIN --symbols SYMBOLS` emits the candidate batches and, with a runner, compares their boundary observations with stock. `--filter FAMILY` selects case identifiers containing that text. `--stock-output DIRECTORY` reuses recorded stock observations only when their execution inputs equal the regenerated case JSON, excluding the `expected` field. `--control` requires the supplied candidate to differ on at least one case, while still requiring model equals stock. Run each of the nine `record-store-image-control-N` artifacts in this mode.
+
+The cases execute the canonical record span, raw NAND service and runtime helpers, with loader divide helpers and a declared A32 medium model at the five NAND request entries. The medium is keyed by pool-relative logical blocks, erases to `0xff`, programs by AND, and supports a failed persistence request or a stop before a persistence step. Recovery cases open and read the resulting medium afresh. Checks and prepares are observed with their input and output bytes; the real kind-2 and kind-3 callbacks run on pinned hardware records and parity mutations. The independent parity model cites `id4.dis` at `0x6a83f4..0x6a8658` and `0x6a6b74..0x6a6dd8`.
+
+Compared observations are entry return statuses, preserved registers and SP, client words, caller memory including collection tails, returned staging pointers and record copies, skipped counts, ordered callback records, ordered program/erase requests including complete payloads, and the final medium. Void close's incidental r0, raw read requests, caches, wrapper/slot internals and non-observable staging bytes are excluded. Register-only stubs stand in for the two semaphore and two cache-maintenance entries. No registration uses kind 6 or above.
+
+`summary.json` is the boundary verdict. The generic native-case transport reports also compare private RAM and stub events, which this oracle excludes; their `mismatches` are not the record-store verdict. Each case JSON carries the model's expected caller buffers, returned records, program/erase journal and callback journal. The model tests are `//replacement/record_store:oracle-tests`.
+
+```sh
+devenv shell -- bazel --output_base=/home/murph/.cache/bazel/latent-image-RecordStoreOracle build --jobs=2 //replacement/record_store:oracle-cases //emulation:native-runner //emulation:emulator-slot
+devenv shell -- bazel --output_base=/home/murph/.cache/bazel/latent-image-RecordStoreOracle test --jobs=2 //replacement/record_store:oracle-tests
+XM1_EMULATOR_SLOTS=1 devenv shell -- bazel-bin/emulation/emulator-slot bazel-bin/replacement/record_store/oracle-cases --runner bazel-bin/emulation/native-runner --out PRIVATE_OUTPUT
+# Add --candidate CARRIER.bin --symbols CARRIER.symbols for the candidate.
+# Add --control with one control artifact for a must-fail comparison.
+```
+
+Qualified on the native profile (`E-RECORD-STORE-ORACLE-NATIVE-150`): all 370 cases match the independent model and stock, and the owned carrier matches stock on all 370. `stock-6` holds the native stock observations, `stock-7` their comparison with the corrected model, and `candidate-10` the full comparison for Core `849a0387`, carrier bin SHA-256 `ad52c5d5e5c4c0585f08bdb3a30fb1fc14284eafe1e4516f299c6394bf62e5bc`. Cached observations are used only after the execution-input equality check. All nine controls are detected on 60 selected cases; none relies on a native admission refusal.
+
+The stock run exposed 35 callback-order differences in the initial model. `0x6ac694..0x6ac69c` skips the following-bank check when the recovery-count output is null; append passes null. The model now distinguishes `OmitRecoveryCount` and `WriteRecoveryCount`. The stock contract and hardware fixtures were not changed.
+
+| Control | Case selector | Cases | Cases differing from stock |
+| ---: | --- | ---: | ---: |
+| 1 | `append-mask` | 5 | 5 |
+| 2 | `append-rotate` | 10 | 10 |
+| 3 | `append-queried-different` | 5 | 5 |
+| 4 | `newest-rejected` | 5 | 5 |
+| 5 | `all-rejected` | 5 | 5 |
+| 6 | `append-rotate` | 10 | 10 |
+| 7 | `wrap` | 10 | 5 |
+| 8 | `erase-all` | 5 | 5 |
+| 9 | `fresh-append` | 5 | 1 |
+
+The comparator forces each verdict and writes `batch-N.json` after each four-case batch. Reported peak RSS was 498,636 KiB for the stock run and 599,492 KiB for the full candidate comparison, with zero swaps. Native-only batches may run serially in a 2 GiB scope with `--native-jobs 1`; full-system runs still require an emulator slot.
+
+```sh
+systemd-run --user --scope -p MemoryMax=2G -- \
+  bazel-bin/replacement/record_store/oracle-cases --native-jobs 1 \
+  --runner bazel-bin/emulation/native-runner --out PRIVATE_OUTPUT \
+  --stock-output STOCK_OBSERVATIONS --candidate CARRIER.bin --symbols CARRIER.symbols
+```
+
 ## Owned menu engine, increment 1 (#128)
 
 `menu_engine/` is the host part of increment 1 of [the engine design](../reports/owned-menu-engine-design.md): a `no_std` library with `MenuEvent`, `EngineState`, `Effect`, `EngineServices`, `Tree` and `apply`, plus `block::decode`/`block::mirror` over the 0x430-byte block at `0x009571d0` and the last-move pair `0x01467580`. It owns five event classes, each with an oracle case: kind 4 and kind 5 row steps on a wrapping node with queried availability, kind `0xe` push from a node whose remember write runs, kind `0xf` pop to a parent with the same id, and kind 1 open; `engine.rs` lists the exact conditions. `apply` makes every call to stock (notifications, snapshot stores, availability, initial row, and the stock kind switch for an empty node's nested pop) through `EngineServices` in stock's order, and returns `NotOwned` only before its first call. The pure classifier and snapshot of `FUN_0061ca2c`/`FUN_0061cd14` live in `menu_engine/src/frame.rs`; `owned_menu::frame` runs them over the live cells. The crate is an unconditional module of the bank crate; `llvm-nm -u` of the four bank archives is unchanged by it.
