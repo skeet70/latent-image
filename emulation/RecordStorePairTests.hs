@@ -23,7 +23,7 @@ import Emulation.Sha256 (sha256, sha256Hex)
 import Numeric (showHex)
 import System.Exit (exitFailure)
 
-data Mutation = Original | PayloadByte | ReorderCalls | StrayFetch | ForeignRead | CacheAgeWrite | BadSettings | BadMedium | MissingCapture | BadBinding | CollectionTail | ReturnedRecord | CloseScratch | OutputStorage | MissingResetRegion | RetiredSnapshotDifference | PreEntryPublication | PostEntryPublication | PreEntryBssWrite | PreEntryRead | MissingMarker | LaterPhaseWrite deriving (Eq)
+data Mutation = Original | PayloadByte | ReorderCalls | StrayFetch | ForeignRead | CacheAgeWrite | BadSettings | BadMedium | MissingCapture | BadBinding | CollectionTail | ReturnedRecord | CloseScratch | OutputStorage | MissingResetRegion | RetiredSnapshotDifference | PreEntryPublication | PostEntryPublication | PreEntryBssWrite | PreEntryRead | MissingMarker | LaterPhaseWrite | MappedMedium | TruncatedSpare | ChangedSpareByte deriving (Eq)
 encode :: Value -> B.ByteString
 encode = BL.toStrict . A.encode
 hash :: B.ByteString -> String
@@ -63,12 +63,18 @@ resetRegions role mutation = A.toJSON (settingRows mutation ++
   [object ["start" .= low,"bytes" .= hex (B.replicate (fromIntegral (high-low)) (if mutation == RetiredSnapshotDifference then 1 else 0))]
   | [low,high] <- if mutation == MissingResetRegion then drop 1 (retired role) else retired role])
 medium :: Mutation -> Value
-medium mutation = if mutation == BadMedium then mediumValue True else erasedMedium
+medium mutation = if mutation `elem` [BadMedium,MappedMedium,TruncatedSpare,ChangedSpareByte] then mediumValue mutation else erasedMedium
 erasedMedium :: Value
-erasedMedium = mediumValue False
-mediumValue :: Bool -> Value
-mediumValue corrupt = A.toJSON [object ["logical" .= logical,"physical" .= Null,"data" .= (if corrupt && logical == 0x54 then zeroBlock else erasedBlock),"spare" .= Null] | logical <- ([0x52..0x59] ++ [0x68,0x69]::[Word32])]
+erasedMedium = mediumValue Original
+mediumValue :: Mutation -> Value
+mediumValue mutation = A.toJSON
+  [object ["logical" .= logical,"physical" .= (if mapped logical then A.toJSON (0x380::Word32) else Null)
+    ,"data" .= (if mutation == BadMedium && logical == 0x54 then zeroBlock else erasedBlock)
+    ,"spare" .= (if mapped logical then A.toJSON spare else Null)]
+  | logical <- ([0x52..0x59] ++ [0x68,0x69]::[Word32])]
  where
+  mapped logical = logical == 0x54 && mutation `elem` [MappedMedium,TruncatedSpare,ChangedSpareByte]
+  spare = hex (B.cons (if mutation == ChangedSpareByte then 0 else 255) (B.replicate ((if mutation == TruncatedSpare then 4096 else 32768)-1) 255))
   zeroBlock = hex (B.replicate 131072 0)
   erasedBlock = hex (B.replicate 131072 255)
 readback :: Word32 -> B.ByteString -> Value
@@ -172,6 +178,16 @@ main = do
         (Right a,Right b) -> isLeft (comparePair a b)
         _ -> False
       refused mutation = isLeft (owned mutation)
+      mappedMatched = case (qualify Stock bindings (fixture Stock MappedMedium),owned MappedMedium) of
+        (Right a,Right b) -> not (isLeft (comparePair a b))
+        _ -> False
+      spareDifference = case (qualify Stock bindings (fixture Stock MappedMedium),owned ChangedSpareByte) of
+        (Right a,Right b) -> case comparisonValue a b (comparePair a b) of
+          Object fields -> case KM.lookup "path" fields of
+            Just (String path) -> ".spare.0" `T.isSuffixOf` path
+            _ -> False
+          _ -> False
+        _ -> False
       reportedCoverage = case (stock,owned Original) of
         (Right a,Right b) ->
           let expected role = object
@@ -209,6 +225,9 @@ main = do
         ,("retirement remains active across phases",refused LaterPhaseWrite)
         ,("changed settings fail comparison",differs BadSettings)
         ,("unmapped non-erased medium refuses qualification",refused BadMedium)
+        ,("mapped medium admits complete bridge spare blocks",mappedMatched)
+        ,("truncated mapped spare block refuses qualification",refused TruncatedSpare)
+        ,("mapped spare bytes remain compared exactly",spareDifference)
         ,("missing capture declaration refuses qualification",refused MissingCapture)
         ,("changed cohort input fails comparison",differs BadBinding)]
   case (stock,owned Original) of

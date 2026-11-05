@@ -2648,3 +2648,5 @@ Matched and differing reports include `coverage.stock` and `coverage.owned`: all
 
 Reset snapshots contain the role's declared write ranges: three settings images and four stock-only metadata ranges, plus the unused second cache buffer for the owned role. Admission requires every complete source range, while settings comparison selects only the settings images. Owned state `[0x89f8f8,0x89fa60)` and the owned block buffer `[0x8a0080,0x8c0080)` are intentionally unwatched. Their behavior is covered by the native oracle, returned records and NAND effects; this pair does not establish general access confinement for those owned ranges.
 
+Mapped medium blocks require 131,072 data bytes and 32,768 bridge-exposed spare bytes, comprising 64 rows with 512 spare bytes per row. Every admitted data and spare byte remains part of the exact comparison.
+

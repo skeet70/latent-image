@@ -213,7 +213,7 @@ parseMedium value = do
     need (B.length bytes == 131072) "medium block has incorrect size"
     case (mapped,spare) of
       (Nothing,Nothing) -> need (B.all (==255) bytes) "unmapped block is not erased"
-      (Just _,Just extra) -> need (B.length extra == 4096) "spare block has incorrect size"
+      (Just _,Just extra) -> need (B.length extra == 32768) "spare block has incorrect size"
       _ -> Left "medium map/spare disagree"
     pure (Block logical mapped bytes spare))
   need ([logical | Block logical _ _ _ <- rows] == [0x52..0x59] ++ [0x68,0x69]) "record pool blocks differ"
