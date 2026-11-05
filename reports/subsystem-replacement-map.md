@@ -245,6 +245,8 @@ UILIB task33 entry `0x1109130`, queue33 `{count 0x30,size 0x14}`, and VGLIB task
 
 The interface inventory is [the render-service manifest draft](render-service-manifest-draft.md) (E-RENDER-SERVICE-MANIFEST-150): UILIB task 33, graphic task 40, VGLIB task 73 and the vector-engine tasks 71/72, their command families, the main UI submission path, the shadow-to-scanout commit and the probe, in 860 entry contracts. The probe also returns 1, a property-5 variant of disabled.
 
+The project's stock map, target design, shims, device laws and first increment are in [the display/render target design](display-render-target-design.md) (`E-DISPLAY-RENDER-TARGET-DESIGN-150`).
+
 ### 2. Extent, data and initialization
 
 UILIB's finite step is 140 bytes; row probe is0x6038 /24,632 bytes with further callees/tables. UILIB initializes through `0x1108cec/0x1108bc8`, publishes a consumer token after successful receive and initializes byte `0x15e470d` only through command family0x1000. Graphics planes, scanout/rectangle state, buffers and completion/ack state are observable, but total renderer code/data ownership and initialization duties are not recovered. [Source: Inventory §8.18 line1694; `replacement/service/README.md:9-10,78-84`; `emulation/README.md:1038,1247`.]
