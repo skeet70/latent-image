@@ -97,7 +97,7 @@ impl RamGuard {
             dma_mappings: vec![BusMapping::ram(0, 0x10000)],
             decoders: vec![], peripherals: vec![], instructions_per_tick: Ratio::new(1, 1).unwrap(),
         };
-        let board = graph.build(factory::Options {
+        let mut board = graph.build(factory::Options {
             engine: factory::Engine::Unicorn, translation_cache_bytes: 1 << 20,
         }, Bus::new(Mode::Strict), None).unwrap();
         board.set_execution_policy(ExecutionPolicy::Exact).unwrap();
