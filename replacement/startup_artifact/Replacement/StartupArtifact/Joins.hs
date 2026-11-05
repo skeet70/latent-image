@@ -1179,7 +1179,7 @@ kernelSlotLoaderStartup :: Join JoinKind
 kernelSlotLoaderStartup = Join KernelSlotLoaderStartup (Set.fromList [KernelSlotBodies, LoaderStartup])
   (slotCarriers LoaderA ++ slotCarriers LoaderB ++ [at LoaderA loaderAStart 0x40b00, at LoaderB loaderStartup 0xd0b00])
   (reason ("loader-startup hashes both canonical loaders (replacement/startup_dispatch/Replacement/StartupDispatch/Artifact.hs:40-46) and the kernel-slot admission hashes both over the orchestration carriers; " <> rebaseText
-    <> "; the orchestration admissions treat retained callees as stock from their entries (replacement/loader_orchestration/Replacement/LoaderOrchestration/Interface.hs:34-48); loader-startup-slot-callers-leave-clobbers-dead checks every direct and root-slot caller in the piece's canonical footprint, and loader-startup-calls-enter-slot-entries checks the direct calls in that footprint and in the owned orchestration code"))
+    <> "; the orchestration admissions name retained service entries (replacement/loader_orchestration/Replacement/LoaderOrchestration/Interface.hs:34-49) and require their actual providers to remain admitted (replacement/loader_orchestration/Replacement/LoaderOrchestration/Artifact.hs:212-216); loader-startup-slot-callers-leave-clobbers-dead checks every direct and root-slot caller in the piece's canonical footprint, and loader-startup-calls-enter-slot-entries checks the direct calls in that footprint and in the owned orchestration code"))
   [publishedSlotEntries, callsEnterAtEntries LoaderStartup, callersScratchDead LoaderStartup, differsOnlyInCarriers LoaderA, differsOnlyInCarriers LoaderB]
 
 kernelSlotOrchestrationB :: Join JoinKind
@@ -1192,7 +1192,7 @@ kernelSlotOrchestrationB = Join KernelSlotLoaderOrchestrationB (Set.fromList [Ke
 kernelSlotRecord2Link :: Join JoinKind
 kernelSlotRecord2Link = Join KernelSlotRecord2Link (Set.fromList [KernelSlotBodies, Record2Link])
   (slotCarriers LoaderB ++ serviceSlots LoaderA ++ [at LoaderB 0xd000c 0xd0010, at LoaderB initializerSite (initializerSite + 4)])
-  (reason ("the record-2 admission pins the stock +0x164, +0x168 and +0x1618 words of both canonical loaders (emulation/Emulation/CriticalPair.hs:106-110) and hashes loader B into the prefix facts, retained against the original (emulation/Emulation/LoaderPrefixWitness.hs:446) and owned over the loader it is given (:524); the kernel-slot admission hashes loader B over the header and initializer words; " <> rebaseText
+  (reason ("the record-2 admission pins the stock +0x164, +0x168 and +0x1618 words of both canonical loaders (emulation/Emulation/CriticalPair.hs:89-110) and hashes loader B into the prefix facts, retained against the original (emulation/Emulation/LoaderPrefixWitness.hs:446) and owned over the loader it is given (:524); the kernel-slot admission hashes loader B over the header and initializer words; " <> rebaseText
     <> "; the critical-pair entry adapter calls +0x1618 and +0x164 32 bytes into its 64-byte frame and holds the +0x164 target in r3 across the call (replacement/critical_pair/entry.S:7-21; emulation/Emulation/CriticalPair.hs:485-486,640-642), its bridge leaves a retained slot 8 bytes (criticalSlotBytes) and its model keeps only the published r0 of a slot call (CriticalPair.hs bridgeSummary), which critical-pair-slot-frames-and-r3 checks against the owned frames and clobbers"))
   [publishedSlotEntries, callsEnterAtEntries Record2Link, callersScratchDead Record2Link, criticalSlotsFit, differsOnlyInCarriers LoaderB]
 
