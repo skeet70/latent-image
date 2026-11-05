@@ -1,0 +1,17 @@
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "task1-actor-rust",
+    src = "src.rs",
+    crate_name = "xm1_task1_actor",
+)
+
+xm1_rust_elf(
+    name = "task1-actor-image",
+    rust_staticlib = ":task1-actor-rust",
+    entry = "xm1_task1_actor",
+    link_script = "task1-actor.ld",
+    extra_ldflags = ["-Wl,--gc-sections"],
+)
