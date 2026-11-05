@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | The registered joins.
 module Replacement.StartupArtifact.Joins
-  ( JoinKind (..), registeredJoins, joinedTasks, submissionStack, submissionStackWith
+  ( JoinKind (..), registeredJoins, joinedTasks, submissionStack, submissionStackWith, constructorInitializer
   ) where
 
 import qualified A32 as A
@@ -10,6 +10,7 @@ import Data.List (nub)
 import Data.Maybe (isJust, mapMaybe)
 import qualified Data.Set as Set
 import Data.Word (Word32)
+import Numeric (showHex)
 import qualified Emulation.InterfaceInitializer as I
 import qualified Emulation.LoaderPrefixWitness as P
 import qualified FujiAF.FirstStage as F
@@ -34,12 +35,15 @@ import qualified Replacement.StartupArtifact.Footprint.RootTask as RootFootprint
 import qualified Replacement.TaskSubmission.Admission as WA
 import qualified Replacement.TaskSubmission.Artifact as W
 import qualified StartupStageContract as Stage
+import qualified Replacement.TaskConstructors.Artifact as TC
+import qualified Replacement.TaskConstructors.Admission as TCA
 
 data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | PrefixOrchestrationB | FirstStageCompletionZero
   | LoaderStartupPublisher | PublisherInstallerRoots | CriticalPairInstallerRoots | DispatcherCriticalPair
   | TaskCompositionOwnedCalls | DispatcherTaskComposition | PublisherTaskServices
   | DispatcherRootEntry | DispatcherIdleEntry | WrapperIdleErrorCallback | RootTaskServices
   | Image5ProducerServices | PlainProducerServices | ApplicationPumpServices | Task1ActorProducer | Task1ActorPump | Image5InitializerServices
+  | ConstructorInitializer | ConstructorTaskSubmission | ConstructorImage5Producer
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 instance JoinName JoinKind where
@@ -64,6 +68,9 @@ instance JoinName JoinKind where
   joinName Task1ActorProducer = "task1-actor-producer"
   joinName Task1ActorPump = "task1-actor-pump"
   joinName Image5InitializerServices = "image5-initializer-services"
+  joinName ConstructorTaskSubmission = "constructor-task-submission"
+  joinName ConstructorImage5Producer = "constructor-image5-producer"
+  joinName ConstructorInitializer = "constructor-initializer"
 
 at :: Target -> Word32 -> Word32 -> Span
 at target start end = Span target (Guest start) (Guest end)
@@ -360,7 +367,8 @@ registeredJoins =
   , loaderStartupPublisher, publisherInstallerRoots, criticalPairInstallerRoots, dispatcherCriticalPair
   , taskCompositionOwnedCalls, dispatcherTaskComposition, publisherTaskServices
   , dispatcherRootEntry, dispatcherIdleEntry, wrapperIdleErrorCallback, rootTaskServices
-  , image5ProducerServices, plainProducerServices, applicationPumpServices, task1ActorProducer, task1ActorPump, image5InitializerServices ]
+  , image5ProducerServices, plainProducerServices, applicationPumpServices, task1ActorProducer, task1ActorPump, image5InitializerServices
+  , constructorTaskSubmission, constructorImage5Producer ]
 
 -- | The task wrapper, the record-2 critical pair and the task-storage transition joined as in
 -- replacement/startup_composition/Replacement/StartupComposition/TaskSubmission.hs:63-97.
@@ -606,3 +614,28 @@ image5InitializerServices = Join Image5InitializerServices (Set.fromList [Image5
   [at Image5 0xd9856c 0xd986b0]
   (ObservationQualified "record 5 publishes the owned initializer before its entry; private-data/scratch/j9/design.md section 3")
   []
+constructorTaskSubmission :: Join JoinKind
+constructorTaskSubmission = Join ConstructorTaskSubmission (Set.fromList [TaskConstructors, TaskSubmission])
+  [at Image4 0x725dd8 0x725ddc]
+  (ObservationQualified "constructors call task submission only at its stock entry 0x725dd8; descriptor fields, D+24 classification and failure propagation require constructor native cases and composed qualification")
+  [HostCheck "constructor-submission-entry-retained" $ \evidence ->
+    all (\constructor -> constructorEntryPreserved evidence constructor) TC.constructors]
+
+constructorEntryPreserved :: JoinEvidence -> TCA.Constructor -> Bool
+constructorEntryPreserved evidence (TCA.Constructor (TCA.CodeAddress start) _) =
+  case [symbols | TaskConstructorsFacts (LinkedBytes _ symbols) <- map pieceFacts (evidencePieces evidence)] of
+    [symbols] -> symbolAt symbols ("xm1_ctor_" ++ showHex start "") == Just start
+    _ -> False
+
+constructorImage5Producer :: Join JoinKind
+constructorImage5Producer = Join ConstructorImage5Producer (Set.fromList [TaskConstructors, Image5Producer])
+  [at Image5 low high | TCA.Constructor (TCA.CodeAddress low) (TCA.CodeAddress high) <- TC.constructors, low >= targetBase Image5]
+  (ObservationQualified "the image5 producer publishes record 5 with the constructor carriers at their unchanged entries; verifyComposed compares the decoded image5 with the composition target")
+  [HostCheck "constructor-entries-retained" $ \evidence -> all (constructorEntryPreserved evidence) TC.constructors]
+
+constructorInitializer :: PieceKind -> Join JoinKind
+constructorInitializer initializer = Join ConstructorInitializer (Set.fromList [TaskConstructors, initializer])
+  [at (if low < targetBase Image5 then Image4 else Image5) low (low+4)
+    | low <- [0xd80d44,0xec5350,0xdca604,0xdb63e0,0xed10b4,0xef8c90,0xed2b00,0x1055d10,0x69f000]]
+  (ObservationQualified "the initializer calls the constructors at their stock entries; constructor ABI and status behavior require native qualification, and descriptor D+24 retains the initializer's caller-stack classification word")
+  [HostCheck "initializer-constructor-entries-retained" $ \evidence -> all (constructorEntryPreserved evidence) TC.constructors]

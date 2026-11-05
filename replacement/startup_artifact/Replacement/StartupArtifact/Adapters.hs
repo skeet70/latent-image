@@ -6,7 +6,7 @@ module Replacement.StartupArtifact.Adapters
   ( LinkedImage (..), ImageBytes (..), SymbolBytes (..), PieceImages (..)
   , deriveFirstStage, deriveRecord2Link, derivePrimaryPublisher, deriveLoaderOrchestrationB, deriveLoaderStartup, derivePieceOf
   , deriveTaskSubmission, deriveTaskStorage, deriveIdleTask, deriveRootTask, deriveImage5Producer, derivePlainProducer
-  , deriveApplicationPump, deriveTask1Actor, deriveImage5Initializer
+  , deriveApplicationPump, deriveTask1Actor, deriveImage5Initializer, deriveTaskConstructors
   , ProducerCall (..), producerCallBoundaries, callerReturn
   ) where
 
@@ -71,6 +71,8 @@ import qualified Replacement.StartupArtifact.Footprint.Task1Actor as Task1Footpr
 import qualified Replacement.TaskStorage.Artifact as TSt
 import qualified Replacement.TaskSubmission.Admission as WA
 import qualified Replacement.TaskSubmission.Artifact as W
+import qualified Replacement.TaskConstructors.Artifact as TC
+import qualified Replacement.TaskConstructors.Admission as TCA
 
 newtype ImageBytes = ImageBytes B.ByteString
 newtype SymbolBytes = SymbolBytes B.ByteString
@@ -102,6 +104,7 @@ derivePieceOf source images = case images of
     ApplicationPump -> deriveApplicationPump source image
     Task1Actor -> deriveTask1Actor source image
     Image5Initializer -> deriveImage5Initializer source image
+    TaskConstructors -> deriveTaskConstructors source image
 
 admitted :: PieceKind -> Either String a -> Either Refusal a
 admitted kind = first (AdapterRefused kind . T.pack)
@@ -1130,3 +1133,40 @@ deriveImage5Initializer source (LinkedImage (ImageBytes bin) (SymbolBytes symbol
         , Premise "retained callee stack demand below the owned frame is not proved" ]
         (Catalog (entry:calls ++ [returned {boundaryKind = ReturnBoundary}]) code writes []) (Image5InitializerFacts (LinkedBytes bin symbols))
   derivePiece source declaration (StagedOutput (canonicalDat source) Nothing (Just staged))
+deriveTaskConstructors :: Canonical -> LinkedImage -> Either Refusal Piece
+deriveTaskConstructors source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) = do
+  let kind = TaskConstructors
+      admit = admitted kind
+      targets = canonicalTargets source
+  original <- admit (TC.canonicalSource (canonicalDat source) (targetOf targets Image4) (targetOf targets Image5))
+  artifact <- admit (TC.deriveArtifact original bin symbolBytes)
+  carriers <- mapM (\(TCA.Constructor (TCA.CodeAddress low) (TCA.CodeAddress high)) ->
+    spanOf kind (if low < targetBase Image5 then Image4 else Image5) low high) TC.constructors
+  code <- concat <$> mapM (\(TCA.Constructor (TCA.CodeAddress low) (TCA.CodeAddress high)) -> ownedCode kind low high) TC.constructors
+  both <- coreSet kind [Core0, Core1]
+  few <- limit kind 4
+  boundaries <- mapM (\(TCA.Constructor (TCA.CodeAddress low) _) -> do
+    named <- label kind ("entry-" <> hexName low)
+    pure (Boundary named SiteBoundary both (Pc low) (Just (Pc low)) False ComparePresence few Nothing)) TC.constructors
+  let serviceWords = nub [address | constructor <- TC.constructors, TCA.CodeAddress address <- TC.retainedCalls original constructor]
+      footprint = [Footprint (Span (if address < targetBase Image5 then Image4 else Image5) (Guest address) (Guest (address+4))) RuntimePremise
+        (Citation "replacement/task_constructors/Replacement/TaskConstructors/Artifact.hs:33-39")
+        | address <- serviceWords, address >= targetBase Image4]
+        ++ [Footprint (Span Image5 (Guest 0xec56a0) (Guest 0xec56a4)) RuntimePremise
+          (Citation "replacement/task_constructors/Replacement/TaskConstructors/Artifact.hs:22-30")]
+      premises = map Premise
+        [ "retained mailbox creation and task submission preserve their stock entry ABI and effects"
+        , "layout/control-flow admission does not prove descriptor effects, status propagation or callee-saved registers"
+        , "constructor callers provide mapped task-stack storage; descriptor D+24 retains its caller-stack classification word"
+        , "callback provenance from incoming r0 into r8 and its result argument at 0xef8da8 require native qualification"
+        , "retained callees preserve r4-r11 and do not modify the constructor descriptor tail" ]
+      writes = EnumeratedWrites (taskStackWindows ++ [wrapperRecords, storageRecords
+        , WriteRange PhysicalTarget 0x89ea98 0x89ea9c, WriteRange PhysicalTarget 0xa0f82c 0xa0f830
+        , WriteRange PhysicalTarget 0x1526a7c 0x1526a84, WriteRange PhysicalTarget 0x169d370 0x169d376
+        , WriteRange PhysicalTarget 0x1469cd0 0x146a184])
+        (Premised (Premise "constructor and retained-service effects require native and composed qualification"))
+      catalog = Catalog boundaries code writes []
+      declaration = PieceDeclaration kind (Set.singleton TaskConstructorsArea) carriers footprint premises catalog
+        (TaskConstructorsFacts (LinkedBytes bin symbolBytes))
+      (image4,image5) = TC.stageImages original artifact
+  derivePiece source declaration (StagedOutput (canonicalDat source) (Just image4) (Just image5))

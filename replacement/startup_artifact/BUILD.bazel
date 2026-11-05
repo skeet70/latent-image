@@ -72,6 +72,7 @@ haskell_library(
         "//replacement/startup_composition:task-composition-artifact",
         "//replacement/task_storage:task-storage-artifact",
         "//replacement/task_submission:task-submission-artifact",
+        "//replacement/task_constructors:task-constructors-artifact",
     ],
 )
 
@@ -277,6 +278,23 @@ haskell_test(
     srcs = ["J9CanonicalTests.hs"],
     args = _TOOL_ARGS + ["$(rootpath %s)" % image for image in _J9_IMAGES],
     data = _TOOLS + _J9_IMAGES,
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    tags = ["manual"],
+    deps = _TEST_DEPS,
+)
+
+_J10_IMAGES = [
+    "//replacement/task_constructors:task-constructors-image.bin",
+    "//replacement/task_constructors:task-constructors-image.symbols",
+    "//replacement/task_submission:task-submission-image.bin",
+    "//replacement/task_submission:task-submission-image.symbols",
+]
+
+haskell_test(
+    name = "startup-artifact-j10-canonical-tests",
+    srcs = ["J10CanonicalTests.hs"],
+    args = _TOOL_ARGS + ["$(rootpath %s)" % image for image in _J10_IMAGES],
+    data = _TOOLS + _J10_IMAGES,
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     tags = ["manual"],
     deps = _TEST_DEPS,

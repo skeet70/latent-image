@@ -166,6 +166,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/startup_sites.rs",
     "//emulation:fujimod-xm1/src/startup_tasks.rs",
     "//emulation:fujimod-xm1/src/idle_tasks.rs",
+    "//emulation:fujimod-xm1/src/task_constructors.rs",
     "//emulation:fujimod-xm1/src/task_storage.rs",
     "//emulation:fujimod-xm1/src/task_storage_check.rs",
     "//emulation:fujimod-xm1/src/task_submission_control.rs",
