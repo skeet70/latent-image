@@ -4,11 +4,11 @@
 //! in-progress state.
 
 macro_rules! word {
-    ($(#[$meta:meta])* $name:ident) => {
+    ($(#[$meta:meta])* $name:ident $(, $visibility:vis)?) => {
         $(#[$meta])*
         #[repr(transparent)]
         #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-        pub struct $name(u32);
+        pub struct $name($($visibility)? u32);
 
         impl $name {
             pub const fn new(raw: u32) -> Self {
@@ -26,7 +26,7 @@ pub(crate) use word;
 
 word!(
     /// Node record word 0.
-    NodeId
+    NodeId, pub
 );
 word!(
     /// Node record word 1.
@@ -38,7 +38,7 @@ word!(
 );
 word!(
     /// Word 0 of a `{token, child}` row.
-    RowToken
+    RowToken, pub
 );
 word!(
     /// A position in a node's rows array.

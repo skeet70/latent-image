@@ -66,6 +66,17 @@
           6
         ]
       ]
+    },
+    {
+      "phase": "control-unload-close",
+      "steps": [
+        [
+          "back",
+          1,
+          5,
+          6
+        ]
+      ]
     }
   ],
   "after_unload": []

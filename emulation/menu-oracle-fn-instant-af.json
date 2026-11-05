@@ -1,0 +1,197 @@
+{
+  "schema": 1,
+  "path": [
+    "fn",
+    "back",
+    "ok",
+    "down",
+    "down",
+    "down",
+    "down",
+    "down",
+    "down",
+    "down",
+    "down",
+    "down",
+    "down",
+    "down",
+    "down",
+    "down",
+    "down",
+    "ok",
+    "down",
+    "down",
+    "down",
+    "down",
+    "down",
+    "down",
+    "down",
+    "down",
+    "ok",
+    "back"
+  ],
+  "key": "fn",
+  "trace_sites": [
+    {
+      "address": "0x00d3d858",
+      "label": "stage-open"
+    },
+    {
+      "address": "0x0063270c",
+      "label": "event-post"
+    },
+    {
+      "address": "0x00ca4674",
+      "label": "stage-consumer"
+    },
+    {
+      "address": "0x00ca4e98",
+      "label": "stage-consumer-101"
+    },
+    {
+      "address": "0x0061d384",
+      "label": "rollback-save"
+    },
+    {
+      "address": "0x0061d3a8",
+      "label": "rollback-restore"
+    },
+    {
+      "address": "0x00d4dd2c",
+      "label": "stage-entry"
+    },
+    {
+      "address": "0x00bfa234",
+      "label": "engine-kind"
+    },
+    {
+      "address": "0x00bf9f44",
+      "label": "engine-move"
+    },
+    {
+      "address": "0x00bf9b1c",
+      "label": "engine-step"
+    },
+    {
+      "address": "0x00bf988c",
+      "label": "engine-scroll"
+    },
+    {
+      "address": "0x00bfa800",
+      "label": "engine-open"
+    },
+    {
+      "address": "0x00bfab98",
+      "label": "engine-push-pop"
+    },
+    {
+      "address": "0x00bfad04",
+      "label": "engine-seek"
+    },
+    {
+      "address": "0x00bf9a5c",
+      "label": "engine-remember"
+    },
+    {
+      "address": "0x0061d0e4",
+      "label": "push-classifier"
+    },
+    {
+      "address": "0x00bf9a2c",
+      "label": "row-of-token"
+    },
+    {
+      "address": "0x0061ceac",
+      "label": "frame-snapshot"
+    },
+    {
+      "address": "0x00d52684",
+      "label": "row-availability"
+    },
+    {
+      "address": "0x00bfa914",
+      "label": "availability-return"
+    },
+    {
+      "address": "0x00d588b8",
+      "label": "initial-row"
+    },
+    {
+      "address": "0x00bfaa3c",
+      "label": "initial-row-return"
+    },
+    {
+      "address": "0x00d5b350",
+      "label": "engine-notify"
+    },
+    {
+      "address": "0x00d42a64",
+      "label": "special-post"
+    },
+    {
+      "address": "0x00d586bc",
+      "label": "value-mode"
+    },
+    {
+      "address": "0x00d3d620",
+      "label": "value-post"
+    },
+    {
+      "address": "0x00d4fc74",
+      "label": "commit"
+    },
+    {
+      "address": "0x0061c91c",
+      "label": "property-write"
+    },
+    {
+      "address": "0x00c7a528",
+      "label": "gate-75-0-50",
+      "reads": [
+        {
+          "address": "0x009544f8",
+          "length": 4
+        },
+        {
+          "address": "0x0146761c",
+          "length": 4
+        }
+      ]
+    }
+  ],
+  "write_ranges": [
+    {
+      "start": "0x0093eb74",
+      "end": "0x00944440"
+    },
+    {
+      "start": "0x0094f64c",
+      "end": "0x0094f660"
+    },
+    {
+      "start": "0x009503d0",
+      "end": "0x009503d8"
+    },
+    {
+      "start": "0x009571d0",
+      "end": "0x00957600"
+    },
+    {
+      "start": "0x0096cc64",
+      "end": "0x0096ce28"
+    },
+    {
+      "start": "0x01467580",
+      "end": "0x0146777c"
+    },
+    {
+      "start": "0x00944580",
+      "end": "0x00944684"
+    },
+    {
+      "start": "0x009544f8",
+      "end": "0x009544fc"
+    }
+  ],
+  "limit": 65536
+}

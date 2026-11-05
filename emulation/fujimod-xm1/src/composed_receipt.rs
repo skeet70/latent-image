@@ -8,6 +8,7 @@ use crate::application_observation::{self, ApplicationReceipt, ApplicationRefusa
 use crate::composed_catalog::{
     AllocationPosition, BoundaryKind, Compare, Contract, Core, Declaration, Label, PiecePolicy, PieceKind, PoolAllocation, Role, Schema, Sha256, Target,
 };
+use crate::attach_state::ComposedWrites;
 use crate::pool_allocation::{self, AllocationProblem, Allocations, Captures};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
@@ -71,7 +72,10 @@ pub enum Outcome {
 pub struct ReadCapture {
     pub label: Label,
     pub address: u32,
+    /// Empty for a read with an expectation, which keeps only its digest.
     pub bytes: HexBytes,
+    #[serde(default)]
+    pub sha256: Option<Sha256>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -194,7 +198,7 @@ pub struct ByteRange {
 }
 
 /// Writes overlapping one watched owned-code carrier class after attach. Totals, writer counts and rows are data;
-/// `coverage`, `kinds` and `owned_code_writes` are compared.
+/// `coverage`, `kinds` and `owned_code_writes` are compared, and `totals_by_kind` against the class's carrier rule.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CarrierWrites {
@@ -210,23 +214,39 @@ pub struct CarrierWrites {
     /// CPU writes whose PC lies in any piece's `owned_code`.
     pub owned_code_writes: u64,
     pub first_owned_code_writes: Vec<CarrierWrite>,
+    /// Every counted row by kind, independent of the writer limit.
+    #[serde(default)]
+    pub totals_by_kind: Vec<KindTotal>,
+    /// Retained-role CPU writes from the stock code the carrier's piece replaces; excluded from every other field.
+    #[serde(default)]
+    pub retired_writes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct KindTotal {
+    pub kind: WriteKind,
+    pub count: u64,
 }
 
 /// One summary per class in `classes` order; every row counts in each class it overlaps, and a row overlapping no
-/// class is refused. `owned_code` holds owned PC spans in every spelling.
-pub fn carrier_writes(classes: &[(u64, u64)], owned_code: &[(u64, u64)], rows: &[WatchRow]) -> Result<Vec<CarrierWrites>, String> {
+/// class is refused. `owned_code` holds owned PC spans in every spelling; `excluded[i]` holds the PC spans, in every
+/// spelling, whose CPU writes class `i` counts only as `retired_writes`.
+pub fn carrier_writes(classes: &[(u64, u64)], owned_code: &[(u64, u64)], excluded: &[Vec<(u64, u64)>], rows: &[WatchRow])
+    -> Result<Vec<CarrierWrites>, String> {
     let mut writers: Vec<BTreeMap<Writer, u64>> = vec![BTreeMap::new(); classes.len()];
     let mut covered: Vec<Vec<ByteRange>> = vec![Vec::new(); classes.len()];
+    let mut kind_totals: Vec<BTreeMap<WriteKind, u64>> = vec![BTreeMap::new(); classes.len()];
     let mut summaries: Vec<CarrierWrites> = classes.iter().map(|&(start, end)| CarrierWrites {
         start, end, total: 0, writers: vec![], writers_truncated: false, first: vec![], coverage: vec![], kinds: vec![],
-        owned_code_writes: 0, first_owned_code_writes: vec![],
+        owned_code_writes: 0, first_owned_code_writes: vec![], totals_by_kind: vec![], retired_writes: 0,
     }).collect();
+    let within = |spans: &[(u64, u64)], pc: Option<u32>| pc.is_some_and(|pc| spans.iter().any(|&(start, end)| start <= u64::from(pc) && u64::from(pc) < end));
     for row in rows {
         let row_end = row.physical.saturating_add(row.size.max(1));
         let writer = Writer { kind: row.source, core: row.core, pc: row.pc };
         let write = CarrierWrite { writer, address: row.address, physical: row.physical, size: row.size };
-        let owned = row.source == WriteKind::CpuWrite
-            && row.pc.is_some_and(|pc| owned_code.iter().any(|&(start, end)| start <= u64::from(pc) && u64::from(pc) < end));
+        let owned = row.source == WriteKind::CpuWrite && within(owned_code, row.pc);
         let mut matched = false;
         for (index, &(start, end)) in classes.iter().enumerate() {
             if row.physical >= end || row_end <= start {
@@ -234,7 +254,12 @@ pub fn carrier_writes(classes: &[(u64, u64)], owned_code: &[(u64, u64)], rows: &
             }
             matched = true;
             let summary = &mut summaries[index];
+            if row.source == WriteKind::CpuWrite && excluded.get(index).is_some_and(|spans| within(spans, row.pc)) {
+                summary.retired_writes += 1;
+                continue;
+            }
             summary.total += 1;
+            *kind_totals[index].entry(row.source).or_default() += 1;
             if summary.first.len() < CARRIER_FIRST_ROWS {
                 summary.first.push(write.clone());
             }
@@ -261,7 +286,8 @@ pub fn carrier_writes(classes: &[(u64, u64)], owned_code: &[(u64, u64)], rows: &
             return Err(format!("carrier write row at {:#x} overlaps no carrier", row.physical));
         }
     }
-    for ((summary, counts), mut ranges) in summaries.iter_mut().zip(writers).zip(covered) {
+    for (((summary, counts), mut ranges), totals) in summaries.iter_mut().zip(writers).zip(covered).zip(kind_totals) {
+        summary.totals_by_kind = totals.into_iter().map(|(kind, count)| KindTotal { kind, count }).collect();
         summary.writers = counts.into_iter().map(|(writer, count)| WriterCount { writer, count }).collect();
         summary.kinds.sort();
         ranges.sort();
@@ -409,6 +435,11 @@ pub enum Difference {
     Register { label: Label, core: Core, occurrence: usize, register: Register, retained: Word, owned: Word },
     Presence { label: Label, role: Role },
     Read { label: Label, occurrence: usize },
+    /// A capture of a read with an expectation is absent, keeps bytes, or has another digest than the role's.
+    ReadExpectation { label: Label, role: Role, occurrence: usize },
+    /// A ruled carrier was written against its rule: by a non-admitted kind in the composed role, or by a writer
+    /// outside the retired stock code in the retained role.
+    RetiredCarrierWrite { role: Role, start: u64, end: u64, first: Option<CarrierWrite> },
     /// A capture file or its receipt binding is missing, malformed or inconsistent.
     AttachSnapshot { role: Role, reason: String },
     AttachContext { core: Core, register: ContextRegister, retained: Word, owned: Word },
@@ -569,7 +600,19 @@ fn compare_presence(contract: &Contract, retained: &Receipt, owned: &Receipt) ->
 }
 
 fn compare_reads(contract: &Contract, retained: &Receipt, owned: &Receipt, pool: Option<&PoolRelation>) -> Result<(), Difference> {
-    for read in contract.reads().filter(|read| read.differs.is_none()) {
+    for read in contract.reads() {
+        let Some(expect) = &read.expect else { continue };
+        for (role, receipt) in [(Role::Retained, retained), (Role::Composed, owned)] {
+            let captures: Vec<&ReadCapture> = receipt.rows.iter().flat_map(|row| &row.reads).filter(|capture| capture.label == read.label).collect();
+            if captures.is_empty() {
+                return Err(Difference::ReadExpectation { label: read.label.clone(), role, occurrence: 0 });
+            }
+            if let Some(occurrence) = captures.iter().position(|capture| capture.sha256.as_ref() != Some(expect.of(role)) || !capture.bytes.0.is_empty()) {
+                return Err(Difference::ReadExpectation { label: read.label.clone(), role, occurrence });
+            }
+        }
+    }
+    for read in contract.reads().filter(|read| read.differs.is_none() && read.expect.is_none()) {
         let (a, b) = (retained.captures(&read.label), owned.captures(&read.label));
         let differs = |index: usize| match (a.get(index), b.get(index), pool) {
             (Some(left), Some(right), Some(pool)) if pool.relation.words.iter().any(|words| words.read == read.label) =>
@@ -594,11 +637,27 @@ pub enum CarrierField {
     Kinds,
 }
 
-fn compare_carriers(retained: &[CarrierWrites], owned: &[CarrierWrites]) -> Result<(), Difference> {
+fn compare_carriers(contract: &Contract, retained: &[CarrierWrites], owned: &[CarrierWrites]) -> Result<(), Difference> {
     if let Some(carrier) = owned.iter().find(|carrier| carrier.owned_code_writes > 0) {
         return Err(Difference::OwnedCodeWrite {
             start: carrier.start, end: carrier.end, first: carrier.first_owned_code_writes.first().cloned(),
         });
+    }
+    for (role, summaries) in [(Role::Retained, retained), (Role::Composed, owned)] {
+        for carrier in summaries {
+            let Some(rule) = contract.carrier_rule(carrier.start, carrier.end) else { continue };
+            let refused = match role {
+                Role::Composed => match rule.composed {
+                    ComposedWrites::Compared => false,
+                    ComposedWrites::None => carrier.total > 0,
+                    ComposedWrites::ModelBus => carrier.totals_by_kind.iter().any(|total| total.kind != WriteKind::ModelBusWrite && total.count > 0),
+                },
+                Role::Retained => !rule.retained_excluded.is_empty() && carrier.total > 0,
+            };
+            if refused {
+                return Err(Difference::RetiredCarrierWrite { role, start: carrier.start, end: carrier.end, first: carrier.first.first().cloned() });
+            }
+        }
     }
     if retained.len() != owned.len() {
         let (start, end) = retained.first().or(owned.first()).map_or((0, 0), |carrier| (carrier.start, carrier.end));
@@ -679,7 +738,7 @@ fn differences(contract: &Contract, digest: &Sha256, retained: &Receipt, owned: 
             start: carrier.start, end: carrier.end, first: carrier.first_owned_code_writes.first().cloned(),
         }.into());
     }
-    compare_carriers(&retained_guard.carrier_writes, &owned_guard.carrier_writes)?;
+    compare_carriers(contract, &retained_guard.carrier_writes, &owned_guard.carrier_writes)?;
     let pool = pool_relation(contract, retained, owned)?;
     compare_rows(contract, retained, owned, pool.as_ref())?;
     compare_presence(contract, retained, owned)?;

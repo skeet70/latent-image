@@ -8,11 +8,12 @@ module Replacement.StartupArtifact.Types
   , Label, label, labelText, Pc (..), RecordLimit, recordLimit, recordLimitCount
   , Cores, cores, coreList, physicalAddress
   , Boundary (..), CodeSpan (..), codeSpan, TcmBank (..), tcmBankName, WriteTarget (..), WriteRange (..)
-  , WriteBasis (..), WritesPolicy (..), CatalogRead (..), Catalog (..)
+  , WriteBasis (..), WritesPolicy (..), ReadExpectation (..), CatalogRead (..), Catalog (..)
   , TcmRegister (..), DecoderIndex (..), DecoderChoice (..), DeclaredMutation (..)
   , Piece (..), PieceFacts (..), ServiceBinding (..), Publication (..), LinkedBytes (..), ScratchBytes (..)
   , PublisherFrame (..), SubmitCall (..), StackDepth (..), TaskNumber (..), StackBytes (..), TaskStart (..)
   , AllocationPosition (..), allocationPositionName, AllocationWords (..), AllocationOwner (..), PoolSpan (..), PoolAllocation (..)
+  , ComposedWrites (..), composedWritesName, CarrierWritePolicy (..), OwnedFrame (..), HeapFacts (..)
   , Refusal (..), CatalogProblem (..), ManifestProblem (..), ApplicationProblem (..)
   ) where
 
@@ -64,7 +65,7 @@ editBytes :: Edit -> B.ByteString
 editBytes (Edit _ bytes) = bytes
 
 data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup | TaskSubmission | TaskStorage
-  | IdleTask | RootTask | Image5Producer | PlainProducer | ApplicationPump | Task1Actor | Image5Initializer | TaskConstructors
+  | IdleTask | RootTask | Image5Producer | PlainProducer | GeneralHeap | ApplicationPump | Task1Actor | Image5Initializer | TaskConstructors
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 pieceKindName :: PieceKind -> Text
@@ -80,6 +81,7 @@ pieceKindName kind = case kind of
   RootTask -> "root-task"
   Image5Producer -> "image5-producer"
   PlainProducer -> "plain-producer"
+  GeneralHeap -> "general-heap"
   ApplicationPump -> "application-pump"
   Task1Actor -> "task1-actor"
   Image5Initializer -> "image5-initializer"
@@ -87,7 +89,7 @@ pieceKindName kind = case kind of
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
   | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea | TaskSubmissionArea | TaskStorageArea
-  | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | ApplicationPumpArea | Task1ActorArea | Image5InitializerArea | TaskConstructorsArea
+  | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | GeneralHeapArea | ApplicationPumpArea | Task1ActorArea | Image5InitializerArea | TaskConstructorsArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 areaName :: Area -> Text
@@ -108,6 +110,7 @@ areaName area = case area of
   RootTaskArea -> "root-task"
   Image5ProducerArea -> "image5-producer"
   PlainProducerArea -> "plain-producer"
+  GeneralHeapArea -> "general-heap"
   ApplicationPumpArea -> "application-pump"
   Task1ActorArea -> "task1-actor"
   Image5InitializerArea -> "image5-initializer"
@@ -238,12 +241,18 @@ data DeclaredMutation
   | DecoderCommit DecoderIndex DecoderChoice DecoderChoice Core Pc Citation
   deriving (Eq, Show)
 
+-- | The digest a read must have in each role, resolved by the contract from the role's own images:
+-- a decoded target, or the NAND bytes of the record-5 media window.
+data ReadExpectation = ExpectTarget Target | ExpectRecord5Media deriving (Eq, Show)
+
+-- | A read compares byte for byte across roles unless it states a difference or an expectation.
 data CatalogRead = CatalogRead
   { readLabel :: Label
   , readBoundary :: Label
   , readAddress :: Word32
   , readLength :: Word32
   , readDiffers :: Maybe Text
+  , readExpect :: Maybe ReadExpectation
   } deriving (Eq, Show)
 
 data Catalog = Catalog
@@ -307,6 +316,28 @@ data PoolAllocation = PoolAllocation
   , poolWords :: [AllocationWords], poolStackTops :: [Label], poolOwners :: [AllocationOwner], poolCitation :: Citation }
   deriving (Eq, Show)
 
+-- | What the composed role may write into a carrier after attach.
+data ComposedWrites = WritesCompared | WritesNone | WritesModelBusOnly deriving (Eq, Show)
+
+composedWritesName :: ComposedWrites -> Text
+composedWritesName WritesCompared = "compared"
+composedWritesName WritesNone = "none"
+composedWritesName WritesModelBusOnly = "model-bus"
+
+-- | A carrier's post-attach write rule: the composed role's admitted kinds, and the code spans whose
+-- retained-role CPU writes into it are the stock code the piece replaces.
+data CarrierWritePolicy = CarrierWritePolicy { policySpan :: Span, policyComposed :: ComposedWrites, policyRetainedExcluded :: [Span] }
+  deriving (Eq, Show)
+
+-- | One owned function's frame: entry, low SP offset and its calls as (target, SP offset at the call).
+data OwnedFrame = OwnedFrame { ownedEntry :: Word32, ownedLow :: Int, ownedCalls :: [(Word32, Int)] } deriving (Eq, Show)
+
+-- | The heap's linked image, public and core entries, frames, arena [base, end) and carrier write rules.
+data HeapFacts = HeapFacts
+  { heapLinked :: LinkedBytes, heapEntries :: [Word32], heapFrames :: [OwnedFrame], heapArena :: (Word32, Word32)
+  , heapCarrierWrites :: [CarrierWritePolicy] }
+  deriving (Eq, Show)
+
 -- | Artifact values that registered joins check across pieces.
 data PieceFacts
   -- | First-stage entry and the linked record-1 image.
@@ -335,6 +366,8 @@ data PieceFacts
   | Image5ProducerFacts LinkedBytes
   -- | The linked plain producer image.
   | PlainProducerFacts LinkedBytes
+  -- | The general heap.
+  | GeneralHeapFacts HeapFacts
   -- | The linked application pump image.
   | ApplicationPumpFacts LinkedBytes
   | Task1ActorFacts LinkedBytes

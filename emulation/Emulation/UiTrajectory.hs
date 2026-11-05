@@ -27,6 +27,7 @@ module Emulation.UiTrajectory
   , instructionPinnedPhases
   , decodeTrajectories
   , variantMismatches
+  , overlayExit
   , checkModalObserverConfiguration
   ) where
 
@@ -415,18 +416,22 @@ decodeTrajectories bytes = do
     phase : _ -> Left ("trajectory requires an unknown segment: " ++ T.unpack phase)
 
 -- | Where VARIANT differs from RETAINED in anything but press timing (segment key pulses and step
--- timing); empty when VARIANT asserts exactly what RETAINED asserts.
+-- timing) and the retained-only MENU after each rendezvous ('withoutOverlayExits'); empty when
+-- VARIANT asserts exactly what RETAINED asserts.
 variantMismatches :: Trajectories -> Trajectories -> [String]
-variantMismatches retained variant =
-  [ "trace sites differ" | trajectoryTraceSites retained /= trajectoryTraceSites variant ]
-  ++ [ "protection differs" | trajectoryProtection retained /= trajectoryProtection variant ]
-  ++ [ "expect differs" | trajectoryExpect retained /= trajectoryExpect variant ]
-  ++ [ "forbidden execution differs" | trajectoryForbiddenExecution retained /= trajectoryForbiddenExecution variant ]
-  ++ [ "execution interval differs" | trajectoryExecutionInterval retained /= trajectoryExecutionInterval variant ]
-  ++ [ "execution control PC differs" | trajectoryExecutionControlPc retained /= trajectoryExecutionControlPc variant ]
-  ++ segments "before_unload" (beforeUnload retained) (beforeUnload variant)
-  ++ segments "after_unload" (afterUnload retained) (afterUnload variant)
+variantMismatches retained variant
+  | null (mismatches retained) = []
+  | otherwise = mismatches (withoutOverlayExits retained)
   where
+    mismatches old =
+      [ "trace sites differ" | trajectoryTraceSites old /= trajectoryTraceSites variant ]
+      ++ [ "protection differs" | trajectoryProtection old /= trajectoryProtection variant ]
+      ++ [ "expect differs" | trajectoryExpect old /= trajectoryExpect variant ]
+      ++ [ "forbidden execution differs" | trajectoryForbiddenExecution old /= trajectoryForbiddenExecution variant ]
+      ++ [ "execution interval differs" | trajectoryExecutionInterval old /= trajectoryExecutionInterval variant ]
+      ++ [ "execution control PC differs" | trajectoryExecutionControlPc old /= trajectoryExecutionControlPc variant ]
+      ++ segments "before_unload" (beforeUnload old) (beforeUnload variant)
+      ++ segments "after_unload" (afterUnload old) (afterUnload variant)
     segments list old new
       | length old /= length new = [list ++ " has " ++ show (length new) ++ " segments, not " ++ show (length old)]
       | otherwise =
@@ -446,6 +451,25 @@ variantMismatches retained variant =
       , ("film_row", segmentFilmRow a == segmentFilmRow b)
       , ("save_lifecycle", segmentSaveLifecycle a == segmentSaveLifecycle b) ]
     assertion step = (stepKey step, stepExpected step)
+
+-- | The first pressed step of SEGMENTS, with its segment's index, when it is a MENU its segment
+-- does not end on: the press that leaves the retained bridge's rendezvous overlay. The retained
+-- bridge holds UP across each rendezvous, which opens focus-area selection at live view; the
+-- FujiMod bridge pushes the command dial, which does not.
+overlayExit :: [Segment] -> Maybe (Int, Step)
+overlayExit segments = case dropWhile (null . segmentSteps . snd) (zip [0 ..] segments) of
+  (index, segment) : _ | step : _ : _ <- segmentSteps segment, stepKey step == "menu" -> Just (index, step)
+  _ -> Nothing
+
+-- | The trajectory without its 'overlayExit' on either side of unload.
+withoutOverlayExits :: Trajectories -> Trajectories
+withoutOverlayExits trajectories =
+  trajectories { beforeUnload = dropExit (beforeUnload trajectories), afterUnload = dropExit (afterUnload trajectories) }
+  where
+    dropExit entries = case overlayExit entries of
+      Just (index, _) -> [ if position == index then segment { segmentSteps = drop 1 (segmentSteps segment) } else segment
+                         | (position, segment) <- zip [0 ..] entries ]
+      Nothing -> entries
 
 checkModalObserverConfiguration :: Trajectories -> Either String ()
 checkModalObserverConfiguration trajectories =

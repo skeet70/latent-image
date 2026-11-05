@@ -2,7 +2,8 @@
 module Replacement.GeneralHeap.Admission
   ( AdmissionError (..), Carrier (..), Image (..), FrameProof, carriers, entrySymbols, retainedCallees
   , deriveFrames, frameValue, instructionPCs, literalWords, validateStockHeader, validateFetch
-  , BackendGeometry, ArenaLayout, decodeGeometry, geometryValue, arenaValue
+  , frameEntry, frameLow, frameCalls, cumulativeDepth
+  , BackendGeometry, ArenaLayout, decodeGeometry, geometryValue, arenaValue, arenaBounds
   , RedesignItem (..), redesignId, redesignValue
   ) where
 
@@ -96,6 +97,36 @@ instructionPCs :: [FrameProof] -> [Word32]
 instructionPCs proofs = S.toAscList (S.fromList [pc | FrameProof _ _ _ _ pcs _ <- proofs, pc <- pcs])
 literalWords :: [FrameProof] -> [(Word32,Word32)]
 literalWords proofs = M.toAscList (M.fromList [word | FrameProof _ _ _ _ _ words' <- proofs, word <- words'])
+
+frameEntry :: FrameProof -> Word32
+frameEntry (FrameProof entry _ _ _ _ _) = entry
+
+-- | The lowest SP offset the function reaches below its entry SP (zero or negative).
+frameLow :: FrameProof -> Int
+frameLow (FrameProof _ low _ _ _ _) = low
+
+-- | Every call and retained tail branch as (target, SP offset at the branch).
+frameCalls :: FrameProof -> [(Word32, Int)]
+frameCalls (FrameProof _ _ calls _ _ _) = [(target, offset) | CallBoundary _ target offset <- calls]
+
+-- | Bytes below the entry SP over the owned call graph: an owned callee adds its own cumulative
+-- depth at the call's offset, any other callee the demand the caller supplies; a cycle or an
+-- unsupplied callee gives Nothing.
+cumulativeDepth :: [FrameProof] -> (Word32 -> Maybe Integer) -> Word32 -> Maybe Integer
+cumulativeDepth proofs supplied = go S.empty
+  where
+    byEntry = M.fromList [(frameEntry proof, proof) | proof <- proofs]
+    go seen entry = case M.lookup entry byEntry of
+      Nothing -> supplied entry
+      Just proof
+        | S.member entry seen -> Nothing
+        | otherwise -> do
+            callees <- mapM (\(target, offset) -> (toInteger (negate offset) +) <$> go (S.insert entry seen) target) (frameCalls proof)
+            pure (maximum (toInteger (negate (frameLow proof)) : callees))
+
+-- | The arena [base, end) and the trailing guard bytes no allocation reaches.
+arenaBounds :: ArenaLayout -> (Word32, Word32, Word32)
+arenaBounds (ArenaLayout base end _ _) = (base, end, 32)
 
 validateStockHeader :: Word32 -> Word32 -> Either AdmissionError Word32
 validateStockHeader available tag = do

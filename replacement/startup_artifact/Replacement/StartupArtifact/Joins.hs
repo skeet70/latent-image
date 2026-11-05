@@ -2,13 +2,17 @@
 -- | The registered joins.
 module Replacement.StartupArtifact.Joins
   ( JoinKind (..), registeredJoins, joinedTasks, submissionStack, submissionStackWith, constructorInitializer
+  , stockDemand, stockDemandConditions, suppliedOf, depthsIn, indirectOf, stockCodeOfEvidence, composedSegments, ownedOf
+  , rootTargets, wrapperCallSites, rootUnbounded, image5Unbounded, plainUnbounded
   ) where
 
 import qualified A32 as A
 import qualified Data.ByteString as B
-import Data.List (nub)
+import Data.List (nub, sort, sortOn)
+import qualified Data.Map.Strict as M
 import Data.Maybe (isJust, mapMaybe)
 import qualified Data.Set as Set
+import qualified Data.Text as T
 import Data.Word (Word32)
 import Numeric (showHex)
 import qualified Emulation.InterfaceInitializer as I
@@ -32,9 +36,19 @@ import qualified Replacement.StartupArtifact.Footprint.ApplicationPump as Pump
 import qualified Replacement.Task1Actor.Artifact as T1
 import qualified Replacement.StartupArtifact.Footprint.Producers as Producers
 import qualified Replacement.StartupArtifact.Footprint.RootTask as RootFootprint
+import Replacement.StartupArtifact.Application (PlainImage (..), plainImage)
+import qualified Replacement.StartupArtifact.StackBounds as SB
 import qualified Replacement.TaskSubmission.Admission as WA
 import qualified Replacement.TaskSubmission.Artifact as W
+import qualified Replacement.Image5Load.Admission as I5A
+import qualified Replacement.Image5Load.Artifact as I5
+import qualified Replacement.PlainLoad.Admission as PLA
+import qualified Replacement.PlainLoad.Artifact as PL
+import qualified Replacement.StartupArtifact.Footprint.GeneralHeap as Heap
+import qualified Replacement.StartupDispatch.Admission as DA
+import qualified StackWalk as W
 import qualified StartupStageContract as Stage
+import qualified StockStack as SS
 import qualified Replacement.TaskConstructors.Artifact as TC
 import qualified Replacement.TaskConstructors.Admission as TCA
 
@@ -42,8 +56,9 @@ data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | 
   | LoaderStartupPublisher | PublisherInstallerRoots | CriticalPairInstallerRoots | DispatcherCriticalPair
   | TaskCompositionOwnedCalls | DispatcherTaskComposition | PublisherTaskServices
   | DispatcherRootEntry | DispatcherIdleEntry | WrapperIdleErrorCallback | RootTaskServices
-  | Image5ProducerServices | PlainProducerServices | ApplicationPumpServices | Task1ActorProducer | Task1ActorPump | Image5InitializerServices
-  | ConstructorInitializer | ConstructorTaskSubmission | ConstructorImage5Producer
+  | Image5ProducerServices | PlainProducerServices | GeneralHeapImage5Publication | GeneralHeapArenaClear
+  | ApplicationPumpServices | Task1ActorProducer | Task1ActorPump | Image5InitializerServices | ConstructorInitializer
+  | ConstructorTaskSubmission | ConstructorImage5Producer
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 instance JoinName JoinKind where
@@ -64,6 +79,8 @@ instance JoinName JoinKind where
   joinName RootTaskServices = "root-task-services"
   joinName Image5ProducerServices = "image5-producer-services"
   joinName PlainProducerServices = "plain-producer-services"
+  joinName GeneralHeapImage5Publication = "general-heap-image5-publication"
+  joinName GeneralHeapArenaClear = "general-heap-arena-clear"
   joinName ApplicationPumpServices = "application-pump-services"
   joinName Task1ActorProducer = "task1-actor-producer"
   joinName Task1ActorPump = "task1-actor-pump"
@@ -367,7 +384,8 @@ registeredJoins =
   , loaderStartupPublisher, publisherInstallerRoots, criticalPairInstallerRoots, dispatcherCriticalPair
   , taskCompositionOwnedCalls, dispatcherTaskComposition, publisherTaskServices
   , dispatcherRootEntry, dispatcherIdleEntry, wrapperIdleErrorCallback, rootTaskServices
-  , image5ProducerServices, plainProducerServices, applicationPumpServices, task1ActorProducer, task1ActorPump, image5InitializerServices
+  , image5ProducerServices, plainProducerServices, generalHeapImage5Publication, generalHeapArenaClear
+  , applicationPumpServices, task1ActorProducer, task1ActorPump, image5InitializerServices
   , constructorTaskSubmission, constructorImage5Producer, constructorInitializer Image5Initializer ]
 
 -- | The task wrapper, the record-2 critical pair and the task-storage transition joined as in
@@ -396,9 +414,13 @@ tableBSlotsStored evidence =
 taskCompositionOwnedCalls :: Join JoinKind
 taskCompositionOwnedCalls = Join TaskCompositionOwnedCalls (Set.fromList [Record2Link, TaskSubmission, TaskStorage])
   [at Image4 0x7235d8 0x723790, at Image4 0x725cc4 0x725da8, at Image4 0x725dd8 0x72612c, at LoaderB initializerSite (initializerSite + 4)]
-  (ObservationQualified "the owned wrapper calls the record-2 critical pair through the entry words at 0x7235d8 and 0x7236b0 and the storage transition through the retained prelude at 0x725c6c; its call targets are wrapper-admission constants (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:93-97), call-SP alignment, live words and continuations are checked by that admission's external calls, and the storage adapter ABI by the storage admission (replacement/task_storage/Replacement/TaskStorage/Artifact.hs:118-125); owned-calls-join derives each owned callee's frame low at the wrapper's actual call SPs, which submission-joined-stack-in-boot-window bounds, and with admitted pieces fails only on a missing owned call; on core 1 the wrapper and the storage prelude load root-1 slots that the record-2 initializer publishes; exit receiving enter's token and the reservation arguments are source properties qualified by a composed natural comparison")
+  (ObservationQualified "the owned wrapper calls the record-2 critical pair through the entry words at 0x7235d8 and 0x7236b0 and the storage transition through the retained prelude at 0x725c6c; its call targets are wrapper-admission constants (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:93-97), call-SP alignment, live words and continuations are checked by that admission's external calls, and the storage adapter ABI by the storage admission (replacement/task_storage/Replacement/TaskStorage/Artifact.hs:118-125); owned-calls-join derives each owned callee's frame low at the wrapper's actual call SPs, which submission-joined-stack-in-boot-window bounds, and with admitted pieces fails only on a missing owned call; on core 1 the wrapper and the storage prelude load root-1 slots that the record-2 initializer publishes; exit receiving enter's token and the reservation arguments are source properties qualified by a composed natural comparison; over the composed images outside owned code, wrapper-callers-closed pins the stock calls of 0x725dd8 and finds no formed address of the wrapper, prelude, release or cleanup, storage-prelude-sole-caller finds no other entry into [0x725c6c,0x725dd8) and no fall-through into it, wrapper-caller-ids finds every stock descriptor id an immediate in 1..120 except at 0x6b0010, 0x6b07f0, 0xe9231c and 0x11e00ec, where the scan does not fix it, and error-callback-writers finds the only store that can reach any byte of the error callback word 0x4089ea8c through a formed base at 0x725b64 in dispatch_set_error_callback, whose only stock call is stock root's at 0x69d184 with r0 = 0x72835c")
   [ HostCheck "owned-calls-join" (isJust . joinedTasks)
-  , HostCheck "table-b-service-slots-stored" tableBSlotsStored ]
+  , HostCheck "table-b-service-slots-stored" tableBSlotsStored
+  , HostCheck "wrapper-callers-closed" wrapperCallersClosed
+  , HostCheck "storage-prelude-sole-caller" storagePreludeSoleCaller
+  , HostCheck "wrapper-caller-ids" wrapperCallerIds
+  , HostCheck "error-callback-writers" errorCallbackWriters ]
 
 -- | The dispatcher passes descriptor D = S-44 (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs:234),
 -- of which the wrapper reads 28 bytes (replacement/task_submission/Replacement/TaskSubmission/Admission.hs Guest Descriptor).
@@ -430,10 +452,11 @@ dispatcherTaskComposition :: Join JoinKind
 dispatcherTaskComposition = Join DispatcherTaskComposition (Set.fromList [LoaderStartup, Record2Link, TaskSubmission, TaskStorage])
   [ at Image4 0x69cdf8 0x69cf84, at Image4 0x725a04 0x725b54, at LoaderA loaderAStart 0x40b00, at LoaderB loaderStartup 0xd0b00
   , at Image4 0x725cc4 0x725da8, at Image4 0x725dd8 0x72612c ]
-  (ObservationQualified "the owned dispatcher hands D = S-44 to the owned wrapper at S-64 on each core's boot stack; the descriptor contents, r0 and the descriptor stores before each call are the dispatcher's admission (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs:206-211,225,233-237), tables A and B are filled before the first dispatch by the orchestration admission (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs:219-240,261), and the class roots are the installer's stores of the loader headers (replacement/kernel_install/Replacement/KernelInstall/Admission.hs RootWrite); qualified by a composed natural comparison")
+  (ObservationQualified ("the owned dispatcher hands D = S-44 to the owned wrapper at S-64 on each core's boot stack; the descriptor contents, r0 and the descriptor stores before each call are the dispatcher's admission (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs:206-211,225,233-237), tables A and B are filled before the first dispatch by the orchestration admission (replacement/loader_orchestration/Replacement/LoaderOrchestration/Admission.hs:219-240,261), and the class roots are the installer's stores of the loader headers (replacement/kernel_install/Replacement/KernelInstall/Admission.hs RootWrite); the wrapper's retained callee demands are StockStack depths (host/firmware/StockStack.hs), error dispatch at the deeper of callbacks 0x723330 and 0x72835c, " <> T.pack (SB.conditionsPhrase SB.demandConditions) <> "; qualified by a composed natural comparison"))
   [ HostCheck "submission-joined-stack-in-boot-window" $ \evidence ->
-      case (submissions evidence, joinedTasks evidence) of
-        (Just calls@(_ : _), Just joined) -> all (\call -> either (const False) (const True) (submissionStack joined call)) calls
+      case (submissions evidence, joinedTasks evidence, stockDemandReport evidence) of
+        (Just calls@(_ : _), Just joined, Just (demand, used)) ->
+          usesOnly SB.demandConditions used && all (\call -> either (const False) (const True) (submissionStackWith demand joined call)) calls
         _ -> False
   , loaderHeadersUnchanged ]
 
@@ -476,12 +499,12 @@ idleFrame evidence = case [linked | IdleTaskFacts linked _ <- map pieceFacts (ev
 dispatchedAt :: Word32 -> Word32 -> [TaskStart] -> Bool
 dispatchedAt task entry starts = [address | TaskStart (TaskNumber number) (Pc address) _ <- starts, number == task] == [entry]
 
--- | Bytes of the source IRQ frame a task stack must hold below the task's own frame
--- (replacement/idle_task/Replacement/IdleTask/Artifact.hs:131).
+-- | Bytes an IRQ that preempts a task leaves below the task's own frame: the entry frame, the return
+-- dispatch's saved context and the dispatch to the switch (StackBounds.irqPreemptionPeak).
 irqFrameBytes :: Integer
-irqFrameBytes = 32
+irqFrameBytes = toInteger SB.irqPreemptionBytes
 
--- | The task's one requested stack holds its admitted frame and the IRQ frame.
+-- | The task's one requested stack holds its admitted frame and the IRQ preemption peak.
 stackCovers :: Word32 -> Int -> [TaskStart] -> Bool
 stackCovers task low starts = case [bytes | TaskStart (TaskNumber number) _ (StackBytes bytes) <- starts, number == task] of
   [bytes] -> toInteger bytes >= toInteger (negate low) + irqFrameBytes
@@ -514,19 +537,19 @@ dispatcherIdleEntry = Join DispatcherIdleEntry (Set.fromList [LoaderStartup, Idl
         _ -> False ]
 
 -- | The wrapper's retained demands with error dispatch into a callback of the given frame low.
-idleCallbackDemand :: Int -> WA.CallTarget -> WA.CalleeDemand
-idleCallbackDemand low target
+idleCallbackDemand :: (WA.CallTarget -> WA.CalleeDemand) -> Int -> WA.CallTarget -> WA.CalleeDemand
+idleCallbackDemand demand low target
   | target == WA.FixedService WA.ErrorCallback = WA.errorCallbackDemand (WA.StackOffset (toInteger low))
-  | otherwise = WA.stockCalleeDemand target
+  | otherwise = demand target
 
 wrapperIdleErrorCallback :: Join JoinKind
 wrapperIdleErrorCallback = Join WrapperIdleErrorCallback (Set.fromList [TaskSubmission, IdleTask])
   [at Image4 0x69cbf0 0x69cc00]
-  (HostProof "the wrapper's error dispatch 0x723398 pushes 8 bytes and calls the callback (replacement/task_submission/Replacement/TaskSubmission/Admission.hs errorCallbackDemand); with callback 0x69cbf0 the demand is 8 plus the idle admission's frame (replacement/idle_task/Replacement/IdleTask/Admission.hs:157-171), and every dispatcher submission's joined stack with that demand fits its boot-stack window; dispatcher-task-composition keeps the stock 12 bytes for callback 0x723330, so the checked bound is the larger of the two; the natural callback word holds 0x723330 or 0x72835c, so this bounds a non-natural callback")
+  (HostProof "the wrapper's error dispatch 0x723398 pushes 8 bytes and calls the callback (replacement/task_submission/Replacement/TaskSubmission/Admission.hs errorCallbackDemand); with callback 0x69cbf0 the demand is 8 plus the idle admission's frame (replacement/idle_task/Replacement/IdleTask/Admission.hs:157-171), the other retained demands are dispatcher-task-composition's StockStack depths, and every dispatcher submission's joined stack with those demands fits its boot-stack window; this check adds the idle body 0x69cbf0 as a callback, which error-callback-writers excludes on the natural route")
   [ HostCheck "error-callback-idle-demand" $ \evidence ->
-      case (submissions evidence, joinedTasks evidence, idleFrame evidence) of
-        (Just calls@(_ : _), Just joined, Just (_, low)) ->
-          all (either (const False) (const True) . submissionStackWith (idleCallbackDemand low) joined) calls
+      case (submissions evidence, joinedTasks evidence, idleFrame evidence, stockDemand evidence) of
+        (Just calls@(_ : _), Just joined, Just (_, low), Just demand) ->
+          all (either (const False) (const True) . submissionStackWith (idleCallbackDemand demand low) joined) calls
         _ -> False ]
 
 -- | Owned carriers a root or producer closure may enter, with the entries their pieces admit: the wrapper and release
@@ -552,8 +575,10 @@ closureEntersAtEntries evidence = any ((== 0x725dd8) . fst) calls && all (uncurr
 rootTaskServices :: Join JoinKind
 rootTaskServices = Join RootTaskServices (Set.fromList [RootTask, Record2Link, TaskSubmission, TaskStorage])
   [at Image4 0x7235d8 0x723790, at Image4 0x725cc4 0x725da8, at Image4 0x725dd8 0x72612c]
-  (ObservationQualified "root's retained submitters (0x69ca24 through 0x6b0764, and the constructors under 0x69ca44) call the owned wrapper at 0x725dd8, its cleanup 0x72612c can call owned release 0x726098, and the stock wrapper body and callback 0x69cc18 reach the critical pair and, through the retained prelude 0x725c6c, the storage transition; root-closure-enters-carriers-at-entries checks that every direct call from root's closure into these carriers targets an entry the owning piece admits; the wrapper's owned calls are task-composition-owned-calls; qualified by root's call sequence and the committed submission records in the composed comparison")
-  [HostCheck "root-closure-enters-carriers-at-entries" closureEntersAtEntries]
+  (ObservationQualified ("root's retained submitters (0x69ca24 through 0x6b0764, and the constructors under 0x69ca44) call the owned wrapper at 0x725dd8, its cleanup 0x72612c can call owned release 0x726098, and the stock wrapper body and callback 0x69cc18 reach the critical pair and, through the retained prelude 0x725c6c, the storage transition; root-closure-enters-carriers-at-entries checks that every direct call from root's closure into these carriers targets an entry the owning piece admits; the wrapper's owned calls are task-composition-owned-calls; root-cleanup-skips-release shows root's cleanup path has no call of release 0x726098, its slot-target closures " <> T.pack (SB.conditionsPhrase SB.cleanupConditions) <> "; root-retained-depth bounds retained callee demand below root's frame with StockStack (host/firmware/StockStack.hs), with the 88-byte IRQ preemption peak, " <> T.pack (SB.conditionsPhrase SB.rootDepthConditions) <> ", except the chains it pins; qualified by root's call sequence and the committed submission records in the composed comparison"))
+  [ HostCheck "root-closure-enters-carriers-at-entries" closureEntersAtEntries
+  , HostCheck "root-cleanup-skips-release" rootCleanupSkipsRelease
+  , HostCheck "root-retained-depth" rootRetainedDepth ]
 
 -- | The producer's closure calls the critical pair, and every call into an owned carrier targets an admitted entry.
 producerEntersAtEntries :: Producers.Producer -> JoinEvidence -> Bool
@@ -563,13 +588,358 @@ producerEntersAtEntries producer evidence = any (\(target, _) -> target >= 0x723
 producerServices :: JoinKind -> PieceKind -> Producers.Producer -> Join JoinKind
 producerServices kind piece producer = Join kind (Set.fromList [piece, Record2Link])
   [at Image4 0x7235d8 0x723790]
-  (ObservationQualified ("the producer's retained services reach the critical-pair entry words 0x7235d8 and 0x7236b0 of the record-2 link; " <> joinName kind <> "-closure-enters-carriers-at-entries checks that every direct call from the producer's closure into the wrapper, critical-pair and storage carriers targets an entry the owning piece admits (critical-pair words: replacement/startup_artifact/Replacement/StartupArtifact/Adapters.hs:199-200); qualified by the producer's call sequence and reads in the composed comparison"))
-  [HostCheck (joinName kind <> "-closure-enters-carriers-at-entries") (producerEntersAtEntries producer)]
+  (ObservationQualified ("the producer's retained services reach the critical-pair entry words 0x7235d8 and 0x7236b0 of the record-2 link; " <> joinName kind <> "-closure-enters-carriers-at-entries checks that every direct call from the producer's closure into the wrapper, critical-pair and storage carriers targets an entry the owning piece admits (critical-pair words: replacement/startup_artifact/Replacement/StartupArtifact/Adapters.hs:199-200); producer-retained-depth bounds retained callee demand below the owned frame with StockStack (host/firmware/StockStack.hs), with the 88-byte IRQ preemption peak, " <> T.pack (SB.conditionsPhrase conditions) <> ", except the chains it pins" <> fillText <> "; qualified by the producer's call sequence and reads in the composed comparison"))
+  ([ HostCheck (joinName kind <> "-closure-enters-carriers-at-entries") (producerEntersAtEntries producer)
+   , HostCheck "producer-retained-depth" (producerRetainedDepth producer) ]
+   ++ [HostCheck "fill-flag-writers" fillFlagWriters | producer == Producers.Image5Load])
+  where
+    fillText = case producer of
+      Producers.Image5Load -> "; fill-flag-writers finds the only stock store to 0x89f8ac at 0x6a8c00 in storage_request_refresh 0x6a8bec, whose address only the producer forms"
+      Producers.PlainLoad -> ""
+    conditions = case producer of
+      Producers.Image5Load -> SB.image5DepthConditions
+      Producers.PlainLoad -> SB.plainDepthConditions
 
 image5ProducerServices, plainProducerServices :: Join JoinKind
 image5ProducerServices = producerServices Image5ProducerServices Image5Producer Producers.Image5Load
 plainProducerServices = producerServices PlainProducerServices PlainProducer Producers.PlainLoad
 
+-- J7: stock stack bounds and caller and writer scans over the composed images.
+
+-- | The composed loaders, images 4 and 5 and the plain window, and every owned carrier's range.
+composedSegments :: JoinEvidence -> [SB.Segment]
+composedSegments evidence = SB.segmentsOf (evidenceComposed evidence) plain
+  where plain = either (const Nothing) (\(PlainImage (Guest load) bytes) -> Just (load, bytes)) (plainImage (evidenceParts evidence))
+
+ownedOf :: JoinEvidence -> [(Word32, Word32)]
+ownedOf evidence = SB.ownedRanges (concatMap pieceCarriers (evidencePieces evidence))
+
+stockCodeOfEvidence :: JoinEvidence -> SS.StockCode
+stockCodeOfEvidence evidence = SB.stockCodeOf (composedSegments evidence) (concatMap pieceCarriers (evidencePieces evidence))
+
+-- | Table A as the owned publisher emits it, table B as the canonical loader-B initializer stores it,
+-- each at its loader header's root.
+indirectOf :: JoinEvidence -> Maybe SS.IndirectTargets
+indirectOf evidence = do
+  rootA <- targetWord (evidenceCanonical evidence) LoaderA rootHeader
+  rootB <- targetWord (evidenceCanonical evidence) LoaderB 0xd0010
+  emitted <- publications evidence
+  stores <- either (const Nothing) Just (I.originalStores (targetOf (evidenceCanonical evidence) LoaderB))
+  let tableA = [(guest, publicationValue row) | row <- emitted, let Guest guest = publicationGuest row]
+      tableB = [(guest, value) | I.ExpectedStore (P.Guest guest) value <- stores]
+  either (const Nothing) Just (SB.indirectTargetsOf (stockCodeOfEvidence evidence) (SB.rootSlotTargets rootA tableA rootB tableB))
+
+-- | Owned entries with proved depths, before the wrapper: the record-2 critical pair, idle and root.
+baseSupplied :: JoinEvidence -> M.Map Word32 SS.StackDepth
+baseSupplied evidence = M.union core (heapSupplied evidence core)
+  where
+    core = M.fromList
+      ([ (entry, SS.StackDepth (fromIntegral depth)) | Just (StackDepth depth) <- [criticalFrame evidence], entry <- [0x7235d8, 0x7236b0] ]
+       ++ [ (entry, SS.StackDepth (fromIntegral (negate low))) | Just (entry, low) <- [idleFrame evidence, rootFrame evidence] ])
+
+heapFacts :: JoinEvidence -> Maybe HeapFacts
+heapFacts evidence = case [facts | GeneralHeapFacts facts <- map pieceFacts (evidencePieces evidence)] of
+  [facts] -> Just facts
+  _ -> Nothing
+
+-- | The heap's entries with their owned cumulative depth plus the StockStack depths of lock, unlock and
+-- memmove at their owned call offsets, present only when the composition holds the heap; an entry whose
+-- retained callee refuses is left unsupplied, so a walk reaching it refuses too.
+heapSupplied :: JoinEvidence -> M.Map Word32 SS.StackDepth -> M.Map Word32 SS.StackDepth
+heapSupplied evidence core = case (heapFacts evidence, indirectOf evidence) of
+  (Just facts, Just indirect) ->
+    let results = SS.stockDepths (stockCodeOfEvidence evidence) (SS.Supplied core) indirect SB.switchModel Heap.retainedCallees
+        retained target = case lookup target results of
+          Just (Right report) | usesOnly SB.heapConditions (SS.reportConditions report) ->
+            let SS.StackDepth bytes = SS.reportDepth report in Just (toInteger bytes)
+          _ -> Nothing
+     in M.fromList [ (entry, SS.StackDepth (fromInteger depth)) | entry <- heapEntries facts, Just depth <- [ownedDepth (heapFrames facts) retained entry] ]
+  _ -> M.empty
+
+-- | Bytes below an owned entry's SP over its own call graph, other callees taking the supplied demand.
+ownedDepth :: [OwnedFrame] -> (Word32 -> Maybe Integer) -> Word32 -> Maybe Integer
+ownedDepth frames supplied = go Set.empty
+  where
+    byEntry = M.fromList [(ownedEntry frame, frame) | frame <- frames]
+    go seen entry = case M.lookup entry byEntry of
+      Nothing -> supplied entry
+      Just frame
+        | Set.member entry seen -> Nothing
+        | otherwise -> do
+            callees <- mapM (\(target, offset) -> (toInteger (negate offset) +) <$> go (Set.insert entry seen) target) (ownedCalls frame)
+            pure (maximum (toInteger (negate (ownedLow frame)) : callees))
+
+-- J7: the general heap.
+
+-- | Composed records 1 and 2, loaders A and B and image 4: everything that runs before the image-5
+-- producer publishes record 5.
+beforePublication :: JoinEvidence -> [(Word32, B.ByteString)]
+beforePublication evidence = [(targetBase target, targetOf (evidenceComposed evidence) target) | target <- [Record1, Record2, LoaderA, LoaderB, Image4]]
+
+-- | Every composed target and the plain window.
+everyComposedImage :: JoinEvidence -> [(Word32, B.ByteString)]
+everyComposedImage evidence = [(targetBase target, bytes) | (target, bytes) <- targetList (evidenceComposed evidence)]
+  ++ [(load, bytes) | Right (PlainImage (Guest load) bytes) <- [plainImage (evidenceParts evidence)]]
+
+generalHeapImage5Publication :: Join JoinKind
+generalHeapImage5Publication = Join GeneralHeapImage5Publication (Set.fromList [Image5Producer, GeneralHeap])
+  [at Image5 0xbf1c1c 0xbf1cd4]
+  (ObservationQualified "the heap's calloc entry and thunk lie in the decoded record 5 that the image-5 producer publishes through the retained decoder at the segment-5 destination; segment5-publishes-heap-carrier checks that destination and extent in the composed parts, image5-carrier-unnamed-before-publication that nothing running before the producer, the heap's own image-4 code included, names the carrier, and composed-entry-surface and composed-retired-state-unreferenced repeat the heap adapter's reference checks over every piece's composed code; qualified by the image5-producer destination and staging reads, each equal to its role's contract digest")
+  [ HostCheck "segment5-publishes-heap-carrier" segment5PublishesCarrier
+  , HostCheck "image5-carrier-unnamed-before-publication" (Heap.image5CarrierUnnamed . beforePublication)
+  , HostCheck "composed-entry-surface" (\evidence -> maybe False (\facts -> null (Heap.entrySurface (heapEntries facts) (everyComposedImage evidence))) (heapFacts evidence))
+  , HostCheck "composed-retired-state-unreferenced" (Heap.retiredStateUnreferenced . everyComposedImage) ]
+
+segment5PublishesCarrier :: JoinEvidence -> Bool
+segment5PublishesCarrier evidence = case filter ((== 5) . U.segId) (U.partSegments (evidenceParts evidence)) of
+  [segment] -> U.segLoad segment == 0xbf1a00
+    && toInteger (B.length (targetOf (evidenceComposed evidence) Image5)) >= toInteger (0xbf1cd4 - 0xbf1a00 :: Word32)
+  _ -> False
+
+generalHeapArenaClear :: Join JoinKind
+generalHeapArenaClear = Join GeneralHeapArenaClear (Set.fromList [GeneralHeap, LoaderStartup])
+  [at Image4 0x69cdf8 0x69cf84]
+  (HostProof "the owned dispatcher's mode-1 word fill clears [0x89ec00,0xbf1a00) in phase 0, before its first task submission (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs clearInterval and the ClearWords effect order); arena-inside-mode1-clear places the heap's decoded arena inside it, sentinel-outside-clear-and-zero keeps the sentinel 0x89d4f8 in image 4's loaded data at 0 in the composed image, so each cold boot starts with sentinel 0 and an arena the first heap call initializes whole (replacement/general_heap/backend.rs Heap::initialize), and no-heap-call-in-phase-0 finds no direct call of a heap entry from the dispatcher, installer, fill or mode getter closure or from either loader")
+  [ HostCheck "arena-inside-mode1-clear" $ \evidence -> case heapFacts evidence of
+      Just facts -> let (base, end) = heapArena facts; (clearStart, clearEnd) = DA.clearInterval in clearStart <= base && base < end && end <= clearEnd
+      Nothing -> False
+  , HostCheck "sentinel-outside-clear-and-zero" $ \evidence ->
+      Heap.sentinel >= targetBase Image4 && Heap.sentinel < fst DA.clearInterval
+        && targetWord (evidenceComposed evidence) Image4 Heap.sentinel == Just 0
+  , HostCheck "no-heap-call-in-phase-0" noHeapCallInPhase0 ]
+
+noHeapCallInPhase0 :: JoinEvidence -> Bool
+noHeapCallInPhase0 evidence = case heapFacts evidence of
+  Nothing -> False
+  Just facts ->
+    let image4 = targetOf (evidenceComposed evidence) Image4
+        extents = [ (low, high) | L.CalleeExtent (LI.CodeAddress low) (LI.CodeAddress high) <-
+                      L.closedCalleeExtents (LI.CodeAddress (targetBase Image4)) image4 [] Set.empty (map LI.CodeAddress [0x69cdf8, 0x725a04, 0x7221a0, 0x657184]) ]
+        image4Calls = [ target | (low, high) <- extents, Heap.BranchReference _ target <- Heap.references low (B.take (fromIntegral (high - low)) (B.drop (fromIntegral (low - targetBase Image4)) image4)) ]
+        loaderCalls = [ target | loader <- [LoaderA, LoaderB], Heap.BranchReference _ target <- Heap.references (targetBase loader) (targetOf (evidenceComposed evidence) loader) ]
+     in not (null extents) && all (`notElem` heapEntries facts) (image4Calls ++ loaderCalls)
+
+-- | The StockStack depths of retained entries, sharing callee results, conditions included.
+depthsIn :: JoinEvidence -> M.Map Word32 SS.StackDepth -> [Word32] -> Maybe [(Word32, Either SS.StackRefusal SS.StackReport)]
+depthsIn evidence supplied entries = do
+  indirect <- indirectOf evidence
+  pure (SS.stockDepths (stockCodeOfEvidence evidence) (SS.Supplied supplied) indirect SB.switchModel entries)
+
+-- | Retained fixed services of the wrapper by address (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:93-97).
+retainedFixed :: [(WA.FixedService, Word32)]
+retainedFixed = [ (service, address) | address <- [0x7221c8, 0x42634, 0x41a34, 0x723398, 0x427d4, 0x427fc]
+                , Just (WA.FixedService service) <- [WA.fixed address] ]
+
+-- | The wrapper's retained callee demands as StockStack depths: fixed services at their addresses,
+-- root-slot services at the deeper of their table-A and table-B targets.
+stockDemand :: JoinEvidence -> Maybe (WA.CallTarget -> WA.CalleeDemand)
+stockDemand = fmap fst . stockDemandReport
+
+-- | The premises the wrapper's retained demands use.
+stockDemandConditions :: JoinEvidence -> Maybe (Set.Set SS.Condition)
+stockDemandConditions = fmap snd . stockDemandReport
+
+stockDemandReport :: JoinEvidence -> Maybe (WA.CallTarget -> WA.CalleeDemand, Set.Set SS.Condition)
+stockDemandReport evidence = do
+  indirect <- indirectOf evidence
+  let slotServices = [ (target, M.findWithDefault [] (SS.SlotOffset offset) (SS.rootSlots indirect)) | (WA.RootOffset offset, target) <- WA.rootServiceOffsets ]
+  results <- depthsIn evidence (baseSupplied evidence) (map snd retainedFixed ++ concatMap snd slotServices)
+  let report address = case lookup address results of
+        Just (Right walked) -> Just walked
+        _ -> Nothing
+      depth address = (\walked -> let SS.StackDepth bytes = SS.reportDepth walked in bytes) <$> report address
+  fixedDepths <- mapM (\(service, address) -> (,) (WA.FixedService service) <$> depth address) retainedFixed
+  slotDepths <- mapM (\(target, services) -> do
+      depths <- mapM depth services
+      if null depths then Nothing else pure (target, maximum depths)) slotServices
+  reports <- mapM report (map snd retainedFixed ++ concatMap snd slotServices)
+  let table = fixedDepths ++ slotDepths
+  pure ( \target -> maybe (WA.stockCalleeDemand target) (WA.CalleeDemand target . WA.StackOffset . negate . toInteger) (lookup target table)
+       , Set.unions (map SS.reportConditions reports) )
+
+-- | Whether a bound used only the premises its text states.
+usesOnly :: [SS.Condition] -> Set.Set SS.Condition -> Bool
+usesOnly allowed used = used `Set.isSubsetOf` Set.fromList allowed
+
+-- | The owned wrapper's or release's depth below its entry SP with the given demands.
+wrapperDepth :: TS.JoinedArtifact -> (WA.CallTarget -> WA.CalleeDemand) -> WA.EntryPoint -> Maybe Word32
+wrapperDepth joined demand entry = either (const Nothing) (Just . depthOfLow . WA.joinedLow) (TS.joinStack joined entry context retained)
+  where
+    context = WA.StackContext 0x10000000 (WA.StackInterval (WA.StackOffset (-0x10000)) (WA.StackOffset 0)) []
+    owned = map WA.FixedService [WA.CriticalEnter, WA.CriticalExit, WA.Reservation]
+    retained = [ demand target | target <- nub (map WA.callTarget (WA.callBoundaries (W.frameProof (TS.wrapperArtifact joined)))), target `notElem` owned ]
+    depthOfLow (WA.StackOffset low) = fromIntegral (negate low)
+
+-- | Every owned entry a retained closure may reach, with its proved depth.
+suppliedOf :: JoinEvidence -> Maybe (M.Map Word32 SS.StackDepth)
+suppliedOf evidence = do
+  demand <- stockDemand evidence
+  let base = baseSupplied evidence
+  wrapper <- case joinedTasks evidence of
+    Nothing -> Just []
+    Just joined -> do
+      submission <- wrapperDepth joined demand WA.Submission
+      release <- wrapperDepth joined demand WA.Release
+      pure [(SB.wrapperEntry, SS.StackDepth submission), (SB.releaseEntry, SS.StackDepth release)]
+  pure (M.union base (M.fromList wrapper))
+
+-- | Entries whose bound fits the budget below a task's entry SP: the owned frame, the deepest
+-- retained callee and the IRQ preemption peak. Refused entries and their refusals must be exactly
+-- the pinned list, and the bounded ones use only the allowed premises.
+retainedFits :: JoinEvidence -> Integer -> Integer -> [SS.Condition] -> [(Word32, SS.StackRefusal)] -> [Word32] -> Bool
+retainedFits evidence frame budget allowed unbounded entries = case suppliedOf evidence >>= \supplied -> depthsIn evidence supplied (nub entries) of
+  Nothing -> False
+  Just results ->
+    let refused = sortOn fst [(entry, refusal) | (entry, Left refusal) <- results]
+        bounded = [report | (_, Right report) <- results]
+        depths = [toInteger bytes | report <- bounded, let SS.StackDepth bytes = SS.reportDepth report]
+     in refused == sortOn fst unbounded && usesOnly allowed (Set.unions (map SS.reportConditions bounded))
+          && all (\depth -> frame + depth + toInteger SB.irqPreemptionBytes <= budget) depths
+
+-- | Root's call targets from its admitted proof.
+rootTargets :: JoinEvidence -> Maybe [Word32]
+rootTargets evidence = case [linked | RootTaskFacts linked _ <- map pieceFacts (evidencePieces evidence)] of
+  [LinkedBytes image symbols] -> do
+    artifact <- either (const Nothing) Just (RT.deriveArtifact image symbols)
+    pure (nub [RA.callTarget site | (site, _) <- RA.callPositions (RT.artifactProof artifact)])
+  _ -> Nothing
+
+-- | Task 104's requested stack (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs:206).
+rootStackBytes :: Integer
+rootStackBytes = 0x400
+
+-- | Root targets whose closures StockStack refuses: the `svc #0x1010` at 0x4360c under 0x6490dc, 0x69cfa4,
+-- 0x69f204, 0x6a5920, 0x6a59b8 and 0x6a5c08, and the argument callback 0x772d58 under 0x69ca44.
+rootUnbounded :: [(Word32, SS.StackRefusal)]
+rootUnbounded = [(0x69ca44, SS.UnresolvedBranch 0x772d58)] ++ [(entry, svc) | entry <- [0x6490dc, 0x69cfa4, 0x69f204, 0x6a5920, 0x6a59b8, 0x6a5c08]]
+
+svc :: SS.StackRefusal
+svc = SS.Refusal 0x4360c W.SupervisorCall
+
+rootRetainedDepth :: JoinEvidence -> Bool
+rootRetainedDepth evidence = case (rootFrame evidence, rootTargets evidence) of
+  (Just (_, low), Just targets) -> retainedFits evidence (toInteger (negate low)) rootStackBytes SB.rootDepthConditions rootUnbounded targets
+  _ -> False
+
+-- | The r0 = 0 path of 0x72612c: @cmp r6, #0; cmpne r6, r0; bne 0x7261d0@, no @bl@ in [0x72616c, 0x7261d0),
+-- and the closures of its four root-slot calls (+0x84, +0x164, +0x4, +0x14) do not reach release.
+rootCleanupSkipsRelease :: JoinEvidence -> Bool
+rootCleanupSkipsRelease evidence = unchanged && guarded && noCall && closuresAvoid
+  where
+    composed = evidenceComposed evidence
+    word = targetWord composed Image4
+    unchanged = all (\address -> word address == targetWord (evidenceCanonical evidence) Image4 address && isJust (word address)) [0x72612c, 0x726130 .. 0x7261cc]
+    decoded address = A.decode address <$> word address
+    guarded = case (decoded 0x726160, decoded 0x726164, decoded 0x726168) of
+      (Just (A.DataProcessing (A.Cond 14) A.CMP True _ r6 (A.Immediate 0)), Just (A.DataProcessing (A.Cond 1) A.CMP True _ r6' (A.ShiftedImmediate r0 A.LSL 0)), Just (A.Branch (A.Cond 1) False 0x7261d0)) ->
+        r6 == A.Reg 6 && r6' == A.Reg 6 && r0 == A.Reg 0
+      _ -> False
+    noCall = and [case decoded address of Just (A.Branch _ True _) -> False; Just _ -> True; Nothing -> False | address <- [0x72616c, 0x726170 .. 0x7261cc]]
+    closuresAvoid = case (indirectOf evidence, suppliedOf evidence) of
+      (Just indirect, Just supplied) ->
+        let marked = M.insert SB.releaseEntry (SS.StackDepth 0) supplied
+            targets = concat [M.findWithDefault [] (SS.SlotOffset slot) (SS.rootSlots indirect) | slot <- [0x84, 0x164, 0x4, 0x14]]
+         in not (null targets) && all (\target -> case SS.stockDepth (stockCodeOfEvidence evidence) (SS.Supplied marked) indirect SB.switchModel target of
+              Right report -> SB.releaseEntry `notElem` SS.reportSupplied report
+                && usesOnly SB.cleanupConditions (Set.insert SS.SlotWordsFixed (SS.reportConditions report))
+              Left _ -> False) targets
+      _ -> False
+
+-- | task60's allocation below the producers' entry SP: 0xa1c1e0 - 0xa1b600 (the premised base, Adapters.hs producerWritesPremise).
+task60Budget :: Integer
+task60Budget = 0xa1c1e0 - 0xa1b600
+
+-- | Producer services whose closures StockStack refuses: the argument callback 0x6f16e0 under storage read
+-- 0x6a8f1c, the message-trace callback word under progress 0x73b924, and the `svc` at 0x4360c under 0x69b9c4.
+image5Unbounded, plainUnbounded :: [(Word32, SS.StackRefusal)]
+image5Unbounded = [(0x6a8f1c, SS.UnresolvedBranch 0x6f16e0)]
+plainUnbounded = [(0x69b9c4, svc), (0x6a8f1c, SS.UnresolvedBranch 0x6f16e0), (0x73b924, SS.UnresolvedBranch 0x7250cc)]
+
+producerFrame :: Producers.Producer -> JoinEvidence -> Maybe Int
+producerFrame producer evidence = case (producer, [facts | facts <- map pieceFacts (evidencePieces evidence), matches facts]) of
+  (Producers.Image5Load, [Image5ProducerFacts (LinkedBytes image symbols)]) -> I5A.scratchLow . I5.artifactProof <$> either (const Nothing) Just (I5.deriveArtifact image symbols)
+  (Producers.PlainLoad, [PlainProducerFacts (LinkedBytes image symbols)]) -> PLA.scratchLow . PL.artifactProof <$> either (const Nothing) Just (PL.deriveArtifact image symbols)
+  _ -> Nothing
+  where
+    matches facts = case (producer, facts) of
+      (Producers.Image5Load, Image5ProducerFacts _) -> True
+      (Producers.PlainLoad, PlainProducerFacts _) -> True
+      _ -> False
+
+producerRetainedDepth :: Producers.Producer -> JoinEvidence -> Bool
+producerRetainedDepth producer evidence = case producerFrame producer evidence of
+  Just low -> retainedFits evidence (toInteger (negate low)) task60Budget allowed unbounded services
+  Nothing -> False
+  where
+    (services, allowed, unbounded) = case producer of
+      Producers.Image5Load -> (I5A.retainedTargets, SB.image5DepthConditions, image5Unbounded)
+      Producers.PlainLoad -> (PLA.retainedTargets, SB.plainDepthConditions, plainUnbounded)
+
+-- | The stock calls of the wrapper in the canonical images (63 outside the dispatcher carrier; the
+-- dispatcher's four are its admitted submissions).
+wrapperCallSites :: [Word32]
+wrapperCallSites =
+  [ 0x69c3e0, 0x69c6dc, 0x69ce88, 0x69cee4, 0x69cf34, 0x69cf6c, 0x69f068, 0x6b0010, 0x6b07f0, 0x6b15d0, 0x6b6954, 0x6b790c
+  , 0x6bda48, 0x6c0930, 0x6c5994, 0x6d22a0, 0x6d2924, 0x6d48b0, 0x6d7ff8, 0x6e2f7c, 0x6e2fe8, 0x6e3054, 0x6ea07c, 0x6eaf28
+  , 0x71fdb0, 0x7218b0, 0x73b0a4, 0x73bfd4, 0x73c144, 0x76fe04, 0x8923a8, 0x8923f4, 0xd0a2a4, 0xd80db4, 0xdb644c, 0xdca688
+  , 0xe9231c, 0xec53bc, 0xed1120, 0xed2b6c, 0xef8d1c, 0xf494d4, 0xf49be4, 0xf49e24, 0xfe9094, 0x1039564, 0x1050f6c, 0x1051f98
+  , 0x105437c, 0x1055d78, 0x10620f8, 0x10662e8, 0x1072764, 0x110f9cc, 0x11e00ec, 0x125a254, 0x125f160, 0x127461c, 0x1279d2c
+  , 0x127ae58, 0x127c060, 0x127ce0c, 0x127dcb8, 0x127fa1c, 0x1281554, 0x13e4d80, 0x13ed5a0 ]
+
+-- | Wrapper call sites whose descriptor id the scan does not fix: data at 0x6b07f0 (cpu_create_workers'
+-- table) and 0xe9231c (0xe922bc's argument); at 0x6b0010 and 0x11e00ec a branch-encoded word in the
+-- images targets an address between the id store and the call.
+dataIdSites :: [Word32]
+dataIdSites = [0x6b0010, 0x6b07f0, 0xe9231c, 0x11e00ec]
+
+outsideOwned :: JoinEvidence -> [Word32] -> [Word32]
+outsideOwned evidence = filter (\site -> not (any (\(low, high) -> low <= site && site < high) (ownedOf evidence)))
+
+wrapperCallersClosed :: JoinEvidence -> Bool
+wrapperCallersClosed evidence =
+  sort (map fst (SB.branchSites segments owned (== SB.wrapperEntry))) == sort (outsideOwned evidence wrapperCallSites)
+    && null (SB.addressFormations segments owned (`elem` [SB.wrapperEntry, SB.storagePrelude, SB.releaseEntry, SB.cleanupEntry]))
+  where
+    segments = composedSegments evidence
+    owned = ownedOf evidence
+
+storagePreludeSoleCaller :: JoinEvidence -> Bool
+storagePreludeSoleCaller evidence =
+  null [() | (site, _) <- SB.branchSites segments owned inPrelude, not (site >= SB.storagePrelude && site < SB.cleanupEntry)]
+    && null (SB.addressFormations segments owned inPrelude)
+    && not (SB.fallsInto segments SB.storagePrelude)
+    && maybe False (\joined -> WA.FixedService WA.Reservation `elem` map WA.callTarget (WA.callBoundaries (W.frameProof (TS.wrapperArtifact joined)))) (joinedTasks evidence)
+  where
+    segments = composedSegments evidence
+    owned = ownedOf evidence
+    inPrelude address = address >= SB.storagePrelude && address < SB.wrapperEntry
+
+wrapperCallerIds :: JoinEvidence -> Bool
+wrapperCallerIds evidence =
+  all (\(_, identity) -> case identity of SB.ImmediateId value -> value >= 1 && value <= 120; SB.DataId -> True) ids
+    && sort [site | (site, SB.DataId) <- ids] == sort (outsideOwned evidence dataIdSites)
+  where ids = SB.descriptorIds (composedSegments evidence) (ownedOf evidence)
+
+-- | The setter's only stock call is cpu_root_task's at 0x69d184 with r0 = 0x72835c (when root is stock).
+errorCallbackWriters :: JoinEvidence -> Bool
+errorCallbackWriters evidence =
+  SB.storesReaching segments owned SB.errorCallbackWord == outsideOwned evidence [0x725b64]
+    && map fst (SB.branchSites segments owned (== SB.errorCallbackSetter)) == calls
+    && (null calls || map (targetWord (evidenceComposed evidence) Image4) [0x69d17c, 0x69d180] == [Just 0xe308035c, Just 0xe3400072])
+    && null (SB.addressFormations segments owned (== SB.errorCallbackSetter))
+  where
+    calls = outsideOwned evidence [0x69d184]
+    segments = composedSegments evidence
+    owned = ownedOf evidence
+
+fillFlagWriters :: JoinEvidence -> Bool
+fillFlagWriters evidence =
+  SB.storesReaching segments owned SB.fillFlag == outsideOwned evidence [0x6a8c00]
+    && null (SB.branchSites segments owned (== SB.fillDoneCallback))
+    && null (SB.addressFormations segments owned (== SB.fillDoneCallback))
+  where
+    segments = composedSegments evidence
+    owned = ownedOf evidence
 -- | The image5 producer decodes the record carrying the owned pump; task1 calls the pump, which calls the stock hooks.
 applicationPumpServices :: Join JoinKind
 applicationPumpServices = Join ApplicationPumpServices (Set.fromList [ApplicationPump, Image5Producer])
@@ -639,3 +1009,4 @@ constructorInitializer initializer = Join ConstructorInitializer (Set.fromList [
     | low <- [0xd80d44,0xec5350,0xdca604,0xdb63e0,0xed10b4,0xef8c90,0xed2b00,0x1055d10,0x69f000]]
   (ObservationQualified "the initializer calls the constructors at their stock entries; constructor ABI and status behavior require native qualification, and descriptor D+24 retains the initializer's caller-stack classification word")
   [HostCheck "initializer-constructor-entries-retained" $ \evidence -> all (constructorEntryPreserved evidence) TC.constructors]
+

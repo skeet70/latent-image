@@ -234,7 +234,6 @@ pub enum NotOwned {
     /// Kinds `0xa` and `0xb` on an open node of type 5 or 7, where `0xbfad04`
     /// pushes instead of seeking.
     FramedNode,
-    NoChild,
     /// A row whose child is a package node outside the tree.
     PackageChild,
     /// The block's total rows differ from the open node's rows in the tree.
@@ -375,6 +374,7 @@ pub(crate) trait Rules {
     const FRAMED_NOTIFY_ID: bool = true;
     /// Kind 9's inner move is upward.
     const PUSH_MOVE_UP: bool = true;
+    const REFUSAL_REJECTS: bool = true;
 }
 
 pub(crate) struct Stock;
@@ -1198,7 +1198,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
                 let child = match Self::row(source, self.state.live.cursor)?.map(|row| row.child) {
                     Some(RowChild::Node(child)) => self.node(child)?,
                     Some(RowChild::Package) => return Err(NotOwned::PackageChild),
-                    Some(RowChild::Leaf) | None => return Err(NotOwned::NoChild),
+                    Some(RowChild::Leaf) | None => return Ok(()),
                 };
                 let restored = *self.state.stack.get(depth + 1).ok_or(NotOwned::StackBounds)?;
                 Self::check_open(child, restored.cursor)?;
@@ -1212,7 +1212,8 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
                 Ok(())
             }
             Switch::Pop => {
-                let parent = self.node(source.parent.ok_or(NotOwned::NoParent)?)?;
+                let Some(parent) = source.parent else { return Ok(()) };
+                let parent = self.node(parent)?;
                 let restored = *depth.checked_sub(1).and_then(|below| self.state.stack.get(below)).ok_or(NotOwned::StackBounds)?;
                 if depth >= STACK_FRAMES {
                     return Err(NotOwned::StackBounds);
@@ -1235,7 +1236,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         Self::stage_index(node_word)?;
         self.check_switch(switch)?;
         if !self.switch_node(switch, node_word, Direction::Down, id)? {
-            return Ok(EngineResult::Rejected);
+            return Ok(if R::REFUSAL_REJECTS { EngineResult::Rejected } else { EngineResult::Accepted });
         }
         let current = self.current()?;
         let landed = StageNode::from(current.id);

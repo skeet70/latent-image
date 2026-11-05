@@ -48,3 +48,15 @@ sh_test(
     args = ["$(location :menu-engine-tests-build)"],
     data = [":menu-engine-tests-build"],
 )
+
+genrule(
+    name = "host-library",
+    srcs = [":module", "src/lib.rs"],
+    outs = ["libmenu_engine.rlib"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --crate-name=menu_engine --edition=2021 --crate-type=rlib $(location src/lib.rs) -o $@",
+    tools = ["@lab_rustc//:bin/rustc"],
+    visibility = [
+        "//replacement/modal_runtime:__pkg__",
+        "//replacement/recipe_ui:__pkg__",
+    ],
+)

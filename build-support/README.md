@@ -39,7 +39,7 @@ Concurrent agents also work in separate git worktrees, so an edit in one never i
 devenv shell -- bazel --output_base="$HOME/.cache/bazel/latent-image-$AGENT" test //emulation:native-runner-tests
 ```
 
-A new output base still resolves its Nix repositories once. Delete `~/.cache/bazel/latent-image-*` and `~/.cache/bazel-disk/latent-image` by hand when they are no longer needed.
+`build-support/reclaim-disk.sh` lists old, uncited run output and orphaned Bazel output bases; `--apply` deletes the queued paths. Current ignored files under `private-data/verify-candidate/baselines/` count as citations. Output bases are retained when their recorded workspace directory exists, regardless of the base name; unmarked bases are retained. Only servers belonging to bases queued for deletion are signalled, and only with `--apply`. `//tests:reclaim-disk` covers these guards with a synthetic repository and cache.
 
 Nix keeps an observer only while something roots it, and the out-links in a worktree's Bazel output base go with the worktree, so a cited receipt can outlive the binary that produced it. `build-support/store-roots.sh list|check|pin` covers the store paths the ledger cites: every store path in `docs/evidence.jsonl` and every store path whose `bin/` or `lib/` a ledger artifact of at most 1 GiB names. `pin` adds an indirect GC root for each one present at `private-data/store-roots/<store basename>`; `check` exits 1 while any present cited path has none; `missing` lines name paths already collected, which only a rebuild from their recorded source commit restores. Run `pin` when a record citing a new observer or bridge lands.
 

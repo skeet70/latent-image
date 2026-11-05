@@ -73,6 +73,7 @@ pub enum Press {
     Dial(DialTurn),
     Shutter(ShutterStage),
     Play,
+    Fn,
 }
 
 impl Press {
@@ -83,6 +84,7 @@ impl Press {
             "half-press" => Press::Shutter(ShutterStage::Half),
             "full-press" => Press::Shutter(ShutterStage::Full),
             "play" => Press::Play,
+            "fn" => Press::Fn,
             _ => Press::Key(RouteKey::parse(name)?),
         })
     }
@@ -191,6 +193,8 @@ pub enum GpioCode {
     S2,
     #[serde(rename = "play")]
     Play,
+    #[serde(rename = "fn")]
+    Fn,
 }
 
 impl GpioCode {
@@ -199,6 +203,7 @@ impl GpioCode {
             Self::S1 => 7,
             Self::S2 => 8,
             Self::Play => 11,
+            Self::Fn => 0x28,
         }
     }
 }
@@ -216,6 +221,17 @@ pub struct GpioBinding {
     pub pad: Pin,
     pub pressed_high: bool,
 }
+
+// X-M1 1.50 image 4, 0x0082828c (file +0x20be8c):
+// 28 00 00 00 00 00 00 00 00 02 00 00 0b 00 00 00 01 00 00 00 02 00 00 00 00 00 00 00.
+// Exact key_sample_inputs 0x006a0888, id4.dis:0x006a0894..0x006a08f4,
+// decomp f659f02b850fcba58de0f9b09ee24ad09a24c2f4, app/drivers/input/key_sample_inputs.c:21.
+const FN_INPUT: GpioBinding = GpioBinding {
+    code: GpioCode::Fn,
+    row: TableRow(13),
+    pad: Pin { port: 0, pin: 11 },
+    pressed_high: false,
+};
 
 impl GpioBinding {
     fn gpio(&self) -> Result<GpioKey, String> {
@@ -506,6 +522,10 @@ impl FirmwareFacts {
         self.play.gpio()?.checked(session, &self.key_table)
     }
 
+    pub fn fn_key(&self, session: &Session) -> Result<GpioKey, String> {
+        FN_INPUT.gpio()?.checked(session, &self.key_table)
+    }
+
     pub fn shutter(&self, session: &Session, stage: ShutterStage) -> Result<GpioKey, String> {
         let key = match stage {
             ShutterStage::Half => &self.shutter.half,
@@ -571,6 +591,7 @@ mod tests {
     #[test]
     fn names_map_to_typed_inputs_and_unknown_ones_refuse() {
         assert_eq!(Press::parse("play").unwrap(), Press::Play);
+        assert_eq!(Press::parse("fn").unwrap(), Press::Fn);
         assert_eq!(Press::parse("full-press").unwrap(), Press::Shutter(ShutterStage::Full));
         assert_eq!(Press::parse("half-press").unwrap(), Press::Shutter(ShutterStage::Half));
         assert_eq!(Press::parse("menu").unwrap(), Press::Key(RouteKey::Ok));

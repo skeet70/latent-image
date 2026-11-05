@@ -300,7 +300,7 @@ main = do
       == Just (CatalogRefused FirstStage (OwnedBoundaryOutsideOwnedCode entryLabel)))
   ok "a read at a boundary that does not stop refuses"
     (refusal (composeWith [] [withCatalog first (catalogOf [boundary entryLabel EntryBoundary Core0 0x6000 False] [CodeSpan 0x6000 0x6010]
-      [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing])])
+      [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing Nothing])])
       == Just (CatalogRefused FirstStage (ReadBoundaryDoesNotStop entryLabel)))
   ok "TCM writes on a core without boundaries refuse"
     (refusal (composeWith [] [withCatalog first (Catalog [boundary entryLabel EntryBoundary Core0 0x6000 False] [CodeSpan 0x6000 0x6010]
@@ -317,13 +317,13 @@ main = do
       == Just (CatalogRefused PrimaryPublisher (OwnedCodeOverlap FirstStage)))
   let unretained = (boundary entryLabel EntryBoundary Core0 0x6000 True) {boundaryRetainedPc = Nothing}
   ok "a read at a boundary without a retained PC needs a difference"
-    (refusal (composeWith [] [withCatalog first (catalogOf [unretained] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing])])
+    (refusal (composeWith [] [withCatalog first (catalogOf [unretained] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing Nothing])])
       == Just (CatalogRefused FirstStage (ReadNeedsDiffers readLabel')))
   ok "a read at a boundary without a retained PC with a stated difference composes"
     (either (const False) (const True)
-      (composeWith [] [withCatalog first (catalogOf [unretained] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 (Just "owned only")])]))
+      (composeWith [] [withCatalog first (catalogOf [unretained] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 (Just "owned only") Nothing])]))
   let yielding = (boundary entryLabel EntryBoundary Core0 0x6000 True) {boundaryYieldsTo = Just PrimaryInitializerArea}
-      yieldingFirst = withCatalog first (catalogOf [yielding] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing])
+      yieldingFirst = withCatalog first (catalogOf [yielding] [CodeSpan 0x6000 0x6010] [CatalogRead readLabel' entryLabel 0x40020000 8 Nothing Nothing])
       kept composition = [ (map boundaryLabel (catalogBoundaries (pieceCatalog p)), map readLabel (catalogReads (pieceCatalog p)))
                          | p <- compositionPieces composition, pieceKind p == FirstStage ]
   ok "a boundary yielding to an area another piece claims is dropped with its reads"
@@ -456,12 +456,12 @@ main = do
   let contractFirst = withCatalog first (Catalog
         [boundary entryLabel EntryBoundary Core0 0x6000 False, boundary handoffLabel SiteBoundary Core0 0x6008 True]
         [CodeSpan 0x6000 0x6010] (EnumeratedWrites [WriteRange (CorePhysicalTarget Core0) 0x4300 0x5280] (Premised (Premise "first-stage stores")))
-        [CatalogRead readLabel' handoffLabel 0x40020000 8 Nothing])
+        [CatalogRead readLabel' handoffLabel 0x40020000 8 Nothing Nothing])
       contractPublisher = withCatalog publisher (Catalog
         [boundary publisherEntry EntryBoundary Core0 0x40430 False, boundary returnLabel ReturnBoundary Core0 0x409e0 True]
         [CodeSpan 0x40430 0x40580]
         (EnumeratedWrites [WriteRange PhysicalTarget 0x4dae0 0x4f10c] (Premised (Premise "scratch")))
-        [CatalogRead tableLabel returnLabel 0x4004dae0 0x162c Nothing])
+        [CatalogRead tableLabel returnLabel 0x4004dae0 0x162c Nothing Nothing])
   contracted <- either (fail . show) pure (composeWith [observed] [contractFirst, contractPublisher])
   contractDat <- either (fail . show) pure (preTableDat source contracted)
   contractTargets <- either (fail . show) pure (verifyComposed source contracted contractDat fixtureImage4 fixtureImage5)
@@ -783,28 +783,25 @@ main = do
   stagingLabel <- labelled Image5Producer "staging"
   let producerPiece = (piece Image5Producer [Image5ProducerArea] [] [] [])
         { pieceCatalog = Catalog [boundary producerReturn ReturnBoundary Core0 0x73b4b0 True] [] (EnumeratedWrites [] Proved)
-            [ CatalogRead destinationLabel producerReturn 0xbf1a00 0x4f1e60 Nothing
-            , CatalogRead stagingLabel producerReturn 0x43e40000 0x2e0000 Nothing ] }
+            [ CatalogRead destinationLabel producerReturn 0xbf1a00 0x4f1e60 Nothing Nothing
+            , CatalogRead stagingLabel producerReturn 0x43e40000 0x2e0000 Nothing Nothing ] }
       pumpPiece = piece ApplicationPump [ApplicationPumpArea] [at Image5 0xbfbd20 0xbfbd40] [flip' targets (at Image5 0xbfbd20 0xbfbd22)] []
-      producerReads composition = [ (labelText (readLabel row), readAddress row, readLength row, readDiffers row /= Nothing)
+      producerReads composition = [ (labelText (readLabel row), readAddress row, readLength row, readExpect row)
                                   | owner <- compositionPieces composition, pieceKind owner == Image5Producer, row <- catalogReads (pieceCatalog owner) ]
-  ok "an image5 edit splits the producer's destination read around the editing piece's carrier and marks staging as differing"
+  ok "an image5 edit keeps full producer reads with per-role expectations"
     (fmap producerReads (composeWith [] [producerPiece, pumpPiece]) == Right
-      [ ("image5-producer/destination-bf1a00", 0xbf1a00, 0xbfbd20 - 0xbf1a00, False)
-      , ("image5-producer/destination-bfbd40", 0xbfbd40, 0x10e3860 - 0xbfbd40, False)
-      , ("image5-producer/staging", 0x43e40000, 0x2e0000, True) ])
+      [ ("image5-producer/destination", 0xbf1a00, 0x4f1e60, Just (ExpectTarget Image5))
+      , ("image5-producer/staging", 0x43e40000, 0x2e0000, Just ExpectRecord5Media) ])
   ok "without an image5 edit the producer's reads are unchanged"
     (fmap producerReads (composeWith [] [producerPiece, first {pieceFootprint = []}]) == Right
-      [ ("image5-producer/destination", 0xbf1a00, 0x4f1e60, False), ("image5-producer/staging", 0x43e40000, 0x2e0000, False) ])
+      [ ("image5-producer/destination", 0xbf1a00, 0x4f1e60, Nothing), ("image5-producer/staging", 0x43e40000, 0x2e0000, Nothing) ])
   let initializerCarrier = at Image5 0xd9856c 0xd986b0
       initializerPiece = piece Image5Initializer [Image5InitializerArea] [initializerCarrier]
         [flip' targets (at Image5 0xd9856c 0xd98570)] []
-  ok "two image5 carriers split the producer destination into three retained reads"
+  ok "two image5 carriers keep full producer reads with per-role expectations"
     (fmap producerReads (composeWith [] [producerPiece, pumpPiece, initializerPiece]) == Right
-      [ ("image5-producer/destination-bf1a00", 0xbf1a00, 0xbfbd20 - 0xbf1a00, False)
-      , ("image5-producer/destination-bfbd40", 0xbfbd40, 0xd9856c - 0xbfbd40, False)
-      , ("image5-producer/destination-d986b0", 0xd986b0, 0x10e3860 - 0xd986b0, False)
-      , ("image5-producer/staging", 0x43e40000, 0x2e0000, True) ])
+      [ ("image5-producer/destination", 0xbf1a00, 0x4f1e60, Just (ExpectTarget Image5))
+      , ("image5-producer/staging", 0x43e40000, 0x2e0000, Just ExpectRecord5Media) ])
 
   passed <- readIORef counter
   putStrLn ("startup-artifact-tests: " ++ show passed ++ " checks passed")

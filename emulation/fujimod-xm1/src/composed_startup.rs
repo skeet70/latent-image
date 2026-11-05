@@ -188,7 +188,7 @@ fn at_boundary(machine: &Machine, contract: &Contract, role: Role, state: &mut O
                 let rows: Vec<WatchRow> = serde_json::from_value(records.clone()).map_err(|error| format!("diagnostic watch rows: {error}"))?;
                 let rows: Vec<_> = rows.into_iter()
                     .filter(|row| classes.iter().any(|&(start, end)| row.physical < end && start < row.physical + row.size)).collect();
-                let summaries = composed_receipt::carrier_writes(classes, &[], &rows)?;
+                let summaries = composed_receipt::carrier_writes(classes, &[], &[], &rows)?;
                 write(&output.join(WRITERS), &serde_json::to_vec_pretty(&summaries).map_err(|error| error.to_string())?)?;
             }
             state.boundary = Some(AtBoundary {
@@ -231,7 +231,10 @@ fn observe_hit(machine: &Machine, contract: &Contract, role: Role, sites: &BTree
         for item in contract.reads().filter(|item| &item.boundary == label) {
             let mut bytes = vec![0; item.length as usize];
             machine.session.board.read_memory(core.index(), u64::from(item.address), &mut bytes)?;
-            reads.push(ReadCapture { label: item.label.clone(), address: item.address, bytes: HexBytes(bytes) });
+            reads.push(match item.expect {
+                Some(_) => ReadCapture { label: item.label.clone(), address: item.address, bytes: HexBytes(Vec::new()), sha256: Some(Sha256::of(&bytes)) },
+                None => ReadCapture { label: item.label.clone(), address: item.address, bytes: HexBytes(bytes), sha256: None },
+            });
         }
         let r = |name| hit_register(hit, name);
         state.rows.push(Row {
@@ -461,6 +464,11 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
     };
     let watch_end_error = machine.session.board.memory_watch_end(&mut guarded.watch).err();
     let owned_code = contract.owned_code_spellings();
+    let excluded: Vec<Vec<(u64, u64)>> = guarded.carriers.iter().map(|&(start, end)| match role {
+        Role::Composed => Vec::new(),
+        Role::Retained => contract.carrier_rule(start, end).map_or_else(Vec::new, |rule| rule.retained_excluded.iter()
+            .flat_map(|span| [(span.start, span.end), (span.start + 0x4000_0000, span.end + 0x4000_0000)]).collect()),
+    }).collect();
     let boundary_row = state.boundary.as_ref().map_or(0, |boundary| boundary.row);
     let summaries = (|| -> Result<(Vec<CarrierWrites>, Vec<CarrierWrites>), String> {
         let rows: Vec<WatchRow> = serde_json::from_value(watch_state["records"].clone())
@@ -471,8 +479,8 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
         };
         let (before, after) = rows.split_at(boundary_row.min(rows.len()));
         Ok((
-            composed_receipt::carrier_writes(&guarded.carriers, &owned_code, &carrier_rows(before))?,
-            composed_receipt::carrier_writes(&guarded.carriers, &owned_code, &carrier_rows(after))?,
+            composed_receipt::carrier_writes(&guarded.carriers, &owned_code, &excluded, &carrier_rows(before))?,
+            composed_receipt::carrier_writes(&guarded.carriers, &owned_code, &excluded, &carrier_rows(after))?,
         ))
     })();
     let end_checks = checks(&guarded.token);

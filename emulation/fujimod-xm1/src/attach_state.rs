@@ -467,6 +467,39 @@ struct RawCarrier {
     start: u64,
     end: u64,
     parts: Vec<RawCarrierPart>,
+    #[serde(default)]
+    composed_writes: ComposedWrites,
+    #[serde(default)]
+    retained_excluded_pcs: Vec<RawPcSpan>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPcSpan {
+    start: u64,
+    end: u64,
+}
+
+/// What the composed role may write into a carrier after attach.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ComposedWrites {
+    /// Both roles' coverage and kinds compare.
+    #[default]
+    Compared,
+    /// No write of any kind.
+    None,
+    /// Model-bus writes only.
+    ModelBus,
+}
+
+/// A carrier's post-attach write rule: the composed role's admitted kinds, and the PC spans (low spelling)
+/// whose retained-role CPU writes into it are the stock code the piece replaces.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CarrierRule {
+    pub physical: Span,
+    pub composed: ComposedWrites,
+    pub retained_excluded: Vec<Span>,
 }
 
 /// A carrier sub-span in physical addresses.
@@ -699,6 +732,8 @@ pub(crate) struct RawAttachRules {
 pub struct AttachRules {
     pub peers: Vec<Peer>,
     pub carriers: Vec<CarrierPart>,
+    /// One per contract carrier, in contract order.
+    pub carrier_rules: Vec<CarrierRule>,
     pub allowances: Vec<Allowance>,
     pub registers: Vec<RegisterAllowance>,
     pub board: Vec<BoardAllowance>,
@@ -778,7 +813,7 @@ impl AttachRules {
                 }
             }
         }
-        let carriers = carrier_parts(raw.carriers, context)?;
+        let (carriers, carrier_rules) = carrier_parts(raw.carriers, context)?;
         let mut allowances = Vec::with_capacity(raw.allowances.len());
         let mut labels = BTreeSet::new();
         for raw in raw.allowances {
@@ -831,16 +866,17 @@ impl AttachRules {
             }
         }
         raw.relations.validate(&allowances)?;
-        Ok(Self { peers: raw.peers, carriers, allowances, registers: raw.registers, board, relations: raw.relations })
+        Ok(Self { peers: raw.peers, carriers, carrier_rules, allowances, registers: raw.registers, board, relations: raw.relations })
     }
 }
 
-fn carrier_parts(raw: Vec<RawCarrier>, context: &RuleContext) -> Result<Vec<CarrierPart>, AttachRuleRefusal> {
+fn carrier_parts(raw: Vec<RawCarrier>, context: &RuleContext) -> Result<(Vec<CarrierPart>, Vec<CarrierRule>), AttachRuleRefusal> {
     use AttachRuleRefusal as Refuse;
     if raw.len() != context.carriers.len() {
         return Err(Refuse::Carriers);
     }
     let mut parts = Vec::new();
+    let mut rules = Vec::new();
     for (entry, (piece, carrier, physical)) in raw.into_iter().zip(&context.carriers) {
         if entry.piece != *piece || entry.target != carrier.target || (entry.start, entry.end) != (carrier.span.start, carrier.span.end) {
             return Err(Refuse::Carriers);
@@ -869,8 +905,13 @@ fn carrier_parts(raw: Vec<RawCarrier>, context: &RuleContext) -> Result<Vec<Carr
         if cursor != entry.end {
             return Err(Refuse::CarrierTiling { piece: piece.clone() });
         }
+        let mut retained_excluded = Vec::new();
+        for span in entry.retained_excluded_pcs {
+            retained_excluded.push(Span::new(span.start, span.end).map_err(|_| Refuse::CarrierPartShape { piece: piece.clone() })?);
+        }
+        rules.push(CarrierRule { physical: *physical, composed: entry.composed_writes, retained_excluded });
     }
-    Ok(parts)
+    Ok((parts, rules))
 }
 
 fn allowance(raw: RawAllowance, context: &RuleContext) -> Result<Allowance, AttachRuleRefusal> {

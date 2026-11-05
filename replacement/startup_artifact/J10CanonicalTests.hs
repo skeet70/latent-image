@@ -18,9 +18,9 @@ import System.Environment (getArgs)
 main :: IO ()
 main = do
   arguments <- getArgs
-  (encoder,rebuild,decoder,ctorBin,ctorSymbols,submitBin,submitSymbols,datPath,scratchPath) <- case arguments of
-    [a,b,c,d,e,f,g,h,i] -> pure (a,b,c,d,e,f,g,h,i)
-    _ -> H.failH "usage: startup-artifact-j10-canonical-tests ENCODER REBUILD DECODER CTOR_BIN CTOR_SYMBOLS SUBMIT_BIN SUBMIT_SYMBOLS CANONICAL_DAT SCRATCH_DIR"
+  (encoder,rebuild,decoder,ctorBin,ctorSymbols,submitBin,submitSymbols,initBin,initSymbols,datPath,scratchPath) <- case arguments of
+    [a,b,c,d,e,f,g,h,i,j,k] -> pure (a,b,c,d,e,f,g,h,i,j,k)
+    _ -> H.failH "usage: startup-artifact-j10-canonical-tests ENCODER REBUILD DECODER CTOR_BIN CTOR_SYMBOLS SUBMIT_BIN SUBMIT_SYMBOLS INIT_BIN INIT_SYMBOLS CANONICAL_DAT SCRATCH_DIR"
   tools <- Tools.Tools <$> canonicalizePath encoder <*> canonicalizePath rebuild <*> canonicalizePath decoder
   scratch <- Tools.validateScratchDirectory scratchPath
   source <- loadCanonical tools scratch datPath
@@ -30,12 +30,20 @@ main = do
   ctorInput <- linked ctorBin ctorSymbols
   constructorsPiece <- derived (deriveTaskConstructors source ctorInput)
   submission <- linked submitBin submitSymbols >>= derived . deriveTaskSubmission source
+  initializer <- linked initBin initSymbols >>= derived . deriveImage5Initializer source
   composition <- derived (compose registeredJoins source [constructorsPiece,submission])
   check "constructor and task-submission compose with their registered join"
     (any (\(AppliedJoin join _) -> joinKind join == ConstructorTaskSubmission) (compositionJoins composition))
   check "omitting constructor-task-submission refuses the unjoined service entry"
     (case compose [join | join <- registeredJoins, joinKind join /= ConstructorTaskSubmission] source [constructorsPiece,submission] of
       Left (FootprintOverlap TaskConstructors TaskSubmission _) -> True
+      _ -> False)
+  joined <- derived (compose registeredJoins source [constructorsPiece,submission,initializer])
+  check "initializer and constructors compose with their registered join"
+    (any (\(AppliedJoin join _) -> joinKind join == ConstructorInitializer) (compositionJoins joined))
+  check "omitting constructor-initializer refuses the unjoined constructor entries"
+    (case compose [join | join <- registeredJoins, joinKind join /= ConstructorInitializer] source [constructorsPiece,submission,initializer] of
+      Left (FootprintOverlap Image5Initializer TaskConstructors _) -> True
       _ -> False)
   let before = targetOf (canonicalTargets source) Image5
       after = targetOf (compositionTargets composition) Image5
