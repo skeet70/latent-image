@@ -944,8 +944,8 @@ fn standalone_configuration_refusal_keeps_initial_and_handoff_identity_unobserve
 
 #[test]
 fn strict_stop_pending_hook_is_collected_read_only_before_claiming_a_complete_boundary() {
-    let mut observed = machine(&[0xe3a01902, 0xe3a02003, 0xe5910000]);
-    observed.traces.arm(&observed.session, BTreeMap::from([(0x1008, "strict-stop".into())])).unwrap();
+    let mut observed = machine(&[0xe3a01006, 0xe3a02003, 0xe3a0000c, 0xee060f12, 0xe3a0003f, 0xee060f51, 0xe320f000]);
+    observed.traces.arm(&observed.session, BTreeMap::from([(0x1018, "strict-stop".into())])).unwrap();
     observed.traces.begin_capture_observation(fujimod_xm1::trace::CaptureScope::Capture).unwrap();
     assert_eq!(observed.run(100), RunOutcome::Failed);
     let failure = observed.failure.clone();
@@ -957,7 +957,7 @@ fn strict_stop_pending_hook_is_collected_read_only_before_claiming_a_complete_bo
     let mut cursor = CaptureCursor::new(0);
     drain_stream(&mut observed, &mut cursor, &mut events);
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].registers[1..3], [0x8000, 3]);
+    assert_eq!(events[0].registers[1..3], [6, 3]);
     assert_eq!(events[0].instructions, boundary.0);
     assert_eq!(observed.failure, failure);
     assert_eq!((observed.instructions(), context(&observed)), boundary);
