@@ -28,6 +28,14 @@
 //! FujiMod's `rprofile::core::Core` (crates/emulator-cpu-unicorn/src/rprofile/core.rs:783-790):
 //! a passing condition writes the identity to Rt, and the PC advances either way.
 //! The wrapper itself is not used: it lacks `Cpu::refuse_access` and host watchdogs.
+//!
+//! A privileged case may also be a kernel case. Beyond the privileged profile it
+//! admits `nop` (the only hint), word `ldrex`/`strex`/`clrex` against a single-core
+//! local monitor, DMB/DSB/ISB in their ARMv7 and CP15 c7 forms, recorded in the
+//! provenance log in execution order, TPIDRURW, CPACR and FPEXC accesses when the
+//! case declares that register, a stop address, and device regions that are single
+//! interrupt-controller bank words taking word writes only. The code hook performs
+//! the exclusives, barriers and register accesses and advances the PC itself.
 
 use crate::r4f;
 use fujimod_emulator_cpu::{
@@ -81,6 +89,30 @@ const MSR_CPSR_C: u32 = 0x0121_f000;
 const MSR_CPSR_FC: u32 = 0x0129_f000;
 /// `mrc p14, 0, Rt, c2, c0, 0` without cond and Rt.
 const MRC_P14_IDENTITY: u32 = 0x0e12_0e10;
+const NOP: u32 = 0xe320_f000;
+const CLREX: u32 = 0xf57f_f01f;
+/// `dmb` and `dsb` without the option field.
+const DMB: u32 = 0xf57f_f050;
+const DSB: u32 = 0xf57f_f040;
+const ISB_SY: u32 = 0xf57f_f06f;
+/// SY, ST, ISH, ISHST, NSH, NSHST, OSH and OSHST.
+const BARRIER_OPTIONS: [u32; 8] = [0xf, 0xe, 0xb, 0xa, 0x7, 0x6, 0x3, 0x2];
+/// `mcr p15, 0, Rt, c7, c10, 5` and `mcr p15, 0, Rt, c7, c10, 4` without cond and Rt.
+const CP15_DMB: u32 = 0x0e07_0fba;
+const CP15_DSB: u32 = 0x0e07_0f9a;
+/// `mrc`/`mcr p15, 0, Rt, c13, c0, 2`, `mrc p15, 0, Rt, c1, c0, 2`, `vmrs Rt, fpexc`
+/// and `vmsr fpexc, Rt` without cond and Rt.
+const TPIDRURW_READ: u32 = 0x0e1d_0f50;
+const TPIDRURW_WRITE: u32 = 0x0e0d_0f50;
+const CPACR_READ: u32 = 0x0e11_0f50;
+const FPEXC_READ: u32 = 0x0ef8_0a10;
+const FPEXC_WRITE: u32 = 0x0ee8_0a10;
+const FPEXC_EN: u32 = 1 << 30;
+/// `ldrex Rt, [Rn]` and `strex Rd, Rt, [Rn]` without cond and registers.
+const LDREX: u32 = 0x0190_0f9f;
+const STREX: u32 = 0x0180_0f90;
+/// Set-pending and clear-pending words of the two interrupt-controller banks.
+const BANK_WORDS: [u32; 4] = [0xfffb_30cc, 0xfffb_40cc, 0xfffb_30ec, 0xfffb_40ec];
 
 /// Page permission bits as taken by `Cpu::map_zeroed`.
 const PAGE_READ: u32 = 1;
@@ -190,6 +222,8 @@ enum Permission {
     Read,
     ReadWrite,
     ReadExecute,
+    /// One bank word of a kernel case: aligned word writes only.
+    Device,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -202,8 +236,8 @@ enum Need {
 impl Permission {
     fn grants(self, need: Need) -> bool {
         match need {
-            Need::Read => true,
-            Need::Write => self == Self::ReadWrite,
+            Need::Read => self != Self::Device,
+            Need::Write => matches!(self, Self::ReadWrite | Self::Device),
             Need::Execute => self == Self::ReadExecute,
         }
     }
@@ -211,7 +245,7 @@ impl Permission {
     fn page_bits(self) -> u32 {
         match self {
             Self::Read => PAGE_READ,
-            Self::ReadWrite => PAGE_READ | PAGE_WRITE,
+            Self::ReadWrite | Self::Device => PAGE_READ | PAGE_WRITE,
             Self::ReadExecute => PAGE_READ | PAGE_EXECUTE,
         }
     }
@@ -294,7 +328,103 @@ struct Cp14Identity(u32);
 #[derive(Clone, Copy, Debug)]
 enum Profile {
     User,
-    Privileged { mode: PrivilegedMode, identity: Option<Cp14Identity> },
+    Privileged { mode: PrivilegedMode, identity: Option<Cp14Identity>, kernel: Option<Kernel> },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Tpidrurw(u32);
+
+#[derive(Clone, Copy, Debug)]
+struct Cpacr(u32);
+
+/// FPEXC with no bit other than EN.
+#[derive(Clone, Copy, Debug)]
+struct Fpexc(u32);
+
+impl Fpexc {
+    fn new(value: u32) -> Option<Self> {
+        (value & !FPEXC_EN == 0).then_some(Self(value))
+    }
+}
+
+/// A kernel case's stop address and the system register values it serves.
+#[derive(Clone, Copy, Debug)]
+struct Kernel {
+    stop: Option<Address>,
+    tpidrurw: Option<Tpidrurw>,
+    cpacr: Option<Cpacr>,
+    fpexc: Option<Fpexc>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Barrier {
+    Dmb,
+    Dsb,
+    Isb,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SystemRegister {
+    Tpidrurw,
+    Cpacr,
+    Fpexc,
+}
+
+/// A kernel-case word the code hook performs; register fields are core indices.
+#[derive(Clone, Copy, Debug)]
+enum KernelWord {
+    Barrier(Barrier),
+    LoadExclusive { target: usize, base: usize },
+    StoreExclusive { status: usize, source: usize, base: usize },
+    ClearExclusive,
+    Read { target: usize, register: SystemRegister },
+    Write { source: usize, register: SystemRegister },
+}
+
+impl Kernel {
+    fn classify(self, word: u32) -> Option<ProfileWord> {
+        let kernel = |op| Some(ProfileWord::Kernel(op));
+        match word {
+            NOP => return Some(ProfileWord::Ordinary),
+            CLREX => return kernel(KernelWord::ClearExclusive),
+            ISB_SY => return kernel(KernelWord::Barrier(Barrier::Isb)),
+            _ => {}
+        }
+        if BARRIER_OPTIONS.contains(&(word & 15)) {
+            match word & !15 {
+                DMB => return kernel(KernelWord::Barrier(Barrier::Dmb)),
+                DSB => return kernel(KernelWord::Barrier(Barrier::Dsb)),
+                _ => {}
+            }
+        }
+        let (rn, rt, rm) = ((word >> 16 & 15) as usize, (word >> 12 & 15) as usize, (word & 15) as usize);
+        if word >> 28 == 15 || rt == 15 {
+            return None;
+        }
+        let read = |register| kernel(KernelWord::Read { target: rt, register });
+        let write = |register| kernel(KernelWord::Write { source: rt, register });
+        match word & 0x0fff_0fff {
+            CP15_DMB => return kernel(KernelWord::Barrier(Barrier::Dmb)),
+            CP15_DSB => return kernel(KernelWord::Barrier(Barrier::Dsb)),
+            TPIDRURW_READ if self.tpidrurw.is_some() => return read(SystemRegister::Tpidrurw),
+            TPIDRURW_WRITE if self.tpidrurw.is_some() => return write(SystemRegister::Tpidrurw),
+            CPACR_READ if self.cpacr.is_some() => return read(SystemRegister::Cpacr),
+            FPEXC_READ if self.fpexc.is_some() => return read(SystemRegister::Fpexc),
+            FPEXC_WRITE if self.fpexc.is_some() => return write(SystemRegister::Fpexc),
+            _ => {}
+        }
+        if rn == 15 {
+            return None;
+        }
+        if word & 0x0ff0_0fff == LDREX {
+            return kernel(KernelWord::LoadExclusive { target: rt, base: rn });
+        }
+        if word & 0x0ff0_0ff0 == STREX && rm != 15 && rt != rn && rt != rm {
+            return kernel(KernelWord::StoreExclusive { status: rt, source: rm, base: rn });
+        }
+        None
+    }
 }
 
 /// How a profile treats one A32 word.
@@ -306,6 +436,7 @@ enum ProfileWord {
     ControlWrite(u32),
     /// The CP14 identity read into this core register.
     IdentityRead(usize, Cp14Identity),
+    Kernel(KernelWord),
 }
 
 impl Profile {
@@ -316,8 +447,15 @@ impl Profile {
         }
     }
 
+    fn kernel(self) -> Option<Kernel> {
+        match self {
+            Self::User => None,
+            Self::Privileged { kernel, .. } => kernel,
+        }
+    }
+
     fn classify(self, word: u32) -> ProfileWord {
-        let Self::Privileged { identity, .. } = self else {
+        let Self::Privileged { identity, kernel, .. } = self else {
             return if excluded(word) { ProfileWord::Excluded } else { ProfileWord::Ordinary };
         };
         if matches!(word, CPSIE_I | CPSID_I) {
@@ -334,6 +472,9 @@ impl Profile {
             && target != 15
         {
             return ProfileWord::IdentityRead(target, identity);
+        }
+        if let Some(class) = kernel.and_then(|kernel| kernel.classify(word)) {
+            return class;
         }
         if privileged_refused(word) || excluded(word) { ProfileWord::Excluded } else { ProfileWord::Ordinary }
     }
@@ -358,16 +499,33 @@ struct Case {
 }
 
 impl Case {
-    /// Containment of the whole range in one region granting `need`.
+    /// Containment of the whole range in one region granting `need`; a device
+    /// region takes whole-word accesses only.
     fn covers(&self, address: u64, bytes: u64, need: Need) -> bool {
-        self.regions
-            .iter()
-            .any(|region| region.permission.grants(need) && region.span.contains(address, bytes))
+        self.regions.iter().any(|region| {
+            region.permission.grants(need)
+                && region.span.contains(address, bytes)
+                && (region.permission != Permission::Device || bytes == 4)
+        })
     }
 
     /// One guest access: covered and, wider than a byte, naturally aligned.
     fn admits(&self, address: u64, size: u64, need: Need) -> bool {
         (size <= 1 || address % size == 0) && self.covers(address, size, need)
+    }
+
+    /// An aligned word inside one non-device region granting `need`.
+    fn admits_exclusive(&self, address: u32, need: Need) -> bool {
+        address % 4 == 0
+            && self.regions.iter().any(|region| {
+                region.permission != Permission::Device
+                    && region.permission.grants(need)
+                    && region.span.contains(u64::from(address), 4)
+            })
+    }
+
+    fn stops_at(&self, address: u32) -> bool {
+        self.profile.kernel().and_then(|kernel| kernel.stop).is_some_and(|stop| stop.0 == address)
     }
 
     fn function_at(&self, address: u32) -> Option<usize> {
@@ -414,15 +572,19 @@ impl<'a> Tokens<'a> {
 
     /// One to eight lowercase hexadecimal digits.
     fn word(&mut self) -> Result<u32, WireError> {
-        let token = self.next()?;
-        if token.is_empty() || token.len() > 8 {
-            return Err(WireError("hexadecimal word must have one to eight digits"));
+        hex_word(self.next()?)
+    }
+
+    /// `n`, or a word.
+    fn optional_word(&mut self) -> Result<Option<u32>, WireError> {
+        match self.next()? {
+            b"n" => Ok(None),
+            token => hex_word(token).map(Some),
         }
-        token.iter().try_fold(0u32, |value, &digit| {
-            nibble(digit)
-                .map(|digit| value << 4 | u32::from(digit))
-                .ok_or(WireError("hexadecimal word must be lowercase hex"))
-        })
+    }
+
+    fn peek(&self) -> Option<&'a [u8]> {
+        Tokens { rest: self.rest }.next().ok()
     }
 
     fn count(&mut self, max: u32) -> Result<u32, WireError> {
@@ -481,6 +643,31 @@ fn nibble(digit: u8) -> Option<u8> {
     }
 }
 
+fn hex_word(token: &[u8]) -> Result<u32, WireError> {
+    if token.is_empty() || token.len() > 8 {
+        return Err(WireError("hexadecimal word must have one to eight digits"));
+    }
+    token.iter().try_fold(0u32, |value, &digit| {
+        nibble(digit)
+            .map(|digit| value << 4 | u32::from(digit))
+            .ok_or(WireError("hexadecimal word must be lowercase hex"))
+    })
+}
+
+impl Kernel {
+    /// `STOP TPIDRURW CPACR FPEXC`, each `n` or a word.
+    fn parse(tokens: &mut Tokens<'_>) -> Result<Self, WireError> {
+        let stop = tokens.optional_word()?.map(Address);
+        let tpidrurw = tokens.optional_word()?.map(Tpidrurw);
+        let cpacr = tokens.optional_word()?.map(Cpacr);
+        let fpexc = match tokens.optional_word()? {
+            None => None,
+            Some(value) => Some(Fpexc::new(value).ok_or(WireError("a kernel case's FPEXC may set EN only"))?),
+        };
+        Ok(Self { stop, tpidrurw, cpacr, fpexc })
+    }
+}
+
 fn parse(wire: &[u8]) -> Result<Case, WireError> {
     if wire.len() > MAX_WIRE_BYTES {
         return Err(WireError("wire exceeds its byte limit"));
@@ -522,7 +709,13 @@ fn parse_case(
             b"i" => Some(Cp14Identity(tokens.word()?)),
             _ => return Err(WireError("a privileged case's CP14 identity must be n or i <word>")),
         };
-        Profile::Privileged { mode, identity }
+        let kernel = if tokens.peek() == Some(b"k") {
+            tokens.next()?;
+            Some(Kernel::parse(&mut tokens)?)
+        } else {
+            None
+        };
+        Profile::Privileged { mode, identity, kernel }
     };
     if core[13] % 8 != 0 || core[14] != exit.0 {
         return Err(WireError("SP must be eight-byte aligned and LR must be the exit"));
@@ -543,12 +736,16 @@ fn parse_case(
             return Err(WireError("region exceeds 2 MiB"));
         }
         let span = Span::new(base, bytes)?;
-        let permission = match tokens.count(7)? {
+        let permission = match tokens.count(15)? {
             1 => Permission::Read,
             3 => Permission::ReadWrite,
             5 => Permission::ReadExecute,
-            _ => return Err(WireError("region permission must be 1, 3 or 5")),
+            10 if profile.kernel().is_some() => Permission::Device,
+            _ => return Err(WireError("region permission must be 1, 3 or 5, or 10 in a kernel case")),
         };
+        if permission == Permission::Device && (bytes != 4 || !BANK_WORDS.contains(&base)) {
+            return Err(WireError("a device region is one interrupt-controller bank word"));
+        }
         if permission == Permission::ReadExecute && span.end() > EXECUTABLE_END {
             return Err(WireError("executable region must end by 0x7ffffffc"));
         }
@@ -650,6 +847,11 @@ fn validate(case: &Case) -> Result<(), WireError> {
             return Err(WireError("stub address is declared twice"));
         }
     }
+    if let Some(stop) = case.profile.kernel().and_then(|kernel| kernel.stop)
+        && (stop.0 % 4 != 0 || stop == case.entry || stop == case.exit || !executable(stop) || case.stub_at(stop.0).is_some())
+    {
+        return Err(WireError("stop address must be aligned, executable and differ from the entry, the exit and every stub"));
+    }
     Ok(())
 }
 
@@ -727,6 +929,8 @@ enum Status {
     UnsupportedInstruction,
     StubContract,
     EngineError,
+    /// A kernel case reached its stop address.
+    StopAddress,
     InvalidCase,
 }
 
@@ -931,6 +1135,36 @@ struct ProvenanceEntry {
     value: Wide,
 }
 
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum BarrierKind {
+    Barrier,
+}
+
+#[derive(Clone, Copy, Serialize)]
+struct BarrierEntry {
+    pc: Word,
+    instruction: Word,
+    kind: BarrierKind,
+    barrier: Barrier,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(untagged)]
+enum LogEntry {
+    Access(ProvenanceEntry),
+    Barrier(BarrierEntry),
+}
+
+/// A kernel case's final TPIDRURW and FPEXC, each when the case declares it.
+#[derive(Serialize)]
+struct KernelRegisters {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tpidrurw: Option<Word>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fpexc: Option<Word>,
+}
+
 #[derive(Serialize)]
 struct Observation<'a> {
     wire_version: u8,
@@ -948,7 +1182,10 @@ struct Observation<'a> {
     access_total: Count,
     accesses: Vec<AccessEntry>,
     memory_provenance_total: Count,
-    memory_provenance: Vec<ProvenanceEntry>,
+    memory_provenance: Vec<LogEntry>,
+    /// Present exactly for an executed kernel case.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kernel: Option<KernelRegisters>,
 }
 
 impl<'a> Observation<'a> {
@@ -983,6 +1220,7 @@ impl<'a> Observation<'a> {
             accesses: Vec::new(),
             memory_provenance_total: Count(0),
             memory_provenance: Vec::new(),
+            kernel: None,
         }
     }
 }
@@ -1214,6 +1452,47 @@ struct Instruction {
     transfer: Option<Transfer>,
 }
 
+/// The local exclusive monitor.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Monitor {
+    Open,
+    Exclusive(u32),
+}
+
+impl Monitor {
+    /// A store over the tagged word other than STREX, whose effect on the
+    /// monitor is IMPLEMENTATION DEFINED.
+    fn clobbered(self, transfer: Option<Transfer>, address: u64, size: u64) -> bool {
+        let Self::Exclusive(tag) = self else {
+            return false;
+        };
+        let tag = u64::from(tag);
+        let overlaps = |start: u64, bytes: u64| start < tag + 4 && tag < start + bytes;
+        match transfer {
+            Some(transfer) => (0..u64::from(transfer.words)).any(|index| overlaps((address + 4 * index) & 0xffff_ffff, 4)),
+            None => overlaps(address, size),
+        }
+    }
+}
+
+/// A kernel case's current TPIDRURW, CPACR and FPEXC.
+#[derive(Clone, Copy)]
+struct SystemState {
+    tpidrurw: Option<Tpidrurw>,
+    cpacr: Option<Cpacr>,
+    fpexc: Option<Fpexc>,
+}
+
+impl SystemState {
+    fn read(self, register: SystemRegister) -> Option<u32> {
+        match register {
+            SystemRegister::Tpidrurw => self.tpidrurw.map(|value| value.0),
+            SystemRegister::Cpacr => self.cpacr.map(|value| value.0),
+            SystemRegister::Fpexc => self.fpexc.map(|value| value.0),
+        }
+    }
+}
+
 struct State {
     status: Option<Status>,
     detail: Option<String>,
@@ -1228,13 +1507,16 @@ struct State {
     trace: [TraceEntry; LOG_SIZE],
     accesses: [AccessEntry; LOG_SIZE],
     access_total: u64,
-    provenance: Vec<ProvenanceEntry>,
+    provenance: Vec<LogEntry>,
     provenance_total: u64,
     instruction: Instruction,
+    monitor: Monitor,
+    system: SystemState,
 }
 
 impl State {
     fn new(case: &Case) -> Self {
+        let kernel = case.profile.kernel();
         Self {
             status: None,
             detail: None,
@@ -1252,6 +1534,12 @@ impl State {
             provenance: Vec::with_capacity(PROVENANCE_SIZE),
             provenance_total: 0,
             instruction: Instruction { pc: 0, word: 0, transfer: None },
+            monitor: Monitor::Open,
+            system: SystemState {
+                tpidrurw: kernel.and_then(|kernel| kernel.tpidrurw),
+                cpacr: kernel.and_then(|kernel| kernel.cpacr),
+                fpexc: kernel.and_then(|kernel| kernel.fpexc),
+            },
         }
     }
 
@@ -1283,6 +1571,24 @@ impl State {
         self.access_total += 1;
     }
 
+    fn record(&mut self, entry: LogEntry) {
+        if self.provenance.len() < PROVENANCE_SIZE {
+            self.provenance.push(entry);
+        }
+        self.provenance_total += 1;
+    }
+
+    fn record_access(&mut self, kind: ProvenanceKind, address: u32, size: i32, value: u64) {
+        self.record(LogEntry::Access(ProvenanceEntry {
+            pc: Word(self.instruction.pc),
+            instruction: Word(self.instruction.word),
+            kind,
+            address: Word(address),
+            size,
+            value: Wide(value),
+        }));
+    }
+
     fn on_instruction(&mut self, cpu: &dyn Cpu, case: &Case, address: u64, size: u32) -> Result<(), Step> {
         if self.status.is_some() {
             return Ok(());
@@ -1301,6 +1607,9 @@ impl State {
         if pc == case.exit.0 {
             let status = if self.returning && self.depth == 0 { Status::Returned } else { Status::UnknownCall };
             return Err(Step::Stop(status));
+        }
+        if case.stops_at(pc) {
+            return Err(Step::Stop(Status::StopAddress));
         }
         if !case.functions[self.current].contains(address, 4) {
             return Err(Step::Stop(Status::UnknownCall));
@@ -1323,6 +1632,13 @@ impl State {
                 write(cpu, arm::PC, pc.wrapping_add(4))?;
                 return Ok(());
             }
+            ProfileWord::Kernel(op) => {
+                if word >> 28 == 15 || passes {
+                    self.perform(cpu, case, op)?;
+                }
+                write(cpu, arm::PC, pc.wrapping_add(4))?;
+                return Ok(());
+            }
             ProfileWord::ControlWrite(_) | ProfileWord::Ordinary => {}
         }
         if !passes {
@@ -1336,6 +1652,63 @@ impl State {
         }
         self.instruction.transfer = Transfer::of(word);
         self.track(cpu, case, pc, word)
+    }
+
+    /// Performs one condition-passing kernel word; the caller advances the PC.
+    fn perform(&mut self, cpu: &dyn Cpu, case: &Case, op: KernelWord) -> Result<(), Step> {
+        match op {
+            KernelWord::Barrier(barrier) => {
+                let (pc, instruction) = (Word(self.instruction.pc), Word(self.instruction.word));
+                self.record(LogEntry::Barrier(BarrierEntry { pc, instruction, kind: BarrierKind::Barrier, barrier }));
+            }
+            KernelWord::ClearExclusive => self.monitor = Monitor::Open,
+            KernelWord::LoadExclusive { target, base } => {
+                let address = read(cpu, arm::CORE[base])?;
+                self.log(AccessType::Read, u64::from(address), 4, 0);
+                if !case.admits_exclusive(address, Need::Read) {
+                    return Err(Step::Stop(Status::MemoryGuard));
+                }
+                let value = read_word(cpu, u64::from(address))?;
+                self.record_access(ProvenanceKind::Read, address, 4, u64::from(value));
+                write(cpu, arm::CORE[target], value)?;
+                self.monitor = Monitor::Exclusive(address);
+            }
+            KernelWord::StoreExclusive { status, source, base } => {
+                let address = read(cpu, arm::CORE[base])?;
+                let value = read(cpu, arm::CORE[source])?;
+                if !case.admits_exclusive(address, Need::Write) {
+                    self.log(AccessType::Write, u64::from(address), 4, i64::from(value));
+                    return Err(Step::Stop(Status::MemoryGuard));
+                }
+                let stored = match self.monitor {
+                    Monitor::Exclusive(tag) if tag == address => true,
+                    Monitor::Exclusive(_) => return Err(Step::Stop(Status::UnsupportedInstruction)),
+                    Monitor::Open => false,
+                };
+                if stored {
+                    self.log(AccessType::Write, u64::from(address), 4, i64::from(value));
+                    cpu.write_memory(u64::from(address), &value.to_le_bytes())?;
+                    self.record_access(ProvenanceKind::Write, address, 4, u64::from(value));
+                }
+                write(cpu, arm::CORE[status], u32::from(!stored))?;
+                self.monitor = Monitor::Open;
+            }
+            KernelWord::Read { target, register } => {
+                let value = self.system.read(register).ok_or_else(|| Step::Host(format!("{register:?} is not declared")))?;
+                write(cpu, arm::CORE[target], value)?;
+            }
+            KernelWord::Write { source, register } => {
+                let value = read(cpu, arm::CORE[source])?;
+                match register {
+                    SystemRegister::Tpidrurw => self.system.tpidrurw = Some(Tpidrurw(value)),
+                    SystemRegister::Fpexc => {
+                        self.system.fpexc = Some(Fpexc::new(value).ok_or(Step::Stop(Status::UnsupportedInstruction))?);
+                    }
+                    SystemRegister::Cpacr => return Err(Step::Host("CPACR is read-only".to_owned())),
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Applies the call contract of one condition-passing word before it executes.
@@ -1358,12 +1731,36 @@ impl State {
             }
             Control::Dispatch(table) => self.dispatch(cpu, case, pc, word, table),
             Control::LoadMultipleReturn => self.load_multiple_return(cpu, case, word),
-            Control::UntrackedPcWrite => Err(Step::Stop(Status::UnsupportedInstruction)),
+            Control::UntrackedPcWrite => self.load_stop(cpu, case, pc, word),
             Control::None => Ok(()),
         }
     }
 
+    /// `ldr pc, [Rn, #+/-imm12]` is admitted only when it loads a kernel case's stop
+    /// address; an inadmissible load is left to its own refusal.
+    fn load_stop(&mut self, cpu: &dyn Cpu, case: &Case, pc: u32, word: u32) -> Result<(), Step> {
+        let Some(stop) = case.profile.kernel().and_then(|kernel| kernel.stop) else {
+            return Err(Step::Stop(Status::UnsupportedInstruction));
+        };
+        if word & 0x0f70_f000 != 0x0510_f000 {
+            return Err(Step::Stop(Status::UnsupportedInstruction));
+        }
+        let base = match word >> 16 & 15 {
+            15 => pc.wrapping_add(8),
+            register => read(cpu, arm::CORE[register as usize])?,
+        };
+        let offset = word & 0xfff;
+        let address = if word & 1 << 23 != 0 { base.wrapping_add(offset) } else { base.wrapping_sub(offset) };
+        if !case.admits(u64::from(address), 4, Need::Read) || read_word(cpu, u64::from(address))? == stop.0 {
+            return Ok(());
+        }
+        Err(Step::Stop(Status::UnsupportedInstruction))
+    }
+
     fn call(&mut self, cpu: &dyn Cpu, case: &Case, target: u32, return_address: u32) -> Result<(), Step> {
+        if case.stops_at(target) {
+            return Ok(());
+        }
         if let Some(index) = case.stub_at(target) {
             self.apply_stub(cpu, &case.stubs[index], index)?;
             write(cpu, arm::CORE[14], return_address)?;
@@ -1413,7 +1810,7 @@ impl State {
 
     fn return_to(&mut self, case: &Case, target: u32) -> Result<(), Step> {
         if target != self.expected_return(case) {
-            return Err(Step::Stop(Status::UnknownCall));
+            return if case.stops_at(target) { Ok(()) } else { Err(Step::Stop(Status::UnknownCall)) };
         }
         match self.depth {
             0 => self.returning = true,
@@ -1499,7 +1896,12 @@ impl State {
             }
         };
         self.log(kind, address, size, value);
-        match self.admit(case, need, address, size) {
+        let transfer = self.instruction.transfer.take();
+        match self.admit(case, need, address, size, transfer) {
+            Ok(true) if need == Need::Write && self.monitor.clobbered(transfer, address, size as u64) => {
+                self.status.get_or_insert(Status::UnsupportedInstruction);
+                return refuse(cpu);
+            }
             Ok(true) => {}
             Ok(false) => {
                 self.status.get_or_insert(Status::MemoryGuard);
@@ -1520,27 +1922,17 @@ impl State {
             cpu.read_memory(address, &mut bytes[..size as usize])?;
             (ProvenanceKind::Read, u64::from_le_bytes(bytes))
         };
-        if self.provenance.len() < PROVENANCE_SIZE {
-            self.provenance.push(ProvenanceEntry {
-                pc: Word(self.instruction.pc),
-                instruction: Word(self.instruction.word),
-                kind,
-                address: Word(address as u32),
-                size,
-                value: Wide(observed),
-            });
-        }
-        self.provenance_total += 1;
+        self.record_access(kind, address as u32, size, observed);
         Ok(())
     }
 
     /// Every access after the run's outcome is decided is refused.
-    fn admit(&mut self, case: &Case, need: Need, address: u64, size: i32) -> Result<bool, String> {
+    fn admit(&self, case: &Case, need: Need, address: u64, size: i32, transfer: Option<Transfer>) -> Result<bool, String> {
         let size = u64::try_from(size)
             .ok()
             .filter(|size| (1..=8).contains(size))
             .ok_or_else(|| format!("memory access of {size} bytes"))?;
-        let transfer = match self.instruction.transfer.take() {
+        let transfer = match transfer {
             Some(transfer) if transfer.need != need => {
                 return Err("the first access of a transfer has the wrong direction".to_owned());
             }
@@ -1662,6 +2054,10 @@ impl State {
                 .collect(),
             memory_provenance_total: Count(self.provenance_total),
             memory_provenance: std::mem::take(&mut self.provenance),
+            kernel: case.profile.kernel().map(|_| KernelRegisters {
+                tpidrurw: self.system.tpidrurw.map(|value| Word(value.0)),
+                fpexc: self.system.fpexc.map(|value| Word(value.0)),
+            }),
         }
     }
 }

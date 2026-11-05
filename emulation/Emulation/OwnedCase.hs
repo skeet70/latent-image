@@ -11,6 +11,11 @@ module Emulation.OwnedCase
   , CaseRegion (..)
   , mkRegion
   , CaseSpec (..)
+  , KernelCase (..)
+  , InstructionLimit (..)
+  , plainLimit
+  , CaseOutcome (..)
+  , caseOutcome
   , writeCase
   , loadObserved
   , CaseId (..)
@@ -123,12 +128,14 @@ functionSymbol symbols name = case lookupSymbol symbols name of
 lookupSymbol :: M.Map String Symbol -> String -> Symbol
 lookupSymbol symbols name = fromMaybe (error ("kernel symbol missing: " ++ name)) (M.lookup name symbols)
 
-data Permission = ReadOnly | ReadWrite | ReadExecute
+-- | 'Device' is one interrupt-controller bank word of a kernel case, taking aligned word stores only.
+data Permission = ReadOnly | ReadWrite | ReadExecute | Device
 
 permissionLabel :: Permission -> String
 permissionLabel ReadOnly = "r"
 permissionLabel ReadWrite = "rw"
 permissionLabel ReadExecute = "rx"
+permissionLabel Device = "device"
 
 data CaseRegion = CaseRegion
   { caseRegion :: Region
@@ -166,7 +173,47 @@ data CaseSpec = CaseSpec
   , caseExpectedMemory :: [(RegionId, B.ByteString)]
   , -- | The value MRC p14, 0, Rt, c2, c0, 0 reads; only a privileged case may name one.
     caseCp14Identity :: Maybe Word32
+  , -- | Only a privileged case may be a kernel case.
+    caseKernel :: Maybe KernelCase
   }
+
+-- | The instruction budget N of a case: it ends @instruction_budget@ when it has not returned within N instructions.
+newtype InstructionLimit = InstructionLimit Word32
+  deriving (Eq, Show)
+
+-- | The budget of a case that is not a kernel case.
+plainLimit :: InstructionLimit
+plainLimit = InstructionLimit 4000000
+
+-- | A kernel case additionally executes word exclusives, barriers and @nop@, reads the declared
+-- system registers, may end at a stop address and may map device regions.
+data KernelCase = KernelCase
+  { kernelLimit :: InstructionLimit
+  , kernelStop :: Maybe GuestAddress
+  , kernelTpidrurw :: Maybe Word32
+  , kernelCpacr :: Maybe Word32
+  , -- | EN (bit 30) is the only bit it may set.
+    kernelFpexc :: Maybe Word32
+  }
+
+caseLimit :: CaseSpec -> InstructionLimit
+caseLimit = maybe plainLimit kernelLimit . caseKernel
+
+-- | How a case ended, the part two roles of one case compare before their state.
+data CaseOutcome
+  = OutcomeReturned
+  | OutcomeStopped GuestAddress
+  | -- | No return within the case's N instructions.
+    OutcomeNoReturnWithin InstructionLimit
+  | OutcomeRefused RunnerStatus
+  deriving (Eq, Show)
+
+caseOutcome :: CaseSpec -> NativeObservation -> CaseOutcome
+caseOutcome spec observation = case nativeStatus observation of
+  Returned -> OutcomeReturned
+  StopAddress -> OutcomeStopped (GuestAddress (fromIntegral (registerValue observation Pc)))
+  InstructionBudget -> OutcomeNoReturnWithin (caseLimit spec)
+  status -> OutcomeRefused status
 
 regionJson :: CaseRegion -> Value
 regionJson (CaseRegion region permission) =
@@ -214,7 +261,7 @@ caseValue file spec =
         | (address, size) <- caseFunctions spec
         ]
     , "stubs" .= ([] :: [Value])
-    , "limits" .= object ["instructions" .= (4000000 :: Int), "wall_ms" .= (4000 :: Int)]
+    , "limits" .= object ["instructions" .= (let InstructionLimit limit = caseLimit spec in limit), "wall_ms" .= (4000 :: Int)]
     , "expected" .=
         object
           [ "status" .= runnerStatusLabel (caseExpectedStatus spec)
@@ -228,6 +275,13 @@ caseValue file spec =
     , "exclusions" .= [caseExclusion spec]
     ]
       ++ ["cp14_identity" .= hexWord32 identity | Just identity <- [caseCp14Identity spec]]
+      ++ ["kernel" .= kernelJson kernel | Just kernel <- [caseKernel spec]]
+
+kernelJson :: KernelCase -> Value
+kernelJson kernel =
+  object $
+    ["stop" .= hexAddress stop | Just stop <- [kernelStop kernel]]
+      ++ [fromString name .= hexWord32 value | (name, Just value) <- [("tpidrurw", kernelTpidrurw kernel), ("cpacr", kernelCpacr kernel), ("fpexc", kernelFpexc kernel)]]
 
 writeCase :: FilePath -> CaseSpec -> IO FilePath
 writeCase directory spec = do

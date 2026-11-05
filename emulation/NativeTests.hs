@@ -544,6 +544,7 @@ ownedBatchApi runner=withTemporary "fuji-owned-batch"$ \root->do
       , O.caseExpectedRegisters=expected
       , O.caseExpectedMemory=memory
       , O.caseCp14Identity=Nothing
+      , O.caseKernel=Nothing
       }
      specs=
       [ spec "writer"[0xe5820000,0xe12fff1e][(N.R0,0xdeadbeef),(N.R2,0x9000)][(N.R0,0xdeadbeef)][(N.RegionId "data",O.word32le 0xdeadbeef)]
@@ -558,6 +559,46 @@ ownedBatchApi runner=withTemporary "fuji-owned-batch"$ \root->do
  case failed of
   Left(e::SomeException)->ensure("broken: invalid_case"`isInfixOf`show e)("loadObservedBatch failure names: "++show e)
   Right _->failH "loadObservedBatch returned for a batch with an invalid case"
+
+-- Two lock-acquisition shapes spinning on a held word share one outcome, distinct from returning
+-- and from stopping; a bank store's barrier precedes it in the parsed order.
+kernelOutcomes :: FilePath -> IO ()
+kernelOutcomes runner=withTemporary "fuji-kernel-outcomes"$ \root->do
+ let acquire=[0xe1921f9f,0xe3510000,0x1afffffc,0xe3a01001,0xe1823f91,0xe3530000,0x1afffff8,0xe12fff1e]
+     spec ident code lock status=O.CaseSpec
+      { O.caseId=ident
+      , O.caseProvenance="NativeTests.hs: kernel-case outcomes"
+      , O.caseExclusion="outcome API control"
+      , O.caseEntry=N.GuestAddress 0x8000
+      , O.caseExit=N.GuestAddress 0xa000
+      , O.caseRegions=
+         [ O.mkRegion(N.RegionId "code")(N.GuestAddress 0x8000)(4*length code)O.ReadExecute(O.assemble code)
+         , O.mkRegion(N.RegionId "lock")(N.GuestAddress 0x9000)4 O.ReadWrite(O.word32le lock)
+         , O.mkRegion(N.RegionId "exit")(N.GuestAddress 0xa000)4 O.ReadExecute(B.replicate 4 0)
+         , O.mkRegion(N.RegionId "stop")(N.GuestAddress 0xa100)4 O.ReadExecute(B.replicate 4 0)
+         , O.mkRegion(N.RegionId "bank")(N.GuestAddress 0xfffb30cc)4 O.Device(B.replicate 4 0)
+         , O.mkRegion(N.RegionId "stack")(N.GuestAddress 0xb000)32 O.ReadWrite(B.replicate 32 0)
+         ]
+      , O.caseFunctions=[(N.GuestAddress 0x8000,4*fromIntegral(length code))]
+      , O.caseInitial=[(r,case r of N.R2->0x9000;N.R3->0xfffb30cc;_->0)|r<-[N.R0 .. N.R12]]++[(N.Sp,0xb020),(N.Lr,0xa000),(N.Cpsr,0xd3)]
+      , O.caseExpectedStatus=status
+      , O.caseExpectedRegisters=[(N.Sp,0xb020)]
+      , O.caseExpectedMemory=[]
+      , O.caseCp14Identity=Nothing
+      , O.caseKernel=Just O.KernelCase{O.kernelLimit=O.InstructionLimit 50,O.kernelStop=Just(N.GuestAddress 0xa100),O.kernelTpidrurw=Nothing,O.kernelCpacr=Nothing,O.kernelFpexc=Nothing}
+      }
+     specs=
+      [ spec "spin"acquire 1 N.InstructionBudget
+      , spec "spin-after-nop"(0xe320f000:acquire)1 N.InstructionBudget
+      , spec "free"acquire 0 N.Returned
+      , spec "stopped"[0xeb00083e]0 N.StopAddress
+      , spec "notify"[0xf57ff04f,0xe5831000,0xe12fff1e]0 N.Returned
+      ]
+ observed<-O.writeBatch root specs>>=O.loadObservedBatch runner
+ let outcomes=[O.caseOutcome one observation|(one,(_,observation))<-zip specs observed]
+ ensure(outcomes==[O.OutcomeNoReturnWithin(O.InstructionLimit 50),O.OutcomeNoReturnWithin(O.InstructionLimit 50),O.OutcomeReturned,O.OutcomeStopped(N.GuestAddress 0xa100),O.OutcomeReturned])("kernel outcomes: "++show outcomes)
+ let order=N.nativeKernel(snd(last observed))>>=N.observedOrder
+ ensure(order==Just[N.OrderedBarrier N.Dsb,N.OrderedWrite(N.Write(N.GuestAddress 0xfffb30cc)(N.WriteBytes 4))])("kernel order: "++show order)
 
 main :: IO ()
 main=do
@@ -580,6 +621,7 @@ main=do
   when(name=="arithmetic.json")$ensure(get result "instructions"==s "3")"arithmetic instruction count"
   when(name=="instruction-budget.json")$ensure(get result "instructions"==s "3" && get result "trace"==arr(replicate 3(obj[("pc",s "0x00001004"),("instruction",s "0xeafffffe")])) )"exact budget trace"
   when(name=="wall-budget.json")$ensure(num(get result "elapsed_ns")<1000000000)"wall bound"
+  when(name=="kernel-barriers.json")$ensure(map(\p->(get p "kind",get p "barrier"))provenance==[(s "write",Null),(s "barrier",s "dmb"),(s "barrier",s "dsb"),(s "barrier",s "isb")])"barrier markers in execution order"
  dispatchRegressions runner
  functionLimitRegressions runner
  instructionLimitRegressions runner
@@ -592,6 +634,7 @@ main=do
  batchFailures runner checker
  batchLimits runner
  ownedBatchApi runner
+ kernelOutcomes runner
  withTemporary "fuji-native-tests"$ \root->do
   artifacts<-filter((==".bin").takeExtension) <$> listDirectory "emulation/fixtures"
   forM_ artifacts$ \name->copyFile("emulation/fixtures" </> name)(root </> name)
@@ -623,6 +666,18 @@ main=do
   invalid "CP14 identity on a user case"(set "cp14_identity"(s "0x00004003")original)
   invalid "noncanonical CP14 identity"(set "cp14_identity"(s "0x4003")$nest "registers"(set "cpsr"(s "0x000000d3"))original)
   forM_["0x00000033","0x00000113","0x00000012","0x0000001b","0x01000013"]$ \cpsr->invalid("privileged CPSR "++cpsr)(nest "registers"(set "cpsr"(s cpsr))original)
+  bankStore<-B.readFile "emulation/fixtures/kernel-bank-store.json" >>= jsonRead
+  forM_
+   [("kernel on a user case",set "kernel"(obj[])original)
+   ,("unknown kernel field",nest "kernel"(set "clock"(s "0x00000000"))bankStore)
+   ,("FPEXC other than EN",nest "kernel"(set "fpexc"(s "0x80000000"))bankStore)
+   ,("device region outside a kernel case",remove "kernel"bankStore)
+   ,("device region off a bank word",modifyAt "regions" 2(set "address"(s "0xfffb30d0"))bankStore)
+   ,("device region wider than a word",modifyAt "regions" 2(set "size"(n 8))bankStore)
+   ,("stop address at the entry",nest "kernel"(set "stop"(s "0x00001004"))bankStore)
+   ,("stop address outside executable bytes",nest "kernel"(set "stop"(s "0x00003000"))bankStore)
+   ,("expected kernel registers outside a kernel case",nest "expected"(set "kernel"(obj[]))original)
+   ](uncurry invalid)
   forM_["{\"schema_version\":1,\"schema_version\":1}","{\"schema_version\":NaN}"]$ \raw->do
    B.writeFile path raw; (_,report)<-runCase runner path; ensure(get report "status"==s "invalid_case")"invalid JSON accepted"
   B.writeFile path(encodeCanonical(set "origin"(s "stock")original))
@@ -663,5 +718,5 @@ main=do
   (timed,code,out,_)<-runBounded 3000000 (8*1024*1024) runner[](BC.pack input)
   result<-jsonRead out
   ensure(not timed && code==ExitFailure 1 && get result "status"==s "invalid_case")"independent wire rejection failed"
- putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, 7 privileged-entry rejections, "++show(length bad)++" independent wire rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries and schema agreement passed")
- putStrLn(show batched++"-case fixture batch, 9 isolation controls, batch failure and framing controls, batch limit boundaries and the owned-case batch API passed")
+ putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, 7 privileged-entry rejections, 9 kernel-case rejections, "++show(length bad)++" independent wire rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries and schema agreement passed")
+ putStrLn(show batched++"-case fixture batch, 9 isolation controls, batch failure and framing controls, batch limit boundaries, the owned-case batch API and kernel-case outcomes passed")

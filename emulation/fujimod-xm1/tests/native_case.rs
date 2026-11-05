@@ -12,6 +12,7 @@ const STUB: u32 = 0x2000;
 const READ: u8 = 1;
 const READ_WRITE: u8 = 3;
 const READ_EXECUTE: u8 = 5;
+const DEVICE: u8 = 10;
 
 const BX_LR: u32 = 0xe12f_ff1e;
 const PUSH_LR: u32 = 0xe92d_4000;
@@ -48,6 +49,24 @@ struct Case {
     stubs: Vec<Stub>,
     /// The wire's CP14 identity token of a privileged case.
     identity: Option<String>,
+    /// The wire's kernel row of a kernel case.
+    kernel: Option<String>,
+}
+
+/// A kernel case's wire row; `None` is `n`.
+#[derive(Clone, Copy, Default)]
+struct Kernel {
+    stop: Option<u32>,
+    tpidrurw: Option<u32>,
+    cpacr: Option<u32>,
+    fpexc: Option<u32>,
+}
+
+impl Kernel {
+    fn row(self) -> String {
+        let token = |value: Option<u32>| value.map_or("n".to_owned(), |value| format!("{value:x}"));
+        format!("k {} {} {} {}", token(self.stop), token(self.tpidrurw), token(self.cpacr), token(self.fpexc))
+    }
 }
 
 fn words(words: &[u32]) -> Vec<u8> {
@@ -75,6 +94,7 @@ impl Case {
             functions: vec![(CODE, 4 * code.len() as u32)],
             stubs: Vec::new(),
             identity: None,
+            kernel: None,
         }
     }
 
@@ -111,6 +131,13 @@ impl Case {
         self
     }
 
+    /// A kernel case in SVC without a CP14 identity.
+    fn kernel(mut self, kernel: Kernel) -> Self {
+        self = self.privileged(SVC_ENTRY, None);
+        self.kernel = Some(kernel.row());
+        self
+    }
+
     /// Four regions sharing page 0x4000: r, rw, r, an unmapped gap, then rw.
     fn shared_page(self) -> Self {
         self.region(0x4000, READ, &[0x44, 0x33, 0x22, 0x11])
@@ -128,6 +155,9 @@ impl Case {
         text += &registers.join(" ");
         if let Some(identity) = &self.identity {
             text += &format!("\n{identity}");
+        }
+        if let Some(kernel) = &self.kernel {
+            text += &format!("\n{kernel}");
         }
         text += &format!("\n{} {} {}\n", self.regions.len(), self.functions.len(), self.stubs.len());
         for region in &self.regions {
@@ -185,6 +215,34 @@ struct Provenance {
     value: String,
 }
 
+#[derive(Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum BarrierTag {
+    Barrier,
+}
+
+#[derive(Clone, Copy, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum Barrier {
+    Dmb,
+    Dsb,
+    Isb,
+}
+
+#[derive(Deserialize, Debug, PartialEq)]
+struct BarrierRow {
+    pc: String,
+    kind: BarrierTag,
+    barrier: Barrier,
+}
+
+#[derive(Deserialize, Debug, PartialEq)]
+#[serde(untagged)]
+enum Row {
+    Access(Provenance),
+    Barrier(BarrierRow),
+}
+
 #[derive(Clone, Copy, Deserialize, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum Status {
@@ -197,7 +255,16 @@ enum Status {
     UnsupportedInstruction,
     StubContract,
     EngineError,
+    StopAddress,
     InvalidCase,
+}
+
+/// Final values of a kernel case's declared TPIDRURW and FPEXC.
+#[derive(Deserialize, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct KernelRegisters {
+    tpidrurw: Option<String>,
+    fpexc: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -210,7 +277,9 @@ struct Observation {
     events: Vec<Event>,
     trace: Vec<Trace>,
     memory_provenance_total: String,
-    memory_provenance: Vec<Provenance>,
+    memory_provenance: Vec<Row>,
+    #[serde(default)]
+    kernel: Option<KernelRegisters>,
 }
 
 struct Observed {
@@ -260,6 +329,10 @@ impl Observed {
         assert!(self.returned);
         assert_eq!(self.register("pc"), EXIT);
     }
+
+    fn kernel(&self) -> &KernelRegisters {
+        self.observation.kernel.as_ref().expect("a kernel observation")
+    }
 }
 
 fn branch(from: u32, to: u32, link: bool) -> u32 {
@@ -306,13 +379,13 @@ fn post_indexed_transfers_update_the_base_memory_and_provenance() {
     assert_eq!(observed.register("r2"), 0xdead_beef);
     assert_eq!(observed.register("r3"), 0x5566_7788);
     assert_eq!(observed.bytes(0x4000), "efbeadde88776655");
-    let entry = |pc: &str, kind: Kind, address: &str, value: &str| Provenance {
+    let entry = |pc: &str, kind: Kind, address: &str, value: &str| Row::Access(Provenance {
         pc: pc.into(),
         kind,
         address: address.into(),
         size: 4,
         value: value.into(),
-    };
+    });
     assert_eq!(
         observed.observation.memory_provenance,
         [
@@ -1130,6 +1203,443 @@ fn malformed_privileged_entries_are_invalid_cases() {
     let mut user = Case::new(&[BX_LR]);
     user.identity = Some("n".to_owned());
     cases.extend([missing, unknown, user]);
+    for case in cases {
+        let observed = case.run();
+        assert_eq!(observed.status(), Status::InvalidCase, "{}", case.wire());
+    }
+}
+
+const DATA: u32 = 0x4000;
+const STOP: u32 = 0x10c0;
+const BANK: u32 = 0xfffb_30cc;
+const NOP: u32 = 0xe320_f000;
+const LDREX_R1_R2: u32 = 0xe192_1f9f;
+const STREX_R3_R1_R2: u32 = 0xe182_3f91;
+const CLREX: u32 = 0xf57f_f01f;
+const ADD_R1_1: u32 = 0xe281_1001;
+const STR_R0_R2: u32 = 0xe582_0000;
+const DMB_SY: u32 = 0xf57f_f05f;
+const DSB_SY: u32 = 0xf57f_f04f;
+const ISB_SY: u32 = 0xf57f_f06f;
+/// `mcr p15, 0, r5, c7, c10, 5` and `, 4`.
+const CP15_DMB_R5: u32 = 0xee07_5fba;
+const CP15_DSB_R5: u32 = 0xee07_5f9a;
+const TPIDRURW_TO_R4: u32 = 0xee1d_4f50;
+const TPIDRURW_FROM_R6: u32 = 0xee0d_6f50;
+const TPIDRURW_TO_R7: u32 = 0xee1d_7f50;
+const CPACR_TO_R5: u32 = 0xee11_5f50;
+const FPEXC_TO_R8: u32 = 0xeef8_8a10;
+const FPEXC_FROM_R6: u32 = 0xeee8_6a10;
+const FPEXC_EN: u32 = 1 << 30;
+
+fn branch_ne(from: u32, to: u32) -> u32 {
+    branch(from, to, false) & 0x0fff_ffff | 0x1000_0000
+}
+
+fn access(pc: u32, kind: Kind, address: u32, value: u32) -> Row {
+    Row::Access(Provenance {
+        pc: format!("0x{pc:08x}"),
+        kind,
+        address: format!("0x{address:08x}"),
+        size: 4,
+        value: format!("0x{value:016x}"),
+    })
+}
+
+fn barrier(pc: u32, barrier: Barrier) -> Row {
+    Row::Barrier(BarrierRow { pc: format!("0x{pc:08x}"), kind: BarrierTag::Barrier, barrier })
+}
+
+#[test]
+fn an_exclusive_pair_updates_the_word_and_reports_success() {
+    let observed = Case::new(&[LDREX_R1_R2, ADD_R1_1, STREX_R3_R1_R2, BX_LR])
+        .kernel(Kernel::default())
+        .region(DATA, READ_WRITE, &words(&[5]))
+        .register(2, DATA)
+        .register(3, 9)
+        .run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r1"), 6);
+    assert_eq!(observed.register("r3"), 0);
+    assert_eq!(observed.bytes(DATA), "06000000");
+    assert_eq!(observed.observation.memory_provenance, [access(0x1000, Kind::Read, DATA, 5), access(0x1008, Kind::Write, DATA, 6)]);
+}
+
+#[test]
+fn a_store_exclusive_without_a_reservation_fails_without_a_store() {
+    // strex alone; ldrex, clrex, strex
+    for code in [vec![STREX_R3_R1_R2, BX_LR], vec![LDREX_R1_R2, CLREX, STREX_R3_R1_R2, BX_LR]] {
+        let observed = Case::new(&code)
+            .kernel(Kernel::default())
+            .region(DATA, READ_WRITE, &words(&[5]))
+            .register(1, 7)
+            .register(2, DATA)
+            .register(3, 9)
+            .run();
+        observed.assert_returned();
+        assert_eq!(observed.register("r3"), 1, "{code:x?}");
+        assert_eq!(observed.bytes(DATA), "05000000", "{code:x?}");
+        assert!(observed.observation.memory_provenance.iter().all(|row| !matches!(row, Row::Access(Provenance { kind: Kind::Write, .. }))));
+    }
+    // ldrex; strexne with Z set is skipped and keeps the reservation; strex then stores
+    let observed = Case::new(&[LDREX_R1_R2, STREX_R3_R1_R2 & 0x0fff_ffff | 0x1000_0000, 0xe182_4f91, BX_LR])
+        .kernel(Kernel::default())
+        .region(DATA, READ_WRITE, &words(&[5]))
+        .register(2, DATA)
+        .register(3, 9)
+        .register(4, 9)
+        .run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r3"), 9);
+    assert_eq!(observed.register("r4"), 0);
+    assert_eq!(observed.bytes(DATA), "05000000");
+}
+
+/// Two lock acquisitions over the word at r2, the second preceded by a `nop`.
+fn acquisitions() -> [Vec<u32>; 2] {
+    let acquire = |at: u32| {
+        vec![
+            LDREX_R1_R2,
+            0xe351_0000, // cmp r1, #0
+            branch_ne(at + 8, at),
+            0xe3a0_1001, // mov r1, #1
+            STREX_R3_R1_R2,
+            0xe353_0000, // cmp r3, #0
+            branch_ne(at + 24, at),
+            BX_LR,
+        ]
+    };
+    [acquire(CODE), [vec![NOP], acquire(CODE + 4)].concat()]
+}
+
+#[test]
+fn a_spin_on_a_held_word_ends_on_the_budget_in_every_shape() {
+    for code in acquisitions() {
+        let mut case = Case::new(&code).kernel(Kernel::default()).region(DATA, READ_WRITE, &words(&[1])).register(2, DATA);
+        case.instructions = 100;
+        let observed = case.run();
+        assert_eq!(observed.status(), Status::InstructionBudget, "{code:x?}");
+        assert!(!observed.returned);
+        assert_eq!(observed.instructions(), 100, "{code:x?}");
+        assert_eq!(observed.bytes(DATA), "01000000");
+    }
+}
+
+#[test]
+fn a_free_word_is_acquired_in_every_shape() {
+    for code in acquisitions() {
+        let observed = Case::new(&code).kernel(Kernel::default()).region(DATA, READ_WRITE, &words(&[0])).register(2, DATA).run();
+        observed.assert_returned();
+        assert_eq!(observed.register("r3"), 0, "{code:x?}");
+        assert_eq!(observed.bytes(DATA), "01000000", "{code:x?}");
+    }
+}
+
+#[test]
+fn stores_over_a_reserved_word_and_a_store_exclusive_elsewhere_are_refused_without_effect() {
+    // ldrex r1, [r2] then: str r0, [r2]; stmia r4, {r0, r3} over it; strex r3, r1, [r4]
+    for (second, r2) in [(STR_R0_R2, DATA), (0xe884_0009, DATA + 4), (0xe184_3f91, DATA)] {
+        let observed = Case::new(&[LDREX_R1_R2, second, BX_LR])
+            .kernel(Kernel::default())
+            .region(DATA, READ_WRITE, &words(&[0x11, 0x22]))
+            .register(0, 0xdead_beef)
+            .register(2, r2)
+            .register(3, 0x3333_3333)
+            .register(4, if second == 0xe884_0009 { DATA } else { DATA + 4 })
+            .run();
+        observed.assert_stopped(Status::UnsupportedInstruction, CODE + 4);
+        assert_eq!(observed.bytes(DATA), "1100000022000000", "{second:#010x}");
+        assert_eq!(observed.register("r3"), 0x3333_3333, "{second:#010x}");
+        assert_eq!(observed.observation.memory_provenance_total, "1", "{second:#010x}");
+    }
+}
+
+#[test]
+fn other_exclusive_forms_are_refused_before_they_execute() {
+    for word in [
+        0xe1d2_0f9f, // ldrexb r0, [r2]
+        0xe1b2_0f9f, // ldrexd r0, r1, [r2]
+        0xe1f2_0f9f, // ldrexh r0, [r2]
+        0xe1e2_3f91, // strexh r3, r1, [r2]
+        0xe192_ff9f, // ldrex pc, [r2]
+        0xe19f_1f9f, // ldrex r1, [pc]
+        0xe182_2f91, // strex r2, r1, [r2]
+        0xe182_3f93, // strex r3, r3, [r2]
+        0xe182_3f9f, // strex r3, pc, [r2]
+        0xe102_0091, // swp r0, r1, [r2]
+    ] {
+        let case = Case::new(&[word, BX_LR])
+            .kernel(Kernel::default())
+            .region(DATA, READ_WRITE, &words(&[5, 6]))
+            .register(0, 9)
+            .register(1, 7)
+            .register(2, DATA)
+            .register(3, 4);
+        assert_status_write_has_no_effect(&case, &case.run());
+    }
+}
+
+#[test]
+fn exclusives_outside_writable_aligned_ordinary_words_are_memory_guards() {
+    let device = |case: Case| case.region(BANK, DEVICE, &[0; 4]);
+    for (code, address, region) in [
+        (vec![LDREX_R1_R2, BX_LR], DATA + 2, READ_WRITE),
+        (vec![LDREX_R1_R2, BX_LR], DATA + 8, READ_WRITE),
+        (vec![LDREX_R1_R2, STREX_R3_R1_R2, BX_LR], DATA, READ),
+        (vec![STREX_R3_R1_R2, BX_LR], DATA, READ),
+        (vec![LDREX_R1_R2, BX_LR], BANK, READ_WRITE),
+        (vec![STREX_R3_R1_R2, BX_LR], BANK, READ_WRITE),
+    ] {
+        let observed = device(Case::new(&code).kernel(Kernel::default()))
+            .region(DATA, region, &words(&[5, 6]))
+            .register(1, 7)
+            .register(2, address)
+            .register(3, 9)
+            .run();
+        let at = if code.len() == 3 { CODE + 4 } else { CODE };
+        observed.assert_stopped(Status::MemoryGuard, at);
+        assert_eq!(observed.register("r3"), 9, "{code:x?} {address:#x}");
+        assert_eq!(observed.bytes(DATA), "0500000006000000");
+        assert_eq!(observed.bytes(BANK), "00000000");
+    }
+}
+
+#[test]
+fn barriers_are_ordered_markers_among_the_stores() {
+    let observed = Case::new(&[STR_R0_R2, DMB_SY, 0xe582_1004, DSB_SY, ISB_SY, CP15_DMB_R5, CP15_DSB_R5, 0xf57f_f05b, BX_LR])
+        .kernel(Kernel::default())
+        .region(DATA, READ_WRITE, &[0; 8])
+        .register(0, 0x11)
+        .register(1, 0x22)
+        .register(2, DATA)
+        .register(5, 0x5555_5555)
+        .run();
+    observed.assert_returned();
+    assert_eq!(observed.bytes(DATA), "1100000022000000");
+    assert_eq!(observed.register("r5"), 0x5555_5555);
+    assert_eq!(
+        observed.observation.memory_provenance,
+        [
+            access(0x1000, Kind::Write, DATA, 0x11),
+            barrier(0x1004, Barrier::Dmb),
+            access(0x1008, Kind::Write, DATA + 4, 0x22),
+            barrier(0x100c, Barrier::Dsb),
+            barrier(0x1010, Barrier::Isb),
+            barrier(0x1014, Barrier::Dmb),
+            barrier(0x1018, Barrier::Dsb),
+            barrier(0x101c, Barrier::Dmb),
+        ]
+    );
+    assert_eq!(observed.observation.memory_provenance_total, "8");
+}
+
+#[test]
+fn a_condition_false_cp15_barrier_leaves_no_marker() {
+    // mcrne p15, 0, r5, c7, c10, 5 with Z set
+    let observed = Case::new(&[CP15_DMB_R5 & 0x0fff_ffff | 0x1000_0000, BX_LR]).kernel(Kernel::default()).run();
+    observed.assert_returned();
+    assert!(observed.observation.memory_provenance.is_empty());
+}
+
+#[test]
+fn reserved_barrier_options_and_other_cp15_c7_words_are_refused() {
+    for word in [
+        0xf57f_f050, // dmb #0
+        0xf57f_f041, // dsb #1
+        0xf57f_f06b, // isb #11
+        0xee07_5f95, // mcr p15, 0, r5, c7, c5, 4
+        0xee07_ff9a, // mcr p15, 0, pc, c7, c10, 4
+        0xee07_5fda, // mcr p15, 0, r5, c7, c10, 6
+        0xee27_5fba, // mcr p15, 1, r5, c7, c10, 5
+    ] {
+        let case = Case::new(&[word, BX_LR]).kernel(Kernel::default()).register(5, 3);
+        assert_status_write_has_no_effect(&case, &case.run());
+    }
+}
+
+#[test]
+fn nop_is_the_only_admitted_hint() {
+    let observed = Case::new(&[NOP, ADD_R0_1, BX_LR]).kernel(Kernel::default()).run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r0"), 1);
+    assert_eq!(observed.instructions(), 3);
+    // yield, wfe, wfi, sev, dbg #0, nopne
+    for word in [0xe320_f001, 0xe320_f002, 0xe320_f003, 0xe320_f004, 0xe320_f0f0, 0x1320_f000] {
+        let case = Case::new(&[word, BX_LR]).kernel(Kernel::default());
+        assert_status_write_has_no_effect(&case, &case.run());
+    }
+}
+
+#[test]
+fn kernel_words_are_refused_in_a_privileged_case_without_a_kernel_row() {
+    for word in [NOP, LDREX_R1_R2, STREX_R3_R1_R2, CLREX, DMB_SY, DSB_SY, ISB_SY, CP15_DMB_R5, TPIDRURW_TO_R4, CPACR_TO_R5, FPEXC_TO_R8] {
+        let case = Case::new(&[word, BX_LR]).privileged(SVC_ENTRY, None).region(DATA, READ_WRITE, &[0; 4]).register(2, DATA);
+        let observed = case.run();
+        assert_status_write_has_no_effect(&case, &observed);
+        assert!(observed.observation.kernel.is_none());
+    }
+}
+
+#[test]
+fn tpidrurw_serves_the_case_value_and_keeps_the_last_write() {
+    let observed = Case::new(&[TPIDRURW_TO_R4, TPIDRURW_FROM_R6, TPIDRURW_TO_R7, BX_LR])
+        .kernel(Kernel { tpidrurw: Some(0xabc), ..Kernel::default() })
+        .register(6, 0x1234)
+        .run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r4"), 0xabc);
+    assert_eq!(observed.register("r7"), 0x1234);
+    assert_eq!(observed.kernel(), &KernelRegisters { tpidrurw: Some("0x00001234".into()), fpexc: None });
+}
+
+#[test]
+fn cpacr_reads_serve_the_case_value() {
+    let observed = Case::new(&[CPACR_TO_R5, BX_LR]).kernel(Kernel { cpacr: Some(0x00f0_0000), ..Kernel::default() }).run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r5"), 0x00f0_0000);
+    assert_eq!(observed.kernel(), &KernelRegisters { tpidrurw: None, fpexc: None });
+}
+
+#[test]
+fn fpexc_serves_the_case_value_and_keeps_an_en_write() {
+    for (initial, written) in [(FPEXC_EN, 0), (0, FPEXC_EN)] {
+        let observed = Case::new(&[FPEXC_TO_R8, FPEXC_FROM_R6, BX_LR])
+            .kernel(Kernel { fpexc: Some(initial), ..Kernel::default() })
+            .register(6, written)
+            .run();
+        observed.assert_returned();
+        assert_eq!(observed.register("r8"), initial);
+        assert_eq!(observed.kernel().fpexc, Some(format!("0x{written:08x}")));
+    }
+}
+
+#[test]
+fn undeclared_and_other_system_register_words_are_refused() {
+    let declared = Kernel { tpidrurw: Some(1), cpacr: Some(2), fpexc: Some(FPEXC_EN), ..Kernel::default() };
+    for (kernel, word) in [
+        (Kernel::default(), TPIDRURW_TO_R4),
+        (Kernel::default(), TPIDRURW_FROM_R6),
+        (Kernel::default(), CPACR_TO_R5),
+        (Kernel::default(), FPEXC_TO_R8),
+        (Kernel::default(), FPEXC_FROM_R6),
+        (declared, 0xee01_5f50), // mcr p15, 0, r5, c1, c0, 2
+        (declared, 0xee1d_4f70), // mrc p15, 0, r4, c13, c0, 3
+        (declared, 0xee1d_ff50), // mrc p15, 0, pc, c13, c0, 2
+        (declared, 0xeef1_4a10), // vmrs r4, fpscr
+        (declared, 0xeee1_6a10), // vmsr fpscr, r6
+        (declared, FPEXC_FROM_R6), // r6 sets EX
+        (declared, 0xfe1d_4f50), // mrc2 p15, 0, r4, c13, c0, 2
+    ] {
+        let case = Case::new(&[word, BX_LR]).kernel(kernel).register(6, 0x8000_0000);
+        let observed = case.run();
+        assert_status_write_has_no_effect(&case, &observed);
+        assert_eq!(observed.kernel().fpexc, kernel.fpexc.map(|value| format!("0x{value:08x}")), "{word:#010x}");
+        assert_eq!(observed.kernel().tpidrurw, kernel.tpidrurw.map(|value| format!("0x{value:08x}")), "{word:#010x}");
+    }
+}
+
+#[test]
+fn a_kernel_case_ends_at_its_stop_address_by_call_branch_return_or_load() {
+    let stop = Kernel { stop: Some(STOP), ..Kernel::default() };
+    let target = words(&[0, 0, 0, 0, 0, 0, 0, 0, 0, STOP]);
+    for (code, lr, instructions) in [
+        (vec![branch(CODE, STOP, true)], CODE + 4, 1),
+        (vec![branch(CODE, STOP, false)], EXIT, 1),
+        (vec![0xe1a0_e005, BX_LR], STOP, 2), // mov lr, r5; bx lr
+        (vec![0xe594_f024, BX_LR], EXIT, 1), // ldr pc, [r4, #0x24]
+    ] {
+        let observed = Case::new(&code)
+            .kernel(stop)
+            .region(DATA, READ, &target)
+            .register(4, DATA)
+            .register(5, STOP)
+            .register(9, 0x99)
+            .run();
+        observed.assert_stopped(Status::StopAddress, STOP);
+        assert_eq!(observed.register("lr"), lr, "{code:x?}");
+        assert_eq!(observed.register("r9"), 0x99);
+        assert_eq!(observed.instructions(), instructions, "{code:x?}");
+    }
+    let returned = Case::new(&[BX_LR]).kernel(stop).run();
+    returned.assert_returned();
+}
+
+#[test]
+fn a_pc_load_of_anything_but_the_stop_address_is_refused() {
+    // ldr pc, [r4, #0x24] loading CODE + 4; with no stop address; ldr pc, [r4, #0x24]!
+    for (word, kernel, loaded) in [
+        (0xe594_f024, Kernel { stop: Some(STOP), ..Kernel::default() }, CODE + 4),
+        (0xe594_f024, Kernel::default(), STOP),
+        (0xe5b4_f024, Kernel { stop: Some(STOP), ..Kernel::default() }, STOP),
+    ] {
+        let case = Case::new(&[word, BX_LR])
+            .kernel(kernel)
+            .region(DATA, READ, &words(&[0, 0, 0, 0, 0, 0, 0, 0, 0, loaded]))
+            .register(4, DATA);
+        assert_status_write_has_no_effect(&case, &case.run());
+    }
+}
+
+#[test]
+fn the_bank_words_take_word_stores_in_order_after_a_barrier() {
+    for bank in [0xfffb_30cc, 0xfffb_40cc, 0xfffb_30ec, 0xfffb_40ec] {
+        let observed = Case::new(&[DSB_SY, STR_R0_R2, BX_LR])
+            .kernel(Kernel::default())
+            .region(bank, DEVICE, &[0; 4])
+            .register(0, 0x0100_0000)
+            .register(2, bank)
+            .run();
+        observed.assert_returned();
+        assert_eq!(observed.bytes(bank), "00000001");
+        assert_eq!(observed.observation.memory_provenance, [barrier(CODE, Barrier::Dsb), access(CODE + 4, Kind::Write, bank, 0x0100_0000)]);
+    }
+}
+
+#[test]
+fn bank_word_loads_and_narrow_stores_are_memory_guards() {
+    // ldr r0, [r2]; strb r0, [r2]; strh r0, [r2]; strd r0, r1, [r2]
+    for word in [0xe592_0000, 0xe5c2_0000, 0xe1c2_00b0, 0xe1c2_00f0] {
+        let observed = Case::new(&[word, BX_LR])
+            .kernel(Kernel::default())
+            .region(BANK, DEVICE, &[0; 4])
+            .register(0, 0x77)
+            .register(2, BANK)
+            .run();
+        observed.assert_stopped(Status::MemoryGuard, CODE);
+        assert_eq!(observed.register("r0"), 0x77, "{word:#010x}");
+        assert_eq!(observed.bytes(BANK), "00000000", "{word:#010x}");
+        assert_eq!(observed.observation.memory_provenance_total, "0");
+    }
+}
+
+#[test]
+fn malformed_kernel_cases_are_invalid() {
+    let valid = Case::new(&[BX_LR]).kernel(Kernel { stop: Some(STOP), ..Kernel::default() }).region(BANK, DEVICE, &[0; 4]);
+    valid.run().assert_returned();
+    let stop = |address| valid.clone().kernel(Kernel { stop: Some(address), ..Kernel::default() });
+    let mut user = valid.clone();
+    user.registers[15] = 0x10;
+    user.identity = None;
+    let mut privileged = valid.clone();
+    privileged.kernel = None;
+    let stubbed = valid.clone().stub(STOP, &[], &[(0, 1)]);
+    let mut cases = vec![
+        stop(CODE),
+        stop(EXIT),
+        stop(STOP + 2),
+        stop(STACK),
+        stubbed,
+        valid.clone().kernel(Kernel { fpexc: Some(0x8000_0000), ..Kernel::default() }),
+        valid.clone().kernel(Kernel { fpexc: Some(FPEXC_EN | 1), ..Kernel::default() }),
+        user,
+        privileged,
+        valid.clone().region(0xfffb_30d0, DEVICE, &[0; 4]),
+    ];
+    let mut wide = valid.clone();
+    wide.regions[2] = Region { address: BANK, size: 8, permission: DEVICE, bytes: vec![0; 8] };
+    let mut malformed = valid.clone();
+    malformed.kernel = Some("k n n n".to_owned());
+    cases.extend([wide, malformed]);
     for case in cases {
         let observed = case.run();
         assert_eq!(observed.status(), Status::InvalidCase, "{}", case.wire());
