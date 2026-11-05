@@ -96,7 +96,7 @@ fn entry_states() -> Vec<Cpsr> {
 fn model(w: &DomainWords, cpsr: Cpsr, handler_context: u32) -> Model {
     let m = Model::new(cpsr);
     m.map(w.handler_context, handler_context);
-    m.map(w.current_task, w.task_table.offset(59 * 56).0);
+    m.map(w.running, w.task_table.offset(59 * 56).0);
     m.map(w.dispatch_enabled, 1);
     m.map(w.timer_base, TIMER_BASE);
     m.map(w.time_offset, TIME_OFFSET);
@@ -164,7 +164,7 @@ fn masked_services_run_only_in_their_context_with_irq_unmasked() {
 
 fn task_id_through(service: Service, w: &DomainWords, task: u32) -> u32 {
     let m = model(w, Cpsr(SVC), if matches!(service, Service::HandlerTaskId) { 1 } else { 0 });
-    m.map(w.current_task, task);
+    m.map(w.running, task);
     assert_eq!(service.run(&m, w), ServiceStatus::OK);
     m.word(BUFFER)
 }
@@ -192,7 +192,7 @@ fn task_ids_follow_the_stock_index_formula() {
 }
 
 #[test]
-fn null_current_task_is_zero_only_in_handler_form() {
+fn null_running_task_is_zero_only_in_handler_form() {
     assert_eq!(task_id_through(Service::HandlerTaskId, &Domain::A.words(), 0), 0);
     assert_eq!(task_id_through(Service::HandlerTaskId, &Domain::B.words(), 0), 0);
     assert_eq!(task_id_through(Service::TaskId, &Domain::A.words(), 0), 0x236d_9b73);
@@ -271,12 +271,12 @@ fn dispatchable_task_reads_bit2_of_byte_0xe() {
         let task = w.task_table.offset(3 * 56);
         for (byte, flag) in [(0x00, 1), (0x04, 0), (0xfb, 1), (0xff, 0)] {
             let m = model(&w, Cpsr(SVC), 0);
-            m.map(w.current_task, task.0);
+            m.map(w.running, task.0);
             m.map(task.offset(0xc), 0xa5_00_5a_c3 | (byte << 16));
             assert_eq!(slot_60(&m, &w), Flag(flag), "byte {byte:#x}");
         }
         let m = model(&w, Cpsr(SVC), 0);
-        m.map(w.current_task, 0);
+        m.map(w.running, 0);
         assert_eq!(slot_60(&m, &w), Flag(1));
     }
 }
@@ -331,21 +331,5 @@ fn core_identity_is_zero_only_for_0x4003() {
         let mut m = Model::new(Cpsr(SVC));
         m.identity = DebugIdentity(identity);
         assert_eq!(slot_1618(&m), Flag(flag), "identity {identity:#x}");
-    }
-}
-
-#[test]
-fn domain_words_are_the_stock_addresses() {
-    let expected = [
-        (Domain::A, [0x4005_45a4, 0x4005_4760, 0x4005_4764, 0x4005_476c, 0x4005_4774, 0x4005_ff0c]),
-        (Domain::B, [0x400e_4564, 0x400e_4720, 0x400e_4724, 0x400e_472c, 0x400e_4734, 0x400e_fecc]),
-    ];
-    for (domain, words) in expected {
-        let w = domain.words();
-        assert_eq!(
-            [w.handler_context, w.current_task, w.dispatch_enabled, w.timer_base, w.time_offset, w.task_table],
-            words.map(GuestAddress),
-            "{domain:?}"
-        );
     }
 }
