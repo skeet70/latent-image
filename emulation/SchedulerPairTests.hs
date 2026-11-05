@@ -10,6 +10,7 @@ import qualified Emulation.OwnFirstPairCheck as Q
 import Emulation.SchedulerPairCheck
 import Emulation.SchedulerPairModel
 import Emulation.SchedulerPairPlan
+import qualified Emulation.SchedulerPairS2 as D
 import Emulation.Sha256 (sha256,sha256Hex)
 import Replacement.RtosOwnFirst.Regions (Domain (..))
 import Replacement.RtosScheduler.Regions (Helper (..))
@@ -22,7 +23,8 @@ plan = Plan Owned "dat" [Entry DomainA (HelperSemantic Notify) (Address 0x44018)
 planBytes :: B.ByteString
 planBytes = "synthetic-plan"
 call :: Call
-call = Call DomainA (Address 0x44018) (HelperSemantic Notify) 0 0xd3 (Arguments [2,0,0,0]) M.empty M.empty 0 0xd3 [] [Written (Address 0xfffb40cc) 4 0x1000000] 1 30
+call = Call DomainA (Address 0x44018) (HelperSemantic Notify) 0 0xd3 (Arguments [2,0,0,0]) M.empty M.empty 0 0xd3 [] [Written (Address 0xfffb40cc) 4 0x1000000] 1 30 (Just (CallTrace registers registers Returned [] Nothing))
+ where registers = D.Registers (replicate 16 0) 0xd3 0 0 0
 readback :: Q.Readback
 readback = Q.Readback 100 [range d lo hi digest | Guard d (Address lo) (Address hi) digest <- planGuards plan]
  where range d lo hi digest = Q.RangeReadback d lo hi digest [Q.ViewHash core a (Right digest) | core <- [0,1],a <- [lo,lo+0x40000000]]
@@ -112,7 +114,7 @@ main = do
   outcome "prepare publishes stack and trampoline then inserts" Prepare [0x1000,0x4000,0,0] prepareMemory 2 [(0x4018,0x6100),(0x401c,0x43728),(0x3004,0x4000),(0x3000,2)]
   outcome "insert does not preempt equal priority" Insert [0x1000,0x4200,0,0] equalPriority 0 [(0x3004,0x4000),(0x200c,0x4200),(0x4000,0x4200)]
   outcome "rotate selects the second task and appends the first" Rotate [0x1000,1,0,0] rotating 2 [(0x3004,0x4100),(0x2008,0x4100),(0x200c,0x4000),(0x4100,0x4000),(0x4000,0x2008)]
-  assert "unmodeled semantic refuses" (checkCall call {callSemantic=DispatchSemantic Save} == Left (UnsupportedSemantic (DispatchSemantic Save)))
+  assert "dispatch without boundary evidence refuses" (checkCall call {callSemantic=DispatchSemantic Save,callTrace=Nothing} == Left MissingTrace)
   let firstCatalog = Catalog 0xe7f000f0 [Entry DomainA (HelperSemantic Notify) (Address 0x42000),Entry DomainB (HelperSemantic Notify) (Address 0xd2000)]
         [Window DomainA (Address 0x42000) (Address 0x42010),Window DomainB (Address 0xd2000) (Address 0xd2010)] []
       secondCatalog = Catalog 0xe7f000f0 [Entry DomainA (DispatchSemantic Save) (Address 0x42100)]
@@ -121,11 +123,45 @@ main = do
   assert "catalog list preserves actual entry addresses and semantic tags" (case catalogPlan of
     Right planned -> planEntries planned==catalogEntries firstCatalog++catalogEntries secondCatalog && planProbes planned==catalogProbes secondCatalog && length (planGuards planned)==3
     Left _ -> False)
+  let boundaryEntries =
+        [Entry d semantic (Address (base d+offset-(if d==DomainB && serviceEntry then 64 else 0)))
+        | d <- [DomainA,DomainB]
+        , (semantic,offset,serviceEntry) <- [(DispatchSemantic Select,0x36a4,False),(ServiceSemantic DisableDispatch,0xc9dc,True),
+            (ServiceSemantic SleepTask,0x5cd4,True),(ServiceSemantic SuspendTask,0x6a00,True),(ServiceSemantic EnableTaskException,0x7428,True),
+            (ServiceSemantic DeliverTaskException,0x41b4,True)]]
+      boundaryCatalog = Catalog 0xe7f000f0 boundaryEntries
+        [Window d (Address (base d+0x3000)) (Address (base d+0xcbd8)) | d <- [DomainA,DomainB]] []
+      loadersFor role = M.fromList
+        [(d, let size=if d==DomainA then 0xdae0 else 0xdaa0
+                 pc=(if role==Stock then 0x4218 else 0x4204)-(if d==DomainB then 64 else 0)
+             in B.replicate pc 0 <> B.pack [if role==Stock then 0x33 else 0x32,0xff,0x2f,0xe1] <> B.replicate (size-pc-4) 0)
+        | d <- [DomainA,DomainB]]
+  forM_ [Stock,Owned] $ \role -> case derivePlan role B.empty [boundaryCatalog] (loadersFor role) of
+    Left failure -> error failure
+    Right planned -> do
+      let probe d pc kind register = Probe d (Address pc) kind (Register register) `elem` planProbes planned
+      forM_ [(DomainA,0x40000,0),(DomainB,0xd0000,64)] $ \(d,offset,delta) -> do
+        assert "selected load probe follows the actual role load" (probe d (offset+if role==Stock then 0x36b4 else 0x36ac) SelectedRead 1)
+        assert "IRQ enabled loaded value is captured" (probe d (offset+0x376c) EnabledRead 0)
+        assert "global lock probe follows the completed null window"
+          (probe d (offset+if role==Stock then 0x371c else 0x3708) GlobalLockRead (if role==Stock then 0 else 1))
+        assert "IRQ selected/discarded probes retain role ordering"
+          (if role==Stock then probe d (offset+0x377c) SelectedRead 0 && probe d (offset+0x3788) DiscardedRead 0
+           else probe d (offset+0x3778) DiscardedRead 0 && probe d (offset+0x3788) SelectedRead 0)
+        assert "save discard probe exists only in owned" (probe d (offset+0x3650) DiscardedRead 3 == (role/=Stock))
+        forM_ [(0xca78,0xca4c),(0x5d9c,0x5d60),(0x6b60,0x6b10),(0x74c8,0x749c)] $ \(stock,owned) ->
+          assert "ready recheck retry is observed after unmask" (probe d (offset+(if role==Stock then stock else owned)-delta) Retry 0)
+        let callback=offset+(if role==Stock then 0x4218 else 0x4204)-delta
+        assert "exception callback and return are paired" (probe d callback Callback (if role==Stock then 3 else 2) && probe d (callback+4) CallbackReturn 0)
+      assert "stock select entry follows stock no-save prologue"
+        (all (\entry -> entrySemantic entry/=DispatchSemantic Select || entryAddress entry==Address (base (entryDomain entry)+if role==Stock then 0x36ac else 0x36a4)) (planEntries planned))
+  assert "callback probes refuse changed call instruction"
+    (case derivePlan Owned B.empty [boundaryCatalog] (M.fromList [(DomainA,B.replicate 0xdae0 0),(DomainB,B.replicate 0xdaa0 0)]) of Left _ -> True; Right _ -> False)
   putStrLn "scheduler-pair host tests passed"
 
 wireObservation :: J.Value
 wireObservation = J.object
-  [ "schema" J..= (2::Int), "role" J..= roleName (obsRole observation)
+  [ "schema" J..= (3::Int), "role" J..= roleName (obsRole observation)
   , "inputs" J..= [J.object ["sha256" J..= digest] | digest <- obsInputs observation]
   , "instructions" J..= obsInstructions observation, "entries" J..= obsEntries observation, "returns" J..= obsReturns observation
   , "untracked" J..= J.object ["count" J..= (0::Int)], "unarmed_entries" J..= J.object ["count" J..= (0::Int)]
@@ -151,8 +187,10 @@ wireObservation = J.object
       "physical_sha256" J..= Q.readbackPhysical range,"views" J..= [J.object ["core" J..= Q.viewCore view,"address" J..= hex (Q.viewAddress view),
         "sha256" J..= either (const "") id (Q.viewDigest view)] | view <- Q.readbackViews range]] | range <- Q.readbackRanges value]]
   wireCall value = J.object ["entry" J..= J.object ["slot" J..= J.object ["domain" J..= domain (callDomain value),"entry" J..= addressOf (callAddress value),"semantic" J..= semanticValue (callSemantic value)],
-      "core" J..= core (callCore value),"cpsr" J..= callCpsr value,"arguments" J..= arguments (callArguments value),"memory" J..= wordsOf (callBefore value)],
+      "core" J..= core (callCore value),"cpsr" J..= callCpsr value,"arguments" J..= arguments (callArguments value),"memory" J..= wordsOf (callBefore value),
+      "registers" J..= replicate (16::Int) (0::Int),"cpacr" J..= (0::Int),"fpexc" J..= (0::Int),"tpidrurw" J..= (0::Int)],
     "result" J..= J.object ["r0" J..= callR0 value,"cpsr" J..= callReturnCpsr value,"memory" J..= wordsOf (callAfter value),
+      "registers" J..= replicate (16::Int) (0::Int),"cpacr" J..= (0::Int),"fpexc" J..= (0::Int),"tpidrurw" J..= (0::Int),"completion" J..= ("return"::String),"history" J..= ([]::[J.Value]),
       "writes" J..= map writeOf (callWrites value),"bank" J..= map writeOf (callBank value)],"count" J..= callCount value,"first" J..= callFirst value]
   arguments (Arguments values) = values
   wordsOf memory = [J.object ["address" J..= hex address,"value" J..= J.object ["view" J..= ("committed"::String),"value" J..= value]] | (Address address,value) <- M.toList memory]

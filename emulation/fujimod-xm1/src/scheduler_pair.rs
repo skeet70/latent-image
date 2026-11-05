@@ -21,8 +21,8 @@ mod memory_view;
 use memory_view::{MemoryAddress, MemoryCore, TcmRegister, static_span, tcm_window};
 
 const USAGE: &str = "scheduler-pair --plan PLAN --run RUN --update DAT --boot-rom ROM --trajectory TRAJECTORY --output NEW_DIR";
-const SCHEMA: u32 = 2;
-const PLAN_SCHEMA: u32 = 2;
+const SCHEMA: u32 = 3;
+const PLAN_SCHEMA: u32 = 3;
 const ALIAS: u32 = 0x4000_0000;
 const ENTRY_LABEL: &str = "scheduler-entry";
 const CONTINUATION_LABEL: &str = "scheduler-continuation";
@@ -100,7 +100,7 @@ enum Semantic { Helper { name: Helper }, Dispatch { name: DispatchPoint }, Servi
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum ProbeKind { SelectedRead, DiscardedRead }
+enum ProbeKind { SelectedRead, DiscardedRead, EnabledRead, GlobalLockRead, Retry, Callback, CallbackReturn, SelectComplete, FirstEntryExit, IrqTail }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(try_from = "String", into = "String")]
@@ -122,7 +122,7 @@ struct PlanProbe { domain: Domain, address: Hex, kind: ProbeKind, register: Prob
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-enum Role { Stock, Owned, ControlRestored, ControlSilentNotify, ControlWrongPredicate }
+enum Role { Stock, Owned, ControlRestored, ControlSilentNotify, ControlWrongPredicate, ControlWakeNoInsert }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -240,7 +240,7 @@ impl Core {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Context { core: Core, pc: u32, lr: u32, sp: u32, cpsr: u32, r0: u32, arguments: [u32; 4], instructions: u64, current: Read }
+struct Context { core: Core, pc: u32, lr: u32, sp: u32, cpsr: u32, r0: u32, arguments: [u32; 4], registers: [u32; 16], instructions: u64, current: Read }
 impl Context {
     fn mode(&self) -> u32 { self.cpsr & 0x1f }
 }
@@ -250,6 +250,16 @@ impl Board<'_> {
     fn register(&self, core: Core, register: arm::Register) -> Result<u32, String> {
         u32::try_from(self.machine.session.board.read_register(core.index(), Register::Arm32(register))?)
             .map_err(|_| "ARM register exceeds 32 bits".to_owned())
+    }
+    fn registers(&self, core: Core) -> Result<[u32; 16], String> {
+        let mut registers = [0; 16];
+        for (index, value) in registers.iter_mut().enumerate() { *value = self.register(core, arm::Register::R(index as u8))?; }
+        Ok(registers)
+    }
+    fn cp15(&self, core: Core, crn: u32, crm: u32, opc2: u32) -> Result<u32, String> {
+        u32::try_from(self.machine.session.board.cpu(core.index())?.coprocessor(arm::Coprocessor {
+            cp: 15, opc1: 0, crn, crm, opc2, secure: 0, wide: false,
+        }, None)?).map_err(|_| "CP15 register exceeds 32 bits".into())
     }
     fn tcm(&self, core: Core) -> Result<[u32; 2], String> {
         let mut banks = [0; 2];
@@ -290,6 +300,7 @@ impl Board<'_> {
             arguments: [self.register(core, arm::Register::R(0))?, self.register(core, arm::Register::R(1))?,
                 self.register(core, arm::Register::R(2))?, self.register(core, arm::Register::R(3))?],
             instructions: self.machine.instructions(),
+            registers: self.registers(core)?,
             current: self.word(core, tcm, core.own_kernel_current_task())?,
         }, tcm))
     }
@@ -304,6 +315,13 @@ struct EntryState {
     memory: Vec<WordValue>,
     r0: u32,
     lr: Hex,
+    task: Read,
+    sp: Hex,
+    registers: [u32; 16],
+    cpacr: u32,
+    fpexc: u32,
+    tpidrurw: u32,
+    origin: Option<DispatchPoint>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -313,10 +331,47 @@ struct ReturnState {
     memory: Vec<WordValue>,
     writes: Vec<Written>,
     bank: Vec<Written>,
+    completion: Completion,
+    task: Read,
+    sp: Hex,
+    registers: [u32; 16],
+    cpacr: u32,
+    fpexc: u32,
+    tpidrurw: u32,
+    history: Vec<Boundary>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 struct CallClass { entry: EntryState, result: ReturnState }
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum Completion { Return, Discard, Dispatched }
+
+#[derive(Clone, Debug, Serialize)]
+struct Boundary {
+    kind: BoundaryKind, address: Hex, instructions: u64, core: Core, task: Read,
+    sp: Hex, cpsr: u32, registers: [u32; 16], memory: Vec<WordValue>,
+    writes: Vec<Written>, bank: Vec<Written>, value: Option<u32>, cpacr: u32, fpexc: u32, tpidrurw: u32,
+}
+
+impl Ord for Boundary {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.kind,self.address,self.core,self.task,self.sp,self.cpsr,&self.registers,&self.memory,&self.writes,&self.bank,self.value,(self.cpacr,self.fpexc,self.tpidrurw))
+            .cmp(&(other.kind,other.address,other.core,other.task,other.sp,other.cpsr,&other.registers,&other.memory,&other.writes,&other.bank,other.value,(other.cpacr,other.fpexc,other.tpidrurw)))
+    }
+}
+impl PartialOrd for Boundary {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(other)) }
+}
+impl PartialEq for Boundary {
+    fn eq(&self, other: &Self) -> bool { self.cmp(other).is_eq() }
+}
+impl Eq for Boundary {}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum BoundaryKind { Save, Resume, NoSave, Retry, Callback, CallbackReturn, SelectedRead, DiscardedRead, EnabledRead, GlobalLockRead, SelectComplete, FirstEntryExit, IrqTail, Return, Acquired }
 
 #[derive(Serialize)]
 struct ClassCount { count: u64, first: u64, last: u64 }
@@ -339,7 +394,23 @@ impl ReturnKey {
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct OpenCall { entry: EntryState, entered: u64, writes: Vec<Written>, bank: Vec<Written> }
+struct OpenCall { entry: EntryState, entered: u64, writes: Vec<Written>, bank: Vec<Written>, history: Vec<Boundary>, write_cursor: usize, bank_cursor: usize, suspended: bool }
+
+impl OpenCall {
+    fn record(&mut self, mut boundary: Boundary) -> Result<(), String> {
+        require(self.history.len() < WATCH_LIMIT, "call boundary bound exceeded")?;
+        boundary.writes = self.writes[self.write_cursor..].to_vec();
+        boundary.bank = self.bank[self.bank_cursor..].to_vec();
+        self.write_cursor = self.writes.len();
+        self.bank_cursor = self.bank.len();
+        if matches!(self.entry.slot.semantic, Semantic::Service { .. }) {
+            if boundary.kind == BoundaryKind::Save { self.suspended = true; }
+            if boundary.kind == BoundaryKind::Resume { self.suspended = false; }
+        }
+        self.history.push(boundary);
+        Ok(())
+    }
+}
 
 #[derive(Default)]
 struct OpenCalls { pending: BTreeMap<ReturnKey, Vec<OpenCall>>, count: usize }
@@ -354,6 +425,19 @@ impl OpenCalls {
         let closed = self.pending.remove(key).unwrap_or_default();
         self.count -= closed.len();
         closed
+    }
+    fn take_where(&mut self, mut predicate: impl FnMut(&ReturnKey, &OpenCall) -> bool) -> Vec<OpenCall> {
+        let mut taken = Vec::new();
+        self.pending.retain(|key, calls| {
+            let mut kept = Vec::new();
+            for call in calls.drain(..) {
+                if predicate(key, &call) { taken.push(call); } else { kept.push(call); }
+            }
+            *calls = kept;
+            !calls.is_empty()
+        });
+        self.count -= taken.len();
+        taken
     }
 }
 
@@ -479,8 +563,81 @@ fn root_snapshot(board: &Board, core: Core, tcm: [u32; 2], domain: Domain) -> Re
     for cell in [running, selected] {
         let task = committed(board.word(core, tcm, cell)?)?;
         if task != 0 { addresses.extend((0..0x38).step_by(4).map(|offset| task+offset)); }
+        if task != 0 {
+            let config = committed(board.word(core, tcm, task + 8)?)?;
+            if config != 0 { addresses.extend((0..0x28).step_by(4).map(|offset| config+offset)); }
+            let saved_sp = committed(board.word(core, tcm, task + 0x18)?)?;
+            if saved_sp != 0 && saved_sp % 4 == 0 { addresses.extend((0..68).step_by(4).map(|offset| saved_sp+offset)); }
+        }
     }
+    addresses.extend((0..0x10c).step_by(4).map(|offset| lock+8+offset));
     addresses.into_iter().map(|address| Ok(WordValue { address: Hex(address), value: board.word(core, tcm, address)? })).collect()
+}
+
+fn service_snapshot(board: &Board, core: Core, tcm: [u32; 2], domain: Domain, service: Service, arguments: [u32; 4]) -> Result<Vec<WordValue>, String> {
+    let mut words = root_snapshot(board, core, tcm, domain)?;
+    let contexts = match domain { Domain::A => 0x400545cc, Domain::B => 0x400e458c };
+    let mut tasks = BTreeSet::new();
+    let running = committed(board.word(core,tcm,core.own_kernel_current_task())?)?;
+    if running != 0 { tasks.insert(running); }
+    for record in [contexts, contexts+0x84] {
+        words.extend(snapshot(board, core, tcm, Helper::Find, [record, 0, 0, 0])?);
+        if matches!(service, Service::WakeTask | Service::InterruptWakeTask) {
+            for offset in [0x38,0x3c] {
+                let cell = committed(board.word(core,tcm,record+offset)?)?;
+                words.push(WordValue { address: Hex(cell), value: board.word(core,tcm,cell)? });
+            }
+            let count_cell = committed(board.word(core,tcm,record+0x38)?)?;
+            let count = committed(board.word(core,tcm,count_cell)?)?;
+            require(count <= 4096, "timer snapshot bound exceeded")?;
+            let heap = committed(board.word(core,tcm,record+0x34)?)?;
+            for index in 0..count {
+                for offset in [0,4] {
+                    let address = heap+index*8+offset;
+                    let value = board.word(core,tcm,address)?;
+                    words.push(WordValue { address: Hex(address), value });
+                    if offset==4 {
+                        let pointer = committed(value)?;
+                        words.push(WordValue { address: Hex(pointer), value: board.word(core,tcm,pointer)? });
+                    }
+                }
+            }
+        }
+    }
+    let class = (arguments[0] as i32) >> 16;
+    let number = arguments[0] as i16;
+    if (0..=2).contains(&class) && (number > 0 || (number == 0 && service == Service::InterruptRaiseTaskException)) {
+        let record = if class == 0 { committed(board.word(core, tcm, contexts-4)?)? } else { contexts+(class as u32-1)*0x84 };
+        let count = committed(board.word(core, tcm, record+0x48)?)?;
+        if number as u32 <= count {
+            let base = committed(board.word(core, tcm, record+0x44)?)?;
+            let task = if number==0 { base.wrapping_sub(0x38) } else { base+(number as u32-1)*0x38 };
+            tasks.insert(task);
+            for address in (task..task+0x38).step_by(4) { words.push(WordValue { address: Hex(address), value: board.word(core,tcm,address)? }); }
+            let config = committed(board.word(core,tcm,task+8)?)?;
+            for address in (config..config+0x28).step_by(4) { words.push(WordValue { address: Hex(address), value: board.word(core,tcm,address)? }); }
+        }
+    }
+    for task in tasks {
+        let state = committed(board.word(core,tcm,task+12)?)? & 0xff;
+        if state & 2 != 0 {
+            let wait = committed(board.word(core,tcm,task+0x14)?)?;
+            if wait != 0 { words.push(WordValue { address: Hex(wait), value: board.word(core,tcm,wait)? }); }
+        }
+        if service == Service::SleepTask {
+            let config = committed(board.word(core,tcm,task+8)?)?;
+            let slot = committed(board.word(core,tcm,config+0x20)?)?;
+            require(slot <= 120, "sleep result slot bound exceeded")?;
+            let address = match domain { Domain::A => 0x4005477c, Domain::B => 0x400e473c } + 4*slot;
+            words.push(WordValue { address: Hex(address), value: board.word(core,tcm,address)? });
+        }
+    }
+    if service == Service::GetTaskPriority && arguments[1] != 0 {
+        words.push(WordValue { address: Hex(arguments[1]), value: board.word(core,tcm,arguments[1])? });
+    }
+    words.sort_by_key(|word| word.address);
+    words.dedup_by_key(|word| word.address);
+    Ok(words)
 }
 
 const PC_WATCHES: [u32; 5] = [0x436ec, 0xd36ec, 0xec8014, 0x40b00, 0xd0b00];
@@ -643,7 +800,7 @@ impl Observer<'_> {
         }
         for (core, _, capture) in &self.data_hooks {
             capture.borrow_mut().active = self.open.pending.iter().filter(|(key,_)| key.core.index()==*core)
-                .flat_map(|(_,calls)| calls.iter().flat_map(|call| call.entry.memory.iter().map(|word| word.address.0 & !ALIAS & !3))).collect();
+                .flat_map(|(_,calls)| calls.iter().filter(|call| !call.suspended).flat_map(|call| call.entry.memory.iter().map(|word| word.address.0 & !ALIAS & !3))).collect();
         }
         machine.session.board.transaction_watch_begin(vec![(0xfffb30cc, 0xfffb30d0), (0xfffb40cc, 0xfffb40d0),
             (0xfffb30ec, 0xfffb30f0), (0xfffb40ec, 0xfffb40f0)], WATCH_LIMIT)
@@ -658,6 +815,7 @@ impl Observer<'_> {
                 for (key, calls) in &mut self.open.pending {
                     if key.core != core { continue; }
                     for call in calls {
+                        if call.suspended { continue; }
                         if call.entry.memory.iter().any(|word| word.address.0 & !ALIAS & !3 == address & !ALIAS & !3) {
                             call.writes.push(Written { address: Hex(address), size, value });
                         }
@@ -675,7 +833,7 @@ impl Observer<'_> {
             let write = Written { address: Hex(u32::try_from(transaction.address).map_err(|_| "bank address overflow")?),
                 size: 4, value: u32::try_from(transaction.value).map_err(|_| "bank value overflow")? };
             for (_, calls) in self.open.pending.iter_mut().filter(|(key,_)| key.core == core) {
-                for call in calls { call.bank.push(write.clone()); }
+                for call in calls.iter_mut().filter(|call| !call.suspended) { call.bank.push(write.clone()); }
             }
         }
         Ok(())
@@ -691,48 +849,102 @@ impl Observer<'_> {
         match failure { Some(error) => Err(error), None => Ok(()) }
     }
 
-    fn enter(&mut self, machine: &mut Machine, context: &Context, tcm: [u32; 2], index: usize) -> Result<(), String> {
+    fn enter(&mut self, machine: &mut Machine, context: &Context, tcm: [u32; 2], index: usize, origin: Option<(DispatchPoint,Vec<Boundary>)>) -> Result<(), String> {
         let board = Board { machine, maps: &self.maps };
         let slot = self.slot(index);
         let domain = slot.id.domain;
         require(context.core.index() == match domain { Domain::A => 0, Domain::B => 1 }, "scheduler entry executed on the other core")?;
-        let entry = EntryState {
+        let mut entry = EntryState {
             slot: slot.id, core: context.core, cpsr: context.cpsr, r0: context.r0, lr: Hex(context.lr),
             arguments: context.arguments,
+            task: context.current, sp: Hex(context.sp), registers: context.registers,
+            cpacr: board.register(context.core, arm::Register::Cpacr)?,
+            fpexc: board.register(context.core, arm::Register::Fpexc)?,
+            tpidrurw: board.cp15(context.core, 13, 0, 2)?,
+            origin: origin.as_ref().map(|(point,_)| *point),
             memory: match slot.id.semantic {
                 Semantic::Helper { name } => snapshot(&board, context.core, tcm, name, context.arguments)?,
+                Semantic::Service { name } => service_snapshot(&board, context.core, tcm, domain, name, context.arguments)?,
                 _ => root_snapshot(&board, context.core, tcm, domain)?,
             },
         };
+        if let Semantic::Dispatch { name } = entry.slot.semantic {
+            let (start, bytes) = match name {
+                DispatchPoint::Save => (context.sp.saturating_sub(36), 36),
+                DispatchPoint::IrqReturn => (context.sp.saturating_sub(32), 64),
+                DispatchPoint::Resume => (context.sp, 36),
+                DispatchPoint::IrqResume | DispatchPoint::IrqTail => (context.sp, 68),
+                _ => (context.sp, 0),
+            };
+            for address in (start..start+bytes).step_by(4) {
+                entry.memory.push(WordValue { address: Hex(address), value: board.word(context.core,tcm,address)? });
+            }
+            entry.memory.sort_by_key(|word| word.address);
+            entry.memory.dedup_by_key(|word| word.address);
+        }
         self.entries += 1;
         if !self.armings.iter().any(|arming| arming.domain == domain) { self.unarmed_entries.push(StopRecord::of(context)); }
-        let call = OpenCall { entry, entered: context.instructions, writes: Vec::new(), bank: Vec::new() };
-        let continuation = context.lr & !1;
-        if continuation == 0 || (context.lr & 1 == 0 && continuation % 4 != 0) {
+        let semantic = entry.slot.semantic;
+        let call = OpenCall { entry, entered: context.instructions, writes: Vec::new(), bank: Vec::new(),
+            history: origin.map(|(_,history)| history).unwrap_or_default(), write_cursor: 0, bank_cursor: 0, suspended: false };
+        let continuation = match semantic {
+            Semantic::Dispatch { name: DispatchPoint::Select } => {
+                let selected_cell = match domain { Domain::A => 0x40054768, Domain::B => 0x400e4728 };
+                let task = committed(board.word(context.core, tcm, selected_cell)?)?;
+                if task == 0 { 0 } else { committed(board.word(context.core, tcm, task+0x1c)?)? & !1 }
+            }
+            Semantic::Dispatch { name: DispatchPoint::FirstEntry } => {
+                let task = committed(context.current)?;
+                let config = committed(board.word(context.core, tcm, task+8)?)?;
+                committed(board.word(context.core, tcm, config+8)?)? & !1
+            }
+            Semantic::Dispatch { name: DispatchPoint::Resume } => committed(board.word(context.core,tcm,context.sp+32)?)? & !1,
+            Semantic::Dispatch { name: DispatchPoint::IrqResume } => match domain { Domain::A => 0x437a8, Domain::B => 0xd37a8 },
+            Semantic::Dispatch { name: DispatchPoint::IrqTail } => committed(board.word(context.core,tcm,context.sp+28)?)? & !1,
+            _ => context.lr & !1,
+        };
+        if !matches!(semantic, Semantic::Dispatch { .. }) && (continuation == 0 || (context.lr & 1 == 0 && continuation % 4 != 0)) {
             self.untracked.push(call);
             return Ok(());
         }
-        if !self.return_sites.contains(&continuation) {
+        if continuation != 0 && !self.return_sites.contains(&continuation) {
             if !machine.traces.sites.contains_key(&continuation) {
                 require(machine.traces.sites.len() < SITE_LIMIT, "continuation site bound exceeded")?;
                 machine.traces.add_sites(&machine.session, [(continuation, CONTINUATION_LABEL.to_owned())].into_iter().collect())?;
             }
             self.return_sites.insert(continuation);
         }
+        if matches!(semantic, Semantic::Dispatch { .. }) {
+            let mut key = ReturnKey::of(context, continuation);
+            key.task = None;
+            key.sp = 0;
+            key.mode = 0;
+            return self.open.open(key, call);
+        }
         self.open.open(ReturnKey::of(context, continuation), call)
     }
 
-    fn complete(&mut self, machine: &Machine, context: &Context, tcm: [u32; 2]) -> Result<(), String> {
-        let key = ReturnKey::of(context, context.pc);
-        let closed = self.open.close(&key);
-        if closed.is_empty() { self.unrelated_continuations += 1; }
+    fn finish(&mut self, machine: &Machine, context: &Context, tcm: [u32; 2], closed: Vec<OpenCall>, completion: Completion) -> Result<(), String> {
         let board = Board { machine, maps: &self.maps };
-        for call in closed {
+        for mut call in closed {
             let memory = call.entry.memory.iter().map(|word| Ok(WordValue {
                 address: word.address, value: board.word(context.core, tcm, word.address.0)?,
             })).collect::<Result<Vec<_>, String>>()?;
+            if matches!(call.entry.slot.semantic, Semantic::Service { .. }) && completion == Completion::Return {
+                call.record(Boundary { kind: BoundaryKind::Return, address: Hex(context.pc), instructions: context.instructions,
+                    core: context.core, task: context.current, sp: Hex(context.sp), cpsr: context.cpsr,
+                    registers: context.registers, memory: memory.clone(), writes: Vec::new(),
+                    bank: Vec::new(), value: Some(context.r0),
+                    cpacr: board.register(context.core, arm::Register::Cpacr)?,
+                    fpexc: board.register(context.core, arm::Register::Fpexc)?,
+                    tpidrurw: board.cp15(context.core, 13, 0, 2)? })?;
+            }
             let class = CallClass { entry: call.entry, result: ReturnState { r0: context.r0, cpsr: context.cpsr,
-                memory, writes: call.writes, bank: call.bank } };
+                memory, writes: call.writes, bank: call.bank, completion, task: context.current,
+                sp: Hex(context.sp), registers: context.registers, history: call.history,
+                cpacr: board.register(context.core, arm::Register::Cpacr)?,
+                fpexc: board.register(context.core, arm::Register::Fpexc)?,
+                tpidrurw: board.cp15(context.core, 13, 0, 2)? } };
             self.returns += 1;
             if let Some(count) = self.classes.get_mut(&class) {
                 count.count += 1;
@@ -743,6 +955,69 @@ impl Observer<'_> {
             }
         }
         Ok(())
+    }
+
+    fn complete(&mut self, machine: &Machine, context: &Context, tcm: [u32; 2]) -> Result<(), String> {
+        let key = ReturnKey::of(context, context.pc);
+        let closed = self.open.close(&key);
+        if closed.is_empty() { self.unrelated_continuations += 1; }
+        if context.r0 == 0 && closed.iter().any(|call| call.entry.slot.semantic == (Semantic::Helper { name: Helper::Acquire })) {
+            self.boundary(machine,context,tcm,BoundaryKind::Acquired,Some(0))?;
+        }
+        self.finish(machine, context, tcm, closed, Completion::Return)
+    }
+
+    fn boundary(&mut self, machine: &Machine, context: &Context, tcm: [u32; 2], kind: BoundaryKind, value: Option<u32>) -> Result<(), String> {
+        let board = Board { machine, maps: &self.maps };
+        for (key, calls) in &mut self.open.pending {
+            if key.core != context.core { continue; }
+            for call in calls {
+                if key.task.is_some() && call.entry.task != context.current { continue; }
+                if call.suspended && kind != BoundaryKind::Resume
+                    && !(kind==BoundaryKind::DiscardedRead && matches!(context.pc & !ALIAS,0x43650 | 0xd3650)) { continue; }
+                let memory = call.entry.memory.iter().map(|word| Ok(WordValue {
+                    address: word.address, value: board.word(context.core, tcm, word.address.0)?,
+                })).collect::<Result<Vec<_>, String>>()?;
+                call.record(Boundary { kind, address: Hex(context.pc), instructions: context.instructions,
+                    core: context.core, task: context.current, sp: Hex(context.sp), cpsr: context.cpsr,
+                    registers: context.registers, memory, writes: Vec::new(),
+                    bank: Vec::new(), value,
+                    cpacr: board.register(context.core, arm::Register::Cpacr)?,
+                    fpexc: board.register(context.core, arm::Register::Fpexc)?,
+                    tpidrurw: board.cp15(context.core, 13, 0, 2)? })?;
+            }
+        }
+        Ok(())
+    }
+
+    fn dispatch_boundary(&mut self, machine: &Machine, context: &Context, tcm: [u32; 2], semantic: Option<Semantic>) -> Result<Option<(DispatchPoint,Vec<Boundary>)>, String> {
+        let stage_entry = matches!(semantic, Some(Semantic::Dispatch { .. }));
+        let delivery = matches!(semantic, Some(Semantic::Service { name: Service::DeliverTaskExceptionEntry }));
+        let closed = self.open.take_where(|key, call| key.core == context.core && match call.entry.slot.semantic {
+            Semantic::Dispatch { name } => stage_entry || key.pc == context.pc || (delivery && name == DispatchPoint::Resume),
+            _ => false,
+        });
+        let origin = if semantic == Some(Semantic::Dispatch { name: DispatchPoint::Select }) {
+            closed.last().and_then(|call| match call.entry.slot.semantic {
+                Semantic::Dispatch { name } => Some((call.entry.origin.unwrap_or(name), call.history.iter()
+                    .filter(|event| matches!(event.kind,BoundaryKind::SelectedRead | BoundaryKind::DiscardedRead | BoundaryKind::EnabledRead | BoundaryKind::GlobalLockRead))
+                    .map(|event| { let mut inherited=event.clone(); inherited.writes.clear(); inherited.bank.clear(); inherited }).collect())),
+                _ => None,
+            })
+        } else { None };
+        if !closed.is_empty() { self.finish(machine, context, tcm, closed, Completion::Dispatched)?; }
+        let kind = match semantic {
+            Some(Semantic::Dispatch { name: DispatchPoint::Save }) => Some(BoundaryKind::Save),
+            Some(Semantic::Dispatch { name: DispatchPoint::Resume }) => Some(BoundaryKind::Resume),
+            Some(Semantic::Dispatch { name: DispatchPoint::NoSave }) => Some(BoundaryKind::NoSave),
+            _ => None,
+        };
+        if let Some(kind) = kind { self.boundary(machine, context, tcm, kind, Some(context.r0))?; }
+        if kind == Some(BoundaryKind::NoSave) {
+            let discarded = self.open.take_where(|key, call| key.core == context.core && call.entry.task == context.current && matches!(call.entry.slot.semantic, Semantic::Service { .. }));
+            self.finish(machine, context, tcm, discarded, Completion::Discard)?;
+        }
+        Ok(origin)
     }
 
     fn stop(&mut self, machine: &mut Machine, stops: &[(Core, u32)]) -> Result<(), String> {
@@ -758,18 +1033,56 @@ impl Observer<'_> {
                 self.pc_watches.entry((core, address)).and_modify(|watch| watch.count += 1)
                     .or_insert(PcWatch { core, address: Hex(address), count: 1, first: context.instructions });
             }
+            let semantic = self.validated.sites.entries.get(&context.pc).map(|&index| self.slot(index).id.semantic);
+            let origin = self.dispatch_boundary(machine, &context, tcm, semantic)?;
             let low = context.pc & !ALIAS;
             if DISPATCH_LOADS.contains(&low) && retained_dispatch_point(&self.validated.plan, low) { self.dispatched[core.index()] = true; }
             if [0x436ec, 0xd36ec].contains(&low) && retained_dispatch_point(&self.validated.plan, low) {
                 require(!self.dispatched[core.index()], "null selected cell after the first dispatch")?;
             }
-            if let Some(indices) = self.validated.sites.probes.get(&context.pc) {
-                for &index in indices {
+            if let Some(indices) = self.validated.sites.probes.get(&context.pc).cloned() {
+                for index in indices {
                     require(self.probe_hits.len()<CLASS_LIMIT, "probe record bound exceeded")?;
                     let probe = &self.validated.plan.probes[index];
-                    let value = Board { machine, maps: &self.maps }.register(core, arm::Register::R(probe.register.0))?;
+                    let board = Board { machine, maps: &self.maps };
+                    let value = if probe.kind==ProbeKind::GlobalLockRead && self.validated.plan.role==Role::Stock {
+                        committed(board.word(core,tcm,0x400c0804)?)?
+                    } else { board.register(core, arm::Register::R(probe.register.0))? };
                     self.probe_hits.push(ProbeHit { domain: probe.domain, core, address: probe.address, kind: probe.kind,
                         register: probe.register, value, cpsr: context.cpsr, sp: Hex(context.sp), lr: Hex(context.lr), instructions: context.instructions });
+                    let kind = match probe.kind {
+                        ProbeKind::SelectedRead => BoundaryKind::SelectedRead,
+                        ProbeKind::DiscardedRead => BoundaryKind::DiscardedRead,
+                        ProbeKind::EnabledRead => BoundaryKind::EnabledRead,
+                        ProbeKind::GlobalLockRead => BoundaryKind::GlobalLockRead,
+                        ProbeKind::Retry => BoundaryKind::Retry,
+                        ProbeKind::Callback => BoundaryKind::Callback,
+                        ProbeKind::CallbackReturn => BoundaryKind::CallbackReturn,
+                        ProbeKind::SelectComplete => BoundaryKind::SelectComplete,
+                        ProbeKind::FirstEntryExit => BoundaryKind::FirstEntryExit,
+                        ProbeKind::IrqTail => BoundaryKind::IrqTail,
+                    };
+                    self.boundary(machine, &context, tcm, kind, Some(value))?;
+                    if kind == BoundaryKind::DiscardedRead && value == 1 && self.validated.plan.probes[index].register.0 == 3 {
+                        let discarded = self.open.take_where(|key,call| key.core==core && call.entry.task==context.current && matches!(call.entry.slot.semantic,Semantic::Service { .. }));
+                        self.finish(machine,&context,tcm,discarded,Completion::Discard)?;
+                    }
+                    if kind == BoundaryKind::SelectedRead && self.validated.plan.probes[index].register.0 == 1 {
+                        require(value != 0 || !self.dispatched[core.index()], "null selected task after first dispatch")?;
+                        if value != 0 {
+                            let destination = committed(Board { machine, maps: &self.maps }.word(core,tcm,value+0x1c)?)? & !1;
+                            if !machine.traces.sites.contains_key(&destination) {
+                                require(machine.traces.sites.len()<SITE_LIMIT, "dispatch destination site bound exceeded")?;
+                                machine.traces.add_sites(&machine.session, [(destination,CONTINUATION_LABEL.to_owned())].into_iter().collect())?;
+                            }
+                            self.return_sites.insert(destination);
+                            let selected = self.open.take_where(|key,call| key.core==core && matches!(call.entry.slot.semantic,Semantic::Dispatch { name: DispatchPoint::Select }));
+                            for call in selected {
+                                self.open.open(ReturnKey { core,pc:destination,sp:0,task:None,mode:0 },call)?;
+                            }
+                            self.dispatched[core.index()] = true;
+                        }
+                    }
                 }
             }
             if self.return_sites.contains(&context.pc) { self.complete(machine, &context, tcm)?; }
@@ -779,7 +1092,7 @@ impl Observer<'_> {
                 return Err(format!("fill word at {:#x} fetched", context.pc));
             }
             if let Some(&domain) = sites.arms.get(&context.pc) { self.arm(machine, &context, domain)?; }
-            if let Some(&index) = sites.entries.get(&context.pc) { self.enter(machine, &context, tcm, index)?; }
+            if let Some(&index) = sites.entries.get(&context.pc) { self.enter(machine, &context, tcm, index, origin)?; }
         }
         self.begin_data(machine)?;
         Ok(())
@@ -1076,6 +1389,139 @@ fn main() -> ExitCode {
             eprintln!("scheduler-pair: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn call() -> OpenCall {
+        OpenCall { entry: EntryState { slot: SlotId { domain: Domain::A, entry: Hex(0x45cd4),
+            semantic: Semantic::Service { name: Service::SleepTask } }, core: Core::Primary, cpsr: 0x53,
+            arguments: [0;4], memory: vec![], r0: 0, lr: Hex(0x8000), task: Read::Committed { value: 0x9000 },
+            sp: Hex(0xa000), registers: [0;16], cpacr: 0, fpexc: 0, tpidrurw: 7, origin: None },
+            entered: 1, writes: vec![], bank: vec![], history: vec![], write_cursor: 0, bank_cursor: 0, suspended: false }
+    }
+
+    fn boundary(kind: BoundaryKind) -> Boundary {
+        let mut registers = [0;16];
+        registers[0] = 0xffff_ffef;
+        registers[13] = 0x9fd0;
+        registers[15] = 0x43640;
+        Boundary { kind, address: Hex(0x43640), instructions: 20, core: Core::Primary,
+            task: Read::Committed { value: 0x9000 }, sp: Hex(0x9fd0), cpsr: 0xd3, registers,
+            memory: vec![WordValue { address: Hex(0x9018), value: Read::Committed { value: 0x9fd0 } }],
+            writes: vec![], bank: vec![], value: Some(0xffff_ffef), cpacr: 0xf00000, fpexc: 0, tpidrurw: 7 }
+    }
+
+    #[test]
+    fn every_boundary_exports_loaded_values_and_completion_state() {
+        for (kind, name) in [(BoundaryKind::Save,"save"),(BoundaryKind::Resume,"resume"),
+            (BoundaryKind::NoSave,"no-save"),(BoundaryKind::Retry,"retry"),(BoundaryKind::Callback,"callback"),
+            (BoundaryKind::CallbackReturn,"callback-return"),(BoundaryKind::SelectedRead,"selected-read"),
+            (BoundaryKind::DiscardedRead,"discarded-read"),(BoundaryKind::EnabledRead,"enabled-read"),
+            (BoundaryKind::GlobalLockRead,"global-lock-read"),
+            (BoundaryKind::SelectComplete,"select-complete"),(BoundaryKind::FirstEntryExit,"first-entry-exit"),
+            (BoundaryKind::IrqTail,"irq-tail"),(BoundaryKind::Return,"return"),(BoundaryKind::Acquired,"acquired")] {
+            let mut call = call();
+            call.writes.push(Written { address: Hex(0x9018), size: 4, value: 0x9fd0 });
+            call.bank.push(Written { address: Hex(0xfffb30ec), size: 4, value: 0x1000000 });
+            call.record(boundary(kind)).unwrap();
+            let wire = serde_json::to_value(&call).unwrap();
+            let event = &wire["history"][0];
+            assert_eq!(event["kind"], name);
+            assert_eq!(event["registers"][0], 0xffff_ffefu32);
+            assert_eq!(event["value"], 0xffff_ffefu32);
+            assert_eq!(event["sp"], "0x9fd0");
+            assert_eq!(event["cpsr"], 0xd3);
+            assert_eq!(event["memory"][0]["value"]["value"], 0x9fd0);
+            assert_eq!(event["writes"][0]["address"], "0x9018");
+            assert_eq!(event["bank"][0]["address"], "0xfffb30ec");
+        }
+    }
+
+    #[test]
+    fn boundary_classification_ignores_sample_time_but_keeps_loaded_state() {
+        let first = boundary(BoundaryKind::SelectedRead);
+        let mut later = first.clone();
+        later.instructions = 900;
+        assert_eq!(first,later);
+        later.value = Some(0x9100);
+        assert_ne!(first,later);
+    }
+
+    #[test]
+    fn scheduler_completion_keeps_running_saved_frame_trampoline_and_doorbell_effects() {
+        let mut call = call();
+        for (address,value) in [(0x40054760,0x9100),(0x9018,0x9fd0),(0x901c,0x43668),(0x400546d8,1)] {
+            call.writes.push(Written { address: Hex(address),size:4,value });
+        }
+        call.bank.push(Written { address: Hex(0xfffb30ec),size:4,value:0x1000000 });
+        let mut event = boundary(BoundaryKind::FirstEntryExit);
+        event.cpsr = 0x53;
+        event.registers[15] = 0x8100;
+        call.record(event).unwrap();
+        let wire = serde_json::to_value(call).unwrap();
+        assert_eq!(wire["history"][0]["cpsr"],0x53);
+        assert_eq!(wire["history"][0]["registers"][15],0x8100);
+        let writes=wire["history"][0]["writes"].as_array().unwrap();
+        assert_eq!(writes[0]["address"],"0x40054760");
+        assert_eq!(writes[0]["value"],0x9100);
+        assert_eq!(writes[1]["value"],0x9fd0);
+        assert_eq!(writes[2]["value"],0x43668);
+        assert_eq!(writes[3]["address"],"0x400546d8");
+        assert_eq!(writes[3]["value"],1);
+        assert_eq!(wire["history"][0]["bank"][0]["address"],"0xfffb30ec");
+    }
+
+    #[test]
+    fn history_segments_effects_and_retains_save_resume_retry_callback_order() {
+        let mut call = call();
+        call.writes.push(Written { address: Hex(0x900c), size: 1, value: 10 });
+        call.record(boundary(BoundaryKind::Save)).unwrap();
+        assert!(call.suspended);
+        call.record(boundary(BoundaryKind::Resume)).unwrap();
+        assert!(!call.suspended);
+        call.record(boundary(BoundaryKind::Retry)).unwrap();
+        call.bank.push(Written { address: Hex(0xfffb40cc), size: 4, value: 0x1000000 });
+        call.record(boundary(BoundaryKind::Callback)).unwrap();
+        call.record(boundary(BoundaryKind::CallbackReturn)).unwrap();
+        call.record(boundary(BoundaryKind::Return)).unwrap();
+        let wire = serde_json::to_value(call).unwrap();
+        let history = wire["history"].as_array().unwrap();
+        assert_eq!(history.iter().map(|event| event["kind"].as_str().unwrap()).collect::<Vec<_>>(),
+            ["save","resume","retry","callback","callback-return","return"]);
+        assert_eq!(history[0]["writes"].as_array().unwrap().len(), 1);
+        assert_eq!(history[1]["writes"].as_array().unwrap().len(), 0);
+        assert_eq!(history[3]["bank"].as_array().unwrap().len(), 1);
+        assert_eq!(history[4]["bank"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn returns_match_task_core_stack_and_continuation() {
+        let key = ReturnKey { core: Core::Primary, pc: 0x8000, sp: 0xa000, task: Some(0x9000), mode: 0x13 };
+        let mut calls = OpenCalls::default();
+        calls.open(key,call()).unwrap();
+        for other in [ReturnKey { core: Core::Secondary,..key },ReturnKey { task: Some(0x9100),..key },
+            ReturnKey { sp: 0xa004,..key },ReturnKey { pc: 0x8004,..key }] {
+            assert!(calls.close(&other).is_empty());
+        }
+        assert_eq!(calls.close(&key).len(), 1);
+    }
+
+    #[test]
+    fn no_save_discards_only_services_owned_by_the_current_task_and_core() {
+        let key = ReturnKey { core: Core::Primary, pc: 0x8000, sp: 0xa000, task: Some(0x9000), mode: 0x13 };
+        let mut calls = OpenCalls::default();
+        calls.open(key,call()).unwrap();
+        let other = ReturnKey { core: Core::Secondary,..key };
+        calls.open(other,call()).unwrap();
+        let closed = calls.take_where(|key,call| key.core==Core::Primary && call.entry.task==(Read::Committed { value: 0x9000 }));
+        assert_eq!(closed.len(), 1);
+        assert_eq!(calls.close(&other).len(), 1);
+        assert_eq!(serde_json::to_value(Completion::Discard).unwrap(), "discard");
+        assert_eq!(serde_json::to_value(Completion::Dispatched).unwrap(), "dispatched");
     }
 }
 

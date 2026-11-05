@@ -57,12 +57,20 @@ instance FromJSON Semantic where
       "irq" | name=="doorbell" -> pure DoorbellSemantic
       _ -> fail "unknown semantic kind"
 
-data ProbeKind = SelectedRead | DiscardedRead deriving (Eq,Ord,Show,Enum,Bounded)
+data ProbeKind = SelectedRead | DiscardedRead | EnabledRead | GlobalLockRead | Retry | Callback | CallbackReturn | SelectComplete | FirstEntryExit | IrqTailProbe deriving (Eq,Ord,Show,Enum,Bounded)
 newtype Register = Register Int deriving (Eq,Ord,Show)
 data Probe = Probe { probeDomain :: Domain, probeAddress :: Address, probeKind :: ProbeKind, probeRegister :: Register } deriving (Eq,Show)
 probeKindName :: ProbeKind -> String
 probeKindName SelectedRead = "selected-read"
 probeKindName DiscardedRead = "discarded-read"
+probeKindName EnabledRead = "enabled-read"
+probeKindName GlobalLockRead = "global-lock-read"
+probeKindName Retry = "retry"
+probeKindName Callback = "callback"
+probeKindName CallbackReturn = "callback-return"
+probeKindName SelectComplete = "select-complete"
+probeKindName FirstEntryExit = "first-entry-exit"
+probeKindName IrqTailProbe = "irq-tail"
 registerName :: Register -> String
 registerName (Register index) = "r" ++ show index
 registerOf :: String -> Parser Register
