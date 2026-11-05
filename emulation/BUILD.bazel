@@ -942,6 +942,18 @@ haskell_library(
     ],
 )
 
+haskell_library(
+    name = "live-settings-lib",
+    srcs = ["Emulation/LiveSettings.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":emulator-usb",
+        "//host:base",
+        "//host:bytestring",
+    ],
+)
+
 haskell_test(
     name = "ui-trajectory-tests",
     size = "small",
@@ -1168,6 +1180,7 @@ haskell_binary(
         ":watch-observation",
         ":modal-observation",
         ":ui-trajectory-lib",
+        ":live-settings-lib",
         ":menu-crawl-lib",
         ":capture-stream-lib",
         ":save-lifecycle-lib",
@@ -1212,6 +1225,7 @@ haskell_test(
         ":watch-observation",
         ":modal-observation",
         ":ui-trajectory-lib",
+        ":live-settings-lib",
         ":menu-crawl-lib",
         ":capture-stream-lib",
         ":save-lifecycle-lib",
@@ -1367,6 +1381,7 @@ haskell_binary(
         ":checkpoint-key-lib",
         ":emulator-slot-lib",
         ":emulator-usb",
+        ":live-settings-lib",
         ":fujimod-paths",
         ":ram-push-unreviewed",
         ":ui-trajectory-lib",
@@ -1856,6 +1871,7 @@ genrule(
         "CardlessRamPush.hs",
         "EmulatorUsb.hs",
         "Xm1RamPushE2E.hs",
+        "Emulation/LiveSettings.hs",
         "Emulation/CaptureStream.hs",
         "Emulation/SaveLifecycle.hs",
         "Emulation/SaveLifecycleRun.hs",

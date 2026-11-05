@@ -6,6 +6,7 @@ module Emulation.ObservationCompare
   , toggleIgnored
   , normalize
   , differences
+  , withoutOverlayExit
   ) where
 
 import Data.Aeson (Value (..), encode, object, (.=))
@@ -99,3 +100,16 @@ differences at a b
   | a == b = []
   | otherwise = [at ++ ": " ++ short a ++ " != " ++ short b]
   where short = take 160 . BL.unpack . encode
+
+-- | RETAINED's observation without its first step when that step is a MENU and CANDIDATE's steps
+-- are the rest: the press that leaves the focus-area overlay the retained bridge's rendezvous UP
+-- opens, which the FujiMod bridge's dial push does not. Otherwise RETAINED unchanged.
+withoutOverlayExit :: Value -> Value -> Value
+withoutOverlayExit (Object retained) (Object candidate)
+  | Just (Array old) <- KM.lookup "steps" retained
+  , Just (Array new) <- KM.lookup "steps" candidate
+  , Just (Object first, rest) <- V.uncons old
+  , KM.lookup "key" first == Just (String "menu")
+  , not (V.null rest)
+  , rest == new = Object (KM.insert "steps" (Array rest) retained)
+withoutOverlayExit retained _ = retained

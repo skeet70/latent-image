@@ -21,7 +21,7 @@
   "before_unload": [
     {
       "phase": "empty-slot-list", "capture": "lifecycle-empty-slot-list",
-      "steps": [["menu",67,56,0],["menu",1,5,2],["left",0,5,0],["down",0,5,1],["down",0,5,2],["down",0,5,3],["down",0,5,4],["right",1,5,30],["down",1,5,31],["down",1,5,32],["down",1,5,33],["ok",97,641,0]],
+      "steps": [["menu",1,5,2],["left",0,5,0],["down",0,5,1],["down",0,5,2],["down",0,5,3],["down",0,5,4],["right",1,5,30],["down",1,5,31],["down",1,5,32],["down",1,5,33],["ok",97,641,0]],
       "reads": [["resident","runtime:rb_resident",1024],["activation","runtime:rb_activation",8],["generation","runtime:rb_current_gen",4],["mask","runtime:rb_resident+0x1c",2],["stored-name","runtime:rb_resident+0x68",26],["state","0146761e",2],["query-latch","009544f0",4],["query-event-banks","0094f888",16],["query-override","009514c4",4],["set-activation-gate","009544f8",4],["set-mode-gates-ab","00950474",8],["set-mode-gate-c","00954500",4],["editor-session","00954d08",4]],
       "read_expectations": [{"read":"generation","hex":"00000000"},{"read":"mask","hex":"0000"},{"read":"stored-name","hex":"0000000000000000000000000000000000000000000000000000"},{"read":"state","hex":"0000"}]
     },

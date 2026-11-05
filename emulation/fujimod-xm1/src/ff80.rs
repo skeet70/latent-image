@@ -4,7 +4,7 @@
 //! bridge (`tools/continue_rec_scanout.py`, `_FF80EndpointBridge`).
 
 use crate::guest::{Press, RouteKey};
-use crate::machine::{KeyPulse, Machine, RunOutcome};
+use crate::machine::{KeyPulse, Latch, Machine, RunOutcome};
 use crate::trace::CaptureScope;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -23,8 +23,8 @@ const PACKET_BYTES: usize = 64;
 const BULK_OUT: u8 = 2;
 const BULK_IN: u8 = 0x81;
 const BULK_IN_PORT: usize = 1;
-/// An UP hold of 455,645 instructions did not enter stock focus-area selection
-/// on the retained engine and 1,778,831 did (emulated).
+/// The retained bridge's floor for its rendezvous UP hold: 455,645 instructions did not enter
+/// stock focus-area selection and 1,778,831 did (emulated). The card stays write-protected as long.
 const RENDEZVOUS_HOLD: u64 = 4_000_000;
 pub const VENDOR_PRODUCT: [u8; 4] = [0xcb, 0x04, 0x80, 0xff];
 const KEEPALIVE_PERIOD: u64 = 32;
@@ -105,19 +105,19 @@ struct ControllerSave {
     endpoints: Option<EndpointDma>,
 }
 
-/// The inputs held from the rendezvous lock to its release (the retained
-/// bridge's `hold_rendezvous_inputs`).
+/// The inputs from the rendezvous lock to its release. The retained bridge's
+/// `hold_rendezvous_inputs` holds UP, which opens focus-area selection at live view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RendezvousInputs {
-    MenuUp,
-    MenuUpAndWriteProtect,
+    DialPush,
+    DialPushAndWriteProtect,
 }
 
 impl RendezvousInputs {
     fn names(self) -> Vec<&'static str> {
         match self {
-            Self::MenuUp => vec!["menu-up"],
-            Self::MenuUpAndWriteProtect => vec!["menu-up", "sd-write-protect"],
+            Self::DialPush => vec!["dial-push"],
+            Self::DialPushAndWriteProtect => vec!["dial-push", "sd-write-protect"],
         }
     }
 }
@@ -126,7 +126,9 @@ impl RendezvousInputs {
 #[derive(Serialize)]
 pub struct Rendezvous {
     latched_instructions: u64,
+    controller_74_state: u16,
     inputs: Vec<&'static str>,
+    dial_push_latched: Option<bool>,
     window_exits: Vec<WindowExit>,
     callback_instructions: Option<u64>,
     released_instructions: Option<u64>,
@@ -289,21 +291,23 @@ impl Ff80 {
                     }
                     let mut settings_at_latch = Box::new([0; LIVE_SETTINGS_BYTES]);
                     self.machine.session.board.read_physical(LIVE_SETTINGS, settings_at_latch.as_mut_slice())?;
-                    // At the live-view root UP opens the focus-area overlay (controller 74 state 0x11) and
-                    // changes no live setting (emulated).
-                    self.machine.press(RouteKey::Up)?;
-                    if self.rendezvous_inputs == RendezvousInputs::MenuUpAndWriteProtect {
+                    if self.rendezvous_inputs == RendezvousInputs::DialPushAndWriteProtect {
                         self.machine.protect_card(true)?;
                     }
                     self.rendezvous.push(Rendezvous {
                         latched_instructions: hit.instructions,
+                        controller_74_state: state.0,
                         inputs: self.rendezvous_inputs.names(),
+                        dial_push_latched: None,
                         window_exits: Vec::new(),
                         callback_instructions: None,
                         released_instructions: None,
                         menu_after: None,
                         settings_at_latch,
                     });
+                    // The keepalive pulse: at live view it leaves the screen and the MENU path unchanged (emulated).
+                    let latched = self.machine.dial_push(KEEPALIVE_PULSE)? == Latch::Latched;
+                    self.rendezvous.last_mut().ok_or("rendezvous activity is missing")?.dial_push_latched = Some(latched);
                 }
                 (Some(exit @ (RendezvousSite::Cpu0WindowExit | RendezvousSite::Cpu1WindowExit)), true) => {
                     let event = self.rendezvous.last_mut().ok_or("rendezvous activity is missing")?;
@@ -382,8 +386,7 @@ impl Ff80 {
         if held < RENDEZVOUS_HOLD {
             self.advance(RENDEZVOUS_HOLD - held)?;
         }
-        self.machine.release_key(RouteKey::Up)?;
-        if self.rendezvous_inputs == RendezvousInputs::MenuUpAndWriteProtect {
+        if self.rendezvous_inputs == RendezvousInputs::DialPushAndWriteProtect {
             self.machine.protect_card(false)?;
         }
         let released = self.machine.instructions();

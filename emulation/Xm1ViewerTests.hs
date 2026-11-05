@@ -3,7 +3,8 @@ module Main (main) where
 import Control.Exception (IOException, try)
 import Control.Monad (forM_, unless)
 import qualified Xm1Viewer as Viewer
-import Xm1RamPushE2E (LiveSettingChange (..), ModalDiagnostic (..), ModalLifetimeGuard (..), ModalOwnedPackage (..), liveSettingChange, liveSettings, loadModalOwnedPackage)
+import Xm1RamPushE2E (ModalDiagnostic (..), ModalLifetimeGuard (..), ModalOwnedPackage (..), loadModalOwnedPackage)
+import Emulation.LiveSettings (LiveSettingChange (..), liveSettingChange, liveSettings)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory)

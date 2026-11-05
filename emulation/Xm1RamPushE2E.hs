@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, LiveSettings, liveSettings, LiveSettingChange (..), liveSettingChange, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint) where
+module Xm1RamPushE2E (RelinkMode (..), AllowlistPolicy (..), OverrideReason (..), BootMode (..), PushMode (..), AttachHold (..), UiConversionProfile (..), CardMode (..), EmulationRuntime (..), FujiModBridge (..), ModalDiagnostic (..), ModalLifetimeGuard (..), E2ESettings (..), ModalOwnedPackage (..), loadModalOwnedPackage, SymbolRead, parseSymbolRead, Payload, bankD3Payload, bankModal75Payload, bankModalEnginePayload, bankLifecyclePayload, bankModalLifecyclePayload, classicChromePayload, classicChromeIconPayload, experimentPayload, runMenuCrawlE2E, runMenuObserveE2E, runRamDiffE2E, runRamPushE2E, warmAttachCheckpoint) where
 
 import Control.Applicative ((<|>))
 import Control.Exception (IOException, SomeException, bracket, catch, displayException, evaluate, finally, throwIO, try)
@@ -7,7 +7,7 @@ import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', encode, object, toJSON, withObject, (.:), (.=))
 import Data.Aeson.Types (parseEither)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
-import Data.List (nub, sort)
+import Data.List (findIndex, nub, sort)
 import Data.Maybe (catMaybes, isJust)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -19,7 +19,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import Data.Bits (shiftL, shiftR, (.|.))
 import Data.Int (Int32)
-import Data.Word (Word32, Word8)
+import Data.Word (Word32)
 import Numeric (readHex, showFFloat, showHex)
 import System.Directory (createDirectory, doesDirectoryExist, doesFileExist, getCurrentDirectory, listDirectory, removeDirectory, removeDirectoryRecursive, removeFile, setCurrentDirectory)
 import System.Environment (getExecutablePath, lookupEnv)
@@ -34,6 +34,7 @@ import Emulation.SegmentReceipt (SegmentReceipt (..), SegmentResult (..), elapse
 import Emulation.Symbols (SymbolTable, parseSymbolTable, resolveSymbol)
 import Emulation.PreservationObservation
 import Emulation.ModalObservation
+import Emulation.LiveSettings (describeLiveSettingChange, liveSettingChange, readLiveSettings)
 import qualified Emulation.CaptureStream as CaptureJournal
 import qualified Emulation.SaveLifecycle as SaveLifecycle
 import Emulation.SaveLifecycleRun (runSaveLifecycle)
@@ -343,42 +344,6 @@ stagedSession directory session = do
     let work = staging </> "session"
     privateDirectory work
     session work `finally` (listDirectory work >>= mapM_ (\name -> B.readFile (work </> name) >>= writePrivateBytes (directory </> name)))
-
--- | `[0x0096cc64, 0x0096ce26)`, the extent the stock BACK settings restore copies.
-newtype LiveSettings = LiveSettings B.ByteString
-
-liveSettingsStart :: Word32
-liveSettingsStart = 0x0096cc64
-
-liveSettingsLength :: Int
-liveSettingsLength = 450
-
-liveSettings :: B.ByteString -> Either String LiveSettings
-liveSettings bytes
-  | B.length bytes == liveSettingsLength = Right (LiveSettings bytes)
-  | otherwise = Left ("live-settings read returned " ++ show (B.length bytes) ++ " bytes, not " ++ show liveSettingsLength)
-
-data LiveSettingChange = LiveSettingChange
-  { changedSettingAddress :: Word32
-  , changedSettingFrom :: Word8
-  , changedSettingTo :: Word8
-  } deriving (Eq, Show)
-
--- | The lowest byte that differs.
-liveSettingChange :: LiveSettings -> LiveSettings -> Maybe LiveSettingChange
-liveSettingChange (LiveSettings before) (LiveSettings after) =
-  case [(offset, old, new) | (offset, old, new) <- zip3 [0 ..] (B.unpack before) (B.unpack after), old /= new] of
-    (offset, old, new) : _ -> Just (LiveSettingChange (liveSettingsStart + offset) old new)
-    [] -> Nothing
-
-describeLiveSettingChange :: LiveSettingChange -> String
-describeLiveSettingChange change = "live setting byte " ++ hexAddress (changedSettingAddress change)
-  ++ " changed from " ++ show (changedSettingFrom change) ++ " to " ++ show (changedSettingTo change)
-  ++ "; ram-push and ram-unload run only at the idle shooting screen (transport/README.md)"
-
-readLiveSettings :: Emulator -> IO LiveSettings
-readLiveSettings emulator = emulatorReadMemory emulator liveSettingsStart liveSettingsLength
-  >>= either (ioError . userError) pure . liveSettings
 
 -- | Entry of the plain-image drawer that renders a menu message banner; r0 is the message id.
 menuMessageDrawer :: Word32
@@ -1246,6 +1211,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
               mediaAfterValue)
         lifetimeReport <- finishModalLifetime emulator e2e lifetimeSession
         observed <- readIORef (runnerObservations runner)
+        rendezvousEntries <- readIORef (runnerRendezvousEntries runner)
         phaseTimes <- readIORef phases
         executionReceipt <- readIORef executionEvidence
         let result = object $
@@ -1273,6 +1239,7 @@ runSession settings python runtime installedMedia adjustmentNand plan e2e = do
               , "trajectories" .= map (\name -> object ["name" .= name, "result" .= String "matched"])
                   (nub (map segmentPhase (filter (not . segmentObserve) (planBefore plan ++ planAfter plan))))
               , "observations" .= (observed :: [Value])
+              , "rendezvous_entry_observations" .= (if pushMode settings == RamPush then rendezvousEntries else [])
               , "reads" .= symbolReads
               , "checks" .= object ["install" .= String "PASS", "trajectory" .= maybe (String "PASS") (const (String "FAIL")) trajectoryFailure, "unload" .= (if planUnload plan then String "PASS" else String "NOT_RUN")]
               , "trajectory_failure" .= trajectoryFailure
@@ -1393,6 +1360,8 @@ data SegmentRunner = SegmentRunner
   , runnerSpLabels :: [String]
   , runnerHits :: IORef Int
   , runnerObservations :: IORef [Value]
+  -- | Indices into 'runnerObservations' of the segments holding the first press after a rendezvous.
+  , runnerRendezvousEntries :: IORef [Int]
   , runnerReads :: IORef [CapturedRead]
   , runnerSnapshotPolicy :: SnapshotPolicy
   }
@@ -1404,7 +1373,7 @@ newSegmentRunner emulator receipt timedAction readAddress stopAction plan = do
   SegmentRunner emulator receipt timedAction readAddress stopAction (map traceSiteLabel (planTraceSites plan))
     [traceSiteLabel site | site <- planTraceSites plan, traceSiteLr site == RecordsLr]
     [traceSiteLabel site | site <- planTraceSites plan, traceSiteSp site == RecordsSp]
-    <$> newIORef recorded <*> newIORef [] <*> newIORef [] <*> pure EnforceSnapshotPreservation
+    <$> newIORef recorded <*> newIORef [] <*> newIORef [] <*> newIORef [] <*> pure EnforceSnapshotPreservation
 
 -- | The plan's trajectory-declared sites in the bridge's form, with each site's entry reads.
 resolveTraceSites :: (String -> IO Word32) -> [TraceSite] -> IO [(Word32, String, [(Word32, Int)])]
@@ -1442,9 +1411,11 @@ traceHitValue lrLabels spLabels hit = object (
   ++ ["sp" .= hexAddress sp | traceSite hit `elem` spLabels, Just sp <- [traceSp hit]]
   ++ ["memory" .= map hexBytes (traceMemory hit) | not (null (traceMemory hit))])
 
--- | Runs each segment and returns its capture receipt.
+-- | Runs each segment and returns its capture receipt. The first segment with steps holds the first
+-- press after the rendezvous that precedes the list.
 runSegments :: SegmentRunner -> [Segment] -> IO [Maybe Value]
-runSegments runner = mapM $ \segment -> runnerTimed runner ("segment " <> segmentPhase segment) $ do
+runSegments runner segments = forM (zip [0 :: Int ..] segments) $ \(index, segment) -> runnerTimed runner ("segment " <> segmentPhase segment) $ do
+  let entry = Just index == findIndex (not . null . segmentSteps) segments
   let emulator = runnerEmulator runner
       stop = runnerStop runner
   context <- either (ioError . userError) pure (releaseSegment (segmentPhase segment))
@@ -1521,6 +1492,7 @@ runSegments runner = mapM $ \segment -> runnerTimed runner ("segment " <> segmen
                                 "stored_code" .= actual]
                              | (expected, actual) <- maybe [] pure film ])
     writeIORef (runnerObservations runner) (previous ++ [current])
+    when entry $ modifyIORef' (runnerRendezvousEntries runner) (++ [length previous])
     writePrivateBytes (runnerReceipt runner </> ("e2e-observation-" ++ show (length previous) ++ ".json"))
       (BL.toStrict (encode current) <> "\n")
   forM_ film $ \(expected, actual) ->

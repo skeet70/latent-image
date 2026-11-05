@@ -3,7 +3,9 @@
 -- ('Emulation.ObservationCompare' names the fields left out).
 --
 -- A RAM-push e2e directory compares every e2e-observation-N.json and the menu state of every
--- capture in e2e-result.json. A usb-toggle-emu directory (one holding summary.json) compares
+-- capture in e2e-result.json. In each observation e2e-result.json lists under
+-- rendezvous_entry_observations, a retained leading MENU the candidate lacks is left out
+-- ('withoutOverlayExit'). A usb-toggle-emu directory (one holding summary.json) compares
 -- each scenario's result and failed checks and its whole receipt.json.
 module Main (main) where
 
@@ -18,7 +20,7 @@ import Control.Exception (IOException, try)
 import qualified Data.ByteString as B
 import qualified Data.Vector as V
 import Emulation.SegmentReceipt (SegmentName, decodeDeclaredSegments, segmentNameText)
-import Emulation.ObservationCompare (differences, e2eIgnored, normalize, toggleIgnored)
+import Emulation.ObservationCompare (differences, e2eIgnored, normalize, toggleIgnored, withoutOverlayExit)
 import System.Directory (doesFileExist, listDirectory)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitFailure)
@@ -44,20 +46,31 @@ segmentNamesOf directory = do
     Left problem -> Left ("e2e-segments.json: " ++ show problem)
     Right bytes -> decodeDeclaredSegments bytes
 
-observationFiles :: FilePath -> FilePath -> IO [String]
-observationFiles before after = do
+observationFiles :: [String] -> FilePath -> FilePath -> IO [String]
+observationFiles entries before after = do
   names <- sort . filter (\name -> "e2e-observation-" `isPrefixOf` name && ".json" `isSuffixOf` name) <$> listDirectory before
   concat <$> forM names (\name -> do
     present <- doesFileExist (after </> name)
-    if present then differences name <$> load e2eIgnored (before </> name) <*> load e2eIgnored (after </> name) else pure [name ++ ": missing"])
+    if not present then pure [name ++ ": missing"] else do
+      retained <- load e2eIgnored (before </> name)
+      candidate <- load e2eIgnored (after </> name)
+      let compared = if name `elem` entries then withoutOverlayExit retained candidate else retained
+      pure (differences name compared candidate))
 
 compareFlat :: FilePath -> FilePath -> IO (Int, [String])
 compareFlat old new = do
   names <- sort . filter (\name -> "e2e-observation-" `isPrefixOf` name && ".json" `isSuffixOf` name) <$> listDirectory old
-  observed <- observationFiles old new
   let result = load e2eIgnored . (</> "e2e-result.json")
-  captured <- differences "e2e-result.menu_receipts" <$> (member "menu_receipts" <$> result old) <*> (member "menu_receipts" <$> result new)
-  pure (length names, observed ++ captured)
+  before <- result old
+  after <- result new
+  let entriesOf = member "rendezvous_entry_observations"
+      entries = case entriesOf before of
+        Array indices -> [ "e2e-observation-" ++ show (round index :: Int) ++ ".json" | Number index <- V.toList indices ]
+        _ -> []
+  observed <- observationFiles entries old new
+  let listed = differences "e2e-result.rendezvous_entry_observations" (entriesOf before) (entriesOf after)
+      captured = differences "e2e-result.menu_receipts" (member "menu_receipts" before) (member "menu_receipts" after)
+  pure (length names, observed ++ listed ++ captured)
 
 compareSegmented :: FilePath -> FilePath -> IO (Int, [String])
 compareSegmented old new = do

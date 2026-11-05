@@ -968,7 +968,7 @@ fn ff80_advance_returns_backpressure_and_reaches_the_original_endpoint_after_dra
     use fujimod_xm1::ff80::{Ff80, RendezvousInputs};
     let mut observed = machine(&[0xe2800001, 0xeafffffd]);
     observed.traces.arm(&observed.session, BTreeMap::from([(0x1000, "loop".into())])).unwrap();
-    let mut bridge = Ff80::new(observed, RendezvousInputs::MenuUp);
+    let mut bridge = Ff80::new(observed, RendezvousInputs::DialPush);
     bridge.begin_capture_observation(fujimod_xm1::trace::CaptureScope::Capture).unwrap();
     assert_eq!(bridge.advance(301).unwrap(), RunOutcome::DrainRequired);
     let mut cursor = CaptureCursor::new(0);

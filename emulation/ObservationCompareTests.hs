@@ -4,7 +4,7 @@ module Main (main) where
 import Control.Monad (unless)
 import Data.Aeson (Value, object, (.=))
 import qualified Data.Text as T
-import Emulation.ObservationCompare (differences, e2eIgnored, normalize, toggleIgnored)
+import Emulation.ObservationCompare (differences, e2eIgnored, normalize, toggleIgnored, withoutOverlayExit)
 import System.Exit (exitFailure)
 
 segment :: [T.Text] -> Value
@@ -30,6 +30,21 @@ sync = ["cc-entry-settings-converter", "cc-entry-settings-converter"]
 
 capture :: [T.Text]
 capture = ["cc-entry-capture-converter"]
+
+step :: T.Text -> [Int] -> Value
+step key state = object ["key" .= key, "expected" .= state, "actual" .= state, "seconds" .= (0.5 :: Double)]
+
+observation :: [Value] -> [T.Text] -> Value
+observation steps messages = object ["phase" .= ("cc-film-list-open" :: T.Text), "steps" .= steps, "menu_messages" .= messages]
+
+-- | An observation that follows a rendezvous, RETAINED against CANDIDATE.
+entryCompared :: Value -> Value -> [String]
+entryCompared retained candidate =
+  let (a, b) = (normalize e2eIgnored retained, normalize e2eIgnored candidate)
+   in differences "observation" (withoutOverlayExit a b) b
+
+opened :: [Value]
+opened = [step "menu" [1, 5, 2], step "down" [1, 5, 3]]
 
 cases :: [(String, Bool)]
 cases =
@@ -83,6 +98,18 @@ cases =
     , not (null (differences "receipt"
         (normalize toggleIgnored (object ["result" .= ("pass" :: T.Text)]))
         (normalize toggleIgnored (object ["result" .= ("blocked" :: T.Text)])))) )
+  , ( "a retained MENU that leaves the overlay before the candidate's steps is left out"
+    , null (entryCompared (observation (step "menu" [67, 56, 0] : opened) []) (observation opened [])) )
+  , ( "a retained leading key other than MENU is compared"
+    , not (null (entryCompared (observation (step "up" [67, 56, 0] : opened) []) (observation opened []))) )
+  , ( "a retained leading MENU with different later steps is compared"
+    , not (null (entryCompared (observation (step "menu" [67, 56, 0] : opened) []) (observation [step "menu" [1, 5, 2]] []))) )
+  , ( "an observation whose only step is the MENU is compared"
+    , not (null (entryCompared (observation [step "menu" [67, 56, 0]] []) (observation [] []))) )
+  , ( "other fields of an entry observation are still compared"
+    , not (null (entryCompared (observation (step "menu" [67, 56, 0] : opened) ["0x12"]) (observation opened []))) )
+  , ( "equal entry observations stay equal"
+    , null (entryCompared (observation opened []) (observation opened [])) )
   ]
 
 main :: IO ()

@@ -73,14 +73,7 @@
     {
       "phase": "package-menu-prefix",
       "capture": "owned75-live-view",
-      "steps": [
-        [
-          "menu",
-          67,
-          56,
-          0
-        ]
-      ],
+      "steps": [],
       "reads": [
         [
           "dispatcher-first-word",

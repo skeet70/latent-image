@@ -265,7 +265,7 @@ fn attach(machine: Machine, rendezvous: RendezvousInputs, hold: Option<RouteKey>
     let mut boundary = |bridge: &Ff80, phase| observer.as_mut().map_or(Ok(()), |observer| observer.boundary(&bridge.machine, phase));
     bridge.advance(FIRST_START_SCREEN.saturating_sub(bridge.machine.instructions()))?;
     boundary(&bridge, AttachPhase::FirstStart)?;
-    if rendezvous == RendezvousInputs::MenuUpAndWriteProtect && !bridge.machine.card_present()? {
+    if rendezvous == RendezvousInputs::DialPushAndWriteProtect && !bridge.machine.card_present()? {
         return Err("the SD host does not read the inserted card as present".into());
     }
     for key in [RouteKey::Up; 12].into_iter().chain([RouteKey::Ok, RouteKey::Ok]) {
@@ -1350,8 +1350,8 @@ impl Server {
 
     fn receipt(&self, error: Option<&str>) -> Result<Value, String> {
         let card = match self.rendezvous {
-            RendezvousInputs::MenuUpAndWriteProtect => "card-backed",
-            RendezvousInputs::MenuUp => "cardless",
+            RendezvousInputs::DialPushAndWriteProtect => "card-backed",
+            RendezvousInputs::DialPush => "cardless",
         };
         let preservation = match &self.preservation {
             Some(preservation) => serde_json::to_value(preservation.state())
@@ -1477,7 +1477,7 @@ fn drive() -> Result<(), String> {
         .as_deref()
         .map(|path| load_card(&document_bytes, path, Backing::Sparse))
         .transpose()?;
-    let rendezvous = if card.is_some() { RendezvousInputs::MenuUpAndWriteProtect } else { RendezvousInputs::MenuUp };
+    let rendezvous = if card.is_some() { RendezvousInputs::DialPushAndWriteProtect } else { RendezvousInputs::DialPush };
     let inputs = Inputs {
         document_bytes,
         update: read(&arguments.installed_dat)?,
@@ -1786,6 +1786,10 @@ mod tests {
     }
 
     fn server(program: &[u32]) -> Server {
+        server_with(program, RendezvousInputs::DialPush)
+    }
+
+    fn server_with(program: &[u32], rendezvous: RendezvousInputs) -> Server {
         static SERIAL: AtomicU64 = AtomicU64::new(0);
         fujimod_emulator_exr2_board::register_board_builder();
         fujimod_emulator_models::register();
@@ -1813,14 +1817,14 @@ mod tests {
         }
         let output = std::env::temp_dir().join(format!("capture-stream-{}-{}", std::process::id(), SERIAL.fetch_add(1, Ordering::Relaxed)));
         Server {
-            bridge: Ff80::new(machine, RendezvousInputs::MenuUp),
+            bridge: Ff80::new(machine, rendezvous),
             attachment: Attachment { pre_attach: Value::Null, device: Vec::new(), configuration: Vec::new() },
             checkpoint: Value::Null,
             key: BootKey { key: CheckpointKey("synthetic-capture".into()), inputs: Value::Null },
             root: output.clone(), output,
             screenshots: Vec::new(), watch: None, preservation: None,
             key_log: Vec::new(), requests: RequestProfile::default(),
-            rendezvous: RendezvousInputs::MenuUp, pending_capture: None,
+            rendezvous, pending_capture: None,
             capture_evidence_error: None, snapshots: BTreeMap::new(),
         }
     }
@@ -2265,15 +2269,16 @@ mod tests {
     }
 
     /// A program that passes the four rendezvous trace sites once, at the given controller-74 state,
-    /// with the input scanner registered over disjoint calibrated key intervals.
-    fn rendezvous_server(top_state: u16) -> Server {
+    /// with the input scanner registered over disjoint calibrated key intervals and the dial-push row bound.
+    fn rendezvous_server(top_state: u16, rendezvous: RendezvousInputs) -> Server {
         const CALIBRATION: u64 = 0x00a0_0000;
-        let mut server = server(&[0xe1a0_0000, 0xe1a0_0000, 0xe1a0_0000, 0xe1a0_0000, 0xeaff_fffe]);
+        let mut server = server_with(&[0xe1a0_0000, 0xe1a0_0000, 0xe1a0_0000, 0xe1a0_0000, 0xeaff_fffe], rendezvous);
         server.handle(request(json!({"command": "trace-sites", "sites": {
             "0x00000000": "rendezvous-locked", "0x00000004": "cpu0-window-exit",
             "0x00000008": "cpu1-window-exit", "0x0000000c": "query-callback-result"}}))).unwrap();
         let machine = &server.bridge.machine;
         let (firmware, board) = (&machine.document.firmware, &machine.session.board);
+        let row = |row: u64| firmware.key_table.base.0 + row * firmware.key_table.row_bytes;
         board.write_physical(0x0146_761c, &top_state.to_le_bytes()).unwrap();
         board.write_physical(firmware.scanner_registered.0, &1u32.to_le_bytes()).unwrap();
         board.write_physical(firmware.calibration_pointer.0, &(CALIBRATION as u32).to_le_bytes()).unwrap();
@@ -2287,36 +2292,60 @@ mod tests {
             record[12..16].copy_from_slice(&(binding.channel as u32).to_le_bytes());
             record[16..18].copy_from_slice(&binding.low_tag.to_le_bytes());
             record[18..20].copy_from_slice(&binding.high_tag.to_le_bytes());
-            board.write_physical(firmware.key_table.base.0 + binding.row * firmware.key_table.row_bytes, &record).unwrap();
+            board.write_physical(row(binding.row), &record).unwrap();
         }
+        let dial = &firmware.dial_push;
+        let mut record = [0u8; 28];
+        record[0..4].copy_from_slice(&dial.code.to_le_bytes());
+        record[9] = 2;
+        record[12..16].copy_from_slice(&(u32::from(dial.port) << 16 | u32::from(dial.pin)).to_le_bytes());
+        record[0x12..0x14].copy_from_slice(&u16::from(dial.pressed_high).to_le_bytes());
+        board.write_physical(row(dial.row), &record).unwrap();
         server
+    }
+
+    /// Every GPIO pad level and ADC sample the bridge drives.
+    fn inputs(server: &Server) -> ([u32; 16], Vec<u16>) {
+        let machine = &server.bridge.machine;
+        let node = machine.session.node(&machine.document.gpio.0).unwrap();
+        let pads = machine.session.board
+            .inspect_device::<fujimod_emulator_devices::exr2::gpio::Gpio, _>(node, |gpio| Ok(gpio.pads().input_levels())).unwrap();
+        (pads, machine.session.adc_samples(&machine.document.adc.0).unwrap())
     }
 
     #[test]
     fn a_rendezvous_outside_the_live_view_root_is_refused_before_any_input() {
         for state in [0x00u16, 0x18, 0x11, 0x01] {
-            let mut server = rendezvous_server(state);
+            let mut server = rendezvous_server(state, RendezvousInputs::DialPushAndWriteProtect);
+            let before = inputs(&server);
             let error = server.bridge.advance(100).unwrap_err();
             assert!(error.contains("rendezvous refused") && error.contains("no menu open"), "{state:#x}: {error}");
             assert!(!server.bridge.rendezvous_active(), "{state:#x}");
+            assert_eq!(inputs(&server), before, "{state:#x}");
+            assert_eq!(server.receipt(None).unwrap()["rendezvous_activity"], json!([]), "{state:#x}");
         }
     }
 
     #[test]
-    fn a_rendezvous_at_the_live_view_root_latches_and_releases_with_unchanged_settings() {
-        let mut server = rendezvous_server(0x04);
+    fn a_rendezvous_at_the_live_view_root_pushes_the_dial_and_records_the_root() {
+        let mut server = rendezvous_server(0x04, RendezvousInputs::DialPush);
+        let before = inputs(&server);
         server.bridge.advance(100).unwrap();
         assert!(server.bridge.rendezvous_active());
         server.bridge.release_rendezvous().unwrap();
         assert!(!server.bridge.rendezvous_active());
+        assert_eq!(inputs(&server), before);
         let activity = &server.receipt(None).unwrap()["rendezvous_activity"];
         assert_eq!(activity.as_array().map(Vec::len), Some(1), "{activity}");
+        assert_eq!(activity[0]["inputs"], json!(["dial-push"]), "{activity}");
+        assert_eq!(activity[0]["controller_74_state"], 4, "{activity}");
+        assert!(activity[0]["dial_push_latched"].is_boolean(), "{activity}");
         assert!(activity[0]["released_instructions"].is_u64(), "{activity}");
     }
 
     #[test]
     fn a_live_setting_changed_during_the_rendezvous_hold_fails_the_release() {
-        let mut server = rendezvous_server(0x04);
+        let mut server = rendezvous_server(0x04, RendezvousInputs::DialPush);
         server.bridge.advance(100).unwrap();
         let mut byte = [0];
         server.bridge.machine.session.board.read_physical(0x0096_cd7c, &mut byte).unwrap();

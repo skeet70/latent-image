@@ -574,7 +574,7 @@ fn drive() -> Result<(), String> {
         machine
     };
     let mut server = Server {
-        bridge: Ff80::new(machine, RendezvousInputs::MenuUp),
+        bridge: Ff80::new(machine, RendezvousInputs::DialPush),
         start: record,
         key,
         inputs: key_inputs,

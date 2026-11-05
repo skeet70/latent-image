@@ -13,7 +13,7 @@
   "before_unload": [
     {
       "phase": "control-installed-slot-list", "capture": "control-installed-slot-list",
-      "steps": [["menu",67,56,0],["menu",1,5,2],["left",0,5,0],["down",0,5,1],["down",0,5,2],["down",0,5,3],["down",0,5,4],["right",1,5,30],["down",1,5,31],["down",1,5,32],["down",1,5,33],["ok",97,641,0]],
+      "steps": [["menu",1,5,2],["left",0,5,0],["down",0,5,1],["down",0,5,2],["down",0,5,3],["down",0,5,4],["right",1,5,30],["down",1,5,31],["down",1,5,32],["down",1,5,33],["ok",97,641,0]],
       "reads": [["generation","runtime:rb_current_gen",4],["mask","runtime:rb_resident+0x1c",2],["state","0146761e",2]],
       "read_expectations": [{"read":"generation","hex":"00000000"},{"read":"mask","hex":"0000"},{"read":"state","hex":"0000"}]
     },
@@ -28,7 +28,7 @@
   "after_unload": [
     {
       "phase": "control-restored-original-set", "requires": ["control-stock-set-ready"], "observe": true,
-      "steps": [["menu",1,5,32],["menu",1,5,32],["ok",1,5,32]]
+      "steps": [["menu",1,5,32],["ok",1,5,32]]
     }
   ]
 }

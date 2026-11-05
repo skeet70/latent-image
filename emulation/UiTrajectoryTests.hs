@@ -7,7 +7,7 @@ import qualified Data.ByteString.Char8 as C
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import Data.List (isInfixOf, isPrefixOf, isSuffixOf, sort)
+import Data.List (intercalate, isInfixOf, isPrefixOf, isSuffixOf, sort)
 import Emulation.PreservationObservation
 import Emulation.Symbols
 import Emulation.UiTrajectory
@@ -54,6 +54,16 @@ mismatchesOf (oldSteps, oldFields) (newSteps, newFields) = do
   old <- either (const Nothing) Just (decodeTrajectories (file oldSteps oldFields))
   new <- either (const Nothing) Just (decodeTrajectories (file newSteps newFields))
   pure (variantMismatches old new)
+
+-- | variantMismatches over two files whose segments carry the given steps, before and after unload.
+sidesMismatches :: ([String], [String]) -> ([String], [String]) -> Maybe [String]
+sidesMismatches old new = do
+  let segments side entries = intercalate "," [ "{\"phase\":\"" ++ side ++ show index ++ "\",\"steps\":[" ++ steps ++ "]}" | (index, steps) <- zip [0 :: Int ..] entries ]
+      file (before, after) = C.pack (concat
+        [ "{\"schema\":1,\"before_unload\":[", segments "b" before, "],\"after_unload\":[", segments "a" after, "]}" ])
+  retained <- either (const Nothing) Just (decodeTrajectories (file old))
+  variant <- either (const Nothing) Just (decodeTrajectories (file new))
+  pure (variantMismatches retained variant)
 
 -- | A linked build's @llvm-nm --print-size@ rows, one symbol each.
 symbolTable :: SymbolTable
@@ -220,7 +230,21 @@ main = do
           ("[\"menu\",67,56,0,{\"settle_instructions\":5000000}],[\"menu\",1,5,2]", ",\"key_pulse\":{\"hold_instructions\":8000000,\"release_instructions\":8000000}")
           == Just []
     , expect "a variant that changes an expected menu state is a mismatch" $
-        fmap null (mismatchesOf ("[\"menu\",67,56,0],[\"menu\",1,5,2]", "") ("[\"menu\",1,5,2]", "")) == Just False
+        fmap null (mismatchesOf ("[\"menu\",67,56,0],[\"menu\",1,5,2]", "") ("[\"menu\",67,56,0],[\"menu\",1,5,3]", "")) == Just False
+    , expect "a variant without the MENU that leaves the retained overlay after install asserts what its retained file asserts" $
+        sidesMismatches (["", "[\"menu\",67,56,0],[\"menu\",1,5,2]"], []) (["", "[\"menu\",1,5,2]"], []) == Just []
+    , expect "a variant without the MENU that leaves the retained overlay after unload asserts what its retained file asserts" $
+        sidesMismatches (["[\"back\",1,5,6]"], ["[\"menu\",1,5,6],[\"menu\",1,5,6]", "[\"ok\",1,254,0]"])
+          (["[\"back\",1,5,6]"], ["[\"menu\",1,5,6]", "[\"ok\",1,254,0]"]) == Just []
+    , expect "a variant without a later MENU is a mismatch" $
+        fmap null (sidesMismatches (["[\"menu\",67,56,0],[\"menu\",1,5,2],[\"menu\",1,5,2]"], [])
+          (["[\"menu\",67,56,0],[\"menu\",1,5,2]"], [])) == Just False
+    , expect "a variant without a first key other than MENU is a mismatch" $
+        fmap null (sidesMismatches (["[\"q\",122,5,1],[\"back\",122,5,1]"], []) (["[\"back\",122,5,1]"], [])) == Just False
+    , expect "a variant that empties a segment by leaving out its only MENU is a mismatch" $
+        fmap null (sidesMismatches (["[\"menu\",67,56,0]", "[\"menu\",1,5,2]"], []) (["", "[\"menu\",1,5,2]"], [])) == Just False
+    , expect "a variant leaves out at most one MENU on each side of unload" $
+        fmap null (sidesMismatches (["[\"menu\",67,56,0],[\"menu\",67,56,0],[\"menu\",1,5,2]"], []) (["[\"menu\",1,5,2]"], [])) == Just False
     , expect "a variant that changes a capture is a mismatch" $
         fmap null (mismatchesOf ("[\"menu\",1,5,2]", "") ("[\"menu\",1,5,2]", ",\"capture\":\"x\"")) == Just False
     , expect "a trajectory without protection declares none" $
