@@ -64,7 +64,7 @@ editBytes :: Edit -> B.ByteString
 editBytes (Edit _ bytes) = bytes
 
 data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup | TaskSubmission | TaskStorage
-  | IdleTask | RootTask | Image5Producer | PlainProducer | ApplicationPump | Image5Initializer
+  | IdleTask | RootTask | Image5Producer | PlainProducer | ApplicationPump | Image5Initializer | TaskConstructors
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 pieceKindName :: PieceKind -> Text
@@ -82,10 +82,11 @@ pieceKindName kind = case kind of
   PlainProducer -> "plain-producer"
   ApplicationPump -> "application-pump"
   Image5Initializer -> "image5-initializer"
+  TaskConstructors -> "task-constructors"
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
   | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea | TaskSubmissionArea | TaskStorageArea
-  | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | ApplicationPumpArea | Image5InitializerArea
+  | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | ApplicationPumpArea | Image5InitializerArea | TaskConstructorsArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 areaName :: Area -> Text
@@ -107,6 +108,7 @@ areaName area = case area of
   Image5ProducerArea -> "image5-producer"
   PlainProducerArea -> "plain-producer"
   ApplicationPumpArea -> "application-pump"
+  TaskConstructorsArea -> "task-constructors"
   Image5InitializerArea -> "image5-initializer"
 
 data FootprintBasis = AdmissionRead | RuntimePremise deriving (Eq, Ord, Show)
@@ -318,6 +320,7 @@ data PieceFacts
   -- | The linked loader-A and loader-B orchestration images, the dispatcher's task submissions and the tasks they start.
   | LoaderStartupFacts LinkedBytes LinkedBytes [SubmitCall] [TaskStart]
   | NoFacts
+  | TaskConstructorsFacts LinkedBytes
   -- | The linked task wrapper/release image and the pool-allocation relation over its reads.
   | TaskSubmissionFacts LinkedBytes PoolAllocation
   -- | The linked task-storage transition image.
