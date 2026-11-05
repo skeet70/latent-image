@@ -12,6 +12,7 @@ The derivations are in `private-data/scratch/ControllerStrategy/inc4/`:
 - `posts.jq` lists every stage post of crawl-5 with its from-screen record (`posts.json`, 3,365 posts).
 - `cells-all.jq` flattens the manifest's cells of all 174 controllers into (controller, state, event, action) (`cells-all.json`).
 - `reference-scan.js` is the retirement reference scan (below).
+- `nochild.jq` lists crawl-5's first stage posts of kind `0xe` from a row without a child and of kind `0xf` from a node without a parent (`nochild.json`, empty).
 - `decomp-55436fc85c/` is `git archive` of `decomp/firmwares/xm1-150/app/ui` at the pinned commit.
 
 Controller states change only by an action's store to `record_transition_state[c]` (`UI_STATES`, `M74_STATE`, `M75_STATE` in the decomp; `DAT_0146761c` and `DAT_0146761e` in all.c) or by a cell whose transition word is a direct state: `ui_dispatch_machine_event` (`0xbfb028`, exact, `app/ui/core/ui_machine_dispatch.c:5`) stores `-transition` when the cell's transition is not positive and otherwise runs the handler without a state change. A gating state was traced back by listing every literal store of that state in all.c, mapping the storing function to the cells whose action calls it (callers up to three deep), and repeating from those cells' states until a state crawl-5 reached. The manifest has five direct-state cells; one enters a state named below (controller 75 state 0, event 41, to state 29). All.c has no computed store to either state word besides `0xbfb028`'s.
@@ -47,15 +48,16 @@ Crawl-5 counts are first posts of a trial.
 | 2b | As 2a, group `0x41` | as 2a | 34 (16 `back`, 16 `ok`, 2 `left`) | yes | `ok up left down ok down ok down ok`, `back` (486, 3717) | `0xf, 0x41, 0x1a` | `framed-pop-group41` | `NoFramedFollow`, `FramedPopAsPush`, `FramedNotifyIdSwap` |
 | 3 | Kind `0xe` push into a type 5 node, then `0xbfad04`'s push | as 2a | 4 (2 into `0x77ff80`, 2 into `0x783d94`) | yes | `ok up left down ok down ok down`, `ok` (485, 3601) | `0xe, 0x3f, 0x1d` | `framed-push` | `NoFramedFollow` |
 | 4 | Kind 9: push, move up, pop | 331365-331370; poster `0xc79178` exact | 0 | probe; [INFERENCE] `dial-left` on the screen Q opens | `q down down`, `dial-left` (254, untried) | `9, 0x7a, 1` | `frame-push-up-probe` | `FrameNotifyId`, `PushMoveUpAsDown` |
-| 5 | Page step (kinds 4, 5, id = rows per page) | 331201-331209 | 0 | not reached; gate controller 75 state 27 | none | none | none | none |
-| 6 | Multi-level (kinds `0x10`..`0x12`) | 331395-331407 | 0 | not reached; gates controller 74 state 26 (open node `0x5c`), controller 75 state 9 with live cell `0x00956864` outside 8..9, states 4, 25, 29 | none | none | none | none |
+| 5 | Page step (kinds 4, 5, id = rows per page) | 331201-331209 | 0 | not reached by the ten crawl keys; gate controller 75 state 27 | none | none | none | none |
+| 6 | Multi-level (kinds `0x10`..`0x12`) | 331395-331407 | 0 | not reached by the ten crawl keys; the two settings-gated posters are dead code (`0x006394d0` returns 1); gates 75 states 4, 21, 29 | none | none | none | none |
 | 7a | Kind 1 with id `0x17` (class 9 of increment 3) | 331307-331323, 331649-331670 | 8 (second post) | yes; stays fallback (increment 3, class 9) | `ok left up ok down down down ok`, `back` (370, 2601) | `2, 0x7d, 0x1a`, then `1, 0x3f, 0x17` | `open-seek` (increment 3) | none |
-| 7b | Kind 1 with id `0x18` | 331307-331323, 331649-331670 | 0 | not reached; gate controller 74 event 90 (code `0x39`) | none | none | none | none |
-| 7c | Kind `0xe` with id `0x17` | 331385-331393, 331649-331670 | 0 | not reached; gates controller 74 state 27 and controller 75 state 42, which no store or cell enters | none | none | none | none |
-| 7d | Kind 1 with ids `0xe`, `0x10`, `0x13` | 331633-331645 | 0 | not reached; gate a dispatch of controller 64 | none | none | none | none |
+| 7b | Kind 1 with id `0x18` | 331307-331323, 331649-331670 | 0 | not reached by the ten crawl keys; needs code `0x39` (controller 74 event 90) | none | none | none | none |
+| 7c | Kind `0xe` with id `0x17` | 331385-331393, 331649-331670 | 0 | not reached by any key; controller 74 state 27 and controller 75 state 42 have no store or entering cell | none | none | none | none |
+| 7d | Kind 1 with ids `0xe`, `0x10`, `0x13` | 331633-331645 | 0 | not reached by the ten crawl keys; needs a dispatch of controller 64 | none | none | none | none |
 | 8 | Kinds `0xa`, `0xb` on a type 5 or 7 open node | 331371-331384, 331620-331625 | 0 | not reached by crawl-5 | none | none | none | none |
+| 9 | Kind `0xe` from a row without a child (`NoChild`), kind `0xf` from a node without a parent (`NoParent`) | 331385-331393, 331563-331565, 331585-331587 | 0 (any post) | not reached by crawl-5 | none | none | none | none |
 
-Classes 1 to 3 become owned; class 4 is owned only if its probe records `9, 0x7a, 1`; classes 5 to 8 stay fallback. "Not reached" names the first state or event on the static path from a crawl-5 state that no bridge key produced.
+Classes 1 to 3 become owned; class 4 is owned only if its probe records `9, 0x7a, 1`; classes 5 to 9 stay fallback. "Not reached by the ten crawl keys" names the first state or event on the static path from a crawl-5 state that none of the ten `CrawlKey` keys produced; the codes each gate needs are listed under "Key reach of the fallback classes" for a later key-layer task. No bridge key is added in this increment.
 
 ## Changes shared by all owned classes
 
@@ -138,33 +140,45 @@ Ownership. If the receipt's stage entry is `9, 0x7a, 1` and its case passes, `fr
 
 Controls. The existing `FrameNotifyId`. `PushMoveUpAsDown` moves down instead. A control on the pop's direction cannot fail this case: every row of node `0x7a`'s pages is selectable in the receipt's before block **[INFERENCE]**, so `0xbfa800`'s step direction is unused.
 
-### 5 to 8. Fallback classes
+### 5 to 9. Fallback classes
 
-Each stays behind "Fallback classes through the stock kind switch". Their key reach is the next section.
+Each stays behind "Fallback classes through the stock kind switch". Their key reach is the next section. Class 9 (`NoChild`, `NoParent`) would be owned as `Rejected`, since stock's `0xbfab98` returns 0 with no call (all.c:331563-331565, 331585-331587), but crawl-5 has no case: `nochild.jq` finds no such first post, and `posts.json` has no kind `0xe` or `0xf` post after the first of a press. It stays fallback until a receipt shows one.
 
 ## Key reach of the fallback classes
 
 Posters are the callers of `0xd3d858` (`ui_execute_record_mode_request`, exact), `0xd3d75c`, `0xd3d78c`, `0xd3d7c4` and `0xd3d7f0` (all exact, `tu_00d3c898.c:478-499`), with their cells. "Reached" states are crawl-5's states on any screen or in any dispatch: controller 74 states 0, 1, 4, 17, 24, 25, 28; controller 75 states 0, 1, 2, 3, 9, 10, 11, 13, 14, 18, 19, 41, 43; controller 64 state 0 only, never dispatched.
 
+Codes each gate needs, for a later key-layer task (no bridge key is added in this increment):
+
+| Class | Gate | What enters it | Code or event needed |
+| --- | --- | --- | --- |
+| 5 page step | 75 state 27 (or 64 state 8) | 75 state 21 from 75/0 event 50 with `UI_W(0xff78)` = 1 and open node id 8 or `0x6a`; 75 state 29 from 75/0 event 41 | a kind 1 open of nodes `0x63`..`0x79` (the only literal one: 74/4 event 5, UI code `0x28` with press word `0x80`); record event `0xa46` for event 41, not a key code; controller 64 as for 7d |
+| 6 multi-level | 75 states 4, 21, 29 | 75 state 4 after a kind `0xe` post on a node of class `0x26`; 21 and 29 as for class 5 | no decoded node has class `0x26`, so none; otherwise as for class 5 |
+| 7b kind 1, id `0x18` | 74/4 event 90 | live view | UI code `0x39` |
+| 7c kind `0xe`, id `0x17` | 74 state 27, 75 state 42 | nothing | none exists |
+| 7d kind 1, ids `0xe`, `0x10`, `0x13` | dispatch of controller 64 | `0xc06b7c`, from controller 57 states 1, 3, 6, 33, 39 and state 0 events 49 and 63 | controller 57 events in those states (codes not traced) |
+
 ### Page step (class 5)
 
 Posters: `ui_m75_action_11` (`0xc6e658`, exact, `ui_m75_actions_c6e378.c:158`) posts `(5, 4)` at cells 75/27 events 0 and 1, and `ui_m75_action_28` (`0xc6ed28`, exact, `:426`) posts `(4, 4)` at 75/27 events 2 and 3; both only test `0x0063a0f8(0x53) == 0`. `ui_m64_action_6` and `_11` (`0xc47f3c`, `0xc4803c`, exact) post the same at controller 64 state 8. A page step also needs the open node's rows per page to be 4; the six such nodes include the two pages of node `0x7a` (`0x0077d908`, `0x0078b000`). The variable-id posters pass `0xd48ab4`, which returns 1 except for classes `0x131` and `0xb6`; the one class `0xb6` node (`0x007894e0`, node `0x56`) has 42 rows per page and the ids are 4..13, so none is a page step.
 
-Gate: controller 75 state 27. Stores: `0xc6fe98`, `0xc6fee0`, `0xc726bc`, `0xc75914`, `0xc75c70`, `0xc77670`, `0xc7ad48`, `0xc7ade8` (all.c:419544-427359), in cells of states 21, 28 and 29 only. State 21 is entered from 75/0 event 50 by `ui_m75_action_274` (`0xc7a528`, NONMATCHING; all.c:426872-426877) only when `0x009544f8` (`UI_W(0xff78)`) is 1, the open node id is 8 or `0x6a`, and the dispatch candidate is -1 or `0x12`. `0x009544f8` has one writer, `0x637f80` (exact), which `0xd4d7a4` (NONMATCHING; all.c:543401-543423) calls with 1 on a kind 1 open of nodes `0x63`..`0x79` other than `0x71`, `0x72`. Crawl-5 opened no such node; the one key-cell poster with a literal node in that range is `ui_m74_action_46` (`0xc59f38`, node `0x63`) at 74/4 event 5, which `0xc09d24` produces from code `0x28` with press word `0x80` (all.c:340220-340227) and no bridge key produced. State 29 is entered by the direct cell 75/0 event 41, which `0xc0bae8` produces only for record event `0xa46` (all.c:341469-341470), and from 75/27. Controller 64 never dispatched. Verdict: not reached.
+Gate: controller 75 state 27. Stores: `0xc6fe98`, `0xc6fee0`, `0xc726bc`, `0xc75914`, `0xc75c70`, `0xc77670`, `0xc7ad48`, `0xc7ade8` (all.c:419544-427359), in cells of states 21, 28 and 29 only. State 21 is entered from 75/0 event 50 by `ui_m75_action_274` (`0xc7a528`, NONMATCHING; all.c:426872-426877) only when `0x009544f8` (`UI_W(0xff78)`) is 1, the open node id is 8 or `0x6a`, and the dispatch candidate is -1 or `0x12`. `0x009544f8` has one writer, `0x637f80` (exact), which `0xd4d7a4` (NONMATCHING; all.c:543401-543423) calls with 1 on a kind 1 open of nodes `0x63`..`0x79` other than `0x71`, `0x72`. Crawl-5 opened no such node; the one key-cell poster with a literal node in that range is `ui_m74_action_46` (`0xc59f38`, node `0x63`) at 74/4 event 5, which `0xc09d24` produces from code `0x28` with press word `0x80` (all.c:340220-340227) and no bridge key produced. State 29 is entered by the direct cell 75/0 event 41, which `0xc0bae8` produces only for record event `0xa46` (all.c:341469-341470), and from 75/27. Controller 64 never dispatched. Verdict: not reached by the ten crawl keys.
 
 ### Multi-level (class 6)
 
-- 74/26 events 22 (`ok`, `ui_m74_action_93`, NONMATCHING), 28 (`back`, `ui_m74_action_115`, exact) and 37 (`right`, `ui_m74_action_178`, NONMATCHING), which post only for last-move classes `0x213` and `0x21a`..`0x21d` (increment 3). Gate: controller 74 state 26, stored only by `ui_m74_action_476` (`0xc6c298`, NONMATCHING; all.c:416782-416849) at 74/4 event 151 when the dispatch candidate `0xc12aac()` is `0x3f` and the open node id is `0x5c`. Node `0x5c` (registry `0x5c`, `0x0078ed04`) is opened by `0xc606c4` at 74/4 event 37 (`right` on the live view) when its branches on `0x00956974` and `0x00956838` do not return first, the live cell `0x00956844` is 7 and `FUN_00d1cfe4()` is nonzero (all.c:406843-406983). Crawl-5's `right` on the live view opened only node `0xb`. Verdict: not reached; the gate is a setting whose live cell is `0x00956844`. Which setting that is was not traced.
-- 75/9 event 8 (`ok`, `ui_m75_action_98`, `0xc74b34`, exact, `ui_m75_actions_c746fc.c:186`): posts `0x11`, or `0x12` when `INPUT_W(0x2c)` (`0x00956864`) is 10, when `UI_W(0xff78)` is not 1, `INPUT_W(0x2c)` is not 8 or 9 and `FUN_009042bc()` is 0; otherwise kind 2. Crawl-5 reached 75 state 9 on node `0xc` (trials 1322, 1324) and posted kind 2. `UI_W(0xff78)` was 0 there, since crawl-5 opened no node in `0x63`..`0x79` **[INFERENCE: its boot value is 0]**, so the live cell `0x00956864` was 8 or 9 or `FUN_009042bc()` was nonzero. Verdict: not reached; the gate is a setting whose live cell is `0x00956864`.
-- 75/4 event 8 (`ui_m75_action_93`, NONMATCHING, class `0xee`): state 4 is stored by `ui_m75_action_66` (75/0 `right`) and `ui_m75_action_90` (75/0 `ok`) after their kind `0xe` post on a node of class `0x26` (all.c:419942-419950), and by two actions of unreached states 5 and 6. Crawl-5 pressed `right` and `ok` at 75/0 only on other classes. Verdict: not reached; gate controller 75 state 4.
-- 75/25 and 75/29 event 50 (`ui_m75_action_286`, NONMATCHING; `_290`, exact): state 25 is entered only from state 22, which is entered from states 21, 23, 24, 25, 26 and 29. None was reached, and every static chain from a reached state enters 21 by 75/0 event 50 or 29 by the direct cell (above). Verdict: not reached; gate controller 75 state 21 or 29.
+The two settings-gated posters were traced to their writers. Both writers are reachable through the ten keys, and both posters are dead code on this body, because the stub `0x006394d0` (decomp `FUN_009042bc`, exact, `app/ui/core/ui_extension_stubs.c:21`) returns 1.
+
+- 74/26 events 22 (`ok`, `ui_m74_action_93`, NONMATCHING), 28 (`back`, `ui_m74_action_115`, exact) and 37 (`right`, `ui_m74_action_178`, NONMATCHING), which post only for last-move classes `0x213` and `0x21a`..`0x21d` (increment 3). Gate: controller 74 state 26, stored only by `ui_m74_action_476` (`0xc6c298`, NONMATCHING; all.c:416782-416849) at 74/4 event 151 when the dispatch candidate `0xc12aac()` is `0x3f` and the open node id is `0x5c`. The only literal open of node `0x5c` (registry `0x5c`, `0x0078ed04`) is in `ui_m74_action_170` (`0xc606c4`, NONMATCHING) at 74/4 event 37 (`right` on the live view), behind the test of live cell `0x00956844` = 7 (all.c:406971-406983). That test follows `if (FUN_006394d0() != 0)` (all.c:406936-406951), which always returns: it opens node `0xb` (crawl-5's only `right` open on the live view) or returns 0. Writer of `0x00956844`: `0x0063386c` (exact, `app/native_recovery/xm1_cached_settings.c:34`), called by the commit `0xd4fc74` (NONMATCHING) for property `0x1b1` (the value) and properties `0x139`, `0x183`, `0x1b2`, `0x1b5`, `0x1b7`, `0x1b8`, `0x214` (constants 4, 8, 0, 7, 5, 6, 1; all.c:545512-545778), the classes of node `0x5f` and its pages. Verdict: not reached; the gate is unreachable code, not a setting.
+- 75/9 event 8 (`ok`, `ui_m75_action_98`, `0xc74b34`, exact, `ui_m75_actions_c746fc.c:186`): kind 2 when `UI_W(0xff78)` is 1 or `INPUT_W(0x2c)` (`0x00956864`) is 8 or 9; otherwise kind 2 again when `FUN_009042bc()` (`0x006394d0`, all.c:422198) is nonzero, which it always is; the `0x11`/`0x12` arm is unreachable. Writer of `0x00956864`: `0x0063396c` (exact, `xm1_cached_settings.c:74`), called by the commit `0xd4fc74` for property `0xed` (all.c:545282-545289), the property of node `0xb` (`0x007866f8`), which `right` opens on the live view; node `0xc`, the screen of 75 state 9, is that node's child. A ten-key path sets the cell, but the poster still posts kind 2, as crawl-5's trials 1322 and 1324 show. Verdict: not reached; no prefix or config is added.
+- 75/4 event 8 (`ui_m75_action_93`, NONMATCHING, class `0xee`): state 4 is stored by `ui_m75_action_66` (75/0 `right`) and `ui_m75_action_90` (75/0 `ok`) after their kind `0xe` post on a node of class `0x26` (all.c:419942-419950), and by two actions of unreached states 5 and 6. No decoded node has class `0x26` or `0xee`. Verdict: not reached by the ten crawl keys; gate controller 75 state 4.
+- 75/25 and 75/29 event 50 (`ui_m75_action_286`, NONMATCHING; `_290`, exact): state 25 is entered only from state 22, which is entered from states 21, 23, 24, 25, 26 and 29. None was reached, and every static chain from a reached state enters 21 by 75/0 event 50 or 29 by the direct cell (above). Verdict: not reached by the ten crawl keys; gate controller 75 state 21 or 29.
 
 ### Seeking ids (class 7)
 
 - Kind 1 with id `0x17`: `ui_m76_action_130` (`0xc81e30`, NONMATCHING) at 76/46 event 12 posts `(1, 0x3f, 0x17, 0xc)`; reached by `back` on node `0x7d` (increment 3, class 9). It stays fallback for increment 3's reason.
-- Kind 1 with id `0x18`: one poster, `ui_m74_action_322` (`0xc67d78`, exact, `ui_m74_actions_c67b90.c:143`), at 74/4 event 90, posting kind 1 on node 1 with id `0x18` and extra 8 (`0xd3d7f0(1, 8)`) when `FUN_00d401c8()` and `FUN_00d1147c()` are nonzero. `0xc09d24` produces event 90 from code `0x39` (all.c:340762-340763); no bridge key dispatched controller 74 event 90 in crawl-5. Verdict: not reached; gate event 90.
+- Kind 1 with id `0x18`: one poster, `ui_m74_action_322` (`0xc67d78`, exact, `ui_m74_actions_c67b90.c:143`), at 74/4 event 90, posting kind 1 on node 1 with id `0x18` and extra 8 (`0xd3d7f0(1, 8)`) when `FUN_00d401c8()` and `FUN_00d1147c()` are nonzero. `0xc09d24` produces event 90 from code `0x39` (all.c:340762-340763); no bridge key dispatched controller 74 event 90 in crawl-5. Verdict: not reached by the ten crawl keys; needs code `0x39`.
 - Kind `0xe` with id `0x17`: the 18 calls of `0xd3d78c` are in 74/27 (events 13, 30, 33, 35, 37, 102) and 75/42 (events 0, 2, 4, 6, 22, 23). All.c stores neither controller 74 state 27 nor controller 75 state 42, and no direct-state cell enters them. Verdict: not reached; no static entry into either gate.
-- Kind 1 with ids `0xe`, `0x10`, `0x13`: `0xd3d75c` from `ui_m64_action_25` (`0xc4b2f8`, exact) and four other controller 64 actions at 64/0 events 7, 12, 27, 28, 36. Controller 64 is dispatched only by `0xc06b7c` (`0xbfb028(0x40)`), reached from controller 57 cells in states 1, 3, 6, 33, 39 and in state 0 on events 49 and 63; crawl-5 dispatched controller 57 in states 0 and 38 and never dispatched controller 64. Verdict: not reached; gate a dispatch of controller 64.
+- Kind 1 with ids `0xe`, `0x10`, `0x13`: `0xd3d75c` from `ui_m64_action_25` (`0xc4b2f8`, exact) and four other controller 64 actions at 64/0 events 7, 12, 27, 28, 36. Controller 64 is dispatched only by `0xc06b7c` (`0xbfb028(0x40)`), reached from controller 57 cells in states 1, 3, 6, 33, 39 and in state 0 on events 49 and 63; crawl-5 dispatched controller 57 in states 0 and 38 and never dispatched controller 64. Verdict: not reached by the ten crawl keys; needs a dispatch of controller 64.
 
 ### Kinds `0xa`, `0xb` on a framed node (class 8)
 
@@ -172,7 +186,7 @@ Gate: controller 75 state 27. Stores: `0xc6fe98`, `0xc6fee0`, `0xc726bc`, `0xc75
 
 ## Retirement scan
 
-Functions under `0xbfa234`: the callee closure of `0xbfa234` in all.c restricted to the engine unit (`0xbf8d20`..`0xbfb028`). For each, its callers in image4 and image5, its decomp status, and what still reaches it after increment 4.
+Functions under `0xbfa234`: the callee closure of `0xbfa234` in all.c restricted to the engine unit (`0xbf8d20`..`0xbfb028`). For each, its callers in image4, image5 and overlays 44, 46 and 47, its decomp status, and what still reaches it after increment 4.
 
 | Function | Status (55436fc85c) | Callers (scan) | Reached after increment 4 by |
 | --- | --- | --- | --- |
@@ -189,11 +203,11 @@ Functions under `0xbfa234`: the callee closure of `0xbfa234` in all.c restricted
 | `0xbf9990` | NONMATCHING | `0xbf9a2c` | `0xbf9a2c` |
 | `0xbf9a2c` | exact | 16 bl, including `0xbf95a8` | retained interface (the redraw `0xd4c8d4` through `0xbf95a8`) |
 | `0xbf9794` | NONMATCHING | 12 bl from `0xbf8d20`..`0xbf93e0` and `0xbf985c` | shared with tree code outside the kind switch |
-| `0xbf95a8`, `0xbf95b8`, `0xbf90f0`, `0xbfaf84` | exact, exact, NONMATCHING, NONMATCHING | `0xd4c8d4`, `0xd588b8` | the `initial_row` service (`0xd588b8`) and the redraw |
+| `0xbf95a8`, `0xbf95b8`, `0xbf90f0`, `0xbfaf84` | exact, exact, NONMATCHING, NONMATCHING | `0xd4c8d4`, `0xd588b8`; `0xbf90f0` also from overlay 44 | the `initial_row` service (`0xd588b8`), the redraw, and overlay 44 |
 
-Result: no function under `0xbfa234` is retired at increment 4. Classes 5 to 8, the empty node, the restored cursor past the rows and the generic refusals keep the whole kind switch reachable, and every function reached only from the engine is reached through `0xbfa234` or a service.
+Result: no function under `0xbfa234` is retired at increment 4. Classes 5 to 9, the empty node, the restored cursor past the rows and the generic refusals keep the whole kind switch reachable, and every function reached only from the engine is reached through `0xbfa234` or a service.
 
-Reference scan (`reference-scan.js`, run over `id4-0061c400.bin` sha256 `f2e2acab…dcff16` and `id5-00bf1a00.bin` sha256 `3cd501c0…fd892a`): for the 18 functions it looks for word-aligned and halfword-aligned 32-bit words equal to the address or the address with bit 0 set (pointer tables, literal pools), A32 `b`/`bl`/`blx`, Thumb `bl`/`blx`, `movw`/`movt` pairs into one register within 64 bytes, and `add`/`sub` from `pc`. It found no pointer word, no `movw`/`movt` pair, no `pc`-relative address, no Thumb branch, and only the A32 `bl` sites in the table, each inside the engine unit, `0xd4c8d4` or `0xd588b8`. This is the check a later retirement must repeat: a function retires only when the scan shows callers only in already-retired code. The scan does not cover the plain image's overlays, where all.c shows calls of `0xbf90f0` from overlay 47 (`0x01163f2c`, `0x01164e1c`, `0x01165aa0`, `0x011662a0`, `0x0116b610`), or a register-indirect call through an address computed other than by these patterns.
+Reference scan (`reference-scan.js`, run over `id4-0061c400.bin` sha256 `f2e2acab…dcff16`, `id5-00bf1a00.bin` sha256 `3cd501c0…fd892a`, and overlays 44 (`0x01100000`, `0xac5a0` bytes), 46 (`0x011c0000`, `0x1cca0`) and 47 (`0x011e0000`, `0x26a5e0`) of `plain-01100000.bin` sha256 `ee211bda…e2d889d`, extents from `reports/xm1-decomp.md`): for the 18 functions it looks for word-aligned and halfword-aligned 32-bit words equal to the address or the address with bit 0 set (pointer tables, literal pools), A32 `b`/`bl`/`blx`, Thumb `bl`/`blx`, `movw`/`movt` pairs into one register within 64 bytes, and `add`/`sub` from `pc`. It found no pointer word, no `movw`/`movt` pair, no `pc`-relative address and no Thumb branch in any of the five. Image4, overlay 46 and overlay 47 have no reference. Image5's references are the A32 `bl` sites in the table, each inside the engine unit, `0xd4c8d4` or `0xd588b8`. Overlay 44 has seven A32 `bl` to `0xbf90f0` (at `0x01164104`, `0x01164280`, `0x01165758`, `0x011660e4`, `0x011668a8`, `0x0116bbd0`, `0x0116bc7c`; all.c places them in `0x01163f2c`, `0x01164e1c`, `0x01165aa0`, `0x011662a0`, `0x0116b610`) and none to another function under `0xbfa234`. This is the check a later retirement must repeat: a function retires only when the scan shows callers only in already-retired code. It does not see a register-indirect call through an address computed other than by these patterns.
 
 ## Shims
 
@@ -202,7 +216,7 @@ New or changed by this increment; the rest of the design's and increment 3's tab
 | Shim | What it does | Removal condition |
 | --- | --- | --- |
 | Stock kind switch and seek as services (narrowed) | `kind_switch` for `0xbfa800`'s empty arm; `seek` only after that delegated pop, when the landed node may have type 5 or 7 | The empty-node arm is owned |
-| Fallback classes through the stock kind switch (narrowed) | Classes 5 to 8, class 4 until its case passes, the empty node, the restored cursor past the rows, node `0x38`, and the bounds refusals | Every class is owned |
+| Fallback classes through the stock kind switch (narrowed) | Classes 5 to 9, class 4 until its case passes, the empty node, the restored cursor past the rows, node `0x38`, and the bounds refusals | Every class is owned |
 
 No class adds an owned key cell; the seven frozen picker cells stay. No per-cell owned dispatch is introduced: classes 1 to 4 are reached through the stock cells and stage consumers.
 
@@ -214,11 +228,18 @@ No class adds an owned key cell; the seven frozen picker cells stay. No per-cell
 
 ## Decisions
 
-- `--menu-observe` takes only the ten `CrawlKey` keys. The gates of classes 5, 6 and 7 that are not settings are events no bridge key produced (controller 74 events 5 and 90, controller 75 event 41, controller 64). Whether to extend `CrawlKey` with the bridge's other inputs (`main-dial-up`, `main-dial-down`, `fn`, `dial-push`; `emulation/README.md:1231-1232`) to search for their codes is open.
-- Two multi-level gates are settings: live cell `0x00956844` = 7 (74 state 26 through `right` opening node `0x5c`) and live cell `0x00956864` outside 8..9 (75 state 9, `ok` on node `0xc`). Tracing which settings write those cells and adding a settings prefix to a path would give class 6 its first case.
-- Retirement needs the generic refusals gone, not only the classes: while `RowTotal`, `RowBounds`, `StackBounds`, `PackageChild`, `NoChild` and `NoParent` fall back, every function under `0xbfa234` stays reachable. `NoChild` and `NoParent` are events stock rejects with no call (all.c:331563-331565, 331585-331587); owning them as `Rejected` is the cheapest next step.
-- Class 4 is decided by its probe, as class 12 of increment 3 was.
-- The `seek` service stays for a framed landing after a delegated pop. Owning it without a pre-check would let `apply` refuse after a call.
+Decided by ControllerStrategy on this design:
+
+- Keys: no bridge key is added in this increment. Gates outside the ten `CrawlKey` keys are recorded as "not reached by the ten crawl keys" with the codes they need (table under "Key reach of the fallback classes").
+- Multi-level settings prefixes: the writers of `0x00956844` and `0x00956864` are traced (class 6). Both posters behind those cells are dead code because `0x006394d0` returns 1, so no prefix and no class 6 config is added.
+- `NoChild` and `NoParent`: to be owned as `Rejected`, but crawl-5 has no case, so they stay fallback as class 9.
+- Class 4 is owned only if its probe records `9, 0x7a, 1`.
+- The `seek` service stays for a framed landing after a delegated pop.
+
+Open:
+
+- Retirement needs the generic refusals gone, not only the classes: while `RowTotal`, `RowBounds`, `StackBounds`, `PackageChild`, `NoChild` and `NoParent` fall back, every function under `0xbfa234` stays reachable, and overlay 44 keeps `0xbf90f0` live regardless.
+- A case for class 9 needs a receipt with such a post: an observation that searches for one, or the guest pairs' traced stage entries (620 events in E-MENU-ENGINE-INC3-GUEST-PAIRS-150, not classified for it here).
 
 ## Appendix: configs
 
