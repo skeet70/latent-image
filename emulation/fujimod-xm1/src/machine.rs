@@ -101,6 +101,7 @@ struct KeyRow(u64);
 #[serde(rename_all = "kebab-case")]
 enum GpioReleaseKey {
     Play,
+    Fn,
     DialPush,
     DialLeft,
     DialRight,
@@ -303,6 +304,12 @@ impl Machine {
         self.gpio_press(key, GpioReleaseKey::Play, pulse)
     }
 
+    pub fn fn_key(&mut self, pulse: KeyPulse) -> Result<Latch, String> {
+        self.require_running()?;
+        let key = self.document.firmware.fn_key(&self.session)?;
+        self.gpio_press(key, GpioReleaseKey::Fn, pulse)
+    }
+
     pub fn shutter(&mut self, stage: ShutterStage, pulse: KeyPulse) -> Result<Latch, String> {
         self.require_running()?;
         let key = self.document.firmware.shutter(&self.session, stage)?;
@@ -382,6 +389,7 @@ impl Machine {
             Press::Dial(turn) => self.turn_dial(turn, pulse).map(|()| Latch::Untracked),
             Press::Shutter(stage) => self.shutter(stage, pulse),
             Press::Play => self.play(pulse),
+            Press::Fn => self.fn_key(pulse),
         }
     }
 
@@ -597,11 +605,17 @@ mod tests {
     const SPIN: u32 = 0xeaff_fffe;
 
     fn machine() -> Machine {
+        machine_with_code(&[SPIN])
+    }
+
+    fn machine_with_code(code: &[u32]) -> Machine {
         fujimod_emulator_exr2_board::register_board_builder();
         fujimod_emulator_models::register();
         let document = RunDocument::parse(RUN).unwrap();
         let mut rom = vec![0u8; ROM_BYTES];
-        rom[0..4].copy_from_slice(&SPIN.to_le_bytes());
+        for (bytes, instruction) in rom.chunks_exact_mut(4).zip(code) {
+            bytes.copy_from_slice(&instruction.to_le_bytes());
+        }
         let update = ValidatedUpdate(vec![0xff; document.update_flash_offset + 2048]);
         let mut session = crate::run::open(&document, &update, &rom).unwrap();
         session.board.set_execution_policy(document.execution_policy.into()).unwrap();
@@ -631,6 +645,48 @@ mod tests {
         record[18..20].copy_from_slice(&33u16.to_le_bytes());
         record[21] = released_byte;
         record
+    }
+
+    fn fn_record(released_byte: u8) -> [u8; 28] {
+        let mut record = [0u8; 28];
+        record[0..4].copy_from_slice(&0x28u32.to_le_bytes());
+        record[9] = 2;
+        record[12..16].copy_from_slice(&11u32.to_le_bytes());
+        record[16] = 1;
+        record[20] = 2;
+        record[21] = released_byte;
+        record
+    }
+
+    #[test]
+    fn fn_drives_gpio0_11_low_during_hold_and_high_on_release() {
+        let mut machine = machine_with_code(&[
+            0xe59f_000c, 0xe59f_200c, 0xe590_1000, 0xe582_1000, 0xeaff_fffc,
+            0xfff8_9014, 0x00a0_0000,
+        ]);
+        write_row(&machine, 13, &fn_record(0));
+        let mut word = [0u8; 4];
+        machine.session.board.read_physical(0xfff8_9014, &mut word).unwrap();
+        assert_ne!(u32::from_le_bytes(word) & (1 << 11), 0);
+        let latch = machine.press_once(Press::Fn, KeyPulse::instructions(100, 0)).unwrap();
+        machine.session.board.read_physical(0x00a0_0000, &mut word).unwrap();
+        assert_eq!(u32::from_le_bytes(word) & (1 << 11), 0);
+        machine.session.board.read_physical(0xfff8_9014, &mut word).unwrap();
+        assert_ne!(u32::from_le_bytes(word) & (1 << 11), 0);
+        assert!(matches!(latch, Latch::Unlatched { .. }));
+    }
+
+    #[test]
+    fn fn_requires_a_latched_row_and_observes_incomplete_release() {
+        let mut machine = machine();
+        write_row(&machine, 13, &fn_record(0));
+        assert!(machine.press_latched(Press::Fn, KeyPulse::instructions(0, 3)).is_err());
+        write_row(&machine, 13, &fn_record(1));
+        machine.press_latched(Press::Fn, KeyPulse::instructions(0, 3)).unwrap();
+        let observed = serde_json::to_value(&machine.key_release_observations).unwrap();
+        assert_eq!(observed[0]["key"], "fn");
+        assert_eq!(observed[0]["row"], 13);
+        assert_eq!(observed[0]["cap"], 3);
     }
 
     #[test]

@@ -553,7 +553,7 @@ fn default_pulse(key: Press) -> KeyPulse {
     match key {
         Press::Key(key) => key_pulse(key),
         Press::Dial(DialTurn::Left | DialTurn::Right) => DIAL_PULSE,
-        Press::Shutter(_) | Press::Play => GPIO_PULSE,
+        Press::Shutter(_) | Press::Play | Press::Fn => GPIO_PULSE,
     }
 }
 

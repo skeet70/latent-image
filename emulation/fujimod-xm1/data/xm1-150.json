@@ -2746,6 +2746,15 @@
       "pin": 10,
       "pressed_high": false
     },
+    "fn_key": {
+      "code": "fn",
+      "row": 13,
+      "pad": {
+        "port": 0,
+        "pin": 11
+      },
+      "pressed_high": false
+    },
     "play": {
       "code": "play",
       "row": 12,
