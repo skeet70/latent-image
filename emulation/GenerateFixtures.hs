@@ -41,6 +41,10 @@ privilegedExclusions :: [String]
 privilegedExclusions=["Synthetic Cortex-R5F privileged SVC/SYS ARM/little-endian only; no X-M1 behavior or ABI claim","No exceptions, SPSR access, mode changes, coprocessors other than the case's CP14 c2 identity read, PC-loading returns, MMIO, interrupts, DMA, caches, scheduling or hardware timing"]
 privileged :: Integer -> Maybe Integer -> Value -> Value
 privileged cpsr identity c=maybe id(\value->set "cp14_identity"(h value))identity$set "exclusions"(arr(map s privilegedExclusions))$nest "registers"(set "cpsr"(h cpsr))c
+kernelExclusions :: [String]
+kernelExclusions=["Synthetic Cortex-R5F privileged SVC kernel case, ARM/little-endian only; no X-M1 behavior or ABI claim","Single-core local monitor only; barriers are ordered markers with no cache, buffer or reordering model; no exceptions, interrupts, DMA or hardware timing"]
+kernel :: [(String,Value)] -> Value -> Value
+kernel facts c=set "kernel"(obj facts)$set "exclusions"(arr(map s kernelExclusions))$nest "registers"(set "cpsr"(h 0xd3))c
 save :: FilePath -> Value -> IO ()
 save root c=B.writeFile(root </> str(get c "id")<.>"json")(encodeCanonical c<>"\n")
 main :: IO ()
@@ -266,5 +270,29 @@ main=do
  forM_[("privileged-spsr-read-refused",0xe14f0000),("privileged-cps-mode-refused",0xf1020013),("privileged-cp14-other-refused",0xee120e30),("privileged-svc-refused",0xef000000)]$ \(name,word)->do
   item<-make name[word,0xe12fff1e]"unsupported_instruction"
   finish$expectedRegs[("pc",h 0x1004)]$privileged 0xd3(Just 0x4003)item
+ pair<-make "kernel-exclusive-pair" [0xe1921f9f,0xe2811001,0xe1823f91,0xe12fff1e] "returned"
+ finish$nest "expected"(set "memory"(arr[memory "data" 0 "01000000"]))$expectedRegs[("r1",h 1),("r3",h 0),("pc",h 0x1080)]$nest "registers"(set "r3"(h 9))$kernel[]pair
+ spin<-make "kernel-exclusive-spin" [0xe1921f9f,0xe3510000,0x1afffffc,0xe12fff1e] "instruction_budget"
+ spinData<-artifact root "kernel-exclusive-spin-data" [1]
+ finish$nest "expected"(set "kernel"(obj[("reserved",h 0x2004)]))$expectedRegs[("r1",h 1),("cpsr",h 0x200000d3),("pc",h 0x100c)]$set "artifacts"(arr(list(get spin "artifacts")++[spinData]))$at "regions" 2(set "initial"(obj[("artifact",get spinData "id"),("offset",n 0),("length",n 4)]))$nest "limits"(set "instructions"(n 20))$kernel[]spin
+ clobber<-make "kernel-store-over-reservation-refused" [0xe1923f9f,0xe5821000,0xe12fff1e] "unsupported_instruction"
+ finish$nest "expected"(set "kernel"(obj[("reserved",h 0x2004)]))$expectedRegs[("r3",h 0),("pc",h 0x1008)]$nest "registers"(set "r3"(h 9))$kernel[]clobber
+ barriers<-make "kernel-barriers" [0xe5821000,0xf57ff05f,0xf57ff04f,0xf57ff06f,0xe12fff1e] "returned"
+ finish$nest "expected"(set "memory"(arr[memory "data" 0 "05000000"]))$expectedRegs[("pc",h 0x1080)]$kernel[]barriers
+ nop<-make "kernel-nop" [0xe320f000,0xe12fff1e] "returned"
+ finish$expectedRegs[("pc",h 0x1080)]$kernel[]nop
+ wfi<-make "kernel-wfi-refused" [0xe320f003,0xe12fff1e] "unsupported_instruction"
+ finish$expectedRegs[("pc",h 0x1004)]$kernel[]wfi
+ thread<-make "kernel-tpidrurw" [0xee1d4f50,0xe3a06007,0xee0d6f50,0xe12fff1e] "returned"
+ finish$nest "expected"(set "kernel"(obj[("tpidrurw",h 7)]))$expectedRegs[("r4",h 0xabc),("r6",h 7),("pc",h 0x1080)]$kernel[("tpidrurw",h 0xabc)]thread
+ floating<-make "kernel-cpacr-fpexc" [0xee115f50,0xeef88a10,0xe3a06000,0xeee86a10,0xe12fff1e] "returned"
+ finish$nest "expected"(set "kernel"(obj[("fpexc",h 0)]))$expectedRegs[("r5",h 0xf00000),("r8",h 0x40000000),("pc",h 0x1080)]$kernel[("cpacr",h 0xf00000),("fpexc",h 0x40000000)]floating
+ stop<-make "kernel-stop-address" [0xeb00000d,0xe12fff1e] "stop_address"
+ finish$expectedRegs[("lr",h 0x1008),("pc",h 0x1040)]$nest "regions"(\v->arr(list v++[region "stop" 0x1040 4 "rx" Nothing]))$kernel[("stop",h 0x1040)]stop
+ let bank=at "regions" 2(\v->merge v[("id",s "bank"),("address",h 0xfffb30cc),("permissions",s "device")]) . nest "registers"(set "r2"(h 0xfffb30cc))
+ store<-make "kernel-bank-store" [0xf57ff04f,0xe5821000,0xe12fff1e] "returned"
+ finish$nest "expected"(set "memory"(arr[memory "bank" 0 "05000000"]))$expectedRegs[("pc",h 0x1080)]$bank$kernel[]store
+ load<-make "kernel-bank-load-refused" [0xe5920000,0xe12fff1e] "memory_guard"
+ finish$expectedRegs[("pc",h 0x1004)]$bank$kernel[]load
  generated<-length.filter((==".json").takeExtension)<$>listDirectory root
  putStrLn("Generated "++show generated++" structurally identical independent cases and exact instruction binaries; JSON uses canonical Haskell serialization. Historical JSON bytes were preserved.")

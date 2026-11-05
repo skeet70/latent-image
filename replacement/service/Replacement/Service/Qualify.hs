@@ -431,6 +431,7 @@ classifyStatus status@N.WallBudget = CheckBlocked status
 classifyStatus status@N.MemoryGuard = CheckBlocked status
 classifyStatus status@N.FetchGuard = CheckBlocked status
 classifyStatus status@N.StubContract = CheckBlocked status
+classifyStatus status@N.StopAddress = CheckBlocked status
 classifyStatus status@N.RunnerEngineError = CheckBlocked status
 classifyStatus status@N.InvalidCase = CheckBlocked status
 classifyStatus status@N.HostTimeout = CheckBlocked status
