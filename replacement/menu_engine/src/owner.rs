@@ -484,7 +484,7 @@ fn owner_controls_fail() {
     let controls: [(&str, Vec<&str>, &[&str]); 25] = [
         ("no-wrap", control::<NoWrap>("no-wrap"), &["fixed-wrap"]),
         ("inverted-skip", control::<InvertedSkip>("inverted-skip"), &[]),
-        ("no-initial-row", control::<NoInitialRow>("no-initial-row"), &[]),
+        ("no-initial-row", control::<NoInitialRow>("no-initial-row"), &["fn"]),
         ("no-last-move", control::<NoLastMove>("no-last-move"), &[]),
         ("zero-scroll", control::<ZeroScroll>("zero-scroll"), &[]),
         ("no-push-classifier", control::<NoPushClassifier>("no-push-classifier"), &[]),
