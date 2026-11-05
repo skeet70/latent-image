@@ -12,6 +12,7 @@ sh_test(
     data = [
         "//docs:evidence.jsonl",
         "//manifests:initial",
+        "//replacement/startup_artifact:qualifications.json",
         "//schemas:all",
         "@lab_git//:bin/git",
         "@lab_jq//:bin/jq",
