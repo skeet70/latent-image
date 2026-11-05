@@ -5,7 +5,7 @@ use super::readiness::{
 };
 use super::{
     read_evidence, view_byte, view_word, ApplicationReceipt, Evidence, GraphicsState, InputIndex, InputPurpose, RawView, Sample,
-    SampleIndex, SiteRef, ALIAS, MenuIdentity, Scenario, Menu,
+    SampleIndex, SiteRef, ALIAS, MenuIdentity, Scenario, Menu, ControllerState, CONTROLLER74,
 };
 use crate::composed_catalog::{physical_address as physical, Application, Core, Domain, Instructions, Role, SiteKind};
 use crate::provenance::Guest;
@@ -820,12 +820,16 @@ pub fn route(evidence: &RoleEvidence) -> Result<(), ApplicationRefusal> {
         "the route does not start at the shooting menu")?;
     for (input, capture) in receipt.scenario.settled().iter().zip(receipt.visible.iter().skip(1)) {
         require(input.menu.is_none_or(|menu| capture.menu == Some(menu)), check, "a scenario menu checkpoint differs")?;
-        require(capture.controller74.agrees(), check, "a controller state view disagrees")?;
+        require(capture.controller74.address == Guest(CONTROLLER74) && capture.controller74.view.agrees(), check,
+            "a controller state view disagrees")?;
+        let state = evidence.evidence.samples.iter().rev()
+            .filter(|sample| sample.input == capture.input && sample.stop <= capture.instructions)
+            .find_map(|sample| view_word(&sample.state, CONTROLLER74))
+            .map(|word| ControllerState(word as u16));
+        require(state.is_some() && capture.controller74.value() == state, check,
+            "the captured controller state differs from the last input sample")?;
         if input.live_view {
-            let state = evidence.evidence.samples.iter().rev()
-                .filter(|sample| sample.input == capture.input && sample.stop <= capture.instructions)
-                .find_map(|sample| view_word(&sample.state, STATE + 74 * 2));
-            require(state.is_some_and(|word| word & 0xffff == 4), check, "the route did not enter live view")?;
+            require(state == Some(ControllerState(4)), check, "the route did not enter live view")?;
         }
     }
     Ok(())
@@ -883,7 +887,7 @@ pub fn check_pair(retained: &ApplicationReceipt, owned: &ApplicationReceipt, dir
     let same = retained.visible.len() == owned.visible.len()
         && retained.visible.iter().zip(&owned.visible).all(|(a, b)| {
             let (left, right) = (planes(a, directories[0]), planes(b, directories[1]));
-            a.menu == b.menu && a.controller74.physical == b.controller74.physical
+            a.menu == b.menu && a.controller74.value() == b.controller74.value()
                 && left.is_some() && left == right && controller(a).is_some() && controller(a) == controller(b)
         });
     if !same {

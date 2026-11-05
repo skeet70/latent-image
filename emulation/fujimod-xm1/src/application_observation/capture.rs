@@ -9,7 +9,7 @@ use super::{
     hex_word, ApplicationReceipt, ApplicationWrite, ByteView, CodeObservation, CoreIdentity, DynamicTarget, EvidenceWriter, GraphicsState,
     InputIndex, InputPurpose, Menu, Publication, RawView, ReadinessIndex, ReadinessKind, ReadinessSample, Registers, RenderViews, RouteInput,
     Sample, SampleIndex, ScopeObservation, SideFile, SiteRef, Task1, TaskTableViews, VisibleCapture, ALIAS, EVIDENCE, TASK_ROW_BYTES,
-    TASK_ROW_LIMIT, UiWorkViews, VIEW_WORDS, view_word, Scenario,
+    TASK_ROW_LIMIT, UiWorkViews, VIEW_WORDS, view_word, Scenario, ControllerStateView, CONTROLLER74,
 };
 use crate::composed_catalog::{
     physical_address as physical, Application, CodeLabel, CodeWord, Core, Domain, Instructions, Pc, Role, Sha256, SitePlan, QUEUE_SITES,
@@ -477,7 +477,7 @@ impl<'a> Recorder<'a> {
         let save = session.board.device_save(session.node(&machine.document.firmware.render.graphics.0)?)?;
         crate::bridge::write(&output.join(format!("{name}.graphics.json")), &serde_json::to_vec(&save).map_err(|error| error.to_string())?)?;
         let controller = RawView::read(session, Guest(CONTROLLER), CONTROLLER_WORDS)?;
-        let controller74 = RawView::read(session, Guest(0x1467588 + 74 * 4), 1)?;
+        let controller74 = ControllerStateView::read(session, Guest(CONTROLLER74))?;
         let menu = machine.menu()?.map(|menu| Menu { menu: menu.menu_id, setting: menu.setting_id, cursor: menu.cursor });
         let bind = |suffix: &str| SideFile::bind(output, &format!("{name}{suffix}"));
         self.visible.push(VisibleCapture {

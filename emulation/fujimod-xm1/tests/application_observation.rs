@@ -3,7 +3,7 @@ use fujimod_xm1::application_observation::{
     ByteView, CodeObservation, Control, CoreIdentity, DynamicTarget, Evidence, Expected, FirstReady, GraphicsState, hit_observers, InputIndex,
     InputPurpose, Menu, PairField, Publication, RawView, ReadinessIndex, ReadinessKind, ReadinessSample, Recorder, Registers, RenderViews,
     RoleEvidence, RoleSummary, RouteInput, Sample, SampleIndex, ScopeObservation, SideFile, SiteRef, Task1, TaskTableViews, UiWorkViews,
-    VisibleCapture, Observers, EVIDENCE, Scenario as RouteScenario,
+    VisibleCapture, Observers, EVIDENCE, Scenario as RouteScenario, ControllerState, ControllerStateView,
 };
 use fujimod_xm1::composed_catalog::{
     Application, ApplicationProblem, CatalogRefusal, CodeLabel, CodeWord, Contract, Core, Domain, Instructions, Pc, QueueLabel, Role, Schema,
@@ -610,9 +610,12 @@ fn visible(directory: &std::path::Path, inputs: &[RouteInput], memory: &Memory) 
             "bytes_completed": counter * 10, "acknowledgments": counter}});
         let graphics = SideFile::replace(directory, &format!("{name}.graphics.json"), &serde_json::to_vec(&save).unwrap()).unwrap();
         let instructions = input.map_or(Instructions(press(15) - 1_000_000), |id| inputs[id.0 as usize].settled.unwrap());
+        let mut state = memory.clone();
+        state.set(0x146761c, if index == 3 { 4 } else { 24 });
         VisibleCapture {
             input, instructions, probe, menu: Some(Menu { menu: 1, setting: 5, cursor: if index == 1 { 3 } else { 2 } }),
-            controller: memory.view(0x944580, 20), controller74: memory.view(0x1467588 + 74 * 4, 1), png, planes, scanout, graphics,
+            controller: memory.view(0x944580, 20),
+            controller74: ControllerStateView { address: Guest(0x146761c), view: state.view(0x146761c, 1) }, png, planes, scanout, graphics,
         }
     }).collect()
 }
@@ -1072,7 +1075,7 @@ fn live_view_uses_the_last_input_sample_state_halfword_with_a_stale_menu_pointer
     let mut scenario = Scenario::new();
     let capture = &scenario.section().visible[3];
     assert_eq!(capture.menu, Some(Menu { menu: 1, setting: 5, cursor: 2 }));
-    assert_eq!(capture.controller74.word(0x1467588 + 74 * 4), Some(0));
+    assert_eq!(capture.controller74.value(), Some(ControllerState(4)));
     assert_eq!(scenario.check(), Ok(()));
     let sample = scenario.evidence.samples.iter_mut().rev().find(|sample| sample.input == Some(InputIndex(17))).unwrap();
     let view = sample.state.iter_mut().find(|view| view.word(0x1467588 + 74 * 2).is_some()).unwrap();
@@ -1087,4 +1090,24 @@ fn live_view_uses_the_last_input_sample_state_halfword_with_a_stale_menu_pointer
         bytes.0[offset..offset + 4].copy_from_slice(&24u32.to_le_bytes());
     }
     assert_eq!(scenario.refusal(), Some(ApplicationCheck::Route));
+}
+
+#[test]
+fn a_live_view_capture_must_agree_with_its_last_state_sample() {
+    let mut scenario = Scenario::new();
+    let mut state = Memory::default();
+    state.set(0x146761c, 24);
+    scenario.receipt.application.as_mut().unwrap().visible[3].controller74 =
+        ControllerStateView { address: Guest(0x146761c), view: state.view(0x146761c, 1) };
+    assert_eq!(scenario.refusal(), Some(ApplicationCheck::Route));
+}
+
+#[test]
+fn captured_controller_state_excludes_the_neighboring_halfword() {
+    let mut scenario = Scenario::new();
+    let mut state = Memory::default();
+    state.set(0x146761c, 0x0018_0004);
+    scenario.receipt.application.as_mut().unwrap().visible[3].controller74 =
+        ControllerStateView { address: Guest(0x146761c), view: state.view(0x146761c, 1) };
+    assert_eq!(scenario.check(), Ok(()));
 }

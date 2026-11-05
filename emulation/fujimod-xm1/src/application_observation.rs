@@ -113,6 +113,33 @@ impl ByteView {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct ControllerState(pub u16);
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControllerStateView {
+    pub address: Guest,
+    pub view: RawView,
+}
+
+impl ControllerStateView {
+    pub fn read(session: &Session, address: Guest) -> Result<Self, String> {
+        if address.0 % 2 != 0 {
+            return Err("a controller state address is not halfword-aligned".into());
+        }
+        Ok(Self { address, view: RawView::read(session, Guest(address.0 & !3), 1)? })
+    }
+
+    pub fn value(&self) -> Option<ControllerState> {
+        (self.address.0 % 2 == 0).then(|| self.view.word(self.address.0 & !3)
+            .map(|word| ControllerState((word >> (8 * (self.address.0 & 3))) as u16))).flatten()
+    }
+}
+
+const CONTROLLER74: u32 = 0x146761c;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Registers {
     pub r: [Word; 13],
@@ -662,7 +689,7 @@ pub struct VisibleCapture {
     pub menu: Option<Menu>,
     /// The controller record at `0x944580`.
     pub controller: RawView,
-    pub controller74: RawView,
+    pub controller74: ControllerStateView,
     pub png: SideFile,
     pub planes: SideFile,
     pub scanout: SideFile,
