@@ -1,6 +1,7 @@
 ENTRY(record_store_entry_open)
 INCLUDE imports.ld
 SECTIONS {
+  .compiler_builtins 0 : { *compiler_builtins*(.text* .rodata* .data* .bss*) }
   .entry_open 0x6ac2b4 : { KEEP(*(.text.record_store_entry_open)) }
   .run0 0x6ac2b8 : { KEEP(*(.text.record_store_zero)) }
   .entry_register 0x6ac328 : { KEEP(*(.text.record_store_entry_register)) }
@@ -30,6 +31,7 @@ ASSERT(SIZEOF(.run5) <= 304, "record run5 overflow")
 ASSERT(SIZEOF(.run6) <= 740, "record run6 overflow")
 ASSERT(SIZEOF(.run7) <= 4952, "record run7 overflow")
 ASSERT(SIZEOF(.data) == 0 && SIZEOF(.bss) == 0, "record store has writable statics")
+ASSERT(SIZEOF(.compiler_builtins) == 0, "record store links compiler-builtins")
 ASSERT(record_store_entry_open == 0x6ac2b4, "open veneer moved")
 ASSERT(record_store_entry_register == 0x6ac328, "register veneer moved")
 ASSERT(record_store_entry_close == 0x6ac478, "close veneer moved")

@@ -433,15 +433,15 @@ Each batch directory holds the case files, every case's native result (about 170
 
 The nine stock entries occupy `[0x6ac2b4,0x6ae114)`. Minimal ARM branch veneers consume four bytes each; the remaining runs are 112, 332, 76, 776, 428, 304, 740, 4,952 and 20 bytes, totaling 7,740. Eight-byte veneers leave 7,704 bytes. The design's final 24-byte run includes the last entry and is not wholly free.
 
-The compact core at `c396a578` occupies 6,368 bytes of text and read-only data, without writable sections. The split carrier uses 4-byte entry branches and places 16, 272, 472, 376, 256, 596 and 4,380 bytes in runs 0, 1, 3, 4, 5, 6 and 7 respectively. Run 2 stays unused. Linker assertions bound every used run and every veneer address; the flat image includes gaps and ends at `0x6ae114`. No RAM-push or image5-tail fallback is required.
+The builtin-free core at `9b0c7c90` occupies 5,372 bytes of text and read-only data, without writable sections. The split carrier uses 4-byte entry branches and places 16, 244, 484, 392, 256, 596 and 3,384 bytes in runs 0, 1, 3, 4, 5, 6 and 7 respectively. Run 2 stays unused. Linker assertions bound every used run and every veneer address; the flat image includes gaps and ends at `0x6ae114`. No RAM-push or image5-tail fallback is required.
 
-The default/control-1..9 core byte counts are 6,368 / 6,360 / 6,328 / 6,368 / 6,268 / 6,252 / 6,352 / 6,300 / 6,368 / 6,344; all produce the same 7,776-byte flat extent. The largest used run has at least 572 bytes free.
+The default/control-1..9 core byte counts are 5,372 / 5,364 / 5,332 / 5,372 / 5,272 / 5,256 / 5,356 / 5,304 / 5,372 / 5,348; all produce the same 7,776-byte flat extent. The largest used run has at least 1,568 bytes free.
 
 `//replacement/record_store_carrier:record-store-artifact` admits the linked span and scans canonical images 4, 5 and plain for references to retired code, wrappers/slots, cache buffers, cache ages/tags and saved program destinations. It rejects resolved A32 branches, MOVW/MOVT pairs, ADR and PC-relative literal/address references from the pinned decomp function ranges. The nine retained entry addresses remain callable. Its contract records the separate raw aligned-word census by image and retired range, classified as inside a function range or data/unmapped. Those numeric coincidences and unresolved computed references remain obligations for the cutover pair's fetch/access traps; a function range is not a complete code/data proof.
 
 `//replacement/record_store_carrier:stage-record-store` pins the DAT, decoded images and the `55436fc85c` decomp index, refuses resolved references, confines replacement bytes to the span and uses the shared image4 stager to recompress and read back one candidate DAT. Its contract binds source, linked code, symbols, candidate DAT, decoded image4 and the function index by SHA-256.
 
-The final host staging run (`94ecaac0-18f8-4231-97eb-a77bf4833635`, core `c396a578`) emitted candidate DAT SHA-256 `224aa110efa7e1ab74b98b81245a741cc6b0ed65353dc37dcd82b21316daf565` with zero refused resolved references. Its raw census retains 172 candidates: image4 43 (6 inside function ranges), image5 99 (11 inside function ranges), plain 30 (3 inside function ranges). All are cache-buffer/tag numeric candidates; none names the retired code or wrapper/slot regions. No full-system cutover run is implied.
+The builtin-free host staging run (`8d6d3ad0-6010-4a48-a82c-2c5e002f4c99`, core `9b0c7c90`) emitted candidate DAT SHA-256 `740fa351c7c41fff783742e54cab9db8defbdce1a9106f1a6c47ec3fc5245a03` with zero refused resolved references. Its raw census retains 172 candidates: image4 43 (6 inside function ranges), image5 99 (11 inside function ranges), plain 30 (3 inside function ranges). All are cache-buffer/tag numeric candidates; none names the retired code or wrapper/slot regions. No full-system cutover run is implied.
 
 ```sh
 devenv shell -- bazel build --jobs=2 //replacement/record_store_carrier:all
@@ -450,6 +450,8 @@ devenv shell -- bazel run --jobs=2 //replacement/record_store_carrier:stage-reco
 ```
 
 The default candidate is `:record-store-image`; each `:record-store-image-control-N` enables exactly one of the nine control features. Every target emits `.elf`, `.bin`, `.symbols` and `.disasm`. The `.bin` is 7,776 bytes at `0x6ac2b4`, suitable for the native-case code region; the symbols name each 4-byte veneer as `record_store_entry_NAME`.
+
+The linker collects reachable `compiler_builtins` archive-member sections in a forbidden output section and asserts it is empty. This rejects transitive compiler-builtins code before emitting any candidate artifact.
 
 ## Owned menu engine, increment 1 (#128)
 
