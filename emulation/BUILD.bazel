@@ -3534,3 +3534,23 @@ haskell_test(
         "//replacement/rtos_own_first/stage:own-first-artifact",
     ],
 )
+
+haskell_binary(
+    name = "record-store-pair-observe",
+    srcs = ["RecordStorePairObserverMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":emulator-usb",
+        ":fujimod-paths",
+        ":property-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:text",
+        "//host:vector",
+    ],
+)

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
+use crate::trace::calls::{Calls, Capture};
 
 const SCHEMA: u32 = 1;
 const WATCH_LIMIT: usize = 1 << 20;
@@ -25,6 +26,12 @@ struct RawSpec {
     hit_limit: NonZeroUsize,
     write_ranges: Vec<[u32; 2]>,
     watch_limit: usize,
+    #[serde(default)]
+    read_ranges: Vec<[u32; 2]>,
+    #[serde(default)]
+    fetch_ranges: Vec<[u32; 2]>,
+    #[serde(default)]
+    captures: BTreeMap<String, Capture>,
 }
 
 pub struct Spec {
@@ -32,6 +39,9 @@ pub struct Spec {
     hit_limit: NonZeroUsize,
     write_ranges: Vec<[u32; 2]>,
     watch_limit: usize,
+    read_ranges: Vec<[u32; 2]>,
+    fetch_ranges: Vec<[u32; 2]>,
+    captures: BTreeMap<u32, Capture>,
 }
 
 impl Spec {
@@ -55,7 +65,18 @@ impl Spec {
         if !(1..=WATCH_LIMIT).contains(&raw.watch_limit) {
             return Err(format!("reset observation watch limit must be 1..{WATCH_LIMIT}"));
         }
-        Ok(Self { sites, hit_limit: raw.hit_limit, write_ranges: raw.write_ranges, watch_limit: raw.watch_limit })
+        for range in raw.read_ranges.iter().chain(&raw.fetch_ranges) {
+            if range[0] >= range[1] { return Err("invalid reset read/fetch range".into()); }
+        }
+        let captures = raw.captures.into_iter().map(|(site, capture)| {
+            let address = u32::from_str_radix(site.strip_prefix("0x").ok_or("capture site lacks 0x")?, 16)
+                .map_err(|_| "capture site is not hexadecimal")?;
+            if !sites.contains_key(&address) { return Err("capture site is not armed"); }
+            Ok((address, capture))
+        }).collect::<Result<BTreeMap<_, _>, _>>()?;
+        Calls::validate(&captures)?;
+        Ok(Self { sites, hit_limit: raw.hit_limit, write_ranges: raw.write_ranges, watch_limit: raw.watch_limit,
+            read_ranges: raw.read_ranges, fetch_ranges: raw.fetch_ranges, captures })
     }
 
     pub fn sites(&self) -> &BTreeMap<u32, String> {
@@ -111,6 +132,7 @@ pub struct ResetObserver {
     maps: Vec<MemoryMap>,
     watch: Option<Box<MemoryWatch>>,
     record: Record,
+    region_ranges: Vec<WatchRange>,
 }
 
 fn regions(machine: &Machine, ranges: &[WatchRange]) -> Result<Vec<Region>, String> {
@@ -142,9 +164,17 @@ impl ResetObserver {
         }
         machine.traces.bound_hits(spec.hit_limit);
         machine.traces.arm(&machine.session, spec.sites.clone())?;
-        let ranges: Vec<_> = spec.write_ranges.iter().map(|range| WatchRange {
+        machine.traces.calls.captures = spec.captures.clone();
+        let region_ranges: Vec<_> = spec.write_ranges.iter().map(|range| WatchRange {
             start: u64::from(range[0]), end: u64::from(range[1]), kinds: WatchKinds::WRITES,
         }).collect();
+        let ranges = region_ranges.iter().cloned()
+            .chain(spec.read_ranges.iter().map(|range| WatchRange {
+                start: u64::from(range[0]), end: u64::from(range[1]), kinds: WatchKinds::CPU_READ,
+            }))
+            .chain(spec.fetch_ranges.iter().map(|range| WatchRange {
+                start: u64::from(range[0]), end: u64::from(range[1]), kinds: WatchKinds::CPU_FETCH,
+            })).collect();
         let mut observer = Self {
             maps: run::memory_maps(&machine.document)?,
             limit: spec.watch_limit,
@@ -152,10 +182,11 @@ impl ResetObserver {
             record: Record {
                 schema: SCHEMA,
                 reset: Reset { instructions: 0, snapshot_sha256: sha256(&bytes), snapshot_bytes: bytes.len() },
-                regions_at_reset: regions(machine, &ranges)?,
+                regions_at_reset: regions(machine, &region_ranges)?,
                 segments: Vec::new(),
             },
             ranges,
+            region_ranges,
         };
         observer.start_watch(machine)?;
         Ok(observer)
@@ -177,7 +208,7 @@ impl ResetObserver {
             instructions: machine.instructions(),
             hits_end: machine.traces.hits.len(),
             watch: state,
-            regions: regions(machine, &self.ranges)?,
+            regions: regions(machine, &self.region_ranges)?,
         });
         if phase != AttachPhase::Attached {
             self.start_watch(machine)?;

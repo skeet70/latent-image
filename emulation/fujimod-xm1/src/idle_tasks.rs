@@ -2032,6 +2032,7 @@ mod tests {
         let hit = Hit {
             site: "instruction".into(), address: format!("{:#x}", WFI.0), core: 1, instructions: 42,
             registers: BTreeMap::new(), sp: "0x0".into(), lr: "0x0".into(), cpsr: 0x53, code_word: None, memory: Vec::new(),
+            observation: None,
         };
         let mut cursor = 0;
         assert_eq!(inspect_watch(&raw, &mut cursor, &[hit], &mut producer).unwrap(), 1);

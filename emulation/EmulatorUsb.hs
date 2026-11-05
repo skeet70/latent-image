@@ -10,6 +10,7 @@ module EmulatorUsb
   , emulatorUsbApi
   , BridgeExchange
   , bridgeUsbApi
+  , emulatorBridgeCommand
   , emulatorTraceSites
   , emulatorTraceSitesReading
   , TraceHit (..)
@@ -151,6 +152,9 @@ rpc = bridgeRpc . exchangeLine
 
 watchRpc :: Emulator -> Value -> IO Value
 watchRpc = bridgeWatchRpc . exchangeLine
+
+emulatorBridgeCommand :: Emulator -> Value -> IO Value
+emulatorBridgeCommand emulator request = Object <$> rpc emulator request
 
 bridgeWatchRpc :: BridgeExchange -> Value -> IO Value
 bridgeWatchRpc exchange request = decodeBridgeWatchLine <$> exchange (encode request)

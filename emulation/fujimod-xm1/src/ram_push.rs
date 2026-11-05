@@ -343,6 +343,7 @@ enum Request {
         #[serde(default)] views: WatchViews,
         #[serde(default)] write_ranges: Vec<[u64; 2]>,
         #[serde(default)] fetch_ranges: Vec<[u64; 2]>,
+        #[serde(default)] read_ranges: Vec<[u64; 2]>,
     },
     WatchState,
     WatchEnd,
@@ -489,7 +490,7 @@ struct Server {
     pending_capture: Option<PendingCapture>,
     capture_evidence_error: Option<String>,
     /// In-memory guest snapshots by client name.
-    snapshots: BTreeMap<SnapshotName, Vec<u8>>,
+    snapshots: BTreeMap<SnapshotName, (Vec<u8>, fujimod_xm1::trace::calls::Calls)>,
 }
 
 /// About 120 MB per held snapshot of the X-M1 run document.
@@ -908,6 +909,8 @@ impl Server {
         sites.extend(requested.iter().map(|(address, label)| (*address, label.clone())));
         let count = sites.len();
         let machine = &mut self.bridge.machine;
+        sites.extend(machine.traces.sites.iter().filter(|(_, label)| label.as_str() == "call-return")
+            .map(|(address, label)| (*address, label.clone())));
         machine.traces.arm(&machine.session, sites)?;
         machine.traces.stop_labels = [RENDEZVOUS_LOCKED.to_owned()].into();
         if !requested.is_empty() {
@@ -919,11 +922,15 @@ impl Server {
     /// Returns the terminal stop the restored guest state replaced. After a stop the R4F guard
     /// restarts empty: its entered-block set holds blocks the refusal left undecoded.
     fn restore_snapshot(&mut self, name: &SnapshotName) -> Result<Option<String>, String> {
-        let bytes = self.snapshots.get(name).ok_or_else(|| format!("snapshot {} is not held", name.0))?;
+        let (bytes, calls) = self.snapshots.get(name).ok_or_else(|| format!("snapshot {} is not held", name.0))?;
         let machine = &mut self.bridge.machine;
         let snapshot = machine.session.import_snapshot(bytes)?;
         machine.disarm()?;
         machine.session.restore(&snapshot)?;
+        machine.traces.calls = calls.clone();
+        for address in machine.traces.calls.return_sites() {
+            machine.traces.sites.entry(address).or_insert_with(|| "call-return".into());
+        }
         let cleared = machine.failure.take();
         if cleared.is_some() {
             machine.guard = Default::default();
@@ -1165,7 +1172,7 @@ impl Server {
                 let read = self.bridge.machine.read_nand(first, count)?;
                 json!({"first": read.first.0, "count": read.count.get(), "data": encode_hex(&read.data), "spare": encode_hex(&read.spare)})
             }
-            Request::WatchBegin { ranges, limit, views, write_ranges, fetch_ranges } => {
+            Request::WatchBegin { ranges, limit, views, write_ranges, fetch_ranges, read_ranges } => {
                 if self.bridge.machine.traces.modal_observation_active() {
                     return Err("active modal observation refuses memory-watch replacement".into());
                 }
@@ -1175,18 +1182,18 @@ impl Server {
                 if self.preservation.is_some() {
                     return Err("a preservation observation conflicts with memory watch".into());
                 }
-                if ranges.is_empty() || ranges.len() > 8
+                if ranges.is_empty() || ranges.len() > 256
                     || !(1..=1 << 20).contains(&limit)
                     || ranges.iter().any(|range| range[0] >= range[1] || range[1] > u32::MAX as u64)
                 {
                     return Err("watch-begin requires bounded 32-bit ranges and a positive record limit".into());
                 }
                 match views {
-                    WatchViews::Observe if !write_ranges.is_empty() || !fetch_ranges.is_empty() =>
+                    WatchViews::Observe if !write_ranges.is_empty() || !fetch_ranges.is_empty() || !read_ranges.is_empty() =>
                         return Err("classified write/fetch ranges require fixed views".into()),
                     WatchViews::Fixed => {
-                        let mut classes: Vec<_> = write_ranges.iter().chain(&fetch_ranges).copied().collect();
-                        if classes.is_empty() || classes.len() > 16
+                        let mut classes: Vec<_> = write_ranges.iter().chain(&fetch_ranges).chain(&read_ranges).copied().collect();
+                        if classes.is_empty() || classes.len() > 256
                             || classes.iter().any(|range| range[0] >= range[1] || range[1] > u32::MAX as u64) {
                             return Err("fixed watch requires nonempty bounded write/fetch classes".into());
                         }
@@ -1210,7 +1217,8 @@ impl Server {
                         ranges.iter().map(|range| (range[0], range[1])).collect(), limit, maps)?,
                     WatchViews::Fixed => self.bridge.machine.session.board.memory_watch_begin_classified(
                         write_ranges.into_iter().map(|range| WatchRange { start: range[0], end: range[1], kinds: WatchKinds::WRITES })
-                            .chain(fetch_ranges.into_iter().map(|range| WatchRange { start: range[0], end: range[1], kinds: WatchKinds::CPU_FETCH })).collect(),
+                            .chain(fetch_ranges.into_iter().map(|range| WatchRange { start: range[0], end: range[1], kinds: WatchKinds::CPU_FETCH }))
+                            .chain(read_ranges.into_iter().map(|range| WatchRange { start: range[0], end: range[1], kinds: WatchKinds::CPU_READ })).collect(),
                         limit, maps, ViewPolicy::Fixed)?,
                 };
                 let acknowledgement = match views {
@@ -1322,7 +1330,7 @@ impl Server {
                 let bytes = exported?;
                 let response = json!({"name": name, "bytes": bytes.len(), "instructions": machine.instructions(),
                     "menu": menu_value(machine.menu()?)});
-                self.snapshots.insert(name, bytes);
+                self.snapshots.insert(name, (bytes, machine.traces.calls.clone()));
                 response
             }
             Request::SnapshotRestore { name } => {
@@ -2399,6 +2407,26 @@ mod tests {
             "reads": {"0x00000008": [[0, 4]]}}))).is_err());
         assert!(server.handle(request(json!({"command": "trace-sites", "sites": {"0x00000004": "loop"},
             "reads": {"0x00000004": [[0, 0]]}}))).is_err());
+    }
+
+    #[test]
+    fn reset_capture_records_arguments_and_dynamic_caller_return() {
+        let mut server = server(&[0xe3a01018, 0xeb000001, 0xeafffffe, 0, 0xe3a0002a, 0xe12fff1e, 0x12345678]);
+        let spec = ResetObservationSpec::parse(br#"{"schema":1,"sites":{"0x10":"entry"},"hit_limit":16,
+            "write_ranges":[[24,28]],"read_ranges":[[24,28]],"fetch_ranges":[[16,24]],"watch_limit":64,
+            "captures":{"0x10":{"entry":[{"base":{"register":1},"count":4}],
+            "returns":[{"base":{"register":1},"count":4}]}}}"#).unwrap();
+        let mut observer = ResetObserver::begin(&mut server.bridge.machine, &spec).unwrap();
+        assert_eq!(server.bridge.machine.run(100), RunOutcome::Completed, "{:?}", server.bridge.machine.failure);
+        observer.boundary(&server.bridge.machine, AttachPhase::Attached).unwrap();
+        let record = serde_json::to_value(observer.finish().unwrap()).unwrap();
+        assert_eq!(record["reset"]["instructions"], 0);
+        let hits = serde_json::to_value(server.bridge.machine.traces.hits.iter().filter(|hit| hit.core == 0).collect::<Vec<_>>()).unwrap();
+        assert_eq!(hits[0]["observation"]["reads"][0]["bytes"], "78563412");
+        assert_eq!(hits[1]["observation"]["event"], "return");
+        assert_eq!(hits[1]["observation"]["site"], 16);
+        assert_eq!(hits[1]["registers"]["r0"], "0x2a");
+        assert_eq!(hits[1]["observation"]["reads"][0]["bytes"], "78563412");
     }
 
     #[test]
