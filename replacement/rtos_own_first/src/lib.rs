@@ -12,16 +12,11 @@ compile_error!("select one of feature=\"domain-a\" or feature=\"domain-b\"");
 #[cfg(all(feature = "domain-a", feature = "domain-b"))]
 compile_error!("feature=\"domain-a\" and feature=\"domain-b\" are exclusive");
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
-#[repr(transparent)]
-pub struct GuestAddress(pub u32);
+#[allow(unused_attributes)]
+#[path = "../../rtos_layout/src/lib.rs"]
+pub mod layout;
 
-impl GuestAddress {
-    #[inline(always)]
-    pub const fn offset(self, bytes: u32) -> Self {
-        Self(self.0.wrapping_add(bytes))
-    }
-}
+pub use layout::{Domain, DomainWords, GuestAddress, Task, TaskFlags};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(transparent)]
@@ -88,55 +83,11 @@ pub struct TaskId(pub u32);
 #[repr(transparent)]
 pub struct SystemTime(pub u32);
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Domain {
-    A,
-    B,
-}
-
-/// Stock data words of one loader.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct DomainWords {
-    /// Nonzero while a handler runs.
-    pub handler_context: GuestAddress,
-    pub current_task: GuestAddress,
-    pub dispatch_enabled: GuestAddress,
-    pub timer_base: GuestAddress,
-    pub time_offset: GuestAddress,
-    /// Task record 0; records are 56 bytes.
-    pub task_table: GuestAddress,
-}
-
-impl Domain {
-    pub const fn words(self) -> DomainWords {
-        match self {
-            Domain::A => DomainWords {
-                handler_context: GuestAddress(0x4005_45a4),
-                current_task: GuestAddress(0x4005_4760),
-                dispatch_enabled: GuestAddress(0x4005_4764),
-                timer_base: GuestAddress(0x4005_476c),
-                time_offset: GuestAddress(0x4005_4774),
-                task_table: GuestAddress(0x4005_ff0c),
-            },
-            Domain::B => DomainWords {
-                handler_context: GuestAddress(0x400e_4564),
-                current_task: GuestAddress(0x400e_4720),
-                dispatch_enabled: GuestAddress(0x400e_4724),
-                timer_base: GuestAddress(0x400e_472c),
-                time_offset: GuestAddress(0x400e_4734),
-                task_table: GuestAddress(0x400e_fecc),
-            },
-        }
-    }
-}
-
 #[cfg(feature = "domain-a")]
 pub const DOMAIN: Domain = Domain::A;
 #[cfg(feature = "domain-b")]
 pub const DOMAIN: Domain = Domain::B;
 
-const TASK_FLAGS_BYTE: u32 = 0xe;
-const TASK_FLAG_BIT2: u8 = 0x4;
 const INVERSE_OF_7: u32 = 0xb6db_6db7;
 
 pub trait Machine {
@@ -204,11 +155,12 @@ pub fn task_id(table: GuestAddress, task: GuestAddress) -> TaskId {
 /// +0x60
 #[inline(always)]
 pub fn slot_60<M: Machine>(m: &M, w: &DomainWords) -> Flag {
-    let task = m.load_word(w.current_task);
+    let task = m.load_word(w.running);
     if task == 0 {
         return Flag(1);
     }
-    Flag::from_bool(m.load_byte(GuestAddress(task).offset(TASK_FLAGS_BYTE)) & TASK_FLAG_BIT2 == 0)
+    let flags = TaskFlags(m.load_byte(Task(GuestAddress(task)).flags()));
+    Flag::from_bool(!flags.contains(TaskFlags::EXCEPTION_ENABLED))
 }
 
 /// +0xfc
@@ -233,7 +185,7 @@ pub fn slot_100<M: Machine>(m: &M, w: &DomainWords, now: GuestAddress) -> Servic
 #[inline(always)]
 pub fn slot_128<M: Machine>(m: &M, w: &DomainWords, id: GuestAddress) -> ServiceStatus {
     masked_service(m, w, Context::Task, || {
-        let task = GuestAddress(m.load_word(w.current_task));
+        let task = GuestAddress(m.load_word(w.running));
         m.store_word(id, task_id(w.task_table, task).0);
     })
 }
@@ -242,7 +194,7 @@ pub fn slot_128<M: Machine>(m: &M, w: &DomainWords, id: GuestAddress) -> Service
 #[inline(always)]
 pub fn slot_12c<M: Machine>(m: &M, w: &DomainWords, id: GuestAddress) -> ServiceStatus {
     masked_service(m, w, Context::Handler, || {
-        let task = m.load_word(w.current_task);
+        let task = m.load_word(w.running);
         let value = if task == 0 { TaskId(0) } else { task_id(w.task_table, GuestAddress(task)) };
         m.store_word(id, value.0);
     })
