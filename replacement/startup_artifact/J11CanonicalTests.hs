@@ -80,6 +80,6 @@ main = do
   check "pump frame follows owned actor SP" (all (\(WriteRange _ _ high) -> high == 0xa4cde0) pumpWrites)
   (dat,observed) <- stageComposition tools scratch source composed
   check "packaged record5 decodes to composed image5" (targetOf observed Image5 == targetOf (compositionTargets composed) Image5)
-  check "image4 remains canonical" (targetOf observed Image4 == targetOf (canonicalTargets source) Image4)
+  check "image4 contains only composed producer edits" (targetOf observed Image4 == targetOf (compositionTargets composed) Image4)
   writeOutputs output dat observed (J.object ["qualification" J..= ("host-composition-only" :: String), "application_observer_qualified" J..= False, "semantic_sites" J..= T1.semanticSites artifact])
   putStrLn "J11 stager host checks passed; application observer qualification not claimed"
