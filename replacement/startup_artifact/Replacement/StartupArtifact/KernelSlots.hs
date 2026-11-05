@@ -6,6 +6,7 @@ module Replacement.StartupArtifact.KernelSlots
   ( footprint, CodeImage (..), codeWord
   , Exits, walkAbi, changedState, differingState
   , DirectCall (..), directCalls, SlotCall (..), slotCalls, rootSlotAt
+  , directImageCalls, slotImageCalls
   , RootTargets, rootTargets, publishedRows, rootRows, Entered (..), deadAfter, liveAfter
   ) where
 
@@ -276,11 +277,19 @@ data DirectCall = DirectCall { directSite :: Word32, directTarget :: Word32, dir
 
 -- | Every aligned word of the spans, read from the targets, that decodes to a B or BL into the carriers from outside them.
 directCalls :: (Target -> B.ByteString) -> [Span] -> [Span] -> [DirectCall]
-directCalls bytesOf spans carriers =
+directCalls bytesOf spans = directImageCalls
+  [CodeImage start (B.take (fromIntegral (end - start)) (B.drop (fromIntegral (start - targetBase owner)) (bytesOf owner)))
+  | Span owner (Guest start) (Guest end) <- spans]
+
+directImageCalls :: [CodeImage] -> [Span] -> [DirectCall]
+directImageCalls images carriers =
   [ DirectCall site target linked
-  | Span owner (Guest start) (Guest end) <- spans, site <- [alignUp start, alignUp start + 4 .. end - 4]
+  | image@(CodeImage start bytes) <- images
+  , B.length bytes >= 4
+  , let end = start + fromIntegral (B.length bytes)
+  , site <- [alignUp start, alignUp start + 4 .. end - 4]
   , not (inside site)
-  , Just word <- [codeWord (CodeImage (targetBase owner) (bytesOf owner)) site]
+  , Just word <- [codeWord image site]
   , A.Branch _ linked target <- [A.decode site word], inside target ]
   where
     inside address = any (\(Span _ (Guest low) (Guest high)) -> address >= low && address < high) carriers
@@ -293,10 +302,17 @@ data SlotCall = SlotCall { slotSite :: Word32, slotOffset :: RootSlot } deriving
 
 -- | Root-slot calls in the spans: @ldr rN,[rM,#k]@ or @movw rK,#k; ldr rN,[rM,rK]@ within the six words before @blx rN@.
 slotCalls :: (Target -> B.ByteString) -> [Span] -> [SlotCall]
-slotCalls bytesOf spans =
+slotCalls bytesOf spans = slotImageCalls
+  [CodeImage start (B.take (fromIntegral (end - start)) (B.drop (fromIntegral (start - targetBase target)) (bytesOf target)))
+  | Span target (Guest start) (Guest end) <- spans]
+
+slotImageCalls :: [CodeImage] -> [SlotCall]
+slotImageCalls images =
   [ SlotCall site offset
-  | Span target (Guest start) (Guest end) <- spans
-  , let word = codeWord (CodeImage (targetBase target) (bytesOf target))
+  | image@(CodeImage start bytes) <- images
+  , B.length bytes >= 4
+  , let word = codeWord image
+        end = start + fromIntegral (B.length bytes)
   , site <- [alignUp start, alignUp start + 4 .. end - 4], Just offset <- [slotOffsetAt word (alignUp start) site] ]
 
 -- | The root-slot offset a @blx@ at the site loads its target from, reading no word below the floor.

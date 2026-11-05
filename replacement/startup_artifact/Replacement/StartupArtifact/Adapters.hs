@@ -1359,7 +1359,8 @@ deriveKernelSlotBodies source a b (RegionsBytes regions) = do
   let carriers = concat [spans | (spans, _, _) <- domains]
       slots = concat [rows | (_, rows, _) <- domains]
       bodies = [body | (_, _, body) <- domains]
-  case slotCallerProblems targets slots published of
+  plain <- plainImage (U.parsedParts (canonicalParsed source))
+  case slotCallerProblems targets plain slots published of
     [] -> pure ()
     problems -> Left (AdapterRefused kind (T.pack (intercalate "; " problems)))
   code <- concat <$> mapM (\(Span _ (Guest low) (Guest high)) -> ownedCode kind low high) (normalizeSpans carriers)
@@ -1391,31 +1392,32 @@ deriveKernelSlotBodies source a b (RegionsBytes regions) = do
           [ "callers enter each slot in A32 in a privileged mode, SVC or SYS, the modes the native-case oracle qualified (E-RTOS-OWN-FIRST-ORACLE-150)"
           , "loader-A service boundaries admit both cores: image4 wrappers 0x72afd8 and 0x72b034 call root[0]+0x1618 at 0x72aff4 and 0x72b050 before selecting root[core], and their error paths call A +0x16c at 0x72b00c and 0x72b068 and log 0x41a34 at 0x72b01c and 0x72b078; that log calls A +0x164 at 0x41a5c and A +0x168 at 0x41b84 (canonical X-M1 1.50 image4 and loader A)"
           , "each body preserves r4-r11 and SP, returns to its entry LR and changes only the caller-saved state its facts list (replacement/startup_artifact/Replacement/StartupArtifact/KernelSlots.hs walkAbi)"
-          , "every canonical direct and root-slot caller in loader A, loader B and image 4 leaves dead the caller-saved state the owned body may leave different from stock (KernelSlots.hs deadAfter); the rule takes it that callers rely on no callee's preservation of r1-r3, r12 or the flags except a slot body's, and return results of at most 32 bits, that the root array index is a core number, and that each other root slot holds a word the canonical publisher or initializer stores"
+          , "every canonical direct and root-slot caller in loader A, loader B, image4, image5 and the plain image leaves dead the caller-saved state the owned body may leave different from stock (KernelSlots.hs deadAfter); the rule takes it that callers rely on no callee's preservation of r1-r3, r12 or the flags except a slot body's, and return results of at most 32 bits, that the root array index is a core number, and that each other root slot holds a word the canonical publisher or initializer stores"
           , "the slot semantics equal stock per slot on the oracle grid (E-RTOS-OWN-FIRST-ORACLE-150) and on the natural route (E-RTOS-OWN-FIRST-NATURAL-150)"
           , "publishers and root words are unchanged, so every published slot word names the stock entry where its owned body is linked (replacement/rtos_own_first/stage/Replacement/RtosOwnFirst/Artifact.hs:321-322)" ])
         catalog (KernelSlotFacts slots bodies)
   derivePiece source declaration (StagedOutput (OF.stagedDat staged) Nothing Nothing)
 
 -- | Every direct branch into a slot extent off its entry, and every direct or root-slot call into an owned slot
--- whose caller reads caller-saved state the owned body may leave different from stock, in loader A, loader B and
--- image 4 of the targets.
-slotCallerProblems :: TargetBytes -> [KernelSlot] -> KS.RootTargets -> [String]
-slotCallerProblems targets slots published =
+-- whose caller reads caller-saved state the owned body may leave different from stock, in loader A, loader B,
+-- image4, image5 and the plain image.
+slotCallerProblems :: TargetBytes -> PlainImage -> [KernelSlot] -> KS.RootTargets -> [String]
+slotCallerProblems targets (PlainImage (Guest plainBase) plainBytes) slots published =
   [ "the canonical branch at 0x" ++ showHex site " enters a slot extent off its entry"
   | KS.DirectCall site target _ <- direct, target `notElem` entries ]
   ++ [ "the canonical caller at 0x" ++ showHex site (" reads caller-saved state the owned body may leave different from stock (" ++ T.unpack reason ++ ")")
      | (site, reason) <- liveDirect ++ liveSlot ]
   where
     entries = [pc | KernelSlot {kernelSlotEntry = Pc pc} <- slots]
-    whole = [Span target (Guest (targetBase target)) (Guest (targetBase target + fromIntegral (B.length (targetOf targets target)))) | target <- [LoaderA, LoaderB, Image4]]
-    word address = listToMaybe [found | target <- [LoaderA, LoaderB, Image4], Just found <- [KS.codeWord (KS.CodeImage (targetBase target) (targetOf targets target)) address]]
+    images = [KS.CodeImage (targetBase target) (targetOf targets target) | target <- [LoaderA, LoaderB, Image4, Image5]]
+      ++ [KS.CodeImage plainBase plainBytes]
+    word address = listToMaybe [found | image <- images, Just found <- [KS.codeWord image address]]
     differsAt entry = concat [kernelSlotDiffers slot | slot <- slots, kernelSlotEntry slot == Pc entry]
     differsOf offset = nub (concat [kernelSlotDiffers slot | slot <- slots, kernelSlotOffset slot == offset])
     offsets = map kernelSlotOffset slots
-    direct = KS.directCalls (targetOf targets) whole (map kernelSlotExtent slots)
+    direct = KS.directImageCalls images (map kernelSlotExtent slots)
     liveDirect = [ (site, reason) | KS.DirectCall site target True <- direct, target `elem` entries
                  , Just reason <- [KS.liveAfter word entries offsets published KS.EnteredDirectly (differsAt target) (site + 4)] ]
-    liveSlot = [ (site, reason) | KS.SlotCall site offset <- KS.slotCalls (targetOf targets) whole, offset `elem` offsets
+    liveSlot = [ (site, reason) | KS.SlotCall site offset <- KS.slotImageCalls images, offset `elem` offsets
                , Just reason <- [KS.liveAfter word entries offsets published KS.EnteredThroughRoot (differsOf offset) (site + 4)] ]
 
