@@ -110,10 +110,17 @@ replace (GuestAddress base) e@(Extent (GuestAddress start) _) replacement origin
   let offset = fromIntegral (start-base) in B.take offset original <> replacement <> B.drop (offset+extentBytes e) original
 
 bodyMarker :: Window -> SymbolName
-bodyMarker window = SymbolName $ case (windowGroup window, windowSymbol window) of
-  (S2,SymbolName "xm1_rtos_scheduler_no_save") -> "__s2_select_body_end"
-  (S2,SymbolName name) -> "__s2_" ++ maybe name id (stripPrefix "xm1_rtos_scheduler_" name) ++ "_body_end"
-  (_,SymbolName name) -> "__" ++ maybe name id (stripPrefix "xm1_" name) ++ "_body_end"
+bodyMarker window = SymbolName $ case (windowGroup window, windowEntries window, windowSymbol window) of
+  (S3a,[Entry _ (ServiceTag ServiceExitTask)],_) -> "__s3a_exit_body_end"
+  (S3a,[Entry _ (ServiceTag ServiceRotateReady)],_) -> "__s3a_rotate_body_end"
+  (S3a,[Entry _ (ServiceTag ServiceInterruptRotateReady)],_) -> "__s3a_irotate_body_end"
+  (S3a,[Entry _ (ServiceTag ServiceCoreRotateReady)],_) -> "__s3a_crotate_body_end"
+  (S3a,[Entry _ (ServiceTag ServiceInterruptCoreRotateReady)],_) -> "__s3a_icrotate_body_end"
+  (S3a,[Entry _ (ServiceTag ServiceDisableDispatch)],_) -> "__s3a_disable_body_end"
+  (S3a,[Entry _ (ServiceTag ServiceEnableDispatch)],_) -> "__s3a_enable_body_end"
+  (S2,_,SymbolName "xm1_rtos_scheduler_no_save") -> "__s2_select_body_end"
+  (S2,_,SymbolName name) -> "__s2_" ++ maybe name id (stripPrefix "xm1_rtos_scheduler_" name) ++ "_body_end"
+  (_,_,SymbolName name) -> "__" ++ maybe name id (stripPrefix "xm1_" name) ++ "_body_end"
 
 admitGroup :: GroupInput -> Domain -> [Window] -> Either CutoverError [(Extent,B.ByteString)]
 admitGroup input domain windows = do
