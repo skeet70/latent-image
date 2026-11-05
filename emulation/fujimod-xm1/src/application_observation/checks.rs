@@ -288,7 +288,7 @@ pub fn code_identity(evidence: &RoleEvidence) -> Result<(), ApplicationRefusal> 
         let (word, armed) = match &sample.site {
             SiteRef::Application(label) => {
                 let site = application.site(label).ok_or_else(|| ApplicationRefusal::new(check, "unknown site"))?;
-                (site.word, site.pc(evidence.role))
+                (site.word(evidence.role), site.pc(evidence.role))
             }
             SiteRef::Queue(label) => {
                 let site = application.queue(label).ok_or_else(|| ApplicationRefusal::new(check, "unknown queue site"))?;

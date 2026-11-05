@@ -36,7 +36,12 @@ pub enum Control {
     ReadinessUnstable,
     UiWorkPending,
     FirstReadyMenu,
+    OwnedPumpSkipsPosthook,
+    StockPumpWord,
 }
+
+/// The stock pump's first word, `push {r3,r4,r11,lr}`.
+const STOCK_PUMP_ENTRY: u32 = 0xe92d4818;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "check", rename_all = "kebab-case")]
@@ -127,10 +132,11 @@ fn insert_sample(receipt: &mut Receipt, evidence: &mut Evidence, at: usize, samp
 }
 
 impl Control {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 19] = [
         Self::CanonicalInput, Self::StopClock, Self::RawAlias, Self::KernelIdentity, Self::MissingInitialization, Self::NormalizerResult,
         Self::LostCalleeSave, Self::RelabelledOlderSample, Self::RenderReadiness, Self::TruncatedPlane, Self::WatchCoverage, Self::PublishedWrite,
         Self::PacketCopy, Self::FrozenStackBound, Self::ReadinessUnstable, Self::UiWorkPending, Self::FirstReadyMenu,
+        Self::OwnedPumpSkipsPosthook, Self::StockPumpWord,
     ];
 
     pub fn name(self) -> &'static str {
@@ -152,6 +158,8 @@ impl Control {
             Self::ReadinessUnstable => "readiness-unstable",
             Self::UiWorkPending => "ui-work-pending",
             Self::FirstReadyMenu => "first-ready-menu",
+            Self::OwnedPumpSkipsPosthook => "owned-pump-skips-posthook",
+            Self::StockPumpWord => "stock-pump-word",
         }
     }
 
@@ -167,7 +175,8 @@ impl Control {
             Self::LostCalleeSave | Self::RelabelledOlderSample => Check::Handback,
             Self::RenderReadiness | Self::TruncatedPlane => Check::RenderCompletion,
             Self::WatchCoverage => Check::CaptureBound,
-            Self::PublishedWrite => Check::CodeIdentity,
+            Self::PublishedWrite | Self::StockPumpWord => Check::CodeIdentity,
+            Self::OwnedPumpSkipsPosthook => Check::HookSequence,
             Self::PacketCopy => Check::QueueProvenance,
             Self::FrozenStackBound => Check::StackContext,
             Self::ReadinessUnstable | Self::UiWorkPending => Check::Readiness,
@@ -191,12 +200,28 @@ impl Control {
                 let level = ui.depth.word(MENU_LEVEL).ok_or("no level word")?;
                 return set_word(&mut ui.depth, MENU_LEVEL, level.wrapping_add(1));
             }
+            Self::StockPumpWord => {
+                let entry = application.pump.entry.0;
+                let sample = evidence.samples.iter_mut().find(|sample| stock_of(application, sample) == Some(entry)).ok_or("no pump entry sample")?;
+                let pc = sample.pc.0;
+                return set_word(&mut sample.code, pc, STOCK_PUMP_ENTRY);
+            }
+            Self::OwnedPumpSkipsPosthook => {
+                let posthook = application.pump.calls[2];
+                let entry = position(application, evidence, application.pump.entry.0)?;
+                for stock in [posthook.site.0, posthook.continuation.0] {
+                    let at = entry + evidence.samples[entry..].iter().position(|sample| stock_of(application, sample) == Some(stock))
+                        .ok_or_else(|| format!("no sample at {stock:#x} after the pump entry"))?;
+                    remove_sample(receipt, evidence, at);
+                }
+                return Ok(());
+            }
             _ => {}
         }
         let section = receipt.application.as_mut().ok_or("the receipt has no application section")?;
         let samples = &mut evidence.samples;
         match self {
-            Self::CanonicalInput | Self::UiWorkPending | Self::FirstReadyMenu => {}
+            Self::CanonicalInput | Self::UiWorkPending | Self::FirstReadyMenu | Self::OwnedPumpSkipsPosthook | Self::StockPumpWord => {}
             Self::StopClock => samples.first_mut().ok_or("no sample")?.resume.0 += 1,
             Self::RawAlias => *samples.first_mut().ok_or("no sample")?.code.spellings[1][1].0.first_mut().ok_or("an empty view")? ^= 1,
             Self::KernelIdentity => {

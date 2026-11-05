@@ -75,6 +75,30 @@ fn word(pc: u32) -> u32 {
     if (PUMP..PUMP + 32).contains(&pc) { pump_words()[((pc - PUMP) / 4) as usize] } else { 0xe1a0_0000 | (pc & 0xfff) }
 }
 
+/// The owned pump's words: its own frame push and pop around the same calls.
+fn owned_word(pc: u32) -> u32 {
+    match pc {
+        PUMP => 0xe92d4c10,
+        _ if pc == PUMP + 24 => 0xe8bd8c10,
+        _ => word(pc),
+    }
+}
+
+/// `schema5()` with an `application-pump` piece owning the pump carrier and the owned words in the composed role.
+fn owned_pump() -> Value {
+    let mut value = schema5();
+    for site in value["application"]["sites"].as_array_mut().unwrap() {
+        let pc = u32::try_from(site["composed_pc"].as_u64().unwrap()).unwrap();
+        site["composed_word"] = json!(owned_word(pc));
+    }
+    value["pieces"].as_array_mut().unwrap().push(json!({
+        "kind": "application-pump", "areas": [], "carriers": [], "edits": [], "footprint": [], "premises": [],
+        "catalog": {"boundaries": [], "owned_code": [{"start": PUMP, "end": PUMP + 32}],
+            "writes": {"allow": [], "basis": "proved", "premise": null}, "reads": []},
+    }));
+    value
+}
+
 fn layout(domain: u8, cells: [u32; 6]) -> Value {
     json!({"domain": domain, "creation": cells[0], "task": cells[1], "ids": cells[2], "domains": cells[3], "current": cells[4], "selected": cells[5]})
 }
@@ -85,7 +109,7 @@ fn schema5() -> Value {
     let code = |label: &str, start: u32, end: u32| json!({"label": label, "start": start, "end": end, "retained_sha256": digest('a'), "composed_sha256": digest('b')});
     value["application"] = json!({
         "sites": APPLICATION_SITES.iter().map(|&(pc, kind)| json!({
-            "label": format!("app-{pc:x}"), "kind": kind, "retained_pc": pc, "composed_pc": pc, "word": word(pc),
+            "label": format!("app-{pc:x}"), "kind": kind, "retained_pc": pc, "composed_pc": pc, "retained_word": word(pc), "composed_word": word(pc),
         })).collect::<Vec<_>>(),
         "queue_sites": QUEUE_SITES.iter().map(|&pc| json!({"label": format!("queue-{pc:x}"), "pc": pc, "word": word(pc)})).collect::<Vec<_>>(),
         "task_layouts": [
@@ -171,8 +195,25 @@ fn a_pc_shared_by_a_boundary_and_an_application_site_reaches_both_and_stays_arme
 #[test]
 fn a_pump_that_does_not_call_the_hook_targets_refuses() {
     let index = APPLICATION_SITES.iter().position(|&(pc, _)| pc == PUMP + 4).unwrap();
-    assert_eq!(refused(|value| value["application"]["sites"][index]["word"] = json!(0xe1a00000u32)),
+    assert_eq!(refused(|value| value["application"]["sites"][index]["retained_word"] = json!(0xe1a00000u32)),
         CatalogRefusal::Application(ApplicationProblem::Pump));
+}
+
+#[test]
+fn the_application_pump_piece_may_own_the_pump_sites_with_the_same_decoding() {
+    let contract = parse(&owned_pump()).unwrap();
+    let entry = contract.application().unwrap().sites.iter().find(|site| site.retained_pc == Pc(PUMP)).unwrap();
+    assert_eq!((entry.word(Role::Retained), entry.word(Role::Composed)), (CodeWord(word(PUMP)), CodeWord(owned_word(PUMP))));
+    let mut other = owned_pump();
+    other["pieces"][2]["kind"] = json!("image5-producer");
+    assert_eq!(parse(&other).unwrap_err(), CatalogRefusal::Application(ApplicationProblem::SiteInPiece(Pc(PUMP))));
+    let mut hooks = owned_pump();
+    hooks["pieces"][2]["catalog"]["owned_code"] = json!([{"start": 0xbfb1b8u32, "end": PUMP + 32}]);
+    assert_eq!(parse(&hooks).unwrap_err(), CatalogRefusal::Application(ApplicationProblem::SiteInPiece(Pc(0xbfb1b8))));
+    let mut decoded = owned_pump();
+    let index = APPLICATION_SITES.iter().position(|&(pc, _)| pc == PUMP + 4).unwrap();
+    decoded["application"]["sites"][index]["composed_word"] = json!(0xe1a00000u32);
+    assert_eq!(parse(&decoded).unwrap_err(), CatalogRefusal::Application(ApplicationProblem::Pump));
 }
 
 #[test]
@@ -234,7 +275,7 @@ impl<'a> Builder<'a> {
     fn new(application: &'a Application) -> Self {
         let mut memory = Memory::default();
         for site in &application.sites {
-            memory.set(site.retained_pc.0, site.word.0);
+            memory.set(site.composed_pc.0, site.word(Role::Composed).0);
         }
         for site in &application.queue_sites {
             memory.set(site.pc.0, site.word.0);
@@ -541,8 +582,12 @@ impl Scenario {
     fn with(plans: &[Plan]) -> Self { Self::with_memory(plans, &[]) }
 
     /// `words` written over the builder's memory before any sample.
-    fn with_memory(plans: &[Plan], words: &[(u32, u32)]) -> Self {
-        let contract = parse(&schema5()).unwrap();
+    fn with_memory(plans: &[Plan], words: &[(u32, u32)]) -> Self { Self::from_contract(&schema5(), plans, words) }
+
+    fn owned() -> Self { Self::from_contract(&owned_pump(), &[Plan::Stable, Plan::Quiet], &[]) }
+
+    fn from_contract(value: &Value, plans: &[Plan], words: &[(u32, u32)]) -> Self {
+        let contract = parse(value).unwrap();
         let directory = scratch();
         let application = contract.application().unwrap();
         let mut builder = Builder::new(application);
@@ -677,9 +722,16 @@ fn the_canonical_input_control_changes_the_update_identity() {
 }
 
 #[test]
-fn the_seventeen_controls_have_distinct_names() {
+fn the_nineteen_controls_have_distinct_names() {
     let names: BTreeSet<&str> = Control::ALL.iter().map(|control| control.name()).collect();
-    assert_eq!(names.len(), 17);
+    assert_eq!(names.len(), 19);
+}
+
+#[test]
+fn an_owned_pump_passes_every_check_and_its_controls_refuse() {
+    assert_eq!(Scenario::owned().check(), Ok(()));
+    assert_eq!(Scenario::owned().control(Control::StockPumpWord).refusal(), Some(ApplicationCheck::CodeIdentity));
+    assert_eq!(Scenario::owned().control(Control::OwnedPumpSkipsPosthook).refusal(), Some(ApplicationCheck::HookSequence));
 }
 
 #[test]

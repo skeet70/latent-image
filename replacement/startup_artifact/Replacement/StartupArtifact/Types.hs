@@ -64,7 +64,7 @@ editBytes :: Edit -> B.ByteString
 editBytes (Edit _ bytes) = bytes
 
 data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup | TaskSubmission | TaskStorage
-  | IdleTask | RootTask | Image5Producer | PlainProducer
+  | IdleTask | RootTask | Image5Producer | PlainProducer | ApplicationPump
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 pieceKindName :: PieceKind -> Text
@@ -80,10 +80,11 @@ pieceKindName kind = case kind of
   RootTask -> "root-task"
   Image5Producer -> "image5-producer"
   PlainProducer -> "plain-producer"
+  ApplicationPump -> "application-pump"
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
   | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea | TaskSubmissionArea | TaskStorageArea
-  | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea
+  | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | ApplicationPumpArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 areaName :: Area -> Text
@@ -104,6 +105,7 @@ areaName area = case area of
   RootTaskArea -> "root-task"
   Image5ProducerArea -> "image5-producer"
   PlainProducerArea -> "plain-producer"
+  ApplicationPumpArea -> "application-pump"
 
 data FootprintBasis = AdmissionRead | RuntimePremise deriving (Eq, Ord, Show)
 
@@ -326,6 +328,8 @@ data PieceFacts
   | Image5ProducerFacts LinkedBytes
   -- | The linked plain producer image.
   | PlainProducerFacts LinkedBytes
+  -- | The linked application pump image.
+  | ApplicationPumpFacts LinkedBytes
   deriving (Eq, Show)
 
 data Piece = Piece
@@ -368,11 +372,11 @@ data ManifestProblem
   deriving (Eq, Show)
 
 data ApplicationProblem
-  -- | A site word overlaps the named piece's carrier.
+  -- | A site word overlaps the named piece's carrier; only pump sites may lie in an application-pump carrier.
   = SiteInCarrier PieceKind Pc
   -- | Code at the PC lies in neither image4, image5 nor the plain window.
   | OutsideImages Pc
-  -- | The composed word at a site differs from the canonical word.
+  -- | The composed word at a site outside every carrier differs from the canonical word.
   | SiteWordDiffers Pc
   | PlainWindowUnreadable
   deriving (Eq, Show)
