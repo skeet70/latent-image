@@ -87,7 +87,7 @@ unsafe fn entry<'a>(medium: &'a mut RawMedium, staging: &'a mut GuestStaging) ->
 pub unsafe extern "C" fn record_store_open(_: u32) -> i32 {
     if record_store_initialized != 0 { return -14; }
     for wrapper in &mut *ptr::addr_of_mut!(record_store_wrappers) { wrapper.active = 0; wrapper.slot = ptr::null_mut(); }
-    ptr::addr_of_mut!(record_store_state).cast::<Service<GuestCallbacks>>().write(Service::new());
+    Service::initialize_at(ptr::addr_of_mut!(record_store_state).cast::<Service<GuestCallbacks>>());
     if service().open(&mut GuestStaging).is_err() { return -14; }
     record_store_initialized = 1;
     0
@@ -108,8 +108,13 @@ pub unsafe extern "C" fn record_store_register(kind: u32, size: u32, total: u32,
 #[no_mangle]
 pub unsafe extern "C" fn record_store_close(wrapper: *mut Wrapper) {
     if slot(wrapper).is_some() {
-        let index = wrapper.offset_from(ptr::addr_of_mut!(record_store_wrappers).cast::<Wrapper>()) as usize;
-        if let Some(handle) = Handle::from_index(index) { service().close(handle); }
+        let base = ptr::addr_of_mut!(record_store_wrappers).cast::<Wrapper>();
+        for index in 0..5 {
+            if wrapper == base.add(index) {
+                if let Some(handle) = Handle::from_index(index) { service().close(handle); }
+                break;
+            }
+        }
         (*wrapper).active = 0;
         (*wrapper).slot = ptr::null_mut();
     }
@@ -157,8 +162,8 @@ pub unsafe extern "C" fn record_store_collect(wrapper: *mut Wrapper, output: *mu
 #[no_mangle]
 pub unsafe extern "C" fn record_store_read_at(kind: u32, position: u32, length: u32, output: *mut u8) -> i32 {
     let output = slice::from_raw_parts_mut(output, length as usize);
-    if record_store_initialized == 0 { output.fill(0); return -14; }
-    let Some(kind) = RecordKind::parse(kind) else { output.fill(0); return -30; };
+    if record_store_initialized == 0 { fill(output, 0); return -14; }
+    let Some(kind) = RecordKind::parse(kind) else { fill(output, 0); return -30; };
     if position >= 0x40000 { *output.as_mut_ptr() = 0; return -30; }
     let mut medium = RawMedium;
     let mut staging = GuestStaging;

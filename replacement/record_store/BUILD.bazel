@@ -1,9 +1,10 @@
 load("//replacement/toolchain:rust.bzl", "xm1_rust_staticlib")
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary")
 
 package(default_visibility = ["//visibility:public"])
 
 xm1_rust_staticlib(
-    name = "record-store-rust",
+    name = "record-store-rust-unchecked",
     src = "src/lib.rs",
     data = ["src/guest.rs", "src/lifecycle.rs"],
     crate_name = "xm1_record_store",
@@ -11,12 +12,28 @@ xm1_rust_staticlib(
 )
 
 [xm1_rust_staticlib(
-    name = "record-store-rust-control-" + str(control),
+    name = "record-store-rust-control-" + str(control) + "-unchecked",
     src = "src/lib.rs",
     data = ["src/guest.rs", "src/lifecycle.rs"],
     crate_name = "xm1_record_store",
     rustc_flags = ["'--cfg=feature=\"guest\"'", "'--cfg=feature=\"control-" + str(control) + "\"'"],
 ) for control in range(1, 10)]
+
+haskell_binary(
+    name = "archive-check",
+    srcs = ["ArchiveCheckMain.hs"],
+    main_file = "ArchiveCheckMain.hs",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = ["//host:base", "//host:containers", "//host:process"],
+)
+
+[genrule(
+    name = "record-store-rust" + variant,
+    srcs = [":record-store-rust" + variant + "-unchecked"],
+    tools = [":archive-check", "@lab_llvm//:bin/llvm-nm"],
+    outs = ["record-store-rust" + variant + ".a"],
+    cmd = "$(location :archive-check) $(location @lab_llvm//:bin/llvm-nm) $(location :record-store-rust" + variant + "-unchecked) && cp $(location :record-store-rust" + variant + "-unchecked) $@",
+) for variant in [""] + ["-control-" + str(control) for control in range(1, 10)]]
 
 genrule(
     name = "host-tests",
