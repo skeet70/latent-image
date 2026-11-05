@@ -381,6 +381,10 @@ main = do
   ok "a loader-startup piece parses its four linked images"
     (fmap manifestPieces (parseManifest (manifestWith "first-stage/entry" emptyRules ("[{\"kind\":\"loader-startup\",\"inputs\":" <> startupInputs <> "}]")))
       == Right [LoaderStartupPiece (LoaderStartupPaths (linkedPaths "a") (linkedPaths "b") (linkedPaths "d") (linkedPaths "i"))])
+  ok "a task-constructors piece parses its packed image and symbols"
+    (fmap manifestPieces (parseManifest (manifestWith "first-stage/entry" emptyRules
+      "[{\"kind\":\"task-constructors\",\"inputs\":{\"image\":\"ctors.bin\",\"symbols\":\"ctors.symbols\"}}]"))
+      == Right [SingleImagePiece TaskConstructors (LinkedPaths "ctors.bin" "ctors.symbols")])
   let unknownKey parsed = case refusal parsed of
         Just (ManifestRefused (ManifestUnknownKey _)) -> True
         _ -> False

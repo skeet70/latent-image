@@ -97,3 +97,39 @@ Implementation: a schema-5 contract (`"application": {}` in the manifest) gives 
 - Reachable cancel/failure routes; modal75 state0 BACK is not the state30 editor cancel (RIB:1804).
 - The section-3 invariant is a proposal; `RenderFacts::probe` was not built as acceptance (RIB:1788).
 - When #153 owns the loader actors, the plain-hook step's extent and constructors.
+
+## 9. J10 task-constructor contract
+
+The constructor piece preserves the thirteen stock entry addresses below. Its retained syscont call at `0xec56a0` still targets `0xd0a238`; the syscont pre-call stores and result mapping stay retained. The hook wrappers at `0x107277c`, `0x1066304` and `0x1062114` stay retained, including their nonzero-result spins. J9 keeps the initializer order and the hook table unchanged.
+
+Source: x70view `55436fc85c0560dd252b0410af6f2427fe198cd3`, inspected through `xm1-decomp lookup/show`. The six NONMATCHING constructor bodies are confirmed against `private-data/analysis/x-m1-1.50/lz/id5.dis`: USB36 lines 408110-408145, syscont lines 734237-734266, record lines 482387-482429, playback lines 461933-461962, USB7 lines 746166-746195 and saclcac lines 786623-786695. Exact C is source-inspected evidence; names and donor types do not establish the ABI.
+
+All queues use attributes `0x30` and retained queue service `0x724cdc`. Descriptor priorities below are the input priorities before the task-submission wrapper's decrement. Descriptors retain their name and actor-entry addresses; this piece owns construction, not those actors.
+
+| Constructor extent | Exactness | Task | Queue message bytes | Name | Priority / stack bytes | Actor entry | Queue/task result |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `[0x69f000,0x69f080)` | exact | 80 | `0x10` | `0x781994` | 6 / `0xc00` | `0x69f0e0` | either failure maps to -255 |
+| `[0xd0a238,0xd0a2b0)` | exact | 1 | `0x54` | `0xd0a2b0` | 6 / `0xc00` | `0xc22f60` | queue failure skips submission; return status unchanged |
+| `[0xd80d44,0xd80dd4)` | NONMATCHING | 36 | `0x20` | `0xd80dd4` | 11 / `0xc00` | `0xd81218` | either failure maps to -255 |
+| `[0xdb63e0,0xdb6458)` | NONMATCHING | 4 | `0xcc` | `0xdb6458` | 6 / `0x1000` | `0x1215480` | queue failure skips submission; return status unchanged |
+| `[0xdca604,0xdca6b0)` | NONMATCHING | 3 | `0x34` | `0xdca790` | 6 / `0x1000` | `0xe00a80` | queue failure skips submission; return status unchanged |
+| `[0xec5350,0xec53c8)` | NONMATCHING | 2 | `0x100` | `0xec53e8` | 6 / `0x1000` | `0xec2668` | queue failure skips submission; return status unchanged |
+| `[0xed10b4,0xed112c)` | NONMATCHING | 7 | `0x54` | `0xed1354` | 6 / `0xc00` | `0xecc058` | queue failure skips submission; return status unchanged |
+| `[0xed2b00,0xed2b78)` | exact | 35 | `0x0c` | `0xed3adc` | 9 / `0xc00` | `0xed2ce0` | queue failure skips submission; return status unchanged |
+| `[0xef8c90,0xef8db4)` | NONMATCHING | 43 | `0xb0` | `0xef9a8c` | 5 / `0x1000` | `0xf01bc8` | always submits; ignores submission status |
+| `[0x1055d10,0x1055d84)` | exact | 64 | `0x40` | `0x1055e04` | 6 / `0xc00` | `0x1054cf4` | queue failure skips submission; return status unchanged |
+| `[0x1062090,0x1062114)` | exact | 62 | `0xb0` | `0x1062414` | 12 / `0x1000` | `0x1064224` | always submits; queue or task failure maps to -255 |
+| `[0x1066280,0x1066304)` | exact | 55 | `0x18` | `0x1066474` | 7 / `0xc00` | `0x106ceec` | always submits; queue or task failure maps to -255 |
+| `[0x10726f4,0x107277c)` | exact | 56 | `0x10` | `0x1072960` | 12 / `0x1400` | `0x1071ca4` | queue failure skips submission; either failure maps to -255 |
+
+The task argument is zero except task80, whose argument is the original unwritten descriptor word at entry SP-24. The auxiliary classification comes from entry SP-20 except saclcac, where it comes from SP-36. The wrapper compares the word with `0xa5f0a5f0`, not with zero. The native cases must distinguish both classes and task80's argument from compiler scratch storage.
+
+The constructor-stack shim preserves those retained descriptor-tail addresses with `MaybeUninit` fields, not a new zero/default classification. Staging admits only an entry/body at the stock address, an owned frame of 48 bytes (64 for saclcac), a descriptor at the call SP+4 and no stores to the retained tail words before submission. The isolated cases independently seed the original slots with magic and nonmagic values and a task80 argument. This shim disappears when task submission accepts explicit owned auxiliary flags and a task80 argument contract replaces the retained frame residue.
+
+The linker gives each constructor its own stock-address section and load segment while packing their load addresses contiguously into one 1,852-byte input image. No gaps between the stock extents, hook wrappers, name strings or neighboring actors become writable carriers. ELF headers are not runtime load segments. The artifact admission binds the original DAT and image identities, exact extents and packed partition, closed direct-call targets, the saclcac callback site and the descriptor-frame shim.
+
+USB36 calls retained `0xd81424` only after successful submission. That exact-C service clears `[0x1469cd0,0x146a184)`, sets the argument-buffer and channel pointers and relinks twenty channel records (`app/connectivity/ptp/vendor/scan_initialize.c:17`, same decomp commit; `id5.dis:408550-408572`). Record construction first writes `0x2c` to `0x1526a7c` and `0x1526a84` to `0x1526a80`, including on queue failure. After successful submission it calls `0xe66750(3)`, `0x72d9f0` and `0xdca5dc` in that order and returns zero.
+
+Saclcac first calls `0xeea2b0`, `0xeeb55c` and `0xee8e08`, writes halfword `0x3ba2` at `0x169d374` and task id 43 at `0x169d370`, then creates its queue and submits its task. Its error count begins with whether queue creation failed; task submission status is ignored. It reads the word at `0x954dcc`, calls `0x76fce4` only when that word is zero, and adds one for a nonzero result. It then calls `0xfea408`, `0xf4c368`, `0x10546c0`, `0x1039500`, `0xeecbf4`, `0x1009974`, `0x1050efc`, `0x1051f30`, `0x1053854` and `0xef7d44` in order. Only nonzero results from `0x1039500`, `0xeecbf4` and `0x1050efc` increment the count. A non-null incoming callback receives zero or -98 according to that count, and its result becomes the constructor result. With no callback, the result is `0xef7d44`'s result. J9 supplies a null callback.
+
+Host qualification uses `//emulation:task-constructors --image4 STOCK_ID4 --image5 STOCK_ID5 --candidate-elf CANDIDATE_ELF --output NEW_DIRECTORY`, under `XM1_EMULATOR_SLOTS=1` and `//emulation:emulator-slot`. The native engine's admitted ARM subset and retained-service stubs bound the claim: these are constructor contracts in isolation, not scheduler, actor, hardware or application-readiness acceptance. Step 9 owns the composed full-system pair.

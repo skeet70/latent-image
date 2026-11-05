@@ -1479,6 +1479,12 @@ sh_binary(
 )
 
 sh_binary(
+    name = "task-constructors",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-task-constructors"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
     name = "startup-callers",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-startup-callers"],
     visibility = ["//visibility:public"],
