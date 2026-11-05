@@ -823,6 +823,16 @@ fn first_start_retains_the_eight_million_instruction_release_cap() {
 }
 
 #[test]
+fn the_release_deadline_control_reaches_route_when_capture_settled_before_the_cap() {
+    let mut scenario = Scenario::new();
+    let section = scenario.receipt.application.as_mut().unwrap();
+    let input = section.inputs.last_mut().unwrap();
+    input.settled = Some(input.debounced);
+    section.visible.last_mut().unwrap().instructions = input.debounced;
+    assert_eq!(scenario.control(Control::ReleaseDeadline).refusal(), Some(ApplicationCheck::Route));
+}
+
+#[test]
 fn an_owned_pump_passes_every_check_and_its_controls_refuse() {
     assert_eq!(Scenario::owned().check(), Ok(()));
     assert_eq!(Scenario::owned().control(Control::StockPumpWord).refusal(), Some(ApplicationCheck::CodeIdentity));
