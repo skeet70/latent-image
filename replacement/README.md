@@ -461,7 +461,7 @@ Milestone 3:
 - The Rust helpers that return a `SpecialField` are `#[inline(always)]`: out of line, the compiler returns the enum through a pointer to the caller's frame, a store through a register other than sp, which admission refuses.
 - The bracket controls patch only stub words of the candidate: `c-bracket-bank1` passes 0 instead of r6 to `xm1_set_bracketed`, and the open-after-set and close-before-set layouts are the stub's words reordered. The read-before-open control is two controls, `c-read-before-open-field` on the first class-6 id the model exposes and `c-read-before-open-pair` on 0x283, so each must fail on its own.
 - A write-only pair's largest set value is 0xff, its whole byte.
-- `c-setter-stub-exit` also runs 0xe9's bank-0 sets: the shared exit adjusts 0x34 only when r7 is 1 (`0x6302e0`), and the setter stub sets r7 to `xm1_set_bracketed`'s 0 for 0x34, so 0x34's default requests alone cannot fail; 0xe9's record-0 write at `0x6308b4` runs for every set.
+- `c-setter-stub-exit` runs 0xe9's bank-0 sets: the shared exit adjusts 0x34 only when r7 is 1 (`0x6302e0`), and the setter stub sets r7 to `xm1_set_bracketed`'s 0 for 0x34, so 0x34's default requests cannot fail; 0xe9's record-0 write at `0x6308b4` runs for every set.
 
 ## Owned menu engine, increment 1 (#128)
 

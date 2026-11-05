@@ -81,7 +81,7 @@ openAfterSetLayout (StubCallees bracketed set after) =
   [ Fixed 0xe1a00004, Fixed 0xe1a01006, CallTo bracketed, Fixed 0xe1a07000
   , Fixed 0xe1a00004, Fixed 0xe1a01005, Fixed 0xe1a02006, Fixed 0xe1a03008, CallTo set, Fixed 0xe3570000, IfZeroTo 23
   , Fixed 0xe30c0c64, Fixed 0xe3400096, CallTo openWord, Fixed 0xe30c0c64, Fixed 0xe3400096, CallTo closeWord
-  , Fixed 0xe1a00004, Fixed 0xe1a01005, Fixed 0xe1a02006, CallTo after, Fixed nopWord, Fixed nopWord, Fixed setterPopWord
+  , Fixed 0xe1a00004, Fixed 0xe1a01005, Fixed 0xe1a02006, CallTo after, Fixed movR0R0Word, Fixed movR0R0Word, Fixed setterPopWord
   ]
 closeBeforeSetLayout (StubCallees bracketed set after) =
   [ Fixed 0xe1a00004, Fixed 0xe1a01006, CallTo bracketed, Fixed 0xe1a07000, Fixed 0xe3570000, IfZeroTo 12
@@ -90,10 +90,15 @@ closeBeforeSetLayout (StubCallees bracketed set after) =
   , Fixed 0xe1a00004, Fixed 0xe1a01005, Fixed 0xe1a02006, CallTo after, Fixed setterPopWord
   ]
 
--- | `nop` and `mov r1, #0`.
-nopWord, movR1ZeroWord :: Word32
-nopWord = 0xe320f000
+-- | `mov r0, r0` and `mov r1, #0`. The native runner refuses `nop`.
+movR0R0Word, movR1ZeroWord :: Word32
+movR0R0Word = 0xe1a00000
 movR1ZeroWord = 0xe3a01000
+
+-- | `c-tail16-base`'s base: the halfword at 0x81b078 is 0x1d in image4, where 0x1e6's default at
+-- 0x81b074 is 0, or 0x5a00 under `TailWindow`.
+tailHalfMovedBase :: Word32
+tailHalfMovedBase = tailDefaultsBase + 4
 
 -- | `ldrh r0, [r12, r0]` and `ldrb r0, [r12, r0]`.
 loadHalfWord, loadByteWord :: Word32
@@ -422,8 +427,8 @@ oracle arguments runner linkedPath symbolsPath = do
             ("SPECIALS second byte " ++ hex (fromIntegral second) ++ " -> " ++ hex (fromIntegral second + 1) ++ " for " ++ propertyHex identifier))
         [] -> Left "c-pair-second-byte: no write-only pair"
       bracketControls =
-        [ bracketControl "c-open-removed" [Patch openSite (branchLinkWord openSite openWord) nopWord] (setsOn Bank0 (bracketedIds (const True)))
-            "setter stub's open call replaced by nop, for every bracketed property's bank-0 sets"
+        [ bracketControl "c-open-removed" [Patch openSite (branchLinkWord openSite openWord) movR0R0Word] (setsOn Bank0 (bracketedIds (const True)))
+            "setter stub's open call replaced by mov r0, r0, for every bracketed property's bank-0 sets"
         , stubLayoutControl "c-close-before-set" closeBeforeSetLayout (setsOn Bank0 (bracketedIds (const True)))
             "setter stub with the close call before xm1_property_set, for every bracketed property's bank-0 sets"
         , bracketControl "c-bracket-bank1" [Patch (setterStub + 4) 0xe1a01006 movR1ZeroWord] (setsOn Bank1 (bracketedIds (const True)))
@@ -434,11 +439,11 @@ oracle arguments runner linkedPath symbolsPath = do
         ]
       -- The shared exit adjusts 0x34 only when r7 is 1, which the stub replaces with
       -- `xm1_set_bracketed`'s 0; 0xe9's record-0 write at 0x6308b4 runs for every set.
-      setterExitControl = case (armsWhere stockDefaulted, [identifier | (identifier, OwnedSlotField (SlotArm _ _ _ _ MirrorRecord0)) <- armsWhere (const True)]) of
-        ((identifier, OwnedField _) : _, mirrored : _) -> Right (Control "c-setter-stub-exit" MustFail (PatchedCandidate [Patch setterPop setterPopWord (branchWord setterPop 0x630200)])
-          ([canonical (OracleCase identifier o) | o <- defaultRequests (Just Bank0)] ++ setsOn Bank0 [mirrored])
-          ("setter stub ends b 0x630200, for " ++ propertyHex identifier ++ "'s bank-0 default requests and " ++ propertyHex mirrored ++ "'s bank-0 sets"))
-        _ -> Left "c-setter-stub-exit: no field with a stock default or no record-0 mirrored slot field"
+      setterExitControl = case [identifier | (identifier, OwnedSlotField (SlotArm _ _ _ _ MirrorRecord0)) <- armsWhere (const True)] of
+        mirrored : _ -> Right (Control "c-setter-stub-exit" MustFail (PatchedCandidate [Patch setterPop setterPopWord (branchWord setterPop 0x630200)])
+          (setsOn Bank0 [mirrored])
+          ("setter stub ends b 0x630200, for " ++ propertyHex mirrored ++ "'s bank-0 sets"))
+        [] -> Left "c-setter-stub-exit: no record-0 mirrored slot field"
       stage3Controls =
         [ stockSwapControl
         , selectorControl
@@ -522,7 +527,7 @@ oracle arguments runner linkedPath symbolsPath = do
         Just (Property identifier _ _ _) -> do
           site <- accessorSite name (Accessor TailDefaultsImage Load16)
           Right (Control name MustFail (PatchedCandidate (patches site)) [RunCase variant (OracleCase identifier o) | variant <- [CanonicalFixture, TailWindow], o <- defaultOperations] (note ++ " for " ++ propertyHex identifier))
-      tailHalfBase = tailHalfControl "c-tail16-base" (\site -> basePatches site tailDefaultsBase (tailDefaultsBase + 1)) ("xm1_tail_defaults_load16 base " ++ hex tailDefaultsBase ++ " -> " ++ hex (tailDefaultsBase + 1))
+      tailHalfBase = tailHalfControl "c-tail16-base" (\site -> basePatches site tailDefaultsBase tailHalfMovedBase) ("xm1_tail_defaults_load16 base " ++ hex tailDefaultsBase ++ " -> " ++ hex tailHalfMovedBase)
       tailHalfByte = tailHalfControl "c-tail16-byte" (\site -> [Patch (site + 8) loadHalfWord loadByteWord]) "xm1_tail_defaults_load16 reads a byte"
       referenceId = if isJust (M.lookup (PropertyId 0x34) properties >>= ownedProperty) then PropertyId 0x34 else PropertyId 0xd
       ownedProperty p = case propertyClass p of
@@ -556,12 +561,13 @@ oracle arguments runner linkedPath symbolsPath = do
       runCases = nub (gridCases ++ concatMap controlCases planned)
       fxOf rc = variantFixture fx (runVariant rc)
   tailHalfSite <- maybe (failH "no xm1_tail_defaults_load16") pure (accessorAt (accessorName (Accessor TailDefaultsImage Load16)))
-  checkEncodings ((tailHalfSite, tailDefaultsBase + 1) : concat [bases | Right (_, bases) <- slotControls])
+  checkEncodings ((tailHalfSite, tailHalfMovedBase) : concat [bases | Right (_, bases) <- slotControls])
   ensure (A.decode setterPop (branchWord setterPop 0x630200) == A.Branch (A.Cond 14) False 0x630200) "b 0x630200 encoding"
   callees <- maybe (failH "the setter stub's callees are not linked") pure stubCallees
   ensure (map candidateWord (take 24 [setterStub, setterStub + 4 ..]) == layoutWords (setterStubLayout callees)) "the candidate's setter stub differs from its layout"
-  ensure (A.decode openSite (branchLinkWord openSite openWord) == A.Branch (A.Cond 14) True openWord && A.decode 0 nopWord == A.Hint (A.Cond 14)
-    && A.decode 0 movR1ZeroWord == A.DataProcessing (A.Cond 14) A.MOV False (A.Reg 1) (A.Reg 0) (A.Immediate 0)) "bl, nop and mov r1, #0 encodings"
+  ensure (A.decode openSite (branchLinkWord openSite openWord) == A.Branch (A.Cond 14) True openWord
+    && A.decode 0 movR0R0Word == A.DataProcessing (A.Cond 14) A.MOV False (A.Reg 0) (A.Reg 0) (A.ShiftedImmediate (A.Reg 0) A.LSL 0)
+    && A.decode 0 movR1ZeroWord == A.DataProcessing (A.Cond 14) A.MOV False (A.Reg 1) (A.Reg 0) (A.Immediate 0)) "bl, mov r0, r0 and mov r1, #0 encodings"
 
   -- Pass 1: stock.
   (stockBatches, stockRuns) <- runBatches runner out "stock" [stockSpec (fxOf rc) image4 properties (runLabel rc) stockFunctions (runCase rc) | rc <- runCases]

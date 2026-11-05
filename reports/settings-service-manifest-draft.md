@@ -43,6 +43,18 @@ Against the stage-1 manifest (`private-data/scratch/PropertyService/settings-man
 
 Against the stage-2 manifest `private-data/scratch/PropertyService2/settings-manifest.json`, with each path's events projected back to its stores and call targets, `replacement/media_permit/settings-manifest-events-delta.jq` lists 10 changed property records, all among the 55 ids stage 2 delegates: call results in 0x34, 0x38 and the class-3 slot arms, a field guard on `0x96b4e8` in 0x49, and step-limit cuts removed in 0xe9, 0xf6, 0xf9, 0xfa, 0x15b, 0x15c and 0x15d. The `mov rD, rM, lsl #k` rule changes exactly the records of 0xf6, 0xf9, 0xfa, 0x15b, 0x15c and 0x15d: without it their exits hold an unmodelled store at `0x630390`, `0x630478`, `0x63056c`, `0x630654`, `0x63073c` and `0x630824` (`private-data/scratch/PropertyService2/stage3-e6-sites.json`). `fieldMethod`, `pathMethod` and `inputs` are the other changed keys.
 
+`stage3-e6-sites.json` comes from a generator built with the two lines of the `A.ShiftedImmediate source A.LSL k` case of `MOV` deleted from `replacement/media_permit/PropertyFields.hs`, run as in Reproduction to `/tmp/stage3-manifest-no-e6.json`, then the source restored. This jq reproduces it byte for byte:
+
+```sh
+jq -n --slurpfile without /tmp/stage3-manifest-no-e6.json \
+  --slurpfile with private-data/scratch/PropertyService2/stage3-manifest.json '
+def sites: [.. | objects | select(.kind? == "unmodelled" and has("instruction")) | .instruction] | unique;
+($with[0].properties | map({key: .property, value: .}) | from_entries) as $w
+| {rule: "records of a manifest built with E6 (MOV rD, rM, LSL #k) disabled against stage3-manifest.json; every differing record with the unmodelled store sites each holds",
+   differing: [$without[0].properties[] | select(. != $w[.property]) | {property, unmodelled_without_e6: sites, unmodelled_with_e6: ($w[.property] | sites)}]}' \
+  > private-data/scratch/PropertyService2/stage3-e6-sites.json
+```
+
 ## Area-3 records, validation and recovery
 
 Area 3 is registered by `0x6a8abc` through `0x6ac328(3, 0x34, 0xfe, ...)` with write callback `0x6a8484` and read-validation callback `0x6a84d4`. It has two banks (media blocks `0x58` and `0x59`, `0x20000` bytes each) of 127 records of 0x34 bytes: u16 sequence at `+0x00` (15 bits; `0xffff` unwritten), two compared bytes at `+0x02`, the 0x28-byte payload at `+0x04`, row parity at `+0x2c` (bit w is the parity of protected word w, w = 0..10) and column parity at `+0x30` (XOR of the 11 protected words) over `[0x00, 0x2c)`.
