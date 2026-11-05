@@ -41,7 +41,7 @@ impl BootIdentity {
     }
 
     pub fn key(&self) -> CheckpointKey {
-        CheckpointKey(sha256(&serde_json::to_vec(self).expect("boot identity serialization")))
+        CheckpointKey(sha256(&serde_json::to_vec(&self.document()).expect("boot identity serialization")))
     }
 
     pub fn document(&self) -> serde_json::Value {

@@ -8,6 +8,8 @@ fn matching_boot_inputs_find_saved_checkpoint_and_changes_miss() {
         BootIdentity::new(run, dat, rom, nand, card, procedure)
     };
     let original = identity(b"run", b"dat", b"rom", b"nand", Some("card"), b"attach");
+    let recorded = serde_json::to_vec(&original.document()).unwrap();
+    assert_eq!(original.key().as_str(), fujimod_xm1::bridge::sha256(&recorded));
     let saved = root.join(original.key().as_str());
     std::fs::create_dir_all(&saved).unwrap();
     assert!(root.join(identity(b"run", b"dat", b"rom", b"nand", Some("card"), b"attach").key().as_str()).is_dir());

@@ -74,7 +74,7 @@ Qualification maps existing execution diagnostics onto pass within scope, behavi
 7. Request the least-risk human or hardware check that answers a named remaining question. Apply the existing camera-run procedure independently of task completion.
 8. Record the scoped decision, integrate the candidate and update the capability/dependency inventory. Remove obsolete production paths and each shim whose removal condition is met, and select the next subsystem from exposed dependencies.
 
-Reuse [Emulation.CheckpointKey](../emulation/Emulation/CheckpointKey.hs) and its existing guest-state, procedure and route identities (E-XM1-EMU-CHECKPOINT-KEYS-150). Invalidate checkpoints when initialization, executable memory or dependency assumptions change; startup changes require cold-boot scenarios. Qualification must exercise the packaged artifact and installation/boot path being claimed, not only a separately linked component.
+Reuse [Emulation.CheckpointKey](../emulation/Emulation/CheckpointKey.hs) for retained-engine guest-state, procedure and route identities (E-XM1-EMU-CHECKPOINT-KEYS-150), and FujiMod's shared [BootIdentity](../emulation/fujimod-xm1/src/checkpoint.rs) for its [boot checkpoints](../emulation/README.md#ram-push-bridge-on-fujimod). Invalidate checkpoints when initialization, executable memory or dependency assumptions change; startup changes require cold-boot scenarios. From-reset observations may restore only a zero-instruction initialized-reset checkpoint before attaching their observers. Qualification must exercise the packaged artifact and installation/boot path being claimed, not only a separately linked component.
 
 ### Review and reruns
 
