@@ -6,8 +6,7 @@ module Replacement.StartupArtifact.Adapters
   ( LinkedImage (..), ImageBytes (..), SymbolBytes (..), PieceImages (..)
   , deriveFirstStage, deriveRecord2Link, derivePrimaryPublisher, deriveLoaderOrchestrationB, deriveLoaderStartup, derivePieceOf
   , deriveTaskSubmission, deriveTaskStorage, deriveIdleTask, deriveRootTask, deriveImage5Producer, derivePlainProducer
-  , deriveApplicationPump
-  , deriveTaskConstructors
+  , deriveApplicationPump, deriveImage5Initializer, deriveTaskConstructors
   , ProducerCall (..), producerCallBoundaries, callerReturn
   ) where
 
@@ -30,6 +29,9 @@ import qualified FujiAF.UpdateContainer as U
 import Numeric (showHex)
 import qualified Replacement.ApplicationPump.Admission as APA
 import qualified Replacement.ApplicationPump.Artifact as AP
+import qualified Replacement.Image5Init.Admission as IIA
+import qualified Replacement.Image5Init.Artifact as II
+import qualified Replacement.StartupArtifact.Footprint.Image5Init as InitFootprint
 import qualified Replacement.KernelInstall.Admission as KA
 import qualified Replacement.KernelInstall.Artifact as KI
 import qualified Replacement.LoaderOrchestration.Admission as LA
@@ -99,6 +101,7 @@ derivePieceOf source images = case images of
     PlainProducer -> derivePlainProducer source image
     ApplicationPump -> deriveApplicationPump source image
     TaskConstructors -> deriveTaskConstructors source image
+    Image5Initializer -> deriveImage5Initializer source image
 
 admitted :: PieceKind -> Either String a -> Either Refusal a
 admitted kind = first (AdapterRefused kind . T.pack)
@@ -963,7 +966,7 @@ deriveImage5Producer source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByt
         ++ calls ++
         [ Boundary returnLabel ReturnBoundary primary (Pc returned) (Just (Pc returned)) True CompareSequence once Nothing
         -- Image5 entry runs in another task after the done store and callback (reports/replacement-inventory-baseline.md:1352).
-        , Boundary image5Entry ReturnBoundary primary (Pc 0xd985a4) (Just (Pc 0xd985a4)) False ComparePresence once Nothing ]
+        , Boundary image5Entry ReturnBoundary primary (Pc 0xd985a4) (Just (Pc 0xd985a4)) False ComparePresence once (Just Image5InitializerArea) ]
   -- Destination, BSS and staging: reports/replacement-inventory-baseline.md:1321; the flag: Admission.hs:81-87.
   rows <- sequence
     [ read' "fill-flag-cleared" fillLabel I5A.fillFlag 4
@@ -1119,3 +1122,29 @@ deriveTaskConstructors source (LinkedImage (ImageBytes bin) (SymbolBytes symbolB
         (TaskConstructorsFacts (LinkedBytes bin symbolBytes))
       (image4,image5) = TC.stageImages original artifact
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just image4) (Just image5))
+deriveImage5Initializer :: Canonical -> LinkedImage -> Either Refusal Piece
+deriveImage5Initializer source (LinkedImage (ImageBytes bin) (SymbolBytes symbols)) = do
+  let kind = Image5Initializer
+      shown :: Show e => Either e a -> Either Refusal a
+      shown = first (AdapterRefused kind . T.pack . show)
+  artifact <- shown (II.deriveArtifact bin symbols)
+  staged <- shown (II.stageImage5 (targetOf (canonicalTargets source) Image5) artifact)
+  carrier <- spanOf kind Image5 0xd9856c 0xd986b0
+  code <- ownedCode kind 0xd9856c 0xd986b0
+  primary <- coreSet kind [Core0]
+  once <- limit kind 1
+  let stock = [0xd985b4,0xd985b8,0xd985c0,0xd985c4,0xd985d4,0xd985e0,0xd985e4,0xd985e8,0xd985ec,0xd98600,0xd98614,0xd98618,0xd98628,0xd98638,0xd98648,0xd9865c,0xd98660,0xd98670,0xd98680,0xd98690,0xd986a8]
+      boundary name before after stop = do
+        named <- label kind name
+        pure (Boundary named SiteBoundary primary (Pc after) (Just (Pc before)) stop ComparePresence once Nothing)
+  calls <- sequence [boundary ("call-" <> (if n < (10 :: Int) then "0" else "") <> T.pack (show n)) before (IIA.callInstruction owned) False | (n,before,owned) <- zip3 [1..] stock (IIA.proofCallSites (II.artifactProof artifact))]
+  entry <- boundary "entry" 0xd985a4 0xd985a4 False
+  returned <- boundary "return" 0x69d2e4 0x69d2e4 True
+  let writes = EnumeratedWrites [WriteRange PhysicalTarget 0xa25588 0xa255a0]
+        (Premised (Premise "entry SP 0xa255a0 in both roles of J8 v1; private-data/scratch/j9/design.md section 3"))
+      declaration = PieceDeclaration kind (Set.singleton Image5InitializerArea) [carrier] InitFootprint.footprint
+        [ Premise "retained services preserve SP and r4-r11 and return in A32; private-data/scratch/j9/spec.md"
+        , Premise "0x725dd8 observes unwritten descriptor D+24 only by equality with 0xa5f0a5f0; the admitted frame preserves that classification, not the residue bytes; private-data/scratch/j9/design.md section 2 and spec.md sections 2.1 and 3.3"
+        , Premise "retained callee stack demand below the owned frame is not proved" ]
+        (Catalog (entry:calls ++ [returned {boundaryKind = ReturnBoundary}]) code writes []) (Image5InitializerFacts (LinkedBytes bin symbols))
+  derivePiece source declaration (StagedOutput (canonicalDat source) Nothing (Just staged))

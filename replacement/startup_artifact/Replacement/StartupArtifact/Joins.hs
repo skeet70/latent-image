@@ -41,7 +41,7 @@ data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | 
   | LoaderStartupPublisher | PublisherInstallerRoots | CriticalPairInstallerRoots | DispatcherCriticalPair
   | TaskCompositionOwnedCalls | DispatcherTaskComposition | PublisherTaskServices
   | DispatcherRootEntry | DispatcherIdleEntry | WrapperIdleErrorCallback | RootTaskServices
-  | Image5ProducerServices | PlainProducerServices | ApplicationPumpServices
+  | Image5ProducerServices | PlainProducerServices | ApplicationPumpServices | Image5InitializerServices
   | ConstructorInitializer
   | ConstructorTaskSubmission | ConstructorImage5Producer
   deriving (Eq, Ord, Show, Enum, Bounded)
@@ -68,6 +68,7 @@ instance JoinName JoinKind where
   joinName ConstructorTaskSubmission = "constructor-task-submission"
   joinName ConstructorImage5Producer = "constructor-image5-producer"
   joinName ConstructorInitializer = "constructor-initializer"
+  joinName Image5InitializerServices = "image5-initializer-services"
 
 at :: Target -> Word32 -> Word32 -> Span
 at target start end = Span target (Guest start) (Guest end)
@@ -364,8 +365,8 @@ registeredJoins =
   , loaderStartupPublisher, publisherInstallerRoots, criticalPairInstallerRoots, dispatcherCriticalPair
   , taskCompositionOwnedCalls, dispatcherTaskComposition, publisherTaskServices
   , dispatcherRootEntry, dispatcherIdleEntry, wrapperIdleErrorCallback, rootTaskServices
-  , image5ProducerServices, plainProducerServices, applicationPumpServices
-  , constructorTaskSubmission, constructorImage5Producer ]
+  , image5ProducerServices, plainProducerServices, applicationPumpServices, image5InitializerServices
+  , constructorTaskSubmission, constructorImage5Producer, constructorInitializer Image5Initializer ]
 
 -- | The task wrapper, the record-2 critical pair and the task-storage transition joined as in
 -- replacement/startup_composition/Replacement/StartupComposition/TaskSubmission.hs:63-97.
@@ -601,3 +602,8 @@ constructorInitializer initializer = Join ConstructorInitializer (Set.fromList [
     | low <- [0xd80d44,0xec5350,0xdca604,0xdb63e0,0xed10b4,0xef8c90,0xed2b00,0x1055d10,0x69f000]]
   (ObservationQualified "the initializer calls the constructors at their stock entries; constructor ABI and status behavior require native qualification, and descriptor D+24 retains the initializer's caller-stack classification word")
   [HostCheck "initializer-constructor-entries-retained" $ \evidence -> all (constructorEntryPreserved evidence) TC.constructors]
+image5InitializerServices :: Join JoinKind
+image5InitializerServices = Join Image5InitializerServices (Set.fromList [Image5Initializer, Image5Producer])
+  [at Image5 0xd9856c 0xd986b0]
+  (ObservationQualified "record 5 publishes the owned initializer before its entry; private-data/scratch/j9/design.md section 3")
+  []

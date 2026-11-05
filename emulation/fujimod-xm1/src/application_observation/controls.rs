@@ -38,6 +38,8 @@ pub enum Control {
     FirstReadyMenu,
     OwnedPumpSkipsPosthook,
     StockPumpWord,
+    InitializerSkipsEd4afc,
+    StockInitializerPc,
 }
 
 /// The stock pump's first word, `push {r3,r4,r11,lr}`.
@@ -132,11 +134,11 @@ fn insert_sample(receipt: &mut Receipt, evidence: &mut Evidence, at: usize, samp
 }
 
 impl Control {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 21] = [
         Self::CanonicalInput, Self::StopClock, Self::RawAlias, Self::KernelIdentity, Self::MissingInitialization, Self::NormalizerResult,
         Self::LostCalleeSave, Self::RelabelledOlderSample, Self::RenderReadiness, Self::TruncatedPlane, Self::WatchCoverage, Self::PublishedWrite,
         Self::PacketCopy, Self::FrozenStackBound, Self::ReadinessUnstable, Self::UiWorkPending, Self::FirstReadyMenu,
-        Self::OwnedPumpSkipsPosthook, Self::StockPumpWord,
+        Self::OwnedPumpSkipsPosthook, Self::StockPumpWord, Self::InitializerSkipsEd4afc, Self::StockInitializerPc,
     ];
 
     pub fn name(self) -> &'static str {
@@ -160,6 +162,8 @@ impl Control {
             Self::FirstReadyMenu => "first-ready-menu",
             Self::OwnedPumpSkipsPosthook => "owned-pump-skips-posthook",
             Self::StockPumpWord => "stock-pump-word",
+            Self::InitializerSkipsEd4afc => "initializer-skips-ed4afc",
+            Self::StockInitializerPc => "stock-initializer-pc",
         }
     }
 
@@ -175,11 +179,11 @@ impl Control {
             Self::LostCalleeSave | Self::RelabelledOlderSample => Check::Handback,
             Self::RenderReadiness | Self::TruncatedPlane => Check::RenderCompletion,
             Self::WatchCoverage => Check::CaptureBound,
-            Self::PublishedWrite | Self::StockPumpWord => Check::CodeIdentity,
+            Self::PublishedWrite | Self::StockPumpWord | Self::StockInitializerPc => Check::CodeIdentity,
             Self::OwnedPumpSkipsPosthook => Check::HookSequence,
             Self::PacketCopy => Check::QueueProvenance,
             Self::FrozenStackBound => Check::StackContext,
-            Self::ReadinessUnstable | Self::UiWorkPending => Check::Readiness,
+            Self::ReadinessUnstable | Self::UiWorkPending | Self::InitializerSkipsEd4afc => Check::Readiness,
         })
     }
 
@@ -216,12 +220,25 @@ impl Control {
                 }
                 return Ok(());
             }
+            Self::InitializerSkipsEd4afc => {
+                let at = position(application, evidence, 0xd985d8)?;
+                remove_sample(receipt, evidence, at);
+                return Ok(());
+            }
+            Self::StockInitializerPc => {
+                let at = position(application, evidence, 0xd985d8)?;
+                let sample = &mut evidence.samples[at];
+                sample.pc = crate::composed_catalog::Pc(0xd985d8);
+                sample.code.address = Guest(0xd985d8);
+                return Ok(());
+            }
             _ => {}
         }
         let section = receipt.application.as_mut().ok_or("the receipt has no application section")?;
         let samples = &mut evidence.samples;
         match self {
-            Self::CanonicalInput | Self::UiWorkPending | Self::FirstReadyMenu | Self::OwnedPumpSkipsPosthook | Self::StockPumpWord => {}
+            Self::CanonicalInput | Self::UiWorkPending | Self::FirstReadyMenu | Self::OwnedPumpSkipsPosthook | Self::StockPumpWord
+                | Self::InitializerSkipsEd4afc | Self::StockInitializerPc => {}
             Self::StopClock => samples.first_mut().ok_or("no sample")?.resume.0 += 1,
             Self::RawAlias => *samples.first_mut().ok_or("no sample")?.code.spellings[1][1].0.first_mut().ok_or("an empty view")? ^= 1,
             Self::KernelIdentity => {

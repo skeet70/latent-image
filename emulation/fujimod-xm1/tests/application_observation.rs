@@ -99,6 +99,27 @@ fn owned_pump() -> Value {
     value
 }
 
+fn owned_initializer() -> Value {
+    let mut value = schema5();
+    for site in value["application"]["sites"].as_array_mut().unwrap() {
+        let pc = site["retained_pc"].as_u64().unwrap() as u32;
+        let composed = match pc {
+            0xd985a4 => 0xd985a4,
+            0xd985c8 => 0xd98620,
+            0xd985d8 => 0xd98640,
+            _ => continue,
+        };
+        site["composed_pc"] = json!(composed);
+        site["composed_word"] = json!(0xe320f000u32);
+    }
+    value["pieces"].as_array_mut().unwrap().push(json!({
+        "kind": "image5-initializer", "areas": [], "carriers": [], "edits": [], "footprint": [], "premises": [],
+        "catalog": {"boundaries": [], "owned_code": [{"start": 0xd9856cu32, "end": 0xd986b0u32}],
+            "writes": {"allow": [], "basis": "proved", "premise": null}, "reads": []},
+    }));
+    value
+}
+
 fn layout(domain: u8, cells: [u32; 6]) -> Value {
     json!({"domain": domain, "creation": cells[0], "task": cells[1], "ids": cells[2], "domains": cells[3], "current": cells[4], "selected": cells[5]})
 }
@@ -214,6 +235,46 @@ fn the_application_pump_piece_may_own_the_pump_sites_with_the_same_decoding() {
     let index = APPLICATION_SITES.iter().position(|&(pc, _)| pc == PUMP + 4).unwrap();
     decoded["application"]["sites"][index]["composed_word"] = json!(0xe1a00000u32);
     assert_eq!(parse(&decoded).unwrap_err(), CatalogRefusal::Application(ApplicationProblem::Pump));
+}
+
+#[test]
+fn initializer_owned_code_refuses_other_site_kinds_and_other_pieces() {
+    let mut other = owned_initializer();
+    other["pieces"][2]["kind"] = json!("image5-producer");
+    assert_eq!(parse(&other).unwrap_err(), CatalogRefusal::Application(ApplicationProblem::SiteInPiece(Pc(0xd985a4))));
+    for &(pc, kind) in &APPLICATION_SITES {
+        if matches!(kind, fujimod_xm1::composed_catalog::SiteKind::Initializer) { continue; }
+        let mut other = owned_initializer();
+        other["pieces"][2]["catalog"]["owned_code"].as_array_mut().unwrap().push(json!({"start": pc, "end": pc + 4}));
+        other["pieces"][2]["catalog"]["owned_code"].as_array_mut().unwrap().sort_by_key(|span| span["start"].as_u64().unwrap());
+        assert_eq!(parse(&other).unwrap_err(), CatalogRefusal::Application(ApplicationProblem::SiteInPiece(Pc(pc))));
+    }
+}
+
+#[test]
+fn an_owned_initializer_entry_reaches_both_observers_in_both_roles() {
+    let mut value = owned_initializer();
+    value["pieces"][2]["catalog"]["boundaries"] = json!([{
+        "label": "image5-initializer/entry", "kind": "entry", "cores": [0],
+        "retained_pc": 0xd985a4u32, "composed_pc": 0xd985a4u32,
+        "stop": false, "compare": "presence", "record_limit": 1,
+    }]);
+    let contract = parse(&value).unwrap();
+    for role in [Role::Retained, Role::Composed] {
+        let directory = scratch();
+        let plan = contract.sites(role);
+        let recorder = Recorder::new(contract.application().unwrap(), role, &directory).unwrap();
+        assert_eq!(hit_observers(&plan, Some(&recorder), 0xd985a4), Observers::CatalogThenApplication);
+        assert!(!recorder.released_boundaries(&plan).contains(&Guest(0xd985a4)));
+        let sites = recorder.trace_sites();
+        let (continuation, absent) = match role {
+            Role::Retained => (0xd985d8, 0xd98640),
+            Role::Composed => (0xd98640, 0xd985d8),
+        };
+        assert_eq!(sites.get(&continuation).map(String::as_str), Some("app-d985d8"));
+        assert_eq!(sites.get(&(continuation | ALIAS)).map(String::as_str), Some("app-d985d8"));
+        assert!(!sites.contains_key(&absent));
+    }
 }
 
 #[test]
@@ -336,7 +397,9 @@ impl<'a> Builder<'a> {
     fn site(&mut self, pc: u32, registers: Registers) -> SampleIndex { self.site_on(Core::Primary, pc, registers, Vec::new()) }
 
     fn site_on(&mut self, core: Core, pc: u32, registers: Registers, packet: Vec<RawView>) -> SampleIndex {
-        self.push(SiteRef::Application(SiteLabel::of(Pc(pc))), pc, core, registers, packet)
+        let label = SiteLabel::of(Pc(pc));
+        let composed = self.application.site(&label).unwrap().pc(Role::Composed).0;
+        self.push(SiteRef::Application(label), composed, core, registers, packet)
     }
 
     fn queue(&mut self, pc: u32, registers: Registers, packet: Vec<RawView>) -> SampleIndex {
@@ -586,6 +649,8 @@ impl Scenario {
 
     fn owned() -> Self { Self::from_contract(&owned_pump(), &[Plan::Stable, Plan::Quiet], &[]) }
 
+    fn initializer_owned() -> Self { Self::from_contract(&owned_initializer(), &[Plan::Stable, Plan::Quiet], &[]) }
+
     fn from_contract(value: &Value, plans: &[Plan], words: &[(u32, u32)]) -> Self {
         let contract = parse(value).unwrap();
         let directory = scratch();
@@ -689,7 +754,7 @@ fn a_coherent_scenario_passes_every_check() {
 fn every_role_control_is_refused_by_its_named_check() {
     for control in Control::ALL {
         let Expected::Application(check) = control.expected() else { continue };
-        assert_eq!(Scenario::new().control(control).refusal(), Some(check), "{control:?}");
+        assert_eq!(Scenario::initializer_owned().control(control).refusal(), Some(check), "{control:?}");
     }
 }
 
@@ -722,9 +787,9 @@ fn the_canonical_input_control_changes_the_update_identity() {
 }
 
 #[test]
-fn the_nineteen_controls_have_distinct_names() {
+fn the_twenty_one_controls_have_distinct_names() {
     let names: BTreeSet<&str> = Control::ALL.iter().map(|control| control.name()).collect();
-    assert_eq!(names.len(), 19);
+    assert_eq!(names.len(), 21);
 }
 
 #[test]
@@ -732,6 +797,13 @@ fn an_owned_pump_passes_every_check_and_its_controls_refuse() {
     assert_eq!(Scenario::owned().check(), Ok(()));
     assert_eq!(Scenario::owned().control(Control::StockPumpWord).refusal(), Some(ApplicationCheck::CodeIdentity));
     assert_eq!(Scenario::owned().control(Control::OwnedPumpSkipsPosthook).refusal(), Some(ApplicationCheck::HookSequence));
+}
+
+#[test]
+fn an_owned_initializer_passes_every_check_and_its_controls_refuse() {
+    assert_eq!(Scenario::initializer_owned().check(), Ok(()));
+    assert_eq!(Scenario::initializer_owned().control(Control::InitializerSkipsEd4afc).refusal(), Some(ApplicationCheck::Readiness));
+    assert_eq!(Scenario::initializer_owned().control(Control::StockInitializerPc).refusal(), Some(ApplicationCheck::CodeIdentity));
 }
 
 #[test]

@@ -25,7 +25,7 @@ import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.AttachState
 import Replacement.StartupArtifact.Contract
 import Replacement.StartupArtifact.Manifest
-import Replacement.StartupArtifact.Application (RoleImages (..), application, applicationValue, plainImage)
+import Replacement.StartupArtifact.Application (RoleImages (..), SiteMap (..), application, applicationValue, plainImage)
 import Replacement.StartupArtifact.Joins (JoinKind, registeredJoins)
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
@@ -701,7 +701,7 @@ main = do
   let patched base changes = either (error . show) id (applyTargetEdits [wordEdit target address value | (target, address, value) <- changes] base)
       stockImages = patched targets [(Image5, 0xbfbd20, 0xe92d4010), (Image4, 0x725214, 0xe59f0004)]
       role targets' = RoleImages targets' plain
-      appOf carriers' composedTargets = application carriers' (role stockImages) (role composedTargets)
+      appOf carriers' composedTargets = application (SiteMap M.empty) carriers' (role stockImages) (role composedTargets)
       rowsOf key name value = [row | J.Array rows <- [member key value], row <- V.toList rows, member "label" row == J.String name]
       sectionOf carriers' composedTargets = applicationValue <$> appOf carriers' composedTargets
       image5Slice :: TargetBytes -> Word32 -> Word32 -> B.ByteString
@@ -728,10 +728,26 @@ main = do
     (either (const False) (const True) (appOf [(LoaderStartup, at Image5 0xbfbd00 0xbfbd20)] stockImages))
   let ownedPump = patched stockImages [(Image5, 0xbfbd20, 0xe92d4c10)]
       pumpCarrier = at Image5 0xbfbd20 0xbfbd40
-  case sectionOf [(ApplicationPump, pumpCarrier)] ownedPump of
+  case applicationValue <$> application (SiteMap (M.fromList [(Pc pc,(ApplicationPump,Pc pc)) | pc <- [0xbfbd20,0xbfbd24..0xbfbd3c]])) [(ApplicationPump,pumpCarrier)] (role stockImages) (role ownedPump) of
     Right value -> ok "a pump site inside an application-pump carrier carries each role's word"
       (map (\row -> (member "retained_word" row, member "composed_word" row)) (rowsOf "sites" "app-bfbd20" value)
         == [(number 0xe92d4010, number 0xe92d4c10)])
+    Left problem -> fail (show problem)
+  let mapped before owner after = application (SiteMap (M.singleton (Pc before) (owner,Pc after)))
+        [(ApplicationPump,pumpCarrier)] (role stockImages) (role ownedPump)
+  ok "a mapped retained PC outside its owner's carrier refuses"
+    (refusal (mapped 0xbfb1b8 ApplicationPump 0xbfbd20) == Just (ApplicationRefused (SiteInCarrier ApplicationPump (Pc 0xbfb1b8))))
+  ok "a mapped composed PC outside its owner's carrier refuses"
+    (refusal (mapped 0xbfbd20 ApplicationPump 0xbfb1b8) == Just (ApplicationRefused (SiteInCarrier ApplicationPump (Pc 0xbfb1b8))))
+  ok "a map naming a different carrier owner refuses"
+    (refusal (mapped 0xbfbd20 Image5Initializer 0xbfbd20) == Just (ApplicationRefused (SiteInCarrier Image5Initializer (Pc 0xbfbd20))))
+  let initializerSites = SiteMap (M.fromList
+        [(Pc 0xd985a4,(Image5Initializer,Pc 0xd985a4)),(Pc 0xd985c8,(Image5Initializer,Pc 0xd98600)),(Pc 0xd985d8,(Image5Initializer,Pc 0xd98604))])
+      initializerImages = patched stockImages [(Image5,0xd98600,0xe3a00001),(Image5,0xd98604,0xe3a00002)]
+  case applicationValue <$> application initializerSites [(Image5Initializer,at Image5 0xd9856c 0xd986b0)] (role stockImages) (role initializerImages) of
+    Right value -> ok "initializer maps select composed PCs and words independently of retained PCs"
+      (map (\row -> (member "retained_pc" row,member "composed_pc" row,member "composed_word" row)) (rowsOf "sites" "app-d985d8" value)
+        == [(number 0xd985d8,number 0xd98604,number 0xe3a00002)])
     Left problem -> fail (show problem)
   ok "a pump site inside another piece's carrier refuses"
     (refusal (appOf [(Image5Producer, pumpCarrier)] ownedPump) == Just (ApplicationRefused (SiteInCarrier Image5Producer (Pc 0xbfbd20))))
@@ -780,6 +796,15 @@ main = do
   ok "without an image5 edit the producer's reads are unchanged"
     (fmap producerReads (composeWith [] [producerPiece, first {pieceFootprint = []}]) == Right
       [ ("image5-producer/destination", 0xbf1a00, 0x4f1e60, False), ("image5-producer/staging", 0x43e40000, 0x2e0000, False) ])
+  let initializerCarrier = at Image5 0xd9856c 0xd986b0
+      initializerPiece = piece Image5Initializer [Image5InitializerArea] [initializerCarrier]
+        [flip' targets (at Image5 0xd9856c 0xd98570)] []
+  ok "two image5 carriers split the producer destination into three retained reads"
+    (fmap producerReads (composeWith [] [producerPiece, pumpPiece, initializerPiece]) == Right
+      [ ("image5-producer/destination-bf1a00", 0xbf1a00, 0xbfbd20 - 0xbf1a00, False)
+      , ("image5-producer/destination-bfbd40", 0xbfbd40, 0xd9856c - 0xbfbd40, False)
+      , ("image5-producer/destination-d986b0", 0xd986b0, 0x10e3860 - 0xd986b0, False)
+      , ("image5-producer/staging", 0x43e40000, 0x2e0000, True) ])
 
   passed <- readIORef counter
   putStrLn ("startup-artifact-tests: " ++ show passed ++ " checks passed")
