@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Canonical decode, composition staging and the output directory.
 module Replacement.StartupArtifact.Stage
-  ( loadCanonical, loadPieces, stageComposition, writeOutputs, runStager
+  ( loadCanonical, loadPieces, stageComposition, writeOutputs, runStager, applicationSiteMap
   ) where
 
 import Control.Monad (forM, forM_, unless)
@@ -9,14 +9,18 @@ import qualified Data.Aeson as J
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as L
 import Data.List (tails)
+import qualified Data.Map.Strict as Map
+import qualified Data.Text as T
 import qualified Emulation.Image4Staging as Tools
 import qualified Emulation.Sha256 as SHA
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
 import Replacement.Record5Staging (decodeRecord, stageRecord5, stagedRecord5Dat)
+import qualified Replacement.Image5Init.Admission as Init
+import qualified Replacement.Image5Init.Artifact as InitArtifact
 import Replacement.StartupArtifact.Adapters
-import Replacement.StartupArtifact.Application (RoleImages (..), application, plainImage)
+import Replacement.StartupArtifact.Application (RoleImages (..), SiteMap (..), application, plainImage)
 import Replacement.StartupArtifact.AttachState (AttachSources (..), attachStateValue)
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Contract
@@ -122,5 +126,22 @@ runStager tools canonicalPath manifestPath scratchPath output = do
       composedParts <- either (const (Left ComposedUnparsed)) (Right . U.parsedParts) (U.parseContainer dat)
       retained <- RoleImages (canonicalTargets source) <$> plainImage (U.parsedParts (canonicalParsed source))
       composed <- RoleImages observed <$> plainImage composedParts
-      Just <$> application (contractCarriers composition) retained composed
+      mapping <- applicationSiteMap (compositionPieces composition)
+      Just <$> application mapping (contractCarriers composition) retained composed
   writeOutputs output dat observed (contractValue source manifestBytes composition dat observed attach attachState section)
+
+applicationSiteMap :: [Piece] -> Either Refusal SiteMap
+applicationSiteMap pieces = SiteMap . Map.fromList . concat <$> mapM mapped pieces
+  where
+    mapped piece = case pieceFacts piece of
+      ApplicationPumpFacts _ -> pure [(Pc pc,(ApplicationPump,Pc pc)) | pc <- [0xbfbd20,0xbfbd24..0xbfbd3c]]
+      Image5InitializerFacts (LinkedBytes bytes symbols) -> do
+        artifact <- either (Left . AdapterRefused Image5Initializer . T.pack . show) pure (InitArtifact.deriveArtifact bytes symbols)
+        let proof = InitArtifact.artifactProof artifact
+            continuation target = case [Init.callReturn site | site <- Init.proofCallSites proof, Init.callTarget site == target] of
+              [pc] -> pure (Pc pc)
+              _ -> Left (AdapterRefused Image5Initializer "initializer continuation missing")
+        checked <- continuation 0xed4acc
+        ready <- continuation 0xed4afc
+        pure [(Pc before,(Image5Initializer,after)) | (before,after) <- [(0xd985a4,Pc 0xd985a4),(0xd985c8,checked),(0xd985d8,ready)]]
+      _ -> pure []

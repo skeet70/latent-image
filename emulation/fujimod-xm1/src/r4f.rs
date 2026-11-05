@@ -52,7 +52,6 @@ fn coprocessor(word: u32) -> Option<Refusal> {
     }
 }
 
-/// Decodes one A32 word.
 pub fn classify_a32(word: u32) -> Option<Refusal> {
     if word >> 28 != 15 && word & 0x0fd0_f0f0 == 0x0710_f010 {
         return Some(Refusal::A32Divide);

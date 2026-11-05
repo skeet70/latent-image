@@ -137,6 +137,24 @@ pub fn run(wire: &[u8]) -> Outcome {
     })
 }
 
+#[derive(Clone, Copy)]
+pub enum CaptureAddress { Fixed(u32), Register(u8) }
+#[derive(Clone, Copy)]
+pub struct Capture { pub service: u32, pub address: CaptureAddress, pub bytes: u32 }
+#[derive(Debug, Serialize)]
+pub struct CapturedMemory { pub address: u32, pub bytes: Vec<u8> }
+#[derive(Debug, Serialize)]
+pub struct StubSnapshot { pub service: u32, pub registers: [u32; 15], pub memory: Vec<CapturedMemory> }
+
+pub fn run_captured(wire: &[u8], captures: &[Capture]) -> (Outcome, Vec<StubSnapshot>) {
+    let mut snapshots = Vec::new();
+    let observation = match parse(wire) {
+        Ok(case) => return (render(&execute_captured(&case, captures, &mut snapshots)), snapshots),
+        Err(error) => Observation::invalid(error),
+    };
+    (render(&observation), snapshots)
+}
+
 fn render(observation: &Observation<'_>) -> Outcome {
     match serde_json::to_vec(observation) {
         Ok(mut json) => {
@@ -1285,6 +1303,10 @@ fn unicorn_error(error: &ExecutionError) -> u32 {
 // Execution
 
 fn execute(case: &Case) -> Observation<'_> {
+    execute_captured(case, &[], &mut Vec::new())
+}
+
+fn execute_captured<'a>(case: &'a Case, captures: &[Capture], snapshots: &mut Vec<StubSnapshot>) -> Observation<'a> {
     let entry_registers = FinalRegisters {
         core: case.registers.core,
         cpsr: case.registers.cpsr.0,
@@ -1302,6 +1324,8 @@ fn execute(case: &Case) -> Observation<'_> {
         return refused(format!("case setup failed: {error}"));
     }
     let context = Context { cpu: &cpu, case, state: UnsafeCell::new(State::new(case)) };
+    // SAFETY: execution has not started.
+    unsafe { (*context.state.get()).captures.extend_from_slice(captures); }
     let data = (&context as *const Context<'_>).cast_mut().cast::<c_void>();
     let hooks = [
         Hook::Instruction { callback: instruction_entry, data, range: HookRange::All },
@@ -1332,6 +1356,7 @@ fn execute(case: &Case) -> Observation<'_> {
     if let Err(error) = removal {
         state.host_failure(format!("hook removal failed: {error}"));
     }
+    snapshots.append(&mut state.snapshots);
     state.observe(&cpu, case, elapsed, entry_registers)
 }
 
@@ -1552,6 +1577,8 @@ struct State {
     monitor: Monitor,
     reserved: Option<u32>,
     system: SystemState,
+    captures: Vec<Capture>,
+    snapshots: Vec<StubSnapshot>,
 }
 
 impl State {
@@ -1568,6 +1595,8 @@ impl State {
             depth: 0,
             returning: false,
             events: Vec::with_capacity(MAX_RECORDED_EVENTS),
+            captures: Vec::new(),
+            snapshots: Vec::new(),
             trace: [TraceEntry::default(); LOG_SIZE],
             accesses: [AccessEntry::default(); LOG_SIZE],
             access_total: 0,
@@ -1878,6 +1907,23 @@ impl State {
             if read(cpu, binding.register.register())? != binding.value {
                 return Err(Step::Stop(Status::StubContract));
             }
+        }
+        if self.captures.iter().any(|capture| capture.service == stub.address.0) {
+            let mut registers = [0; 15];
+            for (index, value) in registers.iter_mut().enumerate() { *value = read(cpu, arm::CORE[index])?; }
+            let mut memory = Vec::new();
+            for capture in self.captures.iter().filter(|capture| capture.service == stub.address.0) {
+                if capture.bytes == 0 { continue; }
+                let address = match capture.address {
+                    CaptureAddress::Fixed(address) => address,
+                    CaptureAddress::Register(index) => *registers.get(usize::from(index)).ok_or(Step::Stop(Status::StubContract))?,
+                };
+                if capture.bytes > 4096 { return Err(Step::Stop(Status::StubContract)); }
+                let mut bytes = vec![0; capture.bytes as usize];
+                cpu.read_memory(u64::from(address), &mut bytes)?;
+                memory.push(CapturedMemory { address, bytes });
+            }
+            self.snapshots.push(StubSnapshot { service: stub.address.0, registers, memory });
         }
         self.events.push(index);
         for binding in stub.outputs.iter() {

@@ -64,6 +64,45 @@ if [[ -z "$(fuji_af_dangling_citations "$TEST_TMPDIR/citations")" ]]; then
   exit 1
 fi
 
+# Each qualified composed contract cites an established record that names the digest's first 8 hex digits and binds it
+# at a composed-contract.json outside ctl-/restage- directories.
+fuji_af_qualifications_cited() {
+  "$fuji_af_jq" -n -e --slurpfile q "$1" --slurpfile ledger "$2" '
+    ($ledger | map({key: .id, value: .}) | from_entries) as $r
+    | $q[0] | .schema == 1 and keys == ["contracts", "schema"]
+      and (.contracts | map(.contract) | length == (unique | length))
+      and all(.contracts[]; keys == ["contract", "evidence"] and (.contract | test("^[0-9a-f]{64}$"))
+        and (.contract as $c | $r[.evidence] | . != null and .status == "established"
+          and (.claim | contains($c[0:8]))
+          and any(.artifacts[]?; .sha256 == $c and (.path | test("/composed-contract\\.json$"))
+            and (.path | test("/(ctl|restage)-") | not))))' > /dev/null
+}
+fuji_af_qualifications=replacement/startup_artifact/qualifications.json
+if ! fuji_af_qualifications_cited "$fuji_af_qualifications" docs/evidence.jsonl; then
+  echo "$fuji_af_qualifications cites a contract its record does not qualify" >&2
+  exit 1
+fi
+for fuji_af_mutation in \
+  '.contracts[0].evidence = ("E" + "-NOT-A-RECORD-150")' \
+  '.contracts[0].evidence = "E-STARTUP-J3-COMPOSED-NATURAL-150"' \
+  '.contracts[4].contract = "238369f76fc57fa4f76694fb5de5aa407c6b7c72aada96f499ebf5f45626cb1b"' \
+  '.contracts += [.contracts[0]]'; do
+  "$fuji_af_jq" "$fuji_af_mutation" "$fuji_af_qualifications" > "$TEST_TMPDIR/qualifications.json"
+  if fuji_af_qualifications_cited "$TEST_TMPDIR/qualifications.json" docs/evidence.jsonl; then
+    echo "Unqualified contract row incorrectly accepted: $fuji_af_mutation" >&2
+    exit 1
+  fi
+done
+for fuji_af_mutation in \
+  'if .id == "E-STARTUP-J1-COMPOSED-NATURAL-150" then .status = "open" else . end' \
+  'if .id == "E-STARTUP-J1-COMPOSED-NATURAL-150" then (.artifacts[] | select(.path | endswith("/j1/stage/composed-contract.json")) | .path) |= sub("/j1/"; "/ctl-j1/") else . end'; do
+  "$fuji_af_jq" -c "$fuji_af_mutation" docs/evidence.jsonl > "$TEST_TMPDIR/evidence.jsonl"
+  if fuji_af_qualifications_cited "$fuji_af_qualifications" "$TEST_TMPDIR/evidence.jsonl"; then
+    echo "Qualification by an unqualifying record incorrectly accepted: $fuji_af_mutation" >&2
+    exit 1
+  fi
+done
+
 fuji_af_markers="$("$fuji_af_git" -C "${fuji_af_ledger%/docs/evidence.jsonl}" grep -I -n -E \
   '^(<<<<<<< |>>>>>>> |=======$)' || [[ $? -eq 1 ]])"
 if [[ -n "$fuji_af_markers" ]]; then

@@ -64,7 +64,7 @@ editBytes :: Edit -> B.ByteString
 editBytes (Edit _ bytes) = bytes
 
 data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup | TaskSubmission | TaskStorage
-  | IdleTask | RootTask | Image5Producer | PlainProducer | ApplicationPump
+  | IdleTask | RootTask | Image5Producer | PlainProducer | ApplicationPump | Image5Initializer | TaskConstructors
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 pieceKindName :: PieceKind -> Text
@@ -81,10 +81,12 @@ pieceKindName kind = case kind of
   Image5Producer -> "image5-producer"
   PlainProducer -> "plain-producer"
   ApplicationPump -> "application-pump"
+  Image5Initializer -> "image5-initializer"
+  TaskConstructors -> "task-constructors"
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
   | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea | TaskSubmissionArea | TaskStorageArea
-  | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | ApplicationPumpArea
+  | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | ApplicationPumpArea | Image5InitializerArea | TaskConstructorsArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 areaName :: Area -> Text
@@ -106,6 +108,8 @@ areaName area = case area of
   Image5ProducerArea -> "image5-producer"
   PlainProducerArea -> "plain-producer"
   ApplicationPumpArea -> "application-pump"
+  TaskConstructorsArea -> "task-constructors"
+  Image5InitializerArea -> "image5-initializer"
 
 data FootprintBasis = AdmissionRead | RuntimePremise deriving (Eq, Ord, Show)
 
@@ -316,6 +320,7 @@ data PieceFacts
   -- | The linked loader-A and loader-B orchestration images, the dispatcher's task submissions and the tasks they start.
   | LoaderStartupFacts LinkedBytes LinkedBytes [SubmitCall] [TaskStart]
   | NoFacts
+  | TaskConstructorsFacts LinkedBytes
   -- | The linked task wrapper/release image and the pool-allocation relation over its reads.
   | TaskSubmissionFacts LinkedBytes PoolAllocation
   -- | The linked task-storage transition image.
@@ -330,6 +335,7 @@ data PieceFacts
   | PlainProducerFacts LinkedBytes
   -- | The linked application pump image.
   | ApplicationPumpFacts LinkedBytes
+  | Image5InitializerFacts LinkedBytes
   deriving (Eq, Show)
 
 data Piece = Piece
@@ -372,7 +378,7 @@ data ManifestProblem
   deriving (Eq, Show)
 
 data ApplicationProblem
-  -- | A site word overlaps the named piece's carrier; only pump sites may lie in an application-pump carrier.
+  -- | The site's map and carrier ownership disagree.
   = SiteInCarrier PieceKind Pc
   -- | Code at the PC lies in neither image4, image5 nor the plain window.
   | OutsideImages Pc

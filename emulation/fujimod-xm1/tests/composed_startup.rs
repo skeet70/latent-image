@@ -9,8 +9,8 @@ use fujimod_xm1::attach_state::{
     Occupant, ProcessorAddress, ReadPath, RegionRead, Space, SpaceSpan, Span, StackCheck, UnusedEntry,
 };
 use fujimod_xm1::composed_catalog::{
-    Bank, CatalogRefusal, Contract, Core, DeclarationProblem, GuardBound, Label, Pc, PiecePolicy, PieceKind, PlanSpan,
-    PoolAllocationProblem, RangePlan, Role, Schema, Sha256, Target, WritesBasis,
+    Bank, CatalogRefusal, CheckRefusal, CheckedContract, Contract, Core, DeclarationProblem, GuardBound, Label, Pc, PiecePolicy, PieceKind,
+    PlanSpan, PoolAllocationProblem, Qualifications, QualificationsRefusal, RangePlan, Role, Schema, Sha256, Target, WritesBasis,
 };
 use fujimod_xm1::composed_receipt::{
     Admission, ByteRange, CaptureDirectories, CarrierField, CarrierWrites, DeclaredUse, Difference, GuardObservation, GuardState,
@@ -1971,4 +1971,73 @@ fn a_malformed_pool_allocation_refuses_at_parse() {
         CatalogRefusal::PoolAllocation(PoolAllocationProblem::Differs(label("primary-publisher/records"))));
     assert_eq!(refusal(|v| v["pool_allocation"]["owners"][0]["offset"] = json!(40)),
         CatalogRefusal::PoolAllocation(PoolAllocationProblem::OwnerLayout(label("primary-publisher/creation-a"))));
+}
+
+const RECORD: &str = "E-STARTUP-J1-COMPOSED-NATURAL-150";
+
+fn qualifications(rows: Value) -> Vec<u8> { serde_json::to_vec(&json!({"schema": 1, "contracts": rows})).unwrap() }
+
+fn host_composed() -> Value {
+    let mut value = fixture();
+    value["qualification"] = json!("host-composed");
+    value["pending_joins"] = json!([]);
+    value
+}
+
+/// The check output for `contract` with `listed` as the only qualified digest.
+fn checked(contract: &Value, listed: &str) -> Result<Value, CheckRefusal> {
+    let bytes = serde_json::to_vec(contract).unwrap();
+    let rows = qualifications(json!([{"contract": listed, "evidence": RECORD}]));
+    CheckedContract::check(&bytes, Some(&rows)).map(|checked| serde_json::to_value(checked).unwrap())
+}
+
+fn digest_of(contract: &Value) -> String { Sha256::of(&serde_json::to_vec(contract).unwrap()).as_str().to_owned() }
+
+#[test]
+fn malformed_qualifications_refuse() {
+    let digest = "a".repeat(64);
+    let row = json!({"contract": digest, "evidence": RECORD});
+    assert!(Qualifications::parse(&qualifications(json!([row.clone()]))).is_ok());
+    let shape = |bytes: Vec<u8>| matches!(Qualifications::parse(&bytes), Err(QualificationsRefusal::Shape(_)));
+    assert!(shape(serde_json::to_vec(&json!({"schema": 1, "contracts": [], "extra": 1})).unwrap()));
+    assert!(shape(qualifications(json!([{"contract": digest, "evidence": RECORD, "extra": 1}]))));
+    assert!(shape(qualifications(json!([{"contract": "A".repeat(64), "evidence": RECORD}]))));
+    assert!(shape(qualifications(json!([{"contract": digest, "evidence": "e-startup-j1"}]))));
+    assert!(shape(qualifications(json!([{"contract": digest}]))));
+    assert_eq!(Qualifications::parse(&serde_json::to_vec(&json!({"schema": 2, "contracts": []})).unwrap()),
+        Err(QualificationsRefusal::Schema(2)));
+    assert_eq!(Qualifications::parse(&qualifications(json!([row.clone(), {"contract": digest, "evidence": "E-STARTUP-J2-COMPOSED-NATURAL-150"}]))),
+        Err(QualificationsRefusal::DuplicateContract(Sha256::try_from(digest).unwrap())));
+}
+
+#[test]
+fn a_listed_pending_contract_is_compared_and_an_unlisted_one_awaits_its_joins() {
+    let contract = fixture();
+    assert_eq!(checked(&contract, &digest_of(&contract)).unwrap()["state"], json!({"kind": "compared", "evidence": RECORD}));
+    assert_eq!(checked(&contract, &"a".repeat(64)).unwrap()["state"],
+        json!({"kind": "pending", "awaiting": ["first-stage-secondary-rendezvous"]}));
+}
+
+#[test]
+fn a_host_composed_contract_is_host_composed_and_refuses_when_listed() {
+    let contract = host_composed();
+    assert_eq!(checked(&contract, &"a".repeat(64)).unwrap()["state"], json!({"kind": "host-composed"}));
+    let digest = digest_of(&contract);
+    assert_eq!(checked(&contract, &digest).unwrap_err(),
+        CheckRefusal::Qualifications(QualificationsRefusal::HostComposedListed(Sha256::try_from(digest).unwrap())));
+}
+
+#[test]
+fn the_check_output_gains_state_only_with_qualifications() {
+    let contract = fixture();
+    let bytes = serde_json::to_vec(&contract).unwrap();
+    let without = serde_json::to_value(CheckedContract::check(&bytes, None).unwrap()).unwrap();
+    let mut with = checked(&contract, &digest_of(&contract)).unwrap();
+    assert!(without.get("state").is_none());
+    assert_eq!(with.as_object_mut().unwrap().remove("state"), Some(json!({"kind": "compared", "evidence": RECORD})));
+    assert_eq!(with, without);
+    assert_eq!(without["contract_sha256"], json!(digest_of(&contract)));
+    let malformed = serde_json::to_vec(&json!({"schema": 1})).unwrap();
+    assert!(matches!(CheckedContract::check(&bytes, Some(&malformed)),
+        Err(CheckRefusal::Qualifications(QualificationsRefusal::Shape(_)))));
 }

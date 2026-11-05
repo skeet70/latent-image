@@ -14,9 +14,9 @@ use std::collections::BTreeMap;
 use std::io::Read;
 
 const KIND: &str = "type1-nand-committed-image";
-const PAGE_BYTES: usize = 2048;
-const SPARE_BYTES: usize = 512;
-const PAGES_PER_BLOCK: u32 = 64;
+pub const PAGE_BYTES: usize = 2048;
+pub const SPARE_BYTES: usize = 512;
+pub const PAGES_PER_BLOCK: u32 = 64;
 const BLOCKS: u32 = 1024;
 
 #[derive(Deserialize, PartialEq, Eq)]
@@ -154,6 +154,35 @@ impl CommittedImage {
             nand.program(*row, data, spare)?;
         }
         session.retain_nand(&medium.0, nand)
+    }
+
+    /// The blocks with at least one committed page.
+    pub fn committed_blocks(&self) -> std::collections::BTreeSet<u32> {
+        self.pages.keys().map(|row| row / PAGES_PER_BLOCK).collect()
+    }
+
+    /// A committed image over `flash_base` with no data overlays or spare
+    /// inputs whose committed pages are `pages`, each paired with its spare.
+    pub fn compose(flash_base: &[u8], pages: &BTreeMap<u32, (Vec<u8>, Vec<u8>)>) -> Result<Vec<u8>, String> {
+        if pages.iter().any(|(row, (data, spare))| *row >= BLOCKS * PAGES_PER_BLOCK || data.len() != PAGE_BYTES || spare.len() != SPARE_BYTES) {
+            return Err("composed NAND pages must be in range and full-sized".into());
+        }
+        let rows = |select: fn(&(Vec<u8>, Vec<u8>)) -> &Vec<u8>| -> Value {
+            Value::Array(pages.iter().map(|(row, page)| Value::Array(vec![(*row).into(), encode_hex(select(page)).into()])).collect())
+        };
+        let document = serde_json::json!({
+            "schema": 1,
+            "kind": KIND,
+            "geometry": {"blocks": BLOCKS, "page_bytes": PAGE_BYTES, "pages_per_block": PAGES_PER_BLOCK, "spare_bytes": SPARE_BYTES},
+            "base": {"sha256": format!("{:x}", Sha256::digest(flash_base)), "size": flash_base.len()},
+            "data_overlays": [],
+            "spare_pages": [],
+            "committed_data_pages": rows(|page| &page.0),
+            "committed_spare_pages": rows(|page| &page.1),
+        });
+        let mut json = String::new();
+        canonical(&document, &mut json);
+        gzip(json.as_bytes())
     }
 
     /// The data and spare bytes of a committed `row`.
