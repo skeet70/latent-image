@@ -1,0 +1,132 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_binary", "haskell_library", "haskell_test")
+
+package(default_visibility = ["//visibility:public"])
+
+genrule(
+    name = "layout-facts-build",
+    srcs = [
+        "layout-facts.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+    ],
+    outs = ["layout-facts-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 -A dead_code -C linker=$(location @lab_clang//:bin/clang) $(location layout-facts.rs) -o $@",
+    executable = True,
+    tools = [
+        "@lab_clang//:bin/clang",
+        "@lab_rustc//:bin/rustc",
+    ],
+)
+
+genrule(
+    name = "layout-facts",
+    outs = ["layout.json"],
+    cmd = "$(location :layout-facts-build) > $@",
+    tools = [":layout-facts-build"],
+)
+
+_INPUTS = [
+    "//replacement/rtos_scheduler:regions.json",
+    ":layout.json",
+    "//replacement/rtos_scheduler:scheduler-a.bin",
+    "//replacement/rtos_scheduler:scheduler-a.symbols",
+    "//replacement/rtos_scheduler:scheduler-b.bin",
+    "//replacement/rtos_scheduler:scheduler-b.symbols",
+]
+
+_GHCOPTS = ["-XGHC2021", "-Wall", "-Werror", "-O2"]
+
+haskell_library(
+    name = "scheduler-oracle-lib",
+    srcs = [
+        "Replacement/RtosScheduler/Controls.hs",
+        "Replacement/RtosScheduler/Layout.hs",
+        "Replacement/RtosScheduler/Oracle.hs",
+        "Replacement/RtosScheduler/Regions.hs",
+        "Replacement/RtosScheduler/Suite.hs",
+        "Replacement/RtosScheduler/Verdict.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = _GHCOPTS,
+    deps = [
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:filepath",
+        "//host:text",
+        "//replacement/rtos_own_first/oracle:own-first-oracle-lib",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+# The stock loaders come from private-data:
+# bazel run //replacement/rtos_scheduler/oracle:scheduler-oracle -- --loader-a LOADER_A --loader-b LOADER_B --work NEW_DIRECTORY --summary NEW_JSON
+haskell_binary(
+    name = "scheduler-oracle",
+    srcs = ["OracleMain.hs"],
+    main_file = "OracleMain.hs",
+    args = [
+        "--runner",
+        "$(rootpath //emulation:native-runner)",
+        "--regions",
+        "$(rootpath //replacement/rtos_scheduler:regions.json)",
+        "--layout",
+        "$(rootpath :layout.json)",
+        "--owned-a-bin",
+        "$(rootpath //replacement/rtos_scheduler:scheduler-a.bin)",
+        "--owned-a-symbols",
+        "$(rootpath //replacement/rtos_scheduler:scheduler-a.symbols)",
+        "--owned-b-bin",
+        "$(rootpath //replacement/rtos_scheduler:scheduler-b.bin)",
+        "--owned-b-symbols",
+        "$(rootpath //replacement/rtos_scheduler:scheduler-b.symbols)",
+    ],
+    data = _INPUTS + ["//emulation:native-runner"],
+    ghcopts = _GHCOPTS,
+    deps = [
+        ":scheduler-oracle-lib",
+        "//emulation:case-sha256",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+    ],
+)
+
+[
+    haskell_test(
+        name = name,
+        size = size,
+        srcs = ["OracleTests.hs"],
+        main_file = "OracleTests.hs",
+        args = [scope, "$(rootpath //emulation:native-runner)"] + ["$(rootpath %s)" % path for path in _INPUTS],
+        data = _INPUTS + ["//emulation:native-runner"],
+        ghcopts = _GHCOPTS,
+        tags = tags,
+        deps = [
+            ":scheduler-oracle-lib",
+            "//emulation:native-observation",
+            "//emulation:owned-case",
+            "//host:base",
+            "//host:bytestring",
+            "//host:containers",
+            "//host:directory",
+            "//host:filepath",
+            "//replacement/rtos_own_first/oracle:own-first-oracle-lib",
+            "//replacement/rtos_own_first/stage:own-first-artifact",
+        ],
+    )
+    for name, size, scope, tags in [
+        ("scheduler-oracle-tests", "medium", "sample", []),
+        # Every grid row of every helper in both loaders.
+        ("scheduler-oracle-full-tests", "large", "full", ["manual"]),
+    ]
+]

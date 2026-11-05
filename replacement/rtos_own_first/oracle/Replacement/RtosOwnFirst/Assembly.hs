@@ -26,6 +26,13 @@ module Replacement.RtosOwnFirst.Assembly
   , ldr
   , ldrb
   , str
+  , strb
+  , strIndexed
+  , rsbI
+  , andR
+  , addShifted
+  , movShiftRegister
+  , clz
   , mrs
   , msrControl
   , mrcIdentity
@@ -208,6 +215,29 @@ ldr, ldrb, str :: Reg -> Reg -> Int -> Item
 ldr = transferImmediate 0x05100000
 ldrb = transferImmediate 0x05500000
 str = transferImmediate 0x05000000
+
+strb :: Reg -> Reg -> Int -> Item
+strb = transferImmediate 0x05400000
+
+-- | @str rd, [rn, rm, lsl #amount]@.
+strIndexed :: Reg -> Reg -> Reg -> Word32 -> Item
+strIndexed rd rn rm amount = instruction (0x07800000 .|. (reg rn `shiftL` 16) .|. (reg rd `shiftL` 12) .|. ((amount .&. 31) `shiftL` 7) .|. reg rm)
+
+rsbI :: Reg -> Reg -> Word32 -> Item
+rsbI rd rn = dataImmediate 0x3 False rn rd
+
+andR :: Reg -> Reg -> Reg -> Item
+andR rd rn rm = dataRegister 0x0 False rn rd rm Lsl 0
+
+addShifted :: Reg -> Reg -> Reg -> Shift -> Word32 -> Item
+addShifted rd rn = dataRegister 0x4 False rn rd
+
+-- | @mov rd, rm, lsl rs@.
+movShiftRegister :: Reg -> Reg -> Reg -> Item
+movShiftRegister rd rm rs = instruction (0x01a00010 .|. (reg rd `shiftL` 12) .|. (reg rs `shiftL` 8) .|. reg rm)
+
+clz :: Reg -> Reg -> Item
+clz rd rm = instruction (0x016f0f10 .|. (reg rd `shiftL` 12) .|. reg rm)
 
 mrs :: Reg -> Item
 mrs rd = instruction (0x010f0000 .|. (reg rd `shiftL` 12))
