@@ -150,7 +150,9 @@ execute runner out ident body input mode allocation=do
      regions=[region "body" entry (fromIntegral(B.length body)) "rx" (Just "body"),region "state" 0x940000 0x40000 "rw" (Just "state"),region "stack" 0x200000 0x1000 "rw" Nothing,region "observed" 0x980000 0x100 "rw" Nothing,region "exit" stop 4 "rx" (Just "exit")]++[region ("wrapper"++show ix) a (fromIntegral(B.length bytes)) "rx" (Just("wrapper"++show ix))|(ix,(a,bytes))<-zip [0::Int ..] wrappers]
      function a size=obj[("address",addr a),("size",n size)]
      spec=obj[("schema_version",n 1),("id",s ident),("origin",s "stock"),("provenance",s "X-M1 1.50 stock instruction contract, id5.dis 50482-50680 and 9635-9671; x70view f659f02b850fcba58de0f9b09ee24ad09a24c2f4"),("cpu",obj[("architecture",s "arm"),("model",s "cortex-r5f"),("mode",s "arm"),("endian",s "little")]),("entry",addr entry),("exit",addr stop),("registers",reg[(r,case r of "sp"->0x201000;"lr"->stop;"cpsr"->0x10;_->0)|r<-map (("r"++).show) [0::Int ..12]++["sp","lr","cpsr"]]),("regions",arr regions),("artifacts",arr(map artifact artifacts)),("functions",arr(function entry (fromIntegral(B.length body)):[function a (fromIntegral(B.length bytes))|(a,bytes)<-wrappers])),("stubs",arr(map stub stubs)),("limits",obj[("instructions",n 10000),("wall_ms",n 1000)]),("expected",obj[("status",s "returned"),("registers",reg[("pc",stop)]),("memory",arr []),("events",arr [])]),("exclusions",arr[s "Stack and scratch registers excluded; retained service implementations are not executed."])]
- let admitted=set "kernel" zero (set "registers" (set "cpsr" (addr 0x53) (get spec "registers")) spec)
+ let calleeSaved=[("r"++show ix,0x44440000+fromIntegral ix*0x111111)|ix<-[4::Int ..11]]
+     initialRegisters=foldl (\rs (name,value)->set name (addr value) rs) (set "cpsr" (addr 0x53) (get spec "registers")) calleeSaved
+     admitted=set "kernel" zero (set "registers" initialRegisters spec)
  B.writeFile(dir</>"case.json")(encodeCanonical admitted)
  (_,report)<-runCase runner (dir</>"case.json")
  let observed=get report "runner"
@@ -164,7 +166,8 @@ execute runner out ident body input mode allocation=do
  let record=if once then assemble [0x918ab8,0x93bea0,0x96b400,0x95b098,allocation] else assemble [0x107,0x944580,0x944584,0x94458c]
      receiveNeeded=held input || pendingBits input==0
      stateOk=if once then actualState==patch (0x972e84-0x940000) (word 1) (patch (0x954d68-0x940000) (word(receiveStatus input)) (B.replicate 0x40000 0)) else actualState==expectedState
-     passed=status=="returned" && stateOk && actualCalls==map (str.addr) expectedCalls && (not(once||receiveNeeded)||B.take(B.length record)observedBytes==record) && (not backedge || (B.length observedBytes>=68 && readWordAt observedBytes 64==2))
+     onceAbiOk=not once || all (\(name,value)->get (get observed "registers") name==addr value) (("sp",0x201000):calleeSaved)
+     passed=status=="returned" && stateOk && onceAbiOk && actualCalls==map (str.addr) expectedCalls && (not(once||receiveNeeded)||B.take(B.length record)observedBytes==record) && (not backedge || (B.length observedBytes>=68 && readWordAt observedBytes 64==2))
  let classification=if status/="returned" then "unsupported" else if passed then "passed" else "failed"
  B.appendFile (out</>"results.jsonl") (encodeCanonical(obj[("id",s ident),("input",s(show input)),("status",s classification),("runner_status",s status),("events",get observed "events"),("contract_passed",b passed)])<>BC.pack "\n")
  if passed then removeDirectoryRecursive dir else B.writeFile(dir</>"report.json")(encodeCanonical(set "contract_passed" (b passed) report))
