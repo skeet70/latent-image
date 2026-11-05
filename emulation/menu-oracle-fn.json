@@ -120,20 +120,20 @@
       "label": "fn-gate",
       "reads": [
         {
-          "start": "0x00944580",
-          "count": 264
+          "address": "0x00944580",
+          "length": 264
         },
         {
-          "start": "0x009544f8",
-          "count": 4
+          "address": "0x009544f8",
+          "length": 4
         },
         {
-          "start": "0x00956838",
-          "count": 828
+          "address": "0x00956838",
+          "length": 828
         },
         {
-          "start": "0x014676e4",
-          "count": 256
+          "address": "0x014676e4",
+          "length": 256
         }
       ]
     },
@@ -142,20 +142,20 @@
       "label": "fn-action-74-4-5",
       "reads": [
         {
-          "start": "0x00944580",
-          "count": 264
+          "address": "0x00944580",
+          "length": 264
         },
         {
-          "start": "0x009544f8",
-          "count": 4
+          "address": "0x009544f8",
+          "length": 4
         },
         {
-          "start": "0x00956838",
-          "count": 828
+          "address": "0x00956838",
+          "length": 828
         },
         {
-          "start": "0x014676e4",
-          "count": 256
+          "address": "0x014676e4",
+          "length": 256
         }
       ]
     },
@@ -164,20 +164,20 @@
       "label": "node-kind-entry",
       "reads": [
         {
-          "start": "0x00944580",
-          "count": 264
+          "address": "0x00944580",
+          "length": 264
         },
         {
-          "start": "0x009544f8",
-          "count": 4
+          "address": "0x009544f8",
+          "length": 4
         },
         {
-          "start": "0x00956838",
-          "count": 828
+          "address": "0x00956838",
+          "length": 828
         },
         {
-          "start": "0x014676e4",
-          "count": 256
+          "address": "0x014676e4",
+          "length": 256
         }
       ]
     },
@@ -186,20 +186,20 @@
       "label": "page-step-setter",
       "reads": [
         {
-          "start": "0x00944580",
-          "count": 264
+          "address": "0x00944580",
+          "length": 264
         },
         {
-          "start": "0x009544f8",
-          "count": 4
+          "address": "0x009544f8",
+          "length": 4
         },
         {
-          "start": "0x00956838",
-          "count": 828
+          "address": "0x00956838",
+          "length": 828
         },
         {
-          "start": "0x014676e4",
-          "count": 256
+          "address": "0x014676e4",
+          "length": 256
         }
       ]
     }
