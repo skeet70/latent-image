@@ -8,6 +8,8 @@
 
 #![cfg_attr(not(test), allow(dead_code))]
 
+use crate::menu_engine::frame::{NodeId, RowToken};
+
 /// Menu node record address, `*0x009571d0` while a menu is open.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct NodeAddress(pub u32);
@@ -33,17 +35,9 @@ pub enum PickerAction {
     RouterTail = 6,
 }
 
-/// Menu node id returned by `0x61d154`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct NodeId(pub u32);
-
 /// Node class returned by `0x61d1f4`; a picker node's class is its property.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ClassId(pub u32);
-
-/// Cursor token returned by `0x61d244`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct CursorToken(pub u32);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct StageKind(pub u32);
@@ -98,7 +92,7 @@ pub trait PickerServices {
     /// `0x61d1f4`.
     fn class(&mut self) -> ClassId;
     /// `0x61d244`.
-    fn cursor_token(&mut self) -> CursorToken;
+    fn cursor_token(&mut self) -> RowToken;
     /// `0xd3d858(kind, id)`.
     fn stage_open(&mut self, kind: StageKind, id: StageId);
     /// `0xc12aac`.
@@ -226,7 +220,7 @@ fn select(node: &PickerNode, special: &[u32], modes: &[WordCell], services: &mut
         return result(routed.0);
     }
     let ClassId(class) = services.class();
-    if class == 5 && services.cursor_token() == CursorToken(0x35) {
+    if class == 5 && services.cursor_token() == RowToken(0x35) {
         return result(routed.0);
     }
     if class == 0xe8 {
@@ -338,8 +332,8 @@ mod tests {
         fn class(&mut self) -> ClassId {
             ClassId(if self.routed { self.class_after_router } else { self.class })
         }
-        fn cursor_token(&mut self) -> CursorToken {
-            CursorToken(self.cursor)
+        fn cursor_token(&mut self) -> RowToken {
+            RowToken(self.cursor)
         }
         fn stage_open(&mut self, kind: StageKind, id: StageId) {
             self.calls.push(Call::Stage(kind.0, id.0));

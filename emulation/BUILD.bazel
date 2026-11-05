@@ -2267,6 +2267,21 @@ haskell_binary(
     ],
 )
 
+haskell_binary(
+    name = "menu-engine-refusal-cases",
+    srcs = ["MenuEngineRefusalCases.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-O2", "-threaded"],
+    main_file = "MenuEngineRefusalCases.hs",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":native-observation",
+        ":owned-case",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+    ],
+)
+
 # Recipe-bank kernel behavior cases: builds each case from the pinned blob and
 # model, runs it through the bounded runner and writes results plus findings.
 haskell_binary(

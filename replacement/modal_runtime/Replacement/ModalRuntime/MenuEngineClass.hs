@@ -102,6 +102,7 @@ data OwnedClass
   | Close
   | FrameMove FrameKind
   | Reopen
+  | Rejected
   deriving (Eq, Show)
 
 -- | Why the engine leaves an event to stock.
@@ -115,7 +116,6 @@ data Fallback
   | SeekClassNode
   | OutsideRegistry
   | Unregistered
-  | NoChild
   | NoParent
   | FramedTarget
   | FramedSource
@@ -207,10 +207,11 @@ deriveClass tree block event = either FallbackEvent OwnedEvent $ rowTotal *> cas
     stageSlot
     cursorInRows
     current <- source
-    child <- case cursorChild current of
-      NodeChild at -> node at
+    case cursorChild current of
+      NodeChild at -> node at >>= pushTarget
       PackageChild _ -> Left PackageChildRow
-      LeafChild -> Left NoChild
+      LeafChild -> pure Rejected
+  pushTarget child = do
     restored <- stackCursor (depth + 1)
     openable child restored
     when (framed child) . framedTarget $ do
@@ -223,7 +224,10 @@ deriveClass tree block event = either FallbackEvent OwnedEvent $ rowTotal *> cas
     stageSlot
     cursorInRows
     current <- source
-    parent <- maybe (Left NoParent) node (nodeParent current)
+    case nodeParent current of
+      Nothing -> pure Rejected
+      Just at -> node at >>= popTarget
+  popTarget parent = do
     when (depth == 0 || depth >= fromIntegral stackFrames) (Left StackBounds)
     restored <- stackCursor (depth - 1)
     openable parent restored
