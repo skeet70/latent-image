@@ -241,6 +241,32 @@ struct BarrierRow {
 enum Row {
     Access(Provenance),
     Barrier(BarrierRow),
+    System(SystemRow),
+}
+
+#[derive(Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum SystemTag {
+    System,
+}
+
+#[derive(Clone, Copy, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum SystemRegister {
+    Tpidrurw,
+    Fpexc,
+}
+
+#[derive(Deserialize, Debug, PartialEq)]
+struct SystemRow {
+    pc: String,
+    kind: SystemTag,
+    register: SystemRegister,
+    value: String,
+}
+
+fn system(pc: u32, register: SystemRegister, value: u32) -> Row {
+    Row::System(SystemRow { pc: format!("0x{pc:08x}"), kind: SystemTag::System, register, value: format!("0x{value:08x}") })
 }
 
 #[derive(Clone, Copy, Deserialize, Debug, PartialEq)]
@@ -265,6 +291,7 @@ enum Status {
 struct KernelRegisters {
     tpidrurw: Option<String>,
     fpexc: Option<String>,
+    monitor: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1322,6 +1349,7 @@ fn a_spin_on_a_held_word_ends_on_the_budget_in_every_shape() {
         assert!(!observed.returned);
         assert_eq!(observed.instructions(), 100, "{code:x?}");
         assert_eq!(observed.bytes(DATA), "01000000");
+        assert_eq!(observed.kernel().monitor, Some(format!("0x{DATA:08x}")), "{code:x?}");
     }
 }
 
@@ -1489,7 +1517,8 @@ fn tpidrurw_serves_the_case_value_and_keeps_the_last_write() {
     observed.assert_returned();
     assert_eq!(observed.register("r4"), 0xabc);
     assert_eq!(observed.register("r7"), 0x1234);
-    assert_eq!(observed.kernel(), &KernelRegisters { tpidrurw: Some("0x00001234".into()), fpexc: None });
+    assert_eq!(observed.kernel(), &KernelRegisters { tpidrurw: Some("0x00001234".into()), fpexc: None, monitor: None });
+    assert_eq!(observed.observation.memory_provenance, [system(CODE + 4, SystemRegister::Tpidrurw, 0x1234)]);
 }
 
 #[test]
@@ -1497,20 +1526,62 @@ fn cpacr_reads_serve_the_case_value() {
     let observed = Case::new(&[CPACR_TO_R5, BX_LR]).kernel(Kernel { cpacr: Some(0x00f0_0000), ..Kernel::default() }).run();
     observed.assert_returned();
     assert_eq!(observed.register("r5"), 0x00f0_0000);
-    assert_eq!(observed.kernel(), &KernelRegisters { tpidrurw: None, fpexc: None });
+    assert_eq!(observed.kernel(), &KernelRegisters { tpidrurw: None, fpexc: None, monitor: None });
 }
 
 #[test]
 fn fpexc_serves_the_case_value_and_keeps_an_en_write() {
     for (initial, written) in [(FPEXC_EN, 0), (0, FPEXC_EN)] {
-        let observed = Case::new(&[FPEXC_TO_R8, FPEXC_FROM_R6, BX_LR])
-            .kernel(Kernel { fpexc: Some(initial), ..Kernel::default() })
-            .register(6, written)
-            .run();
-        observed.assert_returned();
-        assert_eq!(observed.register("r8"), initial);
-        assert_eq!(observed.kernel().fpexc, Some(format!("0x{written:08x}")));
+        for cpacr in [0x00f0_0000, 0x0050_0000] {
+            let observed = Case::new(&[FPEXC_TO_R8, FPEXC_FROM_R6, BX_LR])
+                .kernel(Kernel { cpacr: Some(cpacr), fpexc: Some(initial), ..Kernel::default() })
+                .register(6, written)
+                .run();
+            observed.assert_returned();
+            assert_eq!(observed.register("r8"), initial);
+            assert_eq!(observed.kernel().fpexc, Some(format!("0x{written:08x}")));
+            assert_eq!(observed.observation.memory_provenance, [system(CODE + 4, SystemRegister::Fpexc, written)]);
+        }
     }
+}
+
+#[test]
+fn fpexc_is_refused_unless_cpacr_grants_cp10_and_cp11_alike() {
+    // no access; cp10 only; cp10 privileged with cp11 full; the reserved 0b10 in both
+    for cpacr in [0, 0x0010_0000, 0x00d0_0000, 0x00a0_0000] {
+        for word in [FPEXC_TO_R8, FPEXC_FROM_R6] {
+            let case = Case::new(&[word, BX_LR]).kernel(Kernel { cpacr: Some(cpacr), fpexc: Some(FPEXC_EN), ..Kernel::default() });
+            let observed = case.run();
+            assert_status_write_has_no_effect(&case, &observed);
+            assert_eq!(observed.kernel().fpexc, Some(format!("0x{FPEXC_EN:08x}")), "{cpacr:#x} {word:#010x}");
+        }
+    }
+}
+
+#[test]
+fn mov_pc_lr_is_a_tracked_return_in_a_kernel_case_only() {
+    // mov pc, lr; movle pc, lr with Z set
+    for word in [0xe1a0_f00e, 0xd1a0_f00e] {
+        Case::new(&[word]).kernel(Kernel::default()).run().assert_returned();
+        let case = Case::new(&[word, BX_LR]).privileged(SVC_ENTRY, None);
+        assert_status_write_has_no_effect(&case, &case.run());
+    }
+    // movne pc, lr with Z set falls through to bx lr
+    Case::new(&[0x11a0_f00e, BX_LR]).kernel(Kernel::default()).run().assert_returned();
+    // mov lr, #0; mov pc, lr leaves the tracked frame
+    let observed = Case::new(&[0xe3a0_e000, 0xe1a0_f00e]).kernel(Kernel::default()).run();
+    observed.assert_stopped(Status::UnknownCall, CODE + 4);
+    // a nested callee returns with mov pc, lr
+    let observed = Case::new(&[PUSH_LR, branch(CODE + 4, 0x1040, true), ADD_R0_1, POP_PC])
+        .code(0x1040, &[ADD_R0_1, 0xe1a0_f00e])
+        .function(0x1040, 8)
+        .kernel(Kernel::default())
+        .run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r0"), 2);
+    // movs pc, lr stays refused
+    let case = Case::new(&[0xe1b0_f00e, BX_LR]).kernel(Kernel::default());
+    assert_status_write_has_no_effect(&case, &case.run());
 }
 
 #[test]
@@ -1629,7 +1700,8 @@ fn malformed_kernel_cases_are_invalid() {
         stop(STOP + 2),
         stop(STACK),
         stubbed,
-        valid.clone().kernel(Kernel { fpexc: Some(0x8000_0000), ..Kernel::default() }),
+        valid.clone().kernel(Kernel { cpacr: Some(0x00f0_0000), fpexc: Some(0x8000_0000), ..Kernel::default() }),
+        valid.clone().kernel(Kernel { fpexc: Some(FPEXC_EN), ..Kernel::default() }),
         valid.clone().kernel(Kernel { fpexc: Some(FPEXC_EN | 1), ..Kernel::default() }),
         user,
         privileged,

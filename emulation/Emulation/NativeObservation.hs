@@ -26,6 +26,7 @@ module Emulation.NativeObservation
   , provenanceCount
   , provenanceRetained
   , Barrier (..)
+  , SystemRegister (..)
   , Ordered (..)
   , KernelObservation (..)
   , NativeObservation (..)
@@ -185,16 +186,22 @@ provenanceRetained (Truncated _) = 4096
 data Barrier = Dmb | Dsb | Isb
   deriving (Eq, Show)
 
-data Ordered = OrderedWrite Write | OrderedBarrier Barrier
+-- | A system register a kernel case writes.
+data SystemRegister = Tpidrurw | Fpexc
+  deriving (Eq, Ord, Show)
+
+data Ordered = OrderedWrite Write | OrderedBarrier Barrier | OrderedSystemWrite SystemRegister Word32
   deriving (Eq, Show)
 
 -- | What a kernel case reports beyond a privileged case.
 data KernelObservation = KernelObservation
-  { -- | The provenance log's writes and barriers in execution order; Nothing when truncated.
+  { -- | The provenance log's writes, barriers and system register writes in execution order; Nothing when truncated.
     observedOrder :: Maybe [Ordered]
   , -- | Final TPIDRURW and FPEXC, each when the case declares it.
     observedTpidrurw :: Maybe Word32
   , observedFpexc :: Maybe Word32
+  , -- | The word the local monitor holds tagged at the end.
+    observedMonitor :: Maybe GuestAddress
   }
   deriving (Eq, Show)
 
@@ -242,7 +249,8 @@ data ObservationError
   | ProvenanceRetentionMismatch Int
   | ProvenanceCountMismatch ProvenanceTotal Int
   | MalformedBarrier
-  | BarrierOutsideKernel
+  | MalformedSystemWrite
+  | KernelRowOutsideKernel
   | MalformedKernelRegisters
   deriving (Eq, Show)
 
@@ -275,14 +283,14 @@ observeNative exit regions value = do
   (provenance, ordered) <- parseProvenance total (get value "memory_provenance")
   kernel <- case get value "kernel" of
     Null -> do
-      when (any isBarrier ordered) (Left BarrierOutsideKernel)
+      when (any kernelRow ordered) (Left KernelRowOutsideKernel)
       pure Nothing
     registersValue -> do
-      (tpidrurw, fpexc) <- parseKernelRegisters registersValue
+      (tpidrurw, fpexc, monitor) <- parseKernelRegisters registersValue
       let order = case provenance of
             Complete _ _ -> Just ordered
             Truncated _ -> Nothing
-      pure (Just (KernelObservation order tpidrurw fpexc))
+      pure (Just (KernelObservation order tpidrurw fpexc monitor))
   pure
     NativeObservation
       { nativeStatus = status
@@ -294,8 +302,8 @@ observeNative exit regions value = do
       , nativeKernel = kernel
       }
   where
-    isBarrier (OrderedBarrier _) = True
-    isBarrier (OrderedWrite _) = False
+    kernelRow (OrderedWrite _) = False
+    kernelRow _ = True
 
 renderObservationError :: ObservationError -> String
 renderObservationError errorValue = case errorValue of
@@ -333,7 +341,8 @@ renderObservationError errorValue = case errorValue of
   ProvenanceCountMismatch total retained ->
     "provenance count " ++ show retained ++ " differs from " ++ show (provenanceTotal total)
   MalformedBarrier -> "malformed provenance barrier"
-  BarrierOutsideKernel -> "provenance barrier outside a kernel case"
+  MalformedSystemWrite -> "malformed provenance system register write"
+  KernelRowOutsideKernel -> "provenance barrier or system register write outside a kernel case"
   MalformedKernelRegisters -> "malformed kernel registers"
 
 parseStatus :: Value -> Either ObservationError RunnerStatus
@@ -404,6 +413,7 @@ parseProvenance total value = case value of
       "write" -> Just . OrderedWrite <$> access entry
       "read" -> Nothing <$ access entry
       "barrier" -> Just . OrderedBarrier <$> barrier (str (get entry "barrier"))
+      "system" -> Just <$> systemWrite entry
       _ -> Left MalformedProvenanceKind
     let ordered = [row | Just row <- parsed]
         writes = [write | OrderedWrite write <- ordered]
@@ -431,11 +441,19 @@ parseProvenance total value = case value of
     barrier "dsb" = Right Dsb
     barrier "isb" = Right Isb
     barrier _ = Left MalformedBarrier
+    systemWrite entry = do
+      register <- case str (get entry "register") of
+        "tpidrurw" -> Right Tpidrurw
+        "fpexc" -> Right Fpexc
+        _ -> Left MalformedSystemWrite
+      written <- maybe (Left MalformedSystemWrite) Right (parseWord32 (str (get entry "value")))
+      pure (OrderedSystemWrite register written)
 
-parseKernelRegisters :: Value -> Either ObservationError (Maybe Word32, Maybe Word32)
+parseKernelRegisters :: Value -> Either ObservationError (Maybe Word32, Maybe Word32, Maybe GuestAddress)
 parseKernelRegisters value = case value of
   Object _
-    | all (`elem` ["tpidrurw", "fpexc"]) (keys value) -> (,) <$> register "tpidrurw" <*> register "fpexc"
+    | all (`elem` ["tpidrurw", "fpexc", "monitor"]) (keys value) ->
+        (,,) <$> register "tpidrurw" <*> register "fpexc" <*> (fmap (GuestAddress . fromIntegral) <$> register "monitor")
   _ -> Left MalformedKernelRegisters
   where
     register key

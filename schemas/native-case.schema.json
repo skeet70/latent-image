@@ -81,19 +81,20 @@
           "type": "array", "maxItems": 128,
           "items": {"type": "object", "additionalProperties": false, "required": ["address", "inputs", "outputs"], "properties": {"address": {"$ref": "#/$defs/u32"}, "inputs": {"$ref": "#/$defs/stubRegisters"}, "outputs": {"$ref": "#/$defs/stubRegisters"}}}
         },
-        "kernel": {"$ref": "#/$defs/kernelRegisters", "description": "Final TPIDRURW and FPEXC of a kernel case that declares them."}
+        "kernel": {"$ref": "#/$defs/kernelRegisters", "description": "Final TPIDRURW and FPEXC of a kernel case that declares them, and the word the local monitor holds tagged at the end."}
       }
     },
     "exclusions": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
     "cp14_identity": {"$ref": "#/$defs/u32", "description": "The value MRC p14, 0, Rt, c2, c0, 0 reads. Only a privileged case, whose registers.cpsr is SVC 0x13 or SYS 0x1f with only NZCVQ, GE, I and F besides the mode, may name it; a user case's CPSR is 0x10 with NZCV only."},
     "kernel": {
       "type": "object", "additionalProperties": false,
-      "description": "Makes a privileged case a kernel case: word LDREX/STREX/CLREX with a single-core local monitor, DMB/DSB/ISB logged in memory_provenance, NOP, device regions, and the named values served to MRC/MCR TPIDRURW, MRC CPACR and VMRS/VMSR FPEXC.",
+      "dependentRequired": {"fpexc": ["cpacr"]},
+      "description": "Makes a privileged case a kernel case: word LDREX/STREX/CLREX with a single-core local monitor, DMB/DSB with a defined option, ISB SY and CP15 c7 c10 5/4 logged in memory_provenance, NOP, MOV pc,lr as a tracked return, device regions, and the named values served to MRC/MCR TPIDRURW, MRC CPACR and VMRS/VMSR FPEXC, TPIDRURW and FPEXC writes also logged in memory_provenance.",
       "properties": {
         "stop": {"$ref": "#/$defs/u32", "description": "The case ends as stop_address when the PC reaches it; aligned, executable, not the entry, exit or a stub."},
         "tpidrurw": {"$ref": "#/$defs/u32"},
         "cpacr": {"$ref": "#/$defs/u32"},
-        "fpexc": {"enum": ["0x00000000", "0x40000000"], "description": "EN only."}
+        "fpexc": {"enum": ["0x00000000", "0x40000000"], "description": "EN only. FPEXC words are served only when cpacr cp10 (bits 21:20) and cp11 (bits 23:22) are equal and 0b01 or 0b11, and refused otherwise."}
       }
     }
   },
@@ -108,7 +109,7 @@
       }
     },
     "stubRegisters": {"allOf": [{"$ref": "#/$defs/registers"}], "not": {"anyOf": [{"required": ["sp"]}, {"required": ["lr"]}, {"required": ["cpsr"]}, {"required": ["pc"]}]}},
-    "kernelRegisters": {"type": "object", "additionalProperties": false, "properties": {"tpidrurw": {"$ref": "#/$defs/u32"}, "fpexc": {"$ref": "#/$defs/u32"}}},
+    "kernelRegisters": {"type": "object", "additionalProperties": false, "properties": {"tpidrurw": {"$ref": "#/$defs/u32"}, "fpexc": {"$ref": "#/$defs/u32"}, "monitor": {"$ref": "#/$defs/u32"}}},
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "batch": {
       "description": "A batch input: case files beside it, run in one runner process. maxJsonBytes bounds this file and its case files together; maxArtifactBytes bounds the distinct artifact bytes, by SHA256, that the adapter reads for the batch's cases.",

@@ -560,12 +560,14 @@ ownedBatchApi runner=withTemporary "fuji-owned-batch"$ \root->do
   Left(e::SomeException)->ensure("broken: invalid_case"`isInfixOf`show e)("loadObservedBatch failure names: "++show e)
   Right _->failH "loadObservedBatch returned for a batch with an invalid case"
 
--- Two lock-acquisition shapes spinning on a held word share one outcome, distinct from returning
--- and from stopping; a bank store's barrier precedes it in the parsed order.
+-- Two lock-acquisition shapes spinning on one held word share one outcome and compare equal
+-- with PC and CPSR excluded; spinning on another held word, returning and stopping differ; a
+-- plain case's budget overrun stays a refusal; a bank store's barrier precedes it in the order.
 kernelOutcomes :: FilePath -> IO ()
 kernelOutcomes runner=withTemporary "fuji-kernel-outcomes"$ \root->do
  let acquire=[0xe1921f9f,0xe3510000,0x1afffffc,0xe3a01001,0xe1823f91,0xe3530000,0x1afffff8,0xe12fff1e]
-     spec ident code lock status=O.CaseSpec
+     kernel=O.KernelCase{O.kernelLimit=O.InstructionLimit 50,O.kernelStop=Just(N.GuestAddress 0xa100),O.kernelTpidrurw=Nothing,O.kernelCpacr=Nothing,O.kernelFpexc=Nothing,O.kernelUncompared=[N.Pc,N.Cpsr]}
+     spec ident code lock word status=O.CaseSpec
       { O.caseId=ident
       , O.caseProvenance="NativeTests.hs: kernel-case outcomes"
       , O.caseExclusion="outcome API control"
@@ -573,31 +575,39 @@ kernelOutcomes runner=withTemporary "fuji-kernel-outcomes"$ \root->do
       , O.caseExit=N.GuestAddress 0xa000
       , O.caseRegions=
          [ O.mkRegion(N.RegionId "code")(N.GuestAddress 0x8000)(4*length code)O.ReadExecute(O.assemble code)
-         , O.mkRegion(N.RegionId "lock")(N.GuestAddress 0x9000)4 O.ReadWrite(O.word32le lock)
+         , O.mkRegion(N.RegionId "lock")(N.GuestAddress 0x9000)8 O.ReadWrite(O.assemble lock)
          , O.mkRegion(N.RegionId "exit")(N.GuestAddress 0xa000)4 O.ReadExecute(B.replicate 4 0)
          , O.mkRegion(N.RegionId "stop")(N.GuestAddress 0xa100)4 O.ReadExecute(B.replicate 4 0)
          , O.mkRegion(N.RegionId "bank")(N.GuestAddress 0xfffb30cc)4 O.Device(B.replicate 4 0)
          , O.mkRegion(N.RegionId "stack")(N.GuestAddress 0xb000)32 O.ReadWrite(B.replicate 32 0)
          ]
       , O.caseFunctions=[(N.GuestAddress 0x8000,4*fromIntegral(length code))]
-      , O.caseInitial=[(r,case r of N.R2->0x9000;N.R3->0xfffb30cc;_->0)|r<-[N.R0 .. N.R12]]++[(N.Sp,0xb020),(N.Lr,0xa000),(N.Cpsr,0xd3)]
+      , O.caseInitial=[(r,case r of N.R2->word;N.R3->0xfffb30cc;_->0)|r<-[N.R0 .. N.R12]]++[(N.Sp,0xb020),(N.Lr,0xa000),(N.Cpsr,0xd3)]
       , O.caseExpectedStatus=status
       , O.caseExpectedRegisters=[(N.Sp,0xb020)]
       , O.caseExpectedMemory=[]
       , O.caseCp14Identity=Nothing
-      , O.caseKernel=Just O.KernelCase{O.kernelLimit=O.InstructionLimit 50,O.kernelStop=Just(N.GuestAddress 0xa100),O.kernelTpidrurw=Nothing,O.kernelCpacr=Nothing,O.kernelFpexc=Nothing}
+      , O.caseKernel=Just kernel
       }
      specs=
-      [ spec "spin"acquire 1 N.InstructionBudget
-      , spec "spin-after-nop"(0xe320f000:acquire)1 N.InstructionBudget
-      , spec "free"acquire 0 N.Returned
-      , spec "stopped"[0xeb00083e]0 N.StopAddress
-      , spec "notify"[0xf57ff04f,0xe5831000,0xe12fff1e]0 N.Returned
+      [ spec "spin"acquire[1,1]0x9000 N.InstructionBudget
+      , spec "spin-after-nop"(0xe320f000:acquire)[1,1]0x9000 N.InstructionBudget
+      , spec "spin-other-word"acquire[1,1]0x9004 N.InstructionBudget
+      , spec "free"acquire[0,1]0x9000 N.Returned
+      , spec "stopped"[0xeb00083e][0,0]0x9000 N.StopAddress
+      , spec "notify"[0xf57ff04f,0xe5831000,0xe12fff1e][0,0]0x9000 N.Returned
       ]
- observed<-O.writeBatch root specs>>=O.loadObservedBatch runner
- let outcomes=[O.caseOutcome one observation|(one,(_,observation))<-zip specs observed]
- ensure(outcomes==[O.OutcomeNoReturnWithin(O.InstructionLimit 50),O.OutcomeNoReturnWithin(O.InstructionLimit 50),O.OutcomeReturned,O.OutcomeStopped(N.GuestAddress 0xa100),O.OutcomeReturned])("kernel outcomes: "++show outcomes)
- let order=N.nativeKernel(snd(last observed))>>=N.observedOrder
+ observed<-map snd<$>(O.writeBatch root specs>>=O.loadObservedBatch runner)
+ let outcomes=zipWith O.caseOutcome specs observed
+     held address=O.OutcomeNoReturnWithin(O.InstructionLimit 50)(Just(N.GuestAddress address))
+ ensure(outcomes==[held 0x9000,held 0x9000,held 0x9004,O.OutcomeReturned,O.OutcomeStopped(N.GuestAddress 0xa100),O.OutcomeReturned])("kernel outcomes: "++show outcomes)
+ let spinSpec=specs!!0; spin=observed!!0
+     compared=O.compareKernelCase spinSpec spin
+ ensure(compared(observed!!1)==[])("equal spins differ: "++show(compared(observed!!1)))
+ ensure(O.OutcomeDiffers(held 0x9000)(held 0x9004)`elem`compared(observed!!2) && O.KernelRegisterDiffers N.R2`elem`compared(observed!!2))("spins on different words: "++show(compared(observed!!2)))
+ ensure(O.caseOutcome spinSpec{O.caseKernel=Nothing}spin==O.OutcomeRefused N.InstructionBudget)"a plain case's budget overrun is a refusal"
+ ensure(O.compareKernelCase spinSpec{O.caseKernel=Nothing}spin spin==[O.NotKernelCase])"comparing a plain case"
+ let order=N.nativeKernel(last observed)>>=N.observedOrder
  ensure(order==Just[N.OrderedBarrier N.Dsb,N.OrderedWrite(N.Write(N.GuestAddress 0xfffb30cc)(N.WriteBytes 4))])("kernel order: "++show order)
 
 main :: IO ()
@@ -670,7 +680,8 @@ main=do
   forM_
    [("kernel on a user case",set "kernel"(obj[])original)
    ,("unknown kernel field",nest "kernel"(set "clock"(s "0x00000000"))bankStore)
-   ,("FPEXC other than EN",nest "kernel"(set "fpexc"(s "0x80000000"))bankStore)
+   ,("FPEXC other than EN",nest "kernel"(set "fpexc"(s "0x80000000") . set "cpacr"(s "0x00f00000"))bankStore)
+   ,("FPEXC without CPACR",nest "kernel"(set "fpexc"(s "0x40000000"))bankStore)
    ,("device region outside a kernel case",remove "kernel"bankStore)
    ,("device region off a bank word",modifyAt "regions" 2(set "address"(s "0xfffb30d0"))bankStore)
    ,("device region wider than a word",modifyAt "regions" 2(set "size"(n 8))bankStore)
@@ -718,5 +729,5 @@ main=do
   (timed,code,out,_)<-runBounded 3000000 (8*1024*1024) runner[](BC.pack input)
   result<-jsonRead out
   ensure(not timed && code==ExitFailure 1 && get result "status"==s "invalid_case")"independent wire rejection failed"
- putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, 7 privileged-entry rejections, 9 kernel-case rejections, "++show(length bad)++" independent wire rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries and schema agreement passed")
+ putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, 7 privileged-entry rejections, 10 kernel-case rejections, "++show(length bad)++" independent wire rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries and schema agreement passed")
  putStrLn(show batched++"-case fixture batch, 9 isolation controls, batch failure and framing controls, batch limit boundaries, the owned-case batch API and kernel-case outcomes passed")

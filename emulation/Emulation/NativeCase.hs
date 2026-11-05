@@ -195,7 +195,7 @@ loadCaseWith reader input = do
  ensure(str(get expected "status") `elem` words "returned instruction_budget wall_budget memory_guard fetch_guard unknown_call unsupported_instruction stub_contract stop_address") "unsupported expected exit"
  when("kernel" `elem` keys expected)$do
   ensure(isKernel profile) "expected kernel registers need a kernel case"
-  void(bindings(get expected "kernel")["tpidrurw","fpexc"])
+  void(bindings(get expected "kernel")["tpidrurw","fpexc","monitor"])
  expectedRegs<-bindings(get expected "registers")(regs++["pc"])
  ensure(not(null expectedRegs)) "at least one independently expected register required"
  differences<-arrayCheck(get expected "memory")0 memoryCount "expected memory limit"
@@ -256,8 +256,9 @@ kernelEntry v=do
  ensure(case v of Object _->all(`elem` ["stop","tpidrurw","cpacr","fpexc"])(keys v);_->False) "kernel: only stop, tpidrurw, cpacr and fpexc"
  let optionalAddress k=if k `elem` keys v then Just<$>address(get v k) else pure Nothing
  kernel<-KernelEntry<$>optionalAddress "stop"<*>optionalAddress "tpidrurw"<*>optionalAddress "cpacr"<*>optionalAddress "fpexc"
- let KernelEntry _ _ _ fpexc=kernel
+ let KernelEntry _ _ cpacr fpexc=kernel
  ensure(maybe True(\value->value .&. complement fpexcEnable==0)fpexc) "kernel fpexc may set EN only"
+ ensure(fpexc==Nothing || cpacr/=Nothing) "kernel fpexc needs a cpacr"
  pure kernel
 -- SVC or SYS with only NZCVQ, GE, I and F besides the mode.
 privilegedMode :: Integer -> Maybe PrivilegedMode

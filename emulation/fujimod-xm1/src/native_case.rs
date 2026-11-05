@@ -31,11 +31,13 @@
 //!
 //! A privileged case may also be a kernel case. Beyond the privileged profile it
 //! admits `nop` (the only hint), word `ldrex`/`strex`/`clrex` against a single-core
-//! local monitor, DMB/DSB/ISB in their ARMv7 and CP15 c7 forms, recorded in the
-//! provenance log in execution order, TPIDRURW, CPACR and FPEXC accesses when the
-//! case declares that register, a stop address, and device regions that are single
-//! interrupt-controller bank words taking word writes only. The code hook performs
-//! the exclusives, barriers and register accesses and advances the PC itself.
+//! local monitor, DMB/DSB with a defined option, ISB SY and CP15 c7 c10 5/4,
+//! TPIDRURW, CPACR and FPEXC accesses when the case declares that register (FPEXC
+//! also needs CPACR cp10 and cp11 granting equal access), `mov pc, lr` as a tracked
+//! return, a stop address, and device regions that are single interrupt-controller
+//! bank words taking word writes only. Barriers and TPIDRURW/FPEXC writes are rows
+//! of the provenance log in execution order. The code hook performs the exclusives,
+//! barriers and register accesses and advances the PC itself.
 
 use crate::r4f;
 use fujimod_emulator_cpu::{
@@ -87,6 +89,8 @@ const CPSID_I: u32 = 0xf10c_0080;
 /// `msr CPSR_c, Rn` and `msr CPSR_fc, Rn` without cond and Rn.
 const MSR_CPSR_C: u32 = 0x0121_f000;
 const MSR_CPSR_FC: u32 = 0x0129_f000;
+/// `mov pc, lr` without cond.
+const MOV_PC_LR: u32 = 0x01a0_f00e;
 /// `mrc p14, 0, Rt, c2, c0, 0` without cond and Rt.
 const MRC_P14_IDENTITY: u32 = 0x0e12_0e10;
 const NOP: u32 = 0xe320_f000;
@@ -337,6 +341,14 @@ struct Tpidrurw(u32);
 #[derive(Clone, Copy, Debug)]
 struct Cpacr(u32);
 
+impl Cpacr {
+    /// cp10 (bits 21:20) and cp11 (bits 23:22) equal and 0b01 or 0b11.
+    fn grants_vfp(self) -> bool {
+        let (cp10, cp11) = (self.0 >> 20 & 3, self.0 >> 22 & 3);
+        cp10 == cp11 && cp10 & 1 == 1
+    }
+}
+
 /// FPEXC with no bit other than EN.
 #[derive(Clone, Copy, Debug)]
 struct Fpexc(u32);
@@ -364,7 +376,8 @@ enum Barrier {
     Isb,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 enum SystemRegister {
     Tpidrurw,
     Cpacr,
@@ -410,8 +423,8 @@ impl Kernel {
             TPIDRURW_READ if self.tpidrurw.is_some() => return read(SystemRegister::Tpidrurw),
             TPIDRURW_WRITE if self.tpidrurw.is_some() => return write(SystemRegister::Tpidrurw),
             CPACR_READ if self.cpacr.is_some() => return read(SystemRegister::Cpacr),
-            FPEXC_READ if self.fpexc.is_some() => return read(SystemRegister::Fpexc),
-            FPEXC_WRITE if self.fpexc.is_some() => return write(SystemRegister::Fpexc),
+            FPEXC_READ if self.vfp() => return read(SystemRegister::Fpexc),
+            FPEXC_WRITE if self.vfp() => return write(SystemRegister::Fpexc),
             _ => {}
         }
         if rn == 15 {
@@ -664,7 +677,14 @@ impl Kernel {
             None => None,
             Some(value) => Some(Fpexc::new(value).ok_or(WireError("a kernel case's FPEXC may set EN only"))?),
         };
+        if fpexc.is_some() && cpacr.is_none() {
+            return Err(WireError("a kernel case's FPEXC needs a CPACR"));
+        }
         Ok(Self { stop, tpidrurw, cpacr, fpexc })
+    }
+
+    fn vfp(self) -> bool {
+        self.fpexc.is_some() && self.cpacr.is_some_and(Cpacr::grants_vfp)
     }
 }
 
@@ -1150,19 +1170,38 @@ struct BarrierEntry {
 }
 
 #[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SystemKind {
+    System,
+}
+
+#[derive(Clone, Copy, Serialize)]
+struct SystemEntry {
+    pc: Word,
+    instruction: Word,
+    kind: SystemKind,
+    register: SystemRegister,
+    value: Word,
+}
+
+#[derive(Clone, Copy, Serialize)]
 #[serde(untagged)]
 enum LogEntry {
     Access(ProvenanceEntry),
     Barrier(BarrierEntry),
+    System(SystemEntry),
 }
 
-/// A kernel case's final TPIDRURW and FPEXC, each when the case declares it.
+/// A kernel case's final TPIDRURW and FPEXC, each when the case declares it, and
+/// the word the local monitor holds tagged, when it does.
 #[derive(Serialize)]
 struct KernelRegisters {
     #[serde(skip_serializing_if = "Option::is_none")]
     tpidrurw: Option<Word>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fpexc: Option<Word>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    monitor: Option<Word>,
 }
 
 #[derive(Serialize)]
@@ -1706,6 +1745,8 @@ impl State {
                     }
                     SystemRegister::Cpacr => return Err(Step::Host("CPACR is read-only".to_owned())),
                 }
+                let (pc, instruction) = (Word(self.instruction.pc), Word(self.instruction.word));
+                self.record(LogEntry::System(SystemEntry { pc, instruction, kind: SystemKind::System, register, value: Word(value) }));
             }
         }
         Ok(())
@@ -1731,6 +1772,10 @@ impl State {
             }
             Control::Dispatch(table) => self.dispatch(cpu, case, pc, word, table),
             Control::LoadMultipleReturn => self.load_multiple_return(cpu, case, word),
+            Control::UntrackedPcWrite if case.profile.kernel().is_some() && word & 0x0fff_ffff == MOV_PC_LR => {
+                let link = arm_target(cpu, 14)?;
+                self.return_to(case, link)
+            }
             Control::UntrackedPcWrite => self.load_stop(cpu, case, pc, word),
             Control::None => Ok(()),
         }
@@ -2057,6 +2102,10 @@ impl State {
             kernel: case.profile.kernel().map(|_| KernelRegisters {
                 tpidrurw: self.system.tpidrurw.map(|value| Word(value.0)),
                 fpexc: self.system.fpexc.map(|value| Word(value.0)),
+                monitor: match self.monitor {
+                    Monitor::Exclusive(tag) => Some(Word(tag)),
+                    Monitor::Open => None,
+                },
             }),
         }
     }
