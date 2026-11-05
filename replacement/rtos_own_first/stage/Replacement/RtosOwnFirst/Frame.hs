@@ -138,7 +138,11 @@ walk code entry@(GuestAddress start) = case filter (`extentContains` entry) (cod
           | Just (A.StatusWrite _ A.CurrentStatus _ _) <- A.statusWrite word -> advance state
         A.Rejected A.InterruptMask
           | not (testBit word 17) -> advance state
-        A.Rejected _ -> Left (UnwalkedWord word)
+        A.Rejected _
+          | word `elem` [0xf57ff05f, 0xf57ff04f, 0xf57ff01f] -> advance state
+          | word .&. 0x0ff00fff == 0x01900f9f -> plain [A.Reg (fromIntegral ((word `shiftR` 12) .&. 15))]
+          | word .&. 0x0ff00ff0 == 0x01800f90 -> plain [A.Reg (fromIntegral ((word `shiftR` 12) .&. 15))]
+          | otherwise -> Left (UnwalkedWord word)
         A.ReadStatus _ register -> plain [register]
         A.WriteApplicationFlags {} -> advance state
         A.Hint {} -> advance state

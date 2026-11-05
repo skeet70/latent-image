@@ -4,7 +4,7 @@ package(default_visibility = ["//visibility:public"])
 
 haskell_library(
     name = "scheduler-artifact",
-    srcs = ["Replacement/RtosScheduler/Artifact.hs", "Replacement/RtosScheduler/Frame.hs"],
+    srcs = ["Replacement/RtosScheduler/Artifact.hs"],
     src_strip_prefix = ".",
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [

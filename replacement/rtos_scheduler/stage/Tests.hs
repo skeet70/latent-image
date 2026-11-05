@@ -27,6 +27,34 @@ replaceText before after bytes =
 swapSymbol :: String -> String -> Linked -> Linked
 swapSymbol old new linked = linked {linkedSymbols = C.unlines [if old `elem` words (C.unpack line) then C.pack new else line | line <- C.lines (linkedSymbols linked)]}
 
+changedWords :: GuestAddress -> B.ByteString -> B.ByteString -> [GuestAddress]
+changedWords (GuestAddress base) before after =
+  [GuestAddress (base + fromIntegral offset) | offset <- [0,4 .. B.length before-4], U.word32At before offset /= U.word32At after offset]
+
+checkControl :: (Domain -> B.ByteString) -> Staged -> Variant -> Staged -> IO ()
+checkControl stock candidate variant control = do
+  let candidateA = stagedLoader candidate DomainA
+      candidateB = stagedLoader candidate DomainB
+      controlA = stagedLoader control DomainA
+      controlB = stagedLoader control DomainB
+      changesA = changedWords (domainLoaderBase DomainA) candidateA controlA
+      changesB = changedWords (domainLoaderBase DomainB) candidateB controlB
+      word d at = let GuestAddress base = domainLoaderBase d in U.word32At (stagedLoader control d) (fromIntegral (at-base))
+      exact = case variant of
+        StockInsert ->
+          let insertOffset = 0x43ca4-0x40000
+              insertLength = 0x43d20-0x43ca4
+              stockInsert = B.take insertLength (B.drop insertOffset (stock DomainA))
+           in controlA == replace insertOffset stockInsert candidateA && controlB == candidateB
+        SilentNotify ->
+          changesA == [GuestAddress 0x4402c, GuestAddress 0x44034] && null changesB
+            && word DomainA 0x4402c == 0xe24dd004 && word DomainA 0x44034 == 0xe28dd004
+        WrongPredicate ->
+          null changesA && changesB == map GuestAddress [0xd3fd4,0xd3fd8,0xd3fdc,0xd3fe0]
+            && map (word DomainB) [0xd3fd4,0xd3fd8,0xd3fdc,0xd3fe0] == [0xe3500001,0x93a00001,0x912fff1e,0xe320f000]
+        Candidate -> False
+  unless exact (fail ("incorrect control footprint or words: " ++ show variant))
+
 main :: IO ()
 main = do
   args <- getArgs
@@ -51,8 +79,10 @@ main = do
         ca <- right (controlLinked variant DomainA a)
         cb <- right (controlLinked variant DomainB b)
         control <- right (admit source table variant ca cb >>= stage)
-        unless (stagedDat control /= stagedDat staged) (fail "control did not change DAT")
+        checkControl loader staged variant control
       expect "pin source" (== SourceUnpinned) (requirePinned source)
+      expect "control source word" (\e -> case e of ControlRejected _ -> True; _ -> False)
+        (controlLinked SilentNotify DomainA a {linkedBin = replace (0x4402c-0x439d8) (U.putWord32 0) (linkedBin a)})
       expect "loader identity" (\e -> case e of LoaderMismatch DomainA -> True; _ -> False) (canonicalSource dat (B.cons 0 (B.drop 1 (loader DomainA))) (loader DomainB))
       expect "container" (\e -> case e of ContainerRejected _ -> True; _ -> False) (canonicalSource B.empty (loader DomainA) (loader DomainB))
       expect "malformed table" (\e -> case e of TableRejected _ -> True; _ -> False) (parseTable (C.pack "{}"))

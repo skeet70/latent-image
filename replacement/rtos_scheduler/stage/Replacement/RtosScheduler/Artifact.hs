@@ -21,7 +21,7 @@ import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
 import Numeric (readHex)
 import Replacement.RtosOwnFirst.Regions (Domain (..), GuestAddress (..), Extent (..), FrameBytes (..), SymbolName (..), domains, domainLabel, domainLoaderBase, domainLoaderId, domainLoaderSize, extentBytes, extentContains, hexText)
-import Replacement.RtosScheduler.Frame
+import Replacement.RtosOwnFirst.Frame
 
 data Helper = Acquire | Release | Find | Insert | Remove | Reset | Prepare | Notify | Requeue | Rotate deriving (Eq, Ord, Show, Enum, Bounded)
 data Variant = Candidate | StockInsert | SilentNotify | WrongPredicate deriving (Eq, Show)
@@ -261,7 +261,7 @@ stage a = do
 
 controlLinked :: Variant -> Domain -> Linked -> Either StageError Linked
 controlLinked variant d linked
-  | variant == SilentNotify && d == DomainA = patchAt 0x44030 0xf57ff04f 0xe24dd004 >>= \changed -> patchOther changed 0x44034 0xebfffcea 0xe28dd004
+  | variant == SilentNotify && d == DomainA = patchAt 0x4402c 0xe3a01078 0xe24dd004 >>= \changed -> patchOther changed 0x44034 0xebfffcea 0xe28dd004
   | variant == WrongPredicate && d == DomainB = patchAt 0xd3fd4 0xe3e01002 0xe3500001 >>= \c1 -> patchOther c1 0xd3fd8 0xe1100001 0x93a00001 >>= \c2 -> patchOther c2 0xd3fdc 0x03a00001 0x912fff1e >>= \c3 -> patchOther c3 0xd3fe0 0x012fff1e 0xe320f000
   | otherwise = Right linked
   where
