@@ -132,9 +132,10 @@ findValid hardware bank state = case findLast bank state of
         Accept -> (Just (Valid bank position skipped (B.take (recordBytes (geometry (storeKind s'))) (staging s'))), s', skipped)
         Reject | p == 0 -> (Nothing, s', skipped)
                | otherwise -> step (Position (p - 1)) (skipped + 1) (seek bank (Position (p - 1)) s')
+data RecoveryCount = OmitRecoveryCount | WriteRecoveryCount deriving (Eq, Show)
 -- RSC 0x6ac57c..0x6ac7bc, including the third visit and final re-search.
-readLatest :: HardwareCheck -> Store -> (Maybe Valid, Store)
-readLatest hardware initial = finish (scan 0 Nothing initial)
+readLatest :: RecoveryCount -> HardwareCheck -> Store -> (Maybe Valid, Store)
+readLatest recoveryCount hardware initial = finish (scan 0 Nothing initial)
   where
     g = geometry (storeKind initial)
     total = 2 * recordCount g
@@ -156,7 +157,7 @@ readLatest hardware initial = finish (scan 0 Nothing initial)
                 | otherwise -> scan (n + 1) best (s' { currentBank = nextBank (currentBank s') })
     finish (Nothing, s) = (Nothing, s { currentBank = nextBank (currentBank initial) })
     finish (Just best, s) =
-      let s' = if validPosition best == Position (recordCount g - 1)
+      let s' = if recoveryCount == WriteRecoveryCount && validPosition best == Position (recordCount g - 1)
                then let (_, checked, _) = findValid hardware (nextBank (validBank best)) s in checked
                else s
           (lastBest, final, _) = findValid hardware (validBank best) (s' { currentBank = validBank best })
@@ -181,7 +182,7 @@ innerAppend hardware (Seed seed) source state = case findLast bank state of
 append :: HardwareCheck -> Seed -> AppendSource -> Store -> (Word32, Store)
 append hardware seed source initial =
   let queried = currentBank initial
-      (latest, readState) = readLatest hardware initial
+      (latest, readState) = readLatest OmitRecoveryCount hardware initial
       (nextSeed, destination) = case latest of
         Nothing -> (seed, Bank0)
         Just v -> let Sequence seqNo = successor (sequenceOf (validRecord v)) in (Seed seqNo, validBank v)

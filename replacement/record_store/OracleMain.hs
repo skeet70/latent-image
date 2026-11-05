@@ -108,6 +108,10 @@ symbolFunctions path = do
 main :: IO ()
 main = do
   args <- getArgs
+  case optional args "--native-jobs" of
+    Nothing -> pure ()
+    Just "1" -> pure ()
+    Just _ -> error "record oracle executes one native job at a time"
   runner <- traverse makeAbsolute (optional args "--runner")
   outputPath <- required args "--out" >>= makeAbsolute
   candidate <- traverse makeAbsolute (optional args "--candidate")
@@ -140,7 +144,7 @@ main = do
       let inputs = M.fromList [(entryId entry,entryPath entry) | entry <- entries]
       unless (M.size inputs == length entries) (error "duplicate cached stock case")
       pure inputs
-  batches <- forM (zip [0::Int ..] (chunks 16 (zip selected specs))) $ \(batchIndex,rows) -> do
+  batches <- forM (zip [0::Int ..] (chunks 4 (zip selected specs))) $ \(batchIndex,rows) -> do
     let directory = outputPath </> "stock-" ++ show batchIndex
     batch <- writeBatch directory (map snd rows)
     patchStubs directory (map snd rows)

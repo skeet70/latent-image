@@ -510,4 +510,27 @@ XM1_EMULATOR_SLOTS=1 devenv shell -- bazel-bin/emulation/emulator-slot bazel-bin
 # Add --control with one control artifact for a must-fail comparison.
 ```
 
-Qualification is incomplete (`E-RECORD-STORE-ORACLE-NATIVE-150`). `private-data/scratch/RecordStoreOracle/preflight-both-5/summary.json` records 370 admitted cases per role. The deadline-free `full-3` native run ended with exit 137 during candidate batch 10, before an aggregate verdict. No model-equals-stock, candidate-equals-stock or nine-control qualification is claimed. The model tests pass; the comparison tool now forces each case verdict and writes `batch-N.json` before continuing. That change has not completed a native rerun.
+Qualified on the native profile (`E-RECORD-STORE-ORACLE-NATIVE-150`): all 370 cases match the independent model and stock, and the owned carrier matches stock on all 370. `stock-6` holds the native stock observations, `stock-7` their comparison with the corrected model, and `candidate-10` the full comparison for Core `849a0387`, carrier bin SHA-256 `ad52c5d5e5c4c0585f08bdb3a30fb1fc14284eafe1e4516f299c6394bf62e5bc`. Cached observations are used only after the execution-input equality check. All nine controls are detected on 60 selected cases; none relies on a native admission refusal.
+
+The stock run exposed 35 callback-order differences in the initial model. `0x6ac694..0x6ac69c` skips the following-bank check when the recovery-count output is null; append passes null. The model now distinguishes `OmitRecoveryCount` and `WriteRecoveryCount`. The stock contract and hardware fixtures were not changed.
+
+| Control | Case selector | Cases | Cases differing from stock |
+| ---: | --- | ---: | ---: |
+| 1 | `append-mask` | 5 | 5 |
+| 2 | `append-rotate` | 10 | 10 |
+| 3 | `append-queried-different` | 5 | 5 |
+| 4 | `newest-rejected` | 5 | 5 |
+| 5 | `all-rejected` | 5 | 5 |
+| 6 | `append-rotate` | 10 | 10 |
+| 7 | `wrap` | 10 | 5 |
+| 8 | `erase-all` | 5 | 5 |
+| 9 | `fresh-append` | 5 | 1 |
+
+The comparator forces each verdict and writes `batch-N.json` after each four-case batch. Reported peak RSS was 498,636 KiB for the stock run and 599,492 KiB for the full candidate comparison, with zero swaps. Native-only batches may run serially in a 2 GiB scope with `--native-jobs 1`; full-system runs still require an emulator slot.
+
+```sh
+systemd-run --user --scope -p MemoryMax=2G -- \
+  bazel-bin/replacement/record_store/oracle-cases --native-jobs 1 \
+  --runner bazel-bin/emulation/native-runner --out PRIVATE_OUTPUT \
+  --stock-output STOCK_OBSERVATIONS --candidate CARRIER.bin --symbols CARRIER.symbols
+```

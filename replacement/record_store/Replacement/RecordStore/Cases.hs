@@ -149,7 +149,7 @@ model hardware c = finish (go 0 False [] Nothing initialResults initialCaller (i
           Zero -> same 0
           Latest | not valid -> continue statusUnavailable (replace (offset + 4) (word32le 0) results) caller state opened active current
                  | otherwise ->
-              let (latest, next) = readLatest hardware state
+              let (latest, next) = readLatest WriteRecoveryCount hardware state
                   written = case latest of
                     Nothing -> results
                     Just v -> replace (offset + 64) (validRecord v) (replace (offset+8) (half (validSkipped v)) (replace (offset+4) (word32le (stagingAddress g)) results))

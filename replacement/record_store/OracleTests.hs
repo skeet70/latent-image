@@ -16,7 +16,7 @@ main = do
       empty = initialStore Kind3 (mediumOf g [] []) NoFault MarkerCallback
       (status,written) = append hardware (Seed 0x9234) (CallerRecord (sourceBytes g)) empty
       persisted = medium (persistence written)
-      (latest,_) = readLatest hardware written
+      (latest,_) = readLatest WriteRecoveryCount hardware written
   assert "empty-bank seed remains unmasked" (status == 0 && sequenceOf (recordAt g Bank0 (Position 0) persisted) == Sequence 0x9234)
   assert "latest returns stored record" (fmap (sequenceOf . validRecord) latest == Just (Sequence 0x9234))
   assert "kind3 program retains fresh-open tail" (case requests (persistence written) of [Program (PoolBlock 0x58) 0 payload] -> B.length payload == 0x600 && B.all (==0xff) (B.drop 0x34 payload); _ -> False)
@@ -27,8 +27,14 @@ main = do
       (_,masked) = append hardware (Seed 0) (CallerRecord (sourceBytes g)) wrapped
   assert "occupied predecessor successor masks bit15" (case requests (persistence masked) of [Program _ 0x34 payload] -> sequenceOf payload == Sequence 0; _ -> False)
   let rejected = initialStore Kind3 (mediumOf g [(10,False),(11,True)] []) NoFault MarkerCallback
-      (accepted,_) = readLatest hardware rejected
+      (accepted,_) = readLatest WriteRecoveryCount hardware rejected
   assert "rejected latest steps back" (fmap (sequenceOf . validRecord) accepted == Just (Sequence 10))
+  let bothFull = initialStore Kind3 (mediumOf g [(fromIntegral p,False) | p <- [0..126::Int]] [(fromIntegral p,False) | p <- [127..253::Int]]) NoFault MarkerCallback
+      (_,afterAppend) = append hardware (Seed 0) (CallerRecord (sourceBytes g)) bothFull
+      (_,withCount) = readLatest WriteRecoveryCount hardware bothFull
+      sequences state = [sequenceOf before | CallbackEvent Check before _ _ <- callbackEvents state]
+  assert "append omits the recovery-count following-bank check" (sequences afterAppend == map Sequence [126,253,126,253])
+  assert "requested recovery count checks the following bank" (sequences withCount == map Sequence [126,253,126,126,253])
   let (_,count,collected,_) = collect initialCaller rejected
   assert "collect keeps rejected occupied records" (count == 2 * 0x34 && B.index collected (0x34+2) == 0xee)
   assert "collect leaves caller bytes past both bank chunks unchanged" (B.length collected == callerSize && B.drop (2 * 127 * 0x34) collected == B.replicate (callerSize - 2 * 127 * 0x34) 0xa5)
