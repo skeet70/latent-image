@@ -307,6 +307,7 @@ run options = do
           clock <- emulatedClock
           triggerSynthetic entry address clock api (receipt </> "synthetic-trigger")
           captured <- capture "synthetic-fallback"
+          require (unEventCount (ringPreempted captured) == 0) "synthetic recorder exhausted its preemption retries"
           require (unEventCount (ringCommittedTotal captured) == unEventCount (ringCommittedTotal ordinary) + 300 && unEventCount (ringOverwritten captured) >= 44 && length (filter ((== Synthetic) . eventKind) (ringEvents captured)) == 256) "synthetic recorder did not commit the requested overwrite exercise"
           pure captured
         writeJson (receipt </> "e2e-result.json") (object
@@ -317,7 +318,7 @@ run options = do
           , "event_origin" .= (if genuine then String "ordinary-af" else String "synthetic-fallback")
           , "ordinary_af_observed" .= genuine, "half_press_accepted" .= halfPressAccepted, "synthetic_trigger_count" .= (if genuine then 0 else 300 :: Int)
           , "exclusive_model" .= object
-              [ "uncontended_cpu0_local_monitor_exercised" .= (not genuine && not (ringContentionLoss result))
+              [ "cpu0_local_monitor_exercised" .= not genuine
               , "contention_or_preemption_established" .= False
               , "global_monitor_established" .= False
               , "global_monitor_relied_on" .= False

@@ -29,10 +29,10 @@ check label yes = unless yes (error label)
 le32 :: Word32 -> [Word8]
 le32 value = [fromIntegral (value `shiftR` bits) | bits <- [0,8,16,24]]
 
--- Original synthetic fixtures encode the ring v1 layout; no camera bytes are used.
+-- Original synthetic fixtures encode the ring v2 layout; no camera bytes are used.
 header :: Word32 -> Word32 -> [Word8]
 header total overwritten = concatMap le32
-  ([0x31524641,1,64,36,256,total,overwritten,0,0x4003] ++ replicate 7 0)
+  ([0x31524641,2,64,36,256,total,overwritten,0,0x4003] ++ replicate 7 0)
 
 event :: Word32 -> Word32 -> [Word8]
 event sequenceNumber kind = concatMap le32
@@ -114,6 +114,15 @@ main = do
     case afRingValue withLoss of
       Object value -> check "JSON preserves contention loss" (M.lookup "contention_loss" value == Just (Bool True))
       _ -> error "capture JSON must be an object"
+    forM_ [0,1,4,maxBound] $ \preempted -> do
+      exhausted <- capture (replaceWord 40 preempted original)
+      check "preemption exhaustion preserves committed events and contention status"
+        (ringEvents exhausted == ringEvents beforeLoss && ringCommittedTotal exhausted == ringCommittedTotal beforeLoss
+          && ringOverwritten exhausted == ringOverwritten beforeLoss && not (ringContentionLoss exhausted))
+      check "preemption exhaustion count remains explicit" (unEventCount (ringPreempted exhausted) == preempted)
+      case afRingValue exhausted of
+        Object value -> check "JSON preserves preempted count" (M.lookup "preempted" value == Just (Number (fromIntegral preempted)))
+        _ -> error "capture JSON must be an object"
   forM_ (ringEvents observed) $ \entry -> check "little-endian register and snapshot words survive decoding"
     (map unObservedWord [eventR0 entry,eventR1 entry,eventR2 entry,eventR3 entry,eventSearchState entry,eventFocusStatistic entry]
       == [0x01234567,0x89abcdef,0x10203040,0x50607080,0xa1b2c3d4,0xe5f60718])
@@ -138,7 +147,7 @@ main = do
   let reject label bytes predicate = check label (case decodeAfRing bytes of Left failure -> predicate failure; Right _ -> False)
       malformed _ = True
   reject "active writer refused" (replaceWord 28 1 normal) (== ActiveWriter)
-  forM_ [(0,0),(4,2),(8,32),(12,32),(12,64),(16,255),(28,2),(32,0x4002),(36,2),(36,maxBound),(40,1),(60,1)] $ \(at,value) ->
+  forM_ [(0,0),(4,1),(4,3),(8,32),(12,32),(12,64),(16,255),(28,2),(32,0x4002),(36,2),(36,maxBound),(44,1),(60,1)] $ \(at,value) ->
     reject "malformed header refused" (replaceWord at value normal) (\failure -> case failure of HeaderMismatch _ _ -> True; _ -> False)
   forM_ [B.empty,B.take 63 pristine,B.take 9279 pristine,pristine <> B.singleton 0] $ \bytes ->
     reject "exact extent enforced" bytes (\failure -> case failure of RingExtentMismatch _ -> True; _ -> False)
