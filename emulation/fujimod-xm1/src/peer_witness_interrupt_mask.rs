@@ -293,7 +293,7 @@ pub(in crate::peer_witness::loader) fn observe(machine: &mut Machine, runner: &R
     let prelude_outcome = (|| {
         let dispatch = stop(machine, DISPATCH)?;
         require(dispatch.registers[0].0 == 1 && dispatch.registers[3].0 == TABLE_GUEST as u32
-            && dispatch.registers[4].0 == 1 && dispatch.registers[5].0 == ROOTS.0 as u32
+            && dispatch.registers[4].0 == 1 && dispatch.registers[5].0 == ROOTS.0 as u32 && dispatch.registers[6].0 == 2
             && dispatch.sp.0 == 0x400f3388 && dispatch.registers[11].0 == 0x400f33a4
             && dispatch.cpsr.0 & 0x07f0_fe20 == 0 && dispatch.cpsr.0 & 0xdf == 0xd3 && dispatch.tcm == start.tcm,
             "consumer source dispatch context differs")?;

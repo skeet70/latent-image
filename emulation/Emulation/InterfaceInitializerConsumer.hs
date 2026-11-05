@@ -245,7 +245,7 @@ validateConsumer initializer validated (ConsumerReceipt InterruptMask start disp
       Context afterPc final finalSp finalLr finalCpsr afterCounts finalTcm = after
   require (length incoming == 13 && length entering == 13 && length outgoing == 13 && length final == 13) "consumer register width differs"
   require (dispatchPc == 0x723600 && sp == 0x400f3388 && incoming !! 11 == 0x400f33a4
-    && incoming !! 0 == 1 && incoming !! 3 == 0x400ddaa0 && incoming !! 4 == 1 && incoming !! 5 == 0x96bd20
+    && incoming !! 0 == 1 && incoming !! 3 == 0x400ddaa0 && incoming !! 4 == 1 && incoming !! 5 == 0x96bd20 && incoming !! 6 == 2
     && cpsr .&. 0x07f0fe20 == 0 && cpsr .&. 0xdf == 0xd3) "consumer source dispatch inputs or supported A32 little-endian SVC CPSR differ"
   let targetRegisters = take 3 incoming ++ [0xd1140] ++ drop 4 incoming
       mask = cpsr .&. 0x80

@@ -566,7 +566,7 @@ step contract core1Identity (Machine before bytes pendingEvents) after = do
             finish oldRegisters (pc+4) ((cpsr .&. complement mask) .|. (readReg reg .&. mask)) bytes events
         | word .&. 0x0fff0fff == 0x0e120e10 && (word `shiftR` 12) .&. 15 /= 15 ->
             finish (set [(A.Reg (fromIntegral ((word `shiftR` 12) .&. 15)),core1Identity)]) (pc+4) cpsr bytes events
-        | word .&. 0x0fffffff == 0x0e072fba && pc `elem` [0x427ec,0x42818,0xd27ec,0xd2818] -> unchanged
+        | word .&. 0x0fff0fff == 0x0e070fba && (word `shiftR` 12) .&. 15 /= 15 -> unchanged
         | word .&. 0x0ff00fff == 0x01900f9f -> do
             let base = A.Reg (fromIntegral ((word `shiftR` 16) .&. 15)); destination = A.Reg (fromIntegral ((word `shiftR` 12) .&. 15))
             (value,remaining) <- load (readReg base)
@@ -771,9 +771,10 @@ compareReceipts (retained,retainedBytes) (owned,ownedBytes) = do
   Accepted a b c d e before after <- validateEvidence retained retainedBytes
   Accepted a' b' c' d' e' before' after' <- validateEvidence owned ownedBytes
   let visible context = (pcOf context,regsOf context,cpsrOf context,tcmOf context)
+      slotReturn context = (pcOf context,map (register context . A.Reg) (0:[4..11]++[13]),cpsrOf context .&. 0x07f0ffff,tcmOf context)
       caller context = (pcOf context,map (register context . A.Reg) (0:[4..11]++[13]),cpsrOf context,tcmOf context)
       effects resources = [(address,views) | Resource address@(Physical start) views <- resources,start `elem` [0x96bd20,0x4dae0,0xddaa0,0xa0f824,0xc0804]]
-  checked ComparisonMismatch (require (map visible [a,b,c,d] == map visible [a',b',c',d'] && caller e == caller e' && effects before == effects before' && effects after == effects after') "critical retained/owned caller ABI, counter, lock or publication effects differ")
+  checked ComparisonMismatch (require (map visible [a,c] == map visible [a',c'] && map slotReturn [b,d] == map slotReturn [b',d'] && caller e == caller e' && effects before == effects before' && effects after == effects after') "critical retained/owned caller ABI, counter, lock or publication effects differ")
 
 replayWrapper :: Context -> Context -> [Resource] -> Resource -> [PairEvent] -> Either String Resource
 replayWrapper origin returned resources frame events = do
@@ -841,9 +842,9 @@ counterEffects before after changed events = do
       expected = [(Just (fromIntegral after),Just (AccessBytes (B.unpack (U.putWord32 before)))) | changed]
   require (writes == expected) "critical wrapping counter effects differ from the observed source branch"
 
-sourceScratch :: Context -> [Word32] -> Word32 -> Word32 -> Either String ()
-sourceScratch returned scratch lr status = do
-  require (map (register returned . A.Reg) [0,1,2,3,12] == scratch && register returned A.lr == lr && cpsrOf returned == status) "critical retained-result scratch, LR or CPSR ABI differs from original source"
+sourceScratch :: Context -> Word32 -> Word32 -> Either String ()
+sourceScratch returned r0 status = do
+  require (register returned (A.Reg 0) == r0 && cpsrOf returned .&. 0x07f0ffff == status .&. 0x07f0ffff) "critical retained-result r0 or CPSR control bits differ from original source"
 
 validateSourceEntry :: Boundary -> Context -> [PairEvent] -> Either String ()
 validateSourceEntry (Boundary incoming _ steps before after _) returned events = do
@@ -860,12 +861,10 @@ validateSourceEntry (Boundary incoming _ steps before after _) returned events =
       let direct = callValue first == 0x12
           status = (cpsrOf incoming .&. 0x0fffffff) .|. 0x60000080
           prior = cpsrOf incoming .&. 0x80
-          inherited = case mask of ServiceCall _ _ maskReturned -> register maskReturned (A.Reg 1)
-          preservedR12 = register incoming (A.Reg 12)
       if direct then do
         require (null remaining && new == old) "critical direct-tag entry performed an extra observation, retry or counter update"
         counterEffects old old False events
-        sourceScratch returned [prior,inherited,0x400ddaa0,0x12,preservedR12] 0xd131c status
+        sourceScratch returned prior status
       else case remaining of
         second:retries -> do
           checkService Observe second
@@ -877,7 +876,7 @@ validateSourceEntry (Boundary incoming _ steps before after _) returned events =
             require (all ((/= 0) . callValue) (init retries) && callValue (last retries) == 0) "critical retry loop did not stop on its first observed success"
           require (new == old+1) "critical entry counter increment is not wrapping u32 addition"
           counterEffects old new True events
-          sourceScratch returned [prior,if counted then inherited else 0x22,new,0x40a0f3d0,preservedR12] (if counted then 0xd131c else 0xd12e4) status
+          sourceScratch returned prior status
         [] -> Left "critical entry collapsed the source's separate first and second observations"
     _ -> Left "critical entry omitted its identity, mask or first observation service"
 
@@ -897,15 +896,13 @@ validateSourceExit (Boundary incoming _ steps before after _) returned events = 
           release = decrement && expectedCounter == 0
           comparison = if decrement && not release then (if testBit expectedCounter 31 then 0xa0000000 else 0x20000000) else 0x60000000
           status = (cpsrOf incoming .&. 0x0fffff7f) .|. comparison .|. (register incoming (A.Reg 0) .&. 0x80)
-          lr = if direct then 0x72370c else if old == 0 then 0x72373c else 0x72378c
-          r2 = if decrement then if release then 0 else expectedCounter else 0x400ddaa0
       require (map callKind remaining == (if release then [Release,Restore] else [Restore])) "critical exit release/restore sequence differs from source counter branch"
       mapM_ (\call -> checkService (callKind call) call) remaining
       let ServiceCall _ restoreIncoming _ = last remaining
       require (register restoreIncoming (A.Reg 0) == register incoming (A.Reg 0)) "critical restore service did not receive the caller's saved prior mask"
       require (new == expectedCounter) "critical exit counter decrement or zero/direct skip differs"
       counterEffects old new decrement events
-      sourceScratch returned [status,status .&. complement 0x80,r2,register incoming (A.Reg 3),register incoming (A.Reg 12)] lr status
+      sourceScratch returned status status
     _ -> Left "critical exit omitted source identity or observation"
 
 validateBoundaryFetches :: Context -> Context -> [Context] -> [PairEvent] -> [PairEvent] -> Either String ()

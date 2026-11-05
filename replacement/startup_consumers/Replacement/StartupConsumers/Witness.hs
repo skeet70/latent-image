@@ -693,7 +693,8 @@ checkFirstConsumer model receipt initialized = do
   target <- register service 3
   require (identity == 1 && target == 0xd1140 && readClock > probeClock rootLoad && readClock <= probeClock slotLoad) FirstConsumerRejected
   identityTarget <- register identityCall 3
-  require (identityTarget == 0x412bc) FirstConsumerRejected
+  require (identityTarget == 0x412bc
+    && number (K.contextCpsr (machine identityReturn)) .&. 0x07f0ffff == number (K.contextCpsr (machine identityCall)) .&. 0x07f0ffff) FirstConsumerRejected
   _ <- checkGlobalCall receipt identityCall identityReturn (Address 0x412bc)
   (_,irqReturn) <- checkGlobalCall receipt service returned (Address 0xd1140)
   priorMask <- register irqReturn 0
