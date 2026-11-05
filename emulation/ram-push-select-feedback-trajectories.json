@@ -15,7 +15,8 @@
      "reads": [["animation", "015e4894", 28]], "steps": [["ok", 1, 645, 0]]},
     {"phase": "select-feedback-none", "requires": ["select-feedback-none-open"], "capture": "feedback-none-blink",
      "reads": [["select-snapshot", "00941300", 44], ["pane-state", "015e64d8", 116], ["animation", "015e4894", 28], ["activation", "runtime:rb_activation", 8]],
-     "steps": [["ok", 1, 5, 34, {"hold_instructions": 3000000, "release_instructions": 1}]]}
+     "steps": [["ok", 1, 5, 34, {"hold_instructions": 3000000, "release_instructions": 1}]]},
+    {"phase": "select-feedback-unload-close", "steps": [["back", 1, 5, 34]]}
   ],
   "after_unload": []
 }

@@ -5,8 +5,12 @@
 -- @{"image":PATH,"symbols":PATH}@, or for @loader-startup@ one such object under each of
 -- @loader_a@, @loader_b@, @dispatcher@ and @installer@. @application@ is optional and
 -- asks for the contract's application section. Unknown keys refuse.
+-- @task-constructors@ uses one packed image; its symbols map the thirteen
+-- contiguous load extents to their stock execution addresses.
+-- @kernel-slot-bodies@ takes @{"loader_a":LINKED,"loader_b":LINKED,"regions":PATH}@ with LINKED an image object.
 module Replacement.StartupArtifact.Manifest
   ( Manifest (..), ManifestPiece (..), LinkedPaths (..), LoaderStartupPaths (..), ApplicationPhase (..), manifestPieceKind, parseManifest
+  , KernelSlotPaths (..)
   ) where
 
 import Control.Monad (forM, forM_, unless, when)
@@ -29,11 +33,16 @@ data LoaderStartupPaths = LoaderStartupPaths
   { loaderAPaths :: LinkedPaths, loaderBPaths :: LinkedPaths, dispatcherPaths :: LinkedPaths, installerPaths :: LinkedPaths }
   deriving (Eq, Show)
 
-data ManifestPiece = SingleImagePiece PieceKind LinkedPaths | LoaderStartupPiece LoaderStartupPaths deriving (Eq, Show)
+data ManifestPiece = SingleImagePiece PieceKind LinkedPaths | LoaderStartupPiece LoaderStartupPaths | KernelSlotPiece KernelSlotPaths
+  deriving (Eq, Show)
+
+data KernelSlotPaths = KernelSlotPaths { slotLoaderAPaths :: LinkedPaths, slotLoaderBPaths :: LinkedPaths, slotRegionsPath :: FilePath }
+  deriving (Eq, Show)
 
 manifestPieceKind :: ManifestPiece -> PieceKind
 manifestPieceKind (SingleImagePiece kind _) = kind
 manifestPieceKind (LoaderStartupPiece _) = LoaderStartup
+manifestPieceKind (KernelSlotPiece _) = KernelSlotBodies
 
 -- | Whether the contract carries the application section.
 data ApplicationPhase = WithoutApplication | WithApplication deriving (Eq, Show)
@@ -102,6 +111,12 @@ parseManifest bytes = do
         let side name = linked ("piece.inputs." <> name) (field inputs name)
         paths <- LoaderStartupPaths <$> side "loader_a" <*> side "loader_b" <*> side "dispatcher" <*> side "installer"
         pure (LoaderStartupPiece paths)
+      KernelSlotBodies -> do
+        inputs <- object "piece.inputs" ["loader_a", "loader_b", "regions"] [] (field piece "inputs")
+        let side name = linked ("piece.inputs." <> name) (field inputs name)
+        regions <- text "piece.inputs.regions" (field inputs "regions")
+        paths <- KernelSlotPaths <$> side "loader_a" <*> side "loader_b" <*> pure (T.unpack regions)
+        pure (KernelSlotPiece paths)
       _ -> SingleImagePiece kind <$> linked "piece.inputs" (field piece "inputs")
   let kinds = sort (map manifestPieceKind pieces)
   forM_ (zip kinds (drop 1 kinds)) $ \(left, right) -> when (left == right) (Left (DuplicatePieceKind left))

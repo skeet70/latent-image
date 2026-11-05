@@ -23,7 +23,7 @@ pub fn attach(machine: Machine, rendezvous: RendezvousInputs, hold: Option<Route
     let mut boundary = |bridge: &Ff80, phase| observer.as_mut().map_or(Ok(()), |observer| observer.boundary(&bridge.machine, phase));
     bridge.advance(FIRST_START_SCREEN.saturating_sub(bridge.machine.instructions()))?;
     boundary(&bridge, AttachPhase::FirstStart)?;
-    if rendezvous == RendezvousInputs::MenuUpAndWriteProtect && !bridge.machine.card_present()? {
+    if rendezvous == RendezvousInputs::DialPushAndWriteProtect && !bridge.machine.card_present()? {
         return Err("the SD host does not read the inserted card as present".into());
     }
     for key in [RouteKey::Up; 12].into_iter().chain([RouteKey::Ok, RouteKey::Ok]) {

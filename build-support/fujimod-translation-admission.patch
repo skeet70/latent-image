@@ -1,0 +1,221 @@
+--- a/crates/emulator-cpu/src/lib.rs
++++ b/crates/emulator-cpu/src/lib.rs
+@@ -558,6 +558,14 @@
+         callback: unsafe fn(CpuMutation, *mut c_void) -> bool,
+         data: *mut c_void,
+     },
++    /// Runs once per translated instruction, before its generated code can run.
++    /// Code writes invalidate translations and repeat admission. False refuses
++    /// execution. The address is aligned; Thumb words put the first halfword high.
++    TranslationAdmission {
++        callback: unsafe fn(u64, u32, bool, *mut c_void) -> bool,
++        data: *mut c_void,
++        range: HookRange,
++    },
+     Instruction {
+         callback: unsafe fn(u64, u32, *mut c_void),
+         data: *mut c_void,
+--- a/crates/emulator-cpu-unicorn/src/lib.rs
++++ b/crates/emulator-cpu-unicorn/src/lib.rs
+@@ -799,6 +799,9 @@
+             Hook::Mutation { .. } => {
+                 return Err("mutation hooks require the serialized R-profile backend".into());
+             }
++            Hook::TranslationAdmission { .. } => {
++                return Err("translation admission requires the R-profile backend".into());
++            }
+             Hook::Instruction { range, .. } => (4, instruction as *const (), range),
+             Hook::Block { range, .. } => (8, block as *const (), range),
+             Hook::Exception { .. } => (1, exception as *const (), HookRange::All),
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core.rs
+@@ -470,7 +470,17 @@
+         Ok(())
+     }
+     fn classify(&self, address: u64, word: u32) -> Result<Translation, String> {
+-        let watch = self.memory.note_code(self.id.get(), address, 4)?;
++        let thumb = address & 1 != 0;
++        let address = address & !1;
++        for (_, hook) in self.observer_index.borrow().admissions.at(address) {
++            if let Hook::TranslationAdmission { callback, data, .. } = *hook {
++                if !unsafe { callback(address, word, thumb, data) } {
++                    return Err(format!("translation admission refused at {address:#010x}"));
++                }
++            }
++        }
++        let bytes = if thumb && word <= 0xffff { 2 } else { 4 };
++        let watch = self.memory.note_code(self.id.get(), address, bytes)?;
+         Ok(Translation {
+             instruction: if !self
+                 .observer_index
+@@ -478,8 +488,7 @@
+                 .instructions
+                 .at(address)
+                 .is_empty()
+-                || special(word)
+-                || self.loop_candidate(address, word)
++                || !thumb && (special(word) || self.loop_candidate(address, word))
+             {
+                 InstructionDisposition::ObserveAndEndBlock
+             } else {
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core/observers.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/observers.rs
+@@ -93,6 +93,7 @@
+ pub(super) struct Index {
+     pub instructions: Ranges,
+     pub blocks: Ranges,
++    pub admissions: Ranges,
+     pub stores: Ranges,
+     pub reads: Ranges,
+     pub writes: Ranges,
+@@ -107,6 +108,7 @@
+         match hook {
+             Hook::Mutation { .. } => self.mutations.push((key, hook)),
+             Hook::Instruction { range, .. } => self.instructions.insert(key, hook, range),
++            Hook::TranslationAdmission { range, .. } => self.admissions.insert(key, hook, range),
+             Hook::Block { range, .. } => self.blocks.insert(key, hook, range),
+             Hook::CompletedStore { range, .. } => self.stores.insert(key, hook, range),
+             Hook::Exception { .. } => self.exceptions.push((key, hook)),
+@@ -130,6 +132,7 @@
+         match hook {
+             Hook::Mutation { .. } => self.mutations.retain(|(id, _)| *id != key),
+             Hook::Instruction { range, .. } => self.instructions.remove(key, range),
++            Hook::TranslationAdmission { range, .. } => self.admissions.remove(key, range),
+             Hook::Block { range, .. } => self.blocks.remove(key, range),
+             Hook::CompletedStore { range, .. } => self.stores.remove(key, range),
+             Hook::Exception { .. } => self.exceptions.retain(|(id, _)| *id != key),
+--- a/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/core/backend.rs
+@@ -538,6 +538,9 @@
+             }
+         }
+         let result = self.execute(request, begin);
++        if result.is_err() {
++            e.cpu.invalidate_code(None)?;
++        }
+         e.clock_overshoot
+             .set(if e.policy.get() == ExecutionPolicy::Interactive {
+                 e.count.get().saturating_sub(e.cap.get())
+@@ -636,7 +639,7 @@
+             .checked_add(1)
+             .ok_or("R-profile hook identity overflow")?;
+         let native = match hook {
+-            Hook::Instruction { range, .. } | Hook::Block { range, .. } => {
++            Hook::Instruction { range, .. } | Hook::Block { range, .. } | Hook::TranslationAdmission { range, .. } => {
+                 self.retranslate(range)?;
+                 None
+             }
+@@ -692,7 +695,7 @@
+         let observers = e.observers.borrow();
+         let observer = observers.get(&hook.key).ok_or("unknown R-profile hook")?;
+         match observer.hook {
+-            Hook::Instruction { range, .. } | Hook::Block { range, .. } => {
++            Hook::Instruction { range, .. } | Hook::Block { range, .. } | Hook::TranslationAdmission { range, .. } => {
+                 self.retranslate(range)?;
+             }
+             Hook::Exception { .. } => (),
+--- a/crates/emulator-cpu-unicorn/src/rprofile/worker.rs
++++ b/crates/emulator-cpu-unicorn/src/rprofile/worker.rs
+@@ -217,6 +217,7 @@
+         size: u32,
+     },
+     Block(Block),
++    TranslationAdmission { address: u64, word: u32, thumb: bool },
+     Exception(arm::Exception),
+     Synchronization,
+     Memory {
+@@ -239,6 +240,7 @@
+     MmioRead,
+     MmioWrite,
+     Instruction,
++    TranslationAdmission,
+     Block,
+     Exception,
+     Synchronization,
+@@ -252,6 +254,7 @@
+         Self::MmioRead,
+         Self::MmioWrite,
+         Self::Instruction,
++        Self::TranslationAdmission,
+         Self::Block,
+         Self::Exception,
+         Self::Synchronization,
+@@ -264,6 +267,7 @@
+             CallbackCall::MmioRead { .. } => Self::MmioRead,
+             CallbackCall::MmioWrite { .. } => Self::MmioWrite,
+             CallbackCall::Instruction { .. } => Self::Instruction,
++            CallbackCall::TranslationAdmission { .. } => Self::TranslationAdmission,
+             CallbackCall::Block(_) => Self::Block,
+             CallbackCall::Exception(_) => Self::Exception,
+             CallbackCall::Synchronization => Self::Synchronization,
+@@ -277,6 +281,7 @@
+             Self::MmioRead => "worker_callback_mmio_read",
+             Self::MmioWrite => "worker_callback_mmio_write",
+             Self::Instruction => "worker_callback_instruction",
++            Self::TranslationAdmission => "worker_callback_translation_admission",
+             Self::Block => "worker_callback_block",
+             Self::Exception => "worker_callback_exception",
+             Self::Synchronization => "worker_callback_synchronization",
+@@ -526,6 +531,7 @@
+ #[derive(Clone, Copy)]
+ enum HookKind {
+     Instruction(HookRange),
++    TranslationAdmission(HookRange),
+     Block(HookRange),
+     Exception,
+     Synchronization,
+@@ -776,6 +782,14 @@
+         callback_loop(data).wait_callback(context.callback, CallbackCall::Block(block));
+     }
+ }
++unsafe fn translation_admission(address: u64, word: u32, thumb: bool, data: *mut std::ffi::c_void) -> bool {
++    let context = unsafe { callback_context(data) };
++    matches!(unsafe {
++        callback_loop(data).wait_callback(
++            context.callback, CallbackCall::TranslationAdmission { address, word, thumb },
++        )
++    }, CallbackResult::Bool(true))
++}
+ unsafe fn exception(exception: arm::Exception, data: *mut std::ffi::c_void) {
+     let context = unsafe { callback_context(data) };
+     unsafe {
+@@ -1111,6 +1125,9 @@
+                         data,
+                         range,
+                     },
++                    HookKind::TranslationAdmission(range) => Hook::TranslationAdmission {
++                        callback: translation_admission, data, range,
++                    },
+                     HookKind::Block(range) => Hook::Block {
+                         callback: block,
+                         data,
+@@ -1260,6 +1277,10 @@
+                     CallbackResult::Unit
+                 }
+                 (
++                    CallbackEntry::Hook(Hook::TranslationAdmission { callback, data, .. }),
++                    CallbackCall::TranslationAdmission { address, word, thumb },
++                ) => CallbackResult::Bool(callback(address, word, thumb, data)),
++                (
+                     CallbackEntry::Hook(Hook::Block { callback, data, .. }),
+                     CallbackCall::Block(block),
+                 ) => {
+@@ -1920,6 +1941,7 @@
+             let callback = self.next_callback()?;
+             let kind = match hook {
+                 Hook::Instruction { range, .. } => HookKind::Instruction(range),
++                Hook::TranslationAdmission { range, .. } => HookKind::TranslationAdmission(range),
+                 Hook::Block { range, .. } => HookKind::Block(range),
+                 Hook::Exception { .. } => HookKind::Exception,
+                 Hook::Synchronization { .. } => HookKind::Synchronization,
+--- a/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/target/arm/translate.c
++++ b/crates/emulator-cpu-unicorn/vendor/unicorn/qemu/target/arm/translate.c
+@@ -11607,6 +11607,8 @@
+         dc->base.pc_next += 2;
+     }
+     dc->insn = insn;
++    uc->embedder_insn_decision = uc->embedder_insn_filter
++        ? uc->embedder_insn_filter(uc->embedder_filter_user, dc->pc_curr | 1, insn) : 1;
+ 
+     // Memory hooks retain the atomic IT-block behavior. Code hooks below
+     // publish PC and ITSTATE before testing the condition, so they can stop

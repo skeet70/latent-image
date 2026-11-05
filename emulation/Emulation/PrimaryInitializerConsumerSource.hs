@@ -18,7 +18,7 @@ newtype DescriptorId = DescriptorId Word32 deriving (Eq, Ord, Show)
 descriptorIdentifier :: DescriptorId -> Word32
 descriptorIdentifier (DescriptorId ident) = ident
 
-data CodeSite = Installation | Descriptor | Selector | Identity deriving (Eq, Ord, Show)
+data CodeSite = Installation | Descriptor deriving (Eq, Ord, Show)
 
 data CodeRegion = CodeRegion
   { codeSite :: CodeSite
@@ -38,9 +38,6 @@ codeRegions =
       [0xe92d48f0,0xe28db014,0xe1a05000,0xe30b4d20,0xe3404096,0xe5942000
       ,0xe3013618,0xe7923003,0xe12fff33,0xe1a06000,0xe7942100,0xe2453001
       ,0xe3a0102c,0xe0212391,0xe5911184,0xe5911000]
-  , CodeRegion Selector (Guest 0x412bc) [0xe92d4800,0xe28db004,0xeb00053b,0xe8bd8800]
-  , CodeRegion Identity (Guest 0x427b8)
-      [0xee121e10,0xe3a02901,0xe2822003,0xe1510002,0x03a00000,0x13a00001,0xe12fff1e]
   ]
 data DescriptorAccess = DescriptorAccess
   { descriptorTableWord :: Guest
@@ -85,13 +82,8 @@ bindConsumerSource source image4 = do
   let wordsAt :: Word32 -> B.ByteString -> Word32 -> [Word32] -> Either String ()
       wordsAt origin bytes start expected = forM_ (zip [0,4..] expected) $ \(offset,value) ->
         require (leWordAt bytes (fromIntegral (start - origin) + offset) == Right value)
-          "primary consumer installation, selector or descriptor source differs"
-  forM_ codeRegions $ \(CodeRegion site (Guest start) words') ->
-    case site of
-      Installation -> wordsAt 0x61c400 image4 start words'
-      Descriptor -> wordsAt 0x61c400 image4 start words'
-      Selector -> wordsAt 0x40000 (sourceLoader source) start words'
-      Identity -> wordsAt 0x40000 (sourceLoader source) start words'
+          "primary consumer installation or descriptor source differs"
+  forM_ codeRegions $ \(CodeRegion _ (Guest start) words') -> wordsAt 0x61c400 image4 start words'
   wordsAt 0x40000 (sourceLoader source) 0x40250 [0xe59fd118]
   wordsAt 0x40000 (sourceLoader source) 0x40370 [0x70002000]
   wordsAt 0x40000 (sourceLoader source) 0x402c8 [0xe10f2000,0xe3c22080,0xe129f002]
@@ -153,8 +145,7 @@ consumerSourceValue consumer@(ConsumerSource source imageDigest _) =
           ]
       , "selection" .= object
           [ "extension_offset" .= (0x1618 :: Word32), "service" .= (0x412bc :: Word32)
-          , "identity_helper" .= (0x427b8 :: Word32), "cp14_identity" .= (0x4003 :: Word32)
-          , "root_index" .= (0 :: Word32)
+          , "cp14_identity" .= (0x4003 :: Word32), "root_index" .= (0 :: Word32)
           ]
       , "descriptor" .= object
           [ "entry" .= (0x725b74 :: Word32), "pointer_read" .= (0x725bac :: Word32)
@@ -164,7 +155,7 @@ consumerSourceValue consumer@(ConsumerSource source imageDigest _) =
           , "published_accesses" .= map accessValue [1..120]
           ]
       , "consumer_stack_source" .= object
-          [ "saved_bytes" .= (24 :: Word32), "selector_saved_bytes" .= (8 :: Word32)
+          [ "saved_bytes" .= (24 :: Word32)
           , "entry_sp_premise" .= ("live-consumer-context" :: String)
           , "backing" .= ("core0-atcm" :: String), "atcm_register" .= (0x70000011 :: Word32)
           , "guest_window" .= ([0x70000000,0x70002000] :: [Word32])

@@ -13,6 +13,7 @@ import qualified Data.Text as T
 import Data.Word (Word8, Word32)
 import Emulation.CheckpointKey (CheckpointRoute (..), Interpreter (..), RouteKey (..), UnicornLibrary (..), guestState, routeKey, routeKeyHex)
 import Emulation.EmulatorSlot (reexecInSlot, slotPolicyFromEnvironment)
+import Emulation.LiveSettings (describeLiveSettingChange, liveSettingChange, readLiveSettings)
 import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.UiTrajectory (ReadAddress (..), Segment (..), Step (..), TraceSite (..), Trajectories (..), decodeTrajectories, instructionPinnedPhases)
 import Emulation.ViewerRuntime (DefaultRuntime (..), Firmware (..), Python (..), StagedRuntime (..), StockOriginal (..), Workspace (..), require, resolve, stageViewerRuntime, stagedFirmwarePath)
@@ -276,10 +277,15 @@ run options = do
           pure (fromIntegral value, traceSiteLabel site)
       emulatorTraceSites emulator (installerSites ++ [(synthetic, "af-ring-synthetic")] ++ trajectorySites)
       ensurePrivateDirectory pushDirectory
+      let requireLiveSettings phase before = readLiveSettings emulator >>= \after ->
+            forM_ (liveSettingChange before after) $ \change ->
+              ioError (userError ("AF ring " ++ phase ++ ": " ++ describeLiveSettingChange change))
+      settingsBeforePush <- readLiveSettings emulator
       pushed <- emulatedClock >>= \clock -> runUnreviewedRamPush NoRamPushObserver retained manifest clock api pushDirectory
       pushStatePath <- case pushed of
         RamPushInstalled path -> pure path
         other -> ioError (userError ("AF ring ram-push failed: " ++ show other))
+      requireLiveSettings "ram-push" settingsBeforePush
       pushState <- readRamPushState pushStatePath
       let capture name = do
             let directory = receipt </> name
@@ -287,8 +293,10 @@ run options = do
             emulatedClock >>= \clock -> readAfRing (AfRingManifest manifest) clock api directory
           unload = do
             ensurePrivateDirectory unloadDirectory
+            settingsBeforeUnload <- readLiveSettings emulator
             outcome <- emulatedClock >>= \clock -> runUnreviewedRamUnload pushState clock api unloadDirectory
             require (outcome == RamUnloaded) ("AF ring ram-unload failed: " ++ show outcome)
+            requireLiveSettings "ram-unload" settingsBeforeUnload
       flip finally unload $ do
         baseline <- capture "baseline"
         (observations, halfPressAccepted) <- runTrajectory emulator (beforeUnload trajectory)

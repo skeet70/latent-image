@@ -22,6 +22,7 @@ pub struct BootIdentity {
     installed_dat: String,
     boot_rom: String,
     adjustment_nand: String,
+    record_nand: Option<String>,
     card_sha256: Option<String>,
     procedure: String,
 }
@@ -35,9 +36,15 @@ impl BootIdentity {
             installed_dat: sha256(update),
             boot_rom: sha256(boot_rom),
             adjustment_nand: sha256(adjustment),
+            record_nand: None,
             card_sha256: card_sha256.map(str::to_owned),
             procedure: sha256(procedure),
         }
+    }
+
+    pub fn with_record_nand(mut self, records: Option<&[u8]>) -> Self {
+        self.record_nand = records.map(sha256);
+        self
     }
 
     pub fn key(&self) -> CheckpointKey {

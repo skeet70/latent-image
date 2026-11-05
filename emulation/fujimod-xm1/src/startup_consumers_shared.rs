@@ -24,7 +24,7 @@ impl Sites {
             |ProbeKind::PeerPoll|ProbeKind::PeerPostload|ProbeKind::PeerBranch|ProbeKind::InitializerCall|ProbeKind::InitializerEntry|ProbeKind::InitializerReturn))
     }
     fn points(&self)->Vec<u32> {
-        GLOBAL_PCS.iter().copied().filter(|pc|self.kind(*pc).is_some() || [0x412c4,0x412c8,0x427b8].contains(pc))
+        GLOBAL_PCS.iter().copied().filter(|pc|self.kind(*pc).is_some())
             .chain(self.completion).chain(self.poll).chain(self.initializer).collect()
     }
 }

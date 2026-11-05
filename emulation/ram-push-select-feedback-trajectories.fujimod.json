@@ -8,12 +8,6 @@
       "steps": [
         [
           "menu",
-          67,
-          56,
-          0
-        ],
-        [
-          "menu",
           1,
           5,
           2
@@ -201,6 +195,17 @@
       "steps": [
         [
           "ok",
+          1,
+          5,
+          34
+        ]
+      ]
+    },
+    {
+      "phase": "select-feedback-unload-close",
+      "steps": [
+        [
+          "back",
           1,
           5,
           34

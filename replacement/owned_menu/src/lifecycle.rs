@@ -1,15 +1,10 @@
+use crate::menu_engine::frame::{NodeId, RowToken};
 use super::{EditorSession, QueryAnswer, TransitionResult, EDITOR_QUERY, EDITOR_SESSION_CELL};
 use core::ptr::{read_volatile, write_volatile};
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct FrameClass(u32);
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct RowToken(u32);
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct NodeId(u32);
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 struct ModalState(u16);

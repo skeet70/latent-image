@@ -1018,6 +1018,7 @@ pub(crate) fn derive_lz(plan: &LzPlan, bytes: &[u8]) -> Result<(LzSummary, Vec<S
     }
     let (registers, register_leaves) = derive_registers(plan, before_last, stream.produced())?;
     let leaves = ["literals", "matches", "pending_len"].into_iter().map(|field| stream_leaf(plan.device, field).0)
+        .chain((0..history).map(|position| stream_leaf(plan.device, &format!("history/{position}")).0))
         .chain((0..pending).map(|position| stream_leaf(plan.device, &format!("pending/{position}")).0)).chain(register_leaves).collect();
     let number = |field: &str| derived[field].as_u64().unwrap_or(0);
     Ok((LzSummary { start: plan.start, end: plan.end, literals: number("literals"), matches: number("matches"), submitted: None, registers }, leaves))
@@ -1032,7 +1033,7 @@ pub(crate) fn timer_leaves(device: usize) -> Vec<String> {
 
 /// LZ leaves any LZ relation could fix, for the board-entry overlap check.
 pub(crate) fn lz_leaf_prefixes(device: usize) -> Vec<String> {
-    ["literals", "matches", "pending_len", "pending"].into_iter().map(|field| stream_leaf(device, field).0)
+    ["literals", "matches", "pending_len", "pending", "history"].into_iter().map(|field| stream_leaf(device, field).0)
         .chain([LZ_COUNT, LZ_DESTINATION, LZ_OUTPUT].into_iter().map(|offset| register_leaf(device, offset).0)).collect()
 }
 

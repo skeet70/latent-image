@@ -8,11 +8,13 @@ module Replacement.StartupArtifact.Types
   , Label, label, labelText, Pc (..), RecordLimit, recordLimit, recordLimitCount
   , Cores, cores, coreList, physicalAddress
   , Boundary (..), CodeSpan (..), codeSpan, TcmBank (..), tcmBankName, WriteTarget (..), WriteRange (..)
-  , WriteBasis (..), WritesPolicy (..), CatalogRead (..), Catalog (..)
+  , WriteBasis (..), WritesPolicy (..), ReadExpectation (..), CatalogRead (..), Catalog (..)
   , TcmRegister (..), DecoderIndex (..), DecoderChoice (..), DeclaredMutation (..)
   , Piece (..), PieceFacts (..), ServiceBinding (..), Publication (..), LinkedBytes (..), ScratchBytes (..)
   , PublisherFrame (..), SubmitCall (..), StackDepth (..), TaskNumber (..), StackBytes (..), TaskStart (..)
   , AllocationPosition (..), allocationPositionName, AllocationWords (..), AllocationOwner (..), PoolSpan (..), PoolAllocation (..)
+  , ComposedWrites (..), composedWritesName, CarrierWritePolicy (..), OwnedFrame (..), HeapFacts (..)
+  , RootSlot (..), OwnedSymbol (..), ExtentDigest (..), Clobber (..), KernelSlot (..), KernelSlotBody (..)
   , Refusal (..), CatalogProblem (..), ManifestProblem (..), ApplicationProblem (..)
   ) where
 
@@ -64,7 +66,8 @@ editBytes :: Edit -> B.ByteString
 editBytes (Edit _ bytes) = bytes
 
 data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup | TaskSubmission | TaskStorage
-  | IdleTask | RootTask | Image5Producer | PlainProducer | ApplicationPump
+  | IdleTask | RootTask | Image5Producer | PlainProducer | GeneralHeap | ApplicationPump | Image5Initializer | TaskConstructors
+  | KernelSlotBodies
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 pieceKindName :: PieceKind -> Text
@@ -80,11 +83,16 @@ pieceKindName kind = case kind of
   RootTask -> "root-task"
   Image5Producer -> "image5-producer"
   PlainProducer -> "plain-producer"
+  GeneralHeap -> "general-heap"
   ApplicationPump -> "application-pump"
+  Image5Initializer -> "image5-initializer"
+  TaskConstructors -> "task-constructors"
+  KernelSlotBodies -> "kernel-slot-bodies"
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
   | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea | TaskSubmissionArea | TaskStorageArea
-  | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | ApplicationPumpArea
+  | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | GeneralHeapArea | ApplicationPumpArea | Image5InitializerArea | TaskConstructorsArea
+  | KernelSlotBodiesArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 areaName :: Area -> Text
@@ -105,7 +113,11 @@ areaName area = case area of
   RootTaskArea -> "root-task"
   Image5ProducerArea -> "image5-producer"
   PlainProducerArea -> "plain-producer"
+  GeneralHeapArea -> "general-heap"
   ApplicationPumpArea -> "application-pump"
+  TaskConstructorsArea -> "task-constructors"
+  Image5InitializerArea -> "image5-initializer"
+  KernelSlotBodiesArea -> "kernel-slot-bodies"
 
 data FootprintBasis = AdmissionRead | RuntimePremise deriving (Eq, Ord, Show)
 
@@ -232,12 +244,18 @@ data DeclaredMutation
   | DecoderCommit DecoderIndex DecoderChoice DecoderChoice Core Pc Citation
   deriving (Eq, Show)
 
+-- | The digest a read must have in each role, resolved by the contract from the role's own images:
+-- a decoded target, or the NAND bytes of the record-5 media window.
+data ReadExpectation = ExpectTarget Target | ExpectRecord5Media deriving (Eq, Show)
+
+-- | A read compares byte for byte across roles unless it states a difference or an expectation.
 data CatalogRead = CatalogRead
   { readLabel :: Label
   , readBoundary :: Label
   , readAddress :: Word32
   , readLength :: Word32
   , readDiffers :: Maybe Text
+  , readExpect :: Maybe ReadExpectation
   } deriving (Eq, Show)
 
 data Catalog = Catalog
@@ -301,6 +319,28 @@ data PoolAllocation = PoolAllocation
   , poolWords :: [AllocationWords], poolStackTops :: [Label], poolOwners :: [AllocationOwner], poolCitation :: Citation }
   deriving (Eq, Show)
 
+-- | What the composed role may write into a carrier after attach.
+data ComposedWrites = WritesCompared | WritesNone | WritesModelBusOnly deriving (Eq, Show)
+
+composedWritesName :: ComposedWrites -> Text
+composedWritesName WritesCompared = "compared"
+composedWritesName WritesNone = "none"
+composedWritesName WritesModelBusOnly = "model-bus"
+
+-- | A carrier's post-attach write rule: the composed role's admitted kinds, and the code spans whose
+-- retained-role CPU writes into it are the stock code the piece replaces.
+data CarrierWritePolicy = CarrierWritePolicy { policySpan :: Span, policyComposed :: ComposedWrites, policyRetainedExcluded :: [Span] }
+  deriving (Eq, Show)
+
+-- | One owned function's frame: entry, low SP offset and its calls as (target, SP offset at the call).
+data OwnedFrame = OwnedFrame { ownedEntry :: Word32, ownedLow :: Int, ownedCalls :: [(Word32, Int)] } deriving (Eq, Show)
+
+-- | The heap's linked image, public and core entries, frames, arena [base, end) and carrier write rules.
+data HeapFacts = HeapFacts
+  { heapLinked :: LinkedBytes, heapEntries :: [Word32], heapFrames :: [OwnedFrame], heapArena :: (Word32, Word32)
+  , heapCarrierWrites :: [CarrierWritePolicy] }
+  deriving (Eq, Show)
+
 -- | Artifact values that registered joins check across pieces.
 data PieceFacts
   -- | First-stage entry and the linked record-1 image.
@@ -316,6 +356,7 @@ data PieceFacts
   -- | The linked loader-A and loader-B orchestration images, the dispatcher's task submissions and the tasks they start.
   | LoaderStartupFacts LinkedBytes LinkedBytes [SubmitCall] [TaskStart]
   | NoFacts
+  | TaskConstructorsFacts LinkedBytes
   -- | The linked task wrapper/release image and the pool-allocation relation over its reads.
   | TaskSubmissionFacts LinkedBytes PoolAllocation
   -- | The linked task-storage transition image.
@@ -328,8 +369,13 @@ data PieceFacts
   | Image5ProducerFacts LinkedBytes
   -- | The linked plain producer image.
   | PlainProducerFacts LinkedBytes
+  -- | The general heap.
+  | GeneralHeapFacts HeapFacts
   -- | The linked application pump image.
   | ApplicationPumpFacts LinkedBytes
+  | Image5InitializerFacts LinkedBytes
+  -- | Each loader's owned kernel slots and +0x1618 body.
+  | KernelSlotFacts [KernelSlot] [KernelSlotBody]
   deriving (Eq, Show)
 
 data Piece = Piece
@@ -372,7 +418,7 @@ data ManifestProblem
   deriving (Eq, Show)
 
 data ApplicationProblem
-  -- | A site word overlaps the named piece's carrier; only pump sites may lie in an application-pump carrier.
+  -- | The site's map and carrier ownership disagree.
   = SiteInCarrier PieceKind Pc
   -- | Code at the PC lies in neither image4, image5 nor the plain window.
   | OutsideImages Pc
@@ -403,4 +449,29 @@ data Refusal
   | ComposedDiffMismatch Target
   | ComposedRestoreMismatch
   | ApplicationRefused ApplicationProblem
+  deriving (Eq, Show)
+
+-- | An offset in a published interface root, as +0x1618.
+newtype RootSlot = RootSlot Word32 deriving (Eq, Ord, Show)
+
+-- | A linked symbol name.
+newtype OwnedSymbol = OwnedSymbol Text deriving (Eq, Ord, Show)
+
+-- | Lowercase hex SHA-256 of an extent's bytes.
+newtype ExtentDigest = ExtentDigest Text deriving (Eq, Show)
+
+-- | Caller-saved state a callee may leave changed.
+data Clobber = ClobberR1 | ClobberR2 | ClobberR3 | ClobberR12 | ClobberFlags deriving (Eq, Ord, Show, Enum, Bounded)
+
+-- | One owned slot body linked at its stock entry: the extent it replaces, its deepest stack below the
+-- entry SP with its owned callees, the caller-saved state it may change from its entry values, the
+-- caller-saved state whose value at return may differ from the stock body's, and both extents' digests.
+data KernelSlot = KernelSlot
+  { kernelSlotOffset :: RootSlot, kernelSlotEntry :: Pc, kernelSlotSymbol :: OwnedSymbol, kernelSlotExtent :: Span
+  , kernelSlotFrame :: StackDepth, kernelSlotClobbers :: [Clobber], kernelSlotDiffers :: [Clobber]
+  , kernelSlotStock :: ExtentDigest, kernelSlotOwned :: ExtentDigest }
+  deriving (Eq, Show)
+
+-- | The +0x1618 body in the slack of its host slot's extent, entered only by the +0x1618 entry's branch.
+data KernelSlotBody = KernelSlotBody { kernelBodyHost :: RootSlot, kernelBodyExtent :: Span, kernelBodyFrame :: StackDepth }
   deriving (Eq, Show)

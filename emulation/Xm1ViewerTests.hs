@@ -4,6 +4,7 @@ import Control.Exception (IOException, try)
 import Control.Monad (forM_, unless)
 import qualified Xm1Viewer as Viewer
 import Xm1RamPushE2E (ModalDiagnostic (..), ModalLifetimeGuard (..), ModalOwnedPackage (..), loadModalOwnedPackage)
+import Emulation.LiveSettings (LiveSettingChange (..), liveSettingChange, liveSettings)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import System.Directory (createDirectoryIfMissing, getTemporaryDirectory)
@@ -108,3 +109,16 @@ main = do
     (either (const False) ((== identity) . ownedTableIdentity) carried)
   missing <- load (BC.pack "!<arch>\n" <> B.reverse identityBytes)
   check "an archive without the retired document's table identity refuses" (either (const True) (const False) missing)
+  let block = B.pack (take 450 (cycle [0 .. 255]))
+      settings bytes = either (ioError . userError) pure (liveSettings bytes)
+      flipped offsets = B.pack [if offset `elem` offsets then byte + 1 else byte | (offset, byte) <- zip [0 :: Int ..] (B.unpack block)]
+  before <- settings block
+  same <- settings block
+  changed <- settings (flipped [0x118, 0x11a])
+  last' <- settings (flipped [449])
+  check "an unchanged live-settings block reports no change" (liveSettingChange before same == Nothing)
+  check "the lowest changed live setting is reported at its guest address with both values"
+    (liveSettingChange before changed == Just (LiveSettingChange 0x0096cd7c (B.index block 0x118) (B.index block 0x118 + 1)))
+  check "the block's last byte is compared" (fmap changedSettingAddress (liveSettingChange before last') == Just 0x0096ce25)
+  check "a live-settings read of another length refuses"
+    (all (either (const True) (const False) . liveSettings) [B.take 449 block, block <> B.singleton 0])

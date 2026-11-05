@@ -9,7 +9,7 @@ use super::{
     hex_word, ApplicationReceipt, ApplicationWrite, ByteView, CodeObservation, CoreIdentity, DynamicTarget, EvidenceWriter, GraphicsState,
     InputIndex, InputPurpose, Menu, Publication, RawView, ReadinessIndex, ReadinessKind, ReadinessSample, Registers, RenderViews, RouteInput,
     Sample, SampleIndex, ScopeObservation, SideFile, SiteRef, Task1, TaskTableViews, VisibleCapture, ALIAS, EVIDENCE, TASK_ROW_BYTES,
-    TASK_ROW_LIMIT, UiWorkViews, VIEW_WORDS, view_word,
+    TASK_ROW_LIMIT, UiWorkViews, VIEW_WORDS, view_word, Scenario, ControllerStateView, CONTROLLER74,
 };
 use crate::composed_catalog::{
     physical_address as physical, Application, CodeLabel, CodeWord, Core, Domain, Instructions, Pc, Role, Sha256, SitePlan, QUEUE_SITES,
@@ -74,6 +74,7 @@ pub type WatchRows<'r> = &'r dyn Fn() -> Result<u64, String>;
 
 pub struct Recorder<'a> {
     application: &'a Application,
+    scenario: Scenario,
     output: &'a Path,
     armed: BTreeMap<u32, Armed>,
     writer: Option<EvidenceWriter>,
@@ -217,7 +218,7 @@ struct WatchClass {
 }
 
 impl<'a> Recorder<'a> {
-    pub fn new(application: &'a Application, role: Role, output: &'a Path) -> Result<Self, String> {
+    pub fn new(application: &'a Application, role: Role, output: &'a Path, scenario: Scenario) -> Result<Self, String> {
         let mut armed = BTreeMap::new();
         for (index, site) in application.sites.iter().enumerate() {
             let pc = physical(site.pc(role).0);
@@ -225,7 +226,7 @@ impl<'a> Recorder<'a> {
             armed.insert(pc | ALIAS, Armed::Site(index));
         }
         Ok(Self {
-            application, output, armed, writer: Some(EvidenceWriter::create(output, EVIDENCE)?), samples: 0, readiness: 0, task1: None,
+            application, scenario, output, armed, writer: Some(EvidenceWriter::create(output, EVIDENCE)?), samples: 0, readiness: 0, task1: None,
             scope_sites: Vec::new(), skips: 0, targets: Vec::new(), receives: Vec::new(), search: Search::new(application.readiness),
             publication: None, publication_code: Vec::new(), inputs: Vec::new(), visible: Vec::new(), active_input: None,
         })
@@ -476,10 +477,11 @@ impl<'a> Recorder<'a> {
         let save = session.board.device_save(session.node(&machine.document.firmware.render.graphics.0)?)?;
         crate::bridge::write(&output.join(format!("{name}.graphics.json")), &serde_json::to_vec(&save).map_err(|error| error.to_string())?)?;
         let controller = RawView::read(session, Guest(CONTROLLER), CONTROLLER_WORDS)?;
+        let controller74 = ControllerStateView::read(session, Guest(CONTROLLER74))?;
         let menu = machine.menu()?.map(|menu| Menu { menu: menu.menu_id, setting: menu.setting_id, cursor: menu.cursor });
         let bind = |suffix: &str| SideFile::bind(output, &format!("{name}{suffix}"));
         self.visible.push(VisibleCapture {
-            input, instructions: Instructions(machine.instructions()), probe, menu, controller, png: bind(".png")?, planes: bind(".planes.bin")?,
+            input, instructions: Instructions(machine.instructions()), probe, menu, controller, controller74, png: bind(".png")?, planes: bind(".planes.bin")?,
             scanout: bind(".scanout.json")?, graphics: bind(".graphics.json")?,
         });
         Ok(())
@@ -551,11 +553,8 @@ impl<'a> Recorder<'a> {
         self.active_input = None;
         let probe = self.drain(machine, rows)?;
         self.capture(machine, None, probe)?;
-        for (key, purpose) in [
-            (RouteKey::Down, InputPurpose::Ordinary), (RouteKey::Up, InputPurpose::Ordinary), (RouteKey::Back, InputPurpose::BackHandback),
-            (RouteKey::Ok, InputPurpose::AfterBack), (RouteKey::Left, InputPurpose::UnhandledProbe),
-        ] {
-            self.settled_input(machine, key, purpose, rows)?;
+        for input in self.scenario.settled() {
+            self.settled_input(machine, input.key, input.purpose, rows)?;
         }
         Ok(())
     }
@@ -586,6 +585,7 @@ impl<'a> Recorder<'a> {
             .map(|summary| ScopeObservation { summary, sites: std::mem::take(&mut self.scope_sites), skips: self.skips });
         let evidence = self.writer.take().ok_or("the evidence writer is closed")?.finish()?;
         Ok(ApplicationReceipt {
+            scenario: self.scenario,
             evidence, samples: self.samples, readiness: self.readiness, writes, task1: self.task1, publication: self.publication, code, scope,
             targets: self.targets, first_ready: self.search.first_ready(), watch_classes, inputs: self.inputs, visible: self.visible,
         })

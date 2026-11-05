@@ -215,7 +215,7 @@ fn preflight(cpu: &dyn Cpu, pc: Address, ins: Word, cpsr: Word) -> Result<(), St
     if !condition(ins, cpsr) {
         return Ok(());
     }
-    if let (Some(refusal), _) = fujimod_xm1::r4f::classify_a32(ins) {
+    if let Some(refusal) = fujimod_xm1::r4f::classify_a32(ins) {
         return Err(format!("R4F guard: {refusal}"));
     }
     if ins & 0x0ffffff0 == 0x012fff10 || ins & 0x0ffffff0 == 0x012fff30 {

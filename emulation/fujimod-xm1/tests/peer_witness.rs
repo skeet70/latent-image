@@ -372,10 +372,6 @@ fn consumer_code() -> String {
             0xe1d020b0,0xe2422001,0xe7936102,0xebfff5f5,0xe1a07000]),
         (0x7235d8, &[0xe92d4df0,0xe28db01c,0xe30b5d20,0xe3405096,0xe5952000,0xe3013618,
             0xe7923003,0xe12fff33,0xe1a04000,0xe7953100,0xe5933164,0xe12fff33,0xe1a0a000]),
-        (0x412bc, &[0xe92d4800,0xe28db004,0xeb00053b,0xe8bd8800]),
-        (0x427b8, &[0xee121e10,0xe3a02901,0xe2822003,0xe1510002,0x03a00000,0x13a00001,0xe12fff1e]),
-        (0xd1140, &[0xe52db004,0xe28db000,0xe10f0000,0xe3801080,0xe121f001,0xe2000080,
-            0xe28bd000,0xe8bd0800,0xe12fff1e]),
     ];
     format!("[{}]", regions.iter().map(|(start, words)|
         format!(r#"{{"start":{start},"words":{}}}"#, serde_json::to_string(words).unwrap())).collect::<Vec<_>>().join(","))
@@ -420,15 +416,9 @@ fn consumer_scope_rejects_retargeted_source_code_and_nested_contracts() {
         valid.replace(r#""source_sha256":"43d6"#, r#""source_sha256":"53d6"#),
         valid.replace(r#""loader_b_sha256":"8fb0"#, r#""loader_b_sha256":"9fb0"#),
         valid.replace(r#""image4_sha256":"f2e2"#, r#""image4_sha256":"f2e3"#),
-        valid.replace(&format!(r#""start":{}"#, 0xd1140), &format!(r#""start":{}"#, 0xd1144)),
-        valid.replace(&0xe121f001_u32.to_string(), &0xe1a00000_u32.to_string()),
-        valid.replace(&0xeb00053b_u32.to_string(), &0xe1a00000_u32.to_string()),
-        valid.replace(&0xe8bd8800_u32.to_string(), &0xe8bd4800_u32.to_string()),
-        valid.replace(&0xee121e10_u32.to_string(), &0xe1a01000_u32.to_string()),
-        valid.replace(&0xe3a02901_u32.to_string(), &0xe3a02000_u32.to_string()),
-        valid.replace(&format!(r#""start":{}"#, 0x412bc), &format!(r#""start":{}"#, 0x412c0)),
-        valid.replace(&format!(r#""start":{}"#, 0x427b8), &format!(r#""start":{}"#, 0x427bc)),
-        valid.replace(&0xe12fff1e_u32.to_string(), "0"),
+        valid.replace(&format!(r#""start":{}"#, 0x7235d8), &format!(r#""start":{}"#, 0x7235dc)),
+        valid.replace(&0xe5933164_u32.to_string(), &0xe5933168_u32.to_string()),
+        valid.replace(&0xebfff5f5_u32.to_string(), &0xe1a00000_u32.to_string()),
         valid.replace(r#""scratch_bytes":12"#, r#""scratch_bytes":8"#),
         valid.replace(&consumer_code(), "[]"),
         valid.replace(r#""kind":"natural""#, r#""kind":"held""#),
@@ -520,11 +510,9 @@ fn primary_root0() -> String {
     let accesses = (0..120_u32).map(|index| format!(
         "{{\"identifier\":{},\"table_word\":{},\"pool_word\":{}}}", index + 1, 0x4004dae0 + index * 44 + 0x184,
         0x4005beac + index * 40 + 8)).collect::<Vec<_>>().join(",");
-    let code: [(u32, &[u32]); 4] = [
+    let code: [(u32, &[u32]); 2] = [
         (0x725a04, &[0xe92d4800,0xe28db004,0xe30b0d20,0xe3400096,0xe3003000,0xe3403004,0xe5933010,0xe5803000,0xe3003000,0xe340300d,0xe5933010,0xe5803004]),
         (0x725b74, &[0xe92d48f0,0xe28db014,0xe1a05000,0xe30b4d20,0xe3404096,0xe5942000,0xe3013618,0xe7923003,0xe12fff33,0xe1a06000,0xe7942100,0xe2453001,0xe3a0102c,0xe0212391,0xe5911184,0xe5911000]),
-        (0x412bc, &[0xe92d4800,0xe28db004,0xeb00053b,0xe8bd8800]),
-        (0x427b8, &[0xee121e10,0xe3a02901,0xe2822003,0xe1510002,0x03a00000,0x13a00001,0xe12fff1e]),
     ];
     let code = code.into_iter().map(|(start,words)| format!("{{\"start\":{start},\"words\":{words:?}}}")).collect::<Vec<_>>().join(",");
     let premises = ["natural-primary-arrival","owned-carrier-committed-and-immutable","current-decoder-and-both-core-aliases",
@@ -536,15 +524,15 @@ fn primary_root0() -> String {
         "loader_a_sha256":"21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882",
         "image4_sha256":"f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16",
         "installation":{{"code":[{},{}],"header_words":[{},{}],"root_words":[{},{}],"root_values":[{},{}]}},
-        "selection":{{"extension_offset":{},"service":{},"identity_helper":{},"cp14_identity":{},"root_index":0}},
+        "selection":{{"extension_offset":{},"service":{},"cp14_identity":{},"root_index":0}},
         "descriptor":{{"entry":{},"pointer_read":{},"pool_read":{},"after_pool_read":{},"identifiers":[1,120],"record_bytes":44,
             "root_relative_field":388,"retained_pool_word_value":"requires-live-preimage","published_accesses":[{accesses}]}},
-        "consumer_stack_source":{{"saved_bytes":24,"selector_saved_bytes":8,"entry_sp_premise":"live-consumer-context",
+        "consumer_stack_source":{{"saved_bytes":24,"entry_sp_premise":"live-consumer-context",
             "backing":"core0-atcm","atcm_register":1879048209,"guest_window":[1879048192,1879056384],
             "cpsr_mask":133234687,"cpsr_value":339,"observation":"instruction-boundary-snapshots"}},
         "unproved_runtime_premises":{},"code":[{code}]}}}}"#, primary_initializer(),
         0x725a04,0x725a34,0x40010,0xd0010,0x96bd20,0x96bd24,0x4004dae0,0x400ddaa0,
-        0x1618,0x412bc,0x427b8,0x4003,0x725b74,0x725bac,0x725bb0,0x725bb4,
+        0x1618,0x412bc,0x4003,0x725b74,0x725bac,0x725bb0,0x725bb4,
         serde_json::to_string(&premises).unwrap())
 }
 

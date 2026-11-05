@@ -56,6 +56,7 @@ _FUJIMOD_NIX_DEPS = [
     "//build-support:fujimod-fetch-attribution.patch",
     "//build-support:fujimod-rprofile-byte-exclusives.patch",
     "//build-support:fujimod-timer-upcount.patch",
+    "//build-support:fujimod-translation-admission.patch",
     "//build-support:fujimod-unicorn-context-align.patch",
     "//build-support:fujimod-wifi-unanswered-cmd53.patch",
     "//build-support:fujimod.nix",
@@ -75,6 +76,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/application_observation/controls.rs",
     "//emulation:fujimod-xm1/src/application_observation/planes.rs",
     "//emulation:fujimod-xm1/src/application_observation/readiness.rs",
+    "//emulation:fujimod-xm1/src/application_observation/scenarios.rs",
     "//emulation:fujimod-xm1/src/attach_boot.rs",
     "//emulation:fujimod-xm1/src/attach_relations.rs",
     "//emulation:fujimod-xm1/src/attach_state.rs",
@@ -152,6 +154,8 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/queue_boundary.rs",
     "//emulation:fujimod-xm1/src/r4f.rs",
     "//emulation:fujimod-xm1/src/ram_push.rs",
+    "//emulation:fujimod-xm1/src/record_medium.rs",
+    "//emulation:fujimod-xm1/src/record_medium_main.rs",
     "//emulation:fujimod-xm1/src/render.rs",
     "//emulation:fujimod-xm1/src/run.rs",
     "//emulation:fujimod-xm1/src/reset_observation.rs",
@@ -168,6 +172,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/startup_sites.rs",
     "//emulation:fujimod-xm1/src/startup_tasks.rs",
     "//emulation:fujimod-xm1/src/idle_tasks.rs",
+    "//emulation:fujimod-xm1/src/task_constructors.rs",
     "//emulation:fujimod-xm1/src/task_storage.rs",
     "//emulation:fujimod-xm1/src/task_storage_check.rs",
     "//emulation:fujimod-xm1/src/task_submission_control.rs",
@@ -296,7 +301,7 @@ def _lab_dependencies_impl(_ctx):
         nix_file_deps = _FUJIMOD_NIX_DEPS + _FUJIMOD_XM1_CRATE,
         nixopts = _RUST_NIX_BUILD_CAP,
         repository = "@lab_nixpkgs",
-        build_file_content = 'exports_files(["bin/fujimod-xm1", "bin/fujimod-xm1-composed-startup", "bin/fujimod-xm1-heap-observe", "bin/fujimod-xm1-heap-replay", "bin/fujimod-xm1-idle-tasks", "bin/fujimod-xm1-kernel-install", "bin/fujimod-xm1-loader-continuations", "bin/fujimod-xm1-native-case", "bin/fujimod-xm1-own-first-pair", "bin/fujimod-xm1-provenance", "bin/fujimod-xm1-queue-boundary", "bin/fujimod-xm1-ram-push", "bin/fujimod-xm1-root-compact", "bin/fujimod-xm1-rtos-census", "bin/fujimod-xm1-startup-callers", "bin/fujimod-xm1-startup-consumers", "bin/fujimod-xm1-startup-dispatch", "bin/fujimod-xm1-startup-tasks", "bin/fujimod-xm1-task-storage", "bin/fujimod-xm1-toggle", "bin/fujimod-xm1-updater", "share/fujimod-xm1/store-path", "share/fujimod-xm1/xm1-150.json"], visibility = ["//visibility:public"])\nfilegroup(name = "test-harnesses", srcs = glob(["libexec/fujimod-xm1-tests/*"]), visibility = ["//visibility:public"])\nfilegroup(name = "test-manifest", srcs = ["libexec/fujimod-xm1-tests/manifest"], visibility = ["//visibility:public"])',
+        build_file_content = 'exports_files(["bin/fujimod-xm1", "bin/fujimod-xm1-composed-startup", "bin/fujimod-xm1-heap-observe", "bin/fujimod-xm1-heap-replay", "bin/fujimod-xm1-idle-tasks", "bin/fujimod-xm1-kernel-install", "bin/fujimod-xm1-loader-continuations", "bin/fujimod-xm1-native-case", "bin/fujimod-xm1-own-first-pair", "bin/fujimod-xm1-provenance", "bin/fujimod-xm1-queue-boundary", "bin/fujimod-xm1-ram-push", "bin/fujimod-xm1-record-medium", "bin/fujimod-xm1-root-compact", "bin/fujimod-xm1-rtos-census", "bin/fujimod-xm1-startup-callers", "bin/fujimod-xm1-startup-consumers", "bin/fujimod-xm1-startup-dispatch", "bin/fujimod-xm1-startup-tasks", "bin/fujimod-xm1-task-constructors", "bin/fujimod-xm1-task-storage", "bin/fujimod-xm1-toggle", "bin/fujimod-xm1-updater", "share/fujimod-xm1/store-path", "share/fujimod-xm1/xm1-150.json"], visibility = ["//visibility:public"])\nfilegroup(name = "test-harnesses", srcs = glob(["libexec/fujimod-xm1-tests/*"]), visibility = ["//visibility:public"])\nfilegroup(name = "test-manifest", srcs = ["libexec/fujimod-xm1-tests/manifest"], visibility = ["//visibility:public"])',
     )
 
     # The RAM-push relinker's tools; ram-push-toolchain-paths records their

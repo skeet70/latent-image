@@ -4,6 +4,7 @@ module Replacement.StartupDispatch.Admission
   , Descriptor (..), TaskId (..), NameAddress (..), Priority (..), StackBytes (..), EntryAddress (..), Argument (..)
   , CallBoundary, callBoundaries, callPhase, callInstruction, callContinuation, callEffect, callStack, callLiveWords
   , StackOffset, stackOffsetValue, InstructionAddress, instructionAddressValue
+  , clearInterval
   ) where
 
 import qualified A32 as A
@@ -40,6 +41,15 @@ data Machine = Machine
   , flags :: Flags, effects :: [Effect], pending :: [(Int, Word32)], calls :: [CallBoundary]
   , low :: Int, steps :: Int
   }
+
+-- | The phase-0 mode-1 word fill: [0x89ec00, 0xbf1a00), image 4's BSS
+-- (reports/replacement-inventory-baseline.md:848).
+clearStart, clearEnd :: Word32
+clearStart = 0x89ec00
+clearEnd = 0xbf1a00
+
+clearInterval :: (Word32, Word32)
+clearInterval = (clearStart, clearEnd)
 
 proofPaths :: FrameProof -> [PathProof]
 proofPaths (FrameProof _ paths _) = paths
@@ -227,7 +237,7 @@ deriveFrameProof bytes = do
             (effect, result) <- case target of
               0x657184 -> pure (ModeRead,mode)
               0x7221a0 -> do
-                require (map (get machine . A.Reg) [0,1,2] == map Constant [0x89ec00,0,0x352e00 `div` 4]) "A32 clear interface differs"
+                require (map (get machine . A.Reg) [0,1,2] == map Constant [clearStart,0,(clearEnd - clearStart) `div` 4]) "A32 clear interface differs"
                 pure (ClearWords,Unknown)
               0x725a04 -> pure (Install,status)
               0x725dd8 -> do

@@ -30,7 +30,8 @@
     {"phase":"slot-feedback","capture":"slot-c7-save","steps":[["back",97,641,5],["down",97,641,6],["ok",97,630,0],["ok",97,641,6],["ok",97,630,0]]},
     {"phase":"slot-feedback","capture":"slot-c7-name","steps":[["down",97,630,1]]},
     {"phase":"slot-feedback","capture":"slot-c7-edit","steps":[["down",97,630,2]]},
-    {"phase":"slot-feedback","capture":"slot-c7-reset","steps":[["down",97,630,3]]}
+    {"phase":"slot-feedback","capture":"slot-c7-reset","steps":[["down",97,630,3]]},
+    {"phase":"slot-feedback-unload-close","steps":[["back",97,641,6],["back",1,5,33],["back",1,5,33]]}
   ],
   "after_unload": []
 }

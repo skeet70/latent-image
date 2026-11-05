@@ -3,12 +3,12 @@ use fujimod_emulator::board::observation::{
     WatchRange,
 };
 use fujimod_xm1::{
-    application_observation::{self, hit_observers, Observers, Recorder as ApplicationRecorder},
+    application_observation::{self, hit_observers, Observers, Recorder as ApplicationRecorder, Scenario},
     attach_relations::{self, AttachSources, TimerState, TransactionWriter},
     attach_state::{self, AttachState},
     bridge::{read, sha256, write},
     checkpoint::{BootIdentity, initialized_reset},
-    composed_catalog::{Contract, Core, Label, Pc, Role, ROW_LIMIT, Sha256},
+    composed_catalog::{CheckedContract, Contract, Core, Label, Pc, Role, ROW_LIMIT, Sha256},
     composed_mutations::{self, CensusRow},
     composed_receipt::{
         self, Admission, CaptureDirectories, CarrierWrites, DeclaredUse, GuardObservation, GuardState, HexBytes, Identity,
@@ -22,7 +22,7 @@ use fujimod_xm1::{
 };
 use std::{collections::BTreeMap, num::NonZeroUsize, path::{Path, PathBuf}, process::ExitCode};
 
-const USAGE: &str = "composed-startup --role retained|composed --contract CONTRACT --run RUN --update DAT --boot-rom ROM --output NEW_DIR [--attach-diagnostic RANGES | --mutation-census] [--checkpoints ROOT | --fresh-boot]\n       composed-startup --compare RETAINED_RECEIPT OWNED_RECEIPT --contract CONTRACT\n       composed-startup --check-contract CONTRACT --output NEW_FILE\n       composed-startup --application-controls RUN_DIR --contract CONTRACT --output NEW_DIR";
+const USAGE: &str = "composed-startup --role retained|composed --contract CONTRACT --run RUN --update DAT --boot-rom ROM --output NEW_DIR [--scenario NAME] [--attach-diagnostic RANGES | --mutation-census] [--checkpoints ROOT | --fresh-boot]\n       composed-startup --compare RETAINED_RECEIPT OWNED_RECEIPT --contract CONTRACT\n       composed-startup --check-contract CONTRACT [--qualifications QUALIFICATIONS] --output NEW_FILE\n       composed-startup --application-controls RUN_DIR --contract CONTRACT --output NEW_DIR";
 const CONTROLS: &str = "application-controls.json";
 const CENSUS: &str = "mutation-census.json";
 const WRITERS: &str = "attach-writers.json";
@@ -53,9 +53,9 @@ enum Mode {
 }
 
 enum Command {
-    Observe { role: Role, contract: PathBuf, run: PathBuf, update: PathBuf, rom: PathBuf, output: PathBuf, mode: Mode, checkpoint: BootCheckpoint },
+    Observe { role: Role, contract: PathBuf, run: PathBuf, update: PathBuf, rom: PathBuf, output: PathBuf, mode: Mode, scenario: Scenario, checkpoint: BootCheckpoint },
     Compare { retained: PathBuf, owned: PathBuf, contract: PathBuf },
-    CheckContract { contract: PathBuf, output: PathBuf },
+    CheckContract { contract: PathBuf, qualifications: Option<PathBuf>, output: PathBuf },
     Controls { run: PathBuf, contract: PathBuf, output: PathBuf },
 }
 
@@ -69,14 +69,16 @@ fn put<T>(slot: &mut Option<T>, value: T) -> Result<(), String> {
 
 fn arguments() -> Result<Command, String> {
     let (mut role, mut contract, mut run, mut update, mut rom, mut output, mut compare) = (None, None, None, None, None, None, None);
-    let (mut check, mut mode, mut controls) = (None, None, None);
+    let (mut check, mut mode, mut controls, mut qualifications) = (None, None, None, None);
     let (mut checkpoints, mut fresh) = (None, false);
+    let mut scenario = None;
     let mut arguments = std::env::args_os().skip(1);
     while let Some(flag) = arguments.next() {
         let flag = flag.into_string().map_err(|_| USAGE)?;
         let mut value = || arguments.next().map(PathBuf::from).ok_or(USAGE);
         match flag.as_str() {
             "--role" => put(&mut role, value()?.to_str().ok_or(USAGE)?.parse::<Role>()?)?,
+            "--scenario" => put(&mut scenario, value()?.to_str().ok_or(USAGE)?.parse::<Scenario>()?)?,
             "--contract" => put(&mut contract, value()?)?,
             "--run" => put(&mut run, value()?)?,
             "--update" => put(&mut update, value()?)?,
@@ -84,6 +86,7 @@ fn arguments() -> Result<Command, String> {
             "--output" => put(&mut output, value()?)?,
             "--compare" => { let retained = value()?; put(&mut compare, (retained, value()?))? }
             "--check-contract" => put(&mut check, value()?)?,
+            "--qualifications" => put(&mut qualifications, value()?)?,
             "--attach-diagnostic" => put(&mut mode, Mode::Diagnostic(value()?))?,
             "--mutation-census" => put(&mut mode, Mode::Census)?,
             "--application-controls" => put(&mut controls, value()?)?,
@@ -93,12 +96,15 @@ fn arguments() -> Result<Command, String> {
         }
     }
     require(!fresh || checkpoints.is_none(), "--fresh-boot and --checkpoints are mutually exclusive")?;
+    if scenario.is_some() && role.is_none() || qualifications.is_some() && check.is_none() {
+        return Err(USAGE.into());
+    }
     match (check, contract, compare, role, run, update, rom, output, mode, controls, checkpoints, fresh) {
-        (Some(contract), None, None, None, None, None, None, Some(output), None, None, None, false) => Ok(Command::CheckContract { contract, output }),
+        (Some(contract), None, None, None, None, None, None, Some(output), None, None, None, false) => Ok(Command::CheckContract { contract, qualifications, output }),
         (None, Some(contract), Some((retained, owned)), None, None, None, None, None, None, None, None, false) => Ok(Command::Compare { retained, owned, contract }),
         (None, Some(contract), None, Some(role), Some(run), Some(update), Some(rom), Some(output), mode, None, root, fresh) =>
             Ok(Command::Observe {
-                role, contract, run, update, rom, output, mode: mode.unwrap_or(Mode::Evidence),
+                role, contract, run, update, rom, output, mode: mode.unwrap_or(Mode::Evidence), scenario: scenario.unwrap_or_default(),
                 checkpoint: if fresh { BootCheckpoint::Fresh } else {
                     BootCheckpoint::Reuse(root.unwrap_or_else(|| PathBuf::from("private-data/emulator-checkpoints")))
                 },
@@ -200,7 +206,7 @@ fn at_boundary(machine: &Machine, contract: &Contract, role: Role, state: &mut O
                 let rows: Vec<WatchRow> = serde_json::from_value(records.clone()).map_err(|error| format!("diagnostic watch rows: {error}"))?;
                 let rows: Vec<_> = rows.into_iter()
                     .filter(|row| classes.iter().any(|&(start, end)| row.physical < end && start < row.physical + row.size)).collect();
-                let summaries = composed_receipt::carrier_writes(classes, &[], &rows)?;
+                let summaries = composed_receipt::carrier_writes(classes, &[], &[], &rows)?;
                 write(&output.join(WRITERS), &serde_json::to_vec_pretty(&summaries).map_err(|error| error.to_string())?)?;
             }
             state.boundary = Some(AtBoundary {
@@ -243,7 +249,10 @@ fn observe_hit(machine: &Machine, contract: &Contract, role: Role, sites: &BTree
         for item in contract.reads().filter(|item| &item.boundary == label) {
             let mut bytes = vec![0; item.length as usize];
             machine.session.board.read_memory(core.index(), u64::from(item.address), &mut bytes)?;
-            reads.push(ReadCapture { label: item.label.clone(), address: item.address, bytes: HexBytes(bytes) });
+            reads.push(match item.expect {
+                Some(_) => ReadCapture { label: item.label.clone(), address: item.address, bytes: HexBytes(Vec::new()), sha256: Some(Sha256::of(&bytes)) },
+                None => ReadCapture { label: item.label.clone(), address: item.address, bytes: HexBytes(bytes), sha256: None },
+            });
         }
         let r = |name| hit_register(hit, name);
         state.rows.push(Row {
@@ -377,7 +386,7 @@ fn reset_machine(document: RunDocument, update: Vec<u8>, rom: &[u8], identity: &
 }
 
 fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: PathBuf, rom_path: PathBuf, output: PathBuf,
-    mode: Mode, checkpoint: BootCheckpoint) -> Result<(), String> {
+    mode: Mode, scenario: Scenario, checkpoint: BootCheckpoint) -> Result<(), String> {
     let contract_bytes = read(&contract_path)?;
     let contract = Contract::parse(&contract_bytes).map_err(|refusal| refusal.to_string())?;
     let (run_bytes, update, rom) = (read(&run_path)?, read(&update_path)?, read(&rom_path)?);
@@ -398,6 +407,7 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
         require(!classes.iter().any(|&(start, end)| start < span.end && span.start < end), "a diagnostic class overlaps the log span")?;
     }
     let application = contract.application().filter(|_| mode != Mode::Census);
+    require(scenario == Scenario::MenuInputs || application.is_some(), "scenario requires the application phase")?;
     if let Some(application) = application {
         require(application.readiness.end.0 == DEADLINE, "the readiness search end is not the first press")?;
     }
@@ -437,7 +447,7 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
         rows: vec![], counts: BTreeMap::new(), recorded: BTreeMap::new(), off_core: BTreeMap::new(),
         attach: None, sources: None, transactions: None, recorder, boundary: None, census: None,
     };
-    let mut recorder = application.map(|application| ApplicationRecorder::new(application, role, &output)).transpose()?;
+    let mut recorder = application.map(|application| ApplicationRecorder::new(application, role, &output, scenario)).transpose()?;
     let traced = trace(&mut machine, &contract, role, &mut state, &output, recorder.as_mut());
     let disarm = |machine: &mut Machine| {
         let disarmed = machine.traces.disarm(&machine.session);
@@ -483,6 +493,11 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
     };
     let watch_end_error = machine.session.board.memory_watch_end(&mut guarded.watch).err();
     let owned_code = contract.owned_code_spellings();
+    let excluded: Vec<Vec<(u64, u64)>> = guarded.carriers.iter().map(|&(start, end)| match role {
+        Role::Composed => Vec::new(),
+        Role::Retained => contract.carrier_rule(start, end).map_or_else(Vec::new, |rule| rule.retained_excluded.iter()
+            .flat_map(|span| [(span.start, span.end), (span.start + 0x4000_0000, span.end + 0x4000_0000)]).collect()),
+    }).collect();
     let boundary_row = state.boundary.as_ref().map_or(0, |boundary| boundary.row);
     let summaries = (|| -> Result<(Vec<CarrierWrites>, Vec<CarrierWrites>), String> {
         let rows: Vec<WatchRow> = serde_json::from_value(watch_state["records"].clone())
@@ -493,8 +508,8 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
         };
         let (before, after) = rows.split_at(boundary_row.min(rows.len()));
         Ok((
-            composed_receipt::carrier_writes(&guarded.carriers, &owned_code, &carrier_rows(before))?,
-            composed_receipt::carrier_writes(&guarded.carriers, &owned_code, &carrier_rows(after))?,
+            composed_receipt::carrier_writes(&guarded.carriers, &owned_code, &excluded, &carrier_rows(before))?,
+            composed_receipt::carrier_writes(&guarded.carriers, &owned_code, &excluded, &carrier_rows(after))?,
         ))
     })();
     let end_checks = checks(&guarded.token);
@@ -565,17 +580,11 @@ fn compare(retained: PathBuf, owned: PathBuf, contract_path: PathBuf) -> Result<
     Ok(verdict.verdict)
 }
 
-#[derive(serde::Serialize)]
-struct CheckedContract {
-    contract_sha256: Sha256,
-    plan: fujimod_xm1::composed_catalog::Plan,
-}
-
-fn check_contract(contract_path: PathBuf, output: PathBuf) -> Result<(), String> {
+fn check_contract(contract_path: PathBuf, qualifications: Option<PathBuf>, output: PathBuf) -> Result<(), String> {
     use std::io::Write;
     let contract_bytes = read(&contract_path)?;
-    let contract = Contract::parse(&contract_bytes).map_err(|refusal| refusal.to_string())?;
-    let checked = CheckedContract { contract_sha256: digest(&contract_bytes)?, plan: contract.plan() };
+    let qualifications = qualifications.as_deref().map(read).transpose()?;
+    let checked = CheckedContract::check(&contract_bytes, qualifications.as_deref()).map_err(|refusal| refusal.to_string())?;
     let bytes = serde_json::to_vec_pretty(&checked).map_err(|error| error.to_string())?;
     std::fs::OpenOptions::new().write(true).create_new(true).open(&output)
         .and_then(|mut file| file.write_all(&bytes))
@@ -593,10 +602,10 @@ fn application_controls(run: PathBuf, contract_path: PathBuf, output: PathBuf) -
 
 fn main() -> ExitCode {
     let result = arguments().and_then(|command| match command {
-        Command::Observe { role, contract, run, update, rom, output, mode, checkpoint } =>
-            observe(role, contract, run, update, rom, output, mode, checkpoint).map(|()| true),
+        Command::Observe { role, contract, run, update, rom, output, mode, scenario, checkpoint } =>
+            observe(role, contract, run, update, rom, output, mode, scenario, checkpoint).map(|()| true),
         Command::Compare { retained, owned, contract } => compare(retained, owned, contract).map(|verdict| verdict == VerdictKind::Equal),
-        Command::CheckContract { contract, output } => check_contract(contract, output).map(|()| true),
+        Command::CheckContract { contract, qualifications, output } => check_contract(contract, qualifications, output).map(|()| true),
         Command::Controls { run, contract, output } => application_controls(run, contract, output),
     });
     match result {

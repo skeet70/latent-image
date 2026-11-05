@@ -12,6 +12,7 @@ sh_test(
     data = [
         "//docs:evidence.jsonl",
         "//manifests:initial",
+        "//replacement/startup_artifact:qualifications.json",
         "//schemas:all",
         "@lab_git//:bin/git",
         "@lab_jq//:bin/jq",
@@ -48,6 +49,20 @@ sh_test(
     ],
     data = [
         "//build-support:xm1-decomp",
+        "@lab_git//:bin/git",
+    ],
+)
+
+sh_test(
+    name = "reclaim-disk",
+    size = "small",
+    srcs = ["reclaim-disk.sh"],
+    args = [
+        "$(location //build-support:reclaim-disk.sh)",
+        "$(location @lab_git//:bin/git)",
+    ],
+    data = [
+        "//build-support:reclaim-disk.sh",
         "@lab_git//:bin/git",
     ],
 )

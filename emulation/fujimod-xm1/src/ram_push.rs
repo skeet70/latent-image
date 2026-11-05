@@ -6,10 +6,11 @@
 use fujimod_xm1::adjustment::AdjustmentNand;
 use fujimod_xm1::attach_boot::{Attachment, attach};
 use fujimod_xm1::checkpoint::{BootIdentity, CheckpointKey, initialized_reset};
+use fujimod_xm1::record_medium::RecordMedium;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, load_card, menu_value, read, restore, sha256, write};
 use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, encode_hex};
 use fujimod_xm1::guest::{DialTurn, ModeDialPosition, PhysicalShutterPosition, Press, RouteKey};
-use fujimod_xm1::machine::{KeyPulse, Machine, ReleaseSegment, RunOutcome, key_pulse};
+use fujimod_xm1::machine::{KeyPulse, Machine, ReleaseSegment, RunOutcome, SCANNED_HOLD, key_pulse};
 use fujimod_xm1::modal_trace::BeginRequest as ModalBeginRequest;
 use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::run::{self, NodeName};
@@ -33,8 +34,8 @@ use std::{
 };
 
 const USAGE: &str = "Usage: fujimod-xm1-ram-push --run RUN.json --boot-rom ROM --installed-dat DAT \
---adjustment-nand NAND --output DIR --ram-push-checkpoints DIR [--sd-card-image CARD] [--attach-hold-key KEY] \
-[--fresh-boot [--reset-observation SPEC.json]]\n";
+--adjustment-nand NAND [--record-nand NAND] --output DIR --ram-push-checkpoints DIR [--sd-card-image CARD] \
+[--attach-hold-key KEY] [--fresh-boot [--reset-observation SPEC.json]]\n";
 
 const ATTACH_RECORD: &str = "ram-push-attach.json";
 const INSTALL_RECORD: &str = "ram-push-install.json";
@@ -66,6 +67,7 @@ struct Arguments {
     boot_rom: PathBuf,
     installed_dat: PathBuf,
     adjustment_nand: PathBuf,
+    record_nand: Option<PathBuf>,
     output: PathBuf,
     checkpoints: PathBuf,
     sd_card_image: Option<PathBuf>,
@@ -97,6 +99,7 @@ fn arguments() -> Result<Arguments, String> {
             "--boot-rom",
             "--installed-dat",
             "--adjustment-nand",
+            "--record-nand",
             "--output",
             "--ram-push-checkpoints",
             "--sd-card-image",
@@ -112,6 +115,7 @@ fn arguments() -> Result<Arguments, String> {
         }
     }
     let sd_card_image = values.remove("--sd-card-image");
+    let record_nand = values.remove("--record-nand");
     let reset_observation = values.remove("--reset-observation");
     if reset_observation.is_some() && !fresh_boot {
         return Err(USAGE.into());
@@ -122,6 +126,7 @@ fn arguments() -> Result<Arguments, String> {
         boot_rom: take("--boot-rom")?,
         installed_dat: take("--installed-dat")?,
         adjustment_nand: take("--adjustment-nand")?,
+        record_nand,
         output: take("--output")?,
         checkpoints: take("--ram-push-checkpoints")?,
         sd_card_image,
@@ -148,17 +153,17 @@ enum StartKind {
     Installed,
 }
 
-fn boot_key(arguments: &Arguments, inputs: &Inputs, adjustment: &[u8]) -> Result<BootKey, String> {
+fn boot_key(arguments: &Arguments, inputs: &Inputs, adjustment: &[u8], records: Option<&[u8]>) -> Result<BootKey, String> {
     let procedure = serde_json::to_vec(&json!({
         "source": include_str!("attach_boot.rs"),
         "attach_hold_key": arguments.attach_hold,
-        "rendezvous": if inputs.card.is_some() { "menu-up-write-protect" } else { "menu-up" },
+        "rendezvous": if inputs.card.is_some() { "dial-push-write-protect" } else { "dial-push" },
         "save": "release-rendezvous-disarm-checkpoint-rearm-v1",
     })).map_err(|error| error.to_string())?;
     let identity = BootIdentity::new(
         &inputs.document_bytes, &inputs.update, &inputs.boot_rom, adjustment,
         inputs.card.as_ref().map(|card| card.image.sha256.as_str()), &procedure,
-    );
+    ).with_record_nand(records);
     Ok(BootKey { key: identity.key(), inputs: identity.document() })
 }
 
@@ -487,6 +492,7 @@ fn default_pulse(key: Press) -> KeyPulse {
         Press::Key(key) => key_pulse(key),
         Press::Dial(DialTurn::Left | DialTurn::Right) => DIAL_PULSE,
         Press::Shutter(_) | Press::Play => GPIO_PULSE,
+        Press::Fn => KeyPulse { hold: SCANNED_HOLD, release: GPIO_PULSE.release },
     }
 }
 
@@ -836,8 +842,7 @@ impl Server {
         Ok(count)
     }
 
-    /// Returns the terminal stop the restored guest state replaced. After a stop the R4F guard
-    /// restarts empty: its entered-block set holds blocks the refusal left undecoded.
+    /// Returns the replaced terminal stop. The guard's recorded refusal survives until reset.
     fn restore_snapshot(&mut self, name: &SnapshotName) -> Result<Option<String>, String> {
         let bytes = self.snapshots.get(name).ok_or_else(|| format!("snapshot {} is not held", name.0))?;
         let machine = &mut self.bridge.machine;
@@ -1283,8 +1288,8 @@ impl Server {
 
     fn receipt(&self, error: Option<&str>) -> Result<Value, String> {
         let card = match self.rendezvous {
-            RendezvousInputs::MenuUpAndWriteProtect => "card-backed",
-            RendezvousInputs::MenuUp => "cardless",
+            RendezvousInputs::DialPushAndWriteProtect => "card-backed",
+            RendezvousInputs::DialPush => "cardless",
         };
         let preservation = match &self.preservation {
             Some(preservation) => serde_json::to_value(preservation.state())
@@ -1404,23 +1409,25 @@ fn drive() -> Result<(), String> {
     let started = Instant::now();
     let arguments = arguments()?;
     let adjustment_bytes = read(&arguments.adjustment_nand)?;
+    let record_bytes = arguments.record_nand.as_deref().map(read).transpose()?;
     let document_bytes = read(&arguments.run)?;
     let card = arguments
         .sd_card_image
         .as_deref()
         .map(|path| load_card(&document_bytes, path, Backing::Sparse))
         .transpose()?;
-    let rendezvous = if card.is_some() { RendezvousInputs::MenuUpAndWriteProtect } else { RendezvousInputs::MenuUp };
+    let rendezvous = if card.is_some() { RendezvousInputs::DialPushAndWriteProtect } else { RendezvousInputs::DialPush };
     let inputs = Inputs {
         document_bytes,
         update: read(&arguments.installed_dat)?,
         boot_rom: read(&arguments.boot_rom)?,
         adjustment: AdjustmentNand::parse(&adjustment_bytes)?,
+        records: record_bytes.as_deref().map(RecordMedium::parse).transpose()?,
         card,
     };
     std::fs::create_dir_all(&arguments.output).map_err(|e| format!("{}: {e}", arguments.output.display()))?;
     let observation = arguments.reset_observation.as_deref().map(|path| ResetObservationSpec::parse(&read(path)?)).transpose()?;
-    let key = boot_key(&arguments, &inputs, &adjustment_bytes)?;
+    let key = boot_key(&arguments, &inputs, &adjustment_bytes, record_bytes.as_deref())?;
     let key_seconds = started.elapsed().as_secs_f64();
     let root = arguments.checkpoints.clone();
     let installed = if arguments.fresh_boot { Vec::new() } else { install_checkpoints(&root, &key.key)? };
@@ -1431,7 +1438,11 @@ fn drive() -> Result<(), String> {
                 "runtime_sha256": record.runtime_sha256, "host": record.host})
         })
         .collect();
-    emit(&json!({"ok": true, "event": "start-options", "boot_key": key.key, "installed": listed}))?;
+    let mut options = json!({"ok": true, "event": "start-options", "boot_key": key.key, "installed": listed});
+    if let Some(records) = &inputs.records {
+        options["record_nand"] = records.summary();
+    }
+    emit(&options)?;
     let mut line = String::new();
     std::io::stdin().lock().read_line(&mut line).map_err(|e| e.to_string())?;
     let start: Start = serde_json::from_str(&line).map_err(|e| format!("RAM-push start: {e}"))?;
@@ -1480,7 +1491,7 @@ fn drive() -> Result<(), String> {
                     &inputs.document_bytes, &inputs.update, &inputs.boot_rom, &adjustment_bytes,
                     inputs.card.as_ref().map(|card| card.image.sha256.as_str()),
                     b"initialized-adjusted-card-state-v1:before-reset-observation",
-                );
+                ).with_record_nand(record_bytes.as_deref());
                 machine = initialized_reset(machine, &identity, &root.join("initialized-reset"))?;
             }
             let mut observer = observation.as_ref().map(|spec| ResetObserver::begin(&mut machine, spec)).transpose()?;
@@ -1728,6 +1739,10 @@ mod tests {
     }
 
     fn server(program: &[u32]) -> Server {
+        server_with(program, RendezvousInputs::DialPush)
+    }
+
+    fn server_with(program: &[u32], rendezvous: RendezvousInputs) -> Server {
         static SERIAL: AtomicU64 = AtomicU64::new(0);
         fujimod_emulator_exr2_board::register_board_builder();
         fujimod_emulator_models::register();
@@ -1755,14 +1770,14 @@ mod tests {
         }
         let output = std::env::temp_dir().join(format!("capture-stream-{}-{}", std::process::id(), SERIAL.fetch_add(1, Ordering::Relaxed)));
         Server {
-            bridge: Ff80::new(machine, RendezvousInputs::MenuUp),
+            bridge: Ff80::new(machine, rendezvous),
             attachment: Attachment { pre_attach: Value::Null, device: Vec::new(), configuration: Vec::new() },
             checkpoint: Value::Null,
             key: BootKey { key: BootIdentity::new(b"", b"", b"", b"", None, b"synthetic-capture").key(), inputs: Value::Null },
             root: output.clone(), output,
             screenshots: Vec::new(), watch: None, preservation: None,
             key_log: Vec::new(), requests: RequestProfile::default(),
-            rendezvous: RendezvousInputs::MenuUp, pending_capture: None,
+            rendezvous, pending_capture: None,
             capture_evidence_error: None, snapshots: BTreeMap::new(),
         }
     }
@@ -2206,6 +2221,92 @@ mod tests {
         assert!(server.handle(request(json!({"command": "snapshot-save", "name": "n0"}))).is_ok());
     }
 
+    /// A program that passes the four rendezvous trace sites once, at the given controller-74 state,
+    /// with the input scanner registered over disjoint calibrated key intervals and the dial-push row bound.
+    fn rendezvous_server(top_state: u16, rendezvous: RendezvousInputs) -> Server {
+        const CALIBRATION: u64 = 0x00a0_0000;
+        let mut server = server_with(&[0xe1a0_0000, 0xe1a0_0000, 0xe1a0_0000, 0xe1a0_0000, 0xeaff_fffe], rendezvous);
+        server.handle(request(json!({"command": "trace-sites", "sites": {
+            "0x00000000": "rendezvous-locked", "0x00000004": "cpu0-window-exit",
+            "0x00000008": "cpu1-window-exit", "0x0000000c": "query-callback-result"}}))).unwrap();
+        let machine = &server.bridge.machine;
+        let (firmware, board) = (&machine.document.firmware, &machine.session.board);
+        let row = |row: u64| firmware.key_table.base.0 + row * firmware.key_table.row_bytes;
+        board.write_physical(0x0146_761c, &top_state.to_le_bytes()).unwrap();
+        board.write_physical(firmware.scanner_registered.0, &1u32.to_le_bytes()).unwrap();
+        board.write_physical(firmware.calibration_pointer.0, &(CALIBRATION as u32).to_le_bytes()).unwrap();
+        for (index, binding) in firmware.keys.iter().enumerate() {
+            let low = 100 * index as u16 + 10;
+            board.write_physical(CALIBRATION + u64::from(binding.low_tag), &low.to_le_bytes()).unwrap();
+            board.write_physical(CALIBRATION + u64::from(binding.high_tag), &(low + 50).to_le_bytes()).unwrap();
+            let mut record = [0u8; 28];
+            record[0..4].copy_from_slice(&binding.code.to_le_bytes());
+            record[9] = 1;
+            record[12..16].copy_from_slice(&(binding.channel as u32).to_le_bytes());
+            record[16..18].copy_from_slice(&binding.low_tag.to_le_bytes());
+            record[18..20].copy_from_slice(&binding.high_tag.to_le_bytes());
+            board.write_physical(row(binding.row), &record).unwrap();
+        }
+        let dial = &firmware.dial_push;
+        let mut record = [0u8; 28];
+        record[0..4].copy_from_slice(&dial.code.to_le_bytes());
+        record[9] = 2;
+        record[12..16].copy_from_slice(&(u32::from(dial.port) << 16 | u32::from(dial.pin)).to_le_bytes());
+        record[0x12..0x14].copy_from_slice(&u16::from(dial.pressed_high).to_le_bytes());
+        board.write_physical(row(dial.row), &record).unwrap();
+        server
+    }
+
+    /// Every GPIO pad level and ADC sample the bridge drives.
+    fn inputs(server: &Server) -> ([u32; 16], Vec<u16>) {
+        let machine = &server.bridge.machine;
+        let node = machine.session.node(&machine.document.gpio.0).unwrap();
+        let pads = machine.session.board
+            .inspect_device::<fujimod_emulator_devices::exr2::gpio::Gpio, _>(node, |gpio| Ok(gpio.pads().input_levels())).unwrap();
+        (pads, machine.session.adc_samples(&machine.document.adc.0).unwrap())
+    }
+
+    #[test]
+    fn a_rendezvous_outside_the_live_view_root_is_refused_before_any_input() {
+        for state in [0x00u16, 0x18, 0x11, 0x01] {
+            let mut server = rendezvous_server(state, RendezvousInputs::DialPushAndWriteProtect);
+            let before = inputs(&server);
+            let error = server.bridge.advance(100).unwrap_err();
+            assert!(error.contains("rendezvous refused") && error.contains("no menu open"), "{state:#x}: {error}");
+            assert!(!server.bridge.rendezvous_active(), "{state:#x}");
+            assert_eq!(inputs(&server), before, "{state:#x}");
+            assert_eq!(server.receipt(None).unwrap()["rendezvous_activity"], json!([]), "{state:#x}");
+        }
+    }
+
+    #[test]
+    fn a_rendezvous_at_the_live_view_root_pushes_the_dial_and_records_the_root() {
+        let mut server = rendezvous_server(0x04, RendezvousInputs::DialPush);
+        let before = inputs(&server);
+        server.bridge.advance(100).unwrap();
+        assert!(server.bridge.rendezvous_active());
+        server.bridge.release_rendezvous().unwrap();
+        assert!(!server.bridge.rendezvous_active());
+        assert_eq!(inputs(&server), before);
+        let activity = &server.receipt(None).unwrap()["rendezvous_activity"];
+        assert_eq!(activity.as_array().map(Vec::len), Some(1), "{activity}");
+        assert_eq!(activity[0]["inputs"], json!(["dial-push"]), "{activity}");
+        assert_eq!(activity[0]["controller_74_state"], 4, "{activity}");
+        assert!(activity[0]["dial_push_latched"].is_boolean(), "{activity}");
+        assert!(activity[0]["released_instructions"].is_u64(), "{activity}");
+    }
+
+    #[test]
+    fn a_live_setting_changed_during_the_rendezvous_hold_fails_the_release() {
+        let mut server = rendezvous_server(0x04, RendezvousInputs::DialPush);
+        server.bridge.advance(100).unwrap();
+        let mut byte = [0];
+        server.bridge.machine.session.board.read_physical(0x0096_cd7c, &mut byte).unwrap();
+        server.bridge.machine.session.board.write_physical(0x0096_cd7c, &[byte[0] ^ 1]).unwrap();
+        let error = server.bridge.release_rendezvous().unwrap_err();
+        assert!(error.contains("0x0096cd7c"), "{error}");
+    }
+
     #[test]
     fn trace_site_reads_record_memory_at_entry() {
         let mut server = server(&[0xe2800001, 0xeafffffd]);
@@ -2280,5 +2381,44 @@ mod tests {
         assert_eq!(server.bridge.machine.traces.hits.len() as u64, previous);
     }
 
+    #[test]
+    fn a_record_nand_keys_the_attach_checkpoint_only_when_given() {
+        use fujimod_xm1::nand_image::{CommittedImage, PAGES_PER_BLOCK, PAGE_BYTES, SPARE_BYTES};
+        let pages = fujimod_xm1::adjustment::BLOCKS
+            .flat_map(|block| block * PAGES_PER_BLOCK..(block + 1) * PAGES_PER_BLOCK)
+            .map(|row| (row, (vec![0u8; PAGE_BYTES], vec![0xffu8; SPARE_BYTES])))
+            .collect();
+        let adjustment = CommittedImage::compose(&[0u8; 16], &pages).unwrap();
+        let inputs = Inputs {
+            document_bytes: b"run".to_vec(),
+            update: b"dat".to_vec(),
+            boot_rom: b"rom".to_vec(),
+            adjustment: AdjustmentNand::parse(&adjustment).unwrap(),
+            records: None,
+            card: None,
+        };
+        let arguments = |record_nand: Option<&str>| Arguments {
+            run: "run.json".into(),
+            boot_rom: "rom".into(),
+            installed_dat: "dat".into(),
+            adjustment_nand: "adjustment.nand".into(),
+            record_nand: record_nand.map(PathBuf::from),
+            output: "out".into(),
+            checkpoints: "checkpoints".into(),
+            sd_card_image: None,
+            reset_observation: None,
+            attach_hold: None,
+            fresh_boot: false,
+        };
+        let without = boot_key(&arguments(None), &inputs, &adjustment, None).unwrap();
+        let first = boot_key(&arguments(Some("a.nand")), &inputs, &adjustment, Some(b"first")).unwrap();
+        let moved = boot_key(&arguments(Some("b.nand")), &inputs, &adjustment, Some(b"first")).unwrap();
+        let second = boot_key(&arguments(Some("a.nand")), &inputs, &adjustment, Some(b"second")).unwrap();
+        assert!(without.inputs["record_nand"].is_null());
+        assert_eq!(first.inputs["record_nand"], sha256(b"first"));
+        assert_eq!(first.key, moved.key);
+        assert_ne!(first.key, second.key);
+        assert_ne!(first.key, without.key);
+    }
 }
 

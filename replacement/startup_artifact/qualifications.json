@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "contracts": [
+    {"contract": "686c35b646a1d7404b0da900d6a46d92432ead3a7bd0fd4f083a5ae8ce05403f", "evidence": "E-STARTUP-J1-COMPOSED-NATURAL-150"},
+    {"contract": "372e90d3b46a70deb54b38d2bef7d5c96875b5278c387e6a821a21f0f02aae9b", "evidence": "E-STARTUP-J2-COMPOSED-NATURAL-150"},
+    {"contract": "e466bb88ec2fe53d1302fc8c1487f898c64d5708f03a765c1ca8829a8d16d520", "evidence": "E-STARTUP-J3-COMPOSED-NATURAL-150"},
+    {"contract": "be71754ee9f4b0ab3d3790e09fde43271cbc82e09a3280f3ade737c96ebcfa1f", "evidence": "E-STARTUP-J4-COMPOSED-NATURAL-150"},
+    {"contract": "391a8e49dc6502284b0a23419bf1b61640dabf6fed51607486f338b48f71a311", "evidence": "E-STARTUP-J5-COMPOSED-NATURAL-150"},
+    {"contract": "e290b128c1d94d6ea99b4bdb38e968d61f760053fac089f174c8df9be1034718", "evidence": "E-STARTUP-J6-COMPOSED-NATURAL-150"},
+    {"contract": "6c3fd959f3e3dc7c5fd7ae5945fc66305e0682c75ab729383d4ecd6b3808bd70", "evidence": "E-STARTUP-APPLICATION-PHASE-150"},
+    {"contract": "a82958ca0015a4489d3148d7fd4806418ea7c90870c7dedd4549242c326fb6aa", "evidence": "E-STARTUP-J8-COMPOSED-NATURAL-150"}
+  ]
+}

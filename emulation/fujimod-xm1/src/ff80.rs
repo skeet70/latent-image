@@ -4,7 +4,7 @@
 //! bridge (`tools/continue_rec_scanout.py`, `_FF80EndpointBridge`).
 
 use crate::guest::{Press, RouteKey};
-use crate::machine::{KeyPulse, Machine, RunOutcome};
+use crate::machine::{KeyPulse, Latch, Machine, RunOutcome};
 use crate::trace::CaptureScope;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -23,12 +23,25 @@ const PACKET_BYTES: usize = 64;
 const BULK_OUT: u8 = 2;
 const BULK_IN: u8 = 0x81;
 const BULK_IN_PORT: usize = 1;
-/// An UP hold of 455,645 instructions did not enter stock focus-area selection
-/// on the retained engine and 1,778,831 did (emulated).
+/// The retained bridge's floor for its rendezvous UP hold: 455,645 instructions did not enter
+/// stock focus-area selection and 1,778,831 did (emulated). The card stays write-protected as long.
 const RENDEZVOUS_HOLD: u64 = 4_000_000;
 pub const VENDOR_PRODUCT: [u8; 4] = [0xcb, 0x04, 0x80, 0xff];
 const KEEPALIVE_PERIOD: u64 = 32;
 const KEEPALIVE_PULSE: KeyPulse = KeyPulse::instructions(2_000_000, 2_000_000);
+/// Controller 74's (modal 0x4a) state halfword, `0x01467588 + 2 * 74`.
+const TOP_CONTROLLER_STATE: u64 = 0x0146_761c;
+/// `[0x0096cc64, 0x0096ce26)`, the extent the stock BACK settings restore copies.
+const LIVE_SETTINGS: u64 = 0x0096_cc64;
+const LIVE_SETTINGS_BYTES: usize = 450;
+
+/// Controller 74's state: 0x04 on the live-view root; live-view overlays, menus and SET-UP
+/// pages use other values (crawl-4, reports/recipe-bank-ui-ownership.md).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TopControllerState(u16);
+impl TopControllerState {
+    const LIVE_VIEW_ROOT: Self = Self(0x04);
+}
 /// Trace labels the e2e arms on its runtime's rendezvous symbols.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RendezvousSite {
@@ -92,19 +105,19 @@ struct ControllerSave {
     endpoints: Option<EndpointDma>,
 }
 
-/// The inputs held from the rendezvous lock to its release (the retained
-/// bridge's `hold_rendezvous_inputs`).
+/// The inputs from the rendezvous lock to its release. The retained bridge's
+/// `hold_rendezvous_inputs` holds UP, which opens focus-area selection at live view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RendezvousInputs {
-    MenuUp,
-    MenuUpAndWriteProtect,
+    DialPush,
+    DialPushAndWriteProtect,
 }
 
 impl RendezvousInputs {
     fn names(self) -> Vec<&'static str> {
         match self {
-            Self::MenuUp => vec!["menu-up"],
-            Self::MenuUpAndWriteProtect => vec!["menu-up", "sd-write-protect"],
+            Self::DialPush => vec!["dial-push"],
+            Self::DialPushAndWriteProtect => vec!["dial-push", "sd-write-protect"],
         }
     }
 }
@@ -113,11 +126,15 @@ impl RendezvousInputs {
 #[derive(Serialize)]
 pub struct Rendezvous {
     latched_instructions: u64,
+    controller_74_state: u16,
     inputs: Vec<&'static str>,
+    dial_push_latched: Option<bool>,
     window_exits: Vec<WindowExit>,
     callback_instructions: Option<u64>,
     released_instructions: Option<u64>,
     menu_after: Option<Value>,
+    #[serde(skip)]
+    settings_at_latch: Box<[u8; LIVE_SETTINGS_BYTES]>,
 }
 
 #[derive(Serialize)]
@@ -264,18 +281,33 @@ impl Ff80 {
                     if hit.core != 0 || masked.iter().any(|masked| !masked) {
                         return Err(format!("rendezvous trace lacks two masked cores: core {} masks {masked:?}", hit.core));
                     }
-                    self.machine.press(RouteKey::Up)?;
-                    if self.rendezvous_inputs == RendezvousInputs::MenuUpAndWriteProtect {
+                    let mut state = [0; 2];
+                    self.machine.session.board.read_physical(TOP_CONTROLLER_STATE, &mut state)?;
+                    let state = TopControllerState(u16::from_le_bytes(state));
+                    if state != TopControllerState::LIVE_VIEW_ROOT {
+                        return Err(format!(
+                            "rendezvous refused: controller 74 state {:#04x} is not the live-view root {:#04x}; ram-push and ram-unload run only at the idle shooting screen with no menu open (transport/README.md)",
+                            state.0, TopControllerState::LIVE_VIEW_ROOT.0));
+                    }
+                    let mut settings_at_latch = Box::new([0; LIVE_SETTINGS_BYTES]);
+                    self.machine.session.board.read_physical(LIVE_SETTINGS, settings_at_latch.as_mut_slice())?;
+                    if self.rendezvous_inputs == RendezvousInputs::DialPushAndWriteProtect {
                         self.machine.protect_card(true)?;
                     }
                     self.rendezvous.push(Rendezvous {
                         latched_instructions: hit.instructions,
+                        controller_74_state: state.0,
                         inputs: self.rendezvous_inputs.names(),
+                        dial_push_latched: None,
                         window_exits: Vec::new(),
                         callback_instructions: None,
                         released_instructions: None,
                         menu_after: None,
+                        settings_at_latch,
                     });
+                    // The keepalive pulse: at live view it leaves the screen and the MENU path unchanged (emulated).
+                    let latched = self.machine.dial_push(KEEPALIVE_PULSE)? == Latch::Latched;
+                    self.rendezvous.last_mut().ok_or("rendezvous activity is missing")?.dial_push_latched = Some(latched);
                 }
                 (Some(exit @ (RendezvousSite::Cpu0WindowExit | RendezvousSite::Cpu1WindowExit)), true) => {
                     let event = self.rendezvous.last_mut().ok_or("rendezvous activity is missing")?;
@@ -354,16 +386,21 @@ impl Ff80 {
         if held < RENDEZVOUS_HOLD {
             self.advance(RENDEZVOUS_HOLD - held)?;
         }
-        self.machine.release_key(RouteKey::Up)?;
-        if self.rendezvous_inputs == RendezvousInputs::MenuUpAndWriteProtect {
+        if self.rendezvous_inputs == RendezvousInputs::DialPushAndWriteProtect {
             self.machine.protect_card(false)?;
         }
         let released = self.machine.instructions();
         let menu = self.machine.menu()?;
+        let mut settings = [0; LIVE_SETTINGS_BYTES];
+        self.machine.session.board.read_physical(LIVE_SETTINGS, &mut settings)?;
         let event = self.rendezvous.last_mut().ok_or("rendezvous activity is missing")?;
         event.released_instructions = Some(released);
         event.menu_after = Some(json!(menu.map(|m| json!({"menu_id": m.menu_id, "setting_id": m.setting_id, "cursor": m.cursor}))));
         self.rendezvous_complete = false;
+        if let Some((offset, (now, latched))) = settings.iter().zip(event.settings_at_latch.iter()).enumerate().find(|(_, (now, latched))| now != latched) {
+            return Err(format!("live setting byte {:#010x} changed from {latched:#04x} to {now:#04x} between the rendezvous latch and its release",
+                LIVE_SETTINGS + offset as u64));
+        }
         Ok(())
     }
 

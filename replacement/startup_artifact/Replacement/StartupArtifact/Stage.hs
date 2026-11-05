@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Canonical decode, composition staging and the output directory.
 module Replacement.StartupArtifact.Stage
-  ( loadCanonical, loadPieces, stageComposition, writeOutputs, runStager
+  ( loadCanonical, imageLimit, loadPieces, stageComposition, writeOutputs, runStager, applicationSiteMap
   ) where
 
 import Control.Monad (forM, forM_, unless)
@@ -9,14 +9,18 @@ import qualified Data.Aeson as J
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as L
 import Data.List (tails)
+import qualified Data.Map.Strict as Map
+import qualified Data.Text as T
 import qualified Emulation.Image4Staging as Tools
 import qualified Emulation.Sha256 as SHA
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.Host as H
 import qualified FujiAF.UpdateContainer as U
 import Replacement.Record5Staging (decodeRecord, stageRecord5, stagedRecord5Dat)
+import qualified Replacement.Image5Init.Admission as Init
+import qualified Replacement.Image5Init.Artifact as InitArtifact
 import Replacement.StartupArtifact.Adapters
-import Replacement.StartupArtifact.Application (RoleImages (..), application, plainImage)
+import Replacement.StartupArtifact.Application (RoleImages (..), SiteMap (..), application, plainImage)
 import Replacement.StartupArtifact.AttachState (AttachSources (..), attachStateValue)
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Contract
@@ -48,14 +52,23 @@ loadCanonical tools scratch path = do
   (image4, image5) <- decodeImages tools scratch (U.parsedParts parsed)
   refused (canonical dat image4 image5)
 
+-- | The general heap links one flat image from 0x89cda4 to its image-5 thunk (3,493,540 bytes;
+-- replacement/general_heap/Replacement/GeneralHeap/Artifact.hs:75); every other piece fits 64 KiB.
+imageLimit :: PieceKind -> Int
+imageLimit kind = case kind of
+  GeneralHeap -> 4 * 1024 * 1024
+  _ -> 0x10000
+
 loadPieces :: Canonical -> Manifest -> IO [Piece]
 loadPieces source manifest = forM (manifestPieces manifest) $ \piece -> do
-  let linked (LinkedPaths imagePath symbolsPath) =
-        LinkedImage <$> (ImageBytes <$> H.readRegular 0x10000 imagePath) <*> (SymbolBytes <$> H.readRegular 0x10000 symbolsPath)
+  let linked kind (LinkedPaths imagePath symbolsPath) =
+        LinkedImage <$> (ImageBytes <$> H.readRegular (imageLimit kind) imagePath) <*> (SymbolBytes <$> H.readRegular 0x10000 symbolsPath)
   images <- case piece of
-    SingleImagePiece kind paths -> SingleImage kind <$> linked paths
+    SingleImagePiece kind paths -> SingleImage kind <$> linked kind paths
     LoaderStartupPiece (LoaderStartupPaths a b dispatcher installer) ->
-      LoaderStartupImages <$> linked a <*> linked b <*> linked dispatcher <*> linked installer
+      LoaderStartupImages <$> linked LoaderStartup a <*> linked LoaderStartup b <*> linked LoaderStartup dispatcher <*> linked LoaderStartup installer
+    KernelSlotPiece (KernelSlotPaths a b regions) ->
+      KernelSlotImages <$> linked KernelSlotBodies a <*> linked KernelSlotBodies b <*> (RegionsBytes <$> H.readRegular 0x10000 regions)
   refused (derivePieceOf source images)
 
 -- | Rule 4 application, then the rule 5 postconditions on the result.
@@ -113,7 +126,8 @@ runStager tools canonicalPath manifestPath scratchPath output = do
   -- Log sites resolve symbols of single-image pieces only.
   ownedSymbols <- concat <$> forM (manifestPieces manifest) (\piece -> case piece of
     SingleImagePiece kind (LinkedPaths _ symbolsPath) -> (\symbols -> [(kind, symbols)]) <$> H.readRegular 0x10000 symbolsPath
-    LoaderStartupPiece _ -> pure [])
+    LoaderStartupPiece _ -> pure []
+    KernelSlotPiece _ -> pure [])
   let sources = AttachSources (canonicalDat source) dat (canonicalTargets source) observed ownedSymbols (compositionPieces composition) attach
   attachState <- refused (attachStateValue sources (manifestAttachRules manifest) (contractCarriers composition))
   section <- case manifestApplication manifest of
@@ -122,5 +136,22 @@ runStager tools canonicalPath manifestPath scratchPath output = do
       composedParts <- either (const (Left ComposedUnparsed)) (Right . U.parsedParts) (U.parseContainer dat)
       retained <- RoleImages (canonicalTargets source) <$> plainImage (U.parsedParts (canonicalParsed source))
       composed <- RoleImages observed <$> plainImage composedParts
-      Just <$> application (contractCarriers composition) retained composed
+      mapping <- applicationSiteMap (compositionPieces composition)
+      Just <$> application mapping (contractCarriers composition) retained composed
   writeOutputs output dat observed (contractValue source manifestBytes composition dat observed attach attachState section)
+
+applicationSiteMap :: [Piece] -> Either Refusal SiteMap
+applicationSiteMap pieces = SiteMap . Map.fromList . concat <$> mapM mapped pieces
+  where
+    mapped piece = case pieceFacts piece of
+      ApplicationPumpFacts _ -> pure [(Pc pc,(ApplicationPump,Pc pc)) | pc <- [0xbfbd20,0xbfbd24..0xbfbd3c]]
+      Image5InitializerFacts (LinkedBytes bytes symbols) -> do
+        artifact <- either (Left . AdapterRefused Image5Initializer . T.pack . show) pure (InitArtifact.deriveArtifact bytes symbols)
+        let proof = InitArtifact.artifactProof artifact
+            continuation target = case [Init.callReturn site | site <- Init.proofCallSites proof, Init.callTarget site == target] of
+              [pc] -> pure (Pc pc)
+              _ -> Left (AdapterRefused Image5Initializer "initializer continuation missing")
+        checked <- continuation 0xed4acc
+        ready <- continuation 0xed4afc
+        pure [(Pc before,(Image5Initializer,after)) | (before,after) <- [(0xd985a4,Pc 0xd985a4),(0xd985c8,checked),(0xd985d8,ready)]]
+      _ -> pure []

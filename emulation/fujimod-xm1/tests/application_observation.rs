@@ -3,7 +3,7 @@ use fujimod_xm1::application_observation::{
     ByteView, CodeObservation, Control, CoreIdentity, DynamicTarget, Evidence, Expected, FirstReady, GraphicsState, hit_observers, InputIndex,
     InputPurpose, Menu, PairField, Publication, RawView, ReadinessIndex, ReadinessKind, ReadinessSample, Recorder, Registers, RenderViews,
     RoleEvidence, RoleSummary, RouteInput, Sample, SampleIndex, ScopeObservation, SideFile, SiteRef, Task1, TaskTableViews, UiWorkViews,
-    VisibleCapture, Observers, EVIDENCE,
+    VisibleCapture, Observers, EVIDENCE, Scenario as RouteScenario, ControllerState, ControllerStateView,
 };
 use fujimod_xm1::composed_catalog::{
     Application, ApplicationProblem, CatalogRefusal, CodeLabel, CodeWord, Contract, Core, Domain, Instructions, Pc, QueueLabel, Role, Schema,
@@ -99,6 +99,27 @@ fn owned_pump() -> Value {
     value
 }
 
+fn owned_initializer() -> Value {
+    let mut value = schema5();
+    for site in value["application"]["sites"].as_array_mut().unwrap() {
+        let pc = site["retained_pc"].as_u64().unwrap() as u32;
+        let composed = match pc {
+            0xd985a4 => 0xd985a4,
+            0xd985c8 => 0xd98620,
+            0xd985d8 => 0xd98640,
+            _ => continue,
+        };
+        site["composed_pc"] = json!(composed);
+        site["composed_word"] = json!(0xe320f000u32);
+    }
+    value["pieces"].as_array_mut().unwrap().push(json!({
+        "kind": "image5-initializer", "areas": [], "carriers": [], "edits": [], "footprint": [], "premises": [],
+        "catalog": {"boundaries": [], "owned_code": [{"start": 0xd9856cu32, "end": 0xd986b0u32}],
+            "writes": {"allow": [], "basis": "proved", "premise": null}, "reads": []},
+    }));
+    value
+}
+
 fn layout(domain: u8, cells: [u32; 6]) -> Value {
     json!({"domain": domain, "creation": cells[0], "task": cells[1], "ids": cells[2], "domains": cells[3], "current": cells[4], "selected": cells[5]})
 }
@@ -182,7 +203,7 @@ fn a_pc_shared_by_a_boundary_and_an_application_site_reaches_both_and_stays_arme
     let contract = parse(&value).unwrap();
     let plan = contract.sites(Role::Retained);
     let directory = scratch();
-    let recorder = Recorder::new(contract.application().unwrap(), Role::Retained, &directory).unwrap();
+    let recorder = Recorder::new(contract.application().unwrap(), Role::Retained, &directory, RouteScenario::default()).unwrap();
     let observers = |pc| hit_observers(&plan, Some(&recorder), pc);
     assert_eq!(observers(0x725214), Observers::CatalogThenApplication);
     assert_eq!(observers(263216), Observers::Catalog);
@@ -214,6 +235,46 @@ fn the_application_pump_piece_may_own_the_pump_sites_with_the_same_decoding() {
     let index = APPLICATION_SITES.iter().position(|&(pc, _)| pc == PUMP + 4).unwrap();
     decoded["application"]["sites"][index]["composed_word"] = json!(0xe1a00000u32);
     assert_eq!(parse(&decoded).unwrap_err(), CatalogRefusal::Application(ApplicationProblem::Pump));
+}
+
+#[test]
+fn initializer_owned_code_refuses_other_site_kinds_and_other_pieces() {
+    let mut other = owned_initializer();
+    other["pieces"][2]["kind"] = json!("image5-producer");
+    assert_eq!(parse(&other).unwrap_err(), CatalogRefusal::Application(ApplicationProblem::SiteInPiece(Pc(0xd985a4))));
+    for &(pc, kind) in &APPLICATION_SITES {
+        if matches!(kind, fujimod_xm1::composed_catalog::SiteKind::Initializer) { continue; }
+        let mut other = owned_initializer();
+        other["pieces"][2]["catalog"]["owned_code"].as_array_mut().unwrap().push(json!({"start": pc, "end": pc + 4}));
+        other["pieces"][2]["catalog"]["owned_code"].as_array_mut().unwrap().sort_by_key(|span| span["start"].as_u64().unwrap());
+        assert_eq!(parse(&other).unwrap_err(), CatalogRefusal::Application(ApplicationProblem::SiteInPiece(Pc(pc))));
+    }
+}
+
+#[test]
+fn an_owned_initializer_entry_reaches_both_observers_in_both_roles() {
+    let mut value = owned_initializer();
+    value["pieces"][2]["catalog"]["boundaries"] = json!([{
+        "label": "image5-initializer/entry", "kind": "entry", "cores": [0],
+        "retained_pc": 0xd985a4u32, "composed_pc": 0xd985a4u32,
+        "stop": false, "compare": "presence", "record_limit": 1,
+    }]);
+    let contract = parse(&value).unwrap();
+    for role in [Role::Retained, Role::Composed] {
+        let directory = scratch();
+        let plan = contract.sites(role);
+        let recorder = Recorder::new(contract.application().unwrap(), role, &directory, RouteScenario::default()).unwrap();
+        assert_eq!(hit_observers(&plan, Some(&recorder), 0xd985a4), Observers::CatalogThenApplication);
+        assert!(!recorder.released_boundaries(&plan).contains(&Guest(0xd985a4)));
+        let sites = recorder.trace_sites();
+        let (continuation, absent) = match role {
+            Role::Retained => (0xd985d8, 0xd98640),
+            Role::Composed => (0xd98640, 0xd985d8),
+        };
+        assert_eq!(sites.get(&continuation).map(String::as_str), Some("app-d985d8"));
+        assert_eq!(sites.get(&(continuation | ALIAS)).map(String::as_str), Some("app-d985d8"));
+        assert!(!sites.contains_key(&absent));
+    }
 }
 
 #[test]
@@ -336,7 +397,9 @@ impl<'a> Builder<'a> {
     fn site(&mut self, pc: u32, registers: Registers) -> SampleIndex { self.site_on(Core::Primary, pc, registers, Vec::new()) }
 
     fn site_on(&mut self, core: Core, pc: u32, registers: Registers, packet: Vec<RawView>) -> SampleIndex {
-        self.push(SiteRef::Application(SiteLabel::of(Pc(pc))), pc, core, registers, packet)
+        let label = SiteLabel::of(Pc(pc));
+        let composed = self.application.site(&label).unwrap().pc(Role::Composed).0;
+        self.push(SiteRef::Application(label), composed, core, registers, packet)
     }
 
     fn queue(&mut self, pc: u32, registers: Registers, packet: Vec<RawView>) -> SampleIndex {
@@ -547,8 +610,12 @@ fn visible(directory: &std::path::Path, inputs: &[RouteInput], memory: &Memory) 
             "bytes_completed": counter * 10, "acknowledgments": counter}});
         let graphics = SideFile::replace(directory, &format!("{name}.graphics.json"), &serde_json::to_vec(&save).unwrap()).unwrap();
         let instructions = input.map_or(Instructions(press(15) - 1_000_000), |id| inputs[id.0 as usize].settled.unwrap());
+        let mut state = memory.clone();
+        state.set(0x146761c, if index == 3 { 4 } else { 24 });
         VisibleCapture {
-            input, instructions, probe, menu: Some(Menu { menu: 1, setting: 5, cursor: 2 }), controller: memory.view(0x944580, 20), png, planes, scanout, graphics,
+            input, instructions, probe, menu: Some(Menu { menu: 1, setting: 5, cursor: if index == 1 { 3 } else { 2 } }),
+            controller: memory.view(0x944580, 20),
+            controller74: ControllerStateView { address: Guest(0x146761c), view: state.view(0x146761c, 1) }, png, planes, scanout, graphics,
         }
     }).collect()
 }
@@ -586,6 +653,8 @@ impl Scenario {
 
     fn owned() -> Self { Self::from_contract(&owned_pump(), &[Plan::Stable, Plan::Quiet], &[]) }
 
+    fn initializer_owned() -> Self { Self::from_contract(&owned_initializer(), &[Plan::Stable, Plan::Quiet], &[]) }
+
     fn from_contract(value: &Value, plans: &[Plan], words: &[(u32, u32)]) -> Self {
         let contract = parse(value).unwrap();
         let directory = scratch();
@@ -602,6 +671,7 @@ impl Scenario {
         for index in 15..20 {
             builder.clock = press(index) + 1_000_000;
             builder.input = Some(InputIndex(index as u64));
+            builder.memory.set(0x1467588 + 74 * 2, if index == 17 { 4 } else { 24 });
             builder.cycle(Plan::Quiet);
         }
         builder.input = None;
@@ -625,6 +695,7 @@ impl Scenario {
         };
         let visible = visible(&directory, &inputs, &builder.memory);
         let section = ApplicationReceipt {
+            scenario: RouteScenario::default(),
             evidence: write_evidence(&directory, EVIDENCE, &evidence).unwrap(),
             samples: evidence.samples.len() as u64, readiness: evidence.readiness.len() as u64, writes: evidence.writes.len() as u64,
             task1: Some(Task1 { core: Core::Primary, entry, domain: Domain::A }),
@@ -689,7 +760,7 @@ fn a_coherent_scenario_passes_every_check() {
 fn every_role_control_is_refused_by_its_named_check() {
     for control in Control::ALL {
         let Expected::Application(check) = control.expected() else { continue };
-        assert_eq!(Scenario::new().control(control).refusal(), Some(check), "{control:?}");
+        assert_eq!(Scenario::initializer_owned().control(control).refusal(), Some(check), "{control:?}");
     }
 }
 
@@ -722,9 +793,9 @@ fn the_canonical_input_control_changes_the_update_identity() {
 }
 
 #[test]
-fn the_nineteen_controls_have_distinct_names() {
+fn the_twenty_one_controls_have_distinct_names() {
     let names: BTreeSet<&str> = Control::ALL.iter().map(|control| control.name()).collect();
-    assert_eq!(names.len(), 19);
+    assert_eq!(names.len(), 21);
 }
 
 #[test]
@@ -732,6 +803,13 @@ fn an_owned_pump_passes_every_check_and_its_controls_refuse() {
     assert_eq!(Scenario::owned().check(), Ok(()));
     assert_eq!(Scenario::owned().control(Control::StockPumpWord).refusal(), Some(ApplicationCheck::CodeIdentity));
     assert_eq!(Scenario::owned().control(Control::OwnedPumpSkipsPosthook).refusal(), Some(ApplicationCheck::HookSequence));
+}
+
+#[test]
+fn an_owned_initializer_passes_every_check_and_its_controls_refuse() {
+    assert_eq!(Scenario::initializer_owned().check(), Ok(()));
+    assert_eq!(Scenario::initializer_owned().control(Control::InitializerSkipsEd4afc).refusal(), Some(ApplicationCheck::Readiness));
+    assert_eq!(Scenario::initializer_owned().control(Control::StockInitializerPc).refusal(), Some(ApplicationCheck::CodeIdentity));
 }
 
 #[test]
@@ -957,4 +1035,79 @@ fn a_code_range_label_names_its_range() {
     let contract = parse(&schema5()).unwrap();
     let pump = contract.application().unwrap().code_range(CodeLabel::Pump).unwrap();
     assert_eq!((pump.start, pump.end), (u64::from(PUMP), u64::from(PUMP + 32)));
+}
+
+#[test]
+fn mismatched_scenarios_are_a_pair_refusal() {
+    let retained = Scenario::new();
+    let mut composed = Scenario::new();
+    let summary = retained.summary().unwrap();
+    composed.receipt.application.as_mut().unwrap().scenario = RouteScenario::FilmSimulation;
+    assert_eq!(check_pair(retained.section(), composed.section(), [&retained.directory, &composed.directory], [&summary, &summary]),
+        Err(PairField::Scenario));
+}
+
+#[test]
+fn scenarios_select_their_recorded_keys_and_purposes() {
+    use InputPurpose::*;
+    use RouteKey::*;
+    let cases: &[(&str, RouteScenario, &[(RouteKey, InputPurpose)])] = &[
+        ("menu-inputs", RouteScenario::MenuInputs, &[(Down, Ordinary), (Up, Ordinary), (Back, BackHandback), (Ok, AfterBack), (Left, UnhandledProbe)]),
+        ("shooting-menu", RouteScenario::ShootingMenu, &[(Down, Ordinary), (Up, Ordinary)]),
+        ("live-view", RouteScenario::LiveView, &[(Back, LiveView)]),
+        ("film-simulation", RouteScenario::FilmSimulation, &[(Down, Ordinary), (Down, Ordinary), (Down, Ordinary), (Down, Ordinary),
+            (Ok, FilmOpen), (Back, BackHandback), (Ok, FilmReentry)]),
+        ("editor-cancel", RouteScenario::EditorCancel, &[(Up, Ordinary), (Left, Ordinary), (Down, Ordinary), (Ok, Ordinary), (Ok, EditorOpen), (Back, EditorCancel)]),
+        ("editor-confirm", RouteScenario::EditorConfirm, &[(Up, Ordinary), (Left, Ordinary), (Down, Ordinary), (Ok, Ordinary), (Ok, EditorOpen), (Ok, EditorConfirm)]),
+        ("repeated-inputs", RouteScenario::RepeatedInputs, &[(Down, Ordinary), (Down, Ordinary), (Down, Ordinary), (Up, Ordinary), (Up, Ordinary), (Up, Ordinary)]),
+    ];
+    let prefix: Vec<_> = std::iter::repeat_n((Up, FirstStart), 12).chain([(Ok, FirstStart); 3]).collect();
+    for &(name, scenario, settled) in cases {
+        assert_eq!(name.parse::<RouteScenario>(), Result::Ok(scenario));
+        assert_eq!(scenario.inputs().collect::<Vec<_>>(), prefix.iter().copied().chain(settled.iter().copied()).collect::<Vec<_>>());
+    }
+    assert_eq!(RouteScenario::default(), RouteScenario::MenuInputs);
+    assert!("unknown".parse::<RouteScenario>().is_err());
+}
+
+#[test]
+fn live_view_uses_the_last_input_sample_state_halfword_with_a_stale_menu_pointer() {
+    let mut scenario = Scenario::new();
+    let capture = &scenario.section().visible[3];
+    assert_eq!(capture.menu, Some(Menu { menu: 1, setting: 5, cursor: 2 }));
+    assert_eq!(capture.controller74.value(), Some(ControllerState(4)));
+    assert_eq!(scenario.check(), Ok(()));
+    let sample = scenario.evidence.samples.iter_mut().rev().find(|sample| sample.input == Some(InputIndex(17))).unwrap();
+    let view = sample.state.iter_mut().find(|view| view.word(0x1467588 + 74 * 2).is_some()).unwrap();
+    let offset = (0x1467588 + 74 * 2 - view.address.0) as usize;
+    for bytes in std::iter::once(&mut view.physical).chain(view.spellings.iter_mut().flatten()) {
+        bytes.0[offset..offset + 4].copy_from_slice(&0x0018_0004u32.to_le_bytes());
+    }
+    assert_eq!(scenario.check(), Ok(()));
+    let sample = scenario.evidence.samples.iter_mut().rev().find(|sample| sample.input == Some(InputIndex(17))).unwrap();
+    let view = sample.state.iter_mut().find(|view| view.word(0x1467588 + 74 * 2).is_some()).unwrap();
+    for bytes in std::iter::once(&mut view.physical).chain(view.spellings.iter_mut().flatten()) {
+        bytes.0[offset..offset + 4].copy_from_slice(&24u32.to_le_bytes());
+    }
+    assert_eq!(scenario.refusal(), Some(ApplicationCheck::Route));
+}
+
+#[test]
+fn a_live_view_capture_must_agree_with_its_last_state_sample() {
+    let mut scenario = Scenario::new();
+    let mut state = Memory::default();
+    state.set(0x146761c, 24);
+    scenario.receipt.application.as_mut().unwrap().visible[3].controller74 =
+        ControllerStateView { address: Guest(0x146761c), view: state.view(0x146761c, 1) };
+    assert_eq!(scenario.refusal(), Some(ApplicationCheck::Route));
+}
+
+#[test]
+fn captured_controller_state_excludes_the_neighboring_halfword() {
+    let mut scenario = Scenario::new();
+    let mut state = Memory::default();
+    state.set(0x146761c, 0x0018_0004);
+    scenario.receipt.application.as_mut().unwrap().visible[3].controller74 =
+        ControllerStateView { address: Guest(0x146761c), view: state.view(0x146761c, 1) };
+    assert_eq!(scenario.check(), Ok(()));
 }

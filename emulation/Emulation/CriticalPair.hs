@@ -446,10 +446,12 @@ bridgeSummary frame = do
         "critical-pair Rust retained memory service can escape its admitted lock cell"
       let assign fields = foldl (\words' (field,value) -> insertWord field value words') before fields
           unknown = [(ScratchR0,UnknownWord),(ScratchLr,UnknownWord),(ScratchCpsr,UnknownWord)]
+          -- A kernel slot body may change any caller-saved register; only its result is published.
+          slotScratch = [(field,UnknownWord) | field <- [ScratchR1,ScratchR2,ScratchR3,ScratchR12]]
       pure $ case kind of
-        IdentifyCore -> assign (unknown ++ [(ScratchR0,KnownWords (Set.fromList [0,1])),(ScratchR1,UnknownWord),(ScratchR2,knownWord 0x4003)])
-        MaskIrq -> assign (unknown ++ [(ScratchR0,KnownWords (Set.fromList [0,0x80])),(ScratchR1,UnknownWord)])
-        RestoreIrq -> assign (unknown ++ [(ScratchR1,UnknownWord)])
+        IdentifyCore -> assign (unknown ++ slotScratch ++ [(ScratchR0,KnownWords (Set.fromList [0,1]))])
+        MaskIrq -> assign (unknown ++ slotScratch ++ [(ScratchR0,KnownWords (Set.fromList [0,0x80]))])
+        RestoreIrq -> assign (unknown ++ slotScratch)
         ObserveWord -> assign unknown
         RetryExclusive -> assign (unknown ++ [(ScratchR0,KnownWords (Set.fromList [0,0xffffffff])),(ScratchR2,UnknownWord)])
         ReleaseExclusive -> assign (unknown ++ [(ScratchR0,KnownWords (Set.fromList [0,0xffffffff])),(ScratchR1,knownWord 0),(ScratchR2,knownWord 0)])

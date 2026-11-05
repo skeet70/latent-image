@@ -820,6 +820,30 @@ sh_binary(
     ],
 )
 
+# Record-area reads after a fresh RAM-push boot; see README "Populated record areas".
+sh_binary(
+    name = "record-medium-boot-check",
+    srcs = ["record-medium-boot-check.sh"],
+    args = [
+        "$(rootpath :emulator-slot)",
+        "$(rootpath @lab_jq//:bin/jq)",
+        "$(rootpath @lab_fujimod_xm1//:bin/fujimod-xm1-ram-push)",
+        "$(rootpath @lab_fujimod_xm1//:share/fujimod-xm1/xm1-150.json)",
+    ],
+    data = [
+        ":emulator-slot",
+        "@lab_fujimod_xm1//:bin/fujimod-xm1-ram-push",
+        "@lab_fujimod_xm1//:share/fujimod-xm1/xm1-150.json",
+        "@lab_jq//:bin/jq",
+    ],
+)
+
+sh_binary(
+    name = "fujimod-xm1-record-medium",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-record-medium"],
+    visibility = ["//visibility:public"],
+)
+
 # Re-derives the run document's address provenance from the decoded images:
 # bazel run //emulation:fujimod-xm1-provenance -- --analysis private-data/analysis/x-m1-1.50
 sh_binary(
@@ -939,6 +963,18 @@ haskell_library(
         "//host:base",
         "//host:bytestring",
         "//host:text",
+    ],
+)
+
+haskell_library(
+    name = "live-settings-lib",
+    srcs = ["Emulation/LiveSettings.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        ":emulator-usb",
+        "//host:base",
+        "//host:bytestring",
     ],
 )
 
@@ -1168,6 +1204,7 @@ haskell_binary(
         ":watch-observation",
         ":modal-observation",
         ":ui-trajectory-lib",
+        ":live-settings-lib",
         ":menu-crawl-lib",
         ":capture-stream-lib",
         ":save-lifecycle-lib",
@@ -1212,6 +1249,7 @@ haskell_test(
         ":watch-observation",
         ":modal-observation",
         ":ui-trajectory-lib",
+        ":live-settings-lib",
         ":menu-crawl-lib",
         ":capture-stream-lib",
         ":save-lifecycle-lib",
@@ -1367,6 +1405,7 @@ haskell_binary(
         ":checkpoint-key-lib",
         ":emulator-slot-lib",
         ":emulator-usb",
+        ":live-settings-lib",
         ":fujimod-paths",
         ":ram-push-unreviewed",
         ":ui-trajectory-lib",
@@ -1475,6 +1514,12 @@ cc_binary(
 sh_binary(
     name = "native-runner",
     srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-native-case"],
+    visibility = ["//visibility:public"],
+)
+
+sh_binary(
+    name = "task-constructors",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-task-constructors"],
     visibility = ["//visibility:public"],
 )
 
@@ -1856,6 +1901,7 @@ genrule(
         "CardlessRamPush.hs",
         "EmulatorUsb.hs",
         "Xm1RamPushE2E.hs",
+        "Emulation/LiveSettings.hs",
         "Emulation/CaptureStream.hs",
         "Emulation/SaveLifecycle.hs",
         "Emulation/SaveLifecycleRun.hs",
@@ -2234,6 +2280,21 @@ haskell_binary(
         "//host:containers",
         "//host:filepath",
         "//host:json",
+    ],
+)
+
+haskell_binary(
+    name = "menu-engine-refusal-cases",
+    srcs = ["MenuEngineRefusalCases.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-O2", "-threaded"],
+    main_file = "MenuEngineRefusalCases.hs",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":native-observation",
+        ":owned-case",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
     ],
 )
 

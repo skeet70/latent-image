@@ -552,7 +552,6 @@ fn every_other_class_is_refused_before_any_service_call() {
         (picker, StageEvent { kind: 0x10, node: 1, id: 0x1d, extra: 0 }),
         (page, StageEvent { kind: 0xe, node: 1, id: 0x17, extra: 0 }),
         (far_restored, StageEvent { kind: 0xe, node: 1, id: 0x1d, extra: 0 }),
-        (picker, StageEvent { kind: 0xe, node: 1, id: 0x1d, extra: 0 }),
         (framed, StageEvent { kind: 0xa, node: 1, id: 1, extra: 0 }),
         (closed(), StageEvent { kind: 2, node: 1, id: 0x1d, extra: 0 }),
         (closed(), StageEvent { kind: 1, node: 0x38, id: 0, extra: 0 }),

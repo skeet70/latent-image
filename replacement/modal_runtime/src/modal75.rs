@@ -14,6 +14,9 @@
 
 #![cfg_attr(not(test), allow(dead_code))]
 
+#[cfg(test)]
+extern crate menu_engine;
+
 #[path = "picker.rs"]
 pub mod picker;
 

@@ -623,7 +623,7 @@ emulatorSnapshotKey emulator (SnapshotName name) key = do
     _ -> ioError (userError "snapshot-key failure must be null or text")
 
 -- | A physical press the bridge accepts; MENU is OK and DISP is BACK on this body.
-data CrawlKey = KeyUp | KeyDown | KeyLeft | KeyRight | KeyOk | KeyBack | KeyQ | KeyDialLeft | KeyDialRight | KeyPlay
+data CrawlKey = KeyUp | KeyDown | KeyLeft | KeyRight | KeyOk | KeyBack | KeyQ | KeyDialLeft | KeyDialRight | KeyPlay | KeyFn
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 crawlKeyWire :: CrawlKey -> String
@@ -638,6 +638,7 @@ crawlKeyWire key = case key of
   KeyDialLeft -> "dial-left"
   KeyDialRight -> "dial-right"
   KeyPlay -> "play"
+  KeyFn -> "fn"
 
 instance FromJSON CrawlKey where
   parseJSON = withText "crawl key" $ \text ->

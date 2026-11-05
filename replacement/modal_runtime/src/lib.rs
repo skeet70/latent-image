@@ -283,14 +283,14 @@ impl picker::PickerServices for ArmPicker {
     fn busy(&mut self) -> bool {
         unsafe { rb_call_modal_query(0x53) != 0 }
     }
-    fn node_id(&mut self) -> picker::NodeId {
-        picker::NodeId(unsafe { rb_lifecycle_node() })
+    fn node_id(&mut self) -> crate::menu_engine::frame::NodeId {
+        crate::menu_engine::frame::NodeId::new(unsafe { rb_lifecycle_node() })
     }
     fn class(&mut self) -> picker::ClassId {
         picker::ClassId(unsafe { rb_lifecycle_class() })
     }
-    fn cursor_token(&mut self) -> picker::CursorToken {
-        picker::CursorToken(unsafe { rb_lifecycle_token() })
+    fn cursor_token(&mut self) -> crate::menu_engine::frame::RowToken {
+        crate::menu_engine::frame::RowToken::new(unsafe { rb_lifecycle_token() })
     }
     fn stage_open(&mut self, kind: picker::StageKind, id: picker::StageId) {
         unsafe { rb_call_stage_open(kind.0, id.0) }

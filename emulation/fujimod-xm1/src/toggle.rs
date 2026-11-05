@@ -512,6 +512,7 @@ fn drive() -> Result<(), String> {
         update: read(&arguments.installed_dat)?,
         boot_rom: read(&arguments.boot_rom)?,
         adjustment: AdjustmentNand::parse(&adjustment_bytes)?,
+        records: None,
         card: None,
     };
     std::fs::create_dir_all(&arguments.output).map_err(|e| format!("{}: {e}", arguments.output.display()))?;
@@ -559,7 +560,7 @@ fn drive() -> Result<(), String> {
         machine
     };
     let mut server = Server {
-        bridge: Ff80::new(machine, RendezvousInputs::MenuUp),
+        bridge: Ff80::new(machine, RendezvousInputs::DialPush),
         start: record,
         key,
         inputs: key_inputs,

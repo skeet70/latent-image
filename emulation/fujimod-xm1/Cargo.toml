@@ -30,6 +30,10 @@ name = "fujimod-xm1-updater"
 path = "src/updater.rs"
 
 [[bin]]
+name = "fujimod-xm1-record-medium"
+path = "src/record_medium_main.rs"
+
+[[bin]]
 name = "fujimod-xm1-queue-boundary"
 path = "src/queue_boundary.rs"
 
@@ -92,6 +96,10 @@ path = "src/composed_startup.rs"
 [[bin]]
 name = "fujimod-xm1-root-compact"
 path = "src/root_compact.rs"
+
+[[bin]]
+name = "fujimod-xm1-task-constructors"
+path = "src/task_constructors.rs"
 
 # Compiles the schema-4 loader-prefix observer against an engine carrying
 # build-support/fujimod-scoped-watch.patch.
