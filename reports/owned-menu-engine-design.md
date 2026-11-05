@@ -1,6 +1,6 @@
 # Owned menu engine: design (#128)
 
-Status: revision 2, cleared by MenuEngineDesignReview. Increments 1 and 2 are built and reviewed: the host oracle passes its ten cases (E-MENU-ENGINE-HOST-ORACLE-150), and all 29 guest pairs pass (E-MENU-ENGINE-GUEST-PAIRS-150, `replacement/README.md#owned-menu-engine-increment-2-128`). The acceptance below is not met yet: picker 246 and observe run 1 (DOWN at 246's last row) are excluded while 246's stall is open. Increment 3 is next.
+Status: revision 2, cleared by MenuEngineDesignReview. Increments 1 and 2 are built and reviewed: the host oracle passes its ten cases (E-MENU-ENGINE-HOST-ORACLE-150), and all 29 guest pairs pass (E-MENU-ENGINE-GUEST-PAIRS-150, `replacement/README.md#owned-menu-engine-increment-2-128`). Increment 3 ([its design](owned-menu-engine-increment-3.md)) passes its 38 host cases (E-MENU-ENGINE-INC3-HOST-ORACLE-150) and 56 of its 57 guest pairs (E-MENU-ENGINE-INC3-GUEST-PAIRS-150). The acceptance below is not met yet: picker 246 and observe run 1 (DOWN at 246's last row) stay excluded; their stall is a timing-dependent firmware path on the up-counting timer (E-PICKER246-CHAIN-STALL-150, open).
 
 Facts cite the ledger or `private-data/analysis/x-m1-1.50/filmsim/ghidra/all.c`; **[INFERENCE]** marks what the evidence does not show directly.
 
@@ -48,7 +48,7 @@ apply<S: EngineServices, P: DerefMut<Target = EngineState>>(tree: &Tree, state: 
   - The engine is committed when it makes any call, so an answer or block that does not decode is a run-failing guard event in the adapter, not a fallback.
 - `Tree` is generated from the decoded menu tables (E-MODAL-MENU-TABLES-150) by `//replacement/modal_runtime:menu-engine-tree`, pinned to the menu tables, image4 and strings identities. A node carries id, type, class or property, rows per page, `Wrap` (`+0x10`), `Availability` (`+0x14`), `Remember` (`+0x18`), parent, word 10, rows `{token, child}` and labels. Stock record addresses are not in the tree: the generator emits a separate `NodeRef` to record address table, carrying the tree's identity, that only the decode and mirror shim reads.
 - The tree and engine types are unconditional modules of the bank crate; only the adapter, its seam assembly and its publication are behind `rb_menu_engine_owned`. The node and token newtypes of `owned_menu::frame` now come from the engine's module; those repeated in `recipe_ui`, `modal_runtime` and `owned_menu/src/lifecycle.rs` still move there.
-- No owned class has the `0x285` write, so the engine has no property-write effect yet.
+- Node `0x7a`'s `0xbf9a5c` writes property `0x285` with the remembered row's index; the engine performs it as `Effect::PropertyWrite` (increment 3).
 
 ## Placement in the guest
 
@@ -97,7 +97,7 @@ The adapter hooks the engine wrapper `0xbf95c8`, reached by all four stage consu
 
 1. Host: the tree generator with the record side table, the engine library, decode and mirror, and the oracle with negative controls, for the classes with receipts: kind 4 and kind 5 row steps, push, pop and open. Before that, one `--menu-observe` run per existing case with the added return sites and the last-move watch, so that each case records initial row, availability and the last-move pair, plus one picker case whose current value is not at the restored row, which the initial-row control needs. Reviewed before any guest code.
 2. Guest: the `0xbf95c8` seam, the adapter with class coverage and fallback, the fallback-entry guard check, and the guest pairs. Reviewed before runs.
-3. Observations and classes: `--menu-observe` runs for page moves (kind 4 and 5 page steps and kinds 6..`0xb`), no-wrap and no-availability nodes, seeks (ids `0x17`/`0x18`), multi-level moves, re-open, an empty node, and an open, push or pop where `0xd588b8` returns `0x7ffffffe` while the restored cursor lies past the node's rows (which exercises `token_past_rows`), each followed by its oracle case and the class's ownership.
+3. Observations and classes: `--menu-observe` runs for page moves (kind 4 and 5 page steps and kinds 6..`0xb`), no-wrap and no-availability nodes, seeks (ids `0x17`/`0x18`), multi-level moves, re-open, an empty node, and an open, push or pop where `0xd588b8` returns `0x7ffffffe` while the restored cursor lies past the node's rows (which exercises `token_past_rows`), each followed by its oracle case and the class's ownership. Designed per class in [the increment-3 report](owned-menu-engine-increment-3.md).
 
 ## Open questions
 
