@@ -944,7 +944,7 @@ fn standalone_configuration_refusal_keeps_initial_and_handoff_identity_unobserve
 
 #[test]
 fn strict_stop_pending_hook_is_collected_read_only_before_claiming_a_complete_boundary() {
-    let mut observed = machine(&[0xe3a01006, 0xe3a02003, 0xe710f211]);
+    let mut observed = machine(&[0xe3a01902, 0xe3a02003, 0xe5910000]);
     observed.traces.arm(&observed.session, BTreeMap::from([(0x1008, "strict-stop".into())])).unwrap();
     observed.traces.begin_capture_observation(fujimod_xm1::trace::CaptureScope::Capture).unwrap();
     assert_eq!(observed.run(100), RunOutcome::Failed);
@@ -957,10 +957,41 @@ fn strict_stop_pending_hook_is_collected_read_only_before_claiming_a_complete_bo
     let mut cursor = CaptureCursor::new(0);
     drain_stream(&mut observed, &mut cursor, &mut events);
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].registers[1..3], [6, 3]);
+    assert_eq!(events[0].registers[1..3], [0x8000, 3]);
     assert_eq!(events[0].instructions, boundary.0);
     assert_eq!(observed.failure, failure);
     assert_eq!((observed.instructions(), context(&observed)), boundary);
+}
+
+#[test]
+fn admission_refuses_the_whole_block_before_prefix_effects_or_trace_entry() {
+    let mut observed = machine(&[0xe3a01006, 0xe3a02003, 0xe710f211]);
+    observed.traces.arm(&observed.session, BTreeMap::from([(0x1008, "refused-word".into())])).unwrap();
+    assert_eq!(observed.run(100), RunOutcome::Failed);
+    assert!(observed.require_running().unwrap_err().contains("R4F guard:"));
+    assert_eq!(observed.instructions(), 0);
+    assert_eq!(observed.session.board.read_register(0, Register::Pc).unwrap(), 0x1000);
+    assert_eq!(observed.session.board.read_register(0, arm::CORE[1]).unwrap(), 0);
+    assert_eq!(observed.session.board.read_register(0, arm::CORE[2]).unwrap(), 0);
+    assert!(observed.traces.hits.is_empty());
+}
+
+#[test]
+fn an_interior_loop_trace_observes_every_iteration_and_its_stop_is_not_accelerated() {
+    let program = [0xe2800001, 0xeafffffd];
+    let mut observed = machine(&program);
+    let mut uninterrupted = machine(&program);
+    observed.traces.arm(&observed.session, BTreeMap::from([(0x1004, "within-loop".into())])).unwrap();
+    assert_eq!(observed.run(60), RunOutcome::Completed);
+    assert_eq!(uninterrupted.run(60), RunOutcome::Completed);
+    assert_eq!(context(&observed), context(&uninterrupted));
+    assert_eq!(observed.session.board.instruction_counts(), uninterrupted.session.board.instruction_counts());
+    assert_eq!(observed.traces.hits.len(), 30);
+    observed.traces.stop_labels.insert("within-loop".into());
+    assert_eq!(observed.run(60), RunOutcome::Stopped);
+    assert_eq!(observed.session.board.read_register(0, Register::Pc).unwrap(), 0x1004);
+    assert_eq!(observed.session.board.read_register(0, arm::CORE[0]).unwrap(), 31);
+    assert_eq!(observed.traces.hits.len(), 31);
 }
 
 #[test]
