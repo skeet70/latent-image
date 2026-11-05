@@ -48,11 +48,13 @@ main = do
       nested = [pushR4Lr, sub16, bl 2 5, add16, popR4Pc, push47Lr, pop47Pc]
       cases =
         [ ("a frame adds its reservations and its callee at the call's offset", bytesOf (depth nested none noTargets noSwitches) == Just 44)
+        , ("the report lists the entries it walked", fmap reportEntered (depth nested none noTargets noSwitches) == Right [at 0, at 5])
         , ("depth is the deepest path, not the sum of every path",
             -- cmp; beq small; push {r4-r11, lr}; pop {r4-r11, pc}; small: push {r4, lr}; pop {r4, pc}
             bytesOf (depth [cmp0, branch eq 1 4, 0xe92d4ff0, 0xe8bd8ff0, pushR4Lr, popR4Pc] none noTargets noSwitches) == Just 36)
         , ("two paths reaching one instruction at different offsets refuse",
-            case depth [0xe52de004, cmp0, branch eq 2 4, 0xe52d4004, bxLr] none noTargets noSwitches of
+            -- push {lr}; cmp; beq 4; push {r4}; 4: b 4
+            case depth [0xe52de004, cmp0, branch eq 2 4, 0xe52d4004, branch always 4 4] none noTargets noSwitches of
               Left (OffsetMismatch _) -> True
               _ -> False)
         , ("recursion refuses", case depth [pushR4Lr, bl 1 0, popR4Pc] none noTargets noSwitches of
@@ -86,17 +88,43 @@ main = do
             -- mrc p15; mcr p15; dmb; ldrex; strex; wfi
             bytesOf (depth [pushR4Lr, 0xee113f50, 0xee0d1f50, 0xf57ff05f, 0xe1932f9f, 0xe1832f91, 0xe320f003, popR4Pc] none noTargets noSwitches) == Just 8)
         , ("a root-slot call resolves through the table and records its condition",
-            -- movw r4, #0xbd20; movt r4, #0x96; ldr r3, [r4]; ldr r3, [r3, #0x10]; blx r3; bx lr; callee: push {r4-r7, lr}; pop
-            case depth [0xe30b4d20, 0xe3404096, 0xe5943000, 0xe5933010, 0xe12fff33, bxLr, push47Lr, pop47Pc]
-                   none (IndirectTargets 0x96bd20 (M.singleton (SlotOffset 0x10) [at 6]) M.empty []) noSwitches of
-              Right report -> reportDepth report == StackDepth 20 && reportConditions report == S.singleton SlotWordsFixed
+            -- push {r4, lr}; movw r4, #0xbd20; movt r4, #0x96; ldr r3, [r4]; ldr r3, [r3, #0x10]; blx r3; pop {r4, pc}; callee
+            case depth [pushR4Lr, 0xe30b4d20, 0xe3404096, 0xe5943000, 0xe5933010, 0xe12fff33, popR4Pc, push47Lr, pop47Pc]
+                   none (IndirectTargets 0x96bd20 (M.singleton (SlotOffset 0x10) [at 7]) M.empty []) noSwitches of
+              Right report -> reportDepth report == StackDepth 28 && reportConditions report == S.singleton SlotWordsFixed
               _ -> False)
         , ("a conditional load splits the path so each resolution counts",
-            -- movw r4; movt r4; ldr r2, [r4]; cmp r0, #0; ldreq r3, [r2, #0x10]; ldrne r3, [r2, #0x14]; blx r3; bx lr; deep; shallow
-            case depth [0xe30b4d20, 0xe3404096, 0xe5942000, cmp0, 0x05923010, 0x15923014, 0xe12fff33, bxLr, push47Lr, pop47Pc, pushR4Lr, popR4Pc]
-                   none (IndirectTargets 0x96bd20 (M.fromList [(SlotOffset 0x10, [at 10]), (SlotOffset 0x14, [at 8])]) M.empty []) noSwitches of
-              Right report -> reportDepth report == StackDepth 20
+            -- push {r4, lr}; movw r4; movt r4; ldr r2, [r4]; cmp r0, #0; ldreq r3, [r2, #0x10]; ldrne r3, [r2, #0x14]; blx r3; pop; deep; shallow
+            case depth [pushR4Lr, 0xe30b4d20, 0xe3404096, 0xe5942000, cmp0, 0x05923010, 0x15923014, 0xe12fff33, popR4Pc, push47Lr, pop47Pc, pushR4Lr, popR4Pc]
+                   none (IndirectTargets 0x96bd20 (M.fromList [(SlotOffset 0x10, [at 11]), (SlotOffset 0x14, [at 9])]) M.empty []) noSwitches of
+              Right report -> reportDepth report == StackDepth 28
               _ -> False)
+        , ("a return that leaves bytes reserved refuses",
+            depth [pushR4Lr, 0xe24dd008, popR4Pc] none noTargets noSwitches == Left (UnbalancedReturn (at 2)))
+        , ("bx lr with bytes still reserved refuses", depth [0xe52d4004, bxLr] none noTargets noSwitches == Left (UnbalancedReturn (at 1)))
+        , ("bx lr after loading lr from memory is an unresolved jump",
+            depth [0xe590e000, bxLr] none noTargets noSwitches == Left (UnresolvedBranch (at 1)))
+        , ("bx lr after a call without restoring lr is an unresolved jump",
+            depth [bl 0 2, bxLr, bxLr] none noTargets noSwitches == Left (UnresolvedBranch (at 1)))
+        , ("bx lr after lr is popped from the stack returns",
+            -- push {lr}; bl callee; pop {lr}; bx lr; callee: bx lr
+            bytesOf (depth [0xe52de004, bl 1 4, 0xe49de004, bxLr, bxLr] none noTargets noSwitches) == Just 4)
+        , ("a conditional push refuses", depth [cmp0, 0x092d4010, popR4Pc] none noTargets noSwitches == Left (Refusal (at 1) W.UnaccountedSpWrite))
+        , ("stmia sp! refuses", depth [0xe8ad0010, bxLr] none noTargets noSwitches == Left (Refusal (at 0) W.UnaccountedSpWrite))
+        , ("sub sp by a register refuses", depth [0xe04dd000, bxLr] none noTargets noSwitches == Left (Refusal (at 0) W.VariableReservation))
+        , ("bic sp refuses", depth [0xe3cdd007, bxLr] none noTargets noSwitches == Left (Refusal (at 0) W.UnaccountedSpWrite))
+        , ("a store below SP without writeback refuses", depth [0xe50d0004, bxLr] none noTargets noSwitches == Left (Refusal (at 0) W.BelowStackWrite))
+        , ("stmdb sp without writeback refuses", depth [0xe90d0010, bxLr] none noTargets noSwitches == Left (Refusal (at 0) W.BelowStackWrite))
+        , ("clrex continues", bytesOf (depth [pushR4Lr, 0xf57ff01f, popR4Pc] none noTargets noSwitches) == Just 8)
+        , ("msr of a tracked SVC constant keeps the mode", bytesOf (depth [pushR4Lr, 0xe3a00013, 0xe121f000, popR4Pc] none noTargets noSwitches) == Just 8)
+        , ("an mrc into the constant's register forgets it",
+            depth [pushR4Lr, 0xe3a00013, 0xee110f10, 0xe121f000, popR4Pc] none noTargets noSwitches == Left (ModeChange (at 3)))
+        , ("a jump table without an ls condition refuses",
+            depth [0xe3500001, 0xe79ff100, at 3, bxLr] none noTargets noSwitches == Left (TableUnbounded (at 1)))
+        , ("a jump table whose flags are reset after the cmp refuses",
+            depth [0xe3500001, 0xe2911001, 0x979ff100, branch always 3 6, at 6, at 6, bxLr] none noTargets noSwitches == Left (TableUnbounded (at 2)))
+        , ("pop of r11 forgets the frame",
+            depth [0xe92d4800, 0xe28db004, 0xe8bd0800, 0xe24bd004, bxLr] none noTargets noSwitches == Left (FrameUnknown (at 3)))
         ]
       failures = [label | (label, passed) <- cases, not passed]
   mapM_ (putStrLn . ("FAIL: " ++)) failures

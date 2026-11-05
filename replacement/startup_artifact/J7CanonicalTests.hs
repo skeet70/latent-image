@@ -6,7 +6,7 @@ module Main where
 import Control.Monad (forM_, unless)
 import Data.Bits ((.&.), (.|.))
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
-import Data.List (sort, sortOn)
+import Data.List (nub, sort, sortOn)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
 import Data.Word (Word32)
@@ -18,6 +18,7 @@ import qualified Replacement.Image5Load.Admission as I5A
 import qualified Replacement.PlainLoad.Admission as PLA
 import Replacement.StartupArtifact.Adapters
 import Replacement.StartupArtifact.Compose
+import qualified Replacement.StartupArtifact.Footprint.Producers as Producers
 import Replacement.StartupArtifact.Joins
 import qualified Replacement.StartupArtifact.StackBounds as SB
 import Replacement.StartupArtifact.Stage (loadCanonical)
@@ -95,6 +96,20 @@ main = do
   rootResults <- report "root" targetsOfRoot
   image5Results <- report "image5" I5A.retainedTargets
   plainResults <- report "plain" PLA.retainedTargets
+  composedIndirect <- maybe (H.failH "no indirect targets on the composition") pure (indirectOf composed)
+  cleanupResults <- report "cleanup" (concat [M.findWithDefault [] (SS.SlotOffset slot) (SS.rootSlots composedIndirect) | slot <- [0x84, 0x164, 0x4, 0x14]])
+  demandUsed <- maybe (H.failH "no demand conditions") pure (stockDemandConditions composed)
+  let conditionsOf results = Set.unions [SS.reportConditions walked | (_, Right walked) <- results]
+      image4 = targetOf targets Image4
+      outsideExtents producer results =
+        let extents = Producers.closureExtents producer image4
+         in sort (nub [ entered | (_, Right walked) <- results, entered <- SS.reportEntered walked, entered >= 0x61c400, entered < 0x89ec00
+                      , not (any (\(low, high) -> low <= entered && entered < high) extents) ])
+  putStrLn ("conditions: demand " ++ show (Set.toList demandUsed) ++ "; root " ++ show (Set.toList (conditionsOf rootResults))
+    ++ "; image5 " ++ show (Set.toList (conditionsOf image5Results)) ++ "; plain " ++ show (Set.toList (conditionsOf plainResults))
+    ++ "; cleanup " ++ show (Set.toList (conditionsOf cleanupResults)))
+  putStrLn ("image4 entries outside the image5 footprint closure: " ++ show (map hex (outsideExtents Producers.Image5Load image5Results)))
+  putStrLn ("image4 entries outside the plain footprint closure: " ++ show (map hex (outsideExtents Producers.PlainLoad plainResults)))
 
   -- Canonical: stock bytes everywhere, the publisher's facts give table A.
   let stock = JoinEvidence targets targets parts [publisher {pieceCarriers = []}]
@@ -117,7 +132,8 @@ main = do
   ok "every resume target and exception path is stock code" (all (\address -> wordAt address /= Nothing) (M.elems resumes ++ Set.toList exceptions))
 
   -- Context lock methods recovered from the kernel initializers.
-  ok "both kernels' context lock methods resolve" (map snd (SS.contextLocks indirect) == [([0x439d8], [0x43a14]), ([0xd398c], [0xd39c8])])
+  ok "both kernels' context lock methods resolve"
+    (map SS.lockMethods (SS.contextLocks indirect) == [SS.LockMethods [0x439d8] [0x43a14], SS.LockMethods [0xd398c] [0xd39c8]])
 
   -- error-callback-depth and wrapper-callee-demands on canonical bytes.
   let canonicalDepth = maybe Nothing (lookup 0x72835c) (depthsIn stock M.empty [0x72835c])
@@ -138,22 +154,28 @@ main = do
 
   -- trace-callback-writers on canonical bytes.
   let segments = composedSegments stock
-  ok "the only store to the trace callback word is 0x41558 in its setter"
-    (SB.storesReaching segments [] SB.traceCallbackWord == [0x41558])
-  ok "the setter 0x41548 is called only at 0x647390 and 0x6473cc, each with r0 = 0x6470fc"
-    (sort (SB.branchSites segments [] (== SB.traceCallbackSetter)) == [(0x647390, 0x41548), (0x6473cc, 0x41548)]
+  forM_ ([SB.traceWord kernel | kernel <- SB.traceCallbackKernels] ++ [SB.errorCallbackWord, SB.fillFlag]) $ \word ->
+    putStrLn ("stores reaching " ++ hex word ++ ": " ++ show (map hex (SB.storesReaching segments [] word)))
+  putStrLn ("descriptor data ids: " ++ show [hex site | (site, SB.DataId) <- SB.descriptorIds segments []])
+  forM_ SB.traceCallbackKernels $ \kernel -> do
+    let word = SB.traceWord kernel; setter = SB.traceSetter kernel
+    ok ("the only store to the trace callback word " ++ hex word ++ " is in its setter " ++ hex setter)
+      (SB.storesReaching segments [] word == [setter + 0x10])
+    ok ("no code forms the address of the trace setter " ++ hex setter) (null (SB.addressFormations segments [] (== setter)))
+  ok "the loader-A setter is called only at 0x647390 and 0x6473cc, each with r0 = 0x6470fc; the loader-B setter is never called"
+    (sort (SB.branchSites segments [] (== 0x41548)) == [(0x647390, 0x41548), (0x6473cc, 0x41548)]
+      && null (SB.branchSites segments [] (== 0xd1548))
       && all (\site -> any (\(formed, value) -> formed < site && formed + 12 >= site && value == 0x6470fc)
                          (SB.addressFormations segments [] (== 0x6470fc))) [0x647390, 0x6473cc])
-  ok "no code forms the setter's address" (null (SB.addressFormations segments [] (== SB.traceCallbackSetter)))
 
   -- Canonical wrapper callers: the 67 sites, two of them data-driven.
   ok "the canonical images call the wrapper at the 67 pinned sites"
     (sort (map fst (SB.branchSites segments [] (== SB.wrapperEntry))) == sort wrapperCallSites)
   let ids = SB.descriptorIds segments []
   putStrLn ("immediate descriptor ids: " ++ show (sort [value | (_, SB.ImmediateId value) <- ids]))
-  ok "65 immediate ids in 1..120 (61 outside the dispatcher) and data ids at 0x6b07f0 and 0xe9231c"
-    (length [() | (_, SB.ImmediateId value) <- ids, value >= 1, value <= 120] == 65
-      && sort [site | (site, SB.DataId) <- ids] == [0x6b07f0, 0xe9231c])
+  ok "63 immediate ids in 1..120 (59 outside the dispatcher) and unfixed ids at 0x6b0010, 0x6b07f0, 0xe9231c and 0x11e00ec"
+    (length [() | (_, SB.ImmediateId value) <- ids, value >= 1, value <= 120] == 63
+      && sort [site | (site, SB.DataId) <- ids] == [0x6b0010, 0x6b07f0, 0xe9231c, 0x11e00ec])
 
   -- Composed J6: every J7 check holds, and each fails on a retargeted stock call.
   let named name = [predicate | join <- registeredJoins, HostCheck checkName predicate <- joinChecks join, checkName == name]
@@ -170,6 +192,20 @@ main = do
             (edit (at Image4 site (site + 4)) (U.putWord32 (branchLink site target))))
     ok (show name ++ " fails with the stock call at 0x69c3e0 retargeted to " ++ hex target)
       (not (holds (JoinEvidence targets patched parts (compositionPieces j6)) name))
+  let patchedWords changes = foldl (\acc (address, value) -> either (const acc) id
+        (maybe (Left CompositionUnchanged) (\change -> applyTargetEdits [change] acc) (edit (at Image4 address (address + 4)) (U.putWord32 value))))
+        (compositionTargets j6) changes
+      failsWith name changes = not (holds (JoinEvidence targets (patchedWords changes) parts (compositionPieces j6)) name)
+      nop = 0xe1a00000
+      reserve1024 = 0xe24ddb01
+  ok "wrapper-caller-ids fails when the descriptor set-up before 0x69c3e0 is removed"
+    (failsWith "wrapper-caller-ids" [(0x69c3e0 - 4 * back, nop) | back <- [1 .. 3]])
+  ok "root-cleanup-skips-release fails with a call of release on the r0 = 0 path"
+    (failsWith "root-cleanup-skips-release" [(0x7261a0, branchLink 0x7261a0 SB.releaseEntry)])
+  ok "root-retained-depth fails when 0x6a9354 reserves 1024 bytes at entry"
+    (failsWith "root-retained-depth" [(0x6a9354, reserve1024)])
+  ok "producer-retained-depth fails when 0x66609c reserves 1024 bytes at entry"
+    (failsWith "producer-retained-depth" [(0x66609c, reserve1024)])
 
   -- Refused retained entries are the pinned lists; the deepest bounded entries give the margins.
   let refused results = sortOn fst [(entry, refusal) | (entry, Left refusal) <- results]
@@ -182,6 +218,16 @@ main = do
   ok "plain's deepest bounded service is 0x724c00 at 392 bytes: 40 + 392 + 88 = 520 of 3040" (deepest plainResults == (392, 0x724c00))
   ok "owned entries carry their proved depths: critical pair 128, wrapper 456, release 40, idle 8, root 16"
     (M.toList supplied == [(0x69cbf0, SS.StackDepth 8), (0x69d160, SS.StackDepth 16), (0x7235d8, SS.StackDepth 128), (0x7236b0, SS.StackDepth 128), (0x725dd8, SS.StackDepth 456), (0x726098, SS.StackDepth 40)])
+  ok "each bound's premises are exactly the ones its text states"
+    (demandUsed == Set.fromList SB.demandConditions && conditionsOf rootResults == Set.fromList SB.rootDepthConditions
+      && conditionsOf image5Results == Set.fromList SB.image5DepthConditions && conditionsOf plainResults == Set.fromList SB.plainDepthConditions
+      && Set.insert SS.SlotWordsFixed (conditionsOf cleanupResults) == Set.fromList SB.cleanupConditions)
+  -- The footprint closures follow direct calls. StockStack also enters the trace callback 0x6470fc and
+  -- the error callbacks 0x723330 and 0x72835c through resolved register branches, and 0x69f8fc, which
+  -- the trace callback calls.
+  ok "the image4 functions the producers' bounds enter outside their footprint closures are the register-branch targets and 0x69f8fc"
+    (all (\(producer, results) -> outsideExtents producer results == [0x6470fc, 0x69f8fc, 0x723330, 0x72835c])
+      [(Producers.Image5Load, image5Results), (Producers.PlainLoad, plainResults)])
   ok "J6 composes with every registered join check" (either (const False) (const True) (compose registeredJoins source j6Pieces))
 
   passed <- readIORef counter

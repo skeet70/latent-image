@@ -7,6 +7,7 @@ module StackWalk
   , refusedReason
   , classify
   , written
+  , writes
   , framePointer
   ) where
 
@@ -31,6 +32,7 @@ data Refused
   | ThumbCall
   | ExceptionReturn
   | UnadmittedEncoding
+  | BelowStackWrite
   deriving (Eq, Ord, Show)
 
 refusedReason :: Refused -> String
@@ -44,6 +46,7 @@ refusedReason reason = case reason of
   ThumbCall -> "BLX immediate"
   ExceptionReturn -> "exception return"
   UnadmittedEncoding -> "unadmitted encoding"
+  BelowStackWrite -> "store below the stack pointer"
 
 data Effect
   = -- | SP decreases by the bytes.
@@ -89,6 +92,22 @@ written instruction = case instruction of
   A32.BranchExchange _ True _ -> [A32.Reg n | n <- [0 .. 3] ++ [12, 14]]
   _ -> []
 
+-- | Registers the word writes under `Strict`: `written`, the second register of @ldrd@, and the
+-- destination of the stack-neutral rejected classes (@mrc@, @mrs Rt, spsr@, @ldrex@/@strex@, @swp@, @vmrs@).
+writes :: Word32 -> Word32 -> [A32.Reg]
+writes address word = case A32.decode address word of
+  instruction@(A32.Load _ A32.Dual _ (A32.Reg n) _ _ _) -> written instruction ++ [A32.Reg (n + 1)]
+  A32.Rejected (A32.Coprocessor coprocessor)
+    | coprocessor `elem` [14, 15] && testBit word 20 && word .&. 0x0f000010 == 0x0e000010 -> destination
+    | coprocessor `elem` [10, 11] && word .&. 0x0ff00fff == 0x0ef00a10 -> destination
+  A32.Rejected A32.Exclusive -> destination
+  A32.Rejected A32.SystemRegister | word .&. 0x0fbf0fff == 0x010f0000 -> destination
+  A32.Rejected _ | word .&. 0x0fb00ff0 == 0x01000090 -> destination
+  instruction -> written instruction
+  where
+    rt = fromIntegral ((word `shiftR` 12) .&. 0xf)
+    destination = [A32.Reg rt | rt /= 15]
+
 always :: A32.Cond -> Bool
 always (A32.Cond c) = c == 14
 
@@ -96,6 +115,9 @@ always (A32.Cond c) = c == 14
 classify :: Strictness -> Word32 -> Word32 -> Effect
 classify strictness address word = case A32.decode address word of
   A32.StoreMultiple cond base A32.DecrementBefore True regs | base == A32.sp && admitted cond -> Reserve (4 * fromIntegral (length regs))
+  A32.StoreMultiple _ base mode False _ | strictness == Strict && base == A32.sp && mode `elem` [A32.DecrementBefore, A32.DecrementAfter] ->
+    Refuse BelowStackWrite
+  A32.Store _ _ _ base offset A32.OffsetOnly | strictness == Strict && base == A32.sp && below offset -> Refuse BelowStackWrite
   A32.Store cond _ _ base (A32.OffsetImmediate offset) A32.PreIndexed | base == A32.sp && offset < 0 && admitted cond ->
     Reserve (fromIntegral (negate offset :: Int32))
   A32.DataProcessing cond A32.SUB _ rd rn (A32.Immediate amount) | rd == A32.sp && rn == A32.sp && admitted cond -> Reserve amount
@@ -145,9 +167,13 @@ classify strictness address word = case A32.decode address word of
         A32.OffsetImmediate bytes | always cond && bytes >= 0 -> Release (fromIntegral bytes)
         _ -> Refuse UnaccountedSpWrite
   instruction | A32.sp `elem` written instruction -> Refuse UnaccountedSpWrite
+  _ | strictness == Strict && A32.sp `elem` writes address word -> Refuse UnaccountedSpWrite
   _ -> Neutral
  where
   admitted cond = strictness == Permissive || always cond
+  below offset = case offset of
+    A32.OffsetImmediate bytes -> bytes < 0
+    A32.OffsetRegister add _ _ _ -> not add
   field high low = (word `shiftR` low) .&. ((2 :: Word32) ^ (high - low + 1) - 1)
   -- VMSR/VMRS: cond 1110 111L reg Rt 1010 0001 0000.
   vfpStatusTransfer = word .&. 0x0fe00fff == 0x0ee00a10 && field 15 12 /= 13
@@ -158,7 +184,7 @@ classify strictness address word = case A32.decode address word of
     A32.Coprocessor coprocessor | coprocessor `elem` [14, 15] && systemTransfer -> Neutral
     A32.Barrier -> Neutral
     A32.WaitForEvent -> Neutral
-    A32.Exclusive | exclusiveTarget -> Neutral
+    A32.Exclusive | exclusiveTarget || word == 0xf57ff01f -> Neutral
     A32.SystemRegister -> case A32.statusWrite word of
       Just (A32.StatusWrite _ A32.CurrentStatus fields source)
         | A32.ControlBits `elem` fields -> ModeWrite (case source of

@@ -45,6 +45,7 @@ import qualified Replacement.StartupArtifact.Footprint.IdleTask as IdleFootprint
 import qualified Replacement.StartupArtifact.Footprint.RootTask as RootFootprint
 import qualified Replacement.StartupArtifact.Footprint.TaskStorage as TaskStorageFootprint
 import qualified Replacement.StartupArtifact.Footprint.TaskSubmission as TaskSubmissionFootprint
+import qualified Replacement.StartupArtifact.StackBounds as SB
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
 import StageBuild (StageDeclarations (..))
@@ -679,7 +680,7 @@ deriveTaskSubmission source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByt
         (taskStackWindows ++ [wrapperRecords, WriteRange PhysicalTarget 0xa0f82c 0xa0f830, storageRecords])
         (Premised (Premise (T.intercalate "; "
           [ taskWindowPremise
-          , "size word W+4 of wrapper record W = 0x40a5b204+8i, error word 0x40a0f82c and release's reservation clear 0x40a0fc44+12i+8 are the admission's guest roots (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:123); i < 120 for the dispatcher's ids 104, 102, 103, 93 (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs:206-211) and for every stock call site with an immediate id (wrapper-caller-ids); premised for the data-driven sites 0x6b07f0 and 0xe9231c" ])))
+          , "size word W+4 of wrapper record W = 0x40a5b204+8i, error word 0x40a0f82c and release's reservation clear 0x40a0fc44+12i+8 are the admission's guest roots (replacement/task_submission/Replacement/TaskSubmission/Admission.hs:123); i < 120 for the dispatcher's ids 104, 102, 103, 93 (replacement/startup_dispatch/Replacement/StartupDispatch/Admission.hs:206-211) and for every stock call site with an immediate id (wrapper-caller-ids); premised for the sites 0x6b0010, 0x6b07f0, 0xe9231c and 0x11e00ec, whose id the scan does not fix" ])))
       catalog = Catalog (calls ++ boundaries) code writes rows
       declaration = PieceDeclaration kind (Set.singleton TaskSubmissionArea) [carrier]
         (TaskSubmissionFootprint.footprint (targetOf targets LoaderA) (targetOf targets LoaderB) image4)
@@ -688,7 +689,7 @@ deriveTaskSubmission source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByt
           , "the error callback word 0x4089ea8c holds 0x723330 or 0x72835c (error-callback-writers); stores through computed pointers are premised"
           , "the log trace callback is 0x6470fc when set (trace-callback-writers); its initial value 0 and stores through computed pointers are premised"
           , "exit receives enter's token is a source property (replacement/task_submission/src.rs:89-90,202,212,232,258), not an emitted-code proof"
-          , "stack bounds exclude exception frames; an IRQ that preempts the interrupted task leaves at most 88 bytes on its stack (irq-entry-frame); retained demands are StockStack depths, conditional on published root-slot words staying fixed, fixed context lock methods and on no task-exception routine being defined" ])
+          , "stack bounds exclude exception frames; an IRQ that preempts the interrupted task leaves at most 88 bytes on its stack (irq-entry-frame); retained demands are StockStack depths, " <> T.pack (SB.conditionsPhrase SB.demandConditions) ])
         catalog (TaskSubmissionFacts (LinkedBytes bin symbolBytes) pool)
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (W.stagedBytes (W.stageImage4 wrapperSource artifact))) Nothing)
 
@@ -880,7 +881,7 @@ deriveRootTask source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) =
         (map Premise
           [ "retained callees behave as stock from their entries, including error dispatch from 0x725b74 in IRQ context (replacement/root_task/Replacement/RootTask/Artifact.hs:145; reports/replacement-inventory-baseline.md:1686-1688)"
           , "root is entered once on core 0 by the first-entry trampoline with r0 = 0 and SP = the A104 allocation top (reports/replacement-inventory-baseline.md:1130,1621,1628)"
-          , "an IRQ that preempts root leaves at most 88 bytes below the interrupted frame (irq-entry-frame); retained callee demand on root's stack is bounded by root-retained-depth, conditional on published root-slot words staying fixed, the error and trace callback sets, fixed context lock methods and no task-exception routine being defined, except the chains it names" ])
+          , "an IRQ that preempts root leaves at most 88 bytes below the interrupted frame (irq-entry-frame); retained callee demand on root's stack is bounded by root-retained-depth, " <> T.pack (SB.conditionsPhrase SB.rootDepthConditions) <> ", except the chains it names" ])
         catalog (RootTaskFacts (LinkedBytes bin symbolBytes) pool)
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (RT.stagedBytes (RT.stageImage4 rootSource artifact))) Nothing)
 
@@ -980,7 +981,7 @@ deriveImage5Producer source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByt
           [ "the segment-5 record is tagged and nonaliasing (replacement/image5_load/Replacement/Image5Load/Admission.hs:64-65,345-352)"
           , "0x89f8ac is stored only by the producer and by storage_request_refresh 0x6a8bec, whose address only the producer forms (fill-flag-writers); stores through computed pointers are premised"
           , "the producer runs in task60 on core 0 with an 8-byte aligned entry SP (reports/replacement-inventory-baseline.md:1477; replacement/image5_load/Replacement/Image5Load/Admission.hs:414)"
-          , "retained callees, the decoder engine, IRQ98 completion and resource 0x48 behave as stock (replacement/image5_load/Replacement/Image5Load/Artifact.hs:140); their stack demand below the owned frame is bounded by producer-retained-depth under the same conditions as root-retained-depth, except the chains it names" ])
+          , "retained callees, the decoder engine, IRQ98 completion and resource 0x48 behave as stock (replacement/image5_load/Replacement/Image5Load/Artifact.hs:140); their stack demand below the owned frame is bounded by producer-retained-depth, " <> T.pack (SB.conditionsPhrase SB.image5DepthConditions) <> ", except the chains it names" ])
         catalog (Image5ProducerFacts (LinkedBytes bin symbolBytes))
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (I5.stagedBytes (I5.stageImage4 producerSource artifact))) Nothing)
 
@@ -1037,7 +1038,7 @@ derivePlainProducer source (LinkedImage (ImageBytes bin) (SymbolBytes symbolByte
         (map Premise
           [ "the segment-6 record and the extent descriptor at 0x61c1a4 are tagged and nonaliasing (replacement/plain_load/Replacement/PlainLoad/Admission.hs:51-54; reports/replacement-inventory-baseline.md:1370)"
           , "the producer runs in task60 on core 0 with an 8-byte aligned entry SP (reports/replacement-inventory-baseline.md:1450)"
-          , "the raw reader, progress 0x73b924, worker 0x73bc54 and the extent hooks behave as stock (reports/replacement-inventory-baseline.md:1378-1384); their stack demand below the owned frame is bounded by producer-retained-depth under the same conditions as root-retained-depth, except the chains it names" ])
+          , "the raw reader, progress 0x73b924, worker 0x73bc54 and the extent hooks behave as stock (reports/replacement-inventory-baseline.md:1378-1384); their stack demand below the owned frame is bounded by producer-retained-depth, " <> T.pack (SB.conditionsPhrase SB.plainDepthConditions) <> ", except the chains it names" ])
         catalog (PlainProducerFacts (LinkedBytes bin symbolBytes))
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just (PL.stagedBytes (PL.stageImage4 producerSource artifact))) Nothing)
 
