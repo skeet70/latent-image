@@ -2255,7 +2255,7 @@ fn excluded(word: u32) -> bool {
         || status_write_or_hint
         || synchronization
         || unpredictable(word)
-        || r4f::classify_a32(word).0.is_some()
+        || r4f::classify_a32(word).is_some()
 }
 
 /// Words a privileged profile refuses beyond `excluded`: MRS SPSR, banked
