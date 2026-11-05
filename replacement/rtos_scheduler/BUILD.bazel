@@ -12,6 +12,7 @@ exports_files(["regions.json"])
         crate_name = "xm1_rtos_scheduler",
         data = [
             "src/entries.rs",
+            "src/s3b.rs",
             "//replacement/rtos_layout:src/lib.rs",
         ],
         rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain],
@@ -138,6 +139,19 @@ exports_files(["regions-s2.json", "regions-s3a.json"])
         entry = "xm1_s3a_exit_task",
         extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
         link_script = "s3a-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
+
+exports_files(["regions-s3b.json"])
+
+[
+    xm1_rust_elf(
+        name = "s3b-%s" % domain,
+        rust_staticlib = ":scheduler-%s-rust" % domain,
+        entry = "xm1_s3b_activate",
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+        link_script = "s3b-%s.ld" % domain,
     )
     for domain in ["a", "b"]
 ]
