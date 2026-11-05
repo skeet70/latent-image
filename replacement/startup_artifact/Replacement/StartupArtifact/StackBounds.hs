@@ -9,7 +9,7 @@ module Replacement.StartupArtifact.StackBounds
   , errorCallbackWord, errorCallbackSetter, errorDispatchSite, errorCallbacks
   , TraceCallback (..), traceCallbackKernels, traceCallbacks
   , fillFlag, fillDoneCallback
-  , conditionsPhrase, demandConditions, rootDepthConditions, image5DepthConditions, plainDepthConditions, cleanupConditions
+  , conditionsPhrase, demandConditions, rootDepthConditions, image5DepthConditions, plainDepthConditions, cleanupConditions, heapConditions
   ) where
 
 import qualified A32
@@ -84,12 +84,13 @@ traceCallbacks :: [Word32]
 traceCallbacks = [0x6470fc]
 
 -- | The premises each StockStack bound may use; its check fails when the walk uses another.
-demandConditions, rootDepthConditions, image5DepthConditions, plainDepthConditions, cleanupConditions :: [Condition]
+demandConditions, rootDepthConditions, image5DepthConditions, plainDepthConditions, cleanupConditions, heapConditions :: [Condition]
 demandConditions = [minBound .. maxBound]
 rootDepthConditions = [minBound .. maxBound]
 image5DepthConditions = [minBound .. maxBound]
 plainDepthConditions = [minBound .. maxBound]
 cleanupConditions = [SlotWordsFixed, ContextLocksFixed]
+heapConditions = [SlotWordsFixed, ContextLocksFixed]
 
 conditionsPhrase :: [Condition] -> String
 conditionsPhrase conditions = case map phrase conditions of

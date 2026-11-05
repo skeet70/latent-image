@@ -65,7 +65,7 @@ editBytes :: Edit -> B.ByteString
 editBytes (Edit _ bytes) = bytes
 
 data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup | TaskSubmission | TaskStorage
-  | IdleTask | RootTask | Image5Producer | PlainProducer | GeneralHeap
+  | IdleTask | RootTask | Image5Producer | PlainProducer | GeneralHeap | ApplicationPump
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 pieceKindName :: PieceKind -> Text
@@ -82,10 +82,11 @@ pieceKindName kind = case kind of
   Image5Producer -> "image5-producer"
   PlainProducer -> "plain-producer"
   GeneralHeap -> "general-heap"
+  ApplicationPump -> "application-pump"
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
   | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea | TaskSubmissionArea | TaskStorageArea
-  | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | GeneralHeapArea
+  | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | GeneralHeapArea | ApplicationPumpArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 areaName :: Area -> Text
@@ -107,6 +108,7 @@ areaName area = case area of
   Image5ProducerArea -> "image5-producer"
   PlainProducerArea -> "plain-producer"
   GeneralHeapArea -> "general-heap"
+  ApplicationPumpArea -> "application-pump"
 
 data FootprintBasis = AdmissionRead | RuntimePremise deriving (Eq, Ord, Show)
 
@@ -359,6 +361,8 @@ data PieceFacts
   | PlainProducerFacts LinkedBytes
   -- | The general heap.
   | GeneralHeapFacts HeapFacts
+  -- | The linked application pump image.
+  | ApplicationPumpFacts LinkedBytes
   deriving (Eq, Show)
 
 data Piece = Piece
@@ -401,11 +405,11 @@ data ManifestProblem
   deriving (Eq, Show)
 
 data ApplicationProblem
-  -- | A site word overlaps the named piece's carrier.
+  -- | A site word overlaps the named piece's carrier; only pump sites may lie in an application-pump carrier.
   = SiteInCarrier PieceKind Pc
   -- | Code at the PC lies in neither image4, image5 nor the plain window.
   | OutsideImages Pc
-  -- | The composed word at a site differs from the canonical word.
+  -- | The composed word at a site outside every carrier differs from the canonical word.
   | SiteWordDiffers Pc
   | PlainWindowUnreadable
   deriving (Eq, Show)

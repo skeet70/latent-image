@@ -6,6 +6,7 @@ module Replacement.StartupArtifact.Adapters
   ( LinkedImage (..), ImageBytes (..), SymbolBytes (..), PieceImages (..)
   , deriveFirstStage, deriveRecord2Link, derivePrimaryPublisher, deriveLoaderOrchestrationB, deriveLoaderStartup, derivePieceOf
   , deriveTaskSubmission, deriveTaskStorage, deriveIdleTask, deriveRootTask, deriveImage5Producer, derivePlainProducer, deriveGeneralHeap
+  , deriveApplicationPump
   , ProducerCall (..), producerCallBoundaries, callerReturn
   ) where
 
@@ -26,6 +27,8 @@ import qualified Emulation.PrimaryInitializerSource as PS
 import qualified FujiAF.FirstStage as F
 import qualified FujiAF.UpdateContainer as U
 import Numeric (showHex)
+import qualified Replacement.ApplicationPump.Admission as APA
+import qualified Replacement.ApplicationPump.Artifact as AP
 import qualified Replacement.KernelInstall.Admission as KA
 import qualified Replacement.KernelInstall.Artifact as KI
 import qualified Replacement.LoaderOrchestration.Admission as LA
@@ -59,6 +62,7 @@ import qualified Replacement.Image5Load.Admission as I5A
 import qualified Replacement.Image5Load.Artifact as I5
 import qualified Replacement.PlainLoad.Admission as PLA
 import qualified Replacement.PlainLoad.Artifact as PL
+import qualified Replacement.StartupArtifact.Footprint.ApplicationPump as PumpFootprint
 import qualified Replacement.StartupArtifact.Footprint.Producers as ProducersFootprint
 import qualified Replacement.StartupArtifact.Footprint.GeneralHeap as HeapFootprint
 import Replacement.StartupArtifact.Application (PlainImage (..), plainImage)
@@ -96,6 +100,7 @@ derivePieceOf source images = case images of
     Image5Producer -> deriveImage5Producer source image
     PlainProducer -> derivePlainProducer source image
     GeneralHeap -> deriveGeneralHeap source image
+    ApplicationPump -> deriveApplicationPump source image
 
 admitted :: PieceKind -> Either String a -> Either Refusal a
 admitted kind = first (AdapterRefused kind . T.pack)
@@ -1054,7 +1059,7 @@ taskPool = (0xa10200, 0xa5b200)
 
 heapWritesPremise :: T.Text
 heapWritesPremise = T.intercalate "; "
-  [ "SP-relative stores are proved per entry by the heap frame fixpoint (replacement/general_heap/Replacement/GeneralHeap/Admission.hs deriveFrames); rlsf's stores through pointers are premised to the arena [base, end - 32) its decoded geometry fixes (Admission.hs:28-34)"
+  [ "SP-relative stores are proved per entry by the heap frame fixpoint (replacement/general_heap/Replacement/GeneralHeap/Admission.hs deriveFrames); rlsf's stores through pointers are premised to the arena [base, end - 32) its decoded geometry fixes (Admission.hs:29-36)"
   , "the sentinel 0x89d4f8 is the only absolute store (replacement/general_heap/src.rs acquire); errno is stored at the context word, which every public entry loads from 0x89c970 (canonical value 0x89c978)"
   , "every heap caller on the route runs on a task stack in the reservation pool [0xa10200,0xa5b200), as record2-link's pool range; an owned non-SP store into another live frame of the pool is not excluded"
   , "core 1 has no admitted heap write" ]
@@ -1115,7 +1120,7 @@ deriveGeneralHeap source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)
             (Just "retained holds stock malloc_av_[0]; composed holds the owned sentinel 0x48454150 after first use") Nothing
         , CatalogRead tableRead uilib 0x890f08 16 Nothing Nothing
         , CatalogRead storageRead uilib 0x40a0fc44 1248
-            (Just "holds task 33's allocation, reserved after root's storage-record read that the pool relation normalizes against; the consume step normalizes it per role") Nothing ]
+            (Just "consume compares size and third words; bases are normalized per role to the root allocation base, or for task 33 to its first-entry SP minus size, with a zero offset required; all other records must equal the role's root storage records") Nothing ]
       core0 low high = WriteRange (CorePhysicalTarget Core0) low high
       errno = fromIntegral HeapFootprint.errnoWord
       sentinelWord = fromIntegral HeapFootprint.sentinel
@@ -1135,15 +1140,52 @@ deriveGeneralHeap source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)
       declaration = PieceDeclaration kind (Set.singleton GeneralHeapArea) carrierSpans
         (HeapFootprint.footprint (targetOf targets LoaderA) (targetOf targets LoaderB) image4)
         (map Premise
-          [ "unknown computed entries into the carriers are excluded: entry-surface covers direct branches, literal words and movw/movt pairs only (replacement/general_heap/Replacement/GeneralHeap/Artifact.hs:162)"
-          , "no metadata reader consumes beyond payload-4; the stock boundary tag decodes to an extent within the allocation (Artifact.hs:163)"
+          [ "unknown computed entries into the carriers are excluded: entry-surface covers direct branches, literal words and movw/movt pairs only; the two pinned cross-image conditional branch words are excluded (replacement/general_heap/Replacement/GeneralHeap/Artifact.hs:165)"
+          , "no metadata reader consumes beyond payload-4; the stock boundary tag decodes to an extent within the allocation (Artifact.hs:166)"
           , "retired bin state has no reader or writer outside the heap: retired-state-unreferenced covers direct references, and the composed-role carrier watch admits no write after attach"
           , "the sentinel is 0 in the decoded image 4 and the phase-0 clear, which runs only in mode 1 and before any task, cannot reach it (general-heap-arena-clear)"
           , "the arena and pool have no external writer or backing consumer: the backing helper 0x72b110 is called only from retired code; writers through computed pointers are premised"
           , "the retained recursive lock 0x72b164/0x72b1cc serializes every mutation and first-use setup; heap calls on the route are core 0 only, and cross-core contention is premised"
-          , "retained lock, unlock and memmove behave as stock; their stack demand is a StockStack depth under the switch model, conditional on published root-slot words staying fixed and no task-exception routine (StackBounds.switchModel)"
+          , "retained lock, unlock and memmove behave as stock; their stack demand is a StockStack depth under the switch model, " <> T.pack (SB.conditionsPhrase SB.heapConditions) <> " (StackBounds.switchModel)"
           , "the image-5 calloc entry and thunk are published by the image-5 producer's decode of record 5 before any code that names them runs (general-heap-image5-publication)"
           , "cold boot only; no warm-checkpoint allocator ownership migration is admitted"
           , "finite host checks do not qualify silicon contention, deadlines or capture, development and storage workloads" ])
         catalog (GeneralHeapFacts facts)
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just staged4) (Just (HT.image5Bytes staged)))
+-- | Task1's SP at its pump call 0xc23274 on core 0, recorded in both roles of J3 v12 and in J6 v1 retained.
+task1CallSp :: Word32
+task1CallSp = 0xa4cdd0
+
+-- | Replacement.ApplicationPump.Artifact over //replacement/application_pump:application-pump-image.
+deriveApplicationPump :: Canonical -> LinkedImage -> Either Refusal Piece
+deriveApplicationPump source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) = do
+  let kind = ApplicationPump
+      shown :: Show e => Either e a -> Either Refusal a
+      shown = first (AdapterRefused kind . T.pack . show)
+      targets = canonicalTargets source
+      (start, end) = PumpFootprint.pumpCarrier
+      address (APA.CodeAddress value) = value
+  artifact <- shown (AP.deriveArtifact bin symbolBytes)
+  pumpSource <- shown (AP.canonicalSource (canonicalDat source) (targetOf targets Image5))
+  staged <- shown (AP.stageImage5 pumpSource artifact)
+  let proof = AP.artifactProof artifact
+      frame = fromIntegral (negate (APA.scratchLow proof)) :: Word64
+      sp = fromIntegral task1CallSp :: Word64
+  refuseUnless kind ([(address (APA.callInstruction site), address (APA.callTarget site)) | site <- APA.proofCallSites proof]
+      == zip [0xbfbd28, 0xbfbd2c, 0xbfbd34] PumpFootprint.hookEntries)
+    "the pump's hook calls are not at the stock sites 0xbfbd28, 0xbfbd2c and 0xbfbd34"
+  refuseUnless kind (address (APA.returnInstruction proof) == 0xbfbd3c) "the pump's return is not at the stock 0xbfbd3c"
+  refuseUnless kind (frame > 0) "the pump frame is empty"
+  carrier <- spanOf kind Image5 start end
+  code <- ownedCode kind start end
+  let writes = EnumeratedWrites [WriteRange PhysicalTarget (sp - frame) sp]
+        (Premised (Premise (T.intercalate "; "
+          [ "the width is proved: the pump stores only its frame below the entry SP (replacement/application_pump/Replacement/ApplicationPump/Admission.hs:179-198)"
+          , "the base is task1's SP 0xa4cdd0 at the call 0xc23274 on core 0 (J3 v12 both roles, J6 v1 retained); task1's allocation comes from root's submission, compared by the pool relation; another SP faults the entry push" ])))
+      declaration = PieceDeclaration kind (Set.singleton ApplicationPumpArea) [carrier] PumpFootprint.footprint
+        (map Premise
+          [ "the retained hooks 0xbfb1b8, 0xbfb20c and 0xbfb1e0 return in A32 preserving r4-r11 and SP (replacement/application_pump/Replacement/ApplicationPump/Artifact.hs:126)"
+          , "task1 calls the pump only from 0xc23274 with LR 0xc23278 (private-data/analysis/x-m1-1.50/lz/id5.dis:50679-50680)"
+          , "retained callee stack demand below the owned frame is not proved" ])
+        (Catalog [] code writes []) (ApplicationPumpFacts (LinkedBytes bin symbolBytes))
+  derivePiece source declaration (StagedOutput (canonicalDat source) Nothing (Just (AP.stagedBytes staged)))

@@ -3,7 +3,7 @@ use fujimod_emulator::board::observation::{
     WatchRange,
 };
 use fujimod_xm1::{
-    application_observation::{self, Recorder as ApplicationRecorder},
+    application_observation::{self, hit_observers, Observers, Recorder as ApplicationRecorder},
     attach_relations::{self, AttachSources, TimerState, TransactionWriter},
     attach_state::{self, AttachState},
     bridge::{read, sha256, write},
@@ -16,7 +16,6 @@ use fujimod_xm1::{
     },
     guest::Press,
     machine::{KeyPulse, Machine, RunOutcome},
-    provenance::Guest,
     run::{self, RunDocument, ValidatedUpdate},
     trace::Hit,
 };
@@ -258,7 +257,7 @@ fn watch_rows(recorder: &Recorder) -> Result<u64, String> {
     }
 }
 
-/// Application hits go to `application` before the contract label lookup.
+/// A hit at a contract site goes to the contract row, then to `application` when it also arms the PC.
 fn trace(machine: &mut Machine, contract: &Contract, role: Role, state: &mut Observation, output: &Path,
     mut application: Option<&mut ApplicationRecorder>) -> Result<(), String> {
     let plan = contract.sites(role);
@@ -287,9 +286,12 @@ fn trace(machine: &mut Machine, contract: &Contract, role: Role, state: &mut Obs
         }
         let hits: Vec<Hit> = machine.traces.hits.drain(..).collect();
         for hit in &hits {
-            match application.as_deref_mut() {
-                Some(recorder) if recorder.owns(hit) => recorder.hit(machine, hit, &|| watch_rows(&state.recorder))?,
-                _ => observe_hit(machine, contract, role, &plan.sites, state, hit, output)?,
+            let observers = hit_observers(&plan, application.as_deref(), number(&hit.address)?);
+            if observers != Observers::Application {
+                observe_hit(machine, contract, role, &plan.sites, state, hit, output)?;
+            }
+            if let Some(recorder) = application.as_deref_mut().filter(|_| observers != Observers::Catalog) {
+                recorder.hit(machine, hit, &|| watch_rows(&state.recorder))?;
             }
         }
         if let Some(recorder) = application.as_deref_mut() {
@@ -442,7 +444,7 @@ fn observe(role: Role, contract_path: PathBuf, run_path: PathBuf, update_path: P
     let routed = match recorder.as_mut() {
         None => traced.and(disarmed).and_then(|()| menu_route(&mut machine, &mut menu)),
         Some(application) => traced.and_then(|()| {
-            let boundaries: Vec<Guest> = contract.sites(role).sites.keys().map(|pc| Guest(pc.0)).collect();
+            let boundaries = application.released_boundaries(&contract.sites(role));
             machine.traces.remove_sites(&machine.session, &boundaries)?;
             application.route(&mut machine, &mut menu, &|| watch_row_count(&guarded.watch))
         }),

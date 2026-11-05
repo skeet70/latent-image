@@ -498,6 +498,7 @@ caseSpec domain body label slot row =
     , caseExpectedRegisters = [(R4, sentinel R4)]
     , caseExpectedMemory = []
     , caseCp14Identity = rowIdentity row
+    , caseKernel = Nothing
     }
   where
     words' = dataWords domain

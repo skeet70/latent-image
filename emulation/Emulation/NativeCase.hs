@@ -106,7 +106,7 @@ loadCaseWith reader input = do
  path<-canonicalizePath input
  raw<-readRegularWith (pure()) False caseBytes path
  c<-either failH pure(decodeStrictIntegers raw)
- let optional=["cp14_identity"|"cp14_identity" `elem` keys c]
+ let optional=[key|key<-["cp14_identity","kernel"],key `elem` keys c]
  fields c (unwords(words "schema_version id origin provenance cpu artifacts entry exit registers regions functions stubs limits expected exclusions"++optional)) "case"
  void(integer(get c "schema_version")1 1 "schema version")
  ensure(get c "origin" `elem` [s "synthetic",s "stock"]) "origin must be synthetic or stock; a stock case needs an independently known result"
@@ -121,9 +121,10 @@ loadCaseWith reader input = do
  let reg k=maybe 0 id(lookup k initial)
  profile<-if reg "cpsr" .&. 0x0fffffff==0x10 then pure UserEntry else do
    mode<-maybe(failH "CPSR profile is user mode ARM with flags only, or SVC or SYS ARM with flags, Q, GE, I and F only")pure(privilegedMode(reg "cpsr"))
-   identity<-if null optional then pure Nothing else Just . Cp14Identity<$>address(get c "cp14_identity")
-   pure(PrivilegedEntry mode identity)
- ensure(profile/=UserEntry || null optional) "a CP14 identity needs a privileged entry"
+   identity<-if "cp14_identity" `notElem` optional then pure Nothing else Just . Cp14Identity<$>address(get c "cp14_identity")
+   kernel<-if "kernel" `notElem` optional then pure Nothing else Just<$>kernelEntry(get c "kernel")
+   pure(PrivilegedEntry mode identity kernel)
+ ensure(profile/=UserEntry || null optional) "a CP14 identity or kernel needs a privileged entry"
  ensure(reg "lr"==exit && reg "sp" `mod` 8==0) "LR must be exit and SP eight-byte aligned"
  fields(get c "limits") "instructions wall_ms" "limits"
  budget<-integer(get(get c "limits")"instructions")1 4000000 "instructions"
@@ -150,7 +151,8 @@ loadCaseWith reader input = do
    ensure(validId(get item "id") && all(\r->get(description r)"id"/=get item "id")prior) "region id invalid/duplicate"
    base<-address(get item "address"); size<-integer(get item "size")1(fromIntegral sizeBytes) "region size"
    ensure(base+size<=4294967296) "region address overflow"
-   ensure(get item "permissions" `elem` map s ["r","rw","rx"]) "permissions must be r/rw/rx"
+   ensure(get item "permissions" `elem` map s ["r","rw","rx","device"]) "permissions must be r/rw/rx/device"
+   ensure(get item "permissions"/=s "device" || (isKernel profile && size==4 && base `elem` bankWords)) "a device region is one interrupt-controller bank word of a kernel case"
    ensure(get item "permissions"/=s "rx" || base+size<=0x7ffffffc) "executable region must end by 0x7ffffffc: PMSAv7 default map is execute-never from 0x80000000"
    ensure(all(\r->base+size<=baseAddress r || baseAddress r+regionSize r<=base)prior) "logical regions overlap"
    let initialBytes=get item "initial"
@@ -167,6 +169,8 @@ loadCaseWith reader input = do
  let regions=map fst placed
  ensure(regionAt regions entry 4 'x' && regionAt regions exit 4 'x') "entry/exit must have explicit executable bytes"
  ensure(reg "sp">=8 && regionAt regions (reg "sp"-8) 8 'w') "stack top lacks writable eight bytes"
+ forM_[stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _))<-[profile]]$ \stop->
+   ensure(stop `mod` 4==0 && stop/=entry && stop/=exit && regionAt regions stop 4 'x') "stop address must be aligned, executable and differ from the entry and exit"
  functionsInput<-arrayCheck(get c "functions")1 functionCount "functions limit"
  functions<-foldM(\done item->do
    fields item "address size" "function"
@@ -181,13 +185,17 @@ loadCaseWith reader input = do
    fields item "address inputs outputs side_effects" "stub"
    target'<-address(get item "address")
    ensure(target' `mod` 4==0 && target'/=exit && target' `notElem` map(\(t,_,_)->t)done && not(any(\(x,len)->x<=target' && target'<x+len)functions)) "stub address alignment/alias"
+   ensure(target' `notElem` [stop|PrivilegedEntry _ _ (Just(KernelEntry(Just stop)_ _ _))<-[profile]]) "stub address is the stop address"
    ensure(get item "side_effects"==s "registers-only") "unsupported stub side effects"
    inputs<-bindings(get item "inputs")(take 13 regs); outputs<-bindings(get item "outputs")(take 13 regs)
    ensure(not(null outputs)) "stub must have explicit outputs"
    pure(done++[(target',inputs,outputs)]))[] stubsInput
  let expected=get c "expected"
- fields expected "status registers memory events" "expected"
- ensure(str(get expected "status") `elem` words "returned instruction_budget wall_budget memory_guard fetch_guard unknown_call unsupported_instruction stub_contract") "unsupported expected exit"
+ fields expected(unwords(words "status registers memory events"++["kernel"|"kernel" `elem` keys expected])) "expected"
+ ensure(str(get expected "status") `elem` words "returned instruction_budget wall_budget memory_guard fetch_guard unknown_call unsupported_instruction stub_contract stop_address") "unsupported expected exit"
+ when("kernel" `elem` keys expected)$do
+  ensure(isKernel profile) "expected kernel registers need a kernel case"
+  void(bindings(get expected "kernel")["tpidrurw","fpexc","reserved"])
  expectedRegs<-bindings(get expected "registers")(regs++["pc"])
  ensure(not(null expectedRegs)) "at least one independently expected register required"
  differences<-arrayCheck(get expected "memory")0 memoryCount "expected memory limit"
@@ -197,7 +205,7 @@ loadCaseWith reader input = do
    offset<-integer(get item "offset")0(fromIntegral sizeBytes) "expected offset"
    bytes<-byteString(get item "hex")
    let end=offset+fromIntegral(B.length bytes); ident=get item "region"
-       writable='w' `elem` str(get(description r)"permissions")
+       writable=str(get(description r)"permissions") `elem` ["rw","device"]
        initialSlice=B.take(B.length bytes)(B.drop(fromInteger offset)(regionBytes r))
    ensure(not(B.null bytes) && end<=regionSize r) "expected memory bounds"
    -- An expected byte in a read-only region observes the initial value; it never authorizes a write.
@@ -226,12 +234,32 @@ loadCaseWith reader input = do
   }
 -- A wire region row up to its initial bytes.
 regionHead :: Region -> String
-regionHead r=unwords[hex(baseAddress r),hex(regionSize r),case str(get(description r)"permissions")of "r"->"1";"rw"->"3";_->"5"]
+regionHead r=unwords[hex(baseAddress r),hex(regionSize r),case str(get(description r)"permissions")of "r"->"1";"rw"->"3";"device"->"10";_->"5"]
 -- The entry profile a case's CPSR names.
-data EntryProfile = UserEntry | PrivilegedEntry PrivilegedMode (Maybe Cp14Identity) deriving (Eq,Show)
+data EntryProfile = UserEntry | PrivilegedEntry PrivilegedMode (Maybe Cp14Identity) (Maybe KernelEntry) deriving (Eq,Show)
 data PrivilegedMode = SupervisorMode | SystemMode deriving (Eq,Show)
 -- The value MRC p14, 0, Rt, c2, c0, 0 reads in a privileged case.
 newtype Cp14Identity = Cp14Identity Integer deriving (Eq,Show)
+-- A kernel case's stop address and its TPIDRURW, CPACR and FPEXC values.
+data KernelEntry = KernelEntry (Maybe Integer) (Maybe Integer) (Maybe Integer) (Maybe Integer) deriving (Eq,Show)
+isKernel :: EntryProfile -> Bool
+isKernel(PrivilegedEntry _ _ (Just _))=True
+isKernel _=False
+-- Set-pending and clear-pending words of the two interrupt-controller banks.
+bankWords :: [Integer]
+bankWords=[0xfffb30cc,0xfffb40cc,0xfffb30ec,0xfffb40ec]
+-- FPEXC.EN, the only FPEXC bit a kernel case may set.
+fpexcEnable :: Integer
+fpexcEnable=0x40000000
+kernelEntry :: Value -> IO KernelEntry
+kernelEntry v=do
+ ensure(case v of Object _->all(`elem` ["stop","tpidrurw","cpacr","fpexc"])(keys v);_->False) "kernel: only stop, tpidrurw, cpacr and fpexc"
+ let optionalAddress k=if k `elem` keys v then Just<$>address(get v k) else pure Nothing
+ kernel<-KernelEntry<$>optionalAddress "stop"<*>optionalAddress "tpidrurw"<*>optionalAddress "cpacr"<*>optionalAddress "fpexc"
+ let KernelEntry _ _ cpacr fpexc=kernel
+ ensure(maybe True(\value->value .&. complement fpexcEnable==0)fpexc) "kernel fpexc may set EN only"
+ ensure(fpexc==Nothing || cpacr/=Nothing) "kernel fpexc needs a cpacr"
+ pure kernel
 -- SVC or SYS with only NZCVQ, GE, I and F besides the mode.
 privilegedMode :: Integer -> Maybe PrivilegedMode
 privilegedMode cpsr
@@ -239,13 +267,14 @@ privilegedMode cpsr
  | otherwise = case cpsr .&. 0x1f of 0x13->Just SupervisorMode; 0x1f->Just SystemMode; _->Nothing
 profileRows :: EntryProfile -> [String]
 profileRows UserEntry=[]
-profileRows(PrivilegedEntry _ identity)=[maybe "n"(\(Cp14Identity v)->"i "++hex v)identity]
+profileRows(PrivilegedEntry _ identity kernel)=[maybe "n"(\(Cp14Identity v)->"i "++hex v)identity]++[unwords("k":map(maybe "n" hex)[stop,tpidrurw,cpacr,fpexc])|Just(KernelEntry stop tpidrurw cpacr fpexc)<-[kernel]]
 checkResult :: Value -> [Region] -> Value -> IO [String]
 checkResult c regions result=do
  let expected=get c "expected"
      status=["status differs"|get result "status"/=get expected "status"]
      registers=["register "++k++": differs"|k<-keys(get expected "registers"),get(get result "registers")k/=get(get expected "registers")k]
      events=["stub events differ"|get result "events"/=get expected "events"]
+     kernel=["kernel register "++k++": differs"|"kernel" `elem` keys expected,k<-keys(get expected "kernel"),get(get result "kernel")k/=get(get expected "kernel")k]
      memory=list(get result "memory")
  mem<-if length memory/=length regions then pure["memory region count differs"] else fmap concat$forM(zip regions memory)$ \(r,actual)->do
    desired<-foldM(\bytes change->if get change "region"==get(description r)"id" then do
@@ -254,7 +283,7 @@ checkResult c regions result=do
      pure(B.take offset bytes<>value<>B.drop(offset+B.length value)bytes)
     else pure bytes)(regionBytes r)(list(get expected "memory"))
    pure["memory "++str(get(description r)"id")++": differs from exact allowed final bytes"|get actual "address"/=get(description r)"address" || get actual "bytes"/=s(hexBytes desired)]
- pure(status++registers++events++mem)
+ pure(status++registers++events++kernel++mem)
 unknownReport :: Value
 unknownReport=obj[("schema_version",n 1),("profile",s "unknown")]
 caseReport :: Value -> [(String,Value)] -> Value

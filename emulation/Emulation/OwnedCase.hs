@@ -11,6 +11,13 @@ module Emulation.OwnedCase
   , CaseRegion (..)
   , mkRegion
   , CaseSpec (..)
+  , KernelCase (..)
+  , InstructionLimit (..)
+  , plainLimit
+  , CaseOutcome (..)
+  , caseOutcome
+  , KernelDifference (..)
+  , compareKernelCase
   , writeCase
   , loadObserved
   , CaseId (..)
@@ -33,7 +40,7 @@ import Data.Aeson (Value, object, (.=))
 import qualified Data.ByteString as B
 import Data.Bits (shiftR, (.&.))
 import Data.IORef (modifyIORef', newIORef, readIORef)
-import Data.List (nub)
+import Data.List (nub, sort)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromMaybe)
 import Data.String (fromString)
@@ -41,11 +48,17 @@ import Data.Word (Word32)
 import Emulation.NativeCase (BatchCase (..), BatchStatus (..), BatchSummary (..), CaseId (..), CaseReport (..), CaseStatus (..), Region (..), batchStatusLabel, loadCase, runBatch, runCase)
 import Emulation.NativeObservation
   ( GuestAddress (..)
+  , KernelObservation (..)
   , NativeObservation (..)
+  , Ordered (..)
   , Register (..)
   , RegionId (..)
   , RunnerStatus (..)
+  , Write (..)
+  , WriteBytes (..)
+  , WriteValue (..)
   , hexWord32
+  , registerLabels
   , lookupRegister
   , observeNative
   , parseWord32
@@ -123,12 +136,14 @@ functionSymbol symbols name = case lookupSymbol symbols name of
 lookupSymbol :: M.Map String Symbol -> String -> Symbol
 lookupSymbol symbols name = fromMaybe (error ("kernel symbol missing: " ++ name)) (M.lookup name symbols)
 
-data Permission = ReadOnly | ReadWrite | ReadExecute
+-- | 'Device' is one interrupt-controller bank word of a kernel case, taking aligned word stores only.
+data Permission = ReadOnly | ReadWrite | ReadExecute | Device
 
 permissionLabel :: Permission -> String
 permissionLabel ReadOnly = "r"
 permissionLabel ReadWrite = "rw"
 permissionLabel ReadExecute = "rx"
+permissionLabel Device = "device"
 
 data CaseRegion = CaseRegion
   { caseRegion :: Region
@@ -166,7 +181,103 @@ data CaseSpec = CaseSpec
   , caseExpectedMemory :: [(RegionId, B.ByteString)]
   , -- | The value MRC p14, 0, Rt, c2, c0, 0 reads; only a privileged case may name one.
     caseCp14Identity :: Maybe Word32
+  , -- | Only a privileged case may be a kernel case.
+    caseKernel :: Maybe KernelCase
   }
+
+-- | The instruction budget N of a case: it ends @instruction_budget@ when it has not returned within N instructions.
+newtype InstructionLimit = InstructionLimit Word32
+  deriving (Eq, Show)
+
+-- | The budget of a case that is not a kernel case.
+plainLimit :: InstructionLimit
+plainLimit = InstructionLimit 4000000
+
+-- | A kernel case additionally executes word exclusives, barriers and @nop@, reads the declared
+-- system registers, may end at a stop address and may map device regions.
+data KernelCase = KernelCase
+  { kernelLimit :: InstructionLimit
+  , kernelStop :: Maybe GuestAddress
+  , kernelTpidrurw :: Maybe Word32
+  , -- | Needed with 'kernelFpexc'; FPEXC is accessible only when cp10 and cp11 are equal and 0b01 or 0b11.
+    kernelCpacr :: Maybe Word32
+  , -- | EN (bit 30) is the only bit it may set.
+    kernelFpexc :: Maybe Word32
+  , -- | Registers 'compareKernelCase' leaves out, such as a spinning loop's scratch and PC. 'Cpsr'
+    -- here drops only its flags: mode, T, F, I and A (bits 8:0) are always compared.
+    kernelUncompared :: [Register]
+  }
+
+caseLimit :: CaseSpec -> InstructionLimit
+caseLimit = maybe plainLimit kernelLimit . caseKernel
+
+-- | How a case ended, the part two roles of one case compare before their state.
+data CaseOutcome
+  = OutcomeReturned
+  | OutcomeStopped GuestAddress
+  | -- | A kernel case that has not returned within its N instructions, with the word its last
+    -- LDREX reserved.
+    OutcomeNoReturnWithin InstructionLimit (Maybe GuestAddress)
+  | OutcomeRefused RunnerStatus
+  deriving (Eq, Show)
+
+caseOutcome :: CaseSpec -> NativeObservation -> CaseOutcome
+caseOutcome spec observation = case (nativeStatus observation, caseKernel spec) of
+  (Returned, _) -> OutcomeReturned
+  (StopAddress, _) -> OutcomeStopped (GuestAddress (fromIntegral (registerValue observation Pc)))
+  (InstructionBudget, Just kernel) -> OutcomeNoReturnWithin (kernelLimit kernel) (nativeKernel observation >>= observedReserved)
+  (status, _) -> OutcomeRefused status
+
+data KernelDifference
+  = NotKernelCase
+  | OutcomeDiffers CaseOutcome CaseOutcome
+  | KernelRegisterDiffers Register
+  | KernelMemoryDiffers RegionId
+  | WritesDiffer
+  | SystemRegistersDiffer
+  | WriteLogTruncated
+  deriving (Eq, Show)
+
+-- | Two roles of one kernel case: outcome, every register but the declared exclusions with CPSR
+-- bits 8:0 always, the final bytes of the spec's writable and device regions, the final TPIDRURW and
+-- FPEXC, and the multiset of memory writes with their values and of system register writes. Barrier
+-- order is left to per-case assertions on 'observedOrder'.
+compareKernelCase :: CaseSpec -> NativeObservation -> NativeObservation -> [KernelDifference]
+compareKernelCase spec reference subject = case (caseKernel spec, nativeKernel reference, nativeKernel subject) of
+  (Just kernel, Just referenceKernel, Just subjectKernel) ->
+    [OutcomeDiffers (outcome reference) (outcome subject) | outcome reference /= outcome subject]
+      ++ [ KernelRegisterDiffers register
+         | register <- registerLabels
+         , Just compared <- [comparedPart kernel register]
+         , (compared <$> M.lookup register (nativeRegisters reference)) /= (compared <$> M.lookup register (nativeRegisters subject))
+         ]
+      ++ [ KernelMemoryDiffers ident
+         | CaseRegion region permission <- caseRegions spec
+         , writable permission
+         , let ident = regionIdOf region
+         , lookup ident (nativeMemory reference) /= lookup ident (nativeMemory subject)
+         ]
+      ++ [SystemRegistersDiffer | system referenceKernel /= system subjectKernel]
+      ++ case (writes referenceKernel, writes subjectKernel) of
+        (Just expected, Just actual) -> [WritesDiffer | expected /= actual]
+        _ -> [WriteLogTruncated]
+  _ -> [NotKernelCase]
+  where
+    outcome = caseOutcome spec
+    comparedPart kernel register
+      | register `notElem` kernelUncompared kernel = Just id
+      | register == Cpsr = Just (.&. 0x1ff)
+      | otherwise = Nothing
+    writable permission = case permission of
+      ReadWrite -> True
+      Device -> True
+      ReadOnly -> False
+      ReadExecute -> False
+    system observed = (observedTpidrurw observed, observedFpexc observed)
+    writes observed = sort . concatMap written <$> observedOrder observed
+    written (OrderedWrite (Write (GuestAddress address) (WriteBytes bytes)) (WriteValue stored)) = [Left (address, bytes, stored)]
+    written (OrderedSystemWrite register value) = [Right (register, value)]
+    written (OrderedBarrier _) = []
 
 regionJson :: CaseRegion -> Value
 regionJson (CaseRegion region permission) =
@@ -214,7 +325,7 @@ caseValue file spec =
         | (address, size) <- caseFunctions spec
         ]
     , "stubs" .= ([] :: [Value])
-    , "limits" .= object ["instructions" .= (4000000 :: Int), "wall_ms" .= (4000 :: Int)]
+    , "limits" .= object ["instructions" .= (let InstructionLimit limit = caseLimit spec in limit), "wall_ms" .= (4000 :: Int)]
     , "expected" .=
         object
           [ "status" .= runnerStatusLabel (caseExpectedStatus spec)
@@ -228,6 +339,13 @@ caseValue file spec =
     , "exclusions" .= [caseExclusion spec]
     ]
       ++ ["cp14_identity" .= hexWord32 identity | Just identity <- [caseCp14Identity spec]]
+      ++ ["kernel" .= kernelJson kernel | Just kernel <- [caseKernel spec]]
+
+kernelJson :: KernelCase -> Value
+kernelJson kernel =
+  object $
+    ["stop" .= hexAddress stop | Just stop <- [kernelStop kernel]]
+      ++ [fromString name .= hexWord32 value | (name, Just value) <- [("tpidrurw", kernelTpidrurw kernel), ("cpacr", kernelCpacr kernel), ("fpexc", kernelFpexc kernel)]]
 
 writeCase :: FilePath -> CaseSpec -> IO FilePath
 writeCase directory spec = do

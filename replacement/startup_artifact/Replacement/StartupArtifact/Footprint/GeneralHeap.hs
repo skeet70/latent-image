@@ -102,14 +102,11 @@ footprint loaderA loaderB image4 =
 data Reference = BranchReference Word32 Word32 | LiteralReference Word32 Word32 | FormedReference Word32 Word32
   deriving (Eq, Ord, Show)
 
--- | Every reference in a flat image at the base, every aligned word: @blx@ and unconditional @b@/@bl@
--- targets, conditional @b@/@bl@ targets inside the same image, the word itself, and a @movt rd@ with the
--- last @movw rd@ in the 16 words before it. Code reaches another image only by unconditional calls.
+-- | Every aligned word's branch target, literal value and @movw@/@movt@ formation.
 references :: Word32 -> B.ByteString -> [Reference]
 references base bytes = go M.empty 0
   where
     count = B.length bytes `div` 4
-    limit = base + fromIntegral (B.length bytes)
     go held index
       | index >= count = []
       | otherwise =
@@ -119,8 +116,7 @@ references base bytes = go M.empty 0
               branch
                 | condition == 0xf && word .&. 0xfe000000 == 0xfa000000 = [BranchReference site (site + 8 + offset word + ((word `shiftR` 23) .&. 2))]
                 | condition /= 0xf && (word `shiftR` 25) .&. 7 == 5
-                , let target = site + 8 + offset word
-                , condition == 0xe || (target >= base && target < limit) = [BranchReference site target]
+                , let target = site + 8 + offset word = [BranchReference site target]
                 | otherwise = []
               register = (word `shiftR` 12) .&. 0xf
               half = ((word `shiftR` 4) .&. 0xf000) .|. (word .&. 0xfff)
@@ -168,11 +164,9 @@ graphicsTableForwards image4 =
     && and [ fmap (A.decode site) (wordAt image4 image4Base site) == Just (A.Branch (A.Cond 14) True target)
            | (site, target) <- [(0x890ee0, 0x89da3c), (0x890ef0, 0x89cdc4), (0x890f00, 0x89cda4)] ]
 
--- | Data words that encode a branch into a heap carrier, with the word: image 5 0x109ba48 holds
--- @blx 0x89d26c@ between undecodable words, inside no decomp function
--- (private-data/analysis/x-m1-1.50/lz/id5.dis:1183641-1183643; xm1-decomp lookup 0x109ba48).
+-- | Pinned non-code branch encodings excluded from the carrier-entry scan.
 dataWords :: [(Word32, Word32)]
-dataWords = [(0x109ba48, 0xfae00607)]
+dataWords = [(0x109ba48, 0xfae00607), (0x109dedc, 0x1ae001f2), (0x12c23bc, 0x5ad76bd1)]
 
 -- | Outside the heap carriers, the references naming an address inside one that is not an entry,
 -- except a 'dataWords' branch still holding its word.

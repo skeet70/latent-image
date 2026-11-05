@@ -5,7 +5,7 @@ use super::readiness::{
 };
 use super::{
     read_evidence, view_byte, view_word, ApplicationReceipt, Evidence, GraphicsState, InputIndex, InputPurpose, RawView, Sample,
-    SampleIndex, SiteRef, ALIAS,
+    SampleIndex, SiteRef, ALIAS, MenuIdentity,
 };
 use crate::composed_catalog::{physical_address as physical, Application, Core, Domain, Instructions, Role, SiteKind};
 use crate::guest::RouteKey;
@@ -110,12 +110,20 @@ pub struct RoleEvidence<'a> {
     pub directory: &'a Path,
 }
 
-pub fn check_role(application: &Application, role: Role, receipt: &ApplicationReceipt, directory: &Path) -> Result<(), ApplicationRefusal> {
+/// What the cross-role check needs from a role that passed every per-role check.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RoleSummary {
+    /// The menu at the first-ready sample, `None` when its views do not hold it.
+    pub first_ready_menu: Option<MenuIdentity>,
+}
+
+pub fn check_role(application: &Application, role: Role, receipt: &ApplicationReceipt, directory: &Path)
+    -> Result<RoleSummary, ApplicationRefusal> {
     let evidence = read_evidence(directory, &receipt.evidence).map_err(|error| ApplicationRefusal::new(ApplicationCheck::CaptureBound, error))?;
     check_evidence(&RoleEvidence { application, role, receipt, evidence: &evidence, directory })
 }
 
-pub fn check_evidence(evidence: &RoleEvidence) -> Result<(), ApplicationRefusal> {
+pub fn check_evidence(evidence: &RoleEvidence) -> Result<RoleSummary, ApplicationRefusal> {
     mapping(evidence)?;
     code_identity(evidence)?;
     task_context(evidence)?;
@@ -126,7 +134,11 @@ pub fn check_evidence(evidence: &RoleEvidence) -> Result<(), ApplicationRefusal>
     pump_sequences(evidence)?;
     render_completion(evidence)?;
     route(evidence)?;
-    capture_bound(evidence)
+    capture_bound(evidence)?;
+    let first_ready = evidence.receipt.first_ready
+        .and_then(|first| usize::try_from(first.readiness.0).ok())
+        .and_then(|index| evidence.evidence.readiness.get(index));
+    Ok(RoleSummary { first_ready_menu: first_ready.and_then(|sample| sample.ui.menu()) })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -260,7 +272,7 @@ pub fn mapping(evidence: &RoleEvidence) -> Result<(), ApplicationRefusal> {
         }
         let render = &sample.render;
         let views = [&render.initialized.view, &render.ui_busy.view].into_iter().chain(&render.idle)
-            .chain(render.keys.iter().map(|key| &key.view)).chain(sample.tasks.views());
+            .chain(render.keys.iter().map(|key| &key.view)).chain(sample.tasks.views()).chain(sample.ui.views());
         require(views.into_iter().all(RawView::agrees), check, "a readiness view's spellings differ from its physical bytes")?;
         (preceding, at) = (sample.preceding, sample.instructions);
     }
@@ -276,7 +288,7 @@ pub fn code_identity(evidence: &RoleEvidence) -> Result<(), ApplicationRefusal> 
         let (word, armed) = match &sample.site {
             SiteRef::Application(label) => {
                 let site = application.site(label).ok_or_else(|| ApplicationRefusal::new(check, "unknown site"))?;
-                (site.word, site.pc(evidence.role))
+                (site.word(evidence.role), site.pc(evidence.role))
             }
             SiteRef::Queue(label) => {
                 let site = application.queue(label).ok_or_else(|| ApplicationRefusal::new(check, "unknown queue site"))?;
@@ -837,17 +849,21 @@ pub fn capture_bound(evidence: &RoleEvidence) -> Result<(), ApplicationRefusal> 
 pub enum PairField {
     /// Input keys and purposes.
     Inputs,
-    /// Menus, plane layouts, graphics planes and the controller record outside its timing words.
+    /// Menus, plane layouts, graphics planes and the controller record's code, argument and flags.
     Visible,
     /// Dynamic targets and their words.
     Targets,
+    /// The first-ready sample's menu node, node id, setting, cursor and level word.
+    ReadinessMenu,
 }
 
-/// Controller words `0x94458c` and `0x944590`, which differ with each role's timing; the other 18 words are compared.
-const TIMING_WORDS: std::ops::Range<usize> = 12..20;
+/// Controller bytes `[0x94458c,0x9445d0)`, the last event's 0x44-byte payload: key events from `0x6a1b40` and event
+/// 0x816 from `0x6e97c0` carry their poster's uninitialized frame there. The code, argument and flags are compared.
+const EVENT_PAYLOAD: std::ops::Range<usize> = 12..80;
 
-/// `directories` are the roles' run directories holding their visible side files.
-pub fn check_pair(retained: &ApplicationReceipt, owned: &ApplicationReceipt, directories: [&Path; 2]) -> Result<(), PairField> {
+/// `directories` are the roles' run directories holding their visible side files; `summaries` are their role checks'.
+pub fn check_pair(retained: &ApplicationReceipt, owned: &ApplicationReceipt, directories: [&Path; 2], summaries: [&RoleSummary; 2])
+    -> Result<(), PairField> {
     let keys = |receipt: &ApplicationReceipt| receipt.inputs.iter().map(|input| (input.key, input.purpose)).collect::<Vec<_>>();
     if keys(retained) != keys(owned) {
         return Err(PairField::Inputs);
@@ -858,7 +874,7 @@ pub fn check_pair(retained: &ApplicationReceipt, owned: &ApplicationReceipt, dir
     };
     let controller = |capture: &super::VisibleCapture| {
         let bytes = &capture.controller.physical.0;
-        (bytes.len() >= TIMING_WORDS.end).then(|| [&bytes[..TIMING_WORDS.start], &bytes[TIMING_WORDS.end..]].concat())
+        (bytes.len() >= EVENT_PAYLOAD.end).then(|| [&bytes[..EVENT_PAYLOAD.start], &bytes[EVENT_PAYLOAD.end..]].concat())
     };
     let same = retained.visible.len() == owned.visible.len()
         && retained.visible.iter().zip(&owned.visible).all(|(a, b)| {
@@ -871,6 +887,10 @@ pub fn check_pair(retained: &ApplicationReceipt, owned: &ApplicationReceipt, dir
     let targets = |receipt: &ApplicationReceipt| receipt.targets.iter().map(|target| (target.pc, target.word)).collect::<BTreeSet<_>>();
     if targets(retained) != targets(owned) {
         return Err(PairField::Targets);
+    }
+    let menus = summaries.map(|summary| summary.first_ready_menu);
+    if menus[0].is_none() || menus[0] != menus[1] {
+        return Err(PairField::ReadinessMenu);
     }
     Ok(())
 }

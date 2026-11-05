@@ -29,7 +29,10 @@ import Replacement.StartupArtifact.Application (PlainImage (..), plainImage)
 import Replacement.StartupArtifact.Compose
 import Replacement.StartupArtifact.Contract (contractCarriers, contractValue, record5Media)
 import qualified Replacement.StartupArtifact.Footprint.GeneralHeap as Heap
-import Replacement.StartupArtifact.Joins (JoinKind (..), depthsIn, registeredJoins, suppliedOf)
+import Replacement.StartupArtifact.Joins (JoinKind (..), depthsIn, registeredJoins, suppliedOf, rootTargets)
+import qualified Replacement.StartupArtifact.StackBounds as SB
+import qualified Replacement.Image5Load.Admission as I5A
+import qualified Replacement.PlainLoad.Admission as PLA
 import Replacement.StartupArtifact.Stage
 import Replacement.StartupArtifact.Targets
 import Replacement.StartupArtifact.Types
@@ -259,6 +262,12 @@ main = do
   changedDataWord <- plant targets [(Image5, 0x109ba48, branchLink 0x109ba48 0x89d26c)]
   ok "entry-surface fails when the image-5 data word 0x109ba48 holds any other branch into the carrier"
     (Heap.entrySurface entries (segments parts changedDataWord) == [Heap.BranchReference 0x109ba48 0x89d26c])
+  changedConditional <- plant targets [(Image5, 0x109dedc, 0x1ae001f3)]
+  ok "entry-surface refuses a changed cross-image conditional branch into a carrier"
+    (Heap.entrySurface entries (segments parts changedConditional) == [Heap.BranchReference 0x109dedc 0x89e6b0])
+  ok "entry-surface refuses a new cross-image conditional branch into a carrier"
+    (Heap.entrySurface entries [(0x1100000, U.putWord32 (0x1a000000 .|. (((0x89ce00 - 0x1100000 - 8) `shiftR` 2) .&. 0xffffff)))]
+      == [Heap.BranchReference 0x1100000 0x89ce00])
   symbols <- either (H.failH . show) pure (F.parseSymbols heapSymbolBytes)
   metadataStart <- either (H.failH . show) (pure . F.symbolAddress) (F.lookupSymbol symbols "XM1_HEAP_METADATA")
   let instructions = HA.instructionPCs (HT.artifactFrames artifact)
@@ -288,10 +297,31 @@ main = do
     Nothing -> H.failH "suppliedOf refused on the J7 composition"
     Just supplied -> do
       let depthOf entry = (\(SS.StackDepth bytes) -> toInteger bytes) <$> M.lookup entry supplied
-          owned = [(0x89cda4, 240), (0x89cde4, 240), (0x89cdc4, 200), (0x89e560, 200), (0x89da3c, 280), (0x89da64, 280), (0x89e464, 160), (0xbf1c1c, 240), (0xbf1c44, 240)]
+          owned = [(0x89cda4, 536), (0x89cde4, 536), (0x89cdc4, 472), (0x89e560, 472), (0x89da3c, 544), (0x89da64, 544), (0x89e464, 456), (0xbf1c1c, 536), (0xbf1c44, 536)]
       putStrLn ("heap supplied depths: " ++ show [(entry, depthOf entry) | (entry, _) <- owned])
-      ok "every heap entry is supplied, at least its owned cumulative depth"
-        (all (\(entry, bytes) -> maybe False (>= bytes) (depthOf entry)) owned)
+      ok "every heap entry has its pinned composed demand"
+        (all (\(entry, bytes) -> depthOf entry == Just bytes) owned)
+      let report name entries' = do
+            results <- maybe (H.failH ("no depths for " ++ name)) pure (depthsIn evidence supplied entries')
+            putStrLn (name ++ ": " ++ show results)
+            pure results
+          deepest results = maximum [bytes | (_, Right walked) <- results, let SS.StackDepth bytes = SS.reportDepth walked]
+      retained <- report "heap retained callees" Heap.retainedCallees
+      let used = Set.unions [SS.reportConditions walked | (_, Right walked) <- retained]
+      ok "heap retained callee conditions equal the published list"
+        (length retained == 3 && all (either (const False) (const True) . snd) retained && used == Set.fromList SB.heapConditions)
+      putStrLn ("heap conditions: " ++ show (Set.toList used) ++ "; " ++ SB.conditionsPhrase SB.heapConditions)
+      rootEntries <- maybe (H.failH "no root targets") pure (rootTargets evidence)
+      rootResults <- report "heap-composed root" rootEntries
+      image5Results <- report "heap-composed image5" I5A.retainedTargets
+      plainResults <- report "heap-composed plain" PLA.retainedTargets
+      ok "heap-composed retained maxima preserve root, image5 and plain margins"
+        (map deepest [rootResults, image5Results, plainResults] == [752,536,392])
+      ok "heap-composed J6 owned supplies retain their pinned demands"
+        (all (\(entry, bytes) -> depthOf entry == Just bytes)
+          [(0x69cbf0,8),(0x69d160,16),(0x7235d8,128),(0x7236b0,128),(0x725dd8,456),(0x726098,40)])
+      _ <- report "heap-composed task-entry walks" [0x6d7540,0x892110,0x1109130]
+      pure ()
   -- The retained role's demands: stock malloc, free, _malloc_r and _free_r walked on canonical image 4, the
   -- J6 pieces' owned entries (critical pair, wrapper, idle, root) taking their proved depths (design 6.2).
   j6 <- either (H.failH . show) pure (compose registeredJoins source j6Pieces)

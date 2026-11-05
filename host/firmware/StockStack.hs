@@ -375,9 +375,10 @@ stockDepths code (Supplied supplied) indirect switches entries = go M.empty entr
         reset current = if setsFlags instruction then M.empty else current
         -- Register values the resolution, the mode check and the return check use.
         track decoded registers = case decoded of
-          A32.LoadMultiple (A32.Cond 14) base _ _ regs | base == A32.sp && A32.lr `elem` regs ->
+          A32.LoadMultiple (A32.Cond 14) base _ True regs | base == A32.sp && A32.lr `elem` regs ->
             M.insert A32.lr EntryLink (foldr M.delete registers regs)
-          A32.Load (A32.Cond 14) A32.Word False rt base _ _ | rt == A32.lr && base == A32.sp -> M.insert A32.lr EntryLink registers
+          A32.Load (A32.Cond 14) A32.Word False rt base _ indexing
+            | rt == A32.lr && base == A32.sp && indexing /= A32.OffsetOnly -> M.insert A32.lr EntryLink registers
           A32.MoveWide _ rd value -> M.insert rd (Const value) registers
           A32.MoveTop _ rd value -> case M.lookup rd registers of
             Just (Const low) -> M.insert rd (Const ((value `shiftL` 16) .|. (low .&. 0xffff))) registers

@@ -31,6 +31,7 @@ import qualified Replacement.IdleTask.Admission as IA
 import qualified Replacement.IdleTask.Artifact as IT
 import qualified Replacement.RootTask.Admission as RA
 import qualified Replacement.RootTask.Artifact as RT
+import qualified Replacement.StartupArtifact.Footprint.ApplicationPump as Pump
 import qualified Replacement.StartupArtifact.Footprint.Producers as Producers
 import qualified Replacement.StartupArtifact.Footprint.RootTask as RootFootprint
 import Replacement.StartupArtifact.Application (PlainImage (..), plainImage)
@@ -52,6 +53,7 @@ data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | 
   | TaskCompositionOwnedCalls | DispatcherTaskComposition | PublisherTaskServices
   | DispatcherRootEntry | DispatcherIdleEntry | WrapperIdleErrorCallback | RootTaskServices
   | Image5ProducerServices | PlainProducerServices | GeneralHeapImage5Publication | GeneralHeapArenaClear
+  | ApplicationPumpServices
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 instance JoinName JoinKind where
@@ -74,6 +76,7 @@ instance JoinName JoinKind where
   joinName PlainProducerServices = "plain-producer-services"
   joinName GeneralHeapImage5Publication = "general-heap-image5-publication"
   joinName GeneralHeapArenaClear = "general-heap-arena-clear"
+  joinName ApplicationPumpServices = "application-pump-services"
 
 at :: Target -> Word32 -> Word32 -> Span
 at target start end = Span target (Guest start) (Guest end)
@@ -370,7 +373,8 @@ registeredJoins =
   , loaderStartupPublisher, publisherInstallerRoots, criticalPairInstallerRoots, dispatcherCriticalPair
   , taskCompositionOwnedCalls, dispatcherTaskComposition, publisherTaskServices
   , dispatcherRootEntry, dispatcherIdleEntry, wrapperIdleErrorCallback, rootTaskServices
-  , image5ProducerServices, plainProducerServices, generalHeapImage5Publication, generalHeapArenaClear ]
+  , image5ProducerServices, plainProducerServices, generalHeapImage5Publication, generalHeapArenaClear
+  , applicationPumpServices ]
 
 -- | The task wrapper, the record-2 critical pair and the task-storage transition joined as in
 -- replacement/startup_composition/Replacement/StartupComposition/TaskSubmission.hs:63-97.
@@ -634,7 +638,8 @@ heapSupplied evidence core = case (heapFacts evidence, indirectOf evidence) of
   (Just facts, Just indirect) ->
     let results = SS.stockDepths (stockCodeOfEvidence evidence) (SS.Supplied core) indirect SB.switchModel Heap.retainedCallees
         retained target = case lookup target results of
-          Just (Right report) -> let SS.StackDepth bytes = SS.reportDepth report in Just (toInteger bytes)
+          Just (Right report) | usesOnly SB.heapConditions (SS.reportConditions report) ->
+            let SS.StackDepth bytes = SS.reportDepth report in Just (toInteger bytes)
           _ -> Nothing
      in M.fromList [ (entry, SS.StackDepth (fromInteger depth)) | entry <- heapEntries facts, Just depth <- [ownedDepth (heapFrames facts) retained entry] ]
   _ -> M.empty
@@ -923,3 +928,11 @@ fillFlagWriters evidence =
   where
     segments = composedSegments evidence
     owned = ownedOf evidence
+-- | The image5 producer decodes the record carrying the owned pump; task1 calls the pump, which calls the stock hooks.
+applicationPumpServices :: Join JoinKind
+applicationPumpServices = Join ApplicationPumpServices (Set.fromList [ApplicationPump, Image5Producer])
+  [at Image5 start end]
+  (ObservationQualified "the image5 producer decodes record 5, re-encoded with the owned pump in [0xbfbd20,0xbfbd40), and publishes it before task1 first runs; task1 calls the pump only at 0xc23274 and the pump calls the retained hooks at their stock entries; the call word at 0xc23274 and the hook entries are the pump's footprint, so FootprintOverlap refuses any piece that edits them, and the pump adapter's canonical source hash fixes their stock words; after staging, verifyComposed requires the decoded composed image5 to equal the composition's image5 target, whose carrier is the linked image with NOP padding (ComposedDiffMismatch); qualified by the application phase's pump sequences in the composed comparison")
+  []
+  where
+    (start, end) = Pump.pumpCarrier
