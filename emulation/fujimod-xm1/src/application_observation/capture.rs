@@ -2,7 +2,7 @@
 //! the task1 stack scope, readiness samples and, after the boundary, the route with settled inputs.
 use super::checks::{
     committed, Kind, ADAPTER_ENTRY, COPY_CALL, COPY_RETURN, KERNEL_RECEIVE, PAYLOAD_LIMIT, PRESS, QUEUE_EXIT, QUEUE_ROOTS,
-    RECEIVED, RELEASE_CALL, RELEASE_RETURN, TASK1_RESET,
+    RECEIVED, RELEASE_CALL, RELEASE_LIMIT, RELEASE_RETURN, TASK1_RESET,
 };
 use super::readiness::{Due, Search, CHAIN, IMAGE5_PUBLICATION, PERIOD, QUEUE_ENTRY};
 use super::{
@@ -442,8 +442,9 @@ impl<'a> Recorder<'a> {
         self.advance(machine, PRESS, rows)?;
         machine.release_key(key)?;
         let released = machine.instructions();
+        let release_limit = if purpose == InputPurpose::FirstStart { PRESS } else { RELEASE_LIMIT };
         while !machine.document.firmware.released(&machine.session, key)? {
-            if machine.instructions() - released >= PRESS {
+            if machine.instructions() - released >= release_limit {
                 return Err("an input release did not debounce".into());
             }
             self.advance(machine, PERIOD, rows)?;

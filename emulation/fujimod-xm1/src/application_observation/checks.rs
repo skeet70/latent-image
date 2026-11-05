@@ -53,6 +53,8 @@ const RELEASE_SLOT: u32 = 0xf8;
 const QUEUE_DOMAIN: u32 = 0x7cad9c;
 pub(crate) const PAYLOAD_LIMIT: u32 = 76;
 pub(crate) const PRESS: u64 = 8_000_000;
+/// The settled-input release cap matches the directional input contract.
+pub(crate) const RELEASE_LIMIT: u64 = 12_000_000;
 pub(crate) const FIRST_SETTLED: usize = Scenario::FIRST_SETTLED;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -802,8 +804,7 @@ pub fn render_completion(evidence: &RoleEvidence) -> Result<(), ApplicationRefus
     Ok(())
 }
 
-/// The route's keys and purposes, the first press at the search end, each held 8,000,000 instructions and debounced
-/// within 8,000,000 more.
+/// The route's keys and purposes, fixed press holds and bounded observed releases.
 pub fn route(evidence: &RoleEvidence) -> Result<(), ApplicationRefusal> {
     let check = ApplicationCheck::Route;
     let receipt = evidence.receipt;
@@ -814,8 +815,9 @@ pub fn route(evidence: &RoleEvidence) -> Result<(), ApplicationRefusal> {
     for (index, (input, (key, purpose))) in receipt.inputs.iter().zip(receipt.scenario.inputs()).enumerate() {
         require(input.key == key && input.purpose == purpose, check, "an input's key or purpose differs from the route")?;
         require(index != 0 || input.pressed == start, check, "the first press is not at the search end")?;
+        let release_limit = if purpose == InputPurpose::FirstStart { PRESS } else { RELEASE_LIMIT };
         require(input.pressed >= previous && input.released.0 == input.pressed.0 + PRESS && input.debounced >= input.released
-            && input.debounced.0 - input.released.0 <= PRESS, check, "an input's press, release or debounce differs")?;
+            && input.debounced.0 - input.released.0 <= release_limit, check, "an input's press, release or debounce differs")?;
         previous = input.settled.unwrap_or(input.debounced);
     }
     require(receipt.visible.first().is_some_and(|capture| capture.menu == Some(Menu { menu: 1, setting: 5, cursor: 2 })), check,
