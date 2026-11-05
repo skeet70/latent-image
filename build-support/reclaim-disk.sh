@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # reclaim-disk.sh [--apply] [--min-age-hours N] [--verbose]: list, or with --apply delete, what the disk rules in AGENTS.md let go.
 #   - private-data run output (RUN_ROOTS and top-level NAME-PID-MICROS run directories) that no tracked file on
-#     main, no line added by an unmerged branch and no file in a worktree's working tree names, with or without
-#     the private-data/ prefix;
+#     main, no line added by an unmerged branch, no file in a worktree's working tree and no current ignored
+#     baseline names, with or without the private-data/ prefix;
 #   - clean worktrees whose HEAD is merged into main, with their agent/ branch;
 #   - merged agent/ branches without a worktree;
-#   - Bazel output bases whose worktree is gone.
+#   - Bazel output bases whose recorded workspace directory is gone.
 # Candidates under analysis/ are deleted only after a y at the terminal, one prompt per analysis/A/B group.
 # Anything holding a file modified within the last N hours (default 48) is kept, as are firmware, checkpoints,
 # sessions, photos and every other private-data entry outside RUN_ROOTS.
@@ -70,7 +70,7 @@ drop() {
   queue+=("$1")
 }
 
-# Citations: private-data paths in tracked files on main, plus lines unmerged branches add.
+# Citations include current ignored baselines in each workspace.
 declare -A cited=() under=()
 add_citation() {
   local c="${1%%[.,:;)]}" p
@@ -83,6 +83,7 @@ add_citation() {
 roots_alt="$(IFS='|'; echo "${RUN_ROOTS[*]}")"
 pattern="(private-data/[A-Za-z0-9._/+@=-]+|(^|[^A-Za-z0-9._-])($roots_alt)/[A-Za-z0-9._/+@=-]+)"
 add_citation scratch/reclaim
+add_citation verify-candidate/baselines
 while IFS= read -r c; do c="${c#[^A-Za-z0-9._-]}"; add_citation "${c#private-data/}"; done < <(
   {
     git -C "$root" grep --text -ohE "$pattern" "$main" || true
@@ -92,6 +93,9 @@ while IFS= read -r c; do c="${c#[^A-Za-z0-9._-]}"; add_citation "${c#private-dat
     done
     git -C "$root" worktree list --porcelain | sed -n 's/^worktree //p' | while IFS= read -r w; do
       [[ -d "$w" ]] && git -C "$w" grep --text --untracked -ohE "$pattern" 2>/dev/null || true
+      if [[ -d "$w/private-data/verify-candidate/baselines" ]]; then
+        find "$w/private-data/verify-candidate/baselines" -type f -exec grep -aohE "$pattern" {} + 2>/dev/null || true
+      fi
     done
   } | sort -u)
 say "citations: ${#cited[@]}"
@@ -118,7 +122,6 @@ for entry in "$root/private-data"/*; do
 done
 
 say "== worktrees"
-declare -A live=()
 removed_branches=()
 while IFS=$'\t' read -r dir head branch; do
   [[ "$dir" == "$root" ]] && continue
@@ -132,7 +135,6 @@ while IFS=$'\t' read -r dir head branch; do
     why="modified <${min_age_hours}h"
   fi
   if [[ -n "$why" ]]; then
-    live["${dir##*/}"]=1
     [[ "$why" != unmerged ]] && say "keep   ($why) $dir"
     continue
   fi
@@ -164,21 +166,22 @@ orphans() {
 orphans "$worktrees"
 
 say "== bazel output bases"
-for base in "$bazel_cache"/latent-image-*/; do
+bazel_deletions=()
+for base in "$bazel_cache"/latent-image-*/ "$bazel_cache"/_bazel_"$USER"/*/; do
   base="${base%/}"
-  suffix="${base##*/latent-image-}"
+  workspace=""
   keep=0
-  for w in "${!live[@]}"; do [[ "$suffix" == "$w" || "$suffix" == "$w"-* ]] && keep=1; done
+  for marker in "$base/DO_NOT_BUILD_HERE" "$base/execroot/DO_NOT_BUILD_HERE" "$base/install/DO_NOT_BUILD_HERE"; do
+    [[ -f "$marker" ]] || continue
+    workspace="$(< "$marker")"
+    if [[ -d "$workspace" ]]; then keep=1; break; fi
+  done
   ((keep)) && continue
-  [[ -f "$base/server/server.pid.txt" ]] && ((apply)) && kill "$(< "$base/server/server.pid.txt")" 2>/dev/null || true
-  drop "$base" "output base without a live worktree"
-done
-for base in "$bazel_cache"/_bazel_"$USER"/*/; do
-  base="${base%/}"
-  [[ -f "$base/DO_NOT_BUILD_HERE" ]] || continue
-  [[ -d "$(< "$base/DO_NOT_BUILD_HERE")" ]] && continue
-  [[ -f "$base/server/server.pid.txt" ]] && ((apply)) && kill "$(< "$base/server/server.pid.txt")" 2>/dev/null || true
-  drop "$base" "workspace $(< "$base/DO_NOT_BUILD_HERE") is gone"
+  # Unmarked bases have no recorded workspace to establish that it is gone.
+  [[ -n "$workspace" ]] || continue
+  before="${#queue[@]}"
+  drop "$base" "workspace $workspace is gone"
+  ((${#queue[@]} > before)) && bazel_deletions+=("$base")
 done
 
 if ((${#analysis_groups[@]})); then
@@ -198,6 +201,9 @@ fi
 ((kept_recent)) && say "kept $kept_recent paths modified within ${min_age_hours}h (--verbose lists them)"
 total="$(size_kb "${queue[@]}")"
 if ((apply)); then
+  for base in "${bazel_deletions[@]}"; do
+    [[ -f "$base/server/server.pid.txt" ]] && kill "$(< "$base/server/server.pid.txt")" 2>/dev/null || true
+  done
   for p in "${queue[@]}"; do printf '%s\0' "${p%/*}"; done | xargs -0 -r chmod u+w 2>/dev/null || true
   printf '%s\0' "${queue[@]}" | xargs -0 -r chmod -R u+w 2>/dev/null || true
   printf '%s\0' "${queue[@]}" | xargs -0 -r rm -rf --
