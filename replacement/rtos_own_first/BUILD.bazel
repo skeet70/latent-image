@@ -1,0 +1,72 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["regions.json"])
+
+[
+    xm1_rust_staticlib(
+        name = "own-first-%s-rust" % domain,
+        src = "src/lib.rs",
+        crate_name = "xm1_rtos_own_first",
+        data = ["src/entries.rs"],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "own-first-%s" % domain,
+        rust_staticlib = ":own-first-%s-rust" % domain,
+        entry = "xm1_rtos_own_first_slot_60",
+        extra_ldflags = [
+            "-Wl,--gc-sections",
+            "-Wl,--orphan-handling=error",
+        ],
+        link_script = "own-first-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
+
+genrule(
+    name = "own-first-host-tests-build",
+    srcs = [
+        "src/lib.rs",
+        "src/tests.rs",
+    ],
+    outs = ["own-first-host-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = [
+        "@lab_clang//:bin/clang",
+        "@lab_rustc//:bin/rustc",
+    ],
+)
+
+sh_test(
+    name = "own-first-host-tests",
+    size = "small",
+    srcs = ["//emulation:recovery-task-state-tests.sh"],
+    args = ["$(location :own-first-host-tests-build)"],
+    data = [":own-first-host-tests-build"],
+)
+
+sh_test(
+    name = "own-first-regions-tests",
+    size = "small",
+    srcs = ["check-regions.sh"],
+    args = [
+        "$(location @lab_jq//:bin/jq)",
+        "$(location regions.json)",
+        "$(location :own-first-a.symbols)",
+        "$(location :own-first-b.symbols)",
+    ],
+    data = [
+        "regions.json",
+        ":own-first-a.symbols",
+        ":own-first-b.symbols",
+        "@lab_jq//:bin/jq",
+    ],
+)

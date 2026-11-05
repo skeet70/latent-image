@@ -2,8 +2,10 @@
 
 -- | Writes the owned menu engine's Rust oracle cases from `--menu-observe` receipt directories.
 --
--- usage: menu-engine-cases --out FILE NAME=DIR...
--- Each DIR holds menu-observe.json and the menu-observe-config.json it names.
+-- usage: menu-engine-cases --out FILE NAME=DIR:EVENT[;EVENT...]...
+-- Each DIR holds menu-observe.json and the menu-observe-config.json it names. The events are the
+-- receipt's stage entries in order (`KIND,NODE,ID`, or `-KIND,NODE,ID` for a window that is not a
+-- case). A receipt with one case names it NAME, one with several NAME-1, NAME-2, ... by window.
 module Main where
 
 import Control.Monad (forM, when)
@@ -20,21 +22,24 @@ main = do
   arguments <- getArgs
   (outPath, specs) <- case arguments of
     "--out" : out : rest@(_ : _) -> pure (out, rest)
-    _ -> fail "usage: menu-engine-cases --out FILE NAME=DIR..."
+    _ -> fail "usage: menu-engine-cases --out FILE NAME=DIR:EVENT[;EVENT...]..."
   exists <- doesPathExist outPath
   when exists (fail (outPath ++ " already exists"))
-  cases <- forM specs $ \spec -> do
-    (name, dir) <- case break (== '=') spec of
-      (name, '=' : dir) | not (null name), not (null dir) -> pure (name, dir)
-      _ -> fail ("not NAME=DIR: " ++ spec)
+  cases <- fmap concat . forM specs $ \spec -> do
+    (name, dir, eventsText) <- case break (== '=') spec of
+      (name, '=' : rest) | not (null name), (dir, ':' : eventsText) <- break (== ':') rest, not (null dir) -> pure (name, dir, eventsText)
+      _ -> fail ("not NAME=DIR:EVENTS: " ++ spec)
+    events <- either (fail . ((name ++ " events: ") ++)) pure (parseEvents eventsText)
     configBytes <- B.readFile (dir ++ "/menu-observe-config.json")
     receiptBytes <- B.readFile (dir ++ "/menu-observe.json")
     config <- either (fail . ((name ++ " config: ") ++)) pure (J.eitherDecodeStrict configBytes)
     receipt <- either (fail . ((name ++ " receipt: ") ++)) pure (J.eitherDecodeStrict receiptBytes)
     let configSha = sha256Hex (sha256 configBytes)
         receiptSha = sha256Hex (sha256 receiptBytes)
-    extracted <- either (fail . ((name ++ ": ") ++)) pure (extract configSha config receipt)
-    putStrLn (name ++ ": service calls " ++ show (length (caseCalls extracted))
-      ++ ", snapshot writes " ++ show (length (caseSnapshotWrites extracted)) ++ ", last-move writes " ++ show (length (caseLastMoveWrites extracted)))
-    pure (name, receiptSha, configSha, extracted)
+    windows <- either (fail . ((name ++ ": ") ++)) pure (extract configSha config events receipt)
+    let named = [(if length windows == 1 then name else name ++ "-" ++ show index, extracted) | (index, Just extracted) <- zip [1 :: Int ..] windows]
+    forM named $ \(caseName, extracted) -> do
+      putStrLn (caseName ++ ": " ++ show (caseResult extracted) ++ ", service calls " ++ show (length (caseCalls extracted))
+        ++ ", snapshot writes " ++ show (length (caseSnapshotWrites extracted)) ++ ", last-move writes " ++ show (length (caseLastMoveWrites extracted)))
+      pure (caseName, receiptSha, configSha, extracted)
   writeNewFile outPath (rustCases cases)

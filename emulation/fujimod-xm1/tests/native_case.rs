@@ -46,6 +46,8 @@ struct Case {
     regions: Vec<Region>,
     functions: Vec<(u32, u32)>,
     stubs: Vec<Stub>,
+    /// The wire's CP14 identity token of a privileged case.
+    identity: Option<String>,
 }
 
 fn words(words: &[u32]) -> Vec<u8> {
@@ -72,6 +74,7 @@ impl Case {
             ],
             functions: vec![(CODE, 4 * code.len() as u32)],
             stubs: Vec::new(),
+            identity: None,
         }
     }
 
@@ -101,6 +104,13 @@ impl Case {
         self
     }
 
+    /// A `None` identity is the wire's `n` token.
+    fn privileged(mut self, cpsr: u32, identity: Option<u32>) -> Self {
+        self.registers[15] = cpsr;
+        self.identity = Some(identity.map_or("n".to_owned(), |value| format!("i {value:x}")));
+        self
+    }
+
     /// Four regions sharing page 0x4000: r, rw, r, an unmapped gap, then rw.
     fn shared_page(self) -> Self {
         self.region(0x4000, READ, &[0x44, 0x33, 0x22, 0x11])
@@ -116,6 +126,9 @@ impl Case {
         );
         let registers: Vec<String> = self.registers.iter().map(|value| format!("{value:x}")).collect();
         text += &registers.join(" ");
+        if let Some(identity) = &self.identity {
+            text += &format!("\n{identity}");
+        }
         text += &format!("\n{} {} {}\n", self.regions.len(), self.functions.len(), self.stubs.len());
         for region in &self.regions {
             let hex: String = region.bytes.iter().map(|byte| format!("{byte:02x}")).collect();
@@ -924,4 +937,201 @@ fn malformed_and_out_of_contract_wires_are_invalid_cases() {
     let observed = largest.run();
     observed.assert_returned();
     assert_eq!(observed.register("r0"), 0x41);
+}
+
+const SVC_ENTRY: u32 = 0x6000_00d3;
+const SYS_ENTRY: u32 = 0x0801_001f;
+const MRS_R1_CPSR: u32 = 0xe10f_1000;
+const MSR_CPSR_C_R1: u32 = 0xe121_f001;
+const MSR_CPSR_FC_R1: u32 = 0xe129_f001;
+const ORR_R1_I: u32 = 0xe381_1080;
+const BIC_R1_I: u32 = 0xe3c1_1080;
+const MRC_P14_R0_IDENTITY: u32 = 0xee12_0e10;
+
+#[test]
+fn privileged_status_writes_set_and_clear_i_in_svc_and_sys() {
+    for (entry, change, expected) in [
+        (0x4000_0013, ORR_R1_I, 0x4000_0093),
+        (SVC_ENTRY, BIC_R1_I, 0x6000_0053),
+        (SYS_ENTRY, ORR_R1_I, 0x0801_009f),
+        (0x0801_00df, BIC_R1_I, 0x0801_005f),
+    ] {
+        for write in [MSR_CPSR_C_R1, MSR_CPSR_FC_R1] {
+            let observed = Case::new(&[MRS_R1_CPSR, change, write, BX_LR]).privileged(entry, None).run();
+            observed.assert_returned();
+            assert_eq!(observed.register("cpsr"), expected, "{entry:#010x} {write:#010x}");
+            assert_eq!(observed.register("r1"), expected, "{entry:#010x} {write:#010x}");
+            assert_eq!(observed.register("sp"), SP);
+            assert_eq!(observed.register("lr"), EXIT);
+        }
+    }
+}
+
+#[test]
+fn privileged_cpsid_and_cpsie_change_only_i() {
+    // cpsid i; cpsie i
+    for (entry, word, expected) in [(0x4000_0013, 0xf10c_0080, 0x4000_0093), (SVC_ENTRY, 0xf108_0080, 0x6000_0053), (SYS_ENTRY, 0xf10c_0080, 0x0801_009f)] {
+        let observed = Case::new(&[word, BX_LR]).privileged(entry, None).run();
+        observed.assert_returned();
+        assert_eq!(observed.register("cpsr"), expected, "{word:#010x}");
+    }
+}
+
+#[test]
+fn privileged_status_writes_that_change_the_mode_or_set_t_are_refused_without_effects() {
+    for (entry, source) in [(SVC_ENTRY, 0x6000_00df), (SVC_ENTRY, 0x6000_00d0), (SVC_ENTRY, 0x6000_00f3), (SYS_ENTRY, 0x0801_0013), (SYS_ENTRY, 0x0801_003f)] {
+        // msr CPSR_c, r12; msr CPSR_fc, r12
+        for word in [0xe121_f00c, 0xe129_f00c] {
+            let case = Case::new(&[word, BX_LR]).privileged(entry, None).register(12, source);
+            assert_status_write_has_no_effect(&case, &case.run());
+        }
+    }
+}
+
+#[test]
+fn conditional_privileged_status_writes_check_the_value_only_when_the_condition_passes() {
+    // msreq CPSR_c, r12 with Z set and r12 naming SYS
+    let taken = Case::new(&[0x0121_f00c, BX_LR]).privileged(SVC_ENTRY, None).register(12, 0x6000_00df);
+    assert_status_write_has_no_effect(&taken, &taken.run());
+    // msrne CPSR_c, r12 with Z set
+    let skipped = Case::new(&[0x1121_f00c, BX_LR]).privileged(SVC_ENTRY, None).register(12, 0x6000_00df).run();
+    skipped.assert_returned();
+    assert_eq!(skipped.register("cpsr"), SVC_ENTRY);
+}
+
+#[test]
+fn privileged_cases_refuse_spsr_mode_changes_exception_returns_and_other_coprocessor_words() {
+    for word in [
+        0xe14f_0000, // mrs r0, spsr
+        0x114f_0000, // mrsne r0, spsr
+        0xe169_f00c, // msr SPSR_fc, r12
+        0xe361_f0d3, // msr SPSR_c, #0xd3
+        0xe321_f0d3, // msr CPSR_c, #0xd3
+        0xe125_f00c, // msr CPSR_sc, r12
+        0xe123_f00c, // msr CPSR_xc, r12
+        0xe121_f00f, // msr CPSR_c, pc
+        0xe100_0200, // mrs r0, r8_usr
+        0xe120_f20c, // msr r8_usr, r12
+        0xf102_0013, // cps #0x13
+        0xf10e_0093, // cpsid i, #0x13
+        0xf10c_00c0, // cpsid if
+        0xf10c_0100, // cpsid a
+        0xef00_0000, // svc #0
+        0xe1b0_f00e, // movs pc, lr
+        0xe25e_f004, // subs pc, lr, #4
+        0xe8fd_8000, // ldm sp!, {pc}^
+        0xe8c2_0001, // stmia r2, {r0}^
+        0xf8bd_0a00, // rfeia sp!
+        0xe160_006e, // eret
+        0xee12_0e30, // mrc p14, 0, r0, c2, c0, 1
+        0xee10_0e10, // mrc p14, 0, r0, c0, c0, 0
+        0xee32_0e10, // mrc p14, 1, r0, c2, c0, 0
+        0xee12_fe10, // mrc p14, 0, pc, c2, c0, 0
+        0xee02_0e10, // mcr p14, 0, r0, c2, c0, 0
+        0xfe12_0e10, // mrc2 p14, 0, r0, c2, c0, 0
+        0xee10_0fb0, // mrc p15, 0, r0, c0, c0, 5
+        0xec50_0e00, // mrrc p14, 0, r0, r0, c0
+        0xec40_0e00, // mcrr p14, 0, r0, r0, c0
+        0xed92_0e00, // ldc p14, c0, [r2]
+        0xed82_0e00, // stc p14, c0, [r2]
+        0xee12_0e00, // cdp p14, 1, c0, c2, c0, 0
+        0xe320_f003, // wfi
+    ] {
+        for entry in [SVC_ENTRY, SYS_ENTRY] {
+            let case = Case::new(&[word, BX_LR])
+                .privileged(entry, Some(0x4003))
+                .register(0, 9)
+                .register(2, STACK)
+                .register(12, entry);
+            let observed = case.run();
+            assert_eq!(observed.status(), Status::UnsupportedInstruction, "{word:#010x}");
+            assert_status_write_has_no_effect(&case, &observed);
+        }
+    }
+}
+
+#[test]
+fn the_cp14_identity_read_returns_the_case_identity() {
+    for identity in [0x4003, 0x8003, 0] {
+        let observed = Case::new(&[MRC_P14_R0_IDENTITY, BX_LR]).privileged(SVC_ENTRY, Some(identity)).register(0, 9).run();
+        observed.assert_returned();
+        assert_eq!(observed.register("r0"), identity);
+        assert_eq!(observed.instructions(), 2);
+    }
+    // mrc p14, 0, r7, c2, c0, 0 in SYS
+    let observed = Case::new(&[0xee12_7e10, BX_LR]).privileged(SYS_ENTRY, Some(0x14003)).run();
+    observed.assert_returned();
+    assert_eq!(observed.register("r7"), 0x14003);
+}
+
+#[test]
+fn a_condition_false_cp14_read_leaves_its_destination_and_continues() {
+    // mrcne / mrceq p14, 0, r0, c2, c0, 0 with Z set
+    for (word, expected) in [(0x1e12_0e10, 9), (0x0e12_0e10, 0x4003)] {
+        let observed = Case::new(&[word, ADD_R0_1, BX_LR]).privileged(0x4000_0013, Some(0x4003)).register(0, 9).run();
+        observed.assert_returned();
+        assert_eq!(observed.register("r0"), expected + 1, "{word:#010x}");
+        assert_eq!(observed.instructions(), 3);
+    }
+}
+
+#[test]
+fn a_cp14_read_without_a_case_identity_or_in_user_mode_is_refused() {
+    for case in [
+        Case::new(&[MRC_P14_R0_IDENTITY, BX_LR]).privileged(SVC_ENTRY, None).register(0, 9),
+        Case::new(&[MRC_P14_R0_IDENTITY, BX_LR]).register(0, 9),
+    ] {
+        let observed = case.run();
+        observed.assert_stopped(Status::UnsupportedInstruction, CODE);
+        assert_eq!(observed.register("r0"), 9);
+    }
+}
+
+const HELPER: u32 = 0x1040;
+
+/// push {r11, lr}; bl HELPER; pop {r11, pc}.
+fn identity_probe(identity: u32) -> Observed {
+    // mrc p14, 0, r1, c2, c0, 0; movw r2, #0x4003; cmp r1, r2; moveq r0, #0; movne r0, #1; bx lr
+    let helper = [MRC_P14_R0_IDENTITY | 1 << 12, 0xe304_2003, 0xe151_0002, 0x03a0_0000, 0x13a0_0001, BX_LR];
+    let mut case = Case::new(&[PUSH_LR | 1 << 11, branch(CODE + 4, HELPER, true), POP_PC | 1 << 11])
+        .code(HELPER, &helper)
+        .function(HELPER, 4 * helper.len() as u32);
+    for index in 0..13 {
+        case.registers[index] = 0x5a5a_5a5a;
+    }
+    case.privileged(SVC_ENTRY, Some(identity)).run()
+}
+
+#[test]
+fn an_identity_probe_returns_zero_only_for_identity_4003() {
+    for (identity, expected) in [(0x4003, 0), (0x4002, 1)] {
+        let observed = identity_probe(identity);
+        observed.assert_returned();
+        assert_eq!(observed.register("r0"), expected, "{identity:#x}");
+        assert_eq!(observed.register("r1"), identity);
+        assert_eq!(observed.register("r11"), 0x5a5a_5a5a);
+        assert_eq!(observed.register("sp"), SP);
+        assert_eq!(observed.register("cpsr") & 0xff, SVC_ENTRY & 0xff);
+    }
+}
+
+#[test]
+fn malformed_privileged_entries_are_invalid_cases() {
+    let valid = Case::new(&[BX_LR]).privileged(SVC_ENTRY, Some(0x4003));
+    assert_eq!(valid.run().status(), Status::Returned);
+    let mut cases: Vec<Case> = [0x33, 0x113, 0x12, 0x17, 0x1b, 0x11, 0x0100_0013, 0x0000_0213]
+        .into_iter()
+        .map(|cpsr| valid.clone().privileged(cpsr, Some(0x4003)))
+        .collect();
+    let mut missing = valid.clone();
+    missing.identity = None;
+    let mut unknown = valid.clone();
+    unknown.identity = Some("x".to_owned());
+    let mut user = Case::new(&[BX_LR]);
+    user.identity = Some("n".to_owned());
+    cases.extend([missing, unknown, user]);
+    for case in cases {
+        let observed = case.run();
+        assert_eq!(observed.status(), Status::InvalidCase, "{}", case.wire());
+    }
 }

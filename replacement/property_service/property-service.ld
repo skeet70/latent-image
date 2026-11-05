@@ -3,7 +3,7 @@ ENTRY(xm1_getter_stub)
 xm1_getter_exit = 0x624400;
 xm1_setter_exit = 0x630200;
 
-/* A contiguous run of setter arms that only owned properties' table words reach; admission derives it. */
+/* An owned run of setter arms that staging admits; admission derives the candidates. */
 MEMORY {
   CARRIER (rx) : ORIGIN = 0x62c4b0, LENGTH = 0x62d674 - 0x62c4b0
 }

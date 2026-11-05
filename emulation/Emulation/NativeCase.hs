@@ -106,7 +106,8 @@ loadCaseWith reader input = do
  path<-canonicalizePath input
  raw<-readRegularWith (pure()) False caseBytes path
  c<-either failH pure(decodeStrictIntegers raw)
- fields c "schema_version id origin provenance cpu artifacts entry exit registers regions functions stubs limits expected exclusions" "case"
+ let optional=["cp14_identity"|"cp14_identity" `elem` keys c]
+ fields c (unwords(words "schema_version id origin provenance cpu artifacts entry exit registers regions functions stubs limits expected exclusions"++optional)) "case"
  void(integer(get c "schema_version")1 1 "schema version")
  ensure(get c "origin" `elem` [s "synthetic",s "stock"]) "origin must be synthetic or stock; a stock case needs an independently known result"
  ensure(validId(get c "id")) "invalid case id"
@@ -118,7 +119,11 @@ loadCaseWith reader input = do
  fields(get c "registers") (unwords regs) "registers"
  initial<-bindings(get c "registers")regs
  let reg k=maybe 0 id(lookup k initial)
- ensure(reg "cpsr" .&. 0x0fffffff==0x10) "CPSR profile is user mode ARM, flags only"
+ profile<-if reg "cpsr" .&. 0x0fffffff==0x10 then pure UserEntry else do
+   mode<-maybe(failH "CPSR profile is user mode ARM with flags only, or SVC or SYS ARM with flags, Q, GE, I and F only")pure(privilegedMode(reg "cpsr"))
+   identity<-if null optional then pure Nothing else Just . Cp14Identity<$>address(get c "cp14_identity")
+   pure(PrivilegedEntry mode identity)
+ ensure(profile/=UserEntry || null optional) "a CP14 identity needs a privileged entry"
  ensure(reg "lr"==exit && reg "sp" `mod` 8==0) "LR must be exit and SP eight-byte aligned"
  fields(get c "limits") "instructions wall_ms" "limits"
  budget<-integer(get(get c "limits")"instructions")1 4000000 "instructions"
@@ -205,7 +210,7 @@ loadCaseWith reader input = do
   void(address(get event "address")); void(bindings(get event "inputs")(take 13 regs)); void(bindings(get event "outputs")(take 13 regs))
  exclusions<-arrayCheck(get c "exclusions")1 1000000 "coverage exclusions required"
  ensure(all(not.null.str)exclusions) "coverage exclusions required"
- let rows=["FUJI_NATIVE_V1","cortex-r5f-arm-le",unwords[hex entry,hex exit,show budget,show wall],unwords[hex(reg r)|r<-regs],unwords(map(show.length)[regionsInput,functionsInput,stubsInput])]
+ let rows=["FUJI_NATIVE_V1","cortex-r5f-arm-le",unwords[hex entry,hex exit,show budget,show wall],unwords[hex(reg r)|r<-regs]]++profileRows profile++[unwords(map(show.length)[regionsInput,functionsInput,stubsInput])]
      functionRows=[unwords[hex x,hex size]|(x,size)<-functions]
      stubRows=concat[unwords[hex t,show(length inputs),show(length outputs)]:[unwords[show(maybe 0 id(elemIndex k regs)),hex v]|bindingGroup<-[inputs,outputs],(k,v)<-bindingGroup]|(t,inputs,outputs)<-stubs]
      after=functionRows++stubRows
@@ -222,6 +227,19 @@ loadCaseWith reader input = do
 -- A wire region row up to its initial bytes.
 regionHead :: Region -> String
 regionHead r=unwords[hex(baseAddress r),hex(regionSize r),case str(get(description r)"permissions")of "r"->"1";"rw"->"3";_->"5"]
+-- The entry profile a case's CPSR names.
+data EntryProfile = UserEntry | PrivilegedEntry PrivilegedMode (Maybe Cp14Identity) deriving (Eq,Show)
+data PrivilegedMode = SupervisorMode | SystemMode deriving (Eq,Show)
+-- The value MRC p14, 0, Rt, c2, c0, 0 reads in a privileged case.
+newtype Cp14Identity = Cp14Identity Integer deriving (Eq,Show)
+-- SVC or SYS with only NZCVQ, GE, I and F besides the mode.
+privilegedMode :: Integer -> Maybe PrivilegedMode
+privilegedMode cpsr
+ | cpsr .&. complement 0xf80f00df/=0 = Nothing
+ | otherwise = case cpsr .&. 0x1f of 0x13->Just SupervisorMode; 0x1f->Just SystemMode; _->Nothing
+profileRows :: EntryProfile -> [String]
+profileRows UserEntry=[]
+profileRows(PrivilegedEntry _ identity)=[maybe "n"(\(Cp14Identity v)->"i "++hex v)identity]
 checkResult :: Value -> [Region] -> Value -> IO [String]
 checkResult c regions result=do
  let expected=get c "expected"
