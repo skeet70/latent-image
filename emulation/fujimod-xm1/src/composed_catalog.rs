@@ -96,6 +96,7 @@ kebab_name!(JoinKind, "join kind");
 impl PieceKind {
     /// The piece whose owned code may hold the pump sites.
     pub fn application_pump() -> Self { Self("application-pump".into()) }
+    pub fn task1_actor() -> Self { Self("task1-actor".into()) }
     pub fn image5_initializer() -> Self { Self("image5-initializer".into()) }
 }
 
@@ -1897,6 +1898,9 @@ pub struct Application {
 
 impl Application {
     pub fn site(&self, label: &SiteLabel) -> Option<&ApplicationSite> { self.sites.iter().find(|site| &site.label == label) }
+    pub fn role_pc(&self, retained: Pc, role: Role) -> Option<Pc> {
+        self.sites.iter().find(|site| site.retained_pc == retained).map(|site| site.pc(role))
+    }
     pub fn queue(&self, label: &QueueLabel) -> Option<&QueueSite> { self.queue_sites.iter().find(|site| &site.label == label) }
     pub fn layout(&self, domain: Domain) -> &TaskLayout { &self.task_layouts[domain.index()] }
     pub fn code_range(&self, label: CodeLabel) -> Option<&CodeRange> { self.code.iter().find(|range| range.label == label) }
@@ -1971,10 +1975,12 @@ fn application(raw: RawApplication, pieces: &[Piece]) -> Result<Application, App
         .collect();
     let owner = |pc: Pc| owned.iter().find(|(span, _)| span.holds(u64::from(physical_address(pc.0)))).map(|&(_, kind)| kind);
     let pump_piece = PieceKind::application_pump();
+    let actor_piece = PieceKind::task1_actor();
     let initializer_piece = PieceKind::image5_initializer();
     let exempt = |site: &ApplicationSite| match site.kind {
         SiteKind::Pump => owner(site.composed_pc) == Some(&pump_piece),
         SiteKind::Initializer => owner(site.composed_pc) == Some(&initializer_piece),
+        SiteKind::Task1 => owner(site.composed_pc) == Some(&actor_piece),
         _ => false,
     };
     let sites = raw.sites.iter().filter(|site| !exempt(site)).map(|site| site.composed_pc);

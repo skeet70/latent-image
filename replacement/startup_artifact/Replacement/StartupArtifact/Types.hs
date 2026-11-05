@@ -66,7 +66,7 @@ editBytes :: Edit -> B.ByteString
 editBytes (Edit _ bytes) = bytes
 
 data PieceKind = FirstStage | Record2Link | PrimaryPublisher | LoaderOrchestrationB | LoaderStartup | TaskSubmission | TaskStorage
-  | IdleTask | RootTask | Image5Producer | PlainProducer | GeneralHeap | ApplicationPump | Image5Initializer | TaskConstructors
+  | IdleTask | RootTask | Image5Producer | PlainProducer | GeneralHeap | ApplicationPump | Task1Actor | Image5Initializer | TaskConstructors
   | KernelSlotBodies
   deriving (Eq, Ord, Show, Enum, Bounded)
 
@@ -85,13 +85,14 @@ pieceKindName kind = case kind of
   PlainProducer -> "plain-producer"
   GeneralHeap -> "general-heap"
   ApplicationPump -> "application-pump"
+  Task1Actor -> "task1-actor"
   Image5Initializer -> "image5-initializer"
   TaskConstructors -> "task-constructors"
   KernelSlotBodies -> "kernel-slot-bodies"
 
 data Area = FirstStageArea | SecondaryStageArea | LoaderPrefixArea | InterfaceInitializerArea | CriticalPairArea | PrimaryInitializerArea
   | LoaderOrchestrationAArea | LoaderOrchestrationBArea | PhaseDispatcherArea | KernelInstallArea | TaskSubmissionArea | TaskStorageArea
-  | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | GeneralHeapArea | ApplicationPumpArea | Image5InitializerArea | TaskConstructorsArea
+  | IdleTaskArea | RootTaskArea | Image5ProducerArea | PlainProducerArea | GeneralHeapArea | ApplicationPumpArea | Task1ActorArea | Image5InitializerArea | TaskConstructorsArea
   | KernelSlotBodiesArea
   deriving (Eq, Ord, Show, Enum, Bounded)
 
@@ -115,8 +116,9 @@ areaName area = case area of
   PlainProducerArea -> "plain-producer"
   GeneralHeapArea -> "general-heap"
   ApplicationPumpArea -> "application-pump"
-  TaskConstructorsArea -> "task-constructors"
+  Task1ActorArea -> "task1-actor"
   Image5InitializerArea -> "image5-initializer"
+  TaskConstructorsArea -> "task-constructors"
   KernelSlotBodiesArea -> "kernel-slot-bodies"
 
 data FootprintBasis = AdmissionRead | RuntimePremise deriving (Eq, Ord, Show)
@@ -373,6 +375,7 @@ data PieceFacts
   | GeneralHeapFacts HeapFacts
   -- | The linked application pump image.
   | ApplicationPumpFacts LinkedBytes
+  | Task1ActorFacts LinkedBytes
   | Image5InitializerFacts LinkedBytes
   -- | Each loader's owned kernel slots and +0x1618 body.
   | KernelSlotFacts [KernelSlot] [KernelSlotBody]

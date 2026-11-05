@@ -159,7 +159,7 @@ compose registry source declared = do
   forM_ (pairs declared) $ \(left, right) ->
     forM_ (Set.toList (Set.intersection (pieceAreas left) (pieceAreas right))) $ \area ->
       Left (SharedArea (pieceKind left) (pieceKind right) area)
-  pieces <- image5Reads (yieldBoundaries declared)
+  pieces <- image5Reads (yieldBoundaries (task1PumpFrame declared))
   forM_ pieces $ \piece -> forM_ (pieceEdits piece) $ \change ->
     unless (coveredBy (editSpan change) (pieceCarriers piece)) (Left (EditOutsideCarriers (pieceKind piece) (editSpan change)))
   forM_ (pairs pieces) $ \(left, right) ->
@@ -191,6 +191,22 @@ compose registry source declared = do
   forM_ applicable $ \join -> forM_ (joinChecks join) $ \(HostCheck name check) ->
     unless (check evidence) (Left (HostProofFailed (joinName (joinKind join)) name))
   pure (Composition pieces applied targets)
+
+task1PumpFrame :: [Piece] -> [Piece]
+task1PumpFrame pieces
+  | not (any ((== Task1Actor) . pieceKind) pieces) = pieces
+  | otherwise = map adjust pieces
+  where
+    adjust piece
+      | pieceKind piece /= ApplicationPump = piece
+      | otherwise =
+          let catalog = pieceCatalog piece
+              EnumeratedWrites ranges _ = catalogWrites catalog
+              shifted = [WriteRange target (low+16) (high+16) | WriteRange target low high <- ranges]
+          in piece
+            { pieceCatalog = catalog {catalogWrites = EnumeratedWrites shifted
+                (Premised (Premise "the admitted task1 actor has a 32-byte frame and enters the pump at SP 0xa4cde0; retained stack backing remains an application qualification premise"))}
+            , piecePremises = [Premise "the task1-actor-pump join validates the emitted call and handback; retained hooks preserve r4-r11 and SP"] }
 
 -- | Drops each boundary that yields to an area another manifest piece
 -- claims, with the reads stopping at it.

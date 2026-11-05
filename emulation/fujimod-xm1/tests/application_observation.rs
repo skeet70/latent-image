@@ -806,6 +806,45 @@ fn an_owned_pump_passes_every_check_and_its_controls_refuse() {
 }
 
 #[test]
+fn an_owned_actor_uses_its_relocated_pump_handback() {
+    let mut scenario = Scenario::owned();
+    let mut value = owned_pump();
+    value["pieces"].as_array_mut().unwrap().push(json!({
+        "kind": "task1-actor", "areas": [], "carriers": [], "edits": [], "footprint": [], "premises": [],
+        "catalog": {"boundaries": [], "owned_code": [{"start": 0xbfb124u32, "end": 0xbfb1b8u32}, {"start": 0xc22f60u32, "end": 0xc2327cu32}],
+            "writes": {"allow": [], "basis": "proved", "premise": null}, "reads": []},
+    }));
+    let relocations = [(0xc23274u32, 0xc23200u32), (0xc23278, 0xc23204)];
+    for (before, after) in relocations {
+        let site = value["application"]["sites"].as_array_mut().unwrap().iter_mut()
+            .find(|site| site["retained_pc"] == json!(before)).unwrap();
+        site["composed_pc"] = json!(after);
+        for sample in &mut scenario.evidence.samples {
+            if physical(sample.pc.0) == before {
+                let alias = sample.pc.0 & ALIAS;
+                sample.pc = Pc(after | alias);
+                sample.code.address = Guest(after | alias);
+            }
+            if physical(sample.registers.lr.0) == before {
+                sample.registers.lr = Word(after | (sample.registers.lr.0 & ALIAS));
+            }
+        }
+    }
+    scenario.contract = parse(&value).unwrap();
+    scenario.receipt.application.as_mut().unwrap().evidence =
+        write_evidence(&scenario.directory, EVIDENCE, &scenario.evidence).unwrap();
+    assert_eq!(scenario.check(), Ok(()));
+    for sample in &mut scenario.evidence.samples {
+        if physical(sample.registers.lr.0) == 0xc23204 {
+            sample.registers.lr = Word(0xc23278);
+        }
+    }
+    scenario.receipt.application.as_mut().unwrap().evidence =
+        write_evidence(&scenario.directory, EVIDENCE, &scenario.evidence).unwrap();
+    assert_eq!(scenario.refusal(), Some(ApplicationCheck::Handback));
+}
+
+#[test]
 fn an_owned_initializer_passes_every_check_and_its_controls_refuse() {
     assert_eq!(Scenario::initializer_owned().check(), Ok(()));
     assert_eq!(Scenario::initializer_owned().control(Control::InitializerSkipsEd4afc).refusal(), Some(ApplicationCheck::Readiness));

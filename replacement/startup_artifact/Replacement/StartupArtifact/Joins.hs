@@ -34,6 +34,7 @@ import qualified Replacement.IdleTask.Artifact as IT
 import qualified Replacement.RootTask.Admission as RA
 import qualified Replacement.RootTask.Artifact as RT
 import qualified Replacement.StartupArtifact.Footprint.ApplicationPump as Pump
+import qualified Replacement.Task1Actor.Artifact as T1
 import qualified Replacement.StartupArtifact.Footprint.Producers as Producers
 import qualified Replacement.StartupArtifact.Footprint.RootTask as RootFootprint
 import Replacement.StartupArtifact.Application (PlainImage (..), plainImage)
@@ -63,7 +64,7 @@ data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | 
   | TaskCompositionOwnedCalls | DispatcherTaskComposition | PublisherTaskServices
   | DispatcherRootEntry | DispatcherIdleEntry | WrapperIdleErrorCallback | RootTaskServices
   | Image5ProducerServices | PlainProducerServices | GeneralHeapImage5Publication | GeneralHeapArenaClear
-  | ApplicationPumpServices | Image5InitializerServices | ConstructorInitializer
+  | ApplicationPumpServices | Task1ActorProducer | Task1ActorPump | Image5InitializerServices | ConstructorInitializer
   | ConstructorTaskSubmission | ConstructorImage5Producer
   | KernelSlotPrimaryPublisher | KernelSlotLoaderStartup | KernelSlotLoaderOrchestrationB | KernelSlotRecord2Link
   | KernelSlotTaskSubmission | KernelSlotTaskStorage | KernelSlotRootTask | KernelSlotImage5Producer | KernelSlotPlainProducer
@@ -91,10 +92,12 @@ instance JoinName JoinKind where
   joinName GeneralHeapImage5Publication = "general-heap-image5-publication"
   joinName GeneralHeapArenaClear = "general-heap-arena-clear"
   joinName ApplicationPumpServices = "application-pump-services"
+  joinName Task1ActorProducer = "task1-actor-producer"
+  joinName Task1ActorPump = "task1-actor-pump"
+  joinName Image5InitializerServices = "image5-initializer-services"
   joinName ConstructorTaskSubmission = "constructor-task-submission"
   joinName ConstructorImage5Producer = "constructor-image5-producer"
   joinName ConstructorInitializer = "constructor-initializer"
-  joinName Image5InitializerServices = "image5-initializer-services"
   joinName KernelSlotPrimaryPublisher = "kernel-slot-primary-publisher"
   joinName KernelSlotLoaderStartup = "kernel-slot-loader-startup"
   joinName KernelSlotLoaderOrchestrationB = "kernel-slot-loader-orchestration-b"
@@ -402,7 +405,7 @@ registeredJoins =
   , taskCompositionOwnedCalls, dispatcherTaskComposition, publisherTaskServices
   , dispatcherRootEntry, dispatcherIdleEntry, wrapperIdleErrorCallback, rootTaskServices
   , image5ProducerServices, plainProducerServices, generalHeapImage5Publication, generalHeapArenaClear
-  , applicationPumpServices, image5InitializerServices
+  , applicationPumpServices, task1ActorProducer, task1ActorPump, image5InitializerServices
   , constructorTaskSubmission, constructorImage5Producer, constructorInitializer Image5Initializer ] ++ kernelSlotJoins
 
 -- | The task wrapper, the record-2 critical pair and the task-storage transition joined as in
@@ -970,6 +973,41 @@ applicationPumpServices = Join ApplicationPumpServices (Set.fromList [Applicatio
   where
     (start, end) = Pump.pumpCarrier
 
+task1Artifact :: JoinEvidence -> Maybe T1.Artifact
+task1Artifact evidence = case [linked | Task1ActorFacts linked <- map pieceFacts (evidencePieces evidence)] of
+  [LinkedBytes bytes symbols] -> either (const Nothing) Just (T1.deriveArtifact bytes symbols)
+  _ -> Nothing
+
+task1CarriersMatch :: JoinEvidence -> Bool
+task1CarriersMatch evidence = case task1Artifact evidence of
+  Just artifact -> all (\(T1.Carrier (T1.CodeAddress low) (T1.CodeAddress high),bytes) ->
+    B.take (fromIntegral (high-low)) (B.drop (fromIntegral (low-targetBase Image5)) (targetOf (evidenceComposed evidence) Image5)) == bytes)
+    (T1.artifactCarriers artifact)
+  Nothing -> False
+
+task1ActorProducer :: Join JoinKind
+task1ActorProducer = Join Task1ActorProducer (Set.fromList [Task1Actor,Image5Producer])
+  [at Image5 low high | T1.Carrier (T1.CodeAddress low) (T1.CodeAddress high) <- T1.carriers]
+  (HostProof "record5 staging publishes the admitted once-duty and actor carriers; composed decoding checks the complete image5")
+  [HostCheck "task1-carriers-match-linked-artifact" task1CarriersMatch]
+
+task1ActorPump :: Join JoinKind
+task1ActorPump = Join Task1ActorPump (Set.fromList [Task1Actor,ApplicationPump])
+  [at Image5 0xbfbd20 0xbfbd24, at Image5 0xc23274 0xc23278]
+  (HostProof "the actor calls the separately admitted J8 pump at its fixed entry; its return is the actor's emitted handback site")
+  [ HostCheck "task1-carriers-match-linked-artifact" task1CarriersMatch
+  , HostCheck "task1-pump-call-and-handback" $ \evidence -> case task1Artifact evidence of
+      Just artifact -> case [site | site <- T1.semanticMap artifact, T1.callService site == T1.Pump] of
+        [T1.CallSite (T1.CodeAddress pc) _ (T1.CodeAddress handback)] ->
+          targetWord (evidenceComposed evidence) Image5 pc == Just (0xeb000000 + ((0xbfbd20-pc-8) `div` 4 `mod` 0x1000000))
+            && lookup 0xc23278 (T1.semanticSites artifact) == Just handback
+        _ -> False
+      Nothing -> False ]
+image5InitializerServices :: Join JoinKind
+image5InitializerServices = Join Image5InitializerServices (Set.fromList [Image5Initializer, Image5Producer])
+  [at Image5 0xd9856c 0xd986b0]
+  (ObservationQualified "record 5 publishes the owned initializer before its entry; private-data/scratch/j9/design.md section 3")
+  []
 constructorTaskSubmission :: Join JoinKind
 constructorTaskSubmission = Join ConstructorTaskSubmission (Set.fromList [TaskConstructors, TaskSubmission])
   [at Image4 0x725dd8 0x725ddc]
@@ -995,11 +1033,6 @@ constructorInitializer initializer = Join ConstructorInitializer (Set.fromList [
     | low <- [0xd80d44,0xec5350,0xdca604,0xdb63e0,0xed10b4,0xef8c90,0xed2b00,0x1055d10,0x69f000]]
   (ObservationQualified "the initializer calls the constructors at their stock entries; constructor ABI and status behavior require native qualification, and descriptor D+24 retains the initializer's caller-stack classification word")
   [HostCheck "initializer-constructor-entries-retained" $ \evidence -> all (constructorEntryPreserved evidence) TC.constructors]
-image5InitializerServices :: Join JoinKind
-image5InitializerServices = Join Image5InitializerServices (Set.fromList [Image5Initializer, Image5Producer])
-  [at Image5 0xd9856c 0xd986b0]
-  (ObservationQualified "record 5 publishes the owned initializer before its entry; private-data/scratch/j9/design.md section 3")
-  []
 -- * kernel-slot-bodies
 
 kernelSlotFacts :: JoinEvidence -> Maybe ([KernelSlot], [KernelSlotBody])
@@ -1230,3 +1263,4 @@ kernelSlotJoins =
   [ kernelSlotPublisher, kernelSlotLoaderStartup, kernelSlotOrchestrationB, kernelSlotRecord2Link, kernelSlotTaskSubmission, kernelSlotTaskStorage
   , closureJoin KernelSlotRootTask RootTask, closureJoin KernelSlotImage5Producer Image5Producer, closureJoin KernelSlotPlainProducer PlainProducer
   , kernelSlotGeneralHeap ]
+

@@ -19,6 +19,7 @@ import qualified FujiAF.UpdateContainer as U
 import Replacement.Record5Staging (decodeRecord, stageRecord5, stagedRecord5Dat)
 import qualified Replacement.Image5Init.Admission as Init
 import qualified Replacement.Image5Init.Artifact as InitArtifact
+import qualified Replacement.Task1Actor.Artifact as Task1
 import Replacement.StartupArtifact.Adapters
 import Replacement.StartupArtifact.Application (RoleImages (..), SiteMap (..), application, plainImage)
 import Replacement.StartupArtifact.AttachState (AttachSources (..), attachStateValue)
@@ -52,11 +53,11 @@ loadCanonical tools scratch path = do
   (image4, image5) <- decodeImages tools scratch (U.parsedParts parsed)
   refused (canonical dat image4 image5)
 
--- | The general heap links one flat image from 0x89cda4 to its image-5 thunk (3,493,540 bytes;
--- replacement/general_heap/Replacement/GeneralHeap/Artifact.hs:75); every other piece fits 64 KiB.
+-- | The heap and task1 flat images span separated carriers.
 imageLimit :: PieceKind -> Int
 imageLimit kind = case kind of
   GeneralHeap -> 4 * 1024 * 1024
+  Task1Actor -> 0x30000
   _ -> 0x10000
 
 loadPieces :: Canonical -> Manifest -> IO [Piece]
@@ -145,6 +146,10 @@ applicationSiteMap pieces = SiteMap . Map.fromList . concat <$> mapM mapped piec
   where
     mapped piece = case pieceFacts piece of
       ApplicationPumpFacts _ -> pure [(Pc pc,(ApplicationPump,Pc pc)) | pc <- [0xbfbd20,0xbfbd24..0xbfbd3c]]
+      Task1ActorFacts (LinkedBytes bytes symbols) -> do
+        artifact <- either (Left . AdapterRefused Task1Actor . T.pack . show) pure (Task1.deriveArtifact bytes symbols)
+        let held pc = any (\(Task1.Carrier (Task1.CodeAddress low) (Task1.CodeAddress high)) -> low <= pc && pc < high) Task1.carriers
+        pure [(Pc before,(Task1Actor,Pc after)) | (before,after) <- Task1.semanticSites artifact, held before]
       Image5InitializerFacts (LinkedBytes bytes symbols) -> do
         artifact <- either (Left . AdapterRefused Image5Initializer . T.pack . show) pure (InitArtifact.deriveArtifact bytes symbols)
         let proof = InitArtifact.artifactProof artifact

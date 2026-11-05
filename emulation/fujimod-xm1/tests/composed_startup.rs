@@ -2107,7 +2107,6 @@ fn an_expected_read_compares_each_roles_digest_with_its_own_expectation() {
     value["pieces"][1]["catalog"]["reads"][0]["differs"] = json!("owned");
     assert_eq!(parse(&value).err(), Some(CatalogRefusal::ReadExpectation(label("primary-publisher/table-a"))));
 }
-
 const RECORD: &str = "E-STARTUP-J1-COMPOSED-NATURAL-150";
 
 fn qualifications(rows: Value) -> Vec<u8> { serde_json::to_vec(&json!({"schema": 1, "contracts": rows})).unwrap() }

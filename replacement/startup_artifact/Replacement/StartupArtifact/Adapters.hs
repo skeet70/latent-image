@@ -6,7 +6,7 @@ module Replacement.StartupArtifact.Adapters
   ( LinkedImage (..), ImageBytes (..), SymbolBytes (..), PieceImages (..)
   , deriveFirstStage, deriveRecord2Link, derivePrimaryPublisher, deriveLoaderOrchestrationB, deriveLoaderStartup, derivePieceOf
   , deriveTaskSubmission, deriveTaskStorage, deriveIdleTask, deriveRootTask, deriveImage5Producer, derivePlainProducer, deriveGeneralHeap
-  , deriveApplicationPump, deriveImage5Initializer, deriveTaskConstructors
+  , deriveApplicationPump, deriveTask1Actor, deriveImage5Initializer, deriveTaskConstructors
   , ProducerCall (..), producerCallBoundaries, callerReturn
   , RegionsBytes (..), deriveKernelSlotBodies, slotCallerProblems
   ) where
@@ -30,6 +30,7 @@ import qualified FujiAF.UpdateContainer as U
 import Numeric (showHex)
 import qualified Replacement.ApplicationPump.Admission as APA
 import qualified Replacement.ApplicationPump.Artifact as AP
+import qualified Replacement.Task1Actor.Artifact as T1
 import qualified Replacement.Image5Init.Admission as IIA
 import qualified Replacement.Image5Init.Artifact as II
 import qualified Replacement.StartupArtifact.Footprint.Image5Init as InitFootprint
@@ -68,6 +69,7 @@ import qualified Replacement.PlainLoad.Admission as PLA
 import qualified Replacement.PlainLoad.Artifact as PL
 import qualified Replacement.StartupArtifact.Footprint.ApplicationPump as PumpFootprint
 import qualified Replacement.StartupArtifact.Footprint.Producers as ProducersFootprint
+import qualified Replacement.StartupArtifact.Footprint.Task1Actor as Task1Footprint
 import qualified Replacement.StartupArtifact.Footprint.GeneralHeap as HeapFootprint
 import Replacement.StartupArtifact.Application (PlainImage (..), plainImage)
 import qualified Replacement.GeneralHeap.Admission as HA
@@ -122,8 +124,9 @@ derivePieceOf source images = case images of
     PlainProducer -> derivePlainProducer source image
     GeneralHeap -> deriveGeneralHeap source image
     ApplicationPump -> deriveApplicationPump source image
-    TaskConstructors -> deriveTaskConstructors source image
+    Task1Actor -> deriveTask1Actor source image
     Image5Initializer -> deriveImage5Initializer source image
+    TaskConstructors -> deriveTaskConstructors source image
     KernelSlotBodies -> Left (AdapterRefused kind "kernel-slot-bodies takes two linked loaders and regions.json")
 
 admitted :: PieceKind -> Either String a -> Either Refusal a
@@ -1214,6 +1217,51 @@ deriveApplicationPump source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBy
         (Catalog [] code writes []) (ApplicationPumpFacts (LinkedBytes bin symbolBytes))
   derivePiece source declaration (StagedOutput (canonicalDat source) Nothing (Just (AP.stagedBytes staged)))
 
+deriveTask1Actor :: Canonical -> LinkedImage -> Either Refusal Piece
+deriveTask1Actor source (LinkedImage (ImageBytes bin) (SymbolBytes symbols)) = do
+  let kind = Task1Actor
+      shown :: Show e => Either e a -> Either Refusal a
+      shown = first (AdapterRefused kind . T.pack . show)
+  artifact <- shown (T1.deriveArtifact bin symbols)
+  original <- shown (T1.canonicalSource (canonicalDat source) (targetOf (canonicalTargets source) Image5))
+  image <- shown (T1.stageImage5 original artifact)
+  ranges <- mapM (\(T1.Carrier (T1.CodeAddress low) (T1.CodeAddress high)) -> spanOf kind Image5 low high) T1.carriers
+  code <- concat <$> mapM (\(T1.Carrier (T1.CodeAddress low) _,bytes) -> ownedCode kind low (low + fromIntegral (B.length bytes))) (T1.emittedCarriers artifact)
+  let writes = EnumeratedWrites
+        ([WriteRange PhysicalTarget low high | (low,high) <- [(0x944580,0x94458a),(0x94f5e0,0x94f5e4),(0x950148,0x95014c),(0x95200c,0x952010),(0x954d68,0x954d6c),(0x972e84,0x972e88)]]
+          ++ [WriteRange PhysicalTarget 0xa4cdc0 0xa4ce00])
+        (Premised (Premise "task1 entry SP 0xa4ce00, 32-byte actor and once-duty frames; retained service effects are not proved by staging"))
+      declaration = PieceDeclaration kind (Set.singleton Task1ActorArea) ranges
+        (Task1Footprint.footprint artifact)
+        [Premise "host composition authenticates carriers and direct service boundaries; application observer qualification is separate"]
+        (Catalog [] code writes []) (Task1ActorFacts (LinkedBytes bin symbols))
+  derivePiece source declaration (StagedOutput (canonicalDat source) Nothing (Just image))
+deriveImage5Initializer :: Canonical -> LinkedImage -> Either Refusal Piece
+deriveImage5Initializer source (LinkedImage (ImageBytes bin) (SymbolBytes symbols)) = do
+  let kind = Image5Initializer
+      shown :: Show e => Either e a -> Either Refusal a
+      shown = first (AdapterRefused kind . T.pack . show)
+  artifact <- shown (II.deriveArtifact bin symbols)
+  staged <- shown (II.stageImage5 (targetOf (canonicalTargets source) Image5) artifact)
+  carrier <- spanOf kind Image5 0xd9856c 0xd986b0
+  code <- ownedCode kind 0xd9856c 0xd986b0
+  primary <- coreSet kind [Core0]
+  once <- limit kind 1
+  let stock = [0xd985b4,0xd985b8,0xd985c0,0xd985c4,0xd985d4,0xd985e0,0xd985e4,0xd985e8,0xd985ec,0xd98600,0xd98614,0xd98618,0xd98628,0xd98638,0xd98648,0xd9865c,0xd98660,0xd98670,0xd98680,0xd98690,0xd986a8]
+      boundary name before after stop = do
+        named <- label kind name
+        pure (Boundary named SiteBoundary primary (Pc after) (Just (Pc before)) stop ComparePresence once Nothing)
+  calls <- sequence [boundary ("call-" <> (if n < (10 :: Int) then "0" else "") <> T.pack (show n)) before (IIA.callInstruction owned) False | (n,before,owned) <- zip3 [1..] stock (IIA.proofCallSites (II.artifactProof artifact))]
+  entry <- boundary "entry" 0xd985a4 0xd985a4 False
+  returned <- boundary "return" 0x69d2e4 0x69d2e4 True
+  let writes = EnumeratedWrites [WriteRange PhysicalTarget 0xa25588 0xa255a0]
+        (Premised (Premise "entry SP 0xa255a0 in both roles of J8 v1; private-data/scratch/j9/design.md section 3"))
+      declaration = PieceDeclaration kind (Set.singleton Image5InitializerArea) [carrier] InitFootprint.footprint
+        [ Premise "retained services preserve SP and r4-r11 and return in A32; private-data/scratch/j9/spec.md"
+        , Premise "0x725dd8 observes unwritten descriptor D+24 only by equality with 0xa5f0a5f0; the admitted frame preserves that classification, not the residue bytes; private-data/scratch/j9/design.md section 2 and spec.md sections 2.1 and 3.3"
+        , Premise "retained callee stack demand below the owned frame is not proved" ]
+        (Catalog (entry:calls ++ [returned {boundaryKind = ReturnBoundary}]) code writes []) (Image5InitializerFacts (LinkedBytes bin symbols))
+  derivePiece source declaration (StagedOutput (canonicalDat source) Nothing (Just staged))
 deriveTaskConstructors :: Canonical -> LinkedImage -> Either Refusal Piece
 deriveTaskConstructors source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBytes)) = do
   let kind = TaskConstructors
@@ -1251,32 +1299,6 @@ deriveTaskConstructors source (LinkedImage (ImageBytes bin) (SymbolBytes symbolB
         (TaskConstructorsFacts (LinkedBytes bin symbolBytes))
       (image4,image5) = TC.stageImages original artifact
   derivePiece source declaration (StagedOutput (canonicalDat source) (Just image4) (Just image5))
-deriveImage5Initializer :: Canonical -> LinkedImage -> Either Refusal Piece
-deriveImage5Initializer source (LinkedImage (ImageBytes bin) (SymbolBytes symbols)) = do
-  let kind = Image5Initializer
-      shown :: Show e => Either e a -> Either Refusal a
-      shown = first (AdapterRefused kind . T.pack . show)
-  artifact <- shown (II.deriveArtifact bin symbols)
-  staged <- shown (II.stageImage5 (targetOf (canonicalTargets source) Image5) artifact)
-  carrier <- spanOf kind Image5 0xd9856c 0xd986b0
-  code <- ownedCode kind 0xd9856c 0xd986b0
-  primary <- coreSet kind [Core0]
-  once <- limit kind 1
-  let stock = [0xd985b4,0xd985b8,0xd985c0,0xd985c4,0xd985d4,0xd985e0,0xd985e4,0xd985e8,0xd985ec,0xd98600,0xd98614,0xd98618,0xd98628,0xd98638,0xd98648,0xd9865c,0xd98660,0xd98670,0xd98680,0xd98690,0xd986a8]
-      boundary name before after stop = do
-        named <- label kind name
-        pure (Boundary named SiteBoundary primary (Pc after) (Just (Pc before)) stop ComparePresence once Nothing)
-  calls <- sequence [boundary ("call-" <> (if n < (10 :: Int) then "0" else "") <> T.pack (show n)) before (IIA.callInstruction owned) False | (n,before,owned) <- zip3 [1..] stock (IIA.proofCallSites (II.artifactProof artifact))]
-  entry <- boundary "entry" 0xd985a4 0xd985a4 False
-  returned <- boundary "return" 0x69d2e4 0x69d2e4 True
-  let writes = EnumeratedWrites [WriteRange PhysicalTarget 0xa25588 0xa255a0]
-        (Premised (Premise "entry SP 0xa255a0 in both roles of J8 v1; private-data/scratch/j9/design.md section 3"))
-      declaration = PieceDeclaration kind (Set.singleton Image5InitializerArea) [carrier] InitFootprint.footprint
-        [ Premise "retained services preserve SP and r4-r11 and return in A32; private-data/scratch/j9/spec.md"
-        , Premise "0x725dd8 observes unwritten descriptor D+24 only by equality with 0xa5f0a5f0; the admitted frame preserves that classification, not the residue bytes; private-data/scratch/j9/design.md section 2 and spec.md sections 2.1 and 3.3"
-        , Premise "retained callee stack demand below the owned frame is not proved" ]
-        (Catalog (entry:calls ++ [returned {boundaryKind = ReturnBoundary}]) code writes []) (Image5InitializerFacts (LinkedBytes bin symbols))
-  derivePiece source declaration (StagedOutput (canonicalDat source) Nothing (Just staged))
 -- | Replacement.RtosOwnFirst.Artifact over //replacement/rtos_own_first:own-first-a and own-first-b and
 -- //replacement/rtos_own_first:regions.json, staged through the pre-table loader path.
 deriveKernelSlotBodies :: Canonical -> LinkedImage -> LinkedImage -> RegionsBytes -> Either Refusal Piece
@@ -1396,3 +1418,4 @@ slotCallerProblems targets slots published =
                  , Just reason <- [KS.liveAfter word entries offsets published KS.EnteredDirectly (differsAt target) (site + 4)] ]
     liveSlot = [ (site, reason) | KS.SlotCall site offset <- KS.slotCalls (targetOf targets) whole, offset `elem` offsets
                , Just reason <- [KS.liveAfter word entries offsets published KS.EnteredThroughRoot (differsOf offset) (site + 4)] ]
+
