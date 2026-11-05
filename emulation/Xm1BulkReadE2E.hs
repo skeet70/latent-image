@@ -176,7 +176,7 @@ run options = do
   watch <- either (ioError . userError) pure (mkRamWatch d1Windows singlePass)
   let Workspace workspacePath = root
       checkpoints = workspacePath </> "private-data" </> "emulator-checkpoints" </>
-        (if optEngine options == FujiMod then "xm1-bulk-read-fujimod" else "xm1-bulk-read")
+        (if optEngine options == FujiMod then "xm1-ram-push-fujimod" else "xm1-bulk-read")
       fallback = ReplacedRuntime ("emulator-runtimes" </> "xm1-bulk-read-e2e")
   (destination, executable, checkpointArguments) <- case optEngine options of
     FujiMod -> do

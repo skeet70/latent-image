@@ -219,7 +219,7 @@ run options = do
         [ "--run", fujimodRun, "--boot-rom", destination </> Runtime.stagedRomPath
         , "--installed-dat", stagedFirmwarePath, "--adjustment-nand", nand
         , "--sd-card-image", card, "--output", receipt </> "bridge"
-        , "--ram-push-checkpoints", workspace </> "private-data/emulator-checkpoints/xm1-af-ring-fujimod" ]
+        , "--ram-push-checkpoints", workspace </> "private-data/emulator-checkpoints/xm1-ram-push-fujimod" ]
         ++ ["--fresh-boot" | optFresh options])
     Retained -> do
       staged <- stageViewerRuntime root Nothing fallback (Firmware <$> optFirmware options) StageStockOriginal

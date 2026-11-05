@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "utxsLrB65hf387LOvJQ161+IsUrTMxUuqJMkzVZM7cs=",
+        "bzlTransitiveDigest": "ERzjlYSfXqwBncQDRShWN9QmuVyToR2kP5l7xBrVyWM=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -526,9 +526,11 @@
                 "@@//emulation:fujimod-xm1/src/application_observation/planes.rs": "//emulation:fujimod-xm1/src/application_observation/planes.rs",
                 "@@//emulation:fujimod-xm1/src/application_observation/readiness.rs": "//emulation:fujimod-xm1/src/application_observation/readiness.rs",
                 "@@//emulation:fujimod-xm1/src/application_observation/scenarios.rs": "//emulation:fujimod-xm1/src/application_observation/scenarios.rs",
+                "@@//emulation:fujimod-xm1/src/attach_boot.rs": "//emulation:fujimod-xm1/src/attach_boot.rs",
                 "@@//emulation:fujimod-xm1/src/attach_relations.rs": "//emulation:fujimod-xm1/src/attach_relations.rs",
                 "@@//emulation:fujimod-xm1/src/attach_state.rs": "//emulation:fujimod-xm1/src/attach_state.rs",
                 "@@//emulation:fujimod-xm1/src/bridge.rs": "//emulation:fujimod-xm1/src/bridge.rs",
+                "@@//emulation:fujimod-xm1/src/checkpoint.rs": "//emulation:fujimod-xm1/src/checkpoint.rs",
                 "@@//emulation:fujimod-xm1/src/composed_catalog.rs": "//emulation:fujimod-xm1/src/composed_catalog.rs",
                 "@@//emulation:fujimod-xm1/src/composed_mutations.rs": "//emulation:fujimod-xm1/src/composed_mutations.rs",
                 "@@//emulation:fujimod-xm1/src/composed_receipt.rs": "//emulation:fujimod-xm1/src/composed_receipt.rs",
@@ -632,6 +634,7 @@
                 "@@//emulation:fujimod-xm1/src/updater.rs": "//emulation:fujimod-xm1/src/updater.rs",
                 "@@//emulation:fujimod-xm1/src/witness.rs": "//emulation:fujimod-xm1/src/witness.rs",
                 "@@//emulation:fujimod-xm1/tests/application_observation.rs": "//emulation:fujimod-xm1/tests/application_observation.rs",
+                "@@//emulation:fujimod-xm1/tests/checkpoint.rs": "//emulation:fujimod-xm1/tests/checkpoint.rs",
                 "@@//emulation:fujimod-xm1/tests/composed_startup.rs": "//emulation:fujimod-xm1/tests/composed_startup.rs",
                 "@@//emulation:fujimod-xm1/tests/data/composed-contract-v4.json": "//emulation:fujimod-xm1/tests/data/composed-contract-v4.json",
                 "@@//emulation:fujimod-xm1/tests/exclusive_monitor.rs": "//emulation:fujimod-xm1/tests/exclusive_monitor.rs",

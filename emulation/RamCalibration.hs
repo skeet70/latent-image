@@ -226,7 +226,7 @@ capture engine datSupplied nandSupplied output = do
   (executable, working, arguments) <- case engine of
     FujiMod -> pure (fujimodRamPushBridge, directory,
       ["--run", fujimodRun, "--boot-rom", rom, "--installed-dat", dat, "--adjustment-nand", nand,
-       "--output", directory </> "bridge", "--ram-push-checkpoints", directory </> "checkpoints", "--fresh-boot"])
+       "--output", directory </> "bridge", "--ram-push-checkpoints", resolve root "private-data/emulator-checkpoints/xm1-ram-push-fujimod-cardless"])
     Retained -> do
       staged <- stageViewerRuntime root Nothing (UniqueRuntime "ram-calibration-retained") (Just (Firmware dat)) StageStockOriginal
       let Python python = stagedPython staged

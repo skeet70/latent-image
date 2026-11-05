@@ -4,6 +4,8 @@
 //! `cardless-ram-push-bridge` (without), with attach and install checkpoints
 //! saved as FujiMod session snapshots.
 use fujimod_xm1::adjustment::AdjustmentNand;
+use fujimod_xm1::attach_boot::{Attachment, attach};
+use fujimod_xm1::checkpoint::{BootIdentity, CheckpointKey, initialized_reset};
 use fujimod_xm1::record_medium::RecordMedium;
 use fujimod_xm1::bridge::{self, Inputs, SNAPSHOT, emit, load_card, menu_value, read, restore, sha256, write};
 use fujimod_xm1::ff80::{Ff80, RENDEZVOUS_LOCKED, RendezvousInputs, Transfer, encode_hex};
@@ -12,12 +14,12 @@ use fujimod_xm1::machine::{KeyPulse, Machine, ReleaseSegment, RunOutcome, SCANNE
 use fujimod_xm1::modal_trace::BeginRequest as ModalBeginRequest;
 use fujimod_xm1::render::MAX_SETTLE;
 use fujimod_xm1::run::{self, NodeName};
-use fujimod_xm1::reset_observation::{AttachPhase, ResetObserver, Spec as ResetObservationSpec};
+use fujimod_xm1::reset_observation::{ResetObserver, Spec as ResetObservationSpec};
 use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
 use fujimod_emulator::board::preservation::{
     PhysicalRange, Preservation, PreservationState, ProtectedRanges,
 };
-use fujimod_xm1::sd_host::{Backing, MediaImage, SectorAddress, SectorCount};
+use fujimod_xm1::sd_host::{Backing, SectorAddress, SectorCount};
 use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, InstructionCount, SiteRead};
 use serde::{Deserialize, Serialize};
 use fujimod_emulator_devices::Device;
@@ -39,18 +41,12 @@ const ATTACH_RECORD: &str = "ram-push-attach.json";
 const INSTALL_RECORD: &str = "ram-push-install.json";
 const RESET_OBSERVATION_RECORD: &str = "reset-observation.json";
 const CHECKPOINT_SCHEMA: u32 = 1;
-const FIRST_START_SCREEN: u64 = 100_000_000;
-const FIRST_START_PULSE: KeyPulse = KeyPulse::instructions(8_000_000, 8_000_000);
-const LIVE_VIEW_SETTLE: u64 = 40_000_000;
 const MODE_DIAL_SETTLE: u64 = 40_000_000;
 const GPIO_HOLD: u64 = 8_000_000;
 const GPIO_PULSE: KeyPulse = KeyPulse::instructions(GPIO_HOLD, 8_000_000);
 /// `tools/probe_setup_menus.py` DIAL_PULSE.
 const DIAL_PULSE: KeyPulse = KeyPulse::instructions(4_000_000, 1_000_000);
 const MAX_PHASE: u64 = 15_000_000;
-/// `tools/continue_rec_scanout.py` ATTACH_HOLD_PULSE: the held key's lead before the cable rises
-/// and its settle after release.
-const ATTACH_HOLD_PULSE: u64 = 8_000_000;
 const MAX_READ: usize = 4096;
 
 /// Sites the retained bridge arms for every session.
@@ -146,16 +142,6 @@ struct BootKey {
     inputs: Value,
 }
 
-/// The SHA-256 naming an attach checkpoint and prefixing its install checkpoints.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(transparent)]
-struct CheckpointKey(String);
-
-impl std::fmt::Display for CheckpointKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
 
 /// How the bridge reached its first command, as `EmulatorUsb.BootStart` reads it.
 #[derive(Clone, Copy, Serialize)]
@@ -168,35 +154,17 @@ enum StartKind {
 }
 
 fn boot_key(arguments: &Arguments, inputs: &Inputs, adjustment: &[u8], records: Option<&[u8]>) -> Result<BootKey, String> {
-    let bridge = read(&std::env::current_exe().map_err(|e| e.to_string())?)?;
-    let card: Option<&MediaImage> = inputs.card.as_ref().map(|card| &card.image);
-    let mut keyed = json!({
-        "installed_dat": sha256(&inputs.update),
-        "adjustment_nand": sha256(adjustment),
-        "run_document": sha256(&inputs.document_bytes),
-        "boot_rom": sha256(&inputs.boot_rom),
-        "card_present": card.is_some(),
-    });
-    if let Some(card) = card {
-        keyed["menu_sd_image"] = json!(card.sha256);
-    }
-    if let Some(records) = records {
-        keyed["record_nand"] = json!(sha256(records));
-    }
-    if let Some(key) = arguments.attach_hold {
-        keyed["attach_hold_key"] = json!(key);
-    }
-    let inputs = json!({
-        "schema": CHECKPOINT_SCHEMA,
-        "mode": if card.is_some() { "fujimod-card-volatile-ram-bank" } else { "fujimod-cardless-volatile-ram-bank" },
-        "inputs": keyed,
-        "bridge": {"sha256": sha256(&bridge)},
-        "paths": {"installed_dat": arguments.installed_dat, "adjustment_nand": arguments.adjustment_nand,
-            "record_nand": arguments.record_nand, "menu_sd_image": arguments.sd_card_image},
-    });
-    let mut identity = inputs.clone();
-    identity.as_object_mut().ok_or("key document")?.remove("paths");
-    Ok(BootKey { key: CheckpointKey(sha256(identity.to_string().as_bytes())), inputs })
+    let procedure = serde_json::to_vec(&json!({
+        "source": include_str!("attach_boot.rs"),
+        "attach_hold_key": arguments.attach_hold,
+        "rendezvous": if inputs.card.is_some() { "dial-push-write-protect" } else { "dial-push" },
+        "save": "release-rendezvous-disarm-checkpoint-rearm-v1",
+    })).map_err(|error| error.to_string())?;
+    let identity = BootIdentity::new(
+        &inputs.document_bytes, &inputs.update, &inputs.boot_rom, adjustment,
+        inputs.card.as_ref().map(|card| card.image.sha256.as_str()), &procedure,
+    ).with_record_nand(records);
+    Ok(BootKey { key: identity.key(), inputs: identity.document() })
 }
 
 /// The host record of an install checkpoint, kept whole for the e2e.
@@ -227,7 +195,8 @@ struct AttachRecord {
 }
 
 fn install_name(key: &CheckpointKey, manifest: &str, runtime: &str) -> String {
-    format!("{key}-installed-{}", sha256(format!("{manifest}:{runtime}").as_bytes()))
+    static PROCEDURE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| sha256(include_bytes!("ram_push.rs")));
+    format!("{key}-installed-{}", sha256(format!("{manifest}:{runtime}:{}", &*PROCEDURE).as_bytes()))
 }
 
 fn install_checkpoints(root: &Path, key: &CheckpointKey) -> Result<Vec<(PathBuf, InstallRecord)>, String> {
@@ -245,6 +214,9 @@ fn install_checkpoints(root: &Path, key: &CheckpointKey) -> Result<Vec<(PathBuf,
             if record.schema != CHECKPOINT_SCHEMA || record.key != *key {
                 return Err(format!("{} differs from key {key}", path.display()));
             }
+            if path.file_name().and_then(|name| name.to_str()) != Some(install_name(key, &record.manifest_sha256, &record.runtime_sha256).as_str()) {
+                continue;
+            }
             found.push((std::fs::canonicalize(&path).map_err(|e| e.to_string())?, record));
         }
     }
@@ -258,48 +230,6 @@ fn save_checkpoint(host: &mut Ff80, root: &Path, name: &str, record_file: &str, 
     bridge::save_checkpoint(&mut host.machine, root, name, record_file, record)
 }
 
-struct Attachment {
-    pre_attach: Value,
-    device: Vec<u8>,
-    configuration: Vec<u8>,
-}
-
-/// Boots to live view past the first-start screens and enumerates ff80. A held key is pressed
-/// `ATTACH_HOLD_PULSE` before the cable rises and released after enumeration. An observer ends a
-/// watch segment at each phase.
-fn attach(machine: Machine, rendezvous: RendezvousInputs, hold: Option<RouteKey>, mut observer: Option<&mut ResetObserver>)
-    -> Result<(Ff80, Attachment), String> {
-    let mut bridge = Ff80::new(machine, rendezvous);
-    let mut boundary = |bridge: &Ff80, phase| observer.as_mut().map_or(Ok(()), |observer| observer.boundary(&bridge.machine, phase));
-    bridge.advance(FIRST_START_SCREEN.saturating_sub(bridge.machine.instructions()))?;
-    boundary(&bridge, AttachPhase::FirstStart)?;
-    if rendezvous == RendezvousInputs::DialPushAndWriteProtect && !bridge.machine.card_present()? {
-        return Err("the SD host does not read the inserted card as present".into());
-    }
-    for key in [RouteKey::Up; 12].into_iter().chain([RouteKey::Ok, RouteKey::Ok]) {
-        bridge.key(key, FIRST_START_PULSE)?;
-    }
-    bridge.advance(LIVE_VIEW_SETTLE)?;
-    boundary(&bridge, AttachPhase::LiveView)?;
-    let pressed = bridge.machine.instructions();
-    let mut pre_attach = json!({"instructions": pressed});
-    if let Some(key) = hold {
-        bridge.machine.press(key)?;
-        bridge.advance(ATTACH_HOLD_PULSE)?;
-    }
-    let attached = bridge.machine.instructions();
-    let (device, configuration) = bridge.enumerate()?;
-    if let Some(key) = hold {
-        bridge.machine.release_key(key)?;
-        let released = bridge.machine.instructions();
-        bridge.advance(ATTACH_HOLD_PULSE)?;
-        pre_attach["attach_hold"] = json!({"key": key, "pressed_instructions": pressed,
-            "attach_instructions": attached, "released_instructions": released,
-            "menu_after_release": menu_value(bridge.machine.menu()?)});
-    }
-    boundary(&bridge, AttachPhase::Attached)?;
-    Ok((bridge, Attachment { pre_attach, device, configuration }))
-}
 
 fn hex_field(text: &str) -> Result<Vec<u8>, String> {
     fujimod_xm1::ff80::decode_hex(text)
@@ -1516,7 +1446,7 @@ fn drive() -> Result<(), String> {
     let mut line = String::new();
     std::io::stdin().lock().read_line(&mut line).map_err(|e| e.to_string())?;
     let start: Start = serde_json::from_str(&line).map_err(|e| format!("RAM-push start: {e}"))?;
-    let attach_directory = root.join(&key.key.0);
+    let attach_directory = root.join(key.key.as_str());
     let restore_started = Instant::now();
     let (bridge, attachment, checkpoint) = match start.installed {
         Some(_) if observation.is_some() => return Err("a reset observation starts from no install checkpoint".into()),
@@ -1556,6 +1486,14 @@ fn drive() -> Result<(), String> {
         None => {
             let boot_started = Instant::now();
             let mut machine = inputs.machine()?;
+            if observation.is_some() {
+                let identity = BootIdentity::new(
+                    &inputs.document_bytes, &inputs.update, &inputs.boot_rom, &adjustment_bytes,
+                    inputs.card.as_ref().map(|card| card.image.sha256.as_str()),
+                    b"initialized-adjusted-card-state-v1:before-reset-observation",
+                ).with_record_nand(record_bytes.as_deref());
+                machine = initialized_reset(machine, &identity, &root.join("initialized-reset"))?;
+            }
             let mut observer = observation.as_ref().map(|spec| ResetObserver::begin(&mut machine, spec)).transpose()?;
             let (mut bridge, attachment) = attach(machine, rendezvous, arguments.attach_hold, observer.as_mut())?;
             let boot_seconds = boot_started.elapsed().as_secs_f64();
@@ -1574,7 +1512,7 @@ fn drive() -> Result<(), String> {
                     let record = json!({"schema": CHECKPOINT_SCHEMA, "key": key.key, "inputs": key.inputs,
                         "pre_attach": attachment.pre_attach, "device": encode_hex(&attachment.device),
                         "configuration": encode_hex(&attachment.configuration)});
-                    save_checkpoint(&mut bridge, &root, &key.key.0, ATTACH_RECORD, &record)?;
+                    save_checkpoint(&mut bridge, &root, key.key.as_str(), ATTACH_RECORD, &record)?;
                     json!({"key": key.key, "inputs": key.inputs, "directory": attach_directory,
                         "key_seconds": key_seconds, "start": start,
                         "boot_seconds": boot_seconds, "saved": true, "save_seconds": save_started.elapsed().as_secs_f64()})
@@ -1617,6 +1555,7 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fujimod_xm1::reset_observation::AttachPhase;
     use fujimod_xm1::run::{RunDocument, ValidatedUpdate};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1834,7 +1773,7 @@ mod tests {
             bridge: Ff80::new(machine, rendezvous),
             attachment: Attachment { pre_attach: Value::Null, device: Vec::new(), configuration: Vec::new() },
             checkpoint: Value::Null,
-            key: BootKey { key: CheckpointKey("synthetic-capture".into()), inputs: Value::Null },
+            key: BootKey { key: BootIdentity::new(b"", b"", b"", b"", None, b"synthetic-capture").key(), inputs: Value::Null },
             root: output.clone(), output,
             screenshots: Vec::new(), watch: None, preservation: None,
             key_log: Vec::new(), requests: RequestProfile::default(),
@@ -2475,8 +2414,8 @@ mod tests {
         let first = boot_key(&arguments(Some("a.nand")), &inputs, &adjustment, Some(b"first")).unwrap();
         let moved = boot_key(&arguments(Some("b.nand")), &inputs, &adjustment, Some(b"first")).unwrap();
         let second = boot_key(&arguments(Some("a.nand")), &inputs, &adjustment, Some(b"second")).unwrap();
-        assert!(without.inputs["inputs"].get("record_nand").is_none());
-        assert_eq!(first.inputs["inputs"]["record_nand"], sha256(b"first"));
+        assert!(without.inputs["record_nand"].is_null());
+        assert_eq!(first.inputs["record_nand"], sha256(b"first"));
         assert_eq!(first.key, moved.key);
         assert_ne!(first.key, second.key);
         assert_ne!(first.key, without.key);

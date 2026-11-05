@@ -1,0 +1,9 @@
+genrule(
+    name = "measure",
+    srcs = ["measure.rs"],
+    outs = ["measure-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 -O -C linker=$(location @lab_clang//:bin/clang) $(location measure.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc", "@lab_clang//:bin/clang"],
+    visibility = ["//visibility:public"],
+)

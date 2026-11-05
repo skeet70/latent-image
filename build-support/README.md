@@ -51,6 +51,20 @@ Full-system emulator runs share host CPU and memory. `//emulation:xm1-viewer` wa
 devenv shell -- bazel run //emulation:emulator-slot -- sh -c 'cd RUNTIME && PYTHONPATH=native/python:. "$XM1_VIEWER_PYTHON" -m unittest native.tests.test_portable_checkpoint'
 ```
 
+### Emulator speed measurements
+
+`//build-support/emulator-speed:measure` runs the RAM-push bridge in cold, restored and resumed scenarios with GNU `time -v`, capturing `uptime` immediately before each scenario. It requires explicit bridge, run-document, ROM, DAT, adjustment NAND, checkpoint and new output paths. It saves each command, input stream, bridge stdout/stderr, timing and load beside the scenario's output. Cold uses `--fresh-boot`, restored sends only start/finish, and resumed restores then executes 40,000,000 idle instructions. `--resume-input FILE` replaces that last stream and copies it into the result directory. Measurements of two builds use identical explicit inputs and separate output directories.
+
+```sh
+devenv shell -- bazel build --jobs=2 //build-support/emulator-speed:measure
+devenv shell -- env XM1_EMULATOR_SLOTS=1 bazel run --jobs=2 //emulation:emulator-slot -- \
+  nix shell nixpkgs#time --command bazel-bin/build-support/emulator-speed/measure-bin \
+  --bridge BRIDGE --run RUN_JSON --boot-rom ROM --installed-dat DAT \
+  --adjustment-nand NAND --checkpoints PRIVATE_CHECKPOINT_ROOT --output NEW_PRIVATE_RESULT
+```
+
+The [emulator speed survey](../reports/emulator-speed.md) retains the original cold/restore reference and profile; the generic runner makes subsequent before/after pairs reproducible without that survey's private scratch inputs.
+
 The C import uses Unicorn's `libunicorn.so.2` runtime name so Bazel's runtime symlinks satisfy its SONAME in both `bazel run` and sandboxed tests. No `LD_LIBRARY_PATH` override is required. Upstream Haskell rule helpers and the schema checker use Python internally; project-authored tools use Haskell/Rust, with C limited to necessary boundaries under [current principles](../docs/principles.md#implementation-and-build). JSON parsing uses the shared strict Haskell parser, including duplicate-key rejection, and canonical review bindings retain sorted ASCII JSON semantics.
 
 The X-M1 viewer's locked `xm1-native.nix` build runs Rust unit checks before installing the native extension. The preserved Python checkpoint/profile integration suite separately exercises that extension's supported Python boundary and requires staged pinned ROM/DAT/unpacked fixtures. Those checks do not imply that retained Python orchestration or avoidable C host models have been migrated.

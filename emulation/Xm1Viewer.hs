@@ -459,7 +459,7 @@ launch options = do
       let nandPath = case nand of Just (InstalledNand path) -> path; Nothing -> error "validated NAND missing"
           receiptPath = case receipt of Just (ReceiptDirectory path) -> path; Nothing -> error "validated receipt directory missing"
       runFujiModRehearsal destination nandPath
-        (resolve root "private-data/emulator-checkpoints/xm1-ff80-fujimod") receiptPath
+        (resolve root "private-data/emulator-checkpoints/xm1-ram-push-fujimod-cardless") receiptPath
     else if e2e
       then do
         when (runtimeOption options == RetainedChoice) $
