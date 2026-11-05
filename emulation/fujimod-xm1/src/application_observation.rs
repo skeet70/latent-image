@@ -17,6 +17,9 @@ mod checks;
 mod controls;
 mod planes;
 mod readiness;
+mod scenarios;
+
+pub use scenarios::Scenario;
 
 pub use capture::{hit_observers, Observers, Recorder};
 pub use checks::{
@@ -619,6 +622,12 @@ pub enum InputPurpose {
     Ordinary,
     BackHandback,
     AfterBack,
+    LiveView,
+    FilmOpen,
+    FilmReentry,
+    EditorOpen,
+    EditorCancel,
+    EditorConfirm,
     UnhandledProbe,
 }
 
@@ -653,6 +662,7 @@ pub struct VisibleCapture {
     pub menu: Option<Menu>,
     /// The controller record at `0x944580`.
     pub controller: RawView,
+    pub controller74: RawView,
     pub png: SideFile,
     pub planes: SideFile,
     pub scanout: SideFile,
@@ -718,6 +728,7 @@ pub struct DynamicTarget {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApplicationReceipt {
+    pub scenario: Scenario,
     pub evidence: SideFile,
     pub samples: u64,
     pub readiness: u64,

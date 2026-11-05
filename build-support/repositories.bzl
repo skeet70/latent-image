@@ -75,6 +75,7 @@ _FUJIMOD_XM1_CRATE = [
     "//emulation:fujimod-xm1/src/application_observation/controls.rs",
     "//emulation:fujimod-xm1/src/application_observation/planes.rs",
     "//emulation:fujimod-xm1/src/application_observation/readiness.rs",
+    "//emulation:fujimod-xm1/src/application_observation/scenarios.rs",
     "//emulation:fujimod-xm1/src/attach_relations.rs",
     "//emulation:fujimod-xm1/src/attach_state.rs",
     "//emulation:fujimod-xm1/src/bridge.rs",
