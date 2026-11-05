@@ -1,3 +1,4 @@
+load("@rules_haskell//haskell:defs.bzl", "haskell_library")
 load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
 
 package(default_visibility = ["//visibility:public"])
@@ -14,4 +15,19 @@ xm1_rust_elf(
     entry = "xm1_task1_actor",
     link_script = "task1-actor.ld",
     extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+)
+
+haskell_library(
+    name = "task1-actor-artifact",
+    srcs = ["Replacement/Task1Actor/Artifact.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//host:base",
+        "//host:bytestring",
+        "//host:first-stage",
+        "//host:update-container",
+        "//host/firmware:bank-allowlist",
+    ],
 )

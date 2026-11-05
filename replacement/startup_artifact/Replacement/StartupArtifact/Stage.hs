@@ -51,7 +51,7 @@ loadCanonical tools scratch path = do
 loadPieces :: Canonical -> Manifest -> IO [Piece]
 loadPieces source manifest = forM (manifestPieces manifest) $ \piece -> do
   let linked (LinkedPaths imagePath symbolsPath) =
-        LinkedImage <$> (ImageBytes <$> H.readRegular 0x10000 imagePath) <*> (SymbolBytes <$> H.readRegular 0x10000 symbolsPath)
+        LinkedImage <$> (ImageBytes <$> H.readRegular (if manifestPieceKind piece == Task1Actor then 0x30000 else 0x10000) imagePath) <*> (SymbolBytes <$> H.readRegular 0x10000 symbolsPath)
   images <- case piece of
     SingleImagePiece kind paths -> SingleImage kind <$> linked paths
     LoaderStartupPiece (LoaderStartupPaths a b dispatcher installer) ->

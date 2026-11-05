@@ -28,6 +28,7 @@ import qualified Replacement.IdleTask.Artifact as IT
 import qualified Replacement.RootTask.Admission as RA
 import qualified Replacement.RootTask.Artifact as RT
 import qualified Replacement.StartupArtifact.Footprint.ApplicationPump as Pump
+import qualified Replacement.Task1Actor.Artifact as T1
 import qualified Replacement.StartupArtifact.Footprint.Producers as Producers
 import qualified Replacement.StartupArtifact.Footprint.RootTask as RootFootprint
 import qualified Replacement.TaskSubmission.Admission as WA
@@ -38,7 +39,7 @@ data JoinKind = FirstStageSecondaryRendezvous | CriticalPairPublisherBindings | 
   | LoaderStartupPublisher | PublisherInstallerRoots | CriticalPairInstallerRoots | DispatcherCriticalPair
   | TaskCompositionOwnedCalls | DispatcherTaskComposition | PublisherTaskServices
   | DispatcherRootEntry | DispatcherIdleEntry | WrapperIdleErrorCallback | RootTaskServices
-  | Image5ProducerServices | PlainProducerServices | ApplicationPumpServices
+  | Image5ProducerServices | PlainProducerServices | ApplicationPumpServices | Task1ActorProducer | Task1ActorPump
   deriving (Eq, Ord, Show, Enum, Bounded)
 
 instance JoinName JoinKind where
@@ -60,6 +61,8 @@ instance JoinName JoinKind where
   joinName Image5ProducerServices = "image5-producer-services"
   joinName PlainProducerServices = "plain-producer-services"
   joinName ApplicationPumpServices = "application-pump-services"
+  joinName Task1ActorProducer = "task1-actor-producer"
+  joinName Task1ActorPump = "task1-actor-pump"
 
 at :: Target -> Word32 -> Word32 -> Span
 at target start end = Span target (Guest start) (Guest end)
@@ -356,7 +359,7 @@ registeredJoins =
   , loaderStartupPublisher, publisherInstallerRoots, criticalPairInstallerRoots, dispatcherCriticalPair
   , taskCompositionOwnedCalls, dispatcherTaskComposition, publisherTaskServices
   , dispatcherRootEntry, dispatcherIdleEntry, wrapperIdleErrorCallback, rootTaskServices
-  , image5ProducerServices, plainProducerServices, applicationPumpServices ]
+  , image5ProducerServices, plainProducerServices, applicationPumpServices, task1ActorProducer, task1ActorPump ]
 
 -- | The task wrapper, the record-2 critical pair and the task-storage transition joined as in
 -- replacement/startup_composition/Replacement/StartupComposition/TaskSubmission.hs:63-97.
@@ -566,3 +569,34 @@ applicationPumpServices = Join ApplicationPumpServices (Set.fromList [Applicatio
   []
   where
     (start, end) = Pump.pumpCarrier
+
+task1Artifact :: JoinEvidence -> Maybe T1.Artifact
+task1Artifact evidence = case [linked | Task1ActorFacts linked <- map pieceFacts (evidencePieces evidence)] of
+  [LinkedBytes bytes symbols] -> either (const Nothing) Just (T1.deriveArtifact bytes symbols)
+  _ -> Nothing
+
+task1CarriersMatch :: JoinEvidence -> Bool
+task1CarriersMatch evidence = case task1Artifact evidence of
+  Just artifact -> all (\(T1.Carrier (T1.CodeAddress low) (T1.CodeAddress high),bytes) ->
+    B.take (fromIntegral (high-low)) (B.drop (fromIntegral (low-targetBase Image5)) (targetOf (evidenceComposed evidence) Image5)) == bytes)
+    (T1.artifactCarriers artifact)
+  Nothing -> False
+
+task1ActorProducer :: Join JoinKind
+task1ActorProducer = Join Task1ActorProducer (Set.fromList [Task1Actor,Image5Producer])
+  [at Image5 low high | T1.Carrier (T1.CodeAddress low) (T1.CodeAddress high) <- T1.carriers]
+  (HostProof "record5 staging publishes the admitted once-duty and actor carriers; composed decoding checks the complete image5")
+  [HostCheck "task1-carriers-match-linked-artifact" task1CarriersMatch]
+
+task1ActorPump :: Join JoinKind
+task1ActorPump = Join Task1ActorPump (Set.fromList [Task1Actor,ApplicationPump])
+  [at Image5 0xbfbd20 0xbfbd24, at Image5 0xc23274 0xc23278]
+  (HostProof "the actor calls the separately admitted J8 pump at its fixed entry; its return is the actor's emitted handback site")
+  [ HostCheck "task1-carriers-match-linked-artifact" task1CarriersMatch
+  , HostCheck "task1-pump-call-and-handback" $ \evidence -> case task1Artifact evidence of
+      Just artifact -> case [site | site <- T1.semanticMap artifact, T1.callService site == T1.Pump] of
+        [T1.CallSite (T1.CodeAddress pc) _ (T1.CodeAddress handback)] ->
+          targetWord (evidenceComposed evidence) Image5 pc == Just (0xeb000000 + ((0xbfbd20-pc-8) `div` 4 `mod` 0x1000000))
+            && lookup 0xc23278 (T1.semanticSites artifact) == Just handback
+        _ -> False
+      Nothing -> False ]

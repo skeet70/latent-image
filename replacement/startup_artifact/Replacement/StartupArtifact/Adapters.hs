@@ -6,7 +6,7 @@ module Replacement.StartupArtifact.Adapters
   ( LinkedImage (..), ImageBytes (..), SymbolBytes (..), PieceImages (..)
   , deriveFirstStage, deriveRecord2Link, derivePrimaryPublisher, deriveLoaderOrchestrationB, deriveLoaderStartup, derivePieceOf
   , deriveTaskSubmission, deriveTaskStorage, deriveIdleTask, deriveRootTask, deriveImage5Producer, derivePlainProducer
-  , deriveApplicationPump
+  , deriveApplicationPump, deriveTask1Actor
   , ProducerCall (..), producerCallBoundaries, callerReturn
   ) where
 
@@ -29,6 +29,7 @@ import qualified FujiAF.UpdateContainer as U
 import Numeric (showHex)
 import qualified Replacement.ApplicationPump.Admission as APA
 import qualified Replacement.ApplicationPump.Artifact as AP
+import qualified Replacement.Task1Actor.Artifact as T1
 import qualified Replacement.KernelInstall.Admission as KA
 import qualified Replacement.KernelInstall.Artifact as KI
 import qualified Replacement.LoaderOrchestration.Admission as LA
@@ -63,6 +64,7 @@ import qualified Replacement.PlainLoad.Admission as PLA
 import qualified Replacement.PlainLoad.Artifact as PL
 import qualified Replacement.StartupArtifact.Footprint.ApplicationPump as PumpFootprint
 import qualified Replacement.StartupArtifact.Footprint.Producers as ProducersFootprint
+import qualified Replacement.StartupArtifact.Footprint.Task1Actor as Task1Footprint
 import qualified Replacement.TaskStorage.Artifact as TSt
 import qualified Replacement.TaskSubmission.Admission as WA
 import qualified Replacement.TaskSubmission.Artifact as W
@@ -95,6 +97,7 @@ derivePieceOf source images = case images of
     Image5Producer -> deriveImage5Producer source image
     PlainProducer -> derivePlainProducer source image
     ApplicationPump -> deriveApplicationPump source image
+    Task1Actor -> deriveTask1Actor source image
 
 admitted :: PieceKind -> Either String a -> Either Refusal a
 admitted kind = first (AdapterRefused kind . T.pack)
@@ -1077,3 +1080,23 @@ deriveApplicationPump source (LinkedImage (ImageBytes bin) (SymbolBytes symbolBy
           , "retained callee stack demand below the owned frame is not proved" ])
         (Catalog [] code writes []) (ApplicationPumpFacts (LinkedBytes bin symbolBytes))
   derivePiece source declaration (StagedOutput (canonicalDat source) Nothing (Just (AP.stagedBytes staged)))
+
+deriveTask1Actor :: Canonical -> LinkedImage -> Either Refusal Piece
+deriveTask1Actor source (LinkedImage (ImageBytes bin) (SymbolBytes symbols)) = do
+  let kind = Task1Actor
+      shown :: Show e => Either e a -> Either Refusal a
+      shown = first (AdapterRefused kind . T.pack . show)
+  artifact <- shown (T1.deriveArtifact bin symbols)
+  original <- shown (T1.canonicalSource (canonicalDat source) (targetOf (canonicalTargets source) Image5))
+  image <- shown (T1.stageImage5 original artifact)
+  ranges <- mapM (\(T1.Carrier (T1.CodeAddress low) (T1.CodeAddress high)) -> spanOf kind Image5 low high) T1.carriers
+  code <- concat <$> mapM (\(T1.Carrier (T1.CodeAddress low) _,bytes) -> ownedCode kind low (low + fromIntegral (B.length bytes))) (T1.emittedCarriers artifact)
+  let writes = EnumeratedWrites
+        ([WriteRange PhysicalTarget low high | (low,high) <- [(0x944580,0x944590),(0x94f5e0,0x94f5e4),(0x950148,0x95014c),(0x95200c,0x952010),(0x954d68,0x954d6c),(0x972e84,0x972e88)]]
+          ++ [WriteRange PhysicalTarget 0xa4cd80 0xa4ce00])
+        (Premised (Premise "task1 globals and its live stack backing require application observer qualification; retained service effects are not proved by staging"))
+      declaration = PieceDeclaration kind (Set.singleton Task1ActorArea) ranges
+        (Task1Footprint.footprint artifact)
+        [Premise "host composition authenticates carriers and direct service boundaries; application observer qualification is separate"]
+        (Catalog [] code writes []) (Task1ActorFacts (LinkedBytes bin symbols))
+  derivePiece source declaration (StagedOutput (canonicalDat source) Nothing (Just image))
