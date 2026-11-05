@@ -543,6 +543,7 @@ ownedBatchApi runner=withTemporary "fuji-owned-batch"$ \root->do
       , O.caseExpectedStatus=N.Returned
       , O.caseExpectedRegisters=expected
       , O.caseExpectedMemory=memory
+      , O.caseCp14Identity=Nothing
       }
      specs=
       [ spec "writer"[0xe5820000,0xe12fff1e][(N.R0,0xdeadbeef),(N.R2,0x9000)][(N.R0,0xdeadbeef)][(N.RegionId "data",O.word32le 0xdeadbeef)]
@@ -619,6 +620,9 @@ main=do
        ensure(code==1 && get report "status"==s "invalid_case")(label++": "++show report)
   forM_ mutations$ \(label,change)->invalid label(change original)
   invalid "execute-never region"(highCode 8 original)
+  invalid "CP14 identity on a user case"(set "cp14_identity"(s "0x00004003")original)
+  invalid "noncanonical CP14 identity"(set "cp14_identity"(s "0x4003")$nest "registers"(set "cpsr"(s "0x000000d3"))original)
+  forM_["0x00000033","0x00000113","0x00000012","0x0000001b","0x01000013"]$ \cpsr->invalid("privileged CPSR "++cpsr)(nest "registers"(set "cpsr"(s cpsr))original)
   forM_["{\"schema_version\":1,\"schema_version\":1}","{\"schema_version\":NaN}"]$ \raw->do
    B.writeFile path raw; (_,report)<-runCase runner path; ensure(get report "status"==s "invalid_case")"invalid JSON accepted"
   B.writeFile path(encodeCanonical(set "origin"(s "stock")original))
@@ -659,5 +663,5 @@ main=do
   (timed,code,out,_)<-runBounded 3000000 (8*1024*1024) runner[](BC.pack input)
   result<-jsonRead out
   ensure(not timed && code==ExitFailure 1 && get result "status"==s "invalid_case")"independent wire rejection failed"
- putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, "++show(length bad)++" independent wire rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries and schema agreement passed")
+ putStrLn(show(length names)++" hand-derived execution fixtures, 29 JSON rejections, 7 privileged-entry rejections, "++show(length bad)++" independent wire rejections, execute-never boundary, stub/output/deadline checks, contract limit boundaries and schema agreement passed")
  putStrLn(show batched++"-case fixture batch, 9 isolation controls, batch failure and framing controls, batch limit boundaries and the owned-case batch API passed")

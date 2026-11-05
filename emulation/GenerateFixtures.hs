@@ -37,6 +37,10 @@ dropRegion :: String -> Value -> Value
 dropRegion name v=arr[item|item<-list v,str(get item "id")/=name]
 memory :: String -> Integer -> String -> Value
 memory name offset bytes=obj[("region",s name),("offset",n offset),("hex",s bytes)]
+privilegedExclusions :: [String]
+privilegedExclusions=["Synthetic Cortex-R5F privileged SVC/SYS ARM/little-endian only; no X-M1 behavior or ABI claim","No exceptions, SPSR access, mode changes, coprocessors other than the case's CP14 c2 identity read, PC-loading returns, MMIO, interrupts, DMA, caches, scheduling or hardware timing"]
+privileged :: Integer -> Maybe Integer -> Value -> Value
+privileged cpsr identity c=maybe id(\value->set "cp14_identity"(h value))identity$set "exclusions"(arr(map s privilegedExclusions))$nest "registers"(set "cpsr"(h cpsr))c
 save :: FilePath -> Value -> IO ()
 save root c=B.writeFile(root </> str(get c "id")<.>"json")(encodeCanonical c<>"\n")
 main :: IO ()
@@ -247,5 +251,20 @@ main=do
   item<-make name [word,0xe12fff1e] "returned"
   dat<-artifact root (name++"-data") (if address==0xfffffff8 then [0x12345678,0xabcdef01] else [0x12345678])
   finish$expectedRegs(changes++[("pc",h 0x1080)])$set "artifacts"(arr(list(get item "artifacts")++[dat]))$at "regions" 2(set "address"(h address) . set "size"(get dat "size") . set "initial"(obj[("artifact",get dat "id"),("offset",n 0),("length",get dat "size")]))$nest "registers"(set "r2"(h 0))item
+ svcMask<-make "privileged-svc-irq-mask" [0xe10f1000,0xe3811080,0xe121f001,0xe12fff1e] "returned"
+ finish$expectedRegs[("r1",h 0x40000093),("cpsr",h 0x40000093),("pc",h 0x1080)]$privileged 0x40000013 Nothing svcMask
+ sysUnmask<-make "privileged-sys-irq-unmask" [0xe10f1000,0xe3c11080,0xe129f001,0xe12fff1e] "returned"
+ finish$expectedRegs[("r1",h 0x6000005f),("cpsr",h 0x6000005f),("pc",h 0x1080)]$privileged 0x600000df Nothing sysUnmask
+ cps<-make "privileged-cpsid-cpsie" [0xf10c0080,0xe10f1000,0xf1080080,0xe12fff1e] "returned"
+ finish$expectedRegs[("r1",h 0x93),("cpsr",h 0x13),("pc",h 0x1080)]$privileged 0x13 Nothing cps
+ modeChange<-make "privileged-mode-change-refused" [0xe121f001,0xe12fff1e] "unsupported_instruction"
+ finish$expectedRegs[("pc",h 0x1004)]$nest "registers"(set "r1"(h 0xdf))$privileged 0xd3 Nothing modeChange
+ cp14<-make "privileged-cp14-identity" [0xee120e10,0xe12fff1e] "returned"
+ finish$expectedRegs[("r0",h 0x4003),("pc",h 0x1080)]$privileged 0xd3(Just 0x4003)cp14
+ cp14Skipped<-make "privileged-cp14-condition-false" [0x1e120e10,0xe12fff1e] "returned"
+ finish$expectedRegs[("pc",h 0x1080)]$privileged 0x400000d3(Just 0x4003)cp14Skipped
+ forM_[("privileged-spsr-read-refused",0xe14f0000),("privileged-cps-mode-refused",0xf1020013),("privileged-cp14-other-refused",0xee120e30),("privileged-svc-refused",0xef000000)]$ \(name,word)->do
+  item<-make name[word,0xe12fff1e]"unsupported_instruction"
+  finish$expectedRegs[("pc",h 0x1004)]$privileged 0xd3(Just 0x4003)item
  generated<-length.filter((==".json").takeExtension)<$>listDirectory root
  putStrLn("Generated "++show generated++" structurally identical independent cases and exact instruction binaries; JSON uses canonical Haskell serialization. Historical JSON bytes were preserved.")

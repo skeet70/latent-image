@@ -224,6 +224,7 @@ scenario context identifier queryResult sessionValue transitionResult sessionRea
       , caseExpectedStatus = Returned
       , caseExpectedRegisters = [(Sp, 0x00959ff0)]
       , caseExpectedMemory = []
+      , caseCp14Identity = Nothing
       }
     owned = CaseSpec
       { caseId = identifier ++ "-owned"
@@ -240,6 +241,7 @@ scenario context identifier queryResult sessionValue transitionResult sessionRea
       , caseExpectedStatus = Returned
       , caseExpectedRegisters = [(Sp, 0x00959ff0)]
       , caseExpectedMemory = []
+      , caseCp14Identity = Nothing
       }
     ownedEntry = symbolAddress (contextSymbols context) "rb_ui_editor_cancel"
     kernelBase = symbolAddress (contextSymbols context) "__rb_image_start"
@@ -323,6 +325,7 @@ guardCase context = CaseSpec
   , caseExpectedStatus = Returned
   , caseExpectedRegisters = [(R0, 0)]
   , caseExpectedMemory = []
+  , caseCp14Identity = Nothing
   }
 
 main :: IO ()

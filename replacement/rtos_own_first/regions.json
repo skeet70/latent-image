@@ -1,0 +1,299 @@
+{
+  "fill_word": "0xe7f000f0",
+  "domains": {
+    "a": {
+      "loader_base": "0x40000",
+      "regions": [
+        {
+          "slot": "0x60",
+          "entry": "0x47540",
+          "start": "0x47540",
+          "end": "0x47580",
+          "symbol": "xm1_rtos_own_first_slot_60",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0xfc",
+          "entry": "0x4bd4c",
+          "start": "0x4bd4c",
+          "end": "0x4bdc4",
+          "symbol": "xm1_rtos_own_first_slot_fc",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x100",
+          "entry": "0x4bdc4",
+          "start": "0x4bdc4",
+          "end": "0x4be3c",
+          "symbol": "xm1_rtos_own_first_slot_100",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x128",
+          "entry": "0x4c620",
+          "start": "0x4c620",
+          "end": "0x4c6a8",
+          "symbol": "xm1_rtos_own_first_slot_128",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x12c",
+          "entry": "0x4c6a8",
+          "start": "0x4c6a8",
+          "end": "0x4c73c",
+          "symbol": "xm1_rtos_own_first_slot_12c",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x130",
+          "entry": "0x4c8ac",
+          "start": "0x4c8ac",
+          "end": "0x4c8f8",
+          "symbol": "xm1_rtos_own_first_slot_130",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x134",
+          "entry": "0x4c8f8",
+          "start": "0x4c8f8",
+          "end": "0x4c944",
+          "symbol": "xm1_rtos_own_first_slot_134",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x138",
+          "entry": "0x4c944",
+          "start": "0x4c944",
+          "end": "0x4c990",
+          "symbol": "xm1_rtos_own_first_slot_138",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x13c",
+          "entry": "0x4c990",
+          "start": "0x4c990",
+          "end": "0x4c9dc",
+          "symbol": "xm1_rtos_own_first_slot_13c",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x148",
+          "entry": "0x4cbd8",
+          "start": "0x4cbd8",
+          "end": "0x4cc00",
+          "symbol": "xm1_rtos_own_first_slot_148",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x14c",
+          "entry": "0x4cc00",
+          "start": "0x4cc00",
+          "end": "0x4cc1c",
+          "symbol": "xm1_rtos_own_first_slot_14c",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x150",
+          "entry": "0x4cc1c",
+          "start": "0x4cc1c",
+          "end": "0x4cc44",
+          "symbol": "xm1_rtos_own_first_slot_150",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x154",
+          "entry": "0x4cc44",
+          "start": "0x4cc44",
+          "end": "0x4cc94",
+          "symbol": "xm1_rtos_own_first_slot_154",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x164",
+          "entry": "0x41140",
+          "start": "0x41140",
+          "end": "0x41164",
+          "symbol": "xm1_rtos_own_first_slot_164",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x168",
+          "entry": "0x41164",
+          "start": "0x41164",
+          "end": "0x4118c",
+          "symbol": "xm1_rtos_own_first_slot_168",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x16c",
+          "entry": "0x4118c",
+          "start": "0x4118c",
+          "end": "0x411cc",
+          "symbol": "xm1_rtos_own_first_slot_16c",
+          "frame_bytes": 24
+        }
+      ],
+      "tail": {
+        "slot": "0x1618",
+        "address": "0x412bc",
+        "end": "0x412cc",
+        "symbol": "xm1_rtos_own_first_slot_1618",
+        "frame_bytes": 8,
+        "body": {
+          "address": "0x4c71c",
+          "end": "0x4c73c",
+          "symbol": "xm1_rtos_own_first_slot_1618_body",
+          "host_slot": "0x12c",
+          "frame_bytes": 8
+        }
+      }
+    },
+    "b": {
+      "loader_base": "0xd0000",
+      "regions": [
+        {
+          "slot": "0x60",
+          "entry": "0xd7500",
+          "start": "0xd7500",
+          "end": "0xd7540",
+          "symbol": "xm1_rtos_own_first_slot_60",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0xfc",
+          "entry": "0xdbd0c",
+          "start": "0xdbd0c",
+          "end": "0xdbd84",
+          "symbol": "xm1_rtos_own_first_slot_fc",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x100",
+          "entry": "0xdbd84",
+          "start": "0xdbd84",
+          "end": "0xdbdfc",
+          "symbol": "xm1_rtos_own_first_slot_100",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x128",
+          "entry": "0xdc5e0",
+          "start": "0xdc5e0",
+          "end": "0xdc668",
+          "symbol": "xm1_rtos_own_first_slot_128",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x12c",
+          "entry": "0xdc668",
+          "start": "0xdc668",
+          "end": "0xdc6fc",
+          "symbol": "xm1_rtos_own_first_slot_12c",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x130",
+          "entry": "0xdc86c",
+          "start": "0xdc86c",
+          "end": "0xdc8b8",
+          "symbol": "xm1_rtos_own_first_slot_130",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x134",
+          "entry": "0xdc8b8",
+          "start": "0xdc8b8",
+          "end": "0xdc904",
+          "symbol": "xm1_rtos_own_first_slot_134",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x138",
+          "entry": "0xdc904",
+          "start": "0xdc904",
+          "end": "0xdc950",
+          "symbol": "xm1_rtos_own_first_slot_138",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x13c",
+          "entry": "0xdc950",
+          "start": "0xdc950",
+          "end": "0xdc99c",
+          "symbol": "xm1_rtos_own_first_slot_13c",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x148",
+          "entry": "0xdcb98",
+          "start": "0xdcb98",
+          "end": "0xdcbc0",
+          "symbol": "xm1_rtos_own_first_slot_148",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x14c",
+          "entry": "0xdcbc0",
+          "start": "0xdcbc0",
+          "end": "0xdcbdc",
+          "symbol": "xm1_rtos_own_first_slot_14c",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x150",
+          "entry": "0xdcbdc",
+          "start": "0xdcbdc",
+          "end": "0xdcc04",
+          "symbol": "xm1_rtos_own_first_slot_150",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x154",
+          "entry": "0xdcc04",
+          "start": "0xdcc04",
+          "end": "0xdcc54",
+          "symbol": "xm1_rtos_own_first_slot_154",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x164",
+          "entry": "0xd1140",
+          "start": "0xd1140",
+          "end": "0xd1164",
+          "symbol": "xm1_rtos_own_first_slot_164",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x168",
+          "entry": "0xd1164",
+          "start": "0xd1164",
+          "end": "0xd118c",
+          "symbol": "xm1_rtos_own_first_slot_168",
+          "frame_bytes": 8
+        },
+        {
+          "slot": "0x16c",
+          "entry": "0xd118c",
+          "start": "0xd118c",
+          "end": "0xd11cc",
+          "symbol": "xm1_rtos_own_first_slot_16c",
+          "frame_bytes": 24
+        }
+      ],
+      "tail": {
+        "slot": "0x1618",
+        "address": "0xd12bc",
+        "end": "0xd12cc",
+        "symbol": "xm1_rtos_own_first_slot_1618",
+        "frame_bytes": 8,
+        "body": {
+          "address": "0xdc6dc",
+          "end": "0xdc6fc",
+          "symbol": "xm1_rtos_own_first_slot_1618_body",
+          "host_slot": "0x12c",
+          "frame_bytes": 8
+        }
+      }
+    }
+  }
+}
