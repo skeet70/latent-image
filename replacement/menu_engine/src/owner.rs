@@ -407,10 +407,32 @@ impl Rules for NoPassStop {
     const PASS_STOP: bool = false;
 }
 
+struct NoFramedFollow;
+impl Rules for NoFramedFollow {
+    const FRAMED_FOLLOW: bool = false;
+}
+
+struct FramedPopAsPush;
+impl Rules for FramedPopAsPush {
+    const FRAMED_POP: bool = false;
+}
+
+/// Kind 1's framed push notifies with the event's id, the framed step of
+/// kinds `0xe` and `0xf` with `0x1d`.
+struct FramedNotifyIdSwap;
+impl Rules for FramedNotifyIdSwap {
+    const FRAMED_NOTIFY_ID: bool = false;
+}
+
+struct PushMoveUpAsDown;
+impl Rules for PushMoveUpAsDown {
+    const PUSH_MOVE_UP: bool = false;
+}
+
 /// Each control and the cases it must fail; an empty list asks for any case.
 #[test]
 fn owner_controls_fail() {
-    let controls: [(&str, Vec<&str>, &[&str]); 21] = [
+    let controls: [(&str, Vec<&str>, &[&str]); 25] = [
         ("no-wrap", control::<NoWrap>("no-wrap"), &["fixed-wrap"]),
         ("inverted-skip", control::<InvertedSkip>("inverted-skip"), &[]),
         ("no-initial-row", control::<NoInitialRow>("no-initial-row"), &[]),
@@ -426,7 +448,7 @@ fn owner_controls_fail() {
         (
             "frame-notify-id",
             control::<FrameNotifyId>("frame-notify-id"),
-            &["frame-seek-down", "frame-seek-up", "frame-pop-down", "frame-pop-up", "frame-push-probe"],
+            &["frame-seek-down", "frame-seek-up", "frame-pop-down", "frame-pop-up", "frame-push-probe", "frame-push-up-probe"],
         ),
         ("no-seek-step", control::<NoSeekStep>("no-seek-step"), &["frame-seek-step"]),
         ("query-fixed", control::<QueryFixed>("query-fixed"), &["frame-fixed-open"]),
@@ -440,6 +462,19 @@ fn owner_controls_fail() {
         ("reopen-notifies", control::<ReopenNotifies>("reopen-notifies"), &["reopen"]),
         ("single-step", control::<SingleStep>("single-step"), &["step-rows"]),
         ("no-pass-stop", control::<NoPassStop>("no-pass-stop"), &["step-rows-wrap"]),
+        (
+            "no-framed-follow",
+            control::<NoFramedFollow>("no-framed-follow"),
+            &["framed-open", "framed-open-restored", "framed-pop", "framed-pop-back", "framed-pop-group41", "framed-push"],
+        ),
+        ("framed-pop-as-push", control::<FramedPopAsPush>("framed-pop-as-push"), &["framed-pop", "framed-pop-back", "framed-pop-group41"]),
+        // `framed-pop` and `framed-push` carry the event id 0x1d.
+        (
+            "framed-notify-id-swap",
+            control::<FramedNotifyIdSwap>("framed-notify-id-swap"),
+            &["framed-open", "framed-open-restored", "framed-pop-back", "framed-pop-group41"],
+        ),
+        ("push-move-up-as-down", control::<PushMoveUpAsDown>("push-move-up-as-down"), &["frame-push-up-probe"]),
     ];
     let mut missed = Vec::new();
     for (label, failed, required) in &controls {

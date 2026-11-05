@@ -663,7 +663,66 @@ fn a_stepping_seek_checks_every_rows_child_before_any_service_call() {
 }
 
 #[test]
-fn kind_9_is_refused_before_any_service_call() {
-    let state = at(PAGE, frame(1, 1, 3, 0), 3, 1);
-    assert_eq!(refused(&TREE, state, StageEvent { kind: 9, node: 1, id: 1, extra: 0 }), Err(NotOwned::EventClass));
+fn kind_9_pushes_moves_up_and_pops() {
+    let mut state = at(PAGE, frame(1, 1, 3, 0), 3, 1);
+    state.stack[2] = frame(2, 2, 4, 0);
+    let mut answers = Answers { availability: vec![RowState::Offered; 7], initial_row: vec![None, None], ..Answers::default() };
+    let transition = run(&state, 9, 1, 1, &mut answers).expect("owned");
+    assert_eq!(transition.result, EngineResult::Accepted);
+    assert_eq!(transition.state.node, Some(PAGE));
+    assert_eq!(transition.state.last_move, LastMove { class: MenuClass::new(0x104), token: RowToken::new(1) });
+    let kinds: Vec<StageKind> = answers.notifies().iter().map(|notify| notify.kind).collect();
+    assert_eq!(kinds, [StageKind::Push, StageKind::MoveUp, StageKind::Pop]);
+}
+
+const SECTION: NodeRef = NodeRef::new(1);
+const SECTION_PAGE: NodeRef = NodeRef::new(2);
+
+/// A type 5 section under the top node; its row 0 leads to a page and its
+/// row 1 to a package node.
+static SECTION_TOP_ROWS: [Row; 1] = [row(0x10, Some(SECTION))];
+static SECTION_ROWS: [Row; 2] = [row(0x30, Some(SECTION_PAGE)), Row { token: RowToken::new(0x31), child: RowChild::Package }];
+static SECTION_NODES: [Node; 3] = [
+    node(0, 5, Wrap::Wraps, None, &SECTION_TOP_ROWS),
+    Node { node_type: NodeType::new(5), ..node(0x41, 0x110, Wrap::Wraps, Some(TOP), &SECTION_ROWS) },
+    node(0x41, 0x111, Wrap::Wraps, Some(SECTION), &PICKER_ROWS),
+];
+static SECTION_TREE: Tree = Tree { nodes: &SECTION_NODES, registry: registry(), identity: TreeIdentity([8; 32]) };
+
+fn section_page() -> EngineState {
+    let mut state = at(SECTION_PAGE, frame(0, 0, 4, 0), 4, 3);
+    state.stack[1] = frame(0, 0, 1, 0);
+    state.stack[2] = frame(1, 1, 2, 0);
+    state
+}
+
+#[test]
+fn a_pop_onto_a_type_5_parent_pops_again_with_the_events_id() {
+    let mut state = section_page();
+    let mut answers = Answers { availability: vec![RowState::Offered; 3], initial_row: vec![None, None], ..Answers::default() };
+    let raw = StageEvent { kind: 0xf, node: 0x41, id: 0x1a, extra: 0 };
+    let decoded = MenuEvent::decode(raw, &SECTION_TREE, &state);
+    assert_eq!(apply(&SECTION_TREE, &mut state, decoded, &mut answers), Ok(EngineResult::Accepted));
+    assert_eq!(state.node, Some(TOP));
+    assert_eq!(state.depth, StackDepth::new(1));
+    assert_eq!(
+        answers.notifies(),
+        [
+            Notify { kind: StageKind::Pop, node: StageNode::new(0x41), id: StageId::new(0x1a), class: MenuClass::new(0x111) },
+            Notify { kind: StageKind::Pop, node: StageNode::new(0), id: StageId::new(0x1a), class: MenuClass::new(0x110) },
+        ]
+    );
+}
+
+#[test]
+fn a_pop_onto_a_type_5_parent_restoring_a_cursor_past_its_rows_is_refused_before_any_service_call() {
+    let mut state = section_page();
+    state.stack[2] = frame(3, 3, 2, 0);
+    assert_eq!(refused(&SECTION_TREE, state, StageEvent { kind: 0xf, node: 0x41, id: 0x1a, extra: 0 }), Err(NotOwned::RowBounds));
+}
+
+#[test]
+fn a_push_into_a_type_5_node_with_a_package_row_is_refused_before_any_service_call() {
+    let state = at(TOP, frame(0, 0, 1, 0), 1, 1);
+    assert_eq!(refused(&SECTION_TREE, state, StageEvent { kind: 0xe, node: 0, id: 0x1d, extra: 0 }), Err(NotOwned::PackageChild));
 }

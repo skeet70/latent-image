@@ -5,12 +5,14 @@
 //! - kinds 4 and 5, a row step of any nonzero count other than a page;
 //! - kinds `0x45`..`0x48`, the group moves of `0xbf9c1c`;
 //! - kind 2 with an open node;
-//! - kinds `0xe` and `0xf`, no seek id, into a node of type other than 5 or 7;
-//! - kinds 6, 7, 8, `0xa` and `0xb`, whose inner pushes, pops and moves are
+//! - kinds `0xe` and `0xf`, no seek id; onto a node of type 5 or 7, the
+//!   `0xbfad04` push or pop that follows;
+//! - kinds 6, 7, 8, 9, `0xa` and `0xb`, whose inner pushes, pops and moves are
 //!   those of kinds `0xe`, `0xf`, 4 and 5, the seek of `0xa` and `0xb` on a
 //!   node of type other than 5 or 7;
-//! - kind 1 on a registered node other than `0x38` of type other than 5 or 7,
-//!   with an id the `0xbfad04` switch passes to its default arm;
+//! - kind 1 on a registered node other than `0x38`, with an id the `0xbfad04`
+//!   switch passes to its default arm (`0x13` among them), and on a node of
+//!   type 5 or 7 the `0xbfad04` push that follows;
 //! - kind `0x13` on the open node.
 //!
 //! Every node a push, pop, open or re-open opens (`0xbfa800`) needs 1..=`ROW_STATES`
@@ -229,7 +231,8 @@ pub enum NotOwned {
     StackBounds,
     /// A stage node outside the registry or one with a node-specific branch.
     StageNode,
-    /// `0xbfad04` pushes or pops again for a node of type 5 or 7.
+    /// Kinds `0xa` and `0xb` on an open node of type 5 or 7, where `0xbfad04`
+    /// pushes instead of seeking.
     FramedNode,
     NoChild,
     /// A row whose child is a package node outside the tree.
@@ -363,6 +366,15 @@ pub(crate) trait Rules {
     const STEP_COUNT: bool = true;
     /// The repeated step stops once the cursor passes its start.
     const PASS_STOP: bool = true;
+    /// `0xbfad04` pushes or pops again on an open node of type 5 or 7.
+    const FRAMED_FOLLOW: bool = true;
+    /// `0xbfad04`'s step after kind `0xf` is a pop.
+    const FRAMED_POP: bool = true;
+    /// `0xbfad04`'s step notifies with its fourth argument: `0x1d` after
+    /// kind 1, the event's id after kinds `0xe` and `0xf`.
+    const FRAMED_NOTIFY_ID: bool = true;
+    /// Kind 9's inner move is upward.
+    const PUSH_MOVE_UP: bool = true;
 }
 
 pub(crate) struct Stock;
@@ -495,15 +507,6 @@ struct Machine<'a, R, S, P> {
 
 fn framed(node: &Node) -> bool {
     FRAMED_TYPES.contains(&node.node_type)
-}
-
-/// Whether a node `0xbfad04` would push or pop again may be opened.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum FramedTarget {
-    /// `0xbfad04` follows the open.
-    Refused,
-    /// An inner step of kinds 6..`0xb`, which no `0xbfad04` follows.
-    Allowed,
 }
 
 impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine<'a, R, S, P> {
@@ -753,9 +756,9 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         self.services.kind_switch(&mut self.state, call)
     }
 
-    /// `0xbfad04` after an open that succeeded. Its arms other than the
-    /// default return 1 here unless the open node has type 5 or 7, which only
-    /// a nested pop leaves possible; stock then runs it.
+    /// `0xbfad04` after a delegated open, push or pop that succeeded. Its
+    /// arms other than the default return 1 here unless the open node has
+    /// type 5 or 7; stock then runs it.
     fn seek_framed(
         &mut self,
         kind: StageKind,
@@ -772,6 +775,45 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         self.delegated = true;
         let call = SeekCall { kind, node, node_type: current.node_type, id, seek, target };
         Ok(self.services.seek(&mut self.state, call))
+    }
+
+    /// `0xbfad04`'s arm for an open node of type 5 or 7 (all.c:331620-331625):
+    /// `0xbfab98(0xf, node, 0x15, notify_id)` after a pop, otherwise the push
+    /// `0xbfab98(0xe, node, 0x15, notify_id)`.
+    fn follow_framed(&mut self, switch: Switch, node_word: StageNode, notify_id: StageId) -> Result<EngineResult, NotOwned> {
+        if !R::FRAMED_FOLLOW {
+            return Ok(EngineResult::Accepted);
+        }
+        let switch = if R::FRAMED_POP { switch } else { Switch::Push };
+        self.switched(switch, node_word, Direction::Down, notify_id)
+    }
+
+    /// What `follow_framed`'s push needs from `node` open at `depth`: every
+    /// row child opens with the cursor of `stack[depth + 1]`.
+    fn check_follow_push(&self, node: &Node, depth: usize) -> Result<(), NotOwned> {
+        let restored = *self.state.stack.get(depth + 1).ok_or(NotOwned::StackBounds)?;
+        for row in Self::rows(node)? {
+            self.check_target(row.child, restored.cursor)?;
+        }
+        Ok(())
+    }
+
+    /// What `follow_framed`'s pop needs after a pop from `depth` onto
+    /// `parent`: the remembered row of `parent` at its restored cursor and
+    /// the open of its parent with the cursor of `stack[depth - 2]`.
+    fn check_follow_pop(&self, parent: &Node, depth: usize) -> Result<(), NotOwned> {
+        Self::stage_index(StageNode::from(parent.id))?;
+        if self.remember_branch(parent)? != RememberBranch::Off {
+            let restored = *depth.checked_sub(1).and_then(|below| self.state.stack.get(below)).ok_or(NotOwned::StackBounds)?;
+            if restored.cursor.get() as usize > Self::rows(parent)?.len() {
+                return Err(NotOwned::RowBounds);
+            }
+        }
+        let Some(grandparent) = parent.parent else {
+            return Ok(());
+        };
+        let restored = *depth.checked_sub(2).and_then(|below| self.state.stack.get(below)).ok_or(NotOwned::StackBounds)?;
+        Self::check_open(self.node(grandparent)?, restored.cursor)
     }
 
     /// `0xbf976c`.
@@ -813,10 +855,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
 
     /// What `open_rows` needs of the node it opens and of the cursor it keeps
     /// when the initial row gives no selection.
-    fn check_open(target: &Node, restored: RowIndex, framed_target: FramedTarget) -> Result<(), NotOwned> {
-        if framed_target == FramedTarget::Refused && framed(target) {
-            return Err(NotOwned::FramedNode);
-        }
+    fn check_open(target: &Node, restored: RowIndex) -> Result<(), NotOwned> {
         let rows = Self::rows(target)?.len();
         if rows == 0 {
             return Err(NotOwned::EmptyNode);
@@ -1147,29 +1186,42 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         Ok(opened)
     }
 
-    /// The checks `switch_node` needs before the first call: a push into the
-    /// cursor row's child or a pop to the parent, with the frame each restores.
-    fn check_switch(&self, switch: Switch, framed_target: FramedTarget) -> Result<(), NotOwned> {
+    /// The checks `push_pop` needs before the first call: a push into the
+    /// cursor row's child or a pop to the parent, with the frame each restores,
+    /// and onto a node of type 5 or 7 the step `follow_framed` makes from it.
+    fn check_switch(&self, switch: Switch) -> Result<(), NotOwned> {
         let source = self.current()?;
         let depth = self.state.depth.get() as usize;
         self.check_cursor()?;
         match switch {
             Switch::Push => {
                 let child = match Self::row(source, self.state.live.cursor)?.map(|row| row.child) {
-                    Some(RowChild::Node(child)) => child,
+                    Some(RowChild::Node(child)) => self.node(child)?,
                     Some(RowChild::Package) => return Err(NotOwned::PackageChild),
                     Some(RowChild::Leaf) | None => return Err(NotOwned::NoChild),
                 };
                 let restored = *self.state.stack.get(depth + 1).ok_or(NotOwned::StackBounds)?;
-                Self::check_open(self.node(child)?, restored.cursor, framed_target)
+                Self::check_open(child, restored.cursor)?;
+                if framed(child) {
+                    if restored.cursor.get() as usize > Self::rows(child)?.len() {
+                        return Err(NotOwned::RowBounds);
+                    }
+                    Self::stage_index(StageNode::from(child.id))?;
+                    self.check_follow_push(child, depth + 1)?;
+                }
+                Ok(())
             }
             Switch::Pop => {
-                let parent = source.parent.ok_or(NotOwned::NoParent)?;
+                let parent = self.node(source.parent.ok_or(NotOwned::NoParent)?)?;
                 let restored = *depth.checked_sub(1).and_then(|below| self.state.stack.get(below)).ok_or(NotOwned::StackBounds)?;
                 if depth >= STACK_FRAMES {
                     return Err(NotOwned::StackBounds);
                 }
-                Self::check_open(self.node(parent)?, restored.cursor, framed_target)
+                Self::check_open(parent, restored.cursor)?;
+                if framed(parent) {
+                    self.check_follow_pop(parent, depth)?;
+                }
+                Ok(())
             }
         }
     }
@@ -1181,12 +1233,20 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
             return Err(NotOwned::EventClass);
         }
         Self::stage_index(node_word)?;
-        self.check_switch(switch, FramedTarget::Refused)?;
+        self.check_switch(switch)?;
         if !self.switch_node(switch, node_word, Direction::Down, id)? {
             return Ok(EngineResult::Rejected);
         }
-        let current = StageNode::from(self.current()?.id);
-        self.seek_framed(switch.kind(), current, id, StageId::NO_SEEK, StageExtra::new(0))
+        let current = self.current()?;
+        let landed = StageNode::from(current.id);
+        if self.delegated {
+            return self.seek_framed(switch.kind(), landed, id, StageId::NO_SEEK, StageExtra::new(0));
+        }
+        if !framed(current) {
+            return Ok(EngineResult::Accepted);
+        }
+        let notify_id = if R::FRAMED_NOTIFY_ID { id } else { StageId::VALUE };
+        self.follow_framed(switch, landed, notify_id)
     }
 
     /// A push or pop target of an inner step of kinds 6..`0xb`: a node
@@ -1195,7 +1255,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         match child {
             RowChild::Node(child) => {
                 let node = self.node(child)?;
-                Self::check_open(node, restored, FramedTarget::Allowed)?;
+                Self::check_open(node, restored)?;
                 Ok(Some(node))
             }
             RowChild::Package => Err(NotOwned::PackageChild),
@@ -1225,19 +1285,15 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         Self::check_inner_move(target, node_word, id)?;
         if let Some(parent) = target.parent {
             let last = RowIndex::new(Self::rows(source)?.len().saturating_sub(1) as u32);
-            Self::check_open(self.node(parent)?, last.max(self.state.live.cursor), FramedTarget::Allowed)?;
+            Self::check_open(self.node(parent)?, last.max(self.state.live.cursor))?;
         }
         Ok(())
     }
 
-    /// Kinds 6, 7, 8, `0xa` and `0xb`: pops, pushes and moves through `0xbfab98`
-    /// and `0xbf9f44` with notification id 0, after the seek for `0xa` and
-    /// `0xb`. Every node the steps can open is checked before the first call.
-    /// Kind 9 has no oracle case.
+    /// Kinds 6..`0xb`: pops, pushes and moves through `0xbfab98` and `0xbf9f44`
+    /// with notification id 0, after the seek for `0xa` and `0xb`. Every node
+    /// the steps can open is checked before the first call.
     fn frame_move(&mut self, kind: StageKind, node_word: StageNode, id: StageId, extra: StageExtra) -> Result<EngineResult, NotOwned> {
-        if kind == StageKind::PushMoveUpPop {
-            return Err(NotOwned::EventClass);
-        }
         Self::stage_index(node_word)?;
         self.check_cursor()?;
         let source = self.current()?;
@@ -1245,7 +1301,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         let entry = self.state.live;
         let notify_id = if R::FRAME_NOTIFY_ID_ZERO { StageId::new(0) } else { id };
         let count = StepCount::new(id.get());
-        let up = matches!(kind, StageKind::PopMoveUpPush | StageKind::SeekPushMoveUpPop);
+        let up = matches!(kind, StageKind::PopMoveUpPush | StageKind::PushMoveUpPop | StageKind::SeekPushMoveUpPop);
         let direction = if up { Direction::Up } else { Direction::Down };
         match kind {
             StageKind::PopMoveDownPush | StageKind::PopMoveUpPush => {
@@ -1254,7 +1310,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
                     return Err(NotOwned::StackBounds);
                 }
                 let restored = *self.state.stack.get(depth - 1).ok_or(NotOwned::StackBounds)?;
-                Self::check_open(parent, restored.cursor, FramedTarget::Allowed)?;
+                Self::check_open(parent, restored.cursor)?;
                 Self::check_inner_move(parent, node_word, id)?;
                 for row in Self::rows(parent)? {
                     self.check_target(row.child, entry.cursor)?;
@@ -1267,12 +1323,13 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
                 }
                 self.switched(Switch::Push, node_word, Direction::Down, notify_id)
             }
-            StageKind::PushMoveDownPop => {
+            StageKind::PushMoveDownPop | StageKind::PushMoveUpPop => {
                 self.check_push_move_pop(None, node_word, id)?;
                 if !self.switch_node(Switch::Push, node_word, Direction::Down, notify_id)? {
                     return Ok(EngineResult::Rejected);
                 }
-                if self.move_rows(direction, node_word, count)? != EngineResult::Accepted {
+                let step = if R::PUSH_MOVE_UP { direction } else { Direction::Down };
+                if self.move_rows(step, node_word, count)? != EngineResult::Accepted {
                     return Ok(EngineResult::Rejected);
                 }
                 self.switched(Switch::Pop, node_word, direction, notify_id)
@@ -1339,7 +1396,7 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
     /// Kind `0x13`: `0xbfa800(0x13, node, 0x15)` on the open node.
     fn reopen(&mut self, node_word: StageNode) -> Result<EngineResult, NotOwned> {
         let node = self.current()?;
-        Self::check_open(node, self.state.live.cursor, FramedTarget::Allowed)?;
+        Self::check_open(node, self.state.live.cursor)?;
         let opened = self.open_rows(OpenMode::Reopen, node_word, Direction::Down)?;
         if opened && !R::REOPEN_SILENT {
             self.notify(StageKind::Open, node_word, StageId::VALUE, node.class);
@@ -1365,11 +1422,23 @@ impl<'a, R: Rules, S: EngineServices, P: DerefMut<Target = EngineState>> Machine
         self.state.total = RowCount::new(self.count(CountMode::All)?);
         let remembered = *self.state.remembered.get(index.index()).ok_or(NotOwned::StageNode)?;
         self.state.live.cursor = RowIndex::new(self.ordinal(remembered, OrdinalMode::Index)?);
-        Self::check_open(self.node(target)?, self.state.live.cursor, FramedTarget::Refused)?;
+        let opened = self.node(target)?;
+        Self::check_open(opened, self.state.live.cursor)?;
+        if framed(opened) {
+            self.check_follow_push(opened, 1)?;
+        }
         if self.open_rows(OpenMode::Open(StageKind::Open), node_word, Direction::Down)? {
-            let class = self.current()?.class;
-            self.notify(StageKind::Open, node_word, StageId::VALUE, class);
-            if self.seek_framed(StageKind::Open, node_word, StageId::VALUE, id, extra)? == EngineResult::Accepted {
+            let current = self.current()?;
+            self.notify(StageKind::Open, node_word, StageId::VALUE, current.class);
+            let followed = if self.delegated {
+                self.seek_framed(StageKind::Open, node_word, StageId::VALUE, id, extra)?
+            } else if framed(current) {
+                let notify_id = if R::FRAMED_NOTIFY_ID { StageId::VALUE } else { id };
+                self.follow_framed(Switch::Push, node_word, notify_id)?
+            } else {
+                EngineResult::Accepted
+            };
+            if followed == EngineResult::Accepted {
                 return Ok(EngineResult::Accepted);
             }
         }
