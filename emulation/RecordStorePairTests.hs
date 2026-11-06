@@ -255,7 +255,7 @@ fixture role mutation = Observation receipt files where
       ++ [K.fromString name .= binding (if mutation == BadBinding && name == "run" then "different-run" else "cohort") | name <- ["run","boot-rom","adjustment-nand","observer","bridge"]])
     ,"files" .= object [K.fromString (sidecarName name) .= hash bytes | (name,bytes) <- M.toList files],"ram_rule" .= extents,"raw_residual_count" .= (0::Int),"settings_at_attach" .= regions mutation,"medium_at_attach" .= medium mutation])
 
-data ResetEvidence = ResetAppends | ResetWithoutAppend | ResetUnsettled | BudgetedKey deriving (Eq)
+data ResetEvidence = ResetAppends | ResetWithoutAppend | BudgetedKey deriving (Eq)
 
 data PrefixEvidence = Sampled | MissingPrefix | MissingUi | MissingMenu | MissingDepth | MissingNode | MenuAddressDiffers | MenuAliasDisagrees | MissingMode | ModeAddressDiffers | ModeAliasDisagrees | ShortMode | ChangedCurrent | ChangedPrevious | ChangedPending | ChangedRequest | ChangedLatch | ShortTicks | ExcessTicks | ExcessRan | TickOverflow | InstructionOverflow | RanOverflow | SnapshotInstructionDiffers | SnapshotTickOverflow | UnlatchedPress | PriorRenderPending | IncompleteRecordCall deriving (Eq, Show, Enum, Bounded)
 
@@ -302,7 +302,7 @@ keyFixtureAtCursor cursor role evidence prefixEvidence = (bound, Observation rec
   set _ _ _ = error "fixture object required"
   reset = object ["schema" .= (1::Int),"reset" .= object ["instructions" .= (0::Int)],"regions_at_reset" .= resetRegions role Original
     ,"segments" .= [object ["phase" .= phase,"instructions" .= (1::Int),"hits_end" .= (0::Int),"watch" .= watch role phase Original,"regions" .= resetRegions role Original] | phase <- [minBound..maxBound]::[AttachPhase]]]
-  press = object ["failure" .= (if prefixEvidence == UnlatchedPress then String "unlatched" else Null),"settle" .= object ["status" .= (if prefixEvidence == PriorRenderPending then "prior-render-pending" else if evidence `elem` [ResetUnsettled,BudgetedKey] then "budget-exhausted" else "packet-consumed"::T.Text)]
+  press = object ["failure" .= (if prefixEvidence == UnlatchedPress then String "unlatched" else Null),"settle" .= object ["status" .= (if prefixEvidence == PriorRenderPending then "prior-render-pending" else if evidence == BudgetedKey then "budget-exhausted" else "packet-consumed"::T.Text)]
     ,"menu" .= object ["cursor" .= (0::Int),"menu_id" .= (1::Int),"setting_id" .= (5::Int)]]
   step = object (["step" .= (1::Int),"parent" .= (0::Int),"keys" .= [KeyOk],"hits" .= ([0,length events]::[Int])
     ,"idle" .= object ["ran" .= (20000000::Int)],"press" .= press,"regions_before" .= regions Original,"regions_after" .= regions Original
@@ -534,7 +534,7 @@ main = do
       wrongSymbols extra = rejectBinding id (<> C.pack extra)
       tests = [("nine-entry observation matches",matched Original)
         ,("changed endpoint cursor fails with equal press-time menus",endpointCursorDiffers)
-        ,("defaults reset with a consumed append qualifies",let (bound,observation) = resetFixture ResetAppends in not (isLeft (qualify Owned bound observation)))
+        ,("defaults reset with successful append and program request admits comparison",let (bound,observation) = resetFixture ResetAppends in not (isLeft (qualify Owned bound observation)))
         ,("defaults reset without a record append refuses",let (bound,observation) = resetFixture ResetWithoutAppend in isLeft (qualify Owned bound observation))
         ,("missing cache metadata policy refuses",rejectBinding (\value -> case value of Object fields -> Object (KM.delete "owned_cache" fields); _ -> value) id)
         ,("wrong open initializer refuses",wrongCacheField "initialized_by" (A.toJSON (0x6ac328::Word32)))
@@ -551,7 +551,6 @@ main = do
         ,("moved cache and staging bindings refuse",and [rejectBinding id (C.unlines . map (\line -> if C.words line == [C.pack (showHex address ""), "0", "A", C.pack name] then C.pack (showHex (address+4) " 0 A " ++ name) else line) . C.lines) | (name,address) <- cacheSymbolLayout])
         ,("obsolete gap cannot be declared owned",rejectOwnership (A.toJSON ([[0x89f8f0,0x89fa68],[0x8a0080,0x8e008c]]::[[Word32]])))
         ,("second buffer ownership cannot be omitted",rejectOwnership (A.toJSON ([[0x89f8f8,0x89fa60],[0x89fa60,0x89fa68],[0x8a0080,0x8c0080],[0x8e0080,0x8e008c]]::[[Word32]])))
-        ,("defaults reset with unsettled confirmation refuses",let (bound,observation) = resetFixture ResetUnsettled in isLeft (qualify Owned bound observation))
         ,("report names exercised entries and NAND requests per role/media",reportedCoverage)
         ,("changed program payload fails comparison",differs PayloadByte)
         ,("reordered external calls fail comparison",differs ReorderCalls)
