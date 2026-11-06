@@ -5,6 +5,7 @@ module Main (main) where
 
 import Control.Monad (forM_, unless)
 import qualified Data.ByteString as B
+import System.Directory (createDirectoryIfMissing, getTemporaryDirectory)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
@@ -13,7 +14,10 @@ import Replacement.RtosOwnFirst.Regions (Domain (..))
 
 main :: IO ()
 main = do
-  [runner, directory, binA, binB] <- getArgs
+  [runner, binA, binB] <- getArgs
+  temporary <- getTemporaryDirectory
+  let directory = temporary </> "rtos-objects-family"
+  createDirectoryIfMissing True directory
   bytesA <- B.readFile binA
   bytesB <- B.readFile binB
   let envA = FamilyEnv DomainA 0x40054648 0x4005ab10 0x400c9c0 0x400d1b0 0x40054700 0x4005ab30 0x4005ab38

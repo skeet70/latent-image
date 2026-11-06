@@ -144,8 +144,9 @@ haskell_library(
     ],
 )
 
-haskell_binary(
-    name = "family-suite-runner",
+haskell_test(
+    name = "family-suite-test",
+    size = "small",
     srcs = ["native/SuiteMain.hs"],
     main_file = "native/SuiteMain.hs",
     args = [
@@ -163,6 +164,7 @@ haskell_binary(
         ":family-suite",
         "//host:base",
         "//host:bytestring",
+        "//host:directory",
         "//host:filepath",
     ],
 )

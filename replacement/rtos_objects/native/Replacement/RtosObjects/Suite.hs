@@ -19,14 +19,13 @@ module Replacement.RtosObjects.Suite
 
 import Control.Monad (forM)
 import qualified Data.ByteString as B
-import Data.Aeson (object, (.=))
 import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import qualified Data.Map.Strict as M
+import Data.List (nub)
 import Data.Maybe (fromMaybe)
 import Data.Word (Word32)
-import Emulation.NativeCase (Region (..))
 import Emulation.NativeObservation (GuestAddress (..), NativeObservation (..), RegionId (..), Register (..), RunnerStatus (..))
-import Emulation.OwnedCase (CaseRegion (..), CaseSpec (..), Permission (..), hexAddress)
+import Emulation.OwnedCase (CaseRegion (..), CaseSpec (..), Permission (..), hexAddress, mkRegion)
 import Replacement.RtosOwnFirst.Regions (Domain (..))
 import Replacement.RtosScheduler.Oracle (runCases, stripScratch)
 
@@ -79,9 +78,9 @@ rows :: [Row]
 rows =
   [ Row "set_own_created" SetFlag 0 [(R1, 0x1)] [(InRecord (flagConfig 0), 1), (InRecord (flagConfig 0 + 0xc), 0)] 0 0 [(InRecord (flagConfig 0 + 4), 0x1)] ""
   , Row "set_bits_accumulate" SetFlag 0 [(R1, 0x5)] [(InRecord (flagConfig 0), 1), (InRecord (flagConfig 0 + 4), 0x2)] 0 0 [(InRecord (flagConfig 0 + 4), 0x7)] ""
-  , Row "set_auto_clear" SetFlag 0 [(R1, 0x1)] [(InRecord (flagConfig 0), 1), (InRecord (flagConfig 0 + 0xc), 1), (InRecord 0x28, 0x40000014), (At 0x40000014 + 0x10, 2), (At 0x40000014 + 0x14, 3)] 0 0 [(InRecord (flagConfig 0 + 4), 0), (At 0x40000014 + 0x10, 0)] ""
+  , Row "set_auto_clear" SetFlag 0 [(R1, 0x1)] [(InRecord (flagConfig 0), 1), (InRecord (flagConfig 0 + 0xc), 1), (InRecord 0x28, 0x40000014), (At (0x40000014 + 0x10), 2), (At (0x40000014 + 0x14), 3)] 0 0 [(InRecord (flagConfig 0 + 4), 0), (At (0x40000014 + 0x10), 0)] ""
   , Row "set_remote" SetFlag 0 [(R1, 0x1)] [(InRecord (flagConfig 0), 1)] 0 0 [] "the remote flag record is the peer record; the doorbell word is outside the mapped data and the case asserts only the return"
-  , Row "set_waiter_selector" SetFlag 0 [(R1, 0x1)] [(InRecord (flagConfig 0), 1), (InRecord 0x28, 0x40000014), (At 0x40000014 + 0x18, 0x40000030), (At 0x40000014 + 0x14, 7), (At 0x40000030 + 0x14, 2), (At 0x40000030 + 0x10, 2)] 0 0 [(At 0x40000014 + 0x10, 0), (At 0x40000014 + 0x28, 0)] ""
+  , Row "set_waiter_selector" SetFlag 0 [(R1, 0x1)] [(InRecord (flagConfig 0), 1), (InRecord 0x28, 0x40000014), (At (0x40000014 + 0x18), 0x40000030), (At (0x40000014 + 0x14), 7), (At (0x40000030 + 0x14), 2), (At (0x40000030 + 0x10), 2)] 0 0 [(At (0x40000014 + 0x10), 0), (At (0x40000014 + 0x28), 0)] ""
   , Row "set_not_created" SetFlag 0 [(R1, 0x1)] [(InRecord (flagConfig 0), 0)] 0 0xffffffd6 [] ""
   , Row "send_unknown_extent" Send 0 [(R1, 0x40000000)] [] 0 0xffffffd6 [] "the manifest keeps the +0xd4 extent refused; this case is the oracle hypothesis"
   , Row "send_created" Send 0 [(R1, 0x40000000)] [(InRecord (mailboxConfig 0), 1), (At 0x40000000, 0xabcd)] 0 0xffffffcf [(InRecord (mailboxConfig 0 + 0x18), 0x40000000), (InRecord (mailboxConfig 0 + 0x1c), 0x40000000)] ""
@@ -126,22 +125,8 @@ stub code = B.pack (concatMap littleEndian [0xe3a00000 .|. (code .&. 0xff), 0xe1
   where
     littleEndian word = [fromIntegral (word `shiftR` shift) | shift <- [0, 8, 16, 24]]
 
-mkRegion :: RegionId -> Word32 -> Int -> Permission -> B.ByteString -> CaseRegion
-mkRegion ident base size permission bytes =
-  CaseRegion
-    ( Region
-        { description = object ["id" .= regionName ident, "address" .= hexAddress (GuestAddress (fromIntegral base)), "size" .= size, "permissions" .= label permission]
-        , baseAddress = fromIntegral base
-        , regionSize = fromIntegral size
-        , regionBytes = bytes
-        }
-    )
-    permission
-  where
-    label ReadOnly = "r"
-    label ReadWrite = "rw"
-    label ReadExecute = "rx"
-    label Device = "device"
+region :: RegionId -> Word32 -> Int -> Permission -> B.ByteString -> CaseRegion
+region ident base size permission bytes = mkRegion ident (GuestAddress (fromIntegral base)) size permission bytes
 
 -- | The entry table and the two counts the bodies read.
 layoutWords :: FamilyEnv -> [(Where, Word32)]
@@ -153,12 +138,18 @@ layoutWords env =
   , (At (envMailboxCount env), 8)
   ]
 
--- | A 4 KiB region containing @address@, with the words of @entries@ that fall inside it.
+-- | A 4 KiB region at @base@, with the words of @entries@ that fall inside it.
 pageOf :: Word32 -> [(Where, Word32)] -> FamilyEnv -> CaseRegion
-pageOf address entries env =
-  let base = address .&. 0xfffff000
-      words = [(resolved, value) | (where', value) <- entries, let resolved = resolve env where', resolved >= base, resolved < base + 0x1000]
-   in mkRegion (RegionId ("page-" ++ show base)) base 0x1000 ReadWrite (plant base 0x1000 words)
+pageOf base entries env =
+  let words = [(resolved, value) | (where', value) <- entries, let resolved = resolve env where', resolved >= base, resolved < base + 0x1000]
+   in region (RegionId ("page-" ++ show base)) base 0x1000 ReadWrite (plant base 0x1000 words)
+
+-- | The pages the case's words touch, each once.
+pages :: FamilyEnv -> Row -> [CaseRegion]
+pages env row =
+  let words' = layoutWords env ++ rowWords row
+      bases = nub (map (\address -> address .&. 0xfffff000) (map (resolve env . fst) words') ++ [0x40000000])
+   in [pageOf base words' env | base <- bases]
 
 plant :: Word32 -> Int -> [(Word32, Word32)] -> B.ByteString
 plant base size words =
@@ -180,17 +171,12 @@ caseFor env bin row =
     , caseEntry = GuestAddress (fromIntegral (entryAddress (envDomain env) (rowFamily row)))
     , caseExit = GuestAddress 0x958f00
     , caseRegions =
-        [mkRegion (RegionId ("code-" ++ show base)) base (fromIntegral size) ReadExecute (slice base size) | (base, size) <- extents (envDomain env)]
-          ++ [ mkRegion (RegionId "timer") (timerEntry (envDomain env)) 8 ReadExecute (stub (rowTimer row))
-             , mkRegion (RegionId "raise") (raiseIrqEntry (envDomain env)) 8 ReadExecute (stub 0)
+        [region (RegionId ("code-" ++ show base)) base (fromIntegral size) ReadExecute (slice base size) | (base, size) <- extents (envDomain env)]
+          ++ [ region (RegionId "timer") (timerEntry (envDomain env)) 8 ReadExecute (stub (rowTimer row))
+             , region (RegionId "raise") (raiseIrqEntry (envDomain env)) 8 ReadExecute (stub 0)
              ]
-          ++ [ pageOf (envEntryWords env) (layoutWords env ++ rowWords row) env
-             , pageOf (envFlagCount env) (layoutWords env) env
-             , pageOf (envMailboxCount env) (layoutWords env) env
-             , pageOf (envOwnRecord env) (layoutWords env ++ rowWords row) env
-             , pageOf 0x40000000 (rowWords row) env
-             ]
-          ++ [mkRegion (RegionId "stack") 0x959700 0x110 ReadWrite (B.replicate 0x110 0)]
+          ++ pages env row
+          ++ [region (RegionId "stack") 0x959700 0x110 ReadWrite (B.replicate 0x110 0)]
     , caseFunctions = [(GuestAddress (fromIntegral base), size) | (base, size) <- extents (envDomain env)]
     , caseInitial = [(R0, rowSlot row), (R1, 0)] ++ rowRegisters row ++ [(Sp, 0x959800), (Lr, 0x958f00), (Cpsr, 0x13)]
     , caseExpectedStatus = Returned
