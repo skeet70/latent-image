@@ -1,0 +1,51 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+xm1_rust_staticlib(
+    name = "objects-rust",
+    src = "src/lib.rs",
+    crate_name = "xm1_rtos_objects",
+    data = [
+        "src/admission.rs",
+        "src/id.rs",
+        "src/matching.rs",
+        "src/message.rs",
+        "src/order.rs",
+        "src/status.rs",
+        "src/timeout.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+    ],
+)
+
+genrule(
+    name = "objects-host-tests-build",
+    srcs = [
+        "src/admission.rs",
+        "src/id.rs",
+        "src/lib.rs",
+        "src/matching.rs",
+        "src/message.rs",
+        "src/order.rs",
+        "src/status.rs",
+        "src/tests.rs",
+        "src/timeout.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+    ],
+    outs = ["objects-host-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = [
+        "@lab_clang//:bin/clang",
+        "@lab_rustc//:bin/rustc",
+    ],
+)
+
+sh_test(
+    name = "objects-host-tests",
+    size = "small",
+    srcs = ["//emulation:recovery-task-state-tests.sh"],
+    args = ["$(location :objects-host-tests-build)"],
+    data = [":objects-host-tests-build"],
+)

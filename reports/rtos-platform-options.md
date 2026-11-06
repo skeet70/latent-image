@@ -14,7 +14,7 @@ This report answers whether projects listed at [arewertosyet.com](https://arewer
 ### 1.2 Service ABI that retained callers keep using
 
 - Each root has **97 callable slots**: 93 at `0..0x170` plus four extensions at `+0x1618..+0x1624`. It also holds a tick pointer at `+0x174`, 120 eleven-word descriptors from `+0x178` and a stack-top word at `+0x1628`, for a total of 1,419 words [Draft:11; Map A.1].
-- Manifest v6 (E-RTOS-SLOT-MANIFEST-V5-150) recovers all 97 contracts per domain from the x70view decomp's kernel C (§4.13). Extents: 80 derived by StockInventory, 15 taken from byte-exact decomp functions, and 2 (`+0xc0`, `+0xd4`) still refused ([manifest draft](rtos-platform-manifest-draft.md#v6-contracts-from-the-decomp)).
+- Manifest v7 (E-RTOS-SLOT-MANIFEST-V5-150) recovers all 97 contracts per domain from the x70view decomp's kernel C (§4.13), including the mailbox pointer preconditions in §4.14. Extents: 80 derived by StockInventory, 15 taken from byte-exact decomp functions, and 2 (`+0xc0`, `+0xd4`) still refused ([manifest draft](rtos-platform-manifest-draft.md#v6-contracts-from-the-decomp)).
 - Retained code depends on more than the slots [Draft:37-46]:
   - it calls the scheduler and CPU helpers directly;
   - auto-ready `0x43f9c`, initial scheduler `0x43688`, trampolines `0x43728` and resume through `SPSR/LDM^` are direct entries;
@@ -643,4 +643,291 @@ Paired entry addresses are listed in stock / owned order.
 | service/enable-task-exception | `0x47428` | `0xd73e8` | 0 | 0 | 0 | 0 |
 
 The qualification is finite emulated evidence for this route and these contracts. It does not establish hardware/cache ordering, unused-entry behavior, general stack capacity or composition with the separate startup-artifact pieces. No camera was used.
+
+### 4.14 Owned eventflag and mailbox family: the recovered `+0xd4` body and the family design
+
+Sources: x70view `55436fc85c0560dd252b0410af6f2427fe198cd3`, `decomp/firmwares/xm1-150/kernel0` (A) and `kernel1` (B); the pinned loaders `private-data/analysis/x-m1-1.50/decode/loader-40000.{bin,dis}` (A) and `loader-d0000.{bin,dis}` (B); manifest v6 (E-RTOS-SLOT-MANIFEST-V5-150) for the other 13 slots of the family; census-v1 (E-RTOS-SLOT-CENSUS-STOCK-150) for reach; E-IMAGE4-QUEUE-DESTRUCTOR-POWEROFF-150 for the destructor. **Exact** = a byte-exact decomp function. **Confirmed** = a NONMATCHING draft or a bodyless declaration checked instruction by instruction against both loaders' stock disassembly. **[INFERENCE]** = design conclusion, not an observation. The NONMATCHING `mailbox_send` C was read only as a hypothesis; every fact in §4.14.2 and §4.14.3 was re-derived from the bytes.
+
+#### 4.14.1 The two families are one ownership unit
+
+The record tables are laid out so that one family's writes land in the other's records, in both domains:
+
+| Record | A | B | Stride | Count |
+| --- | --- | --- | --- | --- |
+| mailbox configuration | `0x4005d16c` | `0x400ed12c` | 12 | 1 |
+| eventflag configuration | `0x4005d178` | `0x400ed138` | 12 | 120 |
+| eventflag control block | `0x400624b4` | `0x400f2474` | 16 | 120 |
+| mailbox control block | `0x40062c34` | `0x400f2bf4` | 20 | 1 |
+| eventflag wait record | `0x40055fdc` | `0x400e5f9c` | 24 | 120 |
+| eventflag timer entry | `0x40055a3c` | `0x400e59fc` | 12 | 120 |
+| mailbox wait record | `0x4005783c` | `0x400e77fc` | 16 | 120 |
+| mailbox timer entry | `0x40057fbc` | `0x400e7f7c` | 12 | 120 |
+
+- `0x4005d16c + 12 = 0x4005d178`, so **mailbox configuration n is eventflag configuration n-1**. The flag table ends at `0x4005d178 + 120*12 = 0x4005d718`, the domain's timer heap, so flag id 121 writes the heap.
+- `0x400624b4 + 120*16 = 0x40062c34`, so eventflag control block 121 is mailbox control block 1. Mailbox control block 2 is `0x40062c48`, past the one-entry table and inside the boot stack below its top `0x40063460`.
+- Counts are loader constants, mailbox 1 and eventflag 120 (`[0x4dab4]`/`[0x4dac4]` in A, `[0xdda78]`/`[0xdda88]` in B), read by `mailbox_initialize` A `0x4a9bc` / B `0xda97c` and `event_flag_initialize`, published into the shared configuration at `0x400c0818`/`0x400c0888` and copied into each context record's `+0x54/+0x58` (flags) and `+0x64/+0x68` (mailboxes).
+- `kernel_delete_mailbox` (`+0xd0`, exact) indexes `uxth(r0)-1` with no class, range or existence check, writes `{2, 32, 0}` to that configuration record and a self-link plus `+0xc = 0` to that control block. Image4's queue destructor `0x724f08(n)` calls it with its **data-queue** id `(0x7cad9c[n-1] << 16) | n`, so on the observed POWER OFF route `n = 8` and `n = 41` rewrite A eventflag configurations 7 and 40 from `{4, 0, 1}` to `{2, 0x20, 0}` (E-IMAGE4-QUEUE-DESTRUCTOR-POWEROFF-150). The data queue is never deleted, because `+0xa4` is not called.
+- External callers use ids only: task create `0x725dd8` calls `+0x80` with the task's own id, task delete `0x72612c` calls `+0x84`, the destructor calls `+0xd0`, and the flag wrapper `0x724480` calls `+0x9c`. The message constructor `0x724cdc`, send `0x72503c` and receive `0x725318` use the data-queue `+0xa0`/`+0xac`/`+0xc8` and pool `+0xe4`/`+0xf8` families instead; no stock wrapper calls `+0xd4`, `+0xd8`, `+0xdc` or `+0xe0`.
+- A class-2 id passed from A code resolves to B's tables through B's context record, so A code writes B's records. That is the scheduler's cross-domain rule again, and it makes the family one unit in both domains.
+
+#### 4.14.2 `+0xd4`: byte extent
+
+| Domain | Target | Start | Bytes | End | SHA-256 | Fence |
+| --- | --- | --- | --- | --- | --- | --- |
+| A | `+0xd4` | `0x4aa44` | 772 | `0x4ad48` | `7f49745856203fe1beee899c193344fb140a1832269b9e451f4272914143f1a8` | `0x4ad48` |
+| B | `+0xd4` | `0xdaa04` | 772 | `0xdad08` | `aa5d81982986f242cbe97a5a92951793722c27d5f41fd149153ceabde6697e42` | `0xdad08` |
+
+Both hashes equal the `function-ranges.json` row hash at the pinned commit (`FUN_0004aa44`, `FUN_000daa04`, 772 bytes), recomputed here from our loaders at offsets `0xaa44` and `0xaa04`; the loader section hashes are the pinned `21366fff7cebc617…` and `8fb0c322a22443a3…`. The fence is the next published entry, and it coincides with the measured end.
+
+Boundary proof:
+
+- 193 four-byte instructions exactly fill each window; no literal pool, no Thumb.
+- The window's only entry point in a linear decode of the loader's own bytes is `push {r4-r11, lr}` at `0x4aa44` / `0xdaa04`: the two published neighbours end before it, and no direct branch anywhere in that loader targets an instruction inside the window. The scan establishes no computed, restored or aliased entry, so an indirect arrival inside the window stays unresolved; the extent claims the byte range, not whole-entry closure.
+- One exit in the same linear decode: the only PC load is `pop {r4-r11, pc}` at `0x4ad18` / `0xdacd8`, and `sub sp, r11, #32` immediately precedes it on every path.
+- Every conditional and unconditional branch target encoded in the window lies inside it; the last instruction is `b 0x4acfc` at `0x4ad44` / `b 0xdacbc` at `0xdad04`.
+- `0x4ad48` / `0xdad08` opens the next function with its own frame (`push {r3-r11, lr}`), the `+0xd8` receive body.
+- A and B differ in exactly 10 of 193 encodings: four `movw`/`movt` pairs (`0x400545a4→0x400e4564`, `0x400545cc→0x400e458c` twice, `0x400545c8→0x400e4588`) and two `bl` displacements (`0x44018→0xd3fd4`, `-0x6c28` against `-0x6c24`; `0x43640→0xd3640`). The `bl 0x44568→0xd4528` and all eight indirect calls encode identically, because the bodies are exactly `0x8ffc0` apart. There is no behavioural difference between the domains.
+- The body makes eight indirect calls through a context record: object-lock acquire/release `[record+0x18]`/`[record+0x1c]` at `0x4ab7c`, `0x4abe8`, `0x4ac50`, `0x4ad24`, `0x4ad40`, and scheduler-lock acquire/release `[record+0xc]`/`[record+0x10]` at `0x4abd4`, `0x4ac44`, `0x4ad34`.
+
+Why the manifest still refuses the extent: `extent.status` is `unknown` with `refusal: "PC load is not proven to be the incoming return at 4ad18; premise uses: [4ab7c=unexposed-caller-frame-isolation, 4ad24=unexposed-caller-frame-isolation]"` (B: `dacd8`, `dab3c`, `dace4`). StockInventory cannot prove that an indirect call through a function pointer held in a context record returns to its caller, so the saved-LR slot may have been clobbered before the `pop`. The refusal is a tool premise, not a byte fact.
+
+Exact remaining prerequisite, one of:
+
+1. A byte-exact `mailbox_send` in x70view at a pinned commit. The current marker is `/* NONMATCHING: 54 instructions: block order and a spilled copy of the mailbox pointer */`. The row that would then enter `replacement/media_permit/rtos_decomp_extents.json` is `{domain: A, start: 0x4aa44, bytes: 772, sha256: 7f497458…, name: mailbox_send, path: decomp/firmwares/xm1-150/kernel0/src/sync/mailbox_send.c}` plus its B twin, and the contract's `decomp` entry for `0xd4` must flip `exact` to true.
+2. A reviewed `ReturnProvenance` premise that an indirect call through a context record's `+0x18`/`+0x1c` or `+0xc`/`+0x10` returns to its caller. It must admit the construct, not the two named sites, because `0x4abd4`, `0x4ac44`, `0x4ad34` and `0x4ad40` are the same thing.
+3. A reviewed byte-boundary extent source independent of the return proof, in the shape of the existing `rtos_function_boundaries.json` rows, with `{boundaryDomain: A, boundaryStart: 0x4ad48}` and the basis text of the proof above.
+
+Until one lands the extent stays `unknown`, and no slot contract may cite it as `decomp-exact`. The engineering extent is settled, so the F1-F3 stages may use it as a region.
+
+The same method settles the other refused extent, which belongs to the data-queue family rather than this one: `+0xc0` is A `[0x49f2c, 0x4a2f0)` and B `[0xd9eec, 0xda2b0)`, 964 bytes, SHA-256 `e45bfbf917a5053c…` and `6ec7e61cc9ecf064…`, 241 instructions, one entry point in the same linear scan, one `pop {r4-r11, pc}` at `0x4a2cc` / `0xda28c`, every encoded branch target internal and only `bl` transfers out. It is recorded here only so that family starts from the same evidence; its refusal rests on the same unproved-return class, with more premise kinds.
+
+#### 4.14.3 `+0xd4`: the contract
+
+Signature `int mailbox_send(int id, struct message *message)`; `r0 = (class << 16) | n`, `r1` = message pointer; returns 0. Admission, in stock order and all before any lock:
+
+1. context word `A 0x400545a4 / B 0x400e4564` nonzero → `-25`.
+2. `CPSR.I` set → `-25`.
+3. `class = r0 asr 16`; `(class-1) as u16 <= 1` selects class 1 or 2 (record `0x400545cc`/`0x400e458c` + `(class-1)*132`); class 0 selects the executing record `*0x400545c8`/`*0x400e4588`; anything else `-18`.
+4. `n = r0 as i16`; `n <= 0` or `n > record+0x68` → `-18`. The bound is 1 in both domains.
+5. `config = *(cb+0x8)`; `config+0x8` (exists) zero → `-42`.
+6. Attribute bit1 set and (`message+0x4 as i32 <= 0` or `> config+0x4`) → `-17`.
+
+The dispatch-enabled word is **not** read: a send proceeds with dispatch disabled, unlike every receive form.
+
+With a queued receiver (`cb+0x0 != cb`):
+
+1. Mask IRQ (I only) and take the object lock `record+0x14` through `[record+0x18]`.
+2. `T = cb+0x0`; `dom' = 0x400545cc/0x400e458c + (T+0x20 - 1)*132`.
+3. `*(T+0x14) + 0xc := message`, **before** the scheduler lock.
+4. Take `dom'+0x8` through `[dom'+0xc]`.
+5. Unlink: `cb+0x0 := T+0x0`; `(T+0x0)+0x4 := cb`. `cb+0x4` stays; it equals `cb` when `T` was the only waiter.
+6. `0x44568/0xd4528(dom', T)`: cancel `*(T+0x14)` as a timer in `dom'` when nonzero, `*(T+0x14) := 0`, then reset or ready-insert per `T+0x24`, `T+0x28`, `T+0x2c` and `T+0xc` bit2.
+7. Only when step 6 returned nonzero, `0x44018/0xd3fd4(dom'+0x0)` while both locks are still held. Nonzero means the target is local and its selection changed with dispatch enabled; zero means a remote doorbell was rung.
+8. Release `dom'+0x10`, then release `record+0x1c`. A zero step 6 clears IRQ and returns 0 with no dispatch. Otherwise a nonzero step 7 runs `-63` into the dispatcher `0x43640/0xd3640`, whose result `0` overwrites it, and a zero step 7 returns 0.
+9. Every exit clears `CPSR.I`.
+
+With no receiver:
+
+- Attribute bit1: insert into the list at `cb+0xc` before the first entry whose `+0x4` is strictly greater, so equal priorities keep send order. `cb+0x10` is not written.
+- Otherwise: `message+0x0 := 0`; when `cb+0xc != 0` then `(cb+0x10)+0x0 := message`, else `cb+0xc := message`; then `cb+0x10 := message`.
+- Release the object lock, clear IRQ, return 0. No dispatch and no doorbell.
+
+Lifetime:
+
+- The message is caller-owned. On the queued path the kernel overwrites `message+0x0` and keeps the pointer until a receive returns it or a delete drops it. On the receiver path only `T+0x14`+0xc is written, so `message+0x0` keeps its value.
+- `message+0x4` is read only under attribute bit1, and it is compared as a signed word, so 0 and negatives are refused.
+- The pointer crosses domains unchanged: a class-2 send from A code hands it to a B receiver.
+- Nothing validates `message`, `message+0x4` or the wait record; a bad pointer is a caller fault.
+- A `+0xd0` on the same mailbox sets `cb+0xc := 0` and returns no message to anyone.
+- The `acquire != 0` retry branches in the body are dead: the installed acquire spins and returns 0 (manifest v6 correction).
+
+#### 4.14.4 The other 13 slots the design must cover
+
+| Slot | A | B | Operation | Admission before the object lock | Under the lock | Errors | Order |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `0x80` | `0x4d39c` | `0xdd360` | flag create | none: no class, range or context check, only an I/F mask | `{attr, initial, 1}` to the configuration, self-link the queue, `pattern := config+0x4` | `-41` | n/a |
+| `0x84` | `0x4d434` | `0xdd3f8` | flag delete | none | `{0, 0, 0}`, self-link, `pattern := 0`; a queued waiter is stranded | none | n/a |
+| `0x88` | `0x4813c` | `0xd80fc` | flag set, task | `-25` context/I, `-18` class/index, `-42` | object lock, then the waiter's `T+0x20` scheduler lock; OR, match, `wait+0x14 := pattern`, clear the whole word when attr bit2, unlink, release, notify | `-25`, `-18`, `-42` | one waiter |
+| `0x8c` | `0x4839c` | `0xd835c` | flag set, handler | `-25` unless handler context with I clear; `-18`, `-42` | as `0x88`, but the release uses the **flag's** domain record | `-25`, `-18`, `-42` | one waiter |
+| `0x90` | `0x485c0` | `0xd8580` | flag clear | `-25`, `-18`, `-42` | `pattern &= mask` | `-25`, `-18`, `-42` | none |
+| `0x94` | `0x486f8` | `0xd86b8` | flag wait | `-25` context/I/dispatch, `-18`, `-17` for pattern 0 or a mode bit, `-42`, then `-28` under the lock | match → `*result := pattern`; else block untimed | `-25`, `-18`, `-17`, `-42`, `-28`, `-49` | one waiter |
+| `0x98` | `0x489ac` | `0xd896c` | flag poll | `-25`, `-18`, `-17`, `-42`, `-28` | match → 0 with `*result`; else `-50` | plus `-50` | one waiter |
+| `0x9c` | `0x48b30` | `0xd8af0` | flag timed wait | as `0x94`, plus `-17` for timeout `< -1`; `-50` under the lock when timeout 0 and no match | match → 0; else block with the timer in the **waiter's** heap | `-25`, `-18`, `-17`, `-42`, `-28`, `-50`, `-49` | one waiter |
+| `0xcc` | `0x4d5bc` | `0xdd580` | mailbox create | none, only an I/F mask | `{attr, limit, 1}`, self-link, `head := 0`; `tail` untouched | `-41` | n/a |
+| `0xd0` | `0x4d654` | `0xdd618` | mailbox delete | none, only an I/F mask | `{2, 32, 0}`, self-link, `head := 0`; `tail` untouched | none | n/a |
+| `0xd4` | `0x4aa44` | `0xdaa04` | mailbox send | §4.14.3 | §4.14.3 | `-25`, `-18`, `-42`, `-17` | messages by attr bit1 |
+| `0xd8` | `0x4ad48` | `0xdad08` | mailbox receive | `-25` context/I/dispatch, `-18`, `-42` | head → pop; empty → block untimed | `-25`, `-18`, `-42`, `-49` | receivers by attr bit0 |
+| `0xdc` | `0x4af9c` | `0xdaf5c` | mailbox poll receive | `-25` context/I, `-18`, `-42` | head → pop; empty → `-50` | `-25`, `-18`, `-42`, `-50` | n/a |
+| `0xe0` | `0x4b0e4` | `0xdb0a4` | mailbox timed receive | as `0xd8`, plus `-17` for timeout `< -1` and `-50` for timeout 0 on an empty list | head → pop; else block with a timer | `-25`, `-18`, `-17`, `-42`, `-50`, `-49` | receivers by attr bit0 |
+
+- **Waiting order.** `FUN_000448e8` appends at the tail when `*queue->config & 1` is clear, and otherwise inserts before the first waiter whose `T+0xd` is strictly greater, so equal priorities queue behind existing waiters. `queue->config` is the family's own configuration record, so bit0 orders waiting tasks and bit1 orders queued messages; owned code must not conflate the two.
+- **Timeouts.** The unit is 10 per tick, the deadline is `*own record+0x40 + timeout`, and the entry goes into the waiting task's own heap even when the object belongs to the other domain. Expiry completes the wait with `-50`, a forced release (`+0x38`/`+0x3c`) or termination with `-49`, and a satisfied wake with 0 plus, for flags, the pattern from `wait+0x14`.
+- **Context.** The four blocking forms (`0x94`, `0x9c`, `0xd8`, `0xe0`) require the dispatch-enabled word; `0x88`, `0x90`, `0x98`, `0xd4` and `0xdc` do not. The handler form `0x8c` requires handler context and rejects task context.
+
+#### 4.14.5 Design
+
+**(a) Artifact and increments.** One artifact, `//replacement/rtos_objects`, crate `xm1_rtos_objects`, one `xm1_rust_staticlib` build in F0 (domain-agnostic until the first entry lands, then one per domain), the `rtos_layout` views, one host-test target and one isolated `xm1_rust_elf` stage per increment. No per-slot crate, target or gate: the family is one artifact with one cutover.
+
+- **F0, layout and decode.** Implemented in `replacement/rtos_objects` (crate `xm1_rtos_objects`) over the views added to `replacement/rtos_layout`: typed ids and slots, the record views, the admission order per service, the match predicate, the queue-order policies and the timeout encoding. `EncodedId` appears only in `resolve_flag`, `resolve_mailbox` and `own_*_slot`; every other owned entry point takes `FlagId` or `MailboxId`. The host tests pin the admission order by which refusal wins when several inputs are wrong, against the exact C of `event_flag_check`, `kernel_create_flag`, `kernel_delete_flag`, `kernel_create_mailbox`, `kernel_delete_mailbox`, `mailbox_initialize`, `event_flag_initialize` and `FUN_000448e8`. The policy touches no guest memory. 53 host tests pass (35 in the new crate, 18 in `rtos_layout`, five of them new), the armv7r staticlib builds, and a throwaway consumer caller outside the crate printed the seven expected lines for a cross-domain class-2 id, class 0 from a B entry domain, a class-1 mailbox from B, an admitted priority and three refusals including a negative priority under a negative limit. The first host test run failed one fixture, not the implementation: the dispatch-word case used the zero pattern that `+0x98` refuses with -17, and the fixture, not the policy, was corrected. That caller and its target were removed after the receipt (E-RTOS-OBJECTS-F0-HOST-150).
+- **F1a, record-only bodies.** `0x80` and `0xcc`: an IRQ/FIQ mask and a record write, with no lock, no scheduler and no timer. The owned create uses the owned IRQ save/restore (`+0x164`/`+0x168`).
+- **F1b, object-lock-only bodies.** `0x90`, `0x98`, `0xdc`: the object lock and a pattern or head read, with no scheduler lock and no timer. `0x98` also needs F0's match policy, and `0xdc` only its admission.
+- **F2, task-context wake bodies.** `0x88` and `0xd4`: object lock, then the waiter's scheduler lock, then the owned release, notify and dispatcher. It depends on the owned release and ready insert (S1/S3) and, when the waiter was timed, on timer removal, which is still the stock `kernel_remove_timer` (seam below).
+- **F3, blocking bodies and the handler set.** `0x94`, `0x9c`, `0xd8`, `0xe0`, `0x8c`: the wait record, the stock timer insert, the cancellation handshake and the handler-side set. It depends on the stock tick `+0x104` and its callback, so it inherits the stock entry-clearing hazard (§4.14.5f).
+- **F4, teardown bodies.** `0x84` and `0xd0`. Stock has no scheduler interaction here because it strands waiters; the owned correction releases them, cancels their timers and notifies, so this increment depends on F2 and F3 and lands after them. It is not part of any "no scheduler interaction" bucket.
+- **Cutover.** Both domains in one DAT, one integrated comparison and one technical review, as for S1-S3.
+
+**(b) Typed identities.** Owned code carries domain, task and object identity in the type, and the stock `i32` status exists only at the entries and in the stock-ABI adapter:
+
+```rust
+pub struct EncodedId(i32);                      // the stock r0 word, boundary only
+pub struct EntryDomain(Domain);                 // the loader whose body runs, not the core
+pub struct FlagSlot(u16);                       // 1..=the flag count word, like TaskSlot
+pub struct MailboxSlot(u16);                    // 1..=the mailbox count word
+pub struct FlagId { pub domain: Domain, pub slot: FlagSlot }
+pub struct MailboxId { pub domain: Domain, pub slot: MailboxSlot }
+pub struct Pattern(u32);
+pub struct KeepMask(u32);
+pub enum MatchMode { All, Any }                 // mode bit 0
+pub enum Timeout { Forever, Poll, Units(u32) }
+pub enum WaitOutcome<T> { Satisfied(T), Released, Deleted, TimedOut }
+pub enum ObjectStatus { Context, InvalidClass, InvalidIndex, NotCreated, Param, QueueOverflow }
+```
+
+`resolve_flag` and `resolve_mailbox` are the only constructors of `FlagId` and `MailboxId`. They take the entry domain, the raw word and the live count, which the entry reads from the **selected context record** (`+0x58`/`+0x68`), never from the configuration table, because the record is what stock compares against. `EntryDomain` is the loader whose body runs, not the executing core: a loader-A slot runs on either core, and class 0, the create tables and the delete tables all follow the entry domain. `class_zero_is_the_entry_domain`, `a_class_two_id_from_an_a_body_names_b` and `create_names_the_entry_domain_whatever_the_class` are the counterexamples. Raw layout stays at named consumers only: the 14 entry bodies, the image4 wrappers `0x724480`, `0x72503c`, `0x725318`, `0x724cdc`, `0x724f08`, `0x725dd8`, `0x72612c` (ids and the two `Message` words), the other domain's retained kernel, and the two initialisers.
+
+`EncodedId` exists only at the stock ABI boundary, where the raw word arrives:
+
+```rust
+fn resolve_flag(entry: EntryDomain, id: EncodedId, count: u32) -> Result<FlagId, ObjectStatus>;
+fn resolve_mailbox(entry: EntryDomain, id: EncodedId, count: u32) -> Result<MailboxId, ObjectStatus>;
+fn own_flag_slot(id: EncodedId, count: u32) -> Result<FlagSlot, ObjectStatus>;      // class ignored
+fn own_mailbox_slot(id: EncodedId, count: u32) -> Result<MailboxSlot, ObjectStatus>;
+
+fn create_flag(m: &M, at: FlagSlot, create: FlagCreate) -> Result<FlagId, ObjectStatus>;
+fn delete_flag(m: &M, id: FlagId) -> Result<(), ObjectStatus>;
+fn set_flag(m: &M, id: FlagId, bits: Pattern, from: Context) -> Result<(), ObjectStatus>;
+fn clear_flag(m: &M, id: FlagId, keep: KeepMask) -> Result<(), ObjectStatus>;
+fn wait_flag(m: &M, id: FlagId, want: Pattern, mode: MatchMode,
+             out: &mut Pattern, timeout: Timeout) -> Result<WaitOutcome<Pattern>, ObjectStatus>;
+fn poll_flag(m: &M, id: FlagId, want: Pattern, mode: MatchMode,
+             out: &mut Pattern) -> Result<WaitOutcome<Pattern>, ObjectStatus>;
+
+fn create_mailbox(m: &M, at: MailboxSlot, create: MailboxCreate) -> Result<MailboxId, ObjectStatus>;
+fn delete_mailbox(m: &M, id: MailboxId) -> Result<MessageDrain, ObjectStatus>;
+fn send(m: &M, id: MailboxId, message: Message) -> Result<(), ObjectStatus>;
+fn receive(m: &M, id: MailboxId, out: &mut Option<Message>,
+           timeout: Timeout) -> Result<WaitOutcome<Message>, ObjectStatus>;
+fn poll_receive(m: &M, id: MailboxId, out: &mut Option<Message>) -> Result<WaitOutcome<Message>, ObjectStatus>;
+```
+
+`Err` carries admission (`Context`, `InvalidClass`, `InvalidIndex`, `NotCreated`, `Param`, `QueueOverflow`); `Ok` carries the wait outcome, so `TimedOut` covers both the poll's `-50` and the expiry's `-50`, and the entries module holds the single typed-to-`i32` mapping (`Released` and `Deleted` both map to `-49`). `MessageDrain` is the teardown result: the messages still queued when the mailbox was deleted, in delivery order, so an owned caller cannot leak them.
+
+**(c) Record views to add to `replacement/rtos_layout`.**
+
+```rust
+pub struct WaitBlock(GuestAddress);      // +0x00 result/timer entry, +0x04 queue, +0x08 owner
+pub struct WaitQueue(GuestAddress);      // +0x00 next, +0x04 prev, +0x08 config
+pub struct FlagConfig(GuestAddress);     // +0x00 attributes, +0x04 initial, +0x08 exists; 0x0c
+pub struct FlagControl(GuestAddress);    // queue, +0x0c pattern; 0x10
+pub struct FlagWait(GuestAddress);       // base, +0x0c pattern, +0x10 mode, +0x14 result; 0x18
+pub struct MailboxConfig(GuestAddress);  // +0x00 attributes, +0x04 limit, +0x08 exists; 0x0c
+pub struct MailboxControl(GuestAddress); // queue, +0x0c head, +0x10 tail; 0x14
+pub struct Message(GuestAddress);        // +0x00 next, +0x04 priority; 0x08
+```
+
+Add the eight table accessors on `DomainWords` (`flag_config`, `flag_control`, `flag_wait`, `flag_timer`, `mailbox_config`, `mailbox_control`, `mailbox_wait`, `mailbox_timer`) with the addresses of §4.14.1, and the attribute constants `PRIORITY_ORDER = 0x1`, `MESSAGE_PRIORITY = 0x2`, `CLEAR_ON_MATCH = 0x4`.
+
+**(d) Admission.** One ordered function per direction, returning `Result<_, ObjectStatus>` in the stock order, with the dispatch-enabled check as an explicit parameter because only the blocking forms read it. The four create/delete bodies use a separate resolver that keeps the stock "ignore the class half and index `uxth(id)-1`" behaviour **plus** a range check, which is the intentional difference below. The message priority is decoded at the boundary into `MessagePriority`: the raw word and the record's limit are both read as signed, so a negative word is refused whatever the limit says. `a_negative_priority_is_refused_whatever_the_limit` is the counterexample, and it fails under an unsigned comparison when the limit word is also negative.
+
+**(e) Lock order, including the retained paths.** The nested order is global (`0x400c0804`, held by a whole IRQ handler and by the image4 critical pair), then object lock, then scheduler lock. Every retained path that needs the opposite role holds nothing while it changes rank:
+
+| Path | Nested order | Handshake |
+| --- | --- | --- |
+| family services `+0x88`, `+0x8c`, `+0x94`, `+0x9c`, `+0xd4`, `+0xd8`, `+0xe0` | object (object's domain) → scheduler (waiter's domain), released in reverse | none |
+| `+0x18` terminate | scheduler → **released** → object (`task->wait->owner`) → scheduler | `T+0x24` |
+| `+0x38`/`+0x3c` release wait | scheduler → **released** → object → scheduler | `T+0x2c` |
+| `+0x1c` change priority | scheduler → **released** → object → scheduler | `T+0x28` |
+| tick `+0x104` → `kernel_timeout_task` (A `0x44318` / B `0xd42d8`) | the tick's scheduler lock → **released** → object (`wait->owner`) → scheduler | `T+0x2c` |
+| `+0x40` suspend | scheduler only | none |
+| cyclic handler through `cyclic_expire` | no kernel lock (the tick releases it around the handler) | none |
+
+The four task bodies and the timeout callback are exact C at the pinned commit. Each sets its handshake word before dropping the scheduler lock and re-checks it after retaking both, so a waker that completed the wait in the window makes it return early instead of unlinking twice. The two-lock graph is therefore acyclic by rank: object before scheduler whenever both are held, and nothing held when the roles swap. This covers the retained paths that act on owned waiters, not only the family's. IRQ is masked by the entry and cleared on every exit; the owned acquire and release are S1's, on the same words.
+
+**(f) Wait, timeout, cancellation.** `block` performs the stock sequence: `T+0xc := 0x32`, remove from ready, `T+0x14 := wait`, `wait.result := 0`, insert by family order, `wait.owner := object domain owner`, `wait.queue := queue`. The timer goes into the waiter's own heap through the stock `kernel_insert_timer` (A `0x44c60` / B `0xd4c20`) with the stock deadline, and a wake or a cancel removes it through the stock `kernel_remove_timer` (A `0x44ca8` / B `0xd4c68`); both are seams until the timer family is owned. The entry-clearing repair is **not** this family's: the stock tick `+0x104` pops an entry without clearing `entry->index` or `wait->result` before the callback (§4.13 hazard), and clearing it requires owning that pop. `timeout-entry-not-cleared` is therefore a prerequisite of the TIMER increment, and until the tick is owned F3 inherits exactly the stock behaviour and claims no fix. Cancellation keeps the `T+0x24`/`T+0x28`/`T+0x2c` handshake, because `+0x18` terminate, `+0x38`/`+0x3c` release and `+0x1c` priority change are still stock and act on owned waiters.
+
+**(g) Wake selection.** `wake(waiter)` resolves the record from `T+0x20`, the **waiter's** domain, for the ready insert, the timer cancel and the notify; the object's domain supplies only its object lock. `WakeMode::Task` dispatches through the owned dispatcher when the insert reports a selection change and the target's dispatch-enabled word is nonzero; `WakeMode::Handler` sets the delayed-dispatch word instead. Owned notify issues `DSB` before the doorbell store.
+
+**(h) Teardown.** `delete_flag` and `delete_mailbox` first release every queued waiter as `Deleted`, cancelling each timer in the waiter's own heap; `delete_mailbox` then drains `cb+0xc` into a `MessageDrain`. The record is reset to the stock values (`{0,0,0}` and `{2,32,0}`, self-links, pattern 0, head 0) so a raw reader sees what stock leaves, `tail` is set to 0, and the id is range-checked before any write. The drained messages are caller-owned memory that `send` retained; the stock ABI has no way to return them, so that seam discards the pointers exactly as stock does, and nothing is leaked by the kernel because it never owned them. A caller that needs them back uses the typed delete.
+
+**(i) Intentional differences.**
+
+| Id | Stock | Owned | Trigger | How a retained dependence would show |
+| --- | --- | --- | --- | --- |
+| `object-id-out-of-range` | the four create/delete bodies (`+0x80`, `+0x84`, `+0xcc`, `+0xd0`) index `uxth(id)-1` and write outside the tables; the eight service bodies already refuse with `-18` | `InvalidIndex`, no write | a create or delete id outside `1..=count` | a stock-role change at `0x4005d178+12(id-2)`, `0x40062c34+20(id-1)` or the timer heap with no owned counterpart |
+| `queue-destructor-misdirected-delete` | `0x724f08` calls `+0xd0` with a data-queue id; flag `n-1` becomes `{2,0x20,0}` and the data queue stays created | the caller is corrected to `+0xa4`; until then `+0xd0` refuses with `-18` | `0x724f08(n)`, `n >= 2` | the destructor's own report: code 27 to `0x9121b8` and the `0x40a0fc3c` counter in the owned role, with flag records 7 and 40 unchanged |
+| `delete-stranded-waiter` | delete self-links the queue; a queued waiter stays blocked with dangling links | every waiter is unlinked, its timer cancelled and completed `Deleted` (`-49` at the ABI) | delete with a queued waiter | the stock role never returns from the wait; the owned role returns `-49` |
+| `delete-discards-queued-messages` | delete sets `cb+0xc := 0`; the kernel forgets the queued pointers, which stay caller-owned | the typed delete returns a `MessageDrain`; the stock-ABI delete discards the pointers as stock does, with no counter | delete with queued messages | none at the ABI: both roles leave the message memory allocated and the kernel's list empty. Only a caller that expects the pointers back through the kernel differs, and there is no demonstrated leak because `send` retains caller-owned memory |
+| `mailbox-tail-uninitialised` | init and create leave `cb+0x10` | written 0 | any create | none reachable, because `head == 0` gates every read of `tail` |
+| `handler-set-waiter-domain` | `+0x8c` releases a satisfied waiter through the **flag's** domain record: ready insert into the wrong list, timer cancel in the wrong heap | the waiter's domain from `T+0x20` | handler-context set on a flag whose waiter is in the other domain | the flag's domain bitmap and selected cell change in stock and the waiter's in owned; the doorbell goes to the waiter's core in both |
+| `timeout-entry-not-cleared` | the stock tick pops without clearing `entry->index` or `wait->result`; a waker in the window removes slot 1 or underflows the count | cleared before the callback, **only once the tick `+0x104` is owned**; this family cannot repair it | timer expiry racing a wake | heap slot 1 removed or count underflow in stock. F3 depends on the stock tick and inherits the stock behaviour until the TIMER increment owns the pop |
+
+**(j) Retained seams and removal conditions.** The task create/delete and global-lock seams stay exactly as they are.
+
+| Seam | Address | Retained because | Removal condition |
+| --- | --- | --- | --- |
+| task create `+0x0`, task delete `+0x4` | A `0x4d094`, `0x4d1a4`; B `0xdd054`, `0xdd168` | unchanged by this family; their wrappers `0x725dd8` and `0x72612c` call `+0x80` and `+0x84` | task family cutover, when those wrappers migrate |
+| global lock `+0x161c`, `+0x1620`, `+0x1624` | `0x400c0804`, tags `0x11`/`0x12` and `0x21`/`0x22` | unchanged; shared with both vectors and the image4 critical pair | both vectors and the critical pair owned |
+| terminate `+0x18`, release wait `+0x38`/`+0x3c`, priority change `+0x1c` | A `0x454f0`, `0x46534`, `0x467b4`, `0x4582c`; B `0xd54b0`, `0xd64f4`, `0xd6774`, `0xd57ec` | stock bodies unlink and release an **owned** waiter, so the wait block, the circular queue links, `T+0x0c/+0x14/+0x20`, `T+0x24/+0x28/+0x2c` and the timer entry keep their stock shape | those four slots owned |
+| object and scheduler lock records and function pointers | record `+0x14/+0x18/+0x1c` and `+0x8/+0xc/+0x10`; words A `0x400545c0`/`0x400545c4`, B `0x400e4580`/`0x400e4584` | any stock service still takes them | no stock service takes them |
+| object tables at stock addresses | §4.14.1 | the other domain's retained bodies reach them through ids, and the initialisers publish them | both domains' family bodies, both initialisers and the `0x724f08` caller owned |
+| delayed-dispatch word and doorbell | A `0x400546d8`, B `0x400e4698`; bank offset `0xcc` | the stock IRQ exit consumes the word and the handler clears the request | owned IRQ exit and doorbell |
+| timer insert and remove | A `0x44c60`, `0x44ca8`; B `0xd4c20`, `0xd4c68` | a timed wait arms its entry and a wake or cancel removes it through the stock heap code, because the family does not own the heap | the TIMER increment owns the heap |
+| tick `+0x104` and `kernel_timeout_task` | A `0x44d8c`, `0x44318`; B `0xd4d4c`, `0xd42d8` | the stock tick pops the family's entries and the callback completes the wait with `-50`; the entry-clearing repair needs this seam owned | the TIMER increment |
+| per-task-slot wait and timer indexing | one outstanding wait per task | a stock task can hold only one; stock terminate and release address it by `T+0x14` | the stock wait consumers above are owned |
+| `Message` words `{next, priority}` at the image4 wrappers | `0x724cdc`, `0x72503c`, `0x725318` | caller-owned messages built and consumed by image4 | the image4 message family is owned |
+
+#### 4.14.6 Scenario matrix
+
+Every row is a native case or a natural observation the increment must be gated on. `Stock` and `Owned` are the discriminating expectations; a row with a difference id is an expected difference, keyed by that id. The census counts quoted below are discovery provenance from census-v1 (E-RTOS-SLOT-CENSUS-STOCK-150), not fixed qualification counts; a qualification states the totals its own receipt observed.
+
+| Id | Kind | Setup | Discriminating observation | Stock | Owned |
+| --- | --- | --- | --- | --- | --- |
+| N1 | native | receiver blocked in `+0xd8`; sender calls `+0xd4` | sender r0, receiver r0 and `*r1`, `message+0x0` | 0; 0; the pointer; untouched | equal |
+| N2 | native | empty mailbox, attr 0; send A then B; receive twice | receive order and the two link words | A then B; `A+0x0 = B`, `B+0x0 = 0` | equal |
+| N3 | native | attr 2, priorities 3, 1, 3 | receive order | 1, 3, 3 | equal |
+| N4 | native | attr 2, priority 0 and 33 | r0 and the object-lock word | `-17`, word untouched | equal |
+| N5 | native | `+0xd0(0x10002)`; then `+0x80(121)` | r0 and the words written | `0` with flag 0's record `{2,0x20,0}` and `0x40062c48` self-linked; `0` with the timer-heap word and mailbox control block 1 overwritten | `-18` with no write in both (`object-id-out-of-range`) |
+| N6 | native | exists word 0 | r0 | `-42` | equal |
+| N7 | native | dispatch-enabled word 0 | r0 for `+0xd4` and for `+0xd8` | 0; `-25` | equal |
+| N8 | native | handler context, then `CPSR.I` set | r0 | `-25`; `-25` | equal |
+| N9 | native | flag pattern `0x30`; waiter `0x10`, mode All | `*result`, pattern | 0, `0x30`, pattern `0x30` | equal |
+| N10 | native | flag pattern `0x30`; waiter `0x50`, mode All, then mode Any | r0 and `*result` | `-50` with nothing written; then 0 with `0x30` | equal |
+| N11 | native | two `+0x94` waiters on one flag | second r0 | `-28` | equal |
+| N12 | native | attr 4, pattern `0x30`, waiter `0x10` | `*result`, pattern | `0x30`; 0 (whole word) | equal |
+| N13 | native | pattern `0x31`, `+0x90(0x11)` | pattern | `0x11` | equal |
+| N14 | native | empty mailbox; timeout 0, then expiry, then `+0x38` | r0 | `-50`; `-50`; `-49` | equal |
+| N15 | native | delete with a queued receiver | whether the waiter returns, and r0 | never returns | `-49` (`delete-stranded-waiter`) |
+| N16 | native | delete with two queued messages | whether the kernel still reaches the pointers, and the caller's own memory | `cb+0xc := 0`; the pointers become unreachable through the kernel, the memory is untouched | the typed delete returns both; the ABI delete discards them as stock does (`delete-discards-queued-messages`) |
+| N17 | native | flag in B, waiter in A, set by a task in A | which domain's bitmap and selected cell change | A (the waiter's) | equal |
+| N18 | native | as N17, set from handler context | same | B (the flag's) | A (`handler-set-waiter-domain`) |
+| N19 | native | `+0xd0` with `0x10008` and `0x10029` | A flag records 7 and 40, the mailbox record, the error report | `{4,0,1}→{2,0x20,0}`, 0 | unchanged, `-18` (`queue-destructor-misdirected-delete`) |
+| B1 | behavior | the existing cold-start and FILM SIMULATION route | the 3,551 family entries of the census and their results (discovery counts) | 3,549 matched returns, all 0; A `+0x80` 74, `+0x84` 1, `+0x88` 714, `+0x8c` 722, `+0x90` 592, `+0x9c` 1,437; B `+0x80` 10, `+0x9c` 1; the two unmatched entries are flag timed waits still blocked at the end | equal, with the two expected differences above untriggered |
+| B2 | behavior | a route that sends and receives a mailbox message | message delivery and the ready transition | **not observed**: `+0xd4`/`+0xd8`/`+0xdc`/`+0xe0` have 0 calls in both domains | must be covered by N1-N8 until a route exists |
+| E1 | effect | N1 | lock words taken, in order, and the bank write | object lock `0x400545c4`/`0x400e4584` then the waiter's scheduler lock; one `0xcc` bank write only when remote and the selection changed | equal |
+| E2 | effect | N1 with a remote waiter | ordering primitives | none between the scheduler stores and the doorbell | `DMB` then `DSB`; not an equality case |
+| E3 | effect | N1 with a local, higher-priority receiver | the service's r0 | 0, with `-63` loaded and overwritten by the dispatcher | 0 |
+| L1 | lifetime | N1 then a second receive | the returned pointer, `message+0x0` | same pointer; `+0x0` rewritten only when it was queued | equal |
+| L2 | lifetime | two successive `+0x9c` on one task | wait and timer record identity | the same two records, indexed by the task slot | equal |
+| L3 | lifetime | N15 with a timed `+0xe0` waiter | the waiter's heap entry after the delete, and its r0 | still armed, fires later and returns `-50` | cancelled by the release, which returns `-49` at once (`delete-stranded-waiter`) |
+| L4 | lifetime | create, delete, create | second create's r0 and the record bytes | `-41` unless the delete ran; the delete leaves `{0,0,0}` / `{2,32,0}` | equal |
+| L5 | lifetime | class-2 send from A to a B receiver | the pointer value at the receiver | unchanged | equal |
+
+#### 4.14.7 What is not established, and the lease request
+
+- No natural route exercises the mailbox half: `+0xd4`, `+0xd8`, `+0xdc` and `+0xe0` have zero calls in the census-v1 discovery route in both domains, and the only observed stock writer of any of these records is the destructor's misdirected `+0xd0` on POWER OFF. The mailbox half's stock reference is therefore native-case only, plus that route.
+- No cross-domain flag waiter was observed: all 3,551 family entries of that census carry the calling root's own class, so `handler-set-waiter-domain` has no natural trigger. The correction rests on the code, and the `same-domain-waiter` precondition stays recorded until a route produces one.
+- No blocking path ends in `-50` or `-28` on the existing route: every reached timed wait returns 0, so timeouts, queue overflow and forced release are native-case facts.
+- The family inherits the scheduler's open hardware laws unchanged: exclusive-monitor coherence of the lock words (U12), the memory attributes of both kernels' private RAM and of the controller banks, and the doorbell's priority against the tick.
+- F0 ran as a host-only increment: the staticlib build, both host test targets, the consumer caller, and the manifest v7 regeneration with its schema validation and v6-to-v7 delta. The observed v7 delta is the eight domain/slot precondition changes plus provenance: the slot-contract input's bytes and hash, and four `inputPath` spellings that are absolute in v6 and relative in v7 for the same bytes and hashes. No extent or contract field moved.
+- F1a is a record write behind the owned IRQ save and restore and needs no guest run. The first guest-facing gate is F2's native subset, and the destructor difference needs one POWER OFF re-run with the owned `+0xd0` staged, which belongs to the F4 cutover.
 

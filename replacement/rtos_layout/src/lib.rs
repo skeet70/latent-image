@@ -99,6 +99,269 @@ impl Priority {
     }
 }
 
+/// 1..=the eventflag count word.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[repr(transparent)]
+pub struct FlagSlot(u16);
+
+impl FlagSlot {
+    pub const COUNT: u32 = 120;
+
+    #[inline(always)]
+    pub const fn new(slot: u32, count: u32) -> Option<Self> {
+        if slot >= 1 && slot <= count && slot <= Self::COUNT {
+            Some(Self(slot as u16))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub const fn get(self) -> u32 {
+        self.0 as u32
+    }
+}
+
+/// 1..=the mailbox count word.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[repr(transparent)]
+pub struct MailboxSlot(u16);
+
+impl MailboxSlot {
+    pub const COUNT: u32 = 1;
+
+    #[inline(always)]
+    pub const fn new(slot: u32, count: u32) -> Option<Self> {
+        if slot >= 1 && slot <= count && slot <= Self::COUNT {
+            Some(Self(slot as u16))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub const fn get(self) -> u32 {
+        self.0 as u32
+    }
+}
+
+/// Head of an object's waiter queue, linked through T+0x00/+0x04.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct WaitQueue(pub GuestAddress);
+
+impl WaitQueue {
+    pub const SIZE: u32 = 0x0c;
+
+    #[inline(always)]
+    pub const fn next(self) -> GuestAddress {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn prev(self) -> GuestAddress {
+        self.0.offset(0x04)
+    }
+
+    /// Pointer to the creation record; its attribute bit 0 selects priority order.
+    #[inline(always)]
+    pub const fn config(self) -> GuestAddress {
+        self.0.offset(0x08)
+    }
+}
+
+/// The per-wait record T+0x14 points at.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct WaitBlock(pub GuestAddress);
+
+impl WaitBlock {
+    pub const SIZE: u32 = 0x0c;
+
+    /// Timer entry while waiting, then the result 0, -49 or -50.
+    #[inline(always)]
+    pub const fn result(self) -> GuestAddress {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn queue(self) -> GuestAddress {
+        self.0.offset(0x04)
+    }
+
+    /// One-based owner domain of the object.
+    #[inline(always)]
+    pub const fn owner(self) -> GuestAddress {
+        self.0.offset(0x08)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct FlagConfig(pub GuestAddress);
+
+impl FlagConfig {
+    pub const SIZE: u32 = 0x0c;
+    /// Attribute bit 0.
+    pub const PRIORITY_ORDER: u32 = 0x01;
+    /// Attribute bit 2; clears the whole pattern, not only the matched bits.
+    pub const CLEAR_ON_MATCH: u32 = 0x04;
+
+    #[inline(always)]
+    pub const fn attributes(self) -> GuestAddress {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn initial(self) -> GuestAddress {
+        self.0.offset(0x04)
+    }
+
+    #[inline(always)]
+    pub const fn exists(self) -> GuestAddress {
+        self.0.offset(0x08)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct FlagControl(pub GuestAddress);
+
+impl FlagControl {
+    pub const SIZE: u32 = 0x10;
+
+    #[inline(always)]
+    pub const fn queue(self) -> WaitQueue {
+        WaitQueue(self.0)
+    }
+
+    #[inline(always)]
+    pub const fn pattern(self) -> GuestAddress {
+        self.0.offset(0x0c)
+    }
+}
+
+/// A task's eventflag wait record, in a table indexed by the task slot.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct FlagWait(pub GuestAddress);
+
+impl FlagWait {
+    pub const SIZE: u32 = 0x18;
+
+    #[inline(always)]
+    pub const fn base(self) -> WaitBlock {
+        WaitBlock(self.0)
+    }
+
+    #[inline(always)]
+    pub const fn pattern(self) -> GuestAddress {
+        self.0.offset(0x0c)
+    }
+
+    #[inline(always)]
+    pub const fn mode(self) -> GuestAddress {
+        self.0.offset(0x10)
+    }
+
+    /// The pattern reported to the waiter when the wait is satisfied.
+    #[inline(always)]
+    pub const fn result(self) -> GuestAddress {
+        self.0.offset(0x14)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct MailboxConfig(pub GuestAddress);
+
+impl MailboxConfig {
+    pub const SIZE: u32 = 0x0c;
+    /// Attribute bit 0.
+    pub const PRIORITY_ORDER: u32 = 0x01;
+    /// Attribute bit 1; orders queued messages and enables `priority_limit`.
+    pub const MESSAGE_PRIORITY: u32 = 0x02;
+
+    #[inline(always)]
+    pub const fn attributes(self) -> GuestAddress {
+        self.0
+    }
+
+    #[inline(always)]
+    pub const fn priority_limit(self) -> GuestAddress {
+        self.0.offset(0x04)
+    }
+
+    #[inline(always)]
+    pub const fn exists(self) -> GuestAddress {
+        self.0.offset(0x08)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct MailboxControl(pub GuestAddress);
+
+impl MailboxControl {
+    pub const SIZE: u32 = 0x14;
+
+    #[inline(always)]
+    pub const fn queue(self) -> WaitQueue {
+        WaitQueue(self.0)
+    }
+
+    #[inline(always)]
+    pub const fn head(self) -> GuestAddress {
+        self.0.offset(0x0c)
+    }
+
+    /// Written only by the FIFO append.
+    #[inline(always)]
+    pub const fn tail(self) -> GuestAddress {
+        self.0.offset(0x10)
+    }
+}
+
+/// A task's mailbox wait record, in a table indexed by the task slot.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct MailboxWait(pub GuestAddress);
+
+impl MailboxWait {
+    pub const SIZE: u32 = 0x10;
+
+    #[inline(always)]
+    pub const fn base(self) -> WaitBlock {
+        WaitBlock(self.0)
+    }
+
+    /// Receives the message pointer when the wait is satisfied.
+    #[inline(always)]
+    pub const fn message(self) -> GuestAddress {
+        self.0.offset(0x0c)
+    }
+}
+
+/// A caller-owned message; the kernel overwrites `next` when it queues it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(transparent)]
+pub struct Message(pub GuestAddress);
+
+impl Message {
+    pub const SIZE: u32 = 0x08;
+
+    #[inline(always)]
+    pub const fn next(self) -> GuestAddress {
+        self.0
+    }
+
+    /// Read only under mailbox attribute bit 1, as a signed word.
+    #[inline(always)]
+    pub const fn priority(self) -> GuestAddress {
+        self.0.offset(0x04)
+    }
+}
+
 /// T+0x0c. `READY`, `WAIT` and `SUSPENDED` combine with each other and with the wait kinds.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 #[repr(transparent)]
@@ -513,6 +776,17 @@ pub struct DomainWords {
     pub timer_heap: GuestAddress,
     /// [`TaskSlot::COUNT`] [`Task`] records.
     pub task_table: GuestAddress,
+    /// [`FlagSlot::COUNT`] creation records.
+    pub flag_configs: GuestAddress,
+    pub flag_controls: GuestAddress,
+    /// [`TaskSlot::COUNT`] wait records, indexed by the waiting task.
+    pub flag_waits: GuestAddress,
+    pub flag_timers: GuestAddress,
+    /// [`MailboxSlot::COUNT`] creation records.
+    pub mailbox_configs: GuestAddress,
+    pub mailbox_controls: GuestAddress,
+    pub mailbox_waits: GuestAddress,
+    pub mailbox_timers: GuestAddress,
 }
 
 impl DomainWords {
@@ -544,7 +818,50 @@ impl DomainWords {
     pub const fn ready_head(&self, priority: Priority) -> ReadyHead {
         ReadyHead(self.ready_heads.offset(priority.get() * ReadyHead::SIZE))
     }
+
+    #[inline(always)]
+    pub const fn flag_config(&self, slot: FlagSlot) -> FlagConfig {
+        FlagConfig(self.flag_configs.offset((slot.get() - 1) * FlagConfig::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn flag_control(&self, slot: FlagSlot) -> FlagControl {
+        FlagControl(self.flag_controls.offset((slot.get() - 1) * FlagControl::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn flag_wait(&self, task: TaskSlot) -> FlagWait {
+        FlagWait(self.flag_waits.offset((task.get() - 1) * FlagWait::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn flag_timer(&self, task: TaskSlot) -> GuestAddress {
+        self.flag_timers.offset((task.get() - 1) * TIMER_ENTRY_SIZE)
+    }
+
+    #[inline(always)]
+    pub const fn mailbox_config(&self, slot: MailboxSlot) -> MailboxConfig {
+        MailboxConfig(self.mailbox_configs.offset((slot.get() - 1) * MailboxConfig::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn mailbox_control(&self, slot: MailboxSlot) -> MailboxControl {
+        MailboxControl(self.mailbox_controls.offset((slot.get() - 1) * MailboxControl::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn mailbox_wait(&self, task: TaskSlot) -> MailboxWait {
+        MailboxWait(self.mailbox_waits.offset((task.get() - 1) * MailboxWait::SIZE))
+    }
+
+    #[inline(always)]
+    pub const fn mailbox_timer(&self, task: TaskSlot) -> GuestAddress {
+        self.mailbox_timers.offset((task.get() - 1) * TIMER_ENTRY_SIZE)
+    }
 }
+
+/// A heap entry: one-based slot, callback and argument.
+pub const TIMER_ENTRY_SIZE: u32 = 0x0c;
 
 impl Domain {
     #[inline(always)]
@@ -575,6 +892,14 @@ impl Domain {
                 timer_count: GuestAddress(0x4005_4778),
                 timer_heap: GuestAddress(0x4005_d718),
                 task_table: GuestAddress(0x4005_ff0c),
+                flag_configs: GuestAddress(0x4005_d178),
+                flag_controls: GuestAddress(0x4006_24b4),
+                flag_waits: GuestAddress(0x4005_5fdc),
+                flag_timers: GuestAddress(0x4005_5a3c),
+                mailbox_configs: GuestAddress(0x4005_d16c),
+                mailbox_controls: GuestAddress(0x4006_2c34),
+                mailbox_waits: GuestAddress(0x4005_783c),
+                mailbox_timers: GuestAddress(0x4005_7fbc),
             },
             Domain::B => DomainWords {
                 handler_context: GuestAddress(0x400e_4564),
@@ -594,6 +919,14 @@ impl Domain {
                 timer_count: GuestAddress(0x400e_4738),
                 timer_heap: GuestAddress(0x400e_d6d8),
                 task_table: GuestAddress(0x400e_fecc),
+                flag_configs: GuestAddress(0x400e_d138),
+                flag_controls: GuestAddress(0x400f_2474),
+                flag_waits: GuestAddress(0x400e_5f9c),
+                flag_timers: GuestAddress(0x400e_59fc),
+                mailbox_configs: GuestAddress(0x400e_d12c),
+                mailbox_controls: GuestAddress(0x400f_2bf4),
+                mailbox_waits: GuestAddress(0x400e_77fc),
+                mailbox_timers: GuestAddress(0x400e_7f7c),
             },
         }
     }
