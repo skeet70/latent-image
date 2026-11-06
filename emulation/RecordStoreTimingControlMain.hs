@@ -129,20 +129,35 @@ main = do
       putStrLn (displayException failure)
       exitFailure
 
+mergeRanges :: [PhysicalRange] -> [PhysicalRange]
+mergeRanges = foldr merge [] . sortOn rangeStart
+ where
+  merge range [] = [range]
+  merge range (next:rest)
+    | rangeEnd range >= rangeStart next = merge (PhysicalRange (rangeStart range) (max (rangeEnd range) (rangeEnd next))) rest
+    | otherwise = range:next:rest
+
+phaseRanges :: [PhysicalRange]
+phaseRanges = [PhysicalRange 0x16fed28 0x16fee48,PhysicalRange 0x1703080 0x1703088,PhysicalRange 0x17030d0 0x17030d4]
+
 phaseTraceSpec :: Value -> IO Value
 phaseTraceSpec (Object fields) = case (KM.lookup "sites" fields, KM.lookup "captures" fields) of
   (Just (Object sites), Just (Object captures)) -> do
+    source <- either (ioError . userError) pure (parseEither parseJSON (Object fields))
+    let resetWrites = mergeRanges (PhysicalRange 0x89ec00 0x89fa68 : writes source ++ phaseRanges)
+    need (length resetWrites <= 8) "diagnostic reset watch exceeds the bridge range cap"
     let phaseSites = [(0x62907c,"picker-writer"),(0x103fb50,"reserve-primary-group")
           ,(0x1029f8c,"pending-arm"),(0x1029430,"pending-reply"),(0x1031ad4,"line39")
           ,(0xdcb6c0,"record-notification"),(0xde6304,"apply-notification"),(0xe0a4dc,"completion-notification")
-          ,(0x103fcbc,"group-release"),(0x103fc34,"group-release"),(0x103fc0c,"group-release")
+          ,(0x103fcbc,"group-status-write"),(0x103fc34,"group-status-write"),(0x103fc0c,"group-status-write")
           ,(0x103f294,"group-write"),(0x103f31c,"group-write"),(0x104002c,"group-write")
           ,(0x1040064,"group-write"),(0x103ff14,"group-write")] :: [(Word32,T.Text)]
         siteKey :: Word32 -> K.Key
         siteKey address = K.fromString ("0x" ++ showHex address "")
         sites' = foldr (\(address,label) -> KM.insert (siteKey address) (String label)) sites phaseSites
         captures' = KM.insert (siteKey 0x103fb50) (object ["entry" .= ([] :: [Value]),"returns" .= ([] :: [Value])]) captures
-    pure (Object (KM.insert "sites" (Object sites') (KM.insert "captures" (Object captures') fields)))
+    pure (Object (KM.insert "write_ranges" (A.toJSON [[rangeStart range,rangeEnd range] | range <- resetWrites])
+      (KM.insert "sites" (Object sites') (KM.insert "captures" (Object captures') fields))))
   _ -> ioError (userError "source spec lacks sites or captures")
 phaseTraceSpec _ = ioError (userError "source spec is not an object")
 
@@ -191,7 +206,9 @@ keys = [KeyOk,KeyDown,KeyOk,KeyDown,KeyUp]
 
 readouts :: Emulator -> [PhysicalRange] -> IO Value
 readouts emulator ranges = A.toJSON <$> forM ranges (\range -> do
-  bytes <- emulatorReadMemory emulator (rangeStart range) (fromIntegral (rangeEnd range - rangeStart range))
+  let count = fromIntegral (rangeEnd range - rangeStart range)
+  bytes <- B.concat <$> forM [0,65536..count-1] (\offset ->
+    emulatorReadMemory emulator (rangeStart range + fromIntegral offset) (min 65536 (count-offset)))
   pure (object ["start" .= rangeStart range,"bytes" .= hex bytes]))
 
 medium :: Emulator -> IO Value
@@ -212,11 +229,7 @@ watchRequest spec = object
  where
   RowLimit rowLimit = limit spec
   encodeRanges ranges = [[rangeStart range,rangeEnd range] | range <- ranges]
-  merged = foldr merge [] (sortOn rangeStart (writes spec ++ readRanges spec ++ fetches spec))
-  merge range [] = [range]
-  merge range (next:rest)
-    | rangeEnd range >= rangeStart next = merge (PhysicalRange (rangeStart range) (max (rangeEnd range) (rangeEnd next))) rest
-    | otherwise = range:next:rest
+  merged = mergeRanges (writes spec ++ readRanges spec ++ fetches spec)
 
 observe :: Options -> Inputs -> Spec -> IO ()
 observe options inputs spec = do

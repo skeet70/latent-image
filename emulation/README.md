@@ -2660,3 +2660,7 @@ Mapped medium blocks require 131,072 data bytes and 32,768 bridge-exposed spare 
 
 Run each process serially under `//emulation:emulator-slot` with `XM1_EMULATOR_SLOTS=1`. The separate binary does not rebuild or modify the pair observer or SDK. It saves input bindings, the copied source receipt, the extended reset spec, reset observations, complete hits, each step's ordinary settings, idle/press replies and fixed-range watch, then terminal pool blocks and all declared write-range readouts. A timing-control result does not change a pair verdict or authorize an exclusion by itself.
 
+Terminal write-range readouts use requests of at most 65,536 bytes. The owned reset spec includes a 128 KiB retired cache range.
+
+The diagnostic watch also retains both primary-group pools `[0x16fed28,0x16fee48)`, line/completion counters `[0x1703080,0x1703088)` and pending reply word `[0x17030d0,0x17030d4)` from reset through every key. To stay within the immutable bridge's eight-reset-range cap, it coalesces the neighboring settings and metadata observations through `[0x89ec00,0x89fa68)`, retaining every original watched byte and observing the intervening bytes. Write rows carry raw board ticks alongside instruction counts. This broader diagnostic watch is separate from cutover guards and does not qualify their replacement.
+
