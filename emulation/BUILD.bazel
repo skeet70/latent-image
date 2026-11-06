@@ -3596,6 +3596,7 @@ haskell_test(
     deps = [
         ":case-sha256",
         ":emulator-usb",
+        ":local-ui-menu",
         ":property-pair-lib",
         ":record-store-pair-check-lib",
         "//host:aeson",

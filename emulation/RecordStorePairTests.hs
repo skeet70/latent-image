@@ -16,6 +16,7 @@ import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Word (Word32)
+import Emulation.LocalUiMenu (MenuNodeAddress (..), SettingIdentifier (..), MenuCursor (..), MenuDepth (..))
 import Emulation.PropertyPairPlan (PhysicalRange (..), settingsRanges)
 import Emulation.PropertyPairRoutes
 import Emulation.RecordStorePairCheck
@@ -313,6 +314,7 @@ keyFixtureAtCursor cursor role evidence prefixEvidence = (bound, Observation rec
 
 data ImageSizePoint = RootPoint | ParentPoint | EntryPoint | DownPoint | UpPoint | BackPoint deriving (Eq, Show, Enum, Bounded)
 data ImageSizeEvidence = IntendedChoice | StalledChoice | ErasedStalledChoice | NoDownChange | WrongEntryCursor | WrongBackCursor | ChangedOtherSetting | ChangedAspect | UnpublishedBackup | ChangedImageSizeMode | WrongImageSizeTrial | WrongImageSizeFixture | ChangedUpRecord | ChangedBackRecord | ChangedUpNand | ChangedBackNand | ImageSizeRetiredFetch deriving (Eq, Show)
+data FixtureMenuFrame = FixtureMenuFrame MenuNodeAddress SettingIdentifier MenuCursor MenuDepth
 
 imageSizePointKeys :: ImageSizePoint -> [CrawlKey]
 imageSizePointKeys point = case point of
@@ -374,15 +376,18 @@ imageSizeFixture role evidence = (bound,Observation receipt files)
   resetRows = A.toJSON (rows RootPoint ++ [object ["start" .= low,"bytes" .= hex (B.replicate (fromIntegral (high-low)) 0)] | [low,high] <- retired role])
   reset = object ["schema" .= (1::Int),"reset" .= object ["instructions" .= (0::Int)],"regions_at_reset" .= resetRows
     ,"segments" .= [object ["phase" .= phase,"instructions" .= (1::Int),"hits_end" .= (0::Int),"watch" .= watch role phase Original,"regions" .= resetRows] | phase <- [minBound..maxBound]::[AttachPhase]]]
+  frame :: ImageSizePoint -> FixtureMenuFrame
   frame point
     | point `elem` [EntryPoint,DownPoint,UpPoint] || point == BackPoint && stalled =
-        (0x784014,246,if pending point || point == EntryPoint && evidence == WrongEntryCursor then 1 else 0,2)
-    | otherwise = (0x78ea98,5,if point == RootPoint || point == BackPoint && evidence == WrongBackCursor then 2 else 3,1)
+        FixtureMenuFrame (MenuNodeAddress 0x784014) (SettingIdentifier 246)
+          (MenuCursor (if pending point || point == EntryPoint && evidence == WrongEntryCursor then 1 else 0)) (MenuDepth 2)
+    | otherwise = FixtureMenuFrame (MenuNodeAddress 0x78ea98) (SettingIdentifier 5)
+        (MenuCursor (if point == RootPoint || point == BackPoint && evidence == WrongBackCursor then 2 else 3)) (MenuDepth 1)
   view address bytes = object ["address" .= (address::Word32),"physical" .= hex bytes,"spellings" .= [[hex bytes,hex bytes],[hex bytes,hex bytes]]]
   endpoint point = changedObject "state" state originalEndpoint
    where
     originalEndpoint = prefixEndpoint (if evidence == ChangedImageSizeMode && point == UpPoint then ChangedCurrent else Sampled) 0
-    (node,setting,cursor,depth) = frame point
+    FixtureMenuFrame (MenuNodeAddress node) (SettingIdentifier setting) (MenuCursor cursor) (MenuDepth depth) = frame point
     state = changedObject "ui" (object
       ["menu" .= view 0x9571d0 (wordBytes node <> wordBytes 0 <> wordBytes cursor)
       ,"depth" .= view 0x9575f4 (wordBytes depth)
@@ -393,7 +398,8 @@ imageSizeFixture role evidence = (bound,Observation receipt files)
     ,"keys" .= imageSizePointKeys point,"hits" .= hitRange point
     ,"idle" .= object ["ran" .= (20000000::Int)]
     ,"press" .= object ["failure" .= Null,"settle" .= object ["status" .= ("packet-consumed"::T.Text)]
-      ,"menu" .= let (_,setting,cursor,_) = frame point in object ["menu_id" .= (1::Int),"setting_id" .= setting,"cursor" .= cursor]]
+      ,"menu" .= let FixtureMenuFrame _ (SettingIdentifier setting) (MenuCursor cursor) _ = frame point
+                 in object ["menu_id" .= (1::Int),"setting_id" .= setting,"cursor" .= cursor]]
     ,"bounded_post_settle_prefix" .= endpoint point
     ,"regions_before" .= region (case point of RootPoint -> RootPoint; ParentPoint -> RootPoint; EntryPoint -> ParentPoint; DownPoint -> EntryPoint; UpPoint -> DownPoint; BackPoint -> DownPoint)
     ,"regions_after" .= region point,"medium_after" .= (if point `elem` [UpPoint,BackPoint] then medium Original else Null)
