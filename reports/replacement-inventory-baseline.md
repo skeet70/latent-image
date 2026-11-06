@@ -1855,7 +1855,7 @@ The [subsystem unit plan for X-M1 1.50](subsystem-replacement-map.md) groups the
 
 ### 8.20 Composed startup artifact roadmap (#155)
 
-This section plans one owned startup artifact. It inventories the owned pieces, qualified and missing joins, blockers and qualification sequence; the plan (`E-STARTUP-COMPOSITION-ROADMAP-150`) is source and ledger inference, current through J7 and J8. The step 0 mechanisms and J1 to J7 results follow; J8 ran on J6 before J7 composed the heap on J8.
+This section inventories one owned startup artifact, its pieces, joins and remaining obligations (`E-STARTUP-COMPOSITION-ROADMAP-150`). The per-join results below cover J1-J8; J8 ran on J6 before J7 composed the heap on J8. The complete J1-J11+K1 composition now qualifies on seven settled-input emulator routes (`E-STARTUP-STEP9-COMPOSED-NATURAL-150`), with the artifact, matrix, localization and timing evidence in [application readiness section 10](startup-application-readiness.md#10-composed-startup-qualification). Independently acknowledged cold first-start language/date and input arriving while work is pending remain unsupported; this finite matrix does not close all #154/#155 acceptance criteria or the owned-layout redesign.
 
 #### Owned pieces
 
