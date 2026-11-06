@@ -15,7 +15,6 @@ import Data.Either (isLeft, isRight)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import qualified Data.Vector as V
 import Data.Word (Word32)
 import Emulation.LocalUiMenu (MenuNodeAddress (..), SettingIdentifier (..), MenuCursor (..), MenuDepth (..))
 import Emulation.PropertyPairPlan (PhysicalRange (..), settingsRanges)
@@ -521,8 +520,8 @@ main = do
             files = case receipt of Object fields -> maybe (error "missing files") id (KM.lookup "files" fields); _ -> error "receipt object"
             updated = changedObject "files" (changedObject "steps.json" (A.toJSON (hash steps)) files) receipt
          in qualify Owned bound observation {receiptBytes = encode updated, sidecars = M.insert Steps steps (sidecars observation)}
-      lateStepRefused = isLeft (changedSteps (\bytes -> case A.eitherDecodeStrict' bytes of
-        Right (Array rows) -> encode (Array (V.snoc rows (changedObject "step" (Number 2) (V.head rows))))
+      lateStepRefused = isLeft (changedSteps (\bytes -> case A.eitherDecodeStrict' bytes :: Either String [Value] of
+        Right (row:rows) -> encode (A.toJSON (row : rows ++ [changedObject "step" (Number 2) row]))
         _ -> bytes))
       duplicateStepAccepted = not (isLeft (changedSteps (B.replace "\"step\":1" "\"step\":1,\"step\":9")))
       wrongPrefixPolicy role policy =
