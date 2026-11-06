@@ -11,6 +11,7 @@ exports_files(
         "//replacement/recipe_ui:__pkg__",
         "//replacement/rtos_layout:__pkg__",
         "//replacement/rtos_own_first:__pkg__",
+        "//replacement/rtos_scheduler:__pkg__",
     ],
 )
 
@@ -3588,3 +3589,107 @@ haskell_test(
         "//replacement/rtos_own_first/stage:own-first-artifact",
     ],
 )
+
+haskell_library(
+    name = "scheduler-pair-lib",
+    srcs = [
+        "Emulation/SchedulerPairCatalog.hs",
+        "Emulation/SchedulerPairCheck.hs",
+        "Emulation/SchedulerPairDecode.hs",
+        "Emulation/SchedulerPairEvidence.hs",
+        "Emulation/SchedulerPairModel.hs",
+        "Emulation/SchedulerPairPlan.hs",
+        "Emulation/SchedulerPairS2.hs",
+        "Emulation/SchedulerPairService.hs",
+        "Emulation/SchedulerPairS3a.hs",
+        "Emulation/SchedulerPairS3b.hs",
+        "Emulation/SchedulerPairS3c.hs",
+    ],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":own-first-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:text",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_scheduler/oracle:scheduler-oracle-lib",
+    ],
+)
+
+haskell_binary(
+    name = "scheduler-pair-plan",
+    srcs = ["SchedulerPairPlanMain.hs"],
+    args = ["$(rootpath //replacement/rtos_scheduler:regions.json)"],
+    data = ["//replacement/rtos_scheduler:regions.json"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":scheduler-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:host-support",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_scheduler/oracle:scheduler-oracle-lib",
+    ],
+)
+
+haskell_binary(
+    name = "scheduler-pair-check",
+    srcs = ["SchedulerPairCheckMain.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":scheduler-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:deepseq",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "scheduler-pair-tests",
+    size = "small",
+    srcs = ["SchedulerPairTests.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":case-sha256",
+        ":own-first-pair-lib",
+        ":scheduler-pair-lib",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//replacement/rtos_own_first/stage:own-first-artifact",
+        "//replacement/rtos_scheduler/oracle:scheduler-oracle-lib",
+    ],
+)
+
+sh_binary(
+    name = "scheduler-pair-observe",
+    srcs = ["@lab_fujimod_xm1//:bin/fujimod-xm1-scheduler-pair"],
+    visibility = ["//visibility:public"],
+)
+
+[
+    haskell_test(
+        name = "scheduler-pair-%s-tests" % model,
+        size = "small",
+        srcs = ["SchedulerPair%sTests.hs" % module],
+        main_file = "SchedulerPair%sTests.hs" % module,
+        ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+        deps = [
+            ":scheduler-pair-lib",
+            "//host:base",
+            "//host:containers",
+            "//replacement/rtos_own_first/stage:own-first-artifact",
+        ],
+    )
+    for model, module in [("s2", "S2"), ("s3a", "S3a"), ("s3bc", "S3bc")]
+]

@@ -33,6 +33,9 @@ module Emulation.OwnFirstPairCheck
   , qualifiedValue
   , RouteDifference (..)
   , compareRoutes
+  , readbackOf
+  , checkReadback
+  , checkSegments
   ) where
 
 import Control.Monad (forM, forM_, unless, when)

@@ -563,3 +563,84 @@ Source: x70view `decomp/xm1-coverage` at `55436fc85c0560dd252b0410af6f2427fe198c
 | `null-selection-own-registers` | The null-selection branch (A 0x436ec..0x43724) stores 1 and 0 through r6 and loads CPSR from r4/r5. Only 0x43640/0x43688 preload them, so an entry from 0x4375c stores through the interrupted task's r6 and takes the mode in its r4/r5 | The null branch loads the context-word address, the idle stack and the SVC modes itself; 0x43640/0x43688 drop the r4-r6 preloads | Selected cell 0 at select, entered from 0x4375c (outermost IRQ exit, reschedule requested, dispatch enabled) | A stray store of 1 or a non-SVC mode in stock only. Elsewhere only r4-r6 differ at a dispatch, and no next instruction reads them (the stubs pop r4-r11, the trampoline sets r0, lr and CPSR). A retained reader would show as a task reading r4-r6 at its first entry |
 | `null-loop-releases-leaked-global-lock` | An IRQ in the null loop's unmask window sees context word 1, runs nested, takes 0x400c0804 with tag 0x11/0x12 and never releases it, because stock releases only on the outermost exit (0x4030c). The other core's IRQs and the image4 0x21/0x22 sections spin until this core's next outermost exit | After each window, with IRQ masked and the loop's context word 1, if 0x400c0804 holds the build's tag (A 0x11, B 0x12), issue a DMB and release it through stock unlock 0x427fc/0xd27fc | Selected cell 0, and 0x400c0804 holding this core's IRQ tag after a window with context word 1 | 0x400c0804 still holds the tag at the next loop iteration in stock and is 0 in owned. The other core's vector spins in its observe loop (0x40258..0x4029c) in stock and takes the trylock path in owned |
 | `remote-terminate-restarts` | +0x18 from the other core on a running task with a queued activation sets T+0x30 = 1 and prepares a restart. The running core resumes the old frame when selected == running at 0x4375c, because T+0x30 is tested only afterwards at 0x43784. Or 0x43640 saves the live SP/PC over the prepared T+0x18/+0x1c | 0x4375c keeps the dispatch-disabled tail, then tests T+0x30 before the selected cell and dispatches without saving. 0x43640 skips the save when T+0x30 = 1. 0x43668 and 0x437a4 stay at their stock addresses | At 0x4375c: dispatch enabled, T+0x30 = 1 and selected == running. At 0x43640: T+0x30 = 1. Evaluated on the loaded values | The task's next execution resumes at its interrupted PC in stock and enters the trampoline 0x43728 in owned. Residual, on the object side and no worse than stock: a blocking call the stale frame makes before the doorbell moves the prepared task into an object queue. The restart then waits on that object, the first signal is consumed by the dead wait, and on an untimed wait that is never satisfied the activation is lost |
+
+**Merged scheduler native qualification.** The S1, S2, S3a, S3b and S3c implementations are merged into one tree. Rerunning the S1 oracle passes 5,086 cases per loader and all 46 controls (E-RTOS-SCHED-S1-ORACLE-150). S2 passes 560 cases per loader, including 436 exact comparisons and the three approved expected-difference groups: 72 `null-selection-own-registers`, four `null-loop-releases-leaked-global-lock` and 48 `remote-terminate-restarts`; all 22 control groups per loader hold (E-RTOS-SCHED-S2-ORACLE-150). S3a passes 3,271 cases per loader with all 42 control groups across both loaders (E-RTOS-SCHED-S3A-ORACLE-150). S3b passes 664 cases per service per loader, 7,968 owned comparisons total, with every equivalent matching and every incorrect-result mutant refused (E-RTOS-SCHED-S3B-ORACLE-150). These are isolated native boundaries, not the full combined scheduler natural-pair gate.
+
+**Natural scheduler cutover qualification (E-RTOS-SCHED-CUTOVER-NATURAL-150).** The from-reset stock-10 and stage-1 candidate-3 roles qualify with the same observer executable, SHA256 `69d5cb454ff143ece4387f9896648824402e4535b587543bbc7fa8a1e8da64f9`. The candidate DAT is `47c95e9ca3e7f3881fb1c04c6cc698f716206cc1286ef621d96a68394822369f`. The shooting-menu and packaged FILM SIMULATION route/menu signatures match. Stock completes 1,054,071 modeled observations in 842,322,166 aggregate entered instructions; owned completes 1,068,808 in 833,936,664. Both complete all entered observations, with no pending calls, byte-guard fault, untracked continuation or machine/observer error. All completed classes satisfy their stock contracts, with the approved S2 redesign rules retained. No real semantic or route mismatch remains, so incremental-subset localization was not needed. Counts and instruction interleavings are recorded, not required to be equal.
+
+**First-entry finding.** The stock trampoline loads argument C+4 and PC C+8 through configuration `0x4005bf24`; the target word is the low spelling `0x1215480`, not an alias. Both per-core RAM maps expose the low and `0x40000000` spellings of the backing. The attempted load-to-PC at `0x43758` takes a permission prefetch abort at `0xc` before a target instruction point can fire. The stock diagnostic retains IFSR 13, SPSR `0x53`, IFAR/`LR_abt-4` equal to C+8, unchanged r0-r12/task/core and exactly one faulting-core instruction since the load. The matched pair each qualify one such attempted-transfer witness and a later same-task/core task-context service entry. This is not a claim that a target-body instruction executed at that boundary. Other exception transitions refuse, and proof-to-abort correspondence is bijective.
+
+**Effect attribution.** Task continuations remain armed in both RAM spellings. Captured writes retain their actual core, PC, SP, CPSR, task, kernel context and core instruction count; bank attempts reconcile one-for-one with accepted controller writes. Invocation effects satisfy the model, while every captured foreign/IRQ write remains in raw replay to the next resource snapshot. Same-core foreign effects require the validated save/resume envelope. CPSR.A is excluded only across that task/core's observed C frame restoration; native no-IRQ comparisons remain strict. The earlier stock-9 receipt is retained as an unqualified attribution diagnostic.
+
+| Role | Core | Entered instructions | Cross-domain inserts | Ringing notifies | Bank writes | IRQ 120 entries |
+| --- | --- | --- | --- | --- | --- | --- |
+| stock | 0 | 632,958,198 | 749 | 747 | 1,486 | 735 |
+| stock | 1 | 209,363,968 | 739 | 735 | 1,482 | 747 |
+| owned | 0 | 620,237,853 | 765 | 762 | 1,520 | 754 |
+| owned | 1 | 213,698,811 | 756 | 754 | 1,516 | 762 |
+
+The PC watches at `0x436ec`, `0xd36ec` and image5 direct-ring site `0xec8014` are zero on both cores in both roles. IRQ 120 entry watches are `0x40b00` on core 0 and `0xd0b00` on core 1, with the counts above; the opposite-core entry watches are zero. Each of the three approved S2 redesign triggers has zero qualified calls in both roles. This route does not exercise those repairs.
+
+**Guest controls.** All six frozen control roles are independently recognized by the fresh consumer. The three restore controls fail extent readback. Silent-notify's first remote A notify is at 6,472,686; the enclosing activation entered at 6,472,579 also fails `BankWrites`. Wrong-predicate's first B/id1 notify at 12,862,224 returns 1 without a bank write, violating B's normal `ReturnValue` contract. Its enclosing wake entered at 12,862,088 and takes the induced save at 12,862,242 with reason -19, resume at 12,862,267 and return at 12,862,278. Its baseline refusal is `ProcessorState`, not an ignored A-bit difference. Control-only adjudication derives the defective unsigned `id <= 1` predicate from the frozen words and rechecks the full same-domain service, including frame, flags, reason, writes and completion. Independent earlier faults remain refusals; production qualification uses the stock predicate. Wake-no-insert fails `WrittenWords` at its first wake, 29,529,704.
+
+| Control | Recognized refusal |
+| --- | --- |
+| restore-s1 | Readback |
+| restore-s2 | Readback |
+| restore-s3 | Readback |
+| silent-notify | BankWrites, with the first missing notify and its enclosing activation bound |
+| wrong-predicate | First B/id1 ReturnValue defect and precisely modeled enclosing ProcessorState consequence |
+| wake-no-insert | WrittenWords |
+
+**Per-entry completed observations.** The table includes all 86 planned entries; 48 are reached per role and the other 38 have zero counts. Dispatcher checkpoints and terminal discards count as completions under the observer contract. Zero means unobserved, not retired. The full machine-readable counts, per-core watches, redesign tags and control verdicts are in `private-data/scratch/SchedCutover/natural-cutover-summary.json`, alongside the complete lossless raw receipts and independent qualification/comparison outputs.
+
+Paired entry addresses are listed in stock / owned order.
+
+| Semantic | A entry | B entry | A stock | A owned | B stock | B owned |
+| --- | --- | --- | --- | --- | --- | --- |
+| helper/acquire | `0x439d8` | `0xd398c` | 334,227 | 338,346 | 7,813 | 7,979 |
+| helper/release | `0x43a14` | `0xd39c8` | 334,227 | 338,346 | 7,813 | 7,979 |
+| helper/find | `0x43c48` | `0xd3c04` | 43,387 | 44,168 | 765 | 781 |
+| helper/insert | `0x43ca4` | `0xd3c60` | 38,994 | 39,647 | 741 | 758 |
+| helper/remove | `0x43d20` | `0xd3cdc` | 38,983 | 39,635 | 749 | 765 |
+| helper/reset | `0x43dd0` | `0xd3d8c` | 121 | 121 | 120 | 120 |
+| helper/prepare | `0x43f70` | `0xd3f2c` | 82 | 82 | 2 | 2 |
+| helper/notify | `0x44018` | `0xd3fd4` | 19,409 | 19,750 | 735 | 754 |
+| helper/requeue | `0x44044` | `0xd4004` | 14,846 | 15,076 | 24 | 24 |
+| helper/rotate | `0x44134` | `0xd40f4` | 687 | 657 | 0 | 0 |
+| irq/doorbell | `0x40b00` | `0xd0b00` | 735 | 754 | 747 | 762 |
+| dispatch/save | `0x43640` | `0xd3640` | 40,470 | 41,111 | 749 | 765 |
+| dispatch/resume | `0x43668` | `0xd3668` | 40,398 | 41,040 | 741 | 757 |
+| dispatch/no-save | `0x43688` | `0xd3688` | 2 | 2 | 1 | 1 |
+| dispatch/select | `0x436ac` / `0x436a4` | `0xd36ac` / `0xd36a4` | 58,367 | 59,369 | 1,497 | 1,528 |
+| dispatch/first-entry | `0x43728` | `0xd3728` | 74 | 74 | 10 | 10 |
+| dispatch/irq-return | `0x4375c` | `0xd375c` | 17,895 | 18,256 | 747 | 762 |
+| dispatch/irq-resume | `0x437a4` | `0xd37a4` | 17,895 | 18,255 | 746 | 761 |
+| dispatch/irq-tail | `0x437a8` | `0xd37a8` | 17,895 | 18,255 | 746 | 761 |
+| service/exit-task | `0x453f0` | `0xd53b0` | 1 | 1 | 0 | 0 |
+| service/rotate-ready | `0x4c28c` | `0xdc24c` | 687 | 657 | 0 | 0 |
+| service/interrupt-rotate-ready | `0x4c36c` | `0xdc32c` | 0 | 0 | 0 | 0 |
+| service/core-rotate-ready | `0x4c434` | `0xdc3f4` | 0 | 0 | 0 | 0 |
+| service/interrupt-core-rotate-ready | `0x4c530` | `0xdc4f0` | 0 | 0 | 0 | 0 |
+| service/disable-dispatch | `0x4c9dc` | `0xdc99c` | 220 | 223 | 0 | 0 |
+| service/enable-dispatch | `0x4cac0` | `0xdca80` | 220 | 223 | 0 | 0 |
+| service/activate-task | `0x44f2c` | `0xd4eec` | 82 | 82 | 2 | 2 |
+| service/interrupt-activate-task | `0x450f0` | `0xd50b0` | 0 | 0 | 0 | 0 |
+| service/cancel-activation | `0x45270` | `0xd5230` | 0 | 0 | 0 | 0 |
+| service/wake-task | `0x46004` | `0xd5fc4` | 1,216 | 1,180 | 12 | 12 |
+| service/interrupt-wake-task | `0x46200` | `0xd61c0` | 469 | 456 | 0 | 0 |
+| service/cancel-wakeup | `0x46398` | `0xd6358` | 0 | 0 | 0 | 0 |
+| service/deliver-task-exception | `0x441b4` | `0xd4174` | 0 | 0 | 0 | 0 |
+| service/deliver-task-exception-entry | `0x44288` | `0xd4248` | 0 | 0 | 0 | 0 |
+| service/get-task-priority | `0x45b40` | `0xd5b00` | 6,025 | 6,111 | 0 | 0 |
+| service/sleep-task | `0x45cd4` | `0xd5c94` | 1,697 | 1,648 | 0 | 0 |
+| service/suspend-task | `0x46a00` | `0xd69c0` | 0 | 0 | 0 | 0 |
+| service/resume-task | `0x46c80` | `0xd6c40` | 0 | 0 | 0 | 0 |
+| service/force-resume-task | `0x46e38` | `0xd6df8` | 0 | 0 | 0 | 0 |
+| service/raise-task-exception | `0x46fcc` | `0xd6f8c` | 0 | 0 | 0 | 0 |
+| service/interrupt-raise-task-exception | `0x471b0` | `0xd7170` | 0 | 0 | 0 | 0 |
+| service/disable-task-exception | `0x47354` | `0xd7314` | 0 | 0 | 0 | 0 |
+| service/enable-task-exception | `0x47428` | `0xd73e8` | 0 | 0 | 0 | 0 |
+
+The qualification is finite emulated evidence for this route and these contracts. It does not establish hardware/cache ordering, unused-entry behavior, general stack capacity or composition with the separate startup-artifact pieces. No camera was used.
+

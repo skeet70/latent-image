@@ -90,6 +90,10 @@ name = "fujimod-xm1-own-first-pair"
 path = "src/own_first_pair.rs"
 
 [[bin]]
+name = "fujimod-xm1-scheduler-pair"
+path = "src/scheduler_pair.rs"
+
+[[bin]]
 name = "fujimod-xm1-composed-startup"
 path = "src/composed_startup.rs"
 

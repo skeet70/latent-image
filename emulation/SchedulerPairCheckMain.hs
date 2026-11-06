@@ -1,0 +1,55 @@
+{-# LANGUAGE OverloadedStrings #-}
+module Main (main) where
+
+import Control.DeepSeq (force)
+import Control.Exception (evaluate)
+import Control.Monad (unless)
+import qualified Data.Aeson as J
+import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy.Char8 as L
+import Emulation.SchedulerPairCheck
+import Emulation.SchedulerPairDecode (decodeCheckedObservation, decodeControlObservation)
+import Emulation.SchedulerPairEvidence
+  ( qualifyEvidence, evidenceFailureValue, qualifyControlEvidence, checkControlEvidence, controlFailureValue )
+import Emulation.SchedulerPairPlan
+import qualified FujiAF.Host as H
+import System.Environment (getArgs)
+
+data QualifiedObservation = QualifiedObservation
+  { qualifiedRoute :: Observation
+  , qualifiedSummary :: J.Value
+  }
+
+load :: FilePath -> FilePath -> IO QualifiedObservation
+load planPath observationPath = do
+  bytes <- B.readFile planPath
+  plan <- either H.failH pure (J.eitherDecodeStrict bytes)
+  (observation, evidence) <- L.readFile observationPath >>= either H.failH pure . decodeCheckedObservation plan
+  result <- either (\refusal -> H.failH (show refusal ++ ": " ++ L.unpack (J.encode (if obsRole observation==planRole plan then evidenceFailureValue evidence else J.Null))))
+    pure (qualifyEvidence bytes plan observation evidence)
+  checkedSummary <- evaluate (force result)
+  pure (QualifiedObservation observation checkedSummary)
+main :: IO ()
+main = do
+  args <- getArgs
+  result <- case args of
+    ["qualify",planPath,observationPath] -> qualifiedSummary <$> load planPath observationPath
+    ["compare",stockPlan,stockObservation,ownedPlan,ownedObservation] -> do
+      stock <- load stockPlan stockObservation
+      owned <- load ownedPlan ownedObservation
+      either (H.failH . show) pure (compareRoutes (qualifiedRoute stock) (qualifiedRoute owned))
+      pure (J.object ["stock" J..= qualifiedSummary stock,"owned" J..= qualifiedSummary owned])
+    ["control",planPath,observationPath] -> do
+      bytes <- B.readFile planPath
+      plan <- either H.failH pure (J.eitherDecodeStrict bytes)
+      (observation, evidence) <- L.readFile observationPath >>= either H.failH pure . decodeControlObservation plan
+      let expected = controlRefusals (planRole plan)
+      unless (not (null expected)) (H.failH "not a control role")
+      case qualifyControlEvidence bytes plan observation evidence of
+        Left refusal | refusal `elem` expected -> do
+          either (H.failH . show) pure (checkControlEvidence (planRole plan) observation evidence)
+          pure (J.object ["control" J..= roleName (planRole plan),"refused" J..= show refusal,"first_semantic_failure" J..= controlFailureValue evidence])
+        Left refusal -> H.failH ("control refused for wrong reason: " ++ show refusal)
+        Right _ -> H.failH "control passed"
+    _ -> H.failH "usage: scheduler-pair-check qualify PLAN OBSERVATION | compare STOCK_PLAN STOCK_OBSERVATION OWNED_PLAN OWNED_OBSERVATION | control PLAN OBSERVATION"
+  L.putStrLn (J.encode result)

@@ -1,0 +1,181 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//replacement/toolchain:rust.bzl", "xm1_rust_elf", "xm1_rust_staticlib")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["regions.json"])
+
+[
+    xm1_rust_staticlib(
+        name = "scheduler-%s-rust" % domain,
+        src = "src/lib.rs",
+        crate_name = "xm1_rtos_scheduler",
+        data = [
+            "src/entries.rs",
+            "src/s3b.rs",
+            "//replacement/rtos_layout:src/lib.rs",
+        ],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "scheduler-%s" % domain,
+        rust_staticlib = ":scheduler-%s-rust" % domain,
+        entry = "xm1_rtos_scheduler_acquire",
+        extra_ldflags = [
+            "-Wl,--gc-sections",
+            "-Wl,--orphan-handling=error",
+        ],
+        link_script = "scheduler-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
+
+genrule(
+    name = "scheduler-host-tests-build",
+    srcs = [
+        "src/lib.rs",
+        "src/tests.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+    ],
+    outs = ["scheduler-host-tests-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --test -C linker=$(location @lab_clang//:bin/clang) $(location src/lib.rs) -o $@",
+    executable = True,
+    tools = [
+        "@lab_clang//:bin/clang",
+        "@lab_rustc//:bin/rustc",
+    ],
+)
+
+sh_test(
+    name = "scheduler-host-tests",
+    size = "small",
+    srcs = ["//emulation:recovery-task-state-tests.sh"],
+    args = ["$(location :scheduler-host-tests-build)"],
+    data = [":scheduler-host-tests-build"],
+)
+
+sh_test(
+    name = "scheduler-regions-tests",
+    size = "small",
+    srcs = ["check-regions.sh"],
+    args = [
+        "$(location @lab_jq//:bin/jq)",
+        "$(location regions.json)",
+        "$(location :scheduler-a.symbols)",
+        "$(location :scheduler-b.symbols)",
+        "$(location :scheduler-a.disasm)",
+        "$(location :scheduler-b.disasm)",
+    ],
+    data = [
+        "regions.json",
+        ":scheduler-a.disasm",
+        ":scheduler-a.symbols",
+        ":scheduler-b.disasm",
+        ":scheduler-b.symbols",
+        "@lab_jq//:bin/jq",
+    ],
+)
+
+sh_test(
+    name = "scheduler-bin-digests-tests",
+    size = "small",
+    srcs = ["//replacement/rtos_own_first:check-bin-digests.sh"],
+    args = [
+        "$(location @lab_coreutils//:bin/sha256sum)",
+        "fad6b0462e8fdf38b6aedcca2859d7b2fc1aee689d00f5e0656e9367d691b0ac",
+        "$(location :scheduler-a.bin)",
+        "60f4e310f618324a7ae529f66c82a3653fed83265a22e68588c97ad9632f5fdd",
+        "$(location :scheduler-b.bin)",
+    ],
+    data = [
+        ":scheduler-a.bin",
+        ":scheduler-b.bin",
+        "@lab_coreutils//:bin/sha256sum",
+    ],
+)
+
+exports_files(["regions-s2.json", "regions-s3a.json"])
+
+[
+    xm1_rust_staticlib(
+        name = "scheduler-s2-%s-rust" % domain,
+        src = "src/s2.rs",
+        crate_name = "xm1_rtos_scheduler_s2",
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "scheduler-s2-%s" % domain,
+        rust_staticlib = ":scheduler-s2-%s-rust" % domain,
+        entry = "xm1_rtos_scheduler_save",
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+        link_script = "scheduler-s2-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_staticlib(
+        name = "s3a-%s-rust" % domain,
+        src = "src/lib.rs",
+        crate_name = "xm1_rtos_scheduler_s3a",
+        data = ["src/entries.rs", "src/s3a.rs", "src/s3b.rs", "//replacement/rtos_layout:src/lib.rs"],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain, "--cfg", "'feature=\"s3a\"'"],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "s3a-%s" % domain,
+        rust_staticlib = ":s3a-%s-rust" % domain,
+        entry = "xm1_s3a_exit_task",
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+        link_script = "s3a-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
+
+exports_files(["regions-s3b.json"])
+
+[
+    xm1_rust_elf(
+        name = "s3b-%s" % domain,
+        rust_staticlib = ":scheduler-%s-rust" % domain,
+        entry = "xm1_s3b_activate",
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+        link_script = "s3b-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]
+
+exports_files(["regions-s3c.json"])
+
+[
+    xm1_rust_staticlib(
+        name = "s3c-%s-rust" % domain,
+        src = "src/s3c.rs",
+        crate_name = "xm1_rtos_scheduler_s3c",
+        data = ["//replacement/rtos_layout:src/lib.rs"],
+        rustc_flags = ["--cfg", "'feature=\"domain-%s\"'" % domain],
+    )
+    for domain in ["a", "b"]
+]
+
+[
+    xm1_rust_elf(
+        name = "s3c-%s" % domain,
+        rust_staticlib = ":s3c-%s-rust" % domain,
+        entry = "s3c_get_priority",
+        extra_ldflags = ["-Wl,--gc-sections", "-Wl,--orphan-handling=error"],
+        link_script = "s3c-%s.ld" % domain,
+    )
+    for domain in ["a", "b"]
+]

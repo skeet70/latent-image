@@ -1713,6 +1713,60 @@ bazel-bin/emulation/own-first-pair-check control CONTROL_PLAN CONTROL_DIR OUTPUT
 
 Pending calls that entered within the final settle are reported, not checked. Results are read at the continuation stop, so an interrupt taken between a slot's return and its continuation is part of the observed result.
 
+#### Scheduler cutover natural pair (#156)
+
+`//emulation:scheduler-pair-plan` consumes a list of owned regions catalogs, a role's DAT and the loaders whose guarded bytes that role must hold. Each leaf stager pins its own extents and shim windows. The catalog schema is [`scheduler-pair-regions.schema.json`](scheduler-pair-regions.schema.json): each extent has zero or more entries keyed by address and a typed helper, dispatch, service or IRQ semantic tag. Optional loaded-value probes name a PC, a register and a typed predicate. S1's existing `helper` rows are read directly; additional catalogs follow the output filename on the command line. Unmodeled semantic tags refuse qualification. The standalone S1 candidate is stock plus S1 helpers, without own-first slot bodies. Generate `stock` from canonical loaders, `owned` from the staged candidate, and the notify controls from their own staged loaders. For `control-restored`, pass the restored-insert control DAT but the candidate's loaders.
+
+`//emulation:scheduler-pair-observe` follows the own-first cold-reset shooting-menu and packaged FILM SIMULATION route. Both aliases of every helper entry, continuation, loader arming point and UDF fill word are instruction stops. The byte guard hashes every extent and the prepare shim window physically and through both cores' low and high views at arming and at the end. Classified CPU, host and model-bus write watches cover armed code continuously. The observer records r0-r3, CPSR, the record, reached T records and definition fields, ready heads, bitmap, selected, running, dispatch-enabled and lock words. CPU write hooks record per-call addresses, widths and values, return snapshots contain final word values, and controller transaction watches capture exact bank writes. The checker replays each core's writes independently; a peer can acquire a released lock before the releasing core reaches its continuation. Calls match continuations by core, SP, mode and executing-core current task.
+
+Plans and observations use schema 3. Calls include task pointer, core, entry SP, r0-r15, CPSR, TPIDRURW, CPACR and FPEXC. Completion is `return`, terminal `discard`, or a dispatcher-stage `dispatched` checkpoint. Service histories preserve save/resume, ready-bit retry, successful scheduler acquisition and exception callback/return boundaries. Each history boundary contains its snapshot and only the writes and bank transactions since its predecessor; the final result retains cumulative effects. A saved service remains pending until its own task/core/SP continuation returns, and does not absorb another task's writes while suspended.
+
+Dispatcher classes retain initial and result envelopes for each stage. Select records the actual loaded selected pointer, its running-cell store and arrival at the saved PC/SP; the first-entry trampoline completes before its C+8 target executes. Save and IRQ-return snapshots include the saved frames and T+0x18/+0x1c. IRQ tails complete at the restored interrupted PC. Select inherits its source stage and loaded enabled/discarded values, preserving the distinction between entry memory and values actually read. Role-specific post-load probes observe selected/discarded reads, and the doorbell call retains both bank-clear transactions and the local reschedule store. The immutable-byte guard remains one classified watch.
+
+The `global-lock-read` null-window boundary is the owned post-load r1 value at `0x43708`/`0xd3708`; stock has no corresponding load, so its `0x4371c`/`0xd371c` boundary records committed global-lock memory after the window. Boundary timestamps identify representative observations and do not split otherwise identical call classes.
+
+Service models use the state observed at successful scheduler acquisition, with the acquired lock's pre-store value restored to zero for the model. Their write comparison excludes downward scratch within the calling task's declared stack, but keeps modeled output writes even there. Sleep snapshots include the one-based task slot's result cell. Dispatcher control writes preserve A while IRQ is masked; trampoline completion and IRQ return do not require the saved A bit to be restored. Null-branch PC watches remain armed when dispatcher semantics are enabled.
+
+Natural helper and service comparisons retain CPSR.A equality unless the call records a matching save/resume pair for its own task and core at the fixed C dispatcher entries, with the saved 36-byte frame restored. Across that observed context switch A is not an ABI invariant; mode/T/I/F remain compared. Native no-IRQ oracles continue comparing A.
+
+CPU writes retain the actual writer's core, PC, SP, CPSR, current task, kernel-context word and core instruction count. Both cores observe each active invocation's admitted resources. Bank writes additionally reconcile one-for-one with accepted controller transactions. The checker separates invocation effects from foreign-task, IRQ and dispatcher effects using those raw envelopes and the calling task's declared stack. Same-core foreign effects require the call's validated save/resume witness. No raw write is removed: invocation writes must satisfy the service/helper model, and replay of every captured write must reproduce the next resource snapshot. Suspended service phases restart from their actual resume snapshot.
+
+First-entry, saved-register resume and IRQ-tail calls remain pending across preemption until their own task/SP continuation. Instruction points use mutable arming and both RAM spellings for task entry targets in runtime-written overlays.
+
+An overlay task's first transfer can take a permission prefetch abort before an instruction point at its virtual entry can fire. Stock task `0x4005ffb4` transfers from `0x43758` to virtual entry `0x1215480` through configuration `0x4005bf24`; its next PC is the prefetch-abort vector `0xc`, then stock handler `0x61c73c`. The observer retains the final trampoline load's full envelope and records the raw abort envelope, SPSR, IFAR, IFSR and both core-local instruction counts. It accepts an attempted first entry only when exactly one instruction retired, SPSR equals the trampoline's SVC/I=0/F=1 status, IFSR is a permission fault, IFAR and LR_abt-4 equal C+8, and r0-r12 and task/core are unchanged. The transfer's banked SP/LR are taken from that immediately preceding load envelope. The checker binds this derived transfer to its raw abort history and requires a later task-context service entry from the same task/core, with its published root word and zero kernel context word. No other exception transition completes a trampoline.
+
+Each raw prefetch-abort call boundary must match exactly one complete demand-paging proof, and each proof must match exactly one boundary.
+
+The observer counts null-branch visits (`0x436ec`, `0xd36ec`) including startup, image5's direct ring site (`0xec8014`), and IRQ 120 handler entries (`0x40b00`, `0xd0b00`) by core. It refuses a helper entered on the other loader's core and a null-selection branch after the first successful dispatch. The checker judges each completed call against the stock-listing Haskell model, including raw versus boolean requeue results and the distinct A/B notify predicates. It checks queue/bitmap/selected consistency at queue-helper returns, guard coverage, input bindings, accounting and route completion. Cross-run comparison uses route keys and menu states, not call order or instruction interleavings. Its JSON summary reports cross-domain inserts, ringing notifies, bank writes, handler runs and PC-watch counts per core.
+
+The checker controls require `control-restored` to fail readback, `control-silent-notify` to fail the missing bank-write check, and `control-wrong-predicate` to fail B's return-value check. Barrier ordering remains the native oracle's obligation. Host tests use synthetic memory and guard receipts; they do not qualify a guest run.
+
+Negative-control adjudication still requires the first targeted notify itself to fail with the expected defect. An earlier enclosing service must have the same nonzero task, core and kernel context, a preserved caller frame and no owned bank transaction. Its full model is rechecked under the explicit control policy. Independent earlier failures remain refusals.
+
+For silent-notify, the service's final bank obligation must be exactly the missing target notify's address/value. Every other service invariant remains strict.
+
+The frozen wrong-predicate control replaces B's first four notify words with `e3500001 93a00001 912fff1e e320f000`: `cmp r0,#1`, `movls r0,#1`, `bxls lr`, `nop`. Its first B/id1 notify must fail the normal B return contract and satisfy the defective unsigned `id <= 1` predicate's helper contract. The enclosing S3b service is rechecked with that predicate bound to recipient 1; caller domain and record/device address selection remain unchanged. The induced save/resume, dispatch reason, control bits, caller frame, writes and completion must all match the independent model. Production qualification always uses the stock per-domain predicate, and the raw receipt is unchanged.
+
+```sh
+devenv shell -- bazel --batch build --jobs=2 //emulation:scheduler-pair-plan //emulation:scheduler-pair-observe //emulation:scheduler-pair-check //emulation:emulator-slot
+devenv shell -- bazel --batch test --jobs=2 //emulation:scheduler-pair-tests
+devenv shell -- bazel --batch run --jobs=2 //emulation:scheduler-pair-plan -- ROLE DAT EXPECTED_LOADER_A EXPECTED_LOADER_B NEW_PLAN_JSON [ADDITIONAL_REGIONS ...]
+XM1_EMULATOR_SLOTS=1 devenv shell -- bazel --batch run --jobs=2 //emulation:emulator-slot -- \
+  "$PWD/bazel-bin/emulation/scheduler-pair-observe" --plan PLAN_JSON \
+  --run "$PWD/emulation/fujimod-xm1/data/xm1-150.json" --update DAT --boot-rom "$ROM" \
+  --trajectory "$PWD/emulation/modal75-packaged-route-trajectories.json" --output NEW_DIRECTORY
+bazel-bin/emulation/scheduler-pair-check qualify PLAN_JSON OBSERVATION_DIR/observation.json
+bazel-bin/emulation/scheduler-pair-check compare STOCK_PLAN STOCK_DIR/observation.json OWNED_PLAN OWNED_DIR/observation.json
+bazel-bin/emulation/scheduler-pair-check control CONTROL_PLAN CONTROL_DIR/observation.json
+```
+
+The host checker streams `classes` into checked totals, per-entry summaries and demand-paging witnesses. Notification controls retain the earliest target and preceding failed contracts for the same exact adjudicator; passing contracts are discharged while reading. Duplicate object fields keep their first occurrence, matching Aeson. The comparison forces each role's summary before loading the next role.
+
+`E-RTOS-SCHED-CURRENT-HOST-150` records current staging and offline rechecks of all eight retained roles within 2 GiB and zero swap, with a measured 703,242,240-byte peak. Every role verdict and the route comparison match the frozen qualification. This is a finite-cohort memory result.
+
+Pending calls are accepted only within the final settle window and remain unqualified, as in the own-first pair. A semantic refusal identifies the earliest failing completed call class by its entry instruction count. A return observation includes any interrupt between the helper's return and its continuation.
+
+
 #### Application entry and main UI loop boundary (#154)
 
 [The application contract](../reports/replacement-inventory-baseline.md#818-application-entry-main-ui-actor-and-first-owned-loop-boundary-154) separates finite image5 initializer `0xd985a4`, actual UI task1 `0xc22f60`/queue1, syscont2/queue2, REC3/queue3 and the distinct UILIB33/smaphk72/VGLIB73 actors. Task1's committed first context, queue1 provenance and the pump handback are observed by the composed-startup application phase above (`E-STARTUP-APPLICATION-PHASE-150`).
