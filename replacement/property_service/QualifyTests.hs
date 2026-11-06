@@ -4,228 +4,101 @@ module Main (main) where
 
 import Control.Monad (unless)
 import Data.Aeson (Value (..), eitherDecodeStrict', object, (.=))
+import qualified Data.Aeson.Key as K
+import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
+import Data.Either (isLeft)
 import Data.List (isInfixOf)
-import Emulation.Sha256 (sha256, sha256Hex)
-import FujiAF.Host (get, num, runBounded, str, withTemporary)
-import FujiAF.JSON (encodeCanonical)
+import qualified Data.Map.Strict as M
+import FujiAF.Host (get, runBounded, str, withTemporary)
 import Replacement.PropertyService.Qualification
-import System.Directory (createDirectoryIfMissing, doesFileExist)
+import System.Directory (createDirectoryIfMissing, createDirectoryLink, doesFileExist)
 import System.Environment (getArgs)
-import System.Exit (ExitCode (..), exitFailure)
+import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 
-check :: String -> Bool -> IO Bool
+-- | Every assertion is fatal; a printed FAIL always fails the test.
+check :: String -> Bool -> IO ()
 check label holds = do
   putStrLn ((if holds then "ok   " else "FAIL ") ++ label)
-  pure holds
+  unless holds (ioError (userError ("assertion failed: " ++ label)))
 
-refused :: Either String a -> Bool
-refused result = case result of
-  Left _ -> True
-  Right _ -> False
+dropField :: String -> Value -> Value
+dropField key (Object objectValue) = Object (KM.delete (K.fromString key) objectValue)
+dropField _ value = value
 
-boolOf :: Value -> Bool
-boolOf (Bool value) = value
-boolOf _ = False
+replaceField :: String -> Value -> Value -> Value
+replaceField key replacement (Object objectValue) = Object (KM.insert (K.fromString key) replacement objectValue)
+replaceField _ _ value = value
 
-writeStageFixture :: FilePath -> B.ByteString -> IO (Value, StageFiles)
-writeStageFixture directory candidateBytes = do
-  createDirectoryIfMissing True directory
-  B.writeFile (directory </> "candidate.dat") candidateBytes
-  B.writeFile (directory </> "contract.json") "{\"schema\":1}"
-  B.writeFile (directory </> "image4.bin") (B.replicate 16 7)
-  let identity = object ["schema_version" .= (1 :: Int), "probe" .= ("stage-fixture" :: String)]
-  writeStageManifest
-    directory
-    identity
-    [ ("candidate_dat", directory </> "candidate.dat")
-    , ("contract", directory </> "contract.json")
-    , ("image4", directory </> "image4.bin")
-    ]
-  pure (identity, StageFiles (directory </> "candidate.dat") (directory </> "contract.json") (directory </> "image4.bin") (sha256Hex (sha256 candidateBytes)) "" "")
+sampleDifference :: Value
+sampleDifference = object ["case" .= ("case-1" :: String), "kind" .= ("status" :: String), "detail" .= ("differs" :: String)]
 
-stageAcceptance :: FilePath -> IO Bool
-stageAcceptance root = do
-  let directory = root </> "accept"
-  (identity, _) <- writeStageFixture directory "candidate-bytes"
-  verified <- verifyStage directory identity
-  case verified of
-    Left problem -> check ("completed stage is reused: " ++ problem) False
-    Right files ->
-      check
-        "a completed stage reports the recorded candidate digest"
-        (stageCandidateDatSha256 files == sha256Hex (sha256 "candidate-bytes"))
-
-stageCorruption :: FilePath -> IO Bool
-stageCorruption root = do
-  let directory = root </> "corruption"
-  (identity, _) <- writeStageFixture directory "candidate-bytes"
-  B.writeFile (directory </> "candidate.dat") "tampered"
-  tampered <- verifyStage directory identity
-  B.writeFile (directory </> "candidate.dat") "candidate-bytes"
-  B.writeFile (directory </> "contract.json") "{\"schema\":1}truncated"
-  truncated <- verifyStage directory identity
-  B.writeFile (directory </> "contract.json") "{\"schema\":1}"
-  writeStageManifest directory (object ["schema_version" .= (1 :: Int), "probe" .= ("other" :: String)]) [("candidate_dat", directory </> "candidate.dat"), ("contract", directory </> "contract.json"), ("image4", directory </> "image4.bin")]
-  replaced <- verifyStage directory identity
-  check "tampered candidate bytes are refused" (refused tampered)
-  check "truncated contract bytes are refused" (refused truncated)
-  check "a stage manifest of another identity is refused" (refused replaced)
-
-stageResume :: FilePath -> IO Bool
-stageResume root = do
-  let partial = root </> "partial"
-      final = root </> "final"
-  createDirectoryIfMissing True partial
-  B.writeFile (partial </> "candidate.dat") "unfinished"
-  (identity, _) <- writeStageFixture (root </> "complete") "complete-bytes"
-  interrupted <- verifyStage partial identity
-  committed <- commitStage partial final
-  installed <- doesFileExist (final </> "candidate.dat")
-  installedCheck <- verifyStage final identity
-  let temporary = root </> "second"
-  _ <- writeStageFixture temporary "different-bytes"
-  second <- commitStage temporary final
-  bytes <- B.readFile (final </> "candidate.dat")
-  check "an interrupted stage has no completed manifest" (refused interrupted)
-  check "an interrupted stage is never verified as complete" (committed == Right True && installed && refused installedCheck)
-  check "an existing completed stage is not overwritten" (second == Right False && bytes == "unfinished")
-
-stageCommit :: FilePath -> IO Bool
-stageCommit root = do
-  let temporary = root </> "commit-source"
-      final = root </> "commit-final"
-  (identity, _) <- writeStageFixture temporary "committed-bytes"
-  committed <- commitStage temporary final
-  verified <- verifyStage final identity
-  check "a completed stage is published atomically" (committed == Right True && not (refused verified))
-
-testView :: FilePath -> String -> JobView
-testView root stageStatus =
-  JobView
-    { jobOptions =
-        defaultOptions
-          { optOut = root </> "out"
-          , optCache = root </> "cache"
-          , optIds = Just "0x1"
-          }
-    , jobKey = "job-key"
-    , jobStageKey = "stage-key"
-    , jobIdentity =
-        object
-          [ "sources" .= object ["dat" .= ("aa" :: String)]
-          , "candidate" .= object ["linked" .= ("bb" :: String), "symbols" .= ("cc" :: String)]
-          , "runner" .= object ["path" .= ("runner" :: String), "sha256" .= ("dd" :: String)]
-          , "oracle" .= object ["path" .= ("oracle" :: String), "sha256" .= ("ee" :: String)]
-          ]
-    , jobStageStatus = stageStatus
-    , jobStageFiles = StageFiles "/stage/candidate.dat" "/stage/contract.json" "/stage/image4.bin" "11" "22" "33"
-    , jobStageLogs = []
-    , jobNotes = []
-    }
-
-attemptWith :: FilePath -> Int -> Maybe Value -> Attempt
-attemptWith directory exit results =
-  Attempt
-    { attemptExit = exit
-    , attemptTimedOut = False
-    , attemptResults = results
-    , attemptResultsError = ""
-    , attemptDir = directory
-    , attemptStdoutLog = directory </> "stdout.log"
-    , attemptStderrLog = directory </> "stderr.log"
-    }
-
-failingResults :: Value
-failingResults =
+sampleControl :: Value
+sampleControl =
   object
-    [ "passed" .= False
-    , "case_shape" .= object ["subset" .= True, "ids" .= ("0x1 0x2" :: String), "cases_per_role" .= (160 :: Int), "grid_cases" .= (80 :: Int)]
-    , "execution" .= object ["batches_executed" .= (1 :: Int), "batches_reused" .= (2 :: Int), "cases_executed" .= (10 :: Int), "cases_reused" .= (20 :: Int)]
-    , "controls" .=
-        [ object
-            [ "name" .= ("c-stock-swapped" :: String)
-            , "kind" .= ("must-fail" :: String)
-            , "note" .= ("stock default swapped" :: String)
-            , "cases" .= (3 :: Int)
-            , "failed_cases" .= (1 :: Int)
-            , "holds" .= False
-            , "first_differences" .= [object ["case" .= ("c-stock-swapped-0x34-set" :: String), "kind" .= ("status" :: String), "detail" .= ("differs" :: String)]]
-            ]
-        ]
-    , "differences" .= object []
+    [ "name" .= ("c-stock-swapped" :: String)
+    , "kind" .= ("must-fail" :: String)
+    , "note" .= ("stock default swapped" :: String)
+    , "cases" .= (3 :: Int)
+    , "failed_cases" .= (1 :: Int)
+    , "holds" .= False
+    , "first_differences" .= [sampleDifference]
     ]
 
-passingResults :: Value
-passingResults =
+sampleShape :: Value
+sampleShape = object ["subset" .= True, "ids" .= ("0x1 0x2" :: String), "cases_per_role" .= (160 :: Int), "grid_cases" .= (80 :: Int)]
+
+sampleExecution :: Value
+sampleExecution =
   object
-    [ "passed" .= True
-    , "case_shape" .= object ["subset" .= False, "ids" .= ("0..646" :: String), "cases_per_role" .= (160 :: Int), "grid_cases" .= (80 :: Int)]
-    , "execution" .= object ["batches_executed" .= (0 :: Int), "batches_reused" .= (3 :: Int), "cases_executed" .= (0 :: Int), "cases_reused" .= (30 :: Int)]
-    , "controls" .= ([] :: [Value])
-    , "differences" .= object []
+    [ "cache" .= ("/cache" :: String)
+    , "batches_executed" .= (1 :: Int)
+    , "batches_reused" .= (2 :: Int)
+    , "cases_executed" .= (10 :: Int)
+    , "cases_reused" .= (20 :: Int)
     ]
 
-verdictFailure :: FilePath -> IO Bool
-verdictFailure root = do
-  let view = testView root "staged"
-      (code, verdict) = judgeAttempt view (attemptWith (root </> "attempt-fail") 0 (Just failingResults))
-  check
-    "a failing control yields a nonzero verdict with its case"
-    ( code == 1
-        && str (get verdict "verdict") == "failed"
-        && str (get (get verdict "failure") "predicate") == "control:c-stock-swapped"
-        && str (get (get verdict "failure") "case") == "c-stock-swapped-0x34-set"
-    )
-  check
-    "reuse counts and native-only subset scope are reported"
-    ( num (get (get verdict "execution") "batches_reused") == 2
-        && num (get (get verdict "execution") "cases_reused") == 20
-        && boolOf (get verdict "native_only")
-        && boolOf (get (get verdict "scope") "subset")
-        && encodeCanonical (get (get verdict "scope") "ids") == "[\"0x1\",\"0x2\"]"
-    )
+validSummary :: Value
+validSummary =
+  object
+    [ "schema_version" .= (1 :: Int)
+    , "passed" .= True
+    , "case_shape" .= sampleShape
+    , "execution" .= sampleExecution
+    , "controls" .= [sampleControl]
+    , "differences" .= object ["model:status" .= [sampleDifference]]
+    , "inputs" .= object ["image4" .= object ["path" .= ("/image4" :: String), "sha256" .= ("aa" :: String)]]
+    , "runner" .= object ["path" .= ("/runner" :: String), "sha256" .= ("bb" :: String)]
+    , "contract_staged_image4_sha256" .= ("cc" :: String)
+    ]
 
-verdictPass :: FilePath -> IO Bool
-verdictPass root = do
-  let view = testView root "reused"
-      (code, verdict) = judgeAttempt view (attemptWith (root </> "attempt-pass") 0 (Just passingResults))
-  check
-    "a passing full run reports full native scope and zero exit"
-    ( code == 0
-        && str (get verdict "verdict") == "passed"
-        && boolOf (get (get verdict "scope") "full_native")
-        && encodeCanonical (get (get verdict "scope") "ids") == "[]"
-        && num (get (get verdict "execution") "batches_reused") == 3
-    )
+parseTests :: IO ()
+parseTests = do
+  case parseOracleSummary validSummary of
+    Left problem -> check ("complete oracle summary parses: " ++ problem) False
+    Right summary -> do
+      check "parsed pass and subset scope" (summaryPassed summary && summarySubset summary)
+      check "parsed subset ids" (summaryIds summary == ["0x1", "0x2"])
+      check "parsed reuse counts" (summaryReusedBatches summary == 2 && summaryReusedCases summary == 20)
+      check "parsed control failure" (case summaryControls summary of [control] -> not (controlHolds control) && controlFailedCases control == 1 && length (controlFirstDifferences control) == 1; _ -> False)
+      check "parsed differences" (case summaryDifferences summary of [("model:status", [sample])] -> sampleDetail sample == "differs"; _ -> False)
+      check "parsed input identity" (case M.lookup "image4" (summaryInputs summary) of Just (_, digest) -> digest == "aa"; Nothing -> False)
+      check "parsed runner identity" (summaryRunnerPath summary == "/runner" && summaryRunnerSha256 summary == "bb")
+  check "a summary without case_shape is refused" (isLeft (parseOracleSummary (dropField "case_shape" validSummary)))
+  check "a summary without subset is refused" (isLeft (parseOracleSummary (replaceField "case_shape" (dropField "subset" sampleShape) validSummary)))
+  check "a summary without cases_reused is refused" (isLeft (parseOracleSummary (replaceField "execution" (dropField "cases_reused" sampleExecution) validSummary)))
+  check "a summary without controls is refused" (isLeft (parseOracleSummary (dropField "controls" validSummary)))
+  check "a summary without runner sha256 is refused" (isLeft (parseOracleSummary (replaceField "runner" (object ["path" .= ("/runner" :: String)]) validSummary)))
+  check "a string passed field is refused" (isLeft (parseOracleSummary (replaceField "passed" (String "true") validSummary)))
+  check "a zero-batch summary is refused" (isLeft (parseOracleSummary (replaceField "execution" (object ["cache" .= ("/cache" :: String), "batches_executed" .= (0 :: Int), "batches_reused" .= (0 :: Int), "cases_executed" .= (0 :: Int), "cases_reused" .= (0 :: Int)]) validSummary)))
 
-terminalOverwritesOldPass :: FilePath -> IO Bool
-terminalOverwritesOldPass root = do
-  let output = root </> "terminal"
-      view = testView root "staged"
-      passedVerdict = object ["schema_version" .= (1 :: Int), "verdict" .= ("passed" :: String)]
-      (failedCode, failedVerdict) = judgeAttempt view (attemptWith (root </> "attempt-old") 0 (Just failingResults))
-  createDirectoryIfMissing True output
-  writeTerminal output passedVerdict (object [])
-  writeTerminal output failedVerdict (object [])
-  bytes <- B.readFile (output </> "verdict.json")
-  case eitherDecodeStrict' bytes :: Either String Value of
-    Left problem -> check ("the terminal verdict is readable: " ++ problem) False
-    Right written ->
-      check
-        "an earlier passed verdict is replaced by the current failure"
-        (failedCode == 1 && str (get written "verdict") == "failed")
-
-defectOverride :: IO Bool
-defectOverride =
+optionsTest :: IO ()
+optionsTest =
   case parseOptions provided of
     Left problem -> check ("options parse: " ++ problem) False
-    Right options ->
-      check
-        "a repeated --defect name keeps the later binary"
-        (optDefects options == [("drop_provisional", "second.bin", "second.symbols")])
+    Right options -> check "a repeated --defect name keeps the later binary" (optDefects options == [("drop_provisional", "second.bin", "second.symbols")])
   where
     provided =
       required
@@ -238,7 +111,26 @@ defectOverride =
       , "--stage-rebuild", "rebuild", "--stage-decoder", "decoder"
       ]
 
-driverRefusal :: FilePath -> FilePath -> IO Bool
+pathTests :: FilePath -> IO ()
+pathTests root = do
+  let base = root </> "boundary"
+      scratch = base </> "private-data" </> "scratch"
+      inside = scratch </> "jobs" </> "job"
+      outside = base </> "outside"
+      link = scratch </> "link"
+  createDirectoryIfMissing True inside
+  createDirectoryIfMissing True outside
+  createDirectoryLink outside link
+  insideResult <- resolveWithin scratch inside
+  outsideResult <- resolveWithin scratch outside
+  traversalResult <- resolveWithin scratch (scratch </> "jobs" </> ".." </> ".." </> "outside")
+  linkResult <- resolveWithin scratch link
+  check "a path inside the resolved root is accepted" (either (const False) (const True) insideResult)
+  check "a sibling path is refused" (isLeft outsideResult)
+  check "a dot-dot path that leaves the root is refused" (isLeft traversalResult)
+  check "a symlink that resolves outside the root is refused" (isLeft linkResult)
+
+driverRefusal :: FilePath -> FilePath -> IO ()
 driverRefusal binary root = do
   let directory = root </> "refusal"
       out = directory </> "out"
@@ -250,39 +142,33 @@ driverRefusal binary root = do
         concat [[flag, path] | (flag, path) <- zip flags paths]
           ++ ["--out", out, "--cache", directory </> "cache"]
   (timedOut, exit, stdoutBytes, stderrBytes) <- runBounded 60000000 (4 * 1024 * 1024) binary arguments B.empty
-  case eitherDecodeStrict' stdoutBytes :: Either String Value of
-    Left problem ->
-      check
-        ("the driver refused a noncanonical image4: " ++ problem ++ " stderr " ++ BC.unpack (B.take 200 stderrBytes))
-        False
-    Right verdict -> do
-      written <- doesFileExist (out </> "verdict.json")
-      check
-        "the driver refuses a noncanonical image4 with one error verdict and exit 2"
-        ( not timedOut
-            && exit == ExitFailure 2
-            && str (get verdict "verdict") == "error"
-            && "canonical" `isInfixOf` str (get (get verdict "failure") "detail")
-            && written
-        )
+  verdict <- case eitherDecodeStrict' stdoutBytes :: Either String Value of
+    Left problem -> ioError (userError ("driver stdout is not JSON: " ++ problem ++ " stderr " ++ BC.unpack (B.take 200 stderrBytes)))
+    Right value -> pure value
+  check "the driver exits 2 for a noncanonical image4" (not timedOut && exit == ExitFailure 2)
+  check "the terminal verdict is an error naming the canonical image4" (str (get verdict "verdict") == "error" && "canonical" `isInfixOf` str (get (get verdict "failure") "detail"))
+  pointerExists <- doesFileExist (out </> "current")
+  current <- if pointerExists then B.readFile (out </> "current") else pure B.empty
+  resultDirectory <- case eitherDecodeStrict' current :: Either String Value of
+    Left problem -> ioError (userError ("current pointer is not JSON: " ++ problem))
+    Right pointer -> pure (str (get pointer "result"))
+  resultExists <- doesFileExist (resultDirectory </> "verdict.json")
+  reviewExists <- doesFileExist (resultDirectory </> "review-packet.json")
+  written <- if resultExists then B.readFile (resultDirectory </> "verdict.json") else pure B.empty
+  writtenVerdict <- case eitherDecodeStrict' written :: Either String Value of
+    Left problem -> ioError (userError ("published verdict is not JSON: " ++ problem))
+    Right value -> pure value
+  check "the current pointer names a result with both verdict and review" (pointerExists && resultExists && reviewExists)
+  check "the published verdict is the current error" (str (get writtenVerdict "verdict") == "error")
 
 main :: IO ()
 main = do
   arguments <- getArgs
   binary <- case arguments of
     path : _ -> pure path
-    [] -> fail "usage: qualify-tests QUALIFY_BINARY"
+    [] -> ioError (userError "usage: qualify-tests QUALIFY_BINARY")
   withTemporary "qualify-tests" $ \root -> do
-    outcomes <-
-      sequence
-        [ stageAcceptance root
-        , stageCorruption root
-        , stageResume root
-        , stageCommit root
-        , verdictFailure root
-        , verdictPass root
-        , terminalOverwritesOldPass root
-        , defectOverride
-        , driverRefusal binary root
-        ]
-    unless (and outcomes) exitFailure
+    parseTests
+    optionsTest
+    pathTests root
+    driverRefusal binary root

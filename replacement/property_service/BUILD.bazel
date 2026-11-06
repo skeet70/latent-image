@@ -199,6 +199,8 @@ haskell_library(
         "//host:filepath",
         "//host:host-support",
         "//host:json",
+        "//host:scientific",
+        "//host:text",
     ],
 )
 
@@ -265,14 +267,13 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":qualification",
-        "//emulation:case-sha256",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
+        "//host:containers",
         "//host:directory",
         "//host:filepath",
         "//host:host-support",
-        "//host:json",
     ],
 )
 

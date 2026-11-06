@@ -727,7 +727,17 @@ oracle arguments runner linkedPath symbolsPath = do
                   ]
               | (control, failed, failures) <- controlOutcomes
               ]
-                ++ [object ["name" .= problem, "holds" .= False] | problem <- unavailable]
+                ++ [ object
+                       [ "name" .= problem
+                       , "kind" .= ("unavailable" :: String)
+                       , "note" .= problem
+                       , "cases" .= (0 :: Int)
+                       , "failed_cases" .= (0 :: Int)
+                       , "holds" .= False
+                       , "first_differences" .= ([] :: [Value])
+                       ]
+                   | problem <- unavailable
+                   ]
             )
         , "differences" .= differenceSamples
             ( [("model", runLabel c, d) | (c, ds) <- modelFailures, d <- ds]
