@@ -1,6 +1,9 @@
 use crate::create::Machine;
 use crate::id::{FlagId, MailboxId};
-use crate::layout::{Domain, FlagConfig, FlagWait, GuestAddress, MailboxControl, MailboxWait, Message, Task};
+use crate::layout::{
+    Domain, FlagConfig, FlagWait, GuestAddress, MailboxControl, MailboxWait, Message, Task, TaskFlags,
+    TaskState,
+};
 use crate::locked::ObjectLock;
 use crate::matching::{check, MatchMode, Pattern};
 use crate::message::MessagePriority;
@@ -22,11 +25,14 @@ pub trait Wake: ObjectLock {
     fn with_scheduler_lock<R>(&self, domain: Domain, body: impl FnOnce() -> R) -> R;
     /// T+0x20.
     fn waiter_domain(&self, task: Task) -> Domain;
-    /// A 0x44568 / B 0xd4528: cancel the waiter's timer, clear its result, then reset or insert it.
-    fn release_wait(&self, owner: Domain, task: Task) -> Selection;
-    /// A 0x44018 / B 0xd3fd4: ring IRQ 120 on the peer when the target is not this kernel.
-    fn notify_dispatch(&self, owner: Domain) -> DispatchTarget;
-    /// A 0x43640 / B 0xd3640: switch to the selected task.
+    /// `kernel_remove_timer`, A `0x44ca8` / B `0xd4c68`.
+    fn remove_timer(&self, owner: Domain, entry: GuestAddress);
+    fn reset_task(&self, task: Task);
+    fn prepare(&self, owner: Domain, task: Task) -> Selection;
+    fn insert(&self, owner: Domain, task: Task) -> Selection;
+    /// A `0x44018` / B `0xd3fd4`, with the record id deciding locality.
+    fn notify(&self, owner: Domain) -> DispatchTarget;
+    /// A `0x43640` / B `0xd3640`.
     fn dispatch(&self);
 }
 
@@ -37,10 +43,40 @@ fn unlink<M: Machine>(m: &M, task: Task) {
     m.store_word(GuestAddress(next).offset(0x04), prev);
 }
 
+/// The stock wait release, A `0x44568` / B `0xd4528`, over the S1 primitives.
+fn release<M: Wake>(m: &M, owner: Domain, task: Task) -> Selection {
+    let wait = GuestAddress(m.load_word(task.wait()));
+    let entry = m.load_word(wait);
+    if entry != 0 {
+        m.remove_timer(owner, GuestAddress(entry));
+    }
+    m.store_word(wait, 0);
+    if m.load_word(task.terminate_pending()) != 0 {
+        m.reset_task(task);
+        m.store_word(task.context_discarded(), 1);
+        let flags = m.load_word(task.flags());
+        if flags & TaskFlags::QUEUED_ACTIVATION.bits() as u32 == 0 {
+            return Selection::Unchanged;
+        }
+        m.store_word(task.flags(), flags & !(TaskFlags::QUEUED_ACTIVATION.bits() as u32));
+        return m.prepare(owner, task);
+    }
+    if m.load_word(task.priority_change_pending()) != 0 {
+        m.store_word(task.priority(), m.load_word(task.pending_priority()));
+        m.store_word(task.priority_change_pending(), 0);
+    }
+    m.store_word(task.cancel_pending(), 0);
+    if m.load_word(task.state()) & TaskState::SUSPENDED.bits() as u32 != 0 {
+        m.store_word(task.state(), TaskState::SUSPENDED.bits() as u32);
+        return Selection::Unchanged;
+    }
+    m.insert(owner, task)
+}
+
 fn dispatch_after<M: Wake>(m: &M, owner: Domain, released: Selection) -> bool {
     match released {
         Selection::Unchanged => false,
-        Selection::Changed => m.notify_dispatch(owner) == DispatchTarget::Local,
+        Selection::Changed => m.notify(owner) == DispatchTarget::Local,
     }
 }
 
@@ -62,7 +98,7 @@ pub fn set_flag<M: Wake>(m: &M, id: FlagId, bits: Pattern) {
         m.with_scheduler_lock(owner, || {
             let pattern = m.load_word(control.pattern()) | bits.0;
             m.store_word(control.pattern(), pattern);
-            let wait = FlagWait(m.load_word(task.wait()));
+            let wait = FlagWait(GuestAddress(m.load_word(task.wait())));
             let want = Pattern(m.load_word(wait.pattern()));
             let mode = MatchMode::from_stored(m.load_word(wait.mode()));
             let mut current = Pattern(pattern);
@@ -75,7 +111,7 @@ pub fn set_flag<M: Wake>(m: &M, id: FlagId, bits: Pattern) {
                         m.store_word(control.pattern(), 0);
                     }
                     unlink(m, task);
-                    dispatch_after(m, owner, m.release_wait(owner, task))
+                    dispatch_after(m, owner, release(m, owner, task))
                 }
                 None => false,
             }
@@ -102,13 +138,13 @@ fn insert_by_priority<M: Machine>(
     m: &M,
     control: MailboxControl,
     message: Message,
-    priority: u32,
+    priority: MessagePriority,
 ) {
     let mut link = control.head();
     let mut next = m.load_word(control.head());
     while next != 0 {
         let entry = Message(GuestAddress(next));
-        if priority < m.load_word(entry.priority()) {
+        if priority.get() < m.load_word(entry.priority()) {
             break;
         }
         link = entry.next();
@@ -127,18 +163,18 @@ pub fn send<M: Wake>(m: &M, id: MailboxId, message: Message, priority: Option<Me
         let waiter = m.load_word(control.queue().next());
         if waiter == control.0 .0 {
             match priority {
-                Some(priority) => insert_by_priority(m, control, message, priority.get()),
+                Some(priority) => insert_by_priority(m, control, message, priority),
                 None => append_fifo(m, control, message),
             }
             return false;
         }
         let task = Task(GuestAddress(waiter));
         let owner = m.waiter_domain(task);
-        let wait = MailboxWait(m.load_word(task.wait()));
+        let wait = MailboxWait(GuestAddress(m.load_word(task.wait())));
         m.store_word(wait.message(), message.0 .0);
         m.with_scheduler_lock(owner, || {
             unlink(m, task);
-            dispatch_after(m, owner, m.release_wait(owner, task))
+            dispatch_after(m, owner, release(m, owner, task))
         })
     });
     if dispatch {

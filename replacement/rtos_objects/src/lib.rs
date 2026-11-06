@@ -15,6 +15,9 @@ pub mod status;
 pub mod timeout;
 pub mod wake;
 
+#[cfg(any(test, feature = "sim"))]
+pub mod sim;
+
 #[cfg(test)]
 mod tests;
 
