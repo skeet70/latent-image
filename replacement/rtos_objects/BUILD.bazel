@@ -9,6 +9,7 @@ xm1_rust_staticlib(
     crate_name = "xm1_rtos_objects",
     data = [
         "src/admission.rs",
+        "src/create.rs",
         "src/id.rs",
         "src/matching.rs",
         "src/message.rs",
@@ -23,6 +24,7 @@ genrule(
     name = "objects-host-tests-build",
     srcs = [
         "src/admission.rs",
+        "src/create.rs",
         "src/id.rs",
         "src/lib.rs",
         "src/matching.rs",

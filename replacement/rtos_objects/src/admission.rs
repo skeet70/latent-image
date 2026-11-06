@@ -1,7 +1,7 @@
 use crate::id::{own_flag_slot, own_mailbox_slot, resolve_flag, resolve_mailbox, EncodedId, EntryDomain, FlagId, MailboxId};
 use crate::layout::MailboxConfig;
 use crate::matching::{MatchMode, Pattern};
-use crate::message::MessagePriority;
+use crate::message::{MessagePriority, PriorityLimit};
 use crate::status::{ObjectStatus, WaitOutcome};
 use crate::timeout::Timeout;
 
@@ -149,7 +149,10 @@ pub fn admit(request: &Request) -> Result<Admitted, ObjectStatus> {
             exists(request.facts)?;
             let priority = if request.facts.attributes & MailboxConfig::MESSAGE_PRIORITY != 0 {
                 let raw = request.params.message_priority.ok_or(ObjectStatus::Param)?;
-                Some(MessagePriority::new(raw, request.facts.priority_limit)?)
+                Some(MessagePriority::new(
+                    raw,
+                    PriorityLimit::from_word(request.facts.priority_limit),
+                )?)
             } else {
                 None
             };
