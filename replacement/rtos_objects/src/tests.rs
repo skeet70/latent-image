@@ -942,3 +942,41 @@ fn a_poll_output_aliasing_the_attributes_keeps_the_clear() {
         Ok(WaitOutcome::TimedOut)
     );
 }
+
+#[test]
+fn a_poll_output_aliasing_the_pattern_loses_to_the_clear() {
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let m = Mock::marking(words.flag_config(slot).exists().0);
+    let id = flag_fixture(&m, Domain::A, slot, FlagConfig::CLEAR_ON_MATCH, 0x31);
+    let pattern = words.flag_control(slot).pattern();
+    assert_eq!(
+        poll_flag(
+            &m,
+            id,
+            WantedMask::new(Pattern(0x01)).unwrap(),
+            MatchMode::All,
+            OutWord(pattern)
+        ),
+        Ok(WaitOutcome::Satisfied(Pattern(0x31)))
+    );
+    assert_eq!(m.word(pattern), 0);
+}
+
+#[test]
+fn a_receive_output_aliasing_the_head_reads_the_next_message() {
+    let words = Domain::A.words();
+    let slot = MailboxSlot::new(1, 1).unwrap();
+    let m = Mock::marking(words.mailbox_config(slot).exists().0);
+    let id = mailbox_fixture(&m, slot, 0, 32);
+    let control = words.mailbox_control(slot);
+    let first = Message(GuestAddress(0x4000_0100));
+    let second = Message(GuestAddress(0x4000_0200));
+    m.set(control.head(), first.0 .0);
+    m.set(first.next(), second.0 .0);
+    assert_eq!(
+        poll_receive(&m, id, OutWord(control.head())),
+        Ok(WaitOutcome::Satisfied(first))
+    );
+    assert_eq!(m.word(control.head()), second.0 .0);
+}
