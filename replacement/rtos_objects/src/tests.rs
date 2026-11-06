@@ -234,17 +234,17 @@ fn send_refuses_a_priority_outside_the_limit() {
     accepted.params.message_priority = Some(32);
     assert_eq!(
         admit(&accepted).map(|admitted| admitted.priority),
-        Ok(Some(MessagePriority::new(32, 32).unwrap()))
+        Ok(Some(MessagePriority::new(32, PriorityLimit(32)).unwrap()))
     );
 }
 
 #[test]
 fn a_negative_priority_is_refused_whatever_the_limit() {
-    assert_eq!(MessagePriority::new(0xffff_ffff, 0xffff_ffff), Err(ObjectStatus::Param));
-    assert_eq!(MessagePriority::new(0x8000_0000, 0xffff_ffff), Err(ObjectStatus::Param));
-    assert_eq!(MessagePriority::new(0, 0xffff_ffff), Err(ObjectStatus::Param));
+    assert_eq!(MessagePriority::new(0xffff_ffff, PriorityLimit(0xffff_ffff)), Err(ObjectStatus::Param));
+    assert_eq!(MessagePriority::new(0x8000_0000, PriorityLimit(0xffff_ffff)), Err(ObjectStatus::Param));
+    assert_eq!(MessagePriority::new(0, PriorityLimit(0xffff_ffff)), Err(ObjectStatus::Param));
     assert_eq!(
-        MessagePriority::new(1, 0xffff_ffff),
+        MessagePriority::new(1, PriorityLimit(0xffff_ffff)),
         Err(ObjectStatus::Param),
         "a negative limit admits nothing"
     );
