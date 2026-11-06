@@ -19,7 +19,7 @@ import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
-import Data.Word (Word32)
+import Data.Word (Word32, Word64)
 import Emulation.PropertyPairPlan (PhysicalRange (..), settingsRanges, preKeyIdle)
 import Emulation.PropertyPairRoutes
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -90,6 +90,9 @@ word :: Value -> Parse Word32
 word (Number value) = maybe (Left "expected uint32") Right (toBoundedInteger value)
 word (String value) | Just digits <- T.stripPrefix "0x" value, [(n,"")] <- readHex (T.unpack digits), n <= toInteger (maxBound :: Word32) = Right (fromInteger n)
 word _ = Left "expected uint32"
+word64 :: Value -> Parse Word64
+word64 (Number value) = maybe (Left "expected uint64") Right (toBoundedInteger value)
+word64 _ = Left "expected uint64"
 int :: Value -> Parse Int
 int value = fromIntegral <$> word value
 nullable :: (Value -> Parse a) -> Value -> Parse (Maybe a)
@@ -490,10 +493,63 @@ captureSpec = object [K.fromString ("0x" ++ showHex site "") .= capture site | s
     | site == 0x6acda0 = [object ["base" .= object ["register" .= (3::Int)],"count" .= (0::Int),"count_register" .= (2::Int)]]
     | otherwise = []
 
+parseLocalUiDrain :: Value -> Parse ()
+parseLocalUiDrain endpoint = do
+  ticks <- field "ticks" endpoint >>= word64
+  need (ticks <= tickValue (Tick 833334)) "local UI drain exceeded its tick bound"
+  instructions <- field "instructions" endpoint >>= word64
+  ran <- field "ran" endpoint >>= word64
+  need (ran <= instructions) "local UI drain instruction range is invalid"
+  ui <- field "ui" endpoint
+  queues <- field "queues" ui >>= array
+  words' <- field "words" ui >>= array
+  (secondView,mainView) <- case queues of
+    [second,main] | length words' == 4 -> Right (second,main)
+    _ -> Left "local UI drain views are incomplete"
+  second <- rawView 0x949dd0 8 secondView
+  main <- rawView 0x94f5d8 8 mainView
+  pending <- sequence [rawView address 4 view | (address,view) <- zip [0x950098,0x950148,0x951424,0x951528] words']
+  (priority,pendingWords) <- case map (\bytes -> B.foldr (\byte value -> fromIntegral byte + (value `shiftL` 8)) (0::Word32) bytes) pending of
+    first : rest -> Right (first,rest)
+    [] -> Left "local UI drain pending views are incomplete"
+  let empty bytes = B.take 2 bytes == B.take 2 (B.drop 2 bytes)
+      hold bytes = B.index bytes 4
+  need (hold second == 0 && empty second && (hold main == 1 || empty main)
+    && priority == 0 && all (/= 1) pendingWords) "local deferred UI work remains"
+  render <- field "render" endpoint
+  initialized <- field "initialized" render >>= rawWord
+  idle <- field "idle" render >>= array >>= mapM rawWord
+  keys <- field "keys_released" render >>= array
+  statuses <- field "task_statuses" render >>= array
+  need (initialized == 1 && idle == replicate 7 0 && keys == replicate 7 (Bool True)
+    && length statuses == 4 && all (== Number 0x12) statuses) "local render actors are not drained"
+  graphics <- field "graphics" render
+  busy <- field "busy" graphics
+  command <- field "command_pending" graphics
+  control <- field "control" graphics >>= rawWord
+  started <- field "jobs_started" graphics >>= word64
+  completed <- field "jobs_completed" graphics >>= word64
+  acknowledged <- field "acknowledgments" graphics >>= word64
+  need (busy == Bool False && command == Bool False && control == 0
+    && started == completed && acknowledged >= completed) "local graphics work remains"
+ where
+  rawWord :: Value -> Parse Word32
+  rawWord (Number value) = maybe (Left "expected uint32") Right (toBoundedInteger value)
+  rawWord _ = Left "expected uint32"
+  rawView address size view = do
+    actual <- field "address" view >>= rawWord
+    bytes <- field "physical" view >>= hex
+    spellings <- field "spellings" view >>= array >>= mapM array
+    need (actual == address && B.length bytes == size && map length spellings == [2,2]) "local UI view range is invalid"
+    aliases <- mapM hex (concat spellings)
+    need (all (== bytes) aliases) "local UI view spellings disagree"
+    pure bytes
+
 qualify :: Role -> Bindings -> Observation -> Parse Qualified
 qualify role bindings observation = do
   receipt <- json (receiptBytes observation)
   need (field "schema" receipt == Right (Number 1)) "unsupported receipt schema"
+  need (field "local_ui_drain_tick_bound" receipt == Right (A.toJSON (tickValue (Tick 833334)))) "local UI drain policy differs"
   need (field "role" receipt == Right (String (if role == Stock then "stock" else "owned"))) "receipt role differs"
   outcome <- field "outcome" receipt >>= field "status" >>= text
   need (outcome == "completed") "observer did not complete"
@@ -594,6 +650,7 @@ qualify role bindings observation = do
     need (field "failure" press == Right Null) "key press failed"
     status <- field "settle" press >>= field "status" >>= text >>= \name -> case name of "packet-consumed" -> Right PacketConsumed; "budget-exhausted" -> Right BudgetExhausted; _ -> Left "key was not consumed"
     menu <- field "menu" press >>= parseMenu
+    field "local_ui_drained" step >>= parseLocalUiDrain
     finalMedium <- field "medium_after" step >>= nullable parseMedium
     let leaf = not (any (\candidate -> length candidate > length keys && take (length keys) candidate == keys) (S.toList expectedPaths))
     need (leaf == maybe False (const True) finalMedium) "leaf medium capture missing or misplaced"

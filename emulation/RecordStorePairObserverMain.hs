@@ -20,6 +20,7 @@ import Data.Word (Word32)
 import Emulation.PropertyPairPlan (PhysicalRange (..), settingsRanges, preKeyIdle)
 import Emulation.PropertyPairRoutes
 import Emulation.Sha256 (sha256File, sha256Hex)
+import Emulation.WatchObservation (Tick (..))
 import EmulatorUsb
 import FujiModPaths (fujimodRamPushBridge)
 import Numeric (readHex, showHex)
@@ -220,6 +221,7 @@ observe options directory record = do
   record "raw_residual_count" (A.toJSON (length rawCandidates))
   record "ram_rule" ownedValue
   record "output_rule" (String "Compare outputs written by the stock contract across roles; require each contract-untouched output to equal its own entry preimage, without comparing residue across roles.")
+  record "local_ui_drain_tick_bound" (A.toJSON (tickValue (Tick 833334)))
   steps <- newIORef []
   cursor <- newIORef 0
   counter <- newIORef (0::Int)
@@ -257,12 +259,13 @@ observe options directory record = do
               _ <- emulatorBridgeCommand emulator watch
               idle <- emulatorIdle emulator preKeyIdle
               press <- emulatorDisplayKey emulator key
+              endpoint <- emulatorLocalUiDrain emulator (Tick 833334)
               observed <- emulatorWatchEnd emulator
               last' <- drain emulator
               after <- settings emulator
               blocks <- if null descendants then medium emulator else pure Null
               modifyIORef' steps (object ["step" .= step,"parent" .= parent,"keys" .= map crawlKeyWire keys,"hits" .= [first,last']
-                ,"idle" .= idle,"press" .= press,"watch" .= observed,"regions_before" .= before,"regions_after" .= after,"medium_after" .= blocks] :)
+                ,"idle" .= idle,"press" .= press,"local_ui_drained" .= endpoint,"watch" .= observed,"regions_before" .= before,"regions_after" .= after,"medium_after" .= blocks] :)
               BL.writeFile (directory </> "steps.json") . A.encode . reverse =<< readIORef steps
               need (field "failure" press == Null) ("key failed: " ++ show press)
               putStrLn ("step " ++ show step ++ " " ++ unwords (map crawlKeyWire keys))
