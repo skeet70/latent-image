@@ -75,6 +75,25 @@ fn main() {
     let mailbox_control = words.mailbox_control(mailbox_slot);
     let out = GuestAddress(0x4000_1000);
 
+    create_flag(
+        &memory,
+        flag,
+        FlagCreate {
+            attributes: FlagAttributes(0),
+            initial: Pattern(0x31),
+        },
+    )
+    .unwrap();
+    create_mailbox(
+        &memory,
+        mailbox,
+        MailboxCreate {
+            attributes: MailboxAttributes(2),
+            priority_limit: PriorityLimit(32),
+        },
+    )
+    .unwrap();
+
     memory.set(control.pattern(), 0x31);
     clear_flag(&memory, flag, KeepMask(0x11)).unwrap();
     println!("clear: pattern {:#x}", memory.word(control.pattern()));
