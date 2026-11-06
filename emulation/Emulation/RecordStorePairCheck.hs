@@ -20,6 +20,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
 import Data.Word (Word32, Word64)
+import Emulation.LocalUiMenu (LocalUiMenu, parseLocalUiMenu)
 import Emulation.PropertyPairPlan (PhysicalRange (..), settingsRanges, preKeyIdle)
 import Emulation.PropertyPairRoutes
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -55,6 +56,7 @@ data Block = Block Word32 (Maybe Word32) B.ByteString (Maybe B.ByteString) deriv
 newtype Medium = Medium [Block] deriving (Eq, Show)
 data Menu = NoMenu | Menu Word32 Word32 Word32 deriving (Eq, Show)
 data Settled = PacketConsumed | BudgetExhausted deriving (Eq, Show)
+data Press = Press Settled Menu LocalUiMenu deriving (Eq, Show)
 data OutputRule = CompareBytes | PreserveBytes | UnresolvedBytes | CollectionBytes RecordSize SequenceOffset ByteCount deriving (Eq, Show)
 data Output = AbsentOutput | Output OutputRule B.ByteString B.ByteString deriving (Eq, Show)
 data Call = Call Entry [Word32] (Maybe Word32) [Output] deriving (Eq, Show)
@@ -70,7 +72,7 @@ data CallContext = CallContext Service (Maybe Layout) deriving (Eq, Show)
 data Pending = Pending Int Entry Hit CallContext deriving (Eq, Show)
 data Retirement = BeforeOpen | AfterOpen deriving (Eq, Show)
 data State = State Retirement Service (M.Map Handle Layout) (M.Map (Int, Address, Address) Pending) deriving (Eq, Show)
-data Interval = Interval T.Text [CrawlKey] [Call] [Nand] Regions Regions (Maybe (Settled, Menu)) (Maybe Medium) deriving (Eq, Show)
+data Interval = Interval T.Text [CrawlKey] [Call] [Nand] Regions Regions (Maybe Press) (Maybe Medium) deriving (Eq, Show)
 data Qualified = Qualified Role [(InputName,Digest)] [Interval] Medium deriving (Eq, Show)
 data Difference = Difference T.Text Value Value | AmbiguousOutput T.Text Value Value | PreservationViolation T.Text Value Value deriving (Eq, Show)
 
@@ -493,7 +495,7 @@ captureSpec = object [K.fromString ("0x" ++ showHex site "") .= capture site | s
     | site == 0x6acda0 = [object ["base" .= object ["register" .= (3::Int)],"count" .= (0::Int),"count_register" .= (2::Int)]]
     | otherwise = []
 
-parseLocalUiDrain :: Value -> Parse ()
+parseLocalUiDrain :: Value -> Parse LocalUiMenu
 parseLocalUiDrain endpoint = do
   ticks <- field "ticks" endpoint >>= word64
   need (ticks <= tickValue (Tick 833334)) "local UI drain exceeded its tick bound"
@@ -532,6 +534,7 @@ parseLocalUiDrain endpoint = do
   acknowledged <- field "acknowledgments" graphics >>= word64
   need (busy == Bool False && command == Bool False && control == 0
     && started == completed && acknowledged >= completed) "local graphics work remains"
+  parseLocalUiMenu ui
  where
   rawWord :: Value -> Parse Word32
   rawWord (Number value) = maybe (Left "expected uint32") Right (toBoundedInteger value)
@@ -650,17 +653,17 @@ qualify role bindings observation = do
     need (field "failure" press == Right Null) "key press failed"
     status <- field "settle" press >>= field "status" >>= text >>= \name -> case name of "packet-consumed" -> Right PacketConsumed; "budget-exhausted" -> Right BudgetExhausted; _ -> Left "key was not consumed"
     menu <- field "menu" press >>= parseMenu
-    field "local_ui_drained" step >>= parseLocalUiDrain
+    endpointMenu <- field "local_ui_drained" step >>= parseLocalUiDrain
     finalMedium <- field "medium_after" step >>= nullable parseMedium
     let leaf = not (any (\candidate -> length candidate > length keys && take (length keys) candidate == keys) (S.toList expectedPaths))
     need (leaf == maybe False (const True) finalMedium) "leaf medium capture missing or misplaced"
     watch <- field "watch" step
-    (next,result) <- interval parentState (T.pack (show number)) keys before after first last' (Just (status,menu)) finalMedium watch "fixed"
+    (next,result) <- interval parentState (T.pack (show number)) keys before after first last' (Just (Press status menu endpointMenu)) finalMedium watch "fixed"
     pure (number+1,last',acc++[result],M.insert number (next,after,keys) known,S.insert keys seen)) (1,rootEnd,[],M.empty,S.empty) steps
   need (paths == expectedPaths && lastEnd == length hits) "routes or trace tail unobserved"
   forM_ [keys | Route _ (KeyRoute keys (Declared CustomResetDefaults)) <- routeList routes] $ \keys -> do
     case [observed | observed@(Interval _ path _ _ _ _ _ _) <- results, path == keys] of
-      [Interval _ _ calls requests _ _ (Just (PacketConsumed,_)) _] ->
+      [Interval _ _ calls requests _ _ (Just (Press PacketConsumed _ _)) _] ->
         need (any (\call -> case call of Call Append _ (Just 0) _ -> True; _ -> False) calls
           && any (\request -> case request of Program _ _ -> True; _ -> False) requests) "defaults reset did not append a record"
       _ -> Left "defaults reset confirmation did not settle"
@@ -715,9 +718,10 @@ comparePair (Qualified Stock stockInputs stock stockMedium) (Qualified Owned own
     orderedWith compareNand (path "nand") nand otherNand
     compareRegions (path "settings-before") before otherBefore
     compareRegions (path "settings-after") after otherAfter
-    equal (path "press") (fmap snd press) (fmap snd otherPress)
+    equal (path "press") (fmap (\(Press _ menu _) -> menu) press) (fmap (\(Press _ menu _) -> menu) otherPress)
+    equal (path "endpoint-menu") (fmap (\(Press _ _ menu) -> menu) press) (fmap (\(Press _ _ menu) -> menu) otherPress)
     case (press,otherPress) of
-      (Just (a,_),Just (b,_)) -> unless (a == b || a == BudgetExhausted || b == BudgetExhausted) (Left (Difference (path "settle") (showValue a) (showValue b)))
+      (Just (Press a _ _),Just (Press b _ _)) -> unless (a == b || a == BudgetExhausted || b == BudgetExhausted) (Left (Difference (path "settle") (showValue a) (showValue b)))
       _ -> pure ()
     compareMaybeMedium (path "medium") medium otherMedium
   compareMedium "terminal-medium" stockMedium ownedMedium

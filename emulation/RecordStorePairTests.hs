@@ -219,11 +219,10 @@ fixture role mutation = Observation receipt files where
 
 data ResetEvidence = ResetAppends | ResetWithoutAppend | ResetUnsettled deriving (Eq)
 
-data DrainEvidence = Drained | MissingDrain | MissingUi | PendingQueue | SecondHeld | HeldMain | PendingPriority | PendingWord | AliasDisagrees | MissingViews | RenderUninitialized | RenderBusy | KeyHeld | TaskRunnable | GraphicsBusy | CommandPending | GraphicsControl | IncompleteJob | UnacknowledgedJob | ExcessTicks | ExcessRan | TickOverflow | InstructionOverflow | RanOverflow deriving (Eq, Show, Enum, Bounded)
+data DrainEvidence = Drained | MissingDrain | MissingUi | MissingMenu | MissingDepth | MissingNode | MenuAddressDiffers | MenuAliasDisagrees | PendingQueue | SecondHeld | HeldMain | PendingPriority | PendingWord | AliasDisagrees | MissingViews | RenderUninitialized | RenderBusy | KeyHeld | TaskRunnable | GraphicsBusy | CommandPending | GraphicsControl | IncompleteJob | UnacknowledgedJob | ExcessTicks | ExcessRan | TickOverflow | InstructionOverflow | RanOverflow deriving (Eq, Show, Enum, Bounded)
 
--- Synthetic wire evidence uses the UI queue layouts and render facts of the bridge endpoint.
-drainEndpoint :: DrainEvidence -> Value
-drainEndpoint evidence = object
+drainEndpoint :: DrainEvidence -> Word32 -> Value
+drainEndpoint evidence cursor = object
   (["instructions" .= (if evidence == InstructionOverflow then 2^(64::Int) else 30000000::Integer)
    ,"ran" .= (case evidence of ExcessRan -> 30000001; RanOverflow -> 2^(64::Int); _ -> 1200000::Integer)
    ,"ticks" .= (case evidence of ExcessTicks -> 833335; TickOverflow -> 2^(64::Int); _ -> 833334::Integer)
@@ -236,10 +235,13 @@ drainEndpoint evidence = object
        ,"control" .= (if evidence == GraphicsControl then 1 else 0::Int)
        ,"jobs_started" .= (12::Int),"jobs_completed" .= (if evidence == IncompleteJob then 11 else 12::Int)
        ,"acknowledgments" .= (if evidence == UnacknowledgedJob then 11 else 12::Int)]]]
-   ++ ["ui" .= object ["queues" .= queues,"words" .= pending] | evidence /= MissingUi])
+   ++ ["ui" .= object (["queues" .= queues,"words" .= pending]
+     ++ ["menu" .= view (if evidence == MenuAddressDiffers then 0x9571d4 else 0x9571d0) (wordBytes 0 <> wordBytes 0 <> wordBytes cursor) | evidence /= MissingMenu]
+     ++ ["depth" .= view 0x9575f4 (wordBytes 0) | evidence /= MissingDepth]
+     ++ ["node" .= Null | evidence /= MissingNode]) | evidence /= MissingUi])
  where
   view address bytes = object ["address" .= (address::Word32),"physical" .= hex bytes
-    ,"spellings" .= [[hex bytes,hex bytes],[hex bytes,hex (if evidence == AliasDisagrees then B.map (+1) bytes else bytes)]]]
+    ,"spellings" .= [[hex bytes,hex bytes],[hex bytes,hex (if evidence == AliasDisagrees || evidence == MenuAliasDisagrees && address == 0x9571d0 then B.map (+1) bytes else bytes)]]]
   queues = [view 0x949dd0 (B.pack [7,0,if evidence == PendingQueue then 8 else 7,0,if evidence == SecondHeld then 1 else 0,0,0,0])
     ,view 0x94f5d8 (B.pack [3,0,if evidence == HeldMain then 4 else 3,0,if evidence == HeldMain then 1 else 0,0,0,0])]
   pending = [view address (wordBytes value) | (address,value) <- take (if evidence == MissingViews then 3 else 4)
@@ -249,7 +251,10 @@ resetFixture :: ResetEvidence -> (Bindings, Observation)
 resetFixture evidence = keyFixture Owned evidence Drained
 
 keyFixture :: Role -> ResetEvidence -> DrainEvidence -> (Bindings, Observation)
-keyFixture role evidence drainEvidence = (bound, Observation receipt files) where
+keyFixture = keyFixtureAtCursor 0
+
+keyFixtureAtCursor :: Word32 -> Role -> ResetEvidence -> DrainEvidence -> (Bindings, Observation)
+keyFixtureAtCursor cursor role evidence drainEvidence = (bound, Observation receipt files) where
   bound = bindings { routeBytes = BL.toStrict (encodeRouteFile (RouteFile (replicate 64 '0') "reset fixture" CrawlEffectsSource []
     (phaseRoutes ++ [Route (RouteName "custom-reset-defaults") (KeyRoute [KeyOk] (Declared CustomResetDefaults))]))) }
   events = filter keep (trace role Original)
@@ -268,7 +273,7 @@ keyFixture role evidence drainEvidence = (bound, Observation receipt files) wher
   step = object (["step" .= (1::Int),"parent" .= (0::Int),"keys" .= [KeyOk],"hits" .= ([0,length events]::[Int])
     ,"idle" .= object ["ran" .= (20000000::Int)],"press" .= press,"regions_before" .= regions Original,"regions_after" .= regions Original
     ,"medium_after" .= medium Original,"watch" .= set "views" (String "fixed") (watch role LiveViewPhase Original)]
-    ++ ["local_ui_drained" .= drainEndpoint drainEvidence | drainEvidence /= MissingDrain])
+    ++ ["local_ui_drained" .= drainEndpoint drainEvidence cursor | drainEvidence /= MissingDrain])
   files = M.insert Reset (encode reset) (M.insert Hits (B.intercalate "\n" (map encode events) <> "\n") (M.insert Steps (encode (A.toJSON [step])) originalFiles))
   inputs = set "routes" (object ["path" .= ("fixture"::T.Text),"sha256" .= hash (routeBytes bound)]) (get "inputs" original)
   receipt = encode (set "inputs" inputs (set "files" (object [K.fromString (sidecarName name) .= hash bytes | (name,bytes) <- M.toList files]) original))
@@ -276,6 +281,11 @@ keyFixture role evidence drainEvidence = (bound, Observation receipt files) wher
 main :: IO ()
 main = do
   let stock = qualify Stock bindings (fixture Stock Original)
+      endpointCursorDiffers = case (keyFixtureAtCursor 0 Stock ResetAppends Drained,keyFixtureAtCursor 1 Owned ResetAppends Drained) of
+        ((stockBindings,stockObservation),(ownedBindings,ownedObservation)) ->
+          case (qualify Stock stockBindings stockObservation,qualify Owned ownedBindings ownedObservation) of
+            (Right a,Right b) -> isLeft (comparePair a b)
+            _ -> False
       owned mutation = qualify Owned bindings (fixture Owned mutation)
       matchedAgainst baseline mutation = case (qualify Stock bindings (fixture Stock baseline),owned mutation) of
         (Right a,Right b) -> not (isLeft (comparePair a b))
@@ -330,6 +340,7 @@ main = do
                  in isLeft (qualify role bound observation { receiptBytes = encode (Object changed) })
               _ -> False
       tests = [("nine-entry observation matches",matched Original)
+        ,("changed drained cursor fails with equal press-time menus",endpointCursorDiffers)
         ,("defaults reset with a consumed append qualifies",let (bound,observation) = resetFixture ResetAppends in not (isLeft (qualify Owned bound observation)))
         ,("defaults reset without a record append refuses",let (bound,observation) = resetFixture ResetWithoutAppend in isLeft (qualify Owned bound observation))
         ,("defaults reset with unsettled confirmation refuses",let (bound,observation) = resetFixture ResetUnsettled in isLeft (qualify Owned bound observation))

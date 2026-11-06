@@ -3536,6 +3536,21 @@ haskell_test(
 )
 
 haskell_library(
+    name = "local-ui-menu",
+    srcs = ["Emulation/LocalUiMenu.hs"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    src_strip_prefix = ".",
+    deps = [
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:scientific",
+        "//host:text",
+        "//host:vector",
+    ],
+)
+
+haskell_library(
     name = "record-store-pair-check-lib",
     srcs = ["Emulation/RecordStorePairCheck.hs"],
     src_strip_prefix = ".",
@@ -3543,6 +3558,7 @@ haskell_library(
     deps = [
         ":case-sha256",
         ":emulator-usb",
+        ":local-ui-menu",
         ":property-pair-lib",
         ":watch-observation",
         "//host:aeson",
@@ -3599,6 +3615,7 @@ haskell_binary(
         ":emulator-usb",
         ":fujimod-paths",
         ":property-pair-lib",
+        ":watch-observation",
         "//host:aeson",
         "//host:base",
         "//host:bytestring",
