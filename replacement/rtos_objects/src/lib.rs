@@ -7,6 +7,7 @@ pub mod layout;
 pub mod admission;
 pub mod create;
 pub mod id;
+pub mod locked;
 pub mod matching;
 pub mod message;
 pub mod order;
@@ -29,6 +30,7 @@ pub use create::{
 };
 pub use id::{own_flag_slot, own_mailbox_slot, resolve_flag, resolve_mailbox, EncodedId, EntryDomain, FlagId, MailboxId};
 pub use layout::{Domain, DomainId, FlagSlot, MailboxSlot, TaskSlot};
+pub use locked::{clear_flag, poll_flag, poll_receive, Held, ObjectLock};
 pub use matching::{check, KeepMask, MatchMode, Pattern};
 pub use message::{MessagePriority, PriorityLimit};
 pub use order::{precedes, QueueOrder};
