@@ -189,6 +189,7 @@ fn only_the_blocking_forms_read_the_dispatch_word() {
     ] {
         let mut request = req(service);
         request.entry.dispatch_enabled = 0;
+        request.params.pattern = Pattern(1);
         assert_eq!(admit(&request), Err(ObjectStatus::Context), "{service:?}");
     }
     for service in [
@@ -200,6 +201,7 @@ fn only_the_blocking_forms_read_the_dispatch_word() {
     ] {
         let mut request = req(service);
         request.entry.dispatch_enabled = 0;
+        request.params.pattern = Pattern(1);
         assert!(admit(&request).is_ok(), "{service:?}");
     }
 }
