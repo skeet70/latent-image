@@ -523,7 +523,9 @@ main = do
       lateStepRefused = isLeft (changedSteps (\bytes -> case A.eitherDecodeStrict' bytes :: Either String [Value] of
         Right (row:rows) -> encode (A.toJSON (row : rows ++ [changedObject "step" (Number 2) row]))
         _ -> bytes))
-      duplicateStepAccepted = not (isLeft (changedSteps (B.replace "\"step\":1" "\"step\":1,\"step\":9")))
+      duplicateStepAccepted = not (isLeft (changedSteps (\bytes ->
+        let (before,after) = B.breakSubstring "\"step\":1" bytes
+         in if B.null after then bytes else before <> "\"step\":1,\"step\":9" <> B.drop 8 after)))
       wrongPrefixPolicy role policy =
         let (bound,observation) = keyFixture role ResetAppends Sampled
          in case A.eitherDecodeStrict' (receiptBytes observation) of
