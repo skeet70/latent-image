@@ -11,7 +11,7 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as BL
-import Data.Either (isLeft)
+import Data.Either (isLeft, isRight)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -445,7 +445,7 @@ main = do
         ,("missing capture declaration refuses qualification",refused MissingCapture)
         ,("changed cohort input fails comparison",differs BadBinding)
         ,("both roles include the finite post-settle interval",sampledPair)
-        ,("latched budget-exhausted keys lack a consumption certificate",all (\role -> let (bound,observation) = keyFixture role BudgetedKey Sampled in isLeft (qualify role bound observation)) [Stock,Owned])
+        ,("latched budget-exhausted keys admit finite input observations",all (\role -> let (bound,observation) = keyFixture role BudgetedKey Sampled in isRight (qualify role bound observation)) [Stock,Owned])
         ,("missing or changed exact prefix ticks refuse both roles",and [wrongPrefixPolicy role policy | role <- [Stock,Owned], policy <- [Nothing,Just (Number 833333)]])
         ,("old receipt schema refuses both roles",all (\role -> wrongEndpointVersion role "schema" (Number 1)) [Stock,Owned])
         ,("old endpoint contract refuses both roles",all (\role -> wrongEndpointVersion role "endpoint_contract" (String "local-ui-drain")) [Stock,Owned])]

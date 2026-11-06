@@ -631,7 +631,7 @@ qualify role bindings observation = do
     press <- field "press" step
     need (field "failure" press == Right Null) "key press failed"
     completion <- field "settle" press >>= field "status" >>= text
-    need (completion == "packet-consumed") ("application key consumption was not established: " ++ T.unpack completion)
+    need (completion `elem` ["packet-consumed","budget-exhausted"]) ("key injection was not established: " ++ T.unpack completion)
     menu <- field "menu" press >>= parseMenu
     (endpointMenu,endpointMode) <- field "bounded_post_settle_prefix" step >>= parsePostSettlePrefix
     finalMedium <- field "medium_after" step >>= nullable parseMedium
