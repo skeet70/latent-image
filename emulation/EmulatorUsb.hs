@@ -62,6 +62,7 @@ module EmulatorUsb
   , emulatorIdle
   , emulatorIdleTicks
   , emulatorLocalUiDrain
+  , emulatorUiState
   , emulatedClock
   ) where
 
@@ -671,6 +672,9 @@ emulatorIdleTicks emulator ticks = Object <$> rpc emulator (object ["command" .=
 -- | Observes current local UI and render drain within the board-tick cap.
 emulatorLocalUiDrain :: Emulator -> Tick -> IO Value
 emulatorLocalUiDrain emulator ticks = Object <$> rpc emulator (object ["command" .= String "local-ui-drain", "ticks" .= tickValue ticks])
+
+emulatorUiState :: Emulator -> IO Value
+emulatorUiState emulator = Object <$> rpc emulator (object ["command" .= String "ui-state"])
 
 menuReading :: M.KeyMap Value -> IO MenuReading
 menuReading fields = objectField "menu" fields >>= \value -> case value of

@@ -242,55 +242,51 @@ fixture role mutation = Observation receipt files where
   reset = object ["schema" .= (1::Int),"reset" .= object ["instructions" .= (0::Int)],"regions_at_reset" .= resetRegions role Original
     ,"segments" .= [object ["phase" .= phase,"instructions" .= (1::Int),"hits_end" .= length events,"watch" .= watch role phase mutation,"regions" .= resetRegions role mutation] | phase <- [minBound..maxBound]::[AttachPhase]]]
   files = M.fromList [(Spec,encode spec),(Extents,encode extents),(Reset,encode reset),(Hits,B.intercalate "\n" (map encode events) <> "\n"),(Steps,"[]"),(MediumFile,encode (medium mutation)),(Session,"{}")]
-  receipt = encode (object ["schema" .= (1::Int),"role" .= (if role == Stock then "stock" else "owned"::T.Text),"outcome" .= object ["status" .= ("completed"::T.Text)]
-    ,"local_ui_drain_tick_bound" .= (833334::Int)
+  receipt = encode (object ["schema" .= (2::Int),"role" .= (if role == Stock then "stock" else "owned"::T.Text),"outcome" .= object ["status" .= ("completed"::T.Text)]
+    ,"endpoint_contract" .= ("finite-post-settle-prefix-v2"::T.Text),"post_settle_prefix_ticks" .= (833334::Int)
     ,"output_rule" .= ("Compare outputs written by the stock contract across roles; require each contract-untouched output to equal its own entry preimage, without comparing residue across roles."::T.Text)
     ,"inputs" .= object (["update" .= binding (if role == Stock then "stock-DAT" else "owned-DAT"),"routes" .= binding (routeBytes bindings),"contract" .= binding (contractBytes bindings),"linked" .= binding (linkedBytes bindings),"symbols" .= binding (symbolBytes bindings)]
       ++ [K.fromString name .= binding (if mutation == BadBinding && name == "run" then "different-run" else "cohort") | name <- ["run","boot-rom","adjustment-nand","observer","bridge"]])
     ,"files" .= object [K.fromString (sidecarName name) .= hash bytes | (name,bytes) <- M.toList files],"ram_rule" .= extents,"raw_residual_count" .= (0::Int),"settings_at_attach" .= regions mutation,"medium_at_attach" .= medium mutation])
 
-data ResetEvidence = ResetAppends | ResetWithoutAppend | ResetUnsettled deriving (Eq)
+data ResetEvidence = ResetAppends | ResetWithoutAppend | ResetUnsettled | BudgetedKey deriving (Eq)
 
-data DrainEvidence = Drained | MissingDrain | MissingUi | MissingMenu | MissingDepth | MissingNode | MenuAddressDiffers | MenuAliasDisagrees | PendingQueue | SecondHeld | HeldMain | PendingPriority | PendingWord | AliasDisagrees | MissingViews | RenderUninitialized | RenderBusy | KeyHeld | TaskRunnable | GraphicsBusy | CommandPending | GraphicsControl | IncompleteJob | UnacknowledgedJob | ExcessTicks | ExcessRan | TickOverflow | InstructionOverflow | RanOverflow deriving (Eq, Show, Enum, Bounded)
+data PrefixEvidence = Sampled | MissingPrefix | MissingUi | MissingMenu | MissingDepth | MissingNode | MenuAddressDiffers | MenuAliasDisagrees | MissingMode | ModeAddressDiffers | ModeAliasDisagrees | ShortMode | ChangedCurrent | ChangedPrevious | ChangedPending | ChangedRequest | ChangedLatch | ShortTicks | ExcessTicks | ExcessRan | TickOverflow | InstructionOverflow | RanOverflow | SnapshotInstructionDiffers | SnapshotTickOverflow | UnlatchedPress | PriorRenderPending | IncompleteRecordCall deriving (Eq, Show, Enum, Bounded)
 
-drainEndpoint :: DrainEvidence -> Word32 -> Value
-drainEndpoint evidence cursor = object
-  (["instructions" .= (if evidence == InstructionOverflow then 2^(64::Int) else 30000000::Integer)
-   ,"ran" .= (case evidence of ExcessRan -> 30000001; RanOverflow -> 2^(64::Int); _ -> 1200000::Integer)
-   ,"ticks" .= (case evidence of ExcessTicks -> 833335; TickOverflow -> 2^(64::Int); _ -> 833334::Integer)
-   ,"render" .= object
-     ["initialized" .= (if evidence == RenderUninitialized then 0 else 1::Int)
-     ,"idle" .= (if evidence == RenderBusy then [0,0,0,1,0,0,0] else replicate 7 0::[Int])
-     ,"keys_released" .= (replicate 6 True ++ [evidence /= KeyHeld])
-     ,"task_statuses" .= (replicate 3 (18::Int) ++ [if evidence == TaskRunnable then 1 else 18])
-     ,"graphics" .= object ["busy" .= (evidence == GraphicsBusy),"command_pending" .= (evidence == CommandPending)
-       ,"control" .= (if evidence == GraphicsControl then 1 else 0::Int)
-       ,"jobs_started" .= (12::Int),"jobs_completed" .= (if evidence == IncompleteJob then 11 else 12::Int)
-       ,"acknowledgments" .= (if evidence == UnacknowledgedJob then 11 else 12::Int)]]]
-   ++ ["ui" .= object (["queues" .= queues,"words" .= pending]
-     ++ ["menu" .= view (if evidence == MenuAddressDiffers then 0x9571d4 else 0x9571d0) (wordBytes 0 <> wordBytes 0 <> wordBytes cursor) | evidence /= MissingMenu]
-     ++ ["depth" .= view 0x9575f4 (wordBytes 0) | evidence /= MissingDepth]
-     ++ ["node" .= Null | evidence /= MissingNode]) | evidence /= MissingUi])
+prefixEndpoint :: PrefixEvidence -> Word32 -> Value
+prefixEndpoint evidence cursor = object
+  ["elapsed" .= object
+    ["instructions" .= (if evidence == InstructionOverflow then 2^(64::Int) else 30000000::Integer)
+    ,"ran" .= (case evidence of ExcessRan -> 30000001; RanOverflow -> 2^(64::Int); _ -> 1200000::Integer)
+    ,"ticks" .= (case evidence of ShortTicks -> 833333; ExcessTicks -> 833335; TickOverflow -> 2^(64::Int); _ -> 833334::Integer)]
+  ,"state" .= object
+    (["instructions" .= (if evidence == SnapshotInstructionDiffers then 30000001 else 30000000::Integer)
+     ,"tick" .= (if evidence == SnapshotTickOverflow then 2^(64::Int) else 1000000::Integer)]
+     ++ ["ui" .= object
+       (["menu" .= view (if evidence == MenuAddressDiffers then 0x9571d4 else 0x9571d0) (wordBytes 0 <> wordBytes 0 <> wordBytes cursor) | evidence /= MissingMenu]
+       ++ ["depth" .= view 0x9575f4 (wordBytes 0) | evidence /= MissingDepth]
+       ++ ["node" .= Null | evidence /= MissingNode]) | evidence /= MissingUi]
+     ++ ["source_mode" .= view (if evidence == ModeAddressDiffers then 0x9500f0 else 0x9500ec)
+       (if evidence == ShortMode then B.take 36 mode else mode) | evidence /= MissingMode])]
  where
   view address bytes = object ["address" .= (address::Word32),"physical" .= hex bytes
-    ,"spellings" .= [[hex bytes,hex bytes],[hex bytes,hex (if evidence == AliasDisagrees || evidence == MenuAliasDisagrees && address == 0x9571d0 then B.map (+1) bytes else bytes)]]]
-  queues = [view 0x949dd0 (B.pack [7,0,if evidence == PendingQueue then 8 else 7,0,if evidence == SecondHeld then 1 else 0,0,0,0])
-    ,view 0x94f5d8 (B.pack [3,0,if evidence == HeldMain then 4 else 3,0,if evidence == HeldMain then 1 else 0,0,0,0])]
-  pending = [view address (wordBytes value) | (address,value) <- take (if evidence == MissingViews then 3 else 4)
-    [(0x950098,if evidence == PendingPriority then 1 else 0),(0x950148,if evidence == PendingWord then 1 else 0),(0x951424,2),(0x951528,0)]]
+    ,"spellings" .= [[hex bytes,hex bytes],[hex bytes,hex (if evidence == MenuAliasDisagrees && address == 0x9571d0 || evidence == ModeAliasDisagrees && address == 0x9500ec then B.map (+1) bytes else bytes)]]]
+  changed which = if evidence == which then 1 else 0
+  mode = B.concat [wordBytes (changed ChangedCurrent),wordBytes (changed ChangedPrevious),wordBytes 0,wordBytes (changed ChangedPending),wordBytes 0,wordBytes (changed ChangedRequest),B.replicate 12 0,wordBytes (changed ChangedLatch)]
 
 resetFixture :: ResetEvidence -> (Bindings, Observation)
-resetFixture evidence = keyFixture Owned evidence Drained
+resetFixture evidence = keyFixture Owned evidence Sampled
 
-keyFixture :: Role -> ResetEvidence -> DrainEvidence -> (Bindings, Observation)
+keyFixture :: Role -> ResetEvidence -> PrefixEvidence -> (Bindings, Observation)
 keyFixture = keyFixtureAtCursor 0
 
-keyFixtureAtCursor :: Word32 -> Role -> ResetEvidence -> DrainEvidence -> (Bindings, Observation)
-keyFixtureAtCursor cursor role evidence drainEvidence = (bound, Observation receipt files) where
+keyFixtureAtCursor :: Word32 -> Role -> ResetEvidence -> PrefixEvidence -> (Bindings, Observation)
+keyFixtureAtCursor cursor role evidence prefixEvidence = (bound, Observation receipt files) where
   bound = bindings { routeBytes = BL.toStrict (encodeRouteFile (RouteFile (replicate 64 '0') "reset fixture" CrawlEffectsSource []
-    (phaseRoutes ++ [Route (RouteName "custom-reset-defaults") (KeyRoute [KeyOk] (Declared CustomResetDefaults))]))) }
+    (phaseRoutes ++ [Route (RouteName (if evidence == BudgetedKey then "latched-key" else "custom-reset-defaults")) (KeyRoute [KeyOk] (if evidence == BudgetedKey then CrawlTrial 0 [CommitEffect] else Declared CustomResetDefaults))]))) }
   events = filter keep (trace role Original)
-  keep event = evidence /= ResetWithoutAppend || not (any (\site -> get "site" (get "observation" event) == A.toJSON (site::Word32)) [0x6ac7d4,0x6fb7c8])
+  keep event = (evidence /= ResetWithoutAppend || not (any (\site -> get "site" (get "observation" event) == A.toJSON (site::Word32)) [0x6ac7d4,0x6fb7c8]))
+    && not (prefixEvidence == IncompleteRecordCall && get "site" (get "observation" event) == A.toJSON (0x6ac7d4::Word32) && get "event" (get "observation" event) == String "return")
   Observation originalReceipt originalFiles = fixture role Original
   original = decode originalReceipt
   decode bytes = either error id (A.eitherDecodeStrict' bytes)
@@ -300,12 +296,12 @@ keyFixtureAtCursor cursor role evidence drainEvidence = (bound, Observation rece
   set _ _ _ = error "fixture object required"
   reset = object ["schema" .= (1::Int),"reset" .= object ["instructions" .= (0::Int)],"regions_at_reset" .= resetRegions role Original
     ,"segments" .= [object ["phase" .= phase,"instructions" .= (1::Int),"hits_end" .= (0::Int),"watch" .= watch role phase Original,"regions" .= resetRegions role Original] | phase <- [minBound..maxBound]::[AttachPhase]]]
-  press = object ["failure" .= Null,"settle" .= object ["status" .= (if evidence == ResetUnsettled then "budget-exhausted" else "packet-consumed"::T.Text)]
+  press = object ["failure" .= (if prefixEvidence == UnlatchedPress then String "unlatched" else Null),"settle" .= object ["status" .= (if prefixEvidence == PriorRenderPending then "prior-render-pending" else if evidence `elem` [ResetUnsettled,BudgetedKey] then "budget-exhausted" else "packet-consumed"::T.Text)]
     ,"menu" .= object ["cursor" .= (0::Int),"menu_id" .= (1::Int),"setting_id" .= (5::Int)]]
   step = object (["step" .= (1::Int),"parent" .= (0::Int),"keys" .= [KeyOk],"hits" .= ([0,length events]::[Int])
     ,"idle" .= object ["ran" .= (20000000::Int)],"press" .= press,"regions_before" .= regions Original,"regions_after" .= regions Original
     ,"medium_after" .= medium Original,"watch" .= set "views" (String "fixed") (watch role LiveViewPhase Original)]
-    ++ ["local_ui_drained" .= drainEndpoint drainEvidence cursor | drainEvidence /= MissingDrain])
+    ++ ["bounded_post_settle_prefix" .= prefixEndpoint prefixEvidence cursor | prefixEvidence /= MissingPrefix])
   files = M.insert Reset (encode reset) (M.insert Hits (B.intercalate "\n" (map encode events) <> "\n") (M.insert Steps (encode (A.toJSON [step])) originalFiles))
   inputs = set "routes" (object ["path" .= ("fixture"::T.Text),"sha256" .= hash (routeBytes bound)]) (get "inputs" original)
   receipt = encode (set "inputs" inputs (set "files" (object [K.fromString (sidecarName name) .= hash bytes | (name,bytes) <- M.toList files]) original))
@@ -313,7 +309,7 @@ keyFixtureAtCursor cursor role evidence drainEvidence = (bound, Observation rece
 main :: IO ()
 main = do
   let stock = qualify Stock bindings (fixture Stock Original)
-      endpointCursorDiffers = case (keyFixtureAtCursor 0 Stock ResetAppends Drained,keyFixtureAtCursor 1 Owned ResetAppends Drained) of
+      endpointCursorDiffers = case (keyFixtureAtCursor 0 Stock ResetAppends Sampled,keyFixtureAtCursor 1 Owned ResetAppends Sampled) of
         ((stockBindings,stockObservation),(ownedBindings,ownedObservation)) ->
           case (qualify Stock stockBindings stockObservation,qualify Owned ownedBindings ownedObservation) of
             (Right a,Right b) -> isLeft (comparePair a b)
@@ -359,23 +355,32 @@ main = do
                 Object fields -> KM.lookup "coverage" fields == Just (object ["stock" .= expected "stock","owned" .= expected "owned"])
                 _ -> False
         _ -> False
-      drainAdmitted role evidence = let (bound,observation) = keyFixture role ResetAppends evidence in not (isLeft (qualify role bound observation))
-      drainedPair = case (keyFixture Stock ResetAppends Drained,keyFixture Owned ResetAppends Drained) of
+      prefixAdmitted role evidence = let (bound,observation) = keyFixture role ResetAppends evidence in not (isLeft (qualify role bound observation))
+      sampledPair = case (keyFixture Stock ResetAppends Sampled,keyFixture Owned ResetAppends Sampled) of
         ((bound,a),(_,b)) -> case (qualify Stock bound a,qualify Owned bound b) of
           (Right left,Right right) -> not (isLeft (comparePair left right))
           _ -> False
-      wrongDrainPolicy role policy =
-        let (bound,observation) = keyFixture role ResetAppends Drained
+      wrongPrefixPolicy role policy =
+        let (bound,observation) = keyFixture role ResetAppends Sampled
          in case A.eitherDecodeStrict' (receiptBytes observation) of
               Right (Object fields) ->
-                let changed = maybe (KM.delete "local_ui_drain_tick_bound" fields) (\value -> KM.insert "local_ui_drain_tick_bound" value fields) policy
+                let changed = maybe (KM.delete "post_settle_prefix_ticks" fields) (\value -> KM.insert "post_settle_prefix_ticks" value fields) policy
                  in isLeft (qualify role bound observation { receiptBytes = encode (Object changed) })
               _ -> False
+      wrongEndpointVersion role key value =
+        let (bound,observation) = keyFixture role ResetAppends Sampled
+            receipt = either error id (A.eitherDecodeStrict' (receiptBytes observation))
+        in isLeft (qualify role bound observation {receiptBytes = encode (changedObject key value receipt)})
+      changedModeDiffers evidence = case (keyFixture Stock ResetAppends Sampled,keyFixture Owned ResetAppends evidence) of
+        ((bound,a),(_,b)) -> case (qualify Stock bound a,qualify Owned bound b) of
+          (Right left,Right right) -> isLeft (comparePair left right)
+          _ -> False
+      validEvidence = [Sampled,ChangedCurrent,ChangedPrevious,ChangedPending,ChangedRequest,ChangedLatch]
       wrongCache value = rejectBinding (changedObject "owned_cache" value) id
       wrongCacheField name value = wrongCache (changedObject name value cacheContract)
       wrongSymbols extra = rejectBinding id (<> C.pack extra)
       tests = [("nine-entry observation matches",matched Original)
-        ,("changed drained cursor fails with equal press-time menus",endpointCursorDiffers)
+        ,("changed endpoint cursor fails with equal press-time menus",endpointCursorDiffers)
         ,("defaults reset with a consumed append qualifies",let (bound,observation) = resetFixture ResetAppends in not (isLeft (qualify Owned bound observation)))
         ,("defaults reset without a record append refuses",let (bound,observation) = resetFixture ResetWithoutAppend in isLeft (qualify Owned bound observation))
         ,("missing cache metadata policy refuses",rejectBinding (\value -> case value of Object fields -> Object (KM.delete "owned_cache" fields); _ -> value) id)
@@ -439,11 +444,14 @@ main = do
         ,("mapped spare bytes remain compared exactly",spareDifference)
         ,("missing capture declaration refuses qualification",refused MissingCapture)
         ,("changed cohort input fails comparison",differs BadBinding)
-        ,("both roles include the drained key interval",drainedPair)
-        ,("main queue held with pending packets is drained",all (\role -> drainAdmitted role HeldMain) [Stock,Owned])
-        ,("missing or changed endpoint policy refuses both roles",and [wrongDrainPolicy role policy | role <- [Stock,Owned], policy <- [Nothing,Just (Number 833333)]])]
-        ++ [("local UI drain rejects " ++ show evidence ++ " for " ++ show role,not (drainAdmitted role evidence))
-           | role <- [Stock,Owned], evidence <- [minBound..maxBound], evidence `notElem` [Drained,HeldMain]]
+        ,("both roles include the finite post-settle interval",sampledPair)
+        ,("latched budget-exhausted key admits a finite sample",let (bound,observation) = keyFixture Owned BudgetedKey Sampled in not (isLeft (qualify Owned bound observation)))
+        ,("missing or changed exact prefix ticks refuse both roles",and [wrongPrefixPolicy role policy | role <- [Stock,Owned], policy <- [Nothing,Just (Number 833333)]])
+        ,("old receipt schema refuses both roles",all (\role -> wrongEndpointVersion role "schema" (Number 1)) [Stock,Owned])
+        ,("old endpoint contract refuses both roles",all (\role -> wrongEndpointVersion role "endpoint_contract" (String "local-ui-drain")) [Stock,Owned])]
+        ++ [("changed source mode fails comparison: " ++ show evidence,changedModeDiffers evidence) | evidence <- drop 1 validEvidence]
+        ++ [("finite prefix rejects " ++ show evidence ++ " for " ++ show role,not (prefixAdmitted role evidence))
+           | role <- [Stock,Owned], evidence <- [minBound..maxBound], evidence `notElem` validEvidence]
   case (stock,owned Original) of
     (Left failure,_) -> putStrLn ("stock fixture: " ++ failure)
     (_,Left failure) -> putStrLn ("owned fixture: " ++ failure)

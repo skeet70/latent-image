@@ -22,7 +22,6 @@ import Emulation.PropertyPairRoutes
 import Emulation.Sha256 (sha256File, sha256Hex)
 import Emulation.WatchObservation (Tick (..))
 import EmulatorUsb
-import FujiModPaths (fujimodRamPushBridge)
 import Numeric (readHex, showHex)
 import System.Directory (createDirectory, doesPathExist, makeAbsolute)
 import System.Environment (getArgs, getExecutablePath)
@@ -56,7 +55,7 @@ parseOptions :: [String] -> IO Options
 parseOptions args = do
   pairs <- collect args
   let values = M.fromList pairs
-      required = ["routes", "update", "contract", "linked", "symbols", "run", "boot-rom", "adjustment-nand"]
+      required = ["routes", "update", "contract", "linked", "symbols", "run", "boot-rom", "adjustment-nand", "bridge"]
   need (length pairs == M.size values && all (`M.member` values) ("role" : "output" : required)
     && all (`elem` ("role" : "output" : "record-nand" : required)) (M.keys values)) "invalid record-store-pair-observe options"
   selected <- case values M.! "role" of
@@ -186,10 +185,9 @@ observe options directory record = do
     pure (K.fromString name .= object ["path" .= path,"sha256" .= sha256Hex digest])
   observer <- getExecutablePath
   observerDigest <- sha256File observer
-  bridgeDigest <- sha256File fujimodRamPushBridge
-  record "schema" (Number 1)
+  record "schema" (Number 2)
   record "role" (String (if role options == Owned then "owned" else "stock"))
-  record "inputs" (object (bindings ++ ["observer" .= object ["path" .= observer,"sha256" .= sha256Hex observerDigest],"bridge" .= object ["path" .= fujimodRamPushBridge,"sha256" .= sha256Hex bridgeDigest]]))
+  record "inputs" (object (bindings ++ ["observer" .= object ["path" .= observer,"sha256" .= sha256Hex observerDigest]]))
   symbols <- B.readFile (paths M.! "symbols")
   (owned,syms) <- symbolExtents symbols
   let symbol name = maybe (ioError (userError ("missing symbol " ++ name))) pure (M.lookup name syms)
@@ -233,7 +231,8 @@ observe options directory record = do
   record "raw_residual_count" (A.toJSON (length rawCandidates))
   record "ram_rule" ownedValue
   record "output_rule" (String "Compare outputs written by the stock contract across roles; require each contract-untouched output to equal its own entry preimage, without comparing residue across roles.")
-  record "local_ui_drain_tick_bound" (A.toJSON (tickValue (Tick 833334)))
+  record "endpoint_contract" (String "finite-post-settle-prefix-v2")
+  record "post_settle_prefix_ticks" (A.toJSON (tickValue (Tick 833334)))
   steps <- newIORef []
   cursor <- newIORef 0
   counter <- newIORef (0::Int)
@@ -248,7 +247,7 @@ observe options directory record = do
           hFlush hits
           case field "count" reply of Number total | end < truncate total -> drain emulator; _ -> pure end
         stop (emulator,_,()) = stopEmulator emulator
-    bracket (startEmulator fujimodRamPushBridge directory arguments (\_ -> pure (Nothing,()))) stop $ \(emulator,start,()) -> do
+    bracket (startEmulator (paths M.! "bridge") directory arguments (\_ -> pure (Nothing,()))) stop $ \(emulator,start,()) -> do
       need (bootStart start == FreshBootStart) "bridge did not fresh boot"
       record "emulator_start" (startRecord start)
       _ <- drain emulator
@@ -271,15 +270,20 @@ observe options directory record = do
               _ <- emulatorBridgeCommand emulator watch
               idle <- emulatorIdle emulator preKeyIdle
               press <- emulatorDisplayKey emulator key
-              endpoint <- emulatorLocalUiDrain emulator (Tick 833334)
+              need (field "failure" press == Null) ("key failed: " ++ show press)
+              need (field "status" (field "settle" press) `elem` [String "packet-consumed",String "budget-exhausted"]) "key was not latched"
+              elapsed <- emulatorIdleTicks emulator (Tick 833334)
+              need (field "ticks" elapsed == A.toJSON (tickValue (Tick 833334))) "post-settle prefix missed its exact tick boundary"
+              state <- emulatorUiState emulator
+              need (field "instructions" elapsed == field "instructions" state) "UI snapshot advanced beyond the prefix boundary"
+              let endpoint = object ["elapsed" .= elapsed,"state" .= state]
               observed <- emulatorWatchEnd emulator
               last' <- drain emulator
               after <- settings emulator
               blocks <- if null descendants then medium emulator else pure Null
               modifyIORef' steps (object ["step" .= step,"parent" .= parent,"keys" .= map crawlKeyWire keys,"hits" .= [first,last']
-                ,"idle" .= idle,"press" .= press,"local_ui_drained" .= endpoint,"watch" .= observed,"regions_before" .= before,"regions_after" .= after,"medium_after" .= blocks] :)
+                ,"idle" .= idle,"press" .= press,"bounded_post_settle_prefix" .= endpoint,"watch" .= observed,"regions_before" .= before,"regions_after" .= after,"medium_after" .= blocks] :)
               BL.writeFile (directory </> "steps.json") . A.encode . reverse =<< readIORef steps
-              need (field "failure" press == Null) ("key failed: " ++ show press)
               putStrLn ("step " ++ show step ++ " " ++ unwords (map crawlKeyWire keys))
               walk keys step child
       walk [] 0 (foldl (flip insertPath) (Trie []) [routeKeys route | route <- routeList routes, not (null (routeKeys route))])

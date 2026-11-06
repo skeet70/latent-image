@@ -1,15 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Emulation.LocalUiMenu (LocalUiMenu, parseLocalUiMenu) where
+module Emulation.LocalUiMenu (LocalUiMenu, parseLocalUiMenu, LocalUiMode, parseLocalUiMode) where
 
 import Control.Monad (unless)
 import Data.Aeson (Value (..), ToJSON (..), object, (.=))
+import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.Bits ((.&.), shiftL)
 import qualified Data.ByteString as B
 import Data.Scientific (toBoundedInteger)
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import Data.Word (Word32)
+import Data.Word (Word32, Word8)
 import Numeric (readHex)
 
 data LocalUiMenu = LocalUiMenu Word32 (Maybe Word32) (Maybe Word32) Word32 Word32 deriving (Eq, Show)
@@ -17,6 +18,21 @@ data LocalUiMenu = LocalUiMenu Word32 (Maybe Word32) (Maybe Word32) Word32 Word3
 instance ToJSON LocalUiMenu where
   toJSON (LocalUiMenu node ident setting cursor level) = object
     ["node" .= node, "id" .= ident, "setting" .= setting, "cursor" .= cursor, "level" .= level]
+
+newtype Mode = Mode Word32 deriving (Eq, Show)
+newtype ModeRequest = ModeRequest Word32 deriving (Eq, Show)
+newtype TransitionLatch = TransitionLatch Word8 deriving (Eq, Show)
+data LocalUiMode = LocalUiMode Mode Mode Mode ModeRequest TransitionLatch deriving (Eq, Show)
+
+instance ToJSON LocalUiMode where
+  toJSON (LocalUiMode (Mode current) (Mode previous) (Mode pending) (ModeRequest request) (TransitionLatch latch)) = object
+    ["current" .= current, "previous" .= previous, "pending" .= pending, "request" .= request, "transition_latch" .= latch]
+
+parseLocalUiMode :: Value -> Either String LocalUiMode
+parseLocalUiMode view = do
+  bytes <- rawView 0x9500ec 40 view
+  pure (LocalUiMode (Mode (word bytes 0)) (Mode (word bytes 4)) (Mode (word bytes 12))
+    (ModeRequest (word bytes 20)) (TransitionLatch (B.index bytes 36)))
 
 parseLocalUiMenu :: Value -> Either String LocalUiMenu
 parseLocalUiMenu ui = do
@@ -36,28 +52,38 @@ parseLocalUiMenu ui = do
         let index = fromIntegral (node .&. 3) + offset
         if index `mod` 4 == 0 && index + 4 <= B.length bytes then Just (word bytes index) else Nothing
   pure (LocalUiMenu node (at 0) (at 8) (word menu 8) (word depth 0))
+
+word :: B.ByteString -> Int -> Word32
+word bytes offset = sum [fromIntegral (B.index bytes (offset + index)) `shiftL` (8 * index) | index <- [0..3]]
+
+number :: Value -> Either String Word32
+number (Number value) = maybe (Left "invalid local UI address") Right (toBoundedInteger value)
+number _ = Left "invalid local UI address"
+
+field :: K.Key -> Value -> Either String Value
+field key (Object fields) = maybe (Left "missing local UI view field") Right (KM.lookup key fields)
+field _ _ = Left "invalid local UI view object"
+
+array :: Value -> Either String [Value]
+array (Array values) = Right (V.toList values)
+array _ = Left "invalid local UI view array"
+
+decodeBytes :: Value -> Either String B.ByteString
+decodeBytes (String text) = B.pack <$> decode (T.unpack text)
  where
-  word bytes offset = sum [fromIntegral (B.index bytes (offset + index)) `shiftL` (8 * index) | index <- [0..3]]
-  number :: Value -> Either String Word32
-  number (Number value) = maybe (Left "invalid local UI address") Right (toBoundedInteger value)
-  number _ = Left "invalid local UI address"
-  field key (Object fields) = maybe (Left "missing local UI menu field") Right (KM.lookup key fields)
-  field _ _ = Left "invalid local UI menu object"
-  array (Array values) = Right (V.toList values)
-  array _ = Left "invalid local UI menu array"
-  decodeBytes (String text) = B.pack <$> decode (T.unpack text)
-  decodeBytes _ = Left "invalid local UI menu bytes"
   decode [] = Right []
   decode (a:b:rest) = case readHex [a,b] of
     [(value, "")] -> (value :) <$> decode rest
-    _ -> Left "invalid local UI menu hex"
-  decode _ = Left "invalid local UI menu hex"
-  rawView :: Word32 -> Int -> Value -> Either String B.ByteString
-  rawView address size value = do
-    actual <- field "address" value >>= number
-    raw <- field "physical" value >>= decodeBytes
-    spellings <- field "spellings" value >>= array >>= mapM array
-    unless (actual == address && B.length raw == size && map length spellings == [2,2]) (Left "local UI menu view range differs")
-    aliases <- mapM decodeBytes (concat spellings)
-    unless (all (== raw) aliases) (Left "local UI menu aliases differ")
-    pure raw
+    _ -> Left "invalid local UI view hex"
+  decode _ = Left "invalid local UI view hex"
+decodeBytes _ = Left "invalid local UI view bytes"
+
+rawView :: Word32 -> Int -> Value -> Either String B.ByteString
+rawView address size value = do
+  actual <- field "address" value >>= number
+  raw <- field "physical" value >>= decodeBytes
+  spellings <- field "spellings" value >>= array >>= mapM array
+  unless (actual == address && B.length raw == size && map length spellings == [2,2]) (Left "local UI view range differs")
+  aliases <- mapM decodeBytes (concat spellings)
+  unless (all (== raw) aliases) (Left "local UI view aliases differ")
+  pure raw

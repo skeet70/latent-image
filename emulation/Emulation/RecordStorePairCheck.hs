@@ -20,7 +20,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Vector as V
 import Data.Word (Word32, Word64)
-import Emulation.LocalUiMenu (LocalUiMenu, parseLocalUiMenu)
+import Emulation.LocalUiMenu (LocalUiMenu, parseLocalUiMenu, LocalUiMode, parseLocalUiMode)
 import Emulation.PropertyPairPlan (PhysicalRange (..), settingsRanges, preKeyIdle)
 import Emulation.PropertyPairRoutes
 import Emulation.Sha256 (sha256, sha256Hex)
@@ -56,7 +56,7 @@ data Block = Block Word32 (Maybe Word32) B.ByteString (Maybe B.ByteString) deriv
 newtype Medium = Medium [Block] deriving (Eq, Show)
 data Menu = NoMenu | Menu Word32 Word32 Word32 deriving (Eq, Show)
 data Settled = PacketConsumed | BudgetExhausted deriving (Eq, Show)
-data Press = Press Settled Menu LocalUiMenu deriving (Eq, Show)
+data Press = Press Settled Menu LocalUiMenu LocalUiMode deriving (Eq, Show)
 data OutputRule = CompareBytes | PreserveBytes | UnresolvedBytes | CollectionBytes RecordSize SequenceOffset ByteCount deriving (Eq, Show)
 data Output = AbsentOutput | Output OutputRule B.ByteString B.ByteString deriving (Eq, Show)
 data Call = Call Entry [Word32] (Maybe Word32) [Output] deriving (Eq, Show)
@@ -510,64 +510,29 @@ captureSpec = object [K.fromString ("0x" ++ showHex site "") .= capture site | s
     | site == 0x6acda0 = [object ["base" .= object ["register" .= (3::Int)],"count" .= (0::Int),"count_register" .= (2::Int)]]
     | otherwise = []
 
-parseLocalUiDrain :: Value -> Parse LocalUiMenu
-parseLocalUiDrain endpoint = do
-  ticks <- field "ticks" endpoint >>= word64
-  need (ticks <= tickValue (Tick 833334)) "local UI drain exceeded its tick bound"
-  instructions <- field "instructions" endpoint >>= word64
-  ran <- field "ran" endpoint >>= word64
-  need (ran <= instructions) "local UI drain instruction range is invalid"
-  ui <- field "ui" endpoint
-  queues <- field "queues" ui >>= array
-  words' <- field "words" ui >>= array
-  (secondView,mainView) <- case queues of
-    [second,main] | length words' == 4 -> Right (second,main)
-    _ -> Left "local UI drain views are incomplete"
-  second <- rawView 0x949dd0 8 secondView
-  main <- rawView 0x94f5d8 8 mainView
-  pending <- sequence [rawView address 4 view | (address,view) <- zip [0x950098,0x950148,0x951424,0x951528] words']
-  (priority,pendingWords) <- case map (\bytes -> B.foldr (\byte value -> fromIntegral byte + (value `shiftL` 8)) (0::Word32) bytes) pending of
-    first : rest -> Right (first,rest)
-    [] -> Left "local UI drain pending views are incomplete"
-  let empty bytes = B.take 2 bytes == B.take 2 (B.drop 2 bytes)
-      hold bytes = B.index bytes 4
-  need (hold second == 0 && empty second && (hold main == 1 || empty main)
-    && priority == 0 && all (/= 1) pendingWords) "local deferred UI work remains"
-  render <- field "render" endpoint
-  initialized <- field "initialized" render >>= rawWord
-  idle <- field "idle" render >>= array >>= mapM rawWord
-  keys <- field "keys_released" render >>= array
-  statuses <- field "task_statuses" render >>= array
-  need (initialized == 1 && idle == replicate 7 0 && keys == replicate 7 (Bool True)
-    && length statuses == 4 && all (== Number 0x12) statuses) "local render actors are not drained"
-  graphics <- field "graphics" render
-  busy <- field "busy" graphics
-  command <- field "command_pending" graphics
-  control <- field "control" graphics >>= rawWord
-  started <- field "jobs_started" graphics >>= word64
-  completed <- field "jobs_completed" graphics >>= word64
-  acknowledged <- field "acknowledgments" graphics >>= word64
-  need (busy == Bool False && command == Bool False && control == 0
-    && started == completed && acknowledged >= completed) "local graphics work remains"
-  parseLocalUiMenu ui
- where
-  rawWord :: Value -> Parse Word32
-  rawWord (Number value) = maybe (Left "expected uint32") Right (toBoundedInteger value)
-  rawWord _ = Left "expected uint32"
-  rawView address size view = do
-    actual <- field "address" view >>= rawWord
-    bytes <- field "physical" view >>= hex
-    spellings <- field "spellings" view >>= array >>= mapM array
-    need (actual == address && B.length bytes == size && map length spellings == [2,2]) "local UI view range is invalid"
-    aliases <- mapM hex (concat spellings)
-    need (all (== bytes) aliases) "local UI view spellings disagree"
-    pure bytes
+parsePostSettlePrefix :: Value -> Parse (LocalUiMenu, LocalUiMode)
+parsePostSettlePrefix prefix = do
+  exact ["elapsed","state"] prefix
+  elapsed <- field "elapsed" prefix
+  ticks <- field "ticks" elapsed >>= word64
+  need (ticks == tickValue (Tick 833334)) "post-settle prefix differs from its exact tick boundary"
+  instructions <- field "instructions" elapsed >>= word64
+  ran <- field "ran" elapsed >>= word64
+  need (ran <= instructions) "post-settle prefix instruction range is invalid"
+  state <- field "state" prefix
+  snapshotInstructions <- field "instructions" state >>= word64
+  _ <- field "tick" state >>= word64
+  need (snapshotInstructions == instructions) "UI snapshot advanced beyond the prefix boundary"
+  menu <- field "ui" state >>= parseLocalUiMenu
+  mode <- field "source_mode" state >>= parseLocalUiMode
+  pure (menu,mode)
 
 qualify :: Role -> Bindings -> Observation -> Parse Qualified
 qualify role bindings observation = do
   receipt <- json (receiptBytes observation)
-  need (field "schema" receipt == Right (Number 1)) "unsupported receipt schema"
-  need (field "local_ui_drain_tick_bound" receipt == Right (A.toJSON (tickValue (Tick 833334)))) "local UI drain policy differs"
+  need (field "schema" receipt == Right (Number 2)) "unsupported receipt schema"
+  need (field "endpoint_contract" receipt == Right (String "finite-post-settle-prefix-v2")) "endpoint contract differs"
+  need (field "post_settle_prefix_ticks" receipt == Right (A.toJSON (tickValue (Tick 833334)))) "post-settle prefix policy differs"
   need (field "role" receipt == Right (String (if role == Stock then "stock" else "owned"))) "receipt role differs"
   outcome <- field "outcome" receipt >>= field "status" >>= text
   need (outcome == "completed") "observer did not complete"
@@ -666,19 +631,19 @@ qualify role bindings observation = do
     need (toInteger ran == toInteger (instructionsValue preKeyIdle)) "pre-key idle differs"
     press <- field "press" step
     need (field "failure" press == Right Null) "key press failed"
-    status <- field "settle" press >>= field "status" >>= text >>= \name -> case name of "packet-consumed" -> Right PacketConsumed; "budget-exhausted" -> Right BudgetExhausted; _ -> Left "key was not consumed"
+    status <- field "settle" press >>= field "status" >>= text >>= \name -> case name of "packet-consumed" -> Right PacketConsumed; "budget-exhausted" -> Right BudgetExhausted; _ -> Left "key was not latched"
     menu <- field "menu" press >>= parseMenu
-    endpointMenu <- field "local_ui_drained" step >>= parseLocalUiDrain
+    (endpointMenu,endpointMode) <- field "bounded_post_settle_prefix" step >>= parsePostSettlePrefix
     finalMedium <- field "medium_after" step >>= nullable parseMedium
     let leaf = not (any (\candidate -> length candidate > length keys && take (length keys) candidate == keys) (S.toList expectedPaths))
     need (leaf == maybe False (const True) finalMedium) "leaf medium capture missing or misplaced"
     watch <- field "watch" step
-    (next,result) <- interval parentState (T.pack (show number)) keys before after first last' (Just (Press status menu endpointMenu)) finalMedium watch "fixed"
+    (next,result) <- interval parentState (T.pack (show number)) keys before after first last' (Just (Press status menu endpointMenu endpointMode)) finalMedium watch "fixed"
     pure (number+1,last',acc++[result],M.insert number (next,after,keys) known,S.insert keys seen)) (1,rootEnd,[],M.empty,S.empty) steps
   need (paths == expectedPaths && lastEnd == length hits) "routes or trace tail unobserved"
   forM_ [keys | Route _ (KeyRoute keys (Declared CustomResetDefaults)) <- routeList routes] $ \keys -> do
     case [observed | observed@(Interval _ path _ _ _ _ _ _) <- results, path == keys] of
-      [Interval _ _ calls requests _ _ (Just (Press PacketConsumed _ _)) _] ->
+      [Interval _ _ calls requests _ _ (Just (Press PacketConsumed _ _ _)) _] ->
         need (any (\call -> case call of Call Append _ (Just 0) _ -> True; _ -> False) calls
           && any (\request -> case request of Program _ _ -> True; _ -> False) requests) "defaults reset did not append a record"
       _ -> Left "defaults reset confirmation did not settle"
@@ -733,10 +698,11 @@ comparePair (Qualified Stock stockInputs stock stockMedium) (Qualified Owned own
     orderedWith compareNand (path "nand") nand otherNand
     compareRegions (path "settings-before") before otherBefore
     compareRegions (path "settings-after") after otherAfter
-    equal (path "press") (fmap (\(Press _ menu _) -> menu) press) (fmap (\(Press _ menu _) -> menu) otherPress)
-    equal (path "endpoint-menu") (fmap (\(Press _ _ menu) -> menu) press) (fmap (\(Press _ _ menu) -> menu) otherPress)
+    equal (path "press") (fmap (\(Press _ menu _ _) -> menu) press) (fmap (\(Press _ menu _ _) -> menu) otherPress)
+    equal (path "endpoint-menu") (fmap (\(Press _ _ menu _) -> menu) press) (fmap (\(Press _ _ menu _) -> menu) otherPress)
+    equal (path "endpoint-source-mode") (fmap (\(Press _ _ _ mode) -> mode) press) (fmap (\(Press _ _ _ mode) -> mode) otherPress)
     case (press,otherPress) of
-      (Just (Press a _ _),Just (Press b _ _)) -> unless (a == b || a == BudgetExhausted || b == BudgetExhausted) (Left (Difference (path "settle") (showValue a) (showValue b)))
+      (Just (Press a _ _ _),Just (Press b _ _ _)) -> unless (a == b || a == BudgetExhausted || b == BudgetExhausted) (Left (Difference (path "settle") (showValue a) (showValue b)))
       _ -> pure ()
     compareMaybeMedium (path "medium") medium otherMedium
   compareMedium "terminal-medium" stockMedium ownedMedium
