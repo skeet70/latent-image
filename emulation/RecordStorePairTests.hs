@@ -15,6 +15,7 @@ import Data.Either (isLeft, isRight)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import qualified Data.Vector as V
 import Data.Word (Word32)
 import Emulation.LocalUiMenu (MenuNodeAddress (..), SettingIdentifier (..), MenuCursor (..), MenuDepth (..))
 import Emulation.PropertyPairPlan (PhysicalRange (..), settingsRanges)
@@ -513,6 +514,17 @@ main = do
         ((bound,a),(_,b)) -> case (qualify Stock bound a,qualify Owned bound b) of
           (Right left,Right right) -> not (isLeft (comparePair strictComparison left right))
           _ -> False
+      changedSteps transform =
+        let (bound,observation) = keyFixture Owned ResetAppends Sampled
+            steps = transform (maybe (error "missing steps") id (M.lookup Steps (sidecars observation)))
+            receipt = either error id (A.eitherDecodeStrict' (receiptBytes observation))
+            files = case receipt of Object fields -> maybe (error "missing files") id (KM.lookup "files" fields); _ -> error "receipt object"
+            updated = changedObject "files" (changedObject "steps.json" (A.toJSON (hash steps)) files) receipt
+         in qualify Owned bound observation {receiptBytes = encode updated, sidecars = M.insert Steps steps (sidecars observation)}
+      lateStepRefused = isLeft (changedSteps (\bytes -> case A.eitherDecodeStrict' bytes of
+        Right (Array rows) -> encode (Array (V.snoc rows (changedObject "step" (Number 2) (V.head rows))))
+        _ -> bytes))
+      duplicateStepAccepted = not (isLeft (changedSteps (B.replace "\"step\":1" "\"step\":1,\"step\":9")))
       wrongPrefixPolicy role policy =
         let (bound,observation) = keyFixture role ResetAppends Sampled
          in case A.eitherDecodeStrict' (receiptBytes observation) of
@@ -536,6 +548,8 @@ main = do
         ,("changed endpoint cursor fails with equal press-time menus",endpointCursorDiffers)
         ,("defaults reset with successful append and program request admits comparison",let (bound,observation) = resetFixture ResetAppends in not (isLeft (qualify Owned bound observation)))
         ,("defaults reset without a record append refuses",let (bound,observation) = resetFixture ResetWithoutAppend in isLeft (qualify Owned bound observation))
+        ,("a late invalid step refuses the observation",lateStepRefused)
+        ,("duplicate step keys keep the first occurrence",duplicateStepAccepted)
         ,("missing cache metadata policy refuses",rejectBinding (\value -> case value of Object fields -> Object (KM.delete "owned_cache" fields); _ -> value) id)
         ,("wrong open initializer refuses",wrongCacheField "initialized_by" (A.toJSON (0x6ac328::Word32)))
         ,("wrong tags initializer refuses",wrongCacheField "tags" (object ["address" .= (0x8e0080::Word32),"bytes" .= (8::Int),"initial_values" .= ([0,0]::[Word32])]))
