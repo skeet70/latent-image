@@ -5,11 +5,8 @@ use objects::layout::{GuestAddress, Message};
 use objects::sim::Sim;
 use objects::*;
 
-fn dispatch_on(sim: &Sim, entry: Domain, target: Domain) {
-    let context = entry.words().context(target);
-    let scratch = GuestAddress(0x4000_9000);
-    sim.set(context.dispatch_enabled(), scratch.0);
-    sim.set(scratch, 1);
+fn dispatch_on(sim: &Sim, owner: Domain) {
+    sim.install(owner, true);
 }
 
 fn main() {
@@ -25,7 +22,7 @@ fn main() {
         slot: mailbox_slot,
     };
     let sim = Sim::new(Domain::A);
-    dispatch_on(&sim, Domain::A, Domain::A);
+    dispatch_on(&sim, Domain::A);
     create_flag(&sim, flag, FlagCreate { attributes: FlagAttributes(0), initial: Pattern(0x01) }).unwrap();
     create_mailbox(
         &sim,
@@ -59,7 +56,7 @@ fn main() {
     );
 
     let remote = Sim::new(Domain::A);
-    dispatch_on(&remote, Domain::A, Domain::B);
+    dispatch_on(&remote, Domain::B);
     create_flag(&remote, flag, FlagCreate { attributes: FlagAttributes(0), initial: Pattern(0x01) }).unwrap();
     let rtask = words.task(TaskSlot::new(8).unwrap());
     let rwait = words.flag_wait(TaskSlot::new(8).unwrap());

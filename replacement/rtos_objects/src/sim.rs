@@ -66,6 +66,7 @@ impl Sim {
         self.set(record.ready_bitmap(), base + 0x80);
         self.set(record.selected(), base + 0x84);
         self.set(record.running(), base + 0x88);
+        self.set(record.id(), if owner == self.entry { 0 } else { owner.id().word() });
         self.set(record.dispatch_enabled(), base + 0x8c);
         self.set(GuestAddress(base + 0x8c), dispatch_enabled as u32);
         self.set(record.first_entry(), base + 0x90);
