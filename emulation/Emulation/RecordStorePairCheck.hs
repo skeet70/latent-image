@@ -834,9 +834,9 @@ comparePair contract (Qualified Stock stockInputs stockRoutes stock stockMedium)
     let size = case choice of LargeThreeTwo -> 1; MediumThreeTwo -> 2
     oracleEqual role ("image-size-oracle.ordinary-f6." <> T.pack (show address)) 0 ((B.index image 0x6f `shiftR` 5) .&. 3)
     oracleEqual role ("image-size-oracle.ordinary-f9." <> T.pack (show address)) size ((B.index image 0x7d `shiftR` 5) .&. 3)
-  expectTransition role transition (Regions before) (Regions after) = asOracle role (orderedWith region "image-size-oracle.transition" before after)
+  expectTransition role transition (Regions before) (Regions after) = asOracle role (orderedWith transitionRegion "image-size-oracle.transition" before after)
    where
-    region path (address,old) (other,new) = do
+    transitionRegion path (address,old) (other,new) = do
       equal (path <> ".address") address other
       equal (path <> ".length") (B.length old) (B.length new)
       let offset = case transition of EnterImageSize -> 0x6e; PreviewMedium -> 0x7d
