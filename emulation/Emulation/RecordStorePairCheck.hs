@@ -55,8 +55,7 @@ newtype Regions = Regions [(Address, B.ByteString)] deriving (Eq, Show)
 data Block = Block Word32 (Maybe Word32) B.ByteString (Maybe B.ByteString) deriving (Eq, Show)
 newtype Medium = Medium [Block] deriving (Eq, Show)
 data Menu = NoMenu | Menu Word32 Word32 Word32 deriving (Eq, Show)
-data Settled = PacketConsumed | BudgetExhausted deriving (Eq, Show)
-data Press = Press Settled Menu LocalUiMenu LocalUiMode deriving (Eq, Show)
+data Press = Press Menu LocalUiMenu LocalUiMode deriving (Eq, Show)
 data OutputRule = CompareBytes | PreserveBytes | UnresolvedBytes | CollectionBytes RecordSize SequenceOffset ByteCount deriving (Eq, Show)
 data Output = AbsentOutput | Output OutputRule B.ByteString B.ByteString deriving (Eq, Show)
 data Call = Call Entry [Word32] (Maybe Word32) [Output] deriving (Eq, Show)
@@ -631,19 +630,20 @@ qualify role bindings observation = do
     need (toInteger ran == toInteger (instructionsValue preKeyIdle)) "pre-key idle differs"
     press <- field "press" step
     need (field "failure" press == Right Null) "key press failed"
-    status <- field "settle" press >>= field "status" >>= text >>= \name -> case name of "packet-consumed" -> Right PacketConsumed; "budget-exhausted" -> Right BudgetExhausted; _ -> Left "key was not latched"
+    completion <- field "settle" press >>= field "status" >>= text
+    need (completion == "packet-consumed") ("application key consumption was not established: " ++ T.unpack completion)
     menu <- field "menu" press >>= parseMenu
     (endpointMenu,endpointMode) <- field "bounded_post_settle_prefix" step >>= parsePostSettlePrefix
     finalMedium <- field "medium_after" step >>= nullable parseMedium
     let leaf = not (any (\candidate -> length candidate > length keys && take (length keys) candidate == keys) (S.toList expectedPaths))
     need (leaf == maybe False (const True) finalMedium) "leaf medium capture missing or misplaced"
     watch <- field "watch" step
-    (next,result) <- interval parentState (T.pack (show number)) keys before after first last' (Just (Press status menu endpointMenu endpointMode)) finalMedium watch "fixed"
+    (next,result) <- interval parentState (T.pack (show number)) keys before after first last' (Just (Press menu endpointMenu endpointMode)) finalMedium watch "fixed"
     pure (number+1,last',acc++[result],M.insert number (next,after,keys) known,S.insert keys seen)) (1,rootEnd,[],M.empty,S.empty) steps
   need (paths == expectedPaths && lastEnd == length hits) "routes or trace tail unobserved"
   forM_ [keys | Route _ (KeyRoute keys (Declared CustomResetDefaults)) <- routeList routes] $ \keys -> do
     case [observed | observed@(Interval _ path _ _ _ _ _ _) <- results, path == keys] of
-      [Interval _ _ calls requests _ _ (Just (Press PacketConsumed _ _ _)) _] ->
+      [Interval _ _ calls requests _ _ (Just (Press _ _ _)) _] ->
         need (any (\call -> case call of Call Append _ (Just 0) _ -> True; _ -> False) calls
           && any (\request -> case request of Program _ _ -> True; _ -> False) requests) "defaults reset did not append a record"
       _ -> Left "defaults reset confirmation did not settle"
@@ -698,12 +698,9 @@ comparePair (Qualified Stock stockInputs stock stockMedium) (Qualified Owned own
     orderedWith compareNand (path "nand") nand otherNand
     compareRegions (path "settings-before") before otherBefore
     compareRegions (path "settings-after") after otherAfter
-    equal (path "press") (fmap (\(Press _ menu _ _) -> menu) press) (fmap (\(Press _ menu _ _) -> menu) otherPress)
-    equal (path "endpoint-menu") (fmap (\(Press _ _ menu _) -> menu) press) (fmap (\(Press _ _ menu _) -> menu) otherPress)
-    equal (path "endpoint-source-mode") (fmap (\(Press _ _ _ mode) -> mode) press) (fmap (\(Press _ _ _ mode) -> mode) otherPress)
-    case (press,otherPress) of
-      (Just (Press a _ _ _),Just (Press b _ _ _)) -> unless (a == b || a == BudgetExhausted || b == BudgetExhausted) (Left (Difference (path "settle") (showValue a) (showValue b)))
-      _ -> pure ()
+    equal (path "press") (fmap (\(Press menu _ _) -> menu) press) (fmap (\(Press menu _ _) -> menu) otherPress)
+    equal (path "endpoint-menu") (fmap (\(Press _ menu _) -> menu) press) (fmap (\(Press _ menu _) -> menu) otherPress)
+    equal (path "endpoint-source-mode") (fmap (\(Press _ _ mode) -> mode) press) (fmap (\(Press _ _ mode) -> mode) otherPress)
     compareMaybeMedium (path "medium") medium otherMedium
   compareMedium "terminal-medium" stockMedium ownedMedium
  where

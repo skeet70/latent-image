@@ -271,7 +271,8 @@ observe options directory record = do
               idle <- emulatorIdle emulator preKeyIdle
               press <- emulatorDisplayKey emulator key
               need (field "failure" press == Null) ("key failed: " ++ show press)
-              need (field "status" (field "settle" press) `elem` [String "packet-consumed",String "budget-exhausted"]) "key was not latched"
+              need (field "status" (field "settle" press) == String "packet-consumed")
+                ("application key consumption was not established at " ++ unwords (map crawlKeyWire keys) ++ ": " ++ show press)
               elapsed <- emulatorIdleTicks emulator (Tick 833334)
               need (field "ticks" elapsed == A.toJSON (tickValue (Tick 833334))) "post-settle prefix missed its exact tick boundary"
               state <- emulatorUiState emulator
