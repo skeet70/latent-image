@@ -8221,7 +8221,12 @@
       "wrappers": [
         "0x72a5a8"
       ],
-      "preconditions": [],
+      "preconditions": [
+        {
+          "name": "writable-message",
+          "statement": "Caller passes r1 pointing at a writable two-word message outside the kernel frames; the body writes +0x0 as the queue link when it queues, and reads +0x4 only under creation attribute bit 1, without validating either word."
+        }
+      ],
       "experiments": [
         "Native case: task R calls +0xd8(0x10001, &out) and blocks; task S calls +0xd4(0x10001, msg); compare S's result 0, R's result 0 and out == msg, and whether R runs before S resumes when R has higher priority.",
         "Native case: with the default attribute 2 (message priority order, max 32) send messages with priorities 3, 1, 3 and 0, 33; compare the receive order (1, 3, 3 in send order) and the -17 results."
@@ -8393,7 +8398,12 @@
       "wrappers": [
         "0x72a614"
       ],
-      "preconditions": [],
+      "preconditions": [
+        {
+          "name": "writable-result-pointer",
+          "statement": "Caller passes r1 pointing at a writable word outside the kernel frames; the body writes the message pointer through it on the dequeue path and again after resumption when the wait was satisfied, without validating r1."
+        }
+      ],
       "experiments": [
         "Native case: task R calls +0xd8(0x10001, &out) on an empty mailbox; another task releases R through the 0x44744 path (root +0x38/+0x3c); compare R's result -49 and out unchanged.",
         "Census arm: capture entry r0/r1 and return at A/B +0xd8 under any stock route reaching wrapper 0x72a614 with tmout -1, to learn whether stock code ever blocks on the single mailbox."
@@ -8601,7 +8611,12 @@
       "wrappers": [
         "0x72a614"
       ],
-      "preconditions": [],
+      "preconditions": [
+        {
+          "name": "writable-result-pointer",
+          "statement": "Caller passes r1 pointing at a writable word outside the kernel frames; the body writes the message pointer through it on the dequeue path, without validating r1."
+        }
+      ],
       "experiments": [
         "Native case: +0xdc(0x10001, &out) on an empty created mailbox returns -50; after +0xd4(0x10001, msg) it returns 0 with out == msg."
       ],
@@ -8720,7 +8735,12 @@
       "wrappers": [
         "0x72a614"
       ],
-      "preconditions": [],
+      "preconditions": [
+        {
+          "name": "writable-result-pointer",
+          "statement": "Caller passes r1 pointing at a writable word outside the kernel frames; the body writes the message pointer through it on the dequeue path and again after resumption when the wait was satisfied, without validating r1."
+        }
+      ],
       "experiments": [
         "Native case: +0xe0(0x10001, &out, 5) on an empty created mailbox; compare result -50 after 5 ticks and the T node back in its ready queue; +0xe0(0x10001, &out, -2) returns -17 before the existence check (also on an uncreated id).",
         "Census arm: capture entry r0/r1/r2 and return at A/B +0xe0 under any stock route reaching wrapper 0x72a614 with tmout > 0."

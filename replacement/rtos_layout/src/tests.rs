@@ -240,3 +240,94 @@ fn task_flags_bits() {
     assert!(TaskFlags(0xfc).contains(TaskFlags::EXCEPTION_ENABLED));
     assert!(!TaskFlags(0xfb).contains(TaskFlags::EXCEPTION_ENABLED));
 }
+
+#[test]
+fn family_tables_are_the_stock_addresses() {
+    for (domain, expected) in [
+        (
+            Domain::A,
+            [0x4005_d178, 0x4006_24b4, 0x4005_5fdc, 0x4005_5a3c, 0x4005_d16c, 0x4006_2c34, 0x4005_783c, 0x4005_7fbc],
+        ),
+        (
+            Domain::B,
+            [0x400e_d138, 0x400f_2474, 0x400e_5f9c, 0x400e_59fc, 0x400e_d12c, 0x400f_2bf4, 0x400e_77fc, 0x400e_7f7c],
+        ),
+    ] {
+        let w = domain.words();
+        let actual = [
+            w.flag_configs.0,
+            w.flag_controls.0,
+            w.flag_waits.0,
+            w.flag_timers.0,
+            w.mailbox_configs.0,
+            w.mailbox_controls.0,
+            w.mailbox_waits.0,
+            w.mailbox_timers.0,
+        ];
+        assert_eq!(actual, expected, "{domain:?}");
+    }
+}
+
+#[test]
+fn family_record_fields_are_the_stock_offsets() {
+    let base = GuestAddress(0x4005_0000);
+    assert_eq!(FlagConfig(base).attributes().0, base.0);
+    assert_eq!(FlagConfig(base).initial().0, base.0 + 0x04);
+    assert_eq!(FlagConfig(base).exists().0, base.0 + 0x08);
+    assert_eq!(FlagControl(base).queue().next().0, base.0);
+    assert_eq!(FlagControl(base).pattern().0, base.0 + 0x0c);
+    assert_eq!(FlagWait(base).pattern().0, base.0 + 0x0c);
+    assert_eq!(FlagWait(base).mode().0, base.0 + 0x10);
+    assert_eq!(FlagWait(base).result().0, base.0 + 0x14);
+    assert_eq!(MailboxConfig(base).priority_limit().0, base.0 + 0x04);
+    assert_eq!(MailboxConfig(base).exists().0, base.0 + 0x08);
+    assert_eq!(MailboxControl(base).head().0, base.0 + 0x0c);
+    assert_eq!(MailboxControl(base).tail().0, base.0 + 0x10);
+    assert_eq!(MailboxWait(base).message().0, base.0 + 0x0c);
+    assert_eq!(Message(base).priority().0, base.0 + 0x04);
+    assert_eq!(WaitBlock(base).queue().0, base.0 + 0x04);
+    assert_eq!(WaitBlock(base).owner().0, base.0 + 0x08);
+}
+
+#[test]
+fn family_sizes_are_the_stock_strides() {
+    assert_eq!(
+        [
+            FlagConfig::SIZE,
+            FlagControl::SIZE,
+            FlagWait::SIZE,
+            MailboxConfig::SIZE,
+            MailboxControl::SIZE,
+            MailboxWait::SIZE,
+            Message::SIZE,
+            WaitQueue::SIZE,
+            WaitBlock::SIZE,
+        ],
+        [0x0c, 0x10, 0x18, 0x0c, 0x14, 0x10, 0x08, 0x0c, 0x0c]
+    );
+}
+
+#[test]
+fn family_slot_accessors_stride_from_the_table() {
+    let a = Domain::A.words();
+    let flag2 = FlagSlot::new(2, 120).unwrap();
+    let task3 = TaskSlot::new(3).unwrap();
+    let box1 = MailboxSlot::new(1, 1).unwrap();
+    assert_eq!(a.flag_config(flag2).0 .0, 0x4005_d178 + 0x0c);
+    assert_eq!(a.flag_control(flag2).0 .0, 0x4006_24b4 + 0x10);
+    assert_eq!(a.flag_wait(task3).0 .0, 0x4005_5fdc + 2 * 0x18);
+    assert_eq!(a.flag_timer(task3).0, 0x4005_5a3c + 2 * 0x0c);
+    assert_eq!(a.mailbox_control(box1).0 .0, 0x4006_2c34);
+    assert_eq!(a.mailbox_wait(task3).0 .0, 0x4005_783c + 2 * 0x10);
+}
+
+#[test]
+fn family_slots_refuse_out_of_range_and_oversized_counts() {
+    assert_eq!(FlagSlot::new(0, 120), None);
+    assert_eq!(FlagSlot::new(121, 120), None);
+    assert_eq!(FlagSlot::new(1, 0), None);
+    assert_eq!(FlagSlot::new(200, 200), None);
+    assert_eq!(FlagSlot::new(120, 120).map(FlagSlot::get), Some(120));
+    assert_eq!(MailboxSlot::new(2, 1), None);
+    assert_eq!(MailboxSlot::new(1, 1).map(MailboxSlot::get), Some(1));
+}
