@@ -12,6 +12,7 @@ extern "C" {
     static mut record_store_wrappers: [Wrapper; 5];
     static mut record_store_state: u32;
     static mut record_store_block: [u8; BLOCK_BYTES];
+    static mut record_store_cache_tag: u32;
     static mut record_store_staging_0: u8;
     static mut record_store_staging_1: u8;
     static mut record_store_staging_2: u8;
@@ -53,12 +54,7 @@ fn status(result: i32) -> Result<(), MediumError> { if result == 0 { Ok(()) } el
 impl RecordMedium for RawMedium {
     fn read(&mut self, kind: RecordKind, bank: Bank, offset: BytePosition, output: &mut [u8]) -> Result<(), MediumError> {
         let block = match kind { RecordKind::Kind0 => 0x54, RecordKind::Kind1 => 0x52, RecordKind::Kind2 => 0x56, RecordKind::Kind3 => 0x58, RecordKind::Kind4 => 0x68 } + bank as u32;
-        unsafe {
-            record_semaphore_take(0x4b, -1);
-            let result = record_raw_region_read((block << 17) + offset.0, output.as_mut_ptr());
-            record_semaphore_give(0x4b);
-            status(result)
-        }
+        unsafe { status(record_raw_region_read((block << 17) + offset.0, output.as_mut_ptr())) }
     }
     fn program(&mut self, kind: RecordKind, bank: Bank, offset: BytePosition, bytes: &[u8]) -> Result<(), MediumError> {
         let write = match kind { RecordKind::Kind0 => record_raw_write_0, RecordKind::Kind1 => record_raw_write_1, RecordKind::Kind2 => record_raw_write_2, RecordKind::Kind3 => record_raw_write_3, RecordKind::Kind4 => record_raw_write_4 };
@@ -67,6 +63,31 @@ impl RecordMedium for RawMedium {
     fn erase(&mut self, kind: RecordKind, bank: Bank) -> Result<(), MediumError> {
         let erase = match kind { RecordKind::Kind0 => record_raw_erase_0, RecordKind::Kind1 => record_raw_erase_1, RecordKind::Kind2 => record_raw_erase_2, RecordKind::Kind3 => record_raw_erase_3, RecordKind::Kind4 => record_raw_erase_4 };
         unsafe { status(erase(bank as u32)) }
+    }
+}
+struct SharedBlock;
+impl BlockBuffer<RawMedium> for SharedBlock {
+    fn copy_into(&mut self, medium: &mut RawMedium, kind: RecordKind, bank: Bank, offset: usize, output: &mut [u8]) {
+        unsafe {
+            record_semaphore_take(0x4b, -1);
+            // The tag and block are borrowed only while semaphore 0x4b is held.
+            let tag = kind as u32 * 2 + bank as u32;
+            let block = &mut *ptr::addr_of_mut!(record_store_block);
+            if record_store_cache_tag != tag {
+                let _ = medium.read(kind, bank, BytePosition(0), block);
+                record_store_cache_tag = tag;
+            }
+            let length = output.len();
+            copy(output, part(block, offset, length));
+            record_semaphore_give(0x4b);
+        }
+    }
+    fn invalidate(&mut self) {
+        unsafe {
+            record_semaphore_take(0x4b, -1);
+            record_store_cache_tag = u32::MAX;
+            record_semaphore_give(0x4b);
+        }
     }
 }
 #[derive(Clone, Copy)]
@@ -81,13 +102,14 @@ impl Callbacks for GuestCallbacks {
 unsafe fn slot<'a>(wrapper: *mut Wrapper) -> Option<&'a mut Slot> {
     if record_store_initialized == 0 || (*wrapper).active == 0 || (*wrapper).slot.is_null() { None } else { Some(&mut *(*wrapper).slot) }
 }
-unsafe fn entry<'a>(medium: &'a mut RawMedium, staging: &'a mut GuestStaging) -> Entry<'a, RawMedium, GuestStaging> { Entry::new(medium, staging, &mut *ptr::addr_of_mut!(record_store_block)) }
+fn entry<'a>(medium: &'a mut RawMedium, staging: &'a mut GuestStaging) -> Entry<'a, RawMedium, GuestStaging, SharedBlock> { Entry::with_buffer(medium, staging, SharedBlock) }
 
 #[no_mangle]
 pub unsafe extern "C" fn record_store_open(_: u32) -> i32 {
     if record_store_initialized != 0 { return -14; }
     for wrapper in &mut *ptr::addr_of_mut!(record_store_wrappers) { wrapper.active = 0; wrapper.slot = ptr::null_mut(); }
     Service::initialize_at(ptr::addr_of_mut!(record_store_state).cast::<Service<GuestCallbacks>>());
+    SharedBlock.invalidate();
     if service().open(&mut GuestStaging).is_err() { return -14; }
     record_store_initialized = 1;
     0

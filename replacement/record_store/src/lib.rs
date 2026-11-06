@@ -103,26 +103,42 @@ pub struct Erased { pub errors: [Option<MediumError>; 2] }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReadError { OutsideBank, CrossesBank, Medium(MediumError) }
 
-pub struct Entry<'a, M: RecordMedium, S: Staging> {
-    medium: &'a mut M,
-    staging: &'a mut S,
+pub trait BlockBuffer<M: RecordMedium> {
+    fn copy_into(&mut self, medium: &mut M, kind: RecordKind, bank: Bank, offset: usize, output: &mut [u8]);
+    fn invalidate(&mut self);
+}
+pub struct LocalBlock<'a> {
     block: &'a mut [u8; BLOCK_BYTES],
     loaded: Option<(RecordKind, Bank)>,
 }
-impl<'a, M: RecordMedium, S: Staging> Entry<'a, M, S> {
-    pub fn new(medium: &'a mut M, staging: &'a mut S, block: &'a mut [u8; BLOCK_BYTES]) -> Self { Self { medium, staging, block, loaded: None } }
-    fn load(&mut self, kind: RecordKind, bank: Bank) {
+impl<M: RecordMedium> BlockBuffer<M> for LocalBlock<'_> {
+    fn copy_into(&mut self, medium: &mut M, kind: RecordKind, bank: Bank, offset: usize, output: &mut [u8]) {
         if self.loaded != Some((kind, bank)) {
-            let _ = self.medium.read(kind, bank, BytePosition(0), self.block);
+            let _ = medium.read(kind, bank, BytePosition(0), self.block);
             self.loaded = Some((kind, bank));
         }
+        let length = output.len();
+        copy(output, part(self.block, offset, length));
     }
+    fn invalidate(&mut self) { self.loaded = None; }
+}
+pub struct Entry<'a, M: RecordMedium, S: Staging, B: BlockBuffer<M> = LocalBlock<'a>> {
+    medium: &'a mut M,
+    staging: &'a mut S,
+    buffer: B,
+}
+impl<'a, M: RecordMedium, S: Staging> Entry<'a, M, S> {
+    pub fn new(medium: &'a mut M, staging: &'a mut S, block: &'a mut [u8; BLOCK_BYTES]) -> Self {
+        Self::with_buffer(medium, staging, LocalBlock { block, loaded: None })
+    }
+}
+impl<'a, M: RecordMedium, S: Staging, B: BlockBuffer<M>> Entry<'a, M, S, B> {
+    pub fn with_buffer(medium: &'a mut M, staging: &'a mut S, buffer: B) -> Self { Self { medium, staging, buffer } }
     fn seek(&mut self, area: &Area, position: Position) -> Sequence {
-        self.load(area.kind, area.current);
         let s = area.geometry.bytes.0 as usize;
         let offset = divide(position.0 as u32, area.geometry.page_capacity.0).remainder as usize * s;
         let bytes = self.staging.bytes(area.kind);
-        copy(part_mut(bytes, 0, s), part(self.block, offset, s));
+        self.buffer.copy_into(self.medium, area.kind, area.current, offset, part_mut(bytes, 0, s));
         sequence(bytes, area.geometry.sequence_offset)
     }
     fn find_last(&mut self, area: &Area) -> Option<Position> {
@@ -208,8 +224,8 @@ impl<'a, M: RecordMedium, S: Staging> Entry<'a, M, S> {
         if let RecordSource::Caller(source) = source { copy(part_mut(bytes, q + 2, s - q - 2), part(source, q + 2, s - q - 2)); }
         callbacks.seal(part_mut(bytes, 0, s));
         let length = if cfg!(feature = "control-9") { s } else { area.kind.program_bytes().0 as usize };
+        self.buffer.invalidate();
         let result = self.medium.program(area.kind, area.current, BytePosition(position.0 as u32 * s as u32), part(bytes, 0, length));
-        self.loaded = None;
         Some(Appended { bank: area.current, position, sequence: seq, placement, persisted: match result { Ok(()) => Persisted::Confirmed, Err(error) => Persisted::ProgramFailed(error) } })
     }
     pub fn append(&mut self, area: &mut Area, callbacks: &mut impl Callbacks, initial: Seed, source: &[u8]) -> Result<Appended, NotAppended> {
@@ -226,15 +242,15 @@ impl<'a, M: RecordMedium, S: Staging> Entry<'a, M, S> {
             seed
         } else { area.current = Bank::Zero; initial };
         if let Some(result) = self.inner_append(area, callbacks, seed, source, Placement::Rotated) { return Ok(result); }
+        self.buffer.invalidate();
         let erase = self.medium.erase(area.kind, area.current).err();
-        self.loaded = None;
         self.inner_append(area, callbacks, seed, source, Placement::ErasedThenWritten).ok_or(NotAppended::DestinationFull { erase })
     }
     pub fn erase_all(&mut self, area: &mut Area) -> Erased {
         let mut errors = [None; 2];
         for error in errors.iter_mut().take(if cfg!(feature = "control-8") { 1 } else { 2 }) {
+            self.buffer.invalidate();
             *error = self.medium.erase(area.kind, area.current).err();
-            self.loaded = None;
             area.current = area.current.next();
         }
         Erased { errors }
@@ -280,9 +296,8 @@ impl<'a, M: RecordMedium, S: Staging> Entry<'a, M, S> {
         let offset = position.0 as usize % BLOCK_BYTES;
         if output.len() > BLOCK_BYTES - offset { fill(output, 0); return Err(ReadError::CrossesBank); }
         let bank = if position.0 < BLOCK_BYTES as u32 { Bank::Zero } else { Bank::One };
-        self.load(kind, bank);
         let stage = self.staging.read_bytes(kind, output.len());
-        copy(part_mut(stage, 0, output.len()), part(self.block, offset, output.len()));
+        self.buffer.copy_into(self.medium, kind, bank, offset, part_mut(stage, 0, output.len()));
         copy(output, part(stage, 0, output.len()));
         Ok(())
     }

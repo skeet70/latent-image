@@ -35,9 +35,14 @@ main = do
   check "tag pointer refuses" (not (null (scan 0xbf1a00 (word 0x8e0088))))
   check "saved destination refuses" (not (null (scan 0xbf1a00 (word 0x917fb4))))
   check "staging pointer retained" (null (scan 0xbf1a00 (word 0x89fa80)))
+  let tagScan label base bytes = scanOwnedCacheTag [(label, Image "fixture" "" base bytes)]
+  check "retained cache tag pointer refuses" (not (null (tagScan ScanImage5 0xbf1a00 (word 0x89f8f0))))
+  check "retained cache tag interior pointer refuses" (not (null (tagScan ScanPlain 0x1100000 (word 0x89f8f3))))
+  check "retired cache tag pointer is ignored" (null (tagScan ScanImage4 0x6ac2b4 (word 0x89f8f0)))
   let addresses = [address | GuestAddress address <- entryAddresses]
       names = ["open","register","close","read_latest","append","erase_all","collect","read_at","zero"]
-      symbols = C.pack (concat [showHex address " 00000004 T record_store_entry_" ++ name ++ "\n" ++ showHex (address+8) " 00000004 T record_store_" ++ name ++ "\n" | (address,name) <- zip addresses names])
+      entrySymbols = concat [showHex address " 00000004 T record_store_entry_" ++ name ++ "\n" ++ showHex (address+8) " 00000004 T record_store_" ++ name ++ "\n" | (address,name) <- zip addresses names]
+      symbols = C.pack (entrySymbols ++ "0089f8f0 00000000 A record_store_cache_tag\n")
       linked = foldr (\address bytes -> let at = fromIntegral (address - 0x6ac2b4) in B.take at bytes <> word 0xea000000 <> B.drop (at+4) bytes) (B.replicate 0x1e60 0) addresses
       source = B.replicate 0x100000 0x77
       offset = 0x6ac2b4 - 0x61c400
@@ -49,6 +54,8 @@ main = do
       check "suffix preserved" (B.drop (offset+0x1e60) result == B.drop (offset+0x1e60) source)
   check "missing entry symbols refuse" (case stageImage source linked B.empty of Left _ -> True; Right _ -> False)
   check "wrong linked extent refuses" (case stageImage source (B.drop 4 linked) symbols of Left _ -> True; Right _ -> False)
+  check "missing owned cache tag refuses" (case stageImage source linked (C.pack entrySymbols) of Left _ -> True; Right _ -> False)
+  check "moved owned cache tag refuses" (case stageImage source linked (C.pack (entrySymbols ++ "0089f8f4 00000000 A record_store_cache_tag\n")) of Left _ -> True; Right _ -> False)
   args <- getArgs
   let linkedPairs [] = pure ()
       linkedPairs (binPath:symbolsPath:rest) = do

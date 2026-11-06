@@ -1,5 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Replacement.RecordStore.Carrier (stageImage, scanRetired, entryAddresses, retiredRegions) where
+module Replacement.RecordStore.Carrier (stageImage, scanRetired, scanOwnedCacheTag, entryAddresses, retiredRegions) where
 
 import Control.Monad (unless)
 import Data.Bits ((.&.), shiftL, shiftR)
@@ -33,10 +33,15 @@ scanRetired images = filter refused (concatMap (\region -> scanReferences region
           MovPairInto target -> target `notElem` entryAddresses
           PcRelativeInto target -> target `notElem` entryAddresses
 
+scanOwnedCacheTag :: [(ScanImage, Image)] -> [ScanHit]
+scanOwnedCacheTag images = filter retainedSite (scanReferences (Carrier (GuestAddress 0x89f8f0) (GuestAddress 0x89f8f4)) images S.empty)
+  where retainedSite hit = not (hitImage hit == ScanImage4 && inCarrier recordSpan (hitSite hit))
+
 stageImage :: B.ByteString -> B.ByteString -> B.ByteString -> Either String B.ByteString
 stageImage image linked symbols = do
     unless (B.length linked == 0x1e60) (Left "linked record span must be exactly 7776 bytes")
     forMEntries
+    unless (lookup "record_store_cache_tag" parsed == Just 0x89f8f0) (Left "owned cache tag symbol moved or missing")
     pure (B.take offset image <> linked <> B.drop (offset + B.length linked) image)
   where
     offset = 0x6ac2b4 - 0x61c400

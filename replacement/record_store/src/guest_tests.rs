@@ -11,6 +11,9 @@ struct State([u8; 360]);
 static mut STATE: State = State([0; 360]);
 #[export_name = "record_store_block"]
 static mut BLOCK: [u8; BLOCK_BYTES] = [0; BLOCK_BYTES];
+#[export_name = "record_store_cache_tag"]
+static mut CACHE_TAG: u32 = u32::MAX;
+const _: () = assert!(core::mem::size_of::<u32>() == 4 && core::mem::align_of::<u32>() == 4);
 #[export_name = "record_store_staging_0"]
 static mut STAGING0: [u8; 0x20000] = [0; 0x20000];
 #[export_name = "record_store_staging_1"]
@@ -21,7 +24,8 @@ static mut STAGING2: [u8; 0x20000] = [0; 0x20000];
 static mut STAGING3: [u8; 0x20000] = [0; 0x20000];
 #[export_name = "record_store_staging_4"]
 static mut STAGING4: [u8; 0x20000] = [0; 0x20000];
-struct Backend { banks: [Vec<u8>; 2], held: bool, reads: usize, writes: usize }
+struct Backend { banks: [Vec<u8>; 2], other_banks: [Vec<u8>; 2], held: bool, reads: usize, writes: usize, preempt_on_release: bool }
+static TEST_LOCK: Mutex<()> = Mutex::new(());
 static BACKEND: Mutex<Option<Backend>> = Mutex::new(None);
 #[export_name = "record_raw_region_read"]
 unsafe extern "C" fn read(address: u32, buffer: *mut u8) -> i32 {
@@ -30,7 +34,8 @@ unsafe extern "C" fn read(address: u32, buffer: *mut u8) -> i32 {
     assert!(backend.held);
     backend.reads += 1;
     let bank = ((address >> 17) & 1) as usize;
-    slice::from_raw_parts_mut(buffer, BLOCK_BYTES).copy_from_slice(&backend.banks[bank]);
+    let banks = if address >> 17 & !1 == 0x54 { &backend.banks } else { &backend.other_banks };
+    slice::from_raw_parts_mut(buffer, BLOCK_BYTES).copy_from_slice(&banks[bank]);
     0
 }
 unsafe extern "C" fn write(buffer: *const u8, bank: u32, offset: u32, length: u32) -> i32 {
@@ -55,13 +60,39 @@ erase_import!(erase0, "record_raw_erase_0"); erase_import!(erase1, "record_raw_e
 #[export_name = "record_semaphore_take"]
 unsafe extern "C" fn take(id: u32, timeout: i32) -> i32 { assert_eq!((id, timeout), (0x4b, -1)); let mut backend = BACKEND.lock().unwrap(); let backend = backend.as_mut().unwrap(); assert!(!backend.held); backend.held = true; 0 }
 #[export_name = "record_semaphore_give"]
-unsafe extern "C" fn give(id: u32) -> i32 { assert_eq!(id, 0x4b); let mut backend = BACKEND.lock().unwrap(); let backend = backend.as_mut().unwrap(); assert!(backend.held); backend.held = false; 0 }
+unsafe extern "C" fn give(id: u32) -> i32 {
+    assert_eq!(id, 0x4b);
+    let preempt = {
+        let mut backend = BACKEND.lock().unwrap();
+        let backend = backend.as_mut().unwrap();
+        assert!(backend.held);
+        backend.held = false;
+        core::mem::take(&mut backend.preempt_on_release)
+    };
+    if preempt { read_other_kind(); }
+    0
+}
+unsafe fn read_other_kind() {
+    let mut bytes = [0; 3];
+    assert_eq!(record_store_read_at(1, 0, 3, bytes.as_mut_ptr()), 0);
+    assert_eq!(bytes, [7, 0, 0xb6]);
+}
+unsafe extern "C" fn check_with_cross_kind_preemption(_: *mut u8, _: *mut u8) -> i32 {
+    assert!(!BACKEND.lock().unwrap().as_ref().unwrap().held);
+    read_other_kind();
+    0
+}
+unsafe extern "C" fn seal_with_cross_kind_preemption(_: *mut u8, _: *mut u8) {
+    assert!(!BACKEND.lock().unwrap().as_ref().unwrap().held);
+    read_other_kind();
+}
 
 #[test]
 fn rsc_nine_guest_entries_status_outputs_and_read_only_semaphore() {
+    let _serial = TEST_LOCK.lock().unwrap();
     unsafe {
         INITIALIZED = 0;
-        *BACKEND.lock().unwrap() = Some(Backend { banks: [vec![0xff; BLOCK_BYTES], vec![0xff; BLOCK_BYTES]], held: false, reads: 0, writes: 0 });
+        *BACKEND.lock().unwrap() = Some(Backend { banks: [vec![0xff; BLOCK_BYTES], vec![0xff; BLOCK_BYTES]], other_banks: [vec![0xff; BLOCK_BYTES], vec![0xff; BLOCK_BYTES]], held: false, reads: 0, writes: 0, preempt_on_release: false });
         let register = |client: *mut *mut Wrapper| record_store_register(0, 0x60, 6, 0, None, ptr::null_mut(), None, ptr::null_mut(), client);
         let mut client = 0x1234usize as *mut Wrapper;
         assert_eq!(register(&mut client), -14);
@@ -122,5 +153,53 @@ fn rsc_nine_guest_entries_status_outputs_and_read_only_semaphore() {
         let mut destination = [0; 3];
         assert_eq!(record_store_read_at(0, 0x20000, 3, destination.as_mut_ptr()), 0);
         assert_eq!(destination, [3, 0, 0xa5]);
+    }
+}
+
+#[test]
+fn cross_kind_preemption_preserves_latest_collect_and_addressed_bytes() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    unsafe {
+        let mut banks = [vec![0xff; BLOCK_BYTES], vec![0xff; BLOCK_BYTES]];
+        let first = [3, 0, 0xa5];
+        let second = [4, 0, 0xa6];
+        banks[0][..0x60].fill(0xa5);
+        banks[0][..3].copy_from_slice(&first);
+        banks[0][0x60..0xc0].fill(0xa6);
+        banks[0][0x60..0x63].copy_from_slice(&second);
+        let mut other_banks = [vec![0xff; BLOCK_BYTES], vec![0xff; BLOCK_BYTES]];
+        other_banks[0][..3].copy_from_slice(&[7, 0, 0xb6]);
+        INITIALIZED = 0;
+        *BACKEND.lock().unwrap() = Some(Backend { banks, other_banks, held: false, reads: 0, writes: 0, preempt_on_release: false });
+        assert_eq!(record_store_open(0), 0);
+        let mut client = ptr::null_mut();
+        assert_eq!(record_store_register(0, 0x60, 6, 0, Some(seal_with_cross_kind_preemption), ptr::null_mut(), Some(check_with_cross_kind_preemption), ptr::null_mut(), &mut client), 0);
+
+        BACKEND.lock().unwrap().as_mut().unwrap().preempt_on_release = true;
+        let mut addressed = [0; 3];
+        assert_eq!(record_store_read_at(0, 0, 3, addressed.as_mut_ptr()), 0);
+        assert_eq!(addressed, first);
+
+        BACKEND.lock().unwrap().as_mut().unwrap().preempt_on_release = true;
+        let mut collected = [0x71; 0x240];
+        let mut count = 0;
+        assert_eq!(record_store_collect(client, collected.as_mut_ptr(), &mut count), 0);
+        assert_eq!(count, 0xc0);
+        assert_eq!(&collected[..3], &first);
+        assert_eq!(&collected[0x60..0x63], &second);
+        assert!(collected[3..0x60].iter().all(|byte| *byte == 0xa5));
+        assert!(collected[0x63..0xc0].iter().all(|byte| *byte == 0xa6));
+
+        BACKEND.lock().unwrap().as_mut().unwrap().preempt_on_release = true;
+        let mut output = ptr::null();
+        assert_eq!(record_store_read_latest(client, ptr::null_mut(), &mut output), 0);
+        assert_eq!(slice::from_raw_parts(output, 3), &second);
+        assert!(slice::from_raw_parts(output.add(3), 0x5d).iter().all(|byte| *byte == 0xa6));
+
+        assert_eq!(record_store_append(client, 0, [0xacu8; 0x60].as_ptr()), 0);
+        let mut appended = [0; 0x60];
+        assert_eq!(record_store_read_at(0, 0xc0, 0x60, appended.as_mut_ptr()), 0);
+        assert_eq!(&appended[..2], &[5, 0]);
+        assert!(appended[2..].iter().all(|byte| *byte == 0xac));
     }
 }

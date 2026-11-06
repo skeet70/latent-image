@@ -48,7 +48,7 @@ RSC holds the contract with citations. What the owned code must reproduce:
 - Results: `read_latest -> Latest { bank, position, sequence, skipped, record: &[u8] } | Empty | NoneValid`; `append -> Appended { bank, position, sequence, placement, persisted }` with `Placement` = `InBank`, `Rotated`, `ErasedThenWritten` and `Persisted` = `Confirmed` or `ProgramFailed(MediumError)`, or `Err(NotAppended::DestinationFull { erase: Option<MediumError> })`; `erase_all -> Erased { errors }`; `collect`; `read_at`. Stock statuses exist only in the adapter.
 - The search and append sequences of §2 are the core's behaviour, not an adapter shim **[INFERENCE]**: the check-call sequence, the queried-bank rotation and the rejected-predecessor sequence are observable through callbacks and flash, and the clients are stock. When every client's check is owned and idempotent, a simpler search can replace them (shim row in §7).
 - State per area: kind, geometry, callbacks, current bank. Everything else is read from the medium.
-- Per-entry block buffer: within one entry the core keeps the last bank block read and drops it after any program or erase. Read budget: at most five block reads per read latest (three scan banks, the extra probe of the following bank and the re-search) and five per append; stock reads at most two per entry from cold **[INFERENCE]**.
+- `BlockBuffer` selects and fills a region and copies requested bytes into staging as one operation. Host entries use an exclusively borrowed `LocalBlock`; guest entries use one shared 128 KiB block and a shared kind/bank tag. Cache invalidation precedes each program and erase. Without cross-kind preemption, at most five block fills are needed per read latest (three scan banks, the extra probe and the re-search) and five per append **[INFERENCE]**.
 
 ### 3.2 Retained boundary
 
@@ -57,14 +57,14 @@ RSC holds the contract with citations. What the owned code must reproduce:
 - Callbacks called with the staging buffer and their context, at the stock points.
 - Statuses and output writes as §2.
 - Handles: owned area records sit at the stock wrapper addresses `0x89f8b4 + 12i`, so client words keep the same values and no handle map exists **[INFERENCE]**.
-- Lock: semaphore `0x4b` taken only around each raw read, through `0x724b68`/`0x724c00`, as stock.
+- Lock: semaphore `0x4b`, through `0x724b68`/`0x724c00`, covers shared tag selection, raw region fill and the copy to per-kind staging, matching RSC `0x6ad7b0..0x6ad988`. It also protects tag invalidation. No callback, raw program or erase runs with this semaphore held.
 
-Accepted differences **[INFERENCE]**: no cross-entry cache, so read requests differ (more reads, and a failed read is retried instead of served as a cached hit). Neither changes a return value, a client byte or a persistent effect when reads succeed: stock invalidates its cache before every program and erase (`0x6ade6c..`), and no other writer touches the record blocks. The oracle does not compare read requests; a failed read is a fault case whose stock outcome the oracle records without requiring the candidate to match it, and the difference is listed in the cutover record.
+Accepted differences **[INFERENCE]**: the guest caches one region instead of stock's two; read requests can differ after bank switches or cross-kind preemption. Failed fills remain tagged as hits until invalidation or replacement, as in stock, but eviction can differ. Neither changes a return value, a client byte or a persistent effect when reads succeed: stock invalidates its cache before every program and erase (`0x6ade6c..`), and no other writer touches the record blocks. The oracle does not compare read requests; failed-read outcomes remain fault cases outside successful-read parity.
 
 ## 4. Placement
 
 - Carrier: the retired span. Nine fixed entry veneers split it; the largest free run is `[0x6acda4,0x6ae0fc)`, 4,952 bytes, with gaps of 112, 332, 76, 776, 428, 304 and 740 bytes and 24 at the end. The stager places each section in a named run and the build asserts each fits; if the core does not fit, it goes to the RAM-push bank region and the span holds veneers only.
-- RAM: the per-entry block buffer (128 KiB) and the area records reuse retired data, the stock cache regions `[0x8a0080,0x8e0080)` and the wrapper array `0x89f8b4`; the slots `0x89f8f8`, cache tags `0x8e0080..0x8e008c` and `0x917fa8` are retired.
+- RAM: the shared block uses `[0x8a0080,0x8c0080)`, wrappers use `0x89f8b4 + 12i`, and owned registration state uses `0x89f8f8..0x89fa60`. The aligned four-byte owned cache tag occupies `0x89f8f0..0x89f8f4`; open `0x6ac2b4` initializes it to `0xffffffff` before any lookup. The carrier contract binds that extent, value and initializer, and staging rejects retained pointers to the tag while excluding the retired code. Stock tags `0x8e0080..0x8e008c` and saved destinations `0x917fa8..0x917fe4` remain retired.
 - Retirement checks (spec/11): a reference scan of the three images for the span and the retired data; fetch traps on the retired code and access traps on the retired data during the cutover pair.
 - Backend shim: region read `0x6aad94`, per-kind writes `0x6aab1c`, `0x6aa94c`, `0x6ab07c`, `0x6ab2f4`, `0x6aacb8` and erases `0x6aabd8`, `0x6aaa08`, `0x6ab1e0`, `0x6ab458`, `0x6aad40`.
 - Route: the owned code is staged into a candidate DAT (image4), present from reset; the root task's open at `0x69d1d4` reaches the owned veneer, so no handover exists in qualification. A post-boot RAM-push install would need a handover shim (reading stock wrappers and slots once, quiescence: no task inside the span and `0x4b` free); it is out of this cutover.
@@ -106,7 +106,7 @@ Accepted differences **[INFERENCE]**: no cross-entry cache, so read requests dif
 | Handles at stock wrapper addresses | Client words keep stock values | No stock client holds a handle |
 | Stock callbacks | Check and prepare of the five clients | Each client's seal and check owned (kind 3's by `E-AREA3-VALIDATOR-REPLACEMENT-150`) |
 | Raw service backend | Region read, per-kind writes and erases | Owned `NandFlash` and `FlashMap` |
-| Semaphore `0x4b` | Lock around raw reads | Owned RTOS |
+| Semaphore `0x4b` | Lock around cache selection, fill, staging copy and invalidation | Owned RTOS |
 
 ## 8. Interface with settings storage
 

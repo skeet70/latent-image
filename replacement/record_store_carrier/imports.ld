@@ -13,6 +13,7 @@ record_semaphore_take = 0x724b68;
 record_semaphore_give = 0x724c00;
 record_store_initialized = 0x89f8b0;
 record_store_wrappers = 0x89f8b4;
+record_store_cache_tag = 0x89f8f0;
 record_store_state = 0x89f8f8;
 record_store_block = 0x8a0080;
 record_store_staging_0 = 0x8e16a0;
@@ -20,3 +21,5 @@ record_store_staging_1 = 0x8e00a0;
 record_store_staging_2 = 0x8e1700;
 record_store_staging_3 = 0x89fa80;
 record_store_staging_4 = 0x8e10a0;
+ASSERT(record_store_cache_tag % 4 == 0, "record store cache tag is unaligned")
+ASSERT(record_store_wrappers + 5 * 12 == record_store_cache_tag && record_store_cache_tag + 4 <= record_store_state, "record store cache tag overlaps state")
