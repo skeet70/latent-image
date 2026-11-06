@@ -3579,6 +3579,7 @@ haskell_test(
     ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
     deps = [
         ":case-sha256",
+        ":emulator-usb",
         ":property-pair-lib",
         ":record-store-pair-check-lib",
         "//host:aeson",

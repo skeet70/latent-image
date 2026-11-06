@@ -601,6 +601,12 @@ qualify role bindings observation = do
     (next,result) <- interval parentState (T.pack (show number)) keys before after first last' (Just (status,menu)) finalMedium watch "fixed"
     pure (number+1,last',acc++[result],M.insert number (next,after,keys) known,S.insert keys seen)) (1,rootEnd,[],M.empty,S.empty) steps
   need (paths == expectedPaths && lastEnd == length hits) "routes or trace tail unobserved"
+  forM_ [keys | Route _ (KeyRoute keys (Declared CustomResetDefaults)) <- routeList routes] $ \keys -> do
+    case [observed | observed@(Interval _ path _ _ _ _ _ _) <- results, path == keys] of
+      [Interval _ _ calls requests _ _ (Just (PacketConsumed,_)) _] ->
+        need (any (\call -> case call of Call Append _ (Just 0) _ -> True; _ -> False) calls
+          && any (\request -> case request of Program _ _ -> True; _ -> False) requests) "defaults reset did not append a record"
+      _ -> Left "defaults reset confirmation did not settle"
   terminal <- load MediumFile >>= parseMedium
   let lastMedium = case reverse results of
         Interval _ _ _ _ _ _ _ (Just blocks):_ -> blocks

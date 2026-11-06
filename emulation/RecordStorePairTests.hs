@@ -20,6 +20,7 @@ import Emulation.PropertyPairPlan (PhysicalRange (..), settingsRanges)
 import Emulation.PropertyPairRoutes
 import Emulation.RecordStorePairCheck
 import Emulation.Sha256 (sha256, sha256Hex)
+import EmulatorUsb (CrawlKey (..))
 import Numeric (showHex)
 import System.Exit (exitFailure)
 
@@ -215,6 +216,32 @@ fixture role mutation = Observation receipt files where
       ++ [K.fromString name .= binding (if mutation == BadBinding && name == "run" then "different-run" else "cohort") | name <- ["run","boot-rom","adjustment-nand","observer","bridge"]])
     ,"files" .= object [K.fromString (sidecarName name) .= hash bytes | (name,bytes) <- M.toList files],"ram_rule" .= extents,"raw_residual_count" .= (0::Int),"settings_at_attach" .= regions mutation,"medium_at_attach" .= medium mutation])
 
+data ResetEvidence = ResetAppends | ResetWithoutAppend | ResetUnsettled deriving (Eq)
+
+resetFixture :: ResetEvidence -> (Bindings, Observation)
+resetFixture evidence = (bound, Observation receipt files) where
+  bound = bindings { routeBytes = BL.toStrict (encodeRouteFile (RouteFile (replicate 64 '0') "reset fixture" CrawlEffectsSource []
+    (phaseRoutes ++ [Route (RouteName "custom-reset-defaults") (KeyRoute [KeyOk] (Declared CustomResetDefaults))]))) }
+  events = filter keep (trace Owned Original)
+  keep event = evidence /= ResetWithoutAppend || not (any (\site -> get "site" (get "observation" event) == A.toJSON (site::Word32)) [0x6ac7d4,0x6fb7c8])
+  Observation originalReceipt originalFiles = fixture Owned Original
+  original = decode originalReceipt
+  decode bytes = either error id (A.eitherDecodeStrict' bytes)
+  get key (Object fields) = maybe (error "fixture field missing") id (KM.lookup key fields)
+  get _ _ = error "fixture object required"
+  set key value (Object fields) = Object (KM.insert key value fields)
+  set _ _ _ = error "fixture object required"
+  reset = object ["schema" .= (1::Int),"reset" .= object ["instructions" .= (0::Int)],"regions_at_reset" .= resetRegions Owned Original
+    ,"segments" .= [object ["phase" .= phase,"instructions" .= (1::Int),"hits_end" .= (0::Int),"watch" .= watch Owned phase Original,"regions" .= resetRegions Owned Original] | phase <- [minBound..maxBound]::[AttachPhase]]]
+  press = object ["failure" .= Null,"settle" .= object ["status" .= (if evidence == ResetUnsettled then "budget-exhausted" else "packet-consumed"::T.Text)]
+    ,"menu" .= object ["cursor" .= (0::Int),"menu_id" .= (1::Int),"setting_id" .= (5::Int)]]
+  step = object ["step" .= (1::Int),"parent" .= (0::Int),"keys" .= [KeyOk],"hits" .= ([0,length events]::[Int])
+    ,"idle" .= object ["ran" .= (20000000::Int)],"press" .= press,"regions_before" .= regions Original,"regions_after" .= regions Original
+    ,"medium_after" .= medium Original,"watch" .= set "views" (String "fixed") (watch Owned LiveViewPhase Original)]
+  files = M.insert Reset (encode reset) (M.insert Hits (B.intercalate "\n" (map encode events) <> "\n") (M.insert Steps (encode (A.toJSON [step])) originalFiles))
+  inputs = set "routes" (object ["path" .= ("fixture"::T.Text),"sha256" .= hash (routeBytes bound)]) (get "inputs" original)
+  receipt = encode (set "inputs" inputs (set "files" (object [K.fromString (sidecarName name) .= hash bytes | (name,bytes) <- M.toList files]) original))
+
 main :: IO ()
 main = do
   let stock = qualify Stock bindings (fixture Stock Original)
@@ -260,6 +287,9 @@ main = do
                 _ -> False
         _ -> False
       tests = [("nine-entry observation matches",matched Original)
+        ,("defaults reset with a consumed append qualifies",let (bound,observation) = resetFixture ResetAppends in not (isLeft (qualify Owned bound observation)))
+        ,("defaults reset without a record append refuses",let (bound,observation) = resetFixture ResetWithoutAppend in isLeft (qualify Owned bound observation))
+        ,("defaults reset with unsettled confirmation refuses",let (bound,observation) = resetFixture ResetUnsettled in isLeft (qualify Owned bound observation))
         ,("report names exercised entries and NAND requests per role/media",reportedCoverage)
         ,("changed program payload fails comparison",differs PayloadByte)
         ,("reordered external calls fail comparison",differs ReorderCalls)
