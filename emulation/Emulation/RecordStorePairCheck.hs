@@ -593,8 +593,8 @@ parsePostSettlePrefix prefix = do
   mode <- field "source_mode" state >>= parseLocalUiMode
   pure (menu,mode)
 
-foldSteps :: (state -> Value -> Parse state) -> (state -> ()) -> state -> B.ByteString -> Parse state
-foldSteps step force initial bytes = case lbsToTokens (L.fromStrict bytes) of
+foldSteps :: (state -> Value -> Parse state) -> state -> B.ByteString -> Parse state
+foldSteps step initial bytes = case lbsToTokens (L.fromStrict bytes) of
   TkArrayOpen items -> loop initial items
   TkErr failure -> Left failure
   _ -> Left "expected steps array"
@@ -603,7 +603,7 @@ foldSteps step force initial bytes = case lbsToTokens (L.fromStrict bytes) of
     TkItem tokens -> do
       (value,next) <- toEitherValue tokens
       state' <- step state value
-      force state' `seq` loop state' next
+      loop state' next
     TkArrayEnd remaining -> if L.all (`elem` [9,10,13,32]) remaining then Right state else Left "trailing steps data"
     TkArrayErr failure -> Left failure
 
@@ -663,12 +663,6 @@ forceInterval :: Interval -> ()
 forceInterval (Interval name keys calls nand before after press medium) =
   T.length name `seq` forceKeys keys `seq` forceList forceCall calls `seq` forceList forceNand nand `seq`
   forceRegions before `seq` forceRegions after `seq` forceMaybe forcePress press `seq` forceMaybe forceMedium medium `seq` ()
-
-forceSteps :: (Int, Int, [Interval], M.Map Int (State, Regions, [CrawlKey]), S.Set [CrawlKey]) -> ()
-forceSteps (number, start, intervals, known, seen) =
-  number `seq` start `seq` forceList forceInterval intervals `seq`
-  M.foldrWithKey (\key (state, regions, keys) rest -> key `seq` forceState state `seq` forceRegions regions `seq` forceKeys keys `seq` rest) () known `seq`
-  S.foldr (\keys rest -> forceKeys keys `seq` rest) () seen `seq` ()
 
 forceQualified :: Qualified -> ()
 forceQualified (Qualified _ cohort routes intervals medium) =
@@ -761,7 +755,7 @@ qualify role bindings observation = do
   attachedMedium <- field "medium_at_attach" receipt >>= parseMedium
   stepsBytes <- maybe (Left "missing steps") Right (M.lookup Steps (sidecars observation))
   let expectedPaths = S.fromList [take n keys | route <- routeList routes, let keys = routeKeys route, n <- [1..length keys]]
-  (_,lastEnd,results,_,paths) <- foldSteps (\(number,start,acc,known,seen) step -> do
+  (_,lastEnd,reversedResults,_,paths) <- foldSteps (\(number,start,acc,known,seen) step -> do
     actual <- field "step" step >>= int
     need (actual == number) "steps are not sequential"
     parent <- field "parent" step >>= int
@@ -788,7 +782,10 @@ qualify role bindings observation = do
     need (leaf == maybe False (const True) finalMedium) "leaf medium capture missing or misplaced"
     watch <- field "watch" step
     (next,result) <- interval parentState (T.pack (show number)) keys before after first last' (Just (Press menu endpointMenu endpointMode)) finalMedium watch "fixed"
-    pure (number+1,last',acc++[result],M.insert number (next,after,keys) known,S.insert keys seen)) forceSteps (1,rootEnd,[],M.empty,S.empty) stepsBytes
+    let acc' = result:acc
+        accumulator = (number+1,last',acc',M.insert number (next,after,keys) known,S.insert keys seen)
+    forceInterval result `seq` forceState next `seq` forceRegions after `seq` forceKeys keys `seq` acc' `seq` accumulator `seq` pure accumulator) (1,rootEnd,[],M.empty,S.empty) stepsBytes
+  let results = reverse reversedResults
   need (paths == expectedPaths && lastEnd == length hits) "routes or trace tail unobserved"
   forM_ [keys | Route _ (KeyRoute keys (Declared CustomResetDefaults)) <- routeList routes] $ \keys -> do
     case [observed | observed@(Interval _ path _ _ _ _ _ _) <- results, path == keys] of
@@ -797,7 +794,7 @@ qualify role bindings observation = do
           && any (\request -> case request of Program _ _ -> True; _ -> False) requests) "defaults reset did not append a record"
       _ -> Left "defaults reset confirmation did not settle"
   terminal <- load MediumFile >>= parseMedium
-  let lastMedium = case reverse results of
+  let lastMedium = case reversedResults of
         Interval _ _ _ _ _ _ _ (Just blocks):_ -> blocks
         _ -> attachedMedium
   need (terminal == lastMedium) "terminal medium differs from final leaf"
