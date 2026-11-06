@@ -48,6 +48,24 @@ xm1_rust_staticlib(
     for domain in ["a", "b"]
 ]
 
+[
+    xm1_rust_elf(
+        name = "objects-f2-stage-%s" % domain,
+        rust_staticlib = ":objects-f2-adapter-%s" % domain,
+        rust_staticlibs = [
+            "//replacement/rtos_scheduler:scheduler-%s-rust" % domain,
+            "//replacement/rtos_scheduler:scheduler-s2-%s-rust" % domain,
+        ],
+        link_script = "stage/f2-%s.ld" % domain,
+        link_includes = [
+            "//replacement/rtos_scheduler:scheduler-%s.ld" % domain,
+            "//replacement/rtos_scheduler:scheduler-s2-%s.ld" % domain,
+        ],
+        entry = "xm1_rtos_objects_f2_set_flag",
+    )
+    for domain in ["a", "b"]
+]
+
 genrule(
     name = "objects-host-tests-build",
     srcs = [

@@ -50,6 +50,7 @@ extern "C" {
 
 struct Cpu;
 
+#[inline(always)]
 fn load(address: GuestAddress) -> u32 {
     unsafe { read_volatile(address.0 as *const u32) }
 }
@@ -148,10 +149,12 @@ impl Wake for Cpu {
     }
 }
 
+#[inline(always)]
 fn entry_words() -> DomainWords {
     ENTRY.words()
 }
 
+#[inline(always)]
 fn entry_state() -> Entry {
     Entry {
         handler_context: load(entry_words().handler_context),
@@ -160,12 +163,14 @@ fn entry_state() -> Entry {
     }
 }
 
+#[inline(always)]
 unsafe fn cpsr_masked() -> bool {
     let cpsr: u32;
     unsafe { asm!("mrs {cpsr}, cpsr", cpsr = out(reg) cpsr, options(nostack)) };
     cpsr & 0x80 != 0
 }
 
+#[inline(always)]
 fn target(domain: Domain, class: i32) -> Result<Domain, ObjectStatus> {
     match class {
         0 => Ok(domain),
@@ -177,6 +182,8 @@ fn target(domain: Domain, class: i32) -> Result<Domain, ObjectStatus> {
 
 /// Slot `+0x88`, in stock admission order.
 #[no_mangle]
+#[inline(never)]
+#[link_section = ".text.f2_set_flag"]
 pub extern "C" fn xm1_rtos_objects_f2_set_flag(id: i32, bits: u32) -> i32 {
     let cpu = Cpu;
     let words = entry_words();
@@ -201,6 +208,8 @@ pub extern "C" fn xm1_rtos_objects_f2_set_flag(id: i32, bits: u32) -> i32 {
 
 /// Slot `+0xd4`, in stock admission order: the creation record is read before the message priority.
 #[no_mangle]
+#[inline(never)]
+#[link_section = ".text.f2_send"]
 pub extern "C" fn xm1_rtos_objects_f2_send(id: i32, message: u32) -> i32 {
     let cpu = Cpu;
     let words = entry_words();

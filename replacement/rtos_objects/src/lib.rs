@@ -21,7 +21,7 @@ pub mod sim;
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(target_arch = "arm", not(test)))]
+#[cfg(all(target_arch = "arm", not(test), not(feature = "stage")))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
     loop {}

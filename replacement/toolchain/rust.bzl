@@ -110,7 +110,7 @@ def xm1_rust_elf(
     the preprocessed assembly sources. The outputs are <name>.elf, <name>.bin,
     <name>.symbols and <name>.disasm in the caller's package.
     """
-    srcs = [rust_staticlib] + c_srcs + asm_srcs + link_includes
+    srcs = [rust_staticlib] + rust_staticlibs + c_srcs + asm_srcs + link_includes
     if link_script != None:
         srcs.append(link_script)
 
@@ -147,6 +147,9 @@ def xm1_rust_elf(
     link += [
         "$$objects",
         "$(location %s)" % rust_staticlib,
+    ]
+    link += ["$(location %s)" % staticlib for staticlib in rust_staticlibs]
+    link += [
         "-o",
         "$(@D)/%s.elf" % name,
     ]
