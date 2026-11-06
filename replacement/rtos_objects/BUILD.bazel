@@ -125,3 +125,44 @@ sh_test(
     args = ["$(location :objects-host-tests-build)"],
     data = [":objects-host-tests-build"],
 )
+
+haskell_library(
+    name = "family-suite",
+    srcs = ["native/Replacement/RtosObjects/Suite.hs"],
+    src_strip_prefix = "native",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:native-case",
+        "//emulation:native-observation",
+        "//emulation:owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//replacement/rtos_own_first/oracle:own-first-oracle-lib",
+        "//replacement/rtos_scheduler/oracle:scheduler-oracle-lib",
+    ],
+)
+
+haskell_binary(
+    name = "family-suite-runner",
+    srcs = ["native/SuiteMain.hs"],
+    main_file = "native/SuiteMain.hs",
+    args = [
+        "$(rootpath //emulation:native-runner)",
+        "$(rootpath //replacement/rtos_objects:objects-f2-stage-a.bin)",
+        "$(rootpath //replacement/rtos_objects:objects-f2-stage-b.bin)",
+    ],
+    data = [
+        "//emulation:native-runner",
+        "//replacement/rtos_objects:objects-f2-stage-a.bin",
+        "//replacement/rtos_objects:objects-f2-stage-b.bin",
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":family-suite",
+        "//host:base",
+        "//host:bytestring",
+        "//host:filepath",
+    ],
+)
