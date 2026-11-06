@@ -682,9 +682,9 @@ Both hashes equal the `function-ranges.json` row hash at the pinned commit (`FUN
 Boundary proof:
 
 - 193 four-byte instructions exactly fill each window; no literal pool, no Thumb.
-- One entry, `push {r4-r11, lr}` at `0x4aa44` / `0xdaa04`; the two published neighbours end before it and no instruction in the window is a target from outside.
-- One exit: the only PC load is `pop {r4-r11, pc}` at `0x4ad18` / `0xdacd8`, and `sub sp, r11, #32` immediately precedes it on every path.
-- Every conditional and unconditional branch target lies inside the window; the last instruction is `b 0x4acfc` at `0x4ad44` / `b 0xdacbc` at `0xdad04`.
+- The window's only entry point in a linear decode of the loader's own bytes is `push {r4-r11, lr}` at `0x4aa44` / `0xdaa04`: the two published neighbours end before it, and no direct branch anywhere in that loader targets an instruction inside the window. The scan establishes no computed, restored or aliased entry, so an indirect arrival inside the window stays unresolved; the extent claims the byte range, not whole-entry closure.
+- One exit in the same linear decode: the only PC load is `pop {r4-r11, pc}` at `0x4ad18` / `0xdacd8`, and `sub sp, r11, #32` immediately precedes it on every path.
+- Every conditional and unconditional branch target encoded in the window lies inside it; the last instruction is `b 0x4acfc` at `0x4ad44` / `b 0xdacbc` at `0xdad04`.
 - `0x4ad48` / `0xdad08` opens the next function with its own frame (`push {r3-r11, lr}`), the `+0xd8` receive body.
 - A and B differ in exactly 10 of 193 encodings: four `movw`/`movt` pairs (`0x400545a4→0x400e4564`, `0x400545cc→0x400e458c` twice, `0x400545c8→0x400e4588`) and two `bl` displacements (`0x44018→0xd3fd4`, `-0x6c28` against `-0x6c24`; `0x43640→0xd3640`). The `bl 0x44568→0xd4528` and all eight indirect calls encode identically, because the bodies are exactly `0x8ffc0` apart. There is no behavioural difference between the domains.
 - The body makes eight indirect calls through a context record: object-lock acquire/release `[record+0x18]`/`[record+0x1c]` at `0x4ab7c`, `0x4abe8`, `0x4ac50`, `0x4ad24`, `0x4ad40`, and scheduler-lock acquire/release `[record+0xc]`/`[record+0x10]` at `0x4abd4`, `0x4ac44`, `0x4ad34`.
@@ -699,7 +699,7 @@ Exact remaining prerequisite, one of:
 
 Until one lands the extent stays `unknown`, and no slot contract may cite it as `decomp-exact`. The engineering extent is settled, so the F1-F3 stages may use it as a region.
 
-The same method settles the other refused extent, which belongs to the data-queue family rather than this one: `+0xc0` is A `[0x49f2c, 0x4a2f0)` and B `[0xd9eec, 0xda2b0)`, 964 bytes, SHA-256 `e45bfbf917a5053c…` and `6ec7e61cc9ecf064…`, 241 instructions with one entry, one `pop {r4-r11, pc}` at `0x4a2cc` / `0xda28c`, every branch target internal and only `bl` transfers out. It is recorded here only so that family starts from the same evidence; its refusal rests on the same unproved-return class, with more premise kinds.
+The same method settles the other refused extent, which belongs to the data-queue family rather than this one: `+0xc0` is A `[0x49f2c, 0x4a2f0)` and B `[0xd9eec, 0xda2b0)`, 964 bytes, SHA-256 `e45bfbf917a5053c…` and `6ec7e61cc9ecf064…`, 241 instructions, one entry point in the same linear scan, one `pop {r4-r11, pc}` at `0x4a2cc` / `0xda28c`, every encoded branch target internal and only `bl` transfers out. It is recorded here only so that family starts from the same evidence; its refusal rests on the same unproved-return class, with more premise kinds.
 
 #### 4.14.3 `+0xd4`: the contract
 
