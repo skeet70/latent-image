@@ -17,7 +17,7 @@ import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Lazy as L
-import Data.List (foldl', sort, sortOn)
+import Data.List (sort, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Scientific (toBoundedInteger)
 import qualified Data.Set as S
@@ -645,7 +645,7 @@ forceCall (Call entry arguments returned outputs) =
   entry `seq` forceList forceScalar arguments `seq` forceMaybe forceScalar returned `seq` forceList forceOutput outputs `seq` ()
 
 forceNand :: Nand -> ()
-forceNand (Program words bytes) = forceList forceScalar words `seq` B.length bytes `seq` ()
+forceNand (Program arguments bytes) = forceList forceScalar arguments `seq` B.length bytes `seq` ()
 forceNand (Erase block count) = block `seq` count `seq` ()
 
 forceBlock :: Block -> ()
@@ -666,7 +666,7 @@ forceInterval (Interval name keys calls nand before after press medium) =
 
 forceQualified :: Qualified -> ()
 forceQualified (Qualified _ cohort routes intervals medium) =
-  forceList (\(InputName name, Digest digest) -> T.length name `seq` T.length digest `seq` ()) cohort
+  forceList (\(InputName name, Digest digestText) -> T.length name `seq` T.length digestText `seq` ()) cohort
   `seq` length routes `seq` forceList forceInterval intervals `seq` forceMedium medium `seq` ()
 
 qualify :: Role -> Bindings -> Observation -> Parse Qualified
