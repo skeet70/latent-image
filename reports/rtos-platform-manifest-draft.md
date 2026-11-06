@@ -60,7 +60,7 @@ The recovered bodies match µITRON 4.0 numbering and constants where they overla
 
 **Exactness.** Kernel0 and kernel1 are the same C compiled with a domain constant, apart from the differences listed in private-data/scratch/RtosDecomp/crosscore/design.md §1.4. At `55436fc85c` each carries 19 NONMATCHING markers, and several kernel functions have no C body: the lock pair, the IRQ-120 handler, the vector body and twelve slot bodies. A fact from a NONMATCHING function or from a body the decomp lacks is in the manifest only after it was checked against the stock disassembly of both loaders.
 
-**Contracts.** All 97 contracts per domain are `recovered`, and 48 offsets carry caller preconditions.
+**Contracts.** All 97 contracts per domain are `recovered`, and 52 offsets carry caller preconditions: v7 adds the four mailbox-family pointer obligations (`writable-message` on `+0xd4`, `writable-result-pointer` on `+0xd8/+0xdc/+0xe0`), which the bodies dereference without validating.
 - Against v5: 19 confirm, 33 complete and 45 correct (`private-data/scratch/RtosDecomp/{task,semflag,queue,pooltime,system}/contracts.json`, field `comparison`).
 - The extent derivation of v5 is unchanged: 80 StockInventory envelopes per domain. Each envelope's size equals the size of the decomp function at the same address wherever one exists (136 of 160 instances).
 - Of v5's 17 refused extents per domain, 15 are now `decomp-exact`: the byte range of a NONMATCHING-free decomp function at the target, hashed against the loader. StockInventory's refusal premises stay recorded and unproved.
