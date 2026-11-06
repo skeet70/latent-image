@@ -9,6 +9,23 @@ pub struct Pattern(pub u32);
 pub struct KeepMask(pub u32);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct WantedMask(Pattern);
+
+impl WantedMask {
+    pub const fn new(want: Pattern) -> Result<Self, ObjectStatus> {
+        if want.0 == 0 {
+            Err(ObjectStatus::Param)
+        } else {
+            Ok(Self(want))
+        }
+    }
+
+    pub const fn pattern(self) -> Pattern {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MatchMode {
     All,
     Any,
