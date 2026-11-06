@@ -40,11 +40,12 @@ pub fn poll_flag<M: ObjectLock>(
         if m.load_word(control.queue().next()) != control.0 .0 {
             return Err(ObjectStatus::QueueOverflow);
         }
+        let clear_on_match = m.load_word(config.attributes()) & FlagConfig::CLEAR_ON_MATCH != 0;
         let mut pattern = Pattern(m.load_word(control.pattern()));
         match check(&mut pattern, want.pattern(), mode, false) {
             Some(reported) => {
                 m.store_word(out.0, reported.0);
-                if m.load_word(config.attributes()) & FlagConfig::CLEAR_ON_MATCH != 0 {
+                if clear_on_match {
                     m.store_word(control.pattern(), 0);
                 }
                 Ok(WaitOutcome::Satisfied(reported))
@@ -69,8 +70,9 @@ pub fn poll_receive<M: ObjectLock>(
             return Ok(WaitOutcome::TimedOut);
         }
         let message = Message(GuestAddress(head));
+        let successor = m.load_word(message.next());
         m.store_word(out.0, head);
-        m.store_word(control.head(), m.load_word(message.next()));
+        m.store_word(control.head(), successor);
         Ok(WaitOutcome::Satisfied(message))
     })
 }
