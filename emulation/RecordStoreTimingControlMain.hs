@@ -29,7 +29,8 @@ import Text.Read (readMaybe)
 
 data Binding = Binding { bindingPath :: FilePath, bindingDigest :: Sha256 }
 data Inputs = Inputs { update :: Binding, runDocument :: Binding, rom :: Binding, adjustment :: Binding, bridge :: Binding }
-data Source = Source { sourceInputs :: Inputs, sourceSpecDigest :: Sha256 }
+data SourceRole = StockSource | OwnedSource
+data Source = Source { sourceInputs :: Inputs, sourceSpecDigest :: Sha256, sourceRole :: SourceRole }
 newtype RowLimit = RowLimit Int
 data Spec = Spec { writes :: [PhysicalRange], readRanges :: [PhysicalRange], fetches :: [PhysicalRange], limit :: RowLimit }
 data PerturbationPoint = BeforeFinalUp | BeforePickerDown
@@ -43,22 +44,24 @@ instance FromJSON Binding where
   parseJSON = withObject "input binding" $ \o -> Binding <$> o .: "path" <*> (o .: "sha256" >>= either fail pure . parseSha256Hex)
 
 instance FromJSON Inputs where
-  parseJSON = withObject "erased stock inputs" $ \o -> do
+  parseJSON = withObject "erased record inputs" $ \o -> do
     seeded <- o .:? "record-nand" :: Parser (Maybe Value)
     unless (seeded == Nothing) (fail "timing control requires erased record NAND")
     Inputs <$> o .: "update" <*> o .: "run" <*> o .: "boot-rom" <*> o .: "adjustment-nand" <*> o .: "bridge"
 
 instance FromJSON Source where
-  parseJSON = withObject "completed stock receipt" $ \o -> do
-    role <- o .: "role" :: Parser T.Text
-    unless (role == "stock") (fail "source role must be stock")
+  parseJSON = withObject "completed record receipt" $ \o -> do
+    role <- o .: "role" >>= \value -> case (value :: T.Text) of
+      "stock" -> pure StockSource
+      "owned" -> pure OwnedSource
+      _ -> fail "source role must be stock or owned"
     outcome <- o .: "outcome"
     status <- outcome .: "status" :: Parser T.Text
     unless (status == "completed") (fail "source observation must be completed")
     inputs <- o .: "inputs"
     files <- o .: "files"
     specDigest <- files .: "spec.json" >>= either fail pure . parseSha256Hex
-    pure (Source inputs specDigest)
+    pure (Source inputs specDigest role)
 
 instance FromJSON Spec where
   parseJSON = withObject "reset observation spec" $ \o -> do
@@ -101,7 +104,7 @@ parseOptions :: [String] -> IO Options
 parseOptions arguments = case arguments of
   [source,delta,output] -> parse BeforeFinalUp source delta output
   [source,delta,output,"--before-picker-down"] -> parse BeforePickerDown source delta output
-  _ -> ioError (userError "usage: record-store-timing-control COMPLETED_ERASED_STOCK_DIR DELTA NEW_OUTPUT_DIR [--before-picker-down]")
+  _ -> ioError (userError "usage: record-store-timing-control COMPLETED_ERASED_ROLE_DIR DELTA NEW_OUTPUT_DIR [--before-picker-down]")
  where
   parse point source delta output = case readMaybe delta :: Maybe Integer of
     Just count | count > negate (toInteger (instructionsValue preKeyIdle)) && count <= toInteger (instructionsValue maxIdle) -> Options <$> makeAbsolute source <*> pure (PhaseShift count) <*> makeAbsolute output <*> pure point
@@ -149,7 +152,9 @@ prepare options = do
   source <- json receiptBytes
   let inputs = sourceInputs source
       directory = outputDirectory options
-  need (sha256Hex (bindingDigest (update inputs)) == "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490") "source is not canonical X-M1 1.50"
+  case sourceRole source of
+    StockSource -> need (sha256Hex (bindingDigest (update inputs)) == "43d67afa1a2bc9ae8481bc0acf02cb085ed0f515122dcbd26addcae102cd1490") "stock source is not canonical X-M1 1.50"
+    OwnedSource -> pure ()
   forM_ (bindings inputs) $ \(_,binding) -> do
     digest <- sha256File (bindingPath binding)
     need (digest == bindingDigest binding) ("input checksum differs: " ++ bindingPath binding)
@@ -164,6 +169,7 @@ prepare options = do
   executableDigest <- sha256File executable
   let provenance = object
         ["source_receipt" .= object ["path" .= (sourceDirectory options </> "receipt.json"),"sha256" .= sha256Hex (sha256 receiptBytes)]
+        ,"source_role" .= (case sourceRole source of StockSource -> "stock"; OwnedSource -> "owned" :: T.Text)
         ,"inputs" .= object [K.fromText name .= bindingValue binding | (name,binding) <- bindings inputs]
         ,"observer" .= object ["path" .= executable,"sha256" .= sha256Hex executableDigest]
         ,"instruction_shift" .= phaseShiftValue (perturbation options),"before_step" .= perturbationStep (perturbationPoint options),"pre_key_idle" .= instructionsValue preKeyIdle
@@ -177,7 +183,7 @@ prepare options = do
   let outcome = case result of
         Right () -> object ["status" .= ("completed" :: T.Text)]
         Left failure -> object ["status" .= ("refused" :: T.Text),"error" .= displayException (failure :: SomeException)]
-  writeJson (directory </> "receipt.json") (object ["schema" .= (1 :: Int),"role" .= ("stock-timing-control" :: T.Text),"provenance" .= provenance,"files" .= object hashes,"outcome" .= outcome])
+  writeJson (directory </> "receipt.json") (object ["schema" .= (1 :: Int),"role" .= (case sourceRole source of StockSource -> "stock-timing-control"; OwnedSource -> "owned-timing-diagnostic" :: T.Text),"provenance" .= provenance,"files" .= object hashes,"outcome" .= outcome])
   either (ioError . userError . displayException) pure result
 
 keys :: [CrawlKey]
