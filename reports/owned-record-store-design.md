@@ -1,6 +1,6 @@
 # Owned record store: design (storage first cutover)
 
-Status: the two-slot implementation and its bounded native and finite full-system qualification are clear in the continuing technical review through `413165e1` (`E-RECORD-STORE-ORACLE-NATIVE-150`, `E-RECORD-STORE-CUTOVER-PAIR-150`). Current main-integration checks remain separate. The accepted IMAGE SIZE difference follows the intended-functionality contract below; wider controller, renderer and hardware acceptance remain open.
+Status: the two-slot implementation and its bounded native and finite full-system qualification are clear in the continuing technical review through `413165e1` (`E-RECORD-STORE-ORACLE-NATIVE-150`, `E-RECORD-STORE-CUTOVER-PAIR-150`). Current integration at `a8691be8` passes host checks, fresh staging admission and current native/system comparisons using the completed executions. The accepted IMAGE SIZE difference follows the intended-functionality contract below; wider controller, renderer and hardware acceptance remain open.
 
 Sources: [the stock record-service contract](record-service-stock-contract.md) (here **RSC**, byte-read from `lz/id4.dis` with exact x70view C at `55436fc85c`), [the target design](storage-file-target-design.md) §§1.6, 4 and 6 (`E-STORAGE-FILE-TARGET-DESIGN-150`), the [populated record-area input](../emulation/README.md#populated-record-areas---record-nand) (`E-RECORD-AREA-MEDIUM-150`), the property-service pattern (`E-PROPERTY-SERVICE-ORACLE-150`, `E-PROPERTY-SERVICE-NATURAL-150`), and the recovery-emul native cases (`emulation/README.md`, "the 1.50 writer block loop"). **[INFERENCE]** marks design judgments.
 
@@ -138,6 +138,8 @@ All record calls, statuses, contract-written outputs, untouched-output preimages
 
 The step decoder consumes one JSON object at a time, forces only its new evidence and preserves ordered results. It validates the complete array, late rows, trailing whitespace and Aeson 2.2.4.1's first-duplicate-key behavior. Current host checks and both comparisons complete under the unchanged 2 GiB/no-swap limit with zero OOM kills. The terminal and current review packet are `private-data/scratch/RecordStorePair/jobs/image-size-intended-host-9/terminal.json` and `private-data/scratch/RecordStorePair/record-two-slot-review-packet-12.json`; the single continuing technical review is clear for this contract.
 
+Current integration at `a8691be8` passes all seven affected host test targets and reproduces the exact qualified DAT, contract, linked image and symbols. It re-admits and compares all 378 cached native cases with zero differences, then reproduces the erased and populated verdicts above with the original cohort observer and SDK identities. No firmware is rerun. The current terminal and review packet are `private-data/scratch/Issue117Integration/record-current-2/results.json` and `private-data/scratch/Issue117Integration/record-current-2/review-packet.json`; the integration-conflict continuation of the same technical review has no outstanding findings.
+
 The injected-input endpoint does not establish render quiescence, future timer stability or complete application handling of every key. Unreached record operations and the kind 0/1/4 and area-2 lifecycle-save routes retain their native-only scope. Physical NAND timing, ECC, partial program, power-cut and bad-block laws remain open.
 
 The old one-region policy is withdrawn in §3.2. Stock-only timing offsets did not reproduce its continuation (`E-RECORD-STORE-PICKER246-CONTROL-150`); matching aggregate entered instructions does not align board-clock phase. The earlier reset-to-attach event-phase origin remains unexplained. Historical mismatches and strict-drain refusals keep their original identities and are not qualification of this two-slot carrier. The intended-functionality policy corrects the observed emulator mismatch without claiming its exclusive timing cause or broader picker acceptance.
@@ -175,6 +177,5 @@ The cutover pair (§6) runs once 1-3 compose.
 
 ## 10. Open questions
 
-- Whether the core fits the span's runs or needs the bank region.
 - Whether any client keeps a staging pointer across another read of the same kind.
 - Routes for the kind 0, 1 and 4 writes and the area-2 lifecycle save.
