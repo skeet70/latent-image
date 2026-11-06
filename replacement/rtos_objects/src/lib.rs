@@ -30,8 +30,8 @@ pub use create::{
 };
 pub use id::{own_flag_slot, own_mailbox_slot, resolve_flag, resolve_mailbox, EncodedId, EntryDomain, FlagId, MailboxId};
 pub use layout::{Domain, DomainId, FlagSlot, MailboxSlot, TaskSlot};
-pub use locked::{clear_flag, poll_flag, poll_receive, Held, ObjectLock};
-pub use matching::{check, KeepMask, MatchMode, Pattern};
+pub use locked::{clear_flag, poll_flag, poll_receive, ObjectLock, OutWord};
+pub use matching::{check, KeepMask, MatchMode, Pattern, WantedMask};
 pub use message::{MessagePriority, PriorityLimit};
 pub use order::{precedes, QueueOrder};
 pub use status::{ObjectStatus, WaitOutcome};

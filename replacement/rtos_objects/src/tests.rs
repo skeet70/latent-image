@@ -490,19 +490,13 @@ impl Machine for Mock {
 }
 
 impl ObjectLock for Mock {
-    fn disable_irq(&self) {}
-
-    fn enable_irq(&self) {}
-
-    fn acquire(&self, _lock: LockRecord) -> Held {
+    fn with_object_lock<R>(&self, _lock: LockRecord, body: impl FnOnce() -> R) -> R {
         assert!(!self.held.get(), "object lock acquired twice");
         self.held.set(true);
-        Held::held()
-    }
-
-    fn release(&self, _lock: LockRecord, _held: Held) {
+        let result = body();
         assert!(self.held.get(), "object lock released while not held");
         self.held.set(false);
+        result
     }
 }
 
@@ -706,13 +700,22 @@ fn clear_flag_masks_the_pattern_under_the_lock() {
 }
 
 #[test]
+fn a_zero_wanted_mask_is_refused() {
+    assert_eq!(WantedMask::new(Pattern(0)), Err(ObjectStatus::Param));
+    assert_eq!(
+        WantedMask::new(Pattern(1)).map(WantedMask::pattern),
+        Ok(Pattern(1))
+    );
+}
+
+#[test]
 fn poll_flag_reports_the_whole_pattern() {
     let words = Domain::A.words();
     let slot = FlagSlot::new(3, 120).unwrap();
     let m = Mock::marking(u32::MAX);
     let pattern = words.flag_control(slot).pattern();
+    let out = GuestAddress(0x4000_1000);
     m.set(pattern, 0x30);
-    let mut out = Pattern(0xdead);
     assert_eq!(
         poll_flag(
             &m,
@@ -720,13 +723,13 @@ fn poll_flag_reports_the_whole_pattern() {
                 domain: Domain::A,
                 slot
             },
-            Pattern(0x10),
+            WantedMask::new(Pattern(0x10)).unwrap(),
             MatchMode::All,
-            &mut out
+            OutWord(out)
         ),
         Ok(WaitOutcome::Satisfied(Pattern(0x30)))
     );
-    assert_eq!(out, Pattern(0x30));
+    assert_eq!(m.word(out), 0x30);
     assert_eq!(m.word(pattern), 0x30);
     assert!(!m.held.get());
 }
@@ -738,9 +741,9 @@ fn poll_flag_clears_on_match_after_reporting() {
     let m = Mock::marking(u32::MAX);
     let config = words.flag_config(slot);
     let pattern = words.flag_control(slot).pattern();
+    let out = GuestAddress(0x4000_1000);
     m.set(config.attributes(), FlagConfig::CLEAR_ON_MATCH);
     m.set(pattern, 0x31);
-    let mut out = Pattern(0xdead);
     assert_eq!(
         poll_flag(
             &m,
@@ -748,13 +751,13 @@ fn poll_flag_clears_on_match_after_reporting() {
                 domain: Domain::A,
                 slot
             },
-            Pattern(0x01),
+            WantedMask::new(Pattern(0x01)).unwrap(),
             MatchMode::All,
-            &mut out
+            OutWord(out)
         ),
         Ok(WaitOutcome::Satisfied(Pattern(0x31)))
     );
-    assert_eq!(out, Pattern(0x31));
+    assert_eq!(m.word(out), 0x31);
     assert_eq!(m.word(pattern), 0);
 }
 
@@ -764,9 +767,10 @@ fn poll_flag_refuses_a_queued_waiter_before_matching() {
     let slot = FlagSlot::new(3, 120).unwrap();
     let m = Mock::marking(u32::MAX);
     let control = words.flag_control(slot);
+    let out = GuestAddress(0x4000_1000);
     m.set(control.pattern(), 0x30);
     m.set(control.queue().next(), 0x1234);
-    let mut out = Pattern(0xdead);
+    m.set(out, 0xdead);
     assert_eq!(
         poll_flag(
             &m,
@@ -774,13 +778,13 @@ fn poll_flag_refuses_a_queued_waiter_before_matching() {
                 domain: Domain::A,
                 slot
             },
-            Pattern(0x10),
+            WantedMask::new(Pattern(0x10)).unwrap(),
             MatchMode::All,
-            &mut out
+            OutWord(out)
         ),
         Err(ObjectStatus::QueueOverflow)
     );
-    assert_eq!(out, Pattern(0xdead));
+    assert_eq!(m.word(out), 0xdead);
     assert_eq!(m.word(control.pattern()), 0x30);
 }
 
@@ -790,8 +794,9 @@ fn poll_flag_without_a_match_times_out_and_leaves_the_output() {
     let slot = FlagSlot::new(3, 120).unwrap();
     let m = Mock::marking(u32::MAX);
     let pattern = words.flag_control(slot).pattern();
+    let out = GuestAddress(0x4000_1000);
     m.set(pattern, 0x30);
-    let mut out = Pattern(0xdead);
+    m.set(out, 0xdead);
     assert_eq!(
         poll_flag(
             &m,
@@ -799,13 +804,13 @@ fn poll_flag_without_a_match_times_out_and_leaves_the_output() {
                 domain: Domain::A,
                 slot
             },
-            Pattern(0x40),
+            WantedMask::new(Pattern(0x40)).unwrap(),
             MatchMode::All,
-            &mut out
+            OutWord(out)
         ),
         Ok(WaitOutcome::TimedOut)
     );
-    assert_eq!(out, Pattern(0xdead));
+    assert_eq!(m.word(out), 0xdead);
     assert_eq!(m.word(pattern), 0x30);
 }
 
@@ -815,11 +820,11 @@ fn poll_receive_unlinks_the_head_message() {
     let slot = MailboxSlot::new(1, 1).unwrap();
     let m = Mock::marking(u32::MAX);
     let control = words.mailbox_control(slot);
+    let out = GuestAddress(0x4000_1000);
     let first = Message(GuestAddress(0x4000_0100));
     let second = Message(GuestAddress(0x4000_0200));
     m.set(control.head(), first.0 .0);
     m.set(first.next(), second.0 .0);
-    let mut out = None;
     assert_eq!(
         poll_receive(
             &m,
@@ -827,11 +832,11 @@ fn poll_receive_unlinks_the_head_message() {
                 domain: Domain::A,
                 slot
             },
-            &mut out
+            OutWord(out)
         ),
         Ok(WaitOutcome::Satisfied(first))
     );
-    assert_eq!(out, Some(first));
+    assert_eq!(m.word(out), first.0 .0);
     assert_eq!(m.word(control.head()), second.0 .0);
     assert!(!m.held.get());
 }
@@ -842,7 +847,8 @@ fn poll_receive_on_an_empty_mailbox_times_out() {
     let slot = MailboxSlot::new(1, 1).unwrap();
     let m = Mock::marking(u32::MAX);
     let control = words.mailbox_control(slot);
-    let mut out = None;
+    let out = GuestAddress(0x4000_1000);
+    m.set(out, 0xdead);
     assert_eq!(
         poll_receive(
             &m,
@@ -850,11 +856,11 @@ fn poll_receive_on_an_empty_mailbox_times_out() {
                 domain: Domain::A,
                 slot
             },
-            &mut out
+            OutWord(out)
         ),
         Ok(WaitOutcome::TimedOut)
     );
-    assert_eq!(out, None);
+    assert_eq!(m.word(out), 0xdead);
     assert_eq!(m.word(control.head()), 0);
 }
 
@@ -864,8 +870,8 @@ fn poll_flag_reads_the_object_domain_table() {
     let b = Domain::B.words();
     let slot = FlagSlot::new(2, 120).unwrap();
     let m = Mock::marking(u32::MAX);
+    let out = GuestAddress(0x4000_1000);
     m.set(b.flag_control(slot).pattern(), 0x0f);
-    let mut out = Pattern(0);
     assert_eq!(
         poll_flag(
             &m,
@@ -873,12 +879,61 @@ fn poll_flag_reads_the_object_domain_table() {
                 domain: Domain::B,
                 slot
             },
-            Pattern(0x01),
+            WantedMask::new(Pattern(0x01)).unwrap(),
             MatchMode::All,
-            &mut out
+            OutWord(out)
         ),
         Ok(WaitOutcome::Satisfied(Pattern(0x0f)))
     );
-    assert_eq!(out, Pattern(0x0f));
+    assert_eq!(m.word(out), 0x0f);
     assert_eq!(m.word(a.flag_control(slot).pattern()), 0);
+}
+
+#[test]
+fn a_poll_output_aliasing_the_pattern_loses_to_the_clear() {
+    let words = Domain::A.words();
+    let slot = FlagSlot::new(3, 120).unwrap();
+    let m = Mock::marking(u32::MAX);
+    let config = words.flag_config(slot);
+    let pattern = words.flag_control(slot).pattern();
+    m.set(config.attributes(), FlagConfig::CLEAR_ON_MATCH);
+    m.set(pattern, 0x31);
+    assert_eq!(
+        poll_flag(
+            &m,
+            FlagId {
+                domain: Domain::A,
+                slot
+            },
+            WantedMask::new(Pattern(0x01)).unwrap(),
+            MatchMode::All,
+            OutWord(pattern)
+        ),
+        Ok(WaitOutcome::Satisfied(Pattern(0x31)))
+    );
+    assert_eq!(m.word(pattern), 0);
+}
+
+#[test]
+fn a_receive_output_aliasing_the_head_reads_the_next_message() {
+    let words = Domain::A.words();
+    let slot = MailboxSlot::new(1, 1).unwrap();
+    let m = Mock::marking(u32::MAX);
+    let control = words.mailbox_control(slot);
+    let first = Message(GuestAddress(0x4000_0100));
+    let second = Message(GuestAddress(0x4000_0200));
+    m.set(control.head(), first.0 .0);
+    m.set(first.next(), second.0 .0);
+    assert_eq!(
+        poll_receive(
+            &m,
+            MailboxId {
+                domain: Domain::A,
+                slot
+            },
+            OutWord(control.head())
+        ),
+        Ok(WaitOutcome::Satisfied(first))
+    );
+    assert_eq!(m.word(control.head()), second.0 .0);
 }
