@@ -425,15 +425,31 @@ fn a_poll_without_a_match_is_a_timeout() {
     assert_eq!(poll_result(None).code(), -50);
 }
 
-#[derive(Default)]
 struct Mock {
     words: RefCell<BTreeMap<u32, u32>>,
+    marker: u32,
+    released: Cell<bool>,
     masks: Cell<u32>,
     restores: Cell<u32>,
-    barriers: Cell<u32>,
+}
+
+impl Default for Mock {
+    fn default() -> Self {
+        Self::marking(u32::MAX)
+    }
 }
 
 impl Mock {
+    fn marking(marker: u32) -> Self {
+        Self {
+            words: RefCell::new(BTreeMap::new()),
+            marker,
+            released: Cell::new(false),
+            masks: Cell::new(0),
+            restores: Cell::new(0),
+        }
+    }
+
     fn word(&self, at: GuestAddress) -> u32 {
         *self.words.borrow().get(&at.0).unwrap_or(&0)
     }
@@ -449,6 +465,10 @@ impl Machine for Mock {
     }
 
     fn store_word(&self, at: GuestAddress, value: u32) {
+        if at.0 == self.marker && value != 0 {
+            assert!(self.released.get(), "publication marker stored before the release");
+        }
+        self.released.set(false);
         self.set(at, value);
     }
 
@@ -463,15 +483,15 @@ impl Machine for Mock {
     }
 
     fn dmb(&self) {
-        self.barriers.set(self.barriers.get() + 1);
+        self.released.set(true);
     }
 }
 
 #[test]
 fn create_flag_writes_the_record_and_self_links_the_queue() {
-    let m = Mock::default();
     let words = Domain::A.words();
     let slot = FlagSlot::new(3, 120).unwrap();
+    let m = Mock::marking(words.flag_config(slot).exists().0);
     let id = FlagId {
         domain: Domain::A,
         slot,
@@ -494,9 +514,9 @@ fn create_flag_writes_the_record_and_self_links_the_queue() {
 
 #[test]
 fn create_flag_refuses_an_existing_record_without_writing() {
-    let m = Mock::default();
     let words = Domain::A.words();
     let slot = FlagSlot::new(3, 120).unwrap();
+    let m = Mock::marking(words.flag_config(slot).exists().0);
     let config = words.flag_config(slot);
     m.set(config.exists(), 1);
     assert_eq!(
@@ -520,9 +540,9 @@ fn create_flag_refuses_an_existing_record_without_writing() {
 
 #[test]
 fn create_mailbox_writes_the_record_and_clears_the_ends() {
-    let m = Mock::default();
     let words = Domain::A.words();
     let slot = MailboxSlot::new(1, 1).unwrap();
+    let m = Mock::marking(words.mailbox_config(slot).exists().0);
     let id = MailboxId {
         domain: Domain::A,
         slot,
@@ -551,9 +571,9 @@ fn create_mailbox_writes_the_record_and_clears_the_ends() {
 
 #[test]
 fn create_mailbox_refuses_an_existing_record() {
-    let m = Mock::default();
     let words = Domain::A.words();
     let slot = MailboxSlot::new(1, 1).unwrap();
+    let m = Mock::marking(words.mailbox_config(slot).exists().0);
     let config = words.mailbox_config(slot);
     m.set(config.exists(), 1);
     assert_eq!(
@@ -575,9 +595,10 @@ fn create_mailbox_refuses_an_existing_record() {
 }
 
 #[test]
-fn create_flag_publishes_last_and_restores_the_mask() {
-    let m = Mock::default();
+fn create_flag_publishes_after_the_release() {
+    let words = Domain::A.words();
     let slot = FlagSlot::new(4, 120).unwrap();
+    let m = Mock::marking(words.flag_config(slot).exists().0);
     let id = FlagId {
         domain: Domain::A,
         slot,
@@ -586,17 +607,15 @@ fn create_flag_publishes_last_and_restores_the_mask() {
         create_flag(&m, id, FlagCreate { attributes: FlagAttributes(0), initial: Pattern(0) }),
         Ok(id)
     );
-    let words = Domain::A.words();
     assert_eq!(m.word(words.flag_config(slot).exists()), 1);
-    assert_eq!(m.barriers.get(), 1, "one publication barrier before the marker");
     assert_eq!(m.restores.get(), 1);
 }
 
 #[test]
 fn a_refused_create_leaves_the_record_unchanged() {
-    let m = Mock::default();
     let words = Domain::B.words();
     let slot = FlagSlot::new(2, 120).unwrap();
+    let m = Mock::marking(words.flag_config(slot).exists().0);
     let config = words.flag_config(slot);
     let control = words.flag_control(slot);
     m.set(config.exists(), 1);
@@ -622,14 +641,13 @@ fn a_refused_create_leaves_the_record_unchanged() {
     assert_eq!(m.word(config.initial()), 0x2222);
     assert_eq!(m.word(control.pattern()), 0x3333);
     assert_eq!(m.word(control.queue().next()), 0x4444);
-    assert_eq!(m.barriers.get(), 0);
     assert_eq!(m.restores.get(), 1);
 }
 
 #[test]
 fn a_create_through_admit_writes_the_entry_domain_table() {
-    let m = Mock::default();
     let mut request = req(Service::FlagCreate);
+    let m = Mock::marking(Domain::B.words().flag_config(FlagSlot::new(5, 120).unwrap()).exists().0);
     request.entry_domain = EntryDomain::new(Domain::B);
     request.id = EncodedId::of(2, 5);
     let admitted = admit(&request).unwrap();
