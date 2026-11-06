@@ -213,4 +213,4 @@ expectedMedium c expected
   | isSequence c = mediumBytes (medium (persistence (expectedStore expected)))
   | otherwise = B.concat [bankBytes (geometry (kind c)) b (medium (persistence (expectedStore expected))) | b <- [Bank0,Bank1]]
 mediumBytes :: Medium -> B.ByteString
-mediumBytes (Medium blocks) = B.concat [M.findWithDefault erased (PoolBlock block) blocks | block <- [0x52..0x69]]
+mediumBytes (Medium blocks) = B.concat [M.findWithDefault erased (PoolBlock block) blocks | block <- [0x52..0x57]]

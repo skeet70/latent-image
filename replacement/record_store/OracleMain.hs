@@ -105,6 +105,28 @@ symbolFunctions path = do
   rows <- lines <$> readFile path
   pure (nub [Function (parseAddress "symbol address" ("0x"++address)) (parseAddress "symbol size" ("0x"++size)) | row <- rows, [address,size,kind',_] <- [words row], kind' `elem` ["T","t"], size /= "00000000", size /= "0"])
 
+cachedCaseInputs :: String -> Maybe FilePath -> IO (M.Map CaseId FilePath)
+cachedCaseInputs _ Nothing = pure M.empty
+cachedCaseInputs role (Just root) = do
+  directories <- filter (isPrefixOf (role ++ "-")) <$> listDirectory root
+  entries <- concat <$> mapM (fmap snd . readBatch . (\directory -> root </> directory </> "batch.json")) directories
+  let inputs = M.fromList [(entryId entry,entryPath entry) | entry <- entries]
+  unless (M.size inputs == length entries) (error ("duplicate cached " ++ role ++ " case"))
+  pure inputs
+
+cachedObserved :: String -> Maybe Sha256 -> M.Map CaseId FilePath -> FilePath -> [CaseSpec] -> IO [(CaseId,NativeObservation)]
+cachedObserved role runnerDigest inputs directory specs = forM specs $ \spec -> do
+  let stem = O.caseId spec
+      originalCase = M.findWithDefault (error ("cached " ++ role ++ " case missing: " ++ stem)) (CaseId stem) inputs
+      generatedCase = directory </> stem ++ ".case.json"
+  original <- B.readFile originalCase >>= either error pure . executionInput
+  generated <- B.readFile generatedCase >>= either error pure . executionInput
+  unless (original == generated) (error ("cached " ++ role ++ " input differs: " ++ stem))
+  (_,regions,_,_) <- loadCase generatedCase
+  report <- B.readFile (takeDirectory originalCase </> stem ++ ".native-result.json") >>= either error pure . eitherDecodeStrict'
+  digest <- maybe (error ("cached " ++ role ++ " requires --runner")) pure runnerDigest
+  observation <- either (error . ((stem ++ ": ") ++) . show) pure (observeCachedStock digest regions report)
+  pure (CaseId stem,observation)
 main :: IO ()
 main = do
   args <- getArgs
@@ -117,8 +139,14 @@ main = do
   candidate <- traverse makeAbsolute (optional args "--candidate")
   candidateSymbols <- traverse makeAbsolute (optional args "--symbols")
   cachedStock <- traverse makeAbsolute (optional args "--stock-output")
+  cachedCandidate <- traverse makeAbsolute (optional args "--candidate-output")
   lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
   runnerDigest <- traverse sha256File runner
+  outputRoot <- canonicalizePath outputPath
+  forM_ [root | Just root <- [cachedStock,cachedCandidate]] $ \root -> do
+    cachedRoot <- canonicalizePath root
+    when (splitDirectories outputRoot `isPrefixOf` splitDirectories cachedRoot || splitDirectories cachedRoot `isPrefixOf` splitDirectories outputRoot)
+      (error "output directory overlaps cached observations")
   createDirectoryIfMissing True outputPath
   image <- pinned "private-data/analysis/x-m1-1.50/lz/id4-0061c400.bin" "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
   loader <- pinned "private-data/analysis/x-m1-1.50/decode/loader-40000.bin" "21366ffff7cebc6176b8a8125bf3a9974835a51070a58ea325f7eed8aabd8882"
@@ -137,14 +165,9 @@ main = do
     (Just bin,Just symbols) -> do bytes <- B.readFile bin; functions <- symbolFunctions symbols; unless (B.length bytes == 0x1e60) (error "candidate span size"); pure (Just (bytes,functions))
     _ -> error "--candidate and --symbols are required together"
   when ("--control" `elem` args && candidateInputs == Nothing) (error "--control requires a candidate")
-  cachedInputs <- case cachedStock of
-    Nothing -> pure M.empty
-    Just root -> do
-      directories <- filter (isPrefixOf "stock-") <$> listDirectory root
-      entries <- concat <$> mapM (fmap snd . readBatch . (\directory -> root </> directory </> "batch.json")) directories
-      let inputs = M.fromList [(entryId entry,entryPath entry) | entry <- entries]
-      unless (M.size inputs == length entries) (error "duplicate cached stock case")
-      pure inputs
+  when (cachedCandidate /= Nothing && candidateInputs == Nothing) (error "--candidate-output requires a candidate")
+  cachedInputs <- cachedCaseInputs "stock" cachedStock
+  cachedCandidateInputs <- cachedCaseInputs "candidate" cachedCandidate
   batches <- forM (zip [0::Int ..] (chunks 4 (zip selected specs))) $ \(batchIndex,rows) -> do
     let directory = outputPath </> "stock-" ++ show batchIndex
     batch <- writeBatch directory (map snd rows)
@@ -163,22 +186,12 @@ main = do
       Just executable -> do
         observed <- case cachedStock of
           Nothing -> loadObservedBatch executable batch
-          Just _ -> forM (map snd rows) $ \spec -> do
-            let stem = O.caseId spec
-                originalCase = M.findWithDefault (error ("cached stock case missing: " ++ stem)) (CaseId stem) cachedInputs
-                originalDirectory = takeDirectory originalCase
-                generatedCase = directory </> stem ++ ".case.json"
-            original <- B.readFile originalCase >>= either error pure . executionInput
-            generated <- B.readFile generatedCase >>= either error pure . executionInput
-            unless (original == generated) (error ("cached stock input differs: " ++ stem))
-            (_,regions,_,_) <- loadCase generatedCase
-            report <- B.readFile (originalDirectory </> stem ++ ".native-result.json") >>= either error pure . eitherDecodeStrict'
-            digest <- maybe (error "cached stock requires --runner") pure runnerDigest
-            observation <- either (error . ((stem ++ ": ") ++) . show) pure (observeCachedStock digest regions report)
-            pure (CaseId stem,observation)
+          Just _ -> cachedObserved "stock" runnerDigest cachedInputs directory (map snd rows)
         candidateObserved <- case candidateBatch of
           Nothing -> pure M.empty
-          Just (path,_) -> M.fromList <$> loadObservedBatch executable path
+          Just (path,candidateSpecs) -> M.fromList <$> case cachedCandidate of
+            Nothing -> loadObservedBatch executable path
+            Just _ -> cachedObserved "candidate" runnerDigest cachedCandidateInputs (takeDirectory path) candidateSpecs
         compared <- forM (zip rows observed) $ \((c,_),(ident,observation)) -> do
           let differences = modelDifferences c observation
               candidateDifferences = maybe [] (compareRoles observation) (M.lookup ident candidateObserved)
@@ -192,6 +205,7 @@ main = do
       failures = modelFailures + if controlMode then (if candidateFailures == 0 then 1 else 0) else candidateFailures
       summary = object $ ["schema_version" .= (1::Int),"profile" .= ("native-cortex-r5f"::String),"image4_sha256" .= sha256Hex (sha256 image),"loader_sha256" .= sha256Hex (sha256 loader),"candidate_sha256" .= fmap (sha256Hex . sha256 . fst) candidateInputs,"cases" .= length selected,"executed" .= length rows,"failed" .= failures,"model_failed" .= modelFailures,"candidate_failed" .= candidateFailures,"control" .= controlMode,"control_detected" .= (controlMode && candidateFailures > 0),"candidate" .= maybe False (const True) candidateInputs,"results" .= [row | (row,_,_) <- rows]]
         <> ["runner_sha256" .= fmap sha256Hex runnerDigest]
+        <> ["cached_stock_output" .= cachedStock, "cached_candidate_output" .= cachedCandidate]
   B.writeFile (outputPath </> "summary.json") (encodeCanonical summary)
   putStrLn ("cases=" ++ show (length selected) ++ " executed=" ++ show (length rows) ++ " failed=" ++ show failures)
   when (failures > 0) exitFailure
