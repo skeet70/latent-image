@@ -363,7 +363,7 @@ imageSizeFixture role evidence = (bound,Observation receipt files)
   stalled = evidence `elem` [StalledChoice,ErasedStalledChoice]
   pending point = point == DownPoint && evidence /= NoDownChange || point `elem` [UpPoint,BackPoint] && stalled
   selecting point = point `elem` [EntryPoint,DownPoint,UpPoint] || point == BackPoint && stalled
-  rows point = [object ["start" .= rangeStart range,"bytes" .= hex (B.pack [at range index | index <- [0..fromIntegral (rangeEnd range-rangeStart range)-1]])] | range <- settingsRanges]
+  rows point = [object ["start" .= rangeStart range,"bytes" .= hex (B.pack [at range index | index <- [0::Int ..fromIntegral (rangeEnd range-rangeStart range)-1]])] | range <- settingsRanges]
    where
     at range index
       | index == 0x6e = if selecting point then 0x20 else 0
