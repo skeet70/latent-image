@@ -15,6 +15,8 @@ newtype Seed = Seed Word16 deriving (Eq, Show)
 newtype Position = Position Int deriving (Eq, Show)
 newtype BytePosition = BytePosition Word32 deriving (Eq, Show)
 newtype PersistenceStep = PersistenceStep Int deriving (Eq, Show)
+newtype ReadOccurrence = ReadOccurrence Word32 deriving (Eq, Show)
+data ReadFault = ReadFault PoolBlock ReadOccurrence deriving (Eq, Show)
 data Geometry = Geometry { recordBytes :: Int, recordCount :: Int, programBytes :: Int, stagingAddress :: Word32, firstBlock :: PoolBlock } deriving (Eq, Show)
 geometry :: Kind -> Geometry
 geometry kind = case kind of
@@ -32,7 +34,7 @@ poolBlock :: Geometry -> Bank -> PoolBlock
 poolBlock g bank = let PoolBlock first = firstBlock g in PoolBlock (first + fromIntegral (fromEnum bank))
 newtype Medium = Medium (M.Map PoolBlock B.ByteString) deriving (Eq, Show)
 data Request = Program PoolBlock Int B.ByteString | Erase PoolBlock deriving (Eq, Show)
-data Fault = NoFault | FailRequest PersistenceStep | StopAfter PersistenceStep deriving (Eq, Show)
+data Fault = NoFault | FailRequest PersistenceStep | StopAfter PersistenceStep | FailRead ReadFault deriving (Eq, Show)
 data Persistence = Persistence { medium :: Medium, requests :: [Request], fault :: Fault, steps :: Int, stopped :: Bool } deriving (Eq, Show)
 erased :: B.ByteString
 erased = B.replicate blockBytes 0xff
@@ -73,12 +75,44 @@ statusUnavailable, statusInvalid, statusFailed :: Word32
 statusUnavailable = 0xfffffff2
 statusInvalid = 0xffffffe2
 statusFailed = 0xffffff01
-data Store = Store { storeKind :: Kind, currentBank :: Bank, staging :: B.ByteString, persistence :: Persistence, callback :: Callback, callbackEvents :: [CallbackEvent] } deriving (Eq, Show)
+data CacheSlot = CacheSlot { cacheBlock :: Maybe PoolBlock, cacheAge :: Word32, cacheBytes :: B.ByteString } deriving (Eq, Show)
+data CachePair = CachePair CacheSlot CacheSlot deriving (Eq, Show)
+data CacheIndex = CacheZero | CacheOne deriving (Eq, Show)
+data Store = Store { storeKind :: Kind, currentBank :: Bank, staging :: B.ByteString, persistence :: Persistence, callback :: Callback, callbackEvents :: [CallbackEvent], cacheSlots :: CachePair, cacheTimestamp :: Word32, readOccurrences :: M.Map PoolBlock Word32 } deriving (Eq, Show)
 initialStore :: Kind -> Medium -> Fault -> Callback -> Store
-initialStore kind bytes injection cb = Store kind Bank0 (B.replicate (programBytes (geometry kind)) 0xff) (Persistence bytes [] injection 0 False) cb []
+initialStore kind bytes injection cb = Store kind Bank0 (B.replicate (programBytes (geometry kind)) 0xff) (Persistence bytes [] injection 0 False) cb [] (CachePair emptySlot emptySlot) 0 M.empty
+  where emptySlot = CacheSlot Nothing 0 (B.replicate blockBytes 0)
+cachedBank :: Bank -> Store -> (B.ByteString, Store)
+cachedBank bank state = (cacheBytes selected, state {cacheSlots = updated, cacheTimestamp = tick, readOccurrences = occurrences})
+  where
+    block = poolBlock (geometry (storeKind state)) bank
+    CachePair slot0 slot1 = cacheSlots state
+    index
+      | cacheBlock slot1 == Just block = CacheOne
+      | cacheBlock slot0 == Just block = CacheZero
+      | cacheBlock slot0 == Nothing = CacheZero
+      | cacheBlock slot1 == Nothing = CacheOne
+      | cacheAge slot0 <= cacheAge slot1 = CacheZero
+      | otherwise = CacheOne
+    old = case index of CacheZero -> slot0; CacheOne -> slot1
+    hit = cacheBlock old == Just block
+    occurrence = M.findWithDefault 0 block (readOccurrences state) + 1
+    occurrences = if hit then readOccurrences state else M.insert block occurrence (readOccurrences state)
+    failed = fault (persistence state) == FailRead (ReadFault block (ReadOccurrence occurrence))
+    bytes = if hit || failed then cacheBytes old else bankBytes (geometry (storeKind state)) bank (medium (persistence state))
+    tick = cacheTimestamp state + 1
+    selected = CacheSlot (Just block) (cacheTimestamp state) bytes
+    updated = case index of CacheZero -> CachePair selected slot1; CacheOne -> CachePair slot0 selected
 seek :: Bank -> Position -> Store -> Store
-seek bank position state = state { staging = replace 0 bytes (staging state) }
-  where bytes = recordAt (geometry (storeKind state)) bank position (medium (persistence state))
+seek bank position@(Position p) state
+  | not (isReadFault (fault (persistence state))) = state { staging = replace 0 (recordAt g bank position (medium (persistence state))) (staging state) }
+  | otherwise = next { staging = replace 0 (B.take (recordBytes g) (B.drop (p * recordBytes g) bytes)) (staging state) }
+  where
+    g = geometry (storeKind state)
+    (bytes, next) = cachedBank bank state
+isReadFault :: Fault -> Bool
+isReadFault (FailRead _) = True
+isReadFault _ = False
 -- RSC 0x6acfa8..0x6ad050 searches occupancy, including the final midpoint.
 findLast :: Bank -> Store -> (Maybe Position, Store)
 findLast bank state = finish (search 0 (recordCount g - 1) state)
@@ -227,3 +261,11 @@ readAt (BytePosition position) lengthBytes caller state
     bank = position `div` fromIntegral blockBytes
     offset = fromIntegral (position `mod` fromIntegral blockBytes)
     bytes = bankBytes (geometry (storeKind state)) (if bank == 0 then Bank0 else Bank1) (medium (persistence state))
+
+readCachedAt :: BytePosition -> Int -> B.ByteString -> Store -> (Word32, B.ByteString, Store)
+readCachedAt position@(BytePosition address) size caller state
+  | address >= 0x40000 || fromIntegral (address `mod` 0x20000) + size > blockBytes =
+      let (status, bytes) = readAt position size caller state in (status, bytes, state)
+  | otherwise =
+      let (bytes, next) = cachedBank (if address < 0x20000 then Bank0 else Bank1) state
+      in (0, replace 0 (B.take size (B.drop (fromIntegral (address `mod` 0x20000)) bytes)) caller, next)

@@ -151,11 +151,13 @@ phaseTraceSpec (Object fields) = case (KM.lookup "sites" fields, KM.lookup "capt
           ,(0xdcb6c0,"record-notification"),(0xde6304,"apply-notification"),(0xe0a4dc,"completion-notification")
           ,(0x103fcbc,"group-status-write"),(0x103fc34,"group-status-write"),(0x103fc0c,"group-status-write")
           ,(0x103f294,"group-write"),(0x103f31c,"group-write"),(0x104002c,"group-write")
-          ,(0x1040064,"group-write"),(0x103ff14,"group-write")] :: [(Word32,T.Text)]
+          ,(0x1040064,"group-write"),(0x103ff14,"group-write"),(0x103fd88,"group-status-consumer")
+          ,(0x6aad94,"record-region-read"),(0x6fb904,"nand-read-entry")] :: [(Word32,T.Text)]
         siteKey :: Word32 -> K.Key
         siteKey address = K.fromString ("0x" ++ showHex address "")
         sites' = foldr (\(address,label) -> KM.insert (siteKey address) (String label)) sites phaseSites
-        captures' = KM.insert (siteKey 0x103fb50) (object ["entry" .= ([] :: [Value]),"returns" .= ([] :: [Value])]) captures
+        captures' = foldr (\address -> KM.insert (siteKey address)
+          (object ["entry" .= ([] :: [Value]),"returns" .= ([] :: [Value])])) captures [0x103fb50,0x6aad94]
     pure (Object (KM.insert "write_ranges" (A.toJSON [[rangeStart range,rangeEnd range] | range <- resetWrites])
       (KM.insert "sites" (Object sites') (KM.insert "captures" (Object captures') fields))))
   _ -> ioError (userError "source spec lacks sites or captures")

@@ -13,7 +13,7 @@ import Replacement.RecordStore.Hardware (hardware)
 import Replacement.RecordStore.Model
 
 entryAddress :: Operation -> Word32
-entryAddress op = case op of
+entryAddress op = case operationBody op of
   Open -> 0x6ac2b4
   Register _ -> 0x6ac328
   Close -> 0x6ac478
@@ -23,16 +23,19 @@ entryAddress op = case op of
   Collect -> 0x6acab8
   ReadAt _ _ -> 0x6acda0
   Zero -> 0x6ae0fc
+  CacheBoundary _ _ _ -> 0x6ae0fc
+  On _ _ -> error "selected entry"
 
 modelBase :: Word32
 modelBase = 0x510000
 
 -- NAND request ABIs: id4.dis 0x6a8c5c..0x6a8c7c, 0x6a8ce8..0x6a8d28 and 0x6a8d90..0x6a8dc8.
-mediumCode :: Geometry -> [A.Ins]
-mediumCode g = concat
+mediumCode :: OracleCase -> [A.Ins]
+mediumCode c = concat
   [ [A.at "fn_wait", A.mov 0 0 0, A.ret]
   , [A.at "fn_release", A.mov 0 0 0, A.ret]
-  , [A.at "fn_read", A.push [4,5,6,14], A.movR 4 0, A.ldr 4 0 0, A.sub 0 0 first, A.lsl 0 0 17]
+  , [A.at "fn_read", A.push [4,5,6,14], A.movR 4 0] ++ readFaultCode ++
+      [A.ldr 4 0 0, A.sub 0 0 first, A.lsl 0 0 17]
       ++ A.load 1 mediumBase ++ [A.addR 1 1 0, A.ldr 4 0 12, A.bic 0 0 0x40000000, A.ldr 4 2 8, A.bl "fn_copy", A.mov 0 0 0, A.pop [4,5,6,15]]
   , [A.at "fn_program", A.push [4,5,6,7,8,9,10,14], A.movR 4 0, A.mov 5 0 1, A.bl "fn_persist", A.pop [4,5,6,7,8,9,10,15]]
   , [A.at "fn_erase", A.push [4,5,6,7,8,9,10,14], A.movR 4 0, A.mov 5 0 2, A.bl "fn_persist", A.pop [4,5,6,7,8,9,10,15]]
@@ -60,7 +63,15 @@ mediumCode g = concat
       , A.at "persist_stop" ] ++ A.load 0 0x5150 ++ [A.str 0 0 0, A.ret]
   , [A.at "fn_copy", A.cmp 2 0 0, A.whenEq "copy_done", A.ldr 1 3 0, A.str 0 3 0, A.add 0 0 4, A.add 1 1 4, A.sub 2 2 4, A.jump "fn_copy", A.at "copy_done", A.ret]
   ]
-  where PoolBlock first = firstBlock g
+  where
+    g = geometry (kind c)
+    PoolBlock first = if isSequence c then PoolBlock 0x52 else firstBlock g
+    readFaultCode = case injection c of
+      FailRead (ReadFault (PoolBlock block) (ReadOccurrence occurrence)) ->
+        [A.ldr 4 0 0] ++ A.load 1 block ++ [A.cmpR 0 1,A.whenNe "read_continue"] ++ A.load 5 (cellsBase + 28) ++
+        [A.ldr 5 0 0,A.add 0 0 1,A.str 5 0 0] ++ A.load 1 occurrence ++
+        [A.cmpR 0 1,A.whenNe "read_continue",A.mov 0 0 1,A.pop [4,5,6,15],A.at "read_continue"]
+      _ -> []
 
 callbackCode :: OracleCase -> [A.Ins]
 callbackCode c = one "fn_check" 1 ++ one "fn_prepare" 2
@@ -85,10 +96,12 @@ callbackCode c = one "fn_check" 1 ++ one "fn_prepare" 2
 driverCode :: OracleCase -> [A.Ins]
 driverCode c = [A.at "fn_driver", A.push [12,14], A.sub 13 13 24] ++ concat (zipWith operation [0..] (operations c)) ++ [A.add 13 13 24, A.pop [12,15]]
   where
-    g = geometry (kind c)
     loadHandle = A.load 12 resultBase ++ [A.ldr 12 0 0]
-    operation i op = arguments i op ++ [A.bl ("entry_" ++ show i)] ++ save i op
-    arguments i op = case op of
+    operation i wrapped =
+      let op = operationBody wrapped
+          selected = operationKind (kind c) wrapped
+      in arguments selected i op ++ [A.bl ("entry_" ++ show i)] ++ save selected i op
+    arguments selected i op = let g = geometry selected in case op of
       Open -> [A.mov 0 0 0]
       Register refusal ->
         let size = case refusal of TooSmall -> 1; Oversized -> 0x20001; _ -> fromIntegral (recordBytes g)
@@ -96,19 +109,23 @@ driverCode c = [A.at "fn_driver", A.push [12,14], A.sub 13 13 24] ++ concat (zip
             q = if refusal == OddOffset then 1 else 0
             cb name = if callbacks c == NoCallback then [A.mov 12 0 0] else [A.address 12 name]
             context = case callbacks c of Hardware2 -> A.load 12 0x828568; Hardware3 -> A.load 12 0x828570; _ -> [A.mov 12 0 0]
-        in A.load 0 (fromIntegral (fromEnum (kind c))) ++ A.load 1 size ++ A.load 2 count ++ A.load 3 q ++ cb "fn_prepare" ++
+        in A.load 0 (fromIntegral (fromEnum selected)) ++ A.load 1 size ++ A.load 2 count ++ A.load 3 q ++ cb "fn_prepare" ++
            [A.str 13 12 0] ++ context ++ [A.str 13 12 4] ++ cb "fn_check" ++ [A.str 13 12 8] ++ context ++ [A.str 13 12 12] ++ A.load 12 resultBase ++ [A.str 13 12 16]
       Close -> loadHandle
       Latest -> loadHandle ++ A.load 1 (slot i + 8) ++ A.load 2 (slot i + 4)
       Append (Seed seed) source -> loadHandle ++ A.load 1 (fromIntegral seed) ++ A.load 2 (if source == CallerSource then sourceBase else stagingAddress g)
       EraseAll -> loadHandle
       Collect -> loadHandle ++ A.load 1 callerBase ++ A.load 2 (slot i + 8)
-      ReadAt (BytePosition position) len -> A.load 0 (fromIntegral (fromEnum (kind c))) ++ A.load 1 position ++ A.load 2 (fromIntegral len) ++ A.load 3 callerBase
+      ReadAt (BytePosition position) len -> A.load 0 (fromIntegral (fromEnum selected)) ++ A.load 1 position ++ A.load 2 (fromIntegral len) ++ A.load 3 callerBase
       Zero -> []
+      On _ _ -> error "selected arguments"
+      CacheBoundary timestamp age0 age1 ->
+        A.load 12 0x8e0088 ++ A.load 0 timestamp ++ [A.str 12 0 0] ++ A.load 12 0x89fa60 ++ A.load 0 age0 ++ [A.str 12 0 0] ++ A.load 0 age1 ++ [A.str 12 0 4]
     slot i = resultBase + 0x100 + fromIntegral (i * eventStride)
-    save i op = A.load 12 (slot i) ++ [A.str 12 0 0 | op /= Close] ++
+    save selected i op = let g = geometry selected in A.load 12 (slot i) ++ [A.str 12 0 0 | op /= Close] ++
       [A.str 12 r (12 + 4*(r-4)) | r <- [4..11]] ++ [A.str 12 13 44] ++
       (if op == Latest then [A.cmp 0 0 0, A.Branch 1 False (A.label ("latest_done_" ++ show i)), A.ldr 12 1 4] ++ A.load 0 (slot i+64) ++ A.load 2 (fromIntegral (recordBytes g)) ++ [A.bl "fn_copy", A.at ("latest_done_" ++ show i)] else [])
+      ++ (case op of ReadAt _ len | isSequence c -> A.load 0 (slot i + 64) ++ A.load 1 callerBase ++ A.load 2 (fromIntegral len) ++ [A.bl "fn_copy"]; _ -> [])
 
 -- Range rows come from the pinned decomp index; only the executed closure is declared.
 data Function = Function Word32 Word32 deriving (Eq, Show)
@@ -132,7 +149,9 @@ caseSpec :: B.ByteString -> B.ByteString -> [Function] -> OracleCase -> CaseSpec
 caseSpec image loader ranges c = CaseSpec
   { caseId = caseName (name c)
   , caseProvenance = "RSC byte-read contract, reports/record-service-stock-contract.md; canonical image4 f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16. Medium requests execute declared synthetic A32 code."
-  , caseExclusion = "Host Cortex-R5F native profile. NAND erase=ff, program=AND, atomic persistence steps and injected request failure are declared medium laws, not device physics. Read requests/cache internals are excluded; raw read failure is stock diagnostic only. Void close r0 is excluded."
+  , caseExclusion = if isSequence c
+      then "Host Cortex-R5F native profile. Physical read faults are block-specific and occurrence-specific, return failure without writing destination, and preserve RAM across operations. Only caller outputs, status, callbacks and persistence effects are compared. CacheBoundary writes the declared cache metadata at an explicit guest RAM boundary. Void close r0 is excluded."
+      else "Host Cortex-R5F native profile. NAND erase=ff, program=AND, atomic persistence steps and injected request failure are declared medium laws, not device physics. Read requests/cache internals are excluded; raw read failure is stock diagnostic only. Void close r0 is excluded."
   , caseEntry = addr driverBase, caseExit = addr exitAddress
   , caseRegions =
       [region "record-code" 0x6a6b74 ReadExecute (slice 0x6a6b74 0x6ae114)
@@ -146,7 +165,7 @@ caseSpec image loader ranges c = CaseSpec
       , region "record-ram" 0x89f8b0 ReadWrite (B.replicate (0x917fe4-0x89f8b0) 0)
       , region "results" resultBase ReadWrite (initialResults <> cells), region "caller" callerBase ReadWrite initialCaller
       , region "source" sourceBase ReadWrite (sourceBytes g)
-      , region "medium" mediumBase ReadWrite (B.concat [bankBytes g bankNo (initialMedium c) | bankNo <- [Bank0,Bank1]])
+      , region "medium" mediumBase ReadWrite (if isSequence c then mediumBytes (initialMedium c) else B.concat [bankBytes g bankNo (initialMedium c) | bankNo <- [Bank0,Bank1]])
       , region "requests" requestBase ReadWrite (B.replicate requestSize 0)
       , region "callbacks" callbackBase ReadWrite (B.replicate callbackSize 0)
       , region "stack" stackBase ReadWrite (B.replicate 0x10000 0)
@@ -165,7 +184,7 @@ caseSpec image loader ranges c = CaseSpec
     driverInstructions = driverCode c
     seed = [("entry_" ++ show i, entryAddress op) | (i,op) <- zip [0::Int ..] (operations c)] ++ [("fn_copy",resolve "fn_copy"),("fn_check",resolve "fn_check"),("fn_prepare",resolve "fn_prepare")]
     (driver,_,driverFunctions) = A.assemble driverBase seed driverInstructions
-    (modelBytes,modelSymbols,modelFunctions) = A.assemble modelBase [("hardware_check2",0x6a6c54),("hardware_check3",0x6a84d4),("hardware_prepare2",0x6a6c04),("hardware_prepare3",0x6a8484)] (mediumCode g ++ callbackCode c)
+    (modelBytes,modelSymbols,modelFunctions) = A.assemble modelBase [("hardware_check2",0x6a6c54),("hardware_check3",0x6a84d4),("hardware_prepare2",0x6a6c04),("hardware_prepare3",0x6a8484)] (mediumCode c ++ callbackCode c)
     resolve key = M.findWithDefault (error ("missing model symbol " ++ key)) (A.label key) modelSymbols
     trampolineFunctions = [(a,4) | (a,_) <- trampolineEntries]
     trampolineEntries = [(0x6faf00,"fn_wait"),(0x6faf40,"fn_release"),(0x6fb904,"fn_read"),(0x6fb7c8,"fn_program"),(0x6fb57c,"fn_erase")]

@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Replacement.RecordStore.Carrier (stageImage, scanRetired, scanOwnedCacheTag, entryAddresses, retiredRegions) where
+module Replacement.RecordStore.Carrier (stageImage, scanRetired, scanObsoleteGap, entryAddresses, retiredRegions, cacheContract, cacheSymbols) where
 
 import Control.Monad (unless)
+import Data.Aeson (Value, object, (.=))
 import Data.Bits ((.&.), shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
@@ -33,15 +34,35 @@ scanRetired images = filter refused (concatMap (\region -> scanReferences region
           MovPairInto target -> target `notElem` entryAddresses
           PcRelativeInto target -> target `notElem` entryAddresses
 
-scanOwnedCacheTag :: [(ScanImage, Image)] -> [ScanHit]
-scanOwnedCacheTag images = filter retainedSite (scanReferences (Carrier (GuestAddress 0x89f8f0) (GuestAddress 0x89f8f4)) images S.empty)
+scanObsoleteGap :: [(ScanImage, Image)] -> [ScanHit]
+scanObsoleteGap images = filter retainedSite (scanReferences (Carrier (GuestAddress 0x89f8f0) (GuestAddress 0x89f8f8)) images S.empty)
   where retainedSite hit = not (hitImage hit == ScanImage4 && inCarrier recordSpan (hitSite hit))
+
+cacheSymbols :: [(C.ByteString, Word32)]
+cacheSymbols =
+  [("record_store_initialized",0x89f8b0),("record_store_wrappers",0x89f8b4),("record_store_state",0x89f8f8)
+  ,("record_store_block",0x8a0080),("record_store_second_block",0x8c0080)
+  ,("record_store_cache_tags",0x8e0080),("record_store_cache_timestamp",0x8e0088),("record_store_cache_ages",0x89fa60)
+  ,("record_store_staging_0",0x8e16a0),("record_store_staging_1",0x8e00a0),("record_store_staging_2",0x8e1700)
+  ,("record_store_staging_3",0x89fa80),("record_store_staging_4",0x8e10a0)]
+
+cacheContract :: Value
+cacheContract = object
+  ["buffers" .= ([[0x8a0080,0x8c0080],[0x8c0080,0x8e0080]]::[[Word32]])
+  ,"tags" .= object ["address" .= (0x8e0080::Word32),"bytes" .= (8::Int),"initial_values" .= ([0xffffffff,0xffffffff]::[Word32])]
+  ,"timestamp" .= object ["address" .= (0x8e0088::Word32),"bytes" .= (4::Int),"initial_value" .= (0::Word32)]
+  ,"ages" .= object ["address" .= (0x89fa60::Word32),"bytes" .= (8::Int),"initial_values" .= ([0,0]::[Word32])]
+  ,"initialized_by" .= (0x6ac2b4::Word32)]
 
 stageImage :: B.ByteString -> B.ByteString -> B.ByteString -> Either String B.ByteString
 stageImage image linked symbols = do
     unless (B.length linked == 0x1e60) (Left "linked record span must be exactly 7776 bytes")
     forMEntries
-    unless (lookup "record_store_cache_tag" parsed == Just 0x89f8f0) (Left "owned cache tag symbol moved or missing")
+    unless (length parsed == length (C.lines symbols)) (Left "invalid carrier symbol row")
+    mapM_ (\(name,address) -> unless (lookup name parsed == Just address && length (filter ((== name) . fst) parsed) == 1) (Left ("cache/service symbol moved, duplicated or missing: " ++ C.unpack name))) cacheSymbols
+    unless (lookup "record_store_cache_tag" parsed == Nothing) (Left "obsolete cache tag symbol remains")
+    unless (all (\(name,address) -> address < 0x89f8f0 || address >= 0x89f8f8 || name `elem` map fst cacheSymbols) parsed) (Left "symbol aliases obsolete cache gap")
+    unless (all (\(name,address) -> not (address >= 0x89fa60 && address < 0x89fa68 || address >= 0x8a0080 && address < 0x8e008c) || lookup name cacheSymbols == Just address) parsed) (Left "undeclared cache ownership alias")
     pure (B.take offset image <> linked <> B.drop (offset + B.length linked) image)
   where
     offset = 0x6ac2b4 - 0x61c400

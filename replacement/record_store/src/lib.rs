@@ -8,6 +8,8 @@ mod tests;
 
 #[cfg(feature = "guest")]
 mod guest;
+#[cfg(feature = "guest")]
+pub use guest::{with_guest_entry, RawMedium, GuestStaging, SharedBlock};
 
 mod lifecycle;
 pub use lifecycle::{Handle, Registration, RegistrationError, Service};
@@ -107,20 +109,47 @@ pub trait BlockBuffer<M: RecordMedium> {
     fn copy_into(&mut self, medium: &mut M, kind: RecordKind, bank: Bank, offset: usize, output: &mut [u8]);
     fn invalidate(&mut self);
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CacheTag(u32);
+impl CacheTag {
+    fn region(kind: RecordKind, bank: Bank) -> Self {
+        let block = match kind { RecordKind::Kind0 => 0x54, RecordKind::Kind1 => 0x52, RecordKind::Kind2 => 0x56, RecordKind::Kind3 => 0x58, RecordKind::Kind4 => 0x68 };
+        Self((block + bank as u32) << 17)
+    }
+}
+pub struct CacheState {
+    tags: [u32; 2],
+    ages: [u32; 2],
+    timestamp: u32,
+}
+impl CacheState {
+    pub const fn new() -> Self { Self { tags: [u32::MAX; 2], ages: [0; 2], timestamp: 0 } }
+}
+impl Default for CacheState { fn default() -> Self { Self::new() } }
+fn select_cache(tags: &mut [u32; 2], ages: &[u32; 2], tag: CacheTag) -> (usize, bool) {
+    if tags[1] == tag.0 { return (1, false); }
+    if tags[0] == tag.0 { return (0, false); }
+    let slot = if tags[0] == u32::MAX { 0 } else if tags[1] == u32::MAX { 1 } else { usize::from(ages[1] < ages[0]) };
+    tags[slot] = tag.0;
+    (slot, true)
+}
+fn access_cache(ages: &mut [u32; 2], timestamp: &mut u32, slot: usize) {
+    ages[slot] = *timestamp;
+    *timestamp = timestamp.wrapping_add(1);
+}
 pub struct LocalBlock<'a> {
-    block: &'a mut [u8; BLOCK_BYTES],
-    loaded: Option<(RecordKind, Bank)>,
+    blocks: &'a mut [[u8; BLOCK_BYTES]; 2],
+    cache: &'a mut CacheState,
 }
 impl<M: RecordMedium> BlockBuffer<M> for LocalBlock<'_> {
     fn copy_into(&mut self, medium: &mut M, kind: RecordKind, bank: Bank, offset: usize, output: &mut [u8]) {
-        if self.loaded != Some((kind, bank)) {
-            let _ = medium.read(kind, bank, BytePosition(0), self.block);
-            self.loaded = Some((kind, bank));
-        }
+        let (slot, fill) = select_cache(&mut self.cache.tags, &self.cache.ages, CacheTag::region(kind, bank));
+        if fill { let _ = medium.read(kind, bank, BytePosition(0), &mut self.blocks[slot]); }
+        access_cache(&mut self.cache.ages, &mut self.cache.timestamp, slot);
         let length = output.len();
-        copy(output, part(self.block, offset, length));
+        copy(output, part(&self.blocks[slot], offset, length));
     }
-    fn invalidate(&mut self) { self.loaded = None; }
+    fn invalidate(&mut self) { self.cache.tags = [u32::MAX; 2]; }
 }
 pub struct Entry<'a, M: RecordMedium, S: Staging, B: BlockBuffer<M> = LocalBlock<'a>> {
     medium: &'a mut M,
@@ -128,8 +157,8 @@ pub struct Entry<'a, M: RecordMedium, S: Staging, B: BlockBuffer<M> = LocalBlock
     buffer: B,
 }
 impl<'a, M: RecordMedium, S: Staging> Entry<'a, M, S> {
-    pub fn new(medium: &'a mut M, staging: &'a mut S, block: &'a mut [u8; BLOCK_BYTES]) -> Self {
-        Self::with_buffer(medium, staging, LocalBlock { block, loaded: None })
+    pub fn new(medium: &'a mut M, staging: &'a mut S, blocks: &'a mut [[u8; BLOCK_BYTES]; 2], cache: &'a mut CacheState) -> Self {
+        Self::with_buffer(medium, staging, LocalBlock { blocks, cache })
     }
 }
 impl<'a, M: RecordMedium, S: Staging, B: BlockBuffer<M>> Entry<'a, M, S, B> {

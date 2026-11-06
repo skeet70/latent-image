@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.RecordStorePairCheck
   ( Role (..), Sidecar (..), sidecarName, Observation (..), Bindings (..)
-  , Qualified, qualify, comparePair, comparisonValue, validateInputs
+  , Qualified, qualify, comparePair, comparisonValue, validateInputs, cacheContract, cacheSymbolLayout
   ) where
 
 import Control.Monad (foldM, forM, forM_, unless, when)
@@ -134,8 +134,7 @@ addressValue (Address address) = address
 physical :: Word32 -> Address
 physical address = Address (address .&. 0xbfffffff)
 retired :: Role -> [(Word32,Word32)]
-retired role = [(0x89f8f4,0x89f8f8),(0x89fa60,0x89fa68),(0x8e0080,0x8e008c),(0x917fa8,0x917fe4)]
-  ++ [(0x8c0080,0x8e0080) | role == Owned]
+retired _ = [(0x89f8f0,0x89f8f8),(0x917fa8,0x917fe4)]
 guardFetches :: Role -> [(Word32,Word32)] -> [(Word32,Word32)]
 guardFetches Stock _ = [(0x6ac2b4,0x6ae114)]
 guardFetches Owned code = merge ((0x6ac2b4,0x6ac2b8) : complement code)
@@ -182,8 +181,8 @@ validateInputs bindings role receipt = do
   linked <- field "linked_sha256" contract >>= parseDigest
   symbols <- field "symbols_sha256" contract >>= parseDigest
   need (linked == digest (linkedBytes bindings) && symbols == digest (symbolBytes bindings)) "contract does not bind linked carrier and symbols"
-  tag <- field "owned_cache_tag" contract
-  need (tag == object ["address" .= (0x89f8f0::Word32),"bytes" .= (4::Int),"initial_value" .= (0xffffffff::Word32),"initialized_by" .= (0x6ac2b4::Word32)]) "owned cache tag contract differs"
+  cache <- field "owned_cache" contract
+  need (cache == cacheContract) "owned two-slot cache contract differs"
   update <- field (if role == Stock then "source_sha256" else "candidate_sha256") contract >>= parseDigest
   need (lookup (InputName "update") parsed == Just update) "DAT does not match role contract"
   pure (filter ((/= InputName "update") . fst) parsed)
@@ -197,11 +196,27 @@ ownedRanges bindings = do
   let code = merge [(low,low+count) | (low,count,kind,_) <- rows, kind `elem` ["t","T"], count > 0, low >= 0x6ac2b4, low+count <= 0x6ae114]
       symbol name = case [low | (low,_,_,label) <- rows, label == name] of [low] -> Right low; _ -> Left ("missing or repeated symbol " ++ name)
   forM_ [minBound..maxBound] $ \entry -> need (within code (addressValue (entryAddress entry)) 4) "carrier misses public veneer"
-  state <- symbol "record_store_state"
-  block <- symbol "record_store_block"
-  cacheTag <- symbol "record_store_cache_tag"
-  need (state == 0x89f8f8 && block == 0x8a0080 && cacheTag == 0x89f8f0 && B.length (linkedBytes bindings) == 7776) "carrier placement differs"
-  pure (code,[(cacheTag,cacheTag+4),(state,0x89fa60),(block,block+0x20000)])
+  forM_ cacheSymbolLayout $ \(name,address) -> symbol name >>= \actual -> need (actual == address) ("carrier placement differs: " ++ name)
+  need (all (\(address,_,_,name) -> name /= "record_store_cache_tag" && (address < 0x89f8f0 || address >= 0x89f8f8)) rows) "obsolete cache symbol or gap alias remains"
+  need (all (\(address,count,_,name) -> not (overlaps [(0x89fa60,0x89fa68),(0x8a0080,0x8e008c)] address (max 1 (fromIntegral count))) || lookup name cacheSymbolLayout == Just address) rows) "undeclared cache ownership alias"
+  need (B.length (linkedBytes bindings) == 7776) "carrier extent differs"
+  pure (code,[(0x89f8f8,0x89fa60),(0x89fa60,0x89fa68),(0x8a0080,0x8e0080),(0x8e0080,0x8e008c)])
+
+cacheSymbolLayout :: [(String,Word32)]
+cacheSymbolLayout =
+  [("record_store_initialized",0x89f8b0),("record_store_wrappers",0x89f8b4),("record_store_state",0x89f8f8)
+  ,("record_store_block",0x8a0080),("record_store_second_block",0x8c0080)
+  ,("record_store_cache_tags",0x8e0080),("record_store_cache_timestamp",0x8e0088),("record_store_cache_ages",0x89fa60)
+  ,("record_store_staging_0",0x8e16a0),("record_store_staging_1",0x8e00a0),("record_store_staging_2",0x8e1700)
+  ,("record_store_staging_3",0x89fa80),("record_store_staging_4",0x8e10a0)]
+
+cacheContract :: Value
+cacheContract = object
+  ["buffers" .= ([[0x8a0080,0x8c0080],[0x8c0080,0x8e0080]]::[[Word32]])
+  ,"tags" .= object ["address" .= (0x8e0080::Word32),"bytes" .= (8::Int),"initial_values" .= ([0xffffffff,0xffffffff]::[Word32])]
+  ,"timestamp" .= object ["address" .= (0x8e0088::Word32),"bytes" .= (4::Int),"initial_value" .= (0::Word32)]
+  ,"ages" .= object ["address" .= (0x89fa60::Word32),"bytes" .= (8::Int),"initial_values" .= ([0,0]::[Word32])]
+  ,"initialized_by" .= (0x6ac2b4::Word32)]
 
 data RegionSnapshot = SettingsSnapshot | ResetSnapshot Role deriving (Eq, Show)
 parseRegions :: RegionSnapshot -> Value -> Parse Regions

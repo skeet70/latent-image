@@ -24,7 +24,42 @@ import EmulatorUsb (CrawlKey (..))
 import Numeric (showHex)
 import System.Exit (exitFailure)
 
-data Mutation = Original | PayloadByte | ReorderCalls | StrayFetch | ForeignRead | CacheAgeWrite | StockCacheTagWrite | BadSettings | BadMedium | MissingCapture | BadBinding | CollectionTail | ReturnedRecord | CloseScratch | OutputStorage | MissingResetRegion | RetiredSnapshotDifference | PreEntryPublication | PostEntryPublication | PreEntryBssWrite | PreEntryRead | MissingMarker | LaterPhaseWrite | MappedMedium | TruncatedSpare | ChangedSpareByte | PreservedLatest | ChangedPreservedPointer | ClearedPreservedPointer | ChangedPreservedSkipped | WrittenNullLatest | MissingWrittenNullLatest | ZeroSkippedLatest | ChangedZeroSkippedPreimage | PreservedRegister | ChangedPreservedRegister | InnerFailedRegister | UnopenedRegister | UnopenedRegisterNonNull | OutOfBankRead | ChangedOutOfBankTail | InvalidKindRead | FailedCollect | ChangedFailedCollectCount | ChangedFailedCollectBuffer deriving (Eq)
+data Mutation = Original | PayloadByte | ReorderCalls | StrayFetch | ForeignRead | SavedDestinationWrite | ObsoleteTagWrite | BadSettings | BadMedium | MissingCapture | BadBinding | CollectionTail | ReturnedRecord | CloseScratch | OutputStorage | MissingResetRegion | RetiredSnapshotDifference | PreEntryPublication | PostEntryPublication | PreEntryBssWrite | PreEntryRead | MissingMarker | LaterPhaseWrite | MappedMedium | TruncatedSpare | ChangedSpareByte | PreservedLatest | ChangedPreservedPointer | ClearedPreservedPointer | ChangedPreservedSkipped | WrittenNullLatest | MissingWrittenNullLatest | ZeroSkippedLatest | ChangedZeroSkippedPreimage | PreservedRegister | ChangedPreservedRegister | InnerFailedRegister | UnopenedRegister | UnopenedRegisterNonNull | OutOfBankRead | ChangedOutOfBankTail | InvalidKindRead | FailedCollect | ChangedFailedCollectCount | ChangedFailedCollectBuffer deriving (Eq)
+
+changedObject :: K.Key -> Value -> Value -> Value
+changedObject name value (Object fields) = Object (KM.insert name value fields)
+changedObject _ _ value = value
+
+rejectBinding :: (Value -> Value) -> (B.ByteString -> B.ByteString) -> Bool
+rejectBinding changeContract changeSymbols =
+  case (A.eitherDecodeStrict' (contractBytes bindings), A.eitherDecodeStrict' (receiptBytes original)) of
+    (Right contract,Right receipt) ->
+      let symbols = changeSymbols (symbolBytes bindings)
+          newContract = encode (changeContract (changedObject "symbols_sha256" (A.toJSON (hash symbols)) contract))
+          bound = bindings { contractBytes = newContract, symbolBytes = symbols }
+          binding bytes = object ["path" .= ("fixture"::T.Text),"sha256" .= hash bytes]
+          inputs = case receipt of Object fields -> KM.lookup "inputs" fields; _ -> Nothing
+       in case inputs of
+            Just values ->
+              let updated = changedObject "contract" (binding newContract) (changedObject "symbols" (binding symbols) values)
+               in isLeft (qualify Owned bound original { receiptBytes = encode (changedObject "inputs" updated receipt) })
+            _ -> False
+    _ -> False
+  where original = fixture Owned Original
+
+rejectOwnership :: Value -> Bool
+rejectOwnership ram =
+  case A.eitherDecodeStrict' (receiptBytes original) of
+    Right receipt@(Object fields) ->
+      let extent = changedObject "ram" ram (changedObject "unwatched_owned_ram" ram extents)
+          bytes = encode extent
+          files = case KM.lookup "files" fields of
+            Just value -> changedObject (K.fromString (sidecarName Extents)) (A.toJSON (hash bytes)) value
+            Nothing -> Null
+          updated = changedObject "files" files (changedObject "ram_rule" extent receipt)
+       in isLeft (qualify Owned bindings original { receiptBytes = encode updated, sidecars = M.insert Extents bytes (sidecars original) })
+    _ -> False
+  where original = fixture Owned Original
 encode :: Value -> B.ByteString
 encode = BL.toStrict . A.encode
 hash :: B.ByteString -> String
@@ -43,18 +78,17 @@ fetches :: Role -> [[Word32]]
 fetches Stock = [[0x6ac2b4,0x6ae114]]
 fetches Owned = [0x6ac2b4,0x6ac328] : zipWith (\low high -> [low,high]) (map (+4) (drop 1 entries)) (drop 2 entries ++ [0x6ae114])
 retired :: Role -> [[Word32]]
-retired role = [[0x89f8f4,0x89f8f8],[0x89fa60,0x89fa68],[0x8e0080,0x8e008c],[0x917fa8,0x917fe4]]
-  ++ [[0x8c0080,0x8e0080] | role == Owned]
+retired _ = [[0x89f8f0,0x89f8f8],[0x917fa8,0x917fe4]]
 writes :: Role -> [[Word32]]
 writes role = [[rangeStart range,rangeEnd range] | range <- settingsRanges] ++ retired role
 extents :: Value
 extents = object ["code" .= code,"ram" .= ram,"unwatched_owned_ram" .= ram,"activation_fetch" .= ([0x6ac2b4,0x6ac2b8]::[Word32]),"rule" .= ("fixture"::T.Text)] where
-  ram = [[0x89f8f0,0x89f8f4],[0x89f8f8,0x89fa60],[0x8a0080,0x8c0080]]::[[Word32]]
+  ram = [[0x89f8f8,0x89fa60],[0x89fa60,0x89fa68],[0x8a0080,0x8e0080],[0x8e0080,0x8e008c]]::[[Word32]]
 bindings :: Bindings
 bindings = Bindings contract (B.replicate 7776 0) symbols routes where
-  symbols = C.pack (unlines ([showHex entry "" ++ " 4 T entry" ++ show n | (n,entry) <- zip [0::Int ..] entries] ++ ["0089f8f0 4 B record_store_cache_tag","0089f8f8 168 B record_store_state","008a0080 20000 B record_store_block"]))
+  symbols = C.pack (unlines ([showHex entry "" ++ " 4 T entry" ++ show n | (n,entry) <- zip [0::Int ..] entries] ++ [showHex address " 0 A " ++ name | (name,address) <- cacheSymbolLayout]))
   routes = BL.toStrict (encodeRouteFile (RouteFile (replicate 64 '0') "fixture" CrawlEffectsSource [] phaseRoutes))
-  contract = encode (object ["source_sha256" .= hash "stock-DAT","candidate_sha256" .= hash "owned-DAT","linked_sha256" .= hash (B.replicate 7776 0),"symbols_sha256" .= hash symbols,"owned_cache_tag" .= object ["address" .= (0x89f8f0::Word32),"bytes" .= (4::Int),"initial_value" .= (0xffffffff::Word32),"initialized_by" .= (0x6ac2b4::Word32)],"reference_scan" .= object ["raw_candidates" .= ([]::[Value])]])
+  contract = encode (object ["source_sha256" .= hash "stock-DAT","candidate_sha256" .= hash "owned-DAT","linked_sha256" .= hash (B.replicate 7776 0),"symbols_sha256" .= hash symbols,"owned_cache" .= cacheContract,"reference_scan" .= object ["raw_candidates" .= ([]::[Value])]])
 regions :: Mutation -> Value
 regions = A.toJSON . settingRows
 settingRows :: Mutation -> [Value]
@@ -172,9 +206,7 @@ captureDeclarations = object [K.fromString (hexWord entry) .= declared entry | e
 
 watch :: Role -> AttachPhase -> Mutation -> Value
 watch role phase mutation = object ["enabled" .= True,"ranges" .= ordered,"records" .= records,"violation" .= Null,"views" .= ("observe"::T.Text),"classes" .= classes] where
-  ordered = fetches role ++ take 1 (writes role) ++ [[0x89f8f4,0x89f8f8],[0x89fa60,0x89fa68]]
-    ++ (if role == Owned then [[0x8c0080,0x8e008c]] else [[0x8e0080,0x8e008c]])
-    ++ [[0x917fa8,0x917fe4]] ++ drop 1 (take 3 (writes role))
+  ordered = fetches role ++ take 1 (writes role) ++ retired role ++ drop 1 (take 3 (writes role))
   classes = [object ["range" .= range,"kinds" .= (["cpu-write","host-write","model-bus-write"]::[T.Text])] | range <- writes role]
     ++ [object ["range" .= range,"kinds" .= (["cpu-read"]::[T.Text])] | range <- retired role]
     ++ [object ["range" .= range,"kinds" .= (["cpu-fetch"]::[T.Text])] | range <- fetches role]
@@ -192,12 +224,12 @@ watch role phase mutation = object ["enabled" .= True,"ranges" .= ordered,"recor
     | otherwise = case mutation of
         StrayFetch -> [cpu "cpu-fetch" 0x6ac2c0 0x6ac2c0 Null Null]
         ForeignRead -> [load]
-        CacheAgeWrite -> [store]
-        StockCacheTagWrite -> [cpu "cpu-write" 0x8e0080 0x700000 (A.toJSON (0::Int)) (A.toJSON ([0,0,0,0]::[Int]))]
+        SavedDestinationWrite -> [store]
+        ObsoleteTagWrite -> [cpu "cpu-write" 0x89f8f0 0x700000 (A.toJSON (0::Int)) (A.toJSON ([0,0,0,0]::[Int]))]
         PostEntryPublication -> [publication]
         _ -> []
   load = cpu "cpu-read" 0x89f8f4 0x700000 (A.toJSON (0::Int)) (A.toJSON ([0,0,0,0]::[Int]))
-  store = cpu "cpu-write" 0x89fa60 0x69ce00 (A.toJSON (0::Int)) (A.toJSON ([0,0,0,0]::[Int]))
+  store = cpu "cpu-write" 0x917fa8 0x69ce00 (A.toJSON (0::Int)) (A.toJSON ([0,0,0,0]::[Int]))
   publication = object ["source" .= ("model-bus-write"::T.Text),"address" .= (0x89ec00::Word32),"physical" .= (0x89ec00::Word32),"size" .= (32768::Int),"core" .= Null,"pc" .= Null,"instructions" .= Null,"tick" .= Null]
   cpu source address pc value beforeBytes = object ["source" .= (source::T.Text),"address" .= (address::Word32),"physical" .= address,"size" .= (4::Int),"value" .= value,"before" .= beforeBytes,"byte_order" .= ("little"::T.Text),"core" .= (0::Int),"pc" .= (pc::Word32),"instructions" .= (1::Int),"tick" .= (1::Int)]
 
@@ -339,10 +371,28 @@ main = do
                 let changed = maybe (KM.delete "local_ui_drain_tick_bound" fields) (\value -> KM.insert "local_ui_drain_tick_bound" value fields) policy
                  in isLeft (qualify role bound observation { receiptBytes = encode (Object changed) })
               _ -> False
+      wrongCache value = rejectBinding (changedObject "owned_cache" value) id
+      wrongCacheField name value = wrongCache (changedObject name value cacheContract)
+      wrongSymbols extra = rejectBinding id (<> C.pack extra)
       tests = [("nine-entry observation matches",matched Original)
         ,("changed drained cursor fails with equal press-time menus",endpointCursorDiffers)
         ,("defaults reset with a consumed append qualifies",let (bound,observation) = resetFixture ResetAppends in not (isLeft (qualify Owned bound observation)))
         ,("defaults reset without a record append refuses",let (bound,observation) = resetFixture ResetWithoutAppend in isLeft (qualify Owned bound observation))
+        ,("missing cache metadata policy refuses",rejectBinding (\value -> case value of Object fields -> Object (KM.delete "owned_cache" fields); _ -> value) id)
+        ,("wrong open initializer refuses",wrongCacheField "initialized_by" (A.toJSON (0x6ac328::Word32)))
+        ,("wrong tags initializer refuses",wrongCacheField "tags" (object ["address" .= (0x8e0080::Word32),"bytes" .= (8::Int),"initial_values" .= ([0,0]::[Word32])]))
+        ,("wrong timestamp initializer refuses",wrongCacheField "timestamp" (object ["address" .= (0x8e0088::Word32),"bytes" .= (4::Int),"initial_value" .= (1::Word32)]))
+        ,("wrong ages initializer refuses",wrongCacheField "ages" (object ["address" .= (0x89fa60::Word32),"bytes" .= (8::Int),"initial_values" .= ([1,0]::[Word32])]))
+        ,("one-buffer ownership refuses",wrongCacheField "buffers" (A.toJSON ([[0x8a0080,0x8c0080]]::[[Word32]])))
+        ,("obsolete tag binding refuses",wrongSymbols "0089f8f0 0 A record_store_cache_tag\n")
+        ,("obsolete gap alias refuses",wrongSymbols "0089f8f4 0 A unexpected_alias\n")
+        ,("duplicated cache bindings refuse",and [wrongSymbols (showHex address " 0 A " ++ name ++ "\n") | (name,address) <- cacheSymbolLayout])
+        ,("rebound unchanged contract remains admitted",not (rejectBinding id id))
+        ,("cache interior alias refuses",wrongSymbols "008c0084 0 A unexpected_alias\n")
+        ,("ages alias refuses",wrongSymbols "0089fa64 0 A unexpected_alias\n")
+        ,("moved cache and staging bindings refuse",and [rejectBinding id (C.unlines . map (\line -> if C.words line == [C.pack (showHex address ""), "0", "A", C.pack name] then C.pack (showHex (address+4) " 0 A " ++ name) else line) . C.lines) | (name,address) <- cacheSymbolLayout])
+        ,("obsolete gap cannot be declared owned",rejectOwnership (A.toJSON ([[0x89f8f0,0x89fa68],[0x8a0080,0x8e008c]]::[[Word32]])))
+        ,("second buffer ownership cannot be omitted",rejectOwnership (A.toJSON ([[0x89f8f8,0x89fa60],[0x89fa60,0x89fa68],[0x8a0080,0x8c0080],[0x8e0080,0x8e008c]]::[[Word32]])))
         ,("defaults reset with unsettled confirmation refuses",let (bound,observation) = resetFixture ResetUnsettled in isLeft (qualify Owned bound observation))
         ,("report names exercised entries and NAND requests per role/media",reportedCoverage)
         ,("changed program payload fails comparison",differs PayloadByte)
@@ -374,8 +424,8 @@ main = do
         ,("private reset bytes are excluded from settings comparison",matched RetiredSnapshotDifference)
         ,("stray retired fetch refuses qualification",refused StrayFetch)
         ,("post-entry stock-only read refuses qualification",refused ForeignRead)
-        ,("stock cache-age access refuses qualification",refused CacheAgeWrite)
-        ,("retired stock cache-tag write refuses qualification",refused StockCacheTagWrite)
+        ,("stock saved-destination access refuses qualification",refused SavedDestinationWrite)
+        ,("obsolete cache-tag write refuses qualification",refused ObsoleteTagWrite)
         ,("pre-entry image publication is admitted",matched PreEntryPublication)
         ,("post-entry image publication refuses qualification",refused PostEntryPublication)
         ,("pre-entry BSS write is admitted",matched PreEntryBssWrite)

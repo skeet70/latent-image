@@ -75,10 +75,16 @@ entries = [0x6ac2b4,0x6ac328,0x6ac478,0x6ac4c8,0x6ac7d4,0x6ac984,0x6acab8,0x6acd
 rangesValue :: [(Word32, Word32)] -> Value
 rangesValue ranges = A.toJSON [[start,end] | (start,end) <- ranges]
 
-retiredData :: Role -> Word32 -> Word32 -> Word32 -> [(Word32, Word32)]
-retiredData selected state block cacheTag =
-  [(cacheTag+4,state),(0x89fa60,0x89fa68),(0x8e0080,0x8e008c),(0x917fa8,0x917fe4)]
-  ++ [(block+0x20000,0x8e0080) | selected == Owned]
+retiredData :: [(Word32, Word32)]
+retiredData = [(0x89f8f0,0x89f8f8),(0x917fa8,0x917fe4)]
+
+cacheContract :: Value
+cacheContract = object
+  ["buffers" .= ([[0x8a0080,0x8c0080],[0x8c0080,0x8e0080]]::[[Word32]])
+  ,"tags" .= object ["address" .= (0x8e0080::Word32),"bytes" .= (8::Int),"initial_values" .= ([0xffffffff,0xffffffff]::[Word32])]
+  ,"timestamp" .= object ["address" .= (0x8e0088::Word32),"bytes" .= (4::Int),"initial_value" .= (0::Word32)]
+  ,"ages" .= object ["address" .= (0x89fa60::Word32),"bytes" .= (8::Int),"initial_values" .= ([0,0]::[Word32])]
+  ,"initialized_by" .= (0x6ac2b4::Word32)]
 
 mergeRanges :: [(Word32, Word32)] -> [(Word32, Word32)]
 mergeRanges = foldr merge [] . sortOn fst
@@ -95,6 +101,9 @@ symbolExtents bytes = do
     _ -> ioError (userError "invalid carrier symbol row")
   let extents = mergeRanges [(start,start+size) | (start,size,kind,_) <- rows, kind `elem` ["t","T"], size > 0, start >= 0x6ac2b4, start+size <= 0x6ae114]
   need (all (\entry -> any (\(start,end) -> start <= entry && entry+4 <= end) extents) entries) "carrier symbols omit an entry"
+  need (length rows == M.size (M.fromList [(name,start) | (start,_,_,name) <- rows])) "repeated carrier symbol"
+  need (all (\(start,size,_,name) -> not (any (\(low,high) -> start < high && toInteger start + max 1 (toInteger size) > toInteger low) ([(0x89fa60,0x89fa68),(0x8a0080,0x8e008c)] :: [(Word32,Word32)]))
+    || name `elem` ["record_store_block","record_store_second_block","record_store_cache_tags","record_store_cache_timestamp","record_store_cache_ages"]) rows) "undeclared cache ownership alias"
   pure (extents,M.fromList [(name,start) | (start,_,_,name) <- rows])
 
 complementSpan :: [(Word32, Word32)] -> [(Word32, Word32)]
@@ -184,17 +193,20 @@ observe options directory record = do
   symbols <- B.readFile (paths M.! "symbols")
   (owned,syms) <- symbolExtents symbols
   let symbol name = maybe (ioError (userError ("missing symbol " ++ name))) pure (M.lookup name syms)
-  state <- symbol "record_store_state"
-  block <- symbol "record_store_block"
-  cacheTag <- symbol "record_store_cache_tag"
-  need (cacheTag == 0x89f8f0 && cacheTag+4 <= state) "owned cache tag placement differs"
-  let ownedRam = [(cacheTag,cacheTag+4),(state,0x89fa60),(block,block+0x20000)]
+  forM_ [("record_store_initialized",0x89f8b0),("record_store_wrappers",0x89f8b4),("record_store_state",0x89f8f8)
+    ,("record_store_block",0x8a0080),("record_store_second_block",0x8c0080),("record_store_cache_tags",0x8e0080)
+    ,("record_store_cache_timestamp",0x8e0088),("record_store_cache_ages",0x89fa60)
+    ,("record_store_staging_0",0x8e16a0),("record_store_staging_1",0x8e00a0),("record_store_staging_2",0x8e1700)
+    ,("record_store_staging_3",0x89fa80),("record_store_staging_4",0x8e10a0)] $ \(name,address) ->
+      symbol name >>= \actual -> need (actual == address) ("carrier placement differs: " ++ name)
+  need (M.notMember "record_store_cache_tag" syms && all (\address -> address < 0x89f8f0 || address >= 0x89f8f8) (M.elems syms)) "obsolete cache symbol or gap alias remains"
+  let ownedRam = [(0x89f8f8,0x89fa60),(0x89fa60,0x89fa68),(0x8a0080,0x8e0080),(0x8e0080,0x8e008c)]
       ownedValue = object ["code" .= rangesValue owned,"ram" .= rangesValue ownedRam
         ,"unwatched_owned_ram" .= rangesValue ownedRam,"activation_fetch" .= ([0x6ac2b4,0x6ac2b8]::[Word32])
-        ,"rule" .= ("Owned-role stock-only RAM accesses fail after the first open-veneer fetch; initial image publication is admitted. Unoccupied code fetches fail. Owned state and block buffer are not watched; the oracle, returned records and NAND effects cover them."::T.Text)]
+        ,"rule" .= ("Owned-role stock-only RAM accesses fail after the first open-veneer fetch; initial image publication is admitted. Unoccupied code fetches fail. Owned state, cache buffers and metadata are not watched; the oracle, returned records and NAND effects cover them."::T.Text)]
   BL.writeFile (directory </> "owned-extents.json") (A.encode ownedValue <> "\n")
   contract <- B.readFile (paths M.! "contract") >>= either (ioError . userError) pure . A.eitherDecodeStrict'
-  need (field "owned_cache_tag" contract == object ["address" .= cacheTag,"bytes" .= (4::Int),"initial_value" .= (0xffffffff::Word32),"initialized_by" .= (0x6ac2b4::Word32)]) "owned cache tag contract differs"
+  need (field "owned_cache" contract == cacheContract) "owned two-slot cache contract differs"
   datDigest <- sha256Hex <$> sha256File (paths M.! "update")
   linkedDigest <- sha256Hex <$> sha256File (paths M.! "linked")
   symbolsDigest <- sha256Hex <$> sha256File (paths M.! "symbols")
@@ -206,7 +218,7 @@ observe options directory record = do
       residualSites = [(address,"residual") | candidate <- rawCandidates, Number n <- [field "site" candidate], let address = truncate n]
       siteMap = M.fromList (residualSites ++ [(address,"record-entry") | address <- entries] ++ [(0x6fb7c8,"nand-write"),(0x6fb57c,"nand-erase")])
       sites = object [K.fromString (hexWord address) .= (label::T.Text) | (address,label) <- M.toList siteMap]
-      dataRanges = retiredData (role options) state block cacheTag
+      dataRanges = retiredData
       writes = [(rangeStart range,rangeEnd range) | range <- settingsRanges] ++ dataRanges
       fetches = if role options == Owned then mergeRanges ((0x6ac2b4,0x6ac2b8) : complementSpan owned) else [(0x6ac2b4,0x6ae114)]
       spec = object ["schema" .= (1::Int),"sites" .= sites,"hit_limit" .= (1500000::Int),"captures" .= captureSpec

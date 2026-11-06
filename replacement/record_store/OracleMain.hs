@@ -128,7 +128,7 @@ main = do
   ranges <- readFunctions
   let recover c = c {name = CaseName (caseName (name c) ++ "-recover"), initialMedium = medium (persistence (expectedStore (model hardware c))), operations = [Open,Register Normal,Latest], injection = NoFault}
       recoveryCases = [recover c | c <- caseGrid, StopAfter _ <- [injection c]]
-      allCases = caseGrid ++ recoveryCases ++ hardwareCases area2a area2b area3
+      allCases = caseGrid ++ recoveryCases ++ hardwareCases area2a area2b area3 ++ sequenceCases
       selected = maybe allCases (\pattern' -> filter (isInfixOf pattern' . caseName . name) allCases) (optional args "--filter")
       specs = map (caseSpec image loader ranges) selected
   when (null selected) (error "no cases selected")

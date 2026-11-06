@@ -41,9 +41,9 @@ main = do
       let images = [(ScanImage4,Image "image4" fourPath 0x61c400 four),
             (ScanImage5,Image "image5" fivePath 0xbf1a00 five),(ScanPlain,Image "plain" plainPath 0x1100000 plain)]
           hits = resolvedReferences ranges images
-          tagHits = scanOwnedCacheTag images
+          gapHits = scanObsoleteGap images
       unless (null hits) (mapM_ (putStrLn . hitListing) hits >> H.failH "retired carrier/data references remain")
-      unless (null tagHits) (mapM_ (putStrLn . hitListing) tagHits >> H.failH "owned cache tag has retained references")
+      unless (null gapHits) (mapM_ (putStrLn . hitListing) gapHits >> H.failH "obsolete cache gap has retained references")
       staged <- either H.failH pure (stageImage four linked symbols)
       scratch <- I.validateScratchDirectory scratchPath
       candidate <- I.runImage4Staging (I.Tools encoder rebuild decoder) scratch dat dat staged
@@ -52,8 +52,7 @@ main = do
         "source_sha256" .= hash dat, "linked_sha256" .= hash linked, "symbols_sha256" .= hash symbols,
         "candidate_sha256" .= I.candidateSha256 candidate, "image4_sha256" .= I.candidateImage4Sha256 candidate,
         "span" .= ([0x6ac2b4,0x6ae114]::[Int]), "refused_references" .= length hits,
-        "owned_cache_tag" .= object ["address" .= (0x89f8f0::Int), "bytes" .= (4::Int),
-          "initial_value" .= (0xffffffff::Integer), "initialized_by" .= (0x6ac2b4::Int)],
-        "refused_cache_tag_references" .= length tagHits,
+        "owned_cache" .= cacheContract,
+        "refused_obsolete_gap_references" .= length gapHits,
         "function_ranges_sha256" .= hash index, "reference_scan" .= referenceSummary ranges images]) <> "\n")
     _ -> H.failH "usage: stage-record-store ENCODER REBUILD DECODER DAT IMAGE4 IMAGE5 PLAIN FUNCTION_INDEX LINKED SYMBOLS SCRATCH OUT_DAT OUT_CONTRACT"

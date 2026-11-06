@@ -17,6 +17,7 @@ control-6 = []
 control-7 = []
 control-8 = []
 control-9 = []
+control-unlock-before-copy = []
 
 [profile.release]
 opt-level = "z"

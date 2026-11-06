@@ -12,7 +12,10 @@ extern "C" {
     static mut record_store_wrappers: [Wrapper; 5];
     static mut record_store_state: u32;
     static mut record_store_block: [u8; BLOCK_BYTES];
-    static mut record_store_cache_tag: u32;
+    static mut record_store_second_block: [u8; BLOCK_BYTES];
+    static mut record_store_cache_tags: [u32; 2];
+    static mut record_store_cache_timestamp: u32;
+    static mut record_store_cache_ages: [u32; 2];
     static mut record_store_staging_0: u8;
     static mut record_store_staging_1: u8;
     static mut record_store_staging_2: u8;
@@ -37,7 +40,7 @@ pub(crate) struct Wrapper { active: u32, banks: u32, slot: *mut Slot }
 type Seal = unsafe extern "C" fn(*mut u8, *mut u8);
 type Check = unsafe extern "C" fn(*mut u8, *mut u8) -> i32;
 type Slot = Registration<GuestCallbacks>;
-struct GuestStaging;
+pub struct GuestStaging(());
 impl Staging for GuestStaging {
     fn bytes(&mut self, kind: RecordKind) -> &mut [u8] {
         unsafe {
@@ -49,12 +52,11 @@ impl Staging for GuestStaging {
         unsafe { slice::from_raw_parts_mut(self.bytes(kind).as_mut_ptr(), length) }
     }
 }
-struct RawMedium;
+pub struct RawMedium(());
 fn status(result: i32) -> Result<(), MediumError> { if result == 0 { Ok(()) } else { Err(MediumError(result)) } }
 impl RecordMedium for RawMedium {
     fn read(&mut self, kind: RecordKind, bank: Bank, offset: BytePosition, output: &mut [u8]) -> Result<(), MediumError> {
-        let block = match kind { RecordKind::Kind0 => 0x54, RecordKind::Kind1 => 0x52, RecordKind::Kind2 => 0x56, RecordKind::Kind3 => 0x58, RecordKind::Kind4 => 0x68 } + bank as u32;
-        unsafe { status(record_raw_region_read((block << 17) + offset.0, output.as_mut_ptr())) }
+        unsafe { status(record_raw_region_read(CacheTag::region(kind, bank).0 + offset.0, output.as_mut_ptr())) }
     }
     fn program(&mut self, kind: RecordKind, bank: Bank, offset: BytePosition, bytes: &[u8]) -> Result<(), MediumError> {
         let write = match kind { RecordKind::Kind0 => record_raw_write_0, RecordKind::Kind1 => record_raw_write_1, RecordKind::Kind2 => record_raw_write_2, RecordKind::Kind3 => record_raw_write_3, RecordKind::Kind4 => record_raw_write_4 };
@@ -65,27 +67,29 @@ impl RecordMedium for RawMedium {
         unsafe { status(erase(bank as u32)) }
     }
 }
-struct SharedBlock;
+pub struct SharedBlock(());
 impl BlockBuffer<RawMedium> for SharedBlock {
     fn copy_into(&mut self, medium: &mut RawMedium, kind: RecordKind, bank: Bank, offset: usize, output: &mut [u8]) {
         unsafe {
             record_semaphore_take(0x4b, -1);
-            // The tag and block are borrowed only while semaphore 0x4b is held.
-            let tag = kind as u32 * 2 + bank as u32;
-            let block = &mut *ptr::addr_of_mut!(record_store_block);
-            if record_store_cache_tag != tag {
-                let _ = medium.read(kind, bank, BytePosition(0), block);
-                record_store_cache_tag = tag;
-            }
+            // Cache metadata and blocks are borrowed only while semaphore 0x4b is held.
+            let tags = &mut *ptr::addr_of_mut!(record_store_cache_tags);
+            let ages = &mut *ptr::addr_of_mut!(record_store_cache_ages);
+            let timestamp = &mut *ptr::addr_of_mut!(record_store_cache_timestamp);
+            let (slot, fill) = select_cache(tags, ages, CacheTag::region(kind, bank));
+            let block = if slot == 0 { &mut *ptr::addr_of_mut!(record_store_block) } else { &mut *ptr::addr_of_mut!(record_store_second_block) };
+            if fill { let _ = medium.read(kind, bank, BytePosition(0), block); }
+            access_cache(ages, timestamp, slot);
             let length = output.len();
+            if cfg!(feature = "control-unlock-before-copy") { record_semaphore_give(0x4b); }
             copy(output, part(block, offset, length));
-            record_semaphore_give(0x4b);
+            if !cfg!(feature = "control-unlock-before-copy") { record_semaphore_give(0x4b); }
         }
     }
     fn invalidate(&mut self) {
         unsafe {
             record_semaphore_take(0x4b, -1);
-            record_store_cache_tag = u32::MAX;
+            record_store_cache_tags = [u32::MAX; 2];
             record_semaphore_give(0x4b);
         }
     }
@@ -102,15 +106,23 @@ impl Callbacks for GuestCallbacks {
 unsafe fn slot<'a>(wrapper: *mut Wrapper) -> Option<&'a mut Slot> {
     if record_store_initialized == 0 || (*wrapper).active == 0 || (*wrapper).slot.is_null() { None } else { Some(&mut *(*wrapper).slot) }
 }
-fn entry<'a>(medium: &'a mut RawMedium, staging: &'a mut GuestStaging) -> Entry<'a, RawMedium, GuestStaging, SharedBlock> { Entry::with_buffer(medium, staging, SharedBlock) }
+fn entry<'a>(medium: &'a mut RawMedium, staging: &'a mut GuestStaging) -> Entry<'a, RawMedium, GuestStaging, SharedBlock> { Entry::with_buffer(medium, staging, SharedBlock(())) }
+
+/// # Safety
+/// The caller must exclusively own each area and staging kind used by the operation.
+pub unsafe fn with_guest_entry<R>(operation: impl FnOnce(&mut Entry<'_, RawMedium, GuestStaging, SharedBlock>) -> R) -> R {
+    operation(&mut entry(&mut RawMedium(()), &mut GuestStaging(())))
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn record_store_open(_: u32) -> i32 {
     if record_store_initialized != 0 { return -14; }
     for wrapper in &mut *ptr::addr_of_mut!(record_store_wrappers) { wrapper.active = 0; wrapper.slot = ptr::null_mut(); }
     Service::initialize_at(ptr::addr_of_mut!(record_store_state).cast::<Service<GuestCallbacks>>());
-    SharedBlock.invalidate();
-    if service().open(&mut GuestStaging).is_err() { return -14; }
+    record_store_cache_tags = [u32::MAX; 2];
+    record_store_cache_ages = [0; 2];
+    record_store_cache_timestamp = 0;
+    if service().open(&mut GuestStaging(())).is_err() { return -14; }
     record_store_initialized = 1;
     0
 }
@@ -145,8 +157,8 @@ pub unsafe extern "C" fn record_store_close(wrapper: *mut Wrapper) {
 pub unsafe extern "C" fn record_store_read_latest(wrapper: *mut Wrapper, skipped: *mut u16, output: *mut *const u8) -> i32 {
     let Some(slot) = slot(wrapper) else { *output = ptr::null(); return -14; };
     let mut callbacks = GuestCallbacks::from(*slot);
-    let mut medium = RawMedium;
-    let mut staging = GuestStaging;
+    let mut medium = RawMedium(());
+    let mut staging = GuestStaging(());
     match entry(&mut medium, &mut staging).read_latest(&mut slot.area, &mut callbacks, skipped.as_mut()) {
         Latest::Found { record, .. } => { *output = record.as_ptr(); 0 },
         Latest::Empty => -255,
@@ -157,8 +169,8 @@ pub unsafe extern "C" fn record_store_read_latest(wrapper: *mut Wrapper, skipped
 pub unsafe extern "C" fn record_store_append(wrapper: *mut Wrapper, seed: u32, source: *const u8) -> i32 {
     let Some(slot) = slot(wrapper) else { return -14; };
     let mut callbacks = GuestCallbacks::from(*slot);
-    let mut medium = RawMedium;
-    let mut staging = GuestStaging;
+    let mut medium = RawMedium(());
+    let mut staging = GuestStaging(());
     let same_staging = source == staging.bytes(slot.area.kind).as_ptr();
     let source = if same_staging { RecordSource::Staging } else { RecordSource::Caller(slice::from_raw_parts(source, slot.area.geometry.bytes.0 as usize)) };
     match entry(&mut medium, &mut staging).append_source(&mut slot.area, &mut callbacks, Seed(seed as u16), source) { Ok(_) => 0, Err(_) => -255 }
@@ -166,16 +178,16 @@ pub unsafe extern "C" fn record_store_append(wrapper: *mut Wrapper, seed: u32, s
 #[no_mangle]
 pub unsafe extern "C" fn record_store_erase_all(wrapper: *mut Wrapper) -> i32 {
     let Some(slot) = slot(wrapper) else { return -14; };
-    let mut medium = RawMedium;
-    let mut staging = GuestStaging;
+    let mut medium = RawMedium(());
+    let mut staging = GuestStaging(());
     entry(&mut medium, &mut staging).erase_all(&mut slot.area);
     0
 }
 #[no_mangle]
 pub unsafe extern "C" fn record_store_collect(wrapper: *mut Wrapper, output: *mut u8, count: *mut u32) -> i32 {
     let Some(slot) = slot(wrapper) else { return -14; };
-    let mut medium = RawMedium;
-    let mut staging = GuestStaging;
+    let mut medium = RawMedium(());
+    let mut staging = GuestStaging(());
     let output = slice::from_raw_parts_mut(output, slot.area.geometry.bytes.0 as usize * slot.area.geometry.count.0 as usize * 2);
     let bytes = entry(&mut medium, &mut staging).collect(&mut slot.area, output);
     if !count.is_null() { *count = bytes as u32; if bytes == 0 { return -255; } }
@@ -187,8 +199,8 @@ pub unsafe extern "C" fn record_store_read_at(kind: u32, position: u32, length: 
     if record_store_initialized == 0 { fill(output, 0); return -14; }
     let Some(kind) = RecordKind::parse(kind) else { fill(output, 0); return -30; };
     if position >= 0x40000 { *output.as_mut_ptr() = 0; return -30; }
-    let mut medium = RawMedium;
-    let mut staging = GuestStaging;
+    let mut medium = RawMedium(());
+    let mut staging = GuestStaging(());
     match entry(&mut medium, &mut staging).read_at(kind, BytePosition(position), output) { Ok(()) => 0, Err(_) => -30 }
 }
 #[no_mangle]

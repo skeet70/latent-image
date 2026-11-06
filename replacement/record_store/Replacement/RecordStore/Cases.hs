@@ -11,8 +11,38 @@ import Replacement.RecordStore.Model
 newtype CaseName = CaseName { caseName :: String } deriving (Eq, Ord, Show)
 data Source = CallerSource | StagingSource deriving (Eq, Show)
 data Registration = Normal | OddOffset | TooSmall | TooMany | Oversized deriving (Eq, Show)
-data Operation = Open | Register Registration | Close | Latest | Append Seed Source | EraseAll | Collect | ReadAt BytePosition Int | Zero deriving (Eq, Show)
+data Operation = Open | Register Registration | Close | Latest | Append Seed Source | EraseAll | Collect | ReadAt BytePosition Int | Zero | On Kind Operation | CacheBoundary Word32 Word32 Word32 deriving (Eq, Show)
 data OracleCase = OracleCase { name :: CaseName, kind :: Kind, initialMedium :: Medium, operations :: [Operation], callbacks :: Callback, injection :: Fault } deriving (Eq, Show)
+operationKind :: Kind -> Operation -> Kind
+operationKind _ (On k _) = k
+operationKind k _ = k
+operationBody :: Operation -> Operation
+operationBody (On _ op) = operationBody op
+operationBody op = op
+isSequence :: OracleCase -> Bool
+isSequence = any selected . operations
+  where
+    selected (On _ _) = True
+    selected _ = False
+sequenceCases :: [OracleCase]
+sequenceCases =
+  [ make "ab-a-nofault" NoFault [a,b,a]
+  , make "ab-a-second-a-fails" (fails Kind0 Bank0 2) [a,b,a]
+  , make "first-fill-failure-memoized" (fails Kind0 Bank0 1) [a,a]
+  , make "a0-a1-a0-second-a0-fails" (fails Kind0 Bank0 2) [a,a1,a]
+  , make "three-kind-evicts-a" (fails Kind0 Bank0 2) [a,b,c,a]
+  , make "equal-age-tie-evicts-slot-zero" (fails Kind0 Bank0 2) [a,b,CacheBoundary 9 7 7,c,a]
+  , make "unsigned-age-wrap" (fails Kind0 Bank0 2) [a,b,CacheBoundary 0xffffffff 0xfffffffe 0xffffffff,a,c,b,a]
+  , make "latest-check-order" (fails Kind0 Bank0 2) [On Kind0 (Register Normal),On Kind0 Latest, b,On Kind0 Latest]
+  ]
+  where
+    a = On Kind0 (ReadAt (BytePosition 0) 16)
+    a1 = On Kind0 (ReadAt (BytePosition 0x20000) 16)
+    b = On Kind1 (ReadAt (BytePosition 0) 16)
+    c = On Kind2 (ReadAt (BytePosition 0) 16)
+    fails k bankNo occurrence = FailRead (ReadFault (poolBlock (geometry k) bankNo) (ReadOccurrence occurrence))
+    bytes = foldl (\m k -> putBank (geometry k) Bank1 (bank (geometry k) [(20,False)]) (putBank (geometry k) Bank0 (bank (geometry k) [(10 + fromIntegral (fromEnum k),False),(11 + fromIntegral (fromEnum k),True)]) m)) (Medium M.empty) [Kind0,Kind1,Kind2]
+    make label fault ops = OracleCase (CaseName ("sequence-" ++ label)) Kind0 bytes (Open:ops) MarkerCallback fault
 record :: Geometry -> Word16 -> Bool -> B.ByteString
 record g seqNo rejected = half seqNo <> B.singleton (if rejected then 0xee else 0x22) <> B.replicate (recordBytes g - 3) 0x33
 bank :: Geometry -> [(Word16, Bool)] -> B.ByteString
@@ -121,14 +151,15 @@ data Expected = Expected { expectedResults :: B.ByteString, expectedCaller :: B.
 model :: HardwareCheck -> OracleCase -> Expected
 model hardware c = finish (go 0 False [] Nothing initialResults initialCaller (initialStore (kind c) (initialMedium c) (injection c) (callbacks c)) (operations c))
   where
-    g = geometry (kind c)
     finish (results, caller, state) = Expected results caller state (stopped (persistence state))
     go :: Int -> Bool -> [Int] -> Maybe Int -> B.ByteString -> B.ByteString -> Store -> [Operation] -> (B.ByteString, B.ByteString, Store)
     go _ _ _ _ results caller state [] = (results,caller,state)
     go i opened active current results caller state (op:rest)
+      | On selected nested <- op = go i opened active current results caller (state {storeKind = selected}) (nested:rest)
       | stopped (persistence state) = (results,caller,state)
       | otherwise =
-        let offset = 0x100 + i * eventStride
+        let g = geometry (storeKind state)
+            offset = 0x100 + i * eventStride
             save value bytes = replace offset (word32le value) bytes
             valid = opened && maybe False (`elem` active) current
             saveABI bytes = foldl (\b (j,value) -> replace (offset + 12 + j * 4) (word32le value) b) bytes (zip [0..] ([0x44440004 + fromIntegral j | j <- [0..7::Int]] ++ [stackTop - 32]))
@@ -138,6 +169,9 @@ model hardware c = finish (go 0 False [] Nothing initialResults initialCaller (i
             same status = continue status results caller state opened active current
         in case op of
           Open -> continue (if opened then statusUnavailable else 0) results caller state True active current
+          CacheBoundary timestamp age0 age1 ->
+            let CachePair slot0 slot1 = cacheSlots state
+            in continue 0 results caller (state {cacheTimestamp = timestamp, cacheSlots = CachePair (slot0 {cacheAge = age0}) (slot1 {cacheAge = age1})}) opened active current
           Register refusal
             | not opened -> continue statusUnavailable (replace 0 (word32le 0) results) caller state opened active current
             | refusal /= Normal -> same statusInvalid
@@ -165,6 +199,7 @@ model hardware c = finish (go 0 False [] Nothing initialResults initialCaller (i
                   | otherwise -> let (status,count,bytes,next) = collect caller state
                                  in continue status (replace (offset+8) (word32le count) results) bytes next opened active current
           ReadAt position lengthBytes | not opened -> continue statusUnavailable results (replace 0 (B.replicate lengthBytes 0) caller) state opened active current
+                                      | isSequence c -> let (status,bytes,next) = readCachedAt position lengthBytes caller state in continue status (replace (offset + 64) (B.take lengthBytes bytes) results) bytes next opened active current
                                       | otherwise -> let (status,bytes) = readAt position lengthBytes caller state in continue status results bytes state opened active current
 
 encodeRequest :: Request -> B.ByteString
@@ -174,4 +209,8 @@ encodeRequest request = case request of
 encodeCallback :: CallbackEvent -> B.ByteString
 encodeCallback (CallbackEvent role before after status) = word32le (if role == Check then 1 else 2) <> word32le status <> before <> after
 expectedMedium :: OracleCase -> Expected -> B.ByteString
-expectedMedium c expected = B.concat [bankBytes (geometry (kind c)) b (medium (persistence (expectedStore expected))) | b <- [Bank0,Bank1]]
+expectedMedium c expected
+  | isSequence c = mediumBytes (medium (persistence (expectedStore expected)))
+  | otherwise = B.concat [bankBytes (geometry (kind c)) b (medium (persistence (expectedStore expected))) | b <- [Bank0,Bank1]]
+mediumBytes :: Medium -> B.ByteString
+mediumBytes (Medium blocks) = B.concat [M.findWithDefault erased (PoolBlock block) blocks | block <- [0x52..0x69]]

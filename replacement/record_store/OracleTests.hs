@@ -20,6 +20,7 @@ assert message condition = unless condition (error message)
 main :: IO ()
 main = do
   cachedObservationTests
+  sequenceTests
   let g = geometry Kind3
       empty = initialStore Kind3 (mediumOf g [] []) NoFault MarkerCallback
       (status,written) = append hardware (Seed 0x9234) (CallerRecord (sourceBytes g)) empty
@@ -53,6 +54,27 @@ main = do
   assert "one-bit data error corrects to sealed record" (hardware Check Hardware3 corrupted == (Accept,sealed))
   assert "erased medium defaults to ff" (bankBytes g Bank0 (Medium M.empty) == B.replicate blockBytes 0xff)
   putStrLn "record-store oracle model tests passed"
+
+sequenceTests :: IO ()
+sequenceTests = do
+  let expected label = case [model hardware c | c <- sequenceCases, caseName (name c) == "sequence-" ++ label] of
+        [result] -> result
+        _ -> error ("missing sequence " ++ label)
+      snapshot label event = B.take 16 (B.drop (0x100 + event * eventStride + 64) (expectedResults (expected label)))
+      status label event = B.take 4 (B.drop (0x100 + event * eventStride) (expectedResults (expected label)))
+      a = B.take 16 (record (geometry Kind0) 10 False)
+      b = B.take 16 (record (geometry Kind1) 11 False)
+      c = B.take 16 (record (geometry Kind2) 12 False)
+  assert "original generated grid retains 370 identities with recovery and hardware cases" (length caseGrid + length [() | row <- caseGrid, StopAfter _ <- [injection row]] + 5 == 370)
+  assert "multi-kind nofault returns A after B" (snapshot "ab-a-nofault" 3 == a)
+  assert "resident A survives failure of its second physical read" (snapshot "ab-a-second-a-fails" 1 == a && snapshot "ab-a-second-a-fails" 2 == b && snapshot "ab-a-second-a-fails" 3 == a && status "ab-a-second-a-fails" 3 == B.replicate 4 0)
+  assert "failed fill publishes unchanged slot bytes without retry" (snapshot "first-fill-failure-memoized" 1 == B.replicate 16 0 && snapshot "first-fill-failure-memoized" 2 == B.replicate 16 0)
+  assert "both banks remain resident on A0 A1 A0" (snapshot "a0-a1-a0-second-a0-fails" 3 == a)
+  assert "three kinds evict A and failed refill exposes prior B bytes" (snapshot "three-kind-evicts-a" 4 == b)
+  assert "equal ages evict slot zero" (snapshot "equal-age-tie-evicts-slot-zero" 5 == b)
+  assert "unsigned wrapped age changes eviction" (snapshot "unsigned-age-wrap" 7 == c)
+  let checks = [sequenceOf before | CallbackEvent Check before _ _ <- callbackEvents (expectedStore (expected "latest-check-order"))]
+  assert "latest checks rejected predecessor and final selected bank in order" (take 6 checks == map Sequence [11,10,20,11,10,20])
 
 cachedObservationTests :: IO ()
 cachedObservationTests = do

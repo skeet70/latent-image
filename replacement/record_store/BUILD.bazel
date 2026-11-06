@@ -69,6 +69,14 @@ genrule(
     cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --cfg 'feature=\"guest\"' --cfg 'feature=\"control-6\"' $(location src/lib.rs) -o $(@D)/host-adapter-control-6 && if $(@D)/host-adapter-control-6 --exact guest::tests::rsc_nine_guest_entries_status_outputs_and_read_only_semaphore; then exit 1; else touch $@; fi",
 )
 
+genrule(
+    name = "host-adapter-control-unlock-before-copy",
+    srcs = ["src/lib.rs", "src/tests.rs", "src/lifecycle.rs", "src/guest.rs", "src/guest_tests.rs"],
+    tools = ["@lab_xm1_rust//:bin/rustc"],
+    outs = ["host-adapter-control-unlock-before-copy.detected"],
+    cmd = "$(location @lab_xm1_rust//:bin/rustc) --edition=2021 --test --cfg 'feature=\"guest\"' --cfg 'feature=\"control-unlock-before-copy\"' $(location src/lib.rs) -o $(@D)/host-adapter-control-unlock-before-copy && if $(@D)/host-adapter-control-unlock-before-copy --exact guest::tests::cross_kind_preemption_preserves_latest_collect_and_addressed_bytes; then exit 1; else touch $@; fi",
+)
+
 haskell_library(
     name = "oracle-lib",
     srcs = [

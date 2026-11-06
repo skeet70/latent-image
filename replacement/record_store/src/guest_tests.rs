@@ -11,8 +11,14 @@ struct State([u8; 360]);
 static mut STATE: State = State([0; 360]);
 #[export_name = "record_store_block"]
 static mut BLOCK: [u8; BLOCK_BYTES] = [0; BLOCK_BYTES];
-#[export_name = "record_store_cache_tag"]
-static mut CACHE_TAG: u32 = u32::MAX;
+#[export_name = "record_store_second_block"]
+static mut SECOND_BLOCK: [u8; BLOCK_BYTES] = [0; BLOCK_BYTES];
+#[export_name = "record_store_cache_tags"]
+static mut CACHE_TAGS: [u32; 2] = [u32::MAX; 2];
+#[export_name = "record_store_cache_timestamp"]
+static mut CACHE_TIMESTAMP: u32 = 0;
+#[export_name = "record_store_cache_ages"]
+static mut CACHE_AGES: [u32; 2] = [0; 2];
 const _: () = assert!(core::mem::size_of::<u32>() == 4 && core::mem::align_of::<u32>() == 4);
 #[export_name = "record_store_staging_0"]
 static mut STAGING0: [u8; 0x20000] = [0; 0x20000];
@@ -24,7 +30,7 @@ static mut STAGING2: [u8; 0x20000] = [0; 0x20000];
 static mut STAGING3: [u8; 0x20000] = [0; 0x20000];
 #[export_name = "record_store_staging_4"]
 static mut STAGING4: [u8; 0x20000] = [0; 0x20000];
-struct Backend { banks: [Vec<u8>; 2], other_banks: [Vec<u8>; 2], held: bool, reads: usize, writes: usize, preempt_on_release: bool }
+struct Backend { banks: [Vec<u8>; 2], other_banks: [Vec<u8>; 2], held: bool, reads: usize, writes: usize, preempt_on_release: bool, fail_next_read: bool }
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 static BACKEND: Mutex<Option<Backend>> = Mutex::new(None);
 #[export_name = "record_raw_region_read"]
@@ -33,6 +39,7 @@ unsafe extern "C" fn read(address: u32, buffer: *mut u8) -> i32 {
     let backend = backend.as_mut().unwrap();
     assert!(backend.held);
     backend.reads += 1;
+    if core::mem::take(&mut backend.fail_next_read) { return -7; }
     let bank = ((address >> 17) & 1) as usize;
     let banks = if address >> 17 & !1 == 0x54 { &backend.banks } else { &backend.other_banks };
     slice::from_raw_parts_mut(buffer, BLOCK_BYTES).copy_from_slice(&banks[bank]);
@@ -76,6 +83,8 @@ unsafe fn read_other_kind() {
     let mut bytes = [0; 3];
     assert_eq!(record_store_read_at(1, 0, 3, bytes.as_mut_ptr()), 0);
     assert_eq!(bytes, [7, 0, 0xb6]);
+    assert_eq!(record_store_read_at(1, 0x20000, 3, bytes.as_mut_ptr()), 0);
+    assert_eq!(bytes, [8, 0, 0xb7]);
 }
 unsafe extern "C" fn check_with_cross_kind_preemption(_: *mut u8, _: *mut u8) -> i32 {
     assert!(!BACKEND.lock().unwrap().as_ref().unwrap().held);
@@ -92,7 +101,7 @@ fn rsc_nine_guest_entries_status_outputs_and_read_only_semaphore() {
     let _serial = TEST_LOCK.lock().unwrap();
     unsafe {
         INITIALIZED = 0;
-        *BACKEND.lock().unwrap() = Some(Backend { banks: [vec![0xff; BLOCK_BYTES], vec![0xff; BLOCK_BYTES]], other_banks: [vec![0xff; BLOCK_BYTES], vec![0xff; BLOCK_BYTES]], held: false, reads: 0, writes: 0, preempt_on_release: false });
+        *BACKEND.lock().unwrap() = Some(Backend { banks: [vec![0xff; BLOCK_BYTES], vec![0xff; BLOCK_BYTES]], other_banks: [vec![0xff; BLOCK_BYTES], vec![0xff; BLOCK_BYTES]], held: false, reads: 0, writes: 0, preempt_on_release: false, fail_next_read: false });
         let register = |client: *mut *mut Wrapper| record_store_register(0, 0x60, 6, 0, None, ptr::null_mut(), None, ptr::null_mut(), client);
         let mut client = 0x1234usize as *mut Wrapper;
         assert_eq!(register(&mut client), -14);
@@ -169,8 +178,9 @@ fn cross_kind_preemption_preserves_latest_collect_and_addressed_bytes() {
         banks[0][0x60..0x63].copy_from_slice(&second);
         let mut other_banks = [vec![0xff; BLOCK_BYTES], vec![0xff; BLOCK_BYTES]];
         other_banks[0][..3].copy_from_slice(&[7, 0, 0xb6]);
+        other_banks[1][..3].copy_from_slice(&[8, 0, 0xb7]);
         INITIALIZED = 0;
-        *BACKEND.lock().unwrap() = Some(Backend { banks, other_banks, held: false, reads: 0, writes: 0, preempt_on_release: false });
+        *BACKEND.lock().unwrap() = Some(Backend { banks, other_banks, held: false, reads: 0, writes: 0, preempt_on_release: false, fail_next_read: false });
         assert_eq!(record_store_open(0), 0);
         let mut client = ptr::null_mut();
         assert_eq!(record_store_register(0, 0x60, 6, 0, Some(seal_with_cross_kind_preemption), ptr::null_mut(), Some(check_with_cross_kind_preemption), ptr::null_mut(), &mut client), 0);
@@ -201,5 +211,40 @@ fn cross_kind_preemption_preserves_latest_collect_and_addressed_bytes() {
         assert_eq!(record_store_read_at(0, 0xc0, 0x60, appended.as_mut_ptr()), 0);
         assert_eq!(&appended[..2], &[5, 0]);
         assert!(appended[2..].iter().all(|byte| *byte == 0xac));
+    }
+}
+
+#[test]
+fn shared_cache_reuses_two_kinds_evicts_oldest_and_memoizes_failed_fill() {
+    let _serial = TEST_LOCK.lock().unwrap();
+    unsafe {
+        INITIALIZED = 0;
+        *BACKEND.lock().unwrap() = Some(Backend {
+            banks: [vec![0xa0; BLOCK_BYTES], vec![0xa2; BLOCK_BYTES]],
+            other_banks: [vec![0xb0; BLOCK_BYTES], vec![0xb2; BLOCK_BYTES]],
+            held: false, reads: 0, writes: 0, preempt_on_release: false, fail_next_read: false,
+        });
+        assert_eq!(record_store_open(0), 0);
+        let read_byte = |kind, offset| {
+            let mut byte = 0;
+            assert_eq!(record_store_read_at(kind, offset, 1, &mut byte), 0);
+            byte
+        };
+        assert_eq!(read_byte(0, 0), 0xa0);
+        assert_eq!(read_byte(1, 0), 0xb0);
+        {
+            let mut backend = BACKEND.lock().unwrap();
+            let backend = backend.as_mut().unwrap();
+            backend.banks[0].fill(0xa1);
+            backend.other_banks[0].fill(0xb1);
+        }
+        assert_eq!(read_byte(0, 0), 0xa0);
+        assert_eq!(BACKEND.lock().unwrap().as_ref().unwrap().reads, 2);
+        assert_eq!(read_byte(0, 0x20000), 0xa2);
+        assert_eq!(read_byte(1, 0), 0xb1);
+        BACKEND.lock().unwrap().as_mut().unwrap().fail_next_read = true;
+        assert_eq!(read_byte(0, 0), 0xa2);
+        assert_eq!(read_byte(0, 0), 0xa2);
+        assert_eq!(BACKEND.lock().unwrap().as_ref().unwrap().reads, 5);
     }
 }
