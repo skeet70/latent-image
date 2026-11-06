@@ -184,6 +184,99 @@ haskell_library(
     ],
 )
 
+haskell_library(
+    name = "qualification",
+    srcs = ["Replacement/PropertyService/Qualification.hs"],
+    src_strip_prefix = ".",
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        "//emulation:case-sha256",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:scientific",
+        "//host:text",
+    ],
+)
+
+haskell_binary(
+    name = "qualify",
+    srcs = ["QualifyMain.hs"],
+    main_file = "QualifyMain.hs",
+    args = [
+        "--runner",
+        "$(rootpath //emulation:native-runner)",
+        "--oracle",
+        "$(rootpath :property-oracle)",
+        "--stage",
+        "$(rootpath :stage-property-service)",
+        "--stage-encoder",
+        "$(rootpath //lz:lz-encode)",
+        "--stage-rebuild",
+        "$(rootpath //host/firmware:rebuild-update)",
+        "--stage-decoder",
+        "$(rootpath //lz:fflzd)",
+        "--linked",
+        "$(rootpath :property-service-image.bin)",
+        "--symbols",
+        "$(rootpath :property-service-image.symbols)",
+    ] + [
+        argument
+        for defect in _DEFECTS
+        for argument in [
+            "--defect",
+            defect,
+            "$(rootpath :property-service-defect-%s.bin)" % defect.replace("_", "-"),
+            "$(rootpath :property-service-defect-%s.symbols)" % defect.replace("_", "-"),
+        ]
+    ],
+    data = [
+        ":property-oracle",
+        ":property-service-image.bin",
+        ":property-service-image.symbols",
+        ":stage-property-service",
+        "//emulation:native-runner",
+        "//host/firmware:rebuild-update",
+        "//lz:fflzd",
+        "//lz:lz-encode",
+    ] + [
+        ":property-service-defect-%s.%s" % (defect.replace("_", "-"), suffix)
+        for defect in _DEFECTS
+        for suffix in ["bin", "symbols"]
+    ],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":qualification",
+        "//host:base",
+        "//host:host-support",
+    ],
+)
+
+haskell_test(
+    name = "qualify-tests",
+    size = "small",
+    srcs = ["QualifyTests.hs"],
+    main_file = "QualifyTests.hs",
+    args = ["$(rootpath :qualify)"],
+    data = [":qualify"],
+    ghcopts = ["-XGHC2021", "-Wall", "-Werror", "-O2"],
+    deps = [
+        ":qualification",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:containers",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)
+
 haskell_binary(
     name = "property-oracle",
     srcs = ["OracleMain.hs"],
@@ -219,6 +312,7 @@ haskell_binary(
         ":classify",
         ":property-oracle-lib",
         ":property-service-artifact",
+        "//emulation:cached-native-batch",
         "//emulation:case-sha256",
         "//emulation:native-observation",
         "//emulation:owned-case",
