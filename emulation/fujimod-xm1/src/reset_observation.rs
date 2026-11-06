@@ -4,6 +4,7 @@ use crate::bridge::sha256;
 use crate::ff80::encode_hex;
 use crate::machine::Machine;
 use crate::run;
+use crate::trace::{SiteRead, parse_site_reads};
 use fujimod_emulator::board::factory::MemoryMap;
 use fujimod_emulator::board::observation::{MemoryWatch, ViewPolicy, WatchKinds, WatchRange};
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,8 @@ const WRITE_RANGE_LIMIT: usize = 8;
 struct RawSpec {
     schema: u32,
     sites: BTreeMap<String, String>,
+    #[serde(default)]
+    reads: BTreeMap<String, Vec<[u64; 2]>>,
     hit_limit: NonZeroUsize,
     write_ranges: Vec<[u32; 2]>,
     watch_limit: usize,
@@ -29,6 +32,7 @@ struct RawSpec {
 
 pub struct Spec {
     sites: BTreeMap<u32, String>,
+    site_reads: BTreeMap<u32, Vec<SiteRead>>,
     hit_limit: NonZeroUsize,
     write_ranges: Vec<[u32; 2]>,
     watch_limit: usize,
@@ -43,6 +47,7 @@ impl Spec {
         if raw.sites.is_empty() {
             return Err("reset observation arms no site".into());
         }
+        let site_reads = parse_site_reads(&raw.sites, &raw.reads)?;
         let sites = raw.sites.into_iter().map(|(address, label)| {
             let digits = address.strip_prefix("0x").ok_or_else(|| format!("site address {address} lacks 0x"))?;
             let parsed = u32::from_str_radix(digits, 16).map_err(|_| format!("site address {address} is not hexadecimal"))?;
@@ -55,7 +60,7 @@ impl Spec {
         if !(1..=WATCH_LIMIT).contains(&raw.watch_limit) {
             return Err(format!("reset observation watch limit must be 1..{WATCH_LIMIT}"));
         }
-        Ok(Self { sites, hit_limit: raw.hit_limit, write_ranges: raw.write_ranges, watch_limit: raw.watch_limit })
+        Ok(Self { sites, site_reads, hit_limit: raw.hit_limit, write_ranges: raw.write_ranges, watch_limit: raw.watch_limit })
     }
 
     pub fn sites(&self) -> &BTreeMap<u32, String> {
@@ -142,6 +147,7 @@ impl ResetObserver {
         }
         machine.traces.bound_hits(spec.hit_limit);
         machine.traces.arm(&machine.session, spec.sites.clone())?;
+        machine.traces.site_reads = spec.site_reads.clone();
         let ranges: Vec<_> = spec.write_ranges.iter().map(|range| WatchRange {
             start: u64::from(range[0]), end: u64::from(range[1]), kinds: WatchKinds::WRITES,
         }).collect();
@@ -199,9 +205,6 @@ mod tests {
 
     #[test]
     fn spec_refuses_unbounded_or_malformed_inputs() {
-        let valid = br#"{"schema":1,"sites":{"0x00000004":"loop"},"hit_limit":4,"write_ranges":[[0,16]],"watch_limit":8}"#;
-        let spec = Spec::parse(valid).unwrap();
-        assert_eq!(spec.sites, BTreeMap::from([(4, "loop".to_owned())]));
         for invalid in [
             &br#"{"schema":2,"sites":{"0x4":"loop"},"hit_limit":4,"write_ranges":[[0,16]],"watch_limit":8}"#[..],
             br#"{"schema":1,"sites":{},"hit_limit":4,"write_ranges":[[0,16]],"watch_limit":8}"#,
@@ -212,6 +215,17 @@ mod tests {
             br#"{"schema":1,"sites":{"0x4":"loop"},"hit_limit":4,"write_ranges":[[0,16]],"watch_limit":8,"extra":1}"#,
         ] {
             assert!(Spec::parse(invalid).is_err());
+        }
+        for reads in [
+            serde_json::json!({"0x8": [[0, 4]]}),
+            serde_json::json!({"0x4": [[0, 0]]}),
+            serde_json::json!({"0x4": [[0, 4097]]}),
+            serde_json::json!({"0x4": [[0xffff_ffffu64, 2]]}),
+            serde_json::json!({"0x4": [[u64::MAX, 4]]}),
+        ] {
+            let document = serde_json::json!({"schema": 1, "sites": {"0x4": "loop"},
+                "reads": reads, "hit_limit": 4, "write_ranges": [[0, 16]], "watch_limit": 8});
+            assert!(Spec::parse(&serde_json::to_vec(&document).unwrap()).is_err());
         }
     }
 }

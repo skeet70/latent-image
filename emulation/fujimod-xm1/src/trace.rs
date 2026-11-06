@@ -39,6 +39,29 @@ pub struct Hit {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SiteRead { pub address: u64, pub count: usize }
 
+pub fn parse_site_reads(
+    sites: &BTreeMap<String, String>,
+    reads: &BTreeMap<String, Vec<[u64; 2]>>,
+) -> Result<BTreeMap<u32, Vec<SiteRead>>, String> {
+    reads.iter().map(|(site, ranges)| {
+        if !sites.contains_key(site) {
+            return Err(format!("trace site read names an unrequested site {site}"));
+        }
+        let address = site.strip_prefix("0x")
+            .and_then(|digits| u32::from_str_radix(digits, 16).ok())
+            .ok_or_else(|| format!("invalid trace site address {site}"))?;
+        let ranges = ranges.iter().map(|&[address, count]| {
+            let count = usize::try_from(count).map_err(|_| "trace site read count exceeds the host")?;
+            if !(1..=4096).contains(&count)
+                || address.checked_add(count as u64).is_none_or(|end| end > 1 << 32) {
+                return Err("a trace site read requires an address and 1..4096 bytes".to_owned());
+            }
+            Ok(SiteRead { address, count })
+        }).collect::<Result<Vec<_>, String>>()?;
+        Ok((address, ranges))
+    }).collect()
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct CodeWord {
     pub guest: u32,

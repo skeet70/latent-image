@@ -20,7 +20,7 @@ use fujimod_emulator::board::preservation::{
     PhysicalRange, Preservation, PreservationState, ProtectedRanges,
 };
 use fujimod_xm1::sd_host::{Backing, SectorAddress, SectorCount};
-use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, InstructionCount, SiteRead};
+use fujimod_xm1::trace::{CAPTURE_OBSERVATION_BOUNDS, CaptureCursor, CaptureScope, CaptureSnapshot, InstructionCount, parse_site_reads};
 use serde::{Deserialize, Serialize};
 use fujimod_emulator_devices::Device;
 use fujimod_emulator_exr2_isp_input::ImageInput;
@@ -466,25 +466,6 @@ fn parse_address(text: &str) -> Result<u32, String> {
     text.strip_prefix("0x")
         .and_then(|digits| u32::from_str_radix(digits, 16).ok())
         .ok_or_else(|| format!("invalid trace site address {text}"))
-}
-
-/// The per-site reads of a `trace-sites` request: each named site is a requested one and each read
-/// is `[address, count]` with 1..=`MAX_READ` bytes inside the 32-bit physical space.
-fn parse_site_reads(sites: &BTreeMap<String, String>, reads: &BTreeMap<String, Vec<[u64; 2]>>)
-    -> Result<BTreeMap<u32, Vec<SiteRead>>, String> {
-    reads.iter().map(|(site, ranges)| {
-        if !sites.contains_key(site) {
-            return Err(format!("trace site read names an unrequested site {site}"));
-        }
-        let ranges = ranges.iter().map(|&[address, count]| {
-            let count = usize::try_from(count).map_err(|_| "trace site read count exceeds the host".to_owned())?;
-            if !(1..=MAX_READ).contains(&count) || address + count as u64 > 1 << 32 {
-                return Err("a trace site read requires an address and 1..4096 bytes".to_owned());
-            }
-            Ok(SiteRead { address, count })
-        }).collect::<Result<Vec<_>, String>>()?;
-        Ok((parse_address(site)?, ranges))
-    }).collect()
 }
 
 fn default_pulse(key: Press) -> KeyPulse {
@@ -2327,6 +2308,32 @@ mod tests {
             "reads": {"0x00000008": [[0, 4]]}}))).is_err());
         assert!(server.handle(request(json!({"command": "trace-sites", "sites": {"0x00000004": "loop"},
             "reads": {"0x00000004": [[0, 0]]}}))).is_err());
+    }
+
+    #[test]
+    fn reset_trace_reads_capture_before_and_after_a_guest_store() {
+        let mut server = server(&[0xe59f0008, 0xe3a0102a, 0xe5801000, 0xeafffffe, 0x00900000]);
+        server.bridge.machine.session.board.write_physical(0x00900000, &[0; 4]).unwrap();
+        let spec = ResetObservationSpec::parse(br#"{
+            "schema": 1, "sites": {"0x8": "before-store", "0xc": "after-store"},
+            "reads": {"0x8": [[9437184, 4], [4, 4]], "0xc": [[9437184, 4], [4, 4]]},
+            "hit_limit": 64, "write_ranges": [[9437184, 9437188]], "watch_limit": 32
+        }"#).unwrap();
+        let mut observer = ResetObserver::begin(&mut server.bridge.machine, &spec).unwrap();
+        assert_eq!(server.bridge.machine.run(20), RunOutcome::Completed);
+        let reply = server.handle(request(json!({"command": "trace-hits", "from": 0}))).unwrap().unwrap();
+        assert_eq!(reply["hits"][0]["site"], "before-store");
+        assert_eq!(reply["hits"][0]["memory"], json!(["00000000", "2a10a0e3"]));
+        assert_eq!(reply["hits"][1]["site"], "after-store");
+        assert_eq!(reply["hits"][1]["memory"], json!(["2a000000", "2a10a0e3"]));
+        for phase in [
+            fujimod_xm1::reset_observation::AttachPhase::FirstStart,
+            fujimod_xm1::reset_observation::AttachPhase::LiveView,
+            fujimod_xm1::reset_observation::AttachPhase::Attached,
+        ] {
+            observer.boundary(&server.bridge.machine, phase).unwrap();
+        }
+        observer.finish().unwrap();
     }
 
     #[test]

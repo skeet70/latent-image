@@ -106,7 +106,7 @@
   "moduleExtensions": {
     "//build-support:repositories.bzl%lab_dependencies": {
       "general": {
-        "bzlTransitiveDigest": "ERzjlYSfXqwBncQDRShWN9QmuVyToR2kP5l7xBrVyWM=",
+        "bzlTransitiveDigest": "v/lly2O61pV9D6VlBgUCMJAnrySE4MQNPFX+bwvceTQ=",
         "usagesDigest": "sSVILObhZPULwVuoQBqb/6f057l8rpC1qQ7SV+EjoRI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -606,6 +606,7 @@
                 "@@//emulation:fujimod-xm1/src/record_medium.rs": "//emulation:fujimod-xm1/src/record_medium.rs",
                 "@@//emulation:fujimod-xm1/src/record_medium_main.rs": "//emulation:fujimod-xm1/src/record_medium_main.rs",
                 "@@//emulation:fujimod-xm1/src/render.rs": "//emulation:fujimod-xm1/src/render.rs",
+                "@@//emulation:fujimod-xm1/src/render_provenance.rs": "//emulation:fujimod-xm1/src/render_provenance.rs",
                 "@@//emulation:fujimod-xm1/src/run.rs": "//emulation:fujimod-xm1/src/run.rs",
                 "@@//emulation:fujimod-xm1/src/reset_observation.rs": "//emulation:fujimod-xm1/src/reset_observation.rs",
                 "@@//emulation:fujimod-xm1/src/root_compact.rs": "//emulation:fujimod-xm1/src/root_compact.rs",
