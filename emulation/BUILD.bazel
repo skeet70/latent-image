@@ -2197,6 +2197,59 @@ haskell_library(
     ],
 )
 
+haskell_library(
+    name = "cached-native-batch",
+    srcs = ["Emulation/CachedNativeBatch.hs"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+    ],
+    src_strip_prefix = ".",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":case-sha256",
+        ":native-adapter",
+        ":native-observation",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+        "//host:json",
+        "//host:unix",
+    ],
+)
+
+haskell_test(
+    name = "cached-native-batch-tests",
+    size = "small",
+    srcs = ["CachedNativeBatchTests.hs"],
+    args = ["$(rootpath :native-runner)"],
+    data = [":native-runner"],
+    ghcopts = [
+        "-XGHC2021",
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-threaded",
+    ],
+    deps = [
+        ":cached-native-batch",
+        ":native-adapter",
+        ":native-observation",
+        ":owned-case",
+        "//host:aeson",
+        "//host:base",
+        "//host:bytestring",
+        "//host:directory",
+        "//host:filepath",
+        "//host:host-support",
+    ],
+)
+
 haskell_binary(
     name = "owned-menu-cases",
     srcs = ["OwnedMenuCases.hs"],
