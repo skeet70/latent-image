@@ -14,7 +14,7 @@ This report answers whether projects listed at [arewertosyet.com](https://arewer
 ### 1.2 Service ABI that retained callers keep using
 
 - Each root has **97 callable slots**: 93 at `0..0x170` plus four extensions at `+0x1618..+0x1624`. It also holds a tick pointer at `+0x174`, 120 eleven-word descriptors from `+0x178` and a stack-top word at `+0x1628`, for a total of 1,419 words [Draft:11; Map A.1].
-- Manifest v6 (E-RTOS-SLOT-MANIFEST-V5-150) recovers all 97 contracts per domain from the x70view decomp's kernel C (§4.13). Extents: 80 derived by StockInventory, 15 taken from byte-exact decomp functions, and 2 (`+0xc0`, `+0xd4`) still refused ([manifest draft](rtos-platform-manifest-draft.md#v6-contracts-from-the-decomp)).
+- Manifest v7 (E-RTOS-SLOT-MANIFEST-V5-150) recovers all 97 contracts per domain from the x70view decomp's kernel C (§4.13), including the mailbox pointer preconditions in §4.14. Extents: 80 derived by StockInventory, 15 taken from byte-exact decomp functions, and 2 (`+0xc0`, `+0xd4`) still refused ([manifest draft](rtos-platform-manifest-draft.md#v6-contracts-from-the-decomp)).
 - Retained code depends on more than the slots [Draft:37-46]:
   - it calls the scheduler and CPU helpers directly;
   - auto-ready `0x43f9c`, initial scheduler `0x43688`, trampolines `0x43728` and resume through `SPSR/LDM^` are direct entries;

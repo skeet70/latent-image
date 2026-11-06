@@ -4,17 +4,20 @@
 
 This is the first RTOS-platform research deliverable for #117/#127, incorporating #142, #143, #150, #151 and #152. It inventories X-M1 firmware 1.50 interfaces and missing contracts. It does not qualify a kernel replacement. The proposed milestones below are **[INFERENCE]**. Existing source and runtime claims retain their original scope; the generation command performs host-only source analysis. The replacement process permits new internal function boundaries and requires compatibility at retained interfaces, including shared objects, startup and hardware protocols. [Sources: `spec/11-incremental-firmware-replacement.md:11-19,33-58,79-99`; `reports/replacement-inventory-baseline.md` §§8.8-8.17.]
 
-The current machine-readable artifact is `private-data/scratch/RtosDecomp/manifest-v6.json` (E-RTOS-SLOT-MANIFEST-V5-150). It re-derives every slot contract from the kernel C of the x70view decomp at `55436fc85c0560dd252b0410af6f2427fe198cd3`: `decomp/firmwares/xm1-150/kernel0` is loader A and `kernel1` is loader B ([v6 contracts from the decomp](#v6-contracts-from-the-decomp)).
+The current machine-readable artifact is `private-data/scratch/RtosObjects/manifest-v7.json` (E-RTOS-SLOT-MANIFEST-V5-150). It re-derives every slot contract from the kernel C of the x70view decomp at `55436fc85c0560dd252b0410af6f2427fe198cd3`: `decomp/firmwares/xm1-150/kernel0` is loader A and `kernel1` is loader B ([v6 contracts from the decomp](#v6-contracts-from-the-decomp)). v7 adds eight mailbox-family pointer preconditions across the two domains; extent recovery and caller closure are unchanged.
 
 The earlier generations are preserved:
+- `private-data/scratch/RtosDecomp/manifest-v6.json`;
 - `private-data/scratch/RtosContracts/manifest-v5.json` and `manifest-v4.json`;
 - `private-data/scratch/RtosCensus/manifest-v3.json` and `manifest-v2.json`;
 - `private-data/scratch/RtosManifest/manifest.json`.
 
-`schemas/rtos-manifest.schema.json` describes v4, v5 and v6. Each generation added fields:
+`schemas/rtos-manifest.schema.json` describes v4 through v7. Schema additions:
 - v3: per-slot `preconditions` and the top-level `savedStackTaintResiduals`;
 - v4: per-slot `experiments` (proposed census arms and native cases for facts the source cannot settle), `gaps` and `domainNotes`;
 - v6: per-slot `decomp` sources, the top-level `decompCommit` and the extent status `decomp-exact`.
+
+v7 changes contract preconditions without adding schema fields. Its host generation and v6 comparison are recorded in E-RTOS-OBJECTS-F0-HOST-150.
 
 The generator is `replacement/media_permit/RtosManifestMain.hs`, target `//replacement/media_permit:rtos-manifest`. Its versioned inputs are:
 - the non-root/law inventory `replacement/media_permit/rtos_surface.json`;
