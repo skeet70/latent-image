@@ -273,12 +273,12 @@ executeValidated :: RunnerIdentity -> DigestHex -> FilePath -> [CurrentCase] -> 
 executeValidated identity batchSha256 batchPath cases temporary = do
   observations <- newIORef []
   manifests <- newIORef []
-  next <- newIORef 0
+  remaining <- newIORef cases
   summary <- runBatch (identityPath identity) batchPath $ \report -> do
-    index <- readIORef next
-    case drop index cases of
+    pending <- readIORef remaining
+    case pending of
       [] -> failH "native batch emitted more reports than admitted cases"
-      current : _ -> do
+      current : rest -> do
         ensure
           (reportCase report == currentId current)
           (caseIdText (currentId current) ++ ": native batch report is out of order")
@@ -312,10 +312,10 @@ executeValidated identity batchSha256 batchPath cases temporary = do
             B.writeFile (caseDirectory </> "exit") (exitBytes exit)
             B.writeFile (caseDirectory </> "provenance.json") provenanceBytes
             modifyIORef' manifests (manifestCase current exit rawBytes provenanceBytes :)
-        writeIORef next (index + 1)
+        writeIORef remaining rest
   observed <- reverse <$> readIORef observations
   manifested <- reverse <$> readIORef manifests
-  processed <- readIORef next
+  unprocessed <- readIORef remaining
   ensure
     (summaryStatus summary == BatchComplete)
     ( "native batch did not complete: "
@@ -330,7 +330,7 @@ executeValidated identity batchSha256 batchPath cases temporary = do
     ensure
       (batchCaseStatus batchCase == CasePassed || batchCaseStatus batchCase == CaseFailed)
       (caseIdText (currentId current) ++ ": native batch case did not produce a complete report")
-  ensure (processed == length cases) "native batch did not report every admitted case"
+  ensure (null unprocessed) "native batch did not report every admitted case"
   ensure (length observed == length cases) "native batch did not observe every admitted case"
   pure (observed, manifested)
 
@@ -405,8 +405,8 @@ readCached identity key cases entry batchPath = do
 
 validateCached :: RunnerIdentity -> CacheKey -> [CurrentCase] -> FilePath -> FilePath -> IO [(CaseId, NativeObservation)]
 validateCached identity key cases entry batchPath = do
-  manifestBytes <- readRegularWith (pure ()) False manifestLimit (entry </> "manifest.json")
-  manifest <- parseManifest =<< jsonRead manifestBytes
+  encodedManifest <- readRegularWith (pure ()) False manifestLimit (entry </> "manifest.json")
+  manifest <- parseManifest =<< jsonRead encodedManifest
   ensure (manifestKey manifest == key) "cache manifest key differs"
   ensure
     (manifestRunner manifest == RunnerRecord (identityPath identity) (identitySha256 identity))

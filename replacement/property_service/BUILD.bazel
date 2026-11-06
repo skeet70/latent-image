@@ -201,6 +201,8 @@ haskell_library(
         "//host:json",
         "//host:scientific",
         "//host:text",
+        "//host:unix",
+        "//replacement/media_permit:property-fields",
     ],
 )
 
@@ -211,6 +213,8 @@ haskell_binary(
     args = [
         "--runner",
         "$(rootpath //emulation:native-runner)",
+        "--emulator-slot",
+        "$(rootpath //emulation:emulator-slot)",
         "--oracle",
         "$(rootpath :property-oracle)",
         "--stage",
@@ -241,6 +245,7 @@ haskell_binary(
         ":property-service-image.symbols",
         ":stage-property-service",
         "//emulation:native-runner",
+        "//emulation:emulator-slot",
         "//host/firmware:rebuild-update",
         "//lz:fflzd",
         "//lz:lz-encode",

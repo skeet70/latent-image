@@ -20,7 +20,7 @@ module Replacement.PropertyService.Qualification
   , resolveWithin
   ) where
 
-import Control.Exception (SomeException, displayException, finally, try)
+import Control.Exception (IOException, SomeException, bracketOnError, displayException, finally, mask, try)
 import Control.Monad (forM, unless)
 import Data.Aeson (Value (..), eitherDecodeStrict', object, (.=))
 import qualified Data.Aeson.Key as K
@@ -28,7 +28,7 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import Data.Foldable (toList)
-import Data.List (isPrefixOf, nub, sortOn)
+import Data.List (intercalate, isPrefixOf, nub, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Maybe (isJust, isNothing)
 import Data.Scientific (floatingOrInteger)
@@ -37,6 +37,8 @@ import qualified Data.Text as T
 import Emulation.Sha256 (sha256, sha256Hex, sha256File)
 import FujiAF.Host (failH, readRegular, runBounded)
 import FujiAF.JSON (encodeCanonical)
+import Numeric (readHex, showHex)
+import PropertyFields (PropertyId (..))
 import System.Directory
   ( canonicalizePath
   , createDirectory
@@ -44,9 +46,9 @@ import System.Directory
   , doesDirectoryExist
   , doesFileExist
   , doesPathExist
+  , getCurrentDirectory
   , getFileSize
   , makeAbsolute
-  , removeDirectory
   , renameDirectory
   , renameFile
   , setCurrentDirectory
@@ -54,7 +56,8 @@ import System.Directory
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (splitDirectories, takeDirectory, takeFileName, (</>))
-import System.IO (hClose, openTempFile)
+import System.IO (SeekMode (AbsoluteSeek), hClose, openTempFile)
+import System.Posix.IO (FdOption (CloseOnExec), LockRequest (WriteLock), OpenFileFlags (creat), OpenMode (ReadWrite), closeFd, defaultFileFlags, openFd, setFdOption, setLock)
 
 canonicalImage4 :: String
 canonicalImage4 = "f2e2acab892dafeed85171f6870a411f0a2d5eae10921b86a24630d401dcff16"
@@ -68,6 +71,8 @@ detailLimit = 2000
 
 -- Options ---------------------------------------------------------------------
 
+newtype PropertySelection = PropertySelection [PropertyId] deriving (Eq, Show)
+
 data Options = Options
   { optDat :: FilePath
   , optImage4 :: FilePath
@@ -80,8 +85,9 @@ data Options = Options
   , optSymbols :: FilePath
   , optOut :: FilePath
   , optCache :: FilePath
-  , optIds :: Maybe String
+  , optIds :: Maybe PropertySelection
   , optRunner :: FilePath
+  , optSlot :: FilePath
   , optOracle :: FilePath
   , optStage :: FilePath
   , optStageEncoder :: FilePath
@@ -107,6 +113,7 @@ defaultOptions =
     , optCache = ""
     , optIds = Nothing
     , optRunner = ""
+    , optSlot = ""
     , optOracle = ""
     , optStage = ""
     , optStageEncoder = ""
@@ -123,9 +130,9 @@ parseOptions = go defaultOptions
     go options ("--defect" : name : bin : symbols : rest) =
       go options {optDefects = optDefects options ++ [(name, bin, symbols)]} rest
     go _ ("--defect" : _) = Left "--defect needs NAME BIN SYMBOLS"
-    go options ("--ids" : value : rest)
-      | null value = Left "--ids needs a non-empty value"
-      | otherwise = go options {optIds = Just value} rest
+    go options ("--ids" : value : rest) = do
+      selection <- parseSelection value
+      go options {optIds = Just selection} rest
     go options (flag : rest) = case lookup flag valueFlags of
       Just set -> case rest of
         value : more -> go (set options value) more
@@ -139,6 +146,7 @@ parseOptions = go defaultOptions
             , ("--loader-b", optLoaderB options), ("--image5", optImage5 options), ("--plain", optPlain options)
             , ("--image2", optImage2 options), ("--linked", optLinked options), ("--symbols", optSymbols options)
             , ("--out", optOut options), ("--cache", optCache options), ("--runner", optRunner options)
+            , ("--emulator-slot", optSlot options)
             , ("--oracle", optOracle options), ("--stage", optStage options)
             , ("--stage-encoder", optStageEncoder options), ("--stage-rebuild", optStageRebuild options)
             , ("--stage-decoder", optStageDecoder options)
@@ -161,6 +169,7 @@ parseOptions = go defaultOptions
       , ("--out", \options value -> options {optOut = value})
       , ("--cache", \options value -> options {optCache = value})
       , ("--runner", \options value -> options {optRunner = value})
+      , ("--emulator-slot", \options value -> options {optSlot = value})
       , ("--oracle", \options value -> options {optOracle = value})
       , ("--stage", \options value -> options {optStage = value})
       , ("--stage-encoder", \options value -> options {optStageEncoder = value})
@@ -209,9 +218,9 @@ resolveOutput flag scratch path = do
           Left (flag ++ ": " ++ problem ++ "; use private-data/scratch/QualificationAutomation/jobs or .../cache")
         Right canonical -> Right canonical
   where
-    canonicalExisting path = do
-      exists <- doesDirectoryExist path
-      if exists then canonicalizePath path else canonicalExisting (takeDirectory path)
+    canonicalExisting candidate = do
+      exists <- doesDirectoryExist candidate
+      if exists then canonicalizePath candidate else canonicalExisting (takeDirectory candidate)
 
 -- Typed oracle results ---------------------------------------------------------
 
@@ -261,16 +270,16 @@ parseOracleSummary root = do
   unless (schema == 1) (Left "schema_version: 1 required")
   passed <- boolField "passed" root
   shape <- field "case_shape" root
-  subset <- boolField "case_shape.subset" shape
-  idsText <- stringField "case_shape.ids" shape
-  casesPerRole <- intField "case_shape.cases_per_role" shape
-  gridCases <- intField "case_shape.grid_cases" shape
+  subset <- boolField "subset" shape
+  idsText <- stringField "ids" shape
+  casesPerRole <- intField "cases_per_role" shape
+  gridCases <- intField "grid_cases" shape
   execution <- field "execution" root
-  cache <- stringField "execution.cache" execution
-  executedBatches <- intField "execution.batches_executed" execution
-  reusedBatches <- intField "execution.batches_reused" execution
-  executedCases <- intField "execution.cases_executed" execution
-  reusedCases <- intField "execution.cases_reused" execution
+  cache <- stringField "cache" execution
+  executedBatches <- intField "batches_executed" execution
+  reusedBatches <- intField "batches_reused" execution
+  executedCases <- intField "cases_executed" execution
+  reusedCases <- intField "cases_reused" execution
   controlsValue <- arrayField "controls" root
   controls <- mapM parseControl controlsValue
   differencesValue <- objectField "differences" root
@@ -278,8 +287,8 @@ parseOracleSummary root = do
   inputsValue <- objectField "inputs" root
   inputs <- M.fromList <$> mapM parseInput (KM.toList inputsValue)
   runner <- field "runner" root
-  runnerPath <- stringField "runner.path" runner
-  runnerSha <- stringField "runner.sha256" runner
+  runnerPath <- stringField "path" runner
+  runnerSha <- stringField "sha256" runner
   contractSha <- stringField "contract_staged_image4_sha256" root
   unless (executedBatches + reusedBatches > 0) (Left "execution: no batches recorded")
   unless (executedCases + reusedCases > 0) (Left "execution: no cases recorded")
@@ -318,7 +327,7 @@ parseOracleSummary root = do
       detail <- stringField "detail" value
       pure (DifferenceSample caseId kind detail)
     parseDifferenceGroup (key, value) = do
-      samples <- arrayField (K.toString key) value >>= mapM parseDifferenceSample
+      samples <- asArray (K.toString key) value >>= mapM parseDifferenceSample
       pure (K.toString key, samples)
     parseDifferenceSample value = do
       caseId <- stringField "case" value
@@ -338,7 +347,7 @@ stringField :: String -> Value -> Either String String
 stringField key value = field key value >>= asString key
 
 asString :: String -> Value -> Either String String
-asString key (String text) = Right (T.unpack text)
+asString _ (String text) = Right (T.unpack text)
 asString key _ = Left (key ++ ": string required")
 
 boolField :: String -> Value -> Either String Bool
@@ -600,6 +609,7 @@ jobIdentityFor :: Options -> StageDigests -> String -> IO JobDigests
 jobIdentityFor options stage stageKey = do
   oracleDigest <- fileDigest (optOracle options)
   runnerDigest <- fileDigest (optRunner options)
+  slotDigest <- fileDigest (optSlot options)
   defects <- forM (optDefects options) $ \(name, bin, symbolPath) -> do
     binDigest <- fileDigest bin
     symbolsDigest <- fileDigest symbolPath
@@ -611,7 +621,7 @@ jobIdentityFor options stage stageKey = do
           , "sources" .= object [fromString role .= digest | (role, digest) <- M.toList (digestsSources stage)]
           , "candidate" .= object ["linked" .= digestsLinked stage, "symbols" .= digestsSymbols stage]
           , "comparison" .= object
-              [ "ids" .= fmap splitCommas (optIds options)
+              [ "ids" .= fmap selectionIds (optIds options)
               , "full_native" .= isNothing (optIds options)
               , "defects" .=
                   [ object ["name" .= name, "bin_sha256" .= binDigest, "symbols_sha256" .= symbolsDigest]
@@ -620,6 +630,7 @@ jobIdentityFor options stage stageKey = do
               ]
           , "oracle" .= object ["path" .= optOracle options, "sha256" .= oracleDigest]
           , "runner" .= object ["path" .= optRunner options, "sha256" .= runnerDigest]
+          , "emulator_slot" .= object ["path" .= optSlot options, "sha256" .= slotDigest]
           ]
   pure JobDigests {jobValue = value, jobRunnerSha256 = runnerDigest, jobDefects = defects}
 
@@ -658,7 +669,7 @@ data JobView = JobView
   , jobNotes :: [String]
   , jobExpectedInputs :: M.Map String (FilePath, String)
   , jobRunnerPath :: FilePath
-  , jobRunnerSha256 :: String
+  , viewRunnerSha256 :: String
   }
 
 data Attempt = Attempt
@@ -672,8 +683,11 @@ data Attempt = Attempt
   }
 
 runQualification :: Options -> IO (Int, Value)
-runQualification options = do
-  lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= mapM_ setCurrentDirectory
+runQualification supplied = do
+  invocation <- getCurrentDirectory
+  workspace <- lookupEnv "BUILD_WORKSPACE_DIRECTORY" >>= maybe (pure invocation) makeAbsolute
+  options <- anchorRuntimePaths invocation workspace supplied
+  setCurrentDirectory workspace
   prepared <- try (setupJob options) :: IO (Either SomeException (Either String Setup))
   case prepared of
     Left exception -> publishSetupError options (displayException exception)
@@ -684,6 +698,31 @@ runQualification options = do
         Left message ->
           pure (2, preJobVerdict (setupOptions setup) "" ("--out is busy: " ++ message))
         Right outcome -> pure outcome
+
+anchorRuntimePaths :: FilePath -> FilePath -> Options -> IO Options
+anchorRuntimePaths invocation workspace options = do
+  runner <- anchor (optRunner options)
+  slot <- anchor (optSlot options)
+  oracle <- anchor (optOracle options)
+  stage <- anchor (optStage options)
+  encoder <- anchor (optStageEncoder options)
+  rebuild <- anchor (optStageRebuild options)
+  decoder <- anchor (optStageDecoder options)
+  linked <- anchor (optLinked options)
+  symbols <- anchor (optSymbols options)
+  defects <- forM (optDefects options) $ \(name, image, syms) -> do
+    anchoredImage <- anchor image
+    anchoredSymbols <- anchor syms
+    pure (name, anchoredImage, anchoredSymbols)
+  pure options
+    { optRunner = runner, optSlot = slot, optOracle = oracle, optStage = stage
+    , optStageEncoder = encoder, optStageRebuild = rebuild, optStageDecoder = decoder
+    , optLinked = linked, optSymbols = symbols, optDefects = defects
+    }
+  where
+    anchor path = do
+      present <- doesFileExist (invocation </> path)
+      makeAbsolute ((if present then invocation else workspace) </> path)
 
 setupJob :: Options -> IO (Either String Setup)
 setupJob options = do
@@ -727,6 +766,7 @@ resolveInputs options = do
   linked <- resolve (optLinked options) "--linked"
   symbols <- resolve (optSymbols options) "--symbols"
   runner <- resolve (optRunner options) "--runner"
+  slot <- resolve (optSlot options) "--emulator-slot"
   oracle <- resolve (optOracle options) "--oracle"
   stage <- resolve (optStage options) "--stage"
   encoder <- resolve (optStageEncoder options) "--stage-encoder"
@@ -748,6 +788,7 @@ resolveInputs options = do
       , optLinked = linked
       , optSymbols = symbols
       , optRunner = runner
+      , optSlot = slot
       , optOracle = oracle
       , optStage = stage
       , optStageEncoder = encoder
@@ -762,13 +803,17 @@ resolveInputs options = do
       canonicalizePath path
 
 withOutLock :: FilePath -> IO (Either String a) -> IO (Either String a)
-withOutLock out action = do
-  let lock = out </> ".qualify-lock"
-  acquired <- try (createDirectory lock)
+withOutLock out action = mask $ \restore -> do
+  acquired <- try $ bracketOnError
+    (openFd (out </> ".qualify.lock") ReadWrite defaultFileFlags {creat = Just 0o600})
+    closeFd
+    (\fd -> do
+      setFdOption fd CloseOnExec True
+      setLock fd (WriteLock, AbsoluteSeek, 0, 0)
+      pure fd)
   case acquired of
-    Right () -> action `finally` removeDirectory lock
-    Left (exception :: SomeException) ->
-      pure (Left (lock ++ ": " ++ displayException exception ++ "; remove a stale lock only after confirming no run is active"))
+    Left (exception :: IOException) -> pure (Left (displayException exception))
+    Right fd -> restore action `finally` closeFd fd
 
 runLocked :: Setup -> IO (Either String (Int, Value))
 runLocked setup = do
@@ -799,7 +844,7 @@ runLocked setup = do
                   , jobNotes = notes
                   , jobExpectedInputs = expectedInputsFor options (setupStage setup) files (setupJobs setup)
                   , jobRunnerPath = optRunner options
-                  , jobRunnerSha256 = jobRunnerSha256 (setupJobs setup)
+                  , viewRunnerSha256 = jobRunnerSha256 (setupJobs setup)
                   }
           attempted <- try (runAttempt view attemptParent) :: IO (Either SomeException Attempt)
           let attempt = case attempted of
@@ -809,7 +854,10 @@ runLocked setup = do
 
 finalize :: JobView -> Attempt -> IO (Int, Value)
 finalize view attempt = do
-  integrity <- verifyEffective view
+  checked <- try (verifyEffective view)
+  let integrity = case checked of
+        Left (exception :: IOException) -> Left (displayException exception)
+        Right result -> result
   case integrity of
     Left problem -> publishAttemptError view attempt "identity" problem
     Right () -> do
@@ -841,13 +889,13 @@ publishAttemptError view attempt predicate problem = do
 
 publishSetupError :: Options -> String -> IO (Int, Value)
 publishSetupError options message = do
-  outAttempt <- try (makeAbsolute (optOut options))
+  outAttempt <- try (privateScratchRoot >>= \scratch -> resolveOutput "--out" scratch (optOut options))
   case outAttempt of
-    Left (exception :: SomeException) -> pure (2, preJobVerdict options "" (displayException exception))
-    Right out -> do
+    Left (exception :: IOException) -> pure (2, preJobVerdict options "" (displayException exception))
+    Right (Left problem) -> pure (2, preJobVerdict options "" problem)
+    Right (Right out) -> do
       let resolved = options {optOut = out}
       target <- try (do
-        createDirectoryIfMissing True out
         createDirectoryIfMissing True (out </> "results")
         reserveDirectory (out </> "results") "error-")
       case target of
@@ -856,8 +904,10 @@ publishSetupError options message = do
         Right (Right directory) -> do
           let verdict = preJobVerdict resolved directory message
               review = preJobReview resolved directory message
-          _ <- commitResults out directory (verdict, review) (pure ())
-          pure (2, verdict)
+          published <- commitResults out directory (verdict, review) (pure ())
+          pure $ case published of
+            Left problem -> (2, preJobVerdict resolved directory ("artifact publication failed: " ++ problem))
+            Right () -> (2, verdict)
 
 publishAttemptSetupError :: Setup -> FilePath -> String -> IO (Int, Value)
 publishAttemptSetupError setup attemptParent message = do
@@ -981,7 +1031,7 @@ oracleArguments view directory =
     , ["--out", directory]
     , ["--cache", optCache options]
     ]
-    ++ maybe [] (\ids -> ["--ids", ids]) (optIds options)
+    ++ maybe [] (\selection -> ["--ids", intercalate "," (selectionIds selection)]) (optIds options)
     ++ concat [["--defect", name, bin, symbols] | (name, bin, symbols) <- optDefects options]
   where
     options = jobOptions view
@@ -992,7 +1042,7 @@ runAttempt view parent = do
       directory = parent </> "results"
       stdoutLog = parent </> "stdout.log"
       stderrLog = parent </> "stderr.log"
-  outcome <- try (runBounded oracleTimeoutMicros oracleOutputCap (optOracle options) (oracleArguments view directory) B.empty)
+  outcome <- try (runBounded oracleTimeoutMicros oracleOutputCap (optSlot options) (optOracle options : oracleArguments view directory) B.empty)
   case outcome of
     Left (exception :: SomeException) -> do
       B.writeFile stdoutLog B.empty
@@ -1064,11 +1114,11 @@ summaryMismatch view summary =
   [ "runner path differs: " ++ summaryRunnerPath summary ++ " vs " ++ jobRunnerPath view
   | summaryRunnerPath summary /= jobRunnerPath view
   ]
-    ++ ["runner sha256 differs" | summaryRunnerSha256 summary /= jobRunnerSha256 view]
+    ++ ["runner sha256 differs" | summaryRunnerSha256 summary /= viewRunnerSha256 view]
     ++ ["contract staged image4 sha256 differs" | summaryContractImage4Sha256 summary /= stageImage4Sha256 files]
     ++ ["cache root differs" | summaryCacheRoot summary /= optCache options]
     ++ ["subset flag differs" | summarySubset summary /= isJust (optIds options)]
-    ++ ["subset ids differ" | summarySubset summary, sortOn id (nub (summaryIds summary)) /= sortOn id (nub (maybe [] splitCommas (optIds options)))]
+    ++ ["subset ids differ" | summarySubset summary, sortOn id (nub (summaryIds summary)) /= sortOn id (nub (maybe [] selectionIds (optIds options)))]
     ++ ["input " ++ role ++ " is missing from results" | role <- M.keys expected, not (M.member role actual)]
     ++ [ "input " ++ role ++ " path or sha256 differs"
        | (role, (path, digest)) <- M.toList expected
@@ -1226,7 +1276,7 @@ attemptErrorVerdict view attempt predicate detail =
     ]
   where
     sub = isJust (optIds (jobOptions view))
-    ids = maybe [] splitCommas (optIds (jobOptions view))
+    ids = maybe [] selectionIds (optIds (jobOptions view))
 
 errorFailure :: String -> String -> Attempt -> Value
 errorFailure predicate detail attempt =
@@ -1242,7 +1292,7 @@ errorFailure predicate detail attempt =
 attemptReview :: JobView -> Attempt -> Int -> Value
 attemptReview view attempt code =
   let summary = either (const Nothing) Just (attemptSummary attempt)
-      status = if code == 0 then "passed" else if code == 1 then "failed" else "error"
+      status = if code == 0 then "passed" else if code == 1 then "failed" else "error" :: String
    in object
         [ "schema_version" .= (1 :: Int)
         , "kind" .= ("property-service-review-packet" :: String)
@@ -1263,7 +1313,7 @@ attemptReview view attempt code =
         , "execution" .= maybe Null (flip executionValue attempt) summary
         , "scope" .= reviewScope summary
         , "controls" .= maybe [] (map controlRow . summaryControls) summary
-        , "failures" .= maybe [] (take 50 . failureRows attempt) summary
+        , "failures" .= maybe [] (map (failureJson attempt) . take 50 . failureRows attempt) summary
         , "artifacts" .= artifactsValue view attempt
         , "limits" .= limitText (maybe False summarySubset summary)
         ]
@@ -1309,7 +1359,7 @@ preJobVerdict options directory message =
     [ "schema_version" .= (1 :: Int)
     , "verdict" .= ("error" :: String)
     , "native_only" .= True
-    , "scope" .= object ["subset" .= isJust (optIds options), "ids" .= maybe [] splitCommas (optIds options), "full_native" .= isNothing (optIds options)]
+    , "scope" .= object ["subset" .= isJust (optIds options), "ids" .= maybe [] selectionIds (optIds options), "full_native" .= isNothing (optIds options)]
     , "identity" .= Null
     , "stage" .= Null
     , "execution" .= Null
@@ -1345,8 +1395,8 @@ preJobArtifacts options directory =
   where
     path name
       | null directory = Null
-      | name == "current" = String (optOut options </> "current")
-      | otherwise = String (directory </> (if name == "review_packet" then "review-packet.json" else name ++ ".json"))
+      | name == "current" = String (T.pack (optOut options </> "current"))
+      | otherwise = String (T.pack (directory </> (if name == "review_packet" then "review-packet.json" else name ++ ".json")))
 
 bounded :: String -> String
 bounded message = take detailLimit message
@@ -1403,9 +1453,17 @@ attemptVerdictLabel view attempt = case attemptSummary attempt of
     | summaryPassed summary && attemptExit attempt == 0 && null (failureRows attempt summary) -> "passed"
     | otherwise -> "failed"
 
-splitCommas :: String -> [String]
-splitCommas text = [item | item <- split text, not (null item)]
+parseSelection :: String -> Either String PropertySelection
+parseSelection text = PropertySelection . nub <$> mapM parse (split text)
   where
     split value = case break (== ',') value of
       (item, []) -> [item]
       (item, _ : rest) -> item : split rest
+    parse item = case item of
+      '0' : 'x' : digits | not (null digits) -> case readHex digits :: [(Integer, String)] of
+        [(identifier, "")] | identifier <= 0x286 -> Right (PropertyId (fromInteger identifier))
+        _ -> Left ("--ids: invalid property " ++ item)
+      _ -> Left ("--ids: invalid property " ++ item)
+
+selectionIds :: PropertySelection -> [String]
+selectionIds (PropertySelection identifiers) = ["0x" ++ showHex identifier "" | PropertyId identifier <- identifiers]

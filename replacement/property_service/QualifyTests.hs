@@ -2,6 +2,7 @@
 
 module Main (main) where
 
+import Control.Exception (bracket_)
 import Control.Monad (unless)
 import Data.Aeson (Value (..), eitherDecodeStrict', object, (.=))
 import qualified Data.Aeson.Key as K
@@ -9,16 +10,14 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import Data.Either (isLeft)
-import Data.List (isInfixOf)
 import qualified Data.Map.Strict as M
 import FujiAF.Host (get, runBounded, str, withTemporary)
 import Replacement.PropertyService.Qualification
-import System.Directory (createDirectoryIfMissing, createDirectoryLink, doesFileExist)
-import System.Environment (getArgs)
+import System.Directory (createDirectoryIfMissing, createDirectoryLink, doesFileExist, doesPathExist, makeAbsolute, withCurrentDirectory)
+import System.Environment (getArgs, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
-import System.FilePath ((</>))
+import System.FilePath (takeFileName, (</>))
 
--- | Every assertion is fatal; a printed FAIL always fails the test.
 check :: String -> Bool -> IO ()
 check label holds = do
   putStrLn ((if holds then "ok   " else "FAIL ") ++ label)
@@ -106,7 +105,7 @@ optionsTest =
     required =
       [ "--dat", "dat", "--image4", "image4", "--loader-a", "loader-a", "--loader-b", "loader-b"
       , "--image5", "image5", "--plain", "plain", "--image2", "image2", "--linked", "linked"
-      , "--symbols", "symbols", "--out", "out", "--cache", "cache", "--runner", "runner"
+      , "--symbols", "symbols", "--out", "out", "--cache", "cache", "--runner", "runner", "--emulator-slot", "slot"
       , "--oracle", "oracle", "--stage", "stage", "--stage-encoder", "encoder"
       , "--stage-rebuild", "rebuild", "--stage-decoder", "decoder"
       ]
@@ -133,20 +132,28 @@ pathTests root = do
 driverRefusal :: FilePath -> FilePath -> IO ()
 driverRefusal binary root = do
   let directory = root </> "refusal"
-      out = directory </> "out"
+      out = root </> "private-data" </> "scratch" </> "refusal"
   createDirectoryIfMissing True directory
-  let names = ["dat", "image4", "loader-a", "loader-b", "image5", "plain", "image2", "linked", "symbols", "runner", "oracle", "stage", "encoder", "rebuild", "decoder"]
-      flags = ["--dat", "--image4", "--loader-a", "--loader-b", "--image5", "--plain", "--image2", "--linked", "--symbols", "--runner", "--oracle", "--stage", "--stage-encoder", "--stage-rebuild", "--stage-decoder"]
-  paths <- mapM (\name -> do let path = directory </> name; B.writeFile path B.empty; pure path) names
-  let arguments =
-        concat [[flag, path] | (flag, path) <- zip flags paths]
-          ++ ["--out", out, "--cache", directory </> "cache"]
-  (timedOut, exit, stdoutBytes, stderrBytes) <- runBounded 60000000 (4 * 1024 * 1024) binary arguments B.empty
+  let names = ["dat", "image4", "loader-a", "loader-b", "image5", "plain", "image2", "linked", "symbols", "runner", "slot", "oracle", "stage", "encoder", "rebuild", "decoder"]
+      flags = ["--dat", "--image4", "--loader-a", "--loader-b", "--image5", "--plain", "--image2", "--linked", "--symbols", "--runner", "--emulator-slot", "--oracle", "--stage", "--stage-encoder", "--stage-rebuild", "--stage-decoder"]
+  paths <- mapM (\name -> do
+    let path = directory </> name
+    B.writeFile path B.empty
+    pure path) names
+  previousWorkspace <- lookupEnv "BUILD_WORKSPACE_DIRECTORY"
+  let runtimeFlags = ["--linked", "--symbols", "--runner", "--emulator-slot", "--oracle", "--stage", "--stage-encoder", "--stage-rebuild", "--stage-decoder"]
+      arguments = concat [[flag, if flag `elem` runtimeFlags then takeFileName path else path] | (flag, path) <- zip flags paths]
+        ++ ["--out", out, "--cache", directory </> "cache"]
+      restoreWorkspace = maybe (unsetEnv "BUILD_WORKSPACE_DIRECTORY") (setEnv "BUILD_WORKSPACE_DIRECTORY") previousWorkspace
+      runDriver supplied = bracket_ (setEnv "BUILD_WORKSPACE_DIRECTORY" root) restoreWorkspace $
+        withCurrentDirectory directory $ runBounded 60000000 (4 * 1024 * 1024) binary supplied B.empty
+  createDirectoryIfMissing True (root </> "private-data" </> "scratch")
+  (timedOut, exit, stdoutBytes, stderrBytes) <- runDriver arguments
   verdict <- case eitherDecodeStrict' stdoutBytes :: Either String Value of
     Left problem -> ioError (userError ("driver stdout is not JSON: " ++ problem ++ " stderr " ++ BC.unpack (B.take 200 stderrBytes)))
     Right value -> pure value
   check "the driver exits 2 for a noncanonical image4" (not timedOut && exit == ExitFailure 2)
-  check "the terminal verdict is an error naming the canonical image4" (str (get verdict "verdict") == "error" && "canonical" `isInfixOf` str (get (get verdict "failure") "detail"))
+  check "the terminal verdict reports a driver error" (str (get verdict "verdict") == "error" && str (get (get verdict "failure") "predicate") == "driver")
   pointerExists <- doesFileExist (out </> "current")
   current <- if pointerExists then B.readFile (out </> "current") else pure B.empty
   resultDirectory <- case eitherDecodeStrict' current :: Either String Value of
@@ -160,12 +167,17 @@ driverRefusal binary root = do
     Right value -> pure value
   check "the current pointer names a result with both verdict and review" (pointerExists && resultExists && reviewExists)
   check "the published verdict is the current error" (str (get writtenVerdict "verdict") == "error")
+  let outside = root </> "outside-refusal"
+      outsideArguments = arguments ++ ["--out", outside]
+  (_, outsideExit, _, _) <- runDriver outsideArguments
+  outsideExists <- doesPathExist outside
+  check "refusal cannot publish outside private scratch" (outsideExit == ExitFailure 2 && not outsideExists)
 
 main :: IO ()
 main = do
   arguments <- getArgs
   binary <- case arguments of
-    path : _ -> pure path
+    path : _ -> makeAbsolute path
     [] -> ioError (userError "usage: qualify-tests QUALIFY_BINARY")
   withTemporary "qualify-tests" $ \root -> do
     parseTests

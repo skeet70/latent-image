@@ -138,13 +138,12 @@ expectedRejudgeTest root runner = do
   (reused, rejudged) <- cachedObservedBatch cache runner batchPath
   ensure (reused == BatchReused) ("changed expectation did not reuse raw output: " ++ show reused)
   ensure (rejudged == baseline) "changed expectation changed the raw observation"
-  checkResultFile batchDirectory (head changed) (snd (head rejudged)) "failed"
-  checkResultFile batchDirectory (changed !! 1) (snd (rejudged !! 1)) "passed"
+  checkResultFiles batchDirectory changed rejudged ["failed", "passed"]
   _ <- O.writeBatch batchDirectory cases
   (again, restored) <- cachedObservedBatch cache runner batchPath
   ensure (again == BatchReused) "restoring the expectation did not reuse raw output"
   ensure (restored == baseline) "restoring the expectation changed the raw observation"
-  checkResultFile batchDirectory (head cases) (snd (head restored)) "passed"
+  checkResultFiles batchDirectory cases restored ["passed", "passed"]
   entries <- cacheEntries cache
   ensure (length entries == 1) ("expectation changes created extra cache entries: " ++ show entries)
 
@@ -164,8 +163,8 @@ wireChangeTest root runner = do
   ensure (changedReuse == BatchExecuted) ("changed wire reused: " ++ show changedReuse)
   ensure (changedObservations /= baseline) "changed wire produced the old observation"
   ensure
-    (N.lookupRegister N.R0 (snd (head changedObservations)) == Just 0xcafebabe)
-    ("changed wire observation: " ++ show (head changedObservations))
+    ((lookup (CaseId "writer") changedObservations >>= N.lookupRegister N.R0) == Just 0xcafebabe)
+    ("changed wire observation: " ++ show changedObservations)
   (again, againObservations) <- cachedObservedBatch cache runner batchPath
   ensure (again == BatchReused) "changed wire did not become reusable"
   ensure (againObservations == changedObservations) "changed wire reuse differs"
@@ -175,10 +174,7 @@ labelChangeTest root runner = do
   let cache = root </> "cache"
       batchDirectory = root </> "batch"
       cases = specs 0xdeadbeef 0xdeadbeef 0x11223344
-      renamed =
-        [ (head cases) {O.caseId = "writer-renamed"}
-        , (cases !! 1) {O.caseId = "reader-renamed"}
-        ]
+      renamed = zipWith (\ident caseSpec -> caseSpec {O.caseId = ident}) ["writer-renamed", "reader-renamed"] cases
   batchPath <- O.writeBatch batchDirectory cases
   (executed, baseline) <- cachedObservedBatch cache runner batchPath
   ensure (executed == BatchExecuted) "baseline did not execute"
@@ -238,23 +234,23 @@ corruptionTest root runner = do
   (rawCorrupt, rawObservations) <- cachedObservedBatch cache runner batchPath
   ensure (rawCorrupt == BatchExecuted) ("corrupt raw output was reused: " ++ show rawCorrupt)
   ensure (rawObservations == baseline) "corrupt raw rerun produced a different observation"
-  checkResultFile batchDirectory (head cases) (snd (head rawObservations)) "passed"
-  entry <- singleEntry cache
-  removeFile (entry </> "manifest.json")
+  checkResultFiles batchDirectory cases rawObservations ["passed", "passed"]
+  uncommittedEntry <- singleEntry cache
+  removeFile (uncommittedEntry </> "manifest.json")
   (noManifest, noManifestObservations) <- cachedObservedBatch cache runner batchPath
   ensure (noManifest == BatchExecuted) ("uncommitted manifest was reused: " ++ show noManifest)
   ensure (noManifestObservations == baseline) "uncommitted rerun produced a different observation"
-  entry <- singleEntry cache
-  removeFile (entry </> "cases" </> "reader" </> "exit")
+  missingExitEntry <- singleEntry cache
+  removeFile (missingExitEntry </> "cases" </> "reader" </> "exit")
   (noExit, _) <- cachedObservedBatch cache runner batchPath
   ensure (noExit == BatchExecuted) ("missing recorded exit was reused: " ++ show noExit)
-  entry <- singleEntry cache
-  B.writeFile (entry </> "cases" </> "writer" </> "provenance.json") (BC.pack "{}")
+  provenanceEntry <- singleEntry cache
+  B.writeFile (provenanceEntry </> "cases" </> "writer" </> "provenance.json") (BC.pack "{}")
   (badProvenance, _) <- cachedObservedBatch cache runner batchPath
   ensure (badProvenance == BatchExecuted) ("corrupt provenance was reused: " ++ show badProvenance)
-  entry <- singleEntry cache
-  readerRaw <- B.readFile (entry </> "cases" </> "reader" </> "runner.json")
-  B.writeFile (entry </> "cases" </> "writer" </> "runner.json") readerRaw
+  substitutedEntry <- singleEntry cache
+  readerRaw <- B.readFile (substitutedEntry </> "cases" </> "reader" </> "runner.json")
+  B.writeFile (substitutedEntry </> "cases" </> "writer" </> "runner.json") readerRaw
   (substituted, substitutedObservations) <- cachedObservedBatch cache runner batchPath
   ensure (substituted == BatchExecuted) ("substituted raw output was reused: " ++ show substituted)
   ensure (substitutedObservations == baseline) "substituted raw rerun produced a different observation"
@@ -283,21 +279,29 @@ faultyTest :: FilePath -> FilePath -> IO ()
 faultyTest root runner = do
   let cache = root </> "cache"
       batchDirectory = root </> "batch"
-      cases = specs 0xdeadbeef 0xdeadbeef 0x12345678
+      faulty = spec "faulty" [0xe3a00000, 0xe5820000, 0xe12fff1e]
+        [(N.R0, 0xdeadbeef), (N.R2, 0x9000)] [(N.R0, 0xdeadbeef)]
+        [(N.RegionId "data", O.word32le 0xdeadbeef)]
+      cases = [faulty]
   batchPath <- O.writeBatch batchDirectory cases
   (executed, observations) <- cachedObservedBatch cache runner batchPath
   ensure (executed == BatchExecuted) "faulty batch did not execute"
   ensure (all ((== N.Returned) . N.nativeStatus . snd) observations) "faulty batch lost its raw observation"
-  checkResultFile batchDirectory (head cases) (snd (head observations)) "passed"
-  checkResultFile batchDirectory (cases !! 1) (snd (observations !! 1)) "failed"
-  failed <- B.readFile (batchDirectory </> (O.caseId (cases !! 1) ++ ".native-result.json")) >>= jsonRead
+  checkResultFiles batchDirectory cases observations ["failed"]
+  failed <- B.readFile (batchDirectory </> "faulty.native-result.json") >>= jsonRead
   ensure
-    (any ("register r1" `isInfixOf`) (map str (list (get failed "mismatches"))))
+    (any ("register r0" `isInfixOf`) (map str (list (get failed "mismatches"))))
     ("faulty result lacks actionable mismatch: " ++ show failed)
   (reused, reusedObservations) <- cachedObservedBatch cache runner batchPath
   ensure (reused == BatchReused) ("faulty batch was not reusable: " ++ show reused)
   ensure (reusedObservations == observations) "faulty batch reuse changed the observation"
-  checkResultFile batchDirectory (cases !! 1) (snd (reusedObservations !! 1)) "failed"
+  checkResultFiles batchDirectory cases reusedObservations ["failed"]
+
+checkResultFiles :: FilePath -> [O.CaseSpec] -> [(CaseId, N.NativeObservation)] -> [String] -> IO ()
+checkResultFiles directory cases observations statuses = do
+  ensure (map fst observations == caseIds cases && length cases == length statuses) "result cohort differs"
+  forM_ (zip3 cases observations statuses) $ \(caseSpec, (_, observation), status) ->
+    checkResultFile directory caseSpec observation status
 
 checkResultFile :: FilePath -> O.CaseSpec -> N.NativeObservation -> String -> IO ()
 checkResultFile batchDirectory caseSpec observation wantedStatus = do
