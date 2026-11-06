@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
-import Control.Exception (SomeException, displayException, try)
+import Control.Exception (SomeException, displayException, evaluate, try)
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
@@ -51,9 +51,9 @@ run [stockDirectory,ownedDirectory,contractPath,linkedPath,symbolPath,routesPath
     forM_ (comparisonEvidencePath comparison) $ \path -> do
       evidence <- B.readFile path
       either (ioError . userError) pure (validateComparisonEvidence comparison evidence)
-    stock <- load stockDirectory
-    owned <- load ownedDirectory
-    case (qualify Stock bindings stock,qualify Owned bindings owned) of
+    stock <- load stockDirectory >>= evaluate . qualify Stock bindings
+    owned <- load ownedDirectory >>= evaluate . qualify Owned bindings
+    case (stock,owned) of
       (Left failure,_) -> pure (False,object ["schema" .= (2::Int),"outcome" .= ("refused"::T.Text),"role" .= ("stock"::T.Text),"error" .= failure])
       (_,Left failure) -> pure (False,object ["schema" .= (2::Int),"outcome" .= ("refused"::T.Text),"role" .= ("owned"::T.Text),"error" .= failure])
       (Right retained,Right candidate) -> do

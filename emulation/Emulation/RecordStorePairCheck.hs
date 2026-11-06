@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Emulation.RecordStorePairCheck
   ( Role (..), Sidecar (..), sidecarName, Observation (..), Bindings (..)
@@ -7,12 +8,16 @@ module Emulation.RecordStorePairCheck
 import Control.Monad (foldM, forM, forM_, unless, when)
 import Data.Aeson (Value (..), object, (.=))
 import qualified Data.Aeson as A
+import Data.Aeson.Decoding (toEitherValue)
+import Data.Aeson.Decoding.ByteString.Lazy (lbsToTokens)
+import Data.Aeson.Decoding.Tokens (Tokens (..), TkArray (..))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
-import Data.List (sort, sortOn)
+import qualified Data.ByteString.Lazy as L
+import Data.List (foldl', sort, sortOn)
 import qualified Data.Map.Strict as M
 import Data.Scientific (toBoundedInteger)
 import qualified Data.Set as S
@@ -588,6 +593,88 @@ parsePostSettlePrefix prefix = do
   mode <- field "source_mode" state >>= parseLocalUiMode
   pure (menu,mode)
 
+foldSteps :: (state -> Value -> Parse state) -> (state -> ()) -> state -> B.ByteString -> Parse state
+foldSteps step force initial bytes = case lbsToTokens (L.fromStrict bytes) of
+  TkArrayOpen items -> loop initial items
+  TkErr failure -> Left failure
+  _ -> Left "expected steps array"
+ where
+  loop !state items = case items of
+    TkItem tokens -> do
+      (value,next) <- toEitherValue tokens
+      state' <- step state value
+      force state' `seq` loop state' next
+    TkArrayEnd remaining -> if L.all (`elem` [9,10,13,32]) remaining then Right state else Left "trailing steps data"
+    TkArrayErr failure -> Left failure
+
+forceScalar :: a -> ()
+forceScalar value = value `seq` ()
+
+forceList :: (a -> ()) -> [a] -> ()
+forceList force = foldl' (\() value -> force value) ()
+
+forceMaybe :: (a -> ()) -> Maybe a -> ()
+forceMaybe _ Nothing = ()
+forceMaybe force (Just value) = force value
+
+forceKeys :: [CrawlKey] -> ()
+forceKeys = forceList forceScalar
+
+forceRegions :: Regions -> ()
+forceRegions (Regions rows) = forceList (\(Address address, bytes) -> address `seq` B.length bytes `seq` ()) rows
+
+forceMenu :: Menu -> ()
+forceMenu NoMenu = ()
+forceMenu (Menu node setting cursor) = node `seq` setting `seq` cursor `seq` ()
+
+forcePress :: Press -> ()
+forcePress (Press menu ui mode) = forceMenu menu `seq` ui `seq` mode `seq` ()
+
+forceRule :: OutputRule -> ()
+forceRule CompareBytes = ()
+forceRule PreserveBytes = ()
+forceRule UnresolvedBytes = ()
+forceRule (CollectionBytes (RecordSize size) (SequenceOffset offset) (ByteCount count)) = size `seq` offset `seq` count `seq` ()
+
+forceOutput :: Output -> ()
+forceOutput AbsentOutput = ()
+forceOutput (Output rule bytes residue) = forceRule rule `seq` B.length bytes `seq` B.length residue `seq` ()
+
+forceCall :: Call -> ()
+forceCall (Call entry arguments returned outputs) =
+  entry `seq` forceList forceScalar arguments `seq` forceMaybe forceScalar returned `seq` forceList forceOutput outputs `seq` ()
+
+forceNand :: Nand -> ()
+forceNand (Program words bytes) = forceList forceScalar words `seq` B.length bytes `seq` ()
+forceNand (Erase block count) = block `seq` count `seq` ()
+
+forceBlock :: Block -> ()
+forceBlock (Block logical mapped bytes spare) =
+  logical `seq` forceMaybe forceScalar mapped `seq` B.length bytes `seq` forceMaybe (\extra -> B.length extra `seq` ()) spare `seq` ()
+
+forceMedium :: Medium -> ()
+forceMedium (Medium blocks) = forceList forceBlock blocks
+
+forceState :: State -> ()
+forceState (State retirement service layouts pending) =
+  retirement `seq` service `seq` M.size layouts `seq` M.size pending `seq` ()
+
+forceInterval :: Interval -> ()
+forceInterval (Interval name keys calls nand before after press medium) =
+  T.length name `seq` forceKeys keys `seq` forceList forceCall calls `seq` forceList forceNand nand `seq`
+  forceRegions before `seq` forceRegions after `seq` forceMaybe forcePress press `seq` forceMaybe forceMedium medium `seq` ()
+
+forceSteps :: (Int, Int, [Interval], M.Map Int (State, Regions, [CrawlKey]), S.Set [CrawlKey]) -> ()
+forceSteps (number, start, intervals, known, seen) =
+  number `seq` start `seq` forceList forceInterval intervals `seq`
+  M.foldrWithKey (\key (state, regions, keys) rest -> key `seq` forceState state `seq` forceRegions regions `seq` forceKeys keys `seq` rest) () known `seq`
+  S.foldr (\keys rest -> forceKeys keys `seq` rest) () seen `seq` ()
+
+forceQualified :: Qualified -> ()
+forceQualified (Qualified _ cohort routes intervals medium) =
+  forceList (\(InputName name, Digest digest) -> T.length name `seq` T.length digest `seq` ()) cohort
+  `seq` length routes `seq` forceList forceInterval intervals `seq` forceMedium medium `seq` ()
+
 qualify :: Role -> Bindings -> Observation -> Parse Qualified
 qualify role bindings observation = do
   receipt <- json (receiptBytes observation)
@@ -672,9 +759,9 @@ qualify role bindings observation = do
   attachedSettings <- field "settings_at_attach" receipt >>= parseRegions SettingsSnapshot
   need (attachedSettings == rootRegions) "attach settings differ from reset endpoint"
   attachedMedium <- field "medium_at_attach" receipt >>= parseMedium
-  steps <- load Steps >>= array
+  stepsBytes <- maybe (Left "missing steps") Right (M.lookup Steps (sidecars observation))
   let expectedPaths = S.fromList [take n keys | route <- routeList routes, let keys = routeKeys route, n <- [1..length keys]]
-  (_,lastEnd,results,_,paths) <- foldM (\(number,start,acc,known,seen) step -> do
+  (_,lastEnd,results,_,paths) <- foldSteps (\(number,start,acc,known,seen) step -> do
     actual <- field "step" step >>= int
     need (actual == number) "steps are not sequential"
     parent <- field "parent" step >>= int
@@ -701,7 +788,7 @@ qualify role bindings observation = do
     need (leaf == maybe False (const True) finalMedium) "leaf medium capture missing or misplaced"
     watch <- field "watch" step
     (next,result) <- interval parentState (T.pack (show number)) keys before after first last' (Just (Press menu endpointMenu endpointMode)) finalMedium watch "fixed"
-    pure (number+1,last',acc++[result],M.insert number (next,after,keys) known,S.insert keys seen)) (1,rootEnd,[],M.empty,S.empty) steps
+    pure (number+1,last',acc++[result],M.insert number (next,after,keys) known,S.insert keys seen)) forceSteps (1,rootEnd,[],M.empty,S.empty) stepsBytes
   need (paths == expectedPaths && lastEnd == length hits) "routes or trace tail unobserved"
   forM_ [keys | Route _ (KeyRoute keys (Declared CustomResetDefaults)) <- routeList routes] $ \keys -> do
     case [observed | observed@(Interval _ path _ _ _ _ _ _) <- results, path == keys] of
@@ -714,7 +801,8 @@ qualify role bindings observation = do
         Interval _ _ _ _ _ _ _ (Just blocks):_ -> blocks
         _ -> attachedMedium
   need (terminal == lastMedium) "terminal medium differs from final leaf"
-  pure (Qualified role cohort (routeList routes) (phases ++ [Interval "attach-medium" [] [] [] rootRegions rootRegions Nothing (Just attachedMedium)] ++ results) terminal)
+  let qualified = Qualified role cohort (routeList routes) (phases ++ [Interval "attach-medium" [] [] [] rootRegions rootRegions Nothing (Just attachedMedium)] ++ results) terminal
+  forceQualified qualified `seq` pure qualified
  where
   (>=>) first second value = first value >>= second
 
