@@ -179,3 +179,14 @@ exports_files(["regions-s3c.json"])
     )
     for domain in ["a", "b"]
 ]
+
+genrule(
+    name = "scheduler-host-rlib",
+    srcs = [
+        "src/lib.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+    ],
+    outs = ["libxm1_rtos_scheduler.rlib"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 --crate-name=xm1_rtos_scheduler --crate-type=rlib -o $@ $(location src/lib.rs)",
+    tools = ["@lab_rustc//:bin/rustc"],
+)

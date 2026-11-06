@@ -30,10 +30,12 @@ pub trait Wake: ObjectLock {
     fn reset_task(&self, task: Task);
     fn prepare(&self, owner: Domain, task: Task) -> Selection;
     fn insert(&self, owner: Domain, task: Task) -> Selection;
-    /// A `0x44018` / B `0xd3fd4`, with the record id deciding locality.
-    fn notify(&self, owner: Domain) -> DispatchTarget;
-    /// A `0x43640` / B `0xd3640`.
-    fn dispatch(&self);
+    /// The owner record's `+0x00` id word.
+    fn record_id(&self, owner: Domain) -> u32;
+    /// A `0x44018` / B `0xd3fd4`.
+    fn notify(&self, id: u32) -> DispatchTarget;
+    /// A `0x43640` / B `0xd3640`, with the stock body's code in r0.
+    fn dispatch(&self, code: i32);
 }
 
 fn unlink<M: Machine>(m: &M, task: Task) {
@@ -76,7 +78,7 @@ fn release<M: Wake>(m: &M, owner: Domain, task: Task) -> Selection {
 fn dispatch_after<M: Wake>(m: &M, owner: Domain, released: Selection) -> bool {
     match released {
         Selection::Unchanged => false,
-        Selection::Changed => m.notify(owner) == DispatchTarget::Local,
+        Selection::Changed => m.notify(m.record_id(owner)) == DispatchTarget::Local,
     }
 }
 
@@ -118,7 +120,7 @@ pub fn set_flag<M: Wake>(m: &M, id: FlagId, bits: Pattern) {
         })
     });
     if dispatch {
-        m.dispatch();
+        m.dispatch(-43);
     }
 }
 
@@ -178,6 +180,6 @@ pub fn send<M: Wake>(m: &M, id: MailboxId, message: Message, priority: Option<Me
         })
     });
     if dispatch {
-        m.dispatch();
+        m.dispatch(-43);
     }
 }

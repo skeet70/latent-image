@@ -1,14 +1,12 @@
-//! In-memory scheduler backend for host tests and the external consumer.
-use crate::create::Machine;
-use crate::id::EntryDomain;
-use crate::layout::{
-    Domain, DomainId, GuestAddress, KernelContext, LockRecord, Priority, ReadyHead, Task, TaskDefinition,
-    TaskFlags, TaskState,
-};
+//! Host backend over the owned S1/S2 bodies in `xm1_rtos_scheduler`; models memory, the timer
+//! boundary and the doorbell.
+use crate::create::{Machine as CreateMachine, SavedInterrupts};
+use crate::layout::{Domain, DomainId, GuestAddress, KernelContext, LockRecord, Task};
 use crate::locked::ObjectLock;
 use crate::wake::{DispatchTarget, Selection, Wake};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
+use xm1_rtos_scheduler as s1;
 
 pub struct Sim {
     words: RefCell<BTreeMap<u32, u32>>,
@@ -17,6 +15,26 @@ pub struct Sim {
     doorbell: [Cell<bool>; 2],
     held: Cell<bool>,
     interrupts: Cell<u32>,
+}
+
+fn at(address: GuestAddress) -> s1::GuestAddress {
+    s1::GuestAddress(address.0)
+}
+
+fn back(address: s1::GuestAddress) -> GuestAddress {
+    GuestAddress(address.0)
+}
+
+fn context(address: s1::GuestAddress) -> s1::KernelContext {
+    s1::KernelContext(address.0)
+}
+
+fn task(address: s1::GuestAddress) -> s1::Task {
+    s1::Task(address.0)
+}
+
+fn lock(address: GuestAddress) -> s1::LockRecord {
+    s1::LockRecord(address.0)
 }
 
 impl Sim {
@@ -31,16 +49,43 @@ impl Sim {
         }
     }
 
+    /// Installs one context record's pointer fields and an empty ready set, as the initialiser does.
+    pub fn install(&self, owner: Domain, dispatch_enabled: bool) {
+        let record = self.context(owner);
+        let base = match owner {
+            Domain::A => 0x4006_0000,
+            Domain::B => 0x4006_0100,
+        };
+        let heads = GuestAddress(base);
+        for priority in 0..16u32 {
+            let head = heads.offset(priority * 8);
+            self.set(head, head.0);
+            self.set(head.offset(0x04), head.0);
+        }
+        self.set(record.ready_heads(), heads.0);
+        self.set(record.ready_bitmap(), base + 0x80);
+        self.set(record.selected(), base + 0x84);
+        self.set(record.running(), base + 0x88);
+        self.set(record.dispatch_enabled(), base + 0x8c);
+        self.set(GuestAddress(base + 0x8c), dispatch_enabled as u32);
+        self.set(record.first_entry(), base + 0x90);
+    }
+
     pub fn entry(&self) -> Domain {
         self.entry
     }
 
-    pub fn word(&self, at: GuestAddress) -> u32 {
-        *self.words.borrow().get(&at.0).unwrap_or(&0)
+    pub fn word(&self, address: GuestAddress) -> u32 {
+        *self.words.borrow().get(&address.0).unwrap_or(&0)
     }
 
-    pub fn set(&self, at: GuestAddress, value: u32) {
-        self.words.borrow_mut().insert(at.0, value);
+    pub fn set(&self, address: GuestAddress, value: u32) {
+        self.words.borrow_mut().insert(address.0, value);
+    }
+
+    pub fn set_byte(&self, address: GuestAddress, value: u8) {
+        let kept = self.word(address) & !0xff;
+        self.set(address, kept | value as u32);
     }
 
     pub fn arm(&self, entry: GuestAddress) {
@@ -55,71 +100,96 @@ impl Sim {
         self.doorbell[core].get()
     }
 
-    pub fn running(&self, domain: Domain) -> u32 {
-        self.word(self.context(domain).running())
+    pub fn running(&self, owner: Domain) -> u32 {
+        self.pointed(self.context(owner).running())
     }
 
-    pub fn selected(&self, domain: Domain) -> u32 {
-        self.word(self.context(domain).selected())
+    pub fn selected(&self, owner: Domain) -> u32 {
+        self.pointed(self.context(owner).selected())
     }
 
-    pub fn ready(&self, domain: Domain, priority: u32) -> u32 {
-        let head = self.context(domain).ready_heads().offset(priority * ReadyHead::SIZE);
-        self.word(head)
+    pub fn ready(&self, owner: Domain, priority: u32) -> u32 {
+        let heads = GuestAddress(self.pointed(self.context(owner).ready_heads()));
+        self.word(heads.offset(priority * 8))
     }
 
-    pub fn ready_bit(&self, domain: Domain, priority: u32) -> bool {
-        self.word(self.context(domain).ready_bitmap()) & (1 << priority) != 0
+    pub fn ready_bit(&self, owner: Domain, priority: u32) -> bool {
+        self.pointed(self.context(owner).ready_bitmap()) & (1 << priority) != 0
     }
 
-    fn context(&self, domain: Domain) -> KernelContext {
+    fn pointed(&self, field: GuestAddress) -> u32 {
+        self.word(GuestAddress(self.word(field)))
+    }
+
+    fn context(&self, owner: Domain) -> KernelContext {
         match self.entry {
-            Domain::A => match domain {
+            Domain::A => match owner {
                 Domain::A => KernelContext(GuestAddress(0x4005_45cc)),
                 Domain::B => KernelContext(GuestAddress(0x4005_4650)),
             },
-            Domain::B => match domain {
+            Domain::B => match owner {
                 Domain::A => KernelContext(GuestAddress(0x400e_458c)),
                 Domain::B => KernelContext(GuestAddress(0x400e_4610)),
             },
         }
     }
+}
 
-    fn record_id(&self, owner: Domain) -> u32 {
-        if owner == self.entry {
-            0
-        } else {
-            match owner {
-                Domain::A => 1,
-                Domain::B => 2,
-            }
-        }
+impl s1::Machine for Sim {
+    fn load_word(&self, address: s1::GuestAddress) -> u32 {
+        self.word(back(address))
     }
 
-    fn dispatch_enabled(&self, domain: Domain) -> u32 {
-        let pointer = self.word(self.context(domain).dispatch_enabled());
-        self.word(GuestAddress(pointer))
+    fn load_byte(&self, address: s1::GuestAddress) -> u8 {
+        self.word(back(address)) as u8
+    }
+
+    fn store_word(&self, address: s1::GuestAddress, value: u32) {
+        assert_ne!(self.interrupts.get() & 0x80, 0, "store with IRQ unmasked");
+        self.set(back(address), value);
+    }
+
+    fn store_byte(&self, address: s1::GuestAddress, value: u8) {
+        assert_ne!(self.interrupts.get() & 0x80, 0, "store with IRQ unmasked");
+        let word = back(address);
+        let kept = self.word(word) & !0xff;
+        self.set(word, kept | value as u32);
+    }
+
+    fn try_claim(&self, word: s1::GuestAddress) -> bool {
+        if self.word(back(word)) != 0 {
+            return false;
+        }
+        self.set(back(word), 1);
+        true
+    }
+
+    fn dmb(&self) {}
+
+    fn dsb(&self) {}
+
+    fn raise_irq(&self, core: s1::IrqCore, _irq: s1::Irq) {
+        self.doorbell[core.0 as usize].set(true);
     }
 }
 
-impl Machine for Sim {
-    fn load_word(&self, at: GuestAddress) -> u32 {
-        self.word(at)
+impl CreateMachine for Sim {
+    fn load_word(&self, address: GuestAddress) -> u32 {
+        self.word(address)
     }
 
-    fn store_word(&self, at: GuestAddress, value: u32) {
-        let state = self.interrupts.get();
-        assert_ne!(state & 0x80, 0, "store with IRQ unmasked");
-        self.set(at, value);
+    fn store_word(&self, address: GuestAddress, value: u32) {
+        assert_ne!(self.interrupts.get() & 0x80, 0, "store with IRQ unmasked");
+        self.set(address, value);
     }
 
-    fn mask_interrupts(&self) -> crate::create::SavedInterrupts {
+    fn mask_interrupts(&self) -> SavedInterrupts {
         let saved = self.interrupts.get();
         self.interrupts.set(saved | 0xc0);
-        crate::create::SavedInterrupts(saved)
+        SavedInterrupts(saved)
     }
 
-    fn restore_interrupts(&self, saved: crate::create::SavedInterrupts) {
+    fn restore_interrupts(&self, saved: SavedInterrupts) {
         self.interrupts.set(saved.0);
     }
 
@@ -127,12 +197,14 @@ impl Machine for Sim {
 }
 
 impl ObjectLock for Sim {
-    fn with_object_lock<R>(&self, _lock: LockRecord, body: impl FnOnce() -> R) -> R {
+    fn with_object_lock<R>(&self, record: LockRecord, body: impl FnOnce() -> R) -> R {
         assert!(!self.held.get(), "object lock acquired twice");
         let saved = self.interrupts.get();
         self.interrupts.set(saved | 0x80);
         self.held.set(true);
+        s1::acquire(self, lock(record.0));
         let result = body();
+        s1::release(self, lock(record.0));
         self.held.set(false);
         self.interrupts.set(saved);
         result
@@ -140,17 +212,20 @@ impl ObjectLock for Sim {
 }
 
 impl Wake for Sim {
-    fn with_scheduler_lock<R>(&self, _domain: Domain, body: impl FnOnce() -> R) -> R {
+    fn with_scheduler_lock<R>(&self, owner: Domain, body: impl FnOnce() -> R) -> R {
         assert!(self.held.get(), "scheduler lock taken without the object lock");
         let saved = self.interrupts.get();
         self.interrupts.set(saved | 0x80);
+        let record = self.context(owner).scheduler_lock();
+        s1::acquire(self, lock(record.0));
         let result = body();
+        s1::release(self, lock(record.0));
         self.interrupts.set(saved);
         result
     }
 
-    fn waiter_domain(&self, task: Task) -> Domain {
-        match DomainId::from_word(self.word(task.domain())) {
+    fn waiter_domain(&self, waiter: Task) -> Domain {
+        match DomainId::from_word(self.word(waiter.domain())) {
             Some(DomainId::A) => Domain::A,
             Some(DomainId::B) => Domain::B,
             _ => panic!("waiting task has no domain tag"),
@@ -161,64 +236,44 @@ impl Wake for Sim {
         assert!(self.armed.borrow_mut().remove(&entry.0), "timer was not armed");
     }
 
-    fn reset_task(&self, task: Task) {
-        let definition = TaskDefinition(GuestAddress(self.word(task.definition())));
-        let priority = self.word(definition.priority()) & 0x0f;
-        self.set(task.priority(), priority);
-        self.set(task.state(), TaskState::DORMANT.bits() as u32);
-        let flags = self.word(task.flags())
-            & !(TaskFlags::QUEUED_WAKEUP.bits() as u32 | TaskFlags::EXCEPTION_ENABLED.bits() as u32);
-        self.set(task.flags(), flags);
-        self.set(task.exception_pattern(), 0);
-        self.set(task.terminate_pending(), 0);
-        self.set(task.priority_change_pending(), 0);
-        self.set(task.cancel_pending(), 0);
+    fn reset_task(&self, waiter: Task) {
+        s1::reset(self, task(at(waiter.0)));
     }
 
-    fn prepare(&self, owner: Domain, task: Task) -> Selection {
-        let definition = TaskDefinition(GuestAddress(self.word(task.definition())));
-        let [low, high] = definition.initial_sp_terms();
-        let sp = self.word(low).wrapping_add(self.word(high));
-        self.set(task.saved_sp(), sp);
-        self.set(task.resume_pc(), self.word(self.context(owner).first_entry()));
-        self.insert(owner, task)
-    }
-
-    fn insert(&self, owner: Domain, task: Task) -> Selection {
-        let context = self.context(owner);
-        let priority = self.word(task.priority()) & 0x0f;
-        self.set(task.state(), TaskState::READY.bits() as u32);
-        let head = context.ready_heads().offset(priority * ReadyHead::SIZE);
-        let prev = self.word(head.offset(0x04));
-        self.set(task.prev(), prev);
-        self.set(task.next(), head.0);
-        self.set(GuestAddress(prev), task.0 .0);
-        self.set(head.offset(0x04), task.0 .0);
-        self.set(context.ready_bitmap(), self.word(context.ready_bitmap()) | (1 << priority));
-        let selected = self.word(context.selected());
-        if selected != 0 && priority >= (self.word(Task(GuestAddress(selected)).priority()) & 0x0f) {
-            return Selection::Unchanged;
-        }
-        self.set(context.selected(), task.0 .0);
-        if self.dispatch_enabled(owner) != 0 {
-            Selection::Changed
-        } else {
+    fn prepare(&self, owner: Domain, waiter: Task) -> Selection {
+        let record = self.context(owner);
+        let inserted = s1::prepare(self, context(at(record.0)), task(at(waiter.0)), || {
+            s1::insert(self, context(at(record.0)), task(at(waiter.0)))
+        });
+        if inserted == s1::Reschedule::NONE {
             Selection::Unchanged
+        } else {
+            Selection::Changed
         }
     }
 
-    fn notify(&self, owner: Domain) -> DispatchTarget {
-        let id = self.record_id(owner);
-        if id == 0 || id == match self.entry { Domain::A => 1, Domain::B => 2 } {
-            return DispatchTarget::Local;
+    fn insert(&self, owner: Domain, waiter: Task) -> Selection {
+        let record = self.context(owner);
+        if s1::insert(self, context(at(record.0)), task(at(waiter.0))) == s1::Reschedule::NONE {
+            Selection::Unchanged
+        } else {
+            Selection::Changed
         }
-        self.doorbell[(id >> 1) as usize].set(true);
-        DispatchTarget::Remote
     }
 
-    fn dispatch(&self) {
-        let owner = self.entry;
-        let selected = self.word(self.context(owner).selected());
-        self.set(self.context(owner).running(), selected);
+    fn record_id(&self, owner: Domain) -> u32 {
+        self.word(self.context(owner).id())
+    }
+
+    fn notify(&self, id: u32) -> DispatchTarget {
+        match s1::notify(self, self.entry, s1::RecordId(id)) {
+            s1::Notified::Local => DispatchTarget::Local,
+            s1::Notified::Remote => DispatchTarget::Remote,
+        }
+    }
+
+    fn dispatch(&self, _code: i32) {
+        let selected = self.pointed(self.context(self.entry).selected());
+        self.set(self.context(self.entry).running(), selected);
     }
 }

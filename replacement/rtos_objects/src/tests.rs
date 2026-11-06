@@ -986,11 +986,8 @@ fn a_receive_output_aliasing_the_head_reads_the_next_message() {
     assert_eq!(m.word(control.head()), second.0 .0);
 }
 
-fn enable_dispatch(sim: &Sim, entry: Domain, target: Domain) {
-    let context = entry.words().context(target);
-    let scratch = GuestAddress(0x4000_9000);
-    sim.set(context.dispatch_enabled(), scratch.0);
-    sim.set(scratch, 1);
+fn install(sim: &Sim, owner: Domain) {
+    sim.install(owner, true);
 }
 
 fn queue_flag_waiter(
@@ -1007,8 +1004,8 @@ fn queue_flag_waiter(
     let wait = words.flag_wait(task_slot);
     sim.set(task.domain(), if domain == Domain::A { 1 } else { 2 });
     sim.set(task.wait(), wait.0 .0);
-    sim.set(task.priority(), 5);
-    sim.set(task.state(), 0x32);
+    sim.set_byte(task.priority(), 5);
+    sim.set_byte(task.state(), 0x32);
     sim.set(wait.pattern(), want);
     sim.set(wait.mode(), mode);
     sim.set(wait.base().result(), timer);
@@ -1030,8 +1027,8 @@ fn queue_receiver(
     let wait = words.mailbox_wait(task_slot);
     sim.set(task.domain(), if domain == Domain::A { 1 } else { 2 });
     sim.set(task.wait(), wait.0 .0);
-    sim.set(task.priority(), 5);
-    sim.set(task.state(), 0x32);
+    sim.set_byte(task.priority(), 5);
+    sim.set_byte(task.state(), 0x32);
     sim.set(wait.base().result(), 0);
     sim.set(control.queue().next(), task.0 .0);
     sim.set(control.queue().prev(), task.0 .0);
@@ -1064,7 +1061,7 @@ fn set_flag_makes_a_satisfied_waiter_ready() {
     let words = Domain::A.words();
     let slot = FlagSlot::new(3, 120).unwrap();
     let sim = Sim::new(Domain::A);
-    enable_dispatch(&sim, Domain::A, Domain::A);
+    install(&sim, Domain::A);
     let id = FlagId {
         domain: Domain::A,
         slot,
@@ -1088,7 +1085,7 @@ fn set_flag_makes_a_satisfied_waiter_ready() {
     assert_eq!(sim.word(control.pattern()), 0x11);
     assert_eq!(sim.word(wait.result()), 0x11);
     assert_eq!(sim.word(control.queue().next()), control.0 .0);
-    assert_eq!(sim.word(task.state()), 1);
+    assert_eq!(sim.word(task.state()) & 0xff, 1);
     assert_eq!(sim.ready(Domain::A, 5), task.0 .0);
     assert_eq!(sim.selected(Domain::A), task.0 .0);
     assert_eq!(sim.running(Domain::A), task.0 .0);
@@ -1100,7 +1097,7 @@ fn set_flag_leaves_an_unsatisfied_waiter_queued() {
     let words = Domain::A.words();
     let slot = FlagSlot::new(3, 120).unwrap();
     let sim = Sim::new(Domain::A);
-    enable_dispatch(&sim, Domain::A, Domain::A);
+    install(&sim, Domain::A);
     let id = FlagId {
         domain: Domain::A,
         slot,
@@ -1125,7 +1122,7 @@ fn set_flag_leaves_an_unsatisfied_waiter_queued() {
     assert_eq!(sim.word(control.pattern()), 0x11);
     assert_eq!(sim.word(wait.result()), 0xdead);
     assert_eq!(sim.word(control.queue().next()), task.0 .0);
-    assert_eq!(sim.word(task.state()), 0x32);
+    assert_eq!(sim.word(task.state()) & 0xff, 0x32);
     assert!(!sim.ready_bit(Domain::A, 5));
     assert_eq!(sim.selected(Domain::A), 0);
 }
@@ -1135,7 +1132,7 @@ fn set_flag_clears_the_whole_pattern_when_the_attribute_says_so() {
     let words = Domain::A.words();
     let slot = FlagSlot::new(3, 120).unwrap();
     let sim = Sim::new(Domain::A);
-    enable_dispatch(&sim, Domain::A, Domain::A);
+    install(&sim, Domain::A);
     let id = FlagId {
         domain: Domain::A,
         slot,
@@ -1174,7 +1171,7 @@ fn set_flag_rings_the_peer_for_a_remote_waiter() {
         let words = Domain::A.words();
         let slot = FlagSlot::new(3, 120).unwrap();
         let sim = Sim::new(entry);
-        enable_dispatch(&sim, entry, Domain::B);
+        install(&sim, Domain::B);
         let id = FlagId {
             domain: Domain::A,
             slot,
@@ -1215,7 +1212,7 @@ fn a_satisfied_set_cancels_the_waiters_timer() {
     let words = Domain::A.words();
     let slot = FlagSlot::new(3, 120).unwrap();
     let sim = Sim::new(Domain::A);
-    enable_dispatch(&sim, Domain::A, Domain::A);
+    install(&sim, Domain::A);
     let id = FlagId {
         domain: Domain::A,
         slot,
@@ -1247,7 +1244,7 @@ fn send_makes_a_receiver_ready() {
     let words = Domain::A.words();
     let slot = MailboxSlot::new(1, 1).unwrap();
     let sim = Sim::new(Domain::A);
-    enable_dispatch(&sim, Domain::A, Domain::A);
+    install(&sim, Domain::A);
     let id = MailboxId {
         domain: Domain::A,
         slot,
@@ -1349,7 +1346,7 @@ fn send_rings_the_peer_for_a_remote_receiver() {
         let words = Domain::A.words();
         let slot = MailboxSlot::new(1, 1).unwrap();
         let sim = Sim::new(entry);
-        enable_dispatch(&sim, entry, Domain::B);
+        install(&sim, Domain::B);
         let id = MailboxId {
             domain: Domain::A,
             slot,

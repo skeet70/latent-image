@@ -1,15 +1,15 @@
-//! F2 stage adapter over the CPU and the owned S1/S2 bodies; unbuilt until the scheduler exports
-//! the C-ABI shims named below.
+//! F2 stage adapter: the generic wake bodies over the CPU and the owned S1/S2 exports.
 #![cfg_attr(not(test), no_std)]
 
 #[path = "../src/lib.rs"]
 mod objects;
 
 use core::arch::asm;
-use core::ptr::{read_volatile, write_volatile};
+use core::ptr::read_volatile;
 use objects::create::{Machine, SavedInterrupts};
-use objects::layout::{Domain, GuestAddress, LockRecord};
+use objects::layout::{Domain, DomainId, DomainWords, GuestAddress, KernelContext, LockRecord, Task};
 use objects::locked::ObjectLock;
+use objects::message::{MessagePriority, PriorityLimit};
 use objects::wake::{DispatchTarget, Selection, Wake};
 use objects::*;
 
@@ -18,27 +18,53 @@ const ENTRY: Domain = Domain::A;
 #[cfg(feature = "domain-b")]
 const ENTRY: Domain = Domain::B;
 
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+struct Acquired(pub u32);
+
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+struct Reschedule(pub u32);
+
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+struct RecordId(pub u32);
+
+#[repr(u32)]
+enum Notified {
+    Remote = 0,
+    Local = 1,
+}
+
 extern "C" {
-    fn xm1_rtos_scheduler_insert(record: GuestAddress, task: u32) -> u32;
-    fn xm1_rtos_scheduler_reset(task: u32);
-    fn xm1_rtos_scheduler_prepare(record: GuestAddress, task: u32) -> u32;
-    fn xm1_rtos_scheduler_notify(record: GuestAddress) -> u32;
+    fn xm1_rtos_scheduler_acquire(lock: LockRecord) -> Acquired;
+    fn xm1_rtos_scheduler_release(lock: LockRecord) -> LockRecord;
+    fn xm1_rtos_scheduler_insert(record: KernelContext, task: Task) -> Reschedule;
+    fn xm1_rtos_scheduler_reset(task: Task) -> Task;
+    fn xm1_rtos_scheduler_prepare(record: KernelContext, task: Task) -> Reschedule;
+    fn xm1_rtos_scheduler_notify(id: RecordId) -> Notified;
     fn xm1_rtos_scheduler_save(code: i32);
-    fn xm1_rtos_scheduler_acquire(lock: GuestAddress);
-    fn xm1_rtos_scheduler_release(lock: GuestAddress);
     /// Provided by the link script at the stock `kernel_remove_timer` entry.
-    fn xm1_rtos_objects_stock_remove_timer(record: GuestAddress, entry: GuestAddress);
+    fn xm1_rtos_objects_stock_remove_timer(record: KernelContext, entry: GuestAddress);
 }
 
 struct Cpu;
 
+fn load(address: GuestAddress) -> u32 {
+    unsafe { read_volatile(address.0 as *const u32) }
+}
+
+fn record(owner: Domain) -> KernelContext {
+    ENTRY.words().context(owner)
+}
+
 impl Machine for Cpu {
     fn load_word(&self, at: GuestAddress) -> u32 {
-        unsafe { read_volatile(at.0 as *const u32) }
+        load(at)
     }
 
     fn store_word(&self, at: GuestAddress, value: u32) {
-        unsafe { write_volatile(at.0 as *mut u32, value) }
+        unsafe { core::ptr::write_volatile(at.0 as *mut u32, value) }
     }
 
     fn mask_interrupts(&self) -> SavedInterrupts {
@@ -58,169 +84,155 @@ impl Machine for Cpu {
 
 impl ObjectLock for Cpu {
     fn with_object_lock<R>(&self, lock: LockRecord, body: impl FnOnce() -> R) -> R {
-        let saved: u32;
-        unsafe { asm!("mrs {saved}, cpsr", "cpsid i", saved = out(reg) saved, options(nostack)) };
-        let word = GuestAddress(read_volatile(lock.word().0 as *const u32));
-        xm1_rtos_scheduler_acquire(word);
+        let saved = self.mask_interrupts();
+        unsafe { xm1_rtos_scheduler_acquire(lock) };
         let result = body();
-        xm1_rtos_scheduler_release(word);
-        unsafe { asm!("msr cpsr_fc, {saved}", saved = in(reg) saved, options(nostack)) };
+        unsafe { xm1_rtos_scheduler_release(lock) };
+        self.restore_interrupts(saved);
         result
     }
 }
 
 impl Wake for Cpu {
-    fn with_scheduler_lock<R>(&self, domain: Domain, body: impl FnOnce() -> R) -> R {
-        let lock = ENTRY.words().context(domain).scheduler_lock();
-        let word = GuestAddress(read_volatile(lock.word().0 as *const u32));
-        xm1_rtos_scheduler_acquire(word);
+    fn with_scheduler_lock<R>(&self, owner: Domain, body: impl FnOnce() -> R) -> R {
+        let lock = record(owner).scheduler_lock();
+        unsafe { xm1_rtos_scheduler_acquire(lock) };
         let result = body();
-        xm1_rtos_scheduler_release(word);
+        unsafe { xm1_rtos_scheduler_release(lock) };
         result
     }
 
-    fn waiter_domain(&self, task: Task) -> Domain {
-        match DomainId::from_word(read_volatile(task.domain().0 as *const u32)) {
+    fn waiter_domain(&self, waiter: Task) -> Domain {
+        match DomainId::from_word(load(waiter.domain())) {
             Some(DomainId::A) => Domain::A,
             Some(DomainId::B) => Domain::B,
-            _ => Domain::A,
+            _ => panic!("waiting task has no domain tag"),
         }
     }
 
     fn remove_timer(&self, owner: Domain, entry: GuestAddress) {
-        unsafe { xm1_rtos_objects_stock_remove_timer(ENTRY.words().context(owner).0, entry) };
+        unsafe { xm1_rtos_objects_stock_remove_timer(record(owner), entry) };
     }
 
-    fn reset_task(&self, task: Task) {
-        xm1_rtos_scheduler_reset(task.0 .0);
+    fn reset_task(&self, waiter: Task) {
+        unsafe { xm1_rtos_scheduler_reset(waiter) };
     }
 
-    fn prepare(&self, owner: Domain, task: Task) -> Selection {
-        let record = ENTRY.words().context(owner);
-        if xm1_rtos_scheduler_prepare(record.0, task.0 .0) != 0 {
-            Selection::Changed
-        } else {
-            Selection::Unchanged
+    fn prepare(&self, owner: Domain, waiter: Task) -> Selection {
+        match unsafe { xm1_rtos_scheduler_prepare(record(owner), waiter) } {
+            Reschedule(0) => Selection::Unchanged,
+            _ => Selection::Changed,
         }
     }
 
-    fn insert(&self, owner: Domain, task: Task) -> Selection {
-        let record = ENTRY.words().context(owner);
-        if xm1_rtos_scheduler_insert(record.0, task.0 .0) != 0 {
-            Selection::Changed
-        } else {
-            Selection::Unchanged
+    fn insert(&self, owner: Domain, waiter: Task) -> Selection {
+        match unsafe { xm1_rtos_scheduler_insert(record(owner), waiter) } {
+            Reschedule(0) => Selection::Unchanged,
+            _ => Selection::Changed,
         }
     }
 
-    fn notify(&self, owner: Domain) -> DispatchTarget {
-        let record = ENTRY.words().context(owner);
-        if xm1_rtos_scheduler_notify(record.0) != 0 {
-            DispatchTarget::Local
-        } else {
-            DispatchTarget::Remote
+    fn record_id(&self, owner: Domain) -> u32 {
+        load(record(owner).id())
+    }
+
+    fn notify(&self, id: u32) -> DispatchTarget {
+        match unsafe { xm1_rtos_scheduler_notify(RecordId(id)) } {
+            Notified::Local => DispatchTarget::Local,
+            Notified::Remote => DispatchTarget::Remote,
         }
     }
 
-    fn dispatch(&self) {
-        xm1_rtos_scheduler_save(-24);
+    fn dispatch(&self, code: i32) {
+        unsafe { xm1_rtos_scheduler_save(code) };
     }
 }
 
-fn flag_facts(domain: Domain, slot: FlagSlot) -> Facts {
-    let config = domain.words().flag_config(slot);
-    Facts {
-        exists: read_volatile(config.exists().0 as *const u32) != 0,
-        attributes: read_volatile(config.attributes().0 as *const u32),
-        priority_limit: 0,
+fn entry_words() -> DomainWords {
+    ENTRY.words()
+}
+
+fn entry_state() -> Entry {
+    Entry {
+        handler_context: load(entry_words().handler_context),
+        irq_masked: unsafe { cpsr_masked() },
+        dispatch_enabled: 0,
     }
 }
 
-fn mailbox_facts(domain: Domain, slot: MailboxSlot) -> Facts {
-    let config = domain.words().mailbox_config(slot);
-    Facts {
-        exists: read_volatile(config.exists().0 as *const u32) != 0,
-        attributes: read_volatile(config.attributes().0 as *const u32),
-        priority_limit: read_volatile(config.priority_limit().0 as *const u32),
+unsafe fn cpsr_masked() -> bool {
+    let cpsr: u32;
+    unsafe { asm!("mrs {cpsr}, cpsr", cpsr = out(reg) cpsr, options(nostack)) };
+    cpsr & 0x80 != 0
+}
+
+fn target(domain: Domain, class: i32) -> Result<Domain, ObjectStatus> {
+    match class {
+        0 => Ok(domain),
+        1 => Ok(Domain::A),
+        2 => Ok(Domain::B),
+        _ => Err(ObjectStatus::InvalidClass),
     }
 }
 
-/// Slot `+0x88`.
+/// Slot `+0x88`, in stock admission order.
 #[no_mangle]
 pub extern "C" fn xm1_rtos_objects_f2_set_flag(id: i32, bits: u32) -> i32 {
     let cpu = Cpu;
-    let entry = EntryDomain::new(ENTRY);
-    let slot = match resolve_flag(entry, EncodedId(id), 120) {
+    let words = entry_words();
+    let entry = entry_state();
+    if entry.handler_context != 0 || entry.irq_masked {
+        return ObjectStatus::Context.code();
+    }
+    let domain = match target(ENTRY, id >> 16) {
+        Ok(domain) => domain,
+        Err(status) => return status.code(),
+    };
+    let slot = match resolve_flag(EntryDomain::new(ENTRY), EncodedId(id), load(words.context(domain).event_flag_count())) {
         Ok(resolved) => resolved,
         Err(status) => return status.code(),
     };
-    let request = Request {
-        service: Service::FlagSet,
-        entry: Entry {
-            handler_context: 0,
-            irq_masked: false,
-            dispatch_enabled: 1,
-        },
-        entry_domain: entry,
-        id: EncodedId(id),
-        records: Records {
-            flags: 120,
-            mailboxes: 1,
-        },
-        facts: flag_facts(slot.domain, slot.slot),
-        params: Params::NONE,
-    };
-    match admit(&request) {
-        Ok(admitted) => match admitted.object {
-            Object::Flag(id) => {
-                set_flag(&cpu, id, Pattern(bits));
-                0
-            }
-            Object::Mailbox(_) => -18,
-        },
-        Err(status) => status.code(),
+    if load(domain.words().flag_config(slot.slot).exists()) == 0 {
+        return ObjectStatus::NotCreated.code();
     }
+    set_flag(&cpu, slot, Pattern(bits));
+    0
 }
 
-/// Slot `+0xd4`.
+/// Slot `+0xd4`, in stock admission order: the creation record is read before the message priority.
 #[no_mangle]
 pub extern "C" fn xm1_rtos_objects_f2_send(id: i32, message: u32) -> i32 {
     let cpu = Cpu;
-    let entry = EntryDomain::new(ENTRY);
-    let slot = match resolve_mailbox(entry, EncodedId(id), 1) {
+    let words = entry_words();
+    let entry = entry_state();
+    if entry.handler_context != 0 || entry.irq_masked {
+        return ObjectStatus::Context.code();
+    }
+    let domain = match target(ENTRY, id >> 16) {
+        Ok(domain) => domain,
+        Err(status) => return status.code(),
+    };
+    let slot = match resolve_mailbox(
+        EntryDomain::new(ENTRY),
+        EncodedId(id),
+        load(words.context(domain).mailbox_count()),
+    ) {
         Ok(resolved) => resolved,
         Err(status) => return status.code(),
     };
-    let priority = read_volatile(GuestAddress(message + 4) as *const u32);
-    let request = Request {
-        service: Service::MailboxSend,
-        entry: Entry {
-            handler_context: 0,
-            irq_masked: false,
-            dispatch_enabled: 0,
-        },
-        entry_domain: entry,
-        id: EncodedId(id),
-        records: Records {
-            flags: 120,
-            mailboxes: 1,
-        },
-        facts: mailbox_facts(slot.domain, slot.slot),
-        params: Params {
-            pattern: Pattern(0),
-            mode: 0,
-            timeout: None,
-            message_priority: Some(priority),
-        },
-    };
-    match admit(&request) {
-        Ok(admitted) => match admitted.object {
-            Object::Mailbox(id) => {
-                send(&cpu, id, Message(GuestAddress(message)), admitted.priority);
-                0
-            }
-            Object::Flag(_) => -18,
-        },
-        Err(status) => status.code(),
+    let config = domain.words().mailbox_config(slot.slot);
+    if load(config.exists()) == 0 {
+        return ObjectStatus::NotCreated.code();
     }
+    let priority = if load(config.attributes()) & 2 != 0 {
+        let raw = load(GuestAddress(message + 4));
+        match MessagePriority::new(raw, PriorityLimit(load(config.priority_limit()))) {
+            Ok(priority) => Some(priority),
+            Err(status) => return status.code(),
+        }
+    } else {
+        None
+    };
+    send(&cpu, slot, objects::layout::Message(GuestAddress(message)), priority);
+    0
 }
