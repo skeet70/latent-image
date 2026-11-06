@@ -16,7 +16,6 @@ import Emulation.NativeCase
   , LoadedCase (..)
   , loadCaseWith
   , readArtifact
-  , reportRunnerExit
   )
 import qualified Emulation.NativeObservation as N
 import qualified Emulation.OwnedCase as O
@@ -26,13 +25,13 @@ import System.Directory
   , canonicalizePath
   , copyFile
   , createDirectoryIfMissing
-  , createSymbolicLink
   , doesDirectoryExist
   , getPermissions
   , listDirectory
   , removeFile
   , setPermissions
   )
+import System.Posix.Files (createSymbolicLink)
 import System.Environment (getArgs)
 import System.FilePath ((</>))
 
@@ -47,6 +46,7 @@ main = do
     reuseTest (root </> "reuse") canonicalRunner
     expectedRejudgeTest (root </> "expected") canonicalRunner
     wireChangeTest (root </> "wire") canonicalRunner
+    labelChangeTest (root </> "label") canonicalRunner
     runnerIdentityTest (root </> "runner") canonicalRunner
     corruptionTest (root </> "corruption") canonicalRunner
     interruptedTest (root </> "interrupted") canonicalRunner
@@ -170,6 +170,34 @@ wireChangeTest root runner = do
   ensure (again == BatchReused) "changed wire did not become reusable"
   ensure (againObservations == changedObservations) "changed wire reuse differs"
 
+labelChangeTest :: FilePath -> FilePath -> IO ()
+labelChangeTest root runner = do
+  let cache = root </> "cache"
+      batchDirectory = root </> "batch"
+      cases = specs 0xdeadbeef 0xdeadbeef 0x11223344
+      renamed =
+        [ (head cases) {O.caseId = "writer-renamed"}
+        , (cases !! 1) {O.caseId = "reader-renamed"}
+        ]
+  batchPath <- O.writeBatch batchDirectory cases
+  (executed, baseline) <- cachedObservedBatch cache runner batchPath
+  ensure (executed == BatchExecuted) "baseline did not execute"
+  (reused, _) <- cachedObservedBatch cache runner batchPath
+  ensure (reused == BatchReused) "unchanged labels did not reuse"
+  _ <- O.writeBatch batchDirectory renamed
+  (renamedReuse, renamedObservations) <- cachedObservedBatch cache runner batchPath
+  ensure (renamedReuse == BatchReused) ("renamed cases did not reuse: " ++ show renamedReuse)
+  ensure (map fst renamedObservations == caseIds renamed) "renamed observation ids differ"
+  ensure (map snd renamedObservations == map snd baseline) "renamed cases changed the raw observations"
+  forM_ (zip renamed renamedObservations) $ \(caseSpec, (_, observation)) ->
+    checkResultFile batchDirectory caseSpec observation "passed"
+  entries <- cacheEntries cache
+  ensure (length entries == 1) ("renaming cases created extra cache entries: " ++ show entries)
+  _ <- O.writeBatch batchDirectory cases
+  (restoredReuse, restoredObservations) <- cachedObservedBatch cache runner batchPath
+  ensure (restoredReuse == BatchReused) "restored labels did not reuse"
+  ensure (restoredObservations == baseline) "restored labels changed the raw observations"
+
 runnerIdentityTest :: FilePath -> FilePath -> IO ()
 runnerIdentityTest root runner = do
   let cache = root </> "cache"
@@ -281,7 +309,7 @@ checkResultFile batchDirectory caseSpec observation wantedStatus = do
     (str (get result "status") == wantedStatus)
     (ident ++ ": result status " ++ str (get result "status") ++ ", wanted " ++ wantedStatus)
   ensure (get (get result "runner") "memory_provenance" /= Null) (ident ++ ": result has no raw runner observation")
-  exit <- either (fail . N.renderObservationError) pure (reportRunnerExit result)
+  exit <- either (fail . N.renderObservationError) pure (N.reportRunnerExit result)
   loaded <- loadCaseWith readArtifact casePath
   let regions = map fst (loadedRegions loaded)
   observed <- either (fail . N.renderObservationError) pure (N.observeNative exit regions (get result "runner"))

@@ -2247,6 +2247,7 @@ haskell_test(
         "//host:directory",
         "//host:filepath",
         "//host:host-support",
+        "//host:unix",
     ],
 )
 
