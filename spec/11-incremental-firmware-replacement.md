@@ -86,7 +86,13 @@ Replacement work that runs only on the host or emulator gets no independent revi
 
 Compatibility targets compare original and replacement results at the consumer boundary: outputs, errors, externally visible state, artifacts, effects and required ordering. Ignore internal function layout and scratch registers except where they are part of the actual ABI. Define observation normalization explicitly and reject unexplained differences.
 
-Redesign targets use an accepted behavioral specification for intended changes and preserve compatibility checks for unaffected behavior. Do not treat stock defects as required behavior without a decision. Timing, image-quality and numerical tolerances require their own evidence; instruction counts are not physical latency.
+Redesign targets define intended behavior independently of the candidate and preserve compatibility checks for unaffected behavior. Correct known stock defects rather than copying them to satisfy a stock comparison. The remaining reproduction edge determines which interfaces and dependencies still constrain the replacement.
+
+Record each deliberate correction with the firmware-bound trigger, original behavior, intended behavior, remaining retained boundary and signs that a consumer depends on the defect. If such a dependence appears, fix the consumer or recreate the old behavior at a named compatibility shim with a removal condition.
+
+When an original or emulated path hangs but its intended functionality is known, qualify that functionality against the intended contract. An equivalent test may cover shared behavior while the original failure remains tracked; it does not establish that the original screen or path works.
+
+Timing, image-quality and numerical tolerances require their own evidence; instruction counts are not physical latency.
 
 Exercise boundary values, invalid inputs, repeated operations, resource exhaustion, cancellation and relevant completion orderings. Scheduling exploration is bounded and reports the explored domain; it is not a proof over every interleaving. A plausible deliberately incorrect implementation must fail the pilot's oracle. Expectations must not be derived solely from the candidate implementation.
 

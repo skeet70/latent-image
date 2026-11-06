@@ -12,6 +12,8 @@ Camera runs follow [the camera-run procedure](../spec/07-governance-and-handoff.
 
 Evidence labels distinguish reported leads, source inspection, static inference, emulation, hardware observation and independent reproduction. Keep target-specific claims bound to the firmware version and input they came from. Never fill X-M1 CPU, address, ABI or behavior gaps from sibling examples.
 
+The goal is a complete, better replacement firmware. Stock parity is a temporary reference at the remaining reproduction edge, not a requirement to preserve defects. The [compatibility and redesign policy](../spec/11-incremental-firmware-replacement.md#compatibility-and-redesign) records intentional corrections and dependencies as that edge moves.
+
 The X-M1 core is inferred to be Cortex-R4F-class ([E-CPU-PROFILE](../reports/firmware-extraction.md#cpu-profile)); the native runner emulates Unicorn's Cortex-R5F, the closest available model. No fixture, stock case, payload or expected result may depend on behavior an R4F lacks or reports differently: A32 SDIV/UDIV, multiprocessing extensions and MPIDR, R5F ID-register values, a 16-region MPU, or R5 TCM/cache register semantics. The runner rejects each such feature it can reach; admitting one requires X-M1 evidence first.
 
 ## Implementation and build
