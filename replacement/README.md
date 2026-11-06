@@ -456,6 +456,25 @@ devenv shell -- bazel run //replacement/property_service:property-oracle -- \
 
 Each batch directory holds the case files, every case's native result and a `summary.json`. `results.json` records the input and runner digests, batch digests, the fixture variants, totals per class and id, model agreement, verdicts, status distributions, control outcomes and the first 20 differences of each kind. The command exits nonzero unless the model agrees, every candidate case passes and every control holds.
 
+`:property-oracle` optionally takes `--cache CACHE_ROOT`. A batch is reused only through its integrity manifest: the ordered case bytes, artifacts, effective runner and recorded runner exit must match, the stored raw runner output is re-adjudicated against the current case expectation, and `results.json` records `execution.batches_executed`, `batches_reused`, `cases_executed` and `cases_reused`. Without `--cache` the one-shot behavior is unchanged.
+
+`:qualify` is the bounded production job: it stages the current candidate from the canonical sources through `:stage-property-service`, runs `:property-oracle` on a fresh attempt with `--cache`, and writes one bounded verdict, a review packet and private logs. The Bazel target supplies the native runner, oracle, stager, the three image4 staging tools and the five defect images; a directly invoked compiled binary supplies the same paths with `--runner`, `--oracle`, `--stage`, `--stage-encoder`, `--stage-rebuild`, `--stage-decoder` and repeated `--defect NAME BIN SYMBOLS`.
+
+```sh
+devenv shell -- bazel run --jobs=2 //replacement/property_service:qualify -- \
+  --dat SOURCE_DAT --image4 IMAGE4 --loader-a LOADER_A --loader-b LOADER_B \
+  --image5 IMAGE5 --plain PLAIN --image2 IMAGE2 --linked LINKED_BIN --symbols SYMBOLS \
+  --out private-data/qualification/property-service-job \
+  --cache private-data/cache/property-service \
+  [--ids 0x34,0x283]
+```
+
+Every invocation generates the cases and runs the current model, candidate and control comparisons; an old passed result is never read. The stage is keyed by source, candidate and staging-tool bytes and is published atomically after its outputs and manifest verify; an interrupted or corrupt stage is rejected and staged again. The oracle attempt always gets a fresh directory below `private-data/scratch/PropertyService2/qualify/`; the native cache reuses only completed batches whose execution inputs match. `--ids` narrows the property comparisons to the listed ids but every control still runs in full.
+
+The command prints one JSON verdict line and writes `OUT/verdict.json`, `OUT/review-packet.json`, `OUT/attempts.jsonl`, `OUT/logs/` and `OUT/stages/`. The verdict carries the frozen source, candidate, contract, runner and oracle digests, executed and reused batch and case counts, the subset/full-native scope, and the first failed predicate with its case id, results path and log. The review packet adds every control outcome and up to 50 failing cases; both state that the result is native-only and does not establish research, system, hardware, timing, persistence or full-replacement acceptance. The exit code is nonzero on any stage, oracle, model, candidate or control failure, including after an earlier passing attempt.
+
+To exercise a known defect candidate, pass its linked image and symbols as `--linked`/`--symbols` and repeat `--defect` with the cfg name that build used, naming the good original image and symbols. A repeated defect name keeps the later entry, so the driver does not refuse the run because one defect image equals the candidate, and the current comparator sees the candidate's actual differences.
+
 Changes beyond the stage-3 design. Approved at milestones 1 and 2:
 
 - The crate builds with `-C target-feature=+strict-align`: the compiler emitted an unaligned `strh` to the stack, which the native runner refuses.

@@ -19,6 +19,7 @@ import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe)
 import qualified Data.Set as S
 import Data.String (fromString)
 import Data.Word (Word32)
+import Emulation.CachedNativeBatch (BatchReuse (..), cachedObservedBatch)
 import Emulation.NativeObservation (runnerStatusLabel)
 import Emulation.OwnedCase (CaseId (..), CaseSpec, loadObservedBatch, readWordAt, required, writeBatch)
 import Emulation.Sha256 (sha256, sha256File, sha256Hex)
@@ -110,7 +111,12 @@ data BatchRecord = BatchRecord
   , recordCases :: Int
   , recordBatchSha :: String
   , recordSummarySha :: String
+  , recordReuse :: BatchReuse
   }
+
+reuseLabel :: BatchReuse -> String
+reuseLabel BatchExecuted = "executed"
+reuseLabel BatchReused = "reused"
 
 hex :: Word32 -> String
 hex value = "0x" ++ showHex value ""
@@ -127,11 +133,15 @@ orFail :: Show e => String -> Either e a -> IO a
 orFail context = either (\problem -> failH (context ++ ": " ++ show problem)) pure
 
 -- | One runner session over at most 'batchLimit' cases in @directory@, its runs keyed by case label.
-runBatch :: FilePath -> FilePath -> [CaseSpec] -> IO (BatchRecord, M.Map CaseLabel Run)
-runBatch runner directory specs = do
+-- A cache root reuses only batches whose complete observations are proven for the current cases,
+-- runner and artifacts; the current comparisons run on the returned observations either way.
+runBatch :: Maybe FilePath -> FilePath -> FilePath -> [CaseSpec] -> IO (BatchRecord, M.Map CaseLabel Run)
+runBatch cache runner directory specs = do
   ensure (length specs <= batchLimit) "batch over the case limit"
   batchPath <- writeBatch directory specs
-  observed <- loadObservedBatch runner batchPath
+  (reuse, observed) <- case cache of
+    Nothing -> (BatchExecuted,) <$> loadObservedBatch runner batchPath
+    Just cacheRoot -> cachedObservedBatch cacheRoot runner batchPath
   ensure (length observed == length specs) (batchPath ++ ": observation count differs from the case count")
   rows <- forM observed $ \(CaseId label, observation) -> do
     let reportPath = directory </> label ++ ".native-result.json"
@@ -148,12 +158,12 @@ runBatch runner directory specs = do
         , "cases" .= [object ["id" .= label, "status" .= runnerStatusLabel (runStatus run), "result_sha256" .= digest] | (CaseLabel label, run, digest) <- rows]
         ]
   B.writeFile (directory </> "summary.json") summary
-  pure (BatchRecord (takeFileName directory) (length specs) batchSha (sha256Hex (sha256 summary)), M.fromList [(label, run) | (label, run, _) <- rows])
+  pure (BatchRecord (takeFileName directory) (length specs) batchSha (sha256Hex (sha256 summary)) reuse, M.fromList [(label, run) | (label, run, _) <- rows])
 
-runBatches :: FilePath -> FilePath -> String -> [CaseSpec] -> IO ([BatchRecord], M.Map CaseLabel Run)
-runBatches runner out prefix specs = do
+runBatches :: Maybe FilePath -> FilePath -> FilePath -> String -> [CaseSpec] -> IO ([BatchRecord], M.Map CaseLabel Run)
+runBatches cache runner out prefix specs = do
   results <- forM (zip [0 :: Int ..] (chunks batchLimit specs)) $ \(index, chunk) ->
-    runBatch runner (out </> prefix ++ "-" ++ (if index < 10 then "0" else "") ++ show index) chunk
+    runBatch cache runner (out </> prefix ++ "-" ++ (if index < 10 then "0" else "") ++ show index) chunk
   pure (map fst results, M.unions (map snd results))
 
 lookupRun :: M.Map CaseLabel Run -> CaseLabel -> IO Run
@@ -247,6 +257,13 @@ main = do
     Just [linkedPath, symbolsPath] -> oracle arguments runner linkedPath symbolsPath
     Just _ -> failH "unreachable argument shape"
 
+-- | The optional native batch cache root. Absent keeps the uncached one-shot batch behavior.
+cacheOption :: [String] -> IO (Maybe FilePath)
+cacheOption arguments = case dropWhile (/= "--cache") arguments of
+  _ : value : _ -> Just <$> makeAbsolute value
+  [_] -> failH "--cache needs a value"
+  [] -> pure Nothing
+
 freshOutput :: FilePath -> IO FilePath
 freshOutput path = do
   exists <- doesPathExist path
@@ -279,6 +296,7 @@ subsetIds arguments = case dropWhile (/= "--ids") arguments of
 
 oracle :: [String] -> FilePath -> FilePath -> FilePath -> IO ()
 oracle arguments runner linkedPath symbolsPath = do
+  cache <- cacheOption arguments
   let input name = required arguments name
   image4Path <- input "--image4"
   candidatePath <- input "--candidate-image4"
@@ -570,7 +588,7 @@ oracle arguments runner linkedPath symbolsPath = do
     && A.decode 0 movR1ZeroWord == A.DataProcessing (A.Cond 14) A.MOV False (A.Reg 1) (A.Reg 0) (A.Immediate 0)) "bl, mov r0, r0 and mov r1, #0 encodings"
 
   -- Pass 1: stock.
-  (stockBatches, stockRuns) <- runBatches runner out "stock" [stockSpec (fxOf rc) image4 properties (runLabel rc) stockFunctions (runCase rc) | rc <- runCases]
+  (stockBatches, stockRuns) <- runBatches cache runner out "stock" [stockSpec (fxOf rc) image4 properties (runLabel rc) stockFunctions (runCase rc) | rc <- runCases]
   let stockRun rc = lookupRun stockRuns (runLabel rc)
   modelRows <- fmap concat . forM runCases $ \rc -> case modelled (standing (runProperty rc)) of
     Nothing -> pure []
@@ -582,7 +600,7 @@ oracle arguments runner linkedPath symbolsPath = do
   candidateSpecs <- forM runCases $ \c -> do
     run <- stockRun c
     pure (caseSpec candidate candidateFunctions (fxOf c) (runLabel c) (standing (runProperty c)) (runCase c) (observedExpectation run))
-  (candidateBatches, candidateRuns) <- runBatches runner out "candidate" candidateSpecs
+  (candidateBatches, candidateRuns) <- runBatches cache runner out "candidate" candidateSpecs
   verdicts <- forM runCases $ \c -> do
     reference <- stockRun c
     subject <- lookupRun candidateRuns (runLabel c)
@@ -599,7 +617,7 @@ oracle arguments runner linkedPath symbolsPath = do
   controlSpecs <- forM (concat [[(control, image, spans, c) | c <- controlCases control] | (control, image, spans) <- controlImages]) $ \(control, image, spans, c) -> do
     run <- stockRun c
     pure (caseSpec image spans (fxOf c) (runPrefixed (controlName control) c) (standing (runProperty c)) (runCase c) (observedExpectation run))
-  (controlBatches, controlRuns) <- runBatches runner out "controls" controlSpecs
+  (controlBatches, controlRuns) <- runBatches cache runner out "controls" controlSpecs
   controlOutcomes <- forM controlImages $ \(control, _, _) -> do
     failures <- fmap concat . forM (controlCases control) $ \c -> do
       reference <- stockRun c
@@ -631,13 +649,32 @@ oracle arguments runner linkedPath symbolsPath = do
       stockAll = M.elems stockRuns
       candidateAll = M.elems candidateRuns
       passed = null modelFailures && null verdictFailures && controlsHold
-      batchValue record = object ["name" .= recordName record, "cases" .= recordCases record, "batch_sha256" .= recordBatchSha record, "summary_sha256" .= recordSummarySha record]
+      allBatches = stockBatches ++ candidateBatches ++ controlBatches
+      executedBatches = length [() | record <- allBatches, recordReuse record == BatchExecuted]
+      reusedBatches = length [() | record <- allBatches, recordReuse record == BatchReused]
+      executedCases = sum [recordCases record | record <- allBatches, recordReuse record == BatchExecuted]
+      reusedCases = sum [recordCases record | record <- allBatches, recordReuse record == BatchReused]
+      batchValue record =
+        object
+          [ "name" .= recordName record
+          , "cases" .= recordCases record
+          , "batch_sha256" .= recordBatchSha record
+          , "summary_sha256" .= recordSummarySha record
+          , "reuse" .= reuseLabel (recordReuse record)
+          ]
       results = object
         [ "schema_version" .= (1 :: Int)
         , "inputs" .= object inputs
         , "contract_staged_image4_sha256" .= contractSha
         , "runner" .= object ["path" .= runner, "sha256" .= runnerSha]
-        , "batches" .= map batchValue (stockBatches ++ candidateBatches ++ controlBatches)
+        , "execution" .= object
+            [ "cache" .= cache
+            , "batches_executed" .= executedBatches
+            , "batches_reused" .= reusedBatches
+            , "cases_executed" .= executedCases
+            , "cases_reused" .= reusedCases
+            ]
+        , "batches" .= map batchValue allBatches
         , "case_shape" .= object
             [ "ids" .= maybe ("0..646" :: String) (\chosen -> unwords (map propertyHex (S.toList chosen))) subset
             , "subset" .= isJust subset
@@ -703,6 +740,11 @@ oracle arguments runner linkedPath symbolsPath = do
   putStrLn ("pass 2: " ++ show (length verdictFailures) ++ " failing of " ++ show (length verdicts))
   forM_ controlOutcomes $ \(control, failed, _) -> putStrLn (controlName control ++ ": " ++ show failed ++ " failing of " ++ show (length (controlCases control)))
   forM_ unavailable putStrLn
+  when (isJust cache) $
+    putStrLn
+      ( "execution: " ++ show executedBatches ++ " executed, " ++ show reusedBatches ++ " reused batches; "
+          ++ show executedCases ++ " executed, " ++ show reusedCases ++ " reused cases"
+      )
   putStrLn ("results: " ++ out </> "results.json")
   unless passed exitFailure
 
@@ -730,7 +772,7 @@ smoke arguments runner = do
       split = splitFunctions (carrierStart, carrierEnd) [FunctionSpan carrierStart carrierEnd]
       specs = [stockSpec fx image4 properties (prefixed "stock" c) stockFunctions c | c <- cases] ++ [stockSpec fx image4 properties (prefixed "split" c) split c | c <- cases]
   out <- freshOutput outPath
-  (record, runs) <- runBatch runner (out </> "smoke") specs
+  (record, runs) <- runBatch Nothing runner (out </> "smoke") specs
   rows <- forM cases $ \c -> do
     stockRun <- lookupRun runs (prefixed "stock" c)
     splitRun <- lookupRun runs (prefixed "split" c)
