@@ -42,6 +42,26 @@ genrule(
     ],
 )
 
+genrule(
+    name = "objects-smoke-build",
+    srcs = [
+        "smoke.rs",
+        "src/admission.rs",
+        "src/id.rs",
+        "src/lib.rs",
+        "src/matching.rs",
+        "src/message.rs",
+        "src/order.rs",
+        "src/status.rs",
+        "src/timeout.rs",
+        "//replacement/rtos_layout:src/lib.rs",
+    ],
+    outs = ["objects-smoke-bin"],
+    cmd = "$(location @lab_rustc//:bin/rustc) --edition=2021 $(location smoke.rs) -o $@",
+    executable = True,
+    tools = ["@lab_rustc//:bin/rustc"],
+)
+
 sh_test(
     name = "objects-host-tests",
     size = "small",
